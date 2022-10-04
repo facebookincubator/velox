@@ -50,8 +50,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     testExtractColumnOutOfOrder(
         container, rows, column, expected, rows.size() / 3);
 
-    // This test is for special cases of extractColumn using rowNumbers.
-    testRowNumbersSpecialCases(container, rows, column, expected);
+    testRepeatedRowNumbers(container, rows, column, expected);
+    testNegativeRowNumbers(container, rows, column, expected);
   }
 
   void testExtractColumnAllRows(
@@ -190,58 +190,69 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     testRowNumbers();
   }
 
-  void testRowNumbersSpecialCases(
+  void testRepeatedRowNumbers(
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
       const VectorPtr& expected) {
     auto size = rows.size();
-    auto testRepeatedRowNumber = [&]() {
-      // Copy the first row to all positions in the result vector
-      std::vector<vector_size_t> rowNumbers;
-      rowNumbers.resize(size);
-      for (int i = 0; i < size; i++) {
-        rowNumbers[i] = 0;
+    // Copy the rows so that we rotate over the values at positions 0, 1, 2.
+    // This is for testing copying repeated row numbers.
+    std::vector<vector_size_t> rowNumbers(size, 0);
+    rowNumbers.resize(size);
+    for (int i = 0; i < size; i++) {
+      rowNumbers[i] = i % 3;
+    }
+    auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
+
+    auto result = BaseVector::create(expected->type(), size, pool_.get());
+    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
+
+    EXPECT_EQ(size, result->size());
+    for (vector_size_t i = 0; i < size; ++i) {
+      EXPECT_TRUE(result->equalValueAt(expected.get(), i, i % 3))
+          << "at " << i << ": expected " << expected->toString(i % 3)
+          << ", got " << result->toString(i);
+    }
+  }
+
+  void testNegativeRowNumbers(
+      RowContainer& container,
+      const std::vector<char*>& rows,
+      int column,
+      const VectorPtr& expected) {
+    auto size = rows.size();
+    // Negative row numbers result in nullptr being copied to that position.
+    // Alternate between nulls at odd positions and a copy of the values
+    // at even positions.
+    std::vector<vector_size_t> rowNumbers;
+    rowNumbers.resize(size);
+    for (int i = 0; i < size; i++) {
+      if (i % 2) {
+        rowNumbers[i] = -1 * i;
+      } else {
+        rowNumbers[i] = i;
       }
-      folly::Range<const vector_size_t*> rowNumbersRange =
-          folly::Range(rowNumbers.data(), size);
+    }
+    auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
 
-      auto result = BaseVector::create(expected->type(), size, pool_.get());
-      container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
+    auto result = BaseVector::create(expected->type(), size, pool_.get());
+    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
 
-      EXPECT_EQ(size, result->size());
-      for (vector_size_t i = 0; i < size; ++i) {
-        EXPECT_TRUE(result->equalValueAt(expected.get(), i, 0))
-            << "at " << i << ": expected " << expected->toString(0) << ", got "
-            << result->toString(i);
-      }
-    };
-
-    auto testNegativeRowNumber = [&]() {
-      // -ve row numbers result in nullptr being copied to that position.
-      std::vector<vector_size_t> rowNumbers;
-      rowNumbers.resize(size);
-      for (int i = 0; i < size; i++) {
-        rowNumbers[i] = -i;
-      }
-      folly::Range<const vector_size_t*> rowNumbersRange =
-          folly::Range(rowNumbers.data(), size);
-
-      auto result = BaseVector::create(expected->type(), size, pool_.get());
-      container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
-
-      EXPECT_EQ(size, result->size());
-      EXPECT_TRUE(result->equalValueAt(expected.get(), 0, 0))
-          << "at 0 expected " << expected->toString(0) << ", got "
-          << result->toString(0);
-      for (vector_size_t i = 1; i < size; ++i) {
+    EXPECT_EQ(size, result->size());
+    EXPECT_TRUE(result->equalValueAt(expected.get(), 0, 0))
+        << "at 0 expected " << expected->toString(0) << ", got "
+        << result->toString(0);
+    for (vector_size_t i = 1; i < size; ++i) {
+      if (i % 2) {
         EXPECT_TRUE(result->isNullAt(i))
             << "at " << i << "expected null, got " << result->toString(i);
+      } else {
+        EXPECT_TRUE(result->equalValueAt(expected.get(), i, i))
+            << "at " << i << ": expected " << expected->toString(i) << ", got "
+            << result->toString(i);
       }
-    };
-
-    testRepeatedRowNumber();
-    testNegativeRowNumber();
+    }
   }
 
   void checkSizes(std::vector<char*>& rows, RowContainer& data) {
