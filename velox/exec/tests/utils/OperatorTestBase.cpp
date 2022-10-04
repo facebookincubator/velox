@@ -47,6 +47,7 @@ void OperatorTestBase::registerVectorSerde() {
 OperatorTestBase::~OperatorTestBase() {
   // Revert to default process-wide MappedMemory.
   memory::MappedMemory::setDefaultInstance(nullptr);
+  Task::testingWaitForAllTasksToBeDeleted(10'000'000);
 }
 
 void OperatorTestBase::TearDownTestCase() {

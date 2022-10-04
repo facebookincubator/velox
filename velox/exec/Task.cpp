@@ -1957,9 +1957,11 @@ void Task::testingWaitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
     }
   }
   if (numDeletedTasks < numCreatedTasks) {
-    LOG(ERROR) << numCreatedTasks << " tasks hav been created while only "
-               << numDeletedTasks << " have been deleted after waiting for "
-               << waitUs << " us";
+    VELOX_FAIL(
+        " tasks hav been created while only {} have been deleted after waiting for {} us",
+        numCreatedTasks,
+        numDeletedTasks,
+        waitUs);
   }
 }
 
