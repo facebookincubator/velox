@@ -37,8 +37,8 @@ struct SumCount {
 //   ------------------|---------------------|------------------
 //     REAL            |     DOUBLE          |    REAL
 //     ALL INTs        |     DOUBLE          |    DOUBLE
-//     SHORT_DECIMAL   | LONG_DECIMAL        | SHORT_DECIMAL
-//     LONG_DECIMAL    | LONG_DECIMAL        | LONG_DECIMAL
+//     SHORT_DECIMAL   |     LONG_DECIMAL    |    SHORT_DECIMAL
+//     LONG_DECIMAL    |     LONG_DECIMAL    |    LONG_DECIMAL
 //
 template <typename TInput, typename TAccumulator, typename TResult>
 class AverageAggregate : public exec::Aggregate {
@@ -283,16 +283,14 @@ class AverageAggregate : public exec::Aggregate {
       } else {
         clearNull(rawNulls, i);
         auto* sumCount = accumulator(group);
-        if constexpr (
-            std::is_same_v<TResult, double> || std::is_same_v<TResult, float>) {
-          rawValues[i] = TResult(sumCount->sum) / sumCount->count;
-        } else if constexpr (std::
-                                 is_same_v<TAccumulator, UnscaledLongDecimal>) {
+        if constexpr (std::is_same_v<TAccumulator, UnscaledLongDecimal>) {
           // Handles round-up of fraction results.
           TAccumulator quotient(0);
           DecimalUtil::divideWithRoundUp<TAccumulator, TAccumulator, int64_t>(
               quotient, TAccumulator(sumCount->sum), sumCount->count, 0, 0);
           rawValues[i] = TResult(quotient.unscaledValue());
+        } else {
+          rawValues[i] = TResult(sumCount->sum) / sumCount->count;
         }
       }
     }
@@ -322,10 +320,12 @@ inline int32_t AverageAggregate<
 }
 
 void checkSumCountRowType(TypePtr type, const std::string& errorMessage) {
+  VELOX_CHECK(type->kind() == TypeKind::ROW, "{}", errorMessage);
   VELOX_CHECK(
-      type->kind() == TypeKind::ROW || type->kind() == TypeKind::LONG_DECIMAL,
+      type->childAt(0)->kind() == TypeKind::DOUBLE ||
+          type->childAt(0)->kind() == TypeKind::LONG_DECIMAL,
       "{}",
-      errorMessage);
+      errorMessage)
   VELOX_CHECK_EQ(
       type->childAt(1)->kind(), TypeKind::BIGINT, "{}", errorMessage);
 }
@@ -402,7 +402,7 @@ bool registerAverageAggregate(const std::string& name) {
         } else {
           checkSumCountRowType(
               inputType,
-              "Input type for final aggregation must be (sum:double, count:bigint) struct");
+              "Input type for final aggregation must be (sum:double/long decimal, count:bigint) struct");
           switch (resultType->kind()) {
             case TypeKind::REAL:
               return std::make_unique<AverageAggregate<int64_t, double, float>>(

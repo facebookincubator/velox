@@ -210,9 +210,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
                            std::vector<VectorPtr> input,
                            VectorPtr expectedResult,
                            bool isSingle = true) {
+    // Decimal average cannot be directly compared with duckdb decimal
+    // average whose return type is double. Hence, cannot use testAggregations.
     // Need to use PlanBuilder as it registers a AggregateTypeResolver Vs
-    // evaluate which would compile the expressions through Simple/Vector
-    // function resolvers.
+    // evaluate<ReturnType> which would compile the expressions through
+    // Simple/Vector function resolvers.
     PlanBuilder builder;
     builder.values({makeRowVector(input)});
     if (isSingle) {
