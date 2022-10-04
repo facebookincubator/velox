@@ -46,8 +46,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     // This set of tests use extractColumn with an out-of-order pattern
     // and repetitions. Run these with offset 0 and offset to skip the first
     // 1/3 rows.
-    testExtractColumnOutOfOrder(container, rows, column, expected, 0);
-    testExtractColumnOutOfOrder(
+    testOutOfOrderRowNumbers(container, rows, column, expected, 0);
+    testOutOfOrderRowNumbers(
         container, rows, column, expected, rows.size() / 3);
 
     testRepeatedRowNumbers(container, rows, column, expected);
@@ -109,7 +109,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     testRowNumbers();
   }
 
-  void testExtractColumnOutOfOrder(
+  void testOutOfOrderRowNumbers(
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
