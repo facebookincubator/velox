@@ -326,7 +326,9 @@ TEST_F(ZipWithTest, fuzzSameSizeNoNulls) {
 
   VectorFuzzer fuzzer(options, pool());
   for (auto i = 0; i < 10; ++i) {
-    auto data = fuzzer.fuzzInputRow(rowType);
+    // We need non-lazy children in order to successfully flatten data for
+    // re-use.
+    auto data = fuzzer.fuzzInputRow(rowType, false /*canChildrenBeLazy*/);
     auto flatData = flatten<RowVector>(data);
 
     auto result = evaluate("zip_with(c0, c1, (x, y) -> x + y)", data);
@@ -337,6 +339,11 @@ TEST_F(ZipWithTest, fuzzSameSizeNoNulls) {
     result = evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", data);
     expectedResult =
         evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", flatData);
+    assertEqualVectors(expectedResult, result);
+
+    // Sanity Check with possible lazy inputs.
+    data = fuzzer.fuzzRowChildrenToLazy(data);
+    result = evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", data);
     assertEqualVectors(expectedResult, result);
   }
 }
@@ -352,7 +359,9 @@ TEST_F(ZipWithTest, fuzzVariableLengthWithNulls) {
 
   VectorFuzzer fuzzer(options, pool());
   for (auto i = 0; i < 10; ++i) {
-    auto data = fuzzer.fuzzInputRow(rowType);
+    // We need non-lazy children in order to successfully flatten data for
+    // re-use.
+    auto data = fuzzer.fuzzInputRow(rowType, false /*canChildrenBeLazy*/);
     auto flatData = flatten<RowVector>(data);
 
     auto result = evaluate("zip_with(c0, c1, (x, y) -> x + y)", data);
@@ -363,6 +372,11 @@ TEST_F(ZipWithTest, fuzzVariableLengthWithNulls) {
     result = evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", data);
     expectedResult =
         evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", flatData);
+    assertEqualVectors(expectedResult, result);
+
+    // Sanity Check with possible lazy inputs.
+    data = fuzzer.fuzzRowChildrenToLazy(data);
+    result = evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", data);
     assertEqualVectors(expectedResult, result);
   }
 }

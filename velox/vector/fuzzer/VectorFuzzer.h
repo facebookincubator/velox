@@ -34,6 +34,31 @@ enum UTF8CharList {
   MATHEMATICAL_SYMBOLS = 3 // Mathematical Symbols.
 };
 
+// Servers as a wrapper around a vector that will be used to load a lazyVector.
+// Ensures that the loaded vector will only contain valid rows for the row set
+// that it was loaded for.
+class VectorLoaderWrap : public VectorLoader {
+ public:
+  explicit VectorLoaderWrap(VectorPtr baseVector)
+      : baseVector_(baseVector) {}
+
+  void loadInternal(RowSet rowSet, ValueHook* hook, VectorPtr* result)
+      override {
+    VELOX_CHECK(!hook, "VectorLoaderWrap doesn't support ValueHook");
+    SelectivityVector rows(rowSet.back() + 1, false);
+    for (auto row : rowSet) {
+      rows.setValid(row, true);
+    }
+    rows.updateBounds();
+    BaseVector::ensureWritable(
+        rows, baseVector_->type(), baseVector_->pool(), *result);
+    (*result)->copy(baseVector_.get(), rows, nullptr);
+  }
+
+ private:
+  VectorPtr baseVector_;
+};
+
 /// VectorFuzzer is a helper class that generates randomized vectors and their
 /// data for testing, with a high degree of entropy.
 ///
@@ -44,14 +69,17 @@ enum UTF8CharList {
 ///
 /// #1.
 ///
-/// The `fuzz(type)` method provides the highest degree of entropy. It randomly
-/// generates different types of (possibly nested) encodings given the input
-/// type, including constants, dictionaries, sliced vectors, and more. It
-/// accepts any primitive, complex, or nested types:
+/// The `fuzz(type, canBeLazy)` method provides the highest degree of entropy.
+/// It randomly generates different types of (possibly nested) encodings given
+/// the input type, including constants, dictionaries, sliced vectors, and more.
+/// It accepts any primitive, complex, or nested types. Additionally,
+/// 'canBeLazy' can be set to true to allow a 50% chance of generating a lazy
+/// vector:
 ///
-///   auto vector1 = fuzzer.fuzz(INTEGER());
-///   auto vector2 = fuzzer.fuzz(MAP(ARRAY(INTEGER()), ROW({REAL(), BIGINT()}));
-///   auto vector3 = fuzzer.fuzz(ROW({SMALLINT(), DOUBLE()}));
+///   auto vector1 = fuzzer.fuzz(INTEGER(), true);
+///   auto vector2 =
+///       fuzzer.fuzz(MAP(ARRAY(INTEGER()), ROW({REAL(), BIGINT()})), false);
+///   auto vector3 = fuzzer.fuzz(ROW({SMALLINT(), DOUBLE()}), true);
 ///
 /// #2.
 ///
@@ -138,11 +166,13 @@ class VectorFuzzer {
   }
 
   // Returns a "fuzzed" vector, containing randomized data, nulls, and indices
-  // vector (dictionary). Returns a vector of `opts_.vectorSize` size.
-  VectorPtr fuzz(const TypePtr& type);
+  // vector (dictionary). Returns a vector of `opts_.vectorSize` size. If
+  // 'canBeLazy' is true then the returned vector can be a lazy vector.
+  VectorPtr fuzz(const TypePtr& type, bool canBeLazy = false);
 
   // Same as above, but returns a vector of `size` size.
-  VectorPtr fuzz(const TypePtr& type, vector_size_t size);
+  VectorPtr
+  fuzz(const TypePtr& type, vector_size_t size, bool canBeLazy);
 
   // Returns a flat vector or a complex vector with flat children with
   // randomized data and nulls. Returns a vector of `opts_.vectorSize` size.
@@ -191,9 +221,12 @@ class VectorFuzzer {
   RowVectorPtr fuzzRow(std::vector<VectorPtr>&& children, vector_size_t size);
 
   // Same as the function above, but never return nulls for the top-level row
-  // elements.
-  RowVectorPtr fuzzInputRow(const RowTypePtr& rowType) {
-    return fuzzRow(rowType, opts_.vectorSize, false);
+  // elements. If 'canChildrenBeLazy' is set to true then the returned vector
+  // can be a lazy children.
+  RowVectorPtr fuzzInputRow(
+      const RowTypePtr& rowType,
+      bool canChildrenBeLazy = false) {
+    return fuzzRow(rowType, opts_.vectorSize, false, canChildrenBeLazy);
   }
 
   variant randVariant(const TypePtr& arg);
@@ -216,6 +249,15 @@ class VectorFuzzer {
     return folly::Random::randDouble01(rng_) < n;
   }
 
+  // Wraps the given vector in a LazyVector.
+  static VectorPtr wrapInLazyVector(VectorPtr baseVector);
+
+  // Randomly applies wrapInLazyVector() to the children of the given input row
+  // vector. Must only be used for input row vectors where all children are
+  // non-null and non-lazy. Is useful when the input rowVector needs to be
+  // re-used between multiple evaluations.
+  RowVectorPtr fuzzRowChildrenToLazy(RowVectorPtr rowVector);
+
  private:
   // Generates a flat vector for primitive types.
   VectorPtr fuzzFlatPrimitive(const TypePtr& type, vector_size_t size);
@@ -226,8 +268,11 @@ class VectorFuzzer {
   // flat.
   VectorPtr fuzzComplex(const TypePtr& type, vector_size_t size);
 
-  RowVectorPtr
-  fuzzRow(const RowTypePtr& rowType, vector_size_t size, bool rowHasNulls);
+  RowVectorPtr fuzzRow(
+      const RowTypePtr& rowType,
+      vector_size_t size,
+      bool rowHasNulls,
+      bool canChildrenBeLazy);
 
   // Generate a random null buffer.
   BufferPtr fuzzNulls(vector_size_t size);

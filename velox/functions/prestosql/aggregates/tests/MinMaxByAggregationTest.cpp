@@ -526,7 +526,10 @@ TEST_P(
   VectorFuzzer fuzzer(options, pool_.get(), 0);
 
   for (int i = 0; i < kNumBatches; ++i) {
-    auto valueVector = fuzzer.fuzz(fromKindToScalerType(GetParam().valueType));
+    // Generate a non-lazy vector so that it can be written out as a duckDB
+    // table.
+    auto valueVector = fuzzer.fuzz(
+        fromKindToScalerType(GetParam().valueType), false /*canBeLazy*/);
     auto comparisonVector = buildDataVector(
         GetParam().comparisonType,
         kBatchSize,
@@ -946,7 +949,10 @@ TEST_P(
   VectorFuzzer fuzzer(options, pool_.get(), 0);
 
   for (int i = 0; i < kNumBatches; ++i) {
-    auto valueVector = fuzzer.fuzz(fromKindToScalerType(GetParam().valueType));
+    // Generate a non-lazy vector so that it can be written out as a duckDB
+    // table.
+    auto valueVector = fuzzer.fuzz(
+        fromKindToScalerType(GetParam().valueType), false /*canBeLazy*/);
     auto groupByVector = makeFlatVector<int32_t>(kBatchSize);
     auto comparisonVector = buildDataVector(
         GetParam().comparisonType,

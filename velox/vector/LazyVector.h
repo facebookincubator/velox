@@ -122,6 +122,9 @@ void setRunTimeStatWriter(std::unique_ptr<BaseRuntimeStatWriter>&& ptr);
 // ever be accessed, loading can be limited to these positions. This
 // also allows pushing down computation into loading a column, hence
 // bypassing materialization into a vector.
+// Unloaded LazyVectors should be referenced only by one top-level vector.
+// Otherwise, it runs the risk of being loaded for different set of rows by each
+// top-level vector.
 class LazyVector : public BaseVector {
  public:
   LazyVector(
