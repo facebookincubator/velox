@@ -171,6 +171,10 @@ Task::~Task() {
   } catch (const std::exception& e) {
     LOG(WARNING) << "Caught exception in ~Task(): " << e.what();
   }
+  // NOTE: this is a hack to enforce destruction on 'planFragment_'. We found in
+  // some case the task dtor doesn't call 'planFragment_' dtor which cause the
+  // memory leak of the vectors held by the plan node such as Value node.
+  planFragment_.planNode.reset();
 }
 
 velox::memory::MemoryPool* FOLLY_NONNULL
