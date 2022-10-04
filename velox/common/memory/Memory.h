@@ -941,7 +941,7 @@ template <typename Allocator, uint16_t ALIGNMENT>
 MemoryManager<Allocator, ALIGNMENT>::~MemoryManager() {
   auto currentBytes = getTotalBytes();
   if (currentBytes) {
-    LOG(INFO) << "Leaked total memory of " << currentBytes << " bytes.";
+    VELOX_FAIL("Leaked total memory of {} bytes", currentBytes);
   }
 }
 
