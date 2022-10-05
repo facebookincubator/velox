@@ -171,6 +171,10 @@ Task::~Task() {
   } catch (const std::exception& e) {
     LOG(WARNING) << "Caught exception in ~Task(): " << e.what();
   }
+  // NOTE: this is a hack to enforce destruction on 'planFragment_'. We found in
+  // some case the task dtor doesn't call 'planFragment_' dtor which cause the
+  // memory leak of the vectors held by the plan node such as Value node.
+  planFragment_.planNode.reset();
 }
 
 velox::memory::MemoryPool* FOLLY_NONNULL
@@ -1836,11 +1840,10 @@ struct TaskMemoryUsage {
       out << ": ";
       pipelineMemoryUsage.total.toString(out, "operators");
       for (const auto& it : pipelineMemoryUsage.operators) {
-        const MemoryUsage& operatorMemoryUsage = it.second;
         out << "\n            ";
         out << it.first;
         out << ": ";
-        operatorMemoryUsage.toString(out, "instances");
+        it.second.toString(out, "instances");
       }
     }
   }
@@ -1899,6 +1902,8 @@ static void collectTaskMemoryUsage(
 }
 
 static std::string getQueryMemoryUsageString(memory::MemoryPool* queryPool) {
+  // Collect the memory usage numbers from query's tasks, pipelines and
+  // operators.
   std::vector<TaskMemoryUsage> taskMemoryUsages;
   taskMemoryUsages.reserve(queryPool->getChildCount());
   queryPool->visitChildren([&taskMemoryUsages](memory::MemoryPool* taskPool) {
@@ -1906,6 +1911,15 @@ static std::string getQueryMemoryUsageString(memory::MemoryPool* queryPool) {
     collectTaskMemoryUsage(taskMemoryUsages.back(), taskPool);
   });
 
+  // We will collect each operator's aggregated memory usage to later show the
+  // largest memory consumers.
+  struct TopMemoryUsage {
+    int64_t totalBytes;
+    std::string description;
+  };
+  std::vector<TopMemoryUsage> topMemoryUsages;
+
+  // Build the query memory use tree (task->pipeline->operator).
   std::stringstream out;
   out << "\n";
   out << queryPool->getName();
@@ -1914,7 +1928,35 @@ static std::string getQueryMemoryUsageString(memory::MemoryPool* queryPool) {
       queryPool->getMemoryUsageTracker()->getCurrentTotalBytes());
   for (const auto& taskMemoryUsage : taskMemoryUsages) {
     taskMemoryUsage.toString(out);
+
+    // Collect each operator's memory usage into the vector.
+    for (auto i = 0; i < taskMemoryUsage.pipelines.size(); ++i) {
+      const auto& pipelineMemoryUsage = taskMemoryUsage.pipelines[i];
+      for (const auto& it : pipelineMemoryUsage.operators) {
+        const MemoryUsage& operatorMemoryUsage = it.second;
+        // Ignore operators with zero memory for top memory users.
+        if (operatorMemoryUsage.totalBytes > 0) {
+          topMemoryUsages.emplace_back(TopMemoryUsage{
+              operatorMemoryUsage.totalBytes,
+              fmt::format(
+                  "{}.pipe{}.{}", taskMemoryUsage.taskId, i, it.first)});
+        }
+      }
+    }
   }
+
+  // Sort and show top memory users.
+  out << "\nTop memory usages:";
+  std::sort(
+      topMemoryUsages.begin(),
+      topMemoryUsages.end(),
+      [](const TopMemoryUsage& left, const TopMemoryUsage& right) {
+        return left.totalBytes > right.totalBytes;
+      });
+  for (const auto& top : topMemoryUsages) {
+    out << "\n    " << top.description << ": " << succinctBytes(top.totalBytes);
+  }
+
   return out.str();
 }
 
@@ -1936,6 +1978,27 @@ std::shared_ptr<SpillOperatorGroup> Task::getSpillOperatorGroupLocked(
 std::string Task::getErrorMsgOnMemCapExceeded(
     memory::MemoryUsageTracker& /*tracker*/) {
   return getQueryMemoryUsageString(queryCtx()->pool());
+}
+
+// static
+void Task::testingWaitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
+  const uint64_t numCreatedTasks = Task::numCreatedTasks();
+  uint64_t numDeletedTasks = Task::numDeletedTasks();
+  uint64_t waitUs = 0;
+  while (numCreatedTasks > numDeletedTasks) {
+    constexpr uint64_t kWaitInternalUs = 1'000;
+    std::this_thread::sleep_for(std::chrono::microseconds(kWaitInternalUs));
+    waitUs += kWaitInternalUs;
+    numDeletedTasks = Task::numDeletedTasks();
+    if (waitUs >= maxWaitUs) {
+      break;
+    }
+  }
+  if (numDeletedTasks < numCreatedTasks) {
+    LOG(ERROR) << numCreatedTasks << " tasks hav been created while only "
+               << numDeletedTasks << " have been deleted after waiting for "
+               << waitUs << " us";
+  }
 }
 
 } // namespace facebook::velox::exec

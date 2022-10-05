@@ -16,12 +16,12 @@ version: '3.5'
 services:
   ubuntu-cpp:
     # Usage:
-    #   docker-compose build ubuntu-cpp
+    #   docker-compose pull ubuntu-cpp or docker-compose build ubuntu-cpp
     #   docker-compose run --rm ubuntu-cpp
     #   or
     #   docker-compose run -e NUM_THREADS=<NUMBER_OF_THREADS_TO_USE> --rm ubuntu-cpp
     #   to set the number of threads used during compilation
-    image: facebookincubator/velox:amd64-ubuntu-22.04-cpp
+    image: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
     build:
       context: .
       dockerfile: scripts/ubuntu-22.04-cpp.dockerfile
