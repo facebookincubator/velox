@@ -510,7 +510,7 @@ std::string BaseVector::toString(vector_size_t index) const {
 std::string BaseVector::toString(
     vector_size_t from,
     vector_size_t to,
-    const std::string& delimiter,
+    const char* delimiter,
     bool includeRowNumbers) const {
   const auto start = std::max(0, std::min<int32_t>(from, length_));
   const auto end = std::max(0, std::min<int32_t>(to, length_));
@@ -845,6 +845,52 @@ BufferPtr BaseVector::sliceBuffer(
   bits::copyBits(
       buf->as<uint64_t>(), offset, ans->asMutable<uint64_t>(), 0, length);
   return ans;
+}
+
+std::string printNulls(const BufferPtr& nulls, vector_size_t maxBitsToPrint) {
+  VELOX_CHECK_GE(maxBitsToPrint, 0);
+
+  vector_size_t totalCount = nulls->size() * 8;
+  auto* rawNulls = nulls->as<uint64_t>();
+  auto nullCount = bits::countNulls(rawNulls, 0, totalCount);
+
+  std::stringstream out;
+  out << nullCount << " out of " << totalCount << " rows are null";
+
+  if (nullCount) {
+    out << ": ";
+    for (auto i = 0; i < maxBitsToPrint && i < totalCount; ++i) {
+      out << (bits::isBitNull(rawNulls, i) ? "n" : ".");
+    }
+  }
+
+  return out.str();
+}
+
+std::string printIndices(
+    const BufferPtr& indices,
+    vector_size_t maxIndicesToPrint) {
+  VELOX_CHECK_GE(maxIndicesToPrint, 0);
+
+  auto* rawIndices = indices->as<vector_size_t>();
+
+  vector_size_t size = indices->size() / sizeof(vector_size_t);
+
+  std::unordered_set<vector_size_t> uniqueIndices;
+  for (auto i = 0; i < size; ++i) {
+    uniqueIndices.insert(rawIndices[i]);
+  }
+
+  std::stringstream out;
+  out << uniqueIndices.size() << " unique indices out of " << size << ": ";
+  for (auto i = 0; i < maxIndicesToPrint && i < size; ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << rawIndices[i];
+  }
+
+  return out.str();
 }
 
 } // namespace velox

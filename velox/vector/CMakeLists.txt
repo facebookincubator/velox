@@ -21,9 +21,11 @@ add_library(
   LazyVector.cpp
   SelectivityVector.cpp
   SequenceVector.cpp
+  VectorSaver.cpp
   VectorEncoding.cpp
   VectorPool.cpp
-  VectorStream.cpp)
+  VectorStream.cpp
+  VariantToVector.cpp)
 
 target_link_libraries(velox_vector velox_encode velox_memory velox_time
                       velox_type velox_buffer)

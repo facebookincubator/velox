@@ -16,6 +16,7 @@
 
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/DataSink.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
@@ -25,6 +26,8 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/PrestoSerializer.h"
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::exec::test {
 
@@ -46,6 +49,30 @@ OperatorTestBase::~OperatorTestBase() {
   memory::MappedMemory::setDefaultInstance(nullptr);
 }
 
+void OperatorTestBase::TearDownTestCase() {
+  waitForAllTasksToBeDeleted();
+}
+
+void OperatorTestBase::waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
+  const uint64_t numCreatedTasks = Task::numCreatedTasks();
+  uint64_t numDeletedTasks = Task::numDeletedTasks();
+  uint64_t waitUs = 0;
+  while (numCreatedTasks > numDeletedTasks) {
+    constexpr uint64_t kWaitInternalUs = 1'000;
+    std::this_thread::sleep_for(std::chrono::microseconds(kWaitInternalUs));
+    waitUs += kWaitInternalUs;
+    numDeletedTasks = Task::numDeletedTasks();
+    if (waitUs >= maxWaitUs) {
+      break;
+    }
+  }
+  if (numDeletedTasks < numCreatedTasks) {
+    LOG(ERROR) << numCreatedTasks << " has been created while only "
+               << numDeletedTasks << " has been deleted after waiting for "
+               << waitUs << " us";
+  }
+}
+
 void OperatorTestBase::SetUp() {
   // Sets the process default MappedMemory to an async cache of up
   // to 4GB backed by a default MappedMemory
@@ -61,6 +88,7 @@ void OperatorTestBase::SetUp() {
 
 void OperatorTestBase::SetUpTestCase() {
   functions::prestosql::registerAllScalarFunctions();
+  TestValue::enable();
 }
 
 std::shared_ptr<Task> OperatorTestBase::assertQuery(
@@ -141,7 +169,7 @@ std::shared_ptr<core::FieldAccessTypedExpr> OperatorTestBase::toFieldExpr(
       rowType->findChild(name), name);
 }
 
-std::shared_ptr<const core::ITypedExpr> OperatorTestBase::parseExpr(
+core::TypedExprPtr OperatorTestBase::parseExpr(
     const std::string& text,
     RowTypePtr rowType,
     const parse::ParseOptions& options) {

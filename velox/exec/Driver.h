@@ -124,8 +124,14 @@ enum class BlockingReason {
   kWaitForSplit,
   kWaitForExchange,
   kWaitForJoinBuild,
+  /// Build operator is blocked waiting for the probe operators to finish
+  /// probing before build the next hash table from the previously spilled data.
+  kWaitForJoinProbe,
   kWaitForMemory,
   kWaitForConnector,
+  /// Build operator is blocked waiting for all its peers to stop to run group
+  /// spill on all of them.
+  kWaitForSpill,
 };
 
 std::string blockingReasonToString(BlockingReason reason);
@@ -197,7 +203,8 @@ struct DriverCtx {
 
   const core::QueryConfig& queryConfig() const;
 
-  velox::memory::MemoryPool* FOLLY_NONNULL addOperatorPool();
+  velox::memory::MemoryPool* FOLLY_NONNULL
+  addOperatorPool(const std::string& operatorType = "");
 };
 
 class Driver : public std::enable_shared_from_this<Driver> {

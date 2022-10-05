@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-#include <folly/String.h>
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
-#include <string>
 #include <unordered_set>
-#include <vector>
 
 #include "velox/expression/tests/FuzzerRunner.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -55,7 +52,7 @@ int main(int argc, char** argv) {
       // cardinality passing a VARBINARY (since HLL's implementation uses an
       // alias to VARBINARY).
       "cardinality",
-  };
+      "neq"};
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   return FuzzerRunner::run(FLAGS_only, initialSeed, skipFunctions);
 }

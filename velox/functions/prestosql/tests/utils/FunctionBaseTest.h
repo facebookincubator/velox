@@ -72,7 +72,7 @@ class FunctionBaseTest : public testing::Test,
     return ROW({name, name2}, {type, type2});
   }
 
-  std::shared_ptr<const core::ITypedExpr> makeTypedExpr(
+  core::TypedExprPtr makeTypedExpr(
       const std::string& text,
       const RowTypePtr& rowType) {
     auto untyped = parse::parseExpr(text, options_);
@@ -82,7 +82,7 @@ class FunctionBaseTest : public testing::Test,
   // Use this directly if you want to evaluate a manually-constructed expression
   // tree and don't want it to cast the returned vector.
   VectorPtr evaluate(
-      const std::shared_ptr<const core::ITypedExpr>& typedExpr,
+      const core::TypedExprPtr& typedExpr,
       const RowVectorPtr& data) {
     return evaluateImpl<exec::ExprSet>(typedExpr, data);
   }
@@ -99,7 +99,7 @@ class FunctionBaseTest : public testing::Test,
   // tree.
   template <typename T>
   std::shared_ptr<T> evaluate(
-      const std::shared_ptr<const core::ITypedExpr>& typedExpr,
+      const core::TypedExprPtr& typedExpr,
       const RowVectorPtr& data) {
     auto result = evaluate(typedExpr, data);
     return castEvaluateResult<T>(result, typedExpr->toString());
@@ -218,30 +218,6 @@ class FunctionBaseTest : public testing::Test,
     }
   }
 
-  /// Register a lambda expression with a name that can later be used to refer
-  /// to the lambda in a function call, e.g. foo(a, b,
-  /// function('<lanbda-name>')).
-  ///
-  /// @param name Name to use when referring to the lambda expression from a
-  /// function call.
-  /// @param signature A list of names and types of inputs for the lambda
-  /// expression.
-  /// @param rowType The type of the input data used to resolve types of
-  /// captures used in the lambda expression.
-  /// @param body Body of the lambda as SQL expression.
-  void registerLambda(
-      const std::string& name,
-      const RowTypePtr& signature,
-      TypePtr rowType,
-      const std::string& body) {
-    core::Expressions::registerLambda(
-        name,
-        signature,
-        rowType,
-        parse::parseExpr(body, options_),
-        execCtx_.pool());
-  }
-
   core::TypedExprPtr parseExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
@@ -300,7 +276,7 @@ class FunctionBaseTest : public testing::Test,
 
   template <typename ExprSet>
   VectorPtr evaluateImpl(
-      const std::shared_ptr<const core::ITypedExpr>& typedExpr,
+      const core::TypedExprPtr& typedExpr,
       const RowVectorPtr& data) {
     SelectivityVector rows(data->size());
     std::vector<VectorPtr> results(1);

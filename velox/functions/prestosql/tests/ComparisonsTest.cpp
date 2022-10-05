@@ -20,6 +20,11 @@
 using namespace facebook::velox;
 
 class ComparisonsTest : public functions::test::FunctionBaseTest {
+ public:
+  void SetUp() override {
+    this->options_.parseDecimalAsDouble = false;
+  }
+
  protected:
   template <typename T>
   void testDistinctFrom(
@@ -96,6 +101,108 @@ TEST_F(ComparisonsTest, betweenDate) {
     EXPECT_EQ(result->valueAt(i), std::get<1>(testData[i])) << "at " << i;
   }
 }
+
+TEST_F(ComparisonsTest, betweenDecimal) {
+  auto runAndCompare = [&](const std::string& exprStr,
+                           VectorPtr input,
+                           VectorPtr expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(exprStr, makeRowVector({input}));
+    test::assertEqualVectors(actual, expectedResult);
+  };
+
+  auto shortFlat = makeNullableShortDecimalFlatVector(
+      {100, 250, 300, 500, std::nullopt}, DECIMAL(3, 2));
+  auto expectedResult =
+      makeNullableFlatVector<bool>({false, true, true, false, std::nullopt});
+
+  runAndCompare("c0 between 2.00 and 3.00", shortFlat, expectedResult);
+
+  auto longFlat = makeNullableLongDecimalFlatVector(
+      {100, 250, 300, 500, std::nullopt}, DECIMAL(20, 2));
+
+  // Comparing LONG_DECIMAL and SHORT_DECIMAL must throw error.
+  VELOX_ASSERT_THROW(
+      runAndCompare("c0 between 2.00 and 3.00", longFlat, expectedResult),
+      "Scalar function signature is not supported: between(LONG_DECIMAL(20,2), SHORT_DECIMAL(3,2), SHORT_DECIMAL(3,2)).");
+}
+
+TEST_F(ComparisonsTest, eqDecimal) {
+  auto runAndCompare = [&](std::vector<VectorPtr>& inputs,
+                           VectorPtr expectedResult) {
+    auto actual =
+        evaluate<SimpleVector<bool>>("c0 == c1", makeRowVector(inputs));
+    test::assertEqualVectors(actual, expectedResult);
+  };
+
+  std::vector<VectorPtr> inputs = {
+      makeNullableShortDecimalFlatVector(
+          {1, std::nullopt, 3, -3, std::nullopt, 4}, DECIMAL(10, 5)),
+      makeNullableShortDecimalFlatVector(
+          {1, 2, 3, -3, std::nullopt, 5}, DECIMAL(10, 5))};
+  auto expected = makeNullableFlatVector<bool>(
+      {true, std::nullopt, true, true, std::nullopt, false});
+  runAndCompare(inputs, expected);
+
+  // Test with different data types.
+  inputs = {
+      makeShortDecimalFlatVector({1}, DECIMAL(10, 5)),
+      makeShortDecimalFlatVector({1}, DECIMAL(10, 4))};
+  VELOX_ASSERT_THROW(
+      runAndCompare(inputs, expected),
+      "Scalar function signature is not supported: eq(SHORT_DECIMAL(10,5),"
+      " SHORT_DECIMAL(10,4))");
+}
+
+TEST_F(ComparisonsTest, gtLtDecimal) {
+  auto runAndCompare = [&](std::string expr,
+                           std::vector<VectorPtr>& inputs,
+                           VectorPtr expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(expr, makeRowVector(inputs));
+    test::assertEqualVectors(actual, expectedResult);
+  };
+
+  // Short Decimals test.
+  std::vector<VectorPtr> shortDecimalInputs = {
+      makeNullableShortDecimalFlatVector(
+          {1, std::nullopt, 3, -3, std::nullopt, 4}, DECIMAL(10, 5)),
+      makeNullableShortDecimalFlatVector(
+          {0, 2, 3, -5, std::nullopt, 5}, DECIMAL(10, 5))};
+  auto expectedGtLt = makeNullableFlatVector<bool>(
+      {true, std::nullopt, false, true, std::nullopt, false});
+  auto expectedGteLte = makeNullableFlatVector<bool>(
+      {true, std::nullopt, true, true, std::nullopt, false});
+
+  runAndCompare("c0 > c1", shortDecimalInputs, expectedGtLt);
+  runAndCompare("c1 < c0", shortDecimalInputs, expectedGtLt);
+  // Gte/Lte
+  runAndCompare("c0 >= c1", shortDecimalInputs, expectedGteLte);
+  runAndCompare("c1 <= c0", shortDecimalInputs, expectedGteLte);
+
+  // Long Decimals test.
+  std::vector<VectorPtr> longDecimalsInputs = {
+      makeNullableLongDecimalFlatVector(
+          {UnscaledLongDecimal::max().unscaledValue(),
+           std::nullopt,
+           3,
+           UnscaledLongDecimal::min().unscaledValue() + 1,
+           std::nullopt,
+           4},
+          DECIMAL(38, 5)),
+      makeNullableLongDecimalFlatVector(
+          {UnscaledLongDecimal::max().unscaledValue() - 1,
+           2,
+           3,
+           UnscaledLongDecimal::min().unscaledValue(),
+           std::nullopt,
+           5},
+          DECIMAL(38, 5))};
+  runAndCompare("c0 > c1", longDecimalsInputs, expectedGtLt);
+  runAndCompare("c1 < c0", longDecimalsInputs, expectedGtLt);
+
+  // Gte/Lte
+  runAndCompare("c0 >= c1", longDecimalsInputs, expectedGteLte);
+  runAndCompare("c1 <= c0", longDecimalsInputs, expectedGteLte);
+};
 
 TEST_F(ComparisonsTest, eqArray) {
   auto test =

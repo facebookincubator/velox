@@ -40,6 +40,22 @@ bool isColumnNameRequiringEscaping(const std::string& name) {
 
 namespace facebook::velox {
 
+bool isDecimalName(const std::string& typeName) {
+  auto typeNameUpper = boost::algorithm::to_upper_copy(typeName);
+  return (
+      typeNameUpper == TypeTraits<TypeKind::SHORT_DECIMAL>::name ||
+      typeNameUpper == TypeTraits<TypeKind::LONG_DECIMAL>::name);
+}
+
+bool isDecimalTypeSignature(const std::string& arg) {
+  auto upper = boost::algorithm::to_upper_copy(arg);
+  return (
+      upper.find(TypeTraits<TypeKind::SHORT_DECIMAL>::name) !=
+          std::string::npos ||
+      upper.find(TypeTraits<TypeKind::LONG_DECIMAL>::name) !=
+          std::string::npos);
+}
+
 // Static variable intialization is not thread safe for non
 // constant-initialization, but scoped static initialization is thread safe.
 const std::unordered_map<std::string, TypeKind>& getTypeStringMap() {
@@ -677,6 +693,15 @@ std::shared_ptr<const Type> createScalarType(TypeKind kind) {
 std::shared_ptr<const Type> createType(
     TypeKind kind,
     std::vector<std::shared_ptr<const Type>>&& children) {
+  if (kind == TypeKind::FUNCTION) {
+    VELOX_USER_CHECK_GE(
+        children.size(),
+        1,
+        "FUNCTION type should have at least one child type");
+    std::vector<TypePtr> argTypes(
+        children.begin(), children.begin() + children.size() - 1);
+    return std::make_shared<FunctionType>(std::move(argTypes), children.back());
+  }
   return VELOX_DYNAMIC_TYPE_DISPATCH(createType, kind, std::move(children));
 }
 

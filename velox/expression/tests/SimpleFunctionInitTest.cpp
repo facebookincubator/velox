@@ -92,11 +92,12 @@ TEST_F(SimpleFunctionInitTest, initializationArray) {
           const std::vector<std::optional<int32_t>>& second,
           const std::vector<std::optional<std::vector<std::optional<int32_t>>>>&
               expected) {
-        std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
+        std::vector<core::TypedExprPtr> args;
         args.push_back(
             std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"));
 
-        auto rhsArrayVector = makeNullableArrayVector<int32_t>({second});
+        auto rhsArrayVector = makeNullableArrayVector(
+            std::vector<std::vector<std::optional<int32_t>>>{second});
         args.push_back(std::make_shared<core::ConstantTypedExpr>(
             BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
         exec::ExprSet expr(
@@ -109,7 +110,7 @@ TEST_F(SimpleFunctionInitTest, initializationArray) {
           expr.eval(SelectivityVector(1), evalCtx, results);
           assertEqualVectors(results[0], expectedVector);
         };
-        auto expectedResult = makeVectorWithNullArrays<int32_t>(expected);
+        auto expectedResult = makeNullableArrayVector<int32_t>(expected);
         eval(
             makeRowVector({makeNullableFlatVector(std::vector{first})}),
             expectedResult);
@@ -175,7 +176,7 @@ TEST_F(SimpleFunctionInitTest, initializationMap) {
   auto inputVector = makeNullableFlatVector<int32_t>({1, 2, 3});
   auto expectedResults = makeFlatVector<int64_t>({4, 5, 6});
 
-  std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
+  std::vector<core::TypedExprPtr> args;
   args.push_back(std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"));
 
   args.push_back(std::make_shared<core::ConstantTypedExpr>(

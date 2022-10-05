@@ -31,8 +31,7 @@ class SimpleExpressionEvaluator : public connector::ExpressionEvaluator {
       : execCtx_(execCtx) {}
 
   std::unique_ptr<exec::ExprSet> compile(
-      const std::shared_ptr<const core::ITypedExpr>& expression)
-      const override {
+      const core::TypedExprPtr& expression) const override {
     auto expressions = {expression};
     return std::make_unique<exec::ExprSet>(std::move(expressions), execCtx_);
   }
@@ -55,8 +54,8 @@ class SimpleExpressionEvaluator : public connector::ExpressionEvaluator {
 };
 } // namespace
 
-OperatorCtx::OperatorCtx(DriverCtx* driverCtx)
-    : driverCtx_(driverCtx), pool_(driverCtx_->addOperatorPool()) {}
+OperatorCtx::OperatorCtx(DriverCtx* driverCtx, const std::string& operatorType)
+    : driverCtx_(driverCtx), pool_(driverCtx_->addOperatorPool(operatorType)) {}
 
 core::ExecCtx* OperatorCtx::execCtx() const {
   if (!execCtx_) {
@@ -84,11 +83,11 @@ OperatorCtx::createConnectorQueryCtx(
 
 Operator::Operator(
     DriverCtx* driverCtx,
-    std::shared_ptr<const RowType> outputType,
+    RowTypePtr outputType,
     int32_t operatorId,
     std::string planNodeId,
     std::string operatorType)
-    : operatorCtx_(std::make_unique<OperatorCtx>(driverCtx)),
+    : operatorCtx_(std::make_unique<OperatorCtx>(driverCtx, operatorType)),
       stats_(
           operatorId,
           driverCtx->pipelineId,
@@ -101,7 +100,7 @@ Operator::Operator(
         [&](memory::MemoryUsageTracker& tracker) {
           VELOX_DCHECK(pool()->getMemoryUsageTracker().get() == &tracker);
           std::stringstream out;
-          out << "Failed Operator: " << stats_.operatorType << "_#"
+          out << "\nFailed Operator: " << stats_.operatorType << "."
               << stats_.operatorId << ": "
               << succinctBytes(tracker.getCurrentTotalBytes());
           return out.str();
@@ -261,7 +260,7 @@ std::string Operator::toString() const {
 
 std::vector<column_index_t> toChannels(
     const RowTypePtr& rowType,
-    const std::vector<std::shared_ptr<const core::ITypedExpr>>& exprs) {
+    const std::vector<core::TypedExprPtr>& exprs) {
   std::vector<column_index_t> channels;
   channels.reserve(exprs.size());
   for (const auto& expr : exprs) {

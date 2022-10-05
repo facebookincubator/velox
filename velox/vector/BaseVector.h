@@ -255,6 +255,18 @@ class BaseVector {
       vector_size_t otherIndex,
       CompareFlags flags) const = 0;
 
+  /// Sort values at specified 'indices'. Used to sort map keys.
+  virtual void sortIndices(
+      std::vector<vector_size_t>& indices,
+      CompareFlags flags) const {
+    std::sort(
+        indices.begin(),
+        indices.end(),
+        [&](vector_size_t left, vector_size_t right) {
+          return compare(this, left, right, flags) < 0;
+        });
+  }
+
   /**
    * @return the hash of the value at the given index in this vector
    */
@@ -655,18 +667,39 @@ class BaseVector {
   ///
   ///         [DICTIONARY INTEGER: 5 elements, no nulls], [FLAT INTEGER: 10
   ///             elements, no nulls]
-  std::string toString(bool recursive = false) const;
+  std::string toString(bool recursive) const;
+
+  /// Same as toString(false). Provided to allow for easy invocation from LLDB.
+  std::string toString() const {
+    return toString(false);
+  }
 
   /// Returns string representation of the value in the specified row.
   virtual std::string toString(vector_size_t index) const;
 
-  /// Returns a list of values in rows [from, to). By default rows are separated
-  /// by a new line and include row numbers.
+  /// Returns a list of values in rows [from, to).
+  ///
+  /// Automatically adjusts 'from' and 'to' to a range of valid indices. Returns
+  /// empty string if 'from' is greater than or equal to vector size or 'to' is
+  /// less than or equal to zero. Returns values up to the end of the vector if
+  /// 'to' is greater than vector size. Returns values from the start of the
+  /// vector if 'from' is negative.
+  ///
+  /// The type of the 'delimiter' is a const char* and not an std::string to
+  /// allow for invoking this method from LLDB.
   std::string toString(
       vector_size_t from,
       vector_size_t to,
-      const std::string& delimiter = "\n",
+      const char* delimiter,
       bool includeRowNumbers = true) const;
+
+  /// Returns a list of values in rows [from, to). Values are separated by a new
+  /// line and prefixed with a row number.
+  ///
+  /// This method is provided to allow to easy invocation from LLDB.
+  std::string toString(vector_size_t from, vector_size_t to) const {
+    return toString(from, to, "\n");
+  }
 
   void setCodegenOutput() {
     isCodegenOutput_ = true;
@@ -784,6 +817,28 @@ bool isLazyNotLoaded(const BaseVector& vector);
 inline BufferPtr allocateIndices(vector_size_t size, memory::MemoryPool* pool) {
   return AlignedBuffer::allocate<vector_size_t>(size, pool, 0);
 }
+
+// Allocates a buffer to fit at least 'size' null bits and initializes them to
+// not-null.
+inline BufferPtr allocateNulls(vector_size_t size, memory::MemoryPool* pool) {
+  return AlignedBuffer::allocate<bool>(size, pool, bits::kNotNull);
+}
+
+// Returns a summary of the null bits in the specified buffer and prints out
+// first 'maxBitsToPrint' bits. Automatically adjusts if 'maxBitsToPrint' is
+// greater than total number of bits available.
+// For example: 3 out of 8 rows are null: .nn.n...
+std::string printNulls(
+    const BufferPtr& nulls,
+    vector_size_t maxBitsToPrint = 30);
+
+// Returns a summary of the indices buffer and prints out first
+// 'maxIndicesToPrint' indices. Automatically adjusts if 'maxIndicesToPrint' is
+// greater than total number of indices available.
+// For example: 5 unique indices out of 6: 34, 79, 11, 0, 0, 33.
+std::string printIndices(
+    const BufferPtr& indices,
+    vector_size_t maxIndicesToPrint = 10);
 
 } // namespace velox
 } // namespace facebook

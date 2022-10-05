@@ -266,7 +266,7 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
     void findRun(
         uint64_t offset,
         int32_t* FOLLY_NONNULL index,
-        int32_t* FOLLY_NONNULL offsetInRun);
+        int32_t* FOLLY_NONNULL offsetInRun) const;
 
    private:
     MappedMemory* FOLLY_NONNULL mappedMemory_;
@@ -451,6 +451,13 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
         totalSmallAllocateBytes_,
         totalSizeClassAllocateBytes_,
         totalLargeAllocateBytes_};
+  }
+
+  // clears counters to revert effect of previous tests.
+  static void testingClearAllocateBytesStats() {
+    totalSmallAllocateBytes_ = 0;
+    totalSizeClassAllocateBytes_ = 0;
+    totalLargeAllocateBytes_ = 0;
   }
 
   virtual Stats stats() const {

@@ -121,7 +121,8 @@ processes the expressions and creates trees of exec::Expr class instances.
 ExprSet accepts multiple expressions and identifies common subexpressions across
 all of them so that they can be calculated just once. FilterProject operator
 benefits from this capability as it creates a single ExprSet for all of the
-filter and project expressions.
+filter and project expressions. The compilation steps also flattens adjacent
+AND, OR and concat-line expressions and performs constant folding.
 
 Each node in the expression tree is transformed to a corresponding instance of
 the exec::Expr class.
@@ -131,11 +132,12 @@ core::ITypedExpr node   exec::Expr instance
 ======================  ===================
 FieldAccessTypedExpr    FieldReference
 ConstantTypedExpr       ConstantExpr
-CallTypedExpr           * Expr if function name points to a simple or vector function;
-                        * CastExpr if function name is “cast”;
+CallTypedExpr           * CastExpr if function name is “cast”;
                         * ConjunctExpr if function name is “and” or “or”;
                         * SwitchExpr if function name is “if” or “switch”;
+                        * CoalesceExpr if function name is "coalesce"
                         * TryExpr if function name is “try”;
+                        * Expr if function name is none of the above.
 CastTypedExpr           CastExpr
 LambdaTypedExpr         LambdaExpr
 ======================  ===================
@@ -144,9 +146,12 @@ CallTypedExpr nodes are processed to determine whether function names refer to
 special form expressions or functions (vectorized or simple). The lookup is
 performed in the following order and the search stops on the first match:
 
-* Check if name matches one of special forms
-* Check if name and signature (e.g. input types) matches one of simple functions
-* Check if name matches one of vectorized functions
+* Check if name matches one of special forms.
+* Check if name and signature (i.e. input types) matches one of vectorized functions.
+* Check if name and signature (i.e. input types) matches one of simple functions.
+
+Common SubExpression Detection
+``````````````````````````````
 
 The following diagram shows the expression tree for the **strpos(upper
 (a), 'FOO') > 0 OR strpos(upper(a), 'BAR') > 0** expression. Here, **upper
@@ -156,6 +161,58 @@ class which appears twice in the tree.
 .. image:: images/cse.png
   :width: 600
   :align: center
+
+Flatten ANDs and ORs
+````````````````````
+
+Adjacent AND nodes are consolidated into one. Similarly, adjacent OR nodes are
+consolidated into one. This maximizes the effect of adaptive conjunct
+reordering during execution of the AND and OR expressions.
+
+.. image:: images/flatten-and.png
+  :width: 600
+  :align: center
+
+.. _expr-flatten-concat:
+
+Flatten concat-like functions
+`````````````````````````````
+
+Functions that behave like associative operators can declare support for
+flattening. In that case, adjacent nodes of the same function are
+consolidated into one.
+
+A good example is concat(varchar,..) Presto function. Evaluating concat(a, b, c,
+d) is more efficient than evaluating concat(a, concat(b, concat(c, d))).
+Concatenating 4 columns at once allows to calculate the total amount of memory
+needed for the final result, allocate it in one chunk, then copy individual
+values to the right offsets. This saves on memory allocations and reduces data
+copy as compared to concatenating two columns at a time.
+
+Concat Presto function declares support for flattening allowing the expression
+compiler to convert concat(a, concat(b, concat(c, d))) expression to
+concat(a, b, c, d).
+
+Other functions that can leverage this optimization include concat(array,..) and
+map_concat(map,..).
+
+A function declaring support for flattening must have a signature with variadic
+arguments of the same type and return type must be the same as input type.
+
+        f(x,..) -> x
+
+Flattening converts sub-expressions like f(x1, f(x2, f(x3, x4))) into
+f(x1, x2, x3, x4).
+
+Flattening happens before constant folding, hence, f(a, f(constant-x, constant-y))
+becomes f(a, constant-x, constant-y), not f(a, constant-z), where
+constant-z = f(constant-x, constant-y).
+
+Flattening also affects common sub-expression detection. Without flattening, in
+an expression like g(f(a, f(b, c)), f(d, f(b, c))), the compiler would
+identify f(b, c) as a common sub-expression. With flattening, the expression
+will be re-writen as g(f(a, b, c), f(d, b, c)) and no common sub-expression
+will be identified.
 
 Constant Folding
 ````````````````
@@ -171,17 +228,6 @@ evaluated during compilation time and replaced by a single ConstantExpr
 node **FOO**.
 
 .. image:: images/constant-folding.png
-  :width: 600
-  :align: center
-
-Flatten ANDs and ORs
-````````````````````
-
-Adjacent AND nodes are consolidated into one. Similarly, adjacent OR nodes are
-consolidated into one. This maximizes the effect of adaptive conjunct
-reordering during execution of the AND and OR expressions.
-
-.. image:: images/flatten-and.png
   :width: 600
   :align: center
 
@@ -316,6 +362,52 @@ depth-first order. For each node a sequence of operations is performed.
 #. **Expr::evalAll** - The expression can be either a special form or a function call. If it is a special form, evaluate the expression by invoking Expr::evalSpecialForm(). If it is a function call, recursively evaluate all input expressions by calling Expr::eval() on the child nodes and produce input vectors. If the function has default null behavior, identify all rows where input vectors are null and remove these from the set of rows for evaluation. If the function is deterministic and input vectors are not flat, try to peel off encodings. If peeling is successful, replace input vectors with corresponding inner vectors, update the set of rows for evaluation to corresponding rows in the inner vectors and store the peeled off wrappings for later use. Evaluate the function by calling VectorFunction::apply(). Adjust the results by wrapping them using peeled encodings and by setting nulls on rows which were removed due to null inputs. NOTE: The handling of nulls and peeling of encodings in this step may seem to be duplicating the similar steps from Expr::evalEncodings and Expr::evalWithNulls. The difference is that Expr::evalEncodings and Expr::evalWithNulls are working with the input data provided for the whole expression tree while this step is working with the input vectors that were calculated by evaluating input expressions.
 #. **Finalize** - Set nulls for rows that were removed from evaluation due to null inputs. If any encoding was peeled off, use it to wrap the result. If the expression is a shared subexpression and there is a partial result from prior evaluation, incorporate it into the final result, then save the result for future use.
 
+.. _expr-flat-no-nulls:
+
+Flat No-Nulls Fast Path
+```````````````````````
+
+When evaluating simple expressions on short vectors (< 1000 rows), the overhead
+of handling nulls and encodings is visible. To optimize these use cases,
+expression evaluation takes flat-no-nulls fast path
+(Expr::evalFlatNoNulls). This path applies automatically when inputs are flat
+vectors or constants with no nulls and all sub-expressions are guaranteed to
+produce flat-or-constant-no-nulls results given flat-or-constant-no-nulls
+inputs.
+
+An example of a workload that benefits from this optimization is basic arithmetic
+over non-null floats found in many machine learning pre-processing workloads.
+
+All simple functions are guaranteed to return flat-or-constant-no-nulls result
+for flat-or-constant-no-nulls inputs.
+
+Vector functions that have this property must indicate so by overriding
+supportsFlatNoNullsFastPath method.
+
+.. code-block:: c++
+
+  /// Returns true if (1) supports evaluation on all constant inputs of size >
+  /// 1; (2) returns flat or constant result when inputs are all flat, all
+  /// constant or a mix of flat and constant; (3) guarantees that if all inputs
+  /// are not null, the result is also not null.
+  virtual bool supportsFlatNoNullsFastPath() const {
+    return false;
+  }
+
+Special forms support flat-no-nulls fast path in some cases, but not all.
+
+* AND / OR support flat-no-nulls fast path if all sub-expressions support
+  flat-no-nulls fast path.
+* IF and SWITCH support flat-no-nulls fast path if else clause if specified and
+  all sub-expressions support flat-no-nulls fast path.
+* COALESCE supports flat-no-nulls fast path if all sub-expressions support
+  flat-no-nulls fast path.
+* CAST doesn't support flat-no-nulls fast path.
+* TRY doesnt't support flat-no-nulls fast path.
+
+It is possible for some sub-expressions to take the fast path while others
+go through the regular path.
+
 Error Handling in AND, OR, TRY
 ``````````````````````````````
 
@@ -350,6 +442,7 @@ Evaluation of IF, SWITCH
 ````````````````````````
 
 SWITCH expression evaluation goes through the following steps:
+
 * Evaluate the first condition on all rows.
 * Evaluate the first “then” clause on a subset of rows where the first condition is true and produce a partially populated result vector.
 * Evaluate the second condition on rows where the first condition is not true.

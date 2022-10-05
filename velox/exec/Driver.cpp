@@ -36,14 +36,15 @@ DriverCtx::DriverCtx(
       splitGroupId(_splitGroupId),
       partitionId(_partitionId),
       task(_task),
-      pool(task->addDriverPool()) {}
+      pool(task->addDriverPool(pipelineId, driverId)) {}
 
 const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->config();
 }
 
-velox::memory::MemoryPool* FOLLY_NONNULL DriverCtx::addOperatorPool() {
-  return task->addOperatorPool(pool);
+velox::memory::MemoryPool* FOLLY_NONNULL
+DriverCtx::addOperatorPool(const std::string& operatorType) {
+  return task->addOperatorPool(pool, operatorType);
 }
 
 std::atomic_uint64_t BlockingState::numBlockedDrivers_{0};
@@ -651,10 +652,14 @@ std::string blockingReasonToString(BlockingReason reason) {
       return "kWaitForExchange";
     case BlockingReason::kWaitForJoinBuild:
       return "kWaitForJoinBuild";
+    case BlockingReason::kWaitForJoinProbe:
+      return "kWaitForJoinProbe";
     case BlockingReason::kWaitForMemory:
       return "kWaitForMemory";
     case BlockingReason::kWaitForConnector:
       return "kWaitForConnector";
+    case BlockingReason::kWaitForSpill:
+      return "kWaitForSpill";
   }
   VELOX_UNREACHABLE();
   return "";

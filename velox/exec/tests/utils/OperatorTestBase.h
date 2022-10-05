@@ -41,6 +41,8 @@ class OperatorTestBase : public testing::Test,
 
   static void SetUpTestCase();
 
+  static void TearDownTestCase();
+
   void createDuckDbTable(const std::vector<RowVectorPtr>& data) {
     duckDbQueryRunner_.createTable("tmp", data);
   }
@@ -124,10 +126,16 @@ class OperatorTestBase : public testing::Test,
       const std::string& name,
       const RowTypePtr& rowType);
 
-  std::shared_ptr<const core::ITypedExpr> parseExpr(
+  core::TypedExprPtr parseExpr(
       const std::string& text,
       RowTypePtr rowType,
       const parse::ParseOptions& options = {});
+
+  /// Invoked to wait for all the tasks created by the test to be deleted.
+  ///
+  /// NOTE: it is assumed that there is no more task to be created after or
+  /// during this wait call.gi
+  static void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
 
   DuckDbQueryRunner duckDbQueryRunner_;
 

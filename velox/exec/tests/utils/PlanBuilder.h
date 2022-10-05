@@ -171,7 +171,7 @@ class PlanBuilder {
   PlanBuilder& tableScan(
       tpch::Table table,
       std::vector<std::string>&& columnNames,
-      size_t scaleFactor = 1);
+      double scaleFactor = 1);
 
   /// Add a ValuesNode using specified data.
   ///
@@ -548,40 +548,25 @@ class PlanBuilder {
   /// @param keys Partitioning keys. May be empty, in which case all input will
   /// be places in a single partition.
   /// @param sources One or more plan nodes that produce input data.
-  /// @param outputLayout Optional output layout in case it is different then
-  /// the input. Output columns may appear in different order from the input,
-  /// some input columns may be missing in the output, some columns may be
-  /// duplicated in the output. Supports "col AS alias" syntax to change the
-  /// names for the input columns.
   PlanBuilder& localPartition(
       const std::vector<std::string>& keys,
-      const std::vector<core::PlanNodePtr>& sources,
-      const std::vector<std::string>& outputLayout = {});
+      const std::vector<core::PlanNodePtr>& sources);
 
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node).
-  PlanBuilder& localPartition(
-      const std::vector<std::string>& keys,
-      const std::vector<std::string>& outputLayout = {});
+  PlanBuilder& localPartition(const std::vector<std::string>& keys);
 
   /// Add a LocalPartitionNode to partition the input using row-wise
   /// round-robin. Number of partitions is determined at runtime based on
   /// parallelism of the downstream pipeline.
   ///
   /// @param sources One or more plan nodes that produce input data.
-  /// @param outputLayout Optional output layout in case it is different then
-  /// the input. Output columns may appear in different order from the input,
-  /// some input columns may be missing in the output, some columns may be
-  /// duplicated in the output. Supports "col AS alias" syntax to change the
-  /// names for the input columns.
   PlanBuilder& localPartitionRoundRobin(
-      const std::vector<core::PlanNodePtr>& sources,
-      const std::vector<std::string>& outputLayout = {});
+      const std::vector<core::PlanNodePtr>& sources);
 
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node).
-  PlanBuilder& localPartitionRoundRobin(
-      const std::vector<std::string>& outputLayout = {});
+  PlanBuilder& localPartitionRoundRobin();
 
   /// Add a HashJoinNode to join two inputs using one or more join keys and an
   /// optional filter.
@@ -711,9 +696,16 @@ class PlanBuilder {
     return *this;
   }
 
- private:
+ protected:
+  // Users who create customer operators might want to extend the PlanBuilder to
+  // customized extended plan builders, those functions are needed in such
+  // extensions.
   std::string nextPlanNodeId();
 
+  std::shared_ptr<const core::ITypedExpr> inferTypes(
+      const std::shared_ptr<const core::IExpr>& untypedExpr);
+
+ private:
   std::shared_ptr<const core::FieldAccessTypedExpr> field(column_index_t index);
 
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> fields(
@@ -722,8 +714,7 @@ class PlanBuilder {
   std::shared_ptr<const core::FieldAccessTypedExpr> field(
       const std::string& name);
 
-  std::vector<std::shared_ptr<const core::ITypedExpr>> exprs(
-      const std::vector<std::string>& names);
+  std::vector<core::TypedExprPtr> exprs(const std::vector<std::string>& names);
 
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> fields(
       const std::vector<std::string>& names);
@@ -748,9 +739,6 @@ class PlanBuilder {
       core::AggregationNode::Step step,
       const core::AggregationNode* partialAggNode);
 
-  std::shared_ptr<const core::ITypedExpr> inferTypes(
-      const std::shared_ptr<const core::IExpr>& untypedExpr);
-
   struct ExpressionsAndNames {
     std::vector<std::shared_ptr<const core::CallTypedExpr>> expressions;
     std::vector<std::string> names;
@@ -766,9 +754,12 @@ class PlanBuilder {
       size_t numAggregates,
       const std::vector<std::string>& masks);
 
-  std::shared_ptr<PlanNodeIdGenerator> planNodeIdGenerator_;
+ protected:
   core::PlanNodePtr planNode_;
-  memory::MemoryPool* pool_;
   parse::ParseOptions options_;
+
+ private:
+  std::shared_ptr<PlanNodeIdGenerator> planNodeIdGenerator_;
+  memory::MemoryPool* pool_;
 };
 } // namespace facebook::velox::exec::test

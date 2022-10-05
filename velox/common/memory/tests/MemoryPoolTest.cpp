@@ -35,6 +35,19 @@ class MemoryPoolTest : public testing::TestWithParam<bool> {
  protected:
   void SetUp() override {
     useMmap_ = GetParam();
+    // For duration of the test, make a local MmapAllocator that will not be
+    // seen by any other test.
+    if (useMmap_) {
+      MmapAllocatorOptions opts{8UL << 30};
+      mmapAllocator_ = std::make_unique<MmapAllocator>(opts);
+      MappedMemory::setDefaultInstance(mmapAllocator_.get());
+    } else {
+      MappedMemory::setDefaultInstance(nullptr);
+    }
+  }
+
+  void TearDown() override {
+    MmapAllocator::setDefaultInstance(nullptr);
   }
 
   std::shared_ptr<IMemoryManager> getMemoryManager(int64_t quota) {
@@ -45,6 +58,7 @@ class MemoryPoolTest : public testing::TestWithParam<bool> {
   }
 
   bool useMmap_;
+  std::unique_ptr<MmapAllocator> mmapAllocator_;
 };
 
 TEST(MemoryPoolTest, Ctor) {
@@ -332,14 +346,16 @@ void testMmapMemoryAllocation(
 }
 
 TEST(MemoryPoolTest, SmallMmapMemoryAllocation) {
-  MmapAllocatorOptions options = {8 * GB};
+  MmapAllocatorOptions options;
+  options.capacity = 8 * GB;
   auto mmapAllocator = std::make_unique<memory::MmapAllocator>(options);
   MappedMemory::setDefaultInstance(mmapAllocator.get());
   testMmapMemoryAllocation(mmapAllocator.get(), 6, 100);
 }
 
 TEST(MemoryPoolTest, BigMmapMemoryAllocation) {
-  MmapAllocatorOptions options = {8 * GB};
+  MmapAllocatorOptions options;
+  options.capacity = 8 * GB;
   auto mmapAllocator = std::make_unique<memory::MmapAllocator>(options);
   MappedMemory::setDefaultInstance(mmapAllocator.get());
   testMmapMemoryAllocation(
@@ -677,6 +693,69 @@ TEST(MemoryPoolTest, scopedChildUsageTest) {
   for (unsigned i = 0, e = trackers.size(); i != e; ++i) {
     EXPECT_GE(trackers[i]->getCurrentUserBytes(), expectedCurrentBytes[i]);
     EXPECT_GE(trackers[i]->getPeakTotalBytes(), expectedMaxBytes[i]);
+  }
+}
+
+TEST(MemoryPoolTest, setMemoryUsageTrackerTest) {
+  MemoryManager<MemoryAllocator> manager{};
+  auto& root = manager.getRoot();
+  const int64_t kChunkSize{32L * MB};
+  {
+    auto& pool = root.addChild("empty_pool");
+    auto tracker = SimpleMemoryTracker::create();
+    pool.setMemoryUsageTracker(tracker);
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    void* chunk = pool.allocate(kChunkSize);
+    ASSERT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(kChunkSize, tracker->getCurrentUserBytes());
+    chunk = pool.reallocate(chunk, kChunkSize, 2 * kChunkSize);
+    ASSERT_EQ(2 * kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(2 * kChunkSize, tracker->getCurrentUserBytes());
+    pool.free(chunk, 2 * kChunkSize);
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+  }
+  {
+    auto& pool = root.addChild("nonempty_pool");
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    auto tracker = SimpleMemoryTracker::create();
+    void* chunk = pool.allocate(kChunkSize);
+    ASSERT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    pool.setMemoryUsageTracker(tracker);
+    EXPECT_EQ(kChunkSize, tracker->getCurrentUserBytes());
+    chunk = pool.reallocate(chunk, kChunkSize, 2 * kChunkSize);
+    ASSERT_EQ(2 * kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(2 * kChunkSize, tracker->getCurrentUserBytes());
+    pool.free(chunk, 2 * kChunkSize);
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+  }
+  {
+    auto& pool = root.addChild("switcheroo_pool");
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    auto tracker = SimpleMemoryTracker::create();
+    void* chunk = pool.allocate(kChunkSize);
+    ASSERT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    pool.setMemoryUsageTracker(tracker);
+    EXPECT_EQ(kChunkSize, tracker->getCurrentUserBytes());
+    pool.setMemoryUsageTracker(tracker);
+    EXPECT_EQ(kChunkSize, tracker->getCurrentUserBytes());
+    auto newTracker = SimpleMemoryTracker::create();
+    pool.setMemoryUsageTracker(newTracker);
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    EXPECT_EQ(kChunkSize, newTracker->getCurrentUserBytes());
+
+    chunk = pool.reallocate(chunk, kChunkSize, 2 * kChunkSize);
+    ASSERT_EQ(2 * kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    EXPECT_EQ(2 * kChunkSize, newTracker->getCurrentUserBytes());
+    pool.free(chunk, 2 * kChunkSize);
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    EXPECT_EQ(0, newTracker->getCurrentUserBytes());
   }
 }
 

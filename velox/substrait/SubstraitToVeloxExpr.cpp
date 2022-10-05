@@ -29,12 +29,10 @@ SubstraitVeloxExprConverter::toVeloxExpr(
         kDirectReference: {
       const auto& directRef = substraitField.direct_reference();
       int32_t colIdx = substraitParser_.parseReferenceSegment(directRef);
-
-      const auto& inputTypes = inputType->children();
       const auto& inputNames = inputType->names();
       const int64_t inputSize = inputNames.size();
-
       if (colIdx <= inputSize) {
+        const auto& inputTypes = inputType->children();
         // Convert type to row.
         return std::make_shared<core::FieldAccessTypedExpr>(
             inputTypes[colIdx],
@@ -54,18 +52,17 @@ std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::ScalarFunction& substraitFunc,
     const RowTypePtr& inputType) {
-  std::vector<std::shared_ptr<const core::ITypedExpr>> params;
+  std::vector<core::TypedExprPtr> params;
   params.reserve(substraitFunc.arguments().size());
   for (const auto& sArg : substraitFunc.arguments()) {
     params.emplace_back(toVeloxExpr(sArg.value(), inputType));
   }
   const auto& veloxFunction = substraitParser_.findVeloxFunction(
       functionMap_, substraitFunc.function_reference());
-  const auto& veloxType = toVeloxType(
-      substraitParser_.parseType(substraitFunc.output_type())->type);
-
+  std::string typeName =
+      substraitParser_.parseType(substraitFunc.output_type())->type;
   return std::make_shared<const core::CallTypedExpr>(
-      veloxType, std::move(params), veloxFunction);
+      toVeloxType(typeName), std::move(params), veloxFunction);
 }
 
 std::shared_ptr<const core::ConstantTypedExpr>
@@ -127,10 +124,49 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       return toVeloxExpr(substraitExpr.selection(), inputType);
     case ::substrait::Expression::RexTypeCase::kCast:
       return toVeloxExpr(substraitExpr.cast(), inputType);
+    case ::substrait::Expression::RexTypeCase::kIfThen:
+      return toVeloxExpr(substraitExpr.if_then(), inputType);
     default:
       VELOX_NYI(
           "Substrait conversion not supported for Expression '{}'", typeCase);
   }
+}
+
+std::shared_ptr<const core::ITypedExpr>
+SubstraitVeloxExprConverter::toVeloxExpr(
+    const ::substrait::Expression_IfThen& substraitIfThen,
+    const RowTypePtr& inputType) {
+  std::vector<core::TypedExprPtr> inputs;
+  if (substraitIfThen.has_else_()) {
+    inputs.reserve(substraitIfThen.ifs_size() * 2 + 1);
+  } else {
+    inputs.reserve(substraitIfThen.ifs_size() * 2);
+  }
+
+  TypePtr resultType;
+  for (auto& ifExpr : substraitIfThen.ifs()) {
+    auto ifClauseExpr = toVeloxExpr(ifExpr.if_(), inputType);
+    inputs.emplace_back(ifClauseExpr);
+    auto thenClauseExpr = toVeloxExpr(ifExpr.then(), inputType);
+    inputs.emplace_back(thenClauseExpr);
+
+    if (!thenClauseExpr->type()->containsUnknown()) {
+      resultType = thenClauseExpr->type();
+    }
+  }
+
+  if (substraitIfThen.has_else_()) {
+    auto elseClauseExpr = toVeloxExpr(substraitIfThen.else_(), inputType);
+    inputs.emplace_back(elseClauseExpr);
+    if (!resultType && !elseClauseExpr->type()->containsUnknown()) {
+      resultType = elseClauseExpr->type();
+    }
+  }
+
+  VELOX_CHECK_NOT_NULL(resultType, "Result type not found");
+
+  return std::make_shared<const core::CallTypedExpr>(
+      resultType, std::move(inputs), "if");
 }
 
 } // namespace facebook::velox::substrait

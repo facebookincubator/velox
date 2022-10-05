@@ -26,6 +26,7 @@
 
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/MappedMemory.h"
+#include "velox/common/memory/MmapArena.h"
 
 namespace facebook::velox::memory {
 
@@ -36,6 +37,15 @@ using ClassPageCount = int32_t;
 struct MmapAllocatorOptions {
   //  Capacity in bytes, default 512MB
   uint64_t capacity = 1L << 29;
+
+  // If set true, allocations larger than largest size class size will be
+  // delegated to ManagedMmapArena. Otherwise a system mmap call will be
+  // issued for each such allocation.
+  bool useMmapArena = false;
+
+  // Used to determine MmapArena capacity. The ratio represents system memory
+  // capacity to single MmapArena capacity ratio.
+  int32_t mmapArenaCapacityRatio = 10;
 };
 
 // Implementation of MappedMemory with mmap and madvise. Each size
@@ -179,7 +189,8 @@ class MmapAllocator : public MappedMemory {
     static constexpr int32_t kNoLastLookup = -1;
     // Number of bits in 'mappedPages_' for one bit in
     // 'mappedFreeLookup_'.
-    static constexpr int32_t kPagesPerLookupBit = 512;
+    static constexpr int32_t kPagesPerLookupBit =
+        xsimd::batch<int64_t>::size * 128;
     // Number of extra 0 uint64's at te end of allocation bitmaps for SIMD
     // checks.
     static constexpr int32_t kSimdTail = 8;
@@ -339,6 +350,17 @@ class MmapAllocator : public MappedMemory {
   std::atomic<uint64_t> numAllocations_ = 0;
   std::atomic<uint64_t> numAllocatedPages_ = 0;
   std::atomic<uint64_t> numAdvisedPages_ = 0;
+
+  // Allocations that are larger than largest size classes will be delegated to
+  // ManagedMmapArenas, to avoid calling mmap on every allocation.
+  std::mutex arenaMutex_;
+  std::unique_ptr<ManagedMmapArenas> managedArenas_;
+
+  // If set true, allocations larger than largest size class size will be
+  // delegated to ManagedMmapArena. Otherwise a system mmap call will be
+  // issued for each such allocation.
+  bool useMmapArena_;
+
   Failure injectedFailure_{Failure::kNone};
   Stats stats_;
 };

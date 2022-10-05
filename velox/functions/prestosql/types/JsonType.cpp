@@ -447,6 +447,11 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::MAP>(
     exec::GenericWriter& writer);
 
 template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::ROW>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer);
+
+template <>
 FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::VARCHAR>(
     const folly::dynamic& object,
     exec::GenericWriter& writer) {
@@ -586,6 +591,56 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::MAP>(
   }
 }
 
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::ROW>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  VELOX_USER_CHECK(
+      object.isArray() || object.isObject(),
+      "Only casting from JSON array or object to ROW is supported.");
+
+  auto& writerTyped = writer.castTo<DynamicRow>();
+
+  if (object.isArray()) {
+    VELOX_USER_CHECK_EQ(
+        writer.type()->size(),
+        object.size(),
+        "Cannot cast a JSON array of size {} to ROW with {} fields.",
+        object.size(),
+        writer.type()->size());
+
+    column_index_t i = 0;
+    for (auto it = object.begin(); it != object.end(); ++it, ++i) {
+      if (it->isNull()) {
+        writerTyped.set_null_at(i);
+      } else {
+        VELOX_DYNAMIC_TYPE_DISPATCH(
+            castFromJsonTyped,
+            writer.type()->childAt(i)->kind(),
+            *it,
+            writerTyped.get_writer_at(i));
+      }
+    }
+  } else {
+    auto rowType = writer.type()->asRow();
+    column_index_t fieldCount = rowType.size();
+    auto notFound = object.items().end();
+
+    for (column_index_t i = 0; i < fieldCount; ++i) {
+      auto it = object.find(rowType.nameOf(i));
+      if (it == notFound || it->second.isNull()) {
+        writerTyped.set_null_at(i);
+      } else {
+        VELOX_DYNAMIC_TYPE_DISPATCH(
+            castFromJsonTyped,
+            rowType.childAt(i)->kind(),
+            it->second,
+            writerTyped.get_writer_at(i));
+      }
+    }
+  }
+}
+
 template <TypeKind kind>
 void castFromJson(
     const BaseVector& input,
@@ -692,6 +747,13 @@ bool JsonCastOperator::isSupportedToType(const TypePtr& other) const {
   switch (other->kind()) {
     case TypeKind::ARRAY:
       return isSupportedToType(other->childAt(0));
+    case TypeKind::ROW:
+      for (const auto& child : other->as<TypeKind::ROW>().children()) {
+        if (!isSupportedToType(child)) {
+          return false;
+        }
+      }
+      return true;
     case TypeKind::MAP:
       return (
           isSupportedBasicType(other->childAt(0)) &&
@@ -717,9 +779,10 @@ void JsonCastOperator::castTo(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     bool /*nullOnFailure*/,
-    BaseVector& result) const {
-  // result is guaranteed to be a flat writable vector.
-  auto* flatResult = result.as<FlatVector<StringView>>();
+    const TypePtr& resultType,
+    VectorPtr& result) const {
+  context.ensureWritable(rows, resultType, result);
+  auto* flatResult = result->as<FlatVector<StringView>>();
 
   // Casting from VARBINARY and OPAQUE are not supported and should have been
   // rejected by isSupportedType() in the caller.
@@ -733,11 +796,13 @@ void JsonCastOperator::castFrom(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     bool /*nullOnFailure*/,
-    BaseVector& result) const {
+    const TypePtr& resultType,
+    VectorPtr& result) const {
+  context.ensureWritable(rows, resultType, result);
   // Casting to unsupported types should have been rejected by isSupportedType()
   // in the caller.
   VELOX_DYNAMIC_TYPE_DISPATCH(
-      castFromJson, result.typeKind(), input, context, rows, result);
+      castFromJson, result->typeKind(), input, context, rows, *result);
 }
 
 } // namespace facebook::velox

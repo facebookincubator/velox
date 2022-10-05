@@ -26,6 +26,19 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/vector/SimpleVector.h"
 
+/// GFlag used to enable saving input vector and expression SQL on disk in case
+/// of any (user or system) error during expression evaluation. The value
+/// specifies a path to a directory where the vectors will be saved. That
+/// directory must exist and be writable.
+DECLARE_string(velox_save_input_on_expression_any_failure_path);
+
+/// GFlag used to enable saving input vector and expression SQL on disk in case
+/// of a system error during expression evaluation. The value specifies a path
+/// to a directory where the vectors will be saved. That directory must exist
+/// and be writable. This flag is ignored if
+/// velox_save_input_on_expression_any_failure_path flag is set.
+DECLARE_string(velox_save_input_on_expression_system_failure_path);
+
 namespace facebook::velox::exec {
 
 class ExprSet;
@@ -48,6 +61,63 @@ struct ExprStats {
     numProcessedRows += other.numProcessedRows;
     numProcessedVectors += other.numProcessedVectors;
   }
+
+  std::string toString() const {
+    return fmt::format(
+        "timing: {}, numProcessedRows: {}, numProcessedVectors: {}",
+        timing.toString(),
+        numProcessedRows,
+        numProcessedVectors);
+  }
+};
+
+/// Data needed to generate exception context for the top-level expression. It
+/// also provides functionality to persist both data and sql to disk for
+/// debugging purpose
+class ExprExceptionContext {
+ public:
+  ExprExceptionContext(
+      const Expr* FOLLY_NONNULL expr,
+      const RowVector* FOLLY_NONNULL vector)
+      : expr_(expr), vector_(vector) {}
+
+  /// Persist data and sql on disk. Data will be persisted in $basePath/vector
+  /// and sql will be persisted in $basePath/sql
+  void persistDataAndSql(const char* FOLLY_NONNULL basePath);
+
+  const Expr* FOLLY_NONNULL expr() const {
+    return expr_;
+  }
+
+  const RowVector* FOLLY_NONNULL vector() const {
+    return vector_;
+  }
+
+  const std::string& dataPath() const {
+    return dataPath_;
+  }
+
+  const std::string& sqlPath() const {
+    return sqlPath_;
+  }
+
+ private:
+  /// The expression.
+  const Expr* FOLLY_NONNULL expr_;
+
+  /// The input vector, i.e. EvalCtx::row(). In some cases, input columns are
+  /// re-used for results. Hence, 'vector' may no longer contain input data at
+  /// the time of exception.
+  const RowVector* FOLLY_NONNULL vector_;
+
+  /// Path of the file storing the serialized 'vector'. Used to avoid
+  /// serializing vector repeatedly in cases when multiple rows generate
+  /// exceptions. This happens when exceptions are suppressed by TRY/AND/OR.
+  std::string dataPath_{""};
+
+  /// Path of the file storing the expression SQL. Used to avoid writing SQL
+  /// repeatedly in cases when multiple rows generate exceptions.
+  std::string sqlPath_{""};
 };
 
 // An executable expression.
@@ -77,7 +147,15 @@ class Expr {
 
   virtual ~Expr() = default;
 
-  void eval(const SelectivityVector& rows, EvalCtx& context, VectorPtr& result);
+  /// Evaluates the expression for the specified 'rows'.
+  ///
+  /// @param topLevel Boolean indicating whether this is a top-level expression
+  /// or one of the sub-expressions. Used to setup exception context.
+  void eval(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result,
+      bool topLevel = false);
 
   /// Evaluates the expression using fast path that assumes all inputs and
   /// intermediate results are flat or constant and have no nulls.
@@ -87,10 +165,14 @@ class Expr {
   /// types. It may also be expensive to apply to large batches. Hence, this
   /// path is enabled only for batch sizes less than 1'000 and expressions where
   /// all input and intermediate types are primitive and not strings.
+  ///
+  /// @param topLevel Boolean indicating whether this is a top-level expression
+  /// or one of the sub-expressions. Used to setup exception context.
   void evalFlatNoNulls(
       const SelectivityVector& rows,
       EvalCtx& context,
-      VectorPtr& result);
+      VectorPtr& result,
+      bool topLevel = false);
 
   // Simplified path for expression evaluation (flattens all vectors).
   void evalSimplified(
@@ -202,16 +284,37 @@ class Expr {
   /// their inputs recursively.
   virtual std::string toString(bool recursive = true) const;
 
+  /// Return the expression as SQL string.
+  virtual std::string toSql() const;
+
   const ExprStats& stats() const {
     return stats_;
   }
 
- private:
+  // Adds nulls from 'rawNulls' to positions of 'result' given by
+  // 'rows'. Ensures that '*result' is writable, of sufficient size
+  // and that it can take nulls. Makes a new '*result' when
+  // appropriate.
+  void addNulls(
+      const SelectivityVector& rows,
+      const uint64_t* FOLLY_NULLABLE rawNulls,
+      EvalCtx& context,
+      VectorPtr& result);
+
+  auto& vectorFunction() const {
+    return vectorFunction_;
+  }
+
+  auto& inputValues() {
+    return inputValues_;
+  }
+
   void setAllNulls(
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result) const;
 
+ private:
   struct PeelEncodingsResult {
     SelectivityVector* FOLLY_NULLABLE newRows;
     SelectivityVector* FOLLY_NULLABLE newFinalSelection;
@@ -224,7 +327,7 @@ class Expr {
 
   PeelEncodingsResult peelEncodings(
       EvalCtx& context,
-      ContextSaver& saver,
+      ScopedContextSaver& saver,
       const SelectivityVector& rows,
       LocalDecodedVector& localDecoded,
       LocalSelectivityVector& newRowsHolder,
@@ -247,16 +350,6 @@ class Expr {
 
   void
   evalAll(const SelectivityVector& rows, EvalCtx& context, VectorPtr& result);
-
-  // Adds nulls from 'rawNulls' to positions of 'result' given by
-  // 'rows'. Ensures that '*result' is writable, of sufficient size
-  // and that it can take nulls. Makes a new '*result' when
-  // appropriate.
-  void addNulls(
-      const SelectivityVector& rows,
-      const uint64_t* FOLLY_NULLABLE rawNulls,
-      EvalCtx& context,
-      VectorPtr& result);
 
   // Checks 'inputValues_' for peelable wrappers (constants,
   // dictionaries etc) and applies the function of 'this' to distinct
@@ -303,8 +396,15 @@ class Expr {
       EvalCtx& context,
       VectorPtr& result);
 
+  void evalSpecialFormWithStats(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result);
+
  protected:
   void appendInputs(std::stringstream& stream) const;
+
+  void appendInputsSql(std::stringstream& stream) const;
 
   /// Release 'inputValues_' back to vector pool in 'evalCtx' so they can be
   /// reused.
@@ -380,16 +480,33 @@ class Expr {
   ExprStats stats_;
 };
 
+/// Translates row number of the outer vector into row number of the inner
+/// vector using DecodedVector.
+SelectivityVector* FOLLY_NONNULL translateToInnerRows(
+    const SelectivityVector& rows,
+    DecodedVector& decoded,
+    LocalSelectivityVector& newRowsHolder);
+
+/// Generate a selectivity vector of a single row.
+SelectivityVector* FOLLY_NONNULL
+singleRow(LocalSelectivityVector& holder, vector_size_t row);
+
 using ExprPtr = std::shared_ptr<Expr>;
 
 // A set of Exprs that get evaluated together. Common subexpressions
 // can be deduplicated. This is the top level handle on an expression
 // and is used also if only one Expr is to be evaluated. TODO: Rename to
 // ExprList.
+// Note: Caller must ensure that lazy vectors associated with field references
+// used by the expressions in this ExprSet are pre-loaded (before running
+// evaluation on them) if they are also used/referenced outside the context of
+// this ExprSet. If however such an association cannot be made with certainty,
+// then its advisable to pre-load all lazy vectors to avoid issues associated
+// with partial loading.
 class ExprSet {
  public:
   explicit ExprSet(
-      std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+      const std::vector<core::TypedExprPtr>& source,
       core::ExecCtx* FOLLY_NONNULL execCtx,
       bool enableConstantFolding = true);
 
@@ -418,12 +535,20 @@ class ExprSet {
     return execCtx_;
   }
 
+  auto size() const {
+    return exprs_.size();
+  }
+
   const std::vector<std::shared_ptr<Expr>>& exprs() const {
     return exprs_;
   }
 
   const std::shared_ptr<Expr>& expr(int32_t index) const {
     return exprs_[index];
+  }
+
+  const std::vector<FieldReference*>& distinctFields() const {
+    return distinctFields_;
   }
 
   // Flags a shared subexpression which needs to be reset (e.g. previously
@@ -447,6 +572,9 @@ class ExprSet {
 
   std::vector<std::shared_ptr<Expr>> exprs_;
 
+  // The distinct references to input columns among all expressions in ExprSet.
+  std::vector<FieldReference * FOLLY_NONNULL> distinctFields_;
+
   // Fields referenced by multiple expressions in ExprSet.
   std::unordered_set<FieldReference * FOLLY_NONNULL> multiplyReferencedFields_;
 
@@ -462,9 +590,9 @@ class ExprSet {
 class ExprSetSimplified : public ExprSet {
  public:
   ExprSetSimplified(
-      std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+      const std::vector<core::TypedExprPtr>& source,
       core::ExecCtx* FOLLY_NONNULL execCtx)
-      : ExprSet(std::move(source), execCtx, /*enableConstantFolding*/ false) {}
+      : ExprSet(source, execCtx, /*enableConstantFolding*/ false) {}
 
   virtual ~ExprSetSimplified() override {}
 
@@ -488,7 +616,7 @@ class ExprSetSimplified : public ExprSet {
 // Factory method that takes `kExprEvalSimplified` (query parameter) into
 // account and instantiates the correct ExprSet class.
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
-    std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+    std::vector<core::TypedExprPtr>&& source,
     core::ExecCtx* FOLLY_NONNULL execCtx);
 
 /// Returns a string representation of the expression trees annotated with

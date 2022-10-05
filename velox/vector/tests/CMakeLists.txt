@@ -16,6 +16,7 @@ add_subdirectory(utils)
 add_executable(
   velox_vector_test
   VectorCompareTest.cpp
+  VectorSaverTest.cpp
   VectorMakerTest.cpp
   VectorPoolTest.cpp
   VectorTest.cpp
@@ -27,7 +28,8 @@ add_executable(
   EnsureWritableVectorTest.cpp
   IsWritableVectorTest.cpp
   LazyVectorTest.cpp
-  MayHaveNullsRecursiveTest.cpp)
+  MayHaveNullsRecursiveTest.cpp
+  VariantToVectorTest.cpp)
 
 add_test(velox_vector_test velox_vector_test)
 
@@ -39,6 +41,8 @@ target_link_libraries(
   velox_serialization
   velox_memory
   velox_presto_serializer
+  velox_temp_path
+  velox_vector_fuzzer
   ${Boost_ATOMIC_LIBRARIES}
   ${Boost_CONTEXT_LIBRARIES}
   ${Boost_DATE_TIME_LIBRARIES}

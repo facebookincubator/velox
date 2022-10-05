@@ -44,6 +44,14 @@ DEFINE_int32(
     100,
     "The number of elements on each generated vector.");
 
+DEFINE_int32(
+    max_num_varargs,
+    5,
+    "The maximum number of variadic arguments fuzzer will generate for "
+    "functions that accept variadic arguments. Fuzzer will generate up to "
+    "max_num_varargs arguments for the variadic list in addition to the "
+    "required arguments by the function.");
+
 DEFINE_double(
     null_ratio,
     0.1,
@@ -59,6 +67,11 @@ DEFINE_bool(
     disable_constant_folding,
     false,
     "Disable constant-folding in the common evaluation path.");
+
+DEFINE_bool(
+    enable_variadic_signatures,
+    false,
+    "Enable testing of function signatures with variadic arguments.");
 
 namespace facebook::velox::test {
 
@@ -213,6 +226,7 @@ struct CallableSignature {
 
   // Input arguments and return type.
   std::vector<TypePtr> args;
+  bool variableArity{false};
   TypePtr returnType;
 
   // Convenience print function.
@@ -232,11 +246,14 @@ struct CallableSignature {
 std::optional<CallableSignature> processSignature(
     const std::string& functionName,
     const exec::FunctionSignature& signature) {
-  // Don't support functions with parametrized signatures or variable number of
-  // arguments yet.
-  if (!signature.typeVariableConstants().empty() || signature.variableArity() ||
-      !signature.variables().empty()) {
+  // Don't support functions with parameterized signatures.
+  if (!signature.typeVariableConstraints().empty()) {
     LOG(WARNING) << "Skipping unsupported signature: " << functionName
+                 << signature.toString();
+    return std::nullopt;
+  }
+  if (signature.variableArity() && !FLAGS_enable_variadic_signatures) {
+    LOG(WARNING) << "Skipping variadic function signature: " << functionName
                  << signature.toString();
     return std::nullopt;
   }
@@ -244,6 +261,7 @@ std::optional<CallableSignature> processSignature(
   CallableSignature callable{
       .name = functionName,
       .args = {},
+      .variableArity = signature.variableArity(),
       .returnType =
           SignatureBinder::tryResolveType(signature.returnType(), {})};
   VELOX_CHECK_NOT_NULL(callable.returnType);
@@ -288,15 +306,56 @@ class ExpressionFuzzer {
       : vectorFuzzer_(getFuzzerOptions(), execCtx_.pool()) {
     seed(initialSeed);
 
+    size_t totalFunctions = 0;
+    size_t totalFunctionSignatures = 0;
+    size_t supportedFunctions = 0;
+    size_t supportedFunctionSignatures = 0;
     // Process each available signature for every function.
     for (const auto& function : signatureMap) {
+      ++totalFunctions;
+      bool atLeastOneSupported = false;
       for (const auto& signature : function.second) {
+        ++totalFunctionSignatures;
+
         if (auto callableFunction =
                 processSignature(function.first, *signature)) {
+          atLeastOneSupported = true;
+          ++supportedFunctionSignatures;
           signatures_.emplace_back(*callableFunction);
         }
       }
+
+      if (atLeastOneSupported) {
+        ++supportedFunctions;
+      }
     }
+
+    auto unsupportedFunctions = totalFunctions - supportedFunctions;
+    auto unsupportedFunctionSignatures =
+        totalFunctionSignatures - supportedFunctionSignatures;
+    LOG(INFO) << fmt::format(
+        "Total candidate functions: {} ({} signatures)",
+        totalFunctions,
+        totalFunctionSignatures);
+    LOG(INFO) << fmt::format(
+        "Functions with at least one supported signature: {} ({:.2f}%)",
+        supportedFunctions,
+        (double)supportedFunctions / totalFunctions * 100);
+    LOG(INFO) << fmt::format(
+        "Functions with no supported signature: {} ({:.2f}%)",
+        unsupportedFunctions,
+        (double)unsupportedFunctions / totalFunctions * 100);
+    LOG(INFO) << fmt::format(
+        "Supported function signatures: {} ({:.2f}%)",
+        supportedFunctionSignatures,
+        (double)supportedFunctionSignatures / totalFunctionSignatures * 100);
+    LOG(INFO) << fmt::format(
+        "Unsupported function signatures: {} ({:.2f}%)",
+        unsupportedFunctionSignatures,
+        (double)unsupportedFunctionSignatures / totalFunctionSignatures * 100);
+
+    // Add additional signatures that are not in function registry.
+    appendConjunctSignatures();
 
     // We sort the available signatures to ensure we can deterministically
     // generate expressions across platforms. We just do this once and the
@@ -367,6 +426,18 @@ class ExpressionFuzzer {
     }
   }
 
+  void appendConjunctSignatures() {
+    CallableSignature conjunctSignature;
+    conjunctSignature.name = "and";
+    conjunctSignature.returnType = BOOLEAN();
+    conjunctSignature.args = {BOOLEAN(), BOOLEAN()};
+    conjunctSignature.variableArity = true;
+    signatures_.emplace_back(conjunctSignature);
+
+    conjunctSignature.name = "or";
+    signatures_.emplace_back(conjunctSignature);
+  }
+
   RowVectorPtr generateRowVector() {
     return vectorFuzzer_.fuzzRow(
         ROW(std::move(inputRowNames_), std::move(inputRowTypes_)));
@@ -414,10 +485,17 @@ class ExpressionFuzzer {
 
   std::vector<core::TypedExprPtr> generateArgs(const CallableSignature& input) {
     std::vector<core::TypedExprPtr> inputExpressions;
-    inputExpressions.reserve(input.args.size());
+    auto numVarArgs = !input.variableArity
+        ? 0
+        : folly::Random::rand32(FLAGS_max_num_varargs + 1, rng_);
+    inputExpressions.reserve(input.args.size() + numVarArgs);
 
     for (const auto& arg : input.args) {
       inputExpressions.emplace_back(generateArg(arg));
+    }
+    // Append varargs to the argument list.
+    for (int i = 0; i < numVarArgs; i++) {
+      inputExpressions.emplace_back(generateArg(input.args.back()));
     }
     return inputExpressions;
   }
@@ -494,7 +572,7 @@ class ExpressionFuzzer {
     if (rowVector) {
       LOG(INFO) << rowVector->childrenSize() << " vectors as input:";
       for (const auto& child : rowVector->children()) {
-        LOG(INFO) << "\t" << child->toString();
+        LOG(INFO) << "\t" << child->toString(/*recursive=*/true);
       }
 
       if (VLOG_IS_ON(1)) {

@@ -13,10 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/tests/utils/OperatorTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/functions/prestosql/window/tests/WindowTestBase.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -24,58 +21,7 @@ namespace facebook::velox::window::test {
 
 namespace {
 
-class RowNumberTest : public OperatorTestBase {
- protected:
-  void SetUp() override {
-    exec::test::OperatorTestBase::SetUp();
-    velox::window::registerWindowFunctions();
-  }
-
-  std::vector<RowVectorPtr>
-  makeVectors(const RowTypePtr& rowType, vector_size_t size, int numVectors) {
-    std::vector<RowVectorPtr> vectors;
-    VectorFuzzer::Options options;
-    options.vectorSize = size;
-    VectorFuzzer fuzzer(options, pool_.get(), 0);
-    for (int32_t i = 0; i < numVectors; ++i) {
-      auto vector =
-          std::dynamic_pointer_cast<RowVector>(fuzzer.fuzzRow(rowType));
-      vectors.push_back(vector);
-    }
-    return vectors;
-  }
-
-  void basicTests(const std::vector<RowVectorPtr>& vectors) {
-    auto testWindowSql = [&](const std::vector<RowVectorPtr>& input,
-                             const std::string& overClause) {
-      auto windowSql = fmt::format("row_number() over ({})", overClause);
-
-      SCOPED_TRACE(windowSql);
-      VELOX_CHECK_GE(input[0]->size(), 2);
-
-      auto op = PlanBuilder().values(input).window({windowSql}).planNode();
-      assertQuery(op, "SELECT c0, c1, " + windowSql + " FROM tmp");
-    };
-
-    std::vector<std::string> overClauses = {
-        "partition by c0 order by c1",
-        "partition by c1 order by c0",
-        "partition by c0 order by c1 desc",
-        "partition by c1 order by c0 desc",
-        // No partition by clause.
-        "order by c0, c1",
-        "order by c1, c0",
-        "order by c0 asc, c1 desc",
-        "order by c1 asc, c0 desc",
-        // No order by clause.
-        "partition by c0, c1",
-    };
-
-    for (const auto& overClause : overClauses) {
-      testWindowSql(vectors, overClause);
-    }
-  }
-};
+class RowNumberTest : public WindowTestBase {};
 
 TEST_F(RowNumberTest, basic) {
   vector_size_t size = 100;
@@ -87,8 +33,7 @@ TEST_F(RowNumberTest, basic) {
           size, [](auto row) -> int32_t { return row % 7; }),
   });
 
-  createDuckDbTable({vectors});
-  basicTests({vectors});
+  testTwoColumnInput({vectors}, "row_number()");
 }
 
 TEST_F(RowNumberTest, singlePartition) {
@@ -100,11 +45,7 @@ TEST_F(RowNumberTest, singlePartition) {
       makeFlatVector<int32_t>(size, [](auto row) { return row; }),
   });
 
-  // Invoking with 2 vectors so that the underlying WindowFunction::apply() is
-  // called twice for the same partition.
-  std::vector<RowVectorPtr> input = {vectors, vectors};
-  createDuckDbTable(input);
-  basicTests(input);
+  testTwoColumnInput({vectors}, "row_number()");
 }
 
 TEST_F(RowNumberTest, randomInput) {
@@ -115,16 +56,6 @@ TEST_F(RowNumberTest, randomInput) {
       2);
   createDuckDbTable(vectors);
 
-  auto testWindowSql = [&](std::vector<RowVectorPtr>& input,
-                           const std::string& overClause) {
-    auto windowSql = fmt::format("row_number() over ({})", overClause);
-
-    SCOPED_TRACE(windowSql);
-    auto op = PlanBuilder().values(input).window({windowSql}).planNode();
-    assertQuery(
-        op, fmt::format("SELECT c0, c1, c2, c3, {} FROM tmp", windowSql));
-  };
-
   std::vector<std::string> overClauses = {
       "partition by c0 order by c1, c2, c3",
       "partition by c1 order by c0, c2, c3",
@@ -134,9 +65,7 @@ TEST_F(RowNumberTest, randomInput) {
       "partition by c0, c1, c2, c3",
   };
 
-  for (const auto& overClause : overClauses) {
-    testWindowSql(vectors, overClause);
-  }
+  testWindowFunction(vectors, "row_number()", overClauses);
 }
 
 }; // namespace

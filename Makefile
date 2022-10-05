@@ -56,9 +56,8 @@ USE_CCACHE=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 endif
 endif
 
-ifeq ($(NUM_THREADS),)
- override NUM_THREADS = $(shell getconf _NPROCESSORS_CONF 2>/dev/null || echo 1)
-endif
+
+NUM_THREADS ?= $(shell getconf _NPROCESSORS_CONF 2>/dev/null || echo 1)
 
 CPU_TARGET ?= "avx"
 
@@ -85,7 +84,7 @@ build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
 
 debug:					#: Build with debugging symbols
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
-	$(MAKE) build BUILD_DIR=debug
+	$(MAKE) build BUILD_DIR=debug -j ${NUM_THREADS}
 
 release:				#: Build the release version
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=Release && \
@@ -96,20 +95,16 @@ min_debug:				#: Minimal build with debugging symbols
 	$(MAKE) build BUILD_DIR=debug
 
 benchmarks-basic-build:
-	$(MAKE) release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_MINIMAL=ON -DVELOX_ENABLE_BENCHMARKS_BASIC=ON"
+	$(MAKE) release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_MINIMAL=OFF -DVELOX_ENABLE_BENCHMARKS_BASIC=ON"
 
 benchmarks-basic-run:
 	$(MAKE) benchmarks-basic-build
-	scripts/benchmark-runner.py run \
-		--path $(BENCHMARKS_BASIC_DIR) ${EXTRA_BENCHMARK_FLAGS}
-
-benchmarks-basic-dump:
-	$(MAKE) benchmarks-basic-run EXTRA_BENCHMARK_FLAGS="--dump-path ${BENCHMARKS_DUMP_DIR}"
+	scripts/veloxbench/veloxbench/cpp_micro_benchmarks.py
 
 unittest: debug			#: Build with debugging and run unit tests
 	cd $(BUILD_BASE_DIR)/debug && ctest -j ${NUM_THREADS} -VV --output-on-failure
 
-# Build with debugging and run expression fuzzer test. Use a fixed seed to 
+# Build with debugging and run expression fuzzer test. Use a fixed seed to
 # ensure the tests are reproducible.
 fuzzertest: debug
 	$(BUILD_BASE_DIR)/debug/velox/expression/tests/velox_expression_fuzzer_test \

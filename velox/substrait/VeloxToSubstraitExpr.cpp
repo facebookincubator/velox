@@ -121,7 +121,6 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
       substraitFieldExpr->mutable_direct_reference()->mutable_struct_field();
 
   directStruct->set_field(inputType->getChildIdx(exprName));
-
   return *substraitFieldExpr;
 }
 
@@ -135,14 +134,18 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
   auto inputs = callTypeExpr->inputs();
   auto& functionName = callTypeExpr->name();
 
-  // The processing is different for different function names.
-  // TODO add support for if Expr and switch Expr
   if (functionName != "if" && functionName != "switch") {
     ::substrait::Expression_ScalarFunction* scalarExpr =
         substraitExpr->mutable_scalar_function();
 
-    // TODO need to change yaml file to register function, now is dummy.
-    scalarExpr->set_function_reference(functionMap_[functionName]);
+    std::vector<TypePtr> types;
+    types.reserve(callTypeExpr->inputs().size());
+    for (auto& typedExpr : callTypeExpr->inputs()) {
+      types.emplace_back(typedExpr->type());
+    }
+
+    scalarExpr->set_function_reference(
+        extensionCollector_->getReferenceNumber(functionName, types));
 
     for (auto& arg : inputs) {
       scalarExpr->add_arguments()->mutable_value()->MergeFrom(
@@ -153,7 +156,24 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
         typeConvertor_->toSubstraitType(arena, callTypeExpr->type()));
 
   } else {
-    VELOX_NYI("Unsupported function name '{}'", functionName);
+    // For today's version of Substrait, you'd have to use IfThen if you need
+    // the switch cases to be call typed expression.
+
+    size_t inputsSize = callTypeExpr->inputs().size();
+    bool hasElseInput = inputsSize % 2 == 1;
+
+    auto ifThenExpr = substraitExpr->mutable_if_then();
+    for (int i = 0; i < inputsSize / 2; i++) {
+      auto ifClauseExpr = ifThenExpr->add_ifs();
+      ifClauseExpr->mutable_if_()->MergeFrom(
+          toSubstraitExpr(arena, callTypeExpr->inputs().at(i * 2), inputType));
+      ifClauseExpr->mutable_then()->MergeFrom(toSubstraitExpr(
+          arena, callTypeExpr->inputs().at(i * 2 + 1), inputType));
+    }
+    if (hasElseInput) {
+      ifThenExpr->mutable_else_()->MergeFrom(toSubstraitExpr(
+          arena, callTypeExpr->inputs().at(inputsSize - 1), inputType));
+    }
   }
 
   return *substraitExpr;

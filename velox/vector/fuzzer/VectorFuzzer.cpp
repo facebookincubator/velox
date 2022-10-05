@@ -106,46 +106,48 @@ size_t genContainerLength(
       : opts.containerLength;
 }
 
-/// Unicode character ranges.
+/// Unicode character ranges. Ensure the vector indexes match the UTF8CharList
+/// enum values.
+///
 /// Source: https://jrgraphix.net/research/unicode_blocks.php
-const std::map<UTF8CharList, std::vector<std::pair<char16_t, char16_t>>>
-    kUTFChatSetMap{
-        {UTF8CharList::ASCII,
-         {
-             /*Numbers*/ {'0', '9'},
-             /*Upper*/ {'A', 'Z'},
-             /*Lower*/ {'a', 'z'},
-         }},
-        {UTF8CharList::UNICODE_CASE_SENSITIVE,
-         {
-             /*Basic Latin*/ {u'\u0020', u'\u007F'},
-             /*Cyrillic*/ {u'\u0400', u'\u04FF'},
-         }},
-        {UTF8CharList::EXTENDED_UNICODE,
-         {
-             /*Greek*/ {u'\u03F0', u'\u03FF'},
-             /*Latin Extended A*/ {u'\u0100', u'\u017F'},
-             /*Arabic*/ {u'\u0600', u'\u06FF'},
-             /*Devanagari*/ {u'\u0900', u'\u097F'},
-             /*Hebrew*/ {u'\u0600', u'\u06FF'},
-             /*Hiragana*/ {u'\u3040', u'\u309F'},
-             /*Punctuation*/ {u'\u2000', u'\u206F'},
-             /*Sub/Super Script*/ {u'\u2070', u'\u209F'},
-             /*Currency*/ {u'\u20A0', u'\u20CF'},
-         }},
-        {UTF8CharList::MATHEMATICAL_SYMBOLS,
-         {
-             /*Math Operators*/ {u'\u2200', u'\u22FF'},
-             /*Number Forms*/ {u'\u2150', u'\u218F'},
-             /*Geometric Shapes*/ {u'\u25A0', u'\u25FF'},
-             /*Math Symbols*/ {u'\u27C0', u'\u27EF'},
-             /*Supplemental*/ {u'\u2A00', u'\u2AFF'},
-         }}};
+const std::vector<std::vector<std::pair<char16_t, char16_t>>> kUTFChatSets{
+    // UTF8CharList::ASCII
+    {
+        {33, 127}, // All ASCII printable chars.
+    },
+    // UTF8CharList::UNICODE_CASE_SENSITIVE
+    {
+        {u'\u0020', u'\u007F'}, // Basic Latin.
+        {u'\u0400', u'\u04FF'}, // Cyrillic.
+    },
+    // UTF8CharList::EXTENDED_UNICODE
+    {
+        {u'\u03F0', u'\u03FF'}, // Greek.
+        {u'\u0100', u'\u017F'}, // Latin Extended A.
+        {u'\u0600', u'\u06FF'}, // Arabic.
+        {u'\u0900', u'\u097F'}, // Devanagari.
+        {u'\u0600', u'\u06FF'}, // Hebrew.
+        {u'\u3040', u'\u309F'}, // Hiragana.
+        {u'\u2000', u'\u206F'}, // Punctuation.
+        {u'\u2070', u'\u209F'}, // Sub/Super Script.
+        {u'\u20A0', u'\u20CF'}, // Currency.
+    },
+    // UTF8CharList::MATHEMATICAL_SYMBOLS
+    {
+        {u'\u2200', u'\u22FF'}, // Math Operators.
+        {u'\u2150', u'\u218F'}, // Number Forms.
+        {u'\u25A0', u'\u25FF'}, // Geometric Shapes.
+        {u'\u27C0', u'\u27EF'}, // Math Symbols.
+        {u'\u2A00', u'\u2AFF'}, // Supplemental.
+    },
+};
 
 FOLLY_ALWAYS_INLINE char16_t getRandomChar(
     FuzzerGenerator& rng,
     const std::vector<std::pair<char16_t, char16_t>>& charSet) {
-  const auto& chars = charSet[rand<uint32_t>(rng) % charSet.size()];
+  const auto& chars = charSet.size() == 1
+      ? charSet.front()
+      : charSet[rand<uint32_t>(rng) % charSet.size()];
   auto size = chars.second - chars.first;
   auto inc = (rand<uint32_t>(rng) % size);
   char16_t res = chars.first + inc;
@@ -167,9 +169,13 @@ StringView randString(
   wbuf.resize(stringLength);
 
   for (size_t i = 0; i < stringLength; ++i) {
-    auto encoding =
-        opts.charEncodings[rand<uint32_t>(rng) % opts.charEncodings.size()];
-    wbuf[i] = getRandomChar(rng, kUTFChatSetMap.at(encoding));
+    // First choose a random encoding from the list of input acceptable
+    // encodings.
+    const auto& encoding = (opts.charEncodings.size() == 1)
+        ? opts.charEncodings.front()
+        : opts.charEncodings[rand<uint32_t>(rng) % opts.charEncodings.size()];
+
+    wbuf[i] = getRandomChar(rng, kUTFChatSets[encoding]);
   }
 
   buf.append(converter.to_bytes(wbuf));
@@ -206,7 +212,7 @@ variant randVariantImpl(
 }
 
 template <TypeKind kind>
-void fuzzFlatImpl(
+void fuzzFlatPrimitiveImpl(
     const VectorPtr& vector,
     FuzzerGenerator& rng,
     const VectorFuzzer::Options& opts) {
@@ -239,35 +245,21 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type) {
   return fuzz(type, opts_.vectorSize);
 }
 
-VectorPtr
-VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size, bool flatEncoding) {
+VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
   VectorPtr vector;
-
   vector_size_t vectorSize = size;
+
   if (coinToss(0.1)) {
     // Extend the underlying vector to allow slicing later.
     vectorSize += folly::Random::rand32(8, rng_);
   }
 
   // 20% chance of adding a constant vector.
-  if (!flatEncoding && coinToss(0.2)) {
-    // If adding a constant vector, 50% of chance between:
-    // - generate a regular constant vector (only for primitive types).
-    // - generate a random vector and wrap it using a constant vector.
-    if (type->isPrimitiveType() && coinToss(0.5)) {
-      vector = fuzzConstant(type, vectorSize);
-    } else {
-      // Vector size can't be zero.
-      auto innerVectorSize =
-          folly::Random::rand32(1, opts_.vectorSize + 1, rng_);
-      auto constantIndex = rand<vector_size_t>(rng_) % innerVectorSize;
-      vector = BaseVector::wrapInConstant(
-          vectorSize, constantIndex, fuzz(type, innerVectorSize, flatEncoding));
-    }
+  if (coinToss(0.2)) {
+    vector = fuzzConstant(type, vectorSize);
   } else {
-    vector = type->isPrimitiveType()
-        ? fuzzFlat(type, vectorSize)
-        : fuzzComplex(type, vectorSize, flatEncoding);
+    vector = type->isPrimitiveType() ? fuzzFlatPrimitive(type, vectorSize)
+                                     : fuzzComplex(type, vectorSize);
   }
 
   if (vectorSize > size) {
@@ -276,7 +268,7 @@ VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size, bool flatEncoding) {
   }
 
   // Toss a coin and add dictionary indirections.
-  while (!flatEncoding && coinToss(0.5)) {
+  while (coinToss(0.5)) {
     vectorSize = size;
     if (vectorSize > 0 && coinToss(0.05)) {
       vectorSize += folly::Random::rand32(8, rng_);
@@ -287,7 +279,7 @@ VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size, bool flatEncoding) {
       vector = vector->slice(offset, size);
     }
   }
-  VELOX_DCHECK_EQ(vector->size(), size);
+  VELOX_CHECK_EQ(vector->size(), size);
   return vector;
 }
 
@@ -296,10 +288,26 @@ VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type) {
 }
 
 VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
-  if (coinToss(opts_.nullRatio)) {
-    return BaseVector::createNullConstant(type, size, pool_);
+  // For constants, there are two possible cases:
+  // - generate a regular constant vector (only for primitive types).
+  // - generate a random vector and wrap it using a constant vector.
+  if (type->isPrimitiveType() && coinToss(0.5)) {
+    // For regular constant vectors, toss a coin to determine its nullability.
+    if (coinToss(opts_.nullRatio)) {
+      return BaseVector::createNullConstant(type, size, pool_);
+    }
+    return BaseVector::createConstant(randVariant(type), size, pool_);
   }
-  return BaseVector::createConstant(randVariant(type), size, pool_);
+
+  // Otherwise, create constant by wrapping around another vector. This will
+  // return a null constant if the element being wrapped is null in the
+  // generated inner vector.
+
+  // Inner vector size can't be zero.
+  auto innerVectorSize = folly::Random::rand32(1, opts_.vectorSize + 1, rng_);
+  auto constantIndex = rand<vector_size_t>(rng_) % innerVectorSize;
+  return BaseVector::wrapInConstant(
+      size, constantIndex, fuzz(type, innerVectorSize));
 }
 
 VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type) {
@@ -307,19 +315,49 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type) {
 }
 
 VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
-  if (!type->isPrimitiveType()) {
-    return fuzzComplex(
-        type,
-        size,
-        true); // Use Flat encoding recursively throughout the children
+  // Primitive types.
+  if (type->isPrimitiveType()) {
+    return fuzzFlatPrimitive(type, size);
   }
+  // Arrays.
+  else if (type->isArray()) {
+    return fuzzArray(
+        fuzzFlat(type->asArray().elementType(), size * opts_.containerLength),
+        size);
+  }
+  // Maps.
+  else if (type->isMap()) {
+    return fuzzMap(
+        fuzzFlat(type->asMap().keyType(), size * opts_.containerLength),
+        fuzzFlat(type->asMap().valueType(), size * opts_.containerLength),
+        size);
+  }
+  // Rows.
+  else if (type->isRow()) {
+    const auto& rowType = type->asRow();
+    std::vector<VectorPtr> childrenVectors;
+    childrenVectors.reserve(rowType.children().size());
 
+    for (const auto& childType : rowType.children()) {
+      childrenVectors.emplace_back(fuzzFlat(childType, size));
+    }
+    return fuzzRow(std::move(childrenVectors), size);
+  } else {
+    VELOX_UNREACHABLE();
+  }
+}
+
+VectorPtr VectorFuzzer::fuzzFlatPrimitive(
+    const TypePtr& type,
+    vector_size_t size) {
+  VELOX_CHECK(type->isPrimitiveType());
   auto vector = BaseVector::create(type, size, pool_);
 
   // First, fill it with random values.
   // TODO: We should bias towards edge cases (min, max, Nan, etc).
   auto kind = vector->typeKind();
-  VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(fuzzFlatImpl, kind, vector, rng_, opts_);
+  VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      fuzzFlatPrimitiveImpl, kind, vector, rng_, opts_);
 
   // Second, generate a random null vector.
   for (size_t i = 0; i < vector->size(); ++i) {
@@ -330,58 +368,29 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
   return vector;
 }
 
-VectorPtr VectorFuzzer::fuzzComplex(
-    const TypePtr& type,
-    vector_size_t size,
-    bool flatEncoding) {
-  VectorPtr vector;
-  if (type->kind() == TypeKind::ROW) {
-    vector = fuzzRow(
-        std::dynamic_pointer_cast<const RowType>(type),
-        size,
-        opts_.containerHasNulls,
-        flatEncoding);
-  } else {
-    auto offsets = allocateOffsets(size, pool_);
-    auto rawOffsets = offsets->asMutable<vector_size_t>();
-    auto sizes = allocateSizes(size, pool_);
-    auto rawSizes = sizes->asMutable<vector_size_t>();
-    vector_size_t childSize = 0;
-    // Randomly creates container size.
-    for (auto i = 0; i < size; ++i) {
-      rawOffsets[i] = childSize;
-      auto length = genContainerLength(opts_, rng_);
-      rawSizes[i] = length;
-      childSize += length;
-    }
-
-    auto nulls = opts_.containerHasNulls ? fuzzNulls(size) : nullptr;
-
-    if (type->kind() == TypeKind::ARRAY) {
-      vector = std::make_shared<ArrayVector>(
-          pool_,
-          type,
-          nulls,
+VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
+  switch (type->kind()) {
+    case TypeKind::ROW:
+      return fuzzRow(
+          std::dynamic_pointer_cast<const RowType>(type),
           size,
-          offsets,
-          sizes,
-          fuzz(type->asArray().elementType(), childSize, flatEncoding));
-    } else if (type->kind() == TypeKind::MAP) {
-      auto& mapType = type->asMap();
-      vector = std::make_shared<MapVector>(
-          pool_,
-          type,
-          nulls,
-          size,
-          offsets,
-          sizes,
-          fuzz(mapType.keyType(), childSize, flatEncoding),
-          fuzz(mapType.valueType(), childSize, flatEncoding));
-    } else {
+          opts_.containerHasNulls);
+
+    case TypeKind::ARRAY:
+      return fuzzArray(
+          fuzz(type->asArray().elementType(), size * opts_.containerLength),
+          size);
+
+    case TypeKind::MAP:
+      return fuzzMap(
+          fuzz(type->asMap().keyType(), size * opts_.containerLength),
+          fuzz(type->asMap().valueType(), size * opts_.containerLength),
+          size);
+
+    default:
       VELOX_UNREACHABLE();
-    }
   }
-  return vector;
+  return nullptr; // no-op.
 }
 
 VectorPtr VectorFuzzer::fuzzDictionary(const VectorPtr& vector) {
@@ -406,6 +415,92 @@ VectorPtr VectorFuzzer::fuzzDictionary(
   return BaseVector::wrapInDictionary(nulls, indices, size, vector);
 }
 
+void VectorFuzzer::fuzzOffsetsAndSizes(
+    BufferPtr& offsets,
+    BufferPtr& sizes,
+    size_t elementsSize,
+    size_t size) {
+  offsets = allocateOffsets(size, pool_);
+  sizes = allocateSizes(size, pool_);
+  auto rawOffsets = offsets->asMutable<vector_size_t>();
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+
+  size_t containerAvgLength = std::max(elementsSize / size, 1UL);
+  size_t childSize = 0;
+  size_t length = 0;
+
+  for (auto i = 0; i < size; ++i) {
+    rawOffsets[i] = childSize;
+
+    // If variable length, generate a random number between zero and 2 *
+    // containerAvgLength (so that the average of generated containers size is
+    // equal to number of input elements).
+    if (opts_.containerVariableLength) {
+      length = folly::Random::rand32(rng_) % (containerAvgLength * 2);
+    } else {
+      length = containerAvgLength;
+    }
+
+    // If we exhausted the available elements, add empty arrays.
+    if ((childSize + length) > elementsSize) {
+      length = 0;
+    }
+    rawSizes[i] = length;
+    childSize += length;
+  }
+}
+
+ArrayVectorPtr VectorFuzzer::fuzzArray(
+    const VectorPtr& elements,
+    vector_size_t size) {
+  BufferPtr offsets, sizes;
+  fuzzOffsetsAndSizes(offsets, sizes, elements->size(), size);
+  return std::make_shared<ArrayVector>(
+      pool_,
+      ARRAY(elements->type()),
+      opts_.containerHasNulls ? fuzzNulls(size) : nullptr,
+      size,
+      offsets,
+      sizes,
+      elements);
+}
+
+MapVectorPtr VectorFuzzer::fuzzMap(
+    const VectorPtr& keys,
+    const VectorPtr& values,
+    vector_size_t size) {
+  size_t elementsSize = std::min(keys->size(), values->size());
+  BufferPtr offsets, sizes;
+  fuzzOffsetsAndSizes(offsets, sizes, elementsSize, size);
+  return std::make_shared<MapVector>(
+      pool_,
+      MAP(keys->type(), values->type()),
+      opts_.containerHasNulls ? fuzzNulls(size) : nullptr,
+      size,
+      offsets,
+      sizes,
+      keys,
+      values);
+}
+
+RowVectorPtr VectorFuzzer::fuzzRow(
+    std::vector<VectorPtr>&& children,
+    vector_size_t size) {
+  std::vector<TypePtr> types;
+  types.reserve(children.size());
+
+  for (const auto& child : children) {
+    types.emplace_back(child->type());
+  }
+
+  return std::make_shared<RowVector>(
+      pool_,
+      ROW(std::move(types)),
+      opts_.containerHasNulls ? fuzzNulls(size) : nullptr,
+      size,
+      std::move(children));
+}
+
 RowVectorPtr VectorFuzzer::fuzzRow(const RowTypePtr& rowType) {
   return fuzzRow(rowType, opts_.vectorSize, opts_.containerHasNulls);
 }
@@ -413,11 +508,10 @@ RowVectorPtr VectorFuzzer::fuzzRow(const RowTypePtr& rowType) {
 RowVectorPtr VectorFuzzer::fuzzRow(
     const RowTypePtr& rowType,
     vector_size_t size,
-    bool rowHasNulls,
-    bool flatEncoding) {
+    bool rowHasNulls) {
   std::vector<VectorPtr> children;
   for (auto i = 0; i < rowType->size(); ++i) {
-    children.push_back(fuzz(rowType->childAt(i), size, flatEncoding));
+    children.push_back(fuzz(rowType->childAt(i), size));
   }
 
   auto nulls = rowHasNulls ? fuzzNulls(size) : nullptr;

@@ -38,9 +38,13 @@ struct VectorWriter {
   using exec_out_t = typename VectorExec::template resolver<T>::out_type;
   using vector_t = typename TypeToFlatVector<T>::type;
 
-  void init(vector_t& vector) {
+  void init(vector_t& vector, bool uniqueAndMutable = false) {
     vector_ = &vector;
-    data_ = vector.mutableRawValues();
+    if (!uniqueAndMutable || vector.rawValues() == nullptr) {
+      data_ = vector.mutableRawValues();
+    } else {
+      data_ = const_cast<exec_out_t*>(vector.rawValues());
+    }
   }
 
   void finish() {}
@@ -355,7 +359,7 @@ struct VectorWriter<
   using vector_t = typename TypeToFlatVector<T>::type;
   using exec_out_t = StringWriter<>;
 
-  void init(vector_t& vector) {
+  void init(vector_t& vector, bool uniqueAndMutable = false) {
     proxy_.vector_ = &vector;
   }
 
@@ -402,7 +406,7 @@ struct VectorWriter<T, std::enable_if_t<std::is_same_v<T, bool>>> {
   using vector_t = typename TypeToFlatVector<T>::type;
   using exec_out_t = bool;
 
-  void init(vector_t& vector) {
+  void init(vector_t& vector, bool uniqueAndMutable = false) {
     vector_ = &vector;
   }
 
@@ -580,6 +584,154 @@ struct VectorWriter<Generic<T>> {
 
   GenericWriter::writer_variant_t castWriter_;
   TypePtr castType_;
+};
+
+class DynamicRowWriter {
+ public:
+  using child_writer_t = GenericWriter;
+  using writers_t = std::vector<std::shared_ptr<VectorWriter<Any, void>>>;
+
+  void set_null_at(column_index_t index) {
+    VELOX_USER_CHECK_LT(
+        index,
+        childrenVectors_->size(),
+        "Failed to access the child vector at index {}. Row vector has only {} children.",
+        index,
+        childrenVectors_->size());
+
+    (*childrenVectors_)[index]->setNull(offset_, true);
+    needCommit_[index] = false;
+  }
+
+  child_writer_t& get_writer_at(column_index_t index) {
+    VELOX_USER_CHECK_LT(
+        index,
+        childrenVectors_->size(),
+        "Failed to access the child vector at index {}. Row vector has only {} children.",
+        index,
+        childrenVectors_->size());
+
+    needCommit_[index] = true;
+    childrenWriters_[index]->setOffset(offset_);
+    return childrenWriters_[index]->current();
+  }
+
+ private:
+  // Make sure user do not use those.
+  DynamicRowWriter() = default;
+
+  DynamicRowWriter(const DynamicRowWriter&) = default;
+
+  DynamicRowWriter& operator=(const DynamicRowWriter&) = default;
+
+  void initialize(BaseVector* vector) {
+    childrenVectors_ = &vector->as<RowVector>()->children();
+    childrenCount_ = childrenVectors_->size();
+
+    for (int i = 0; i < childrenCount_; ++i) {
+      childrenWriters_.push_back(std::make_shared<VectorWriter<Any, void>>());
+      childrenWriters_[i]->init(*(*childrenVectors_)[i]);
+      childrenWriters_[i]->ensureSize(vector->size());
+
+      needCommit_.push_back(false);
+    }
+  }
+
+  void finalize() {
+    for (int i = 0; i < childrenCount_; ++i) {
+      if (needCommit_[i]) {
+        childrenWriters_[i]->commit(true);
+        needCommit_[i] = false;
+      }
+    }
+  }
+
+  void finalizeNull() {
+    for (int i = 0; i < childrenCount_; ++i) {
+      childrenWriters_[i]->current().finalizeNull();
+      needCommit_[i] = false;
+    }
+  }
+
+  writers_t childrenWriters_;
+
+  column_index_t childrenCount_;
+
+  std::vector<VectorPtr>* childrenVectors_;
+
+  std::vector<bool> needCommit_;
+
+  vector_size_t offset_;
+
+  template <typename A, typename B>
+  friend struct VectorWriter;
+
+  friend class GenericWriter;
+};
+
+template <>
+struct VectorWriter<DynamicRow, void> {
+  using vector_t = RowVector;
+  using exec_out_t = DynamicRowWriter;
+
+  VectorWriter() {}
+
+  void init(vector_t& vector) {
+    rowVector_ = &vector;
+    writer_.initialize(rowVector_);
+  }
+
+  // This should be called once all rows are processed.
+  void finish() {
+    for (int i = 0; i < writer_.childrenCount_; ++i) {
+      writer_.childrenWriters_[i]->finish();
+    }
+  }
+
+  exec_out_t& current() {
+    return writer_;
+  }
+
+  vector_t& vector() {
+    return *rowVector_;
+  }
+
+  void ensureSize(size_t size) {
+    if (size > rowVector_->size()) {
+      rowVector_->resize(size, /*setNotNull*/ false);
+      for (int i = 0; i < writer_.childrenCount_; ++i) {
+        writer_.childrenWriters_[i]->ensureSize(size);
+      }
+    }
+  }
+
+  void commitNull() {
+    writer_.finalizeNull();
+    rowVector_->setNull(writer_.offset_, true);
+  }
+
+  void commit(bool isSet = true) {
+    VELOX_DCHECK(rowVector_->size() > writer_.offset_);
+
+    if (LIKELY(isSet)) {
+      rowVector_->setNull(writer_.offset_, false);
+      writer_.finalize();
+    } else {
+      commitNull();
+    }
+  }
+
+  void setOffset(size_t offset) {
+    writer_.offset_ = offset;
+  }
+
+  void reset() {
+    writer_.offset_ = 0;
+  }
+
+ private:
+  DynamicRowWriter writer_;
+  vector_t* rowVector_ = nullptr;
 };
 
 } // namespace facebook::velox::exec

@@ -164,7 +164,9 @@ struct OperatorStats {
 
 class OperatorCtx {
  public:
-  explicit OperatorCtx(DriverCtx* driverCtx);
+  explicit OperatorCtx(
+      DriverCtx* driverCtx,
+      const std::string& operatorType = "");
 
   const std::shared_ptr<Task>& task() const {
     return driverCtx_->task;
@@ -248,7 +250,7 @@ class Operator {
   // corresponds. 'operatorType' is a label for use in stats.
   Operator(
       DriverCtx* driverCtx,
-      std::shared_ptr<const RowType> outputType,
+      RowTypePtr outputType,
       int32_t operatorId,
       std::string planNodeId,
       std::string operatorType);
@@ -408,7 +410,7 @@ class Operator {
 
   std::unique_ptr<OperatorCtx> operatorCtx_;
   OperatorStats stats_;
-  const std::shared_ptr<const RowType> outputType_;
+  const RowTypePtr outputType_;
 
   // Holds the last data from addInput until it is processed. Reset after the
   // input is processed.
@@ -433,7 +435,7 @@ class Operator {
 /// Given a row type returns indices for the specified subset of columns.
 std::vector<column_index_t> toChannels(
     const RowTypePtr& rowType,
-    const std::vector<std::shared_ptr<const core::ITypedExpr>>& exprs);
+    const std::vector<core::TypedExprPtr>& exprs);
 
 column_index_t exprToChannel(const core::ITypedExpr* expr, const TypePtr& type);
 
@@ -451,7 +453,7 @@ class SourceOperator : public Operator {
  public:
   SourceOperator(
       DriverCtx* driverCtx,
-      std::shared_ptr<const RowType> outputType,
+      RowTypePtr outputType,
       int32_t operatorId,
       const std::string& planNodeId,
       const std::string& operatorType)

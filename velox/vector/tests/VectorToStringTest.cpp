@@ -234,4 +234,72 @@ TEST_F(VectorToStringTest, dictionary) {
       "[CONSTANT INTEGER: 100 elements, 75]");
 }
 
+TEST_F(VectorToStringTest, printNulls) {
+  // No nulls.
+  BufferPtr nulls = allocateNulls(1024, pool());
+  EXPECT_EQ(printNulls(nulls), "0 out of 1024 rows are null");
+
+  // Some nulls.
+  for (auto i = 3; i < 1024; i += 7) {
+    bits::setNull(nulls->asMutable<uint64_t>(), i);
+  }
+  EXPECT_EQ(
+      printNulls(nulls),
+      "146 out of 1024 rows are null: ...n......n......n......n.....");
+
+  EXPECT_EQ(
+      printNulls(nulls, 15), "146 out of 1024 rows are null: ...n......n....");
+
+  EXPECT_EQ(
+      printNulls(nulls, 50),
+      "146 out of 1024 rows are null: "
+      "...n......n......n......n......n......n......n....");
+
+  // All nulls.
+  for (auto i = 0; i < 1024; ++i) {
+    bits::setNull(nulls->asMutable<uint64_t>(), i);
+  }
+  EXPECT_EQ(
+      printNulls(nulls),
+      "1024 out of 1024 rows are null: nnnnnnnnnnnnnnnnnnnnnnnnnnnnnn");
+
+  // Short buffer.
+  nulls = allocateNulls(5, pool());
+  bits::setNull(nulls->asMutable<uint64_t>(), 1);
+  bits::setNull(nulls->asMutable<uint64_t>(), 2);
+  bits::setNull(nulls->asMutable<uint64_t>(), 4);
+  EXPECT_EQ(printNulls(nulls), "3 out of 8 rows are null: .nn.n...");
+}
+
+TEST_F(VectorToStringTest, printIndices) {
+  BufferPtr indices = allocateIndices(1024, pool());
+  EXPECT_EQ(
+      printIndices(indices),
+      "1 unique indices out of 1024: 0, 0, 0, 0, 0, 0, 0, 0, 0, 0");
+
+  indices = makeIndices(1024, [](auto row) { return row / 3; });
+  EXPECT_EQ(
+      printIndices(indices),
+      "342 unique indices out of 1024: 0, 0, 0, 1, 1, 1, 2, 2, 2, 3");
+
+  indices = makeIndices(1024, [](auto row) { return row % 7; });
+  EXPECT_EQ(
+      printIndices(indices),
+      "7 unique indices out of 1024: 0, 1, 2, 3, 4, 5, 6, 0, 1, 2");
+
+  indices = makeIndices(1024, [](auto row) { return row; });
+  EXPECT_EQ(
+      printIndices(indices),
+      "1024 unique indices out of 1024: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9");
+
+  indices = makeIndices(1024, [](auto row) { return row; });
+  EXPECT_EQ(
+      printIndices(indices, 15),
+      "1024 unique indices out of 1024: "
+      "0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14");
+
+  indices = makeIndices({34, 79, 11, 0, 0, 33});
+  EXPECT_EQ(
+      printIndices(indices), "5 unique indices out of 6: 34, 79, 11, 0, 0, 33");
+}
 } // namespace facebook::velox::test

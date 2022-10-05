@@ -54,6 +54,47 @@ void registerComparisonFunctions() {
   registerFunction<BetweenFunction, bool, Varchar, Varchar, Varchar>(
       {"between"});
   registerFunction<BetweenFunction, bool, Date, Date, Date>({"between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      UnscaledLongDecimal,
+      UnscaledLongDecimal,
+      UnscaledLongDecimal>({"between"});
+  registerFunction<
+      GtFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"gt"});
+  registerFunction<GtFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"gt"});
+  registerFunction<
+      LtFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"lt"});
+  registerFunction<LtFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"lt"});
+
+  registerFunction<
+      GteFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"gte"});
+  registerFunction<GteFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"gte"});
+  registerFunction<
+      LteFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"lte"});
+  registerFunction<LteFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"lte"});
 }
 
 } // namespace facebook::velox::functions

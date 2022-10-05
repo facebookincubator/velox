@@ -254,6 +254,24 @@ std::vector<std::string> SpillState::testingSpilledFilePaths() const {
   return spilledFiles;
 }
 
+std::vector<std::unique_ptr<SpillPartition>> SpillPartition::split(
+    int numShards) {
+  const int32_t numFilesPerShard = bits::roundUp(files_.size(), numShards);
+  std::vector<std::unique_ptr<SpillPartition>> shards(numShards);
+
+  for (int shard = 0, fileIdx = 0; shard < numShards; ++shard) {
+    SpillFiles shardFiles;
+    shardFiles.reserve(numFilesPerShard);
+    while (shardFiles.size() < numFilesPerShard && fileIdx < files_.size()) {
+      shardFiles.push_back(std::move(files_[fileIdx++]));
+    }
+    shards[shard] =
+        std::make_unique<SpillPartition>(id_, std::move(shardFiles));
+  }
+  files_.clear();
+  return shards;
+}
+
 std::unique_ptr<UnorderedStreamReader<BatchStream>>
 SpillPartition::createReader() {
   std::vector<std::unique_ptr<BatchStream>> streams;
@@ -266,4 +284,13 @@ SpillPartition::createReader() {
       std::move(streams));
 }
 
+SpillPartitionIdSet toSpillPartitionIdSet(
+    const SpillPartitionSet& partitionSet) {
+  SpillPartitionIdSet partitionIdSet;
+  partitionIdSet.reserve(partitionSet.size());
+  for (auto& partitionEntry : partitionSet) {
+    partitionIdSet.insert(partitionEntry.first);
+  }
+  return partitionIdSet;
+}
 } // namespace facebook::velox::exec

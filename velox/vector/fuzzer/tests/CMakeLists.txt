@@ -11,9 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_parse_utils_test VariantToVectorTest.cpp)
+add_executable(velox_vector_fuzzer_test VectorFuzzerTest.cpp)
 
-add_test(velox_parse_utils_test velox_parse_utils_test)
+add_test(velox_vector_fuzzer_test velox_vector_fuzzer_test)
 
-target_link_libraries(velox_parse_utils_test velox_parse_utils velox_type
-                      velox_vector gtest gtest_main)
+target_link_libraries(velox_vector_fuzzer_test velox_vector_fuzzer velox_memory
+                      gtest gtest_main)

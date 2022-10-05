@@ -129,13 +129,13 @@ class SpillOperatorGroupTest : public testing::Test {
       ops.push_back(newSpillOperator(spillGroup_.get()));
     }
     spillOps_ = std::move(ops);
-    ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::INIT);
+    ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::kInit);
   }
 
   void setupSpillGroup() {
     spillGroup_ = std::make_unique<SpillOperatorGroup>(
         taskId_, splitGroupId_++, planNodeId_);
-    ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::INIT);
+    ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::kInit);
     numSpillRuns_ = 0;
 
     setupSpillOperators();
@@ -187,9 +187,9 @@ class SpillOperatorGroupTest : public testing::Test {
 
     ASSERT_FALSE(spillGroup_->needSpill());
     if (hasRunningOperators()) {
-      ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::RUNNING);
+      ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::kRunning);
     } else {
-      ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::STOPPED);
+      ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::kStopped);
     }
     if (spillTriggered) {
       ++numSpillRuns_;
@@ -243,7 +243,7 @@ class SpillOperatorGroupTest : public testing::Test {
   }
 
   void startSpillGroup() {
-    if (spillGroup_->state() != SpillOperatorGroup::State::STOPPED) {
+    if (spillGroup_->state() != SpillOperatorGroup::State::kStopped) {
       spillGroup_->start();
       return;
     }
@@ -252,19 +252,22 @@ class SpillOperatorGroupTest : public testing::Test {
       op->restartSpill();
     }
     spillGroup_->restart();
-    ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::RUNNING);
+    ASSERT_EQ(spillGroup_->state(), SpillOperatorGroup::State::kRunning);
   }
 
   uint32_t randInt(uint32_t n) {
+    std::lock_guard<std::mutex> l(mutex_);
     return folly::Random().rand64(rng_) % (n + 1);
   }
 
   bool oneIn(uint32_t n) {
+    std::lock_guard<std::mutex> l(mutex_);
     return folly::Random().oneIn(n, rng_);
   }
 
   const int32_t numOperators_;
 
+  std::mutex mutex_;
   folly::Random::DefaultGenerator rng_;
 
   uint32_t operatorId_;
@@ -276,22 +279,11 @@ class SpillOperatorGroupTest : public testing::Test {
   std::vector<std::unique_ptr<MockOperator>> spillOps_;
 };
 
-struct TestParam {
-  int32_t numOperators;
-};
-
 class MultiSpillOperatorGroupTest
     : public SpillOperatorGroupTest,
-      public testing::WithParamInterface<TestParam> {
+      public testing::WithParamInterface<int32_t> {
  public:
-  MultiSpillOperatorGroupTest()
-      : SpillOperatorGroupTest(GetParam().numOperators) {}
-
-  static std::vector<TestParam> getTestParams() {
-    return std::vector<TestParam>({TestParam{1}, TestParam{4}, TestParam{32}});
-    // return std::vector<TestParam>({TestParam{1}, TestParam{4},
-    // TestParam{32}});
-  }
+  MultiSpillOperatorGroupTest() : SpillOperatorGroupTest(GetParam()) {}
 };
 
 TEST_P(MultiSpillOperatorGroupTest, spillRun) {
@@ -453,4 +445,4 @@ TEST_P(MultiSpillOperatorGroupTest, multiThreading) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SpillOperatorGroupTest,
     MultiSpillOperatorGroupTest,
-    testing::ValuesIn(MultiSpillOperatorGroupTest::getTestParams()));
+    testing::ValuesIn({1, 4, 32}));

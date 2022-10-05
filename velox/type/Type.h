@@ -674,9 +674,9 @@ inline bool isDecimalKind(TypeKind typeKind) {
       typeKind == TypeKind::LONG_DECIMAL);
 }
 
-inline bool isDecimalName(const std::string& typeName) {
-  return (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL");
-}
+bool isDecimalName(const std::string& typeName);
+
+bool isDecimalTypeSignature(const std::string& arg);
 
 std::pair<int, int> getDecimalPrecisionScale(const Type& type);
 
@@ -1104,6 +1104,10 @@ std::shared_ptr<const LongDecimalType> LONG_DECIMAL(
 
 TypePtr DECIMAL(uint8_t precision, uint8_t scale);
 
+std::shared_ptr<const FunctionType> FUNCTION(
+    std::vector<std::shared_ptr<const Type>>&& argumentTypes,
+    std::shared_ptr<const Type> returnType);
+
 template <typename Class>
 std::shared_ptr<const OpaqueType> OPAQUE() {
   return OpaqueType::create<Class>();
@@ -1341,12 +1345,6 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
     } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {         \
       return CLASS_NAME<::facebook::velox::TypeKind::OPAQUE>::METHOD_NAME(  \
           __VA_ARGS__);                                                     \
-    } else if ((typeKind) == ::facebook::velox::TypeKind::SHORT_DECIMAL) {  \
-      return CLASS_NAME<::facebook::velox::TypeKind::SHORT_DECIMAL>::       \
-          METHOD_NAME(__VA_ARGS__);                                         \
-    } else if ((typeKind) == ::facebook::velox::TypeKind::LONG_DECIMAL) {   \
-      return CLASS_NAME<::facebook::velox::TypeKind::LONG_DECIMAL>::        \
-          METHOD_NAME(__VA_ARGS__);                                         \
     } else {                                                                \
       return VELOX_DYNAMIC_TYPE_DISPATCH_IMPL(                              \
           CLASS_NAME, ::METHOD_NAME, typeKind, __VA_ARGS__);                \
@@ -1921,6 +1919,13 @@ struct CastTypeChecker {
 
   static bool check(const TypePtr& vectorType) {
     return CppToType<T>::typeKind == vectorType->kind();
+  }
+};
+
+template <>
+struct CastTypeChecker<DynamicRow> {
+  static bool check(const TypePtr& vectorType) {
+    return TypeKind::ROW == vectorType->kind();
   }
 };
 
