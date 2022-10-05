@@ -15,6 +15,11 @@ name: Build & Push Docker Images
 
 on:
   pull_request:
+    paths:
+      - scripts/*.dockfile
+      - scripts/*.dockerfile
+      - scripts/setup-*.sh
+      - .github/workflows/docker.yml
   push:
     branches: [main]
     paths:
