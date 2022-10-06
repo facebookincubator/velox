@@ -148,15 +148,30 @@ class AverageAggregate : public exec::Aggregate {
         }
       });
     } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
-      const TInput* data = decodedRaw_.data<TInput>();
       TAccumulator totalSum(0);
-      rows.applyToSelected([&](vector_size_t i) { totalSum += data[i]; });
-      updateNonNullValue<false>(group, rows.countSelected(), totalSum);
+      if constexpr (std::is_same_v<TAccumulator, UnscaledLongDecimal>) {
+        rows.applyToSelected([&](vector_size_t i) {
+          updateNonNullValue(group, decodedRaw_.valueAt<TInput>(i));
+        });
+      } else {
+        const TInput* data = decodedRaw_.data<TInput>();
+        rows.applyToSelected([&](vector_size_t i) { totalSum += data[i]; });
+        updateNonNullValue<false>(group, rows.countSelected(), totalSum);
+      }
     } else {
       TAccumulator totalSum(0);
-      rows.applyToSelected(
-          [&](vector_size_t i) { totalSum += decodedRaw_.valueAt<TInput>(i); });
-      updateNonNullValue(group, rows.countSelected(), totalSum);
+      // Decimal average is calculated iteratively to avoid overflow of total
+      // sum.
+      if constexpr (std::is_same_v<TAccumulator, UnscaledLongDecimal>) {
+        rows.applyToSelected([&](vector_size_t i) {
+          updateNonNullValue(group, decodedRaw_.valueAt<TInput>(i));
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          totalSum += decodedRaw_.valueAt<TInput>(i);
+        });
+        updateNonNullValue(group, rows.countSelected(), totalSum);
+      }
     }
   }
 
@@ -285,10 +300,12 @@ class AverageAggregate : public exec::Aggregate {
         auto* sumCount = accumulator(group);
         if constexpr (std::is_same_v<TAccumulator, UnscaledLongDecimal>) {
           // Handles round-up of fraction results.
-          TAccumulator quotient(0);
-          DecimalUtil::divideWithRoundUp<TAccumulator, TAccumulator, int64_t>(
-              quotient, TAccumulator(sumCount->sum), sumCount->count, 0, 0);
-          rawValues[i] = TResult(quotient.unscaledValue());
+          // TAccumulator quotient(0);
+          // DecimalUtil::divideWithRoundUp<TAccumulator, TAccumulator,
+          // int64_t>(
+          //     quotient, TAccumulator(sumCount->sum), sumCount->count, 0, 0);
+          // rawValues[i] = TResult(quotient.unscaledValue());
+          rawValues[i] = TResult(sumCount->sum.unscaledValue());
         } else {
           rawValues[i] = TResult(sumCount->sum) / sumCount->count;
         }
@@ -299,6 +316,52 @@ class AverageAggregate : public exec::Aggregate {
   DecodedVector decodedRaw_;
   DecodedVector decodedPartial_;
 }; // class AverageAggregate
+
+template <>
+template <bool tableHasNulls>
+void AverageAggregate<
+    UnscaledShortDecimal,
+    UnscaledLongDecimal,
+    UnscaledShortDecimal>::
+    updateNonNullValue(char* group, UnscaledShortDecimal value) {
+  if constexpr (tableHasNulls) {
+    exec::Aggregate::clearNull(group);
+  }
+
+  accumulator(group)->count += 1;
+  UnscaledLongDecimal quotient(0);
+  DecimalUtil::
+      divideWithRoundUp<UnscaledLongDecimal, UnscaledLongDecimal, int64_t>(
+          quotient,
+          UnscaledLongDecimal(value) - accumulator(group)->sum,
+          accumulator(group)->count,
+          0,
+          0);
+  accumulator(group)->sum += quotient;
+}
+
+template <>
+template <bool tableHasNulls>
+void AverageAggregate<
+    UnscaledLongDecimal,
+    UnscaledLongDecimal,
+    UnscaledLongDecimal>::
+    updateNonNullValue(char* group, UnscaledLongDecimal value) {
+  if constexpr (tableHasNulls) {
+    exec::Aggregate::clearNull(group);
+  }
+
+  accumulator(group)->count += 1;
+  UnscaledLongDecimal quotient(0);
+  DecimalUtil::
+      divideWithRoundUp<UnscaledLongDecimal, UnscaledLongDecimal, int64_t>(
+          quotient,
+          UnscaledLongDecimal(value) - accumulator(group)->sum,
+          accumulator(group)->count,
+          0,
+          0);
+  accumulator(group)->sum += quotient;
+}
 
 /// Override 'accumulatorAlignmentSize' for UnscaledLongDecimal values as it
 /// uses int128_t type. Some CPUs don't support misaligned access to int128_t
