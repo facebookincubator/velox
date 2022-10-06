@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/parquet/tests/ParquetTpchTest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/dwio/parquet/tests/ParquetTpchTestBase.h"
 
 class MultiParquetTpchTest
     : public ParquetTpchTestBase,

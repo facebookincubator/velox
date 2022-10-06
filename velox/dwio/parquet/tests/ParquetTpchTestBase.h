@@ -38,9 +38,11 @@ namespace {
 
 class ParquetTpchTestBase : public testing::Test {
  public:
+  ParquetTpchTestBase(ParquetReaderType parquetReaderType) : parquetReaderType_(parquetReaderType) {}
+
   // Setup a DuckDB instance for the entire suite and load TPC-H data with scale
   // factor 0.01.
-  ParquetTpchTestBase(ParquetReaderType parquetReaderType) {
+  void SetUp() {
     if (duckDb_ == nullptr) {
       duckDb_ = std::make_shared<DuckDbQueryRunner>();
       constexpr double kTpchScaleFactor = 0.01;
@@ -49,7 +51,7 @@ class ParquetTpchTestBase : public testing::Test {
     functions::prestosql::registerAllScalarFunctions();
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
-    registerParquetReaderFactory(parquetReaderType);
+    registerParquetReaderFactory(parquetReaderType_);
 
     auto hiveConnector =
         connector::getConnectorFactory(
@@ -69,7 +71,7 @@ class ParquetTpchTestBase : public testing::Test {
     auto task = assertQuery(tpchPlan, duckDbSql, sortingKeys);
   }
 
-  ~ParquetTpchTestBase() {
+  void TearDown() {
     connector::unregisterConnector(kHiveConnectorId);
     unregisterParquetReaderFactory();
   }
@@ -123,6 +125,7 @@ class ParquetTpchTestBase : public testing::Test {
         params, addSplits, duckQuery, *duckDb_, sortingKeys);
   }
 
+  const ParquetReaderType parquetReaderType_;
   std::shared_ptr<DuckDbQueryRunner> duckDb_ = nullptr;
   std::shared_ptr<TempDirectoryPath> tempDirectory_ = nullptr;
   TpchQueryBuilder tpchBuilder_ =
