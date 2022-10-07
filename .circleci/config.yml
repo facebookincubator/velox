@@ -220,24 +220,50 @@ jobs:
       - post-steps
 
   linux-benchmarks-basic:
-    executor: build
+    machine: 
+      image: ubuntu-2004:current
+    resource_class: 2xlarge
     environment:
       CONBENCH_URL: https://velox-conbench.voltrondata.run/
     steps:
-      - pre-steps
+      - checkout
+      - update-submodules
+      - run:
+          name: "Setup Ubuntu"
+          command: |
+            sudo ./scripts/setup-ubuntu.sh
+      - run:
+          name: "Setup Environment"
+          command: |
+            # Calculate ccache key.
+            git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
+
+            # Set up xml gtest output. 
+            mkdir -p /tmp/test_xml_output/
+            echo "export XML_OUTPUT_FILE=\"/tmp/test_xml_output/\"" >> $BASH_ENV
+
+            # Set up ccache configs.
+            mkdir -p .ccache
+            echo "export CCACHE_DIR=$(realpath .ccache)" >> $BASH_ENV
+            ccache -sz -M 5Gi
+      - restore_cache:
+          name: "Restore CCache Cache"
+          keys:
+            - velox-ccache-debug-{{ arch }}-{{ checksum "merge-base-date" }}
+
       - run:
           name: "Build Benchmarks"
           command: |
-            make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make benchmarks-basic-build NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4
             ccache -s
       - run:
           name: "Install Conbench, Benchalerts, and Veloxbench"
           command: |
             # upgrade python to 3.8 for this job
-            yum install -y python38
-            pip3.8 install conbench
-            pip3.8 install git+https://github.com/conbench/benchalerts.git@0.2.1
-            pip3.8 install scripts/veloxbench
+            #yum install -y python38
+            pip3 install conbench
+            pip3 install git+https://github.com/conbench/benchalerts.git@0.2.1
+            pip3 install scripts/veloxbench
       - run:
           name: "Run Benchmarks"
           command: |
@@ -271,7 +297,7 @@ jobs:
           name: "Analyze Benchmark Regressions and Post to Github"
           command: |
             export GITHUB_APP_PRIVATE_KEY=$(echo $GITHUB_APP_PRIVATE_KEY_ENCODED | base64 -d)
-            python3.8 scripts/benchmark-github-status.py --z-score-threshold 50
+            python3 scripts/benchmark-github-status.py --z-score-threshold 50
       - post-steps
 
   # Build with different options

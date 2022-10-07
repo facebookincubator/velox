@@ -45,7 +45,8 @@ sudo --preserve-env apt install -y \
   bison \
   flex \
   tzdata \
-  wget
+  wget \
+  libprotobuf-dev
 
 function run_and_time {
   time "$@"
@@ -84,7 +85,7 @@ function install_protobuf {
 
 function install_velox_deps {
   run_and_time install_fmt
-  run_and_time install_protobuf
+  #run_and_time install_protobuf
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
