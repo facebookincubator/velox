@@ -200,6 +200,26 @@ void EvalCtx::setErrors(
   rows.applyToSelected([&](auto row) { setError(row, exceptionPtr); });
 }
 
+void EvalCtx::addElementErrorsToTopLevel(
+    const SelectivityVector& elementRows,
+    const BufferPtr& elementToTopLevelRows,
+    ErrorVectorPtr& topLevelErrors) {
+  if (!errors_) {
+    return;
+  }
+
+  auto rawElementToTopLevelRows =
+      elementToTopLevelRows->asMutable<vector_size_t>();
+  elementRows.applyToSelected([&](auto row) {
+    if (errors_->isIndexInRange(row) && !errors_->isNullAt(row)) {
+      addError(
+          rawElementToTopLevelRows[row],
+          *std::static_pointer_cast<std::exception_ptr>(errors_->valueAt(row)),
+          topLevelErrors);
+    }
+  });
+}
+
 const VectorPtr& EvalCtx::getField(int32_t index) const {
   const VectorPtr* field;
   if (!peeledFields_.empty()) {
