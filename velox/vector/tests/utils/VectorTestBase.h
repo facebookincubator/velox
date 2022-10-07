@@ -259,25 +259,34 @@ class VectorTestBase {
   //   EXPECT_EQ(4, arrayVector->size());
   template <typename T>
   ArrayVectorPtr makeNestedArrayVector(
-      const std::vector<
-          std::vector<std::optional<std::vector<std::optional<T>>>>>& data) {
+      const std::vector<std::optional<
+          std::vector<std::optional<std::vector<std::optional<T>>>>>>& data) {
     vector_size_t size = data.size();
     BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool());
     BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool());
+    BufferPtr nulls = AlignedBuffer::allocate<bool>(size, pool());
 
     auto rawOffsets = offsets->asMutable<vector_size_t>();
     auto rawSizes = sizes->asMutable<vector_size_t>();
+    auto rawNulls = nulls->asMutable<uint64_t>();
+    memset(rawNulls, bits::kNotNullByte, nulls->capacity());
 
     // Flatten the outermost layer of std::vector of the input, and populate
     // the sizes and offsets for the top-level array vector.
     std::vector<std::optional<std::vector<std::optional<T>>>> flattenedData;
     vector_size_t i = 0;
     for (const auto& vector : data) {
-      flattenedData.insert(flattenedData.end(), vector.begin(), vector.end());
+      if (!vector.has_value()) {
+        bits::setNull(rawNulls, i, true);
+        rawSizes[i] = 0;
+        rawOffsets[i] = 0;
+      } else {
+        flattenedData.insert(
+            flattenedData.end(), vector->begin(), vector->end());
 
-      rawSizes[i] = vector.size();
-      rawOffsets[i] = (i == 0) ? 0 : rawOffsets[i - 1] + rawSizes[i - 1];
-
+        rawSizes[i] = vector->size();
+        rawOffsets[i] = (i == 0) ? 0 : rawOffsets[i - 1] + rawSizes[i - 1];
+      }
       ++i;
     }
 
@@ -288,7 +297,7 @@ class VectorTestBase {
     return std::make_shared<ArrayVector>(
         pool(),
         ARRAY(ARRAY(CppToType<T>::create())),
-        BufferPtr(nullptr),
+        nulls,
         size,
         offsets,
         sizes,

@@ -403,7 +403,7 @@ TEST_F(ArrayWriterTest, nestedArray) {
   array_type array3 = {{1, std::nullopt, 2}};
 
   assertEqualVectors(
-      result, makeNestedArrayVector<int32_t>({{array1, array2, array3}}));
+      result, makeNestedArrayVector<int32_t>({{{array1, array2, array3}}}));
 }
 
 // Creates a matrix of size n*n with numbers 1 to n^2-1 for every input n,
@@ -441,9 +441,9 @@ TEST_F(ArrayWriterTest, nestedArrayE2E) {
   // Build the expected output.
   using matrix_row = std::vector<std::optional<int64_t>>;
   using matrix_type = std::vector<std::optional<matrix_row>>;
-  std::vector<matrix_type> expected;
+  std::vector<std::optional<matrix_type>> expected;
   for (auto k = 1; k <= 10; k++) {
-    auto& expectedMatrix = *expected.insert(expected.end(), matrix_type());
+    auto& expectedMatrix = **expected.insert(expected.end(), matrix_type());
     auto n = k;
     int count = 0;
 
@@ -535,7 +535,7 @@ TEST_F(ArrayWriterTest, copyFromNestedArray) {
   array_type array3 = {{1}};
 
   assertEqualVectors(
-      result, makeNestedArrayVector<int64_t>({{array1, array2, array3}}));
+      result, makeNestedArrayVector<int64_t>({{{array1, array2, array3}}}));
 }
 
 auto makeCopyFromTestData() {

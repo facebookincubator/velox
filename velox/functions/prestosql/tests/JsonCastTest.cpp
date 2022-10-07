@@ -974,10 +974,10 @@ TEST_F(JsonCastTest, toNested) {
       {R"([[1,2],[3]])"_sv, R"([[null,null,4]])"_sv, "[[]]"_sv, "[]"_sv},
       JSON());
   auto arrayExpected = makeNestedArrayVector<StringView>(
-      {{{{"1"_sv, "2"_sv}}, {{"3"_sv}}},
-       {{{std::nullopt, std::nullopt, "4"_sv}}},
-       {{{}}},
-       {}});
+      {{{{{"1"_sv, "2"_sv}}, {{"3"_sv}}}},
+       {{{{std::nullopt, std::nullopt, "4"_sv}}}},
+       {{{{}}}},
+       {{}}});
 
   testCast<ComplexType>(JSON(), ARRAY(ARRAY(VARCHAR())), array, arrayExpected);
 

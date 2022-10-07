@@ -298,7 +298,8 @@ ArrayVectorPtr ArraySortTest::arrayVector<TestMapType>(
 template <>
 ArrayVectorPtr ArraySortTest::arrayVector<TestArrayType>(
     const std::vector<std::optional<TestArrayType>>& inputValues) {
-  std::vector<std::vector<std::optional<TestArrayType>>> inputVectors;
+  std::vector<std::optional<std::vector<std::optional<TestArrayType>>>>
+      inputVectors;
   inputVectors.reserve(numVectors_);
   for (int i = 0; i < numVectors_; ++i) {
     inputVectors.push_back(inputValues);
