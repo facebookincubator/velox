@@ -28,6 +28,7 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/vector/FunctionVector.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -2554,6 +2555,55 @@ TEST_F(ExprTest, lambdaWithRowField) {
   auto evalResult = evaluate("filter(c1, x -> (x + c0.val >= 0))", rowVector);
 
   assertEqualVectors(array, evalResult);
+}
+
+namespace {
+// Transform values in a flat bigint vector with a lambda expression.
+class FlatLambdaFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /*outputType*/,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    SelectivityVector finalSelection;
+    auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
+    while (auto entry = it.next()) {
+      entry.callable->apply(
+          *entry.rows,
+          context.isFinalSelection() ? finalSelection
+                                     : *context.finalSelection(),
+          nullptr,
+          &context,
+          {args[0]},
+          &result);
+    }
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    // bigint, function(bigint, bigint) -> bigint
+    return {exec::FunctionSignatureBuilder()
+                .returnType("bigint")
+                .argumentType("bigint")
+                .argumentType("function(bigint, bigint)")
+                .build()};
+  }
+};
+} // namespace
+
+TEST_F(ExprTest, lambdaInTry) {
+  exec::registerVectorFunction(
+      "flat_lambda",
+      FlatLambdaFunction::signatures(),
+      std::make_unique<FlatLambdaFunction>());
+
+  auto input = makeRowVector({makeFlatVector<int64_t>({1, 0, 4, 5, 10})});
+  auto expected =
+      makeNullableFlatVector<int64_t>({100, std::nullopt, 25, 20, 10});
+
+  auto evalResult = evaluate("try(flat_lambda(c0, x -> (100 / x)))", input);
+  assertEqualVectors(expected, evalResult);
 }
 
 TEST_F(ExprTest, flatNoNullsFastPath) {

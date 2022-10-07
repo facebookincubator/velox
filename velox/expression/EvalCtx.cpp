@@ -155,6 +155,27 @@ void EvalCtx::addError(
   }
 }
 
+void EvalCtx::addErrors(
+    const SelectivityVector& rows,
+    ErrorVectorPtr& fromErrors,
+    ErrorVectorPtr& toErrors) {
+  if (!fromErrors) {
+    return;
+  }
+
+  ensureErrorsVectorSize(toErrors, fromErrors->size());
+  rows.applyToSelected([&](auto row) {
+    if (fromErrors->isIndexInRange(row) && !fromErrors->isNullAt(row) &&
+        toErrors->isNullAt(row)) {
+      toErrors->setNull(row, false);
+      toErrors->set(
+          row,
+          std::static_pointer_cast<std::exception_ptr>(
+              fromErrors->valueAt(row)));
+    }
+  });
+}
+
 void EvalCtx::restore(ScopedContextSaver& saver) {
   peeledFields_ = std::move(saver.peeled);
   nullsPruned_ = saver.nullsPruned;

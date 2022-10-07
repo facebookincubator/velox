@@ -116,6 +116,13 @@ class EvalCtx {
       const std::exception_ptr& exceptionPtr,
       ErrorVectorPtr& errorsPtr) const;
 
+  /// Copy std::exception_ptr in fromErrors at rows to the corresponding rows in
+  /// toErrors.
+  void addErrors(
+      const SelectivityVector& rows,
+      ErrorVectorPtr& fromErrors,
+      ErrorVectorPtr& toErrors);
+
   // Given a mapping from element rows to top-level rows, add element-level
   // errors in errors_ to topLevelErrors.
   void addElementErrorsToTopLevel(

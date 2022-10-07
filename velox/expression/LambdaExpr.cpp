@@ -46,6 +46,19 @@ class ExprCallable : public Callable {
       EvalCtx* context,
       const std::vector<VectorPtr>& args,
       VectorPtr* result) override {
+    doApply(rows, finalSelection, wrapCapture, context, args, result);
+
+    context->addErrors(rows, *lambdaCtx_->errorsPtr(), *context->errorsPtr());
+  }
+
+ private:
+  void doApply(
+      const SelectivityVector& rows,
+      const SelectivityVector& finalSelection,
+      BufferPtr wrapCapture,
+      EvalCtx* context,
+      const std::vector<VectorPtr>& args,
+      VectorPtr* result) {
     std::vector<VectorPtr> allVectors = args;
     for (auto index = args.size(); index < capture_->childrenSize(); ++index) {
       auto values = capture_->childAt(index);
@@ -61,18 +74,19 @@ class ExprCallable : public Callable {
         BufferPtr(nullptr),
         rows.end(),
         std::move(allVectors));
-    EvalCtx lambdaCtx(context->execCtx(), context->exprSet(), row.get());
+    lambdaCtx_.emplace(context->execCtx(), context->exprSet(), row.get());
+    *lambdaCtx_->mutableThrowOnError() = context->throwOnError();
     if (!context->isFinalSelection()) {
-      *lambdaCtx.mutableIsFinalSelection() = false;
-      *lambdaCtx.mutableFinalSelection() = &finalSelection;
+      *lambdaCtx_->mutableIsFinalSelection() = false;
+      *lambdaCtx_->mutableFinalSelection() = &finalSelection;
     }
-    body_->eval(rows, lambdaCtx, *result);
+    body_->eval(rows, *lambdaCtx_, *result);
   }
 
- private:
   RowTypePtr signature_;
   RowVectorPtr capture_;
   std::shared_ptr<Expr> body_;
+  std::optional<EvalCtx> lambdaCtx_;
 };
 
 } // namespace
