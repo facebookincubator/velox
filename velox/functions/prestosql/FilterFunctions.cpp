@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/expression/Expr.h"
+#include "velox/expression/LambdaExpr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -82,15 +83,18 @@ class FilterFunctionBase : public exec::VectorFunction {
           toElementRows<T>(numElements, *entry.rows, input.get());
       auto wrapCapture =
           toWrapCapture<T>(numElements, entry.callable, *entry.rows, input);
+      auto elementToTopLevelRows = getElementToTopLevelRows(
+          numElements, *entry.rows, input.get(), context.pool());
 
       VectorPtr bits;
-      entry.callable->apply(
+      entry.callable->as<exec::ExprCallable>()->apply(
           elementRows,
           finalSelection,
           wrapCapture,
           &context,
           lambdaArgs,
-          &bits);
+          &bits,
+          elementToTopLevelRows);
       bitsDecoder.get()->decode(*bits, elementRows);
       entry.rows->applyToSelected([&](vector_size_t row) {
         if (input->isNullAt(row)) {

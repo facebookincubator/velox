@@ -212,3 +212,20 @@ TEST_F(ArrayFilterTest, dictionaryWithDuplicates) {
 
   assertEqualVectors(expectedResult, result);
 }
+
+TEST_F(ArrayFilterTest, try) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2},
+          {3, 0, 5},
+          {6, 7, 8, 9},
+          {10, 11, 12, 13},
+      }),
+  });
+
+  auto result =
+      evaluate<BaseVector>("try(filter(c0, x -> (100 / x > 0)))", data);
+  auto expected = vectorMaker_.arrayVectorNullable<int64_t>(
+      {{{1, 2}}, std::nullopt, {{6, 7, 8, 9}}, {{10, 11, 12, 13}}});
+  assertEqualVectors(expected, result);
+}

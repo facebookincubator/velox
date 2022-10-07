@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/expression/SpecialForm.h"
+#include "velox/vector/FunctionVector.h"
 
 namespace facebook::velox::exec {
 
@@ -86,5 +87,55 @@ class LambdaExpr : public SpecialForm {
   /// create an input row vector which is fed to the inner expression. Filled on
   /// first use.
   RowTypePtr typeWithCapture_;
+};
+
+// Represents an interpreted lambda expression. 'signature' describes
+// the parameters passed by the caller. 'capture' is a row with a
+// leading nullptr for each element in 'signature' followed by the
+// vectors for the captures from the lambda's definition scope.
+class ExprCallable : public Callable {
+ public:
+  ExprCallable(
+      RowTypePtr signature,
+      RowVectorPtr capture,
+      std::shared_ptr<Expr> body)
+      : signature_(std::move(signature)),
+        capture_(std::move(capture)),
+        body_(std::move(body)) {}
+
+  bool hasCapture() const override {
+    return capture_->childrenSize() > signature_->size();
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      const SelectivityVector& finalSelection,
+      BufferPtr wrapCapture,
+      EvalCtx* context,
+      const std::vector<VectorPtr>& args,
+      VectorPtr* result) override;
+
+  void apply(
+      const SelectivityVector& rows,
+      const SelectivityVector& finalSelection,
+      BufferPtr wrapCapture,
+      EvalCtx* context,
+      const std::vector<VectorPtr>& args,
+      VectorPtr* result,
+      const BufferPtr& elementToTopLevelRows);
+
+ private:
+  void doApply(
+      const SelectivityVector& rows,
+      const SelectivityVector& finalSelection,
+      BufferPtr wrapCapture,
+      EvalCtx* context,
+      const std::vector<VectorPtr>& args,
+      VectorPtr* result);
+
+  RowTypePtr signature_;
+  RowVectorPtr capture_;
+  std::shared_ptr<Expr> body_;
+  std::optional<EvalCtx> lambdaCtx_;
 };
 } // namespace facebook::velox::exec

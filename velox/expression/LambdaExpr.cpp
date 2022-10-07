@@ -19,77 +19,63 @@
 
 namespace facebook::velox::exec {
 
-namespace {
+void ExprCallable::apply(
+    const SelectivityVector& rows,
+    const SelectivityVector& finalSelection,
+    BufferPtr wrapCapture,
+    EvalCtx* context,
+    const std::vector<VectorPtr>& args,
+    VectorPtr* result) {
+  doApply(rows, finalSelection, wrapCapture, context, args, result);
 
-// Represents an interpreted lambda expression. 'signature' describes
-// the parameters passed by the caller. 'capture' is a row with a
-// leading nullptr for each element in 'signature' followed by the
-// vectors for the captures from the lambda's definition scope.
-class ExprCallable : public Callable {
- public:
-  ExprCallable(
-      RowTypePtr signature,
-      RowVectorPtr capture,
-      std::shared_ptr<Expr> body)
-      : signature_(std::move(signature)),
-        capture_(std::move(capture)),
-        body_(std::move(body)) {}
+  context->addErrors(rows, *lambdaCtx_->errorsPtr(), *context->errorsPtr());
+}
 
-  bool hasCapture() const override {
-    return capture_->childrenSize() > signature_->size();
-  }
+void ExprCallable::apply(
+    const SelectivityVector& rows,
+    const SelectivityVector& finalSelection,
+    BufferPtr wrapCapture,
+    EvalCtx* context,
+    const std::vector<VectorPtr>& args,
+    VectorPtr* result,
+    const BufferPtr& elementToTopLevelRows) {
+  doApply(rows, finalSelection, wrapCapture, context, args, result);
 
-  void apply(
-      const SelectivityVector& rows,
-      const SelectivityVector& finalSelection,
-      BufferPtr wrapCapture,
-      EvalCtx* context,
-      const std::vector<VectorPtr>& args,
-      VectorPtr* result) override {
-    doApply(rows, finalSelection, wrapCapture, context, args, result);
+  // Transform error vector to map element rows back to top-level rows.
+  lambdaCtx_->addElementErrorsToTopLevel(
+      rows, elementToTopLevelRows, *context->errorsPtr());
+}
 
-    context->addErrors(rows, *lambdaCtx_->errorsPtr(), *context->errorsPtr());
-  }
-
- private:
-  void doApply(
-      const SelectivityVector& rows,
-      const SelectivityVector& finalSelection,
-      BufferPtr wrapCapture,
-      EvalCtx* context,
-      const std::vector<VectorPtr>& args,
-      VectorPtr* result) {
-    std::vector<VectorPtr> allVectors = args;
-    for (auto index = args.size(); index < capture_->childrenSize(); ++index) {
-      auto values = capture_->childAt(index);
-      if (wrapCapture) {
-        values = BaseVector::wrapInDictionary(
-            BufferPtr(nullptr), wrapCapture, rows.end(), values);
-      }
-      allVectors.push_back(values);
+void ExprCallable::doApply(
+    const SelectivityVector& rows,
+    const SelectivityVector& finalSelection,
+    BufferPtr wrapCapture,
+    EvalCtx* context,
+    const std::vector<VectorPtr>& args,
+    VectorPtr* result) {
+  std::vector<VectorPtr> allVectors = args;
+  for (auto index = args.size(); index < capture_->childrenSize(); ++index) {
+    auto values = capture_->childAt(index);
+    if (wrapCapture) {
+      values = BaseVector::wrapInDictionary(
+          BufferPtr(nullptr), wrapCapture, rows.end(), values);
     }
-    auto row = std::make_shared<RowVector>(
-        context->pool(),
-        capture_->type(),
-        BufferPtr(nullptr),
-        rows.end(),
-        std::move(allVectors));
-    lambdaCtx_.emplace(context->execCtx(), context->exprSet(), row.get());
-    *lambdaCtx_->mutableThrowOnError() = context->throwOnError();
-    if (!context->isFinalSelection()) {
-      *lambdaCtx_->mutableIsFinalSelection() = false;
-      *lambdaCtx_->mutableFinalSelection() = &finalSelection;
-    }
-    body_->eval(rows, *lambdaCtx_, *result);
+    allVectors.push_back(values);
   }
-
-  RowTypePtr signature_;
-  RowVectorPtr capture_;
-  std::shared_ptr<Expr> body_;
-  std::optional<EvalCtx> lambdaCtx_;
-};
-
-} // namespace
+  auto row = std::make_shared<RowVector>(
+      context->pool(),
+      capture_->type(),
+      BufferPtr(nullptr),
+      rows.end(),
+      std::move(allVectors));
+  lambdaCtx_.emplace(context->execCtx(), context->exprSet(), row.get());
+  *lambdaCtx_->mutableThrowOnError() = context->throwOnError();
+  if (!context->isFinalSelection()) {
+    *lambdaCtx_->mutableIsFinalSelection() = false;
+    *lambdaCtx_->mutableFinalSelection() = &finalSelection;
+  }
+  body_->eval(rows, *lambdaCtx_, *result);
+}
 
 std::string LambdaExpr::toString(bool recursive) const {
   if (!recursive) {

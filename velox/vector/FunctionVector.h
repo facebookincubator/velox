@@ -30,6 +30,12 @@ class Callable {
 
   virtual bool hasCapture() const = 0;
 
+  template <typename T>
+  T* as() {
+    static_assert(std::is_base_of_v<Callable, T>);
+    return dynamic_cast<T*>(this);
+  }
+
   // Applies 'this' to 'args' for 'rows' and returns the result in
   // '*result'.  'wrapCapture' translates row numbers in 'rows' to the
   // corresponding numbers for captured variables, i.e. is an indices
