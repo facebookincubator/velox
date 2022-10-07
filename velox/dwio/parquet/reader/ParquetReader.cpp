@@ -353,11 +353,16 @@ TypePtr ReaderBase::convertType(
             "TIMESTAMP_MICROS or TIMESTAMP_MILLIS converted type can only be set for value of thrift::Type::INT64");
         return TIMESTAMP();
 
-      case thrift::ConvertedType::DECIMAL:
+      case thrift::ConvertedType::DECIMAL: {
         VELOX_CHECK(
             schemaElement.__isset.precision && schemaElement.__isset.scale,
             "DECIMAL requires a length and scale specifier!");
-        return DECIMAL(schemaElement.precision, schemaElement.scale);
+        auto decimalType =
+            DECIMAL(schemaElement.precision, schemaElement.scale);
+        VELOX_CHECK(
+            decimalType->isShortDecimal(), "Only SHORT DECIMAL is supported");
+        return decimalType;
+      }
 
       case thrift::ConvertedType::UTF8:
         switch (schemaElement.type) {
