@@ -142,9 +142,7 @@ TEST(LocalFile, list) {
   // Get sorted list of files in the given path.
   auto listOfFiles = localFs->list(std::string_view(tempFolder->path));
   sort(listOfFiles.begin(), listOfFiles.end());
-  ASSERT_EQ(
-      listOfFiles,
-      std::vector<std::string>({a, b}));
+  ASSERT_EQ(listOfFiles, std::vector<std::string>({a, b}));
   localFs->remove(a);
   ASSERT_EQ(
       localFs->list(std::string_view(tempFolder->path)),
