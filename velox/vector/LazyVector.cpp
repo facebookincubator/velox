@@ -169,10 +169,9 @@ void LazyVector::ensureLoadedRows(
         // All valid values in 'rows' are nulls. Set the nulls buffer to all
         // nulls to avoid hitting DCHECK when creating a dictionary with a zero
         // sized base vector.
-        nulls =
-            AlignedBuffer::allocate<bool>(rows.end(), vector->pool(), false);
+        nulls = allocateNulls(rows.end(), vector->pool(), bits::kNull);
       } else {
-        nulls = AlignedBuffer::allocate<bool>(rows.end(), vector->pool());
+        nulls = allocateNulls(rows.end(), vector->pool());
         std::memcpy(
             nulls->asMutable<uint64_t>(),
             decoded.nulls(),

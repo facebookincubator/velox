@@ -204,7 +204,7 @@ TEST_F(LazyVectorTest, lazyInMultipleDictionaryAllResultantNullRows) {
             rows.back() + 1, [](auto row) { return row; });
       }));
   auto wrapped = BaseVector::wrapInDictionary(
-      makeNulls(kVectorSize, [](vector_size_t row) { return true; }),
+      makeNulls(kVectorSize, [](vector_size_t /*row*/) { return true; }),
       makeIndices(kVectorSize, [](auto row) { return row; }),
       kVectorSize,
       lazy);
