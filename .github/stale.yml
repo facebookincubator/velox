@@ -14,6 +14,7 @@
 
 staleLabel: stale
 daysUntilClose: 14
+only: pulls
 
 pulls:
   daysUntilStale: 90 # ~3 months
