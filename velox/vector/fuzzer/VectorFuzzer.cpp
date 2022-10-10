@@ -654,4 +654,54 @@ RowVectorPtr VectorFuzzer::fuzzRowChildrenToLazy(RowVectorPtr rowVector) {
       std::move(children));
 }
 
+VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(SelectivityVector& rows) {
+  VectorPtr result;
+  DecodedVector decoded;
+  decoded.decode(*vector_, rows, false);
+
+  if (decoded.isConstantMapping() || decoded.isIdentityMapping()) {
+    BaseVector::ensureWritable(rows, vector_->type(), vector_->pool(), result);
+    result->copy(vector_.get(), rows, nullptr);
+    return result;
+  }
+
+  SelectivityVector baseRows;
+  auto baseVector = decoded.base();
+
+  baseRows.resize(baseVector->size(), false);
+  rows.applyToSelected([&](auto row) {
+    if (!decoded.isNullAt(row)) {
+      baseRows.setValid(decoded.index(row), true);
+    }
+  });
+  baseRows.updateBounds();
+
+  BaseVector::ensureWritable(
+      baseRows, baseVector->type(), vector_->pool(), result);
+  result->copy(baseVector, baseRows, nullptr);
+
+  BufferPtr indices = allocateIndices(rows.end(), vector_->pool());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  auto decodedIndices = decoded.indices();
+  rows.applyToSelected(
+      [&](auto row) { rawIndices[row] = decodedIndices[row]; });
+
+  BufferPtr nulls = nullptr;
+  if (decoded.nulls()) {
+    if (!baseRows.hasSelections()) {
+      // TODO: update this with allocateNulls once #2781 is merged
+      nulls = AlignedBuffer::allocate<bool>(rows.end(), vector_->pool(), false);
+    } else {
+      nulls = AlignedBuffer::allocate<bool>(rows.end(), vector_->pool());
+      std::memcpy(
+          nulls->asMutable<uint64_t>(),
+          decoded.nulls(),
+          bits::nbytes(rows.end()));
+    }
+  }
+
+  return BaseVector::wrapInDictionary(
+      std::move(nulls), std::move(indices), rows.end(), result);
+}
+
 } // namespace facebook::velox

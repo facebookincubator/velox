@@ -36,11 +36,11 @@ enum UTF8CharList {
 
 // Servers as a wrapper around a vector that will be used to load a lazyVector.
 // Ensures that the loaded vector will only contain valid rows for the row set
-// that it was loaded for.
+// that it was loaded for. NOTE: If the vector is a multi-level dictionary, the
+// indices from all the dictionaries are combined.
 class VectorLoaderWrap : public VectorLoader {
  public:
-  explicit VectorLoaderWrap(VectorPtr baseVector)
-      : baseVector_(baseVector) {}
+  explicit VectorLoaderWrap(VectorPtr vector) : vector_(vector) {}
 
   void loadInternal(RowSet rowSet, ValueHook* hook, VectorPtr* result)
       override {
@@ -50,13 +50,14 @@ class VectorLoaderWrap : public VectorLoader {
       rows.setValid(row, true);
     }
     rows.updateBounds();
-    BaseVector::ensureWritable(
-        rows, baseVector_->type(), baseVector_->pool(), *result);
-    (*result)->copy(baseVector_.get(), rows, nullptr);
+    *result = makeEncodingPreservedCopy(rows);
   }
 
  private:
-  VectorPtr baseVector_;
+  // Returns a copy of 'vector_' while retaining dictionary encoding if present.
+  // Multiple dictionary layers are collapsed into one.
+  VectorPtr makeEncodingPreservedCopy(SelectivityVector& rows);
+  VectorPtr vector_;
 };
 
 /// VectorFuzzer is a helper class that generates randomized vectors and their
@@ -171,8 +172,7 @@ class VectorFuzzer {
   VectorPtr fuzz(const TypePtr& type, bool canBeLazy = false);
 
   // Same as above, but returns a vector of `size` size.
-  VectorPtr
-  fuzz(const TypePtr& type, vector_size_t size, bool canBeLazy);
+  VectorPtr fuzz(const TypePtr& type, vector_size_t size, bool canBeLazy);
 
   // Returns a flat vector or a complex vector with flat children with
   // randomized data and nulls. Returns a vector of `opts_.vectorSize` size.

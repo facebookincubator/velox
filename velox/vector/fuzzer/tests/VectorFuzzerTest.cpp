@@ -361,7 +361,7 @@ void assertEqualVectors(
   });
 }
 
-TEST_F(VectorFuzzerTest, lazy) {
+TEST_F(VectorFuzzerTest, lazyOverFlat) {
   // Verify that lazy vectors generated from flat vectors are loaded properly.
   VectorFuzzer::Options opts;
   SelectivityVector partialRows(opts.vectorSize);
@@ -424,6 +424,53 @@ TEST_F(VectorFuzzerTest, lazy) {
     LazyVector::ensureLoadedRows(lazy, partialRows);
     assertEqualVectors(&partialRows, lazy, vector);
   }
+}
+
+TEST_F(VectorFuzzerTest, lazyOverDictionary) {
+  // Verify that when lazy vectors generated over dictionary vectors are loaded,
+  // the resulting loaded vector retains dictionary wrapping.
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.3;
+  SelectivityVector partialRows(opts.vectorSize);
+  VectorFuzzer fuzzer(opts, pool());
+  // Starting from 1 to ensure at least one row is selected.
+  for (int i = 1; i < opts.vectorSize; ++i) {
+    if (fuzzer.coinToss(0.7)) {
+      partialRows.setValid(i, false);
+    }
+  }
+  partialRows.updateBounds();
+
+  // Case 1: Applying a single dictionary layer.
+  auto vector = fuzzer.fuzzFlat(BIGINT());
+  auto dict = fuzzer.fuzzDictionary(vector);
+  auto lazy = VectorFuzzer::wrapInLazyVector(dict);
+  LazyVector::ensureLoadedRows(lazy, partialRows);
+  ASSERT_TRUE(VectorEncoding::isDictionary(lazy->loadedVector()->encoding()));
+  assertEqualVectors(&partialRows, dict, lazy);
+
+  partialRows.applyToSelected([&](vector_size_t row) {
+    ASSERT_EQ(dict->isNullAt(row), lazy->isNullAt(row));
+    if (!lazy->isNullAt(row)) {
+      ASSERT_EQ(dict->wrappedIndex(row), lazy->wrappedIndex(row));
+    }
+  });
+
+  // Case 2: Applying a multiple dictionary layers.
+  dict = fuzzer.fuzzDictionary(vector);
+  dict = fuzzer.fuzzDictionary(dict);
+  lazy = VectorFuzzer::wrapInLazyVector(dict);
+
+  LazyVector::ensureLoadedRows(lazy, partialRows);
+  ASSERT_TRUE(VectorEncoding::isDictionary(lazy->loadedVector()->encoding()));
+  assertEqualVectors(&partialRows, dict, lazy);
+
+  partialRows.applyToSelected([&](vector_size_t row) {
+    ASSERT_EQ(dict->isNullAt(row), lazy->isNullAt(row));
+    if (!lazy->isNullAt(row)) {
+      ASSERT_EQ(dict->wrappedIndex(row), lazy->wrappedIndex(row));
+    }
+  });
 }
 
 } // namespace
