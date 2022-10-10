@@ -139,8 +139,11 @@ TEST(LocalFile, list) {
     auto writeFile = localFs->openFileForWrite(a);
     writeFile = localFs->openFileForWrite(b);
   }
+  // Get sorted list of files in the given path.
+  auto listOfFiles = localFs->list(std::string_view(tempFolder->path));
+  sort(listOfFiles.begin(), listOfFiles.end());
   ASSERT_EQ(
-      localFs->list(std::string_view(tempFolder->path)),
+      listOfFiles,
       std::vector<std::string>({a, b}));
   localFs->remove(a);
   ASSERT_EQ(
