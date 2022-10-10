@@ -16,6 +16,7 @@
 
 #include "velox/expression/tests/ExpressionVerifier.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::test {

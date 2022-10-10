@@ -51,8 +51,7 @@ int main(int argc, char** argv) {
       // (since HLL is a user defined type), and end up trying to use
       // cardinality passing a VARBINARY (since HLL's implementation uses an
       // alias to VARBINARY).
-      "cardinality",
-      "neq"};
+      "cardinality"};
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   return FuzzerRunner::run(FLAGS_only, initialSeed, skipFunctions);
 }
