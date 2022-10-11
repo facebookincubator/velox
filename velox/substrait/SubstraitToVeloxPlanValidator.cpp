@@ -16,9 +16,6 @@
 
 #include "velox/substrait/SubstraitToVeloxPlanValidator.h"
 #include "TypeUtils.h"
-#include "velox/functions/sparksql/Register.h"
-
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 namespace facebook::velox::substrait {
 
@@ -337,8 +334,6 @@ bool SubstraitToVeloxPlanValidator::validate(
 }
 
 bool SubstraitToVeloxPlanValidator::validate(const ::substrait::Plan& sPlan) {
-  functions::prestosql::registerAllScalarFunctions();
-  functions::sparksql::registerFunctions("");
   // Create plan converter and expression converter to help the validation.
   planConverter_->constructFunctionMap(sPlan);
   exprConverter_ = std::make_shared<SubstraitVeloxExprConverter>(

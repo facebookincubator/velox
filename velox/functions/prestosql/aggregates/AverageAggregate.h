@@ -164,23 +164,18 @@ class AverageAggregate : public exec::Aggregate {
     if (decodedPartial_.isConstantMapping()) {
       if (!decodedPartial_.isNullAt(0)) {
         auto decodedIndex = decodedPartial_.index(0);
-        if (!baseSumVector->isNullAt(decodedIndex)) {
           auto count = baseCountVector->valueAt(decodedIndex);
           auto sum = baseSumVector->valueAt(decodedIndex);
           rows.applyToSelected([&](vector_size_t i) {
             updateNonNullValue(groups[i], count, sum);
           });
-        }
       }
-    } else if (decodedPartial_.mayHaveNulls() || baseSumVector->mayHaveNulls()) {
+    } else if (decodedPartial_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
         if (decodedPartial_.isNullAt(i)) {
           return;
         }
         auto decodedIndex = decodedPartial_.index(i);
-        if (baseSumVector->isNullAt(decodedIndex)) {
-          return;
-        }
         updateNonNullValue(
             groups[i],
             baseCountVector->valueAt(decodedIndex),
