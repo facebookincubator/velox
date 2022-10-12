@@ -48,6 +48,25 @@ class E2EFilterTest : public E2EFilterTestBase {
     writer_->close();
   }
 
+  virtual void testWithTypes(
+      const std::string& columns,
+      std::function<void()> customize,
+      bool wrapInStruct,
+      const std::vector<std::string>& filterable,
+      int32_t numCombinations,
+      bool /* tryNoNulls */ = true,
+      bool /* tryNoVInts */ = true) override {
+    testSenario(columns, customize, wrapInStruct, filterable, numCombinations);
+
+    // Always test no null case.
+    auto newCustomize = [&]() {
+      customize();
+      makeNotNull(0);
+    };
+    testSenario(
+        columns, newCustomize, wrapInStruct, filterable, numCombinations);
+  }
+
   std::unique_ptr<dwio::common::Reader> makeReader(
       const dwio::common::ReaderOptions& opts,
       std::unique_ptr<dwio::common::InputStream> input) override {
@@ -60,9 +79,10 @@ class E2EFilterTest : public E2EFilterTestBase {
 
 TEST_F(E2EFilterTest, writerMagic) {
   rowType_ = ROW({INTEGER()});
-  batches_.push_back(std::static_pointer_cast<RowVector>(
+  std::vector<RowVectorPtr> batches;
+  batches.push_back(std::static_pointer_cast<RowVector>(
       test::BatchMaker::createBatch(rowType_, 20000, *pool_, nullptr, 0)));
-  writeToMemory(rowType_, batches_, false);
+  writeToMemory(rowType_, batches, false);
   auto data = sinkPtr_->getData();
   auto size = sinkPtr_->size();
   EXPECT_EQ("PAR1", std::string(data, 4));
@@ -107,7 +127,7 @@ TEST_F(E2EFilterTest, integerDictionary) {
         "long_val:bigint",
         [&]() {
           makeIntDistribution<int64_t>(
-              Subfield("long_val"),
+              "long_val",
               10, // min
               100, // max
               22, // repeats
@@ -117,7 +137,7 @@ TEST_F(E2EFilterTest, integerDictionary) {
               true); // keepNulls
 
           makeIntDistribution<int32_t>(
-              Subfield("int_val"),
+              "int_val",
               10, // min
               100, // max
               22, // repeats
@@ -127,7 +147,7 @@ TEST_F(E2EFilterTest, integerDictionary) {
               false); // keepNulls
 
           makeIntDistribution<int16_t>(
-              Subfield("short_val"),
+              "short_val",
               10, // min
               100, // max
               22, // repeats
@@ -158,8 +178,8 @@ TEST_F(E2EFilterTest, floatAndDoubleDirect) {
       "float_null:float",
       [&]() {
         makeAllNulls("float_null");
-        makeQuantizedFloat<float>(Subfield("float_val2"), 200, true);
-        makeQuantizedFloat<double>(Subfield("double_val2"), 522, true);
+        makeQuantizedFloat<float>("float_val2", 200, true);
+        makeQuantizedFloat<double>("double_val2", 522, true);
       },
       false,
       {"float_val", "double_val", "float_val2", "double_val2", "float_null"},
@@ -182,16 +202,11 @@ TEST_F(E2EFilterTest, floatAndDouble) {
       "float_null:float",
       [&]() {
         makeAllNulls("float_null");
-        makeQuantizedFloat<float>(Subfield("float_val2"), 200, true);
-        makeQuantizedFloat<double>(Subfield("double_val2"), 522, true);
+        makeQuantizedFloat<float>("float_val2", 200, true);
+        makeQuantizedFloat<double>("double_val2", 522, true);
         // Make sure there are RLE's.
-        auto floats = batches_[0]->childAt(2)->as<FlatVector<float>>();
-        auto doubles = batches_[0]->childAt(3)->as<FlatVector<double>>();
-        for (auto i = 100; i < 200; ++i) {
-          // This makes a RLE even if some nulls along the way.
-          floats->set(i, 0.66);
-          doubles->set(i, 0.66);
-        }
+        makeReapeatingValues<float>("float_val2", 0, 100, 200);
+        makeReapeatingValues<double>("double_val2", 0, 100, 200);
       },
       false,
       {"float_val", "double_val", "float_val2", "double_val2", "float_null"},
@@ -210,8 +225,8 @@ TEST_F(E2EFilterTest, stringDirect) {
       "string_val:string,"
       "string_val_2:string",
       [&]() {
-        makeStringUnique(Subfield("string_val"));
-        makeStringUnique(Subfield("string_val_2"));
+        makeStringUnique("string_val");
+        makeStringUnique("string_val_2");
       },
       false,
       {"string_val", "string_val_2"},
@@ -224,8 +239,8 @@ TEST_F(E2EFilterTest, stringDictionary) {
       "string_val:string,"
       "string_val_2:string",
       [&]() {
-        makeStringDistribution(Subfield("string_val"), 100, true, false);
-        makeStringDistribution(Subfield("string_val_2"), 170, false, true);
+        makeStringDistribution("string_val", 100, true, false);
+        makeStringDistribution("string_val_2", 170, false, true);
       },
       false,
       {"string_val", "string_val_2"},

@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_dwio_common_test_utils BatchMaker.cpp DataFiles.cpp
-                                         FilterGenerator.cpp)
+add_library(
+  velox_dwio_common_test_utils 
+  BatchMaker.cpp 
+  DataFiles.cpp
+  FilterGenerator.cpp 
+  DataSetBuilder.cpp)
 
 target_link_libraries(
   velox_dwio_common_test_utils

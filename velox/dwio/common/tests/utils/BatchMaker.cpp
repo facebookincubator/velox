@@ -299,7 +299,7 @@ VectorPtr BatchMaker::createVector<TypeKind::MAP>(
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt);
 
-VectorPtr createRow(
+VectorPtr createRows(
     const std::shared_ptr<const Type>& type,
     size_t size,
     bool allowNulls,
@@ -321,10 +321,10 @@ VectorPtr createRow(
     }
   }
 
-  auto& row = type->asRow();
-  std::vector<VectorPtr> children(row.size());
-  for (size_t i = 0; i < row.size(); ++i) {
-    auto child = row.childAt(i);
+  auto& rowType = type->asRow();
+  std::vector<VectorPtr> children(rowType.size());
+  for (size_t i = 0; i < rowType.size(); ++i) {
+    auto child = rowType.childAt(i);
     children[i] = VELOX_DYNAMIC_TYPE_DISPATCH(
         BatchMaker::createVector,
         child->kind(),
@@ -346,7 +346,7 @@ VectorPtr BatchMaker::createVector<TypeKind::ROW>(
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  return createRow(type, size, /* allowNulls */ true, pool, gen, isNullAt);
+  return createRows(type, size, /* allowNulls */ true, pool, gen, isNullAt);
 }
 
 template <>
@@ -593,7 +593,7 @@ VectorPtr BatchMaker::createBatch(
     MemoryPool& memoryPool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  return createRow(
+  return createRows(
       type, capacity, /* allowNulls */ false, memoryPool, gen, isNullAt);
 }
 
