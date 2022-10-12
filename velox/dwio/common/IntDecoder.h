@@ -426,9 +426,7 @@ inline int128_t IntDecoder<isSigned>::readInt128() {
         reinterpret_cast<char*>(&result) + (16 - numBytes),
         reinterpret_cast<const char*>(valueOffset),
         numBytes);
-    auto low = __builtin_bswap64(result >> 64);
-    auto high = __builtin_bswap64(result);
-    return buildInt128(high, low);
+    return dwio::common::builtin_bswap128(result);
   }
   char b;
   int128_t offset = 0;
@@ -443,9 +441,7 @@ inline int128_t IntDecoder<isSigned>::readInt128() {
       reinterpret_cast<char*>(&value) + (16 - numBytes),
       reinterpret_cast<const char*>(&result),
       numBytes);
-  auto low = __builtin_bswap64(value >> 64);
-  auto high = __builtin_bswap64(value);
-  return buildInt128(high, low);
+  return dwio::common::builtin_bswap128(value);
 }
 
 template <>
@@ -512,6 +508,40 @@ template <>
 inline void IntDecoder<true>::bulkReadRows(
     RowSet /*rows*/,
     float* FOLLY_NONNULL /*result*/,
+    int32_t /*initialRow*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<false>::bulkRead(
+    uint64_t /*size*/,
+    int128_t* FOLLY_NONNULL /*result*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<false>::bulkReadRows(
+    RowSet /*rows*/,
+    int128_t* FOLLY_NONNULL /*result*/,
+    int32_t /*initialRow*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<true>::bulkRead(
+    uint64_t /*size*/,
+    int128_t* FOLLY_NONNULL /*result*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<true>::bulkReadRows(
+    RowSet /*rows*/,
+    int128_t* FOLLY_NONNULL /*result*/,
     int32_t /*initialRow*/) {
   VELOX_UNREACHABLE();
 }

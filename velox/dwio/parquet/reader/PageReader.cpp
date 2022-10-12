@@ -418,9 +418,8 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
         }
         auto values = dictionary_.values->asMutable<UnscaledLongDecimal>();
         for (auto i = 0; i < dictionary_.numValues; ++i) {
-          auto low = __builtin_bswap64(values[i].unscaledValue() >> 64);
-          auto high = __builtin_bswap64(values[i].unscaledValue());
-          values[i] = UnscaledLongDecimal(buildInt128(high, low));
+          values[i] = UnscaledLongDecimal(
+              dwio::common::builtin_bswap128(values[i].unscaledValue()));
         }
         break;
       }

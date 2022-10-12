@@ -563,7 +563,7 @@ struct LoadIndices<int64_t, A> {
 template <typename A>
 struct LoadIndices<int128_t, A> {
   static xsimd::batch<int32_t, A> apply(const int128_t* values, const A& arch) {
-    VELOX_UNSUPPORTED("LoadIndices for int128_t type is not supported");
+    VELOX_UNREACHABLE();
   }
 };
 

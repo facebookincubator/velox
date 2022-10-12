@@ -55,7 +55,7 @@ struct make_index<uint64_t> {
 
 template <>
 struct make_index<int128_t> {
-  using type = int128_t;
+  using type = __uint128_t;
 };
 
 template <>
