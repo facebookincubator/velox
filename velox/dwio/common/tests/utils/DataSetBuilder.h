@@ -19,6 +19,7 @@
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::test {
 
@@ -31,6 +32,11 @@ class DataSetBuilder {
       : pool_(pool), rng_(seed), batches_(nullptr) {}
 
   static RowTypePtr makeRowType(const std::string& columns, bool wrapInStruct);
+
+  static RowTypePtr makeRowType(std::vector<TypePtr>&& types) {
+    return velox::test::VectorMaker::rowType(
+        std::forward<std::vector<TypePtr>&&>(types));
+  }
 
   // Create batchCount number of batches, each with numRows number of rows. The
   // data was randomly created.

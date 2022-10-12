@@ -47,7 +47,7 @@ struct FilterSpec {
         selectPct(selectPct),
         filterKind(filterKind),
         isForRowGroupSkip(isForRowGroupSkip) {}
-  
+
   std::string field;
   float startPct = 50;
   float selectPct = 20;
