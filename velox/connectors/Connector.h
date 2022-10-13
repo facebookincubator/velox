@@ -28,7 +28,8 @@ class Filter;
 }
 namespace facebook::velox::core {
 class ITypedExpr;
-}
+class QueryConfig;
+} // namespace facebook::velox::core
 namespace facebook::velox::exec {
 class ExprSet;
 }
@@ -171,21 +172,31 @@ class ConnectorQueryCtx {
  public:
   ConnectorQueryCtx(
       memory::MemoryPool* pool,
-      Config* config,
-      ExpressionEvaluator* expressionEvaluator,
-      memory::MappedMemory* mappedMemory,
-      const std::string& scanId)
+      const core::QueryConfig* FOLLY_NONNULL queryConfig,
+      const Config* FOLLY_NONNULL connectorConfig,
+      ExpressionEvaluator* FOLLY_NONNULL expressionEvaluator,
+      memory::MappedMemory* FOLLY_NONNULL mappedMemory,
+      const std::string& taskId,
+      const std::string& planNodeId,
+      int driverId)
       : pool_(pool),
-        config_(config),
+        queryConfig_(queryConfig),
+        config_(connectorConfig),
         expressionEvaluator_(expressionEvaluator),
         mappedMemory_(mappedMemory),
-        scanId_(scanId) {}
+        scanId_(fmt::format("{}.{}", taskId, planNodeId)),
+        taskId_(taskId),
+        driverId_(driverId) {}
 
   memory::MemoryPool* memoryPool() const {
     return pool_;
   }
 
-  Config* config() const {
+  const core::QueryConfig* queryConfig() const {
+    return queryConfig_;
+  }
+
+  const Config* config() const {
     return config_;
   }
 
@@ -208,12 +219,23 @@ class ConnectorQueryCtx {
     return scanId_;
   }
 
+  const std::string& taskId() const {
+    return taskId_;
+  }
+
+  int driverId() const {
+    return driverId_;
+  }
+
  private:
   memory::MemoryPool* pool_;
-  Config* config_;
+  const core::QueryConfig* queryConfig_;
+  const Config* config_;
   ExpressionEvaluator* expressionEvaluator_;
   memory::MappedMemory* mappedMemory_;
-  std::string scanId_;
+  const std::string scanId_;
+  const std::string taskId_;
+  const int driverId_;
 };
 
 class Connector {

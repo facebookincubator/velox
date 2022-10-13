@@ -75,10 +75,13 @@ OperatorCtx::createConnectorQueryCtx(
   }
   return std::make_unique<connector::ConnectorQueryCtx>(
       pool_,
+      &driverCtx_->task->queryCtx()->config(),
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
       expressionEvaluator_.get(),
       driverCtx_->task->queryCtx()->mappedMemory(),
-      fmt::format("{}.{}", driverCtx_->task->taskId(), planNodeId));
+      taskId(),
+      planNodeId,
+      driverCtx_->driverId);
 }
 
 Operator::Operator(

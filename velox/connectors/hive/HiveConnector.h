@@ -51,6 +51,10 @@ class HiveColumnHandle : public ColumnHandle {
     return dataType_;
   }
 
+  bool isPartitionKey() const {
+    return columnType_ == ColumnType::kPartitionKey;
+  }
+
  private:
   const std::string name_;
   const ColumnType columnType_;
@@ -92,38 +96,121 @@ class HiveTableHandle : public ConnectorTableHandle {
   const core::TypedExprPtr remainingFilter_;
 };
 
+/// Location related properties of the Hive table to be written
+class LocationHandle {
+ public:
+  enum class TableType {
+    kNew, // Write to a new table to be created.
+    kExisting, // Write to an existing table.
+    kTemporary, // Write to a temporary table.
+  };
+  enum class WriteMode {
+    // Write to a staging directory and then move to the target directory
+    // after write finishes.
+    kStageAndMoveToTargetDirectory,
+    // Directly write to the target directory to be created.
+    kDirectToTargetNewDirectory,
+    // Directly write to the existing target directory.
+    kDirectToTargetExistingDirectory,
+  };
+
+  LocationHandle(
+      const std::string& targetPath,
+      const std::string& writePath,
+      TableType tableType,
+      WriteMode writeMode)
+      : targetPath_(targetPath),
+        writePath_(writePath),
+        tableType_(tableType),
+        writeMode_(writeMode) {}
+
+  const std::string& targetPath() const {
+    return targetPath_;
+  }
+
+  const std::string& writePath() const {
+    return writePath_;
+  }
+
+  TableType tableType() const {
+    return tableType_;
+  }
+
+  WriteMode writeMode() const {
+    return writeMode_;
+  }
+
+ private:
+  // Target directory path.
+  const std::string targetPath_;
+  // Staging directory path.
+  const std::string writePath_;
+  // Whether the table to be written is new, already existing or temporary.
+  const TableType tableType_;
+  // How the target path and directory path could be used.
+  const WriteMode writeMode_;
+};
+
 /**
  * Represents a request for Hive write
  */
 class HiveInsertTableHandle : public ConnectorInsertTableHandle {
  public:
-  explicit HiveInsertTableHandle(const std::string& filePath)
-      : filePath_(filePath) {}
-
-  const std::string& filePath() const {
-    return filePath_;
-  }
+  explicit HiveInsertTableHandle(
+      std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
+      std::shared_ptr<const LocationHandle> locationHandle)
+      : inputColumns_(std::move(inputColumns)),
+        locationHandle_(std::move(locationHandle)) {}
 
   virtual ~HiveInsertTableHandle() {}
 
+  const std::vector<std::shared_ptr<const HiveColumnHandle>>& inputColumns()
+      const {
+    return inputColumns_;
+  }
+
+  const std::shared_ptr<const LocationHandle>& locationHandle() const {
+    return locationHandle_;
+  }
+
+  bool isPartitioned() const {
+    return std::any_of(
+        inputColumns_.begin(), inputColumns_.end(), [](auto column) {
+          return column->isPartitionKey();
+        });
+  }
+
+  bool isCreateTable() const {
+    return locationHandle_->tableType() == LocationHandle::TableType::kNew;
+  }
+
+  bool isInsertTable() const {
+    return locationHandle_->tableType() == LocationHandle::TableType::kExisting;
+  }
+
  private:
-  const std::string filePath_;
+  const std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns_;
+  const std::shared_ptr<const LocationHandle> locationHandle_;
 };
 
 class HiveDataSink : public DataSink {
  public:
   explicit HiveDataSink(
       std::shared_ptr<const RowType> inputType,
-      const std::string& filePath,
-      velox::memory::MemoryPool* FOLLY_NONNULL memoryPool);
+      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx);
 
   void appendData(VectorPtr input) override;
 
   void close() override;
 
  private:
+  std::unique_ptr<dwrf::Writer> createWriter();
+
   const std::shared_ptr<const RowType> inputType_;
-  std::unique_ptr<facebook::velox::dwrf::Writer> writer_;
+  const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
+  const ConnectorQueryCtx* connectorQueryCtx_;
+  std::vector<std::unique_ptr<dwrf::Writer>> writers_;
 };
 
 class HiveConnector;
@@ -254,18 +341,15 @@ class HiveConnector final : public Connector {
   }
 
   std::shared_ptr<DataSink> createDataSink(
-      std::shared_ptr<const RowType> inputType,
+      RowTypePtr inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
       ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) override final {
     auto hiveInsertHandle = std::dynamic_pointer_cast<HiveInsertTableHandle>(
         connectorInsertTableHandle);
-    VELOX_CHECK(
-        hiveInsertHandle != nullptr,
-        "Hive connector expecting hive write handle!");
+    VELOX_CHECK_NOT_NULL(
+        hiveInsertHandle, "Hive connector expecting hive write handle!");
     return std::make_shared<HiveDataSink>(
-        inputType,
-        hiveInsertHandle->filePath(),
-        connectorQueryCtx->memoryPool());
+        inputType, hiveInsertHandle, connectorQueryCtx);
   }
 
   folly::Executor* FOLLY_NULLABLE executor() {

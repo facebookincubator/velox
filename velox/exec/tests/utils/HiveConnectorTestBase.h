@@ -86,6 +86,29 @@ class HiveConnectorTestBase : public OperatorTestBase {
         remainingFilter);
   }
 
+  /// Build a HiveInsertTableHandle.
+  /// @param tableColumnNames Column names of the target table. Corresponding
+  /// type of tableColumnNames[i] is tableColumnTypes[i].
+  /// @param tableColumnTypes Column types of the target table. Corresponding
+  /// name of tableColumnTypes[i] is tableColumnNames[i].
+  /// @param partitionedBy A list of partition columns of the target table.
+  /// @param targetDirectory Final directory of the target table after commit.
+  /// @param writeDirectory Write directory of the target table before commit.
+  /// @param tableType Whether to create a new table, insert into an existing
+  /// table, or write a temporary table.
+  /// @param writeMode How to write to the target directory.
+  static std::shared_ptr<connector::hive::HiveInsertTableHandle>
+  buildHiveInsertTableHandle(
+      const std::vector<std::string>& tableColumnNames,
+      const std::vector<TypePtr>& tableColumnTypes,
+      const std::vector<std::string>& partitionedBy,
+      const std::string& targetDirectory,
+      const std::optional<std::string>& writeDirectory = std::nullopt,
+      connector::hive::LocationHandle::TableType tableType =
+          connector::hive::LocationHandle::TableType::kNew,
+      connector::hive::LocationHandle::WriteMode writeMode = connector::hive::
+          LocationHandle::WriteMode::kDirectToTargetNewDirectory);
+
   static std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
       const std::string& name,
       const TypePtr& type);
