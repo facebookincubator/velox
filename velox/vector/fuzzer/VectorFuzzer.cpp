@@ -239,16 +239,43 @@ void fuzzFlatPrimitiveImpl(
   }
 }
 
+// Servers as a wrapper around a vector that will be used to load a lazyVector.
+// Ensures that the loaded vector will only contain valid rows for the row set
+// that it was loaded for. NOTE: If the vector is a multi-level dictionary, the
+// indices from all the dictionaries are combined.
+class VectorLoaderWrap : public VectorLoader {
+ public:
+  explicit VectorLoaderWrap(VectorPtr vector) : vector_(vector) {}
+
+  void loadInternal(RowSet rowSet, ValueHook* hook, VectorPtr* result)
+      override {
+    VELOX_CHECK(!hook, "VectorLoaderWrap doesn't support ValueHook");
+    SelectivityVector rows(rowSet.back() + 1, false);
+    for (auto row : rowSet) {
+      rows.setValid(row, true);
+    }
+    rows.updateBounds();
+    *result = makeEncodingPreservedCopy(rows);
+  }
+
+ private:
+  // Returns a copy of 'vector_' while retaining dictionary encoding if present.
+  // Multiple dictionary layers are collapsed into one.
+  VectorPtr makeEncodingPreservedCopy(SelectivityVector& rows);
+  VectorPtr vector_;
+};
+
 } // namespace
 
-VectorPtr VectorFuzzer::fuzz(const TypePtr& type, bool canBeLazy) {
-  return fuzz(type, opts_.vectorSize, canBeLazy);
+VectorPtr VectorFuzzer::fuzz(const TypePtr& type) {
+  return fuzz(type, opts_.vectorSize, opts_.allowLazyVector);
 }
 
 VectorPtr
 VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size, bool canBeLazy) {
   VectorPtr vector;
   vector_size_t vectorSize = size;
+
   bool usingLazyVector = canBeLazy && coinToss(0.5);
   // Lazy Vectors cannot be sliced, so we skip this if using lazy wrapping.
   if (!usingLazyVector && coinToss(0.1)) {

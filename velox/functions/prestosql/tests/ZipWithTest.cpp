@@ -328,7 +328,7 @@ TEST_F(ZipWithTest, fuzzSameSizeNoNulls) {
   for (auto i = 0; i < 10; ++i) {
     // We need non-lazy children in order to successfully flatten data for
     // re-use.
-    auto data = fuzzer.fuzzInputRow(rowType, false /*canChildrenBeLazy*/);
+    auto data = fuzzer.fuzzInputRow(rowType);
     auto flatData = flatten<RowVector>(data);
 
     auto result = evaluate("zip_with(c0, c1, (x, y) -> x + y)", data);
@@ -361,7 +361,7 @@ TEST_F(ZipWithTest, fuzzVariableLengthWithNulls) {
   for (auto i = 0; i < 10; ++i) {
     // We need non-lazy children in order to successfully flatten data for
     // re-use.
-    auto data = fuzzer.fuzzInputRow(rowType, false /*canChildrenBeLazy*/);
+    auto data = fuzzer.fuzzInputRow(rowType);
     auto flatData = flatten<RowVector>(data);
 
     auto result = evaluate("zip_with(c0, c1, (x, y) -> x + y)", data);

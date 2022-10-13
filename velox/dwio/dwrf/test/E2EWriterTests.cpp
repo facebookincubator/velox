@@ -1301,7 +1301,7 @@ TEST(E2EWriterTests, fuzzFlatmap) {
         offsets,
         sizes,
         createKeys(mapType.keyType(), pool, rng, childSize, 10),
-        valueFuzzer.fuzz(mapType.valueType(), false /*canBeLazy*/));
+        valueFuzzer.fuzz(mapType.valueType()));
 
     if (folly::Random::oneIn(2, rng)) {
       vector = fuzzer.fuzzDictionary(vector);

@@ -61,8 +61,8 @@ class EvalSimplifiedTest : public FunctionBaseTest {
 
     for (const auto& type : types->children()) {
       size_t seed = folly::Random::rand32(rng);
-      vectors.emplace_back(VectorFuzzer(fuzzerOpts, execCtx_.pool(), seed)
-                               .fuzz(type, false /*canBeLazy*/));
+      vectors.emplace_back(
+          VectorFuzzer(fuzzerOpts, execCtx_.pool(), seed).fuzz(type));
       LOG(INFO) << "\t" << vectors.back()->toString();
     }
     return makeRowVector(vectors);

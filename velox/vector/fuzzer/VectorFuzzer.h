@@ -34,32 +34,6 @@ enum UTF8CharList {
   MATHEMATICAL_SYMBOLS = 3 // Mathematical Symbols.
 };
 
-// Servers as a wrapper around a vector that will be used to load a lazyVector.
-// Ensures that the loaded vector will only contain valid rows for the row set
-// that it was loaded for. NOTE: If the vector is a multi-level dictionary, the
-// indices from all the dictionaries are combined.
-class VectorLoaderWrap : public VectorLoader {
- public:
-  explicit VectorLoaderWrap(VectorPtr vector) : vector_(vector) {}
-
-  void loadInternal(RowSet rowSet, ValueHook* hook, VectorPtr* result)
-      override {
-    VELOX_CHECK(!hook, "VectorLoaderWrap doesn't support ValueHook");
-    SelectivityVector rows(rowSet.back() + 1, false);
-    for (auto row : rowSet) {
-      rows.setValid(row, true);
-    }
-    rows.updateBounds();
-    *result = makeEncodingPreservedCopy(rows);
-  }
-
- private:
-  // Returns a copy of 'vector_' while retaining dictionary encoding if present.
-  // Multiple dictionary layers are collapsed into one.
-  VectorPtr makeEncodingPreservedCopy(SelectivityVector& rows);
-  VectorPtr vector_;
-};
-
 /// VectorFuzzer is a helper class that generates randomized vectors and their
 /// data for testing, with a high degree of entropy.
 ///
@@ -150,6 +124,12 @@ class VectorFuzzer {
     /// If true, the random generated timestamp value will only be in
     /// microsecond precision (default is nanosecond).
     bool useMicrosecondPrecisionTimestamp{false};
+
+    /// If true, fuzz() will randomly generate lazy vectors and fuzzInputRow()
+    /// will generate a raw vector with children that can randomly be lazy
+    /// vectors. The generated lazy vectors can also have any number of
+    /// dictionary layers on top of them.
+    bool allowLazyVector{false};
   };
 
   VectorFuzzer(
@@ -167,11 +147,11 @@ class VectorFuzzer {
   }
 
   // Returns a "fuzzed" vector, containing randomized data, nulls, and indices
-  // vector (dictionary). Returns a vector of `opts_.vectorSize` size. If
-  // 'canBeLazy' is true then the returned vector can be a lazy vector.
-  VectorPtr fuzz(const TypePtr& type, bool canBeLazy = false);
+  // vector (dictionary). Returns a vector of `opts_.vectorSize` size.
+  VectorPtr fuzz(const TypePtr& type);
 
-  // Same as above, but returns a vector of `size` size.
+  // Same as above, but returns a vector of `size` size. Additionally, If
+  // 'canBeLazy' is true then the returned vector can be a lazy vector.
   VectorPtr fuzz(const TypePtr& type, vector_size_t size, bool canBeLazy);
 
   // Returns a flat vector or a complex vector with flat children with
@@ -221,12 +201,9 @@ class VectorFuzzer {
   RowVectorPtr fuzzRow(std::vector<VectorPtr>&& children, vector_size_t size);
 
   // Same as the function above, but never return nulls for the top-level row
-  // elements. If 'canChildrenBeLazy' is set to true then the returned vector
-  // can be a lazy children.
-  RowVectorPtr fuzzInputRow(
-      const RowTypePtr& rowType,
-      bool canChildrenBeLazy = false) {
-    return fuzzRow(rowType, opts_.vectorSize, false, canChildrenBeLazy);
+  // elements.
+  RowVectorPtr fuzzInputRow(const RowTypePtr& rowType) {
+    return fuzzRow(rowType, opts_.vectorSize, false, opts_.allowLazyVector);
   }
 
   variant randVariant(const TypePtr& arg);
@@ -268,6 +245,8 @@ class VectorFuzzer {
   // flat.
   VectorPtr fuzzComplex(const TypePtr& type, vector_size_t size);
 
+  // If 'canChildrenBeLazy' is set to true then the returned vector can have
+  // lazy children.
   RowVectorPtr fuzzRow(
       const RowTypePtr& rowType,
       vector_size_t size,

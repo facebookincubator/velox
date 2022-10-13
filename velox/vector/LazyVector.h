@@ -194,7 +194,9 @@ class LazyVector : public BaseVector {
     return loadedVectorShared().get();
   }
 
-  // Returns a shared_ptr to the vector holding the values.
+  // Returns a shared_ptr to the vector holding the values. If vector is not
+  // loaded, loads all the rows, otherwise returns the loaded vector which can
+  // have partially loaded rows.
   const VectorPtr& loadedVectorShared() const {
     if (!allLoaded_) {
       if (!vector_) {

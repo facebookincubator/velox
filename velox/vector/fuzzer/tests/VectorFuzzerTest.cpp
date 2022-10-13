@@ -337,11 +337,12 @@ TEST_F(VectorFuzzerTest, assorted) {
 
 TEST_F(VectorFuzzerTest, randomized) {
   VectorFuzzer::Options opts;
+  opts.allowLazyVector = true;
   VectorFuzzer fuzzer(opts, pool());
 
   for (size_t i = 0; i < 50; ++i) {
     auto type = fuzzer.randType();
-    auto vector = fuzzer.fuzz(type, true);
+    auto vector = fuzzer.fuzz(type);
     ASSERT_TRUE(vector->type()->kindEquals(type));
   }
 }
@@ -370,32 +371,28 @@ TEST_F(VectorFuzzerTest, lazyOverFlat) {
     VectorFuzzer fuzzer(opts, pool());
     // Start with 1 to ensure at least one row is selected.
     for (int i = 1; i < opts.vectorSize; ++i) {
-      if (fuzzer.coinToss(0.5)) {
+      if (fuzzer.coinToss(0.6)) {
         partialRows.setValid(i, false);
       }
     }
     partialRows.updateBounds();
     auto vector = fuzzer.fuzzConstant(INTEGER());
     auto lazy = VectorFuzzer::wrapInLazyVector(vector);
-    ASSERT_FALSE(lazy->mayHaveNulls());
     LazyVector::ensureLoadedRows(lazy, partialRows);
     assertEqualVectors(&partialRows, lazy, vector);
 
     vector = fuzzer.fuzzFlat(BIGINT());
     lazy = VectorFuzzer::wrapInLazyVector(vector);
-    ASSERT_FALSE(lazy->mayHaveNulls());
     LazyVector::ensureLoadedRows(lazy, partialRows);
     assertEqualVectors(&partialRows, lazy, vector);
 
     vector = fuzzer.fuzzFlat(ARRAY(BIGINT()));
     lazy = VectorFuzzer::wrapInLazyVector(vector);
-    ASSERT_FALSE(lazy->mayHaveNulls());
     LazyVector::ensureLoadedRows(lazy, partialRows);
     assertEqualVectors(&partialRows, lazy, vector);
 
     vector = fuzzer.fuzzFlat(MAP(BIGINT(), INTEGER()));
     lazy = VectorFuzzer::wrapInLazyVector(vector);
-    ASSERT_FALSE(lazy->mayHaveNulls());
     LazyVector::ensureLoadedRows(lazy, partialRows);
     assertEqualVectors(&partialRows, lazy, vector);
   }

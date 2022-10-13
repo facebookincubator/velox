@@ -73,11 +73,6 @@ DEFINE_bool(
     false,
     "Enable testing of function signatures with variadic arguments.");
 
-DEFINE_bool(
-    enable_lazy_vector_generation,
-    false,
-    "Enable lazy vectors to be generated for testing.");
-
 namespace facebook::velox::test {
 
 namespace {
@@ -444,8 +439,8 @@ class ExpressionFuzzer {
   }
 
   RowVectorPtr generateRowVector() {
-    return vectorFuzzer_.fuzzInputRow(
-        ROW(std::move(inputRowNames_), std::move(inputRowTypes_)), false);
+    return vectorFuzzer_.fuzzRow(
+        ROW(std::move(inputRowNames_), std::move(inputRowTypes_)));
   }
 
   core::TypedExprPtr generateArgConstant(const TypePtr& arg) {
@@ -563,13 +558,9 @@ class ExpressionFuzzer {
         chosen->returnType, args, chosen->name);
   }
 
-  // Executes an expression both using common path (all evaluation
-  // optimizations) and simplified path. Additionally, if the
-  // enable_lazy_vector_generation flag is set to true then the input row vector
-  // passed to the common path is fuzzed again to apply a lazy layer on top of
-  // some of its children.
-  // Returns:
-  //  - true if both paths succeeded and returned the exact same results.
+  // Executes an expression. Returns:
+  //
+  //  - true if both succeeded and returned the exact same results.
   //  - false if both failed with compatible exceptions.
   //  - throws otherwise (incompatible exceptions or different results).
   bool executeExpression(
@@ -609,11 +600,7 @@ class ExpressionFuzzer {
     try {
       exec::ExprSet exprSetCommon(
           {plan}, &execCtx_, !FLAGS_disable_constant_folding);
-      auto lazyFuzzedRowVector = FLAGS_enable_lazy_vector_generation
-          ? vectorFuzzer_.fuzzRowChildrenToLazy(rowVector)
-          : rowVector;
-      exec::EvalCtx evalCtxCommon(
-          &execCtx_, &exprSetCommon, lazyFuzzedRowVector.get());
+      exec::EvalCtx evalCtxCommon(&execCtx_, &exprSetCommon, rowVector.get());
 
       try {
         exprSetCommon.eval(rows, evalCtxCommon, commonEvalResult);
