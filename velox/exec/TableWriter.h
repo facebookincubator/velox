@@ -16,10 +16,51 @@
 
 #pragma once
 
+#include "velox/connectors/WriteProtocol.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec {
+
+class TableWriterWriteInfo : public connector::WriteInfo {
+ public:
+  TableWriterWriteInfo(
+      RowTypePtr outputType,
+      const std::string& taskId,
+      vector_size_t numWrittenRows,
+      std::vector<std::shared_ptr<const connector::WriterParameters>>
+          writeParameters)
+      : outputType_(std::move(outputType)),
+        taskId_(taskId),
+        numWrittenRows_(numWrittenRows),
+        writeParameters_(std::move(writeParameters)) {}
+
+  ~TableWriterWriteInfo() override {}
+
+  RowTypePtr outputType() const {
+    return outputType_;
+  }
+
+  const std::string& taskId() const {
+    return taskId_;
+  }
+
+  vector_size_t numWrittenRows() const {
+    return numWrittenRows_;
+  }
+
+  const std::vector<std::shared_ptr<const connector::WriterParameters>>&
+  writeParameters() const {
+    return writeParameters_;
+  }
+
+ private:
+  const RowTypePtr outputType_;
+  const std::string taskId_;
+  const vector_size_t numWrittenRows_;
+  const std::vector<std::shared_ptr<const connector::WriterParameters>>
+      writeParameters_;
+};
 
 /**
  * The class implements a simple table writer VELOX operator
@@ -29,7 +70,8 @@ class TableWriter : public Operator {
   TableWriter(
       int32_t operatorId,
       DriverCtx* driverCtx,
-      const std::shared_ptr<const core::TableWriteNode>& tableWriteNode);
+      const std::shared_ptr<const core::TableWriteNode>& tableWriteNode,
+      connector::WriteProtocol::CommitStrategy commitStrategy);
 
   BlockingReason isBlocked(ContinueFuture* /* future */) override {
     return BlockingReason::kNotBlocked;
@@ -89,6 +131,7 @@ class TableWriter : public Operator {
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::shared_ptr<connector::DataSink> dataSink_;
+  std::shared_ptr<connector::WriteProtocol> writeProtocol_;
   std::shared_ptr<connector::ConnectorInsertTableHandle> insertTableHandle_;
 };
 } // namespace facebook::velox::exec

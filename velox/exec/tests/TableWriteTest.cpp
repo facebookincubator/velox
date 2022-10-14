@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 #include "velox/common/base/Fs.h"
+#include "velox/connectors/WriteProtocol.h"
+#include "velox/connectors/hive/HiveWriteProtocol.h"
 #include "velox/dwio/common/DataSink.h"
+#include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -24,6 +27,33 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+
+class TestWriteProtocolWithCommit : public HiveNoCommitWriteProtocol {
+ public:
+  CommitStrategy getCommitStrategy() const override {
+    return CommitStrategy::kNoCommit;
+  }
+
+  RowVectorPtr commit(
+      const WriteInfo& writeInfo,
+      memory::MemoryPool* FOLLY_NONNULL pool) override {
+    const auto& tableWriterWriteInfo =
+        dynamic_cast<const TableWriterWriteInfo&>(writeInfo);
+    return std::make_shared<RowVector>(
+        pool,
+        tableWriterWriteInfo.outputType(),
+        BufferPtr(nullptr),
+        1,
+        std::vector<VectorPtr>{std::make_shared<ConstantVector<int64_t>>(
+            pool, 1, false, BIGINT(), tableWriterWriteInfo.numWrittenRows())});
+  }
+
+  static void registerProtocol() {
+    registerWriteProtocol(CommitStrategy::kNoCommit, []() {
+      return std::make_shared<TestWriteProtocolWithCommit>();
+    });
+  }
+};
 
 class TableWriteTest : public HiveConnectorTestBase {
  protected:
@@ -58,9 +88,10 @@ TEST_F(TableWriteTest, scanFilterProjectWrite) {
     writeToFile(filePaths[i]->path, vectors[i]);
   }
 
-  auto outputDirectory = TempDirectoryPath::create();
-
   createDuckDbTable(vectors);
+
+  TestWriteProtocolWithCommit::registerProtocol();
+  auto outputDirectory = TempDirectoryPath::create();
 
   auto planBuilder = PlanBuilder();
   auto project = planBuilder.tableScan(rowType_)
@@ -107,8 +138,10 @@ TEST_F(TableWriteTest, renameAndReorderColumns) {
     writeToFile(filePaths[i]->path, vectors[i]);
   }
 
-  auto outputDirectory = TempDirectoryPath::create();
   createDuckDbTable(vectors);
+
+  TestWriteProtocolWithCommit::registerProtocol();
+  auto outputDirectory = TempDirectoryPath::create();
 
   auto tableRowType = ROW({"d", "c", "b"}, {VARCHAR(), DOUBLE(), INTEGER()});
 
@@ -146,8 +179,11 @@ TEST_F(TableWriteTest, directReadWrite) {
     writeToFile(filePaths[i]->path, vectors[i]);
   }
 
-  auto outputDirectory = TempDirectoryPath::create();
   createDuckDbTable(vectors);
+
+  TestWriteProtocolWithCommit::registerProtocol();
+  auto outputDirectory = TempDirectoryPath::create();
+
   auto plan = PlanBuilder()
                   .tableScan(rowType_)
                   .tableWrite(
@@ -200,7 +236,9 @@ TEST_F(TableWriteTest, constantVectors) {
 
   createDuckDbTable({vector});
 
+  TestWriteProtocolWithCommit::registerProtocol();
   auto outputDirectory = TempDirectoryPath::create();
+
   auto op = PlanBuilder()
                 .values({vector})
                 .tableWrite(
@@ -226,7 +264,9 @@ TEST_F(TableWriteTest, constantVectors) {
 
 // Test TableWriter create empty ORC or not based on the config
 TEST_F(TableWriteTest, writeEmptyFile) {
+  TestWriteProtocolWithCommit::registerProtocol();
   auto outputDirectory = TempDirectoryPath::create();
+
   auto plan = PlanBuilder()
                   .tableScan(rowType_)
                   .filter("false")

@@ -277,9 +277,7 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& tableColumnNames,
     const std::shared_ptr<core::InsertTableHandle>& insertHandle,
     const std::string& rowCountColumnName) {
-  auto outputType =
-      ROW({rowCountColumnName, "fragments", "commitcontext"},
-          {BIGINT(), VARBINARY(), VARBINARY()});
+  auto outputType = ROW({rowCountColumnName}, {BIGINT()});
   planNode_ = std::make_shared<core::TableWriteNode>(
       nextPlanNodeId(),
       inputColumns,

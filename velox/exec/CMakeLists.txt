@@ -70,7 +70,8 @@ target_link_libraries(
   velox_time
   velox_codegen
   velox_common_base
-  velox_test_util)
+  velox_test_util
+  velox_hive_write_protocol)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

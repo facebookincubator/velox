@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 
 #include "velox/common/base/Fs.h"
+#include "velox/connectors/hive/HiveWriteProtocol.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/FieldReference.h"
@@ -30,6 +31,7 @@
 
 #include <memory>
 
+using namespace facebook::velox::exec;
 using namespace facebook::velox::dwrf;
 using WriterConfig = facebook::velox::dwrf::Config;
 
@@ -85,21 +87,28 @@ std::string HiveTableHandle::toString() const {
 }
 
 HiveDataSink::HiveDataSink(
-    std::shared_ptr<const RowType> inputType,
+    RowTypePtr inputType,
     std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-    const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx)
+    const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
+    std::shared_ptr<WriteProtocol> writeProtocol)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
-      connectorQueryCtx_(connectorQueryCtx) {
+      connectorQueryCtx_(connectorQueryCtx),
+      writeProtocol_(std::move(writeProtocol)) {
   if (connectorQueryCtx_->queryConfig()->createEmptyFiles() &&
       !insertTableHandle_->isPartitioned()) {
     writers_.emplace_back(createWriter());
   }
 }
 
+const std::vector<std::shared_ptr<const WriterParameters>>&
+HiveDataSink::getWriterParameters() const {
+  return writerParameters_;
+}
+
 void HiveDataSink::appendData(VectorPtr input) {
   // For the time being the hive data sink supports one file
-  // To extend it we can create a new writer for each
+  // To extend it we can create a new data sink for each
   // partition
   if (writers_.empty()) {
     writers_.emplace_back(createWriter());
@@ -123,10 +132,18 @@ std::unique_ptr<velox::dwrf::Writer> HiveDataSink::createWriter() {
   // Without explicitly setting flush policy, the default memory based flush
   // policy is used.
 
-  auto fileName =
-      boost::lexical_cast<std::string>(boost::uuids::random_generator()());
-  auto sink = dwio::common::DataSink::create(
-      fs::path(insertTableHandle_->locationHandle()->writePath()) / fileName);
+  auto hiveWriterParameters =
+      std::dynamic_pointer_cast<const HiveWriterParameters>(
+          writeProtocol_->getWriterParameters(
+              insertTableHandle_, connectorQueryCtx_));
+  VELOX_CHECK_NOT_NULL(
+      hiveWriterParameters,
+      "Hive data sink expects write parameters for Hive.");
+  writerParameters_.emplace_back(hiveWriterParameters);
+
+  auto writePath = fs::path(hiveWriterParameters->writeDirectory()) /
+      hiveWriterParameters->writeFileName();
+  auto sink = dwio::common::DataSink::create(writePath);
   return std::make_unique<Writer>(
       options, std::move(sink), *connectorQueryCtx_->memoryPool());
 }

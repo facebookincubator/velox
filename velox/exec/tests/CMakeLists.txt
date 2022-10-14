@@ -79,6 +79,7 @@ target_link_libraries(
   velox_functions_lib
   velox_functions_prestosql
   velox_hive_connector
+  velox_hive_write_protocol
   velox_test_util
   velox_type
   velox_serialization
@@ -86,6 +87,7 @@ target_link_libraries(
   velox_functions_json
   velox_vector
   velox_vector_fuzzer
+  velox_write_protocol
   velox_memory
   velox_dwio_common_exception
   ${Boost_ATOMIC_LIBRARIES}

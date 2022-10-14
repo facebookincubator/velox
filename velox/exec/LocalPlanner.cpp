@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/LocalPlanner.h"
+#include "velox/connectors/WriteProtocol.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
@@ -312,8 +313,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     } else if (
         auto tableWriteNode =
             std::dynamic_pointer_cast<const core::TableWriteNode>(planNode)) {
-      operators.push_back(
-          std::make_unique<TableWriter>(id, ctx.get(), tableWriteNode));
+      operators.push_back(std::make_unique<TableWriter>(
+          id,
+          ctx.get(),
+          tableWriteNode,
+          connector::WriteProtocol::CommitStrategy::kNoCommit));
     } else if (
         auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(
