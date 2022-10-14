@@ -231,7 +231,7 @@ TEST_F(TableWriteTest, constantVectors) {
       "SELECT * FROM tmp");
 }
 
-TEST_F(TableWriteTest, TestASecondCommitStrategy) {
+TEST_F(TableWriteTest, TestCommitStrategy) {
   auto filePaths = makeFilePaths(10);
   auto vectors = makeVectors(rowType_, filePaths.size(), 1000);
   for (int i = 0; i < filePaths.size(); i++) {
