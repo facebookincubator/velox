@@ -15,8 +15,9 @@
  */
 
 #include "velox/exec/TableWriter.h"
+
+#include "velox/connectors/WriteProtocol.h"
 #include "velox/exec/Task.h"
-#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
 
@@ -36,9 +37,6 @@ TableWriter::TableWriter(
       driverCtx_(driverCtx),
       insertTableHandle_(
           tableWriteNode->insertTableHandle()->connectorInsertTableHandle()) {
-  // For the time being the table writer supports one file
-  // To extend it we can create a new data sink for each
-  // partition
   const auto& connectorId = tableWriteNode->insertTableHandle()->connectorId();
   connector_ = connector::getConnector(connectorId);
   connectorQueryCtx_ =
@@ -55,16 +53,17 @@ TableWriter::TableWriter(
   }
 
   mappedType_ = ROW(std::move(names), std::move(types));
-  const auto& config = driverCtx_->task->queryCtx()->config();
-  if (config.createEmptyFiles()) {
-    LOG(INFO) << "Enforce creating empty files\n";
-    createDataSink();
-  }
+  writeProtocol_ = connector::WriteProtocol::getWriteProtocol(
+      tableWriteNode->commitStrategy());
+  createDataSink();
 }
 
 void TableWriter::createDataSink() {
   dataSink_ = connector_->createDataSink(
-      mappedType_, insertTableHandle_, connectorQueryCtx_.get());
+      mappedType_,
+      insertTableHandle_,
+      connectorQueryCtx_.get(),
+      writeProtocol_);
 }
 
 void TableWriter::addInput(RowVectorPtr input) {
@@ -86,7 +85,6 @@ void TableWriter::addInput(RowVectorPtr input) {
       mappedChildren,
       input->getNullCount());
 
-  // Lazily instantiate data sink to prevent leftover empty files.
   if (!dataSink_) {
     createDataSink();
   }
