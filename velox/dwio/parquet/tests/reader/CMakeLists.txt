@@ -21,6 +21,20 @@ target_link_libraries(
   velox_dwio_parquet_reader_test velox_dwio_native_parquet_reader
   ${VELOX_LINK_LIBS} ${TEST_LINK_LIBS})
 
+add_executable(velox_dwio_parquet_query_test ParquetQueryTest.cpp)
+add_test(
+  NAME velox_dwio_parquet_query_test
+  COMMAND velox_dwio_parquet_query_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(
+  velox_dwio_parquet_query_test
+  velox_dwio_parquet_reader
+  velox_exec_test_lib
+  velox_exec
+  velox_hive_connector
+  velox_aggregates
+  ${TEST_LINK_LIBS})
+
 add_executable(velox_parquet_e2e_filter_test E2EFilterTest.cpp)
 add_test(velox_parquet_e2e_filter_test velox_parquet_e2e_filter_test)
 target_link_libraries(
