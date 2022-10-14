@@ -32,6 +32,9 @@ class SubstraitToVeloxPlanValidator {
   /// Used to validate whether the computing of this type is supported.
   bool validate(const ::substrait::Type& sType);
 
+  /// Used to validate whether the computing of this Sort is supported.
+  bool validate(const ::substrait::SortRel& sSort);
+
   /// Used to validate whether the computing of this Aggregation is supported.
   bool validate(const ::substrait::AggregateRel& sAgg);
 

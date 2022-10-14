@@ -63,6 +63,64 @@ bool SubstraitToVeloxPlanValidator::validateInputTypes(
 }
 
 bool SubstraitToVeloxPlanValidator::validate(
+    const ::substrait::SortRel& sSort) {
+  if (sSort.has_input() && !validate(sSort.input())) {
+    return false;
+  }
+  // Get and validate the input types from extension.
+  if (!sSort.has_advanced_extension()) {
+    std::cout << "Input types are expected in SortRel." << std::endl;
+    return false;
+  }
+  const auto& extension = sSort.advanced_extension();
+  std::vector<TypePtr> types;
+  if (!validateInputTypes(extension, types)) {
+    std::cout << "Validation failed for input types in SortRel." << std::endl;
+    return false;
+  }
+
+  int32_t inputPlanNodeId = 0;
+  std::vector<std::string> names;
+  names.reserve(types.size());
+  for (auto colIdx = 0; colIdx < types.size(); colIdx++) {
+    names.emplace_back(subParser_->makeNodeName(inputPlanNodeId, colIdx));
+  }
+  auto rowType = std::make_shared<RowType>(std::move(names), std::move(types));
+
+  const auto& sorts = sSort.sorts();
+  for (const auto& sort : sorts) {
+    switch (sort.direction()) {
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_FIRST:
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_LAST:
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_FIRST:
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_LAST:
+        break;
+      default:
+        return false;
+    }
+
+    if (sort.has_expr()) {
+      try {
+        auto expression = exprConverter_->toVeloxExpr(sort.expr(), rowType);
+        auto expr_field =
+            dynamic_cast<const core::FieldAccessTypedExpr*>(expression.get());
+        VELOX_CHECK(
+            expr_field != nullptr,
+            " the sorting key in Sort Operator only support field")
+
+        exec::ExprSet exprSet({std::move(expression)}, execCtx_);
+      } catch (const VeloxException& err) {
+        std::cout << "Validation failed for expression in SortRel due to:"
+                  << err.message() << std::endl;
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+bool SubstraitToVeloxPlanValidator::validate(
     const ::substrait::ProjectRel& sProject) {
   if (sProject.has_input() && !validate(sProject.input())) {
     return false;
@@ -320,6 +378,9 @@ bool SubstraitToVeloxPlanValidator::validate(const ::substrait::Rel& sRel) {
   }
   if (sRel.has_read()) {
     return validate(sRel.read());
+  }
+  if (sRel.has_sort()) {
+    return validate(sRel.sort());
   }
   return false;
 }
