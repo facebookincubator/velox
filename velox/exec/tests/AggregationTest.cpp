@@ -101,6 +101,51 @@ class AggregateFunc : public Aggregate {
   void finalize(char** /*groups*/, int32_t /*numGroups*/) override {}
 };
 
+template <int32_t kTag>
+struct TaggedAggregate : AggregateFunc {
+  using AggregateFunc::AggregateFunc;
+
+  void extractValues(char** /*groups*/, int32_t numGroups, VectorPtr* result)
+      override {
+    auto flat = result->get()->asFlatVector<int32_t>();
+    flat->resize(numGroups);
+    for (int i = 0; i < numGroups; ++i) {
+      flat->set(i, kTag);
+    }
+  }
+
+  void extractAccumulators(
+      char** /*groups*/,
+      int32_t numGroups,
+      VectorPtr* result) override {
+    auto flat = result->get()->asFlatVector<int32_t>();
+    flat->resize(numGroups);
+    for (int i = 0; i < numGroups; ++i) {
+      flat->set(i, kTag);
+    }
+  }
+
+  void addIntermediateResults(
+      char** /*groups*/,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    auto flat = args[0]->asFlatVector<int32_t>();
+    rows.applyToSelected(
+        [&](auto row) { EXPECT_EQ(flat->valueAt(row), kTag); });
+  }
+
+  void addSingleGroupIntermediateResults(
+      char* /*group*/,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    auto flat = args[0]->asFlatVector<int32_t>();
+    rows.applyToSelected(
+        [&](auto row) { EXPECT_EQ(flat->valueAt(row), kTag); });
+  }
+};
+
 class AggregationTest : public OperatorTestBase {
  protected:
   static void SetUpTestCase() {
@@ -1241,6 +1286,57 @@ TEST_F(AggregationTest, groupingSets) {
   assertQuery(
       plan,
       "SELECT k1, k2, count(1), sum(a), max(b) FROM tmp GROUP BY ROLLUP (k1, k2)");
+}
+
+TEST_F(AggregationTest, rawInputTypes) {
+  constexpr const char* kName = "test_agg";
+  registerAggregateFunction(
+      kName,
+      {
+          AggregateFunctionSignatureBuilder()
+              .returnType("integer")
+              .intermediateType("integer")
+              .argumentType("bigint")
+              .build(),
+          AggregateFunctionSignatureBuilder()
+              .returnType("integer")
+              .intermediateType("integer")
+              .argumentType("double")
+              .build(),
+      },
+      [](core::AggregationNode::Step,
+         const std::vector<TypePtr>&,
+         const TypePtr& resultType,
+         const FunctionSignaturePtr& signature)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK(signature);
+        auto& args = signature->argumentTypes();
+        VELOX_CHECK_EQ(args.size(), 1);
+        if (args[0].baseName() == "bigint") {
+          return std::make_unique<TaggedAggregate<1>>(resultType);
+        } else if (args[0].baseName() == "double") {
+          return std::make_unique<TaggedAggregate<2>>(resultType);
+        } else {
+          VELOX_FAIL(args[0].toString());
+        }
+      });
+  auto data =
+      makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>({0}))});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({}, {"test_agg(c0)"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .planNode();
+  assertQuery(plan, "SELECT 1");
+  data = makeRowVector({makeFlatVector<double>(std::vector<double>({0}))});
+  plan = PlanBuilder()
+             .values({data})
+             .partialAggregation({}, {"test_agg(c0)"})
+             .intermediateAggregation()
+             .finalAggregation()
+             .planNode();
+  assertQuery(plan, "SELECT 2");
 }
 
 } // namespace

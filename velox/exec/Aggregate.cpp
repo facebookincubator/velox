@@ -61,6 +61,25 @@ bool registerAggregateFunction(
   return true;
 }
 
+bool registerAggregateFunction(
+    const std::string& name,
+    std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures,
+    std::function<std::unique_ptr<Aggregate>(
+        core::AggregationNode::Step,
+        const std::vector<TypePtr>&,
+        const TypePtr&)> factory) {
+  return registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [factory = std::move(factory)](
+          core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const FunctionSignaturePtr&) {
+        return factory(step, argTypes, resultType);
+      });
+}
+
 std::unordered_map<
     std::string,
     std::vector<std::shared_ptr<AggregateFunctionSignature>>>
@@ -89,10 +108,11 @@ std::unique_ptr<Aggregate> Aggregate::create(
     const std::string& name,
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
-    const TypePtr& resultType) {
+    const TypePtr& resultType,
+    const FunctionSignaturePtr& signature) {
   // Lookup the function in the new registry first.
   if (auto func = getAggregateFunctionEntry(name)) {
-    return func.value()->factory(step, argTypes, resultType);
+    return func.value()->factory(step, argTypes, resultType, signature);
   }
 
   VELOX_USER_FAIL("Aggregate function not registered: {}", name);

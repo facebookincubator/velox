@@ -346,11 +346,15 @@ TypePtr resolveAggregateType(
     const std::string& aggregateName,
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& rawInputTypes,
-    bool nullOnFailure) {
+    bool nullOnFailure,
+    FunctionSignaturePtr* outSignature) {
   if (auto signatures = exec::getAggregateFunctionSignatures(aggregateName)) {
     for (const auto& signature : signatures.value()) {
       exec::SignatureBinder binder(*signature, rawInputTypes);
       if (binder.tryBind()) {
+        if (outSignature) {
+          *outSignature = signature;
+        }
         return binder.tryResolveType(
             exec::isPartialOutput(step) ? signature->intermediateType()
                                         : signature->returnType());
@@ -378,8 +382,11 @@ class AggregateTypeResolver {
   explicit AggregateTypeResolver(core::AggregationNode::Step step)
       : step_(step), previousHook_(core::Expressions::getResolverHook()) {
     core::Expressions::setTypeResolverHook(
-        [&](const auto& inputs, const auto& expr, bool nullOnFailure) {
-          return resolveType(inputs, expr, nullOnFailure);
+        [&](const auto& inputs,
+            const auto& expr,
+            bool nullOnFailure,
+            FunctionSignaturePtr* signature) {
+          return resolveType(inputs, expr, nullOnFailure, signature);
         });
   }
 
@@ -395,7 +402,8 @@ class AggregateTypeResolver {
   TypePtr resolveType(
       const std::vector<core::TypedExprPtr>& inputs,
       const std::shared_ptr<const core::CallExpr>& expr,
-      bool nullOnFailure) const {
+      bool nullOnFailure,
+      FunctionSignaturePtr* signature) const {
     if (resultType_) {
       return resultType_;
     }
@@ -410,7 +418,8 @@ class AggregateTypeResolver {
     // Use raw input types (if available) to resolve intermediate and final
     // result types.
     if (exec::isRawInput(step_)) {
-      return resolveAggregateType(functionName, step_, types, nullOnFailure);
+      return resolveAggregateType(
+          functionName, step_, types, nullOnFailure, signature);
     }
 
     if (!nullOnFailure) {
@@ -455,10 +464,10 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
       rawInputTypes.push_back(rawInput->type());
     }
 
-    auto type = resolveAggregateType(name, step, rawInputTypes, false);
+    auto type = resolveAggregateType(name, step, rawInputTypes, false, nullptr);
     std::vector<core::TypedExprPtr> inputs = {field(numGroupingKeys + i)};
-    aggregates.emplace_back(
-        std::make_shared<core::CallTypedExpr>(type, std::move(inputs), name));
+    aggregates.emplace_back(std::make_shared<core::CallTypedExpr>(
+        type, std::move(inputs), name, partialAggregates[i]->signature()));
   }
 
   return std::make_shared<core::AggregationNode>(
@@ -1044,10 +1053,12 @@ class WindowTypeResolver {
  public:
   explicit WindowTypeResolver()
       : previousHook_(core::Expressions::getResolverHook()) {
-    core::Expressions::setTypeResolverHook(
-        [&](const auto& inputs, const auto& expr, bool nullOnFailure) {
-          return resolveType(inputs, expr, nullOnFailure);
-        });
+    core::Expressions::setTypeResolverHook([&](const auto& inputs,
+                                               const auto& expr,
+                                               bool nullOnFailure,
+                                               FunctionSignaturePtr*) {
+      return resolveType(inputs, expr, nullOnFailure);
+    });
   }
 
   ~WindowTypeResolver() {

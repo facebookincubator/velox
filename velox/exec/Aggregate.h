@@ -214,7 +214,8 @@ class Aggregate {
       const std::string& name,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& argTypes,
-      const TypePtr& resultType);
+      const TypePtr& resultType,
+      const FunctionSignaturePtr& = nullptr);
 
   // Returns the intermediate type for 'name' with signature
   // 'argTypes'. Throws if cannot resolve.
@@ -313,16 +314,30 @@ class Aggregate {
   std::vector<vector_size_t> pushdownCustomIndices_;
 };
 
+// 'argTypes' can be either raw input types or intermediate type.  'resultType'
+// is either final output or intermdiate type.  'signature' is the function
+// signature from planner, only non-null if the information is provided.  Even
+// 'signature' is non-null, it is not guaranteed to be able to cast to
+// 'AggregateFunctionSignature'.
 using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
-    const TypePtr& resultType)>;
+    const TypePtr& resultType,
+    const FunctionSignaturePtr& signature)>;
 
 /// Register an aggregate function with the specified name and signatures.
 bool registerAggregateFunction(
     const std::string& name,
     std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures,
     AggregateFunctionFactory factory);
+
+bool registerAggregateFunction(
+    const std::string& name,
+    std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures,
+    std::function<std::unique_ptr<Aggregate>(
+        core::AggregationNode::Step,
+        const std::vector<TypePtr>& argTypes,
+        const TypePtr& resultType)>);
 
 /// Returns signatures of the aggregate function with the specified name.
 /// Returns empty std::optional if function with that name is not found.

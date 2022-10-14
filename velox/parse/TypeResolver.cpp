@@ -54,7 +54,8 @@ std::string toString(
 TypePtr resolveType(
     const std::vector<std::shared_ptr<const core::ITypedExpr>>& inputs,
     const std::shared_ptr<const core::CallExpr>& expr,
-    bool nullOnFailure) {
+    bool nullOnFailure,
+    exec::FunctionSignaturePtr*) {
   if (expr->getFunctionName() == "if") {
     return !inputs[1]->type()->containsUnknown() ? inputs[1]->type()
                                                  : inputs[2]->type();

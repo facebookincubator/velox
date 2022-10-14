@@ -17,6 +17,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/ITypedExpr.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::core {
@@ -158,12 +159,18 @@ class CallTypedExpr : public ITypedExpr {
   CallTypedExpr(
       std::shared_ptr<const Type> type,
       std::vector<TypedExprPtr> inputs,
-      std::string funcName)
+      std::string funcName,
+      exec::FunctionSignaturePtr signature = nullptr)
       : ITypedExpr{std::move(type), std::move(inputs)},
-        name_(std::move(funcName)) {}
+        name_(std::move(funcName)),
+        signature_(std::move(signature)) {}
 
   virtual const std::string& name() const {
     return name_;
+  }
+
+  const exec::FunctionSignaturePtr& signature() const {
+    return signature_;
   }
 
   TypedExprPtr rewriteInputNames(
@@ -211,6 +218,7 @@ class CallTypedExpr : public ITypedExpr {
 
  private:
   const std::string name_;
+  exec::FunctionSignaturePtr signature_;
 };
 
 using CallTypedExprPtr = std::shared_ptr<const CallTypedExpr>;

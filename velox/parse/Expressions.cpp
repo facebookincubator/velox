@@ -40,9 +40,10 @@ std::vector<TypePtr> getTypes(const std::vector<TypedExprPtr>& inputs) {
 TypePtr resolveTypeImpl(
     std::vector<TypedExprPtr> inputs,
     const std::shared_ptr<const CallExpr>& expr,
-    bool nullOnFailure) {
+    bool nullOnFailure,
+    exec::FunctionSignaturePtr* signature) {
   VELOX_CHECK_NOT_NULL(Expressions::getResolverHook());
-  return Expressions::getResolverHook()(inputs, expr, nullOnFailure);
+  return Expressions::getResolverHook()(inputs, expr, nullOnFailure, signature);
 }
 
 namespace {
@@ -109,10 +110,14 @@ TypedExprPtr adjustLastNArguments(
     std::vector<TypedExprPtr> inputs,
     const std::shared_ptr<const CallExpr>& expr,
     size_t n) {
-  auto type = resolveTypeImpl(inputs, expr, true /*nullOnFailure*/);
+  exec::FunctionSignaturePtr signature;
+  auto type = resolveTypeImpl(inputs, expr, true /*nullOnFailure*/, &signature);
   if (type != nullptr) {
     return std::make_unique<CallTypedExpr>(
-        type, inputs, std::string{expr->getFunctionName()});
+        type,
+        inputs,
+        std::string{expr->getFunctionName()},
+        std::move(signature));
   }
 
   if (n == 0) {
@@ -162,9 +167,11 @@ TypedExprPtr createWithImplicitCast(
   if (adjusted) {
     return adjusted;
   }
-  auto type = resolveTypeImpl(inputs, expr, false /*nullOnFailure*/);
+  exec::FunctionSignaturePtr signature;
+  auto type =
+      resolveTypeImpl(inputs, expr, false /*nullOnFailure*/, &signature);
   return std::make_shared<CallTypedExpr>(
-      type, std::move(inputs), std::string{expr->getFunctionName()});
+      type, inputs, std::string{expr->getFunctionName()}, std::move(signature));
 }
 
 bool isLambdaArgument(const exec::TypeSignature& typeSignature) {

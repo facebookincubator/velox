@@ -79,7 +79,11 @@ StreamingAggregation::StreamingAggregation(
 
     const auto& aggResultType = outputType_->childAt(numKeys + i);
     aggregates_.push_back(Aggregate::create(
-        aggregate->name(), aggregationNode->step(), argTypes, aggResultType));
+        aggregate->name(),
+        aggregationNode->step(),
+        argTypes,
+        aggResultType,
+        aggregate->signature()));
     args_.push_back(channels);
     constantArgs_.push_back(constants);
   }

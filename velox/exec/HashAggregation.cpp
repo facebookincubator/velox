@@ -129,7 +129,11 @@ HashAggregation::HashAggregation(
 
     const auto& resultType = outputType_->childAt(numHashers + i);
     aggregates.push_back(Aggregate::create(
-        aggregate->name(), aggregationNode->step(), argTypes, resultType));
+        aggregate->name(),
+        aggregationNode->step(),
+        argTypes,
+        resultType,
+        aggregate->signature()));
     args.push_back(channels);
     constantLists.push_back(constants);
   }

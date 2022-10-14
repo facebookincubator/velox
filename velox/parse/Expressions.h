@@ -35,7 +35,8 @@ class Expressions {
   using TypeResolverHook = std::function<TypePtr(
       const std::vector<core::TypedExprPtr>& inputs,
       const std::shared_ptr<const core::CallExpr>& expr,
-      bool nullOnFailure)>;
+      bool nullOnFailure,
+      exec::FunctionSignaturePtr*)>;
 
   static TypedExprPtr inferTypes(
       const std::shared_ptr<const IExpr>& expr,
