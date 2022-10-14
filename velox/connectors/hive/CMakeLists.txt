@@ -21,6 +21,11 @@ add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 
 target_link_libraries(velox_hive_partition_function velox_core)
 
+add_library(velox_hive_write_protocol OBJECT HiveWriteProtocol.cpp)
+
+target_link_libraries(velox_hive_write_protocol velox_hive_connector
+                      velox_write_protocol)
+
 add_subdirectory(storage_adapters)
 
 if(${VELOX_BUILD_TESTING})

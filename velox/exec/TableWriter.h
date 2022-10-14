@@ -61,6 +61,22 @@ class TableWriter : public Operator {
     return finished_;
   }
 
+  RowTypePtr outputType() const {
+    return outputType_;
+  }
+
+  vector_size_t numWrittenRows() const {
+    return numWrittenRows_;
+  }
+
+  const DriverCtx* driverCtx() const {
+    return driverCtx_;
+  }
+
+  std::shared_ptr<connector::DataSink> dataSink() const {
+    return dataSink_;
+  }
+
  private:
   void createDataSink();
 

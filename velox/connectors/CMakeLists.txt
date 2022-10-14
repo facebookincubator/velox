@@ -15,6 +15,10 @@ add_library(velox_connector Connector.cpp)
 
 target_link_libraries(velox_connector velox_config velox_vector)
 
+add_library(velox_write_protocol WriteProtocol.cpp)
+
+target_link_libraries(velox_write_protocol velox_connector velox_vector)
+
 if(${VELOX_ENABLE_HIVE_CONNECTOR})
   add_subdirectory(hive)
 endif()
