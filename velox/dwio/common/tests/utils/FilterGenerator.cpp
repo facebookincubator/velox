@@ -89,6 +89,37 @@ std::unique_ptr<Filter> ColumnStats<bool>::makeRangeFilter(
 }
 
 template <>
+std::unique_ptr<Filter> ColumnStats<UnscaledShortDecimal>::makeRangeFilter(
+    float startPct,
+    float selectPct) {
+  if (values_.empty()) {
+    return std::make_unique<velox::common::IsNull>();
+  }
+  int32_t lowerIndex;
+  int32_t upperIndex;
+  UnscaledShortDecimal lower = valueAtPct(startPct, &lowerIndex);
+  UnscaledShortDecimal upper = valueAtPct(startPct + selectPct, &upperIndex);
+  if (upperIndex - lowerIndex < 1000 && ++counter_ % 10 <= 3) {
+    std::vector<int64_t> in;
+    for (auto i = lowerIndex; i <= upperIndex; ++i) {
+      in.push_back(values_[i].unscaledValue());
+    }
+    // make sure we don't accidentally generate an AlwaysFalse filter
+    if (counter_ % 2 == 1 && selectPct < 100.0) {
+      return velox::common::createNegatedBigintValues(in, true);
+    }
+    return velox::common::createBigintValues(in, true);
+  }
+  // sometimes make a negated filter instead (1/4 chance)
+  if (counter_ % 4 == 1 && selectPct < 100.0) {
+    return std::make_unique<velox::common::NegatedBigintRange>(
+        lower.unscaledValue(), upper.unscaledValue(), selectPct < 75);
+  }
+  return std::make_unique<velox::common::BigintRange>(
+      lower.unscaledValue(), upper.unscaledValue(), selectPct > 25);
+}
+
+template <>
 std::unique_ptr<Filter> ColumnStats<float>::makeRangeFilter(
     float startPct,
     float selectPct) {
@@ -436,8 +467,14 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::DOUBLE:
         stats = makeStats<TypeKind::DOUBLE>(vector->type(), rowType_);
         break;
-        // TODO:
-        // Add support for TTypeKind::IMESTAMP and TypeKind::ROW
+      case TypeKind::ROW:
+        stats = makeStats<TypeKind::ROW>(vector->type(), rowType_);
+        break;
+      // TODO:
+      // Add support for TypeKind::TIMESTAMP.
+      case TypeKind::SHORT_DECIMAL:
+        stats = makeStats<TypeKind::SHORT_DECIMAL>(vector->type(), rowType_);
+        break;
       default:
         VELOX_CHECK(
             false,
@@ -457,7 +494,9 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
           subfield,
           hitRows);
     }
-    filters[Subfield(filterSpec.field)] = std::move(filter);
+    if (filter) {
+      filters[Subfield(filterSpec.field)] = std::move(filter);
+    }
   }
 
   return filters;

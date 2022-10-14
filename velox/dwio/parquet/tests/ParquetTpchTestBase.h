@@ -17,7 +17,7 @@
 #include <folly/init/Init.h>
 #include <vector>
 
-#include "velox/common/base/tests/Fs.h"
+#include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
@@ -25,6 +25,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -50,6 +51,8 @@ class ParquetTpchTestBase : public testing::Test {
       duckDb_->initializeTpch(kTpchScaleFactor);
     }
     functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
+
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
     registerParquetReaderFactory(parquetReaderType_);

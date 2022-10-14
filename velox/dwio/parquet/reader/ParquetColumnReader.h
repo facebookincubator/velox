@@ -29,7 +29,10 @@ inline int32_t parquetSizeOfIntKind(TypeKind kind) {
     case TypeKind::DATE:
       return 4;
     case TypeKind::BIGINT:
+    case TypeKind::SHORT_DECIMAL:
       return 8;
+    case TypeKind::LONG_DECIMAL:
+      return 16;
     default:
       VELOX_FAIL("Not an integer TypeKind");
   }

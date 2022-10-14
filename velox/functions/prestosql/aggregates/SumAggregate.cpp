@@ -16,9 +16,10 @@
 #include "velox/functions/prestosql/aggregates/SumAggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
-namespace facebook::velox::aggregate {
+namespace facebook::velox::aggregate::prestosql {
 
-static bool FB_ANONYMOUS_VARIABLE(g_AggregateFunction) =
-    registerSumAggregate<SumAggregate>(kSum);
+void registerSumAggregate() {
+  registerSumAggregate<SumAggregate>(kSum);
+}
 
-} // namespace facebook::velox::aggregate
+} // namespace facebook::velox::aggregate::prestosql

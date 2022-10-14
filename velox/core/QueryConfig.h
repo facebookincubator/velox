@@ -58,6 +58,11 @@ class QueryConfig {
   static constexpr const char* kExprTrackCpuUsage =
       "expression.track_cpu_usage";
 
+  // Whether to track CPU usage for stages of individual operators. True by
+  // default. Can be expensive when processing small batches, e.g. < 10K rows.
+  static constexpr const char* kOperatorTrackCpuUsage =
+      "driver.track_operator_cpu_usage";
+
   // Flags used to configure the CAST operator:
 
   // This flag makes the Row conversion to by applied
@@ -79,11 +84,6 @@ class QueryConfig {
 
   static constexpr const char* kMaxExtendedPartialAggregationMemory =
       "max_extended_partial_aggregation_memory";
-
-  /// The max memory that a final aggregation can use before spilling. If it 0,
-  /// then there is no limit.
-  static constexpr const char* kAggregationSpillMemoryThreshold =
-      "aggregation_spill_memory_threshold";
 
   /// Output volume as percentage of input volume below which we will not seek
   /// to increase reduction by using more memory. the data volume is measured as
@@ -107,7 +107,31 @@ class QueryConfig {
 
   static constexpr const char* kCreateEmptyFiles = "driver.create_empty_files";
 
+  /// Global enable spilling flag.
+  static constexpr const char* kSpillEnabled = "spill_enabled";
+
+  /// Spill path. "/tmp" by default.
   static constexpr const char* kSpillPath = "spiller-spill-path";
+
+  /// Aggregation spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kAggregationSpillEnabled =
+      "aggregation_spill_enabled";
+
+  /// Join spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kJoinSpillEnabled = "join_spill_enabled";
+
+  /// OrderBy spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kOrderBySpillEnabled = "order_by_spill_enabled";
+
+  /// The max memory that a final aggregation can use before spilling. If it 0,
+  /// then there is no limit.
+  static constexpr const char* kAggregationSpillMemoryThreshold =
+      "aggregation_spill_memory_threshold";
+
+  /// The max memory that an order by can use before spilling. If it 0, then
+  /// there is no limit.
+  static constexpr const char* kOrderBySpillMemoryThreshold =
+      "order_by_spill_memory_threshold";
 
   static constexpr const char* kTestingSpillPct = "testing.spill-pct";
 
@@ -140,6 +164,11 @@ class QueryConfig {
   double partialAggregationGoodPct() const {
     static constexpr double kDefault = 0.5;
     return get<double>(kPartialAggregationGoodPct, kDefault);
+  }
+
+  uint64_t orderBySpillMemoryThreshold() const {
+    static constexpr uint64_t kDefault = 0;
+    return get<uint64_t>(kOrderBySpillMemoryThreshold, kDefault);
   }
 
   // Returns the target size for a Task's buffered output. The
@@ -214,16 +243,37 @@ class QueryConfig {
     return get<bool>(kExprEvalSimplified, false);
   }
 
-  /// Returns a path for writing spill files. If empty, spilling is
-  /// disabled. The path should be interpretable by
-  /// filesystems::getFileSystem and may refer to any writable
-  /// location. Actual file names are composed by appending '/' and a
-  /// filename composed of Task id and serial numbers. The files are
-  /// automatically deleted when no longer needed. Files may be left
-  /// behind after crashes but are identifiable based on the Task id in
-  /// the name.
+  /// Returns true if spilling is enabled.
+  bool spillEnabled() const {
+    return get<bool>(kSpillEnabled, false);
+  }
+
+  /// Returns the path for writing spill files. The path should be
+  /// interpretable by filesystems::getFileSystem and may refer to any writable
+  /// location. Actual file names are composed by appending '/' and a filename
+  /// composed of Task id and serial numbers. The files are automatically
+  /// deleted when no longer needed. Files may be left behind after crashes but
+  /// are identifiable based on the Task id in the name.
   std::optional<std::string> spillPath() const {
-    return get<std::string>(kSpillPath);
+    return get<std::string>(kSpillPath, "/tmp");
+  }
+
+  /// Returns 'is aggregation spilling enabled' flag. Must also check the
+  /// spillEnabled()!
+  bool aggregationSpillEnabled() const {
+    return get<bool>(kAggregationSpillEnabled, false);
+  }
+
+  /// Returns 'is join spilling enabled' flag. Must also check the
+  /// spillEnabled()!
+  bool joinSpillEnabled() const {
+    return get<bool>(kJoinSpillEnabled, false);
+  }
+
+  /// Returns 'is orderby spilling enabled' flag. Must also check the
+  /// spillEnabled()!
+  bool orderBySpillEnabled() const {
+    return get<bool>(kOrderBySpillEnabled, false);
   }
 
   // Returns a percentage of aggregation or join input batches that
@@ -269,6 +319,10 @@ class QueryConfig {
 
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
+  }
+
+  bool operatorTrackCpuUsage() const {
+    return get<bool>(kOperatorTrackCpuUsage, true);
   }
 
   template <typename T>

@@ -43,7 +43,8 @@ VectorPtr createScalar(
     std::mt19937& gen,
     std::function<T()> val,
     MemoryPool& pool,
-    std::function<bool(vector_size_t /*index*/)> isNullAt) {
+    std::function<bool(vector_size_t /*index*/)> isNullAt,
+    const TypePtr type = CppToType<T>::create()) {
   BufferPtr values = AlignedBuffer::allocate<T>(size, &pool);
   auto valuesPtr = values->asMutableRange<T>();
 
@@ -62,7 +63,7 @@ VectorPtr createScalar(
   }
 
   return std::make_shared<FlatVector<T>>(
-      &pool, nulls, size, values, std::vector<BufferPtr>{});
+      &pool, type, nulls, size, values, std::vector<BufferPtr>{});
 }
 
 template <TypeKind KIND>
@@ -174,6 +175,41 @@ VectorPtr BatchMaker::createVector<TypeKind::DOUBLE>(
       [&gen]() { return Random::randDouble01(gen); },
       pool,
       isNullAt);
+}
+
+template <>
+VectorPtr BatchMaker::createVector<TypeKind::SHORT_DECIMAL>(
+    const std::shared_ptr<const Type>& type,
+    size_t size,
+    MemoryPool& pool,
+    std::mt19937& gen,
+    std::function<bool(vector_size_t /*index*/)> isNullAt) {
+  return createScalar<UnscaledShortDecimal>(
+      size,
+      gen,
+      [&gen]() { return UnscaledShortDecimal(Random::rand32(gen)); },
+      pool,
+      isNullAt,
+      type);
+}
+
+template <>
+VectorPtr BatchMaker::createVector<TypeKind::LONG_DECIMAL>(
+    const std::shared_ptr<const Type>& type,
+    size_t size,
+    MemoryPool& pool,
+    std::mt19937& gen,
+    std::function<bool(vector_size_t /*index*/)> isNullAt) {
+  return createScalar<UnscaledLongDecimal>(
+      size,
+      gen,
+      [&gen]() {
+        return UnscaledLongDecimal(
+            buildInt128(Random::rand32(gen), Random::rand32(gen)));
+      },
+      pool,
+      isNullAt,
+      type);
 }
 
 VectorPtr createBinary(
@@ -593,8 +629,10 @@ VectorPtr BatchMaker::createBatch(
     MemoryPool& memoryPool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  return createRow(
+  auto result = createRow(
       type, capacity, /* allowNulls */ false, memoryPool, gen, isNullAt);
+  propagateNullsRecursive(*result);
+  return result;
 }
 
 VectorPtr BatchMaker::createBatch(
@@ -605,6 +643,73 @@ VectorPtr BatchMaker::createBatch(
     std::mt19937::result_type seed) {
   std::mt19937 gen(seed);
   return createBatch(type, capacity, memoryPool, gen, isNullAt);
+}
+
+namespace {
+void setNullRecursive(BaseVector& vector, vector_size_t i) {
+  vector.setNull(i, true);
+  switch (vector.typeKind()) {
+    case TypeKind::ROW: {
+      auto row = vector.asUnchecked<RowVector>();
+      for (auto& child : row->children()) {
+        setNullRecursive(*child, i);
+      }
+    } break;
+
+    case TypeKind::ARRAY: {
+      auto array = vector.asUnchecked<ArrayVector>();
+      for (auto j = 0; j < array->sizeAt(i); ++j) {
+        setNullRecursive(*array->elements(), array->offsetAt(i) + j);
+      }
+    } break;
+    case TypeKind::MAP: {
+      auto map = vector.asUnchecked<MapVector>();
+      for (auto j = 0; j < map->sizeAt(i); ++j) {
+        setNullRecursive(*map->mapKeys(), map->offsetAt(i) + j);
+        setNullRecursive(*map->mapValues(), map->offsetAt(i) + j);
+      }
+    } break;
+    default:;
+  }
+}
+} // namespace
+
+void propagateNullsRecursive(BaseVector& vector) {
+  switch (vector.typeKind()) {
+    case TypeKind::ROW: {
+      auto row = vector.asUnchecked<RowVector>();
+      for (auto& child : row->children()) {
+        propagateNullsRecursive(*child);
+      }
+      for (auto i = 0; i < row->size(); ++i) {
+        if (row->isNullAt(i)) {
+          setNullRecursive(*row, i);
+        }
+      }
+    } break;
+
+    case TypeKind::ARRAY: {
+      auto array = vector.asUnchecked<ArrayVector>();
+      propagateNullsRecursive(*array->elements());
+      for (auto i = 0; i < array->size(); ++i) {
+        if (array->isNullAt(i)) {
+          setNullRecursive(*array, i);
+        }
+      }
+    } break;
+
+    case TypeKind::MAP: {
+      auto map = vector.asUnchecked<MapVector>();
+      propagateNullsRecursive(*map->mapKeys());
+      propagateNullsRecursive(*map->mapValues());
+      for (auto i = 0; i < map->size(); ++i) {
+        if (map->isNullAt(i)) {
+          setNullRecursive(*map, i);
+        }
+      }
+    } break;
+    default:;
+  }
 }
 
 } // namespace facebook::velox::test

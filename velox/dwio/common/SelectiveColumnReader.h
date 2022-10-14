@@ -50,7 +50,7 @@ struct DictionaryValues {
 };
 
 struct RawDictionaryState {
-  const void* values{nullptr};
+  const void* FOLLY_NULLABLE values{nullptr};
   int32_t numValues{0};
 };
 
@@ -61,8 +61,8 @@ struct RawScanState {
 
   // See comment in  ScanState below.
   RawDictionaryState dictionary2;
-  const uint64_t* __restrict inDictionary{nullptr};
-  uint8_t* __restrict filterCache;
+  const uint64_t* __restrict FOLLY_NULLABLE inDictionary{nullptr};
+  uint8_t* __restrict FOLLY_NULLABLE filterCache;
 };
 
 // Maintains state for encoding between calls to readWithVisitor of
@@ -140,7 +140,7 @@ class SelectiveColumnReader {
   virtual void next(
       uint64_t /*numValues*/,
       VectorPtr& /*result*/,
-      const uint64_t* /*incomingNulls*/ = nullptr) {
+      const uint64_t* FOLLY_NULLABLE /*incomingNulls*/ = nullptr) {
     VELOX_UNSUPPORTED("next() is only defined in SelectiveStructColumnReader");
   }
 
@@ -154,8 +154,10 @@ class SelectiveColumnReader {
   // relative to 'offset', so that row 0 is the 'offset'th row from
   // start of stripe. 'rows' is expected to stay constant
   // between this and the next call to read.
-  virtual void
-  read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls) = 0;
+  virtual void read(
+      vector_size_t offset,
+      RowSet rows,
+      const uint64_t* FOLLY_NULLABLE incomingNulls) = 0;
 
   virtual uint64_t skip(uint64_t numValues) {
     return formatData_->skip(numValues);
@@ -164,7 +166,7 @@ class SelectiveColumnReader {
   // Extracts the values at 'rows' into '*result'. May rewrite or
   // reallocate '*result'. 'rows' must be the same set or a subset of
   // 'rows' passed to the last 'read().
-  virtual void getValues(RowSet rows, VectorPtr* result) = 0;
+  virtual void getValues(RowSet rows, VectorPtr* FOLLY_NONNULL result) = 0;
 
   // Returns the rows that were selected/visited by the last
   // read(). If 'this' has no filter, returns 'rows' passed to last
@@ -178,11 +180,16 @@ class SelectiveColumnReader {
 
   // Advances to 'offset', so that the next item to be read is the
   // offset-th from the start of stripe.
-  void seekTo(vector_size_t offset, bool readsNullsOnly);
+  virtual void seekTo(vector_size_t offset, bool readsNullsOnly);
 
-  // Positions this at the start of 'index'th row group. Interpretation of
-  // 'index' depends on format.
-  virtual void seekToRowGroup(uint32_t index) = 0;
+  // Positions this at the start of 'index'th row
+  // group. Interpretation of 'index' depends on format. Clears counts
+  // of skipped enclosing struct nulls for formats where nulls are
+  // recorded at each nesting level, i.e. not rep-def.
+  virtual void seekToRowGroup(uint32_t /*index*/) {
+    numParentNulls_ = 0;
+    parentNullsRecordedTo_ = 0;
+  }
 
   const TypePtr& type() const {
     return type_;
@@ -194,14 +201,14 @@ class SelectiveColumnReader {
   }
 
   // Returns a pointer to output rows  with at least 'size' elements available.
-  vector_size_t* mutableOutputRows(int32_t size) {
+  vector_size_t* FOLLY_NONNULL mutableOutputRows(int32_t size) {
     numOutConfirmed_ = outputRows_.size();
     outputRows_.resize(numOutConfirmed_ + size);
     return outputRows_.data() + numOutConfirmed_;
   }
 
   template <typename T>
-  T* mutableValues(int32_t size) {
+  T* FOLLY_NONNULL mutableValues(int32_t size) {
     DCHECK(values_->capacity() >= (numValues_ + size) * sizeof(T));
     return reinterpret_cast<T*>(rawValues_) + numValues_;
   }
@@ -210,7 +217,7 @@ class SelectiveColumnReader {
   // bitmap. Ensures that this has at least 'numValues_' + 'size'
   // capacity and is unique. If extending existing buffer, preserves
   // previous contents.
-  uint64_t* mutableNulls(int32_t size) {
+  uint64_t* FOLLY_NONNULL mutableNulls(int32_t size) {
     if (!resultNulls_->unique()) {
       resultNulls_ = AlignedBuffer::allocate<bool>(
           numValues_ + size, &memoryPool_, bits::kNotNull);
@@ -311,7 +318,7 @@ class SelectiveColumnReader {
     numValues_ -= count;
   }
 
-  velox::common::ScanSpec* scanSpec() const {
+  velox::common::ScanSpec* FOLLY_NONNULL scanSpec() const {
     return scanSpec_;
   }
 
@@ -388,6 +395,34 @@ class SelectiveColumnReader {
     return scanState_;
   }
 
+  // If 'this' has values set for returning as dictionary-encoded,
+  // converts these values to flat so that additional values can be
+  // added without reference to dictionary. Resets dictionary info in
+  // 'scanState_'. No-op for non-string readers. This is needed when
+  // scanning a Parquet ColumnChunk that begins with dictionaries and
+  // converts to direct in mid-read.
+  virtual void dedictionarize() {}
+
+  // A reader nested inside nullable containers has fewer rows than
+  // the top level table. addParentNulls records how many parent nulls
+  // there are between the position of 'this' and 'rows.back() + 1',
+  // i.e. the position of the scan in top level rows. 'firstRowInNulls' is
+  // the top level row corresponding to the first bit in
+  // 'nulls'. 'nulls' is in terms of top level rows and represents all
+  // null parents at any enclosing level. 'nulls' is nullptr if there are no
+  // parent nulls.
+  void addParentNulls(
+      int32_t firstRowInNulls,
+      const uint64_t* FOLLY_NULLABLE nulls,
+      RowSet rows);
+
+  // When skipping rows in a struct, records how many parent nulls at
+  // any level there are between top level row 'from' and 'to'. If
+  // called many times, the 'from' of the next should be the 'to' of
+  // the previous.
+  void
+  addSkippedParentNulls(vector_size_t from, vector_size_t to, int32_t numNulls);
+
   static constexpr int8_t kNoValueSize = -1;
   static constexpr uint32_t kRowGroupNotSet = ~0;
 
@@ -403,23 +438,17 @@ class SelectiveColumnReader {
   // 'extraSpace' bits worth of space in the nulls buffer.
   void prepareNulls(RowSet rows, bool hasNulls, int32_t extraRows = 0);
 
+ protected:
   // Filters 'rows' according to 'is_null'. Only applies to cases where
   // readsNullsOnly() is true.
   template <typename T>
   void filterNulls(RowSet rows, bool isNull, bool extractValues);
 
-  // If 'this' has values set for returning as dictionary-encoded,
-  // converts these values to flat so that additional values can be
-  // added without reference to dictionary. Resets dictionary info in
-  // 'scanState_'. No-op for non-string readers. This is needed when
-  // scanning a Parquet ColumnChunk that begins with dictionaries and
-  // converts to direct in mid-read.
-  virtual void dedictionarize() {}
-
- protected:
   template <typename T>
-  void
-  prepareRead(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls);
+  void prepareRead(
+      vector_size_t offset,
+      RowSet rows,
+      const uint64_t* FOLLY_NULLABLE incomingNulls);
 
   void setOutputRows(RowSet rows) {
     outputRows_.resize(rows.size());
@@ -431,7 +460,10 @@ class SelectiveColumnReader {
 
   // Returns integer values for 'rows' cast to the width of
   // 'requestedType' in '*result'.
-  void getIntValues(RowSet rows, const Type* requestedType, VectorPtr* result);
+  void getIntValues(
+      RowSet rows,
+      const TypePtr& requestedType,
+      VectorPtr* FOLLY_NONNULL result);
 
   // Returns read values for 'rows' in 'vector'. This can be called
   // multiple times for consecutive subsets of 'rows'. If 'isFinal' is
@@ -440,12 +472,20 @@ class SelectiveColumnReader {
   template <typename T, typename TVector>
   void getFlatValues(
       RowSet rows,
-      VectorPtr* result,
+      VectorPtr* FOLLY_NONNULL result,
       const TypePtr& type = CppToType<TVector>::create(),
       bool isFinal = false);
 
   template <typename T, typename TVector>
   void compactScalarValues(RowSet rows, bool isFinal);
+
+  // Compacts values extracted for a complex type column with
+  // filter. The values for 'rows' are shifted to be consecutive at
+  // indices [0..rows.size() - 1]'. 'move' is a function that takes
+  // two indices source and target and moves the value at source to
+  // target. target is <= source for all calls.
+  template <typename Move>
+  void compactComplexValues(RowSet rows, Move move, bool isFinal);
 
   template <typename T, typename TVector>
   void upcastScalarValues(RowSet rows);
@@ -458,7 +498,7 @@ class SelectiveColumnReader {
 
   // Copies 'value' to buffers owned by 'this' and returns the start of the
   // copy.
-  char* copyStringValue(folly::StringPiece value);
+  char* FOLLY_NONNULL copyStringValue(folly::StringPiece value);
 
   memory::MemoryPool& memoryPool_;
 
@@ -470,11 +510,21 @@ class SelectiveColumnReader {
   // Specification of filters, value extraction, pruning etc. The
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
-  velox::common::ScanSpec* const scanSpec_;
+  velox::common::ScanSpec* const FOLLY_NONNULL scanSpec_;
   TypePtr type_;
 
   // Row number after last read row, relative to stripe start.
   vector_size_t readOffset_ = 0;
+
+  // Number of parent nulls between 'readOffset_' and 'parentNullsRecordedTo_'.
+  // When skipping, subtract the parent nulls from the skip distance because the
+  // child does not have values for these.
+  int32_t numParentNulls_{0};
+
+  // The end of the row range starting at 'readOffset_' to which
+  // 'numParentNulls_' applies.
+  int32_t parentNullsRecordedTo_{0};
+
   // The rows to process in read(). References memory supplied by
   // caller. The values must remain live until the next call to read().
   RowSet inputRows_;
@@ -494,11 +544,11 @@ class SelectiveColumnReader {
   // Nulls buffer for readWithVisitor. Not set if no nulls. 'numValues'
   // is the index of the first non-set bit.
   BufferPtr resultNulls_;
-  uint64_t* rawResultNulls_ = nullptr;
+  uint64_t* FOLLY_NULLABLE rawResultNulls_ = nullptr;
   // Buffer for gathering scalar values in readWithVisitor.
   BufferPtr values_;
   // Writable content in 'values'
-  void* rawValues_ = nullptr;
+  void* FOLLY_NULLABLE rawValues_ = nullptr;
   vector_size_t numValues_ = 0;
   // Size of fixed width value in 'rawValues'. For integers, values
   // are read at 64 bit width and can be compacted or extracted at a
@@ -524,7 +574,7 @@ class SelectiveColumnReader {
   // Buffers backing the StringViews in 'values' when reading strings.
   std::vector<BufferPtr> stringBuffers_;
   // Writable contents of 'stringBuffers_.back()'.
-  char* rawStringBuffer_ = nullptr;
+  char* FOLLY_NULLABLE rawStringBuffer_ = nullptr;
   // True if a vector can acquire a pin to a stream's buffer and refer
   // to that as its values.
   bool mayUseStreamBuffer_ = false;
@@ -572,7 +622,8 @@ namespace facebook::velox::dwio::common {
 // Template parameter to indicate no hook in fast scan path. This is
 // referenced in decoders, thus needs to be declared in a header.
 struct NoHook : public ValueHook {
-  void addValue(vector_size_t /*row*/, const void* /*value*/) override {}
+  void addValue(vector_size_t /*row*/, const void* FOLLY_NULLABLE /*value*/)
+      override {}
 };
 
 } // namespace facebook::velox::dwio::common

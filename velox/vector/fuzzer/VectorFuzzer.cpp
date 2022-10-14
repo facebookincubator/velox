@@ -296,7 +296,11 @@ VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
     if (coinToss(opts_.nullRatio)) {
       return BaseVector::createNullConstant(type, size, pool_);
     }
-    return BaseVector::createConstant(randVariant(type), size, pool_);
+    if (type->isUnKnown()) {
+      return BaseVector::createNullConstant(type, size, pool_);
+    } else {
+      return BaseVector::createConstant(randVariant(type), size, pool_);
+    }
   }
 
   // Otherwise, create constant by wrapping around another vector. This will
@@ -353,16 +357,21 @@ VectorPtr VectorFuzzer::fuzzFlatPrimitive(
   VELOX_CHECK(type->isPrimitiveType());
   auto vector = BaseVector::create(type, size, pool_);
 
-  // First, fill it with random values.
-  // TODO: We should bias towards edge cases (min, max, Nan, etc).
-  auto kind = vector->typeKind();
-  VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      fuzzFlatPrimitiveImpl, kind, vector, rng_, opts_);
+  if (type->isUnKnown()) {
+    auto* rawNulls = vector->mutableRawNulls();
+    bits::fillBits(rawNulls, 0, size, bits::kNull);
+  } else {
+    // First, fill it with random values.
+    // TODO: We should bias towards edge cases (min, max, Nan, etc).
+    auto kind = vector->typeKind();
+    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        fuzzFlatPrimitiveImpl, kind, vector, rng_, opts_);
 
-  // Second, generate a random null vector.
-  for (size_t i = 0; i < vector->size(); ++i) {
-    if (coinToss(opts_.nullRatio)) {
-      vector->setNull(i, true);
+    // Second, generate a random null vector.
+    for (size_t i = 0; i < vector->size(); ++i) {
+      if (coinToss(opts_.nullRatio)) {
+        vector->setNull(i, true);
+      }
     }
   }
   return vector;
@@ -530,40 +539,9 @@ BufferPtr VectorFuzzer::fuzzNulls(vector_size_t size) {
 }
 
 variant VectorFuzzer::randVariant(const TypePtr& arg) {
-  if (arg->isArray()) {
-    auto arrayType = arg->asArray();
-    std::vector<variant> variantArray;
-    auto length = genContainerLength(opts_, rng_);
-    variantArray.reserve(length);
-
-    for (size_t i = 0; i < length; ++i) {
-      variantArray.emplace_back(randVariant(arrayType.elementType()));
-    }
-    return variant::array(std::move(variantArray));
-  } else if (arg->isMap()) {
-    auto mapType = arg->asMap();
-    std::map<variant, variant> variantMap;
-    auto length = genContainerLength(opts_, rng_);
-
-    for (size_t i = 0; i < length; ++i) {
-      variantMap.emplace(
-          randVariant(mapType.keyType()), randVariant(mapType.valueType()));
-    }
-    return variant::map(std::move(variantMap));
-  } else if (arg->isRow()) {
-    auto rowType = arg->asRow();
-    std::vector<variant> variantArray;
-    auto length = genContainerLength(opts_, rng_);
-    variantArray.reserve(length);
-
-    for (size_t i = 0; i < length; ++i) {
-      variantArray.emplace_back(randVariant(rowType.childAt(i)));
-    }
-    return variant::row(std::move(variantArray));
-  } else {
-    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        randVariantImpl, arg->kind(), rng_, opts_);
-  }
+  VELOX_CHECK(arg->isPrimitiveType());
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      randVariantImpl, arg->kind(), rng_, opts_);
 }
 
 TypePtr VectorFuzzer::randType(int maxDepth) {

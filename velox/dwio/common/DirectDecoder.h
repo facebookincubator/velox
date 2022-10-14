@@ -30,8 +30,9 @@ class DirectDecoder : public IntDecoder<isSigned> {
   DirectDecoder(
       std::unique_ptr<dwio::common::SeekableInputStream> input,
       bool useVInts,
-      uint32_t numBytes)
-      : IntDecoder<isSigned>{std::move(input), useVInts, numBytes} {}
+      uint32_t numBytes,
+      bool bigEndian = false)
+      : IntDecoder<isSigned>{std::move(input), useVInts, numBytes, bigEndian} {}
 
   void seekToRowGroup(dwio::common::PositionProvider&) override;
 
@@ -57,10 +58,16 @@ class DirectDecoder : public IntDecoder<isSigned> {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* FOLLY_NULLABLE nulls, Visitor visitor) {
-    if (dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
-      fastPath<hasNulls>(nulls, visitor);
-      return;
+  void readWithVisitor(
+      const uint64_t* FOLLY_NULLABLE nulls,
+      Visitor visitor,
+      bool useFastPath = true) {
+    if constexpr (!std::is_same_v<typename Visitor::DataType, int128_t>) {
+      if (useFastPath &&
+          dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
+        fastPath<hasNulls>(nulls, visitor);
+        return;
+      }
     }
     int32_t current = visitor.start();
     skip<hasNulls>(current, 0, nulls);
@@ -84,10 +91,14 @@ class DirectDecoder : public IntDecoder<isSigned> {
           }
         }
       }
-      if (std::is_same_v<typename Visitor::DataType, float>) {
+      if constexpr (std::is_same_v<typename Visitor::DataType, float>) {
         toSkip = visitor.process(readFloat(), atEnd);
-      } else if (std::is_same_v<typename Visitor::DataType, double>) {
+      } else if constexpr (std::is_same_v<typename Visitor::DataType, double>) {
         toSkip = visitor.process(readDouble(), atEnd);
+      } else if constexpr (std::is_same_v<
+                               typename Visitor::DataType,
+                               int128_t>) {
+        toSkip = visitor.process(super::readInt128(), atEnd);
       } else {
         toSkip = visitor.process(super::readLong(), atEnd);
       }

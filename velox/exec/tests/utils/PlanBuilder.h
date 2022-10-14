@@ -32,11 +32,6 @@ enum class Table : uint8_t;
 
 namespace facebook::velox::exec::test {
 
-// TODO Remove after updating presto_cpp.
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-using PlanNodeIdGenerator = core::PlanNodeIdGenerator;
-#endif
-
 /// A builder class with fluent API for building query plans. Plans are built
 /// bottom up starting with the source node (table scan or similar). Expressions
 /// and orders can be specified using SQL. See filter, project and orderBy
@@ -212,10 +207,19 @@ class PlanBuilder {
   /// will produce projected columns named sum_ab, c and p2.
   PlanBuilder& project(const std::vector<std::string>& projections);
 
+  /// Similar to project() except 'optionalProjections' could be empty and the
+  /// function will skip creating a ProjectNode in that case.
+  PlanBuilder& optionalProject(
+      const std::vector<std::string>& optionalProjections);
+
   /// Add a FilterNode using specified SQL expression.
   ///
   /// @param filter SQL expression of type boolean.
   PlanBuilder& filter(const std::string& filter);
+
+  /// Similar to filter() except 'optionalFilter' could be empty and the
+  /// function will skip creating a FilterNode in that case.
+  PlanBuilder& optionalFilter(const std::string& optionalFilter);
 
   /// Adds a TableWriteNode.
   ///

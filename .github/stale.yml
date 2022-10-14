@@ -13,9 +13,10 @@
 # limitations under the License.
 
 staleLabel: stale
-daysUntilClose: 14
+only: pulls
 
 pulls:
+  daysUntilClose: 14
   daysUntilStale: 90 # ~3 months
   markComment: >
     This pull request has been automatically marked as stale because it has not had

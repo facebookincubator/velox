@@ -35,10 +35,14 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
             dataType->type) {}
 
   bool hasBulkPath() const override {
-    return true;
+    return !this->type()->isLongDecimal() &&
+        ((this->type()->isShortDecimal())
+             ? formatData_->as<ParquetData>().hasDictionary()
+             : true);
   }
 
   void seekToRowGroup(uint32_t index) override {
+    SelectiveColumnReader::seekToRowGroup(index);
     scanState().clear();
     readOffset_ = 0;
     formatData_->as<ParquetData>().seekToRowGroup(index);
