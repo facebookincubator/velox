@@ -16,7 +16,6 @@
 
 #include <folly/container/F14Set.h>
 
-#include <velox/vector/TypeAliases.h>
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
@@ -29,44 +28,9 @@ namespace {
 /// Implements the array_sum function.
 /// See documentation at https://prestodb.io/docs/current/functions/array.html
 ///
-
 template <typename TInput, typename TOutput>
 class ArraySumFunction : public exec::VectorFunction {
  public:
-  template <bool mayHaveNulls, typename DataAtFunc, typename IsNullFunc>
-  void applyCore(
-      const SelectivityVector& rows,
-      ArrayVector* arrayVector,
-      FlatVector<TOutput>* resultValues,
-      DataAtFunc&& dataAtFunc,
-      IsNullFunc&& isNullFunc) const {
-    rows.template applyToSelected([&](vector_size_t row) {
-      auto start = arrayVector->offsetAt(row);
-      auto end = start + arrayVector->sizeAt(row);
-      TOutput sum = 0;
-
-      auto addElement = [](TOutput& sum, TInput value) {
-        if constexpr (std::is_same_v<TOutput, int64_t>) {
-          sum = checkedPlus<TOutput>(sum, value);
-        } else {
-          sum += value;
-        }
-      };
-
-      for (auto i = start; i < end; i++) {
-        if constexpr (mayHaveNulls) {
-          bool isNull = isNullFunc(i);
-          if (!isNull) {
-            addElement(sum, dataAtFunc(i));
-          }
-        } else {
-          addElement(sum, dataAtFunc(i));
-        }
-      }
-      resultValues->set(row, sum);
-    });
-  }
-
   template <bool mayHaveNulls>
   void applyFlat(
       const SelectivityVector& rows,
@@ -74,12 +38,30 @@ class ArraySumFunction : public exec::VectorFunction {
       const uint64_t* rawNulls,
       const TInput* rawElements,
       FlatVector<TOutput>* resultValues) const {
-    applyCore<mayHaveNulls>(
-        rows,
-        arrayVector,
-        resultValues,
-        [&](vector_size_t index) { return rawElements[index]; },
-        [&](vector_size_t index) { return bits::isBitNull(rawNulls, index); });
+    rows.template applyToSelected([&](vector_size_t row) {
+      auto start = arrayVector->offsetAt(row);
+      auto end = start + arrayVector->sizeAt(row);
+      TOutput sum = 0;
+      for (; start < end; start++) {
+        if constexpr (mayHaveNulls) {
+          bool isNull = bits::isBitNull(rawNulls, start);
+          if (!isNull) {
+            if constexpr (std::is_same<TOutput, int64_t>::value) {
+              sum = checkedPlus<TOutput>(sum, rawElements[start]);
+            } else {
+              sum += rawElements[start];
+            }
+          }
+        } else {
+          if constexpr (std::is_same<TOutput, int64_t>::value) {
+            sum = checkedPlus<TOutput>(sum, rawElements[start]);
+          } else {
+            sum += rawElements[start];
+          }
+        }
+      }
+      resultValues->set(row, sum);
+    });
   }
 
   template <bool mayHaveNulls>
@@ -88,14 +70,31 @@ class ArraySumFunction : public exec::VectorFunction {
       ArrayVector* arrayVector,
       exec::LocalDecodedVector& elements,
       FlatVector<TOutput>* resultValues) const {
-    applyCore<mayHaveNulls>(
-        rows,
-        arrayVector,
-        resultValues,
-        [&](vector_size_t index) {
-          return elements->template valueAt<TInput>(index);
-        },
-        [&](vector_size_t index) { return elements->isNullAt(index); });
+    rows.template applyToSelected([&](vector_size_t row) {
+      auto start = arrayVector->offsetAt(row);
+      auto end = start + arrayVector->sizeAt(row);
+      TOutput sum = 0;
+      for (; start < end; start++) {
+        if constexpr (mayHaveNulls) {
+          if (!elements->isNullAt(start)) {
+            if constexpr (std::is_same<TOutput, int64_t>::value) {
+              sum = checkedPlus<TOutput>(
+                  sum, elements->template valueAt<TInput>(start));
+            } else {
+              sum += elements->template valueAt<TInput>(start);
+            }
+          }
+        } else {
+          if constexpr (std::is_same<TOutput, int64_t>::value) {
+            sum = checkedPlus<TOutput>(
+                sum, elements->template valueAt<TInput>(start));
+          } else {
+            sum += elements->template valueAt<TInput>(start);
+          }
+        }
+      }
+      resultValues->set(row, sum);
+    });
   }
 
   void apply(
