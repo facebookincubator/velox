@@ -48,7 +48,7 @@ enum UTF8CharList {
 /// It randomly generates different types of (possibly nested) encodings given
 /// the input type, including constants, dictionaries, sliced vectors, and more.
 /// It accepts any primitive, complex, or nested types. Additionally,
-/// 'canBeLazy' can be set to true to allow a 50% chance of generating a lazy
+/// 'canBeLazy' can be set to true to enable a chance of generating a lazy
 /// vector:
 ///
 ///   auto vector1 = fuzzer.fuzz(INTEGER(), true);
@@ -150,10 +150,6 @@ class VectorFuzzer {
   // vector (dictionary). Returns a vector of `opts_.vectorSize` size.
   VectorPtr fuzz(const TypePtr& type);
 
-  // Same as above, but returns a vector of `size` size. Additionally, If
-  // 'canBeLazy' is true then the returned vector can be a lazy vector.
-  VectorPtr fuzz(const TypePtr& type, vector_size_t size, bool canBeLazy);
-
   // Returns a flat vector or a complex vector with flat children with
   // randomized data and nulls. Returns a vector of `opts_.vectorSize` size.
   VectorPtr fuzzFlat(const TypePtr& type);
@@ -236,6 +232,10 @@ class VectorFuzzer {
   RowVectorPtr fuzzRowChildrenToLazy(RowVectorPtr rowVector);
 
  private:
+  // Same as above, but returns a vector of `size` size. Additionally, If
+  // 'canBeLazy' is true then the returned vector can be a lazy vector.
+  VectorPtr fuzz(const TypePtr& type, vector_size_t size, bool canBeLazy);
+
   // Generates a flat vector for primitive types.
   VectorPtr fuzzFlatPrimitive(const TypePtr& type, vector_size_t size);
 

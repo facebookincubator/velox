@@ -276,7 +276,7 @@ VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size, bool canBeLazy) {
   VectorPtr vector;
   vector_size_t vectorSize = size;
 
-  bool usingLazyVector = canBeLazy && coinToss(0.5);
+  bool usingLazyVector = canBeLazy && coinToss(0.1);
   // Lazy Vectors cannot be sliced, so we skip this if using lazy wrapping.
   if (!usingLazyVector && coinToss(0.1)) {
     // Extend the underlying vector to allow slicing later.
@@ -716,8 +716,7 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(SelectivityVector& rows) {
   BufferPtr nulls = nullptr;
   if (decoded.nulls()) {
     if (!baseRows.hasSelections()) {
-      // TODO: update this with allocateNulls once #2781 is merged
-      nulls = AlignedBuffer::allocate<bool>(rows.end(), vector_->pool(), false);
+      nulls = allocateNulls(rows.end(), vector_->pool(), bits::kNull);
     } else {
       nulls = AlignedBuffer::allocate<bool>(rows.end(), vector_->pool());
       std::memcpy(
