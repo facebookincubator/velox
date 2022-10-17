@@ -103,26 +103,21 @@ std::shared_ptr<exec::test::TempDirectoryPath>
 
 TEST_F(ParquetQueryTest, simpleSelectFilter) {
   duckDb_->execute(fmt::format(
-          "create table store as select * from read_parquet('{}')",
-          getExampleFilePath("store.snappy.parquet")));
+      "create table store as select * from read_parquet('{}')",
+      getExampleFilePath("store.snappy.parquet")));
 
   auto result = duckDb_->execute("select * from store");
   result->Print();
   auto fieldType = ROW({{"s_store_sk", BIGINT()}, {"s_state", VARCHAR()}});
-  auto filter = "s_state = 'TN'";
   const std::string filePath(getExampleFilePath("store.snappy.parquet"));
-  const std::unordered_map<std::string, std::string> fileColumnNames = {
-      {"s_store_sk", "s_store_sk"}};
   core::PlanNodeId planNodeId;
   auto plan = PlanBuilder()
-                  .tableScan("store", fieldType, fileColumnNames, {filter})
+                  .tableScan("store", fieldType, {}, {})
                   .capturePlanNodeId(planNodeId)
-                  .project({"s_store_sk"})
                   .planNode();
   std::unordered_map<core::PlanNodeId, std::vector<std::string>> dataFiles{
       {planNodeId, {filePath}}};
-  assertQuery(
-      plan, dataFiles, "select s_store_sk from store where s_state = 'TN'", {});
+  assertQuery(plan, dataFiles, "select s_store_sk from store", {});
 }
 
 int main(int argc, char** argv) {
