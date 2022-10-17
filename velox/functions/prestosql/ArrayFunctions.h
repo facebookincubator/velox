@@ -286,32 +286,27 @@ struct ArraySumFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T)
   template <typename TOutput, typename TInput>
   FOLLY_ALWAYS_INLINE void call(TOutput& out, const TInput& array) {
-    TOutput sum = 0;
-    for (const auto& item : array) {
-      if (item.has_value()) {
+    out = 0;
+
+    if (!array.mayHaveNulls()) {
+      for (const auto& item : array) {
         if constexpr (std::is_same_v<TOutput, int64_t>) {
-          sum = checkedPlus<TOutput>(sum, *item);
+          out = checkedPlus<TOutput>(out, *item);
         } else {
-          sum += *item;
+          out += *item;
+        }
+      }
+    } else {
+      for (const auto& item : array) {
+        if (item.has_value()) {
+          if constexpr (std::is_same_v<TOutput, int64_t>) {
+            out = checkedPlus<TOutput>(out, *item);
+          } else {
+            out += *item;
+          }
         }
       }
     }
-    out = sum;
-    return;
-  }
-
-  template <typename TOutput, typename TInput>
-  FOLLY_ALWAYS_INLINE void callNullFree(TOutput& out, const TInput& array) {
-    // Not nulls path
-    TOutput sum = 0;
-    for (const auto& item : array) {
-      if constexpr (std::is_same_v<TOutput, int64_t>) {
-        sum = checkedPlus<TOutput>(sum, item);
-      } else {
-        sum += item;
-      }
-    }
-    out = sum;
     return;
   }
 };

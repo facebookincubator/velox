@@ -21,6 +21,7 @@
 
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
+#include "velox/vector/NullsBuilder.h"
 
 namespace facebook::velox::functions {
 
@@ -65,30 +66,18 @@ struct ArrayMinSimpleFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE bool callNullFree(
       TInput& out,
-      const arg_type<Array<TInput>>& array) {
+      const null_free_arg_type<Array<TInput>>& array) {
     if (array.size() == 0) {
       return false; // NULL
     }
 
     auto min = INT32_MAX;
-    if (array.mayHaveNulls()) {
-      for (auto i = 0; i < array.size(); i++) {
-        if (!array[i].has_value()) {
-          return false; // NULL
-        }
-        auto v = array[i].value();
-        if (v < min) {
-          min = v;
-        }
-      }
-    } else {
-      for (auto i = 0; i < array.size(); i++) {
-        auto v = array[i].value();
-        if (v < min) {
-          min = v;
-        }
+    for (auto i = 0; i < array.size(); i++) {
+      auto v = array[i];
+      if (v < min) {
+        min = v;
       }
     }
     out = min;
@@ -167,49 +156,93 @@ struct ArrayMinSimpleFunctionSkipNullIterator {
   }
 };
 
-// Basic vector function with out fast path.
 template <template <typename> class F, TypeKind kind>
-void applyTyped(
+VectorPtr applyTyped(
     const SelectivityVector& rows,
     const ArrayVector& arrayVector,
     DecodedVector& elementsDecoded,
-    VectorPtr& result) {
+    exec::EvalCtx& context) {
+  auto pool = context.pool();
   using T = typename TypeTraits<kind>::NativeType;
 
   auto rawSizes = arrayVector.rawSizes();
   auto rawOffsets = arrayVector.rawOffsets();
-  auto* flatResults = result->asFlatVector<T>();
-  rows.applyToSelected([&](auto row) {
-    auto size = rawSizes[row];
-    if (size == 0) {
-      result->setNull(row, true);
-      return;
+
+  BufferPtr indices = allocateIndices(rows.size(), pool);
+  auto rawIndices = indices->asMutable<vector_size_t>();
+
+  // Create nulls for lazy initialization.
+  NullsBuilder nullsBuilder(rows.size(), pool);
+
+  if (elementsDecoded.isIdentityMapping() && !elementsDecoded.mayHaveNulls()) {
+    if constexpr (std::is_same_v<bool, T>) {
+      auto rawElements = elementsDecoded.data<uint64_t>();
+      rows.applyToSelected([&](auto row) {
+        auto size = rawSizes[row];
+        if (size == 0) {
+          nullsBuilder.setNull(row);
+        } else {
+          auto offset = rawOffsets[row];
+          auto elementIndex = offset;
+          for (auto i = offset + 1; i < offset + size; i++) {
+            if (F<T>()(
+                    bits::isBitSet(rawElements, i),
+                    bits::isBitSet(rawElements, elementIndex))) {
+              elementIndex = i;
+            }
+          }
+          rawIndices[row] = elementIndex;
+        }
+      });
+    } else {
+      auto rawElements = elementsDecoded.data<T>();
+      rows.applyToSelected([&](auto row) {
+        auto size = rawSizes[row];
+        if (size == 0) {
+          nullsBuilder.setNull(row);
+        } else {
+          auto offset = rawOffsets[row];
+          auto elementIndex = offset;
+          for (auto i = offset + 1; i < offset + size; i++) {
+            if (F<T>()(rawElements[i], rawElements[elementIndex])) {
+              elementIndex = i;
+            }
+          }
+          rawIndices[row] = elementIndex;
+        }
+      });
     }
-
-    auto offset = rawOffsets[row];
-    auto vertex = elementsDecoded.valueAt<T>(offset);
-
-    for (auto i = offset; i < offset + size; i++) {
-      if (elementsDecoded.isNullAt(i)) {
-        // If a NULL value is encountered, min/max are always NULL.
-        result->setNull(row, true);
-        return;
+  } else {
+    rows.applyToSelected([&](auto row) {
+      auto size = rawSizes[row];
+      if (size == 0) {
+        nullsBuilder.setNull(row);
+      } else {
+        auto offset = rawOffsets[row];
+        auto elementIndex = offset;
+        for (auto i = offset; i < offset + size; i++) {
+          if (elementsDecoded.isNullAt(i)) {
+            // If a NULL value is encountered, min/max are always NULL
+            nullsBuilder.setNull(row);
+            break;
+          } else if (F<T>()(
+                         elementsDecoded.valueAt<T>(i),
+                         elementsDecoded.valueAt<T>(elementIndex))) {
+            elementIndex = i;
+          }
+        }
+        rawIndices[row] = elementIndex;
       }
+    });
+  }
 
-      auto value = elementsDecoded.valueAt<T>(i);
-      if (F<T>()(value, vertex)) {
-        vertex = value;
-      }
-    }
-
-    flatResults->set(row, vertex);
-  });
+  return BaseVector::wrapInDictionary(
+      nullsBuilder.build(), indices, rows.size(), arrayVector.elements());
 }
-
 // Decoder-based unoptimized implementation of min/max used to compare
 // performance of simple function min/max.
 template <template <typename> class F>
-class ArrayMinMaxFunctionBasic : public exec::VectorFunction {
+class ArrayMinMaxFunction : public exec::VectorFunction {
  public:
   void apply(
       const SelectivityVector& rows,
@@ -224,18 +257,15 @@ class ArrayMinMaxFunctionBasic : public exec::VectorFunction {
     exec::LocalSelectivityVector elementsRows(context, elementsVector->size());
     exec::LocalDecodedVector elementsHolder(
         context, *elementsVector, *elementsRows.get());
-
-    BaseVector::ensureWritable(
-        rows, elementsVector->type(), context.pool(), result);
-
-    VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+    auto localResult = VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
         applyTyped,
         F,
         elementsVector->typeKind(),
         rows,
         *arrayVector,
         *elementsHolder.get(),
-        result);
+        context);
+    context.moveOrCopyResult(localResult, rows, result);
   }
 };
 
@@ -267,6 +297,6 @@ inline std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_array_min_basic,
     functions::signatures(),
-    std::make_unique<functions::ArrayMinMaxFunctionBasic<std::less>>());
+    std::make_unique<ArrayMinMaxFunction<std::less>>());
 
 } // namespace facebook::velox::functions
