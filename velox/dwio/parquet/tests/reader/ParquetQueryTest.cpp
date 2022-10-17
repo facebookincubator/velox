@@ -18,8 +18,8 @@
 #include <vector>
 
 #include "velox/common/base/Fs.h"
-#include "velox/common/file/FileSystems.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
@@ -102,6 +102,12 @@ std::shared_ptr<exec::test::TempDirectoryPath>
     ParquetQueryTest::tempDirectory_ = nullptr;
 
 TEST_F(ParquetQueryTest, simpleSelectFilter) {
+  duckDb_->execute(fmt::format(
+          "create table store as select * from read_parquet('{}')",
+          getExampleFilePath("store.snappy.parquet")));
+
+  auto result = duckDb_->execute("select * from store");
+  result->Print();
   auto fieldType = ROW({{"s_store_sk", BIGINT()}, {"s_state", VARCHAR()}});
   auto filter = "s_state = 'TN'";
   const std::string filePath(getExampleFilePath("store.snappy.parquet"));
