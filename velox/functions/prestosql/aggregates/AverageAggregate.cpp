@@ -28,6 +28,11 @@ template <typename TSum>
 struct SumCount {
   TSum sum{0};
   int64_t count{0};
+  virtual ~SumCount() {}
+};
+
+struct DecimalAccumulator : SumCount<int128_t> {
+  int64_t overflow{0};
 };
 
 // Partial aggregation produces a pair of sum and count.
@@ -134,12 +139,22 @@ class AverageAggregate : public exec::Aggregate {
     decodedRaw_.decode(*args[0], rows);
     if (decodedRaw_.isConstantMapping()) {
       if (!decodedRaw_.isNullAt(0)) {
-        TAccumulator value(0);
         const auto numRows = rows.countSelected();
-        updateNonNullValue(
-            group,
-            numRows,
-            TAccumulator(decodedRaw_.valueAt<TInput>(0) * numRows));
+        if constexpr (std::is_same_v<TAccumulator, int128_t>) {
+          int64_t overflow = 0;
+          TAccumulator totalSum{0};
+          for (auto i = 0; i < numRows; ++i) {
+            overflow += DecimalUtil::addWithOverflow(
+                totalSum,
+                decodedRaw_.valueAt<TInput>(0).unscaledValue(),
+                totalSum);
+          }
+          updateNonNullValue(group, numRows, totalSum, overflow);
+        } else {
+          TAccumulator value(0);
+          updateNonNullValue(
+              group, numRows, decodedRaw_.valueAt<TInput>(0) * numRows);
+        }
       }
     } else if (decodedRaw_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
@@ -150,13 +165,34 @@ class AverageAggregate : public exec::Aggregate {
     } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
       const TInput* data = decodedRaw_.data<TInput>();
       TAccumulator totalSum(0);
-      rows.applyToSelected([&](vector_size_t i) { totalSum += data[i]; });
+      if constexpr (std::is_same_v<TAccumulator, int128_t>) {
+        int64_t overflow = 0;
+        rows.applyToSelected([&](vector_size_t i) {
+          overflow += DecimalUtil::addWithOverflow(
+              totalSum, data[i].unscaledValue(), totalSum);
+        });
+        updateNonNullValue(group, rows.countSelected(), totalSum, overflow);
+      } else {
+        rows.applyToSelected([&](vector_size_t i) { totalSum += data[i]; });
+      }
       updateNonNullValue<false>(group, rows.countSelected(), totalSum);
     } else {
       TAccumulator totalSum(0);
-      rows.applyToSelected(
-          [&](vector_size_t i) { totalSum += decodedRaw_.valueAt<TInput>(i); });
-      updateNonNullValue(group, rows.countSelected(), totalSum);
+      if constexpr (std::is_same_v<TAccumulator, int128_t>) {
+        int64_t overflow = 0;
+        rows.applyToSelected([&](vector_size_t i) {
+          overflow += DecimalUtil::addWithOverflow(
+              totalSum,
+              decodedRaw_.valueAt<TInput>(i).unscaledValue(),
+              totalSum);
+        });
+        updateNonNullValue(group, rows.countSelected(), totalSum, overflow);
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          totalSum += decodedRaw_.valueAt<TInput>(i);
+        });
+        updateNonNullValue(group, rows.countSelected(), totalSum);
+      }
     }
   }
 
@@ -257,7 +293,11 @@ class AverageAggregate : public exec::Aggregate {
   }
 
   template <bool tableHasNulls = true>
-  inline void updateNonNullValue(char* group, int64_t count, TAccumulator sum) {
+  inline void updateNonNullValue(
+      char* group,
+      int64_t count,
+      TAccumulator sum,
+      int64_t overflow = 0) {
     if constexpr (tableHasNulls) {
       exec::Aggregate::clearNull(group);
     }
@@ -267,6 +307,10 @@ class AverageAggregate : public exec::Aggregate {
 
   inline SumCount<TAccumulator>* accumulator(char* group) {
     return exec::Aggregate::value<SumCount<TAccumulator>>(group);
+  }
+
+  inline DecimalAccumulator* decimalAccumulator(char* group) {
+    return exec::Aggregate::value<DecimalAccumulator>(group);
   }
 
   void extractValuesImpl(char** groups, int32_t numGroups, VectorPtr* result) {
@@ -282,14 +326,18 @@ class AverageAggregate : public exec::Aggregate {
         vector->setNull(i, true);
       } else {
         clearNull(rawNulls, i);
-        auto* sumCount = accumulator(group);
-        if constexpr (std::is_same_v<TAccumulator, UnscaledLongDecimal>) {
+        if constexpr (std::is_same_v<TAccumulator, int128_t>) {
+          auto accumulator = decimalAccumulator(group);
           // Handles round-up of fraction results.
-          TAccumulator quotient(0);
-          DecimalUtil::divideWithRoundUp<TAccumulator, TAccumulator, int64_t>(
-              quotient, TAccumulator(sumCount->sum), sumCount->count, 0, 0);
-          rawValues[i] = TResult(quotient.unscaledValue());
+          int128_t average{0};
+          DecimalUtil::computeAverage(
+              average,
+              accumulator->sum,
+              accumulator->count,
+              accumulator->overflow);
+          rawValues[i] = TResult(average);
         } else {
+          auto* sumCount = accumulator(group);
           rawValues[i] = TResult(sumCount->sum) / sumCount->count;
         }
       }
@@ -300,22 +348,104 @@ class AverageAggregate : public exec::Aggregate {
   DecodedVector decodedPartial_;
 }; // class AverageAggregate
 
+template <>
+template <bool tableHasNulls>
+void AverageAggregate<UnscaledShortDecimal, int128_t, UnscaledShortDecimal>::
+    updateNonNullValue(
+        char* group,
+        int64_t count,
+        int128_t sum,
+        int64_t overflow) {
+  if constexpr (tableHasNulls) {
+    exec::Aggregate::clearNull(group);
+  }
+  auto accumulator = decimalAccumulator(group);
+  accumulator->overflow +=
+      DecimalUtil::addWithOverflow(accumulator->sum, sum, accumulator->sum);
+  accumulator->overflow += overflow;
+  accumulator->count += count;
+}
+
+template <>
+template <bool tableHasNulls>
+void AverageAggregate<UnscaledLongDecimal, int128_t, UnscaledLongDecimal>::
+    updateNonNullValue(
+        char* group,
+        int64_t count,
+        int128_t sum,
+        int64_t overflow) {
+  if constexpr (tableHasNulls) {
+    exec::Aggregate::clearNull(group);
+  }
+  auto accumulator = decimalAccumulator(group);
+  accumulator->overflow +=
+      DecimalUtil::addWithOverflow(accumulator->sum, sum, accumulator->sum);
+  accumulator->overflow += overflow;
+  accumulator->count += count;
+}
+
+template <>
+template <bool tableHasNulls>
+void AverageAggregate<UnscaledShortDecimal, int128_t, UnscaledShortDecimal>::
+    updateNonNullValue(char* group, UnscaledShortDecimal value) {
+  if constexpr (tableHasNulls) {
+    exec::Aggregate::clearNull(group);
+  }
+  auto accumulator = decimalAccumulator(group);
+  accumulator->overflow += DecimalUtil::addWithOverflow(
+      accumulator->sum, value.unscaledValue(), accumulator->sum);
+  accumulator->count += 1;
+}
+
+template <>
+template <bool tableHasNulls>
+void AverageAggregate<UnscaledLongDecimal, int128_t, UnscaledLongDecimal>::
+    updateNonNullValue(char* group, UnscaledLongDecimal value) {
+  if constexpr (tableHasNulls) {
+    exec::Aggregate::clearNull(group);
+  }
+  auto accumulator = decimalAccumulator(group);
+  accumulator->overflow += DecimalUtil::addWithOverflow(
+      accumulator->sum, value.unscaledValue(), accumulator->sum);
+  accumulator->count += 1;
+}
+
+template <>
+void AverageAggregate<UnscaledShortDecimal, int128_t, UnscaledShortDecimal>::
+    initializeNewGroups(
+        char** groups,
+        folly::Range<const vector_size_t*> indices) {
+  setAllNulls(groups, indices);
+  for (auto i : indices) {
+    new (groups[i] + offset_) DecimalAccumulator();
+  }
+}
+
+template <>
+void AverageAggregate<UnscaledLongDecimal, int128_t, UnscaledLongDecimal>::
+    initializeNewGroups(
+        char** groups,
+        folly::Range<const vector_size_t*> indices) {
+  setAllNulls(groups, indices);
+  for (auto i : indices) {
+    new (groups[i] + offset_) DecimalAccumulator();
+  }
+}
+
 /// Override 'accumulatorAlignmentSize' for UnscaledLongDecimal values as it
 /// uses int128_t type. Some CPUs don't support misaligned access to int128_t
 /// type.
 template <>
-inline int32_t AverageAggregate<
-    UnscaledShortDecimal,
-    UnscaledLongDecimal,
-    UnscaledShortDecimal>::accumulatorAlignmentSize() const {
+inline int32_t
+AverageAggregate<UnscaledShortDecimal, int128_t, UnscaledShortDecimal>::
+    accumulatorAlignmentSize() const {
   return static_cast<int32_t>(sizeof(UnscaledLongDecimal));
 }
 
 template <>
-inline int32_t AverageAggregate<
-    UnscaledLongDecimal,
-    UnscaledLongDecimal,
-    UnscaledLongDecimal>::accumulatorAlignmentSize() const {
+inline int32_t
+AverageAggregate<UnscaledLongDecimal, int128_t, UnscaledLongDecimal>::
+    accumulatorAlignmentSize() const {
   return static_cast<int32_t>(sizeof(UnscaledLongDecimal));
 }
 
@@ -352,7 +482,7 @@ bool registerAverageAggregate(const std::string& name) {
           .integerVariable("a_precision")
           .integerVariable("a_scale")
           .argumentType("DECIMAL(a_precision, a_scale)")
-          .intermediateType("ROW(DECIMAL(38, a_scale), bigint)")
+          .intermediateType("ROW(DECIMAL(38, a_scale), bigint, bigint)")
           .returnType("DECIMAL(a_precision, a_scale)")
           .build());
 
@@ -386,12 +516,12 @@ bool registerAverageAggregate(const std::string& name) {
             case TypeKind::SHORT_DECIMAL:
               return std::make_unique<AverageAggregate<
                   UnscaledShortDecimal,
-                  UnscaledLongDecimal,
+                  int128_t,
                   UnscaledShortDecimal>>(resultType);
             case TypeKind::LONG_DECIMAL:
               return std::make_unique<AverageAggregate<
                   UnscaledLongDecimal,
-                  UnscaledLongDecimal,
+                  int128_t,
                   UnscaledLongDecimal>>(resultType);
             default:
               VELOX_FAIL(
@@ -414,12 +544,12 @@ bool registerAverageAggregate(const std::string& name) {
             case TypeKind::SHORT_DECIMAL:
               return std::make_unique<AverageAggregate<
                   UnscaledShortDecimal,
-                  UnscaledLongDecimal,
+                  int128_t,
                   UnscaledShortDecimal>>(resultType);
             case TypeKind::LONG_DECIMAL:
               return std::make_unique<AverageAggregate<
                   UnscaledLongDecimal,
-                  UnscaledLongDecimal,
+                  int128_t,
                   UnscaledLongDecimal>>(resultType);
             default:
               VELOX_FAIL(
