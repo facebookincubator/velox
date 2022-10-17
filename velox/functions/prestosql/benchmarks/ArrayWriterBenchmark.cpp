@@ -130,7 +130,7 @@ class ArrayWriterBenchmark : public functions::test::FunctionBenchmarkBase {
  public:
   ArrayWriterBenchmark() : FunctionBenchmarkBase() {
     registerFunction<SimpleFunctionResize, Array<int64_t>, int64_t>(
-        {"simpl_resize"});
+        {"simple_resize"});
     registerFunction<SimpleFunctionPushBack, Array<int64_t>, int64_t>(
         {"simple_push_back"});
     registerFunction<SimpleGeneralInterface, Array<int64_t>, int64_t>(
