@@ -52,13 +52,11 @@ struct PatternMetadata {
       const PatternKind& patternKindArg,
       vector_size_t numSingleWildcardsArg,
       vector_size_t reducedPatternLengthArg,
-      vector_size_t numFixedPatternsArg,
       const std::optional<std::vector<std::string>>& fixedPatternsArg =
           std::nullopt)
       : patternKind(patternKindArg),
         numSingleWildcards(numSingleWildcardsArg),
         reducedPatternLength(reducedPatternLengthArg),
-        numFixedPatterns(numFixedPatternsArg),
         fixedPatterns(fixedPatternsArg) {}
 
   const PatternKind patternKind;
@@ -66,8 +64,6 @@ struct PatternMetadata {
   const vector_size_t numSingleWildcards;
   // Length of the fixed pattern in kFixed, kPrefix, and kSuffix patterns.
   const vector_size_t reducedPatternLength;
-  // Number of fixed patterns in kMiddleWildcard patterns.
-  const vector_size_t numFixedPatterns;
   // Vector of fixed patterns in kMiddleWildcard patterns.
   const std::optional<std::vector<std::string>> fixedPatterns;
 };

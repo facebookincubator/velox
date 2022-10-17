@@ -412,7 +412,7 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
           case PatternKind::kAtLeastN: {
             EXPECT_EQ(patternParameters.numSingleWildcards, length);
             EXPECT_EQ(patternParameters.reducedPatternLength, NULL);
-            EXPECT_EQ(patternParameters.numFixedPatterns, NULL);
+            EXPECT_FALSE(patternParameters.fixedPatterns);
             break;
           }
           case PatternKind::kFixed:
@@ -420,11 +420,10 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
           case PatternKind::kSuffix: {
             EXPECT_EQ(patternParameters.reducedPatternLength, length);
             EXPECT_EQ(patternParameters.numSingleWildcards, NULL);
-            EXPECT_EQ(patternParameters.numFixedPatterns, NULL);
+            EXPECT_FALSE(patternParameters.fixedPatterns);
             break;
           }
           case PatternKind::kMiddleWildcards: {
-            EXPECT_EQ(patternParameters.numFixedPatterns, length);
             EXPECT_TRUE(patternParameters.fixedPatterns);
             EXPECT_EQ(patternParameters.fixedPatterns.value().size(), length);
             EXPECT_EQ(patternParameters.reducedPatternLength, NULL);
@@ -432,7 +431,7 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
             break;
           }
           case PatternKind::kGeneric: {
-            EXPECT_EQ(patternParameters.numFixedPatterns, NULL);
+            EXPECT_FALSE(patternParameters.fixedPatterns);
             EXPECT_EQ(patternParameters.reducedPatternLength, NULL);
             EXPECT_EQ(patternParameters.numSingleWildcards, NULL);
             break;

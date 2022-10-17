@@ -462,10 +462,11 @@ class OptimizedLikeWithMemcmp final : public VectorFunction {
   // interspersed with one or more '%' wildcard character streams.
   bool matchFixedWithWildcard(const StringView& input) const {
     auto startPosition = 0;
-    const auto numFixedPatterns = trailingWildcard_
-        ? patternMetadata_.numFixedPatterns
-        : patternMetadata_.numFixedPatterns - 1;
-    if ((startPosition = matchFixedPatterns(input, numFixedPatterns)) == -1) {
+    const auto numFixedPatterns = patternMetadata_.fixedPatterns.value().size();
+    const auto numFixedPatternsToMatch =
+        trailingWildcard_ ? numFixedPatterns : numFixedPatterns - 1;
+    if ((startPosition = matchFixedPatterns(input, numFixedPatternsToMatch)) ==
+        -1) {
       return false;
     }
 
@@ -473,8 +474,7 @@ class OptimizedLikeWithMemcmp final : public VectorFunction {
     // wildcard character.
     if (!trailingWildcard_) {
       const std::string lastPatternString{
-          patternMetadata_.fixedPatterns
-              .value()[patternMetadata_.numFixedPatterns - 1]};
+          patternMetadata_.fixedPatterns.value()[numFixedPatterns - 1]};
       auto lastPattern = StringView(lastPatternString);
       auto fixedPatternLength = lastPattern.size();
       return (
@@ -933,13 +933,13 @@ PatternMetadata determinePatternKind(const StringView& pattern) {
   // Pattern contains only wildcard characters.
   if (!numFixedPatterns && numWildcards) {
     if (!numAnyWildcards) {
-      return PatternMetadata(PatternKind::kExactlyN, numSingleWildcards, 0, 0);
+      return PatternMetadata(PatternKind::kExactlyN, numSingleWildcards, 0);
     }
-    return PatternMetadata(PatternKind::kAtLeastN, numSingleWildcards, 0, 0);
+    return PatternMetadata(PatternKind::kAtLeastN, numSingleWildcards, 0);
   }
   // Pattern is fixed if there are no wildcards.
   if (!numWildcards && numFixedPatterns == 1) {
-    return PatternMetadata(PatternKind::kFixed, 0, patternLength, 0);
+    return PatternMetadata(PatternKind::kFixed, 0, patternLength);
   }
   // Patterns containing one fixed pattern and a single stream of '%' wildcards
   // is either a prefix or a suffix pattern. Based on the positions of the fixed
@@ -947,18 +947,17 @@ PatternMetadata determinePatternKind(const StringView& pattern) {
   if (!numSingleWildcards && numFixedPatterns <= 1 &&
       numAnyWildcardStream <= 1) {
     if (fixedPatternStart < wildcardStart) {
-      return PatternMetadata(PatternKind::kPrefix, 0, wildcardStart, 0);
+      return PatternMetadata(PatternKind::kPrefix, 0, wildcardStart);
     }
     return PatternMetadata(
-        PatternKind::kSuffix, 0, patternLength - fixedPatternStart, 0);
+        PatternKind::kSuffix, 0, patternLength - fixedPatternStart);
   }
   // Patterns with multiple fixed patterns and '%' wildcard character streams
   // are classified as kMiddleWildcard patterns.
   if (!numSingleWildcards && numAnyWildcardStream && numFixedPatterns) {
-    return PatternMetadata(
-        PatternKind::kMiddleWildcards, 0, 0, numFixedPatterns, fixedPatterns);
+    return PatternMetadata(PatternKind::kMiddleWildcards, 0, 0, fixedPatterns);
   }
-  return PatternMetadata(PatternKind::kGeneric, 0, 0, 0);
+  return PatternMetadata(PatternKind::kGeneric, 0, 0);
 }
 
 std::shared_ptr<exec::VectorFunction> makeLike(
