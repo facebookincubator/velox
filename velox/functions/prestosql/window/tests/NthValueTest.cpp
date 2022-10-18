@@ -124,58 +124,5 @@ TEST_F(NthValueTest, offsetValues) {
       {vectors}, "nth_value(c0, c2)", overClause, offsetError);
 }
 
-TEST_F(NthValueTest, randomInput) {
-  auto vectors = makeVectors(
-      ROW(
-          {
-              "c0",
-              "c1",
-              "c2",
-              "c3",
-          },
-          {
-              BIGINT(),
-              SMALLINT(),
-              INTEGER(),
-              BIGINT(),
-          }),
-      10,
-      2,
-      0.5);
-  createDuckDbTable(vectors);
-
-  std::vector<std::string> overClauses = {
-      "partition by c0 order by c1, c2, c3",
-      "partition by c1 order by c0, c2, c3",
-      "partition by c0 order by c1 desc, c2, c3",
-      "partition by c1 order by c0 desc, c2, c3",
-      "partition by c0 order by c1 desc nulls first, c2, c3",
-      "partition by c1 order by c0 nulls first, c2, c3",
-      "partition by c0 order by c1",
-      "partition by c0 order by c2",
-      "partition by c0 order by c3",
-      "partition by c1 order by c0 desc",
-      "partition by c0, c1 order by c2, c3",
-      "partition by c0, c1 order by c2, c3 nulls first",
-      "partition by c0, c1 order by c2",
-      "partition by c0, c1 order by c2 nulls first",
-      "partition by c0, c1 order by c2 desc",
-      "partition by c0, c1 order by c2 desc nulls first",
-      "order by c0, c1, c2, c3",
-      "order by c0, c1 nulls first, c2, c3",
-      "order by c0, c1 desc nulls first, c2, c3",
-      "order by c0 nulls first, c1 nulls first, c2, c3",
-      "order by c0 nulls first, c1 desc nulls first, c2, c3",
-      "order by c0 desc nulls first, c1 nulls first, c2, c3",
-      "order by c0 desc nulls first, c1 desc nulls first, c2, c3",
-      "partition by c0, c1, c2, c3",
-  };
-
-  testWindowFunction(vectors, "nth_value(c0, 1)", overClauses);
-  testWindowFunction(vectors, "nth_value(c1, 5)", overClauses);
-  testWindowFunction(vectors, "nth_value(c2, 10)", overClauses);
-  testWindowFunction(vectors, "nth_value(c3, 20)", overClauses);
-}
-
 }; // namespace
 }; // namespace facebook::velox::window::test
