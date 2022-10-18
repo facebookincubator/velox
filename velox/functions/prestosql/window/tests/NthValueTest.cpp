@@ -23,7 +23,30 @@ namespace facebook::velox::window::test {
 
 namespace {
 
-class NthValueTest : public WindowTestBase {};
+class NthValueTest : public WindowTestBase {
+  VectorPtr typeValues(const TypePtr& type, vector_size_t size) {
+    VectorFuzzer::Options options;
+    options.vectorSize = size;
+    options.nullRatio = 0.2;
+    options.useMicrosecondPrecisionTimestamp = true;
+    VectorFuzzer fuzzer(options, pool_.get(), 0);
+    return fuzzer.fuzz(type);
+  }
+
+ protected:
+  void testPrimitiveType(const TypePtr& type) {
+    vector_size_t size = 100;
+    auto vectors = makeRowVector({
+        makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+        makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+        makeFlatVector<int64_t>(size, [](auto row) { return row % 3 + 1; }),
+        typeValues(type, size),
+    });
+    testTwoColumnOverClauses({vectors}, "nth_value(c3, c2)");
+    testTwoColumnOverClauses({vectors}, "nth_value(c3, 1)");
+    testTwoColumnOverClauses({vectors}, "nth_value(c3, 5)");
+  }
+};
 
 TEST_F(NthValueTest, basic) {
   vector_size_t size = 100;
@@ -54,40 +77,44 @@ TEST_F(NthValueTest, singlePartition) {
   testTwoColumnOverClauses({vectors}, "nth_value(c0, 25)");
 }
 
-TEST_F(NthValueTest, allPrimitiveTypes) {
-  vector_size_t size = 100;
+TEST_F(NthValueTest, integerValues) {
+  testPrimitiveType(INTEGER());
+}
 
-  VectorFuzzer::Options options;
-  options.vectorSize = size;
-  options.nullRatio = 0.2;
-  options.useMicrosecondPrecisionTimestamp = true;
-  VectorFuzzer fuzzer(options, pool_.get(), 0);
+TEST_F(NthValueTest, tinyIntValues) {
+  testPrimitiveType(TINYINT());
+}
 
-  // Test all primitive types of the column in the first parameter for
-  // nth_value.
-  std::vector<TypePtr> typesList = {
-      INTEGER(),
-      BOOLEAN(),
-      TINYINT(),
-      SMALLINT(),
-      BIGINT(),
-      REAL(),
-      DOUBLE(),
-      VARCHAR(),
-      VARBINARY(),
-      TIMESTAMP(),
-      DATE()};
-  for (const auto& type : typesList) {
-    auto vectors = makeRowVector({
-        makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
-        makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-        makeFlatVector<int64_t>(size, [](auto row) { return row % 3 + 1; }),
-        fuzzer.fuzz(type),
-    });
-    testTwoColumnOverClauses({vectors}, "nth_value(c3, c2)");
-    testTwoColumnOverClauses({vectors}, "nth_value(c3, 1)");
-    testTwoColumnOverClauses({vectors}, "nth_value(c3, 5)");
-  }
+TEST_F(NthValueTest, smallIntValues) {
+  testPrimitiveType(SMALLINT());
+}
+
+TEST_F(NthValueTest, bigIntValues) {
+  testPrimitiveType(BIGINT());
+}
+
+TEST_F(NthValueTest, realValues) {
+  testPrimitiveType(REAL());
+}
+
+TEST_F(NthValueTest, doubleValues) {
+  testPrimitiveType(DOUBLE());
+}
+
+TEST_F(NthValueTest, varcharValues) {
+  testPrimitiveType(VARCHAR());
+}
+
+TEST_F(NthValueTest, varBinaryValues) {
+  testPrimitiveType(VARBINARY());
+}
+
+TEST_F(NthValueTest, timestampValues) {
+  testPrimitiveType(TIMESTAMP());
+}
+
+TEST_F(NthValueTest, dateValues) {
+  testPrimitiveType(DATE());
 }
 
 TEST_F(NthValueTest, nullOffsets) {
