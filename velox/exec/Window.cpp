@@ -41,16 +41,84 @@ void initKeyInfo(
   }
 }
 
-void checkDefaultWindowFrame(const core::WindowNode::Function& windowFunction) {
-  VELOX_CHECK_EQ(
-      windowFunction.frame.type, core::WindowNode::WindowType::kRange);
-  VELOX_CHECK_EQ(
-      windowFunction.frame.startType,
-      core::WindowNode::BoundType::kUnboundedPreceding);
-  VELOX_CHECK_EQ(
-      windowFunction.frame.endType, core::WindowNode::BoundType::kCurrentRow);
-  VELOX_CHECK_EQ(windowFunction.frame.startValue, nullptr);
-  VELOX_CHECK_EQ(windowFunction.frame.endValue, nullptr);
+vector_size_t findRowUnboundedPreceding(
+    vector_size_t partitionStartRow,
+    vector_size_t /*partitionEndRow*/,
+    vector_size_t /*peerStartRow*/,
+    vector_size_t /*peerEndRow*/,
+    vector_size_t /*currentRow*/) {
+  return partitionStartRow;
+}
+
+vector_size_t findCurrentRowFrameStart(
+    vector_size_t /*partitionStartRow*/,
+    vector_size_t /*partitionEndRow*/,
+    vector_size_t peerStartRow,
+    vector_size_t /*peerEndRow*/,
+    vector_size_t /*currentRow*/) {
+  return peerStartRow;
+}
+
+vector_size_t findCurrentRowFrameEnd(
+    vector_size_t /*partitionStartRow*/,
+    vector_size_t /*partitionEndRow*/,
+    vector_size_t /*peerStartRow*/,
+    vector_size_t peerEndRow,
+    vector_size_t /*currentRow*/) {
+  return peerEndRow;
+}
+
+vector_size_t findRowUnboundedFollowing(
+    vector_size_t /*partitionStartRow*/,
+    vector_size_t partitionEndRow,
+    vector_size_t /*peerStartRow*/,
+    vector_size_t /*peerEndRow*/,
+    vector_size_t /*currentRow*/) {
+  return partitionEndRow;
+}
+
+const WindowFrameFunctionPtr getStartFrameFunction(
+    core::WindowNode::BoundType startType,
+    core::WindowNode::WindowType type) {
+  switch (startType) {
+    case core::WindowNode::BoundType::kUnboundedPreceding:
+      return findRowUnboundedPreceding;
+    case core::WindowNode::BoundType::kCurrentRow: {
+      if (type == core::WindowNode::WindowType::kRange) {
+        return findCurrentRowFrameStart;
+      } else {
+        VELOX_NYI("Not supported");
+      }
+    }
+    case core::WindowNode::BoundType::kPreceding:
+    case core::WindowNode::BoundType::kFollowing:
+      VELOX_NYI("Not supported");
+    case core::WindowNode::BoundType::kUnboundedFollowing:
+    default:
+      VELOX_FAIL("Invalid frame start value");
+  }
+}
+
+const WindowFrameFunctionPtr getEndFrameFunction(
+    core::WindowNode::BoundType endType,
+    core::WindowNode::WindowType type) {
+  switch (endType) {
+    case core::WindowNode::BoundType::kCurrentRow: {
+      if (type == core::WindowNode::WindowType::kRange) {
+        return findCurrentRowFrameEnd;
+      } else {
+        VELOX_NYI("Not supported");
+      }
+    }
+    case core::WindowNode::BoundType::kUnboundedFollowing:
+      return findRowUnboundedFollowing;
+    case core::WindowNode::BoundType::kPreceding:
+    case core::WindowNode::BoundType::kFollowing:
+      VELOX_NYI("Not supported");
+    case core::WindowNode::BoundType::kUnboundedPreceding:
+    default:
+      VELOX_FAIL("Invalid frame end value");
+  }
 }
 
 }; // namespace
@@ -147,12 +215,16 @@ void Window::createWindowFunctions(
         windowNodeFunction.functionCall->type(),
         operatorCtx_->pool()));
 
-    checkDefaultWindowFrame(windowNodeFunction);
-
+    const WindowFrameFunctionPtr startFrameFunction = getStartFrameFunction(
+        windowNodeFunction.frame.startType, windowNodeFunction.frame.type);
+    const WindowFrameFunctionPtr endFrameFunction = getEndFrameFunction(
+        windowNodeFunction.frame.endType, windowNodeFunction.frame.type);
     windowFrames_.push_back(
         {windowNodeFunction.frame.type,
          windowNodeFunction.frame.startType,
          windowNodeFunction.frame.endType,
+         startFrameFunction,
+         endFrameFunction,
          fieldArgToChannel(windowNodeFunction.frame.startValue),
          fieldArgToChannel(windowNodeFunction.frame.endValue)});
   }
@@ -294,20 +366,6 @@ void Window::callResetPartition(vector_size_t partitionNumber) {
   }
 }
 
-std::pair<vector_size_t, vector_size_t> Window::findFrameEndPoints(
-    vector_size_t /*i*/,
-    vector_size_t partitionStartRow,
-    vector_size_t /*partitionEndRow*/,
-    vector_size_t /*peerStartRow*/,
-    vector_size_t peerEndRow,
-    vector_size_t /*currentRow*/) {
-  // TODO : We handle only the default window frame in this code. Add support
-  // for all window frames subsequently.
-
-  // Default window frame is Range UNBOUNDED PRECEDING CURRENT ROW.
-  return std::make_pair(partitionStartRow, peerEndRow);
-}
-
 void Window::callApplyForPartitionRows(
     vector_size_t startRow,
     vector_size_t endRow,
@@ -376,15 +434,20 @@ void Window::callApplyForPartitionRows(
     rawPeerEnds[j] = peerEndRow_ - 1 - firstPartitionRow;
 
     for (auto w = 0; w < numFuncs; w++) {
-      auto frameEndPoints = findFrameEndPoints(
-          w,
-          firstPartitionRow,
-          lastPartitionRow,
-          peerStartRow_,
-          peerEndRow_ - 1,
-          i);
-      rawFrameStartBuffers[w][j] = frameEndPoints.first - firstPartitionRow;
-      rawFrameEndBuffers[w][j] = frameEndPoints.second - firstPartitionRow;
+      rawFrameStartBuffers[w][j] = windowFrames_[w].startFrameFunction(
+                                       firstPartitionRow,
+                                       lastPartitionRow,
+                                       peerStartRow_,
+                                       peerEndRow_ - 1,
+                                       i) -
+          firstPartitionRow;
+      rawFrameEndBuffers[w][j] = windowFrames_[w].endFrameFunction(
+                                     firstPartitionRow,
+                                     lastPartitionRow,
+                                     peerStartRow_,
+                                     peerEndRow_ - 1,
+                                     i) -
+          firstPartitionRow;
     }
   }
   // Invoke the apply method for the WindowFunctions.

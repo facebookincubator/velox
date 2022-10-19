@@ -22,6 +22,14 @@
 
 namespace facebook::velox::exec {
 
+// Pointer to the function used to compute window frame bounds.
+typedef vector_size_t (*WindowFrameFunctionPtr)(
+    vector_size_t /*partitionStartRow*/,
+    vector_size_t /*partitionEndRow*/,
+    vector_size_t /*peerStartRow*/,
+    vector_size_t /*peerEndRow*/,
+    vector_size_t /*currentRow*/);
+
 /// This is a very simple in-Memory implementation of a Window Operator
 /// to compute window functions.
 ///
@@ -65,6 +73,8 @@ class Window : public Operator {
     const core::WindowNode::WindowType type;
     const core::WindowNode::BoundType startType;
     const core::WindowNode::BoundType endType;
+    const WindowFrameFunctionPtr startFrameFunction;
+    const WindowFrameFunctionPtr endFrameFunction;
     const std::optional<column_index_t> startChannel;
     const std::optional<column_index_t> endChannel;
   };
@@ -94,16 +104,6 @@ class Window : public Operator {
   // of a partition adjacent to each other and sorted by the
   // ORDER BY clause.
   void sortPartitions();
-
-  // Helper function to find window frame start and end values for
-  // currentRow of ith window function (in windowFunctions_ list).
-  std::pair<vector_size_t, vector_size_t> findFrameEndPoints(
-      vector_size_t i,
-      vector_size_t partitionStartRow,
-      vector_size_t partitionEndRow,
-      vector_size_t peerStartRow,
-      vector_size_t peerEndRow,
-      vector_size_t currentRow);
 
   // Helper function to call WindowFunction::resetPartition() for
   // all WindowFunctions.
