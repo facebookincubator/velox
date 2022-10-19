@@ -188,15 +188,34 @@ void EvalCtx::restore(ScopedContextSaver& saver) {
 void EvalCtx::setError(
     vector_size_t index,
     const std::exception_ptr& exceptionPtr) {
-  if (throwOnError_) {
+  // If exceptionPtr represents an std::exception, convert it to VeloxException
+  // to add useful context for debugging.
+  try {
     std::rethrow_exception(exceptionPtr);
+  } catch (const VeloxException& e) {
+    if (throwOnError_) {
+      std::rethrow_exception(exceptionPtr);
+    } else {
+      addError(index, exceptionPtr, errors_);
+    }
+  } catch (const std::exception& e) {
+    if (throwOnError_) {
+      VELOX_USER_FAIL("{}", e.what());
+    } else {
+      try {
+        VELOX_USER_FAIL("{}", e.what());
+      } catch (...) {
+        addError(index, std::current_exception(), errors_);
+      }
+    }
   }
-  addError(index, exceptionPtr, errors_);
 }
 
 void EvalCtx::setErrors(
     const SelectivityVector& rows,
     const std::exception_ptr& exceptionPtr) {
+  // TODO Refactor to avoid converting exceptionPtr to VeloxException in
+  // setError repeatedly.
   rows.applyToSelected([&](auto row) { setError(row, exceptionPtr); });
 }
 

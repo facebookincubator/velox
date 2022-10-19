@@ -2224,6 +2224,39 @@ TEST_F(ExprTest, exceptionContext) {
   }
 }
 
+namespace {
+
+template <typename T>
+struct AlwaysThrowsStdExceptionFunction {
+  template <typename TResult, typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TResult&, const TInput&) {
+    throw std::invalid_argument("This is a test");
+  }
+};
+} // namespace
+
+/// Verify exception context for the case when function throws std::exception.
+TEST_F(ExprTest, stdExceptionContext) {
+  auto data = makeFlatVector<int64_t>({1, 2, 3});
+
+  registerFunction<AlwaysThrowsStdExceptionFunction, int64_t, int64_t>(
+      {"throw_invalid_argument"});
+
+  assertError(
+      "throw_invalid_argument(c0) + 5",
+      data,
+      "throw_invalid_argument(c0)",
+      "plus(throw_invalid_argument(c0), 5:BIGINT)",
+      "This is a test");
+
+  assertError(
+      "throw_invalid_argument(c0 + 5)",
+      data,
+      "throw_invalid_argument(plus(c0, 5:BIGINT))",
+      "Same as context.",
+      "This is a test");
+}
+
 /// Verify the output of ConstantExpr::toString().
 TEST_F(ExprTest, constantToString) {
   auto arrayVector =
