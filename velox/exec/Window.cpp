@@ -368,7 +368,10 @@ void Window::callApplyForPartitionRows(
               isStartBound ? rawPeerStarts : rawPeerEnds;
           std::copy(rawPeerBuffer, rawPeerBuffer + numRows, frameBoundBuffer);
         } else {
-          VELOX_NYI("Not supported");
+          std::iota(
+              frameBoundBuffer,
+              frameBoundBuffer + numRows,
+              startRow - firstPartitionRow);
         }
         break;
       }
