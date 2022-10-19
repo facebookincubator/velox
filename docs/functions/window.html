@@ -143,6 +143,17 @@ The ranking is performed for each window partition.</p>
 <p>Returns a unique, sequential number for each row, starting with one, according to the ordering of rows
 within the window partition.</p>
 </section>
+<section id="value-functions">
+<h1>Value functions<a class="headerlink" href="#value-functions" title="Permalink to this headline">¶</a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="nth_value">
+<span class="sig-name descname"><span class="pre">nth_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#nth_value" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<p>Returns the value at the specified offset from the beginning of the window. Offsets start at 1. The offset
+can be any scalar expression. If the offset is null or greater than the number of values in the window, null is
+returned. It is an error for the offset to be zero or negative.</p>
+</section>
 
 
             <div class="clearer"></div>
@@ -162,6 +173,7 @@ within the window partition.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#ranking-functions">Ranking functions</a></li>
+<li><a class="reference internal" href="#value-functions">Value functions</a></li>
 </ul>
 
   </div>
