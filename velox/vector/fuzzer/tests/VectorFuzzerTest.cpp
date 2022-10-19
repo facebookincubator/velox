@@ -378,11 +378,17 @@ void assertEqualVectors(
 TEST_F(VectorFuzzerTest, lazyOverFlat) {
   // Verify that lazy vectors generated from flat vectors are loaded properly.
   VectorFuzzer::Options opts;
+  SelectivityVector partialRows(opts.vectorSize);
   // non-nullable
   {
     VectorFuzzer fuzzer(opts, pool());
-    SelectivityVector partialRows =
-        fuzzer.fuzzSelectivity(opts.vectorSize, 0.6);
+    // Start with 1 to ensure at least one row is selected.
+    for (int i = 1; i < opts.vectorSize; ++i) {
+      if (fuzzer.coinToss(0.6)) {
+        partialRows.setValid(i, false);
+      }
+    }
+    partialRows.updateBounds();
     auto vector = fuzzer.fuzzConstant(INTEGER());
     auto lazy = VectorFuzzer::wrapInLazyVector(vector);
     LazyVector::ensureLoadedRows(lazy, partialRows);
@@ -407,8 +413,6 @@ TEST_F(VectorFuzzerTest, lazyOverFlat) {
   {
     opts.nullRatio = 0.5;
     VectorFuzzer fuzzer(opts, pool());
-    SelectivityVector partialRows =
-        fuzzer.fuzzSelectivity(opts.vectorSize, 0.6);
 
     auto vector = fuzzer.fuzzConstant(INTEGER());
     auto lazy = VectorFuzzer::wrapInLazyVector(vector);
@@ -437,10 +441,14 @@ TEST_F(VectorFuzzerTest, lazyOverDictionary) {
   // the resulting loaded vector retains dictionary wrapping.
   VectorFuzzer::Options opts;
   opts.nullRatio = 0.3;
+  SelectivityVector partialRows(opts.vectorSize);
   VectorFuzzer fuzzer(opts, pool());
-  // Ensure at least one row is selected so that the lazy vector can be loaded.
-  SelectivityVector partialRows = fuzzer.fuzzSelectivity(opts.vectorSize, 0.7);
-  partialRows.setValid(0, true);
+  // Starting from 1 to ensure at least one row is selected.
+  for (int i = 1; i < opts.vectorSize; ++i) {
+    if (fuzzer.coinToss(0.7)) {
+      partialRows.setValid(i, false);
+    }
+  }
   partialRows.updateBounds();
 
   // Case 1: Applying a single dictionary layer.

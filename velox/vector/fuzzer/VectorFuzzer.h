@@ -231,10 +231,6 @@ class VectorFuzzer {
   // re-used between multiple evaluations.
   RowVectorPtr fuzzRowChildrenToLazy(RowVectorPtr rowVector);
 
-  // Returns a selectivity vector of specified 'size' with randomly selected
-  // rows with a probability of 'selectionRatio'.
-  SelectivityVector fuzzSelectivity(vector_size_t size, double selectionRatio);
-
  private:
   // Same as above, but returns a vector of `size` size. Additionally, If
   // 'canBeLazy' is true then the returned vector can be a lazy vector.

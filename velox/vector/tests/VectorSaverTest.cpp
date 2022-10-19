@@ -177,7 +177,13 @@ class VectorSaverTest : public testing::Test, public VectorTestBase {
     assertEqualLazyVectors(vector, copy);
 
     // Verify loaded lazy vector makes the round trip
-    auto rows = fuzzer.fuzzSelectivity(vector->size(), 0.7);
+    SelectivityVector rows(vector->size());
+    for (int i = 0; i < vector->size(); ++i) {
+      if (fuzzer.coinToss(0.3)) {
+        rows.setValid(i, false);
+      }
+    }
+    rows.updateBounds();
     LazyVector::ensureLoadedRows(vector, rows);
     copy = takeRoundTrip(vector);
     LazyVector::ensureLoadedRows(copy, rows);

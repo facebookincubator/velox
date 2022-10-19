@@ -516,7 +516,7 @@ VectorPtr readMapVector(
 
 void writeLazyVector(const BaseVector& vector, std::ostream& out) {
   auto lazyVector = dynamic_cast<const LazyVector*>(&vector);
-  // Nulls buffer.
+  // check if the vector was loaded.
   bool isLoaded = lazyVector->isLoaded();
   write<bool>(isLoaded, out);
 
@@ -535,7 +535,7 @@ class LoadedVectorShim : public VectorLoader {
  public:
   explicit LoadedVectorShim(VectorPtr vector) : vector_(vector) {}
 
-  void loadInternal(RowSet rowSet, ValueHook* hook, VectorPtr* result)
+  void loadInternal(RowSet /*rowSet*/, ValueHook* /*hook*/, VectorPtr* result)
       override {
     VELOX_CHECK(
         vector_ != nullptr, "This lazy vector should not have been loaded.");
