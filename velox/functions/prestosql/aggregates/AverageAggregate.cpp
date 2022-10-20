@@ -13,7 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/aggregates/AverageAggregate.h"
+#include "velox/exec/Aggregate.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/AverageDecimalAccumulator.h"
 #include "velox/vector/ComplexVector.h"

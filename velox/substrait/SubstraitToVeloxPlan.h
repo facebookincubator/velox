@@ -50,9 +50,6 @@ class SubstraitVeloxPlanConverter {
       bool validationMode = false)
       : pool_(pool), validationMode_(validationMode) {}
 
-  /// Used to convert Substrait SortRel into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(const ::substrait::SortRel& sSort);
-
   /// Used to convert Substrait JoinRel into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::JoinRel& sJoin);
 
@@ -80,17 +77,8 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::ReadRel& readRel,
       const RowTypePtr& type);
 
-  /// Convert Substrait Rel into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(const ::substrait::Rel& rel);
-
-  /// Convert Substrait RelRoot into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(const ::substrait::RelRoot& root);
-
   /// Convert Substrait SortRel into Velox OrderByNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::SortRel& sortRel);
-
-  /// Convert Substrait Plan into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(const ::substrait::Plan& substraitPlan);
 
   /// Check the Substrait type extension only has one unknown extension.
   bool checkTypeExtension(const ::substrait::Plan& substraitPlan);
@@ -169,9 +157,6 @@ class SubstraitVeloxPlanConverter {
       std::vector<const ::substrait::Expression::FieldReference*>& rightExprs);
 
  private:
-  /// Memory pool.
-  memory::MemoryPool* pool_;
-
   /// Range filter recorder for a field is used to make sure only the conditions
   /// that can coexist for this field being pushed down with a range filter.
   class RangeRecorder {
@@ -348,9 +333,9 @@ class SubstraitVeloxPlanConverter {
       uint32_t& fieldIndex);
 
   /// Separate the functions to be two parts:
-  /// subfield functions to be handled by the subfieldFilters in
-  /// HiveConnector, and remaining functions to be handled by the
-  /// remainingFilter in HiveConnector.
+  /// subfield functions to be handled by the subfieldFilters in HiveConnector,
+  /// and remaining functions to be handled by the remainingFilter in
+  /// HiveConnector.
   void separateFilters(
       const std::unordered_map<uint32_t, std::shared_ptr<RangeRecorder>>&
           rangeRecorders,

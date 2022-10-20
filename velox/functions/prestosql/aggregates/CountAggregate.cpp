@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/aggregates/CountAggregate.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/SumAggregate.h"
 
 namespace facebook::velox::aggregate::prestosql {
 

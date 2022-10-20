@@ -710,56 +710,6 @@ std::string SubstraitVeloxPlanConverter::nextPlanNodeId() {
   return id;
 }
 
-// This class contains the needed infos for Filter Pushdown.
-// TODO: Support different types here.
-class FilterInfo {
- public:
-  // Used to set the left bound.
-  void setLeft(double left, bool isExclusive) {
-    left_ = left;
-    leftExclusive_ = isExclusive;
-    if (!isInitialized_) {
-      isInitialized_ = true;
-    }
-  }
-
-  // Used to set the right bound.
-  void setRight(double right, bool isExclusive) {
-    right_ = right;
-    rightExclusive_ = isExclusive;
-    if (!isInitialized_) {
-      isInitialized_ = true;
-    }
-  }
-
-  // Will fordis Null value if called once.
-  void forbidsNull() {
-    nullAllowed_ = false;
-    if (!isInitialized_) {
-      isInitialized_ = true;
-    }
-  }
-
-  // Return the initialization status.
-  bool isInitialized() {
-    return isInitialized_ ? true : false;
-  }
-
-  // The left bound.
-  std::optional<double> left_ = std::nullopt;
-  // The right bound.
-  std::optional<double> right_ = std::nullopt;
-  // The Null allowing.
-  bool nullAllowed_ = true;
-  // If true, left bound will be exclusive.
-  bool leftExclusive_ = false;
-  // If true, right bound will be exclusive.
-  bool rightExclusive_ = false;
-
- private:
-  bool isInitialized_ = false;
-};
-
 void SubstraitVeloxPlanConverter::flattenConditions(
     const ::substrait::Expression& substraitFilter,
     std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions,

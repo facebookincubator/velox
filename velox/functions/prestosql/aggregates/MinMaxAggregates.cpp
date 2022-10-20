@@ -14,8 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/aggregates/MinMaxAggregates.h"
+#include <limits>
+#include "velox/exec/Aggregate.h"
+#include "velox/exec/AggregationHook.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
+#include "velox/functions/prestosql/aggregates/SingleValueAccumulator.h"
 
 namespace facebook::velox::aggregate::prestosql {
 
