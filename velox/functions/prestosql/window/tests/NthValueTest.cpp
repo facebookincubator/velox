@@ -233,34 +233,208 @@ TEST_F(NthValueTest, multiInputRangeFrames) {
       {vectors}, "nth_value(c0, 5)", kFrameOverClauses, kRangeFrameClauses);
 }
 
-TEST_F(NthValueTest, basicRowFrames) {
+TEST_F(NthValueTest, basicUnboundedRowFrames) {
   auto vectors = makeBasicVectors(50);
 
   testWindowFunction(
-      {vectors}, "nth_value(c0, c2)", kFrameOverClauses, kRowsFrameClauses);
+      {vectors},
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kUnboundedRowsFrameClauses);
   testWindowFunction(
-      {vectors}, "nth_value(c0, 1)", kFrameOverClauses, kRowsFrameClauses);
+      {vectors},
+      "nth_value(c0, 1)",
+      kFrameOverClauses,
+      kUnboundedRowsFrameClauses);
   testWindowFunction(
-      {vectors}, "nth_value(c0, 5)", kFrameOverClauses, kRowsFrameClauses);
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kUnboundedRowsFrameClauses);
 }
 
-TEST_F(NthValueTest, singlePartitionRowFrames) {
+TEST_F(NthValueTest, singlePartitionUnboundedRowFrames) {
   auto vectors = makeSinglePartitionVectors(400);
 
   testWindowFunction(
-      {vectors}, "nth_value(c0, c2)", kFrameOverClauses, kRowsFrameClauses);
+      {vectors},
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kUnboundedRowsFrameClauses);
   testWindowFunction(
-      {vectors}, "nth_value(c0, 5)", kFrameOverClauses, kRowsFrameClauses);
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kUnboundedRowsFrameClauses);
 }
 
-TEST_F(NthValueTest, multiInputRowFrames) {
+TEST_F(NthValueTest, multiInputUnboundedRowFrames) {
   auto vectors = makeSinglePartitionVectors(200);
   auto doubleVectors = {vectors, vectors};
 
   testWindowFunction(
-      doubleVectors, "nth_value(c0, c2)", kFrameOverClauses, kRowsFrameClauses);
+      doubleVectors,
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kUnboundedRowsFrameClauses);
   testWindowFunction(
-      {vectors}, "nth_value(c0, 5)", kFrameOverClauses, kRowsFrameClauses);
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kUnboundedRowsFrameClauses);
+}
+
+TEST_F(NthValueTest, basicConstantKBoundedRowFrames) {
+  auto vectors = makeBasicVectors(50);
+
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kConstantKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 1)",
+      kFrameOverClauses,
+      kConstantKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kConstantKBoundedRowsFrameClauses);
+}
+
+TEST_F(NthValueTest, singlePartitionConstantKBoundedRowFrames) {
+  auto vectors = makeSinglePartitionVectors(400);
+
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kConstantKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kConstantKBoundedRowsFrameClauses);
+}
+
+TEST_F(NthValueTest, multiInputConstantKBoundedRowFrames) {
+  auto vectors = makeSinglePartitionVectors(200);
+  auto doubleVectors = {vectors, vectors};
+
+  testWindowFunction(
+      doubleVectors,
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kConstantKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kConstantKBoundedRowsFrameClauses);
+}
+
+TEST_F(NthValueTest, basicColumnarKBoundedRowFrames) {
+  auto vectors = makeBasicVectors(50);
+
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kColumnarKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 1)",
+      kFrameOverClauses,
+      kColumnarKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kColumnarKBoundedRowsFrameClauses);
+}
+
+TEST_F(NthValueTest, singlePartitionColumnarKBoundedRowFrames) {
+  auto vectors = makeSinglePartitionVectors(400);
+
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kColumnarKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kColumnarKBoundedRowsFrameClauses);
+}
+
+TEST_F(NthValueTest, multiInputColumnarKBoundedRowFrames) {
+  auto vectors = makeSinglePartitionVectors(200);
+  auto doubleVectors = {vectors, vectors};
+
+  testWindowFunction(
+      doubleVectors,
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kColumnarKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kColumnarKBoundedRowsFrameClauses);
+}
+
+TEST_F(NthValueTest, basicEmptyKBoundedRowFrames) {
+  auto vectors = makeBasicVectors(50);
+
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kEmptyKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 1)",
+      kFrameOverClauses,
+      kEmptyKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kEmptyKBoundedRowsFrameClauses);
+}
+
+TEST_F(NthValueTest, singlePartitionEmptyKBoundedRowFrames) {
+  auto vectors = makeSinglePartitionVectors(400);
+
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kEmptyKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kEmptyKBoundedRowsFrameClauses);
+}
+
+TEST_F(NthValueTest, multiInputEmptyKBoundedRowFrames) {
+  auto vectors = makeSinglePartitionVectors(200);
+  auto doubleVectors = {vectors, vectors};
+
+  testWindowFunction(
+      doubleVectors,
+      "nth_value(c0, c2)",
+      kFrameOverClauses,
+      kEmptyKBoundedRowsFrameClauses);
+  testWindowFunction(
+      {vectors},
+      "nth_value(c0, 5)",
+      kFrameOverClauses,
+      kEmptyKBoundedRowsFrameClauses);
 }
 
 }; // namespace

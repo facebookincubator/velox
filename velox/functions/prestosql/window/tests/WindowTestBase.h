@@ -75,11 +75,52 @@ static std::vector<std::string> kRangeFrameClauses = {
 
 /// Common set of window function frame clauses in ROWS mode, with current row,
 /// unbounded preceding, and unbounded following frame combinations.
-static std::vector<std::string> kRowsFrameClauses = {
+static std::vector<std::string> kUnboundedRowsFrameClauses = {
     "rows unbounded preceding",
     "rows current row",
     "rows between current row and unbounded following",
     "rows between unbounded preceding and unbounded following",
+};
+
+/// Common set of window function frame clauses in ROWS mode, with current row,
+/// unbounded preceding, unbounded following, k preceding, and k following
+/// frame combinations where k is a constant integer.
+static std::vector<std::string> kConstantKBoundedRowsFrameClauses = {
+    "rows between 1 preceding and current row",
+    "rows between 5 preceding and current row",
+    "rows between 1 preceding and unbounded following",
+    "rows between 5 preceding and unbounded following",
+    "rows between current row and 1 following",
+    "rows between current row and 5 following",
+    "rows between unbounded preceding and 1 following",
+    "rows between unbounded preceding and 5 following",
+    "rows between 1 preceding and 5 following",
+    "rows between 5 preceding and 1 following",
+    "rows between 1 preceding and 1 following",
+    "rows between 5 preceding and 5 following",
+};
+
+/// Common set of window function frame clauses in ROWS mode, with current row,
+/// unbounded preceding, unbounded following, k preceding, and k following
+/// frame combinations where k is a column.
+static std::vector<std::string> kColumnarKBoundedRowsFrameClauses = {
+    "rows between c2 preceding and current row",
+    "rows between c2 preceding and unbounded following",
+    "rows between current row and c2 following",
+    "rows between unbounded preceding and c2 following",
+    "rows between c2 preceding and c2 following",
+};
+
+/// Common set of window function frame clauses in ROWS mode, with unbounded
+/// preceding, unbounded following, k preceding, and k following empty frame
+/// combinations where k is a constant integer or a column.
+static std::vector<std::string> kEmptyKBoundedRowsFrameClauses = {
+    "rows between 1 following and unbounded following",
+    "rows between 5 following and unbounded following",
+    "rows between unbounded preceding and 1 preceding",
+    "rows between unbounded preceding and 5 preceding",
+    "rows between unbounded preceding and c2 preceding",
+    "rows between c2 following and unbounded following",
 };
 
 class WindowTestBase : public exec::test::OperatorTestBase {

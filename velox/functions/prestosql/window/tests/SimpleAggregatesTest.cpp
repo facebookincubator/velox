@@ -40,7 +40,8 @@ class SimpleAggregatesTest : public WindowTestBase {
     return makeRowVector({
         makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
         makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
-        makeFlatVector<int32_t>(size, [](auto row) -> int32_t { return row; }),
+        makeFlatVector<int32_t>(
+            size, [](auto row) -> int32_t { return row + 1; }),
     });
   }
 
@@ -124,14 +125,58 @@ TEST_P(MultiAggregatesTest, singlePartitionRangeFrames) {
       {makeSinglePartitionVector(100)}, kFrameOverClauses, kRangeFrameClauses);
 }
 
-TEST_P(MultiAggregatesTest, basicRowFrames) {
+TEST_P(MultiAggregatesTest, basicUnboundedRowFrames) {
   SimpleAggregatesTest::testWindowFunction(
-      {makeBasicVectors(50)}, kFrameOverClauses, kRowsFrameClauses);
+      {makeBasicVectors(50)}, kFrameOverClauses, kUnboundedRowsFrameClauses);
 }
 
-TEST_P(MultiAggregatesTest, singlePartitionRowFrames) {
+TEST_P(MultiAggregatesTest, singlePartitionUnboundedRowFrames) {
   SimpleAggregatesTest::testWindowFunction(
-      {makeSinglePartitionVector(100)}, kFrameOverClauses, kRowsFrameClauses);
+      {makeSinglePartitionVector(100)},
+      kFrameOverClauses,
+      kUnboundedRowsFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, basicConstantKBoundedRowFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeBasicVectors(50)},
+      kFrameOverClauses,
+      kConstantKBoundedRowsFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, singlePartitionConstantKBoundedRowFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeSinglePartitionVector(100)},
+      kFrameOverClauses,
+      kConstantKBoundedRowsFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, basicColumnarKBoundedRowFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeBasicVectors(50)},
+      kFrameOverClauses,
+      kColumnarKBoundedRowsFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, singlePartitionColumnarKBoundedRowFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeSinglePartitionVector(100)},
+      kFrameOverClauses,
+      kColumnarKBoundedRowsFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, basicEmptyKBoundedRowFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeBasicVectors(50)},
+      kFrameOverClauses,
+      kEmptyKBoundedRowsFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, singlePartitionEmptyKBoundedRowFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeSinglePartitionVector(100)},
+      kFrameOverClauses,
+      kEmptyKBoundedRowsFrameClauses);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
