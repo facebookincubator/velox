@@ -224,7 +224,8 @@ bool SubstraitToVeloxPlanValidator::validate(
     case ::substrait::JoinRel_JoinType_JOIN_TYPE_OUTER:
     case ::substrait::JoinRel_JoinType_JOIN_TYPE_LEFT:
     case ::substrait::JoinRel_JoinType_JOIN_TYPE_RIGHT:
-    case ::substrait::JoinRel_JoinType_JOIN_TYPE_SEMI:
+    case ::substrait::JoinRel_JoinType_JOIN_TYPE_LEFT_SEMI:
+    case ::substrait::JoinRel_JoinType_JOIN_TYPE_RIGHT_SEMI:
     case ::substrait::JoinRel_JoinType_JOIN_TYPE_ANTI:
       break;
     default:

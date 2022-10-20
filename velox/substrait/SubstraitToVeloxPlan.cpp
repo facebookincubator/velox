@@ -167,8 +167,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_RIGHT:
       joinType = core::JoinType::kRight;
       break;
-    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_SEMI:
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_LEFT_SEMI:
       joinType = core::JoinType::kLeftSemi;
+      break;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_RIGHT_SEMI:
+      joinType = core::JoinType::kRightSemi;
       break;
     case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_ANTI:
       joinType = core::JoinType::kNullAwareAnti;
