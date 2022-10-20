@@ -14,7 +14,6 @@
 
 # write all cmake var in a file for post-processing
 
-set(CODEGEN_LINK_PATH "$<TARGET_FILE:velox_all_link>")
 get_directory_property(DEFINED_VARIABLE VARIABLES)
 foreach(VR IN LISTS DEFINED_VARIABLE)
   set(CMAKE_VARS "${CMAKE_VARS}\n${VR}=${${VR}}")

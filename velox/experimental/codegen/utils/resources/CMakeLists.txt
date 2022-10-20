@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(CODEGEN_LINK_PATH "$<TARGET_FILE:velox_all_link>")
 get_directory_property(DEFINED_VARIABLE VARIABLES)
 foreach(VR IN LISTS DEFINED_VARIABLE)
   set(CMAKE_VARS "${CMAKE_VARS}\n${VR}=${${VR}}")
