@@ -34,8 +34,12 @@ struct QueryInfo {
 QueryInfo buildWindowQuery(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
-    const std::string& overClause) {
-  auto functionSql = fmt::format("{} over ({})", function, overClause);
+    const std::string& overClause,
+    const std::optional<std::string> frameClause = "") {
+  auto functionSql = frameClause
+      ? fmt::format(
+            "{} over ({} {})", function, overClause, frameClause.value())
+      : fmt::format("{} over ({})", function, overClause);
 
   auto op = PlanBuilder().values(input).window({functionSql}).planNode();
 
@@ -69,27 +73,20 @@ std::vector<RowVectorPtr> WindowTestBase::makeVectors(
 void WindowTestBase::testWindowFunction(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
-    const std::string& overClause) {
-  auto queryInfo = buildWindowQuery(input, function, overClause);
+    const std::string& overClause,
+    const std::optional<std::string>& frameClause) {
+  auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
   SCOPED_TRACE(queryInfo.functionSql);
   assertQuery(queryInfo.planNode, queryInfo.querySql);
-}
-
-void WindowTestBase::testWindowFunction(
-    const std::vector<RowVectorPtr>& input,
-    const std::string& function,
-    const std::vector<std::string>& overClauses) {
-  for (const auto& overClause : overClauses) {
-    testWindowFunction(input, function, overClause);
-  }
 }
 
 void WindowTestBase::assertWindowFunctionError(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
     const std::string& overClause,
-    const std::string& errorMessage) {
-  auto queryInfo = buildWindowQuery(input, function, overClause);
+    const std::string& errorMessage,
+    const std::optional<std::string>& frameClause) {
+  auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
   SCOPED_TRACE(queryInfo.functionSql);
 
   VELOX_ASSERT_THROW(
@@ -98,33 +95,17 @@ void WindowTestBase::assertWindowFunctionError(
 
 void WindowTestBase::testTwoColumnOverClauses(
     const std::vector<RowVectorPtr>& input,
-    const std::string& windowFunction) {
+    const std::string& windowFunction,
+    const std::string& overClause,
+    const std::optional<std::string>& frameClause) {
   VELOX_CHECK_GE(input[0]->childrenSize(), 2);
 
-  std::vector<std::string> overClauses = {
-      "partition by c0 order by c1",
-      "partition by c1 order by c0",
-      "partition by c0 order by c1 desc",
-      "partition by c1 order by c0 desc",
-      "partition by c0 order by c1 nulls first",
-      "partition by c1 order by c0 nulls first",
-      "partition by c0 order by c1 desc nulls first",
-      "partition by c1 order by c0 desc nulls first",
-      // No partition by clause.
-      "order by c0, c1",
-      "order by c1, c0",
-      "order by c0 asc, c1 desc",
-      "order by c1 asc, c0 desc",
-      "order by c0 asc nulls first, c1 desc nulls first",
-      "order by c1 asc nulls first, c0 desc nulls first",
-      "order by c0 desc nulls first, c1 asc nulls first",
-      "order by c1 desc nulls first, c0 asc nulls first",
-      // No order by clause.
-      "partition by c0, c1",
-  };
-
   createDuckDbTable(input);
-  testWindowFunction(input, windowFunction, overClauses);
+  if (frameClause) {
+    testWindowFunction(input, windowFunction, overClause, frameClause);
+  } else {
+    testWindowFunction(input, windowFunction, overClause);
+  }
 
   // Invoking with same vector set twice so that the underlying WindowFunction
   // receives the same data set multiple times and does a full processing
@@ -133,7 +114,11 @@ void WindowTestBase::testTwoColumnOverClauses(
   doubleInput.insert(doubleInput.end(), input.begin(), input.end());
   doubleInput.insert(doubleInput.end(), input.begin(), input.end());
   createDuckDbTable(doubleInput);
-  testWindowFunction(doubleInput, windowFunction, overClauses);
+  if (frameClause) {
+    testWindowFunction(doubleInput, windowFunction, overClause, frameClause);
+  } else {
+    testWindowFunction(doubleInput, windowFunction, overClause);
+  }
 }
 
 }; // namespace facebook::velox::window::test

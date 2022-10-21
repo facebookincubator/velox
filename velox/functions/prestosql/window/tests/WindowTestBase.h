@@ -31,15 +31,6 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       int numVectors,
       float nullRatio = 0.0);
 
-  // This function tests SQL queries for the window function and
-  // the specified overClauses with the input RowVectors.
-  // Note : 'function' should be a full window function invocation string
-  // including input parameters and open/close braces. e.g. rank(), ntile(5)
-  void testWindowFunction(
-      const std::vector<RowVectorPtr>& input,
-      const std::string& function,
-      const std::vector<std::string>& overClauses);
-
   // This function tests the SQL query for the window function and overClause
   // combination with the input RowVectors. It is expected that query execution
   // will throw an exception with the errorMessage specified.
@@ -47,7 +38,8 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::vector<RowVectorPtr>& input,
       const std::string& function,
       const std::string& overClause,
-      const std::string& errorMessage);
+      const std::string& errorMessage,
+      const std::optional<std::string>& frameClause = "");
 
   // This function operates on input RowVectors that have at least 2 columns.
   // It verifies (for the windowFunction) SQL queries with varying over
@@ -57,12 +49,14 @@ class WindowTestBase : public exec::test::OperatorTestBase {
   // including input parameters and open/close braces. e.g. rank(), ntile(5)
   void testTwoColumnOverClauses(
       const std::vector<RowVectorPtr>& input,
-      const std::string& windowFunction);
+      const std::string& windowFunction,
+      const std::string& overClause,
+      const std::optional<std::string>& frameClause = "");
 
- private:
   void testWindowFunction(
       const std::vector<RowVectorPtr>& input,
       const std::string& function,
-      const std::string& overClause);
+      const std::string& overClause,
+      const std::optional<std::string>& frameClause = "");
 };
 }; // namespace facebook::velox::window::test
