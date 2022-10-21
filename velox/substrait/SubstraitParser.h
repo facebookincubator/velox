@@ -101,6 +101,8 @@ class SubstraitParser {
       {"gt", "greaterthan"},
       {"gte", "greaterthanorequal"},
       {"not_equal", "notequalto"},
+      {"char_length", "length"},
+      {"strpos", "instr"},
       {"ends_with", "endswith"},
       {"starts_with", "startswith"},
       {"modulus", "mod"} /*Presto functions.*/};
