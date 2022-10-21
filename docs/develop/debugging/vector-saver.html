@@ -106,7 +106,7 @@ are supported. Decimal, opaque and function types are not supported.</p>
 <ul class="simple">
 <li><dl class="simple">
 <dt>Encoding. 4 bytes</dt><dd><ul>
-<li><p>0 - FLAT, 1 - CONSTANT, 2 - DICTIONARY</p></li>
+<li><p>0 - FLAT, 1 - CONSTANT, 2 - DICTIONARY, 3 - LAZY</p></li>
 </ul>
 </dd>
 </dl>
@@ -221,6 +221,24 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 <li><p>Base vector.</p></li>
 </ul>
 </section>
+<section id="lazy-vector">
+<h3>Lazy Vector<a class="headerlink" href="#lazy-vector" title="Permalink to this headline">¶</a></h3>
+<ul class="simple">
+<li><p>Header</p></li>
+<li><p>Boolean indicating the presence of the loaded vector. 1 byte.</p></li>
+<li><p>Loaded vector (if present).</p></li>
+</ul>
+<p>The objective behind serializing lazy vectors is only to recreate the state of
+these vectors when they were serialized. This would help in quickly reproducing
+the error (that initiated its serialization) as the lazy vector would end up
+in the same state if the same steps are executed that resulted in an error
+in the first place.
+This also means that when the deserialized lazy vector is loaded, it will load the exact
+loaded vector that was serialized regardless of which rows it was asked to load.
+Moreover, if the vector was not loaded when it was serialized then the deserialized
+instance will throw if an attempt is made to load it. Therefore, it should only
+be used to reproduce the error and not in any other context like testing a fix.</p>
+</section>
 </section>
 </section>
 
@@ -246,6 +264,7 @@ view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
 <li><a class="reference internal" href="#flat-map-vector">Flat Map Vector</a></li>
 <li><a class="reference internal" href="#constant-vector">Constant Vector</a></li>
 <li><a class="reference internal" href="#dictionary-vector">Dictionary Vector</a></li>
+<li><a class="reference internal" href="#lazy-vector">Lazy Vector</a></li>
 </ul>
 </li>
 </ul>
