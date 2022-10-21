@@ -74,7 +74,7 @@ void WindowTestBase::testWindowFunction(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
     const std::string& overClause,
-    const std::optional<std::string>& frameClause) {
+    const std::string& frameClause) {
   auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
   SCOPED_TRACE(queryInfo.functionSql);
   assertQuery(queryInfo.planNode, queryInfo.querySql);
@@ -85,7 +85,7 @@ void WindowTestBase::assertWindowFunctionError(
     const std::string& function,
     const std::string& overClause,
     const std::string& errorMessage,
-    const std::optional<std::string>& frameClause) {
+    const std::string& frameClause) {
   auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
   SCOPED_TRACE(queryInfo.functionSql);
 
@@ -97,11 +97,11 @@ void WindowTestBase::testTwoColumnOverClauses(
     const std::vector<RowVectorPtr>& input,
     const std::string& windowFunction,
     const std::string& overClause,
-    const std::optional<std::string>& frameClause) {
+    const std::string& frameClause) {
   VELOX_CHECK_GE(input[0]->childrenSize(), 2);
 
   createDuckDbTable(input);
-  if (frameClause) {
+  if (frameClause.size()) {
     testWindowFunction(input, windowFunction, overClause, frameClause);
   } else {
     testWindowFunction(input, windowFunction, overClause);
@@ -114,7 +114,7 @@ void WindowTestBase::testTwoColumnOverClauses(
   doubleInput.insert(doubleInput.end(), input.begin(), input.end());
   doubleInput.insert(doubleInput.end(), input.begin(), input.end());
   createDuckDbTable(doubleInput);
-  if (frameClause) {
+  if (frameClause.size()) {
     testWindowFunction(doubleInput, windowFunction, overClause, frameClause);
   } else {
     testWindowFunction(doubleInput, windowFunction, overClause);

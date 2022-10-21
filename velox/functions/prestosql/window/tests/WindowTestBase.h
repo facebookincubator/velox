@@ -39,7 +39,7 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& function,
       const std::string& overClause,
       const std::string& errorMessage,
-      const std::optional<std::string>& frameClause = "");
+      const std::string& frameClause = "");
 
   // This function operates on input RowVectors that have at least 2 columns.
   // It verifies (for the windowFunction) SQL queries with varying over
@@ -51,12 +51,12 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::vector<RowVectorPtr>& input,
       const std::string& windowFunction,
       const std::string& overClause,
-      const std::optional<std::string>& frameClause = "");
+      const std::string& frameClause = "");
 
   void testWindowFunction(
       const std::vector<RowVectorPtr>& input,
       const std::string& function,
       const std::string& overClause,
-      const std::optional<std::string>& frameClause = "");
+      const std::string& frameClause = "");
 };
 }; // namespace facebook::velox::window::test
