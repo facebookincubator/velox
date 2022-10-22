@@ -48,9 +48,8 @@ and NOT EXISTS &lt;subquery&gt; clauses. The semantics of these queries are diff
 in the presence of NULLs in the outer query or subquery. NOT IN semantics are
 implemented by the null aware anti join. NOT EXISTS semantics are implemented
 by the regular anti join.</p>
-<p>Currently, Velox provides only null aware anti join via the JoinType::kAnti.
-Regular anti join is not available. We will rename kAnti to kNullAwareAnti for
-clarity and introduce a new kAnti join type for the regular anti join.</p>
+<p>Velox provides regular anti join via <code class="docutils literal notranslate"><span class="pre">JoinType::kAnti</span></code> and null-aware anti
+join via <code class="docutils literal notranslate"><span class="pre">JoinType::kNullAwareAnti</span></code>.</p>
 <p>This article explains the differences in semantics between NOT IN and NOT EXISTS
 queries and discusses the implementation of these in the null aware and regular
 anti joins.</p>
@@ -549,17 +548,6 @@ in the results. If there are matches, the extra filter needs to be evaluated.
 If the filter comes out empty, the row is included in the results.</p>
 </section>
 </section>
-<section id="summary">
-<h2>Summary<a class="headerlink" href="#summary" title="Permalink to this headline">¶</a></h2>
-<p>Velox currently provides null aware anti join via the JoinType::kAnti. Regular
-anti join is not available. There is also a bug in filter processing where the
-join always returns empty results if there is a build side row with null in the
-join key.</p>
-<p>To provide full support for efficient execution of NOT IN and NOT EXISTS
-queries, we will rename kAnti to kNullAwareAnti and introduce a new kAnti join
-type for the regular anti join. We will also fix the bug in null aware anti
-join with filter.</p>
-</section>
 </section>
 
 
@@ -595,7 +583,6 @@ join with filter.</p>
 <li><a class="reference internal" href="#anti-join-with-filter">ANTI JOIN with Filter</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#summary">Summary</a></li>
 </ul>
 </li>
 </ul>
