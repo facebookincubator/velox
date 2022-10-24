@@ -20,60 +20,74 @@ namespace facebook::velox::window::prestosql {
 
 namespace {
 
-enum class FirstLastType {
-  kFirst,
-  kLast,
-};
-
-template <FirstLastType TValue>
-class FirstLastValueFunction : public ValueFunction<ValueType::kFirstLast> {
+template <ValueType TValue>
+class LeadLagFunction : public ValueFunction<TValue> {
  public:
-  explicit FirstLastValueFunction(
+  explicit LeadLagFunction(
       const std::vector<exec::WindowFunctionArg>& args,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool)
-      : ValueFunction(args, resultType, pool) {}
+      : ValueFunction<TValue>(args, resultType, pool) {}
 
   void resetPartition(const exec::WindowPartition* partition) override {
-    partition_ = partition;
+    ValueFunction<TValue>::partition_ = partition;
+    ValueFunction<TValue>::numPartitionRows_ = partition->numRows();
+    ValueFunction<TValue>::partitionOffset_ = 0;
   }
 
   void apply(
       const BufferPtr& /*peerGroupStarts*/,
       const BufferPtr& /*peerGroupEnds*/,
       const BufferPtr& frameStarts,
-      const BufferPtr& frameEnds,
+      const BufferPtr& /*frameEnds*/,
       const SelectivityVector& validRows,
       int32_t resultOffset,
       const VectorPtr& result) override {
     auto numRows = frameStarts->size() / sizeof(vector_size_t);
-    rowNumbers_.resize(numRows);
-
-    if constexpr (TValue == FirstLastType::kFirst) {
-      auto rawFrameStarts = frameStarts->as<vector_size_t>();
-      validRows.applyToSelected(
-          [&](auto i) { rowNumbers_[i] = rawFrameStarts[i]; });
-    } else {
-      auto rawFrameEnds = frameEnds->as<vector_size_t>();
-      validRows.applyToSelected(
-          [&](auto i) { rowNumbers_[i] = rawFrameEnds[i]; });
+    auto partitionLimit = 0;
+    if constexpr (TValue == ValueType::kLead) {
+      partitionLimit = ValueFunction<TValue>::numPartitionRows_ - 1;
     }
-    setRowNumbersForEmptyFrames(validRows);
+    ValueFunction<TValue>::rowNumbers_.resize(numRows);
 
-    auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
-    partition_->extractColumn(
-        valueIndex_, rowNumbersRange, resultOffset, result);
+    if (ValueFunction<TValue>::constantOffset_.has_value() ||
+        ValueFunction<TValue>::isConstantOffsetNull_) {
+      ValueFunction<TValue>::setRowNumbersForConstantOffset(numRows, validRows);
+    } else {
+      ValueFunction<TValue>::setRowNumbers(numRows, validRows);
+    }
+
+    auto rowNumbersRange =
+        folly::Range(ValueFunction<TValue>::rowNumbers_.data(), numRows);
+    ValueFunction<TValue>::partition_->extractColumn(
+        ValueFunction<TValue>::valueIndex_,
+        rowNumbersRange,
+        resultOffset,
+        result);
+    ValueFunction<TValue>::partitionOffset_ += numRows;
   }
 };
 } // namespace
 
-template <FirstLastType TValue>
-void registerFirstLastInternal(const std::string& name) {
-  // T -> T
+template <ValueType TValue>
+void registerLeadLagInternal(const std::string& name) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
           .typeVariable("T")
           .returnType("T")
+          .argumentType("T")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("T")
+          .argumentType("T")
+          .argumentType("bigint")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("T")
+          .argumentType("T")
+          .argumentType("bigint")
           .argumentType("T")
           .build(),
   };
@@ -86,15 +100,16 @@ void registerFirstLastInternal(const std::string& name) {
          velox::memory::MemoryPool* pool,
          HashStringAllocator* /*stringAllocator*/)
           -> std::unique_ptr<exec::WindowFunction> {
-        return std::make_unique<FirstLastValueFunction<TValue>>(
+        return std::make_unique<LeadLagFunction<TValue>>(
             args, resultType, pool);
       });
 }
 
-void registerFirstValue(const std::string& name) {
-  registerFirstLastInternal<FirstLastType::kFirst>(name);
+void registerLead(const std::string& name) {
+  registerLeadLagInternal<ValueType::kLead>(name);
 }
-void registerLastValue(const std::string& name) {
-  registerFirstLastInternal<FirstLastType::kLast>(name);
+
+void registerLag(const std::string& name) {
+  registerLeadLagInternal<ValueType::kLag>(name);
 }
 } // namespace facebook::velox::window::prestosql

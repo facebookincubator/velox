@@ -20,6 +20,7 @@ add_library(
   CumeDist.cpp
   FirstLastValue.cpp
   NthValue.cpp
+  LeadLag.cpp
   Ntile.cpp
   Rank.cpp
   RowNumber.cpp
