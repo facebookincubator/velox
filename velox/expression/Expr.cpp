@@ -284,7 +284,11 @@ void Expr::evalSimplifiedImpl(
     inputs_[i]->evalSimplified(remainingRows, context, inputValue);
 
     BaseVector::flattenVector(inputValue, rows.end());
-    VELOX_CHECK_EQ(VectorEncoding::Simple::FLAT, inputValue->encoding());
+    VELOX_CHECK(
+        inputValue->encoding() == VectorEncoding::Simple::FLAT ||
+        inputValue->encoding() == VectorEncoding::Simple::ARRAY ||
+        inputValue->encoding() == VectorEncoding::Simple::MAP ||
+        inputValue->encoding() == VectorEncoding::Simple::ROW);
 
     // If the resulting vector has nulls, merge them into our current remaining
     // rows bitmap.
@@ -908,26 +912,36 @@ bool Expr::removeSureNulls(
   return false;
 }
 
+// static
 void Expr::addNulls(
     const SelectivityVector& rows,
     const uint64_t* rawNulls,
     EvalCtx& context,
+    const TypePtr& type,
     VectorPtr& result) {
   // If there's no `result` yet, return a NULL ContantVector.
   if (!result) {
-    result =
-        BaseVector::createNullConstant(type(), rows.size(), context.pool());
+    result = BaseVector::createNullConstant(type, rows.end(), context.pool());
     return;
   }
 
-  // If result is already a NULL ConstantVector, do nothing.
-  if (result->isConstantEncoding() && result->mayHaveNulls()) {
+  // If result is already a NULL ConstantVector, resize the vector if necessary,
+  // or do nothing otherwise.
+  if (result->isConstantEncoding() && result->isNullAt(0)) {
+    if (result->size() < rows.end()) {
+      if (result.unique()) {
+        result->resize(rows.end());
+      } else {
+        result =
+            BaseVector::createNullConstant(type, rows.end(), context.pool());
+      }
+    }
     return;
   }
 
   if (!result.unique() || !result->isNullsWritable()) {
     BaseVector::ensureWritable(
-        SelectivityVector::empty(), type(), context.pool(), result);
+        SelectivityVector::empty(), type, context.pool(), result);
   }
 
   if (result->size() < rows.end()) {
@@ -935,6 +949,14 @@ void Expr::addNulls(
   }
 
   result->addNulls(rawNulls, rows);
+}
+
+void Expr::addNulls(
+    const SelectivityVector& rows,
+    const uint64_t* FOLLY_NULLABLE rawNulls,
+    EvalCtx& context,
+    VectorPtr& result) {
+  addNulls(rows, rawNulls, context, type(), result);
 }
 
 void Expr::evalWithNulls(

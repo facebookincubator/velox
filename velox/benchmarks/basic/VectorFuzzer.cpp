@@ -15,6 +15,8 @@
  */
 
 #include <folly/Benchmark.h>
+#include <folly/init/Init.h>
+
 #include <gflags/gflags.h>
 
 #include "velox/common/memory/Memory.h"
@@ -126,6 +128,7 @@ BENCHMARK_RELATIVE_MULTI(flatMapArrayNested, n) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+  folly::init(&argc, &argv);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   folly::runBenchmarks();
   return 0;

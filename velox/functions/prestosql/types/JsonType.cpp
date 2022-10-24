@@ -25,9 +25,10 @@
 #include "folly/json.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/expression/EvalCtx.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorWriters.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -165,8 +166,12 @@ struct AsJson {
       exec::EvalCtx& context,
       const VectorPtr& input,
       const SelectivityVector& rows,
+      const BufferPtr& elementToTopLevelRows,
       bool isMapKey = false)
       : decoded_(context, *input, rows) {
+    exec::EvalCtx::ErrorVectorPtr oldErrors;
+    context.swapErrors(oldErrors);
+
     if (isMapKey && decoded_->mayHaveNulls()) {
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         if (decoded_->isNullAt(row)) {
@@ -178,32 +183,39 @@ struct AsJson {
     if (isJsonType(input->type())) {
       json_ = nullptr;
       jsonStrings_ = decoded_->base()->as<SimpleVector<StringView>>();
+      combineErrors(context, rows, elementToTopLevelRows, oldErrors);
       return;
     }
 
-    // Translates the selected rows of input into the corresponding rows of the
-    // base of the decoded input.
-    exec::LocalSelectivityVector baseRows(
-        *context.execCtx(), decoded_->base()->size());
-    baseRows->clearAll();
-    context.applyToSelectedNoThrow(rows, [&](auto row) {
-      baseRows->setValid(decoded_->index(row), true);
-    });
-    baseRows->updateBounds();
+    if (decoded_->isIdentityMapping() || !rows.hasSelections()) {
+      doCast(context, rows, isMapKey);
+    } else {
+      // If decoded_ has constant or dictionary encoding, we peel off the
+      // encoding before casting the base vector and wrap the result with the
+      // encoding afterwards. To comply with TRY expression, the errors recorded
+      // during the casting need to be wrapped with the encoding as well.
+      // ScopedContextSaver automatically handles the wrapping to the error
+      // vector.
+      exec::ScopedContextSaver saver;
+      exec::LocalSelectivityVector baseRows(
+          *context.execCtx(), decoded_->base()->size());
 
-    context.ensureWritable(*baseRows, JSON(), json_);
-    auto flatJsonStrings = json_->as<FlatVector<StringView>>();
+      if (decoded_->isConstantMapping()) {
+        auto index = decoded_->index(rows.begin());
+        singleRow(baseRows, index);
+        context.saveAndReset(saver, rows);
+        context.setConstantWrap(index);
+      } else {
+        translateToInnerRows(rows, *decoded_, baseRows);
+        context.saveAndReset(saver, rows);
+        auto wrapping = decoded_->dictionaryWrapping(*input, rows);
+        context.setDictionaryWrap(
+            std::move(wrapping.indices), std::move(wrapping.nulls));
+      }
 
-    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-        castToJson,
-        input->typeKind(),
-        *decoded_->base(),
-        context,
-        *baseRows,
-        *flatJsonStrings,
-        isMapKey);
-
-    jsonStrings_ = flatJsonStrings;
+      doCast(context, *baseRows, isMapKey);
+    }
+    combineErrors(context, rows, elementToTopLevelRows, oldErrors);
   }
 
   StringView at(vector_size_t i) const {
@@ -231,6 +243,47 @@ struct AsJson {
     }
   }
 
+ private:
+  void doCast(
+      exec::EvalCtx& context,
+      const SelectivityVector& baseRows,
+      bool isMapKey) {
+    context.ensureWritable(baseRows, JSON(), json_);
+    auto flatJsonStrings = json_->as<FlatVector<StringView>>();
+
+    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+        castToJson,
+        decoded_->base()->typeKind(),
+        *decoded_->base(),
+        context,
+        baseRows,
+        *flatJsonStrings,
+        isMapKey);
+
+    jsonStrings_ = flatJsonStrings;
+  }
+
+  // Combine exceptions in oldErrors into context.errors_ with a transformation
+  // of rows mapping provided by elementToTopLevelRows. If there are exceptions
+  // at the same row in both context.errors_ and oldErrors, the one in oldErrors
+  // remains. elementToTopLevelRows can be a nullptr, meaning that the rows in
+  // context.errors_ correspond to rows in oldErrors exactly.
+  void combineErrors(
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      const BufferPtr& elementToTopLevelRows,
+      exec::EvalCtx::ErrorVectorPtr& oldErrors) {
+    if (context.errors()) {
+      if (elementToTopLevelRows) {
+        context.addElementErrorsToTopLevel(
+            rows, elementToTopLevelRows, oldErrors);
+      } else {
+        context.addErrors(rows, *context.errorsPtr(), oldErrors);
+      }
+    }
+    context.swapErrors(oldErrors);
+  }
+
   exec::LocalDecodedVector decoded_;
   VectorPtr json_;
   const SimpleVector<StringView>* jsonStrings_;
@@ -247,7 +300,9 @@ void castToJsonFromArray(
   auto elements = inputArray->elements();
   auto elementsRows =
       functions::toElementRows(elements->size(), rows, inputArray);
-  AsJson elementsAsJson{context, elements, elementsRows};
+  auto elementToTopLevelRows = functions::getElementToTopLevelRows(
+      elements->size(), rows, inputArray, context.pool());
+  AsJson elementsAsJson{context, elements, elementsRows, elementToTopLevelRows};
 
   // Estimates an upperbound of the total length of all Json strings for the
   // input according to the length of all elements Json strings and the
@@ -307,11 +362,13 @@ void castToJsonFromMap(
   auto mapKeys = inputMap->mapKeys();
   auto mapValues = inputMap->mapValues();
   auto elementsRows = functions::toElementRows(mapKeys->size(), rows, inputMap);
-
+  auto elementToTopLevelRows = functions::getElementToTopLevelRows(
+      mapKeys->size(), rows, inputMap, context.pool());
   // Maps with unsupported key types should have already been rejected by
   // JsonCastOperator::isSupportedType() beforehand.
-  AsJson keysAsJson{context, mapKeys, elementsRows, true};
-  AsJson valuesAsJson{context, mapValues, elementsRows};
+  AsJson keysAsJson{
+      context, mapKeys, elementsRows, elementToTopLevelRows, true};
+  AsJson valuesAsJson{context, mapValues, elementsRows, elementToTopLevelRows};
 
   // Estimates an upperbound of the total length of all Json strings for the
   // input according to the length of all elements Json strings and the
@@ -387,7 +444,7 @@ void castToJsonFromRow(
   size_t childrenStringSize = 0;
   std::vector<AsJson> childrenAsJson;
   for (int i = 0; i < childrenSize; ++i) {
-    childrenAsJson.emplace_back(context, inputRow->childAt(i), rows);
+    childrenAsJson.emplace_back(context, inputRow->childAt(i), rows, nullptr);
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       if (inputRow->isNullAt(row)) {

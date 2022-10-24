@@ -16,6 +16,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/vector/FunctionVector.h"
 
 namespace facebook::velox::functions {
@@ -58,6 +59,9 @@ class TransformValuesFunction : public exec::VectorFunction {
 
     VectorPtr transformedValues;
 
+    auto elementToTopLevelRows = getElementToTopLevelRows(
+        numValues, rows, flatMap.get(), context.pool());
+
     // Loop over lambda functions and apply these to values of the map.
     // In most cases there will be only one function and the loop will run once.
     auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
@@ -73,6 +77,7 @@ class TransformValuesFunction : public exec::VectorFunction {
           wrapCapture,
           &context,
           lambdaArgs,
+          elementToTopLevelRows,
           &transformedValues);
     }
 

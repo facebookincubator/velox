@@ -15,6 +15,8 @@
  */
 
 #include <folly/Benchmark.h>
+#include <folly/init/Init.h>
+
 #include <gflags/gflags.h>
 
 #include "velox/exec/TreeOfLosers.h"
@@ -52,6 +54,7 @@ BENCHMARK_RELATIVE(wideArray) {
 }
 
 int main(int argc, char* argv[]) {
+  folly::init(&argc, &argv);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   MergeTestBase test;
   test.seed(1);

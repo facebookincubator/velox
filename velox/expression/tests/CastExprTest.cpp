@@ -754,6 +754,40 @@ TEST_F(CastExprTest, castInTry) {
 
   evaluateAndVerifyCastInTryDictEncoding(
       ARRAY(VARCHAR()), ARRAY(BIGINT()), input, expected);
+
+  // Test try(cast(map(varchar, bigint) as map(bigint, bigint))) where "3a"
+  // should trigger an error at the first row.
+  auto map = makeRowVector({makeMapVector<StringView, int64_t>(
+      {{{"1", 2}, {"3a", 4}}, {{"5", 6}, {"7", 8}}})});
+  auto mapExpected = makeNullableMapVector<int64_t, int64_t>(
+      {std::nullopt, {{{5, 6}, {7, 8}}}});
+  evaluateAndVerifyCastInTryDictEncoding(
+      MAP(VARCHAR(), BIGINT()), MAP(BIGINT(), BIGINT()), map, mapExpected);
+
+  // Test try(cast(array(varchar) as array(bigint))) where "2a" should trigger
+  // an error at the first row.
+  auto array =
+      makeArrayVector<StringView>({{"1"_sv, "2a"_sv}, {"3"_sv, "4"_sv}});
+  auto arrayExpected =
+      vectorMaker_.arrayVectorNullable<int64_t>({std::nullopt, {{3, 4}}});
+  evaluateAndVerifyCastInTryDictEncoding(
+      ARRAY(VARCHAR()), ARRAY(BIGINT()), makeRowVector({array}), arrayExpected);
+
+  arrayExpected = vectorMaker_.arrayVectorNullable<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  evaluateAndVerifyCastInTryDictEncoding(
+      ARRAY(VARCHAR()),
+      ARRAY(BIGINT()),
+      makeRowVector({BaseVector::wrapInConstant(3, 0, array)}),
+      arrayExpected);
+
+  auto nested = makeRowVector({makeNullableNestedArrayVector<StringView>(
+      {{{{{"1"_sv, "2"_sv}}, {{"3"_sv}}, {{"4a"_sv, "5"_sv}}}},
+       {{{{"6"_sv, "7"_sv}}}}})});
+  auto nestedExpected =
+      makeNullableNestedArrayVector<int64_t>({std::nullopt, {{{{6, 7}}}}});
+  evaluateAndVerifyCastInTryDictEncoding(
+      ARRAY(ARRAY(VARCHAR())), ARRAY(ARRAY(BIGINT())), nested, nestedExpected);
 }
 
 TEST_F(CastExprTest, primitiveNullConstant) {
@@ -773,4 +807,45 @@ TEST_F(CastExprTest, primitiveNullConstant) {
 
   result = evaluate(outerCast, makeRowVector(ROW({}, {}), 1));
   assertEqualVectors(expectedResult, result);
+}
+
+TEST_F(CastExprTest, primitiveWithDictionaryIntroducedNulls) {
+  exec::registerVectorFunction(
+      "add_dict",
+      TestingDictionaryFunction::signatures(),
+      std::make_unique<TestingDictionaryFunction>(2));
+
+  {
+    auto data = makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9});
+    auto result = evaluate(
+        "cast(add_dict(add_dict(c0)) as smallint)", makeRowVector({data}));
+    auto expected = makeNullableFlatVector<int16_t>(
+        {std::nullopt,
+         std::nullopt,
+         3,
+         4,
+         5,
+         6,
+         7,
+         std::nullopt,
+         std::nullopt});
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    auto data = makeNullableFlatVector<int64_t>(
+        {1,
+         2,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         8,
+         9});
+    auto result = evaluate(
+        "cast(add_dict(add_dict(c0)) as varchar)", makeRowVector({data}));
+    auto expected = makeNullConstant(TypeKind::VARCHAR, 9);
+    assertEqualVectors(expected, result);
+  }
 }

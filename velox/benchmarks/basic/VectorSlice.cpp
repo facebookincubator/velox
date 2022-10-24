@@ -15,6 +15,8 @@
  */
 
 #include <folly/Benchmark.h>
+#include <folly/init/Init.h>
+
 #include <gflags/gflags.h>
 
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -93,6 +95,7 @@ DEFINE_BENCHMARKS(row)
 } // namespace facebook::velox
 
 int main(int argc, char* argv[]) {
+  folly::init(&argc, &argv);
   using namespace facebook::velox;
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   VELOX_CHECK_LE(FLAGS_slice_size, kVectorSize);

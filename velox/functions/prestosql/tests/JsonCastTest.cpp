@@ -973,11 +973,11 @@ TEST_F(JsonCastTest, toNested) {
   auto array = makeNullableFlatVector<Json>(
       {R"([[1,2],[3]])"_sv, R"([[null,null,4]])"_sv, "[[]]"_sv, "[]"_sv},
       JSON());
-  auto arrayExpected = makeNestedArrayVector<StringView>(
-      {{{{"1"_sv, "2"_sv}}, {{"3"_sv}}},
-       {{{std::nullopt, std::nullopt, "4"_sv}}},
-       {{{}}},
-       {}});
+  auto arrayExpected = makeNullableNestedArrayVector<StringView>(
+      {{{{{"1"_sv, "2"_sv}}, {{"3"_sv}}}},
+       {{{{std::nullopt, std::nullopt, "4"_sv}}}},
+       {{{{}}}},
+       {{}}});
 
   testCast<ComplexType>(JSON(), ARRAY(ARRAY(VARCHAR())), array, arrayExpected);
 
@@ -1068,12 +1068,103 @@ TEST_F(JsonCastTest, toInvalid) {
 }
 
 TEST_F(JsonCastTest, castInTry) {
-  // Test try(json as array(bigint))) whose input vector is wrapped in
-  // dictionary encoding. The row of "1a" should trigger an error during casting
-  // and the try expression should turn this error into a null at this row.
+  // Test try(json as bigint)) whose input vector is wrapped in dictionary
+  // encoding. The row of "1a" should trigger an error during casting and the
+  // try expression should turn this error into a null at this row.
   auto input =
       makeRowVector({makeFlatVector<Json>({"1a"_sv, "2"_sv, "3"_sv}, JSON())});
   auto expected = makeNullableFlatVector<int64_t>({std::nullopt, 2, 3});
 
   evaluateAndVerifyCastInTryDictEncoding(JSON(), BIGINT(), input, expected);
+
+  // Cast map whose elements are wrapped in a dictionary to Json. The map vector
+  // contains four rows: {g -> null, null -> -6}, {e -> null, d -> -4}, {null ->
+  // 3, b -> -2}, {null -> 1}.
+  std::vector<std::optional<StringView>> keys{
+      std::nullopt, "b"_sv, std::nullopt, "d"_sv, "e"_sv, std::nullopt, "g"_sv};
+  std::vector<std::optional<int64_t>> values{1, -2, 3, -4, std::nullopt, -6, 7};
+  auto map = makeMapWithDictionaryElements(keys, values, 2);
+
+  auto jsonExpected = makeNullableFlatVector<Json>(
+      {std::nullopt, R"({"d":-4,"e":null})", std::nullopt, std::nullopt},
+      JSON());
+  evaluateAndVerifyCastInTryDictEncoding(
+      MAP(VARCHAR(), BIGINT()), JSON(), makeRowVector({map}), jsonExpected);
+
+  // Cast map vector that has null keys. The map vector contains three rows:
+  // {blue -> 1, red -> 2}, {null -> 3, yellow -> 4}, {purple -> 5, null -> 6}.
+  auto keyVector = makeNullableFlatVector<StringView>(
+      {"blue"_sv,
+       "red"_sv,
+       std::nullopt,
+       "yellow"_sv,
+       "purple"_sv,
+       std::nullopt},
+      JSON());
+  auto valueVector = makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5, 6});
+
+  auto mapOffsets = allocateOffsets(3, pool());
+  auto mapSizes = allocateSizes(3, pool());
+  makeOffsetsAndSizes(6, 2, mapOffsets, mapSizes);
+  auto mapVector = std::make_shared<MapVector>(
+      pool(),
+      MAP(JSON(), BIGINT()),
+      nullptr,
+      3,
+      mapOffsets,
+      mapSizes,
+      keyVector,
+      valueVector,
+      0);
+  auto rowVector = makeRowVector({mapVector});
+
+  jsonExpected = makeNullableFlatVector<Json>(
+      {"[{blue:1,red:2}]"_sv, std::nullopt, std::nullopt});
+  evaluateAndVerifyCastInTryDictEncoding(
+      ROW({MAP(JSON(), BIGINT())}),
+      JSON(),
+      makeRowVector({rowVector}),
+      jsonExpected);
+
+  // Cast map whose elements are wrapped in constant encodings to Json.
+  auto constantKey = BaseVector::wrapInConstant(6, 2, keyVector);
+  auto constantValue = BaseVector::wrapInConstant(6, 3, valueVector);
+  mapVector = std::make_shared<MapVector>(
+      pool(),
+      MAP(JSON(), BIGINT()),
+      nullptr,
+      3,
+      mapOffsets,
+      mapSizes,
+      constantKey,
+      constantValue,
+      0);
+
+  jsonExpected =
+      makeNullableFlatVector<Json>({std::nullopt, std::nullopt, std::nullopt});
+  evaluateAndVerifyCastInTryDictEncoding(
+      MAP(JSON(), BIGINT()), JSON(), makeRowVector({mapVector}), jsonExpected);
+
+  // Cast array of map vector that has null keys. The array vector contains two
+  // rows: [{blue -> 1, red -> 2}, {null -> 3, yellow -> 4}], [{purple -> 5,
+  // null -> 6}].
+  auto arrayOffsets = allocateOffsets(2, pool());
+  auto arraySizes = allocateSizes(2, pool());
+  makeOffsetsAndSizes(3, 2, arrayOffsets, arraySizes);
+  auto arrayVector = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(MAP(JSON(), BIGINT())),
+      nullptr,
+      2,
+      arrayOffsets,
+      arraySizes,
+      mapVector);
+  rowVector = makeRowVector({arrayVector});
+
+  jsonExpected = makeNullableFlatVector<Json>({std::nullopt, std::nullopt});
+  evaluateAndVerifyCastInTryDictEncoding(
+      ROW({ARRAY(MAP(JSON(), BIGINT()))}),
+      JSON(),
+      makeRowVector({rowVector}),
+      jsonExpected);
 }

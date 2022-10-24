@@ -15,6 +15,8 @@
  */
 
 #include <folly/Benchmark.h>
+#include <folly/init/Init.h>
+
 #include <gflags/gflags.h>
 
 #include "velox/common/base/CompareFlags.h"
@@ -109,6 +111,7 @@ BENCHMARK_DRAW_LINE();
 } // namespace
 
 int main(int argc, char* argv[]) {
+  folly::init(&argc, &argv);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   benchmark = std::make_unique<VectorCompareBenchmark>(1000);

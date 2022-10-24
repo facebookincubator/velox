@@ -326,6 +326,8 @@ TEST_F(ZipWithTest, fuzzSameSizeNoNulls) {
 
   VectorFuzzer fuzzer(options, pool());
   for (auto i = 0; i < 10; ++i) {
+    // We need non-lazy children in order to successfully flatten data for
+    // re-use.
     auto data = fuzzer.fuzzInputRow(rowType);
     auto flatData = flatten<RowVector>(data);
 
@@ -337,6 +339,11 @@ TEST_F(ZipWithTest, fuzzSameSizeNoNulls) {
     result = evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", data);
     expectedResult =
         evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", flatData);
+    assertEqualVectors(expectedResult, result);
+
+    // Sanity Check with possible lazy inputs.
+    data = fuzzer.fuzzRowChildrenToLazy(data);
+    result = evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", data);
     assertEqualVectors(expectedResult, result);
   }
 }
@@ -352,6 +359,8 @@ TEST_F(ZipWithTest, fuzzVariableLengthWithNulls) {
 
   VectorFuzzer fuzzer(options, pool());
   for (auto i = 0; i < 10; ++i) {
+    // We need non-lazy children in order to successfully flatten data for
+    // re-use.
     auto data = fuzzer.fuzzInputRow(rowType);
     auto flatData = flatten<RowVector>(data);
 
@@ -364,6 +373,30 @@ TEST_F(ZipWithTest, fuzzVariableLengthWithNulls) {
     expectedResult =
         evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", flatData);
     assertEqualVectors(expectedResult, result);
+
+    // Sanity Check with possible lazy inputs.
+    data = fuzzer.fuzzRowChildrenToLazy(data);
+    result = evaluate("zip_with(c0, c1, (x, y) -> (x + y) * c2)", data);
+    assertEqualVectors(expectedResult, result);
   }
+}
+
+TEST_F(ZipWithTest, try) {
+  auto data = makeRowVector(
+      {makeArrayVector<int64_t>({{1, 2, 3}, {0, 5}, {6, 7, 0}, {}}),
+       makeArrayVector<int64_t>(
+           {{10, 20, 30}, {40, 50, 60}, {60, 70}, {100, 110}})});
+
+  ASSERT_THROW(
+      evaluate("zip_with(c0, c1, (x, y) -> y / x)", data), std::exception);
+
+  auto result = evaluate("try(zip_with(c0, c1, (x, y) -> y / x))", data);
+
+  auto expected = vectorMaker_.arrayVectorNullable<int64_t>(
+      {{{10, 10, 10}},
+       std::nullopt,
+       {{10, 10, std::nullopt}},
+       {{std::nullopt, std::nullopt}}});
+  assertEqualVectors(expected, result);
 }
 } // namespace

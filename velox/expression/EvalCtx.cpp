@@ -15,6 +15,7 @@
  */
 
 #include "velox/expression/EvalCtx.h"
+#include <exception>
 #include "velox/common/base/RawVector.h"
 #include "velox/expression/Expr.h"
 
@@ -155,6 +156,29 @@ void EvalCtx::addError(
   }
 }
 
+void EvalCtx::addErrors(
+    const SelectivityVector& rows,
+    const ErrorVectorPtr& fromErrors,
+    ErrorVectorPtr& toErrors) const {
+  if (!fromErrors) {
+    return;
+  }
+
+  ensureErrorsVectorSize(toErrors, fromErrors->size());
+  rows.testSelected([&](auto row) {
+    if (!fromErrors->isIndexInRange(row)) {
+      return false;
+    }
+    if (!fromErrors->isNullAt(row) && toErrors->isNullAt(row)) {
+      toErrors->set(
+          row,
+          std::static_pointer_cast<std::exception_ptr>(
+              fromErrors->valueAt(row)));
+    }
+    return true;
+  });
+}
+
 void EvalCtx::restore(ScopedContextSaver& saver) {
   peeledFields_ = std::move(saver.peeled);
   nullsPruned_ = saver.nullsPruned;
@@ -185,19 +209,65 @@ void EvalCtx::restore(ScopedContextSaver& saver) {
   finalSelection_ = saver.finalSelection;
 }
 
+namespace {
+/// If exceptionPtr represents an std::exception, convert it to VeloxUserError
+/// to add useful context for debugging.
+std::exception_ptr toVeloxException(const std::exception_ptr& exceptionPtr) {
+  try {
+    std::rethrow_exception(exceptionPtr);
+  } catch (const VeloxException& e) {
+    return exceptionPtr;
+  } catch (const std::exception& e) {
+    return std::make_exception_ptr(
+        VeloxUserError(std::current_exception(), e.what(), false));
+  }
+}
+
+auto throwError(const std::exception_ptr& exceptionPtr) {
+  std::rethrow_exception(toVeloxException(exceptionPtr));
+}
+} // namespace
+
 void EvalCtx::setError(
     vector_size_t index,
     const std::exception_ptr& exceptionPtr) {
   if (throwOnError_) {
-    std::rethrow_exception(exceptionPtr);
+    throwError(exceptionPtr);
   }
-  addError(index, exceptionPtr, errors_);
+
+  addError(index, toVeloxException(exceptionPtr), errors_);
 }
 
 void EvalCtx::setErrors(
     const SelectivityVector& rows,
     const std::exception_ptr& exceptionPtr) {
-  rows.applyToSelected([&](auto row) { setError(row, exceptionPtr); });
+  if (throwOnError_) {
+    throwError(exceptionPtr);
+  }
+
+  auto veloxException = toVeloxException(exceptionPtr);
+  rows.applyToSelected(
+      [&](auto row) { addError(row, veloxException, errors_); });
+}
+
+void EvalCtx::addElementErrorsToTopLevel(
+    const SelectivityVector& elementRows,
+    const BufferPtr& elementToTopLevelRows,
+    ErrorVectorPtr& topLevelErrors) {
+  if (!errors_) {
+    return;
+  }
+
+  const auto* rawElementToTopLevelRows =
+      elementToTopLevelRows->as<vector_size_t>();
+  elementRows.applyToSelected([&](auto row) {
+    if (errors_->isIndexInRange(row) && !errors_->isNullAt(row)) {
+      addError(
+          rawElementToTopLevelRows[row],
+          *std::static_pointer_cast<std::exception_ptr>(errors_->valueAt(row)),
+          topLevelErrors);
+    }
+  });
 }
 
 const VectorPtr& EvalCtx::getField(int32_t index) const {
