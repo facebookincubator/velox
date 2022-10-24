@@ -528,6 +528,7 @@ jobs:
       image: ubuntu-2204:2022.10.1 # Ubuntu 22.04
     steps:
       - checkout
+      - update-submodules
       - run:
           name: "Build images for ubuntu-CPP declared in docker-compose.yml"
           command: docker-compose build ubuntu-cpp
