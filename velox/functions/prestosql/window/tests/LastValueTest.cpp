@@ -1,0 +1,118 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/functions/prestosql/window/tests/WindowTestBase.h"
+
+#include "velox/vector/fuzzer/VectorFuzzer.h"
+
+using namespace facebook::velox::exec::test;
+
+namespace facebook::velox::window::test {
+
+namespace {
+
+class LastValueTest : public WindowTestBase {
+ protected:
+  void testPrimitiveType(const TypePtr& type) {
+    vector_size_t size = 100;
+    auto vectors = makeRowVector({
+        makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+        makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+        makeFlatVector<int64_t>(size, [](auto row) { return row % 3 + 1; }),
+        typeValues(type, size),
+    });
+    testTwoColumnOverClauses({vectors}, "last_value(c3)");
+    testTwoColumnOverClauses({vectors}, "last_value(c3)");
+    testTwoColumnOverClauses({vectors}, "last_value(c3)");
+  }
+
+ private:
+  VectorPtr typeValues(const TypePtr& type, vector_size_t size) {
+    VectorFuzzer::Options options;
+    options.vectorSize = size;
+    options.nullRatio = 0.2;
+    options.useMicrosecondPrecisionTimestamp = true;
+    VectorFuzzer fuzzer(options, pool_.get(), 0);
+    return fuzzer.fuzz(type);
+  }
+};
+
+TEST_F(LastValueTest, basic) {
+  vector_size_t size = 100;
+
+  auto vectors = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 7; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 3 + 1; }),
+  });
+
+  testTwoColumnOverClauses({vectors}, "last_value(c0)");
+}
+
+TEST_F(LastValueTest, singlePartition) {
+  // Test all input rows in a single partition.
+  vector_size_t size = 1'000;
+
+  auto vectors = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 5 + 1; }),
+  });
+
+  testTwoColumnOverClauses({vectors}, "last_value(c0)");
+}
+
+TEST_F(LastValueTest, integerValues) {
+  testPrimitiveType(INTEGER());
+}
+
+TEST_F(LastValueTest, tinyintValues) {
+  testPrimitiveType(TINYINT());
+}
+
+TEST_F(LastValueTest, smallintValues) {
+  testPrimitiveType(SMALLINT());
+}
+
+TEST_F(LastValueTest, bigintValues) {
+  testPrimitiveType(BIGINT());
+}
+
+TEST_F(LastValueTest, realValues) {
+  testPrimitiveType(REAL());
+}
+
+TEST_F(LastValueTest, doubleValues) {
+  testPrimitiveType(DOUBLE());
+}
+
+TEST_F(LastValueTest, varcharValues) {
+  testPrimitiveType(VARCHAR());
+}
+
+TEST_F(LastValueTest, varbinaryValues) {
+  testPrimitiveType(VARBINARY());
+}
+
+TEST_F(LastValueTest, timestampValues) {
+  testPrimitiveType(TIMESTAMP());
+}
+
+TEST_F(LastValueTest, dateValues) {
+  testPrimitiveType(DATE());
+}
+
+}; // namespace
+}; // namespace facebook::velox::window::test
