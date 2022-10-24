@@ -85,10 +85,11 @@ class DecimalUtil {
   }
 
   template <typename R, typename A, typename B>
-  inline static void divideWithRoundUp(
+  inline static R divideWithRoundUp(
       R& r,
       const A& a,
       const B& b,
+      bool noRoundUp,
       uint8_t aRescale,
       uint8_t /*bRescale*/) {
     VELOX_CHECK_NE(b, 0, "Division by zero");
@@ -107,10 +108,11 @@ class DecimalUtil {
         unsignedDividendRescaled, R(DecimalUtil::kPowersOfTen[aRescale]));
     R quotient = unsignedDividendRescaled / unsignedDivisor;
     R remainder = unsignedDividendRescaled % unsignedDivisor;
-    if (remainder * 2 >= unsignedDivisor) {
+    if (!noRoundUp && remainder * 2 >= unsignedDivisor) {
       ++quotient;
     }
     r = quotient * resultSign;
+    return remainder;
   }
 
   template <typename R, typename A, typename B>
@@ -157,26 +159,14 @@ class DecimalUtil {
     return (unsignedSum >> 127);
   }
 
-  /*
-   * Subtracts rhs from lhs ignoring the signs.
-   */
-  inline static void subtractUnsigned(
-      int128_t& result,
-      const int128_t& lhs,
-      const int128_t& rhs,
-      bool isResultNegative) {
-    __uint128_t finalResult = (__uint128_t)lhs - (__uint128_t)rhs;
-    result = isResultNegative ? -finalResult : finalResult;
-  }
-
   inline static int64_t
   addWithOverflow(int128_t& result, const int128_t& lhs, const int128_t& rhs) {
-    bool islhsNegative = lhs < 0;
-    bool isrhsNegative = rhs < 0;
+    bool isLhsNegative = lhs < 0;
+    bool isRhsNegative = rhs < 0;
     int64_t overflow = 0;
-    if (islhsNegative == isrhsNegative) {
+    if (isLhsNegative == isRhsNegative) {
       // Both inputs of same time.
-      if (islhsNegative) {
+      if (isLhsNegative) {
         // Both negative, ignore signs and add.
         overflow = addUnsignedValues(result, -lhs, -rhs, true);
         overflow = -overflow;
@@ -205,17 +195,18 @@ class DecimalUtil {
       const int64_t count,
       const int64_t overflow) {
     if (overflow == 0) {
-      divideWithRoundUp<int128_t, int128_t, int64_t>(avg, sum, count, 0, 0);
+      int64_t remainder = divideWithRoundUp<int128_t, int128_t, int64_t>(
+          avg, sum, count, false, 0, 0);
     } else {
-      int64_t remainderA{0};
       __uint128_t sumA{0};
-      DecimalUtil::divideInt128<__uint128_t, __uint128_t, int64_t>(
-          sumA, kOverflowMultiplier, count, remainderA);
+      auto remainderA =
+          DecimalUtil::divideWithRoundUp<__uint128_t, __uint128_t, int64_t>(
+              sumA, kOverflowMultiplier, count, true, 0, 0);
       double totalRemainder = (double)remainderA / count;
       __uint128_t sumB{0};
-      int64_t remainderB{0};
-      DecimalUtil::divideInt128<__uint128_t, __int128_t, int64_t>(
-          sumB, sum, count * overflow, remainderB);
+      auto remainderB = DecimalUtil::DecimalUtil::
+          divideWithRoundUp<__uint128_t, __int128_t, int64_t>(
+              sumB, sum, count * overflow, true, 0, 0);
       totalRemainder += (double)remainderB / (count * overflow);
       DecimalUtil::addWithOverflow(avg, sumA, sumB);
       avg = avg * overflow + (int)(totalRemainder * overflow);

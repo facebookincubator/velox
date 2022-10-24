@@ -214,7 +214,7 @@ class Divide {
   template <typename R, typename A, typename B>
   inline static void
   apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t /*bRescale*/) {
-    DecimalUtil::divideWithRoundUp<R, A, B>(r, a, b, aRescale, 0);
+    DecimalUtil::divideWithRoundUp<R, A, B>(r, a, b, false, aRescale, 0);
   }
 
   inline static uint8_t
