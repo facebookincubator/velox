@@ -23,6 +23,8 @@ extern void registerDenseRank(const std::string& name);
 extern void registerPercentRank(const std::string& name);
 extern void registerCumeDist(const std::string& name);
 extern void registerNthValue(const std::string& name);
+extern void registerLead(const std::string& name);
+extern void registerLag(const std::string& name);
 
 void registerWindowFunctions() {
   window::registerRowNumber("row_number");
@@ -31,6 +33,8 @@ void registerWindowFunctions() {
   window::registerPercentRank("percent_rank");
   window::registerCumeDist("cume_dist");
   window::registerNthValue("nth_value");
+  window::registerLead("lead");
+  window::registerLag("lag");
 }
 
 } // namespace facebook::velox::window

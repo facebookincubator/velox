@@ -1249,9 +1249,9 @@ PlanBuilder& PlanBuilder::window(
       }
     }
 
-    auto windowCall = std::dynamic_pointer_cast<const core::CallTypedExpr>(
-        core::Expressions::inferTypes(
-            windowExpr.functionCall, planNode_->outputType(), pool_));
+    auto y = core::Expressions::inferTypes(
+        windowExpr.functionCall, planNode_->outputType(), pool_);
+    auto windowCall = std::dynamic_pointer_cast<const core::CallTypedExpr>(y);
     windowNodeFunctions.push_back(
         {std::move(windowCall),
          createWindowFrame(windowExpr.frame, planNode_->outputType(), pool_),

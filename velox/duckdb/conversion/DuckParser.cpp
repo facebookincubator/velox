@@ -641,9 +641,23 @@ const IExprWindowFunction parseWindowExpr(const std::string& windowString) {
   }
 
   std::vector<std::shared_ptr<const core::IExpr>> params;
-  params.reserve(windowExpr.children.size());
+  auto childrenSize = windowExpr.children.size();
+  if (windowExpr.offset_expr) {
+    if (windowExpr.default_expr) {
+      childrenSize += 2;
+    } else {
+      childrenSize += 1;
+    }
+  }
+  params.reserve(childrenSize);
   for (const auto& c : windowExpr.children) {
     params.emplace_back(parseExpr(*c, options));
+  }
+  if (windowExpr.offset_expr) {
+    params.emplace_back(parseExpr(*windowExpr.offset_expr, options));
+    if (windowExpr.default_expr) {
+      params.emplace_back(parseExpr(*windowExpr.default_expr, options));
+    }
   }
   auto func = normalizeFuncName(windowExpr.function_name);
   windowIExpr.functionCall =

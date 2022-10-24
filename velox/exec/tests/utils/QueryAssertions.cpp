@@ -493,6 +493,15 @@ std::string generateUserFriendlyDiff(
       actualRows.end(),
       std::inserter(missingActualRows, missingActualRows.end()));
 
+  std::vector<MaterializedRow> dummyRows;
+  std::vector<MaterializedRow> dummyRows2;
+  std::set_difference(
+      expectedRows.begin(),
+      expectedRows.end(),
+      dummyRows.begin(),
+      dummyRows.end(),
+      std::inserter(dummyRows2, dummyRows2.end()));
+
   std::ostringstream message;
   message << "Expected " << expectedRows.size() << ", got " << actualRows.size()
           << std::endl;
@@ -514,6 +523,14 @@ std::string generateUserFriendlyDiff(
   for (int32_t i = 0; i < missingRowsToPrint; i++) {
     message << "\t";
     printRow(missingActualRows[i], message);
+    message << std::endl;
+  }
+  message << std::endl;
+
+  message << " DuckDb result:" << std::endl;
+  for (int32_t i = 0; i < dummyRows2.size(); i++) {
+    message << "\t";
+    printRow(dummyRows2[i], message);
     message << std::endl;
   }
   message << std::endl;
