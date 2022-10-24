@@ -525,7 +525,7 @@ jobs:
 
   docker-compose-ubuntu-cpp:
     machine: # executor type
-      image: ubuntu-2004:202010-01 # Ubuntu 20.04
+      image: ubuntu-2204:2022.10.1 # Ubuntu 22.04
     steps:
       - checkout
       - run:
