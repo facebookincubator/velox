@@ -34,6 +34,22 @@ static std::vector<std::string> kBasicOverClauses = {
     "partition by c0, c1",
 };
 
+/// Common set of window function over clauses that ensures a fixed ordering of
+/// rows for three column inputs.
+static std::vector<std::string> kFixedBasicOverClauses = {
+    "partition by c0 order by c1, c2",
+    "partition by c1 order by c0, c2",
+    "partition by c0 order by c1 desc, c2",
+    "partition by c1 order by c0 desc, c2",
+    // No partition by clause.
+    "order by c0, c1, c2",
+    "order by c1, c0, c2",
+    "order by c0 asc, c1 desc, c2",
+    "order by c1 asc, c0 desc, c2",
+    // No order by clause.
+    "partition by c0, c1, c2",
+};
+
 /// Common set of window function over clauses with different sort orders
 /// using a combination of two columns.
 static std::vector<std::string> kSortOrderBasedOverClauses = {
@@ -46,6 +62,20 @@ static std::vector<std::string> kSortOrderBasedOverClauses = {
     "order by c1 asc nulls first, c0 desc nulls first",
     "order by c0 desc nulls first, c1 asc nulls first",
     "order by c1 desc nulls first, c0 asc nulls first",
+};
+
+/// Common set of window function over clauses with different sort orders that
+/// ensures a fixed ordering of rows for three column inputs.
+static std::vector<std::string> kFixedSortOrderBasedOverClauses = {
+    "partition by c0 order by c1 nulls first, c2",
+    "partition by c1 order by c0 nulls first, c2",
+    "partition by c0 order by c1 desc nulls first, c2",
+    "partition by c1 order by c0 desc nulls first, c2",
+    // No partition by clause.
+    "order by c0 asc nulls first, c1 desc nulls first, c2",
+    "order by c1 asc nulls first, c0 desc nulls first, c2",
+    "order by c0 desc nulls first, c1 asc nulls first, c2",
+    "order by c1 desc nulls first, c0 asc nulls first, c2",
 };
 
 /// Common set of window function over clauses for window frame tests to ensure
