@@ -524,12 +524,12 @@ jobs:
             fi
 
   docker-compose-ubuntu-cpp:
-    machine: # executor type
+    machine: # Use machine executor type to use docker-compose
       image: ubuntu-2204:2022.10.1 # Ubuntu 22.04
     steps:
       - checkout
       - run:
-          name: "Build images for Ubuntu-CPP eclared in docker-compose.yml"
+          name: "Build images for ubuntu-CPP declared in docker-compose.yml"
           command: docker-compose build ubuntu-cpp
       - run:
           name: "Run ubuntu-cpp image"
