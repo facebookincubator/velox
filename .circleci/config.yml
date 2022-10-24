@@ -26,6 +26,7 @@ workflows:
       - header-check
       - linux-benchmarks-basic
       - linux-benchmarks-basic-dedicated
+      - docker-compose-ubuntu
 
   # Daily documentation update
   nightly:
@@ -56,6 +57,7 @@ workflows:
       - linux-build-options
       - linux-adapters
       - macos-build
+      - docker-compose-ubuntu
 
 commands:
   update-submodules:
@@ -520,3 +522,24 @@ jobs:
               git commit -m "Update documentation"
               git push
             fi
+
+  docker-compose-ubuntu:
+    machine: # executor type
+      image: ubuntu-2004:202010-01 # Ubuntu 20.04
+    steps:
+      - checkout
+      - run:
+          name: "Install docker-compose"
+          environment:
+            COMPOSE_VERSION: '2.12.2'
+          command: |
+            curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o ~/docker-compose
+            chmod +x ~/docker-compose
+            sudo mv ~/docker-compose /usr/local/bin/docker-compose
+      - setup_remote_docker
+      - run:
+          name: "Build images for Ubuntu-CPP eclared in docker-compose.yml"
+          command: docker-compose build ubuntu-cpp
+      - run:
+          name: "Run ubuntu-cpp image"
+          command: docker-compose run --rm ubuntu-cpp
