@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-#include <folly/Random.h>
 #include "velox/common/base/Nulls.h"
-#include "velox/dwio/common/IntDecoder.h"
+#include "velox/dwio/common/BitPackDecoder.h"
+#include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 
+#include <folly/Random.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox::dwio::common;
@@ -96,7 +97,7 @@ class DecodeBitsTest : public testing::Test {
       // path.
       auto end = reinterpret_cast<const char*>(bitsPointer) +
           (((start + rows[numRows - 1] - rows[start]) * width) / 8);
-      IntDecoder<false>::decodeBitsLE(
+      decodeBitsLE(
           bitsPointer,
           bitOffset,
           RowSet(&rows[start], numRows),
