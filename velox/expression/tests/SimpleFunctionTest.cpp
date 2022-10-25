@@ -106,7 +106,7 @@ struct ArrayWriterFunction {
 
 TEST_F(SimpleFunctionTest, arrayWriter) {
   registerFunction<ArrayWriterFunction, Array<int64_t>, int64_t>(
-      {"array_writer_func"}, ARRAY(BIGINT()));
+      {"array_writer_func"});
 
   const size_t rows = arrayData.size();
   auto flatVector = makeFlatVector<int64_t>(rows, [](auto row) { return row; });
@@ -143,7 +143,7 @@ struct ArrayOfStringsWriterFunction {
 
 TEST_F(SimpleFunctionTest, arrayOfStringsWriter) {
   registerFunction<ArrayOfStringsWriterFunction, Array<Varchar>, int64_t>(
-      {"array_of_strings_writer_func"}, ARRAY(VARCHAR()));
+      {"array_of_strings_writer_func"});
 
   const size_t rows = stringArrayData.size();
   auto flatVector = makeFlatVector<int64_t>(rows, [](auto row) { return row; });
@@ -249,7 +249,7 @@ struct RowWriterFunction {
 
 TEST_F(SimpleFunctionTest, rowWriter) {
   registerFunction<RowWriterFunction, Row<int64_t, double>, int64_t>(
-      {"row_writer_func"}, ROW({BIGINT(), DOUBLE()}));
+      {"row_writer_func"});
 
   const size_t rows = rowVectorCol1.size();
   auto flatVector = makeFlatVector<int64_t>(rows, [](auto row) { return row; });
@@ -351,7 +351,7 @@ TEST_F(SimpleFunctionTest, arrayRowWriter) {
   registerFunction<
       ArrayRowWriterFunction,
       Array<Row<int64_t, double>>,
-      int32_t>({"array_row_writer_func"}, ARRAY(ROW({BIGINT(), DOUBLE()})));
+      int32_t>({"array_row_writer_func"});
 
   const size_t rows = rowVectorCol1.size();
   auto flatVector = makeFlatVector<int32_t>(rows, [](auto row) { return row; });

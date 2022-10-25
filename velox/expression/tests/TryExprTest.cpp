@@ -60,8 +60,7 @@ struct CountCallsFunction {
 };
 
 TEST_F(TryExprTest, skipExecution) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
 
   std::vector<std::optional<int64_t>> expected{
       0, std::nullopt, 1, std::nullopt, 2};
@@ -181,8 +180,7 @@ TEST_F(TryExprTest, constant) {
 }
 
 TEST_F(TryExprTest, evalSimplified) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
 
   std::vector<std::optional<int64_t>> expected{0, 1, 2, 3};
   auto constant = makeConstant<int64_t>(0, 4);

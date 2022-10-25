@@ -364,9 +364,8 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
     }
   }
 
-  explicit SimpleFunctionMetadata(std::shared_ptr<const Type> returnType)
-      : returnType_(
-            returnType ? std::move(returnType) : CppToType<TReturn>::create()) {
+  explicit SimpleFunctionMetadata()
+      : returnType_(CppToType<TReturn>::create()) {
     auto analysis = analyzeSignatureTypes();
     buildSignature(analysis);
     priority_ = analysis.stats.computePriority();
@@ -662,9 +661,6 @@ class UDFHolder final
 
   template <size_t N>
   using exec_type_at = typename std::tuple_element<N, exec_arg_types>::type;
-
-  explicit UDFHolder(std::shared_ptr<const Type> returnType)
-      : Metadata(std::move(returnType)), instance_{} {}
 
   FOLLY_ALWAYS_INLINE void initialize(
       const core::QueryConfig& config,

@@ -213,9 +213,8 @@ class SimpleFunctionAdapter : public VectorFunction {
  public:
   explicit SimpleFunctionAdapter(
       const core::QueryConfig& config,
-      const std::vector<VectorPtr>& constantInputs,
-      std::shared_ptr<const Type> returnType)
-      : fn_{std::make_unique<FUNC>(move(returnType))} {
+      const std::vector<VectorPtr>& constantInputs)
+      : fn_{std::make_unique<FUNC>()} {
     if constexpr (FUNC::udf_has_initialize) {
       try {
         unpackInitialize<0>(config, constantInputs);
@@ -861,19 +860,12 @@ class SimpleFunctionAdapterFactoryImpl : public SimpleFunctionAdapterFactory {
   // Exposed for use in FunctionRegistry
   using Metadata = typename UDFHolder::Metadata;
 
-  explicit SimpleFunctionAdapterFactoryImpl(
-      std::shared_ptr<const Type> returnType)
-      : returnType_(std::move(returnType)) {}
-
   std::unique_ptr<VectorFunction> createVectorFunction(
       const core::QueryConfig& config,
       const std::vector<VectorPtr>& constantInputs) const override {
     return std::make_unique<SimpleFunctionAdapter<UDFHolder>>(
-        config, constantInputs, returnType_);
+        config, constantInputs);
   }
-
- private:
-  const std::shared_ptr<const Type> returnType_;
 };
 
 } // namespace facebook::velox::exec
