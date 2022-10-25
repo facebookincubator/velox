@@ -25,6 +25,9 @@
 
 namespace facebook::velox {
 
+#define LOWER(x) ((uint64_t)x)
+#define UPPER(x) ((int64_t)(x >> 64))
+
 static int128_t kSignInt128Mask = ((int128_t)1 << 127);
 static __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
 
@@ -115,35 +118,6 @@ class DecimalUtil {
     return remainder;
   }
 
-  template <typename R, typename A, typename B>
-  inline static void divideInt128(R& r, const A& a, const B& b, B& remainder) {
-    VELOX_CHECK_NE(b, 0, "Division by zero");
-    int resultSign = 1;
-    R unsignedDividendRescaled(a);
-    if (a < 0) {
-      resultSign = -1;
-      unsignedDividendRescaled *= -1;
-    }
-    R unsignedDivisor(b);
-    if (b < 0) {
-      resultSign *= -1;
-      unsignedDivisor *= -1;
-    }
-    R quotient = unsignedDividendRescaled / unsignedDivisor;
-    remainder = unsignedDividendRescaled % unsignedDivisor;
-    r = quotient * resultSign;
-  }
-
-  inline static int compareAbsolute(int128_t lhs, int128_t rhs) {
-    auto lhsAbs = lhs < 0 ? -lhs : lhs;
-    auto rhsAbs = rhs < 0 ? -rhs : rhs;
-
-    if (lhsAbs < rhsAbs)
-      return -1;
-    if (lhsAbs > rhsAbs)
-      return 1;
-    return 0;
-  }
   /*
    * sum up and return overflow/underflow.
    */
@@ -204,8 +178,8 @@ class DecimalUtil {
               sumA, kOverflowMultiplier, count, true, 0, 0);
       double totalRemainder = (double)remainderA / count;
       __uint128_t sumB{0};
-      auto remainderB = DecimalUtil::DecimalUtil::
-          divideWithRoundUp<__uint128_t, __int128_t, int64_t>(
+      auto remainderB =
+          DecimalUtil::divideWithRoundUp<__uint128_t, __int128_t, int64_t>(
               sumB, sum, count * overflow, true, 0, 0);
       totalRemainder += (double)remainderB / (count * overflow);
       DecimalUtil::addWithOverflow(avg, sumA, sumB);

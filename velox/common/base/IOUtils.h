@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <type/UnscaledLongDecimal.h>
 #include <cstdint>
 #include <cstring>
 

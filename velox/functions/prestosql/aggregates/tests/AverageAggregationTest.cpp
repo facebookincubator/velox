@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
@@ -215,6 +216,32 @@ TEST_F(AverageAggregationTest, partialResults) {
                   .planNode();
 
   assertQuery(plan, "SELECT row(4950, 100)");
+}
+
+TEST_F(AverageAggregationTest, decimalAccumulator) {
+  exec::AverageDecimalAccumulator accumulator;
+  accumulator.sum = -1000;
+  accumulator.count = 10;
+  accumulator.overflow = -1;
+
+  char* buffer = new char[accumulator.serializedSize()];
+  StringView serialized(buffer, accumulator.serializedSize());
+  accumulator.serialize(serialized);
+  exec::AverageDecimalAccumulator mergedAccumulator;
+  mergedAccumulator.mergeWith(serialized);
+
+  ASSERT_EQ(mergedAccumulator.sum, accumulator.sum);
+  ASSERT_EQ(mergedAccumulator.count, accumulator.count);
+  ASSERT_EQ(mergedAccumulator.overflow, accumulator.overflow);
+
+  // Merging again to same accumulator.
+  memset(buffer, 0, accumulator.serializedSize());
+  mergedAccumulator.serialize(serialized);
+  mergedAccumulator.mergeWith(serialized);
+  ASSERT_EQ(mergedAccumulator.sum, accumulator.sum * 2);
+  ASSERT_EQ(mergedAccumulator.count, accumulator.count * 2);
+  ASSERT_EQ(mergedAccumulator.overflow, accumulator.overflow * 2);
+  delete[] buffer;
 }
 
 TEST_F(AverageAggregationTest, avgDecimal) {

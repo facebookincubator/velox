@@ -21,9 +21,6 @@
 
 namespace facebook::velox {
 
-#define UPPER(x) ((int64_t)(x >> 64))
-#define LOWER(x) ((uint64_t)(x))
-
 namespace {
 
 TEST(DecimalTest, toString) {
