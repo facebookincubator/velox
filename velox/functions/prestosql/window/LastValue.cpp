@@ -37,7 +37,6 @@ class LastValueFunction : public exec::WindowFunction {
 
   void resetPartition(const exec::WindowPartition* partition) override {
     partition_ = partition;
-    partitionOffset_ = 0;
   }
 
   void apply(
@@ -52,7 +51,6 @@ class LastValueFunction : public exec::WindowFunction {
     auto rowNumbersRange = folly::Range(frameEndsPtr, numRows);
     partition_->extractColumn(
         valueIndex_, rowNumbersRange, resultOffset, result);
-    partitionOffset_ += numRows;
   }
 
  private:
@@ -61,11 +59,6 @@ class LastValueFunction : public exec::WindowFunction {
   column_index_t valueIndex_;
 
   const exec::WindowPartition* partition_;
-
-  // This offset tracks how far along the partition rows have been output.
-  // This can be used to optimize reading offset column values corresponding
-  // to the present row set in getOutput.
-  vector_size_t partitionOffset_;
 };
 
 template <TypeKind kind>
