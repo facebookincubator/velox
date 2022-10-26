@@ -16,6 +16,7 @@
 
 #include <optional>
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/vector/tests/TestingDictionaryArrayElementsFunction.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -54,22 +55,25 @@ class ArrayIntersectTest : public FunctionBaseTest {
   template <typename T>
   void testInt() {
     auto array1 = makeNullableArrayVector<T>({
-        {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
-        {1, 2, -2, 1},
-        {3, 8, std::nullopt},
-        {1, 1, -2, -2, -2, 4, 8},
+        {{1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt}},
+        {{1, 2, -2, 1}},
+        {{3, 8, std::nullopt}},
+        std::nullopt,
+        {{1, 1, -2, -2, -2, 4, 8}},
     });
     auto array2 = makeNullableArrayVector<T>({
         {1, -2, 4},
         {1, -2, 4},
         {1, -2, 4},
+        {1, 2},
         {1, -2, 4},
     });
     auto expected = makeNullableArrayVector<T>({
-        {1, -2, 4},
-        {1, -2},
-        {},
-        {1, -2, 4},
+        {{1, -2, 4}},
+        {{1, -2}},
+        {{}},
+        std::nullopt,
+        {{1, -2, 4}},
     });
     testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
     testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
@@ -79,13 +83,15 @@ class ArrayIntersectTest : public FunctionBaseTest {
         {10, -24, 43},
         {std::nullopt, -2, 2},
         {std::nullopt, std::nullopt, std::nullopt},
+        {0, 0, 0},
         {8, 1, 8, 1},
     });
     expected = makeNullableArrayVector<T>({
-        {},
-        {2, -2},
-        {std::nullopt},
-        {1, 8},
+        {{}},
+        {{2, -2}},
+        {std::vector<std::optional<T>>{std::nullopt}},
+        std::nullopt,
+        {{1, 8}},
     });
     testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
   }
@@ -255,4 +261,18 @@ TEST_F(ArrayIntersectTest, constant) {
   });
   testExpr(expected, "array_intersect(C0, ARRAY[1,NULL,4])", {array1});
   testExpr(expected, "array_intersect(ARRAY[1,NULL,4], C0)", {array1});
+}
+
+TEST_F(ArrayIntersectTest, dictionaryEncodedElementsInConstant) {
+  exec::registerVectorFunction(
+      "testing_dictionary_array_elements",
+      test::TestingDictionaryArrayElementsFunction::signatures(),
+      std::make_unique<test::TestingDictionaryArrayElementsFunction>());
+
+  auto array = makeArrayVector<int32_t>({{1, 3}, {2, 5}, {0, 6}});
+  auto expected = makeArrayVector<int32_t>({{1, 3}, {2}, {}});
+  testExpr(
+      expected,
+      "array_intersect(c0, testing_dictionary_array_elements(ARRAY [2, 2, 3, 1, 2, 2]))",
+      {array});
 }

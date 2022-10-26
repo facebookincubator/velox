@@ -81,7 +81,7 @@ class HashBuild final : public Operator {
 
  private:
   void setState(State state);
-  void stateTransitionCheck(State state);
+  void checkStateTransition(State state);
 
   void setRunning();
   bool isRunning() const;
@@ -105,6 +105,14 @@ class HashBuild final : public Operator {
   // it will transition to 'kWaitForProbe' to wait for the next spill data to
   // process which will be set by the join probe side.
   void postHashBuildProcess();
+
+  // Checks if the spilling is allowed for this hash join. As for now, we don't
+  // allow spilling for null-aware anti-join with filter set. It requires to
+  // cross join the null-key probe rows with all the build-side rows for filter
+  // evaluation which is not supported under spilling.
+  bool isSpillAllowed() const {
+    return !isNullAwareAntiJoinWithFilter(joinNode_);
+  }
 
   bool spillEnabled() const {
     return spillConfig_.has_value();
@@ -310,5 +318,4 @@ inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
   os << HashBuild::stateName(state);
   return os;
 }
-
 } // namespace facebook::velox::exec

@@ -178,7 +178,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       auto offset = baseLeftArray->offsetAt(idx);
 
       outputSet.reset();
-      *rawNewOffsets = indicesCursor;
+      rawNewOffsets[row] = indicesCursor;
 
       // Scans the array elements on the left-hand side.
       for (vector_size_t i = offset; i < (offset + size); ++i) {
@@ -217,9 +217,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
           }
         }
       }
-      *rawNewLengths = indicesCursor - *rawNewOffsets;
-      ++rawNewLengths;
-      ++rawNewOffsets;
+      rawNewLengths[row] = indicesCursor - rawNewOffsets[row];
     };
 
     SetWithNull<T> outputSet;
@@ -392,12 +390,19 @@ SetWithNull<T> validateConstantVectorAndGenerateSet(
   VELOX_CHECK_NOT_NULL(constantVector, "wrong constant type found");
   auto arrayVecPtr = constantVector->valueVector()->as<ArrayVector>();
   VELOX_CHECK_NOT_NULL(arrayVecPtr, "wrong array literal type");
-  auto elementsAsFlatVector = arrayVecPtr->elements()->as<FlatVector<T>>();
-  VELOX_CHECK_NOT_NULL(
-      elementsAsFlatVector, "constant value must be encoded as flat");
+
   auto idx = constantArray->index();
+  auto elementBegin = arrayVecPtr->offsetAt(idx);
+  auto elementEnd = elementBegin + arrayVecPtr->sizeAt(idx);
+
+  SelectivityVector rows{elementEnd, false};
+  rows.setValidRange(elementBegin, elementEnd, true);
+  rows.updateBounds();
+
+  DecodedVector decodedElements{*arrayVecPtr->elements(), rows};
+
   SetWithNull<T> constantSet;
-  generateSet<T>(arrayVecPtr, elementsAsFlatVector, idx, constantSet);
+  generateSet<T>(arrayVecPtr, &decodedElements, idx, constantSet);
   return constantSet;
 }
 
