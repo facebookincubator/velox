@@ -133,6 +133,14 @@ struct resolver<Generic<T>> {
   using null_free_in_type = in_type;
   using out_type = void; // Not supported as output type yet.
 };
+
+template <typename T>
+struct resolver<CustomType<T>> {
+  using in_type = typename resolver<typename T::velox_type>::in_type;
+  using null_free_in_type =
+      typename resolver<typename T::velox_type>::null_free_in_type;
+  using out_type = typename resolver<typename T::velox_type>::out_type;
+};
 } // namespace detail
 
 struct VectorExec {
