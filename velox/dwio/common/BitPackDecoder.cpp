@@ -174,7 +174,7 @@ int32_t decode1To24(
     break;
 
 template <typename T>
-void decodeBitsLE(
+void unpack(
     const uint64_t* FOLLY_NONNULL bits,
     int32_t bitOffset,
     RowSet rows,
@@ -289,7 +289,7 @@ void decodeBitsLE(
   }
 }
 
-template void decodeBitsLE(
+template void unpack(
     const uint64_t* FOLLY_NONNULL bits,
     int32_t bitOffset,
     RowSet rows,
@@ -298,7 +298,7 @@ template void decodeBitsLE(
     const char* FOLLY_NULLABLE bufferEnd,
     int32_t* FOLLY_NONNULL result);
 
-template void decodeBitsLE(
+template void unpack(
     const uint64_t* FOLLY_NONNULL bits,
     int32_t bitOffset,
     RowSet rows,
@@ -307,7 +307,7 @@ template void decodeBitsLE(
     const char* FOLLY_NULLABLE bufferEnd,
     int64_t* FOLLY_NONNULL result);
 
-template void decodeBitsLE(
+template void unpack(
     const uint64_t* FOLLY_NONNULL bits,
     int32_t bitOffset,
     RowSet rows,
@@ -316,7 +316,7 @@ template void decodeBitsLE(
     const char* FOLLY_NULLABLE bufferEnd,
     int128_t* FOLLY_NONNULL result);
 
-template void decodeBitsLE(
+template void unpack(
     const uint64_t* FOLLY_NONNULL bits,
     int32_t bitOffset,
     RowSet rows,

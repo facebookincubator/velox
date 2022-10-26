@@ -54,7 +54,7 @@ inline uint64_t safeLoadBits(
 /// extra-wide memory accesses will not be used at thee end of the range to
 /// stay under 'bufferEnd'.
 template <typename T>
-void decodeBitsLE(
+void unpack(
     const uint64_t* FOLLY_NONNULL bits,
     int32_t bitOffset,
     RowSet rows,

@@ -170,7 +170,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
     using TValues = typename std::remove_reference<decltype(values[0])>::type;
     using TIndex = typename std::make_signed_t<
         typename dwio::common::make_index<TValues>::type>;
-    facebook::velox::dwio::common::decodeBitsLE(
+    facebook::velox::dwio::common::unpack(
         reinterpret_cast<const uint64_t*>(super::bufferStart_),
         bitOffset_,
         folly::Range<const int32_t*>(rows + rowIndex, numRows),

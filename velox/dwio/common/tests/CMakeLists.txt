@@ -17,9 +17,9 @@ add_subdirectory(utils)
 add_executable(
   velox_dwio_common_test
   BitConcatenationTest.cpp
+  BitUnpackingTest.cpp
   ChainedBufferTests.cpp
   DataBufferTests.cpp
-  DecodeBitsTest.cpp
   DecoderUtilTest.cpp
   LoggedExceptionTest.cpp
   RangeTests.cpp

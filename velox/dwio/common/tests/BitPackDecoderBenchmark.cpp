@@ -47,7 +47,7 @@ std::vector<uint64_t> randomInts_u64;
 std::vector<uint64_t> randomInts_u64_result;
 std::vector<char> buffer_u64;
 
-// Naive unpacking, original version of IntDecoder::decodeBitsLE.
+// Naive unpacking, original version of IntDecoder::unpack.
 template <typename T>
 void naiveDecodeBitsLE(
     const uint64_t* FOLLY_NONNULL bits,
@@ -128,7 +128,7 @@ void unpackFast(RowSet rows, uint8_t bitWidth, T* result) {
   auto data = bitPackedData[bitWidth].data();
   auto numBytes = bits::roundUp((rows.back() + 1) * bitWidth, 8) / 8;
   auto end = reinterpret_cast<const char*>(data) + numBytes;
-  facebook::velox::dwio::common::decodeBitsLE(
+  facebook::velox::dwio::common::unpack(
       data,
       0,
       rows,
