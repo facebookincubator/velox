@@ -245,64 +245,69 @@ TEST_F(AverageAggregationTest, decimalAccumulator) {
 }
 
 TEST_F(AverageAggregationTest, avgDecimal) {
-  // facebook::velox::exec::test::AggregateTypeResolver resolver(step);
-  auto runAndCompare = [&](std::vector<VectorPtr> input,
-                           VectorPtr expectedResult,
-                           bool isSingle = true) {
-    // Decimal average cannot be directly compared with duckdb decimal average,
-    // whose return type is double. Hence, cannot use testAggregations.
-    // Need to use PlanBuilder as it registers a AggregateTypeResolver Vs
-    // evaluate<ReturnType> which would compile the expressions through
-    // Simple/Vector function resolvers.
-    auto planNodePtr = createAvgAggPlanNode(input, isSingle);
-    AssertQueryBuilder queryBuilder(planNodePtr);
-    std::vector<RowVectorPtr> expectedRowVector = {
-        makeRowVector({expectedResult})};
-    queryBuilder.assertResults(expectedRowVector);
-  };
   auto shortDecimal = makeNullableShortDecimalFlatVector(
       {1'000, 2'000, 3'000, 4'000, 5'000, std::nullopt}, DECIMAL(10, 1));
-  runAndCompare(
-      {shortDecimal}, makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1)));
+  // Short decimal aggregation
+  testAggregations(
+      {makeRowVector({shortDecimal})},
+      {},
+      {"avg(c0)"},
+      {},
+      {makeRowVector({makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1))})});
 
-  runAndCompare(
-      {makeNullableLongDecimalFlatVector(
+  // Long decimal aggregation
+  testAggregations(
+      {makeRowVector({makeNullableLongDecimalFlatVector(
           {buildInt128(10, 100),
            buildInt128(10, 200),
            buildInt128(10, 300),
            buildInt128(10, 400),
            buildInt128(10, 500),
            std::nullopt},
-          DECIMAL(23, 4))},
-      makeLongDecimalFlatVector({buildInt128(10, 300)}, DECIMAL(23, 4)));
-
+          DECIMAL(23, 4))})},
+      {},
+      {"avg(c0)"},
+      {},
+      {makeRowVector({makeLongDecimalFlatVector(
+          {buildInt128(10, 300)}, DECIMAL(23, 4))})});
   // Round-up average.
-  runAndCompare(
-      {makeNullableShortDecimalFlatVector({100, 400, 510}, DECIMAL(3, 2))},
-      makeShortDecimalFlatVector({337}, DECIMAL(3, 2)));
+  testAggregations(
+      {makeRowVector({makeNullableShortDecimalFlatVector(
+          {100, 400, 510}, DECIMAL(3, 2))})},
+      {},
+      {"avg(c0)"},
+      {},
+      {makeRowVector({makeShortDecimalFlatVector({337}, DECIMAL(3, 2))})});
 
   // The total sum overflows the max int128_t limit.
   std::vector<int128_t> rawVector;
   for (int i = 0; i < 10; ++i) {
     rawVector.push_back(UnscaledLongDecimal::max().unscaledValue());
   }
-  runAndCompare(
-      {makeLongDecimalFlatVector(rawVector, DECIMAL(38, 0))},
-      makeLongDecimalFlatVector(
-          {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0)));
+  testAggregations(
+      {makeRowVector({makeLongDecimalFlatVector(rawVector, DECIMAL(38, 0))})},
+      {},
+      {"avg(c0)"},
+      {},
+      {makeRowVector({makeLongDecimalFlatVector(
+          {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0))})});
+  // The total sum underflows the min int128_t limit.
   rawVector.clear();
   auto underFlowTestResult = makeLongDecimalFlatVector(
       {UnscaledLongDecimal::min().unscaledValue()}, DECIMAL(38, 0));
-  // The total sum underflows the min int128_t limit.
-  // Add more values.
   for (int i = 0; i < 10; ++i) {
     rawVector.push_back(UnscaledLongDecimal::min().unscaledValue());
   }
-  runAndCompare(
-      {makeLongDecimalFlatVector(rawVector, DECIMAL(38, 0))},
-      underFlowTestResult);
+  testAggregations(
+      {makeRowVector({makeLongDecimalFlatVector(rawVector, DECIMAL(38, 0))})},
+      {},
+      {"avg(c0)"},
+      {},
+      {makeRowVector({underFlowTestResult})});
 
-  // Add more rows to show that average result starts deviating from expected.
+  // Add more rows to show that average result starts deviating from expected
+  // result with varying row count.
+  // Making sure the error value is consistent.
   for (int i = 0; i < 10; ++i) {
     rawVector.push_back(UnscaledLongDecimal::min().unscaledValue());
   }
@@ -315,6 +320,27 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   ASSERT_EQ(
       underFlowTestResult->valueAt(0) - actualResult->valueAt(0),
       UnscaledLongDecimal(-13));
+
+  // Test constant vector.
+  testAggregations(
+      {makeRowVector({makeConstant<UnscaledShortDecimal>(
+          UnscaledShortDecimal(100), 10, DECIMAL(3, 2))})},
+      {},
+      {"avg(c0)"},
+      {},
+      {makeRowVector({makeShortDecimalFlatVector({100}, DECIMAL(3, 2))})});
+
+  auto newSize = shortDecimal->size() * 2;
+  auto indices = makeIndices(newSize, [&](int row) { return row / 2; });
+  auto dictVector =
+      VectorTestBase::wrapInDictionary(indices, newSize, shortDecimal);
+
+  testAggregations(
+      {makeRowVector({dictVector})},
+      {},
+      {"avg(c0)"},
+      {},
+      {makeRowVector({makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1))})});
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test
