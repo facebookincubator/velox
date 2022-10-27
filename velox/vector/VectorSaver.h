@@ -61,9 +61,4 @@ VectorPtr restoreVectorFromFile(
 /// Reads a string from a file stored by saveStringToFile() method
 std::string restoreStringFromFile(const char* FOLLY_NONNULL filePath);
 
-/// Generates a file path in specified directory. Returns std::nullopt on
-/// failure.
-std::optional<std::string> generateFilePath(
-    const char* FOLLY_NONNULL basePath,
-    const char* FOLLY_NONNULL prefix);
 } // namespace facebook::velox

@@ -220,6 +220,7 @@ bool ExpressionVerifier::verify(
     } else {
       // Throws in case output is different.
       compareVectors(commonEvalResult.front(), simplifiedEvalResult.front());
+      VELOX_FAIL("STRATEGIC DEBUG FAIL"); // DEBUG, TO BE DELETED
     }
   } catch (...) {
     if (!options_.reproPersistPath.empty()) {
@@ -244,7 +245,7 @@ void ExpressionVerifier::persistReproInfo(
   }
 
   // Saving input vector
-  auto inputPathOpt = generateFilePath(basePath, "vector");
+  auto inputPathOpt = common::generateFilePath(basePath, "input_vector");
   if (!inputPathOpt.has_value()) {
     inputPath = "Failed to create file for saving input vector.";
   } else {
@@ -258,7 +259,7 @@ void ExpressionVerifier::persistReproInfo(
 
   // Saving result vector
   if (resultVector) {
-    auto resultPathOpt = generateFilePath(basePath, "vector");
+    auto resultPathOpt = common::generateFilePath(basePath, "result_vector");
     if (!resultPathOpt.has_value()) {
       resultPath = "Failed to create file for saving result vector.";
     } else {
@@ -272,7 +273,7 @@ void ExpressionVerifier::persistReproInfo(
   }
 
   // Saving sql
-  auto sqlPathOpt = generateFilePath(basePath, "sql");
+  auto sqlPathOpt = common::generateFilePath(basePath, "expression_sql");
   if (!sqlPathOpt.has_value()) {
     sqlPath = "Failed to create file for saving SQL.";
   } else {

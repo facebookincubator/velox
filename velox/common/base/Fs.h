@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <optional>
+
 #if __has_include("filesystem")
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -31,5 +33,14 @@ namespace facebook::velox::common {
 /// creation is unsuccessful, but already created directories will not be
 /// removed.
 bool generateFileDirectory(const char* dirPath);
+
+/// Creates a file with a generated file name in provided 'basePath'. The
+/// generated file will have random chars in the file name to avoid duplication.
+/// The full path of the file will be of the pattern
+/// {basePath}/velox_{prefix}_XXXXXX where 'XXXXXX' is the randomly generated
+/// chars. A nullopt will be returned if file creation fails.
+std::optional<std::string> generateFilePath(
+    const char* basePath,
+    const char* prefix);
 
 } // namespace facebook::velox::common

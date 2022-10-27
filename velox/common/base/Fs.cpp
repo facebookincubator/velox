@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/Fs.h"
+#include <fmt/format.h>
 #include <glog/logging.h>
 
 namespace facebook::velox::common {
@@ -22,13 +23,25 @@ namespace facebook::velox::common {
 bool generateFileDirectory(const char* dirPath) {
   std::error_code errorCode;
   auto success = fs::create_directories(dirPath, errorCode);
-  if (!success) {
+  fs::permissions(dirPath, fs::perms::all, fs::perm_options::replace);
+  if (!success && errorCode.value() != 0) {
     LOG(ERROR) << "Failed to create file directory '" << dirPath
                << "'. Error: " << errorCode.message() << " errno "
                << errorCode.value();
     return false;
   }
   return true;
+}
+
+std::optional<std::string> generateFilePath(
+    const char* basePath,
+    const char* prefix) {
+  auto path = fmt::format("{}/velox_{}_XXXXXX", basePath, prefix);
+  auto fd = mkstemp(path.data());
+  if (fd == -1) {
+    return std::nullopt;
+  }
+  return path;
 }
 
 } // namespace facebook::velox::common
