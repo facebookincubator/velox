@@ -173,9 +173,26 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_RIGHT_SEMI:
       joinType = core::JoinType::kRightSemi;
       break;
-    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_ANTI:
-      joinType = core::JoinType::kNullAwareAnti;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_ANTI: {
+      // Determine the anti join type based on extracted information.
+      bool isNullAwareAntiJoin = false;
+      if (sJoin.has_advanced_extension() &&
+          sJoin.advanced_extension().has_optimization()) {
+        std::string msg = sJoin.advanced_extension().optimization().value();
+        std::string nullAwareKey = "isNullAwareAntiJoin=";
+        std::size_t pos = msg.find(nullAwareKey);
+        if ((pos != std::string::npos) &&
+            (msg.substr(pos + nullAwareKey.size(), 1) == "1")) {
+          isNullAwareAntiJoin = true;
+        }
+      }
+      if (isNullAwareAntiJoin) {
+        joinType = core::JoinType::kNullAwareAnti;
+      } else {
+        joinType = core::JoinType::kAnti;
+      }
       break;
+    }
     default:
       VELOX_NYI("Unsupported Join type: {}", sJoin.type());
   }

@@ -95,7 +95,7 @@ class SubstraitParser {
   std::unordered_map<std::string, std::string> substraitVeloxFunctionMap_ = {
       {"is_not_null", "isnotnull"}, /*Spark functions.*/
       {"is_null", "isnull"},
-      {"equal", "equalto"}, 
+      {"equal", "equalto"},
       {"lt", "lessthan"},
       {"lte", "lessthanorequal"},
       {"gt", "greaterthan"},
