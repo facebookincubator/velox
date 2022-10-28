@@ -16,6 +16,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/AverageDecimalAccumulator.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -295,7 +296,7 @@ class DecimalAverageAggregate : public exec::Aggregate {
       : exec::Aggregate(resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(exec::AverageDecimalAccumulator);
+    return sizeof(AverageDecimalAccumulator);
   }
 
   int32_t accumulatorAlignmentSize() const override {
@@ -307,7 +308,7 @@ class DecimalAverageAggregate : public exec::Aggregate {
       folly::Range<const vector_size_t*> indices) override {
     setAllNulls(groups, indices);
     for (auto i : indices) {
-      new (groups[i] + offset_) exec::AverageDecimalAccumulator();
+      new (groups[i] + offset_) AverageDecimalAccumulator();
     }
   }
 
@@ -367,19 +368,19 @@ class DecimalAverageAggregate : public exec::Aggregate {
       });
     } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
       const TUnscaledType* data = decodedRaw_.data<TUnscaledType>();
-      exec::AverageDecimalAccumulator accumulator;
+      AverageDecimalAccumulator accumulator;
       rows.applyToSelected([&](vector_size_t i) {
         accumulator.overflow += DecimalUtil::addWithOverflow(
             accumulator.sum, data[i].unscaledValue(), accumulator.sum);
       });
       accumulator.count = rows.countSelected();
-      char rawData[exec::AverageDecimalAccumulator::serializedSize()];
+      char rawData[AverageDecimalAccumulator::serializedSize()];
       StringView serialized(
-          rawData, exec::AverageDecimalAccumulator::serializedSize());
+          rawData, AverageDecimalAccumulator::serializedSize());
       accumulator.serialize(serialized);
       mergeAccumulators<false>(group, serialized);
     } else {
-      exec::AverageDecimalAccumulator accumulator;
+      AverageDecimalAccumulator accumulator;
       rows.applyToSelected([&](vector_size_t i) {
         accumulator.overflow += DecimalUtil::addWithOverflow(
             accumulator.sum,
@@ -387,9 +388,9 @@ class DecimalAverageAggregate : public exec::Aggregate {
             accumulator.sum);
       });
       accumulator.count = rows.countSelected();
-      char rawData[exec::AverageDecimalAccumulator::serializedSize()];
+      char rawData[AverageDecimalAccumulator::serializedSize()];
       StringView serialized(
-          rawData, exec::AverageDecimalAccumulator::serializedSize());
+          rawData, AverageDecimalAccumulator::serializedSize());
       accumulator.serialize(serialized);
       mergeAccumulators(group, serialized);
     }
@@ -544,8 +545,8 @@ class DecimalAverageAggregate : public exec::Aggregate {
   }
 
  private:
-  inline exec::AverageDecimalAccumulator* decimalAccumulator(char* group) {
-    return exec::Aggregate::value<exec::AverageDecimalAccumulator>(group);
+  inline AverageDecimalAccumulator* decimalAccumulator(char* group) {
+    return exec::Aggregate::value<AverageDecimalAccumulator>(group);
   }
 
   DecodedVector decodedRaw_;
