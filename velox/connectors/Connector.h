@@ -172,7 +172,7 @@ class ConnectorQueryCtx {
   ConnectorQueryCtx(
       memory::MemoryPool* FOLLY_NONNULL pool,
       const Config* FOLLY_NONNULL connectorConfig,
-      ExpressionEvaluator* FOLLY_NONNULL expressionEvaluator,
+      ExpressionEvaluator* FOLLY_NULLABLE expressionEvaluator,
       memory::MappedMemory* FOLLY_NONNULL mappedMemory,
       const std::string& taskId,
       const std::string& planNodeId,
@@ -193,7 +193,7 @@ class ConnectorQueryCtx {
     return config_;
   }
 
-  ExpressionEvaluator* FOLLY_NONNULL expressionEvaluator() const {
+  ExpressionEvaluator* FOLLY_NULLABLE expressionEvaluator() const {
     return expressionEvaluator_;
   }
 
@@ -222,7 +222,7 @@ class ConnectorQueryCtx {
  private:
   memory::MemoryPool* FOLLY_NONNULL pool_;
   const Config* FOLLY_NONNULL config_;
-  ExpressionEvaluator* FOLLY_NONNULL expressionEvaluator_;
+  ExpressionEvaluator* FOLLY_NULLABLE expressionEvaluator_;
   memory::MappedMemory* FOLLY_NONNULL mappedMemory_;
   const std::string scanId_;
   const std::string taskId_;

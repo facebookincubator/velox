@@ -253,11 +253,17 @@ velox::variant mapVariantAt(
   for (int i = 0; i < keyList.size(); i++) {
     // TODO: Add support for complex key and value types. Also add support for
     // NULL keys or values.
-    auto variantKey =
+    auto key =
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(variantAt, keyType, keyList[i]);
-    auto variantValue =
+    auto value =
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(variantAt, valueType, valueList[i]);
-    map.insert({variantKey, variantValue});
+    bool ok = map.insert({key, value}).second;
+    VELOX_CHECK(
+        ok,
+        "Unexpected duplicate key in a map: {} => {} and {}",
+        key.toJson(),
+        value.toJson(),
+        map.at(key).toJson());
   }
   return velox::variant::map(map);
 }
@@ -385,7 +391,13 @@ velox::variant mapVariantAt(const VectorPtr& vector, vector_size_t row) {
     auto innerRow = offset + i;
     auto key = variantAt(mapKeys, innerRow);
     auto value = variantAt(mapValues, innerRow);
-    map.insert({key, value});
+    auto ok = map.insert({key, value}).second;
+    VELOX_CHECK(
+        ok,
+        "Unexpected duplicate key in a map: {} => {} and {}",
+        key.toJson(),
+        value.toJson(),
+        map.at(key).toJson());
   }
   return velox::variant::map(map);
 }

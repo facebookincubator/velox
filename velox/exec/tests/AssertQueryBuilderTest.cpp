@@ -198,4 +198,12 @@ TEST_F(AssertQueryBuilderTest, nestedArrayMapResults) {
   assertEqualResults({input}, {input});
 }
 
+TEST_F(AssertQueryBuilderTest, duplicateMapKeys) {
+  auto input = makeRowVector({makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 10}, {1, 12}, {2, 20}}},
+      {{{1, 100}, {1, 112}, {2, 200}}},
+  })});
+
+  EXPECT_ANY_THROW(assertEqualResults({input}, {input}));
+}
 } // namespace facebook::velox::exec::test
