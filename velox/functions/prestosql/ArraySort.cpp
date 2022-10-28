@@ -87,8 +87,6 @@ void applyScalarType(
   VELOX_DCHECK(kind == inputElements->typeKind());
   const SelectivityVector inputElementRows =
       toElementRows(inputElements->size(), rows, inputArray);
-  exec::LocalDecodedVector decodedElements(
-      context, *inputElements, inputElementRows);
   const vector_size_t elementsCount = inputElementRows.size();
 
   // TODO: consider to use dictionary wrapping to avoid the direct sorting on
@@ -96,11 +94,8 @@ void applyScalarType(
   // practice.
   resultElements =
       BaseVector::create(inputElements->type(), elementsCount, context.pool());
-  LOG(INFO) << "InputElements:" << inputElements->toString();
-  LOG(INFO) << "ArrayVector@0 : " << inputArray->toString(0);
-  LOG(INFO) << "Decoded base:" << decodedElements->base()->toString();
   resultElements->copy(
-      decodedElements->base(), inputElementRows, /*toSourceRow=*/nullptr);
+      inputElements.get(), inputElementRows, /*toSourceRow=*/nullptr);
 
   auto flatResults = resultElements->asFlatVector<T>();
 
