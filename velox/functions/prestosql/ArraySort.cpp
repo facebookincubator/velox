@@ -96,6 +96,9 @@ void applyScalarType(
   // practice.
   resultElements =
       BaseVector::create(inputElements->type(), elementsCount, context.pool());
+  LOG(INFO) << "InputElements:" << inputElements->toString();
+  LOG(INFO) << "ArrayVector@0 : " << inputArray->toString(0);
+  LOG(INFO) << "Decoded base:" << decodedElements->base()->toString();
   resultElements->copy(
       decodedElements->base(), inputElementRows, /*toSourceRow=*/nullptr);
 

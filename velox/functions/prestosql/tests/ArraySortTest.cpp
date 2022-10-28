@@ -405,6 +405,45 @@ TEST_P(ArraySortTest, constant) {
   assertEqualVectors(expected, result);
 }
 
+TEST_P(ArraySortTest, multilevelDictionaries) {
+  if (GetParam() != TypeKind::BIGINT) {
+    GTEST_SKIP() << "Skipping constant test for non-bigint type";
+  }
+
+  // Create dictionaries that are multiple levels deep. Odd numLevels will
+  // return a reverse element and even will return the original elements in
+  // order when decoded.
+  auto multiLevelDictionary = [&](uint32_t numLevels, VectorPtr rootElements) {
+    VectorPtr dictionaryVector = rootElements;
+    for (auto i = 0; i < numLevels; i++) {
+      dictionaryVector = wrapInDictionary(
+          makeIndicesInReverse(rootElements->size()), dictionaryVector);
+    }
+    return dictionaryVector;
+  };
+
+  auto evaluateSort = [&](const VectorPtr& arrayVector,
+                          const VectorPtr& expected) {
+    auto result = evaluate("array_sort(c0)", makeRowVector({arrayVector}));
+    assertEqualVectors(expected, result);
+  };
+
+  auto rootElementVector =
+      makeNullableFlatVector<int64_t>({3, 1, 2, std::nullopt});
+  // One array with element vector 5 dictionaries deep.
+  auto arrayVector =
+      makeArrayVector({0}, multiLevelDictionary(5, rootElementVector));
+  evaluateSort(
+      arrayVector, makeNullableArrayVector<int64_t>({{1, 2, 3, std::nullopt}}));
+
+  // Two arrays , 4 dictionary deep element vector.
+  arrayVector =
+      makeArrayVector({0, 2}, multiLevelDictionary(4, rootElementVector));
+  evaluateSort(
+      arrayVector,
+      makeNullableArrayVector<int64_t>({{1, 3}, {2, std::nullopt}}));
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     ArraySortTest,
     ArraySortTest,
