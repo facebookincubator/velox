@@ -147,6 +147,25 @@ macro(build_protobuf)
 endmacro()
 # ================================ END PROTOBUF ================================
 
+# ================================== PYBIND11 ==================================
+if(DEFINED ENV{VELOX_PYBIND11_URL})
+  set(PYBIND11_SOURCE_URL "$ENV{VELOX_PYBIND11_URL}")
+else()
+  set(VELOX_PYBIND11_BUILD_VERSION 2.10.0)
+  string(
+          CONCAT
+          PROTOBUF_SOURCE_URL
+          "https://github.com/pybind/pybind11/archive/refs/tags/"
+          "v${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz"
+  )
+  set(VELOX_PYBIND11_BUILD_SHA256_CHECKSUM
+          6c5e1b0788afba4569aeebb2cfe205cb154aa01deacaba0cd26442f3b761a836)
+endif()
+
+
+
+# ================================ END PYBIND11 ================================
+
 macro(build_dependency DEPENDENCY_NAME)
   if("${DEPENDENCY_NAME}" STREQUAL "folly")
     build_folly()
