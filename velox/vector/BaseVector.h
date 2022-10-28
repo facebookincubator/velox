@@ -365,7 +365,7 @@ class BaseVector {
     clearNulls(0, size());
   }
 
-  // Sets the size to 'size' and ensures there is space for the
+  // Sets the size to 'newSize' and ensures there is space for the
   // indicated number of nulls and top level values (eg. values for Flat,
   // indices for Dictionary, etc). Any immutable buffers that need to be resized
   // are copied. 'setNotNull' indicates if nulls in range [oldSize, newSize]

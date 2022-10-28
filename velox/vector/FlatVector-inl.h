@@ -311,13 +311,16 @@ VectorPtr FlatVector<T>::slice(vector_size_t offset, vector_size_t length)
 template <typename T>
 void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
   auto previousSize = BaseVector::length_;
+  if (newSize == previousSize) {
+    return;
+  }
   BaseVector::resize(newSize, setNotNull);
   if (!values_) {
     return;
   }
 
   if constexpr (std::is_same_v<T, StringView>) {
-    resizeValues(&values_, BaseVector::pool_, newSize, StringView());
+    resizeValues(newSize, StringView());
     if (newSize < previousSize) {
       auto vector = this->template asUnchecked<SimpleVector<StringView>>();
       vector->invalidateIsAscii();
@@ -326,7 +329,7 @@ void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
       clearStringBuffers();
     }
   } else {
-    resizeValues(&values_, BaseVector::pool_, newSize, std::nullopt);
+    resizeValues(newSize, std::nullopt);
   }
   rawValues_ = values_->asMutable<T>();
 }
@@ -385,77 +388,69 @@ void FlatVector<T>::prepareForReuse() {
 
 template <typename T>
 void FlatVector<T>::resizeValues(
-    BufferPtr* buffer,
-    velox::memory::MemoryPool* pool,
     vector_size_t newSize,
     const std::optional<T>& initialValue) {
-  if (buffer->get() && buffer->get()->unique() && buffer->get()->isMutable()) {
+  if (values_ && values_->isMutable()) {
     const uint64_t newByteSize = BaseVector::byteSize<T>(newSize);
-    if (buffer->get()->size() < newByteSize) {
-      AlignedBuffer::reallocate<T>(buffer, newSize, initialValue);
+    if (values_->capacity() < newByteSize) {
+      AlignedBuffer::reallocate<T>(&values_, newSize, initialValue);
     } else {
-      buffer->get()->setSize(newByteSize);
+      values_->setSize(newByteSize);
     }
     return;
   }
-  BufferPtr newValues;
-  newValues = AlignedBuffer::allocate<T>(newSize, pool, initialValue);
+  BufferPtr newValues =
+      AlignedBuffer::allocate<T>(newSize, BaseVector::pool_, initialValue);
 
-  if (buffer->get()) {
+  if (values_) {
     if constexpr (Buffer::is_pod_like_v<T>) {
       auto dst = newValues->asMutable<T>();
-      auto src = buffer->get()->as<T>();
-      auto len = std::min(buffer->get()->size(), newValues->size());
+      auto src = values_->as<T>();
+      auto len = std::min(values_->size(), newValues->size());
       memcpy(dst, src, len);
     } else {
       auto previousSize = BaseVector::length_;
       auto rawOldValues = newValues->asMutable<T>();
       auto rawNewValues = newValues->asMutable<T>();
-      SelectivityVector rowsToCopy(
-          std::min<vector_size_t>(newSize, previousSize));
-      rowsToCopy.applyToSelected(
-          [&](vector_size_t row) { rawNewValues[row] = rawOldValues[row]; });
+      auto len = std::min<vector_size_t>(newSize, previousSize);
+      for (vector_size_t row = 0; row < len; row++) {
+        rawNewValues[row] = rawOldValues[row];
+      }
     }
   }
-  (*buffer) = std::move(newValues);
+  values_ = std::move(newValues);
 }
 
 template <>
 inline void FlatVector<bool>::resizeValues(
-    BufferPtr* buffer,
-    velox::memory::MemoryPool* pool,
     vector_size_t newSize,
     const std::optional<bool>& initialValue) {
-  if (buffer->get() && buffer->get()->unique() && buffer->get()->isMutable()) {
+  if (values_ && values_->isMutable()) {
     const uint64_t newByteSize = BaseVector::byteSize<bool>(newSize);
-    if (buffer->get()->size() < newByteSize) {
-      AlignedBuffer::reallocate<bool>(buffer, newSize, initialValue);
+    if (values_->size() < newByteSize) {
+      AlignedBuffer::reallocate<bool>(&values_, newSize, initialValue);
     } else {
-      buffer->get()->setSize(newByteSize);
+      values_->setSize(newByteSize);
     }
     // ensure that the newly added positions have the right initial value for
     // the case where changes in size don't result in change in the size of
     // the underlying buffer.
     if (initialValue.has_value() && length_ < newSize) {
-      auto rawData = buffer->get()->asMutable<uint64_t>();
-      bits::fillBits(
-          const_cast<uint64_t*>(rawData),
-          length_,
-          newSize,
-          initialValue.value());
+      auto rawData = values_->asMutable<uint64_t>();
+      bits::fillBits(rawData, length_, newSize, initialValue.value());
     }
     return;
   }
-  BufferPtr newValues;
-  newValues = AlignedBuffer::allocate<bool>(newSize, pool, initialValue);
+  BufferPtr newValues =
+      AlignedBuffer::allocate<bool>(newSize, BaseVector::pool_, initialValue);
 
-  if (buffer->get()) {
+  if (values_) {
     auto dst = newValues->asMutable<char>();
-    auto src = buffer->get()->as<char>();
-    auto len = std::min(buffer->get()->size(), newValues->size());
+    auto src = values_->as<char>();
+    auto len = std::min(values_->size(), newValues->size());
     memcpy(dst, src, len);
   }
-  (*buffer) = std::move(newValues);
+  values_ = std::move(newValues);
 }
 } // namespace velox
 } // namespace facebook

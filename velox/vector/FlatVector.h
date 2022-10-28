@@ -449,12 +449,10 @@ class FlatVector final : public SimpleVector<T> {
       vector_size_t sourceIndex,
       vector_size_t count);
 
-  // Ensures that '*indices' has space for 'newSize' elements and is mutable.
-  // Sets elements between the old and new sizes to 'initialValue' if the new
-  // size > old size.
+  // Ensures that the values buffer has space for 'newSize' elements and is
+  // mutable. Sets elements between the old and new sizes to 'initialValue' if
+  // the new size > old size.
   void resizeValues(
-      BufferPtr* buffer,
-      velox::memory::MemoryPool* pool,
       vector_size_t newSize,
       const std::optional<T>& initialValue);
 

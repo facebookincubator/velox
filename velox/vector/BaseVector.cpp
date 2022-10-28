@@ -100,7 +100,7 @@ uint64_t BaseVector::byteSize<bool>(vector_size_t count) {
 void BaseVector::resize(vector_size_t size, bool setNotNull) {
   if (nulls_) {
     auto bytes = byteSize<bool>(size);
-    if (length_ < size) {
+    if (length_ < size || !nulls_->isMutable()) {
       ensureNullsCapacity(size, setNotNull);
     }
     nulls_->setSize(bytes);

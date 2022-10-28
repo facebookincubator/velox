@@ -2963,6 +2963,7 @@ TEST_F(ExprTest, addNulls) {
     VectorPtr vector =
         makeFlatVector<int64_t>(kSize, [](auto row) { return row; });
     auto slicedVector = vector->slice(0, kSize - 1);
+    ASSERT_FALSE(slicedVector->values()->isMutable());
     exec::Expr::addNulls(rows, rawNulls, context, BIGINT(), slicedVector);
 
     checkResult(slicedVector);

@@ -355,15 +355,6 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     // Check that type kind is preserved in cases where T is the same with.
     EXPECT_EQ(
         flat->typeKind(), BaseVector::wrapInConstant(100, 0, flat)->typeKind());
-
-    // Test that resize works even when the underlying values buffer is
-    // immutable. This is done by first slicing the vector which creates buffer
-    // views of its nulls and values buffer which are immutable.
-    auto slicedFlat = flat->slice(0, size);
-    slicedFlat->resize(2 * size);
-    EXPECT_EQ(slicedFlat->size(), size * 2);
-    EXPECT_GE(
-        slicedFlat->values()->capacity(), BaseVector::byteSize<T>(size * 2));
   }
 
   static SelectivityVector selectEven(vector_size_t size) {
@@ -666,6 +657,14 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
           slice->size(),
           std::make_unique<TestingLoader>(slice));
       testSlices(wrapped, level - 1);
+    }
+    {
+      // Test that resize works even when the underlying buffers are
+      // immutable. This is true for a slice since it creates buffer views over
+      // the buffers of the original vector that it sliced.
+      auto newSize = slice->size() * 2;
+      slice->resize(newSize);
+      EXPECT_EQ(slice->size(), newSize);
     }
   }
 
