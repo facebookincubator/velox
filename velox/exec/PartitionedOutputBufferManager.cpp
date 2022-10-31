@@ -476,8 +476,7 @@ std::shared_ptr<PartitionedOutputBuffer>
 PartitionedOutputBufferManager::getBuffer(const std::string& taskId) {
   return buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
-    VELOX_CHECK(
-        it != buffers.end(), "Output buffers for task not found: {}", taskId);
+    return it == buffers.end() ? nullptr : it->second;
     return it->second;
   });
 }
@@ -491,15 +490,24 @@ BlockingReason PartitionedOutputBufferManager::enqueue(
     int destination,
     std::unique_ptr<SerializedPage> data,
     ContinueFuture* future) {
-  return getBuffer(taskId)->enqueue(destination, std::move(data), future);
+  auto buffer = getBuffer(taskId);
+  if (buffer) {
+    return getBuffer(taskId)->enqueue(destination, std::move(data), future);
+  } else {
+    return BlockingReason::kNotBlocked;
+  }
 }
 
 void PartitionedOutputBufferManager::noMoreData(const std::string& taskId) {
-  getBuffer(taskId)->noMoreData();
+  auto buffer = getBuffer(taskId);
+  if (buffer) {
+    buffer->noMoreData();
+  }
 }
 
 bool PartitionedOutputBufferManager::isFinished(const std::string& taskId) {
-  return getBuffer(taskId)->isFinished();
+  auto buffer = getBuffer(taskId);
+  return !buffer || buffer->isFinished();
 }
 
 void PartitionedOutputBufferManager::acknowledge(
@@ -543,7 +551,10 @@ void PartitionedOutputBufferManager::getData(
     uint64_t maxBytes,
     int64_t sequence,
     DataAvailableCallback notify) {
-  getBuffer(taskId)->getData(destination, maxBytes, sequence, notify);
+  auto buffer = getBuffer(taskId);
+  if (buffer) {
+    buffer->getData(destination, maxBytes, sequence, notify);
+  }
 }
 
 void PartitionedOutputBufferManager::initializeTask(
@@ -569,13 +580,19 @@ void PartitionedOutputBufferManager::updateBroadcastOutputBuffers(
     const std::string& taskId,
     int numBuffers,
     bool noMoreBuffers) {
-  getBuffer(taskId)->updateBroadcastOutputBuffers(numBuffers, noMoreBuffers);
+  auto buffer = getBuffer(taskId);
+  if (buffer) {
+    buffer->updateBroadcastOutputBuffers(numBuffers, noMoreBuffers);
+  }
 }
 
 void PartitionedOutputBufferManager::updateNumDrivers(
     const std::string& taskId,
     uint32_t newNumDrivers) {
-  getBuffer(taskId)->updateNumDrivers(newNumDrivers);
+  auto buffer = getBuffer(taskId);
+  if (buffer) {
+    buffer->updateNumDrivers(newNumDrivers);
+  }
 }
 
 void PartitionedOutputBufferManager::removeTask(const std::string& taskId) {
