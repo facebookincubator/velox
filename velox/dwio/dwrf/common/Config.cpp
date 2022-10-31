@@ -188,9 +188,10 @@ Config::Entry<uint64_t> Config::MAX_DICTIONARY_SIZE(
     "hive.exec.orc.max.dictionary.size",
     80L * 1024L * 1024L);
 
+// Decreased from 256MB to 72MB until we fix T136142244
 Config::Entry<uint64_t> Config::STRIPE_SIZE(
     "hive.exec.orc.stripe.size",
-    256L * 1024L * 1024L);
+    72L * 1024L * 1024L);
 
 Config::Entry<bool> Config::FORCE_LOW_MEMORY_MODE(
     "hive.exec.orc.low.memory",
