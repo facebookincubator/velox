@@ -213,7 +213,7 @@ class Divide {
   template <typename R, typename A, typename B>
   inline static void
   apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t /*bRescale*/) {
-    VELOX_CHECK_NE(b.unscaledValue(), 0, "Division by zero");
+    VELOX_USER_CHECK_NE(b.unscaledValue(), 0, "Division by zero");
     int resultSign = 1;
     R unsignedDividendRescaled(a);
     if (a < 0) {
