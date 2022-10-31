@@ -41,6 +41,10 @@ class SubstraitParser {
   std::vector<std::shared_ptr<SubstraitType>> parseNamedStruct(
       const ::substrait::NamedStruct& namedStruct);
 
+  /// Used to parse partition columns from Substrait NamedStruct.
+  std::vector<bool> parsePartitionColumns(
+      const ::substrait::NamedStruct& namedStruct);
+
   /// Parse Substrait Type.
   std::shared_ptr<SubstraitType> parseType(
       const ::substrait::Type& substraitType);

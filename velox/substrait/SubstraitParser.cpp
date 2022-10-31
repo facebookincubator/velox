@@ -158,6 +158,36 @@ SubstraitParser::parseNamedStruct(const ::substrait::NamedStruct& namedStruct) {
   return substraitTypeList;
 }
 
+std::vector<bool> SubstraitParser::parsePartitionColumns(
+    const ::substrait::NamedStruct& namedStruct) {
+  const auto& columnsTypes = namedStruct.partition_columns().column_type();
+  std::vector<bool> isPartitionColumns;
+  if (columnsTypes.size() == 0) {
+    // Regard all columns as non-partitioned columns.
+    isPartitionColumns.resize(namedStruct.names().size(), false);
+    return isPartitionColumns;
+  } else {
+    VELOX_CHECK(
+        columnsTypes.size() == namedStruct.names().size(),
+        "Invalid partion columns.");
+  }
+
+  isPartitionColumns.reserve(columnsTypes.size());
+  for (const auto& columnType : columnsTypes) {
+    switch (columnType) {
+      case ::substrait::PartitionColumns::NORMAL_COL:
+        isPartitionColumns.emplace_back(false);
+        break;
+      case ::substrait::PartitionColumns::PARTITION_COL:
+        isPartitionColumns.emplace_back(true);
+        break;
+      default:
+        VELOX_FAIL("Patition column type is not supported.");
+    }
+  }
+  return isPartitionColumns;
+}
+
 int32_t SubstraitParser::parseReferenceSegment(
     const ::substrait::Expression::ReferenceSegment& refSegment) {
   auto typeCase = refSegment.reference_type_case();

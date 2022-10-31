@@ -460,6 +460,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   // Get output names and types.
   std::vector<std::string> colNameList;
   std::vector<TypePtr> veloxTypeList;
+  std::vector<bool> isPartitionColumns;
   if (sRead.has_base_schema()) {
     const auto& baseSchema = sRead.base_schema();
     colNameList.reserve(baseSchema.names().size());
@@ -467,6 +468,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       colNameList.emplace_back(name);
     }
     auto substraitTypeList = subParser_->parseNamedStruct(baseSchema);
+    isPartitionColumns = subParser_->parsePartitionColumns(baseSchema);
     veloxTypeList.reserve(substraitTypeList.size());
     for (const auto& substraitType : substraitTypeList) {
       veloxTypeList.emplace_back(toVeloxType(substraitType->type));
@@ -573,10 +575,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       assignments;
   for (int idx = 0; idx < colNameList.size(); idx++) {
     auto outName = subParser_->makeNodeName(planNodeId_, idx);
+    auto columnType = isPartitionColumns[idx]
+        ? connector::hive::HiveColumnHandle::ColumnType::kPartitionKey
+        : connector::hive::HiveColumnHandle::ColumnType::kRegular;
     assignments[outName] = std::make_shared<connector::hive::HiveColumnHandle>(
-        colNameList[idx],
-        connector::hive::HiveColumnHandle::ColumnType::kRegular,
-        veloxTypeList[idx]);
+        colNameList[idx], columnType, veloxTypeList[idx]);
     outNames.emplace_back(outName);
   }
   auto outputType = ROW(std::move(outNames), std::move(veloxTypeList));
