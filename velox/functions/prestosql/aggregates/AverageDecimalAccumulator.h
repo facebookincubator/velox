@@ -56,7 +56,7 @@ struct AverageDecimalAccumulator {
 
   /*
    * Total size = sizeOf(count) + sizeOf(overflow) + sizeOf(sum)
-   *            = 4 + 4 + 8 = 16.
+   *            = 8 + 8 + 16 = 32.
    */
   inline static size_t serializedSize() {
     return sizeof(int64_t) * 4;
