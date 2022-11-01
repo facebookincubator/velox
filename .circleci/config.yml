@@ -157,7 +157,7 @@ executors:
         CXX: /opt/rh/gcc-toolset-9/root/bin/g++
   check:
     docker:
-      - image : prestocpp/velox-check:mikesh-20210609
+      - image : ghcr.io/assignuser/velox-dev:check-avx
   doc-gen:
     docker:
       - image : prestocpp/velox-circleci:sagarm-20220131
