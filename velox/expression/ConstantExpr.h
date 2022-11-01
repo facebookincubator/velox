@@ -22,13 +22,14 @@ class ConstantExpr : public SpecialForm {
  public:
   ConstantExpr(TypePtr type, variant value)
       : SpecialForm(
-            std::move(type),
+            type,
             std::vector<ExprPtr>(),
             "literal",
             !value.isNull() /* supportsFlatNoNullsFastPath */,
             false /* trackCpuUsage */),
         value_(std::move(value)),
-        needToSetIsAscii_{type->isVarchar()} {}
+        needToSetIsAscii_{type->isVarchar()},
+        isNull_{value.isNull()} {}
 
   explicit ConstantExpr(VectorPtr value)
       : SpecialForm(
@@ -37,7 +38,8 @@ class ConstantExpr : public SpecialForm {
             "literal",
             !value->isNullAt(0) /* supportsFlatNoNullsFastPath */,
             false /* trackCpuUsage */),
-        needToSetIsAscii_{value->type()->isVarchar()} {
+        needToSetIsAscii_{value->type()->isVarchar()},
+        isNull_{value->isNullAt(0)} {
     VELOX_CHECK_EQ(value->encoding(), VectorEncoding::Simple::CONSTANT);
     sharedSubexprValues_ = std::move(value);
   }
@@ -59,6 +61,10 @@ class ConstantExpr : public SpecialForm {
     return sharedSubexprValues_;
   }
 
+  bool isNull() const {
+    return isNull_;
+  }
+
   std::string toString(bool recursive = true) const override;
 
   std::string toSql() const override;
@@ -66,5 +72,6 @@ class ConstantExpr : public SpecialForm {
  private:
   const variant value_;
   bool needToSetIsAscii_;
+  bool isNull_;
 };
 } // namespace facebook::velox::exec

@@ -401,6 +401,35 @@ TEST_F(ExprTest, validateReturnType) {
       VeloxUserError);
 }
 
+class DefaultNullFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& /*args*/,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    // This function returns a vector of all nulls
+    BaseVector::ensureWritable(rows, BIGINT(), context.pool(), result);
+    result->addNulls(nullptr, rows);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    // T, double -> bigint
+    return {exec::FunctionSignatureBuilder()
+                .typeVariable("T")
+                .returnType("bigint")
+                .argumentType("T")
+                .argumentType("double")
+                .build()};
+  }
+};
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_default_null,
+    DefaultNullFunction::signatures(),
+    std::make_unique<DefaultNullFunction>());
+
 TEST_F(ExprTest, constantFolding) {
   auto typedExpr = parseExpression("1 + 2", ROW({}));
 
@@ -437,6 +466,24 @@ TEST_F(ExprTest, constantFolding) {
     // folding time. Ensure compiling this expression does not throw..
     auto typedExpr = parseExpression("codepoint('abcdef')", ROW({}));
     EXPECT_NO_THROW(exec::ExprSet exprSet({typedExpr}, execCtx_.get(), true));
+  }
+
+  // Test constant-folding when the expression has default null behavior and at
+  // least one input is null.
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_default_null, "default_null");
+  typedExpr =
+      parseExpression("sign(default_null(null, c0))", ROW({"c0"}, {DOUBLE()}));
+
+  // Check that the constants have been folded.
+  {
+    exec::ExprSet exprSetFolded({typedExpr}, execCtx_.get(), true);
+
+    auto expr = exprSetFolded.exprs().front();
+    auto constExpr = dynamic_cast<exec::ConstantExpr*>(expr.get());
+
+    ASSERT_TRUE(constExpr != nullptr);
+    EXPECT_TRUE(constExpr->inputs().empty());
+    EXPECT_TRUE(constExpr->isNull());
   }
 }
 

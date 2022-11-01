@@ -335,12 +335,24 @@ ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
   if (expr->isDeterministic() && !expr->inputs().empty() &&
       scope->exprSet->execCtx()) {
     try {
-      // Check that all inputs are literals.
+      // Constant-folding is possible if all inputs are literals or if expr has
+      // default null behavior and at least one input is null.
+      bool allLiteral = true;
       for (auto& input : expr->inputs()) {
-        if (!dynamic_cast<ConstantExpr*>(input.get())) {
-          return expr;
+        auto* constantInput = dynamic_cast<ConstantExpr*>(input.get());
+        if (!constantInput) {
+          allLiteral = false;
+        } else if (expr->propagatesNulls() && constantInput->isNull()) {
+          auto nullVector = BaseVector::createNullConstant(
+              expr->type(), 1, scope->exprSet->execCtx()->pool());
+          return std::make_shared<ConstantExpr>(nullVector);
         }
       }
+
+      if (!allLiteral) {
+        return expr;
+      }
+
       auto rowType = ROW({}, {});
       auto execCtx = scope->exprSet->execCtx();
       auto row = BaseVector::create(rowType, 1, execCtx->pool());
