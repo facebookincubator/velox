@@ -37,4 +37,10 @@ std::shared_ptr<exec::VectorFunction> makeHash(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs);
 
+std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures();
+
+std::shared_ptr<exec::VectorFunction> makeXxHash64(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs);
+
 } // namespace facebook::velox::functions::sparksql

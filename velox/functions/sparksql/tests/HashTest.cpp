@@ -113,5 +113,98 @@ TEST_F(HashTest, Float) {
   EXPECT_EQ(hash<float>(-limits::infinity()), 427440766);
 }
 
+class XxHashTest : public SparkFunctionBaseTest {
+ protected:
+  template <typename T>
+  std::optional<int64_t> xxhash64(std::optional<T> arg) {
+    return evaluateOnce<int64_t>("xxhash64(c0)", arg);
+  }
+};
+
+TEST_F(XxHashTest, String) {
+  EXPECT_EQ(xxhash64<std::string>("Spark"), -4294468057691064905);
+  EXPECT_EQ(xxhash64<std::string>(""), -7444071767201028348);
+  EXPECT_EQ(xxhash64<std::string>("abcdefghijklmnopqrstuvwxyz"), -3265757659154784300);
+  // String that has a length that is a multiple of four.
+  EXPECT_EQ(xxhash64<std::string>("12345678"), 6863040065134489090);
+  EXPECT_EQ(xxhash64<std::string>("12345678djdejidecjjeijcneknceincne"), -633855189410948723);
+  EXPECT_EQ(xxhash64<std::string>(std::nullopt), 42);
+}
+
+TEST_F(XxHashTest, Int64) {
+  EXPECT_EQ(xxhash64<int64_t>(0xcafecafedeadbeef), -6259772178006417012);
+  EXPECT_EQ(xxhash64<int64_t>(0xdeadbeefcafecafe), -1700188678616701932);
+  EXPECT_EQ(xxhash64<int64_t>(INT64_MAX), -3246596055638297850);
+  EXPECT_EQ(xxhash64<int64_t>(INT64_MIN), -8619748838626508300);
+  EXPECT_EQ(xxhash64<int64_t>(1), -7001672635703045582);
+  EXPECT_EQ(xxhash64<int64_t>(0), -5252525462095825812);
+  EXPECT_EQ(xxhash64<int64_t>(-1), 3858142552250413010);
+  EXPECT_EQ(xxhash64<int64_t>(std::nullopt), 42);
+}
+
+TEST_F(XxHashTest, Int32) {
+  EXPECT_EQ(xxhash64<int32_t>(0xdeadbeef), -8041005359684616715);
+  EXPECT_EQ(xxhash64<int32_t>(0xcafecafe), 3599843564351570672);
+  EXPECT_EQ(xxhash64<int32_t>(1), -6698625589789238999);
+  EXPECT_EQ(xxhash64<int32_t>(0), 3614696996920510707);
+  EXPECT_EQ(xxhash64<int32_t>(-1), 2017008487422258757);
+  EXPECT_EQ(xxhash64<int32_t>(std::nullopt), 42);
+}
+
+TEST_F(XxHashTest, Int16) {
+  EXPECT_EQ(xxhash64<int16_t>(1), -6698625589789238999);
+  EXPECT_EQ(xxhash64<int16_t>(0), 3614696996920510707);
+  EXPECT_EQ(xxhash64<int16_t>(-1), 2017008487422258757);
+  EXPECT_EQ(xxhash64<int16_t>(std::nullopt), 42);
+}
+
+TEST_F(XxHashTest, Int8) {
+  EXPECT_EQ(xxhash64<int8_t>(1), -6698625589789238999);
+  EXPECT_EQ(xxhash64<int8_t>(0), 3614696996920510707);
+  EXPECT_EQ(xxhash64<int8_t>(-1), 2017008487422258757);
+  EXPECT_EQ(xxhash64<int8_t>(std::nullopt), 42);
+}
+
+TEST_F(XxHashTest, Bool) {
+  EXPECT_EQ(xxhash64<bool>(false), 3614696996920510707);
+  EXPECT_EQ(xxhash64<bool>(true), -6698625589789238999);
+  EXPECT_EQ(xxhash64<bool>(std::nullopt), 42);
+}
+
+TEST_F(XxHashTest, StringInt32) {
+  auto xxhash64 = [&](std::optional<std::string> a, std::optional<int32_t> b) {
+    return evaluateOnce<int64_t>("xxhash64(c0, c1)", a, b);
+  };
+
+  EXPECT_EQ(xxhash64(std::nullopt, std::nullopt), 42);
+  EXPECT_EQ(xxhash64("", std::nullopt), -7444071767201028348);
+  EXPECT_EQ(xxhash64(std::nullopt, 0), 3614696996920510707);
+  EXPECT_EQ(xxhash64("", 0), 5333022629466737987);
+}
+
+TEST_F(XxHashTest, Double) {
+  using limits = std::numeric_limits<double>;
+
+  EXPECT_EQ(xxhash64<double>(std::nullopt), 42);
+  EXPECT_EQ(xxhash64<double>(-0.0), -5252525462095825812);
+  EXPECT_EQ(xxhash64<double>(0), -5252525462095825812);
+  EXPECT_EQ(xxhash64<double>(1), -2162451265447482029);
+  EXPECT_EQ(xxhash64<double>(limits::quiet_NaN()), -3127944061524951246);
+  EXPECT_EQ(xxhash64<double>(limits::infinity()), 5810986238603807492);
+  EXPECT_EQ(xxhash64<double>(-limits::infinity()), 5326262080505358431);
+}
+
+TEST_F(XxHashTest, Float) {
+  using limits = std::numeric_limits<float>;
+
+  EXPECT_EQ(xxhash64<float>(std::nullopt), 42);
+  EXPECT_EQ(xxhash64<float>(-0.0f), 3614696996920510707);
+  EXPECT_EQ(xxhash64<float>(0), 3614696996920510707);
+  EXPECT_EQ(xxhash64<float>(1), 700633588856507837);
+  EXPECT_EQ(xxhash64<float>(limits::quiet_NaN()), 2692338816207849720);
+  EXPECT_EQ(xxhash64<float>(limits::infinity()), -5940311692336719973);
+  EXPECT_EQ(xxhash64<float>(-limits::infinity()), -7580553461823983095);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

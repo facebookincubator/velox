@@ -917,6 +917,10 @@ inline uint32_t rotateLeft(uint32_t a, int shift) {
 #endif
 }
 
+inline uint64_t rotateLeft64(uint64_t a, int32_t shift) {
+  return (a << shift) | (a >> (64 - shift));
+}
+
 /// Pads bytes starting at 'pointer + padIndex' up until the next
 /// offset from 'pointer' that is a multiple of 'alignment'. If
 /// 'padIndex' is 5 and alignment is 16, writes 11 zero bytes to
