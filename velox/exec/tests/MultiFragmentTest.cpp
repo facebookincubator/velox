@@ -380,7 +380,7 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
 
-  // Test asynchronously deleting task buffer (due to abort from downstream)
+  // Test asynchronously deleting task buffer (due to abort from downstream).
   {
     auto leafTaskId = makeTaskId("leaf", 0);
     auto leafPlan = PlanBuilder()
@@ -390,7 +390,7 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
     Task::start(leafTask, 4);
     auto bufferMgr = PartitionedOutputBufferManager::getInstance().lock();
-    // Deletes the results asynchronously to simulate abort from downstream
+    // Delete the results asynchronously to simulate abort from downstream.
     bufferMgr->deleteResults(leafTaskId, 0);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
