@@ -12,30 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(${VELOX_ENABLE_PYVELOX})
+if(VELOX_BUILD_PYTHON_PACKAGE)
+  message("Creating pyvelox module")
+  include_directories(SYSTEM ${CMAKE_SOURCE_DIR})
+  add_definitions(-DCREATE_PYVELOX_MODULE)
+  # Define our Python module:
+  pybind11_add_module(
+    pyvelox MODULE
+    NO_EXTRAS # TODO: LTO crashes GCC9.2. File issues to pybind11
+    pyvelox.cpp pyvelox.h)
 
-    # Define our Python module:
-    pybind11_add_module(
-            pyvelox
-            MODULE
-            NO_EXTRAS # TODO: LTO crashes GCC9.2. File issues to pybind11
-            pyvelox.cpp
-            pyvelox.h
-    )
+  # Link with Velox:
+  target_link_libraries(pyvelox PRIVATE velox_type)
 
-    # Link with Velox:
-    target_link_libraries(pyvelox PRIVATE
-            velox_type
-            )
-
-    install(
-            TARGETS pyvelox
-            LIBRARY DESTINATION .
-    )
+  install(TARGETS pyvelox LIBRARY DESTINATION .)
 else()
-    add_library(pyvelox pyvelox.cpp pyvelox.h)
-    target_link_libraries(
-            pyvelox
-            velox_type
-            pybind11::module)
+  # Torcharrow will not use pyvelox as an extension module for compatibility
+  # reasons.
+  message("Creating pyvelox library")
+  add_library(pyvelox pyvelox.cpp pyvelox.h)
+  target_link_libraries(pyvelox velox_type pybind11::module)
 endif()

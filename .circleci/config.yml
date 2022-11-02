@@ -276,13 +276,11 @@ jobs:
       - pre-steps
       - build-benchmarks
       - run:
-          name: "Install Conbench, Benchalerts, and Veloxbench"
+          name: "Install benchmark dependencies"
           command: |
             # upgrade python to 3.8 for this job
             yum install -y python38
-            pip3.8 install conbench
-            pip3.8 install git+https://github.com/conbench/benchalerts.git@0.3.2
-            pip3.8 install scripts/veloxbench
+            pip3.8 install -r scripts/benchmark-requirements.txt
       - run-benchmarks
       # TODO: Disabling conbench github notifications for now until results are more stable.
       #- run:
@@ -310,11 +308,9 @@ jobs:
       - setup-environment
       - build-benchmarks
       - run:
-          name: "Install Conbench, Benchalerts, and Veloxbench"
+          name: "Install benchmark dependencies"
           command: |
-            pip3 install conbench
-            pip3 install git+https://github.com/conbench/benchalerts.git@0.3.1
-            pip3 install scripts/veloxbench
+            pip3 install -r scripts/benchmark-requirements.txt
       - run-benchmarks
       # TODO: Disabling conbench github notifications for now until results are more stable.
       #- run:
@@ -403,16 +399,19 @@ jobs:
           # the job output for context.
           name: "Run Fuzzer Tests"
           command: |
-            make fuzzertest NUM_THREADS=8 FUZZER_DURATION_SEC=600 FUZZER_SEED=${RANDOM} \
-              > /tmp/fuzzer.log 2>&1 || ( \
+            echo -e "The logs will be saved to \"/tmp/fuzzer.log\" and uploaded" \
+                    "as a job artifact (check the \"Artifacts\" tab above)."
+            _build/debug/velox/expression/tests/velox_expression_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 600 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+              2>&1 | tee /tmp/fuzzer.log || ( \
                 tail -n 1000 /tmp/fuzzer.log;
-                echo "FAIL: Fuzzer run failed, logs saved to \"/tmp/fuzzer.log\" and uploaded" \
-                     "as job artifact (check the \"Artifacts\" tab above).";
+                echo "FAIL: Fuzzer run failed";
                 exit 1; \
               )
-            tail -n 1000 /tmp/fuzzer.log
-            echo -e "\n\nFuzzer run finished successfully. Logs saved as job artifact " \
-                 "(check the \"Artifacts\" tab above)."
+            echo -e "\n\nFuzzer run finished successfully."
           no_output_timeout: 20m
       - store_artifacts:
           path: '/tmp/fuzzer.log'
