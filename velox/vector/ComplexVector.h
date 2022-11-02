@@ -276,7 +276,11 @@ struct ArrayVectorBase : BaseVector {
         offsets_(std::move(offsets)),
         rawOffsets_(offsets_->as<vector_size_t>()),
         sizes_(std::move(lengths)),
-        rawSizes_(sizes_->as<vector_size_t>()) {}
+        rawSizes_(sizes_->as<vector_size_t>()) {
+    VELOX_CHECK_GE(
+        offsets_->size(), BaseVector::length_ * sizeof(vector_size_t));
+    VELOX_CHECK_GE(sizes_->size(), BaseVector::length_ * sizeof(vector_size_t));
+  }
 
   void copyRangesImpl(
       const BaseVector* source,
@@ -285,6 +289,38 @@ struct ArrayVectorBase : BaseVector {
       const BaseVector* sourceValues,
       VectorPtr* targetKeys,
       const BaseVector* sourceKeys);
+
+  /// Checks whether offsets and sizes are valid values and point to valid
+  /// indices in the child vectors(elements for array, keys and values for
+  /// map.
+  void checkConsistency(size_t childVectorSize) {
+#ifndef NDEBUG
+    for (auto i = 0; i < BaseVector::length_; ++i) {
+      const bool isNull =
+          BaseVector::rawNulls_ && bits::isBitNull(BaseVector::rawNulls_, i);
+      if (isNull) {
+        continue;
+      }
+      auto offset = rawOffsets_[i];
+      auto size = rawSizes_[i];
+      if (size == 0) {
+        // Represents empty entry.
+        continue;
+      }
+      // Verify index for a non-null position. It must be >= 0 and < size of the
+      // base vector.
+      VELOX_DCHECK_GE(size, 0, "Sizes must be non-negative. Index: {}.", i);
+      VELOX_DCHECK_GE(
+          offset, 0, "Offset index must be non-negative. Index: {}.", i);
+      VELOX_DCHECK_LE(
+          offset + size,
+          childVectorSize,
+          "Offset and size must point to valid indices in the children "
+          "vectors. Index: {}.",
+          i);
+    }
+#endif
+  }
 
  private:
   BufferPtr
@@ -334,6 +370,7 @@ class ArrayVector : public ArrayVectorBase {
         "Unexpected element type: {}. Expected: {}",
         elements_->type()->toString(),
         type->childAt(0)->toString());
+    ArrayVectorBase::checkConsistency(elements_->size());
 
     if (type->isFixedWidth()) { // and thus must be FixedSizeArrayType
       // Ensure all elements have the same width as our type.
@@ -494,6 +531,7 @@ class MapVector : public ArrayVectorBase {
         "Unexpected value type: {}. Expected: {}",
         values_->type()->toString(),
         type->childAt(1)->toString());
+    ArrayVectorBase::checkConsistency(std::min(keys_->size(), values_->size()));
   }
 
   virtual ~MapVector() override {}
@@ -541,6 +579,7 @@ class MapVector : public ArrayVectorBase {
         std::move(keys), type()->childAt(0), pool_);
     values_ = BaseVector::getOrCreateEmpty(
         std::move(values), type()->childAt(1), pool_);
+    ArrayVectorBase::checkConsistency(std::min(keys_->size(), values_->size()));
   }
 
   void copyRanges(
