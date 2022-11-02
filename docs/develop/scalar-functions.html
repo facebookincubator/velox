@@ -269,7 +269,7 @@ scan the strings to determine whether they are ASCII or not.</p>
 </section>
 <section id="zero-copy-string-result">
 <h3>Zero-copy String Result<a class="headerlink" href="#zero-copy-string-result" title="Permalink to this headline">¶</a></h3>
-<p>Functions like <a class="reference internal" href="../functions/string.html#id3" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> and <a class="reference internal" href="../functions/string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a> can produce zero-copy results by
+<p>Functions like <a class="reference internal" href="../functions/string.html#id4" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> and <a class="reference internal" href="../functions/string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a> can produce zero-copy results by
 referencing input strings. To do that they must define a reuse_strings_from_arg
 member variable and initialize it to the index of the argument whose strings
 are being re-used in the result. This will allow the engine to add a reference

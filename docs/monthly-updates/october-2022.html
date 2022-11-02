@@ -1,0 +1,188 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>October 2022 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="September 2022 Update" href="september-2022.html" />
+    <link rel="prev" title="Monthly Updates" href="../monthly-updates.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="september-2022.html" title="September 2022 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">October 2022 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="october-2022-update">
+<h1>October 2022 Update<a class="headerlink" href="#october-2022-update" title="Permalink to this headline">¶</a></h1>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add regular (not null aware) <a class="reference internal" href="../develop/anti-join.html"><span class="doc">Anti Join</span></a>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2906">#2906</a></p></li>
+<li><p>Add spilling support for Hash Join.</p></li>
+<li><p>Add query configuration properties to configure spilling: <cite>spill_enabled</cite>,
+<cite>aggregation_spill_enabled</cite>, <cite>join_spill_enabled</cite>, <cite>order_by_spill_enabled</cite>,
+<cite>aggregation_spill_memory_threshold</cite>, <cite>order_by_spill_memory_threshold</cite>.</p></li>
+<li><p>Fix signatures of simple functions using custom types. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2965">#2965</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/math.html#truncate" title="truncate"><code class="xref py py-func docutils literal notranslate"><span class="pre">truncate()</span></code></a> function.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/map.html#map_zip_with" title="map_zip_with"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_zip_with()</span></code></a> function.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/window.html#nth_value" title="nth_value"><code class="xref py py-func docutils literal notranslate"><span class="pre">nth_value()</span></code></a> and <a class="reference internal" href="../functions/window.html#cume_dist" title="cume_dist"><code class="xref py py-func docutils literal notranslate"><span class="pre">cume_dist()</span></code></a> window functions.</p></li>
+<li><p>Optimize <a class="reference internal" href="../functions/array.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a> function.</p></li>
+<li><p>Fix <a class="reference internal" href="../functions/datetime.html#from_unixtime" title="from_unixtime"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a> for NaN input. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2936">#2936</a></p></li>
+<li><p>Fix <a class="reference internal" href="../functions/array.html#array_sum" title="array_sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sum()</span></code></a> for constant input. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2932">#2932</a></p></li>
+<li><p>Fix <a class="reference internal" href="../functions/array.html#array_intersect" title="array_intersect"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_intersect()</span></code></a> and <a class="reference internal" href="../functions/array.html#array_except" title="array_except"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_except()</span></code></a> for dictionary encoded or
+null input. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2959">#2959</a></p></li>
+<li><p>Fix <a class="reference internal" href="../functions/array.html#arrays_overlap" title="arrays_overlap"><code class="xref py py-func docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a>, <a class="reference internal" href="../functions/array.html#array_intersect" title="array_intersect"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_intersect()</span></code></a>, and <a class="reference internal" href="../functions/array.html#array_except" title="array_except"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_except()</span></code></a>
+when one argument is a constant array with dictionary-encoded elements. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2954">#2954</a></p></li>
+<li><p>Fix <cite>sum(real)</cite> aggregate function.</p></li>
+<li><p>Fix CAST to JSON when invoked inside of a TRY.</p></li>
+<li><p>Fix lambda functions when invoked inside of a TRY.</p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for DECIMAL types to Parquet reader.</p></li>
+<li><p>Add support for S3 FileSystem compatible schemes <cite>s3a</cite> and <cite>oss</cite>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2410">#2410</a></p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add mechanism to reproduce Fuzzer failures reliably: run ExpressionFuzzer
+with <cite>–repro_persist_path</cite> flag to save repro files, then run ExpressionRunner
+to reproduce.</p></li>
+<li><p>Add support for functions that take or return complex type values to Fuzzer.
+Use <cite>–velox_fuzzer_enable_complex_types</cite> flag to enable.</p></li>
+<li><p>Add support for LazyVector to VectorSaver and VectorFuzzer.</p></li>
+</ul>
+</section>
+<section id="debugging-experience">
+<h2>Debugging Experience<a class="headerlink" href="#debugging-experience" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add printIndices(indices) and printNulls(nulls) functions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2723">#2723</a> and <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2721">#2721</a></p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this headline">¶</a></h2>
+<p>Adalto Correia, Aditi Pandit, Amit Dutta, Austin Dickey, Bikramjeet Vig, Chad
+Austin, Deepak Majeti, Ge Gao, Giuseppe Ottaviano, Gosh Arzumanyan, Huameng
+Jiang, Ivan Morett, Jacob Wujciak-Jens, Jake Jung, Jialiang Tan, Jimmy Lu,
+Kevin Wilfong, Krishna Pai, Laith Sakka, Masha Basmanova, Michael Liu, Michael
+Shang, Mike Decker, Milosz Linkiewicz, Open Source Bot, Orri Erling, Patrick
+Somaru, Pavel Solodovnikov, Pedro Eugenio Rocha Pedreira, Pedro Pedreira,
+Pramod, Qitian Zeng, Randeep Singh, Raúl Cumplido, Sergey Pershin, Uhyon Chung,
+Vinti Pandey, Wei He, Weile Wei, Zeyi (Rice) Fan, Zhenyuan Zhao, mwish,
+shengxuan.liu, tanjialiang, xiaoxmeng, yingsu00, zhejiangxiaomai</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">October 2022 Update</a><ul>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#debugging-experience">Debugging Experience</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../monthly-updates.html"
+                          title="previous chapter">Monthly Updates</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="september-2022.html"
+                          title="next chapter">September 2022 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/monthly-updates/october-2022.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="september-2022.html" title="September 2022 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">October 2022 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+    </div>
+  </body>
+</html>

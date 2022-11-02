@@ -1,0 +1,261 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Configuration properties &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="_static/nature.css" />
+    <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Developer Guide" href="develop.html" />
+    <link rel="prev" title="HyperLogLog Functions" href="functions/hyperloglog.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="develop.html" title="Developer Guide"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="functions/hyperloglog.html" title="HyperLogLog Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Configuration properties</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="configuration-properties">
+<h1>Configuration properties<a class="headerlink" href="#configuration-properties" title="Permalink to this headline">¶</a></h1>
+<section id="memory-management">
+<h2>Memory Management<a class="headerlink" href="#memory-management" title="Permalink to this headline">¶</a></h2>
+<section id="max-partial-aggregation-memory">
+<h3><code class="docutils literal notranslate"><span class="pre">max_partial_aggregation_memory</span></code><a class="headerlink" href="#max-partial-aggregation-memory" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">16MB</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Maximum amount of memory in bytes for partial aggregation results. Increasing
+this value can result in less network transfer and lower CPU utilization by
+allowing more groups to be kept locally before being flushed, at the cost of
+additional memory usage.</p>
+</section>
+</section>
+<section id="spilling">
+<h2>Spilling<a class="headerlink" href="#spilling" title="Permalink to this headline">¶</a></h2>
+<section id="spill-enabled">
+<h3><code class="docutils literal notranslate"><span class="pre">spill_enabled</span></code><a class="headerlink" href="#spill-enabled" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Spill memory to disk to avoid exceeding memory limits for the query.</p>
+</section>
+<section id="spiller-spill-path">
+<h3><code class="docutils literal notranslate"><span class="pre">spiller-spill-path</span></code><a class="headerlink" href="#spiller-spill-path" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">string</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">/tmp</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Directory where spilled content is written.</p>
+</section>
+<section id="aggregation-spill-enabled">
+<h3><code class="docutils literal notranslate"><span class="pre">aggregation_spill_enabled</span></code><a class="headerlink" href="#aggregation-spill-enabled" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk
+for aggregations to avoid exceeding memory limits for the query.</p>
+</section>
+<section id="join-spill-enabled">
+<h3><code class="docutils literal notranslate"><span class="pre">join_spill_enabled</span></code><a class="headerlink" href="#join-spill-enabled" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk
+for hash joins to avoid exceeding memory limits for the query.</p>
+</section>
+<section id="order-by-spill-enabled">
+<h3><code class="docutils literal notranslate"><span class="pre">order_by_spill_enabled</span></code><a class="headerlink" href="#order-by-spill-enabled" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk
+for order by to avoid exceeding memory limits for the query.</p>
+</section>
+<section id="aggregation-spill-memory-threshold">
+<h3><code class="docutils literal notranslate"><span class="pre">aggregation_spill_memory_threshold</span></code><a class="headerlink" href="#aggregation-spill-memory-threshold" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">0</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Maximum amount of memory in bytes that a final aggregation can use before spilling.
+0 means unlimited.</p>
+</section>
+<section id="join-spill-memory-threshold">
+<h3><code class="docutils literal notranslate"><span class="pre">join_spill_memory_threshold</span></code><a class="headerlink" href="#join-spill-memory-threshold" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">0</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Maximum amount of memory in bytes that a hash join build side can use before spilling.
+0 means unlimited.</p>
+</section>
+<section id="order-by-spill-memory-threshold">
+<h3><code class="docutils literal notranslate"><span class="pre">order_by_spill_memory_threshold</span></code><a class="headerlink" href="#order-by-spill-memory-threshold" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">0</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Maximum amount of memory in bytes that an order by can use before spilling.
+0 means unlimited.</p>
+</section>
+<section id="max-spill-level">
+<h3><code class="docutils literal notranslate"><span class="pre">max-spill-level</span></code><a class="headerlink" href="#max-spill-level" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">4</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>The maximum allowed spilling level with zero being the initial spilling level.
+Applies to hash join build spilling which might use recursive spilling when
+the build table is very large. -1 means unlimited. In this case an extremely
+large query might run out of spilling partition bits. The max spill level
+can be used to prevent a query from using too much io and cpu resources.</p>
+</section>
+<section id="max-spill-file-size">
+<h3><code class="docutils literal notranslate"><span class="pre">max-spill-file-size</span></code><a class="headerlink" href="#max-spill-file-size" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">0</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>The maximum allowed spill file size. Zero means unlimited.</p>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Configuration properties</a><ul>
+<li><a class="reference internal" href="#memory-management">Memory Management</a><ul>
+<li><a class="reference internal" href="#max-partial-aggregation-memory"><code class="docutils literal notranslate"><span class="pre">max_partial_aggregation_memory</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#spilling">Spilling</a><ul>
+<li><a class="reference internal" href="#spill-enabled"><code class="docutils literal notranslate"><span class="pre">spill_enabled</span></code></a></li>
+<li><a class="reference internal" href="#spiller-spill-path"><code class="docutils literal notranslate"><span class="pre">spiller-spill-path</span></code></a></li>
+<li><a class="reference internal" href="#aggregation-spill-enabled"><code class="docutils literal notranslate"><span class="pre">aggregation_spill_enabled</span></code></a></li>
+<li><a class="reference internal" href="#join-spill-enabled"><code class="docutils literal notranslate"><span class="pre">join_spill_enabled</span></code></a></li>
+<li><a class="reference internal" href="#order-by-spill-enabled"><code class="docutils literal notranslate"><span class="pre">order_by_spill_enabled</span></code></a></li>
+<li><a class="reference internal" href="#aggregation-spill-memory-threshold"><code class="docutils literal notranslate"><span class="pre">aggregation_spill_memory_threshold</span></code></a></li>
+<li><a class="reference internal" href="#join-spill-memory-threshold"><code class="docutils literal notranslate"><span class="pre">join_spill_memory_threshold</span></code></a></li>
+<li><a class="reference internal" href="#order-by-spill-memory-threshold"><code class="docutils literal notranslate"><span class="pre">order_by_spill_memory_threshold</span></code></a></li>
+<li><a class="reference internal" href="#max-spill-level"><code class="docutils literal notranslate"><span class="pre">max-spill-level</span></code></a></li>
+<li><a class="reference internal" href="#max-spill-file-size"><code class="docutils literal notranslate"><span class="pre">max-spill-file-size</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="functions/hyperloglog.html"
+                          title="previous chapter">HyperLogLog Functions</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="develop.html"
+                          title="next chapter">Developer Guide</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="_sources/configs.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="develop.html" title="Developer Guide"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="functions/hyperloglog.html" title="HyperLogLog Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Configuration properties</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+    </div>
+  </body>
+</html>
