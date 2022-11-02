@@ -21,6 +21,7 @@ add_executable(
   ExceptionTest.cpp
   RangeTest.cpp
   RawVectorTest.cpp
+  SemaphoreTest.cpp
   SimdUtilTest.cpp
   StatsReporterTest.cpp
   SuccinctPrinterTest.cpp)
@@ -35,3 +36,6 @@ target_link_libraries(
   gtest
   gtest_main
   pthread)
+
+add_executable(velox_memcpy_meter Memcpy.cpp)
+target_link_libraries(velox_memcpy_meter velox_common_base pthread)
