@@ -65,6 +65,21 @@ void ArgumentTypeFuzzer::determineUnboundedTypeVariables() {
   }
 }
 
+namespace {
+bool hasMapWithUknownKey(const TypePtr& type) {
+  if (type->kind() == TypeKind::MAP &&
+      type->childAt(0)->kind() == TypeKind::UNKNOWN) {
+    return true;
+  }
+  for (auto i = 0; i < type->size(); i++) {
+    if (hasMapWithUknownKey(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+} // namespace
+
 bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
   const auto& formalArgs = signature_.argumentTypes();
   auto formalArgsCnt = formalArgs.size();
@@ -83,8 +98,12 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
     } else {
       actualArg =
           exec::SignatureBinder::tryResolveType(formalArgs[i], bindings_);
+      if (hasMapWithUknownKey(actualArg)) {
+        return false;
+      }
       VELOX_CHECK(actualArg != nullptr);
     }
+
     argumentTypes_.push_back(actualArg);
   }
 

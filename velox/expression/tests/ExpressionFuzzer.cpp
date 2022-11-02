@@ -650,23 +650,38 @@ ExpressionFuzzer::chooseRandomSignatureTemplate(
 core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
     const TypePtr& returnType) {
   auto typeName = typeToBaseName(returnType);
+  auto count = 0;
 
-  auto* chosen = chooseRandomSignatureTemplate(returnType, typeName);
-  if (!chosen) {
-    chosen = chooseRandomSignatureTemplate(returnType, kTypeParameterName);
+  while (true) {
+    VELOX_USER_CHECK_LT(
+        count,
+        100,
+        "ExpressionFuzzer is struggling to fuzz appropriate expression for type:" +
+            returnType->toString());
+
+    // Pick a random signature.
+    auto* chosen = chooseRandomSignatureTemplate(returnType, typeName);
     if (!chosen) {
-      return nullptr;
+      chosen = chooseRandomSignatureTemplate(returnType, kTypeParameterName);
+      if (!chosen) {
+        return nullptr;
+      }
     }
+
+    ArgumentTypeFuzzer fuzzer{*chosen->signature, returnType, rng_};
+
+    if (!fuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs)) {
+      // When it fail to assign appropriate arg types, try again with different
+      // signature.
+      continue;
+    }
+    auto& argumentTypes = fuzzer.argumentTypes();
+
+    CallableSignature callable{
+        chosen->functionName, argumentTypes, false, returnType};
+
+    return getCallExprFromCallable(callable);
   }
-
-  ArgumentTypeFuzzer fuzzer{*chosen->signature, returnType, rng_};
-  VELOX_CHECK_EQ(fuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs), true);
-  auto& argumentTypes = fuzzer.argumentTypes();
-
-  CallableSignature callable{
-      chosen->functionName, argumentTypes, false, returnType};
-
-  return getCallExprFromCallable(callable);
 }
 
 template <typename T>
