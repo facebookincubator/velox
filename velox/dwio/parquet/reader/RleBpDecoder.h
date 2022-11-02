@@ -40,6 +40,11 @@ class RleBpDecoder {
 
   void skip(uint64_t numValues);
 
+  /// Decode @param numValues number of values and copy the decoded values into
+  /// @param outputBuffer
+  template <typename T>
+  void next(T* FOLLY_NONNULL& outputBuffer, uint64_t numValues);
+
   /// Copies 'numValues' bits from the encoding into 'buffer',
   /// little-endian. If 'allOnes' is non-nullptr, this function may
   /// check if all the bits are ones, as in a RLE run of all ones and
@@ -48,11 +53,28 @@ class RleBpDecoder {
   /// '*allOnes' is set to false and the bits are copied to 'buffer'.
   void readBits(
       int32_t numValues,
-      uint64_t* FOLLY_NONNULL buffer,
+      uint64_t* FOLLY_NONNULL outputBuffer,
       bool* FOLLY_NULLABLE allOnes = nullptr);
 
  protected:
   void readHeader();
+
+  template <typename T>
+  inline void copyRemainingUnpackedValues(
+      T* FOLLY_NONNULL& outputBuffer,
+      int8_t numValues) {
+    VELOX_CHECK_LE(numValues, numRemainingUnpackedValues_);
+
+    std::memcpy(
+        outputBuffer,
+        reinterpret_cast<T*>(remainingUnpackedValues_) +
+            remainingUnpackedValuesOffset_,
+        numValues);
+
+    outputBuffer += numValues;
+    numRemainingUnpackedValues_ -= numValues;
+    remainingUnpackedValuesOffset_ += numValues;
+  }
 
   const char* FOLLY_NULLABLE bufferStart_;
   const char* FOLLY_NULLABLE bufferEnd_;
@@ -64,6 +86,10 @@ class RleBpDecoder {
   int64_t value_;
   int8_t bitOffset_{0};
   bool repeating_;
+
+  uint64_t remainingUnpackedValues_[8];
+  int8_t remainingUnpackedValuesOffset_{0};
+  int8_t numRemainingUnpackedValues_{0};
 };
 
 } // namespace facebook::velox::parquet
