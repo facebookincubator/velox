@@ -18,18 +18,19 @@
 #include <array>
 #include <random>
 #include "velox/common/file/FileSystems.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/PrestoSerializer.h"
-#include "velox/vector/tests/VectorMaker.h"
-#include "velox/vector/tests/VectorTestBase.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::exec::test {
 
-class RowContainerTestBase : public testing::Test {
+class RowContainerTestBase : public testing::Test,
+                             public velox::test::VectorTestBase {
  protected:
   void SetUp() override {
     pool_ = memory::getDefaultScopedMemoryPool();

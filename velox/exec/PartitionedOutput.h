@@ -18,10 +18,9 @@
 #include <folly/Random.h>
 #include "velox/exec/Operator.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
-
-class PartitionedOutput;
 
 class Destination {
  public:
@@ -224,6 +223,7 @@ class PartitionedOutput : public Operator {
   SelectivityVector rows_;
   SelectivityVector nullRows_;
   std::vector<uint32_t> partitions_;
+  std::vector<DecodedVector> decodedVectors_;
 };
 
 } // namespace facebook::velox::exec

@@ -14,20 +14,24 @@
  * limitations under the License.
  */
 
-#include <folly/init/Init.h>
-#include <algorithm>
-
+#include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
+#include <folly/init/Init.h>
+#include <algorithm>
+
 using namespace facebook::velox;
+using exec::test::HiveConnectorTestBase;
 
 // This file contains a step-by-step minimal example of a workflow that:
 //
@@ -68,16 +72,9 @@ int main(int argc, char** argv) {
 
   // For fun, let's print the shuffled data to stdout.
   LOG(INFO) << "Input vector generated:";
-  for (size_t i = 0; i < rowVector->size(); ++i) {
+  for (vector_size_t i = 0; i < rowVector->size(); ++i) {
     LOG(INFO) << rowVector->toString(i);
   }
-
-  // Create a temporary dir to store the local file created. Note that this
-  // directory is automatically removed when the `tempDir` object runs out of
-  // scope.
-  auto tempDir = exec::test::TempDirectoryPath::create();
-  const std::string filePath = tempDir->path + "/file1.dwrf";
-  LOG(INFO) << "Writing dwrf file to '" << filePath << "'.";
 
   // In order to read and write data and files from storage, we need to use a
   // Connector. Let's instantiate and register a HiveConnector for this
@@ -99,6 +96,11 @@ int main(int argc, char** argv) {
   filesystems::registerLocalFileSystem();
   dwrf::registerDwrfReaderFactory();
 
+  // Create a temporary dir to store the local file created. Note that this
+  // directory is automatically removed when the `tempDir` object runs out of
+  // scope.
+  auto tempDir = exec::test::TempDirectoryPath::create();
+
   // Once we finalize setting up the Hive connector, let's define our query
   // plan. We use the helper `PlanBuilder` class to generate the query plan
   // for this example, but this is usually done programatically based on the
@@ -116,8 +118,12 @@ int main(int argc, char** argv) {
               inputRowType->names(),
               std::make_shared<core::InsertTableHandle>(
                   kHiveConnectorId,
-                  std::make_shared<connector::hive::HiveInsertTableHandle>(
-                      filePath)))
+                  HiveConnectorTestBase::makeHiveInsertTableHandle(
+                      inputRowType->names(),
+                      inputRowType->children(),
+                      {},
+                      HiveConnectorTestBase::makeLocationHandle(
+                          tempDir->path))))
           .planFragment();
 
   // Task is the top-level execution concept. A task needs a taskId (as a
@@ -129,14 +135,10 @@ int main(int argc, char** argv) {
       /*destination=*/0,
       core::QueryCtx::createForTest());
 
-  // Then start the task. `maxDrivers` controls the maximum number of threads
-  // that will be used to run operators in this pipeline.
-  exec::Task::start(writeTask, /*maxDrivers=*/1);
-
-  // Ensures that the task is finished before moving on. 0 timeout means it will
-  // block forever until the task finishes.
-  auto& inlineExecutor = folly::QueuedImmediateExecutor::instance();
-  writeTask->stateChangeFuture(0).via(&inlineExecutor).wait();
+  // next() starts execution using the client thread. The loop pumps output
+  // vectors out of the task (there are none in this query fragment).
+  while (auto result = writeTask->next())
+    ;
 
   // At this point, the first part of the example is done; there is now a
   // file encoded using dwrf at `filePath`. The next part of the example
@@ -155,27 +157,12 @@ int main(int argc, char** argv) {
                               .orderBy({"my_col"}, /*isPartial=*/false)
                               .planFragment();
 
-  // For the reader task, we also specify a `Consumer` callback, which is called
-  // whenever a new processed batch is available. It returns a `BlockingReason`,
-  // specifying whether the upstream task should be blocked (and the reason), or
-  // continue generating output vectors.
+  // Create the reader task.
   auto readTask = std::make_shared<exec::Task>(
       "my_read_task",
       readPlanFragment,
       /*destination=*/0,
-      core::QueryCtx::createForTest(),
-      [](RowVectorPtr vector, facebook::velox::ContinueFuture*) {
-        if (vector) {
-          LOG(INFO) << "Vector available after processing (scan + sort):";
-          for (size_t i = 0; i < vector->size(); ++i) {
-            LOG(INFO) << vector->toString(i);
-          }
-        }
-        return exec::BlockingReason::kNotBlocked;
-      });
-
-  // Start the task.
-  exec::Task::start(readTask, /*maxDrivers=*/1);
+      core::QueryCtx::createForTest());
 
   // Now that we have the query fragment and Task structure set up, we will
   // add data to it via `splits`.
@@ -184,21 +171,29 @@ int main(int argc, char** argv) {
   // HiveConnectorSplit for each file, using the same HiveConnector id defined
   // above, the local file path (the "file:" prefix specifies which FileSystem
   // to use; local, in this case), and the file format (DWRF/ORC).
-  auto connectorSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
-      kHiveConnectorId, "file:" + filePath, dwio::common::FileFormat::DWRF);
+  for (auto& filePath : fs::directory_iterator(tempDir->path)) {
+    auto connectorSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
+        kHiveConnectorId,
+        "file:" + filePath.path().string(),
+        dwio::common::FileFormat::DWRF);
+    // Wrap it in a `Split` object and add to the task. We need to specify to
+    // which operator we're adding the split (that's why we captured the
+    // TableScan's id above). Here we could pump subsequent split/files into the
+    // TableScan.
+    readTask->addSplit(scanNodeId, exec::Split{connectorSplit});
+  }
 
-  // Wrap it in a `Split` object and add to the task. We need to specify to
-  // which operator we're adding the split (that's why we captured the
-  // TableScan's id above). Here we could pump subsequent split/files into the
-  // TableScan.
-  readTask->addSplit(scanNodeId, exec::Split{connectorSplit});
-
-  // Signal that no more splits will be added. After this point, the consumer
-  // callbacks will be called once the data is processed.
+  // Signal that no more splits will be added. After this point, calling next()
+  // on the task will start the plan execution using the current thread.
   readTask->noMoreSplits(scanNodeId);
 
-  // Here we need to make sure main() doesn't return (and hence destructs the
-  // local Task object) before the task is done executing.
-  readTask->stateChangeFuture(0).via(&inlineExecutor).wait();
+  // Read output vectors and print them.
+  while (auto result = readTask->next()) {
+    LOG(INFO) << "Vector available after processing (scan + sort):";
+    for (vector_size_t i = 0; i < result->size(); ++i) {
+      LOG(INFO) << result->toString(i);
+    }
+  }
+
   return 0;
 }

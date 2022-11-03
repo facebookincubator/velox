@@ -26,8 +26,8 @@ namespace {
 class HistogramTest : public AggregationTestBase {
  protected:
   void SetUp() override {
-    // Single batches of input.
-    disableSpill();
+    AggregationTestBase::SetUp();
+    allowInputShuffle();
   }
 
   void testHistogramWithDuck(
@@ -134,17 +134,17 @@ TEST_F(HistogramTest, groupByTimestamp) {
   auto vector2 = makeFlatVector<Timestamp>(
       num,
       [](vector_size_t row) {
-        return Timestamp{row % 2, 100};
+        return Timestamp{row % 2, 17'123'456};
       },
       nullEvery(5));
 
   auto expected = makeRowVector(
       {makeNullableFlatVector<int32_t>({std::nullopt, 0, 1, 2}),
        makeMapVector<Timestamp, int64_t>(
-           {{{Timestamp{0, 100}, 2}},
-            {{Timestamp{0, 100}, 1}, {Timestamp{1, 100}, 2}},
-            {{Timestamp{1, 100}, 2}},
-            {{Timestamp{0, 100}, 1}}})});
+           {{{Timestamp{0, 17'123'456}, 2}},
+            {{Timestamp{0, 17'123'456}, 1}, {Timestamp{1, 17'123'456}, 2}},
+            {{Timestamp{1, 17'123'456}, 2}},
+            {{Timestamp{0, 17'123'456}, 1}}})});
 
   testHistogram("histogram(c1)", {"c0"}, vector1, vector2, expected);
 }

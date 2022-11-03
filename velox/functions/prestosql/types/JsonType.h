@@ -39,14 +39,16 @@ class JsonCastOperator : public exec::CastOperator {
       exec::EvalCtx& context,
       const SelectivityVector& rows,
       bool nullOnFailure,
-      BaseVector& result) const override;
+      const TypePtr& resultType,
+      VectorPtr& result) const override;
 
   void castFrom(
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
       bool nullOnFailure,
-      BaseVector& result) const override;
+      const TypePtr& resultType,
+      VectorPtr& result) const override;
 
  private:
   JsonCastOperator() = default;
@@ -82,7 +84,12 @@ FOLLY_ALWAYS_INLINE std::shared_ptr<const JsonType> JSON() {
 }
 
 // Type used for function registration.
-using Json = StringView;
+struct JsonT {
+  using type = StringView;
+  static constexpr const char* typeName = "json";
+};
+
+using Json = CustomType<JsonT>;
 
 class JsonTypeFactories : public CustomTypeFactories {
  public:

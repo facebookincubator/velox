@@ -53,10 +53,21 @@ bool CacheInputStream::Next(const void** buffer, int32_t* size) {
     *size = 0;
     return false;
   }
+  if (window_.has_value() &&
+      position_ >= window_.value().offset + window_.value().length) {
+    *size = 0;
+    return false;
+  }
   loadPosition();
 
   *buffer = reinterpret_cast<const void**>(run_ + offsetInRun_);
   *size = runSize_ - offsetInRun_;
+  if (window_.has_value()) {
+    auto window = window_.value();
+    if (position_ + *size > window.offset + window.length) {
+      *size = window.offset + window.length - position_;
+    }
+  }
   if (position_ + *size > region_.length) {
     *size = region_.length - position_;
   }
@@ -106,6 +117,11 @@ size_t CacheInputStream::positionSize() {
   return 1;
 }
 
+void CacheInputStream::setRemainingBytes(uint64_t remainingBytes) {
+  VELOX_CHECK_GE(region_.length, position_ + remainingBytes);
+  window_ = Region{static_cast<uint64_t>(position_), remainingBytes};
+}
+
 namespace {
 std::vector<folly::Range<char*>> makeRanges(
     cache::AsyncDataCacheEntry* entry,
@@ -133,7 +149,7 @@ void CacheInputStream::loadSync(Region region) {
   // rawBytesRead is the number of bytes touched. Whether they come
   // from disk, ssd or memory is itemized in different counters. A
   process::TraceContext trace("loadSync");
-  // coalesced read ofrom InputStream removes itself from this count
+  // coalesced read from InputStream removes itself from this count
   // so as not to double count when the individual parts are
   // hit.
   ioStats_->incRawBytesRead(region.length);
@@ -155,6 +171,8 @@ void CacheInputStream::loadSync(Region region) {
     }
     auto entry = pin_.checkedEntry();
     if (entry->isExclusive()) {
+      // Missed memory cache. Trying to load from ssd cache, and if again
+      // missed, fall back to remote fetching.
       entry->setGroupId(groupId_);
       entry->setTrackingId(trackingId_);
       if (loadFromSsd(region, *entry)) {
@@ -170,6 +188,7 @@ void CacheInputStream::loadSync(Region region) {
       ioStats_->queryThreadIoLatency().increment(usec);
       entry->setExclusiveToShared();
     } else {
+      // Hit memory cache.
       if (!entry->getAndClearFirstUseFlag()) {
         ioStats_->ramHit().increment(entry->size());
       }

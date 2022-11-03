@@ -24,9 +24,8 @@
 #include "velox/expression/tests/ExpressionFuzzer.h"
 #include "velox/functions/FunctionRegistry.h"
 
-/// ExpressionFuzzerTest is an test/executable helper that leverages
-/// ExpressionFuzzer and VectorFuzzer to automatically generate and execute
-/// expression tests. It works by:
+/// FuzzerRunner leverages ExpressionFuzzer and VectorFuzzer to automatically
+/// generate and execute expression tests. It works by:
 ///
 ///  1. Taking an initial set of available function signatures.
 ///  2. Generating a random expression tree based on the available function
@@ -43,7 +42,9 @@
 ///
 /// The important flags that control Fuzzer's behavior are:
 ///
-///  --steps: how many iterations to run
+///  --steps: how many iterations to run.
+///  --duration_sec: alternatively, for how many seconds it should run (takes
+///          precedence over --steps).
 ///  --seed: pass a deterministic seed to reproduce the behavior (each iteration
 ///          will print a seed as part of the logs).
 ///  --v=1: verbose logging; print a lot more details about the execution.
@@ -59,7 +60,21 @@
 ///         --only "substr,trim"
 
 class FuzzerRunner {
-  // Parse the comma separated list of funciton names, and use it to filter the
+  static std::unordered_set<std::string> splitNames(const std::string& names) {
+    // Parse, lower case and trim it.
+    std::vector<folly::StringPiece> nameList;
+    folly::split(',', names, nameList);
+    std::unordered_set<std::string> nameSet;
+
+    for (const auto& it : nameList) {
+      auto str = folly::trimWhitespace(it).toString();
+      folly::toLowerAscii(str);
+      nameSet.insert(str);
+    }
+    return nameSet;
+  }
+
+  // Parse the comma separated list of function names, and use it to filter the
   // input signatures.
   static facebook::velox::FunctionSignatureMap filterSignatures(
       const facebook::velox::FunctionSignatureMap& input,
@@ -79,15 +94,7 @@ class FuzzerRunner {
     }
 
     // Parse, lower case and trim it.
-    std::vector<folly::StringPiece> nameList;
-    folly::split(',', onlyFunctions, nameList);
-    std::unordered_set<std::string> nameSet;
-
-    for (const auto& it : nameList) {
-      auto str = folly::trimWhitespace(it).toString();
-      folly::toLowerAscii(str);
-      nameSet.insert(str);
-    }
+    auto nameSet = splitNames(onlyFunctions);
 
     // Use the generated set to filter the input signatures.
     facebook::velox::FunctionSignatureMap output;
@@ -99,19 +106,95 @@ class FuzzerRunner {
     return output;
   }
 
+  static const std::unordered_map<
+      std::string,
+      std::vector<facebook::velox::exec::FunctionSignaturePtr>>
+      kSpecialForms;
+
+  static void appendSpecialForms(
+      const std::string& specialForms,
+      facebook::velox::FunctionSignatureMap& signatureMap) {
+    auto specialFormNames = splitNames(specialForms);
+    for (const auto& [name, signatures] : kSpecialForms) {
+      if (specialFormNames.count(name) == 0) {
+        LOG(INFO) << "Skipping special form: " << name;
+        continue;
+      }
+      std::vector<const facebook::velox::exec::FunctionSignature*>
+          rawSignatures;
+      for (const auto& signature : signatures) {
+        rawSignatures.push_back(signature.get());
+      }
+      signatureMap.insert({name, std::move(rawSignatures)});
+    }
+  }
+
  public:
   static int run(
       const std::string& onlyFunctions,
-      size_t steps,
       size_t seed,
-      const std::unordered_set<std::string>& skipFunctions) {
+      const std::unordered_set<std::string>& skipFunctions,
+      const std::string& specialForms) {
+    auto signatures = facebook::velox::getFunctionSignatures();
+    appendSpecialForms(specialForms, signatures);
     facebook::velox::test::expressionFuzzer(
-        filterSignatures(
-            facebook::velox::getFunctionSignatures(),
-            onlyFunctions,
-            skipFunctions),
-        steps,
-        seed);
+        filterSignatures(signatures, onlyFunctions, skipFunctions), seed);
     return RUN_ALL_TESTS();
   }
+};
+
+// static
+const std::unordered_map<
+    std::string,
+    std::vector<facebook::velox::exec::FunctionSignaturePtr>>
+    FuzzerRunner::kSpecialForms = {
+        {"and",
+         std::vector<facebook::velox::exec::FunctionSignaturePtr>{
+             // and: boolean, boolean,.. -> boolean
+             facebook::velox::exec::FunctionSignatureBuilder()
+                 .argumentType("boolean")
+                 .argumentType("boolean")
+                 .variableArity()
+                 .returnType("boolean")
+                 .build()}},
+        {"or",
+         std::vector<facebook::velox::exec::FunctionSignaturePtr>{
+             // or: boolean, boolean,.. -> boolean
+             facebook::velox::exec::FunctionSignatureBuilder()
+                 .argumentType("boolean")
+                 .argumentType("boolean")
+                 .variableArity()
+                 .returnType("boolean")
+                 .build()}},
+        {"coalesce",
+         std::vector<facebook::velox::exec::FunctionSignaturePtr>{
+             // coalesce: T, T,.. -> T
+             facebook::velox::exec::FunctionSignatureBuilder()
+                 .typeVariable("T")
+                 .argumentType("T")
+                 .argumentType("T")
+                 .variableArity()
+                 .returnType("T")
+                 .build()}},
+        {
+            "if",
+            std::vector<facebook::velox::exec::FunctionSignaturePtr>{
+                // if (condition, then): boolean, T -> T
+                facebook::velox::exec::FunctionSignatureBuilder()
+                    .typeVariable("T")
+                    .argumentType("boolean")
+                    .argumentType("T")
+                    .argumentType("T")
+                    .returnType("T")
+                    .build(),
+                // if (condition, then, else): boolean, T -> T
+                facebook::velox::exec::FunctionSignatureBuilder()
+                    .typeVariable("T")
+                    .argumentType("boolean")
+                    .argumentType("T")
+                    .argumentType("T")
+                    .argumentType("T")
+                    .returnType("T")
+                    .build()},
+        },
 };

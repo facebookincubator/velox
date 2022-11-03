@@ -37,7 +37,7 @@ The above examples use the timestamp ``2001-08-22 03:04:05.321`` as the input.
 
 .. function:: date_trunc(unit, x) -> x
 
-    Returns ``x`` truncated to ``unit``. The supported types for ``x`` are TIMESTAMP and DATE.
+    Returns ``x`` truncated to ``unit``. The supported types for ``x`` are TIMESTAMP, DATE, and TIMESTAMP WITH TIME ZONE.
 
 Interval Functions
 ------------------
@@ -121,9 +121,9 @@ Specifier Description
 
 **Warning**: The following specifiers are not currently supported: ``%D``, ``%U``, ``%u``, ``%V``, ``%w``, ``%X``.
 
-.. function:: date_format(timestamp, format) -> varchar
+.. function:: date_format(x, format) -> varchar
 
-    Formats ``timestamp`` as a string using ``format``.
+    Formats ``x`` as a string using ``format``. ``x`` is a timestamp or a timestamp with time zone.
 
 Java Date Functions
 -------------------
@@ -131,7 +131,8 @@ Java Date Functions
 The functions in this section leverage a native cpp implementation that follows
 a format string compatible with JodaTime’s `DateTimeFormat
 <http://joda-time.sourceforge.net/apidocs/org/joda/time/format/DateTimeFormat.html>`_
-pattern format.
+pattern format. The symbols currently supported are ``y``, ``Y``, ``M`` , ``d``,
+``H``, ``m``, ``s``, ``S``, and ``Z``.
 
 .. function:: parse_datetime(string, format) -> timestamp with time zone
 
@@ -140,7 +141,7 @@ pattern format.
 Convenience Extraction Functions
 --------------------------------
 
-These functions are supported for TIMESTAMP, DATE, and Presto TIMESTAMPWITHTIMEZONE values.
+These functions support TIMESTAMP, DATE, and TIMESTAMP WITH TIME ZONE input types.
 
 .. function:: day(x) -> bigint
 

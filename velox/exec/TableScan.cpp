@@ -71,8 +71,9 @@ RowVectorPtr TableScan::getOutput() {
       const auto& connectorSplit = split.connectorSplit;
       needNewSplit_ = false;
 
-      VELOX_CHECK(
-          connector_->connectorId() == connectorSplit->connectorId,
+      VELOX_CHECK_EQ(
+          connector_->connectorId(),
+          connectorSplit->connectorId,
           "Got splits with different connector IDs");
 
       if (!dataSource_) {
@@ -100,7 +101,7 @@ RowVectorPtr TableScan::getOutput() {
 
     const auto ioTimeStartMicros = getCurrentTimeMicro();
     ExceptionContextSetter exceptionContext(
-        {[](auto* debugString) {
+        {[](VeloxException::Type /*exceptionType*/, auto* debugString) {
            return *static_cast<std::string*>(debugString);
          },
          &debugString_});

@@ -24,11 +24,13 @@ add_library(
   MemoryUsage.cpp
   MappedMemory.cpp
   MmapAllocator.cpp
+  MmapArena.cpp
   MemoryUsageTracker.cpp
   StreamArena.cpp)
 
-target_link_libraries(velox_memory velox_flag_definitions velox_exception
-                      ${FOLLY_WITH_DEPENDENCIES})
+target_link_libraries(
+  velox_memory velox_flag_definitions velox_common_base velox_exception
+  velox_test_util ${FOLLY_WITH_DEPENDENCIES})
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
   target_link_libraries(velox_memory gtest)

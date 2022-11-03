@@ -5,9 +5,40 @@ promoting consistency within the codebase, and encouraging common practices
 which will make the codebase easier to read, edit, maintain and debug in the
 future.
 
-## Cpp Style
+## Code Formatting, Headers, and Licenses
 
-Many aspects of cpp style will be covered by clang-format, such as spacing,
+Our Makefile contains targets to help highlight and fix format, header or
+license issues. These targets are shortcuts for calling `./scripts/check.py`.
+
+Use `make header-fix` to apply our open source license headers to new files.
+Use `make format-fix` to identify and fix formatting issues using clang-format.
+
+Formatting issues found on the changed lines in the current commit can be
+displayed using `make format-check`.  These issues can be fixed by using `make
+format-fix`. This command will apply formatting changes to modified lines in
+the current commit.
+
+Header issues found on the changed files in the current commit can be displayed
+using `make header-check`. These issues can be fixed by using `make header-fix`.
+This will apply license header updates to the files in the current commit.
+
+An entire directory tree of files can be formatted and have license headers
+added using the `tree` variant of the format commands:
+
+```
+    ./scripts/check.py format tree
+    ./scripts/check.py format tree --fix
+
+    ./scripts/check.py header tree
+    ./scripts/check.py header tree --fix
+```
+
+All the available formatting commands can be displayed by using
+`./scripts/check.py help`.
+
+## C++ Style
+
+Many aspects of C++ style will be covered by clang-format, such as spacing,
 line width, indentation and ordering (for includes, using directives and etc). 
 
 * Always ensure your code is clang-format compatible.
@@ -189,7 +220,7 @@ About comment style:
 * As a general rule, do not use string literals without declaring a named
   constant for them.
   * The best way to make a constant string literal is to use constexpr
-    `std::string_view`/folly::StringPiece`
+    `std::string_view`/`folly::StringPiece`
   * **NEVER** use `std::string` - this makes your code more prone to SIOF bugs.
   * Avoid `const char* const` and `const char*` - these are less efficient to
     convert to `std::string` later on in your program if you ever need to
@@ -223,7 +254,7 @@ macro names are always upper-snake-case. Also:
   * Use clang-format to order your include and using directives.
 * Includes should always use the full path (relative to github’s root dir).
 * Whenever possible, try to forward-declare as much as possible in the .h and
-  only `#includ`e things you need the full implementation for. 
+  only `#include` things you need the full implementation for. 
   * For instance, if you just use a `Class*` or `Class&` in a header file,
     forward-declare `Class` instead of including the full header to minimize
     header dependencies.

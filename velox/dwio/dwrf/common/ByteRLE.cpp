@@ -13,10 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/dwio/dwrf/common/ByteRLE.h"
+
 #include <algorithm>
 
 #include "velox/dwio/common/exception/Exceptions.h"
-#include "velox/dwio/dwrf/common/ByteRLE.h"
 
 namespace facebook::velox::dwrf {
 
@@ -31,17 +32,19 @@ class ByteRleEncoderImpl : public ByteRleEncoder {
         bufferLength{0},
         buffer{nullptr} {}
 
-  uint64_t add(const char* data, const Ranges& ranges, const uint64_t* nulls)
-      override;
+  uint64_t add(
+      const char* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override;
 
   uint64_t add(
       const std::function<char(vector_size_t)>& valueAt,
-      const Ranges& ranges,
+      const common::Ranges& ranges,
       const std::function<bool(vector_size_t)>& isNullAt) override;
 
   uint64_t addBits(
       const uint64_t* data,
-      const Ranges& ranges,
+      const common::Ranges& ranges,
       const uint64_t* nulls,
       bool invert) override {
     throw std::runtime_error("addBits is only for bool stream");
@@ -49,7 +52,7 @@ class ByteRleEncoderImpl : public ByteRleEncoder {
 
   uint64_t addBits(
       const std::function<bool(vector_size_t)>& isNullAt,
-      const Ranges& ranges,
+      const common::Ranges& ranges,
       const std::function<bool(vector_size_t)>& valueAt,
       bool invert) override {
     throw std::runtime_error("addBits is only for bool stream");
@@ -93,7 +96,7 @@ void ByteRleEncoderImpl::writeByte(char c) {
 
 uint64_t ByteRleEncoderImpl::add(
     const char* data,
-    const Ranges& ranges,
+    const common::Ranges& ranges,
     const uint64_t* nulls) {
   uint64_t count = 0;
   if (nulls) {
@@ -114,7 +117,7 @@ uint64_t ByteRleEncoderImpl::add(
 
 uint64_t ByteRleEncoderImpl::add(
     const std::function<char(vector_size_t)>& valueAt,
-    const Ranges& ranges,
+    const common::Ranges& ranges,
     const std::function<bool(vector_size_t)>& isNullAt) {
   uint64_t count = 0;
   if (isNullAt) {
@@ -213,18 +216,20 @@ class BooleanRleEncoderImpl : public ByteRleEncoderImpl {
   explicit BooleanRleEncoderImpl(std::unique_ptr<BufferedOutputStream> output)
       : ByteRleEncoderImpl{std::move(output)}, bitsRemained{8}, current{0} {}
 
-  uint64_t add(const char* data, const Ranges& ranges, const uint64_t* nulls)
-      override;
+  uint64_t add(
+      const char* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override;
 
   uint64_t addBits(
       const uint64_t* data,
-      const Ranges& ranges,
+      const common::Ranges& ranges,
       const uint64_t* nulls,
       bool invert) override;
 
   uint64_t addBits(
       const std::function<bool(vector_size_t)>& isNullAt,
-      const Ranges& ranges,
+      const common::Ranges& ranges,
       const std::function<bool(vector_size_t)>& valueAt,
       bool invert) override;
 
@@ -262,7 +267,7 @@ class BooleanRleEncoderImpl : public ByteRleEncoderImpl {
 
 uint64_t BooleanRleEncoderImpl::add(
     const char* data,
-    const Ranges& ranges,
+    const common::Ranges& ranges,
     const uint64_t* nulls) {
   uint64_t count = 0;
   if (nulls) {
@@ -283,7 +288,7 @@ uint64_t BooleanRleEncoderImpl::add(
 
 uint64_t BooleanRleEncoderImpl::addBits(
     const uint64_t* data,
-    const Ranges& ranges,
+    const common::Ranges& ranges,
     const uint64_t* nulls,
     bool invert) {
   uint64_t count = 0;
@@ -307,7 +312,7 @@ uint64_t BooleanRleEncoderImpl::addBits(
 
 uint64_t BooleanRleEncoderImpl::addBits(
     const std::function<bool(vector_size_t)>& valueAt,
-    const Ranges& ranges,
+    const common::Ranges& ranges,
     const std::function<bool(vector_size_t)>& isNullAt,
     bool invert) {
   uint64_t count = 0;

@@ -16,9 +16,10 @@
 #pragma once
 
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/prestosql/CheckedArithmeticImpl.h"
 #include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
 
-namespace facebook::velox::aggregate {
+namespace facebook::velox::aggregate::prestosql {
 
 template <typename TInput, typename TAccumulator, typename ResultType>
 class SumAggregate
@@ -33,12 +34,16 @@ class SumAggregate
     return sizeof(TAccumulator);
   }
 
+  int32_t accumulatorAlignmentSize() const override {
+    return 1;
+  }
+
   void initializeNewGroups(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
-      *exec::Aggregate::value<ResultType>(groups[i]) = 0;
+      *exec::Aggregate::value<TAccumulator>(groups[i]) = 0;
     }
   }
 
@@ -46,7 +51,10 @@ class SumAggregate
       override {
     BaseAggregate::template doExtractValues<ResultType>(
         groups, numGroups, result, [&](char* group) {
-          return *BaseAggregate::Aggregate::template value<ResultType>(group);
+          // 'ResultType' and 'TAccumulator' might not be same such as sum(real)
+          // and we do an explicit type conversion here.
+          return (ResultType)(*BaseAggregate::Aggregate::template value<
+                              TAccumulator>(group));
         });
   }
 
@@ -71,7 +79,7 @@ class SumAggregate
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
-    updateInternal<ResultType>(groups, rows, args, mayPushdown);
+    updateInternal<TAccumulator, TAccumulator>(groups, rows, args, mayPushdown);
   }
 
   void addSingleGroupRawInput(
@@ -83,10 +91,10 @@ class SumAggregate
         group,
         rows,
         args[0],
-        [](TAccumulator& result, TInput value) { result += value; },
-        [](TAccumulator& result, TInput value, int n) { result += n * value; },
+        &updateSingleValue<TAccumulator>,
+        &updateDuplicateValues<TAccumulator>,
         mayPushdown,
-        0);
+        TAccumulator(0));
   }
 
   void addSingleGroupIntermediateResults(
@@ -94,20 +102,23 @@ class SumAggregate
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
-    BaseAggregate::template updateOneGroup<ResultType>(
+    BaseAggregate::template updateOneGroup<TAccumulator, TAccumulator>(
         group,
         rows,
         args[0],
-        [](ResultType& result, TInput value) { result += value; },
-        [](ResultType& result, TInput value, int n) { result += n * value; },
+        &updateSingleValue<TAccumulator>,
+        &updateDuplicateValues<TAccumulator>,
         mayPushdown,
-        0);
+        TAccumulator(0));
   }
 
  protected:
-  // TData is either TAccumulator or TResult, which in most cases are the same,
+  // TData is used to store the updated sum state. It can be either
+  // TAccumulator or TResult, which in most cases are the same, but for
+  // sum(real) can differ. TValue is used to decode the sum input 'args'.
+  // It can be either TAccumulator or TInput, which is most cases are the same
   // but for sum(real) can differ.
-  template <typename TData>
+  template <typename TData, typename TValue = TInput>
   void updateInternal(
       char** groups,
       const SelectivityVector& rows,
@@ -116,28 +127,88 @@ class SumAggregate
     const auto& arg = args[0];
 
     if (mayPushdown && arg->isLazy()) {
-      BaseAggregate::template pushdown<SumHook<TInput, TData>>(
+      BaseAggregate::template pushdown<SumHook<TValue, TData>>(
           groups, rows, arg);
       return;
     }
 
     if (exec::Aggregate::numNulls_) {
-      BaseAggregate::template updateGroups<true, TData>(
-          groups,
-          rows,
-          arg,
-          [](TData& result, TInput value) { result += value; },
-          false);
+      BaseAggregate::template updateGroups<true, TData, TValue>(
+          groups, rows, arg, &updateSingleValue<TData>, false);
     } else {
-      BaseAggregate::template updateGroups<false, TData>(
-          groups,
-          rows,
-          arg,
-          [](TData& result, TInput value) { result += value; },
-          false);
+      BaseAggregate::template updateGroups<false, TData, TValue>(
+          groups, rows, arg, &updateSingleValue<TData>, false);
+    }
+  }
+
+ private:
+  /// Update functions that check for overflows for integer types.
+  /// For floating points, an overflow results in +/- infinity which is a
+  /// valid output.
+  template <typename TData>
+  static void updateSingleValue(TData& result, TData value) {
+    if constexpr (
+        std::is_same_v<TData, double> || std::is_same_v<TData, float>) {
+      result += value;
+    } else {
+      result = functions::checkedPlus<TData>(result, value);
+    }
+  }
+
+  template <typename TData>
+  static void updateDuplicateValues(TData& result, TData value, int n) {
+    if constexpr (
+        std::is_same_v<TData, double> || std::is_same_v<TData, float>) {
+      result += n * value;
+    } else {
+      result = functions::checkedPlus<TData>(
+          result, functions::checkedMultiply<TData>(TData(n), value));
     }
   }
 };
+
+/// Override 'initializeNewGroups' for decimal values to call set method to
+/// initialize the decimal value properly.
+template <>
+inline void
+SumAggregate<UnscaledShortDecimal, UnscaledLongDecimal, UnscaledLongDecimal>::
+    initializeNewGroups(
+        char** groups,
+        folly::Range<const vector_size_t*> indices) {
+  exec::Aggregate::setAllNulls(groups, indices);
+  for (auto i : indices) {
+    exec::Aggregate::value<UnscaledLongDecimal>(groups[i])->setUnscaledValue(0);
+  }
+}
+
+template <>
+inline void
+SumAggregate<UnscaledLongDecimal, UnscaledLongDecimal, UnscaledLongDecimal>::
+    initializeNewGroups(
+        char** groups,
+        folly::Range<const vector_size_t*> indices) {
+  exec::Aggregate::setAllNulls(groups, indices);
+  for (auto i : indices) {
+    exec::Aggregate::value<UnscaledLongDecimal>(groups[i])->setUnscaledValue(0);
+  }
+}
+
+/// Override 'accumulatorAlignmentSize' for UnscaledLongDecimal values as it
+/// uses int128_t type. Some CPUs don't support misaligned access to int128_t
+/// type.
+template <>
+inline int32_t
+SumAggregate<UnscaledShortDecimal, UnscaledLongDecimal, UnscaledLongDecimal>::
+    accumulatorAlignmentSize() const {
+  return static_cast<int32_t>(sizeof(UnscaledLongDecimal));
+}
+
+template <>
+inline int32_t
+SumAggregate<UnscaledLongDecimal, UnscaledLongDecimal, UnscaledLongDecimal>::
+    accumulatorAlignmentSize() const {
+  return static_cast<int32_t>(sizeof(UnscaledLongDecimal));
+}
 
 template <template <typename U, typename V, typename W> class T>
 bool registerSumAggregate(const std::string& name) {
@@ -151,6 +222,13 @@ bool registerSumAggregate(const std::string& name) {
           .returnType("double")
           .intermediateType("double")
           .argumentType("double")
+          .build(),
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .intermediateType("DECIMAL(38, a_scale)")
+          .returnType("DECIMAL(38, a_scale)")
           .build(),
   };
 
@@ -190,6 +268,16 @@ bool registerSumAggregate(const std::string& name) {
               return std::make_unique<T<double, double, float>>(resultType);
             }
             return std::make_unique<T<double, double, double>>(DOUBLE());
+          case TypeKind::SHORT_DECIMAL:
+            return std::make_unique<
+                T<UnscaledShortDecimal,
+                  UnscaledLongDecimal,
+                  UnscaledLongDecimal>>(resultType);
+          case TypeKind::LONG_DECIMAL:
+            return std::make_unique<
+                T<UnscaledLongDecimal,
+                  UnscaledLongDecimal,
+                  UnscaledLongDecimal>>(resultType);
           default:
             VELOX_CHECK(
                 false,
@@ -200,4 +288,4 @@ bool registerSumAggregate(const std::string& name) {
       });
 }
 
-} // namespace facebook::velox::aggregate
+} // namespace facebook::velox::aggregate::prestosql

@@ -20,6 +20,8 @@
 
 #include "velox/common/base/Exceptions.h"
 
+using namespace facebook::velox;
+
 struct Counter {
   mutable int counter = 0;
 };
@@ -62,88 +64,63 @@ void verifyException(
 void verifyVeloxException(
     std::function<void()> f,
     const std::string& messagePrefix) {
-  verifyException<::facebook::velox::VeloxException>(
-      f, [&messagePrefix](const auto& e) {
-        EXPECT_TRUE(folly::StringPiece{e.what()}.startsWith(messagePrefix))
-            << "\nException message prefix mismatch.\n\nExpected prefix: "
-            << messagePrefix << "\n\nActual message: " << e.what();
-      });
+  verifyException<VeloxException>(f, [&messagePrefix](const auto& e) {
+    EXPECT_TRUE(folly::StringPiece{e.what()}.startsWith(messagePrefix))
+        << "\nException message prefix mismatch.\n\nExpected prefix: "
+        << messagePrefix << "\n\nActual message: " << e.what();
+  });
 }
 
-void testExceptionTraceCollectionControl(
-    bool userException,
-    bool enabled,
-    bool testNewFlag) {
+void testExceptionTraceCollectionControl(bool userException, bool enabled) {
   // Disable rate control in the test.
-  FLAGS_velox_exception_stacktrace_rate_limit_ms = 0;
   FLAGS_velox_exception_user_stacktrace_rate_limit_ms = 0;
   FLAGS_velox_exception_system_stacktrace_rate_limit_ms = 0;
 
-  // Test the old flag to deprecate.
-  if (testNewFlag) {
-    FLAGS_velox_exception_stacktrace = false;
-    if (userException) {
-      FLAGS_velox_exception_user_stacktrace_enabled = enabled ? true : false;
-      FLAGS_velox_exception_system_stacktrace_enabled = folly::Random::oneIn(2);
-    } else {
-      FLAGS_velox_exception_system_stacktrace_enabled = enabled ? true : false;
-      FLAGS_velox_exception_user_stacktrace_enabled = folly::Random::oneIn(2);
-    }
+  if (userException) {
+    FLAGS_velox_exception_user_stacktrace_enabled = enabled ? true : false;
+    FLAGS_velox_exception_system_stacktrace_enabled = folly::Random::oneIn(2);
   } else {
-    FLAGS_velox_exception_stacktrace = enabled ? true : false;
-    if (userException) {
-      FLAGS_velox_exception_user_stacktrace_enabled =
-          enabled ? folly::Random::oneIn(2) : false;
-      FLAGS_velox_exception_system_stacktrace_enabled = folly::Random::oneIn(2);
-    } else {
-      FLAGS_velox_exception_system_stacktrace_enabled =
-          enabled ? folly::Random::oneIn(2) : false;
-      FLAGS_velox_exception_user_stacktrace_enabled = folly::Random::oneIn(2);
-    }
+    FLAGS_velox_exception_system_stacktrace_enabled = enabled ? true : false;
+    FLAGS_velox_exception_user_stacktrace_enabled = folly::Random::oneIn(2);
   }
   try {
     if (userException) {
-      throw ::facebook::velox::VeloxUserError(
+      throw VeloxUserError(
           "file_name",
           1,
           "function_name()",
           "operator()",
           "test message",
           "",
-          ::facebook::velox::error_code::kArithmeticError,
+          error_code::kArithmeticError,
           false);
     } else {
-      throw ::facebook::velox::VeloxRuntimeError(
+      throw VeloxRuntimeError(
           "file_name",
           1,
           "function_name()",
           "operator()",
           "test message",
           "",
-          ::facebook::velox::error_code::kArithmeticError,
+          error_code::kArithmeticError,
           false);
     }
-  } catch (::facebook::velox::VeloxException& e) {
+  } catch (VeloxException& e) {
     SCOPED_TRACE(fmt::format(
-        "enabled: {}, legacy flag: {}, user flag: {}, sys flag: {}",
+        "enabled: {}, user flag: {}, sys flag: {}",
         enabled,
-        FLAGS_velox_exception_stacktrace,
         FLAGS_velox_exception_user_stacktrace_enabled,
         FLAGS_velox_exception_system_stacktrace_enabled));
-    ASSERT_EQ(
-        userException,
-        e.exceptionType() == ::facebook::velox::VeloxException::Type::kUser);
+    ASSERT_EQ(userException, e.exceptionType() == VeloxException::Type::kUser);
     ASSERT_EQ(enabled, e.stackTrace() != nullptr);
   }
 }
 
 void testExceptionTraceCollectionRateControl(
     bool userException,
-    bool hasRateLimit,
-    bool testNewFlag) {
+    bool hasRateLimit) {
   // Disable rate control in the test.
   // Enable trace rate control in the test.
-  FLAGS_velox_exception_stacktrace = true;
   FLAGS_velox_exception_user_stacktrace_enabled = true;
   FLAGS_velox_exception_system_stacktrace_enabled = true;
   // Set rate control interval to a large value to avoid time related test
@@ -156,74 +133,51 @@ void testExceptionTraceCollectionRateControl(
     std::this_thread::sleep_for(
         std::chrono::milliseconds(kRateLimitIntervalMs)); // NOLINT
   }
-  // Test the old flag to deprecate.
-  if (testNewFlag) {
-    FLAGS_velox_exception_stacktrace_rate_limit_ms = 0;
-    if (userException) {
-      FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
-          hasRateLimit ? kRateLimitIntervalMs : 0;
-      FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
-          folly::Random::rand32();
-    } else {
-      // Set rate control to a large interval to avoid time related test
-      // flakiness.
-      FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
-          hasRateLimit ? kRateLimitIntervalMs : 0;
-      FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
-          folly::Random::rand32();
-    }
+  if (userException) {
+    FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
+        hasRateLimit ? kRateLimitIntervalMs : 0;
+    FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
+        folly::Random::rand32();
   } else {
     // Set rate control to a large interval to avoid time related test
     // flakiness.
-    FLAGS_velox_exception_stacktrace_rate_limit_ms =
+    FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
         hasRateLimit ? kRateLimitIntervalMs : 0;
-    if (userException) {
-      FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
-          hasRateLimit ? folly::Random::rand32() : 0;
-      FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
-          folly::Random::rand32();
-    } else {
-      FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
-          hasRateLimit ? folly::Random::rand32() : 0;
-      FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
-          folly::Random::rand32();
-    }
+    FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
+        folly::Random::rand32();
   }
   for (int iter = 0; iter < 3; ++iter) {
     try {
       if (userException) {
-        throw ::facebook::velox::VeloxUserError(
+        throw VeloxUserError(
             "file_name",
             1,
             "function_name()",
             "operator()",
             "test message",
             "",
-            ::facebook::velox::error_code::kArithmeticError,
+            error_code::kArithmeticError,
             false);
       } else {
-        throw ::facebook::velox::VeloxRuntimeError(
+        throw VeloxRuntimeError(
             "file_name",
             1,
             "function_name()",
             "operator()",
             "test message",
             "",
-            ::facebook::velox::error_code::kArithmeticError,
+            error_code::kArithmeticError,
             false);
       }
-    } catch (::facebook::velox::VeloxException& e) {
+    } catch (VeloxException& e) {
       SCOPED_TRACE(fmt::format(
-          "userException: {}, testNewFlag: {}, hasRateLimit: {}, legacy limit: {}ms, user limit: {}ms, sys limit: {}ms",
+          "userException: {}, hasRateLimit: {}, user limit: {}ms, sys limit: {}ms",
           userException,
-          testNewFlag,
           hasRateLimit,
-          FLAGS_velox_exception_stacktrace_rate_limit_ms,
           FLAGS_velox_exception_user_stacktrace_rate_limit_ms,
           FLAGS_velox_exception_system_stacktrace_rate_limit_ms));
       ASSERT_EQ(
-          userException,
-          e.exceptionType() == ::facebook::velox::VeloxException::Type::kUser);
+          userException, e.exceptionType() == VeloxException::Type::kUser);
       ASSERT_EQ(!hasRateLimit || ((iter % 2) == 0), e.stackTrace() != nullptr);
       // NOTE: with rate limit control, we want to verify if we can collect
       // stack trace after waiting for a while.
@@ -245,22 +199,16 @@ TEST(ExceptionTest, lazyStreamEvaluation) {
   VELOX_CHECK(true, "{}", c);
   EXPECT_EQ(0, c.counter);
 
-  EXPECT_THROW(
-      ([&]() { VELOX_CHECK(false, "{}", c); })(),
-      ::facebook::velox::VeloxRuntimeError);
+  EXPECT_THROW(([&]() { VELOX_CHECK(false, "{}", c); })(), VeloxRuntimeError);
   EXPECT_EQ(1, c.counter);
 
   VELOX_CHECK(true, "{}", c);
   EXPECT_EQ(1, c.counter);
 
-  EXPECT_THROW(
-      ([&]() { VELOX_USER_CHECK(false, "{}", c); })(),
-      ::facebook::velox::VeloxUserError);
+  EXPECT_THROW(([&]() { VELOX_USER_CHECK(false, "{}", c); })(), VeloxUserError);
   EXPECT_EQ(2, c.counter);
 
-  EXPECT_THROW(
-      ([&]() { VELOX_CHECK(false, "{}", c); })(),
-      ::facebook::velox::VeloxRuntimeError);
+  EXPECT_THROW(([&]() { VELOX_CHECK(false, "{}", c); })(), VeloxRuntimeError);
   EXPECT_EQ(3, c.counter);
 
   // Simple types.
@@ -270,13 +218,9 @@ TEST(ExceptionTest, lazyStreamEvaluation) {
   VELOX_CHECK(true, "{}", ++i);
   EXPECT_EQ(0, i);
 
-  EXPECT_THROW(
-      ([&]() { VELOX_CHECK(false, "{}", i++); })(),
-      ::facebook::velox::VeloxRuntimeError);
+  EXPECT_THROW(([&]() { VELOX_CHECK(false, "{}", i++); })(), VeloxRuntimeError);
   EXPECT_EQ(1, i);
-  EXPECT_THROW(
-      ([&]() { VELOX_CHECK(false, "{}", ++i); })(),
-      ::facebook::velox::VeloxRuntimeError);
+  EXPECT_THROW(([&]() { VELOX_CHECK(false, "{}", ++i); })(), VeloxRuntimeError);
   EXPECT_EQ(2, i);
 }
 
@@ -617,24 +561,43 @@ TEST(ExceptionTest, context) {
       "\nFile: ");
 
   // With context.
-  auto messageFunction = [](auto* arg) {
-    return std::string(static_cast<char*>(arg));
+  int callCount = 0;
+
+  struct MessageFunctionArg {
+    std::string message;
+    int* callCount;
+  };
+
+  auto messageFunction = [](facebook::velox::VeloxException::Type exceptionType,
+                            void* untypedArg) {
+    auto arg = static_cast<MessageFunctionArg*>(untypedArg);
+    ++(*arg->callCount);
+    switch (exceptionType) {
+      case facebook::velox::VeloxException::Type::kUser:
+        return fmt::format("User error: {}", arg->message);
+      case facebook::velox::VeloxException::Type::kSystem:
+        return fmt::format("System error: {}", arg->message);
+      default:
+        return fmt::format("Unexpected error type: {}", arg->message);
+    }
   };
 
   {
     // Create multi-layer contexts.
-    std::string topLevelTroubleshootingAid = "Top-level troubleshooting aid.";
+    MessageFunctionArg topLevelTroubleshootingAid{
+        "Top-level troubleshooting aid.", &callCount};
     facebook::velox::ExceptionContextSetter topLevelContext(
-        {messageFunction, topLevelTroubleshootingAid.data()});
+        {messageFunction, &topLevelTroubleshootingAid});
 
-    std::string midLevelTroubleshootingAid = "Mid-level troubleshooting aid.";
+    MessageFunctionArg midLevelTroubleshootingAid{
+        "Mid-level troubleshooting aid.", &callCount};
     facebook::velox::ExceptionContextSetter midLevelContext(
-        {messageFunction, midLevelTroubleshootingAid.data()});
+        {messageFunction, &midLevelTroubleshootingAid});
 
-    std::string innerLevelTroubleshootingAid =
-        "Inner-level troubleshooting aid.";
+    MessageFunctionArg innerLevelTroubleshootingAid{
+        "Inner-level troubleshooting aid.", &callCount};
     facebook::velox::ExceptionContextSetter innerLevelContext(
-        {messageFunction, innerLevelTroubleshootingAid.data()});
+        {messageFunction, &innerLevelTroubleshootingAid});
 
     verifyVeloxException(
         [&]() { VELOX_CHECK_EQ(1, 3); },
@@ -644,19 +607,38 @@ TEST(ExceptionTest, context) {
         "\nReason: (1 vs. 3)"
         "\nRetriable: False"
         "\nExpression: 1 == 3"
-        "\nContext: Inner-level troubleshooting aid."
-        "\nTop-Level Context: Top-level troubleshooting aid."
+        "\nContext: System error: Inner-level troubleshooting aid."
+        "\nTop-Level Context: System error: Top-level troubleshooting aid."
         "\nFunction: operator()"
         "\nFile: ");
+
+    EXPECT_EQ(2, callCount);
+
+    verifyVeloxException(
+        [&]() { VELOX_USER_CHECK_EQ(1, 3); },
+        "Exception: VeloxUserError"
+        "\nError Source: USER"
+        "\nError Code: INVALID_ARGUMENT"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: User error: Inner-level troubleshooting aid."
+        "\nTop-Level Context: User error: Top-level troubleshooting aid."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(4, callCount);
   }
 
   // Different context.
   {
+    callCount = 0;
+
     // Create a single layer of context. Context and top-level context are
     // expected to be the same.
-    std::string debuggingInfo = "Debugging info.";
+    MessageFunctionArg debuggingInfo{"Debugging info.", &callCount};
     facebook::velox::ExceptionContextSetter context(
-        {messageFunction, debuggingInfo.data()});
+        {messageFunction, &debuggingInfo});
 
     verifyVeloxException(
         [&]() { VELOX_CHECK_EQ(1, 3); },
@@ -666,11 +648,30 @@ TEST(ExceptionTest, context) {
         "\nReason: (1 vs. 3)"
         "\nRetriable: False"
         "\nExpression: 1 == 3"
-        "\nContext: Debugging info."
+        "\nContext: System error: Debugging info."
         "\nTop-Level Context: Same as context."
         "\nFunction: operator()"
         "\nFile: ");
+
+    EXPECT_EQ(1, callCount);
+
+    verifyVeloxException(
+        [&]() { VELOX_USER_CHECK_EQ(1, 3); },
+        "Exception: VeloxUserError"
+        "\nError Source: USER"
+        "\nError Code: INVALID_ARGUMENT"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: User error: Debugging info."
+        "\nTop-Level Context: Same as context."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(2, callCount);
   }
+
+  callCount = 0;
 
   // No context.
   verifyVeloxException(
@@ -683,16 +684,44 @@ TEST(ExceptionTest, context) {
       "\nExpression: 1 == 3"
       "\nFunction: operator()"
       "\nFile: ");
+
+  EXPECT_EQ(0, callCount);
+
+  // With message function throwing an exception.
+  auto throwingMessageFunction =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* untypedArg) -> std::string {
+    auto arg = static_cast<MessageFunctionArg*>(untypedArg);
+    ++(*arg->callCount);
+    VELOX_FAIL("Test failure.");
+  };
+  {
+    MessageFunctionArg debuggingInfo{"Debugging info.", &callCount};
+    facebook::velox::ExceptionContextSetter context(
+        {throwingMessageFunction, &debuggingInfo});
+
+    verifyVeloxException(
+        [&]() { VELOX_CHECK_EQ(1, 3); },
+        "Exception: VeloxRuntimeError"
+        "\nError Source: RUNTIME"
+        "\nError Code: INVALID_STATE"
+        "\nReason: (1 vs. 3)"
+        "\nRetriable: False"
+        "\nExpression: 1 == 3"
+        "\nContext: Failed to produce additional context."
+        "\nTop-Level Context: Same as context."
+        "\nFunction: operator()"
+        "\nFile: ");
+
+    EXPECT_EQ(1, callCount);
+  }
 }
 
 TEST(ExceptionTest, traceCollectionEnabling) {
   // Switch on/off tests.
   for (const bool enabled : {false, true}) {
     for (const bool userException : {false, true}) {
-      for (const bool testNewFlag : {false, true}) {
-        testExceptionTraceCollectionControl(
-            userException, enabled, testNewFlag);
-      }
+      testExceptionTraceCollectionControl(userException, enabled);
     }
   }
 }
@@ -701,10 +730,111 @@ TEST(ExceptionTest, traceCollectionRateControl) {
   // Rate limit tests.
   for (const bool withLimit : {false, true}) {
     for (const bool userException : {false, true}) {
-      for (const bool testNewFlag : {false, true}) {
-        testExceptionTraceCollectionRateControl(
-            userException, withLimit, testNewFlag);
-      }
+      testExceptionTraceCollectionRateControl(userException, withLimit);
     }
+  }
+}
+
+TEST(ExceptionTest, wrappedException) {
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_TRUE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "");
+    ASSERT_EQ(ve.topLevelContext(), "");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxRuntimeError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_FALSE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "");
+    ASSERT_EQ(ve.topLevelContext(), "");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  try {
+    VELOX_FAIL("This is a test.");
+  } catch (const VeloxException& e) {
+    ASSERT_EQ(e.message(), "This is a test.");
+    ASSERT_TRUE(e.wrappedException() == nullptr);
+  }
+}
+
+TEST(ExceptionTest, wrappedExceptionWithContext) {
+  auto messageFunction = [](facebook::velox::VeloxException::Type exceptionType,
+                            void* untypedArg) {
+    auto data = static_cast<char*>(untypedArg);
+    switch (exceptionType) {
+      case facebook::velox::VeloxException::Type::kUser:
+        return fmt::format("User error: {}", data);
+      case facebook::velox::VeloxException::Type::kSystem:
+        return fmt::format("System error: {}", data);
+      default:
+        return fmt::format("Unexpected error type: {}", data);
+    }
+  };
+
+  std::string data = "lakes";
+  facebook::velox::ExceptionContextSetter context(
+      {messageFunction, data.data()});
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_TRUE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "User error: lakes");
+    ASSERT_EQ(ve.topLevelContext(), "Same as context.");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxRuntimeError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_FALSE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "System error: lakes");
+    ASSERT_EQ(ve.topLevelContext(), "Same as context.");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  std::string innerData = "mountains";
+  facebook::velox::ExceptionContextSetter innerContext(
+      {messageFunction, innerData.data()});
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_TRUE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "User error: mountains");
+    ASSERT_EQ(ve.topLevelContext(), "User error: lakes");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
+  }
+
+  try {
+    throw std::invalid_argument("This is a test.");
+  } catch (const std::exception& e) {
+    VeloxRuntimeError ve(std::current_exception(), e.what(), false);
+    ASSERT_EQ(ve.message(), "This is a test.");
+    ASSERT_FALSE(ve.isUserError());
+    ASSERT_EQ(ve.context(), "System error: mountains");
+    ASSERT_EQ(ve.topLevelContext(), "System error: lakes");
+    ASSERT_THROW(
+        std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
   }
 }

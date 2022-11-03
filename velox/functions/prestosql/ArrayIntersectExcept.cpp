@@ -15,6 +15,7 @@
  */
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -123,9 +124,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    memory::MemoryPool* pool = context->pool();
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    memory::MemoryPool* pool = context.pool();
     BaseVector* left = args[0].get();
     BaseVector* right = args[1].get();
 
@@ -177,7 +178,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       auto offset = baseLeftArray->offsetAt(idx);
 
       outputSet.reset();
-      *rawNewOffsets = indicesCursor;
+      rawNewOffsets[row] = indicesCursor;
 
       // Scans the array elements on the left-hand side.
       for (vector_size_t i = offset; i < (offset + size); ++i) {
@@ -216,9 +217,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
           }
         }
       }
-      *rawNewLengths = indicesCursor - *rawNewOffsets;
-      ++rawNewLengths;
-      ++rawNewOffsets;
+      rawNewLengths[row] = indicesCursor - rawNewOffsets[row];
     };
 
     SetWithNull<T> outputSet;
@@ -257,7 +256,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
         newLengths,
         newElements,
         0);
-    context->moveOrCopyResult(resultArray, rows, result);
+    context.moveOrCopyResult(resultArray, rows, result);
   }
 
   // If one of the arrays is constant, this member will store a pointer to the
@@ -281,8 +280,8 @@ class ArraysOverlapFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     BaseVector* left = args[0].get();
     BaseVector* right = args[1].get();
     if (constantSet_.has_value() && isLeftConstant_) {
@@ -294,8 +293,8 @@ class ArraysOverlapFunction : public exec::VectorFunction {
         decodeArrayElements(arrayDecoder, elementsDecoder, rows);
     auto decodedLeftArray = arrayDecoder.get();
     auto baseLeftArray = decodedLeftArray->base()->as<ArrayVector>();
-    BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
-    auto resultBoolVector = (*result)->template asFlatVector<bool>();
+    context.ensureWritable(rows, BOOLEAN(), result);
+    auto resultBoolVector = result->template asFlatVector<bool>();
     auto processRow = [&](auto row, const SetWithNull<T>& rightSet) {
       auto idx = decodedLeftArray->index(row);
       auto offset = baseLeftArray->offsetAt(idx);
@@ -391,12 +390,19 @@ SetWithNull<T> validateConstantVectorAndGenerateSet(
   VELOX_CHECK_NOT_NULL(constantVector, "wrong constant type found");
   auto arrayVecPtr = constantVector->valueVector()->as<ArrayVector>();
   VELOX_CHECK_NOT_NULL(arrayVecPtr, "wrong array literal type");
-  auto elementsAsFlatVector = arrayVecPtr->elements()->as<FlatVector<T>>();
-  VELOX_CHECK_NOT_NULL(
-      elementsAsFlatVector, "constant value must be encoded as flat");
+
   auto idx = constantArray->index();
+  auto elementBegin = arrayVecPtr->offsetAt(idx);
+  auto elementEnd = elementBegin + arrayVecPtr->sizeAt(idx);
+
+  SelectivityVector rows{elementEnd, false};
+  rows.setValidRange(elementBegin, elementEnd, true);
+  rows.updateBounds();
+
+  DecodedVector decodedElements{*arrayVecPtr->elements(), rows};
+
   SetWithNull<T> constantSet;
-  generateSet<T>(arrayVecPtr, elementsAsFlatVector, idx, constantSet);
+  generateSet<T>(arrayVecPtr, &decodedElements, idx, constantSet);
   return constantSet;
 }
 
@@ -453,13 +459,18 @@ std::shared_ptr<exec::VectorFunction> createArrayExcept(
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
-    const std::string& returnType) {
-  return {exec::FunctionSignatureBuilder()
-              .typeVariable("T")
-              .returnType(returnType)
-              .argumentType("array(T)")
-              .argumentType("array(T)")
-              .build()};
+    const std::string& returnTypeTemplate) {
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+  for (const auto& type : exec::primitiveTypeNames()) {
+    signatures.push_back(
+        exec::FunctionSignatureBuilder()
+            .returnType(
+                fmt::format(fmt::runtime(returnTypeTemplate.c_str()), type))
+            .argumentType(fmt::format("array({})", type))
+            .argumentType(fmt::format("array({})", type))
+            .build());
+  }
+  return signatures;
 }
 
 template <TypeKind kind>
@@ -497,11 +508,11 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_array_intersect,
-    signatures("array(T)"),
+    signatures("array({})"),
     createArrayIntersect);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_array_except,
-    signatures("array(T)"),
+    signatures("array({})"),
     createArrayExcept);
 } // namespace facebook::velox::functions

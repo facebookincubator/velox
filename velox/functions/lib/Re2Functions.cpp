@@ -69,18 +69,18 @@ void checkForBadPattern(const RE2& re) {
 
 FlatVector<bool>& ensureWritableBool(
     const SelectivityVector& rows,
-    velox::memory::MemoryPool* pool,
-    std::shared_ptr<BaseVector>* result) {
-  BaseVector::ensureWritable(rows, BOOLEAN(), pool, result);
-  return *(*result)->as<FlatVector<bool>>();
+    EvalCtx& context,
+    VectorPtr& result) {
+  context.ensureWritable(rows, BOOLEAN(), result);
+  return *result->as<FlatVector<bool>>();
 }
 
 FlatVector<StringView>& ensureWritableStringView(
     const SelectivityVector& rows,
-    velox::memory::MemoryPool* pool,
-    std::shared_ptr<BaseVector>* result) {
-  BaseVector::ensureWritable(rows, VARCHAR(), pool, result);
-  auto* flat = (*result)->as<FlatVector<StringView>>();
+    EvalCtx& context,
+    std::shared_ptr<BaseVector>& result) {
+  context.ensureWritable(rows, VARCHAR(), result);
+  auto* flat = result->as<FlatVector<StringView>>();
   flat->mutableValues(rows.end());
   return *flat;
 }
@@ -191,11 +191,10 @@ class Re2MatchConstantPattern final : public VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      EvalCtx* context,
-      VectorPtr* resultRef) const final {
+      EvalCtx& context,
+      VectorPtr& resultRef) const final {
     VELOX_CHECK_EQ(args.size(), 2);
-    FlatVector<bool>& result =
-        ensureWritableBool(rows, context->pool(), resultRef);
+    FlatVector<bool>& result = ensureWritableBool(rows, context, resultRef);
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
     checkForBadPattern(re_);
     rows.applyToSelected([&](vector_size_t i) {
@@ -214,8 +213,8 @@ class Re2Match final : public VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
-      EvalCtx* context,
-      VectorPtr* resultRef) const override {
+      EvalCtx& context,
+      VectorPtr& resultRef) const override {
     VELOX_CHECK_EQ(args.size(), 2);
     if (auto pattern = getIfConstant<StringView>(*args[1])) {
       Re2MatchConstantPattern<Fn>(*pattern).apply(
@@ -223,8 +222,7 @@ class Re2Match final : public VectorFunction {
       return;
     }
     // General case.
-    FlatVector<bool>& result =
-        ensureWritableBool(rows, context->pool(), resultRef);
+    FlatVector<bool>& result = ensureWritableBool(rows, context, resultRef);
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
     exec::LocalDecodedVector pattern(context, *args[1], rows);
     rows.applyToSelected([&](vector_size_t row) {
@@ -253,12 +251,12 @@ class Re2SearchAndExtractConstantPattern final : public VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      EvalCtx* context,
-      VectorPtr* resultRef) const final {
+      EvalCtx& context,
+      VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
     // TODO: Potentially re-use the string vector, not just the buffer.
     FlatVector<StringView>& result =
-        ensureWritableStringView(rows, context->pool(), resultRef);
+        ensureWritableStringView(rows, context, resultRef);
 
     // apply() will not be invoked if the selection is empty.
     checkForBadPattern(re_);
@@ -329,8 +327,8 @@ class Re2SearchAndExtract final : public VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
-      EvalCtx* context,
-      VectorPtr* resultRef) const final {
+      EvalCtx& context,
+      VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
     // Handle the common case of a constant pattern.
     if (auto pattern = getIfConstant<StringView>(*args[1])) {
@@ -342,7 +340,7 @@ class Re2SearchAndExtract final : public VectorFunction {
     // The general case. Further optimizations are possible to avoid regex
     // recompilation, but a constant pattern is by far the most common case.
     FlatVector<StringView>& result =
-        ensureWritableStringView(rows, context->pool(), resultRef);
+        ensureWritableStringView(rows, context, resultRef);
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
     exec::LocalDecodedVector pattern(context, *args[1], rows);
     bool mustRefSourceStrings = false;
@@ -376,44 +374,136 @@ class Re2SearchAndExtract final : public VectorFunction {
   const bool emptyNoMatch_;
 };
 
-class LikeConstantPattern final : public VectorFunction {
+// Match string 'input' with a fixed pattern (with no wildcard characters).
+bool matchExactPattern(
+    StringView input,
+    StringView pattern,
+    vector_size_t length) {
+  return input.size() == pattern.size() &&
+      std::memcmp(input.data(), pattern.data(), length) == 0;
+}
+
+// Match the first 'length' characters of string 'input' and prefix pattern.
+bool matchPrefixPattern(
+    StringView input,
+    StringView pattern,
+    vector_size_t length) {
+  return input.size() >= length &&
+      std::memcmp(input.data(), pattern.data(), length) == 0;
+}
+
+// Match the last 'length' characters of string 'input' and suffix pattern.
+bool matchSuffixPattern(
+    StringView input,
+    StringView pattern,
+    vector_size_t length) {
+  return input.size() >= length &&
+      std::memcmp(
+          input.data() + input.size() - length,
+          pattern.data() + pattern.size() - length,
+          length) == 0;
+}
+
+template <PatternKind P>
+class OptimizedLikeWithMemcmp final : public VectorFunction {
  public:
-  LikeConstantPattern(StringView pattern, std::optional<char> escapeChar)
-      : re_(toStringPiece(likePatternToRe2(pattern, escapeChar, validPattern_)),
-            RE2::Quiet) {}
+  OptimizedLikeWithMemcmp(
+      StringView pattern,
+      vector_size_t reducedPatternLength)
+      : pattern_{pattern}, reducedPatternLength_{reducedPatternLength} {}
+
+  bool match(StringView input) const {
+    switch (P) {
+      case PatternKind::kExactlyN:
+        return input.size() == reducedPatternLength_;
+      case PatternKind::kAtLeastN:
+        return input.size() >= reducedPatternLength_;
+      case PatternKind::kFixed:
+        return matchExactPattern(input, pattern_, reducedPatternLength_);
+      case PatternKind::kPrefix:
+        return matchPrefixPattern(input, pattern_, reducedPatternLength_);
+      case PatternKind::kSuffix:
+        return matchSuffixPattern(input, pattern_, reducedPatternLength_);
+    }
+  }
 
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      EvalCtx* context,
-      VectorPtr* resultRef) const final {
+      EvalCtx& context,
+      VectorPtr& resultRef) const final {
+    VELOX_CHECK(args.size() == 2 || args.size() == 3);
+    FlatVector<bool>& result = ensureWritableBool(rows, context, resultRef);
+    exec::DecodedArgs decodedArgs(rows, args, context);
+    auto toSearch = decodedArgs.at(0);
+
+    if (toSearch->isIdentityMapping()) {
+      auto input = toSearch->data<StringView>();
+      rows.applyToSelected(
+          [&](vector_size_t i) { result.set(i, match(input[i])); });
+      return;
+    }
+    if (toSearch->isConstantMapping()) {
+      auto input = toSearch->valueAt<StringView>(0);
+      bool matchResult = match(input);
+      rows.applyToSelected(
+          [&](vector_size_t i) { result.set(i, matchResult); });
+      return;
+    }
+
+    // Since the likePattern and escapeChar (2nd and 3rd args) are both
+    // constants, so the first arg is expected to be either of flat or constant
+    // vector only. This code path is unreachable.
+    VELOX_UNREACHABLE();
+  }
+
+ private:
+  StringView pattern_;
+  vector_size_t reducedPatternLength_;
+};
+
+class LikeWithRe2 final : public VectorFunction {
+ public:
+  LikeWithRe2(StringView pattern, std::optional<char> escapeChar) {
+    RE2::Options opt{RE2::Quiet};
+    opt.set_dot_nl(true);
+    re_.emplace(
+        toStringPiece(likePatternToRe2(pattern, escapeChar, validPattern_)),
+        opt);
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      EvalCtx& context,
+      VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
 
     if (!validPattern_) {
       auto error = std::make_exception_ptr(std::invalid_argument(
           "Escape character must be followed by '%%', '_' or the escape character itself\""));
-      rows.applyToSelected([&](auto row) { context->setError(row, error); });
+      context.setErrors(rows, error);
       return;
     }
 
     // apply() will not be invoked if the selection is empty.
-    checkForBadPattern(re_);
-    FlatVector<bool>& result =
-        ensureWritableBool(rows, context->pool(), resultRef);
+    checkForBadPattern(*re_);
+    FlatVector<bool>& result = ensureWritableBool(rows, context, resultRef);
 
     exec::DecodedArgs decodedArgs(rows, args, context);
     auto toSearch = decodedArgs.at(0);
     if (toSearch->isIdentityMapping()) {
       auto rawStrings = toSearch->data<StringView>();
       rows.applyToSelected([&](vector_size_t i) {
-        result.set(i, re2FullMatch(rawStrings[i], re_));
+        result.set(i, re2FullMatch(rawStrings[i], *re_));
       });
       return;
     }
 
     if (toSearch->isConstantMapping()) {
-      bool match = re2FullMatch(toSearch->valueAt<StringView>(0), re_);
+      bool match = re2FullMatch(toSearch->valueAt<StringView>(0), *re_);
       rows.applyToSelected([&](vector_size_t i) { result.set(i, match); });
       return;
     }
@@ -425,7 +515,7 @@ class LikeConstantPattern final : public VectorFunction {
   }
 
  private:
-  RE2 re_;
+  std::optional<RE2> re_;
   bool validPattern_;
 };
 
@@ -466,13 +556,13 @@ class Re2ExtractAllConstantPattern final : public VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      EvalCtx* context,
-      VectorPtr* resultRef) const final {
+      EvalCtx& context,
+      VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
     checkForBadPattern(re_);
 
     ArrayBuilder<Varchar> builder(
-        rows.size(), rows.countSelected() * 3, context->pool());
+        rows.size(), rows.countSelected() * 3, context.pool());
     exec::LocalDecodedVector inputStrs(context, *args[0], rows);
     FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
 
@@ -480,7 +570,7 @@ class Re2ExtractAllConstantPattern final : public VectorFunction {
       // Case 1: No groupId -- use 0 as the default groupId
       //
       groups.resize(1);
-      context->applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         re2ExtractAll(builder, re_, inputStrs, row, groups, 0);
       });
     } else if (const auto _groupId = getIfConstant<T>(*args[2])) {
@@ -488,7 +578,7 @@ class Re2ExtractAllConstantPattern final : public VectorFunction {
       //
       checkForBadGroupId(*_groupId, re_);
       groups.resize(*_groupId + 1);
-      context->applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         re2ExtractAll(builder, re_, inputStrs, row, groups, *_groupId);
       });
     } else {
@@ -497,14 +587,14 @@ class Re2ExtractAllConstantPattern final : public VectorFunction {
       //
       exec::LocalDecodedVector groupIds(context, *args[2], rows);
       T maxGroupId = 0, minGroupId = 0;
-      context->applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         maxGroupId = std::max(groupIds->valueAt<T>(row), maxGroupId);
         minGroupId = std::min(groupIds->valueAt<T>(row), minGroupId);
       });
       checkForBadGroupId(maxGroupId, re_);
       checkForBadGroupId(minGroupId, re_);
       groups.resize(maxGroupId + 1);
-      context->applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         const T groupId = groupIds->valueAt<T>(row);
         checkForBadGroupId(groupId, re_);
         re2ExtractAll(builder, re_, inputStrs, row, groups, groupId);
@@ -515,8 +605,8 @@ class Re2ExtractAllConstantPattern final : public VectorFunction {
       builder.setStringBuffers(fv->stringBuffers());
     }
     std::shared_ptr<ArrayVector> arrayVector =
-        std::move(builder).finish(context->pool());
-    context->moveOrCopyResult(arrayVector, rows, resultRef);
+        std::move(builder).finish(context.pool());
+    context.moveOrCopyResult(arrayVector, rows, resultRef);
   }
 
  private:
@@ -530,8 +620,8 @@ class Re2ExtractAll final : public VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
-      EvalCtx* context,
-      VectorPtr* resultRef) const final {
+      EvalCtx& context,
+      VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
     // Use Re2ExtractAllConstantPattern if it's constant regexp pattern.
     //
@@ -542,7 +632,7 @@ class Re2ExtractAll final : public VectorFunction {
     }
 
     ArrayBuilder<Varchar> builder(
-        rows.size(), rows.countSelected() * 3, context->pool());
+        rows.size(), rows.countSelected() * 3, context.pool());
     exec::LocalDecodedVector inputStrs(context, *args[0], rows);
     exec::LocalDecodedVector pattern(context, *args[1], rows);
     FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
@@ -551,7 +641,7 @@ class Re2ExtractAll final : public VectorFunction {
       // Case 1: No groupId -- use 0 as the default groupId
       //
       groups.resize(1);
-      context->applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         RE2 re(toStringPiece(pattern->valueAt<StringView>(row)), RE2::Quiet);
         checkForBadPattern(re);
         re2ExtractAll(builder, re, inputStrs, row, groups, 0);
@@ -560,7 +650,7 @@ class Re2ExtractAll final : public VectorFunction {
       // Case 2: Has groupId
       //
       exec::LocalDecodedVector groupIds(context, *args[2], rows);
-      context->applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         const T groupId = groupIds->valueAt<T>(row);
         RE2 re(toStringPiece(pattern->valueAt<StringView>(row)), RE2::Quiet);
         checkForBadPattern(re);
@@ -574,8 +664,8 @@ class Re2ExtractAll final : public VectorFunction {
       builder.setStringBuffers(fv->stringBuffers());
     }
     std::shared_ptr<ArrayVector> arrayVector =
-        std::move(builder).finish(context->pool());
-    context->moveOrCopyResult(arrayVector, rows, resultRef);
+        std::move(builder).finish(context.pool());
+    context.moveOrCopyResult(arrayVector, rows, resultRef);
   }
 };
 
@@ -719,6 +809,73 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures() {
   };
 }
 
+std::pair<PatternKind, vector_size_t> determinePatternKind(StringView pattern) {
+  vector_size_t patternLength = pattern.size();
+  vector_size_t i = 0;
+  // Index of the first % or _ character.
+  vector_size_t wildcardStart = -1;
+  // Index of the first character that is not % and not _.
+  vector_size_t fixedPatternStart = -1;
+  // Total number of % characters.
+  vector_size_t anyCharacterWildcardCount = 0;
+  // Total number of _ characters.
+  vector_size_t singleCharacterWildcardCount = 0;
+  auto patternStr = pattern.data();
+
+  while (i < patternLength) {
+    if (patternStr[i] == '%' || patternStr[i] == '_') {
+      // Ensures that pattern has a single contiguous stream of wildcard
+      // characters.
+      if (wildcardStart != -1) {
+        return std::make_pair(PatternKind::kGeneric, 0);
+      }
+      // Look till the last contiguous wildcard character, starting from this
+      // index, is found, or the end of pattern is reached.
+      wildcardStart = i;
+      while (i < patternLength &&
+             (patternStr[i] == '%' || patternStr[i] == '_')) {
+        singleCharacterWildcardCount += (patternStr[i] == '_');
+        anyCharacterWildcardCount += (patternStr[i] == '%');
+        i++;
+      }
+    } else {
+      // Ensure that pattern has a single fixed pattern.
+      if (fixedPatternStart != -1) {
+        return std::make_pair(PatternKind::kGeneric, 0);
+      }
+      // Look till the end of fixed pattern, starting from this index, is found,
+      // or the end of pattern is reached.
+      fixedPatternStart = i;
+      while (i < patternLength &&
+             (patternStr[i] != '%' && patternStr[i] != '_')) {
+        i++;
+      }
+    }
+  }
+
+  // Pattern contains wildcard characters only.
+  if (fixedPatternStart == -1) {
+    if (!anyCharacterWildcardCount) {
+      return {PatternKind::kExactlyN, singleCharacterWildcardCount};
+    }
+    return {PatternKind::kAtLeastN, singleCharacterWildcardCount};
+  }
+  // Pattern contains no wildcard characters (is a fixed pattern).
+  if (wildcardStart == -1) {
+    return {PatternKind::kFixed, patternLength};
+  }
+  // Pattern is generic if it has '_' wildcard characters and a fixed pattern.
+  if (singleCharacterWildcardCount) {
+    return {PatternKind::kGeneric, 0};
+  }
+  // Classify pattern as prefix pattern or suffix pattern based on the
+  // positions of the fixed pattern and contiguous wildcard character stream.
+  if (fixedPatternStart < wildcardStart) {
+    return {PatternKind::kPrefix, wildcardStart};
+  }
+  return {PatternKind::kSuffix, patternLength - fixedPatternStart};
+}
+
 std::shared_ptr<exec::VectorFunction> makeLike(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
@@ -770,7 +927,34 @@ std::shared_ptr<exec::VectorFunction> makeLike(
       name,
       inputArgs[1].type->toString());
   auto pattern = constantPattern->as<ConstantVector<StringView>>()->valueAt(0);
-  return std::make_shared<LikeConstantPattern>(pattern, escapeChar);
+  if (!escapeChar) {
+    PatternKind patternKind;
+    vector_size_t reducedLength;
+    std::tie(patternKind, reducedLength) = determinePatternKind(pattern);
+
+    switch (patternKind) {
+      case PatternKind::kExactlyN:
+        return std::make_shared<
+            OptimizedLikeWithMemcmp<PatternKind::kExactlyN>>(
+            pattern, reducedLength);
+      case PatternKind::kAtLeastN:
+        return std::make_shared<
+            OptimizedLikeWithMemcmp<PatternKind::kAtLeastN>>(
+            pattern, reducedLength);
+      case PatternKind::kFixed:
+        return std::make_shared<OptimizedLikeWithMemcmp<PatternKind::kFixed>>(
+            pattern, reducedLength);
+      case PatternKind::kPrefix:
+        return std::make_shared<OptimizedLikeWithMemcmp<PatternKind::kPrefix>>(
+            pattern, reducedLength);
+      case PatternKind::kSuffix:
+        return std::make_shared<OptimizedLikeWithMemcmp<PatternKind::kSuffix>>(
+            pattern, reducedLength);
+      default:
+        return std::make_shared<LikeWithRe2>(pattern, escapeChar);
+    }
+  }
+  return std::make_shared<LikeWithRe2>(pattern, escapeChar);
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> likeSignatures() {

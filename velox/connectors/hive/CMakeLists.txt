@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_hive_connector OBJECT HiveConnector.cpp FileHandle.cpp)
+add_library(velox_hive_connector HiveConnector.cpp FileHandle.cpp
+                                 HiveWriteProtocol.cpp)
 
 target_link_libraries(velox_hive_connector velox_connector
                       velox_dwio_dwrf_reader velox_dwio_dwrf_writer velox_file)
@@ -25,5 +26,8 @@ add_subdirectory(storage_adapters)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(benchmarks)
 endif()

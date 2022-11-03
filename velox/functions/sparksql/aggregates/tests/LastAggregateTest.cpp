@@ -25,8 +25,8 @@ namespace {
 class LastAggregateTest : public aggregate::test::AggregationTestBase {
  public:
   LastAggregateTest() {
+    aggregate::test::AggregationTestBase::SetUp();
     aggregates::registerAggregateFunctions("");
-    disableSpill();
   }
 
   template <typename T>
@@ -48,7 +48,7 @@ class LastAggregateTest : public aggregate::test::AggregationTestBase {
         vectors,
         {"c0"},
         {"last(c1, c2)"},
-        "SELECT c0, last(c1 ORDER BY c1) FROM tmp GROUP BY c0");
+        "SELECT c0, last(c1 ORDER BY c1 NULLS FIRST) FROM tmp GROUP BY c0");
 
     // Verify when ignoreNull is false.
     // Expected result should have last 7 rows [91..98) including nulls.
@@ -170,7 +170,7 @@ TEST_F(LastAggregateTest, varcharGroupBy) {
       vectors,
       {"c0"},
       {"last(c1, c2)"},
-      "SELECT c0, last(c1 ORDER BY c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0");
+      "SELECT c0, last(c1 ORDER BY c1 NULLS FIRST) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0");
 
   // Verify when ignoreNull is false.
   // Expected result should have last 7 rows [91..98) including nulls.
@@ -262,14 +262,14 @@ TEST_F(LastAggregateTest, arrayGroupBy) {
 // Verify global aggregation for ARRAY.
 TEST_F(LastAggregateTest, arrayGlobal) {
   auto vectors = {makeRowVector({
-      makeVectorWithNullArrays<int64_t>(
+      makeNullableArrayVector<int64_t>(
           {std::nullopt, {{1, 2}}, {{3, 4}}, std::nullopt}),
       makeConstant<bool>(true, 4),
       makeConstant<bool>(false, 4),
   })};
 
   auto expectedTrue = {makeRowVector({
-      makeVectorWithNullArrays<int64_t>({{{3, 4}}}),
+      makeArrayVector<int64_t>({{3, 4}}),
   })};
 
   // Verify when ignoreNull is true.
@@ -277,7 +277,7 @@ TEST_F(LastAggregateTest, arrayGlobal) {
 
   // Verify when ignoreNull is false.
   auto expectedFalse = {makeRowVector({
-      makeVectorWithNullArrays<int64_t>({std::nullopt}),
+      makeNullableArrayVector<int64_t>({std::nullopt}),
   })};
   testAggregations(vectors, {}, {"last(c0, c2)"}, expectedFalse);
 

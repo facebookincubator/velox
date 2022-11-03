@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -132,6 +132,12 @@ class InPredicateTest : public FunctionBaseTest {
     rowVector = makeRowVector({dict});
     result = evaluate<SimpleVector<bool>>("c0 IN (2, 5, 9)", rowVector);
     assertEqualVectors(expected, result);
+
+    // an in list with nulls only is always null.
+    result = evaluate<SimpleVector<bool>>("c0 IN (null)", rowVector);
+    auto expectedConstant =
+        BaseVector::createNullConstant(BOOLEAN(), size, pool_.get());
+    assertEqualVectors(expectedConstant, result);
   }
 
   template <typename T>

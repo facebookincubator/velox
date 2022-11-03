@@ -20,10 +20,11 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/parse/ExpressionsParser.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/FlatVector.h"
-#include "velox/vector/tests/VectorMaker.h"
-#include "velox/vector/tests/VectorTestBase.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::exec::test {
 class OperatorTestBase : public testing::Test,
@@ -34,7 +35,13 @@ class OperatorTestBase : public testing::Test,
 
   void SetUp() override;
 
+  /// Allow base classes to register custom vector serde.
+  /// By default, registers Presto-compatible serde.
+  virtual void registerVectorSerde();
+
   static void SetUpTestCase();
+
+  static void TearDownTestCase();
 
   void createDuckDbTable(const std::vector<RowVectorPtr>& data) {
     duckDbQueryRunner_.createTable("tmp", data);
@@ -119,9 +126,10 @@ class OperatorTestBase : public testing::Test,
       const std::string& name,
       const RowTypePtr& rowType);
 
-  std::shared_ptr<const core::ITypedExpr> parseExpr(
+  core::TypedExprPtr parseExpr(
       const std::string& text,
-      RowTypePtr rowType);
+      RowTypePtr rowType,
+      const parse::ParseOptions& options = {});
 
   DuckDbQueryRunner duckDbQueryRunner_;
 

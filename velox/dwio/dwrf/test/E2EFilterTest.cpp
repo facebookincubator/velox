@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/test/E2EFilterTestBase.h"
+#include "velox/dwio/common/tests/E2EFilterTestBase.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 
-using namespace facebook::velox::dwio::dwrf;
+#include <folly/init/Init.h>
+
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox;
@@ -27,10 +30,38 @@ using dwio::common::MemorySink;
 
 class E2EFilterTest : public E2EFilterTestBase {
  protected:
+  void testWithTypes(
+      const std::string& columns,
+      std::function<void()> customize,
+      bool wrapInStruct,
+      const std::vector<std::string>& filterable,
+      int32_t numCombinations,
+      bool tryNoNulls = false,
+      bool tryNoVInts = false) {
+    for (int32_t noVInts = 0; noVInts < (tryNoVInts ? 2 : 1); ++noVInts) {
+      useVInts_ = !noVInts;
+      for (int32_t noNulls = 0; noNulls < (tryNoNulls ? 2 : 1); ++noNulls) {
+        LOG(INFO) << "Running with " << (noNulls ? " no nulls " : "nulls")
+                  << " and " << (noVInts ? " no VInts " : " VInts ")
+                  << std::endl;
+        auto newCustomize = customize;
+        if (noNulls) {
+          newCustomize = [&]() {
+            customize();
+            makeNotNull();
+          };
+        }
+
+        testSenario(
+            columns, newCustomize, wrapInStruct, filterable, numCombinations);
+      }
+    }
+  }
+
   void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
-      bool forRowGroupSkip) override {
+      bool forRowGroupSkip = false) override {
     auto config = std::make_shared<dwrf::Config>();
     config->set(dwrf::Config::COMPRESSION, CompressionKind_NONE);
     config->set(dwrf::Config::USE_VINTS, useVInts_);
@@ -85,7 +116,7 @@ TEST_F(E2EFilterTest, integerDictionary) {
       "long_val:bigint",
       [&]() {
         makeIntDistribution<int64_t>(
-            Subfield("long_val"),
+            "long_val",
             10, // min
             100, // max
             22, // repeats
@@ -95,7 +126,7 @@ TEST_F(E2EFilterTest, integerDictionary) {
             true); // keepNulls
 
         makeIntDistribution<int32_t>(
-            Subfield("int_val"),
+            "int_val",
             10, // min
             100, // max
             22, // repeats
@@ -105,7 +136,7 @@ TEST_F(E2EFilterTest, integerDictionary) {
             false); // keepNulls
 
         makeIntDistribution<int16_t>(
-            Subfield("short_val"),
+            "short_val",
             10, // min
             100, // max
             22, // repeats
@@ -153,8 +184,8 @@ TEST_F(E2EFilterTest, stringDirect) {
       "string_val:string,"
       "string_val_2:string",
       [&]() {
-        makeStringUnique(Subfield("string_val"));
-        makeStringUnique(Subfield("string_val_2"));
+        makeStringUnique("string_val");
+        makeStringUnique("string_val_2");
       },
 
       true,
@@ -168,8 +199,8 @@ TEST_F(E2EFilterTest, stringDictionary) {
       "string_val:string,"
       "string_val_2:string",
       [&]() {
-        makeStringDistribution(Subfield("string_val"), 100, true, false);
-        makeStringDistribution(Subfield("string_val_2"), 170, false, true);
+        makeStringDistribution("string_val", 100, true, false);
+        makeStringDistribution("string_val_2", 170, false, true);
       },
       true,
       {"string_val", "string_val_2"},
@@ -236,4 +267,31 @@ TEST_F(E2EFilterTest, lazyStruct) {
       10,
       true,
       false);
+}
+
+TEST_F(E2EFilterTest, filterStruct) {
+  // The data has a struct member with one second level struct
+  // column. Both structs have a column that gets filtered 'nestedxxx'
+  // and one that does not 'dataxxx'.
+  testWithTypes(
+      "long_val:bigint,"
+      "outer_struct: struct<nested1:bigint, "
+      "  data1: string, "
+      "  inner_struct: struct<nested2: bigint, data2: smallint>>",
+      [&]() {},
+      true,
+      {"long_val",
+       "outer_struct.inner_struct",
+       "outer_struct.nested1",
+       "outer_struct.inner_struct.nested2"},
+      40,
+      true,
+      false);
+}
+
+// Define main so that gflags get processed.
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  folly::init(&argc, &argv, false);
+  return RUN_ALL_TESTS();
 }

@@ -18,13 +18,10 @@
 
 namespace facebook::velox::substrait {
 
-/// Return whether the type is String type.
-bool isString(const TypePtr& type);
-
-/// Return the occupied bytes for a variable of this type.
-int64_t bytesOfType(const TypePtr& type);
-
 /// Return the Velox type according to the typename.
 TypePtr toVeloxType(const std::string& typeName);
 
+std::string_view getNameBeforeDelimiter(
+    const std::string& compoundName,
+    const std::string& delimiter);
 } // namespace facebook::velox::substrait

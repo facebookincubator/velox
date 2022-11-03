@@ -125,7 +125,7 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
 template <typename T>
 xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
     size_t byteOffset) const {
-  if constexpr (std::is_same<T, bool>::value) {
+  if constexpr (std::is_same_v<T, bool>) {
     throw std::runtime_error(
         "Sequence encoding only supports SIMD operations on integers");
   } else {
@@ -196,26 +196,6 @@ static inline vector_size_t offsetOfIndex(
     } while (index >= *lastRangeEnd);
   }
   return *lastIndex;
-}
-
-template <typename T>
-const uint64_t* SequenceVector<T>::computeFlatNulls(
-    const SelectivityVector& rows) {
-  int32_t bytes = BaseVector::byteSize<bool>(BaseVector::length_);
-  flatNullsBuffer_ = AlignedBuffer::allocate<char>(bytes, BaseVector::pool_);
-  auto flatNulls = flatNullsBuffer_->asMutable<uint64_t>();
-  int32_t current = 0;
-  auto numLengths = numSequences();
-  for (int32_t i = 0; i < numLengths; ++i) {
-    VELOX_CHECK(current < bytes * 8);
-    bits::fillBits(
-        flatNulls,
-        current,
-        current + lengths_[i],
-        !sequenceValues_->isNullAt(i));
-    current += lengths_[i];
-  }
-  return flatNulls;
 }
 
 } // namespace velox

@@ -17,9 +17,11 @@
 #include <limits>
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/CastBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/TypeAliases.h"
@@ -27,39 +29,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-namespace {
-/// Wraps input in a dictionary that reverses the order of rows.
-class TestingDictionaryFunction : public exec::VectorFunction {
- public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    VELOX_CHECK(rows.isAllSelected());
-    const auto size = rows.size();
-    auto indices = makeIndicesInReverse(size, context->pool());
-    *result = BaseVector::wrapInDictionary(
-        BufferPtr(nullptr), indices, size, args[0]);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // T, integer -> T
-    return {exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("T")
-                .argumentType("T")
-                .build()};
-  }
-};
-} // namespace
-
-class CastExprTest : public functions::test::FunctionBaseTest {
+class CastExprTest : public functions::test::CastBaseTest {
  protected:
   CastExprTest() {
     exec::registerVectorFunction(
@@ -87,11 +57,15 @@ class CastExprTest : public functions::test::FunctionBaseTest {
     });
   }
 
+  std::shared_ptr<core::ConstantTypedExpr> makeConstantNullExpr(TypeKind kind) {
+    return std::make_shared<core::ConstantTypedExpr>(variant(kind));
+  }
+
   std::shared_ptr<core::CastTypedExpr> makeCastExpr(
-      const std::shared_ptr<const core::ITypedExpr>& input,
+      const core::TypedExprPtr& input,
       const TypePtr& toType,
       bool nullOnFailure) {
-    std::vector<std::shared_ptr<const core::ITypedExpr>> inputs = {input};
+    std::vector<core::TypedExprPtr> inputs = {input};
     return std::make_shared<core::CastTypedExpr>(toType, inputs, nullOnFailure);
   }
 
@@ -101,7 +75,7 @@ class CastExprTest : public functions::test::FunctionBaseTest {
       const VectorPtr& expected,
       bool nullOnFailure = false) {
     auto rowVector = makeRowVector({data});
-    auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
+    auto rowType = asRowType(rowVector->type());
     auto castExpr = makeCastExpr(
         makeTypedExpr(fromExpression, rowType),
         expected->type(),
@@ -113,7 +87,7 @@ class CastExprTest : public functions::test::FunctionBaseTest {
     std::vector<VectorPtr> result(1);
     {
       exec::EvalCtx evalCtx(&execCtx_, &exprSet, rowVector.get());
-      exprSet.eval(rows, &evalCtx, &result);
+      exprSet.eval(rows, evalCtx, result);
 
       assertEqualVectors(expected, result[0]);
     }
@@ -125,7 +99,7 @@ class CastExprTest : public functions::test::FunctionBaseTest {
       auto constantData = BaseVector::wrapInConstant(size, index, data);
       auto constantRow = makeRowVector({constantData});
       exec::EvalCtx evalCtx(&execCtx_, &exprSet, constantRow.get());
-      exprSet.eval(rows, &evalCtx, &result);
+      exprSet.eval(rows, evalCtx, result);
 
       assertEqualVectors(
           BaseVector::wrapInConstant(size, index, expected), result[0]);
@@ -143,7 +117,7 @@ class CastExprTest : public functions::test::FunctionBaseTest {
           nullOnFailure);
       exec::ExprSet dictionaryExprSet({dictionaryCastExpr}, &execCtx_);
       exec::EvalCtx evalCtx(&execCtx_, &dictionaryExprSet, rowVector.get());
-      dictionaryExprSet.eval(rows, &evalCtx, &result);
+      dictionaryExprSet.eval(rows, evalCtx, result);
 
       auto indices = ::makeIndicesInReverse(size, pool());
       assertEqualVectors(wrapInDictionary(indices, size, expected), result[0]);
@@ -184,26 +158,16 @@ class CastExprTest : public functions::test::FunctionBaseTest {
     std::string castFunction = tryCast ? "try_cast" : "cast";
     if (expectFailure) {
       EXPECT_THROW(
-          evaluate<FlatVector<typename CppToType<TTo>::NativeType>>(
-              castFunction + "(c0 as " + typeString + ")", rowVector),
+          evaluate(
+              fmt::format("{}(c0 as {})", castFunction, typeString), rowVector),
           VeloxException);
       return;
     }
     // run try cast and get the result vector
-    auto result = evaluate<FlatVector<typename CppToType<TTo>::NativeType>>(
-        castFunction + "(c0 as " + typeString + ")", rowVector);
-
-    std::string msg;
-    // Compare the values and nulls in the output with expected
-    for (int index = 0; index < input.size(); index++) {
-      if (expectedResult[index].has_value()) {
-        EXPECT_TRUE(
-            compareValues(result->valueAt(index), expectedResult[index], msg))
-            << "values at index " << index << " do not match!" << msg;
-      } else {
-        EXPECT_TRUE(result->isNullAt(index)) << " at index " << index;
-      }
-    }
+    auto result =
+        evaluate(castFunction + "(c0 as " + typeString + ")", rowVector);
+    auto expected = makeNullableFlatVector<TTo>(expectedResult);
+    assertEqualVectors(expected, result);
   }
 };
 
@@ -345,26 +309,29 @@ TEST_F(CastExprTest, timestampAdjustToTimezoneInvalid) {
 }
 
 TEST_F(CastExprTest, date) {
-  testCast<std::string, Date>(
-      "date",
-      {
-          "1970-01-01",
-          "2020-01-01",
-          "2135-11-09",
-          "1969-12-27",
-          "1812-04-15",
-          "1920-01-02",
-          std::nullopt,
-      },
-      {
-          Date(0),
-          Date(18262),
-          Date(60577),
-          Date(-5),
-          Date(-57604),
-          Date(-18262),
-          std::nullopt,
-      });
+  std::vector<std::optional<std::string>> input{
+      "1970-01-01",
+      "2020-01-01",
+      "2135-11-09",
+      "1969-12-27",
+      "1812-04-15",
+      "1920-01-02",
+      std::nullopt,
+  };
+  std::vector<std::optional<Date>> result{
+      Date(0),
+      Date(18262),
+      Date(60577),
+      Date(-5),
+      Date(-57604),
+      Date(-18262),
+      std::nullopt,
+  };
+
+  testCast<std::string, Date>("date", input, result);
+
+  setCastIntByTruncate(true);
+  testCast<std::string, Date>("date", input, result);
 }
 
 TEST_F(CastExprTest, invalidDate) {
@@ -655,4 +622,230 @@ TEST_F(CastExprTest, toString) {
       &execCtx_);
   ASSERT_EQ("cast((a) as BIGINT)", exprSet.exprs()[0]->toString());
   ASSERT_EQ("cast((a) as ARRAY<VARCHAR>)", exprSet.exprs()[1]->toString());
+}
+
+TEST_F(CastExprTest, decimalToDecimal) {
+  // short to short, scale up.
+  auto shortFlat =
+      makeShortDecimalFlatVector({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(2, 2));
+  testComplexCast(
+      "c0",
+      shortFlat,
+      makeShortDecimalFlatVector(
+          {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(4, 4)));
+
+  // short to short, scale down.
+  testComplexCast(
+      "c0",
+      shortFlat,
+      makeShortDecimalFlatVector({0, 0, 0, 0, 6, 7, 7}, DECIMAL(4, 1)));
+
+  // long to short, scale up.
+  auto longFlat =
+      makeLongDecimalFlatVector({-201, -109, 0, 105, 208}, DECIMAL(20, 2));
+  testComplexCast(
+      "c0",
+      longFlat,
+      makeShortDecimalFlatVector(
+          {-201'000, -109'000, 0, 105'000, 208'000}, DECIMAL(10, 5)));
+
+  // long to short, scale down.
+  testComplexCast(
+      "c0",
+      longFlat,
+      makeShortDecimalFlatVector({-20, -11, 0, 11, 21}, DECIMAL(10, 1)));
+
+  // long to long, scale up.
+  testComplexCast(
+      "c0",
+      longFlat,
+      makeLongDecimalFlatVector(
+          {-20'100'000'000, -10'900'000'000, 0, 10'500'000'000, 20'800'000'000},
+          DECIMAL(20, 10)));
+
+  // long to long, scale down.
+  testComplexCast(
+      "c0",
+      longFlat,
+      makeLongDecimalFlatVector({-20, -11, 0, 11, 21}, DECIMAL(20, 1)));
+
+  // short to long, scale up.
+  testComplexCast(
+      "c0",
+      shortFlat,
+      makeLongDecimalFlatVector(
+          {-3'000'000'000,
+           -2'000'000'000,
+           -1'000'000'000,
+           0,
+           55'000'000'000,
+           69'000'000'000,
+           72'000'000'000},
+          DECIMAL(20, 11)));
+
+  // short to long, scale down.
+  testComplexCast(
+      "c0",
+      makeShortDecimalFlatVector(
+          {-20'500, -190, 12'345, 19'999}, DECIMAL(6, 4)),
+      makeLongDecimalFlatVector({-21, 0, 12, 20}, DECIMAL(20, 1)));
+
+  // NULLs and overflow.
+  longFlat = makeNullableLongDecimalFlatVector(
+      {-20'000, -1'000'000, 10'000, std::nullopt}, DECIMAL(20, 3));
+  auto expectedShort = makeNullableShortDecimalFlatVector(
+      {-200'000, std::nullopt, 100'000, std::nullopt}, DECIMAL(6, 4));
+
+  // Throws exception if CAST fails.
+  VELOX_ASSERT_THROW(
+      testComplexCast("c0", longFlat, expectedShort),
+      "Cannot cast DECIMAL '-1000.000' to DECIMAL(6,4)");
+
+  // nullOnFailure is true.
+  testComplexCast("c0", longFlat, expectedShort, true);
+
+  // long to short, big numbers.
+  testComplexCast(
+      "c0",
+      makeNullableLongDecimalFlatVector(
+          {buildInt128(-2, 200),
+           buildInt128(-1, 300),
+           buildInt128(0, 400),
+           buildInt128(1, 1),
+           buildInt128(10, 100),
+           std::nullopt},
+          DECIMAL(23, 8)),
+      makeNullableShortDecimalFlatVector(
+          {-368934881474,
+           -184467440737,
+           0,
+           184467440737,
+           std::nullopt,
+           std::nullopt},
+          DECIMAL(12, 0)),
+      true);
+
+  // Overflow case.
+  VELOX_ASSERT_THROW(
+      testComplexCast(
+          "c0",
+          makeNullableLongDecimalFlatVector(
+              {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0)),
+          makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
+      "Cannot cast DECIMAL '99999999999999999999999999999999999999' to DECIMAL(38,1)");
+  VELOX_ASSERT_THROW(
+      testComplexCast(
+          "c0",
+          makeNullableLongDecimalFlatVector(
+              {UnscaledLongDecimal::min().unscaledValue()}, DECIMAL(38, 0)),
+          makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
+      "Cannot cast DECIMAL '-99999999999999999999999999999999999999' to DECIMAL(38,1)");
+}
+
+TEST_F(CastExprTest, castInTry) {
+  // Test try(cast(array(varchar) as array(bigint))) whose input vector is
+  // wrapped in dictinary encoding. The row of ["2a"] should trigger an error
+  // during casting and the try expression should turn this error into a null at
+  // this row.
+  auto input = makeRowVector({makeNullableArrayVector<StringView>(
+      {{{"1"_sv}}, {{"2a"_sv}}, std::nullopt, std::nullopt})});
+  auto expected = makeNullableArrayVector<int64_t>(
+      {{{1}}, std::nullopt, std::nullopt, std::nullopt});
+
+  evaluateAndVerifyCastInTryDictEncoding(
+      ARRAY(VARCHAR()), ARRAY(BIGINT()), input, expected);
+
+  // Test try(cast(map(varchar, bigint) as map(bigint, bigint))) where "3a"
+  // should trigger an error at the first row.
+  auto map = makeRowVector({makeMapVector<StringView, int64_t>(
+      {{{"1", 2}, {"3a", 4}}, {{"5", 6}, {"7", 8}}})});
+  auto mapExpected = makeNullableMapVector<int64_t, int64_t>(
+      {std::nullopt, {{{5, 6}, {7, 8}}}});
+  evaluateAndVerifyCastInTryDictEncoding(
+      MAP(VARCHAR(), BIGINT()), MAP(BIGINT(), BIGINT()), map, mapExpected);
+
+  // Test try(cast(array(varchar) as array(bigint))) where "2a" should trigger
+  // an error at the first row.
+  auto array =
+      makeArrayVector<StringView>({{"1"_sv, "2a"_sv}, {"3"_sv, "4"_sv}});
+  auto arrayExpected =
+      vectorMaker_.arrayVectorNullable<int64_t>({std::nullopt, {{3, 4}}});
+  evaluateAndVerifyCastInTryDictEncoding(
+      ARRAY(VARCHAR()), ARRAY(BIGINT()), makeRowVector({array}), arrayExpected);
+
+  arrayExpected = vectorMaker_.arrayVectorNullable<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  evaluateAndVerifyCastInTryDictEncoding(
+      ARRAY(VARCHAR()),
+      ARRAY(BIGINT()),
+      makeRowVector({BaseVector::wrapInConstant(3, 0, array)}),
+      arrayExpected);
+
+  auto nested = makeRowVector({makeNullableNestedArrayVector<StringView>(
+      {{{{{"1"_sv, "2"_sv}}, {{"3"_sv}}, {{"4a"_sv, "5"_sv}}}},
+       {{{{"6"_sv, "7"_sv}}}}})});
+  auto nestedExpected =
+      makeNullableNestedArrayVector<int64_t>({std::nullopt, {{{{6, 7}}}}});
+  evaluateAndVerifyCastInTryDictEncoding(
+      ARRAY(ARRAY(VARCHAR())), ARRAY(ARRAY(BIGINT())), nested, nestedExpected);
+}
+
+TEST_F(CastExprTest, primitiveNullConstant) {
+  // Evaluate cast(NULL::double as bigint).
+  auto cast =
+      makeCastExpr(makeConstantNullExpr(TypeKind::DOUBLE), BIGINT(), false);
+
+  auto result = evaluate(
+      cast, makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{1})}));
+  auto expectedResult = makeNullableFlatVector<int64_t>({std::nullopt});
+  assertEqualVectors(expectedResult, result);
+
+  // Evaluate cast(try_cast(NULL::varchar as double) as bigint).
+  auto innerCast =
+      makeCastExpr(makeConstantNullExpr(TypeKind::VARCHAR), DOUBLE(), true);
+  auto outerCast = makeCastExpr(innerCast, BIGINT(), false);
+
+  result = evaluate(outerCast, makeRowVector(ROW({}, {}), 1));
+  assertEqualVectors(expectedResult, result);
+}
+
+TEST_F(CastExprTest, primitiveWithDictionaryIntroducedNulls) {
+  exec::registerVectorFunction(
+      "add_dict",
+      TestingDictionaryFunction::signatures(),
+      std::make_unique<TestingDictionaryFunction>(2));
+
+  {
+    auto data = makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9});
+    auto result = evaluate(
+        "cast(add_dict(add_dict(c0)) as smallint)", makeRowVector({data}));
+    auto expected = makeNullableFlatVector<int16_t>(
+        {std::nullopt,
+         std::nullopt,
+         3,
+         4,
+         5,
+         6,
+         7,
+         std::nullopt,
+         std::nullopt});
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    auto data = makeNullableFlatVector<int64_t>(
+        {1,
+         2,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         8,
+         9});
+    auto result = evaluate(
+        "cast(add_dict(add_dict(c0)) as varchar)", makeRowVector({data}));
+    auto expected = makeNullConstant(TypeKind::VARCHAR, 9);
+    assertEqualVectors(expected, result);
+  }
 }

@@ -123,12 +123,18 @@ class RowVector : public BaseVector {
       vector_size_t sourceIndex,
       vector_size_t count) override;
 
+  void copyRanges(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges) override {
+    for (auto& range : ranges) {
+      copy(source, range.targetIndex, range.sourceIndex, range.count);
+    }
+  }
+
   void copy(
       const BaseVector* source,
       const SelectivityVector& rows,
       const vector_size_t* toSourceRow) override;
-
-  void move(vector_size_t source, vector_size_t target) override;
 
   uint64_t retainedSize() const override {
     auto size = BaseVector::retainedSize();
@@ -148,6 +154,8 @@ class RowVector : public BaseVector {
 
   void ensureWritable(const SelectivityVector& rows) override;
 
+  bool isWritable() const override;
+
   /// Calls BaseVector::prepareForReuse() to check and reset nulls buffer if
   /// needed, then calls BaseVector::prepareForReuse(child, 0) for all children.
   void prepareForReuse() override;
@@ -165,6 +173,8 @@ class RowVector : public BaseVector {
 
     return false;
   }
+
+  VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
 
  private:
   vector_size_t childSize() const {
@@ -196,7 +206,105 @@ class RowVector : public BaseVector {
   mutable std::vector<VectorPtr> children_;
 };
 
-class ArrayVector : public BaseVector {
+// Common parent class for ARRAY and MAP vectors.  Contains 'offsets' and
+// 'sizes' data and provide manipulations on them.
+struct ArrayVectorBase : BaseVector {
+  const BufferPtr& offsets() const {
+    return offsets_;
+  }
+
+  const BufferPtr& sizes() const {
+    return sizes_;
+  }
+
+  const vector_size_t* rawOffsets() const {
+    return rawOffsets_;
+  }
+
+  const vector_size_t* rawSizes() const {
+    return rawSizes_;
+  }
+
+  vector_size_t offsetAt(vector_size_t index) const {
+    return rawOffsets_[index];
+  }
+
+  vector_size_t sizeAt(vector_size_t index) const {
+    return rawSizes_[index];
+  }
+
+  BufferPtr mutableOffsets(size_t size) {
+    return ensureIndices(offsets_, rawOffsets_, size);
+  }
+
+  BufferPtr mutableSizes(size_t size) {
+    return ensureIndices(sizes_, rawSizes_, size);
+  }
+
+  void resize(vector_size_t size, bool setNotNull = true) override {
+    if (BaseVector::length_ < size) {
+      resizeIndices(size, 0, &offsets_, &rawOffsets_);
+      resizeIndices(size, 0, &sizes_, &rawSizes_);
+    }
+    BaseVector::resize(size, setNotNull);
+  }
+
+  void
+  setOffsetAndSize(vector_size_t i, vector_size_t offset, vector_size_t size) {
+    offsets_->asMutable<vector_size_t>()[i] = offset;
+    sizes_->asMutable<vector_size_t>()[i] = size;
+  }
+
+ protected:
+  ArrayVectorBase(
+      velox::memory::MemoryPool* pool,
+      std::shared_ptr<const Type> type,
+      VectorEncoding::Simple encoding,
+      BufferPtr nulls,
+      size_t length,
+      std::optional<vector_size_t> nullCount,
+      BufferPtr offsets,
+      BufferPtr lengths)
+      : BaseVector(
+            pool,
+            type,
+            encoding,
+            std::move(nulls),
+            length,
+            std::nullopt /*distinctValueCount*/,
+            nullCount),
+        offsets_(std::move(offsets)),
+        rawOffsets_(offsets_->as<vector_size_t>()),
+        sizes_(std::move(lengths)),
+        rawSizes_(sizes_->as<vector_size_t>()) {}
+
+  void copyRangesImpl(
+      const BaseVector* source,
+      const folly::Range<const CopyRange*>& ranges,
+      VectorPtr* targetValues,
+      const BaseVector* sourceValues,
+      VectorPtr* targetKeys,
+      const BaseVector* sourceKeys);
+
+ private:
+  BufferPtr
+  ensureIndices(BufferPtr& buf, const vector_size_t*& raw, vector_size_t size) {
+    if (buf && buf->isMutable() &&
+        buf->capacity() >= size * sizeof(vector_size_t)) {
+      return buf;
+    }
+    resizeIndices(size, 0, &buf, &raw);
+    return buf;
+  }
+
+ protected:
+  BufferPtr offsets_;
+  const vector_size_t* rawOffsets_;
+  BufferPtr sizes_;
+  const vector_size_t* rawSizes_;
+};
+
+class ArrayVector : public ArrayVectorBase {
  public:
   ArrayVector(
       velox::memory::MemoryPool* pool,
@@ -207,18 +315,15 @@ class ArrayVector : public BaseVector {
       BufferPtr lengths,
       VectorPtr elements,
       std::optional<vector_size_t> nullCount = std::nullopt)
-      : BaseVector(
+      : ArrayVectorBase(
             pool,
             type,
             VectorEncoding::Simple::ARRAY,
-            nulls,
+            std::move(nulls),
             length,
-            std::nullopt /*distinctValueCount*/,
-            nullCount),
-        offsets_(std::move(offsets)),
-        rawOffsets_(offsets_->as<vector_size_t>()),
-        sizes_(std::move(lengths)),
-        rawSizes_(sizes_->as<vector_size_t>()),
+            nullCount,
+            std::move(offsets),
+            std::move(lengths)),
         elements_(BaseVector::getOrCreateEmpty(
             std::move(elements),
             type->childAt(0),
@@ -274,8 +379,6 @@ class ArrayVector : public BaseVector {
     }
   }
 
-  virtual ~ArrayVector() override {}
-
   std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -285,20 +388,6 @@ class ArrayVector : public BaseVector {
   uint64_t hashValueAt(vector_size_t index) const override;
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
-
-  void resize(vector_size_t size, bool setNotNull = true) override {
-    if (BaseVector::length_ < size) {
-      resizeIndices(size, 0, &offsets_, &rawOffsets_);
-      resizeIndices(size, 0, &sizes_, &rawSizes_);
-    }
-    BaseVector::resize(size, setNotNull);
-  }
-
-  void
-  setOffsetAndSize(vector_size_t i, vector_size_t offset, vector_size_t size) {
-    offsets_->asMutable<vector_size_t>()[i] = offset;
-    sizes_->asMutable<vector_size_t>()[i] = size;
-  }
 
   const VectorPtr& elements() const {
     return elements_;
@@ -313,53 +402,22 @@ class ArrayVector : public BaseVector {
         std::move(elements), type()->childAt(0), pool_);
   }
 
-  const BufferPtr& offsets() const {
-    return offsets_;
-  }
-
-  const BufferPtr& sizes() const {
-    return sizes_;
-  }
-
-  const vector_size_t* rawOffsets() const {
-    return rawOffsets_;
-  }
-
-  const vector_size_t* rawSizes() const {
-    return rawSizes_;
-  }
-
-  vector_size_t offsetAt(vector_size_t index) const {
-    return rawOffsets_[index];
-  }
-
-  vector_size_t sizeAt(vector_size_t index) const {
-    return rawSizes_[index];
-  }
-
-  BufferPtr mutableOffsets(size_t size) {
-    if (offsets_ && offsets_->capacity() >= size * sizeof(vector_size_t)) {
-      return offsets_;
-    }
-    resizeIndices(size, 0, &offsets_, &rawOffsets_);
-    return offsets_;
-  }
-
-  BufferPtr mutableSizes(size_t size) {
-    if (sizes_ && sizes_->capacity() >= size * sizeof(vector_size_t)) {
-      return sizes_;
-    }
-    resizeIndices(size, 0, &sizes_, &rawSizes_);
-    return sizes_;
-  }
-
-  void copy(
+  void copyRanges(
       const BaseVector* source,
-      vector_size_t targetIndex,
-      vector_size_t sourceIndex,
-      vector_size_t count) override;
-
-  void move(vector_size_t source, vector_size_t target) override;
+      const folly::Range<const CopyRange*>& ranges) override {
+    const ArrayVector* sourceArray{};
+    if (auto wrapped = source->wrappedVector();
+        !wrapped->isConstantEncoding()) {
+      sourceArray = wrapped->asUnchecked<ArrayVector>();
+    }
+    copyRangesImpl(
+        source,
+        ranges,
+        &elements_,
+        sourceArray ? sourceArray->elements_.get() : nullptr,
+        nullptr,
+        nullptr);
+  }
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
@@ -374,6 +432,8 @@ class ArrayVector : public BaseVector {
 
   void ensureWritable(const SelectivityVector& rows) override;
 
+  bool isWritable() const override;
+
   /// Calls BaseVector::prepareForReuse() to check and reset nulls buffer if
   /// needed, checks and resets offsets and sizes buffers, zeros out offsets and
   /// sizes if reusable, calls BaseVector::prepareForReuse(elements, 0) for the
@@ -385,15 +445,13 @@ class ArrayVector : public BaseVector {
         elements_->mayHaveNullsRecursive();
   }
 
+  VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
+
  private:
-  BufferPtr offsets_;
-  const vector_size_t* rawOffsets_;
-  BufferPtr sizes_;
-  const vector_size_t* rawSizes_;
   VectorPtr elements_;
 };
 
-class MapVector : public BaseVector {
+class MapVector : public ArrayVectorBase {
  public:
   MapVector(
       velox::memory::MemoryPool* pool,
@@ -404,20 +462,17 @@ class MapVector : public BaseVector {
       BufferPtr sizes,
       VectorPtr keys,
       VectorPtr values,
-      std::optional<vector_size_t> nullCount = std::nullopt)
-      : BaseVector(
+      std::optional<vector_size_t> nullCount = std::nullopt,
+      bool sortedKeys = false)
+      : ArrayVectorBase(
             pool,
             type,
             VectorEncoding::Simple::MAP,
-            nulls,
+            std::move(nulls),
             length,
-            std::nullopt /*distinctValueCount*/,
             nullCount,
-            std::nullopt /*representedByteCount*/),
-        offsets_(std::move(offsets)),
-        rawOffsets_(offsets_->as<vector_size_t>()),
-        sizes_(std::move(sizes)),
-        rawSizes_(sizes_->as<vector_size_t>()),
+            std::move(offsets),
+            std::move(sizes)),
         keys_(BaseVector::getOrCreateEmpty(
             std::move(keys),
             type->childAt(0),
@@ -425,7 +480,8 @@ class MapVector : public BaseVector {
         values_(BaseVector::getOrCreateEmpty(
             std::move(values),
             type->childAt(1),
-            pool)) {
+            pool)),
+        sortedKeys_{sortedKeys} {
     VELOX_CHECK_EQ(type->kind(), TypeKind::MAP);
 
     VELOX_CHECK(
@@ -476,36 +532,8 @@ class MapVector : public BaseVector {
     return values_;
   }
 
-  vector_size_t reserveMap(vector_size_t offset, vector_size_t size);
-
-  void
-  setOffsetAndSize(vector_size_t i, vector_size_t offset, vector_size_t size) {
-    offsets_->asMutable<vector_size_t>()[i] = offset;
-    sizes_->asMutable<vector_size_t>()[i] = size;
-  }
-
-  const BufferPtr& offsets() const {
-    return offsets_;
-  }
-
-  const BufferPtr& sizes() const {
-    return sizes_;
-  }
-
-  const vector_size_t* rawOffsets() const {
-    return rawOffsets_;
-  }
-
-  const vector_size_t* rawSizes() const {
-    return rawSizes_;
-  }
-
-  vector_size_t offsetAt(vector_size_t index) const {
-    return rawOffsets_[index];
-  }
-
-  vector_size_t sizeAt(vector_size_t index) const {
-    return rawSizes_[index];
+  bool hasSortedKeys() const {
+    return sortedKeys_;
   }
 
   void setKeysAndValues(VectorPtr keys, VectorPtr values) {
@@ -515,29 +543,22 @@ class MapVector : public BaseVector {
         std::move(values), type()->childAt(1), pool_);
   }
 
-  BufferPtr mutableOffsets(size_t size) {
-    if (offsets_ && offsets_->capacity() >= size * sizeof(vector_size_t)) {
-      return offsets_;
-    }
-    resizeIndices(size, 0, &offsets_, &rawOffsets_);
-    return offsets_;
-  }
-
-  BufferPtr mutableSizes(size_t size) {
-    if (sizes_ && sizes_->capacity() >= size * sizeof(vector_size_t)) {
-      return sizes_;
-    }
-    resizeIndices(size, 0, &sizes_, &rawSizes_);
-    return sizes_;
-  }
-
-  void copy(
+  void copyRanges(
       const BaseVector* source,
-      vector_size_t targetIndex,
-      vector_size_t sourceIndex,
-      vector_size_t count) override;
-
-  void move(vector_size_t source, vector_size_t target) override;
+      const folly::Range<const CopyRange*>& ranges) override {
+    const MapVector* sourceMap{};
+    if (auto wrapped = source->wrappedVector();
+        !wrapped->isConstantEncoding()) {
+      sourceMap = wrapped->asUnchecked<MapVector>();
+    }
+    copyRangesImpl(
+        source,
+        ranges,
+        &values_,
+        sourceMap ? sourceMap->values_.get() : nullptr,
+        &keys_,
+        sourceMap ? sourceMap->keys_.get() : nullptr);
+  }
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
@@ -565,6 +586,8 @@ class MapVector : public BaseVector {
 
   void ensureWritable(const SelectivityVector& rows) override;
 
+  bool isWritable() const override;
+
   /// Calls BaseVector::prepareForReuse() to check and reset nulls buffer if
   /// needed, checks and resets offsets and sizes buffers, zeros out offsets and
   /// sizes if reusable, calls BaseVector::prepareForReuse(keys|values, 0) for
@@ -576,6 +599,8 @@ class MapVector : public BaseVector {
         keys_->mayHaveNullsRecursive() || values_->mayHaveNullsRecursive();
   }
 
+  VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
+
  private:
   // Returns true if the keys for map at 'index' are sorted from first
   // to last in the type's collation order.
@@ -585,13 +610,9 @@ class MapVector : public BaseVector {
   // get elements in key order in each map.
   BufferPtr elementIndices() const;
 
-  BufferPtr offsets_;
-  const vector_size_t* rawOffsets_;
-  BufferPtr sizes_;
-  const vector_size_t* rawSizes_;
   VectorPtr keys_;
   VectorPtr values_;
-  bool sortedKeys_ = false;
+  bool sortedKeys_;
 };
 
 using RowVectorPtr = std::shared_ptr<RowVector>;

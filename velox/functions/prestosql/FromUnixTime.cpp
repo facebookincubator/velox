@@ -21,6 +21,9 @@ namespace facebook::velox::functions {
 namespace {
 
 inline int64_t toMillis(double unixtime) {
+  if (UNLIKELY(std::isnan(unixtime))) {
+    return 0;
+  }
   return std::floor(unixtime * 1'000);
 }
 
@@ -30,15 +33,15 @@ class FromUnixtimeFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     exec::DecodedArgs decodedArgs(rows, args, context);
 
     auto unixtimes = decodedArgs.at(0);
     auto timezoneNames = decodedArgs.at(1);
 
     const auto size = rows.end();
-    auto* pool = context->pool();
+    auto* pool = context.pool();
 
     auto timestamps = BaseVector::create(BIGINT(), size, pool);
     auto* rawTimestamps =
@@ -77,7 +80,7 @@ class FromUnixtimeFunction : public exec::VectorFunction {
         std::vector<VectorPtr>{timestamps, timezones},
         0 /*nullCount*/);
 
-    context->moveOrCopyResult(localResult, rows, result);
+    context.moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

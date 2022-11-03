@@ -15,39 +15,17 @@
  */
 #pragma once
 
+#include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashTable.h"
-#include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/Spill.h"
+#include "velox/exec/SpillOperatorGroup.h"
+#include "velox/exec/Spiller.h"
+#include "velox/exec/UnorderedStreamReader.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/expression/Expr.h"
 
 namespace facebook::velox::exec {
-
-// Hands over a hash table from a multi-threaded build pipeline to a
-// multi-threaded probe pipeline. This is owned by shared_ptr by all the build
-// and probe Operator instances concerned. Corresponds to the Presto concept of
-// the same name.
-class HashJoinBridge : public JoinBridge {
- public:
-  void setHashTable(std::unique_ptr<BaseHashTable> table);
-
-  void setAntiJoinHasNullKeys();
-
-  // Represents the result of a HashBuild operator: a hash table. In case of an
-  // anti join, a build side entry with a null in a join key makes the join
-  // return nothing. In this case, HashBuild operator finishes early without
-  // processing all the input and without finishing building the hash table.
-  struct HashBuildResult {
-    std::shared_ptr<BaseHashTable> table;
-    bool antiJoinHasNullKeys;
-  };
-
-  std::optional<HashBuildResult> tableOrFuture(ContinueFuture* future);
-
- private:
-  std::shared_ptr<BaseHashTable> table_;
-  bool antiJoinHasNullKeys_{false};
-};
 
 // Builds a hash table for use in HashProbe. This is the final
 // Operator in a build side Driver. The build side pipeline has
@@ -60,9 +38,27 @@ class HashJoinBridge : public JoinBridge {
 // their state.
 class HashBuild final : public Operator {
  public:
+  /// Define the internal execution state for hash build.
+  enum class State {
+    /// The running state.
+    kRunning = 1,
+    /// The state that waits for the pending group spill to finish. This state
+    /// only applies if disk spilling is enabled.
+    kWaitForSpill = 2,
+    /// The state that waits for the hash tables to be merged together.
+    kWaitForBuild = 3,
+    /// The state that waits for the hash probe to finish before start to build
+    /// the hash table for one of previously spilled partition. This state only
+    /// applies if disk spilling is enabled.
+    kWaitForProbe = 4,
+    /// The finishing state.
+    kFinish = 5,
+  };
+  static std::string stateName(State state);
+
   HashBuild(
       int32_t operatorId,
-      DriverCtx* driverCtx,
+      DriverCtx* FOLLY_NONNULL driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
   void addInput(RowVectorPtr input) override;
@@ -77,16 +73,185 @@ class HashBuild final : public Operator {
 
   void noMoreInput() override;
 
-  BlockingReason isBlocked(ContinueFuture* future) override;
+  BlockingReason isBlocked(ContinueFuture* FOLLY_NONNULL future) override;
 
   bool isFinished() override;
 
   void close() override {}
 
  private:
+  void setState(State state);
+  void checkStateTransition(State state);
+
+  void setRunning();
+  bool isRunning() const;
+  void checkRunning() const;
+
+  // Invoked to set up hash table to build.
+  void setupTable();
+
+  // Invoked when operator has finished processing the build input and wait for
+  // all the other drivers to finish the processing. The last driver that
+  // reaches to the hash build barrier, is responsible to build the hash table
+  // merged from all the other drivers. If the disk spilling is enabled, the
+  // last driver will also restart 'spillGroup_' and add a new hash build
+  // barrier for the next round of hash table build operation if it needs.
+  bool finishHashBuild();
+
+  // Invoked after the hash table has been built. It waits for any spill data to
+  // process after the probe side has finished processing the previously built
+  // hash table. If disk spilling is not enabled or there is no more spill data,
+  // then the operator will transition to 'kFinish' state to finish. Otherwise,
+  // it will transition to 'kWaitForProbe' to wait for the next spill data to
+  // process which will be set by the join probe side.
+  void postHashBuildProcess();
+
+  // Checks if the spilling is allowed for this hash join. As for now, we don't
+  // allow spilling for null-aware anti-join with filter set. It requires to
+  // cross join the null-key probe rows with all the build-side rows for filter
+  // evaluation which is not supported under spilling.
+  bool isSpillAllowed() const {
+    return !isNullAwareAntiJoinWithFilter(joinNode_);
+  }
+
+  bool spillEnabled() const {
+    return spillConfig_.has_value();
+  }
+
+  const Spiller::Config* FOLLY_NULLABLE spillConfig() const {
+    return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
+  }
+
+  // Indicates if the input is read from spill data or not.
+  bool isInputFromSpill() const;
+
+  // Returns the type of data fed into 'addInput()'. The column orders will be
+  // different from the build source data type if the input is read from spill
+  // data during restoring.
+  RowTypePtr inputType() const;
+
+  // Invoked to setup spiller if disk spilling is enabled. If 'spillPartition'
+  // is not null, then the input is from the spilled data instead of from build
+  // source. The function will need to setup a spill input reader to read input
+  // from the spilled data for restoring. If the spilled data can't still fit
+  // in memory, then we will recursively spill part(s) of its data on disk.
+  void setupSpiller(SpillPartition* FOLLY_NULLABLE spillPartition = nullptr);
+
+  // Invoked when either there is no more input from the build source or from
+  // the spill input reader during the restoring.
+  void noMoreInputInternal();
+
+  // Invoked to ensure there is a sufficient memory to process 'input' by
+  // reserving a sufficient amount of memory in advance if disk spilling is
+  // enabled. The function returns true if the disk spilling is not enabled, or
+  // the memory reservation succeeds. If the memory reservation fails, the
+  // function will trigger a group spill which needs coordination among the
+  // other build drivers in the same group. The function returns true if the
+  // group spill has been inline executed which could happen if there is only
+  // one driver in the group, or it happens that all the other drivers have
+  // also requested group spill and this driver is the last one to reach the
+  // group spill barrier. Otherwise, the function returns false to wait for the
+  // group spill to run. The operator will transition to 'kWaitForSpill' state
+  // accordingly.
+  bool ensureInputFits(RowVectorPtr& input);
+
+  // Invoked to reserve memory for 'input' if disk spilling is enabled. The
+  // function returns true on success, otherwise false.
+  bool reserveMemory(const RowVectorPtr& input);
+
+  // Invoked to compute spill partitions numbers for each row 'input' and spill
+  // rows to spiller directly if the associated partition(s) is spilling. The
+  // function will skip processing if disk spilling is not enabled or there is
+  // no spilling partition.
+  void spillInput(const RowVectorPtr& input);
+
+  // Invoked to spill a number of rows from 'input' to a spill 'partition'.
+  // 'size' is the number of rows. 'indices' is the row indices in 'input'.
+  void spillPartition(
+      uint32_t partition,
+      vector_size_t size,
+      const BufferPtr& indices,
+      const RowVectorPtr& input);
+
+  // Invoked to compute spill partition numbers for 'input' if disk spilling is
+  // enabled. The computed partition numbers are stored in 'spillPartitions_'.
+  void computeSpillPartitions(const RowVectorPtr& input);
+
+  // Invoked to set up 'spillChildVectors_' for spill if 'input' is from build
+  // source.
+  void maybeSetupSpillChildVectors(const RowVectorPtr& input);
+
+  // Invoked to prepare indices buffers for input spill processing.
+  void prepareInputIndicesBuffers(
+      vector_size_t numInput,
+      const SpillPartitionNumSet& spillPartitions);
+
+  // Invoked to send group spill request to 'spillGroup_'. The function returns
+  // true if group spill has been inline executed, otherwise returns false. In
+  // the latter case, the operator will transition to 'kWaitForSpill' state and
+  // 'input' will be saved in 'input_' to be processed after the group spill has
+  // been executed.
+  bool requestSpill(RowVectorPtr& input);
+
+  // Invoked to check if it needs to wait for any pending group spill to run.
+  // The function returns true if it needs to wait, otherwise false. The latter
+  // case is either because there is no pending group spill or this operator is
+  // the last one to reach to the group spill barrier and execute the group
+  // spill inline.
+  bool waitSpill(RowVectorPtr& input);
+
+  // The callback registered to 'spillGroup_' to run group spill on
+  // 'spillOperators'.
+  void runSpill(const std::vector<Operator*>& spillOperators);
+
+  // Invoked by 'runSpill' to sum up the spill targets from all the operators in
+  // 'numRows' and 'numBytes'.
+  void addAndClearSpillTarget(uint64_t& numRows, uint64_t& numBytes);
+
+  // Invoked to reset the operator state to restore previously spilled data. It
+  // setup (recursive) spiller and spill input reader from 'spillInput' received
+  // from 'joinBride_'. 'spillInput' contains a shard of previously spilled
+  // partition data. 'spillInput' also indicates if there is no more spill data,
+  // then this operator will transition to 'kFinish' state to finish.
+  void setupSpillInput(HashJoinBridge::SpillInput spillInput);
+
+  // Invoked to process data from spill input reader on restoring.
+  void processSpillInput();
+
+  // Set up for null-aware and regular anti-join with filter processing.
+  void setupFilterForAntiJoins(
+      const folly::F14FastMap<column_index_t, column_index_t>& keyChannelMap);
+
+  // Invoked when preparing for null-aware and regular anti join with
+  // null-propagating filter. The function deselects the input rows which have
+  // any null in the filter input columns. This is an optimization for
+  // null-aware and regular anti join processing at the probe side as any probe
+  // matches with the deselected rows can't pass the null-propagating filter and
+  // will be added to the joined output.
+  void removeInputRowsForAntiJoinFilter();
+
   void addRuntimeStats();
 
+  // Invoked to check if it needs to trigger spilling for test purpose only.
+  bool testingTriggerSpill();
+
+  const std::shared_ptr<const core::HashJoinNode> joinNode_;
+
   const core::JoinType joinType_;
+
+  // Holds the areas in RowContainer of 'table_'
+  memory::MappedMemory* const FOLLY_NONNULL mappedMemory_;
+
+  const std::shared_ptr<HashJoinBridge> joinBridge_;
+
+  const std::optional<Spiller::Config> spillConfig_;
+
+  const std::shared_ptr<SpillOperatorGroup> spillGroup_;
+
+  State state_{State::kRunning};
+
+  // The row type used for hash table build and disk spilling.
+  RowTypePtr tableType_;
 
   // Container for the rows being accumulated.
   std::unique_ptr<BaseHashTable> table_;
@@ -99,9 +264,6 @@ class HashBuild final : public Operator {
 
   // Corresponds 1:1 to 'dependentChannels_'.
   std::vector<std::unique_ptr<DecodedVector>> decoders_;
-
-  // Holds the areas in RowContainer of 'table_'
-  memory::MappedMemory* mappedMemory_;
 
   // Future for synchronizing with other Drivers of the same pipeline. All build
   // Drivers must be completed before making the hash table.
@@ -120,6 +282,40 @@ class HashBuild final : public Operator {
   // True if this is a build side of an anti join and has at least one entry
   // with null join keys.
   bool antiJoinHasNullKeys_{false};
+
+  // Counts input batches and triggers spilling if folly hash of this % 100 <=
+  // 'testSpillPct_';.
+  uint64_t spillTestCounter_{0};
+
+  // The spill targets set by 'requestSpill()' to request group spill.
+  uint64_t numSpillRows_{0};
+  uint64_t numSpillBytes_{0};
+
+  std::unique_ptr<Spiller> spiller_;
+
+  // Used to read input from previously spilled data for restoring.
+  std::unique_ptr<UnorderedStreamReader<BatchStream>> spillInputReader_;
+
+  // Reusable memory for spill partition calculation for input data.
+  std::vector<uint32_t> spillPartitions_;
+
+  // Reusable memory for input spilling processing.
+  std::vector<vector_size_t> numSpillInputs_;
+  std::vector<BufferPtr> spillInputIndicesBuffers_;
+  std::vector<vector_size_t*> rawSpillInputIndicesBuffers_;
+  std::vector<VectorPtr> spillChildVectors_;
+
+  // Indicates whether the filter is null-propagating.
+  bool filterPropagatesNulls_{false};
+
+  // Indices of key columns used by the filter in build side table.
+  std::vector<column_index_t> keyFilterChannels_;
+  // Indices of dependent columns used by the filter in 'decoders_'.
+  std::vector<column_index_t> dependentFilterChannels_;
 };
 
+inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
+  os << HashBuild::stateName(state);
+  return os;
+}
 } // namespace facebook::velox::exec

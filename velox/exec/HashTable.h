@@ -80,15 +80,19 @@ class BaseHashTable {
       return !rows || lastRowIndex == rows->size();
     }
 
-    const raw_vector<vector_size_t>* rows{nullptr};
-    const raw_vector<char*>* hits{nullptr};
-    char* nextHit{nullptr};
+    const raw_vector<vector_size_t>* FOLLY_NULLABLE rows{nullptr};
+    const raw_vector<char*>* FOLLY_NULLABLE hits{nullptr};
+    char* FOLLY_NULLABLE nextHit{nullptr};
     vector_size_t lastRowIndex{0};
   };
 
-  struct NotProbedRowsIterator {
+  struct RowsIterator {
     int32_t hashTableIndex_{-1};
     RowContainerIterator rowContainerIterator_;
+
+    void reset() {
+      *this = {};
+    }
   };
 
   /// Takes ownership of 'hashers'. These are used to keep key-level
@@ -101,7 +105,7 @@ class BaseHashTable {
 
   virtual ~BaseHashTable() = default;
 
-  virtual HashStringAllocator* stringAllocator() = 0;
+  virtual HashStringAllocator* FOLLY_NULLABLE stringAllocator() = 0;
 
   /// Finds or creates a group for each key in 'lookup'. The keys are
   /// returned in 'lookup.hits'.
@@ -126,15 +130,30 @@ class BaseHashTable {
       folly::Range<vector_size_t*> inputRows,
       folly::Range<char**> hits) = 0;
 
-  /// Returns rows with 'probed' flag unset. Used by the right join.
+  /// Returns rows with 'probed' flag unset. Used by the right/full join.
   virtual int32_t listNotProbedRows(
-      NotProbedRowsIterator* iter,
+      RowsIterator* FOLLY_NULLABLE iter,
       int32_t maxRows,
       uint64_t maxBytes,
-      char** rows) = 0;
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) = 0;
+
+  /// Returns rows with 'probed' flag set. Used by the right semi join.
+  virtual int32_t listProbedRows(
+      RowsIterator* FOLLY_NULLABLE iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) = 0;
+
+  /// Returns all rows. Used by the right semi join project.
+  virtual int32_t listAllRows(
+      RowsIterator* FOLLY_NULLABLE iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) = 0;
 
   virtual void prepareJoinTable(
-      std::vector<std::unique_ptr<BaseHashTable>> tables) = 0;
+      std::vector<std::unique_ptr<BaseHashTable>> tables,
+      folly::Executor* FOLLY_NULLABLE executor = nullptr) = 0;
 
   /// Returns the memory footprint in bytes for any data structures
   /// owned by 'this'.
@@ -150,7 +169,7 @@ class BaseHashTable {
 
   // Returns table growth in bytes after adding 'numNewDistinct' distinct
   // entries. This only concerns the hash table, not the payload rows.
-  virtual uint64_t hashTableSizeIncrease(int32_t numnewDistinct) const = 0;
+  virtual uint64_t hashTableSizeIncrease(int32_t numNewDistinct) const = 0;
 
   /// Returns true if the hash table contains rows with duplicate keys.
   virtual bool hasDuplicateKeys() const = 0;
@@ -184,7 +203,8 @@ class BaseHashTable {
   /// Returns a brief description for use in debugging.
   virtual std::string toString() = 0;
 
-  static void storeTag(uint8_t* tags, int32_t index, uint8_t tag) {
+  static void
+  storeTag(uint8_t* FOLLY_NULLABLE tags, int32_t index, uint8_t tag) {
     tags[index] = tag;
   }
 
@@ -192,7 +212,7 @@ class BaseHashTable {
     return hashers_;
   }
 
-  RowContainer* rows() const {
+  RowContainer* FOLLY_NULLABLE rows() const {
     return rows_.get();
   }
 
@@ -210,13 +230,31 @@ class BaseHashTable {
     return static_cast<uint8_t>(hash >> 32) | 0x80;
   }
 
-  /// Loads a vector of tags for bulk comparison.
-  static TagVector loadTags(uint8_t* tags, int32_t tagIndex) {
-    return TagVector::load_unaligned(tags + tagIndex);
+  /// Loads a vector of tags for bulk comparison. Disables tsan errors
+  /// because with parallel join build different ranges of the table
+  /// are filled by different threads, after which the main thread
+  /// inserts the entries that would have overflowed past the
+  /// inserting thread's range. There is a sync barrier between but
+  /// tsan does not recognize this.
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+  __attribute__((__no_sanitize__("thread")))
+#endif
+#endif
+  static TagVector
+  loadTags(uint8_t* FOLLY_NULLABLE tags, int32_t tagIndex) {
+    // Cannot use xsimd::batch::unaligned here because we need to skip TSAN.
+    auto src = tags + tagIndex;
+#if XSIMD_WITH_SSE2
+    return TagVector(_mm_loadu_si128(reinterpret_cast<__m128i const*>(src)));
+#elif XSIMD_WITH_NEON
+    return TagVector(vld1q_u8(src));
+#endif
   }
 
   /// Loads the payload row pointer corresponding to the tag at 'index'.
-  static char* loadRow(char** table, int32_t index) {
+  static char* FOLLY_NULLABLE
+  loadRow(char* FOLLY_NULLABLE* FOLLY_NULLABLE table, int32_t index) {
     return table[index];
   }
 
@@ -245,12 +283,12 @@ class HashTable : public BaseHashTable {
       bool allowDuplicates,
       bool isJoinBuild,
       bool hasProbedFlag,
-      memory::MappedMemory* memory);
+      memory::MappedMemory* FOLLY_NULLABLE memory);
 
   static std::unique_ptr<HashTable> createForAggregation(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       const std::vector<std::unique_ptr<Aggregate>>& aggregates,
-      memory::MappedMemory* memory) {
+      memory::MappedMemory* FOLLY_NULLABLE memory) {
     return std::make_unique<HashTable>(
         std::move(hashers),
         aggregates,
@@ -266,7 +304,7 @@ class HashTable : public BaseHashTable {
       const std::vector<TypePtr>& dependentTypes,
       bool allowDuplicates,
       bool hasProbedFlag,
-      memory::MappedMemory* memory) {
+      memory::MappedMemory* FOLLY_NULLABLE memory) {
     static const std::vector<std::unique_ptr<Aggregate>> kNoAggregates;
     return std::make_unique<HashTable>(
         std::move(hashers),
@@ -291,10 +329,22 @@ class HashTable : public BaseHashTable {
       folly::Range<char**> hits) override;
 
   int32_t listNotProbedRows(
-      NotProbedRowsIterator* iter,
+      RowsIterator* FOLLY_NULLABLE iter,
       int32_t maxRows,
       uint64_t maxBytes,
-      char** rows) override;
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) override;
+
+  int32_t listProbedRows(
+      RowsIterator* FOLLY_NULLABLE iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) override;
+
+  int32_t listAllRows(
+      RowsIterator* FOLLY_NULLABLE iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) override;
 
   void clear() override;
 
@@ -304,7 +354,7 @@ class HashTable : public BaseHashTable {
     return (1 + sizeof(char*)) * size_ + rows_->allocatedBytes();
   }
 
-  HashStringAllocator* stringAllocator() override {
+  HashStringAllocator* FOLLY_NULLABLE stringAllocator() override {
     return &rows_->stringAllocator();
   }
 
@@ -335,7 +385,8 @@ class HashTable : public BaseHashTable {
   // with prepareJoinTable. This then takes ownership of all the data
   // and VectorHashers and decides the hash mode and representation.
   void prepareJoinTable(
-      std::vector<std::unique_ptr<BaseHashTable>> tables) override;
+      std::vector<std::unique_ptr<BaseHashTable>> tables,
+      folly::Executor* FOLLY_NULLABLE executor = nullptr) override;
 
   uint64_t hashTableSizeIncrease(int32_t numNewDistinct) const override {
     if (numDistinct_ + numNewDistinct > rehashSize()) {
@@ -355,13 +406,27 @@ class HashTable : public BaseHashTable {
     return size_ - (size_ / 8);
   }
 
-  char*& nextRow(char* row) {
+  template <RowContainer::ProbeType probeType>
+  int32_t listRows(
+      RowsIterator* FOLLY_NULLABLE iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE rows);
+
+  char* FOLLY_NULLABLE& nextRow(char* FOLLY_NULLABLE row) {
     return *reinterpret_cast<char**>(row + nextOffset_);
   }
 
   void arrayGroupProbe(HashLookup& lookup);
 
   void setHashMode(HashMode mode, int32_t numNew) override;
+
+  // Fast path for join results when there are no duplicates in the table.
+  int32_t listJoinResultsNoDuplicates(
+      JoinResultIterator& iter,
+      bool includeMisses,
+      folly::Range<vector_size_t*> inputRows,
+      folly::Range<char**> hits);
 
   /// Tries to use as many range hashers as can in a normalized key situation.
   void enableRangeWhereCan(
@@ -382,10 +447,9 @@ class HashTable : public BaseHashTable {
   void clearUseRange(std::vector<bool>& useRange);
 
   void rehash();
-  void initializeNewGroups(HashLookup& lookup);
   void storeKeys(HashLookup& lookup, vector_size_t row);
 
-  void storeRowPointer(int32_t index, uint64_t hash, char* row);
+  void storeRowPointer(int32_t index, uint64_t hash, char* FOLLY_NULLABLE row);
 
   // Allocates new tables for tags and payload pointers. The size must
   // a power of 2.
@@ -396,43 +460,115 @@ class HashTable : public BaseHashTable {
   // Computes hash numbers of the appropriate hash mode for 'groups',
   // stores these in 'hashes' and inserts the groups using
   // insertForJoin or insertForGroupBy.
-  bool
-  insertBatch(char** groups, int32_t numGroups, raw_vector<uint64_t>& hashes);
+  bool insertBatch(
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE groups,
+      int32_t numGroups,
+      raw_vector<uint64_t>& hashes);
 
   // Inserts 'numGroups' entries into 'this'. 'groups' point to
-  // contents in a RowContainer owned by 'this'. 'hashes' are te hash
+  // contents in a RowContainer owned by 'this'. 'hashes' are the hash
   // numbers or array indices (if kArray mode) for each
-  // group. Duplicate key rows are chained via their next link.
-  void insertForJoin(char** groups, uint64_t* hashes, int32_t numGroups);
+  // group. Duplicate key rows are chained via their next link. if
+  // parallel build, partitionEnd is the index of the first entry
+  // after the partition being inserted. If a row would be inserted to
+  // the right of the end, it is not inserted but rather added to the
+  // end of 'overflows'.
+  void insertForJoin(
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE groups,
+      uint64_t* FOLLY_NULLABLE hashes,
+      int32_t numGroups,
+      int32_t partitionBegin = 0,
+      int32_t partitionEnd = std::numeric_limits<int32_t>::max(),
+      std::vector<char*>* FOLLY_NULLABLE overflows = nullptr);
 
   // Inserts 'numGroups' entries into 'this'. 'groups' point to
-  // contents in a RowContainer owned by 'this'. 'hashes' are te hash
+  // contents in a RowContainer owned by 'this'. 'hashes' are the hash
   // numbers or array indices (if kArray mode) for each
-  // group. 'groups' is expectedd to have no duplicate keys.
+  // group. 'groups' is expected to have no duplicate keys.
+  void insertForGroupBy(
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE groups,
+      uint64_t* FOLLY_NULLABLE hashes,
+      int32_t numGroups);
 
-  void insertForGroupBy(char** groups, uint64_t* hashes, int32_t numGroups);
+  /// Checks if we can apply parallel table build optimization for hash join.
+  /// The function returns true if all of the following conditions:
+  /// 1. the hash table is built for parallel join;
+  /// 2. there is more than one sub-tables;
+  /// 3. the build executor has been set;
+  /// 4. the table is not in kArray mode;
+  /// 5. the number of table entries per each parallel build shard is no less
+  ///    than a pre-defined threshold: 1000 for now.
+  bool canApplyParallelJoinBuild() const;
 
-  char* insertEntry(HashLookup& lookup, int32_t index, vector_size_t row);
+  // Builds a join table with '1 + otherTables_.size()' independent
+  // threads using 'executor_'. First all RowContainers get partition
+  // numbers assigned to each row. Next, all threads pick all rows
+  // assigned to their thread-specific partition and insert these. If
+  // a row would overflow past the end of its partition it is added to
+  // a set of overflow rows that are sequentially inserted after all
+  // else.
+  void parallelJoinBuild();
 
-  bool compareKeys(const char* group, HashLookup& lookup, vector_size_t row);
+  // Inserts the rows in 'partition' from this and 'otherTables' into 'this'.
+  // The rows that would have gone past the end of the partition are returned in
+  // 'overflow'.
+  void buildJoinPartition(uint8_t partition, std::vector<char*>& overflow);
 
-  bool compareKeys(const char* group, const char* inserted);
+  // Assigns a partition to each row of 'subtable' in RowPartitions of
+  // subtable's RowContainer. If 'hashMode_' is kNormalizedKeys, records the
+  // normalized key of each row below the row in its container.
+  void partitionRows(HashTable<ignoreNullKeys>& subtable);
+
+  // Calculates hashes for 'rows' and returns them in 'hashes'. If
+  // 'initNormalizedKeys' is true, the normalized keys are stored
+  // below each row in the container. If 'initNormalizedKeys' is false
+  // and the table is in normalized keys mode, the keys are retrieved
+  // from the row and the hash is made from this, without recomputing
+  // the normalized key. Returns false if the hash keys are not mappable via the
+  // VectorHashers.
+  bool hashRows(
+      folly::Range<char**> rows,
+      bool initNormalizedKeys,
+      raw_vector<uint64_t>& hashes);
+
+  char* FOLLY_NULLABLE
+  insertEntry(HashLookup& lookup, int32_t index, vector_size_t row);
+
+  bool compareKeys(
+      const char* FOLLY_NULLABLE group,
+      HashLookup& lookup,
+      vector_size_t row);
+
+  bool compareKeys(
+      const char* FOLLY_NULLABLE group,
+      const char* FOLLY_NULLABLE inserted);
 
   template <bool isJoin>
   void fullProbe(HashLookup& lookup, ProbeState& state, bool extraCheck);
 
+  // Shortcut for probe with normalized keys.
+  void joinNormalizedKeyProbe(HashLookup& lookup);
+
   // Adds a row to a hash join table in kArray hash mode. Returns true
   // if a new entry was made and false if the row was added to an
   // existing set of rows with the same key.
-  bool arrayPushRow(char* row, int32_t index);
+  bool arrayPushRow(char* FOLLY_NULLABLE row, int32_t index);
 
   // Adds a row to a hash join build side entry with multiple rows
   // with the same key.
-  void pushNext(char* row, char* next);
+  void pushNext(char* FOLLY_NULLABLE row, char* FOLLY_NULLABLE next);
 
-  // Finishes inserting an entry into a join hash table.
-  void
-  buildFullProbe(ProbeState& state, uint64_t hash, char* row, bool extraCheck);
+  // Finishes inserting an entry into a join hash table. If the insert
+  // would fall outside of 'partitionBegin' ... 'partitionEnd', the
+  // insert is not made but the row is instead added to 'overflow'.
+  void buildFullProbe(
+      ProbeState& state,
+      uint64_t hash,
+      char* FOLLY_NULLABLE row,
+      bool extraCheck,
+      int32_t partitionBegin,
+      int32_t partitionEnd,
+      std::vector<char*>* FOLLY_NULLABLE overflows);
 
   // Updates 'hashers_' to correspond to the keys in the
   // content. Returns true if all hashers offer a mapping to value ids
@@ -440,7 +576,9 @@ class HashTable : public BaseHashTable {
   bool analyze();
   // Erases the entries of rows from the hash table and its RowContainer.
   // 'hashes' must be computed according to 'hashMode_'.
-  void eraseWithHashes(folly::Range<char**> rows, uint64_t* hashes);
+  void eraseWithHashes(
+      folly::Range<char**> rows,
+      uint64_t* FOLLY_NULLABLE hashes);
 
   // Returns the percentage of values to reserve for new keys in range
   // or distinct mode VectorHashers in a group by hash table. 0 for
@@ -449,19 +587,19 @@ class HashTable : public BaseHashTable {
     return isJoinBuild_ ? 0 : 50;
   }
 
-  const std::vector<std::unique_ptr<Aggregate>>& aggregates_;
   int8_t sizeBits_;
   bool isJoinBuild_ = false;
 
-  // Set at join build time if the table has duplicates, meaning
-  // that the join can be cardinality increasing.
-  bool hasDuplicates_ = false;
+  // Set at join build time if the table has duplicates, meaning that
+  // the join can be cardinality increasing. Atomic for tsan because
+  // many threads can set this.
+  std::atomic<bool> hasDuplicates_{false};
 
   // Offset of next row link for join build side, 0 if none. Copied
   // from 'rows_'.
   int32_t nextOffset_;
-  uint8_t* tags_ = nullptr;
-  char** table_ = nullptr;
+  uint8_t* FOLLY_NULLABLE tags_ = nullptr;
+  char* FOLLY_NULLABLE* FOLLY_NULLABLE table_ = nullptr;
   memory::MappedMemory::ContiguousAllocation tableAllocation_;
   int64_t size_ = 0;
   int64_t sizeMask_ = 0;
@@ -470,6 +608,20 @@ class HashTable : public BaseHashTable {
   // Owns the memory of multiple build side hash join tables that are
   // combined into a single probe hash table.
   std::vector<std::unique_ptr<HashTable<ignoreNullKeys>>> otherTables_;
+
+  // Bounds of independently buildable index ranges in the table. The
+  // range of partition i starts at [i] and ends at [i +1]. Bounds are multiple
+  // of cache line  size.
+  raw_vector<int32_t> buildPartitionBounds_;
+
+  // Executor for parallelizing hash join build. This may be the
+  // executor for Drivers. If this executor is indefinitely taken by
+  // other work, the thread of prepareJoinTables() will sequentially
+  // execute the parallel build steps.
+  folly::Executor* FOLLY_NULLABLE buildExecutor_{nullptr};
+
+  //  Counts parallel build rows. Used for consistency check.
+  std::atomic<int64_t> numParallelBuildRows_{0};
 };
 
 } // namespace facebook::velox::exec

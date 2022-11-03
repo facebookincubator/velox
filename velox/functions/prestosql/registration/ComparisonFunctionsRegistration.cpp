@@ -21,14 +21,25 @@
 namespace facebook::velox::functions {
 
 void registerComparisonFunctions() {
-  registerBinaryScalar<EqFunction, bool>({"eq"});
+  registerNonSimdizableScalar<EqFunction, bool>({"eq"});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_eq, "eq");
   registerFunction<EqFunction, bool, Generic<T1>, Generic<T1>>({"eq"});
 
-  registerBinaryScalar<NeqFunction, bool>({"neq"});
-  registerBinaryScalar<LtFunction, bool>({"lt"});
-  registerBinaryScalar<GtFunction, bool>({"gt"});
-  registerBinaryScalar<LteFunction, bool>({"lte"});
-  registerBinaryScalar<GteFunction, bool>({"gte"});
+  registerNonSimdizableScalar<NeqFunction, bool>({"neq"});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_neq, "neq");
+
+  registerNonSimdizableScalar<LtFunction, bool>({"lt"});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_lt, "lt");
+
+  registerNonSimdizableScalar<GtFunction, bool>({"gt"});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gt, "gt");
+
+  registerNonSimdizableScalar<LteFunction, bool>({"lte"});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_lte, "lte");
+
+  registerNonSimdizableScalar<GteFunction, bool>({"gte"});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gte, "gte");
+
   registerBinaryScalar<DistinctFromFunction, bool>({"distinct_from"});
 
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>({"between"});
@@ -43,6 +54,47 @@ void registerComparisonFunctions() {
   registerFunction<BetweenFunction, bool, Varchar, Varchar, Varchar>(
       {"between"});
   registerFunction<BetweenFunction, bool, Date, Date, Date>({"between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      UnscaledLongDecimal,
+      UnscaledLongDecimal,
+      UnscaledLongDecimal>({"between"});
+  registerFunction<
+      GtFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"gt"});
+  registerFunction<GtFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"gt"});
+  registerFunction<
+      LtFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"lt"});
+  registerFunction<LtFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"lt"});
+
+  registerFunction<
+      GteFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"gte"});
+  registerFunction<GteFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"gte"});
+  registerFunction<
+      LteFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"lte"});
+  registerFunction<LteFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"lte"});
 }
 
 } // namespace facebook::velox::functions

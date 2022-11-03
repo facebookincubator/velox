@@ -16,9 +16,12 @@
 
 #include "velox/exec/HashTable.h"
 #include "velox/common/base/SelectivityInfo.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/VectorHasher.h"
-#include "velox/vector/tests/VectorMaker.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gtest/gtest.h>
 #include <memory>
 
@@ -33,8 +36,15 @@ using namespace facebook::velox::test;
 // measures the time for computing hashes/value ids vs the time spent
 // probing the table. Covers kArray, kNormalizedKey and kHash hash
 // modes.
-class HashTableTest : public testing::Test {
+class HashTableTest : public testing::TestWithParam<bool> {
  protected:
+  void SetUp() override {
+    if (GetParam()) {
+      executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(16);
+    }
+    aggregate::prestosql::registerAllAggregateFunctions();
+  }
+
   void testCycle(
       BaseHashTable::HashMode mode,
       int32_t size,
@@ -81,7 +91,7 @@ class HashTableTest : public testing::Test {
       batches_.insert(batches_.end(), batches.begin(), batches.end());
       startOffset += size;
     }
-    topTable_->prepareJoinTable(std::move(otherTables));
+    topTable_->prepareJoinTable(std::move(otherTables), executor_.get());
     EXPECT_EQ(topTable_->hashMode(), mode);
     LOG(INFO) << "Made table " << describeTable();
     testProbe();
@@ -167,12 +177,13 @@ class HashTableTest : public testing::Test {
     bool rehash = false;
     for (int32_t i = 0; i < hashers.size(); ++i) {
       auto key = input.childAt(hashers[i]->channel());
+      hashers[i]->decode(*key, rows);
       if (mode != BaseHashTable::HashMode::kHash) {
-        if (!hashers[i]->computeValueIds(*key, rows, lookup.hashes)) {
+        if (!hashers[i]->computeValueIds(rows, lookup.hashes)) {
           rehash = true;
         }
       } else {
-        hashers[i]->hash(*key, rows, i > 0, lookup.hashes);
+        hashers[i]->hash(rows, i > 0, lookup.hashes);
       }
     }
 
@@ -241,7 +252,8 @@ class HashTableTest : public testing::Test {
           if (table->hashMode() != BaseHashTable::HashMode::kHash) {
             auto hasher = table->hashers()[i].get();
             if (hasher->mayUseValueIds()) {
-              hasher->computeValueIds(*batch->childAt(i), insertedRows, dummy);
+              hasher->decode(*batch->childAt(i), insertedRows);
+              hasher->computeValueIds(insertedRows, dummy);
             }
           }
         }
@@ -362,7 +374,8 @@ class HashTableTest : public testing::Test {
             hashers[i]->lookupValueIds(
                 *key, rows, scratchMemory, lookup->hashes);
           } else {
-            hashers[i]->hash(*key, rows, i > 0, lookup->hashes);
+            hashers[i]->decode(*key, rows);
+            hashers[i]->hash(rows, i > 0, lookup->hashes);
           }
         }
       }
@@ -441,60 +454,61 @@ class HashTableTest : public testing::Test {
   int32_t insertPct_ = 100;
   // Spacing between consecutive generated keys. Affects whether
   // Vectorhashers make ranges or ids of distinct values.
-  int32_t keySpacing_ = 1;
+  int64_t keySpacing_ = 1;
+  std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
 };
 
-TEST_F(HashTableTest, int2DenseArray) {
+TEST_P(HashTableTest, int2DenseArray) {
   auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
   testCycle(BaseHashTable::HashMode::kArray, 500, 2, type, 2);
 }
 
-TEST_F(HashTableTest, string1DenseArray) {
+TEST_P(HashTableTest, string1DenseArray) {
   auto type = ROW({"k1"}, {VARCHAR()});
   testCycle(BaseHashTable::HashMode::kArray, 500, 2, type, 1);
 }
 
-TEST_F(HashTableTest, string2Normalized) {
+TEST_P(HashTableTest, string2Normalized) {
   auto type = ROW({"k1", "k2"}, {VARCHAR(), VARCHAR()});
-  testCycle(BaseHashTable::HashMode::kNormalizedKey, 50000, 2, type, 2);
+  testCycle(BaseHashTable::HashMode::kNormalizedKey, 5000, 19, type, 2);
 }
 
-TEST_F(HashTableTest, int2SparseArray) {
+TEST_P(HashTableTest, int2SparseArray) {
   auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
   keySpacing_ = 1000;
   testCycle(BaseHashTable::HashMode::kArray, 500, 2, type, 2);
 }
 
-TEST_F(HashTableTest, int2SparseNormalized) {
+TEST_P(HashTableTest, int2SparseNormalized) {
   auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
   keySpacing_ = 1000;
   testCycle(BaseHashTable::HashMode::kNormalizedKey, 10000, 2, type, 2);
 }
 
-TEST_F(HashTableTest, int2SparseNormalizedMostMiss) {
+TEST_P(HashTableTest, int2SparseNormalizedMostMiss) {
   auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
   keySpacing_ = 1000;
   insertPct_ = 10;
   testCycle(BaseHashTable::HashMode::kNormalizedKey, 100000, 2, type, 2);
 }
 
-TEST_F(HashTableTest, structKey) {
+TEST_P(HashTableTest, structKey) {
   auto type =
       ROW({"key"}, {ROW({"k1", "k2", "k3"}, {BIGINT(), VARCHAR(), BIGINT()})});
   keySpacing_ = 1000;
   testCycle(BaseHashTable::HashMode::kHash, 100000, 2, type, 1);
 }
 
-TEST_F(HashTableTest, mixed6Sparse) {
+TEST_P(HashTableTest, mixed6Sparse) {
   auto type =
       ROW({"k1", "k2", "k3", "k4", "k5", "k6"},
           {BIGINT(), BIGINT(), BIGINT(), BIGINT(), BIGINT(), VARCHAR()});
   keySpacing_ = 1000;
-  testCycle(BaseHashTable::HashMode::kHash, 1000000, 2, type, 6);
+  testCycle(BaseHashTable::HashMode::kHash, 100000, 9, type, 6);
 }
 
 // It should be safe to call clear() before we insert any data into HashTable
-TEST_F(HashTableTest, clear) {
+TEST_P(HashTableTest, clear) {
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0 /*channel*/));
   std::vector<std::unique_ptr<Aggregate>> aggregates;
@@ -510,7 +524,7 @@ TEST_F(HashTableTest, clear) {
 
 /// Test edge case that used to trigger a rounding error in
 /// HashTable::enableRangeWhereCan.
-TEST_F(HashTableTest, enableRangeWhereCan) {
+TEST_P(HashTableTest, enableRangeWhereCan) {
   auto rowType = ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), VARCHAR()});
   auto table = createHashTableForAggregation(rowType, 3);
   auto lookup = std::make_unique<HashLookup>(table->hashers());
@@ -550,7 +564,7 @@ TEST_F(HashTableTest, enableRangeWhereCan) {
   insertGroups(*data, *lookup, *table);
 }
 
-TEST_F(HashTableTest, arrayProbeNormalizedKey) {
+TEST_P(HashTableTest, arrayProbeNormalizedKey) {
   auto table = createHashTableForAggregation(ROW({"a"}, {BIGINT()}), 1);
   auto lookup = std::make_unique<HashLookup>(table->hashers());
 
@@ -572,3 +586,8 @@ TEST_F(HashTableTest, arrayProbeNormalizedKey) {
 
   ASSERT_TRUE(table->hashMode() == BaseHashTable::HashMode::kNormalizedKey);
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    HashTableTests,
+    HashTableTest,
+    testing::Values(true, false));

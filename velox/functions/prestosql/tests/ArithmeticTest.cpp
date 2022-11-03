@@ -19,7 +19,7 @@
 
 #include <velox/common/base/VeloxException.h>
 #include <velox/vector/SimpleVector.h>
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 namespace facebook::velox {
 namespace {
@@ -618,8 +618,28 @@ TEST_F(ArithmeticTest, clamp) {
   EXPECT_EQ(1, clamp(1, -1, 1));
   // lo == hi != v => lo.
   EXPECT_EQ(-1, clamp(2, -1, -1));
-  // lo > hi => VeloxUserError.
-  EXPECT_THROW(clamp(0, 1, -1), VeloxUserError);
+  // lo == hi == v => v.
+  EXPECT_EQ(-1, clamp(-1, -1, -1));
+
+  // lo > hi -> hi.
+  EXPECT_EQ(clamp(-123, 1, -1), -1);
+  EXPECT_EQ(clamp(-1, 1, -1), -1);
+  EXPECT_EQ(clamp(0, 1, -1), -1);
+  EXPECT_EQ(clamp(1, 1, -1), -1);
+  EXPECT_EQ(clamp(2, 1, -1), -1);
+  EXPECT_EQ(clamp(123456, 1, -1), -1);
+}
+
+TEST_F(ArithmeticTest, truncate) {
+  const auto truncate = [&](std::optional<double> a) {
+    return evaluateOnce<double>("truncate(c0)", a);
+  };
+
+  EXPECT_EQ(truncate(0), 0);
+  EXPECT_EQ(truncate(1.5), 1);
+  EXPECT_EQ(truncate(-1.5), -1);
+  EXPECT_EQ(truncate(std::nullopt), std::nullopt);
+  EXPECT_THAT(truncate(kNan), IsNan());
 }
 
 } // namespace

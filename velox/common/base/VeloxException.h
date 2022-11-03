@@ -28,65 +28,14 @@
 
 #include "velox/common/process/StackTrace.h"
 
-DECLARE_bool(velox_exception_stacktrace);
 DECLARE_bool(velox_exception_user_stacktrace_enabled);
 DECLARE_bool(velox_exception_system_stacktrace_enabled);
 
-DECLARE_int32(velox_exception_stacktrace_rate_limit_ms);
 DECLARE_int32(velox_exception_user_stacktrace_rate_limit_ms);
 DECLARE_int32(velox_exception_system_stacktrace_rate_limit_ms);
 
 namespace facebook {
 namespace velox {
-
-/// Holds a pointer to a function that provides addition context to be
-/// added to the detailed error message in case of an exception.
-struct ExceptionContext {
-  using MessageFunction = std::string (*)(void* arg);
-
-  /// Function to call in case of an exception to get additional context.
-  MessageFunction messageFunc{nullptr};
-
-  /// Value to pass to `messageFunc`. Can be null.
-  void* arg{nullptr};
-
-  /// Pointer to the parent context when there are hierarchical exception
-  /// contexts.
-  ExceptionContext* parent{nullptr};
-
-  /// Calls `messageFunc(arg)` and returns the result. Returns empty string if
-  /// `messageFunc` is null.
-  std::string message() {
-    return messageFunc ? messageFunc(arg) : "";
-  }
-};
-
-/// Returns a reference to thread_local variable that holds a function that can
-/// be used to get addition context to be added to the detailed error message in
-/// case an exception occurs. This is to used in cases when stack trace would
-/// not provide enough information, e.g. in case of hierarchical processing like
-/// expression evaluation.
-ExceptionContext& getExceptionContext();
-
-/// RAII class to set and restore context for exceptions. Links the new
-/// exception context with the previous context held by the thread_local
-/// variable to allow retrieving the top-level context when there is an
-/// exception context hierarchy.
-class ExceptionContextSetter {
- public:
-  explicit ExceptionContextSetter(ExceptionContext value)
-      : prev_{getExceptionContext()} {
-    value.parent = &prev_;
-    getExceptionContext() = std::move(value);
-  }
-
-  ~ExceptionContextSetter() {
-    getExceptionContext() = std::move(prev_);
-  }
-
- private:
-  ExceptionContext prev_;
-};
 
 namespace error_source {
 using namespace folly::string_literals;
@@ -143,6 +92,9 @@ inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
 // Error caused by failing to allocate cache buffer space for IO.
 inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
 
+// Errors indicating file read corruptions.
+inline constexpr auto kFileCorruption = "FILE_CORRUPTION"_fs;
+
 // We do not know how to classify it yet.
 inline constexpr auto kUnknown = "UNKNOWN"_fs;
 } // namespace error_code
@@ -159,6 +111,15 @@ class VeloxException : public std::exception {
       std::string_view message,
       std::string_view errorSource,
       std::string_view errorCode,
+      bool isRetriable,
+      Type exceptionType = Type::kSystem,
+      std::string_view exceptionName = "VeloxException");
+
+  /// Wrap an std::exception.
+  VeloxException(
+      const std::exception_ptr& e,
+      std::string_view message,
+      std::string_view errorSource,
       bool isRetriable,
       Type exceptionType = Type::kSystem,
       std::string_view exceptionName = "VeloxException");
@@ -220,6 +181,10 @@ class VeloxException : public std::exception {
     return state_->topLevelContext;
   }
 
+  const std::exception_ptr& wrappedException() const {
+    return state_->wrappedException;
+  }
+
  private:
   struct State {
     std::unique_ptr<process::StackTrace> stackTrace;
@@ -237,12 +202,22 @@ class VeloxException : public std::exception {
     // The top-level ancestor of the current exception context.
     std::string topLevelContext;
     bool isRetriable;
+    // The original std::exception.
+    std::exception_ptr wrappedException;
 
     mutable folly::once_flag once;
     mutable std::string elaborateMessage;
 
     template <typename F>
     static std::shared_ptr<const State> make(Type exceptionType, F);
+
+    template <typename F>
+    static std::shared_ptr<const State> make(F f) {
+      auto state = std::make_shared<VeloxException::State>();
+      f(*state);
+      return state;
+    }
+
     void finalize() const;
 
     const char* what() const noexcept;
@@ -277,6 +252,20 @@ class VeloxUserError : public VeloxException {
             isRetriable,
             Type::kUser,
             exceptionName) {}
+
+  /// Wrap an std::exception.
+  VeloxUserError(
+      const std::exception_ptr& e,
+      std::string_view message,
+      bool isRetriable,
+      std::string_view exceptionName = "VeloxUserError")
+      : VeloxException(
+            e,
+            message,
+            error_source::kErrorSourceUser,
+            isRetriable,
+            Type::kUser,
+            exceptionName) {}
 };
 
 class VeloxRuntimeError final : public VeloxException {
@@ -302,6 +291,87 @@ class VeloxRuntimeError final : public VeloxException {
             isRetriable,
             Type::kSystem,
             exceptionName) {}
+
+  /// Wrap an std::exception.
+  VeloxRuntimeError(
+      const std::exception_ptr& e,
+      std::string_view message,
+      bool isRetriable,
+      std::string_view exceptionName = "VeloxRuntimeError")
+      : VeloxException(
+            e,
+            message,
+            error_source::kErrorSourceRuntime,
+            isRetriable,
+            Type::kSystem,
+            exceptionName) {}
+};
+
+/// Holds a pointer to a function that provides addition context to be
+/// added to the detailed error message in case of an exception.
+struct ExceptionContext {
+  using MessageFunction =
+      std::string (*)(VeloxException::Type exceptionType, void* arg);
+
+  /// Function to call in case of an exception to get additional context.
+  MessageFunction messageFunc{nullptr};
+
+  /// Value to pass to `messageFunc`. Can be null.
+  void* arg{nullptr};
+
+  /// Pointer to the parent context when there are hierarchical exception
+  /// contexts.
+  ExceptionContext* parent{nullptr};
+
+  /// Calls `messageFunc(arg)` and returns the result. Returns empty string if
+  /// `messageFunc` is null.
+  std::string message(VeloxException::Type exceptionType) {
+    if (!messageFunc || suspended) {
+      return "";
+    }
+
+    std::string theMessage;
+
+    try {
+      // Make sure not to call messageFunc again in case it throws.
+      suspended = true;
+      theMessage = messageFunc(exceptionType, arg);
+      suspended = false;
+    } catch (...) {
+      return "Failed to produce additional context.";
+    }
+
+    return theMessage;
+  }
+
+  bool suspended{false};
+};
+
+/// Returns a reference to thread_local variable that holds a function that can
+/// be used to get addition context to be added to the detailed error message in
+/// case an exception occurs. This is to used in cases when stack trace would
+/// not provide enough information, e.g. in case of hierarchical processing like
+/// expression evaluation.
+ExceptionContext& getExceptionContext();
+
+/// RAII class to set and restore context for exceptions. Links the new
+/// exception context with the previous context held by the thread_local
+/// variable to allow retrieving the top-level context when there is an
+/// exception context hierarchy.
+class ExceptionContextSetter {
+ public:
+  explicit ExceptionContextSetter(ExceptionContext value)
+      : prev_{getExceptionContext()} {
+    value.parent = &prev_;
+    getExceptionContext() = std::move(value);
+  }
+
+  ~ExceptionContextSetter() {
+    getExceptionContext() = std::move(prev_);
+  }
+
+ private:
+  ExceptionContext prev_;
 };
 } // namespace velox
 } // namespace facebook

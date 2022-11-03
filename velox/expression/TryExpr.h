@@ -21,11 +21,13 @@ namespace facebook::velox::exec {
 
 class TryExpr : public SpecialForm {
  public:
+  /// Try expression adds nulls, hence, doesn't support flat-no-nulls fast path.
   TryExpr(TypePtr type, ExprPtr&& input)
       : SpecialForm(
             std::move(type),
             {std::move(input)},
             "try",
+            false /* supportsFlatNoNullsFastPath */,
             false /* trackCpuUsage */) {}
 
   void evalSpecialForm(
@@ -42,7 +44,6 @@ class TryExpr : public SpecialForm {
     return inputs_[0]->propagatesNulls();
   }
 
- private:
   void nullOutErrors(
       const SelectivityVector& rows,
       EvalCtx& context,

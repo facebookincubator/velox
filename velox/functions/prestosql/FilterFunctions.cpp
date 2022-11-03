@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 #include "velox/expression/Expr.h"
+#include "velox/expression/LambdaExpr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/vector/FunctionVector.h"
 
 namespace facebook::velox::functions {
@@ -54,19 +56,28 @@ class FilterFunctionBase : public exec::VectorFunction {
       const std::shared_ptr<T>& input,
       const VectorPtr& lambdas,
       const std::vector<VectorPtr>& lambdaArgs,
-      exec::EvalCtx* context,
+      exec::EvalCtx& context,
       BufferPtr& resultOffsets,
       BufferPtr& resultSizes,
       BufferPtr& selectedIndices) {
     auto inputOffsets = input->rawOffsets();
     auto inputSizes = input->rawSizes();
 
-    auto pool = context->pool();
+    auto* pool = context.pool();
     resultSizes = allocateSizes(rows.size(), pool);
     resultOffsets = allocateOffsets(rows.size(), pool);
     auto rawResultSizes = resultSizes->asMutable<vector_size_t>();
     auto rawResultOffsets = resultOffsets->asMutable<vector_size_t>();
     auto numElements = lambdaArgs[0]->size();
+
+    SelectivityVector finalSelection;
+    if (!context.isFinalSelection()) {
+      finalSelection =
+          toElementRows<T>(numElements, *context.finalSelection(), input.get());
+    }
+
+    auto elementToTopLevelRows = getElementToTopLevelRows(
+        numElements, rows, input.get(), context.pool());
 
     exec::LocalDecodedVector bitsDecoder(context);
     auto iter = lambdas->asUnchecked<FunctionVector>()->iterator(&rows);
@@ -78,7 +89,13 @@ class FilterFunctionBase : public exec::VectorFunction {
 
       VectorPtr bits;
       entry.callable->apply(
-          elementRows, wrapCapture, context, lambdaArgs, &bits);
+          elementRows,
+          finalSelection,
+          wrapCapture,
+          &context,
+          lambdaArgs,
+          elementToTopLevelRows,
+          &bits);
       bitsDecoder.get()->decode(*bits, elementRows);
       entry.rows->applyToSelected([&](vector_size_t row) {
         if (input->isNullAt(row)) {
@@ -114,8 +131,8 @@ class ArrayFilterFunction : public FilterFunctionBase {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 2);
     exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
     auto& decodedArray = *arrayDecoder.get();
@@ -150,7 +167,7 @@ class ArrayFilterFunction : public FilterFunctionBase {
         std::move(resultOffsets),
         std::move(resultSizes),
         wrappedElements);
-    context->moveOrCopyResult(localResult, rows, result);
+    context.moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -174,8 +191,8 @@ class MapFilterFunction : public FilterFunctionBase {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 2);
     exec::LocalDecodedVector mapDecoder(context, *args[0], rows);
     auto& decodedMap = *mapDecoder.get();
@@ -216,7 +233,7 @@ class MapFilterFunction : public FilterFunctionBase {
         std::move(resultSizes),
         wrappedKeys,
         wrappedValues);
-    context->moveOrCopyResult(localResult, rows, result);
+    context.moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

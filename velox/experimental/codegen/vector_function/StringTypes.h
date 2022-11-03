@@ -193,10 +193,10 @@ struct TempString {
   }
 
   template <typename T>
-  typename std::enable_if<
-      std::is_same<T, InputReferenceString>::value ||
-          std::is_same<T, ConstantString>::value,
-      void>::type
+  typename std::enable_if_t<
+      std::is_same_v<T, InputReferenceString> ||
+          std::is_same_v<T, ConstantString>,
+      void>
   operator=(const T& other_) {
     auto& other = other_.get();
     data_ = const_cast<char*>(other.data());
@@ -251,10 +251,10 @@ struct TempStringNullable {
   }
   // Assigns temp to inputRef or to constant
   template <typename T>
-  typename std::enable_if<
-      std::is_same<T, InputReferenceStringNullable>::value ||
-          std::is_same<T, ConstantStringNullable>::value,
-      void>::type
+  typename std::enable_if_t<
+      std::is_same_v<T, InputReferenceStringNullable> ||
+          std::is_same_v<T, ConstantStringNullable>,
+      void>
   operator=(const T& other) {
     if UNLIKELY (!other.has_value()) {
       // since this is assigned only once we dont even need

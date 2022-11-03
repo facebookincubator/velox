@@ -85,6 +85,7 @@ class PythonFormatter(str):
 format_file_types = OrderedDict(
     {
         "CMakeLists.txt": attrdict({"formatter": CMakeFormatter}),
+        "*.cmake": attrdict({"formatter": CMakeFormatter}),
         "*.cpp": attrdict({"formatter": CppFormatter}),
         "*.h": attrdict({"formatter": CppFormatter}),
         "*.inc": attrdict({"formatter": CppFormatter}),
@@ -173,8 +174,8 @@ def get_commit(files):
     if files == "commit":
         return "HEAD^"
 
-    if files == "branch":
-        return util.run("git merge-base origin/main HEAD")[1]
+    if files == "main" or files == "master":
+        return util.run(f"git merge-base origin/{files} HEAD")[1]
 
     return ""
 
@@ -184,7 +185,7 @@ def get_files(commit, path):
 
     if commit != "":
         status, stdout, stderr = util.run(
-            f"git diff --name-only --diff-filter='ACM' {commit}"
+            f"git diff --relative --name-only --diff-filter='ACM' {commit}"
         )
         filelist = stdout.splitlines()
     else:
@@ -220,7 +221,8 @@ def add_options(parser):
     tree_parser = add_check_options(files, "tree")
     tree_parser.add_argument("path", default="")
 
-    branch_parser = add_check_options(files, "branch")
+    branch_parser = add_check_options(files, "main")
+    branch_parser = add_check_options(files, "master")
     commit_parser = add_check_options(files, "commit")
 
 

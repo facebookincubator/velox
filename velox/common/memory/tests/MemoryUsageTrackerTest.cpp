@@ -48,32 +48,43 @@ TEST(MemoryUsageTrackerTest, update) {
   auto child1 = parent->addChild();
   auto child2 = parent->addChild();
 
-  EXPECT_THROW(child1->reserve(2 * kMaxSize), VeloxRuntimeError);
+  ASSERT_THROW(child1->reserve(2 * kMaxSize), VeloxRuntimeError);
 
-  EXPECT_EQ(0, parent->getCurrentTotalBytes());
+  ASSERT_EQ(0, parent->getCurrentTotalBytes());
+  ASSERT_EQ(0, parent->getCumulativeBytes());
   child1->update(1000);
-  EXPECT_EQ(kMB, parent->getCurrentTotalBytes());
-  EXPECT_EQ(kMB - 1000, child1->getAvailableReservation());
+  ASSERT_EQ(kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(kMB, parent->getCumulativeBytes());
+  ASSERT_EQ(kMB - 1000, child1->getAvailableReservation());
   child1->update(1000);
-  EXPECT_EQ(kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(kMB, parent->getCumulativeBytes());
   child1->update(kMB);
-  EXPECT_EQ(2 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(2 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(2 * kMB, parent->getCumulativeBytes());
+
   child1->update(100 * kMB);
   // Larger sizes round up to next 8MB.
-  EXPECT_EQ(104 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(104 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(104 * kMB, parent->getCumulativeBytes());
   child1->update(-kMB);
   // 1MB less does not decrease the reservation.
-  EXPECT_EQ(104 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(104 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(104 * kMB, parent->getCumulativeBytes());
 
   child1->update(-7 * kMB);
-  EXPECT_EQ(96 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(96 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(104 * kMB, parent->getCumulativeBytes());
   child1->update(-92 * kMB);
-  EXPECT_EQ(2 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(2 * kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(104 * kMB, parent->getCumulativeBytes());
   child1->update(-kMB);
-  EXPECT_EQ(kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(kMB, parent->getCurrentTotalBytes());
+  ASSERT_EQ(104 * kMB, parent->getCumulativeBytes());
 
   child1->update(-2000);
-  EXPECT_EQ(0, parent->getCurrentTotalBytes());
+  ASSERT_EQ(0, parent->getCurrentTotalBytes());
+  ASSERT_EQ(104 * kMB, parent->getCumulativeBytes());
 }
 
 TEST(MemoryUsageTrackerTest, reserve) {
@@ -106,6 +117,83 @@ TEST(MemoryUsageTrackerTest, reserve) {
   EXPECT_EQ(104 * kMB, child->getAvailableReservation());
   child->release();
   EXPECT_EQ(0, parent->getCurrentTotalBytes());
+}
+
+TEST(MemoryUsageTrackerTest, reserveAndUpdate) {
+  constexpr int64_t kMaxSize = 1 << 30; // 1GB
+  constexpr int64_t kMB = 1 << 20;
+  auto config = MemoryUsageConfigBuilder().maxUserMemory(kMaxSize).build();
+  auto parent = MemoryUsageTracker::create(config);
+
+  auto child1 = parent->addChild();
+
+  child1->update(1000);
+  EXPECT_EQ(kMB, parent->getCurrentTotalBytes());
+  EXPECT_EQ(kMB - 1000, child1->getAvailableReservation());
+  child1->update(1000);
+  EXPECT_EQ(kMB, parent->getCurrentTotalBytes());
+
+  child1->reserve(kMB);
+  EXPECT_EQ(2 * kMB, parent->getCurrentTotalBytes());
+  child1->update(kMB);
+
+  // release has no effect  since usage within quantum of reservation.
+  child1->release();
+  EXPECT_EQ(2 * kMB, parent->getCurrentTotalBytes());
+  EXPECT_EQ(2000 + kMB, child1->getCurrentTotalBytes());
+  EXPECT_EQ(kMB - 2000, child1->getAvailableReservation());
+
+  // We reserve 20MB, consume 9MB and release the unconsumed.
+  child1->reserve(20 * kMB);
+  // 22 rounded up to 24.
+  EXPECT_EQ(24 * kMB, parent->getCurrentTotalBytes());
+  child1->update(7 * kMB);
+  EXPECT_EQ(16 * kMB - 2000, child1->getAvailableReservation());
+  child1->release();
+  EXPECT_EQ(kMB - 2000, child1->getAvailableReservation());
+  EXPECT_EQ(9 * kMB, parent->getCurrentTotalBytes());
+
+  // We reserve another 20 MB, consume 25 and release nothing because
+  // reservation is already taken.
+  child1->reserve(20 * kMB);
+  child1->update(25 * kMB);
+  EXPECT_EQ(36 * kMB, parent->getCurrentTotalBytes());
+  EXPECT_EQ(3 * kMB - 2000, child1->getAvailableReservation());
+  child1->release();
+
+  // Nothing changed by release since already over the explicit reservation.
+  EXPECT_EQ(36 * kMB, parent->getCurrentTotalBytes());
+  EXPECT_EQ(3 * kMB - 2000, child1->getAvailableReservation());
+
+  // We reserve 20MB and free 5MB and release. Expect 25MB drop.
+  child1->reserve(20 * kMB);
+  child1->update(-5 * kMB);
+  EXPECT_EQ(28 * kMB - 2000, child1->getAvailableReservation());
+  EXPECT_EQ(56 * kMB, parent->getCurrentTotalBytes());
+
+  // Reservation drops by 25, rounded to  quantized size of 32.
+  child1->release();
+
+  EXPECT_EQ(32 * kMB, parent->getCurrentTotalBytes());
+  EXPECT_EQ(4 * kMB - 2000, child1->getAvailableReservation());
+
+  // We reserve 20MB, allocate 25 and free 15
+  child1->reserve(20 * kMB);
+  child1->update(25 * kMB);
+  EXPECT_EQ(56 * kMB, parent->getCurrentTotalBytes());
+  EXPECT_EQ(3 * kMB - 2000, child1->getAvailableReservation());
+  child1->update(-15 * kMB);
+
+  // There is 14MB - 2000  of available reservation because the reservation does
+  // not drop below the bar set in reserve(). The used size reflected in the
+  // parent drops a little to match the level given in reserver().
+  EXPECT_EQ(52 * kMB, parent->getCurrentTotalBytes());
+  EXPECT_EQ(14 * kMB - 2000, child1->getAvailableReservation());
+
+  // The unused reservation is freed.
+  child1->release();
+  EXPECT_EQ(40 * kMB, parent->getCurrentTotalBytes());
+  EXPECT_EQ(2 * kMB - 2000, child1->getAvailableReservation());
 }
 
 namespace {
@@ -196,10 +284,34 @@ TEST(MemoryUsageTrackerTest, maybeReserve) {
   child->updateConfig(childConfig);
   // 1MB can be reserved, rounds up to 8 and leaves 2 unreserved in parent.
   EXPECT_TRUE(child->maybeReserve(kMB));
+  EXPECT_EQ(0, child->getCurrentUserBytes());
   EXPECT_EQ(8 * kMB, child->getAvailableReservation());
   EXPECT_EQ(8 * kMB, parent->getCurrentUserBytes());
   // Fails to reserve 100MB, existing reservations are unchanged.
   EXPECT_FALSE(child->maybeReserve(100 * kMB));
+  EXPECT_EQ(0, child->getCurrentTotalBytes());
+  // Use some memory from child and expect there is no memory usage change in
+  // parent.
+  constexpr int64_t kB = 1 << 10;
+  constexpr int64_t childMemUsageBytes = 10 * kB;
+  child->update(childMemUsageBytes);
+  EXPECT_EQ(8 * kMB - childMemUsageBytes, child->getAvailableReservation());
+  EXPECT_EQ(8 * kMB, parent->getCurrentUserBytes());
+  // Free up the memory usage and expect the reserved memory is still available,
+  // and there is no memory usage change in parent.
+  child->update(-childMemUsageBytes);
   EXPECT_EQ(8 * kMB, child->getAvailableReservation());
+  EXPECT_EQ(8 * kMB, parent->getCurrentUserBytes());
+  // Release the child reserved memory.
+  child->release();
+  EXPECT_EQ(0, parent->getCurrentUserBytes());
+
+  child = parent->addChild();
+  EXPECT_TRUE(child->maybeReserve(kMB));
+  EXPECT_EQ(0, child->getCurrentUserBytes());
+  EXPECT_EQ(8 * kMB, child->getAvailableReservation());
+  EXPECT_EQ(8 * kMB, parent->getCurrentUserBytes());
+  child.reset();
+  // The child destruction won't release the reserved memory back to the parent.
   EXPECT_EQ(8 * kMB, parent->getCurrentUserBytes());
 }

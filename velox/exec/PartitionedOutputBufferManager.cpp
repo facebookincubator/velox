@@ -120,8 +120,6 @@ DestinationBuffer::deleteResults() {
     freed.push_back(std::move(data_[i]));
   }
   data_.clear();
-  // Notify any consumers that are still waiting.
-  getAndClearNotify().notify();
   return freed;
 }
 
@@ -170,6 +168,7 @@ void PartitionedOutputBuffer::updateBroadcastOutputBuffers(
   VELOX_CHECK(broadcast_);
 
   std::vector<ContinuePromise> promises;
+  bool isFinished;
   {
     std::lock_guard<std::mutex> l(mutex_);
 
@@ -182,10 +181,14 @@ void PartitionedOutputBuffer::updateBroadcastOutputBuffers(
     }
 
     noMoreBroadcastBuffers_ = true;
+    isFinished = isFinishedLocked();
     updateAfterAcknowledgeLocked(dataToBroadcast_, promises);
   }
 
   releaseAfterAcknowledge(dataToBroadcast_, promises);
+  if (isFinished) {
+    task_->setAllOutputConsumed();
+  }
 }
 
 void PartitionedOutputBuffer::updateNumDrivers(uint32_t newNumDrivers) {
@@ -222,30 +225,37 @@ BlockingReason PartitionedOutputBuffer::enqueue(
     int destination,
     std::unique_ptr<SerializedPage> data,
     ContinueFuture* future) {
-  VELOX_CHECK(data);
+  VELOX_CHECK_NOT_NULL(data);
+  VELOX_CHECK(
+      task_->isRunning(), "Task is terminated, cannot add data to output.");
   std::vector<DataAvailable> dataAvailableCallbacks;
   bool blocked = false;
   {
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK_LT(destination, buffers_.size());
-    VELOX_CHECK(
-        task_->isRunning(), "Task is terminated, cannot add data to output.");
 
     totalSize_ += data->size();
     if (broadcast_) {
       std::shared_ptr<SerializedPage> sharedData(data.release());
       for (auto& buffer : buffers_) {
-        buffer->enqueue(sharedData);
-        dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
+        if (buffer) {
+          buffer->enqueue(sharedData);
+          dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
+        }
       }
 
       if (!noMoreBroadcastBuffers_) {
         dataToBroadcast_.emplace_back(sharedData);
       }
     } else {
-      auto buffer = buffers_[destination].get();
-      buffer->enqueue(std::move(data));
-      dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
+      if (auto buffer = buffers_[destination].get()) {
+        buffer->enqueue(std::move(data));
+        dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
+      } else {
+        // Some downstream tasks may finish early and delete the
+        // corresponding buffers. Further data for these buffers is dropped.
+        totalSize_ -= data->size();
+      }
     }
 
     if (totalSize_ > maxSize_ && future) {
@@ -364,20 +374,26 @@ bool PartitionedOutputBuffer::deleteResults(int destination) {
   std::vector<std::shared_ptr<SerializedPage>> freed;
   std::vector<ContinuePromise> promises;
   bool isFinished;
+  DataAvailable dataAvailable;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(destination < buffers_.size());
+    VELOX_CHECK_LT(destination, buffers_.size());
     auto* buffer = buffers_[destination].get();
     if (!buffer) {
       VLOG(1) << "Extra delete  received  for destination " << destination;
       return false;
     }
     freed = buffer->deleteResults();
+    dataAvailable = buffer->getAndClearNotify();
     buffers_[destination] = nullptr;
     ++numFinalAcknowledges_;
     isFinished = isFinishedLocked();
     updateAfterAcknowledgeLocked(freed, promises);
   }
+
+  // Outside of mutex.
+  dataAvailable.notify();
+
   if (!promises.empty()) {
     VLOG(1) << "Delete of results unblocks producers. Can happen in early end "
             << "due to error or limit";
@@ -422,10 +438,11 @@ void PartitionedOutputBuffer::getData(
 }
 
 void PartitionedOutputBuffer::terminate() {
+  VELOX_CHECK(not task_->isRunning());
+
   std::vector<ContinuePromise> outstandingPromises;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(not task_->isRunning());
     outstandingPromises.swap(promises_);
   }
   for (auto& promise : outstandingPromises) {
@@ -515,8 +532,8 @@ void PartitionedOutputBufferManager::deleteResults(
         }
         return it->second;
       });
-  if (buffer && buffer->deleteResults(destination)) {
-    buffers_.withLock([&](auto& buffers) { buffers.erase(taskId); });
+  if (buffer) {
+    buffer->deleteResults(destination);
   }
 }
 

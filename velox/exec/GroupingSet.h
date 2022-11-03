@@ -38,7 +38,11 @@ class GroupingSet {
       bool ignoreNullKeys,
       bool isPartial,
       bool isRawInput,
-      OperatorCtx* FOLLY_NONNULL operatorCtx);
+      const Spiller::Config* FOLLY_NULLABLE spillConfig,
+      OperatorCtx* FOLLY_NONNULL operatorCtx,
+      OperatorStats& stats);
+
+  ~GroupingSet();
 
   void addInput(const RowVectorPtr& input, bool mayPushdown);
 
@@ -74,10 +78,9 @@ class GroupingSet {
   /// of this will be in a paused state and off thread.
   void spill(int64_t targetRows, int64_t targetBytes);
 
-  /// Returns the total bytes and rows spilled so far.
-  std::pair<int64_t, int64_t> spilledBytesAndRows() const {
-    return spiller_ ? spiller_->spilledBytesAndRows()
-                    : std::pair<int64_t, int64_t>(0, 0);
+  /// Returns the spiller stats including total bytes and rows spilled so far.
+  Spiller::Stats spilledStats() const {
+    return spiller_ != nullptr ? spiller_->stats() : Spiller::Stats{};
   }
 
   /// Return the number of rows kept in memory.
@@ -91,6 +94,8 @@ class GroupingSet {
   void addRemainingInput();
 
   void initializeGlobalAggregation();
+
+  void destroyGlobalAggregations();
 
   void addGlobalAggregationInput(const RowVectorPtr& input, bool mayPushdown);
 
@@ -140,11 +145,11 @@ class GroupingSet {
   // accumulated and we have a new key, we produce the output and
   // clear 'mergeRows_' with extractSpillResult() and only then do
   // initializeRow().
-  void initializeRow(SpillStream& keys, char* FOLLY_NONNULL row);
+  void initializeRow(SpillMergeStream& keys, char* FOLLY_NONNULL row);
 
   // Updates the accumulators in 'row' with the intermediate type data from
   // 'keys'. This is called for each row received from a merge of spilled data.
-  void updateRow(SpillStream& keys, char* FOLLY_NONNULL row);
+  void updateRow(SpillMergeStream& keys, char* FOLLY_NONNULL row);
 
   // Copies the finalized state from 'mergeRows' to 'result' and clears
   // 'mergeRows'. Used for producing a batch of results when aggregating spilled
@@ -173,7 +178,14 @@ class GroupingSet {
   const std::vector<TypePtr> intermediateTypes_;
 
   const bool ignoreNullKeys_;
+
   memory::MappedMemory* FOLLY_NONNULL const mappedMemory_;
+
+  // The maximum memory usage that a final aggregation can hold before spilling.
+  // If it is zero, then there is no such limit.
+  const uint64_t spillMemoryThreshold_;
+
+  const Spiller::Config* FOLLY_NULLABLE const spillConfig_; // Not owned.
 
   // Boolean indicating whether accumulators for a global aggregation (i.e.
   // aggregation with no grouping keys) have been initialized.
@@ -193,8 +205,6 @@ class GroupingSet {
   AllocationPool rows_;
   const bool isAdaptive_;
 
-  core::ExecCtx& execCtx_;
-
   bool noMoreInput_{false};
 
   /// In case of partial streaming aggregation, the input vector passed to
@@ -211,12 +221,8 @@ class GroupingSet {
 
   uint64_t maxBatchBytes_;
 
-  // Filesystem path for spill files, empty if spilling is disabled.
-  const std::optional<std::string> spillPath_;
-
   std::unique_ptr<Spiller> spiller_;
-  std::unique_ptr<TreeOfLosers<SpillStream>> merge_;
-  RowContainerIterator spillIterator_;
+  std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge_;
 
   // Container for materializing batches of output from spilling.
   std::unique_ptr<RowContainer> mergeRows_;
@@ -247,16 +253,11 @@ class GroupingSet {
   // Pool of the OperatorCtx. Used for spilling.
   memory::MemoryPool& pool_;
 
-  // Executor for spilling. If nullptr spilling writes on the Driver's thread.
-  folly::Executor* FOLLY_NULLABLE const spillExecutor_;
+  OperatorStats& stats_;
 
   // The RowContainer of 'table_' is moved here before freeing
   // 'table_' when starting to read spill output.
   std::unique_ptr<RowContainer> rowsWhileReadingSpill_;
-
-  // Percentage of input batches to be spilled for testing. 0 means no spilling
-  // for test.
-  const int32_t testSpillPct_;
 
   // Counts input batches and triggers spilling if folly hash of this % 100 <=
   // 'testSpillPct_';.

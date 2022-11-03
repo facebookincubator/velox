@@ -15,9 +15,69 @@
  */
 #include "velox/expression/SwitchExpr.h"
 #include "velox/expression/BooleanMix.h"
-#include "velox/expression/VarSetter.h"
+#include "velox/expression/ConstantExpr.h"
+#include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::velox::exec {
+
+namespace {
+bool hasElseClause(const std::vector<ExprPtr>& inputs) {
+  return inputs.size() % 2 == 1;
+}
+} // namespace
+
+SwitchExpr::SwitchExpr(
+    TypePtr type,
+    const std::vector<ExprPtr>& inputs,
+    bool inputsSupportFlatNoNullsFastPath)
+    : SpecialForm(
+          std::move(type),
+          inputs,
+          "switch",
+          hasElseClause(inputs) && inputsSupportFlatNoNullsFastPath,
+          false /* trackCpuUsage */),
+      numCases_{inputs_.size() / 2},
+      hasElseClause_{hasElseClause(inputs_)} {
+  VELOX_CHECK_GT(numCases_, 0);
+
+  // Make sure all 'condition' expressions hae type BOOLEAN and all 'then' and
+  // an optional 'else' clause have the same type.
+
+  // Find first 'then' type that's not an UNKNOWN type.
+  TypePtr thenType;
+
+  for (auto i = 0; i < numCases_; i++) {
+    auto& condition = inputs_[i * 2];
+    VELOX_CHECK_EQ(condition->type()->kind(), TypeKind::BOOLEAN);
+    auto& thenClause = inputs_[i * 2 + 1];
+    if (thenClause->type()->containsUnknown()) {
+      // Allow null expressions.
+    } else if (!thenType) {
+      thenType = thenClause->type();
+    } else {
+      VELOX_CHECK(
+          thenType->equivalent(*thenClause->type()),
+          "All then clauses of a SWITCH statement must have the same type. "
+          "Expected {}, but got {}.",
+          thenType->toString(),
+          thenClause->type()->toString());
+    }
+  }
+
+  if (hasElseClause_ && thenType) {
+    auto& elseClause = inputs_.back();
+    if (elseClause->type()->containsUnknown()) {
+      // Allow null expressions.
+    } else {
+      VELOX_CHECK(
+          thenType->equivalent(*elseClause->type()),
+          "Else clause of a SWITCH statement must have the same type as 'then' clauses. "
+          "Expected {}, but got {}.",
+          thenType->toString(),
+          elseClause->type()->toString());
+    }
+  }
+}
 
 void SwitchExpr::evalSpecialForm(
     const SelectivityVector& rows,
@@ -31,19 +91,16 @@ void SwitchExpr::evalSpecialForm(
   const uint64_t* values;
 
   // SWITCH: fix finalSelection at "rows" unless already fixed
-  VarSetter finalSelection(
-      context.mutableFinalSelection(), &rows, context.isFinalSelection());
-  VarSetter isFinalSelection(context.mutableIsFinalSelection(), false);
+  ScopedFinalSelectionSetter scopedFinalSelectionSetter(context, &rows);
 
   for (auto i = 0; i < numCases_; i++) {
     if (!remainingRows.get()->hasSelections()) {
       break;
     }
-
     // evaluate the case condition
     inputs_[2 * i]->eval(*remainingRows.get(), context, condition);
 
-    auto booleanMix = getFlatBool(
+    const auto booleanMix = getFlatBool(
         condition.get(),
         *remainingRows.get(),
         context,
@@ -52,6 +109,7 @@ void SwitchExpr::evalSpecialForm(
         true,
         &values,
         nullptr);
+    context.releaseVector(condition);
     switch (booleanMix) {
       case BooleanMix::kAllTrue:
         inputs_[2 * i + 1]->eval(*remainingRows.get(), context, result);
@@ -69,11 +127,6 @@ void SwitchExpr::evalSpecialForm(
         thenRows.get()->updateBounds();
 
         if (thenRows.get()->hasSelections()) {
-          if (result) {
-            BaseVector::ensureWritable(
-                *thenRows.get(), result->type(), context.pool(), &result);
-          }
-
           inputs_[2 * i + 1]->eval(*thenRows.get(), context, result);
           remainingRows.get()->deselect(*thenRows.get());
         }
@@ -83,15 +136,11 @@ void SwitchExpr::evalSpecialForm(
 
   // Evaluate the "else" clause.
   if (remainingRows.get()->hasSelections()) {
-    if (result) {
-      BaseVector::ensureWritable(
-          *remainingRows.get(), result->type(), context.pool(), &result);
-    }
-
     if (hasElseClause_) {
       inputs_.back()->eval(*remainingRows.get(), context, result);
-
     } else {
+      context.ensureWritable(*remainingRows.get(), type(), result);
+
       // fill in nulls for remainingRows
       remainingRows.get()->applyToSelected(
           [&](auto row) { result->setNull(row, true); });

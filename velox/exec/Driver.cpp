@@ -36,14 +36,15 @@ DriverCtx::DriverCtx(
       splitGroupId(_splitGroupId),
       partitionId(_partitionId),
       task(_task),
-      pool(task->addDriverPool()) {}
+      pool(task->addDriverPool(pipelineId, driverId)) {}
 
 const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->config();
 }
 
-velox::memory::MemoryPool* FOLLY_NONNULL DriverCtx::addOperatorPool() {
-  return task->addOperatorPool(pool);
+velox::memory::MemoryPool* FOLLY_NONNULL
+DriverCtx::addOperatorPool(const std::string& operatorType) {
+  return task->addOperatorPool(pool, operatorType);
 }
 
 std::atomic_uint64_t BlockingState::numBlockedDrivers_{0};
@@ -73,25 +74,21 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
   std::move(state->future_)
       .via(&exec)
       .thenValue([state](auto&& /* unused */) {
-        state->operator_->recordBlockingTime(state->sinceMicros_);
         auto driver = state->driver_;
         auto task = driver->task();
-        if (!task) {
-          //'driver' is already removed from its task. No Just drop remaining
-          // references.
+
+        std::lock_guard<std::mutex> l(task->mutex());
+        if (!driver->state().isTerminated) {
+          state->operator_->recordBlockingTime(state->sinceMicros_);
+        }
+        VELOX_CHECK(!driver->state().isSuspended);
+        VELOX_CHECK(driver->state().hasBlockingFuture);
+        driver->state().hasBlockingFuture = false;
+        if (task->pauseRequested()) {
+          // The thread will be enqueued at resume.
           return;
         }
-        {
-          std::lock_guard<std::mutex> l(task->mutex());
-          VELOX_CHECK(!driver->state().isSuspended);
-          VELOX_CHECK(driver->state().hasBlockingFuture);
-          driver->state().hasBlockingFuture = false;
-          if (task->pauseRequested()) {
-            // The thread will be enqueued at resume.
-            return;
-          }
-          Driver::enqueue(state->driver_);
-        }
+        Driver::enqueue(state->driver_);
       })
       .thenError(
           folly::tag_t<std::exception>{}, [state](std::exception const& e) {
@@ -163,6 +160,7 @@ Driver::Driver(
   curOpIndex_ = operators_.size() - 1;
   // Operators need access to their Driver for adaptation.
   ctx_->driver = this;
+  trackOperatorCpuUsage_ = ctx_->queryConfig().operatorTrackCpuUsage();
 }
 
 namespace {
@@ -350,9 +348,13 @@ StopReason Driver::runInternal(
             uint64_t resultBytes = 0;
             RowVectorPtr result;
             {
-              CpuWallTimer timer(op->stats().getOutputTiming);
+              auto timer = cpuWallTimer(op->stats().getOutputTiming);
               result = op->getOutput();
               if (result) {
+                VELOX_CHECK(
+                    result->size() > 0,
+                    "Operator::getOutput() must return nullptr or a non-empty vector: {}",
+                    op->stats().operatorType);
                 op->stats().outputVectors += 1;
                 op->stats().outputPositions += result->size();
                 resultBytes = result->estimateFlatSize();
@@ -361,7 +363,7 @@ StopReason Driver::runInternal(
             }
             pushdownFilters(i);
             if (result) {
-              CpuWallTimer timer(nextOp->stats().addInputTiming);
+              auto timer = cpuWallTimer(op->stats().addInputTiming);
               nextOp->stats().inputVectors += 1;
               nextOp->stats().inputPositions += result->size();
               nextOp->stats().inputBytes += resultBytes;
@@ -390,7 +392,7 @@ StopReason Driver::runInternal(
                 return StopReason::kBlock;
               }
               if (op->isFinished()) {
-                CpuWallTimer timer(nextOp->stats().finishTiming);
+                auto timer = cpuWallTimer(op->stats().finishTiming);
                 nextOp->noMoreInput();
                 break;
               }
@@ -402,9 +404,14 @@ StopReason Driver::runInternal(
           // this will be detected when trying to add input, and we
           // will come back here after this is again on thread.
           {
-            CpuWallTimer timer(op->stats().getOutputTiming);
+            auto timer = cpuWallTimer(op->stats().getOutputTiming);
             result = op->getOutput();
             if (result) {
+              VELOX_CHECK(
+                  result->size() > 0,
+                  "Operator::getOutput() must return nullptr or a non-empty vector: {}",
+                  op->stats().operatorType);
+
               // This code path is used only in single-threaded execution.
               blockingReason_ = BlockingReason::kWaitForConsumer;
               guard.notThrown();
@@ -440,7 +447,10 @@ void Driver::run(std::shared_ptr<Driver> self) {
 
   // When Driver runs on an executor, the last operator (sink) must not produce
   // any results.
-  VELOX_CHECK_NULL(nullResult);
+  VELOX_CHECK_NULL(
+      nullResult,
+      "The last operator (sink) must not produce any results. "
+      "Results need to be consumed by either a callback or another operator. ")
 
   switch (reason) {
     case StopReason::kBlock:
@@ -587,6 +597,15 @@ Driver::findOperator(std::string_view planNodeId) const {
   return nullptr;
 }
 
+std::vector<Operator*> Driver::operators() const {
+  std::vector<Operator*> operators;
+  operators.reserve(operators_.size());
+  for (auto& op : operators_) {
+    operators.push_back(op.get());
+  }
+  return operators;
+}
+
 void Driver::setError(std::exception_ptr exception) {
   task()->setError(exception);
 }
@@ -634,10 +653,14 @@ std::string blockingReasonToString(BlockingReason reason) {
       return "kWaitForExchange";
     case BlockingReason::kWaitForJoinBuild:
       return "kWaitForJoinBuild";
+    case BlockingReason::kWaitForJoinProbe:
+      return "kWaitForJoinProbe";
     case BlockingReason::kWaitForMemory:
       return "kWaitForMemory";
     case BlockingReason::kWaitForConnector:
       return "kWaitForConnector";
+    case BlockingReason::kWaitForSpill:
+      return "kWaitForSpill";
   }
   VELOX_UNREACHABLE();
   return "";

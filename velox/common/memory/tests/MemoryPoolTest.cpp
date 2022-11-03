@@ -17,16 +17,49 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MmapAllocator.h"
 
 using namespace ::testing;
 
-constexpr int64_t MB = 1024L * 1024L;
+constexpr int64_t KB = 1024L;
+constexpr int64_t MB = 1024L * KB;
 constexpr int64_t GB = 1024L * MB;
 
 namespace facebook {
 namespace velox {
 namespace memory {
+
+class MemoryPoolTest : public testing::TestWithParam<bool> {
+ protected:
+  void SetUp() override {
+    useMmap_ = GetParam();
+    // For duration of the test, make a local MmapAllocator that will not be
+    // seen by any other test.
+    if (useMmap_) {
+      MmapAllocatorOptions opts{8UL << 30};
+      mmapAllocator_ = std::make_unique<MmapAllocator>(opts);
+      MappedMemory::setDefaultInstance(mmapAllocator_.get());
+    } else {
+      MappedMemory::setDefaultInstance(nullptr);
+    }
+  }
+
+  void TearDown() override {
+    MmapAllocator::setDefaultInstance(nullptr);
+  }
+
+  std::shared_ptr<IMemoryManager> getMemoryManager(int64_t quota) {
+    if (useMmap_) {
+      return std::make_shared<MemoryManager<MmapMemoryAllocator>>(quota);
+    }
+    return std::make_shared<MemoryManager<MemoryAllocator>>(quota);
+  }
+
+  bool useMmap_;
+  std::unique_ptr<MmapAllocator> mmapAllocator_;
+};
 
 TEST(MemoryPoolTest, Ctor) {
   MemoryManager<MemoryAllocator, 64> manager{8 * GB};
@@ -98,7 +131,7 @@ TEST(MemoryPoolTest, AddChild) {
   EXPECT_TRUE(childThree.isMemoryCapped());
 }
 
-TEST(MemoryPoolTest, DropChild) {
+TEST_P(MemoryPoolTest, DropChild) {
   MemoryManager<MemoryAllocator> manager{};
   auto& root = manager.getRoot();
 
@@ -118,7 +151,7 @@ TEST(MemoryPoolTest, DropChild) {
   EXPECT_EQ(1, root.getChildCount());
 }
 
-TEST(MemoryPoolTest, RemoveSelf) {
+TEST_P(MemoryPoolTest, RemoveSelf) {
   MemoryManager<MemoryAllocator> manager{};
   auto& root = manager.getRoot();
   ASSERT_EQ(0, root.getChildCount());
@@ -250,10 +283,89 @@ TEST(MemoryPoolTest, ReserveTest) {
   EXPECT_EQ(child.getCurrentBytes(), 0);
 }
 
-// Mainly tests how it updates the memory usage in MemoryPool.
-TEST(MemoryPoolTest, AllocTest) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
+MachinePageCount numPagesNeeded(
+    const MappedMemory* mappedMemory,
+    MachinePageCount numPages) {
+  auto& sizeClasses = mappedMemory->sizeClasses();
+  if (numPages > sizeClasses.back()) {
+    return numPages;
+  }
+  for (auto& sizeClass : sizeClasses) {
+    if (sizeClass >= numPages) {
+      return sizeClass;
+    }
+  }
+  VELOX_UNREACHABLE();
+}
+
+void testMmapMemoryAllocation(
+    const MmapAllocator* mmapAllocator,
+    MachinePageCount allocPages,
+    size_t allocCount) {
+  MemoryManager<MmapMemoryAllocator> manager(8 * GB);
+  const auto kPageSize = 4 * KB;
+
   auto& root = manager.getRoot();
+  auto& child = root.addChild("elastic_quota");
+
+  std::vector<void*> allocations;
+  uint64_t totalPageAllocated = 0;
+  uint64_t totalPageMapped = 0;
+  const auto pageIncrement = numPagesNeeded(mmapAllocator, allocPages);
+  const auto isSizeClassAlloc =
+      allocPages <= mmapAllocator->sizeClasses().back();
+  const auto byteSize = allocPages * kPageSize;
+  const std::string buffer(byteSize, 'x');
+  for (size_t i = 0; i < allocCount; i++) {
+    void* allocResult = nullptr;
+    EXPECT_NO_THROW(allocResult = child.allocate(byteSize));
+    EXPECT_TRUE(allocResult != nullptr);
+
+    // Write data to let mapped address to be backed by physical memory
+    memcpy(allocResult, buffer.data(), byteSize);
+    allocations.emplace_back(allocResult);
+    totalPageAllocated += pageIncrement;
+    totalPageMapped += pageIncrement;
+    EXPECT_EQ(mmapAllocator->numAllocated(), totalPageAllocated);
+    EXPECT_EQ(
+        isSizeClassAlloc ? mmapAllocator->numMapped()
+                         : mmapAllocator->numExternalMapped(),
+        totalPageMapped);
+  }
+  for (size_t i = 0; i < allocCount; i++) {
+    EXPECT_NO_THROW(child.free(allocations[i], byteSize));
+    totalPageAllocated -= pageIncrement;
+    EXPECT_EQ(mmapAllocator->numAllocated(), totalPageAllocated);
+    if (isSizeClassAlloc) {
+      EXPECT_EQ(mmapAllocator->numMapped(), totalPageMapped);
+    } else {
+      totalPageMapped -= pageIncrement;
+      EXPECT_EQ(mmapAllocator->numExternalMapped(), totalPageMapped);
+    }
+  }
+}
+
+TEST(MemoryPoolTest, SmallMmapMemoryAllocation) {
+  MmapAllocatorOptions options;
+  options.capacity = 8 * GB;
+  auto mmapAllocator = std::make_unique<memory::MmapAllocator>(options);
+  MappedMemory::setDefaultInstance(mmapAllocator.get());
+  testMmapMemoryAllocation(mmapAllocator.get(), 6, 100);
+}
+
+TEST(MemoryPoolTest, BigMmapMemoryAllocation) {
+  MmapAllocatorOptions options;
+  options.capacity = 8 * GB;
+  auto mmapAllocator = std::make_unique<memory::MmapAllocator>(options);
+  MappedMemory::setDefaultInstance(mmapAllocator.get());
+  testMmapMemoryAllocation(
+      mmapAllocator.get(), mmapAllocator->sizeClasses().back() + 56, 20);
+}
+
+// Mainly tests how it updates the memory usage in MemoryPool.
+TEST_P(MemoryPoolTest, AllocTest) {
+  auto manager = getMemoryManager(8 * GB);
+  auto& root = manager->getRoot();
 
   auto& child = root.addChild("elastic_quota");
 
@@ -276,9 +388,9 @@ TEST(MemoryPoolTest, AllocTest) {
   EXPECT_EQ(4 * kChunkSize, child.getMaxBytes());
 }
 
-TEST(MemoryPoolTest, ReallocTestSameSize) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
-  auto& root = manager.getRoot();
+TEST_P(MemoryPoolTest, ReallocTestSameSize) {
+  auto manager = getMemoryManager(8 * GB);
+  auto& root = manager->getRoot();
 
   auto& pool = root.addChild("elastic_quota");
 
@@ -299,9 +411,9 @@ TEST(MemoryPoolTest, ReallocTestSameSize) {
   EXPECT_EQ(kChunkSize, pool.getMaxBytes());
 }
 
-TEST(MemoryPoolTest, ReallocTestHigher) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
-  auto& root = manager.getRoot();
+TEST_P(MemoryPoolTest, ReallocTestHigher) {
+  auto manager = getMemoryManager(8 * GB);
+  auto& root = manager->getRoot();
 
   auto& pool = root.addChild("elastic_quota");
 
@@ -320,9 +432,9 @@ TEST(MemoryPoolTest, ReallocTestHigher) {
   EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
 }
 
-TEST(MemoryPoolTest, ReallocTestLower) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
-  auto& root = manager.getRoot();
+TEST_P(MemoryPoolTest, ReallocTestLower) {
+  auto manager = getMemoryManager(8 * GB);
+  auto& root = manager->getRoot();
   auto& pool = root.addChild("elastic_quota");
 
   const int64_t kChunkSize{32L * MB};
@@ -340,9 +452,9 @@ TEST(MemoryPoolTest, ReallocTestLower) {
   EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
 }
 
-TEST(MemoryPoolTest, CapAllocation) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
-  auto& root = manager.getRoot();
+TEST_P(MemoryPoolTest, CapAllocation) {
+  auto manager = getMemoryManager(8 * GB);
+  auto& root = manager->getRoot();
 
   auto& pool = root.addChild("static_quota", 64L * MB);
 
@@ -388,7 +500,9 @@ TEST(MemoryPoolTest, MemoryCapExceptions) {
       EXPECT_EQ(error_source::kErrorSourceRuntime.c_str(), ex.errorSource());
       EXPECT_EQ(error_code::kMemCapExceeded.c_str(), ex.errorCode());
       EXPECT_TRUE(ex.isRetriable());
-      EXPECT_EQ("Exceeded memory cap of 63 MB", ex.message());
+      EXPECT_EQ(
+          "Exceeded memory cap of 63.00MB when requesting 64.00MB",
+          ex.message());
     }
     ASSERT_FALSE(pool.isMemoryCapped());
   }
@@ -582,6 +696,101 @@ TEST(MemoryPoolTest, scopedChildUsageTest) {
   }
 }
 
+TEST(MemoryPoolTest, setMemoryUsageTrackerTest) {
+  MemoryManager<MemoryAllocator> manager{};
+  auto& root = manager.getRoot();
+  const int64_t kChunkSize{32L * MB};
+  {
+    auto& pool = root.addChild("empty_pool");
+    auto tracker = SimpleMemoryTracker::create();
+    pool.setMemoryUsageTracker(tracker);
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    void* chunk = pool.allocate(kChunkSize);
+    ASSERT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(kChunkSize, tracker->getCurrentUserBytes());
+    chunk = pool.reallocate(chunk, kChunkSize, 2 * kChunkSize);
+    ASSERT_EQ(2 * kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(2 * kChunkSize, tracker->getCurrentUserBytes());
+    pool.free(chunk, 2 * kChunkSize);
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+  }
+  {
+    auto& pool = root.addChild("nonempty_pool");
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    auto tracker = SimpleMemoryTracker::create();
+    void* chunk = pool.allocate(kChunkSize);
+    ASSERT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    pool.setMemoryUsageTracker(tracker);
+    EXPECT_EQ(kChunkSize, tracker->getCurrentUserBytes());
+    chunk = pool.reallocate(chunk, kChunkSize, 2 * kChunkSize);
+    ASSERT_EQ(2 * kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(2 * kChunkSize, tracker->getCurrentUserBytes());
+    pool.free(chunk, 2 * kChunkSize);
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+  }
+  {
+    auto& pool = root.addChild("switcheroo_pool");
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    auto tracker = SimpleMemoryTracker::create();
+    void* chunk = pool.allocate(kChunkSize);
+    ASSERT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    pool.setMemoryUsageTracker(tracker);
+    EXPECT_EQ(kChunkSize, tracker->getCurrentUserBytes());
+    pool.setMemoryUsageTracker(tracker);
+    EXPECT_EQ(kChunkSize, tracker->getCurrentUserBytes());
+    auto newTracker = SimpleMemoryTracker::create();
+    pool.setMemoryUsageTracker(newTracker);
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    EXPECT_EQ(kChunkSize, newTracker->getCurrentUserBytes());
+
+    chunk = pool.reallocate(chunk, kChunkSize, 2 * kChunkSize);
+    ASSERT_EQ(2 * kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    EXPECT_EQ(2 * kChunkSize, newTracker->getCurrentUserBytes());
+    pool.free(chunk, 2 * kChunkSize);
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    EXPECT_EQ(0, newTracker->getCurrentUserBytes());
+  }
+}
+
+TEST(MemoryPoolTest, mockUpdatesTest) {
+  MemoryManager<MemoryAllocator> manager{};
+  auto& root = manager.getRoot();
+  const int64_t kChunkSize{32L * MB};
+  {
+    auto& defaultTrackerPool = root.addChild("default_tracker_pool");
+    auto defaultTracker = MemoryUsageTracker::create();
+    defaultTrackerPool.setMemoryUsageTracker(defaultTracker);
+    EXPECT_EQ(0, defaultTracker->getCurrentUserBytes());
+    void* twoChunks = defaultTrackerPool.allocate(2 * kChunkSize);
+    EXPECT_EQ(2 * kChunkSize, defaultTracker->getCurrentUserBytes());
+    twoChunks =
+        defaultTrackerPool.reallocate(twoChunks, 2 * kChunkSize, kChunkSize);
+    EXPECT_EQ(kChunkSize, defaultTracker->getCurrentUserBytes());
+    // We didn't do any real reallocation.
+    defaultTrackerPool.free(twoChunks, 2 * kChunkSize);
+  }
+  {
+    auto& simpleTrackerPool = root.addChild("simple_tracker_pool");
+    auto simpleTracker = SimpleMemoryTracker::create();
+    simpleTrackerPool.setMemoryUsageTracker(simpleTracker);
+    EXPECT_EQ(0, simpleTracker->getCurrentUserBytes());
+    void* twoChunks = simpleTrackerPool.allocate(2 * kChunkSize);
+    EXPECT_EQ(2 * kChunkSize, simpleTracker->getCurrentUserBytes());
+    twoChunks =
+        simpleTrackerPool.reallocate(twoChunks, 2 * kChunkSize, kChunkSize);
+    EXPECT_EQ(2 * kChunkSize, simpleTracker->getCurrentUserBytes());
+    // We didn't do any real reallocation.
+    simpleTrackerPool.free(twoChunks, 2 * kChunkSize);
+  }
+}
+
 TEST(MemoryPoolTest, getPreferredSize) {
   MemoryManager<MemoryAllocator, 64> manager{};
   auto& pool =
@@ -608,6 +817,21 @@ TEST(MemoryPoolTest, getPreferredSizeOverflow) {
   EXPECT_EQ(1ULL << 32, pool.getPreferredSize((1ULL << 32) - 1));
   EXPECT_EQ(1ULL << 63, pool.getPreferredSize((1ULL << 62) - 1 + (1ULL << 62)));
 }
+
+TEST(MemoryPoolTest, allocatorOverflow) {
+  MemoryManager<MemoryAllocator, 64> manager{};
+  auto& pool =
+      dynamic_cast<MemoryPoolImpl<MemoryAllocator, 64>&>(manager.getRoot());
+  Allocator<int64_t> alloc(pool);
+  EXPECT_THROW(alloc.allocate(1ULL << 62), VeloxException);
+  EXPECT_THROW(alloc.deallocate(nullptr, 1ULL << 62), VeloxException);
+}
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    MemoryPoolTestSuite,
+    MemoryPoolTest,
+    testing::Values(true, false));
+
 } // namespace memory
 } // namespace velox
 } // namespace facebook

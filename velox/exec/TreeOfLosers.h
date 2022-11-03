@@ -68,7 +68,7 @@ class TreeOfLosers {
 
   explicit TreeOfLosers(std::vector<std::unique_ptr<Stream>> streams)
       : streams_(std::move(streams)) {
-    static_assert(std::is_base_of<MergeStream, Stream>::value);
+    static_assert(std::is_base_of_v<MergeStream, Stream>);
     VELOX_CHECK_LT(streams_.size(), std::numeric_limits<TIndex>::max());
     VELOX_CHECK_GE(streams_.size(), 1);
 
@@ -107,6 +107,10 @@ class TreeOfLosers {
   // calling this again. Returns nullptr when all streams are at end.
   Stream* next() {
     if (UNLIKELY(lastIndex_ == kEmpty)) {
+      if (UNLIKELY(values_.empty())) {
+        // Only one stream. We handle this off the common path.
+        return streams_[0]->hasData() ? streams_[0].get() : nullptr;
+      }
       lastIndex_ = first(0);
     } else {
       lastIndex_ = propagate(
@@ -126,6 +130,11 @@ class TreeOfLosers {
   std::pair<Stream*, bool> nextWithEquals() {
     IndexAndFlag result;
     if (UNLIKELY(lastIndex_ == kEmpty)) {
+      // Only one stream. We handle this off the common path.
+      if (values_.empty()) {
+        return streams_[0]->hasData() ? std::make_pair(streams_[0].get(), false)
+                                      : std::make_pair(nullptr, false);
+      }
       result = firstWithEquals(0);
     } else {
       result = propagateWithEquals(
@@ -137,7 +146,6 @@ class TreeOfLosers {
     return lastIndex_ == kEmpty
         ? std::make_pair(nullptr, false)
         : std::make_pair(streams_[lastIndex_].get(), result.second);
-    ;
   }
 
  private:
@@ -198,6 +206,7 @@ class TreeOfLosers {
 
   IndexAndFlag firstWithEquals(TIndex node) {
     if (node >= firstStream_) {
+      VELOX_DCHECK_LT(node - firstStream_, streams_.size());
       return indexAndFlag(
           streams_[node - firstStream_]->hasData() ? node - firstStream_
                                                    : kEmpty,
@@ -221,7 +230,7 @@ class TreeOfLosers {
         return left;
       } else {
         values_[node] = left.first;
-        equals_[node] = right.second;
+        equals_[node] = left.second;
         return right;
       }
     }
@@ -280,6 +289,7 @@ class TreeOfLosers {
   static TIndex rightChild(TIndex node) {
     return node * 2 + 2;
   }
+
   std::vector<TIndex> values_;
   // 'true' if the corresponding element of 'values_' has met an equal
   // element on its way to its present position. Used only in nextWithEquals().
@@ -299,7 +309,7 @@ template <typename Stream>
 class MergeArray {
  public:
   explicit MergeArray(std::vector<std::unique_ptr<Stream>> streams) {
-    static_assert(std::is_base_of<MergeStream, Stream>::value);
+    static_assert(std::is_base_of_v<MergeStream, Stream>);
     for (auto& stream : streams) {
       if (stream->hasData()) {
         streams_.push_back(std::move(stream));

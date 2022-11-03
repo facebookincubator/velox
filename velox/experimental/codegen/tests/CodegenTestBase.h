@@ -19,9 +19,11 @@
 #include <gtest/gtest.h>
 
 #include <folly/Benchmark.h>
+#include <folly/init/Init.h>
+
 #include <optional>
 #include "velox/core/PlanNode.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -72,7 +74,7 @@ class CodegenTestCore {
     EvalCtx context(execCtx_.get(), &exprSet, &inputRowBatches);
     std::vector<VectorPtr> results(sizeof...(SQLType));
     exprSet.eval(
-        0, sizeof...(SQLType) - 1, true, selectedRows, &context, &results);
+        0, sizeof...(SQLType) - 1, true, selectedRows, context, results);
     return results;
   }
 
@@ -80,7 +82,7 @@ class CodegenTestCore {
   std::shared_ptr<const core::ITypedExpr> makeTypedExpr(
       const std::string& text,
       const TypePtr& rowType) {
-    auto untyped = parse::parseExpr(text);
+    auto untyped = parse::parseExpr(text, options_);
     return core::Expressions::inferTypes(untyped, rowType, pool_.get());
   }
 
@@ -286,6 +288,7 @@ class CodegenTestCore {
   UDFManager udfManager_;
   bool useSymbolForArithmetic_;
   NamedSteadyClockEventSequence eventSequence_;
+  parse::ParseOptions options_;
 };
 
 class CodegenTestBase : public CodegenTestCore, public testing::Test {

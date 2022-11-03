@@ -35,18 +35,14 @@ class LeastGreatestFunction final : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    auto isFlatVector = [](const VectorPtr vp) -> bool {
-      return vp->encoding() == VectorEncoding::Simple::FLAT;
-    };
-
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     const size_t nargs = args.size();
     const auto nrows = rows.end();
 
     // Setup result vector.
-    BaseVector::ensureWritable(rows, outputType, context->pool(), result);
-    FlatVector<T>& flatResult = *(*result)->as<FlatVector<T>>();
+    context.ensureWritable(rows, outputType, result);
+    FlatVector<T>& flatResult = *result->as<FlatVector<T>>();
 
     // NULL all elements.
     rows.applyToSelected(
@@ -56,18 +52,19 @@ class LeastGreatestFunction final : public exec::VectorFunction {
     exec::LocalDecodedVector decodedVectorHolder(context);
     // Column-wise process: one argument at a time.
     for (size_t i = 0; i < nargs; i++) {
+      decodedVectorHolder.get()->decode(*args[i], rows);
+
       // Only compare with non-null elements of each argument
       *cmpRows = rows;
-      if (auto* rawNulls = args[i]->flatRawNulls(rows)) {
+      if (auto* rawNulls = decodedVectorHolder->nulls()) {
         cmpRows->deselectNulls(rawNulls, 0, nrows);
       }
 
-      if (isFlatVector(args[i])) {
+      if (decodedVectorHolder->isIdentityMapping()) {
         // Fast path: this argument is a FlatVector
         cmpAndReplace(flatResult, *args[i]->as<FlatVector<T>>(), *cmpRows);
       } else {
         // Slow path: decode this argument
-        decodedVectorHolder.get()->decode(*args[i], rows);
         cmpAndReplace(flatResult, *decodedVectorHolder, *cmpRows);
       }
     }

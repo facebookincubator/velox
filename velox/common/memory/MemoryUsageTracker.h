@@ -26,15 +26,17 @@
 
 namespace facebook::velox::memory {
 constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
+constexpr std::string_view MEM_CAP_EXCEEDED_ERROR_FORMAT =
+    "Exceeded memory cap of {} when requesting {}";
 
-#define VELOX_MEM_CAP_EXCEEDED(cap)                                 \
+#define VELOX_MEM_CAP_EXCEEDED(errorMessage)                        \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
       ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
       ::facebook::velox::error_code::kMemCapExceeded.c_str(),       \
       /* isRetriable */ true,                                       \
-      "Exceeded memory cap of {} MB",                               \
-      (cap) / 1024 / 1024);
+      "{}",                                                         \
+      errorMessage);
 
 struct MemoryUsageConfig {
   std::optional<int64_t> maxUserMemory;
@@ -109,6 +111,15 @@ class MemoryUsageTracker
   using GrowCallback = std::function<
       bool(UsageType type, int64_t size, MemoryUsageTracker& tracker)>;
 
+  /// This function will be used when a MEM_CAP_EXCEEDED error is thrown during
+  /// a call to increment reservation. It returns a string that will be appended
+  /// to the error's message and should ideally be used to add additional
+  /// details to it. This may be called to add details when the error is thrown
+  /// or when encountered during a recursive call to increment reservation from
+  /// a parent tracker.
+  using MakeMemoryCapExceededMessage =
+      std::function<std::string(MemoryUsageTracker& tracker)>;
+
   // Create default usage tracker. It aggregates both 'user' and 'system' memory
   // from its children and tracks the allocations as 'user' memory. It returns a
   // 'root' tracker.
@@ -133,76 +144,33 @@ class MemoryUsageTracker
             .build());
   }
 
+  virtual ~MemoryUsageTracker() = default;
+
   // Increments the reservation for 'this' so that we can allocate at
   // least 'size' bytes on top of the current allocation. This is used
-  // when an a memory user needs to allocate more memory and needs a
+  // when a memory user needs to allocate more memory and needs a
   // guarantee of at least 'size' being available. If less memory ends
   // up being needed, the unused reservation should be released with
   // release().  If the new reserved amount exceeds the usage limit,
   // an exception will be thrown.
-  void reserve(int64_t size) {
-    int64_t increment;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      increment = reserveLocked(size);
-      minReservation_ += increment;
-    }
-    if (increment) {
-      checkAndPropagateReservationIncrement(increment, true);
-    }
-  }
+  void reserve(int64_t size);
 
-  // Release unused reservation. Used reservation will be released as the
-  // allocations are freed.
-  void release() {
-    int64_t remaining;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      remaining = reservation_ - usedReservation_;
-      reservation_ = 0;
-      minReservation_ = 0;
-      usedReservation_ = 0;
-    }
-    if (remaining) {
-      decrementUsage(type_, remaining);
-    }
-  }
+  // If a minimum reservation has been set with reserve(), resets the
+  // minimum reservation. If the current usage is below the minimum
+  // reservation, decreases reservation and usage down to the rounded
+  // actual usage.
+  void release();
 
   // Increments outstanding memory by 'size', which is positive for
   // allocation and negative for free. If there is no reservation or
   // the new allocated amount exceeds the reservation, propagates the
   // change upward.
-  void update(int64_t size) {
-    if (size > 0) {
-      int64_t increment = 0;
-      {
-        std::lock_guard<std::mutex> l(mutex_);
-        if (usedReservation_ + size > reservation_) {
-          increment = reserveLocked(size);
-        }
-      }
-      checkAndPropagateReservationIncrement(increment, false);
-      usedReservation_.fetch_add(size);
-      return;
-    }
-    // Decreasing usage. See if need to propagate upward.
-    int64_t decrement = 0;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      auto newUsed = usedReservation_ += size;
-      auto newCap = std::max(minReservation_, newUsed);
-      auto newQuantized = quantizedSize(newCap);
-      if (newQuantized != reservation_) {
-        decrement = reservation_ - newQuantized;
-        reservation_ = newQuantized;
-      }
-    }
-    if (decrement) {
-      decrementUsage(type_, decrement);
-    }
-  }
+  // Sometimes the memory pool wants to mock an update for quota
+  // accounting purposes and different memory usage trackers can
+  // choose to accommodate this differently.
+  virtual void update(int64_t size, bool /* mock */ = false);
 
-  int64_t getCurrentUserBytes() const {
+  virtual int64_t getCurrentUserBytes() const {
     return adjustByReservation(user(currentUsageInBytes_));
   }
   int64_t getCurrentSystemBytes() const {
@@ -232,7 +200,7 @@ class MemoryUsageTracker
   }
 
   int64_t getCumulativeBytes() const {
-    return total(cumulativeBytes_);
+    return user(cumulativeBytes_) + system(cumulativeBytes_);
   }
 
   // Returns the total size including unused reservation.
@@ -273,14 +241,50 @@ class MemoryUsageTracker
     growCallback_ = func;
   }
 
+  void setMakeMemoryCapExceededMessage(MakeMemoryCapExceededMessage func) {
+    makeMemoryCapExceededMessage_ = func;
+  }
+
   /// Checks if it is likely that the reservation on 'this' can be
   /// incremented by 'increment'. Returns false if this seems
   /// unlikely. Otherwise attempts the reservation increment and returns
   /// true if succeeded.
   bool maybeReserve(int64_t increment);
 
- private:
+  std::string toString() const;
+
+ protected:
   static constexpr int64_t kMB = 1 << 20;
+
+  MemoryUsageTracker(
+      const std::shared_ptr<MemoryUsageTracker>& parent,
+      UsageType type,
+      const MemoryUsageConfig& config)
+      : parent_(parent),
+        type_(type),
+        maxMemory_{
+            config.maxUserMemory.value_or(kMaxMemory),
+            config.maxSystemMemory.value_or(kMaxMemory),
+            config.maxTotalMemory.value_or(kMaxMemory)} {}
+
+  static std::shared_ptr<MemoryUsageTracker> create(
+      const std::shared_ptr<MemoryUsageTracker>& parent,
+      UsageType type,
+      const MemoryUsageConfig& config);
+
+  void maySetMax(UsageType type, int64_t newPeak);
+
+  // Increments the reservation of 'type' and checks against
+  // limits. Calls 'growCallback_' if this is set and limit
+  // exceeded. Should be called without holding 'mutex_'. This throws if a limit
+  // is exceeded and there is no corresponding GrowCallback or the GrowCallback
+  // fails.
+  void incrementUsage(UsageType type, int64_t size);
+
+  //  Decrements usage in 'this' and parents.
+  void decrementUsage(UsageType type, int64_t size) noexcept;
+
+  void checkNonNegativeSizes(const char* FOLLY_NONNULL message) const;
 
   template <typename T, size_t size>
   static T& usage(std::array<T, size>& array, UsageType type) {
@@ -375,61 +379,38 @@ class MemoryUsageTracker
   UsageType type_;
   std::array<std::atomic<int64_t>, 3> currentUsageInBytes_{};
   std::array<std::atomic<int64_t>, 3> peakUsageInBytes_{};
+  // The memory limit to enforce.
   std::array<int64_t, 3> maxMemory_;
   std::array<std::atomic<int64_t>, 3> numAllocs_{};
   std::array<std::atomic<int64_t>, 3> cumulativeBytes_{};
 
-  int64_t reservation_{0};
+  std::atomic<int64_t> reservation_{0};
 
   // Minimum amount of reserved memory to hold until explicit release().
-  int64_t minReservation_{0};
+  std::atomic<int64_t> minReservation_{0};
   std::atomic<int64_t> usedReservation_{};
 
   GrowCallback growCallback_{};
 
-  explicit MemoryUsageTracker(
-      const std::shared_ptr<MemoryUsageTracker>& parent,
-      UsageType type,
-      const MemoryUsageConfig& config)
-      : parent_(parent),
-        type_(type),
-        maxMemory_{
-            config.maxUserMemory.value_or(kMaxMemory),
-            config.maxSystemMemory.value_or(kMaxMemory),
-            config.maxTotalMemory.value_or(kMaxMemory)} {}
+  MakeMemoryCapExceededMessage makeMemoryCapExceededMessage_{};
+};
 
-  static std::shared_ptr<MemoryUsageTracker> create(
-      const std::shared_ptr<MemoryUsageTracker>& parent,
-      UsageType type,
-      const MemoryUsageConfig& config);
+// A temporary solution to MemoryUsageTracker accounting leak without properly
+// remodeling the interface. Only the overridden methods are supposed to be
+// used.
+class SimpleMemoryTracker : public MemoryUsageTracker {
+ public:
+  explicit SimpleMemoryTracker(const MemoryUsageConfig& config);
+  virtual ~SimpleMemoryTracker() override = default;
 
-  void maySetMax(UsageType type, int64_t newPeak) {
-    auto& peakUsage = peakUsageInBytes_[static_cast<int>(type)];
-    int64_t oldPeak = peakUsage;
-    while (oldPeak < newPeak &&
-           !peakUsage.compare_exchange_weak(oldPeak, newPeak)) {
-      oldPeak = peakUsage;
-    }
-  }
+  virtual void update(int64_t size, bool mock = false) override;
+  virtual int64_t getCurrentUserBytes() const override;
 
-  // Incrementss the reservation of 'type' and checks against
-  // limits. Calls 'growCallback_' if this is set and limit
-  // exceeded. Should be called without holding 'mutex_'. This throws if a limit
-  // is exceeded and there is no corresponding GrowCallback or the GrowCallback
-  // fails.
-  void incrementUsage(UsageType type, int64_t size);
+  static std::shared_ptr<SimpleMemoryTracker> create(
+      const MemoryUsageConfig& config = MemoryUsageConfig());
 
-  //  Decrements usage in 'this' and parents.
-  void decrementUsage(UsageType type, int64_t size) noexcept;
-
-  void checkNonNegativeSizes(const char* FOLLY_NONNULL message) const {
-    if (user(currentUsageInBytes_) < 0 || system(currentUsageInBytes_) < 0 ||
-        total(currentUsageInBytes_) < 0) {
-      LOG_EVERY_N(ERROR, 100)
-          << "MEMR: Negative usage " << message << user(currentUsageInBytes_)
-          << " " << system(currentUsageInBytes_) << " "
-          << total(currentUsageInBytes_);
-    }
-  }
+ private:
+  const int64_t userMemoryQuota_;
+  std::atomic_long totalUserMemory_{0};
 };
 } // namespace facebook::velox::memory

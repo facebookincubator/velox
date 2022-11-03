@@ -36,14 +36,16 @@ bool isRegisteredVectorSerde() {
 }
 
 void VectorStreamGroup::createStreamTree(
-    std::shared_ptr<const RowType> type,
-    int32_t numRows) {
+    RowTypePtr type,
+    int32_t numRows,
+    const VectorSerde::Options* options) {
   VELOX_CHECK(getVectorSerde().get(), "Vector serde is not registered");
-  serializer_ = getVectorSerde()->createSerializer(type, numRows, this);
+  serializer_ =
+      getVectorSerde()->createSerializer(type, numRows, this, options);
 }
 
 void VectorStreamGroup::append(
-    std::shared_ptr<RowVector> vector,
+    RowVectorPtr vector,
     const folly::Range<const IndexRange*>& ranges) {
   serializer_->append(vector, ranges);
 }
@@ -54,7 +56,7 @@ void VectorStreamGroup::flush(OutputStream* out) {
 
 // static
 void VectorStreamGroup::estimateSerializedSize(
-    std::shared_ptr<BaseVector> vector,
+    VectorPtr vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes) {
   VELOX_CHECK(getVectorSerde().get(), "Vector serde is not registered");
@@ -65,10 +67,11 @@ void VectorStreamGroup::estimateSerializedSize(
 void VectorStreamGroup::read(
     ByteStream* source,
     velox::memory::MemoryPool* pool,
-    std::shared_ptr<const RowType> type,
-    std::shared_ptr<RowVector>* result) {
+    RowTypePtr type,
+    RowVectorPtr* result,
+    const VectorSerde::Options* options) {
   VELOX_CHECK(getVectorSerde().get(), "Vector serde is not registered");
-  getVectorSerde()->deserialize(source, pool, type, result);
+  getVectorSerde()->deserialize(source, pool, type, result, options);
 }
 
 } // namespace facebook::velox

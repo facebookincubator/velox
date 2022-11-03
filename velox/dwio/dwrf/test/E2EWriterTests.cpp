@@ -19,16 +19,16 @@
 #include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/common/tests/utils/MapBuilder.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
-#include "velox/dwio/dwrf/test/utils/MapBuilder.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
-#include "velox/vector/tests/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;

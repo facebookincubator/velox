@@ -22,6 +22,8 @@
 
 namespace facebook::velox::functions {
 
+enum class DateTimeFormatterType { JODA, MYSQL, UNKNOWN };
+
 enum class DateTimeFormatSpecifier : uint8_t {
   // Era, e.g: "AD"
   ERA = 0,
@@ -152,10 +154,12 @@ class DateTimeFormatter {
   explicit DateTimeFormatter(
       std::unique_ptr<char[]>&& literalBuf,
       size_t bufSize,
-      std::vector<DateTimeToken>&& tokens)
+      std::vector<DateTimeToken>&& tokens,
+      DateTimeFormatterType type)
       : literalBuf_(std::move(literalBuf)),
         bufSize_(bufSize),
-        tokens_(std::move(tokens)) {}
+        tokens_(std::move(tokens)),
+        type_(type) {}
 
   const std::unique_ptr<char[]>& literalBuf() const {
     return literalBuf_;
@@ -169,9 +173,7 @@ class DateTimeFormatter {
     return tokens_;
   }
 
-  Timestamp parse(const std::string_view& /* input */) const {
-    VELOX_NYI("date time parsing not implemented yet");
-  }
+  DateTimeResult parse(const std::string_view& input) const;
 
   std::string format(
       const Timestamp& timestamp,
@@ -181,6 +183,7 @@ class DateTimeFormatter {
   std::unique_ptr<char[]> literalBuf_;
   size_t bufSize_;
   std::vector<DateTimeToken> tokens_;
+  DateTimeFormatterType type_;
 };
 
 std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(

@@ -19,7 +19,7 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/vector/tests/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::functions::test {
 
@@ -32,7 +32,7 @@ class FunctionBenchmarkBase {
   exec::ExprSet compileExpression(
       const std::string& text,
       const TypePtr& rowType) {
-    auto untyped = parse::parseExpr(text);
+    auto untyped = parse::parseExpr(text, options_);
     auto typed =
         core::Expressions::inferTypes(untyped, rowType, execCtx_.pool());
     return exec::ExprSet({typed}, &execCtx_);
@@ -42,8 +42,13 @@ class FunctionBenchmarkBase {
     SelectivityVector rows(data->size());
     exec::EvalCtx evalCtx(&execCtx_, &exprSet, data.get());
     std::vector<VectorPtr> results(1);
-    exprSet.eval(rows, &evalCtx, &results);
+    exprSet.eval(rows, evalCtx, results);
     return results[0];
+  }
+
+  VectorPtr evaluate(const std::string& expression, const RowVectorPtr& data) {
+    auto exprSet = compileExpression(expression, asRowType(data->type()));
+    return evaluate(exprSet, data);
   }
 
   facebook::velox::test::VectorMaker& maker() {
@@ -60,5 +65,6 @@ class FunctionBenchmarkBase {
       memory::getDefaultScopedMemoryPool()};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
+  parse::ParseOptions options_;
 };
 } // namespace facebook::velox::functions::test

@@ -16,12 +16,13 @@
 
 #pragma once
 
+#include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 #include "velox/dwio/dwrf/reader/DwrfData.h"
-#include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwrf {
 
-class SelectiveByteRleColumnReader : public SelectiveColumnReader {
+class SelectiveByteRleColumnReader
+    : public dwio::common::SelectiveColumnReader {
  public:
   using ValueType = int8_t;
 
@@ -50,6 +51,7 @@ class SelectiveByteRleColumnReader : public SelectiveColumnReader {
   }
 
   void seekToRowGroup(uint32_t index) override {
+    SelectiveColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->seekToRowGroup(index);
     if (boolRle_) {
       boolRle_->seekToRowGroup(positionsProvider);
@@ -143,7 +145,7 @@ void SelectiveByteRleColumnReader::readHelper(
     ExtractValues extractValues) {
   readWithVisitor(
       rows,
-      ColumnVisitor<int8_t, TFilter, ExtractValues, isDense>(
+      dwio::common::ColumnVisitor<int8_t, TFilter, ExtractValues, isDense>(
           *reinterpret_cast<TFilter*>(filter), this, rows, extractValues));
 }
 
@@ -161,10 +163,10 @@ void SelectiveByteRleColumnReader::processFilter(
       filterNulls<int8_t>(
           rows,
           true,
-          !std::is_same<decltype(extractValues), DropValues>::value);
+          !std::is_same_v<decltype(extractValues), dwio::common::DropValues>);
       break;
     case FilterKind::kIsNotNull:
-      if (std::is_same<decltype(extractValues), DropValues>::value) {
+      if (std::is_same_v<decltype(extractValues), dwio::common::DropValues>) {
         filterNulls<int8_t>(rows, false, false);
       } else {
         readHelper<common::IsNotNull, isDense>(filter, rows, extractValues);
@@ -199,11 +201,15 @@ void SelectiveByteRleColumnReader::processValueHook(
   switch (hook->kind()) {
     case aggregate::AggregationHook::kSumBigintToBigint:
       readHelper<common::AlwaysTrue, isDense>(
-          &alwaysTrue(), rows, ExtractToHook<SumHook<int64_t, int64_t>>(hook));
+          &dwio::common::alwaysTrue(),
+          rows,
+          dwio::common::ExtractToHook<SumHook<int64_t, int64_t>>(hook));
       break;
     default:
       readHelper<common::AlwaysTrue, isDense>(
-          &alwaysTrue(), rows, ExtractToGenericHook(hook));
+          &dwio::common::alwaysTrue(),
+          rows,
+          dwio::common::ExtractToGenericHook(hook));
   }
 }
 

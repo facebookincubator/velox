@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/writer/ColumnWriter.h"
+#include <velox/dwio/common/exception/Exception.h>
 #include "velox/dwio/common/ChainedBuffer.h"
 #include "velox/dwio/dwrf/common/EncoderUtil.h"
 #include "velox/dwio/dwrf/writer/DictionaryEncodingUtils.h"
@@ -33,7 +34,7 @@ namespace facebook::velox::dwrf {
 
 WriterContext::LocalDecodedVector BaseColumnWriter::decode(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   auto& selected = context_.getSharedSelectivityVector(slice->size());
   // initialize
   selected.clearAll();
@@ -64,7 +65,7 @@ class ByteRleColumnWriter : public BaseColumnWriter {
     reset();
   }
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
       std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
@@ -85,7 +86,7 @@ class ByteRleColumnWriter : public BaseColumnWriter {
 template <>
 uint64_t ByteRleColumnWriter<int8_t>::write(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   static_assert(sizeof(int8_t) == sizeof(char), "unexpected type width");
   static_assert(NULL_SIZE == 1, "unexpected raw data size");
   if (slice->encoding() == VectorEncoding::Simple::FLAT) {
@@ -135,7 +136,7 @@ uint64_t ByteRleColumnWriter<int8_t>::write(
 template <>
 uint64_t ByteRleColumnWriter<bool>::write(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   static_assert(sizeof(bool) == sizeof(char), "unexpected type width");
   static_assert(NULL_SIZE == 1, "unexpected raw data size");
   if (slice->encoding() == VectorEncoding::Simple::FLAT) {
@@ -225,7 +226,7 @@ class IntegerColumnWriter : public BaseColumnWriter {
     reset();
   }
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void reset() override {
     // Lots of decisions regarding the presence of streams are made at flush
@@ -361,9 +362,11 @@ class IntegerColumnWriter : public BaseColumnWriter {
   }
 
  private:
-  uint64_t writeDict(DecodedVector& decodedVector, const Ranges& ranges);
+  uint64_t writeDict(
+      DecodedVector& decodedVector,
+      const common::Ranges& ranges);
 
-  uint64_t writeDirect(const VectorPtr& slice, const Ranges& ranges);
+  uint64_t writeDirect(const VectorPtr& slice, const common::Ranges& ranges);
 
   void ensureValidStreamWriters(bool dictEncoding) {
     // Ensure we have valid streams for exactly one encoding.
@@ -470,7 +473,7 @@ class IntegerColumnWriter : public BaseColumnWriter {
 template <typename T>
 uint64_t IntegerColumnWriter<T>::write(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   if (useDictionaryEncoding_) {
     // Decode and then write
     auto localDecoded = decode(slice, ranges);
@@ -497,7 +500,7 @@ uint64_t IntegerColumnWriter<T>::write(
 template <typename T>
 uint64_t IntegerColumnWriter<T>::writeDict(
     DecodedVector& decodedVector,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   auto& statsBuilder =
       dynamic_cast<IntegerStatisticsBuilder&>(*indexStatsBuilder_);
   writeNulls(decodedVector, ranges);
@@ -536,7 +539,7 @@ uint64_t IntegerColumnWriter<T>::writeDict(
 template <typename T>
 uint64_t IntegerColumnWriter<T>::writeDirect(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   ensureValidStreamWriters(false);
   auto flatVector = slice->asFlatVector<T>();
   DWIO_ENSURE(flatVector, "unexpected vector type");
@@ -591,7 +594,7 @@ void IntegerColumnWriter<T>::populateDictionaryEncodingStreams() {
           end,
           [&](auto index) { return dictEncoder_.getInDict()[rows_[index]]; },
           [&](auto buf, auto size) {
-            inDictionary_->add(buf, Ranges::of(0, size), nullptr);
+            inDictionary_->add(buf, common::Ranges::of(0, size), nullptr);
           });
     }
 
@@ -606,7 +609,7 @@ void IntegerColumnWriter<T>::populateDictionaryEncodingStreams() {
         end,
         [&](auto index) { return dictEncoder_.getLookupTable()[rows_[index]]; },
         [&](auto buf, auto size) {
-          data_->add(buf, Ranges::of(0, size), nullptr);
+          data_->add(buf, common::Ranges::of(0, size), nullptr);
         });
   };
 
@@ -633,7 +636,7 @@ void IntegerColumnWriter<T>::convertToDirectEncoding() {
         end,
         [&](auto index) { return dictEncoder_.getKey(rows_[index]); },
         [&](auto buf, auto size) {
-          dataDirect_->add(buf, Ranges::of(0, size), nullptr);
+          dataDirect_->add(buf, common::Ranges::of(0, size), nullptr);
         });
   };
 
@@ -666,7 +669,7 @@ class TimestampColumnWriter : public BaseColumnWriter {
     reset();
   }
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
       std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
@@ -730,7 +733,7 @@ FOLLY_ALWAYS_INLINE int64_t formatNanos(uint64_t nanos) {
 
 uint64_t TimestampColumnWriter::write(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   // Timestamp is not frequently used, always decode so we have less branches to
   // deal with.
   auto localDecoded = decode(slice, ranges);
@@ -810,7 +813,7 @@ class StringColumnWriter : public BaseColumnWriter {
     reset();
   }
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void reset() override {
     // Lots of decisions regarding the presence of streams are made at flush
@@ -957,9 +960,13 @@ class StringColumnWriter : public BaseColumnWriter {
   }
 
  private:
-  uint64_t writeDict(DecodedVector& decodedVector, const Ranges& ranges);
+  uint64_t writeDict(
+      DecodedVector& decodedVector,
+      const common::Ranges& ranges);
 
-  uint64_t writeDirect(DecodedVector& decodedVector, const Ranges& ranges);
+  uint64_t writeDirect(
+      DecodedVector& decodedVector,
+      const common::Ranges& ranges);
 
   void ensureValidStreamWriters(bool dictEncoding) {
     // Ensure we have exactly one valid data stream.
@@ -1081,7 +1088,7 @@ class StringColumnWriter : public BaseColumnWriter {
 
 uint64_t StringColumnWriter::write(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   auto localDecoded = decode(slice, ranges);
   auto& decodedVector = localDecoded.get();
 
@@ -1094,7 +1101,7 @@ uint64_t StringColumnWriter::write(
 
 uint64_t StringColumnWriter::writeDict(
     DecodedVector& decodedVector,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   auto& statsBuilder =
       dynamic_cast<StringStatisticsBuilder&>(*indexStatsBuilder_);
   writeNulls(decodedVector, ranges);
@@ -1134,7 +1141,7 @@ uint64_t StringColumnWriter::writeDict(
 
 uint64_t StringColumnWriter::writeDirect(
     DecodedVector& decodedVector,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   auto& statsBuilder =
       dynamic_cast<StringStatisticsBuilder&>(*indexStatsBuilder_);
   writeNulls(decodedVector, ranges);
@@ -1171,7 +1178,7 @@ uint64_t StringColumnWriter::writeDirect(
   }
   if (lengths.size() > 0) {
     dataDirectLength_->add(
-        lengths.data(), Ranges::of(0, lengths.size()), nullptr);
+        lengths.data(), common::Ranges::of(0, lengths.size()), nullptr);
   }
 
   if (nullCount > 0) {
@@ -1208,7 +1215,7 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
       strideDictCounts,
       [&](auto buf, auto size) { dictionaryData_->write(buf, size); },
       [&](auto buf, auto size) {
-        dictionaryDataLength_->add(buf, Ranges::of(0, size), nullptr);
+        dictionaryDataLength_->add(buf, common::Ranges::of(0, size), nullptr);
       });
 
   // When all the Keys are in Dictionary, inDictionaryStream is omitted.
@@ -1236,7 +1243,7 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
                 getMemoryPool(MemoryUsageCategory::GENERAL),
                 64 * 1024,
                 [&](auto buf, auto size) {
-                  inDictionary_->add(buf, Ranges::of(0, size), nullptr);
+                  inDictionary_->add(buf, common::Ranges::of(0, size), nullptr);
                 });
 
             uint32_t strideDictSize = 0;
@@ -1263,7 +1270,7 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
                 64 * 1024,
                 [&](auto buf, auto size) {
                   strideDictionaryDataLength_->add(
-                      buf, Ranges::of(0, size), nullptr);
+                      buf, common::Ranges::of(0, size), nullptr);
                 });
             for (size_t i = 0; i < strideDictKeyCount; ++i) {
               auto val = dictEncoder_.getKey(sortedStrideDictKeyIndexBuffer[i]);
@@ -1280,7 +1287,7 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
             end,
             [&](auto index) { return lookupTable[rows_[index]]; },
             [&](auto buf, auto size) {
-              data_->add(buf, Ranges::of(0, size), nullptr);
+              data_->add(buf, common::Ranges::of(0, size), nullptr);
             });
       };
 
@@ -1306,7 +1313,7 @@ void StringColumnWriter::convertToDirectEncoding() {
             getMemoryPool(MemoryUsageCategory::GENERAL),
             64 * 1024,
             [&](auto buf, auto size) {
-              dataDirectLength_->add(buf, Ranges::of(0, size), nullptr);
+              dataDirectLength_->add(buf, common::Ranges::of(0, size), nullptr);
             });
         for (size_t i = start; i != end; ++i) {
           auto key = dictEncoder_.getKey(rows_[i]);
@@ -1336,7 +1343,7 @@ class FloatColumnWriter : public BaseColumnWriter {
     reset();
   }
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
       std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
@@ -1357,7 +1364,7 @@ class FloatColumnWriter : public BaseColumnWriter {
 template <typename T>
 uint64_t FloatColumnWriter<T>::write(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   static_assert(folly::kIsLittleEndian, "not supported");
   auto& statsBuilder =
       dynamic_cast<DoubleStatisticsBuilder&>(*indexStatsBuilder_);
@@ -1461,7 +1468,7 @@ class BinaryColumnWriter : public BaseColumnWriter {
     reset();
   }
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
       std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
@@ -1484,7 +1491,7 @@ class BinaryColumnWriter : public BaseColumnWriter {
 
 uint64_t BinaryColumnWriter::write(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   auto& statsBuilder =
       dynamic_cast<BinaryStatisticsBuilder&>(*indexStatsBuilder_);
   uint64_t rawSize = 0;
@@ -1553,7 +1560,8 @@ uint64_t BinaryColumnWriter::write(
   }
 
   if (lengths.size() > 0) {
-    lengths_->add(lengths.data(), Ranges::of(0, lengths.size()), nullptr);
+    lengths_->add(
+        lengths.data(), common::Ranges::of(0, lengths.size()), nullptr);
   }
   if (nullCount > 0) {
     statsBuilder.setHasNull();
@@ -1574,7 +1582,7 @@ class StructColumnWriter : public BaseColumnWriter {
     reset();
   }
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
       std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
@@ -1588,13 +1596,13 @@ class StructColumnWriter : public BaseColumnWriter {
  private:
   uint64_t writeChildrenAndStats(
       const RowVector* rowSlice,
-      const Ranges& ranges,
+      const common::Ranges& ranges,
       uint64_t nullCount);
 };
 
 uint64_t StructColumnWriter::writeChildrenAndStats(
     const RowVector* rowSlice,
-    const Ranges& ranges,
+    const common::Ranges& ranges,
     uint64_t nullCount) {
   uint64_t rawSize = 0;
   if (ranges.size() > 0) {
@@ -1613,13 +1621,13 @@ uint64_t StructColumnWriter::writeChildrenAndStats(
 
 uint64_t StructColumnWriter::write(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
   // Special case for writing the root. Root writer accepts rows, so all are
   // not null.
   if (isRoot()) {
-    Ranges childRanges;
+    common::Ranges childRanges;
     const RowVector* rowSlice;
-    const Ranges* childRangesPtr;
+    const common::Ranges* childRangesPtr;
     if (slice->encoding() != VectorEncoding::Simple::ROW) {
       auto localDecoded = decode(slice, ranges);
       auto& decodedVector = localDecoded.get();
@@ -1643,9 +1651,9 @@ uint64_t StructColumnWriter::write(
 
   // General case for writing row (struct)
   uint64_t nullCount = 0;
-  Ranges childRanges;
+  common::Ranges childRanges;
   const RowVector* rowSlice;
-  const Ranges* childRangesPtr;
+  const common::Ranges* childRangesPtr;
   if (slice->encoding() != VectorEncoding::Simple::ROW) {
     auto localDecoded = decode(slice, ranges);
     auto& decodedVector = localDecoded.get();
@@ -1703,7 +1711,7 @@ class ListColumnWriter : public BaseColumnWriter {
     reset();
   }
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
       std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
@@ -1722,11 +1730,13 @@ class ListColumnWriter : public BaseColumnWriter {
   std::unique_ptr<IntEncoder</* isSigned = */ false>> lengths_;
 };
 
-uint64_t ListColumnWriter::write(const VectorPtr& slice, const Ranges& ranges) {
+uint64_t ListColumnWriter::write(
+    const VectorPtr& slice,
+    const common::Ranges& ranges) {
   DataBuffer<vector_size_t> nonNullLengths{
       getMemoryPool(MemoryUsageCategory::GENERAL)};
   nonNullLengths.reserve(ranges.size());
-  Ranges childRanges;
+  common::Ranges childRanges;
   uint64_t nullCount = 0;
 
   const ArrayVector* arraySlice;
@@ -1793,7 +1803,9 @@ uint64_t ListColumnWriter::write(const VectorPtr& slice, const Ranges& ranges) {
 
   if (nonNullLengths.size()) {
     lengths_->add(
-        nonNullLengths.data(), Ranges::of(0, nonNullLengths.size()), nullptr);
+        nonNullLengths.data(),
+        common::Ranges::of(0, nonNullLengths.size()),
+        nullptr);
   }
 
   uint64_t rawSize = 0;
@@ -1826,7 +1838,7 @@ class MapColumnWriter : public BaseColumnWriter {
     reset();
   }
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
       std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
@@ -1846,11 +1858,13 @@ class MapColumnWriter : public BaseColumnWriter {
   std::unique_ptr<IntEncoder<false>> lengths_;
 };
 
-uint64_t MapColumnWriter::write(const VectorPtr& slice, const Ranges& ranges) {
+uint64_t MapColumnWriter::write(
+    const VectorPtr& slice,
+    const common::Ranges& ranges) {
   DataBuffer<vector_size_t> nonNullLengths{
       getMemoryPool(MemoryUsageCategory::GENERAL)};
   nonNullLengths.reserve(ranges.size());
-  Ranges childRanges;
+  common::Ranges childRanges;
   uint64_t nullCount = 0;
 
   const MapVector* mapSlice;
@@ -1915,7 +1929,9 @@ uint64_t MapColumnWriter::write(const VectorPtr& slice, const Ranges& ranges) {
 
   if (nonNullLengths.size()) {
     lengths_->add(
-        nonNullLengths.data(), Ranges::of(0, nonNullLengths.size()), nullptr);
+        nonNullLengths.data(),
+        common::Ranges::of(0, nonNullLengths.size()),
+        nullptr);
   }
 
   uint64_t rawSize = 0;
@@ -1947,15 +1963,29 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
   // When flat map is enabled, all columns provided in the MAP_FLAT_COLS config,
   // must be of MAP type. We only check top level columns (columns which are
   // direct children of the root node).
-  if (flatMapEnabled && type.parent != nullptr && type.parent->id == 0 &&
-      type.type->kind() != TypeKind::MAP &&
-      std::find(flatMapCols.begin(), flatMapCols.end(), type.column) !=
-          flatMapCols.end()) {
-    DWIO_RAISE(fmt::format(
-        "MAP_FLAT_COLS contains column {}, but the root type of this column is {}."
-        " Column root types must be of type MAP",
-        type.column,
-        mapTypeKindToName(type.type->kind())));
+  if (flatMapEnabled && type.parent != nullptr && type.parent->id == 0) {
+    if (type.type->kind() != TypeKind::MAP &&
+        std::find(flatMapCols.begin(), flatMapCols.end(), type.column) !=
+            flatMapCols.end()) {
+      DWIO_RAISE(fmt::format(
+          "MAP_FLAT_COLS contains column {}, but the root type of this column is {}."
+          " Column root types must be of type MAP",
+          type.column,
+          mapTypeKindToName(type.type->kind())));
+    }
+    const auto structColumnKeys =
+        context.getConfig(Config::MAP_FLAT_COLS_STRUCT_KEYS);
+    if (!structColumnKeys.empty()) {
+      DWIO_ENSURE(
+          type.parent->size() == structColumnKeys.size(),
+          "MAP_FLAT_COLS_STRUCT_KEYS size must match number of columns.");
+      if (!structColumnKeys[type.column].empty()) {
+        DWIO_ENSURE(
+            std::find(flatMapCols.begin(), flatMapCols.end(), type.column) !=
+                flatMapCols.end(),
+            "Struct input found in MAP_FLAT_COLS_STRUCT_KEYS. Column must also be in MAP_FLAT_COLS.");
+      }
+    }
   }
 
   switch (type.type->kind()) {

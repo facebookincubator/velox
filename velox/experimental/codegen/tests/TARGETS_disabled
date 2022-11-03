@@ -11,9 +11,9 @@ cpp_library(
     exported_deps = [
         "//folly:benchmark",
         "//velox/core:velox_core",
-        "//velox/dwio/dwrf/test/utils:lib_test_batch_maker",
+        "//velox/dwio/common/tests/utils:lib_test_batch_maker",
         "//velox/exec:velox_exec_lib",
-        "//velox/exec/tests/utils:velox_exec_test_util",
+        "//velox/exec/tests/utils:velox_exec_test_lib",
         "//velox/experimental/codegen:velox_experimental_codegen_header",
         "//velox/experimental/codegen:velox_experimental_codegen_impl",
         "//velox/experimental/codegen/code_generator:velox_codegen_code_generator",

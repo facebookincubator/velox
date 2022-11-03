@@ -24,8 +24,8 @@ class NotFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     VELOX_CHECK_EQ(
         args.size(), 1, "Incorrect number of arguments passed to not");
     const auto& input = args[0];
@@ -33,22 +33,31 @@ class NotFunction : public exec::VectorFunction {
     VELOX_CHECK_EQ(
         input->type()->kind(), TypeKind::BOOLEAN, "Unsupported input type");
 
-    auto rawInput = input->asFlatVector<bool>()->rawValues<uint64_t>();
+    BufferPtr negated;
 
-    BufferPtr negated =
-        AlignedBuffer::allocate<bool>(rows.end(), context->pool());
-    memcpy(negated->asMutable<uint64_t>(), rawInput, bits::nbytes(rows.end()));
-    bits::negate(
-        reinterpret_cast<char*>(negated->asMutable<uint64_t>()), rows.end());
+    // Input may be constant or flat.
+    if (input->isConstantEncoding()) {
+      bool value = input->as<ConstantVector<bool>>()->valueAt(0);
+      negated =
+          AlignedBuffer::allocate<bool>(rows.size(), context.pool(), !value);
+    } else {
+      negated = AlignedBuffer::allocate<bool>(rows.size(), context.pool());
+      auto rawNegated = negated->asMutable<char>();
+
+      auto rawInput = input->asFlatVector<bool>()->rawValues<uint64_t>();
+
+      memcpy(rawNegated, rawInput, bits::nbytes(rows.end()));
+      bits::negate(rawNegated, rows.end());
+    }
 
     auto localResult = std::make_shared<FlatVector<bool>>(
-        context->pool(),
-        BufferPtr(nullptr),
-        rows.end(),
+        context.pool(),
+        nullptr,
+        rows.size(),
         negated,
         std::vector<BufferPtr>{});
 
-    context->moveOrCopyResult(localResult, rows, result);
+    context.moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

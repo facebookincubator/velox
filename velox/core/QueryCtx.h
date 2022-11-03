@@ -22,6 +22,7 @@
 #include "velox/core/Context.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/VectorPool.h"
 
 namespace facebook::velox::core {
 
@@ -52,17 +53,19 @@ class QueryCtx : public Context {
       memory::MappedMemory* FOLLY_NONNULL mappedMemory =
           memory::MappedMemory::getInstance(),
       std::unique_ptr<memory::MemoryPool> pool = nullptr,
-      std::shared_ptr<folly::Executor> spillExecutor = nullptr)
+      std::shared_ptr<folly::Executor> spillExecutor = nullptr,
+      const std::string& queryId = "")
       : Context{ContextScope::QUERY},
         pool_(std::move(pool)),
         mappedMemory_(mappedMemory),
         connectorConfigs_(connectorConfigs),
         executor_{std::move(executor)},
         config_{this},
+        queryId_(queryId),
         spillExecutor_(std::move(spillExecutor)) {
     setConfigOverrides(config);
     if (!pool_) {
-      initPool();
+      initPool(queryId);
     }
   }
 
@@ -77,17 +80,23 @@ class QueryCtx : public Context {
           connectorConfigs = {},
       memory::MappedMemory* FOLLY_NONNULL mappedMemory =
           memory::MappedMemory::getInstance(),
-      std::unique_ptr<memory::MemoryPool> pool = nullptr)
+      std::unique_ptr<memory::MemoryPool> pool = nullptr,
+      const std::string& queryId = "")
       : Context{ContextScope::QUERY},
         pool_(std::move(pool)),
         mappedMemory_(mappedMemory),
         connectorConfigs_(connectorConfigs),
         executorKeepalive_(std::move(executorKeepalive)),
-        config_{this} {
+        config_{this},
+        queryId_(queryId) {
     setConfigOverrides(config);
     if (!pool_) {
-      initPool();
+      initPool(queryId);
     }
+  }
+
+  static std::string generatePoolName(const std::string& queryId) {
+    return fmt::format("query.{}", queryId.c_str());
   }
 
   memory::MemoryPool* FOLLY_NONNULL pool() const {
@@ -132,6 +141,10 @@ class QueryCtx : public Context {
     return spillExecutor_.get();
   }
 
+  const std::string& queryId() const {
+    return queryId_;
+  }
+
  private:
   static Config* FOLLY_NONNULL getEmptyConfig() {
     static const std::unique_ptr<Config> kEmptyConfig =
@@ -139,16 +152,13 @@ class QueryCtx : public Context {
     return kEmptyConfig.get();
   }
 
-  void initPool() {
+  void initPool(const std::string& queryId) {
     pool_ = memory::getProcessDefaultMemoryManager().getRoot().addScopedChild(
-        kQueryRootMemoryPool);
+        QueryCtx::generatePoolName(queryId));
     static const auto kUnlimited = std::numeric_limits<int64_t>::max();
     pool_->setMemoryUsageTracker(
         memory::MemoryUsageTracker::create(kUnlimited, kUnlimited, kUnlimited));
   }
-
-  static constexpr const char* FOLLY_NONNULL kQueryRootMemoryPool =
-      "query_root";
 
   std::unique_ptr<memory::MemoryPool> pool_;
   memory::MappedMemory* FOLLY_NONNULL mappedMemory_;
@@ -156,6 +166,7 @@ class QueryCtx : public Context {
   std::shared_ptr<folly::Executor> executor_;
   folly::Executor::KeepAlive<> executorKeepalive_;
   QueryConfig config_;
+  const std::string queryId_;
   std::shared_ptr<folly::Executor> spillExecutor_;
 };
 
@@ -165,7 +176,10 @@ class ExecCtx : public Context {
   ExecCtx(
       memory::MemoryPool* FOLLY_NONNULL pool,
       QueryCtx* FOLLY_NULLABLE queryCtx)
-      : Context{ContextScope::QUERY}, pool_(pool), queryCtx_(queryCtx) {}
+      : Context{ContextScope::QUERY},
+        pool_(pool),
+        queryCtx_(queryCtx),
+        vectorPool_{pool} {}
 
   velox::memory::MemoryPool* FOLLY_NONNULL pool() const {
     return pool_;
@@ -220,6 +234,28 @@ class ExecCtx : public Context {
     decodedVectorPool_.push_back(std::move(vector));
   }
 
+  VectorPool& vectorPool() {
+    return vectorPool_;
+  }
+
+  /// Gets a possibly recycled vector of 'type and 'size'. Allocates from
+  /// 'pool_' if no pre-allocated vector.
+  VectorPtr getVector(const TypePtr& type, vector_size_t size) {
+    return vectorPool_.get(type, size);
+  }
+
+  /// Moves 'vector' to the pool if it is reusable, else leaves it in
+  /// place. Returns true if the vector was moved into the pool.
+  bool releaseVector(VectorPtr& vector) {
+    return vectorPool_.release(vector);
+  }
+
+  /// Moves elements of 'vectors' to the pool if reusable, else leaves them
+  /// in place. Returns number of vectors that were moved into the pool.
+  size_t releaseVectors(std::vector<VectorPtr>& vectors) {
+    return vectorPool_.release(vectors);
+  }
+
  private:
   // Pool for all Buffers for this thread
   memory::MemoryPool* FOLLY_NONNULL pool_;
@@ -229,6 +265,7 @@ class ExecCtx : public Context {
   // A pool of preallocated SelectivityVectors for use by expressions
   // and operators.
   std::vector<std::unique_ptr<SelectivityVector>> selectivityVectorPool_;
+  VectorPool vectorPool_;
 };
 
 } // namespace facebook::velox::core

@@ -16,110 +16,64 @@
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/TypeUtils.h"
+#include "velox/substrait/VariantToVectorConverter.h"
 #include "velox/type/Type.h"
-#include "velox/vector/ComplexVector.h"
-#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::substrait {
-
 namespace {
-template <TypeKind KIND>
-VectorPtr setVectorFromVariantsByKind(
-    const std::vector<velox::variant>& value,
-    memory::MemoryPool* pool) {
-  using T = typename TypeTraits<KIND>::NativeType;
-
-  auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(
-      BaseVector::create(CppToType<T>::create(), value.size(), pool));
-
-  for (vector_size_t i = 0; i < value.size(); i++) {
-    if (value[i].isNull()) {
-      flatVector->setNull(i, true);
-    } else {
-      flatVector->set(i, value[i].value<T>());
-    }
+core::AggregationNode::Step toAggregationStep(
+    const ::substrait::AggregateRel& sAgg) {
+  if (sAgg.measures().size() == 0) {
+    // When only groupings exist, set the phase to be Single.
+    return core::AggregationNode::Step::kSingle;
   }
-  return flatVector;
-}
 
-template <>
-VectorPtr setVectorFromVariantsByKind<TypeKind::VARBINARY>(
-    const std::vector<velox::variant>& value,
-    memory::MemoryPool* pool) {
-  throw std::invalid_argument("Return of VARBINARY data is not supported");
-}
-
-template <>
-VectorPtr setVectorFromVariantsByKind<TypeKind::VARCHAR>(
-    const std::vector<velox::variant>& value,
-    memory::MemoryPool* pool) {
-  auto flatVector = std::dynamic_pointer_cast<FlatVector<StringView>>(
-      BaseVector::create(VARCHAR(), value.size(), pool));
-
-  for (vector_size_t i = 0; i < value.size(); i++) {
-    if (value[i].isNull()) {
-      flatVector->setNull(i, true);
-    } else {
-      flatVector->set(i, StringView(value[i].value<Varchar>()));
-    }
+  // Use the first measure to set aggregation phase.
+  const auto& firstMeasure = sAgg.measures()[0];
+  const auto& aggFunction = firstMeasure.measure();
+  switch (aggFunction.phase()) {
+    case ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE:
+      return core::AggregationNode::Step::kPartial;
+    case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE:
+      return core::AggregationNode::Step::kIntermediate;
+    case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT:
+      return core::AggregationNode::Step::kFinal;
+    case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT:
+      return core::AggregationNode::Step::kSingle;
+    default:
+      VELOX_FAIL("Aggregate phase is not supported.");
   }
-  return flatVector;
-}
-
-VectorPtr setVectorFromVariants(
-    const TypePtr& type,
-    const std::vector<velox::variant>& value,
-    velox::memory::MemoryPool* pool) {
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      setVectorFromVariantsByKind, type->kind(), value, pool);
 }
 } // namespace
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::AggregateRel& aggRel,
-    memory::MemoryPool* pool) {
+    const ::substrait::AggregateRel& aggRel) {
   core::PlanNodePtr childNode;
   if (aggRel.has_input()) {
-    childNode = toVeloxPlan(aggRel.input(), pool);
+    childNode = toVeloxPlan(aggRel.input());
   } else {
     VELOX_FAIL("Child Rel is expected in AggregateRel.");
   }
-
-  // Construct Velox grouping expressions.
-  auto inputTypes = childNode->outputType();
+  core::AggregationNode::Step aggStep = toAggregationStep(aggRel);
+  const auto& inputType = childNode->outputType();
   std::vector<core::FieldAccessTypedExprPtr> veloxGroupingExprs;
 
-  const auto& groupings = aggRel.groupings();
-  int inputPlanNodeId = planNodeId_ - 1;
-  // The index of output column.
-  int outIdx = 0;
-  for (const auto& grouping : groupings) {
-    auto groupingExprs = grouping.grouping_expressions();
-    for (const auto& groupingExpr : groupingExprs) {
-      // Velox's groupings are limited to be Field, so groupingExpr is
-      // expected to be FieldReference.
-      auto fieldExpr =
-          exprConverter_->toVeloxExpr(groupingExpr.selection(), inputTypes);
-      veloxGroupingExprs.emplace_back(fieldExpr);
-      outIdx += 1;
+  // Get the grouping expressions.
+  for (const auto& grouping : aggRel.groupings()) {
+    for (const auto& groupingExpr : grouping.grouping_expressions()) {
+      // Velox's groupings are limited to be Field.
+      veloxGroupingExprs.emplace_back(
+          exprConverter_->toVeloxExpr(groupingExpr.selection(), inputType));
     }
   }
 
-  // Parse measures to get Aggregation phase and expressions.
-  bool phaseInited = false;
-  core::AggregationNode::Step aggStep;
-  // Project expressions are used to conduct a pre-projection before
-  // Aggregation if needed.
-  std::vector<core::TypedExprPtr> projectExprs;
-  std::vector<std::string> projectOutNames;
+  // Parse measures and get the aggregate expressions.
+  // Each measure represents one aggregate expression.
   std::vector<core::CallTypedExprPtr> aggExprs;
-  auto aggMeasureSize = aggRel.measures().size();
-  aggExprs.reserve(aggMeasureSize);
-
+  aggExprs.reserve(aggRel.measures().size());
   std::vector<core::FieldAccessTypedExprPtr> aggregateMasks;
   aggregateMasks.reserve(aggRel.measures().size());
 
-  // Construct Velox Aggregate expressions.
   for (const auto& measure : aggRel.measures()) {
     core::FieldAccessTypedExprPtr aggregateMask;
     ::substrait::Expression substraitAggMask = measure.filter();
@@ -130,138 +84,57 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       } else {
         aggregateMask =
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
-                exprConverter_->toVeloxExpr(substraitAggMask, inputTypes));
+                exprConverter_->toVeloxExpr(substraitAggMask, inputType));
       }
       aggregateMasks.push_back(aggregateMask);
     }
 
-    auto aggFunction = measure.measure();
-    // Get the params of this Aggregate function.
+    const auto& aggFunction = measure.measure();
+    auto funcName = substraitParser_->findVeloxFunction(
+        functionMap_, aggFunction.function_reference());
     std::vector<core::TypedExprPtr> aggParams;
-    auto args = aggFunction.args();
-    aggParams.reserve(args.size());
-    for (auto arg : args) {
-      auto typeCase = arg.rex_type_case();
-      switch (typeCase) {
-        case ::substrait::Expression::RexTypeCase::kSelection: {
-          aggParams.emplace_back(
-              exprConverter_->toVeloxExpr(arg.selection(), inputTypes));
-          break;
-        }
-        case ::substrait::Expression::RexTypeCase::kCast: {
-          aggParams.emplace_back(
-              exprConverter_->toVeloxExpr(arg.cast(), inputTypes));
-          break;
-        }
-        case ::substrait::Expression::RexTypeCase::kLiteral: {
-          aggParams.emplace_back(exprConverter_->toVeloxExpr(arg.literal()));
-          break;
-        }
-        case ::substrait::Expression::RexTypeCase::kScalarFunction: {
-          // Pre-projection is needed before Aggregate.
-          // The input of Aggregatation will be the output of the
-          // pre-projection.
-          auto sFunc = arg.scalar_function();
-          projectExprs.emplace_back(
-              exprConverter_->toVeloxExpr(sFunc, inputTypes));
-          auto colOutName = substraitParser_->makeNodeName(planNodeId_, outIdx);
-          projectOutNames.emplace_back(colOutName);
-          auto outType = substraitParser_->parseType(sFunc.output_type());
-          auto aggInputParam =
-              std::make_shared<const core::FieldAccessTypedExpr>(
-                  toVeloxType(outType->type), colOutName);
-          aggParams.emplace_back(aggInputParam);
-          break;
-        }
-        default:
-          VELOX_NYI(
-              "Substrait conversion not supported for arg type '{}'", typeCase);
-      }
+    aggParams.reserve(aggFunction.arguments().size());
+    for (const auto& arg : aggFunction.arguments()) {
+      aggParams.emplace_back(
+          exprConverter_->toVeloxExpr(arg.value(), inputType));
     }
-    auto funcId = aggFunction.function_reference();
-    auto funcName = substraitParser_->findVeloxFunction(functionMap_, funcId);
-    auto aggOutType = substraitParser_->parseType(aggFunction.output_type());
+    auto aggVeloxType = toVeloxType(
+        substraitParser_->parseType(aggFunction.output_type())->type);
     auto aggExpr = std::make_shared<const core::CallTypedExpr>(
-        toVeloxType(aggOutType->type), std::move(aggParams), funcName);
+        aggVeloxType, std::move(aggParams), funcName);
     aggExprs.emplace_back(aggExpr);
-
-    // Initialize the Aggregate Step.
-    if (!phaseInited) {
-      auto phase = aggFunction.phase();
-      switch (phase) {
-        case ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE:
-          aggStep = core::AggregationNode::Step::kPartial;
-          break;
-        case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE:
-          aggStep = core::AggregationNode::Step::kIntermediate;
-          break;
-        case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT:
-          aggStep = core::AggregationNode::Step::kFinal;
-          break;
-        case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT:
-          aggStep = core::AggregationNode::Step::kSingle;
-          break;
-        default:
-          VELOX_NYI("Substrait conversion not supported for phase '{}'", phase);
-      }
-      phaseInited = true;
-    }
-    outIdx += 1;
   }
 
-  // Construct the Aggregate Node.
   bool ignoreNullKeys = false;
   std::vector<core::FieldAccessTypedExprPtr> preGroupingExprs;
-  if (projectOutNames.size() == 0) {
-    // Conduct Aggregation directly.
-    std::vector<std::string> aggOutNames;
-    aggOutNames.reserve(aggMeasureSize);
-    for (int idx = 0; idx < aggMeasureSize; idx++) {
-      aggOutNames.emplace_back(
-          substraitParser_->makeNodeName(planNodeId_, idx));
-    }
-    return std::make_shared<core::AggregationNode>(
-        nextPlanNodeId(),
-        aggStep,
-        veloxGroupingExprs,
-        preGroupingExprs,
-        aggOutNames,
-        aggExprs,
-        aggregateMasks,
-        ignoreNullKeys,
-        childNode);
-  } else {
-    // A Project Node is needed before Aggregation.
-    auto projectNode = std::make_shared<core::ProjectNode>(
-        nextPlanNodeId(),
-        std::move(projectOutNames),
-        std::move(projectExprs),
-        childNode);
-    std::vector<std::string> aggOutNames;
-    aggOutNames.reserve(aggMeasureSize);
-    for (int idx = 0; idx < aggMeasureSize; idx++) {
-      aggOutNames.emplace_back(
-          substraitParser_->makeNodeName(planNodeId_, idx));
-    }
-    return std::make_shared<core::AggregationNode>(
-        nextPlanNodeId(),
-        aggStep,
-        veloxGroupingExprs,
-        preGroupingExprs,
-        aggOutNames,
-        aggExprs,
-        aggregateMasks,
-        ignoreNullKeys,
-        projectNode);
+
+  // Get the output names of Aggregation.
+  std::vector<std::string> aggOutNames;
+  aggOutNames.reserve(aggRel.measures().size());
+  for (int idx = veloxGroupingExprs.size();
+       idx < veloxGroupingExprs.size() + aggRel.measures().size();
+       idx++) {
+    aggOutNames.emplace_back(substraitParser_->makeNodeName(planNodeId_, idx));
   }
+
+  // Create Aggregate node.
+  return std::make_shared<core::AggregationNode>(
+      nextPlanNodeId(),
+      aggStep,
+      veloxGroupingExprs,
+      preGroupingExprs,
+      aggOutNames,
+      aggExprs,
+      aggregateMasks,
+      ignoreNullKeys,
+      childNode);
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::ProjectRel& projectRel,
-    memory::MemoryPool* pool) {
+    const ::substrait::ProjectRel& projectRel) {
   core::PlanNodePtr childNode;
   if (projectRel.has_input()) {
-    childNode = toVeloxPlan(projectRel.input(), pool);
+    childNode = toVeloxPlan(projectRel.input());
   } else {
     VELOX_FAIL("Child Rel is expected in ProjectRel.");
   }
@@ -290,11 +163,10 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::FilterRel& filterRel,
-    memory::MemoryPool* pool) {
+    const ::substrait::FilterRel& filterRel) {
   core::PlanNodePtr childNode;
   if (filterRel.has_input()) {
-    childNode = toVeloxPlan(filterRel.input(), pool);
+    childNode = toVeloxPlan(filterRel.input());
   } else {
     VELOX_FAIL("Child Rel is expected in FilterRel.");
   }
@@ -310,7 +182,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& readRel,
-    memory::MemoryPool* pool,
     std::shared_ptr<SplitInfo>& splitInfo) {
   // Get output names and types.
   std::vector<std::string> colNameList;
@@ -330,6 +201,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
   // Parse local files
   if (readRel.has_local_files()) {
+    using SubstraitFileFormatCase =
+        ::substrait::ReadRel_LocalFiles_FileOrFiles::FileFormatCase;
     const auto& fileList = readRel.local_files().items();
     splitInfo->paths.reserve(fileList.size());
     splitInfo->starts.reserve(fileList.size());
@@ -340,11 +213,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       splitInfo->paths.emplace_back(file.uri_file());
       splitInfo->starts.emplace_back(file.start());
       splitInfo->lengths.emplace_back(file.length());
-      switch (file.format()) {
-        case 0:
+      switch (file.file_format_case()) {
+        case SubstraitFileFormatCase::kOrc:
           splitInfo->format = dwio::common::FileFormat::DWRF;
           break;
-        case 1:
+        case SubstraitFileFormatCase::kParquet:
           splitInfo->format = dwio::common::FileFormat::PARQUET;
           break;
         default:
@@ -393,7 +266,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   auto outputType = ROW(std::move(outNames), std::move(veloxTypeList));
 
   if (readRel.has_virtual_table()) {
-    return toVeloxPlan(readRel, pool, outputType);
+    return toVeloxPlan(readRel, outputType);
 
   } else {
     auto tableScanNode = std::make_shared<core::TableScanNode>(
@@ -404,7 +277,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& readRel,
-    memory::MemoryPool* pool,
     const RowTypePtr& type) {
   ::substrait::ReadRel_VirtualTable readVirtualTable = readRel.virtual_table();
   int64_t numVectors = readVirtualTable.values_size();
@@ -414,7 +286,13 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   std::vector<RowVectorPtr> vectors;
   vectors.reserve(numVectors);
 
-  int64_t batchSize = valueFieldNums / numColumns;
+  int64_t batchSize;
+  // For the empty vectors, eg,vectors = makeRowVector(ROW({}, {}), 1).
+  if (numColumns == 0) {
+    batchSize = 1;
+  } else {
+    batchSize = valueFieldNums / numColumns;
+  }
 
   for (int64_t index = 0; index < numVectors; ++index) {
     std::vector<VectorPtr> children;
@@ -447,32 +325,31 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         }
       }
       children.emplace_back(
-          setVectorFromVariants(outputChildType, batchChild, pool));
+          setVectorFromVariants(outputChildType, batchChild, pool_));
     }
 
     vectors.emplace_back(
-        std::make_shared<RowVector>(pool, type, nullptr, batchSize, children));
+        std::make_shared<RowVector>(pool_, type, nullptr, batchSize, children));
   }
 
   return std::make_shared<core::ValuesNode>(nextPlanNodeId(), vectors);
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::Rel& rel,
-    memory::MemoryPool* pool) {
+    const ::substrait::Rel& rel) {
   if (rel.has_aggregate()) {
-    return toVeloxPlan(rel.aggregate(), pool);
+    return toVeloxPlan(rel.aggregate());
   }
   if (rel.has_project()) {
-    return toVeloxPlan(rel.project(), pool);
+    return toVeloxPlan(rel.project());
   }
   if (rel.has_filter()) {
-    return toVeloxPlan(rel.filter(), pool);
+    return toVeloxPlan(rel.filter());
   }
   if (rel.has_read()) {
     auto splitInfo = std::make_shared<SplitInfo>();
 
-    auto planNode = toVeloxPlan(rel.read(), pool, splitInfo);
+    auto planNode = toVeloxPlan(rel.read(), splitInfo);
     splitInfoMap_[planNode->id()] = splitInfo;
     return planNode;
   }
@@ -480,35 +357,38 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::RelRoot& root,
-    memory::MemoryPool* pool) {
+    const ::substrait::RelRoot& root) {
   // TODO: Use the names as the output names for the whole computing.
   const auto& names = root.names();
   if (root.has_input()) {
     const auto& rel = root.input();
-    return toVeloxPlan(rel, pool);
+    return toVeloxPlan(rel);
   }
   VELOX_FAIL("Input is expected in RelRoot.");
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::Plan& substraitPlan,
-    memory::MemoryPool* pool) {
+    const ::substrait::Plan& substraitPlan) {
+  VELOX_CHECK(
+      checkTypeExtension(substraitPlan),
+      "The type extension only have unknown type.")
   // Construct the function map based on the Substrait representation.
   constructFunctionMap(substraitPlan);
 
   // Construct the expression converter.
-  exprConverter_ = std::make_shared<SubstraitVeloxExprConverter>(functionMap_);
+  exprConverter_ =
+      std::make_shared<SubstraitVeloxExprConverter>(pool_, functionMap_);
 
   // In fact, only one RelRoot or Rel is expected here.
-  for (const auto& rel : substraitPlan.relations()) {
-    if (rel.has_root()) {
-      return toVeloxPlan(rel.root(), pool);
-    }
-    if (rel.has_rel()) {
-      return toVeloxPlan(rel.rel(), pool);
-    }
+  VELOX_CHECK_EQ(substraitPlan.relations_size(), 1);
+  const auto& rel = substraitPlan.relations(0);
+  if (rel.has_root()) {
+    return toVeloxPlan(rel.root());
   }
+  if (rel.has_rel()) {
+    return toVeloxPlan(rel.rel());
+  }
+
   VELOX_FAIL("RelRoot or Rel is expected in Plan.");
 }
 
@@ -585,22 +465,23 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toVeloxFilter(
   for (const auto& scalarFunction : scalarFunctions) {
     auto filterNameSpec = substraitParser_->findFunctionSpec(
         functionMap_, scalarFunction.function_reference());
-    auto filterName = substraitParser_->getFunctionName(filterNameSpec);
+    auto filterName = getNameBeforeDelimiter(filterNameSpec, ":");
     int32_t colIdx;
     // TODO: Add different types' support here.
     double val;
-    for (auto& param : scalarFunction.args()) {
-      auto typeCase = param.rex_type_case();
+    for (auto& arg : scalarFunction.arguments()) {
+      auto argExpr = arg.value();
+      auto typeCase = argExpr.rex_type_case();
       switch (typeCase) {
         case ::substrait::Expression::RexTypeCase::kSelection: {
-          auto sel = param.selection();
+          auto sel = argExpr.selection();
           // TODO: Only direct reference is considered here.
           auto dRef = sel.direct_reference();
           colIdx = substraitParser_->parseReferenceSegment(dRef);
           break;
         }
         case ::substrait::Expression::RexTypeCase::kLiteral: {
-          auto sLit = param.literal();
+          auto sLit = argExpr.literal();
           // TODO: Only double is considered here.
           val = sLit.fp64();
           break;
@@ -672,9 +553,9 @@ void SubstraitVeloxPlanConverter::flattenConditions(
       auto filterNameSpec = substraitParser_->findFunctionSpec(
           functionMap_, sFunc.function_reference());
       // TODO: Only and relation is supported here.
-      if (substraitParser_->getFunctionName(filterNameSpec) == "and") {
-        for (const auto& sCondition : sFunc.args()) {
-          flattenConditions(sCondition, scalarFunctions);
+      if (getNameBeforeDelimiter(filterNameSpec, ":") == "and") {
+        for (const auto& sCondition : sFunc.arguments()) {
+          flattenConditions(sCondition.value(), scalarFunctions);
         }
       } else {
         scalarFunctions.emplace_back(sFunc);
@@ -698,6 +579,21 @@ void SubstraitVeloxPlanConverter::constructFunctionMap(
     auto name = sFmap.name();
     functionMap_[id] = name;
   }
+}
+
+bool SubstraitVeloxPlanConverter::checkTypeExtension(
+    const ::substrait::Plan& substraitPlan) {
+  for (const auto& sExtension : substraitPlan.extensions()) {
+    if (!sExtension.has_extension_type()) {
+      continue;
+    }
+
+    // Only support UNKNOWN type in UserDefined type extension.
+    if (sExtension.extension_type().name() != "UNKNOWN") {
+      return false;
+    }
+  }
+  return true;
 }
 
 const std::string& SubstraitVeloxPlanConverter::findFunction(

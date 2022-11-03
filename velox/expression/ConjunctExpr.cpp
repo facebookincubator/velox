@@ -15,7 +15,7 @@
  */
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/BooleanMix.h"
-#include "velox/expression/VarSetter.h"
+#include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::velox::exec {
 
@@ -96,8 +96,8 @@ void ConjunctExpr::evalSpecialForm(
     VectorPtr& result) {
   // TODO Revisit error handling
   bool throwOnError = *context.mutableThrowOnError();
-  VarSetter saveError(context.mutableThrowOnError(), false);
-  BaseVector::ensureWritable(rows, type(), context.pool(), &result);
+  ScopedVarSetter saveError(context.mutableThrowOnError(), false);
+  context.ensureWritable(rows, type(), result);
   auto flatResult = result->asFlatVector<bool>();
   // clear nulls from the result for the active rows.
   if (flatResult->mayHaveNulls()) {
@@ -114,32 +114,22 @@ void ConjunctExpr::evalSpecialForm(
   }
 
   // OR: fix finalSelection at "rows" unless already fixed
-  VarSetter finalSelectionOr(
-      context.mutableFinalSelection(),
-      &rows,
-      !isAnd_ && context.isFinalSelection());
-  VarSetter isFinalSelectionOr(
-      context.mutableIsFinalSelection(), false, !isAnd_);
+  ScopedFinalSelectionSetter scopedFinalSelectionSetter(
+      context, &rows, !isAnd_);
 
   bool handleErrors = false;
   LocalSelectivityVector errorRows(context);
   LocalSelectivityVector activeRowsHolder(context, rows);
   auto activeRows = activeRowsHolder.get();
-  assert(activeRows); // lint
+  VELOX_DCHECK(activeRows != nullptr);
   int32_t numActive = activeRows->countSelected();
   for (int32_t i = 0; i < inputs_.size(); ++i) {
     VectorPtr inputResult;
+    VectorRecycler inputResultRecycler(inputResult, context.vectorPool());
     EvalCtx::ErrorVectorPtr errors;
     if (handleErrors) {
       context.swapErrors(errors);
     }
-
-    // AND: reduce finalSelection to activeRows unless it has been fixed by IF
-    // or OR above.
-    VarSetter finalSelectionAnd(
-        context.mutableFinalSelection(),
-        static_cast<const SelectivityVector*>(activeRows),
-        isAnd_ && context.isFinalSelection());
 
     SelectivityTimer timer(selectivity_[inputOrder_[i]], numActive);
     inputs_[inputOrder_[i]]->eval(*activeRows, context, inputResult);
@@ -274,5 +264,15 @@ void ConjunctExpr::updateResult(
       activeRows->updateBounds();
     }
   }
+}
+
+std::string ConjunctExpr::toSql() const {
+  std::stringstream out;
+  out << "(" << inputs_[0]->toSql() << ")";
+  for (auto i = 1; i < inputs_.size(); ++i) {
+    out << " " << name_ << " "
+        << "(" << inputs_[i]->toSql() << ")";
+  }
+  return out.str();
 }
 } // namespace facebook::velox::exec

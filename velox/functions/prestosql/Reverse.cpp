@@ -24,7 +24,7 @@ namespace facebook::velox::functions {
 
 ///  reverse(Array[E]) -> Array[E]
 ///  Takes any array as an input and returns the reversed array.
-
+///
 ///  reverse(Varchar) -> Varchar
 ///  Takes any Varchar as an input and returns the reversed varchar.
 class ReverseFunction : public exec::VectorFunction {
@@ -49,8 +49,8 @@ class ReverseFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 1);
 
     switch (args[0]->typeKind()) {
@@ -70,18 +70,37 @@ class ReverseFunction : public exec::VectorFunction {
   void applyVarchar(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::EvalCtx* context,
-      VectorPtr* result) const {
-    BaseVector* inputStringsVector = args[0].get();
-    auto inputStringVector = inputStringsVector->as<FlatVector<StringView>>();
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
+    auto* arg = args[0].get();
 
-    auto ascii = isAscii(inputStringsVector, rows);
+    auto ascii = isAscii(arg, rows);
 
     prepareFlatResultsVector(result, rows, context, args[0]);
-    auto* resultFlatVector = (*result)->as<FlatVector<StringView>>();
+    auto* flatResult = result->as<FlatVector<StringView>>();
 
-    StringEncodingTemplateWrapper<ApplyVarcharInternal>::apply(
-        ascii, rows, inputStringVector, resultFlatVector);
+    // Input can be constant or flat.
+    if (arg->isConstantEncoding()) {
+      auto value = arg->as<ConstantVector<StringView>>()->valueAt(0);
+
+      auto proxy = exec::StringWriter<>(flatResult, rows.begin());
+      if (ascii) {
+        stringImpl::reverse<true>(proxy, value.str());
+      } else {
+        stringImpl::reverse<false>(proxy, value.str());
+      }
+      proxy.finalize();
+
+      auto rawResults = flatResult->mutableRawValues();
+      auto reversedValue = rawResults[rows.begin()];
+
+      rows.applyToSelected([&](auto row) { rawResults[row] = reversedValue; });
+    } else {
+      auto flatInput = arg->as<FlatVector<StringView>>();
+
+      StringEncodingTemplateWrapper<ApplyVarcharInternal>::apply(
+          ascii, rows, flatInput, flatResult);
+    }
   }
 
   bool ensureStringEncodingSetAtAllInputs() const override {
@@ -95,14 +114,41 @@ class ReverseFunction : public exec::VectorFunction {
   void applyArray(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::EvalCtx* context,
-      VectorPtr* result) const {
-    auto vector = args[0].get();
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
+    auto& arg = args[0];
+
+    VectorPtr localResult;
+
+    // Input can be constant or flat.
+    if (arg->isConstantEncoding()) {
+      auto* constantArray = arg->as<ConstantVector<ComplexType>>();
+      const auto& flatArray = constantArray->valueVector();
+      const auto flatIndex = constantArray->index();
+
+      SelectivityVector singleRow(flatIndex + 1, false);
+      singleRow.setValid(flatIndex, true);
+      singleRow.updateBounds();
+
+      localResult = applyArrayFlat(singleRow, flatArray, context);
+      localResult =
+          BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
+    } else {
+      localResult = applyArrayFlat(rows, arg, context);
+    }
+
+    context.moveOrCopyResult(localResult, rows, result);
+  }
+
+  VectorPtr applyArrayFlat(
+      const SelectivityVector& rows,
+      const VectorPtr& vector,
+      exec::EvalCtx& context) const {
     auto arrayVector = vector->as<ArrayVector>();
     auto elementCount = arrayVector->elements()->size();
 
     // Allocate new vectors for indices.
-    auto pool = context->pool();
+    auto* pool = context.pool();
     BufferPtr indices = allocateIndices(elementCount, pool);
     auto rawIndices = indices->asMutable<vector_size_t>();
 
@@ -122,7 +168,7 @@ class ReverseFunction : public exec::VectorFunction {
     auto elementsDict =
         BaseVector::transpose(indices, std::move(elementsVector));
 
-    auto resultArray = std::make_shared<ArrayVector>(
+    return std::make_shared<ArrayVector>(
         pool,
         vector->type(),
         arrayVector->nulls(),
@@ -131,8 +177,6 @@ class ReverseFunction : public exec::VectorFunction {
         arrayVector->sizes(),
         elementsDict,
         arrayVector->getNullCount());
-
-    context->moveOrCopyResult(resultArray, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

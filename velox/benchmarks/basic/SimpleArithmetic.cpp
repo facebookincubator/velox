@@ -15,6 +15,8 @@
  */
 
 #include <folly/Benchmark.h>
+#include <folly/init/Init.h>
+
 #include <gflags/gflags.h>
 
 #include "velox/functions/Registerer.h"
@@ -329,6 +331,7 @@ BENCHMARK_MULTI(plusCheckedLarge, n) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+  folly::init(&argc, &argv);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   benchmark = std::make_unique<SimpleArithmeticBenchmark>();

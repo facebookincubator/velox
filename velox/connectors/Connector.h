@@ -28,7 +28,7 @@ class Filter;
 }
 namespace facebook::velox::core {
 class ITypedExpr;
-}
+} // namespace facebook::velox::core
 namespace facebook::velox::exec {
 class ExprSet;
 }
@@ -161,59 +161,72 @@ class ExpressionEvaluator {
   // Evaluates previously compiled expression on the specified rows.
   // Re-uses result vector if it is not null.
   virtual void evaluate(
-      exec::ExprSet* exprSet,
+      exec::ExprSet* FOLLY_NONNULL exprSet,
       const SelectivityVector& rows,
       RowVectorPtr& input,
-      VectorPtr* result) const = 0;
+      VectorPtr* FOLLY_NULLABLE result) const = 0;
 };
 
 class ConnectorQueryCtx {
  public:
   ConnectorQueryCtx(
-      memory::MemoryPool* pool,
-      Config* config,
-      ExpressionEvaluator* expressionEvaluator,
-      memory::MappedMemory* mappedMemory,
-      const std::string& scanId)
+      memory::MemoryPool* FOLLY_NONNULL pool,
+      const Config* FOLLY_NONNULL connectorConfig,
+      ExpressionEvaluator* FOLLY_NULLABLE expressionEvaluator,
+      memory::MappedMemory* FOLLY_NONNULL mappedMemory,
+      const std::string& taskId,
+      const std::string& planNodeId,
+      int driverId)
       : pool_(pool),
-        config_(config),
+        config_(connectorConfig),
         expressionEvaluator_(expressionEvaluator),
         mappedMemory_(mappedMemory),
-        scanId_(scanId) {}
+        scanId_(fmt::format("{}.{}", taskId, planNodeId)),
+        taskId_(taskId),
+        driverId_(driverId) {}
 
-  memory::MemoryPool* memoryPool() const {
+  memory::MemoryPool* FOLLY_NONNULL memoryPool() const {
     return pool_;
   }
 
-  Config* config() const {
+  const Config* FOLLY_NONNULL config() const {
     return config_;
   }
 
-  ExpressionEvaluator* expressionEvaluator() const {
+  ExpressionEvaluator* FOLLY_NULLABLE expressionEvaluator() const {
     return expressionEvaluator_;
   }
 
   // MappedMemory for large allocations. Used for caching with
   // CachedBufferedImput if this implements cache::AsyncDataCache.
-  memory::MappedMemory* mappedMemory() const {
+  memory::MappedMemory* FOLLY_NONNULL mappedMemory() const {
     return mappedMemory_;
   }
 
-  // Returns an id that allows sharing state between different threads
-  // of the same scan. This is typically a query id plus the scan's
-  // PlanNodeId. This is used for locating a scanTracker, which tracks
-  // the read density of columns for prefetch and other memory
-  // hierarchy purposes.
+  // This is a combination of task id and the scan's PlanNodeId. This is an id
+  // that allows sharing state between different threads of the same scan. This
+  // is used for locating a scanTracker, which tracks the read density of
+  // columns for prefetch and other memory hierarchy purposes.
   const std::string& scanId() const {
     return scanId_;
   }
 
+  const std::string& taskId() const {
+    return taskId_;
+  }
+
+  int driverId() const {
+    return driverId_;
+  }
+
  private:
-  memory::MemoryPool* pool_;
-  Config* config_;
-  ExpressionEvaluator* expressionEvaluator_;
-  memory::MappedMemory* mappedMemory_;
-  std::string scanId_;
+  memory::MemoryPool* FOLLY_NONNULL pool_;
+  const Config* FOLLY_NONNULL config_;
+  ExpressionEvaluator* FOLLY_NULLABLE expressionEvaluator_;
+  memory::MappedMemory* FOLLY_NONNULL mappedMemory_;
+  const std::string scanId_;
+  const std::string taskId_;
+  const int driverId_;
 };
 
 class Connector {
@@ -245,12 +258,12 @@ class Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx) = 0;
+      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) = 0;
 
   virtual std::shared_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
-      ConnectorQueryCtx* connectorQueryCtx) = 0;
+      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) = 0;
 
   // Returns a ScanTracker for 'id'. 'id' uniquely identifies the
   // tracker and different threads will share the same
@@ -261,7 +274,7 @@ class Connector {
       int32_t loadQuantum);
 
  private:
-  static void unregisterTracker(cache::ScanTracker* tracker);
+  static void unregisterTracker(cache::ScanTracker* FOLLY_NONNULL tracker);
 
   const std::string id_;
 
@@ -274,7 +287,7 @@ class Connector {
 
 class ConnectorFactory {
  public:
-  explicit ConnectorFactory(const char* name) : name_(name) {}
+  explicit ConnectorFactory(const char* FOLLY_NONNULL name) : name_(name) {}
 
   virtual ~ConnectorFactory() = default;
 
@@ -285,7 +298,7 @@ class ConnectorFactory {
   virtual std::shared_ptr<Connector> newConnector(
       const std::string& id,
       std::shared_ptr<const Config> properties,
-      folly::Executor* executor = nullptr) = 0;
+      folly::Executor* FOLLY_NULLABLE executor = nullptr) = 0;
 
  private:
   const std::string name_;

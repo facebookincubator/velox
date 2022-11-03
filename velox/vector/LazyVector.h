@@ -122,6 +122,9 @@ void setRunTimeStatWriter(std::unique_ptr<BaseRuntimeStatWriter>&& ptr);
 // ever be accessed, loading can be limited to these positions. This
 // also allows pushing down computation into loading a column, hence
 // bypassing materialization into a vector.
+// Unloaded LazyVectors should be referenced only by one top-level vector.
+// Otherwise, it runs the risk of being loaded for different set of rows by each
+// top-level vector.
 class LazyVector : public BaseVector {
  public:
   LazyVector(
@@ -191,7 +194,9 @@ class LazyVector : public BaseVector {
     return loadedVectorShared().get();
   }
 
-  // Returns a shared_ptr to the vector holding the values.
+  // Returns a shared_ptr to the vector holding the values. If vector is not
+  // loaded, loads all the rows, otherwise returns the loaded vector which can
+  // have partially loaded rows.
   const VectorPtr& loadedVectorShared() const {
     if (!allLoaded_) {
       if (!vector_) {
@@ -231,7 +236,7 @@ class LazyVector : public BaseVector {
   }
 
   bool isScalar() const override {
-    return loadedVector()->isScalar();
+    return type()->isPrimitiveType() || type()->isOpaque();
   }
 
   bool mayHaveNulls() const override {
@@ -244,10 +249,6 @@ class LazyVector : public BaseVector {
 
   bool isNullAt(vector_size_t index) const override {
     return loadedVector()->isNullAt(index);
-  }
-
-  const uint64_t* flatRawNulls(const SelectivityVector& rows) override {
-    return loadedVector()->flatRawNulls(rows);
   }
 
   uint64_t retainedSize() const override {
@@ -263,6 +264,8 @@ class LazyVector : public BaseVector {
   std::string toString(vector_size_t index) const override {
     return loadedVector()->toString(index);
   }
+
+  VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
 
   // Loads 'rows' of 'vector'. 'vector' may be an arbitrary wrapping
   // of a LazyVector. 'rows' are translated through the wrappers. If

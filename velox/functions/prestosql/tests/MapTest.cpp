@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
+
+namespace {
 
 class MapTest : public FunctionBaseTest {};
 
@@ -47,7 +50,7 @@ TEST_F(MapTest, someNulls) {
   auto keyAt = [](vector_size_t row) { return row % 11; };
   auto valueAt = [](vector_size_t row) { return row % 13; };
   auto keys = makeArrayVector<int64_t>(size, sizeAt, keyAt, nullEvery(7));
-  auto values = makeArrayVector<int32_t>(size, sizeAt, valueAt);
+  auto values = makeArrayVector<int32_t>(size, sizeAt, valueAt, nullEvery(7));
 
   auto expectedMap = makeMapVector<int64_t, int32_t>(
       size, sizeAt, keyAt, valueAt, nullEvery(7));
@@ -91,29 +94,54 @@ TEST_F(MapTest, partiallyPopulated) {
   }
 }
 
+TEST_F(MapTest, nullKeys) {
+  auto keys = makeNullableArrayVector<int64_t>({
+      {1, 2, 3, std::nullopt},
+      {1, 2},
+      {std::nullopt},
+  });
+
+  auto values = makeNullableArrayVector<int64_t>({
+      {10, 20, 30, 40},
+      {10, 20},
+      {10},
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate<MapVector>("map(c0, c1)", makeRowVector({keys, values})),
+      "map key cannot be null");
+
+  auto result =
+      evaluate<MapVector>("try(map(c0, c1))", makeRowVector({keys, values}));
+  assertEqualVectors(
+      makeNullableMapVector<int64_t, int64_t>({
+          std::nullopt,
+          {{{1, 10}, {2, 20}}},
+          std::nullopt,
+      }),
+      result);
+}
+
 TEST_F(MapTest, duplicateKeys) {
   auto size = 1'000;
 
   auto sizeAt = [](vector_size_t row) { return row % 7; };
   auto keys = makeArrayVector<int64_t>(
-      size, sizeAt, [](vector_size_t row) { return row % 3; });
+      size, sizeAt, [](vector_size_t row) { return 10 + row % 3; });
   auto values = makeArrayVector<int32_t>(
       size, sizeAt, [](vector_size_t row) { return row % 5; });
 
-  try {
-    evaluate<MapVector>("map(c0, c1)", makeRowVector({keys, values}));
-    ASSERT_TRUE(false) << "Expected an error";
-  } catch (const VeloxUserError& e) {
-    ASSERT_EQ(e.message(), "Duplicate map keys are not allowed");
-  }
-  // Trying the map version with allowing duplicates
-  facebook::velox::functions::prestosql::registerMapAllowingDuplicates(
-      std::string("map2"));
-  try {
-    evaluate<MapVector>("map2(c0, c1)", makeRowVector({keys, values}));
-  } catch (const VeloxUserError& e) {
-    ASSERT_TRUE(false) << "No error expected";
-  }
+  VELOX_ASSERT_THROW(
+      evaluate<MapVector>("map(c0, c1)", makeRowVector({keys, values})),
+      "Duplicate map keys (10) are not allowed");
+
+  ASSERT_NO_THROW(
+      evaluate<MapVector>("try(map(c0, c1))", makeRowVector({keys, values})));
+
+  // Trying the map version with allowing duplicates.
+  functions::prestosql::registerMapAllowingDuplicates("map2");
+  ASSERT_NO_THROW(
+      evaluate<MapVector>("map2(c0, c1)", makeRowVector({keys, values})));
 }
 
 TEST_F(MapTest, differentArraySizes) {
@@ -128,13 +156,12 @@ TEST_F(MapTest, differentArraySizes) {
       [](vector_size_t row) { return row % 7; },
       [](vector_size_t row) { return row % 13; });
 
-  try {
-    evaluate<MapVector>("map(c0, c1)", makeRowVector({keys, values}));
-    ASSERT_TRUE(false) << "Expected an error";
-  } catch (const VeloxUserError& e) {
-    ASSERT_EQ(
-        e.message(), "(0 vs. 5) Key and value arrays must be the same length");
-  }
+  VELOX_ASSERT_THROW(
+      evaluate<MapVector>("map(c0, c1)", makeRowVector({keys, values})),
+      "(0 vs. 5) Key and value arrays must be the same length");
+
+  ASSERT_NO_THROW(
+      evaluate<MapVector>("try(map(c0, c1))", makeRowVector({keys, values})));
 }
 
 TEST_F(MapTest, encodings) {
@@ -211,3 +238,30 @@ TEST_F(MapTest, constantValues) {
       }));
   assertEqualVectors(expectedMap, result);
 }
+
+TEST_F(MapTest, outOfOrder) {
+  auto size = 1'000;
+
+  auto sizeAt = [](vector_size_t row) { return row % 5; };
+  auto keyAt = [](vector_size_t row) { return row % 11; };
+  auto valueAt = [](vector_size_t row) { return row % 13; };
+
+  auto keys1 = makeArrayVector<int64_t>(size, sizeAt, keyAt);
+  auto keys2 = makeArrayVector<int64_t>(size, sizeAt, keyAt);
+
+  auto values1 = makeArrayVector<int32_t>(size, sizeAt, valueAt);
+  auto values2 = makeArrayVector<int32_t>(size, sizeAt, valueAt);
+
+  auto intVector =
+      makeFlatVector<int32_t>(size, [](vector_size_t row) { return row; });
+
+  auto expectedMap =
+      makeMapVector<int64_t, int32_t>(size, sizeAt, keyAt, valueAt);
+
+  auto result = evaluate<MapVector>(
+      "map(if(c0 \% 2 = 1, c1, c2), if(c0 \% 3 = 0, c3, c4))",
+      makeRowVector({intVector, keys1, keys2, values1, values2}));
+  assertEqualVectors(expectedMap, result);
+}
+
+} // namespace

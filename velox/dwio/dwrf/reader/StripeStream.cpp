@@ -15,6 +15,7 @@
  */
 
 #include <folly/ScopeGuard.h>
+#include <folly/container/F14Set.h>
 
 #include "velox/common/base/BitSet.h"
 #include "velox/dwio/common/exception/Exception.h"
@@ -180,7 +181,7 @@ void StripeStreamsImpl::loadStreams() {
   if (handler.isEncrypted()) {
     DWIO_ENSURE_EQ(
         handler.getEncryptionGroupCount(), footer.encryptiongroups_size());
-    std::unordered_set<uint32_t> groupIndices;
+    folly::F14FastSet<uint32_t> groupIndices;
     bits::forEachSetBit(
         projectedNodes.bits(), 0, projectedNodes.max() + 1, [&](uint32_t node) {
           if (handler.isEncrypted(node)) {
@@ -217,7 +218,7 @@ StripeStreamsImpl::getCompressedStream(const DwrfStreamIdentifier& si) const {
   const auto& info = getStreamInfo(si);
 
   std::unique_ptr<dwio::common::SeekableInputStream> streamRead;
-  if (si.kind() == StreamKind::StreamKind_ROW_INDEX) {
+  if (isIndexStream(si.kind())) {
     streamRead = getIndexStreamFromCache(info);
   }
 
@@ -230,14 +231,14 @@ StripeStreamsImpl::getCompressedStream(const DwrfStreamIdentifier& si) const {
   return streamRead;
 }
 
-std::unordered_map<uint32_t, std::vector<uint32_t>>
+folly::F14FastMap<uint32_t, std::vector<uint32_t>>
 StripeStreamsImpl::getEncodingKeys() const {
   DWIO_ENSURE_EQ(
       decryptedEncodings_.size(),
       0,
       "Not supported for reader with encryption");
 
-  std::unordered_map<uint32_t, std::vector<uint32_t>> encodingKeys;
+  folly::F14FastMap<uint32_t, std::vector<uint32_t>> encodingKeys;
   for (const auto& kv : encodings_) {
     const auto ek = kv.first;
     encodingKeys[ek.node].push_back(ek.sequence);
@@ -246,9 +247,9 @@ StripeStreamsImpl::getEncodingKeys() const {
   return encodingKeys;
 }
 
-std::unordered_map<uint32_t, std::vector<DwrfStreamIdentifier>>
+folly::F14FastMap<uint32_t, std::vector<DwrfStreamIdentifier>>
 StripeStreamsImpl::getStreamIdentifiers() const {
-  std::unordered_map<uint32_t, std::vector<DwrfStreamIdentifier>>
+  folly::F14FastMap<uint32_t, std::vector<DwrfStreamIdentifier>>
       nodeToStreamIdMap;
 
   for (const auto& kv : streams_) {
@@ -268,7 +269,7 @@ std::unique_ptr<dwio::common::SeekableInputStream> StripeStreamsImpl::getStream(
   }
 
   std::unique_ptr<dwio::common::SeekableInputStream> streamRead;
-  if (si.kind() == StreamKind::StreamKind_ROW_INDEX) {
+  if (isIndexStream(si.kind())) {
     streamRead = getIndexStreamFromCache(info);
   }
 
@@ -323,7 +324,12 @@ StripeStreamsImpl::getIndexStreamFromCache(
     if (indexBase) {
       auto offset = info.getOffset();
       auto length = info.getLength();
-
+      if (auto cacheInput =
+              dynamic_cast<dwio::common::CacheInputStream*>(indexBase.get())) {
+        cacheInput->Skip(offset);
+        cacheInput->setRemainingBytes(length);
+        return indexBase;
+      }
       const void* start;
       int32_t ignored;
       DWIO_ENSURE(indexBase->Next(&start, &ignored), "failed to read index");

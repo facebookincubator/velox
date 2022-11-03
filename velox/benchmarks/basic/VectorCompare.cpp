@@ -15,6 +15,8 @@
  */
 
 #include <folly/Benchmark.h>
+#include <folly/init/Init.h>
+
 #include <gflags/gflags.h>
 
 #include "velox/common/base/CompareFlags.h"
@@ -41,14 +43,11 @@ class VectorCompareBenchmark : public functions::test::FunctionBenchmarkBase {
 
     flatVector_ = fuzzer.fuzzFlat(BIGINT());
 
-    arrayVector_ =
-        fuzzer.fuzzComplex(std::make_shared<ArrayType>(ArrayType(BIGINT())));
+    arrayVector_ = fuzzer.fuzzFlat(ARRAY(BIGINT()));
 
-    mapVector_ = fuzzer.fuzzComplex(
-        std::make_shared<MapType>(MapType(BIGINT(), BIGINT())));
+    mapVector_ = fuzzer.fuzzFlat(MAP(BIGINT(), BIGINT()));
 
-    rowVector_ = fuzzer.fuzzComplex(
-        vectorMaker_.rowType({BIGINT(), BIGINT(), BIGINT()}));
+    rowVector_ = fuzzer.fuzzFlat(ROW({BIGINT(), BIGINT(), BIGINT()}));
   }
 
   size_t run(const VectorPtr& vector) {
@@ -99,11 +98,11 @@ BENCHMARK_MULTI(compareSimilarArray) {
   return benchmark->run(benchmark->arrayVector_);
 }
 
-BENCHMARK_MULTI(CompareSimilarMap) {
+BENCHMARK_MULTI(compareSimilarMap) {
   return benchmark->run(benchmark->mapVector_);
 }
 
-BENCHMARK_MULTI(CompareSimilarRow) {
+BENCHMARK_MULTI(compareSimilarRow) {
   return benchmark->run(benchmark->rowVector_);
 }
 
@@ -112,6 +111,7 @@ BENCHMARK_DRAW_LINE();
 } // namespace
 
 int main(int argc, char* argv[]) {
+  folly::init(&argc, &argv);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   benchmark = std::make_unique<VectorCompareBenchmark>(1000);

@@ -35,12 +35,18 @@ class IntDecoder {
   IntDecoder(
       std::unique_ptr<dwio::common::SeekableInputStream> input,
       bool useVInts,
-      uint32_t numBytes)
+      uint32_t numBytes,
+      bool bigEndian = false)
       : inputStream(std::move(input)),
         bufferStart(nullptr),
         bufferEnd(bufferStart),
         useVInts(useVInts),
-        numBytes(numBytes) {}
+        numBytes(numBytes),
+        bigEndian(bigEndian) {}
+
+  // Constructs for use in Parquet /Alphawhere the buffer is always preloaded.
+  IntDecoder(const char* FOLLY_NONNULL start, const char* FOLLY_NONNULL end)
+      : bufferStart(start), bufferEnd(end), useVInts(false), numBytes(0) {}
 
   virtual ~IntDecoder() = default;
 
@@ -62,10 +68,15 @@ class IntDecoder {
    * @param nulls If the pointer is null, all values are read. If the
    *    pointer is not null, positions that are true are skipped.
    */
-  virtual void
-  next(int64_t* data, uint64_t numValues, const uint64_t* nulls) = 0;
+  virtual void next(
+      int64_t* FOLLY_NONNULL data,
+      uint64_t numValues,
+      const uint64_t* FOLLY_NULLABLE nulls) = 0;
 
-  virtual void next(int32_t* data, uint64_t numValues, const uint64_t* nulls) {
+  virtual void next(
+      int32_t* FOLLY_NONNULL data,
+      uint64_t numValues,
+      const uint64_t* FOLLY_NULLABLE nulls) {
     if (numValues <= 4) {
       int64_t temp[4];
       next(temp, numValues, nulls);
@@ -81,17 +92,23 @@ class IntDecoder {
     }
   }
 
-  virtual void
-  nextInts(int32_t* data, uint64_t numValues, const uint64_t* nulls) {
+  virtual void nextInts(
+      int32_t* FOLLY_NONNULL data,
+      uint64_t numValues,
+      const uint64_t* FOLLY_NULLABLE nulls) {
     narrow(data, numValues, nulls);
   }
 
-  virtual void
-  nextShorts(int16_t* data, uint64_t numValues, const uint64_t* nulls) {
+  virtual void nextShorts(
+      int16_t* FOLLY_NONNULL data,
+      uint64_t numValues,
+      const uint64_t* FOLLY_NULLABLE nulls) {
     narrow(data, numValues, nulls);
   }
 
-  virtual void nextLengths(int32_t* /*values*/, int32_t /*numValues*/) {
+  virtual void nextLengths(
+      int32_t* FOLLY_NONNULL /*values*/,
+      int32_t /*numValues*/) {
     VELOX_FAIL("A length decoder should be a RLEv1");
   }
 
@@ -111,28 +128,32 @@ class IntDecoder {
 
   // Reads 'size' consecutive T' and stores then in 'result'.
   template <typename T>
-  void bulkRead(uint64_t size, T* result);
+  void bulkRead(uint64_t size, T* FOLLY_NONNULL result);
 
   // Reads data at positions 'rows' to 'result'. 'initialRow' is the
   // row number of the first unread element of 'this'. if rows is {10}
   // and 'initialRow' is 9, then this skips one element and reads the
   // next element into 'result'.
   template <typename T>
-  void bulkReadRows(RowSet rows, T* result, int32_t initialRow = 0);
+  void
+  bulkReadRows(RowSet rows, T* FOLLY_NONNULL result, int32_t initialRow = 0);
 
  protected:
   template <typename T>
-  void bulkReadFixed(uint64_t size, T* result);
+  void bulkReadFixed(uint64_t size, T* FOLLY_NONNULL result);
 
   template <typename T>
-  void bulkReadRowsFixed(RowSet rows, int32_t initialRow, T* result);
+  void
+  bulkReadRowsFixed(RowSet rows, int32_t initialRow, T* FOLLY_NONNULL result);
 
   signed char readByte();
-
   int64_t readLong();
   uint64_t readVuLong();
   int64_t readVsLong();
   int64_t readLongLE();
+  int128_t readInt128();
+  template <typename cppType>
+  cppType readLittleEndianFromBigEndian();
 
   // Applies 'visitor to 'numRows' consecutive values.
   template <typename Visitor>
@@ -151,8 +172,10 @@ class IntDecoder {
   //       this by directly supporting deserialization into the correct
   //       target data type
   template <typename T>
-  void
-  narrow(T* const data, const uint64_t numValues, const uint64_t* const nulls) {
+  void narrow(
+      T* FOLLY_NONNULL const data,
+      const uint64_t numValues,
+      const uint64_t* FOLLY_NULLABLE const nulls) {
     DWIO_ENSURE_LE(numBytes, sizeof(T))
     std::array<int64_t, 64> buf;
     uint64_t remain = numValues;
@@ -173,10 +196,11 @@ class IntDecoder {
   }
 
   const std::unique_ptr<dwio::common::SeekableInputStream> inputStream;
-  const char* bufferStart;
-  const char* bufferEnd;
+  const char* FOLLY_NULLABLE bufferStart;
+  const char* FOLLY_NULLABLE bufferEnd;
   const bool useVInts;
   const uint32_t numBytes;
+  bool bigEndian;
 };
 
 template <bool isSigned>
@@ -284,6 +308,22 @@ FOLLY_ALWAYS_INLINE int64_t IntDecoder<isSigned>::readVsLong() {
 template <bool isSigned>
 inline int64_t IntDecoder<isSigned>::readLongLE() {
   int64_t result = 0;
+  if (bufferStart && bufferStart + sizeof(int64_t) <= bufferEnd) {
+    bufferStart += numBytes;
+    if (numBytes == 8) {
+      return *reinterpret_cast<const int64_t*>(bufferStart - 8);
+    }
+    if (numBytes == 4) {
+      if (isSigned) {
+        return *reinterpret_cast<const int32_t*>(bufferStart - 4);
+      }
+      return *reinterpret_cast<const uint32_t*>(bufferStart - 4);
+    }
+    if (isSigned) {
+      return *reinterpret_cast<const int16_t*>(bufferStart - 2);
+    }
+    return *reinterpret_cast<const uint16_t*>(bufferStart - 2);
+  }
   char b;
   int64_t offset = 0;
   for (uint32_t i = 0; i < numBytes; ++i) {
@@ -291,6 +331,7 @@ inline int64_t IntDecoder<isSigned>::readLongLE() {
     result |= (b & BASE_256_MASK) << offset;
     offset += 8;
   }
+
   if (isSigned && numBytes < 8) {
     if (numBytes == 2) {
       return static_cast<int16_t>(result);
@@ -304,6 +345,58 @@ inline int64_t IntDecoder<isSigned>::readLongLE() {
 }
 
 template <bool isSigned>
+template <typename cppType>
+inline cppType IntDecoder<isSigned>::readLittleEndianFromBigEndian() {
+  cppType bigEndianValue = 0;
+  // Input is in Big Endian layout of size numBytes.
+  if (bufferStart && bufferStart + sizeof(int64_t) <= bufferEnd) {
+    bufferStart += numBytes;
+    auto valueOffset = bufferStart - numBytes;
+    // Use first byte to initialize bigEndianValue.
+    bigEndianValue =
+        *(reinterpret_cast<const int8_t*>(valueOffset)) >= 0 ? 0 : -1;
+    // Copy numBytes input to the bigEndianValue.
+    memcpy(
+        reinterpret_cast<char*>(&bigEndianValue) + (sizeof(cppType) - numBytes),
+        reinterpret_cast<const char*>(valueOffset),
+        numBytes);
+    // Convert bigEndianValue to little endian value and return.
+    if constexpr (sizeof(cppType) == 16) {
+      return dwio::common::builtin_bswap128(bigEndianValue);
+    } else {
+      return __builtin_bswap64(bigEndianValue);
+    }
+  }
+  char b;
+  cppType offset = 0;
+  cppType numBytesBigEndian = 0;
+  // Read numBytes input into numBytesBigEndian.
+  for (uint32_t i = 0; i < numBytes; ++i) {
+    b = readByte();
+    if constexpr (sizeof(cppType) == 16) {
+      numBytesBigEndian |= (b & INT128_BASE_256_MASK) << offset;
+    } else {
+      numBytesBigEndian |= (b & BASE_256_MASK) << offset;
+    }
+    offset += 8;
+  }
+  // Use first byte to initialize bigEndianValue.
+  bigEndianValue =
+      (reinterpret_cast<const int8_t*>(&numBytesBigEndian)[0]) >= 0 ? 0 : -1;
+  // Copy numBytes input to the bigEndianValue.
+  memcpy(
+      reinterpret_cast<char*>(&bigEndianValue) + (sizeof(cppType) - numBytes),
+      reinterpret_cast<const char*>(&numBytesBigEndian),
+      numBytes);
+  // Convert bigEndianValue to little endian value and return.
+  if constexpr (sizeof(cppType) == 16) {
+    return dwio::common::builtin_bswap128(bigEndianValue);
+  } else {
+    return __builtin_bswap64(bigEndianValue);
+  }
+}
+
+template <bool isSigned>
 inline int64_t IntDecoder<isSigned>::readLong() {
   if (useVInts) {
     if constexpr (isSigned) {
@@ -311,9 +404,120 @@ inline int64_t IntDecoder<isSigned>::readLong() {
     } else {
       return static_cast<int64_t>(readVuLong());
     }
+  } else if (bigEndian) {
+    return readLittleEndianFromBigEndian<int64_t>();
   } else {
     return readLongLE();
   }
+}
+
+template <bool isSigned>
+inline int128_t IntDecoder<isSigned>::readInt128() {
+  if (!bigEndian) {
+    VELOX_NYI();
+  }
+  return readLittleEndianFromBigEndian<int128_t>();
+}
+template <>
+template <>
+inline void IntDecoder<false>::bulkRead(
+    uint64_t /*size*/,
+    double* FOLLY_NONNULL /*result*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<false>::bulkReadRows(
+    RowSet /*rows*/,
+    double* FOLLY_NONNULL /*result*/,
+    int32_t /*initialRow*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<true>::bulkRead(
+    uint64_t /*size*/,
+    double* FOLLY_NONNULL /*result*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<true>::bulkReadRows(
+    RowSet /*rows*/,
+    double* FOLLY_NONNULL /*result*/,
+    int32_t /*initialRow*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<false>::bulkRead(
+    uint64_t /*size*/,
+    float* FOLLY_NONNULL /*result*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<false>::bulkReadRows(
+    RowSet /*rows*/,
+    float* FOLLY_NONNULL /*result*/,
+    int32_t /*initialRow*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<true>::bulkRead(
+    uint64_t /*size*/,
+    float* FOLLY_NONNULL /*result*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<true>::bulkReadRows(
+    RowSet /*rows*/,
+    float* FOLLY_NONNULL /*result*/,
+    int32_t /*initialRow*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<false>::bulkRead(
+    uint64_t /*size*/,
+    int128_t* FOLLY_NONNULL /*result*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<false>::bulkReadRows(
+    RowSet /*rows*/,
+    int128_t* FOLLY_NONNULL /*result*/,
+    int32_t /*initialRow*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<true>::bulkRead(
+    uint64_t /*size*/,
+    int128_t* FOLLY_NONNULL /*result*/) {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+template <>
+inline void IntDecoder<true>::bulkReadRows(
+    RowSet /*rows*/,
+    int128_t* FOLLY_NONNULL /*result*/,
+    int32_t /*initialRow*/) {
+  VELOX_UNREACHABLE();
 }
 
 } // namespace facebook::velox::dwio::common

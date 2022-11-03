@@ -92,10 +92,10 @@ class StripeStreams {
   virtual ~StripeStreams() = default;
 
   /**
-   * Get the FileFormat for the stream
-   * @return FileFormat
+   * Get the DwrfFormat for the stream
+   * @return DwrfFormat
    */
-  virtual dwio::common::FileFormat getFormat() const = 0;
+  virtual DwrfFormat format() const = 0;
 
   /**
    * get column selector for current stripe reading session
@@ -178,8 +178,8 @@ class StripeStreamsBase : public StripeStreams {
   }
 
   // For now just return DWRF, will refine when ORC has better support
-  virtual dwio::common::FileFormat getFormat() const override {
-    return dwio::common::FileFormat::DWRF;
+  virtual DwrfFormat format() const override {
+    return DwrfFormat::kDwrf;
   }
 
   std::function<BufferPtr()> getIntDictionaryInitializerForNode(
@@ -212,13 +212,13 @@ class StripeStreamsImpl : public StripeStreamsBase {
   void loadStreams();
 
   // map of stream id -> stream information
-  std::unordered_map<
+  folly::F14FastMap<
       DwrfStreamIdentifier,
       StreamInformationImpl,
       dwio::common::StreamIdentifierHash>
       streams_;
-  std::unordered_map<EncodingKey, uint32_t, EncodingKeyHash> encodings_;
-  std::unordered_map<EncodingKey, proto::ColumnEncoding, EncodingKeyHash>
+  folly::F14FastMap<EncodingKey, uint32_t, EncodingKeyHash> encodings_;
+  folly::F14FastMap<EncodingKey, proto::ColumnEncoding, EncodingKeyHash>
       decryptedEncodings_;
 
  public:
@@ -242,8 +242,8 @@ class StripeStreamsImpl : public StripeStreamsBase {
 
   ~StripeStreamsImpl() override = default;
 
-  dwio::common::FileFormat getFormat() const override {
-    return reader_.getReader().getFileFormat();
+  DwrfFormat format() const override {
+    return reader_.getReader().format();
   }
 
   const dwio::common::ColumnSelector& getColumnSelector() const override {
@@ -278,9 +278,9 @@ class StripeStreamsImpl : public StripeStreamsBase {
     return getStreamInfo(si).getLength();
   }
 
-  std::unordered_map<uint32_t, std::vector<uint32_t>> getEncodingKeys() const;
+  folly::F14FastMap<uint32_t, std::vector<uint32_t>> getEncodingKeys() const;
 
-  std::unordered_map<uint32_t, std::vector<DwrfStreamIdentifier>>
+  folly::F14FastMap<uint32_t, std::vector<DwrfStreamIdentifier>>
   getStreamIdentifiers() const;
 
   std::unique_ptr<dwio::common::SeekableInputStream> getStream(
@@ -298,7 +298,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
   }
 
   uint32_t rowsPerRowGroup() const override {
-    return reader_.getReader().getFooter().rowindexstride();
+    return reader_.getReader().getFooter().rowIndexStride();
   }
 
  private:

@@ -16,10 +16,10 @@
 
 #pragma once
 
-#include <gtest/gtest.h>
+#include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
-#include "velox/dwio/dwrf/test/utils/DataFiles.h"
-#include "velox/vector/tests/VectorMaker.h"
+#include <gtest/gtest.h>
 
 namespace facebook::velox::dwio::parquet {
 
@@ -60,10 +60,10 @@ class ParquetReaderTestBase : public testing::Test {
   void assertEqualVectorPart(
       const VectorPtr& expected,
       const VectorPtr& actual,
-      size_t offset) {
+      vector_size_t offset) {
     ASSERT_GE(expected->size(), actual->size() + offset);
     ASSERT_EQ(expected->typeKind(), actual->typeKind());
-    for (auto i = 0; i < actual->size(); i++) {
+    for (vector_size_t i = 0; i < actual->size(); i++) {
       ASSERT_TRUE(expected->equalValueAt(actual.get(), i + offset, i))
           << "at " << (i + offset) << ": expected "
           << expected->toString(i + offset) << ", but got "
@@ -145,6 +145,11 @@ class ParquetReaderTestBase : public testing::Test {
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
     assertReadExpected(*rowReader, expected);
+  }
+
+  std::string getExampleFilePath(const std::string& fileName) {
+    return test::getDataFilePath(
+        "velox/dwio/parquet/tests/reader", "../examples/" + fileName);
   }
 
   std::unique_ptr<memory::ScopedMemoryPool> pool_{

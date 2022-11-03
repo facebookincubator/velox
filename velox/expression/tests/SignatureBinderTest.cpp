@@ -15,6 +15,8 @@
  */
 #include "velox/expression/SignatureBinder.h"
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox;
 
@@ -27,7 +29,7 @@ void testSignatureBinder(
 
   auto returnType = binder.tryResolveReturnType();
   ASSERT_TRUE(returnType != nullptr);
-  ASSERT_TRUE(expectedReturnType->kindEquals(returnType));
+  ASSERT_TRUE(expectedReturnType->equivalent(*returnType));
 }
 
 void assertCannotResolve(
@@ -42,34 +44,42 @@ TEST(SignatureBinderTest, decimals) {
   {
     auto signature =
         exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("b_precision")
+            .integerVariable("b_scale")
+            .integerVariable(
+                "r_precision",
+                "min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)")
+            .integerVariable("r_scale", "max(a_scale, b_scale)")
             .returnType("decimal(r_precision, r_scale)")
             .argumentType("decimal(a_precision, a_scale)")
             .argumentType("DECIMAL(b_precision, b_scale)")
-            .variableConstraint(
-                "r_precision",
-                "min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)")
-            .variableConstraint("r_scale", "max(a_scale, b_scale)")
             .build();
     ASSERT_EQ(
         signature->argumentTypes()[0].toString(),
-        "decimal(a_precision, a_scale)");
+        "decimal(a_precision,a_scale)");
     ASSERT_EQ(
         signature->argumentTypes()[1].toString(),
-        "DECIMAL(b_precision, b_scale)");
+        "DECIMAL(b_precision,b_scale)");
     testSignatureBinder(
-        signature, {DECIMAL(11, 5), DECIMAL(10, 6)}, DECIMAL(12, 6));
+        signature, {DECIMAL(11, 5), DECIMAL(10, 6)}, DECIMAL(13, 6));
   }
 
   // Decimal Multiply.
   {
     auto signature =
         exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("b_precision")
+            .integerVariable("b_scale")
+            .integerVariable(
+                "r_precision", "min(38, a_precision + b_precision)")
+            .integerVariable("r_scale", "a_scale + b_scale")
             .returnType("DECIMAL(r_precision, r_scale)")
             .argumentType("decimal(a_precision, a_scale)")
             .argumentType("decimal(b_precision, b_scale)")
-            .variableConstraint(
-                "r_precision", "min(38, a_precision + b_precision)")
-            .variableConstraint("r_scale", "a_scale + b_scale")
             .build();
 
     testSignatureBinder(
@@ -80,13 +90,17 @@ TEST(SignatureBinderTest, decimals) {
   {
     auto signature =
         exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("b_precision")
+            .integerVariable("b_scale")
+            .integerVariable(
+                "r_precision",
+                "min(38, a_precision + b_scale + max(b_scale - a_scale, 0))")
+            .integerVariable("r_scale", "max(a_scale, b_scale)")
             .returnType("DECIMAL(r_precision, r_scale)")
             .argumentType("DECIMAL(a_precision, a_scale)")
             .argumentType("DECIMAL(b_precision, b_scale)")
-            .variableConstraint(
-                "r_precision",
-                "min(38, a_precision + b_scale + max(b_scale - a_scale, 0))")
-            .variableConstraint("r_scale", "max(a_scale, b_scale)")
             .build();
 
     testSignatureBinder(
@@ -97,13 +111,17 @@ TEST(SignatureBinderTest, decimals) {
   {
     auto signature =
         exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("b_precision")
+            .integerVariable("b_scale")
+            .integerVariable(
+                "r_precision",
+                "min(b_precision - b_scale, a_precision - a_scale) + max(a_scale, b_scale)")
+            .integerVariable("r_scale", "max(a_scale, b_scale)")
             .returnType("DECIMAL(r_precision, r_scale)")
             .argumentType("DECIMAL(a_precision, a_scale)")
             .argumentType("DECIMAL(b_precision, b_scale)")
-            .variableConstraint(
-                "r_precision",
-                "min(b_precision - b_scale, a_precision - a_scale) + max(a_scale, b_scale)")
-            .variableConstraint("r_scale", "max(a_scale, b_scale)")
             .build();
 
     testSignatureBinder(
@@ -111,9 +129,37 @@ TEST(SignatureBinderTest, decimals) {
         {SHORT_DECIMAL(11, 5), SHORT_DECIMAL(10, 6)},
         DECIMAL(10, 6));
   }
-  // Error: missing constraint
+  // Aggregate Sum.
+  {
+    auto signature = exec::AggregateFunctionSignatureBuilder()
+                         .integerVariable("a_precision")
+                         .integerVariable("a_scale")
+                         .argumentType("DECIMAL(a_precision, a_scale)")
+                         .intermediateType("DECIMAL(38, a_scale)")
+                         .returnType("DECIMAL(38, a_scale)")
+                         .build();
+
+    const std::vector<TypePtr> actualTypes{DECIMAL(10, 4)};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+
+    auto intermediateType =
+        binder.tryResolveType(signature->intermediateType());
+    ASSERT_TRUE(intermediateType != nullptr);
+    ASSERT_TRUE(DECIMAL(38, 4)->equivalent(*intermediateType));
+    auto returnType = binder.tryResolveReturnType();
+    ASSERT_TRUE(returnType != nullptr);
+    ASSERT_TRUE(DECIMAL(38, 4)->equivalent(*returnType));
+  }
+  // missing constraint returns nullptr.
   {
     auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("a_precision")
+                         .integerVariable("a_scale")
+                         .integerVariable("b_precision")
+                         .integerVariable("b_scale")
+                         .integerVariable("r_precision")
+                         .integerVariable("r_scale")
                          .returnType("decimal(r_precision, r_scale)")
                          .argumentType("decimal(a_precision, a_scale)")
                          .argumentType("DECIMAL(b_precision, b_scale)")
@@ -121,24 +167,104 @@ TEST(SignatureBinderTest, decimals) {
     const std::vector<TypePtr> argTypes{DECIMAL(11, 5), DECIMAL(10, 6)};
     exec::SignatureBinder binder(*signature, argTypes);
     ASSERT_TRUE(binder.tryBind());
-    try {
-      binder.tryResolveReturnType();
-      FAIL();
-    } catch (const VeloxRuntimeError& e) {
-      ASSERT_EQ(e.message(), "Missing constraint for variable r_precision");
-    }
+    ASSERT_TRUE(binder.tryResolveReturnType() == nullptr);
   }
-  // Error: Do not use short_decimal or long_decimal
+  // Scalar function signature, same precision and scale.
   {
-    try {
-      auto signature = exec::FunctionSignatureBuilder()
-                           .returnType("decimal(r_precision, r_scale)")
-                           .argumentType("short_decimal(a_precision, a_scale)")
-                           .argumentType("DECIMAL(b_precision, b_scale)")
-                           .build();
-      FAIL();
-    } catch (const VeloxUserError& e) {
-      ASSERT_EQ(e.message(), "Use 'DECIMAL' in the signature.");
+    auto shortSignature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .returnType("boolean")
+            .argumentType("SHORT_DECIMAL(a_precision, a_scale)")
+            .argumentType("SHORT_DECIMAL(a_precision, a_scale)")
+            .build();
+    auto longSignature = exec::FunctionSignatureBuilder()
+                             .integerVariable("a_precision")
+                             .integerVariable("a_scale")
+                             .returnType("boolean")
+                             .argumentType("LONG_DECIMAL(a_precision, a_scale)")
+                             .argumentType("LONG_DECIMAL(a_precision, a_scale)")
+                             .build();
+    {
+      const std::vector<TypePtr> argTypes{DECIMAL(11, 5), DECIMAL(11, 5)};
+      exec::SignatureBinder binder(*shortSignature, argTypes);
+      ASSERT_TRUE(binder.tryBind());
+      auto returnType = binder.tryResolveReturnType();
+      ASSERT_TRUE(returnType != nullptr);
+      ASSERT_TRUE(BOOLEAN()->equivalent(*returnType));
+
+      // Long decimal argument types must fail binding.
+      const std::vector<TypePtr> argTypes1{DECIMAL(21, 4), DECIMAL(21, 4)};
+      exec::SignatureBinder binder1(*shortSignature, argTypes1);
+      ASSERT_FALSE(binder1.tryBind());
+    }
+
+    {
+      const std::vector<TypePtr> argTypes{DECIMAL(28, 5), DECIMAL(28, 5)};
+      exec::SignatureBinder binder(*longSignature, argTypes);
+      ASSERT_TRUE(binder.tryBind());
+      auto returnType = binder.tryResolveReturnType();
+      ASSERT_TRUE(returnType != nullptr);
+      ASSERT_TRUE(BOOLEAN()->equivalent(*returnType));
+
+      // Short decimal argument types must fail binding.
+      const std::vector<TypePtr> argTypes1{DECIMAL(14, 4), DECIMAL(14, 4)};
+      exec::SignatureBinder binder1(*longSignature, argTypes1);
+      ASSERT_FALSE(binder1.tryBind());
+    }
+
+    // Long decimal scalar function signature with precision/scale mismatch.
+    {
+      const std::vector<TypePtr> argTypes{DECIMAL(28, 5), DECIMAL(29, 5)};
+      exec::SignatureBinder binder(*longSignature, argTypes);
+      ASSERT_FALSE(binder.tryBind());
+
+      const std::vector<TypePtr> argTypes1{DECIMAL(28, 7), DECIMAL(28, 5)};
+      exec::SignatureBinder binder1(*longSignature, argTypes1);
+      ASSERT_FALSE(binder1.tryBind());
+    }
+
+    // Short decimal scalar function signature with precision/scale mismatch.
+    {
+      const std::vector<TypePtr> argTypes{DECIMAL(14, 5), DECIMAL(15, 5)};
+      exec::SignatureBinder binder(*shortSignature, argTypes);
+      ASSERT_FALSE(binder.tryBind());
+
+      const std::vector<TypePtr> argTypes1{DECIMAL(14, 5), DECIMAL(14, 6)};
+      exec::SignatureBinder binder1(*shortSignature, argTypes1);
+      ASSERT_FALSE(binder1.tryBind());
+    }
+
+    // Resolving invalid ShortDecimal/LongDecimal arguments returns nullptr.
+    {
+      // Missing constraints.
+      const auto typeSignature = shortSignature->argumentTypes()[0];
+      ASSERT_EQ(
+          exec::SignatureBinder::tryResolveType(typeSignature, {}), nullptr);
+      ASSERT_EQ(
+          exec::SignatureBinder::tryResolveType(
+              longSignature->argumentTypes()[0], {}),
+          nullptr);
+      // Missing parameters.
+      ASSERT_EQ(
+          exec::SignatureBinder::tryResolveType(
+              exec::TypeSignature("DECIMAL", {}), {}),
+          nullptr);
+      // Missing constraint value.
+      std::unordered_map<std::string, std::optional<int>> integerVariable;
+      integerVariable[typeSignature.parameters()[0].baseName()] = {};
+      ASSERT_EQ(
+          exec::SignatureBinder::tryResolveType(
+              typeSignature, {}, {}, integerVariable),
+          nullptr);
+    }
+    // Type parameter + constraint = error.
+    {
+      VELOX_ASSERT_THROW(
+          exec::TypeVariableConstraint(
+              "TypeName", "a = b", exec::ParameterType::kTypeParameter),
+          "Type parameters cannot have constraints");
     }
   }
 }
@@ -315,6 +441,34 @@ TEST(SignatureBinderTest, unresolvable) {
     assertCannotResolve(signature, {BIGINT()});
     assertCannotResolve(signature, {INTEGER(), BIGINT()});
   }
+
+  // row(bigint, varchar) -> bigint
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("row(bigint, varchar)")
+                         .build();
+
+    testSignatureBinder(signature, {ROW({BIGINT(), VARCHAR()})}, BIGINT());
+
+    // wrong type
+    assertCannotResolve(signature, {ROW({BIGINT()})});
+    assertCannotResolve(signature, {ROW({BIGINT(), VARCHAR(), BOOLEAN()})});
+  }
+
+  // array(row(boolean)) -> bigint
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("array(row(boolean))")
+                         .build();
+
+    testSignatureBinder(signature, {ARRAY(ROW({BOOLEAN()}))}, BIGINT());
+
+    // wrong type
+    assertCannotResolve(signature, {ARRAY(ROW({BOOLEAN(), BIGINT()}))});
+    assertCannotResolve(signature, {ARRAY(ROW({BIGINT()}))});
+  }
 }
 
 TEST(SignatureBinderTest, tryResolveTypeNullOutput) {
@@ -331,4 +485,84 @@ TEST(SignatureBinderTest, tryResolveTypeNullOutput) {
   assertNullResult("array(any)");
   assertNullResult("map(int, T)");
   assertNullResult("row(int, T)");
+}
+
+TEST(SignatureBinderTest, lambda) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .typeVariable("S")
+                       .typeVariable("R")
+                       .returnType("R")
+                       .argumentType("array(T)")
+                       .argumentType("S")
+                       .argumentType("function(S,T,S)")
+                       .argumentType("function(S,R)")
+                       .build();
+
+  std::vector<TypePtr> inputTypes{ARRAY(BIGINT()), DOUBLE(), nullptr, nullptr};
+  exec::SignatureBinder binder(*signature, inputTypes);
+  ASSERT_FALSE(binder.tryBind());
+
+  // Resolve inputs for function(S,T,S). We resolve first 2 arguments, since
+  // last argument is the return type that requires the signature of the lambda
+  // itself for resolution.
+  {
+    auto lambdaType = signature->argumentTypes()[2];
+    ASSERT_EQ(binder.tryResolveType(lambdaType.parameters()[0]), DOUBLE());
+    ASSERT_EQ(binder.tryResolveType(lambdaType.parameters()[1]), BIGINT());
+  }
+
+  // Resolve inputs for function(S,R).
+  {
+    auto lambdaType = signature->argumentTypes()[3];
+    ASSERT_EQ(binder.tryResolveType(lambdaType.parameters()[0]), DOUBLE());
+  }
+}
+
+TEST(SignatureBinderTest, customType) {
+  registerType(
+      "timestamp with time zone",
+      std::make_unique<const TimestampWithTimeZoneTypeFactories>());
+
+  // Custom type as an argument type.
+  {
+    // timestamp with time zone -> bigint
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("timestamp with time zone")
+                         .build();
+
+    testSignatureBinder(signature, {TIMESTAMP_WITH_TIME_ZONE()}, BIGINT());
+  }
+
+  {
+    // timestamp with time zone -> bigint
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("array(integer)")
+                         .argumentType("timestamp with time zone")
+                         .argumentType("varchar")
+                         .build();
+
+    testSignatureBinder(
+        signature, {TIMESTAMP_WITH_TIME_ZONE(), VARCHAR()}, ARRAY(INTEGER()));
+  }
+
+  // Custom type as a return type.
+  {
+    // timestamp with time zone -> bigint
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("timestamp with time zone")
+                         .argumentType("integer")
+                         .build();
+
+    testSignatureBinder(signature, {INTEGER()}, TIMESTAMP_WITH_TIME_ZONE());
+  }
+
+  // Unknown custom type.
+  VELOX_ASSERT_THROW(
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("fancy_type")
+          .build(),
+      "not found : FANCY_TYPE");
 }

@@ -21,8 +21,11 @@ add_library(
   LazyVector.cpp
   SelectivityVector.cpp
   SequenceVector.cpp
+  VectorSaver.cpp
   VectorEncoding.cpp
-  VectorStream.cpp)
+  VectorPool.cpp
+  VectorStream.cpp
+  VariantToVector.cpp)
 
 target_link_libraries(velox_vector velox_encode velox_memory velox_time
                       velox_type velox_buffer)
@@ -30,7 +33,12 @@ target_link_libraries(velox_vector velox_encode velox_memory velox_time
 add_subdirectory(arrow)
 add_subdirectory(fuzzer)
 
-if(${VELOX_BUILD_TESTING} OR ${VELOX_ENABLE_BENCHMARKS_BASIC})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
+elseif(${VELOX_BUILD_TEST_UTILS})
+  add_subdirectory(tests/utils)
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(benchmarks)
 endif()

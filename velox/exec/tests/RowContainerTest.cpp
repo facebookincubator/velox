@@ -19,7 +19,7 @@
 #include <array>
 #include <random>
 #include "velox/common/file/FileSystems.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
@@ -32,47 +32,226 @@ using namespace facebook::velox::test;
 
 class RowContainerTest : public exec::test::RowContainerTestBase {
  protected:
-  void testExtractColumnForOddRows(
+  void testExtractColumn(
+      RowContainer& container,
+      const std::vector<char*>& rows,
+      int column,
+      const VectorPtr& expected) {
+    // This set of tests uses all variations of the extractColumn API to copy
+    // column value for all rows in the container. Run these with offset 0
+    // and offset to skip the first 1/3 rows.
+    testExtractColumnAllRows(container, rows, column, expected, 0);
+    testExtractColumnAllRows(
+        container, rows, column, expected, rows.size() / 3);
+    // This set of tests use extractColumn with an out-of-order pattern
+    // and repetitions. Run these with offset 0 and offset to skip the first
+    // 1/3 rows.
+    testOutOfOrderRowNumbers(container, rows, column, expected, 0);
+    testOutOfOrderRowNumbers(
+        container, rows, column, expected, rows.size() / 3);
+
+    testRepeatedRowNumbers(container, rows, column, expected);
+    testNegativeRowNumbers(container, rows, column, expected);
+  }
+
+  void testExtractColumnAllRows(
+      RowContainer& container,
+      const std::vector<char*>& rows,
+      int column,
+      const VectorPtr& expected,
+      vector_size_t offset) {
+    auto size = rows.size();
+
+    auto testEqualVectors = [](const VectorPtr& lhs,
+                               const VectorPtr& rhs,
+                               vector_size_t lhsIndex,
+                               vector_size_t rhsIndex) {
+      for (auto i = 0; i < lhs->size() - lhsIndex; i++) {
+        EXPECT_TRUE(lhs->equalValueAt(rhs.get(), lhsIndex + i, rhsIndex + i));
+      }
+    };
+
+    auto testBasic = [&]() {
+      // Test the extractColumn API that didn't use the offset parameter and
+      // copied to the start of the result vector.
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
+      container.extractColumn(rows.data(), size, column, result);
+      assertEqualVectors(expected, result);
+    };
+
+    auto testBasicWithOffset = [&]() {
+      // Test extractColumn from offset.
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
+      container.extractColumn(
+          rows.data(), size - offset, column, offset, result);
+      testEqualVectors(result, expected, offset, 0);
+    };
+
+    auto testRowNumbers = [&]() {
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
+
+      std::vector<vector_size_t> rowNumbers;
+      rowNumbers.resize(size - offset);
+      for (int i = 0; i < size - offset; i++) {
+        rowNumbers[i] = i + offset;
+      }
+      folly::Range<const vector_size_t*> rowNumbersRange =
+          folly::Range(rowNumbers.data(), size - offset);
+      container.extractColumn(
+          rows.data(), rowNumbersRange, column, offset, result);
+      testEqualVectors(result, expected, offset, offset);
+    };
+
+    // Test using extractColumn API.
+    testBasic();
+    testBasicWithOffset();
+    // Test using extractColumn (with rowNumbers) API.
+    testRowNumbers();
+  }
+
+  void testOutOfOrderRowNumbers(
+      RowContainer& container,
+      const std::vector<char*>& rows,
+      int column,
+      const VectorPtr& expected,
+      vector_size_t offset) {
+    auto size = rows.size();
+
+    // In this test the extractColumn API is operated on an out-of-order
+    // input (either the base input data or the rowNumbers). The new ordering
+    // has null in even positions and retains odd positions from the original
+    // input.
+
+    // This is a helper method for result verification for the out of order
+    // results.
+    auto verifyResults = [&](const VectorPtr& result, int offset = 0) {
+      EXPECT_EQ(size, result->size());
+      for (vector_size_t i = offset; i < size; ++i) {
+        if (i % 2 == 0) {
+          EXPECT_TRUE(result->isNullAt(i)) << "at " << i;
+        } else {
+          EXPECT_TRUE(expected->equalValueAt(result.get(), i, i))
+              << "at " << i << ": expected " << expected->toString(i)
+              << ", got " << result->toString();
+        }
+      }
+    };
+
+    auto testBasic = [&]() {
+      // Construct an input source with null in even
+      // positions and that retains the original rows in
+      // odd positions. Copy its rows
+      std::vector<char*> input(size, nullptr);
+      for (auto i = 1; i < size; i += 2) {
+        input[i] = rows[i];
+      }
+
+      // Test the extractColumn API that didn't use the offset parameter
+      // and copies to the start of the result vector.
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
+      container.extractColumn(input.data(), size, column, result);
+      verifyResults(result);
+
+      // Test extractColumn from offset.
+      container.extractColumn(
+          input.data() + offset, size - offset, column, offset, result);
+      verifyResults(result, offset);
+    };
+
+    auto testRowNumbers = [&]() {
+      // Setup input rows vector so that the first row is null.
+      std::vector<char*> input(rows);
+      input[0] = nullptr;
+
+      // The rowNumbersBuffer has values like 0, 1, 0, 3, 0, 5, 0, 7, etc
+      // This tests the case of column extraction where the rowNumber values
+      // are repeated and are also out of order.
+      std::vector<vector_size_t> rowNumbers;
+      auto rowNumbersSize = size - offset;
+      rowNumbers.resize(rowNumbersSize);
+
+      for (int i = 0; i < rowNumbersSize; i++) {
+        if ((i + offset) % 2 == 0) {
+          rowNumbers[i] = 0;
+        } else {
+          rowNumbers[i] = i + offset;
+        }
+      }
+
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
+      folly::Range<const vector_size_t*> rowNumbersRange =
+          folly::Range(rowNumbers.data(), rowNumbersSize);
+      container.extractColumn(
+          input.data(), rowNumbersRange, column, offset, result);
+      verifyResults(result, offset);
+    };
+
+    testBasic();
+    testRowNumbers();
+  }
+
+  void testRepeatedRowNumbers(
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
       const VectorPtr& expected) {
     auto size = rows.size();
-
-    // Extract only odd rows.
-    std::vector<char*> oddRows(size, nullptr);
-    for (auto i = 1; i < size; i += 2) {
-      oddRows[i] = rows[i];
+    // Copy the rows so that we rotate over the values at positions 0, 1, 2.
+    // This is for testing copying repeated row numbers.
+    std::vector<vector_size_t> rowNumbers(size, 0);
+    rowNumbers.resize(size);
+    for (int i = 0; i < size; i++) {
+      rowNumbers[i] = i % 3;
     }
+    auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
 
     auto result = BaseVector::create(expected->type(), size, pool_.get());
-    container.extractColumn(oddRows.data(), size, column, result);
+    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
+
     EXPECT_EQ(size, result->size());
-    for (size_t row = 0; row < size; ++row) {
-      if (row % 2 == 0) {
-        EXPECT_TRUE(result->isNullAt(row)) << "at " << row;
-      } else {
-        EXPECT_TRUE(expected->equalValueAt(result.get(), row, row))
-            << "at " << row << ": expected " << expected->toString(row)
-            << ", got " << result->toString();
-      }
+    for (vector_size_t i = 0; i < size; ++i) {
+      EXPECT_TRUE(result->equalValueAt(expected.get(), i, i % 3))
+          << "at " << i << ": expected " << expected->toString(i % 3)
+          << ", got " << result->toString(i);
     }
   }
 
-  void testExtractColumnForAllRows(
+  void testNegativeRowNumbers(
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
       const VectorPtr& expected) {
     auto size = rows.size();
+    // Negative row numbers result in nullptr being copied to that position.
+    // Alternate between nulls at odd positions and a copy of the values
+    // at even positions.
+    std::vector<vector_size_t> rowNumbers;
+    rowNumbers.resize(size);
+    for (int i = 0; i < size; i++) {
+      if (i % 2) {
+        rowNumbers[i] = -1 * i;
+      } else {
+        rowNumbers[i] = i;
+      }
+    }
+    auto rowNumbersRange = folly::Range(rowNumbers.data(), size);
 
     auto result = BaseVector::create(expected->type(), size, pool_.get());
-    container.extractColumn(rows.data(), size, column, result);
+    container.extractColumn(rows.data(), rowNumbersRange, column, 0, result);
+
     EXPECT_EQ(size, result->size());
-    for (size_t row = 0; row < size; ++row) {
-      EXPECT_TRUE(expected->equalValueAt(result.get(), row, row))
-          << "at " << row << ": expected " << expected->toString(row)
-          << ", got " << result->toString(row);
+    EXPECT_TRUE(result->equalValueAt(expected.get(), 0, 0))
+        << "at 0 expected " << expected->toString(0) << ", got "
+        << result->toString(0);
+    for (vector_size_t i = 1; i < size; ++i) {
+      if (i % 2) {
+        EXPECT_TRUE(result->isNullAt(i))
+            << "at " << i << "expected null, got " << result->toString(i);
+      } else {
+        EXPECT_TRUE(result->equalValueAt(expected.get(), i, i))
+            << "at " << i << ": expected " << expected->toString(i) << ", got "
+            << result->toString(i);
+      }
     }
   }
 
@@ -85,31 +264,31 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     EXPECT_EQ(usage, sum);
   }
 
-  // Stores the input vector in Row Container, extracts it and compares.
-  void roundTrip(const VectorPtr& input) {
+  // Stores the input vector in Row Container, extracts it and compares. Returns
+  // the container.
+  std::unique_ptr<RowContainer> roundTrip(const VectorPtr& input) {
     // Create row container.
     std::vector<TypePtr> types{input->type()};
-    auto data = makeRowContainer(types, std::vector<TypePtr>{});
 
     // Store the vector in the rowContainer.
-    RowContainer rowContainer(types, mappedMemory_);
+    auto rowContainer = std::make_unique<RowContainer>(types, mappedMemory_);
     auto size = input->size();
     SelectivityVector allRows(size);
     std::vector<char*> rows(size);
     DecodedVector decoded(*input, allRows);
     for (size_t row = 0; row < size; ++row) {
-      rows[row] = rowContainer.newRow();
-      rowContainer.store(decoded, row, rows[row], 0);
+      rows[row] = rowContainer->newRow();
+      rowContainer->store(decoded, row, rows[row], 0);
     }
 
-    testExtractColumnForAllRows(rowContainer, rows, 0, input);
-
-    testExtractColumnForOddRows(rowContainer, rows, 0, input);
+    testExtractColumn(*rowContainer, rows, 0, input);
+    return rowContainer;
   }
 
   template <typename T>
-  void testCompareFloats(TypePtr type, bool ascending) {
-    auto rowContainer = makeRowContainer({type}, {type});
+  void testCompareFloats(TypePtr type, bool ascending, bool nullsFirst) {
+    // NOTE: set 'isJoinBuild' to true to enable nullable sort key in test.
+    auto rowContainer = makeRowContainer({type}, {type}, false);
     auto lowest = std::numeric_limits<T>::lowest();
     auto min = std::numeric_limits<T>::min();
     auto max = std::numeric_limits<T>::max();
@@ -117,8 +296,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     auto inf = std::numeric_limits<T>::infinity();
 
     facebook::velox::test::VectorMaker vectorMaker{pool_.get()};
-    VectorPtr values =
-        vectorMaker.flatVector<T>({max, inf, 0.0, nan, lowest, min});
+    VectorPtr values = vectorMaker.flatVectorNullable<T>(
+        {std::nullopt, max, inf, 0.0, nan, lowest, min});
     int numRows = values->size();
 
     SelectivityVector allRows(numRows);
@@ -131,38 +310,97 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       indexedRows[i] = std::make_pair(i, rows[i]);
     }
 
-    std::vector<T> expectedOrder = {lowest, 0.0, min, max, inf, nan};
+    std::vector<std::optional<T>> expectedOrder = {
+        std::nullopt, lowest, 0.0, min, max, inf, nan};
     if (!ascending) {
-      std::reverse(expectedOrder.begin(), expectedOrder.end());
+      if (nullsFirst) {
+        std::reverse(expectedOrder.begin() + 1, expectedOrder.end());
+      } else {
+        std::reverse(expectedOrder.begin(), expectedOrder.end());
+      }
+    } else {
+      if (!nullsFirst) {
+        for (int i = 0; i < expectedOrder.size() - 1; ++i) {
+          expectedOrder[i] = expectedOrder[i + 1];
+        }
+        expectedOrder[expectedOrder.size() - 1] = std::nullopt;
+      }
     }
-    VectorPtr expected = vectorMaker.flatVector<T>(expectedOrder);
-
-    // Verify compare method with two rows as input
-    std::sort(rows.begin(), rows.end(), [&](const char* l, const char* r) {
-      return rowContainer->compare(l, r, 0, {true, ascending}) < 0;
-    });
-    VectorPtr result = BaseVector::create(type, numRows, pool_.get());
-    rowContainer->extractColumn(rows.data(), numRows, 0, result);
-    assertEqualVectors(expected, result);
+    VectorPtr expected = vectorMaker.flatVectorNullable<T>(expectedOrder);
+    {
+      // Verify compare method with two rows as input
+      std::sort(rows.begin(), rows.end(), [&](const char* l, const char* r) {
+        return rowContainer->compare(l, r, 0, {nullsFirst, ascending}) < 0;
+      });
+      VectorPtr result = BaseVector::create(type, numRows, pool_.get());
+      rowContainer->extractColumn(rows.data(), numRows, 0, result);
+      assertEqualVectors(expected, result);
+    }
 
     // Verify compare method with row and decoded vector as input
-    std::sort(
-        indexedRows.begin(),
-        indexedRows.end(),
-        [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
-          return rowContainer->compare(
-                     l.second,
-                     rowContainer->columnAt(0),
-                     decoded,
-                     r.first,
-                     {true, ascending}) < 0;
-        });
-    std::vector<T> sorted;
-    for (const auto& irow : indexedRows) {
-      sorted.push_back(decoded.valueAt<T>(irow.first));
+    {
+      std::sort(
+          indexedRows.begin(),
+          indexedRows.end(),
+          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+            return rowContainer->compare(
+                       l.second,
+                       rowContainer->columnAt(0),
+                       decoded,
+                       r.first,
+                       {nullsFirst, ascending}) < 0;
+          });
+      std::vector<std::optional<T>> sorted;
+      for (const auto& irow : indexedRows) {
+        if (decoded.isNullAt(irow.first)) {
+          sorted.push_back(std::nullopt);
+        } else {
+          sorted.push_back(decoded.valueAt<T>(irow.first));
+        }
+      }
+      VectorPtr result = vectorMaker.template flatVectorNullable<T>(sorted);
+      assertEqualVectors(expected, result);
     }
-    result = vectorMaker.flatVector<T>(sorted);
-    assertEqualVectors(expected, result);
+
+    // Verify compareRows method with row as input.
+    {
+      std::sort(
+          indexedRows.begin(),
+          indexedRows.end(),
+          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+            return rowContainer->compareRows(
+                       l.second, r.second, {{nullsFirst, ascending}}) < 0;
+          });
+      std::vector<std::optional<T>> sorted;
+      for (const auto& irow : indexedRows) {
+        if (decoded.isNullAt(irow.first)) {
+          sorted.push_back(std::nullopt);
+        } else {
+          sorted.push_back(decoded.valueAt<T>(irow.first));
+        }
+      }
+      VectorPtr result = vectorMaker.template flatVectorNullable<T>(sorted);
+      assertEqualVectors(expected, result);
+    }
+    // Verify compareRows method with default compare flags.
+    if (ascending && nullsFirst) {
+      std::sort(
+          indexedRows.begin(),
+          indexedRows.end(),
+          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+            return rowContainer->compareRows(l.second, r.second) < 0;
+          });
+      std::vector<std::optional<T>> sorted;
+      for (const auto& irow : indexedRows) {
+        if (decoded.isNullAt(irow.first)) {
+          sorted.push_back(std::nullopt);
+        } else {
+          sorted.push_back(decoded.valueAt<T>(irow.first));
+        }
+      }
+      VectorPtr result = vectorMaker.template flatVectorNullable<T>(sorted);
+      assertEqualVectors(expected, result);
+    }
   }
 };
 
@@ -315,8 +553,7 @@ TEST_F(RowContainerTest, types) {
   auto copy = std::static_pointer_cast<RowVector>(
       BaseVector::create(batch->type(), batch->size(), pool_.get()));
   for (auto column = 0; column < batch->childrenSize(); ++column) {
-    testExtractColumnForAllRows(*data, rows, column, batch->childAt(column));
-    testExtractColumnForOddRows(*data, rows, column, batch->childAt(column));
+    testExtractColumn(*data, rows, column, batch->childAt(column));
 
     auto extracted = copy->childAt(column);
     extracted->resize(kNumRows);
@@ -325,7 +562,8 @@ TEST_F(RowContainerTest, types) {
     auto source = batch->childAt(column);
     auto columnType = batch->type()->as<TypeKind::ROW>().childAt(column);
     VectorHasher hasher(columnType, column);
-    hasher.hash(*source, allRows, false, hashes);
+    hasher.decode(*source, allRows);
+    hasher.hash(allRows, false, hashes);
     DecodedVector decoded(*extracted, allRows);
     std::vector<uint64_t> rowHashes(kNumRows);
     data->hash(
@@ -479,18 +717,134 @@ TEST_F(RowContainerTest, rowSize) {
   EXPECT_EQ(rows, rowsFromContainer);
 }
 
-// Verify comparison of fringe float values
+// Verify comparison of fringe float valuesg
 TEST_F(RowContainerTest, compareFloat) {
   // Verify ascending order
-  testCompareFloats<float>(REAL(), true);
-  // Verify descending order
-  testCompareFloats<float>(REAL(), false);
+  testCompareFloats<float>(REAL(), true, true);
+  testCompareFloats<float>(REAL(), true, false);
+  //  Verify descending order
+  testCompareFloats<float>(REAL(), false, true);
+  testCompareFloats<float>(REAL(), false, false);
 }
 
 // Verify comparison of fringe double values
 TEST_F(RowContainerTest, compareDouble) {
   // Verify ascending order
-  testCompareFloats<double>(DOUBLE(), true);
+  testCompareFloats<double>(DOUBLE(), true, true);
+  testCompareFloats<double>(DOUBLE(), true, false);
   // Verify descending order
-  testCompareFloats<double>(DOUBLE(), false);
+  testCompareFloats<double>(DOUBLE(), false, true);
+  testCompareFloats<double>(DOUBLE(), false, false);
+}
+
+TEST_F(RowContainerTest, partition) {
+  // We assign an arbitrary partition number to each row and iterate
+  // over the rows a partition at a time.
+  constexpr int32_t kNumRows = 100019;
+  constexpr uint8_t kNumPartitions = 16;
+  auto batch = makeDataset(
+      ROW(
+          {{"int_val", INTEGER()},
+           {"long_val", BIGINT()},
+           {"string_val", VARCHAR()}}),
+      kNumRows,
+      [](RowVectorPtr /*rows*/) {});
+
+  auto data = roundTrip(batch);
+  std::vector<char*> rows(kNumRows);
+  RowContainerIterator iter;
+  data->listRows(&iter, kNumRows, RowContainer::kUnlimited, rows.data());
+
+  // Test random skipping of RowContainerIterator.
+  for (auto count = 0; count < 100; ++count) {
+    auto index = (count * 121) % kNumRows;
+    iter.reset();
+    data->skip(iter, index);
+    EXPECT_EQ(iter.currentRow(), rows[index]);
+    if (index + count < kNumRows) {
+      data->skip(iter, count);
+      EXPECT_EQ(iter.currentRow(), rows[index + count]);
+    }
+  }
+
+  auto& partitions = data->partitions();
+  std::vector<uint8_t> rowPartitions(kNumRows);
+  // Assign a partition to each row based on  modulo of first column.
+  std::vector<std::vector<char*>> partitionRows(kNumPartitions);
+  auto column = batch->childAt(0)->as<FlatVector<int32_t>>();
+  for (auto i = 0; i < kNumRows; ++i) {
+    uint8_t partition =
+        static_cast<uint32_t>(column->valueAt(i)) % kNumPartitions;
+    rowPartitions[i] = partition;
+    partitionRows[partition].push_back(rows[i]);
+  }
+  partitions.appendPartitions(
+      folly::Range<const uint8_t*>(rowPartitions.data(), kNumRows));
+  for (auto partition = 0; partition < kNumPartitions; ++partition) {
+    std::vector<char*> result(partitionRows[partition].size() + 10);
+    iter.reset();
+    int32_t numFound = 0;
+    int32_t resultBatch = 1;
+    // Read the rows in multiple batches.
+    while (auto numResults = data->listPartitionRows(
+               iter, partition, resultBatch, result.data() + numFound)) {
+      numFound += numResults;
+      resultBatch += 13;
+    }
+    EXPECT_EQ(numFound, partitionRows[partition].size());
+    result.resize(numFound);
+    EXPECT_EQ(partitionRows[partition], result);
+  }
+}
+
+TEST_F(RowContainerTest, probedFlag) {
+  auto rowContainer =
+      makeRowContainer({BIGINT()}, {BIGINT()}, true /*isJoinBuild*/);
+
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+      makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+  });
+
+  auto size = input->size();
+  std::vector<char*> rows(size);
+  DecodedVector decodedKey(*input->childAt(0));
+  DecodedVector decodedValue(*input->childAt(1));
+  for (auto i = 0; i < size; ++i) {
+    rows[i] = rowContainer->newRow();
+    rowContainer->store(decodedKey, i, rows[i], 0);
+    rowContainer->store(decodedValue, i, rows[i], 1);
+  }
+
+  // No 'probed' flags set. Verify all false.
+  auto result = BaseVector::create<FlatVector<bool>>(BOOLEAN(), 1, pool());
+  rowContainer->extractProbedFlags(rows.data(), size, result);
+
+  ASSERT_EQ(size, result->size());
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_FALSE(result->isNullAt(i));
+    ASSERT_FALSE(result->valueAt(i));
+  }
+
+  // Set 'probed' flags for every other row.
+  for (auto i = 0; i < size; i += 2) {
+    rowContainer->setProbedFlag(rows.data() + i, 1);
+  }
+
+  rowContainer->extractProbedFlags(rows.data(), size, result);
+  ASSERT_EQ(size, result->size());
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_FALSE(result->isNullAt(i));
+    ASSERT_EQ(result->valueAt(i), i % 2 == 0);
+  }
+
+  // Set 'probed' flags for all rows.
+  rowContainer->setProbedFlag(rows.data(), size);
+
+  rowContainer->extractProbedFlags(rows.data(), size, result);
+  ASSERT_EQ(size, result->size());
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_FALSE(result->isNullAt(i));
+    ASSERT_TRUE(result->valueAt(i));
+  }
 }

@@ -414,7 +414,7 @@ class InstallSysDepsCmd(ProjectCmdBase):
         elif manager == "deb":
             packages = sorted(set(all_packages["deb"]))
             if packages:
-                cmd_args = ["apt", "install", "-y"] + packages
+                cmd_args = ["apt-get", "install", "-y"] + packages
         elif manager == "homebrew":
             packages = sorted(set(all_packages["homebrew"]))
             if packages:
@@ -1115,7 +1115,7 @@ jobs:
             help="Allow CI to fire on all branches - Handy for testing",
         )
         parser.add_argument(
-            "--ubuntu-version", default="18.04", help="Version of Ubuntu to use"
+            "--ubuntu-version", default="20.04", help="Version of Ubuntu to use"
         )
         parser.add_argument(
             "--main-branch",

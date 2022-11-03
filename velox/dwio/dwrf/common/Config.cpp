@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/common/Config.h"
 
 #include "folly/String.h"
+#include "folly/dynamic.h"
 
 namespace facebook::velox::dwrf {
 
@@ -140,6 +141,44 @@ Config::Entry<const std::vector<uint32_t>> Config::MAP_FLAT_COLS(
       }
       return result;
     });
+
+Config::Entry<const std::vector<std::vector<std::string>>>
+    Config::MAP_FLAT_COLS_STRUCT_KEYS(
+        "orc.map.flat.cols.struct.keys",
+        {},
+        [](const std::vector<std::vector<std::string>>& val) {
+          std::vector<folly::dynamic> columns;
+          columns.reserve(val.size());
+          std::transform(
+              val.cbegin(),
+              val.cend(),
+              std::back_inserter(columns),
+              [](const auto& v) {
+                return folly::dynamic::array(v.cbegin(), v.cend());
+              });
+          return folly::toJson(
+              folly::dynamic::array(columns.cbegin(), columns.cend()));
+        },
+        [](const std::string& val) {
+          folly::dynamic columns = folly::parseJson(val);
+          std::vector<std::vector<std::string>> result;
+          result.reserve(columns.size());
+          std::transform(
+              columns.begin(),
+              columns.end(),
+              std::back_inserter(result),
+              [](const auto& keys) {
+                std::vector<std::string> intermediateResult;
+                intermediateResult.reserve(keys.size());
+                std::transform(
+                    keys.begin(),
+                    keys.end(),
+                    std::back_inserter(intermediateResult),
+                    [](const auto& str) { return str.asString(); });
+                return intermediateResult;
+              });
+          return result;
+        });
 
 Config::Entry<uint32_t> Config::MAP_FLAT_MAX_KEYS(
     "orc.map.flat.max.keys",

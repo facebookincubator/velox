@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/Expressions.h"
 
 using namespace facebook::velox;
@@ -240,6 +241,15 @@ TEST_F(SplitTest, split) {
     }
   }
 
+  // Check the empty delimiter special case.
+  delim = "";
+  auto expected = makeArrayVector<StringView>({
+      {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y", ""},
+      {"o", "n", "e", ",", ",", ",", "f", "o", "u", "r", ",", ""},
+      {""},
+  });
+  assertEqualVectors(expected, run(inputStrings, delim, "split(C0, C1)"));
+
   // Non-ascii, flat strings, flat delimiter, no limit.
   delim = "లేదా";
   inputStrings = std::vector<std::string>{
@@ -300,5 +310,5 @@ TEST_F(SplitTest, splitError) {
       VectorEncoding::Simple::CONSTANT)
 
   // Limit should be positive.
-  EXPECT_THROW(RUN("split(C0, C1, C2)", 0), std::invalid_argument);
+  VELOX_ASSERT_THROW(RUN("split(C0, C1, C2)", 0), "Limit must be positive");
 }

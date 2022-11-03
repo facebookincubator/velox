@@ -40,26 +40,30 @@ class CastOperator {
   /// @param context The context
   /// @param rows Non-null rows of input
   /// @param nullOnFailure Whether this is a cast or try_cast operation
-  /// @param result The writable output vector of the custom type
+  /// @param resultType The result type.
+  /// @param result The result vector of the custom type
   virtual void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
       bool nullOnFailure,
-      BaseVector& result) const = 0;
+      const TypePtr& resultType,
+      VectorPtr& result) const = 0;
 
   /// Casts a vector of the custom type to another type.
   /// @param input The flat or constant input vector
   /// @param context The context
   /// @param rows Non-null rows of input
   /// @param nullOnFailure Whether this is a cast or try_cast operation
-  /// @param result The writable output vector of the destination type
+  /// @param resultType The result type
+  /// @param result The result vector of the destination type
   virtual void castFrom(
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
       bool nullOnFailure,
-      BaseVector& result) const = 0;
+      const TypePtr& resultType,
+      VectorPtr& result) const = 0;
 };
 
 class CastExpr : public SpecialForm {
@@ -74,6 +78,7 @@ class CastExpr : public SpecialForm {
             type,
             std::vector<ExprPtr>({expr}),
             kCast.data(),
+            false /* supportsFlatNoNullsFastPath */,
             trackCpuUsage),
         nullOnFailure_(nullOnFailure) {
     auto fromType = inputs_[0]->type();
@@ -97,6 +102,8 @@ class CastExpr : public SpecialForm {
 
   std::string toString(bool recursive = true) const override;
 
+  std::string toSql() const override;
+
  private:
   /// @tparam To The cast target type
   /// @tparam From The expression type
@@ -108,21 +115,23 @@ class CastExpr : public SpecialForm {
   void applyCastWithTry(
       const SelectivityVector& rows,
       exec::EvalCtx& context,
-      const DecodedVector& input,
+      const BaseVector& input,
       FlatVector<To>* resultFlatVector);
 
   /// @tparam To The target template
   /// @param fromType The source type pointer
+  /// @param toType The target type pointer
   /// @param rows The list of rows
   /// @param context The context
   /// @param input The input vector (of type From)
   /// @param result The output vector (of type To)
   template <TypeKind To>
   void applyCast(
-      const TypeKind fromType,
+      const TypePtr& fromType,
+      const TypePtr& toType,
       const SelectivityVector& rows,
       exec::EvalCtx& context,
-      const DecodedVector& input,
+      const BaseVector& input,
       VectorPtr& result);
 
   /// Apply the cast after generating the input vectors
@@ -160,6 +169,27 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const RowType& fromType,
       const RowType& toType);
+
+  /// Apply the cast between decimal vectors.
+  /// @param rows Non-null rows of the input vector.
+  /// @param input The input decimal vector. It is guaranteed to be flat or
+  /// constant.
+  VectorPtr applyDecimal(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType);
+
+  // Apply the cast to a vector after vector encodings being peeled off. The
+  // input vector is guaranteed to be flat or constant.
+  void applyPeeled(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      VectorPtr& result);
 
   // When enabled the error in casting leads to null being returned.
   const bool nullOnFailure_;

@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Range.h"
 #include "velox/vector/LazyVector.h"
 
@@ -95,6 +96,18 @@ class AggregationHook : public ValueHook {
   uint64_t* numNulls_;
 };
 
+namespace {
+template <typename TValue>
+inline void updateSingleValue(TValue& result, TValue value) {
+  if constexpr (
+      std::is_same_v<TValue, double> || std::is_same_v<TValue, float>) {
+    result += value;
+  } else {
+    result = checkedPlus<TValue>(result, value);
+  }
+}
+} // namespace
+
 template <typename TValue, typename TAggregate>
 class SumHook final : public AggregationHook {
  public:
@@ -107,18 +120,18 @@ class SumHook final : public AggregationHook {
       : AggregationHook(offset, nullByte, nullMask, groups, numNulls) {}
 
   Kind kind() const override {
-    if (std::is_same<TAggregate, double>::value) {
-      if (std::is_same<TValue, double>::value) {
+    if (std::is_same_v<TAggregate, double>) {
+      if (std::is_same_v<TValue, double>) {
         return kSumDoubleToDouble;
       }
-      if (std::is_same<TValue, float>::value) {
+      if (std::is_same_v<TValue, float>) {
         return kSumFloatToDouble;
       }
-    } else if (std::is_same<TAggregate, int64_t>::value) {
-      if (std::is_same<TValue, int32_t>::value) {
+    } else if (std::is_same_v<TAggregate, int64_t>) {
+      if (std::is_same_v<TValue, int32_t>) {
         return kSumIntegerToBigint;
       }
-      if (std::is_same<TValue, int64_t>::value) {
+      if (std::is_same_v<TValue, int64_t>) {
         return kSumBigintToBigint;
       }
     }
@@ -128,8 +141,9 @@ class SumHook final : public AggregationHook {
   void addValue(vector_size_t row, const void* value) override {
     auto group = findGroup(row);
     clearNull(group);
-    *reinterpret_cast<TAggregate*>(group + offset_) +=
-        *reinterpret_cast<const TValue*>(value);
+    updateSingleValue(
+        *reinterpret_cast<TAggregate*>(group + offset_),
+        TAggregate(*reinterpret_cast<const TValue*>(value)));
   }
 };
 
@@ -155,7 +169,7 @@ class SimpleCallableHook final : public AggregationHook {
     clearNull(group);
     updateSingleValue_(
         *reinterpret_cast<TAggregate*>(group + offset_),
-        *reinterpret_cast<const TValue*>(value));
+        TAggregate(*reinterpret_cast<const TValue*>(value)));
   }
 
  private:
@@ -175,23 +189,23 @@ class MinMaxHook final : public AggregationHook {
 
   Kind kind() const override {
     if (isMin) {
-      if (std::is_same<T, int64_t>::value) {
+      if (std::is_same_v<T, int64_t>) {
         return kBigintMin;
       }
-      if (std::is_same<T, float>::value) {
+      if (std::is_same_v<T, float>) {
         return kFloatMin;
       }
-      if (std::is_same<T, double>::value) {
+      if (std::is_same_v<T, double>) {
         return kDoubleMin;
       }
     } else {
-      if (std::is_same<T, int64_t>::value) {
+      if (std::is_same_v<T, int64_t>) {
         return kBigintMax;
       }
-      if (std::is_same<T, float>::value) {
+      if (std::is_same_v<T, float>) {
         return kFloatMax;
       }
-      if (std::is_same<T, double>::value) {
+      if (std::is_same_v<T, double>) {
         return kDoubleMax;
       }
     }

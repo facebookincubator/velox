@@ -15,8 +15,13 @@
 add_executable(
   velox_plan_conversion_test
   Substrait2VeloxPlanConversionTest.cpp
-  Substrait2VeloxValuesNodeConversionTest.cpp FunctionTest.cpp
-  JsonToProtoConverter.cpp VeloxSubstraitRoundTripPlanConverterTest.cpp)
+  Substrait2VeloxValuesNodeConversionTest.cpp
+  FunctionTest.cpp
+  JsonToProtoConverter.cpp
+  VeloxSubstraitRoundTripTest.cpp
+  VeloxToSubstraitTypeTest.cpp
+  VeloxSubstraitSignatureTest.cpp
+  SubstraitExtensionCollectorTest.cpp)
 
 add_dependencies(velox_plan_conversion_test velox_substrait_plan_converter)
 
@@ -38,7 +43,7 @@ target_link_libraries(
   velox_hive_connector
   velox_type
   velox_serialization
-  velox_exec_test_util
+  velox_exec_test_lib
   velox_functions_json
   velox_vector
   velox_memory

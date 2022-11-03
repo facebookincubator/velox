@@ -69,10 +69,33 @@ LocalReadFile::LocalReadFile(std::string_view path) {
   buf[path.size()] = 0;
   memcpy(buf.get(), path.data(), path.size());
   fd_ = open(buf.get(), O_RDONLY);
-  VELOX_CHECK_GE(fd_, 0, "open failure in LocalReadFile constructor, {}.", fd_);
+  VELOX_CHECK_GE(
+      fd_,
+      0,
+      "open failure in LocalReadFile constructor, {} {} {}.",
+      fd_,
+      path,
+      folly::errnoStr(errno));
+  const off_t rc = lseek(fd_, 0, SEEK_END);
+  VELOX_CHECK_GE(
+      rc,
+      0,
+      "fseek failure in LocalReadFile constructor, {} {} {}.",
+      rc,
+      path,
+      folly::errnoStr(errno));
+  size_ = rc;
 }
 
 LocalReadFile::LocalReadFile(int32_t fd) : fd_(fd) {}
+
+LocalReadFile::~LocalReadFile() {
+  const int ret = close(fd_);
+  if (ret < 0) {
+    LOG(WARNING) << "close failure in LocalReadFile destructor: " << ret << ", "
+                 << folly::errnoStr(errno);
+  }
+}
 
 void LocalReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
     const {
@@ -104,15 +127,15 @@ uint64_t LocalReadFile::preadv(
     const std::vector<folly::Range<char*>>& buffers) const {
   // Dropped bytes sized so that a typical dropped range of 50K is not
   // too many iovecs.
-  static char droppedBytes[16 * 1024];
+  static thread_local std::vector<char> droppedBytes(16 * 1024);
   std::vector<struct iovec> iovecs;
   iovecs.reserve(buffers.size());
   for (auto& range : buffers) {
     if (!range.data()) {
       auto skipSize = range.size();
       while (skipSize) {
-        auto bytes = std::min<size_t>(sizeof(droppedBytes), skipSize);
-        iovecs.push_back({droppedBytes, bytes});
+        auto bytes = std::min<size_t>(droppedBytes.size(), skipSize);
+        iovecs.push_back({droppedBytes.data(), bytes});
         skipSize -= bytes;
       }
     } else {
@@ -123,12 +146,6 @@ uint64_t LocalReadFile::preadv(
 }
 
 uint64_t LocalReadFile::size() const {
-  if (size_ != -1) {
-    return size_;
-  }
-  const off_t rc = lseek(fd_, 0, SEEK_END);
-  VELOX_CHECK_GE(rc, 0, "fseek failure in LocalReadFile::size, {}.", rc);
-  size_ = rc;
   return size_;
 }
 
@@ -150,7 +167,11 @@ LocalWriteFile::LocalWriteFile(std::string_view path) {
         !exists, "Failure in LocalWriteFile: path '{}' already exists.", path);
   }
   auto file = fopen(buf.get(), "ab");
-  VELOX_CHECK(file, "fopen failure in LocalWriteFile constructor, {}.", path);
+  VELOX_CHECK(
+      file,
+      "fopen failure in LocalWriteFile constructor, {} {}.",
+      path,
+      folly::errnoStr(errno));
   file_ = file;
 }
 
@@ -178,13 +199,21 @@ void LocalWriteFile::append(std::string_view data) {
 void LocalWriteFile::flush() {
   VELOX_CHECK(!closed_, "file is closed");
   auto ret = fflush(file_);
-  VELOX_CHECK_EQ(ret, 0, "fflush failed in LocalWriteFile::flush.");
+  VELOX_CHECK_EQ(
+      ret,
+      0,
+      "fflush failed in LocalWriteFile::flush: {}.",
+      folly::errnoStr(errno));
 }
 
 void LocalWriteFile::close() {
   if (!closed_) {
     auto ret = fclose(file_);
-    VELOX_CHECK_EQ(ret, 0, "fwrite failure in LocalWriteFile::close.");
+    VELOX_CHECK_EQ(
+        ret,
+        0,
+        "fwrite failure in LocalWriteFile::close: {}.",
+        folly::errnoStr(errno));
     closed_ = true;
   }
 }

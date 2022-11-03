@@ -32,9 +32,36 @@ using ::duckdb::dtime_t;
 using ::duckdb::string_t;
 using ::duckdb::timestamp_t;
 
+namespace {
+variant decimalVariant(const Value& val) {
+  uint8_t precision;
+  uint8_t scale;
+  val.type().GetDecimalProperties(precision, scale);
+  auto decimalType = DECIMAL(precision, scale);
+  switch (val.type().InternalType()) {
+    case ::duckdb::PhysicalType::INT128: {
+      auto unscaledValue = val.GetValueUnsafe<::duckdb::hugeint_t>();
+      return variant::longDecimal(
+          buildInt128(unscaledValue.upper, unscaledValue.lower), decimalType);
+    }
+    case ::duckdb::PhysicalType::INT16: {
+      return variant::shortDecimal(val.GetValueUnsafe<int16_t>(), decimalType);
+    }
+    case ::duckdb::PhysicalType::INT32: {
+      return variant::shortDecimal(val.GetValueUnsafe<int32_t>(), decimalType);
+    }
+    case ::duckdb::PhysicalType::INT64: {
+      return variant::shortDecimal(val.GetValueUnsafe<int64_t>(), decimalType);
+    }
+    default:
+      VELOX_UNSUPPORTED();
+  }
+}
+} // namespace
+
 //! Type mapping for velox -> DuckDB conversions
-LogicalType fromVeloxType(TypeKind kind) {
-  switch (kind) {
+LogicalType fromVeloxType(const TypePtr& type) {
+  switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return LogicalType::BOOLEAN;
     case TypeKind::TINYINT:
@@ -53,31 +80,24 @@ LogicalType fromVeloxType(TypeKind kind) {
       return LogicalType::VARCHAR;
     case TypeKind::TIMESTAMP:
       return LogicalType::TIMESTAMP;
+    case TypeKind::ARRAY:
+      return LogicalType::LIST(fromVeloxType(type->childAt(0)));
+    case TypeKind::MAP:
+      return LogicalType::MAP(
+          fromVeloxType(type->childAt(0)), fromVeloxType(type->childAt(1)));
+    case TypeKind::ROW: {
+      const auto& rowType = type->asRow();
+      std::vector<std::pair<std::string, LogicalType>> children;
+      for (auto i = 0; i < rowType.size(); ++i) {
+        children.push_back(
+            {rowType.nameOf(i), fromVeloxType(rowType.childAt(i))});
+      }
+      return LogicalType::STRUCT(std::move(children));
+    }
     default:
       throw std::runtime_error(
-          "unsupported type for velox -> DuckDB conversion: " +
-          mapTypeKindToName(kind));
-  }
-}
-
-//! Whether or not a type is supported for velox <-> DuckDB conversion; note
-//! that this is more restrictive than toVeloxType We only support types that
-//! have a 1:1 mapping between DuckDB and velox here
-bool duckdbTypeIsSupported(LogicalType type) {
-  switch (type.id()) {
-    case LogicalTypeId::BOOLEAN:
-    case LogicalTypeId::TINYINT:
-    case LogicalTypeId::SMALLINT:
-    case LogicalTypeId::INTEGER:
-    case LogicalTypeId::BIGINT:
-    case LogicalTypeId::FLOAT:
-    case LogicalTypeId::DOUBLE:
-    case LogicalTypeId::VARCHAR:
-    case LogicalTypeId::TIMESTAMP:
-    case LogicalTypeId::DATE:
-      return true;
-    default:
-      return false;
+          "Unsupported type for velox -> DuckDB conversion: " +
+          type->toString());
   }
 }
 
@@ -110,8 +130,34 @@ TypePtr toVeloxType(LogicalType type) {
       return DATE();
     case LogicalTypeId::TIMESTAMP:
       return TIMESTAMP();
+    case LogicalTypeId::INTERVAL:
+      return INTERVAL_DAY_TIME();
     case LogicalTypeId::BLOB:
       return VARBINARY();
+    case LogicalTypeId::LIST: {
+      auto childType = ::duckdb::ListType::GetChildType(type);
+      return ARRAY(toVeloxType(childType));
+    }
+    case LogicalTypeId::MAP: {
+      auto keyType = ::duckdb::MapType::KeyType(type);
+      auto valueType = ::duckdb::MapType::ValueType(type);
+      return MAP(toVeloxType(keyType), toVeloxType(valueType));
+    }
+    case LogicalTypeId::STRUCT: {
+      std::vector<std::string> names;
+      std::vector<TypePtr> types;
+
+      auto numChildren = ::duckdb::StructType::GetChildCount(type);
+      names.reserve(numChildren);
+      types.reserve(numChildren);
+
+      for (auto i = 0; i < numChildren; ++i) {
+        names.push_back(::duckdb::StructType::GetChildName(type, i));
+        types.push_back(
+            toVeloxType(::duckdb::StructType::GetChildType(type, i)));
+      }
+      return ROW(std::move(names), std::move(types));
+    }
     default:
       throw std::runtime_error(
           "unsupported type for duckdb -> velox conversion: " +
@@ -119,7 +165,7 @@ TypePtr toVeloxType(LogicalType type) {
   }
 }
 
-variant duckValueToVariant(const Value& val) {
+variant duckValueToVariant(const Value& val, bool parseDecimalAsDouble) {
   switch (val.type().id()) {
     case LogicalTypeId::SQLNULL:
       return variant(TypeKind::UNKNOWN);
@@ -138,7 +184,11 @@ variant duckValueToVariant(const Value& val) {
     case LogicalTypeId::DOUBLE:
       return variant(val.GetValue<double>());
     case LogicalTypeId::DECIMAL:
-      return variant(val.GetValue<double>());
+      if (parseDecimalAsDouble) {
+        return variant(val.GetValue<double>());
+      } else {
+        return decimalVariant(val);
+      }
     case LogicalTypeId::VARCHAR:
       return variant(val.GetValue<std::string>());
     case LogicalTypeId::BLOB:
@@ -148,6 +198,33 @@ variant duckValueToVariant(const Value& val) {
           "unsupported type for duckdb value -> velox  variant conversion: " +
           val.type().ToString());
   }
+}
+
+std::string makeCreateTableSql(
+    const std::string& tableName,
+    const RowType& rowType) {
+  std::ostringstream sql;
+  sql << "CREATE TABLE " << tableName << "(";
+  for (int32_t i = 0; i < rowType.size(); i++) {
+    if (i > 0) {
+      sql << ", ";
+    }
+    sql << rowType.nameOf(i) << " ";
+    auto child = rowType.childAt(i);
+    if (child->isArray()) {
+      sql << child->asArray().elementType()->kindName() << "[]";
+    } else if (child->isMap()) {
+      sql << "MAP(" << child->asMap().keyType()->kindName() << ", "
+          << child->asMap().valueType()->kindName() << ")";
+    } else if (child->isShortDecimal() || child->isLongDecimal()) {
+      const auto& [precision, scale] = getDecimalPrecisionScale(*child);
+      sql << "DECIMAL(" << precision << ", " << scale << ")";
+    } else {
+      sql << child->kindName();
+    }
+  }
+  sql << ")";
+  return sql.str();
 }
 
 } // namespace facebook::velox::duckdb

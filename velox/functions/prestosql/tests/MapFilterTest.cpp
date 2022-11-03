@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -72,10 +72,9 @@ TEST_F(MapFilterTest, filter) {
       ROW({"long_val", "map_val"}, {BIGINT(), MAP(BIGINT(), INTEGER())});
   auto data = std::static_pointer_cast<RowVector>(
       BatchMaker::createBatch(rowType, 1'000, *execCtx_.pool()));
-  auto signature = ROW({"k", "v"}, {BIGINT(), INTEGER()});
-  registerLambda("filter", signature, rowType, "k > long_val");
-  auto result =
-      evaluate<BaseVector>("map_filter(map_val, function('filter'))", data);
+
+  auto result = evaluate<BaseVector>(
+      "map_filter(map_val, (k, v) -> (k > long_val))", data);
   auto* cutoff = data->childAt(0)->as<SimpleVector<int64_t>>();
   checkMapFilter<SimpleVector<int64_t>, SimpleVector<int32_t>>(
       data->childAt(1).get(),
@@ -95,11 +94,9 @@ TEST_F(MapFilterTest, empty) {
       ROW({"long_val", "map_val"}, {BIGINT(), MAP(BIGINT(), INTEGER())});
   auto input = std::static_pointer_cast<RowVector>(
       BatchMaker::createBatch(rowType, 1'000, *execCtx_.pool()));
-  registerLambda(
-      "filter", ROW({"k", "v"}, {BIGINT(), INTEGER()}), rowType, "k = 11111");
 
   auto result =
-      evaluate<MapVector>("map_filter(map_val, function('filter'))", input);
+      evaluate<MapVector>("map_filter(map_val, (k, v) -> (k = 11111))", input);
 
   EXPECT_EQ(result->size(), input->size());
   auto inputMap = input->childAt(1);
@@ -116,9 +113,6 @@ TEST_F(MapFilterTest, empty) {
 TEST_F(MapFilterTest, dictionaryWithUniqueValues) {
   auto rowType =
       ROW({"long_val", "map_val"}, {BIGINT(), MAP(BIGINT(), INTEGER())});
-  auto signature = ROW({"k", "v"}, {BIGINT(), INTEGER()});
-  registerLambda("key_filter", signature, rowType, "k > long_val");
-  registerLambda("value_filter", signature, rowType, "v > 0");
   auto data = std::static_pointer_cast<RowVector>(
       BatchMaker::createBatch(rowType, 10, *execCtx_.pool()));
 
@@ -126,7 +120,7 @@ TEST_F(MapFilterTest, dictionaryWithUniqueValues) {
   BufferPtr indices = makeIndicesInReverse(data->size());
   data->childAt(1) = wrapInDictionary(indices, data->size(), data->childAt(1));
   auto result = evaluate<BaseVector>(
-      "map_filter(map_filter(map_val, function('key_filter')), function('value_filter'))",
+      "map_filter(map_filter(map_val, (k, v) -> (k > long_val)), (k, v) -> (v > 0))",
       data);
   auto* cutoff = data->childAt(0)->as<SimpleVector<int64_t>>();
   auto test = [&](SimpleVector<int64_t>* keys,
@@ -147,7 +141,7 @@ TEST_F(MapFilterTest, dictionaryWithUniqueValues) {
   // Wrap both inputs in the same dictionary.
   data->childAt(0) = wrapInDictionary(indices, data->size(), data->childAt(0));
   result = evaluate<BaseVector>(
-      "map_filter(map_filter(map_val, function('key_filter')), function('value_filter'))",
+      "map_filter(map_filter(map_val, (k, v) -> (k > long_val)), (k, v) -> (v > 0))",
       data);
   cutoff = data->childAt(0)->as<SimpleVector<int64_t>>();
   checkMapFilter<SimpleVector<int64_t>, SimpleVector<int32_t>>(
@@ -159,13 +153,10 @@ TEST_F(MapFilterTest, conditional) {
       ROW({"long_val", "map_val"}, {BIGINT(), MAP(BIGINT(), INTEGER())});
   auto data = std::static_pointer_cast<RowVector>(
       BatchMaker::createBatch(rowType, 1'000, *execCtx_.pool()));
-  auto signature = ROW({"k", "v"}, {BIGINT(), INTEGER()});
-  registerLambda("gtCutoff", signature, rowType, "k > long_val");
-  registerLambda("ltCutoff", signature, rowType, "v < long_val");
 
   auto result = evaluate<BaseVector>(
       "map_filter(map_val, "
-      "  if (long_val < 0, function('ltCutoff'), function('gtCutoff')))",
+      "  if (long_val < 0, (k, v) -> (v < long_val), (k, v) -> (k > long_val)))",
       data);
 
   auto* cutoff = data->childAt(0)->as<SimpleVector<int64_t>>();
@@ -204,12 +195,7 @@ TEST_F(MapFilterTest, dictionaryWithDuplicates) {
       [](vector_size_t row) { return row % 11; },
       nullEvery(11));
 
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(size, execCtx_.pool());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (auto i = 0; i < size; ++i) {
-    rawIndices[i] = i / 2;
-  }
+  BufferPtr indices = makeIndices(size, [](auto row) { return row / 2; });
 
   auto map = wrapInDictionary(indices, size, baseMap);
 
@@ -219,17 +205,68 @@ TEST_F(MapFilterTest, dictionaryWithDuplicates) {
 
   auto input = makeRowVector({capture, map});
 
-  auto signature = ROW(
-      {"k", "v"}, {baseMap->mapKeys()->type(), baseMap->mapValues()->type()});
-  registerLambda("filter", signature, input->type(), "(k + v + c0) % 7 < 3");
-
-  auto result =
-      evaluate<BaseVector>("map_filter(c1, function('filter'))", input);
+  auto result = evaluate<BaseVector>(
+      "map_filter(c1, (k, v) -> ((k + v + c0) % 7 < 3))", input);
 
   auto flatMap = flatten(map);
   input = makeRowVector({capture, flatMap});
-  auto expectedResult =
-      evaluate<BaseVector>("map_filter(c1, function('filter'))", input);
+  auto expectedResult = evaluate<BaseVector>(
+      "map_filter(c1, (k, v) -> ((k + v + c0) % 7 < 3))", input);
 
   assertEqualVectors(expectedResult, result);
+}
+
+TEST_F(MapFilterTest, lambdaSelectivityVector) {
+  auto data = makeRowVector({
+      wrapInDictionary(
+          makeIndices({0}),
+          1,
+          makeFlatVector<int64_t>(std::vector<int64_t>{10})),
+  });
+
+  // Our expression. Use large numbers to trigger asan if things go wrong.
+  auto exprSet = compileExpression(
+      "map_filter("
+      "MAP(ARRAY[233439836560246536, 398885052601874414, 213334509704047604],"
+      "ARRAY[c0, c0, c0]),"
+      "(k, v) -> (v IS NOT NULL))",
+      asRowType(data->type()));
+
+  // Ensure that our context would have 'final selection' false.
+  exec::EvalCtx context(&execCtx_, exprSet.get(), data.get());
+  const SelectivityVector allRows(data->size());
+  exec::ScopedFinalSelectionSetter scopedFinalSelectionSetter(
+      context, &allRows);
+
+  // Evaluate. Result would be overwritten.
+  std::vector<VectorPtr> result = {
+      makeFlatVector<int64_t>(std::vector<int64_t>{1})};
+  exprSet->eval(allRows, context, result);
+
+  auto expectedKeys = makeFlatVector<int64_t>(
+      {233439836560246536, 398885052601874414, 213334509704047604});
+  auto expectedValues = makeFlatVector<int64_t>({10, 10, 10});
+  auto expected = makeMapVector({0}, expectedKeys, expectedValues);
+  assertEqualVectors(expected, result[0]);
+}
+
+TEST_F(MapFilterTest, try) {
+  auto data = makeRowVector({
+      makeMapVector<int64_t, int64_t>({
+          {{1, 2}, {2, 3}},
+          {{3, 4}, {0, 1}, {5, 6}},
+          {{6, 5}, {7, 8}},
+          {{8, 7}},
+      }),
+  });
+
+  ASSERT_THROW(
+      evaluate<BaseVector>("map_filter(c0, (k, v) -> (v / k > 0))", data),
+      std::exception);
+
+  auto result =
+      evaluate<BaseVector>("try(map_filter(c0, (k, v) -> (v / k > 0)))", data);
+  auto expected = makeNullableMapVector<int64_t, int64_t>(
+      {{{{1, 2}, {2, 3}}}, std::nullopt, {{{7, 8}}}, {{}}});
+  assertEqualVectors(expected, result);
 }

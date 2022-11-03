@@ -31,7 +31,10 @@ class LocalExchangeMemoryManager {
   /// will be complete when memory usage is update to be below the limit.
   bool increaseMemoryUsage(ContinueFuture* future, int64_t added);
 
-  void decreaseMemoryUsage(int64_t removed);
+  /// Decreases the memory usage by 'removed' bytes. If the memory usage goes
+  /// below the limit after the decrease, the function returns 'promises_' to
+  /// caller to fulfill.
+  std::vector<ContinuePromise> decreaseMemoryUsage(int64_t removed);
 
  private:
   const int64_t maxBufferSize_;
@@ -188,16 +191,9 @@ class LocalPartition : public Operator {
   }
 
  private:
-  BlockingReason
-  enqueue(int32_t partition, RowVectorPtr data, ContinueFuture* future);
-
   const std::vector<std::shared_ptr<LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
   std::unique_ptr<core::PartitionFunction> partitionFunction_;
-  /// Mapping of sources' output columns to our output columns.
-  /// One for all sources.
-  /// Empty if column order in the output is exactly the same as in input.
-  std::vector<column_index_t> sourceOutputChannels_;
 
   uint32_t numBlockedPartitions_{0};
   std::vector<BlockingReason> blockingReasons_;

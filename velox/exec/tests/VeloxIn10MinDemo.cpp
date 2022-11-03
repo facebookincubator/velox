@@ -20,12 +20,13 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/tpch/gen/TpchGen.h"
-#include "velox/vector/tests/VectorTestBase.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -38,6 +39,9 @@ class VeloxIn10MinDemo : public VectorTestBase {
   VeloxIn10MinDemo() {
     // Register Presto scalar functions.
     functions::prestosql::registerAllScalarFunctions();
+
+    // Register Presto aggregate functions.
+    aggregate::prestosql::registerAllAggregateFunctions();
 
     // Register type resolver with DuckDB SQL parser.
     parse::registerTypeResolver();
@@ -58,7 +62,8 @@ class VeloxIn10MinDemo : public VectorTestBase {
   core::TypedExprPtr parseExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
-    auto untyped = parse::parseExpr(text);
+    parse::ParseOptions options;
+    auto untyped = parse::parseExpr(text, options);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
@@ -78,7 +83,7 @@ class VeloxIn10MinDemo : public VectorTestBase {
 
     SelectivityVector rows(input->size());
     std::vector<VectorPtr> result(1);
-    exprSet.eval(rows, &context, &result);
+    exprSet.eval(rows, context, result);
     return result[0];
   }
 
@@ -246,7 +251,7 @@ void VeloxIn10MinDemo::run() {
   // build side. We are going to use PlanNodeIdGenerator to ensure that all plan
   // nodes in the final plan have unique IDs.
 
-  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId nationScanId;
   core::PlanNodeId regionScanId;
   plan = PlanBuilder(planNodeIdGenerator)

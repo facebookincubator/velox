@@ -32,6 +32,17 @@ static int32_t typeKindSize(TypeKind kind) {
 
   return VELOX_DYNAMIC_TYPE_DISPATCH(kindSize, kind);
 }
+
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+__attribute__((__no_sanitize__("thread")))
+#endif
+#endif
+inline void
+setBit(char* bits, uint32_t idx) {
+  auto bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
+  bitsAs8Bit[idx / 8] |= (1 << (idx % 8));
+}
 } // namespace
 
 RowContainer::RowContainer(
@@ -98,6 +109,8 @@ RowContainer::RowContainer(
   int32_t firstAggregate = offsets_.size();
   int32_t firstAggregateOffset = offset;
   for (auto& aggregate : aggregates) {
+    // Accumulator offset must be aligned by their alignment size.
+    offset = bits::roundUp(offset, aggregate->accumulatorAlignmentSize());
     offsets_.push_back(offset);
     offset += aggregate->accumulatorFixedWidthSize();
     nullOffsets_.push_back(nullOffset);
@@ -179,6 +192,8 @@ RowContainer::RowContainer(
 
 char* RowContainer::newRow() {
   char* row;
+  VELOX_DCHECK(
+      !partitions_, "Rows may not be added after partitions() has been called");
   ++numRows_;
   if (firstFreeRow_) {
     row = firstFreeRow_;
@@ -373,27 +388,6 @@ void RowContainer::storeComplexType(
       StringView(reinterpret_cast<char*>(position.position), stream.size());
 }
 
-void RowContainer::extractComplexType(
-    const char* const* rows,
-    int32_t numRows,
-    RowColumn column,
-    VectorPtr result) {
-  ByteStream stream;
-  auto nullByte = column.nullByte();
-  auto nullMask = column.nullMask();
-  auto offset = column.offset();
-  result->resize(numRows);
-  for (int i = 0; i < numRows; ++i) {
-    auto row = rows[i];
-    if (!row || row[nullByte] & nullMask) {
-      result->setNull(i, true);
-    } else {
-      prepareRead(row, offset, stream);
-      ContainerRowSerde::instance().deserialize(stream, i, result.get());
-    }
-  }
-}
-
 //   static
 int32_t RowContainer::compareStringAsc(
     StringView left,
@@ -526,8 +520,20 @@ void RowContainer::setProbedFlag(char** rows, int32_t numRows) {
   for (auto i = 0; i < numRows; i++) {
     // Row may be null in case of a FULL join.
     if (rows[i]) {
-      bits::setBit(rows[i], probedFlagOffset_);
+      setBit(rows[i], probedFlagOffset_);
     }
+  }
+}
+
+void RowContainer::extractProbedFlags(
+    const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
+    int32_t numRows,
+    const VectorPtr& result) {
+  result->resize(numRows);
+  auto flatResult = result->as<FlatVector<bool>>();
+  auto* rawValues = flatResult->mutableRawValues<uint64_t>();
+  for (auto i = 0; i < numRows; ++i) {
+    bits::setBit(rawValues, i, bits::isBitSet(rows[i], probedFlagOffset_));
   }
 }
 
@@ -541,6 +547,179 @@ int64_t RowContainer::sizeIncrement(
       std::min<int64_t>(0, variableLengthBytes - stringAllocator_.freeSpace());
   return bits::roundUp(needRows * fixedRowSize_, kAllocUnit) +
       bits::roundUp(needBytes, kAllocUnit);
+}
+
+void RowContainer::skip(RowContainerIterator& iter, int32_t numRows) {
+  VELOX_DCHECK_LE(0, numRows);
+  if (!iter.endOfRun) {
+    // Set to first row.
+    VELOX_DCHECK_EQ(0, iter.rowNumber);
+    VELOX_DCHECK_EQ(0, iter.allocationIndex);
+    iter.normalizedKeysLeft = numRowsWithNormalizedKey_;
+    auto run = rows_.allocationAt(0)->runAt(0);
+    iter.rowBegin = run.data<char>();
+    iter.endOfRun = iter.rowBegin + run.numBytes();
+  }
+  if (iter.rowNumber + numRows >= numRows_) {
+    iter.rowNumber = numRows_;
+    iter.rowBegin = nullptr;
+    return;
+  }
+  int32_t rowSize = fixedRowSize_ +
+      (iter.normalizedKeysLeft > 0 ? sizeof(normalized_key_t) : 0);
+  auto toSkip = numRows;
+  if (iter.normalizedKeysLeft && iter.normalizedKeysLeft < numRows) {
+    toSkip -= iter.normalizedKeysLeft;
+    skip(iter, iter.normalizedKeysLeft);
+    rowSize = fixedRowSize_;
+  }
+  while (toSkip) {
+    if (iter.rowBegin &&
+        toSkip * rowSize <= (iter.endOfRun - iter.rowBegin) - rowSize) {
+      iter.rowBegin += toSkip * rowSize;
+      break;
+    }
+    int32_t rowsInRun = (iter.endOfRun - iter.rowBegin) / rowSize;
+    toSkip -= rowsInRun;
+    auto numRuns = rows_.allocationAt(iter.allocationIndex)->numRuns();
+    if (iter.runIndex >= numRuns - 1) {
+      ++iter.allocationIndex;
+      iter.runIndex = 0;
+    } else {
+      ++iter.runIndex;
+    }
+    auto run = rows_.allocationAt(iter.allocationIndex)->runAt(iter.runIndex);
+    if (iter.allocationIndex == rows_.numSmallAllocations() - 1 &&
+        iter.runIndex ==
+            rows_.allocationAt(iter.allocationIndex)->numRuns() - 1) {
+      iter.endOfRun = run.data<char>() + rows_.currentOffset();
+    } else {
+      iter.endOfRun = run.data<char>() + run.numBytes();
+    }
+    iter.rowBegin = run.data<char>();
+  }
+  if (iter.normalizedKeysLeft) {
+    iter.normalizedKeysLeft -= numRows;
+  }
+  iter.rowNumber += numRows;
+}
+
+RowPartitions& RowContainer::partitions() {
+  if (!partitions_) {
+    partitions_ =
+        std::make_unique<RowPartitions>(numRows_, *rows_.mappedMemory());
+  }
+  return *partitions_;
+}
+
+int32_t RowContainer::listPartitionRows(
+    RowContainerIterator& iter,
+    uint8_t partition,
+    int32_t maxRows,
+    char** result) {
+  if (!numRows_) {
+    return 0;
+  }
+  VELOX_CHECK(
+      partitions_, "partitions() must be called before listPartitionRows()");
+  VELOX_CHECK_EQ(
+      partitions_->size(), numRows_, "All rows must have a partition");
+  auto partitionNumberVector = xsimd::batch<uint8_t>::broadcast(partition);
+  auto& allocation = partitions_->allocation();
+  auto numRuns = allocation.numRuns();
+  int32_t numResults = 0;
+  while (numResults < maxRows && iter.rowNumber < numRows_) {
+    constexpr int32_t kBatch = xsimd::batch<uint8_t>::size;
+    // Start at multiple of kBatch.
+    auto startRow = iter.rowNumber / kBatch * kBatch;
+    // Ignore the possible hits at or below iter.rowNumber.
+    uint32_t firstBatchMask = ~bits::lowMask(iter.rowNumber - startRow);
+    int32_t runIndex;
+    int32_t offsetInRun;
+    VELOX_CHECK_LT(startRow, numRows_);
+    allocation.findRun(startRow, &runIndex, &offsetInRun);
+    auto run = allocation.runAt(runIndex);
+    auto runEnd = run.numBytes();
+    auto runBytes = run.data<uint8_t>();
+    for (; offsetInRun < runEnd; offsetInRun += kBatch) {
+      auto bits =
+          simd::toBitMask(
+              partitionNumberVector ==
+              xsimd::batch<uint8_t>::load_unaligned(runBytes + offsetInRun)) &
+          firstBatchMask;
+      firstBatchMask = ~0;
+      bool atEnd = false;
+      if (startRow + kBatch >= numRows_) {
+        // Clear bits that are for rows past numRows_ - 1.
+        bits &= bits::lowMask(numRows_ - startRow);
+        atEnd = true;
+      }
+      while (bits) {
+        int32_t hit = __builtin_ctz(bits);
+        auto distance = hit + startRow - iter.rowNumber;
+        skip(iter, distance);
+        result[numResults++] = iter.currentRow();
+        if (numResults == maxRows) {
+          skip(iter, 1);
+          return numResults;
+        }
+        // Clear last set bit in 'bits'.
+        bits &= bits - 1;
+      }
+      startRow += kBatch;
+      // The last batch of 32 bytes may have been partly filled. If so, we could
+      // have skipped past end.
+      if (atEnd) {
+        iter.rowNumber = numRows_;
+        return numResults;
+      }
+
+      if (iter.rowNumber != startRow) {
+        skip(iter, startRow - iter.rowNumber);
+      }
+    }
+  }
+  return numResults;
+}
+
+RowPartitions::RowPartitions(
+    int32_t numRows,
+    memory::MappedMemory& mappedMemory)
+    : capacity_(numRows), allocation_(&mappedMemory) {
+  auto numPages = bits::roundUp(capacity_, memory::MappedMemory::kPageSize) /
+      memory::MappedMemory::kPageSize;
+  if (!mappedMemory.allocate(numPages, 0, allocation_)) {
+    VELOX_FAIL(
+        "Failed to allocate RowContainer partitions: {} pages", numPages);
+  }
+}
+
+void RowPartitions::appendPartitions(folly::Range<const uint8_t*> partitions) {
+  int32_t toAdd = partitions.size();
+  int index = 0;
+  VELOX_CHECK_LE(size_ + toAdd, capacity_);
+  while (toAdd) {
+    int32_t run;
+    int32_t offset;
+    allocation_.findRun(size_, &run, &offset);
+    auto runSize = allocation_.runAt(run).numBytes();
+    auto copySize = std::min<int32_t>(toAdd, runSize - offset);
+    memcpy(
+        allocation_.runAt(run).data<uint8_t>() + offset,
+        &partitions[index],
+        copySize);
+    size_ += copySize;
+    index += copySize;
+    toAdd -= copySize;
+    // Zero out to the next multiple of SIMD width for asan/valgring.
+    if (!toAdd) {
+      bits::padToAlignment(
+          allocation_.runAt(run).data<uint8_t>(),
+          runSize,
+          offset + copySize,
+          xsimd::batch<uint8_t>::size);
+    }
+  }
 }
 
 } // namespace facebook::velox::exec

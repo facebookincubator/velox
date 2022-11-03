@@ -13,14 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/hyperloglog/SparseHll.h"
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/functions/FunctionRegistry.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-using facebook::velox::aggregate::hll::DenseHll;
-using facebook::velox::aggregate::hll::SparseHll;
+using facebook::velox::common::hll::DenseHll;
+using facebook::velox::common::hll::SparseHll;
 
 namespace facebook::velox {
 namespace {
@@ -48,8 +49,38 @@ class HyperLogLogFunctionsTest : public functions::test::FunctionBaseTest {
     return serialized;
   }
 
+  static std::unordered_set<std::string> getSignatureStrings(
+      const std::string& functionName) {
+    auto allSignatures = getFunctionSignatures();
+    const auto& signatures = allSignatures.at(functionName);
+
+    std::unordered_set<std::string> signatureStrings;
+    for (const auto& signature : signatures) {
+      signatureStrings.insert(signature->toString());
+      LOG(ERROR) << signature->toString();
+    }
+    return signatureStrings;
+  }
+
   HashStringAllocator allocator_{memory::MappedMemory::getInstance()};
 };
+
+TEST_F(HyperLogLogFunctionsTest, cardinalitySignatures) {
+  auto signatures = getSignatureStrings("cardinality");
+  ASSERT_EQ(3, signatures.size());
+
+  ASSERT_EQ(1, signatures.count("(map(any,any)) -> bigint"));
+  ASSERT_EQ(1, signatures.count("(array(any)) -> bigint"));
+  ASSERT_EQ(1, signatures.count("(hyperloglog) -> bigint"));
+}
+
+TEST_F(HyperLogLogFunctionsTest, emptyApproxSetSignatures) {
+  auto signatures = getSignatureStrings("empty_approx_set");
+  ASSERT_EQ(2, signatures.size());
+
+  ASSERT_EQ(1, signatures.count("(double) -> hyperloglog"));
+  ASSERT_EQ(1, signatures.count("() -> hyperloglog"));
+}
 
 TEST_F(HyperLogLogFunctionsTest, cardinalitySparse) {
   const auto cardinality = [&](const std::string& input) {

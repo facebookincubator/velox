@@ -20,7 +20,7 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/sparksql/Comparisons.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -37,12 +37,12 @@ void applyComplexType(
     ArrayVector* inputArray,
     bool ascending,
     bool nullsFirst,
-    exec::EvalCtx* context,
+    exec::EvalCtx& context,
     VectorPtr* resultElements) {
   auto elementsVector = inputArray->elements();
 
   // Allocate new vectors for indices.
-  BufferPtr indices = allocateIndices(elementsVector->size(), context->pool());
+  BufferPtr indices = allocateIndices(elementsVector->size(), context.pool());
   vector_size_t* rawIndices = indices->asMutable<vector_size_t>();
 
   const CompareFlags flags{.nullsFirst = nullsFirst, .ascending = ascending};
@@ -73,7 +73,7 @@ inline void swapWithNull(
     vector_size_t nullIndex) {
   // Values are already present in vector stringBuffers. Don't create additional
   // copy.
-  if constexpr (std::is_same<T, StringView>::value) {
+  if constexpr (std::is_same_v<T, StringView>) {
     vector->setNoCopy(nullIndex, vector->valueAt(index));
   } else {
     vector->set(nullIndex, vector->valueAt(index));
@@ -87,7 +87,7 @@ void applyTyped(
     const ArrayVector* inputArray,
     bool ascending,
     bool nullsFirst,
-    exec::EvalCtx* context,
+    exec::EvalCtx& context,
     VectorPtr* resultElements) {
   using T = typename TypeTraits<kind>::NativeType;
 
@@ -97,7 +97,7 @@ void applyTyped(
       toElementRows(inputElements->size(), rows, inputArray);
 
   *resultElements = BaseVector::create(
-      inputElements->type(), inputElements->size(), context->pool());
+      inputElements->type(), inputElements->size(), context.pool());
   (*resultElements)
       ->copy(inputElements.get(), elementRows, /*toSourceRow=*/nullptr);
 
@@ -161,9 +161,37 @@ void ArraySort::apply(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args,
     const TypePtr& /*outputType*/,
-    exec::EvalCtx* context,
-    VectorPtr* result) const {
-  ArrayVector* inputArray = args[0]->as<ArrayVector>();
+    exec::EvalCtx& context,
+    VectorPtr& result) const {
+  auto& arg = args[0];
+
+  VectorPtr localResult;
+
+  // Input can be constant or flat.
+  if (arg->isConstantEncoding()) {
+    auto* constantArray = arg->as<ConstantVector<ComplexType>>();
+    const auto& flatArray = constantArray->valueVector();
+    const auto flatIndex = constantArray->index();
+
+    SelectivityVector singleRow(flatIndex + 1, false);
+    singleRow.setValid(flatIndex, true);
+    singleRow.updateBounds();
+
+    localResult = applyFlat(singleRow, flatArray, context);
+    localResult =
+        BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
+  } else {
+    localResult = applyFlat(rows, arg, context);
+  }
+
+  context.moveOrCopyResult(localResult, rows, result);
+}
+
+VectorPtr ArraySort::applyFlat(
+    const SelectivityVector& rows,
+    const VectorPtr& arg,
+    exec::EvalCtx& context) const {
+  ArrayVector* inputArray = arg->as<ArrayVector>();
   VectorPtr resultElements;
 
   auto typeKind = inputArray->elements()->typeKind();
@@ -183,8 +211,8 @@ void ArraySort::apply(
         &resultElements);
   }
 
-  auto resultArray = std::make_shared<ArrayVector>(
-      context->pool(),
+  return std::make_shared<ArrayVector>(
+      context.pool(),
       inputArray->type(),
       inputArray->nulls(),
       rows.end(),
@@ -192,8 +220,6 @@ void ArraySort::apply(
       inputArray->sizes(),
       resultElements,
       inputArray->getNullCount());
-
-  context->moveOrCopyResult(resultArray, rows, result);
 }
 
 // Signature: array_sort(array(T)) -> array(T)

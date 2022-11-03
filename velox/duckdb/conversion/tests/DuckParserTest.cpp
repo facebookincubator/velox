@@ -16,10 +16,18 @@
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
+#include "velox/external/duckdb/duckdb.hpp"
 #include "velox/parse/Expressions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::duckdb;
+
+namespace {
+std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString) {
+  ParseOptions options;
+  return parseExpr(exprString, options);
+}
+} // namespace
 
 TEST(DuckParserTest, constants) {
   // Integers.
@@ -54,8 +62,19 @@ TEST(DuckParserTest, arrays) {
   // Empty array.
   EXPECT_EQ("[]", parseExpr("ARRAY[]")->toString());
 
-  // Only simple constants are supported as part of array literals.
-  EXPECT_THROW(parseExpr("ARRAY[1 + 2]"), VeloxUserError);
+  // Expressions with variables and without.
+  EXPECT_EQ(
+      "array_constructor(plus(\"x\",\"y\"),"
+      "minus(\"y\",10),"
+      "multiply(5,\"z\"),"
+      "1,"
+      "multiply(7,6))",
+      parseExpr("ARRAY[x + y, y - 10, 5 * z, 1, 7 * 6]")->toString());
+
+  // Array of variables and one constant.
+  EXPECT_EQ(
+      "array_constructor(\"x\",\"y\",\"z\",1)",
+      parseExpr("ARRAY[x, y, z, 1]")->toString());
 }
 
 TEST(DuckParserTest, variables) {
@@ -188,6 +207,28 @@ TEST(DuckParserTest, between) {
       parseExpr("c0 between 0 and 1 and c0 > 10")->toString());
 }
 
+TEST(DuckParserTest, interval) {
+  EXPECT_EQ("\"0 05:00:00.000\"", parseExpr("INTERVAL 5 HOURS")->toString());
+  EXPECT_EQ("\"0 00:36:00.000\"", parseExpr("INTERVAL 36 MINUTES")->toString());
+  EXPECT_EQ("\"0 00:00:07.000\"", parseExpr("INTERVAL 7 SECONDS")->toString());
+  EXPECT_EQ(
+      "\"0 00:00:00.123\"", parseExpr("INTERVAL 123 MILLISECONDS")->toString());
+
+  EXPECT_EQ(
+      "\"0 00:00:12.345\"",
+      parseExpr("INTERVAL 12345 MILLISECONDS")->toString());
+  EXPECT_EQ(
+      "\"0 03:25:45.678\"",
+      parseExpr("INTERVAL 12345678 MILLISECONDS")->toString());
+  EXPECT_EQ(
+      "\"1 03:48:20.100\"",
+      parseExpr("INTERVAL 100100100 MILLISECONDS")->toString());
+
+  EXPECT_EQ(
+      "\"0 00:00:00.011\" AS x",
+      parseExpr("INTERVAL 11 MILLISECONDS AS x")->toString());
+}
+
 TEST(DuckParserTest, cast) {
   EXPECT_EQ(
       "cast(\"1\", BIGINT)", parseExpr("cast('1' as bigint)")->toString());
@@ -217,8 +258,33 @@ TEST(DuckParserTest, cast) {
       "cast(\"str_col\", DATE)",
       parseExpr("cast(str_col as date)")->toString());
 
+  EXPECT_EQ(
+      "cast(\"str_col\", INTERVAL DAY TO SECOND)",
+      parseExpr("cast(str_col as interval day to second)")->toString());
+
   // Unsupported casts for now.
   EXPECT_THROW(parseExpr("cast('2020-01-01' as TIME)"), std::runtime_error);
+
+  // Complex types.
+  EXPECT_EQ(
+      "cast(\"c0\", ARRAY<BIGINT>)", parseExpr("c0::bigint[]")->toString());
+  EXPECT_EQ(
+      "cast(\"c0\", ARRAY<BIGINT>)",
+      parseExpr("cast(c0 as bigint[])")->toString());
+
+  EXPECT_EQ(
+      "cast(\"c0\", MAP<VARCHAR,BIGINT>)",
+      parseExpr("c0::map(varchar, bigint)")->toString());
+  EXPECT_EQ(
+      "cast(\"c0\", MAP<VARCHAR,BIGINT>)",
+      parseExpr("cast(c0 as map(varchar, bigint))")->toString());
+
+  EXPECT_EQ(
+      "cast(\"c0\", ROW<a:BIGINT,b:REAL,c:VARCHAR>)",
+      parseExpr("c0::struct(a bigint, b real, c varchar)")->toString());
+  EXPECT_EQ(
+      "cast(\"c0\", ROW<a:BIGINT,b:REAL,c:VARCHAR>)",
+      parseExpr("cast(c0 as struct(a bigint, b real, c varchar))")->toString());
 }
 
 TEST(DuckParserTest, ifCase) {
@@ -329,8 +395,158 @@ TEST(DuckParserTest, orderBy) {
   EXPECT_EQ("\"c1\" DESC NULLS LAST", parse("c1 DESC NULLS LAST"));
 }
 
+namespace {
+const std::string windowTypeString(WindowType w) {
+  switch (w) {
+    case WindowType::kRange:
+      return "RANGE";
+    case WindowType::kRows:
+      return "ROWS";
+  }
+  VELOX_UNREACHABLE();
+}
+
+const std::string boundTypeString(BoundType b) {
+  switch (b) {
+    case BoundType::kUnboundedPreceding:
+      return "UNBOUNDED PRECEDING";
+    case BoundType::kUnboundedFollowing:
+      return "UNBOUNDED FOLLOWING";
+    case BoundType::kPreceding:
+      return "PRECEDING";
+    case BoundType::kFollowing:
+      return "FOLLOWING";
+    case BoundType::kCurrentRow:
+      return "CURRENT ROW";
+  }
+  VELOX_UNREACHABLE();
+}
+
+const std::string parseWindow(const std::string& expr) {
+  auto windowExpr = parseWindowExpr(expr);
+  std::string concatPartitions = "";
+  int i = 0;
+  for (const auto& partition : windowExpr.partitionBy) {
+    concatPartitions += partition->toString();
+    if (i > 0) {
+      concatPartitions += " , ";
+    }
+    i++;
+  }
+  auto partitionString = windowExpr.partitionBy.empty()
+      ? ""
+      : fmt::format("PARTITION BY {}", concatPartitions);
+
+  std::string concatOrderBys = "";
+  i = 0;
+  for (const auto& orderBy : windowExpr.orderBy) {
+    concatOrderBys += fmt::format(
+        " {} {}", orderBy.first->toString(), orderBy.second.toString());
+    if (i > 0) {
+      concatOrderBys += " , ";
+    }
+    i++;
+  }
+  auto orderByString = windowExpr.orderBy.empty()
+      ? ""
+      : fmt::format("ORDER BY {}", concatOrderBys);
+
+  auto frameString = fmt::format(
+      "{} BETWEEN {}{} AND{} {}",
+      windowTypeString(windowExpr.frame.type),
+      (windowExpr.frame.startValue
+           ? windowExpr.frame.startValue->toString() + " "
+           : ""),
+      boundTypeString(windowExpr.frame.startType),
+      (windowExpr.frame.endValue ? " " + windowExpr.frame.endValue->toString()
+                                 : ""),
+      boundTypeString(windowExpr.frame.endType));
+
+  return fmt::format(
+      "{} OVER ({} {} {})",
+      windowExpr.functionCall->toString(),
+      partitionString,
+      orderByString,
+      frameString);
+}
+} // namespace
+
+TEST(DuckParserTest, window) {
+  EXPECT_EQ(
+      "row_number() AS c OVER (PARTITION BY \"a\" ORDER BY  \"b\" ASC NULLS LAST"
+      " RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("row_number() over (partition by a order by b) as c"));
+  EXPECT_EQ(
+      "row_number() AS a OVER (  RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("row_number() over () as a"));
+  EXPECT_EQ(
+      "row_number() AS a OVER ( ORDER BY  \"b\" ASC NULLS LAST "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("row_number() over (order by b) as a"));
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\"  ROWS BETWEEN "
+      "UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow(
+          "row_number() over (partition by a rows between unbounded preceding and current row)"));
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" ASC NULLS LAST "
+      "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
+      parseWindow("row_number() over (partition by a order by b "
+                  "rows between a + 10 preceding and 10 following)"));
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" DESC NULLS FIRST "
+      "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
+      parseWindow(
+          "row_number() over (partition by a order by b desc nulls first "
+          "rows between a + 10 preceding and 10 following)"));
+}
+
 TEST(DuckParserTest, invalidExpression) {
   VELOX_ASSERT_THROW(
       parseExpr("func(a b)"),
       "Cannot parse expression: func(a b). Parser Error: syntax error at or near \"b\"");
+}
+
+TEST(DuckParserTest, parseDecimalConstant) {
+  ParseOptions options;
+  options.parseDecimalAsDouble = false;
+  auto expr = parseExpr("1.234", options);
+  if (auto constant =
+          std::dynamic_pointer_cast<const core::ConstantExpr>(expr)) {
+    ASSERT_EQ(*constant->type(), *DECIMAL(4, 3));
+  } else {
+    FAIL() << expr->toString() << " is not a constant";
+  }
+}
+
+TEST(DuckParserTest, lambda) {
+  // There is a bug in DuckDB in parsing lambda expressions that use
+  // comparisons. This doesn't work: filter(a, x -> x = 10). This does:
+  // filter(a, x -> (x = 10))
+  EXPECT_EQ(
+      "filter(\"a\",x -> eq(\"x\",10))",
+      parseExpr("filter(a, x -> (x = 10))")->toString());
+
+  EXPECT_EQ(
+      "filter(\"a\",x -> plus(\"x\",1))",
+      parseExpr("filter(a, x -> x + 1)")->toString());
+
+  EXPECT_EQ(
+      "transform_keys(\"m\",(k, v) -> plus(\"k\",1))",
+      parseExpr("transform_keys(m, (k, v) -> k + 1)")->toString());
+
+  // With capture.
+  EXPECT_EQ(
+      "filter(\"a\",x -> eq(\"x\",\"b\"))",
+      parseExpr("filter(a, x -> (x = b))")->toString());
+
+  EXPECT_EQ(
+      "transform_keys(\"m\",(k, v) -> plus(\"k\",multiply(\"v\",\"b\")))",
+      parseExpr("transform_keys(m, (k, v) -> k + v * b)")->toString());
+
+  // Conditional lambdas.
+  EXPECT_EQ(
+      "filter(\"a\",if(gt(\"b\",0),x -> eq(\"x\",10),x -> eq(\"x\",20)))",
+      parseExpr("filter(a, if (b > 0, x -> (x = 10), x -> (x = 20)))")
+          ->toString());
 }

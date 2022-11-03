@@ -217,12 +217,16 @@ void PartitionedOutput::collectNullRows() {
   nullRows_.resize(size);
   nullRows_.clearAll();
 
+  decodedVectors_.resize(keyChannels_.size());
+
   for (auto i : keyChannels_) {
     auto& keyVector = input_->childAt(i);
     if (keyVector->mayHaveNulls()) {
-      auto* rawNulls = keyVector->flatRawNulls(rows_);
-      bits::orWithNegatedBits(
-          nullRows_.asMutableRange().bits(), rawNulls, 0, size);
+      decodedVectors_[i].decode(*keyVector, rows_);
+      if (auto* rawNulls = decodedVectors_[i].nulls()) {
+        bits::orWithNegatedBits(
+            nullRows_.asMutableRange().bits(), rawNulls, 0, size);
+      }
     }
   }
   nullRows_.updateBounds();
@@ -264,6 +268,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
       }
     }
   } while (workLeft);
+
   if (blockedDestination) {
     // If we are going off-thread, we may as well make the output in
     // progress for other destinations available, unless it is too

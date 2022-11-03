@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <velox/common/memory/MappedMemory.h>
 #include <velox/common/memory/Memory.h>
 #include <memory>
 #include "velox/common/memory/ByteStream.h"
@@ -34,7 +35,8 @@ class SerializedPage {
   // TODO: consider to enforce setting memory pool if possible.
   explicit SerializedPage(
       std::unique_ptr<folly::IOBuf> iobuf,
-      memory::MemoryPool* pool = nullptr);
+      memory::MemoryPool* FOLLY_NULLABLE pool = nullptr,
+      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr);
 
   ~SerializedPage();
 
@@ -45,7 +47,7 @@ class SerializedPage {
 
   // Makes 'input' ready for deserializing 'this' with
   // VectorStreamGroup::read().
-  void prepareStreamForDeserialize(ByteStream* input);
+  void prepareStreamForDeserialize(ByteStream* FOLLY_NONNULL input);
 
   std::unique_ptr<folly::IOBuf> getIOBuf() const {
     return iobuf_->clone();
@@ -68,7 +70,13 @@ class SerializedPage {
 
   // Number of payload bytes in 'iobuf_'.
   const int64_t iobufBytes_;
-  memory::MemoryPool* pool_{nullptr};
+  memory::MemoryPool* FOLLY_NULLABLE pool_;
+
+  // Callback that will be called on destruction of the SerializedPage,
+  // primarily used to free externally allocated memory backing folly::IOBuf
+  // from caller. Caller is responsible to pass in proper cleanup logic to
+  // prevent any memory leak.
+  std::function<void(folly::IOBuf&)> onDestructionCb_;
 };
 
 // Queue of results retrieved from source. Owned by shared_ptr by
@@ -118,7 +126,9 @@ class ExchangeQueue {
     clearAllPromises();
   }
 
-  std::unique_ptr<SerializedPage> dequeue(bool* atEnd, ContinueFuture* future) {
+  std::unique_ptr<SerializedPage> dequeue(
+      bool* FOLLY_NONNULL atEnd,
+      ContinueFuture* FOLLY_NONNULL future) {
     VELOX_CHECK(future);
     if (!error_.empty()) {
       *atEnd = true;
@@ -163,6 +173,10 @@ class ExchangeQueue {
     checkComplete();
   }
 
+  void closeLocked() {
+    queue_.clear();
+  }
+
  private:
   void checkComplete() {
     if (noMoreSources_ && numCompleted_ == numSources_) {
@@ -201,20 +215,26 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   using Factory = std::function<std::shared_ptr<ExchangeSource>(
       const std::string& taskId,
       int destination,
-      std::shared_ptr<ExchangeQueue> queue)>;
+      std::shared_ptr<ExchangeQueue> queue,
+      memory::MemoryPool* FOLLY_NONNULL pool)>;
 
   ExchangeSource(
       const std::string& taskId,
       int destination,
-      std::shared_ptr<ExchangeQueue> queue)
-      : taskId_(taskId), destination_(destination), queue_(std::move(queue)) {}
+      std::shared_ptr<ExchangeQueue> queue,
+      memory::MemoryPool* FOLLY_NONNULL pool)
+      : taskId_(taskId),
+        destination_(destination),
+        queue_(std::move(queue)),
+        pool_(pool) {}
 
   virtual ~ExchangeSource() = default;
 
   static std::shared_ptr<ExchangeSource> create(
       const std::string& taskId,
       int destination,
-      std::shared_ptr<ExchangeQueue> queue);
+      std::shared_ptr<ExchangeQueue> queue,
+      memory::MemoryPool* FOLLY_NONNULL pool);
 
   // Returns true if there is no request to the source pending or if
   // this should be retried. If true, the caller is expected to call
@@ -252,18 +272,17 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
 
   static std::vector<Factory>& factories();
 
-  void setMemoryPool(memory::MemoryPool* pool);
   // ID of the task producing data
   const std::string taskId_;
   // Destination number of 'this' on producer
   const int destination_;
   int64_t sequence_ = 0;
   std::shared_ptr<ExchangeQueue> queue_;
-  bool requestPending_ = false;
+  std::atomic<bool> requestPending_{false};
   bool atEnd_ = false;
 
  protected:
-  memory::MemoryPool* pool_{nullptr};
+  memory::MemoryPool* FOLLY_NONNULL pool_;
 };
 
 struct RemoteConnectorSplit : public connector::ConnectorSplit {
@@ -290,21 +309,30 @@ class ExchangeClient {
 
   ~ExchangeClient();
 
-  memory::MemoryPool* pool() const {
+  memory::MemoryPool* FOLLY_NULLABLE pool() const {
     return pool_;
   }
 
-  void maybeSetMemoryPool(memory::MemoryPool* pool);
+  void initialize(memory::MemoryPool* FOLLY_NONNULL pool);
 
+  // Creates an exchange source and starts fetching data from the specified
+  // upstream task. If 'close' has been called already, creates an exchange
+  // source and immediately closes it to notify the upstream task that data is
+  // no longer needed. Repeated calls with the same 'taskId' are ignored.
   void addRemoteTaskId(const std::string& taskId);
 
   void noMoreRemoteTasks();
+
+  // Closes exchange sources.
+  void close();
 
   std::shared_ptr<ExchangeQueue> queue() const {
     return queue_;
   }
 
-  std::unique_ptr<SerializedPage> next(bool* atEnd, ContinueFuture* future);
+  std::unique_ptr<SerializedPage> next(
+      bool* FOLLY_NONNULL atEnd,
+      ContinueFuture* FOLLY_NONNULL future);
 
   std::string toString();
 
@@ -313,14 +341,15 @@ class ExchangeClient {
   std::shared_ptr<ExchangeQueue> queue_;
   std::unordered_set<std::string> taskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
-  memory::MemoryPool* pool_{nullptr};
+  memory::MemoryPool* FOLLY_NULLABLE pool_{nullptr};
+  bool closed_{false};
 };
 
 class Exchange : public SourceOperator {
  public:
   Exchange(
       int32_t operatorId,
-      DriverCtx* ctx,
+      DriverCtx* FOLLY_NONNULL ctx,
       const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
       std::shared_ptr<ExchangeClient> exchangeClient)
       : SourceOperator(
@@ -331,7 +360,11 @@ class Exchange : public SourceOperator {
             "Exchange"),
         planNodeId_(exchangeNode->id()),
         exchangeClient_(std::move(exchangeClient)) {
-    exchangeClient_->maybeSetMemoryPool(operatorCtx_->pool());
+    if (operatorCtx_->driverCtx()->driverId == 0) {
+      // As all Exchange operators share the same ExchangeClient, we only
+      // need one to do client initialization.
+      exchangeClient_->initialize(operatorCtx_->pool());
+    }
   }
 
   ~Exchange() override {
@@ -341,12 +374,16 @@ class Exchange : public SourceOperator {
   RowVectorPtr getOutput() override;
 
   void close() override {
+    SourceOperator::close();
     currentPage_ = nullptr;
     result_ = nullptr;
+    if (exchangeClient_) {
+      exchangeClient_->close();
+    }
     exchangeClient_ = nullptr;
   }
 
-  BlockingReason isBlocked(ContinueFuture* future) override;
+  BlockingReason isBlocked(ContinueFuture* FOLLY_NONNULL future) override;
 
   bool isFinished() override;
 
@@ -358,7 +395,7 @@ class Exchange : public SourceOperator {
   /// this operator is not the first operator in the pipeline and therefore is
   /// not responsible for fetching splits and adding them to the
   /// exchangeClient_.
-  bool getSplits(ContinueFuture* future);
+  bool getSplits(ContinueFuture* FOLLY_NONNULL future);
 
   const core::PlanNodeId planNodeId_;
   bool noMoreSplits_ = false;

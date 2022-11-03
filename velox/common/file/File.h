@@ -195,6 +195,8 @@ class LocalReadFile final : public ReadFile {
 
   explicit LocalReadFile(int32_t fd);
 
+  ~LocalReadFile();
+
   std::string_view
   pread(uint64_t offset, uint64_t length, void* FOLLY_NONNULL buf) const final;
 
@@ -217,7 +219,7 @@ class LocalReadFile final : public ReadFile {
       const;
 
   int32_t fd_;
-  mutable long size_ = -1;
+  long size_;
 };
 
 class LocalWriteFile final : public WriteFile {

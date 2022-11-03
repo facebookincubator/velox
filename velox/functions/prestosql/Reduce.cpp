@@ -13,10 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/VarSetter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
-#include "velox/vector/FunctionVector.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -70,8 +68,8 @@ class ReduceFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 4);
 
     // Flatten input array.
@@ -80,17 +78,9 @@ class ReduceFunction : public exec::VectorFunction {
 
     auto flatArray = flattenArray(rows, args[0], decodedArray);
 
-    // Loop over lambda functions and apply these to elements of the base array.
-    // In most cases there will be only one function and the loop will run once.
-    auto inputFuncIt = args[2]->asUnchecked<FunctionVector>()->iterator(&rows);
-
-    SelectivityVector arrayRows(flatArray->size(), false);
-    BufferPtr elementIndices =
-        allocateIndices(flatArray->size(), context->pool());
-
     const auto& initialState = args[1];
     auto partialResult =
-        BaseVector::create(initialState->type(), rows.end(), context->pool());
+        BaseVector::create(initialState->type(), rows.end(), context.pool());
 
     // Process null and empty arrays.
     auto* rawNulls = flatArray->rawNulls();
@@ -104,9 +94,16 @@ class ReduceFunction : public exec::VectorFunction {
     });
 
     // Fix finalSelection at "rows" unless already fixed.
-    VarSetter finalSelection(
-        context->mutableFinalSelection(), &rows, context->isFinalSelection());
-    VarSetter isFinalSelection(context->mutableIsFinalSelection(), false);
+    exec::ScopedFinalSelectionSetter scopedFinalSelectionSetter(context, &rows);
+    const SelectivityVector& finalSelectionRows = *context.finalSelection();
+
+    // Loop over lambda functions and apply these to elements of the base array.
+    // In most cases there will be only one function and the loop will run once.
+    auto inputFuncIt = args[2]->asUnchecked<FunctionVector>()->iterator(&rows);
+
+    BufferPtr elementIndices =
+        allocateIndices(flatArray->size(), context.pool());
+    SelectivityVector arrayRows(flatArray->size(), false);
 
     // Iteratively apply input function to array elements.
     // First, apply input function to first elements of all arrays.
@@ -117,22 +114,41 @@ class ReduceFunction : public exec::VectorFunction {
     while (auto entry = inputFuncIt.next()) {
       VectorPtr state = initialState;
 
-      int n = 0;
+      vector_size_t n = 0;
       while (true) {
+        // 'state' might use the 'elementIndices', in that case we need to
+        // reallocate them to avoid overwriting.
+        if (not elementIndices->unique()) {
+          elementIndices = allocateIndices(flatArray->size(), context.pool());
+        }
+
+        // Sets arrayRows[row] to true if array at that row has n-th element, to
+        // false otherwise.
+        // Set elementIndices[row] to the index of the n-th element in the
+        // array's elements vector.
         if (!toNthElementRows(
                 flatArray, *entry.rows, n, arrayRows, elementIndices)) {
           break; // Ran out of elements in all arrays.
         }
 
-        auto nthElement = BaseVector::wrapInDictionary(
+        // Create dictionary row -> element in array's elements vector.
+        auto dictNthElements = BaseVector::wrapInDictionary(
             BufferPtr(nullptr),
             elementIndices,
             flatArray->size(),
             flatArray->elements());
 
-        std::vector<VectorPtr> lambdaArgs = {state, nthElement};
+        // Run input lambda on our dictionary - adding n-th element to the
+        // initial state for every row.
+        std::vector<VectorPtr> lambdaArgs = {state, dictNthElements};
         entry.callable->apply(
-            arrayRows, nullptr, context, lambdaArgs, &partialResult);
+            arrayRows,
+            finalSelectionRows,
+            nullptr,
+            &context,
+            lambdaArgs,
+            nullptr,
+            &partialResult);
         state = partialResult;
         n++;
       }
@@ -142,7 +158,14 @@ class ReduceFunction : public exec::VectorFunction {
     auto outputFuncIt = args[3]->asUnchecked<FunctionVector>()->iterator(&rows);
     while (auto entry = outputFuncIt.next()) {
       std::vector<VectorPtr> lambdaArgs = {partialResult};
-      entry.callable->apply(*entry.rows, nullptr, context, lambdaArgs, result);
+      entry.callable->apply(
+          *entry.rows,
+          finalSelectionRows,
+          nullptr,
+          &context,
+          lambdaArgs,
+          nullptr,
+          &result);
     }
   }
 

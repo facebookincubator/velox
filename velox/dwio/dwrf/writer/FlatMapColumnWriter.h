@@ -126,11 +126,30 @@ class ValueWriter {
 
   uint64_t writeBuffers(const VectorPtr& values, uint32_t mapCount) {
     if (mapCount) {
-      inMap_->add(inMapBuffer_.data(), Ranges::of(0, mapCount), nullptr);
+      inMap_->add(
+          inMapBuffer_.data(), common::Ranges::of(0, mapCount), nullptr);
     }
 
     if (values) {
       return columnWriter_->write(values, ranges_);
+    }
+    return 0;
+  }
+
+  // used for struct encoding writer
+  uint64_t writeBuffers(
+      const VectorPtr& values,
+      const common::Ranges& nonNullRanges,
+      const BufferPtr& inMapBuffer /* all 1 */) {
+    if (nonNullRanges.size()) {
+      inMap_->add(
+          inMapBuffer->as<char>(),
+          common::Ranges::of(0, nonNullRanges.size()),
+          nullptr);
+    }
+
+    if (values) {
+      return columnWriter_->write(values, nonNullRanges);
     }
     return 0;
   }
@@ -142,7 +161,7 @@ class ValueWriter {
 
     inMapBuffer_.reserve(count);
     std::memset(inMapBuffer_.data(), 0, count);
-    inMap_->add(inMapBuffer_.data(), Ranges::of(0, count), nullptr);
+    inMap_->add(inMapBuffer_.data(), common::Ranges::of(0, count), nullptr);
   }
 
   uint32_t getSequence() const {
@@ -182,7 +201,7 @@ class ValueWriter {
   std::unique_ptr<ByteRleEncoder> inMap_;
   std::unique_ptr<BaseColumnWriter> columnWriter_;
   dwio::common::DataBuffer<char> inMapBuffer_;
-  Ranges ranges_;
+  common::Ranges ranges_;
   const bool collectMapStats_;
 };
 
@@ -231,7 +250,7 @@ class FlatMapColumnWriter : public BaseColumnWriter {
       const dwio::common::TypeWithId& type,
       const uint32_t sequence);
 
-  uint64_t write(const VectorPtr& slice, const Ranges& ranges) override;
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
       std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
@@ -250,6 +269,10 @@ class FlatMapColumnWriter : public BaseColumnWriter {
   void setEncoding(proto::ColumnEncoding& encoding) const override;
 
   ValueWriter& getValueWriter(KeyType key, uint32_t inMapSize);
+
+  // write() calls writeMap() or writeRow() depending on input type
+  uint64_t writeMap(const VectorPtr& slice, const common::Ranges& ranges);
+  uint64_t writeRow(const VectorPtr& slice, const common::Ranges& ranges);
 
   void clearNodes();
 
@@ -271,6 +294,12 @@ class FlatMapColumnWriter : public BaseColumnWriter {
   std::unique_ptr<typename TypeInfo<K>::StatisticsBuilder> keyFileStatsBuilder_;
   std::unique_ptr<const ValueStatisticsBuilder> valueFileStatsBuilder_;
   const uint32_t maxKeyCount_;
+
+  // Stores column keys as string in case of StringView pointers
+  std::vector<std::string> stringKeys_;
+
+  // Stores column keys if writing with RowVector input
+  std::vector<KeyType> structKeys_;
 };
 
 template <>

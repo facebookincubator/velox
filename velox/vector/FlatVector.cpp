@@ -197,6 +197,8 @@ void FlatVector<bool>::copyValuesAndNulls(
 
 template <>
 Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size) {
+  VELOX_DCHECK_GE(stringBuffers_.size(), stringBufferSet_.size());
+
   // Check if the last buffer is uniquely referenced and has enough space.
   Buffer* buffer =
       stringBuffers_.empty() ? nullptr : stringBuffers_.back().get();
@@ -209,8 +211,8 @@ Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size) {
   int32_t newSize = std::max(kInitialStringSize, size);
   BufferPtr newBuffer = AlignedBuffer::allocate<char>(newSize, pool());
   newBuffer->setSize(0);
-  stringBuffers_.push_back(newBuffer);
-  return stringBuffers_.back().get();
+  addStringBuffer(newBuffer);
+  return newBuffer.get();
 }
 
 template <>
@@ -231,9 +233,9 @@ void FlatVector<StringView>::prepareForReuse() {
     if (firstBuffer->unique() && firstBuffer->isMutable() &&
         firstBuffer->capacity() <= kMaxStringSizeForReuse) {
       firstBuffer->setSize(0);
-      stringBuffers_.resize(1);
+      setStringBuffers({firstBuffer});
     } else {
-      stringBuffers_.clear();
+      clearStringBuffers();
     }
   }
 
@@ -281,8 +283,9 @@ void FlatVector<StringView>::setNoCopy(
   }
 }
 
-template <typename T>
-void FlatVector<T>::acquireSharedStringBuffers(const BaseVector* source) {
+template <>
+void FlatVector<StringView>::acquireSharedStringBuffers(
+    const BaseVector* source) {
   auto leaf = source->wrappedVector();
   if (leaf->typeKind() == TypeKind::UNKNOWN) {
     // If the source is all nulls, it can be of unknown type.
@@ -292,9 +295,7 @@ void FlatVector<T>::acquireSharedStringBuffers(const BaseVector* source) {
     case VectorEncoding::Simple::FLAT: {
       auto* flat = leaf->asUnchecked<FlatVector<StringView>>();
       for (auto& buffer : flat->stringBuffers_) {
-        if (std::find(stringBuffers_.begin(), stringBuffers_.end(), buffer) ==
-            stringBuffers_.end())
-          stringBuffers_.push_back(buffer);
+        addStringBuffer(buffer);
       }
       break;
     }
@@ -302,10 +303,9 @@ void FlatVector<T>::acquireSharedStringBuffers(const BaseVector* source) {
       if (!leaf->isNullAt(0)) {
         auto* constant = leaf->asUnchecked<ConstantVector<StringView>>();
         auto buffer = constant->getStringBuffer();
-        if (buffer &&
-            std::find(stringBuffers_.begin(), stringBuffers_.end(), buffer) ==
-                stringBuffers_.end())
-          stringBuffers_.push_back(buffer);
+        if (buffer != nullptr) {
+          addStringBuffer(buffer);
+        }
       }
       break;
     }
@@ -381,21 +381,33 @@ void FlatVector<StringView>::copy(
     vector_size_t targetIndex,
     vector_size_t sourceIndex,
     vector_size_t count) {
+  BaseVector::copy(source, targetIndex, sourceIndex, count);
+}
+
+template <>
+void FlatVector<StringView>::copyRanges(
+    const BaseVector* source,
+    const folly::Range<const CopyRange*>& ranges) {
   auto leaf = source->wrappedVector()->asUnchecked<SimpleVector<StringView>>();
   if (pool_ == leaf->pool()) {
     // We copy referencing the storage of 'source'.
-    copyValuesAndNulls(source, targetIndex, sourceIndex, count);
+    for (auto& r : ranges) {
+      copyValuesAndNulls(source, r.targetIndex, r.sourceIndex, r.count);
+    }
     acquireSharedStringBuffers(source);
   } else {
-    for (auto i = 0; i < count; ++i) {
-      if (source->isNullAt(sourceIndex + i)) {
-        setNull(targetIndex + i, true);
-      } else {
-        set(targetIndex + i,
-            leaf->valueAt(source->wrappedIndex(sourceIndex + i)));
+    for (auto& r : ranges) {
+      for (auto i = 0; i < r.count; ++i) {
+        if (source->isNullAt(r.sourceIndex + i)) {
+          setNull(r.targetIndex + i, true);
+        } else {
+          set(r.targetIndex + i,
+              leaf->valueAt(source->wrappedIndex(r.sourceIndex + i)));
+        }
       }
     }
   }
 }
+
 } // namespace velox
 } // namespace facebook

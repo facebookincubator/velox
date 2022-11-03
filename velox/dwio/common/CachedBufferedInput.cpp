@@ -136,7 +136,7 @@ std::vector<CacheRequest*> makeRequestParts(
 
 int32_t adjustedReadPct(const cache::TrackingData& trackingData) {
   // When called, there will be one more reference that read, since references
-  // are counted before readig.
+  // are counted before reading.
   if (trackingData.numReferences < 2) {
     return 0;
   }
@@ -182,7 +182,7 @@ void CachedBufferedInput::load(const LogType) {
             part->ssdPin = ssdFile->find(part->key);
             if (!part->ssdPin.empty() &&
                 part->ssdPin.run().size() < part->size) {
-              LOG(INFO) << "IOERR: Ignorin SSD  shorter than requested: "
+              LOG(INFO) << "IOERR: Ignoring SSD shorter than requested: "
                         << part->ssdPin.run().size() << " vs " << part->size;
               part->ssdPin.clear();
             }
@@ -450,8 +450,8 @@ std::shared_ptr<cache::CoalescedLoad> CachedBufferedInput::coalescedLoad(
           return nullptr;
         }
         auto load = std::move(it->second);
-        auto dwrfLoad = dynamic_cast<DwioCoalescedLoadBase*>(load.get());
-        for (auto& request : dwrfLoad->requests()) {
+        auto dwioLoad = dynamic_cast<DwioCoalescedLoadBase*>(load.get());
+        for (auto& request : dwioLoad->requests()) {
           loads.erase(request.stream);
         }
         return load;

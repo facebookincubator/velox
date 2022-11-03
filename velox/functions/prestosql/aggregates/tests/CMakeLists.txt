@@ -14,7 +14,7 @@
 
 add_library(velox_aggregates_test_lib AggregationTestBase.cpp)
 
-target_link_libraries(velox_aggregates_test_lib velox_exec_test_util)
+target_link_libraries(velox_aggregates_test_lib velox_exec_test_lib)
 
 add_executable(
   velox_aggregates_test
@@ -39,7 +39,8 @@ add_executable(
   MapAggTest.cpp
   MapUnionAggregationTest.cpp
   ValueListTest.cpp
-  VarianceAggregationTest.cpp)
+  VarianceAggregationTest.cpp
+  MaxSizeForStatsTest.cpp)
 
 add_test(
   NAME velox_aggregates_test
@@ -51,15 +52,16 @@ target_link_libraries(
   velox_aggregates
   velox_aggregates_test_lib
   velox_core
-  velox_dwrf_test_utils
+  velox_dwio_common_test_utils
   velox_exec
-  velox_exec_test_util
+  velox_exec_test_lib
   velox_file
   velox_functions_test_lib
   velox_functions_prestosql
   velox_functions_lib
   velox_hive_connector
   velox_type
+  velox_vector_fuzzer
   ${gflags_LIBRARIES}
   gtest
   gtest_main)

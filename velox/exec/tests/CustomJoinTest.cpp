@@ -194,6 +194,12 @@ class CustomJoinProbe : public Operator {
       return output;
     }
 
+    // Return nullptr if there is no data to return.
+    if (remainingLimit_ == 0) {
+      input_.reset();
+      return nullptr;
+    }
+
     auto output = std::make_shared<RowVector>(
         input_->pool(),
         input_->type(),
@@ -284,7 +290,7 @@ class CustomJoinTest : public OperatorTestBase {
       const std::string& referenceQuery) {
     createDuckDbTable("t", {leftBatch});
 
-    auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto leftNode =
         PlanBuilder(planNodeIdGenerator).values({leftBatch}, true).planNode();
     auto rightNode =

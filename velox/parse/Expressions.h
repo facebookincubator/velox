@@ -28,6 +28,7 @@
 namespace facebook::velox::core {
 
 class CallExpr;
+class LambdaExpr;
 
 class Expressions {
  public:
@@ -51,36 +52,25 @@ class Expressions {
     return resolverHook_;
   }
 
-  // Infers types for a single argument lambda. 'rowType' gives the
-  // names and types of columns available for capture. The lambda can
-  // be referenced with function(name) in a different expression.
-  static void registerLambda(
-      const std::string& name,
-      const std::shared_ptr<const RowType>& signature,
-      TypePtr rowType,
-      std::shared_ptr<const core::IExpr> body,
-      memory::MemoryPool* pool) {
-    auto types = rowType->as<TypeKind::ROW>().children();
-    types.insert(
-        types.end(),
-        signature->children().begin(),
-        signature->children().end());
-    auto names = rowType->as<TypeKind::ROW>().names();
-    names.insert(
-        names.end(), signature->names().begin(), signature->names().end());
-    auto lambdaRowType = ROW(std::move(names), std::move(types));
-    auto typedBody = inferTypes(body, lambdaRowType, pool);
-    lambdaRegistry()[name] =
-        std::make_shared<LambdaTypedExpr>(signature, typedBody);
-  }
-
  private:
-  static std::shared_ptr<const LambdaTypedExpr> lookupLambdaExpr(
-      std::shared_ptr<const IExpr> expr);
+  static TypedExprPtr inferTypes(
+      const std::shared_ptr<const IExpr>& expr,
+      const TypePtr& input,
+      const std::vector<TypePtr>& lambdaInputTypes,
+      memory::MemoryPool* pool);
+
+  static TypedExprPtr resolveLambdaExpr(
+      const std::shared_ptr<const core::LambdaExpr>& lambdaExpr,
+      const TypePtr& inputRow,
+      const std::vector<TypePtr>& lambdaInputTypes,
+      memory::MemoryPool* pool);
+
+  static TypedExprPtr tryResolveCallWithLambdas(
+      const std::shared_ptr<const CallExpr>& expr,
+      const TypePtr& input,
+      memory::MemoryPool* pool);
+
   static TypeResolverHook resolverHook_;
-  static std::
-      unordered_map<std::string, std::shared_ptr<core::LambdaTypedExpr>>&
-      lambdaRegistry();
 };
 
 class InputExpr : public core::IExpr {
@@ -132,14 +122,14 @@ class FieldAccessExpr : public core::IExpr {
       std::vector<std::shared_ptr<const IExpr>>&& inputs =
           std::vector<std::shared_ptr<const IExpr>>{
               std::make_shared<const InputExpr>()})
-      : IExpr{std::move(alias)}, name_{name}, inputs_{move(inputs)} {
+      : IExpr{std::move(alias)}, name_{name}, inputs_{std::move(inputs)} {
     CHECK_EQ(inputs_.size(), 1);
   }
 
   std::shared_ptr<const IExpr> withInputs(
       std::vector<std::shared_ptr<const IExpr>> inputs) const override {
     return std::make_shared<FieldAccessExpr>(
-        std::string{name_}, alias_, move(inputs));
+        std::string{name_}, alias_, std::move(inputs));
   }
 
   const std::string& getFieldName() const {
@@ -180,12 +170,12 @@ class FieldAccessExpr : public core::IExpr {
     auto inputs = ISerializable::deserialize<std::vector<IExpr>>(obj["inputs"]);
 
     return std::make_shared<const FieldAccessExpr>(
-        move(fieldName), std::nullopt, move(inputs));
+        std::move(fieldName), std::nullopt, std::move(inputs));
   }
 
   static std::shared_ptr<const FieldAccessExpr> column(std::string columnName) {
     return std::make_shared<const FieldAccessExpr>(
-        move(columnName), std::nullopt);
+        std::move(columnName), std::nullopt);
   }
 
   bool equalsNonRecursive(const IExpr& other) const override {
@@ -218,14 +208,14 @@ class SortExpr : public core::IExpr {
   SortExpr(
       std::vector<bool>&& orders,
       std::vector<std::shared_ptr<const IExpr>>&& inputs)
-      : orders_(move(orders)), inputs_{move(inputs)} {
+      : orders_(std::move(orders)), inputs_{std::move(inputs)} {
     CHECK_EQ(inputs_.size(), orders_.size());
   }
 
   std::shared_ptr<const IExpr> withInputs(
       std::vector<std::shared_ptr<const IExpr>> inputs) const override {
     return std::make_shared<SortExpr>(
-        std::vector<bool>(this->orders_), move(inputs));
+        std::vector<bool>(this->orders_), std::move(inputs));
   }
 
   const std::vector<bool>& getOrders() const {
@@ -277,8 +267,8 @@ class CallExpr : public core::IExpr {
       std::vector<std::shared_ptr<const IExpr>>&& inputs,
       std::optional<std::string> alias)
       : core::IExpr{std::move(alias)},
-        name_{move(funcName)},
-        inputs_{move(inputs)} {
+        name_{std::move(funcName)},
+        inputs_{std::move(inputs)} {
     VELOX_CHECK(!name_.empty());
   }
 
@@ -288,7 +278,8 @@ class CallExpr : public core::IExpr {
 
   std::shared_ptr<const IExpr> withInputs(
       std::vector<std::shared_ptr<const IExpr>> inputs) const override {
-    return std::make_shared<CallExpr>(std::string{name_}, move(inputs), alias_);
+    return std::make_shared<CallExpr>(
+        std::string{name_}, std::move(inputs), alias_);
   }
 
   std::string toString() const override {
@@ -324,7 +315,7 @@ class CallExpr : public core::IExpr {
     auto inputs = ISerializable::deserialize<std::vector<IExpr>>(obj["inputs"]);
 
     return std::make_shared<const CallExpr>(
-        move(functionName), move(inputs), std::nullopt);
+        std::move(functionName), std::move(inputs), std::nullopt);
   }
 
   template <typename... T>
@@ -454,4 +445,61 @@ class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {
   VELOX_DEFINE_CLASS_NAME(CastExpr)
 };
 
+/// Represents lambda expression as a list of inputs and the body expression.
+/// For example, the expression
+///     (k, v) -> k + v
+/// is represented using [k, v] as inputNames and k + v as body.
+class LambdaExpr : public IExpr,
+                   public std::enable_shared_from_this<LambdaExpr> {
+ public:
+  LambdaExpr(
+      std::vector<std::string> inputNames,
+      std::shared_ptr<const IExpr> body)
+      : inputNames_{std::move(inputNames)}, body_{{std::move(body)}} {
+    VELOX_CHECK(!inputNames_.empty());
+  }
+
+  const std::vector<std::string>& inputNames() const {
+    return inputNames_;
+  }
+
+  const std::shared_ptr<const IExpr>& body() const {
+    return body_[0];
+  }
+
+  std::string toString() const override {
+    std::ostringstream out;
+    if (inputNames_.size() > 1) {
+      out << "(";
+      for (auto i = 0; i < inputNames_.size(); ++i) {
+        if (i > 0) {
+          out << ", ";
+        }
+        out << inputNames_[i];
+      }
+      out << ")";
+    } else {
+      out << inputNames_[0];
+    }
+    out << " -> " << body_[0]->toString();
+    return out.str();
+  }
+
+  const std::vector<std::shared_ptr<const IExpr>>& getInputs() const override {
+    return body_;
+  }
+
+  std::shared_ptr<const IExpr> withInputs(
+      std::vector<std::shared_ptr<const IExpr>> /* unused */) const override {
+    VELOX_NYI();
+  }
+
+  folly::dynamic serialize() const override {
+    VELOX_NYI();
+  }
+
+ private:
+  std::vector<std::string> inputNames_;
+  std::vector<std::shared_ptr<const IExpr>> body_;
+};
 } // namespace facebook::velox::core

@@ -17,8 +17,10 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
+#include <memory>
 
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
@@ -124,8 +126,18 @@ enum class BlockingReason {
   kWaitForSplit,
   kWaitForExchange,
   kWaitForJoinBuild,
+  /// For a build operator, it is blocked waiting for the probe operators to
+  /// finish probing before build the next hash table from one of the previously
+  /// spilled partition data.
+  /// For a probe operator, it is blocked waiting for all its peer probe
+  /// operators to finish probing before notifying the build operators to build
+  /// the next hash table from the previously spilled data.
+  kWaitForJoinProbe,
   kWaitForMemory,
   kWaitForConnector,
+  /// Build operator is blocked waiting for all its peers to stop to run group
+  /// spill on all of them.
+  kWaitForSpill,
 };
 
 std::string blockingReasonToString(BlockingReason reason);
@@ -197,7 +209,8 @@ struct DriverCtx {
 
   const core::QueryConfig& queryConfig() const;
 
-  velox::memory::MemoryPool* FOLLY_NONNULL addOperatorPool();
+  velox::memory::MemoryPool* FOLLY_NONNULL
+  addOperatorPool(const std::string& operatorType = "");
 };
 
 class Driver : public std::enable_shared_from_this<Driver> {
@@ -253,6 +266,9 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // build by id.
   Operator* FOLLY_NULLABLE findOperator(std::string_view planNodeId) const;
 
+  // Returns a list of all operators.
+  std::vector<Operator*> operators() const;
+
   void setError(std::exception_ptr exception);
 
   std::string toString();
@@ -285,6 +301,11 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // position in the pipeline.
   void pushdownFilters(int operatorIndex);
 
+  std::unique_ptr<CpuWallTimer> cpuWallTimer(CpuWallTiming& timing) {
+    return trackOperatorCpuUsage_ ? std::make_unique<CpuWallTimer>(timing)
+                                  : nullptr;
+  }
+
   std::unique_ptr<DriverCtx> ctx_;
   std::atomic_bool closed_{false};
 
@@ -300,6 +321,8 @@ class Driver : public std::enable_shared_from_this<Driver> {
   std::vector<std::unique_ptr<Operator>> operators_;
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+
+  bool trackOperatorCpuUsage_;
 };
 
 using OperatorSupplier = std::function<std::unique_ptr<Operator>(
@@ -357,13 +380,15 @@ struct DriverFactory {
     return nullptr;
   }
 
-  bool needsExchangeClient() const {
+  /// Returns Exchange plan node ID if the pipeline receives data from an
+  /// exchange.
+  std::optional<core::PlanNodeId> needsExchangeClient() const {
     VELOX_CHECK(!planNodes.empty());
     if (auto exchangeNode = std::dynamic_pointer_cast<const core::ExchangeNode>(
             planNodes.front())) {
-      return true;
+      return exchangeNode->id();
     }
-    return false;
+    return std::nullopt;
   }
 
   /// Returns LocalPartition plan node ID if the pipeline gets data from a local

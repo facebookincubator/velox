@@ -20,6 +20,7 @@ add_executable(
   IsNotNullTest.cpp
   JodaDateTimeTest.cpp
   KllSketchTest.cpp
+  MapConcatTest.cpp
   Re2FunctionsTest.cpp
   ZetaDistributionTest.cpp)
 
@@ -29,7 +30,8 @@ target_link_libraries(
   velox_functions_lib_test
   velox_functions_lib
   velox_functions_test_lib
-  velox_exec_test_util
+  velox_is_null_functions
+  velox_exec_test_lib
   velox_expression
   velox_memory
   gtest

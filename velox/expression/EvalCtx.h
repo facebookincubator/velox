@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "velox/common/base/Portability.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/vector/ComplexVector.h"
@@ -25,7 +27,7 @@ namespace facebook::velox::exec {
 
 class Expr;
 class ExprSet;
-struct ContextSaver;
+struct ScopedContextSaver;
 
 // Context for holding the base row vector, error state and various
 // flags for Expr interpreter.
@@ -43,6 +45,12 @@ class EvalCtx {
     return row_;
   }
 
+  /// Returns true if all input vectors in 'row' are flat or constant and have
+  /// no nulls.
+  bool inputFlatNoNulls() const {
+    return inputFlatNoNulls_;
+  }
+
   memory::MemoryPool* FOLLY_NONNULL pool() const {
     return execCtx_->pool();
   }
@@ -52,7 +60,7 @@ class EvalCtx {
   // peeled off fields.
   const VectorPtr& getField(int32_t index) const;
 
-  void ensureFieldLoaded(int32_t index, const SelectivityVector& rows);
+  VectorPtr ensureFieldLoaded(int32_t index, const SelectivityVector& rows);
 
   void setPeeled(int32_t index, const VectorPtr& vector) {
     if (peeledFields_.size() <= index) {
@@ -62,20 +70,16 @@ class EvalCtx {
   }
 
   /// Used by peelEncodings.
-  void saveAndReset(ContextSaver& saver, const SelectivityVector& rows);
+  void saveAndReset(ScopedContextSaver& saver, const SelectivityVector& rows);
 
-  void restore(ContextSaver& saver);
+  void restore(ScopedContextSaver& saver);
 
-  // Creates or updates *result according to 'source'. The
-  // 'source' position corresponding to each position in 'rows' is
-  // given by the wrap produced by the last peeling in
-  // EvalEncoding. If '*result' existed, positions not in 'rows' are
-  // not changed.
-  void setWrapped(
-      Expr* FOLLY_NONNULL expr,
-      VectorPtr source,
-      const SelectivityVector& rows,
-      VectorPtr& result);
+  // Wraps the 'peeledResult' in the wrap produced by the last peeling in
+  // EvalEncoding() and returns the vector created as a result.
+  VectorPtr applyWrapToPeeledResult(
+      const TypePtr& outputType,
+      VectorPtr peeledResult,
+      const SelectivityVector& rows);
 
   void setError(vector_size_t index, const std::exception_ptr& exceptionPtr);
 
@@ -112,6 +116,22 @@ class EvalCtx {
       const std::exception_ptr& exceptionPtr,
       ErrorVectorPtr& errorsPtr) const;
 
+  /// Copy std::exception_ptr in fromErrors at rows to the corresponding rows in
+  /// toErrors. If there are existing exceptions in toErrors, these exceptions
+  /// are preserved and those at the corresponding rows in fromErrors are
+  /// ignored.
+  void addErrors(
+      const SelectivityVector& rows,
+      const ErrorVectorPtr& fromErrors,
+      ErrorVectorPtr& toErrors) const;
+
+  // Given a mapping from element rows to top-level rows, add element-level
+  // errors in errors_ to topLevelErrors.
+  void addElementErrorsToTopLevel(
+      const SelectivityVector& elementRows,
+      const BufferPtr& elementToTopLevelRows,
+      ErrorVectorPtr& topLevelErrors);
+
   // Returns the vector of errors or nullptr if no errors. This is
   // intentionally a raw pointer to signify that the caller may not
   // retain references to this.
@@ -125,6 +145,10 @@ class EvalCtx {
 
   void swapErrors(ErrorVectorPtr& other) {
     std::swap(errors_, other);
+  }
+
+  bool throwOnError() const {
+    return throwOnError_;
   }
 
   bool* FOLLY_NONNULL mutableThrowOnError() {
@@ -194,24 +218,48 @@ class EvalCtx {
       const SelectivityVector& rows,
       VectorPtr& result) const {
     if (result && !isFinalSelection() && *finalSelection() != rows) {
-      BaseVector::ensureWritable(rows, result->type(), result->pool(), &result);
+      BaseVector::ensureWritable(rows, result->type(), result->pool(), result);
       result->copy(localResult.get(), rows, nullptr);
     } else {
       result = localResult;
     }
   }
 
-  void moveOrCopyResult(
-      const VectorPtr& localResult,
-      const SelectivityVector& rows,
-      VectorPtr* FOLLY_NONNULL result) const {
-    moveOrCopyResult(localResult, rows, *result);
+  VectorPool& vectorPool() const {
+    return execCtx_->vectorPool();
   }
+
+  VectorPtr getVector(const TypePtr& type, vector_size_t size) {
+    return execCtx_->getVector(type, size);
+  }
+
+  bool releaseVector(VectorPtr& vector) {
+    return execCtx_->releaseVector(vector);
+  }
+
+  size_t releaseVectors(std::vector<VectorPtr>& vectors) {
+    return execCtx_->releaseVectors(vectors);
+  }
+
+  /// Makes 'result' writable for 'rows'. Allocates or reuses a vector from the
+  /// pool of 'execCtx_' if needed.
+  void ensureWritable(
+      const SelectivityVector& rows,
+      const TypePtr& type,
+      VectorPtr& result) {
+    BaseVector::ensureWritable(
+        rows, type, execCtx_->pool(), result, &execCtx_->vectorPool());
+  }
+
+  /// Make sure the vector is addressable up to index `size`-1. Initialize all
+  /// new elements to null.
+  void ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size) const;
 
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
   ExprSet* FOLLY_NULLABLE const exprSet_;
   const RowVector* FOLLY_NULLABLE row_;
+  bool inputFlatNoNulls_;
 
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector
   // after removing dictionary/sequence wrappers.
@@ -240,8 +288,12 @@ class EvalCtx {
   ErrorVectorPtr errors_;
 };
 
-struct ContextSaver {
-  ~ContextSaver();
+/// Utility wrapper struct that is used to temporarily reset the value of the an
+/// ExprCtx till it goes out of scope. EvalCtx::saveAndReset() is used to
+/// achieve that. The old context can also be explicitly restored using
+/// EvalCtx::restore().
+struct ScopedContextSaver {
+  ~ScopedContextSaver();
   // The context to restore. nullptr if nothing to restore.
   EvalCtx* FOLLY_NULLABLE context = nullptr;
   std::vector<VectorPtr> peeled;
@@ -369,9 +421,6 @@ class LocalDecodedVector {
  public:
   explicit LocalDecodedVector(core::ExecCtx& context) : context_(context) {}
 
-  explicit LocalDecodedVector(core::ExecCtx* FOLLY_NONNULL context)
-      : LocalDecodedVector(*context) {}
-
   explicit LocalDecodedVector(EvalCtx& context)
       : context_(*context.execCtx()) {}
 
@@ -387,25 +436,23 @@ class LocalDecodedVector {
     get()->decode(vector, rows, loadLazy);
   }
 
-  LocalDecodedVector(
-      const EvalCtx* FOLLY_NONNULL context,
-      const BaseVector& vector,
-      const SelectivityVector& rows,
-      bool loadLazy = true)
-      : LocalDecodedVector(*context, vector, rows, loadLazy) {}
-
   LocalDecodedVector(LocalDecodedVector&& other) noexcept
       : context_{other.context_}, vector_{std::move(other.vector_)} {}
 
+  void operator=(LocalDecodedVector&& other) {
+    context_ = other.context_;
+    vector_ = std::move(other.vector_);
+  }
+
   ~LocalDecodedVector() {
     if (vector_) {
-      context_.releaseDecodedVector(std::move(vector_));
+      context_.get().releaseDecodedVector(std::move(vector_));
     }
   }
 
   DecodedVector* FOLLY_NONNULL get() {
     if (!vector_) {
-      vector_ = context_.getDecodedVector();
+      vector_ = context_.get().getDecodedVector();
     }
     return vector_.get();
   }
@@ -432,8 +479,28 @@ class LocalDecodedVector {
   }
 
  private:
-  core::ExecCtx& context_;
+  std::reference_wrapper<core::ExecCtx> context_;
   std::unique_ptr<DecodedVector> vector_;
+};
+
+/// Utility class used to activate final selection (setting isFinalSelection to
+/// false and finalSelection to the input 'finalSelection') temporarily till it
+/// goes out of scope. It only sets final selection if it has not already been
+/// set and 'checkCondition' is true. Additionally, 'override' can be set to
+/// true to always set finalSelection even if its already set.
+class ScopedFinalSelectionSetter {
+ public:
+  ScopedFinalSelectionSetter(
+      EvalCtx& evalCtx,
+      const SelectivityVector* FOLLY_NULLABLE finalSelection,
+      bool checkCondition = true,
+      bool override = false);
+  ~ScopedFinalSelectionSetter();
+
+ private:
+  EvalCtx& evalCtx_;
+  const SelectivityVector* FOLLY_NULLABLE oldFinalSelection_;
+  bool oldIsFinalSelection_;
 };
 
 } // namespace facebook::velox::exec

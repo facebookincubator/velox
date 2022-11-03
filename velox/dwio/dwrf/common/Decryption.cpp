@@ -55,6 +55,15 @@ void DecryptionHandler::populateChildNodeMap(
   }
 }
 
+// Temporary function before Footer can totally replace proto::Footer
+std::unique_ptr<DecryptionHandler> DecryptionHandler::create(
+    const FooterWrapper& footer,
+    DecrypterFactory* factory) {
+  return footer.format() == DwrfFormat::kDwrf
+      ? create(*footer.getDwrfPtr(), factory)
+      : std::make_unique<DecryptionHandler>();
+}
+
 std::unique_ptr<DecryptionHandler> DecryptionHandler::create(
     const proto::Footer& footer,
     DecrypterFactory* factory) {

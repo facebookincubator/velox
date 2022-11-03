@@ -49,17 +49,17 @@ class BinaryStripeStreams {
     return stripeStreams_.getStreamLength(si);
   }
 
-  const proto::StripeInformation& getStripeInfo() const {
+  const StripeInformationWrapper& getStripeInfo() const {
     return stripeInfo_;
   }
 
  private:
   bool preload_;
-  proto::StripeInformation stripeInfo_;
+  StripeInformationWrapper stripeInfo_;
   dwio::common::RowReaderOptions options_;
   StripeStreamsImpl stripeStreams_;
-  std::unordered_map<uint32_t, std::vector<uint32_t>> encodingKeys_;
-  std::unordered_map<uint32_t, std::vector<DwrfStreamIdentifier>>
+  folly::F14FastMap<uint32_t, std::vector<uint32_t>> encodingKeys_;
+  folly::F14FastMap<uint32_t, std::vector<DwrfStreamIdentifier>>
       nodeToStreamIdMap_;
 };
 

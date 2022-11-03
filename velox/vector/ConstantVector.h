@@ -36,9 +36,9 @@ template <typename T>
 class ConstantVector final : public SimpleVector<T> {
  public:
   static constexpr bool can_simd =
-      (std::is_same<T, int64_t>::value || std::is_same<T, int32_t>::value ||
-       std::is_same<T, int16_t>::value || std::is_same<T, int8_t>::value ||
-       std::is_same<T, bool>::value || std::is_same<T, size_t>::value);
+      (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
+       std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
+       std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
 
   ConstantVector(
       velox::memory::MemoryPool* pool,
@@ -90,7 +90,7 @@ class ConstantVector final : public SimpleVector<T> {
       valueVector_ = BaseVector::create(type, 1, pool);
       valueVector_->setNull(0, true);
     }
-    if (!isNull_ && std::is_same<T, StringView>::value) {
+    if (!isNull_ && std::is_same_v<T, StringView>) {
       // Copy string value.
       StringView* valuePtr = reinterpret_cast<StringView*>(&value_);
       setValue(std::string(valuePtr->data(), valuePtr->size()));
@@ -161,21 +161,6 @@ class ConstantVector final : public SimpleVector<T> {
 
   void setNull(vector_size_t /*idx*/, bool /*value*/) override {
     VELOX_FAIL("setNull not supported on ConstantVector");
-  }
-
-  const uint64_t* flatRawNulls(const SelectivityVector& rows) override {
-    VELOX_DCHECK(initialized_);
-    if (isNull_) {
-      if (BaseVector::nulls_ &&
-          BaseVector::nulls_->capacity() / 8 >= rows.size()) {
-        return BaseVector::rawNulls_;
-      }
-      BaseVector::nulls_ = AlignedBuffer::allocate<bool>(
-          rows.size(), BaseVector::pool(), bits::kNull);
-      BaseVector::rawNulls_ = BaseVector::nulls_->as<uint64_t>();
-      return BaseVector::rawNulls_;
-    }
-    return nullptr;
   }
 
   const T valueAtFast(vector_size_t /*idx*/) const {
@@ -252,7 +237,8 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
   bool isScalar() const override {
-    return valueVector_ ? valueVector_->isScalar() : true;
+    return valueVector_ ? valueVector_->isScalar()
+                        : (this->typeKind() != TypeKind::UNKNOWN);
   }
 
   const BaseVector* wrappedVector() const override {
@@ -287,14 +273,21 @@ class ConstantVector final : public SimpleVector<T> {
     BaseVector::length_ = size;
   }
 
+  VectorPtr slice(vector_size_t /*offset*/, vector_size_t length)
+      const override {
+    VELOX_DCHECK(initialized_);
+    if (valueVector_) {
+      return std::make_shared<ConstantVector<T>>(
+          this->pool_, length, index_, valueVector_);
+    } else {
+      return std::make_shared<ConstantVector<T>>(
+          this->pool_, length, isNull_, this->type_, T(value_));
+    }
+  }
+
   void addNulls(const uint64_t* /*bits*/, const SelectivityVector& /*rows*/)
       override {
     VELOX_FAIL("addNulls not supported");
-  }
-
-  void move(vector_size_t /*source*/, vector_size_t target) override {
-    VELOX_CHECK_LT(target, BaseVector::length_);
-    // nothing to do
   }
 
   std::optional<int32_t> compare(
@@ -319,19 +312,25 @@ class ConstantVector final : public SimpleVector<T> {
     return SimpleVector<T>::compare(other, index, otherIndex, flags);
   }
 
-  std::string toString() const override {
-    std::stringstream out;
-    out << "[" << BaseVector::encoding() << " " << this->type()->toString()
-        << ": " << toString(index_) << " value, " << this->size() << " size]";
-    return out.str();
-  }
-
   std::string toString(vector_size_t index) const override {
-    if (isScalar()) {
-      return SimpleVector<T>::toString(index);
+    if (valueVector_) {
+      return valueVector_->toString(index_);
     }
 
-    return valueVector_->toString(index_);
+    return SimpleVector<T>::toString(index);
+  }
+
+  bool isNullsWritable() const override {
+    return false;
+  }
+
+ protected:
+  std::string toSummaryString() const override {
+    std::stringstream out;
+    out << "[" << BaseVector::encoding() << " "
+        << BaseVector::type()->toString() << ": " << BaseVector::size()
+        << " elements, " << toString(index_) << "]";
+    return out.str();
   }
 
  private:
@@ -349,7 +348,7 @@ class ConstantVector final : public SimpleVector<T> {
       isNull_ = simple->isNullAt(index_);
       if (!isNull_) {
         value_ = simple->valueAt(index_);
-        if constexpr (std::is_same<T, StringView>::value) {
+        if constexpr (std::is_same_v<T, StringView>) {
           // Copy string value.
           StringView* valuePtr = reinterpret_cast<StringView*>(&value_);
           setValue(std::string(valuePtr->data(), valuePtr->size()));

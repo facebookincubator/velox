@@ -49,16 +49,6 @@ DEFINE_bool(
     "Record time and volume for large allocation/free");
 
 // Used in common/base/VeloxException.cpp
-
-/// TODO: deprecate 'FLAGS_deprecate velox_exception_stacktrace' flag once after
-/// 'FLAGS_velox_exception_user_stacktrace_enabled' and
-/// 'FLAGS_velox_exception_system_stacktrace_enabled' have been rolled out in
-/// production.
-DEFINE_bool(
-    velox_exception_stacktrace,
-    true,
-    "Enable the stacktrace for VeloxException");
-
 DEFINE_bool(
     velox_exception_user_stacktrace_enabled,
     false,
@@ -68,16 +58,6 @@ DEFINE_bool(
     velox_exception_system_stacktrace_enabled,
     true,
     "Enable the stacktrace for system type of VeloxException");
-
-/// TODO: deprecate 'FLAGS_velox_exception_stacktrace_rate_limit_ms' flag once
-/// after 'FLAGS_velox_exception_user_stacktrace_rate_limit_ms' and
-/// 'FLAGS_velox_exception_system_stacktrace_rate_limit_ms' have been rolled out
-/// in production.
-DEFINE_int32(
-    velox_exception_stacktrace_rate_limit_ms,
-    0, // effectively turns off rate-limiting
-    "Min time interval in milliseconds between stack traces captured in"
-    " VeloxException; off when set to 0 (the default)");
 
 DEFINE_int32(
     velox_exception_user_stacktrace_rate_limit_ms,
@@ -96,3 +76,20 @@ DEFINE_int32(
 DEFINE_bool(avx2, true, "Enables use of AVX2 when available");
 
 DEFINE_bool(bmi2, true, "Enables use of BMI2 when available");
+
+// Used in exec/Expr.cpp
+
+DEFINE_string(
+    velox_save_input_on_expression_any_failure_path,
+    "",
+    "Enable saving input vector and expression SQL on any failure during "
+    "expression evaluation. Specifies the directory to use for storing the "
+    "vectors and expression SQL strings.");
+
+DEFINE_string(
+    velox_save_input_on_expression_system_failure_path,
+    "",
+    "Enable saving input vector and expression SQL on system failure during "
+    "expression evaluation. Specifies the directory to use for storing the "
+    "vectors and expression SQL strings. This flag is ignored if "
+    "velox_save_input_on_expression_any_failure_path is set.");

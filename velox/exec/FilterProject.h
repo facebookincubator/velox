@@ -67,11 +67,11 @@ class FilterProject : public Operator {
   // of the passing rows if only some rows pass the filter. If all or no rows
   // passed the filter filterEvalCtx_.selectedBits and selectedIndices are not
   // updated.
-  vector_size_t filter(EvalCtx* evalCtx, const SelectivityVector& allRows);
+  vector_size_t filter(EvalCtx& evalCtx, const SelectivityVector& allRows);
 
   // Evaluate projections on the specified rows and populate results_.
   // pre-condition: !isIdentityProjection_
-  void project(const SelectivityVector& rows, EvalCtx* evalCtx);
+  void project(const SelectivityVector& rows, EvalCtx& evalCtx);
 
   // If true exprs_[0] is a filter and the other expressions are projections
   const bool hasFilter_{false};
@@ -81,5 +81,15 @@ class FilterProject : public Operator {
   FilterEvalCtx filterEvalCtx_;
 
   vector_size_t numProcessedInputRows_{0};
+
+  // Indices for fields/input columns that are both an identity projection and
+  // are referenced by either a filter or project expression. This is used to
+  // identify fields that need to be preloaded before evaluating filters or
+  // projections.
+  // Consider projection with 2 expressions: f(c0) AND g(c1), c1
+  // If c1 is a LazyVector and f(c0) AND g(c1) expression is evaluated first, it
+  // will load c1 only for rows where f(c0) is true. However, c1 identity
+  // projection needs all rows.
+  std::vector<column_index_t> multiplyReferencedFieldIndices_;
 };
 } // namespace facebook::velox::exec

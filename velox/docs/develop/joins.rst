@@ -2,13 +2,13 @@
 Joins
 =====
 
-Velox supports inner, left, right, full outer, left semi, and anti hash joins using
-either partitioned or broadcast distribution strategies. Velox also supports
-cross joins.
+Velox supports inner, left, right, full outer, left semi, right semi, and 
+anti hash joins using either partitioned or broadcast distribution strategies.
+Velox also supports cross joins.
 
 Velox also supports inner and left merge join for the case where join inputs are
-sorted on the join keys. Right, full, left semi, and anti merge joins are not
-supported yet.
+sorted on the join keys. Right, full, left semi, right semi, and anti merge joins
+are not supported yet.
 
 Hash Join Implementation
 ------------------------
@@ -21,7 +21,8 @@ values need to match, and an optional filter to apply to join results.
     :width: 400
     :align: center
 
-The join type can be one of kInner, kLeft, kRight, kFull, kLeftSemi, or kAnti.
+The join type can be one of kInner, kLeft, kRight, kFull, kLeftSemi, kRightSemi,
+or kAnti.
 
 Filter is optional. If specified it can be any expression over the results of
 the join. This expression will be evaluated using the same expression
@@ -174,7 +175,8 @@ join key values on the build side are unique it is possible to replace the join
 completely with the pushed down filter. Velox detects such opportunities and
 turns the join into a no-op after pushing the filter down.
 
-Dynamic filter pushdown optimization is enabled for inner and left semi joins.
+Dynamic filter pushdown optimization is enabled for inner, left semi, and 
+right semi joins.
 
 Broadcast Join
 ~~~~~~~~~~~~~~
@@ -194,14 +196,15 @@ by setting boolean flag "broadcast" in the PartitionedOutputNode to true.
 Anti Joins
 ~~~~~~~~~~
 
-Anti join is used for queries like this:
+Anti join is used for queries with NOT IN <subquery> clause:
 
 .. code-block:: sql
 
     SELECT * FROM t WHERE t.key NOT IN (SELECT key FROM u)
 
 Anti join returns probe-side rows which have no match in the build side. The
-exact semantics of the anti join is tricky:
+exact semantics of the anti join is tricky. These are described in detail in
+a separate article: :doc:`Anti joins <../develop/anti-join>`.
 
 #. when the build side contains an entry with a null in any of the join keys, the join returns no rows;
 
@@ -211,7 +214,7 @@ exact semantics of the anti join is tricky:
 
 The cases (1) and (2) cannot be identified locally (unless the join runs in
 broadcast mode) as they require knowledge about the whole build side. It is
-necessar to know whether the combined build side across all nodes is empty and
+necessary to know whether the combined build side across all nodes is empty and
 if not if it contains a null key. To provide this information locally,
 PartitionedOutput operator supports a mode where it replicates all rows with
 nulls in the partitioning keys to all destinations and in case there are no
@@ -229,15 +232,15 @@ safe because that row cannot possibly match anything on these destinations.
 Empty Build Side
 ~~~~~~~~~~~~~~~~
 
-For inner and left semi joins, when the build side is empty, Velox implements an
-optimization to finish the join early and return an empty set of results
-without waiting to receive all the probe side input. In this case all upstream
-operators are canceled to avoid unnecessary computation.
+For inner, left semi, and right semi joins, when the build side is empty,
+Velox implements an optimization to finish the join early and return an empty
+set of results without waiting to receive all the probe side input. In this case
+all upstream operators are canceled to avoid unnecessary computation.
 
 Skipping Duplicate Keys
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-When building a hash table for left semi or anti join HashBuild operator skips
+When building a hash table for left semi or anti join, HashBuild operator skips
 entries with duplicate keys as these are not needed. This is achieved by
 configuring exec::HashTable to set the "allowDuplicates" flag to false. This
 optimization reduces memory usage of the hash table in case the build side
@@ -264,6 +267,9 @@ down.
 
 * dynamicFiltersProduced - number of dynamic filters generated (at most one per
   join key)
+
+* maxSpillLevel - the max spill level that has been triggered with zero for the
+initial spill.
 
 TableScan operator reports the number of dynamic filters it received and passed
 to HiveConnector.

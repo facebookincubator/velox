@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/caching/AsyncDataCache.h"
+#include <velox/common/base/BitUtil.h>
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 
@@ -27,7 +28,9 @@ using memory::MachinePageCount;
 using memory::MappedMemory;
 
 AsyncDataCacheEntry::AsyncDataCacheEntry(CacheShard* shard)
-    : shard_(shard), data_(shard->cache()) {}
+    : shard_(shard), data_(shard->cache()) {
+  accessStats_.reset();
+}
 
 void AsyncDataCacheEntry::setExclusiveToShared() {
   VELOX_CHECK(isExclusive());
@@ -95,7 +98,6 @@ memory::MachinePageCount AsyncDataCacheEntry::setPrefetch(bool flag) {
 void AsyncDataCacheEntry::initialize(FileCacheKey key) {
   VELOX_CHECK(isExclusive());
   setSsdFile(nullptr, 0);
-  accessStats_.reset();
   key_ = std::move(key);
   auto cache = shard_->cache();
   ClockTimer t(shard_->allocClocks());
@@ -109,8 +111,6 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key) {
       cache->incrementCachedPages(data().numPages());
     } else {
       // No memory to cover 'this'.
-      // Remove from 'shard_'s map and unpin.
-      shard_->removeEntry(this);
       release();
       _VELOX_THROW(
           VeloxRuntimeError,
@@ -504,14 +504,14 @@ bool AsyncDataCache::makeSpace(
     MachinePageCount numPages,
     std::function<bool()> allocate) {
   // Try to allocate and if failed, evict the desired amount and
-  // retry. This is without symchronization, so that other threads may
+  // retry. This is without synchronization, so that other threads may
   // get what one thread evicted but this will usually work in a
-  // couple of iterations. If this does not settle withing 8 tries, we
-  // start counting the contending threads nd doing random backoff to
+  // couple of iterations. If this does not settle within 8 tries, we
+  // start counting the contending threads and doing random backoff to
   // serialize the evicts and allocates. If a new thread enters when
-  // thread counting and backoff are in ffect, it gets a rank at the
+  // thread counting and backoff are in effect, it gets a rank at the
   // end of the queue. The larger the rank, the larger the backoff, so
-  // that first come is likelier to get the memory. We cannot
+  // that first comer is likelier to get the memory. We cannot
   // serialize with a mutex because memory arbitration must not be
   // called from inside a global mutex.
 
@@ -592,7 +592,7 @@ bool AsyncDataCache::allocate(
     MachinePageCount numPages,
     int32_t owner,
     Allocation& out,
-    std::function<void(int64_t)> beforeAllocCB,
+    std::function<void(int64_t, bool)> beforeAllocCB,
     MachinePageCount minSizeClass) {
   free(out);
   return makeSpace(numPages, [&]() {
@@ -605,11 +605,21 @@ bool AsyncDataCache::allocateContiguous(
     MachinePageCount numPages,
     Allocation* collateral,
     ContiguousAllocation& allocation,
-    std::function<void(int64_t)> beforeAllocCB) {
+    std::function<void(int64_t, bool)> beforeAllocCB) {
   return makeSpace(numPages, [&]() {
     return mappedMemory_->allocateContiguous(
         numPages, collateral, allocation, beforeAllocCB);
   });
+}
+
+void* FOLLY_NULLABLE
+AsyncDataCache::allocateBytes(uint64_t bytes, uint64_t maxMallocSize) {
+  void* result = nullptr;
+  makeSpace(bits::roundUp(bytes, kPageSize) / kPageSize, [&]() {
+    result = mappedMemory_->allocateBytes(bytes, maxMallocSize);
+    return result != nullptr;
+  });
+  return result;
 }
 
 void AsyncDataCache::incrementNew(uint64_t size) {

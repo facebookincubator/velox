@@ -19,7 +19,7 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -27,8 +27,8 @@ namespace {
 void applyComplexType(
     const SelectivityVector& rows,
     ArrayVector* inputArray,
-    exec::EvalCtx* context,
-    VectorPtr* resultElements) {
+    exec::EvalCtx& context,
+    VectorPtr& resultElements) {
   auto inputElements = inputArray->elements();
   const SelectivityVector inputElementRows =
       toElementRows(inputElements->size(), rows, inputArray);
@@ -37,7 +37,7 @@ void applyComplexType(
   const auto* baseElementsVector = decodedElements->base();
 
   // Allocate new vectors for indices.
-  BufferPtr indices = allocateIndices(inputElements->size(), context->pool());
+  BufferPtr indices = allocateIndices(inputElements->size(), context.pool());
   vector_size_t* rawIndices = indices->asMutable<vector_size_t>();
 
   const CompareFlags flags{.nullsFirst = false, .ascending = true};
@@ -56,7 +56,7 @@ void applyComplexType(
         });
   });
 
-  *resultElements = BaseVector::transpose(indices, std::move(inputElements));
+  resultElements = BaseVector::transpose(indices, std::move(inputElements));
 }
 
 template <typename T>
@@ -78,8 +78,8 @@ template <TypeKind kind>
 void applyScalarType(
     const SelectivityVector& rows,
     const ArrayVector* inputArray,
-    exec::EvalCtx* context,
-    VectorPtr* resultElements) {
+    exec::EvalCtx& context,
+    VectorPtr& resultElements) {
   using T = typename TypeTraits<kind>::NativeType;
 
   // Copy array elements to new vector.
@@ -87,20 +87,17 @@ void applyScalarType(
   VELOX_DCHECK(kind == inputElements->typeKind());
   const SelectivityVector inputElementRows =
       toElementRows(inputElements->size(), rows, inputArray);
-  exec::LocalDecodedVector decodedElements(
-      context, *inputElements, inputElementRows);
   const vector_size_t elementsCount = inputElementRows.size();
 
   // TODO: consider to use dictionary wrapping to avoid the direct sorting on
   // the scalar values as we do for complex data type if this runs slow in
   // practice.
-  *resultElements =
-      BaseVector::create(inputElements->type(), elementsCount, context->pool());
-  (*resultElements)
-      ->copy(
-          decodedElements->base(), inputElementRows, /*toSourceRow=*/nullptr);
+  resultElements =
+      BaseVector::create(inputElements->type(), elementsCount, context.pool());
+  resultElements->copy(
+      inputElements.get(), inputElementRows, /*toSourceRow=*/nullptr);
 
-  auto flatResults = (*resultElements)->asFlatVector<T>();
+  auto flatResults = resultElements->asFlatVector<T>();
 
   auto processRow = [&](vector_size_t row) {
     const auto size = inputArray->sizeAt(row);
@@ -161,24 +158,52 @@ class ArraySortFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /*outputType*/,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 1);
+    auto& arg = args[0];
 
+    VectorPtr localResult;
+
+    // Input can be constant or flat.
+    if (arg->isConstantEncoding()) {
+      auto* constantArray = arg->as<ConstantVector<ComplexType>>();
+      const auto& flatArray = constantArray->valueVector();
+      const auto flatIndex = constantArray->index();
+
+      SelectivityVector singleRow(flatIndex + 1, false);
+      singleRow.setValid(flatIndex, true);
+      singleRow.updateBounds();
+
+      localResult = applyFlat(singleRow, flatArray, context);
+      localResult =
+          BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
+    } else {
+      localResult = applyFlat(rows, arg, context);
+    }
+
+    context.moveOrCopyResult(localResult, rows, result);
+  }
+
+ private:
+  VectorPtr applyFlat(
+      const SelectivityVector& rows,
+      const VectorPtr& arg,
+      exec::EvalCtx& context) const {
     // Acquire the array elements vector.
-    auto inputArray = args.front()->as<ArrayVector>();
+    auto inputArray = arg->as<ArrayVector>();
     VectorPtr resultElements;
 
     if (velox::TypeTraits<T>::isPrimitiveType) {
       VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          applyScalarType, T, rows, inputArray, context, &resultElements);
+          applyScalarType, T, rows, inputArray, context, resultElements);
 
     } else {
-      applyComplexType(rows, inputArray, context, &resultElements);
+      applyComplexType(rows, inputArray, context, resultElements);
     }
 
-    auto resultArray = std::make_shared<ArrayVector>(
-        context->pool(),
+    return std::make_shared<ArrayVector>(
+        context.pool(),
         inputArray->type(),
         inputArray->nulls(),
         rows.end(),
@@ -186,15 +211,13 @@ class ArraySortFunction : public exec::VectorFunction {
         inputArray->sizes(),
         resultElements,
         inputArray->getNullCount());
-
-    context->moveOrCopyResult(resultArray, rows, result);
   }
 };
 
 // Validate number of parameters and types.
 void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
   VELOX_USER_CHECK_EQ(
-      inputArgs.size(), 1, "array_distinct requires exactly one parameter");
+      inputArgs.size(), 1, "array_sort requires exactly one parameter");
 
   auto arrayType = inputArgs.front().type;
   VELOX_USER_CHECK_EQ(

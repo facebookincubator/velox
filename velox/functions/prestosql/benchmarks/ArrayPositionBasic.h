@@ -23,7 +23,7 @@ namespace {
 // Find the index of the first match for primitive types.
 template <
     TypeKind kind,
-    typename std::enable_if<TypeTraits<kind>::isPrimitiveType, int>::type = 0>
+    typename std::enable_if_t<TypeTraits<kind>::isPrimitiveType, int> = 0>
 void applyTypedFirstMatch(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
@@ -60,7 +60,7 @@ void applyTypedFirstMatch(
 // Find the index of the first match for complex types.
 template <
     TypeKind kind,
-    typename std::enable_if<!TypeTraits<kind>::isPrimitiveType, int>::type = 0>
+    typename std::enable_if_t<!TypeTraits<kind>::isPrimitiveType, int> = 0>
 void applyTypedFirstMatch(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
@@ -99,7 +99,7 @@ void applyTypedFirstMatch(
 // Find the index of the instance-th match for primitive types.
 template <
     TypeKind kind,
-    typename std::enable_if<TypeTraits<kind>::isPrimitiveType, int>::type = 0>
+    typename std::enable_if_t<TypeTraits<kind>::isPrimitiveType, int> = 0>
 void applyTypedWithInstance(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
@@ -150,7 +150,7 @@ void applyTypedWithInstance(
 // Find the index of the instance-th match for complex types.
 template <
     TypeKind kind,
-    typename std::enable_if<!TypeTraits<kind>::isPrimitiveType, int>::type = 0>
+    typename std::enable_if_t<!TypeTraits<kind>::isPrimitiveType, int> = 0>
 void applyTypedWithInstance(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
@@ -207,16 +207,16 @@ class ArrayPositionFunctionBasic : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     const auto& arrayVector = args[0];
     const auto& searchVector = args[1];
     VELOX_CHECK(arrayVector->type()->isArray());
     VELOX_CHECK(arrayVector->type()->asArray().elementType()->kindEquals(
         searchVector->type()));
 
-    BaseVector::ensureWritable(rows, BIGINT(), context->pool(), result);
-    auto flatResult = (*result)->asFlatVector<int64_t>();
+    context.ensureWritable(rows, BIGINT(), result);
+    auto flatResult = result->asFlatVector<int64_t>();
 
     exec::DecodedArgs decodedArgs(rows, args, context);
     auto elements = decodedArgs.at(0)->base()->as<ArrayVector>()->elements();

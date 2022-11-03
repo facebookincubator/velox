@@ -144,8 +144,6 @@ void FlatVector<T>::copyValuesAndNulls(
   VELOX_CHECK(
       BaseVector::compatibleKind(BaseVector::typeKind(), source->typeKind()));
   VELOX_CHECK_GE(BaseVector::length_, rows.end());
-  SelectivityIterator iter(rows);
-  vector_size_t row;
   const uint64_t* sourceNulls = source->rawNulls();
   uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
   if (source->mayHaveNulls()) {
@@ -159,11 +157,11 @@ void FlatVector<T>::copyValuesAndNulls(
   }
 
   if (source->isFlatEncoding()) {
-    auto flat = source->asUnchecked<FlatVector<T>>();
-    auto* sourceValues =
-        source->typeKind() != TypeKind::UNKNOWN ? flat->rawValues() : nullptr;
+    auto* sourceValues = source->typeKind() != TypeKind::UNKNOWN
+        ? source->asUnchecked<FlatVector<T>>()->rawValues()
+        : nullptr;
     if (toSourceRow) {
-      while (iter.next(row)) {
+      rows.applyToSelected([&](auto row) {
         auto sourceRow = toSourceRow[row];
         if (sourceValues) {
           rawValues_[row] = sourceValues[sourceRow];
@@ -174,7 +172,7 @@ void FlatVector<T>::copyValuesAndNulls(
               row,
               sourceNulls && bits::isBitNull(sourceNulls, sourceRow));
         }
-      }
+      });
     } else {
       VELOX_CHECK_GE(source->size(), rows.end());
       rows.applyToSelected([&](vector_size_t row) {
@@ -200,7 +198,7 @@ void FlatVector<T>::copyValuesAndNulls(
     auto sourceVector = source->typeKind() != TypeKind::UNKNOWN
         ? source->asUnchecked<SimpleVector<T>>()
         : nullptr;
-    while (iter.next(row)) {
+    rows.applyToSelected([&](auto row) {
       auto sourceRow = toSourceRow ? toSourceRow[row] : row;
       if (!source->isNullAt(sourceRow)) {
         if (sourceVector) {
@@ -212,7 +210,7 @@ void FlatVector<T>::copyValuesAndNulls(
       } else {
         bits::setNull(rawNulls, row);
       }
-    }
+    });
   }
 }
 
@@ -240,12 +238,13 @@ void FlatVector<T>::copyValuesAndNulls(
   }
 
   if (source->isFlatEncoding()) {
-    auto flat = source->asUnchecked<FlatVector<T>>();
-    if (!flat->values() || flat->values()->size() == 0) {
+    if (!source->values() || source->values()->size() == 0) {
       // The vector must have all-null values.
       VELOX_CHECK_EQ(
-          BaseVector::countNulls(flat->nulls(), 0, flat->size()), flat->size());
+          BaseVector::countNulls(source->nulls(), 0, source->size()),
+          source->size());
     } else if (source->typeKind() != TypeKind::UNKNOWN) {
+      auto flat = source->asUnchecked<FlatVector<T>>();
       if (Buffer::is_pod_like_v<T>) {
         memcpy(
             &rawValues_[targetIndex],
@@ -297,42 +296,50 @@ void FlatVector<T>::copyValuesAndNulls(
 }
 
 template <typename T>
-void FlatVector<T>::resize(vector_size_t size, bool setNotNull) {
+VectorPtr FlatVector<T>::slice(vector_size_t offset, vector_size_t length)
+    const {
+  return std::make_shared<FlatVector<T>>(
+      this->pool_,
+      this->type_,
+      this->sliceNulls(offset, length),
+      length,
+      BaseVector::sliceBuffer(
+          *this->type_, values_, offset, length, this->pool_),
+      std::vector<BufferPtr>(stringBuffers_));
+}
+
+template <typename T>
+void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
   auto previousSize = BaseVector::length_;
-  BaseVector::resize(size, setNotNull);
+  if (newSize == previousSize) {
+    return;
+  }
+  BaseVector::resize(newSize, setNotNull);
   if (!values_) {
     return;
   }
-  const uint64_t minBytes = BaseVector::byteSize<T>(size);
-  if (values_->capacity() < minBytes) {
-    AlignedBuffer::reallocate<T>(&values_, size);
-    rawValues_ = values_->asMutable<T>();
-  }
-  values_->setSize(minBytes);
 
-  if (std::is_same<T, StringView>::value) {
-    if (size < previousSize) {
+  if constexpr (std::is_same_v<T, StringView>) {
+    resizeValues(newSize, StringView());
+    if (newSize < previousSize) {
       auto vector = this->template asUnchecked<SimpleVector<StringView>>();
       vector->invalidateIsAscii();
     }
-    if (size == 0) {
-      stringBuffers_.clear();
+    if (newSize == 0) {
+      clearStringBuffers();
     }
-    if (size > previousSize) {
-      auto stringViews = reinterpret_cast<StringView*>(rawValues_);
-      for (auto index = previousSize; index < size; ++index) {
-        new (&stringViews[index]) StringView();
-      }
-    }
+  } else {
+    resizeValues(newSize, std::nullopt);
   }
+  rawValues_ = values_->asMutable<T>();
 }
 
 template <typename T>
 void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
   auto newSize = std::max<vector_size_t>(rows.size(), BaseVector::length_);
-  if (values_ && !values_->unique()) {
+  if (values_ && !(values_->unique() && values_->isMutable())) {
     BufferPtr newValues;
-    if constexpr (std::is_same<T, StringView>::value) {
+    if constexpr (std::is_same_v<T, StringView>) {
       // Make sure to initialize StringView values so they can be safely
       // accessed.
       newValues = AlignedBuffer::allocate<T>(newSize, BaseVector::pool_, T());
@@ -340,11 +347,17 @@ void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
       newValues = AlignedBuffer::allocate<T>(newSize, BaseVector::pool_);
     }
 
-    auto rawNewValues = newValues->asMutable<T>();
     SelectivityVector rowsToCopy(BaseVector::length_);
     rowsToCopy.deselect(rows);
-    rowsToCopy.applyToSelected(
-        [&](vector_size_t row) { rawNewValues[row] = rawValues_[row]; });
+
+    if constexpr (std::is_same_v<T, bool>) {
+      auto rawNewValues = newValues->asMutable<uint64_t>();
+      std::memcpy(rawNewValues, rawValues_, values_->size());
+    } else {
+      auto rawNewValues = newValues->asMutable<T>();
+      rowsToCopy.applyToSelected(
+          [&](vector_size_t row) { rawNewValues[row] = rawValues_[row]; });
+    }
 
     // Keep the string buffers even if multiply referenced. These are
     // append-only and are written to in FlatVector::set which calls
@@ -371,6 +384,73 @@ void FlatVector<T>::prepareForReuse() {
     values_ = nullptr;
     rawValues_ = nullptr;
   }
+}
+
+template <typename T>
+void FlatVector<T>::resizeValues(
+    vector_size_t newSize,
+    const std::optional<T>& initialValue) {
+  if (values_ && values_->isMutable()) {
+    const uint64_t newByteSize = BaseVector::byteSize<T>(newSize);
+    if (values_->capacity() < newByteSize) {
+      AlignedBuffer::reallocate<T>(&values_, newSize, initialValue);
+    } else {
+      values_->setSize(newByteSize);
+    }
+    return;
+  }
+  BufferPtr newValues =
+      AlignedBuffer::allocate<T>(newSize, BaseVector::pool_, initialValue);
+
+  if (values_) {
+    if constexpr (Buffer::is_pod_like_v<T>) {
+      auto dst = newValues->asMutable<T>();
+      auto src = values_->as<T>();
+      auto len = std::min(values_->size(), newValues->size());
+      memcpy(dst, src, len);
+    } else {
+      auto previousSize = BaseVector::length_;
+      auto rawOldValues = newValues->asMutable<T>();
+      auto rawNewValues = newValues->asMutable<T>();
+      auto len = std::min<vector_size_t>(newSize, previousSize);
+      for (vector_size_t row = 0; row < len; row++) {
+        rawNewValues[row] = rawOldValues[row];
+      }
+    }
+  }
+  values_ = std::move(newValues);
+}
+
+template <>
+inline void FlatVector<bool>::resizeValues(
+    vector_size_t newSize,
+    const std::optional<bool>& initialValue) {
+  if (values_ && values_->isMutable()) {
+    const uint64_t newByteSize = BaseVector::byteSize<bool>(newSize);
+    if (values_->size() < newByteSize) {
+      AlignedBuffer::reallocate<bool>(&values_, newSize, initialValue);
+    } else {
+      values_->setSize(newByteSize);
+    }
+    // ensure that the newly added positions have the right initial value for
+    // the case where changes in size don't result in change in the size of
+    // the underlying buffer.
+    if (initialValue.has_value() && length_ < newSize) {
+      auto rawData = values_->asMutable<uint64_t>();
+      bits::fillBits(rawData, length_, newSize, initialValue.value());
+    }
+    return;
+  }
+  BufferPtr newValues =
+      AlignedBuffer::allocate<bool>(newSize, BaseVector::pool_, initialValue);
+
+  if (values_) {
+    auto dst = newValues->asMutable<char>();
+    auto src = values_->as<char>();
+    auto len = std::min(values_->size(), newValues->size());
+    memcpy(dst, src, len);
+  }
+  values_ = std::move(newValues);
 }
 } // namespace velox
 } // namespace facebook

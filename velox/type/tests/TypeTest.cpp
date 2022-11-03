@@ -251,6 +251,21 @@ TEST(TypeTest, parseStringToDate) {
   EXPECT_EQ(parseDate("2135-11-09").days(), 60577);
 }
 
+TEST(TypeTest, dateFormat) {
+  auto parseDate = [](const std::string& dateStr) {
+    Date returnDate;
+    parseTo(dateStr, returnDate);
+    return returnDate;
+  };
+
+  EXPECT_EQ(fmt::format("{}", parseDate("2015-12-24")), "2015-12-24");
+  EXPECT_EQ(fmt::format("{}", parseDate("1970-01-01")), "1970-01-01");
+  EXPECT_EQ(fmt::format("{}", parseDate("2000-03-10")), "2000-03-10");
+  EXPECT_EQ(fmt::format("{}", parseDate("1945-05-20")), "1945-05-20");
+  EXPECT_EQ(fmt::format("{}", parseDate("2135-11-09")), "2135-11-09");
+  EXPECT_EQ(fmt::format("{}", parseDate("1812-04-15")), "1812-04-15");
+}
+
 TEST(TypeTest, map) {
   auto map0 = MAP(INTEGER(), ARRAY(BIGINT()));
   EXPECT_EQ(map0->toString(), "MAP<INTEGER,ARRAY<BIGINT>>");
@@ -535,6 +550,23 @@ TEST(TypeTest, equivalent) {
   EXPECT_TRUE(LONG_DECIMAL(30, 5)->equivalent(*LONG_DECIMAL(30, 5)));
   EXPECT_FALSE(LONG_DECIMAL(30, 6)->equivalent(*LONG_DECIMAL(30, 5)));
   EXPECT_FALSE(LONG_DECIMAL(31, 5)->equivalent(*LONG_DECIMAL(30, 5)));
+  auto complexTypeA = ROW(
+      {{"a0", ARRAY(ROW({{"a1", DECIMAL(20, 8)}}))},
+       {"a2", MAP(VARCHAR(), ROW({{"a3", DECIMAL(10, 5)}}))}});
+  auto complexTypeB = ROW(
+      {{"b0", ARRAY(ROW({{"b1", DECIMAL(20, 8)}}))},
+       {"b2", MAP(VARCHAR(), ROW({{"b3", DECIMAL(10, 5)}}))}});
+  EXPECT_TRUE(complexTypeA->equivalent(*complexTypeB));
+  // Change Array element type.
+  complexTypeB = ROW(
+      {{"b0", ARRAY(ROW({{"b1", DECIMAL(20, 7)}}))},
+       {"b2", MAP(VARCHAR(), ROW({{"b3", DECIMAL(10, 5)}}))}});
+  EXPECT_FALSE(complexTypeA->equivalent(*complexTypeB));
+  // Change Map value type.
+  complexTypeB = ROW(
+      {{"b0", ARRAY(ROW({{"b1", DECIMAL(20, 8)}}))},
+       {"b2", MAP(VARCHAR(), ROW({{"b3", DECIMAL(20, 5)}}))}});
+  EXPECT_FALSE(complexTypeA->equivalent(*complexTypeB));
 }
 
 TEST(TypeTest, kindEquals) {
@@ -646,4 +678,38 @@ TEST(TypeTest, isVariadicType) {
   EXPECT_FALSE(isVariadicType<velox::StringView>::value);
   EXPECT_FALSE(isVariadicType<bool>::value);
   EXPECT_FALSE((isVariadicType<Map<int8_t, Date>>::value));
+}
+
+TEST(TypeTest, fromKindToScalerType) {
+  for (const TypeKind& kind :
+       {TypeKind::BOOLEAN,
+        TypeKind::TINYINT,
+        TypeKind::SMALLINT,
+        TypeKind::INTEGER,
+        TypeKind::BIGINT,
+        TypeKind::REAL,
+        TypeKind::DOUBLE,
+        TypeKind::VARCHAR,
+        TypeKind::VARBINARY,
+        TypeKind::TIMESTAMP,
+        TypeKind::DATE,
+        TypeKind::INTERVAL_DAY_TIME,
+        TypeKind::UNKNOWN}) {
+    SCOPED_TRACE(mapTypeKindToName(kind));
+    auto type = fromKindToScalerType(kind);
+    ASSERT_EQ(type->kind(), kind);
+  }
+
+  for (const TypeKind& kind :
+       {TypeKind::SHORT_DECIMAL,
+        TypeKind::LONG_DECIMAL,
+        TypeKind::ARRAY,
+        TypeKind::MAP,
+        TypeKind::ROW,
+        TypeKind::OPAQUE,
+        TypeKind::FUNCTION,
+        TypeKind::INVALID}) {
+    SCOPED_TRACE(mapTypeKindToName(kind));
+    EXPECT_ANY_THROW(fromKindToScalerType(kind));
+  }
 }

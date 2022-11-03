@@ -30,17 +30,24 @@ class DirectDecoder : public IntDecoder<isSigned> {
   DirectDecoder(
       std::unique_ptr<dwio::common::SeekableInputStream> input,
       bool useVInts,
-      uint32_t numBytes)
-      : IntDecoder<isSigned>{std::move(input), useVInts, numBytes} {}
+      uint32_t numBytes,
+      bool bigEndian = false)
+      : IntDecoder<isSigned>{std::move(input), useVInts, numBytes, bigEndian} {}
 
   void seekToRowGroup(dwio::common::PositionProvider&) override;
 
   void skip(uint64_t numValues) override;
 
-  void next(int64_t* data, uint64_t numValues, const uint64_t* nulls) override;
+  void next(
+      int64_t* FOLLY_NONNULL data,
+      uint64_t numValues,
+      const uint64_t* FOLLY_NULLABLE nulls) override;
 
   template <bool hasNulls>
-  inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
+  inline void skip(
+      int32_t numValues,
+      int32_t current,
+      const uint64_t* FOLLY_NULLABLE nulls) {
     if (!numValues) {
       return;
     }
@@ -51,10 +58,16 @@ class DirectDecoder : public IntDecoder<isSigned> {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
-    if (dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
-      fastPath<hasNulls>(nulls, visitor);
-      return;
+  void readWithVisitor(
+      const uint64_t* FOLLY_NULLABLE nulls,
+      Visitor visitor,
+      bool useFastPath = true) {
+    if constexpr (!std::is_same_v<typename Visitor::DataType, int128_t>) {
+      if (useFastPath &&
+          dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
+        fastPath<hasNulls>(nulls, visitor);
+        return;
+      }
     }
     int32_t current = visitor.start();
     skip<hasNulls>(current, 0, nulls);
@@ -78,7 +91,17 @@ class DirectDecoder : public IntDecoder<isSigned> {
           }
         }
       }
-      toSkip = visitor.process(IntDecoder<isSigned>::readLong(), atEnd);
+      if constexpr (std::is_same_v<typename Visitor::DataType, float>) {
+        toSkip = visitor.process(readFloat(), atEnd);
+      } else if constexpr (std::is_same_v<typename Visitor::DataType, double>) {
+        toSkip = visitor.process(readDouble(), atEnd);
+      } else if constexpr (std::is_same_v<
+                               typename Visitor::DataType,
+                               int128_t>) {
+        toSkip = visitor.process(super::readInt128(), atEnd);
+      } else {
+        toSkip = visitor.process(super::readLong(), atEnd);
+      }
     skip:
       ++current;
       if (toSkip) {
@@ -94,16 +117,46 @@ class DirectDecoder : public IntDecoder<isSigned> {
  private:
   using super = IntDecoder<isSigned>;
 
+  float readFloat() {
+    float temp;
+    auto buffer = readFixed(sizeof(float), &temp);
+    return *reinterpret_cast<const float*>(buffer);
+  }
+
+  double readDouble() {
+    double temp;
+    auto buffer = readFixed(sizeof(double), &temp);
+    return *reinterpret_cast<const double*>(buffer);
+  }
+
+  // Returns a pointer to the next element of 'size' bytes in the
+  // buffer. If the element would straddle buffers, it is copied to
+  // *temp and temp is returned.
+  const void* FOLLY_NONNULL readFixed(int32_t size, void* FOLLY_NONNULL temp) {
+    auto ptr = super::bufferStart;
+    if (ptr && ptr + size <= super::bufferEnd) {
+      super::bufferStart += size;
+      return ptr;
+    }
+    readBytes(
+        size,
+        super::inputStream.get(),
+        temp,
+        super::bufferStart,
+        super::bufferEnd);
+    return temp;
+  }
+
   template <bool hasNulls, typename Visitor>
-  void fastPath(const uint64_t* nulls, Visitor& visitor) {
+  void fastPath(const uint64_t* FOLLY_NULLABLE nulls, Visitor& visitor) {
     using T = typename Visitor::DataType;
     constexpr bool hasFilter =
-        !std::is_same<typename Visitor::FilterType, velox::common::AlwaysTrue>::
-            value;
+        !std::
+            is_same_v<typename Visitor::FilterType, velox::common::AlwaysTrue>;
     constexpr bool filterOnly =
-        std::is_same<typename Visitor::Extract, DropValues>::value;
+        std::is_same_v<typename Visitor::Extract, DropValues>;
     constexpr bool hasHook =
-        !std::is_same<typename Visitor::HookType, dwio::common::NoHook>::value;
+        !std::is_same_v<typename Visitor::HookType, dwio::common::NoHook>;
 
     int32_t numValues = 0;
     auto rows = visitor.rows();
@@ -115,7 +168,9 @@ class DirectDecoder : public IntDecoder<isSigned> {
       int32_t tailSkip = 0;
       raw_vector<int32_t>* innerVector = nullptr;
       auto outerVector = &visitor.outerNonNullRows();
-      if (Visitor::dense) {
+      // In non-DWRF formats, it can be the visitor is not dense but
+      // this run of rows is dense.
+      if (Visitor::dense || rowsAsRange.back() == rowsAsRange.size() - 1) {
         dwio::common::nonNullRowsFromDense(nulls, numRows, *outerVector);
         numNonNull = outerVector->size();
         if (!numNonNull) {
@@ -205,7 +260,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
             hasHook ? velox::iota(numRows, visitor.innerNonNullRows())
                     : nullptr,
             visitor.rawValues(numRows),
-            visitor.outputRows(numRows),
+            hasFilter ? visitor.outputRows(numRows) : nullptr,
             numValues,
             *super::inputStream,
             super::bufferStart,

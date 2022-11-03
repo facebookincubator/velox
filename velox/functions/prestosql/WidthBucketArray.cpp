@@ -16,7 +16,7 @@
 #include "velox/functions/prestosql/WidthBucketArray.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::functions {
@@ -60,10 +60,10 @@ class WidthBucketArrayFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    BaseVector::ensureWritable(rows, BIGINT(), context->pool(), result);
-    auto flatResult = (*result)->asFlatVector<int64_t>()->mutableRawValues();
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, BIGINT(), result);
+    auto flatResult = result->asFlatVector<int64_t>()->mutableRawValues();
 
     exec::DecodedArgs decodedArgs(rows, args, context);
     auto operand = decodedArgs.at(0);
@@ -79,15 +79,11 @@ class WidthBucketArrayFunction : public exec::VectorFunction {
         context, *elementsVector, elementsRows);
 
     auto indices = bins->indices();
-    rows.applyToSelected([&](auto row) {
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
       auto size = rawSizes[indices[row]];
       auto offset = rawOffsets[indices[row]];
-      try {
-        flatResult[row] = widthBucket<T>(
-            operand->valueAt<double>(row), *elementsHolder.get(), offset, size);
-      } catch (const std::exception& e) {
-        context->setError(row, std::current_exception());
-      }
+      flatResult[row] = widthBucket<T>(
+          operand->valueAt<double>(row), *elementsHolder.get(), offset, size);
     });
   }
 };
@@ -101,20 +97,16 @@ class WidthBucketArrayFunctionConstantBins : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    BaseVector::ensureWritable(rows, BIGINT(), context->pool(), result);
-    auto flatResult = (*result)->asFlatVector<int64_t>()->mutableRawValues();
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, BIGINT(), result);
+    auto flatResult = result->asFlatVector<int64_t>()->mutableRawValues();
 
     exec::DecodedArgs decodedArgs(rows, args, context);
     auto operand = decodedArgs.at(0);
 
-    rows.applyToSelected([&](auto row) {
-      try {
-        flatResult[row] = widthBucket(operand->valueAt<double>(row), bins_);
-      } catch (const std::exception& e) {
-        context->setError(row, std::current_exception());
-      }
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      flatResult[row] = widthBucket(operand->valueAt<double>(row), bins_);
     });
   }
 

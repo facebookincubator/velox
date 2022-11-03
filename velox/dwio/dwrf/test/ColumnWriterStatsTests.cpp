@@ -19,8 +19,8 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/common/MemoryInputStream.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/type/fbhive/HiveTypeParser.h"
@@ -94,15 +94,15 @@ void verifyStats(
     const size_t repeat,
     const std::vector<size_t>& nodeSizePerStride,
     const bool hasFlatMapCol) {
-  ASSERT_EQ(1, rowReader.getReader().getFooter().stripes_size())
+  ASSERT_EQ(1, rowReader.getReader().getFooter().stripesSize())
       << "Only one stripe expected";
 
-  ASSERT_EQ(true, rowReader.getReader().getFooter().has_rawdatasize())
+  ASSERT_EQ(true, rowReader.getReader().getFooter().hasRawDataSize())
       << "File raw data size does not exist";
 
   ASSERT_EQ(
       nodeSizePerStride.at(0) * repeat,
-      rowReader.getReader().getFooter().rawdatasize())
+      rowReader.getReader().getFooter().rawDataSize())
       << "File raw data size does not match";
 
   // Verify File Column's raw Size.
@@ -118,7 +118,7 @@ void verifyStats(
   auto stripeInfo = rowReader.loadStripe(0, preload);
 
   // Verify Stripe content length + index length equals size of the column 0.
-  auto totalStreamSize = stripeInfo.datalength() + stripeInfo.indexlength();
+  auto totalStreamSize = stripeInfo.dataLength() + stripeInfo.indexLength();
   auto node_0_Size = rowReader.getReader().getColumnStatistics(0)->getSize();
 
   ASSERT_EQ(node_0_Size, totalStreamSize) << "Total size does not match";
@@ -133,7 +133,7 @@ void verifyStats(
   computeCumulativeNodeSize(
       nodeSizes, *TypeWithId::create(rowReader.getReader().getSchema()));
   for (auto nodeId = 0;
-       nodeId < rowReader.getReader().getFooter().statistics_size();
+       nodeId < rowReader.getReader().getFooter().statisticsSize();
        nodeId++) {
     ASSERT_EQ(
         nodeSizes[nodeId],

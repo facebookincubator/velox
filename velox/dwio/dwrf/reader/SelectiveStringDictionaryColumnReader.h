@@ -16,12 +16,13 @@
 
 #pragma once
 
+#include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 #include "velox/dwio/dwrf/reader/DwrfData.h"
-#include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwrf {
 
-class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
+class SelectiveStringDictionaryColumnReader
+    : public dwio::common::SelectiveColumnReader {
  public:
   using ValueType = int32_t;
 
@@ -31,6 +32,7 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
       common::ScanSpec& scanSpec);
 
   void seekToRowGroup(uint32_t index) override {
+    SelectiveColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->as<DwrfData>().seekToRowGroup(index);
     if (strideDictStream_) {
       strideDictStream_->seekToPosition(positionsProvider);
@@ -76,7 +78,7 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
   void loadDictionary(
       dwio::common::SeekableInputStream& data,
       dwio::common::IntDecoder</*isSigned*/ false>& lengthDecoder,
-      DictionaryValues& values);
+      dwio::common::DictionaryValues& values);
   void ensureInitialized();
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> dictIndex_;
   std::unique_ptr<ByteRleDecoder> inDictionaryReader_;
@@ -121,8 +123,9 @@ void SelectiveStringDictionaryColumnReader::readHelper(
     ExtractValues values) {
   readWithVisitor(
       rows,
-      StringDictionaryColumnVisitor<TFilter, ExtractValues, isDense>(
-          *reinterpret_cast<TFilter*>(filter), this, rows, values));
+      dwio::common::
+          StringDictionaryColumnVisitor<TFilter, ExtractValues, isDense>(
+              *reinterpret_cast<TFilter*>(filter), this, rows, values));
 }
 
 template <bool isDense, typename ExtractValues>
@@ -138,10 +141,10 @@ void SelectiveStringDictionaryColumnReader::processFilter(
       filterNulls<int32_t>(
           rows,
           true,
-          !std::is_same<decltype(extractValues), DropValues>::value);
+          !std::is_same_v<decltype(extractValues), dwio::common::DropValues>);
       break;
     case common::FilterKind::kIsNotNull:
-      if (std::is_same<decltype(extractValues), DropValues>::value) {
+      if (std::is_same_v<decltype(extractValues), dwio::common::DropValues>) {
         filterNulls<int32_t>(rows, false, false);
       } else {
         readHelper<common::IsNotNull, isDense>(filter, rows, extractValues);
@@ -149,6 +152,10 @@ void SelectiveStringDictionaryColumnReader::processFilter(
       break;
     case common::FilterKind::kBytesRange:
       readHelper<common::BytesRange, isDense>(filter, rows, extractValues);
+      break;
+    case common::FilterKind::kNegatedBytesRange:
+      readHelper<common::NegatedBytesRange, isDense>(
+          filter, rows, extractValues);
       break;
     case common::FilterKind::kBytesValues:
       readHelper<common::BytesValues, isDense>(filter, rows, extractValues);

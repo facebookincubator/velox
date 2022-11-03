@@ -36,7 +36,7 @@ FooterStatisticsImpl::FooterStatisticsImpl(
     const StatsContext& statsContext) {
   auto& footer = reader.getFooter();
   auto& handler = reader.getDecryptionHandler();
-  colStats_.resize(footer.statistics_size());
+  colStats_.resize(footer.statisticsSize());
   // fill in the encrypted stats
   if (handler.isEncrypted()) {
     auto& encryption = footer.encryption();
@@ -66,7 +66,7 @@ FooterStatisticsImpl::FooterStatisticsImpl(
     }
   }
   // fill in unencrypted stats if not found in encryption groups
-  for (int32_t i = 0; i < footer.statistics_size(); i++) {
+  for (int32_t i = 0; i < footer.statisticsSize(); i++) {
     if (!colStats_[i]) {
       colStats_[i] =
           buildColumnStatisticsFromProto(footer.statistics(i), statsContext);
@@ -135,15 +135,16 @@ ReaderBase::ReaderBase(
   if (fileFormat == FileFormat::DWRF) {
     auto postScript = ProtoUtils::readProto<proto::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<PostScript>(*postScript);
+    postScript_ = std::make_unique<PostScript>(std::move(postScript));
   } else {
     auto postScript = ProtoUtils::readProto<proto::orc::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<PostScript>(*postScript);
+    postScript_ = std::make_unique<PostScript>(std::move(postScript));
   }
 
   uint64_t footerSize = postScript_->footerLength();
-  uint64_t cacheSize = postScript_->cacheSize();
+  uint64_t cacheSize =
+      postScript_->hasCacheSize() ? postScript_->cacheSize() : 0;
   uint64_t tailSize = 1 + psLength_ + footerSize + cacheSize;
 
   // There are cases in warehouse, where RC/text files are stored
@@ -155,17 +156,12 @@ ReaderBase::ReaderBase(
       cacheSize, fileLength_, "Corrupted file, cache size is invalid");
   DWIO_ENSURE_LE(tailSize, fileLength_, "Corrupted file, tail size is invalid");
 
-  if (getFileFormat() == FileFormat::DWRF) {
-    DWIO_ENSURE(
-        proto::CompressionKind_IsValid(postScript_->compression()),
-        "Corrupted File, invalid compression kind ",
-        postScript_->compression());
-  } else {
-    DWIO_ENSURE(
-        proto::orc::CompressionKind_IsValid(postScript_->compression()),
-        "Corrupted File, invalid compression kind ",
-        postScript_->compression());
-  }
+  DWIO_ENSURE(
+      (format() == DwrfFormat::kDwrf)
+          ? proto::CompressionKind_IsValid(postScript_->compression())
+          : proto::orc::CompressionKind_IsValid(postScript_->compression()),
+      "Corrupted File, invalid compression kind ",
+      postScript_->compression());
 
   if (tailSize > readSize) {
     input_->enqueue({fileLength_ - tailSize, tailSize});
@@ -174,32 +170,50 @@ ReaderBase::ReaderBase(
 
   auto footerStream = input_->read(
       fileLength_ - psLength_ - footerSize - 1, footerSize, LogType::FOOTER);
-  footer_ = google::protobuf::Arena::CreateMessage<proto::Footer>(arena_.get());
-  ProtoUtils::readProtoInto<proto::Footer>(
-      createDecompressedStream(std::move(footerStream), "File Footer"),
-      footer_);
+  if (fileFormat == FileFormat::DWRF) {
+    auto footer =
+        google::protobuf::Arena::CreateMessage<proto::Footer>(arena_.get());
+    ProtoUtils::readProtoInto<proto::Footer>(
+        createDecompressedStream(std::move(footerStream), "File Footer"),
+        footer);
+    footer_ = std::make_unique<FooterWrapper>(footer);
+  } else {
+    auto footer = google::protobuf::Arena::CreateMessage<proto::orc::Footer>(
+        arena_.get());
+    ProtoUtils::readProtoInto<proto::orc::Footer>(
+        createDecompressedStream(std::move(footerStream), "File Footer"),
+        footer);
+    footer_ = std::make_unique<FooterWrapper>(footer);
+  }
 
   schema_ = std::dynamic_pointer_cast<const RowType>(convertType(*footer_));
   DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
 
   // load stripe index/footer cache
   if (cacheSize > 0) {
-    DWIO_ENSURE_EQ(getFileFormat(), FileFormat::DWRF);
-    auto cacheBuffer =
-        std::make_shared<dwio::common::DataBuffer<char>>(pool, cacheSize);
-    input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER)
-        ->readFully(cacheBuffer->data(), cacheSize);
-    cache_ = std::make_unique<StripeMetadataCache>(
-        postScript_->cacheMode(), *footer_, std::move(cacheBuffer));
+    DWIO_ENSURE_EQ(format(), DwrfFormat::kDwrf);
+    if (input_->shouldPrefetchStripes()) {
+      cache_ = std::make_unique<StripeMetadataCache>(
+          postScript_->cacheMode(),
+          *footer_,
+          input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER));
+      input_->load(LogType::FOOTER);
+    } else {
+      auto cacheBuffer =
+          std::make_shared<dwio::common::DataBuffer<char>>(pool, cacheSize);
+      input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER)
+          ->readFully(cacheBuffer->data(), cacheSize);
+      cache_ = std::make_unique<StripeMetadataCache>(
+          postScript_->cacheMode(), *footer_, std::move(cacheBuffer));
+    }
   }
-
-  if (input_->shouldPrefetchStripes()) {
-    auto numStripes = getFooter().stripes_size();
+  if (!cache_ && input_->shouldPrefetchStripes()) {
+    auto numStripes = getFooter().stripesSize();
     for (auto i = 0; i < numStripes; i++) {
-      const auto& stripe = getFooter().stripes(i);
+      const auto stripe = getFooter().stripes(i);
       input_->enqueue(
-          {stripe.offset() + stripe.indexlength() + stripe.datalength(),
-           stripe.footerlength()});
+          {stripe.offset() + stripe.indexLength() + stripe.dataLength(),
+           stripe.footerLength()});
     }
     if (numStripes) {
       input_->load(LogType::FOOTER);
@@ -211,10 +225,10 @@ ReaderBase::ReaderBase(
 
 std::vector<uint64_t> ReaderBase::getRowsPerStripe() const {
   std::vector<uint64_t> rowsPerStripe;
-  auto numStripes = getFooter().stripes_size();
+  auto numStripes = getFooter().stripesSize();
   rowsPerStripe.reserve(numStripes);
   for (auto i = 0; i < numStripes; i++) {
-    rowsPerStripe.push_back(getFooter().stripes(i).numberofrows());
+    rowsPerStripe.push_back(getFooter().stripes(i).numberOfRows());
   }
   return rowsPerStripe;
 }
@@ -228,7 +242,7 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
     uint32_t index) const {
   DWIO_ENSURE_LT(
       index,
-      static_cast<uint32_t>(footer_->statistics_size()),
+      static_cast<uint32_t>(footer_->statisticsSize()),
       "column index out of range");
   StatsContext statsContext(getWriterVersion());
   if (!handler_->isEncrypted(index)) {
@@ -263,43 +277,40 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
 }
 
 std::shared_ptr<const Type> ReaderBase::convertType(
-    const proto::Footer& footer,
+    const FooterWrapper& footer,
     uint32_t index) {
   DWIO_ENSURE_LT(
       index,
-      folly::to<uint32_t>(footer.types_size()),
+      folly::to<uint32_t>(footer.typesSize()),
       "Corrupted file, invalid types");
-  const auto& type = footer.types(index);
-  switch (static_cast<int64_t>(type.kind())) {
-    case proto::Type_Kind_BOOLEAN:
-    case proto::Type_Kind_BYTE:
-    case proto::Type_Kind_SHORT:
-    case proto::Type_Kind_INT:
-    case proto::Type_Kind_LONG:
-    case proto::Type_Kind_FLOAT:
-    case proto::Type_Kind_DOUBLE:
-    case proto::Type_Kind_STRING:
-    case proto::Type_Kind_BINARY:
-    case proto::Type_Kind_TIMESTAMP:
-      return createScalarType(static_cast<TypeKind>(type.kind()));
-    case proto::Type_Kind_LIST:
+  const auto type = footer.types(index);
+  switch (type.kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
+    case TypeKind::DATE:
+      return createScalarType(type.kind());
+    case TypeKind::ARRAY:
       return ARRAY(convertType(footer, type.subtypes(0)));
-    case proto::Type_Kind_MAP:
+    case TypeKind::MAP:
       return MAP(
           convertType(footer, type.subtypes(0)),
           convertType(footer, type.subtypes(1)));
-    case proto::Type_Kind_UNION: {
-      DWIO_RAISE("Union type is deprecated!");
-    }
-
-    case proto::Type_Kind_STRUCT: {
+    case TypeKind::ROW: {
       std::vector<std::shared_ptr<const Type>> tl;
-      tl.reserve(type.subtypes_size());
+      tl.reserve(type.subtypesSize());
       std::vector<std::string> names;
-      names.reserve(type.subtypes_size());
-      for (int32_t i = 0; i < type.subtypes_size(); ++i) {
+      names.reserve(type.subtypesSize());
+      for (int32_t i = 0; i < type.subtypesSize(); ++i) {
         auto child = convertType(footer, type.subtypes(i));
-        names.push_back(type.fieldnames(i));
+        names.push_back(type.fieldNames(i));
         tl.push_back(std::move(child));
       }
 

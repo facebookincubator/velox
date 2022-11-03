@@ -16,11 +16,11 @@
 
 #include "velox/substrait/tests/JsonToProtoConverter.h"
 
-#include "velox/common/base/tests/Fs.h"
-#include "velox/dwio/dwrf/test/utils/DataFiles.h"
+#include "velox/common/base/Fs.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/vector/tests/VectorTestBase.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 
@@ -31,12 +31,9 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::substrait;
 
 class Substrait2VeloxValuesNodeConversionTest : public OperatorTestBase {
- public:
+ protected:
   std::shared_ptr<SubstraitVeloxPlanConverter> planConverter_ =
-      std::make_shared<SubstraitVeloxPlanConverter>();
-
-  std::unique_ptr<memory::ScopedMemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
+      std::make_shared<SubstraitVeloxPlanConverter>(pool_.get());
 };
 
 // SELECT * FROM tmp
@@ -47,7 +44,7 @@ TEST_F(Substrait2VeloxValuesNodeConversionTest, valuesNode) {
   ::substrait::Plan substraitPlan;
   JsonToProtoConverter::readFromFile(planPath, substraitPlan);
 
-  auto veloxPlan = planConverter_->toVeloxPlan(substraitPlan, pool_.get());
+  auto veloxPlan = planConverter_->toVeloxPlan(substraitPlan);
 
   RowVectorPtr expectedData = makeRowVector(
       {makeFlatVector<int64_t>(

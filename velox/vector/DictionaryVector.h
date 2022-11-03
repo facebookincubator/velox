@@ -31,7 +31,7 @@ namespace velox {
 template <typename T>
 class DictionaryVector : public SimpleVector<T> {
  public:
-  static constexpr bool can_simd = std::is_same<T, int64_t>::value;
+  static constexpr bool can_simd = std::is_same_v<T, int64_t>;
 
   // Creates dictionary vector using base vector (dictionaryValues) and a set
   // of indices (dictionaryIndexArray).
@@ -77,8 +77,6 @@ class DictionaryVector : public SimpleVector<T> {
 
   bool isNullAt(vector_size_t idx) const override;
 
-  const uint64_t* flatRawNulls(const SelectivityVector& rows) override;
-
   const T valueAtFast(vector_size_t idx) const;
 
   /**
@@ -117,7 +115,8 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   BufferPtr mutableIndices(vector_size_t size) {
-    if (indices_ && indices_->capacity() >= size * sizeof(vector_size_t)) {
+    if (indices_ && indices_->isMutable() &&
+        indices_->capacity() >= size * sizeof(vector_size_t)) {
       return indices_;
     }
 
@@ -128,8 +127,7 @@ class DictionaryVector : public SimpleVector<T> {
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + dictionaryValues_->retainedSize() +
-        indices_->capacity() +
-        (flatNullsBuffer_ ? flatNullsBuffer_->capacity() : 0);
+        indices_->capacity();
   }
 
   bool isConstant(const SelectivityVector& rows) const override {
@@ -178,25 +176,6 @@ class DictionaryVector : public SimpleVector<T> {
     return dictionaryValues_->wrappedIndex(rawIndices_[index]);
   }
 
-  bool isNullsWritable() const override {
-    return true;
-  }
-
-  void addNulls(const uint64_t* bits, const SelectivityVector& rows) override {
-    flatNullsBuffer_ = nullptr;
-    BaseVector::addNulls(bits, rows);
-  }
-
-  void clearNulls(const SelectivityVector& rows) override {
-    flatNullsBuffer_ = nullptr;
-    BaseVector::clearNulls(rows);
-  }
-
-  void clearNulls(vector_size_t begin, vector_size_t end) override {
-    flatNullsBuffer_ = nullptr;
-    BaseVector::clearNulls(begin, end);
-  }
-
   std::string toString(vector_size_t index) const override {
     if (BaseVector::isNullAt(index)) {
       return "null";
@@ -225,6 +204,8 @@ class DictionaryVector : public SimpleVector<T> {
     BaseVector::resize(size, setNotNull);
   }
 
+  VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
+
  private:
   // return the dictionary index for the specified vector index.
   inline vector_size_t getDictionaryIndex(vector_size_t idx) const {
@@ -242,7 +223,9 @@ class DictionaryVector : public SimpleVector<T> {
   // Caches 'scalarDictionaryValues_->getRawValues()' if 'dictionaryValues_'
   // is a FlatVector<T>.
   const T* rawDictionaryValues_ = nullptr;
-  BufferPtr flatNullsBuffer_;
+
+  // Indicates whether internal state has been set. Can also be false if there
+  // is an unloaded lazy vector under the encoding layers.
   bool initialized_{false};
 };
 

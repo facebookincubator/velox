@@ -79,6 +79,10 @@ class Task : public std::enable_shared_from_this<Task> {
     return taskId_;
   }
 
+  const int destination() const {
+    return destination_;
+  }
+
   // Convenience function for shortening a Presto taskId. To be used
   // in debugging messages and listings.
   static std::string shortId(const std::string& id);
@@ -182,7 +186,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// subsequent calls.
   /// @param noMoreBuffers A flag indicating that numBuffers is the final number
   /// of buffers. No more calls are expected after the call with noMoreBuffers
-  /// == true.
+  /// == true, but occasionally the caller might resend it, so calls
+  /// received after a call with noMoreBuffers == true are ignored.
   void updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers);
 
   /// Returns true if state is 'running'.
@@ -255,13 +260,14 @@ class Task : public std::enable_shared_from_this<Task> {
   /// library components (Driver, Operator, etc.) and should not be called by
   /// the library users.
 
-  memory::MemoryPool* FOLLY_NONNULL addDriverPool();
+  memory::MemoryPool* FOLLY_NONNULL addDriverPool(int pipelineId, int driverId);
 
   /// Creates new instance of MemoryPool, stores it in the task to ensure
   /// lifetime and returns a raw pointer. Not thread safe, e.g. must be called
   /// from the Operator's constructor.
-  memory::MemoryPool* FOLLY_NONNULL
-  addOperatorPool(memory::MemoryPool* FOLLY_NONNULL driverPool);
+  memory::MemoryPool* FOLLY_NONNULL addOperatorPool(
+      memory::MemoryPool* FOLLY_NONNULL driverPool,
+      const std::string& operatorType = "");
 
   /// Creates new instance of MappedMemory, stores it in the task to ensure
   /// lifetime and returns a raw pointer. Not thread safe, e.g. must be called
@@ -376,6 +382,10 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
+  std::shared_ptr<HashJoinBridge> getHashJoinBridgeLocked(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
   // Returns a CrossJoinBridge for 'planNodeId'.
   std::shared_ptr<CrossJoinBridge> getCrossJoinBridge(
       uint32_t splitGroupId,
@@ -383,6 +393,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Returns a custom join bridge for 'planNodeId'.
   std::shared_ptr<JoinBridge> getCustomJoinBridge(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
+  std::shared_ptr<SpillOperatorGroup> getSpillOperatorGroupLocked(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
@@ -471,7 +485,39 @@ class Task : public std::enable_shared_from_this<Task> {
     return mutex_;
   }
 
+  /// Returns the number of created and deleted tasks since the velox engine
+  /// starts running so far.
+  static uint64_t numCreatedTasks() {
+    return numCreatedTasks_;
+  }
+
+  static uint64_t numDeletedTasks() {
+    return numDeletedTasks_;
+  }
+
+  /// Invoked to wait for all the tasks created by the test to be deleted.
+  ///
+  /// NOTE: it is assumed that there is no more task to be created after or
+  /// during this wait call. This is for testing purpose for now.
+  static void testingWaitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
+
  private:
+  // Counts the number of created tasks which is incremented on each task
+  // creation.
+  static std::atomic<uint64_t> numCreatedTasks_;
+
+  // Counts the number of deleted tasks which is incremented on each task
+  // destruction.
+  static std::atomic<uint64_t> numDeletedTasks_;
+
+  static void taskCreated() {
+    ++numCreatedTasks_;
+  }
+
+  static void taskDeleted() {
+    ++numDeletedTasks_;
+  }
+
   /// Returns true if state is 'running'.
   bool isRunningLocked() const;
 
@@ -483,11 +529,26 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
+  template <class TBridgeType>
+  std::shared_ptr<TBridgeType> getJoinBridgeInternalLocked(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
+  /// Add remote split to ExchangeClient for the specified plan node. Used to
+  /// close remote sources that are added after the task completed early.
+  void addRemoteSplit(
+      const core::PlanNodeId& planNodeId,
+      const exec::Split& split);
+
   /// Retrieve a split or split future from the given split store structure.
   BlockingReason getSplitOrFutureLocked(
       SplitsStore& splitsStore,
       exec::Split& split,
       ContinueFuture& future);
+
+  /// Returns next split from the store. The caller must ensure the store is not
+  /// empty.
+  exec::Split getSplitLocked(SplitsStore& splitsStore);
 
   /// Creates for the given split group and fills up the 'SplitGroupState'
   /// structure, which stores inter-operator state (local exchange, bridges).
@@ -508,9 +569,12 @@ class Task : public std::enable_shared_from_this<Task> {
 
   void driverClosedLocked();
 
-  /// Returns true if Task is in kRunning state, but all drivers finished
+  /// Returns true if Task is in kRunning state, but all output drivers finished
   /// processing and all output has been consumed. In other words, returns true
   /// if task should transition to kFinished state.
+  ///
+  /// In case of grouped execution, checks that all drivers, not just output
+  /// drivers finished processing.
   bool checkIfFinishedLocked();
 
   /// Check if we have no more split groups coming and adjust the total number
@@ -568,6 +632,35 @@ class Task : public std::enable_shared_from_this<Task> {
 
   int getOutputPipelineId() const;
 
+  /// Callback function added to the MemoryUsageTracker to return a descriptive
+  /// message about query memory usage to be added to the error when a
+  /// MEM_CAP_EXCEEDED error is encountered.
+  /// Example Error Message generated:
+  /// Query 20220923_033248_00003_xney3 failed:
+  ///   Exceeded memory cap of 7.00GB when requesting 4.00MB.
+  /// query.20220923_033248_00003_xney3: total: 7.00GB
+  ///     task.20220923_033248_00003_xney3.1.0.25: : 5.88GB in 30 drivers,
+  ///       min 2.00MB, max 400.00MB
+  ///         pipe.0: : 5.74GB in 60 operators, min 0B, max 393.81MB
+  ///             op.PartitionedOutput: : 0B in 15 instances, min 0B, max 0B
+  ///             op.FilterProject: : 0B in 15 instances, min 0B, max 0B
+  ///             op.Aggregation: : 5GB in 15 instances, min 384MB, max 393MB
+  ///             op.LocalExchange: : 0B in 15 instances, min 0B, max 0B
+  ///         pipe.1: : 32.75MB in 30 operators, min 4.00KB, max 14.65MB
+  ///             op.LocalPartition: : 508KB in 15 instances, min 4KB, max 63KB
+  ///             op.Exchange: : 32.25MB in 15 instances, min 107KB, max 14MB
+  ///     task.20220923_033248_00003_xney3.2.0.19: : 1.12GB in 15 drivers,
+  ///       min 61.00MB, max 91.00MB
+  ///         pipe.0: : 1.03GB in 75 operators, min 149.00KB, max 39.38MB
+  ///             op.PartitionedOutput: : 446.71MB in 15 instances,
+  ///               min 12.02MB, max 39.38MB
+  ///             op.PartialAggregation: : 300.03MB in 15 instances,
+  ///               min 1.48MB, max 25.59MB
+  ///             op.FilterProject: : 32MB in 30 instances, min 149KB, max 2MB
+  ///             op.TableScan: : 278MB in 15 instances, min 9.05MB, max 27MB.
+  /// Failed Operator: PartialAggregation.3: 11.98MB
+  std::string getErrorMsgOnMemCapExceeded(memory::MemoryUsageTracker& tracker);
+
   // RAII helper class to satisfy 'stateChangePromises_' and notify listeners
   // that task is complete outside of the mutex. Inactive on creation. Must be
   // activated explicitly by calling 'activate'.
@@ -598,19 +691,52 @@ class Task : public std::enable_shared_from_this<Task> {
         [&]() { onTaskCompletion(); }, std::move(stateChangePromises_));
   }
 
-  /// Universally unique identifier of the task. Used to identify the task when
-  /// calling TaskListener.
+  // The helper class used to maintain 'numCreatedTasks_' and 'numDeletedTasks_'
+  // on task construction and destruction.
+  class TaskCounter {
+   public:
+    TaskCounter() {
+      Task::taskCreated();
+    }
+    ~TaskCounter() {
+      Task::taskDeleted();
+    }
+  };
+  friend class Task::TaskCounter;
+
+  // NOTE: keep 'taskCount_' the first member so that it will be the first
+  // constructed member and the last destructed one. The purpose is to make
+  // 'numCreatedTasks_' and 'numDeletedTasks_' counting more robust to the
+  // timing race condition when used in scenarios such as waiting for all the
+  // tasks to be destructed in test.
+  const TaskCounter taskCounter_;
+
+  // Universally unique identifier of the task. Used to identify the task when
+  // calling TaskListener.
   const std::string uuid_;
 
-  /// Application specific task ID specified at construction time. May not be
-  /// unique or universally unique.
+  // Application specific task ID specified at construction time. May not be
+  // unique or universally unique.
   const std::string taskId_;
   core::PlanFragment planFragment_;
   const int destination_;
   const std::shared_ptr<core::QueryCtx> queryCtx_;
 
-  /// A set of IDs of leaf plan nodes that require splits. Used to check plan
-  /// node IDs specified in split management methods.
+  // Root MemoryPool for this Task. All member variables that hold references
+  // to pool_ must be defined after pool_, childPools_, and
+  // childMappedMemories_
+  std::unique_ptr<memory::MemoryPool> pool_;
+
+  // Keep driver and operator memory pools alive for the duration of the task
+  // to allow for sharing vectors across drivers without copy.
+  std::vector<std::unique_ptr<memory::MemoryPool>> childPools_;
+
+  // Keep operator MappedMemory instances alive for the duration of the task to
+  // allow for sharing data without copy.
+  std::vector<std::shared_ptr<memory::MappedMemory>> childMappedMemories_;
+
+  // A set of IDs of leaf plan nodes that require splits. Used to check plan
+  // node IDs specified in split management methods.
   const std::unordered_set<core::PlanNodeId> splitPlanNodeIds_;
 
   // True if produces output via PartitionedOutputBufferManager.
@@ -626,12 +752,20 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Null for pipelines, which don't need it.
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;
 
+  /// Exchange clients keyed by the corresponding Exchange plan node ID. Used to
+  /// process remaining remote splits after the task has completed early.
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
+      exchangeClientByPlanNode_;
+
   // Set if terminated by an error. This is the first error reported
   // by any of the instances.
   std::exception_ptr exception_ = nullptr;
   mutable std::mutex mutex_;
 
   ConsumerSupplier consumerSupplier_;
+
+  // The function that is executed when the task encounters its first error,
+  // that is, serError() is called for the first time.
   std::function<void(std::exception_ptr)> onError_;
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
@@ -684,21 +818,16 @@ class Task : public std::enable_shared_from_this<Task> {
   std::vector<ContinuePromise> stateChangePromises_;
 
   TaskStats taskStats_;
-  std::unique_ptr<memory::MemoryPool> pool_;
-
-  // Keep driver and operator memory pools alive for the duration of the task to
-  // allow for sharing vectors across drivers without copy.
-  std::vector<std::unique_ptr<memory::MemoryPool>> childPools_;
-
-  // Keep operator MappedMemory instances alive for the duration of the task to
-  // allow for sharing data without copy.
-  std::vector<std::shared_ptr<memory::MappedMemory>> childMappedMemories_;
 
   /// Stores inter-operator state (exchange, bridges) per split group.
   /// During ungrouped execution we use the [0] entry in this vector.
   std::unordered_map<uint32_t, SplitGroupState> splitGroupStates_;
 
   std::weak_ptr<PartitionedOutputBufferManager> bufferManager_;
+
+  /// Boolean indicating that we have already recieved no-more-broadcast-buffers
+  /// message. Subsequent messagees will be ignored.
+  bool noMoreBroadcastBuffers_{false};
 
   // Thread counts and cancellation -related state.
   //

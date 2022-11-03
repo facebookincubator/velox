@@ -31,7 +31,6 @@ yum -y install double-conversion-devel
 yum -y install glog-devel
 yum -y install bzip2-devel
 yum -y install gflags-devel
-yum -y install gtest-devel
 yum -y install libevent-devel
 yum -y install lz4-devel
 yum -y install libzstd-devel
@@ -77,7 +76,6 @@ function wget_and_untar {
 wget_and_untar https://github.com/gflags/gflags/archive/refs/tags/v2.2.2.tar.gz gflags
 wget_and_untar https://ftp.openssl.org/source/openssl-1.1.1k.tar.gz openssl &
 wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.69.0/source/boost_1_69_0.tar.gz boost &
-wget_and_untar https://github.com/facebook/folly/archive/v2022.03.14.00.tar.gz folly &
 
 wait
 
@@ -94,7 +92,4 @@ wait
   CPLUS_INCLUDE_PATH=/usr/include/python3.6m  ./b2 "-j$(nproc)" -d0 install threading=multi
 )
 
-# Folly fails to build in release-mode due
-# AtomicUtil-inl.h:202: Error: operand type mismatch for `bts'
 cmake_install gflags -DBUILD_SHARED_LIBS=ON
-cmake_install folly

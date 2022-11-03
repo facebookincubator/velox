@@ -30,7 +30,7 @@ void applyTyped(
     std::vector<VectorPtr>& args,
     DecodedVector* decoded0,
     DecodedVector* decoded1,
-    exec::EvalCtx* context,
+    exec::EvalCtx& context,
     FlatVector<bool>* flatResult) {
   using T = typename TypeTraits<kind>::NativeType;
 
@@ -43,9 +43,9 @@ void applyTyped(
     });
   } else {
     // (isnull(a) AND isnull(b)) || (a == b)
-    // When flatRawNulls is null it means there are no nulls.
-    auto* rawNulls0 = args[0]->flatRawNulls(rows);
-    auto* rawNulls1 = args[1]->flatRawNulls(rows);
+    // When DecodedVector::nulls() is null it means there are no nulls.
+    auto* rawNulls0 = decoded0->nulls();
+    auto* rawNulls1 = decoded1->nulls();
     rows.applyToSelected([&](vector_size_t i) {
       auto isNull0 = rawNulls0 && bits::isBitNull(rawNulls0, i);
       auto isNull1 = rawNulls1 && bits::isBitNull(rawNulls1, i);
@@ -64,7 +64,7 @@ void applyTyped<TypeKind::ARRAY>(
     std::vector<VectorPtr>& /* args */,
     DecodedVector* /* decoded0 */,
     DecodedVector* /* decoded1 */,
-    exec::EvalCtx* /* context */,
+    exec::EvalCtx& /* context */,
     FlatVector<bool>* /* flatResult */) {
   VELOX_NYI("equalnullsafe does not support arrays.");
 }
@@ -75,7 +75,7 @@ void applyTyped<TypeKind::MAP>(
     std::vector<VectorPtr>& /* args */,
     DecodedVector* /* decoded0 */,
     DecodedVector* /* decoded1 */,
-    exec::EvalCtx* /* context */,
+    exec::EvalCtx& /* context */,
     FlatVector<bool>* /* flatResult */) {
   VELOX_NYI("equalnullsafe does not support maps.");
 }
@@ -86,7 +86,7 @@ void applyTyped<TypeKind::ROW>(
     std::vector<VectorPtr>& /* args */,
     DecodedVector* /* decoded0 */,
     DecodedVector* /* decoded1 */,
-    exec::EvalCtx* /* context */,
+    exec::EvalCtx& /* context */,
     FlatVector<bool>* /* flatResult */) {
   VELOX_NYI("equalnullsafe does not support structs.");
 }
@@ -101,14 +101,14 @@ class EqualtoNullSafe final : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     exec::DecodedArgs decodedArgs(rows, args, context);
 
     DecodedVector* decoded0 = decodedArgs.at(0);
     DecodedVector* decoded1 = decodedArgs.at(1);
-    BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
-    FlatVector<bool>* flatResult = (*result)->asFlatVector<bool>();
+    context.ensureWritable(rows, BOOLEAN(), result);
+    auto* flatResult = result->asFlatVector<bool>();
     flatResult->mutableRawValues<int64_t>();
 
     VELOX_DYNAMIC_TYPE_DISPATCH(

@@ -15,7 +15,7 @@
  */
 
 #include <optional>
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -172,5 +172,28 @@ TEST_F(ArrayDuplicatesTest, nonContiguousRows) {
   auto result = evaluate<ArrayVector>(
       "if(c0 % 2 = 0, array_duplicates(c1), array_duplicates(c2))",
       makeRowVector({c0, c1, c2}));
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrayDuplicatesTest, constant) {
+  vector_size_t size = 1'000;
+  auto data = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5, 4, 5}, {6, 6, 6, 6}});
+
+  auto evaluateConstant = [&](vector_size_t row, const VectorPtr& vector) {
+    return evaluate(
+        "array_duplicates(c0)",
+        makeRowVector({BaseVector::wrapInConstant(size, row, vector)}));
+  };
+
+  auto result = evaluateConstant(0, data);
+  auto expected = makeConstantArray<int64_t>(size, {});
+  assertEqualVectors(expected, result);
+
+  result = evaluateConstant(1, data);
+  expected = makeConstantArray<int64_t>(size, {4, 5});
+  assertEqualVectors(expected, result);
+
+  result = evaluateConstant(2, data);
+  expected = makeConstantArray<int64_t>(size, {6});
   assertEqualVectors(expected, result);
 }

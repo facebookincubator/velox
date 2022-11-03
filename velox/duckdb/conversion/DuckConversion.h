@@ -24,8 +24,10 @@ class variant;
 
 namespace facebook::velox::duckdb {
 
-::duckdb::LogicalType fromVeloxType(TypeKind kind);
-bool duckdbTypeIsSupported(::duckdb::LogicalType type);
+/// Converts Velox type to DuckDB type.
+::duckdb::LogicalType fromVeloxType(const TypePtr& type);
+
+/// Converts DuckDB type to Velox type.
 TypePtr toVeloxType(::duckdb::LogicalType type);
 
 static ::duckdb::timestamp_t veloxTimestampToDuckDB(
@@ -42,7 +44,9 @@ static Timestamp duckdbTimestampToVelox(
 
 // Converts a duckDB Value (class that holds an arbitraty data type) into a
 // VELOX's variant.
-variant duckValueToVariant(const ::duckdb::Value& val);
+variant duckValueToVariant(
+    const ::duckdb::Value& val,
+    bool parseDecimalAsDouble);
 
 // value conversion routines
 template <class T>
@@ -89,55 +93,55 @@ struct DuckStringConversion {
 
 struct DuckInt16DecimalConversion {
   typedef int16_t DUCK_TYPE;
-  typedef ShortDecimal VELOX_TYPE;
+  typedef UnscaledShortDecimal VELOX_TYPE;
 
   static int16_t toDuck(
-      const ShortDecimal& input,
+      const UnscaledShortDecimal& input,
       ::duckdb::Vector& /* unused */) {
     return input.unscaledValue();
   }
 
-  static ShortDecimal toVelox(const int16_t input) {
-    return ShortDecimal(static_cast<int64_t>(input));
+  static UnscaledShortDecimal toVelox(const int16_t input) {
+    return UnscaledShortDecimal(static_cast<int64_t>(input));
   }
 };
 
 struct DuckInt32DecimalConversion {
   typedef int32_t DUCK_TYPE;
-  typedef ShortDecimal VELOX_TYPE;
+  typedef UnscaledShortDecimal VELOX_TYPE;
 
   static int32_t toDuck(
-      const ShortDecimal& input,
+      const UnscaledShortDecimal& input,
       ::duckdb::Vector& /* unused */) {
     return input.unscaledValue();
   }
 
-  static ShortDecimal toVelox(const int32_t input) {
-    return ShortDecimal(static_cast<int64_t>(input));
+  static UnscaledShortDecimal toVelox(const int32_t input) {
+    return UnscaledShortDecimal(static_cast<int64_t>(input));
   }
 };
 
 struct DuckInt64DecimalConversion {
   typedef int64_t DUCK_TYPE;
-  typedef ShortDecimal VELOX_TYPE;
+  typedef UnscaledShortDecimal VELOX_TYPE;
 
   static int64_t toDuck(
-      const ShortDecimal& input,
+      const UnscaledShortDecimal& input,
       ::duckdb::Vector& /* unused */) {
     return input.unscaledValue();
   }
 
-  static ShortDecimal toVelox(const int64_t input) {
-    return ShortDecimal(input);
+  static UnscaledShortDecimal toVelox(const int64_t input) {
+    return UnscaledShortDecimal(input);
   }
 };
 
 struct DuckLongDecimalConversion {
   typedef ::duckdb::hugeint_t DUCK_TYPE;
-  typedef LongDecimal VELOX_TYPE;
+  typedef UnscaledLongDecimal VELOX_TYPE;
 
   static ::duckdb::hugeint_t toDuck(
-      const LongDecimal& input,
+      const UnscaledLongDecimal& input,
       ::duckdb::Vector& /* unused */) {
     ::duckdb::hugeint_t duckValue;
     duckValue.upper = (input.unscaledValue() >> 64);
@@ -145,8 +149,8 @@ struct DuckLongDecimalConversion {
     return duckValue;
   }
 
-  static LongDecimal toVelox(const ::duckdb::hugeint_t input) {
-    return LongDecimal(buildInt128(input.upper, input.lower));
+  static UnscaledLongDecimal toVelox(const ::duckdb::hugeint_t input) {
+    return UnscaledLongDecimal(buildInt128(input.upper, input.lower));
   }
 };
 
@@ -177,5 +181,10 @@ struct DuckDateConversion {
     return Date(::duckdb::Date::EpochDays(input));
   }
 };
+
+/// Returns CREATE TABLE <tableName>(<schema>) DuckDB SQL.
+std::string makeCreateTableSql(
+    const std::string& tableName,
+    const RowType& rowType);
 
 } // namespace facebook::velox::duckdb

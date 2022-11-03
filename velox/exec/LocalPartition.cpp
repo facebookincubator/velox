@@ -41,19 +41,18 @@ bool LocalExchangeMemoryManager::increaseMemoryUsage(
   return false;
 }
 
-void LocalExchangeMemoryManager::decreaseMemoryUsage(int64_t removed) {
+std::vector<ContinuePromise> LocalExchangeMemoryManager::decreaseMemoryUsage(
+    int64_t removed) {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
     bufferedBytes_ -= removed;
 
-    if (bufferedBytes_ < maxBufferSize_ &&
-        bufferedBytes_ + removed >= maxBufferSize_) {
+    if (bufferedBytes_ < maxBufferSize_) {
       promises = std::move(promises_);
     }
   }
-
-  notify(promises);
+  return promises;
 }
 
 void LocalExchangeQueue::addProducer() {
@@ -133,6 +132,7 @@ BlockingReason LocalExchangeQueue::next(
     memory::MemoryPool* pool,
     RowVectorPtr* data) {
   std::vector<ContinuePromise> producerPromises;
+  std::vector<ContinuePromise> memoryPromises;
   auto blockingReason = queue_.withWLock([&](auto& queue) {
     *data = nullptr;
     if (queue.empty()) {
@@ -149,7 +149,8 @@ BlockingReason LocalExchangeQueue::next(
     *data = queue.front();
     queue.pop();
 
-    memoryManager_->decreaseMemoryUsage((*data)->retainedSize());
+    memoryPromises =
+        memoryManager_->decreaseMemoryUsage((*data)->retainedSize());
 
     if (noMoreProducers_ && pendingProducers_ == 0 && queue.empty()) {
       producerPromises = std::move(producerPromises_);
@@ -157,6 +158,7 @@ BlockingReason LocalExchangeQueue::next(
 
     return BlockingReason::kNotBlocked;
   });
+  notify(memoryPromises);
   notify(producerPromises);
   return blockingReason;
 }
@@ -194,6 +196,7 @@ bool LocalExchangeQueue::isFinished() {
 void LocalExchangeQueue::close() {
   std::vector<ContinuePromise> producerPromises;
   std::vector<ContinuePromise> consumerPromises;
+  std::vector<ContinuePromise> memoryPromises;
   queue_.withWLock([&](auto& queue) {
     uint64_t freedBytes = 0;
     while (!queue.empty()) {
@@ -202,7 +205,7 @@ void LocalExchangeQueue::close() {
     }
 
     if (freedBytes) {
-      memoryManager_->decreaseMemoryUsage(freedBytes);
+      memoryPromises = memoryManager_->decreaseMemoryUsage(freedBytes);
     }
 
     producerPromises = std::move(producerPromises_);
@@ -211,6 +214,7 @@ void LocalExchangeQueue::close() {
   });
   notify(producerPromises);
   notify(consumerPromises);
+  notify(memoryPromises);
 }
 
 LocalExchange::LocalExchange(
@@ -276,10 +280,6 @@ LocalPartition::LocalPartition(
           numPartitions_ == 1
               ? nullptr
               : planNode->partitionFunctionFactory()(numPartitions_)),
-      sourceOutputChannels_{calculateOutputChannels(
-          planNode->sources()[0]->outputType(),
-          planNode->inputTypeFromSource(),
-          planNode->outputType())},
       blockingReasons_{numPartitions_} {
   VELOX_CHECK(numPartitions_ == 1 || partitionFunction_ != nullptr);
 
@@ -330,27 +330,6 @@ wrapChildren(const RowVectorPtr& input, vector_size_t size, BufferPtr indices) {
 }
 } // namespace
 
-BlockingReason LocalPartition::enqueue(
-    int32_t partition,
-    RowVectorPtr data,
-    ContinueFuture* future) {
-  RowVectorPtr projectedData;
-  if (sourceOutputChannels_.empty() && outputType_->size() > 0) {
-    projectedData = std::move(data);
-  } else {
-    std::vector<VectorPtr> outputColumns;
-    outputColumns.reserve(sourceOutputChannels_.size());
-    for (const auto& i : sourceOutputChannels_) {
-      outputColumns.push_back(data->childAt(i));
-    }
-
-    projectedData = std::make_shared<RowVector>(
-        data->pool(), outputType_, nullptr, data->size(), outputColumns);
-  }
-
-  return queues_[partition]->enqueue(projectedData, future);
-}
-
 void LocalPartition::addInput(RowVectorPtr input) {
   stats_.outputBytes += input->estimateFlatSize();
   stats_.outputPositions += input->size();
@@ -363,7 +342,7 @@ void LocalPartition::addInput(RowVectorPtr input) {
   input_ = std::move(input);
 
   if (numPartitions_ == 1) {
-    blockingReasons_[0] = enqueue(0, input_, &futures_[0]);
+    blockingReasons_[0] = queues_[0]->enqueue(input_, &futures_[0]);
     if (blockingReasons_[0] != BlockingReason::kNotBlocked) {
       numBlockedPartitions_ = 1;
     }
@@ -392,7 +371,7 @@ void LocalPartition::addInput(RowVectorPtr input) {
           wrapChildren(input_, partitionSize, std::move(indexBuffers[i]));
 
       ContinueFuture future;
-      auto reason = enqueue(i, partitionData, &future);
+      auto reason = queues_[i]->enqueue(partitionData, &future);
       if (reason != BlockingReason::kNotBlocked) {
         blockingReasons_[numBlockedPartitions_] = reason;
         futures_[numBlockedPartitions_] = std::move(future);

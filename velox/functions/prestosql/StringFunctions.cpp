@@ -84,8 +84,8 @@ class UpperLowerTemplateFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     VELOX_CHECK(args.size() == 1);
     VELOX_CHECK(args[0]->typeKind() == TypeKind::VARCHAR);
 
@@ -104,7 +104,7 @@ class UpperLowerTemplateFunction : public exec::VectorFunction {
     // buffer can be reused as output.
     if (tryInplace &&
         prepareFlatResultsVector(result, rows, context, args.at(0))) {
-      auto* resultFlatVector = (*result)->as<FlatVector<StringView>>();
+      auto* resultFlatVector = result->as<FlatVector<StringView>>();
       applyInternalInPlace(rows, decodedInput, resultFlatVector);
       return;
     }
@@ -112,7 +112,7 @@ class UpperLowerTemplateFunction : public exec::VectorFunction {
     // Not in place path.
     VectorPtr emptyVectorPtr;
     prepareFlatResultsVector(result, rows, context, emptyVectorPtr);
-    auto* resultFlatVector = (*result)->as<FlatVector<StringView>>();
+    auto* resultFlatVector = result->as<FlatVector<StringView>>();
 
     StringEncodingTemplateWrapper<ApplyInternal>::apply(
         ascii, rows, decodedInput, resultFlatVector);
@@ -143,171 +143,139 @@ class UpperLowerTemplateFunction : public exec::VectorFunction {
  * */
 class ConcatFunction : public exec::VectorFunction {
  public:
-  bool isDefaultNullBehavior() const override {
-    return true;
-  }
+  ConcatFunction(
+      const std::string& /* name */,
+      const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    auto numArgs = inputArgs.size();
 
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    VectorPtr emptyVectorPtr;
-    prepareFlatResultsVector(result, rows, context, emptyVectorPtr);
-    auto* resultFlatVector = (*result)->as<FlatVector<StringView>>();
+    // Save constant values to constantStrings_.
+    // Identify and combine consecutive constant inputs.
+    argMapping_.reserve(numArgs);
+    constantStrings_.reserve(numArgs);
 
-    exec::DecodedArgs decodedArgs(rows, args, context);
+    for (auto i = 0; i < numArgs; ++i) {
+      argMapping_.push_back(i);
 
-    std::vector<StringView> concatInputs(args.size());
+      const auto& arg = inputArgs[i];
+      if (arg.constantValue) {
+        std::string value = arg.constantValue->as<ConstantVector<StringView>>()
+                                ->valueAt(0)
+                                .str();
 
-    rows.applyToSelected([&](int row) {
-      for (int i = 0; i < args.size(); i++) {
-        concatInputs[i] = decodedArgs.at(i)->valueAt<StringView>(row);
+        column_index_t j = i + 1;
+        for (; j < inputArgs.size(); ++j) {
+          if (!inputArgs[j].constantValue) {
+            break;
+          }
+
+          value += inputArgs[j]
+                       .constantValue->as<ConstantVector<StringView>>()
+                       ->valueAt(0)
+                       .str();
+        }
+
+        constantStrings_.push_back(std::string(value.data(), value.size()));
+
+        i = j - 1;
+      } else {
+        constantStrings_.push_back(std::string());
       }
-      auto proxy = exec::StringWriter<>(resultFlatVector, row);
-      stringImpl::concatDynamic(proxy, concatInputs);
-      proxy.finalize();
-    });
-  }
+    }
 
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // varchar -> varchar
-    return {exec::FunctionSignatureBuilder()
-                .returnType("varchar")
-                .argumentType("varchar")
-                .variableArity()
-                .build()};
+    // Create StringViews for constant strings.
+    constantStringViews_.reserve(numArgs);
+    for (const auto& constantString : constantStrings_) {
+      constantStringViews_.push_back(
+          StringView(constantString.data(), constantString.size()));
+    }
   }
 
   bool propagateStringEncodingFromAllInputs() const override {
     return true;
   }
-};
 
-/**
- * strpos(string, substring) → bigint
- * Returns the starting position of the first instance of substring in string.
- * Positions start with 1. If not found, 0 is returned.
- *
- * strpos(string, substring, instance) → bigint
- * Returns the position of the N-th instance of substring in string. instance
- * must be a positive number. Positions start with 1. If not found, 0 is
- * returned.
- **/
-class StringPosition : public exec::VectorFunction {
- private:
-  /// A function that can be wrapped with ascii mode
-  template <bool isAscii>
-  struct ApplyInternal {
-    template <
-        typename StringReader,
-        typename SubStringReader,
-        typename InstanceReader>
-    static void apply(
-        StringReader stringReader,
-        SubStringReader subStringReader,
-        InstanceReader instanceReader,
-        const SelectivityVector& rows,
-        FlatVector<int64_t>* resultFlatVector) {
-      rows.applyToSelected([&](int row) {
-        auto result = stringImpl::stringPosition<isAscii>(
-            stringReader(row), subStringReader(row), instanceReader(row));
-        resultFlatVector->set(row, result);
-      });
-    }
-  };
-
- public:
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    exec::DecodedArgs decodedArgs(rows, args, context);
-    auto decodedStringInput = decodedArgs.at(0);
-    auto decodedSubStringInput = decodedArgs.at(1);
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, VARCHAR(), result);
+    auto flatResult = result->asFlatVector<StringView>();
 
-    auto stringArgStringEncoding = isAscii(args.at(0).get(), rows);
-    BaseVector::ensureWritable(rows, BIGINT(), context->pool(), result);
+    auto numArgs = argMapping_.size();
 
-    auto* resultFlatVector = (*result)->as<FlatVector<int64_t>>();
+    std::vector<exec::LocalDecodedVector> decodedArgs;
+    decodedArgs.reserve(numArgs);
 
-    auto stringReader = [&](const vector_size_t row) {
-      return decodedStringInput->valueAt<StringView>(row);
-    };
-
-    auto substringReader = [&](const vector_size_t row) {
-      return decodedSubStringInput->valueAt<StringView>(row);
-    };
-
-    // If there's no "instance" parameter.
-    if (args.size() <= 2) {
-      StringEncodingTemplateWrapper<ApplyInternal>::apply(
-          stringArgStringEncoding,
-          stringReader,
-          substringReader,
-          [](const vector_size_t) { return 1L; },
-          rows,
-          resultFlatVector);
-    }
-    // If there's an "instance" parameter, check if it's BIGINT or INTEGER.
-    else {
-      auto decodedInstanceInput = decodedArgs.at(2);
-
-      if (args[2]->typeKind() == TypeKind::BIGINT) {
-        auto instanceReader = [&](const vector_size_t row) {
-          return decodedInstanceInput->valueAt<int64_t>(row);
-        };
-        StringEncodingTemplateWrapper<ApplyInternal>::apply(
-            stringArgStringEncoding,
-            stringReader,
-            substringReader,
-            instanceReader,
-            rows,
-            resultFlatVector);
-      } else if (args[2]->typeKind() == TypeKind::INTEGER) {
-        auto instanceReader = [&](const vector_size_t row) {
-          return decodedInstanceInput->valueAt<int32_t>(row);
-        };
-        StringEncodingTemplateWrapper<ApplyInternal>::apply(
-            stringArgStringEncoding,
-            stringReader,
-            substringReader,
-            instanceReader,
-            rows,
-            resultFlatVector);
+    for (auto i = 0; i < numArgs; ++i) {
+      auto index = argMapping_[i];
+      if (constantStringViews_[i].empty()) {
+        decodedArgs.emplace_back(context, *args[index], rows);
       } else {
-        VELOX_UNREACHABLE();
+        // Do not decode constant inputs.
+        decodedArgs.emplace_back(context);
       }
     }
+
+    // Calculate the combined size of the result strings.
+    size_t totalResultBytes = 0;
+    rows.applyToSelected([&](int row) {
+      for (int i = 0; i < numArgs; i++) {
+        if (constantStringViews_[i].empty()) {
+          auto value = decodedArgs[i]->valueAt<StringView>(row);
+          totalResultBytes += value.size();
+        } else {
+          totalResultBytes += constantStringViews_[i].size();
+        }
+      }
+    });
+
+    // Allocate a string buffer.
+    auto buffer = flatResult->getBufferWithSpace(totalResultBytes);
+    auto rawBuffer = buffer->asMutable<char>();
+
+    size_t offset = 0;
+    rows.applyToSelected([&](int row) {
+      const char* start = rawBuffer + offset;
+
+      size_t combinedSize = 0;
+      for (int i = 0; i < numArgs; i++) {
+        StringView value;
+        if (constantStringViews_[i].empty()) {
+          value = decodedArgs[i]->valueAt<StringView>(row);
+        } else {
+          value = constantStringViews_[i];
+        }
+        auto size = value.size();
+        if (size > 0) {
+          memcpy(rawBuffer + offset, value.data(), size);
+          combinedSize += size;
+          offset += size;
+        }
+      }
+      flatResult->setNoCopy(row, StringView(start, combinedSize));
+    });
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {
-        // varchar, varchar -> bigint
-        exec::FunctionSignatureBuilder()
-            .returnType("bigint")
-            .argumentType("varchar")
-            .argumentType("varchar")
-            .build(),
-        // varchar, varchar, integer -> bigint
-        exec::FunctionSignatureBuilder()
-            .returnType("bigint")
-            .argumentType("varchar")
-            .argumentType("varchar")
-            .argumentType("integer")
-            .build(),
-        // varchar, varchar, bigint -> bigint
-        exec::FunctionSignatureBuilder()
-            .returnType("bigint")
-            .argumentType("varchar")
-            .argumentType("varchar")
-            .argumentType("bigint")
-            .build(),
-    };
+    // varchar, varchar,.. -> varchar
+    return {exec::FunctionSignatureBuilder()
+                .returnType("varchar")
+                .argumentType("varchar")
+                .argumentType("varchar")
+                .variableArity()
+                .build()};
   }
+
+  static exec::VectorFunctionMetadata metadata() {
+    return {true /* supportsFlattening */};
+  }
+
+ private:
+  std::vector<column_index_t> argMapping_;
+  std::vector<std::string> constantStrings_;
+  std::vector<StringView> constantStringViews_;
 };
 
 /**
@@ -362,8 +330,8 @@ class Replace : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     // Read string input
     exec::LocalDecodedVector decodedStringHolder(context, *args[0], rows);
     auto decodedStringInput = decodedStringHolder.get();
@@ -421,7 +389,7 @@ class Replace : public exec::VectorFunction {
 
     if (tryInplace) {
       if (prepareFlatResultsVector(result, rows, context, args.at(0))) {
-        auto* resultFlatVector = (*result)->as<FlatVector<StringView>>();
+        auto* resultFlatVector = result->as<FlatVector<StringView>>();
         applyInPlace(
             stringReader, searchReader, replaceReader, rows, resultFlatVector);
         return;
@@ -431,7 +399,7 @@ class Replace : public exec::VectorFunction {
     // Not in place path
     VectorPtr emptyVectorPtr;
     prepareFlatResultsVector(result, rows, context, emptyVectorPtr);
-    auto* resultFlatVector = (*result)->as<FlatVector<StringView>>();
+    auto* resultFlatVector = result->as<FlatVector<StringView>>();
 
     applyInternal(
         stringReader, searchReader, replaceReader, rows, resultFlatVector);
@@ -476,15 +444,13 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     UpperLowerTemplateFunction<true /*isLower*/>::signatures(),
     std::make_unique<UpperLowerTemplateFunction<true /*isLower*/>>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(
     udf_concat,
     ConcatFunction::signatures(),
-    std::make_unique<ConcatFunction>());
-
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_strpos,
-    StringPosition::signatures(),
-    std::make_unique<StringPosition>());
+    ConcatFunction::metadata(),
+    [](const auto& name, const auto& inputs) {
+      return std::make_unique<ConcatFunction>(name, inputs);
+    });
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_replace,

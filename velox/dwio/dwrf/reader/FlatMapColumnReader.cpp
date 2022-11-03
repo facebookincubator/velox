@@ -17,12 +17,12 @@
 #include "velox/dwio/dwrf/reader/FlatMapColumnReader.h"
 #include <folly/json.h>
 #include "velox/common/base/BitUtil.h"
-#include "velox/dwio/dwrf/reader/FlatMapHelper.h"
 
 namespace facebook::velox::dwrf {
 
 using dwio::common::TypeWithId;
 using memory::MemoryPool;
+using namespace dwio::common::flatmap;
 
 StringKeyBuffer::StringKeyBuffer(
     MemoryPool& pool,
@@ -55,68 +55,17 @@ KeyValue<T> extractKey(const proto::KeyInfo& info) {
 }
 
 template <>
-KeyValue<StringView> extractKey<StringView>(const proto::KeyInfo& info) {
+inline KeyValue<StringView> extractKey<StringView>(const proto::KeyInfo& info) {
   return KeyValue<StringView>(StringView(info.byteskey()));
 }
 
 template <typename T>
-KeyValue<T> parseKeyValue(std::string_view str) {
-  return KeyValue<T>(folly::to<T>(str));
-}
-
-template <>
-KeyValue<StringView> parseKeyValue<StringView>(std::string_view str) {
-  return KeyValue<StringView>(StringView(str));
-}
-
-template <typename T>
-struct KeyProjection {
-  KeyProjectionMode mode = KeyProjectionMode::ALLOW;
-  KeyValue<T> value;
-};
-
-template <typename T>
-KeyProjection<T> convertDynamic(const folly::dynamic& v) {
-  constexpr char reject_prefix = '!';
-  const auto str = v.asString();
-  const std::string_view view(str);
-  if (!view.empty() && view.front() == reject_prefix) {
-    return {
-        .mode = KeyProjectionMode::REJECT,
-        .value = parseKeyValue<T>(view.substr(1)),
-    };
-  } else {
-    return {
-        .mode = KeyProjectionMode::ALLOW,
-        .value = parseKeyValue<T>(view),
-    };
-  }
-}
-
-template <>
-KeyProjection<StringView> convertDynamic<StringView>(const folly::dynamic& v) {
-  return {
-      .mode = KeyProjectionMode::ALLOW,
-      .value = KeyValue<StringView>(StringView(v.asString()))};
-}
-
-template <typename T>
-void forEachConfiguredKey(
-    const std::function<void(KeyValue<T>&&)>& cb,
-    const std::shared_ptr<const TypeWithId>& requestedType,
-    const StripeStreams& stripe) {
-  // if keys filter is passed, translate them as the internal filter
-  const auto& cs = stripe.getColumnSelector();
+KeyPredicate<T> prepareKeyPredicate(
+    const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+    StripeStreams& stripe) {
+  auto& cs = stripe.getColumnSelector();
   const auto expr = cs.getNode(requestedType->id)->getNode().expression;
-  if (!expr.empty()) {
-    // JSON parse option?
-    const auto array = folly::parseJson(expr);
-    for (const auto& v : array) {
-      DWIO_ENSURE(!v.isNull(), "map key filter should not be null");
-      cb(convertDynamic<T>(v).value);
-    }
-    VLOG(1) << "[Flat-Map] key filters count: " << array.size();
-  }
+  return dwio::common::flatmap::prepareKeyPredicate<T>(expr);
 }
 
 template <typename T>
@@ -178,57 +127,6 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesFiltered(
           << dataType->id << ", keys=" << keyNodes.size()
           << ", streams=" << streams;
   return keyNodes;
-}
-
-template <typename T>
-struct ParsedKeyFilter {
-  KeyProjectionMode mode = KeyProjectionMode::ALLOW;
-  std::vector<KeyValue<T>> keys;
-};
-
-template <typename T>
-ParsedKeyFilter<T> parseKeyFilter(
-    const std::shared_ptr<const TypeWithId>& requestedType,
-    const StripeStreams& stripe) {
-  std::vector<KeyProjectionMode> modes;
-  std::vector<KeyValue<T>> keys;
-
-  auto& cs = stripe.getColumnSelector();
-  const auto expr = cs.getNode(requestedType->id)->getNode().expression;
-  if (!expr.empty()) {
-    // JSON parse option?
-    auto array = folly::parseJson(expr);
-    for (auto v : array) {
-      DWIO_ENSURE(!v.isNull(), "map key filter should not be null");
-      auto converted = convertDynamic<T>(v);
-      modes.push_back(converted.mode);
-      keys.push_back(std::move(converted.value));
-    }
-    VLOG(1) << "[Flat-Map] key filters count: " << array.size();
-  }
-
-  DWIO_ENSURE_EQ(modes.size(), keys.size());
-  // You cannot mix allow key and reject key.
-  DWIO_ENSURE(
-      modes.empty() ||
-      std::all_of(modes.begin(), modes.end(), [&modes](const auto& v) {
-        return v == modes.front();
-      }));
-
-  return {
-      .mode = modes.empty() ? KeyProjectionMode::ALLOW : modes.front(),
-      .keys = std::move(keys)};
-}
-
-template <typename T>
-KeyPredicate<T> prepareKeyPredicate(
-    const std::shared_ptr<const TypeWithId>& requestedType,
-    StripeStreams& stripe) {
-  auto parsedKeyFilter = parseKeyFilter<T>(requestedType, stripe);
-  return KeyPredicate<T>(
-      parsedKeyFilter.mode,
-      typename KeyPredicate<T>::Lookup(
-          parsedKeyFilter.keys.begin(), parsedKeyFilter.keys.end()));
 }
 
 template <typename T>
@@ -299,21 +197,21 @@ template <typename T>
 void FlatMapColumnReader<T>::initKeysVector(
     VectorPtr& vector,
     vector_size_t size) {
-  flatmap_helper::initializeFlatVector<T>(vector, memoryPool_, size, false);
-  vector->setSize(size);
+  initializeFlatVector<T>(vector, memoryPool_, size, false);
+  vector->resize(size, false);
 }
 
 template <>
 void FlatMapColumnReader<StringView>::initKeysVector(
     VectorPtr& vector,
     vector_size_t size) {
-  flatmap_helper::initializeFlatVector<StringView>(
+  initializeFlatVector<StringView>(
       vector,
       memoryPool_,
       size,
       false,
       std::vector<BufferPtr>{stringKeyBuffer_->getBuffer()});
-  vector->setSize(size);
+  vector->resize(size, false);
 }
 
 template <typename T>
@@ -386,8 +284,7 @@ void FlatMapColumnReader<T>::next(
     }
 
     initKeysVector(keysVector, totalChildren);
-    flatmap_helper::initializeVector(
-        valuesVector, mapValueType, memoryPool_, nodeBatches);
+    initializeVector(valuesVector, mapValueType, memoryPool_, nodeBatches);
 
     if (!returnFlatVector_) {
       for (auto batch : nodeBatches) {
@@ -417,7 +314,7 @@ void FlatMapColumnReader<T>::next(
         if (bulkInMapIter.hasValueAt(j)) {
           nodes[j]->fillKeysVector(keysVector, offset, stringKeyBuffer_.get());
           if (returnFlatVector_) {
-            flatmap_helper::copyOne(
+            copyOne(
                 mapValueType,
                 *valuesVector,
                 offset,
@@ -589,12 +486,7 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesForStructEncoding(
   // projected, the vector of key node will be created [3, 2, 1].
   // If the key is not found in the stripe, the key node will be nullptr.
 
-  auto parsedKeyFilter = parseKeyFilter<T>(requestedType, stripe);
-
-  const KeyPredicate<T> keyPredicate(
-      parsedKeyFilter.mode,
-      typename KeyPredicate<T>::Lookup(
-          parsedKeyFilter.keys.begin(), parsedKeyFilter.keys.end()));
+  auto keyPredicate = prepareKeyPredicate<T>(requestedType, stripe);
 
   auto availableKeyNodes = getKeyNodesFiltered<T>(
       [&keyPredicate](const auto& keyValue) { return keyPredicate(keyValue); },
@@ -657,6 +549,7 @@ void FlatMapStructEncodingColumnReader<T>::next(
   if (rowVector) {
     // Track children vectors in a local variable because readNulls may reset
     // the parent vector.
+    result->resize(numValues, false);
     children = rowVector->children();
     DWIO_ENSURE_EQ(children.size(), keyNodes_.size());
   }
@@ -690,7 +583,6 @@ void FlatMapStructEncodingColumnReader<T>::next(
   }
 
   if (result) {
-    result->setSize(numValues);
     result->setNullCount(nullCount);
   } else {
     result = std::make_shared<RowVector>(

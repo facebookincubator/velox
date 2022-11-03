@@ -22,7 +22,7 @@
 #include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/prestosql/aggregates/SingleValueAccumulator.h"
 
-namespace facebook::velox::aggregate {
+namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
@@ -40,9 +40,20 @@ struct MinMaxTrait<Timestamp> {
   }
 };
 
-template <typename T, typename ResultType>
-class MinMaxAggregate : public SimpleNumericAggregate<T, T, ResultType> {
-  using BaseAggregate = SimpleNumericAggregate<T, T, ResultType>;
+template <>
+struct MinMaxTrait<Date> {
+  static constexpr Date min() {
+    return Date(std::numeric_limits<int32_t>::min());
+  }
+
+  static constexpr Date max() {
+    return Date(std::numeric_limits<int32_t>::max());
+  }
+};
+
+template <typename T>
+class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
+  using BaseAggregate = SimpleNumericAggregate<T, T, T>;
 
  public:
   explicit MinMaxAggregate(TypePtr resultType) : BaseAggregate(resultType) {}
@@ -53,43 +64,40 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, ResultType> {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    BaseAggregate::doExtractValues(groups, numGroups, result, [&](char* group) {
-      return *BaseAggregate::Aggregate::template value<T>(group);
-    });
+    BaseAggregate::template doExtractValues<T>(
+        groups, numGroups, result, [&](char* group) {
+          return *BaseAggregate::Aggregate::template value<T>(group);
+        });
+  }
+
+  void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    BaseAggregate::template doExtractValues<T>(
+        groups, numGroups, result, [&](char* group) {
+          return *BaseAggregate::Aggregate::template value<T>(group);
+        });
   }
 };
 
+// Truncate timestamps to milliseconds precision.
 template <>
-void MinMaxAggregate<int64_t, Timestamp>::extractValues(
+void MinMaxAggregate<Timestamp>::extractValues(
     char** groups,
     int32_t numGroups,
     VectorPtr* result) {
   BaseAggregate::template doExtractValues<Timestamp>(
       groups, numGroups, result, [&](char* group) {
-        auto millis = *BaseAggregate::Aggregate::template value<int64_t>(group);
-        return Timestamp::fromMillis(millis);
-      });
-}
-
-template <>
-void MinMaxAggregate<Timestamp, int64_t>::extractValues(
-    char** groups,
-    int32_t numGroups,
-    VectorPtr* result) {
-  BaseAggregate::template doExtractValues<int64_t>(
-      groups, numGroups, result, [&](char* group) {
         auto ts = *BaseAggregate::Aggregate::template value<Timestamp>(group);
-        return ts.toMillis();
+        return Timestamp::fromMillis(ts.toMillis());
       });
 }
 
-template <typename T, typename ResultType>
-class MaxAggregate : public MinMaxAggregate<T, ResultType> {
-  using BaseAggregate = SimpleNumericAggregate<T, T, ResultType>;
+template <typename T>
+class MaxAggregate : public MinMaxAggregate<T> {
+  using BaseAggregate = SimpleNumericAggregate<T, T, T>;
 
  public:
-  explicit MaxAggregate(TypePtr resultType)
-      : MinMaxAggregate<T, ResultType>(resultType) {}
+  explicit MaxAggregate(TypePtr resultType) : MinMaxAggregate<T>(resultType) {}
 
   void initializeNewGroups(
       char** groups,
@@ -105,8 +113,7 @@ class MaxAggregate : public MinMaxAggregate<T, ResultType> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
-    if (mayPushdown && args[0]->isLazy() &&
-        std::is_same<T, ResultType>::value) {
+    if (mayPushdown && args[0]->isLazy()) {
       BaseAggregate::template pushdown<MinMaxHook<T, false>>(
           groups, rows, args[0]);
       return;
@@ -158,13 +165,12 @@ class MaxAggregate : public MinMaxAggregate<T, ResultType> {
   static constexpr T kInitialValue_{MinMaxTrait<T>::min()};
 };
 
-template <typename T, typename ResultType>
-class MinAggregate : public MinMaxAggregate<T, ResultType> {
-  using BaseAggregate = SimpleNumericAggregate<T, T, ResultType>;
+template <typename T>
+class MinAggregate : public MinMaxAggregate<T> {
+  using BaseAggregate = SimpleNumericAggregate<T, T, T>;
 
  public:
-  explicit MinAggregate(TypePtr resultType)
-      : MinMaxAggregate<T, ResultType>(resultType) {}
+  explicit MinAggregate(TypePtr resultType) : MinMaxAggregate<T>(resultType) {}
 
   void initializeNewGroups(
       char** groups,
@@ -180,8 +186,7 @@ class MinAggregate : public MinMaxAggregate<T, ResultType> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
-    if (mayPushdown && args[0]->isLazy() &&
-        std::is_same<T, ResultType>::value) {
+    if (mayPushdown && args[0]->isLazy()) {
       BaseAggregate::template pushdown<MinMaxHook<T, true>>(
           groups, rows, args[0]);
       return;
@@ -441,98 +446,9 @@ class NonNumericMinAggregate : public NonNumericMinMaxAggregateBase {
   }
 };
 
-template <typename TInput, template <typename U, typename V> class TNumeric>
-std::unique_ptr<exec::Aggregate> createMinMaxIntegralAggregate(
-    const std::string& name,
-    const TypePtr& resultType) {
-  switch (resultType->kind()) {
-    case TypeKind::TINYINT:
-      return std::make_unique<TNumeric<TInput, int8_t>>(resultType);
-    case TypeKind::SMALLINT:
-      return std::make_unique<TNumeric<TInput, int16_t>>(resultType);
-    case TypeKind::INTEGER:
-      return std::make_unique<TNumeric<TInput, int32_t>>(resultType);
-    case TypeKind::BIGINT:
-      return std::make_unique<TNumeric<TInput, int64_t>>(resultType);
-    case TypeKind::REAL:
-      return std::make_unique<TNumeric<TInput, float>>(resultType);
-    case TypeKind::DOUBLE:
-      return std::make_unique<TNumeric<TInput, double>>(resultType);
-    default:
-      VELOX_FAIL(
-          "Unknown result type for {} aggregation with integral input type: {}",
-          name,
-          resultType->toString());
-  }
-}
-
-template <typename TInput, template <typename U, typename V> class TNumeric>
-std::unique_ptr<exec::Aggregate> createMinMaxTimestampAggregate(
-    const std::string& name,
-    const TypePtr& resultType) {
-  switch (resultType->kind()) {
-    case TypeKind::BIGINT:
-      return std::make_unique<TNumeric<TInput, int64_t>>(resultType);
-    case TypeKind::TIMESTAMP:
-      return std::make_unique<TNumeric<TInput, Timestamp>>(resultType);
-    default:
-      VELOX_FAIL(
-          "Unknown result type for {} aggregation with timestamp input type: {}",
-          name,
-          resultType->toString());
-  }
-}
-
-template <template <typename U, typename V> class TNumeric>
-std::unique_ptr<exec::Aggregate> createMinMaxDateAggregate(
-    const std::string& name,
-    const TypePtr& resultType) {
-  switch (resultType->kind()) {
-    case TypeKind::DATE:
-      return std::make_unique<TNumeric<Date, Date>>(resultType);
-    default:
-      VELOX_FAIL(
-          "Unknown result type for {} aggregation with date input type: {}",
-          name,
-          resultType->toString());
-  }
-}
-
-template <typename TInput, template <typename U, typename V> class TNumeric>
-std::unique_ptr<exec::Aggregate> createMinMaxFloatingPointAggregate(
-    const std::string& name,
-    const TypePtr& resultType) {
-  switch (resultType->kind()) {
-    case TypeKind::REAL:
-      return std::make_unique<TNumeric<TInput, float>>(resultType);
-    case TypeKind::DOUBLE:
-      return std::make_unique<TNumeric<TInput, double>>(resultType);
-    case TypeKind::BIGINT:
-      return std::make_unique<TNumeric<TInput, int64_t>>(resultType);
-    default:
-      VELOX_FAIL(
-          "Unknown result type for {} aggregation with floating point input type: {}",
-          name,
-          resultType->toString());
-  }
-}
-
-template <
-    template <typename U, typename V>
-    class TNumeric,
-    typename TNonNumeric>
+template <template <typename T> class TNumeric, typename TNonNumeric>
 bool registerMinMaxAggregate(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-
-  for (const auto& inputType :
-       {"tinyint", "smallint", "integer", "bigint", "timestamp"}) {
-    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                             .returnType(inputType)
-                             .intermediateType("bigint")
-                             .argumentType(inputType)
-                             .build());
-  }
-
   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                            .typeVariable("T")
                            .returnType("T")
@@ -551,31 +467,21 @@ bool registerMinMaxAggregate(const std::string& name) {
         auto inputType = argTypes[0];
         switch (inputType->kind()) {
           case TypeKind::TINYINT:
-            return createMinMaxIntegralAggregate<int8_t, TNumeric>(
-                name, resultType);
+            return std::make_unique<TNumeric<int8_t>>(resultType);
           case TypeKind::SMALLINT:
-            return createMinMaxIntegralAggregate<int16_t, TNumeric>(
-                name, resultType);
+            return std::make_unique<TNumeric<int16_t>>(resultType);
           case TypeKind::INTEGER:
-            return createMinMaxIntegralAggregate<int32_t, TNumeric>(
-                name, resultType);
+            return std::make_unique<TNumeric<int32_t>>(resultType);
           case TypeKind::BIGINT:
-            if (resultType->isTimestamp()) {
-              return std::make_unique<TNumeric<int64_t, Timestamp>>(resultType);
-            }
-            return createMinMaxIntegralAggregate<int64_t, TNumeric>(
-                name, resultType);
+            return std::make_unique<TNumeric<int64_t>>(resultType);
           case TypeKind::REAL:
-            return createMinMaxFloatingPointAggregate<float, TNumeric>(
-                name, resultType);
+            return std::make_unique<TNumeric<float>>(resultType);
           case TypeKind::DOUBLE:
-            return createMinMaxFloatingPointAggregate<double, TNumeric>(
-                name, resultType);
+            return std::make_unique<TNumeric<double>>(resultType);
           case TypeKind::TIMESTAMP:
-            return createMinMaxTimestampAggregate<Timestamp, TNumeric>(
-                name, resultType);
+            return std::make_unique<TNumeric<Timestamp>>(resultType);
           case TypeKind::DATE:
-            return createMinMaxDateAggregate<TNumeric>(name, resultType);
+            return std::make_unique<TNumeric<Date>>(resultType);
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:
           case TypeKind::MAP:
@@ -591,10 +497,11 @@ bool registerMinMaxAggregate(const std::string& name) {
       });
 }
 
-static bool FB_ANONYMOUS_VARIABLE(g_AggregateFunction) =
-    registerMinMaxAggregate<MinAggregate, NonNumericMinAggregate>(kMin);
-static bool FB_ANONYMOUS_VARIABLE(g_AggregateFunction) =
-    registerMinMaxAggregate<MaxAggregate, NonNumericMaxAggregate>(kMax);
-
 } // namespace
-} // namespace facebook::velox::aggregate
+
+void registerMinMaxAggregates() {
+  registerMinMaxAggregate<MinAggregate, NonNumericMinAggregate>(kMin);
+  registerMinMaxAggregate<MaxAggregate, NonNumericMaxAggregate>(kMax);
+}
+
+} // namespace facebook::velox::aggregate::prestosql

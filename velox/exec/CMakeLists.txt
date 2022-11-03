@@ -27,10 +27,9 @@ add_library(
   GroupingSet.cpp
   HashAggregation.cpp
   HashBuild.cpp
+  HashJoinBridge.cpp
   HashPartitionFunction.cpp
   HashProbe.cpp
-  Spill.cpp
-  Spiller.cpp
   HashTable.cpp
   JoinBridge.cpp
   Limit.cpp
@@ -46,6 +45,8 @@ add_library(
   PartitionedOutputBufferManager.cpp
   PlanNodeStats.cpp
   RowContainer.cpp
+  Spill.cpp
+  SpillOperatorGroup.cpp
   Spiller.cpp
   StreamingAggregation.cpp
   TableScan.cpp
@@ -55,6 +56,9 @@ add_library(
   Unnest.cpp
   Values.cpp
   VectorHasher.cpp
+  Window.cpp
+  WindowFunction.cpp
+  WindowPartition.cpp
   AssignUniqueId.cpp)
 
 target_link_libraries(
@@ -65,11 +69,15 @@ target_link_libraries(
   velox_connector
   velox_time
   velox_codegen
-  velox_common_base)
+  velox_common_base
+  velox_test_util)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
-  add_subdirectory(benchmarks)
 elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_subdirectory(benchmarks)
 endif()

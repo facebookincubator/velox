@@ -126,6 +126,23 @@ Note that,
   * On ARM
     * Neon
 
+### Building Velox with docker-compose
+
+If you don't want to install the system dependencies required to build Velox,
+you can also build and run tests for Velox on a docker container
+using [docker-compose](https://docs.docker.com/compose/).
+Use the following commands:
+
+```shell
+$ docker-compose build ubuntu-cpp
+$ docker-compose run --rm ubuntu-cpp
+```
+If you want to increase or decrease the number of threads used when building Velox
+you can override the `NUM_THREADS` environment variable by doing:
+```shell
+$ docker-compose run -e NUM_THREADS=<NUM_THREADS_TO_USE> --rm ubuntu-cpp
+```
+
 ## Contributing
 
 Check our [contributing guide](CONTRIBUTING.md) to learn about how to

@@ -28,6 +28,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/type/StringView.h"
+#include "velox/type/UnscaledShortDecimal.h"
 
 namespace facebook::velox::common {
 
@@ -128,6 +129,10 @@ class Filter {
 
   virtual bool testInt64(int64_t /* unused */) const {
     VELOX_UNSUPPORTED("{}: testInt64() is not supported.", toString());
+  }
+
+  virtual bool testInt128(__int128_t /* unused */) const {
+    VELOX_UNSUPPORTED("{}: testInt128() is not supported.", toString());
   }
 
   virtual bool testDouble(double /* unused */) const {
@@ -319,6 +324,10 @@ class AlwaysTrue final : public Filter {
   }
 
   bool testInt64(int64_t /* unused */) const final {
+    return true;
+  }
+
+  bool testInt128(__int128_t /* unused */) const final {
     return true;
   }
 
@@ -984,7 +993,11 @@ class AbstractRange : public Filter {
         lowerUnbounded_(lowerUnbounded),
         lowerExclusive_(lowerExclusive),
         upperUnbounded_(upperUnbounded),
-        upperExclusive_(upperExclusive) {}
+        upperExclusive_(upperExclusive) {
+    VELOX_CHECK(
+        !lowerUnbounded_ || !upperUnbounded_,
+        "A range filter must have  a lower or upper  bound");
+  }
 
  protected:
   const bool lowerUnbounded_;
@@ -1025,8 +1038,8 @@ class FloatingPointRange final : public AbstractRange {
             upperUnbounded,
             upperExclusive,
             nullAllowed,
-            (std::is_same<T, double>::value) ? FilterKind::kDoubleRange
-                                             : FilterKind::kFloatRange),
+            (std::is_same_v<T, double>) ? FilterKind::kDoubleRange
+                                        : FilterKind::kFloatRange),
         lower_(lower),
         upper_(upper) {
     VELOX_CHECK(lowerUnbounded || !std::isnan(lower_));
@@ -1040,8 +1053,8 @@ class FloatingPointRange final : public AbstractRange {
             other.upperUnbounded_,
             other.upperExclusive_,
             nullAllowed,
-            (std::is_same<T, double>::value) ? FilterKind::kDoubleRange
-                                             : FilterKind::kFloatRange),
+            (std::is_same_v<T, double>) ? FilterKind::kDoubleRange
+                                        : FilterKind::kFloatRange),
         lower_(other.lower_),
         upper_(other.upper_) {
     VELOX_CHECK(lowerUnbounded_ || !std::isnan(lower_));
@@ -1662,14 +1675,19 @@ class MultiRange final : public Filter {
 // Helper for applying filters to different types
 template <typename TFilter, typename T>
 static inline bool applyFilter(TFilter& filter, T value) {
-  if (std::is_same<T, int8_t>::value || std::is_same<T, int16_t>::value ||
-      std::is_same<T, int32_t>::value || std::is_same<T, int64_t>::value) {
+  if constexpr (std::is_same_v<T, __int128_t>) {
+    return filter.testInt128(value);
+  } else if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
+    return filter.testInt64(value.unscaledValue());
+  } else if constexpr (
+      std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> ||
+      std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t>) {
     return filter.testInt64(value);
-  } else if (std::is_same<T, float>::value) {
+  } else if constexpr (std::is_same_v<T, float>) {
     return filter.testFloat(value);
-  } else if (std::is_same<T, double>::value) {
+  } else if constexpr (std::is_same_v<T, double>) {
     return filter.testDouble(value);
-  } else if (std::is_same<T, bool>::value) {
+  } else if constexpr (std::is_same_v<T, bool>) {
     return filter.testBool(value);
   } else {
     VELOX_CHECK(false, "Bad argument type to filter");

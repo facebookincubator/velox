@@ -24,21 +24,31 @@ class ToUtf8Function : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    // Single-argument function, hence, input is flat.
-    auto input = args[0]->asFlatVector<StringView>();
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    VectorPtr localResult;
 
-    auto stringBuffers = input->stringBuffers();
-    auto localResult = std::make_shared<FlatVector<StringView>>(
-        context->pool(),
-        VARBINARY(),
-        input->nulls(),
-        rows.end(),
-        input->values(),
-        std::move(stringBuffers));
+    // Input can be constant or flat.
+    const auto& arg = args[0];
+    if (arg->isConstantEncoding()) {
+      auto value = arg->as<ConstantVector<StringView>>()->valueAt(0);
+      localResult = std::make_shared<ConstantVector<StringView>>(
+          context.pool(), rows.end(), false, VARBINARY(), std::move(value));
+    } else {
+      auto flatInput = arg->asFlatVector<StringView>();
 
-    context->moveOrCopyResult(localResult, rows, result);
+      auto stringBuffers = flatInput->stringBuffers();
+      VELOX_CHECK_LE(rows.end(), flatInput->size());
+      localResult = std::make_shared<FlatVector<StringView>>(
+          context.pool(),
+          VARBINARY(),
+          nullptr,
+          rows.end(),
+          flatInput->values(),
+          std::move(stringBuffers));
+    }
+
+    context.moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

@@ -73,8 +73,8 @@ class SortOrder {
   }
 
  private:
-  const bool ascending_;
-  const bool nullsFirst_;
+  bool ascending_;
+  bool nullsFirst_;
 };
 
 extern const SortOrder kAscNullsFirst;
@@ -287,7 +287,9 @@ class ProjectNode : public PlanNode {
     return projections_;
   }
 
-  std::string_view name() const override {
+  // This function is virtual to allow customized projections to inherit from
+  // this class without re-implementing the other functions.
+  virtual std::string_view name() const override {
     return "Project";
   }
 
@@ -727,8 +729,7 @@ using PartitionFunctionFactory =
 
 /// Partitions data using specified partition function. The number of partitions
 /// is determined by the parallelism of the upstream pipeline. Can be used to
-/// gather data from multiple sources. The order of columns in the output may be
-/// different from input.
+/// gather data from multiple sources.
 class LocalPartitionNode : public PlanNode {
  public:
   enum class Type {
@@ -742,35 +743,35 @@ class LocalPartitionNode : public PlanNode {
       const PlanNodeId& id,
       Type type,
       PartitionFunctionFactory partitionFunctionFactory,
-      RowTypePtr outputType,
-      std::vector<PlanNodePtr> sources,
-      RowTypePtr inputTypeFromSource)
+      std::vector<PlanNodePtr> sources)
       : PlanNode(id),
         type_{type},
         sources_{std::move(sources)},
-        partitionFunctionFactory_{std::move(partitionFunctionFactory)},
-        outputType_{std::move(outputType)},
-        inputTypeFromSource_{std::move(inputTypeFromSource)} {
+        partitionFunctionFactory_{std::move(partitionFunctionFactory)} {
     VELOX_CHECK_GT(
         sources_.size(),
         0,
         "Local repartitioning node requires at least one source");
+
+    for (auto i = 1; i < sources_.size(); ++i) {
+      VELOX_CHECK(
+          *sources_[i]->outputType() == *sources_[0]->outputType(),
+          "All sources of the LocalPartitionedNode must have the same output type: {} vs. {}.",
+          sources_[i]->outputType()->toString(),
+          sources_[0]->outputType()->toString());
+    }
   }
 
   static std::shared_ptr<LocalPartitionNode> gather(
       const PlanNodeId& id,
-      RowTypePtr outputType,
-      std::vector<PlanNodePtr> sources,
-      RowTypePtr inputTypeFromSource) {
+      std::vector<PlanNodePtr> sources) {
     return std::make_shared<LocalPartitionNode>(
         id,
         Type::kGather,
         [](auto /*numPartitions*/) -> std::unique_ptr<PartitionFunction> {
           VELOX_UNREACHABLE();
         },
-        std::move(outputType),
-        std::move(sources),
-        std::move(inputTypeFromSource));
+        std::move(sources));
   }
 
   Type type() const {
@@ -778,15 +779,11 @@ class LocalPartitionNode : public PlanNode {
   }
 
   const RowTypePtr& outputType() const override {
-    return outputType_;
+    return sources_[0]->outputType();
   }
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
-  }
-
-  const RowTypePtr& inputTypeFromSource() const {
-    return inputTypeFromSource_;
   }
 
   const PartitionFunctionFactory& partitionFunctionFactory() const {
@@ -803,13 +800,6 @@ class LocalPartitionNode : public PlanNode {
   const Type type_;
   const std::vector<PlanNodePtr> sources_;
   const PartitionFunctionFactory partitionFunctionFactory_;
-  const RowTypePtr outputType_;
-  /// Input layout from source, describing how data should be fed to our node.
-  /// For all sources the layout should be the same, so we store only one (we
-  /// use the 1st source for that).
-  /// This layout and the output layout for the 1st source would be used to
-  /// created the column mapping in the operator.
-  const RowTypePtr inputTypeFromSource_;
 };
 
 class PartitionedOutputNode : public PlanNode {
@@ -931,7 +921,61 @@ class PartitionedOutputNode : public PlanNode {
   const RowTypePtr outputType_;
 };
 
-enum class JoinType { kInner, kLeft, kRight, kFull, kLeftSemi, kAnti };
+enum class JoinType {
+  // For each row on the left, find all matching rows on the right and return
+  // all combinations.
+  kInner,
+  // For each row on the left, find all matching rows on the right and return
+  // all combinations. In addition, return all rows from the left that have no
+  // match on the right with right-side columns filled with nulls.
+  kLeft,
+  // Opposite of kLeft. For each row on the right, find all matching rows on the
+  // left and return all combinations. In addition, return all rows from the
+  // right that have no match on the left with left-side columns filled with
+  // nulls.
+  kRight,
+  // A "union" of kLeft and kRight. For each row on the left, find all matching
+  // rows on the right and return all combinations. In addition, return all rows
+  // from the left that have no
+  // match on the right with right-side columns filled with nulls. Also, return
+  // all rows from the
+  // right that have no match on the left with left-side columns filled with
+  // nulls.
+  kFull,
+  kLeftSemi, // TODO Remove after updating Prestissimo.
+  // Return a subset of rows from the left side which have a match on the right
+  // side. For this join type, cardinality of the output is less than or equal
+  // to the cardinality of the left side.
+  kLeftSemiFilter,
+  // Return each row from the left side with a boolean flag indicating whether
+  // there exists a match on the right side. For this join type, cardinality of
+  // the output equals the cardinality of the left side.
+  kLeftSemiProject,
+  kRightSemi, // TODO Remove after updating Prestissimo.
+  // Opposite of kLeftSemiFilter. Return a subset of rows from the right side
+  // which have a match on the left side. For this join type, cardinality of the
+  // output is less than or equal to the cardinality of the right side.
+  kRightSemiFilter,
+  // Opposite of kLeftSemiProject. Return each row from the right side with a
+  // boolean flag indicating whether there exists a match on the left side. For
+  // this join type, cardinality of the output equals the cardinality of the
+  // right side.
+  kRightSemiProject,
+  // Return each row from the left side which has no match on the right side.
+  // The handling of the rows with nulls in the join key follows NOT IN
+  // semantic:
+  // (1) return empty result if the right side contains a record with a null in
+  // the join key;
+  // (2) return left-side row with null in the join key only when
+  // the right side is empty.
+  kNullAwareAnti,
+  // Return each row from the left side which has no match on the right side.
+  // The handling of the rows with nulls in the join key follows NOT EXISTS
+  // semantic:
+  // (1) ignore right-side rows with nulls in the join keys;
+  // (2) unconditionally return left side rows with nulls in the join keys.
+  kAnti,
+};
 
 inline const char* joinTypeName(JoinType joinType) {
   switch (joinType) {
@@ -944,7 +988,17 @@ inline const char* joinTypeName(JoinType joinType) {
     case JoinType::kFull:
       return "FULL";
     case JoinType::kLeftSemi:
-      return "LEFT SEMI";
+    case JoinType::kLeftSemiFilter:
+      return "LEFT SEMI (FILTER)";
+    case JoinType::kRightSemi:
+    case JoinType::kRightSemiFilter:
+      return "RIGHT SEMI (FILTER)";
+    case JoinType::kLeftSemiProject:
+      return "LEFT SEMI (PROJECT)";
+    case JoinType::kRightSemiProject:
+      return "RIGHT SEMI (PROJECT)";
+    case JoinType::kNullAwareAnti:
+      return "NULL-AWARE ANTI";
     case JoinType::kAnti:
       return "ANTI";
   }
@@ -967,12 +1021,34 @@ inline bool isFullJoin(JoinType joinType) {
   return joinType == JoinType::kFull;
 }
 
-inline bool isLeftSemiJoin(JoinType joinType) {
-  return joinType == JoinType::kLeftSemi;
+inline bool isLeftSemiFilterJoin(JoinType joinType) {
+  return joinType == JoinType::kLeftSemiFilter ||
+      joinType == JoinType::kLeftSemi;
+}
+
+inline bool isLeftSemiProjectJoin(JoinType joinType) {
+  return joinType == JoinType::kLeftSemiProject;
+}
+
+inline bool isRightSemiFilterJoin(JoinType joinType) {
+  return joinType == JoinType::kRightSemiFilter ||
+      joinType == JoinType::kRightSemi;
+}
+
+inline bool isRightSemiProjectJoin(JoinType joinType) {
+  return joinType == JoinType::kRightSemiProject;
+}
+
+inline bool isNullAwareAntiJoin(JoinType joinType) {
+  return joinType == JoinType::kNullAwareAnti;
 }
 
 inline bool isAntiJoin(JoinType joinType) {
   return joinType == JoinType::kAnti;
+}
+
+inline bool isAntiJoins(JoinType joinType) {
+  return isAntiJoin(joinType) || isNullAwareAntiJoin(joinType);
 }
 
 /// Abstract class representing inner/outer/semi/anti joins. Used as a base
@@ -1017,8 +1093,26 @@ class AbstractJoinNode : public PlanNode {
     return joinType_ == JoinType::kFull;
   }
 
-  bool isLeftSemiJoin() const {
-    return joinType_ == JoinType::kLeftSemi;
+  bool isLeftSemiFilterJoin() const {
+    return joinType_ == JoinType::kLeftSemiFilter ||
+        joinType_ == JoinType::kLeftSemi;
+  }
+
+  bool isLeftSemiProjectJoin() const {
+    return joinType_ == JoinType::kLeftSemiProject;
+  }
+
+  bool isRightSemiFilterJoin() const {
+    return joinType_ == JoinType::kRightSemiFilter ||
+        joinType_ == JoinType::kRightSemi;
+  }
+
+  bool isRightSemiProjectJoin() const {
+    return joinType_ == JoinType::kRightSemiProject;
+  }
+
+  bool isNullAwareAntiJoin() const {
+    return joinType_ == JoinType::kNullAwareAnti;
   }
 
   bool isAntiJoin() const {
@@ -1490,7 +1584,7 @@ class WindowNode : public PlanNode {
     bool ignoreNulls;
   };
 
-  /// @windowColumnNames parameter specifies the output column
+  /// @param windowColumnNames specifies the output column
   /// names for each window function column. So
   /// windowColumnNames.length() = windowFunctions.length().
   WindowNode(

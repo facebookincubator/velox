@@ -15,10 +15,38 @@
  */
 
 #include "velox/dwio/dwrf/writer/FlatMapColumnWriter.h"
+#include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::dwrf {
+
+namespace {
+
+template <typename T>
+T getKey(const std::string& val) {
+  try {
+    return folly::to<T>(val);
+  } catch (const folly::ConversionError& e) {
+    DWIO_RAISE(e.what());
+  }
+}
+
+template <>
+StringView getKey<StringView>(const std::string& val) {
+  return StringView(val);
+}
+
+template <typename KeyType>
+std::vector<KeyType> parseKeys(const std::vector<std::string>& stringKeys) {
+  std::vector<KeyType> keys(stringKeys.size());
+  for (auto i = 0; i < stringKeys.size(); i++) {
+    keys[i] = getKey<KeyType>(stringKeys[i]);
+  }
+  return keys;
+}
+
+} // namespace
 
 using dwio::common::TypeWithId;
 using proto::KeyInfo;
@@ -39,6 +67,17 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
               StatisticsBuilder::create(*keyType_.type, options).release()));
   valueFileStatsBuilder_ = ValueStatisticsBuilder::create(context_, valueType_);
   reset();
+  const auto structColumnKeys =
+      context.getConfig(Config::MAP_FLAT_COLS_STRUCT_KEYS);
+  if (!structColumnKeys.empty()) {
+    if constexpr (std::is_same_v<KeyType, StringView>) {
+      const auto& keys = structColumnKeys[type.column];
+      std::copy(keys.cbegin(), keys.cend(), std::back_inserter(stringKeys_));
+      structKeys_ = parseKeys<KeyType>(stringKeys_);
+    } else {
+      structKeys_ = parseKeys<KeyType>(structColumnKeys[type.column]);
+    }
+  }
 }
 
 template <TypeKind K>
@@ -263,7 +302,8 @@ class Decoded {
 };
 
 template <typename Map, typename MapOp>
-uint64_t iterateMaps(const Ranges& ranges, const Map& map, const MapOp& mapOp) {
+uint64_t
+iterateMaps(const common::Ranges& ranges, const Map& map, const MapOp& mapOp) {
   uint64_t nullCount = 0;
   if (map.hasNulls()) {
     for (auto& index : ranges) {
@@ -286,13 +326,32 @@ uint64_t iterateMaps(const Ranges& ranges, const Map& map, const MapOp& mapOp) {
 template <TypeKind K>
 uint64_t FlatMapColumnWriter<K>::write(
     const VectorPtr& slice,
-    const Ranges& ranges) {
+    const common::Ranges& ranges) {
+  switch (slice->typeKind()) {
+    case TypeKind::MAP:
+      return writeMap(slice, ranges);
+    case TypeKind::ROW:
+      if (!structKeys_.empty()) {
+        return writeRow(slice, ranges);
+      }
+      DWIO_RAISE(
+          "Writing RowVector as flatmap with empty keys. Keys must be specified on writer creation.");
+    default:
+      DWIO_RAISE(
+          "Unexpected vector type. Should be MapVector or RowVector (can be encoded)");
+  }
+}
+
+template <TypeKind K>
+uint64_t FlatMapColumnWriter<K>::writeMap(
+    const VectorPtr& slice,
+    const common::Ranges& ranges) {
   // Define variables captured and used by below lambdas.
   const vector_size_t* offsets;
   const vector_size_t* lengths;
   uint64_t rawSize = 0;
   uint64_t mapCount = 0;
-  Ranges keyRanges;
+  common::Ranges keyRanges;
 
   // Lambda that iterates keys of a map and records the offsets to write to
   // particular value node.
@@ -380,6 +439,76 @@ uint64_t FlatMapColumnWriter<K>::write(
   }
   rowsInCurrentStride_ += mapCount;
   indexStatsBuilder_->increaseValueCount(mapCount);
+  indexStatsBuilder_->increaseRawSize(rawSize);
+  return rawSize;
+}
+
+template <typename Row>
+common::Ranges getNonNullRanges(const common::Ranges& ranges, const Row& row) {
+  common::Ranges nonNullRanges;
+  if (row.hasNulls()) {
+    for (auto& index : ranges) {
+      if (!row.isNullAt(index)) {
+        nonNullRanges.add(row.index(index), row.index(index) + 1);
+      }
+    }
+  } else {
+    nonNullRanges = ranges;
+  }
+  return nonNullRanges;
+}
+
+template <TypeKind K>
+uint64_t FlatMapColumnWriter<K>::writeRow(
+    const VectorPtr& slice,
+    const common::Ranges& ranges) {
+  uint64_t rawSize = 0;
+  common::Ranges nonNullRanges;
+
+  const RowVector* rowSlice = slice->as<RowVector>();
+  if (rowSlice) {
+    // Row is flat
+    writeNulls(slice, ranges);
+    nonNullRanges = getNonNullRanges(ranges, Flat{slice});
+  } else {
+    // Row is encoded. Decode.
+    auto& decodedRow = decode(slice, ranges).get();
+    writeNulls(decodedRow, ranges);
+    rowSlice = decodedRow.base()->template as<RowVector>();
+    // may verify in write() before entering writeRow() -- still needed?
+    DWIO_ENSURE(rowSlice, "unexpected vector type");
+    nonNullRanges = getNonNullRanges(ranges, Decoded{decodedRow});
+  }
+  DWIO_ENSURE(
+      structKeys_.size() == rowSlice->childrenSize(),
+      "Writing RowVector as flatmap with mismatched number of keys and columns.");
+
+  BufferPtr inMapBuffer = AlignedBuffer::allocate<char>(
+      nonNullRanges.size(),
+      &context_.getMemoryPool(MemoryUsageCategory::GENERAL),
+      1);
+
+  for (size_t i = 0; i < structKeys_.size(); i++) {
+    // looping each non-null row for now; no batch updateKeyStatistics()
+    for (size_t j = 0; j < nonNullRanges.size(); j++) {
+      auto keySize =
+          updateKeyStatistics<K>(*keyFileStatsBuilder_, structKeys_[i]);
+      keyFileStatsBuilder_->increaseRawSize(keySize);
+      rawSize += keySize;
+    }
+
+    ValueWriter& valueWriter =
+        getValueWriter(structKeys_[i], nonNullRanges.size());
+    valueWriter.writeBuffers(rowSlice->childAt(i), nonNullRanges, inMapBuffer);
+  }
+
+  size_t numNullRows = ranges.size() - nonNullRanges.size();
+  if (numNullRows > 0) {
+    indexStatsBuilder_->setHasNull();
+    rawSize += numNullRows * NULL_SIZE;
+  }
+  rowsInCurrentStride_ += nonNullRanges.size();
+  indexStatsBuilder_->increaseValueCount(nonNullRanges.size());
   indexStatsBuilder_->increaseRawSize(rawSize);
   return rawSize;
 }

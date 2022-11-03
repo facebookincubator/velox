@@ -17,7 +17,7 @@
 #include "velox/substrait/tests/JsonToProtoConverter.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/dwio/dwrf/test/utils/DataFiles.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -95,9 +95,9 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
            "l_tax",
            "l_returnflag",
            "l_linestatus",
-           "l_shipdate_new",
-           "l_commitdate_new",
-           "l_receiptdate_new",
+           "l_shipdate",
+           "l_commitdate",
+           "l_receiptdate",
            "l_shipinstruct",
            "l_shipmode",
            "l_comment"},
@@ -268,15 +268,16 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
 
   // Find and deserialize Substrait plan json file.
   std::string planPath =
-      getDataFilePath("velox/substrait/tests", "data/sub.json");
+      getDataFilePath("velox/substrait/tests", "data/q6_first_stage.json");
 
-  // Read sub.json and resume the Substrait plan.
+  // Read q6_first_stage.json and resume the Substrait plan.
   ::substrait::Plan substraitPlan;
   JsonToProtoConverter::readFromFile(planPath, substraitPlan);
 
   // Convert to Velox PlanNode.
-  facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter;
-  auto planNode = planConverter.toVeloxPlan(substraitPlan, pool_.get());
+  facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter(
+      pool_.get());
+  auto planNode = planConverter.toVeloxPlan(substraitPlan);
 
   auto expectedResult = makeRowVector({
       makeFlatVector<double>(1, [](auto /*row*/) { return 13613.1921; }),

@@ -25,7 +25,7 @@ namespace facebook::velox {
 
 /**
  * Provides a vector type that enacts run-length encoding for vectors that have
- * repeated runs of the same value.  For example, this would be usefor for
+ * repeated runs of the same value.  For example, this would be useful for
  * {foo, foo, foo, foo, bar, bar, bar, foo, foo, foo, foo, foo} as it can be
  * reduced to {foo, bar, foo} along with run length information of {4, 3, 5}.
  *
@@ -35,9 +35,9 @@ template <typename T>
 class SequenceVector : public SimpleVector<T> {
  public:
   static constexpr bool can_simd =
-      (std::is_same<T, int64_t>::value || std::is_same<T, int32_t>::value ||
-       std::is_same<T, int16_t>::value || std::is_same<T, int8_t>::value ||
-       std::is_same<T, size_t>::value);
+      (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
+       std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
+       std::is_same_v<T, size_t>);
 
   SequenceVector(
       velox::memory::MemoryPool* pool,
@@ -60,17 +60,6 @@ class SequenceVector : public SimpleVector<T> {
 
   bool mayHaveNullsRecursive() const override {
     return sequenceValues_->mayHaveNullsRecursive();
-  }
-
-  const uint64_t* flatRawNulls(const SelectivityVector& rows) override {
-    if (flatNullsBuffer_) {
-      return flatNullsBuffer_->as<uint64_t>();
-    }
-    loadedVector();
-    if (!sequenceValues_->mayHaveNulls()) {
-      return nullptr;
-    }
-    return computeFlatNulls(rows);
   }
 
   bool isNullAtFast(vector_size_t idx) const;
@@ -173,17 +162,33 @@ class SequenceVector : public SimpleVector<T> {
     throw std::runtime_error("addNulls not supported");
   }
 
+  std::string toString(vector_size_t index) const override {
+    if (BaseVector::isNullAt(index)) {
+      return "null";
+    }
+    auto inner = offsetOfIndex(index);
+    std::stringstream out;
+    out << "[" << index << "->" << inner << "] "
+        << sequenceValues_->toString(inner);
+    return out.str();
+  }
+
+  VectorPtr slice(vector_size_t, vector_size_t) const override {
+    VELOX_NYI();
+  }
+
+  bool isNullsWritable() const override {
+    return false;
+  }
+
  private:
   // Prepares for use after construction.
   void setInternalState();
-
-  const uint64_t* computeFlatNulls(const SelectivityVector& rows);
 
   bool checkLoadRange(size_t idx, size_t count) const;
 
   std::shared_ptr<BaseVector> sequenceValues_;
   SimpleVector<T>* scalarSequenceValues_ = nullptr;
-  BufferPtr flatNullsBuffer_;
   BufferPtr sequenceLengths_;
   // Caches 'sequenceLengths_->as<vector_size_t>()'
   const vector_size_t* lengths_ = nullptr;

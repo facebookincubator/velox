@@ -22,16 +22,18 @@ add_library(
   Decryption.cpp
   Encryption.cpp
   EncryptionSpecification.cpp
+  FileMetadata.cpp
   IntEncoder.cpp
   OutputStream.cpp
   PagedInputStream.cpp
   PagedOutputStream.cpp
   RLEv1.cpp
   RLEv2.cpp
-  Range.cpp
   Statistics.cpp
   wrap/dwrf-proto-wrapper.cpp
   wrap/orc-proto-wrapper.cpp)
+
+add_dependencies(velox_dwio_dwrf_common velox_dwio_dwrf_proto)
 
 target_link_libraries(
   velox_dwio_dwrf_common velox_common_base velox_dwio_common

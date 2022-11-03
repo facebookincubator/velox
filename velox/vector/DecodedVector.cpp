@@ -48,9 +48,9 @@ const std::vector<vector_size_t>& DecodedVector::zeroIndices() {
 
 void DecodedVector::decode(
     const BaseVector& vector,
-    const SelectivityVector& rows,
+    const SelectivityVector* rows,
     bool loadLazy) {
-  reset(rows.end());
+  reset(end(vector.size(), rows));
   loadLazy_ = loadLazy;
   if (loadLazy_ && (isLazyNotLoaded(vector) || vector.isLazy())) {
     decode(*vector.loadedVector(), rows);
@@ -93,10 +93,13 @@ void DecodedVector::decode(
 
 void DecodedVector::makeIndices(
     const BaseVector& vector,
-    const SelectivityVector& rows,
+    const SelectivityVector* rows,
     int32_t numLevels) {
-  VELOX_CHECK_LE(rows.end(), vector.size());
-  reset(rows.end());
+  if (rows) {
+    VELOX_CHECK_LE(rows->end(), vector.size());
+  }
+
+  reset(end(vector.size(), rows));
   combineWrappers(&vector, rows, numLevels);
 }
 
@@ -105,6 +108,7 @@ void DecodedVector::reset(vector_size_t size) {
   indices_ = nullptr;
   data_ = nullptr;
   nulls_ = nullptr;
+  allNulls_.reset();
   baseVector_ = nullptr;
   mayHaveNulls_ = false;
   hasExtraNulls_ = false;
@@ -126,7 +130,7 @@ void DecodedVector::copyNulls(vector_size_t size) {
 
 void DecodedVector::combineWrappers(
     const BaseVector* vector,
-    const SelectivityVector& rows,
+    const SelectivityVector* rows,
     int numLevels) {
   auto topEncoding = vector->encoding();
   BaseVector* values = nullptr;
@@ -139,17 +143,19 @@ void DecodedVector::combineWrappers(
       mayHaveNulls_ = true;
     }
   } else if (topEncoding == VectorEncoding::Simple::SEQUENCE) {
-    copiedIndices_.resize(rows.end());
+    copiedIndices_.resize(end(rows));
     indices_ = &copiedIndices_[0];
     auto sizes = vector->wrapInfo()->as<vector_size_t>();
     vector_size_t lastBegin = 0;
     vector_size_t lastEnd = sizes[0];
     vector_size_t lastIndex = 0;
     values = vector->valueVector().get();
-    rows.applyToSelected([&](vector_size_t row) {
+
+    applyToRows(rows, [&](vector_size_t row) {
       copiedIndices_[row] =
           offsetOfIndex(sizes, row, &lastBegin, &lastEnd, &lastIndex);
     });
+
   } else {
     VELOX_FAIL(
         "Unsupported wrapper encoding: {}",
@@ -196,7 +202,12 @@ void DecodedVector::combineWrappers(
 
 void DecodedVector::applyDictionaryWrapper(
     const BaseVector& dictionaryVector,
-    const SelectivityVector& rows) {
+    const SelectivityVector* rows) {
+  if (size_ == 0 || (rows && !rows->hasSelections())) {
+    // No further processing is needed.
+    return;
+  }
+
   auto newIndices = dictionaryVector.wrapInfo()->as<vector_size_t>();
   auto newNulls = dictionaryVector.rawNulls();
   if (newNulls) {
@@ -206,7 +217,7 @@ void DecodedVector::applyDictionaryWrapper(
     // buffer is not copied, make a copy because we may need to
     // change it when iterating through wrapped vector
     if (!nulls_ || nullsNotCopied()) {
-      copyNulls(rows.end());
+      copyNulls(end(rows));
     }
   }
   auto copiedNulls = copiedNulls_.data();
@@ -216,7 +227,7 @@ void DecodedVector::applyDictionaryWrapper(
     indices_ = copiedIndices_.data();
   }
 
-  rows.applyToSelected([&](vector_size_t row) {
+  applyToRows(rows, [&](vector_size_t row) {
     if (!nulls_ || !bits::isBitNull(nulls_, row)) {
       auto wrappedIndex = currentIndices[row];
       if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
@@ -230,14 +241,19 @@ void DecodedVector::applyDictionaryWrapper(
 
 void DecodedVector::applySequenceWrapper(
     const BaseVector& sequenceVector,
-    const SelectivityVector& rows) {
+    const SelectivityVector* rows) {
+  if (size_ == 0 || (rows && !rows->hasSelections())) {
+    // No further processing is needed.
+    return;
+  }
+
   const auto* lengths = sequenceVector.wrapInfo()->as<vector_size_t>();
   auto newNulls = sequenceVector.rawNulls();
   if (newNulls) {
     hasExtraNulls_ = true;
     mayHaveNulls_ = true;
     if (!nulls_ || nullsNotCopied()) {
-      copyNulls(rows.end());
+      copyNulls(end(rows));
     }
   }
   auto copiedNulls = copiedNulls_.data();
@@ -250,7 +266,8 @@ void DecodedVector::applySequenceWrapper(
   vector_size_t lastBegin = 0;
   vector_size_t lastEnd = lengths[0];
   vector_size_t lastIndex = 0;
-  rows.applyToSelected([&, this](vector_size_t row) {
+
+  applyToRows(rows, [&](vector_size_t row) {
     if (!nulls_ || !bits::isBitNull(nulls_, row)) {
       auto wrappedIndex = currentIndices[row];
       if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
@@ -268,7 +285,7 @@ void DecodedVector::fillInIndices() {
     if (size_ > zeroIndices().size() || constantIndex_ != 0) {
       copiedIndices_.resize(size_);
       std::fill(copiedIndices_.begin(), copiedIndices_.end(), constantIndex_);
-      indices_ = &copiedIndices_[0];
+      indices_ = copiedIndices_.data();
     } else {
       indices_ = zeroIndices().data();
     }
@@ -302,7 +319,7 @@ void DecodedVector::makeIndicesMutable() {
 template <TypeKind kind>
 void DecodedVector::decodeBiased(
     const BaseVector& vector,
-    const SelectivityVector& rows) {
+    const SelectivityVector* rows) {
   using T = typename TypeTraits<kind>::NativeType;
   auto biased = vector.as<const BiasVector<T>>();
   // The API contract is that 'data_' is interpretable as a flat array
@@ -313,21 +330,22 @@ void DecodedVector::decodeBiased(
       bits::roundUp(size_, sizeof(int64_t)) / (sizeof(int64_t) / sizeof(T));
   tempSpace_.resize(numInt64);
   T* data = reinterpret_cast<T*>(&tempSpace_[0]); // NOLINT
-  rows.applyToSelected(
-      [data, biased](vector_size_t row) { data[row] = biased->valueAt(row); });
+  applyToRows(rows, [data, biased](vector_size_t row) {
+    data[row] = biased->valueAt(row);
+  });
   data_ = data;
 }
 
 void DecodedVector::setFlatNulls(
     const BaseVector& vector,
-    const SelectivityVector& rows) {
+    const SelectivityVector* rows) {
   if (hasExtraNulls_) {
     if (nullsNotCopied()) {
-      copyNulls(rows.end());
+      copyNulls(end(rows));
     }
     auto leafNulls = vector.rawNulls();
     auto copiedNulls = &copiedNulls_[0];
-    rows.applyToSelected([&](vector_size_t row) {
+    applyToRows(rows, [&](vector_size_t row) {
       if (!bits::isBitNull(nulls_, row) &&
           (leafNulls && bits::isBitNull(leafNulls, indices_[row]))) {
         bits::setNull(copiedNulls, row);
@@ -342,7 +360,7 @@ void DecodedVector::setFlatNulls(
 
 void DecodedVector::setBaseData(
     const BaseVector& vector,
-    const SelectivityVector& rows) {
+    const SelectivityVector* rows) {
   auto encoding = vector.encoding();
   baseVector_ = &vector;
   switch (encoding) {
@@ -375,7 +393,7 @@ void DecodedVector::setBaseData(
 
 void DecodedVector::setBaseDataForConstant(
     const BaseVector& vector,
-    const SelectivityVector& rows) {
+    const SelectivityVector* rows) {
   if (!vector.isScalar()) {
     baseVector_ = vector.wrappedVector();
     constantIndex_ = vector.wrappedIndex(0);
@@ -389,8 +407,10 @@ void DecodedVector::setBaseDataForConstant(
     nulls_ = vector.isNullAt(0) ? &constantNullMask_ : nullptr;
   } else {
     makeIndicesMutable();
-    rows.applyToSelected(
-        [this](vector_size_t row) { copiedIndices_[row] = constantIndex_; });
+
+    applyToRows(rows, [this](vector_size_t row) {
+      copiedIndices_[row] = constantIndex_;
+    });
     setFlatNulls(vector, rows);
   }
   data_ = vector.valuesAsVoid();
@@ -402,7 +422,7 @@ void DecodedVector::setBaseDataForConstant(
 
 void DecodedVector::setBaseDataForBias(
     const BaseVector& vector,
-    const SelectivityVector& rows) {
+    const SelectivityVector* rows) {
   setFlatNulls(vector, rows);
   switch (vector.typeKind()) {
     case TypeKind::SMALLINT:
@@ -464,19 +484,23 @@ BufferPtr copyNullsBuffer(
 
 DecodedVector::DictionaryWrapping DecodedVector::dictionaryWrapping(
     const BaseVector& wrapper,
-    const SelectivityVector& rows) const {
+    vector_size_t size) const {
   VELOX_CHECK(!isIdentityMapping_);
   VELOX_CHECK(!isConstantMapping_);
 
-  VELOX_CHECK_LE(rows.end(), size_);
+  VELOX_CHECK_LE(size, size_);
 
   if (isOneLevelDictionary(wrapper)) {
     // Re-use indices and nulls buffers.
     return {wrapper.wrapInfo(), wrapper.nulls()};
   } else {
     // Make a copy of the indices and nulls buffers.
-    BufferPtr indices = copyIndicesBuffer(indices_, rows.end(), wrapper.pool());
-    BufferPtr nulls = copyNullsBuffer(nulls_, rows.end(), wrapper.pool());
+    BufferPtr indices = copyIndicesBuffer(indices_, size, wrapper.pool());
+    // Only copy nulls if we have nulls coming from one of the wrappers, don't
+    // do it if nulls are missing or from the base vector.
+    BufferPtr nulls = hasExtraNulls_
+        ? copyNullsBuffer(nulls_, size, wrapper.pool())
+        : nullptr;
     return {std::move(indices), std::move(nulls)};
   }
 }
@@ -484,24 +508,69 @@ DecodedVector::DictionaryWrapping DecodedVector::dictionaryWrapping(
 VectorPtr DecodedVector::wrap(
     VectorPtr data,
     const BaseVector& wrapper,
-    const SelectivityVector& rows) {
-  if (data->isConstantEncoding()) {
+    vector_size_t size) {
+  // Return `data` as is if it is constant encoded and the vector size matches
+  // exactly with the selection size. Otherwise, the constant vector will need
+  // to be resized to match it. The resizing will be done in the wrapping code
+  // later.
+  if (data->isConstantEncoding() && size == data->size()) {
     return data;
   }
+
   if (wrapper.isConstantEncoding()) {
     if (wrapper.isNullAt(0)) {
-      return BaseVector::createNullConstant(
-          data->type(), rows.end(), data->pool());
+      return BaseVector::createNullConstant(data->type(), size, data->pool());
     }
-    return BaseVector::wrapInConstant(
-        rows.end(), wrapper.wrappedIndex(0), data);
+    return BaseVector::wrapInConstant(size, wrapper.wrappedIndex(0), data);
   }
 
-  auto wrapping = dictionaryWrapping(wrapper, rows);
+  auto wrapping = dictionaryWrapping(wrapper, size);
   return BaseVector::wrapInDictionary(
       std::move(wrapping.nulls),
       std::move(wrapping.indices),
-      rows.end(),
+      size,
       std::move(data));
+}
+
+const uint64_t* DecodedVector::nulls() {
+  if (allNulls_.has_value()) {
+    return allNulls_.value();
+  }
+
+  if (hasExtraNulls_) {
+    allNulls_ = nulls_;
+  } else if (!nulls_ || size_ == 0) {
+    allNulls_ = nullptr;
+  } else {
+    if (isIdentityMapping_) {
+      allNulls_ = nulls_;
+    } else if (isConstantMapping_) {
+      copiedNulls_.resize(0);
+      copiedNulls_.resize(bits::nwords(size_), bits::kNull64);
+      allNulls_ = copiedNulls_.data();
+    } else {
+      // Copy base nulls.
+      copiedNulls_.resize(bits::nwords(size_));
+      auto* rawCopiedNulls = copiedNulls_.data();
+      for (auto i = 0; i < size_; ++i) {
+        bits::setNull(rawCopiedNulls, i, bits::isBitNull(nulls_, indices_[i]));
+      }
+      allNulls_ = copiedNulls_.data();
+    }
+  }
+
+  return allNulls_.value();
+}
+
+template <typename Func>
+void DecodedVector::applyToRows(const SelectivityVector* rows, Func&& func)
+    const {
+  if (rows) {
+    rows->applyToSelected([&](vector_size_t row) { func(row); });
+  } else {
+    for (auto i = 0; i < size_; i++) {
+      func(i);
+    }
+  }
 }
 } // namespace facebook::velox

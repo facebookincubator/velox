@@ -60,6 +60,9 @@ struct KllSketch {
   /// Add one new value to the sketch.
   void insert(T value);
 
+  /// Call this before serialization can optimize the space used.
+  void compact();
+
   /// Merge this sketch with values from multiple other sketches.
   /// @tparam Iter Iterator type dereferenceable to the same type as this sketch
   ///  (KllSketch<T, Allocator, Compare>)
@@ -85,6 +88,17 @@ struct KllSketch {
   std::vector<T, Allocator> estimateQuantiles(
       const folly::Range<Iter>& quantiles) const;
 
+  /// Estimate the values of the given quantiles.  This is more
+  /// efficient than calling estimateQuantile(double) repeatedly.
+  /// @tparam Iter Iterator type dereferenceable to double
+  /// @param quantiles Range of quantiles in [0, 1] to be estimated
+  /// @param out Pre-allocated memory to hold the result, must be at least as
+  ///  large as `quantiles`
+  template <typename Iter>
+  void estimateQuantiles(
+      const folly::Range<Iter>& quantiles,
+      T* FOLLY_NONNULL out) const;
+
   /// The total number of values being added to the sketch.
   size_t totalCount() const {
     return n_;
@@ -95,11 +109,11 @@ struct KllSketch {
 
   /// Serialize the sketch into bytes.
   /// @param out Pre-allocated memory at least serializedByteSize() in size
-  void serialize(char* out) const;
+  void serialize(char* FOLLY_NONNULL out) const;
 
   /// Deserialize a sketch from bytes.
   static KllSketch<T, Allocator, Compare> deserialize(
-      const char* data,
+      const char* FOLLY_NONNULL data,
       const Allocator& = Allocator(),
       uint32_t seed = folly::Random::rand32());
 
@@ -121,29 +135,10 @@ struct KllSketch {
 
   /// Merge with another deserialized sketch.  This is more efficient
   /// than deserialize then merge.
-  void mergeDeserialized(const char* data);
+  void mergeDeserialized(const char* FOLLY_NONNULL data);
 
- private:
-  KllSketch(const Allocator&, uint32_t seed);
-  void doInsert(T);
-  uint32_t insertPosition();
-  int findLevelToCompact() const;
-  void addEmptyTopLevelToCompletelyFullSketch();
-
-  template <typename Iter>
-  void estimateQuantiles(const folly::Range<Iter>& fractions, T* out) const;
-
-  uint8_t numLevels() const {
-    return levels_.size() - 1;
-  }
-
-  uint32_t getNumRetained() const {
-    return levels_.back() - levels_[0];
-  }
-
-  uint32_t safeLevelSize(uint8_t level) const {
-    return level < numLevels() ? levels_[level + 1] - levels_[level] : 0;
-  }
+  /// Get frequencies of items being tracked.  The result is sorted by item.
+  std::vector<std::pair<T, uint64_t>> getFrequencies() const;
 
   struct View {
     uint32_t k;
@@ -161,13 +156,35 @@ struct KllSketch {
       return level < numLevels() ? levels[level + 1] - levels[level] : 0;
     }
 
-    void deserialize(const char*);
+    void deserialize(const char* FOLLY_NONNULL);
   };
 
+  void mergeViews(const folly::Range<const View*>& views);
+
   View toView() const;
+
+ private:
+  KllSketch(const Allocator&, uint32_t seed);
+  void doInsert(T);
+  uint32_t insertPosition();
+  int findLevelToCompact() const;
+  void addEmptyTopLevelToCompletelyFullSketch();
+  void shiftItems(uint32_t delta);
+
+  uint8_t numLevels() const {
+    return levels_.size() - 1;
+  }
+
+  uint32_t getNumRetained() const {
+    return levels_.back() - levels_[0];
+  }
+
+  uint32_t safeLevelSize(uint8_t level) const {
+    return level < numLevels() ? levels_[level + 1] - levels_[level] : 0;
+  }
+
   static KllSketch<T, Allocator, Compare>
   fromView(const View&, const Allocator&, uint32_t seed);
-  void mergeViews(const folly::Range<const View*>& views);
 
   using AllocU32 = typename std::allocator_traits<
       Allocator>::template rebind_alloc<uint32_t>;

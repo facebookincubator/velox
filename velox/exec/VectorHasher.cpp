@@ -324,10 +324,8 @@ bool VectorHasher::makeValueIdsDecoded<bool, false>(
 }
 
 bool VectorHasher::computeValueIds(
-    const BaseVector& values,
     const SelectivityVector& rows,
     raw_vector<uint64_t>& result) {
-  decoded_.decode(values, rows);
   return VALUE_ID_TYPE_DISPATCH(makeValueIds, typeKind_, rows, result.data());
 }
 
@@ -380,7 +378,8 @@ void VectorHasher::lookupValueIdsTyped(
     const DecodedVector& decoded,
     SelectivityVector& rows,
     raw_vector<uint64_t>& hashes,
-    uint64_t* result) const {
+    uint64_t* result,
+    bool noNulls) const {
   using T = typename TypeTraits<Kind>::NativeType;
   if (decoded.isConstantMapping()) {
     if (decoded.isNullAt(rows.begin())) {
@@ -400,21 +399,27 @@ void VectorHasher::lookupValueIdsTyped(
       });
     }
   } else if (decoded.isIdentityMapping()) {
-    rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
-      if (decoded.isNullAt(row)) {
-        if (multiplier_ == 1) {
-          result[row] = 0;
+    if (Kind == TypeKind::BIGINT && isRange_ && noNulls) {
+      lookupIdsRangeSimd<int64_t>(decoded, rows, result);
+    } else if (Kind == TypeKind::INTEGER && isRange_ && noNulls) {
+      lookupIdsRangeSimd<int32_t>(decoded, rows, result);
+    } else {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
+        if (decoded.isNullAt(row)) {
+          if (multiplier_ == 1) {
+            result[row] = 0;
+          }
+          return;
         }
-        return;
-      }
-      T value = decoded.valueAt<T>(row);
-      uint64_t id = lookupValueId(value);
-      if (id == kUnmappable) {
-        rows.setValid(row, false);
-        return;
-      }
-      result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
-    });
+        T value = decoded.valueAt<T>(row);
+        uint64_t id = lookupValueId(value);
+        if (id == kUnmappable) {
+          rows.setValid(row, false);
+          return;
+        }
+        result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+      });
+    }
     rows.updateBounds();
   } else {
     hashes.resize(decoded.base()->size());
@@ -443,11 +448,68 @@ void VectorHasher::lookupValueIdsTyped(
   }
 }
 
+template <typename T>
+void VectorHasher::lookupIdsRangeSimd(
+    const DecodedVector& decoded,
+    SelectivityVector& rows,
+    uint64_t* result) const {
+  static_assert(sizeof(T) == 8 || sizeof(T) == 4);
+  auto lower = xsimd::batch<T>::broadcast(min_);
+  auto upper = xsimd::batch<T>::broadcast(max_);
+  auto data = decoded.data<T>();
+  uint64_t offset = min_ - 1;
+  auto bits = rows.asMutableRange().bits();
+  bits::forBatches<xsimd::batch<T>::size>(
+      bits, rows.begin(), rows.end(), [&](auto index, auto /*mask*/) {
+        auto values = xsimd::batch<T>::load_unaligned(data + index);
+        uint64_t outOfRange =
+            simd::toBitMask(lower > values) | simd::toBitMask(values > upper);
+        if (outOfRange) {
+          bits[index / 64] &= ~(outOfRange << (index & 63));
+        }
+        if (outOfRange != bits::lowMask(xsimd::batch<T>::size)) {
+          if constexpr (sizeof(T) == 8) {
+            auto unsignedValues =
+                static_cast<xsimd::batch<typename std::make_unsigned<T>::type>>(
+                    values);
+            if (multiplier_ == 1) {
+              (unsignedValues - offset).store_unaligned(result + index);
+            } else {
+              (xsimd::batch<uint64_t>::load_unaligned(result + index) +
+               ((unsignedValues - offset) * multiplier_))
+                  .store_unaligned(result + index);
+            }
+          } else {
+            // Widen 8 to 2 x 4 since result is always 64 wide.
+            auto first4 = static_cast<xsimd::batch<uint64_t>>(
+                              simd::getHalf<int64_t, 0>(values)) -
+                offset;
+            auto next4 = static_cast<xsimd::batch<uint64_t>>(
+                             simd::getHalf<int64_t, 1>(values)) -
+                offset;
+            if (multiplier_ == 1) {
+              first4.store_unaligned(result + index);
+              next4.store_unaligned(result + index + first4.size);
+            } else {
+              (xsimd::batch<uint64_t>::load_unaligned(result + index) +
+               (first4 * multiplier_))
+                  .store_unaligned(result + index);
+              (xsimd::batch<uint64_t>::load_unaligned(
+                   result + index + first4.size) +
+               (next4 * multiplier_))
+                  .store_unaligned(result + index + first4.size);
+            }
+          }
+        }
+      });
+}
+
 void VectorHasher::lookupValueIds(
     const BaseVector& values,
     SelectivityVector& rows,
     ScratchMemory& scratchMemory,
-    raw_vector<uint64_t>& result) const {
+    raw_vector<uint64_t>& result,
+    bool noNulls) const {
   scratchMemory.decoded.decode(values, rows);
   VALUE_ID_TYPE_DISPATCH(
       lookupValueIdsTyped,
@@ -455,15 +517,14 @@ void VectorHasher::lookupValueIds(
       scratchMemory.decoded,
       rows,
       scratchMemory.hashes,
-      result.data());
+      result.data(),
+      noNulls);
 }
 
 void VectorHasher::hash(
-    const BaseVector& values,
     const SelectivityVector& rows,
     bool mix,
     raw_vector<uint64_t>& result) {
-  decoded_.decode(values, rows);
   VELOX_DYNAMIC_TYPE_DISPATCH(hashValues, typeKind_, rows, mix, result.data());
 }
 
@@ -557,9 +618,12 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
     bool nullAllowed) const {
   switch (typeKind_) {
     case TypeKind::TINYINT:
+      FOLLY_FALLTHROUGH;
     case TypeKind::SMALLINT:
+      FOLLY_FALLTHROUGH;
     case TypeKind::INTEGER:
-    case TypeKind::BIGINT: {
+      FOLLY_FALLTHROUGH;
+    case TypeKind::BIGINT:
       if (!distinctOverflow_) {
         std::vector<int64_t> values;
         values.reserve(uniqueValues_.size());
@@ -569,7 +633,7 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
 
         return common::createBigintValues(values, nullAllowed);
       }
-    }
+      FOLLY_FALLTHROUGH;
     default:
       // TODO Add support for strings.
       return nullptr;
@@ -595,8 +659,8 @@ void extendRange(int64_t reserve, int64_t& min, int64_t& max) {
   }
 }
 
-// Adds 'reservePct' % to either end of the range between 'min' and 'max' while
-// staying in the range of 'kind'.
+// Adds 'reservePct' % to either end of the range between 'min' and 'max'
+// while staying in the range of 'kind'.
 void extendRange(
     TypeKind kind,
     int32_t reservePct,
@@ -640,6 +704,8 @@ int64_t addIdReserve(size_t numDistinct, int32_t reservePct) {
   if (reservePct == VectorHasher::kNoLimit) {
     return VectorHasher::kMaxDistinct;
   }
+  // NOTE: 'kMaxDistinct' is a small value so no need to check overflow for
+  // reservation here.
   return std::min<int64_t>(
       VectorHasher::kMaxDistinct, numDistinct * (1 + (reservePct / 100.0)));
 }

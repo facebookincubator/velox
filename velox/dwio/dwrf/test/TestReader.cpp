@@ -22,10 +22,10 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/DataSink.h"
 #include "velox/dwio/common/MemoryInputStream.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
 #include "velox/dwio/type/fbhive/HiveTypeParser.h"
 #include "velox/type/Type.h"
@@ -1356,13 +1356,13 @@ TEST(TestReader, testFlatmapAsMapFieldLifeCycle) {
 }
 
 TEST(TestReader, testOrcReaderSimple) {
-  const std::string test1(
+  const std::string simpleTest(
       getExampleFilePath("TestStringDictionary.testRowIndex.orc"));
   ReaderOptions readerOpts;
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
-  auto reader =
-      DwrfReader::create(std::make_unique<FileInputStream>(test1), readerOpts);
+  auto reader = DwrfReader::create(
+      std::make_unique<FileInputStream>(simpleTest), readerOpts);
 
   RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -1381,4 +1381,92 @@ TEST(TestReader, testOrcReaderSimple) {
     }
   }
   EXPECT_EQ(rowNumber, 32768);
+}
+
+TEST(TestReader, testFooterWrapper) {
+  proto::Footer impl;
+  FooterWrapper wrapper(&impl);
+  EXPECT_FALSE(wrapper.hasNumberOfRows());
+  impl.set_numberofrows(0);
+  ASSERT_TRUE(wrapper.hasNumberOfRows());
+  EXPECT_EQ(wrapper.numberOfRows(), 0);
+}
+
+TEST(TestReader, testOrcReaderComplexTypes) {
+  const std::string icebergOrc(getExampleFilePath("complextypes_iceberg.orc"));
+  const std::shared_ptr<const RowType> expectedType =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
+      id:bigint,int_array:array<int>,int_array_array:array<array<int>>,\
+      int_map:map<string,int>,int_map_array:array<map<string,int>>,\
+      nested_struct:struct<\
+        a:int,b:array<int>,c:struct<\
+          d:array<array<struct<\
+            e:int,f:string>>>>,\
+          g:map<string,struct<\
+            h:struct<\
+              i:array<double>>>>>>"));
+  ReaderOptions readerOpts;
+  readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
+  auto reader = DwrfReader::create(
+      std::make_unique<FileInputStream>(icebergOrc), readerOpts);
+  auto rowType = reader->rowType();
+  EXPECT_TRUE(rowType->equivalent(*expectedType));
+}
+
+TEST(TestReader, testOrcReaderVarchar) {
+  const std::string varcharOrc(getExampleFilePath("orc_index_int_string.orc"));
+  ReaderOptions readerOpts;
+  readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
+  auto reader = DwrfReader::create(
+      std::make_unique<FileInputStream>(varcharOrc), readerOpts);
+
+  RowReaderOptions rowReaderOptions;
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr batch;
+  int counter = 0;
+  while (rowReader->next(500, batch)) {
+    auto rowVector = batch->as<RowVector>();
+    auto ints = rowVector->childAt(0)->as<SimpleVector<int32_t>>();
+    auto strings = rowVector->childAt(1)->as<SimpleVector<StringView>>();
+    for (size_t i = 0; i < rowVector->size(); ++i) {
+      counter++;
+      EXPECT_EQ(counter, ints->valueAt(i));
+      std::stringstream stream;
+      stream << counter;
+      if (counter < 1000) {
+        stream << "a";
+      }
+      EXPECT_EQ(stream.str(), strings->valueAt(i).str());
+    }
+  }
+  EXPECT_EQ(counter, 6000);
+}
+
+TEST(TestReader, testOrcReaderDate) {
+  const std::string dateOrc(getExampleFilePath("TestOrcFile.testDate1900.orc"));
+  ReaderOptions readerOpts;
+  readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
+  auto reader = DwrfReader::create(
+      std::make_unique<FileInputStream>(dateOrc), readerOpts);
+
+  RowReaderOptions rowReaderOptions;
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr batch;
+  int year = 1900;
+  while (rowReader->next(1000, batch)) {
+    auto rowVector = batch->as<RowVector>();
+    auto dates = rowVector->childAt(1)->as<SimpleVector<Date>>();
+
+    std::stringstream stream;
+    stream << year << "-12-25";
+    EXPECT_EQ(stream.str(), dates->valueAt(0).toString());
+
+    for (size_t i = 1; i < rowVector->size(); ++i) {
+      EXPECT_EQ(dates->valueAt(0), dates->valueAt(i));
+    }
+
+    year++;
+  }
 }

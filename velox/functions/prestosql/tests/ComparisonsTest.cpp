@@ -13,11 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/Udf.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
 
 class ComparisonsTest : public functions::test::FunctionBaseTest {
+ public:
+  void SetUp() override {
+    this->options_.parseDecimalAsDouble = false;
+  }
+
  protected:
   template <typename T>
   void testDistinctFrom(
@@ -94,6 +101,108 @@ TEST_F(ComparisonsTest, betweenDate) {
     EXPECT_EQ(result->valueAt(i), std::get<1>(testData[i])) << "at " << i;
   }
 }
+
+TEST_F(ComparisonsTest, betweenDecimal) {
+  auto runAndCompare = [&](const std::string& exprStr,
+                           VectorPtr input,
+                           VectorPtr expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(exprStr, makeRowVector({input}));
+    test::assertEqualVectors(actual, expectedResult);
+  };
+
+  auto shortFlat = makeNullableShortDecimalFlatVector(
+      {100, 250, 300, 500, std::nullopt}, DECIMAL(3, 2));
+  auto expectedResult =
+      makeNullableFlatVector<bool>({false, true, true, false, std::nullopt});
+
+  runAndCompare("c0 between 2.00 and 3.00", shortFlat, expectedResult);
+
+  auto longFlat = makeNullableLongDecimalFlatVector(
+      {100, 250, 300, 500, std::nullopt}, DECIMAL(20, 2));
+
+  // Comparing LONG_DECIMAL and SHORT_DECIMAL must throw error.
+  VELOX_ASSERT_THROW(
+      runAndCompare("c0 between 2.00 and 3.00", longFlat, expectedResult),
+      "Scalar function signature is not supported: between(LONG_DECIMAL(20,2), SHORT_DECIMAL(3,2), SHORT_DECIMAL(3,2)).");
+}
+
+TEST_F(ComparisonsTest, eqDecimal) {
+  auto runAndCompare = [&](std::vector<VectorPtr>& inputs,
+                           VectorPtr expectedResult) {
+    auto actual =
+        evaluate<SimpleVector<bool>>("c0 == c1", makeRowVector(inputs));
+    test::assertEqualVectors(actual, expectedResult);
+  };
+
+  std::vector<VectorPtr> inputs = {
+      makeNullableShortDecimalFlatVector(
+          {1, std::nullopt, 3, -3, std::nullopt, 4}, DECIMAL(10, 5)),
+      makeNullableShortDecimalFlatVector(
+          {1, 2, 3, -3, std::nullopt, 5}, DECIMAL(10, 5))};
+  auto expected = makeNullableFlatVector<bool>(
+      {true, std::nullopt, true, true, std::nullopt, false});
+  runAndCompare(inputs, expected);
+
+  // Test with different data types.
+  inputs = {
+      makeShortDecimalFlatVector({1}, DECIMAL(10, 5)),
+      makeShortDecimalFlatVector({1}, DECIMAL(10, 4))};
+  VELOX_ASSERT_THROW(
+      runAndCompare(inputs, expected),
+      "Scalar function signature is not supported: eq(SHORT_DECIMAL(10,5),"
+      " SHORT_DECIMAL(10,4))");
+}
+
+TEST_F(ComparisonsTest, gtLtDecimal) {
+  auto runAndCompare = [&](std::string expr,
+                           std::vector<VectorPtr>& inputs,
+                           VectorPtr expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(expr, makeRowVector(inputs));
+    test::assertEqualVectors(actual, expectedResult);
+  };
+
+  // Short Decimals test.
+  std::vector<VectorPtr> shortDecimalInputs = {
+      makeNullableShortDecimalFlatVector(
+          {1, std::nullopt, 3, -3, std::nullopt, 4}, DECIMAL(10, 5)),
+      makeNullableShortDecimalFlatVector(
+          {0, 2, 3, -5, std::nullopt, 5}, DECIMAL(10, 5))};
+  auto expectedGtLt = makeNullableFlatVector<bool>(
+      {true, std::nullopt, false, true, std::nullopt, false});
+  auto expectedGteLte = makeNullableFlatVector<bool>(
+      {true, std::nullopt, true, true, std::nullopt, false});
+
+  runAndCompare("c0 > c1", shortDecimalInputs, expectedGtLt);
+  runAndCompare("c1 < c0", shortDecimalInputs, expectedGtLt);
+  // Gte/Lte
+  runAndCompare("c0 >= c1", shortDecimalInputs, expectedGteLte);
+  runAndCompare("c1 <= c0", shortDecimalInputs, expectedGteLte);
+
+  // Long Decimals test.
+  std::vector<VectorPtr> longDecimalsInputs = {
+      makeNullableLongDecimalFlatVector(
+          {UnscaledLongDecimal::max().unscaledValue(),
+           std::nullopt,
+           3,
+           UnscaledLongDecimal::min().unscaledValue() + 1,
+           std::nullopt,
+           4},
+          DECIMAL(38, 5)),
+      makeNullableLongDecimalFlatVector(
+          {UnscaledLongDecimal::max().unscaledValue() - 1,
+           2,
+           3,
+           UnscaledLongDecimal::min().unscaledValue(),
+           std::nullopt,
+           5},
+          DECIMAL(38, 5))};
+  runAndCompare("c0 > c1", longDecimalsInputs, expectedGtLt);
+  runAndCompare("c1 < c0", longDecimalsInputs, expectedGtLt);
+
+  // Gte/Lte
+  runAndCompare("c0 >= c1", longDecimalsInputs, expectedGteLte);
+  runAndCompare("c1 <= c0", longDecimalsInputs, expectedGteLte);
+};
 
 TEST_F(ComparisonsTest, eqArray) {
   auto test =
@@ -258,7 +367,8 @@ TEST_F(ComparisonsTest, eqNestedComplex) {
   array_type array2 = {{}};
   array_type array3 = {{1, 100, 2}};
 
-  auto vector1 = makeNestedArrayVector<int64_t>({{array1, array2, array3}});
+  auto vector1 =
+      makeNullableNestedArrayVector<int64_t>({{{array1, array2, array3}}});
   auto vector2 = makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6});
   auto vector3 = makeMapVector<int64_t, int64_t>({{{1, 2}, {3, 4}}});
   auto row1 = makeRowVector({vector1, vector2, vector3});
@@ -290,4 +400,199 @@ TEST_F(ComparisonsTest, eqNestedComplex) {
         evaluate<SimpleVector<bool>>("c0 == c1", makeRowVector({row1, row2}));
     ASSERT_EQ(result->isNullAt(0), true);
   }
+}
+
+namespace {
+template <typename Tp, typename Op, const char* fnName>
+struct ComparisonTypeOp {
+  typedef Tp type;
+  typedef Op fn;
+  std::string sqlFunction{fnName};
+
+  static std::string toString() {
+    return fmt::format("{}:{}", Tp().toString(), fnName);
+  }
+};
+
+const char eq[] = "eq";
+const char neq[] = "neq";
+const char lt[] = "lt";
+const char gt[] = "gt";
+const char lte[] = "lte";
+const char gte[] = "gte";
+
+#define ComparisonTypes(Tp)                           \
+  ComparisonTypeOp<Tp, std::equal_to<>, eq>,          \
+      ComparisonTypeOp<Tp, std::not_equal_to<>, neq>, \
+      ComparisonTypeOp<Tp, std::less<>, lt>,          \
+      ComparisonTypeOp<Tp, std::greater<>, gt>,       \
+      ComparisonTypeOp<Tp, std::less_equal<>, lte>,   \
+      ComparisonTypeOp<Tp, std::greater_equal<>, gte>
+
+typedef ::testing::Types<
+    ComparisonTypes(TinyintType),
+    ComparisonTypes(SmallintType),
+    ComparisonTypes(IntegerType),
+    ComparisonTypes(BigintType),
+    ComparisonTypes(RealType),
+    ComparisonTypes(DoubleType)>
+    comparisonTypes;
+} // namespace
+
+template <typename ComparisonTypeOp>
+class SimdComparisonsTest : public functions::test::FunctionBaseTest {
+ public:
+  using T = typename ComparisonTypeOp::type::NativeType::NativeType;
+  using ComparisonOp = typename ComparisonTypeOp::fn;
+  const std::string sqlFn = ComparisonTypeOp().sqlFunction;
+
+  auto checkConstantComparison(
+      const std::vector<T>& data,
+      T constVal,
+      bool constantRhs = true) {
+    auto vector1 = makeFlatVector<T>(data);
+    auto vector2 = makeConstant<T>(constVal, vector1->size());
+    auto rowVector = constantRhs ? makeRowVector({vector1, vector2})
+                                 : makeRowVector({vector2, vector1});
+    return evaluate<SimpleVector<bool>>(
+        fmt::format("{}(c0, c1)", sqlFn), rowVector);
+  }
+
+  void vectorComparisonImpl(
+      const std::vector<T>& lhs,
+      const std::vector<T>& rhs) {
+    auto rowVector =
+        makeRowVector({makeFlatVector<T>(lhs), makeFlatVector<T>(rhs)});
+    auto result = evaluate<SimpleVector<bool>>(
+        fmt::format("{}(c0, c1)", sqlFn), rowVector);
+
+    auto expectedResult = std::vector<bool>();
+    expectedResult.reserve(lhs.size());
+    for (auto i = 0; i < lhs.size(); i++) {
+      expectedResult.push_back(ComparisonOp()(lhs[i], rhs[i]));
+    }
+
+    test::assertEqualVectors(result, makeFlatVector<bool>(expectedResult));
+  }
+
+  void testVectorComparison(
+      const std::vector<T>& lhs,
+      const std::vector<T>& rhs) {
+    vectorComparisonImpl(lhs, rhs);
+    vectorComparisonImpl(rhs, lhs);
+  }
+
+  void testConstant(uint32_t vectorLength, T constVal) {
+    auto data = std::vector<T>(vectorLength);
+    for (int i = 0; i < vectorLength; i++) {
+      data[i] = i;
+    }
+
+    auto result = checkConstantComparison(data, constVal);
+    ASSERT_EQ(result->size(), vectorLength);
+
+    for (int i = 0; i < vectorLength; i++) {
+      ASSERT_FALSE(result->isNullAt(i));
+      ASSERT_EQ(result->valueAt(i), ComparisonOp()(((T)i), constVal))
+          << "Values not matching at " << i;
+    }
+
+    // Now check converse
+    result = checkConstantComparison(data, constVal, false);
+    ASSERT_EQ(result->size(), vectorLength);
+
+    for (int i = 0; i < vectorLength; i++) {
+      ASSERT_FALSE(result->isNullAt(i));
+      ASSERT_EQ(result->valueAt(i), ComparisonOp()(constVal, ((T)i)))
+          << "Values not matching at " << i;
+    }
+  }
+
+  void testFlat() {
+    // Basic comparison test.
+    auto lhsVector = std::vector<T>{1, 2, 3, 4, 5, 6, 7};
+    auto rhsVector = std::vector<T>{1, 2, 3, 7, 8, 9, 0};
+
+    testVectorComparison(lhsVector, rhsVector);
+
+    // Test some larger vectors.
+    lhsVector = std::vector<T>(2047);
+    std::fill(
+        lhsVector.begin(), lhsVector.end(), std::numeric_limits<T>::max());
+    lhsVector[13] = std::numeric_limits<T>::min();
+    lhsVector[257] = std::numeric_limits<T>::min();
+
+    rhsVector = std::vector<T>(lhsVector.size());
+    std::fill(
+        rhsVector.begin(), rhsVector.end(), std::numeric_limits<T>::min());
+
+    testVectorComparison(lhsVector, rhsVector);
+
+    // Add tests against Nan and other edge cases.
+    if constexpr (std::is_floating_point_v<T>) {
+      lhsVector = std::vector<T>(47);
+      rhsVector = std::vector<T>(47);
+
+      std::fill(
+          lhsVector.begin(),
+          lhsVector.end(),
+          std::numeric_limits<T>::signaling_NaN());
+      std::fill(
+          rhsVector.begin(),
+          rhsVector.end(),
+          std::numeric_limits<T>::signaling_NaN());
+      testVectorComparison(lhsVector, rhsVector);
+
+      std::fill(
+          lhsVector.begin(),
+          lhsVector.end(),
+          std::numeric_limits<T>::signaling_NaN());
+      std::fill(rhsVector.begin(), rhsVector.end(), 1);
+      testVectorComparison(lhsVector, rhsVector);
+    }
+  }
+
+  void testDictionary() {
+    // Identity mapping, however this will result in non-simd path.
+    auto makeDictionary = [&](const std::vector<T>& data) {
+      auto base = makeFlatVector(data);
+      auto indices = makeIndices(data.size(), [](auto row) { return row; });
+      return wrapInDictionary(indices, data.size(), base);
+    };
+
+    auto lhs = std::vector<T>{1, 2, 3, 4, 5};
+    auto rhs = std::vector<T>{1, 0, 0, 0, 5};
+    auto lhsVector = makeDictionary(lhs);
+    auto rhsVector = makeDictionary(rhs);
+
+    auto rowVector = makeRowVector({lhsVector, rhsVector});
+    auto result = evaluate<SimpleVector<bool>>(
+        fmt::format("{}(c0, c1)", sqlFn), rowVector);
+    auto expectedResult = std::vector<bool>();
+    expectedResult.reserve(lhsVector->size());
+    for (auto i = 0; i < lhsVector->size(); i++) {
+      expectedResult.push_back(ComparisonOp()(lhs[i], rhs[i]));
+    }
+    test::assertEqualVectors(result, makeFlatVector<bool>(expectedResult));
+  }
+};
+
+TYPED_TEST_SUITE(
+    SimdComparisonsTest,
+    comparisonTypes,
+    functions::test::FunctionBaseTest::TypeNames);
+
+TYPED_TEST(SimdComparisonsTest, constant) {
+  this->testConstant(35, 17);
+  this->testConstant(1024, 53);
+  this->testConstant(99, 7);
+  this->testConstant(1027, 13);
+}
+
+TYPED_TEST(SimdComparisonsTest, flat) {
+  this->testFlat();
+}
+
+TYPED_TEST(SimdComparisonsTest, dictionary) {
+  this->testDictionary();
 }

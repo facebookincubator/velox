@@ -13,26 +13,60 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/file/FileSystems.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spiller.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/vector/tests/VectorMaker.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::core;
 using namespace facebook::velox::exec::test;
+
+namespace {
+// Returns aggregated spilled stats by 'task'.
+Spiller::Stats spilledStats(const exec::Task& task) {
+  Spiller::Stats spilledStats;
+  auto stats = task.taskStats();
+  for (auto& pipeline : stats.pipelineStats) {
+    for (auto op : pipeline.operatorStats) {
+      spilledStats.spilledBytes += op.spilledBytes;
+      spilledStats.spilledRows += op.spilledRows;
+      spilledStats.spilledPartitions += op.spilledPartitions;
+    }
+  }
+  return spilledStats;
+}
+} // namespace
 
 class OrderByTest : public OperatorTestBase {
  protected:
+  void SetUp() override {
+    filesystems::registerLocalFileSystem();
+    if (!isRegisteredVectorSerde()) {
+      this->registerVectorSerde();
+    }
+  }
+
   void testSingleKey(
       const std::vector<RowVectorPtr>& input,
       const std::string& key) {
+    core::PlanNodeId orderById;
     auto keyIndex = input[0]->type()->asRow().getChildIdx(key);
     auto plan = PlanBuilder()
                     .values(input)
                     .orderBy({fmt::format("{} ASC NULLS LAST", key)}, false)
+                    .capturePlanNodeId(orderById)
                     .planNode();
-
-    assertQueryOrdered(
+    runTest(
         plan,
+        orderById,
         fmt::format("SELECT * FROM tmp ORDER BY {} NULLS LAST", key),
         {keyIndex});
 
@@ -40,9 +74,9 @@ class OrderByTest : public OperatorTestBase {
                .values(input)
                .orderBy({fmt::format("{} DESC NULLS FIRST", key)}, false)
                .planNode();
-
-    assertQueryOrdered(
+    runTest(
         plan,
+        orderById,
         fmt::format("SELECT * FROM tmp ORDER BY {} DESC NULLS FIRST", key),
         {keyIndex});
   }
@@ -51,15 +85,17 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<RowVectorPtr>& input,
       const std::string& key,
       const std::string& filter) {
+    core::PlanNodeId orderById;
     auto keyIndex = input[0]->type()->asRow().getChildIdx(key);
     auto plan = PlanBuilder()
                     .values(input)
                     .filter(filter)
                     .orderBy({fmt::format("{} ASC NULLS LAST", key)}, false)
+                    .capturePlanNodeId(orderById)
                     .planNode();
-
-    assertQueryOrdered(
+    runTest(
         plan,
+        orderById,
         fmt::format(
             "SELECT * FROM tmp WHERE {} ORDER BY {} NULLS LAST", filter, key),
         {keyIndex});
@@ -68,10 +104,11 @@ class OrderByTest : public OperatorTestBase {
                .values(input)
                .filter(filter)
                .orderBy({fmt::format("{} DESC NULLS FIRST", key)}, false)
+               .capturePlanNodeId(orderById)
                .planNode();
-
-    assertQueryOrdered(
+    runTest(
         plan,
+        orderById,
         fmt::format(
             "SELECT * FROM tmp WHERE {} ORDER BY {} DESC NULLS FIRST",
             filter,
@@ -92,16 +129,18 @@ class OrderByTest : public OperatorTestBase {
 
     for (int i = 0; i < sortOrders.size(); i++) {
       for (int j = 0; j < sortOrders.size(); j++) {
+        core::PlanNodeId orderById;
         auto plan = PlanBuilder()
                         .values(input)
                         .orderBy(
                             {fmt::format("{} {}", key1, sortOrderSqls[i]),
                              fmt::format("{} {}", key2, sortOrderSqls[j])},
                             false)
+                        .capturePlanNodeId(orderById)
                         .planNode();
-
-        assertQueryOrdered(
+        runTest(
             plan,
+            orderById,
             fmt::format(
                 "SELECT * FROM tmp ORDER BY {} {}, {} {}",
                 key1,
@@ -109,6 +148,41 @@ class OrderByTest : public OperatorTestBase {
                 key2,
                 sortOrderSqls[j]),
             keyIndices);
+      }
+    }
+  }
+
+  void runTest(
+      core::PlanNodePtr planNode,
+      const core::PlanNodeId& orderById,
+      const std::string& duckDbSql,
+      const std::vector<uint32_t>& sortingKeys) {
+    {
+      SCOPED_TRACE("run without spilling");
+      assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+    }
+    {
+      SCOPED_TRACE("run with spilling");
+      auto spillDirectory = exec::test::TempDirectoryPath::create();
+      auto queryCtx = core::QueryCtx::createForTest();
+      queryCtx->setConfigOverridesUnsafe({
+          {core::QueryConfig::kTestingSpillPct, "100"},
+          {core::QueryConfig::kSpillEnabled, "true"},
+          {core::QueryConfig::kOrderBySpillEnabled, "true"},
+          {core::QueryConfig::kSpillPath, spillDirectory->path},
+      });
+      CursorParameters params;
+      params.planNode = planNode;
+      params.queryCtx = queryCtx;
+      auto task = assertQueryOrdered(params, duckDbSql, sortingKeys);
+      auto inputRows = toPlanStats(task->taskStats()).at(orderById).inputRows;
+      if (inputRows > 0) {
+        EXPECT_LT(0, spilledStats(*task).spilledBytes);
+        EXPECT_EQ(1, spilledStats(*task).spilledPartitions);
+        // NOTE: the last input batch won't go spilling.
+        EXPECT_GT(inputRows, spilledStats(*task).spilledRows);
+      } else {
+        EXPECT_EQ(0, spilledStats(*task).spilledBytes);
       }
     }
   }
@@ -154,20 +228,21 @@ TEST_F(OrderByTest, singleKey) {
   // parser doesn't support "is not null" expression, hence, using c0 % 2 >= 0
   testSingleKey(vectors, "c0", "c0 % 2 >= 0");
 
+  core::PlanNodeId orderById;
   auto plan = PlanBuilder()
                   .values(vectors)
                   .orderBy({"c0 DESC NULLS LAST"}, false)
+                  .capturePlanNodeId(orderById)
                   .planNode();
-
-  assertQueryOrdered(
-      plan, "SELECT * FROM tmp ORDER BY c0 DESC NULLS LAST", {0});
+  runTest(
+      plan, orderById, "SELECT * FROM tmp ORDER BY c0 DESC NULLS LAST", {0});
 
   plan = PlanBuilder()
              .values(vectors)
              .orderBy({"c0 ASC NULLS FIRST"}, false)
+             .capturePlanNodeId(orderById)
              .planNode();
-
-  assertQueryOrdered(plan, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST", {0});
+  runTest(plan, orderById, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST", {0});
 }
 
 TEST_F(OrderByTest, multipleKeys) {
@@ -187,21 +262,26 @@ TEST_F(OrderByTest, multipleKeys) {
 
   testTwoKeys(vectors, "c0", "c1");
 
+  core::PlanNodeId orderById;
   auto plan = PlanBuilder()
                   .values(vectors)
                   .orderBy({"c0 ASC NULLS FIRST", "c1 ASC NULLS LAST"}, false)
+                  .capturePlanNodeId(orderById)
                   .planNode();
-
-  assertQueryOrdered(
-      plan, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST, c1 NULLS LAST", {0, 1});
+  runTest(
+      plan,
+      orderById,
+      "SELECT * FROM tmp ORDER BY c0 NULLS FIRST, c1 NULLS LAST",
+      {0, 1});
 
   plan = PlanBuilder()
              .values(vectors)
              .orderBy({"c0 DESC NULLS LAST", "c1 DESC NULLS FIRST"}, false)
+             .capturePlanNodeId(orderById)
              .planNode();
-
-  assertQueryOrdered(
+  runTest(
       plan,
+      orderById,
       "SELECT * FROM tmp ORDER BY c0 DESC NULLS LAST, c1 DESC NULLS FIRST",
       {0, 1});
 }
@@ -254,13 +334,175 @@ TEST_F(OrderByTest, unknown) {
            variant(TypeKind::UNKNOWN), size, pool_.get())});
 
   // Exclude "UNKNOWN" column as DuckDB doesn't understand UNKNOWN type
-  createDuckDbTable({makeRowVector({vector->childAt(0)})});
+  createDuckDbTable(
+      {makeRowVector({vector->childAt(0)}),
+       makeRowVector({vector->childAt(0)})});
+
+  core::PlanNodeId orderById;
+  auto plan = PlanBuilder()
+                  .values({vector, vector})
+                  .orderBy({"c0 DESC NULLS LAST"}, false)
+                  .capturePlanNodeId(orderById)
+                  .planNode();
+  runTest(
+      plan,
+      orderById,
+      "SELECT *, null FROM tmp ORDER BY c0 DESC NULLS LAST",
+      {0});
+}
+
+/// Verifies that Order By output batch sizes correspond to
+/// preferredOutputBatchSize.
+TEST_F(OrderByTest, outputBatchSize) {
+  struct {
+    int numRowsPerBatch;
+    int preferredOutBatchSize;
+    int expectedOutputVectors;
+
+    std::string debugString() const {
+      return fmt::format(
+          "numRowsPerBatch:{}, preferredOutBatchSize:{}, expectedOutputVectors:{}",
+          numRowsPerBatch,
+          preferredOutBatchSize,
+          expectedOutputVectors);
+    }
+  } testSettings[] = {{1024, 1024 * 1024 * 10, 1}, {1024, 1, 2}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const vector_size_t batchSize = testData.numRowsPerBatch;
+    std::vector<RowVectorPtr> rowVectors;
+    auto c0 = makeFlatVector<int64_t>(
+        batchSize, [&](vector_size_t row) { return row; }, nullEvery(5));
+    auto c1 = makeFlatVector<double>(
+        batchSize, [&](vector_size_t row) { return row; }, nullEvery(11));
+    std::vector<VectorPtr> vectors;
+    vectors.push_back(c0);
+    for (int i = 0; i < 256; ++i) {
+      vectors.push_back(c1);
+    }
+    rowVectors.push_back(makeRowVector(vectors));
+    createDuckDbTable(rowVectors);
+
+    core::PlanNodeId orderById;
+    auto plan = PlanBuilder()
+                    .values(rowVectors)
+                    .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                    .capturePlanNodeId(orderById)
+                    .planNode();
+    auto queryCtx = core::QueryCtx::createForTest();
+    queryCtx->setConfigOverridesUnsafe(
+        {{core::QueryConfig::kPreferredOutputBatchSize,
+          std::to_string(testData.preferredOutBatchSize)}});
+    CursorParameters params;
+    params.planNode = plan;
+    params.queryCtx = queryCtx;
+    auto task = assertQueryOrdered(
+        params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
+    EXPECT_EQ(
+        testData.expectedOutputVectors,
+        toPlanStats(task->taskStats()).at(orderById).outputVectors);
+  }
+}
+
+TEST_F(OrderByTest, spill) {
+  const int kNumBatches = 3;
+  const int kNumRows = 100'000;
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < kNumBatches; ++i) {
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row * 3; }),
+         makeFlatVector<StringView>(kNumRows, [](auto row) {
+           return StringView(std::to_string(row * 3));
+         })}));
+  }
+  createDuckDbTable(batches);
 
   auto plan = PlanBuilder()
-                  .values({vector})
-                  .orderBy({"c0 DESC NULLS LAST"}, false)
+                  .values(batches)
+                  .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
                   .planNode();
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = core::QueryCtx::createForTest();
+  constexpr int64_t kMaxBytes = 20LL << 20; // 20 MB
+  queryCtx->pool()->setMemoryUsageTracker(
+      memory::MemoryUsageTracker::create(kMaxBytes, 0, kMaxBytes));
+  // Set 'kSpillableReservationGrowthPct' to an extreme large value to trigger
+  // disk spilling by failed memory growth reservation.
+  queryCtx->setConfigOverridesUnsafe({
+      {core::QueryConfig::kSpillPath, spillDirectory->path},
+      {core::QueryConfig::kSpillEnabled, "true"},
+      {core::QueryConfig::kOrderBySpillEnabled, "true"},
+      {core::QueryConfig::kSpillableReservationGrowthPct, "1000"},
+  });
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = queryCtx;
+  auto task = assertQueryOrdered(
+      params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
+  auto stats = task->taskStats().pipelineStats;
+  EXPECT_LT(0, stats[0].operatorStats[1].spilledRows);
+  EXPECT_GT(kNumBatches * kNumRows, stats[0].operatorStats[1].spilledRows);
+  EXPECT_LT(0, stats[0].operatorStats[1].spilledBytes);
+  EXPECT_EQ(1, stats[0].operatorStats[1].spilledPartitions);
+}
 
-  assertQueryOrdered(
-      plan, "SELECT *, null FROM tmp ORDER BY c0 DESC NULLS LAST", {0});
+TEST_F(OrderByTest, spillWithMemoryLimit) {
+  constexpr int32_t kNumRows = 2000;
+  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
+  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
+  VectorFuzzer fuzzer({}, pool());
+  const int32_t numBatches = 5;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(fuzzer.fuzzRow(rowType));
+  }
+  struct {
+    uint64_t orderByMemLimit;
+    bool expectSpill;
+
+    std::string debugString() const {
+      return fmt::format(
+          "orderByMemLimit:{}, expectSpill:{}", orderByMemLimit, expectSpill);
+    }
+  } testSettings[] = {// Memory limit is disabled so spilling is not triggered.
+                      {0, false},
+                      // Memory limit is too small so always trigger spilling.
+                      {1, true},
+                      // Memory limit is too large so spilling is not triggered.
+                      {1'000'000'000, false}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto tempDirectory = exec::test::TempDirectoryPath::create();
+    auto queryCtx = core::QueryCtx::createForTest();
+    queryCtx->pool()->setMemoryUsageTracker(
+        memory::MemoryUsageTracker::create(kMaxBytes, 0, kMaxBytes));
+    auto results =
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .planNode())
+            .queryCtx(queryCtx)
+            .copyResults(pool_.get());
+    auto task =
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .planNode())
+            .queryCtx(queryCtx)
+            .config(QueryConfig::kSpillPath, tempDirectory->path)
+            .config(core::QueryConfig::kSpillEnabled, "true")
+            .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+            .config(
+                QueryConfig::kOrderBySpillMemoryThreshold,
+                std::to_string(testData.orderByMemLimit))
+            .config(QueryConfig::kSpillPath, tempDirectory->path)
+            .assertResults(results);
+
+    auto stats = task->taskStats().pipelineStats;
+    ASSERT_EQ(testData.expectSpill, stats[0].operatorStats[1].spilledBytes > 0);
+  }
 }

@@ -15,10 +15,13 @@
  */
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Crc.h"
 
 #include <unordered_set>
 
+#include <boost/crc.hpp>
 #include <folly/Random.h>
+#include <folly/hash/Checksum.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
@@ -667,6 +670,82 @@ TEST_F(BitUtilTest, hashMix) {
   EXPECT_EQ(
       bits::commutativeHashMix(123, 321), bits::commutativeHashMix(321, 123));
 }
+
+TEST_F(BitUtilTest, crc) {
+  const char* text =
+      "We were sailing on the sloop John B., ny grandfather and me...";
+  const char* text2 = "around old Nassau we would rowm";
+  boost::crc_32_type crc32;
+  crc32.process_bytes(text, sizeof(text));
+  crc32.process_bytes(text2, sizeof(text2));
+  auto boostCrc = crc32.checksum();
+  bits::Crc32 crc;
+  crc.process_bytes(text, sizeof(text));
+  crc.process_bytes(text2, sizeof(text2));
+  auto follyCrc = crc.checksum();
+
+  EXPECT_EQ(boostCrc, follyCrc);
+}
+
+TEST_F(BitUtilTest, pad) {
+  char bytes[100];
+  memset(bytes, 1, sizeof(bytes));
+  bits::padToAlignment(&bytes[11], 30, 7, 16);
+  // We expect a 0 in bytes[11 +7] ... bytes[11 + 15].
+  EXPECT_EQ(1, bytes[11 + 6]);
+  for (auto i = 11 + 7; i < 11 + 16; ++i) {
+    EXPECT_EQ(0, bytes[i]);
+  }
+  EXPECT_EQ(1, bytes[11 + 16]);
+
+  // Test with end of data before next aligned address.
+  memset(bytes, 1, sizeof(bytes));
+  bits::padToAlignment(&bytes[11], 12, 7, 16);
+  // We expect a 0 in bytes[11 +7] ... bytes[11 + 12].
+  EXPECT_EQ(1, bytes[11 + 6]);
+  for (auto i = 11 + 7; i < 11 + 12; ++i) {
+    EXPECT_EQ(0, bytes[i]);
+  }
+  EXPECT_EQ(1, bytes[11 + 13]);
+}
+
+TEST_F(BitUtilTest, forBatches) {
+  uint64_t bits[] = {
+      0x0f0f'000f'ff00'f0f0, 0xff00'ffff'0000'00ff, 0x0, 0x0fff'0000'0000'ff0f};
+  auto test = [&](int32_t begin, int32_t end) {
+    int32_t numSet = 0;
+    auto numOnes = countBits(bits, begin, end);
+    forBatches<8>(bits, begin, end, [&](int32_t index, uint8_t mask) {
+      EXPECT_EQ(0, index % 8);
+      auto bitfield = reinterpret_cast<const uint8_t*>(bits)[index / 8] & mask;
+      EXPECT_NE(0, bitfield & mask);
+      numSet += __builtin_popcount(bitfield);
+    });
+    EXPECT_EQ(numOnes, numSet);
+    numSet = 0;
+    forBatches<64>(bits, begin, end, [&](int32_t index, uint64_t mask) {
+      EXPECT_EQ(0, index % 64);
+      auto bitfield =
+          reinterpret_cast<const uint64_t*>(bits)[index / 64] & mask;
+      EXPECT_NE(0, bitfield & mask);
+      numSet += __builtin_popcountl(bitfield);
+    });
+    EXPECT_EQ(numOnes, numSet);
+  };
+
+  // Empty
+  test(11, 11);
+
+  // Begins and ends in the same word
+  test(65, 75);
+
+  // multiword, starts and ends on and off 64 bit boundaries.
+  test(64, 140);
+  test(31, 128);
+  test(1, sizeof(bits) * 8 - 22);
+  test(0, sizeof(bits) * 8);
+}
+
 } // namespace bits
 } // namespace velox
 } // namespace facebook

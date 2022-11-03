@@ -12,7 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_dwio_type_fbhive fbhive/HiveTypeParser.cpp
-                                   fbhive/HiveTypeSerializer.cpp)
-
-target_link_libraries(velox_dwio_type_fbhive velox_dwio_common)
+add_subdirectory(fbhive)

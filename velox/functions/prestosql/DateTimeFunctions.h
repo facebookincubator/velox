@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <velox/type/Timestamp.h>
+#include <string_view>
 #include "velox/core/QueryConfig.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/Macros.h"
@@ -118,6 +119,8 @@ template <typename T>
 struct TimestampWithTimezoneSupport {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  // Convert timestampWithTimezone to a timestamp representing the moment at the
+  // zone in timestampWithTimezone.
   FOLLY_ALWAYS_INLINE
   Timestamp toTimestamp(
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
@@ -526,10 +529,22 @@ inline std::optional<DateTimeUnit> getDateUnit(
   return unit;
 }
 
+inline std::optional<DateTimeUnit> getTimestampUnit(
+    const StringView& unitString) {
+  std::optional<DateTimeUnit> unit =
+      fromDateTimeUnitString(unitString, false /*throwIfInvalid*/);
+  VELOX_USER_CHECK(
+      !(unit.has_value() && unit.value() == DateTimeUnit::kMillisecond),
+      "{} is not a valid TIMESTAMP field",
+      unitString);
+
+  return unit;
+}
+
 } // namespace
 
 template <typename T>
-struct DateTruncFunction {
+struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   const date::time_zone* timeZone_ = nullptr;
@@ -542,11 +557,7 @@ struct DateTruncFunction {
     timeZone_ = getTimeZoneFromConfig(config);
 
     if (unitString != nullptr) {
-      unit_ = fromDateTimeUnitString(*unitString, false /*throwIfInvalid*/);
-      VELOX_USER_CHECK(
-          !(unit_.has_value() && unit_.value() == DateTimeUnit::kMillisecond),
-          "{} is not a valid TIMESTAMP field",
-          *unitString);
+      unit_ = getTimestampUnit(*unitString);
     }
   }
 
@@ -556,6 +567,15 @@ struct DateTruncFunction {
       const arg_type<Date>* /*date*/) {
     if (unitString != nullptr) {
       unit_ = getDateUnit(*unitString, false);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* unitString,
+      const arg_type<TimestampWithTimezone>* /*timestamp*/) {
+    if (unitString != nullptr) {
+      unit_ = getTimestampUnit(*unitString);
     }
   }
 
@@ -587,7 +607,7 @@ struct DateTruncFunction {
     }
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Timestamp>& timestamp) {
@@ -595,17 +615,12 @@ struct DateTruncFunction {
     if (unit_.has_value()) {
       unit = unit_.value();
     } else {
-      unit =
-          fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value();
-      VELOX_USER_CHECK(
-          unit != DateTimeUnit::kMillisecond,
-          "{} is not a valid TIMESTAMP field",
-          unitString);
+      unit = getTimestampUnit(unitString).value();
     }
 
     if (unit == DateTimeUnit::kSecond) {
       result = Timestamp(timestamp.getSeconds(), 0);
-      return true;
+      return;
     }
 
     auto dateTime = getDateTime(timestamp, timeZone_);
@@ -615,10 +630,9 @@ struct DateTruncFunction {
     if (timeZone_ != nullptr) {
       result.toGMT(*timeZone_);
     }
-    return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Varchar>& unitString,
       const arg_type<Date>& date) {
@@ -628,14 +642,44 @@ struct DateTruncFunction {
 
     if (unit == DateTimeUnit::kDay) {
       result = Date(date.days());
-      return true;
+      return;
     }
 
     auto dateTime = getDateTime(date);
     adjustDateTime(dateTime, unit);
 
     result = Date(timegm(&dateTime) / kSecondsInDay);
-    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    DateTimeUnit unit;
+    if (unit_.has_value()) {
+      unit = unit_.value();
+    } else {
+      unit = getTimestampUnit(unitString).value();
+    }
+
+    if (unit == DateTimeUnit::kSecond) {
+      auto utcTimestamp =
+          Timestamp::fromMillis(*timestampWithTimezone.template at<0>());
+      result.template get_writer_at<0>() = utcTimestamp.getSeconds() * 1000;
+      result.template get_writer_at<1>() =
+          *timestampWithTimezone.template at<1>();
+      return;
+    }
+
+    auto timestamp = this->toTimestamp(timestampWithTimezone);
+    auto dateTime = getDateTime(timestamp, nullptr);
+    adjustDateTime(dateTime, unit);
+    timestamp = Timestamp::fromMillis(timegm(&dateTime) * 1000);
+    timestamp.toGMT(*timestampWithTimezone.template at<1>());
+
+    result.template get_writer_at<0>() = timestamp.toMillis();
+    result.template get_writer_at<1>() =
+        *timestampWithTimezone.template at<1>();
   }
 };
 
@@ -799,23 +843,34 @@ struct DateDiffFunction {
 };
 
 template <typename T>
-struct DateFormatFunction {
+struct DateFormatFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   const date::time_zone* sessionTimeZone_ = nullptr;
   std::shared_ptr<DateTimeFormatter> mysqlDateTime_;
   bool isConstFormat_ = false;
 
-  FOLLY_ALWAYS_INLINE void initialize(
-      const core::QueryConfig& config,
-      const arg_type<Timestamp>* /*timestamp*/,
-      const arg_type<Varchar>* formatString) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>* formatString) {
     if (formatString != nullptr) {
       mysqlDateTime_ = buildMysqlDateTimeFormatter(
           std::string_view(formatString->data(), formatString->size()));
       isConstFormat_ = true;
     }
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* formatString) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    setFormatter(formatString);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& /*config*/,
+      const arg_type<TimestampWithTimezone>* /*timestamp*/,
+      const arg_type<Varchar>* formatString) {
+    setFormatter(formatString);
   }
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -835,34 +890,32 @@ struct DateFormatFunction {
     }
     return true;
   }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone,
+      const arg_type<Varchar>& formatString) {
+    auto timestamp = this->toTimestamp(timestampWithTimezone);
+    return call(result, timestamp, formatString);
+  }
 };
 
 template <typename T>
 struct DateParseFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-  static constexpr folly::StringPiece supportedFormat{"%Y-%m-%d"};
-  static constexpr folly::StringPiece correspondingJodaFormat{"YYYY-MM-dd"};
 
-  std::optional<JodaFormatter> format_;
+  std::shared_ptr<DateTimeFormatter> format_;
   std::optional<int64_t> sessionTzID_;
-
-  void validateFormat(const velox::StringView& format) {
-    if (format != supportedFormat) {
-      VELOX_USER_FAIL(
-          "'date_parse' function currently only supports '%Y-%m-%d' format but "
-          "'",
-          format,
-          "' is provided");
-    }
-  }
+  bool isConstFormat_ = false;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* formatString) {
     if (formatString != nullptr) {
-      validateFormat(*formatString);
-      format_.emplace(correspondingJodaFormat.data());
+      format_ = buildMysqlDateTimeFormatter(
+          std::string_view(formatString->data(), formatString->size()));
+      isConstFormat_ = true;
     }
 
     auto sessionTzName = config.sessionTimezone();
@@ -875,14 +928,19 @@ struct DateParseFunction {
       out_type<Timestamp>& result,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
-    validateFormat(format);
-    if (!format_.has_value()) {
-      format_.emplace(correspondingJodaFormat.data());
+    if (!isConstFormat_) {
+      format_ = buildMysqlDateTimeFormatter(
+          std::string_view(format.data(), format.size()));
     }
-    auto jodaResult = format_->parse(input);
+
+    auto dateTimeResult =
+        format_->parse(std::string_view(input.data(), input.size()));
+
+    // Since MySql format has no timezone specifier, simply check if session
+    // timezone was provided. If not, fallback to 0 (GMT).
     int16_t timezoneId = sessionTzID_.value_or(0);
-    jodaResult.timestamp.toGMT(timezoneId);
-    result = jodaResult.timestamp;
+    dateTimeResult.timestamp.toGMT(timezoneId);
+    result = dateTimeResult.timestamp;
     return true;
   }
 };
@@ -930,15 +988,18 @@ template <typename T>
 struct ParseDateTimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::optional<JodaFormatter> format_;
+  std::shared_ptr<DateTimeFormatter> format_;
   std::optional<int64_t> sessionTzID_;
+  bool isConstFormat_ = false;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
     if (format != nullptr) {
-      format_.emplace(*format);
+      format_ = buildJodaDateTimeFormatter(
+          std::string_view(format->data(), format->size()));
+      isConstFormat_ = true;
     }
 
     auto sessionTzName = config.sessionTimezone();
@@ -951,15 +1012,20 @@ struct ParseDateTimeFunction {
       out_type<TimestampWithTimezone>& result,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
-    auto jodaResult = format_.has_value() ? format_->parse(input)
-                                          : JodaFormatter(format).parse(input);
+    if (!isConstFormat_) {
+      format_ = buildJodaDateTimeFormatter(
+          std::string_view(format.data(), format.size()));
+    }
+    auto dateTimeResult =
+        format_->parse(std::string_view(input.data(), input.size()));
 
     // If timezone was not parsed, fallback to the session timezone. If there's
     // no session timezone, fallback to 0 (GMT).
-    int16_t timezoneId = jodaResult.timezoneId != -1 ? jodaResult.timezoneId
-                                                     : sessionTzID_.value_or(0);
-    jodaResult.timestamp.toGMT(timezoneId);
-    result = std::make_tuple(jodaResult.timestamp.toMillis(), timezoneId);
+    int16_t timezoneId = dateTimeResult.timezoneId != -1
+        ? dateTimeResult.timezoneId
+        : sessionTzID_.value_or(0);
+    dateTimeResult.timestamp.toGMT(timezoneId);
+    result = std::make_tuple(dateTimeResult.timestamp.toMillis(), timezoneId);
     return true;
   }
 };

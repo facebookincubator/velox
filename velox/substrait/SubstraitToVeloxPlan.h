@@ -25,6 +25,8 @@ namespace facebook::velox::substrait {
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
+  explicit SubstraitVeloxPlanConverter(memory::MemoryPool* pool)
+      : pool_(pool) {}
   struct SplitInfo {
     /// The Partition index.
     u_int32_t partitionIndex;
@@ -43,19 +45,13 @@ class SubstraitVeloxPlanConverter {
   };
 
   /// Convert Substrait AggregateRel into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(
-      const ::substrait::AggregateRel& aggRel,
-      memory::MemoryPool* pool);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::AggregateRel& aggRel);
 
   /// Convert Substrait ProjectRel into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(
-      const ::substrait::ProjectRel& projectRel,
-      memory::MemoryPool* pool);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::ProjectRel& projectRel);
 
   /// Convert Substrait FilterRel into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(
-      const ::substrait::FilterRel& filterRel,
-      memory::MemoryPool* pool);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::FilterRel& filterRel);
 
   /// Convert Substrait ReadRel into Velox PlanNode.
   /// Index: the index of the partition this item belongs to.
@@ -63,33 +59,28 @@ class SubstraitVeloxPlanConverter {
   /// Lengths: the lengths in byte to read from the items.
   core::PlanNodePtr toVeloxPlan(
       const ::substrait::ReadRel& readRel,
-      memory::MemoryPool* pool,
       std::shared_ptr<SplitInfo>& splitInfo);
 
   /// Convert Substrait ReadRel into Velox Values Node.
   core::PlanNodePtr toVeloxPlan(
       const ::substrait::ReadRel& readRel,
-      memory::MemoryPool* pool,
       const RowTypePtr& type);
 
   /// Convert Substrait Rel into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(
-      const ::substrait::Rel& rel,
-      memory::MemoryPool* pool);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::Rel& rel);
 
   /// Convert Substrait RelRoot into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(
-      const ::substrait::RelRoot& root,
-      memory::MemoryPool* pool);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::RelRoot& root);
 
   /// Convert Substrait Plan into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(
-      const ::substrait::Plan& substraitPlan,
-      memory::MemoryPool* pool);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::Plan& substraitPlan);
+
+  /// Check the Substrait type extension only has one unknown extension.
+  bool checkTypeExtension(const ::substrait::Plan& substraitPlan);
 
   /// Construct the function map between the index and the Substrait function
   /// name.
-  void constructFunctionMap(const ::substrait::Plan& sPlan);
+  void constructFunctionMap(const ::substrait::Plan& substraitPlan);
 
   /// Return the function map used by this plan converter.
   const std::unordered_map<uint64_t, std::string>& getFunctionMap() const {
@@ -148,6 +139,9 @@ class SubstraitVeloxPlanConverter {
   /// Mapping from leaf plan node ID to splits.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitInfo>>
       splitInfoMap_;
+
+  /// Memory pool.
+  memory::MemoryPool* pool_;
 };
 
 } // namespace facebook::velox::substrait

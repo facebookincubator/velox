@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/vector/tests/VectorTestBase.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
 
@@ -31,6 +33,7 @@ class PlanNodeToStringTest : public testing::Test, public test::VectorTestBase {
  public:
   PlanNodeToStringTest() {
     functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
     parse::registerTypeResolver();
     data_ = makeRowVector(
         {makeFlatVector<int16_t>({0, 1, 2, 3, 4}),
@@ -500,4 +503,54 @@ TEST_F(PlanNodeToStringTest, tableScan) {
         "-> discount:DOUBLE, quantity:DOUBLE, shipdate:VARCHAR, comment:VARCHAR\n",
         plan->toString(true, false));
   }
+}
+
+TEST_F(PlanNodeToStringTest, decimalConstant) {
+  parse::ParseOptions options;
+  options.parseDecimalAsDouble = false;
+
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .tableScan(ROW({"a"}, {VARCHAR()}))
+                  .project({"a", "1.234"})
+                  .planNode();
+
+  ASSERT_EQ(
+      "-- Project[expressions: (a:VARCHAR, ROW[\"a\"]), (p1:SHORT_DECIMAL(4,3), 1.234)] -> a:VARCHAR, p1:SHORT_DECIMAL(4,3)\n",
+      plan->toString(true));
+}
+
+TEST_F(PlanNodeToStringTest, window) {
+  std::vector<exec::FunctionSignaturePtr> signatures{
+      exec::FunctionSignatureBuilder()
+          .argumentType("BIGINT")
+          .returnType("BIGINT")
+          .build(),
+  };
+  exec::registerWindowFunction("window1", std::move(signatures), nullptr);
+
+  auto plan =
+      PlanBuilder()
+          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .window({"window1(c) over (partition by a order by b "
+                   "range between 10 preceding and unbounded following) AS d"})
+          .planNode();
+  ASSERT_EQ("-- Window\n", plan->toString());
+  ASSERT_EQ(
+      "-- Window[partition by [a] order by [b ASC NULLS LAST] "
+      "d := window1(ROW[\"c\"]) RANGE between 10 PRECEDING and UNBOUNDED FOLLOWING] "
+      "-> a:VARCHAR, b:BIGINT, c:BIGINT, d:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+             .window({"window1(c) over (partition by a "
+                      "range between current row and b following)"})
+             .planNode();
+  ASSERT_EQ("-- Window\n", plan->toString());
+  ASSERT_EQ(
+      "-- Window[partition by [a] order by [] "
+      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING] "
+      "-> a:VARCHAR, b:BIGINT, c:BIGINT, w0:BIGINT\n",
+      plan->toString(true, false));
 }

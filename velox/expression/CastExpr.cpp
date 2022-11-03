@@ -25,6 +25,7 @@
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/external/date/tz.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FunctionVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -43,9 +44,11 @@ namespace {
 template <typename To, typename From, bool Truncate>
 void applyCastKernel(
     vector_size_t row,
-    const DecodedVector& input,
+    const BaseVector& input,
     FlatVector<To>* resultFlatVector,
     bool& nullOutput) {
+  auto* inputVector = input.asUnchecked<SimpleVector<From>>();
+
   // Special handling for string target type
   if constexpr (CppToType<To>::typeKind == TypeKind::VARCHAR) {
     if (nullOutput) {
@@ -53,7 +56,7 @@ void applyCastKernel(
     } else {
       auto output =
           util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-              input.valueAt<From>(row), nullOutput);
+              inputVector->valueAt(row), nullOutput);
       // Write the result output to the output vector
       auto writer = exec::StringWriter<>(resultFlatVector, row);
       writer.resize(output.size());
@@ -65,7 +68,7 @@ void applyCastKernel(
   } else {
     auto result =
         util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-            input.valueAt<From>(row), nullOutput);
+            inputVector->valueAt(row), nullOutput);
     if (nullOutput) {
       resultFlatVector->setNull(row, true);
     } else {
@@ -74,37 +77,53 @@ void applyCastKernel(
   }
 }
 
-void populateNestedRows(
-    const SelectivityVector& rows,
-    const vector_size_t* rawSizes,
-    const vector_size_t* rawOffsets,
-    SelectivityVector& nestedRows) {
-  nestedRows.clearAll();
-  rows.applyToSelected([&](auto row) {
-    nestedRows.setValidRange(
-        rawOffsets[row], rawOffsets[row] + rawSizes[row], true);
-  });
-  nestedRows.updateBounds();
-}
-
 std::string makeErrorMessage(
-    const DecodedVector& input,
+    const BaseVector& input,
     vector_size_t row,
     const TypePtr& toType) {
   return fmt::format(
       "Failed to cast from {} to {}: {}.",
-      input.base()->type()->toString(),
+      input.type()->toString(),
       toType->toString(),
-      input.base()->toString(input.index(row)));
+      input.toString(row));
 }
 
+template <typename TInput, typename TOutput>
+void applyDecimalCastKernel(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType,
+    const TypePtr& toType,
+    VectorPtr castResult,
+    const bool nullOnFailure) {
+  auto sourceVector = input.as<SimpleVector<TInput>>();
+  auto castResultRawBuffer =
+      castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
+  const auto& fromPrecisionScale = getDecimalPrecisionScale(*fromType);
+  const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    auto rescaledValue = DecimalUtil::rescaleWithRoundUp<TInput, TOutput>(
+        sourceVector->valueAt(row),
+        fromPrecisionScale.first,
+        fromPrecisionScale.second,
+        toPrecisionScale.first,
+        toPrecisionScale.second,
+        nullOnFailure);
+    if (rescaledValue.has_value()) {
+      castResultRawBuffer[row] = rescaledValue.value();
+    } else {
+      castResult->setNull(row, true);
+    }
+  });
+}
 } // namespace
 
 template <typename To, typename From>
 void CastExpr::applyCastWithTry(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
-    const DecodedVector& input,
+    const BaseVector& input,
     FlatVector<To>* resultFlatVector) {
   const auto& queryConfig = context.execCtx()->queryCtx()->config();
   auto isCastIntByTruncate = queryConfig.isCastIntByTruncate();
@@ -212,18 +231,20 @@ void CastExpr::applyCastWithTry(
 
 template <TypeKind Kind>
 void CastExpr::applyCast(
-    const TypeKind fromType,
+    const TypePtr& fromType,
+    const TypePtr& toType,
     const SelectivityVector& rows,
     exec::EvalCtx& context,
-    const DecodedVector& input,
+    const BaseVector& input,
     VectorPtr& result) {
   using To = typename TypeTraits<Kind>::NativeType;
+  context.ensureWritable(rows, toType, result);
   auto* resultFlatVector = result->as<FlatVector<To>>();
 
   // Unwrapping fromType pointer. VERY IMPORTANT: dynamic type pointer and
   // static type templates in each cast must match exactly
   // @TODO Add support for needed complex types in T74045702
-  switch (fromType) {
+  switch (fromType->kind()) {
     case TypeKind::TINYINT: {
       return applyCastWithTry<To, int8_t>(
           rows, context, input, resultFlatVector);
@@ -284,12 +305,17 @@ VectorPtr CastExpr::applyMap(
   auto mapKeys = input->mapKeys();
   auto mapValues = input->mapValues();
 
-  LocalSelectivityVector nestedRows(context);
+  SelectivityVector nestedRows;
+  BufferPtr elementToTopLevelRows;
   if (fromType.keyType() != toType.keyType() ||
       fromType.valueType() != toType.valueType()) {
-    nestedRows.allocate(mapKeys->size());
-    populateNestedRows(rows, rawSizes, rawOffsets, *nestedRows);
+    nestedRows = functions::toElementRows(mapKeys->size(), rows, input);
+    elementToTopLevelRows = functions::getElementToTopLevelRows(
+        mapKeys->size(), rows, input, context.pool());
   }
+
+  EvalCtx::ErrorVectorPtr oldErrors;
+  context.swapErrors(oldErrors);
 
   // Cast keys
   VectorPtr newMapKeys;
@@ -297,7 +323,7 @@ VectorPtr CastExpr::applyMap(
     newMapKeys = input->mapKeys();
   } else {
     apply(
-        *nestedRows,
+        nestedRows,
         mapKeys,
         context,
         fromType.keyType(),
@@ -311,13 +337,17 @@ VectorPtr CastExpr::applyMap(
     newMapValues = mapValues;
   } else {
     apply(
-        *nestedRows,
+        nestedRows,
         mapValues,
         context,
         fromType.valueType(),
         toType.valueType(),
         newMapValues);
   }
+
+  context.addElementErrorsToTopLevel(
+      nestedRows, elementToTopLevelRows, oldErrors);
+  context.swapErrors(oldErrors);
 
   // Assemble the output map
   return std::make_shared<MapVector>(
@@ -344,17 +374,28 @@ VectorPtr CastExpr::applyArray(
   // using their linear selectivity vector
   auto arrayElements = input->elements();
 
-  LocalSelectivityVector nestedRows(*context.execCtx(), arrayElements->size());
-  populateNestedRows(rows, inputRawSizes, inputOffsets, *nestedRows);
+  auto nestedRows =
+      functions::toElementRows(arrayElements->size(), rows, input);
+  auto elementToTopLevelRows = functions::getElementToTopLevelRows(
+      arrayElements->size(), rows, input, context.pool());
+
+  EvalCtx::ErrorVectorPtr oldErrors;
+  context.swapErrors(oldErrors);
 
   VectorPtr newElements;
   apply(
-      *nestedRows,
+      nestedRows,
       arrayElements,
       context,
       fromType.elementType(),
       toType.elementType(),
       newElements);
+
+  if (context.errors()) {
+    context.addElementErrorsToTopLevel(
+        nestedRows, elementToTopLevelRows, oldErrors);
+  }
+  context.swapErrors(oldErrors);
 
   // Assemble the output array
   return std::make_shared<ArrayVector>(
@@ -419,8 +460,7 @@ VectorPtr CastExpr::applyRow(
             toFieldName)
       }
       // Create a vector for null for this child
-      BaseVector::ensureWritable(
-          rows, toChildType, context.pool(), &outputChild);
+      context.ensureWritable(rows, toChildType, outputChild);
       outputChild->addNulls(nullptr, rows);
     } else {
       auto inputChild = input->children()[fromChildrenIndex];
@@ -443,8 +483,7 @@ VectorPtr CastExpr::applyRow(
   // Assemble the output row
   auto toNames = toType.names();
   auto toTypes = toType.children();
-  auto finalRowType =
-      std::make_shared<RowType>(std::move(toNames), std::move(toTypes));
+  auto finalRowType = ROW(std::move(toNames), std::move(toTypes));
   return std::make_shared<RowVector>(
       context.pool(),
       finalRowType,
@@ -453,182 +492,179 @@ VectorPtr CastExpr::applyRow(
       std::move(newChildren));
 }
 
-/// Apply casting between a custom type and another type.
-/// @param castTo The boolean indicating whether to cast an input to the custom
-/// type or from the custom type
-/// @param input The input vector
-/// @param allRows The selectivity vector of all rows in input
-/// @param nonNullRows The selectivity vector of non-null rows in input
-/// @param castOperator The cast operator for the custom type
-/// @param thisType The custom type
-/// @param otherType The other type involved in this casting
-/// @param context The context
-/// @param nullOnFailure Whether this is a cast or try_cast operation
-/// @param result The output vector
-template <bool castTo>
-void applyCustomTypeCast(
-    VectorPtr& input,
-    const SelectivityVector& allRows,
-    const SelectivityVector& nonNullRows,
-    const CastOperatorPtr& castOperator,
-    const TypePtr& thisType,
-    const TypePtr& otherType,
+VectorPtr CastExpr::applyDecimal(
+    const SelectivityVector& rows,
+    const BaseVector& input,
     exec::EvalCtx& context,
-    bool nullOnFailure,
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  VectorPtr castResult;
+  context.ensureWritable(rows, toType, castResult);
+  (*castResult).clearNulls(rows);
+  switch (fromType->kind()) {
+    case TypeKind::SHORT_DECIMAL: {
+      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
+        applyDecimalCastKernel<UnscaledShortDecimal, UnscaledShortDecimal>(
+            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+      } else {
+        applyDecimalCastKernel<UnscaledShortDecimal, UnscaledLongDecimal>(
+            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+      }
+      break;
+    }
+    case TypeKind::LONG_DECIMAL: {
+      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
+        applyDecimalCastKernel<UnscaledLongDecimal, UnscaledShortDecimal>(
+            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+      } else {
+        applyDecimalCastKernel<UnscaledLongDecimal, UnscaledLongDecimal>(
+            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+      }
+      break;
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
+  }
+  return castResult;
+}
+
+void CastExpr::applyPeeled(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType,
+    const TypePtr& toType,
     VectorPtr& result) {
-  VELOX_CHECK_NE(
-      thisType,
-      otherType,
-      "Attempting to cast from {} to itself.",
-      thisType->toString());
+  if (castFromOperator_ || castToOperator_) {
+    VELOX_CHECK_NE(
+        fromType,
+        toType,
+        "Attempting to cast from {} to itself.",
+        fromType->toString());
 
-  LocalDecodedVector inputDecoded(context, *input, allRows);
-
-  exec::LocalSelectivityVector baseRows(
-      *context.execCtx(), inputDecoded->base()->size());
-  baseRows->clearAll();
-  context.applyToSelectedNoThrow(nonNullRows, [&](auto row) {
-    baseRows->setValid(inputDecoded->index(row), true);
-  });
-  baseRows->updateBounds();
-
-  VectorPtr localResult;
-  if constexpr (castTo) {
-    BaseVector::ensureWritable(
-        *baseRows, thisType, context.pool(), &localResult);
-
-    castOperator->castTo(
-        *inputDecoded->base(), context, *baseRows, nullOnFailure, *localResult);
+    if (castToOperator_) {
+      castToOperator_->castTo(
+          input, context, rows, nullOnFailure_, toType, result);
+    } else {
+      castFromOperator_->castFrom(
+          input, context, rows, nullOnFailure_, toType, result);
+    }
   } else {
-    BaseVector::ensureWritable(
-        *baseRows, otherType, context.pool(), &localResult);
-
-    castOperator->castFrom(
-        *inputDecoded->base(), context, *baseRows, nullOnFailure, *localResult);
+    switch (toType->kind()) {
+      case TypeKind::MAP:
+        result = applyMap(
+            rows,
+            input.asUnchecked<MapVector>(),
+            context,
+            fromType->asMap(),
+            toType->asMap());
+        break;
+      case TypeKind::ARRAY:
+        result = applyArray(
+            rows,
+            input.asUnchecked<ArrayVector>(),
+            context,
+            fromType->asArray(),
+            toType->asArray());
+        break;
+      case TypeKind::ROW:
+        result = applyRow(
+            rows,
+            input.asUnchecked<RowVector>(),
+            context,
+            fromType->asRow(),
+            toType->asRow());
+        break;
+      case TypeKind::SHORT_DECIMAL:
+      case TypeKind::LONG_DECIMAL:
+        result = applyDecimal(rows, input, context, fromType, toType);
+        break;
+      default: {
+        // Handle primitive type conversions.
+        VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            applyCast,
+            toType->kind(),
+            fromType,
+            toType,
+            rows,
+            context,
+            input,
+            result);
+      }
+    }
   }
-
-  if (!inputDecoded->isIdentityMapping()) {
-    localResult = inputDecoded->wrap(localResult, *input, allRows);
-  }
-
-  context.moveOrCopyResult(localResult, nonNullRows, result);
 }
 
 void CastExpr::apply(
     const SelectivityVector& rows,
     VectorPtr& input,
     exec::EvalCtx& context,
-    const std::shared_ptr<const Type>& fromType,
-    const std::shared_ptr<const Type>& toType,
+    const TypePtr& fromType,
+    const TypePtr& toType,
     VectorPtr& result) {
+  LocalDecodedVector decoded(context, *input, rows);
+  auto* rawNulls = decoded->nulls();
+
   LocalSelectivityVector nonNullRows(*context.execCtx(), rows.end());
   *nonNullRows = rows;
-  if (input->mayHaveNulls()) {
-    nonNullRows->deselectNulls(
-        input->flatRawNulls(rows), rows.begin(), rows.end());
+  if (rawNulls) {
+    nonNullRows->deselectNulls(rawNulls, rows.begin(), rows.end());
   }
 
   LocalSelectivityVector nullRows(*context.execCtx(), rows.end());
   nullRows->clearAll();
-  if (input->mayHaveNulls()) {
+  if (rawNulls) {
     *nullRows = rows;
-    nullRows->deselectNonNulls(
-        input->flatRawNulls(rows), rows.begin(), rows.end());
+    nullRows->deselectNonNulls(rawNulls, rows.begin(), rows.end());
   }
 
-  if (castToOperator_) {
-    applyCustomTypeCast<true>(
-        input,
-        rows,
-        *nonNullRows,
-        castToOperator_,
-        toType,
-        fromType,
-        context,
-        nullOnFailure_,
-        result);
-  } else if (castFromOperator_) {
-    applyCustomTypeCast<false>(
-        input,
-        rows,
-        *nonNullRows,
-        castFromOperator_,
-        fromType,
-        toType,
-        context,
-        nullOnFailure_,
-        result);
+  VectorPtr localResult;
+  if (!nonNullRows->hasSelections()) {
+    localResult =
+        BaseVector::createNullConstant(toType, rows.end(), context.pool());
+  } else if (decoded->isIdentityMapping()) {
+    applyPeeled(
+        *nonNullRows, *decoded->base(), context, fromType, toType, localResult);
+
   } else {
-    LocalDecodedVector decoded(context, *input, rows);
+    ScopedContextSaver saver;
+    LocalSelectivityVector translatedRowsHolder(*context.execCtx());
 
-    if (toType->isArray() || toType->isMap() || toType->isRow()) {
-      LocalSelectivityVector translatedRows(
-          *context.execCtx(), decoded->base()->size());
-      translatedRows->clearAll();
-      nonNullRows->applyToSelected([&](auto row) {
-        translatedRows->setValid(decoded->index(row), true);
-      });
-      translatedRows->updateBounds();
-
-      VectorPtr localResult;
-
-      switch (toType->kind()) {
-        // Handle complex type conversions
-        case TypeKind::MAP:
-          localResult = applyMap(
-              *translatedRows,
-              decoded->base()->asUnchecked<MapVector>(),
-              context,
-              fromType->asMap(),
-              toType->asMap());
-          break;
-        case TypeKind::ARRAY:
-          localResult = applyArray(
-              *translatedRows,
-              decoded->base()->asUnchecked<ArrayVector>(),
-              context,
-              fromType->asArray(),
-              toType->asArray());
-          break;
-        case TypeKind::ROW:
-          localResult = applyRow(
-              *translatedRows,
-              decoded->base()->asUnchecked<RowVector>(),
-              context,
-              fromType->asRow(),
-              toType->asRow());
-          break;
-        default: {
-          VELOX_UNREACHABLE();
-        }
-      }
-
-      if (!decoded->isIdentityMapping()) {
-        localResult = decoded->wrap(localResult, *input, rows);
-      }
-
-      context.moveOrCopyResult(localResult, rows, result);
+    if (decoded->isConstantMapping()) {
+      auto index = decoded->index(nonNullRows->begin());
+      singleRow(translatedRowsHolder, index);
+      context.saveAndReset(saver, *nonNullRows);
+      context.setConstantWrap(index);
     } else {
-      // Handling primitive type conversions
-      BaseVector::ensureWritable(rows, toType, context.pool(), &result);
-      // Unwrapping toType pointer. VERY IMPORTANT: dynamic type pointer and
-      // static type templates in each cast must match exactly
-      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          applyCast,
-          toType->kind(),
-          fromType->kind(),
-          *nonNullRows,
-          context,
-          *decoded,
-          result);
+      translateToInnerRows(*nonNullRows, *decoded, translatedRowsHolder);
+      context.saveAndReset(saver, *nonNullRows);
+      auto wrapping = decoded->dictionaryWrapping(*input, *nonNullRows);
+      context.setDictionaryWrap(
+          std::move(wrapping.indices), std::move(wrapping.nulls));
     }
-  }
 
-  // Copy nulls from "input".
-  if (nullRows->hasSelections()) {
-    auto targetNulls = result->mutableRawNulls();
-    nullRows->applyToSelected(
-        [&](auto row) { bits::setNull(targetNulls, row, true); });
+    applyPeeled(
+        *translatedRowsHolder,
+        *decoded->base(),
+        context,
+        fromType,
+        toType,
+        localResult);
+
+    localResult =
+        context.applyWrapToPeeledResult(toType, localResult, *nonNullRows);
+  }
+  context.moveOrCopyResult(localResult, rows, result);
+  context.releaseVector(localResult);
+
+  // If we have a mix of null and non-null in input, add nulls to the result.
+  VELOX_CHECK_NOT_NULL(result);
+  if (nullRows->hasSelections() && nonNullRows->hasSelections()) {
+    Expr::addNulls(
+        rows, nonNullRows->asRange().bits(), context, toType, result);
   }
 }
 
@@ -641,10 +677,9 @@ void CastExpr::evalSpecialForm(
   auto fromType = inputs_[0]->type();
   auto toType = std::const_pointer_cast<const Type>(type_);
 
-  stats_.numProcessedVectors += 1;
-  stats_.numProcessedRows += rows.countSelected();
-  auto timer = cpuWallTimer();
   apply(rows, input, context, fromType, toType, result);
+  // Return 'input' back to the vector pool in 'context' so it can be reused.
+  context.releaseVector(input);
 }
 
 std::string CastExpr::toString(bool recursive) const {
@@ -659,4 +694,57 @@ std::string CastExpr::toString(bool recursive) const {
   return out.str();
 }
 
+namespace {
+
+/// Appends type's SQL string to 'out'. Uses DuckDB SQL.
+void toTypeSql(const TypePtr& type, std::ostream& out) {
+  if (type->isPrimitiveType()) {
+    out << type->toString();
+    return;
+  }
+
+  switch (type->kind()) {
+    case TypeKind::ARRAY:
+      // Append <type>[], e.g. bigint[].
+      toTypeSql(type->childAt(0), out);
+      out << "[]";
+      break;
+    case TypeKind::MAP:
+      // Append map(<key>, <value>), e.g. map(varchar, bigint).
+      out << "map(";
+      toTypeSql(type->childAt(0), out);
+      out << ", ";
+      toTypeSql(type->childAt(1), out);
+      out << ")";
+      break;
+    case TypeKind::ROW: {
+      // Append struct(name1 type1, name2 type2,..), e.g.
+      // struct(a bigint, b real);
+      const auto& rowType = type->asRow();
+      out << "struct(";
+      for (auto i = 0; i < type->size(); ++i) {
+        if (i > 0) {
+          out << ", ";
+        }
+        out << rowType.nameOf(i) << " ";
+        toTypeSql(type->childAt(i), out);
+      }
+      out << ")";
+      break;
+    }
+    default:
+      VELOX_UNSUPPORTED("Type is not supported: {}", type->toString());
+  }
+}
+} // namespace
+
+std::string CastExpr::toSql() const {
+  std::stringstream out;
+  out << "cast(";
+  appendInputsSql(out);
+  out << " as ";
+  toTypeSql(type_, out);
+  out << ")";
+  return out.str();
+}
 } // namespace facebook::velox::exec

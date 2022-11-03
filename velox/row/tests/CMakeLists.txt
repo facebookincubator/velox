@@ -22,9 +22,11 @@ target_link_libraries(
   velox_row_test
   velox_row
   velox_exec
-  velox_exec_test_util
+  velox_exec_test_lib
   velox_functions_lib
   velox_functions_prestosql
+  velox_aggregates
+  velox_presto_serializer
   velox_type
   velox_vector
   velox_vector_fuzzer

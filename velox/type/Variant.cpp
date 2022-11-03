@@ -15,16 +15,20 @@
  */
 
 #include "velox/type/Variant.h"
+#include <cfloat>
 #include "common/encode/Base64.h"
 #include "folly/json.h"
 
 namespace facebook::velox {
 
 namespace {
-folly::json::serialization_opts& getOpts() {
-  static folly::json::serialization_opts opts;
-  opts.sort_keys = true;
-  return opts;
+const folly::json::serialization_opts& getOpts() {
+  static const folly::json::serialization_opts opts_ = []() {
+    folly::json::serialization_opts opts;
+    opts.sort_keys = true;
+    return opts;
+  }();
+  return opts_;
 }
 } // namespace
 
@@ -72,6 +76,44 @@ struct VariantEquality<TypeKind::DATE> {
       return evaluateNullEquality<NullEqualsNull>(a, b);
     } else {
       return a.value<TypeKind::DATE>() == b.value<TypeKind::DATE>();
+    }
+  }
+};
+
+template <>
+struct VariantEquality<TypeKind::SHORT_DECIMAL> {
+  template <bool NullEqualsNull>
+  static bool equals(const variant& a, const variant& b) {
+    const auto lhs = a.value<TypeKind::SHORT_DECIMAL>();
+    const auto rhs = b.value<TypeKind::SHORT_DECIMAL>();
+    const auto lType = DECIMAL(lhs.precision, lhs.scale);
+    const auto rType = DECIMAL(rhs.precision, rhs.scale);
+    if (!lType->equivalent(*rType)) {
+      return false;
+    }
+    if (a.isNull() || b.isNull()) {
+      return evaluateNullEquality<NullEqualsNull>(a, b);
+    } else {
+      return lhs.value() == rhs.value();
+    }
+  }
+};
+
+template <>
+struct VariantEquality<TypeKind::LONG_DECIMAL> {
+  template <bool NullEqualsNull>
+  static bool equals(const variant& a, const variant& b) {
+    const auto lhs = a.value<TypeKind::LONG_DECIMAL>();
+    const auto rhs = b.value<TypeKind::LONG_DECIMAL>();
+    const auto lType = DECIMAL(lhs.precision, lhs.scale);
+    const auto rType = DECIMAL(rhs.precision, rhs.scale);
+    if (!lType->equivalent(*rType)) {
+      return false;
+    }
+    if (a.isNull() || b.isNull()) {
+      return evaluateNullEquality<NullEqualsNull>(a, b);
+    } else {
+      return lhs.value() == rhs.value();
     }
   }
 };
@@ -191,8 +233,8 @@ void variant::throwCheckIsKindError(TypeKind kind) const {
       mapTypeKindToName(kind))};
 }
 
-void variant::throwCheckNotNullError() const {
-  throw std::invalid_argument{"it's null!"};
+void variant::throwCheckPtrError() const {
+  throw std::invalid_argument{"missing variant value"};
 }
 
 std::string variant::toJson() const {
@@ -310,8 +352,14 @@ std::string variant::toJson() const {
       // debugging only. Variant::serialize should actually serialize the data.
       return "\"Opaque<" + value<TypeKind::OPAQUE>().type->toString() + ">\"";
     }
-    case TypeKind::SHORT_DECIMAL:
-    case TypeKind::LONG_DECIMAL:
+    case TypeKind::SHORT_DECIMAL: {
+      return DecimalUtil::toString(
+          value<TypeKind::SHORT_DECIMAL>().value(), inferType());
+    }
+    case TypeKind::LONG_DECIMAL: {
+      return DecimalUtil::toString(
+          value<TypeKind::LONG_DECIMAL>().value(), inferType());
+    }
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:
     case TypeKind::INVALID:
@@ -320,6 +368,21 @@ std::string variant::toJson() const {
 
   VELOX_UNSUPPORTED(
       "Unsupported: given type {} is not json-ready", mapTypeKindToName(kind_));
+}
+
+void serializeOpaque(
+    folly::dynamic& variantObj,
+    detail::OpaqueCapsule opaqueValue) {
+  try {
+    auto serializeFunction = opaqueValue.type->getSerializeFunc();
+    variantObj["value"] = serializeFunction(opaqueValue.obj);
+    variantObj["opaque_type"] = folly::toJson(opaqueValue.type->serialize());
+  } catch (VeloxRuntimeError& ex) {
+    // Re-throw error for backwards compatibility.
+    // Want to return error_code::kNotImplemented rather
+    // than error_code::kInvalidState
+    VELOX_NYI(ex.message());
+  }
 }
 
 folly::dynamic variant::serialize() const {
@@ -394,16 +457,15 @@ folly::dynamic variant::serialize() const {
       objValue = value<TypeKind::VARCHAR>();
       break;
     }
-
+    case TypeKind::OPAQUE: {
+      serializeOpaque(variantObj, value<TypeKind::OPAQUE>());
+      break;
+    }
     case TypeKind::DATE:
     case TypeKind::INTERVAL_DAY_TIME:
     case TypeKind::TIMESTAMP:
     case TypeKind::INVALID:
       VELOX_NYI();
-
-    case TypeKind::OPAQUE:
-      VELOX_NYI(
-          "Opaque types serialization is potentially possible but not implemented yet");
 
     default:
       VELOX_NYI();
@@ -412,6 +474,22 @@ folly::dynamic variant::serialize() const {
   return variantObj;
 }
 
+variant deserializeOpaque(const folly::dynamic& variantobj) {
+  auto typ = folly::parseJson(variantobj["opaque_type"].asString());
+  auto opaqueType =
+      std::dynamic_pointer_cast<const OpaqueType>(Type::create(typ));
+
+  try {
+    auto deserializeFunc = opaqueType->getDeserializeFunc();
+    auto value = variantobj["value"].asString();
+    return variant::opaque(deserializeFunc(value), opaqueType);
+  } catch (VeloxRuntimeError& ex) {
+    // Re-throw error for backwards compatibility.
+    // Want to return error_code::kNotImplemented rather
+    // than error_code::kInvalidState
+    VELOX_NYI(ex.message());
+  }
+}
 variant variant::create(const folly::dynamic& variantobj) {
   TypeKind kind = mapNameToTypeKind(variantobj["type"].asString());
   const folly::dynamic& obj = variantobj["value"];
@@ -478,6 +556,9 @@ variant variant::create(const folly::dynamic& variantobj) {
       }
       return variant::create<TypeKind::DOUBLE>(obj.asDouble());
     }
+    case TypeKind::OPAQUE: {
+      return deserializeOpaque(variantobj);
+    }
     case TypeKind::DATE:
     case TypeKind::INTERVAL_DAY_TIME:
     case TypeKind::TIMESTAMP:
@@ -495,6 +576,12 @@ variant variant::create(const folly::dynamic& variantobj) {
 uint64_t variant::hash() const {
   uint64_t hash = 0;
   if (isNull()) {
+    if (kind_ == TypeKind::SHORT_DECIMAL) {
+      return value<TypeKind::SHORT_DECIMAL>().hash();
+    }
+    if (kind_ == TypeKind::LONG_DECIMAL) {
+      return value<TypeKind::LONG_DECIMAL>().hash();
+    }
     return folly::Hash{}(static_cast<int32_t>(kind_));
   }
 
@@ -548,7 +635,12 @@ uint64_t variant::hash() const {
       return folly::Hash{}(
           timestampValue.getSeconds(), timestampValue.getNanos());
     }
-
+    case TypeKind::SHORT_DECIMAL: {
+      return value<TypeKind::SHORT_DECIMAL>().hash();
+    }
+    case TypeKind::LONG_DECIMAL: {
+      return value<TypeKind::LONG_DECIMAL>().hash();
+    }
     case TypeKind::MAP: {
       auto hasher = folly::Hash{};
       auto& mapVariant = value<TypeKind::MAP>();
@@ -571,19 +663,41 @@ uint64_t variant::hash() const {
   }
 }
 
-/*static*/ bool variant::equalsFloatingPointWithEpsilon(
-    const variant& a,
-    const variant& b) {
+namespace {
+
+// Compare floating point numbers using relative epsilon comparison.
+// See
+// https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
+// for details.
+template <TypeKind KIND, typename TFloat>
+bool equalsFloatingPointWithEpsilonTyped(const variant& a, const variant& b) {
+  TFloat f1 = a.value<KIND>();
+  TFloat f2 = b.value<KIND>();
+
+  // Check if the numbers are really close -- needed
+  // when comparing numbers near zero.
+  if (fabs(f1 - f2) < kEpsilon) {
+    return true;
+  }
+
+  TFloat largest = std::max(abs(f1), abs(f2));
+
+  return fabs(f1 - f2) <= largest * 2 * FLT_EPSILON;
+}
+
+bool equalsFloatingPointWithEpsilon(const variant& a, const variant& b) {
   if (a.isNull() or b.isNull()) {
     return false;
   }
-  if (a.kind_ == TypeKind::REAL) {
-    return fabs(a.value<TypeKind::REAL>() - b.value<TypeKind::REAL>()) <
-        kEpsilon;
+
+  if (a.kind() == TypeKind::REAL) {
+    return equalsFloatingPointWithEpsilonTyped<TypeKind::REAL, float>(a, b);
+  } else {
+    VELOX_CHECK_EQ(a.kind(), TypeKind::DOUBLE);
+    return equalsFloatingPointWithEpsilonTyped<TypeKind::DOUBLE, double>(a, b);
   }
-  return fabs(a.value<TypeKind::DOUBLE>() - b.value<TypeKind::DOUBLE>()) <
-      kEpsilon;
 }
+} // namespace
 
 bool variant::lessThanWithEpsilon(const variant& other) const {
   if (other.kind_ != this->kind_) {

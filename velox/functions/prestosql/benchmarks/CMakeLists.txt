@@ -13,8 +13,8 @@
 # limitations under the License.
 
 set(BENCHMARK_DEPENDENCIES_NO_FUNC
-    velox_functions_test_lib velox_exec velox_exec_test_util
-    ${gflags_LIBRARIES} ${FOLLY_WITH_DEPENDENCIES} ${FOLLY_BENCHMARK})
+    velox_functions_test_lib velox_exec velox_exec_test_lib ${gflags_LIBRARIES}
+    ${FOLLY_WITH_DEPENDENCIES} ${FOLLY_BENCHMARK})
 
 set(BENCHMARK_DEPENDENCIES
     velox_functions_prestosql velox_functions_lib velox_vector_fuzzer
@@ -33,6 +33,12 @@ target_link_libraries(velox_functions_prestosql_benchmarks_array_min_max
 add_executable(velox_functions_prestosql_benchmarks_array_position
                ArrayPositionBenchmark.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_array_position
+                      ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_prestosql_benchmarks_array_sum
+               ArraySumBenchmark.cpp)
+
+target_link_libraries(velox_functions_prestosql_benchmarks_array_sum
                       ${BENCHMARK_DEPENDENCIES})
 
 add_executable(velox_functions_prestosql_benchmarks_width_bucket
@@ -130,4 +136,28 @@ target_link_libraries(velox_functions_prestosql_benchmarks_zip
 
 add_executable(velox_functions_prestosql_benchmarks_row Row.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_row
+                      ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_prestosql_benchmarks_comparisons
+               ComparisonsBenchmark.cpp)
+target_link_libraries(velox_functions_prestosql_benchmarks_comparisons
+                      ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_prestosql_benchmarks_concat ConcatBenchmark.cpp)
+target_link_libraries(velox_functions_prestosql_benchmarks_concat
+                      ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_prestosql_benchmarks_zip_with
+               ZipWithBenchmark.cpp)
+target_link_libraries(velox_functions_prestosql_benchmarks_zip_with
+                      ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_prestosql_benchmarks_map_zip_with
+               MapZipWithBenchmark.cpp)
+target_link_libraries(velox_functions_prestosql_benchmarks_map_zip_with
+                      ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_prestosql_benchmarks_cardinality
+               CardinalityBenchmark.cpp)
+target_link_libraries(velox_functions_prestosql_benchmarks_cardinality
                       ${BENCHMARK_DEPENDENCIES})

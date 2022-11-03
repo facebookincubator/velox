@@ -11,8 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_hive_connector_test HivePartitionFunctionTest.cpp
-                                         FileHandleTest.cpp)
+add_executable(
+  velox_hive_connector_test HivePartitionFunctionTest.cpp FileHandleTest.cpp
+                            HiveWriteProtocolTest.cpp)
 add_test(velox_hive_connector_test velox_hive_connector_test)
 
 target_link_libraries(
@@ -22,6 +23,6 @@ target_link_libraries(
   velox_dwio_common_exception
   velox_vector_test_lib
   velox_exec
-  velox_exec_test_util
+  velox_exec_test_lib
   gtest
   gtest_main)

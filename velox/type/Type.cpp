@@ -40,6 +40,22 @@ bool isColumnNameRequiringEscaping(const std::string& name) {
 
 namespace facebook::velox {
 
+bool isDecimalName(const std::string& typeName) {
+  auto typeNameUpper = boost::algorithm::to_upper_copy(typeName);
+  return (
+      typeNameUpper == TypeTraits<TypeKind::SHORT_DECIMAL>::name ||
+      typeNameUpper == TypeTraits<TypeKind::LONG_DECIMAL>::name);
+}
+
+bool isDecimalTypeSignature(const std::string& arg) {
+  auto upper = boost::algorithm::to_upper_copy(arg);
+  return (
+      upper.find(TypeTraits<TypeKind::SHORT_DECIMAL>::name) !=
+          std::string::npos ||
+      upper.find(TypeTraits<TypeKind::LONG_DECIMAL>::name) !=
+          std::string::npos);
+}
+
 // Static variable intialization is not thread safe for non
 // constant-initialization, but scoped static initialization is thread safe.
 const std::unordered_map<std::string, TypeKind>& getTypeStringMap() {
@@ -121,18 +137,14 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
   return found->second;
 }
 
-void getDecimalPrecisionScale(const Type& type, int& precision, int& scale) {
-  VELOX_CHECK(isDecimalKind(type.kind()));
-  if (type.kind() == TypeKind::SHORT_DECIMAL) {
-    const ShortDecimalType* decimalType =
-        static_cast<const ShortDecimalType*>(&type);
-    precision = decimalType->precision();
-    scale = decimalType->scale();
+std::pair<int, int> getDecimalPrecisionScale(const Type& type) {
+  VELOX_CHECK(type.isShortDecimal() || type.isLongDecimal());
+  if (type.isShortDecimal()) {
+    const auto& decimalType = type.asShortDecimal();
+    return {decimalType.precision(), decimalType.scale()};
   } else {
-    const LongDecimalType* decimalType =
-        static_cast<const LongDecimalType*>(&type);
-    precision = decimalType->precision();
-    scale = decimalType->scale();
+    const auto& decimalType = type.asLongDecimal();
+    return {decimalType.precision(), decimalType.scale()};
   }
 }
 
@@ -219,7 +231,7 @@ bool ArrayType::equivalent(const Type& other) const {
     return false;
   }
   auto& otherArray = other.asArray();
-  return *child_ == *otherArray.child_;
+  return child_->equivalent(*otherArray.child_);
 }
 
 folly::dynamic ArrayType::serialize() const {
@@ -458,7 +470,8 @@ bool MapType::equivalent(const Type& other) const {
     return false;
   }
   auto& otherMap = other.asMap();
-  return *keyType_ == *otherMap.keyType_ && *valueType_ == *otherMap.valueType_;
+  return keyType_->equivalent(*otherMap.keyType_) &&
+      valueType_->equivalent(*otherMap.valueType_);
 }
 
 bool FunctionType::equivalent(const Type& other) const {
@@ -680,6 +693,15 @@ std::shared_ptr<const Type> createScalarType(TypeKind kind) {
 std::shared_ptr<const Type> createType(
     TypeKind kind,
     std::vector<std::shared_ptr<const Type>>&& children) {
+  if (kind == TypeKind::FUNCTION) {
+    VELOX_USER_CHECK_GE(
+        children.size(),
+        1,
+        "FUNCTION type should have at least one child type");
+    std::vector<TypePtr> argTypes(
+        children.begin(), children.begin() + children.size() - 1);
+    return std::make_shared<FunctionType>(std::move(argTypes), children.back());
+  }
   return VELOX_DYNAMIC_TYPE_DISPATCH(createType, kind, std::move(children));
 }
 
@@ -775,6 +797,41 @@ exec::CastOperatorPtr getCastOperator(const std::string& name) {
   }
 
   return nullptr;
+}
+
+TypePtr fromKindToScalerType(TypeKind kind) {
+  switch (kind) {
+    case TypeKind::TINYINT:
+      return TINYINT();
+    case TypeKind::BOOLEAN:
+      return BOOLEAN();
+    case TypeKind::SMALLINT:
+      return SMALLINT();
+    case TypeKind::BIGINT:
+      return BIGINT();
+    case TypeKind::INTEGER:
+      return INTEGER();
+    case TypeKind::REAL:
+      return REAL();
+    case TypeKind::VARCHAR:
+      return VARCHAR();
+    case TypeKind::VARBINARY:
+      return VARBINARY();
+    case TypeKind::TIMESTAMP:
+      return TIMESTAMP();
+    case TypeKind::DOUBLE:
+      return DOUBLE();
+    case TypeKind::DATE:
+      return DATE();
+    case TypeKind::INTERVAL_DAY_TIME:
+      return INTERVAL_DAY_TIME();
+    case TypeKind::UNKNOWN:
+      return UNKNOWN();
+    default:
+      VELOX_UNSUPPORTED(
+          "Kind is not a scalar type: {}", mapTypeKindToName(kind));
+      return nullptr;
+  }
 }
 
 } // namespace facebook::velox

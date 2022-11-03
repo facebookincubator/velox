@@ -11,14 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_vector_test_lib VectorMaker.cpp VectorTestBase.cpp)
-
-target_link_libraries(velox_vector_test_lib velox_vector)
+add_subdirectory(utils)
 
 add_executable(
   velox_vector_test
   VectorCompareTest.cpp
+  VectorSaverTest.cpp
   VectorMakerTest.cpp
+  VectorPoolTest.cpp
   VectorTest.cpp
   VectorToStringTest.cpp
   VectorEstimateFlatSizeTest.cpp
@@ -26,8 +26,10 @@ add_executable(
   DecodedVectorTest.cpp
   SelectivityVectorTest.cpp
   EnsureWritableVectorTest.cpp
+  IsWritableVectorTest.cpp
   LazyVectorTest.cpp
-  MayHaveNullsRecursiveTest.cpp)
+  MayHaveNullsRecursiveTest.cpp
+  VariantToVectorTest.cpp)
 
 add_test(velox_vector_test velox_vector_test)
 
@@ -39,6 +41,8 @@ target_link_libraries(
   velox_serialization
   velox_memory
   velox_presto_serializer
+  velox_temp_path
+  velox_vector_fuzzer
   ${Boost_ATOMIC_LIBRARIES}
   ${Boost_CONTEXT_LIBRARIES}
   ${Boost_DATE_TIME_LIBRARIES}

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 #include <fmt/format.h>
 
@@ -298,12 +298,13 @@ ArrayVectorPtr ArraySortTest::arrayVector<TestMapType>(
 template <>
 ArrayVectorPtr ArraySortTest::arrayVector<TestArrayType>(
     const std::vector<std::optional<TestArrayType>>& inputValues) {
-  std::vector<std::vector<std::optional<TestArrayType>>> inputVectors;
+  std::vector<std::optional<std::vector<std::optional<TestArrayType>>>>
+      inputVectors;
   inputVectors.reserve(numVectors_);
   for (int i = 0; i < numVectors_; ++i) {
     inputVectors.push_back(inputValues);
   }
-  return makeNestedArrayVector<StringView>(inputVectors);
+  return makeNullableNestedArrayVector<StringView>(inputVectors);
 }
 
 template <>
@@ -374,6 +375,60 @@ void ArraySortTest::SetUp() {
 
 TEST_P(ArraySortTest, basic) {
   runTest(GetParam());
+}
+
+TEST_P(ArraySortTest, constant) {
+  if (GetParam() != TypeKind::BIGINT) {
+    GTEST_SKIP() << "Skipping constant test for non-bigint type";
+  }
+
+  vector_size_t size = 1'000;
+  auto data =
+      makeArrayVector<int64_t>({{1, 2, 3, 0}, {4, 5, 4, 5}, {6, 6, 6, 6}});
+
+  auto evaluateConstant = [&](vector_size_t row, const VectorPtr& vector) {
+    return evaluate(
+        "array_sort(c0)",
+        makeRowVector({BaseVector::wrapInConstant(size, row, vector)}));
+  };
+
+  auto result = evaluateConstant(0, data);
+  auto expected = makeConstantArray<int64_t>(size, {0, 1, 2, 3});
+  assertEqualVectors(expected, result);
+
+  result = evaluateConstant(1, data);
+  expected = makeConstantArray<int64_t>(size, {4, 4, 5, 5});
+  assertEqualVectors(expected, result);
+
+  result = evaluateConstant(2, data);
+  expected = makeConstantArray<int64_t>(size, {6, 6, 6, 6});
+  assertEqualVectors(expected, result);
+}
+
+TEST_P(ArraySortTest, dictionaryEncodedElements) {
+  if (GetParam() != TypeKind::BIGINT) {
+    GTEST_SKIP()
+        << "Skipping dictionaryEncodedElements test for non-bigint type";
+  }
+
+  auto elementVector = makeNullableFlatVector<int64_t>({3, 1, 2, 4, 5});
+  auto dictionaryVector = BaseVector::wrapInDictionary(
+      makeNulls(5, nullEvery(2)), makeIndicesInReverse(5), 5, elementVector);
+  // Array vector with one array.
+  auto arrayVector = makeArrayVector({0}, dictionaryVector);
+  auto result = evaluate("array_sort(c0)", makeRowVector({arrayVector}));
+  assertEqualVectors(
+      result,
+      makeNullableArrayVector<int64_t>(
+          {{1, 4, std::nullopt, std::nullopt, std::nullopt}}));
+
+  // Array vector with 2 arrays.
+  arrayVector = makeArrayVector({0, 2}, dictionaryVector);
+  result = evaluate("array_sort(c0)", makeRowVector({arrayVector}));
+  assertEqualVectors(
+      result,
+      makeNullableArrayVector<int64_t>(
+          {{4, std::nullopt}, {1, std::nullopt, std::nullopt}}));
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

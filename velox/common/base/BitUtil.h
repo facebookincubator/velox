@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #ifdef __BMI2__
 #include <x86intrin.h>
@@ -190,6 +191,65 @@ inline void forEachWord(
   if (end != lastWord) {
     partialWordFunc(lastWord / 64, lowMask(end - lastWord));
   }
+}
+
+/// Variant of forEachWord with a single callable for more concise
+/// invocation for cases with a long callable.
+template <typename PartialWordFunc>
+inline void
+forEachWord(int32_t begin, int32_t end, PartialWordFunc partialWordFunc) {
+  if (begin >= end) {
+    return;
+  }
+  int32_t firstIndex = begin / 64;
+  int32_t lastIndex = (roundUp(end, 64) - 64) / 64;
+  for (auto index = firstIndex; index <= lastIndex; ++index) {
+    uint64_t mask = ~0UL;
+    if (index == firstIndex && begin != firstIndex * 64) {
+      // We do not start at 64 bit boundary, and off the bits below start.
+      mask = highMask((firstIndex + 1) * 64 - begin);
+    }
+    if (index == lastIndex && lastIndex * 64 + 64 != end) {
+      // The last word is partial, and off the bits at and above 'end'.
+      mask &= lowMask(end - lastIndex * 64);
+    }
+    partialWordFunc(index, mask);
+  }
+}
+
+// Applies callable to each group of 'kWidth' values where at least
+// one bit of 'bits' is set. The callable is called with a bit
+// number and a mask of active values, where bit 0 corresponds to
+// the bit at index. The index ranges over multiples of kWidth,
+// skipping kWidth bit runs where no bit is set. This can be used
+// for invoking a SIMD operation kWidth wide over a selected rows
+// bitmap. The first and last invocation of the callable may be
+// outside of begin ... end by up to kWidth - 1 bits but using the
+// mask for example for load with mask will scope the operation to
+// valid values only.
+template <int8_t kWidth, typename Callable>
+void forBatches(
+    const uint64_t* bits,
+    int32_t begin,
+    int32_t end,
+    Callable func) {
+  constexpr int64_t unitMask = kWidth == 64 ? ~0UL : lowMask(kWidth);
+  static_assert(kWidth <= 64 && 64 % kWidth == 0);
+  bits::forEachWord(begin, end, [&](auto index, uint64_t mask) {
+    uint64_t active = bits[index] & mask;
+    int32_t first = 0;
+    while (active) {
+      int32_t skip = (__builtin_ctzll(active) / kWidth) * kWidth;
+      active >>= skip;
+      first += skip;
+      auto selected = active & unitMask;
+      if (selected) {
+        func(index * 64 + first, selected);
+        first += kWidth;
+        active = kWidth == 64 ? 0 : active >> kWidth;
+      }
+    }
+  });
 }
 
 /// Invokes a function for each batch of bits (partial or full words)
@@ -855,6 +915,24 @@ inline uint32_t rotateLeft(uint32_t a, int shift) {
 #else
   return (a << shift) | (a >> (32 - shift));
 #endif
+}
+
+/// Pads bytes starting at 'pointer + padIndex' up until the next
+/// offset from 'pointer' that is a multiple of 'alignment'. If
+/// 'padIndex' is 5 and alignment is 16, writes 11 zero bytes to
+/// [pointer + 5 ... pointer + 15 inclusive. Does not write past
+/// 'pointer' + 'size' in any case. Used to initialize memory that may
+/// be partly filled for use with valgring/asan.
+inline void padToAlignment(
+    void* pointer,
+    int32_t size,
+    int32_t padIndex,
+    int32_t alignment) {
+  auto roundEnd = std::min<int32_t>(size, bits::roundUp(padIndex, alignment));
+  if (roundEnd > padIndex) {
+    std::memset(
+        reinterpret_cast<char*>(pointer) + padIndex, 0, roundEnd - padIndex);
+  }
 }
 
 } // namespace bits

@@ -24,7 +24,6 @@ add_library(
   Writer.cpp
   WriterBase.cpp
   WriterContext.cpp
-  WriterShared.cpp
   WriterSink.cpp)
 
 target_link_libraries(
@@ -32,6 +31,7 @@ target_link_libraries(
   velox_dwio_common
   velox_dwio_dwrf_common
   velox_dwio_dwrf_utils
+  velox_process
   velox_time
   velox_vector
   ${LZ4}

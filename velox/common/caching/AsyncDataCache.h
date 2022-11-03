@@ -274,7 +274,7 @@ class AsyncDataCacheEntry {
   // Set after first use of a prefetched entry. Cleared by
   // getAndClearFirstUseFlag(). Does not require synchronization since used for
   // statistics only.
-  bool isFirstUse_{false};
+  std::atomic<bool> isFirstUse_{false};
 
   // Group id. Used for deciding if 'this' should be written to SSD.
   uint64_t groupId_{0};
@@ -396,8 +396,9 @@ class CoalescedLoad {
 
   // Makes entries for the keys that are not yet loaded and does a coalesced
   // load of the entries that are not yet present. If another thread is in the
-  // process of doing this, returns immediately if 'wait' is false and waits for
-  // the other thread to be done if 'wait' is true.
+  // process of doing this and 'wait' is null, returns immediately. If another
+  // thread is in the process of doing this and 'wait' is not null, waits for
+  // the other thread to be done.
   bool loadOrFuture(folly::SemiFuture<bool>* FOLLY_NULLABLE wait);
 
   LoadState state() const {
@@ -414,7 +415,7 @@ class CoalescedLoad {
 
  protected:
   // Makes entries for 'keys_' and loads their content. Elements of
-  // 'keys' that are already loaded or loading are expected to be left
+  // 'keys_' that are already loaded or loading are expected to be left
   // out. The returned pins are expected to be exclusive with data
   // loaded. The caller will set them to shared state on success. If
   // loadData() throws, the pins it may have made will be destructed in
@@ -440,7 +441,7 @@ class CoalescedLoad {
 // Struct for CacheShard stats. Stats from all shards are added into
 // this struct to provide a snapshot of state.
 struct CacheStats {
-  // Total size in 'tynyData_'
+  // Total size in 'tinyData_'
   int64_t tinySize{};
   // Total size in 'data_'
   int64_t largeSize{};
@@ -473,7 +474,7 @@ struct CacheStats {
   // Number of times a user waited for an entry to transit from exclusive to
   // shared mode.
   int64_t numWaitExclusive{};
-  // Cumulative clocks spent in allocating or freeing memory  for backing cache
+  // Cumulative clocks spent in allocating or freeing memory for backing cache
   // entries.
   uint64_t allocClocks{};
   // Sum of scores of evicted entries. This serves to infer an average
@@ -532,11 +533,15 @@ class CacheShard {
 
  private:
   static constexpr int32_t kNoThreshold = std::numeric_limits<int32_t>::max();
+
   void calibrateThreshold();
+
   void removeEntryLocked(AsyncDataCacheEntry* FOLLY_NONNULL entry);
+
   // Returns an unused entry if found. 'size' is a hint for selecting an entry
   // that already has the right amount of memory associated with it.
   std::unique_ptr<AsyncDataCacheEntry> getFreeEntryWithSize(uint64_t sizeHint);
+
   CachePin initEntry(
       RawFileCacheKey key,
       AsyncDataCacheEntry* FOLLY_NONNULL entry);
@@ -607,7 +612,7 @@ class AsyncDataCache : public memory::MappedMemory {
       memory::MachinePageCount numPages,
       int32_t owner,
       Allocation& out,
-      std::function<void(int64_t)> beforeAllocCB = nullptr,
+      std::function<void(int64_t, bool)> beforeAllocCB = nullptr,
       memory::MachinePageCount minSizeClass = 0) override;
 
   int64_t free(Allocation& allocation) override {
@@ -618,10 +623,21 @@ class AsyncDataCache : public memory::MappedMemory {
       memory::MachinePageCount numPages,
       Allocation* FOLLY_NULLABLE collateral,
       ContiguousAllocation& allocation,
-      std::function<void(int64_t)> beforeAllocCB = nullptr) override;
+      std::function<void(int64_t, bool)> beforeAllocCB = nullptr) override;
 
   void freeContiguous(ContiguousAllocation& allocation) override {
     mappedMemory_->freeContiguous(allocation);
+  }
+
+  void* FOLLY_NULLABLE allocateBytes(
+      uint64_t bytes,
+      uint64_t maxMallocSize = kMaxMallocBytes) override;
+
+  void freeBytes(
+      void* FOLLY_NONNULL p,
+      uint64_t size,
+      uint64_t maxMallocSize = kMaxMallocBytes) noexcept override {
+    mappedMemory_->freeBytes(p, size, maxMallocSize);
   }
 
   bool checkConsistency() const override {
@@ -732,7 +748,6 @@ class AsyncDataCache : public memory::MappedMemory {
   // for memory arbitration to work.
   bool makeSpace(
       memory::MachinePageCount numPages,
-
       std::function<bool()> allocate);
 
   std::shared_ptr<memory::MappedMemory> mappedMemory_;
@@ -747,10 +762,10 @@ class AsyncDataCache : public memory::MappedMemory {
 
   // Approximate counter of bytes allocated to cover misses. When this
   // exceeds 'nextSsdScoreSize_' we update the SSD admission criteria.
-  uint64_t newBytes_{0};
+  std::atomic<uint64_t> newBytes_{0};
 
   // 'newBytes_' value after which SSD admission should be reconsidered.
-  uint64_t nextSsdScoreSize_{};
+  std::atomic<uint64_t> nextSsdScoreSize_{0};
 
   // Approximate counter tracking new entries that could be saved to SSD.
   uint64_t ssdSaveable_{0};
@@ -803,7 +818,7 @@ T percentile(Next next, int32_t numSamples, int percent) {
 // read.
 //
 // Returns the number of distinct IOs, the number of bytes loaded into pins and
-// the number of extr bytes read.
+// the number of extra bytes read.
 CoalesceIoStats readPins(
     const std::vector<CachePin>& pins,
     int32_t maxGap,

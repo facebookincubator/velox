@@ -44,31 +44,37 @@ class RleEncoderV1 : public IntEncoder<isSigned> {
   // For 64 bit Integers, only signed type is supported. writeVuLong only
   // supports int64_t and it needs to support uint64_t before this method
   // can support uint64_t overload.
-  uint64_t add(const int64_t* data, const Ranges& ranges, const uint64_t* nulls)
-      override {
+  uint64_t add(
+      const int64_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
     return addImpl(data, ranges, nulls);
   }
 
-  uint64_t add(const int32_t* data, const Ranges& ranges, const uint64_t* nulls)
-      override {
+  uint64_t add(
+      const int32_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
     return addImpl(data, ranges, nulls);
   }
 
   uint64_t add(
       const uint32_t* data,
-      const Ranges& ranges,
+      const common::Ranges& ranges,
       const uint64_t* nulls) override {
     return addImpl(data, ranges, nulls);
   }
 
-  uint64_t add(const int16_t* data, const Ranges& ranges, const uint64_t* nulls)
-      override {
+  uint64_t add(
+      const int16_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
     return addImpl(data, ranges, nulls);
   }
 
   uint64_t add(
       const uint16_t* data,
-      const Ranges& ranges,
+      const common::Ranges& ranges,
       const uint64_t* nulls) override {
     return addImpl(data, ranges, nulls);
   }
@@ -152,7 +158,8 @@ class RleEncoderV1 : public IntEncoder<isSigned> {
   void writeValues();
 
   template <typename T>
-  uint64_t addImpl(const T* data, const Ranges& ranges, const uint64_t* nulls);
+  uint64_t
+  addImpl(const T* data, const common::Ranges& ranges, const uint64_t* nulls);
 
   template <typename Integer>
   FOLLY_ALWAYS_INLINE bool isRunRepeating(const Integer& value) {
@@ -206,7 +213,7 @@ template <bool isSigned>
 template <typename T>
 uint64_t RleEncoderV1<isSigned>::addImpl(
     const T* data,
-    const Ranges& ranges,
+    const common::Ranges& ranges,
     const uint64_t* nulls) {
   uint64_t count = 0;
   if (nulls) {
@@ -224,8 +231,6 @@ uint64_t RleEncoderV1<isSigned>::addImpl(
   }
   return count;
 }
-
-struct DropValues;
 
 template <bool isSigned>
 class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
@@ -325,9 +330,9 @@ class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
   template <bool hasNulls, typename Visitor>
   void fastPath(const uint64_t* nulls, Visitor& visitor) {
     constexpr bool hasFilter =
-        !std::is_same<typename Visitor::FilterType, common::AlwaysTrue>::value;
+        !std::is_same_v<typename Visitor::FilterType, common::AlwaysTrue>;
     constexpr bool hasHook =
-        !std::is_same<typename Visitor::HookType, dwio::common::NoHook>::value;
+        !std::is_same_v<typename Visitor::HookType, dwio::common::NoHook>;
     auto rows = visitor.rows();
     auto numRows = visitor.numRows();
     auto rowsAsRange = folly::Range<const int32_t*>(rows, numRows);

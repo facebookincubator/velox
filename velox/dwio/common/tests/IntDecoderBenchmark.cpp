@@ -23,9 +23,12 @@
 #include "folly/lang/Bits.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/IntCodecCommon.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/exception/Exception.h"
 
+using namespace facebook::velox;
 using namespace facebook::velox::dwio;
+using namespace facebook::velox::dwio::common;
 namespace bits = facebook::velox::bits;
 
 const size_t kNumElements = 1000000;
@@ -960,7 +963,7 @@ int32_t main(int32_t argc, char* argv[]) {
   randomInts_u32_result.resize(randomInts_u32.size());
   len_u32 = pos;
 
-  // Populate uint32 buffer
+  // Populate uint64 buffer
   buffer_u64.resize(kNumElements);
   pos = 0;
   for (int32_t i = 0; i < 100000; i++) {
@@ -968,6 +971,7 @@ int32_t main(int32_t argc, char* argv[]) {
     randomInts_u64.push_back(randomInt);
     pos = writeVulongToBuffer(randomInt, buffer_u64.data(), pos);
   }
+
   randomInts_u64_result.resize(randomInts_u64.size());
   len_u64 = pos;
 

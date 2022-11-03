@@ -32,13 +32,13 @@ target_link_libraries(
   velox_core
   velox_type
   velox_serialization
-  velox_exec_test_util
+  velox_exec_test_lib
   velox_functions_json
   velox_vector
   velox_memory
   velox_dwio_type_fbhive
   velox_dwio_common_exception
-  velox_dwrf_test_utils
+  velox_dwio_common_test_utils
   velox_presto_serializer
   velox_transform_utils
   ${ANTLR4_RUNTIME}

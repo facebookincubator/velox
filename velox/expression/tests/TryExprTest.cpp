@@ -18,7 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/ConstantVector.h"
 
 namespace facebook::velox {
@@ -143,13 +143,12 @@ class CreateConstantAndThrow : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& /* args */,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    *result =
-        BaseVector::createConstant((int64_t)1, rows.end(), context->pool());
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    result = BaseVector::createConstant((int64_t)1, rows.end(), context.pool());
 
     rows.applyToSelected([&](int row) {
-      context->setError(
+      context.setError(
           row, std::make_exception_ptr(std::invalid_argument("expected")));
     });
   }

@@ -17,7 +17,7 @@
 #include <folly/init/Init.h>
 #include <velox/exec/Driver.h>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -41,7 +41,7 @@ class TestingPauserNode : public core::PlanNode {
   TestingPauserNode(const core::PlanNodeId& id, core::PlanNodePtr input)
       : PlanNode(id), sources_{input} {}
 
-  const std::shared_ptr<const RowType>& outputType() const override {
+  const RowTypePtr& outputType() const override {
     return sources_[0]->outputType();
   }
 
@@ -86,6 +86,15 @@ class DriverTest : public OperatorTestBase {
   }
 
   void TearDown() override {
+    for (auto& task : tasks_) {
+      if (task != nullptr) {
+        waitForTaskCompletion(task.get(), 1'000'000);
+      }
+    }
+    // NOTE: destroy the tasks first to release all the allocated memory held
+    // by the plan nodes (Values) in tasks.
+    tasks_.clear();
+
     if (wakeupInitialized_) {
       wakeupCancelled_ = true;
       wakeupThread_.join();
@@ -94,7 +103,7 @@ class DriverTest : public OperatorTestBase {
   }
 
   core::PlanNodePtr makeValuesFilterProject(
-      const std::shared_ptr<const RowType>& rowType,
+      const RowTypePtr& rowType,
       const std::string& filter,
       const std::string& project,
       int32_t numBatches,
@@ -305,7 +314,7 @@ class DriverTest : public OperatorTestBase {
   // Set to true when it is time to exit 'wakeupThread_'.
   std::atomic<bool> wakeupCancelled_{false};
 
-  std::shared_ptr<const RowType> rowType_;
+  RowTypePtr rowType_;
   std::mutex mutex_;
   std::vector<std::shared_ptr<Task>> tasks_;
   ContinueFuture cancelFuture_;
@@ -347,13 +356,13 @@ TEST_F(DriverTest, cancel) {
       rowType_,
       "m1 % 10 > 0",
       "m1 % 3 + m2 % 5 + m3 % 7 + m4 % 11 + m5 % 13 + m6 % 17 + m7 % 19",
-      100,
-      100'000);
+      1'000,
+      1'000);
   params.maxDrivers = 10;
   int32_t numRead = 0;
   try {
     readResults(params, ResultOperation::kCancel, 1'000'000, &numRead);
-    EXPECT_TRUE(false) << "Expected exception";
+    FAIL() << "Expected exception";
   } catch (const VeloxRuntimeError& e) {
     EXPECT_EQ("Cancelled", e.message());
   }
@@ -374,8 +383,8 @@ TEST_F(DriverTest, terminate) {
       rowType_,
       "m1 % 10 > 0",
       "m1 % 3 + m2 % 5 + m3 % 7 + m4 % 11 + m5 % 13 + m6 % 17 + m7 % 19",
-      100,
-      100'000);
+      1'000,
+      1'000);
   params.maxDrivers = 10;
   int32_t numRead = 0;
   try {
@@ -385,6 +394,11 @@ TEST_F(DriverTest, terminate) {
     // If this is an exception, it will be a cancellation.
     EXPECT_TRUE(strstr(e.what(), "Aborted") != nullptr) << e.what();
   }
+
+  ASSERT_TRUE(cancelFuture_.valid());
+  auto& executor = folly::QueuedImmediateExecutor::instance();
+  std::move(cancelFuture_).via(&executor).wait();
+
   EXPECT_GE(numRead, 1'000'000);
   EXPECT_TRUE(stateFutures_.at(0).isReady());
   EXPECT_EQ(tasks_[0]->state(), TaskState::kAborted);
@@ -429,11 +443,16 @@ TEST_F(DriverTest, pause) {
       rowType_,
       "m1 % 10 > 0",
       "m1 % 3 + m2 % 5 + m3 % 7 + m4 % 11 + m5 % 13 + m6 % 17 + m7 % 19",
-      100,
-      10'000,
+      1'000,
+      1'000,
       [](int64_t num) { return num % 10 > 0; },
       &hits);
   params.maxDrivers = 10;
+  params.queryCtx =
+      core::QueryCtx::createForTest(std::make_shared<core::MemConfig>(
+          std::unordered_map<std::string, std::string>{
+              // Make sure CPU usage tracking is enabled.
+              {core::QueryConfig::kOperatorTrackCpuUsage, "true"}}));
   int32_t numRead = 0;
   readResults(params, ResultOperation::kPause, 370'000'000, &numRead);
   // Each thread will fully read the 1M rows in values.
@@ -456,10 +475,7 @@ TEST_F(DriverTest, pause) {
 TEST_F(DriverTest, yield) {
   constexpr int32_t kNumTasks = 20;
   constexpr int32_t kThreadsPerTask = 5;
-  std::vector<int32_t> counters;
-  counters.reserve(kNumTasks);
-  std::vector<CursorParameters> params;
-  params.resize(kNumTasks);
+  std::vector<CursorParameters> params(kNumTasks);
   int32_t hits;
   for (int32_t i = 0; i < kNumTasks; ++i) {
     params[i].planNode = makeValuesFilterProject(
@@ -472,10 +488,10 @@ TEST_F(DriverTest, yield) {
         &hits);
     params[i].maxDrivers = kThreadsPerTask;
   }
+  std::vector<int32_t> counters(kNumTasks, 0);
   std::vector<std::thread> threads;
   threads.reserve(kNumTasks);
   for (int32_t i = 0; i < kNumTasks; ++i) {
-    counters.push_back(0);
     threads.push_back(std::thread([this, &params, &counters, i]() {
       readResults(params[i], ResultOperation::kYield, 10'000, &counters[i], i);
     }));
@@ -654,10 +670,7 @@ TEST_F(DriverTest, pauserNode) {
   Operator::registerOperator(std::make_unique<PauserNodeFactory>(
       kThreadsPerTask, sequence, testInstance));
 
-  std::vector<int32_t> counters;
-  counters.reserve(kNumTasks);
-  std::vector<CursorParameters> params;
-  params.resize(kNumTasks);
+  std::vector<CursorParameters> params(kNumTasks);
   int32_t hits;
   for (int32_t i = 0; i < kNumTasks; ++i) {
     params[i].queryCtx = std::make_shared<core::QueryCtx>(
@@ -674,10 +687,10 @@ TEST_F(DriverTest, pauserNode) {
     params[i].maxDrivers =
         kThreadsPerTask * 2; // a number larger than kThreadsPerTask
   }
+  std::vector<int32_t> counters(kNumTasks, 0);
   std::vector<std::thread> threads;
   threads.reserve(kNumTasks);
   for (int32_t i = 0; i < kNumTasks; ++i) {
-    counters.push_back(0);
     threads.push_back(std::thread([this, &params, &counters, i]() {
       try {
         readResults(params[i], ResultOperation::kRead, 10'000, &counters[i], i);
@@ -702,7 +715,7 @@ class ThrowNode : public core::PlanNode {
   ThrowNode(const core::PlanNodeId& id, core::PlanNodePtr input)
       : PlanNode(id), sources_{input} {}
 
-  const std::shared_ptr<const RowType>& outputType() const override {
+  const RowTypePtr& outputType() const override {
     return sources_[0]->outputType();
   }
 
@@ -789,7 +802,7 @@ TEST_F(DriverTest, driverCreationThrow) {
 
   auto rows = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})});
 
-  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .values({rows}, true)

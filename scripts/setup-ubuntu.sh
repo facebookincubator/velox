@@ -18,16 +18,11 @@ set -eufx -o pipefail
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 
-# Folly must be built with the same compiler flags so that some low level types
-# are the same size.
-CPU_TARGET="${CPU_TARGET:-avx}"
-export COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
-FB_OS_VERSION=v2022.03.14.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 
 # Install all velox and folly dependencies.
-sudo apt install -y \
+sudo --preserve-env apt install -y \
   g++ \
   cmake \
   ccache \
@@ -40,16 +35,17 @@ sudo apt install -y \
   libgoogle-glog-dev \
   libbz2-dev \
   libgflags-dev \
-  libgtest-dev \
   libgmock-dev \
   libevent-dev \
-  libprotobuf-dev \
   liblz4-dev \
   libzstd-dev \
   libre2-dev \
   libsnappy-dev \
   liblzo2-dev \
-  protobuf-compiler
+  bison \
+  flex \
+  tzdata \
+  wget
 
 function run_and_time {
   time "$@"
@@ -76,14 +72,8 @@ function install_fmt {
   cmake_install -DFMT_TEST=OFF
 }
 
-function install_folly {
-  github_checkout facebook/folly "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF
-}
-
 function install_velox_deps {
   run_and_time install_fmt
-  run_and_time install_folly
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

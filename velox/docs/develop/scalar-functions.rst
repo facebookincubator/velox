@@ -58,22 +58,16 @@ above could be re-written as follows:
 
 The argument list must start with an output parameter “result” followed by the
 function arguments. The “result” argument must be a reference. Function
-arguments must be const references. The C++ types of the arguments must match
-Velox types as specified in the following mapping:
+arguments must be const references. The C++ types of the function arguments and
+the result argument must match :doc:`Velox types</develop/types>`.
+Since the result argument must be a reference, some of the types listed below
+have a different result argument type:
 
 ==========  ==============================  =============================
 Velox Type  C++ Argument Type               C++ Result Type
 ==========  ==============================  =============================
-BOOLEAN     bool                            bool
-TINYINT     int8_t                          int8_t
-SMALLINT    int16_t                         int16_t
-INTEGER     int32_t                         int32_t
-BIGINT      int64_t                         int64_t
-REAL        float                           float
-DOUBLE      double                          double
 VARCHAR     StringView                      out_type<Varchar>
 VARBINARY   StringView                      out_type<Varbinary>
-TIMESTAMP   Timestamp                       Timestamp
 ARRAY       arg_type<Array<E>>              out_type<Array<E>>
 MAP         arg_type<Map<K,V>>              out_type<Map<K, V>>
 ROW         arg_type<Row<T1, T2, T3,...>>   out_type<Row<T1, T2, T3,...>>
@@ -365,6 +359,11 @@ we need to call registerFunction again:
 
 We need to call registerFunction for each signature we want to support.
 
+For decimal arguments, we use UnscaledLongDecimal or UnscaledShortDecimal for
+registration. Simple functions always require decimal arguments to have the same
+precision and scale. We must explicitly :func:`cast` the decimal arguments if
+required before passing them to simple functions.
+
 Codegen
 ^^^^^^^
 
@@ -438,7 +437,7 @@ The object supports the following methods:
 
 - arg_type<E> value()      : unchecked access to the underlying value.
 
-- arg_type<E> operator *() : unchecked access to the underlying value.
+- arg_type<E> operator \*() : unchecked access to the underlying value.
 
 - bool has_value()         : return true if the value is not null.
 
@@ -581,7 +580,7 @@ MapView<K, V>::Element is the type returned by dereferencing MapView<K, V>::Iter
 
 - second: OptionalAccessor<V> | null_free_arg_type<V>
 
-- MapView<K, V>::Element participates in struct binding: auto [v, k] = *map.begin();
+- MapView<K, V>::Element participates in struct binding: auto [v, k] = \*map.begin();
 
 Note: iterator de-referencing and iterator pointer de-referencing result in temporaries. Hence those can be bound to
 const references or value variables but not normal references.
@@ -625,6 +624,7 @@ Note that in the range-loop, the range expression is assigned to a universal ref
      for(const auto& e : *itt){..}
 
 .. _outputs-write:
+
 Outputs (Writer Types)
 **********************
 
@@ -803,8 +803,8 @@ implement the “apply” method.
               const SelectivityVector& rows,
               std::vector<VectorPtr>& args,
               Expr* caller,
-              EvalCtx* context,
-              VectorPtr* result) const
+              EvalCtx& context,
+              VectorPtr& result) const
 
 Input rows
 ^^^^^^^^^^
@@ -872,9 +872,10 @@ Input vectors
 The “args” parameter is an std::vector of Velox vectors containing the values
 of the function arguments. These vectors are not necessarily flat and may be
 dictionary or constant encoded. However, a deterministic function that takes
-a single argument is guaranteed to receive its only input as a flat vector.
-By default, a function is assumed to be deterministic. If that’s not the
-case, the function must override isDeterministic method to return false.
+a single argument and has default null behavior is guaranteed to receive its
+only input as a flat or constant vector. By default, a function is assumed to
+be deterministic. If that’s not the case, the function must override
+isDeterministic method to return false.
 
 .. code-block:: c++
 
@@ -917,13 +918,13 @@ Here is an example of using moveOrCopyResult to implement map_keys function:
         const SelectivityVector& rows,
         std::vector<VectorPtr>& args,
         exec::Expr* /* caller */,
-        exec::EvalCtx* context,
-        VectorPtr* result) const override {
+        exec::EvalCtx& context,
+        VectorPtr& result) const override {
       auto mapVector = args[0]->as<MapVector>();
       auto mapKeys = mapVector->mapKeys();
 
       auto localResult = std::make_shared<ArrayVector>(
-          context->pool(),
+          context.pool(),
           ARRAY(mapKeys->type()),
           mapVector->nulls(),
           rows.end(),
@@ -932,7 +933,7 @@ Here is an example of using moveOrCopyResult to implement map_keys function:
           mapKeys,
           mapVector->getNullCount());
 
-      context->moveOrCopyResult(localResult, rows, result);
+      context.moveOrCopyResult(localResult, rows, result);
     }
 
 Use BaseVector::ensureWritable method to initialize “result” to a flat
@@ -957,12 +958,12 @@ cardinality function for maps:
         const SelectivityVector& rows,
         std::vector<VectorPtr>& args,
         exec::Expr* /* caller */,
-        exec::EvalCtx* context,
-        VectorPtr* result) const override {
+        exec::EvalCtx& context,
+        VectorPtr& result) const override {
 
-      BaseVector::ensureWritable(rows, BIGINT(), context->pool(), result);
+      BaseVector::ensureWritable(rows, BIGINT(), context.pool(), result);
       BufferPtr resultValues =
-          (*result)->as<FlatVector<int64_t>>()->mutableValues(rows.size());
+           result->as<FlatVector<int64_t>>()->mutableValues(rows.size());
       auto rawResult = resultValues->asMutable<int64_t>();
 
       auto mapVector = args[0]->as<MapVector>();
@@ -986,8 +987,8 @@ as a simple function. I’m using it here for illustration purposes only.
 .. code-block:: c++
 
     // Initialize flat results vector.
-    BaseVector::ensureWritable(rows, DOUBLE(), context->pool(), result);
-    auto rawResults = (*result)->as<FlatVector<int64_t>>()->mutableRawValues();
+    BaseVector::ensureWritable(rows, DOUBLE(), context.pool(), result);
+    auto rawResults = result->as<FlatVector<int64_t>>()->mutableRawValues();
 
     // Decode the arguments.
     DecodedArgs decodedArgs(rows, args, context);
@@ -1073,7 +1074,7 @@ catch block.
       try {
         // ... calculate and store the result for the row
       } catch (const std::exception& e) {
-        context->setError(row, std::current_exception());
+        context.setError(row, std::current_exception());
       }
     });
 
@@ -1082,14 +1083,14 @@ instead of the explicit try-catch block above:
 
 .. code-block:: c++
 
-    context->applyToSelectedNoThrow(rows, [&](auto row) {
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
       // ... calculate and store the result for the row
     });
 
 
 Simple functions are compatible with the TRY expression by default. The framework
 wraps the “call” and “callNullable” methods in a try-catch and reports errors
-using context->setError.
+using context.setError.
 
 Registration
 ^^^^^^^^^^^^
@@ -1111,6 +1112,10 @@ name already exists.
 
 Use exec::registerStatefulVectorFunction to register a stateful vector
 function.
+
+Note: A vector function will be given precedence over a simple function during resolution time.
+This is because in certain cases it makes sense to write an optimized vector function, and thus more precedence is given
+to a vector function over an equivalent simple function.
 
 .. code-block:: c++
 
@@ -1222,6 +1227,24 @@ element of the array and returns a new array of the results.
       .argumentType("function(T, U)")
       .build();
 
+The signature of a function that handles DECIMAL types can additionally take
+variables and constraints to represent the precision and scale values.
+The constraints are evaluated using a type calculator built from Flex and Bison
+tools. The decimal arithmetic addition function has the following signature:
+
+.. code-block:: c++
+
+    // decimal, decimal -> decimal
+    exec::FunctionSignatureBuilder()
+      .returnType("DECIMAL(r_precision, r_scale)")
+      .argumentType("DECIMAL(a_precision, a_scale)")
+      .argumentType("DECIMAL(b_precision, b_scale)")
+      .variableConstraint(
+          "r_precision",
+          "min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)")
+      .variableConstraint("r_scale", "max(a_scale, b_scale)")
+      .build();
+
 The type names used in FunctionSignatureBuilder can be either lowercase
 standard types, a special type “any”, or the ones defined by calling
 typeVariable() method. “any” type can be used to specify a printf-like
@@ -1232,7 +1255,7 @@ Testing
 -------
 
 Add a test using FunctionBaseTest from
-velox/functions/prestosql/tests/FunctionBaseTest.h as a base class. Name your test
+velox/functions/prestosql/tests/utils/FunctionBaseTest.h as a base class. Name your test
 and the .cpp file <function-name>Test, e.g. CardinalityTest in
 CardinalityTest.cpp or IsNullTest in IsNullTest.cpp.
 
@@ -1303,11 +1326,51 @@ result. Here is an example of a test for simple function “sqrt”:
     }
 
 Function names
-------------
+--------------
 
 For both simple and vector functions, their names are case insensitive. Function
 names are converted to lower case automatically when the functions are
 registered and when they are resolved for a given expression.
+
+The following names are reserved for special forms and cannot be used as function
+names:
+
+* and
+* or
+* cast
+* if
+* switch
+* coalesce
+* try
+* row_constructor
+
+Function Resolution order
+-------------------------
+
+Vector functions have precedence over simple functions during function resolution. If a function `foo` has
+multiple implementations, then the order in which function resolution will proceed is as follows:
+
+    1. Vector Function
+    2. Simple Function which are generic free and variadic free
+    3. Simple Function has variadic but generic free
+    4. Simple Function has generic but no variadic of generic
+    5. Simple function has variadic of generic
+
+The available function with lowest rank is picked during function resolution.
+If there is more than one function with the same lowest rank, we count the number of concrete types in the signature
+and return the signature with highest concrete types count. (a concrete type is any type other variadic or generic).
+
+For example: consider the two signatures bellow which are both of type 4.
+
+.. code-block:: c++
+
+    void call(bool& out, const int& , const Any& , const& Variadic<int>)    // concrete types = 2
+    void call(bool& out, const int& , const Any& ,const Any&)               // concrete types = 1
+
+
+When both of them are valid for a given input, the first one will be picked  since it has more concrete types.
+When number of concrete types are the same, the call is ambiguous, and it's undefined which function is called.
+
 
 Benchmarking
 ------------

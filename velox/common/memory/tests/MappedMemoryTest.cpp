@@ -17,6 +17,8 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/MmapArena.h"
+#include "velox/common/testutil/TestValue.h"
 
 #include <thread>
 
@@ -28,6 +30,8 @@
 
 DECLARE_int32(velox_memory_pool_mb);
 
+using namespace facebook::velox::common::testutil;
+
 namespace facebook::velox::memory {
 
 static constexpr uint64_t kMaxMappedMemory = 128UL * 1024 * 1024;
@@ -36,12 +40,18 @@ static constexpr MachinePageCount kCapacity =
 
 class MappedMemoryTest : public testing::TestWithParam<bool> {
  protected:
+  static void SetUpTestCase() {
+    TestValue::enable();
+  }
+
   void SetUp() override {
+    MappedMemory::destroyTestOnly();
     auto tracker = MemoryUsageTracker::create(
         MemoryUsageConfigBuilder().maxTotalMemory(kMaxMappedMemory).build());
     useMmap_ = GetParam();
     if (useMmap_) {
-      MmapAllocatorOptions options = {kMaxMappedMemory};
+      MmapAllocatorOptions options;
+      options.capacity = kMaxMappedMemory;
       mmapAllocator_ = std::make_shared<MmapAllocator>(options);
       MappedMemory::setDefaultInstance(mmapAllocator_.get());
     } else {
@@ -412,6 +422,8 @@ TEST_P(MappedMemoryTest, increasingSizeWithThreadsTest) {
   threads.reserve(numThreads);
   for (int32_t i = 0; i < numThreads; ++i) {
     allocations.emplace_back(makeEmptyAllocations(500));
+  }
+  for (int32_t i = 0; i < numThreads; ++i) {
     threads.push_back(std::thread([this, &allocations, i]() {
       allocateIncreasing(10, 1000, 1000, allocations[i]);
     }));
@@ -543,7 +555,9 @@ TEST_P(MappedMemoryTest, allocContiguousFail) {
   std::vector<std::unique_ptr<MappedMemory::Allocation>> allocations;
   auto numAllocs = kCapacity / kSmallSize;
   int64_t trackedBytes = 0;
-  auto trackCallback = [&](int64_t delta) { trackedBytes += delta; };
+  auto trackCallback = [&](int64_t delta, bool preAlloc) {
+    trackedBytes += preAlloc ? delta : -delta;
+  };
   allocations.reserve(numAllocs);
   for (int32_t i = 0; i < numAllocs; ++i) {
     allocations.push_back(std::make_unique<MappedMemory::Allocation>(instance));
@@ -612,6 +626,7 @@ TEST_P(MappedMemoryTest, allocContiguousFail) {
 
 TEST_P(MappedMemoryTest, allocateBytes) {
   constexpr int32_t kNumAllocs = 50;
+  MappedMemory::testingClearAllocateBytesStats();
   // Different sizes, including below minimum and above largest size class.
   std::vector<MachinePageCount> sizes = {
       MappedMemory::kMaxMallocBytes / 2,
@@ -687,6 +702,81 @@ TEST_P(MappedMemoryTest, stlMappedMemoryAllocator) {
   }
   EXPECT_EQ(0, instance_->numAllocated());
   EXPECT_TRUE(instance_->checkConsistency());
+  {
+    StlMappedMemoryAllocator<int64_t> alloc(instance_);
+    EXPECT_THROW(alloc.allocate(1ULL << 62), VeloxException);
+    auto p = alloc.allocate(1);
+    EXPECT_THROW(alloc.deallocate(p, 1ULL << 62), VeloxException);
+    alloc.deallocate(p, 1);
+  }
+}
+
+DEBUG_ONLY_TEST_P(
+    MappedMemoryTest,
+    nonContiguousScopedMappedMemoryAllocationFailure) {
+  auto tracker = MemoryUsageTracker::create();
+  ASSERT_EQ(tracker->getCurrentUserBytes(), 0);
+  auto* mappedMemory = MappedMemory::getInstance();
+  auto scopedMemory = mappedMemory->addChild(tracker);
+  ASSERT_EQ(tracker->getCurrentUserBytes(), 0);
+
+  const std::string testValueStr = useMmap_
+      ? "facebook::velox::memory::MmapAllocator::allocate"
+      : "facebook::velox::memory::MappedMemoryImpl::allocate";
+  std::atomic<bool> injectFailureOnce{true};
+  SCOPED_TESTVALUE_SET(
+      testValueStr, std::function<void(bool*)>([&](bool* testFlag) {
+        if (!injectFailureOnce.exchange(false)) {
+          return;
+        }
+        if (useMmap_) {
+          *testFlag = false;
+        } else {
+          *testFlag = true;
+        }
+      }));
+
+  constexpr MachinePageCount kAllocSize = 8;
+  std::unique_ptr<MappedMemory::Allocation> allocation(
+      new MappedMemory::Allocation(scopedMemory.get()));
+  ASSERT_FALSE(scopedMemory->allocate(kAllocSize, 0, *allocation));
+  ASSERT_EQ(tracker->getCurrentUserBytes(), 0);
+  ASSERT_TRUE(scopedMemory->allocate(kAllocSize, 0, *allocation));
+  ASSERT_GT(tracker->getCurrentUserBytes(), 0);
+  allocation.reset();
+  ASSERT_EQ(tracker->getCurrentUserBytes(), 0);
+}
+
+TEST_P(MappedMemoryTest, contiguousScopedMappedMemoryAllocationFailure) {
+  if (!useMmap_) {
+    // This test doesn't apply for MappedMemoryImpl which doesn't have memory
+    // allocation failure rollback code path.
+    return;
+  }
+  auto* mappedMemory =
+      dynamic_cast<MmapAllocator*>(MappedMemory::getInstance());
+  std::vector<MmapAllocator::Failure> failureTypes(
+      {MmapAllocator::Failure::kMadvise, MmapAllocator::Failure::kMmap});
+  for (const auto& failure : failureTypes) {
+    mappedMemory->injectFailure(failure);
+    auto tracker = MemoryUsageTracker::create();
+    ASSERT_EQ(tracker->getCurrentUserBytes(), 0);
+    auto scopedMemory = mappedMemory->addChild(tracker);
+    ASSERT_EQ(tracker->getCurrentUserBytes(), 0);
+
+    constexpr MachinePageCount kAllocSize = 8;
+    std::unique_ptr<MappedMemory::ContiguousAllocation> allocation(
+        new MappedMemory::ContiguousAllocation());
+    ASSERT_FALSE(
+        scopedMemory->allocateContiguous(kAllocSize, nullptr, *allocation));
+    ASSERT_EQ(tracker->getCurrentUserBytes(), 0);
+    mappedMemory->injectFailure(MmapAllocator::Failure::kNone);
+    ASSERT_TRUE(
+        scopedMemory->allocateContiguous(kAllocSize, nullptr, *allocation));
+    ASSERT_GT(tracker->getCurrentUserBytes(), 0);
+    allocation.reset();
+    ASSERT_EQ(tracker->getCurrentUserBytes(), 0);
+  }
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
@@ -694,4 +784,140 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     MappedMemoryTest,
     testing::Values(true, false));
 
+class MmapArenaTest : public testing::Test {
+ public:
+  // 32 MB arena space
+  static constexpr uint64_t kArenaCapacityBytes = 1l << 25;
+
+ protected:
+  void SetUp() override {
+    rng_.seed(1);
+  }
+
+  void* allocateAndPad(MmapArena* arena, uint64_t bytes) {
+    void* buffer = arena->allocate(bytes);
+    memset(buffer, 0xff, bytes);
+    return buffer;
+  }
+
+  void unpadAndFree(MmapArena* arena, void* buffer, uint64_t bytes) {
+    memset(buffer, 0x00, bytes);
+    arena->free(buffer, bytes);
+  }
+
+  uint64_t randomPowTwo(uint64_t lowerBound, uint64_t upperBound) {
+    lowerBound = bits::nextPowerOfTwo(lowerBound);
+    auto attemptedUpperBound = bits::nextPowerOfTwo(upperBound);
+    upperBound = attemptedUpperBound == upperBound ? upperBound
+                                                   : attemptedUpperBound / 2;
+    uint64_t moveSteps;
+    if (lowerBound == 0) {
+      uint64_t one = 1;
+      moveSteps =
+          (folly::Random::rand64(
+               bits::countLeadingZeros(one) + 1 -
+                   bits::countLeadingZeros(upperBound),
+               rng_) +
+           1);
+      return moveSteps == 0 ? 0 : (1l << (moveSteps - 1));
+    }
+    moveSteps =
+        (folly::Random::rand64(
+             bits::countLeadingZeros(lowerBound) -
+                 bits::countLeadingZeros(upperBound),
+             rng_) +
+         1);
+    return lowerBound << moveSteps;
+  }
+
+  folly::Random::DefaultGenerator rng_;
+};
+
+TEST_F(MmapArenaTest, basic) {
+  // 0 Byte lower bound for revealing edge cases.
+  const uint64_t kAllocLowerBound = 0;
+
+  // 1 KB upper bound
+  const uint64_t kAllocUpperBound = 1l << 10;
+  std::unique_ptr<MmapArena> arena =
+      std::make_unique<MmapArena>(kArenaCapacityBytes);
+  memset(arena->address(), 0x00, kArenaCapacityBytes);
+
+  std::unordered_map<uint64_t, uint64_t> allocations;
+
+  // First phase allocate only
+  for (size_t i = 0; i < 1000; i++) {
+    auto bytes = randomPowTwo(kAllocLowerBound, kAllocUpperBound);
+    allocations.emplace(
+        reinterpret_cast<uint64_t>(allocateAndPad(arena.get(), bytes)), bytes);
+  }
+  EXPECT_TRUE(arena->checkConsistency());
+
+  // Second phase alloc and free called in an interleaving way
+  for (size_t i = 0; i < 10000; i++) {
+    auto bytes = randomPowTwo(kAllocLowerBound, kAllocUpperBound);
+    allocations.emplace(
+        reinterpret_cast<uint64_t>(allocateAndPad(arena.get(), bytes)), bytes);
+
+    auto itrToFree = allocations.begin();
+    auto bytesFree = itrToFree->second;
+    unpadAndFree(
+        arena.get(), reinterpret_cast<void*>(itrToFree->first), bytesFree);
+    allocations.erase(itrToFree);
+  }
+  EXPECT_TRUE(arena->checkConsistency());
+
+  // Third phase free only
+  auto itr = allocations.begin();
+  while (itr != allocations.end()) {
+    auto bytes = itr->second;
+    unpadAndFree(arena.get(), reinterpret_cast<void*>(itr->first), bytes);
+    itr++;
+  }
+  EXPECT_TRUE(arena->checkConsistency());
+}
+
+TEST_F(MmapArenaTest, managedMmapArenas) {
+  {
+    // Test natural growing of ManagedMmapArena
+    std::unique_ptr<ManagedMmapArenas> managedArenas =
+        std::make_unique<ManagedMmapArenas>(kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 1);
+    void* alloc1 = managedArenas->allocate(kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 1);
+    void* alloc2 = managedArenas->allocate(kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 2);
+
+    managedArenas->free(alloc2, kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 2);
+    managedArenas->free(alloc1, kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 1);
+  }
+
+  {
+    // Test growing of ManagedMmapArena due to fragmentation
+    std::unique_ptr<ManagedMmapArenas> managedArenas =
+        std::make_unique<ManagedMmapArenas>(kArenaCapacityBytes);
+    const uint64_t kNumAllocs = 128;
+    const uint64_t kAllocSize = kArenaCapacityBytes / kNumAllocs;
+    std::vector<uint64_t> evenAllocAddresses;
+    for (int i = 0; i < kNumAllocs; i++) {
+      auto* allocResult = managedArenas->allocate(kAllocSize);
+      if (i % 2 == 0) {
+        evenAllocAddresses.emplace_back(
+            reinterpret_cast<uint64_t>(allocResult));
+      }
+    }
+    EXPECT_EQ(managedArenas->arenas().size(), 1);
+
+    // Free every other allocations so that the single MmapArena is fragmented
+    // that it can no longer handle allocations of size larger than kAllocSize
+    for (auto address : evenAllocAddresses) {
+      managedArenas->free(reinterpret_cast<void*>(address), kAllocSize);
+    }
+
+    managedArenas->allocate(kAllocSize * 2);
+    EXPECT_EQ(managedArenas->arenas().size(), 2);
+  }
+}
 } // namespace facebook::velox::memory

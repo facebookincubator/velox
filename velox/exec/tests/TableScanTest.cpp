@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 #include <velox/type/Timestamp.h>
-#include "velox/common/base/tests/Fs.h"
+#include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/dwio/dwrf/test/utils/DataFiles.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/Cursor.h"
@@ -1828,6 +1828,28 @@ TEST_F(TableScanTest, structLazy) {
                 .planNode();
 
   assertQuery(op, {filePath}, "select c0 % 3 from tmp");
+}
+
+TEST_F(TableScanTest, lazyVectorAccessTwiceWithDifferentRows) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, 1, 1, std::nullopt}),
+      makeNullableFlatVector<int64_t>({0, 1, 2, 3}),
+  });
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {data});
+  createDuckDbTable({data});
+
+  auto plan =
+      PlanBuilder()
+          .tableScan(asRowType(data->type()))
+          .filter(
+              "element_at(array_constructor(c0 + c1, if(c1 >= 0, c1, 0)), 1) > 0")
+          .planNode();
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT c0, c1 from tmp where ([c0 + c1, if(c1 >= 0, c1, 0)])[1] > 0");
 }
 
 TEST_F(TableScanTest, structInArrayOrMap) {

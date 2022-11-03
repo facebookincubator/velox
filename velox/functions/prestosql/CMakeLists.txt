@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_subdirectory(json)
-add_subdirectory(hyperloglog)
 add_subdirectory(types)
+add_subdirectory(window)
 
 add_library(
-  velox_functions_prestosql_impl OBJECT
+  velox_functions_prestosql_impl
   ArrayConstructor.cpp
   ArrayContains.cpp
   ArrayDistinct.cpp
@@ -24,15 +24,18 @@ add_library(
   ArrayIntersectExcept.cpp
   ArrayPosition.cpp
   ArraySort.cpp
+  ArraySum.cpp
+  Comparisons.cpp
+  DecimalArithmetic.cpp
   ElementAt.cpp
   FilterFunctions.cpp
   FromUnixTime.cpp
   GreatestLeast.cpp
   InPredicate.cpp
   Map.cpp
-  MapConcat.cpp
   MapEntries.cpp
   MapKeysAndValues.cpp
+  MapZipWith.cpp
   Not.cpp
   Reduce.cpp
   Reverse.cpp
@@ -43,20 +46,24 @@ add_library(
   Subscript.cpp
   ToUtf8.cpp
   Transform.cpp
+  TransformKeys.cpp
+  TransformValues.cpp
   URLFunctions.cpp
   VectorArithmetic.cpp
   WidthBucketArray.cpp
-  Zip.cpp)
+  Zip.cpp
+  ZipWith.cpp)
 
 target_link_libraries(
   velox_functions_prestosql_impl
+  velox_common_hyperloglog
   velox_functions_json
-  velox_functions_hyperloglog
   velox_functions_lib
   velox_expression
   md5
   velox_type_tz
-  velox_presto_types)
+  velox_presto_types
+  velox_functions_util)
 
 set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE
                                                             high_memory_pool)
@@ -67,8 +74,13 @@ endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
-  add_subdirectory(benchmarks)
   add_subdirectory(coverage)
+elseif(${VELOX_BUILD_TEST_UTILS})
+  add_subdirectory(tests/utils)
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_subdirectory(benchmarks)
 endif()
 
 add_subdirectory(registration)

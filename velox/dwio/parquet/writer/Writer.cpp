@@ -25,7 +25,7 @@ void Writer::write(const RowVectorPtr& data) {
   ArrowArray array;
   ArrowSchema schema;
   exportToArrow(data, array, &pool_);
-  exportToArrow(data->type(), schema);
+  exportToArrow(data, schema);
   PARQUET_ASSIGN_OR_THROW(
       auto recordBatch, arrow::ImportRecordBatch(&array, &schema));
   auto table = arrow::Table::Make(
@@ -45,15 +45,21 @@ void Writer::write(const RowVectorPtr& data) {
   PARQUET_THROW_NOT_OK(arrowWriter_->WriteTable(*table, 10000));
 }
 
+void Writer::flush() {
+  if (arrowWriter_) {
+    PARQUET_THROW_NOT_OK(arrowWriter_->Close());
+    arrowWriter_.reset();
+    finalSink_->write(std::move(stream_->dataBuffer()));
+  }
+}
+
 void Writer::newRowGroup(int32_t numRows) {
   PARQUET_THROW_NOT_OK(arrowWriter_->NewRowGroup(numRows));
 }
 
 void Writer::close() {
-  if (arrowWriter_) {
-    PARQUET_THROW_NOT_OK(arrowWriter_->Close());
-    finalSink_->write(std::move(stream_->dataBuffer()));
-  }
+  flush();
+  finalSink_->close();
 }
 
 } // namespace facebook::velox::parquet

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/VectorFunction.h"
 
@@ -30,49 +31,55 @@ class IsNullFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    BaseVector* arg = args[0].get();
-    if (rows.isAllSelected()) {
-      if (!arg->mayHaveNulls()) {
-        // no nulls
-        *result =
-            BaseVector::createConstant(IsNotNULL, rows.end(), context->pool());
-        return;
-      }
-
-      BaseVector::ensureWritable(rows, BOOLEAN(), arg->pool(), result);
-      FlatVector<bool>* flatResult = (*result)->asFlatVector<bool>();
-      flatResult->clearNulls(rows);
-      flatResult->mutableRawValues<int64_t>();
-      auto rawNulls = arg->flatRawNulls(rows);
-      memcpy(
-          flatResult->mutableRawValues<int64_t>(),
-          rawNulls,
-          bits::nbytes(rows.end()));
-      if constexpr (!IsNotNULL) {
-        bits::negate(flatResult->mutableRawValues<char>(), rows.end());
-      }
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    auto* arg = args[0].get();
+    auto* pool = context.pool();
+    if (arg->isConstantEncoding()) {
+      bool isNull = arg->isNullAt(rows.begin());
+      auto localResult = BaseVector::createConstant(
+          IsNotNULL ? !isNull : isNull, rows.size(), pool);
+      context.moveOrCopyResult(localResult, rows, result);
       return;
     }
 
-    BaseVector::ensureWritable(rows, BOOLEAN(), arg->pool(), result);
-    FlatVector<bool>* flatResult = (*result)->asFlatVector<bool>();
     if (!arg->mayHaveNulls()) {
-      rows.applyToSelected(
-          [&](vector_size_t i) { flatResult->set(i, IsNotNULL); });
-    } else {
-      auto rawNulls = arg->flatRawNulls(rows);
-      if constexpr (!IsNotNULL) {
-        rows.applyToSelected([&](vector_size_t i) {
-          flatResult->set(i, bits::isBitNull(rawNulls, i));
-        });
+      // No nulls.
+      auto localResult = BaseVector::createConstant(
+          IsNotNULL ? true : false, rows.size(), pool);
+      context.moveOrCopyResult(localResult, rows, result);
+      return;
+    }
+
+    BufferPtr isNull;
+    if (arg->isFlatEncoding()) {
+      if constexpr (IsNotNULL) {
+        isNull = arg->nulls();
       } else {
-        rows.applyToSelected([&](vector_size_t i) {
-          flatResult->set(i, !bits::isBitNull(rawNulls, i));
-        });
+        isNull = AlignedBuffer::allocate<bool>(rows.size(), pool);
+        memcpy(
+            isNull->asMutable<int64_t>(),
+            arg->rawNulls(),
+            bits::nbytes(rows.end()));
+        bits::negate(isNull->asMutable<char>(), rows.end());
+      }
+    } else {
+      exec::DecodedArgs decodedArgs(rows, args, context);
+
+      isNull = AlignedBuffer::allocate<bool>(rows.size(), pool);
+      memcpy(
+          isNull->asMutable<int64_t>(),
+          decodedArgs.at(0)->nulls(),
+          bits::nbytes(rows.end()));
+
+      if (!IsNotNULL) {
+        bits::negate(isNull->asMutable<char>(), rows.end());
       }
     }
+
+    auto localResult = std::make_shared<FlatVector<bool>>(
+        pool, nullptr, rows.size(), isNull, std::vector<BufferPtr>{});
+    context.moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -91,8 +98,17 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     IsNullFunction<false>::signatures(),
     std::make_unique<IsNullFunction</*IsNotNUll=*/false>>());
 
+void registerIsNullFunction(const std::string& name) {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_is_null, name);
+}
+
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_is_not_null,
     IsNullFunction<true>::signatures(),
     std::make_unique<IsNullFunction</*IsNotNUll=*/true>>());
+
+void registerIsNotNullFunction(const std::string& name) {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_is_not_null, name);
+}
+
 } // namespace facebook::velox::functions

@@ -16,6 +16,7 @@
 
 #include "velox/substrait/SubstraitParser.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/substrait/TypeUtils.h"
 
 namespace facebook::velox::substrait {
 
@@ -30,6 +31,16 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
       nullability = substraitType.bool_().nullability();
       break;
     }
+    case ::substrait::Type::KindCase::kI8: {
+      typeName = "TINYINT";
+      nullability = substraitType.i8().nullability();
+      break;
+    }
+    case ::substrait::Type::KindCase::kI16: {
+      typeName = "SMALLINT";
+      nullability = substraitType.i16().nullability();
+      break;
+    }
     case ::substrait::Type::KindCase::kI32: {
       typeName = "INTEGER";
       nullability = substraitType.i32().nullability();
@@ -40,19 +51,14 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
       nullability = substraitType.i64().nullability();
       break;
     }
+    case ::substrait::Type::KindCase::kFp32: {
+      typeName = "REAL";
+      nullability = substraitType.fp32().nullability();
+      break;
+    }
     case ::substrait::Type::KindCase::kFp64: {
       typeName = "DOUBLE";
       nullability = substraitType.fp64().nullability();
-      break;
-    }
-    case ::substrait::Type::KindCase::kStruct: {
-      // TODO: Support for Struct is not fully added.
-      typeName = "STRUCT";
-      const auto& substraitStruct = substraitType.struct_();
-      const auto& substraitTypes = substraitStruct.types();
-      for (const auto& type : substraitTypes) {
-        parseType(type);
-      }
       break;
     }
     case ::substrait::Type::KindCase::kString: {
@@ -60,8 +66,57 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
       nullability = substraitType.string().nullability();
       break;
     }
+    case ::substrait::Type::KindCase::kBinary: {
+      typeName = "VARBINARY";
+      nullability = substraitType.string().nullability();
+      break;
+    }
+    case ::substrait::Type::KindCase::kStruct: {
+      // The type name of struct is in the format of:
+      // ROW<type0,type1,ROW<type2>>...typen.
+      typeName = "ROW<";
+      const auto& sStruct = substraitType.struct_();
+      const auto& substraitTypes = sStruct.types();
+      for (int i = 0; i < substraitTypes.size(); i++) {
+        if (i > 0) {
+          typeName += ",";
+        }
+        typeName += parseType(substraitTypes[i])->type;
+      }
+      typeName += ">";
+      nullability = substraitType.struct_().nullability();
+      break;
+    }
+    case ::substrait::Type::KindCase::kList: {
+      // The type name of list is in the format of: ARRAY<T>.
+      const auto& sList = substraitType.list();
+      const auto& sType = sList.type();
+      typeName = "ARRAY<" + parseType(sType)->type + ">";
+      nullability = substraitType.list().nullability();
+      break;
+    }
+    case ::substrait::Type::KindCase::kMap: {
+      // The type name of map is in the format of: MAP<K,V>.
+      const auto& sMap = substraitType.map();
+      const auto& keyType = sMap.key();
+      const auto& valueType = sMap.value();
+      typeName = "MAP<" + parseType(keyType)->type + "," +
+          parseType(valueType)->type + ">";
+      nullability = substraitType.map().nullability();
+      break;
+    }
+    case ::substrait::Type::KindCase::kUserDefined: {
+      // We only support UNKNOWN type to handle the null literal whose type is
+      // not known.
+      VELOX_CHECK_EQ(substraitType.user_defined().type_reference(), 0);
+      typeName = "UNKNOWN";
+      nullability = substraitType.string().nullability();
+      break;
+    }
     default:
-      VELOX_NYI("Substrait parsing for type {} not supported.", typeName);
+      VELOX_NYI(
+          "Parsing for Substrait type not supported: {}",
+          substraitType.DebugString());
   }
 
   bool nullable;
@@ -159,47 +214,12 @@ const std::string& SubstraitParser::findFunctionSpec(
   return map[id];
 }
 
-std::string SubstraitParser::getFunctionName(
-    const std::string& functionSpec) const {
-  // Get the position of ":" in the function name.
-  std::size_t pos = functionSpec.find(":");
-  if (pos == std::string::npos) {
-    return functionSpec;
-  }
-  return functionSpec.substr(0, pos);
-}
-
-void SubstraitParser::getFunctionTypes(
-    const std::string& functionSpec,
-    std::vector<std::string>& types) const {
-  types.clear();
-  // Get the position of ":" in the function name.
-  std::size_t pos = functionSpec.find(":");
-  // Get the parameter types.
-  std::string funcTypes;
-  if (pos == std::string::npos) {
-    return;
-  } else {
-    if (pos == functionSpec.size() - 1) {
-      return;
-    }
-    funcTypes = functionSpec.substr(pos + 1);
-  }
-  // Split the types with delimiter.
-  std::string delimiter = "_";
-  while ((pos = funcTypes.find(delimiter)) != std::string::npos) {
-    types.emplace_back(funcTypes.substr(0, pos));
-    funcTypes.erase(0, pos + delimiter.length());
-  }
-  types.emplace_back(funcTypes);
-}
-
 std::string SubstraitParser::findVeloxFunction(
     const std::unordered_map<uint64_t, std::string>& functionMap,
     uint64_t id) const {
   std::string funcSpec = findFunctionSpec(functionMap, id);
-  std::string funcName = getFunctionName(funcSpec);
-  return mapToVeloxFunction(funcName);
+  std::string_view funcName = getNameBeforeDelimiter(funcSpec, ":");
+  return mapToVeloxFunction({funcName.begin(), funcName.end()});
 }
 
 std::string SubstraitParser::mapToVeloxFunction(

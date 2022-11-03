@@ -45,11 +45,9 @@ exec::TypeSignature typeToTypeSignature(std::shared_ptr<const Type> type) {
 }
 
 void populateSimpleFunctionSignatures(FunctionSignatureMap& map) {
-  auto& simpleFunctions = exec::SimpleFunctions();
-  auto functionNames = simpleFunctions.getFunctionNames();
-  for (const auto& functionName : functionNames) {
-    auto signatures = simpleFunctions.getFunctionSignatures(functionName);
-    map[functionName] = signatures;
+  const auto& simpleFunctions = exec::SimpleFunctions();
+  for (const auto& functionName : simpleFunctions.getFunctionNames()) {
+    map[functionName] = simpleFunctions.getFunctionSignatures(functionName);
   }
 }
 
@@ -97,7 +95,7 @@ std::shared_ptr<const Type> resolveSimpleFunction(
       exec::SimpleFunctions().resolveFunction(functionName, argTypes);
 
   if (resolvedFunction) {
-    return resolvedFunction->getMetadata()->returnType();
+    return resolvedFunction->getMetadata().returnType();
   }
 
   return nullptr;
@@ -106,17 +104,7 @@ std::shared_ptr<const Type> resolveSimpleFunction(
 std::shared_ptr<const Type> resolveVectorFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
-  if (auto vectorFunctionSignatures =
-          exec::getVectorFunctionSignatures(functionName)) {
-    for (const auto& signature : vectorFunctionSignatures.value()) {
-      exec::SignatureBinder binder(*signature, argTypes);
-      if (binder.tryBind()) {
-        return binder.tryResolveReturnType();
-      }
-    }
-  }
-
-  return nullptr;
+  return exec::resolveVectorFunction(functionName, argTypes);
 }
 
 } // namespace facebook::velox

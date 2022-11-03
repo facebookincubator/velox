@@ -32,6 +32,7 @@ namespace facebook::velox::dwrf {
 // Writer version
 constexpr folly::StringPiece WRITER_NAME_KEY{"orc.writer.name"};
 constexpr folly::StringPiece WRITER_VERSION_KEY{"orc.writer.version"};
+constexpr folly::StringPiece WRITER_HOSTNAME_KEY{"orc.writer.host"};
 constexpr folly::StringPiece kDwioWriter{"dwio"};
 constexpr folly::StringPiece kPrestoWriter{"presto"};
 
@@ -67,6 +68,11 @@ enum StreamKind {
   StreamKind_BLOOM_FILTER_UTF8 = 10,
   StreamKind_IN_MAP = 11
 };
+
+inline bool isIndexStream(StreamKind kind) {
+  return kind == StreamKind::StreamKind_ROW_INDEX ||
+      kind == StreamKind::StreamKind_BLOOM_FILTER_UTF8;
+}
 
 /**
  * Get the string representation of the StreamKind.
@@ -258,86 +264,6 @@ class StripeInformation {
    * @return a count of the number of rows
    */
   virtual uint64_t getNumberOfRows() const = 0;
-};
-
-class PostScript {
- public:
-  PostScript(
-      uint64_t footerLength,
-      dwio::common::CompressionKind compression,
-      uint64_t compressionBlockSize,
-      uint32_t writerVersion)
-      : footerLength_{footerLength},
-        compression_{compression},
-        compressionBlockSize_{compressionBlockSize},
-        writerVersion_{static_cast<WriterVersion>(writerVersion)} {}
-
-  explicit PostScript(const proto::PostScript& ps)
-      : footerLength_{ps.footerlength()},
-        compression_{
-            ps.has_compression()
-                ? static_cast<dwio::common::CompressionKind>(ps.compression())
-                : dwio::common::CompressionKind::CompressionKind_NONE},
-        compressionBlockSize_{
-            ps.has_compressionblocksize()
-                ? ps.compressionblocksize()
-                : dwio::common::DEFAULT_COMPRESSION_BLOCK_SIZE},
-        writerVersion_{
-            ps.has_writerversion()
-                ? static_cast<WriterVersion>(ps.writerversion())
-                : WriterVersion::ORIGINAL},
-        cacheMode_{static_cast<StripeCacheMode>(ps.cachemode())},
-        cacheSize_{ps.cachesize()} {}
-
-  explicit PostScript(const proto::orc::PostScript& ps);
-
-  dwio::common::FileFormat fileFormat() const {
-    return fileFormat_;
-  }
-
-  // General methods
-  uint64_t footerLength() const {
-    return footerLength_;
-  }
-
-  dwio::common::CompressionKind compression() const {
-    return compression_;
-  }
-
-  uint64_t compressionBlockSize() const {
-    return compressionBlockSize_;
-  }
-
-  uint32_t writerVersion() const {
-    return writerVersion_;
-  }
-
-  // DWRF-specific methods
-  StripeCacheMode cacheMode() const {
-    return cacheMode_;
-  }
-
-  uint32_t cacheSize() const {
-    return cacheSize_;
-  }
-
- private:
-  // General attributes
-  dwio::common::FileFormat fileFormat_ = dwio::common::FileFormat::DWRF;
-  uint64_t footerLength_;
-  dwio::common::CompressionKind compression_ =
-      dwio::common::CompressionKind::CompressionKind_NONE;
-  uint64_t compressionBlockSize_ = dwio::common::DEFAULT_COMPRESSION_BLOCK_SIZE;
-  WriterVersion writerVersion_ = WriterVersion::ORIGINAL;
-
-  // DWRF-specific attributes
-  StripeCacheMode cacheMode_;
-  uint32_t cacheSize_ = 0;
-
-  // ORC-specific attributes
-  // TODO: add getter
-  uint64_t metadataLength_;
-  uint64_t stripeStatisticsLength_;
 };
 
 enum RleVersion { RleVersion_1, RleVersion_2 };

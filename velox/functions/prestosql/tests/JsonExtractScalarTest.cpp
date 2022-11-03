@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions::prestosql {
@@ -33,7 +33,7 @@ class JsonExtractScalarTest : public functions::test::FunctionBaseTest {
       const std::vector<std::optional<StringView>>& json,
       const std::vector<std::optional<StringView>>& path,
       const std::vector<std::optional<StringView>>& expected) {
-    auto jsonVector = makeNullableFlatVector<Json>(json, JSON());
+    auto jsonVector = makeNullableFlatVector<StringView>(json, JSON());
     auto pathVector = makeNullableFlatVector<StringView>(path);
     auto expectedVector = makeNullableFlatVector<StringView>(expected);
 
@@ -157,6 +157,30 @@ TEST_F(JsonExtractScalarTest, overflow) {
       json_extract_scalar(
           R"(184467440737095516151844674407370955161518446744073709551615)",
           "$"),
+      std::nullopt);
+}
+
+// TODO: When there is a wildcard in the json path, Presto's behavior is to
+// always extract an array of selected items, and hence json_extract_scalar()
+// always return NULL in this situation. But some internal customers are
+// relying on the current behavior of returning the selected item itself if
+// there is exactly one selected. We'll fix json_extract_scalar() to follow
+// Presto's behavior after internal customers clear the dependence on this
+// diverged semantic. This unit test makes sure we don't break their workloads
+// before they clear the dependency.
+TEST_F(JsonExtractScalarTest, wildcardSelect) {
+  EXPECT_EQ(
+      json_extract_scalar(R"({"tags":{"a":["b"],"c":["d"]}})", "$.tags.c[*]"),
+      "d");
+  EXPECT_EQ(
+      json_extract_scalar(R"({"tags":{"a":["b"],"c":["d"]}})", "$[tags][c][*]"),
+      "d");
+  EXPECT_EQ(
+      json_extract_scalar(
+          R"({"tags":{"a":["b"],"c":["d","e"]}})", "$.tags.c[*]"),
+      std::nullopt);
+  EXPECT_EQ(
+      json_extract_scalar(R"({"tags":{"a":["b"],"c":[]}})", "$.tags.c[*]"),
       std::nullopt);
 }
 

@@ -19,41 +19,66 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 
 namespace facebook::velox::functions {
 namespace {
 
-// See documentation at https://prestodb.io/docs/current/functions/array.html
+/// See documentation at https://prestodb.io/docs/current/functions/array.html
+///
+/// array_distinct SQL function.
+///
+/// Along with the set, we maintain a `hasNull` flag that indicates whether
+/// null is present in the array.
+///
+/// Zero element copy:
+///
+/// In order to prevent copies of array elements, the function reuses the
+/// internal elements() vector from the original ArrayVector.
+///
+/// First a new vector is created containing the indices of the elements
+/// which will be present in the output, and wrapped into a DictionaryVector.
+/// Next the `lengths` and `offsets` vectors that control where output arrays
+/// start and end are wrapped into the output ArrayVector.template <typename T>
 template <typename T>
 class ArrayDistinctFunction : public exec::VectorFunction {
  public:
-  /// This class implements the array_distinct query function.
-  ///
-  /// Along with the set, we maintain a `hasNull` flag that indicates whether
-  /// null is present in the array.
-  ///
-  /// Zero element copy:
-  ///
-  /// In order to prevent copies of array elements, the function reuses the
-  /// internal elements() vector from the original ArrayVector.
-  ///
-  /// First a new vector is created containing the indices of the elements
-  /// which will be present in the output, and wrapped into a DictionaryVector.
-  /// Next the `lengths` and `offsets` vectors that control where output arrays
-  /// start and end are wrapped into the output ArrayVector.
-
-  ArrayDistinctFunction() {}
-
-  // Execute function.
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    // Acquire the array elements vector.
-    auto arrayVector = args.front()->as<ArrayVector>();
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    auto& arg = args[0];
+
+    VectorPtr localResult;
+
+    // Input can be constant or flat.
+    if (arg->isConstantEncoding()) {
+      auto* constantArray = arg->as<ConstantVector<ComplexType>>();
+      const auto& flatArray = constantArray->valueVector();
+      const auto flatIndex = constantArray->index();
+
+      SelectivityVector singleRow(flatIndex + 1, false);
+      singleRow.setValid(flatIndex, true);
+      singleRow.updateBounds();
+
+      localResult = applyFlat(singleRow, flatArray, context);
+      localResult =
+          BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
+    } else {
+      localResult = applyFlat(rows, arg, context);
+    }
+
+    context.moveOrCopyResult(localResult, rows, result);
+  }
+
+ private:
+  VectorPtr applyFlat(
+      const SelectivityVector& rows,
+      const VectorPtr& arg,
+      exec::EvalCtx& context) const {
+    auto arrayVector = arg->as<ArrayVector>();
     auto elementsVector = arrayVector->elements();
     auto elementsRows =
         toElementRows(elementsVector->size(), rows, arrayVector);
@@ -63,7 +88,7 @@ class ArrayDistinctFunction : public exec::VectorFunction {
     vector_size_t rowCount = arrayVector->size();
 
     // Allocate new vectors for indices, length and offsets.
-    memory::MemoryPool* pool = context->pool();
+    memory::MemoryPool* pool = context.pool();
     BufferPtr newIndices = allocateIndices(elementsCount, pool);
     BufferPtr newLengths = allocateSizes(rowCount, pool);
     BufferPtr newOffsets = allocateOffsets(rowCount, pool);
@@ -106,17 +131,15 @@ class ArrayDistinctFunction : public exec::VectorFunction {
     auto newElements =
         BaseVector::transpose(newIndices, std::move(elementsVector));
 
-    // Prepare and return result set.
-    auto resultArray = std::make_shared<ArrayVector>(
+    return std::make_shared<ArrayVector>(
         pool,
-        outputType,
+        arrayVector->type(),
         nullptr,
         rowCount,
         std::move(newOffsets),
         std::move(newLengths),
         std::move(newElements),
         0);
-    context->moveOrCopyResult(resultArray, rows, result);
   }
 };
 
@@ -156,11 +179,14 @@ std::shared_ptr<exec::VectorFunction> create(
 // Define function signature.
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   // array(T) -> array(T)
-  return {exec::FunctionSignatureBuilder()
-              .typeVariable("T")
-              .returnType("array(T)")
-              .argumentType("array(T)")
-              .build()};
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+  for (const auto& type : exec::primitiveTypeNames()) {
+    signatures.push_back(exec::FunctionSignatureBuilder()
+                             .returnType(fmt::format("array({})", type))
+                             .argumentType(fmt::format("array({})", type))
+                             .build());
+  }
+  return signatures;
 }
 
 } // namespace

@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
+
+namespace {
 
 class ArrayConstructorTest : public functions::test::FunctionBaseTest {};
 
@@ -146,3 +148,67 @@ TEST_F(ArrayConstructorTest, empty) {
   auto other = asArray(sameResult);
   EXPECT_TRUE(asArray(result)->equalValueAt(other.get(), 0, 0));
 }
+
+TEST_F(ArrayConstructorTest, reuseResultWithNulls) {
+  vector_size_t size = 1'000;
+
+  auto a = makeFlatVector<int32_t>(size, [](vector_size_t row) { return row; });
+  auto b =
+      makeFlatVector<int32_t>(size, [](vector_size_t row) { return row + 1; });
+  std::shared_ptr<BaseVector> reusedResult = makeArrayVector<int32_t>(
+      size,
+      [](vector_size_t /* row */) { return 1; },
+      [](vector_size_t row) { return row; },
+      [](vector_size_t /* row */) { return true; });
+  SelectivityVector selected(size);
+
+  auto result = evaluate<ArrayVector>(
+      "array_constructor(c0, c1)",
+      makeRowVector({a, b}),
+      selected,
+      reusedResult);
+  auto resultElements = result->elements()->asFlatVector<int32_t>();
+  for (vector_size_t row = 0; row < result->size(); row++) {
+    ASSERT_FALSE(result->isNullAt(row)) << "at " << row;
+    ASSERT_EQ(2, result->sizeAt(row)) << "at " << row;
+    ASSERT_EQ(2 * row, result->offsetAt(row)) << "at " << row;
+
+    auto offset = 2 * row;
+    ASSERT_TRUE(a->equalValueAt(resultElements, row, offset));
+    ASSERT_TRUE(b->equalValueAt(resultElements, row, offset + 1));
+  }
+}
+
+TEST_F(ArrayConstructorTest, literals) {
+  // Simple bigint literals.
+  auto result =
+      evaluate("array_constructor(1, 2, 3, 4, 5)", makeRowVector(ROW({}), 1));
+  auto expected = makeArrayVector<int64_t>({{1, 2, 3, 4, 5}});
+  test::assertEqualVectors(expected, result);
+
+  // Add null literals.
+  result = evaluate(
+      "array_constructor(1, 2, null, 4, null)", makeRowVector(ROW({}), 1));
+  expected =
+      makeNullableArrayVector<int64_t>({{1, 2, std::nullopt, 4, std::nullopt}});
+  test::assertEqualVectors(expected, result);
+
+  // Double literals.
+  result =
+      evaluate("array_constructor(1.9, 2.4, 3.2)", makeRowVector(ROW({}), 1));
+  expected = makeArrayVector<double>({{1.9, 2.4, 3.2}});
+  test::assertEqualVectors(expected, result);
+
+  // String literals.
+  result = evaluate(
+      "array_constructor('asd', '', 'def')", makeRowVector(ROW({}), 1));
+  expected = makeArrayVector<StringView>({{"asd", "", "def"}});
+  test::assertEqualVectors(expected, result);
+
+  // Mixing literals is not allowed.
+  EXPECT_THROW(
+      evaluate("array_constructor('asd', 10, 99.9)", makeRowVector(ROW({}), 1)),
+      VeloxUserError);
+}
+
+} // namespace

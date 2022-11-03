@@ -61,6 +61,9 @@ endif
 NUM_THREADS ?= $(shell getconf _NPROCESSORS_CONF 2>/dev/null || echo 1)
 CPU_TARGET ?= "avx"
 
+FUZZER_SEED ?= 123456
+FUZZER_DURATION_SEC ?= 60
+
 all: release			#: Build the release version
 
 clean:					#: Delete all build artifacts
@@ -77,11 +80,11 @@ cmake:					#: Use CMake to create a Makefile build system
 		${EXTRA_CMAKE_FLAGS}
 
 build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
-	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j ${NUM_THREADS}
+	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS)
 
 debug:					#: Build with debugging symbols
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
-	$(MAKE) build BUILD_DIR=debug
+	$(MAKE) build BUILD_DIR=debug -j ${NUM_THREADS}
 
 release:				#: Build the release version
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=Release && \
@@ -92,40 +95,36 @@ min_debug:				#: Minimal build with debugging symbols
 	$(MAKE) build BUILD_DIR=debug
 
 benchmarks-basic-build:
-	$(MAKE) release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_MINIMAL=ON -DVELOX_ENABLE_BENCHMARKS_BASIC=ON"
+	$(MAKE) release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_MINIMAL=OFF -DVELOX_ENABLE_BENCHMARKS_BASIC=ON"
 
 benchmarks-basic-run:
 	$(MAKE) benchmarks-basic-build
-	scripts/benchmark-runner.py run \
-		--path $(BENCHMARKS_BASIC_DIR) ${EXTRA_BENCHMARK_FLAGS}
-
-benchmarks-basic-dump:
-	$(MAKE) benchmarks-basic-run EXTRA_BENCHMARK_FLAGS="--dump-path ${BENCHMARKS_DUMP_DIR}"
+	scripts/veloxbench/veloxbench/cpp_micro_benchmarks.py
 
 unittest: debug			#: Build with debugging and run unit tests
 	cd $(BUILD_BASE_DIR)/debug && ctest -j ${NUM_THREADS} -VV --output-on-failure
 
-# Build with debugging and run expression fuzzer test. Use a fixed seed to 
+# Build with debugging and run expression fuzzer test. Use a fixed seed to
 # ensure the tests are reproducible.
 fuzzertest: debug
 	$(BUILD_BASE_DIR)/debug/velox/expression/tests/velox_expression_fuzzer_test \
-		--seed 123456 \
-		--steps 100000 \
+		--seed $(FUZZER_SEED) \
+		--duration_sec $(FUZZER_DURATION_SEC) \
 		--logtostderr=1 \
 		--minloglevel=0
 
-format-fix: 			#: Fix formatting issues in the current branch
-	scripts/check.py format branch --fix
+format-fix: 			#: Fix formatting issues in the main branch
+	scripts/check.py format main --fix
 
-format-check: 			#: Check for formatting issues on the current branch
+format-check: 			#: Check for formatting issues on the main branch
 	clang-format --version
-	scripts/check.py format branch
+	scripts/check.py format main
 
 header-fix:				#: Fix license header issues in the current branch
-	scripts/check.py header branch --fix
+	scripts/check.py header main --fix
 
-header-check:			#: Check for license header issues on the current branch
-	scripts/check.py header branch
+header-check:			#: Check for license header issues on the main branch
+	scripts/check.py header main
 
 circleci-container:			#: Build the linux container for CircleCi
 	$(MAKE) linux-container CONTAINER_NAME=circleci

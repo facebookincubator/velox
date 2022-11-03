@@ -76,6 +76,11 @@ void registerSimpleFunctions() {
   registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
       {"date_trunc"});
   registerFunction<DateTruncFunction, Date, Varchar, Date>({"date_trunc"});
+  registerFunction<
+      DateTruncFunction,
+      TimestampWithTimezone,
+      Varchar,
+      TimestampWithTimezone>({"date_trunc"});
   registerFunction<DateAddFunction, Date, Varchar, int64_t, Date>({"date_add"});
   registerFunction<DateAddFunction, Timestamp, Varchar, int64_t, Timestamp>(
       {"date_add"});
@@ -84,6 +89,8 @@ void registerSimpleFunctions() {
   registerFunction<DateDiffFunction, int64_t, Varchar, Timestamp, Timestamp>(
       {"date_diff"});
   registerFunction<DateFormatFunction, Varchar, Timestamp, Varchar>(
+      {"date_format"});
+  registerFunction<DateFormatFunction, Varchar, TimestampWithTimezone, Varchar>(
       {"date_format"});
   registerFunction<FormatDateTimeFunction, Varchar, Timestamp, Varchar>(
       {"format_datetime"});
@@ -98,11 +105,11 @@ void registerSimpleFunctions() {
 } // namespace
 
 void registerDateTimeFunctions() {
-  registerSimpleFunctions();
-
   registerType(
       "timestamp with time zone",
       std::make_unique<const TimestampWithTimeZoneTypeFactories>());
+
+  registerSimpleFunctions();
   VELOX_REGISTER_VECTOR_FUNCTION(udf_from_unixtime, "from_unixtime");
 }
 } // namespace facebook::velox::functions

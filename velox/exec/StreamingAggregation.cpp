@@ -103,6 +103,15 @@ StreamingAggregation::StreamingAggregation(
       ContainerRowSerde::instance());
 }
 
+void StreamingAggregation::close() {
+  for (int32_t i = 0; i < aggregates_.size(); ++i) {
+    if (aggregates_[i]->accumulatorUsesExternalMemory()) {
+      aggregates_[i]->destroy(folly::Range(groups_.data(), groups_.size()));
+    }
+  }
+  Operator::close();
+}
+
 void StreamingAggregation::addInput(RowVectorPtr input) {
   input_ = std::move(input);
 }

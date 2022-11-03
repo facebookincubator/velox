@@ -20,7 +20,8 @@
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::aggregate {
+namespace facebook::velox::aggregate::prestosql {
+
 namespace {
 
 template <typename T>
@@ -95,6 +96,15 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
+    (*result)->resize(numGroups);
+    if (buckets_ == kMissingArgument) {
+      // No data has been added.
+      for (int i = 0; i < numGroups; ++i) {
+        VELOX_DCHECK_EQ(value<StreamSummary>(groups[i])->size(), 0);
+        (*result)->setNull(i, true);
+      }
+      return;
+    }
     auto mapVector = (*result)->as<MapVector>();
     auto [keys, values] = prepareFinalResult(groups, numGroups, mapVector);
     vector_size_t entryCount = 0;
@@ -262,7 +272,6 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
   std::pair<FlatVector<T>*, FlatVector<int64_t>*>
   prepareFinalResult(char** groups, int32_t numGroups, MapVector* result) {
     VELOX_CHECK(result);
-    result->resize(numGroups);
     auto keys = result->mapKeys()->asUnchecked<FlatVector<T>>();
     auto values = result->mapValues()->asUnchecked<FlatVector<int64_t>>();
     VELOX_CHECK(keys);
@@ -337,8 +346,10 @@ bool registerApproxMostFrequent(const std::string& name) {
   return true;
 }
 
-static bool FB_ANONYMOUS_VARIABLE(g_AggregateFunction) =
-    registerApproxMostFrequent(kApproxMostFrequent);
-
 } // namespace
-} // namespace facebook::velox::aggregate
+
+void registerApproxMostFrequentAggregate() {
+  registerApproxMostFrequent(kApproxMostFrequent);
+}
+
+} // namespace facebook::velox::aggregate::prestosql

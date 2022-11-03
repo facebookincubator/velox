@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -38,11 +38,11 @@ class ArrayCombinationsTest : public FunctionBaseTest {
     auto arrayVector = makeArrayVector<T>(
         {{0, 1, 2, 3}, {0, 1, 2, 3}, {0, 1, 2, 3}, {0, 1, 2, 3}});
     auto comboLengthVector = makeFlatVector<int32_t>({0, 3, 4, 5});
-    auto expected = makeNestedArrayVector<T>(
-        {{{std::vector<std::optional<T>>()}},
-         {{{0, 1, 2}}, {{0, 1, 3}}, {{0, 2, 3}}, {{1, 2, 3}}},
-         {{{0, 1, 2, 3}}},
-         {}});
+    auto expected = makeNullableNestedArrayVector<T>(
+        {{{{std::vector<std::optional<T>>()}}},
+         {{{{0, 1, 2}}, {{0, 1, 3}}, {{0, 2, 3}}, {{1, 2, 3}}}},
+         {{{{0, 1, 2, 3}}}},
+         {{}}});
     testExpr(
         expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
   }
@@ -55,20 +55,20 @@ class ArrayCombinationsTest : public FunctionBaseTest {
          {0, 1, std::nullopt, 3},
          {0, 1, std::nullopt, 3}});
     auto comboLengthVector = makeFlatVector<int32_t>({0, 3, 4, 5});
-    auto expected = makeNestedArrayVector<T>({
-        {
+    auto expected = makeNullableNestedArrayVector<T>({
+        {{
             {std::vector<std::optional<T>>()},
-        },
-        {
+        }},
+        {{
             {{0, 1, std::nullopt}},
             {{0, 1, 3}},
             {{0, std::nullopt, 3}},
             {{1, std::nullopt, 3}},
-        },
-        {
+        }},
+        {{
             {{0, 1, std::nullopt, 3}},
-        },
-        {},
+        }},
+        {{}},
     });
     testExpr(
         expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
@@ -76,12 +76,14 @@ class ArrayCombinationsTest : public FunctionBaseTest {
 
   template <typename T>
   void testError(
-      const std::vector<std::optional<T>>& inputArray,
+      const std::vector<T>& inputArray,
       const int combinationLength,
       const std::string& expectedError) {
-    auto arrayVector = makeNullableArrayVector<T>({inputArray});
+    auto arrayVector = makeArrayVector<T>({
+        inputArray,
+    });
     auto comboLengthVector =
-        makeFlatVector<int32_t>(std::vector<int32_t>({combinationLength}));
+        makeFlatVector(std::vector<int32_t>({combinationLength}));
     VELOX_ASSERT_THROW(
         evaluate<ArrayVector>(
             "combinations(C0, C1)",
@@ -112,11 +114,11 @@ TEST_F(ArrayCombinationsTest, errorCases) {
       {0, 1, 2, 3}, -1, "combination size must not be negative: -1");
   testError<int32_t>({0, 1, 2, 3}, 8, "combination size must not exceed 5: 8");
   testError<int32_t>(
-      std::vector<std::optional<int32_t>>(100001, 1),
+      std::vector<int32_t>(100001, 1),
       3,
       "combinations exceed max size of 100000");
   testError<int32_t>(
-      std::vector<std::optional<int32_t>>(99999, 1),
+      std::vector<int32_t>(99999, 1),
       3,
       "combinations exceed max size of 100000");
 }
@@ -133,17 +135,17 @@ TEST_F(ArrayCombinationsTest, inlineVarcharArrays) {
   });
   auto comboLengthVector = makeFlatVector<int32_t>({0, 1, 1, 2, 4, 5});
 
-  auto expected = makeNestedArrayVector<S>(
-      {{{std::vector<std::optional<S>>()}},
-       {{{""}}},
-       {{{std::optional<S>(std::nullopt)}}},
-       {{{"aa", std::nullopt}}, {{"aa", "bb"}}, {{std::nullopt, "bb"}}},
-       {{{"bb", "aa", "cc", "aa"}},
-        {{"bb", "aa", "cc", "ddd"}},
-        {{"bb", "aa", "aa", "ddd"}},
-        {{"bb", "cc", "aa", "ddd"}},
-        {{"aa", "cc", "aa", "ddd"}}},
-       {}});
+  auto expected = makeNullableNestedArrayVector<S>(
+      {{{{std::vector<std::optional<S>>()}}},
+       {{{{""}}}},
+       {{{{std::optional<S>(std::nullopt)}}}},
+       {{{{"aa", std::nullopt}}, {{"aa", "bb"}}, {{std::nullopt, "bb"}}}},
+       {{{{"bb", "aa", "cc", "aa"}},
+         {{"bb", "aa", "cc", "ddd"}},
+         {{"bb", "aa", "aa", "ddd"}},
+         {{"bb", "cc", "aa", "ddd"}},
+         {{"aa", "cc", "aa", "ddd"}}}},
+       {{}}});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }
 
@@ -163,34 +165,34 @@ TEST_F(ArrayCombinationsTest, varcharArrays) {
   });
   auto comboLengthVector = makeFlatVector<int32_t>({0, 1, 1, 2, 4, 5});
 
-  auto expected = makeNestedArrayVector<S>(
-      {{{std::vector<std::optional<S>>()}},
-       {{{""}}},
-       {{{std::optional<S>(std::nullopt)}}},
-       {{{"red shiny car ahead", std::nullopt}},
-        {{"red shiny car ahead", "blue clear sky above"}},
-        {{std::nullopt, "blue clear sky above"}}},
-       {{{"blue clear sky above",
-          "red shiny car ahead",
-          "yellow rose flowers",
-          "red shiny car ahead"}},
-        {{"blue clear sky above",
-          "red shiny car ahead",
-          "yellow rose flowers",
-          "purple is an elegant color"}},
-        {{"blue clear sky above",
-          "red shiny car ahead",
-          "red shiny car ahead",
-          "purple is an elegant color"}},
-        {{"blue clear sky above",
-          "yellow rose flowers",
-          "red shiny car ahead",
-          "purple is an elegant color"}},
-        {{"red shiny car ahead",
-          "yellow rose flowers",
-          "red shiny car ahead",
-          "purple is an elegant color"}}},
-       {}});
+  auto expected = makeNullableNestedArrayVector<S>(
+      {{{{std::vector<std::optional<S>>()}}},
+       {{{{""}}}},
+       {{{{std::optional<S>(std::nullopt)}}}},
+       {{{{"red shiny car ahead", std::nullopt}},
+         {{"red shiny car ahead", "blue clear sky above"}},
+         {{std::nullopt, "blue clear sky above"}}}},
+       {{{{"blue clear sky above",
+           "red shiny car ahead",
+           "yellow rose flowers",
+           "red shiny car ahead"}},
+         {{"blue clear sky above",
+           "red shiny car ahead",
+           "yellow rose flowers",
+           "purple is an elegant color"}},
+         {{"blue clear sky above",
+           "red shiny car ahead",
+           "red shiny car ahead",
+           "purple is an elegant color"}},
+         {{"blue clear sky above",
+           "yellow rose flowers",
+           "red shiny car ahead",
+           "purple is an elegant color"}},
+         {{"red shiny car ahead",
+           "yellow rose flowers",
+           "red shiny car ahead",
+           "purple is an elegant color"}}}},
+       {{}}});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }
 
@@ -204,16 +206,16 @@ TEST_F(ArrayCombinationsTest, boolNullableArrays) {
   });
   auto comboLengthVector = makeFlatVector<int32_t>({0, 1, 2, 4, 5});
 
-  auto expected = makeNestedArrayVector<bool>(
-      {{{std::vector<std::optional<bool>>()}},
-       {{{std::optional<bool>(std::nullopt)}}},
-       {{{true, std::nullopt}}, {{true, false}}, {{std::nullopt, false}}},
-       {{{false, true, false, true}},
-        {{false, true, false, true}},
-        {{false, true, true, true}},
-        {{false, false, true, true}},
-        {{true, false, true, true}}},
-       {}});
+  auto expected = makeNullableNestedArrayVector<bool>(
+      {{{{std::vector<std::optional<bool>>()}}},
+       {{{{std::optional<bool>(std::nullopt)}}}},
+       {{{{true, std::nullopt}}, {{true, false}}, {{std::nullopt, false}}}},
+       {{{{false, true, false, true}},
+         {{false, true, false, true}},
+         {{false, true, true, true}},
+         {{false, false, true, true}},
+         {{true, false, true, true}}}},
+       {{}}});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }
 
@@ -227,15 +229,15 @@ TEST_F(ArrayCombinationsTest, boolArrays) {
   });
   auto comboLengthVector = makeFlatVector<int32_t>({0, 1, 2, 4, 5});
 
-  auto expected = makeNestedArrayVector<bool>(
-      {{{std::vector<std::optional<bool>>()}},
-       {{{true}}},
-       {{{true, true}}, {{true, false}}, {{true, false}}},
-       {{{false, true, false, true}},
-        {{false, true, false, true}},
-        {{false, true, true, true}},
-        {{false, false, true, true}},
-        {{true, false, true, true}}},
-       {}});
+  auto expected = makeNullableNestedArrayVector<bool>(
+      {{{{std::vector<std::optional<bool>>()}}},
+       {{{{true}}}},
+       {{{{true, true}}, {{true, false}}, {{true, false}}}},
+       {{{{false, true, false, true}},
+         {{false, true, false, true}},
+         {{false, true, true, true}},
+         {{false, false, true, true}},
+         {{true, false, true, true}}}},
+       {{}}});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }

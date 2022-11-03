@@ -19,6 +19,8 @@
 #include <velox/core/PlanFragment.h>
 #include <velox/core/PlanNode.h>
 #include "velox/common/memory/Memory.h"
+#include "velox/parse/ExpressionsParser.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
 
 namespace facebook::velox::core {
 class IExpr;
@@ -29,24 +31,6 @@ enum class Table : uint8_t;
 }
 
 namespace facebook::velox::exec::test {
-
-/// Generates unique sequential plan node IDs starting with zero or specified
-/// value.
-class PlanNodeIdGenerator {
- public:
-  explicit PlanNodeIdGenerator(int startId = 0) : nextId_{startId} {}
-
-  int next() {
-    return nextId_++;
-  }
-
-  void reset(int startId = 0) {
-    nextId_ = startId;
-  }
-
- private:
-  int nextId_;
-};
 
 /// A builder class with fluent API for building query plans. Plans are built
 /// bottom up starting with the source node (table scan or similar). Expressions
@@ -101,14 +85,14 @@ class PlanBuilder {
   /// of PlanNodeIdGenerator for all builders to ensure unique plan node IDs
   /// across the plan.
   explicit PlanBuilder(
-      std::shared_ptr<PlanNodeIdGenerator> planNodeIdGenerator,
+      std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator,
       memory::MemoryPool* pool = nullptr)
       : planNodeIdGenerator_{std::move(planNodeIdGenerator)}, pool_{pool} {}
 
   /// Constructor with no required parameters suitable for creating
   /// straight-line (e.g. no joins) query plans.
   explicit PlanBuilder(memory::MemoryPool* pool = nullptr)
-      : PlanBuilder(std::make_shared<PlanNodeIdGenerator>(), pool) {}
+      : PlanBuilder(std::make_shared<core::PlanNodeIdGenerator>(), pool) {}
 
   /// Add a TableScanNode to scan a Hive table.
   ///
@@ -170,7 +154,7 @@ class PlanBuilder {
   PlanBuilder& tableScan(
       tpch::Table table,
       std::vector<std::string>&& columnNames,
-      size_t scaleFactor = 1);
+      double scaleFactor = 1);
 
   /// Add a ValuesNode using specified data.
   ///
@@ -223,10 +207,19 @@ class PlanBuilder {
   /// will produce projected columns named sum_ab, c and p2.
   PlanBuilder& project(const std::vector<std::string>& projections);
 
+  /// Similar to project() except 'optionalProjections' could be empty and the
+  /// function will skip creating a ProjectNode in that case.
+  PlanBuilder& optionalProject(
+      const std::vector<std::string>& optionalProjections);
+
   /// Add a FilterNode using specified SQL expression.
   ///
   /// @param filter SQL expression of type boolean.
   PlanBuilder& filter(const std::string& filter);
+
+  /// Similar to filter() except 'optionalFilter' could be empty and the
+  /// function will skip creating a FilterNode in that case.
+  PlanBuilder& optionalFilter(const std::string& optionalFilter);
 
   /// Adds a TableWriteNode.
   ///
@@ -547,35 +540,25 @@ class PlanBuilder {
   /// @param keys Partitioning keys. May be empty, in which case all input will
   /// be places in a single partition.
   /// @param sources One or more plan nodes that produce input data.
-  /// @param outputLayout Optional output layout in case it is different then
-  /// the input. Output columns may appear in different order from the input,
-  /// some input columns may be missing in the output, some columns may be
-  /// duplicated in the output. Supports "col AS alias" syntax to change the
-  /// names for the input columns.
   PlanBuilder& localPartition(
       const std::vector<std::string>& keys,
-      const std::vector<core::PlanNodePtr>& sources,
-      const std::vector<std::string>& outputLayout = {});
+      const std::vector<core::PlanNodePtr>& sources);
 
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node).
-  PlanBuilder& localPartition(
-      const std::vector<std::string>& keys,
-      const std::vector<std::string>& outputLayout = {});
+  PlanBuilder& localPartition(const std::vector<std::string>& keys);
 
   /// Add a LocalPartitionNode to partition the input using row-wise
   /// round-robin. Number of partitions is determined at runtime based on
   /// parallelism of the downstream pipeline.
   ///
   /// @param sources One or more plan nodes that produce input data.
-  /// @param outputLayout Optional output layout in case it is different then
-  /// the input. Output columns may appear in different order from the input,
-  /// some input columns may be missing in the output, some columns may be
-  /// duplicated in the output. Supports "col AS alias" syntax to change the
-  /// names for the input columns.
   PlanBuilder& localPartitionRoundRobin(
-      const std::vector<core::PlanNodePtr>& sources,
-      const std::vector<std::string>& outputLayout = {});
+      const std::vector<core::PlanNodePtr>& sources);
+
+  /// A convenience method to add a LocalPartitionNode with a single source (the
+  /// current plan node).
+  PlanBuilder& localPartitionRoundRobin();
 
   /// Add a HashJoinNode to join two inputs using one or more join keys and an
   /// optional filter.
@@ -649,6 +632,28 @@ class PlanBuilder {
       const std::vector<std::string>& unnestColumns,
       const std::optional<std::string>& ordinalColumn = std::nullopt);
 
+  /// Add a WindowNode to compute one or more windowFunctions.
+  /// @param windowFunctions A list of one or more window function SQL like
+  /// strings to be computed by this windowNode.
+  /// A window function SQL string looks like :
+  /// "name(parameters) OVER (PARTITION BY partition_keys ORDER BY
+  /// sorting_keys [ROWS|RANGE BETWEEN [UNBOUNDED PRECEDING | x PRECEDING |
+  /// CURRENT ROW] AND [UNBOUNDED FOLLOWING | x FOLLOWING | CURRENT ROW]] AS
+  /// columnName"
+  /// The PARTITION BY and ORDER BY clauses are optional. An empty PARTITION
+  /// list means all the table rows are in a single partition.
+  /// An empty ORDER BY list means the window functions will be computed over
+  /// all the rows in the partition in a random order. Also, the default frame
+  /// if unspecified is RANGE OVER UNBOUNDED PRECEDING AND CURRENT ROW.
+  /// Some examples of window function strings are as follows:
+  /// "first_value(c) over (partition by a order by b) as d"
+  /// "first_value(c) over (partition by a) as d"
+  /// "first_value(c) over ()"
+  /// "row_number() over (order by b) as a"
+  /// "row_number() over (partition by a order by b
+  ///  rows between a + 10 preceding and 10 following)"
+  PlanBuilder& window(const std::vector<std::string>& windowFunctions);
+
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use
   /// when adding splits at runtime.
@@ -677,9 +682,22 @@ class PlanBuilder {
     return *this;
   }
 
- private:
-  std::string nextPlanNodeId();
+  /// Set parsing options
+  PlanBuilder& setParseOptions(const parse::ParseOptions& options) {
+    options_ = options;
+    return *this;
+  }
 
+ protected:
+  // Users who create custom operators might want to extend the PlanBuilder to
+  // customize extended plan builders. Those functions are needed in such
+  // extensions.
+  core::PlanNodeId nextPlanNodeId();
+
+  std::shared_ptr<const core::ITypedExpr> inferTypes(
+      const std::shared_ptr<const core::IExpr>& untypedExpr);
+
+ private:
   std::shared_ptr<const core::FieldAccessTypedExpr> field(column_index_t index);
 
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> fields(
@@ -688,8 +706,7 @@ class PlanBuilder {
   std::shared_ptr<const core::FieldAccessTypedExpr> field(
       const std::string& name);
 
-  std::vector<std::shared_ptr<const core::ITypedExpr>> exprs(
-      const std::vector<std::string>& names);
+  std::vector<core::TypedExprPtr> exprs(const std::vector<std::string>& names);
 
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> fields(
       const std::vector<std::string>& names);
@@ -714,15 +731,12 @@ class PlanBuilder {
       core::AggregationNode::Step step,
       const core::AggregationNode* partialAggNode);
 
-  std::shared_ptr<const core::ITypedExpr> inferTypes(
-      const std::shared_ptr<const core::IExpr>& untypedExpr);
-
-  struct AggregateExpressionsAndNames {
-    std::vector<std::shared_ptr<const core::CallTypedExpr>> aggregates;
+  struct ExpressionsAndNames {
+    std::vector<std::shared_ptr<const core::CallTypedExpr>> expressions;
     std::vector<std::string> names;
   };
 
-  AggregateExpressionsAndNames createAggregateExpressionsAndNames(
+  ExpressionsAndNames createAggregateExpressionsAndNames(
       const std::vector<std::string>& aggregates,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& resultTypes);
@@ -732,8 +746,12 @@ class PlanBuilder {
       size_t numAggregates,
       const std::vector<std::string>& masks);
 
-  std::shared_ptr<PlanNodeIdGenerator> planNodeIdGenerator_;
+ protected:
   core::PlanNodePtr planNode_;
+  parse::ParseOptions options_;
+
+ private:
+  std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
   memory::MemoryPool* pool_;
 };
 } // namespace facebook::velox::exec::test

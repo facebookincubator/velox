@@ -16,7 +16,7 @@
 
 #include <folly/init/Init.h>
 
-#include "velox/dwio/dwrf/test/utils/DataFiles.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -110,7 +110,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
 
   std::string getExampleFilePath(const std::string& fileName) {
     return facebook::velox::test::getDataFilePath(
-        "", "../examples/" + fileName);
+        "velox/dwio/parquet/tests/duckdb_reader", "../examples/" + fileName);
   }
 
   std::shared_ptr<connector::hive::HiveConnectorSplit> makeSplit(

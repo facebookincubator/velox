@@ -16,7 +16,7 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/vector/tests/VectorTestBase.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -169,4 +169,77 @@ TEST_F(LazyVectorTest, lazyInDoubleDictionary) {
   expected = makeFlatVector<int32_t>(
       kInnerSize, [](auto row) { return row; }, nullEvery(3));
   assertEqualVectors(wrapped, expected);
+}
+
+TEST_F(LazyVectorTest, lazySlice) {
+  auto lazy = std::make_shared<LazyVector>(
+      pool_.get(),
+      INTEGER(),
+      100,
+      std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
+        return makeFlatVector<int32_t>(
+            rows.back() + 1, [](auto row) { return row; });
+      }));
+  EXPECT_THROW(lazy->slice(0, 10), VeloxRuntimeError);
+  lazy->loadedVector();
+  auto slice = lazy->slice(0, 10);
+  for (int i = 0; i < slice->size(); ++i) {
+    EXPECT_TRUE(slice->equalValueAt(lazy.get(), i, i));
+  }
+}
+
+TEST_F(LazyVectorTest, lazyInMultipleDictionaryAllResultantNullRows) {
+  // Verifies that lazy loading works for a lazy vector that is wrapped in
+  // multiple layers of dictionary encoding such that the rows that it needs to
+  // be loaded for all end up pointing to nulls. This results in a zero sized
+  // base vector which when wrapped in a dictionary layer can run into invalid
+  // internal state for row indices that were not asked to be loaded.
+  static constexpr int32_t kVectorSize = 10;
+  auto lazy = std::make_shared<LazyVector>(
+      pool_.get(),
+      INTEGER(),
+      kVectorSize,
+      std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
+        return makeFlatVector<int32_t>(
+            rows.back() + 1, [](auto row) { return row; });
+      }));
+  auto wrapped = BaseVector::wrapInDictionary(
+      makeNulls(kVectorSize, [](vector_size_t /*row*/) { return true; }),
+      makeIndices(kVectorSize, [](auto row) { return row; }),
+      kVectorSize,
+      lazy);
+  wrapped = BaseVector::wrapInDictionary(
+      nullptr,
+      makeIndices(kVectorSize, [](auto row) { return row; }),
+      kVectorSize,
+      wrapped);
+  SelectivityVector rows(kVectorSize, true);
+  rows.setValid(1, false);
+  LazyVector::ensureLoadedRows(wrapped, rows);
+  auto expected =
+      BaseVector::createNullConstant(lazy->type(), wrapped->size(), pool());
+  assertEqualVectors(expected, wrapped);
+}
+
+TEST_F(LazyVectorTest, lazyInDictionaryNoRowsToLoad) {
+  // Verifies that lazy loading works for a lazy vector that is wrapped a
+  // dictionary with no extra nulls when loading for 0 selected rows.
+  static constexpr int32_t kVectorSize = 10;
+  auto lazy = std::make_shared<LazyVector>(
+      pool_.get(),
+      INTEGER(),
+      kVectorSize,
+      std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
+        return makeFlatVector<int32_t>(
+            rows.back() + 1, [](auto row) { return row; });
+      }));
+  auto wrapped = BaseVector::wrapInDictionary(
+      nullptr,
+      makeIndices(kVectorSize, [](auto row) { return row; }),
+      kVectorSize,
+      lazy);
+  SelectivityVector rows(kVectorSize, false);
+  LazyVector::ensureLoadedRows(wrapped, rows);
+  auto expected = makeFlatVector<int32_t>(0);
+  assertEqualVectors(expected, wrapped);
 }

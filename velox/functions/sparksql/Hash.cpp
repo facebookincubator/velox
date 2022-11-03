@@ -115,13 +115,13 @@ class HashFunction final : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* resultRef) const final {
+      exec::EvalCtx& context,
+      VectorPtr& resultRef) const final {
     constexpr int32_t kSeed = 42;
 
-    BaseVector::ensureWritable(rows, INTEGER(), context->pool(), resultRef);
+    context.ensureWritable(rows, INTEGER(), resultRef);
 
-    FlatVector<int32_t>& result = *(*resultRef)->as<FlatVector<int32_t>>();
+    FlatVector<int32_t>& result = *resultRef->as<FlatVector<int32_t>>();
     rows.applyToSelected([&](int row) { result.set(row, kSeed); });
 
     exec::LocalSelectivityVector selectedMinusNulls(context);
@@ -132,7 +132,7 @@ class HashFunction final : public exec::VectorFunction {
       if (arg->mayHaveNulls()) {
         *selectedMinusNulls.get(rows.end()) = rows;
         selectedMinusNulls->deselectNulls(
-            arg->flatRawNulls(rows), rows.begin(), rows.end());
+            decoded->nulls(), rows.begin(), rows.end());
         selected = selectedMinusNulls.get();
       }
       switch (arg->type()->kind()) {
