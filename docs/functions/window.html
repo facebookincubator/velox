@@ -154,6 +154,11 @@ within the window partition.</p>
 can be any scalar expression. If the offset is null or greater than the number of values in the window, null is
 returned. It is an error for the offset to be zero or negative.</p>
 </section>
+<section id="aggregate-functions">
+<h1>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this headline">¶</a></h1>
+<p>All aggregate functions can be used as window functions by adding the OVER clause. The aggregate function is computed
+for each row over the rows within the current row’s window frame.</p>
+</section>
 
 
             <div class="clearer"></div>
@@ -174,6 +179,7 @@ returned. It is an error for the offset to be zero or negative.</p>
 </li>
 <li><a class="reference internal" href="#ranking-functions">Ranking functions</a></li>
 <li><a class="reference internal" href="#value-functions">Value functions</a></li>
+<li><a class="reference internal" href="#aggregate-functions">Aggregate functions</a></li>
 </ul>
 
   </div>
