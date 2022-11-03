@@ -31,7 +31,7 @@ std::optional<std::vector<FunctionSignaturePtr>> getVectorFunctionSignatures(
   auto sanitizedName = sanitizeFunctionName(name);
 
   return vectorFunctionFactories()
-      .withRLock([&sanitizedName](auto& functions) -> auto {
+      .withRLock([&sanitizedName](auto& functions) -> auto{
         auto it = functions.find(sanitizedName);
         return it == functions.end() ? std::nullopt
                                      : std::optional(it->second.signatures);

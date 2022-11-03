@@ -19,7 +19,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/common/ColumnSelector.h"
-#include "velox/dwio/common/FormatData.h"
+#include "velox/dwio/common/FormatDataReader.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/type/Filter.h"
 
@@ -128,7 +128,7 @@ class SelectiveColumnReader {
 
   virtual ~SelectiveColumnReader() = default;
 
-  dwio::common::FormatData& formatData() const {
+  dwio::common::FormatDataReader& formatData() const {
     return *formatData_;
   }
 
@@ -505,7 +505,7 @@ class SelectiveColumnReader {
   std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
 
   // Format specific state and functions.
-  std::unique_ptr<dwio::common::FormatData> formatData_;
+  std::unique_ptr<dwio::common::FormatDataReader> formatData_;
 
   // Specification of filters, value extraction, pruning etc. The
   // spec is assigned at construction and the contents may change at

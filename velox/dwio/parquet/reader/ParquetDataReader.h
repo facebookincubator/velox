@@ -29,18 +29,19 @@ class ParquetParams : public dwio::common::FormatParams {
  public:
   ParquetParams(memory::MemoryPool& pool, const thrift::FileMetaData& metaData)
       : FormatParams(pool), metaData_(metaData) {}
-  std::unique_ptr<dwio::common::FormatData> toFormatData(
+  std::unique_ptr<dwio::common::FormatDataReader> toFormatDataReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
-      const common::ScanSpec& scanSpec) override;
+      const common::ScanSpec&) override;
 
  private:
   const thrift::FileMetaData& metaData_;
+  bool isNested_ = false;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
-class ParquetData : public dwio::common::FormatData {
+class ParquetDataReader : public dwio::common::FormatDataReader {
  public:
-  ParquetData(
+  ParquetDataReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const std::vector<thrift::RowGroup>& rowGroups,
       memory::MemoryPool& pool)
@@ -54,11 +55,6 @@ class ParquetData : public dwio::common::FormatData {
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
 
-  /// Positions 'this' at 'index'th row group. enqueueRowGroup must be called
-  /// first. The returned PositionProvider is empty and should not be used.
-  /// Other formats may use it.
-  dwio::common::PositionProvider seekToRowGroup(uint32_t index) override;
-
   /// True if 'filter' may have hits for the column of 'this' according to the
   /// stats in 'rowGroup'.
   bool rowGroupMatches(
@@ -69,6 +65,32 @@ class ParquetData : public dwio::common::FormatData {
       const common::ScanSpec& scanSpec,
       uint64_t rowsPerRowGroup,
       const dwio::common::StatsContext& writerContext) override;
+
+ protected:
+  memory::MemoryPool& pool_;
+  std::shared_ptr<const ParquetTypeWithId> type_;
+  const std::vector<thrift::RowGroup>& rowGroups_;
+  // Streams for this column in each of 'rowGroups_'. Will be created on or
+  // ahead of first use, not at construction.
+  std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
+
+  const uint32_t maxDefine_;
+  const uint32_t maxRepeat_;
+  int64_t rowsInRowGroup_;
+};
+
+class ParquetPrimitiveDataReader : public ParquetDataReader {
+ public:
+  ParquetPrimitiveDataReader(
+      const std::shared_ptr<const dwio::common::TypeWithId>& type,
+      const std::vector<thrift::RowGroup>& rowGroups,
+      memory::MemoryPool& pool)
+      : ParquetDataReader(type, rowGroups, pool) {}
+
+  /// Positions 'this' at 'index'th row group. enqueueRowGroup must be called
+  /// first. The returned PositionProvider is empty and should not be used.
+  /// Other formats may use it.
+  dwio::common::PositionProvider seekToRowGroup(uint32_t index) override;
 
   // Reads null flags for 'numValues' next top level rows. The first 'numValues'
   // bits of 'nulls' are set and the reader is advanced by numValues'.
@@ -118,6 +140,10 @@ class ParquetData : public dwio::common::FormatData {
     reader_->readWithVisitor(visitor);
   }
 
+  bool hasDictionary() const {
+    return reader_->isDictionary();
+  }
+
   const VectorPtr& dictionaryValues() {
     return reader_->dictionaryValues();
   }
@@ -126,21 +152,7 @@ class ParquetData : public dwio::common::FormatData {
     reader_->clearDictionary();
   }
 
-  bool hasDictionary() const {
-    return reader_->isDictionary();
-  }
-
- protected:
-  memory::MemoryPool& pool_;
-  std::shared_ptr<const ParquetTypeWithId> type_;
-  const std::vector<thrift::RowGroup>& rowGroups_;
-  // Streams for this column in each of 'rowGroups_'. Will be created on or
-  // ahead of first use, not at construction.
-  std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
-
-  const uint32_t maxDefine_;
-  const uint32_t maxRepeat_;
-  int64_t rowsInRowGroup_;
+ private:
   std::unique_ptr<PageReader> reader_;
 };
 

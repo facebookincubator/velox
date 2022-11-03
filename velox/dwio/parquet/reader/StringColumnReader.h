@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
-#include "velox/dwio/parquet/reader/ParquetData.h"
+#include "velox/dwio/parquet/reader/ParquetDataReader.h"
 
 namespace facebook::velox::parquet {
 
@@ -38,7 +38,7 @@ class StringColumnReader : public dwio::common::SelectiveColumnReader {
     SelectiveColumnReader::seekToRowGroup(index);
     scanState().clear();
     readOffset_ = 0;
-    formatData_->as<ParquetData>().seekToRowGroup(index);
+    formatData_->as<ParquetDataReader>().seekToRowGroup(index);
   }
 
   uint64_t skip(uint64_t numValues) override;

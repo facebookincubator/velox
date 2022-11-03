@@ -61,7 +61,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
   std::unique_ptr<SeekableInputStream> inDictStream = stripe.getStream(
       encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY), false);
   if (inDictStream) {
-    formatData_->as<DwrfData>().ensureRowGroupIndex();
+    formatData_->as<DwrfDataReader>().ensureRowGroupIndex();
 
     inDictionaryReader_ =
         createBooleanRleDecoder(std::move(inDictStream), encodingKey);
@@ -132,7 +132,7 @@ void SelectiveStringDictionaryColumnReader::loadStrideDictionary() {
 
   // get stride dictionary size and load it if needed
   auto& positions =
-      formatData_->as<DwrfData>().index().entry(nextStride).positions();
+      formatData_->as<DwrfDataReader>().index().entry(nextStride).positions();
   scanState_.dictionary2.numValues = positions.Get(strideDictSizeOffset_);
   if (scanState_.dictionary2.numValues > 0) {
     // seek stride dictionary related streams
@@ -295,7 +295,7 @@ void SelectiveStringDictionaryColumnReader::ensureInitialized() {
 
   // handle in dictionary stream
   if (inDictionaryReader_) {
-    auto& dwrfData = formatData_->as<DwrfData>();
+    auto& dwrfData = formatData_->as<DwrfDataReader>();
     dwrfData.ensureRowGroupIndex();
     // load stride dictionary offsets
     auto indexStartOffset = dwrfData.flatMapContext().inMapDecoder

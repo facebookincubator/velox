@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/reader/DwrfData.h"
+#include "velox/dwio/dwrf/reader/DwrfDataReader.h"
 
 namespace facebook::velox::dwrf {
 
-DwrfData::DwrfData(
+DwrfDataReader::DwrfDataReader(
     std::shared_ptr<const dwio::common::TypeWithId> nodeType,
     StripeStreams& stripe,
     FlatMapContext flatMapContext)
@@ -42,7 +42,7 @@ DwrfData::DwrfData(
       encodingKey.forKind(proto::Stream_Kind_ROW_INDEX), false);
 }
 
-uint64_t DwrfData::skipNulls(uint64_t numValues, bool /*nullsOnly*/) {
+uint64_t DwrfDataReader::skipNulls(uint64_t numValues, bool /*nullsOnly*/) {
   if (notNullDecoder_) {
     // page through the values that we want to skip
     // and count how many are non-null
@@ -61,14 +61,14 @@ uint64_t DwrfData::skipNulls(uint64_t numValues, bool /*nullsOnly*/) {
   return numValues;
 }
 
-void DwrfData::ensureRowGroupIndex() {
+void DwrfDataReader::ensureRowGroupIndex() {
   VELOX_CHECK(index_ || indexStream_, "Reader needs to have an index stream");
   if (indexStream_) {
     index_ = ProtoUtils::readProto<proto::RowIndex>(std::move(indexStream_));
   }
 }
 
-dwio::common::PositionProvider DwrfData::seekToRowGroup(uint32_t index) {
+dwio::common::PositionProvider DwrfDataReader::seekToRowGroup(uint32_t index) {
   ensureRowGroupIndex();
   tempPositions_ = toPositionsInner(index_->entry(index));
   dwio::common::PositionProvider positionProvider(tempPositions_);
@@ -83,7 +83,7 @@ dwio::common::PositionProvider DwrfData::seekToRowGroup(uint32_t index) {
   return positionProvider;
 }
 
-void DwrfData::readNulls(
+void DwrfDataReader::readNulls(
     vector_size_t numValues,
     const uint64_t* FOLLY_NULLABLE incomingNulls,
     BufferPtr& nulls,
@@ -108,7 +108,7 @@ void DwrfData::readNulls(
       reinterpret_cast<char*>(nullsPtr), numValues, incomingNulls);
 }
 
-std::vector<uint32_t> DwrfData::filterRowGroups(
+std::vector<uint32_t> DwrfDataReader::filterRowGroups(
     const common::ScanSpec& scanSpec,
     uint64_t rowGroupSize,
     const dwio::common::StatsContext& writerContext) {

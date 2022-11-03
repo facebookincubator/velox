@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
-#include "velox/dwio/dwrf/reader/DwrfData.h"
+#include "velox/dwio/dwrf/reader/DwrfDataReader.h"
 
 namespace facebook::velox::dwrf {
 
@@ -33,7 +33,8 @@ class SelectiveStringDictionaryColumnReader
 
   void seekToRowGroup(uint32_t index) override {
     SelectiveColumnReader::seekToRowGroup(index);
-    auto positionsProvider = formatData_->as<DwrfData>().seekToRowGroup(index);
+    auto positionsProvider =
+        formatData_->as<DwrfDataReader>().seekToRowGroup(index);
     if (strideDictStream_) {
       strideDictStream_->seekToPosition(positionsProvider);
       strideDictLengthDecoder_->seekToRowGroup(positionsProvider);

@@ -42,7 +42,7 @@ void StructColumnReader::enqueueRowGroup(
     if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
       structChild->enqueueRowGroup(index, input);
     } else {
-      child->formatData().as<ParquetData>().enqueueRowGroup(index, input);
+      child->formatData().as<ParquetDataReader>().enqueueRowGroup(index, input);
     }
   }
 }

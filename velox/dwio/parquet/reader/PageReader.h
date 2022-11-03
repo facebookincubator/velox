@@ -27,6 +27,55 @@
 
 namespace facebook::velox::parquet {
 
+struct ParquetPage {
+  ParquetPage() {}
+
+  ParquetPage(int32_t numRowsInPage, int32_t encodedDataSize)
+      : numRowsInPage_(numRowsInPage), encodedDataSize_(encodedDataSize) {}
+
+  // Number of rows in current page.
+  const int32_t numRowsInPage_{0};
+
+  // Number of bytes starting at pageData_ for current encoded data.
+  const int32_t encodedDataSize_{0};
+};
+
+struct ParquetDataPage : public ParquetPage {
+  ParquetDataPage() : ParquetPage() {}
+
+  ParquetDataPage(
+      int32_t numRowsInPage,
+      int32_t encodedDataSize,
+      thrift::Encoding::type encoding,
+      const char* FOLLY_NULLABLE pageData)
+      : ParquetPage(numRowsInPage, encodedDataSize),
+        encoding_(encoding),
+        pageData_(pageData) {}
+
+  // Encoding of current page.
+  thrift::Encoding::type encoding_;
+
+  // First byte of uncompressed encoded data. Contains the encoded data as a
+  // contiguous run of bytes.
+  const char* FOLLY_NULLABLE pageData_{nullptr};
+};
+
+struct ParquetDictionaryPage : public ParquetPage {
+  ParquetDictionaryPage() : ParquetPage() {}
+
+  ParquetDictionaryPage(
+      int32_t numRowsInPage,
+      int32_t encodedDataSize,
+      dwio::common::DictionaryValues dictionary,
+      thrift::Encoding::type dictionaryEncoding)
+      : ParquetPage(numRowsInPage, encodedDataSize),
+        dictionary_(dictionary),
+        dictionaryEncoding_(dictionaryEncoding) {}
+
+  dwio::common::DictionaryValues dictionary_;
+  thrift::Encoding::type dictionaryEncoding_;
+};
+
 /// Manages access to pages inside a ColumnChunk. Interprets page headers and
 /// encodings and presents the combination of pages and encoded values as a
 /// continuous stream accessible via readWithVisitor().
@@ -81,6 +130,8 @@ class PageReader {
     dictionaryValues_.reset();
   }
 
+  std::shared_ptr<ParquetPage> readNextPage();
+
  private:
   // If the current page has nulls, returns a nulls bitmap owned by 'this'. This
   // is filled for 'numRows' bits.
@@ -98,10 +149,10 @@ class PageReader {
   // 'pageData_' + 'encodedDataSize_'.
   void makedecoder();
 
-  // Reads and skips pages until finding a data page that contains 'row'. Reads
-  // and sets 'rowOfPage_' and 'numRowsInPage_' and initializes a decoder for
-  // the found page.
-  void readNextPage(int64_t row);
+  /// Reads and skips pages until finding a data page that contains 'row'.
+  /// Reads and sets 'rowOfPage_' and 'numRowsInPage_' and initializes a decoder
+  /// for the found page.
+  void seekToPage(int64_t row);
 
   // Parses the PageHeader at 'inputStream_'. Will not read more than
   // 'remainingBytes' since there could be less data left in the
@@ -119,7 +170,8 @@ class PageReader {
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
   // producing up to 'uncompressedSize' bytes. The The start of the decoding
-  // result is returned. an intermediate copy may be made in 'uncompresseddata_'
+  // result is returned. an intermediate copy may be made in
+  // 'uncompresseddata_'
   const char* FOLLY_NONNULL uncompressData(
       const char* FOLLY_NONNULL pageData,
       uint32_t compressedSize,
@@ -283,6 +335,9 @@ class PageReader {
 
   // Number of bytes starting at pageData_ for current encoded data.
   int32_t encodedDataSize_{0};
+
+  //  std::shared_ptr<ParquetDataPage> currentDataPage_;
+  //  std::shared_ptr<ParquetDictionaryPage> currentDictionaryPage_;
 
   // Below members Keep state between calls to readWithVisitor().
 

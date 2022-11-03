@@ -40,7 +40,7 @@ class FloatingPointColumnReader
     root::seekToRowGroup(index);
     root::scanState().clear();
     root::readOffset_ = 0;
-    root::formatData_->as<ParquetData>().seekToRowGroup(index);
+    root::formatData_->as<ParquetDataReader>().seekToRowGroup(index);
   }
 
   uint64_t skip(uint64_t numValues) override;
@@ -76,7 +76,7 @@ template <typename TVisitor>
 void FloatingPointColumnReader<TData, TRequested>::readWithVisitor(
     RowSet rows,
     TVisitor visitor) {
-  root::formatData_->as<ParquetData>().readWithVisitor(visitor);
+  root::formatData_->as<ParquetPrimitiveDataReader>().readWithVisitor(visitor);
   root::readOffset_ += rows.back() + 1;
 }
 

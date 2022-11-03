@@ -31,7 +31,34 @@ namespace facebook::velox::parquet {
 using thrift::Encoding;
 using thrift::PageHeader;
 
-void PageReader::readNextPage(int64_t row) {
+std::shared_ptr<ParquetPage> PageReader::readNextPage() {
+  defineDecoder_.reset();
+  repeatDecoder_.reset();
+  // 'rowOfPage_' is the row number of the first row of the next page.
+  rowOfPage_ += numRowsInPage_;
+
+  PageHeader pageHeader = readPageHeader(chunkSize_ - pageStart_);
+  pageStart_ = pageDataStart_ + pageHeader.compressed_page_size;
+
+  switch (pageHeader.type) {
+    case thrift::PageType::DATA_PAGE:
+      prepareDataPageV1(pageHeader, 0);
+      return std::make_shared<ParquetDataPage>(
+          numRowsInPage_, encodedDataSize_, encoding_, pageData_);
+    case thrift::PageType::DATA_PAGE_V2:
+      prepareDataPageV2(pageHeader, 0);
+      return std::make_shared<ParquetDataPage>(
+          numRowsInPage_, encodedDataSize_, encoding_, pageData_);
+    case thrift::PageType::DICTIONARY_PAGE:
+      prepareDictionary(pageHeader);
+      return std::make_shared<ParquetDictionaryPage>(
+          numRowsInPage_, encodedDataSize_, dictionary_, dictionaryEncoding_);
+    default:
+      return nullptr; // ignore INDEX page type and any other custom extensions
+  }
+}
+
+void PageReader::seekToPage(int64_t row) {
   defineDecoder_.reset();
   repeatDecoder_.reset();
   // 'rowOfPage_' is the row number of the first row of the next page.
@@ -53,9 +80,11 @@ void PageReader::readNextPage(int64_t row) {
       default:
         break; // ignore INDEX page type and any other custom extensions
     }
+
     if (row < rowOfPage_ + numRowsInPage_) {
       break;
     }
+
     rowOfPage_ += numRowsInPage_;
     dwio::common::skipBytes(
         pageHeader.compressed_page_size,
@@ -216,16 +245,19 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   VELOX_CHECK(
       pageHeader.type == thrift::PageType::DATA_PAGE &&
       pageHeader.__isset.data_page_header);
+
   numRowsInPage_ = pageHeader.data_page_header.num_values;
   if (numRowsInPage_ + rowOfPage_ <= row) {
     return;
   }
+
   pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
   pageData_ = uncompressData(
       pageData_,
       pageHeader.compressed_page_size,
       pageHeader.uncompressed_page_size);
   auto pageEnd = pageData_ + pageHeader.uncompressed_page_size;
+
   if (maxRepeat_ > 0) {
     uint32_t repeatLength = readField<int32_t>(pageData_);
     pageData_ += repeatLength;
@@ -244,14 +276,15 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
         arrow::bit_util::NumRequiredBits(maxDefine_));
     pageData_ += defineLength;
   }
-  encodedDataSize_ = pageEnd - pageData_;
 
+  encodedDataSize_ = pageEnd - pageData_;
   encoding_ = pageHeader.data_page_header.encoding;
   makeDecoder();
 }
 
 void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   VELOX_CHECK(pageHeader.__isset.data_page_header_v2);
+
   numRowsInPage_ = pageHeader.data_page_header_v2.num_values;
   if (numRowsInPage_ + rowOfPage_ <= row) {
     return;
@@ -503,7 +536,7 @@ void PageReader::skip(int64_t numRows) {
   }
   auto toSkip = numRows;
   if (firstUnvisited_ + numRows >= rowOfPage_ + numRowsInPage_) {
-    readNextPage(firstUnvisited_ + numRows);
+    seekToPage(firstUnvisited_ + numRows);
     toSkip -= rowOfPage_ - firstUnvisited_;
   }
   firstUnvisited_ += numRows;
@@ -547,7 +580,7 @@ void PageReader::skipNullsOnly(int64_t numRows) {
   }
   auto toSkip = numRows;
   if (firstUnvisited_ + numRows >= rowOfPage_ + numRowsInPage_) {
-    readNextPage(firstUnvisited_ + numRows);
+    seekToPage(firstUnvisited_ + numRows);
     firstUnvisited_ += numRows;
     toSkip = firstUnvisited_ - rowOfPage_;
   }
@@ -566,7 +599,7 @@ void PageReader::readNullsOnly(int64_t numValues, BufferPtr& buffer) {
   while (toRead) {
     auto availableOnPage = rowOfPage_ + numRowsInPage_ - firstUnvisited_;
     if (!availableOnPage) {
-      readNextPage(firstUnvisited_);
+      seekToPage(firstUnvisited_);
       availableOnPage = numRowsInPage_;
     }
     auto numRead = std::min(availableOnPage, toRead);
@@ -613,8 +646,9 @@ bool PageReader::rowsForPage(
   // page that contains the row.
   auto rowZero = visitBase_ + visitorRows_[currentVisitorRow_];
   if (rowZero >= rowOfPage_ + numRowsInPage_) {
-    readNextPage(rowZero);
+    seekToPage(rowZero);
   }
+
   auto& scanState = reader.scanState();
   if (isDictionary()) {
     if (scanState.dictionary.values != dictionary_.values) {

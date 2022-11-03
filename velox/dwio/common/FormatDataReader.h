@@ -28,9 +28,9 @@ namespace facebook::velox::dwio::common {
 
 /// Interface base class for format-specific state in common between different
 /// file format readers.
-class FormatData {
+class FormatDataReader {
  public:
-  virtual ~FormatData() = default;
+  virtual ~FormatDataReader() = default;
 
   template <typename T>
   T& as() {
@@ -127,7 +127,7 @@ class FormatParams {
 
   /// Makes format-specific structures for the column given by  'type'.
   /// 'scanSpec' is given as extra context.
-  virtual std::unique_ptr<FormatData> toFormatData(
+  virtual std::unique_ptr<FormatDataReader> toFormatDataReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const velox::common::ScanSpec& scanSpec) = 0;
 
