@@ -37,7 +37,9 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
 
   inputFlatNoNulls_ = true;
   for (const auto& child : row->children()) {
-    VELOX_CHECK_NOT_NULL(child);
+    if (!child)
+      continue;
+//    VELOX_CHECK_NOT_NULL(child);
     if ((!child->isFlatEncoding() && !child->isConstantEncoding()) ||
         child->mayHaveNulls()) {
       inputFlatNoNulls_ = false;

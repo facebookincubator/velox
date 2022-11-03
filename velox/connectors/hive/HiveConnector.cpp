@@ -188,23 +188,26 @@ static void makeFieldSpecs(
 
 std::shared_ptr<common::ScanSpec> makeScanSpec(
     const SubfieldFilters& filters,
-    const RowTypePtr& rowType) {
+    const RowTypePtr& rowType,
+    bool dealWithFilter = true) {
   auto spec = std::make_shared<common::ScanSpec>("root");
   makeFieldSpecs("", 0, rowType, spec.get());
 
-  for (auto& pair : filters) {
-    // SelectiveColumnReader doesn't support constant columns with filters,
-    // hence, we can't have a filter for a $path or $bucket column.
-    //
-    // Unfortunately, Presto happens to specify a filter for $path or $bucket
-    // column. This filter is redundant and needs to be removed.
-    // TODO Remove this check when Presto is fixed to not specify a filter
-    // on $path and $bucket column.
-    if (pair.first.toString() == kPath || pair.first.toString() == kBucket) {
-      continue;
+  if (dealWithFilter) {
+    for (auto& pair : filters) {
+      // SelectiveColumnReader doesn't support constant columns with filters,
+      // hence, we can't have a filter for a $path or $bucket column.
+      //
+      // Unfortunately, Presto happens to specify a filter for $path or $bucket
+      // column. This filter is redundant and needs to be removed.
+      // TODO Remove this check when Presto is fixed to not specify a filter
+      // on $path and $bucket column.
+      if (pair.first.toString() == kPath || pair.first.toString() == kBucket) {
+        continue;
+      }
+      auto fieldSpec = spec->getOrCreateChild(pair.first);
+      fieldSpec->setFilter(pair.second->clone());
     }
-    auto fieldSpec = spec->getOrCreateChild(pair.first);
-    fieldSpec->setFilter(pair.second->clone());
   }
   return spec;
 }
@@ -267,10 +270,12 @@ HiveDataSource::HiveDataSource(
 
   auto outputTypes = outputType_->children();
   readerOutputType_ = ROW(std::move(columnNames), std::move(outputTypes));
-  scanSpec_ =
-      makeScanSpec(hiveTableHandle->subfieldFilters(), readerOutputType_);
-
   const auto& remainingFilter = hiveTableHandle->remainingFilter();
+  bool dealWithFilter = remainingFilter ? false : true;
+  scanSpec_ =
+      makeScanSpec(hiveTableHandle->subfieldFilters(), readerOutputType_,
+                   dealWithFilter);
+
   if (remainingFilter) {
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
 
@@ -295,6 +300,16 @@ HiveDataSource::HiveDataSource(
       fieldSpec->setChannel(channel++);
     }
     readerOutputType_ = ROW(std::move(names), std::move(types));
+  }
+
+  if (!dealWithFilter) {
+    for (auto & pair : (hiveTableHandle->subfieldFilters())) {
+      if (pair.first.toString() == kPath || pair.first.toString() == kBucket) {
+        continue;
+    }
+    auto fieldSpec = scanSpec_->getOrCreateChild(pair.first);
+    fieldSpec->setFilter(pair.second->clone());
+    }
   }
 
   rowReaderOpts_.setScanSpec(scanSpec_);
