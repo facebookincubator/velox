@@ -41,6 +41,7 @@ void initKeyInfo(
   }
 }
 
+// Return the first row of the partition for UNBOUNDED PRECEDING frame bound.
 vector_size_t findRowUnboundedPreceding(
     vector_size_t partitionStartRow,
     vector_size_t /*partitionEndRow*/,
@@ -50,6 +51,8 @@ vector_size_t findRowUnboundedPreceding(
   return partitionStartRow;
 }
 
+// Return the first row of the peer group when frame start is CURRENT ROW in
+// RANGE mode.
 vector_size_t findCurrentRowFrameStart(
     vector_size_t /*partitionStartRow*/,
     vector_size_t /*partitionEndRow*/,
@@ -59,6 +62,8 @@ vector_size_t findCurrentRowFrameStart(
   return peerStartRow;
 }
 
+// Return the last row of the peer group when frame end is CURRENT ROW in
+// RANGE mode.
 vector_size_t findCurrentRowFrameEnd(
     vector_size_t /*partitionStartRow*/,
     vector_size_t /*partitionEndRow*/,
@@ -68,6 +73,7 @@ vector_size_t findCurrentRowFrameEnd(
   return peerEndRow;
 }
 
+// Return the last row of the partition for UNBOUNDED FOLLOWING frame bound.
 vector_size_t findRowUnboundedFollowing(
     vector_size_t /*partitionStartRow*/,
     vector_size_t partitionEndRow,
@@ -77,7 +83,7 @@ vector_size_t findRowUnboundedFollowing(
   return partitionEndRow;
 }
 
-const WindowFrameFunctionPtr getStartFrameFunction(
+WindowFrameFunctionPtr getStartFrameFunction(
     core::WindowNode::BoundType startType,
     core::WindowNode::WindowType type) {
   switch (startType) {
@@ -93,13 +99,12 @@ const WindowFrameFunctionPtr getStartFrameFunction(
     case core::WindowNode::BoundType::kPreceding:
     case core::WindowNode::BoundType::kFollowing:
       VELOX_NYI("Not supported");
-    case core::WindowNode::BoundType::kUnboundedFollowing:
     default:
       VELOX_FAIL("Invalid frame start value");
   }
 }
 
-const WindowFrameFunctionPtr getEndFrameFunction(
+WindowFrameFunctionPtr getEndFrameFunction(
     core::WindowNode::BoundType endType,
     core::WindowNode::WindowType type) {
   switch (endType) {
@@ -115,7 +120,6 @@ const WindowFrameFunctionPtr getEndFrameFunction(
     case core::WindowNode::BoundType::kPreceding:
     case core::WindowNode::BoundType::kFollowing:
       VELOX_NYI("Not supported");
-    case core::WindowNode::BoundType::kUnboundedPreceding:
     default:
       VELOX_FAIL("Invalid frame end value");
   }
