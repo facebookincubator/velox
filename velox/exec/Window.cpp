@@ -41,46 +41,48 @@ void initKeyInfo(
   }
 }
 
-// Return the first row of the partition for UNBOUNDED PRECEDING frame bound.
-vector_size_t findRowUnboundedPreceding(
+// Update frameBound with the first row of the partition i.e zero for UNBOUNDED
+// PRECEDING frame bound.
+void findRowUnboundedPreceding(
+    vector_size_t* frameBound,
+    vector_size_t /*partitionStartRow*/,
+    vector_size_t /*partitionEndRow*/,
+    vector_size_t* /*peerGroup*/,
+    vector_size_t numRows) {
+  std::memset(frameBound, 0, numRows * sizeof(vector_size_t));
+}
+
+// Update frameBound with the first row of the peer group when frame start is
+// CURRENT ROW in RANGE mode.
+void findCurrentRowFrameStart(
+    vector_size_t* frameBound,
     vector_size_t partitionStartRow,
     vector_size_t /*partitionEndRow*/,
-    vector_size_t /*peerStartRow*/,
-    vector_size_t /*peerEndRow*/,
-    vector_size_t /*currentRow*/) {
-  return partitionStartRow;
+    vector_size_t* peerStarts,
+    vector_size_t numRows) {
+  std::copy(peerStarts, peerStarts + numRows, frameBound);
 }
 
-// Return the first row of the peer group when frame start is CURRENT ROW in
-// RANGE mode.
-vector_size_t findCurrentRowFrameStart(
-    vector_size_t /*partitionStartRow*/,
+// Update frameBound with the last row of the peer group when frame end is
+// CURRENT ROW in RANGE mode.
+void findCurrentRowFrameEnd(
+    vector_size_t* frameBound,
+    vector_size_t partitionStartRow,
     vector_size_t /*partitionEndRow*/,
-    vector_size_t peerStartRow,
-    vector_size_t /*peerEndRow*/,
-    vector_size_t /*currentRow*/) {
-  return peerStartRow;
+    vector_size_t* peerEnds,
+    vector_size_t numRows) {
+  std::copy(peerEnds, peerEnds + numRows, frameBound);
 }
 
-// Return the last row of the peer group when frame end is CURRENT ROW in
-// RANGE mode.
-vector_size_t findCurrentRowFrameEnd(
-    vector_size_t /*partitionStartRow*/,
-    vector_size_t /*partitionEndRow*/,
-    vector_size_t /*peerStartRow*/,
-    vector_size_t peerEndRow,
-    vector_size_t /*currentRow*/) {
-  return peerEndRow;
-}
-
-// Return the last row of the partition for UNBOUNDED FOLLOWING frame bound.
-vector_size_t findRowUnboundedFollowing(
-    vector_size_t /*partitionStartRow*/,
+// Update frameBound with the last row of the partition for UNBOUNDED FOLLOWING
+// frame bound.
+void findRowUnboundedFollowing(
+    vector_size_t* frameBound,
+    vector_size_t partitionStartRow,
     vector_size_t partitionEndRow,
-    vector_size_t /*peerStartRow*/,
-    vector_size_t /*peerEndRow*/,
-    vector_size_t /*currentRow*/) {
-  return partitionEndRow;
+    vector_size_t* /*peerGroup*/,
+    vector_size_t numRows) {
+  std::fill_n(frameBound, numRows, partitionEndRow - partitionStartRow);
 }
 
 WindowFrameFunctionPtr getStartFrameFunction(
@@ -436,24 +438,23 @@ void Window::callApplyForPartitionRows(
     // as WindowFunction only sees one partition at a time.
     rawPeerStarts[j] = peerStartRow_ - firstPartitionRow;
     rawPeerEnds[j] = peerEndRow_ - 1 - firstPartitionRow;
-
-    for (auto w = 0; w < numFuncs; w++) {
-      rawFrameStartBuffers[w][j] = windowFrames_[w].startFrameFunction(
-                                       firstPartitionRow,
-                                       lastPartitionRow,
-                                       peerStartRow_,
-                                       peerEndRow_ - 1,
-                                       i) -
-          firstPartitionRow;
-      rawFrameEndBuffers[w][j] = windowFrames_[w].endFrameFunction(
-                                     firstPartitionRow,
-                                     lastPartitionRow,
-                                     peerStartRow_,
-                                     peerEndRow_ - 1,
-                                     i) -
-          firstPartitionRow;
-    }
   }
+
+  for (auto w = 0; w < numFuncs; w++) {
+    windowFrames_[w].startFrameFunction(
+        rawFrameStartBuffers[w],
+        firstPartitionRow,
+        lastPartitionRow,
+        rawPeerStarts,
+        numRows);
+    windowFrames_[w].endFrameFunction(
+        rawFrameEndBuffers[w],
+        firstPartitionRow,
+        lastPartitionRow,
+        rawPeerEnds,
+        numRows);
+  }
+
   // Invoke the apply method for the WindowFunctions.
   for (auto w = 0; w < numFuncs; w++) {
     windowFunctions_[w]->apply(

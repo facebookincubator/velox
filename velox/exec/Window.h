@@ -23,12 +23,12 @@
 namespace facebook::velox::exec {
 
 // Pointer to the function used to compute window frame bounds.
-using WindowFrameFunctionPtr = vector_size_t (*)(
+using WindowFrameFunctionPtr = void (*)(
+    vector_size_t* /*frameBound*/,
     vector_size_t /*partitionStartRow*/,
     vector_size_t /*partitionEndRow*/,
-    vector_size_t /*peerStartRow*/,
-    vector_size_t /*peerEndRow*/,
-    vector_size_t /*currentRow*/);
+    vector_size_t* /*peerGroup*/,
+    vector_size_t /*numRows*/);
 
 /// This is a very simple in-Memory implementation of a Window Operator
 /// to compute window functions.
