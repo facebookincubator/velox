@@ -11,24 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.14)
 
 # the policy allows us to change options without caching
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
-
-# the policy allows us to change set(CACHE) without caching
-if(POLICY CMP0126)
-  cmake_policy(SET CMP0126 NEW)
-  set(CMAKE_POLICY_DEFAULT_CMP0126 NEW)
-endif()
-
-# The policy uses the download time for timestamp, instead of the timestamp in
-# the archive. This allows for proper rebuilds when a projects url changes
-if(POLICY CMP0135)
-  cmake_policy(SET CMP0135 NEW)
-  set(CMAKE_POLICY_DEFAULT_CMP0135 NEW)
-endif()
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 
