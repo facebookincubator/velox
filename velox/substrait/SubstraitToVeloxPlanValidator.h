@@ -29,9 +29,6 @@ class SubstraitToVeloxPlanValidator {
       core::ExecCtx* execCtx)
       : pool_(pool), execCtx_(execCtx) {}
 
-  /// Used to validate whether the computing of this type is supported.
-  bool validate(const ::substrait::Type& sType);
-
   /// Used to validate whether the computing of this Sort is supported.
   bool validate(const ::substrait::SortRel& sSort);
 

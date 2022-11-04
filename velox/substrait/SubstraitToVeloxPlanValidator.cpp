@@ -19,19 +19,6 @@
 
 namespace facebook::velox::substrait {
 
-bool SubstraitToVeloxPlanValidator::validate(const ::substrait::Type& sType) {
-  switch (sType.kind_case()) {
-    case ::substrait::Type::KindCase::kBool:
-    case ::substrait::Type::KindCase::kI32:
-    case ::substrait::Type::KindCase::kI64:
-    case ::substrait::Type::KindCase::kFp64:
-    case ::substrait::Type::KindCase::kString:
-      return true;
-    default:
-      return false;
-  }
-}
-
 bool SubstraitToVeloxPlanValidator::validateInputTypes(
     const ::substrait::extensions::AdvancedExtension& extension,
     std::vector<TypePtr>& types) {

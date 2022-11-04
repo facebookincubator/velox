@@ -444,6 +444,17 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   std::vector<core::TypedExprPtr> inputs{
       toVeloxExpr(castExpr.input(), inputType)};
 
+  // TODO: refactor this part for input type validation.
+  for (const auto& input : inputs) {
+    switch (input->type()->kind()) {
+      case TypeKind::ARRAY: {
+        // Cast from array type is not supported. See CastExpr::applyCast.
+        VELOX_UNSUPPORTED("Invalid from type in casting: {}", input->type());
+      }
+      default: {
+      }
+    }
+  }
   return std::make_shared<core::CastTypedExpr>(type, inputs, nullOnFailure);
 }
 
