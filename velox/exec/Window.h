@@ -145,6 +145,9 @@ class Window : public Operator {
   // The decodedInputVectors_ are reused across addInput() calls to decode
   // the partition and sort keys for the above RowContainer.
   std::vector<DecodedVector> decodedInputVectors_;
+  // HashStringAllocator required by functions that allocate out of line
+  // string values.
+  HashStringAllocator stringAllocator_;
 
   // The below 3 vectors represent the ChannelIndex of the partition keys,
   // the order by keys and the concatenation of the 2. These keyInfo are
