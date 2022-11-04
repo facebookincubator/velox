@@ -15,13 +15,14 @@
  */
 #pragma once
 
-#include "velox/type/StringView.h"
-
 #include <iomanip>
 #include <sstream>
 #include <string>
 
 #include <folly/dynamic.h>
+
+#include "velox/common/base/CheckedArithmetic.h"
+#include "velox/type/StringView.h"
 
 namespace date {
 class time_zone;
@@ -49,7 +50,9 @@ struct Timestamp {
   }
 
   int64_t toMillis() const {
-    return seconds_ * 1'000 + nanos_ / 1'000'000;
+    // The addition cannot overflow because the product will be promoted to
+    // uint64_t first and its value is at most UINT64_MAX / 2.
+    return checkedMultiply(seconds_, (int64_t)1'000) + nanos_ / 1'000'000;
   }
 
   int64_t toMicros() const {

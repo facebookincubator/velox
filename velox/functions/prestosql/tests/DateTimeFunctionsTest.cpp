@@ -2394,6 +2394,11 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   // Check null behaviors
   EXPECT_EQ(std::nullopt, dateFormatOnce(std::nullopt, "%Y"));
 
+  // Check handling of arithmatic overflow.
+  EXPECT_THROW(
+      dateFormatOnce(Timestamp(9223372036854776, 100), "%Y-%m-%d"),
+      VeloxUserError);
+
   // Normal cases
   EXPECT_EQ(
       "1970-01-01", dateFormat(fromTimestampString("1970-01-01"), "%Y-%m-%d"));
