@@ -179,6 +179,22 @@ for order by to avoid exceeding memory limits for the query.</p>
 <p>Maximum amount of memory in bytes that an order by can use before spilling.
 0 means unlimited.</p>
 </section>
+<section id="spillable-reservation-growth-pct">
+<h3><code class="docutils literal notranslate"><span class="pre">spillable-reservation-growth-pct</span></code><a class="headerlink" href="#spillable-reservation-growth-pct" title="Permalink to this headline">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">25</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>The spillable memory reservation growth percentage of the current memory
+reservation size. Suppose a growth percentage of N and the current memory
+reservation size of M, the next memory reservation size will be
+M * (1 + N / 100). After growing the memory reservation K times, the memory
+reservation size will be M * (1 + N / 100) ^ K. Hence the memory reservation
+grows along a series of powers of (1 + N / 100). If the memory reservation
+fails, it starts spilling.</p>
+</section>
 <section id="max-spill-level">
 <h3><code class="docutils literal notranslate"><span class="pre">max-spill-level</span></code><a class="headerlink" href="#max-spill-level" title="Permalink to this headline">¶</a></h3>
 <blockquote>
@@ -248,6 +264,7 @@ files.</p>
 <li><a class="reference internal" href="#aggregation-spill-memory-threshold"><code class="docutils literal notranslate"><span class="pre">aggregation_spill_memory_threshold</span></code></a></li>
 <li><a class="reference internal" href="#join-spill-memory-threshold"><code class="docutils literal notranslate"><span class="pre">join_spill_memory_threshold</span></code></a></li>
 <li><a class="reference internal" href="#order-by-spill-memory-threshold"><code class="docutils literal notranslate"><span class="pre">order_by_spill_memory_threshold</span></code></a></li>
+<li><a class="reference internal" href="#spillable-reservation-growth-pct"><code class="docutils literal notranslate"><span class="pre">spillable-reservation-growth-pct</span></code></a></li>
 <li><a class="reference internal" href="#max-spill-level"><code class="docutils literal notranslate"><span class="pre">max-spill-level</span></code></a></li>
 <li><a class="reference internal" href="#max-spill-file-size"><code class="docutils literal notranslate"><span class="pre">max-spill-file-size</span></code></a></li>
 <li><a class="reference internal" href="#min-spill-run-size"><code class="docutils literal notranslate"><span class="pre">min-spill-run-size</span></code></a></li>
