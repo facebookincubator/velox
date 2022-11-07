@@ -129,6 +129,7 @@ macro(build_protobuf)
     if(COMPILER_HAS_W_INVALID_NORETURN)
       string(APPEND CMAKE_CXX_FLAGS " -Wno-invalid-noreturn")
     else()
+      # Currently reproduced on Ubuntu 22.04 with clang 14
       string(APPEND CMAKE_CXX_FLAGS " -Wno-error")
     endif()
 
