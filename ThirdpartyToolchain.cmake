@@ -125,8 +125,11 @@ macro(build_protobuf)
 
     check_cxx_compiler_flag("-Winvalid-noreturn"
                             COMPILER_HAS_W_INVALID_NORETURN)
+
     if(COMPILER_HAS_W_INVALID_NORETURN)
       string(APPEND CMAKE_CXX_FLAGS " -Wno-invalid-noreturn")
+    else()
+      string(APPEND CMAKE_CXX_FLAGS " -Wno-error")
     endif()
 
     # Fetch the content using previously declared details
