@@ -431,6 +431,31 @@ TEST_P(ArraySortTest, dictionaryEncodedElements) {
           {{4, std::nullopt}, {1, std::nullopt, std::nullopt}}));
 }
 
+TEST_F(ArraySortTest, complexArraySort) {
+
+  // Lets create an array of array vector.
+  auto elementVector = makeNullableFlatVector<int64_t>({
+      std::nullopt, 1, 3, 4,
+      3, 1, std::nullopt, 2,
+      2, 4, 5, std::nullopt,
+      std::nullopt, 3, 1, std::nullopt});
+  auto size = elementVector->size();
+  auto dictionaryVector = BaseVector::wrapInDictionary(nullptr, makeIndices(size, [](auto row) { return row;}), size, elementVector);
+  auto arrayVector = makeArrayVector({0, 4, 8, 12}, dictionaryVector);
+  auto arrayOfArray = makeArrayVector({0, 2}, arrayVector);
+
+  auto result = evaluate("array_sort(c0)", makeRowVector({arrayOfArray}));
+  auto expectedBase = makeNullableFlatVector<int64_t>({
+      3, 1, std::nullopt, 2,
+      std::nullopt, 1, 3, 4,
+      2, 4, 5, std::nullopt,
+      std::nullopt, 3, 1, std::nullopt});
+  auto expectedDictionary = BaseVector::wrapInDictionary(nullptr, makeIndices(size, [](auto row) { return row;}), size, expectedBase);
+  auto expectedArray = makeArrayVector({0, 4, 8, 12}, expectedDictionary);
+  auto expected = makeArrayVector({0, 2}, expectedArray);
+  assertEqualVectors(result, expected);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     ArraySortTest,
     ArraySortTest,
