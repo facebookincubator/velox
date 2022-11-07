@@ -451,9 +451,8 @@ level, <em>M</em> = 1*GB*, <em>N</em> = 3:</p>
 level using <a class="reference internal" href="../configs.html"><span class="doc">max-spill-level</span></a> configuration property.</p>
 <p>The following gives a brief description of the hash build and probe workflows
 extended to support (recursive) spilling:</p>
-</section>
 <section id="hashbuild">
-<h3>HashBuild<a class="headerlink" href="#hashbuild" title="Permalink to this headline">¶</a></h3>
+<h4>HashBuild<a class="headerlink" href="#hashbuild" title="Permalink to this headline">¶</a></h4>
 <ol class="arabic simple">
 <li><p>Process inputs from either build input source or the previously spilled
 data.</p></li>
@@ -488,7 +487,7 @@ evicted tasks first before spilling so we might not need the coordinator support
 if the spilling is triggered in that case.</p>
 </section>
 <section id="hashprobe">
-<h3>HashProbe<a class="headerlink" href="#hashprobe" title="Permalink to this headline">¶</a></h3>
+<h4>HashProbe<a class="headerlink" href="#hashprobe" title="Permalink to this headline">¶</a></h4>
 <ol class="arabic simple">
 <li><p>Wait for the next hash table to join from the hash join bridge plus
 additional spilling metadata if spilling gets involved: the table spill
@@ -521,7 +520,7 @@ requires to cross join null-key probe rows with all build-side rows for filter
 evaluation to check if the null-key probe rows can be added to output or not.</p>
 </section>
 <section id="hashjoinbridge">
-<h3>HashJoinBridge<a class="headerlink" href="#hashjoinbridge" title="Permalink to this headline">¶</a></h3>
+<h4>HashJoinBridge<a class="headerlink" href="#hashjoinbridge" title="Permalink to this headline">¶</a></h4>
 <p>The HashJoinBridge object includes the following extensions to support the
 spilling:</p>
 <ul class="simple">
@@ -543,6 +542,7 @@ partition number goes first.</p></li>
 bridge will split the spill partition files among the hash build operators
 with each one having an equally-sized shard to restore.</p></li>
 </ul>
+</section>
 </section>
 </section>
 <section id="future-work">
@@ -627,10 +627,12 @@ ahead.</p></li>
 <li><a class="reference internal" href="#spilling-algorithm">Spilling Algorithm</a><ul>
 <li><a class="reference internal" href="#hash-aggregation">Hash Aggregation</a></li>
 <li><a class="reference internal" href="#orderby">OrderBy</a></li>
-<li><a class="reference internal" href="#hash-join">Hash Join</a></li>
+<li><a class="reference internal" href="#hash-join">Hash Join</a><ul>
 <li><a class="reference internal" href="#hashbuild">HashBuild</a></li>
 <li><a class="reference internal" href="#hashprobe">HashProbe</a></li>
 <li><a class="reference internal" href="#hashjoinbridge">HashJoinBridge</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li><a class="reference internal" href="#future-work">Future Work</a><ul>
