@@ -45,9 +45,6 @@ void initKeyInfo(
 // PRECEDING frame bound.
 void findRowUnboundedPreceding(
     vector_size_t* frameBound,
-    vector_size_t /*partitionStartRow*/,
-    vector_size_t /*partitionEndRow*/,
-    vector_size_t* /*peerGroup*/,
     vector_size_t numRows) {
   std::memset(frameBound, 0, numRows * sizeof(vector_size_t));
 }
@@ -57,7 +54,6 @@ void findRowUnboundedPreceding(
 void findCurrentRowFrameStart(
     vector_size_t* frameBound,
     vector_size_t partitionStartRow,
-    vector_size_t /*partitionEndRow*/,
     vector_size_t* peerStarts,
     vector_size_t numRows) {
   std::copy(peerStarts, peerStarts + numRows, frameBound);
@@ -68,7 +64,6 @@ void findCurrentRowFrameStart(
 void findCurrentRowFrameEnd(
     vector_size_t* frameBound,
     vector_size_t partitionStartRow,
-    vector_size_t /*partitionEndRow*/,
     vector_size_t* peerEnds,
     vector_size_t numRows) {
   std::copy(peerEnds, peerEnds + numRows, frameBound);
@@ -80,51 +75,8 @@ void findRowUnboundedFollowing(
     vector_size_t* frameBound,
     vector_size_t partitionStartRow,
     vector_size_t partitionEndRow,
-    vector_size_t* /*peerGroup*/,
     vector_size_t numRows) {
   std::fill_n(frameBound, numRows, partitionEndRow - partitionStartRow);
-}
-
-WindowFrameFunctionPtr getStartFrameFunction(
-    core::WindowNode::BoundType startType,
-    core::WindowNode::WindowType type) {
-  switch (startType) {
-    case core::WindowNode::BoundType::kUnboundedPreceding:
-      return findRowUnboundedPreceding;
-    case core::WindowNode::BoundType::kCurrentRow: {
-      if (type == core::WindowNode::WindowType::kRange) {
-        return findCurrentRowFrameStart;
-      } else {
-        VELOX_NYI("Not supported");
-      }
-    }
-    case core::WindowNode::BoundType::kPreceding:
-    case core::WindowNode::BoundType::kFollowing:
-      VELOX_NYI("Not supported");
-    default:
-      VELOX_FAIL("Invalid frame start value");
-  }
-}
-
-WindowFrameFunctionPtr getEndFrameFunction(
-    core::WindowNode::BoundType endType,
-    core::WindowNode::WindowType type) {
-  switch (endType) {
-    case core::WindowNode::BoundType::kCurrentRow: {
-      if (type == core::WindowNode::WindowType::kRange) {
-        return findCurrentRowFrameEnd;
-      } else {
-        VELOX_NYI("Not supported");
-      }
-    }
-    case core::WindowNode::BoundType::kUnboundedFollowing:
-      return findRowUnboundedFollowing;
-    case core::WindowNode::BoundType::kPreceding:
-    case core::WindowNode::BoundType::kFollowing:
-      VELOX_NYI("Not supported");
-    default:
-      VELOX_FAIL("Invalid frame end value");
-  }
 }
 
 }; // namespace
@@ -221,16 +173,10 @@ void Window::createWindowFunctions(
         windowNodeFunction.functionCall->type(),
         operatorCtx_->pool()));
 
-    const WindowFrameFunctionPtr startFrameFunction = getStartFrameFunction(
-        windowNodeFunction.frame.startType, windowNodeFunction.frame.type);
-    const WindowFrameFunctionPtr endFrameFunction = getEndFrameFunction(
-        windowNodeFunction.frame.endType, windowNodeFunction.frame.type);
     windowFrames_.push_back(
         {windowNodeFunction.frame.type,
          windowNodeFunction.frame.startType,
          windowNodeFunction.frame.endType,
-         startFrameFunction,
-         endFrameFunction,
          fieldArgToChannel(windowNodeFunction.frame.startValue),
          fieldArgToChannel(windowNodeFunction.frame.endValue)});
   }
@@ -440,19 +386,51 @@ void Window::callApplyForPartitionRows(
     rawPeerEnds[j] = peerEndRow_ - 1 - firstPartitionRow;
   }
 
-  for (auto w = 0; w < numFuncs; w++) {
-    windowFrames_[w].startFrameFunction(
-        rawFrameStartBuffers[w],
-        firstPartitionRow,
-        lastPartitionRow,
-        rawPeerStarts,
-        numRows);
-    windowFrames_[w].endFrameFunction(
-        rawFrameEndBuffers[w],
-        firstPartitionRow,
-        lastPartitionRow,
-        rawPeerEnds,
-        numRows);
+  auto updateFrameBounds = [&](vector_size_t* frameBound,
+                               core::WindowNode::BoundType boundType,
+                               core::WindowNode::WindowType type,
+                               bool isStartBound) -> void {
+    switch (boundType) {
+      case core::WindowNode::BoundType::kUnboundedPreceding:
+        findRowUnboundedPreceding(frameBound, numRows);
+        break;
+      case core::WindowNode::BoundType::kCurrentRow: {
+        if (type == core::WindowNode::WindowType::kRange) {
+          if (isStartBound) {
+            findCurrentRowFrameStart(
+                frameBound, firstPartitionRow, rawPeerStarts, numRows);
+          } else {
+            findCurrentRowFrameEnd(
+                frameBound, firstPartitionRow, rawPeerEnds, numRows);
+          }
+        } else {
+          VELOX_NYI("Not supported");
+        }
+        break;
+      }
+      case core::WindowNode::BoundType::kPreceding:
+      case core::WindowNode::BoundType::kFollowing:
+        VELOX_NYI("Not supported");
+      case core::WindowNode::BoundType::kUnboundedFollowing:
+        findRowUnboundedFollowing(
+            frameBound, firstPartitionRow, lastPartitionRow, numRows);
+        break;
+      default:
+        VELOX_USER_FAIL("Invalid frame start value");
+    }
+  };
+
+  for (auto i = 0; i < numFuncs; i++) {
+    updateFrameBounds(
+        rawFrameStartBuffers[i],
+        windowFrames_[i].startType,
+        windowFrames_[i].type,
+        true);
+    updateFrameBounds(
+        rawFrameEndBuffers[i],
+        windowFrames_[i].endType,
+        windowFrames_[i].type,
+        false);
   }
 
   // Invoke the apply method for the WindowFunctions.

@@ -498,10 +498,10 @@ void addWindowFunction(
   stream << windowFunction.functionCall->toString() << " ";
   auto frame = windowFunction.frame;
   if (frame.startType == WindowNode::BoundType::kUnboundedFollowing) {
-    VELOX_FAIL("Window frame start cannot be UNBOUNDED FOLLOWING");
+    VELOX_USER_FAIL("Window frame start cannot be UNBOUNDED FOLLOWING");
   }
   if (frame.endType == WindowNode::BoundType::kUnboundedPreceding) {
-    VELOX_FAIL("Window frame end cannot be UNBOUNDED PRECEDING");
+    VELOX_USER_FAIL("Window frame end cannot be UNBOUNDED PRECEDING");
   }
 
   stream << windowTypeString(frame.type) << " between ";
