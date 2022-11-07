@@ -26,7 +26,18 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/dwio/common/ColumnSelector.h"
+#include "velox/dwio/common/DataBuffer.h"
+#include "velox/dwio/common/DataSink.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/type/StringView.h"
+#include "velox/type/Type.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/ConstantVector.h"
+#include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox;
 
@@ -403,4 +414,94 @@ TEST_F(HdfsFileSystemTest, readFailures) {
   auto hdfs = hdfsBuilderConnect(builder);
   HdfsReadFile readFile(hdfs, destinationPath);
   verifyFailures(&readFile);
+}
+
+std::unique_ptr<facebook::velox::dwrf::Writer> createDwrfWriter(
+    const std::string& path,
+    std::shared_ptr<const RowType>& type,
+    facebook::velox::memory::MemoryPool& memoryPool) {
+  auto writeFileSink =
+      facebook::velox::dwio::common::WriteFileSink::createWriteFileSink(
+          "hdfs://localhost:7878" + path, &configurationValues);
+
+  auto config = std::make_shared<facebook::velox::dwrf::Config>();
+  config->set(
+      facebook::velox::dwrf::Config::COMPRESSION,
+      facebook::velox::dwio::common::CompressionKind::CompressionKind_ZSTD);
+  facebook::velox::dwrf::WriterOptions options;
+  options.config = config;
+  options.schema = type;
+  options.memoryBudget = 100 * 1024 * 1024;
+  options.flushPolicyFactory = nullptr;
+  options.layoutPlannerFactory = nullptr;
+  auto writer = std::make_unique<facebook::velox::dwrf::Writer>(
+      options, std::move(writeFileSink), memoryPool);
+  return writer;
+}
+
+std::unique_ptr<dwio::common::RowReader> createDwrfReader(
+    const std::string& path,
+    std::shared_ptr<const RowType>& type,
+    facebook::velox::memory::MemoryPool& memoryPool) {
+  dwio::common::ReaderOptions readerOptions;
+  dwio::common::RowReaderOptions rowReaderOptions;
+  auto format = dwio::common::FileFormat::DWRF;
+  readerOptions.setFileFormat(format);
+  readerOptions.setFileSchema(type);
+  readerOptions.setMemoryPool(memoryPool);
+  rowReaderOptions.select(
+      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+          type, std::vector<std::string>{"string_val"}));
+  struct hdfsBuilder* builder = hdfsNewBuilder();
+  hdfsBuilderSetNameNode(builder, localhost.c_str());
+  hdfsBuilderSetNameNodePort(builder, atoi(hdfsPort.c_str()));
+  auto hdfs = hdfsBuilderConnect(builder);
+  hdfsFreeBuilder(builder);
+  HdfsReadFile readFile(hdfs, path);
+  auto reader =
+      dwio::common::getReaderFactory(readerOptions.getFileFormat())
+          ->createReader(
+              std::make_unique<dwio::common::ReadFileInputStream>(&readFile),
+              readerOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+  return rowReader;
+}
+
+TEST_F(HdfsFileSystemTest, E2EHdfsReadWriteDwrf) {
+  facebook::velox::filesystems::registerHdfsFileSystem();
+  facebook::velox::dwrf::registerDwrfReaderFactory();
+  auto scopedPool =
+      facebook::velox::memory::getDefaultScopedMemoryPool(100 * 1024 * 1024);
+  auto& memoryPool = scopedPool->getPool();
+
+  const std::string path = "/b.txt";
+  const char* s = "aaaaaaaaaaaaaaaaaaaaaa";
+  const facebook::velox::StringView sv(s, strlen(s));
+  BufferPtr buffer =
+      AlignedBuffer::allocate<facebook::velox::StringView>(1, &memoryPool, sv);
+  auto flat = std::make_shared<
+      facebook::velox::FlatVector<facebook::velox::StringView>>(
+      &memoryPool, BufferPtr(nullptr), 1, buffer, std::vector<BufferPtr>());
+  flat->set(1, sv);
+  std::vector<VectorPtr> vecs;
+  vecs.emplace_back(flat);
+  std::shared_ptr<const RowType> rowType = ROW({{"string_val", VARCHAR()}});
+  auto rv = std::make_shared<facebook::velox::RowVector>(
+      &memoryPool, rowType, nullptr, 1, vecs);
+
+  auto writer = createDwrfWriter(path, rowType, memoryPool);
+  writer->write(rv);
+  writer->close();
+
+  auto reader = createDwrfReader(path, rowType, memoryPool);
+  VectorPtr batch;
+  bool result = reader->next(1, batch);
+  ASSERT_EQ(result, true);
+  auto root = batch->as<facebook::velox::RowVector>();
+  ASSERT_EQ(root->childrenSize(), 1);
+  auto child = root->childAt(0);
+  ASSERT_EQ(child->encoding(), VectorEncoding::Simple::FLAT);
+  auto flatVector = child->as<facebook::velox::FlatVector<StringView>>();
+  facebook::velox::StringView v1 = flatVector->valueAt(0);
+  ASSERT_EQ(v1, "aaaaaaaaaaaaaaaaaaaaaa");
 }

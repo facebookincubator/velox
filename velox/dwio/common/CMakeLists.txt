@@ -58,6 +58,7 @@ target_link_libraries(
   velox_dwio_common_exception
   velox_exception
   velox_memory
+  velox_core
   Boost::regex
   ${FOLLY_WITH_DEPENDENCIES}
   glog::glog)

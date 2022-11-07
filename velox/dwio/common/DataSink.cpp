@@ -15,6 +15,8 @@
  */
 
 #include "velox/dwio/common/DataSink.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/core/Context.h"
 #include "velox/dwio/common/exception/Exception.h"
 
 #include <fcntl.h>
@@ -107,5 +109,86 @@ static std::unique_ptr<DataSink> fileSink(
 }
 
 VELOX_REGISTER_DATA_SINK_METHOD_DEFINITION(FileSink, fileSink);
+
+WriteFileSink::WriteFileSink(
+    std::unique_ptr<WriteFile> writeFile,
+    const MetricsLogPtr& metricLogger,
+    IoStatistics* stats)
+    : DataSink{"WriteFileSink", metricLogger, stats} {
+  if (writeFile == nullptr) {
+    markClosed();
+    DWIO_RAISE("Can't open Write file is NULL.");
+  }
+  writeFile_ = std::move(writeFile);
+}
+
+void WriteFileSink::write(std::vector<DataBuffer<char>>& buffers) {
+  int cnt = 0;
+  uint64_t writeSizePerFlush = 0;
+  // Write the data buffer to hdfs.
+  writeImpl(buffers, [&](auto& buffer) {
+    size_t size = buffer.size();
+    std::string data(buffer.data(), size);
+    writeFile_->append(data);
+    cnt++;
+    writeSizePerFlush += size;
+    // Flush the data if it's last buffer or write size greater than configured
+    // flush size.
+    if (cnt == buffers.size() || writeSizePerFlush >= flushSize_) {
+      writeFile_->flush();
+      writeSizePerFlush = 0;
+    }
+    return size;
+  });
+}
+
+void WriteFileSink::setFlushSize(uint64_t flushSize) {
+  flushSize_ = flushSize;
+}
+
+std::unique_ptr<DataSink> WriteFileSink::createWriteFileSink(
+    const std::string& path_,
+    const std::unordered_map<std::string, std::string>* props,
+    const MetricsLogPtr& metricsLog,
+    IoStatistics* stats) {
+  std::shared_ptr<const facebook::velox::core::MemConfig> config = nullptr;
+  // Create the write file sink, if props is nullptr, will read the default
+  // config of hdfs-site.xml in LIBHDFS3_CONF environment variable, by set the
+  // 'hive.hdfs.host' as 'default'
+  if (props == nullptr) {
+    static const std::unordered_map<std::string, std::string> configMap(
+        {{"hive.hdfs.host", "default"}, {"hive.hdfs.port", "0"}});
+    config =
+        std::make_shared<const facebook::velox::core::MemConfig>(configMap);
+  } else {
+    config = std::make_shared<const facebook::velox::core::MemConfig>(*props);
+  }
+  std::shared_ptr<facebook::velox::filesystems::FileSystem> fs =
+      filesystems::getFileSystem(path_, config);
+  VELOX_CHECK(fs != nullptr, "Failed to connector file system");
+  std::string filePath_ = path_;
+  // Remove hdfs prefix from path. If the file path like: 'hdfs://a/b/c',  then
+  // we will remove the hdfs prefix, make the path to be '/a/b/c'
+  if (strncmp(filePath_.c_str(), "hdfs:", 5) == 0) {
+    std::string hdfsPrefix("hdfs://");
+    filePath_ = filePath_.replace(0, hdfsPrefix.size(), "");
+    int pathBeginIndex = filePath_.find("/", 0);
+    filePath_ = filePath_.substr(pathBeginIndex);
+  }
+  std::unique_ptr<WriteFile> writeFile = fs->openFileForWrite(filePath_);
+  VELOX_CHECK(writeFile != nullptr, "Failed to open write file");
+  return std::make_unique<WriteFileSink>(
+      std::move(writeFile), metricsLog, stats);
+}
+
+static std::unique_ptr<DataSink> writeFileSink(
+    const std::string& file_path_,
+    const MetricsLogPtr& metricsLog,
+    IoStatistics* stats) {
+  return WriteFileSink::createWriteFileSink(
+      file_path_, nullptr, metricsLog, stats);
+}
+
+VELOX_REGISTER_DATA_SINK_METHOD_DEFINITION(WriteFileSink, writeFileSink);
 
 } // namespace facebook::velox::dwio::common

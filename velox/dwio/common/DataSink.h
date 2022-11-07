@@ -18,6 +18,7 @@
 
 #include <chrono>
 
+#include "velox/common/file/File.h"
 #include "velox/dwio/common/Closeable.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/IoStatistics.h"
@@ -193,6 +194,62 @@ class MemorySink : public DataSink {
 
  private:
   DataBuffer<char> data_;
+};
+
+/// A file sink support to write to hdfs.
+class WriteFileSink : public DataSink {
+ public:
+  /// The constructor.
+  /// @param writeFile The configured write handle for hdfs.
+  /// @param metricLogger The metric logger.
+  /// @param stats The io statictics.
+  explicit WriteFileSink(
+      std::unique_ptr<WriteFile> writeFile,
+      const MetricsLogPtr& metricLogger = MetricsLog::voidLog(),
+      IoStatistics* stats = nullptr);
+
+  ~WriteFileSink() override {
+    destroy();
+  }
+
+  using DataSink::write;
+
+  /// Write the data.
+  /// @param buffers The data buffers to write.
+  void write(std::vector<DataBuffer<char>>& buffers) override;
+
+  /// Set flush size.
+  /// @param flushSize data flush size, when write data size greater than this
+  /// value, will flush the data.
+  void setFlushSize(uint64_t flushSize);
+
+  static void registerFactory();
+
+  /// Create a write file sink.
+  /// @param filePath The file path to write.
+  /// @param props The custimized configuration, if it set as nullptr, will use
+  /// the default config from LIB3HDFS_CONF variable for hdfs file write sink.
+  /// @param metricsLog The metrics log.
+  /// @param stats The io statistics.
+  static std::unique_ptr<DataSink> createWriteFileSink(
+      const std::string& filePath,
+      const std::unordered_map<std::string, std::string>* props = nullptr,
+      const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
+      IoStatistics* stats = nullptr);
+
+ protected:
+  /// Close the write file handle.
+  void doClose() override {
+    if (writeFile_ != nullptr) {
+      writeFile_->close();
+    }
+  }
+
+ private:
+  /// The write file handle.
+  std::unique_ptr<WriteFile> writeFile_;
+  /// The data flush size, default value is 128*1024*1024.
+  uint64_t flushSize_ = 128 * 1024 * 1024;
 };
 
 } // namespace facebook::velox::dwio::common
