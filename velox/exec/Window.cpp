@@ -41,44 +41,6 @@ void initKeyInfo(
   }
 }
 
-// Update frameBound with the first row of the partition i.e zero for UNBOUNDED
-// PRECEDING frame bound.
-void findRowUnboundedPreceding(
-    vector_size_t* frameBound,
-    vector_size_t numRows) {
-  std::memset(frameBound, 0, numRows * sizeof(vector_size_t));
-}
-
-// Update frameBound with the first row of the peer group when frame start is
-// CURRENT ROW in RANGE mode.
-void findCurrentRowFrameStart(
-    vector_size_t* frameBound,
-    vector_size_t partitionStartRow,
-    vector_size_t* peerStarts,
-    vector_size_t numRows) {
-  std::copy(peerStarts, peerStarts + numRows, frameBound);
-}
-
-// Update frameBound with the last row of the peer group when frame end is
-// CURRENT ROW in RANGE mode.
-void findCurrentRowFrameEnd(
-    vector_size_t* frameBound,
-    vector_size_t partitionStartRow,
-    vector_size_t* peerEnds,
-    vector_size_t numRows) {
-  std::copy(peerEnds, peerEnds + numRows, frameBound);
-}
-
-// Update frameBound with the last row of the partition for UNBOUNDED FOLLOWING
-// frame bound.
-void findRowUnboundedFollowing(
-    vector_size_t* frameBound,
-    vector_size_t partitionStartRow,
-    vector_size_t partitionEndRow,
-    vector_size_t numRows) {
-  std::fill_n(frameBound, numRows, partitionEndRow - partitionStartRow);
-}
-
 }; // namespace
 
 Window::Window(
@@ -386,23 +348,23 @@ void Window::callApplyForPartitionRows(
     rawPeerEnds[j] = peerEndRow_ - 1 - firstPartitionRow;
   }
 
-  auto updateFrameBounds = [&](vector_size_t* frameBound,
+  auto updateFrameBounds = [&](vector_size_t* frameBoundBuffer,
                                core::WindowNode::BoundType boundType,
                                core::WindowNode::WindowType type,
                                bool isStartBound) -> void {
     switch (boundType) {
       case core::WindowNode::BoundType::kUnboundedPreceding:
-        findRowUnboundedPreceding(frameBound, numRows);
+        std::memset(frameBoundBuffer, 0, numRows * sizeof(vector_size_t));
+        break;
+      case core::WindowNode::BoundType::kUnboundedFollowing:
+        std::fill_n(
+            frameBoundBuffer, numRows, lastPartitionRow - firstPartitionRow);
         break;
       case core::WindowNode::BoundType::kCurrentRow: {
         if (type == core::WindowNode::WindowType::kRange) {
-          if (isStartBound) {
-            findCurrentRowFrameStart(
-                frameBound, firstPartitionRow, rawPeerStarts, numRows);
-          } else {
-            findCurrentRowFrameEnd(
-                frameBound, firstPartitionRow, rawPeerEnds, numRows);
-          }
+          vector_size_t* rawPeerBuffer =
+              isStartBound ? rawPeerStarts : rawPeerEnds;
+          std::copy(rawPeerBuffer, rawPeerBuffer + numRows, frameBoundBuffer);
         } else {
           VELOX_NYI("Not supported");
         }
@@ -411,10 +373,6 @@ void Window::callApplyForPartitionRows(
       case core::WindowNode::BoundType::kPreceding:
       case core::WindowNode::BoundType::kFollowing:
         VELOX_NYI("Not supported");
-      case core::WindowNode::BoundType::kUnboundedFollowing:
-        findRowUnboundedFollowing(
-            frameBound, firstPartitionRow, lastPartitionRow, numRows);
-        break;
       default:
         VELOX_USER_FAIL("Invalid frame start value");
     }

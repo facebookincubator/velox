@@ -114,6 +114,11 @@ TEST_P(MultiAggregatesTest, basicRangeFrames) {
       {makeBasicVectors(50)}, kFrameOverClauses, kRangeFrameClauses);
 }
 
+TEST_P(MultiAggregatesTest, basicRangeFramesWithSortOrders) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeBasicVectors(50)}, kSortOrderBasedOverClauses, kRangeFrameClauses);
+}
+
 TEST_P(MultiAggregatesTest, singlePartitionRangeFrames) {
   SimpleAggregatesTest::testWindowFunction(
       {makeSinglePartitionVector(100)}, kFrameOverClauses, kRangeFrameClauses);
