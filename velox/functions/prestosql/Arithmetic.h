@@ -272,7 +272,8 @@ struct Atan2Function {
 
 template <typename T>
 struct SqrtFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::sqrt(a);
   }
 };
