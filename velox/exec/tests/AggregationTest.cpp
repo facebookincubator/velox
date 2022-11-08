@@ -1245,6 +1245,31 @@ TEST_F(AggregationTest, groupingSets) {
       "SELECT k1, k2, count(1), sum(a), max(b) FROM tmp GROUP BY ROLLUP (k1, k2)");
 }
 
+TEST_F(AggregationTest, groupingSetsOutput) {
+  vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"ba", "ab", "a", "b"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row % 11; }),
+          makeFlatVector<int64_t>(size, [](auto row) { return row % 17; }),
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<StringView>(
+              size,
+              [](auto row) { return StringView(std::string(row % 12, 'x')); }),
+      });
+
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .groupId({{"ba"}, {"ab"}}, {"a", "b"})
+                  .planNode();
+
+  auto expectedOutput =
+      "ROW<ba:BIGINT,ab:BIGINT,a:BIGINT,b:VARCHAR,group_id:BIGINT>";
+  ASSERT_EQ(expectedOutput, plan->outputType()->toString());
+}
+
 TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
   rowType_ = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
   VectorFuzzer::Options options;

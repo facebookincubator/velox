@@ -634,17 +634,27 @@ PlanBuilder& PlanBuilder::groupId(
     groupingSetExprs.push_back(fields(groupingSet));
   }
 
-  std::map<std::string, core::FieldAccessTypedExprPtr> outputGroupingKeyNames;
+  std::map<int, std::shared_ptr<core::GroupIdNode::OutputGroupingKeyInfo>>
+      outputGroupingKeyInfos;
+  std::set<std::string> names;
+  auto index = 0;
   for (const auto& groupingSet : groupingSetExprs) {
     for (const auto& groupingKey : groupingSet) {
-      outputGroupingKeyNames[groupingKey->name()] = groupingKey;
+      if (names.find(groupingKey->name()) == names.end()) {
+        auto outputGroupingKeyInfo =
+            std::make_shared<core::GroupIdNode::OutputGroupingKeyInfo>();
+        outputGroupingKeyInfo->name = groupingKey->name();
+        outputGroupingKeyInfo->field = groupingKey;
+        outputGroupingKeyInfos[index++] = outputGroupingKeyInfo;
+      }
+      names.insert(groupingKey->name());
     }
   }
 
   planNode_ = std::make_shared<core::GroupIdNode>(
       nextPlanNodeId(),
       groupingSetExprs,
-      std::move(outputGroupingKeyNames),
+      std::move(outputGroupingKeyInfos),
       fields(aggregationInputs),
       std::move(groupIdName),
       planNode_);

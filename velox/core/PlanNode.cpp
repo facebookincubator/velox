@@ -154,15 +154,15 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
 
 namespace {
 RowTypePtr getGroupIdOutputType(
-    const std::map<std::string, FieldAccessTypedExprPtr>&
-        outputGroupingKeyNames,
+    const std::map<int, std::shared_ptr<GroupIdNode::OutputGroupingKeyInfo>>&
+        outputGroupingKeyInfos,
     const std::vector<FieldAccessTypedExprPtr>& aggregationInputs,
     const std::string& groupIdName) {
   // Grouping keys come first, followed by aggregation inputs and groupId
   // column.
 
   auto numOutputs =
-      outputGroupingKeyNames.size() + aggregationInputs.size() + 1;
+      outputGroupingKeyInfos.size() + aggregationInputs.size() + 1;
 
   std::vector<std::string> names;
   std::vector<TypePtr> types;
@@ -170,9 +170,9 @@ RowTypePtr getGroupIdOutputType(
   names.reserve(numOutputs);
   types.reserve(numOutputs);
 
-  for (const auto& [name, groupingKey] : outputGroupingKeyNames) {
-    names.push_back(name);
-    types.push_back(groupingKey->type());
+  for (const auto& [id, groupingKeyInfo] : outputGroupingKeyInfos) {
+    names.push_back(groupingKeyInfo->name);
+    types.push_back(groupingKeyInfo->field->type());
   }
 
   for (const auto& input : aggregationInputs) {
@@ -190,18 +190,19 @@ RowTypePtr getGroupIdOutputType(
 GroupIdNode::GroupIdNode(
     PlanNodeId id,
     std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-    std::map<std::string, FieldAccessTypedExprPtr> outputGroupingKeyNames,
+    std::map<int, std::shared_ptr<OutputGroupingKeyInfo>>
+        outputGroupingKeyInfos,
     std::vector<FieldAccessTypedExprPtr> aggregationInputs,
     std::string groupIdName,
     PlanNodePtr source)
     : PlanNode(std::move(id)),
       sources_{source},
       outputType_(getGroupIdOutputType(
-          outputGroupingKeyNames,
+          outputGroupingKeyInfos,
           aggregationInputs,
           groupIdName)),
       groupingSets_(std::move(groupingSets)),
-      outputGroupingKeyNames_(std::move(outputGroupingKeyNames)),
+      outputGroupingKeyInfos_(std::move(outputGroupingKeyInfos)),
       aggregationInputs_(std::move(aggregationInputs)),
       groupIdName_(std::move(groupIdName)) {
   VELOX_CHECK_GE(

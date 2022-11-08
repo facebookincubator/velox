@@ -554,10 +554,15 @@ inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
 /// The rest of the grouping key columns are filled in with nulls.
 class GroupIdNode : public PlanNode {
  public:
+  struct OutputGroupingKeyInfo {
+    std::string name;
+    FieldAccessTypedExprPtr field;
+  };
+
   /// @param id Plan node ID.
   /// @param groupingSets A list of grouping key sets. Grouping keys within the
   /// set must be unique, but grouping keys across sets may repeat.
-  /// @param outputGroupingKeyNames Output names for the grouping keys.
+  /// @param outputGroupingKeyInfos Output infos for the grouping keys.
   /// @param aggregationInputs Columns that contain inputs to the aggregate
   /// functions.
   /// @param groupIdName Name of the column that will contain the grouping set
@@ -566,7 +571,8 @@ class GroupIdNode : public PlanNode {
   GroupIdNode(
       PlanNodeId id,
       std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-      std::map<std::string, FieldAccessTypedExprPtr> outputGroupingKeyNames,
+      std::map<int, std::shared_ptr<OutputGroupingKeyInfo>>
+          outputGroupingKeyInfos,
       std::vector<FieldAccessTypedExprPtr> aggregationInputs,
       std::string groupIdName,
       PlanNodePtr source);
@@ -584,9 +590,9 @@ class GroupIdNode : public PlanNode {
     return groupingSets_;
   }
 
-  const std::map<std::string, FieldAccessTypedExprPtr>& outputGroupingKeyNames()
-      const {
-    return outputGroupingKeyNames_;
+  const std::map<int, std::shared_ptr<OutputGroupingKeyInfo>>&
+  outputGroupingKeyInfos() const {
+    return outputGroupingKeyInfos_;
   }
 
   const std::vector<FieldAccessTypedExprPtr>& aggregationInputs() const {
@@ -611,7 +617,8 @@ class GroupIdNode : public PlanNode {
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
   const std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets_;
-  const std::map<std::string, FieldAccessTypedExprPtr> outputGroupingKeyNames_;
+  const std::map<int, std::shared_ptr<OutputGroupingKeyInfo>>
+      outputGroupingKeyInfos_;
   const std::vector<FieldAccessTypedExprPtr> aggregationInputs_;
   const std::string groupIdName_;
 };
