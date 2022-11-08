@@ -13,7 +13,7 @@
 # limitations under the License.
 
 add_library(
-  velox_hive_connector OBJECT HiveConnector.cpp HiveDataSink.cpp FileHandle.cpp
+  velox_hive_connector HiveConnector.cpp HiveDataSink.cpp FileHandle.cpp
                               HiveWriteProtocol.cpp PartitionIdGenerator.cpp)
 
 target_link_libraries(velox_hive_connector velox_connector velox_dwio_common_exception
