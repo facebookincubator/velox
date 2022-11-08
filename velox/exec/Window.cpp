@@ -374,7 +374,7 @@ void Window::callApplyForPartitionRows(
       case core::WindowNode::BoundType::kFollowing:
         VELOX_NYI("Not supported");
       default:
-        VELOX_USER_FAIL("Invalid frame start value");
+        VELOX_USER_FAIL("Invalid frame bound type");
     }
   };
 
