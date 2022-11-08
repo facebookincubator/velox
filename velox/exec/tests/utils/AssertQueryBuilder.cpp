@@ -158,8 +158,6 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
 RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
   auto [cursor, results] = readCursor();
 
-  VELOX_CHECK(!results.empty());
-
   auto totalCount = 0;
   for (const auto& result : results) {
     totalCount += result->size();
@@ -180,10 +178,19 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 AssertQueryBuilder::readCursor() {
   VELOX_CHECK_NOT_NULL(params_.planNode);
 
-  if (!configs_.empty()) {
-    if (!params_.queryCtx) {
-      params_.queryCtx = core::QueryCtx::createForTest();
+  std::shared_ptr<folly::CPUThreadPoolExecutor> executor;
+  auto guard = folly::makeGuard([&] {
+    if (executor) {
+      executor->join();
     }
+  });
+
+  if (!params_.queryCtx) {
+    executor = std::make_shared<folly::CPUThreadPoolExecutor>(
+        std::thread::hardware_concurrency());
+    params_.queryCtx = std::make_shared<core::QueryCtx>(executor);
+  }
+  if (!configs_.empty()) {
     params_.queryCtx->setConfigOverridesUnsafe(std::move(configs_));
   }
 
