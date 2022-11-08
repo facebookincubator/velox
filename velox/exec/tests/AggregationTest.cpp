@@ -1260,14 +1260,25 @@ TEST_F(AggregationTest, groupingSetsOutput) {
 
   createDuckDbTable({data});
 
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .groupId({{"ba"}, {"ab"}}, {"a", "b"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values({data}).groupId({{"ba"}, {"ab"}}, {}).planNode();
 
-  auto expectedOutput =
-      "ROW<ba:BIGINT,ab:BIGINT,a:BIGINT,b:VARCHAR,group_id:BIGINT>";
-  ASSERT_EQ(expectedOutput, plan->outputType()->toString());
+  auto expectedRowType =
+      ROW({"ba", "ab", "group_id"}, {BIGINT(), BIGINT(), BIGINT()});
+  ASSERT_EQ(*expectedRowType, *plan->outputType());
+
+  plan = PlanBuilder()
+             .values({data})
+             .groupId({{"ba", "ab"}, {"ba"}, {}}, {"a", "b"})
+             .singleAggregation(
+                 {"ba", "ab", "group_id"},
+                 {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
+             .project({"ba", "ab", "count_1", "sum_a", "max_b"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT ba, ab, count(1), sum(a), max(b) FROM tmp GROUP BY ROLLUP (ba, ab)");
 }
 
 TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {

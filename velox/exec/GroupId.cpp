@@ -31,9 +31,9 @@ GroupId::GroupId(
 
   std::unordered_map<std::string, column_index_t>
       inputToOutputGroupingKeyMapping;
-  for (const auto& [output, input] : groupIdNode->outputGroupingKeyInfos()) {
-    inputToOutputGroupingKeyMapping[input->field->name()] =
-        outputType_->getChildIdx(input->name);
+  for (const auto& input : groupIdNode->outputGroupingKeyInfos()) {
+    inputToOutputGroupingKeyMapping[input.field->name()] =
+        outputType_->getChildIdx(input.name);
   }
 
   auto numGroupingSets = groupIdNode->groupingSets().size();

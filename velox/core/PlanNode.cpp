@@ -154,7 +154,7 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
 
 namespace {
 RowTypePtr getGroupIdOutputType(
-    const std::map<int, std::shared_ptr<GroupIdNode::OutputGroupingKeyInfo>>&
+    const std::vector<GroupIdNode::OutputGroupingKeyInfo>&
         outputGroupingKeyInfos,
     const std::vector<FieldAccessTypedExprPtr>& aggregationInputs,
     const std::string& groupIdName) {
@@ -170,9 +170,9 @@ RowTypePtr getGroupIdOutputType(
   names.reserve(numOutputs);
   types.reserve(numOutputs);
 
-  for (const auto& [id, groupingKeyInfo] : outputGroupingKeyInfos) {
-    names.push_back(groupingKeyInfo->name);
-    types.push_back(groupingKeyInfo->field->type());
+  for (const auto& groupingKeyInfo : outputGroupingKeyInfos) {
+    names.push_back(groupingKeyInfo.name);
+    types.push_back(groupingKeyInfo.field->type());
   }
 
   for (const auto& input : aggregationInputs) {
@@ -190,8 +190,7 @@ RowTypePtr getGroupIdOutputType(
 GroupIdNode::GroupIdNode(
     PlanNodeId id,
     std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-    std::map<int, std::shared_ptr<OutputGroupingKeyInfo>>
-        outputGroupingKeyInfos,
+    std::vector<GroupIdNode::OutputGroupingKeyInfo> outputGroupingKeyInfos,
     std::vector<FieldAccessTypedExprPtr> aggregationInputs,
     std::string groupIdName,
     PlanNodePtr source)

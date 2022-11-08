@@ -571,8 +571,7 @@ class GroupIdNode : public PlanNode {
   GroupIdNode(
       PlanNodeId id,
       std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-      std::map<int, std::shared_ptr<OutputGroupingKeyInfo>>
-          outputGroupingKeyInfos,
+      std::vector<OutputGroupingKeyInfo> outputGroupingKeyInfos,
       std::vector<FieldAccessTypedExprPtr> aggregationInputs,
       std::string groupIdName,
       PlanNodePtr source);
@@ -590,8 +589,7 @@ class GroupIdNode : public PlanNode {
     return groupingSets_;
   }
 
-  const std::map<int, std::shared_ptr<OutputGroupingKeyInfo>>&
-  outputGroupingKeyInfos() const {
+  const std::vector<OutputGroupingKeyInfo>& outputGroupingKeyInfos() const {
     return outputGroupingKeyInfos_;
   }
 
@@ -617,8 +615,7 @@ class GroupIdNode : public PlanNode {
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
   const std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets_;
-  const std::map<int, std::shared_ptr<OutputGroupingKeyInfo>>
-      outputGroupingKeyInfos_;
+  const std::vector<OutputGroupingKeyInfo> outputGroupingKeyInfos_;
   const std::vector<FieldAccessTypedExprPtr> aggregationInputs_;
   const std::string groupIdName_;
 };
