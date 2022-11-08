@@ -40,46 +40,37 @@ void applyComplexType(
   BufferPtr indices = allocateIndices(inputElements->size(), context.pool());
   vector_size_t* rawIndices = indices->asMutable<vector_size_t>();
 
-  // Allocate nulls buffer
-  BufferPtr nulls = allocateNulls(inputElements->size(), context.pool());
-  auto rawNulls = nulls->asMutable<uint64_t>();
-
   const CompareFlags flags{.nullsFirst = false, .ascending = true};
   auto decodedIndices = decodedElements->indices();
 
   rows.applyToSelected([&](vector_size_t row) {
     const auto size = inputArray->sizeAt(row);
     const auto offset = inputArray->offsetAt(row);
-    vector_size_t numNulls = 0;
+
     for (auto i = offset; i < offset + size; ++i) {
-      if(decodedElements->isNullAt(i)) {
-        auto endIndex = offset + size - numNulls -1;
-        bits::setNull(rawNulls, endIndex);
-        for (; endIndex > i ; endIndex--) {
-          if (!decodedElements->isNullAt(endIndex)) {
-            break;
-          }
-        }
-        if (endIndex > i) {
-          rawIndices[i] = decodedIndices[endIndex];
-          rawIndices[endIndex] = decodedIndices[i];
-          ++numNulls;
-        }
-      } else {
-        rawIndices[i] = decodedIndices[i];
-      }
+      rawIndices[i] = i;
     }
     std::sort(
         rawIndices + offset,
-        rawIndices + offset + size - numNulls,
+        rawIndices + offset + size,
         [&](vector_size_t& a, vector_size_t& b) {
-          return baseElementsVector->compare(baseElementsVector, a, b, flags) <
-              0;
+          bool aNull = decodedElements->isNullAt(a);
+          bool bNull = decodedElements->isNullAt(b);
+          if (aNull) {
+            return false;
+          }
+          if (bNull) {
+            return true;
+          }
+          return baseElementsVector->compare(
+                     baseElementsVector,
+                     decodedIndices[a],
+                     decodedIndices[b],
+                     flags) < 0;
         });
   });
 
   resultElements = BaseVector::transpose(indices, std::move(inputElements));
-  resultElements->setNulls(nulls);
 }
 
 template <typename T>
