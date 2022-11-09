@@ -37,7 +37,7 @@ NPROC=$(getconf _NPROCESSORS_ONLN)
 COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja flex bison cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
+MACOS_DEPS="ninja flex bison cmake ccache icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
 
 function run_and_time {
   time "$@"
@@ -117,7 +117,7 @@ function install_velox_deps {
   run_and_time install_fmt
   run_and_time install_double_conversion
   run_and_time install_re2
-  run_and_time install_folly
+  # run_and_time install_folly
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
