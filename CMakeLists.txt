@@ -32,14 +32,14 @@ option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
   OFF)
-# No string options
+# option() always creats a BOOL variable so we have to use a normal cache variable
+# with STRING type for this option.
 set(VELOX_DEPENDENCY_SOURCE
     ${VELOX_DEPENDENCY_SOURCE_DEFAULT}
     CACHE
       STRING
       "Default source for all dependencies with source builds enabled. AUTO SYSTEM BUNDLED"
 )
-# message(FATAL_ERROR "def ${VELOX_DEPENDENCY_SOURCE}")
 option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." ON)
 option(VELOX_ENABLE_EXEC "Build exec." ON)
 option(VELOX_ENABLE_AGGREGATES "Build aggregates." ON)
