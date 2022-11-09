@@ -115,9 +115,9 @@ function install_velox_deps {
   fi
   run_and_time install_ranges_v3
   run_and_time install_fmt
-  run_and_time install_folly
   run_and_time install_double_conversion
   run_and_time install_re2
+  run_and_time install_folly
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
