@@ -16,13 +16,15 @@
 
 #pragma once
 
-#include <thrift/protocol/TCompactProtocol.h> //@manual
 #include "velox/common/base/RawVector.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ScanSpec.h"
+#include "velox/dwio/parquet/reader/NestedStructureDecoder.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
+
+#include <thrift/protocol/TCompactProtocol.h> //@manual
 
 namespace facebook::velox::parquet {
 class ParquetParams : public dwio::common::FormatParams {
@@ -32,7 +34,7 @@ class ParquetParams : public dwio::common::FormatParams {
 
   std::unique_ptr<dwio::common::FormatDataReader> toFormatDataReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
-      const common::ScanSpec& scanSpec) override;
+      const common::ScanSpec&) override;
 
  private:
   const thrift::FileMetaData& metaData_;
@@ -53,12 +55,9 @@ class ParquetDataReader : public dwio::common::FormatDataReader {
         rowsInRowGroup_(-1) {}
 
   /// Prepares to read data for 'index'th row group.
-  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
-
-  /// Positions 'this' at 'index'th row group. enqueueRowGroup must be called
-  /// first. The returned PositionProvider is empty and should not be used.
-  /// Other formats may use it.
-  dwio::common::PositionProvider seekToRowGroup(uint32_t index) override;
+  virtual void enqueueRowGroup(
+      uint32_t index,
+      dwio::common::BufferedInput& input) = 0;
 
   /// True if 'filter' may have hits for the column of 'this' according to the
   /// stats in 'rowGroup'.
@@ -71,10 +70,39 @@ class ParquetDataReader : public dwio::common::FormatDataReader {
       uint64_t rowsPerRowGroup,
       const dwio::common::StatsContext& writerContext) override;
 
+ protected:
+  memory::MemoryPool& pool_;
+  std::shared_ptr<const ParquetTypeWithId> type_;
+  const std::vector<thrift::RowGroup>& rowGroups_;
+  // Streams for this column in each of 'rowGroups_'. Will be created on or
+  // ahead of first use, not at construction.
+  std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
+
+  const uint32_t maxDefine_;
+  const uint32_t maxRepeat_;
+  int64_t rowsInRowGroup_;
+};
+
+class ParquetPrimitiveDataReader : public ParquetDataReader {
+ public:
+  ParquetPrimitiveDataReader(
+      const std::shared_ptr<const dwio::common::TypeWithId>& type,
+      const std::vector<thrift::RowGroup>& rowGroups,
+      memory::MemoryPool& pool)
+      : ParquetDataReader(type, rowGroups, pool) {}
+
+  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input)
+      override;
+
+  /// Positions 'this' at 'index'th row group. enqueueRowGroup must be called
+  /// first. The returned PositionProvider is empty and should not be used.
+  /// Other formats may use it.
+  dwio::common::PositionProvider seekToRowGroup(uint32_t index) override;
+
   // Reads null flags for 'numValues' next top level rows. The first 'numValues'
   // bits of 'nulls' are set and the reader is advanced by numValues'.
   void readNullsOnly(int32_t numValues, BufferPtr& nulls) {
-    reader_->readNullsOnly(numValues, nulls);
+    pageReader_->readNullsOnly(numValues, nulls);
   }
 
   bool hasNulls() const override {
@@ -102,13 +130,13 @@ class ParquetDataReader : public dwio::common::FormatDataReader {
     // 'nullsOnly' set and is responsible for reading however many nulls or
     // pages it takes to skip 'numValues' top level rows.
     if (nullsOnly) {
-      reader_->skipNullsOnly(numValues);
+      pageReader_->skipNullsOnly(numValues);
     }
     return numValues;
   }
 
   uint64_t skip(uint64_t numRows) override {
-    reader_->skip(numRows);
+    pageReader_->skip(numRows);
     return numRows;
   }
 
@@ -116,33 +144,23 @@ class ParquetDataReader : public dwio::common::FormatDataReader {
   /// PageReader::readWithVisitor().
   template <typename Visitor>
   void readWithVisitor(Visitor visitor) {
-    reader_->readWithVisitor(visitor);
-  }
-
-  const VectorPtr& dictionaryValues() {
-    return reader_->dictionaryValues();
-  }
-
-  void clearDictionary() {
-    reader_->clearDictionary();
+    pageReader_->readWithVisitor(visitor);
   }
 
   bool hasDictionary() const {
-    return reader_->isDictionary();
+    return pageReader_->isDictionary();
   }
 
- protected:
-  memory::MemoryPool& pool_;
-  std::shared_ptr<const ParquetTypeWithId> type_;
-  const std::vector<thrift::RowGroup>& rowGroups_;
-  // Streams for this column in each of 'rowGroups_'. Will be created on or
-  // ahead of first use, not at construction.
-  std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
+  const VectorPtr& dictionaryValues() {
+    return pageReader_->dictionaryValues();
+  }
 
-  const uint32_t maxDefine_;
-  const uint32_t maxRepeat_;
-  int64_t rowsInRowGroup_;
-  std::unique_ptr<PageReader> reader_;
+  void clearDictionary() {
+    pageReader_->clearDictionary();
+  }
+
+ private:
+  std::unique_ptr<PageReader> pageReader_;
 };
 
 } // namespace facebook::velox::parquet

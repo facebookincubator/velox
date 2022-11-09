@@ -25,7 +25,7 @@ std::unique_ptr<dwio::common::FormatDataReader>
 ParquetParams::toFormatDataReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
-  return std::make_unique<ParquetDataReader>(
+  return std::make_unique<ParquetPrimitiveDataReader>(
       type, metaData_.row_groups, pool());
 }
 
@@ -68,7 +68,7 @@ bool ParquetDataReader::rowGroupMatches(
   return true;
 }
 
-void ParquetDataReader::enqueueRowGroup(
+void ParquetPrimitiveDataReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
   auto& chunk = rowGroups_[index].columns[type_->column];
@@ -99,13 +99,13 @@ void ParquetDataReader::enqueueRowGroup(
   streams_[index] = input.enqueue({chunkReadOffset, readSize}, &id);
 }
 
-dwio::common::PositionProvider ParquetDataReader::seekToRowGroup(
+dwio::common::PositionProvider ParquetPrimitiveDataReader::seekToRowGroup(
     uint32_t index) {
   static std::vector<uint64_t> empty;
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");
   auto& metadata = rowGroups_[index].columns[type_->column].meta_data;
-  reader_ = std::make_unique<PageReader>(
+  pageReader_ = std::make_unique<PageReader>(
       std::move(streams_[index]),
       pool_,
       type_,
