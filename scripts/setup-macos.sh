@@ -34,7 +34,7 @@ source $SCRIPTDIR/setup-helper-functions.sh
 CPU_TARGET="${CPU_TARGET:-avx}"
 FB_OS_VERSION=v2022.07.11.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
-COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
+# COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 MACOS_DEPS="ninja flex bison cmake ccache icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
