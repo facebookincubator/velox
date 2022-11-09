@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>How to add a lambda function? &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Expression Evaluation" href="expression-evaluation.html" />
@@ -42,10 +44,10 @@
           <div class="body" role="main">
             
   <section id="how-to-add-a-lambda-function">
-<h1>How to add a lambda function?<a class="headerlink" href="#how-to-add-a-lambda-function" title="Permalink to this headline">¶</a></h1>
+<h1>How to add a lambda function?<a class="headerlink" href="#how-to-add-a-lambda-function" title="Permalink to this heading">¶</a></h1>
 <p>This article assumes familiarity with <a class="reference external" href="https://prestodb.io/blog/2020/03/02/presto-lambda">Presto’s lambda functions</a>.</p>
 <section id="introduction">
-<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this headline">¶</a></h2>
+<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h2>
 <p>Velox supports lambda functions which are used to implement computations over
 arrays and maps. Lambda functions are higher order functions that take
 arguments which are functions themselves. For example, the <a class="reference internal" href="../functions/array.html#filter" title="filter"><code class="xref py py-func docutils literal notranslate"><span class="pre">filter()</span></code></a>
@@ -69,10 +71,6 @@ e.g. from the type of the array argument of “filter”.</p>
 function. Let’s say we have a dataset with an array column “a” and an integer
 column “b”:</p>
 <table class="docutils align-default">
-<colgroup>
-<col style="width: 63%" />
-<col style="width: 37%" />
-</colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>a: array(integer)</p></th>
 <th class="head"><p>b: integer</p></th>
@@ -109,7 +107,7 @@ if “b” is even and odd elements if “b” is odd.</p>
 <p>Note: At the time of writing Presto didn’t support this syntax.</p>
 </section>
 <section id="function-vector">
-<h2>Function Vector<a class="headerlink" href="#function-vector" title="Permalink to this headline">¶</a></h2>
+<h2>Function Vector<a class="headerlink" href="#function-vector" title="Permalink to this heading">¶</a></h2>
 <p>In Velox, lambda functions must be implemented as vector functions. These
 receive their lambda inputs as vectors of type FUNCTION. For example,
 the “filter” function receives two vectors: a vector of type ARRAY and another
@@ -182,7 +180,7 @@ usually are the rows the lambda function is evaluated on, e.g. the “rows”
 parameter to VectorFunction::apply() method.</p>
 </section>
 <section id="end-to-end-flow">
-<h2>End-to-End Flow<a class="headerlink" href="#end-to-end-flow" title="Permalink to this headline">¶</a></h2>
+<h2>End-to-End Flow<a class="headerlink" href="#end-to-end-flow" title="Permalink to this heading">¶</a></h2>
 <p>A lambda function call in an expression tree is represented by a CallTypedExpr
 node with a LambdaTypedExpr child. The “filter(a, x -&gt; x % 2 = 0)” would be
 represented like this:</p>
@@ -199,7 +197,7 @@ LambdaExpr::evalSpecialForm() creates instances of Callable and stores them in
 a FunctionVector.</p>
 </section>
 <section id="lambda-function-signature">
-<h2>Lambda Function Signature<a class="headerlink" href="#lambda-function-signature" title="Permalink to this headline">¶</a></h2>
+<h2>Lambda Function Signature<a class="headerlink" href="#lambda-function-signature" title="Permalink to this heading">¶</a></h2>
 <p>To specify a signature of a lambda function use “function(argType1, argType2,..,
 returnType)” syntax for the type of the lambda argument. Here is an example of
 the signature of the “filter” function:</p>
@@ -214,7 +212,7 @@ the signature of the “filter” function:</p>
 </div>
 </section>
 <section id="testing">
-<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this headline">¶</a></h2>
+<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this heading">¶</a></h2>
 <p>Testing framework doesn’t support Presto SQL lambda expressions, e.g. one cannot
 evaluate “filter(a, x - &gt;x &gt;= b)” expression directly. Instead, use the
 registerLambda helper method of the FunctionBaseTest class to register lambda
@@ -288,7 +286,7 @@ is used to resolve the types of captures.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -312,7 +310,7 @@ is used to resolve the types of captures.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

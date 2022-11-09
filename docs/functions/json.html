@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>JSON Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="URL Functions" href="url.html" />
@@ -42,9 +44,9 @@
           <div class="body" role="main">
             
   <section id="json-functions">
-<h1>JSON Functions<a class="headerlink" href="#json-functions" title="Permalink to this headline">¶</a></h1>
+<h1>JSON Functions<a class="headerlink" href="#json-functions" title="Permalink to this heading">¶</a></h1>
 <section id="json-format">
-<h2>JSON Format<a class="headerlink" href="#json-format" title="Permalink to this headline">¶</a></h2>
+<h2>JSON Format<a class="headerlink" href="#json-format" title="Permalink to this heading">¶</a></h2>
 <p>JSON is a language-independent data format that represents data as
 human-readable text. A JSON text can represent a number, a boolean, a
 string, an array, an object, or a null, with slightly different grammar.
@@ -56,7 +58,7 @@ such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</sp
 <a class="reference external" href="https://www.json.org">this JSON introduction</a>.</p>
 </section>
 <section id="cast-to-json">
-<h2>Cast to JSON<a class="headerlink" href="#cast-to-json" title="Permalink to this headline">¶</a></h2>
+<h2>Cast to JSON<a class="headerlink" href="#cast-to-json" title="Permalink to this heading">¶</a></h2>
 <p>Casting a value from a supported type to JSON returns a JSON text that
 represents this value. Casting from BOOLEAN, TINYINT, SMALLINT, INTEGER,
 BIGINT, REAL, DOUBLE, DATE, TIMESTAMP, or VARCHAR is supported. Casting
@@ -93,7 +95,7 @@ representing the original string. This JSON text is different from the original
 string since it has special characters escaped and extra double quotes added.</p>
 </section>
 <section id="cast-from-json">
-<h2>Cast from JSON<a class="headerlink" href="#cast-from-json" title="Permalink to this headline">¶</a></h2>
+<h2>Cast from JSON<a class="headerlink" href="#cast-from-json" title="Permalink to this heading">¶</a></h2>
 <p>Casting a JSON text to a supported type returns the value represented by this
 JSON text. The JSON text must represent a valid value of the type it is casted
 to, or an error will be thrown. Casting to BOOLEAN, TINYINT, SMALLINT, INTEGER,
@@ -120,7 +122,7 @@ the JSON text. This string is different from the JSON text because it has
 special characters unescaped and double quotes removed.</p>
 </section>
 <section id="id1">
-<h2>JSON Functions<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h2>
+<h2>JSON Functions<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="json_extract_scalar">
 <span class="sig-name descname"><span class="pre">json_extract_scalar</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">json_path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#json_extract_scalar" title="Permalink to this definition">¶</a></dt>
@@ -169,7 +171,7 @@ Returns NULL if <code class="docutils literal notranslate"><span class="pre">jso
 </section>
 </section>
 <section id="json-vectors">
-<h1>JSON Vectors<a class="headerlink" href="#json-vectors" title="Permalink to this headline">¶</a></h1>
+<h1>JSON Vectors<a class="headerlink" href="#json-vectors" title="Permalink to this heading">¶</a></h1>
 <p>There are a number of Presto JSON functions expecting JSON-typed inputs or
 returning JSON-typed outputs. Hence, developers who use the Velox library may
 need to work with JSON-typed vectors. In the Velox internal implementation,
@@ -195,7 +197,13 @@ VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
 <li><a class="reference internal" href="#json-format">JSON Format</a></li>
 <li><a class="reference internal" href="#cast-to-json">Cast to JSON</a></li>
 <li><a class="reference internal" href="#cast-from-json">Cast from JSON</a></li>
-<li><a class="reference internal" href="#id1">JSON Functions</a></li>
+<li><a class="reference internal" href="#id1">JSON Functions</a><ul>
+<li><a class="reference internal" href="#json_extract_scalar"><code class="docutils literal notranslate"><span class="pre">json_extract_scalar()</span></code></a></li>
+<li><a class="reference internal" href="#is_json_scalar"><code class="docutils literal notranslate"><span class="pre">is_json_scalar()</span></code></a></li>
+<li><a class="reference internal" href="#json_array_length"><code class="docutils literal notranslate"><span class="pre">json_array_length()</span></code></a></li>
+<li><a class="reference internal" href="#json_array_contains"><code class="docutils literal notranslate"><span class="pre">json_array_contains()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li><a class="reference internal" href="#json-vectors">JSON Vectors</a></li>
@@ -228,7 +236,7 @@ VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -252,7 +260,7 @@ VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

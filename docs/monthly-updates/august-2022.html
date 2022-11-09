@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>August 2022 Update &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="July 2022 Update" href="july-2022.html" />
@@ -42,9 +44,9 @@
           <div class="body" role="main">
             
   <section id="august-2022-update">
-<h1>August 2022 Update<a class="headerlink" href="#august-2022-update" title="Permalink to this headline">¶</a></h1>
+<h1>August 2022 Update<a class="headerlink" href="#august-2022-update" title="Permalink to this heading">¶</a></h1>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this headline">¶</a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference external" href="https://velox-lib.io">website</a> for Velox.</p></li>
 <li><p>Add documentation for <a class="reference internal" href="../functions/window.html"><span class="doc">Window functions</span></a>.</p></li>
@@ -52,7 +54,7 @@
 </ul>
 </section>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this headline">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for Right Semi Join.</p></li>
 <li><p>Add basic <a class="reference internal" href="../develop/operators.html#window-node"><span class="std std-ref">Window operator</span></a>.</p></li>
@@ -66,20 +68,20 @@
 </ul>
 </section>
 <section id="substrait-extension">
-<h2>Substrait Extension<a class="headerlink" href="#substrait-extension" title="Permalink to this headline">¶</a></h2>
+<h2>Substrait Extension<a class="headerlink" href="#substrait-extension" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for ROW, ARRAY, and MAP types.</p></li>
 </ul>
 </section>
 <section id="arrow-extension">
-<h2>Arrow Extension<a class="headerlink" href="#arrow-extension" title="Permalink to this headline">¶</a></h2>
+<h2>Arrow Extension<a class="headerlink" href="#arrow-extension" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for dictionary encoding.</p></li>
 <li><p>Improve support for ARRAY and MAP types.</p></li>
 </ul>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../functions/map.html#transform_keys" title="transform_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform_keys()</span></code></a> and <a class="reference internal" href="../functions/map.html#transform_values" title="transform_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform_values()</span></code></a> functions.</p></li>
 <li><p>Add <a class="reference internal" href="../functions/array.html#array_sum" title="array_sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sum()</span></code></a> function.</p></li>
@@ -93,7 +95,7 @@
 </ul>
 </section>
 <section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this headline">¶</a></h2>
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for FLOAT, DOUBLE, and STRING types to native Parquet reader.</p></li>
 <li><p>Add support for dictionary encoded INTEGER columns to native Parquet reader.</p></li>
@@ -102,7 +104,7 @@
 </ul>
 </section>
 <section id="performance-and-correctness">
-<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this headline">¶</a></h2>
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add q9, q15, q16 to TPC-H benchmark.</p></li>
 <li><p>Optimize memory allocation by specializing vector readers based on the arguments. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/1956">#1956</a></p></li>
@@ -111,13 +113,13 @@
 </ul>
 </section>
 <section id="debugging-experience">
-<h2>Debugging Experience<a class="headerlink" href="#debugging-experience" title="Permalink to this headline">¶</a></h2>
+<h2>Debugging Experience<a class="headerlink" href="#debugging-experience" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add <cite>BaseVector::toString(bool)</cite> API to print all layers of encodings.</p></li>
 </ul>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this headline">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
 <p>Aditi Pandit, Barson, Behnam Robatmili, Bikramjeet Vig, Chad Austin, Connor Devlin,
 Daniel Munoz, Deepak Majeti, Ge Gao, Huameng Jiang, James Wyles, Jialiang Tan,
 Jimmy Lu, Jonathan Keane, Karteek Murthy Samba Murthy, Katie Mancini, Kimberly Yang,
@@ -181,7 +183,7 @@ muniao, tanjialiang, usurai, yingsu00, 学东栾.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -205,7 +207,7 @@ muniao, tanjialiang, usurai, yingsu00, 学东栾.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Spilling &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -43,9 +45,9 @@
           <div class="body" role="main">
             
   <section id="spilling">
-<h1>Spilling<a class="headerlink" href="#spilling" title="Permalink to this headline">¶</a></h1>
+<h1>Spilling<a class="headerlink" href="#spilling" title="Permalink to this heading">¶</a></h1>
 <section id="background">
-<h2>Background<a class="headerlink" href="#background" title="Permalink to this headline">¶</a></h2>
+<h2>Background<a class="headerlink" href="#background" title="Permalink to this heading">¶</a></h2>
 <p>Spilling in Velox allows a query to succeed using a limited amount of memory
 when some operators are accumulating large state. For example, a hash
 aggregation operator stores the intermediate aggregation state in a hash table,
@@ -65,7 +67,7 @@ different spilling algorithms. This document discusses the algorithms used by
 Hash Aggregation, Order By, and Hash Join operators.</p>
 </section>
 <section id="spilling-framework">
-<h2>Spilling Framework<a class="headerlink" href="#spilling-framework" title="Permalink to this headline">¶</a></h2>
+<h2>Spilling Framework<a class="headerlink" href="#spilling-framework" title="Permalink to this heading">¶</a></h2>
 <p>Spilling in Velox consists of a spilling framework and a set of spillable
 operators built on top of it. The spilling framework provides the common
 spilling functions which includes spill data collection, partition, sort,
@@ -74,10 +76,10 @@ operator uses these functions to implement its own spilling algorithm.</p>
 <a class="reference internal image-reference" href="../_images/spill-arch.png"><img alt="../_images/spill-arch.png" class="align-center" src="../_images/spill-arch.png" style="width: 300px;" /></a>
 </section>
 <section id="spill-objects">
-<h2>Spill Objects<a class="headerlink" href="#spill-objects" title="Permalink to this headline">¶</a></h2>
+<h2>Spill Objects<a class="headerlink" href="#spill-objects" title="Permalink to this heading">¶</a></h2>
 <p>The spilling framework consists of the following major software objects:</p>
 <section id="spiller">
-<h3>Spiller<a class="headerlink" href="#spiller" title="Permalink to this headline">¶</a></h3>
+<h3>Spiller<a class="headerlink" href="#spiller" title="Permalink to this heading">¶</a></h3>
 <p>The Spiller object provides the spilling functions for all the operators
 and helps them manage their spilled state on disk. There is one Spiller object
 created for each operator. The Spiller object takes a row container object on
@@ -129,7 +131,7 @@ is a thread execution unit. The spill reads are executed in the driver
 executor. Both read and write are synchronous IO operations.</p>
 <p>The Spiller provides the following spilling APIs for operators to use:</p>
 <section id="spill-apis">
-<h4>Spill APIs<a class="headerlink" href="#spill-apis" title="Permalink to this headline">¶</a></h4>
+<h4>Spill APIs<a class="headerlink" href="#spill-apis" title="Permalink to this heading">¶</a></h4>
 <p><strong>spill with targets</strong>: the operator specifies the number of rows and bytes to
 spill as the target. The Spiller selects a number of partitions to spill to
 meet the target. Spilling runs internally and returns after the spilling is
@@ -172,7 +174,7 @@ hash join spilling section.</p>
 </div>
 </section>
 <section id="restore-apis">
-<h4>Restore APIs<a class="headerlink" href="#restore-apis" title="Permalink to this headline">¶</a></h4>
+<h4>Restore APIs<a class="headerlink" href="#restore-apis" title="Permalink to this heading">¶</a></h4>
 <p><strong>sorted spill restore</strong>: Used by order by and hash aggregation operators.
 The operator first calls Spiller::finishSpill() to mark the completion of
 spilling. The Spiller collects rows from unspilled partitions and returns these
@@ -203,7 +205,7 @@ reader to restore the spilled partition state.</p>
 </section>
 </section>
 <section id="spillfilelist-and-spillfile">
-<h3>SpillFileList and SpillFile<a class="headerlink" href="#spillfilelist-and-spillfile" title="Permalink to this headline">¶</a></h3>
+<h3>SpillFileList and SpillFile<a class="headerlink" href="#spillfilelist-and-spillfile" title="Permalink to this heading">¶</a></h3>
 <p>SpillFileList object manages spill files for a single partition. Each spill
 file is managed by one SpillFile object which provides the low level io
 operations with the storage system through Velox file system interface. On the
@@ -218,7 +220,7 @@ vectors.</p>
 </section>
 </section>
 <section id="spill-triggers">
-<h2>Spill Triggers<a class="headerlink" href="#spill-triggers" title="Permalink to this headline">¶</a></h2>
+<h2>Spill Triggers<a class="headerlink" href="#spill-triggers" title="Permalink to this heading">¶</a></h2>
 <p>Spilling will be integrated with the Velox memory management system as a way to
 reclaim memory when the system lacks memory. Whenever an operator can’t
 allocate or reserve new memory, the memory arbitrator will select a number of
@@ -242,9 +244,9 @@ memory as the last memory allocation that exceeds the memory limit, can be made
 from any operator in a query plan not always from the spillable one.</p>
 </section>
 <section id="spill-parameters">
-<h2>Spill Parameters<a class="headerlink" href="#spill-parameters" title="Permalink to this headline">¶</a></h2>
+<h2>Spill Parameters<a class="headerlink" href="#spill-parameters" title="Permalink to this heading">¶</a></h2>
 <section id="spill-file-size">
-<h3>Spill File Size<a class="headerlink" href="#spill-file-size" title="Permalink to this headline">¶</a></h3>
+<h3>Spill File Size<a class="headerlink" href="#spill-file-size" title="Permalink to this heading">¶</a></h3>
 <p>Given the same amount of spill data, the spill file size determines the number
 of spill files on disk. On the one hand, we should avoid generating too many
 small spill files as it might overload the metadata service of the storage
@@ -268,7 +270,7 @@ underlying storage system. We don’t expect they needs too much tuning in
 practice.</p>
 </section>
 <section id="spill-target-size">
-<h3>Spill Target Size<a class="headerlink" href="#spill-target-size" title="Permalink to this headline">¶</a></h3>
+<h3>Spill Target Size<a class="headerlink" href="#spill-target-size" title="Permalink to this heading">¶</a></h3>
 <p>The spill target size determines how much data to spill each time. If too
 small, spilling interrupts operator execution frequently and generates lots of
 small files. If too large, operator execution slows down by spilling lots of
@@ -278,7 +280,7 @@ this parameter a bit in practice to see its impact on performance.</p>
 </section>
 </section>
 <section id="data-storage">
-<h2>Data Storage<a class="headerlink" href="#data-storage" title="Permalink to this headline">¶</a></h2>
+<h2>Data Storage<a class="headerlink" href="#data-storage" title="Permalink to this heading">¶</a></h2>
 <p>The spilling just needs the underlying storage system to store a number of
 named streamed bytes. It may or may not need the namespace support. If the
 storage system supports namespace, we could store the spilled files from a
@@ -303,9 +305,9 @@ id, driver id, and the operator id together which is unique within a query.</p>
 </div>
 </section>
 <section id="spilling-algorithm">
-<h2>Spilling Algorithm<a class="headerlink" href="#spilling-algorithm" title="Permalink to this headline">¶</a></h2>
+<h2>Spilling Algorithm<a class="headerlink" href="#spilling-algorithm" title="Permalink to this heading">¶</a></h2>
 <section id="hash-aggregation">
-<h3>Hash Aggregation<a class="headerlink" href="#hash-aggregation" title="Permalink to this headline">¶</a></h3>
+<h3>Hash Aggregation<a class="headerlink" href="#hash-aggregation" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><a class="reference internal image-reference" href="../_images/spill-aggregation-spill.png"><img alt="../_images/spill-aggregation-spill.png" class="align-left" src="../_images/spill-aggregation-spill.png" style="width: 300px;" /></a>
 <a class="reference internal image-reference" href="../_images/spill-aggregation-restore.png"><img alt="../_images/spill-aggregation-restore.png" class="align-right" src="../_images/spill-aggregation-restore.png" style="width: 300px;" /></a>
@@ -330,7 +332,7 @@ intermediate state of a group can be spilled multiple times during the
 operator’s execution. Note that the sort is based on the grouping keys.</p>
 </section>
 <section id="orderby">
-<h3>OrderBy<a class="headerlink" href="#orderby" title="Permalink to this headline">¶</a></h3>
+<h3>OrderBy<a class="headerlink" href="#orderby" title="Permalink to this heading">¶</a></h3>
 <p>The order by operator stores all the input rows in a row container and sorts
 them all after it has received all the inputs. When spilling gets triggered,
 the Spiller collects a sufficient number of rows to spill to satisfy the spill
@@ -346,7 +348,7 @@ all the sorted runs to produce the final sorted output. Note that the sort here
 needs to use the comparison options specified by the query plan node.</p>
 </section>
 <section id="hash-join">
-<h3>Hash Join<a class="headerlink" href="#hash-join" title="Permalink to this headline">¶</a></h3>
+<h3>Hash Join<a class="headerlink" href="#hash-join" title="Permalink to this heading">¶</a></h3>
 <p>The hash join is implemented by hash build and hash probe two types of
 operators, and each belonging to a separate driver pipeline and the two
 pipelines are connected through a shared hash join bridge data structure. The
@@ -409,7 +411,7 @@ spilling, 2 for the first level recursive spilling etc):</p>
 \[T = M * ((2 ^ N) ^ L)\]</div>
 <p>The following table gives the max supported table size at different spilling
 level, <em>M</em> = 1*GB*, <em>N</em> = 3:</p>
-<table class="colwidths-auto docutils align-center" id="data">
+<table class="docutils align-center" id="data">
 <thead>
 <tr class="row-odd"><th class="head"><p>Spill Level</p></th>
 <th class="head"><p>Total Partition Bits</p></th>
@@ -452,7 +454,7 @@ level using <a class="reference internal" href="../configs.html"><span class="do
 <p>The following gives a brief description of the hash build and probe workflows
 extended to support (recursive) spilling:</p>
 <section id="hashbuild">
-<h4>HashBuild<a class="headerlink" href="#hashbuild" title="Permalink to this headline">¶</a></h4>
+<h4>HashBuild<a class="headerlink" href="#hashbuild" title="Permalink to this heading">¶</a></h4>
 <ol class="arabic simple">
 <li><p>Process inputs from either build input source or the previously spilled
 data.</p></li>
@@ -487,7 +489,7 @@ evicted tasks first before spilling so we might not need the coordinator support
 if the spilling is triggered in that case.</p>
 </section>
 <section id="hashprobe">
-<h4>HashProbe<a class="headerlink" href="#hashprobe" title="Permalink to this headline">¶</a></h4>
+<h4>HashProbe<a class="headerlink" href="#hashprobe" title="Permalink to this heading">¶</a></h4>
 <ol class="arabic simple">
 <li><p>Wait for the next hash table to join from the hash join bridge plus
 additional spilling metadata if spilling gets involved: the table spill
@@ -520,7 +522,7 @@ requires to cross join null-key probe rows with all build-side rows for filter
 evaluation to check if the null-key probe rows can be added to output or not.</p>
 </section>
 <section id="hashjoinbridge">
-<h4>HashJoinBridge<a class="headerlink" href="#hashjoinbridge" title="Permalink to this headline">¶</a></h4>
+<h4>HashJoinBridge<a class="headerlink" href="#hashjoinbridge" title="Permalink to this heading">¶</a></h4>
 <p>The HashJoinBridge object includes the following extensions to support the
 spilling:</p>
 <ul class="simple">
@@ -546,9 +548,9 @@ with each one having an equally-sized shard to restore.</p></li>
 </section>
 </section>
 <section id="future-work">
-<h2>Future Work<a class="headerlink" href="#future-work" title="Permalink to this headline">¶</a></h2>
+<h2>Future Work<a class="headerlink" href="#future-work" title="Permalink to this heading">¶</a></h2>
 <section id="memory-arbitration">
-<h3>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Permalink to this headline">¶</a></h3>
+<h3>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Permalink to this heading">¶</a></h3>
 <p>Introduce memory arbitration logic to choose operators to reclaim memory from
 running queries when any operator fails to allocate or reserve memory. The
 memory arbitrator can reclaim memory from both spillable and some non-spillbale
@@ -561,7 +563,7 @@ successfully using limited amounts of memory and enable dynamic memory sharing
 between concurrent queries to improve overall memory efficiency.</p>
 </section>
 <section id="runtime-statistics-collection">
-<h3>Runtime Statistics Collection<a class="headerlink" href="#runtime-statistics-collection" title="Permalink to this headline">¶</a></h3>
+<h3>Runtime Statistics Collection<a class="headerlink" href="#runtime-statistics-collection" title="Permalink to this heading">¶</a></h3>
 <p>Add the following RuntimeMetric stats to measure the spilling execution
 internals to help performance analysis in production:</p>
 <p><strong>Spill data size</strong>: spill bytes, spill rows, spill partitions, spill files and
@@ -589,7 +591,7 @@ ahead.</p></li>
 </ul>
 </section>
 <section id="spilling-extension">
-<h3>Spilling Extension<a class="headerlink" href="#spilling-extension" title="Permalink to this headline">¶</a></h3>
+<h3>Spilling Extension<a class="headerlink" href="#spilling-extension" title="Permalink to this heading">¶</a></h3>
 <p>Add spilling support for window operator.</p>
 </section>
 </section>
@@ -672,7 +674,7 @@ ahead.</p></li>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -696,7 +698,7 @@ ahead.</p></li>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

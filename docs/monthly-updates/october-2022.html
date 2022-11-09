@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>October 2022 Update &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="September 2022 Update" href="september-2022.html" />
@@ -42,9 +44,9 @@
           <div class="body" role="main">
             
   <section id="october-2022-update">
-<h1>October 2022 Update<a class="headerlink" href="#october-2022-update" title="Permalink to this headline">¶</a></h1>
+<h1>October 2022 Update<a class="headerlink" href="#october-2022-update" title="Permalink to this heading">¶</a></h1>
 <section id="core-library">
-<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this headline">¶</a></h2>
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add regular (not null aware) <a class="reference internal" href="../develop/anti-join.html"><span class="doc">Anti Join</span></a>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2906">#2906</a></p></li>
 <li><p>Add spilling support for Hash Join.</p></li>
@@ -55,7 +57,7 @@
 </ul>
 </section>
 <section id="presto-functions">
-<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add <a class="reference internal" href="../functions/math.html#truncate" title="truncate"><code class="xref py py-func docutils literal notranslate"><span class="pre">truncate()</span></code></a> function.</p></li>
 <li><p>Add <a class="reference internal" href="../functions/map.html#map_zip_with" title="map_zip_with"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_zip_with()</span></code></a> function.</p></li>
@@ -73,14 +75,14 @@ when one argument is a constant array with dictionary-encoded elements. <a class
 </ul>
 </section>
 <section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this headline">¶</a></h2>
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add support for DECIMAL types to Parquet reader.</p></li>
 <li><p>Add support for S3 FileSystem compatible schemes <cite>s3a</cite> and <cite>oss</cite>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2410">#2410</a></p></li>
 </ul>
 </section>
 <section id="performance-and-correctness">
-<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this headline">¶</a></h2>
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add mechanism to reproduce Fuzzer failures reliably: run ExpressionFuzzer
 with <cite>–repro_persist_path</cite> flag to save repro files, then run ExpressionRunner
@@ -91,13 +93,13 @@ Use <cite>–velox_fuzzer_enable_complex_types</cite> flag to enable.</p></li>
 </ul>
 </section>
 <section id="debugging-experience">
-<h2>Debugging Experience<a class="headerlink" href="#debugging-experience" title="Permalink to this headline">¶</a></h2>
+<h2>Debugging Experience<a class="headerlink" href="#debugging-experience" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Add printIndices(indices) and printNulls(nulls) functions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2723">#2723</a> and <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2721">#2721</a></p></li>
 </ul>
 </section>
 <section id="credits">
-<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this headline">¶</a></h2>
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
 <p>Adalto Correia, Aditi Pandit, Amit Dutta, Austin Dickey, Bikramjeet Vig, Chad
 Austin, Deepak Majeti, Ge Gao, Giuseppe Ottaviano, Gosh Arzumanyan, Huameng
 Jiang, Ivan Morett, Jacob Wujciak-Jens, Jake Jung, Jialiang Tan, Jimmy Lu,
@@ -158,7 +160,7 @@ shengxuan.liu, tanjialiang, xiaoxmeng, yingsu00, zhejiangxiaomai</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -182,7 +184,7 @@ shengxuan.liu, tanjialiang, xiaoxmeng, yingsu00, zhejiangxiaomai</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

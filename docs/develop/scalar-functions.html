@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>How to add a scalar function? &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="How to add an aggregate function?" href="aggregate-functions.html" />
@@ -42,9 +44,9 @@
           <div class="body" role="main">
             
   <section id="how-to-add-a-scalar-function">
-<h1>How to add a scalar function?<a class="headerlink" href="#how-to-add-a-scalar-function" title="Permalink to this headline">¶</a></h1>
+<h1>How to add a scalar function?<a class="headerlink" href="#how-to-add-a-scalar-function" title="Permalink to this heading">¶</a></h1>
 <section id="simple-functions">
-<h2>Simple Functions<a class="headerlink" href="#simple-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Simple Functions<a class="headerlink" href="#simple-functions" title="Permalink to this heading">¶</a></h2>
 <p>This document describes the main concepts, features, and examples of the simple
 function API in Velox. For more real-world API usage examples, check
 <strong>velox/example/SimpleFunctions.cpp</strong>.</p>
@@ -94,11 +96,6 @@ the result argument must match <a class="reference internal" href="types.html"><
 Since the result argument must be a reference, some of the types listed below
 have a different result argument type:</p>
 <table class="docutils align-default">
-<colgroup>
-<col style="width: 14%" />
-<col style="width: 43%" />
-<col style="width: 42%" />
-</colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Velox Type</p></th>
 <th class="head"><p>C++ Argument Type</p></th>
@@ -137,7 +134,7 @@ from and to the columnar representation without extra copying.</p>
 They are included here for completeness, but require a whole separate
 discussion.</p>
 <section id="null-behavior">
-<h3>Null Behavior<a class="headerlink" href="#null-behavior" title="Permalink to this headline">¶</a></h3>
+<h3>Null Behavior<a class="headerlink" href="#null-behavior" title="Permalink to this heading">¶</a></h3>
 <p>Most functions have default null behavior, e.g. a null value in any of the
 arguments produces a null result. The expression evaluation engine
 automatically produces nulls for such inputs, eliding a call to the actual
@@ -162,7 +159,7 @@ an artificial example of a ceil function that returns 0 for null input:</p>
 references to allow for specifying null values. callNullable() can also return
 void to indicate that the function does not produce null values.</p>
 <section id="null-free-fast-path">
-<h4>Null-Free Fast Path<a class="headerlink" href="#null-free-fast-path" title="Permalink to this headline">¶</a></h4>
+<h4>Null-Free Fast Path<a class="headerlink" href="#null-free-fast-path" title="Permalink to this heading">¶</a></h4>
 <p>A “callNullFree” function may be implemented in place of or along side “call”
 and/or “callNullable” functions. When only the “callNullFree” function is
 implemented, evaluation of the function will be skipped and null will
@@ -205,7 +202,7 @@ interface upon access.</p>
 </section>
 </section>
 <section id="determinism">
-<h3>Determinism<a class="headerlink" href="#determinism" title="Permalink to this headline">¶</a></h3>
+<h3>Determinism<a class="headerlink" href="#determinism" title="Permalink to this heading">¶</a></h3>
 <p>By default simple functions are assumed to be deterministic, e.g. given the
 same inputs they always produce the same results. If this is not the case,
 the function must define a static constexpr bool is_deterministic member:</p>
@@ -226,7 +223,7 @@ the function must define a static constexpr bool is_deterministic member:</p>
 </div>
 </section>
 <section id="all-ascii-fast-path">
-<h3>All-ASCII Fast Path<a class="headerlink" href="#all-ascii-fast-path" title="Permalink to this headline">¶</a></h3>
+<h3>All-ASCII Fast Path<a class="headerlink" href="#all-ascii-fast-path" title="Permalink to this heading">¶</a></h3>
 <p>Functions that process string inputs must work correctly for UTF-8 inputs.
 However, these functions often can be implemented more efficiently if input is
 known to contain only ASCII characters. Such functions can provide a “call”
@@ -268,7 +265,7 @@ scan the strings to determine whether they are ASCII or not.</p>
 </div>
 </section>
 <section id="zero-copy-string-result">
-<h3>Zero-copy String Result<a class="headerlink" href="#zero-copy-string-result" title="Permalink to this headline">¶</a></h3>
+<h3>Zero-copy String Result<a class="headerlink" href="#zero-copy-string-result" title="Permalink to this heading">¶</a></h3>
 <p>Functions like <a class="reference internal" href="../functions/string.html#id4" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> and <a class="reference internal" href="../functions/string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a> can produce zero-copy results by
 referencing input strings. To do that they must define a reuse_strings_from_arg
 member variable and initialize it to the index of the argument whose strings
@@ -283,7 +280,7 @@ and rows.</p>
 </div>
 </section>
 <section id="access-to-session-properties-and-constant-inputs">
-<h3>Access to Session Properties and Constant Inputs<a class="headerlink" href="#access-to-session-properties-and-constant-inputs" title="Permalink to this headline">¶</a></h3>
+<h3>Access to Session Properties and Constant Inputs<a class="headerlink" href="#access-to-session-properties-and-constant-inputs" title="Permalink to this heading">¶</a></h3>
 <p>Some functions require access to session properties such as session’s timezone.
 Some examples are the <a class="reference internal" href="../functions/datetime.html#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>, <a class="reference internal" href="../functions/datetime.html#hour" title="hour"><code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code></a>, and <a class="reference internal" href="../functions/datetime.html#minute" title="minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">minute()</span></code></a> Presto
 functions. Other functions could benefit from pre-processing some of the
@@ -358,7 +355,7 @@ reported as output for every single active row. If there are no active rows,
 the exception will not be raised.</p>
 </section>
 <section id="registration">
-<h3>Registration<a class="headerlink" href="#registration" title="Permalink to this headline">¶</a></h3>
+<h3>Registration<a class="headerlink" href="#registration" title="Permalink to this heading">¶</a></h3>
 <p>Use registerFunction template to register simple functions.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">class</span><span class="o">&gt;</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">Func</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">TReturn</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="p">...</span><span class="w"> </span><span class="n">TArgs</span><span class="o">&gt;</span><span class="w"></span>
 <span class="kt">void</span><span class="w"> </span><span class="n">registerFunction</span><span class="p">(</span><span class="w"></span>
@@ -387,7 +384,7 @@ precision and scale. We must explicitly <code class="xref py py-func docutils li
 required before passing them to simple functions.</p>
 </section>
 <section id="codegen">
-<h3>Codegen<a class="headerlink" href="#codegen" title="Permalink to this headline">¶</a></h3>
+<h3>Codegen<a class="headerlink" href="#codegen" title="Permalink to this heading">¶</a></h3>
 <p>To allow the function to be used in the codegen, extract the “kernel” of the
 function into a header file and call that from the “call” or “callNullable”.
 Here is an example with ceil function.</p>
@@ -415,9 +412,9 @@ Here is an example with ceil function.</p>
 as much as possible to allow for faster compilation in codegen.</p>
 </section>
 <section id="complex-types">
-<h3>Complex Types<a class="headerlink" href="#complex-types" title="Permalink to this headline">¶</a></h3>
+<h3>Complex Types<a class="headerlink" href="#complex-types" title="Permalink to this heading">¶</a></h3>
 <section id="inputs-view-types">
-<h4>Inputs (View Types)<a class="headerlink" href="#inputs-view-types" title="Permalink to this headline">¶</a></h4>
+<h4>Inputs (View Types)<a class="headerlink" href="#inputs-view-types" title="Permalink to this heading">¶</a></h4>
 <p>Input complex types are represented in the simple function interface using light-weight lazy
 access abstractions that enable efficient direct access to the underlying data in Velox
 vectors.
@@ -425,11 +422,6 @@ As mentioned earlier, the helper aliases arg_type and null_free_arg_type can be 
 map Velox types to the corresponding input types. The table below shows the actual types that are
 used to represent inputs of different complex types.</p>
 <table class="docutils align-default">
-<colgroup>
-<col style="width: 35%" />
-<col style="width: 29%" />
-<col style="width: 35%" />
-</colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>C++ Argument Type</p></th>
 <th class="head"><p>C++ Actual Argument Type</p></th>
@@ -627,7 +619,7 @@ assigned. And in such a case, the assignment has undefined behavior.</p>
 </div>
 </section>
 <section id="outputs-writer-types">
-<span id="outputs-write"></span><h4>Outputs (Writer Types)<a class="headerlink" href="#outputs-writer-types" title="Permalink to this headline">¶</a></h4>
+<span id="outputs-write"></span><h4>Outputs (Writer Types)<a class="headerlink" href="#outputs-writer-types" title="Permalink to this heading">¶</a></h4>
 <p>Outputs of complex types are represented using special writers that are designed in a way that
 minimizes data copying by writing directly to Velox vectors.</p>
 <p><strong>ArrayWriter&lt;V&gt;</strong></p>
@@ -702,7 +694,7 @@ primitives.</p>
 </ul>
 </section>
 <section id="limitations">
-<h4>Limitations<a class="headerlink" href="#limitations" title="Permalink to this headline">¶</a></h4>
+<h4>Limitations<a class="headerlink" href="#limitations" title="Permalink to this heading">¶</a></h4>
 <p>1. It is not possible to define functions that have generic output types,
 for example Array&lt;T&gt; output, where T is an input type.</p>
 <p>2. If a function throws an exception while writing a complex type, then the output of the
@@ -711,16 +703,12 @@ to avoid throwing exceptions after writing has started for a complex output with
 </section>
 </section>
 <section id="variadic-arguments">
-<h3>Variadic Arguments<a class="headerlink" href="#variadic-arguments" title="Permalink to this headline">¶</a></h3>
+<h3>Variadic Arguments<a class="headerlink" href="#variadic-arguments" title="Permalink to this heading">¶</a></h3>
 <p>The last argument to a simple function may be marked “Variadic”. This means
 invocations of this function may include 0..N arguments of that type at the end
 of the call.  While not a true type in Velox, “Variadic” can be thought of as a
 syntactic type, and behaves somewhat similarly to Array.</p>
 <table class="docutils align-default">
-<colgroup>
-<col style="width: 56%" />
-<col style="width: 44%" />
-</colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>C++ Argument Type</p></th>
 <th class="head"><p>C++ Actual Argument Type</p></th>
@@ -768,7 +756,7 @@ syntactic type, and behaves somewhat similarly to Array.</p>
 </section>
 </section>
 <section id="vector-functions">
-<h2>Vector Functions<a class="headerlink" href="#vector-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Vector Functions<a class="headerlink" href="#vector-functions" title="Permalink to this heading">¶</a></h2>
 <p>Simple functions process a single row and produce a single value as a result.
 Vector functions process a batch or rows and produce a vector of results.
 Some of the defining features of these functions are:</p>
@@ -800,7 +788,7 @@ implement the “apply” method.</p>
 </pre></div>
 </div>
 <section id="input-rows">
-<h3>Input rows<a class="headerlink" href="#input-rows" title="Permalink to this headline">¶</a></h3>
+<h3>Input rows<a class="headerlink" href="#input-rows" title="Permalink to this heading">¶</a></h3>
 <p>The “rows” parameter specifies the set of rows in the incoming batch to
 process. This set may not include all the rows. By default, a vector function
 is assumed to have the default null behavior, e.g. null in any input produces
@@ -849,7 +837,7 @@ the specified rows in a way that’s rather similar to a standard for loop.</p>
 </div>
 </section>
 <section id="input-vectors">
-<h3>Input vectors<a class="headerlink" href="#input-vectors" title="Permalink to this headline">¶</a></h3>
+<h3>Input vectors<a class="headerlink" href="#input-vectors" title="Permalink to this heading">¶</a></h3>
 <p>The “args” parameter is an std::vector of Velox vectors containing the values
 of the function arguments. These vectors are not necessarily flat and may be
 dictionary or constant encoded. However, a deterministic function that takes
@@ -872,7 +860,7 @@ vector. A helper class exec::DecodedArgs can be used to decode multiple argument
 </div>
 </section>
 <section id="result-vector">
-<h3>Result vector<a class="headerlink" href="#result-vector" title="Permalink to this headline">¶</a></h3>
+<h3>Result vector<a class="headerlink" href="#result-vector" title="Permalink to this heading">¶</a></h3>
 <p>The “result” parameter is a raw pointer to VectorPtr, which is a
 std::shared_ptr to BaseVector. It can be null, may point to a scratch vector
 that is maybe reusable or a partially populated vector whose contents must be
@@ -944,7 +932,7 @@ cardinality function for maps:</p>
 </div>
 </section>
 <section id="simple-implementation">
-<h3>Simple implementation<a class="headerlink" href="#simple-implementation" title="Permalink to this headline">¶</a></h3>
+<h3>Simple implementation<a class="headerlink" href="#simple-implementation" title="Permalink to this heading">¶</a></h3>
 <p>Vector function interface is very flexible and allows for many interesting
 optimizations. It may also feel very complicated. Let’s see how we can use
 DecodedVector and BaseVector::ensureWritable to implement the “power(a, b)”
@@ -1010,7 +998,7 @@ comes only from introducing optimization paths. Developers need to decide
 whether that complexity is justified on a case by case basis.</p>
 </section>
 <section id="try-expression-support">
-<h3>TRY expression support<a class="headerlink" href="#try-expression-support" title="Permalink to this headline">¶</a></h3>
+<h3>TRY expression support<a class="headerlink" href="#try-expression-support" title="Permalink to this heading">¶</a></h3>
 <p>A built-in TRY expression evaluates input expression and handles certain types
 of errors by returning NULL. It is used for the cases where it is preferable
 that queries produce NULL or default values instead of failing when corrupt
@@ -1046,7 +1034,7 @@ wraps the “call” and “callNullable” methods in a try-catch and reports e
 using context.setError.</p>
 </section>
 <section id="id1">
-<h3>Registration<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h3>
+<h3>Registration<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h3>
 <p>Use exec::registerVectorFunction to register a stateless vector function.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="n">registerVectorFunction</span><span class="p">(</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
@@ -1099,7 +1087,7 @@ once and reuse it for all the batches of data.</p>
 </div>
 </section>
 <section id="function-signature">
-<span id="id2"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Permalink to this headline">¶</a></h3>
+<span id="id2"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Permalink to this heading">¶</a></h3>
 <p>It is recommended to use FunctionSignatureBuilder to create FunctionSignature
 instances. FunctionSignatureBuilder and FunctionSignature support Java-like
 generics, variable number of arguments and lambdas. Here are some examples.</p>
@@ -1181,7 +1169,7 @@ types.</p>
 </section>
 </section>
 <section id="testing">
-<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this headline">¶</a></h2>
+<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this heading">¶</a></h2>
 <p>Add a test using FunctionBaseTest from
 velox/functions/prestosql/tests/utils/FunctionBaseTest.h as a base class. Name your test
 and the .cpp file &lt;function-name&gt;Test, e.g. CardinalityTest in
@@ -1249,7 +1237,7 @@ result. Here is an example of a test for simple function “sqrt”:</p>
 </div>
 </section>
 <section id="function-names">
-<h2>Function names<a class="headerlink" href="#function-names" title="Permalink to this headline">¶</a></h2>
+<h2>Function names<a class="headerlink" href="#function-names" title="Permalink to this heading">¶</a></h2>
 <p>For both simple and vector functions, their names are case insensitive. Function
 names are converted to lower case automatically when the functions are
 registered and when they are resolved for a given expression.</p>
@@ -1267,7 +1255,7 @@ names:</p>
 </ul>
 </section>
 <section id="function-resolution-order">
-<h2>Function Resolution order<a class="headerlink" href="#function-resolution-order" title="Permalink to this headline">¶</a></h2>
+<h2>Function Resolution order<a class="headerlink" href="#function-resolution-order" title="Permalink to this heading">¶</a></h2>
 <p>Vector functions have precedence over simple functions during function resolution. If a function <cite>foo</cite> has
 multiple implementations, then the order in which function resolution will proceed is as follows:</p>
 <blockquote>
@@ -1291,7 +1279,7 @@ and return the signature with highest concrete types count. (a concrete type is 
 When number of concrete types are the same, the call is ambiguous, and it’s undefined which function is called.</p>
 </section>
 <section id="benchmarking">
-<h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Permalink to this headline">¶</a></h2>
+<h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Permalink to this heading">¶</a></h2>
 <p>Add a benchmark using folly::Benchmark framework and FunctionBenchmarkBase
 from velox/functions/lib/benchmarks/FunctionBenchmarkBase.h as a base class.
 Benchmarks are a great way to check if an optimization is working, evaluate
@@ -1299,7 +1287,7 @@ how much benefit it brings and decide whether it is worth the additional
 complexity.</p>
 </section>
 <section id="documenting">
-<h2>Documenting<a class="headerlink" href="#documenting" title="Permalink to this headline">¶</a></h2>
+<h2>Documenting<a class="headerlink" href="#documenting" title="Permalink to this heading">¶</a></h2>
 <p>If a function implements Presto semantics, document it by adding an entry to
 one of the <cite>*.rst</cite> files in velox/docs/functions. Each file documents a set of
 related functions. E.g. math.rst contains all of the mathematical functions,
@@ -1385,7 +1373,7 @@ functions are listed in alphabetical order.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -1409,7 +1397,7 @@ functions are listed in alphabetical order.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

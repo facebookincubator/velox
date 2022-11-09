@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>How to add an aggregate function? &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="How to add a lambda function?" href="lambda-functions.html" />
@@ -42,7 +44,7 @@
           <div class="body" role="main">
             
   <section id="how-to-add-an-aggregate-function">
-<h1>How to add an aggregate function?<a class="headerlink" href="#how-to-add-an-aggregate-function" title="Permalink to this headline">¶</a></h1>
+<h1>How to add an aggregate function?<a class="headerlink" href="#how-to-add-an-aggregate-function" title="Permalink to this heading">¶</a></h1>
 <p>Aggregate functions are calculated by the HashAggregation operator.
 There can be one or more aggregate functions in a single operator.
 Here are some examples.</p>
@@ -74,11 +76,6 @@ parallel to reduce the amount of data sent to the final aggregation stage.</p>
 <p>The four types, steps, of aggregation are distinguished solely by the types of
 input and output.</p>
 <table class="docutils align-default">
-<colgroup>
-<col style="width: 38%" />
-<col style="width: 31%" />
-<col style="width: 31%" />
-</colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Step</p></th>
 <th class="head"><p>Input</p></th>
@@ -112,7 +109,7 @@ counts to produce a total.</p>
 <p>The signature of an aggregate function consists of the type of the raw input data,
 the type of the intermediate result and the type of the final result.</p>
 <section id="memory-layout">
-<h2>Memory Layout<a class="headerlink" href="#memory-layout" title="Permalink to this headline">¶</a></h2>
+<h2>Memory Layout<a class="headerlink" href="#memory-layout" title="Permalink to this heading">¶</a></h2>
 <p>HashAggregation operator stores data in rows. Each row corresponds to a unique combination of grouping key values. Global aggregations store data in a single row.</p>
 <p>Aggregate functions can be classified by the type of their accumulators into three groups:</p>
 <ul class="simple">
@@ -152,7 +149,7 @@ accumulators.</p>
 <a class="reference internal image-reference" href="../_images/aggregation-layout.png"><img alt="../_images/aggregation-layout.png" src="../_images/aggregation-layout.png" style="width: 600px;" /></a>
 </section>
 <section id="aggregate-class">
-<h2>Aggregate class<a class="headerlink" href="#aggregate-class" title="Permalink to this headline">¶</a></h2>
+<h2>Aggregate class<a class="headerlink" href="#aggregate-class" title="Permalink to this heading">¶</a></h2>
 <p>To add an aggregate function,</p>
 <ul class="simple">
 <li><dl class="simple">
@@ -173,7 +170,7 @@ inputs and intermediate results.</p></li>
 </ul>
 </section>
 <section id="accumulator-size">
-<h2>Accumulator size<a class="headerlink" href="#accumulator-size" title="Permalink to this headline">¶</a></h2>
+<h2>Accumulator size<a class="headerlink" href="#accumulator-size" title="Permalink to this heading">¶</a></h2>
 <p>The implementation of the velox::exec::Aggregate interface can start with <em>accumulatorFixedWidthSize()</em> method.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Returns the fixed number of bytes the accumulator takes on a group</span>
 <span class="c1">// row. Variable width accumulators will reference the variable</span>
@@ -217,7 +214,7 @@ inputs and intermediate results.</p></li>
 </div>
 </section>
 <section id="initialization">
-<h2>Initialization<a class="headerlink" href="#initialization" title="Permalink to this headline">¶</a></h2>
+<h2>Initialization<a class="headerlink" href="#initialization" title="Permalink to this heading">¶</a></h2>
 <p>Once you have accumulatorFixedWidthSize(), the next method to implement is initializeNewGroups().</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Initializes null flags and accumulators for newly encountered groups.</span>
 <span class="c1">// @param groups Pointers to the start of the new group rows.</span>
@@ -230,7 +227,7 @@ inputs and intermediate results.</p></li>
 <p>This method is called by the HashAggregation operator every time it encounters new combinations of the grouping keys. This method should initialize the accumulators for the new groups. For example, partial “count” and “sum” aggregates would set the accumulators to zero. Many aggregate functions would set null flags to true by calling the exec::Aggregate::setAllNulls(groups, indices) helper method.</p>
 </section>
 <section id="groupby-aggregation">
-<h2>GroupBy aggregation<a class="headerlink" href="#groupby-aggregation" title="Permalink to this headline">¶</a></h2>
+<h2>GroupBy aggregation<a class="headerlink" href="#groupby-aggregation" title="Permalink to this heading">¶</a></h2>
 <p>At this point you have accumulatorFixedWidthSize() and initializeNewGroups() methods implemented. Now, we can proceed to implementing the end-to-end group-by aggregation. We need the following pieces:</p>
 <ul class="simple">
 <li><dl class="simple">
@@ -271,7 +268,7 @@ inputs and intermediate results.</p></li>
 </ul>
 <p>Some methods are only used in a subset of aggregation workflows. The following
 tables shows which methods are used in which workflows.</p>
-<table class="colwidths-given docutils align-default">
+<table class="docutils align-default">
 <colgroup>
 <col style="width: 29%" />
 <col style="width: 14%" />
@@ -395,7 +392,7 @@ tables shows which methods are used in which workflows.</p>
 <p>GroupBy aggregation code path is done. We proceed to global aggregation.</p>
 </section>
 <section id="global-aggregation">
-<h2>Global aggregation<a class="headerlink" href="#global-aggregation" title="Permalink to this headline">¶</a></h2>
+<h2>Global aggregation<a class="headerlink" href="#global-aggregation" title="Permalink to this heading">¶</a></h2>
 <p>Global aggregation is similar to group-by aggregation, but there is only one group and one accumulator. After implementing group-by aggregation, the only thing needed to enable global aggregation is to implement addSingleGroupRawInput() method (addSingleGroupIntermediateResults() method is already implemented as it is used for spilling group by).</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Updates the single accumulator used for global aggregation.</span>
 <span class="c1">// @param group Pointer to the start of the group row.</span>
@@ -414,7 +411,7 @@ tables shows which methods are used in which workflows.</p>
 <p>Spilling is not helpful for global aggregations, hence, it is not supported. The
 following table shows which methods are used in different global aggregation
 workflows.</p>
-<table class="colwidths-given docutils align-default">
+<table class="docutils align-default">
 <colgroup>
 <col style="width: 29%" />
 <col style="width: 14%" />
@@ -465,7 +462,7 @@ workflows.</p>
 </table>
 </section>
 <section id="factory-function">
-<h2>Factory function<a class="headerlink" href="#factory-function" title="Permalink to this headline">¶</a></h2>
+<h2>Factory function<a class="headerlink" href="#factory-function" title="Permalink to this heading">¶</a></h2>
 <p>We can now write a factory function that creates an instance of the new
 aggregation function and register it by calling exec::registerAggregateFunction
 (…) and specifying function name and signatures.</p>
@@ -496,10 +493,10 @@ input type and result type.</p>
 <span class="w">        </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">isRawInput</span><span class="p">(</span><span class="n">step</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">argTypes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">resultType</span><span class="p">;</span><span class="w"></span>
 
 <span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">type</span><span class="o">-&gt;</span><span class="n">kind</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="n">BIGINT</span><span class="o">:</span><span class="w"></span>
+<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="no">TypeKind</span><span class="o">::</span><span class="no">BIGINT</span><span class="p">:</span><span class="w"></span>
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
 <span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
-<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="n">DOUBLE</span><span class="o">:</span><span class="w"></span>
+<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="no">TypeKind</span><span class="o">::</span><span class="no">DOUBLE</span><span class="p">:</span><span class="w"></span>
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
 <span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
 <span class="w">          </span><span class="p">...</span><span class="w"></span>
@@ -546,7 +543,7 @@ result type is the same as input value type.</p>
 </div>
 </section>
 <section id="testing">
-<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this headline">¶</a></h2>
+<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this heading">¶</a></h2>
 <p>It is time to put all the pieces together and test how well the new function
 works.</p>
 <p>Use AggregationTestBase from velox/aggregates/tests/AggregationTestBase.h as a
@@ -605,18 +602,18 @@ and <a class="reference internal" href="../functions/aggregate.html#min_by" titl
 inputs in the presence of ties.</p>
 </section>
 <section id="function-names">
-<h2>Function names<a class="headerlink" href="#function-names" title="Permalink to this headline">¶</a></h2>
+<h2>Function names<a class="headerlink" href="#function-names" title="Permalink to this heading">¶</a></h2>
 <p>Same as scalar functions, aggregate function names are case insensitive. The names
 are converted to lower case automatically when the functions are registered and
 when they are resolved for a given expression.</p>
 </section>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this headline">¶</a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
 <p>Finally, document the new function by adding an entry to velox/docs/functions/aggregate.rst</p>
 <p>You can see the documentation for all functions at <a class="reference internal" href="../functions/aggregate.html"><span class="doc">Aggregate Functions</span></a> and read about how documentation is generated at <a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/docs#velox-documentation">https://github.com/facebookincubator/velox/tree/main/velox/docs#velox-documentation</a></p>
 </section>
 <section id="accumulator">
-<h2>Accumulator<a class="headerlink" href="#accumulator" title="Permalink to this headline">¶</a></h2>
+<h2>Accumulator<a class="headerlink" href="#accumulator" title="Permalink to this heading">¶</a></h2>
 <p>Variable-width accumulators need to use <a class="reference internal" href="arena.html"><span class="doc">HashStringAllocator</span></a> to allocate memory. An instance of the allocator is available in the base class: <em>velox::exec::Aggregate::allocator_</em>.</p>
 <p>Sometimes you’ll need to create a custom accumulator. Sometimes one of the existing accumulators would do the jobs.</p>
 <p>SingleValueAccumulator used by <a class="reference internal" href="../functions/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> functions can be used to store a single value of variable-width type, e.g. string, array, map or struct.</p>
@@ -634,14 +631,14 @@ when they are resolved for a given expression.</p>
 </div>
 </section>
 <section id="end-to-end-testing">
-<h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Permalink to this headline">¶</a></h2>
+<h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Permalink to this heading">¶</a></h2>
 <p>To confirm that aggregate function works end to end as part of query, update testAggregations() test in TestHiveAggregationQueries.java in presto_cpp repo to add a query that uses the new function.</p>
-<div class="highlight-java notranslate"><div class="highlight"><pre><span></span><span class="n">assertQuery</span><span class="p">(</span><span class="s">&quot;SELECT orderkey, array_agg(linenumber) FROM lineitem GROUP BY 1&quot;</span><span class="p">);</span>
+<div class="highlight-java notranslate"><div class="highlight"><pre><span></span><span class="n">assertQuery</span><span class="p">(</span><span class="s">&quot;SELECT orderkey, array_agg(linenumber) FROM lineitem GROUP BY 1&quot;</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
 <section id="overwrite-intermediate-type-in-presto">
-<h2>Overwrite Intermediate Type in Presto<a class="headerlink" href="#overwrite-intermediate-type-in-presto" title="Permalink to this headline">¶</a></h2>
+<h2>Overwrite Intermediate Type in Presto<a class="headerlink" href="#overwrite-intermediate-type-in-presto" title="Permalink to this heading">¶</a></h2>
 <p>Sometimes we need to change the intermediate type of aggregation function in
 Presto, due to the differences in implementation or in the type information
 worker node receives.  This is done in Presto class
@@ -711,7 +708,7 @@ example pull request can be found at
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -735,7 +732,7 @@ example pull request can be found at
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

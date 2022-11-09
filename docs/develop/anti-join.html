@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Anti joins &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Plan Nodes and Operators" href="operators.html" />
@@ -42,7 +44,7 @@
           <div class="body" role="main">
             
   <section id="anti-joins">
-<h1>Anti joins<a class="headerlink" href="#anti-joins" title="Permalink to this headline">¶</a></h1>
+<h1>Anti joins<a class="headerlink" href="#anti-joins" title="Permalink to this heading">¶</a></h1>
 <p>Anti joins can be used to efficiently implement queries with NOT IN &lt;subquery&gt;
 and NOT EXISTS &lt;subquery&gt; clauses. The semantics of these queries are different
 in the presence of NULLs in the outer query or subquery. NOT IN semantics are
@@ -64,10 +66,6 @@ whether the semantics are NOT IN or NOT EXISTS. This topic is in active
 <p>It is easiest to understand the semantic differences using examples.</p>
 <p>Consider table t:</p>
 <table class="docutils align-default">
-<colgroup>
-<col style="width: 44%" />
-<col style="width: 56%" />
-</colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>id</p></th>
 <th class="head"><p>value</p></th>
@@ -87,10 +85,6 @@ whether the semantics are NOT IN or NOT EXISTS. This topic is in active
 </table>
 <p>and table u:</p>
 <table class="docutils align-default">
-<colgroup>
-<col style="width: 44%" />
-<col style="width: 56%" />
-</colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>id</p></th>
 <th class="head"><p>value</p></th>
@@ -150,7 +144,7 @@ the datasets above:</p>
 </pre></div>
 </div>
 <section id="not-in-subquery-semantics">
-<h2>NOT IN &lt;subquery&gt; Semantics<a class="headerlink" href="#not-in-subquery-semantics" title="Permalink to this headline">¶</a></h2>
+<h2>NOT IN &lt;subquery&gt; Semantics<a class="headerlink" href="#not-in-subquery-semantics" title="Permalink to this heading">¶</a></h2>
 <p>We need to consider 3 cases of NOT IN queries:</p>
 <ul class="simple">
 <li><p>Subquery returns a row with a NULL.</p></li>
@@ -158,7 +152,7 @@ the datasets above:</p>
 <li><p>Subquery returns one or more rows and no row has a NULL.</p></li>
 </ul>
 <section id="not-in-with-nulls-in-the-subquery">
-<h3>NOT IN with NULLs in the subquery<a class="headerlink" href="#not-in-with-nulls-in-the-subquery" title="Permalink to this headline">¶</a></h3>
+<h3>NOT IN with NULLs in the subquery<a class="headerlink" href="#not-in-with-nulls-in-the-subquery" title="Permalink to this heading">¶</a></h3>
 <p>Consider NOT IN query:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span><span class="w"></span>
 </pre></div>
@@ -197,7 +191,7 @@ NOT IN predicate.</p>
 </div>
 </section>
 <section id="not-in-without-nulls-in-the-subquery">
-<h3>NOT IN without NULLs in the subquery<a class="headerlink" href="#not-in-without-nulls-in-the-subquery" title="Permalink to this headline">¶</a></h3>
+<h3>NOT IN without NULLs in the subquery<a class="headerlink" href="#not-in-without-nulls-in-the-subquery" title="Permalink to this heading">¶</a></h3>
 <p>Now, consider NOT IN query where subquery doesn’t return NULLs (by removing
 NULLs from the u table or adding u.id IS NOT NULL predicate to the subquery).</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="w"></span>
@@ -224,7 +218,7 @@ hence, included in the results. 2 NOT IN (2, 3) returns false, hence, not
 included in the results.</p>
 </section>
 <section id="not-in-with-empty-subquery">
-<h3>NOT IN with empty subquery<a class="headerlink" href="#not-in-with-empty-subquery" title="Permalink to this headline">¶</a></h3>
+<h3>NOT IN with empty subquery<a class="headerlink" href="#not-in-with-empty-subquery" title="Permalink to this heading">¶</a></h3>
 <p>Now, consider a NOT IN query with a subquery that returns empty results
 (by removing all rows from the u table or adding an always false predicate to
 the subquery).</p>
@@ -252,7 +246,7 @@ the subquery).</p>
 </section>
 </section>
 <section id="not-exists-subquery-semantics">
-<h2>NOT EXISTS &lt;subquery&gt; Semantics<a class="headerlink" href="#not-exists-subquery-semantics" title="Permalink to this headline">¶</a></h2>
+<h2>NOT EXISTS &lt;subquery&gt; Semantics<a class="headerlink" href="#not-exists-subquery-semantics" title="Permalink to this heading">¶</a></h2>
 <p>Similar to NOT IN queries, we consider 3 cases:</p>
 <ul class="simple">
 <li><p>Subquery returns a row with a NULL.</p></li>
@@ -260,7 +254,7 @@ the subquery).</p>
 <li><p>Subquery returns one or more rows and no row has a NULL.</p></li>
 </ul>
 <section id="not-exists-with-nulls-in-the-subquery">
-<h3>NOT EXISTS with NULLs in the subquery<a class="headerlink" href="#not-exists-with-nulls-in-the-subquery" title="Permalink to this headline">¶</a></h3>
+<h3>NOT EXISTS with NULLs in the subquery<a class="headerlink" href="#not-exists-with-nulls-in-the-subquery" title="Permalink to this heading">¶</a></h3>
 <p>Consider NOT EXISTS query:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">id</span><span class="p">)</span><span class="w"></span>
 </pre></div>
@@ -303,7 +297,7 @@ subquery results are not empty, hence, the NOT EXISTS &lt;subquery&gt; clause
 evaluates to false.</p>
 </section>
 <section id="not-exists-without-nulls-in-the-subquery">
-<h3>NOT EXISTS without NULLs in the subquery<a class="headerlink" href="#not-exists-without-nulls-in-the-subquery" title="Permalink to this headline">¶</a></h3>
+<h3>NOT EXISTS without NULLs in the subquery<a class="headerlink" href="#not-exists-without-nulls-in-the-subquery" title="Permalink to this heading">¶</a></h3>
 <p>Now, consider NOT EXISTS query with no nulls in the subquery:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">(</span><span class="w"></span>
 <span class="w">        </span><span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"></span>
@@ -329,7 +323,7 @@ query is not sensitive for NULLs in the subquery.</p>
 </div>
 </section>
 <section id="not-exists-with-empty-subquery">
-<h3>NOT EXISTS with empty subquery<a class="headerlink" href="#not-exists-with-empty-subquery" title="Permalink to this headline">¶</a></h3>
+<h3>NOT EXISTS with empty subquery<a class="headerlink" href="#not-exists-with-empty-subquery" title="Permalink to this heading">¶</a></h3>
 <p>Now, consider a NOT EXISTS query with a subquery that returns empty results.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">(</span><span class="w"></span>
 <span class="w">        </span><span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="w"></span>
@@ -355,12 +349,12 @@ queries are the same.</p>
 </section>
 </section>
 <section id="implementation">
-<h2>Implementation<a class="headerlink" href="#implementation" title="Permalink to this headline">¶</a></h2>
+<h2>Implementation<a class="headerlink" href="#implementation" title="Permalink to this heading">¶</a></h2>
 <p>NOT IN and NOT EXISTS queries can be implemented efficiently using anti joins.
 NOT IN queries are implemented using NULL AWARE ANTI JOIN. NOT EXISTS queries
 are implemented using regular ANTI JOIN.</p>
 <section id="null-aware-anti-join">
-<h3>NULL AWARE ANTI JOIN<a class="headerlink" href="#null-aware-anti-join" title="Permalink to this headline">¶</a></h3>
+<h3>NULL AWARE ANTI JOIN<a class="headerlink" href="#null-aware-anti-join" title="Permalink to this heading">¶</a></h3>
 <p>NULL AWARE ANTI JOIN is used to implement NOT IN queries.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span><span class="w"></span>
 </pre></div>
@@ -394,7 +388,7 @@ nulls in the partition-by keys to all destinations and also replicates one
 arbitrary chosen row with no nulls in the partition-by keys.</p>
 </section>
 <section id="anti-join">
-<h3>ANTI JOIN<a class="headerlink" href="#anti-join" title="Permalink to this headline">¶</a></h3>
+<h3>ANTI JOIN<a class="headerlink" href="#anti-join" title="Permalink to this heading">¶</a></h3>
 <p>Regular ANTI JOIN is used to implement NOT EXISTS queries.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">id</span><span class="p">)</span><span class="w"></span>
 </pre></div>
@@ -428,7 +422,7 @@ keys.</p></li>
 </section>
 </section>
 <section id="anti-joins-with-extra-filter">
-<h2>ANTI JOINs with Extra Filter<a class="headerlink" href="#anti-joins-with-extra-filter" title="Permalink to this headline">¶</a></h2>
+<h2>ANTI JOINs with Extra Filter<a class="headerlink" href="#anti-joins-with-extra-filter" title="Permalink to this heading">¶</a></h2>
 <p>NOT IN and NOT EXISTS queries may contain non-equality conditions that use
 columns from the outer query in the subqueries. For example,</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">u</span><span class="p">.</span><span class="n">value</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">value</span><span class="p">)</span><span class="w"></span>
@@ -500,7 +494,7 @@ examples above, the implementations use null aware anti joins with extra
 filters u.value &gt; t.value and u.value * t.value &gt; 0.</p>
 <p>The presence of extra filters changes the implementation of anti join.</p>
 <section id="null-aware-anti-join-with-filter">
-<h3>NULL AWARE ANTI JOIN with Filter<a class="headerlink" href="#null-aware-anti-join-with-filter" title="Permalink to this headline">¶</a></h3>
+<h3>NULL AWARE ANTI JOIN with Filter<a class="headerlink" href="#null-aware-anti-join-with-filter" title="Permalink to this heading">¶</a></h3>
 <p>In the presence of an extra filter, null aware anti join cannot finish early
 upon encountering a null in the join key on the right side. The join must
 finish building the hash table and include all rows, even the ones with nulls
@@ -538,7 +532,7 @@ replicated (broadcasted) to all the nodes evaluating the join. This is achieved
 using replicate-nulls-and-any partitioning strategy.</p>
 </section>
 <section id="anti-join-with-filter">
-<h3>ANTI JOIN with Filter<a class="headerlink" href="#anti-join-with-filter" title="Permalink to this headline">¶</a></h3>
+<h3>ANTI JOIN with Filter<a class="headerlink" href="#anti-join-with-filter" title="Permalink to this heading">¶</a></h3>
 <p>In the presence of an extra filter, regular anti join can still unconditionally
 return left side rows with nulls in the join key. The subquery with an extra
 filter still returns an empty result for these rows.</p>
@@ -614,7 +608,7 @@ If the filter comes out empty, the row is included in the results.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -638,7 +632,7 @@ If the filter comes out empty, the row is included in the results.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

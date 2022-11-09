@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>HyperLogLog Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Configuration properties" href="../configs.html" />
@@ -42,11 +44,11 @@
           <div class="body" role="main">
             
   <section id="hyperloglog-functions">
-<h1>HyperLogLog Functions<a class="headerlink" href="#hyperloglog-functions" title="Permalink to this headline">¶</a></h1>
+<h1>HyperLogLog Functions<a class="headerlink" href="#hyperloglog-functions" title="Permalink to this heading">¶</a></h1>
 <p>Velox implements the Presto’s <a class="reference internal" href="aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> function using the
 <a class="reference external" href="https://en.wikipedia.org/wiki/HyperLogLog">HyperLogLog</a> data structure.</p>
 <section id="data-structures">
-<h2>Data Structures<a class="headerlink" href="#data-structures" title="Permalink to this headline">¶</a></h2>
+<h2>Data Structures<a class="headerlink" href="#data-structures" title="Permalink to this heading">¶</a></h2>
 <p>Like Presto, Velox implements HyperLogLog data sketches as a set of 32-bit
 buckets which store a <em>maximum hash</em>. They can be stored sparsely (as a map
 from bucket ID to bucket), or densely (as a contiguous memory block). The
@@ -54,7 +56,7 @@ HyperLogLog data structure starts as the sparse representation, switching to
 dense when it is more efficient.</p>
 </section>
 <section id="serialization">
-<h2>Serialization<a class="headerlink" href="#serialization" title="Permalink to this headline">¶</a></h2>
+<h2>Serialization<a class="headerlink" href="#serialization" title="Permalink to this heading">¶</a></h2>
 <p>Data sketches can be serialized to and deserialized from <code class="docutils literal notranslate"><span class="pre">varbinary</span></code>. This
 allows them to be stored for later use.  Combined with the ability to merge
 multiple sketches, this allows one to calculate <a class="reference internal" href="aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> of the
@@ -66,7 +68,7 @@ dailies. This is similar to computing weekly revenue by summing daily revenue.</
 <p>Serialization format is compatible (actually, identical) to Presto’s.</p>
 </section>
 <section id="functions">
-<h2>Functions<a class="headerlink" href="#functions" title="Permalink to this headline">¶</a></h2>
+<h2>Functions<a class="headerlink" href="#functions" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="approx_set">
 <span class="sig-name descname"><span class="pre">approx_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#approx_set" title="Permalink to this definition">¶</a></dt>
@@ -131,7 +133,14 @@ HyperLogLog structures.</p>
 <li><a class="reference internal" href="#">HyperLogLog Functions</a><ul>
 <li><a class="reference internal" href="#data-structures">Data Structures</a></li>
 <li><a class="reference internal" href="#serialization">Serialization</a></li>
-<li><a class="reference internal" href="#functions">Functions</a></li>
+<li><a class="reference internal" href="#functions">Functions</a><ul>
+<li><a class="reference internal" href="#approx_set"><code class="docutils literal notranslate"><span class="pre">approx_set()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">approx_set()</span></code></a></li>
+<li><a class="reference internal" href="#empty_approx_set"><code class="docutils literal notranslate"><span class="pre">empty_approx_set()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">empty_approx_set()</span></code></a></li>
+<li><a class="reference internal" href="#merge"><code class="docutils literal notranslate"><span class="pre">merge()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -163,7 +172,7 @@ HyperLogLog structures.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -187,7 +196,7 @@ HyperLogLog structures.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

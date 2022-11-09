@@ -193,6 +193,8 @@ div.seealso {
     background-color: #ffc;
     border: 1px solid #ff6;
 }
+nav.contents,
+aside.topic,
 
 div.topic {
     background-color: #eee;

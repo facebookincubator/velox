@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>URL Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Aggregate Functions" href="aggregate.html" />
@@ -42,9 +44,9 @@
           <div class="body" role="main">
             
   <section id="url-functions">
-<h1>URL Functions<a class="headerlink" href="#url-functions" title="Permalink to this headline">¶</a></h1>
+<h1>URL Functions<a class="headerlink" href="#url-functions" title="Permalink to this heading">¶</a></h1>
 <section id="extraction-functions">
-<h2>Extraction Functions<a class="headerlink" href="#extraction-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Extraction Functions<a class="headerlink" href="#extraction-functions" title="Permalink to this heading">¶</a></h2>
 <p>The URL extraction functions extract components from HTTP URLs (or any valid URIs conforming to <a class="reference external" href="https://tools.ietf.org/html/rfc2396.html">RFC 2396</a>). The following syntax is supported:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="o">[</span>protocol:<span class="o">][</span>//host<span class="o">[</span>:port<span class="o">]][</span>path<span class="o">][</span>?query<span class="o">][</span><span class="c1">#fragment]</span>
 </pre></div>
@@ -94,7 +96,7 @@
 
 </section>
 <section id="encoding-functions">
-<h2>Encoding Functions<a class="headerlink" href="#encoding-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Encoding Functions<a class="headerlink" href="#encoding-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="url_encode">
 <span class="sig-name descname"><span class="pre">url_encode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_encode" title="Permalink to this definition">¶</a></dt>
@@ -131,8 +133,21 @@ This function is the inverse of <a class="reference internal" href="#url_encode"
     <h3><a href="../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">URL Functions</a><ul>
-<li><a class="reference internal" href="#extraction-functions">Extraction Functions</a></li>
-<li><a class="reference internal" href="#encoding-functions">Encoding Functions</a></li>
+<li><a class="reference internal" href="#extraction-functions">Extraction Functions</a><ul>
+<li><a class="reference internal" href="#url_extract_fragment"><code class="docutils literal notranslate"><span class="pre">url_extract_fragment()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_host"><code class="docutils literal notranslate"><span class="pre">url_extract_host()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_parameter"><code class="docutils literal notranslate"><span class="pre">url_extract_parameter()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_path"><code class="docutils literal notranslate"><span class="pre">url_extract_path()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_port"><code class="docutils literal notranslate"><span class="pre">url_extract_port()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_protocol"><code class="docutils literal notranslate"><span class="pre">url_extract_protocol()</span></code></a></li>
+<li><a class="reference internal" href="#url_extract_query"><code class="docutils literal notranslate"><span class="pre">url_extract_query()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#encoding-functions">Encoding Functions</a><ul>
+<li><a class="reference internal" href="#url_encode"><code class="docutils literal notranslate"><span class="pre">url_encode()</span></code></a></li>
+<li><a class="reference internal" href="#url_decode"><code class="docutils literal notranslate"><span class="pre">url_decode()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -164,7 +179,7 @@ This function is the inverse of <a class="reference internal" href="#url_encode"
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -188,7 +203,7 @@ This function is the inverse of <a class="reference internal" href="#url_encode"
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

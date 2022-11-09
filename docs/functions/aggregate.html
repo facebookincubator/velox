@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Aggregate Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Window functions" href="window.html" />
@@ -42,7 +44,7 @@
           <div class="body" role="main">
             
   <section id="aggregate-functions">
-<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h1>
 <p>Aggregate functions operate on a set of values to compute a single result.</p>
 <p>Except for <a class="reference internal" href="#id0" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a>, <a class="reference internal" href="#count_if" title="count_if"><code class="xref py py-func docutils literal notranslate"><span class="pre">count_if()</span></code></a>, <a class="reference internal" href="#max_by" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a>, <a class="reference internal" href="#min_by" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a> and
 <a class="reference internal" href="#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a>, all of these aggregate functions ignore null values
@@ -53,7 +55,7 @@ zero.</p>
 <p>Some aggregate functions such as <a class="reference internal" href="#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> produce different results
 depending on the order of input values.</p>
 <section id="general-aggregate-functions">
-<h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="arbitrary">
 <span class="sig-name descname"><span class="pre">arbitrary</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#arbitrary" title="Permalink to this definition">¶</a></dt>
@@ -157,7 +159,7 @@ boolean, timestamp, and date input types.</p>
 
 </section>
 <section id="bitwise-aggregate-functions">
-<h2>Bitwise Aggregate Functions<a class="headerlink" href="#bitwise-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Bitwise Aggregate Functions<a class="headerlink" href="#bitwise-aggregate-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="bitwise_and_agg">
 <span class="sig-name descname"><span class="pre">bitwise_and_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#bitwise_and_agg" title="Permalink to this definition">¶</a></dt>
@@ -172,7 +174,7 @@ boolean, timestamp, and date input types.</p>
 
 </section>
 <section id="map-aggregate-functions">
-<h2>Map Aggregate Functions<a class="headerlink" href="#map-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Map Aggregate Functions<a class="headerlink" href="#map-aggregate-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="map_agg">
 <span class="sig-name descname"><span class="pre">map_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_agg" title="Permalink to this definition">¶</a></dt>
@@ -189,7 +191,7 @@ that <code class="docutils literal notranslate"><span class="pre">key’s</span>
 
 </section>
 <section id="approximate-aggregate-functions">
-<h2>Approximate Aggregate Functions<a class="headerlink" href="#approximate-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Approximate Aggregate Functions<a class="headerlink" href="#approximate-aggregate-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="approx_distinct">
 <span class="sig-name descname"><span class="pre">approx_distinct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#approx_distinct" title="Permalink to this definition">¶</a></dt>
@@ -306,7 +308,7 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
 
 </section>
 <section id="statistical-aggregate-functions">
-<h2>Statistical Aggregate Functions<a class="headerlink" href="#statistical-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<h2>Statistical Aggregate Functions<a class="headerlink" href="#statistical-aggregate-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="corr">
 <span class="sig-name descname"><span class="pre">corr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#corr" title="Permalink to this definition">¶</a></dt>
@@ -363,7 +365,7 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
 
 </section>
 <section id="miscellaneous">
-<h2>Miscellaneous<a class="headerlink" href="#miscellaneous" title="Permalink to this headline">¶</a></h2>
+<h2>Miscellaneous<a class="headerlink" href="#miscellaneous" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="max_data_size_for_stats">
 <span class="sig-name descname"><span class="pre">max_data_size_for_stats</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#max_data_size_for_stats" title="Permalink to this definition">¶</a></dt>
@@ -384,12 +386,65 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
     <h3><a href="../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a></li>
-<li><a class="reference internal" href="#bitwise-aggregate-functions">Bitwise Aggregate Functions</a></li>
-<li><a class="reference internal" href="#map-aggregate-functions">Map Aggregate Functions</a></li>
-<li><a class="reference internal" href="#approximate-aggregate-functions">Approximate Aggregate Functions</a></li>
-<li><a class="reference internal" href="#statistical-aggregate-functions">Statistical Aggregate Functions</a></li>
-<li><a class="reference internal" href="#miscellaneous">Miscellaneous</a></li>
+<li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#arbitrary"><code class="docutils literal notranslate"><span class="pre">arbitrary()</span></code></a></li>
+<li><a class="reference internal" href="#array_agg"><code class="docutils literal notranslate"><span class="pre">array_agg()</span></code></a></li>
+<li><a class="reference internal" href="#avg"><code class="docutils literal notranslate"><span class="pre">avg()</span></code></a></li>
+<li><a class="reference internal" href="#bool_and"><code class="docutils literal notranslate"><span class="pre">bool_and()</span></code></a></li>
+<li><a class="reference internal" href="#bool_or"><code class="docutils literal notranslate"><span class="pre">bool_or()</span></code></a></li>
+<li><a class="reference internal" href="#checksum"><code class="docutils literal notranslate"><span class="pre">checksum()</span></code></a></li>
+<li><a class="reference internal" href="#count"><code class="docutils literal notranslate"><span class="pre">count()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">count()</span></code></a></li>
+<li><a class="reference internal" href="#count_if"><code class="docutils literal notranslate"><span class="pre">count_if()</span></code></a></li>
+<li><a class="reference internal" href="#every"><code class="docutils literal notranslate"><span class="pre">every()</span></code></a></li>
+<li><a class="reference internal" href="#histogram"><code class="docutils literal notranslate"><span class="pre">histogram()</span></code></a></li>
+<li><a class="reference internal" href="#max_by"><code class="docutils literal notranslate"><span class="pre">max_by()</span></code></a></li>
+<li><a class="reference internal" href="#min_by"><code class="docutils literal notranslate"><span class="pre">min_by()</span></code></a></li>
+<li><a class="reference internal" href="#max"><code class="docutils literal notranslate"><span class="pre">max()</span></code></a></li>
+<li><a class="reference internal" href="#min"><code class="docutils literal notranslate"><span class="pre">min()</span></code></a></li>
+<li><a class="reference internal" href="#sum"><code class="docutils literal notranslate"><span class="pre">sum()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#bitwise-aggregate-functions">Bitwise Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#bitwise_and_agg"><code class="docutils literal notranslate"><span class="pre">bitwise_and_agg()</span></code></a></li>
+<li><a class="reference internal" href="#bitwise_or_agg"><code class="docutils literal notranslate"><span class="pre">bitwise_or_agg()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#map-aggregate-functions">Map Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#map_agg"><code class="docutils literal notranslate"><span class="pre">map_agg()</span></code></a></li>
+<li><a class="reference internal" href="#map_union"><code class="docutils literal notranslate"><span class="pre">map_union()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#approximate-aggregate-functions">Approximate Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#approx_distinct"><code class="docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a></li>
+<li><a class="reference internal" href="#approx_most_frequent"><code class="docutils literal notranslate"><span class="pre">approx_most_frequent()</span></code></a></li>
+<li><a class="reference internal" href="#approx_percentile"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
+<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
+<li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
+<li><a class="reference internal" href="#id5"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
+<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
+<li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
+<li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
+<li><a class="reference internal" href="#id9"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#statistical-aggregate-functions">Statistical Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#corr"><code class="docutils literal notranslate"><span class="pre">corr()</span></code></a></li>
+<li><a class="reference internal" href="#covar_pop"><code class="docutils literal notranslate"><span class="pre">covar_pop()</span></code></a></li>
+<li><a class="reference internal" href="#covar_samp"><code class="docutils literal notranslate"><span class="pre">covar_samp()</span></code></a></li>
+<li><a class="reference internal" href="#stddev"><code class="docutils literal notranslate"><span class="pre">stddev()</span></code></a></li>
+<li><a class="reference internal" href="#stddev_pop"><code class="docutils literal notranslate"><span class="pre">stddev_pop()</span></code></a></li>
+<li><a class="reference internal" href="#stddev_samp"><code class="docutils literal notranslate"><span class="pre">stddev_samp()</span></code></a></li>
+<li><a class="reference internal" href="#variance"><code class="docutils literal notranslate"><span class="pre">variance()</span></code></a></li>
+<li><a class="reference internal" href="#var_pop"><code class="docutils literal notranslate"><span class="pre">var_pop()</span></code></a></li>
+<li><a class="reference internal" href="#var_samp"><code class="docutils literal notranslate"><span class="pre">var_samp()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#miscellaneous">Miscellaneous</a><ul>
+<li><a class="reference internal" href="#max_data_size_for_stats"><code class="docutils literal notranslate"><span class="pre">max_data_size_for_stats()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -421,7 +476,7 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -445,7 +500,7 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

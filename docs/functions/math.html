@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Mathematical Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Bitwise Functions" href="bitwise.html" />
@@ -42,7 +44,7 @@
           <div class="body" role="main">
             
   <section id="mathematical-functions">
-<h1>Mathematical Functions<a class="headerlink" href="#mathematical-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Mathematical Functions<a class="headerlink" href="#mathematical-functions" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="abs">
 <span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#abs" title="Permalink to this definition">¶</a></dt>
@@ -266,7 +268,7 @@ is assumed to be in sorted ascending order.</p>
 
 </section>
 <section id="trigonometric-functions">
-<h1>Trigonometric Functions<a class="headerlink" href="#trigonometric-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Trigonometric Functions<a class="headerlink" href="#trigonometric-functions" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="acos">
 <span class="sig-name descname"><span class="pre">acos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#acos" title="Permalink to this definition">¶</a></dt>
@@ -323,7 +325,7 @@ is assumed to be in sorted ascending order.</p>
 
 </section>
 <section id="floating-point-functions">
-<h1>Floating Point Functions<a class="headerlink" href="#floating-point-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Floating Point Functions<a class="headerlink" href="#floating-point-functions" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="infinity">
 <span class="sig-name descname"><span class="pre">infinity</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#infinity" title="Permalink to this definition">¶</a></dt>
@@ -366,9 +368,62 @@ is assumed to be in sorted ascending order.</p>
   <div>
     <h3><a href="../index.html">Table of Contents</a></h3>
     <ul>
-<li><a class="reference internal" href="#">Mathematical Functions</a></li>
-<li><a class="reference internal" href="#trigonometric-functions">Trigonometric Functions</a></li>
-<li><a class="reference internal" href="#floating-point-functions">Floating Point Functions</a></li>
+<li><a class="reference internal" href="#">Mathematical Functions</a><ul>
+<li><a class="reference internal" href="#abs"><code class="docutils literal notranslate"><span class="pre">abs()</span></code></a></li>
+<li><a class="reference internal" href="#cbrt"><code class="docutils literal notranslate"><span class="pre">cbrt()</span></code></a></li>
+<li><a class="reference internal" href="#ceil"><code class="docutils literal notranslate"><span class="pre">ceil()</span></code></a></li>
+<li><a class="reference internal" href="#ceiling"><code class="docutils literal notranslate"><span class="pre">ceiling()</span></code></a></li>
+<li><a class="reference internal" href="#clamp"><code class="docutils literal notranslate"><span class="pre">clamp()</span></code></a></li>
+<li><a class="reference internal" href="#degrees"><code class="docutils literal notranslate"><span class="pre">degrees()</span></code></a></li>
+<li><a class="reference internal" href="#divide"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
+<li><a class="reference internal" href="#e"><code class="docutils literal notranslate"><span class="pre">e()</span></code></a></li>
+<li><a class="reference internal" href="#exp"><code class="docutils literal notranslate"><span class="pre">exp()</span></code></a></li>
+<li><a class="reference internal" href="#floor"><code class="docutils literal notranslate"><span class="pre">floor()</span></code></a></li>
+<li><a class="reference internal" href="#from_base"><code class="docutils literal notranslate"><span class="pre">from_base()</span></code></a></li>
+<li><a class="reference internal" href="#ln"><code class="docutils literal notranslate"><span class="pre">ln()</span></code></a></li>
+<li><a class="reference internal" href="#log2"><code class="docutils literal notranslate"><span class="pre">log2()</span></code></a></li>
+<li><a class="reference internal" href="#log10"><code class="docutils literal notranslate"><span class="pre">log10()</span></code></a></li>
+<li><a class="reference internal" href="#minus"><code class="docutils literal notranslate"><span class="pre">minus()</span></code></a></li>
+<li><a class="reference internal" href="#mod"><code class="docutils literal notranslate"><span class="pre">mod()</span></code></a></li>
+<li><a class="reference internal" href="#multiply"><code class="docutils literal notranslate"><span class="pre">multiply()</span></code></a></li>
+<li><a class="reference internal" href="#negate"><code class="docutils literal notranslate"><span class="pre">negate()</span></code></a></li>
+<li><a class="reference internal" href="#pi"><code class="docutils literal notranslate"><span class="pre">pi()</span></code></a></li>
+<li><a class="reference internal" href="#plus"><code class="docutils literal notranslate"><span class="pre">plus()</span></code></a></li>
+<li><a class="reference internal" href="#pow"><code class="docutils literal notranslate"><span class="pre">pow()</span></code></a></li>
+<li><a class="reference internal" href="#power"><code class="docutils literal notranslate"><span class="pre">power()</span></code></a></li>
+<li><a class="reference internal" href="#radians"><code class="docutils literal notranslate"><span class="pre">radians()</span></code></a></li>
+<li><a class="reference internal" href="#rand"><code class="docutils literal notranslate"><span class="pre">rand()</span></code></a></li>
+<li><a class="reference internal" href="#random"><code class="docutils literal notranslate"><span class="pre">random()</span></code></a></li>
+<li><a class="reference internal" href="#round"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
+<li><a class="reference internal" href="#sqrt"><code class="docutils literal notranslate"><span class="pre">sqrt()</span></code></a></li>
+<li><a class="reference internal" href="#to_base"><code class="docutils literal notranslate"><span class="pre">to_base()</span></code></a></li>
+<li><a class="reference internal" href="#truncate"><code class="docutils literal notranslate"><span class="pre">truncate()</span></code></a></li>
+<li><a class="reference internal" href="#width_bucket"><code class="docutils literal notranslate"><span class="pre">width_bucket()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">width_bucket()</span></code></a></li>
+<li><a class="reference internal" href="#sign"><code class="docutils literal notranslate"><span class="pre">sign()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#trigonometric-functions">Trigonometric Functions</a><ul>
+<li><a class="reference internal" href="#acos"><code class="docutils literal notranslate"><span class="pre">acos()</span></code></a></li>
+<li><a class="reference internal" href="#asin"><code class="docutils literal notranslate"><span class="pre">asin()</span></code></a></li>
+<li><a class="reference internal" href="#atan"><code class="docutils literal notranslate"><span class="pre">atan()</span></code></a></li>
+<li><a class="reference internal" href="#atan2"><code class="docutils literal notranslate"><span class="pre">atan2()</span></code></a></li>
+<li><a class="reference internal" href="#cos"><code class="docutils literal notranslate"><span class="pre">cos()</span></code></a></li>
+<li><a class="reference internal" href="#cosh"><code class="docutils literal notranslate"><span class="pre">cosh()</span></code></a></li>
+<li><a class="reference internal" href="#sin"><code class="docutils literal notranslate"><span class="pre">sin()</span></code></a></li>
+<li><a class="reference internal" href="#tan"><code class="docutils literal notranslate"><span class="pre">tan()</span></code></a></li>
+<li><a class="reference internal" href="#tanh"><code class="docutils literal notranslate"><span class="pre">tanh()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#floating-point-functions">Floating Point Functions</a><ul>
+<li><a class="reference internal" href="#infinity"><code class="docutils literal notranslate"><span class="pre">infinity()</span></code></a></li>
+<li><a class="reference internal" href="#is_finite"><code class="docutils literal notranslate"><span class="pre">is_finite()</span></code></a></li>
+<li><a class="reference internal" href="#is_infinite"><code class="docutils literal notranslate"><span class="pre">is_infinite()</span></code></a></li>
+<li><a class="reference internal" href="#is_nan"><code class="docutils literal notranslate"><span class="pre">is_nan()</span></code></a></li>
+<li><a class="reference internal" href="#nan"><code class="docutils literal notranslate"><span class="pre">nan()</span></code></a></li>
+</ul>
+</li>
 </ul>
 
   </div>
@@ -398,7 +453,7 @@ is assumed to be in sorted ascending order.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -422,7 +477,7 @@ is assumed to be in sorted ascending order.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Dictionary Encoding &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Arena Allocation" href="arena.html" />
@@ -42,9 +44,9 @@
           <div class="body" role="main">
             
   <section id="dictionary-encoding">
-<h1>Dictionary Encoding<a class="headerlink" href="#dictionary-encoding" title="Permalink to this headline">¶</a></h1>
+<h1>Dictionary Encoding<a class="headerlink" href="#dictionary-encoding" title="Permalink to this heading">¶</a></h1>
 <section id="introduction">
-<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this headline">¶</a></h2>
+<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h2>
 <p>Velox makes extensive use of Dictionary encoding to avoid data copying.
 Dictionary encoding is used to compactly represent repeated values and to
 represent a subset of rows without copying data.</p>
@@ -52,10 +54,6 @@ represent a subset of rows without copying data.</p>
 <p>Let’s say we have a table of people’s favourite colors. First column is a
 person’s name. Second column is the person’s favorite color.</p>
 <table class="docutils align-default">
-<colgroup>
-<col style="width: 57%" />
-<col style="width: 43%" />
-</colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>name</p></th>
 <th class="head"><p>color</p></th>
@@ -112,7 +110,7 @@ vector two layers deep: Dict(Dict(Flat)). A projection using a function like <a 
 may add another layer of dictionary on top: Dict(Dict(Dict(Flat))).</p>
 </section>
 <section id="nulls">
-<h2>Nulls<a class="headerlink" href="#nulls" title="Permalink to this headline">¶</a></h2>
+<h2>Nulls<a class="headerlink" href="#nulls" title="Permalink to this heading">¶</a></h2>
 <p>Dictionary vector has a nulls buffer separate from the nulls buffer of
 the base vector. This allows dictionary vectors to add nulls to a base vector
 which may not have nulls. This flexibility comes in handy in the
@@ -127,7 +125,7 @@ corresponding to null entries are undefined.</p>
 vector from a nulls buffer, an indices buffer and a base vector.</p>
 </section>
 <section id="decodedvector">
-<span id="decoded-vector"></span><h2>DecodedVector<a class="headerlink" href="#decodedvector" title="Permalink to this headline">¶</a></h2>
+<span id="decoded-vector"></span><h2>DecodedVector<a class="headerlink" href="#decodedvector" title="Permalink to this heading">¶</a></h2>
 <p>As we’ve seen a vector can have many layers of dictionaries: Dict(Dict(….Dict
 (Flat)…)). How do we access the data in such a vector? We use DecodedVector,
 which works for all types, or SimpleVector&lt;T&gt;, which works only for primitive
@@ -293,9 +291,9 @@ constant, dictionary and sequence, but detailed description of these is out of
 scope for this article.</p>
 </section>
 <section id="optimizations">
-<h2>Optimizations<a class="headerlink" href="#optimizations" title="Permalink to this headline">¶</a></h2>
+<h2>Optimizations<a class="headerlink" href="#optimizations" title="Permalink to this heading">¶</a></h2>
 <section id="memory-reuse">
-<h3>Memory Reuse<a class="headerlink" href="#memory-reuse" title="Permalink to this headline">¶</a></h3>
+<h3>Memory Reuse<a class="headerlink" href="#memory-reuse" title="Permalink to this heading">¶</a></h3>
 <p>DecodedVector allocates memory. Reuse instances of DecodedVector to reduce
 memory allocations.</p>
 <p>Use LocalDecodedVector when implementing a VectorFunction. LocalDecodedVector
@@ -333,7 +331,7 @@ a few more for intermediate input vectors.</p>
 </div>
 </section>
 <section id="flat-and-constant-encodings">
-<h3>Flat and Constant Encodings<a class="headerlink" href="#flat-and-constant-encodings" title="Permalink to this headline">¶</a></h3>
+<h3>Flat and Constant Encodings<a class="headerlink" href="#flat-and-constant-encodings" title="Permalink to this heading">¶</a></h3>
 <p>Often it is useful to provide a separate code path for constant or flat
 vectors with no nulls. Use DecodedVector::isConstantMapping() and
 DecodedVector::isFlatMapping() to tell whether the vector is constant or flat
@@ -423,7 +421,7 @@ the rows of interest.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -447,7 +445,7 @@ the rows of interest.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

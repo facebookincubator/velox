@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Regular Expression Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Binary Functions" href="binary.html" />
@@ -42,7 +44,7 @@
           <div class="body" role="main">
             
   <section id="regular-expression-functions">
-<h1>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Permalink to this heading">¶</a></h1>
 <p>Regular expression functions use RE2 as the regex engine. RE2 is fast, but
 supports only a subset of PCRE syntax and in particular does not support
 backtracking and associated features (e.g. back references).
@@ -142,6 +144,22 @@ SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
   <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Regular Expression Functions</a><ul>
+<li><a class="reference internal" href="#regexp_extract"><code class="docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_extract_all"><code class="docutils literal notranslate"><span class="pre">regexp_extract_all()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_like"><code class="docutils literal notranslate"><span class="pre">regexp_like()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_replace"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
+<li><a class="reference internal" href="#like"><code class="docutils literal notranslate"><span class="pre">like()</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="map.html"
                           title="previous chapter">Map Functions</a></p>
@@ -167,7 +185,7 @@ SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -191,7 +209,7 @@ SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

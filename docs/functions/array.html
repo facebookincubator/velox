@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Array Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Map Functions" href="map.html" />
@@ -42,7 +44,7 @@
           <div class="body" role="main">
             
   <section id="array-functions">
-<h1>Array Functions<a class="headerlink" href="#array-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Array Functions<a class="headerlink" href="#array-functions" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="array_distinct">
 <span class="sig-name descname"><span class="pre">array_distinct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_distinct" title="Permalink to this definition">¶</a></dt>
@@ -294,6 +296,39 @@ If one array is shorter, nulls are appended at the end to match the length of th
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
   <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Array Functions</a><ul>
+<li><a class="reference internal" href="#array_distinct"><code class="docutils literal notranslate"><span class="pre">array_distinct()</span></code></a></li>
+<li><a class="reference internal" href="#array_duplicates"><code class="docutils literal notranslate"><span class="pre">array_duplicates()</span></code></a></li>
+<li><a class="reference internal" href="#array_except"><code class="docutils literal notranslate"><span class="pre">array_except()</span></code></a></li>
+<li><a class="reference internal" href="#array_intersect"><code class="docutils literal notranslate"><span class="pre">array_intersect()</span></code></a></li>
+<li><a class="reference internal" href="#array_join"><code class="docutils literal notranslate"><span class="pre">array_join()</span></code></a></li>
+<li><a class="reference internal" href="#array_max"><code class="docutils literal notranslate"><span class="pre">array_max()</span></code></a></li>
+<li><a class="reference internal" href="#array_min"><code class="docutils literal notranslate"><span class="pre">array_min()</span></code></a></li>
+<li><a class="reference internal" href="#arrays_overlap"><code class="docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a></li>
+<li><a class="reference internal" href="#array_position"><code class="docutils literal notranslate"><span class="pre">array_position()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">array_position()</span></code></a></li>
+<li><a class="reference internal" href="#array_sort"><code class="docutils literal notranslate"><span class="pre">array_sort()</span></code></a></li>
+<li><a class="reference internal" href="#array_sum"><code class="docutils literal notranslate"><span class="pre">array_sum()</span></code></a></li>
+<li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>
+<li><a class="reference internal" href="#combinations"><code class="docutils literal notranslate"><span class="pre">combinations()</span></code></a></li>
+<li><a class="reference internal" href="#contains"><code class="docutils literal notranslate"><span class="pre">contains()</span></code></a></li>
+<li><a class="reference internal" href="#element_at"><code class="docutils literal notranslate"><span class="pre">element_at()</span></code></a></li>
+<li><a class="reference internal" href="#filter"><code class="docutils literal notranslate"><span class="pre">filter()</span></code></a></li>
+<li><a class="reference internal" href="#reduce"><code class="docutils literal notranslate"><span class="pre">reduce()</span></code></a></li>
+<li><a class="reference internal" href="#reverse"><code class="docutils literal notranslate"><span class="pre">reverse()</span></code></a></li>
+<li><a class="reference internal" href="#slice"><code class="docutils literal notranslate"><span class="pre">slice()</span></code></a></li>
+<li><a class="reference internal" href="#subscript"><code class="docutils literal notranslate"><span class="pre">subscript()</span></code></a></li>
+<li><a class="reference internal" href="#transform"><code class="docutils literal notranslate"><span class="pre">transform()</span></code></a></li>
+<li><a class="reference internal" href="#zip"><code class="docutils literal notranslate"><span class="pre">zip()</span></code></a></li>
+<li><a class="reference internal" href="#zip_with"><code class="docutils literal notranslate"><span class="pre">zip_with()</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="datetime.html"
                           title="previous chapter">Date and Time Functions</a></p>
@@ -319,7 +354,7 @@ If one array is shorter, nulls are appended at the end to match the length of th
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -343,7 +378,7 @@ If one array is shorter, nulls are appended at the end to match the length of th
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

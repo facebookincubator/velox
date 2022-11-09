@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Window functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="HyperLogLog Functions" href="hyperloglog.html" />
@@ -42,10 +44,10 @@
           <div class="body" role="main">
             
   <section id="window-functions">
-<h1>Window functions<a class="headerlink" href="#window-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Window functions<a class="headerlink" href="#window-functions" title="Permalink to this heading">¶</a></h1>
 <p>Velox window functions can be used to compute SQL window functions.</p>
 <section id="understanding-the-window-function-definition">
-<h2>Understanding the window function definition<a class="headerlink" href="#understanding-the-window-function-definition" title="Permalink to this headline">¶</a></h2>
+<h2>Understanding the window function definition<a class="headerlink" href="#understanding-the-window-function-definition" title="Permalink to this heading">¶</a></h2>
 <p>Window functions operate over all the input rows.</p>
 <p>Each window function can be thought to operate with an OVER clause
 that specifies how it is evaluated:</p>
@@ -91,7 +93,7 @@ If no ORDER BY is specified, all rows are considered peers of the current row.</
 </li>
 </ul>
 <section id="sql-example">
-<h3>SQL Example<a class="headerlink" href="#sql-example" title="Permalink to this headline">¶</a></h3>
+<h3>SQL Example<a class="headerlink" href="#sql-example" title="Permalink to this heading">¶</a></h3>
 <p>Window functions can be used to evaluate the following SQL query.
 The query ranks orders for each clerk by price:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">orderkey</span><span class="p">,</span><span class="w"> </span><span class="n">clerk</span><span class="p">,</span><span class="w"> </span><span class="n">totalprice</span><span class="p">,</span><span class="w"></span>
@@ -103,7 +105,7 @@ The query ranks orders for each clerk by price:</p>
 </section>
 </section>
 <section id="ranking-functions">
-<h1>Ranking functions<a class="headerlink" href="#ranking-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Ranking functions<a class="headerlink" href="#ranking-functions" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="cume_dist">
 <span class="sig-name descname"><span class="pre">cume_dist</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cume_dist" title="Permalink to this definition">¶</a></dt>
@@ -144,7 +146,7 @@ The ranking is performed for each window partition.</p>
 within the window partition.</p>
 </section>
 <section id="value-functions">
-<h1>Value functions<a class="headerlink" href="#value-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Value functions<a class="headerlink" href="#value-functions" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="nth_value">
 <span class="sig-name descname"><span class="pre">nth_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#nth_value" title="Permalink to this definition">¶</a></dt>
@@ -155,7 +157,7 @@ can be any scalar expression. If the offset is null or greater than the number o
 returned. It is an error for the offset to be zero or negative.</p>
 </section>
 <section id="aggregate-functions">
-<h1>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this headline">¶</a></h1>
+<h1>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h1>
 <p>All aggregate functions can be used as window functions by adding the OVER clause. The aggregate function is computed
 for each row over the rows within the current row’s window frame.</p>
 </section>
@@ -177,8 +179,18 @@ for each row over the rows within the current row’s window frame.</p>
 </li>
 </ul>
 </li>
-<li><a class="reference internal" href="#ranking-functions">Ranking functions</a></li>
-<li><a class="reference internal" href="#value-functions">Value functions</a></li>
+<li><a class="reference internal" href="#ranking-functions">Ranking functions</a><ul>
+<li><a class="reference internal" href="#cume_dist"><code class="docutils literal notranslate"><span class="pre">cume_dist()</span></code></a></li>
+<li><a class="reference internal" href="#dense_rank"><code class="docutils literal notranslate"><span class="pre">dense_rank()</span></code></a></li>
+<li><a class="reference internal" href="#percent_rank"><code class="docutils literal notranslate"><span class="pre">percent_rank()</span></code></a></li>
+<li><a class="reference internal" href="#rank"><code class="docutils literal notranslate"><span class="pre">rank()</span></code></a></li>
+<li><a class="reference internal" href="#row_number"><code class="docutils literal notranslate"><span class="pre">row_number()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#value-functions">Value functions</a><ul>
+<li><a class="reference internal" href="#nth_value"><code class="docutils literal notranslate"><span class="pre">nth_value()</span></code></a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#aggregate-functions">Aggregate functions</a></li>
 </ul>
 
@@ -209,7 +221,7 @@ for each row over the rows within the current row’s window frame.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -233,7 +245,7 @@ for each row over the rows within the current row’s window frame.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

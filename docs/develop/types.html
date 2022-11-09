@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Types &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -43,20 +45,15 @@
           <div class="body" role="main">
             
   <section id="types">
-<h1>Types<a class="headerlink" href="#types" title="Permalink to this headline">¶</a></h1>
+<h1>Types<a class="headerlink" href="#types" title="Permalink to this heading">¶</a></h1>
 <p>Velox supports scalar types and complex types. These types cover most of the
 Presto and Spark data types.</p>
 <section id="scalar-types">
-<h2>Scalar Types<a class="headerlink" href="#scalar-types" title="Permalink to this headline">¶</a></h2>
+<h2>Scalar Types<a class="headerlink" href="#scalar-types" title="Permalink to this heading">¶</a></h2>
 <p>Scalar types in Velox are logical and SQL-compatible.
 Each scalar type is implemented using a C++ type. The table
 below shows the supported scalar types and their corresponding C++ type.</p>
 <table class="docutils align-default">
-<colgroup>
-<col style="width: 32%" />
-<col style="width: 40%" />
-<col style="width: 28%" />
-</colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Velox Type</p></th>
 <th class="head"><p>C++ Type</p></th>
@@ -140,7 +137,7 @@ Velox chose <cite>int128_t</cite> since most compilers now support this type and
 it simplifies the implementation.</p>
 </section>
 <section id="complex-types">
-<h2>Complex Types<a class="headerlink" href="#complex-types" title="Permalink to this headline">¶</a></h2>
+<h2>Complex Types<a class="headerlink" href="#complex-types" title="Permalink to this heading">¶</a></h2>
 <p>Velox supports the ARRAY, MAP, and ROW complex types.</p>
 </section>
 </section>
@@ -189,7 +186,7 @@ it simplifies the implementation.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -213,7 +210,7 @@ it simplifies the implementation.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Vectors &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="How to add a scalar function?" href="scalar-functions.html" />
@@ -42,7 +44,7 @@
           <div class="body" role="main">
             
   <section id="vectors">
-<h1>Vectors<a class="headerlink" href="#vectors" title="Permalink to this headline">¶</a></h1>
+<h1>Vectors<a class="headerlink" href="#vectors" title="Permalink to this heading">¶</a></h1>
 <p>Velox vectors is columnar in-memory format for storing query data during
 execution. It is similar to Arrow, but features more encodings and different
 layout for strings, arrays and maps which support out-of-order writes. Vectors
@@ -66,7 +68,7 @@ single column of type struct.</p>
 stored in the vector. Flat, constant and dictionary encodings can be combined
 with any type.</p>
 <section id="buffers">
-<h2>Buffers<a class="headerlink" href="#buffers" title="Permalink to this headline">¶</a></h2>
+<h2>Buffers<a class="headerlink" href="#buffers" title="Permalink to this heading">¶</a></h2>
 <p>Vector data is stored in memory using one or more buffers. A buffer is a
 contiguous range of bytes. Buffers are reference counted and must be held by
 BufferPtr. Buffers can either own their memory or represent a view into
@@ -128,7 +130,7 @@ using helper methods from the “bits” namespace.</p>
 in the buffer, not the number of values.</p>
 </section>
 <section id="null-flags">
-<h2>Null Flags<a class="headerlink" href="#null-flags" title="Permalink to this headline">¶</a></h2>
+<h2>Null Flags<a class="headerlink" href="#null-flags" title="Permalink to this heading">¶</a></h2>
 <p>Each vector contains an optional set of null flags which identify rows with null
 values. If there are no null values in a given vector, null flags may not be
 present. Null flags are bit-packed into an array of 64-bit unsigned integers.
@@ -162,7 +164,7 @@ a nulls buffer.</p>
 </div>
 </section>
 <section id="flat-vectors-scalar-types">
-<h2>Flat Vectors - Scalar Types<a class="headerlink" href="#flat-vectors-scalar-types" title="Permalink to this headline">¶</a></h2>
+<h2>Flat Vectors - Scalar Types<a class="headerlink" href="#flat-vectors-scalar-types" title="Permalink to this heading">¶</a></h2>
 <p>Flat vectors of scalar types are represented using the FlatVector&lt;T&gt; template,
 where T is the C++ type of the scalar type. The values stored in the vector
 naturally use the C++ type.</p>
@@ -246,7 +248,7 @@ entry uses 16 bytes.</p>
 </div>
 </section>
 <section id="constant-vector-scalar-types">
-<h2>Constant Vector - Scalar Types<a class="headerlink" href="#constant-vector-scalar-types" title="Permalink to this headline">¶</a></h2>
+<h2>Constant Vector - Scalar Types<a class="headerlink" href="#constant-vector-scalar-types" title="Permalink to this heading">¶</a></h2>
 <p>Constant vectors are represented using ConstantVector&lt;T&gt; template which contains
 a value and a boolean indicating whether the value is null or not. It may
 contain a string buffer if T = StringView and the string is longer than 12
@@ -266,7 +268,7 @@ vector from a scalar value.</p>
 </div>
 </section>
 <section id="dictionary-vector-scalar-types">
-<h2>Dictionary Vector - Scalar Types<a class="headerlink" href="#dictionary-vector-scalar-types" title="Permalink to this headline">¶</a></h2>
+<h2>Dictionary Vector - Scalar Types<a class="headerlink" href="#dictionary-vector-scalar-types" title="Permalink to this heading">¶</a></h2>
 <p>Dictionary encoding is used to compactly represent vectors with lots of
 duplicate values as well as a result of a filter or filter-like operation
 without copying the data. Dictionary encoding can also be used to represent a
@@ -334,11 +336,11 @@ entry in the indices buffer contains garbage and should not be accessed.</p>
 <a class="reference internal image-reference" href="../_images/dictionary-with-nulls.png"><img alt="../_images/dictionary-with-nulls.png" class="align-center" src="../_images/dictionary-with-nulls.png" style="width: 500px;" /></a>
 </section>
 <section id="flat-vectors-complex-types">
-<h2>Flat Vectors - Complex Types<a class="headerlink" href="#flat-vectors-complex-types" title="Permalink to this headline">¶</a></h2>
+<h2>Flat Vectors - Complex Types<a class="headerlink" href="#flat-vectors-complex-types" title="Permalink to this heading">¶</a></h2>
 <p>Flat vectors of complex types ARRAY, MAP and ROW / STRUCT are represented using
 ArrayVector, MapVector and RowVector.</p>
 <section id="arrayvector">
-<h3>ArrayVector<a class="headerlink" href="#arrayvector" title="Permalink to this headline">¶</a></h3>
+<h3>ArrayVector<a class="headerlink" href="#arrayvector" title="Permalink to this heading">¶</a></h3>
 <p>ArrayVector stores values of type ARRAY. In addition to nulls buffer, it
 contains offsets and sizes buffers and an elements vector. Offsets and sizes
 are 32-bit integers.</p>
@@ -379,7 +381,7 @@ array vector itself. This allows us to specify non-null arrays with some or all
 null elements. Null array and array of all null elements are not the same.</p>
 </section>
 <section id="mapvector">
-<h3>MapVector<a class="headerlink" href="#mapvector" title="Permalink to this headline">¶</a></h3>
+<h3>MapVector<a class="headerlink" href="#mapvector" title="Permalink to this heading">¶</a></h3>
 <p>MapVector stores values of type MAP. In addition to nulls buffer, it contains
 offsets and sizes buffers, keys and values vectors. Offsets and sizes are
 32-bit integers.</p>
@@ -408,7 +410,7 @@ unique. However, in practice, places which create maps, e.g. ORC and Parquet
 readers, <a class="reference internal" href="../functions/map.html#id0" title="map"><code class="xref py py-func docutils literal notranslate"><span class="pre">map()</span></code></a> function, etc., ensure that map keys are unique.</p>
 </section>
 <section id="rowvector">
-<h3>RowVector<a class="headerlink" href="#rowvector" title="Permalink to this headline">¶</a></h3>
+<h3>RowVector<a class="headerlink" href="#rowvector" title="Permalink to this heading">¶</a></h3>
 <p>Finally, RowVector stores values of type ROW (e.g. structs). In addition to the
 nulls buffer, it contains a list of child vectors.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">children_</span><span class="p">;</span><span class="w"></span>
@@ -430,7 +432,7 @@ during query execution.</p>
 </section>
 </section>
 <section id="constant-vector-complex-types">
-<h2>Constant Vector - Complex Types<a class="headerlink" href="#constant-vector-complex-types" title="Permalink to this headline">¶</a></h2>
+<h2>Constant Vector - Complex Types<a class="headerlink" href="#constant-vector-complex-types" title="Permalink to this heading">¶</a></h2>
 <p>Constant vectors of complex types are represented by
 ConstantVector&lt;ComplexType&gt;, where ComplexType is a special marker type that is
 used for all complex types. Constant vector of type ARRAY(INTEGER) and constant
@@ -465,7 +467,7 @@ returns the same value for all inputs as all rows of the constant vector map to
 the same row of the underlying flat vector.</p>
 </section>
 <section id="dictionary-vector-complex-types">
-<h2>Dictionary Vector - Complex Types<a class="headerlink" href="#dictionary-vector-complex-types" title="Permalink to this headline">¶</a></h2>
+<h2>Dictionary Vector - Complex Types<a class="headerlink" href="#dictionary-vector-complex-types" title="Permalink to this heading">¶</a></h2>
 <p>Similarly to constant vectors, dictionary vectors of complex types are
 represented by DictionaryVector&lt;ComplexType&gt;, where ComplexType is a special
 marker type that is used for all complex types. Dictionary vector of type ARRAY
@@ -530,7 +532,7 @@ complex types are no different than dictionary vectors of scalar types.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -554,7 +556,7 @@ complex types are no different than dictionary vectors of scalar types.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>

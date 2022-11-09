@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
     <title>Configuration properties &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="_static/pygments.css" />
@@ -12,7 +12,9 @@
     <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
     <script src="_static/jquery.js"></script>
     <script src="_static/underscore.js"></script>
+    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="_static/doctools.js"></script>
+    <script src="_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
     <link rel="next" title="Developer Guide" href="develop.html" />
@@ -41,11 +43,11 @@
           <div class="body" role="main">
             
   <section id="configuration-properties">
-<h1>Configuration properties<a class="headerlink" href="#configuration-properties" title="Permalink to this headline">¶</a></h1>
+<h1>Configuration properties<a class="headerlink" href="#configuration-properties" title="Permalink to this heading">¶</a></h1>
 <section id="memory-management">
-<h2>Memory Management<a class="headerlink" href="#memory-management" title="Permalink to this headline">¶</a></h2>
+<h2>Memory Management<a class="headerlink" href="#memory-management" title="Permalink to this heading">¶</a></h2>
 <section id="max-partial-aggregation-memory">
-<h3><code class="docutils literal notranslate"><span class="pre">max_partial_aggregation_memory</span></code><a class="headerlink" href="#max-partial-aggregation-memory" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">max_partial_aggregation_memory</span></code><a class="headerlink" href="#max-partial-aggregation-memory" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
@@ -58,7 +60,7 @@ allowing more groups to be kept locally before being flushed, at the cost of
 additional memory usage.</p>
 </section>
 <section id="max-extended-partial-aggregation-memory">
-<h3><code class="docutils literal notranslate"><span class="pre">max_extended_partial_aggregation_memory</span></code><a class="headerlink" href="#max-extended-partial-aggregation-memory" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">max_extended_partial_aggregation_memory</span></code><a class="headerlink" href="#max-extended-partial-aggregation-memory" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
@@ -77,7 +79,7 @@ the value of <cite>max_extended_partial_aggregation_memory</cite> equals the val
 to enable.</p>
 </section>
 <section id="partial-aggregation-reduction-ratio-threshold">
-<h3><code class="docutils literal notranslate"><span class="pre">partial_aggregation_reduction_ratio_threshold</span></code><a class="headerlink" href="#partial-aggregation-reduction-ratio-threshold" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">partial_aggregation_reduction_ratio_threshold</span></code><a class="headerlink" href="#partial-aggregation-reduction-ratio-threshold" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">double</span></code></p></li>
@@ -92,9 +94,9 @@ the limit is automatically doubled up to <cite>max_extended_partial_aggregation_
 </section>
 </section>
 <section id="spilling">
-<h2>Spilling<a class="headerlink" href="#spilling" title="Permalink to this headline">¶</a></h2>
+<h2>Spilling<a class="headerlink" href="#spilling" title="Permalink to this heading">¶</a></h2>
 <section id="spill-enabled">
-<h3><code class="docutils literal notranslate"><span class="pre">spill_enabled</span></code><a class="headerlink" href="#spill-enabled" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">spill_enabled</span></code><a class="headerlink" href="#spill-enabled" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
@@ -104,7 +106,7 @@ the limit is automatically doubled up to <cite>max_extended_partial_aggregation_
 <p>Spill memory to disk to avoid exceeding memory limits for the query.</p>
 </section>
 <section id="spiller-spill-path">
-<h3><code class="docutils literal notranslate"><span class="pre">spiller-spill-path</span></code><a class="headerlink" href="#spiller-spill-path" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">spiller-spill-path</span></code><a class="headerlink" href="#spiller-spill-path" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">string</span></code></p></li>
@@ -114,7 +116,7 @@ the limit is automatically doubled up to <cite>max_extended_partial_aggregation_
 <p>Directory where spilled content is written.</p>
 </section>
 <section id="aggregation-spill-enabled">
-<h3><code class="docutils literal notranslate"><span class="pre">aggregation_spill_enabled</span></code><a class="headerlink" href="#aggregation-spill-enabled" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">aggregation_spill_enabled</span></code><a class="headerlink" href="#aggregation-spill-enabled" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
@@ -125,7 +127,7 @@ the limit is automatically doubled up to <cite>max_extended_partial_aggregation_
 for aggregations to avoid exceeding memory limits for the query.</p>
 </section>
 <section id="join-spill-enabled">
-<h3><code class="docutils literal notranslate"><span class="pre">join_spill_enabled</span></code><a class="headerlink" href="#join-spill-enabled" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">join_spill_enabled</span></code><a class="headerlink" href="#join-spill-enabled" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
@@ -136,7 +138,7 @@ for aggregations to avoid exceeding memory limits for the query.</p>
 for hash joins to avoid exceeding memory limits for the query.</p>
 </section>
 <section id="order-by-spill-enabled">
-<h3><code class="docutils literal notranslate"><span class="pre">order_by_spill_enabled</span></code><a class="headerlink" href="#order-by-spill-enabled" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">order_by_spill_enabled</span></code><a class="headerlink" href="#order-by-spill-enabled" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
@@ -147,7 +149,7 @@ for hash joins to avoid exceeding memory limits for the query.</p>
 for order by to avoid exceeding memory limits for the query.</p>
 </section>
 <section id="aggregation-spill-memory-threshold">
-<h3><code class="docutils literal notranslate"><span class="pre">aggregation_spill_memory_threshold</span></code><a class="headerlink" href="#aggregation-spill-memory-threshold" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">aggregation_spill_memory_threshold</span></code><a class="headerlink" href="#aggregation-spill-memory-threshold" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
@@ -158,7 +160,7 @@ for order by to avoid exceeding memory limits for the query.</p>
 0 means unlimited.</p>
 </section>
 <section id="join-spill-memory-threshold">
-<h3><code class="docutils literal notranslate"><span class="pre">join_spill_memory_threshold</span></code><a class="headerlink" href="#join-spill-memory-threshold" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">join_spill_memory_threshold</span></code><a class="headerlink" href="#join-spill-memory-threshold" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
@@ -169,7 +171,7 @@ for order by to avoid exceeding memory limits for the query.</p>
 0 means unlimited.</p>
 </section>
 <section id="order-by-spill-memory-threshold">
-<h3><code class="docutils literal notranslate"><span class="pre">order_by_spill_memory_threshold</span></code><a class="headerlink" href="#order-by-spill-memory-threshold" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">order_by_spill_memory_threshold</span></code><a class="headerlink" href="#order-by-spill-memory-threshold" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
@@ -180,7 +182,7 @@ for order by to avoid exceeding memory limits for the query.</p>
 0 means unlimited.</p>
 </section>
 <section id="spillable-reservation-growth-pct">
-<h3><code class="docutils literal notranslate"><span class="pre">spillable-reservation-growth-pct</span></code><a class="headerlink" href="#spillable-reservation-growth-pct" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">spillable-reservation-growth-pct</span></code><a class="headerlink" href="#spillable-reservation-growth-pct" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
@@ -196,7 +198,7 @@ grows along a series of powers of (1 + N / 100). If the memory reservation
 fails, it starts spilling.</p>
 </section>
 <section id="max-spill-level">
-<h3><code class="docutils literal notranslate"><span class="pre">max-spill-level</span></code><a class="headerlink" href="#max-spill-level" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">max-spill-level</span></code><a class="headerlink" href="#max-spill-level" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
@@ -210,7 +212,7 @@ large query might run out of spilling partition bits. The max spill level
 can be used to prevent a query from using too much io and cpu resources.</p>
 </section>
 <section id="max-spill-file-size">
-<h3><code class="docutils literal notranslate"><span class="pre">max-spill-file-size</span></code><a class="headerlink" href="#max-spill-file-size" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">max-spill-file-size</span></code><a class="headerlink" href="#max-spill-file-size" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
@@ -220,7 +222,7 @@ can be used to prevent a query from using too much io and cpu resources.</p>
 <p>The maximum allowed spill file size. Zero means unlimited.</p>
 </section>
 <section id="min-spill-run-size">
-<h3><code class="docutils literal notranslate"><span class="pre">min-spill-run-size</span></code><a class="headerlink" href="#min-spill-run-size" title="Permalink to this headline">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">min-spill-run-size</span></code><a class="headerlink" href="#min-spill-run-size" title="Permalink to this heading">¶</a></h3>
 <blockquote>
 <div><ul class="simple">
 <li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
@@ -301,7 +303,7 @@ files.</p>
     </form>
     </div>
 </div>
-<script>$('#searchbox').show(0);</script>
+<script>document.getElementById('searchbox').style.display = "block"</script>
         </div>
       </div>
       <div class="clearer"></div>
@@ -324,7 +326,7 @@ files.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>
