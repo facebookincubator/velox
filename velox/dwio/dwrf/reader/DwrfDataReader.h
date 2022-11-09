@@ -18,7 +18,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnSelector.h"
-#include "velox/dwio/common/FormatData.h"
+#include "velox/dwio/common/FormatDataReader.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/dwrf/common/ByteRLE.h"
 #include "velox/dwio/dwrf/common/Compression.h"
@@ -31,9 +31,9 @@
 namespace facebook::velox::dwrf {
 
 // DWRF specific functions shared between all readers.
-class DwrfData : public dwio::common::FormatData {
+class DwrfDataReader : public dwio::common::FormatDataReader {
  public:
-  DwrfData(
+  DwrfDataReader(
       std::shared_ptr<const dwio::common::TypeWithId> nodeType,
       StripeStreams& stripe,
       FlatMapContext flatMapContext);
@@ -128,10 +128,11 @@ class DwrfParams : public dwio::common::FormatParams {
         stripeStreams_(stripeStreams),
         flatMapContext_(context) {}
 
-  std::unique_ptr<dwio::common::FormatData> toFormatData(
+  std::unique_ptr<dwio::common::FormatDataReader> toFormatDataReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& /*scanSpec*/) override {
-    return std::make_unique<DwrfData>(type, stripeStreams_, flatMapContext_);
+    return std::make_unique<DwrfDataReader>(
+        type, stripeStreams_, flatMapContext_);
   }
 
   StripeStreams& stripeStreams() {

@@ -19,7 +19,7 @@
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
-#include "velox/dwio/dwrf/reader/DwrfData.h"
+#include "velox/dwio/dwrf/reader/DwrfDataReader.h"
 
 namespace facebook::velox::dwrf {
 

@@ -16,7 +16,7 @@ add_library(
   velox_dwio_dwrf_reader
   BinaryStreamReader.cpp
   ColumnReader.cpp
-  DwrfData.cpp
+  DwrfDataReader.cpp
   DwrfReader.cpp
   FlatMapColumnReader.cpp
   ReaderBase.cpp

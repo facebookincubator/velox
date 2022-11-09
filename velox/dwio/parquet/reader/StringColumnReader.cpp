@@ -35,7 +35,7 @@ void StringColumnReader::readHelper(
     common::Filter* filter,
     RowSet rows,
     ExtractValues extractValues) {
-  formatData_->as<ParquetData>().readWithVisitor(
+  formatData_->as<ParquetDataReader>().readWithVisitor(
       dwio::common::
           ColumnVisitor<folly::StringPiece, TFilter, ExtractValues, isDense>(
               *reinterpret_cast<TFilter*>(filter), this, rows, extractValues));
@@ -127,7 +127,8 @@ void StringColumnReader::read(
 
 void StringColumnReader::getValues(RowSet rows, VectorPtr* result) {
   if (scanState_.dictionary.values) {
-    auto dictionaryValues = formatData_->as<ParquetData>().dictionaryValues();
+    auto dictionaryValues =
+        formatData_->as<ParquetDataReader>().dictionaryValues();
     compactScalarValues<int32_t, int32_t>(rows, false);
 
     *result = std::make_shared<DictionaryVector<StringView>>(
@@ -148,7 +149,7 @@ void StringColumnReader::getValues(RowSet rows, VectorPtr* result) {
 
 void StringColumnReader::dedictionarize() {
   if (scanSpec_->keepValues()) {
-    auto dict = formatData_->as<ParquetData>()
+    auto dict = formatData_->as<ParquetDataReader>()
                     .dictionaryValues()
                     ->as<FlatVector<StringView>>();
     auto valuesCapacity = values_->capacity();
@@ -175,6 +176,6 @@ void StringColumnReader::dedictionarize() {
     numValues_ = numValues;
   }
   scanState_.clear();
-  formatData_->as<ParquetData>().clearDictionary();
+  formatData_->as<ParquetDataReader>().clearDictionary();
 }
 } // namespace facebook::velox::parquet

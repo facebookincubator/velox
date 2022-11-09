@@ -17,7 +17,7 @@ add_library(
   NestedStructureDecoder.cpp
   ParquetReader.cpp
   PageReader.cpp
-  ParquetData.cpp
+  ParquetDataReader.cpp
   ParquetColumnReader.cpp
   RleBpDecoder.cpp
   Statistics.cpp

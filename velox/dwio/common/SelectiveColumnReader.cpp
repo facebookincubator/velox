@@ -49,7 +49,7 @@ SelectiveColumnReader::SelectiveColumnReader(
     const TypePtr& type)
     : memoryPool_(params.pool()),
       nodeType_(requestedType),
-      formatData_(params.toFormatData(requestedType, scanSpec)),
+      formatData_(params.toFormatDataReader(requestedType, scanSpec)),
       scanSpec_(&scanSpec),
       type_{type} {}
 
