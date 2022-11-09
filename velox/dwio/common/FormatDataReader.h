@@ -28,9 +28,9 @@ namespace facebook::velox::dwio::common {
 
 /// Interface base class for format-specific state in common between different
 /// file format readers.
-class FormatData {
+class FormatDataReader {
  public:
-  virtual ~FormatData() = default;
+  virtual ~FormatDataReader() = default;
 
   template <typename T>
   T& as() {
@@ -84,7 +84,7 @@ class FormatData {
   /// Seeks the position to the 'index'th row group for the streams
   /// managed by 'this'. Returns a PositionProvider for streams not
   /// managed by 'this'. In a format like Parquet where all the reading
-  /// is in FormatData the provider is at end. For ORC/DWRF the type
+  /// is in FormatDataReader the provider is at end. For ORC/DWRF the type
   /// dependent stream positions are accessed via the provider. The
   /// provider is valid until next call of this.
   virtual dwio::common::PositionProvider seekToRowGroup(uint32_t index) = 0;
@@ -127,7 +127,7 @@ class FormatParams {
 
   /// Makes format-specific structures for the column given by  'type'.
   /// 'scanSpec' is given as extra context.
-  virtual std::unique_ptr<FormatData> toFormatData(
+  virtual std::unique_ptr<FormatDataReader> toFormatDataReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const velox::common::ScanSpec& scanSpec) = 0;
 

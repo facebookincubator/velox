@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
-#include "velox/dwio/dwrf/reader/DwrfData.h"
+#include "velox/dwio/dwrf/reader/DwrfDataReader.h"
 
 namespace facebook::velox::dwrf {
 class SelectiveTimestampColumnReader

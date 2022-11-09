@@ -29,7 +29,8 @@ class ParquetParams : public dwio::common::FormatParams {
  public:
   ParquetParams(memory::MemoryPool& pool, const thrift::FileMetaData& metaData)
       : FormatParams(pool), metaData_(metaData) {}
-  std::unique_ptr<dwio::common::FormatData> toFormatData(
+
+  std::unique_ptr<dwio::common::FormatDataReader> toFormatDataReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
 
@@ -38,9 +39,9 @@ class ParquetParams : public dwio::common::FormatParams {
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
-class ParquetData : public dwio::common::FormatData {
+class ParquetDataReader : public dwio::common::FormatDataReader {
  public:
-  ParquetData(
+  ParquetDataReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const std::vector<thrift::RowGroup>& rowGroups,
       memory::MemoryPool& pool)

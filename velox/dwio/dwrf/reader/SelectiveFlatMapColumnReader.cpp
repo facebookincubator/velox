@@ -275,7 +275,8 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
       }
       int currentRowSize = 0;
       for (int k = 0; k < children_.size(); ++k) {
-        auto& data = static_cast<const DwrfData&>(children_[k]->formatData());
+        auto& data =
+            static_cast<const DwrfDataReader&>(children_[k]->formatData());
         auto* inMap = data.inMap();
         if (inMap && bits::isBitNull(inMap, rows[i])) {
           continue;

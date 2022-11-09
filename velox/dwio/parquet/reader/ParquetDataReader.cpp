@@ -14,20 +14,22 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/parquet/reader/ParquetData.h"
+#include "velox/dwio/parquet/reader/ParquetDataReader.h"
 #include "velox/dwio/parquet/reader/Statistics.h"
 
 namespace facebook::velox::parquet {
 
 using thrift::RowGroup;
 
-std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
+std::unique_ptr<dwio::common::FormatDataReader>
+ParquetParams::toFormatDataReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
-  return std::make_unique<ParquetData>(type, metaData_.row_groups, pool());
+  return std::make_unique<ParquetDataReader>(
+      type, metaData_.row_groups, pool());
 }
 
-std::vector<uint32_t> ParquetData::filterRowGroups(
+std::vector<uint32_t> ParquetDataReader::filterRowGroups(
     const common::ScanSpec& scanSpec,
     uint64_t /*rowsPerRowGroup*/,
     const dwio::common::StatsContext& /*writerContext*/) {
@@ -43,7 +45,7 @@ std::vector<uint32_t> ParquetData::filterRowGroups(
   return toSkip;
 }
 
-bool ParquetData::rowGroupMatches(
+bool ParquetDataReader::rowGroupMatches(
     uint32_t rowGroupId,
     common::Filter* FOLLY_NULLABLE filter) {
   auto column = type_->column;
@@ -66,7 +68,7 @@ bool ParquetData::rowGroupMatches(
   return true;
 }
 
-void ParquetData::enqueueRowGroup(
+void ParquetDataReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
   auto& chunk = rowGroups_[index].columns[type_->column];
@@ -97,7 +99,8 @@ void ParquetData::enqueueRowGroup(
   streams_[index] = input.enqueue({chunkReadOffset, readSize}, &id);
 }
 
-dwio::common::PositionProvider ParquetData::seekToRowGroup(uint32_t index) {
+dwio::common::PositionProvider ParquetDataReader::seekToRowGroup(
+    uint32_t index) {
   static std::vector<uint64_t> empty;
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");

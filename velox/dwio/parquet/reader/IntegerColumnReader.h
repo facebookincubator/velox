@@ -37,7 +37,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   bool hasBulkPath() const override {
     return !this->type()->isLongDecimal() &&
         ((this->type()->isShortDecimal())
-             ? formatData_->as<ParquetData>().hasDictionary()
+             ? formatData_->as<ParquetDataReader>().hasDictionary()
              : true);
   }
 
@@ -45,11 +45,11 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     SelectiveColumnReader::seekToRowGroup(index);
     scanState().clear();
     readOffset_ = 0;
-    formatData_->as<ParquetData>().seekToRowGroup(index);
+    formatData_->as<ParquetDataReader>().seekToRowGroup(index);
   }
 
   uint64_t skip(uint64_t numValues) override {
-    formatData_->as<ParquetData>().skip(numValues);
+    formatData_->as<ParquetDataReader>().skip(numValues);
     return numValues;
   }
 
@@ -57,7 +57,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
       vector_size_t offset,
       RowSet rows,
       const uint64_t* /*incomingNulls*/) override {
-    auto& data = formatData_->as<ParquetData>();
+    auto& data = formatData_->as<ParquetDataReader>();
     VELOX_WIDTH_DISPATCH(
         parquetSizeOfIntKind(type_->kind()),
         prepareRead,
@@ -69,7 +69,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
 
   template <typename ColumnVisitor>
   void readWithVisitor(RowSet rows, ColumnVisitor visitor) {
-    formatData_->as<ParquetData>().readWithVisitor(visitor);
+    formatData_->as<ParquetDataReader>().readWithVisitor(visitor);
     readOffset_ += rows.back() + 1;
   }
 };

@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/dwio/parquet/reader/ParquetData.h"
+#include "velox/dwio/parquet/reader/ParquetDataReader.h"
 
 namespace facebook::velox::parquet {
 
