@@ -28,6 +28,11 @@ BufferPtr makeIndicesInReverse(vector_size_t size, memory::MemoryPool* pool);
 // TODO: enable ASSERT_EQ for vectors.
 void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual);
 
+void assertEqualVectors(
+    const VectorPtr& expected,
+    const VectorPtr& actual,
+    const SelectivityVector& rowsToCompare);
+
 /// Verify that 'vector' is copyable, by copying all rows.
 void assertCopyableVector(const VectorPtr& vector);
 

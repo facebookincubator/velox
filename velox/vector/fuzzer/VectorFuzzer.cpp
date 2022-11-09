@@ -290,6 +290,11 @@ class VectorLoaderWrap : public VectorLoader {
   VectorPtr vector_;
 };
 
+bool hasNestedDictionaryLayers(const VectorPtr& baseVector) {
+  return baseVector && VectorEncoding::isDictionary(baseVector->encoding()) &&
+      VectorEncoding::isDictionary(baseVector->valueVector()->encoding());
+}
+
 } // namespace
 
 VectorPtr VectorFuzzer::fuzzNotNull(const TypePtr& type) {
@@ -722,6 +727,20 @@ RowTypePtr VectorFuzzer::randRowType(int maxDepth) {
 }
 
 VectorPtr VectorFuzzer::wrapInLazyVector(VectorPtr baseVector) {
+  if (hasNestedDictionaryLayers(baseVector)) {
+    auto indices = baseVector->wrapInfo();
+    auto values = baseVector->valueVector();
+    auto nulls = baseVector->nulls();
+
+    auto copiedIndices = AlignedBuffer::copy(baseVector->pool(), indices);
+    auto copiedNulls = AlignedBuffer::copy(baseVector->pool(), nulls);
+
+    return BaseVector::wrapInDictionary(
+        copiedNulls,
+        copiedIndices,
+        baseVector->size(),
+        wrapInLazyVector(values));
+  }
   return std::make_shared<LazyVector>(
       baseVector->pool(),
       baseVector->type(),
