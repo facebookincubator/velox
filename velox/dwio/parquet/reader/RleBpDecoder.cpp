@@ -36,58 +36,6 @@ void RleBpDecoder::skip(uint64_t numValues) {
   }
 }
 
-template <typename T>
-void RleBpDecoder::next(T* FOLLY_NONNULL& outputBuffer, uint64_t numValues) {
-  while (numValues > 0) {
-    if (numRemainingUnpackedValues_ > 0) {
-      auto numValuesToRead =
-          std::min<uint32_t>(numValues, numRemainingUnpackedValues_);
-      copyRemainingUnpackedValues(outputBuffer, numValuesToRead);
-
-      numValues -= numValuesToRead;
-    } else {
-      if (remainingValues_ == 0) {
-        readHeader();
-      }
-
-      auto numValuesToRead = std::min<uint32_t>(numValues, remainingValues_);
-      if (repeating_) {
-        std::fill(outputBuffer, outputBuffer + numValuesToRead, value_);
-        outputBuffer += numValuesToRead;
-        remainingValues_ -= numValuesToRead;
-      } else {
-        remainingUnpackedValuesOffset_ = 0;
-        // The parquet standard requires the bit packed values are always a
-        // multiple of 8. So we read a multiple of 8 values each time
-        dwio::common::unpack<T>(
-            bitWidth_,
-            reinterpret_cast<const uint8_t * FOLLY_NONNULL&>(bufferStart_),
-            bufferEnd_ - bufferStart_,
-            numValuesToRead & 0xffff'fff8,
-            //              outputBuffer);
-            reinterpret_cast<T * FOLLY_NONNULL&>(outputBuffer));
-        remainingValues_ -= (numValuesToRead & 0xffff'fff8);
-
-        // Unpack the next 8 values to remainingUnpackedValues_ if necessary
-        if ((numValuesToRead & 7) != 0) {
-          T* output = reinterpret_cast<T*>(remainingUnpackedValues_);
-          dwio::common::unpack<T>(
-              bitWidth_,
-              reinterpret_cast<const uint8_t*>(bufferStart_),
-              bufferEnd_ - bufferStart_,
-              8,
-              output);
-
-          copyRemainingUnpackedValues(outputBuffer, numValuesToRead | 7);
-          remainingValues_ -= 8;
-        }
-      }
-
-      numValues -= numValuesToRead;
-    }
-  }
-}
-
 void RleBpDecoder::readBits(
     int32_t numValues,
     uint64_t* FOLLY_NONNULL outputBuffer,

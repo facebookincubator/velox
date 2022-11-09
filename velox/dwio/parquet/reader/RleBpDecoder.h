@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/dwio/common/BitPackDecoder.h"
 #include "velox/dwio/common/DecoderUtil.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/LazyVector.h"
@@ -43,7 +44,57 @@ class RleBpDecoder {
   /// Decode @param numValues number of values and copy the decoded values into
   /// @param outputBuffer
   template <typename T>
-  void next(T* FOLLY_NONNULL& outputBuffer, uint64_t numValues);
+  void next(T* FOLLY_NONNULL& outputBuffer, int64_t numValues) {
+    while (numValues > 0) {
+      if (numRemainingUnpackedValues_ > 0) {
+        auto numValuesToRead =
+            std::min<uint64_t>(numValues, numRemainingUnpackedValues_);
+        copyRemainingUnpackedValues(outputBuffer, numValuesToRead);
+
+        numValues -= numValuesToRead;
+      } else {
+        if (remainingValues_ == 0) {
+          readHeader();
+        }
+
+        auto numValuesToRead = std::min<uint32_t>(numValues, remainingValues_);
+        if (repeating_) {
+          std::fill(outputBuffer, outputBuffer + numValuesToRead, value_);
+          outputBuffer += numValuesToRead;
+          remainingValues_ -= numValuesToRead;
+        } else {
+          remainingUnpackedValuesOffset_ = 0;
+          // The parquet standard requires the bit packed values are always a
+          // multiple of 8. So we read a multiple of 8 values each time
+          dwio::common::unpack<T>(
+              reinterpret_cast<const uint8_t*&>(bufferStart_),
+              bufferEnd_ - bufferStart_,
+              numValuesToRead & 0xfffffff8,
+              bitWidth_,
+              reinterpret_cast<T * FOLLY_NONNULL&>(outputBuffer));
+          remainingValues_ -= (numValuesToRead & 0xfffffff8);
+
+          // Unpack the next 8 values to remainingUnpackedValues_ if necessary
+          if ((numValuesToRead & 7) != 0) {
+            T* output = reinterpret_cast<T*>(remainingUnpackedValues_);
+            dwio::common::unpack<T>(
+                reinterpret_cast<const uint8_t*&>(bufferStart_),
+                bufferEnd_ - bufferStart_,
+                8,
+                bitWidth_,
+                output);
+            numRemainingUnpackedValues_ = 8;
+            remainingUnpackedValuesOffset_ = 0;
+
+            copyRemainingUnpackedValues(outputBuffer, numValuesToRead & 7);
+            remainingValues_ -= 8;
+          }
+        }
+
+        numValues -= numValuesToRead;
+      }
+    }
+  }
 
   /// Copies 'numValues' bits from the encoding into 'buffer',
   /// little-endian. If 'allOnes' is non-nullptr, this function may
@@ -82,7 +133,7 @@ class RleBpDecoder {
   const int8_t byteWidth_;
   const uint64_t bitMask_;
   const char* FOLLY_NONNULL const lastSafeWord_;
-  uint64_t remainingValues_{0};
+  int64_t remainingValues_{0};
   int64_t value_;
   int8_t bitOffset_{0};
   bool repeating_;

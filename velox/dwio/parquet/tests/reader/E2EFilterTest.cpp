@@ -45,7 +45,9 @@ class E2EFilterTest : public E2EFilterTestBase {
 
     // Always test no null case.
     auto newCustomize = [&]() {
-      customize();
+      if (customize) {
+        customize();
+      }
       makeNotNull(0);
     };
     testSenario(
@@ -397,6 +399,14 @@ TEST_F(E2EFilterTest, dedictionarize) {
       false,
       {"long_val", "string_val", "string_val_2"},
       20);
+}
+
+TEST_F(E2EFilterTest, listSimple) {
+  writerProperties_ = ::parquet::WriterProperties::Builder()
+                          .data_pagesize(20)
+                          ->disable_dictionary()
+                          ->build();
+  testWithTypes("array_val:array<int>", nullptr, false, {}, 1);
 }
 
 // Define main so that gflags get processed.

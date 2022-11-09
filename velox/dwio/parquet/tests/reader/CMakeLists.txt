@@ -74,4 +74,3 @@ if(${VELOX_ENABLE_ARROW})
     arrow ${VELOX_LINK_LIBS} ${TEST_LINK_LIBS})
 
 endif()
-

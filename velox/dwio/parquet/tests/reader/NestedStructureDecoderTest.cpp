@@ -50,11 +50,11 @@ class NestedStructureDecoderTest : public testing::Test {
       std::vector<vector_size_t> expectedLengths,
       std::vector<bool> expectedNulls) {
     int64_t numCollections = NestedStructureDecoder::readOffsetsAndNulls(
-        definitionLevels,
         repetitionLevels,
+        definitionLevels,
         numValues,
-        maxDefinition,
         maxRepeat,
+        maxDefinition,
         offsetsBuffer_,
         lengthsBuffer_,
         nullsBuffer_,

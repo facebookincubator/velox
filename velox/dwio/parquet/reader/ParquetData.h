@@ -130,6 +130,10 @@ class ParquetData : public dwio::common::FormatData {
     return reader_->isDictionary();
   }
 
+  std::shared_ptr<ParquetPage> readNextPage() {
+    return reader_->readNextPage();
+  }
+
  protected:
   memory::MemoryPool& pool_;
   std::shared_ptr<const ParquetTypeWithId> type_;

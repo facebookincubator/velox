@@ -20,6 +20,13 @@
 
 namespace facebook::velox::parquet {
 
+struct NestedData {
+  BufferPtr offsets;
+  BufferPtr lengths;
+  BufferPtr nulls;
+  int64_t numNonNulls;
+};
+
 class NestedStructureDecoder {
  public:
   /// This function constructs the offsets, lengths and nulls arrays for the
@@ -50,17 +57,28 @@ class NestedStructureDecoder {
   /// @param nullsBuffer The output buffer for the nulls bitmap.
   /// @return The number of elements for the current nested level.
   static int64_t readOffsetsAndNulls(
-      const uint8_t* definitionLevels,
-      const uint8_t* repetitionLevels,
+      const uint8_t* FOLLY_NONNULL repetitionLevels,
+      const uint8_t* FOLLY_NONNULL definitionLevels,
       int64_t numValues,
-      uint8_t maxDefinition,
       uint8_t maxRepeat,
+      uint8_t maxDefinition,
       BufferPtr& offsetsBuffer,
       BufferPtr& lengthsBuffer,
       BufferPtr& nullsBuffer,
+      int64_t& numNonNulls,
+      memory::MemoryPool& pool);
+
+  static std::vector<std::shared_ptr<NestedData>>
+  readOffsetsAndNullsForAllLevels(
+      const uint8_t* FOLLY_NONNULL repetitionLevels,
+      const uint8_t* FOLLY_NONNULL definitionLevels,
+      int64_t numValues,
+      std::vector<uint32_t> maxRepeats_,
+      std::vector<uint32_t> maxDefines_,
       memory::MemoryPool& pool);
 
  private:
   NestedStructureDecoder() {}
 };
+
 } // namespace facebook::velox::parquet

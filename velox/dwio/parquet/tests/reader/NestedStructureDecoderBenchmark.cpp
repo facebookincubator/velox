@@ -77,11 +77,11 @@ BENCHMARK(randomDefs) {
   suspender.dismiss();
 
   int64_t numCollections = NestedStructureDecoder::readOffsetsAndNulls(
-      benchmark.definitionLevels_.get(),
       benchmark.repetitionLevels_.get(),
+      benchmark.definitionLevels_.get(),
       numValues,
-      maxDefinition / 2,
       maxRepetition / 2,
+      maxDefinition / 2,
       benchmark.offsetsBuffer_,
       benchmark.lengthsBuffer_,
       benchmark.nullsBuffer_,

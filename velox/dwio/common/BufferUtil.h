@@ -30,6 +30,19 @@ inline void ensureCapacity(
     data = AlignedBuffer::allocate<T>(capacity, pool);
   }
 }
+//
+// template <typename T>
+// inline void moveToBufferBegin(
+//    BufferPtr& bufferPtr,
+//    size_t sourceOffset,
+//    size_t numValues,
+//    velox::memory::MemoryPool* pool) {
+//
+//  std::memmove(
+//      bufferPtr->template as<T>() + sourceOffset,
+//      bufferPtr->template asMutable<T>(),
+//      BaseVector::byteSize<T>(numValues));
+//}
 
 template <typename T>
 inline T* resetIfWrongVectorType(VectorPtr& result) {

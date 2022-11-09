@@ -22,6 +22,8 @@
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 #include "velox/dwio/parquet/reader/FloatingPointColumnReader.h"
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
+#include "velox/dwio/parquet/reader/ListColumnReader.h"
+#include "velox/dwio/parquet/reader/NestedIntegerColumnReader.h"
 #include "velox/dwio/parquet/reader/StringColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 
@@ -34,11 +36,17 @@ namespace facebook::velox::parquet {
 std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec) {
+    common::ScanSpec& scanSpec,
+    common::ScanSpec& topLevelScanSpec,
+    bool isNested) {
   auto colName = scanSpec.fieldName();
 
   switch (dataType->type->kind()) {
     case TypeKind::INTEGER:
+      if (isNested) {
+        return std::make_unique<NestedIntegerColumnReader>(
+            dataType, params, scanSpec, topLevelScanSpec);
+      };
     case TypeKind::BIGINT:
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT:
@@ -56,14 +64,18 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
           dataType, params, scanSpec);
 
     case TypeKind::ROW:
-      return std::make_unique<StructColumnReader>(dataType, params, scanSpec);
+      return std::make_unique<StructColumnReader>(
+          dataType, params, scanSpec, topLevelScanSpec, isNested);
 
     case TypeKind::VARBINARY:
     case TypeKind::VARCHAR:
       return std::make_unique<StringColumnReader>(dataType, params, scanSpec);
 
-    case TypeKind::BOOLEAN:
     case TypeKind::ARRAY:
+      return std::make_unique<ListColumnReader>(
+          dataType, params, scanSpec, topLevelScanSpec);
+
+    case TypeKind::BOOLEAN:
     case TypeKind::MAP:
 
       VELOX_UNSUPPORTED("Type is not supported: ", dataType->type->kind());
