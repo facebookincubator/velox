@@ -32,8 +32,8 @@ option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
   OFF)
-# option() always creats a BOOL variable so we have to use a normal cache variable
-# with STRING type for this option.
+# option() always creats a BOOL variable so we have to use a normal cache
+# variable with STRING type for this option.
 set(VELOX_DEPENDENCY_SOURCE
     ${VELOX_DEPENDENCY_SOURCE_DEFAULT}
     CACHE
