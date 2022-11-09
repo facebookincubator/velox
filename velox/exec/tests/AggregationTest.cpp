@@ -1245,10 +1245,31 @@ TEST_F(AggregationTest, groupingSets) {
       "SELECT k1, k2, count(1), sum(a), max(b) FROM tmp GROUP BY ROLLUP (k1, k2)");
 }
 
+const std::shared_ptr<const core::GroupIdNode> findGroupIdNode(
+    const core::PlanNodePtr& root,
+    const core::PlanNodeId& groupIdNodeId) {
+  std::vector<core::PlanNodePtr> nodes;
+  nodes.push_back(root);
+  while (!nodes.empty()) {
+    std::vector<core::PlanNodePtr> nextNodes;
+    for (const auto& node : nodes) {
+      if (node->id() == groupIdNodeId) {
+        return std::dynamic_pointer_cast<const core::GroupIdNode>(node);
+      }
+      const auto childNodes = node->sources();
+      std::copy(
+          childNodes.begin(), childNodes.end(), std::back_inserter(nextNodes));
+    }
+    nodes.swap(nextNodes);
+  }
+  VELOX_UNREACHABLE("Plan node {} is not found", groupIdNodeId);
+  return nullptr;
+}
+
 TEST_F(AggregationTest, groupingSetsOutput) {
   vector_size_t size = 1'000;
   auto data = makeRowVector(
-      {"ba", "ab", "a", "b"},
+      {"k1", "k2", "a", "b"},
       {
           makeFlatVector<int64_t>(size, [](auto row) { return row % 11; }),
           makeFlatVector<int64_t>(size, [](auto row) { return row % 17; }),
@@ -1260,25 +1281,53 @@ TEST_F(AggregationTest, groupingSetsOutput) {
 
   createDuckDbTable({data});
 
-  auto plan =
-      PlanBuilder().values({data}).groupId({{"ba"}, {"ab"}}, {}).planNode();
+  core::PlanNodeId randomGroupId;
+  core::PlanNodeId orderGroupId;
+  auto randomPlan =
+      PlanBuilder()
+          .values({data})
+          .groupId({{"k2", "k1"}, {}}, {"a", "b"})
+          .capturePlanNodeId(randomGroupId)
+          .singleAggregation(
+              {"k2", "k1", "group_id"},
+              {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
+          .project({"k1", "k2", "count_1", "sum_a", "max_b"})
+          .planNode();
 
-  auto expectedRowType =
-      ROW({"ba", "ab", "group_id"}, {BIGINT(), BIGINT(), BIGINT()});
-  ASSERT_EQ(*expectedRowType, *plan->outputType());
+  auto orderPlan =
+      PlanBuilder()
+          .values({data})
+          .groupId({{"k1", "k2"}, {}}, {"a", "b"})
+          .capturePlanNodeId(orderGroupId)
+          .singleAggregation(
+              {"k1", "k2", "group_id"},
+              {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
+          .project({"k1", "k2", "count_1", "sum_a", "max_b"})
+          .planNode();
 
-  plan = PlanBuilder()
-             .values({data})
-             .groupId({{"ba", "ab"}, {"ba"}, {}}, {"a", "b"})
-             .singleAggregation(
-                 {"ba", "ab", "group_id"},
-                 {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
-             .project({"ba", "ab", "count_1", "sum_a", "max_b"})
-             .planNode();
+  auto randomGroupIdNode = findGroupIdNode(randomPlan, randomGroupId);
+  auto orderGroupIdNode = findGroupIdNode(orderPlan, orderGroupId);
 
-  assertQuery(
-      plan,
-      "SELECT ba, ab, count(1), sum(a), max(b) FROM tmp GROUP BY ROLLUP (ba, ab)");
+  ASSERT_NE(*randomGroupIdNode->outputType(), *orderGroupIdNode->outputType());
+
+  auto randomExpectedRowType =
+      ROW({"k2", "k1", "a", "b", "group_id"},
+          {BIGINT(), BIGINT(), BIGINT(), VARCHAR(), BIGINT()});
+  auto orderExpectedRowType =
+      ROW({"k1", "k2", "a", "b", "group_id"},
+          {BIGINT(), BIGINT(), BIGINT(), VARCHAR(), BIGINT()});
+  ASSERT_EQ(*randomExpectedRowType, *randomGroupIdNode->outputType());
+  ASSERT_EQ(*orderExpectedRowType, *orderGroupIdNode->outputType());
+
+  CursorParameters orderParams;
+  orderParams.planNode = orderPlan;
+  auto orderResult = readCursor(orderParams, [](Task*) {});
+
+  CursorParameters randomParams;
+  randomParams.planNode = randomPlan;
+  auto randomResult = readCursor(randomParams, [](Task*) {});
+
+  assertEqualResults(orderResult.second, randomResult.second);
 }
 
 TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {

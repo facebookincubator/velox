@@ -624,6 +624,8 @@ PlanBuilder& PlanBuilder::streamingAggregation(
   return *this;
 }
 
+// groupId method creates GroupIdNode plan node with grouping keys appearing
+// in the output in the order they appear in 'groupingSets'.
 PlanBuilder& PlanBuilder::groupId(
     const std::vector<std::vector<std::string>>& groupingSets,
     const std::vector<std::string>& aggregationInputs,
@@ -634,15 +636,15 @@ PlanBuilder& PlanBuilder::groupId(
     groupingSetExprs.push_back(fields(groupingSet));
   }
 
-  std::vector<core::GroupIdNode::OutputGroupingKeyInfo> outputGroupingKeyInfos;
+  std::vector<core::GroupIdNode::GroupingKeyInfo> outputGroupingKeyInfos;
   std::set<std::string> names;
   auto index = 0;
   for (const auto& groupingSet : groupingSetExprs) {
     for (const auto& groupingKey : groupingSet) {
       if (names.find(groupingKey->name()) == names.end()) {
-        core::GroupIdNode::OutputGroupingKeyInfo keyInfos;
-        keyInfos.name = groupingKey->name();
-        keyInfos.field = groupingKey;
+        core::GroupIdNode::GroupingKeyInfo keyInfos;
+        keyInfos.output = groupingKey->name();
+        keyInfos.input = groupingKey;
         outputGroupingKeyInfos.push_back(keyInfos);
       }
       names.insert(groupingKey->name());

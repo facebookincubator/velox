@@ -554,9 +554,11 @@ inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
 /// The rest of the grouping key columns are filled in with nulls.
 class GroupIdNode : public PlanNode {
  public:
-  struct OutputGroupingKeyInfo {
-    std::string name;
-    FieldAccessTypedExprPtr field;
+  struct GroupingKeyInfo {
+    // The name to use in the output.
+    std::string output;
+    // The input field.
+    FieldAccessTypedExprPtr input;
   };
 
   /// @param id Plan node ID.
@@ -571,7 +573,7 @@ class GroupIdNode : public PlanNode {
   GroupIdNode(
       PlanNodeId id,
       std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-      std::vector<OutputGroupingKeyInfo> outputGroupingKeyInfos,
+      std::vector<GroupingKeyInfo> outputGroupingKeyInfos,
       std::vector<FieldAccessTypedExprPtr> aggregationInputs,
       std::string groupIdName,
       PlanNodePtr source);
@@ -589,7 +591,7 @@ class GroupIdNode : public PlanNode {
     return groupingSets_;
   }
 
-  const std::vector<OutputGroupingKeyInfo>& outputGroupingKeyInfos() const {
+  const std::vector<GroupingKeyInfo>& outputGroupingKeyInfos() const {
     return outputGroupingKeyInfos_;
   }
 
@@ -615,7 +617,7 @@ class GroupIdNode : public PlanNode {
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
   const std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets_;
-  const std::vector<OutputGroupingKeyInfo> outputGroupingKeyInfos_;
+  const std::vector<GroupingKeyInfo> outputGroupingKeyInfos_;
   const std::vector<FieldAccessTypedExprPtr> aggregationInputs_;
   const std::string groupIdName_;
 };
