@@ -103,4 +103,3 @@ cmake_install_deps fmt -DFMT_TEST=OFF
 dnf clean all
 
 echo "source /opt/rh/gcc-toolset-9/enable" >> ~/.bashrc
-source ~/.bashrc
