@@ -34,6 +34,9 @@ option(
   OFF)
 # option() always creats a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
+# AUTO: Try SYSTEM first fall back to BUNDLED
+# SYSTEM Use installed dependencies via find_package
+# BUNDLED Build dependencies from source
 set(VELOX_DEPENDENCY_SOURCE
     ${VELOX_DEPENDENCY_SOURCE_DEFAULT}
     CACHE
