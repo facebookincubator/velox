@@ -312,6 +312,17 @@ void GCSFileSystem::remove(std::string_view path) {
       ret, "Failed to get metadata for GCS object", bucket, object);
 }
 
+bool GCSFileSystem::exists(std::string_view path) {
+  // TODO
+  return false;
+}
+
+std::vector<std::string> GCSFileSystem::list(std::string_view path) {
+  // TODO
+  std::vector<std::string> result;
+  return result;
+}
+
 std::string GCSFileSystem::name() const {
   return "GCS";
 }

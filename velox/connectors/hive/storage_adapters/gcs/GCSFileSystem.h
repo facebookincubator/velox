@@ -38,6 +38,10 @@ class GCSFileSystem : public FileSystem {
 
   void remove(std::string_view path) override;
 
+  bool exists(std::string_view path) override;
+
+  std::vector<std::string> list(std::string_view path) override;
+
  protected:
   class Impl;
   std::shared_ptr<Impl> impl_;
