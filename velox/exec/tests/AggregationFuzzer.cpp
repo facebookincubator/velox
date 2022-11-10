@@ -363,7 +363,7 @@ void persistReproInfo(
   }
 
   // Save input vector.
-  auto inputPathOpt = generateFilePath(basePath.c_str(), "vector");
+  auto inputPathOpt = common::generateTempFilePath(basePath.c_str(), "vector");
   if (!inputPathOpt.has_value()) {
     inputPath = "Failed to create file for saving input vector.";
   } else {
@@ -378,7 +378,7 @@ void persistReproInfo(
 
   // Save plan.
   std::string planPath;
-  auto planPathOpt = generateFilePath(basePath.c_str(), "plan");
+  auto planPathOpt = common::generateTempFilePath(basePath.c_str(), "plan");
   if (!planPathOpt.has_value()) {
     planPath = "Failed to create file for saving SQL.";
   } else {
