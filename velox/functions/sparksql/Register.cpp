@@ -81,6 +81,10 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
 
+  registerFunction<LPadFunction, Varchar, Varchar, int32_t, Varchar>(
+      {prefix + "lpad"});
+  registerFunction<RPadFunction, Varchar, Varchar, int32_t, Varchar>(
+      {prefix + "rpad"});
   registerFunction<SubstrFunction, Varchar, Varchar, int32_t>(
       {prefix + "substring"});
   registerFunction<SubstrFunction, Varchar, Varchar, int32_t, int32_t>(
