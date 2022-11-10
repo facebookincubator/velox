@@ -1245,27 +1245,6 @@ TEST_F(AggregationTest, groupingSets) {
       "SELECT k1, k2, count(1), sum(a), max(b) FROM tmp GROUP BY ROLLUP (k1, k2)");
 }
 
-const std::shared_ptr<const core::GroupIdNode> findGroupIdNode(
-    const core::PlanNodePtr& root,
-    const core::PlanNodeId& groupIdNodeId) {
-  std::vector<core::PlanNodePtr> nodes;
-  nodes.push_back(root);
-  while (!nodes.empty()) {
-    std::vector<core::PlanNodePtr> nextNodes;
-    for (const auto& node : nodes) {
-      if (node->id() == groupIdNodeId) {
-        return std::dynamic_pointer_cast<const core::GroupIdNode>(node);
-      }
-      const auto childNodes = node->sources();
-      std::copy(
-          childNodes.begin(), childNodes.end(), std::back_inserter(nextNodes));
-    }
-    nodes.swap(nextNodes);
-  }
-  VELOX_UNREACHABLE("Plan node {} is not found", groupIdNodeId);
-  return nullptr;
-}
-
 TEST_F(AggregationTest, groupingSetsOutput) {
   vector_size_t size = 1'000;
   auto data = makeRowVector(
@@ -1281,13 +1260,13 @@ TEST_F(AggregationTest, groupingSetsOutput) {
 
   createDuckDbTable({data});
 
-  core::PlanNodeId randomGroupId;
-  core::PlanNodeId orderGroupId;
-  auto randomPlan =
+  core::PlanNodePtr reversedOrderGroupIdNode;
+  core::PlanNodePtr orderGroupIdNode;
+  auto reversedOrderPlan =
       PlanBuilder()
           .values({data})
           .groupId({{"k2", "k1"}, {}}, {"a", "b"})
-          .capturePlanNodeId(randomGroupId)
+          .capturePlanNode(reversedOrderGroupIdNode)
           .singleAggregation(
               {"k2", "k1", "group_id"},
               {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
@@ -1298,36 +1277,32 @@ TEST_F(AggregationTest, groupingSetsOutput) {
       PlanBuilder()
           .values({data})
           .groupId({{"k1", "k2"}, {}}, {"a", "b"})
-          .capturePlanNodeId(orderGroupId)
+          .capturePlanNode(orderGroupIdNode)
           .singleAggregation(
               {"k1", "k2", "group_id"},
               {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
           .project({"k1", "k2", "count_1", "sum_a", "max_b"})
           .planNode();
 
-  auto randomGroupIdNode = findGroupIdNode(randomPlan, randomGroupId);
-  auto orderGroupIdNode = findGroupIdNode(orderPlan, orderGroupId);
-
-  ASSERT_NE(*randomGroupIdNode->outputType(), *orderGroupIdNode->outputType());
-
-  auto randomExpectedRowType =
+  auto reversedOrderExpectedRowType =
       ROW({"k2", "k1", "a", "b", "group_id"},
           {BIGINT(), BIGINT(), BIGINT(), VARCHAR(), BIGINT()});
   auto orderExpectedRowType =
       ROW({"k1", "k2", "a", "b", "group_id"},
           {BIGINT(), BIGINT(), BIGINT(), VARCHAR(), BIGINT()});
-  ASSERT_EQ(*randomExpectedRowType, *randomGroupIdNode->outputType());
-  ASSERT_EQ(*orderExpectedRowType, *orderGroupIdNode->outputType());
+  ASSERT_EQ(
+      *reversedOrderGroupIdNode->outputType(), *reversedOrderExpectedRowType);
+  ASSERT_EQ(*orderGroupIdNode->outputType(), *orderExpectedRowType);
 
   CursorParameters orderParams;
   orderParams.planNode = orderPlan;
   auto orderResult = readCursor(orderParams, [](Task*) {});
 
-  CursorParameters randomParams;
-  randomParams.planNode = randomPlan;
-  auto randomResult = readCursor(randomParams, [](Task*) {});
+  CursorParameters reversedOrderParams;
+  reversedOrderParams.planNode = reversedOrderPlan;
+  auto reversedOrderResult = readCursor(reversedOrderParams, [](Task*) {});
 
-  assertEqualResults(orderResult.second, randomResult.second);
+  assertEqualResults(orderResult.second, reversedOrderResult.second);
 }
 
 TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {

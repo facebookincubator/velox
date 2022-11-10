@@ -432,7 +432,8 @@ class PlanBuilder {
       const std::vector<TypePtr>& resultTypes = {});
 
   /// Add a GroupIdNode using the specified grouping sets, aggregation inputs
-  /// and a groupId column name.
+  /// and a groupId column name. And create GroupIdNode plan node with grouping
+  /// keys appearing in the output in the order they appear in 'groupingSets'.
   PlanBuilder& groupId(
       const std::vector<std::vector<std::string>>& groupingSets,
       const std::vector<std::string>& aggregationInputs,
@@ -660,6 +661,12 @@ class PlanBuilder {
   PlanBuilder& capturePlanNodeId(core::PlanNodeId& id) {
     VELOX_CHECK_NOT_NULL(planNode_);
     id = planNode_->id();
+    return *this;
+  }
+
+  PlanBuilder& capturePlanNode(core::PlanNodePtr& planNode) {
+    VELOX_CHECK_NOT_NULL(planNode_);
+    planNode = planNode_;
     return *this;
   }
 

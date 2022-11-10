@@ -154,14 +154,13 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
 
 namespace {
 RowTypePtr getGroupIdOutputType(
-    const std::vector<GroupIdNode::GroupingKeyInfo>& outputGroupingKeyInfos,
+    const std::vector<GroupIdNode::GroupingKeyInfo>& groupingKeyInfos,
     const std::vector<FieldAccessTypedExprPtr>& aggregationInputs,
     const std::string& groupIdName) {
   // Grouping keys come first, followed by aggregation inputs and groupId
   // column.
 
-  auto numOutputs =
-      outputGroupingKeyInfos.size() + aggregationInputs.size() + 1;
+  auto numOutputs = groupingKeyInfos.size() + aggregationInputs.size() + 1;
 
   std::vector<std::string> names;
   std::vector<TypePtr> types;
@@ -169,7 +168,7 @@ RowTypePtr getGroupIdOutputType(
   names.reserve(numOutputs);
   types.reserve(numOutputs);
 
-  for (const auto& groupingKeyInfo : outputGroupingKeyInfos) {
+  for (const auto& groupingKeyInfo : groupingKeyInfos) {
     names.push_back(groupingKeyInfo.output);
     types.push_back(groupingKeyInfo.input->type());
   }
@@ -189,18 +188,18 @@ RowTypePtr getGroupIdOutputType(
 GroupIdNode::GroupIdNode(
     PlanNodeId id,
     std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-    std::vector<GroupIdNode::GroupingKeyInfo> outputGroupingKeyInfos,
+    std::vector<GroupIdNode::GroupingKeyInfo> groupingKeyInfos,
     std::vector<FieldAccessTypedExprPtr> aggregationInputs,
     std::string groupIdName,
     PlanNodePtr source)
     : PlanNode(std::move(id)),
       sources_{source},
       outputType_(getGroupIdOutputType(
-          outputGroupingKeyInfos,
+          groupingKeyInfos,
           aggregationInputs,
           groupIdName)),
       groupingSets_(std::move(groupingSets)),
-      outputGroupingKeyInfos_(std::move(outputGroupingKeyInfos)),
+      groupingKeyInfos_(std::move(groupingKeyInfos)),
       aggregationInputs_(std::move(aggregationInputs)),
       groupIdName_(std::move(groupIdName)) {
   VELOX_CHECK_GE(

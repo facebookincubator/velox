@@ -31,7 +31,7 @@ GroupId::GroupId(
 
   std::unordered_map<std::string, column_index_t>
       inputToOutputGroupingKeyMapping;
-  for (const auto& groupingKeyInfo : groupIdNode->outputGroupingKeyInfos()) {
+  for (const auto& groupingKeyInfo : groupIdNode->groupingKeyInfos()) {
     inputToOutputGroupingKeyMapping[groupingKeyInfo.input->name()] =
         outputType_->getChildIdx(groupingKeyInfo.output);
   }

@@ -564,7 +564,8 @@ class GroupIdNode : public PlanNode {
   /// @param id Plan node ID.
   /// @param groupingSets A list of grouping key sets. Grouping keys within the
   /// set must be unique, but grouping keys across sets may repeat.
-  /// @param outputGroupingKeyInfos Output infos for the grouping keys.
+  /// @param groupingKeyInfos The names and order of the grouping keys in the
+  /// output.
   /// @param aggregationInputs Columns that contain inputs to the aggregate
   /// functions.
   /// @param groupIdName Name of the column that will contain the grouping set
@@ -573,7 +574,7 @@ class GroupIdNode : public PlanNode {
   GroupIdNode(
       PlanNodeId id,
       std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-      std::vector<GroupingKeyInfo> outputGroupingKeyInfos,
+      std::vector<GroupingKeyInfo> groupingKeyInfos,
       std::vector<FieldAccessTypedExprPtr> aggregationInputs,
       std::string groupIdName,
       PlanNodePtr source);
@@ -591,8 +592,8 @@ class GroupIdNode : public PlanNode {
     return groupingSets_;
   }
 
-  const std::vector<GroupingKeyInfo>& outputGroupingKeyInfos() const {
-    return outputGroupingKeyInfos_;
+  const std::vector<GroupingKeyInfo>& groupingKeyInfos() const {
+    return groupingKeyInfos_;
   }
 
   const std::vector<FieldAccessTypedExprPtr>& aggregationInputs() const {
@@ -617,7 +618,7 @@ class GroupIdNode : public PlanNode {
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
   const std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets_;
-  const std::vector<GroupingKeyInfo> outputGroupingKeyInfos_;
+  const std::vector<GroupingKeyInfo> groupingKeyInfos_;
   const std::vector<FieldAccessTypedExprPtr> aggregationInputs_;
   const std::string groupIdName_;
 };
