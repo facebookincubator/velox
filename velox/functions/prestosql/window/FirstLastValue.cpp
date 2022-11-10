@@ -37,7 +37,7 @@ class FirstLastValueFunction : public exec::WindowFunction {
       velox::memory::MemoryPool* pool)
       : WindowFunction(resultType, pool, nullptr) {
     VELOX_CHECK_NULL(args[0].constantValue);
-    valueIndex_ = args[0].index.value();
+    valueColumn_ = args[0].index.value();
   }
 
   void resetPartition(const exec::WindowPartition* partition) override {
@@ -52,23 +52,24 @@ class FirstLastValueFunction : public exec::WindowFunction {
       int32_t resultOffset,
       const VectorPtr& result) override {
     auto numRows = frameStarts->size() / sizeof(vector_size_t);
-    auto frameStartsPtr = frameStarts->as<vector_size_t>();
-    auto frameEndsPtr = frameEnds->as<vector_size_t>();
+
     if constexpr (TValue == ValueType::kFirst) {
+      auto frameStartsPtr = frameStarts->as<vector_size_t>();
       auto rowNumbersRange = folly::Range(frameStartsPtr, numRows);
       partition_->extractColumn(
-          valueIndex_, rowNumbersRange, resultOffset, result);
+          valueColumn_, rowNumbersRange, resultOffset, result);
     } else {
+      auto frameEndsPtr = frameEnds->as<vector_size_t>();
       auto rowNumbersRange = folly::Range(frameEndsPtr, numRows);
       partition_->extractColumn(
-          valueIndex_, rowNumbersRange, resultOffset, result);
+          valueColumn_, rowNumbersRange, resultOffset, result);
     }
   }
 
  private:
-  // Argument index of the first_value argument column in the input row vector.
-  // This is used to retrieve column values from the partition data.
-  column_index_t valueIndex_;
+  // Argument index of the first_value / last_value argument column in the input
+  // row vector. This is used to retrieve column values from the partition data.
+  column_index_t valueColumn_;
 
   const exec::WindowPartition* partition_;
 };
@@ -93,7 +94,8 @@ std::unique_ptr<exec::WindowFunction> createFirstLastValueFunction(
 template <ValueType TValue>
 void registerFirstLastInternal(const std::string& name) {
   std::vector<exec::FunctionSignaturePtr> signatures{
-      // (T, bigint) -> T.
+      // first_value(T) -> T
+      // last_value(T) -> T
       exec::FunctionSignatureBuilder()
           .typeVariable("T")
           .returnType("T")
