@@ -494,3 +494,10 @@ struct TruncateFunction {
 
 } // namespace
 } // namespace facebook::velox::functions
+
+template <>
+struct fmt::formatter<std::errc> : formatter<int> {
+  auto format(std::errc s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

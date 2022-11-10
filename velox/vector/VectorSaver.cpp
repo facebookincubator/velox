@@ -791,3 +791,10 @@ template void saveVectorTofile<column_index_t>(
     const std::vector<column_index_t>& list,
     const char* filePath);
 } // namespace facebook::velox
+
+template <>
+struct fmt::formatter<facebook::velox::Encoding> : formatter<int> {
+  auto format(facebook::velox::Encoding s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

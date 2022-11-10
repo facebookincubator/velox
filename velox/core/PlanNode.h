@@ -1680,3 +1680,23 @@ class WindowNode : public PlanNode {
 };
 
 } // namespace facebook::velox::core
+
+template <>
+struct fmt::formatter<facebook::velox::core::WindowNode::WindowType>
+    : formatter<int> {
+  auto format(
+      facebook::velox::core::WindowNode::WindowType s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::core::WindowNode::BoundType>
+    : formatter<int> {
+  auto format(
+      facebook::velox::core::WindowNode::BoundType s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
