@@ -50,6 +50,66 @@ bool SubstraitToVeloxPlanValidator::validateInputTypes(
 }
 
 bool SubstraitToVeloxPlanValidator::validate(
+    const ::substrait::ExpandRel& sExpand) {
+  if (sExpand.has_input() && !validate(sExpand.input())) {
+    return false;
+  }
+  // Get and validate the input types from extension.
+  if (!sExpand.has_advanced_extension()) {
+    std::cout << "Input types are expected in ExpandRel." << std::endl;
+    return false;
+  }
+  const auto& extension = sExpand.advanced_extension();
+  std::vector<TypePtr> types;
+  if (!validateInputTypes(extension, types)) {
+    std::cout << "Validation failed for input types in ExpandRel." << std::endl;
+    return false;
+  }
+
+  int32_t inputPlanNodeId = 0;
+  std::vector<std::string> names;
+  names.reserve(types.size());
+  for (auto colIdx = 0; colIdx < types.size(); colIdx++) {
+    names.emplace_back(subParser_->makeNodeName(inputPlanNodeId, colIdx));
+  }
+  auto rowType = std::make_shared<RowType>(std::move(names), std::move(types));
+
+  // Validate the expand agg expressions.
+  const auto& aggExprs = sExpand.aggregate_expressions();
+  std::vector<std::shared_ptr<const core::ITypedExpr>> expressions;
+  expressions.reserve(aggExprs.size());
+
+  try {
+    for (const auto& expr : aggExprs) {
+      expressions.emplace_back(exprConverter_->toVeloxExpr(expr, rowType));
+    }
+    // Try to compile the expressions. If there is any unregistred funciton or
+    // mismatched type, exception will be thrown.
+    exec::ExprSet exprSet(std::move(expressions), execCtx_);
+  } catch (const VeloxException& err) {
+    std::cout << "Validation failed for agg expression in ExpandRel due to:"
+              << err.message() << std::endl;
+    return false;
+  }
+
+  // Validate groupings.
+  for (const auto& grouping : sExpand.groupings()) {
+    for (const auto& groupingExpr : grouping.groupsets_expressions()) {
+      const auto& typeCase = groupingExpr.rex_type_case();
+      switch (typeCase) {
+        case ::substrait::Expression::RexTypeCase::kSelection:
+          break;
+        default:
+          std::cout << "Only field is supported in groupings." << std::endl;
+          return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+bool SubstraitToVeloxPlanValidator::validate(
     const ::substrait::SortRel& sSort) {
   if (sSort.has_input() && !validate(sSort.input())) {
     return false;
@@ -369,6 +429,9 @@ bool SubstraitToVeloxPlanValidator::validate(const ::substrait::Rel& sRel) {
   }
   if (sRel.has_sort()) {
     return validate(sRel.sort());
+  }
+  if (sRel.has_expand()) {
+    return validate(sRel.expand());
   }
   return false;
 }

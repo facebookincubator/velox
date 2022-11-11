@@ -413,6 +413,78 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+    const ::substrait::ExpandRel& expandRel) {
+  core::PlanNodePtr childNode;
+  if (expandRel.has_input()) {
+    childNode = toVeloxPlan(expandRel.input());
+  } else {
+    VELOX_FAIL("Child Rel is expected in ExpandRel.");
+  }
+
+  const auto& inputType = childNode->outputType();
+
+  std::vector<std::vector<core::FieldAccessTypedExprPtr>> groupingSetExprs;
+  groupingSetExprs.reserve(expandRel.groupings_size());
+
+  for (const auto& grouping : expandRel.groupings()) {
+    std::vector<core::FieldAccessTypedExprPtr> groupingExprs;
+    groupingExprs.reserve(grouping.groupsets_expressions_size());
+
+    for (const auto& groupingExpr : grouping.groupsets_expressions()) {
+      auto expression =
+          exprConverter_->toVeloxExpr(groupingExpr.selection(), inputType);
+      auto expr_field =
+          dynamic_cast<const core::FieldAccessTypedExpr*>(expression.get());
+      VELOX_CHECK(
+          expr_field != nullptr,
+          " the group set key in Expand Operator only support field")
+
+      groupingExprs.emplace_back(
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+              expression));
+    }
+    groupingSetExprs.emplace_back(groupingExprs);
+  }
+
+  std::vector<core::GroupIdNode::GroupingKeyInfo> groupingKeyInfos;
+  std::set<std::string> names;
+  auto index = 0;
+  for (const auto& groupingSet : groupingSetExprs) {
+    for (const auto& groupingKey : groupingSet) {
+      if (names.find(groupingKey->name()) == names.end()) {
+        core::GroupIdNode::GroupingKeyInfo keyInfos;
+        keyInfos.output = groupingKey->name();
+        keyInfos.input = groupingKey;
+        groupingKeyInfos.push_back(keyInfos);
+      }
+      names.insert(groupingKey->name());
+    }
+  }
+
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggExprs;
+
+  for (const auto& aggExpr : expandRel.aggregate_expressions()) {
+    auto expression = exprConverter_->toVeloxExpr(aggExpr, inputType);
+    auto expr_field =
+        dynamic_cast<const core::FieldAccessTypedExpr*>(expression.get());
+    VELOX_CHECK(
+        expr_field != nullptr,
+        " the agg key in Expand Operator only support field");
+    auto filed =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expression);
+    aggExprs.emplace_back(filed);
+  }
+
+  return std::make_shared<core::GroupIdNode>(
+      nextPlanNodeId(),
+      groupingSetExprs,
+      std::move(groupingKeyInfos),
+      aggExprs,
+      std::move(expandRel.group_name()),
+      childNode);
+}
+
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::SortRel& sortRel) {
   auto childNode = convertSingleInput<::substrait::SortRel>(sortRel);
 
@@ -763,6 +835,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   }
   if (rel.has_sort()) {
     return toVeloxPlan(rel.sort());
+  }
+  if (sRel.has_expand()) {
+    return toVeloxPlan(sRel.expand());
   }
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }

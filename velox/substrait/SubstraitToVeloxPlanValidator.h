@@ -30,6 +30,9 @@ class SubstraitToVeloxPlanValidator {
       : pool_(pool), execCtx_(execCtx) {}
 
   /// Used to validate whether the computing of this Sort is supported.
+  bool validate(const ::substrait::ExpandRel& sExpand);
+
+  /// Used to validate whether the computing of this Sort is supported.
   bool validate(const ::substrait::SortRel& sSort);
 
   /// Used to validate whether the computing of this Aggregation is supported.
