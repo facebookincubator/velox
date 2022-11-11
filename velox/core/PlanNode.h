@@ -970,7 +970,6 @@ enum class JoinType {
   // right that have no match on the left with left-side columns filled with
   // nulls.
   kFull,
-  kLeftSemi, // TODO Remove after updating Prestissimo.
   // Return a subset of rows from the left side which have a match on the right
   // side. For this join type, cardinality of the output is less than or equal
   // to the cardinality of the left side.
@@ -979,7 +978,6 @@ enum class JoinType {
   // there exists a match on the right side. For this join type, cardinality of
   // the output equals the cardinality of the left side.
   kLeftSemiProject,
-  kRightSemi, // TODO Remove after updating Prestissimo.
   // Opposite of kLeftSemiFilter. Return a subset of rows from the right side
   // which have a match on the left side. For this join type, cardinality of the
   // output is less than or equal to the cardinality of the right side.
@@ -1015,10 +1013,8 @@ inline const char* joinTypeName(JoinType joinType) {
       return "RIGHT";
     case JoinType::kFull:
       return "FULL";
-    case JoinType::kLeftSemi:
     case JoinType::kLeftSemiFilter:
       return "LEFT SEMI (FILTER)";
-    case JoinType::kRightSemi:
     case JoinType::kRightSemiFilter:
       return "RIGHT SEMI (FILTER)";
     case JoinType::kLeftSemiProject:
@@ -1050,8 +1046,7 @@ inline bool isFullJoin(JoinType joinType) {
 }
 
 inline bool isLeftSemiFilterJoin(JoinType joinType) {
-  return joinType == JoinType::kLeftSemiFilter ||
-      joinType == JoinType::kLeftSemi;
+  return joinType == JoinType::kLeftSemiFilter;
 }
 
 inline bool isLeftSemiProjectJoin(JoinType joinType) {
@@ -1059,8 +1054,7 @@ inline bool isLeftSemiProjectJoin(JoinType joinType) {
 }
 
 inline bool isRightSemiFilterJoin(JoinType joinType) {
-  return joinType == JoinType::kRightSemiFilter ||
-      joinType == JoinType::kRightSemi;
+  return joinType == JoinType::kRightSemiFilter;
 }
 
 inline bool isRightSemiProjectJoin(JoinType joinType) {
@@ -1122,8 +1116,7 @@ class AbstractJoinNode : public PlanNode {
   }
 
   bool isLeftSemiFilterJoin() const {
-    return joinType_ == JoinType::kLeftSemiFilter ||
-        joinType_ == JoinType::kLeftSemi;
+    return joinType_ == JoinType::kLeftSemiFilter;
   }
 
   bool isLeftSemiProjectJoin() const {
@@ -1131,8 +1124,7 @@ class AbstractJoinNode : public PlanNode {
   }
 
   bool isRightSemiFilterJoin() const {
-    return joinType_ == JoinType::kRightSemiFilter ||
-        joinType_ == JoinType::kRightSemi;
+    return joinType_ == JoinType::kRightSemiFilter;
   }
 
   bool isRightSemiProjectJoin() const {
