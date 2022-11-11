@@ -168,8 +168,6 @@ jobs:
     macos:
       xcode: "12.5.1"
     resource_class: large
-    environment:
-      VELOX_DEPENDENCY_SOURCE: BUNDLED
     steps:
       - checkout
       - update-submodules
