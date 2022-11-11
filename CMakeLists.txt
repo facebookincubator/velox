@@ -299,7 +299,7 @@ include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 find_package(gflags COMPONENTS shared)
 find_package(glog REQUIRED)
 
-set(fmt_SOURCE AUTO)
+set_source(fmt)
 resolve_dependency(fmt)
 
 find_library(EVENT event)
