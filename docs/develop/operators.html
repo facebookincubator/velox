@@ -282,6 +282,8 @@ each measure for each combination of the grouping keys.</p>
 <span id="group-id-node"></span><h3>GroupIdNode<a class="headerlink" href="#groupidnode" title="Permalink to this heading">¶</a></h3>
 <p>Duplicates the input for each of the specified grouping key sets. Used to
 implement aggregations over grouping sets.</p>
+<p>The output consists of grouping keys, followed by aggregation inputs,
+followed by the group ID column. The type of group ID column is BIGINT.</p>
 <table class="docutils align-left">
 <colgroup>
 <col style="width: 25%" />
@@ -296,8 +298,8 @@ implement aggregations over grouping sets.</p>
 <tr class="row-even"><td><p>groupingSets</p></td>
 <td><p>List of grouping key sets. Keys within each set must be unique, but keys can repeat across the sets.</p></td>
 </tr>
-<tr class="row-odd"><td><p>outputGroupingKeyNames</p></td>
-<td><p>Output names for the grouping key columns.</p></td>
+<tr class="row-odd"><td><p>groupingKeyInfos</p></td>
+<td><p>The names and order of the grouping key columns in the output.</p></td>
 </tr>
 <tr class="row-even"><td><p>aggregationInputs</p></td>
 <td><p>Input columns to duplicate.</p></td>
