@@ -422,7 +422,7 @@ std::unique_ptr<facebook::velox::dwrf::Writer> createDwrfWriter(
     facebook::velox::memory::MemoryPool& memoryPool) {
   auto writeFileSink =
       facebook::velox::dwio::common::WriteFileSink::createWriteFileSink(
-          "hdfs://localhost:7878" + path, &configurationValues);
+          "hdfs://localhost:7878" + path, configurationValues);
 
   auto config = std::make_shared<facebook::velox::dwrf::Config>();
   config->set(
@@ -475,8 +475,8 @@ TEST_F(HdfsFileSystemTest, E2EHdfsReadWriteDwrf) {
   auto& memoryPool = scopedPool->getPool();
 
   const std::string path = "/b.txt";
-  const char* s = "aaaaaaaaaaaaaaaaaaaaaa";
-  const facebook::velox::StringView sv(s, strlen(s));
+  const std::string str = "aaaaaaaaaaaaaaaaaaaaaa";
+  const facebook::velox::StringView sv(str.c_str(), str.size());
   BufferPtr buffer =
       AlignedBuffer::allocate<facebook::velox::StringView>(1, &memoryPool, sv);
   auto flat = std::make_shared<
@@ -502,6 +502,6 @@ TEST_F(HdfsFileSystemTest, E2EHdfsReadWriteDwrf) {
   auto child = root->childAt(0);
   ASSERT_EQ(child->encoding(), VectorEncoding::Simple::FLAT);
   auto flatVector = child->as<facebook::velox::FlatVector<StringView>>();
-  facebook::velox::StringView v1 = flatVector->valueAt(0);
-  ASSERT_EQ(v1, "aaaaaaaaaaaaaaaaaaaaaa");
+  facebook::velox::StringView v = flatVector->valueAt(0);
+  ASSERT_EQ(std::string(v), str);
 }

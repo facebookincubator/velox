@@ -147,46 +147,45 @@ void WriteFileSink::setFlushSize(uint64_t flushSize) {
 }
 
 std::unique_ptr<DataSink> WriteFileSink::createWriteFileSink(
-    const std::string& path_,
-    const std::unordered_map<std::string, std::string>* props,
+    const std::string& path,
+    const std::unordered_map<std::string, std::string>& props,
     const MetricsLogPtr& metricsLog,
     IoStatistics* stats) {
   std::shared_ptr<const facebook::velox::core::MemConfig> config = nullptr;
   // Create the write file sink, if props is nullptr, will read the default
   // config of hdfs-site.xml in LIBHDFS3_CONF environment variable, by set the
-  // 'hive.hdfs.host' as 'default'
-  if (props == nullptr) {
+  // 'hive.hdfs.host' as 'default'.
+  if (props.empty()) {
     static const std::unordered_map<std::string, std::string> configMap(
         {{"hive.hdfs.host", "default"}, {"hive.hdfs.port", "0"}});
     config =
         std::make_shared<const facebook::velox::core::MemConfig>(configMap);
   } else {
-    config = std::make_shared<const facebook::velox::core::MemConfig>(*props);
+    config = std::make_shared<const facebook::velox::core::MemConfig>(props);
   }
   std::shared_ptr<facebook::velox::filesystems::FileSystem> fs =
-      filesystems::getFileSystem(path_, config);
+      filesystems::getFileSystem(path, config);
   VELOX_CHECK(fs != nullptr, "Failed to connector file system");
-  std::string filePath_ = path_;
+  std::string filePath = path;
   // Remove hdfs prefix from path. If the file path like: 'hdfs://a/b/c',  then
-  // we will remove the hdfs prefix, make the path to be '/a/b/c'
-  if (strncmp(filePath_.c_str(), "hdfs:", 5) == 0) {
+  // we will remove the hdfs prefix, make the path to be '/a/b/c'.
+  if (strncmp(filePath.c_str(), "hdfs:", 5) == 0) {
     std::string hdfsPrefix("hdfs://");
-    filePath_ = filePath_.replace(0, hdfsPrefix.size(), "");
-    int pathBeginIndex = filePath_.find("/", 0);
-    filePath_ = filePath_.substr(pathBeginIndex);
+    filePath = filePath.replace(0, hdfsPrefix.size(), "");
+    int pathBeginIndex = filePath.find("/", 0);
+    filePath = filePath.substr(pathBeginIndex);
   }
-  std::unique_ptr<WriteFile> writeFile = fs->openFileForWrite(filePath_);
+  std::unique_ptr<WriteFile> writeFile = fs->openFileForWrite(filePath);
   VELOX_CHECK(writeFile != nullptr, "Failed to open write file");
   return std::make_unique<WriteFileSink>(
       std::move(writeFile), metricsLog, stats);
 }
 
 static std::unique_ptr<DataSink> writeFileSink(
-    const std::string& file_path_,
+    const std::string& filePath,
     const MetricsLogPtr& metricsLog,
     IoStatistics* stats) {
-  return WriteFileSink::createWriteFileSink(
-      file_path_, nullptr, metricsLog, stats);
+  return WriteFileSink::createWriteFileSink(filePath, {}, metricsLog, stats);
 }
 
 VELOX_REGISTER_DATA_SINK_METHOD_DEFINITION(WriteFileSink, writeFileSink);

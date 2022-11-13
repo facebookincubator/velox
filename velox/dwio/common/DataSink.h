@@ -233,7 +233,7 @@ class WriteFileSink : public DataSink {
   /// @param stats The io statistics.
   static std::unique_ptr<DataSink> createWriteFileSink(
       const std::string& filePath,
-      const std::unordered_map<std::string, std::string>* props = nullptr,
+      const std::unordered_map<std::string, std::string>& props = {},
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr);
 
