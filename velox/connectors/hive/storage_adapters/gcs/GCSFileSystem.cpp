@@ -313,13 +313,47 @@ void GCSFileSystem::remove(std::string_view path) {
 }
 
 bool GCSFileSystem::exists(std::string_view path) {
-  // TODO
-  return false;
+  std::vector<std::string> result;
+  if (!isGCSFile(path))
+    VELOX_FAIL("File {} is not a valid gcs file", path);
+  const std::string file = gcsPath(path);
+
+  // assumption it's a proper path
+  std::string bucket;
+  std::string object;
+  bucketAndKeyFromGCSPath(file, bucket, object);
+  using ::google::cloud::StatusOr;
+  StatusOr<gcs::BucketMetadata> metadata =
+      impl_->gcsClient()->GetBucketMetadata(bucket);
+
+  if (!metadata) {
+    return false;
+  } else {
+    return true;
+  }
 }
 
 std::vector<std::string> GCSFileSystem::list(std::string_view path) {
-  // TODO
   std::vector<std::string> result;
+  if (!isGCSFile(path))
+    VELOX_FAIL("File {} is not a valid gcs file", path);
+  const std::string file = gcsPath(path);
+
+  // assumption it's a proper path
+  std::string bucket;
+  std::string object;
+  bucketAndKeyFromGCSPath(file, bucket, object);
+  for (auto&& metadata : impl_->gcsClient()->ListObjects(bucket)) {
+    if (!metadata) {
+      VELOX_CHECK_GCS_OUTCOME(
+          metadata.status(),
+          "Failed to get metadata for GCS object",
+          bucket,
+          object);
+    }
+    result.push_back(metadata->name());
+  }
+
   return result;
 }
 
