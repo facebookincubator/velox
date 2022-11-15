@@ -124,10 +124,14 @@ class XxHashTest : public SparkFunctionBaseTest {
 TEST_F(XxHashTest, String) {
   EXPECT_EQ(xxhash64<std::string>("Spark"), -4294468057691064905);
   EXPECT_EQ(xxhash64<std::string>(""), -7444071767201028348);
-  EXPECT_EQ(xxhash64<std::string>("abcdefghijklmnopqrstuvwxyz"), -3265757659154784300);
+  EXPECT_EQ(
+      xxhash64<std::string>("abcdefghijklmnopqrstuvwxyz"),
+      -3265757659154784300);
   // String that has a length that is a multiple of four.
   EXPECT_EQ(xxhash64<std::string>("12345678"), 6863040065134489090);
-  EXPECT_EQ(xxhash64<std::string>("12345678djdejidecjjeijcneknceincne"), -633855189410948723);
+  EXPECT_EQ(
+      xxhash64<std::string>("12345678djdejidecjjeijcneknceincne"),
+      -633855189410948723);
   EXPECT_EQ(xxhash64<std::string>(std::nullopt), 42);
 }
 
