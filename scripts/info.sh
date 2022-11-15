@@ -22,7 +22,6 @@ e C++ Compiler Version: $(grep -aP 'CMAKE_CXX_COMPILER_VERSION' $info | ext)
 e C Compiler: $(grep -aP 'CMAKE_C_COMPILER ==' $info | ext)
 e C Compiler Version: $(grep -aP 'CMAKE_C_COMPILER_VERSION' $info | ext)
 e CMake Prefix Path: $(grep -aP '_PREFIX_PATH ' $info | ext)
-e 
 echo '```'
 
 rm $info
