@@ -59,8 +59,9 @@ vector can have random and potentially nested encodings.</p>
 expression fuzzer evaluates each expression twice and asserts the results to be
 the same: using regular evaluation path and using simplified evaluation that
 flattens all input vectors before evaluating an expression.</p>
-<p>The Aggregation Fuzzer tests the HashAggregation operator and UDAFs by
-generating random aggregations and evaluating these on random input vectors.</p>
+<p>The Aggregation Fuzzer tests the HashAggregation operator, the StreamingAggregation
+operator and UDAFs by generating random aggregations and evaluating these on
+random input vectors.</p>
 <p>The Aggregation Fuzzer tests global aggregations (no grouping keys), group-by
 aggregations (one or more grouping keys), distinct aggregations(no aggregates),
 aggregations with and without masks.</p>
@@ -73,7 +74,18 @@ verifies that results match. These plans are:</p>
 <li><p>Partial -&gt; Final aggregation.</p></li>
 <li><p>Partial -&gt; Intermediate -&gt; Final aggregation.</p></li>
 <li><p>Partial -&gt; LocalExchange(grouping keys) -&gt; Final aggregation.</p></li>
-<li><p>All the above using flattened input vectors.</p></li>
+<li><p>All of the above using flattened input vectors.</p></li>
+</ul>
+<p>In addition, to test StreamingAggregation operator, Fuzzer generates plans
+using OrderBy and StreamingAggregation.</p>
+<ul class="simple">
+<li><p>OrderBy(grouping keys) -&gt; Single streaming aggregation (raw input, final result).</p></li>
+<li><p>OrderBy(grouping keys) -&gt; Partial streaming -&gt; Final streaming aggregation.</p></li>
+<li><p>OrderBy(grouping keys) -&gt; Partial streaming -&gt; Intermediate streaming
+-&gt; Final streaming aggregation.</p></li>
+<li><p>OrderBy(grouping keys) -&gt; Partial streaming -&gt; LocalMerge(grouping keys)
+-&gt; Final streaming aggregation.</p></li>
+<li><p>All of the above using flattened input vectors.</p></li>
 </ul>
 <p>When testing aggregate functions whose results depend on the order of inputs
 (e.g. map_agg, map_union, arbitrary, etc.), the Fuzzer verifies that all plans
