@@ -26,7 +26,6 @@ workflows:
       - header-check
       - linux-benchmarks-basic
       - linux-benchmarks-basic-dedicated
-      - docker-compose-ubuntu-cpp
 
   # Daily documentation update
   nightly:
@@ -41,6 +40,7 @@ workflows:
       - doc-gen-job
       - linux-fuzzer-run
       - linux-aggregate-fuzzer-run
+      - docker-compose-ubuntu-cpp
 
   # Hourly build on weekdays
   weekday:
