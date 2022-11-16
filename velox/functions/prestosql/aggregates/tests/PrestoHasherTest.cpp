@@ -227,8 +227,8 @@ TEST_F(PrestoHasherTest, floats) {
 
 TEST_F(PrestoHasherTest, varchars) {
   assertHash<StringView>(
-      {"abcd"_sv, ""_sv, std::nullopt, "Thanks \u0020\u007F"_sv, ""},
-      {-2449070131962342708, -1205034819632174695, 0, 2911531567394159200, -1205034819632174695});
+      {"abcd"_sv, ""_sv, std::nullopt, "Thanks \u0020\u007F"_sv},
+      {-2449070131962342708, -1205034819632174695, 0, 2911531567394159200});
 }
 
 TEST_F(PrestoHasherTest, bools) {
@@ -311,14 +311,6 @@ TEST_F(PrestoHasherTest, maps) {
   assertHash(
       mapWithNullArrays,
       {9155312661752487122, 6562918552317873797, 2644717257979355699});
-}
-
-TEST_F(PrestoHasherTest, rowsStringInt32) {
-  auto row = makeRowVector(
-      {makeNullableFlatVector<StringView>({std::nullopt, ""}),
-       makeNullableFlatVector<int32_t>({0, 0})});
-
-  assertHash(row, {961, -462591261178311352});
 }
 
 TEST_F(PrestoHasherTest, rows) {
