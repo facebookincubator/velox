@@ -15,6 +15,7 @@
  */
 
 #pragma once
+#include "BufferedInput.h"
 #include "velox/common/base/RawVector.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/process/ProcessBase.h"
@@ -132,6 +133,9 @@ class SelectiveColumnReader {
     return *formatData_;
   }
 
+  /// Returns list of child readers, empty for leaf readers.
+  virtual const std::vector<SelectiveColumnReader*> children() const;
+
   /**
    * Read the next group of values into a RowVector.
    * @param numValues the number of values to read
@@ -193,6 +197,10 @@ class SelectiveColumnReader {
 
   const TypePtr& type() const {
     return type_;
+  }
+
+  const TypeWithId& nodeType() const {
+    return *nodeType_;
   }
 
   // The below functions are called from ColumnVisitor to fill the result set.
@@ -502,6 +510,7 @@ class SelectiveColumnReader {
 
   memory::MemoryPool& memoryPool_;
 
+  // Requested Velox type
   std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
 
   // Format specific state and functions.
@@ -511,6 +520,8 @@ class SelectiveColumnReader {
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* FOLLY_NONNULL scanSpec_;
+
+  // The file data type?
   TypePtr type_;
 
   // Row number after last read row, relative to stripe start.
