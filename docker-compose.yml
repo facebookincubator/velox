@@ -48,3 +48,25 @@ services:
     volumes:
       - .:/velox:delegated
     command: /bin/bash -c "scl enable gcc-toolset-9 '/velox/scripts/docker-command.sh'"
+
+  ubuntu-adapters-cpp:
+    # Usage:
+    #   docker-compose pull ubuntu-adapters-cpp or docker-compose build ubuntu-adapters-cpp
+    #   docker-compose run --rm ubuntu-adapters-cpp
+    #   or
+    #   docker-compose run -e NUM_THREADS=<NUMBER_OF_THREADS_TO_USE> --rm ubuntu-adapters-cpp
+    #   to set the number of threads used during compilation
+    image: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-adapters-22.04-avx
+    build:
+      context: .
+      dockerfile: scripts/ubuntu-adapters-cpp.dockerfile
+      args:
+        base: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
+    environment:
+      NUM_THREADS: 8 # default value for NUM_THREADS
+      VELOX_DEPENDENCY_SOURCE: BUNDLED # Build dependencies from source
+      EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HDFS=ON -DVELOX_ENABLE_S3=ON -DVELOX_ENABLE_SUBSTRAIT=ON"
+      AWSSDK_ROOT_DIR: /deps/install
+    volumes:
+      - .:/velox:delegated
+    command: scripts/docker-command.sh

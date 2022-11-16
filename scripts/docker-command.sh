@@ -15,5 +15,5 @@
 
 set -eu
 # Compilation and testing
-make
+make EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS}" AWSSDK_ROOT_DIR="${AWSSDK_ROOT_DIR}"
 cd _build/release && ctest -j${NUM_THREADS} -VV --output-on-failure
