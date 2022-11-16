@@ -49,6 +49,11 @@ void HdfsWriteFile::close() {
 }
 
 void HdfsWriteFile::flush() {
+  // Check Whether the file is opened for write.
+  VELOX_CHECK_EQ(
+      hdfsFileIsOpenForWrite(hdfsFile_),
+      1,
+      "Flush failure in HdfsWriteFile::flush as the file is not opened");
   int success = hdfsFlush(hdfsClient_, hdfsFile_);
   VELOX_CHECK_EQ(
       success, 0, "Hdfs flush error: {}", std::string(hdfsGetLastError()));
@@ -58,6 +63,11 @@ void HdfsWriteFile::append(std::string_view data) {
   if (data.size() == 0) {
     return;
   }
+  // Check Whether the file is opened for write.
+  VELOX_CHECK_EQ(
+      hdfsFileIsOpenForWrite(hdfsFile_),
+      1,
+      "Write failure in HdfsWriteFile::append as the file is not opened");
   int64_t totalWrittenBytes =
       hdfsWrite(hdfsClient_, hdfsFile_, std::string(data).c_str(), data.size());
   VELOX_CHECK_EQ(
