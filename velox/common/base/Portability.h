@@ -19,6 +19,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace facebook::velox {
+
 inline size_t count_trailing_zeros(uint64_t x) {
   return x == 0 ? 64 : __builtin_ctzll(x);
 }
@@ -32,3 +34,21 @@ inline size_t count_leading_zeros(uint64_t x) {
 #else
 #define INLINE_LAMBDA
 #endif
+
+/// Define asan_atomic<T> to be std::atomic<T> with asan and just T
+/// otherwise. Applies to counters that do not need atomicity and are
+/// not serialized on any mutex but generate warnings with asan.
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+template <typename T>
+using asan_atomic = std::atomic<T>;
+#else
+template <typename T>
+using asan_atomic = T;
+#endif
+#else
+template <typename T>
+using asan_atomic = T;
+#endif
+
+} // namespace facebook::velox
