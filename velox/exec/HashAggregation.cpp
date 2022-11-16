@@ -275,6 +275,9 @@ RowVectorPtr HashAggregation::getOutput() {
   if (isDistinct_) {
     if (!newDistincts_) {
       if (noMoreInput_) {
+        if (!isPartialOutput_) {
+          LOG(ERROR) << "aggregation done";
+        }
         finished_ = true;
       }
       return nullptr;
@@ -306,6 +309,9 @@ RowVectorPtr HashAggregation::getOutput() {
   if (!hasData) {
     resultIterator_.reset();
     if (noMoreInput_) {
+      if (!isPartialOutput_) {
+        LOG(ERROR) << "aggregation done";
+      }
       finished_ = true;
     }
     resetPartialOutputIfNeed();

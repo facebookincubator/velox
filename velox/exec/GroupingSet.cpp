@@ -513,10 +513,17 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
         currentUsage * spillConfig_->spillableReservationGrowthPct / 100;
     auto rowsToSpill = std::max<int64_t>(
         1, bytesToSpill / (rows->fixedRowSize() + outOfLineBytesPerRow));
-    spill(
-        std::max<int64_t>(0, numDistinct - rowsToSpill),
-        std::max<int64_t>(
-            0, outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow)));
+    static std::atomic<int64_t> numSpills{0};
+    LOG(ERROR) << "start threshold spill";
+    uint64_t usec = 0;
+    {
+      MicrosecondTimer timer(&usec);
+      spill(
+          std::max<int64_t>(0, numDistinct - rowsToSpill),
+          std::max<int64_t>(
+              0, outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow)));
+    }
+    LOG(ERROR) << "end threshold spill " << usec << "us " << " rowsToSpill " << rowsToSpill << " bytesToSpill " << bytesToSpill << " numSpills " << ++numSpills;
     return;
   }
 
@@ -547,10 +554,16 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   }
   auto rowsToSpill = std::max<int64_t>(
       1, targetIncrement / (rows->fixedRowSize() + outOfLineBytesPerRow));
-  spill(
-      std::max<int64_t>(0, numDistinct - rowsToSpill),
-      std::max<int64_t>(
-          0, outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow)));
+  LOG(ERROR) << "start reservation spill";
+  uint64_t usec = 0;
+  {
+    MicrosecondTimer timer(&usec);
+    spill(
+        std::max<int64_t>(0, numDistinct - rowsToSpill),
+        std::max<int64_t>(
+            0, outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow)));
+  }
+  LOG(ERROR) << "end reservationg spill " << usec << "us";
 }
 
 void GroupingSet::spill(int64_t targetRows, int64_t targetBytes) {
@@ -696,5 +709,4 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* FOLLY_NONNULL row) {
   }
   mergeSelection_.setValid(input.currentIndex(), false);
 }
-
 } // namespace facebook::velox::exec
