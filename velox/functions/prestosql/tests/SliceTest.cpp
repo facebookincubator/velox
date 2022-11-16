@@ -32,9 +32,9 @@ class SliceTest : public FunctionBaseTest {
       const ArrayVectorPtr& expectedArrayVector) {
     auto result = evaluate<ArrayVector>(expression, makeRowVector(parameters));
     assertEqualVectors(expectedArrayVector, result);
+    assertNoOverlappingRanges(result);
   }
 };
-} // namespace
 
 TEST_F(SliceTest, prestoTestCases) {
   {
@@ -249,6 +249,26 @@ TEST_F(SliceTest, variableInputArray) {
         {arrayVector, startsVector, lengthsVector},
         expectedArrayVector);
   }
+
+  // Tests constant arrays a non-constant starts and lengths.
+  {
+    auto startsVector = makeFlatVector<int64_t>(
+        kVectorSize, [](vector_size_t /*row*/) { return 2; });
+    auto lengthsVector = makeFlatVector<int64_t>(
+        kVectorSize, [](vector_size_t /*row*/) { return 2; });
+    auto arrayVector = makeConstantArray<int64_t>(kVectorSize, {99, 100, 101});
+
+    auto expectedSizeAt = [](vector_size_t row) { return 2; };
+    auto expectedValueAt = [](vector_size_t row, vector_size_t idx) {
+      return idx == 0 ? 100 : 101;
+    };
+    auto expectedArrayVector =
+        makeArrayVector<int64_t>(kVectorSize, expectedSizeAt, expectedValueAt);
+    testSlice(
+        "slice(C0, C1, C2)",
+        {arrayVector, startsVector, lengthsVector},
+        expectedArrayVector);
+  }
 }
 
 TEST_F(SliceTest, varcharVariableInput) {
@@ -385,3 +405,5 @@ TEST_F(SliceTest, negativeSliceLength) {
       },
       "The value of length argument of slice() function should not be negative");
 }
+
+} // namespace

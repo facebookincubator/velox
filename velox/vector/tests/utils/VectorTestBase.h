@@ -34,6 +34,10 @@ void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual);
 /// Verify that 'vector' is copyable, by copying all rows.
 void assertCopyableVector(const VectorPtr& vector);
 
+/// Verify that an ArrayVector does not contain overlapping [offset, size]
+/// ranges.
+void assertNoOverlappingRanges(const ArrayVectorPtr& arrayVector);
+
 class VectorTestBase {
  protected:
   VectorTestBase() {

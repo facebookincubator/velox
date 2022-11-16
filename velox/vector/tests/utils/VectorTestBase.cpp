@@ -116,4 +116,24 @@ void assertCopyableVector(const VectorPtr& vector) {
   copy->copy(vector.get(), 0, 0, vector->size());
 }
 
+void assertNoOverlappingRanges(const ArrayVectorPtr& arrayVector) {
+  std::unordered_map<vector_size_t, vector_size_t> seenElements;
+  seenElements.reserve(arrayVector->elements()->size());
+
+  for (vector_size_t i = 0; i < arrayVector->size(); ++i) {
+    auto size = arrayVector->sizeAt(i);
+    auto offset = arrayVector->offsetAt(i);
+
+    for (vector_size_t j = 0; j < size; ++j) {
+      auto it = seenElements.find(offset + j);
+      ASSERT_EQ(it, seenElements.end())
+          << "found overlap at idx " << offset + j << ": element " << it->second
+          << " has offset " << arrayVector->offsetAt(it->second) << " and size "
+          << arrayVector->sizeAt(it->second) << ", and element " << i
+          << " has offset " << offset << " and size " << size << ".";
+      seenElements.emplace(offset + j, i);
+    }
+  }
+}
+
 } // namespace facebook::velox::test
