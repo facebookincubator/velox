@@ -50,6 +50,15 @@ bool SubstraitToVeloxPlanValidator::validateInputTypes(
 }
 
 bool SubstraitToVeloxPlanValidator::validate(
+    const ::substrait::FetchRel& fetchRel) {
+  if (fetchRel.offset() < 0 || fetchRel.count() < 0) {
+    std::cout << "Offset and count should be valid." << std::endl;
+    return false;
+  }
+  return true;
+}
+
+bool SubstraitToVeloxPlanValidator::validate(
     const ::substrait::ExpandRel& sExpand) {
   if (sExpand.has_input() && !validate(sExpand.input())) {
     return false;
@@ -432,6 +441,9 @@ bool SubstraitToVeloxPlanValidator::validate(const ::substrait::Rel& sRel) {
   }
   if (sRel.has_expand()) {
     return validate(sRel.expand());
+  }
+  if (sRel.has_fetch()) {
+    return validate(sRel.fetch());
   }
   return false;
 }

@@ -64,12 +64,6 @@ class SubstraitVeloxPlanConverter {
   /// Convert Substrait FilterRel into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::FilterRel& filterRel);
 
-  /// Convert Substrait ReadRel into Velox PlanNode.
-  /// Index: the index of the partition this item belongs to.
-  /// Starts: the start positions in byte to read from the items.
-  /// Lengths: the lengths in byte to read from the items.
-  core::PlanNodePtr toVeloxPlan(const ::substrait::ReadRel& sRead);
-
   /// Convert Substrait FetchRel into Velox LimitNode or TopNNode according the
   /// different input of fetchRel.
   core::PlanNodePtr toVeloxPlan(const ::substrait::FetchRel& fetchRel);

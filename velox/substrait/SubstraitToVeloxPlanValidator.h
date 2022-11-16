@@ -29,6 +29,9 @@ class SubstraitToVeloxPlanValidator {
       core::ExecCtx* execCtx)
       : pool_(pool), execCtx_(execCtx) {}
 
+  /// Used to validate whether the computing of this Limit is supported.
+  bool validate(const ::substrait::FetchRel& fetchRel);
+
   /// Used to validate whether the computing of this Sort is supported.
   bool validate(const ::substrait::ExpandRel& sExpand);
 

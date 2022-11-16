@@ -539,6 +539,23 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       childNode);
 }
 
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+    const ::substrait::FetchRel& fetchRel) {
+  core::PlanNodePtr childNode;
+  if (fetchRel.has_input()) {
+    childNode = toVeloxPlan(fetchRel.input());
+  } else {
+    VELOX_FAIL("Child Rel is expected in FetchRel.");
+  }
+
+  return std::make_shared<core::LimitNode>(
+      nextPlanNodeId(),
+      (int32_t)fetchRel.offset(),
+      (int32_t)fetchRel.count(),
+      false /*isPartial*/,
+      childNode);
+}
+
 bool isPushDownSupportedByFormat(
     const dwio::common::FileFormat& format,
     connector::hive::SubfieldFilters& subfieldFilters) {
@@ -838,6 +855,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   }
   if (sRel.has_expand()) {
     return toVeloxPlan(sRel.expand());
+  }
+  if (sRel.has_fetch()) {
+    return toVeloxPlan(sRel.fetch());
   }
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }
