@@ -188,8 +188,8 @@ int main(int argc, char** argv) {
       udf_map_resolver_vector, "map_resolver_vector");
 
   // Create memory pool and other query-related structures.
-  auto queryCtx = core::QueryCtx::createForTest();
-  auto pool = memory::getDefaultScopedMemoryPool();
+  auto queryCtx = std::make_shared<core::QueryCtx>();
+  auto pool = memory::getDefaultMemoryPool();
   core::ExecCtx execCtx{pool.get(), queryCtx.get()};
 
   // Next, we need to generate an input batch of data (rowVector). We create a

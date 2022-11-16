@@ -23,8 +23,7 @@ class InPredicateTest : public FunctionBaseTest {
  protected:
   template <typename T>
   void testIntegers() {
-    std::unique_ptr<memory::MemoryPool> pool{
-        memory::getDefaultScopedMemoryPool()};
+    std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
 
     const vector_size_t size = 1'000;
     auto vector = makeFlatVector<T>(size, [](auto row) { return row % 17; });
@@ -132,6 +131,12 @@ class InPredicateTest : public FunctionBaseTest {
     rowVector = makeRowVector({dict});
     result = evaluate<SimpleVector<bool>>("c0 IN (2, 5, 9)", rowVector);
     assertEqualVectors(expected, result);
+
+    // an in list with nulls only is always null.
+    result = evaluate<SimpleVector<bool>>("c0 IN (null)", rowVector);
+    auto expectedConstant =
+        BaseVector::createNullConstant(BOOLEAN(), size, pool_.get());
+    assertEqualVectors(expectedConstant, result);
   }
 
   template <typename T>

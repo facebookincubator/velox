@@ -160,7 +160,8 @@ HashAggregation::HashAggregation(
       isPartialOutput_,
       isRawInput(aggregationNode->step()),
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
-      operatorCtx_.get());
+      operatorCtx_.get(),
+      stats_);
 }
 
 void HashAggregation::addInput(RowVectorPtr input) {
@@ -296,7 +297,7 @@ RowVectorPtr HashAggregation::getOutput() {
     return output;
   }
 
-  auto batchSize = isGlobal_ ? 1 : outputBatchSize_;
+  const auto batchSize = isGlobal_ ? 1 : outputBatchSize_;
 
   // Reuse output vectors if possible.
   prepareOutput(batchSize);

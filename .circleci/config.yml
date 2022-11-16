@@ -39,6 +39,7 @@ workflows:
     jobs:
       - doc-gen-job
       - linux-fuzzer-run
+      - linux-aggregate-fuzzer-run
 
   # Hourly build on weekdays
   weekday:
@@ -150,17 +151,17 @@ commands:
 executors:
   build:
     docker:
-      - image : prestocpp/velox-avx-circleci:kpai-20221017
+      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
     resource_class: 2xlarge
     environment:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
         CXX: /opt/rh/gcc-toolset-9/root/bin/g++
   check:
     docker:
-      - image : prestocpp/velox-check:mikesh-20210609
+      - image : ghcr.io/facebookincubator/velox-dev:check-avx
   doc-gen:
     docker:
-      - image : prestocpp/velox-circleci:sagarm-20220131
+      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
 
 jobs:
   macos-build:
@@ -240,9 +241,22 @@ jobs:
           path: /tmp/test_xml_output/
       - run:
           name: "Run Fuzzer Tests"
+          # Run fuzzer using the built executable - we do this instead of make
+          # since currently make fuzzertest tends to rebuild the project.
           command: |
-            make fuzzertest NUM_THREADS=10
+            mkdir -p /tmp/fuzzer_repro/
+            chmod -R 777 /tmp/fuzzer_repro
+            _build/debug/velox/expression/tests/velox_expression_fuzzer_test \
+                --seed 123456 \
+                --enable_variadic_signatures \
+                --duration_sec 60 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --repro_persist_path=/tmp/fuzzer_repro \
+            && echo -e "\n\nFuzzer run finished successfully."
           no_output_timeout: 5m
+      - store_artifacts:
+          path: '/tmp/fuzzer_repro'
       - run:
          name: "Run Example Binaries"
          command: |
@@ -415,6 +429,41 @@ jobs:
           no_output_timeout: 20m
       - store_artifacts:
           path: '/tmp/fuzzer.log'
+      - post-steps
+
+  linux-aggregate-fuzzer-run:
+    executor: build
+    steps:
+      - pre-steps
+      - run:
+          name: Build
+          command: |
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            ccache -s
+          no_output_timeout: 2h
+      - run:
+          # Run Aggregate Fuzzer, save the output to /tmp/aggregate_fuzzer.log, and upload the file
+          # as job artifact to make it convenient for users to inspect it -
+          # these logs can also be quite large. Always prints the last 1k lines to
+          # the job output for context.
+          name: "Run Aggregate Fuzzer Tests"
+          command: |
+            echo -e "The logs will be saved to \"/tmp/aggregate_fuzzer.log\" and uploaded" \
+                    "as a job artifact (check the \"Artifacts\" tab above)."
+            _build/debug/velox/expression/tests/velox_aggregation_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 3600 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+              2>&1 | tee /tmp/aggregate_fuzzer.log || ( \
+                tail -n 1000 /tmp/aggregate_fuzzer.log;
+                echo "FAIL: Aggregate Fuzzer run failed";
+                exit 1; \
+              )
+            echo -e "\n\nAggregate Fuzzer run finished successfully."
+          no_output_timeout: 120m
+      - store_artifacts:
+          path: '/tmp/aggregate_fuzzer.log'
       - post-steps
 
   format-check:

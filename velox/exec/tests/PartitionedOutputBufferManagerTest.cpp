@@ -29,7 +29,7 @@ using facebook::velox::test::BatchMaker;
 class PartitionedOutputBufferManagerTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = facebook::velox::memory::getDefaultScopedMemoryPool();
+    pool_ = facebook::velox::memory::getDefaultMemoryPool();
     mappedMemory_ = memory::MappedMemory::getInstance();
     bufferManager_ = PartitionedOutputBufferManager::getInstance().lock();
     if (!isRegisteredVectorSerde()) {
@@ -54,7 +54,10 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
                                 BatchMaker::createBatch(rowType, 100, *pool_))})
                             .planFragment();
     auto task = std::make_shared<Task>(
-        taskId, std::move(planFragment), 0, core::QueryCtx::createForTest());
+        taskId,
+        std::move(planFragment),
+        0,
+        std::make_shared<core::QueryCtx>(executor_.get()));
 
     bufferManager_->initializeTask(task, false, numDestinations, numDrivers);
     return task;
@@ -224,7 +227,10 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
     EXPECT_FALSE(receivedData) << "for destination " << destination;
   }
 
-  std::unique_ptr<facebook::velox::memory::ScopedMemoryPool> pool_;
+  std::shared_ptr<folly::Executor> executor_{
+      std::make_shared<folly::CPUThreadPoolExecutor>(
+          std::thread::hardware_concurrency())};
+  std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
   memory::MappedMemory* mappedMemory_;
   std::shared_ptr<PartitionedOutputBufferManager> bufferManager_;
 };
@@ -290,7 +296,7 @@ TEST_F(PartitionedOutputBufferManagerTest, basic) {
   EXPECT_TRUE(task->isRunning());
   deleteResults(taskId, 3);
   fetchEndMarker(taskId, 4, 2);
-
+  bufferManager_->removeTask(taskId);
   EXPECT_TRUE(task->isFinished());
 }
 
@@ -323,6 +329,7 @@ TEST_F(PartitionedOutputBufferManagerTest, maxBytes) {
   for (int destination = 2; destination < 5; destination++) {
     fetchEndMarker(taskId, destination, 0);
   }
+  bufferManager_->removeTask(taskId);
 }
 
 TEST_F(PartitionedOutputBufferManagerTest, outOfOrderAcks) {

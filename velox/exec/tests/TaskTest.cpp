@@ -17,6 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -45,6 +46,7 @@ class TaskTest : public HiveConnectorTestBase {
 
     VELOX_CHECK(task->supportsSingleThreadedExecution());
 
+    vector_size_t numRows = 0;
     std::vector<RowVectorPtr> results;
     for (;;) {
       auto result = task->next();
@@ -56,9 +58,16 @@ class TaskTest : public HiveConnectorTestBase {
         child->loadedVector();
       }
       results.push_back(result);
+      numRows += result->size();
     }
 
     VELOX_CHECK(waitForTaskCompletion(task.get()));
+
+    auto planNodeStats = toPlanStats(task->taskStats());
+    VELOX_CHECK(planNodeStats.count(plan.planNode->id()));
+    VELOX_CHECK_EQ(numRows, planNodeStats.at(plan.planNode->id()).outputRows);
+    VELOX_CHECK_EQ(
+        results.size(), planNodeStats.at(plan.planNode->id()).outputVectors);
 
     return {task, results};
   }
@@ -78,7 +87,10 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
                   .planFragment();
 
   exec::Task task(
-      "task-1", std::move(plan), 0, core::QueryCtx::createForTest());
+      "task-1",
+      std::move(plan),
+      0,
+      std::make_shared<core::QueryCtx>(executor_.get()));
 
   // Add split for the source node.
   task.addSplit("0", exec::Split(folly::copy(connectorSplit)));
@@ -127,7 +139,10 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
           .planFragment();
 
   exec::Task valuesTask(
-      "task-2", std::move(plan), 0, core::QueryCtx::createForTest());
+      "task-2",
+      std::move(plan),
+      0,
+      std::make_shared<core::QueryCtx>(executor_.get()));
   errorMessage =
       "Splits can be associated only with leaf plan nodes which require splits. Plan node ID 0 doesn't refer to such plan node.";
   VELOX_ASSERT_THROW(
@@ -149,7 +164,11 @@ TEST_F(TaskTest, duplicatePlanNodeIds) {
                   .planFragment();
 
   VELOX_ASSERT_THROW(
-      exec::Task("task-1", std::move(plan), 0, core::QueryCtx::createForTest()),
+      exec::Task(
+          "task-1",
+          std::move(plan),
+          0,
+          std::make_shared<core::QueryCtx>(executor_.get())),
       "Plan node IDs must be unique. Found duplicate ID: 0.")
 }
 
@@ -447,7 +466,8 @@ TEST_F(TaskTest, singleThreadedExecution) {
   uint64_t numDeletedTasks = Task::numDeletedTasks();
   {
     auto [task, results] = executeSingleThreaded(plan);
-    assertEqualResults({expectedResult, expectedResult}, results);
+    assertEqualResults(
+        std::vector<RowVectorPtr>{expectedResult, expectedResult}, results);
   }
   ASSERT_EQ(numCreatedTasks + 1, Task::numCreatedTasks());
   ASSERT_EQ(numDeletedTasks + 1, Task::numDeletedTasks());
@@ -667,7 +687,7 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
 
   CursorParameters params;
   params.planNode = plan;
-  params.queryCtx = core::QueryCtx::createForTest();
+  params.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   params.queryCtx->setConfigOverridesUnsafe(
       {{core::QueryConfig::kPreferredOutputBatchSize, "1"}});
   auto task = assertQueryOrdered(params, "VALUES (0)", {0});

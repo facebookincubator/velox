@@ -15,6 +15,7 @@
  */
 #include "velox/vector/VectorSaver.h"
 #include <fstream>
+#include "velox/common/base/Fs.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -209,6 +210,7 @@ TEST_F(VectorSaverTest, types) {
 
   testTypeRoundTrip(TIMESTAMP());
   testTypeRoundTrip(DATE());
+  testTypeRoundTrip(INTERVAL_DAY_TIME());
 
   testTypeRoundTrip(ARRAY(BIGINT()));
   testTypeRoundTrip(ARRAY(ARRAY(VARCHAR())));
@@ -279,6 +281,11 @@ TEST_F(VectorSaverTest, flatVarchar) {
   opts.stringLength = 6;
   opts.vectorSize = 1024;
   testRoundTrip(opts, VARCHAR());
+}
+
+TEST_F(VectorSaverTest, flatIntervalDayTime) {
+  VectorFuzzer::Options opts = fuzzerOptions();
+  testRoundTrip(opts, INTERVAL_DAY_TIME());
 }
 
 TEST_F(VectorSaverTest, row) {
@@ -541,7 +548,7 @@ TEST_F(VectorSaverTest, exceptionContext) {
   auto messageFunction = [](VeloxException::Type /*exceptionType*/,
                             auto* arg) -> std::string {
     auto* info = static_cast<VectorSaverInfo*>(arg);
-    auto filePath = generateFilePath(info->path, "vector");
+    auto filePath = common::generateTempFilePath(info->path, "vector");
     if (!filePath.has_value()) {
       return "Cannot generate file path to store the vector.";
     }

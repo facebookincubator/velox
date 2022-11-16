@@ -16,7 +16,7 @@
 
 #include "pyvelox.h" // @manual
 
-namespace facebook::pyvelox {
+namespace facebook::velox::py {
 using namespace velox;
 namespace py = pybind11;
 
@@ -37,4 +37,4 @@ PYBIND11_MODULE(pyvelox, m) {
   m.attr("__version__") = "dev";
 }
 #endif
-} // namespace facebook::pyvelox
+} // namespace facebook::velox::py

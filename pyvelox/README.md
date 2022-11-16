@@ -1,6 +1,6 @@
 # PyVelox: Python bindings and extensions for Velox
 
-**This library is currently in the Alpha stage and does not have a stable release. The API and implementation may change based on
+**This library is currently in Alpha stage and does not have a stable release. The API and implementation may change based on
 user feedback or performance. Future changes may not be backward compatible.
 If you have suggestions on the API or use cases you'd like to be covered, please open a
 GitHub issue. We'd love to hear thoughts and feedback.**
@@ -12,8 +12,8 @@ You will need Python 3.7 or later. Also, we highly recommend installing an [Mini
 
 First, set up an environment. If you are using conda, create a conda environment:
 ```
-conda create --name torcharrow python=3.7
-conda activate torcharrow
+conda create --name pyveloxenv python=3.7
+conda activate pyveloxenv
 ```
 
 
@@ -43,7 +43,3 @@ And run unit tests with
 ```
 python -m unittest -v
 ```
-
-
-
-

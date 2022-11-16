@@ -15,6 +15,8 @@
  */
 
 #include <string>
+#include "velox/parse/Expressions.h"
+#include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::test {
 
@@ -28,22 +30,38 @@ namespace facebook::velox::test {
 ///                supported)
 class ExpressionRunner {
  public:
-  /// \param inputPath The path to the on-disk vector that will be used as input
+  /// @param inputPath The path to the on-disk vector that will be used as input
   ///        to feed to the expression.
-  /// \param sqlPath The path to the on-disk SQL that will be used to describe
-  ///        the expression. \param resultPath The path to the on-disk vector
+  /// @param sql Comma-separated SQL expressions.
+  /// @param complexConstantsPath The path to on-disk vector that stores complex
+  ///        subexpressions that aren't expressable in SQL (if any), used with
+  ///        sql to construct the complete plan
+  /// @param resultPath The path to the on-disk vector
   ///        that will be used as the result buffer to which the expression
   ///        evaluation results will be written.
-  /// \param mode The expression evaluation mode, one of ["verify", "common",
+  /// @param mode The expression evaluation mode, one of ["verify", "common",
   ///        "simplified"]
+  /// @param numRows Maximum number of rows to process. 0 means 'all' rows.
+  ///         Applies to "common" and "simplified" modes only.
   ///
   /// User can refer to 'VectorSaver' class to see how to serialize/preserve
   /// vectors to disk.
   static void run(
       const std::string& inputPath,
-      const std::string& sqlPath,
+      const std::string& sql,
+      const std::string& complexConstantsPath,
       const std::string& resultPath,
-      const std::string& mode);
+      const std::string& mode,
+      vector_size_t numRows,
+      const std::string& storeResultPath);
+
+  /// Parse comma-separated SQL expressions. This should be treated as private
+  /// except for tests.
+  static std::vector<core::TypedExprPtr> parseSql(
+      const std::string& sql,
+      const TypePtr& inputType,
+      memory::MemoryPool* pool,
+      const VectorPtr& complexConstants);
 };
 
 } // namespace facebook::velox::test

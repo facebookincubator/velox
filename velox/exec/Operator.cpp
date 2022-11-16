@@ -56,11 +56,12 @@ class SimpleExpressionEvaluator : public connector::ExpressionEvaluator {
 
 OperatorCtx::OperatorCtx(
     DriverCtx* driverCtx,
+    const core::PlanNodeId& planNodeId,
     int32_t operatorId,
     const std::string& operatorType)
     : driverCtx_(driverCtx),
       operatorId_(operatorId),
-      pool_(driverCtx_->addOperatorPool(operatorType)) {}
+      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType)) {}
 
 core::ExecCtx* OperatorCtx::execCtx() const {
   if (!execCtx_) {
@@ -126,7 +127,8 @@ std::optional<Spiller::Config> OperatorCtx::makeSpillConfig(
           taskId(),
           driverCtx()->driverId,
           operatorId_),
-      queryConfig.spillFileSizeFactor(),
+      queryConfig.maxSpillFileSize(),
+      queryConfig.minSpillRunSize(),
       driverCtx_->task->queryCtx()->spillExecutor(),
       queryConfig.spillableReservationGrowthPct(),
       HashBitRange(
@@ -143,8 +145,11 @@ Operator::Operator(
     int32_t operatorId,
     std::string planNodeId,
     std::string operatorType)
-    : operatorCtx_(
-          std::make_unique<OperatorCtx>(driverCtx, operatorId, operatorType)),
+    : operatorCtx_(std::make_unique<OperatorCtx>(
+          driverCtx,
+          planNodeId,
+          operatorId,
+          operatorType)),
       stats_(
           operatorId,
           driverCtx->pipelineId,
@@ -365,6 +370,12 @@ std::vector<column_index_t> calculateOutputChannels(
     outputChannels.clear();
   }
   return outputChannels;
+}
+
+void OperatorStats::addRuntimeStat(
+    const std::string& name,
+    const RuntimeCounter& value) {
+  addOperatorRuntimeStats(name, value, runtimeStats);
 }
 
 void OperatorStats::add(const OperatorStats& other) {

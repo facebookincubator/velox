@@ -95,16 +95,6 @@ class Window : public Operator {
   // ORDER BY clause.
   void sortPartitions();
 
-  // Helper function to find window frame start and end values for
-  // currentRow of ith window function (in windowFunctions_ list).
-  std::pair<vector_size_t, vector_size_t> findFrameEndPoints(
-      vector_size_t i,
-      vector_size_t partitionStartRow,
-      vector_size_t partitionEndRow,
-      vector_size_t peerStartRow,
-      vector_size_t peerEndRow,
-      vector_size_t currentRow);
-
   // Helper function to call WindowFunction::resetPartition() for
   // all WindowFunctions.
   void callResetPartition(vector_size_t partitionNumber);
@@ -142,9 +132,14 @@ class Window : public Operator {
   // any function computation. As the Window operators gets input rows
   // we store the rows in the RowContainer (data_).
   std::unique_ptr<RowContainer> data_;
+
   // The decodedInputVectors_ are reused across addInput() calls to decode
   // the partition and sort keys for the above RowContainer.
   std::vector<DecodedVector> decodedInputVectors_;
+
+  // HashStringAllocator required by functions that allocate out of line
+  // buffers.
+  HashStringAllocator stringAllocator_;
 
   // The below 3 vectors represent the ChannelIndex of the partition keys,
   // the order by keys and the concatenation of the 2. These keyInfo are

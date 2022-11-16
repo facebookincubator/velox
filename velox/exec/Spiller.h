@@ -41,35 +41,48 @@ class Spiller {
   struct Config {
     Config(
         const std::string& _filePath,
-        double _fileSizeFactor,
+        uint64_t _maxFileSize,
+        uint64_t _minSpillRunSize,
         folly::Executor* FOLLY_NULLABLE _executor,
         int32_t _spillableReservationGrowthPct,
         const HashBitRange& _hashBitRange,
         int32_t _maxSpillLevel,
         int32_t _testSpillPct)
         : filePath(_filePath),
-          fileSizeFactor(_fileSizeFactor),
+          maxFileSize(
+              _maxFileSize == 0 ? std::numeric_limits<int64_t>::max()
+                                : _maxFileSize),
+          minSpillRunSize(_minSpillRunSize),
           executor(_executor),
           spillableReservationGrowthPct(_spillableReservationGrowthPct),
           hashBitRange(_hashBitRange),
           maxSpillLevel(_maxSpillLevel),
           testSpillPct(_testSpillPct) {}
 
-    // Returns the spilling level with given 'startBitOffset'.
-    //
-    // NOTE: we advance (or right shift) the partition bit offset when goes to
-    // the next level of recursive spilling.
+    /// Returns the spilling level with given 'startBitOffset'.
+    ///
+    /// NOTE: we advance (or right shift) the partition bit offset when goes to
+    /// the next level of recursive spilling.
     int32_t spillLevel(uint8_t startBitOffset) const;
 
-    // Checks if the given 'startBitOffset' has exceeded the max spill limit.
+    /// Checks if the given 'startBitOffset' has exceeded the max spill limit.
     bool exceedSpillLevelLimit(uint8_t startBitOffset) const;
 
-    // Filesystem path for spill files.
+    /// Filesystem path for spill files.
     std::string filePath;
 
-    // Used to calculate the spill file size based on the associated task or
-    // operator's memory usage.
-    double fileSizeFactor;
+    /// The max spill file size. If it is zero, there is no limit on the spill
+    /// file size.
+    uint64_t maxFileSize;
+
+    /// The min spill run size (bytes) limit used to select partitions for
+    /// spilling. The spiller tries to spill a previously spilled partitions if
+    /// its data size exceeds this limit, otherwise it spills the partition with
+    /// most data. If the limit is zero, then the spiller always spill a
+    /// previously spilled partition if it has any data. This is to avoid spill
+    /// from a partition wigth a small amount of data which might result in
+    /// generating too many small spilled files.
+    uint64_t minSpillRunSize;
 
     // Executor for spilling. If nullptr spilling writes on the Driver's thread.
     folly::Executor* FOLLY_NULLABLE executor; // Not owned.
@@ -105,8 +118,10 @@ class Spiller {
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       const std::string& path,
-      int64_t targetFileSize,
+      uint64_t targetFileSize,
+      uint64_t minSpillRunSize,
       memory::MemoryPool& pool,
+      std::unordered_map<std::string, RuntimeMetric>& stats,
       folly::Executor* FOLLY_NULLABLE executor);
 
   Spiller(
@@ -114,8 +129,10 @@ class Spiller {
       RowTypePtr rowType,
       HashBitRange bits,
       const std::string& path,
-      int64_t targetFileSize,
+      uint64_t targetFileSize,
+      uint64_t minSpillRunSize,
       memory::MemoryPool& pool,
+      std::unordered_map<std::string, RuntimeMetric>& stats,
       folly::Executor* FOLLY_NULLABLE executor);
 
   Spiller(
@@ -127,8 +144,10 @@ class Spiller {
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       const std::string& path,
-      int64_t targetFileSize,
+      uint64_t targetFileSize,
+      uint64_t minSpillRunSize,
       memory::MemoryPool& pool,
+      std::unordered_map<std::string, RuntimeMetric>& stats,
       folly::Executor* FOLLY_NULLABLE executor);
 
   /// Spills rows from 'this' until there are under 'targetRows' rows
@@ -159,9 +178,45 @@ class Spiller {
   /// spill any data buffered in row container before call this.
   void spill(uint32_t partition, const RowVectorPtr& spillVector);
 
+  /// Contains the amount of spillable data of a partition which includes the
+  /// number of spillable rows and bytes.
+  struct SpillableStats {
+    int64_t numRows = 0;
+    int64_t numBytes = 0;
+
+    inline SpillableStats& operator+=(const SpillableStats& other) {
+      this->numRows += other.numRows;
+      this->numBytes += other.numBytes;
+      return *this;
+    }
+  };
+
+  /// Invoked to fill spill runs on all partitions and accumulate the spillable
+  /// stats in 'statsList' by partition number.
+  void fillSpillRuns(std::vector<SpillableStats>& statsList);
+
   /// Finishes spilling and returns the rows that are in partitions that have
   /// not started spilling.
   SpillRows finishSpill();
+
+  std::unique_ptr<TreeOfLosers<SpillMergeStream>> startMerge(
+      int32_t partition) {
+    if (FOLLY_UNLIKELY(!needSort())) {
+      VELOX_FAIL("Can't sort merge the unsorted spill data: {}", toString());
+    }
+    return state_.startMerge(partition, spillMergeStreamOverRows(partition));
+  }
+
+  // Extracts up to 'maxRows' or 'maxBytes' from 'rows' into
+  // 'spillVector'. The extract starts at nextBatchIndex and updates
+  // nextBatchIndex to be the index of the first non-extracted element
+  // of 'rows'. Returns the byte size of the extracted rows.
+  int64_t extractSpillVector(
+      SpillRows& rows,
+      int32_t maxRows,
+      int64_t maxBytes,
+      RowVectorPtr& spillVector,
+      size_t& nextBatchIndex);
 
   /// Finishes spilling and accumulate the spilled partition data in
   /// 'partitionSet' by spill partition id.
@@ -201,31 +256,6 @@ class Spiller {
     }
   }
 
-  /// Contains the amount of spillable data of a partition which includes the
-  /// number of spillable rows and bytes.
-  struct SpillableStats {
-    int64_t numRows = 0;
-    int64_t numBytes = 0;
-
-    inline SpillableStats& operator+=(const SpillableStats& other) {
-      this->numRows += other.numRows;
-      this->numBytes += other.numBytes;
-      return *this;
-    }
-  };
-
-  /// Invoked to fill spill runs on all partitions and accumulate the spillable
-  /// stats in 'statsList' by partition number.
-  void fillSpillRuns(std::vector<SpillableStats>& statsList);
-
-  std::unique_ptr<TreeOfLosers<SpillMergeStream>> startMerge(
-      int32_t partition) {
-    if (FOLLY_UNLIKELY(!needSort())) {
-      VELOX_FAIL("Can't sort merge the unsorted spill data: {}", toString());
-    }
-    return state_.startMerge(partition, spillMergeStreamOverRows(partition));
-  }
-
   /// Define the spiller stats.
   struct Stats {
     uint64_t spilledBytes{0};
@@ -261,22 +291,6 @@ class Spiller {
     return state_.spilledFiles();
   }
 
-  // Extracts the keys, dependents or accumulators for 'rows' into '*result'.
-  // Creates '*results' in spillPool() if nullptr. Used from Spiller and
-  // RowContainerSpillMergeStream.
-  void extractSpill(folly::Range<char**> rows, RowVectorPtr& result);
-
-  // Extracts up to 'maxRows' or 'maxBytes' from 'rows' into
-  // 'spillVector'. The extract starts at nextBatchIndex and updates
-  // nextBatchIndex to be the index of the first non-extracted element
-  // of 'rows'. Returns the byte size of the extracted rows.
-  int64_t extractSpillVector(
-      SpillRows& rows,
-      int32_t maxRows,
-      int64_t maxBytes,
-      RowVectorPtr& spillVector,
-      size_t& nextBatchIndex);
-
   // Returns the MappedMemory to use for intermediate storage for
   // spilling. This is not directly the RowContainer's memory because
   // this is usually at limit when starting spilling.
@@ -286,14 +300,19 @@ class Spiller {
   // is the expected peak utilization.
   static memory::MemoryPool& spillPool();
 
+  std::string toString() const;
+
+ private:
+  // Extracts the keys, dependents or accumulators for 'rows' into '*result'.
+  // Creates '*results' in spillPool() if nullptr. Used from Spiller and
+  // RowContainerSpillMergeStream.
+  void extractSpill(folly::Range<char**> rows, RowVectorPtr& result);
+
   // Returns a mergeable stream that goes over unspilled in-memory
   // rows for the spill partition  'partition'. finishSpill()
   // first and 'partition' must specify a partition that has started spilling.
   std::unique_ptr<SpillMergeStream> spillMergeStreamOverRows(int32_t partition);
 
-  std::string toString() const;
-
- private:
   // Represents a run of rows from a spillable partition of
   // a RowContainer. Rows that hash to the same partition are accumulated here
   // and sorted in the case of sorted spilling. The run is then
@@ -377,6 +396,9 @@ class Spiller {
   // non hash join types of spilling.
   bool needSort() const;
 
+  // Invoked when finish spill
+  void recordStats();
+
   const Type type_;
   // NOTE: for hash join probe type, there is no associated row container for
   // the spiller.
@@ -384,6 +406,7 @@ class Spiller {
   const RowContainer::Eraser eraser_;
   const HashBitRange bits_;
   const RowTypePtr rowType_;
+  const uint64_t minSpillRunSize_;
 
   SpillState state_;
 
@@ -398,8 +421,13 @@ class Spiller {
   // that are not written out and deleted will be captured by
   // spillMergeStreamOverRows().
   bool spillFinalized_{false};
+
   memory::MemoryPool& pool_;
+
+  std::unordered_map<std::string, RuntimeMetric>& stats_;
+
   folly::Executor* FOLLY_NULLABLE const executor_;
+
   uint64_t spilledRows_{0};
 };
 

@@ -13,22 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
-#include <glog/logging.h>
-#include <gtest/gtest.h>
-#include "folly/Conv.h"
-#include "velox/core/Metaprogramming.h"
+#include "velox/exec/Aggregate.h"
 
-TEST(Metafunctions, ForEachWithIndex) {
-  auto tup = std::make_tuple(1, std::string{"hello"}, 3.1);
-  std::string result;
-  facebook::velox::util::forEachWithIndex(
-      [&](size_t i, auto&& elem) {
-        result += folly::to<std::string>(i);
-        result += ":";
-        result += folly::to<std::string>(elem);
-        result += ";";
-      },
-      std::move(tup));
-  ASSERT_EQ(result, "0:1;1:hello;2:3.1;");
+namespace facebook::velox::exec::test {
+void aggregateFuzzer(
+    AggregateFunctionSignatureMap signatureMap,
+    size_t seed,
+    const std::unordered_map<std::string, std::string>&
+        orderDependentFunctions);
 }

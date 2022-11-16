@@ -124,7 +124,8 @@ void HashBuild::setupTable() {
   for (int i = numKeys; i < tableType_->size(); ++i) {
     dependentTypes.emplace_back(tableType_->childAt(i));
   }
-  if (joinNode_->isRightJoin() || joinNode_->isFullJoin()) {
+  if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
+      joinNode_->isRightSemiProjectJoin()) {
     // Do not ignore null keys.
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
@@ -136,9 +137,10 @@ void HashBuild::setupTable() {
     // (Left) semi and anti join with no extra filter only needs to know whether
     // there is a match. Hence, no need to store entries with duplicate keys.
     const bool dropDuplicates = !joinNode_->filter() &&
-        (joinNode_->isLeftSemiJoin() || isAntiJoins(joinType_));
+        (joinNode_->isLeftSemiFilterJoin() ||
+         joinNode_->isLeftSemiProjectJoin() || isAntiJoins(joinType_));
     // Right semi join needs to tag build rows that were probed.
-    const bool needProbedFlag = joinNode_->isRightSemiJoin();
+    const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
     if (isNullAwareAntiJoinWithFilter(joinNode_)) {
       // We need to check null key rows in build side in case of null-aware anti
       // join with filter set.
@@ -198,13 +200,10 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       keyChannels_.size(),
       std::vector<CompareFlags>(),
       spillConfig.filePath,
-      operatorCtx_->task()
-              ->queryCtx()
-              ->pool()
-              ->getMemoryUsageTracker()
-              ->maxTotalBytes() *
-          spillConfig.fileSizeFactor,
+      spillConfig.maxFileSize,
+      spillConfig.minSpillRunSize,
       Spiller::spillPool(),
+      stats().runtimeStats,
       spillConfig.executor);
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
@@ -297,6 +296,7 @@ void HashBuild::addInput(RowVectorPtr input) {
   }
 
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
+      !isRightSemiProjectJoin(joinType_) &&
       !isNullAwareAntiJoinWithFilter(joinNode_)) {
     deselectRowsWithNulls(hashers, activeRows_);
   }
@@ -311,13 +311,15 @@ void HashBuild::addInput(RowVectorPtr input) {
       removeInputRowsForAntiJoinFilter();
     }
   } else if (
-      isNullAwareAntiJoin(joinType_) &&
+      (isNullAwareAntiJoin(joinType_) || isLeftSemiProjectJoin(joinType_)) &&
       activeRows_.countSelected() < input->size()) {
-    // Null-aware anti join with no extra filter returns no rows if build side
-    // has nulls in join keys. Hence, we can stop processing on first null.
-    antiJoinHasNullKeys_ = true;
-    noMoreInput();
-    return;
+    joinHasNullKeys_ = true;
+    if (isNullAwareAntiJoin(joinType_)) {
+      // Null-aware anti join with no extra filter returns no rows if build side
+      // has nulls in join keys. Hence, we can stop processing on first null.
+      noMoreInput();
+      return;
+    }
   }
 
   spillInput(input);
@@ -690,14 +692,18 @@ bool HashBuild::finishHashBuild() {
   otherTables.reserve(peers.size());
   SpillPartitionSet spillPartitions;
   Spiller::Stats spillStats;
-  if (!antiJoinHasNullKeys_) {
+  if (joinHasNullKeys_ && isNullAwareAntiJoin(joinType_)) {
+    joinBridge_->setAntiJoinHasNullKeys();
+  } else {
     for (auto& peer : peers) {
       auto op = peer->findOperator(planNodeId());
       HashBuild* build = dynamic_cast<HashBuild*>(op);
       VELOX_CHECK(build);
-      if (build->antiJoinHasNullKeys_) {
-        antiJoinHasNullKeys_ = true;
-        break;
+      if (build->joinHasNullKeys_) {
+        joinHasNullKeys_ = true;
+        if (isNullAwareAntiJoin(joinType_)) {
+          break;
+        }
       }
       otherTables.push_back(std::move(build->table_));
       if (build->spiller_ != nullptr) {
@@ -706,30 +712,38 @@ bool HashBuild::finishHashBuild() {
       }
     }
 
-    if (spiller_ != nullptr) {
-      spillStats += spiller_->stats();
+    if (joinHasNullKeys_ && isNullAwareAntiJoin(joinType_)) {
+      joinBridge_->setAntiJoinHasNullKeys();
+    } else {
+      if (spiller_ != nullptr) {
+        spillStats += spiller_->stats();
 
-      stats_.spilledBytes += spillStats.spilledBytes;
-      stats_.spilledRows += spillStats.spilledRows;
-      stats_.spilledPartitions += spillStats.spilledPartitions;
+        stats_.spilledBytes += spillStats.spilledBytes;
+        stats_.spilledRows += spillStats.spilledRows;
+        stats_.spilledPartitions += spillStats.spilledPartitions;
 
-      spiller_->finishSpill(spillPartitions);
+        spiller_->finishSpill(spillPartitions);
 
-      // Verify all the spilled partitions are not empty as we won't spill on
-      // an empty one.
-      for (const auto& spillPartitionEntry : spillPartitions) {
-        VELOX_CHECK_GT(spillPartitionEntry.second->numFiles(), 0);
+        // Verify all the spilled partitions are not empty as we won't spill on
+        // an empty one.
+        for (const auto& spillPartitionEntry : spillPartitions) {
+          VELOX_CHECK_GT(spillPartitionEntry.second->numFiles(), 0);
+        }
+      }
+
+      const bool hasOthers = !otherTables.empty();
+      table_->prepareJoinTable(
+          std::move(otherTables),
+          hasOthers ? operatorCtx_->task()->queryCtx()->executor() : nullptr);
+
+      addRuntimeStats();
+      if (joinBridge_->setHashTable(
+              std::move(table_),
+              std::move(spillPartitions),
+              joinHasNullKeys_)) {
+        spillGroup_->restart();
       }
     }
-    table_->prepareJoinTable(std::move(otherTables));
-
-    addRuntimeStats();
-    if (joinBridge_->setHashTable(
-            std::move(table_), std::move(spillPartitions))) {
-      spillGroup_->restart();
-    }
-  } else {
-    joinBridge_->setAntiJoinHasNullKeys();
   }
 
   // Realize the promises so that the other Drivers (which were not

@@ -19,6 +19,7 @@
 #include <velox/core/PlanFragment.h>
 #include <velox/core/PlanNode.h>
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/WriteProtocol.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -234,6 +235,8 @@ class PlanBuilder {
       const RowTypePtr& inputColumns,
       const std::vector<std::string>& tableColumnNames,
       const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+      connector::WriteProtocol::CommitStrategy commitStrategy =
+          connector::WriteProtocol::CommitStrategy::kNoCommit,
       const std::string& rowCountColumnName = "rowCount");
 
   /// Add a TableWriteNode assuming that input columns names match column names
@@ -246,6 +249,8 @@ class PlanBuilder {
   PlanBuilder& tableWrite(
       const std::vector<std::string>& columnNames,
       const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+      connector::WriteProtocol::CommitStrategy commitStrategy =
+          connector::WriteProtocol::CommitStrategy::kNoCommit,
       const std::string& rowCountColumnName = "rowCount");
 
   /// Add an AggregationNode representing partial aggregation with the
@@ -432,7 +437,8 @@ class PlanBuilder {
       const std::vector<TypePtr>& resultTypes = {});
 
   /// Add a GroupIdNode using the specified grouping sets, aggregation inputs
-  /// and a groupId column name.
+  /// and a groupId column name. And create GroupIdNode plan node with grouping
+  /// keys appearing in the output in the order they appear in 'groupingSets'.
   PlanBuilder& groupId(
       const std::vector<std::vector<std::string>>& groupingSets,
       const std::vector<std::string>& aggregationInputs,
@@ -660,6 +666,16 @@ class PlanBuilder {
   PlanBuilder& capturePlanNodeId(core::PlanNodeId& id) {
     VELOX_CHECK_NOT_NULL(planNode_);
     id = planNode_->id();
+    return *this;
+  }
+
+  /// Stores the latest plan node into the specified variable. Useful for
+  /// capturing intermediate plan nodes without interrupting the build flow.
+  template <typename T = core::PlanNode>
+  PlanBuilder& capturePlanNode(std::shared_ptr<const T>& planNode) {
+    VELOX_CHECK_NOT_NULL(planNode_);
+    planNode = std::dynamic_pointer_cast<const T>(planNode_);
+    VELOX_CHECK_NOT_NULL(planNode);
     return *this;
   }
 

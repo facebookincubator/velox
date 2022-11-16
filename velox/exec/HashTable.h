@@ -144,6 +144,13 @@ class BaseHashTable {
       uint64_t maxBytes,
       char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) = 0;
 
+  /// Returns all rows. Used by the right semi join project.
+  virtual int32_t listAllRows(
+      RowsIterator* FOLLY_NULLABLE iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) = 0;
+
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       folly::Executor* FOLLY_NULLABLE executor = nullptr) = 0;
@@ -333,6 +340,12 @@ class HashTable : public BaseHashTable {
       uint64_t maxBytes,
       char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) override;
 
+  int32_t listAllRows(
+      RowsIterator* FOLLY_NULLABLE iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char* FOLLY_NULLABLE* FOLLY_NULLABLE rows) override;
+
   void clear() override;
 
   int64_t allocatedBytes() const override {
@@ -384,13 +397,17 @@ class HashTable : public BaseHashTable {
     return 0;
   }
 
+  uint64_t rehashSize() const {
+    return rehashSize(size_);
+  }
+
   std::string toString() override;
 
  private:
   // Returns the number of entries after which the table gets rehashed.
-  uint64_t rehashSize() const {
+  static uint64_t rehashSize(int64_t size) {
     // This implements the F14 load factor: Resize if less than 1/8 unoccupied.
-    return size_ - (size_ / 8);
+    return size - (size / 8);
   }
 
   template <RowContainer::ProbeType probeType>
@@ -476,6 +493,16 @@ class HashTable : public BaseHashTable {
       char* FOLLY_NULLABLE* FOLLY_NULLABLE groups,
       uint64_t* FOLLY_NULLABLE hashes,
       int32_t numGroups);
+
+  /// Checks if we can apply parallel table build optimization for hash join.
+  /// The function returns true if all of the following conditions:
+  /// 1. the hash table is built for parallel join;
+  /// 2. there is more than one sub-tables;
+  /// 3. the build executor has been set;
+  /// 4. the table is not in kArray mode;
+  /// 5. the number of table entries per each parallel build shard is no less
+  ///    than a pre-defined threshold: 1000 for now.
+  bool canApplyParallelJoinBuild() const;
 
   // Builds a join table with '1 + otherTables_.size()' independent
   // threads using 'executor_'. First all RowContainers get partition

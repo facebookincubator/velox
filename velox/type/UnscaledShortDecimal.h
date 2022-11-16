@@ -16,6 +16,7 @@
 #include <folly/dynamic.h>
 #include <sstream>
 #include <string>
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/StringView.h"
 
@@ -50,17 +51,16 @@ struct UnscaledShortDecimal {
   int64_t unscaledValue() const {
     return unscaledValue_;
   }
-
-  void setUnscaledValue(const int64_t unscaledValue) {
-    unscaledValue_ = unscaledValue;
-  }
-
   bool operator==(const UnscaledShortDecimal& other) const {
     return unscaledValue_ == other.unscaledValue_;
   }
 
   bool operator!=(const UnscaledShortDecimal& other) const {
     return unscaledValue_ != other.unscaledValue_;
+  }
+
+  bool operator!=(int other) const {
+    return unscaledValue_ != other;
   }
 
   bool operator<(const UnscaledShortDecimal& other) const {
@@ -89,6 +89,11 @@ struct UnscaledShortDecimal {
 
   UnscaledShortDecimal operator*(int value) const {
     return UnscaledShortDecimal(unscaledValue_ * value);
+  }
+
+  UnscaledShortDecimal& operator+=(const UnscaledShortDecimal& value) {
+    unscaledValue_ += value.unscaledValue_;
+    return *this;
   }
 
   UnscaledShortDecimal& operator*=(int value) {
@@ -129,6 +134,48 @@ static inline UnscaledShortDecimal operator/(
   VELOX_CHECK_NE(b, 0, "Divide by zero is not supported");
   return UnscaledShortDecimal(a.unscaledValue() / b);
 }
+
+template <>
+inline UnscaledShortDecimal checkedPlus(
+    const UnscaledShortDecimal& a,
+    const UnscaledShortDecimal& b) {
+  int64_t result;
+  bool overflow =
+      __builtin_add_overflow(a.unscaledValue(), b.unscaledValue(), &result);
+  if (UNLIKELY(overflow || !UnscaledShortDecimal::valueInRange(result))) {
+    VELOX_ARITHMETIC_ERROR(
+        "Decimal overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
+  }
+  return UnscaledShortDecimal(result);
+}
+
+template <>
+inline UnscaledShortDecimal checkedMinus(
+    const UnscaledShortDecimal& a,
+    const UnscaledShortDecimal& b) {
+  int64_t result;
+  bool overflow =
+      __builtin_sub_overflow(a.unscaledValue(), b.unscaledValue(), &result);
+  if (UNLIKELY(overflow || !UnscaledShortDecimal::valueInRange(result))) {
+    VELOX_ARITHMETIC_ERROR(
+        "Decimal overflow: {} - {}", a.unscaledValue(), b.unscaledValue());
+  }
+  return UnscaledShortDecimal(result);
+}
+
+template <>
+inline UnscaledShortDecimal checkedMultiply(
+    const UnscaledShortDecimal& a,
+    const UnscaledShortDecimal& b) {
+  int64_t result;
+  bool overflow =
+      __builtin_mul_overflow(a.unscaledValue(), b.unscaledValue(), &result);
+  if (UNLIKELY(overflow || !UnscaledShortDecimal::valueInRange(result))) {
+    VELOX_ARITHMETIC_ERROR(
+        "Decimal overflow: {} * {}", a.unscaledValue(), b.unscaledValue());
+  }
+  return UnscaledShortDecimal(result);
+}
 } // namespace facebook::velox
 
 namespace folly {
@@ -162,3 +209,20 @@ class numeric_limits<facebook::velox::UnscaledShortDecimal> {
   }
 };
 } // namespace std
+
+/// fmt::formatter<> specialization required for error message formatting
+/// in VELOX checks.
+template <>
+struct fmt::formatter<facebook::velox::UnscaledShortDecimal> {
+  template <typename ParseContext>
+  constexpr auto parse(ParseContext& ctx) {
+    return ctx.begin();
+  }
+
+  template <typename FormatContext>
+  auto format(
+      const facebook::velox::UnscaledShortDecimal& d,
+      FormatContext& ctx) {
+    return fmt::format_to(ctx.out(), "{}", std::to_string(d.unscaledValue()));
+  }
+};

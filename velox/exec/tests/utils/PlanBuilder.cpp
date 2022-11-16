@@ -30,6 +30,7 @@
 #include "velox/parse/ExpressionsParser.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
 
 namespace facebook::velox::exec::test {
@@ -267,25 +268,30 @@ PlanBuilder& PlanBuilder::filter(const std::string& filter) {
 PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& columnNames,
     const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+    WriteProtocol::CommitStrategy commitStrategy,
     const std::string& rowCountColumnName) {
   return tableWrite(
-      planNode_->outputType(), columnNames, insertHandle, rowCountColumnName);
+      planNode_->outputType(),
+      columnNames,
+      insertHandle,
+      commitStrategy,
+      rowCountColumnName);
 }
 
 PlanBuilder& PlanBuilder::tableWrite(
     const RowTypePtr& inputColumns,
     const std::vector<std::string>& tableColumnNames,
     const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+    WriteProtocol::CommitStrategy commitStrategy,
     const std::string& rowCountColumnName) {
-  auto outputType =
-      ROW({rowCountColumnName, "fragments", "commitcontext"},
-          {BIGINT(), VARBINARY(), VARBINARY()});
+  auto outputType = ROW({rowCountColumnName}, {BIGINT()});
   planNode_ = std::make_shared<core::TableWriteNode>(
       nextPlanNodeId(),
       inputColumns,
       tableColumnNames,
       insertHandle,
       outputType,
+      commitStrategy,
       planNode_);
   return *this;
 }
@@ -482,12 +488,16 @@ const core::AggregationNode* findPartialAggregation(
   if (auto exchange = dynamic_cast<const core::LocalPartitionNode*>(planNode)) {
     aggNode = dynamic_cast<const core::AggregationNode*>(
         exchange->sources()[0].get());
+  } else if (auto merge = dynamic_cast<const core::LocalMergeNode*>(planNode)) {
+    aggNode =
+        dynamic_cast<const core::AggregationNode*>(merge->sources()[0].get());
   } else {
     aggNode = dynamic_cast<const core::AggregationNode*>(planNode);
   }
   VELOX_CHECK_NOT_NULL(
       aggNode,
-      "Current plan node must be a partial or intermediate aggregation or local exchange over the same. Got: {}",
+      "Current plan node must be one of: partial or intermediate aggregation, "
+      "local merge or exchange. Got: {}",
       planNode->toString());
   VELOX_CHECK(exec::isPartialOutput(aggNode->step()));
   return aggNode;
@@ -634,17 +644,25 @@ PlanBuilder& PlanBuilder::groupId(
     groupingSetExprs.push_back(fields(groupingSet));
   }
 
-  std::map<std::string, core::FieldAccessTypedExprPtr> outputGroupingKeyNames;
+  std::vector<core::GroupIdNode::GroupingKeyInfo> groupingKeyInfos;
+  std::set<std::string> names;
+  auto index = 0;
   for (const auto& groupingSet : groupingSetExprs) {
     for (const auto& groupingKey : groupingSet) {
-      outputGroupingKeyNames[groupingKey->name()] = groupingKey;
+      if (names.find(groupingKey->name()) == names.end()) {
+        core::GroupIdNode::GroupingKeyInfo keyInfos;
+        keyInfos.output = groupingKey->name();
+        keyInfos.input = groupingKey;
+        groupingKeyInfos.push_back(keyInfos);
+      }
+      names.insert(groupingKey->name());
     }
   }
 
   planNode_ = std::make_shared<core::GroupIdNode>(
       nextPlanNodeId(),
       groupingSetExprs,
-      std::move(outputGroupingKeyNames),
+      std::move(groupingKeyInfos),
       fields(aggregationInputs),
       std::move(groupIdName),
       planNode_);
@@ -887,7 +905,24 @@ PlanBuilder& PlanBuilder::hashJoin(
   if (!filter.empty()) {
     filterExpr = parseExpr(filter, resultType, options_, pool_);
   }
-  auto outputType = extract(resultType, outputLayout);
+
+  RowTypePtr outputType;
+  if (isLeftSemiProjectJoin(joinType) || isRightSemiProjectJoin(joinType)) {
+    std::vector<std::string> names = outputLayout;
+
+    // Last column in 'outputLayout' must be a boolean 'match'.
+    std::vector<TypePtr> types;
+    types.reserve(outputLayout.size());
+    for (auto i = 0; i < outputLayout.size() - 1; ++i) {
+      types.emplace_back(resultType->findChild(outputLayout[i]));
+    }
+    types.emplace_back(BOOLEAN());
+
+    outputType = ROW(std::move(names), std::move(types));
+  } else {
+    outputType = extract(resultType, outputLayout);
+  }
+
   auto leftKeyFields = fields(leftType, leftKeys);
   auto rightKeyFields = fields(rightType, rightKeys);
 

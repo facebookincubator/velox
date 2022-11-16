@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <folly/Random.h>
+#include <boost/random/uniform_int_distribution.hpp>
 #include <folly/ScopeGuard.h>
 #include <glog/logging.h>
 #include <exception>
@@ -29,9 +29,6 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/expression/tests/ArgumentTypeFuzzer.h"
 #include "velox/expression/tests/ExpressionFuzzer.h"
-#include "velox/type/Type.h"
-#include "velox/vector/BaseVector.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int32(steps, 10, "Number of expressions to generate and execute.");
 
@@ -81,6 +78,13 @@ DEFINE_string(
     "Directory path for persistence of data and SQL when fuzzer fails for "
     "future reproduction. Empty string disables this feature.");
 
+DEFINE_bool(
+    persist_and_run_once,
+    false,
+    "Persist repro info before evaluation and only run one iteration. "
+    "This is to rerun with the seed number and persist repro info upon a "
+    "crash failure. Only effective if repro_persist_path is set.");
+
 DEFINE_int32(
     velox_fuzzer_max_level_of_nesting,
     10,
@@ -91,6 +95,13 @@ DEFINE_bool(
     false,
     "Enable testing of function signatures with complex argument or return types.");
 
+DEFINE_double(
+    lazy_vector_generation_ratio,
+    0.0,
+    "Specifies the probability with which columns in the input row "
+    "vector will be selected to be wrapped in lazy encoding "
+    "(expressed as double from 0 to 1).");
+
 namespace facebook::velox::test {
 
 namespace {
@@ -98,8 +109,9 @@ namespace {
 using exec::SignatureBinder;
 
 /// Returns if `functionName` with the given `argTypes` is deterministic.
-/// Returns std::nullopt if the function was not found.
-std::optional<bool> isDeterministic(
+/// Returns true if the function was not found or determinism cannot be
+/// established.
+bool isDeterministic(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   // Check if this is a simple function.
@@ -136,7 +148,11 @@ std::optional<bool> isDeterministic(
                  << "' is deterministic or not. Assuming it is.";
     return true;
   }
-  return std::nullopt;
+
+  // functionName must be a special form.
+  LOG(WARNING) << "Unable to determine if '" << functionName
+               << "' is deterministic or not. Assuming it is.";
+  return true;
 }
 
 VectorFuzzer::Options getFuzzerOptions() {
@@ -190,7 +206,7 @@ std::optional<CallableSignature> processSignature(
   }
 
   if (onlyPrimitiveTypes || FLAGS_velox_fuzzer_enable_complex_types) {
-    if (isDeterministic(callable.name, callable.args).value()) {
+    if (isDeterministic(callable.name, callable.args)) {
       return callable;
     }
     LOG(WARNING) << "Skipping non-deterministic function: "
@@ -233,19 +249,23 @@ bool useTypeName(
   return false;
 }
 
-} // namespace
-
-std::string CallableSignature::toString() const {
-  std::string buf = name;
-  buf.append("( ");
-  for (const auto& arg : args) {
-    buf.append(arg->toString());
-    buf.append(" ");
+// Randomly pick columns from the input row vector to wrap in lazy.
+std::vector<column_index_t> generateLazyColumnIds(
+    const RowVectorPtr& rowVector,
+    VectorFuzzer& vectorFuzzer) {
+  std::vector<column_index_t> columnsToWrapInLazy;
+  if (FLAGS_lazy_vector_generation_ratio > 0) {
+    for (column_index_t idx = 0; idx < rowVector->childrenSize(); idx++) {
+      if (rowVector->childAt(idx) &&
+          vectorFuzzer.coinToss(FLAGS_lazy_vector_generation_ratio)) {
+        columnsToWrapInLazy.push_back(idx);
+      }
+    }
   }
-  buf.append(") -> ");
-  buf.append(returnType->toString());
-  return buf;
+  return columnsToWrapInLazy;
 }
+
+} // namespace
 
 ExpressionFuzzer::ExpressionFuzzer(
     FunctionSignatureMap signatureMap,
@@ -254,7 +274,9 @@ ExpressionFuzzer::ExpressionFuzzer(
     : remainingLevelOfNesting_(std::max(1, maxLevelOfNesting)),
       verifier_(
           &execCtx_,
-          {FLAGS_disable_constant_folding, FLAGS_repro_persist_path}),
+          {FLAGS_disable_constant_folding,
+           FLAGS_repro_persist_path,
+           FLAGS_persist_and_run_once}),
       vectorFuzzer_(getFuzzerOptions(), execCtx_.pool()) {
   seed(initialSeed);
 
@@ -291,8 +313,8 @@ ExpressionFuzzer::ExpressionFuzzer(
         }
         atLeastOneSupported = true;
         ++supportedFunctionSignatures;
-        signatureTemplates_.emplace_back(
-            function.first, signature, std::move(typeVariables));
+        signatureTemplates_.emplace_back(SignatureTemplate{
+            function.first, signature, std::move(typeVariables)});
       } else if (
           auto callableFunction =
               processSignature(function.first, *signature)) {
@@ -331,16 +353,13 @@ ExpressionFuzzer::ExpressionFuzzer(
       unsupportedFunctionSignatures,
       (double)unsupportedFunctionSignatures / totalFunctionSignatures * 100);
 
-  // Add additional signatures that are not in function registry.
-  appendConjunctSignatures();
-
   // We sort the available signatures before inserting them into
   // signaturesMap_. The purpose of this step is to ensure the vector of
   // function signatures associated with each key in signaturesMap_ has a
   // deterministic order, so that we can deterministically generate
   // expressions across platforms. We just do this once and the vector is
   // small, so it doesn't need to be very efficient.
-  sortConcreteSignatures();
+  sortCallableSignatures(signatures_);
 
   // Generates signaturesMap, which maps a given type to the function
   // signature that returns it.
@@ -349,7 +368,7 @@ ExpressionFuzzer::ExpressionFuzzer(
   }
 
   // Similarly, sort all template signatures.
-  sortSignatureTemplates();
+  sortSignatureTemplates(signatureTemplates_);
 
   // Insert signature templates into signatureTemplateMap_ grouped by their
   // return type base name. If the return type is a type variable, insert the
@@ -387,78 +406,7 @@ void ExpressionFuzzer::seed(size_t seed) {
 }
 
 void ExpressionFuzzer::reSeed() {
-  seed(folly::Random::rand32(rng_));
-}
-
-void ExpressionFuzzer::sortConcreteSignatures() {
-  std::sort(
-      signatures_.begin(),
-      signatures_.end(),
-      // Returns true if lhs is less (comes before).
-      [](const CallableSignature& lhs, const CallableSignature& rhs) {
-        // The comparison logic is the following:
-        //
-        // 1. Compare based on function name.
-        // 2. If names are the same, compare the number of args.
-        // 3. If number of args are the same, look for any different arg
-        // types.
-        // 4. If all arg types are the same, compare return type.
-        if (lhs.name == rhs.name) {
-          if (lhs.args.size() == rhs.args.size()) {
-            for (size_t i = 0; i < lhs.args.size(); ++i) {
-              if (!lhs.args[i]->kindEquals(rhs.args[i])) {
-                return lhs.args[i]->toString() < rhs.args[i]->toString();
-              }
-            }
-            return lhs.returnType->toString() < rhs.returnType->toString();
-          }
-          return lhs.args.size() < rhs.args.size();
-        }
-        return lhs.name < rhs.name;
-      });
-}
-
-void ExpressionFuzzer::sortSignatureTemplates() {
-  std::sort(
-      signatureTemplates_.begin(),
-      signatureTemplates_.end(),
-      // Returns true if lhs is less (comes before).
-      [](const SignatureTemplate& lhs, const SignatureTemplate& rhs) {
-        // The comparison logic is the following:
-        //
-        // 1. Compare based on function name.
-        // 2. If names are the same, compare the number of args.
-        // 3. If number of args are the same, look for any different arg
-        // types.
-        // 4. If all arg types are the same, compare return type.
-        if (lhs.functionName == rhs.functionName) {
-          auto& leftArgs = lhs.signature->argumentTypes();
-          auto& rightArgs = rhs.signature->argumentTypes();
-          if (leftArgs.size() == rightArgs.size()) {
-            for (size_t i = 0; i < leftArgs.size(); ++i) {
-              if (!(leftArgs[i] == rightArgs[i])) {
-                return leftArgs[i].toString() < rightArgs[i].toString();
-              }
-            }
-            return lhs.signature->returnType().toString() <
-                rhs.signature->returnType().toString();
-          }
-          return leftArgs.size() < rightArgs.size();
-        }
-        return lhs.functionName < rhs.functionName;
-      });
-}
-
-void ExpressionFuzzer::appendConjunctSignatures() {
-  CallableSignature conjunctSignature;
-  conjunctSignature.name = "and";
-  conjunctSignature.returnType = BOOLEAN();
-  conjunctSignature.args = {BOOLEAN(), BOOLEAN()};
-  conjunctSignature.variableArity = true;
-  signatures_.emplace_back(conjunctSignature);
-
-  conjunctSignature.name = "or";
-  signatures_.emplace_back(conjunctSignature);
+  seed(rng_());
 }
 
 RowVectorPtr ExpressionFuzzer::generateRowVector() {
@@ -484,7 +432,8 @@ core::TypedExprPtr ExpressionFuzzer::generateArgColumn(const TypePtr& arg) {
 }
 
 core::TypedExprPtr ExpressionFuzzer::generateArg(const TypePtr& arg) {
-  size_t argClass = folly::Random::rand32(4, rng_);
+  size_t argClass =
+      boost::random::uniform_int_distribution<uint32_t>(0, 3)(rng_);
 
   // Toss a coin and choose between a constant, a column reference, or another
   // expression (function).
@@ -498,7 +447,7 @@ core::TypedExprPtr ExpressionFuzzer::generateArg(const TypePtr& arg) {
     if (remainingLevelOfNesting_ > 0) {
       return generateExpression(arg);
     }
-    argClass = folly::Random::rand32(2, rng_);
+    argClass = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
   }
 
   if (argClass == kArgConstant) {
@@ -513,7 +462,8 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateArgs(
   std::vector<core::TypedExprPtr> inputExpressions;
   auto numVarArgs = !input.variableArity
       ? 0
-      : folly::Random::rand32(FLAGS_max_num_varargs + 1, rng_);
+      : boost::random::uniform_int_distribution<uint32_t>(
+            0, FLAGS_max_num_varargs)(rng_);
   inputExpressions.reserve(input.args.size() + numVarArgs);
 
   for (const auto& arg : input.args) {
@@ -572,7 +522,8 @@ core::TypedExprPtr ExpressionFuzzer::generateExpression(
   auto secondAttempt =
       &ExpressionFuzzer::generateExpressionFromSignatureTemplate;
 
-  size_t useSignatureTemplate = folly::Random::rand32(2, rng_);
+  size_t useSignatureTemplate =
+      boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
   if (FLAGS_velox_fuzzer_enable_complex_types && useSignatureTemplate) {
     std::swap(firstAttempt, secondAttempt);
   }
@@ -623,14 +574,14 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
   }
 
   // Randomly pick a function that can return `returnType`.
-  size_t idx = folly::Random::rand32(eligible.size(), rng_);
+  size_t idx = boost::random::uniform_int_distribution<uint32_t>(
+      0, eligible.size() - 1)(rng_);
   const auto& chosen = eligible[idx];
 
   return getCallExprFromCallable(*chosen);
 }
 
-const ExpressionFuzzer::SignatureTemplate*
-ExpressionFuzzer::chooseRandomSignatureTemplate(
+const SignatureTemplate* ExpressionFuzzer::chooseRandomSignatureTemplate(
     const TypePtr& returnType,
     const std::string& typeName) {
   std::vector<const SignatureTemplate*> eligible;
@@ -653,7 +604,8 @@ ExpressionFuzzer::chooseRandomSignatureTemplate(
     return nullptr;
   }
 
-  auto idx = folly::Random::rand32(eligible.size(), rng_);
+  auto idx = boost::random::uniform_int_distribution<uint32_t>(
+      0, eligible.size() - 1)(rng_);
   return eligible[idx];
 }
 
@@ -673,8 +625,7 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
   VELOX_CHECK_EQ(fuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs), true);
   auto& argumentTypes = fuzzer.argumentTypes();
 
-  CallableSignature callable{
-      chosen->functionName, argumentTypes, false, returnType};
+  CallableSignature callable{chosen->name, argumentTypes, false, returnType};
 
   return getCallExprFromCallable(callable);
 }
@@ -704,8 +655,9 @@ void ExpressionFuzzer::go() {
     VELOX_CHECK(inputRowTypes_.empty());
     VELOX_CHECK(inputRowNames_.empty());
 
-    // Pick a random signature to chose the root return type.
-    size_t idx = folly::Random::rand32(signatures_.size(), rng_);
+    // Pick a random signature to choose the root return type.
+    size_t idx = boost::random::uniform_int_distribution<uint32_t>(
+        0, signatures_.size() - 1)(rng_);
     const auto& rootType = signatures_[idx].returnType;
 
     // Generate expression tree and input data vectors.
@@ -719,6 +671,8 @@ void ExpressionFuzzer::go() {
       resultVector = vectorFuzzer_.fuzzFlat(plan->type());
     }
 
+    auto columnsToWrapInLazy = generateLazyColumnIds(rowVector, vectorFuzzer_);
+
     // If both paths threw compatible exceptions, we add a try() function to
     // the expression's root and execute it again. This time the expression
     // cannot throw.
@@ -726,7 +680,8 @@ void ExpressionFuzzer::go() {
             plan,
             rowVector,
             resultVector ? BaseVector::copy(*resultVector) : nullptr,
-            true) &&
+            true,
+            columnsToWrapInLazy) &&
         FLAGS_retry_with_try) {
       LOG(INFO)
           << "Both paths failed with compatible exceptions. Retrying expression using try().";
@@ -739,7 +694,8 @@ void ExpressionFuzzer::go() {
           plan,
           rowVector,
           resultVector ? BaseVector::copy(*resultVector) : nullptr,
-          false);
+          false,
+          columnsToWrapInLazy);
     }
 
     LOG(INFO) << "==============================> Done with iteration " << i;

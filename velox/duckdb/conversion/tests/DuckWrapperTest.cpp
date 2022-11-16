@@ -90,9 +90,8 @@ class BaseDuckWrapperTest : public testing::Test {
         << "Query failed: " << result->errorMessage();
   }
 
-  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::createForTest()};
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
   std::unique_ptr<DuckDBWrapper> db_{

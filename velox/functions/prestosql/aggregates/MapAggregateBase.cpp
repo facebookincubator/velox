@@ -36,6 +36,12 @@ void MapAggregateBase::extractValues(
 
   for (int32_t i = 0; i < numGroups; ++i) {
     char* group = groups[i];
+
+    if (isNull(group)) {
+      mapVector->setNull(i, true);
+      continue;
+    }
+
     clearNull(rawNulls, i);
 
     auto accumulator = value<MapAccumulator>(group);
@@ -50,7 +56,7 @@ void MapAggregateBase::extractValues(
       mapVector->setOffsetAndSize(i, offset, mapSize);
       offset += mapSize;
     } else {
-      mapVector->setOffsetAndSize(i, offset, 0);
+      mapVector->setOffsetAndSize(i, 0, 0);
     }
   }
 
@@ -88,7 +94,7 @@ VectorPtr MapAggregateBase::removeDuplicates(MapVectorPtr& mapVector) const {
         // Duplicate key found.
         duplicateCnt++;
         if (!rawNewSizes) {
-          newSizes = allocateSizes(numElements, mapVector->pool());
+          newSizes = allocateSizes(numRows, mapVector->pool());
           rawNewSizes = newSizes->asMutable<vector_size_t>();
 
           elementIndices = allocateIndices(numElements, mapVector->pool());
@@ -104,7 +110,7 @@ VectorPtr MapAggregateBase::removeDuplicates(MapVectorPtr& mapVector) const {
     if (rawNewSizes) {
       rawNewSizes[row] = size - duplicateCnt;
     }
-  };
+  }
 
   if (rawNewSizes) {
     return std::make_shared<MapVector>(
@@ -141,12 +147,15 @@ void MapAggregateBase::addMapInputToAccumulator(
     auto group = groups[row];
     auto accumulator = value<MapAccumulator>(group);
 
-    auto decodedRow = decodedMaps_.index(row);
-    auto offset = mapVector->offsetAt(decodedRow);
-    auto size = mapVector->sizeAt(decodedRow);
-    auto tracker = trackRowSize(group);
-    accumulator->keys.appendRange(mapKeys, offset, size, allocator_);
-    accumulator->values.appendRange(mapValues, offset, size, allocator_);
+    if (!decodedMaps_.isNullAt(row)) {
+      clearNull(group);
+      auto decodedRow = decodedMaps_.index(row);
+      auto offset = mapVector->offsetAt(decodedRow);
+      auto size = mapVector->sizeAt(decodedRow);
+      auto tracker = trackRowSize(group);
+      accumulator->keys.appendRange(mapKeys, offset, size, allocator_);
+      accumulator->values.appendRange(mapValues, offset, size, allocator_);
+    }
   });
 }
 
@@ -166,11 +175,14 @@ void MapAggregateBase::addSingleGroupMapInputToAccumulator(
   auto& mapKeys = mapVector->mapKeys();
   auto& mapValues = mapVector->mapValues();
   rows.applyToSelected([&](vector_size_t row) {
-    auto decodedRow = decodedMaps_.index(row);
-    auto offset = mapVector->offsetAt(decodedRow);
-    auto size = mapVector->sizeAt(decodedRow);
-    keys.appendRange(mapKeys, offset, size, allocator_);
-    values.appendRange(mapValues, offset, size, allocator_);
+    if (!decodedMaps_.isNullAt(row)) {
+      clearNull(group);
+      auto decodedRow = decodedMaps_.index(row);
+      auto offset = mapVector->offsetAt(decodedRow);
+      auto size = mapVector->sizeAt(decodedRow);
+      keys.appendRange(mapKeys, offset, size, allocator_);
+      values.appendRange(mapValues, offset, size, allocator_);
+    }
   });
 }
 } // namespace facebook::velox::aggregate

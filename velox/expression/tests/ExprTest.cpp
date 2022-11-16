@@ -32,6 +32,7 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/IntervalDayTime.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -228,9 +229,9 @@ class ExprTest : public testing::Test, public VectorTestBase {
       evaluate(expression, makeRowVector({input}));
       ASSERT_TRUE(false) << "Expected an error";
     } catch (VeloxException& e) {
+      ASSERT_EQ(message, e.message());
       ASSERT_EQ(context, trimInputPath(e.context()));
       ASSERT_EQ(topLevelContext, trimInputPath(e.topLevelContext()));
-      ASSERT_EQ(message, e.message());
     }
   }
 
@@ -262,7 +263,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
         << sql;
   }
 
-  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::createForTest()};
+  std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
   parse::ParseOptions options_;
@@ -2339,6 +2340,16 @@ TEST_F(ExprTest, constantToSql) {
   ASSERT_EQ(toSql(Date(18'506)), "'2020-09-01'::DATE");
   ASSERT_EQ(toSql(variant::null(TypeKind::DATE)), "NULL::DATE");
 
+  ASSERT_EQ(
+      toSql(Timestamp(123'456, 123'000)),
+      "'1970-01-02T10:17:36.000123000'::TIMESTAMP");
+  ASSERT_EQ(toSql(variant::null(TypeKind::TIMESTAMP)), "NULL::TIMESTAMP");
+
+  ASSERT_EQ(toSql(IntervalDayTime(123'456)), "INTERVAL 123456 MILLISECONDS");
+  ASSERT_EQ(
+      toSql(variant::null(TypeKind::INTERVAL_DAY_TIME)),
+      "NULL::INTERVAL DAY TO SECOND");
+
   ASSERT_EQ(toSql(1.5f), "'1.5'::REAL");
   ASSERT_EQ(toSql(variant::null(TypeKind::REAL)), "NULL::REAL");
 
@@ -2968,4 +2979,107 @@ TEST_F(ExprTest, addNulls) {
 
     checkResult(slicedVector);
   }
+}
+
+namespace {
+class AlwaysThrowsVectorFunction : public exec::VectorFunction {
+ public:
+  static constexpr const char* kErrorMessage = "Expected";
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& /* args */,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& /* result */) const override {
+    auto error = std::make_exception_ptr(std::invalid_argument(kErrorMessage));
+    context.setErrors(rows, error);
+    return;
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("boolean")
+                .argumentType("integer")
+                .build()};
+  }
+};
+
+class NoOpVectorFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& /* rows */,
+      std::vector<VectorPtr>& /* args */,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& /* context */,
+      VectorPtr& /* result */) const override {}
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("boolean")
+                .argumentType("integer")
+                .build()};
+  }
+};
+} // namespace
+
+TEST_F(ExprTest, applyFunctionNoResult) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3}),
+  });
+
+  exec::registerVectorFunction(
+      "always_throws_vector_function",
+      AlwaysThrowsVectorFunction::signatures(),
+      std::make_unique<AlwaysThrowsVectorFunction>());
+
+  // At various places in the code, we don't check if result has been set or
+  // not.  Conjuncts have the nice property that they set throwOnError to
+  // false and don't check if the result VectorPtr is nullptr.
+  assertError(
+      "always_throws_vector_function(c0) AND true",
+      makeFlatVector<int32_t>({1, 2, 3}),
+      "always_throws_vector_function(c0)",
+      "and(always_throws_vector_function(c0), 1:BOOLEAN)",
+      AlwaysThrowsVectorFunction::kErrorMessage);
+
+  exec::registerVectorFunction(
+      "no_op",
+      NoOpVectorFunction::signatures(),
+      std::make_unique<NoOpVectorFunction>());
+
+  assertError(
+      "no_op(c0) AND true",
+      makeFlatVector<int32_t>({1, 2, 3}),
+      "no_op(c0)",
+      "and(no_op(c0), 1:BOOLEAN)",
+      "Function neither returned results nor threw exception.");
+}
+
+TEST_F(ExprTest, mapKeysAndValues) {
+  // Verify that the right size of maps and keys arrays are created. This is
+  // done by executing eval with a selectivity vector larger than the size of
+  // the input map but with the extra trailing rows marked invalid. Finally, if
+  // map_keys/_values tried to create a larger result array (equivalent to
+  // rows.size()) this will throw.
+  vector_size_t vectorSize = 100;
+  VectorPtr mapVector = std::make_shared<MapVector>(
+      pool_.get(),
+      MAP(BIGINT(), BIGINT()),
+      makeNulls(vectorSize, nullEvery(3)),
+      vectorSize,
+      makeIndices(vectorSize, [](auto /* row */) { return 0; }),
+      makeIndices(vectorSize, [](auto /* row */) { return 1; }),
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<int64_t>({10, 20, 30}));
+  auto input = makeRowVector({mapVector});
+  auto exprSet = compileMultiple(
+      {"map_keys(c0)", "map_values(c0)"}, asRowType(input->type()));
+  exec::EvalCtx context(execCtx_.get(), exprSet.get(), input.get());
+
+  SelectivityVector rows(vectorSize + 1);
+  rows.setValid(vectorSize, false);
+  rows.updateBounds();
+  std::vector<VectorPtr> result(2);
+  ASSERT_NO_THROW(exprSet->eval(rows, context, result));
 }

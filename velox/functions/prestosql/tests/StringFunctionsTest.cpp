@@ -18,6 +18,7 @@
 #include <cctype>
 #include <random>
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/lib/StringEncodingUtils.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -295,6 +296,12 @@ class StringFunctionsTest : public FunctionBaseTest {
 
   template <typename TInstance>
   void testStringPositionAllFlatVector(
+      const strpos_input_test_t& tests,
+      const std::vector<std::optional<bool>>& stringEncodings,
+      bool withInstanceArgument);
+
+  template <typename TInstance>
+  void testStringPositionFromEndAllFlatVector(
       const strpos_input_test_t& tests,
       const std::vector<std::optional<bool>>& stringEncodings,
       bool withInstanceArgument);
@@ -969,6 +976,89 @@ TEST_F(StringFunctionsTest, stringPosition) {
   }
 }
 
+// Test strpos function
+template <typename TInstance>
+void StringFunctionsTest::testStringPositionFromEndAllFlatVector(
+    const strpos_input_test_t& tests,
+    const std::vector<std::optional<bool>>& asciiEncodings,
+    bool withInstanceArgument) {
+  auto stringVector = makeFlatVector<StringView>(tests.size());
+  auto subStringVector = makeFlatVector<StringView>(tests.size());
+  auto instanceVector =
+      withInstanceArgument ? makeFlatVector<TInstance>(tests.size()) : nullptr;
+
+  for (int i = 0; i < tests.size(); i++) {
+    stringVector->set(i, StringView(std::get<0>(tests[i].first)));
+    subStringVector->set(i, StringView(std::get<1>(tests[i].first)));
+    if (instanceVector) {
+      instanceVector->set(i, std::get<2>(tests[i].first));
+    }
+  }
+
+  if (asciiEncodings[0].has_value()) {
+    stringVector->setAllIsAscii(asciiEncodings[0].value());
+  }
+  if (asciiEncodings[1].has_value()) {
+    subStringVector->setAllIsAscii(asciiEncodings[1].value());
+  }
+
+  FlatVectorPtr<int64_t> result;
+  if (withInstanceArgument) {
+    result = evaluate<FlatVector<int64_t>>(
+        "strrpos(c0, c1,c2)",
+        makeRowVector({stringVector, subStringVector, instanceVector}));
+  } else {
+    result = evaluate<FlatVector<int64_t>>(
+        "strrpos(c0, c1)", makeRowVector({stringVector, subStringVector}));
+  }
+
+  for (int32_t i = 0; i < tests.size(); ++i) {
+    ASSERT_EQ(result->valueAt(i), tests[i].second);
+  }
+}
+
+TEST_F(StringFunctionsTest, stringPositionFromEnd) {
+  strpos_input_test_t testsAscii = {
+      {{"high", "ig", -1}, {2}},
+      {{"high", "igx", -1}, {0}},
+      {{"high", "h", -1}, {4}},
+      {{"", "h", -1}, {0}},
+      {{"high", "", -1}, {1}},
+      {{"", "", -1}, {1}},
+  };
+
+  strpos_input_test_t testsAsciiWithPosition = {
+      {{"high", "h", 2}, 1},
+      {{"high", "h", 10}, 0},
+      {{"high", "", 2}, {1}},
+      {{"", "", 2}, {1}},
+  };
+
+  strpos_input_test_t testsUnicodeWithPosition = {
+      {{"\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u7231", 1}, 4},
+      {{"\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u5E0C\u671B", 1}, 6},
+  };
+
+  // We dont have to try all encoding combinations here since there is a test
+  // that test the encoding resolution but we want to to have a test for each
+  // possible resolution
+  testStringPositionFromEndAllFlatVector<int64_t>(
+      testsAscii, {true, true}, false);
+
+  // Try instance parameter using BIGINT and INTEGER.
+  testStringPositionFromEndAllFlatVector<int32_t>(
+      testsAsciiWithPosition, {false, false}, true);
+  testStringPositionFromEndAllFlatVector<int64_t>(
+      testsAsciiWithPosition, {false, false}, true);
+
+  // Test constant vectors
+  auto rows = makeRowVector(makeRowType({BIGINT()}), 10);
+  auto result = evaluate<SimpleVector<int64_t>>("strrpos('high', 'ig')", rows);
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(result->valueAt(i), 2);
+  }
+}
+
 void StringFunctionsTest::testChrFlatVector(
     const std::vector<std::pair<int64_t, std::string>>& tests) {
   auto codePoints = makeFlatVector<int64_t>(tests.size());
@@ -1402,6 +1492,15 @@ TEST_F(StringFunctionsTest, reverse) {
       "\u671B\u5E0C\u2014\u7231\u2014\u5FF5\u4FE1",
       reverse("\u4FE1\u5FF5\u2014\u7231\u2014\u5E0C\u671B"));
   EXPECT_EQ(expectedInvalidStr, reverse(invalidStr));
+
+  // Test unicode out of the valid range.
+  std::string invalidUnicodeStr;
+  invalidUnicodeStr.resize(3);
+  // An invalid unicode within 0xD800--0xDFFF.
+  int16_t invalidUnicode = 0xeda0;
+  memcpy(invalidUnicodeStr.data(), &invalidUnicode, 2);
+  invalidUnicodeStr[2] = '\0';
+  EXPECT_THROW(reverse(invalidUnicodeStr), VeloxUserError);
 }
 
 TEST_F(StringFunctionsTest, fromBase64) {

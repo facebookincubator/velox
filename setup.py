@@ -22,6 +22,7 @@
 import distutils.command.build
 import distutils.command.clean
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -41,6 +42,7 @@ class BuildCommand(distutils.command.build.build):
 
 def _get_version():
     version = open("./version.txt").read().strip()
+    version = re.sub("#.*\n?", "", version, flags=re.MULTILINE)
     sha = "Unknown"
     try:
         sha = (

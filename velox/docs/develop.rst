@@ -21,4 +21,6 @@ This guide is intended for Velox contributors and developers of Velox-based appl
     develop/operators
     develop/task
     develop/simd
+    develop/spilling
+    develop/testing
     develop/debugging

@@ -35,16 +35,16 @@ DriverCtx::DriverCtx(
       pipelineId(_pipelineId),
       splitGroupId(_splitGroupId),
       partitionId(_partitionId),
-      task(_task),
-      pool(task->addDriverPool(pipelineId, driverId)) {}
+      task(_task) {}
 
 const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->config();
 }
 
-velox::memory::MemoryPool* FOLLY_NONNULL
-DriverCtx::addOperatorPool(const std::string& operatorType) {
-  return task->addOperatorPool(pool, operatorType);
+velox::memory::MemoryPool* FOLLY_NONNULL DriverCtx::addOperatorPool(
+    const core::PlanNodeId& planNodeId,
+    const std::string& operatorType) {
+  return task->addOperatorPool(planNodeId, pipelineId, operatorType);
 }
 
 std::atomic_uint64_t BlockingState::numBlockedDrivers_{0};
@@ -411,6 +411,10 @@ StopReason Driver::runInternal(
                   result->size() > 0,
                   "Operator::getOutput() must return nullptr or a non-empty vector: {}",
                   op->stats().operatorType);
+
+              op->stats().outputVectors += 1;
+              op->stats().outputPositions += result->size();
+              op->stats().outputBytes += result->estimateFlatSize();
 
               // This code path is used only in single-threaded execution.
               blockingReason_ = BlockingReason::kWaitForConsumer;

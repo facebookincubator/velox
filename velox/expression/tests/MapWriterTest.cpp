@@ -16,6 +16,7 @@
 #include <fmt/core.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <cstdint>
 #include <optional>
 #include <tuple>
 
@@ -599,6 +600,101 @@ TEST_F(MapWriterTest, finishPostSize) {
   auto* innerMap = outerMap->mapValues()->as<MapVector>();
   ASSERT_EQ(innerMap->mapKeys()->size(), 6);
   ASSERT_EQ(innerMap->mapValues()->size(), 6);
+}
+
+// MapWriter should append to key and values vectors and not overwrite them.
+TEST_F(MapWriterTest, appendToKeysAndValues) {
+  using out_t = Map<int64_t, int64_t>;
+  auto result = prepareResult(CppToType<out_t>::create(), 2);
+
+  {
+    // Write map at offset 0.
+    exec::VectorWriter<out_t> vectorWriter;
+    vectorWriter.init(*result->as<MapVector>());
+    vectorWriter.setOffset(0);
+    auto& mapWriter = vectorWriter.current();
+    mapWriter.copy_from(folly::F14FastMap<int64_t, int64_t>{{1, 2}});
+
+    vectorWriter.commit();
+    vectorWriter.finish();
+  }
+
+  {
+    // Write map at offset 1 using a different writer.
+    exec::VectorWriter<out_t> vectorWriter;
+    vectorWriter.init(*result->as<MapVector>());
+    vectorWriter.setOffset(1);
+
+    auto& mapWriter = vectorWriter.current();
+    mapWriter.copy_from(folly::F14FastMap<int64_t, int64_t>{{10, 20}});
+
+    vectorWriter.commit();
+    vectorWriter.finish();
+  }
+
+  auto* outerMap = result->as<MapVector>();
+  auto& keys = outerMap->mapKeys();
+  auto& values = outerMap->mapValues();
+  ASSERT_EQ(keys->size(), 2);
+  ASSERT_EQ(values->size(), 2);
+
+  ASSERT_EQ(keys->asFlatVector<int64_t>()->valueAt(0), 1);
+  ASSERT_EQ(values->asFlatVector<int64_t>()->valueAt(0), 2);
+
+  ASSERT_EQ(keys->asFlatVector<int64_t>()->valueAt(1), 10);
+  ASSERT_EQ(values->asFlatVector<int64_t>()->valueAt(1), 20);
+}
+
+// Make sure copy from MapView correctly resizes children vectors.
+TEST_F(MapWriterTest, copyFromViewTypeResizedChildren) {
+  using out_t = Map<int64_t, Map<int64_t, int64_t>>;
+
+  // Create a map vector.
+  auto makeNestedMapVector = [&]() {
+    auto result = prepareResult(CppToType<out_t>::create());
+    exec::VectorWriter<out_t> vectorWriter;
+    vectorWriter.init(*result->as<MapVector>());
+    vectorWriter.setOffset(0);
+    auto& mapWriter = vectorWriter.current();
+
+    folly::F14FastMap<int64_t, int64_t> element = {{1, 2}, {3, 4}};
+
+    mapWriter.copy_from(
+        folly::F14FastMap<int64_t, folly::F14FastMap<int64_t, int64_t>>{
+            {1, element}, {2, element}, {3, element}});
+    vectorWriter.commit();
+    vectorWriter.finish();
+    return result;
+  };
+
+  auto vectorInput = makeNestedMapVector();
+  DecodedVector decoded;
+  decoded.decode(*vectorInput.get());
+  exec::VectorReader<out_t> reader(&decoded);
+
+  auto mapViewToBeCopied = reader[0];
+
+  // Write a new vector and copy mapViewToBeCopied to it.
+
+  auto result = prepareResult(CppToType<out_t>::create());
+  exec::VectorWriter<out_t> vectorWriter;
+  vectorWriter.init(*result->as<MapVector>());
+  vectorWriter.setOffset(0);
+  auto& mapWriter = vectorWriter.current();
+  mapWriter.copy_from(mapViewToBeCopied);
+  vectorWriter.commit();
+
+  // Check the lengths of the underlying vectors.
+  auto* outerMap = result->as<MapVector>();
+  auto& outerKeys = outerMap->mapKeys();
+  auto* outerValues = outerMap->mapValues()->as<MapVector>();
+
+  vectorWriter.finish();
+  ASSERT_EQ(outerKeys->size(), 3);
+  ASSERT_EQ(outerValues->size(), 3);
+
+  ASSERT_EQ(outerValues->mapKeys()->asFlatVector<int64_t>()->size(), 6);
+  ASSERT_EQ(outerValues->mapValues()->asFlatVector<int64_t>()->size(), 6);
 }
 
 } // namespace

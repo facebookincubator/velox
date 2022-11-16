@@ -161,11 +161,17 @@ void appendSqlLiteral(
     case TypeKind::INTEGER:
     case TypeKind::BIGINT:
     case TypeKind::DATE:
+    case TypeKind::TIMESTAMP:
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
       out << "'" << vector.wrappedVector()->toString(vector.wrappedIndex(row))
           << "'::" << vector.type()->toString();
       break;
+    case TypeKind::INTERVAL_DAY_TIME: {
+      auto interval = vector.as<SimpleVector<IntervalDayTime>>()->valueAt(row);
+      out << "INTERVAL " << interval.milliseconds() << " MILLISECONDS";
+      break;
+    }
     case TypeKind::VARCHAR:
       appendSqlString(
           vector.wrappedVector()->toString(vector.wrappedIndex(row)), out);
@@ -212,10 +218,17 @@ void appendSqlLiteral(
 }
 } // namespace
 
-std::string ConstantExpr::toSql() const {
+std::string ConstantExpr::toSql(
+    std::vector<VectorPtr>* complexConstants) const {
   VELOX_CHECK_NOT_NULL(sharedSubexprValues_);
   std::ostringstream out;
-  appendSqlLiteral(*sharedSubexprValues_, 0, out);
+  if (complexConstants && !sharedSubexprValues_->type()->isPrimitiveType()) {
+    int idx = complexConstants->size();
+    out << "__complex_constant(c" << idx << ")";
+    complexConstants->push_back(sharedSubexprValues_);
+  } else {
+    appendSqlLiteral(*sharedSubexprValues_, 0, out);
+  }
   return out.str();
 }
 } // namespace facebook::velox::exec

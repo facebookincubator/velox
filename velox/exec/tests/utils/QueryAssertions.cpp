@@ -67,6 +67,15 @@ template <>
 }
 
 template <>
+::duckdb::Value duckValueAt<TypeKind::INTERVAL_DAY_TIME>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  using T = typename KindToFlatVector<TypeKind::INTERVAL_DAY_TIME>::WrapperType;
+  return ::duckdb::Value::INTERVAL(
+      0, 0, vector->as<SimpleVector<T>>()->valueAt(index).milliseconds());
+}
+
+template <>
 ::duckdb::Value duckValueAt<TypeKind::SHORT_DECIMAL>(
     const VectorPtr& vector,
     vector_size_t index) {
@@ -119,11 +128,12 @@ template <>
 ::duckdb::Value duckValueAt<TypeKind::MAP>(
     const VectorPtr& vector,
     int32_t row) {
-  auto mapVector = vector->as<MapVector>();
+  auto mapVector = vector->wrappedVector()->as<MapVector>();
+  auto mapRow = vector->wrappedIndex(row);
   const auto& mapKeys = mapVector->mapKeys();
   const auto& mapValues = mapVector->mapValues();
-  auto offset = mapVector->offsetAt(row);
-  auto size = mapVector->sizeAt(row);
+  auto offset = mapVector->offsetAt(mapRow);
+  auto size = mapVector->sizeAt(mapRow);
   if (size == 0) {
     return ::duckdb::Value::MAP(
         ::duckdb::Value::EMPTYLIST(duckdb::fromVeloxType(mapKeys->type())),
@@ -193,12 +203,29 @@ velox::variant variantAt<TypeKind::DATE>(
       dataChunk->GetValue(column, row).GetValue<::duckdb::date_t>()));
 }
 
+template <>
+velox::variant variantAt<TypeKind::INTERVAL_DAY_TIME>(
+    ::duckdb::DataChunk* dataChunk,
+    int32_t row,
+    int32_t column) {
+  return velox::variant::intervalDayTime(
+      IntervalDayTime(::duckdb::Interval::GetMicro(
+          dataChunk->GetValue(column, row).GetValue<::duckdb::interval_t>())));
+}
+
 template <TypeKind kind>
 velox::variant variantAt(const ::duckdb::Value& value) {
   // NOTE: duckdb only support native cpp type for GetValue so we need to use
   // DeepCopiedType instead of WrapperType here.
   using T = typename TypeTraits<kind>::DeepCopiedType;
   return velox::variant(value.GetValue<T>());
+}
+
+template <>
+velox::variant variantAt<TypeKind::INTERVAL_DAY_TIME>(
+    const ::duckdb::Value& value) {
+  return velox::variant::intervalDayTime(IntervalDayTime(
+      ::duckdb::Interval::GetMicro(value.GetValue<::duckdb::interval_t>())));
 }
 
 velox::variant decimalVariantAt(const ::duckdb::Value& value) {
@@ -290,8 +317,8 @@ velox::variant arrayVariantAt(
 std::vector<MaterializedRow> materialize(
     ::duckdb::DataChunk* dataChunk,
     const std::shared_ptr<const RowType>& rowType) {
-  EXPECT_EQ(rowType->size(), dataChunk->GetTypes().size())
-      << "Wrong number of columns";
+  VELOX_CHECK_EQ(
+      rowType->size(), dataChunk->GetTypes().size(), "Wrong number of columns");
 
   auto size = dataChunk->size();
   std::vector<MaterializedRow> rows;
@@ -887,16 +914,9 @@ velox::variant readSingleValue(
   return materialize(result.second[0])[0][0];
 }
 
-void assertEqualResults(
+bool assertEqualResults(
     const std::vector<RowVectorPtr>& expected,
     const std::vector<RowVectorPtr>& actual) {
-  MaterializedRowMultiset actualRows;
-  for (auto vector : actual) {
-    auto rows = materialize(vector);
-    std::copy(
-        rows.begin(), rows.end(), std::inserter(actualRows, actualRows.end()));
-  }
-
   MaterializedRowMultiset expectedRows;
   for (auto vector : expected) {
     auto rows = materialize(vector);
@@ -906,9 +926,32 @@ void assertEqualResults(
         std::inserter(expectedRows, expectedRows.end()));
   }
 
+  return assertEqualResults(expectedRows, actual);
+}
+
+bool assertEqualResults(
+    const MaterializedRowMultiset& expectedRows,
+    const std::vector<RowVectorPtr>& actual) {
+  MaterializedRowMultiset actualRows;
+  for (auto vector : actual) {
+    auto rows = materialize(vector);
+    std::copy(
+        rows.begin(), rows.end(), std::inserter(actualRows, actualRows.end()));
+  }
+
   if (not compareMaterializedRows(actualRows, expectedRows)) {
     auto message = generateUserFriendlyDiff(expectedRows, actualRows);
     EXPECT_TRUE(false) << message << "Unexpected results";
+    return false;
+  }
+
+  return true;
+}
+
+void printResults(const RowVectorPtr& result, std::ostream& out) {
+  auto materializedRows = materialize(result);
+  for (const auto& row : materializedRows) {
+    out << toString(row) << std::endl;
   }
 }
 

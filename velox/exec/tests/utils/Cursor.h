@@ -55,7 +55,7 @@ class TaskQueue {
   };
 
   explicit TaskQueue(uint64_t maxBytes)
-      : pool_(memory::getDefaultScopedMemoryPool()), maxBytes_(maxBytes) {}
+      : pool_(memory::getDefaultMemoryPool()), maxBytes_(maxBytes) {}
 
   void setNumProducers(int32_t n) {
     numProducers_ = n;
@@ -82,7 +82,7 @@ class TaskQueue {
 
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
-  std::unique_ptr<velox::memory::MemoryPool> pool_;
+  std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::deque<TaskQueueEntry> queue_;
   std::optional<int32_t> numProducers_;
   int32_t producersFinished_ = 0;
@@ -127,14 +127,17 @@ class TaskCursor {
   }
 
  private:
+  static std::atomic<int32_t> serial_;
+
   const int32_t maxDrivers_;
   const int32_t numConcurrentSplitGroups_;
   const int32_t numSplitGroups_;
+
+  std::shared_ptr<folly::Executor> executor_;
   bool started_ = false;
   std::shared_ptr<TaskQueue> queue_;
   std::shared_ptr<exec::Task> task_;
   RowVectorPtr current_;
-  static std::atomic<int32_t> serial_;
   bool atEnd_{false};
 };
 

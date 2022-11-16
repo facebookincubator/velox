@@ -146,20 +146,21 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
       stream << ", ";
     }
     stream << aggregateNames_[i] << " := " << aggregates_[i]->toString();
+    if (aggregateMasks_.size() > i && aggregateMasks_[i]) {
+      stream << " mask: " << aggregateMasks_[i]->name();
+    }
   }
 }
 
 namespace {
 RowTypePtr getGroupIdOutputType(
-    const std::map<std::string, FieldAccessTypedExprPtr>&
-        outputGroupingKeyNames,
+    const std::vector<GroupIdNode::GroupingKeyInfo>& groupingKeyInfos,
     const std::vector<FieldAccessTypedExprPtr>& aggregationInputs,
     const std::string& groupIdName) {
   // Grouping keys come first, followed by aggregation inputs and groupId
   // column.
 
-  auto numOutputs =
-      outputGroupingKeyNames.size() + aggregationInputs.size() + 1;
+  auto numOutputs = groupingKeyInfos.size() + aggregationInputs.size() + 1;
 
   std::vector<std::string> names;
   std::vector<TypePtr> types;
@@ -167,9 +168,9 @@ RowTypePtr getGroupIdOutputType(
   names.reserve(numOutputs);
   types.reserve(numOutputs);
 
-  for (const auto& [name, groupingKey] : outputGroupingKeyNames) {
-    names.push_back(name);
-    types.push_back(groupingKey->type());
+  for (const auto& groupingKeyInfo : groupingKeyInfos) {
+    names.push_back(groupingKeyInfo.output);
+    types.push_back(groupingKeyInfo.input->type());
   }
 
   for (const auto& input : aggregationInputs) {
@@ -187,18 +188,18 @@ RowTypePtr getGroupIdOutputType(
 GroupIdNode::GroupIdNode(
     PlanNodeId id,
     std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-    std::map<std::string, FieldAccessTypedExprPtr> outputGroupingKeyNames,
+    std::vector<GroupIdNode::GroupingKeyInfo> groupingKeyInfos,
     std::vector<FieldAccessTypedExprPtr> aggregationInputs,
     std::string groupIdName,
     PlanNodePtr source)
     : PlanNode(std::move(id)),
       sources_{source},
       outputType_(getGroupIdOutputType(
-          outputGroupingKeyNames,
+          groupingKeyInfos,
           aggregationInputs,
           groupIdName)),
       groupingSets_(std::move(groupingSets)),
-      outputGroupingKeyNames_(std::move(outputGroupingKeyNames)),
+      groupingKeyInfos_(std::move(groupingKeyInfos)),
       aggregationInputs_(std::move(aggregationInputs)),
       groupIdName_(std::move(groupIdName)) {
   VELOX_CHECK_GE(
@@ -352,14 +353,41 @@ AbstractJoinNode::AbstractJoinNode(
         rightKeys_[i]->type()->kind(),
         "Join key types on the left and right sides must match");
   }
-  for (auto i = 0; i < outputType_->size(); ++i) {
+
+  auto numOutputColumms = outputType_->size();
+  if (core::isLeftSemiProjectJoin(joinType) ||
+      core::isRightSemiProjectJoin(joinType)) {
+    // Last output column must be a boolean 'match'.
+    --numOutputColumms;
+    VELOX_CHECK_EQ(outputType_->childAt(numOutputColumms), BOOLEAN());
+
+    // Verify that 'match' column name doesn't match any column from left or
+    // right source.
+    const auto& name = outputType->nameOf(numOutputColumms);
+    VELOX_CHECK(!leftType->containsChild(name));
+    VELOX_CHECK(!rightType->containsChild(name));
+  }
+
+  // Output of right semi join cannot include columns from the left side.
+  bool outputMayIncludeLeftColumns =
+      !(core::isRightSemiFilterJoin(joinType) ||
+        core::isRightSemiProjectJoin(joinType));
+
+  // Output of left semi and anti joins cannot include columns from the right
+  // side.
+  bool outputMayIncludeRightColumns =
+      !(core::isLeftSemiFilterJoin(joinType) ||
+        core::isLeftSemiProjectJoin(joinType) || core::isAntiJoin(joinType) ||
+        core::isNullAwareAntiJoin(joinType));
+
+  for (auto i = 0; i < numOutputColumms; ++i) {
     auto name = outputType_->nameOf(i);
-    if (leftType->containsChild(name)) {
+    if (outputMayIncludeLeftColumns && leftType->containsChild(name)) {
       VELOX_CHECK(
           !rightType->containsChild(name),
           "Duplicate column name found on join's left and right sides: {}",
           name);
-    } else if (rightType->containsChild(name)) {
+    } else if (outputMayIncludeRightColumns && rightType->containsChild(name)) {
       VELOX_CHECK(
           !leftType->containsChild(name),
           "Duplicate column name found on join's left and right sides: {}",
@@ -470,6 +498,13 @@ void addWindowFunction(
     const WindowNode::Function& windowFunction) {
   stream << windowFunction.functionCall->toString() << " ";
   auto frame = windowFunction.frame;
+  if (frame.startType == WindowNode::BoundType::kUnboundedFollowing) {
+    VELOX_USER_FAIL("Window frame start cannot be UNBOUNDED FOLLOWING");
+  }
+  if (frame.endType == WindowNode::BoundType::kUnboundedPreceding) {
+    VELOX_USER_FAIL("Window frame end cannot be UNBOUNDED PRECEDING");
+  }
+
   stream << windowTypeString(frame.type) << " between ";
   if (frame.startValue) {
     addKeys(stream, {frame.startValue});

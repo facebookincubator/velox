@@ -19,6 +19,7 @@
 #include <fstream>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Fs.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/ConstantExpr.h"
@@ -342,7 +343,7 @@ class ExprExceptionContext {
 
     // Persist vector to disk
     try {
-      auto dataPathOpt = generateFilePath(basePath, "vector");
+      auto dataPathOpt = common::generateTempFilePath(basePath, "vector");
       if (!dataPathOpt.has_value()) {
         dataPath_ = "Failed to create file for saving input vector.";
         return;
@@ -357,7 +358,7 @@ class ExprExceptionContext {
     // Persist sql to disk
     auto sql = expr_->toSql();
     try {
-      auto sqlPathOpt = generateFilePath(basePath, "sql");
+      auto sqlPathOpt = common::generateTempFilePath(basePath, "sql");
       if (!sqlPathOpt.has_value()) {
         sqlPath_ = "Failed to create file for saving SQL.";
         return;
@@ -1439,6 +1440,29 @@ void Expr::applyFunction(
 
   vectorFunction_->apply(rows, inputValues_, type(), context, result);
 
+  if (!result) {
+    LocalSelectivityVector mutableRemainingRowsHolder(context);
+    auto mutableRemainingRows = mutableRemainingRowsHolder.get(rows);
+    deselectErrors(context, *mutableRemainingRows);
+
+    // If there are rows with no result and no exception this is a bug in the
+    // function implementation.
+    if (mutableRemainingRows->hasSelections()) {
+      try {
+        // This isn't performant, but it gives us the relevant context and
+        // should only apply when the UDF is buggy (hopefully rarely).
+        VELOX_USER_FAIL(
+            "Function neither returned results nor threw exception.");
+      } catch (const std::exception& e) {
+        context.setErrors(*mutableRemainingRows, std::current_exception());
+      }
+    }
+
+    // Since result was empty, and either the function set errors for every row
+    // or we did above, set it to be all NULL.
+    result = BaseVector::createNullConstant(type(), rows.end(), context.pool());
+  }
+
   if (isAscii.has_value()) {
     result->asUnchecked<SimpleVector<StringView>>()->setIsAscii(
         isAscii.value(), rows);
@@ -1502,10 +1526,10 @@ std::string Expr::toString(bool recursive) const {
   return name_;
 }
 
-std::string Expr::toSql() const {
+std::string Expr::toSql(std::vector<VectorPtr>* complexConstants) const {
   std::stringstream out;
   out << "\"" << name_ << "\"";
-  appendInputsSql(out);
+  appendInputsSql(out, complexConstants);
   return out.str();
 }
 
@@ -1522,14 +1546,16 @@ void Expr::appendInputs(std::stringstream& stream) const {
   }
 }
 
-void Expr::appendInputsSql(std::stringstream& stream) const {
+void Expr::appendInputsSql(
+    std::stringstream& stream,
+    std::vector<VectorPtr>* complexConstants) const {
   if (!inputs_.empty()) {
     stream << "(";
     for (auto i = 0; i < inputs_.size(); ++i) {
       if (i > 0) {
         stream << ", ";
       }
-      stream << inputs_[i]->toSql();
+      stream << inputs_[i]->toSql(complexConstants);
     }
     stream << ")";
   }

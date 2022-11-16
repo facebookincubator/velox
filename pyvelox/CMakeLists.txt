@@ -17,10 +17,7 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
   include_directories(SYSTEM ${CMAKE_SOURCE_DIR})
   add_definitions(-DCREATE_PYVELOX_MODULE)
   # Define our Python module:
-  pybind11_add_module(
-    pyvelox MODULE
-    NO_EXTRAS # TODO: LTO crashes GCC9.2. File issues to pybind11
-    pyvelox.cpp pyvelox.h)
+  pybind11_add_module(pyvelox MODULE pyvelox.cpp pyvelox.h)
 
   # Link with Velox:
   target_link_libraries(pyvelox PRIVATE velox_type)

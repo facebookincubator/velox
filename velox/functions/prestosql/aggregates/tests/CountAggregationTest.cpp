@@ -22,7 +22,7 @@ namespace facebook::velox::aggregate::test {
 
 namespace {
 
-class CountAggregation : public AggregationTestBase {
+class CountAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
@@ -41,9 +41,11 @@ class CountAggregation : public AggregationTestBase {
            TINYINT()})};
 };
 
-TEST_F(CountAggregation, count) {
+TEST_F(CountAggregationTest, count) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
+
+  testAggregations(vectors, {}, {"count()"}, "SELECT count(1) FROM tmp");
 
   testAggregations(vectors, {}, {"count(1)"}, "SELECT count(1) FROM tmp");
 
@@ -74,6 +76,55 @@ TEST_F(CountAggregation, count) {
       {"c0_mod_10"},
       {"count(c7)"},
       "SELECT c0 % 10, count(c7) FROM tmp GROUP BY 1");
+}
+
+TEST_F(CountAggregationTest, mask) {
+  auto data = makeRowVector(
+      {"c", "m"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+          makeFlatVector<bool>(
+              {true,
+               false,
+               true,
+               false,
+               true,
+               false,
+               true,
+               false,
+               true,
+               false}),
+      });
+
+  createDuckDbTable({data});
+
+  // count(c)
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"count(c)"}, {"m"})
+                  .planNode();
+  assertQuery(plan, "SELECT count(c) FILTER (where m) FROM tmp");
+
+  plan = PlanBuilder()
+             .values({data})
+             .partialAggregation({}, {"count(c)"}, {"m"})
+             .finalAggregation()
+             .planNode();
+  assertQuery(plan, "SELECT count(c) FILTER (where m) FROM tmp");
+
+  // count(1)
+  plan = PlanBuilder()
+             .values({data})
+             .singleAggregation({}, {"count()"}, {"m"})
+             .planNode();
+  assertQuery(plan, "SELECT count(1) FILTER (where m) FROM tmp");
+
+  plan = PlanBuilder()
+             .values({data})
+             .partialAggregation({}, {"count()"}, {"m"})
+             .finalAggregation()
+             .planNode();
+  assertQuery(plan, "SELECT count(1) FILTER (where m) FROM tmp");
 }
 
 } // namespace

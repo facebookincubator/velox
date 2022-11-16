@@ -20,17 +20,31 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <velox/type/Type.h>
+#include "folly/json.h"
 
-namespace facebook::pyvelox {
+namespace facebook::velox::py {
 
 std::string serializeType(const std::shared_ptr<const velox::Type>& type);
 
-// Inlining these bindings since adding them to the cpp file results in a
-// ASAN error.
+///  Adds Velox Python Bindings to the module m.
+///
+/// This function adds the following bindings:
+///   * velox::TypeKind enum
+///   * velox::Type and its derived types
+///   * Basic functions on Type and its derived types.
+///
+///  @param m Module to add bindings too.
+///  @param asLocalModule If true then these bindings are only visible inside
+///  the module. Refer to
+///  https://pybind11.readthedocs.io/en/stable/advanced/classes.html#module-local-class-bindings
+///  for further details.
 inline void addVeloxBindings(pybind11::module& m, bool asLocalModule = true) {
+  // Inlining these bindings since adding them to the cpp file results in a
+  // ASAN error.
   using namespace velox;
   namespace py = pybind11;
 
+  // Add TypeKind enum.
   py::enum_<velox::TypeKind>(m, "TypeKind", py::module_local(asLocalModule))
       .value("BOOLEAN", velox::TypeKind::BOOLEAN)
       .value("TINYINT", velox::TypeKind::TINYINT)
@@ -48,9 +62,11 @@ inline void addVeloxBindings(pybind11::module& m, bool asLocalModule = true) {
       .value("ROW", velox::TypeKind::ROW)
       .export_values();
 
+  // Create VeloxType bound to velox::Type.
   py::class_<Type, std::shared_ptr<Type>> type(
       m, "VeloxType", py::module_local(asLocalModule));
 
+  // Adding all the derived types of Type here.
   py::class_<BooleanType, Type, std::shared_ptr<BooleanType>> booleanType(
       m, "BooleanType", py::module_local(asLocalModule));
   py::class_<IntegerType, Type, std::shared_ptr<IntegerType>> integerType(
@@ -80,9 +96,11 @@ inline void addVeloxBindings(pybind11::module& m, bool asLocalModule = true) {
   py::class_<FixedSizeArrayType, Type, std::shared_ptr<FixedSizeArrayType>>
       fixedArrayType(m, "FixedSizeArrayType", py::module_local(asLocalModule));
 
+  // Basic operations on Type.
   type.def("__str__", &Type::toString);
   // Gcc doesnt support the below kind of templatization.
 #if defined(__clang__)
+  // Adds equality and inequality comparison operators.
   type.def(py::self == py::self);
   type.def(py::self != py::self);
 #endif
@@ -150,4 +168,4 @@ inline void addVeloxBindings(pybind11::module& m, bool asLocalModule = true) {
   rowType.def("names", &RowType::names, "Return the names of the columns");
 }
 
-} // namespace facebook::pyvelox
+} // namespace facebook::velox::py

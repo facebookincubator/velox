@@ -68,8 +68,7 @@ size_t runBenchmark(
 
 BENCHMARK_MULTI(copyArray) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -85,8 +84,7 @@ BENCHMARK_MULTI(copyArray) {
 
 BENCHMARK_MULTI(copyArrayWithNulls) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -103,8 +101,7 @@ BENCHMARK_MULTI(copyArrayWithNulls) {
 
 BENCHMARK_MULTI(copyArrayDictionaryEncoded) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -134,8 +131,7 @@ BENCHMARK_MULTI(copyArrayDictionaryEncoded) {
 
 BENCHMARK_MULTI(copyArrayOneAtATime) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -151,8 +147,7 @@ BENCHMARK_MULTI(copyArrayOneAtATime) {
 
 BENCHMARK_MULTI(copyArrayTwoAtATime) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -168,8 +163,7 @@ BENCHMARK_MULTI(copyArrayTwoAtATime) {
 
 BENCHMARK_MULTI(copyArrayOfVarchar) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 50'000;
@@ -198,8 +192,7 @@ BENCHMARK_MULTI(copyArrayOfVarchar) {
 
 BENCHMARK_MULTI(copyArrayOfArray) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -227,8 +220,7 @@ BENCHMARK_MULTI(copyArrayOfArray) {
 
 BENCHMARK_MULTI(copyMap) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -246,8 +238,7 @@ BENCHMARK_MULTI(copyMap) {
 
 BENCHMARK_MULTI(copyMapWithNulls) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -266,8 +257,7 @@ BENCHMARK_MULTI(copyMapWithNulls) {
 
 BENCHMARK_MULTI(copyMapDictionaryEncoded) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -300,8 +290,7 @@ BENCHMARK_MULTI(copyMapDictionaryEncoded) {
 
 BENCHMARK_MULTI(copyMapOneAtATime) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -319,8 +308,7 @@ BENCHMARK_MULTI(copyMapOneAtATime) {
 
 BENCHMARK_MULTI(copyMapTwoAtATime) {
   folly::BenchmarkSuspender suspender;
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
   test::VectorMaker vectorMaker{pool.get()};
 
   const vector_size_t size = 1'000;
@@ -335,6 +323,30 @@ BENCHMARK_MULTI(copyMapTwoAtATime) {
   return runBenchmark(
       mapVector, selected, MAP(INTEGER(), INTEGER()), pool.get(), 2);
 }
+
+BENCHMARK_MULTI(copyStructNonContiguous) {
+  folly::BenchmarkSuspender suspender;
+  std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
+  test::VectorMaker vectorMaker{pool.get()};
+  constexpr vector_size_t kSize = 2'000;
+  std::vector<VectorPtr> children = {
+      vectorMaker.flatVector<int64_t>(kSize, folly::identity),
+      vectorMaker.flatVector<float>(kSize, folly::identity),
+  };
+  auto source = vectorMaker.rowVector(children);
+  auto target = BaseVector::create(source->type(), kSize / 2, pool.get());
+  BaseVector::CopyRange ranges[kSize / 2];
+  for (int i = 0; i < kSize; i += 2) {
+    ranges[i / 2] = {i, i / 2, 1};
+  }
+  suspender.dismiss();
+  constexpr int kIter = 100;
+  for (int i = 0; i < kIter; ++i) {
+    target->copyRanges(source.get(), {std::begin(ranges), std::end(ranges)});
+  }
+  return kIter * kSize;
+}
+
 } // namespace
 } // namespace facebook::velox
 

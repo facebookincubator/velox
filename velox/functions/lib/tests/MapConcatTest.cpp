@@ -13,15 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/VectorFunction.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::functions::test;
 
 class MapConcatTest : public FunctionBaseTest {
  protected:
+  static void SetUpTestCase() {
+    FunctionBaseTest::SetUpTestCase();
+    facebook::velox::functions::registerMapConcatEmptyNullsFunction(
+        "map_concat_empty_nulls");
+  }
+
   template <typename TKey, typename TValue>
   static std::vector<TKey> mapKeys(const std::map<TKey, TValue>& m) {
     std::vector<TKey> keys;
@@ -256,4 +262,24 @@ TEST_F(MapConcatTest, partiallyPopulated) {
         << "at " << i << ": expected " << acMap->toString(i) << ", got "
         << result->toString(i);
   }
+}
+
+TEST_F(MapConcatTest, nullEntry) {
+  auto offsets = allocateOffsets(1, pool());
+  auto sizes = AlignedBuffer::allocate<vector_size_t>(1, pool(), 1000);
+  auto keys = BaseVector::create(BIGINT(), 0, pool());
+  auto values = BaseVector::create(DOUBLE(), 0, pool());
+  auto nulls = AlignedBuffer::allocate<bool>(1, pool(), bits::kNull);
+  auto map = std::make_shared<MapVector>(
+      pool(), MAP(BIGINT(), DOUBLE()), nulls, 1, offsets, sizes, keys, values);
+  auto dict = BaseVector::wrapInDictionary(nulls, sizes, 1, map);
+  auto rows = std::make_shared<RowVector>(
+      pool(),
+      ROW({"c0", "c1"}, {dict->type(), map->type()}),
+      nullptr,
+      1,
+      std::vector<VectorPtr>({dict, map}));
+  auto result = evaluate<MapVector>("map_concat_empty_nulls(c0, c1)", rows);
+  ASSERT_EQ(result->size(), 1);
+  EXPECT_EQ(result->sizeAt(0), 0);
 }
