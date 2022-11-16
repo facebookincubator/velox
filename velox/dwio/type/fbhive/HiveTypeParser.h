@@ -50,11 +50,10 @@ enum class TokenType {
   Number = 17,
   Identifier = 18,
   EndOfStream = 19,
-  ShortDecimal = 20,
-  LongDecimal = 21,
-  LeftRoundBracket = 22,
-  RightRoundBracket = 23,
-  MaxTokenType = 23
+  ShortDecimal,
+  LeftRoundBracket,
+  RightRoundBracket,
+  MaxTokenType
 };
 
 struct TokenMetadata {
