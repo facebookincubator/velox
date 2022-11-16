@@ -61,6 +61,9 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::ReadRel& readRel,
       std::shared_ptr<SplitInfo>& splitInfo);
 
+  /// Convert Substrait FetchRel into Velox LimitNode.
+  core::PlanNodePtr toVeloxPlan(const ::substrait::FetchRel& fetchRel);
+
   /// Convert Substrait ReadRel into Velox Values Node.
   core::PlanNodePtr toVeloxPlan(
       const ::substrait::ReadRel& readRel,
