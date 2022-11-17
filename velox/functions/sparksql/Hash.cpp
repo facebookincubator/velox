@@ -24,15 +24,16 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-// ReturnType can be int32_t or int64_t
-template <typename ReturnType, typename HashFunc>
+// ReturnType can be either int32_t or int64_t
+// HashClass contains the function like hashInt32
+template <typename ReturnType, typename HashClass>
 void applyWithType(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
     exec::EvalCtx& context,
     VectorPtr& resultRef) {
   constexpr ReturnType kSeed = 42;
-  HashFunc hash;
+  HashClass hash;
 
   auto& result = *resultRef->as<FlatVector<ReturnType>>();
   rows.applyToSelected([&](int row) { result.set(row, kSeed); });
@@ -40,7 +41,7 @@ void applyWithType(
   exec::LocalSelectivityVector selectedMinusNulls(context);
 
   exec::DecodedArgs decodedArgs(rows, args, context);
-  for (auto i =0; i < args.size(); i++) {
+  for (auto i = 0; i < args.size(); i++) {
     auto decoded = decodedArgs.at(i);
     const SelectivityVector* selected = &rows;
     if (args[i]->mayHaveNulls()) {
@@ -70,7 +71,8 @@ void applyWithType(
       CASE(DOUBLE, hash.hashDouble, double);
 #undef CASE
       default:
-        VELOX_NYI("Unsupported type for HASH(): {}", args[i]->type()->toString());
+        VELOX_NYI(
+            "Unsupported type for HASH(): {}", args[i]->type()->toString());
     }
   }
 }
@@ -172,8 +174,7 @@ class Murmur3HashFunction final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     context.ensureWritable(rows, INTEGER(), resultRef);
-    applyWithType<int32_t, Murmur3Hash>(
-        rows, args, context, resultRef);
+    applyWithType<int32_t, Murmur3Hash>(rows, args, context, resultRef);
   }
 };
 
@@ -323,8 +324,7 @@ class XxHash64Function final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     context.ensureWritable(rows, BIGINT(), resultRef);
-    applyWithType<int64_t, XxHash64>(
-        rows, args, context, resultRef);
+    applyWithType<int64_t, XxHash64>(rows, args, context, resultRef);
   }
 };
 
@@ -346,17 +346,13 @@ std::shared_ptr<exec::VectorFunction> makeHash(
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures() {
-  auto supportedTypes = {"boolean", "tinyint","smallint", "integer", "bigint", "varchar", "varbinary", "real", "double"};
-  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-  for (auto type : supportedTypes) {
-    signatures.emplace_back(exec::FunctionSignatureBuilder()
-              .returnType("bigint")
-              .argumentType(type)
+  return {exec::FunctionSignatureBuilder()
+              .returnType("integer")
+              .argumentType("any")
               .variableArity()
-              .build());
-  }
-  return signatures;
+              .build()};
 }
+} // namespace facebook::velox::functions::sparksql
 
 std::shared_ptr<exec::VectorFunction> makeXxHash64(
     const std::string& name,

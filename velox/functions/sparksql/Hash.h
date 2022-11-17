@@ -37,6 +37,20 @@ std::shared_ptr<exec::VectorFunction> makeHash(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs);
 
+// Supported types:
+//   - Bools
+//   - Integer types (byte, short, int, long)
+//   - String, Binary
+//   - Float, Double
+//
+// Unsupported:
+//   - Decimal
+//   - Datetime
+//   - Structs, Arrays: hash the elements in order
+//   - Maps: iterate over map, hashing key then value. Since map ordering is
+//        unspecified, hashing logically equivalent maps may result in
+//        different hash values.
+
 std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures();
 
 std::shared_ptr<exec::VectorFunction> makeXxHash64(
