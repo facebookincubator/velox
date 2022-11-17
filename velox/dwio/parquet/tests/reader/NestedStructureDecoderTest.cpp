@@ -46,20 +46,28 @@ class NestedStructureDecoderTest : public testing::Test {
       int64_t numValues,
       uint8_t maxDefinition,
       uint8_t maxRepeat,
+      int64_t expectedNonEmptyCollections,
+      int64_t expectedNonNullCollections,
       std::vector<vector_size_t> expectedOffsets,
       std::vector<vector_size_t> expectedLengths,
       std::vector<bool> expectedNulls) {
+    numNonEmptyCollections_ = 0;
+    numNonNullCollections_ = 0;
     int64_t numCollections = NestedStructureDecoder::readOffsetsAndNulls(
-        definitionLevels,
         repetitionLevels,
+        definitionLevels,
         numValues,
-        maxDefinition,
         maxRepeat,
+        maxDefinition,
         offsetsBuffer_,
         lengthsBuffer_,
         nullsBuffer_,
+        numNonEmptyCollections_,
+        numNonNullCollections_,
         *pool_);
 
+    ASSERT_EQ(numNonEmptyCollections_, expectedNonEmptyCollections);
+    ASSERT_EQ(numNonNullCollections_, expectedNonNullCollections);
     assertBufferContent<vector_size_t>(
         offsetsBuffer_, numCollections + 1, expectedOffsets);
     assertBufferContent<vector_size_t>(
@@ -103,6 +111,8 @@ class NestedStructureDecoderTest : public testing::Test {
   BufferPtr offsetsBuffer_;
   BufferPtr lengthsBuffer_;
   BufferPtr nullsBuffer_;
+  uint64_t numNonEmptyCollections_;
+  uint64_t numNonNullCollections_;
 };
 
 // ------------------------
@@ -126,7 +136,16 @@ TEST_F(NestedStructureDecoderTest, oneLevel) {
       {false, false, false, true, false, false, false, false, false});
 
   assertStructure(
-      defs, reps, 18, 1, 1, expectedOffsets, expectedLengths, expectedNulls);
+      defs,
+      reps,
+      18,
+      1,
+      0,
+      9,
+      8,
+      expectedOffsets,
+      expectedLengths,
+      expectedNulls);
 }
 
 //---------------------------
@@ -173,7 +192,16 @@ TEST_F(NestedStructureDecoderTest, secondLevelInTwo) {
 
   // tests the second level, where maxDefinition = 3 and maxRepeat = 2
   assertStructure(
-      defs, reps, 26, 3, 2, expectedOffsets, expectedLengths, expectedNulls);
+      defs,
+      reps,
+      26,
+      3,
+      1,
+      19,
+      12,
+      expectedOffsets,
+      expectedLengths,
+      expectedNulls);
 }
 
 //---------------------------
@@ -207,7 +235,16 @@ TEST_F(NestedStructureDecoderTest, firstLevelInTwo) {
 
   // tests the second level, where maxDefinition = 1 and maxRepeat = 1
   assertStructure(
-      defs, reps, 24, 1, 1, expectedOffsets, expectedLengths, expectedNulls);
+      defs,
+      reps,
+      24,
+      1,
+      0,
+      8,
+      7,
+      expectedOffsets,
+      expectedLengths,
+      expectedNulls);
 }
 
 // ------------------------
@@ -226,7 +263,16 @@ TEST_F(NestedStructureDecoderTest, emptyRowsInTheMiddle) {
 
   // tests the second level, where maxDefinition = 3 and maxRepeat = 2
   assertStructure(
-      defs, reps, 7, 3, 2, expectedOffsets, expectedLengths, expectedNulls);
+      defs,
+      reps,
+      7,
+      3,
+      1,
+      4,
+      3,
+      expectedOffsets,
+      expectedLengths,
+      expectedNulls);
 }
 
 // ------------------------
@@ -244,7 +290,16 @@ TEST_F(NestedStructureDecoderTest, emptyRowAfterNull) {
 
   // tests the second level, where maxDefinition = 3 and maxRepeat = 2
   assertStructure(
-      defs, reps, 5, 3, 2, expectedOffsets, expectedLengths, expectedNulls);
+      defs,
+      reps,
+      5,
+      3,
+      1,
+      3,
+      2,
+      expectedOffsets,
+      expectedLengths,
+      expectedNulls);
 }
 
 // ------------------------
@@ -261,5 +316,14 @@ TEST_F(NestedStructureDecoderTest, emptyRowAtEnd) {
 
   // tests the second level, where maxDefinition = 3 and maxRepeat = 2
   assertStructure(
-      defs, reps, 4, 3, 2, expectedOffsets, expectedLengths, expectedNulls);
+      defs,
+      reps,
+      4,
+      3,
+      1,
+      2,
+      1,
+      expectedOffsets,
+      expectedLengths,
+      expectedNulls);
 }

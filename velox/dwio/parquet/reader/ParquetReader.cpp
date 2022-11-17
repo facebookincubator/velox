@@ -337,7 +337,7 @@ TypePtr ReaderBase::convertType(
             schemaElement.type,
             thrift::Type::INT64,
             "UINT_64 converted type can only be set for value of thrift::Type::INT64");
-        return TINYINT();
+        return BIGINT();
 
       case thrift::ConvertedType::DATE:
         VELOX_CHECK_EQ(
@@ -500,7 +500,9 @@ ParquetRowReader::ParquetRowReader(
   columnReader_ = ParquetColumnReader::build(
       readerBase_->schemaWithId(), // Id is schema id
       params,
-      *options_.getScanSpec());
+      *options_.getScanSpec(),
+      *options_.getScanSpec(),
+      false);
 
   filterRowGroups();
 }

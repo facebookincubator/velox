@@ -19,36 +19,29 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/BufferUtil.h"
 
+#include <iostream>
+
 namespace facebook::velox::parquet {
 
-int64_t NestedStructureDecoder::readOffsetsAndNulls(
-    const uint8_t* definitionLevels,
+void NestedStructureDecoder::readOffsetsAndNulls(
     const uint8_t* repetitionLevels,
-    int64_t numValues,
-    uint8_t maxDefinition,
-    uint8_t maxRepeat,
-    BufferPtr& offsetsBuffer,
-    BufferPtr& lengthsBuffer,
-    BufferPtr& nullsBuffer,
+    const uint8_t* definitionLevels,
+    uint64_t numValues,
+    uint32_t maxRepeat,
+    uint32_t maxDefinition,
+    int64_t& lastOffset,
+    bool& wasLastCollectionNull,
+    uint32_t* offsets,
+    uint64_t* nulls,
+    uint64_t& numNonEmptyCollections,
+    uint64_t& numNonNullCollections,
     memory::MemoryPool& pool) {
-  dwio::common::ensureCapacity<uint8_t>(
-      nullsBuffer, bits::nbytes(numValues), &pool);
-  dwio::common::ensureCapacity<vector_size_t>(
-      offsetsBuffer, numValues + 1, &pool);
-  dwio::common::ensureCapacity<vector_size_t>(lengthsBuffer, numValues, &pool);
+  // Use the child level's max repetition value, which is +1 to the current
+  // level's value
+  auto childMaxRepeat = maxRepeat + 1;
 
-  auto offsets = offsetsBuffer->asMutable<vector_size_t>();
-  auto lengths = lengthsBuffer->asMutable<vector_size_t>();
-  auto nulls = nullsBuffer->asMutable<uint64_t>();
-
-  int64_t offset = 0;
-  int64_t lastOffset = 0;
-  bool wasLastCollectionNull = definitionLevels[0] == (maxDefinition - 1);
-  bits::setNull(nulls, 0, wasLastCollectionNull);
-  offsets[0] = 0;
-
-  int64_t outputIndex = 1;
-  for (int64_t i = 1; i < numValues; ++i) {
+  int64_t offset = lastOffset;
+  for (int64_t i = 0; i < numValues; ++i) {
     uint8_t definitionLevel = definitionLevels[i];
     uint8_t repetitionLevel = repetitionLevels[i];
 
@@ -56,28 +49,76 @@ int64_t NestedStructureDecoder::readOffsetsAndNulls(
     // levels.
     bool isEmpty = definitionLevel < (maxDefinition - 1);
     bool isNull = definitionLevel == (maxDefinition - 1);
-    bool isCollectionBegin = (repetitionLevel < maxRepeat) & !isEmpty;
-    bool isEntryBegin = (repetitionLevel <= maxRepeat) & !isEmpty;
+    bool isNotNull = definitionLevel >= maxDefinition;
+    bool isCollectionBegin = (repetitionLevel < childMaxRepeat) & !isEmpty;
+    bool isEntryBegin = (repetitionLevel <= childMaxRepeat) & !isEmpty;
 
     offset += isEntryBegin & !wasLastCollectionNull;
-    offsets[outputIndex] = offset;
-    lengths[outputIndex - 1] = offset - offsets[outputIndex - 1];
-    bits::setNull(nulls, outputIndex, isNull);
+    offsets[numNonEmptyCollections] = offset;
+    bits::setNull(nulls, numNonEmptyCollections, isNull);
 
     // Always update the outputs, but only increase the outputIndex when the
     // current entry is the begin of a new collection, and it's not empty.
     // Benchmark shows skipping non-collection-begin rows is worse than this
     // solution by nearly 2x because of extra branchings added for skipping.
-    outputIndex += isCollectionBegin;
+    numNonNullCollections += isNotNull & isCollectionBegin;
+    numNonEmptyCollections += isCollectionBegin;
+
     wasLastCollectionNull = isEmpty ? wasLastCollectionNull : isNull;
     lastOffset = isCollectionBegin ? offset : lastOffset;
   }
 
-  offset += !wasLastCollectionNull;
-  offsets[outputIndex] = offset;
-  lengths[outputIndex - 1] = offset - lastOffset;
+  lastOffset = offset;
+}
 
-  return outputIndex;
+int64_t NestedStructureDecoder::readOffsetsAndNulls(
+    const uint8_t* repetitionLevels,
+    const uint8_t* definitionLevels,
+    uint64_t numValues,
+    uint8_t maxRepeat,
+    uint8_t maxDefinition,
+    BufferPtr& offsetsBuffer,
+    BufferPtr& lengthsBuffer,
+    BufferPtr& nullsBuffer,
+    uint64_t& numNonEmptyCollections,
+    uint64_t& numNonNullCollections,
+    memory::MemoryPool& pool) {
+  dwio::common::ensureCapacity<uint8_t>(
+      nullsBuffer, bits::nbytes(numValues), &pool);
+  dwio::common::ensureCapacity<vector_size_t>(
+      offsetsBuffer, numValues + 1, &pool);
+  dwio::common::ensureCapacity<vector_size_t>(lengthsBuffer, numValues, &pool);
+
+  auto offsets = offsetsBuffer->asMutable<uint32_t>();
+  auto lengths = lengthsBuffer->asMutable<uint32_t>();
+  auto nulls = nullsBuffer->asMutable<uint64_t>();
+
+  bool wasLastCollectionNull = false;
+  int64_t lastOffset = -1;
+  numNonEmptyCollections = 0;
+  numNonNullCollections = 0;
+  readOffsetsAndNulls(
+      repetitionLevels,
+      definitionLevels,
+      numValues,
+      maxRepeat,
+      maxDefinition,
+      lastOffset,
+      wasLastCollectionNull,
+      offsets,
+      nulls,
+      numNonEmptyCollections,
+      numNonNullCollections,
+      pool);
+
+  auto endOffset = lastOffset + !wasLastCollectionNull;
+  offsets[numNonEmptyCollections] = endOffset;
+
+  for (int i = 0; i < numNonEmptyCollections; i++) {
+    lengths[i] = offsets[i + 1] - offsets[i];
+  }
+
+  return numNonEmptyCollections;
 }
 
 } // namespace facebook::velox::parquet

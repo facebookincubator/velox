@@ -76,7 +76,10 @@ class OwnershipChecker {
 
 class E2EFilterTestBase : public testing::Test {
  protected:
-  static constexpr int32_t kRowsInGroup = 10'000;
+  static constexpr int32_t kRowsInGroup = 10000;
+  static constexpr size_t kBatchCount = 4;
+  // kBatchSize must be greater than kRowsInGroup for RowGroup skipping test
+  size_t kBatchSize = 25'000;
 
   void SetUp() override {
     pool_ = memory::getDefaultMemoryPool();
@@ -270,10 +273,6 @@ class E2EFilterTestBase : public testing::Test {
     }
     return readSizes_[nextReadSizeIndex_++];
   }
-
-  const size_t kBatchCount = 4;
-  // kBatchSize must be greater than 10000 for RowGroup skipping test
-  const size_t kBatchSize = 25'000;
 
   std::unique_ptr<test::DataSetBuilder> dataSetBuilder_;
   std::unique_ptr<common::FilterGenerator> filterGenerator_;

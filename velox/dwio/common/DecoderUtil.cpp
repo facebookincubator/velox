@@ -22,13 +22,23 @@ namespace facebook::velox::dwio::common {
 
 int32_t nonNullRowsFromDense(
     const uint64_t* nulls,
+    int32_t nullsOffset,
     int32_t numRows,
     raw_vector<int32_t>& nonNullRows) {
   nonNullRows.resize(numRows);
-  auto size = simd::indicesOfSetBits(nulls, 0, numRows, nonNullRows.data());
+  auto size = simd::indicesOfSetBits(
+      nulls, nullsOffset, nullsOffset + numRows, nonNullRows.data());
   nonNullRows.resize(size);
   return size;
 }
+
+int32_t nonNullRowsFromDense(
+    const uint64_t* nulls,
+    int32_t numRows,
+    raw_vector<int32_t>& nonNullRows) {
+  return nonNullRowsFromDense(nulls, 0, numRows, nonNullRows);
+}
+
 // Returns 8 bits starting at bit 'index'.
 uint8_t load8Bits(const uint64_t* bits, int32_t index) {
   uint8_t shift = index & 7;

@@ -26,7 +26,9 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   StructColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       ParquetParams& params,
-      common::ScanSpec& scanSpec);
+      common::ScanSpec& scanSpec,
+      common::ScanSpec& topLevelScanSpec,
+      bool isNested = false);
 
   void seekToRowGroup(uint32_t index) override;
 

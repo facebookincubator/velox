@@ -46,6 +46,8 @@ class ParquetColumnReader {
   static std::unique_ptr<dwio::common::SelectiveColumnReader> build(
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       ParquetParams& params,
-      common::ScanSpec& scanSpec);
+      common::ScanSpec& scanSpec,
+      common::ScanSpec& topLevelScanSpec,
+      bool isNested = false);
 };
 } // namespace facebook::velox::parquet

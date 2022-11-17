@@ -27,6 +27,81 @@
 
 namespace facebook::velox::parquet {
 
+struct ParquetPage {
+  ParquetPage() {}
+
+  ParquetPage(int32_t numRowsInPage, int32_t encodedDataSize, bool isDictionary)
+      : numRowsInPage(numRowsInPage),
+        encodedDataSize(encodedDataSize),
+        isDictionary(isDictionary) {}
+
+  // Number of rep/def values in current page.
+  uint64_t numRowsInPage{0};
+  uint64_t numRowsInBatch{0};
+  // Number of bytes starting at pageData for current encoded data.
+  int32_t encodedDataSize{0};
+  bool isDictionary{false};
+};
+
+struct ParquetDataPage : public ParquetPage {
+  ParquetDataPage() : ParquetPage() {}
+
+  ParquetDataPage(
+      int32_t numRowsInPage,
+      int32_t encodedDataSize,
+      thrift::Encoding::type encoding,
+      const char* FOLLY_NULLABLE pageData,
+      BufferPtr repetitionLevels,
+      BufferPtr definitionLevels)
+      : ParquetPage(numRowsInPage, encodedDataSize, false),
+        encoding(encoding),
+        pageData(pageData),
+        repetitions(repetitionLevels),
+        definitions(definitionLevels) {}
+
+  bool isEmpty() {
+    return numRowsInPage == 0;
+  }
+
+  thrift::Encoding::type encoding;
+
+  // First byte of uncompressed encoded data. Contains the encoded data as a
+  // contiguous run of bytes.
+  const char* FOLLY_NULLABLE pageData{nullptr};
+
+  // The rep/def values are for all rows in this page, even though they are not
+  // within the current batch
+  BufferPtr repetitions;
+  BufferPtr definitions;
+  // The start position to parse reps/defs in this page. It is 0 for all pages
+  // in a batch except the first one if it's from last batch leftovers.
+  uint64_t repDefOffset{0};
+  uint64_t numNonEmptyRowsInBatch{0};
+  uint64_t numNonNullRowsInBatch{0};
+};
+
+struct ParquetDictionaryPage : public ParquetPage {
+  ParquetDictionaryPage() : ParquetPage() {}
+
+  ParquetDictionaryPage(
+      int32_t numRowsInPage,
+      int32_t encodedDataSize,
+      dwio::common::DictionaryValues dictionary,
+      thrift::Encoding::type dictionaryEncoding)
+      : ParquetPage(numRowsInPage, encodedDataSize, true),
+        dictionary_(dictionary),
+        dictionaryEncoding_(dictionaryEncoding) {}
+
+  dwio::common::DictionaryValues dictionary_;
+  thrift::Encoding::type dictionaryEncoding_;
+};
+
+namespace {
+
+int32_t parquetTypeBytes(thrift::Type::type type);
+
+}
+
 /// Manages access to pages inside a ColumnChunk. Interprets page headers and
 /// encodings and presents the combination of pages and encoded values as a
 /// continuous stream accessible via readWithVisitor().
@@ -81,6 +156,8 @@ class PageReader {
     dictionaryValues_.reset();
   }
 
+  std::shared_ptr<ParquetPage> readNextPage();
+
  private:
   // If the current page has nulls, returns a nulls bitmap owned by 'this'. This
   // is filled for 'numRows' bits.
@@ -94,14 +171,14 @@ class PageReader {
   // Initializes a filter result cache for the dictionary in 'state'.
   void makeFilterCache(dwio::common::ScanState& state);
 
-  // Makes a decoder based on 'encoding_' for bytes from ''pageData_' to
-  // 'pageData_' + 'encodedDataSize_'.
+  // Makes a decoder based on 'encoding_' for bytes from ''pageData' to
+  // 'pageData' + 'encodedDataSize'.
   void makedecoder();
 
   // Reads and skips pages until finding a data page that contains 'row'. Reads
-  // and sets 'rowOfPage_' and 'numRowsInPage_' and initializes a decoder for
+  // and sets 'rowOfPage_' and 'numRowsInPage' and initializes a decoder for
   // the found page.
-  void readNextPage(int64_t row);
+  void seekToPage(int64_t row);
 
   // Parses the PageHeader at 'inputStream_'. Will not read more than
   // 'remainingBytes' since there could be less data left in the
@@ -117,7 +194,7 @@ class PageReader {
   // straddles buffers. Allocates or resizes 'copy' as needed.
   const char* FOLLY_NONNULL readBytes(int32_t size, BufferPtr& copy);
 
-  // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
+  // Decompresses data starting at 'pageData', consuming 'compressedsize' and
   // producing up to 'uncompressedSize' bytes. The The start of the decoding
   // result is returned. an intermediate copy may be made in 'uncompresseddata_'
   const char* FOLLY_NONNULL uncompressData(
@@ -281,7 +358,7 @@ class PageReader {
   // Offset of first byte after current page' header.
   uint64_t pageDataStart_{0};
 
-  // Number of bytes starting at pageData_ for current encoded data.
+  // Number of bytes starting at pageData for current encoded data.
   int32_t encodedDataSize_{0};
 
   // Below members Keep state between calls to readWithVisitor().

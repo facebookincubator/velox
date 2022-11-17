@@ -290,6 +290,11 @@ TEST_F(E2EFilterTest, listAndMap) {
       10);
 }
 
+TEST_F(E2EFilterTest, list) {
+  testWithTypes(
+      "array_val:array<int>", [&]() {}, false, {}, 10);
+}
+
 TEST_F(E2EFilterTest, nullCompactRanges) {
   // Makes a dataset with nulls at the beginning. Tries different
   // filter ombinations on progressively larger batches. tests for a

@@ -15,6 +15,7 @@
  */
 
 #pragma once
+#include "BufferedInput.h"
 #include "velox/common/base/RawVector.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/process/ProcessBase.h"
@@ -502,6 +503,7 @@ class SelectiveColumnReader {
 
   memory::MemoryPool& memoryPool_;
 
+  // Requested Velox type
   std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
 
   // Format specific state and functions.
@@ -511,6 +513,8 @@ class SelectiveColumnReader {
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* FOLLY_NONNULL scanSpec_;
+
+  // The file data type?
   TypePtr type_;
 
   // Row number after last read row, relative to stripe start.

@@ -34,6 +34,11 @@ class DirectDecoder : public IntDecoder<isSigned> {
       bool bigEndian = false)
       : IntDecoder<isSigned>{std::move(input), useVInts, numBytes, bigEndian} {}
 
+  DirectDecoder(
+      std::unique_ptr<dwio::common::SeekableInputStream> input,
+      uint32_t numBytes)
+      : IntDecoder<isSigned>{std::move(input), false, numBytes, false} {}
+
   void seekToRowGroup(dwio::common::PositionProvider&) override;
 
   void skip(uint64_t numValues) override;
@@ -42,6 +47,37 @@ class DirectDecoder : public IntDecoder<isSigned> {
       int64_t* FOLLY_NONNULL data,
       uint64_t numValues,
       const uint64_t* FOLLY_NULLABLE nulls) override;
+
+  template <typename T>
+  uint64_t next(
+      int64_t* FOLLY_NULLABLE output,
+      uint64_t outputOffset,
+      uint64_t numValues,
+      const uint64_t* FOLLY_NULLABLE nulls) {
+    auto numNonNullValues = numValues;
+
+    if (nulls) {
+      // TODO: This could be pushed to NestedStructureDecoder
+      nonNullRows_.resize(numValues);
+      numNonNullValues = dwio::common::nonNullRowsFromDense(
+          nulls, outputOffset, numValues, nonNullRows_);
+    }
+
+    auto outputTyped = reinterpret_cast<T*>(output);
+    IntDecoder<true>::bulkReadFixed<T>(
+        numNonNullValues, outputTyped + outputOffset);
+
+    if (nulls) {
+      // Note that nonNullRowsFromDense output base row starts at outputOffset
+      dwio::common::scatterDense<T>(
+          outputTyped + outputOffset,
+          nonNullRows_.data(),
+          numNonNullValues,
+          outputTyped);
+    }
+
+    return numNonNullValues * IntDecoder<isSigned>::numBytes;
+  }
 
   template <bool hasNulls>
   inline void skip(
@@ -271,6 +307,9 @@ class DirectDecoder : public IntDecoder<isSigned> {
     }
     visitor.setNumValues(hasFilter ? numValues : numRows);
   }
+
+ private:
+  raw_vector<int32_t> nonNullRows_;
 };
 
 } // namespace facebook::velox::dwio::common

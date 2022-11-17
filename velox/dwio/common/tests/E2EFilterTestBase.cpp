@@ -281,10 +281,12 @@ void E2EFilterTestBase::testNoRowGroupSkip(
   uint64_t timeWithNoFilter = 0;
   readWithoutFilter(spec, batches, timeWithNoFilter);
 
-  for (auto i = 0; i < numCombinations; ++i) {
-    std::vector<FilterSpec> specs =
-        filterGenerator_->makeRandomSpecs(filterable, 125);
-    testFilterSpecs(batches, specs);
+  if (!filterable.empty()) {
+    for (auto i = 0; i < numCombinations; ++i) {
+      std::vector<FilterSpec> specs =
+          filterGenerator_->makeRandomSpecs(filterable, 125);
+      testFilterSpecs(batches, specs);
+    }
   }
 }
 

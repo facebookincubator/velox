@@ -136,8 +136,8 @@ void BM_isValid(uint32_t iterations, size_t numEntries) {
   suspender.dismiss();
 
   for (uint32_t i = 0; i < iterations; ++i) {
-    // Note: Without the % numEntries, the compiler seems to optimize away the
-    // check. Unfortunately mod in itself also adds its own overhead.
+    // Note: Without the % numCollections, the compiler seems to optimize away
+    // the check. Unfortunately mod in itself also adds its own overhead.
     folly::doNotOptimizeAway(vector.isValid(i % numEntries));
     // folly:: doNotOptimizeAway(vector.isValid(indexToGet));
   }

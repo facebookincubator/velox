@@ -356,6 +356,12 @@ void fixedWidthScan(
 
 int32_t nonNullRowsFromDense(
     const uint64_t* nulls,
+    int32_t nullsOffset,
+    int32_t numRows,
+    raw_vector<int32_t>& nonNullRows);
+
+int32_t nonNullRowsFromDense(
+    const uint64_t* nulls,
     int32_t numRows,
     raw_vector<int32_t>& nonNullRows);
 

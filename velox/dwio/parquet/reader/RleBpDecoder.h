@@ -44,7 +44,7 @@ class RleBpDecoder {
   /// Decode @param numValues number of values and copy the decoded values into
   /// @param outputBuffer
   template <typename T>
-  void next(T* FOLLY_NONNULL& outputBuffer, uint64_t numValues) {
+  void next(T* FOLLY_NONNULL& outputBuffer, int64_t numValues) {
     while (numValues > 0) {
       if (numRemainingUnpackedValues_ > 0) {
         auto numValuesToRead =
@@ -133,7 +133,7 @@ class RleBpDecoder {
   const int8_t byteWidth_;
   const uint64_t bitMask_;
   const char* FOLLY_NONNULL const lastSafeWord_;
-  uint64_t remainingValues_{0};
+  int64_t remainingValues_{0};
   int64_t value_;
   int8_t bitOffset_{0};
   bool repeating_;

@@ -16,12 +16,16 @@
 
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 
+#include "velox/dwio/parquet/reader/ParquetNestedColumnReader.h"
+
 namespace facebook::velox::parquet {
 
 StructColumnReader::StructColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec)
+    common::ScanSpec& scanSpec,
+    common::ScanSpec& topLevelScanSpec,
+    bool isNested)
     : SelectiveStructColumnReader(dataType, dataType, params, scanSpec) {
   auto& childSpecs = scanSpec_->children();
   for (auto i = 0; i < childSpecs.size(); ++i) {
@@ -30,7 +34,8 @@ StructColumnReader::StructColumnReader(
     }
     auto childDataType = nodeType_->childByName(childSpecs[i]->fieldName());
 
-    addChild(ParquetColumnReader::build(childDataType, params, *childSpecs[i]));
+    addChild(ParquetColumnReader::build(
+        childDataType, params, *childSpecs[i], topLevelScanSpec, isNested));
     childSpecs[i]->setSubscript(children_.size() - 1);
   }
 }
@@ -41,6 +46,9 @@ void StructColumnReader::enqueueRowGroup(
   for (auto& child : children_) {
     if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
       structChild->enqueueRowGroup(index, input);
+    } else if (
+        auto nestedChild = dynamic_cast<ParquetRepeatedColumnReader*>(child)) {
+      nestedChild->enqueueRowGroup(index, input);
     } else {
       child->formatData().as<ParquetData>().enqueueRowGroup(index, input);
     }

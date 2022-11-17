@@ -194,6 +194,7 @@ class DataSetBuilder {
     int32_t row = 0;
     for (auto& batch : *batches_) {
       auto values = batch->childAt(columnIndex)->as<FlatVector<T>>();
+
       for (auto i = 0; i < values->size(); ++i) {
         auto rowGroup = row++ / numRowsInGroup;
         bool isIn = (rowGroup % 3) != 0;

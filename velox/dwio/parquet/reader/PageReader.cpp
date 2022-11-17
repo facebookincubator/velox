@@ -31,7 +31,58 @@ namespace facebook::velox::parquet {
 using thrift::Encoding;
 using thrift::PageHeader;
 
-void PageReader::readNextPage(int64_t row) {
+std::shared_ptr<ParquetPage> PageReader::readNextPage() {
+  if (pageStart_ >= chunkSize_) {
+    return nullptr;
+  }
+
+  PageHeader pageHeader = readPageHeader(chunkSize_ - pageStart_);
+  pageStart_ = pageDataStart_ + pageHeader.compressed_page_size;
+
+  switch (pageHeader.type) {
+    case thrift::PageType::DATA_PAGE:
+      prepareDataPageV1(pageHeader, rowOfPage_);
+      break;
+    case thrift::PageType::DATA_PAGE_V2:
+      prepareDataPageV2(pageHeader, rowOfPage_);
+      break;
+    case thrift::PageType::DICTIONARY_PAGE:
+      prepareDictionary(pageHeader);
+      return std::make_shared<ParquetDictionaryPage>(
+          numRowsInPage_, encodedDataSize_, dictionary_, dictionaryEncoding_);
+    default:
+      VELOX_UNREACHABLE();
+  }
+
+  BufferPtr repetitionLevels;
+  BufferPtr definitionLevels;
+  if (maxRepeat_ > 0) {
+    // ensureCapacity would update the buffer size.
+    dwio::common::ensureCapacity<uint8_t>(
+        repetitionLevels, numRowsInPage_, &pool_);
+    auto repetitions = repetitionLevels->asMutable<uint8_t>();
+    repeatDecoder_->next<uint8_t>(repetitions, numRowsInPage_);
+  }
+
+  if (maxDefine_ > 0) {
+    dwio::common::ensureCapacity<uint8_t>(
+        definitionLevels, numRowsInPage_, &pool_);
+    auto definitions = definitionLevels->asMutable<uint8_t>();
+    defineDecoder_->next<uint8_t>(definitions, numRowsInPage_);
+  }
+
+  rowOfPage_ += numRowsInPage_;
+
+  return std::make_shared<ParquetDataPage>(
+      numRowsInPage_,
+      encodedDataSize_,
+      encoding_,
+      pageData_,
+      repetitionLevels,
+      definitionLevels);
+}
+
+void PageReader::seekToPage(int64_t row) {
   defineDecoder_.reset();
   repeatDecoder_.reset();
   // 'rowOfPage_' is the row number of the first row of the next page.
@@ -228,7 +279,6 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   auto pageEnd = pageData_ + pageHeader.uncompressed_page_size;
   if (maxRepeat_ > 0) {
     uint32_t repeatLength = readField<int32_t>(pageData_);
-    pageData_ += repeatLength;
     repeatDecoder_ = std::make_unique<RleBpDecoder>(
         pageData_,
         pageData_ + repeatLength,
@@ -503,7 +553,7 @@ void PageReader::skip(int64_t numRows) {
   }
   auto toSkip = numRows;
   if (firstUnvisited_ + numRows >= rowOfPage_ + numRowsInPage_) {
-    readNextPage(firstUnvisited_ + numRows);
+    seekToPage(firstUnvisited_ + numRows);
     toSkip -= rowOfPage_ - firstUnvisited_;
   }
   firstUnvisited_ += numRows;
@@ -547,7 +597,7 @@ void PageReader::skipNullsOnly(int64_t numRows) {
   }
   auto toSkip = numRows;
   if (firstUnvisited_ + numRows >= rowOfPage_ + numRowsInPage_) {
-    readNextPage(firstUnvisited_ + numRows);
+    seekToPage(firstUnvisited_ + numRows);
     firstUnvisited_ += numRows;
     toSkip = firstUnvisited_ - rowOfPage_;
   }
@@ -566,7 +616,7 @@ void PageReader::readNullsOnly(int64_t numValues, BufferPtr& buffer) {
   while (toRead) {
     auto availableOnPage = rowOfPage_ + numRowsInPage_ - firstUnvisited_;
     if (!availableOnPage) {
-      readNextPage(firstUnvisited_);
+      seekToPage(firstUnvisited_);
       availableOnPage = numRowsInPage_;
     }
     auto numRead = std::min(availableOnPage, toRead);
@@ -613,7 +663,7 @@ bool PageReader::rowsForPage(
   // page that contains the row.
   auto rowZero = visitBase_ + visitorRows_[currentVisitorRow_];
   if (rowZero >= rowOfPage_ + numRowsInPage_) {
-    readNextPage(rowZero);
+    seekToPage(rowZero);
   }
   auto& scanState = reader.scanState();
   if (isDictionary()) {

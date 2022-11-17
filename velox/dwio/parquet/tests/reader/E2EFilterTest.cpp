@@ -31,6 +31,9 @@ using dwio::common::MemorySink;
 class E2EFilterTest : public E2EFilterTestBase {
  protected:
   void SetUp() override {
+    // Temporarily set batch size to a smaller number to avoid hitting
+    // https://github.com/facebookincubator/velox/issues/3255
+    kBatchSize = 250;
     E2EFilterTestBase::SetUp();
     writerProperties_ = ::parquet::WriterProperties::Builder().build();
   }
@@ -45,7 +48,9 @@ class E2EFilterTest : public E2EFilterTestBase {
 
     // Always test no null case.
     auto newCustomize = [&]() {
-      customize();
+      if (customize) {
+        customize();
+      }
       makeNotNull(0);
     };
     testSenario(
@@ -397,6 +402,14 @@ TEST_F(E2EFilterTest, dedictionarize) {
       false,
       {"long_val", "string_val", "string_val_2"},
       20);
+}
+
+TEST_F(E2EFilterTest, listSimple) {
+  writerProperties_ = ::parquet::WriterProperties::Builder()
+                          .data_pagesize(20)
+                          ->disable_dictionary()
+                          ->build();
+  testSenario("array_val:array<int>", nullptr, false, {}, 1);
 }
 
 // Define main so that gflags get processed.

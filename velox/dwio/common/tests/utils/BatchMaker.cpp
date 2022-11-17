@@ -412,7 +412,7 @@ VectorPtr BatchMaker::createVector<TypeKind::ARRAY>(
       lengthsPtr[i] = len;
       childSize += len;
     } else {
-      offsetsPtr[i] = 0;
+      offsetsPtr[i] = childSize;
       lengthsPtr[i] = 0;
       nullCount++;
     }
