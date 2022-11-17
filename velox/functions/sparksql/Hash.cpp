@@ -18,36 +18,38 @@
 #include <folly/CPortability.h>
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/expression/DecodedArgs.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+// ReturnType can be int32_t or int64_t
 template <typename ReturnType, typename HashFunc>
 void applyWithType(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
-    const TypePtr& /* outputType */,
     exec::EvalCtx& context,
     VectorPtr& resultRef) {
   constexpr ReturnType kSeed = 42;
   HashFunc hash;
 
-  FlatVector<ReturnType>& result = *resultRef->as<FlatVector<ReturnType>>();
+  auto& result = *resultRef->as<FlatVector<ReturnType>>();
   rows.applyToSelected([&](int row) { result.set(row, kSeed); });
 
   exec::LocalSelectivityVector selectedMinusNulls(context);
 
-  for (auto& arg : args) {
-    exec::LocalDecodedVector decoded(context, *arg, rows);
+  exec::DecodedArgs decodedArgs(rows, args, context);
+  for (auto i =0; i < args.size(); i++) {
+    auto decoded = decodedArgs.at(i);
     const SelectivityVector* selected = &rows;
-    if (arg->mayHaveNulls()) {
+    if (args[i]->mayHaveNulls()) {
       *selectedMinusNulls.get(rows.end()) = rows;
       selectedMinusNulls->deselectNulls(
           decoded->nulls(), rows.begin(), rows.end());
       selected = selectedMinusNulls.get();
     }
-    switch (arg->type()->kind()) {
+    switch (args[i]->type()->kind()) {
 // Derived from InterpretedHashFunction.hash:
 // https://github.com/apache/spark/blob/382b66e/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/hash.scala#L532
 #define CASE(typeEnum, hashFn, inputType)                                      \
@@ -68,7 +70,7 @@ void applyWithType(
       CASE(DOUBLE, hash.hashDouble, double);
 #undef CASE
       default:
-        VELOX_NYI("Unsupported type for HASH(): {}", arg->type()->toString());
+        VELOX_NYI("Unsupported type for HASH(): {}", args[i]->type()->toString());
     }
   }
 }
@@ -166,12 +168,12 @@ class Murmur3HashFunction final : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
-      const TypePtr& outputType,
+      const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     context.ensureWritable(rows, INTEGER(), resultRef);
     applyWithType<int32_t, Murmur3Hash>(
-        rows, args, outputType, context, resultRef);
+        rows, args, context, resultRef);
   }
 };
 
@@ -317,12 +319,12 @@ class XxHash64Function final : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
-      const TypePtr& outputType /* outputType */,
+      const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     context.ensureWritable(rows, BIGINT(), resultRef);
     applyWithType<int64_t, XxHash64>(
-        rows, args, outputType, context, resultRef);
+        rows, args, context, resultRef);
   }
 };
 
@@ -344,11 +346,16 @@ std::shared_ptr<exec::VectorFunction> makeHash(
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures() {
-  return {exec::FunctionSignatureBuilder()
+  auto supportedTypes = {"boolean", "tinyint","smallint", "integer", "bigint", "varchar", "varbinary", "real", "double"};
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+  for (auto type : supportedTypes) {
+    signatures.emplace_back(exec::FunctionSignatureBuilder()
               .returnType("bigint")
-              .argumentType("any")
+              .argumentType(type)
               .variableArity()
-              .build()};
+              .build());
+  }
+  return signatures;
 }
 
 std::shared_ptr<exec::VectorFunction> makeXxHash64(

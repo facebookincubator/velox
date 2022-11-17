@@ -917,10 +917,10 @@ inline uint32_t rotateLeft(uint32_t a, int shift) {
 #endif
 }
 
-// Shift the bits of unsigned 64-bit integer a left by the number of
-// bits specified in shift, rotating the most-significant bit to the
-// least-significant bit location, and return the unsigned result.
-inline uint64_t rotateLeft64(uint64_t a, int32_t shift) {
+/// Shift the bits of unsigned 64-bit integer to the left by the number of
+/// bits specified in shift, rotating the most-significant bit to the
+/// least-significant bit location, and return the unsigned result.
+inline uint64_t rotateLeft64(uint64_t a, uint32_t shift) {
   return (a << shift) | (a >> (64 - shift));
 }
 

@@ -28,6 +28,7 @@ class XxHash64Test : public SparkFunctionBaseTest {
   }
 };
 
+// expected result get from spark-sql=> select xxhash64("Spark")
 TEST_F(XxHash64Test, varchar) {
   EXPECT_EQ(xxhash64<std::string>("Spark"), -4294468057691064905);
   EXPECT_EQ(xxhash64<std::string>(""), -7444071767201028348);
@@ -82,7 +83,7 @@ TEST_F(XxHash64Test, bool) {
   EXPECT_EQ(xxhash64<bool>(std::nullopt), 42);
 }
 
-TEST_F(XxHash64Test, VarcharInt32) {
+TEST_F(XxHash64Test, varcharInt32) {
   auto xxhash64 = [&](std::optional<std::string> a, std::optional<int32_t> b) {
     return evaluateOnce<int64_t>("xxhash64(c0, c1)", a, b);
   };
