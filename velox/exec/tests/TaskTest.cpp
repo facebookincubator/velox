@@ -17,6 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -45,6 +46,7 @@ class TaskTest : public HiveConnectorTestBase {
 
     VELOX_CHECK(task->supportsSingleThreadedExecution());
 
+    vector_size_t numRows = 0;
     std::vector<RowVectorPtr> results;
     for (;;) {
       auto result = task->next();
@@ -56,9 +58,16 @@ class TaskTest : public HiveConnectorTestBase {
         child->loadedVector();
       }
       results.push_back(result);
+      numRows += result->size();
     }
 
     VELOX_CHECK(waitForTaskCompletion(task.get()));
+
+    auto planNodeStats = toPlanStats(task->taskStats());
+    VELOX_CHECK(planNodeStats.count(plan.planNode->id()));
+    VELOX_CHECK_EQ(numRows, planNodeStats.at(plan.planNode->id()).outputRows);
+    VELOX_CHECK_EQ(
+        results.size(), planNodeStats.at(plan.planNode->id()).outputVectors);
 
     return {task, results};
   }
@@ -78,7 +87,10 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
                   .planFragment();
 
   exec::Task task(
-      "task-1", std::move(plan), 0, core::QueryCtx::createForTest());
+      "task-1",
+      std::move(plan),
+      0,
+      std::make_shared<core::QueryCtx>(executor_.get()));
 
   // Add split for the source node.
   task.addSplit("0", exec::Split(folly::copy(connectorSplit)));
@@ -127,7 +139,10 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
           .planFragment();
 
   exec::Task valuesTask(
-      "task-2", std::move(plan), 0, core::QueryCtx::createForTest());
+      "task-2",
+      std::move(plan),
+      0,
+      std::make_shared<core::QueryCtx>(executor_.get()));
   errorMessage =
       "Splits can be associated only with leaf plan nodes which require splits. Plan node ID 0 doesn't refer to such plan node.";
   VELOX_ASSERT_THROW(
@@ -149,7 +164,11 @@ TEST_F(TaskTest, duplicatePlanNodeIds) {
                   .planFragment();
 
   VELOX_ASSERT_THROW(
-      exec::Task("task-1", std::move(plan), 0, core::QueryCtx::createForTest()),
+      exec::Task(
+          "task-1",
+          std::move(plan),
+          0,
+          std::make_shared<core::QueryCtx>(executor_.get())),
       "Plan node IDs must be unique. Found duplicate ID: 0.")
 }
 
@@ -390,7 +409,7 @@ TEST_F(TaskTest, testTerminateDeadlock) {
   auto rightBatch = makeRowVector(
       {makeFlatVector<int32_t>(10, [](auto row) { return row; })});
 
-  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto leftNode =
       PlanBuilder(planNodeIdGenerator).values({leftBatch}, true).planNode();
   auto rightNode =
@@ -447,7 +466,8 @@ TEST_F(TaskTest, singleThreadedExecution) {
   uint64_t numDeletedTasks = Task::numDeletedTasks();
   {
     auto [task, results] = executeSingleThreaded(plan);
-    assertEqualResults({expectedResult, expectedResult}, results);
+    assertEqualResults(
+        std::vector<RowVectorPtr>{expectedResult, expectedResult}, results);
   }
   ASSERT_EQ(numCreatedTasks + 1, Task::numCreatedTasks());
   ASSERT_EQ(numDeletedTasks + 1, Task::numDeletedTasks());
@@ -525,7 +545,7 @@ TEST_F(TaskTest, singleThreadedHashJoin) {
   auto rightPath = TempFilePath::create();
   writeToFile(rightPath->path, {right});
 
-  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanId;
   core::PlanNodeId rightScanId;
   auto plan = PlanBuilder(planNodeIdGenerator)
@@ -565,7 +585,7 @@ TEST_F(TaskTest, singleThreadedCrossJoin) {
   auto rightPath = TempFilePath::create();
   writeToFile(rightPath->path, {right});
 
-  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId leftScanId;
   core::PlanNodeId rightScanId;
   auto plan = PlanBuilder(planNodeIdGenerator)
@@ -617,7 +637,7 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
 
   // Create a query plan fragment with one input pipeline and one output
   // pipeline and both have only one driver.
-  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
       PlanBuilder(planNodeIdGenerator)
           .localMerge(
@@ -639,21 +659,27 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Values::getOutput",
       std::function<void(const int32_t*)>(([&](const int32_t* outputIdx) {
+        LOG(ERROR) << "get output " << *outputIdx;
         // Only blocks the value node on the second output.
         if (*outputIdx != 1) {
+          LOG(ERROR) << "done get output";
           return;
         }
         mergePromise.setValue();
+        LOG(ERROR) << "wait value";
         std::move(valueFuture).wait();
+        LOG(ERROR) << "finish wait value";
         driverPromise.setValue();
       })));
 
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Merge::isFinished",
       std::function<void(const bool*)>(([&](const bool* isFinished) {
+        LOG(ERROR) << "is finish " << *isFinished;
         // Only wait for the value operator running after the merge operator is
         // finished.
         if (!*isFinished) {
+          LOG(ERROR) << "isFinished quit";
           return;
         }
 
@@ -661,17 +687,23 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
         // on the output pipeline so there is no race to access mergeFuture.
         ContinueFuture future = std::move(mergeFuture);
         if (future.valid()) {
+          LOG(ERROR) << "isFinished wait";
           future.wait();
+          LOG(ERROR) << "isFinished done wait";
         }
+        LOG(ERROR) << "isFinished done";
       })));
 
   CursorParameters params;
   params.planNode = plan;
-  params.queryCtx = core::QueryCtx::createForTest();
+  params.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   params.queryCtx->setConfigOverridesUnsafe(
       {{core::QueryConfig::kPreferredOutputBatchSize, "1"}});
+  LOG(ERROR) << "start run query";
   auto task = assertQueryOrdered(params, "VALUES (0)", {0});
-  waitForTaskCompletion(task.get(), 1'000'000);
+  LOG(ERROR) << "start to wait";
+  VELOX_CHECK(waitForTaskCompletion(task.get(), 1'000'000));
+  LOG(ERROR) << "stop wait";
   task.reset();
   valuePromise.setValue();
   // Wait for Values driver to complete.
