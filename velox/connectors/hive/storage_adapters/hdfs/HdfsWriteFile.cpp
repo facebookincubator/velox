@@ -46,6 +46,7 @@ void HdfsWriteFile::close() {
       0,
       "Failed to close hdfs file: {}",
       std::string(hdfsGetLastError()));
+  hdfsFile_ = nullptr;
 }
 
 void HdfsWriteFile::flush() {
