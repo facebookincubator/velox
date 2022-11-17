@@ -524,8 +524,8 @@ void PartitionedOutputBufferManager::acknowledge(
         }
         return it->second;
       });
-  if (buffer && buffer->deleteResults(destination)) {
-    buffers_.withLock([&](auto& buffers) { buffers.erase(taskId); });
+  if (buffer) {
+    buffer->acknowledge(destination, sequence);
   }
 }
 
