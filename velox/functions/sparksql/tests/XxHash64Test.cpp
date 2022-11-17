@@ -28,7 +28,7 @@ class XxHash64Test : public SparkFunctionBaseTest {
   }
 };
 
-// expected result get from spark-sql=> select xxhash64("Spark")
+// The expected result was obtained by running SELECT xxhash64("Spark") query using spark-sql CLI.
 TEST_F(XxHash64Test, varchar) {
   EXPECT_EQ(xxhash64<std::string>("Spark"), -4294468057691064905);
   EXPECT_EQ(xxhash64<std::string>(""), -7444071767201028348);

@@ -18,16 +18,17 @@
 namespace facebook::velox::functions::sparksql {
 
 // Supported types:
-//   - Bools
-//   - Integer types (byte, short, int, long)
-//   - String, Binary
-//   - Float, Double
+//   - Boolean
+//   - Integer types (tinyint, smallint, integer, bigint)
+//   - Varchar, varbinary
+//   - Real, double
 //
-// Unsupported:
+// TODO:
 //   - Decimal
-//   - Datetime
-//   - Structs, Arrays: hash the elements in order
-//   - Maps: iterate over map, hashing key then value. Since map ordering is
+//   - Date
+//   - Timestamp
+//   - Row, Array: hash the elements in order
+//   - Map: iterate over map, hashing key then value. Since map ordering is
 //        unspecified, hashing logically equivalent maps may result in
 //        different hash values.
 

@@ -753,7 +753,7 @@ TEST_F(BitUtilTest, rotateLeft64) {
       0xfedcba9876543210,
       0xf0f0f0f0f0f0f0f0,
       0x0123456789abcdef};
-  // get from java standard library
+  // The expected result was obtained by running with java standard library
   // System.out.println(Long.toHexString(Long.rotateLeft(0x0f0f0f0f0f0f0f0fL,
   // 2)));
   uint64_t expectedShift2[] = {
