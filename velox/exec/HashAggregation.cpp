@@ -42,7 +42,10 @@ HashAggregation::HashAggregation(
           driverCtx->queryConfig().partialAggregationGoodPct()),
       maxExtendedPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxExtendedPartialAggregationMemoryUsage()),
-      spillConfig_(operatorCtx_->makeSpillConfig(Spiller::Type::kAggregate)),
+      spillConfig_(
+          isSpillAllowed(aggregationNode)
+              ? operatorCtx_->makeSpillConfig(Spiller::Type::kAggregate)
+              : std::nullopt),
       maxPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {
   VELOX_CHECK_NOT_NULL(memoryTracker_, "Memory usage tracker is not set");
@@ -162,6 +165,11 @@ HashAggregation::HashAggregation(
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
       operatorCtx_.get(),
       stats_);
+}
+
+bool HashAggregation::isSpillAllowed(
+    const std::shared_ptr<const core::AggregationNode>& node) const {
+  return !isDistinct_ && node->preGroupedKeys().empty();
 }
 
 void HashAggregation::addInput(RowVectorPtr input) {
