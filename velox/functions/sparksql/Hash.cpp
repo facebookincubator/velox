@@ -352,7 +352,6 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures() {
               .variableArity()
               .build()};
 }
-} // namespace facebook::velox::functions::sparksql
 
 std::shared_ptr<exec::VectorFunction> makeXxHash64(
     const std::string& name,
