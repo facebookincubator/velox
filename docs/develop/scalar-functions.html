@@ -1126,7 +1126,7 @@ appear zero or more times by calling variableArity() method.</p>
 <p>The map_keys function takes any map and returns an array of map keys.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// map(K,V) -&gt; array(K)</span>
 <span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
-<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;K&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">knownTypeVariable</span><span class="p">(</span><span class="s">&quot;K)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;V&quot;</span><span class="p">)</span><span class="w"></span>
 <span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;array(K)&quot;</span><span class="p">)</span><span class="w"></span>
 <span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;map(K,V)&quot;</span><span class="p">)</span><span class="w"></span>
