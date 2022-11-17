@@ -15,6 +15,9 @@
  */
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
+
+#include <google/protobuf/wrappers.pb.h>
+
 #include "velox/substrait/TypeUtils.h"
 #include "velox/substrait/VariantToVectorConverter.h"
 #include "velox/type/Type.h"
@@ -109,10 +112,11 @@ bool configSetInOptimization(
     const ::substrait::extensions::AdvancedExtension& extension,
     const std::string& config) {
   if (extension.has_optimization()) {
-    std::string msg = extension.optimization().value();
-    std::size_t pos = msg.find(config);
+    google::protobuf::StringValue msg;
+    extension.optimization().UnpackTo(&msg);
+    std::size_t pos = msg.value().find(config);
     if ((pos != std::string::npos) &&
-        (msg.substr(pos + config.size(), 1) == "1")) {
+        (msg.value().substr(pos + config.size(), 1) == "1")) {
       return true;
     }
   }
