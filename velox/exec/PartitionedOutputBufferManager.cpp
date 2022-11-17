@@ -150,15 +150,23 @@ PartitionedOutputBuffer::PartitionedOutputBuffer(
     std::shared_ptr<Task> task,
     bool broadcast,
     int numDestinations,
-    uint32_t numDrivers)
+    uint32_t numDrivers,
+    std::shared_ptr<std::unordered_set<int>> deletedDestinations)
     : task_(std::move(task)),
       broadcast_(broadcast),
       numDrivers_(numDrivers),
       maxSize_(task_->queryCtx()->config().maxPartitionedOutputBufferSize()),
       continueSize_((maxSize_ * kContinuePct) / 100) {
   buffers_.reserve(numDestinations);
+  auto taskId = task_ ? task_->taskId() : "unknown";
   for (int i = 0; i < numDestinations; i++) {
-    buffers_.push_back(std::make_unique<DestinationBuffer>());
+    if (!deletedDestinations ||
+        deletedDestinations->find(i) == deletedDestinations->end()) {
+      buffers_.push_back(std::make_unique<DestinationBuffer>());
+    } else {
+      VLOG(1) << "Adding null buffer " << taskId << ", " << i;
+      buffers_.push_back(nullptr);
+    }
   }
 }
 
@@ -516,8 +524,8 @@ void PartitionedOutputBufferManager::acknowledge(
         }
         return it->second;
       });
-  if (buffer) {
-    buffer->acknowledge(destination, sequence);
+  if (buffer && buffer->deleteResults(destination)) {
+    buffers_.withLock([&](auto& buffers) { buffers.erase(taskId); });
   }
 }
 
@@ -528,6 +536,11 @@ void PartitionedOutputBufferManager::deleteResults(
       [&](auto& buffers) -> std::shared_ptr<PartitionedOutputBuffer> {
         auto it = buffers.find(taskId);
         if (it == buffers.end()) {
+          if (!deletedDestinations_[taskId]) {
+            deletedDestinations_[taskId] =
+                std::make_shared<std::unordered_set<int>>();
+          }
+          deletedDestinations_[taskId]->insert(destination);
           return nullptr;
         }
         return it->second;
@@ -556,8 +569,11 @@ void PartitionedOutputBufferManager::initializeTask(
   buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
     if (it == buffers.end()) {
-      buffers[taskId] = std::make_shared<PartitionedOutputBuffer>(
-          std::move(task), broadcast, numDestinations, numDrivers);
+      auto buffer = std::make_shared<PartitionedOutputBuffer>(
+          std::move(task), broadcast, numDestinations, numDrivers,
+          deletedDestinations_[taskId]);
+      buffers[taskId] = buffer;
+      deletedDestinations_.erase(taskId);
     } else {
       VELOX_FAIL(
           "Registering an output buffer for pre-existing taskId {}", taskId);
@@ -588,6 +604,7 @@ void PartitionedOutputBufferManager::removeTask(const std::string& taskId) {
         }
         auto taskBuffer = it->second;
         buffers.erase(taskId);
+        deletedDestinations_.erase(taskId);
         return taskBuffer;
       });
   if (buffer) {

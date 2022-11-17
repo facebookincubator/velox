@@ -866,10 +866,20 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   if (exchangeClient) {
     exchangeClient->noMoreRemoteTasks();
   }
-
-  if (allFinished) {
+  if (allFinished || shouldTerminateOnNoMoreSplits_) {
     terminate(kFinished);
   }
+}
+
+bool Task::hasNoMoreSplitGroups() {
+  bool noMoreSplitGroups = true;
+  for (auto& it : splitsStates_) {
+    if (not it.second.noMoreSplits) {
+      noMoreSplitGroups = false;
+      break;
+    }
+  }
+  return noMoreSplitGroups;
 }
 
 bool Task::checkNoMoreSplitGroupsLocked() {
@@ -881,14 +891,7 @@ bool Task::checkNoMoreSplitGroupsLocked() {
   // we should review the total number of drivers, which initially is set to
   // process all split groups, but in reality workers share split groups and
   // each worker processes only a part of them, meaning much less than all.
-  bool noMoreSplitGroups = true;
-  for (auto& it : splitsStates_) {
-    if (not it.second.noMoreSplits) {
-      noMoreSplitGroups = false;
-      break;
-    }
-  }
-  if (noMoreSplitGroups) {
+  if (hasNoMoreSplitGroups()) {
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_;
     if (hasPartitionedOutput_) {
       auto bufferManager = bufferManager_.lock();
@@ -1254,6 +1257,12 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       taskStats_.executionEndTimeMs = getCurrentTimeMs();
     }
     if (not isRunningLocked()) {
+      return makeFinishFutureLocked("Task::terminate");
+    }
+    if (not hasNoMoreSplitGroups()
+        || splitPlanNodeIds_.size() > splitsStates_.size()) {
+      VLOG(1) << "Waiting for splits before terminating. taskId=" << taskId_;
+      shouldTerminateOnNoMoreSplits_ = true;
       return makeFinishFutureLocked("Task::terminate");
     }
     state_ = terminalState;

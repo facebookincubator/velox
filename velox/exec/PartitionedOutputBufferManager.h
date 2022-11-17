@@ -90,7 +90,8 @@ class PartitionedOutputBuffer {
       std::shared_ptr<Task> task,
       bool broadcast,
       int numDestinations,
-      uint32_t numDrivers);
+      uint32_t numDrivers,
+      std::shared_ptr<std::unordered_set<int>> deletedDestinations);
 
   /// The total number of broadcast buffers may not be known at the task start
   /// time. This method can be called to update the total number of broadcast
@@ -273,5 +274,10 @@ class PartitionedOutputBufferManager {
 
   std::function<std::unique_ptr<OutputStreamListener>()> listenerFactory_{
       nullptr};
+
+  // To keep track of premature destination deletions.
+  // Must only be used within the buffers_ lock
+  std::unordered_map<std::string, std::shared_ptr<std::unordered_set<int>>>
+      deletedDestinations_;
 };
 } // namespace facebook::velox::exec

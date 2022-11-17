@@ -587,6 +587,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// returns true if task should transition to kFinished state.
   bool checkNoMoreSplitGroupsLocked();
 
+  // Returns true if all the splitStates_ have their noMoreSplits set to true
+  bool hasNoMoreSplitGroups();
+
   /// Notifies listeners that the task is now complete.
   void onTaskCompletion();
 
@@ -837,6 +840,10 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Boolean indicating that we have already recieved no-more-broadcast-buffers
   /// message. Subsequent messagees will be ignored.
   bool noMoreBroadcastBuffers_{false};
+
+  // This flag is set when we try to terminate before all the splits
+  // have been received from the coordinator
+  bool shouldTerminateOnNoMoreSplits_{false};
 
   // Thread counts and cancellation -related state.
   //
