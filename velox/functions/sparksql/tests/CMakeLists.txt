@@ -24,6 +24,7 @@ add_executable(
   RegexFunctionsTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp
+  SparkBitwiseTest.cpp
   SplitFunctionsTest.cpp
   StringTest.cpp
   SubscriptTest.cpp)

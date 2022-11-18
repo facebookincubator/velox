@@ -29,6 +29,7 @@
 #include "velox/functions/sparksql/LeastGreatest.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
 #include "velox/functions/sparksql/RegisterArithmetic.h"
+#include "velox/functions/sparksql/RegisterBitwise.h"
 #include "velox/functions/sparksql/RegisterCompare.h"
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/String.h"
@@ -126,6 +127,7 @@ void registerFunctions(const std::string& prefix) {
   // broken out into a separate compilation unit to improve build latency.
   registerArithmeticFunctions(prefix);
   registerCompareFunctions(prefix);
+  registerBitwiseFunctions(prefix);
 
   // String sreach function
   registerFunction<StartsWithFunction, bool, Varchar, Varchar>(

@@ -22,6 +22,7 @@ add_library(
   RegexFunctions.cpp
   Register.cpp
   RegisterArithmetic.cpp
+  RegisterBitwise.cpp
   RegisterCompare.cpp
   Size.cpp
   SplitFunctions.cpp
