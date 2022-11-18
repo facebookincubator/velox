@@ -14,6 +14,7 @@
 add_library(
   velox_functions_spark
   ArraySort.cpp
+  Bitwise.cpp
   CompareFunctionsNullSafe.cpp
   Hash.cpp
   In.cpp
@@ -22,7 +23,6 @@ add_library(
   RegexFunctions.cpp
   Register.cpp
   RegisterArithmetic.cpp
-  RegisterBitwise.cpp
   RegisterCompare.cpp
   Size.cpp
   SplitFunctions.cpp

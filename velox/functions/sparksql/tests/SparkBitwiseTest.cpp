@@ -34,21 +34,13 @@ static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
 class BitwiseTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
-  std::optional<T> bitwiseFunction(
-      const std::string& fn,
-      std::optional<T> a,
-      std::optional<T> b) {
-    return evaluateOnce<T>(fmt::format("{}(c0, c1)", fn), a, b);
-  }
-
-  template <typename T>
   std::optional<T> bitwiseAnd(std::optional<T> a, std::optional<T> b) {
-    return bitwiseFunction<T>("bitwise_and", a, b);
+    return evaluateOnce<T>("bitwise_and(c0, c1)", a, b);
   }
 
   template <typename T>
   std::optional<T> bitwiseOr(std::optional<T> a, std::optional<T> b) {
-    return bitwiseFunction<T>("bitwise_or", a, b);
+    return evaluateOnce<T>("bitwise_or(c0, c1)", a, b);
   }
 };
 

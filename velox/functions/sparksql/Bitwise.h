@@ -17,26 +17,10 @@
 
 #include <string>
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/RegistrationHelpers.h"
+
 namespace facebook::velox::functions::sparksql {
 
 void registerBitwiseFunctions(const std::string& prefix);
-
-template <typename T>
-struct BitwiseAndFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
-    result = a & b;
-    return;
-  }
-};
-
-template <typename T>
-struct BitwiseOrFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
-    result = a | b;
-    return;
-  }
-};
 
 } // namespace facebook::velox::functions::sparksql

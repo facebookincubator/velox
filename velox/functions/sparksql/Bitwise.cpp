@@ -13,10 +13,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/sparksql/Bitwise.h"
 
 namespace facebook::velox::functions::sparksql {
+
+template <typename T>
+struct BitwiseAndFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
+    result = a & b;
+    return;
+  }
+};
+
+template <typename T>
+struct BitwiseOrFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
+    result = a | b;
+    return;
+  }
+};
 
 void registerBitwiseFunctions(const std::string& prefix) {
   registerBinaryIntegral<BitwiseAndFunction>({prefix + "bitwise_and"});
