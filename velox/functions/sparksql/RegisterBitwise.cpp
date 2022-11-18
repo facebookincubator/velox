@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/sparksql/Bitwise.h"
 
 namespace facebook::velox::functions::sparksql {
 

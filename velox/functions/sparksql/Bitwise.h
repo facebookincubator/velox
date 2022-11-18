@@ -39,4 +39,4 @@ struct BitwiseOrFunction {
   }
 };
 
-} // namespace facebook::velox::functions
+} // namespace facebook::velox::functions::sparksql
