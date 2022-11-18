@@ -15,24 +15,27 @@
  */
 #pragma once
 
+#include <string>
 #include "velox/functions/Macros.h"
-namespace facebook::velox::functions {
+namespace facebook::velox::functions::sparksql {
+
+void registerBitwiseFunctions(const std::string& prefix);
 
 template <typename T>
 struct BitwiseAndFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, TInput a, TInput b) {
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
     result = a & b;
-    return true;
+    return;
   }
 };
 
 template <typename T>
 struct BitwiseOrFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, TInput a, TInput b) {
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
     result = a | b;
-    return true;
+    return;
   }
 };
 

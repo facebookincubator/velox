@@ -43,12 +43,12 @@ protected:
 
  template <typename T>
  std::optional<T> bitwiseAnd(std::optional<T> a, std::optional<T> b) {
-   return evaluateOnce<T>("bitwise_and(c0, c1)", a, b);
+   return bitwiseFunction<T>("bitwise_and", a, b);
  }
 
  template <typename T>
  std::optional<T> bitwiseOr(std::optional<T> a, std::optional<T> b) {
-   return evaluateOnce<T>("bitwise_or(c0, c1)", a, b);
+   return bitwiseFunction<T>("bitwise_or", a, b);
  }
 };
 
@@ -121,4 +121,4 @@ TEST_F(BitwiseTest, bitwiseOr) {
 }
 
 } // namespace
-} // namespace facebook::velox
+} // namespace facebook::velox::functions::sparksql::test
