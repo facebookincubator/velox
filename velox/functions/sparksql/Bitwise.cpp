@@ -22,7 +22,6 @@ struct BitwiseAndFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
     result = a & b;
-    return;
   }
 };
 
@@ -31,7 +30,6 @@ struct BitwiseOrFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
     result = a | b;
-    return;
   }
 };
 
