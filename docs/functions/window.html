@@ -123,6 +123,15 @@ distribution value.</p>
 <p>Returns the rank of a value in a group of values. This is similar to rank(), except that tie values do
 not produce gaps in the sequence.</p>
 <dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">ntile(n)</span> <span class="pre">→</span> <span class="pre">bigint</span></span></dt>
+<dd></dd></dl>
+
+<p>Divides the rows for each window partition into n buckets ranging from 1 to at most <code class="docutils literal notranslate"><span class="pre">n</span></code>. Bucket values
+will differ by at most 1. If the number of rows in the partition does not divide evenly into the number
+of buckets, then the remainder values are distributed one per bucket, starting with the first bucket.</p>
+<p>For example, with 6 rows and 4 buckets, the bucket values would be as follows: <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">1</span> <span class="pre">2</span> <span class="pre">2</span> <span class="pre">3</span> <span class="pre">4</span></code></p>
+<dl class="py function">
 <dt class="sig sig-object py" id="percent_rank">
 <span class="sig-name descname"><span class="pre">percent_rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#percent_rank" title="Permalink to this definition">¶</a></dt>
 <dd></dd></dl>
