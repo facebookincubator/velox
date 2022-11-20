@@ -32,15 +32,12 @@ dnf_install epel-release dnf-plugins-core # For ccache, ninja
 dnf config-manager --set-enabled powertools
 dnf_install ninja-build ccache gcc-toolset-9 git wget which libevent-devel \
   openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
-  libdwarf-devel curl-devel
+  libdwarf-devel curl-devel cmake
 
 dnf remove -y gflags
 
 # Required for Thrift
 dnf_install autoconf automake libtool bison flex python3
-
-# install sphinx for doc gen
-pip3 install sphinx sphinx-tabs breathe sphinx_rtd_theme
 
 # Activate gcc9; enable errors on unset variables afterwards.
 source /opt/rh/gcc-toolset-9/enable || exit 1
@@ -59,8 +56,6 @@ function wget_and_untar {
   wget -q --max-redirect 3 -O - "${URL}" | tar -xz -C "${DIR}" --strip-components=1
 }
 
-# untar cmake binary release directly to /usr.
-wget_and_untar https://github.com/Kitware/CMake/releases/download/v3.17.5/cmake-3.17.5-Linux-x86_64.tar.gz /usr &
 
 # Fetch sources.
 wget_and_untar https://github.com/gflags/gflags/archive/v2.2.2.tar.gz gflags &
@@ -102,4 +97,3 @@ cmake_install_deps fmt -DFMT_TEST=OFF
 
 dnf clean all
 
-echo "source /opt/rh/gcc-toolset-9/enable" >> ~/.bashrc
