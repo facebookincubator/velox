@@ -64,7 +64,6 @@ wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz 
 wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.72.0/source/boost_1_72_0.tar.gz boost &
 wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy &
 wget_and_untar https://github.com/fmtlib/fmt/archive/8.0.0.tar.gz fmt &
-wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protobuf-all-21.4.tar.gz protobuf &
 
 wait  # For cmake and source downloads to complete.
 
@@ -80,14 +79,6 @@ wait  # For cmake and source downloads to complete.
   cd boost
   ./bootstrap.sh --prefix=/usr/local
   ./b2 "-j$(nproc)" -d0 install threading=multi
-)
-
-(
-  cd protobuf
-  ./configure --prefix=/usr
-  make "-j${NPROC}"
-  make install
-  ldconfig
 )
 
 cmake_install_deps gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64 -DCMAKE_INSTALL_PREFIX:PATH=/usr
