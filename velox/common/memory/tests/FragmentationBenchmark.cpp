@@ -165,9 +165,9 @@ class FragmentationTest {
   std::string sizeString(size_t size) {
     char str[20];
     if (size < 1 << 20) {
-      sprintf(str, "%ldK", size >> 10);
+      snprintf(str, 20, "%ldK", size >> 10);
     } else {
-      sprintf(str, "%ldM", size >> 20);
+      snprintf(str, 20, "%ldM", size >> 20);
     }
     return str;
   }
