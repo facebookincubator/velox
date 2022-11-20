@@ -22,6 +22,14 @@
 
 namespace facebook::velox::exec {
 
+// Used for k preceding/following frames. Index is the column index if k is a
+// column. value is used to read the column values from the input, or contains
+// the constant value if k is a constant.
+struct FrameChannelArg {
+  column_index_t index;
+  VectorPtr value;
+};
+
 /// This is a very simple in-Memory implementation of a Window Operator
 /// to compute window functions.
 ///
@@ -65,8 +73,8 @@ class Window : public Operator {
     const core::WindowNode::WindowType type;
     const core::WindowNode::BoundType startType;
     const core::WindowNode::BoundType endType;
-    const std::optional<column_index_t> startChannel;
-    const std::optional<column_index_t> endChannel;
+    const std::optional<FrameChannelArg> startFrameArg;
+    const std::optional<FrameChannelArg> endFrameArg;
   };
 
   // Helper function to create WindowFunction and frame objects
@@ -219,6 +227,9 @@ class Window : public Operator {
   // cross getOutput boundaries they are saved in the operator.
   vector_size_t peerStartRow_ = 0;
   vector_size_t peerEndRow_ = 0;
+
+  // This offset tracks how far along the partition rows have been output.
+  vector_size_t partitionOffset_ = 0;
 };
 
 } // namespace facebook::velox::exec
