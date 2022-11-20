@@ -14,7 +14,9 @@
 # Build the test and build container for presto_cpp
 #
 FROM quay.io/centos/centos:stream8
-ARG cpu_target
-COPY setup-centos8.sh /
-COPY setup-helper-functions.sh /
-RUN mkdir build && ( cd build && CPU_TARGET="$cpu_target" bash /setup-centos8.sh ) && rm -rf build
+
+ADD scripts /velox/scripts/
+RUN /velox/scripts/setup-centos8.sh
+
+WORKDIR /velox
+
