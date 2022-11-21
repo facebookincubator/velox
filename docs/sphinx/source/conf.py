@@ -41,7 +41,7 @@ extensions = [
 ]
 
 # Breathe configuration
-breathe_projects = {"pyvelox_c": "../../doxygen"}
+breathe_projects = {"pyvelox_c": "../../doxygen/xml"}
 breathe_default_project = "pyvelox_c"
 
 

@@ -10,6 +10,17 @@ Welcome to PyVelox's documentation!
    :maxdepth: 2
    :caption: Contents:
 
+PyVelox
+=======
+
+.. doxygengroup:: pyvelox
+
+
+Type Serialization
+==================
+
+.. doxygengroup:: pyvelox-type-serialization
+   :members:
 
 
 Indices and tables
