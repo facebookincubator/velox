@@ -10,22 +10,6 @@ Welcome to PyVelox's documentation!
    :maxdepth: 2
    :caption: Contents:
 
-PyVelox
-=======
-
-.. doxygengroup:: pyvelox
-
-
-Type Serialization
-==================
-
-.. doxygengroup:: pyvelox-type-serialization
-   :members:
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+   PyVelox Get Started <README_generated_pyvelox>
+   C++ Python Bindings API Reference <cpp>
+   Building Documentation <README_generated_docs>

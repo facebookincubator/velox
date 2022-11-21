@@ -1,3 +1,4 @@
 doxygen/html/*
 doxygen/latex/*
 doxygen/xml/*
+sphinx/source/README_generated_*
