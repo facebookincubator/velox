@@ -25,6 +25,9 @@ workflows:
       - format-check
       - header-check
       - linux-benchmarks-basic
+      - linux-benchmarks-basic-dedicated
+      # Only for testing purposes, will remove before merge
+      - docker-compose-ubuntu-adapters-cpp
 
   # Daily documentation update
   nightly:
@@ -42,9 +45,9 @@ workflows:
       - linux-aggregate-fuzzer-run
       - linux-join-fuzzer-run
       - docker-compose-ubuntu-cpp
+      - docker-compose-ubuntu-adapters-cpp
       - docker-compose-centos-cpp
       - docker-compose-presto-native
-
 
   # Hourly build on weekdays
   weekday:
@@ -646,3 +649,17 @@ jobs:
             git config --global user.name "velox"
             cd presto/presto-native-execution
             make runtime-container
+
+  docker-compose-ubuntu-adapters-cpp:
+    machine: # Use machine executor type to use docker-compose
+      image: ubuntu-2204:2022.10.1 # Ubuntu 22.04
+    resource_class: 2xlarge
+    steps:
+      - checkout
+      - update-submodules
+      - run:
+          name: "Build images for ubuntu-adapters-cpp declared in docker-compose.yml"
+          command: docker-compose build ubuntu-adapters-cpp
+      - run:
+          name: "Run ubuntu-cpp image"
+          command: docker-compose run -e NUM_THREADS=16 --rm ubuntu-adapters-cpp
