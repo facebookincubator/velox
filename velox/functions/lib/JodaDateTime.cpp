@@ -238,6 +238,50 @@ void parseFail(const std::string& input, const char* cur, const char* end) {
       std::string_view(cur, end - cur));
 }
 
+// Joda only supports parsing a few three-letter prefixes. The list is available
+// here:
+//
+//  https://github.com/JodaOrg/joda-time/blob/main/src/main/java/org/joda/time/DateTimeUtils.java#L437
+//
+// Full timezone names (e.g. "America/Los_Angeles") are not supported by Joda
+// when parsing, so we don't implement them here.
+int64_t parseTimezone(
+    const std::string& input,
+    const char* cur,
+    const char* end,
+    JodaDate& jodaDate) {
+  if (cur < end) {
+    // If there are at least 3 letters left.
+    if (end - cur >= 3) {
+      static std::unordered_map<std::string_view, int64_t> defaultTzNames{
+          {"UTC", 0},
+          {"GMT", 0},
+          {"EST", util::getTimeZoneID("America/New_York")},
+          {"EDT", util::getTimeZoneID("America/New_York")},
+          {"CST", util::getTimeZoneID("America/Chicago")},
+          {"CDT", util::getTimeZoneID("America/Chicago")},
+          {"MST", util::getTimeZoneID("America/Denver")},
+          {"MDT", util::getTimeZoneID("America/Denver")},
+          {"PST", util::getTimeZoneID("America/Los_Angeles")},
+          {"PDT", util::getTimeZoneID("America/Los_Angeles")},
+      };
+
+      auto it = defaultTzNames.find(std::string_view(cur, 3));
+      if (it != defaultTzNames.end()) {
+        jodaDate.timezoneId = it->second;
+        return 3;
+      }
+    }
+    // The format 'UT' is also accepted for UTC.
+    else if ((end - cur == 2) && (*cur == 'U') && (*(cur + 1) == 'T')) {
+      jodaDate.timezoneId = 0;
+      return 2;
+    }
+  }
+  parseFail(input, cur, end);
+  return 0; // non-reachable.
+}
+
 // Returns number of characters consumed, or calls parseFail() if timezone
 // offset id could not be parsed.
 int64_t parseTimezoneOffset(
@@ -401,7 +445,9 @@ void parseFromPattern(
     const char*& cur,
     const char* end,
     JodaDate& jodaDate) {
-  if (pattern.specifier == JodaFormatSpecifier::TIMEZONE_OFFSET_ID) {
+  if (pattern.specifier == JodaFormatSpecifier::TIMEZONE) {
+    cur += parseTimezone(input, cur, end, jodaDate);
+  } else if (pattern.specifier == JodaFormatSpecifier::TIMEZONE_OFFSET_ID) {
     cur += parseTimezoneOffset(input, cur, end, jodaDate);
   }
   // Following Joda format, for 3 or more 'M's, use text, otherwise use number.

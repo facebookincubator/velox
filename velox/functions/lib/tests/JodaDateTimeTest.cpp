@@ -270,7 +270,7 @@ TEST_F(JodaDateTimeTest, parseSecond) {
   EXPECT_THROW(parse("123456789", "s"), VeloxUserError);
 }
 
-TEST_F(JodaDateTimeTest, parseTimezone) {
+TEST_F(JodaDateTimeTest, parseTimezoneOffset) {
   // Broken timezone offfsets; allowed formats are "+00:00", "+00", "+0000" or
   // "Z".
   EXPECT_THROW(parse("", "ZZ"), VeloxUserError);
@@ -331,6 +331,22 @@ TEST_F(JodaDateTimeTest, parseTimezone) {
   EXPECT_THROW(parseTZ("+15", "ZZ"), VeloxUserError);
   EXPECT_THROW(parseTZ("+16", "ZZ"), VeloxUserError);
   EXPECT_THROW(parseTZ("-16", "ZZ"), VeloxUserError);
+}
+
+TEST_F(JodaDateTimeTest, parseTimezone) {
+  EXPECT_THROW(parse("", "z"), VeloxUserError);
+  EXPECT_THROW(parse("ANY", "z"), VeloxUserError);
+  EXPECT_THROW(parse("GM", "z"), VeloxUserError);
+  EXPECT_THROW(parse("Los_Angeles", "z"), VeloxUserError);
+  EXPECT_THROW(parse("2020", "Y z"), VeloxUserError);
+
+  // Only a few three letter prefixes are supported by Joda.
+  EXPECT_EQ("America/Los_Angeles", parseTZ("PST", "z"));
+  EXPECT_EQ("America/Los_Angeles", parseTZ("PDT", "zz"));
+  EXPECT_EQ("America/New_York", parseTZ("EST", "z"));
+  EXPECT_EQ("+00:00", parseTZ("GMT", "zz"));
+  EXPECT_EQ("+00:00", parseTZ("UTC", "z"));
+  EXPECT_EQ("+00:00", parseTZ("UT", "z"));
 }
 
 TEST_F(JodaDateTimeTest, parseMixed) {
