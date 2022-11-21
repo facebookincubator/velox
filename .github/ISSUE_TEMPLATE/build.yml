@@ -41,6 +41,6 @@ body:
     attributes:
       label: CMake log
       description: |
-        Please copy and paste the CMake log here.
+        Please copy and paste the relevant part of the CMake log here.
         This will be automatically formatted into code, so no need for backticks.
       render: bash
