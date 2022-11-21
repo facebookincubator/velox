@@ -23,10 +23,10 @@ namespace facebook::velox::parquet {
 
 void registerParquetReaderFactory(ParquetReaderType parquetReaderType) {
   switch (parquetReaderType) {
-    case ParquetReaderType::DUCKDB:
+    /*case ParquetReaderType::DUCKDB:
       dwio::common::registerReaderFactory(
           std::make_shared<duckdb_reader::ParquetReaderFactory>());
-      break;
+      break;*/
     case ParquetReaderType::NATIVE:
       dwio::common::registerReaderFactory(
           std::make_shared<ParquetReaderFactory>());
