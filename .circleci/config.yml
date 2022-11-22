@@ -326,19 +326,13 @@ jobs:
       - run:
           name: "Run benchmarks to generate profile information"
           command: |
-            ./scripts/veloxbench/veloxbench/cpp_micro_benhcmarks.py
+            ./scripts/veloxbench/veloxbench/cpp_micro_benchmarks.py
       - run:
           name: "Build Benchmarks using the profiles"
           command: |
             make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 USE_PGO=1
             ccache -s
       - run-benchmarks
-      # TODO: Disabling conbench github notifications for now until results are more stable.
-      #- run:
-      #  name: "Analyze Benchmark Regressions and Post to Github"
-      #    command: |
-      #      export GITHUB_APP_PRIVATE_KEY=$(echo $GITHUB_APP_PRIVATE_KEY_ENCODED | base64 -d)
-      #      python3.8 scripts/benchmark-github-status.py --z-score-threshold 50
       - post-steps
 
   linux-benchmarks-basic-dedicated:
