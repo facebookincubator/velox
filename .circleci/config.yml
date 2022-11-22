@@ -26,6 +26,7 @@ workflows:
       - header-check
       - linux-benchmarks-basic
       - linux-benchmarks-basic-dedicated
+      - linux-benchmarks-basic-PGO
 
   # Daily documentation update
   nightly:

@@ -214,7 +214,8 @@ if("${GENERATE_PGO}")
 endif()
 
 if("${USE_PGO}")
-  # Wno-missing-profile is necesary since we won't have profiling data for all files from just these benchmarks
+  # Wno-missing-profile is necesary since we won't have profiling data for all
+  # files from just these benchmarks
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-use=PGO_profile -Wno-missing-profile")
 endif()
 
