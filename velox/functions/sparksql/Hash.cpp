@@ -174,7 +174,8 @@ class Murmur3HashFunction final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     context.ensureWritable(rows, INTEGER(), resultRef);
-    applyWithType<int32_t, Murmur3Hash, uint32_t>(rows, args, context, resultRef);
+    applyWithType<int32_t, Murmur3Hash, uint32_t>(
+        rows, args, context, resultRef);
   }
 };
 
