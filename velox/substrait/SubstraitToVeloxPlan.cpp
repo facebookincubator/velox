@@ -703,7 +703,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     // Flatten the conditions connected with 'and'.
     std::vector<::substrait::Expression_ScalarFunction> scalarFunctions;
     std::vector<::substrait::Expression_SingularOrList> singularOrLists;
-    flattenConditions(sRead.filter(), scalarFunctions, singularOrLists);
+    std::vector<::substrait::Expression_IfThen> ifThens;
+    flattenConditions(
+        sRead.filter(), scalarFunctions, singularOrLists, ifThens);
 
     std::unordered_map<uint32_t, std::shared_ptr<RangeRecorder>> rangeRecorders;
     for (uint32_t idx = 0; idx < veloxTypeList.size(); idx++) {
@@ -738,10 +740,18 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       // mark all filter as remaining filters.
       subfieldFilters.clear();
       remainingFilter = connectWithAnd(
-          colNameList, veloxTypeList, scalarFunctions, singularOrLists);
+          colNameList,
+          veloxTypeList,
+          scalarFunctions,
+          singularOrLists,
+          ifThens);
     } else {
       remainingFilter = connectWithAnd(
-          colNameList, veloxTypeList, remainingFunctions, remainingrOrLists);
+          colNameList,
+          veloxTypeList,
+          remainingFunctions,
+          remainingrOrLists,
+          ifThens);
     }
 
     tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
@@ -923,7 +933,8 @@ std::string SubstraitVeloxPlanConverter::nextPlanNodeId() {
 void SubstraitVeloxPlanConverter::flattenConditions(
     const ::substrait::Expression& substraitFilter,
     std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions,
-    std::vector<::substrait::Expression_SingularOrList>& singularOrLists) {
+    std::vector<::substrait::Expression_SingularOrList>& singularOrLists,
+    std::vector<::substrait::Expression_IfThen>& ifThens) {
   auto typeCase = substraitFilter.rex_type_case();
   switch (typeCase) {
     case ::substrait::Expression::RexTypeCase::kScalarFunction: {
@@ -934,7 +945,7 @@ void SubstraitVeloxPlanConverter::flattenConditions(
       if (subParser_->getSubFunctionName(filterNameSpec) == "and") {
         for (const auto& sCondition : sFunc.arguments()) {
           flattenConditions(
-              sCondition.value(), scalarFunctions, singularOrLists);
+              sCondition.value(), scalarFunctions, singularOrLists, ifThens);
         }
       } else {
         scalarFunctions.emplace_back(sFunc);
@@ -943,6 +954,10 @@ void SubstraitVeloxPlanConverter::flattenConditions(
     }
     case ::substrait::Expression::RexTypeCase::kSingularOrList: {
       singularOrLists.emplace_back(substraitFilter.singular_or_list());
+      break;
+    }
+    case ::substrait::Expression::RexTypeCase::kIfThen: {
+      ifThens.emplace_back(substraitFilter.if_then());
       break;
     }
     default:
@@ -1781,47 +1796,40 @@ core::TypedExprPtr SubstraitVeloxPlanConverter::connectWithAnd(
     std::vector<std::string> inputNameList,
     std::vector<TypePtr> inputTypeList,
     const std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions,
-    const std::vector<::substrait::Expression_SingularOrList>&
-        singularOrLists) {
-  if (scalarFunctions.size() == 0 && singularOrLists.size() == 0) {
+    const std::vector<::substrait::Expression_SingularOrList>& singularOrLists,
+    const std::vector<::substrait::Expression_IfThen>& ifThens) {
+  if (scalarFunctions.size() == 0 && singularOrLists.size() == 0 &&
+      ifThens.size() == 0) {
     return nullptr;
   }
   auto inputType = ROW(std::move(inputNameList), std::move(inputTypeList));
 
   // Filter for scalar functions.
-  std::shared_ptr<const core::ITypedExpr> scalarFilter = nullptr;
-  if (scalarFunctions.size() > 0) {
-    scalarFilter = exprConverter_->toVeloxExpr(scalarFunctions[0], inputType);
-    // Will connect multiple functions with AND.
-    uint32_t idx = 1;
-    while (idx < scalarFunctions.size()) {
-      scalarFilter = connectWithAnd(
-          scalarFilter,
-          exprConverter_->toVeloxExpr(scalarFunctions[idx], inputType));
-      idx += 1;
+  std::vector<std::shared_ptr<const core::ITypedExpr>> allFilters;
+  for (auto scalar : scalarFunctions) {
+    auto filter = exprConverter_->toVeloxExpr(scalar, inputType);
+    if (filter != nullptr) {
+      allFilters.emplace_back(filter);
     }
   }
-
-  // Filter for OrList.
-  std::shared_ptr<const core::ITypedExpr> orListFilter = nullptr;
-  if (singularOrLists.size() > 0) {
-    orListFilter = exprConverter_->toVeloxExpr(singularOrLists[0], inputType);
-    uint32_t idx = 1;
-    while (idx < singularOrLists.size()) {
-      orListFilter = connectWithAnd(
-          orListFilter,
-          exprConverter_->toVeloxExpr(singularOrLists[idx], inputType));
-      idx += 1;
+  for (auto orList : singularOrLists) {
+    auto filter = exprConverter_->toVeloxExpr(orList, inputType);
+    if (filter != nullptr) {
+      allFilters.emplace_back(filter);
     }
   }
-
-  VELOX_CHECK(
-      scalarFilter != nullptr || orListFilter != nullptr,
-      "One filter should be valid.");
-  if (scalarFilter != nullptr && orListFilter != nullptr) {
-    return connectWithAnd(scalarFilter, orListFilter);
+  for (auto ifThen : ifThens) {
+    auto filter = exprConverter_->toVeloxExpr(ifThen, inputType);
+    if (filter != nullptr) {
+      allFilters.emplace_back(filter);
+    }
   }
-  return scalarFilter ? scalarFilter : orListFilter;
+  VELOX_CHECK_GT(allFilters.size(), 0, "One filter should be valid.")
+  std::shared_ptr<const core::ITypedExpr> andFilter = allFilters[0];
+  for (auto i = 1; i < allFilters.size(); i++) {
+    andFilter = connectWithAnd(andFilter, allFilters[i]);
+  }
+  return andFilter;
 }
 
 core::TypedExprPtr SubstraitVeloxPlanConverter::connectWithAnd(

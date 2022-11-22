@@ -137,7 +137,8 @@ class SubstraitVeloxPlanConverter {
   void flattenConditions(
       const ::substrait::Expression& sFilter,
       std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions,
-      std::vector<::substrait::Expression_SingularOrList>& singularOrLists);
+      std::vector<::substrait::Expression_SingularOrList>& singularOrLists,
+      std::vector<::substrait::Expression_IfThen>& ifThens);
 
   /// Used to find the function specification in the constructed function map.
   std::string findFuncSpec(uint64_t id);
@@ -467,7 +468,9 @@ class SubstraitVeloxPlanConverter {
       const std::vector<::substrait::Expression_ScalarFunction>&
           remainingFunctions,
       const std::vector<::substrait::Expression_SingularOrList>&
-          singularOrLists);
+          singularOrLists,
+      const std::vector<::substrait::Expression_IfThen>&
+          ifThens);
 
   /// Connect the left and right expressions with 'and' relation.
   core::TypedExprPtr connectWithAnd(

@@ -294,3 +294,20 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
       .splits(makeSplits(*planConverter_, planNode))
       .assertResults(expectedResult);
 }
+
+TEST_F(Substrait2VeloxPlanConversionTest, ifthenTest) {
+  std::string subPlanPath =
+      getDataFilePath("velox/substrait/tests", "data/if_then.json");
+
+  ::substrait::Plan substraitPlan;
+  JsonToProtoConverter::readFromFile(subPlanPath, substraitPlan);
+
+  // Convert to Velox PlanNode.
+  facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter(
+      pool_.get());
+  auto planNode = planConverter.toVeloxPlan(substraitPlan);
+  ASSERT_EQ(
+      "-- Project[expressions: (n1_0:BIGINT, ROW[\"n0_0\"])] -> n1_0:BIGINT\n"
+      "  -- TableScan[table: hive_table, range filters: [(hd_buy_potential, Filter(MultiRange, deterministic, null not allowed)), (hd_demo_sk, Filter(IsNotNull, deterministic, null not allowed)), (hd_vehicle_count, BigintRange: [1, 9223372036854775807] no nulls)], remaining filter: (if(greaterthan(ROW[\"hd_vehicle_count\"],0),greaterthan(divide(cast ROW[\"hd_dep_count\"] as DOUBLE,cast ROW[\"hd_vehicle_count\"] as DOUBLE),1.2)))] -> n0_0:BIGINT, n0_1:VARCHAR, n0_2:BIGINT, n0_3:BIGINT\n",
+      planNode->toString(true, true));
+}
