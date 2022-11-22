@@ -26,8 +26,6 @@ workflows:
       - header-check
       - linux-benchmarks-basic
       - linux-benchmarks-basic-dedicated
-      # Temporary to trigger CI on PR
-      - docker-compose-centos-cpp
 
   # Daily documentation update
   nightly:
