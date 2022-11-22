@@ -26,8 +26,6 @@ workflows:
       - header-check
       - linux-benchmarks-basic
       - linux-benchmarks-basic-dedicated
-      # Only for testing purposes, will remove before merge
-      - docker-compose-ubuntu-adapters-cpp
 
   # Daily documentation update
   nightly:
