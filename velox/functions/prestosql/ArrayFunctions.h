@@ -328,9 +328,7 @@ struct ArrayHasDuplicatesFunction {
     out = false;
     for (const auto& item : inputArray) {
       if (item.has_value()) {
-        if (uniqSet.find(item.value()) == uniqSet.end()) {
-          uniqSet.insert(item.value());
-        } else {
+        if (!uniqSet.insert(item.value()).second) {
           out = true;
           break;
         }
@@ -340,6 +338,19 @@ struct ArrayHasDuplicatesFunction {
           out = true;
           break;
         }
+      }
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void callNullFree(
+      bool& out,
+      const null_free_arg_type<velox::Array<T>>& inputArray) {
+    folly::F14FastSet<null_free_arg_type<T>> uniqSet;
+    out = false;
+    for (const auto& item : inputArray) {
+      if (!uniqSet.insert(item).second) {
+        out = true;
+        break;
       }
     }
   }

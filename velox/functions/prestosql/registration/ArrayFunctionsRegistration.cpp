@@ -51,7 +51,7 @@ inline void registerArrayCombinationsFunctions() {
 }
 
 template <typename T>
-inline void registerArrayHasDuplicationsFunctions() {
+inline void registerArrayHasDuplicatesFunctions() {
   registerFunction<
       ParameterBinder<ArrayHasDuplicatesFunction, T>,
       bool,
@@ -109,10 +109,10 @@ void registerArrayFunctions() {
   registerArrayCombinationsFunctions<Timestamp>();
   registerArrayCombinationsFunctions<Date>();
 
-  registerArrayHasDuplicationsFunctions<int8_t>();
-  registerArrayHasDuplicationsFunctions<int16_t>();
-  registerArrayHasDuplicationsFunctions<int32_t>();
-  registerArrayHasDuplicationsFunctions<int64_t>();
-  registerArrayHasDuplicationsFunctions<Varchar>();
+  registerArrayHasDuplicatesFunctions<int8_t>();
+  registerArrayHasDuplicatesFunctions<int16_t>();
+  registerArrayHasDuplicatesFunctions<int32_t>();
+  registerArrayHasDuplicatesFunctions<int64_t>();
+  registerArrayHasDuplicatesFunctions<Varchar>();
 }
 }; // namespace facebook::velox::functions
