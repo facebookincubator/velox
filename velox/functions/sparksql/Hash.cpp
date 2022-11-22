@@ -26,13 +26,13 @@ namespace {
 
 // ReturnType can be either int32_t or int64_t
 // HashClass contains the function like hashInt32
-template <typename ReturnType, typename HashClass>
+template <typename ReturnType, typename HashClass, typename SeedType>
 void applyWithType(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
     exec::EvalCtx& context,
     VectorPtr& resultRef) {
-  constexpr ReturnType kSeed = 42;
+  constexpr SeedType kSeed = 42;
   HashClass hash;
 
   auto& result = *resultRef->as<FlatVector<ReturnType>>();
@@ -174,26 +174,26 @@ class Murmur3HashFunction final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     context.ensureWritable(rows, INTEGER(), resultRef);
-    applyWithType<int32_t, Murmur3Hash>(rows, args, context, resultRef);
+    applyWithType<int32_t, Murmur3Hash, uint32_t>(rows, args, context, resultRef);
   }
 };
 
 class XxHash64 final {
-  const int64_t PRIME64_1 = 0x9E3779B185EBCA87L;
-  const int64_t PRIME64_2 = 0xC2B2AE3D27D4EB4FL;
-  const int64_t PRIME64_3 = 0x165667B19E3779F9L;
-  const int64_t PRIME64_4 = 0x85EBCA77C2B2AE63L;
-  const int64_t PRIME64_5 = 0x27D4EB2F165667C5L;
+  const uint64_t PRIME64_1 = 0x9E3779B185EBCA87L;
+  const uint64_t PRIME64_2 = 0xC2B2AE3D27D4EB4FL;
+  const uint64_t PRIME64_3 = 0x165667B19E3779F9L;
+  const uint64_t PRIME64_4 = 0x85EBCA77C2B2AE63L;
+  const uint64_t PRIME64_5 = 0x27D4EB2F165667C5L;
 
  public:
-  int64_t hashInt32(const int32_t input, int64_t seed) {
+  int64_t hashInt32(const int32_t input, uint64_t seed) {
     int64_t hash = seed + PRIME64_5 + 4L;
-    hash ^= reinterpret_cast<int64_t>((input & 0xFFFFFFFFL) * PRIME64_1);
+    hash ^= static_cast<int64_t>((input & 0xFFFFFFFFL) * PRIME64_1);
     hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
     return fmix(hash);
   }
 
-  int64_t hashInt64(int64_t input, int64_t seed) {
+  int64_t hashInt64(int64_t input, uint64_t seed) {
     int64_t hash = seed + PRIME64_5 + 8L;
     hash ^= bits::rotateLeft64(input * PRIME64_2, 31) * PRIME64_1;
     hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
@@ -202,17 +202,17 @@ class XxHash64 final {
 
   // Floating point numbers are hashed as if they are integers, with
   // -0f defined to have the same output as +0f.
-  int64_t hashFloat(float input, int64_t seed) {
+  int64_t hashFloat(float input, uint64_t seed) {
     return hashInt32(
         input == -0.f ? 0 : *reinterpret_cast<uint32_t*>(&input), seed);
   }
 
-  int64_t hashDouble(double input, int64_t seed) {
+  int64_t hashDouble(double input, uint64_t seed) {
     return hashInt64(
         input == -0. ? 0 : *reinterpret_cast<uint64_t*>(&input), seed);
   }
 
-  uint64_t hashBytes(const StringView& input, int64_t seed) {
+  uint64_t hashBytes(const StringView& input, uint64_t seed) {
     const char* i = input.data();
     const char* const end = input.data() + input.size();
 
@@ -244,7 +244,7 @@ class XxHash64 final {
     return hash;
   }
 
-  uint64_t hashBytesByWords(const StringView& input, int64_t seed) {
+  uint64_t hashBytesByWords(const StringView& input, uint64_t seed) {
     const char* i = input.data();
     const char* const end = input.data() + input.size();
     uint32_t length = input.size();
@@ -324,7 +324,7 @@ class XxHash64Function final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     context.ensureWritable(rows, BIGINT(), resultRef);
-    applyWithType<int64_t, XxHash64>(rows, args, context, resultRef);
+    applyWithType<int64_t, XxHash64, uint64_t>(rows, args, context, resultRef);
   }
 };
 
