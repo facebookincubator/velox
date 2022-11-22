@@ -195,6 +195,17 @@ bool SubstraitToVeloxPlanValidator::validate(
     return false;
   }
 
+  // In velox, the supported hash type in projectNode is 
+  // BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, VARCHAR, VARBINARY
+  // REAL, DOUBLE. Hash.cpp (L148 - L156)
+  for (auto i = 0; i < types.size(); i++) {
+    switch (types[i]->kind()) {
+      case TypeKind::DATE:
+        return false;
+      default:;
+    }
+  }
+
   int32_t inputPlanNodeId = 0;
   // Create the fake input names to be used in row type.
   std::vector<std::string> names;
