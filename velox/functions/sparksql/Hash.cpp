@@ -188,7 +188,7 @@ class XxHash64 final {
  public:
   int64_t hashInt32(const int32_t input, int64_t seed) {
     int64_t hash = seed + PRIME64_5 + 4L;
-    hash ^= (input & 0xFFFFFFFFL) * PRIME64_1;
+    hash ^= reinterpret_cast<int64_t>((input & 0xFFFFFFFFL) * PRIME64_1);
     hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
     return fmix(hash);
   }
