@@ -113,11 +113,8 @@ commands:
       - run:
           name: "Build Benchmarks"
           command: |
-            make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 GENERATE_PGO=$GENERATE_PGO USE_PGO=$USE_PGO
+            make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
-          environment: 
-            GENERATE_PGO: false
-            USE_PGO: false
   
   run-benchmarks:
     steps:
@@ -315,9 +312,10 @@ jobs:
       LINUX_DISTRO: "centos"
     steps:
       - pre-steps
-      - build-benchmarks
-          environment: 
-            GENERATE_PGO: 1
+      - run:
+          name: "Build Benchmarks with profiling"
+          command: |
+            make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 GENERATE_PGO=1
       - run:
           name: "Install benchmark dependencies"
           command: |
@@ -328,9 +326,11 @@ jobs:
           name: "Run benchmarks to generate profile information"
           command: |
             ./scripts/veloxbench/veloxbench/cpp_micro_benhcmarks.py
-      - build-benchmarks
-          environment: 
-            USE_PGO: 1
+      - run:
+          name: "Build Benchmarks using the profiles"
+          command: |
+            make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 USE_PGO=1
+            ccache -s
       - run-benchmarks
       # TODO: Disabling conbench github notifications for now until results are more stable.
       #- run:
