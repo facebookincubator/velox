@@ -316,8 +316,8 @@ jobs:
     steps:
       - pre-steps
       - build-benchmarks
-        environment: 
-          GENERATE_PGO: 1
+          environment: 
+            GENERATE_PGO: 1
       - run:
           name: "Install benchmark dependencies"
           command: |
@@ -329,8 +329,8 @@ jobs:
           command: |
             ./scripts/veloxbench/veloxbench/cpp_micro_benhcmarks.py
       - build-benchmarks
-        environment: 
-          USE_PGO: 1
+          environment: 
+            USE_PGO: 1
       - run-benchmarks
       # TODO: Disabling conbench github notifications for now until results are more stable.
       #- run:
