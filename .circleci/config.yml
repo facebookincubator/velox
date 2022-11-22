@@ -113,9 +113,12 @@ commands:
       - run:
           name: "Build Benchmarks"
           command: |
-            make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 GENERATE_PGO=$GENERATE_PGO USE_PGO=$USE_PGO
             ccache -s
-
+          environment: 
+            GENERATE_PGO: false
+            USE_PGO: false
+  
   run-benchmarks:
     steps:
       - run:
@@ -295,6 +298,39 @@ jobs:
             # upgrade python to 3.8 for this job
             yum install -y python38
             pip3.8 install -r scripts/benchmark-requirements.txt
+      - run-benchmarks
+      # TODO: Disabling conbench github notifications for now until results are more stable.
+      #- run:
+      #  name: "Analyze Benchmark Regressions and Post to Github"
+      #    command: |
+      #      export GITHUB_APP_PRIVATE_KEY=$(echo $GITHUB_APP_PRIVATE_KEY_ENCODED | base64 -d)
+      #      python3.8 scripts/benchmark-github-status.py --z-score-threshold 50
+      - post-steps
+
+  linux-benchmarks-basic-PGO:
+    executor: build
+    environment:
+      CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
+      CONBENCH_HOST: "CircleCI-runner-PGO"
+      LINUX_DISTRO: "centos"
+    steps:
+      - pre-steps
+      - build-benchmarks
+        environment: 
+          GENERATE_PGO: 1
+      - run:
+          name: "Install benchmark dependencies"
+          command: |
+            # upgrade python to 3.8 for this job
+            yum install -y python38
+            pip3.8 install -r scripts/benchmark-requirements.txt
+      - run:
+          name: "Run benchmarks to generate profile information"
+          command: |
+            ./scripts/veloxbench/veloxbench/cpp_micro_benhcmarks.py
+      - build-benchmarks
+        environment: 
+          USE_PGO: 1
       - run-benchmarks
       # TODO: Disabling conbench github notifications for now until results are more stable.
       #- run:

@@ -209,6 +209,15 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
+if("${GENERATE_PGO}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-generate=PGO_profile")
+endif()
+
+if("${USE_PGO}")
+  # Wno-missing-profile is necesary since we won't have profiling data for all files from just these benchmarks
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-use=PGO_profile -Wno-missing-profile")
+endif()
+
 if("${ENABLE_ALL_WARNINGS}")
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
