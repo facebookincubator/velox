@@ -562,7 +562,7 @@ jobs:
       - checkout
       - update-submodules
       - run:
-          name: "Build images for centis8-cpp declared in docker-compose.yml"
+          name: "Build images for centos-cpp declared in docker-compose.yml"
           command: docker-compose build centos-cpp
       - run:
           name: "Run centos-cpp image"
