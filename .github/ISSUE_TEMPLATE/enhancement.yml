@@ -19,8 +19,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please add as much relevant information to the form below as you can.
-        This will help us replicate and solve the issue. Thank you!
+        Please add as much relevant information as you can about the potential 
+        enhancement to the form below. Thank you!
   - type: textarea
     id: description
     attributes:
