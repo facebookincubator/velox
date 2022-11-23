@@ -19,8 +19,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please add as much relevant information as you can about the potential 
-        enhancement to the form below. Thank you!
+        Please add as much relevant information regarding your enhancement to the 
+        form below as you can. The enhancement can be a feature or additional 
+        documentation. Thank you!
   - type: textarea
     id: description
     attributes:
