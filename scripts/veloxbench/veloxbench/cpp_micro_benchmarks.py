@@ -63,7 +63,7 @@ class LocalCppMicroBenchmarks:
 
     def run(
         self,
-        result_dir,
+        output_dir,
         binary_path=None,
         binary_filter=None,
         bm_filter=None,
@@ -78,13 +78,14 @@ class LocalCppMicroBenchmarks:
             binary_path = self._default_binary_path()
 
         binaries = self._find_binaries(binary_path)
-        result_dir_path = pathlib.Path(result_dir)
+        output_dir_path = pathlib.Path(output_dir)
+        output_dir_path.mkdir(parents=True, exist_ok=True)
 
         for binary_path in binaries:
             if binary_filter and not re.search(binary_filter, binary_path.name):
                 continue
 
-            out_path = result_dir_path / f"{binary_path.name}.json"
+            out_path = output_dir_path / f"{binary_path.name}.json"
             print(f"Executing and dumping results for '{binary_path}' to '{out_path}':")
             run_command = [
                 binary_path,
@@ -181,6 +182,12 @@ def parse_arguments():
         "Defaults to release build directory.",
     )
     parser.add_argument(
+        "--output_path",
+        default=None,
+        help="Directory where output json files will be written to. "
+        "By default generate a temporary directory.",
+    )
+    parser.add_argument(
         "--binary_filter",
         default=None,
         help="Filter applied to binary names. "
@@ -196,7 +203,7 @@ def parse_arguments():
         "--bm_max_secs",
         default=None,
         type=int,
-        help="For how many second to run each benchmark in a binary.",
+        help="For how many seconds to run each benchmark in a binary.",
     )
     parser.add_argument(
         "--bm_max_trials",
@@ -216,16 +223,16 @@ def parse_arguments():
 def main():
     args = parse_arguments()
 
-    with tempfile.TemporaryDirectory() as result_dir:
-        LocalCppMicroBenchmarks().run(
-            result_dir=result_dir,
-            binary_path=args.binary_path,
-            binary_filter=args.binary_filter,
-            bm_filter=args.bm_filter,
-            bm_max_secs=args.bm_max_secs,
-            bm_max_trials=args.bm_max_trials,
-            bm_estimate_time=args.bm_estimate_time,
-        )
+    output_dir = args.output_path or tempfile.mkdtemp()
+    LocalCppMicroBenchmarks().run(
+        output_dir=output_dir,
+        binary_path=args.binary_path,
+        binary_filter=args.binary_filter,
+        bm_filter=args.bm_filter,
+        bm_max_secs=args.bm_max_secs,
+        bm_max_trials=args.bm_max_trials,
+        bm_estimate_time=args.bm_estimate_time,
+    )
     return 0
 
 
