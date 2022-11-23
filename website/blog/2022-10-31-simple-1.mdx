@@ -1,0 +1,94 @@
+---
+slug: simple-functions-1
+title: "Simple Functions: Efficient Complex Types"
+authors: [lsakka]
+tags: [tech-blog, simple-functions]
+---
+
+_This blogpost is part of a series of blog posts that discuss different features and optimizations of the simple function interface_.
+
+
+# Introduction to simple functions
+
+Scaler functions are one of the most used extension points in Velox. Since Velox is a vectorized engine, by nature functions are <a href="https://facebookincubator.github.io/velox/develop/scalar-functions.html#vector-functions">"vector functions"</a> that consume vectors and produce vectors. Velox allows users to write functions as vector functions or as single-row operations "simple functions" that are converted to vector functions using template expansion through <a href="https://github.com/facebookincubator/velox/blob/main/velox/expression/SimpleFunctionAdapter.h">SimpleFunctionAdapter</a>.
+
+<figure>
+ <img src="/img/simple1_1.png"/>
+</figure>
+
+The user only need to impelements the PlusFunction struct, which is then expanded using template expansion to a vector function.
+Writing simple functions is quite simple and easy; however it's not as powerful as writing vector functions.
+For example the function _map_keys_ can be implemented in O(1) as a vector function by moving the keys vector, this is not possible to express as simple function.
+
+Another limitation is that when using the simple interface, authors do not have access to the encodings of the input vectors, nor control over the encoding of the result vector. Hence, do not have the power to optimize the code for specific input encodings or optimize it by generating specific output encodings. The _array_sort_ function for instance does not need to re-order the elements and copy them during sorting; instead it can generate a dictionary vector as an output, which is something not expressible as a simple function.
+
+On the other hand, writing vector functions has some drawbacks:
+
+- **Complexity** : Requires an understanding of Velox vectorized data representation and encodings, which requires additional work for our customers, specially those without DB background. And writing optimized vector functions requires even deeper understanding.
+- **Repetition** : Involves repeated efforts and code; in each function vectors are read in the same way, same set of optimizations are applied ... etc.
+- **Reliability** : More code means more bugs especially in such complex context.
+
+In the ideal world we would like to add most of the optimization that someone can do in a vector function to the simple functions adapter, so it would be enabled automatically. We have identified a number of optimizations that apply to all functions and implemented these generically in the SimpleFunctionAdapter. In this way, we can achieve the good of the two worlds and gain **Simplicity**, **Efficiency** and **Reliability** for most functions.
+
+In the past year we have been working on several improvements on the simple function interface on both the `expressivity` and `performance` axes that we will discuss in this series of notes. In this blogpost, we will talk about
+some of the general optimizations that we have in the adapter.
+
+# General optimizations
+
+**Vector reuse**
+
+If the output type matches one of the inputs types, and the input vector is to die after the function invocations, then it is possible to reuse it for the results instead of allocating a new vector.
+
+**Bulk null setting**
+
+Nulls are represented in bit vectors, hence, writing each bit can be expensive specially for primitive operations(like plus and minus). One optimization is
+to optimize for the not null case, and bulk setting the nulls to not null (64 bits in one instruction). After that during the computation, only if the results are null, the null bit is set to null.
+
+**Null setting avoidance**
+
+The adapter can infer if a function never generates null statically. In the simple function interface if the `call` function return's type is `void`, it means the output is never null, and if it's `bool`, then the user should return true for not null and false for null).
+When the function does not generate nulls, then null setting is completely avoided during the computation (only the previous bull setting is needed). The consequence of that is that the hot loop applying the function becomes simdizable triggering a huge boost in performance for primitive operations.
+
+
+**Encoding based fast path**
+
+Vectors in velox can have difrerent encodings (flat, constant..etc). The generic way of reading a vector of arbitrary encoding is to use a decoded vectors that gurantees correct data access. That translates into an overhead each time an input values is accessed
+(we need to check the encoding of the vector to know how to read the value for every row).
+
+When the function is a primitive operation like plus or minus, such overhead is expensive! to avoid that we can
+encoding based fast paths, the code snippet bellow illustrates the idea.
+<figure>
+ <img src="/img/simple1_11.png" width="60%"/>
+</figure>
+
+In the code above, the overhead of checking the encoding is switched outside the loop that applies the functions (the plus operation here).
+One issue with this optimizations is that the core loop is replicated many times. In general, the numbers of times it will be replicated
+is n^m where n is number of args, and m: is number of encodings.
+
+To avoid code size blowing, we only apply this optimization when all input arguments are primitives and the number of inputs arguments is <=3.
+The figure bellow shows the effet of this optimization on per row the proccessing time.
+<figure>
+ <img src="/img/simple1_12.png"  width="70%"  />
+</figure>
+To gain the benifits of the two worlds when the condition for specialzing for all encodings are not met, we have a psuedo specialization mode that does not blow up the code size, but still reduce the overhead of decoding to a single multiplication per arg. This mode is enabled when all the primitive arguments are either flat or constant. The code bellow illustrates the idea:
+<figure>
+ <img src="/img/simple1_13.png" width="60%" />
+</figure>
+
+When the input vector is constant we can read the value always from index 0 of the values vectors, and when it flat  we can read it from the index row this can be be acheived by assigning a factor to either 0 or 1 and reduce the decoding operation per row into that operation. Note that such a miultiplication does not prevent simd.
+
+**ASCII fast path**
+
+Functions with string inputs can be optimized when the inputs are known to be ascii. For example the length function
+for ascii strings is the size of the StringView O(1). But for non-ascii inputs the computations it is more complicated O(n) operation.
+User's can define a function `callAscii()` that will be called when all the string inputs arguments are ascii.
+
+<figure>
+ <img src="/img/simple1_10.png" width ="70%"/>
+</figure>
+
+
+**Constant inputs pre-proccessing**
+
+Users can pre-proccess constant inputs of functions query to avoid repeated computation by definiting initialize function which is called once during query compilations and receives constant inputs . More information about this can be found here
+<a href="https://facebookincubator.github.io/velox/develop/scalar-functions.html#access-to-session-properties-and-constant-inputs">here</a>.
