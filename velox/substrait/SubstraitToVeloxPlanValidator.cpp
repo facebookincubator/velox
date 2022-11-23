@@ -202,6 +202,8 @@ bool SubstraitToVeloxPlanValidator::validate(
     switch (types[i]->kind()) {
       case TypeKind::DATE:
         return false;
+      case TypeKind::ARRAY:
+        return false;
       default:;
     }
   }
