@@ -152,7 +152,7 @@ commands:
 executors:
   build:
     docker:
-      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
+      - image : prestocpp/velox-avx-circleci:kpai-20221123
     resource_class: 2xlarge
     environment:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
@@ -234,6 +234,12 @@ jobs:
             make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
             ccache -s
           no_output_timeout: 1h
+      - run:
+          name: "Build and Test PyVelox"
+          command: |
+            conda create -y --name pyveloxenv python=3.7
+            conda activate pyveloxenv
+            make python-test
       - run:
           name: "Run Unit Tests"
           command: |
