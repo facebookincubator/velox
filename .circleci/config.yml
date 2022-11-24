@@ -300,7 +300,50 @@ jobs:
             # upgrade python to 3.8 for this job
             yum install -y python38
             pip3.8 install -r scripts/benchmark-requirements.txt
-      - run-benchmarks
+      - run:
+          name: "Run Benchmarks - A"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/a/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - B"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/b/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - Summary"
+          command: |
+            ./scripts/benchmark-runner.py compare --baseline_path  /tmp/a/ --target_path /tmp/b/ || true
+      - run:
+          name: "Run Benchmarks - C"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/c/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - D"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/d/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - Summary"
+          command: |
+            ./scripts/benchmark-runner.py compare --baseline_path  /tmp/c/ --target_path /tmp/d/ || true
+      - run:
+          name: "Run Benchmarks - E"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/e/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - F"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/f/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - Summary"
+          command: |
+            ./scripts/benchmark-runner.py compare --baseline_path  /tmp/e/ --target_path /tmp/f/ || true
+
+      #- run-benchmarks
       # TODO: Disabling conbench github notifications for now until results are more stable.
       #- run:
       #  name: "Analyze Benchmark Regressions and Post to Github"
@@ -331,7 +374,50 @@ jobs:
           name: "Install benchmark dependencies"
           command: |
             pip3 install -r scripts/benchmark-requirements.txt
-      - run-benchmarks
+      - run:
+          name: "Run Benchmarks - A"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/a/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - B"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/b/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - Summary"
+          command: |
+            ./scripts/benchmark-runner.py compare --baseline_path  /tmp/a/ --target_path /tmp/b/ || true
+      - run:
+          name: "Run Benchmarks - C"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/c/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - D"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/d/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - Summary"
+          command: |
+            ./scripts/benchmark-runner.py compare --baseline_path  /tmp/c/ --target_path /tmp/d/ || true
+      - run:
+          name: "Run Benchmarks - E"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/e/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - F"
+          command: |
+            ./scripts/benchmark-runner.py run --bm_estimate_time --output_path /tmp/f/ #--bm_max_secs 10 --bm_max_trials 10000
+          no_output_timeout: 1h
+      - run:
+          name: "Run Benchmarks - Summary"
+          command: |
+            ./scripts/benchmark-runner.py compare --baseline_path  /tmp/e/ --target_path /tmp/f/ || true
+
+      #- run-benchmarks
       # TODO: Disabling conbench github notifications for now until results are more stable.
       #- run:
       #    name: "Analyze Benchmark Regressions and Post to Github"
