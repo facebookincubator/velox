@@ -90,6 +90,9 @@ class DecimalUtil {
       const int toPrecision,
       const int toScale,
       const bool nullOnFailure) {
+    static_assert(
+        std::is_same_v<TOutput, UnscaledShortDecimal> ||
+        std::is_same_v<TOutput, UnscaledLongDecimal>);
     int128_t rescaledValue = inputValue;
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
@@ -104,12 +107,11 @@ class DecimalUtil {
           inputValue,
           toPrecision,
           toScale);
+    }
+    if constexpr (std::is_same_v<TOutput, UnscaledShortDecimal>) {
+      return UnscaledShortDecimal(static_cast<int64_t>(rescaledValue));
     } else {
-      if constexpr (std::is_same_v<TOutput, UnscaledShortDecimal>) {
-        return UnscaledShortDecimal(static_cast<int64_t>(rescaledValue));
-      } else {
-        return UnscaledLongDecimal(static_cast<int64_t>(rescaledValue));
-      }
+      return UnscaledLongDecimal(rescaledValue);
     }
   }
 
