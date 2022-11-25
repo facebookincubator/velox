@@ -335,9 +335,19 @@ std::vector<column_index_t> toChannels(
 
 column_index_t exprToChannel(
     const core::ITypedExpr* expr,
-    const TypePtr& type) {
+    const TypePtr& type,
+    bool lastChannel) {
   if (auto field = dynamic_cast<const core::FieldAccessTypedExpr*>(expr)) {
-    return type->as<TypeKind::ROW>().getChildIdx(field->name());
+    auto& rowType = type->asRow();
+    if (!lastChannel) {
+      return rowType.getChildIdx(field->name());
+    }
+    auto& names = rowType.names();
+    auto it = std::find(names.rbegin(), names.rend(), field->name());
+    if (it == names.rend()) {
+      VELOX_USER_FAIL("Field not found: {}", field->name());
+    }
+    return &*it - names.data();
   }
   if (dynamic_cast<const core::ConstantTypedExpr*>(expr)) {
     return kConstantChannel;

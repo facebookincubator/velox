@@ -1305,6 +1305,31 @@ TEST_F(AggregationTest, groupingSetsOutput) {
   assertEqualResults(orderResult.second, reversedOrderResult.second);
 }
 
+TEST_F(AggregationTest, overlappingKeyGroupingSets) {
+  vector_size_t size = 10;
+  auto data = makeRowVector(
+      {"k1", "k2"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row % 2; }),
+          makeFlatVector<int64_t>(size, [](auto row) { return row % 3; }),
+      });
+
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .groupId({{"k1"}, {"k2"}}, {"k2", "k2"})
+                  .singleAggregation(
+                      {"k1", "k2", "group_id"},
+                      {"sum(k2) as sum_k2", "max(k2) as max_k2"})
+                  .project({"k1", "k2", "sum_k2", "max_k2"})
+                  .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1, k2, sum(k2), max(k2) FROM tmp GROUP BY GROUPING SETS ((k1), (k2))");
+}
+
 TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
   rowType_ = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
   VectorFuzzer::Options options;

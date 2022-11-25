@@ -60,7 +60,13 @@ StreamingAggregation::StreamingAggregation(
     std::vector<TypePtr> argTypes;
     for (auto& arg : aggregate->inputs()) {
       argTypes.push_back(arg->type());
-      channels.push_back(exprToChannel(arg.get(), inputType));
+      // In case of the present of GroupId, there could be duplicated column
+      // names if the grouping key also shows up in aggregate inputs.  The
+      // grouping key column could be set to NULL but the input column is
+      // unchanged.  As per implementation of GroupId, keys are always ordered
+      // before the inputs.  Here we need to get the channel of input, thus must
+      // search backward to get the last column with the name.
+      channels.push_back(exprToChannel(arg.get(), inputType, true));
       if (channels.back() == kConstantChannel) {
         auto constant = static_cast<const core::ConstantTypedExpr*>(arg.get());
         constants.push_back(BaseVector::createConstant(

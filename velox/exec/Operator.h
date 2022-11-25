@@ -475,7 +475,8 @@ std::vector<column_index_t> toChannels(
 
 column_index_t exprToChannel(
     const core::ITypedExpr* FOLLY_NONNULL expr,
-    const TypePtr& type);
+    const TypePtr& type,
+    bool lastChannel = false);
 
 /// Given a source output type and target input type we return the indices of
 /// the target input columns in the source output type.
