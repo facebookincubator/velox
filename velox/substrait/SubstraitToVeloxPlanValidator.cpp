@@ -51,6 +51,13 @@ bool SubstraitToVeloxPlanValidator::validateInputTypes(
 
 bool SubstraitToVeloxPlanValidator::validate(
     const ::substrait::FetchRel& fetchRel) {
+  const auto& extension = fetchRel.advanced_extension();
+  std::vector<TypePtr> types;
+  if (!validateInputTypes(extension, types)) {
+    std::cout << "Validation failed for input types in FetchRel." << std::endl;
+    return false;
+  }
+
   if (fetchRel.offset() < 0 || fetchRel.count() < 0) {
     std::cout << "Offset and count should be valid." << std::endl;
     return false;
@@ -195,7 +202,7 @@ bool SubstraitToVeloxPlanValidator::validate(
     return false;
   }
 
-  // In velox, the supported hash type in projectNode is 
+  // In velox, the supported hash type in projectNode is
   // BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, VARCHAR, VARBINARY
   // REAL, DOUBLE. Hash.cpp (L148 - L156)
   for (auto i = 0; i < types.size(); i++) {
