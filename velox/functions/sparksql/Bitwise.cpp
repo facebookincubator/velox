@@ -33,9 +33,27 @@ struct BitwiseOrFunction {
   }
 };
 
+template <typename T>
+struct ShiftLeftFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
+    result = a << b;
+  }
+};
+
+template <typename T>
+struct ShiftRightFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
+    result = a >> b;
+  }
+};
+
 void registerBitwiseFunctions(const std::string& prefix) {
   registerBinaryIntegral<BitwiseAndFunction>({prefix + "bitwise_and"});
   registerBinaryIntegral<BitwiseOrFunction>({prefix + "bitwise_or"});
+  registerBinaryIntegral<ShiftLeftFunction>({prefix + "shiftleft"});
+  registerBinaryIntegral<ShiftRightFunction>({prefix + "shiftright"});
 }
 
 } // namespace facebook::velox::functions::sparksql
