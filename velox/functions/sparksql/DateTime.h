@@ -260,7 +260,7 @@ struct DayOfWeekFunction : public InitSessionTimezone<T>,
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE int64_t getDayOfWeek(const std::tm& time) {
-    return time.tm_wday == 0 ? 7 : time.tm_wday;
+    return time.tm_wday + 1 == 0 ? 7 : time.tm_wday + 1;
   }
 
   template <typename TInput>

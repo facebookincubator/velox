@@ -18,6 +18,7 @@ add_executable(
   ArraySortTest.cpp
   BitwiseTest.cpp
   CompareNullSafeTests.cpp
+  DateTimeTest.cpp
   HashTest.cpp
   InTest.cpp
   LeastGreatestTest.cpp
