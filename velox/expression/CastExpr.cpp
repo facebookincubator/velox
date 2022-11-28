@@ -123,7 +123,6 @@ void applyCastBigintToDecimalKernel(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
-    const TypePtr& fromType,
     const TypePtr& toType,
     VectorPtr castResult,
     const bool nullOnFailure) {
@@ -553,11 +552,11 @@ VectorPtr CastExpr::applyDecimal(
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
         auto* inputVector = input.asUnchecked<SimpleVector<int64_t>>();
         applyCastBigintToDecimalKernel<UnscaledShortDecimal>(
-            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+            rows, input, context, toType, castResult, nullOnFailure_);
       } else {
         auto* inputVector = input.asUnchecked<SimpleVector<int64_t>>();
         applyCastBigintToDecimalKernel<UnscaledLongDecimal>(
-            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+            rows, input, context, toType, castResult, nullOnFailure_);
       }
       break;
     }
