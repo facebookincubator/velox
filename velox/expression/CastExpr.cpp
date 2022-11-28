@@ -550,11 +550,9 @@ VectorPtr CastExpr::applyDecimal(
     }
     case TypeKind::BIGINT: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        auto* inputVector = input.asUnchecked<SimpleVector<int64_t>>();
         applyCastBigintToDecimalKernel<UnscaledShortDecimal>(
             rows, input, context, toType, castResult, nullOnFailure_);
       } else {
-        auto* inputVector = input.asUnchecked<SimpleVector<int64_t>>();
         applyCastBigintToDecimalKernel<UnscaledLongDecimal>(
             rows, input, context, toType, castResult, nullOnFailure_);
       }
