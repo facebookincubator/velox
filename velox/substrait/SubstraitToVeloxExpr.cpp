@@ -226,12 +226,13 @@ SubstraitVeloxExprConverter::toExtractExpr(
     std::vector<std::shared_ptr<const core::ITypedExpr>> exprParams;
     exprParams.reserve(1);
     exprParams.emplace_back(params[1]);
-    if (from == "YEAR") {
-      // Use PrestoSql year function.
+    auto iter = extractDatetimeFunctionMap_.find(from);
+    if (iter != extractDatetimeFunctionMap_.end()) {
       return std::make_shared<const core::CallTypedExpr>(
-          outputType, std::move(exprParams), "year");
+        outputType, std::move(exprParams), iter->second);
+    } else {
+      VELOX_NYI("Extract from {} not supported.", from);
     }
-    VELOX_NYI("Extract from {} not supported.", from);
   }
   VELOX_FAIL("Constant is expected to be the first parameter in extract.");
 }
