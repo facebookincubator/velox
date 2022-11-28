@@ -66,18 +66,4 @@ html_theme = 'pydata_sphinx_theme'
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
 
-#html_extra_path = ['../../doxygen/html']
-
-html_context = {
-    "github_user": "apache",
-    "github_repo": "arrow-nanoarrow",
-    "github_version": "main",
-    "doc_path": "docs/source",
-}
-
-# html_sidebars = {
-#     "**": ["search-field", "sidebar-nav-bs"]
-# }
-
-
 add_module_names = False
