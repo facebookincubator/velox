@@ -56,7 +56,7 @@ USE_CCACHE=-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 endif
 endif
 
-NUM_THREADS ?= 8#$(shell getconf _NPROCESSORS_CONF 2>/dev/null || echo 1)
+NUM_THREADS ?= $(shell getconf _NPROCESSORS_CONF 2>/dev/null || echo 1)
 CPU_TARGET ?= "avx"
 
 FUZZER_SEED ?= 123456
@@ -159,6 +159,3 @@ python-build:
 
 python-test: python-build
 	DEBUG=1 ${PYTHON_EXECUTABLE} -m unittest -v
-
-python-test-out: python-build
-	DEBUG=1 ${PYTHON_EXECUTABLE} -m unittest -v -s
