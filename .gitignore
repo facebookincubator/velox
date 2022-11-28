@@ -311,3 +311,9 @@ src/amalgamation/
 .cproject
 .settings
 ~
+
+#docs
+docs/doxygen/html/*
+docs/doxygen/latex/*
+docs/doxygen/xml/*
+docs/sphinx/source/README_generated_*
