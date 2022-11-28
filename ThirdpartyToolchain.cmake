@@ -32,6 +32,8 @@
 include(FetchContent)
 include(CheckCXXCompilerFlag)
 
+# Enable SSL certificate verification for file downloads
+set(CMAKE_TLS_VERIFY true)
 # ================================ FOLLY =======================================
 
 if(DEFINED ENV{VELOX_FOLLY_URL})
