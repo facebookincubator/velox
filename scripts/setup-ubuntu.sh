@@ -51,7 +51,8 @@ sudo --preserve-env apt install -y \
   bison \
   flex \
   tzdata \
-  wget
+  wget \
+  conda
 
 function run_and_time {
   time "$@"
