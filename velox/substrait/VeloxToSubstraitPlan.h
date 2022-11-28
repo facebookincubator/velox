@@ -73,6 +73,24 @@ class VeloxToSubstraitPlanConvertor {
       const std::shared_ptr<const core::AggregationNode>& aggregateNode,
       ::substrait::AggregateRel* aggregateRel);
 
+  /// Convert Velox OrderBy Node into Substrait SortRel.
+  void toSubstrait(
+      google::protobuf::Arena& arena,
+      const std::shared_ptr<const core::OrderByNode>& orderByNode,
+      ::substrait::SortRel* sortRel);
+
+  /// Convert Velox TopN Node into Substrait TopNRel.
+  void toSubstrait(
+      google::protobuf::Arena& arena,
+      const std::shared_ptr<const core::TopNNode>& topNNode,
+      ::substrait::TopNRel* topNRel);
+
+  /// Convert Velox Limit Node into Substrait FetchRel.
+  void toSubstrait(
+      google::protobuf::Arena& arena,
+      const std::shared_ptr<const core::LimitNode>& limitNode,
+      ::substrait::FetchRel* fetchRel);
+
   /// The Expression converter used to convert Velox representations into
   /// Substrait expressions.
   VeloxToSubstraitExprConvertorPtr exprConvertor_;

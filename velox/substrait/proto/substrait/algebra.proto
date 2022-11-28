@@ -194,6 +194,10 @@ message FetchRel {
   int64 offset = 3;
   // the amount of records to return
   int64 count = 4;
+  // A Boolean indicating whether the node generates partial
+  // results on local workers or finalizes the partial results.
+  bool is_partial = 5;
+
   substrait.extensions.AdvancedExtension advanced_extension = 10;
 }
 
@@ -232,6 +236,24 @@ message SortRel {
   RelCommon common = 1;
   Rel input = 2;
   repeated SortField sorts = 3;
+
+  // True if this node only sorts a portion of the final result. If it is true,
+  // a local merge or merge exchange is required to merge the sorted runs.
+  bool is_partial = 4;
+  substrait.extensions.AdvancedExtension advanced_extension = 10;
+}
+
+// The Top-N relational operator.
+message TopNRel {
+  RelCommon common = 1;
+  Rel input = 2;
+  repeated SortField sorts = 3;
+  // The offset expressed in number of records. Optional, defaults to 0.
+  int64 offset = 4;
+  // The amount of records to return.
+  int64 count = 5;
+  bool is_partial = 6;
+
   substrait.extensions.AdvancedExtension advanced_extension = 10;
 }
 
@@ -362,6 +384,7 @@ message Rel {
     ExtensionMultiRel extension_multi = 10;
     ExtensionLeafRel extension_leaf = 11;
     CrossRel cross = 12;
+    TopNRel top_n = 13;
   }
 }
 
