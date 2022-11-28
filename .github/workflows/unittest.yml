@@ -1,0 +1,26 @@
+name: Velox Unit Tests Suite
+
+on:
+  pull_request
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+
+  velox-test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v2
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y cmake ccache build-essential
+      - run: sudo apt-get install -y maven
+      - run: sudo apt-get install -y libboost-all-dev libcurl4-openssl-dev
+      - run: sudo apt-get install -y libssl-dev
+      - run: sudo apt-get install -y libz-dev
+      - name: Compile C++ unit tests
+        run: |
+          git submodule sync --recursive && git submodule update --init --recursive
+          ./scripts/setup-ubuntu.sh 
+          make release EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
