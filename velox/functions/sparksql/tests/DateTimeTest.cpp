@@ -17,8 +17,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Date.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
