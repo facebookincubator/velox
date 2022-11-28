@@ -119,7 +119,7 @@ void applyDecimalCastKernel(
 }
 
 template <typename TOutput>
-void applyCastBigintToDecimalKernel(
+void applyBigintToDecimalCastKernel(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
@@ -550,10 +550,10 @@ VectorPtr CastExpr::applyDecimal(
     }
     case TypeKind::BIGINT: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyCastBigintToDecimalKernel<UnscaledShortDecimal>(
+        applyBigintToDecimalCastKernel<UnscaledShortDecimal>(
             rows, input, context, toType, castResult, nullOnFailure_);
       } else {
-        applyCastBigintToDecimalKernel<UnscaledLongDecimal>(
+        applyBigintToDecimalCastKernel<UnscaledLongDecimal>(
             rows, input, context, toType, castResult, nullOnFailure_);
       }
       break;

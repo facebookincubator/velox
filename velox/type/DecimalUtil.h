@@ -93,7 +93,7 @@ class DecimalUtil {
     static_assert(
         std::is_same_v<TOutput, UnscaledShortDecimal> ||
         std::is_same_v<TOutput, UnscaledLongDecimal>);
-    int128_t rescaledValue = inputValue;
+    int128_t rescaledValue = static_cast<int128_t>(inputValue);
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
     // Check overflow.
