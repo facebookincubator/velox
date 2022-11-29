@@ -227,6 +227,7 @@ macro(build_icu4c)
   # icu.
   set(ICU_LIBRARIES ${ICU_LIBRARY_DIR}/libicuuc.so)
 
+  # We can not use FetchContent as ICU does not use cmake
   ExternalProject_Add(
     ICU
     URL ${ICU4C_SOURCE_URL}
@@ -239,7 +240,7 @@ macro(build_icu4c)
     INSTALL_COMMAND ${HOST_ENV_CMAKE} ${MAKE_PROGRAM} install)
 endmacro()
 
-# ================================ END ICU$C ================================
+# ================================ END ICU4C ================================
 
 macro(build_dependency DEPENDENCY_NAME)
   if("${DEPENDENCY_NAME}" STREQUAL "folly")
