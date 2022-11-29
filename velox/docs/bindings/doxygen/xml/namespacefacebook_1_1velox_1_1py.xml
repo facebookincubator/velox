@@ -1,0 +1,80 @@
+<?xml version='1.0' encoding='UTF-8' standalone='no'?>
+<doxygen xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="compound.xsd" version="1.9.5" xml:lang="en-US">
+  <compounddef id="namespacefacebook_1_1velox_1_1py" kind="namespace" language="C++">
+    <compoundname>facebook::velox::py</compoundname>
+      <sectiondef kind="func">
+      <memberdef kind="function" id="group__pyvelox-type-serialization_1gabc79f16e7823ab840cb02f08d4c578d1" prot="public" static="no" const="no" explicit="no" inline="no" virt="non-virtual">
+        <type>std::string</type>
+        <definition>std::string facebook::velox::py::serializeType</definition>
+        <argsstring>(const std::shared_ptr&lt; const velox::Type &gt; &amp;type)</argsstring>
+        <name>serializeType</name>
+        <qualifiedname>facebook::velox::py::serializeType</qualifiedname>
+        <param>
+          <type>const std::shared_ptr&lt; const velox::Type &gt; &amp;</type>
+          <declname>type</declname>
+        </param>
+        <briefdescription>
+<para>serialize Type </para>
+        </briefdescription>
+        <detaileddescription>
+        </detaileddescription>
+        <inbodydescription>
+        </inbodydescription>
+        <location file="/home/asus/github/fork/velox/pyvelox/pyvelox.cpp" line="23" column="13" bodyfile="/home/asus/github/fork/velox/pyvelox/pyvelox.cpp" bodystart="23" bodyend="26" declfile="/home/asus/github/fork/velox/pyvelox/pyvelox.h" declline="34" declcolumn="13"/>
+      </memberdef>
+      <memberdef kind="function" id="group__pyvelox-type-serialization_1gacb67e389d06aff815aa745a0221f5a56" prot="public" static="no" const="no" explicit="no" inline="yes" virt="non-virtual">
+        <type>void</type>
+        <definition>void facebook::velox::py::addVeloxBindings</definition>
+        <argsstring>(pybind11::module &amp;m, bool asLocalModule=true)</argsstring>
+        <name>addVeloxBindings</name>
+        <qualifiedname>facebook::velox::py::addVeloxBindings</qualifiedname>
+        <param>
+          <type>pybind11::module &amp;</type>
+          <declname>m</declname>
+        </param>
+        <param>
+          <type>bool</type>
+          <declname>asLocalModule</declname>
+          <defval>true</defval>
+        </param>
+        <briefdescription>
+        </briefdescription>
+        <detaileddescription>
+<para>Adds Velox Python Bindings to the module m.</para>
+<para>This function adds the following bindings:<itemizedlist>
+<listitem><para>velox::TypeKind enum</para>
+</listitem><listitem><para>velox::Type and its derived types</para>
+</listitem><listitem><para>Basic functions on Type and its derived types.</para>
+</listitem></itemizedlist>
+</para>
+<para><parameterlist kind="param"><parameteritem>
+<parameternamelist>
+<parametername>m</parametername>
+</parameternamelist>
+<parameterdescription>
+<para>Module to add bindings too. </para>
+</parameterdescription>
+</parameteritem>
+<parameteritem>
+<parameternamelist>
+<parametername>asLocalModule</parametername>
+</parameternamelist>
+<parameterdescription>
+<para>If true then these bindings are only visible inside the module. Refer to <ulink url="https://pybind11.readthedocs.io/en/stable/advanced/classes.html#module-local-class-bindings">https://pybind11.readthedocs.io/en/stable/advanced/classes.html#module-local-class-bindings</ulink> for further details. </para>
+</parameterdescription>
+</parameteritem>
+</parameterlist>
+</para>
+        </detaileddescription>
+        <inbodydescription>
+        </inbodydescription>
+        <location file="/home/asus/github/fork/velox/pyvelox/pyvelox.h" line="48" column="13" bodyfile="/home/asus/github/fork/velox/pyvelox/pyvelox.h" bodystart="48" bodyend="176"/>
+      </memberdef>
+      </sectiondef>
+    <briefdescription>
+    </briefdescription>
+    <detaileddescription>
+    </detaileddescription>
+    <location file="/home/asus/github/fork/velox/pyvelox/pyvelox.cpp" line="19" column="1"/>
+  </compounddef>
+</doxygen>

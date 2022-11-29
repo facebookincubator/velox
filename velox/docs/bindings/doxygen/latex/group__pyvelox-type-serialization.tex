@@ -1,0 +1,38 @@
+\hypertarget{group__pyvelox-type-serialization}{}\doxysection{Pyvelox-\/type-\/serialization}
+\label{group__pyvelox-type-serialization}\index{Pyvelox-\/type-\/serialization@{Pyvelox-\/type-\/serialization}}
+\doxysubsection*{Functions}
+\begin{DoxyCompactItemize}
+\item 
+\mbox{\Hypertarget{group__pyvelox-type-serialization_gabc79f16e7823ab840cb02f08d4c578d1}\label{group__pyvelox-type-serialization_gabc79f16e7823ab840cb02f08d4c578d1}} 
+std\+::string {\bfseries facebook\+::velox\+::py\+::serialize\+Type} (const std\+::shared\+\_\+ptr$<$ const velox\+::\+Type $>$ \&type)
+\begin{DoxyCompactList}\small\item\em serialize Type \end{DoxyCompactList}\item 
+void \mbox{\hyperlink{group__pyvelox-type-serialization_gacb67e389d06aff815aa745a0221f5a56}{facebook\+::velox\+::py\+::add\+Velox\+Bindings}} (pybind11\+::module \&m, bool as\+Local\+Module=true)
+\end{DoxyCompactItemize}
+
+
+\doxysubsection{Detailed Description}
+
+
+\doxysubsection{Function Documentation}
+\mbox{\Hypertarget{group__pyvelox-type-serialization_gacb67e389d06aff815aa745a0221f5a56}\label{group__pyvelox-type-serialization_gacb67e389d06aff815aa745a0221f5a56}} 
+\index{Pyvelox-\/type-\/serialization@{Pyvelox-\/type-\/serialization}!addVeloxBindings@{addVeloxBindings}}
+\index{addVeloxBindings@{addVeloxBindings}!Pyvelox-\/type-\/serialization@{Pyvelox-\/type-\/serialization}}
+\doxysubsubsection{\texorpdfstring{addVeloxBindings()}{addVeloxBindings()}}
+{\footnotesize\ttfamily void facebook\+::velox\+::py\+::add\+Velox\+Bindings (\begin{DoxyParamCaption}\item[{pybind11\+::module \&}]{m,  }\item[{bool}]{as\+Local\+Module = {\ttfamily true} }\end{DoxyParamCaption})\hspace{0.3cm}{\ttfamily [inline]}}
+
+Adds Velox Python Bindings to the module m.
+
+This function adds the following bindings\+:
+\begin{DoxyItemize}
+\item velox\+::\+Type\+Kind enum
+\item velox\+::\+Type and its derived types
+\item Basic functions on Type and its derived types.
+\end{DoxyItemize}
+
+
+\begin{DoxyParams}{Parameters}
+{\em m} & Module to add bindings too. \\
+\hline
+{\em as\+Local\+Module} & If true then these bindings are only visible inside the module. Refer to \href{https://pybind11.readthedocs.io/en/stable/advanced/classes.html\#module-local-class-bindings}{\texttt{ https\+://pybind11.\+readthedocs.\+io/en/stable/advanced/classes.\+html\#module-\/local-\/class-\/bindings}} for further details. \\
+\hline
+\end{DoxyParams}

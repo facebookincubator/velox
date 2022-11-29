@@ -1,0 +1,24 @@
+digraph "Graph Legend"
+{
+ // LATEX_PDF_SIZE
+  bgcolor="transparent";
+  edge [fontname=Helvetica,fontsize=10,labelfontname=Helvetica,labelfontsize=10];
+  node [fontname=Helvetica,fontsize=10,shape=box,height=0.2,width=0.4];
+  Node9 [label="Inherited",height=0.2,width=0.4,color="gray40", fillcolor="grey60", style="filled", fontcolor="black",tooltip=" "];
+  Node10 -> Node9 [dir="back",color="steelblue1",style="solid"];
+  Node10 [label="PublicBase",height=0.2,width=0.4,color="grey40", fillcolor="white", style="filled",URL="url.html",tooltip=" "];
+  Node11 -> Node10 [dir="back",color="steelblue1",style="solid"];
+  Node11 [label="Truncated",height=0.2,width=0.4,color="red", fillcolor="#FFF0F0", style="filled",URL="url.html",tooltip=" "];
+  Node13 -> Node9 [dir="back",color="darkgreen",style="solid"];
+  Node13 [label="ProtectedBase",color="gray40",fillcolor="white",style="filled"];
+  Node14 -> Node9 [dir="back",color="firebrick4",style="solid"];
+  Node14 [label="PrivateBase",color="gray40",fillcolor="white",style="filled"];
+  Node15 -> Node9 [dir="back",color="steelblue1",style="solid"];
+  Node15 [label="Undocumented",height=0.2,width=0.4,color="grey60", fillcolor="#E0E0E0", style="filled",tooltip=" "];
+  Node16 -> Node9 [dir="back",color="steelblue1",style="solid"];
+  Node16 [label="Templ\< int \>",color="gray40",fillcolor="white",style="filled"];
+  Node17 -> Node16 [dir="back",color="orange",style="dashed",label="< int >",];
+  Node17 [label="Templ\< T \>",color="gray40",fillcolor="white",style="filled"];
+  Node18 -> Node9 [dir="back",color="darkorchid3",style="dashed",label="m_usedClass",];
+  Node18 [label="Used",color="gray40",fillcolor="white",style="filled"];
+}

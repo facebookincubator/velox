@@ -1,0 +1,34 @@
+<?xml version='1.0' encoding='UTF-8' standalone='no'?>
+<doxygenindex xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="index.xsd" version="1.9.5" xml:lang="en-US">
+  <compound refid="namespacefacebook" kind="namespace"><name>facebook</name>
+  </compound>
+  <compound refid="namespacefacebook_1_1velox" kind="namespace"><name>facebook::velox</name>
+  </compound>
+  <compound refid="namespacefacebook_1_1velox_1_1py" kind="namespace"><name>facebook::velox::py</name>
+    <member refid="group__pyvelox-type-serialization_1gabc79f16e7823ab840cb02f08d4c578d1" kind="function"><name>serializeType</name></member>
+    <member refid="group__pyvelox-type-serialization_1gacb67e389d06aff815aa745a0221f5a56" kind="function"><name>addVeloxBindings</name></member>
+  </compound>
+  <compound refid="namespacepyvelox" kind="namespace"><name>pyvelox</name>
+  </compound>
+  <compound refid="____init_____8py" kind="file"><name>__init__.py</name>
+  </compound>
+  <compound refid="_c_make_lists_8txt" kind="file"><name>CMakeLists.txt</name>
+    <member refid="_c_make_lists_8txt_1a861db37ab4b19a09a0141cf774f0c64f" kind="function"><name>if</name></member>
+  </compound>
+  <compound refid="pyvelox_8cpp" kind="file"><name>pyvelox.cpp</name>
+  </compound>
+  <compound refid="pyvelox_8h" kind="file"><name>pyvelox.h</name>
+  </compound>
+  <compound refid="_r_e_a_d_m_e_8md" kind="file"><name>README.md</name>
+  </compound>
+  <compound refid="group__pyvelox" kind="group"><name>pyvelox</name>
+  </compound>
+  <compound refid="group__pyvelox-type-serialization" kind="group"><name>pyvelox-type-serialization</name>
+    <member refid="group__pyvelox-type-serialization_1gabc79f16e7823ab840cb02f08d4c578d1" kind="function"><name>serializeType</name></member>
+    <member refid="group__pyvelox-type-serialization_1gacb67e389d06aff815aa745a0221f5a56" kind="function"><name>addVeloxBindings</name></member>
+  </compound>
+  <compound refid="md__home_asus_github_fork_velox_pyvelox__r_e_a_d_m_e" kind="page"><name>md__home_asus_github_fork_velox_pyvelox_README</name>
+  </compound>
+  <compound refid="dir_5ac0d1256b96455ecff498bbce7b6da7" kind="dir"><name>/home/asus/github/fork/velox/pyvelox</name>
+  </compound>
+</doxygenindex>
