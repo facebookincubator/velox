@@ -48,14 +48,14 @@ copyright = "TBD"
 # ones.
 extensions = [
     "breathe",
-    "issue", 
+    "issue",
     "pr",
     "sphinx.ext.autodoc",
     "sphinx.ext.doctest",
     "sphinx.ext.mathjax",
     "sphinx.ext.viewcode",
-    "sphinx.ext.imgmath", 
-    "sphinx.ext.todo"
+    "sphinx.ext.imgmath",
+    "sphinx.ext.todo",
 ]
 
 # Breathe configuration
