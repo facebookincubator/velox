@@ -365,8 +365,10 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
   for (int64_t i = 0; i < sortingKeys.size(); i++) {
     ::substrait::SortField* sortField = sortRel->add_sorts();
-    sortField->mutable_expr()->MergeFrom(
-        exprConvertor_->toSubstraitExpr(arena, sortingKeys[i], inputType));
+    sortField->mutable_expr()->MergeFrom(exprConvertor_->toSubstraitExpr(
+        arena,
+        std::dynamic_pointer_cast<const core::ITypedExpr>(sortingKeys[i]),
+        inputType));
 
     sortField->set_direction(toSortDirection(sortingOrders[i]));
   }
@@ -400,8 +402,10 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
   for (int64_t i = 0; i < sortingKeys.size(); i++) {
     ::substrait::SortField* sortField = topNRel->add_sorts();
-    sortField->mutable_expr()->MergeFrom(
-        exprConvertor_->toSubstraitExpr(arena, sortingKeys[i], inputType));
+    sortField->mutable_expr()->MergeFrom(exprConvertor_->toSubstraitExpr(
+        arena,
+        std::dynamic_pointer_cast<const core::ITypedExpr>(sortingKeys[i]),
+        inputType));
 
     sortField->set_direction(toSortDirection(sortingOrders[i]));
   }
