@@ -44,16 +44,12 @@ class BitwiseTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
-  std::optional<T> shiftLeft(
-      std::optional<T> a,
-      std::optional<T> b) {
+  std::optional<T> shiftLeft(std::optional<T> a, std::optional<T> b) {
     return evaluateOnce<T>("shiftleft(c0, c1)", a, b);
   }
 
   template <typename T>
-  std::optional<T> shiftRight(
-      std::optional<T> a,
-      std::optional<T> b) {
+  std::optional<T> shiftRight(std::optional<T> a, std::optional<T> b) {
     return evaluateOnce<T>("shiftright(c0, c1)", a, b);
   }
 };
