@@ -99,6 +99,18 @@ struct PlanNodeStats {
   /// Number of total splits.
   int numSplits{0};
 
+  /// Total bytes written for spilling.
+  uint64_t spilledBytes{0};
+
+  /// Total rows written for spilling.
+  uint64_t spilledRows{0};
+
+  /// Total spilled partitions.
+  uint32_t spilledPartitions{0};
+
+  /// Total spilled files.
+  uint32_t spilledFiles{0};
+
   /// Add stats for a single operator instance.
   void add(const OperatorStats& stats);
 

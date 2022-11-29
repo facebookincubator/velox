@@ -44,6 +44,11 @@ struct RuntimeMetric {
       RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
       : unit(_unit) {}
 
+  explicit RuntimeMetric(
+      int64_t value,
+      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
+      : unit(_unit), sum{value}, count{1}, min{value}, max{value} {}
+
   void addValue(int64_t value);
 
   void printMetric(std::stringstream& stream) const;
@@ -77,7 +82,7 @@ void setThreadLocalRunTimeStatWriter(
     BaseRuntimeStatWriter* FOLLY_NULLABLE writer);
 
 /// Retrives the current runtime stats writer.
-BaseRuntimeStatWriter* getThreadLocalRunTimeStatWriter();
+BaseRuntimeStatWriter* FOLLY_NULLABLE getThreadLocalRunTimeStatWriter();
 
 /// Writes runtime counter to the current Operator running on that thread.
 void addThreadLocalRuntimeStat(
@@ -87,10 +92,12 @@ void addThreadLocalRuntimeStat(
 /// Scope guard to conveniently set and revert back the current stat writer.
 class RuntimeStatWriterScopeGuard {
  public:
-  RuntimeStatWriterScopeGuard(BaseRuntimeStatWriter* writer)
+  explicit RuntimeStatWriterScopeGuard(
+      BaseRuntimeStatWriter* FOLLY_NULLABLE writer)
       : prevWriter_(getThreadLocalRunTimeStatWriter()) {
     setThreadLocalRunTimeStatWriter(writer);
   }
+
   ~RuntimeStatWriterScopeGuard() {
     setThreadLocalRunTimeStatWriter(prevWriter_);
   }

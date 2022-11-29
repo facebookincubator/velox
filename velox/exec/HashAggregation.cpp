@@ -42,7 +42,10 @@ HashAggregation::HashAggregation(
           driverCtx->queryConfig().partialAggregationGoodPct()),
       maxExtendedPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxExtendedPartialAggregationMemoryUsage()),
-      spillConfig_(operatorCtx_->makeSpillConfig(Spiller::Type::kAggregate)),
+      spillConfig_(
+          isSpillAllowed(aggregationNode)
+              ? operatorCtx_->makeSpillConfig(Spiller::Type::kAggregate)
+              : std::nullopt),
       maxPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {
   VELOX_CHECK_NOT_NULL(memoryTracker_, "Memory usage tracker is not set");
@@ -163,6 +166,11 @@ HashAggregation::HashAggregation(
       operatorCtx_.get());
 }
 
+bool HashAggregation::isSpillAllowed(
+    const std::shared_ptr<const core::AggregationNode>& node) const {
+  return !isDistinct_ && node->preGroupedKeys().empty();
+}
+
 void HashAggregation::addInput(RowVectorPtr input) {
   if (!pushdownChecked_) {
     mayPushdown_ = operatorCtx_->driver()->mayPushdownAggregation(this);
@@ -170,12 +178,13 @@ void HashAggregation::addInput(RowVectorPtr input) {
   }
   groupingSet_->addInput(input, mayPushdown_);
   numInputRows_ += input->size();
-  auto spilledStats = groupingSet_->spilledStats();
   {
+    auto spillStats = groupingSet_->spilledStats();
     auto lockedStats = stats_.wlock();
-    lockedStats->spilledBytes = spilledStats.spilledBytes;
-    lockedStats->spilledRows = spilledStats.spilledRows;
-    lockedStats->spilledPartitions = spilledStats.spilledPartitions;
+    lockedStats->spilledBytes = spillStats.spilledBytes;
+    lockedStats->spilledRows = spillStats.spilledRows;
+    lockedStats->spilledPartitions = spillStats.spilledPartitions;
+    lockedStats->spilledFiles = spillStats.spilledFiles;
   }
 
   // NOTE: we should not trigger partial output flush in case of global
