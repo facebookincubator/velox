@@ -313,7 +313,7 @@ src/amalgamation/
 ~
 
 #docs
-docs/doxygen/html/*
-docs/doxygen/latex/*
-docs/doxygen/xml/*
-docs/sphinx/source/README_generated_*
+velox/docs/bindings/doxygen/html/*
+velox/docs/bindings/doxygen/latex/*
+velox/docs/bindings/doxygen/xml/*
+velox/docs/sphinx/source/README_generated_*
