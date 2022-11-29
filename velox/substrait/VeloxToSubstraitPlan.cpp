@@ -410,7 +410,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     sortField->set_direction(toSortDirection(sortingOrders[i]));
   }
 
-  topNRel->set_offset(0);
   topNRel->set_is_partial(topNNode->isPartial());
   topNRel->set_count(topNNode->count());
   topNRel->mutable_common()->mutable_direct();
