@@ -31,6 +31,7 @@
 
 include(FetchContent)
 include(ExternalProject)
+include(ProcessorCount)
 include(CheckCXXCompilerFlag)
 
 # Enable SSL certificate verification for file downloads
@@ -202,24 +203,23 @@ else()
 endif()
 
 macro(build_icu4c)
+
   message(STATUS "Building ICU4C from source")
 
+  ProcessorCount(NUM_JOBS)
+  set_with_default(NUM_JOBS NUM_THREADS ${NUM_JOBS})
   find_program(MAKE_PROGRAM make)
-  # set(HOST_CFLAGS "${CMAKE_C_FLAGS}") set(HOST_CXXFLAGS "${CMAKE_CXX_FLAGS}")
-  set(HOST_CC "${CMAKE_C_COMPILER}")
-  set(HOST_CXX "${CMAKE_CXX_COMPILER}")
-  set(HOST_LDFLAGS "${CMAKE_MODULE_LINKER_FLAGS}")
-  # set(HOST_CFG ${ICU_CFG})
+
+  set(ICU_CFG --disable-tests --disable-samples)
   set(HOST_ENV_CMAKE
       ${CMAKE_COMMAND}
       -E
       env
-      CC=${HOST_CC}
-      CXX=${HOST_CXX}
-      CFLAGS=${HOST_CFLAGS}
-      CXXFLAGS=${HOST_CXXFLAGS}
-      LDFLAGS=${HOST_LDFLAGS})
-
+      CC="${CMAKE_C_COMPILER}"
+      CXX="${CMAKE_CXX_COMPILER}"
+      CFLAGS="${CMAKE_C_FLAGS}"
+      CXXFLAGS="${CMAKE_CXX_FLAGS}"
+      LDFLAGS="${CMAKE_MODULE_LINKER_FLAGS}")
   set(ICU_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu)
   set(ICU_INCLUDE_DIRS ${ICU_DIR}/include)
   set(ICU_LIBRARY_DIR ${ICU_DIR}/lib/)
@@ -234,7 +234,7 @@ macro(build_icu4c)
     SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu-src
     BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu-bld
     CONFIGURE_COMMAND <SOURCE_DIR>/source/configure --prefix=${ICU_DIR}
-                      --libdir=${ICU_LIBRARY_DIR} ${HOST_CFG}
+                      --libdir=${ICU_LIBRARY_DIR} ${ICU_CFG}
     BUILD_COMMAND ${MAKE_PROGRAM} -j ${NUM_JOBS}
     INSTALL_COMMAND ${HOST_ENV_CMAKE} ${MAKE_PROGRAM} install)
 endmacro()
