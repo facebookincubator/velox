@@ -293,6 +293,7 @@ jobs:
       CONBENCH_HOST: "CircleCI-runner"
       LINUX_DISTRO: "centos"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      ICU_SOURCE: BUNDLED
     steps:
       - pre-steps
       - build-benchmarks
@@ -366,6 +367,7 @@ jobs:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      ICU_SOURCE: BUNDLED
     steps:
       - pre-steps
       - run:
@@ -410,6 +412,7 @@ jobs:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      ICU_SOURCE: BUNDLED
     steps:
       - pre-steps
       - run:
