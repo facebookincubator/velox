@@ -372,7 +372,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   }
 
   sortRel->set_is_partial(orderByNode->isPartial());
-  // TODO: output.
   sortRel->mutable_common()->mutable_direct();
 }
 
@@ -410,7 +409,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   topNRel->set_offset(0);
   topNRel->set_is_partial(topNNode->isPartial());
   topNRel->set_count(topNNode->count());
-  // TODO: output.
+  topNRel->mutable_common()->mutable_direct();
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(
@@ -429,6 +428,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   fetchRel->set_offset(limitNode->offset());
   fetchRel->set_count(limitNode->count());
   fetchRel->set_is_partial(limitNode->isPartial());
+  fetchRel->mutable_common()->mutable_direct();
 }
 
 } // namespace facebook::velox::substrait
