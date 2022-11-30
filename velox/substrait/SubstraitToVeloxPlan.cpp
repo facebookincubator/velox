@@ -198,27 +198,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       childNode);
 }
 
-core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::TopNRel& topNRel) {
-  core::PlanNodePtr childNode;
-  if (topNRel.has_input()) {
-    childNode = toVeloxPlan(topNRel.input());
-  } else {
-    VELOX_FAIL("Child Rel is expected in TopNRel.");
-  }
-
-  auto [sortingKeys, sortingOrders] =
-      processSortField(topNRel.sorts(), childNode->outputType());
-
-  return std::make_shared<core::TopNNode>(
-      nextPlanNodeId(),
-      sortingKeys,
-      sortingOrders,
-      topNRel.count(),
-      topNRel.is_partial(),
-      childNode);
-}
-
 std::pair<
     std::vector<core::FieldAccessTypedExprPtr>,
     std::vector<core::SortOrder>>
@@ -246,9 +225,8 @@ SubstraitVeloxPlanConverter::processSortField(
           std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
               expression));
     }
-
-    return {sortingKeys, sortingOrders};
   }
+  return {sortingKeys, sortingOrders};
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
@@ -272,18 +250,47 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::FetchRel& fetchRel) {
   core::PlanNodePtr childNode;
+  // Check the input of fetchRel, if it's sortRel, convert them into
+  // topNNode. otherwise, to limitNode.
+  ::substrait::SortRel sortRel;
+  bool topNFlag;
   if (fetchRel.has_input()) {
-    childNode = toVeloxPlan(fetchRel.input());
+    topNFlag = fetchRel.input().has_sort();
+    if (topNFlag) {
+      sortRel = fetchRel.input().sort();
+      childNode = toVeloxPlan(sortRel.input());
+    } else {
+      childNode = toVeloxPlan(fetchRel.input());
+    }
   } else {
     VELOX_FAIL("Child Rel is expected in FetchRel.");
   }
 
-  return std::make_shared<core::LimitNode>(
-      nextPlanNodeId(),
-      (int32_t)fetchRel.offset(),
-      (int32_t)fetchRel.count(),
-      fetchRel.is_partial() /*isPartial*/,
-      childNode);
+  if (topNFlag) {
+    auto [sortingKeys, sortingOrders] =
+        processSortField(sortRel.sorts(), childNode->outputType());
+
+    VELOX_CHECK_EQ(
+        sortRel.is_partial(),
+        fetchRel.is_partial(),
+        "The isPartial flag should be the same since they are for the same TopN Node.");
+
+    return std::make_shared<core::TopNNode>(
+        nextPlanNodeId(),
+        sortingKeys,
+        sortingOrders,
+        fetchRel.count(),
+        sortRel.is_partial(),
+        childNode);
+
+  } else {
+    return std::make_shared<core::LimitNode>(
+        nextPlanNodeId(),
+        (int32_t)fetchRel.offset(),
+        (int32_t)fetchRel.count(),
+        fetchRel.is_partial() /*isPartial*/,
+        childNode);
+  }
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
@@ -465,10 +472,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   if (rel.has_sort()) {
     return toVeloxPlan(rel.sort());
   }
-  if (rel.has_top_n()) {
-    return toVeloxPlan(rel.top_n());
-  }
-
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }
 

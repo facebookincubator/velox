@@ -75,11 +75,8 @@ class SubstraitVeloxPlanConverter {
   /// Convert Substrait RelRoot into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::RelRoot& root);
 
-  /// Used to convert Substrait SortRel into Velox PlanNode.
+  /// Convert Substrait SortRel into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::SortRel& sortRel);
-
-  /// Used to convert Substrait TopNRel into Velox PlanNode.
-  core::PlanNodePtr toVeloxPlan(const ::substrait::TopNRel& topNRel);
 
   /// Convert Substrait Plan into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::Plan& substraitPlan);

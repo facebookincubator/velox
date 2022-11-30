@@ -361,7 +361,6 @@ TEST_F(VeloxSubstraitRoundTripTest, topNPartial) {
       plan, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST LIMIT 10");
 }
 
-
 TEST_F(VeloxSubstraitRoundTripTest, topNFilter) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
@@ -383,7 +382,8 @@ TEST_F(VeloxSubstraitRoundTripTest, topNTwoKeys) {
                   .topN({"c0 NULLS FIRST", "c1 DESC NULLS LAST"}, 10, true)
                   .planNode();
   assertPlanConversion(
-      plan, "SELECT * FROM tmp WHERE c0 > 15 ORDER BY c0 NULLS FIRST, c1 DESC NULLS LAST LIMIT 10");
+      plan,
+      "SELECT * FROM tmp WHERE c0 > 15 ORDER BY c0 NULLS FIRST, c1 DESC NULLS LAST LIMIT 10");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, notNullLiteral) {
