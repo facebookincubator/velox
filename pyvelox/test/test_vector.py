@@ -15,21 +15,32 @@
 import pyvelox.pyvelox as pv
 import unittest
 
+
 class TestVeloxVector(unittest.TestCase):
     def test_from_list(self):
         self.assertTrue(isinstance(pv.BaseVector.from_list([1, 2, 3]), pv.BaseVector))
-        self.assertTrue(isinstance(pv.BaseVector.from_list([1, None, None]), pv.BaseVector))
-        self.assertTrue(isinstance(pv.BaseVector.from_list(['hello', 'world']), pv.BaseVector))
+        self.assertTrue(
+            isinstance(pv.BaseVector.from_list([1, None, None]), pv.BaseVector)
+        )
+        self.assertTrue(
+            isinstance(pv.BaseVector.from_list(["hello", "world"]), pv.BaseVector)
+        )
         with self.assertRaises(TypeError):
-            pv.BaseVector.from_list(['hello', 3.14])
+            pv.BaseVector.from_list(["hello", 3.14])
         with self.assertRaises(ValueError):
             pv.BaseVector.from_list([None, None, None])
         with self.assertRaises(ValueError):
             pv.BaseVector.from_list([])
 
     def test_to_string(self):
-        self.assertEqual(str(pv.BaseVector.from_list([1, 2, 3])), '[FLAT BIGINT: 3 elements, no nulls]')
-        self.assertEqual(str(pv.BaseVector.from_list([1, None, 3])), '[FLAT BIGINT: 3 elements, 1 nulls]')
+        self.assertEqual(
+            str(pv.BaseVector.from_list([1, 2, 3])),
+            "[FLAT BIGINT: 3 elements, no nulls]",
+        )
+        self.assertEqual(
+            str(pv.BaseVector.from_list([1, None, 3])),
+            "[FLAT BIGINT: 3 elements, 1 nulls]",
+        )
 
     def test_get_item(self):
         ints = pv.BaseVector.from_list([1, 2, None, None, 3])
@@ -39,13 +50,13 @@ class TestVeloxVector(unittest.TestCase):
         self.assertEqual(ints[3], None)
         self.assertEqual(ints[4], 3)
 
-        strs = pv.BaseVector.from_list(['hello', 'world', None])
-        self.assertEqual(strs[0], 'hello')
-        self.assertEqual(strs[1], 'world')
+        strs = pv.BaseVector.from_list(["hello", "world", None])
+        self.assertEqual(strs[0], "hello")
+        self.assertEqual(strs[1], "world")
         self.assertEqual(strs[2], None)
-        self.assertNotEqual(strs[0], 'world')
-        self.assertNotEqual(strs[2], 'world')
-        
+        self.assertNotEqual(strs[0], "world")
+        self.assertNotEqual(strs[2], "world")
+
         with self.assertRaises(IndexError):
             ints[5]
         with self.assertRaises(IndexError):
@@ -61,21 +72,21 @@ class TestVeloxVector(unittest.TestCase):
         ints[2] = 10
         self.assertEqual(ints[2], 10)
 
-        strs = pv.BaseVector.from_list(['googly', 'doogly'])
-        self.assertEqual(strs[1], 'doogly')
-        strs[1] = 'moogly'
-        self.assertEqual(strs[1], 'moogly')
+        strs = pv.BaseVector.from_list(["googly", "doogly"])
+        self.assertEqual(strs[1], "doogly")
+        strs[1] = "moogly"
+        self.assertEqual(strs[1], "moogly")
 
         with self.assertRaises(IndexError):
             ints[5] = 10
         with self.assertRaises(IndexError):
             ints[-1] = 10
         with self.assertRaises(IndexError):
-            strs[1000] = 'hi'
+            strs[1000] = "hi"
         with self.assertRaises(IndexError):
-            strs[-1000] = 'bye'
+            strs[-1000] = "bye"
         with self.assertRaises(TypeError):
-            ints[3] = 'ni hao'
+            ints[3] = "ni hao"
         with self.assertRaises(TypeError):
             strs[0] = 2
 
@@ -83,7 +94,7 @@ class TestVeloxVector(unittest.TestCase):
         ints = pv.BaseVector.from_list([1, 2, None])
         self.assertEqual(len(ints), 3)
 
-        strs = pv.BaseVector.from_list(['hi', 'bye'])
+        strs = pv.BaseVector.from_list(["hi", "bye"])
         self.assertEqual(len(strs), 2)
 
     def test_numeric_limits(self):

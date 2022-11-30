@@ -15,6 +15,7 @@
 import pyvelox.pyvelox as pv
 import unittest
 
+
 class TestVeloxTypes(unittest.TestCase):
     def test_types(self):
         # Ensure we support all the basic types
