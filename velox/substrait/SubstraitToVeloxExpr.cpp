@@ -341,8 +341,11 @@ SubstraitVeloxExprConverter::toVeloxExpr(
           veloxType, variant::null(veloxType->kind()));
     }
     case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
+      // The data of date type is represented by int32 in substrait. So directly
+      // initializing variant with substraitLit.date() can get the type wrongly
+      // parsed.
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.date()));
+          variant(Date(substraitLit.date())));
     case ::substrait::Expression_Literal::LiteralTypeCase::kList: {
       // Literals in List are put in a constant vector.
       std::vector<::substrait::Expression::Literal> literals;
