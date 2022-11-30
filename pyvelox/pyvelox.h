@@ -31,48 +31,50 @@ std::string serializeType(const std::shared_ptr<const velox::Type>& type);
 
 inline velox::variant pyToVariant(const pybind11::handle& obj) {
   namespace py = pybind11;
-  if (py::isinstance<py::bool_>(obj))
+  if (py::isinstance<py::bool_>(obj)) {
     return velox::variant::create<velox::TypeKind::BOOLEAN>(
         py::cast<bool>(obj));
-  else if (py::isinstance<py::int_>(obj))
+  } else if (py::isinstance<py::int_>(obj)) {
     return velox::variant::create<velox::TypeKind::BIGINT>(
         py::cast<int64_t>(obj));
-  else if (py::isinstance<py::float_>(obj))
+  } else if (py::isinstance<py::float_>(obj)) {
     return velox::variant::create<velox::TypeKind::DOUBLE>(
         py::cast<double>(obj));
-  else if (py::isinstance<py::str>(obj))
+  } else if (py::isinstance<py::str>(obj)) {
     return velox::variant::create<velox::TypeKind::VARCHAR>(
         py::cast<std::string>(obj));
-  else if (obj.is_none())
+  } else if (obj.is_none()) {
     return velox::variant();
-  throw std::domain_error("Invalid type of object");
+  }
+  throw py::type_error("Invalid type of object");
 }
 
 template <typename T>
-inline VectorPtr variantToFlatVector(
+inline VectorPtr variantsToFlatVector(
     const TypePtr& type,
     const std::vector<velox::variant>& variants,
-    std::shared_ptr<facebook::velox::memory::MemoryPool>& pool) {
+    facebook::velox::memory::MemoryPool* pool) {
   std::shared_ptr<FlatVector<T>> result =
-      BaseVector::create<FlatVector<T>>(type, variants.size(), pool.get());
+      BaseVector::create<FlatVector<T>>(type, variants.size(), pool);
   for (int i = 0; i < variants.size(); i++) {
-    if (variants[i].isNull())
+    if (variants[i].isNull()) {
       result->setNull(i, true);
-    else
+    } else {
       result->set(i, variants[i].value<T>());
+    }
   }
   return result;
 }
 
 template <>
-inline VectorPtr variantToFlatVector<velox::StringView>(
+inline VectorPtr variantsToFlatVector<velox::StringView>(
     const TypePtr& type,
     const std::vector<velox::variant>& variants,
-    std::shared_ptr<facebook::velox::memory::MemoryPool>& pool) {
-  velox::StringViewBufferHolder holder(pool.get());
+    facebook::velox::memory::MemoryPool* pool) {
+  velox::StringViewBufferHolder holder(pool);
   std::shared_ptr<FlatVector<velox::StringView>> result =
       BaseVector::create<FlatVector<velox::StringView>>(
-          type, variants.size(), pool.get());
+          type, variants.size(), pool);
   for (int i = 0; i < variants.size(); i++) {
     if (variants[i].isNull()) {
       result->setNull(i, true);
@@ -88,35 +90,124 @@ inline VectorPtr variantToFlatVector<velox::StringView>(
 
 inline VectorPtr pyListToVector(
     const pybind11::list& list,
-    std::shared_ptr<facebook::velox::memory::MemoryPool>& pool) {
+    facebook::velox::memory::MemoryPool* pool) {
+  namespace py = pybind11;
   std::vector<velox::variant> variants;
-  for (auto item : list)
+  variants.reserve(list.size());
+  for (auto item : list) {
     variants.push_back(pyToVariant(item));
+  }
 
-  if (variants.empty())
-    return nullptr;
+  if (variants.empty()) {
+    throw py::value_error("Can't create a Velox vector from an empty list");
+  }
 
   velox::TypeKind first_kind = velox::TypeKind::INVALID;
   for (velox::variant& var : variants) {
     if (var.hasValue()) {
-      if (first_kind == velox::TypeKind::INVALID)
+      if (first_kind == velox::TypeKind::INVALID) {
         first_kind = var.kind();
-      else if (var.kind() != first_kind)
-        throw std::domain_error(
+      } else if (var.kind() != first_kind) {
+        throw py::type_error(
             "Velox Vector must consist of items of the same type");
+      }
     }
+  }
+
+  if (first_kind == velox::TypeKind::INVALID) {
+    throw py::value_error(
+        "Can't create a Velox vector consisting of only None");
   }
 
   TypePtr type = fromKindToScalerType(first_kind);
   switch (first_kind) {
     case velox::TypeKind::BOOLEAN:
-      return variantToFlatVector<bool>(type, variants, pool);
+      return variantsToFlatVector<bool>(type, variants, pool);
     case velox::TypeKind::BIGINT:
-      return variantToFlatVector<int64_t>(type, variants, pool);
+      return variantsToFlatVector<int64_t>(type, variants, pool);
     case velox::TypeKind::DOUBLE:
-      return variantToFlatVector<double>(type, variants, pool);
+      return variantsToFlatVector<double>(type, variants, pool);
     case velox::TypeKind::VARCHAR:
-      return variantToFlatVector<velox::StringView>(type, variants, pool);
+      return variantsToFlatVector<velox::StringView>(type, variants, pool);
+    default:
+      throw std::runtime_error("Impossible type detected for velox::variant");
+  }
+}
+
+template <typename T>
+inline pybind11::object getItemFromVector(
+    std::shared_ptr<BaseVector>& v,
+    int64_t idx) {
+  namespace py = pybind11;
+  const FlatVector<T>* flat = v->asFlatVector<T>();
+  return py::cast(flat->valueAt(idx));
+}
+
+template <>
+inline pybind11::object getItemFromVector<velox::StringView>(
+    std::shared_ptr<BaseVector>& v,
+    int64_t idx) {
+  namespace py = pybind11;
+  const FlatVector<velox::StringView>* flat =
+      v->asFlatVector<velox::StringView>();
+  const velox::StringView value = flat->valueAt(idx);
+  py::str result = std::string_view(value);
+  return result;
+}
+
+inline pybind11::object getItemFromVector(
+    std::shared_ptr<BaseVector>& v,
+    int64_t idx) {
+  if (idx < 0 || idx >= v->size())
+    throw std::out_of_range("Index out of range");
+  if (v->isNullAt(idx))
+    return pybind11::none();
+  switch (v->typeKind()) {
+    case velox::TypeKind::BOOLEAN:
+      return getItemFromVector<bool>(v, idx);
+    case velox::TypeKind::BIGINT:
+      return getItemFromVector<int64_t>(v, idx);
+    case velox::TypeKind::DOUBLE:
+      return getItemFromVector<double>(v, idx);
+    case velox::TypeKind::VARCHAR:
+      return getItemFromVector<velox::StringView>(v, idx);
+    default:
+      throw std::runtime_error("Impossible type detected for velox::variant");
+  }
+}
+
+template <typename T>
+inline void setItemInVector(
+    std::shared_ptr<BaseVector>& v,
+    int64_t idx,
+    velox::variant& var) {
+  namespace py = pybind11;
+  FlatVector<T>* flat = v->asFlatVector<T>();
+  flat->set(idx, T{var.value<T>()});
+}
+
+inline void setItemInVector(
+    std::shared_ptr<BaseVector>& v,
+    int64_t idx,
+    pybind11::handle& obj) {
+  namespace py = pybind11;
+
+  if (idx < 0 || idx >= v->size())
+    throw std::out_of_range("Index out of range");
+
+  velox::variant var = pyToVariant(obj);
+  if (var.kind() != v->typeKind())
+    throw py::type_error("Attempted to insert value of mismatched types");
+
+  switch (v->typeKind()) {
+    case velox::TypeKind::BOOLEAN:
+      return setItemInVector<bool>(v, idx, var);
+    case velox::TypeKind::BIGINT:
+      return setItemInVector<int64_t>(v, idx, var);
+    case velox::TypeKind::DOUBLE:
+      return setItemInVector<double>(v, idx, var);
+    case velox::TypeKind::VARCHAR:
+      return setItemInVector<velox::StringView>(v, idx, var);
     default:
       throw std::runtime_error("Impossible type detected for velox::variant");
   }
@@ -261,20 +352,29 @@ inline void addVectorBindings(
     pybind11::module& m,
     bool asModuleLocalDefinitions = true) {
   namespace py = pybind11;
-  std::shared_ptr<facebook::velox::memory::MemoryPool> pool =
-      facebook::velox::memory::getDefaultMemoryPool();
-  py::class_<
-      facebook::velox::BaseVector,
-      std::shared_ptr<facebook::velox::BaseVector>>(
+  using namespace facebook::velox;
+  std::shared_ptr<memory::MemoryPool> pool = memory::getDefaultMemoryPool();
+  py::class_<BaseVector, std::shared_ptr<BaseVector>>(
       m, "BaseVector", py::module_local(asModuleLocalDefinitions))
       .def_static(
           "from_list",
           [pool](const py::list& list) mutable {
-            return pyListToVector(list, pool);
+            return pyListToVector(list, pool.get());
           })
-      .def("__str__", [](std::shared_ptr<facebook::velox::BaseVector>& v) {
-        return v->toString();
-      });
+      .def(
+          "__str__",
+          [](std::shared_ptr<BaseVector>& v) { return v->toString(); })
+      .def("__len__", &BaseVector::size)
+      .def(
+          "__getitem__",
+          [](std::shared_ptr<BaseVector>& v, int64_t idx) {
+            return getItemFromVector(v, idx);
+          })
+      .def(
+          "__setitem__",
+          [](std::shared_ptr<BaseVector>& v, int64_t idx, py::handle& obj) {
+            setItemInVector(v, idx, obj);
+          });
 }
 
 ///  Adds Velox Python Bindings to the module m.
