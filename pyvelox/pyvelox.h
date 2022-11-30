@@ -19,33 +19,120 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+#include <velox/buffer/StringViewBufferHolder.h>
 #include <velox/type/Type.h>
+#include <velox/type/Variant.h>
+#include <velox/vector/FlatVector.h>
 #include "folly/json.h"
 
 namespace facebook::velox::py {
 
 std::string serializeType(const std::shared_ptr<const velox::Type>& type);
 
-///  Adds Velox Python Bindings to the module m.
-///
-/// This function adds the following bindings:
-///   * velox::TypeKind enum
-///   * velox::Type and its derived types
-///   * Basic functions on Type and its derived types.
-///
-///  @param m Module to add bindings too.
-///  @param asLocalModule If true then these bindings are only visible inside
-///  the module. Refer to
-///  https://pybind11.readthedocs.io/en/stable/advanced/classes.html#module-local-class-bindings
-///  for further details.
-inline void addVeloxBindings(pybind11::module& m, bool asLocalModule = true) {
+inline velox::variant pyToVariant(const pybind11::handle& obj) {
+  namespace py = pybind11;
+  if (py::isinstance<py::bool_>(obj))
+    return velox::variant::create<velox::TypeKind::BOOLEAN>(
+        py::cast<bool>(obj));
+  else if (py::isinstance<py::int_>(obj))
+    return velox::variant::create<velox::TypeKind::BIGINT>(
+        py::cast<int64_t>(obj));
+  else if (py::isinstance<py::float_>(obj))
+    return velox::variant::create<velox::TypeKind::DOUBLE>(
+        py::cast<double>(obj));
+  else if (py::isinstance<py::str>(obj))
+    return velox::variant::create<velox::TypeKind::VARCHAR>(
+        py::cast<std::string>(obj));
+  else if (obj.is_none())
+    return velox::variant();
+  throw std::domain_error("Invalid type of object");
+}
+
+template <typename T>
+inline VectorPtr variantToFlatVector(
+    const TypePtr& type,
+    const std::vector<velox::variant>& variants,
+    std::shared_ptr<facebook::velox::memory::MemoryPool>& pool) {
+  std::shared_ptr<FlatVector<T>> result =
+      BaseVector::create<FlatVector<T>>(type, variants.size(), pool.get());
+  for (int i = 0; i < variants.size(); i++) {
+    if (variants[i].isNull())
+      result->setNull(i, true);
+    else
+      result->set(i, variants[i].value<T>());
+  }
+  return result;
+}
+
+template <>
+inline VectorPtr variantToFlatVector<velox::StringView>(
+    const TypePtr& type,
+    const std::vector<velox::variant>& variants,
+    std::shared_ptr<facebook::velox::memory::MemoryPool>& pool) {
+  velox::StringViewBufferHolder holder(pool.get());
+  std::shared_ptr<FlatVector<velox::StringView>> result =
+      BaseVector::create<FlatVector<velox::StringView>>(
+          type, variants.size(), pool.get());
+  for (int i = 0; i < variants.size(); i++) {
+    if (variants[i].isNull()) {
+      result->setNull(i, true);
+    } else {
+      velox::StringView view =
+          holder.getOwnedValue(variants[i].value<std::string>());
+      result->set(i, view);
+    }
+  }
+  result->setStringBuffers(holder.moveBuffers());
+  return result;
+}
+
+inline VectorPtr pyListToVector(
+    const pybind11::list& list,
+    std::shared_ptr<facebook::velox::memory::MemoryPool>& pool) {
+  std::vector<velox::variant> variants;
+  for (auto item : list)
+    variants.push_back(pyToVariant(item));
+
+  if (variants.empty())
+    return nullptr;
+
+  velox::TypeKind first_kind = velox::TypeKind::INVALID;
+  for (velox::variant& var : variants) {
+    if (var.hasValue()) {
+      if (first_kind == velox::TypeKind::INVALID)
+        first_kind = var.kind();
+      else if (var.kind() != first_kind)
+        throw std::domain_error(
+            "Velox Vector must consist of items of the same type");
+    }
+  }
+
+  TypePtr type = fromKindToScalerType(first_kind);
+  switch (first_kind) {
+    case velox::TypeKind::BOOLEAN:
+      return variantToFlatVector<bool>(type, variants, pool);
+    case velox::TypeKind::BIGINT:
+      return variantToFlatVector<int64_t>(type, variants, pool);
+    case velox::TypeKind::DOUBLE:
+      return variantToFlatVector<double>(type, variants, pool);
+    case velox::TypeKind::VARCHAR:
+      return variantToFlatVector<velox::StringView>(type, variants, pool);
+    default:
+      throw std::runtime_error("Impossible type detected for velox::variant");
+  }
+}
+
+inline void addDataTypeBindings(
+    pybind11::module& m,
+    bool asModuleLocalDefinitions = true) {
   // Inlining these bindings since adding them to the cpp file results in a
   // ASAN error.
   using namespace velox;
   namespace py = pybind11;
 
   // Add TypeKind enum.
-  py::enum_<velox::TypeKind>(m, "TypeKind", py::module_local(asLocalModule))
+  py::enum_<velox::TypeKind>(
+      m, "TypeKind", py::module_local(asModuleLocalDefinitions))
       .value("BOOLEAN", velox::TypeKind::BOOLEAN)
       .value("TINYINT", velox::TypeKind::TINYINT)
       .value("SMALLINT", velox::TypeKind::SMALLINT)
@@ -64,37 +151,38 @@ inline void addVeloxBindings(pybind11::module& m, bool asLocalModule = true) {
 
   // Create VeloxType bound to velox::Type.
   py::class_<Type, std::shared_ptr<Type>> type(
-      m, "VeloxType", py::module_local(asLocalModule));
+      m, "VeloxType", py::module_local(asModuleLocalDefinitions));
 
   // Adding all the derived types of Type here.
   py::class_<BooleanType, Type, std::shared_ptr<BooleanType>> booleanType(
-      m, "BooleanType", py::module_local(asLocalModule));
+      m, "BooleanType", py::module_local(asModuleLocalDefinitions));
   py::class_<IntegerType, Type, std::shared_ptr<IntegerType>> integerType(
-      m, "IntegerType", py::module_local(asLocalModule));
+      m, "IntegerType", py::module_local(asModuleLocalDefinitions));
   py::class_<BigintType, Type, std::shared_ptr<BigintType>> bigintType(
-      m, "BigintType", py::module_local(asLocalModule));
+      m, "BigintType", py::module_local(asModuleLocalDefinitions));
   py::class_<SmallintType, Type, std::shared_ptr<SmallintType>> smallintType(
-      m, "SmallintType", py::module_local(asLocalModule));
+      m, "SmallintType", py::module_local(asModuleLocalDefinitions));
   py::class_<TinyintType, Type, std::shared_ptr<TinyintType>> tinyintType(
-      m, "TinyintType", py::module_local(asLocalModule));
+      m, "TinyintType", py::module_local(asModuleLocalDefinitions));
   py::class_<RealType, Type, std::shared_ptr<RealType>> realType(
-      m, "RealType", py::module_local(asLocalModule));
+      m, "RealType", py::module_local(asModuleLocalDefinitions));
   py::class_<DoubleType, Type, std::shared_ptr<DoubleType>> doubleType(
-      m, "DoubleType", py::module_local(asLocalModule));
+      m, "DoubleType", py::module_local(asModuleLocalDefinitions));
   py::class_<TimestampType, Type, std::shared_ptr<TimestampType>> timestampType(
-      m, "TimestampType", py::module_local(asLocalModule));
+      m, "TimestampType", py::module_local(asModuleLocalDefinitions));
   py::class_<VarcharType, Type, std::shared_ptr<VarcharType>> varcharType(
-      m, "VarcharType", py::module_local(asLocalModule));
+      m, "VarcharType", py::module_local(asModuleLocalDefinitions));
   py::class_<VarbinaryType, Type, std::shared_ptr<VarbinaryType>> varbinaryType(
-      m, "VarbinaryType", py::module_local(asLocalModule));
+      m, "VarbinaryType", py::module_local(asModuleLocalDefinitions));
   py::class_<ArrayType, Type, std::shared_ptr<ArrayType>> arrayType(
-      m, "ArrayType", py::module_local(asLocalModule));
+      m, "ArrayType", py::module_local(asModuleLocalDefinitions));
   py::class_<MapType, Type, std::shared_ptr<MapType>> mapType(
-      m, "MapType", py::module_local(asLocalModule));
+      m, "MapType", py::module_local(asModuleLocalDefinitions));
   py::class_<RowType, Type, std::shared_ptr<RowType>> rowType(
-      m, "RowType", py::module_local(asLocalModule));
+      m, "RowType", py::module_local(asModuleLocalDefinitions));
   py::class_<FixedSizeArrayType, Type, std::shared_ptr<FixedSizeArrayType>>
-      fixedArrayType(m, "FixedSizeArrayType", py::module_local(asLocalModule));
+      fixedArrayType(
+          m, "FixedSizeArrayType", py::module_local(asModuleLocalDefinitions));
 
   // Basic operations on Type.
   type.def("__str__", &Type::toString);
@@ -167,6 +255,45 @@ inline void addVeloxBindings(pybind11::module& m, bool asLocalModule = true) {
       "Return the name of the column at the given index",
       py::arg("idx"));
   rowType.def("names", &RowType::names, "Return the names of the columns");
+}
+
+inline void addVectorBindings(
+    pybind11::module& m,
+    bool asModuleLocalDefinitions = true) {
+  namespace py = pybind11;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> pool =
+      facebook::velox::memory::getDefaultMemoryPool();
+  py::class_<
+      facebook::velox::BaseVector,
+      std::shared_ptr<facebook::velox::BaseVector>>(
+      m, "BaseVector", py::module_local(asModuleLocalDefinitions))
+      .def_static(
+          "from_list",
+          [pool](const py::list& list) mutable {
+            return pyListToVector(list, pool);
+          })
+      .def("__str__", [](std::shared_ptr<facebook::velox::BaseVector>& v) {
+        return v->toString();
+      });
+}
+
+///  Adds Velox Python Bindings to the module m.
+///
+/// This function adds the following bindings:
+///   * velox::TypeKind enum
+///   * velox::Type and its derived types
+///   * Basic functions on Type and its derived types.
+///
+///  @param m Module to add bindings too.
+///  @param asModuleLocalDefinitions If true then these bindings are only
+///  visible inside the module. Refer to
+///  https://pybind11.readthedocs.io/en/stable/advanced/classes.html#module-local-class-bindings
+///  for further details.
+inline void addVeloxBindings(
+    pybind11::module& m,
+    bool asModuleLocalDefinitions = true) {
+  addDataTypeBindings(m, asModuleLocalDefinitions);
+  addVectorBindings(m, asModuleLocalDefinitions);
 }
 
 } // namespace facebook::velox::py
