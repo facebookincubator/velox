@@ -1402,5 +1402,134 @@ TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
+// Test verifies that if all input batches are low cardinality, the decision to
+// skip grouping or not is evaluated after each batch.
+TEST_F(AggregationTest, disablePartialAggregationGroupingTestAllBad) {
+  auto makeHighCardinalityBatch = [&]() {
+    return makeRowVector(
+        {makeFlatVector<int32_t>(100, [](auto row) { return row; }),
+         makeFlatVector<int32_t>(100, [](auto row) { return row; })});
+  };
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < 3000; ++i) {
+    vectors.push_back(makeHighCardinalityBatch());
+  }
+
+  createDuckDbTable(vectors);
+
+  // Distinct aggregation.
+  core::PlanNodeId aggNodeId;
+  // Set artifically small memory limit to trigger frequent flush (1
+  // flush/batch). Also enable skip partial agg grouping is high cardinality is
+  // detected.
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(QueryConfig::kAllowSkipPartialAggregationGrouping, "true")
+          .config(QueryConfig::kMaxPartialAggregationMemory, "100")
+          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, "100")
+          .plan(PlanBuilder()
+                    .values(vectors)
+                    .partialAggregation({"c0"}, {"sum(c1)"})
+                    .capturePlanNodeId(aggNodeId)
+                    .finalAggregation()
+                    .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp group by c0");
+  EXPECT_EQ(
+      toPlanStats(task->taskStats())
+          .at(aggNodeId)
+          .customStats.at("disablePartialAggregationGroupingEvaluation")
+          .count,
+      12);
+}
+
+TEST_F(
+    AggregationTest,
+    disablePartialAggregationGroupingTestAllLowCardinality) {
+  auto makeLowCardinalityVector = [&]() {
+    return makeRowVector(
+        {makeFlatVector<int32_t>(1000, [](auto row) { return 1; }),
+         makeFlatVector<int32_t>(1000, [](auto row) { return row; })});
+  };
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < 100; ++i) {
+    vectors.push_back(makeLowCardinalityVector());
+  }
+
+  createDuckDbTable(vectors);
+
+  // Distinct aggregation.
+  core::PlanNodeId aggNodeId;
+  // Set artifically small memory limit to trigger frequent flush (1
+  // flush/batch). Also enable skip partial agg grouping is high cardinality is
+  // detected.
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(QueryConfig::kAllowSkipPartialAggregationGrouping, "true")
+          .config(QueryConfig::kMaxPartialAggregationMemory, "100")
+          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, "100")
+          .plan(PlanBuilder()
+                    .values(vectors)
+                    .partialAggregation({"c0"}, {"sum(c1)"})
+                    .capturePlanNodeId(aggNodeId)
+                    .finalAggregation()
+                    .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp group by c0");
+  EXPECT_EQ(
+      toPlanStats(task->taskStats())
+          .at(aggNodeId)
+          .customStats.at("disablePartialAggregationGroupingEvaluation")
+          .count,
+      100);
+}
+
+// Test that verifies that high cardinality will cause skipping grouping to
+// occur and afterwards, low cardinality input will gradually bring the interval
+// back down.
+TEST_F(AggregationTest, disablePartialAggregationGroupingTestHighToLow) {
+  auto makeHighCardinalityBatch = [&]() {
+    return makeRowVector(
+        {makeFlatVector<int32_t>(50, [](auto row) { return row; }),
+         makeFlatVector<int32_t>(50, [](auto row) { return row; })});
+  };
+  auto makeLowCardinalityBatch = [&]() {
+    return makeRowVector(
+        {makeFlatVector<int32_t>(50, [](auto row) { return 1; }),
+         makeFlatVector<int32_t>(50, [](auto row) { return row; })});
+  };
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < 2000; ++i) {
+    vectors.push_back(makeHighCardinalityBatch());
+  }
+  for (int i = 0; i < 3000; ++i) {
+    vectors.push_back(makeLowCardinalityBatch());
+  }
+
+  createDuckDbTable(vectors);
+
+  // Distinct aggregation.
+  core::PlanNodeId aggNodeId;
+  // Set artifically small memory limit to trigger frequent flush (1
+  // flush/batch). Also enable skip partial agg grouping is high cardinality is
+  // detected.
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(QueryConfig::kAllowSkipPartialAggregationGrouping, "true")
+          .config(QueryConfig::kMaxPartialAggregationMemory, "100")
+          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, "100")
+          .plan(PlanBuilder()
+                    .values(vectors)
+                    .partialAggregation({"c0"}, {"sum(c1)"})
+                    .capturePlanNodeId(aggNodeId)
+                    .finalAggregation()
+                    .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp group by c0");
+  EXPECT_EQ(
+      toPlanStats(task->taskStats())
+          .at(aggNodeId)
+          .customStats.at("disablePartialAggregationGroupingEvaluation")
+          .count,
+      14);
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test

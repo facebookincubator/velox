@@ -20,6 +20,21 @@
 
 namespace facebook::velox::exec {
 
+static uint32_t powersOfTwo[] = {
+    0,
+    1 << 0,
+    1 << 1,
+    1 << 2,
+    1 << 3,
+    1 << 4,
+    1 << 5,
+    1 << 6,
+    1 << 7,
+    1 << 8,
+    1 << 9,
+    1 << 10};
+static uint32_t powersOfTwoLength = sizeof(powersOfTwo) / sizeof(uint32_t);
+
 class HashAggregation : public Operator {
  public:
   HashAggregation(
@@ -52,6 +67,83 @@ class HashAggregation : public Operator {
   }
 
  private:
+  // Checks if the spilling is allowed for this hash aggregation. As for now, we
+  // don't allow spilling for distinct aggregation
+  // (https://github.com/facebookincubator/velox/issues/3263) and pre-grouped
+  // aggregation (https://github.com/facebookincubator/velox/issues/3264). We
+  // will add support later to re-enable.
+  bool isSpillAllowed(
+      const std::shared_ptr<const core::AggregationNode>& node) const;
+
+  // Think of HashAggregation of a stream of batches, some have low cardinality
+  // and some have high cardinality.
+  // This class checks a batch's cardinality and decide heuristically whether
+  // the following K batches are likely to be high/low cardinality and then
+  // enables/disables hastable grouping in GroupingSet accordingly.
+  // Value of K is selected using exponential back-off.
+  // This class maintains all state (counter, current exponent) associated with
+  // exponential back-off; users of this class simply needs to call
+  // executeIteration after each batch and this class will take care of whether
+  // hashing/grouping will be skipped and how many batches till the next check.
+  // See AggregationTest for examples of live behavior.
+  class SkipPartialAggregationGroupingEvaluator {
+   public:
+    SkipPartialAggregationGroupingEvaluator(const double goodPct)
+        : partialAggregationGoodPct_(goodPct) {}
+
+    void executeIteration(
+        double percent,
+        GroupingSet& groupingSet,
+        folly::Synchronized<OperatorStats>& stats) {
+      if (iterationsUntilNextEvaluation() > 1) {
+        consumeOneIteration();
+        return;
+      }
+      if (iterationsUntilNextEvaluation() == 1) {
+        groupingSet.enableGrouping();
+        consumeOneIteration();
+        return;
+      }
+      if (iterationsUntilNextEvaluation() == 0) {
+        stats.wlock()->addRuntimeStat(
+            "disablePartialAggregationGroupingEvaluation",
+            RuntimeCounter(percent));
+        if (percent < partialAggregationGoodPct_) {
+          decreaseInterval();
+        } else {
+          increaseInterval();
+        }
+        if (iterationsUntilNextEvaluation() != 0) {
+          groupingSet.disableGrouping();
+        }
+      }
+    }
+
+   private:
+    int iterationsUntilNextEvaluation() {
+      return iterationsUntilNextEvaluation_;
+    }
+    void consumeOneIteration() {
+      iterationsUntilNextEvaluation_--;
+    }
+    void increaseInterval() {
+      if (intervalIndex_ + 1 < powersOfTwoLength) {
+        ++intervalIndex_;
+      }
+      iterationsUntilNextEvaluation_ = powersOfTwo[intervalIndex_];
+    }
+    void decreaseInterval() {
+      if (intervalIndex_ > 0) {
+        --intervalIndex_;
+      }
+      iterationsUntilNextEvaluation_ = powersOfTwo[intervalIndex_];
+    }
+
+    const double partialAggregationGoodPct_;
+    uint32_t iterationsUntilNextEvaluation_ = 0;
+    uint32_t intervalIndex_ = 0;
+  };
+
   void prepareOutput(vector_size_t size);
 
   // Invoked to reset partial aggregation state if it was full and has been
@@ -64,7 +156,9 @@ class HashAggregation : public Operator {
   // measure of the effectiveness of the partial aggregation.
   void maybeIncreasePartialAggregationMemoryUsage(double aggregationPct);
 
-  // Maximum number of rows in the output batch.
+  bool considerSkipPartialAggregationGrouping();
+
+  /// Maximum number of rows in the output batch.
   const uint32_t outputBatchSize_;
 
   const bool isPartialOutput_;
@@ -85,6 +179,12 @@ class HashAggregation : public Operator {
   bool pushdownChecked_ = false;
   bool mayPushdown_ = false;
 
+  bool isRawInput_;
+  bool emptyPreGroupedKeyChannels_;
+  bool allowSkipPartialAggregationGrouping_;
+  bool hasVarianceAggregation_;
+  bool hasMasks_;
+
   /// Count the number of input rows. It is reset on partial aggregation output
   /// flush.
   int64_t numInputRows_ = 0;
@@ -94,6 +194,9 @@ class HashAggregation : public Operator {
 
   /// Possibly reusable output vector.
   RowVectorPtr output_;
+
+  SkipPartialAggregationGroupingEvaluator
+      disablePartialAggregationGroupingEvaluator_;
 };
 
 } // namespace facebook::velox::exec

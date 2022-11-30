@@ -183,6 +183,34 @@ void AggregationTestBase::testAggregations(
     assertResults(queryBuilder);
   }
 
+  {
+    SCOPED_TRACE("Run partial + final with partial agg no grouping");
+    PlanBuilder builder(pool());
+    makeSource(builder);
+    builder.partialAggregation(groupingKeys, aggregates).finalAggregation();
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    queryBuilder.config(
+        core::QueryConfig::kAllowSkipPartialAggregationGrouping, "true");
+    assertResults(queryBuilder);
+  }
+
+  {
+    SCOPED_TRACE("Run single");
+    PlanBuilder builder(pool());
+    makeSource(builder);
+    builder.singleAggregation(groupingKeys, aggregates);
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    assertResults(queryBuilder);
+  }
+
   if (!groupingKeys.empty() && allowInputShuffle_) {
     SCOPED_TRACE("Run partial + final with spilling");
     PlanBuilder builder(pool());

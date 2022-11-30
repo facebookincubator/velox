@@ -88,6 +88,10 @@ class QueryConfig {
   static constexpr const char* kMaxExtendedPartialAggregationMemory =
       "max_extended_partial_aggregation_memory";
 
+  /// Skip hashtable grouping in partial aggregation step
+  static constexpr const char* kAllowSkipPartialAggregationGrouping =
+      "skip_partial_aggregation_grouping";
+
   /// Output volume as percentage of input volume below which we will not seek
   /// to increase reduction by using more memory. the data volume is measured as
   /// the number of rows.
@@ -185,6 +189,11 @@ class QueryConfig {
   uint64_t aggregationSpillMemoryThreshold() const {
     static constexpr uint64_t kDefault = 0;
     return get<uint64_t>(kAggregationSpillMemoryThreshold, kDefault);
+  }
+
+  bool allowSkipPartialAggregationGrouping() const {
+    static constexpr bool kDefault = false;
+    return get<bool>(kAllowSkipPartialAggregationGrouping, kDefault);
   }
 
   double partialAggregationGoodPct() const {

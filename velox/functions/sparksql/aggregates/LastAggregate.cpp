@@ -468,7 +468,7 @@ class LastAggregateNonNumeric : public exec::Aggregate {
       clearNull(rawNulls, i);
       ignoreNullVector->set(i, ignoreNull_.value());
       if (isNull(group)) {
-        (*result)->setNull(i, true);
+        baseVector->setNull(i, true);
       } else {
         (*result)->setNull(i, false);
         auto accumulator = value<aggregate::SingleValueAccumulator>(group);

@@ -55,6 +55,7 @@ GroupingSet::GroupingSet(
       isGlobal_(hashers_.empty()),
       isPartial_(isPartial),
       isRawInput_(isRawInput),
+      skipPartialAggregationGrouping_(false),
       aggregates_(std::move(aggregates)),
       masks_{std::move(aggrMaskChannels)},
       channelLists_(std::move(channelLists)),
@@ -112,6 +113,11 @@ bool equalKeys(
 void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
   if (isGlobal_) {
     addGlobalAggregationInput(input, mayPushdown);
+    return;
+  }
+
+  if (skipGrouping()) {
+    addAggregationInputWithoutGrouping(input, mayPushdown);
     return;
   }
 
@@ -297,6 +303,59 @@ void GroupingSet::initializeGlobalAggregation() {
     aggregate->initializeNewGroups(lookup_->hits.data(), singleGroup);
   }
   globalAggregationInitialized_ = true;
+}
+
+void GroupingSet::addAggregationInputWithoutGrouping(
+    const RowVectorPtr& input,
+    bool mayPushdown) {
+  activeRows_.resize(input->size());
+  activeRows_.setAll();
+
+  // CreateHashTable() initializes aggregates_. i.e set offsets
+  if (not table_) {
+    createHashTable();
+  }
+  // Copy over the keys
+  auto& hashers = table_->hashers();
+  if (ignoreNullKeys_) {
+    deselectRowsWithNulls(hashers, activeRows_);
+  }
+
+  const vector_size_t input_size = activeRows_.countSelected();
+  char* groups[input_size];
+
+  // Do not bother with hashing, simply allocate a new RowContainer row for
+  // each input row.
+  for (size_t i = 0; i < input->size(); ++i) {
+    groups[i] = table_->rows()->newRow();
+  }
+
+  vector_size_t row_index[input_size];
+  vector_size_t* row_index_start = &row_index[0];
+  vector_size_t* row_index_last = &row_index[input_size];
+  std::iota(row_index_start, row_index_last, 0);
+  for (auto& aggregate : aggregates_) {
+    aggregate->initializeNewGroups(
+        groups, folly::Range(row_index_start, row_index_start + input_size));
+  }
+
+  for (auto hasher_index = 0; hasher_index < hashers.size(); ++hasher_index) {
+    auto& hasher = *hashers[hasher_index];
+    auto key = input->childAt(hashers[hasher_index]->channel())->loadedVector();
+    hasher.decode(*key, activeRows_);
+    activeRows_.applyToSelected([&](vector_size_t row) {
+      table_->rows()->store(
+          hasher.decodedVector(), row, groups[row], hasher_index);
+    });
+  }
+
+  // Apply each aggregate
+  for (auto i = 0; i < aggregates_.size(); ++i) {
+    populateTempVectors(i, input);
+    aggregates_[i]->addRawInput(groups, activeRows_, tempVectors_, mayPushdown);
+  }
+
+  tempVectors_.clear();
 }
 
 void GroupingSet::addGlobalAggregationInput(

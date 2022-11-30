@@ -92,6 +92,13 @@ class GroupingSet {
     return table_ ? table_->rows()->numRows() : 0;
   }
 
+  void enableGrouping() {
+    skipPartialAggregationGrouping_ = false;
+  }
+  void disableGrouping() {
+    skipPartialAggregationGrouping_ = true;
+  }
+
  private:
   void addInputForActiveRows(const RowVectorPtr& input, bool mayPushdown);
 
@@ -102,6 +109,10 @@ class GroupingSet {
   void destroyGlobalAggregations();
 
   void addGlobalAggregationInput(const RowVectorPtr& input, bool mayPushdown);
+
+  void addAggregationInputWithoutGrouping(
+      const RowVectorPtr& input,
+      bool mayPushdown);
 
   bool getGlobalAggregationOutput(
       int32_t batchSize,
@@ -161,6 +172,21 @@ class GroupingSet {
   // groups.
   void extractSpillResult(const RowVectorPtr& result);
 
+  // Evaluates whether it is allowed to skip grouping (hashing). Conditions:
+  // 1. Partial agg
+  // 2. No pregrouped key channels.
+  // 3. No channel mask
+  // In "Groupless" aggregation, we aggregate each input row by itself, i.e,
+  // no grouping of input rows based on key column hash takes place.
+  // This avoids CPU time spent on hashing input row key columns and the
+  // subsequent clearing of HashTable.tags_ and HashTable.table_.
+  // This improves performance when input is high cardinality, which leads to
+  // wasted "hashing" since most rows do not end up being grouped with another
+  // input row.
+  bool skipGrouping() const {
+    return skipPartialAggregationGrouping_;
+  }
+
   std::vector<column_index_t> keyChannels_;
 
   /// A subset of grouping keys on which the input is clustered.
@@ -170,6 +196,7 @@ class GroupingSet {
   const bool isGlobal_;
   const bool isPartial_;
   const bool isRawInput_;
+  bool skipPartialAggregationGrouping_;
   std::vector<std::unique_ptr<Aggregate>> aggregates_;
   AggregationMasks masks_;
   // Argument list for the corresponding element of 'aggregates_'.

@@ -47,7 +47,10 @@ HashAggregation::HashAggregation(
               ? operatorCtx_->makeSpillConfig(Spiller::Type::kAggregate)
               : std::nullopt),
       maxPartialAggregationMemoryUsage_(
-          driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {
+          driverCtx->queryConfig().maxPartialAggregationMemoryUsage()),
+      allowSkipPartialAggregationGrouping_(
+          driverCtx->queryConfig().allowSkipPartialAggregationGrouping()),
+      disablePartialAggregationGroupingEvaluator_(partialAggregationGoodPct_) {
   VELOX_CHECK_NOT_NULL(memoryTracker_, "Memory usage tracker is not set");
   auto inputType = aggregationNode->sources()[0]->outputType();
 
@@ -79,6 +82,7 @@ HashAggregation::HashAggregation(
   std::vector<std::vector<column_index_t>> args;
   std::vector<std::vector<VectorPtr>> constantLists;
   std::vector<TypePtr> intermediateTypes;
+  hasMasks_ = false;
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode->aggregates()[i];
 
@@ -113,6 +117,7 @@ HashAggregation::HashAggregation(
       if (aggrMask == nullptr) {
         aggrMaskChannels.emplace_back(std::nullopt);
       } else {
+        hasMasks_ = true;
         aggrMaskChannels.emplace_back(
             inputType->asRow().getChildIdx(aggrMask->name()));
       }
@@ -145,6 +150,31 @@ HashAggregation::HashAggregation(
     }
   }
 
+  // TODO: This may not be necessary if we can confirm that variance aggregation
+  // tests are flaky (non-determinist) by default and confirm that groupless
+  // partial aggregation does not make the issue worse.
+  hasVarianceAggregation_ = std::any_of(
+      aggregationNode->aggregates().begin(),
+      aggregationNode->aggregates().end(),
+      [&](auto& callTypeExpr) {
+        const std::vector<const char*> varianceAggregateNames{
+            "stddev",
+            "stddev_pop",
+            "stddev_samp",
+            "variance",
+            "var_pop",
+            "var_samp"};
+        return std::any_of(
+            varianceAggregateNames.begin(),
+            varianceAggregateNames.end(),
+            [&](auto& varianceName) {
+              return varianceName == callTypeExpr->name();
+            });
+      });
+
+  isRawInput_ = isRawInput(aggregationNode->step());
+  emptyPreGroupedKeyChannels_ = preGroupedChannels.empty();
+
   groupingSet_ = std::make_unique<GroupingSet>(
       std::move(hashers),
       std::move(preGroupedChannels),
@@ -155,9 +185,20 @@ HashAggregation::HashAggregation(
       std::move(intermediateTypes),
       aggregationNode->ignoreNullKeys(),
       isPartialOutput_,
-      isRawInput(aggregationNode->step()),
+      isRawInput_,
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
       operatorCtx_.get());
+}
+
+bool HashAggregation::isSpillAllowed(
+    const std::shared_ptr<const core::AggregationNode>& node) const {
+  return !isDistinct_ && node->preGroupedKeys().empty();
+}
+
+bool HashAggregation::considerSkipPartialAggregationGrouping() {
+  return allowSkipPartialAggregationGrouping_ && isPartialOutput_ &&
+      isRawInput_ && !isGlobal_ && emptyPreGroupedKeyChannels_ && !hasMasks_ &&
+      !hasVarianceAggregation_ && !isDistinct_;
 }
 
 void HashAggregation::addInput(RowVectorPtr input) {
@@ -237,6 +278,10 @@ void HashAggregation::resetPartialOutputIfNeed() {
   numInputRows_ = 0;
   if (!finished_) {
     maybeIncreasePartialAggregationMemoryUsage(aggregationPct);
+  }
+  if (considerSkipPartialAggregationGrouping()) {
+    disablePartialAggregationGroupingEvaluator_.executeIteration(
+        aggregationPct, *groupingSet_, stats());
   }
 }
 
