@@ -15,10 +15,10 @@
  */
 #pragma once
 
+#include <folly/hash/Checksum.h>
 #include <cstdint>
 #define XXH_INLINE_ALL
 #include <xxhash.h>
-#include <zlib.h>
 
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/string/StringCore.h"
@@ -62,8 +62,8 @@ struct CRC32Function {
 
   FOLLY_ALWAYS_INLINE
   bool call(out_type<int64_t>& result, const arg_type<Varchar>& input) {
-    result = static_cast<int64_t>(crc32_z(
-        0, reinterpret_cast<unsigned const char*>(input.data()), input.size()));
+    result = static_cast<int64_t>(folly::crc32_type(
+        reinterpret_cast<const unsigned char*>(input.data()), input.size()));
     return true;
   }
 };
