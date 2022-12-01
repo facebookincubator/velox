@@ -19,8 +19,12 @@
 #include "velox/connectors/WriteProtocol.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/vector/arrow/Bridge.h"
 
-#include "velox/vector/arrow/c/Bridge.h"
+/// These definition should be included by user from either
+///   1. <arrow/c/abi.h> or
+///   2. "velox/vector/arrow/Abi.h"
+struct ArrowArrayStream;
 
 namespace facebook::velox::core {
 

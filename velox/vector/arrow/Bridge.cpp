@@ -14,14 +14,15 @@
  * limitations under the License.
  */
 
-#include "velox/vector/arrow/c/Bridge.h"
+#include "velox/vector/arrow/Bridge.h"
+
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
-#include "velox/vector/arrow/c/abi.h"
+#include "velox/vector/arrow/Abi.h"
 
 namespace facebook::velox {
 

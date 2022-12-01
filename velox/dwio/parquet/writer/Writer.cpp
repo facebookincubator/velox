@@ -15,9 +15,9 @@
  */
 
 #include "velox/dwio/parquet/writer/Writer.h"
-#include <arrow/c/bridge.h>
+#include <arrow/c/bridge.h> // @manual
 #include <arrow/table.h> // @manual
-#include "velox/vector/arrow/c/Bridge.h"
+#include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::parquet {
 

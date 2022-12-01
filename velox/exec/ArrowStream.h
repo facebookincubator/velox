@@ -16,7 +16,11 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
-#include "velox/vector/arrow/c/abi.h"
+
+/// These definition should be included by user from either
+///   1. <arrow/c/abi.h> or
+///   2. "velox/vector/arrow/Abi.h"
+struct ArrowArrayStream;
 
 namespace facebook::velox::exec {
 
