@@ -316,4 +316,53 @@ struct ArraySumFunction {
   }
 };
 
+/// Function Signature: array_has_duplicates(array(T)) -> boolean
+/// where T must be coercible to bigint or varchar.
+/// Returns a boolean: whether array has any elements that occur more than once.
+template <typename TExecCtx, typename T>
+struct ArrayHasDuplicatesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      bool& out,
+      const arg_type<velox::Array<T>>& inputArray) {
+    folly::F14FastSet<arg_type<T>> nonNullElementSet;
+    int numOfNulls = 0;
+    for (const auto& item : inputArray) {
+      if (item.has_value()) {
+        auto it = nonNullElementSet.find(*item);
+        if (it != nonNullElementSet.end()) {
+          out = true;
+          return true;
+        }
+        nonNullElementSet.insert(*item);
+      } else {
+        // if multiple nulls are found, return true
+        if (++numOfNulls == 2) {
+          out = true;
+          return true;
+        }
+      }
+    }
+    out = false;
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE void callNullFree(
+      bool& out,
+      const null_free_arg_type<velox::Array<T>>& inputArray) {
+    folly::F14FastSet<null_free_arg_type<T>> nonNullElementSet;
+    for (const auto& item : inputArray) {
+      auto it = nonNullElementSet.find(item);
+      if (it != nonNullElementSet.end()) {
+        out = true;
+        return;
+      }
+      nonNullElementSet.insert(item);
+    }
+    out = false;
+    return;
+  }
+};
+
 } // namespace facebook::velox::functions
