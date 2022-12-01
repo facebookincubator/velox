@@ -39,6 +39,8 @@ void BitConcatenation::append(
 void BitConcatenation::appendOnes(int32_t numOnes) {
   if (hasZeros_) {
     bits::fillBits(ensureSpace(numOnes), numBits_, numBits_ + numOnes, 1);
+  } else {
+    ensureSpace(numOnes);
   }
   numBits_ += numOnes;
   setSize();
