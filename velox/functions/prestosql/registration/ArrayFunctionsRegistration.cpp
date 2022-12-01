@@ -50,10 +50,17 @@ inline void registerArrayCombinationsFunctions() {
       int64_t>({"combinations"});
 }
 
+template <typename T>
+inline void registerArrayDuplicatesFunctions() {
+  registerFunction<
+      ParameterBinder<ArrayDuplicatesFunction, T>,
+      Array<T>,
+      Array<T>>({"array_duplicates"});
+}
+
 void registerArrayFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, "array_distinct");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_duplicates, "array_duplicates");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_intersect, "array_intersect");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, "contains");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, "array_except");
@@ -100,5 +107,8 @@ void registerArrayFunctions() {
   registerArrayCombinationsFunctions<Varchar>();
   registerArrayCombinationsFunctions<Timestamp>();
   registerArrayCombinationsFunctions<Date>();
+
+  registerArrayDuplicatesFunctions<int64_t>();
+  registerArrayDuplicatesFunctions<Varchar>();
 }
 }; // namespace facebook::velox::functions

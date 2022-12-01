@@ -20,7 +20,6 @@ add_library(
   ArrayConstructor.cpp
   ArrayContains.cpp
   ArrayDistinct.cpp
-  ArrayDuplicates.cpp
   ArrayIntersectExcept.cpp
   ArrayPosition.cpp
   ArraySort.cpp

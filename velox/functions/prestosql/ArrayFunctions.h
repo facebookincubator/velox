@@ -15,6 +15,10 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
+#include <optional>
+#include <set>
+
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/CheckedArithmetic.h"
 #include "velox/type/Conversions.h"
@@ -312,6 +316,91 @@ struct ArraySumFunction {
       }
     }
     out = sum;
+    return;
+  }
+};
+
+/// Function Signature: array_duplicates(array(T)) -> array(T)
+/// where T must be coercible to bigint or varchar.
+/// Returns a set of elements that occur more than once in array.
+///
+/// Internally, we maintain a hashmap to indicate non-null tri-state:
+/// 1. key does not exist (key not in map),
+/// 2. unique (map-value=true),
+/// 3. duplicate (map-value=false).
+/// Meanwhile, maintain a std::optional to indicate null tri-state:
+/// 1. null does not exist (std::nullopt)
+/// 2. unique (value=true),
+/// 3. duplicate (value=false).
+template <typename TExecCtx, typename T>
+struct ArrayDuplicatesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<velox::Array<T>>& out,
+      const arg_type<velox::Array<T>>& inputArray) {
+    folly::F14FastMap<arg_type<T>, bool> uniqueMap;
+    std::optional<bool> nullState = std::nullopt;
+    // TODO: Introducing an ordered set is redundant
+    //  if std::sort() in ArrayWriter is implemented
+    std::set<arg_type<T>> duplicateNonNullElements;
+
+    for (const auto& item : inputArray) {
+      if (item.has_value()) {
+        auto it = uniqueMap.find(*item);
+        if (it == uniqueMap.end()) {
+          uniqueMap[*item] = true;
+        } else if (it->second) {
+          it->second = false;
+          duplicateNonNullElements.insert(*item);
+        }
+      } else {
+        if (nullState.has_value()) {
+          if (nullState.value()) {
+            nullState = false;
+          }
+        } else {
+          nullState = true;
+        }
+      }
+    }
+
+    if (!nullState.value_or(true)) {
+      out.add_null();
+    }
+    for (const auto& item : duplicateNonNullElements) {
+      if constexpr (std::is_same_v<T, Varchar>) {
+        out.add_item().setNoCopy(item);
+      } else {
+        out.add_item() = item;
+      }
+    }
+    return;
+  }
+
+  FOLLY_ALWAYS_INLINE void callNullFree(
+      out_type<velox::Array<T>>& out,
+      const null_free_arg_type<velox::Array<T>>& inputArray) {
+    folly::F14FastMap<null_free_arg_type<T>, bool> uniqueMap;
+    std::set<null_free_arg_type<T>> duplicateNonNullElements;
+
+    for (const auto& item : inputArray) {
+      auto it = uniqueMap.find(item);
+      if (it == uniqueMap.end()) {
+        uniqueMap[item] = true;
+      } else if (it->second) {
+        it->second = false;
+        duplicateNonNullElements.insert(item);
+      }
+    }
+
+    for (const auto& item : duplicateNonNullElements) {
+      if constexpr (std::is_same_v<T, Varchar>) {
+        out.add_item().setNoCopy(item);
+      } else {
+        out.add_item() = item;
+      }
+    }
     return;
   }
 };
