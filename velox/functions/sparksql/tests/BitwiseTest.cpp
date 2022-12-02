@@ -137,6 +137,8 @@ TEST_F(BitwiseTest, bitwiseOr) {
 }
 
 TEST_F(BitwiseTest, shiftLeft) {
+  EXPECT_EQ((shiftLeft_twoTypes<int32_t, int64_t>(1, 1)), 2);
+  EXPECT_EQ((shiftLeft_twoTypes<int64_t, int32_t>(1, 1)), 2);
   EXPECT_EQ(shiftLeft<int32_t>(1, 1), 2);
   EXPECT_EQ(shiftLeft<int32_t>(-1, 1), -2);
   EXPECT_EQ(shiftLeft<int32_t>(-1, 3), -8);
@@ -154,6 +156,9 @@ TEST_F(BitwiseTest, shiftLeft) {
 }
 
 TEST_F(BitwiseTest, shiftRight) {
+  EXPECT_EQ((shiftRight_twoTypes<int64_t, int32_t>(1, 1)), 0);
+  EXPECT_EQ((shiftRight_twoTypes<int32_t, int64_t>(1, 1)), 0);
+  EXPECT_EQ(shiftRight<int64_t>(1, 1), 0);
   EXPECT_EQ(shiftRight<int32_t>(-3, 1), -2);
   EXPECT_EQ(shiftRight<int32_t>(-1, 32), -1);
   EXPECT_EQ(shiftRight<int32_t>(-1, -1), -1);

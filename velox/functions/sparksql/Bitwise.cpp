@@ -84,15 +84,25 @@ struct ShiftRightFunction {
 void registerBitwiseFunctions(const std::string& prefix) {
   registerBinaryIntegral<BitwiseAndFunction>({prefix + "bitwise_and"});
   registerBinaryIntegral<BitwiseOrFunction>({prefix + "bitwise_or"});
+  registerBinaryIntegral<ShiftLeftFunction>({prefix + "shiftleft"});
+  registerBinaryIntegral<ShiftRightFunction>({prefix + "shiftright"});
 
   registerFunction<ShiftLeftFunction, int32_t, int32_t, int32_t>(
       {prefix + "shiftleft"});
+  registerFunction<ShiftLeftFunction, int32_t, int32_t, int64_t>(
+      {prefix + "shiftleft"});
   registerFunction<ShiftLeftFunction, int64_t, int64_t, int32_t>(
+      {prefix + "shiftleft"});
+  registerFunction<ShiftLeftFunction, int64_t, int64_t, int64_t>(
       {prefix + "shiftleft"});
 
   registerFunction<ShiftRightFunction, int32_t, int32_t, int32_t>(
       {prefix + "shiftright"});
+  registerFunction<ShiftRightFunction, int32_t, int32_t, int64_t>(
+      {prefix + "shiftright"});
   registerFunction<ShiftRightFunction, int64_t, int64_t, int32_t>(
+      {prefix + "shiftright"});
+  registerFunction<ShiftRightFunction, int64_t, int64_t, int64_t>(
       {prefix + "shiftright"});
 }
 
