@@ -34,17 +34,19 @@ struct BitwiseOrFunction {
 };
 
 template <typename T>
+// template <typename TInput1, typename TInput2>
 struct ShiftLeftFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
+  template <typename TInput1, typename TInput2>
+  FOLLY_ALWAYS_INLINE void call(TInput1& result, TInput1 a, TInput2 b) {
     result = a << b;
   }
 };
 
 template <typename T>
+// template <typename TInput1, typename TInput2>
 struct ShiftRightFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a, TInput b) {
+  template <typename TInput1, typename TInput2>
+  FOLLY_ALWAYS_INLINE void call(TInput1& result, TInput1 a, TInput2 b) {
     result = a >> b;
   }
 };
@@ -54,6 +56,16 @@ void registerBitwiseFunctions(const std::string& prefix) {
   registerBinaryIntegral<BitwiseOrFunction>({prefix + "bitwise_or"});
   registerBinaryIntegral<ShiftLeftFunction>({prefix + "shiftleft"});
   registerBinaryIntegral<ShiftRightFunction>({prefix + "shiftright"});
+
+ registerFunction<ShiftLeftFunction, int32_t, int32_t, int32_t>({prefix + "shiftleft"});
+ registerFunction<ShiftLeftFunction, int32_t, int32_t, int64_t>({prefix + "shiftleft"});
+ registerFunction<ShiftLeftFunction, int64_t, int64_t, int32_t>({prefix + "shiftleft"});
+ registerFunction<ShiftLeftFunction, int64_t, int64_t, int64_t>({prefix + "shiftleft"});
+
+ registerFunction<ShiftRightFunction, int32_t, int32_t, int32_t>({prefix + "shiftright"});
+ registerFunction<ShiftRightFunction, int32_t, int32_t, int64_t>({prefix + "shiftright"});
+ registerFunction<ShiftRightFunction, int64_t, int64_t, int32_t>({prefix + "shiftright"});
+ registerFunction<ShiftRightFunction, int64_t, int64_t, int64_t>({prefix + "shiftright"});
 }
 
 } // namespace facebook::velox::functions::sparksql
