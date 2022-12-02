@@ -34,7 +34,6 @@ struct BitwiseOrFunction {
 };
 
 template <typename T>
-// template <typename TInput1, typename TInput2>
 struct ShiftLeftFunction {
   template <typename TInput1, typename TInput2>
   FOLLY_ALWAYS_INLINE void call(TInput1& result, TInput1 a, TInput2 b) {
@@ -43,7 +42,6 @@ struct ShiftLeftFunction {
 };
 
 template <typename T>
-// template <typename TInput1, typename TInput2>
 struct ShiftRightFunction {
   template <typename TInput1, typename TInput2>
   FOLLY_ALWAYS_INLINE void call(TInput1& result, TInput1 a, TInput2 b) {
