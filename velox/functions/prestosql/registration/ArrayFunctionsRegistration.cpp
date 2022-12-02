@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
 
@@ -51,7 +52,7 @@ inline void registerArrayCombinationsFunctions() {
 }
 
 void registerArrayFunctions() {
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, "array_constructor");
+  registerArrayConstructor("array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, "array_distinct");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_duplicates, "array_duplicates");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_intersect, "array_intersect");
