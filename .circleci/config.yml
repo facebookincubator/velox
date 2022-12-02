@@ -41,6 +41,7 @@ workflows:
       - linux-fuzzer-run
       - linux-aggregate-fuzzer-run
       - docker-compose-ubuntu-cpp
+      - docker-compose-centos-cpp
 
   # Hourly build on weekdays
   weekday:
@@ -152,7 +153,7 @@ commands:
 executors:
   build:
     docker:
-      - image : prestocpp/velox-avx-circleci:kpai-20221123
+      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
     resource_class: 2xlarge
     environment:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
@@ -237,9 +238,11 @@ jobs:
       - run:
           name: "Build and Test PyVelox"
           command: |
+            conda init bash 
+            source ~/.bashrc
             conda create -y --name pyveloxenv python=3.7
-            conda activate pyveloxenv
-            make python-test
+            conda activate pyveloxenv 
+            LD_LIBRARY_PATH=/usr/local/lib make python-test
       - run:
           name: "Run Unit Tests"
           command: |
@@ -553,3 +556,20 @@ jobs:
       - run:
           name: "Run ubuntu-cpp image"
           command: docker-compose run -e NUM_THREADS=16 --rm ubuntu-cpp
+
+  docker-compose-centos-cpp:
+    machine: # Use machine executor type to use docker-compose
+      # Ubuntu 22.04 is the base image but we use centos 8 on
+      # the docker-compose container. There are no centos on
+      # circle-ci base images
+      image: ubuntu-2204:2022.10.1
+    resource_class: 2xlarge
+    steps:
+      - checkout
+      - update-submodules
+      - run:
+          name: "Build images for centos-cpp declared in docker-compose.yml"
+          command: docker-compose build centos-cpp
+      - run:
+          name: "Run centos-cpp image"
+          command: docker-compose run -e NUM_THREADS=16 --rm centos-cpp

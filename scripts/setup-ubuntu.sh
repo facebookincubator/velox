@@ -23,7 +23,7 @@ source $SCRIPTDIR/setup-helper-functions.sh
 CPU_TARGET="${CPU_TARGET:-avx}"
 COMPILER_FLAGS=$(get_cxx_flags "$CPU_TARGET")
 export COMPILER_FLAGS
-FB_OS_VERSION=v2022.07.11.00
+FB_OS_VERSION=v2022.11.14.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 
@@ -83,9 +83,17 @@ function install_folly {
   cmake_install -DBUILD_TESTS=OFF
 }
 
+function install_conda {
+  mkdir -p conda && cd conda
+  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+  MINICONDA_PATH=/opt/miniconda-for-velox
+  sh Miniconda3-latest-Linux-x86_64.sh -b -p $MINICONDA_PATH
+}
+
 function install_velox_deps {
   run_and_time install_fmt
   run_and_time install_folly
+  run_and_time install_conda
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

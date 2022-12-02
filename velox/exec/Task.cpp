@@ -214,11 +214,11 @@ velox::memory::MemoryPool* FOLLY_NONNULL Task::addOperatorPool(
   return childPools_.back().get();
 }
 
-memory::MappedMemory* FOLLY_NONNULL Task::addOperatorMemory(
+memory::MemoryAllocator* FOLLY_NONNULL Task::addOperatorMemory(
     const std::shared_ptr<memory::MemoryUsageTracker>& tracker) {
-  auto mappedMemory = queryCtx_->mappedMemory()->addChild(tracker);
-  childMappedMemories_.emplace_back(mappedMemory);
-  return mappedMemory.get();
+  auto allocator = queryCtx_->allocator()->addChild(tracker);
+  childAllocators_.emplace_back(allocator);
+  return allocator.get();
 }
 
 bool Task::supportsSingleThreadedExecution() const {
@@ -1419,10 +1419,13 @@ TaskStats Task::taskStats() const {
   // (their operators).
   TaskStats taskStats = taskStats_;
 
+  taskStats.numTotalDrivers = drivers_.size();
+
   // Add stats of the drivers (their operators) that are still running.
   for (const auto& driver : drivers_) {
     // Driver can be null.
     if (driver == nullptr) {
+      ++taskStats.numCompletedDrivers;
       continue;
     }
 
@@ -1431,6 +1434,13 @@ TaskStats Task::taskStats() const {
       taskStats.pipelineStats[statsCopy.pipelineId]
           .operatorStats[statsCopy.operatorId]
           .add(statsCopy);
+    }
+    if (driver->isOnThread()) {
+      ++taskStats.numRunningDrivers;
+    } else if (driver->isTerminated()) {
+      ++taskStats.numTerminatedDrivers;
+    } else {
+      ++taskStats.numBlockedDrivers[driver->blockingReason()];
     }
   }
 
