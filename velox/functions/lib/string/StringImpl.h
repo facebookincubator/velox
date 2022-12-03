@@ -300,6 +300,18 @@ HmacSha256(TOutString& output, const TInString& key, const TInString& data) {
   return true;
 }
 
+// Compute the HMAC-SHA512 Hash.
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool
+HmacSha512(TOutString& output, const TInString& key, const TInString& data) {
+  output.resize(64);
+  folly::ssl::OpenSSLHash::hmac_sha512(
+      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
+      folly::ByteRange((const uint8_t*)key.data(), key.size()),
+      folly::ByteRange((const uint8_t*)data.data(), data.size()));
+  return true;
+}
+
 template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool toHex(TOutString& output, const TInString& input) {
   static const char* const kHexTable =
