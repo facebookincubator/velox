@@ -80,6 +80,16 @@ E must be bigint or varchar.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="array_has_duplicates">
+<span class="sig-name descname"><span class="pre">array_has_duplicates</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#array_has_duplicates" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a boolean: whether array has any elements that occur more than once.
+E must be bigint or varchar.</p>
+<blockquote>
+<div><p>select array_has_duplicates(ARRAY [5, 2, 5, 1, 1, 5, null, null])); – true</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_intersect">
 <span class="sig-name descname"><span class="pre">array_intersect</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span> <span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(E)</span> <span class="pre">y)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_intersect" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns an array of the elements in the intersection of array <code class="docutils literal notranslate"><span class="pre">x</span></code> and array <code class="docutils literal notranslate"><span class="pre">y</span></code>, without duplicates.</p>
@@ -302,6 +312,7 @@ If one array is shorter, nulls are appended at the end to match the length of th
 <li><a class="reference internal" href="#array_distinct"><code class="docutils literal notranslate"><span class="pre">array_distinct()</span></code></a></li>
 <li><a class="reference internal" href="#array_duplicates"><code class="docutils literal notranslate"><span class="pre">array_duplicates()</span></code></a></li>
 <li><a class="reference internal" href="#array_except"><code class="docutils literal notranslate"><span class="pre">array_except()</span></code></a></li>
+<li><a class="reference internal" href="#array_has_duplicates"><code class="docutils literal notranslate"><span class="pre">array_has_duplicates()</span></code></a></li>
 <li><a class="reference internal" href="#array_intersect"><code class="docutils literal notranslate"><span class="pre">array_intersect()</span></code></a></li>
 <li><a class="reference internal" href="#array_join"><code class="docutils literal notranslate"><span class="pre">array_join()</span></code></a></li>
 <li><a class="reference internal" href="#array_max"><code class="docutils literal notranslate"><span class="pre">array_max()</span></code></a></li>
