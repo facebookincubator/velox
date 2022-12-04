@@ -295,7 +295,7 @@ class AsyncDataCacheEntry {
   // SSD. The exact file and offset are needed to include uses in RAM
   // to uses on SSD. Failing this, we could have the hottest data first in
   // line for eviction from SSD.
-  tsan_atomic<SsdFile * FOLLY_NULLABLE> ssdFile_{nullptr};
+  tsan_atomic<SsdFile*> FOLLY_NULLABLE ssdFile_{nullptr};
 
   // Offset in 'ssdFile_'.
   tsan_atomic<uint64_t> ssdOffset_{0};
