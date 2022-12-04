@@ -26,6 +26,12 @@ Map Functions
 
     See also :func:`map_agg` for creating a map as an aggregation.
 
+.. function:: map_from_entries(array(row(K, V))) -> map(K, V)
+
+    Returns a map created from the given array of entries. ::
+
+        SELECT map_from_entries(ARRAY[(1, 'x'), (2, 'y')]); -- {1 -> 'x', 2 -> 'y'}
+
 .. function:: map_entries(map(K,V)) -> array(row(K,V))
 
     Returns an array of all entries in the given map. ::
