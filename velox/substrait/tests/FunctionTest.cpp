@@ -212,3 +212,19 @@ TEST_F(FunctionTest, streamIsInput) {
   int index = planConverter_->streamIsInput(substraitRel.read());
   ASSERT_EQ(index, 0);
 }
+
+TEST_F(FunctionTest, getFunctionType) {
+  std::vector<std::string> types;
+  substraitParser_->getSubFunctionTypes("sum:opt_i32", types);
+  ASSERT_EQ("i32", types[0]);
+
+  types.clear();
+  substraitParser_->getSubFunctionTypes("sum:i32", types);
+  ASSERT_EQ("i32", types[0]);
+
+  types.clear();
+  substraitParser_->getSubFunctionTypes("sum:opt_str_str", types);
+  ASSERT_EQ(2, types.size());
+  ASSERT_EQ("str", types[0]);
+  ASSERT_EQ("str", types[1]);
+}

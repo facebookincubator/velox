@@ -85,6 +85,8 @@ class SubstraitToVeloxPlanValidator {
   bool validateInputTypes(
       const ::substrait::extensions::AdvancedExtension& extension,
       std::vector<TypePtr>& types);
+
+  bool validateAggRelFunctionType(const ::substrait::AggregateRel& sAgg);
 };
 
 } // namespace facebook::velox::substrait

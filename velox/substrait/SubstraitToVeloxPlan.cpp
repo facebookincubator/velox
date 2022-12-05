@@ -24,29 +24,6 @@
 
 namespace facebook::velox::substrait {
 namespace {
-core::AggregationNode::Step toAggregationStep(
-    const ::substrait::AggregateRel& sAgg) {
-  if (sAgg.measures().size() == 0) {
-    // When only groupings exist, set the phase to be Single.
-    return core::AggregationNode::Step::kSingle;
-  }
-
-  // Use the first measure to set aggregation phase.
-  const auto& firstMeasure = sAgg.measures()[0];
-  const auto& aggFunction = firstMeasure.measure();
-  switch (aggFunction.phase()) {
-    case ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE:
-      return core::AggregationNode::Step::kPartial;
-    case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE:
-      return core::AggregationNode::Step::kIntermediate;
-    case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT:
-      return core::AggregationNode::Step::kFinal;
-    case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT:
-      return core::AggregationNode::Step::kSingle;
-    default:
-      VELOX_FAIL("Aggregate phase is not supported.");
-  }
-}
 
 core::SortOrder toSortOrder(const ::substrait::SortField& sortField) {
   switch (sortField.direction()) {
@@ -204,6 +181,30 @@ RowTypePtr getJoinOutputType(
   VELOX_FAIL("Output should include left or right columns.");
 }
 } // namespace
+
+core::AggregationNode::Step SubstraitVeloxPlanConverter::toAggregationStep(
+    const ::substrait::AggregateRel& sAgg) {
+  if (sAgg.measures().size() == 0) {
+    // When only groupings exist, set the phase to be Single.
+    return core::AggregationNode::Step::kSingle;
+  }
+
+  // Use the first measure to set aggregation phase.
+  const auto& firstMeasure = sAgg.measures()[0];
+  const auto& aggFunction = firstMeasure.measure();
+  switch (aggFunction.phase()) {
+    case ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE:
+      return core::AggregationNode::Step::kPartial;
+    case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE:
+      return core::AggregationNode::Step::kIntermediate;
+    case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT:
+      return core::AggregationNode::Step::kFinal;
+    case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT:
+      return core::AggregationNode::Step::kSingle;
+    default:
+      VELOX_FAIL("Aggregate phase is not supported.");
+  }
+}
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::JoinRel& sJoin) {

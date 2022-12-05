@@ -16,6 +16,7 @@
 
 #include "velox/substrait/SubstraitToVeloxPlanValidator.h"
 #include "TypeUtils.h"
+#include "velox/expression/SignatureBinder.h"
 
 namespace facebook::velox::substrait {
 
@@ -41,8 +42,8 @@ bool SubstraitToVeloxPlanValidator::validateInputTypes(
     try {
       types.emplace_back(toVeloxType(subParser_->parseType(sType)->type));
     } catch (const VeloxException& err) {
-      std::cout << "Type is not supported in ProjectRel due to:"
-                << err.message() << std::endl;
+      std::cout << "Type is not supported due to:" << err.message()
+                << std::endl;
       return false;
     }
   }
@@ -356,6 +357,62 @@ bool SubstraitToVeloxPlanValidator::validate(
   return true;
 }
 
+bool SubstraitToVeloxPlanValidator::validateAggRelFunctionType(
+    const ::substrait::AggregateRel& sAgg) {
+  if (sAgg.measures_size() == 0) {
+    return true;
+  }
+  core::AggregationNode::Step step = planConverter_->toAggregationStep(sAgg);
+  for (const auto& smea : sAgg.measures()) {
+    const auto& aggFunction = smea.measure();
+    auto funcSpec =
+        planConverter_->findFuncSpec(aggFunction.function_reference());
+    auto funcName = subParser_->getSubFunctionName(funcSpec);
+    std::vector<TypePtr> types;
+    try {
+      std::vector<std::string> funcTypes;
+      subParser_->getSubFunctionTypes(funcSpec, funcTypes);
+      types.reserve(funcTypes.size());
+      for (auto& type : funcTypes) {
+        types.emplace_back(toVeloxType(subParser_->parseType(type)));
+      }
+    } catch (const VeloxException& err) {
+      std::cout
+          << "Validation failed for input type in AggregateRel function due to:"
+          << err.message() << std::endl;
+      return false;
+    }
+    if (auto signatures = exec::getAggregateFunctionSignatures(funcName)) {
+      for (const auto& signature : signatures.value()) {
+        exec::SignatureBinder binder(*signature, types);
+        if (binder.tryBind()) {
+          auto resolveType = binder.tryResolveType(
+              exec::isPartialOutput(step) ? signature->intermediateType()
+                                          : signature->returnType());
+          if (resolveType == nullptr) {
+            std::cout
+                << fmt::format(
+                       "Validation failed for function {} resolve type in AggregateRel.",
+                       funcName)
+                << std::endl;
+            return false;
+          }
+          return true;
+        }
+      }
+      std::cout
+          << fmt::format(
+                 "Validation failed for function {} bind in AggregateRel.",
+                 funcName)
+          << std::endl;
+      return false;
+    }
+  }
+  std::cout << "Validation failed for function resolve in AggregateRel."
+            << std::endl;
+  return false;
+}
+
 bool SubstraitToVeloxPlanValidator::validate(
     const ::substrait::AggregateRel& sAgg) {
   if (sAgg.has_input() && !validate(sAgg.input())) {
@@ -364,10 +421,10 @@ bool SubstraitToVeloxPlanValidator::validate(
 
   // Validate input types.
   if (sAgg.has_advanced_extension()) {
-    const auto& extension = sAgg.advanced_extension();
     std::vector<TypePtr> types;
+    const auto& extension = sAgg.advanced_extension();
     if (!validateInputTypes(extension, types)) {
-      std::cout << "Validation failed for input types in AggregateRel"
+      std::cout << "Validation failed for input types in AggregateRel."
                 << std::endl;
       return false;
     }
@@ -422,6 +479,30 @@ bool SubstraitToVeloxPlanValidator::validate(
     if (supportedFuncs.find(funcName) == supportedFuncs.end()) {
       std::cout << "Validation failed due to " << funcName
                 << " was not supported in AggregateRel." << std::endl;
+      return false;
+    }
+  }
+
+  if (!validateAggRelFunctionType(sAgg)) {
+    return false;
+  }
+
+  // Validate both groupby and aggregates input are empty, which is corner case.
+  if (sAgg.measures_size() == 0) {
+    bool hasExpr = false;
+    for (const auto& grouping : sAgg.groupings()) {
+      for (const auto& groupingExpr : grouping.grouping_expressions()) {
+        hasExpr = true;
+        break;
+      }
+      if (hasExpr) {
+        break;
+      }
+    }
+    if (!hasExpr) {
+      std::cout
+          << "Validation failed due to aggregation must specify either grouping keys or aggregates."
+          << std::endl;
       return false;
     }
   }

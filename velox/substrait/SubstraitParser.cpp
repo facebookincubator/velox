@@ -144,6 +144,16 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
   return std::make_shared<SubstraitType>(type);
 }
 
+std::string SubstraitParser::parseType(
+    const std::string& substraitType) {
+      auto it = typeMap_.find(substraitType);
+      if (it == typeMap_.end()) {
+        VELOX_NYI(
+          "Substrait parsing for type {} not supported.", substraitType);
+      }
+      return it->second;
+};
+
 std::vector<std::shared_ptr<SubstraitParser::SubstraitType>>
 SubstraitParser::parseNamedStruct(const ::substrait::NamedStruct& namedStruct) {
   // Nte that "names" are not used.
@@ -275,7 +285,10 @@ void SubstraitParser::getSubFunctionTypes(
   // Split the types with delimiter.
   std::string delimiter = "_";
   while ((pos = funcTypes.find(delimiter)) != std::string::npos) {
-    types.emplace_back(funcTypes.substr(0, pos));
+    auto type = funcTypes.substr(0, pos);
+    if (type != "opt" && type !="req") {
+      types.emplace_back(type);
+    }
     funcTypes.erase(0, pos + delimiter.length());
   }
   types.emplace_back(funcTypes);

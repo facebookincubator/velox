@@ -49,6 +49,9 @@ class SubstraitParser {
   std::shared_ptr<SubstraitType> parseType(
       const ::substrait::Type& substraitType);
 
+  // Parse substraitType type such as i32.
+  std::string parseType(const std::string& substraitType);
+
   /// Parse Substrait ReferenceSegment.
   int32_t parseReferenceSegment(
       const ::substrait::Expression::ReferenceSegment& refSegment);
@@ -112,6 +115,21 @@ class SubstraitParser {
       {"BitwiseAnd", "bitwise_and"},
       {"BitwiseOr", "bitwise_or"},
       {"modulus", "mod"} /*Presto functions.*/};
+  // The map is uesd for mapping substrait type.
+  // Key: type in function name.
+  // Value: substrait type name.
+  const std::unordered_map<std::string, std::string> typeMap_ = {
+      {"bool", "BOOLEAN"},
+      {"i8", "TINYINT"},
+      {"i16", "SMALLINT"},
+      {"i32", "INTEGER"},
+      {"i64", "BIGINT"},
+      {"fp32", "REAL"},
+      {"fp64", "DOUBLE"},
+      {"date", "DATE"},
+      {"ts", "TIMESTAMP_TZ"},
+      {"str", "VARCHAR"},
+      {"vbin", "VARBINARY"}};
 };
 
 } // namespace facebook::velox::substrait

@@ -23,6 +23,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/substrait/SubstraitToVeloxPlan.h"
+#include "velox/substrait/SubstraitToVeloxPlanValidator.h"
 #include "velox/type/Type.h"
 
 using namespace facebook::velox;
