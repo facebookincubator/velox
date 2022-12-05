@@ -99,7 +99,7 @@ bool SubstraitToVeloxPlanValidator::validate(
     for (const auto& expr : aggExprs) {
       expressions.emplace_back(exprConverter_->toVeloxExpr(expr, rowType));
     }
-    // Try to compile the expressions. If there is any unregistred funciton or
+    // Try to compile the expressions. If there is any unregistered function or
     // mismatched type, exception will be thrown.
     exec::ExprSet exprSet(std::move(expressions), execCtx_);
   } catch (const VeloxException& err) {
@@ -232,7 +232,7 @@ bool SubstraitToVeloxPlanValidator::validate(
     for (const auto& expr : projectExprs) {
       expressions.emplace_back(exprConverter_->toVeloxExpr(expr, rowType));
     }
-    // Try to compile the expressions. If there is any unregistred funciton or
+    // Try to compile the expressions. If there is any unregistered function or
     // mismatched type, exception will be thrown.
     exec::ExprSet exprSet(std::move(expressions), execCtx_);
   } catch (const VeloxException& err) {
@@ -275,11 +275,11 @@ bool SubstraitToVeloxPlanValidator::validate(
   try {
     expressions.emplace_back(
         exprConverter_->toVeloxExpr(sFilter.condition(), rowType));
-    // Try to compile the expressions. If there is any unregistred funciton
+    // Try to compile the expressions. If there is any unregistered function
     // or mismatched type, exception will be thrown.
     exec::ExprSet exprSet(std::move(expressions), execCtx_);
   } catch (const VeloxException& err) {
-    std::cout << "Validation failed for expression in ProjectRel due to:"
+    std::cout << "Validation failed for expression in FilterRel due to:"
               << err.message() << std::endl;
     return false;
   }
@@ -436,6 +436,42 @@ bool SubstraitToVeloxPlanValidator::validate(
     std::cout << "ReadRel validation failed due to:" << err.message()
               << std::endl;
     return false;
+  }
+
+  // Validate filter in ReadRel.
+  if (sRead.has_filter()) {
+    std::vector<std::shared_ptr<const core::ITypedExpr>> expressions;
+    expressions.reserve(1);
+
+    std::vector<TypePtr> veloxTypeList;
+    if (sRead.has_base_schema()) {
+      const auto& baseSchema = sRead.base_schema();
+      auto substraitTypeList = subParser_->parseNamedStruct(baseSchema);
+      veloxTypeList.reserve(substraitTypeList.size());
+      for (const auto& substraitType : substraitTypeList) {
+        veloxTypeList.emplace_back(toVeloxType(substraitType->type));
+      }
+    }
+    std::vector<std::string> names;
+    int32_t inputPlanNodeId = 0;
+    names.reserve(veloxTypeList.size());
+    for (auto colIdx = 0; colIdx < veloxTypeList.size(); colIdx++) {
+      names.emplace_back(subParser_->makeNodeName(inputPlanNodeId, colIdx));
+    }
+    auto rowType =
+        std::make_shared<RowType>(std::move(names), std::move(veloxTypeList));
+
+    try {
+      expressions.emplace_back(
+          exprConverter_->toVeloxExpr(sRead.filter(), rowType));
+      // Try to compile the expressions. If there is any unregistered function
+      // or mismatched type, exception will be thrown.
+      exec::ExprSet exprSet(std::move(expressions), execCtx_);
+    } catch (const VeloxException& err) {
+      std::cout << "Validation failed for filter expression in ReadRel due to:"
+                << err.message() << std::endl;
+      return false;
+    }
   }
   return true;
 }
