@@ -14,7 +14,7 @@
 # limitations under the License.
 set -e
 
-version='0.0.1'
+version='0.0.2'
 cb='```'
 
 if [ ! -x "$(command -v cmake)" ]; then
@@ -25,7 +25,7 @@ fi
 info=$(cmake --system-information)
 
 ext() {
-  grep -oP '\".+\"$' $1 | tr -d '\"'
+  grep -oE '".+"$' $1 | tr -d '"'
 }
 
 print_info() {
