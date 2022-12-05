@@ -29,14 +29,14 @@ ext() {
 }
 
 print_info() {
-echo "$info" | grep -P "$1" | ext
+echo "$info" | grep -e "$1" | ext
 }
 
 result="
 Velox System Info v${version}
 Commit: $(git rev-parse HEAD 2> /dev/null || echo "Not in a git repo.")
-CMake Version: $(cmake --version | grep -oP '\d+\.\d+\.\d+')
-System: $(print_info 'CMAKE_SYSTEM \"')
+CMake Version: $(cmake --version | grep -oE '[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+')
+System: $(print_info 'CMAKE_SYSTEM "')
 Arch: $(print_info 'CMAKE_SYSTEM_PROCESSOR')
 C++ Compiler: $(print_info 'CMAKE_CXX_COMPILER ==')
 C++ Compiler Version: $(print_info 'CMAKE_CXX_COMPILER_VERSION')
