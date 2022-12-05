@@ -323,6 +323,16 @@ TEST_F(JsonFunctionsTest, jsonSize) {
       3);
 }
 
+TEST_F(JsonFunctionsTest, invalidPath) {
+  EXPECT_THROW(json_size(R"([0,1,2])", ""), VeloxUserError);
+  EXPECT_THROW(json_size(R"([0,1,2])", "$[]"), VeloxUserError);
+  EXPECT_THROW(json_size(R"([0,1,2])", "$[-1]"), VeloxUserError);
+  EXPECT_THROW(json_size(R"({"k1":"v1"})", "$k1"), VeloxUserError);
+  EXPECT_THROW(json_size(R"({"k1":"v1"})", "$.k1."), VeloxUserError);
+  EXPECT_THROW(json_size(R"({"k1":"v1"})", "$.k1]"), VeloxUserError);
+  EXPECT_THROW(json_size(R"({"k1":"v1)", "$.k1]"), VeloxUserError);
+}
+
 } // namespace
 
 } // namespace facebook::velox::functions::prestosql
