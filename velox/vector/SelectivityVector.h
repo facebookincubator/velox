@@ -290,6 +290,10 @@ class SelectivityVector {
     allSelected_.reset();
   }
 
+  bool isAllSelectedSet() const {
+    return allSelected_.has_value();
+  }
+
   bool isAllSelected() const {
     if (allSelected_.has_value()) {
       return allSelected_.value();

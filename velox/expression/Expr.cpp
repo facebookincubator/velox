@@ -1268,7 +1268,11 @@ void Expr::evalAll(
   // Write non-selected rows in remainingRows as nulls in the result if some
   // rows have been skipped.
   if (mutableRemainingRows != nullptr) {
-    addNulls(rows, mutableRemainingRows->asRange().bits(), context, result);
+    bool KnownToBeAllSelected = mutableRemainingRows->isAllSelectedSet() &&
+        mutableRemainingRows->isAllSelected();
+    if (!KnownToBeAllSelected) {
+      addNulls(rows, mutableRemainingRows->asRange().bits(), context, result);
+    }
   }
   releaseInputValues(context);
 }
