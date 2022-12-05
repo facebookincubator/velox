@@ -1422,6 +1422,13 @@ bool Expr::applyFunctionWithPeeling(
   VectorPtr wrappedResult =
       context.applyWrapToPeeledResult(this->type(), peeledResult, applyRows);
   context.moveOrCopyResult(wrappedResult, rows, result);
+
+  if (context.wrapEncoding() == VectorEncoding::Simple::CONSTANT &&
+      type()->isPrimitiveType()) {
+    // The if condition is optional, but it makes it clear when this will be
+    // useful.
+    context.releaseVector(peeledResult);
+  }
   return true;
 }
 
