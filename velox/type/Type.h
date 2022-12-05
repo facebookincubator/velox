@@ -435,6 +435,9 @@ struct TypeFactory;
     return this->kind() == TypeKind::KIND;                                \
   }
 
+class Type;
+using TypePtr = std::shared_ptr<const Type>;
+
 /// Abstract class hierarchy. Instances of these classes carry full
 /// information about types, including for example field names.
 /// Can be instantiated by factory methods, like INTEGER()
@@ -505,6 +508,11 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   static std::shared_ptr<const Type> create(const folly::dynamic& obj);
 
+  // Combine two compatible types by resolving unknowns. If the types are not
+  // compatible, return nullptr. row(unknow, int), row(int, unknown) -> row(int,
+  // int). row(int), row(float) -> nullptr.
+  static TypePtr resolveUnknownTypes(const TypePtr& a, const TypePtr& b);
+
   /// Recursive kind hashing (uses only TypeKind).
   size_t hashKind() const;
 
@@ -546,8 +554,6 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 };
 
 #undef VELOX_FLUENT_CAST
-
-using TypePtr = std::shared_ptr<const Type>;
 
 template <TypeKind KIND>
 class TypeBase : public Type {

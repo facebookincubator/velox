@@ -20,6 +20,7 @@
 #include <folly/Demangle.h>
 #include <sstream>
 #include <typeindex>
+#include "Type.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace std {
@@ -39,6 +40,63 @@ bool isColumnNameRequiringEscaping(const std::string& name) {
 } // namespace
 
 namespace facebook::velox {
+
+TypePtr Type::resolveUnknownTypes(const TypePtr& a, const TypePtr& b) {
+  if (a->isUnKnown()) {
+    return b;
+  }
+
+  if (b->isUnKnown()) {
+    return a;
+  }
+
+  if (a->kind() != b->kind()) {
+    return nullptr;
+  }
+
+  if (a->isPrimitiveType()) {
+    return a;
+  }
+
+  if (a->isArray()) {
+    auto valuesType = resolveUnknownTypes(a->childAt(0), b->childAt(0));
+    if (valuesType == nullptr) {
+      return nullptr;
+    }
+
+    return ARRAY(std::move(valuesType));
+  }
+
+  if (a->isMap()) {
+    auto keysType = resolveUnknownTypes(a->childAt(0), b->childAt(0));
+    if (keysType == nullptr) {
+      return nullptr;
+    }
+
+    auto valuesType = resolveUnknownTypes(a->childAt(1), b->childAt(1));
+    if (valuesType == nullptr) {
+      return nullptr;
+    }
+
+    return MAP(std::move(keysType), std::move(valuesType));
+  }
+
+  if (a->isRow()) {
+    if (a->size() != b->size()) {
+      return nullptr;
+    }
+
+    std::vector<TypePtr> types(a->size());
+    for (auto i = 0; i < b->size(); i++) {
+      types[i] = resolveUnknownTypes(a->childAt(i), b->childAt(i));
+      if (types[i] == nullptr) {
+        return nullptr;
+      }
+    }
+    return ROW(std::move(types));
+  }
+  VELOX_UNREACHABLE("unexpected type in resolveUnknownTypes");
+}
 
 bool isDecimalName(const std::string& typeName) {
   auto typeNameUpper = boost::algorithm::to_upper_copy(typeName);

@@ -15,6 +15,7 @@
  */
 
 #include <exception>
+#include <optional>
 #include "gtest/gtest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -189,4 +190,63 @@ TEST_F(EvalCtxTest, addErrorsPreserveOldErrors) {
   checkErrors(4, "out of range");
   ASSERT_TRUE(context.errors()->isNullAt(1));
   ASSERT_TRUE(context.errors()->isNullAt(2));
+}
+
+namespace {
+
+// Create unknown vector of size 5 with nulls for all rows.
+auto makeUnknownVector(EvalCtx& context) {
+  VectorPtr vector;
+  context.ensureWritable(SelectivityVector(5), UNKNOWN(), vector);
+  vector->setNull(0, 0);
+  vector->setNull(0, 1);
+  vector->setNull(0, 2);
+  vector->setNull(0, 3);
+
+  vector->setNull(0, 4);
+  return vector;
+}
+} // namespace
+
+TEST_F(EvalCtxTest, moveOrCopyResultToUnknown) {
+  // Add two invalid_argument to context.errors().
+  EvalCtx context(&execCtx_);
+  *context.mutableIsFinalSelection() = false;
+  SelectivityVector rowsAll(5);
+  *context.mutableFinalSelection() = &rowsAll;
+
+  VectorPtr knownVector = vectorMaker_.flatVector<int32_t>({1, 2, 3, 4, 5});
+  auto unknownVector = makeUnknownVector(context);
+
+  SelectivityVector rowsPartial(5);
+  rowsPartial.setValid(0, false);
+  rowsPartial.setValid(1, false);
+  rowsPartial.setValid(4, false);
+
+  context.moveOrCopyResult(knownVector, rowsPartial, unknownVector);
+  VectorPtr expected = vectorMaker_.flatVectorNullable<int32_t>(
+      {std::nullopt, std::nullopt, 3, 4, std::nullopt});
+
+  assertEqualVectors(expected, unknownVector);
+}
+
+TEST_F(EvalCtxTest, moveOrCopyResultFromUnknown) {
+  // Add two invalid_argument to context.errors().
+  EvalCtx context(&execCtx_);
+  *context.mutableIsFinalSelection() = false;
+  SelectivityVector rowsAll(5);
+  *context.mutableFinalSelection() = &rowsAll;
+
+  VectorPtr knownVector = vectorMaker_.flatVector<int32_t>({1, 2, 3, 4, 5});
+  auto unknownVector = makeUnknownVector(context);
+
+  SelectivityVector rowsPartial(5);
+  rowsPartial.setValid(2, false);
+  rowsPartial.setValid(3, false);
+
+  context.moveOrCopyResult(unknownVector, rowsPartial, knownVector);
+  VectorPtr expected = vectorMaker_.flatVectorNullable<int32_t>(
+      {std::nullopt, std::nullopt, 3, 4, std::nullopt});
+
+  assertEqualVectors(expected, knownVector);
 }

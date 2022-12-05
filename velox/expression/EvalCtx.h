@@ -218,7 +218,10 @@ class EvalCtx {
       const SelectivityVector& rows,
       VectorPtr& result) const {
     if (result && !isFinalSelection() && *finalSelection() != rows) {
-      BaseVector::ensureWritable(rows, result->type(), result->pool(), result);
+      auto type =
+          Type::resolveUnknownTypes(result->type(), localResult->type());
+      VELOX_CHECK(type, "moveOrCopyResult encountered incompatible types");
+      BaseVector::ensureWritable(rows, type, result->pool(), result);
       result->copy(localResult.get(), rows, nullptr);
     } else {
       result = localResult;

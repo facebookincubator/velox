@@ -3086,3 +3086,24 @@ TEST_F(ExprTest, mapKeysAndValues) {
   std::vector<VectorPtr> result(2);
   ASSERT_NO_THROW(exprSet->eval(rows, context, result));
 }
+
+TEST_F(ExprTest, ifWithUnknown) {
+  auto input = vectorMaker_.flatVectorNullable<int64_t>({std::nullopt, 2, 3});
+  {
+    auto result1 = evaluate(
+        "if(c0 is Null, null, if(c0=2 , 2, 3))", makeRowVector({input}));
+    auto result2 = evaluate(
+        "if(c0 is not Null, if(c0=2 , 2, 3), null)", makeRowVector({input}));
+
+    assertEqualVectors(result1, input);
+    assertEqualVectors(result2, input);
+  }
+  {
+    auto result = evaluate(
+        "if(c0 is Null, row_constructor(null, c0), row_constructor(c0,null))",
+        makeRowVector({input}));
+    auto exptected = evaluate(
+        "row_constructor(c0, cast (null as bigint))", makeRowVector({input}));
+    assertEqualVectors(result, exptected);
+  }
+}

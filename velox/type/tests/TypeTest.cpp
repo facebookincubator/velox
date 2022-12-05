@@ -631,6 +631,67 @@ TEST(TypeTest, kindStreamOp) {
   EXPECT_EQ(buf.str(), "BIGINT");
 }
 
+TEST(TypeTest, resolveUnknowTest) {
+  auto test = [&](const TypePtr& type1,
+                  const TypePtr& type2,
+                  const TypePtr& exptectedType) {
+    if (exptectedType) {
+      ASSERT_TRUE(
+          exptectedType->kindEquals(Type::resolveUnknownTypes(type1, type2)));
+    } else {
+      ASSERT_TRUE(Type::resolveUnknownTypes(type1, type2) == nullptr);
+    }
+  };
+
+  test(INTEGER(), INTEGER(), INTEGER());
+  test(INTEGER(), UNKNOWN(), INTEGER());
+  test(UNKNOWN(), INTEGER(), INTEGER());
+  test(UNKNOWN(), UNKNOWN(), UNKNOWN());
+  test(INTEGER(), DOUBLE(), nullptr);
+
+  test(ARRAY(INTEGER()), INTEGER(), nullptr);
+  test(ARRAY(INTEGER()), UNKNOWN(), ARRAY(INTEGER()));
+  test(ARRAY(UNKNOWN()), ARRAY(INTEGER()), ARRAY(INTEGER()));
+  test(ARRAY(INTEGER()), ARRAY(UNKNOWN()), ARRAY(INTEGER()));
+
+  test(MAP(UNKNOWN(), UNKNOWN()), INTEGER(), nullptr);
+  test(
+      MAP(UNKNOWN(), UNKNOWN()),
+      MAP(UNKNOWN(), UNKNOWN()),
+      MAP(UNKNOWN(), UNKNOWN()));
+  test(
+      MAP(INTEGER(), UNKNOWN()),
+      MAP(UNKNOWN(), UNKNOWN()),
+      MAP(INTEGER(), UNKNOWN()));
+  test(
+      MAP(UNKNOWN(), INTEGER()),
+      MAP(UNKNOWN(), UNKNOWN()),
+      MAP(UNKNOWN(), INTEGER()));
+  test(
+      MAP(UNKNOWN(), INTEGER()),
+      MAP(DOUBLE(), UNKNOWN()),
+      MAP(DOUBLE(), INTEGER()));
+  test(MAP(UNKNOWN(), INTEGER()), MAP(DOUBLE(), DOUBLE()), nullptr);
+
+  test(
+      ROW({UNKNOWN(), UNKNOWN()}),
+      ROW({UNKNOWN(), UNKNOWN()}),
+      ROW({UNKNOWN(), UNKNOWN()}));
+  test(ROW({UNKNOWN()}), ROW({UNKNOWN(), UNKNOWN()}), nullptr);
+  test(
+      ROW({INTEGER(), UNKNOWN()}),
+      ROW({UNKNOWN(), UNKNOWN()}),
+      ROW({INTEGER(), UNKNOWN()}));
+  test(
+      ROW({UNKNOWN(), UNKNOWN()}),
+      ROW({INTEGER(), UNKNOWN()}),
+      ROW({INTEGER(), UNKNOWN()}));
+  test(
+      ROW({UNKNOWN(), DOUBLE()}),
+      ROW({INTEGER(), UNKNOWN()}),
+      ROW({INTEGER(), DOUBLE()}));
+}
+
 TEST(TypeTest, function) {
   auto type = std::make_shared<FunctionType>(
       std::vector<TypePtr>{BIGINT(), VARCHAR()}, BOOLEAN());
