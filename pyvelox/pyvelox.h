@@ -38,12 +38,12 @@ inline void checkBounds(std::shared_ptr<BaseVector>& v, int64_t idx) {
 }
 
 template <TypeKind T>
-inline auto pyToVariant(const pybind11::handle& obj) {
+inline auto pyToVariant(const py::handle& obj) {
   using NativeType = typename TypeTraits<T>::DeepCopiedType;
   return velox::variant::create<T>(py::cast<NativeType>(obj));
 }
 
-inline velox::variant pyToVariant(const pybind11::handle& obj) {
+inline velox::variant pyToVariant(const py::handle& obj) {
   if (obj.is_none()) {
     return velox::variant();
   } else if (py::isinstance<py::bool_>(obj)) {
@@ -93,7 +93,7 @@ inline VectorPtr variantsToFlatVector(
 }
 
 inline VectorPtr pyListToVector(
-    const pybind11::list& list,
+    const py::list& list,
     facebook::velox::memory::MemoryPool* pool) {
   std::vector<velox::variant> variants;
   variants.reserve(list.size());
@@ -127,7 +127,7 @@ inline VectorPtr pyListToVector(
 }
 
 template <TypeKind T>
-inline pybind11::object getItemFromVector(
+inline py::object getItemFromVector(
     std::shared_ptr<BaseVector>& v,
     int64_t idx) {
   using NativeType = typename TypeTraits<T>::NativeType;
@@ -143,12 +143,12 @@ inline pybind11::object getItemFromVector(
   }
 }
 
-inline pybind11::object getItemFromVector(
+inline py::object getItemFromVector(
     std::shared_ptr<BaseVector>& v,
     int64_t idx) {
   checkBounds(v, idx);
   if (v->isNullAt(idx)) {
-    return pybind11::none();
+    return py::none();
   }
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       getItemFromVector, v->typeKind(), v, idx);
@@ -164,10 +164,8 @@ inline void setItemInVector(
   flat->set(idx, NativeType{var.value<NativeType>()});
 }
 
-inline void setItemInVector(
-    std::shared_ptr<BaseVector>& v,
-    int64_t idx,
-    pybind11::handle& obj) {
+inline void
+setItemInVector(std::shared_ptr<BaseVector>& v, int64_t idx, py::handle& obj) {
   checkBounds(v, idx);
 
   velox::variant var = pyToVariant(obj);
@@ -192,7 +190,7 @@ inline void appendVectors(
 }
 
 inline void addDataTypeBindings(
-    pybind11::module& m,
+    py::module& m,
     bool asModuleLocalDefinitions = true) {
   // Inlining these bindings since adding them to the cpp file results in a
   // ASAN error.
@@ -326,7 +324,7 @@ inline void addDataTypeBindings(
 }
 
 inline void addVectorBindings(
-    pybind11::module& m,
+    py::module& m,
     bool asModuleLocalDefinitions = true) {
   using namespace facebook::velox;
   std::shared_ptr<memory::MemoryPool> pool = memory::getDefaultMemoryPool();
@@ -401,7 +399,7 @@ inline void addVectorBindings(
 ///  https://pybind11.readthedocs.io/en/stable/advanced/classes.html#module-local-class-bindings
 ///  for further details.
 inline void addVeloxBindings(
-    pybind11::module& m,
+    py::module& m,
     bool asModuleLocalDefinitions = true) {
   addDataTypeBindings(m, asModuleLocalDefinitions);
   addVectorBindings(m, asModuleLocalDefinitions);
