@@ -17,6 +17,7 @@
 #include "velox/duckdb/functions/DuckFunctions.h"
 #include <boost/algorithm/string.hpp>
 #include "velox/duckdb/conversion/DuckConversion.h"
+#include "velox/duckdb/functions/DuckFunctionBinder.h"
 #include "velox/duckdb/memory/Allocator.h"
 #include "velox/external/duckdb/duckdb.hpp"
 #include "velox/functions/Registerer.h"
@@ -390,7 +391,8 @@ static void toDuck(
       }
     }
     if (requiresCast) {
-      VectorOperations::Cast(castChunk.data[i], result.data[i], cardinality);
+      VectorOperations::DefaultCast(
+          castChunk.data[i], result.data[i], cardinality);
     }
   }
   result.Verify();
@@ -428,12 +430,12 @@ struct DuckDBFunctionData {
 
 class DuckDBFunction : public exec::VectorFunction {
  public:
-  explicit DuckDBFunction(std::vector<ScalarFunction> set) : set_(move(set)) {
-    assert(set_.size() > 0);
+  explicit DuckDBFunction(::duckdb::ScalarFunctionSet set) : set_(move(set)) {
+    assert(set_.Size() > 0);
   }
 
  private:
-  mutable std::vector<ScalarFunction> set_;
+  mutable ::duckdb::ScalarFunctionSet set_;
 
  public:
   void apply(
@@ -450,8 +452,8 @@ class DuckDBFunction : public exec::VectorFunction {
 
     duckdb::VeloxPoolAllocator duckDBAllocator(*context.pool());
     auto state = initializeState(move(inputTypes), duckDBAllocator);
-    assert(state->functionIndex < set_.size());
-    auto& function = set_[state->functionIndex];
+    assert(state->functionIndex < set_.Size());
+    auto function = set_.GetFunctionByOffset(state->functionIndex);
     idx_t nrow = rows.size();
 
     if (!result) {
@@ -599,19 +601,22 @@ class DuckDBFunction : public exec::VectorFunction {
   std::unique_ptr<DuckDBFunctionData> initializeState(
       std::vector<LogicalType> inputTypes,
       duckdb::VeloxPoolAllocator& duckDBAllocator) const {
-    assert(set_.size() > 0);
+    assert(set_.Size() > 0);
     auto result = std::make_unique<DuckDBFunctionData>();
     result->inputTypes = move(inputTypes);
     std::string error;
-    bool castParameters;
-    result->functionIndex = ::duckdb::Function::BindFunction(
-        set_[0].name, set_, result->inputTypes, error, castParameters);
-    if (result->functionIndex >= set_.size()) {
+
+    DuckDB db;
+    Connection con(db);
+    ::duckdb::FunctionBinder functionBinder(*con.context);
+    result->functionIndex = functionBinder.BindFunction(
+        set_.GetFunctionByOffset(0).name, set_, result->inputTypes, error);
+    if (result->functionIndex >= set_.Size()) {
       // binding error: cannot bind this function with the provided parameters
       throw std::runtime_error(error);
     }
     // figure out the expected types
-    auto& function = set_[result->functionIndex];
+    auto function = set_.GetFunctionByOffset(result->functionIndex);
     std::vector<LogicalType> expectedTypes = function.arguments;
     // handle varargs
     for (size_t i = function.arguments.size(); i < result->inputTypes.size();
@@ -668,10 +673,10 @@ std::string toString(const TypePtr& type) {
 } // namespace
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> getSignatures(
-    const std::vector<ScalarFunction>& functions) {
+    ::duckdb::ScalarFunctionSet functions) {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-  signatures.reserve(functions.size());
-  for (auto const& function : functions) {
+  signatures.reserve(functions.Size());
+  for (auto const& function : functions.functions) {
     exec::FunctionSignatureBuilder builder;
 
     builder.returnType(toString(toVeloxType(function.return_type)));
@@ -711,9 +716,9 @@ void registerDuckDBFunction(CatalogEntry* entry, const std::string& prefix) {
   if (skippedFunctions.find(name) != skippedFunctions.end()) {
     return;
   }
-  std::vector<ScalarFunction> functions;
-  for (size_t i = 0; i < scalarFunction.functions.size(); i++) {
-    auto& testedFunction = scalarFunction.functions[i];
+  ::duckdb::ScalarFunctionSet functions("duckdbScalarFunctions");
+  for (size_t i = 0; i < scalarFunction.functions.Size(); i++) {
+    auto testedFunction = scalarFunction.functions.GetFunctionByOffset(i);
     // functions that need to be bound are not supported (yet?)
     if (testedFunction.bind || testedFunction.dependency) {
       continue;
@@ -731,9 +736,9 @@ void registerDuckDBFunction(CatalogEntry* entry, const std::string& prefix) {
     if (!allArgsSupported) {
       continue;
     }
-    functions.push_back(testedFunction);
+    functions.AddFunction(testedFunction);
   }
-  if (functions.size() == 0) {
+  if (functions.Size() == 0) {
     return;
   }
   auto signatures = getSignatures(functions);

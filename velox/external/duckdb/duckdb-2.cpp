@@ -10,6 +10,1691 @@
 
 
 
+namespace duckdb {
+
+ColumnDataAllocator::ColumnDataAllocator(Allocator &allocator) : type(ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR) {
+	alloc.allocator = &allocator;
+}
+
+ColumnDataAllocator::ColumnDataAllocator(BufferManager &buffer_manager)
+    : type(ColumnDataAllocatorType::BUFFER_MANAGER_ALLOCATOR) {
+	alloc.buffer_manager = &buffer_manager;
+}
+
+ColumnDataAllocator::ColumnDataAllocator(ClientContext &context, ColumnDataAllocatorType allocator_type)
+    : type(allocator_type) {
+	switch (type) {
+	case ColumnDataAllocatorType::BUFFER_MANAGER_ALLOCATOR:
+		alloc.buffer_manager = &BufferManager::GetBufferManager(context);
+		break;
+	case ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR:
+		alloc.allocator = &Allocator::Get(context);
+		break;
+	default:
+		throw InternalException("Unrecognized column data allocator type");
+	}
+}
+
+BufferHandle ColumnDataAllocator::Pin(uint32_t block_id) {
+	D_ASSERT(type == ColumnDataAllocatorType::BUFFER_MANAGER_ALLOCATOR);
+	if (shared) {
+		lock_guard<mutex> guard(lock);
+		return PinInternal(block_id);
+	} else {
+		return PinInternal(block_id);
+	}
+}
+
+BufferHandle ColumnDataAllocator::PinInternal(uint32_t block_id) {
+	return alloc.buffer_manager->Pin(blocks[block_id].handle);
+}
+
+BufferHandle ColumnDataAllocator::AllocateBlock() {
+	D_ASSERT(type == ColumnDataAllocatorType::BUFFER_MANAGER_ALLOCATOR);
+	BlockMetaData data;
+	data.size = 0;
+	data.capacity = Storage::BLOCK_SIZE;
+	auto pin = alloc.buffer_manager->Allocate(Storage::BLOCK_SIZE, false, &data.handle);
+	blocks.push_back(move(data));
+	return pin;
+}
+
+void ColumnDataAllocator::AllocateEmptyBlock(idx_t size) {
+	auto allocation_amount = MaxValue<idx_t>(NextPowerOfTwo(size), 4096);
+	if (!blocks.empty()) {
+		auto last_capacity = blocks.back().capacity;
+		auto next_capacity = MinValue<idx_t>(last_capacity * 2, last_capacity + Storage::BLOCK_SIZE);
+		allocation_amount = MaxValue<idx_t>(next_capacity, allocation_amount);
+	}
+	D_ASSERT(type == ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR);
+	BlockMetaData data;
+	data.size = 0;
+	data.capacity = allocation_amount;
+	data.handle = nullptr;
+	blocks.push_back(move(data));
+}
+
+void ColumnDataAllocator::AssignPointer(uint32_t &block_id, uint32_t &offset, data_ptr_t pointer) {
+	auto pointer_value = uintptr_t(pointer);
+	if (sizeof(uintptr_t) == sizeof(uint32_t)) {
+		block_id = uint32_t(pointer_value);
+	} else if (sizeof(uintptr_t) == sizeof(uint64_t)) {
+		block_id = uint32_t(pointer_value & 0xFFFFFFFF);
+		offset = uint32_t(pointer_value >> 32);
+	} else {
+		throw InternalException("ColumnDataCollection: Architecture not supported!?");
+	}
+}
+
+void ColumnDataAllocator::AllocateBuffer(idx_t size, uint32_t &block_id, uint32_t &offset,
+                                         ChunkManagementState *chunk_state) {
+	D_ASSERT(allocated_data.empty());
+	if (blocks.empty() || blocks.back().Capacity() < size) {
+		auto pinned_block = AllocateBlock();
+		if (chunk_state) {
+			D_ASSERT(!blocks.empty());
+			auto new_block_id = blocks.size() - 1;
+			chunk_state->handles[new_block_id] = move(pinned_block);
+		}
+	}
+	auto &block = blocks.back();
+	D_ASSERT(size <= block.capacity - block.size);
+	block_id = blocks.size() - 1;
+	offset = block.size;
+	block.size += size;
+}
+
+void ColumnDataAllocator::AllocateMemory(idx_t size, uint32_t &block_id, uint32_t &offset,
+                                         ChunkManagementState *chunk_state) {
+	D_ASSERT(blocks.size() == allocated_data.size());
+	if (blocks.empty() || blocks.back().Capacity() < size) {
+		AllocateEmptyBlock(size);
+		auto &last_block = blocks.back();
+		auto allocated = alloc.allocator->Allocate(last_block.capacity);
+		allocated_data.push_back(move(allocated));
+	}
+	auto &block = blocks.back();
+	D_ASSERT(size <= block.capacity - block.size);
+	AssignPointer(block_id, offset, allocated_data.back().get() + block.size);
+	block.size += size;
+}
+
+void ColumnDataAllocator::AllocateData(idx_t size, uint32_t &block_id, uint32_t &offset,
+                                       ChunkManagementState *chunk_state) {
+	switch (type) {
+	case ColumnDataAllocatorType::BUFFER_MANAGER_ALLOCATOR:
+		if (shared) {
+			lock_guard<mutex> guard(lock);
+			AllocateBuffer(size, block_id, offset, chunk_state);
+		} else {
+			AllocateBuffer(size, block_id, offset, chunk_state);
+		}
+		break;
+	case ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR:
+		D_ASSERT(!shared);
+		AllocateMemory(size, block_id, offset, chunk_state);
+		break;
+	default:
+		throw InternalException("Unrecognized allocator type");
+	}
+}
+
+void ColumnDataAllocator::Initialize(ColumnDataAllocator &other) {
+	D_ASSERT(other.HasBlocks());
+	blocks.push_back(other.blocks.back());
+}
+
+data_ptr_t ColumnDataAllocator::GetDataPointer(ChunkManagementState &state, uint32_t block_id, uint32_t offset) {
+	if (type == ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR) {
+		// in-memory allocator: construct pointer from block_id and offset
+		if (sizeof(uintptr_t) == sizeof(uint32_t)) {
+			uintptr_t pointer_value = uintptr_t(block_id);
+			return (data_ptr_t)pointer_value;
+		} else if (sizeof(uintptr_t) == sizeof(uint64_t)) {
+			uintptr_t pointer_value = (uintptr_t(offset) << 32) | uintptr_t(block_id);
+			return (data_ptr_t)pointer_value;
+		} else {
+			throw InternalException("ColumnDataCollection: Architecture not supported!?");
+		}
+	}
+	D_ASSERT(state.handles.find(block_id) != state.handles.end());
+	return state.handles[block_id].Ptr() + offset;
+}
+
+void ColumnDataAllocator::DeleteBlock(uint32_t block_id) {
+	blocks[block_id].handle->SetCanDestroy(true);
+}
+
+Allocator &ColumnDataAllocator::GetAllocator() {
+	return type == ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR ? *alloc.allocator
+	                                                            : alloc.buffer_manager->GetBufferAllocator();
+}
+
+void ColumnDataAllocator::InitializeChunkState(ChunkManagementState &state, ChunkMetaData &chunk) {
+	if (type != ColumnDataAllocatorType::BUFFER_MANAGER_ALLOCATOR) {
+		// nothing to pin
+		return;
+	}
+	// release any handles that are no longer required
+	bool found_handle;
+	do {
+		found_handle = false;
+		for (auto it = state.handles.begin(); it != state.handles.end(); it++) {
+			if (chunk.block_ids.find(it->first) != chunk.block_ids.end()) {
+				// still required: do not release
+				continue;
+			}
+			state.handles.erase(it);
+			found_handle = true;
+			break;
+		}
+	} while (found_handle);
+
+	// grab any handles that are now required
+	for (auto &block_id : chunk.block_ids) {
+		if (state.handles.find(block_id) != state.handles.end()) {
+			// already pinned: don't need to do anything
+			continue;
+		}
+		state.handles[block_id] = Pin(block_id);
+	}
+}
+
+uint32_t BlockMetaData::Capacity() {
+	D_ASSERT(size <= capacity);
+	return capacity - size;
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+struct ColumnDataMetaData;
+
+typedef void (*column_data_copy_function_t)(ColumnDataMetaData &meta_data, const UnifiedVectorFormat &source_data,
+                                            Vector &source, idx_t offset, idx_t copy_count);
+
+struct ColumnDataCopyFunction {
+	column_data_copy_function_t function;
+	vector<ColumnDataCopyFunction> child_functions;
+};
+
+struct ColumnDataMetaData {
+	ColumnDataMetaData(ColumnDataCopyFunction &copy_function, ColumnDataCollectionSegment &segment,
+	                   ColumnDataAppendState &state, ChunkMetaData &chunk_data, VectorDataIndex vector_data_index)
+	    : copy_function(copy_function), segment(segment), state(state), chunk_data(chunk_data),
+	      vector_data_index(vector_data_index) {
+	}
+	ColumnDataMetaData(ColumnDataCopyFunction &copy_function, ColumnDataMetaData &parent,
+	                   VectorDataIndex vector_data_index)
+	    : copy_function(copy_function), segment(parent.segment), state(parent.state), chunk_data(parent.chunk_data),
+	      vector_data_index(vector_data_index) {
+	}
+
+	ColumnDataCopyFunction &copy_function;
+	ColumnDataCollectionSegment &segment;
+	ColumnDataAppendState &state;
+	ChunkMetaData &chunk_data;
+	VectorDataIndex vector_data_index;
+	idx_t child_list_size = DConstants::INVALID_INDEX;
+
+	VectorMetaData &GetVectorMetaData() {
+		return segment.GetVectorData(vector_data_index);
+	}
+};
+
+//! Explicitly initialized without types
+ColumnDataCollection::ColumnDataCollection(Allocator &allocator_p) {
+	types.clear();
+	count = 0;
+	this->finished_append = false;
+	allocator = make_shared<ColumnDataAllocator>(allocator_p);
+}
+
+ColumnDataCollection::ColumnDataCollection(Allocator &allocator_p, vector<LogicalType> types_p) {
+	Initialize(move(types_p));
+	allocator = make_shared<ColumnDataAllocator>(allocator_p);
+}
+
+ColumnDataCollection::ColumnDataCollection(BufferManager &buffer_manager, vector<LogicalType> types_p) {
+	Initialize(move(types_p));
+	allocator = make_shared<ColumnDataAllocator>(buffer_manager);
+}
+
+ColumnDataCollection::ColumnDataCollection(shared_ptr<ColumnDataAllocator> allocator_p, vector<LogicalType> types_p) {
+	Initialize(move(types_p));
+	this->allocator = move(allocator_p);
+}
+
+ColumnDataCollection::ColumnDataCollection(ClientContext &context, vector<LogicalType> types_p,
+                                           ColumnDataAllocatorType type)
+    : ColumnDataCollection(make_shared<ColumnDataAllocator>(context, type), move(types_p)) {
+	D_ASSERT(!types.empty());
+}
+
+ColumnDataCollection::ColumnDataCollection(ColumnDataCollection &other)
+    : ColumnDataCollection(other.allocator, other.types) {
+	other.finished_append = true;
+	D_ASSERT(!types.empty());
+}
+
+ColumnDataCollection::~ColumnDataCollection() {
+}
+
+void ColumnDataCollection::Initialize(vector<LogicalType> types_p) {
+	this->types = move(types_p);
+	this->count = 0;
+	this->finished_append = false;
+	D_ASSERT(!types.empty());
+	copy_functions.reserve(types.size());
+	for (auto &type : types) {
+		copy_functions.push_back(GetCopyFunction(type));
+	}
+}
+
+void ColumnDataCollection::CreateSegment() {
+	segments.emplace_back(make_unique<ColumnDataCollectionSegment>(allocator, types));
+}
+
+//===--------------------------------------------------------------------===//
+// ColumnDataRow
+//===--------------------------------------------------------------------===//
+ColumnDataRow::ColumnDataRow(DataChunk &chunk_p, idx_t row_index, idx_t base_index)
+    : chunk(chunk_p), row_index(row_index), base_index(base_index) {
+}
+
+Value ColumnDataRow::GetValue(idx_t column_index) const {
+	D_ASSERT(column_index < chunk.ColumnCount());
+	D_ASSERT(row_index < chunk.size());
+	return chunk.data[column_index].GetValue(row_index);
+}
+
+idx_t ColumnDataRow::RowIndex() const {
+	return base_index + row_index;
+}
+
+//===--------------------------------------------------------------------===//
+// ColumnDataRowCollection
+//===--------------------------------------------------------------------===//
+ColumnDataRowCollection::ColumnDataRowCollection(const ColumnDataCollection &collection) {
+	if (collection.Count() == 0) {
+		return;
+	}
+	// read all the chunks
+	ColumnDataScanState temp_scan_state;
+	collection.InitializeScan(temp_scan_state);
+	while (true) {
+		auto chunk = make_unique<DataChunk>();
+		collection.InitializeScanChunk(*chunk);
+		if (!collection.Scan(temp_scan_state, *chunk)) {
+			break;
+		}
+		// we keep the BufferHandles that are needed for the materialized collection pinned in the supplied scan_state
+		auto &temp_handles = temp_scan_state.current_chunk_state.handles;
+		auto &scan_handles = scan_state.current_chunk_state.handles;
+		for (auto &temp_handle_pair : temp_handles) {
+			auto handle_copy = make_pair<uint32_t, BufferHandle>(scan_handles.size(), move(temp_handle_pair.second));
+			scan_state.current_chunk_state.handles.insert(move(handle_copy));
+		}
+		chunks.push_back(move(chunk));
+	}
+	// now create all of the column data rows
+	rows.reserve(collection.Count());
+	idx_t base_row = 0;
+	for (auto &chunk : chunks) {
+		for (idx_t row_idx = 0; row_idx < chunk->size(); row_idx++) {
+			rows.emplace_back(*chunk, row_idx, base_row);
+		}
+		base_row += chunk->size();
+	}
+}
+
+ColumnDataRow &ColumnDataRowCollection::operator[](idx_t i) {
+	return rows[i];
+}
+
+const ColumnDataRow &ColumnDataRowCollection::operator[](idx_t i) const {
+	return rows[i];
+}
+
+Value ColumnDataRowCollection::GetValue(idx_t column, idx_t index) const {
+	return rows[index].GetValue(column);
+}
+
+//===--------------------------------------------------------------------===//
+// ColumnDataChunkIterator
+//===--------------------------------------------------------------------===//
+ColumnDataChunkIterationHelper ColumnDataCollection::Chunks() const {
+	vector<column_t> column_ids;
+	for (idx_t i = 0; i < ColumnCount(); i++) {
+		column_ids.push_back(i);
+	}
+	return Chunks(column_ids);
+}
+
+ColumnDataChunkIterationHelper ColumnDataCollection::Chunks(vector<column_t> column_ids) const {
+	return ColumnDataChunkIterationHelper(*this, move(column_ids));
+}
+
+ColumnDataChunkIterationHelper::ColumnDataChunkIterationHelper(const ColumnDataCollection &collection_p,
+                                                               vector<column_t> column_ids_p)
+    : collection(collection_p), column_ids(move(column_ids_p)) {
+}
+
+ColumnDataChunkIterationHelper::ColumnDataChunkIterator::ColumnDataChunkIterator(
+    const ColumnDataCollection *collection_p, vector<column_t> column_ids_p)
+    : collection(collection_p), scan_chunk(make_shared<DataChunk>()), row_index(0) {
+	if (!collection) {
+		return;
+	}
+	collection->InitializeScan(scan_state, move(column_ids_p));
+	collection->InitializeScanChunk(scan_state, *scan_chunk);
+	collection->Scan(scan_state, *scan_chunk);
+}
+
+void ColumnDataChunkIterationHelper::ColumnDataChunkIterator::Next() {
+	if (!collection) {
+		return;
+	}
+	if (!collection->Scan(scan_state, *scan_chunk)) {
+		collection = nullptr;
+		row_index = 0;
+	} else {
+		row_index += scan_chunk->size();
+	}
+}
+
+ColumnDataChunkIterationHelper::ColumnDataChunkIterator &
+ColumnDataChunkIterationHelper::ColumnDataChunkIterator::operator++() {
+	Next();
+	return *this;
+}
+
+bool ColumnDataChunkIterationHelper::ColumnDataChunkIterator::operator!=(const ColumnDataChunkIterator &other) const {
+	return collection != other.collection || row_index != other.row_index;
+}
+
+DataChunk &ColumnDataChunkIterationHelper::ColumnDataChunkIterator::operator*() const {
+	return *scan_chunk;
+}
+
+//===--------------------------------------------------------------------===//
+// ColumnDataRowIterator
+//===--------------------------------------------------------------------===//
+ColumnDataRowIterationHelper ColumnDataCollection::Rows() const {
+	return ColumnDataRowIterationHelper(*this);
+}
+
+ColumnDataRowIterationHelper::ColumnDataRowIterationHelper(const ColumnDataCollection &collection_p)
+    : collection(collection_p) {
+}
+
+ColumnDataRowIterationHelper::ColumnDataRowIterator::ColumnDataRowIterator(const ColumnDataCollection *collection_p)
+    : collection(collection_p), scan_chunk(make_shared<DataChunk>()), current_row(*scan_chunk, 0, 0) {
+	if (!collection) {
+		return;
+	}
+	collection->InitializeScan(scan_state);
+	collection->InitializeScanChunk(*scan_chunk);
+	collection->Scan(scan_state, *scan_chunk);
+}
+
+void ColumnDataRowIterationHelper::ColumnDataRowIterator::Next() {
+	if (!collection) {
+		return;
+	}
+	current_row.row_index++;
+	if (current_row.row_index >= scan_chunk->size()) {
+		current_row.base_index += scan_chunk->size();
+		current_row.row_index = 0;
+		if (!collection->Scan(scan_state, *scan_chunk)) {
+			// exhausted collection: move iterator to nop state
+			current_row.base_index = 0;
+			collection = nullptr;
+		}
+	}
+}
+
+ColumnDataRowIterationHelper::ColumnDataRowIterator ColumnDataRowIterationHelper::begin() { // NOLINT
+	return ColumnDataRowIterationHelper::ColumnDataRowIterator(collection.Count() == 0 ? nullptr : &collection);
+}
+ColumnDataRowIterationHelper::ColumnDataRowIterator ColumnDataRowIterationHelper::end() { // NOLINT
+	return ColumnDataRowIterationHelper::ColumnDataRowIterator(nullptr);
+}
+
+ColumnDataRowIterationHelper::ColumnDataRowIterator &ColumnDataRowIterationHelper::ColumnDataRowIterator::operator++() {
+	Next();
+	return *this;
+}
+
+bool ColumnDataRowIterationHelper::ColumnDataRowIterator::operator!=(const ColumnDataRowIterator &other) const {
+	return collection != other.collection || current_row.row_index != other.current_row.row_index ||
+	       current_row.base_index != other.current_row.base_index;
+}
+
+const ColumnDataRow &ColumnDataRowIterationHelper::ColumnDataRowIterator::operator*() const {
+	return current_row;
+}
+
+//===--------------------------------------------------------------------===//
+// Append
+//===--------------------------------------------------------------------===//
+void ColumnDataCollection::InitializeAppend(ColumnDataAppendState &state) {
+	D_ASSERT(!finished_append);
+	state.vector_data.resize(types.size());
+	if (segments.empty()) {
+		CreateSegment();
+	}
+	auto &segment = *segments.back();
+	if (segment.chunk_data.empty()) {
+		segment.AllocateNewChunk();
+	}
+	segment.InitializeChunkState(segment.chunk_data.size() - 1, state.current_chunk_state);
+}
+
+void ColumnDataCopyValidity(const UnifiedVectorFormat &source_data, validity_t *target, idx_t source_offset,
+                            idx_t target_offset, idx_t copy_count) {
+	ValidityMask validity(target);
+	if (target_offset == 0) {
+		// first time appending to this vector
+		// all data here is still uninitialized
+		// initialize the validity mask to set all to valid
+		validity.SetAllValid(STANDARD_VECTOR_SIZE);
+	}
+	// FIXME: we can do something more optimized here using bitshifts & bitwise ors
+	if (!source_data.validity.AllValid()) {
+		for (idx_t i = 0; i < copy_count; i++) {
+			auto idx = source_data.sel->get_index(source_offset + i);
+			if (!source_data.validity.RowIsValid(idx)) {
+				validity.SetInvalid(target_offset + i);
+			}
+		}
+	}
+}
+
+template <class T>
+struct BaseValueCopy {
+	static idx_t TypeSize() {
+		return sizeof(T);
+	}
+
+	template <class OP>
+	static void Assign(ColumnDataMetaData &meta_data, data_ptr_t target, data_ptr_t source, idx_t target_idx,
+	                   idx_t source_idx) {
+		auto result_data = (T *)target;
+		auto source_data = (T *)source;
+		result_data[target_idx] = OP::Operation(meta_data, source_data[source_idx]);
+	}
+};
+
+template <class T>
+struct StandardValueCopy : public BaseValueCopy<T> {
+	static T Operation(ColumnDataMetaData &, T input) {
+		return input;
+	}
+};
+
+struct StringValueCopy : public BaseValueCopy<string_t> {
+	static string_t Operation(ColumnDataMetaData &meta_data, string_t input) {
+		return input.IsInlined() ? input : meta_data.segment.heap.AddBlob(input);
+	}
+};
+
+struct ListValueCopy : public BaseValueCopy<list_entry_t> {
+	using TYPE = list_entry_t;
+
+	static TYPE Operation(ColumnDataMetaData &meta_data, TYPE input) {
+		input.offset += meta_data.child_list_size;
+		return input;
+	}
+};
+
+struct StructValueCopy {
+	static idx_t TypeSize() {
+		return 0;
+	}
+
+	template <class OP>
+	static void Assign(ColumnDataMetaData &meta_data, data_ptr_t target, data_ptr_t source, idx_t target_idx,
+	                   idx_t source_idx) {
+	}
+};
+
+template <class OP>
+static void TemplatedColumnDataCopy(ColumnDataMetaData &meta_data, const UnifiedVectorFormat &source_data,
+                                    Vector &source, idx_t offset, idx_t count) {
+	auto &segment = meta_data.segment;
+	auto &append_state = meta_data.state;
+
+	auto current_index = meta_data.vector_data_index;
+	idx_t remaining = count;
+	while (remaining > 0) {
+		auto &current_segment = segment.GetVectorData(current_index);
+		idx_t append_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE - current_segment.count, remaining);
+
+		auto base_ptr = meta_data.segment.allocator->GetDataPointer(append_state.current_chunk_state,
+		                                                            current_segment.block_id, current_segment.offset);
+		auto validity_data = ColumnDataCollectionSegment::GetValidityPointer(base_ptr, OP::TypeSize());
+
+		ValidityMask result_validity(validity_data);
+		if (current_segment.count == 0) {
+			// first time appending to this vector
+			// all data here is still uninitialized
+			// initialize the validity mask to set all to valid
+			result_validity.SetAllValid(STANDARD_VECTOR_SIZE);
+		}
+		for (idx_t i = 0; i < append_count; i++) {
+			auto source_idx = source_data.sel->get_index(offset + i);
+			if (source_data.validity.RowIsValid(source_idx)) {
+				OP::template Assign<OP>(meta_data, base_ptr, source_data.data, current_segment.count + i, source_idx);
+			} else {
+				result_validity.SetInvalid(current_segment.count + i);
+			}
+		}
+		current_segment.count += append_count;
+		offset += append_count;
+		remaining -= append_count;
+		if (remaining > 0) {
+			// need to append more, check if we need to allocate a new vector or not
+			if (!current_segment.next_data.IsValid()) {
+				segment.AllocateVector(source.GetType(), meta_data.chunk_data, meta_data.state, current_index);
+			}
+			D_ASSERT(segment.GetVectorData(current_index).next_data.IsValid());
+			current_index = segment.GetVectorData(current_index).next_data;
+		}
+	}
+}
+
+template <class T>
+static void ColumnDataCopy(ColumnDataMetaData &meta_data, const UnifiedVectorFormat &source_data, Vector &source,
+                           idx_t offset, idx_t copy_count) {
+	TemplatedColumnDataCopy<StandardValueCopy<T>>(meta_data, source_data, source, offset, copy_count);
+}
+
+template <>
+void ColumnDataCopy<string_t>(ColumnDataMetaData &meta_data, const UnifiedVectorFormat &source_data, Vector &source,
+                              idx_t offset, idx_t copy_count) {
+	TemplatedColumnDataCopy<StringValueCopy>(meta_data, source_data, source, offset, copy_count);
+}
+
+template <>
+void ColumnDataCopy<list_entry_t>(ColumnDataMetaData &meta_data, const UnifiedVectorFormat &source_data, Vector &source,
+                                  idx_t offset, idx_t copy_count) {
+	auto &segment = meta_data.segment;
+
+	// first append the child entries of the list
+	auto &child_vector = ListVector::GetEntry(source);
+	idx_t child_list_size = ListVector::GetListSize(source);
+	auto &child_type = child_vector.GetType();
+
+	UnifiedVectorFormat child_vector_data;
+	child_vector.ToUnifiedFormat(child_list_size, child_vector_data);
+
+	if (!meta_data.GetVectorMetaData().child_index.IsValid()) {
+		auto child_index = segment.AllocateVector(child_type, meta_data.chunk_data, meta_data.state);
+		meta_data.GetVectorMetaData().child_index = meta_data.segment.AddChildIndex(child_index);
+	}
+	auto &child_function = meta_data.copy_function.child_functions[0];
+	auto child_index = segment.GetChildIndex(meta_data.GetVectorMetaData().child_index);
+	// figure out the current list size by traversing the set of child entries
+	idx_t current_list_size = 0;
+	auto current_child_index = child_index;
+	while (current_child_index.IsValid()) {
+		auto &child_vdata = segment.GetVectorData(current_child_index);
+		current_list_size += child_vdata.count;
+		current_child_index = child_vdata.next_data;
+	}
+	ColumnDataMetaData child_meta_data(child_function, meta_data, child_index);
+	// FIXME: appending the entire child list here is not required
+	// We can also scan the actual list entries required per the offset/copy_count
+	child_function.function(child_meta_data, child_vector_data, child_vector, 0, child_list_size);
+
+	// now copy the list entries
+	meta_data.child_list_size = current_list_size;
+	TemplatedColumnDataCopy<ListValueCopy>(meta_data, source_data, source, offset, copy_count);
+}
+
+void ColumnDataCopyStruct(ColumnDataMetaData &meta_data, const UnifiedVectorFormat &source_data, Vector &source,
+                          idx_t offset, idx_t copy_count) {
+	auto &segment = meta_data.segment;
+
+	// copy the NULL values for the main struct vector
+	TemplatedColumnDataCopy<StructValueCopy>(meta_data, source_data, source, offset, copy_count);
+
+	auto &child_types = StructType::GetChildTypes(source.GetType());
+	// now copy all the child vectors
+	D_ASSERT(meta_data.GetVectorMetaData().child_index.IsValid());
+	auto &child_vectors = StructVector::GetEntries(source);
+	for (idx_t child_idx = 0; child_idx < child_types.size(); child_idx++) {
+		auto &child_function = meta_data.copy_function.child_functions[child_idx];
+		auto child_index = segment.GetChildIndex(meta_data.GetVectorMetaData().child_index, child_idx);
+		ColumnDataMetaData child_meta_data(child_function, meta_data, child_index);
+
+		UnifiedVectorFormat child_data;
+		child_vectors[child_idx]->ToUnifiedFormat(copy_count, child_data);
+
+		child_function.function(child_meta_data, child_data, *child_vectors[child_idx], offset, copy_count);
+	}
+}
+
+ColumnDataCopyFunction ColumnDataCollection::GetCopyFunction(const LogicalType &type) {
+	ColumnDataCopyFunction result;
+	column_data_copy_function_t function;
+	switch (type.InternalType()) {
+	case PhysicalType::BOOL:
+		function = ColumnDataCopy<bool>;
+		break;
+	case PhysicalType::INT8:
+		function = ColumnDataCopy<int8_t>;
+		break;
+	case PhysicalType::INT16:
+		function = ColumnDataCopy<int16_t>;
+		break;
+	case PhysicalType::INT32:
+		function = ColumnDataCopy<int32_t>;
+		break;
+	case PhysicalType::INT64:
+		function = ColumnDataCopy<int64_t>;
+		break;
+	case PhysicalType::INT128:
+		function = ColumnDataCopy<hugeint_t>;
+		break;
+	case PhysicalType::UINT8:
+		function = ColumnDataCopy<uint8_t>;
+		break;
+	case PhysicalType::UINT16:
+		function = ColumnDataCopy<uint16_t>;
+		break;
+	case PhysicalType::UINT32:
+		function = ColumnDataCopy<uint32_t>;
+		break;
+	case PhysicalType::UINT64:
+		function = ColumnDataCopy<uint64_t>;
+		break;
+	case PhysicalType::FLOAT:
+		function = ColumnDataCopy<float>;
+		break;
+	case PhysicalType::DOUBLE:
+		function = ColumnDataCopy<double>;
+		break;
+	case PhysicalType::INTERVAL:
+		function = ColumnDataCopy<interval_t>;
+		break;
+	case PhysicalType::VARCHAR:
+		function = ColumnDataCopy<string_t>;
+		break;
+	case PhysicalType::STRUCT: {
+		function = ColumnDataCopyStruct;
+		auto &child_types = StructType::GetChildTypes(type);
+		for (auto &kv : child_types) {
+			result.child_functions.push_back(GetCopyFunction(kv.second));
+		}
+		break;
+	}
+	case PhysicalType::LIST: {
+		function = ColumnDataCopy<list_entry_t>;
+		auto child_function = GetCopyFunction(ListType::GetChildType(type));
+		result.child_functions.push_back(child_function);
+		break;
+	}
+	default:
+		throw InternalException("Unsupported type for ColumnDataCollection::GetCopyFunction");
+	}
+	result.function = function;
+	return result;
+}
+
+static bool IsComplexType(const LogicalType &type) {
+	switch (type.InternalType()) {
+	case PhysicalType::STRUCT:
+	case PhysicalType::LIST:
+		return true;
+	default:
+		return false;
+	};
+}
+
+void ColumnDataCollection::Append(ColumnDataAppendState &state, DataChunk &input) {
+	D_ASSERT(!finished_append);
+	D_ASSERT(types == input.GetTypes());
+
+	auto &segment = *segments.back();
+	for (idx_t vector_idx = 0; vector_idx < types.size(); vector_idx++) {
+		if (IsComplexType(input.data[vector_idx].GetType())) {
+			input.data[vector_idx].Flatten(input.size());
+		}
+		input.data[vector_idx].ToUnifiedFormat(input.size(), state.vector_data[vector_idx]);
+	}
+
+	idx_t remaining = input.size();
+	while (remaining > 0) {
+		auto &chunk_data = segment.chunk_data.back();
+		idx_t append_amount = MinValue<idx_t>(remaining, STANDARD_VECTOR_SIZE - chunk_data.count);
+		if (append_amount > 0) {
+			idx_t offset = input.size() - remaining;
+			for (idx_t vector_idx = 0; vector_idx < types.size(); vector_idx++) {
+				ColumnDataMetaData meta_data(copy_functions[vector_idx], segment, state, chunk_data,
+				                             chunk_data.vector_data[vector_idx]);
+				copy_functions[vector_idx].function(meta_data, state.vector_data[vector_idx], input.data[vector_idx],
+				                                    offset, append_amount);
+			}
+			chunk_data.count += append_amount;
+		}
+		remaining -= append_amount;
+		if (remaining > 0) {
+			// more to do
+			// allocate a new chunk
+			segment.AllocateNewChunk();
+			segment.InitializeChunkState(segment.chunk_data.size() - 1, state.current_chunk_state);
+		}
+	}
+	segment.count += input.size();
+	count += input.size();
+}
+
+void ColumnDataCollection::Append(DataChunk &input) {
+	ColumnDataAppendState state;
+	InitializeAppend(state);
+	Append(state, input);
+}
+
+//===--------------------------------------------------------------------===//
+// Scan
+//===--------------------------------------------------------------------===//
+void ColumnDataCollection::InitializeScan(ColumnDataScanState &state, ColumnDataScanProperties properties) const {
+	vector<column_t> column_ids;
+	column_ids.reserve(types.size());
+	for (idx_t i = 0; i < types.size(); i++) {
+		column_ids.push_back(i);
+	}
+	InitializeScan(state, move(column_ids), properties);
+}
+
+void ColumnDataCollection::InitializeScan(ColumnDataScanState &state, vector<column_t> column_ids,
+                                          ColumnDataScanProperties properties) const {
+	state.chunk_index = 0;
+	state.segment_index = 0;
+	state.current_row_index = 0;
+	state.next_row_index = 0;
+	state.current_chunk_state.handles.clear();
+	state.properties = properties;
+	state.column_ids = move(column_ids);
+}
+
+void ColumnDataCollection::InitializeScan(ColumnDataParallelScanState &state,
+                                          ColumnDataScanProperties properties) const {
+	InitializeScan(state.scan_state, properties);
+}
+
+void ColumnDataCollection::InitializeScan(ColumnDataParallelScanState &state, vector<column_t> column_ids,
+                                          ColumnDataScanProperties properties) const {
+	InitializeScan(state.scan_state, move(column_ids), properties);
+}
+
+bool ColumnDataCollection::Scan(ColumnDataParallelScanState &state, ColumnDataLocalScanState &lstate,
+                                DataChunk &result) const {
+	result.Reset();
+
+	idx_t chunk_index;
+	idx_t segment_index;
+	idx_t row_index;
+	{
+		lock_guard<mutex> l(state.lock);
+		if (!NextScanIndex(state.scan_state, chunk_index, segment_index, row_index)) {
+			return false;
+		}
+	}
+	ScanAtIndex(state, lstate, result, chunk_index, segment_index, row_index);
+	return true;
+}
+
+void ColumnDataCollection::InitializeScanChunk(DataChunk &chunk) const {
+	chunk.Initialize(allocator->GetAllocator(), types);
+}
+
+void ColumnDataCollection::InitializeScanChunk(ColumnDataScanState &state, DataChunk &chunk) const {
+	D_ASSERT(!state.column_ids.empty());
+	vector<LogicalType> chunk_types;
+	chunk_types.reserve(state.column_ids.size());
+	for (idx_t i = 0; i < state.column_ids.size(); i++) {
+		auto column_idx = state.column_ids[i];
+		D_ASSERT(column_idx < types.size());
+		chunk_types.push_back(types[column_idx]);
+	}
+	chunk.Initialize(allocator->GetAllocator(), chunk_types);
+}
+
+bool ColumnDataCollection::NextScanIndex(ColumnDataScanState &state, idx_t &chunk_index, idx_t &segment_index,
+                                         idx_t &row_index) const {
+	row_index = state.current_row_index = state.next_row_index;
+	// check if we still have collections to scan
+	if (state.segment_index >= segments.size()) {
+		// no more data left in the scan
+		return false;
+	}
+	// check within the current collection if we still have chunks to scan
+	while (state.chunk_index >= segments[state.segment_index]->chunk_data.size()) {
+		// exhausted all chunks for this internal data structure: move to the next one
+		state.chunk_index = 0;
+		state.segment_index++;
+		state.current_chunk_state.handles.clear();
+		if (state.segment_index >= segments.size()) {
+			return false;
+		}
+	}
+	state.next_row_index += segments[state.segment_index]->chunk_data[state.chunk_index].count;
+	segment_index = state.segment_index;
+	chunk_index = state.chunk_index++;
+	return true;
+}
+
+void ColumnDataCollection::ScanAtIndex(ColumnDataParallelScanState &state, ColumnDataLocalScanState &lstate,
+                                       DataChunk &result, idx_t chunk_index, idx_t segment_index,
+                                       idx_t row_index) const {
+	if (segment_index != lstate.current_segment_index) {
+		lstate.current_chunk_state.handles.clear();
+		lstate.current_segment_index = segment_index;
+	}
+	auto &segment = *segments[segment_index];
+	lstate.current_chunk_state.properties = state.scan_state.properties;
+	segment.ReadChunk(chunk_index, lstate.current_chunk_state, result, state.scan_state.column_ids);
+	lstate.current_row_index = row_index;
+	result.Verify();
+}
+
+bool ColumnDataCollection::Scan(ColumnDataScanState &state, DataChunk &result) const {
+	result.Reset();
+
+	idx_t chunk_index;
+	idx_t segment_index;
+	idx_t row_index;
+	if (!NextScanIndex(state, chunk_index, segment_index, row_index)) {
+		return false;
+	}
+
+	// found a chunk to scan -> scan it
+	auto &segment = *segments[segment_index];
+	state.current_chunk_state.properties = state.properties;
+	segment.ReadChunk(chunk_index, state.current_chunk_state, result, state.column_ids);
+	result.Verify();
+	return true;
+}
+
+ColumnDataRowCollection ColumnDataCollection::GetRows() const {
+	return ColumnDataRowCollection(*this);
+}
+
+//===--------------------------------------------------------------------===//
+// Combine
+//===--------------------------------------------------------------------===//
+void ColumnDataCollection::Combine(ColumnDataCollection &other) {
+	if (other.count == 0) {
+		return;
+	}
+	if (types != other.types) {
+		throw InternalException("Attempting to combine ColumnDataCollections with mismatching types");
+	}
+	this->count += other.count;
+	this->segments.reserve(segments.size() + other.segments.size());
+	for (auto &other_seg : other.segments) {
+		segments.push_back(move(other_seg));
+	}
+	Verify();
+}
+
+//===--------------------------------------------------------------------===//
+// Fetch
+//===--------------------------------------------------------------------===//
+idx_t ColumnDataCollection::ChunkCount() const {
+	idx_t chunk_count = 0;
+	for (auto &segment : segments) {
+		chunk_count += segment->ChunkCount();
+	}
+	return chunk_count;
+}
+
+void ColumnDataCollection::FetchChunk(idx_t chunk_idx, DataChunk &result) const {
+	D_ASSERT(chunk_idx < ChunkCount());
+	for (auto &segment : segments) {
+		if (chunk_idx >= segment->ChunkCount()) {
+			chunk_idx -= segment->ChunkCount();
+		} else {
+			segment->FetchChunk(chunk_idx, result);
+			return;
+		}
+	}
+	throw InternalException("Failed to find chunk in ColumnDataCollection");
+}
+
+//===--------------------------------------------------------------------===//
+// Helpers
+//===--------------------------------------------------------------------===//
+void ColumnDataCollection::Verify() {
+#ifdef DEBUG
+	// verify counts
+	idx_t total_segment_count = 0;
+	for (auto &segment : segments) {
+		segment->Verify();
+		total_segment_count += segment->count;
+	}
+	D_ASSERT(total_segment_count == this->count);
+#endif
+}
+
+string ColumnDataCollection::ToString() const {
+	return "Column Data Collection";
+}
+
+void ColumnDataCollection::Print() const {
+	Printer::Print(ToString());
+}
+
+void ColumnDataCollection::Reset() {
+	count = 0;
+	segments.clear();
+}
+
+bool ColumnDataCollection::ResultEquals(const ColumnDataCollection &left, const ColumnDataCollection &right,
+                                        string &error_message) {
+	if (left.ColumnCount() != right.ColumnCount()) {
+		error_message = "Column count mismatch";
+		return false;
+	}
+	if (left.Count() != right.Count()) {
+		error_message = "Row count mismatch";
+		return false;
+	}
+	auto left_rows = left.GetRows();
+	auto right_rows = right.GetRows();
+	for (idx_t r = 0; r < left.Count(); r++) {
+		for (idx_t c = 0; c < left.ColumnCount(); c++) {
+			auto lvalue = left_rows.GetValue(c, r);
+			auto rvalue = left_rows.GetValue(c, r);
+			if (!Value::DefaultValuesAreEqual(lvalue, rvalue)) {
+				error_message =
+				    StringUtil::Format("%s <> %s (row: %lld, col: %lld)\n", lvalue.ToString(), rvalue.ToString(), r, c);
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+const vector<unique_ptr<ColumnDataCollectionSegment>> &ColumnDataCollection::GetSegments() const {
+	return segments;
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+ColumnDataCollectionSegment::ColumnDataCollectionSegment(shared_ptr<ColumnDataAllocator> allocator_p,
+                                                         vector<LogicalType> types_p)
+    : allocator(move(allocator_p)), types(move(types_p)), count(0), heap(allocator->GetAllocator()) {
+}
+
+idx_t ColumnDataCollectionSegment::GetDataSize(idx_t type_size) {
+	return AlignValue(type_size * STANDARD_VECTOR_SIZE);
+}
+
+validity_t *ColumnDataCollectionSegment::GetValidityPointer(data_ptr_t base_ptr, idx_t type_size) {
+	return (validity_t *)(base_ptr + GetDataSize(type_size));
+}
+
+VectorDataIndex ColumnDataCollectionSegment::AllocateVectorInternal(const LogicalType &type, ChunkMetaData &chunk_meta,
+                                                                    ChunkManagementState *chunk_state) {
+	VectorMetaData meta_data;
+	meta_data.count = 0;
+
+	auto internal_type = type.InternalType();
+	auto type_size = internal_type == PhysicalType::STRUCT ? 0 : GetTypeIdSize(internal_type);
+	allocator->AllocateData(GetDataSize(type_size) + ValidityMask::STANDARD_MASK_SIZE, meta_data.block_id,
+	                        meta_data.offset, chunk_state);
+	if (allocator->GetType() == ColumnDataAllocatorType::BUFFER_MANAGER_ALLOCATOR) {
+		chunk_meta.block_ids.insert(meta_data.block_id);
+	}
+
+	auto index = vector_data.size();
+	vector_data.push_back(meta_data);
+	return VectorDataIndex(index);
+}
+
+VectorDataIndex ColumnDataCollectionSegment::AllocateVector(const LogicalType &type, ChunkMetaData &chunk_meta,
+                                                            ChunkManagementState *chunk_state,
+                                                            VectorDataIndex prev_index) {
+	auto index = AllocateVectorInternal(type, chunk_meta, chunk_state);
+	if (prev_index.IsValid()) {
+		GetVectorData(prev_index).next_data = index;
+	}
+	if (type.InternalType() == PhysicalType::STRUCT) {
+		// initialize the struct children
+		auto &child_types = StructType::GetChildTypes(type);
+		auto base_child_index = ReserveChildren(child_types.size());
+		for (idx_t child_idx = 0; child_idx < child_types.size(); child_idx++) {
+			VectorDataIndex prev_child_index;
+			if (prev_index.IsValid()) {
+				prev_child_index = GetChildIndex(GetVectorData(prev_index).child_index, child_idx);
+			}
+			auto child_index = AllocateVector(child_types[child_idx].second, chunk_meta, chunk_state, prev_child_index);
+			SetChildIndex(base_child_index, child_idx, child_index);
+		}
+		GetVectorData(index).child_index = base_child_index;
+	}
+	return index;
+}
+
+VectorDataIndex ColumnDataCollectionSegment::AllocateVector(const LogicalType &type, ChunkMetaData &chunk_meta,
+                                                            ColumnDataAppendState &append_state,
+                                                            VectorDataIndex prev_index) {
+	return AllocateVector(type, chunk_meta, &append_state.current_chunk_state, prev_index);
+}
+
+void ColumnDataCollectionSegment::AllocateNewChunk() {
+	ChunkMetaData meta_data;
+	meta_data.count = 0;
+	meta_data.vector_data.reserve(types.size());
+	for (idx_t i = 0; i < types.size(); i++) {
+		auto vector_idx = AllocateVector(types[i], meta_data);
+		meta_data.vector_data.push_back(vector_idx);
+	}
+	chunk_data.push_back(move(meta_data));
+}
+
+void ColumnDataCollectionSegment::InitializeChunkState(idx_t chunk_index, ChunkManagementState &state) {
+	auto &chunk = chunk_data[chunk_index];
+	allocator->InitializeChunkState(state, chunk);
+}
+
+VectorDataIndex ColumnDataCollectionSegment::GetChildIndex(VectorChildIndex index, idx_t child_entry) {
+	D_ASSERT(index.IsValid());
+	D_ASSERT(index.index + child_entry < child_indices.size());
+	return VectorDataIndex(child_indices[index.index + child_entry]);
+}
+
+VectorChildIndex ColumnDataCollectionSegment::AddChildIndex(VectorDataIndex index) {
+	auto result = child_indices.size();
+	child_indices.push_back(index);
+	return VectorChildIndex(result);
+}
+
+VectorChildIndex ColumnDataCollectionSegment::ReserveChildren(idx_t child_count) {
+	auto result = child_indices.size();
+	for (idx_t i = 0; i < child_count; i++) {
+		child_indices.emplace_back();
+	}
+	return VectorChildIndex(result);
+}
+
+void ColumnDataCollectionSegment::SetChildIndex(VectorChildIndex base_idx, idx_t child_number, VectorDataIndex index) {
+	D_ASSERT(base_idx.IsValid());
+	D_ASSERT(index.IsValid());
+	D_ASSERT(base_idx.index + child_number < child_indices.size());
+	child_indices[base_idx.index + child_number] = index;
+}
+
+idx_t ColumnDataCollectionSegment::ReadVectorInternal(ChunkManagementState &state, VectorDataIndex vector_index,
+                                                      Vector &result) {
+	auto &vector_type = result.GetType();
+	auto internal_type = vector_type.InternalType();
+	auto type_size = GetTypeIdSize(internal_type);
+	auto &vdata = GetVectorData(vector_index);
+
+	auto base_ptr = allocator->GetDataPointer(state, vdata.block_id, vdata.offset);
+	auto validity_data = GetValidityPointer(base_ptr, type_size);
+	if (!vdata.next_data.IsValid() && state.properties != ColumnDataScanProperties::DISALLOW_ZERO_COPY) {
+		// no next data, we can do a zero-copy read of this vector
+		FlatVector::SetData(result, base_ptr);
+		FlatVector::Validity(result).Initialize(validity_data);
+		return vdata.count;
+	}
+
+	// the data for this vector is spread over multiple vector data entries
+	// we need to copy over the data for each of the vectors
+	// first figure out how many rows we need to copy by looping over all of the child vector indexes
+	idx_t vector_count = 0;
+	auto next_index = vector_index;
+	while (next_index.IsValid()) {
+		auto &current_vdata = GetVectorData(next_index);
+		vector_count += current_vdata.count;
+		next_index = current_vdata.next_data;
+	}
+	// resize the result vector
+	result.Resize(0, vector_count);
+	next_index = vector_index;
+	// now perform the copy of each of the vectors
+	auto target_data = FlatVector::GetData(result);
+	auto &target_validity = FlatVector::Validity(result);
+	idx_t current_offset = 0;
+	while (next_index.IsValid()) {
+		auto &current_vdata = GetVectorData(next_index);
+		base_ptr = allocator->GetDataPointer(state, current_vdata.block_id, current_vdata.offset);
+		validity_data = GetValidityPointer(base_ptr, type_size);
+		if (type_size > 0) {
+			memcpy(target_data + current_offset * type_size, base_ptr, current_vdata.count * type_size);
+		}
+		// FIXME: use bitwise operations here
+		ValidityMask current_validity(validity_data);
+		for (idx_t k = 0; k < current_vdata.count; k++) {
+			target_validity.Set(current_offset + k, current_validity.RowIsValid(k));
+		}
+		current_offset += current_vdata.count;
+		next_index = current_vdata.next_data;
+	}
+	return vector_count;
+}
+
+idx_t ColumnDataCollectionSegment::ReadVector(ChunkManagementState &state, VectorDataIndex vector_index,
+                                              Vector &result) {
+	auto &vector_type = result.GetType();
+	auto internal_type = vector_type.InternalType();
+	auto &vdata = GetVectorData(vector_index);
+	if (vdata.count == 0) {
+		return 0;
+	}
+	auto count = ReadVectorInternal(state, vector_index, result);
+	if (internal_type == PhysicalType::LIST) {
+		// list: copy child
+		auto &child_vector = ListVector::GetEntry(result);
+		auto child_count = ReadVector(state, GetChildIndex(vdata.child_index), child_vector);
+		ListVector::SetListSize(result, child_count);
+	} else if (internal_type == PhysicalType::STRUCT) {
+		auto &child_vectors = StructVector::GetEntries(result);
+		for (idx_t child_idx = 0; child_idx < child_vectors.size(); child_idx++) {
+			auto child_count =
+			    ReadVector(state, GetChildIndex(vdata.child_index, child_idx), *child_vectors[child_idx]);
+			if (child_count != count) {
+				throw InternalException("Column Data Collection: mismatch in struct child sizes");
+			}
+		}
+	}
+	return count;
+}
+
+void ColumnDataCollectionSegment::ReadChunk(idx_t chunk_index, ChunkManagementState &state, DataChunk &chunk,
+                                            const vector<column_t> &column_ids) {
+	D_ASSERT(chunk.ColumnCount() == column_ids.size());
+	D_ASSERT(state.properties != ColumnDataScanProperties::INVALID);
+	InitializeChunkState(chunk_index, state);
+	auto &chunk_meta = chunk_data[chunk_index];
+	for (idx_t i = 0; i < column_ids.size(); i++) {
+		auto vector_idx = column_ids[i];
+		D_ASSERT(vector_idx < chunk_meta.vector_data.size());
+		ReadVector(state, chunk_meta.vector_data[vector_idx], chunk.data[i]);
+	}
+	chunk.SetCardinality(chunk_meta.count);
+}
+
+idx_t ColumnDataCollectionSegment::ChunkCount() const {
+	return chunk_data.size();
+}
+
+void ColumnDataCollectionSegment::FetchChunk(idx_t chunk_idx, DataChunk &result) {
+	vector<column_t> column_ids;
+	column_ids.reserve(types.size());
+	for (idx_t i = 0; i < types.size(); i++) {
+		column_ids.push_back(i);
+	}
+	FetchChunk(chunk_idx, result, column_ids);
+}
+
+void ColumnDataCollectionSegment::FetchChunk(idx_t chunk_idx, DataChunk &result, const vector<column_t> &column_ids) {
+	D_ASSERT(chunk_idx < chunk_data.size());
+	ChunkManagementState state;
+	state.properties = ColumnDataScanProperties::DISALLOW_ZERO_COPY;
+	ReadChunk(chunk_idx, state, result, column_ids);
+}
+
+void ColumnDataCollectionSegment::Verify() {
+#ifdef DEBUG
+	idx_t total_count = 0;
+	for (idx_t i = 0; i < chunk_data.size(); i++) {
+		total_count += chunk_data[i].count;
+	}
+	D_ASSERT(total_count == this->count);
+#endif
+}
+
+} // namespace duckdb
+
+
+#include <algorithm>
+
+namespace duckdb {
+
+using ChunkReference = ColumnDataConsumer::ChunkReference;
+
+ChunkReference::ChunkReference(ColumnDataCollectionSegment *segment_p, uint32_t chunk_index_p)
+    : segment(segment_p), chunk_index_in_segment(chunk_index_p) {
+}
+
+uint32_t ChunkReference::GetMinimumBlockID() const {
+	const auto &block_ids = segment->chunk_data[chunk_index_in_segment].block_ids;
+	return *std::min_element(block_ids.begin(), block_ids.end());
+}
+
+ColumnDataConsumer::ColumnDataConsumer(ColumnDataCollection &collection_p, vector<column_t> column_ids)
+    : collection(collection_p), column_ids(move(column_ids)) {
+}
+
+void ColumnDataConsumer::InitializeScan() {
+	chunk_count = collection.ChunkCount();
+	current_chunk_index = 0;
+	chunk_delete_index = DConstants::INVALID_INDEX;
+
+	// Initialize chunk references and sort them, so we can scan them in a sane order, regardless of how it was created
+	chunk_references.reserve(chunk_count);
+	for (auto &segment : collection.GetSegments()) {
+		for (idx_t chunk_index = 0; chunk_index < segment->chunk_data.size(); chunk_index++) {
+			chunk_references.emplace_back(segment.get(), chunk_index);
+		}
+	}
+	std::sort(chunk_references.begin(), chunk_references.end());
+}
+
+bool ColumnDataConsumer::AssignChunk(ColumnDataConsumerScanState &state) {
+	lock_guard<mutex> guard(lock);
+	if (current_chunk_index == chunk_count) {
+		// All chunks have been assigned
+		state.current_chunk_state.handles.clear();
+		state.chunk_index = DConstants::INVALID_INDEX;
+		return false;
+	}
+	// Assign chunk index
+	state.chunk_index = current_chunk_index++;
+	D_ASSERT(chunks_in_progress.find(state.chunk_index) == chunks_in_progress.end());
+	chunks_in_progress.insert(state.chunk_index);
+	return true;
+}
+
+void ColumnDataConsumer::ScanChunk(ColumnDataConsumerScanState &state, DataChunk &chunk) const {
+	D_ASSERT(state.chunk_index < chunk_count);
+	auto &chunk_ref = chunk_references[state.chunk_index];
+	if (state.allocator != chunk_ref.segment->allocator.get()) {
+		// Previously scanned a chunk from a different allocator, reset the handles
+		state.allocator = chunk_ref.segment->allocator.get();
+		state.current_chunk_state.handles.clear();
+	}
+	chunk_ref.segment->ReadChunk(chunk_ref.chunk_index_in_segment, state.current_chunk_state, chunk, column_ids);
+}
+
+void ColumnDataConsumer::FinishChunk(ColumnDataConsumerScanState &state) {
+	D_ASSERT(state.chunk_index < chunk_count);
+	idx_t delete_index_start;
+	idx_t delete_index_end;
+	{
+		lock_guard<mutex> guard(lock);
+		D_ASSERT(chunks_in_progress.find(state.chunk_index) != chunks_in_progress.end());
+		delete_index_start = chunk_delete_index;
+		delete_index_end = *std::min_element(chunks_in_progress.begin(), chunks_in_progress.end());
+		chunks_in_progress.erase(state.chunk_index);
+		chunk_delete_index = delete_index_end;
+	}
+	ConsumeChunks(delete_index_start, delete_index_end);
+}
+void ColumnDataConsumer::ConsumeChunks(idx_t delete_index_start, idx_t delete_index_end) {
+	for (idx_t chunk_index = delete_index_start; chunk_index < delete_index_end; chunk_index++) {
+		if (chunk_index == 0) {
+			continue;
+		}
+		auto &prev_chunk_ref = chunk_references[chunk_index - 1];
+		auto &curr_chunk_ref = chunk_references[chunk_index];
+		auto prev_allocator = prev_chunk_ref.segment->allocator.get();
+		auto curr_allocator = curr_chunk_ref.segment->allocator.get();
+		auto prev_min_block_id = prev_chunk_ref.GetMinimumBlockID();
+		auto curr_min_block_id = curr_chunk_ref.GetMinimumBlockID();
+		if (prev_allocator != curr_allocator) {
+			// Moved to the next allocator, delete all remaining blocks in the previous one
+			for (uint32_t block_id = prev_min_block_id; block_id < prev_allocator->BlockCount(); block_id++) {
+				prev_allocator->DeleteBlock(block_id);
+			}
+			continue;
+		}
+		// Same allocator, see if we can delete blocks
+		for (uint32_t block_id = prev_min_block_id; block_id < curr_min_block_id; block_id++) {
+			prev_allocator->DeleteBlock(block_id);
+		}
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+DataChunk::DataChunk() : count(0), capacity(STANDARD_VECTOR_SIZE) {
+}
+
+DataChunk::~DataChunk() {
+}
+
+void DataChunk::InitializeEmpty(const vector<LogicalType> &types) {
+	InitializeEmpty(types.begin(), types.end());
+}
+
+void DataChunk::Initialize(Allocator &allocator, const vector<LogicalType> &types, idx_t capacity_p) {
+	Initialize(allocator, types.begin(), types.end(), capacity_p);
+}
+
+void DataChunk::Initialize(ClientContext &context, const vector<LogicalType> &types, idx_t capacity_p) {
+	Initialize(Allocator::Get(context), types, capacity_p);
+}
+
+void DataChunk::Initialize(Allocator &allocator, vector<LogicalType>::const_iterator begin,
+                           vector<LogicalType>::const_iterator end, idx_t capacity_p) {
+	D_ASSERT(data.empty());                   // can only be initialized once
+	D_ASSERT(std::distance(begin, end) != 0); // empty chunk not allowed
+	capacity = capacity_p;
+	for (; begin != end; begin++) {
+		VectorCache cache(allocator, *begin, capacity);
+		data.emplace_back(cache);
+		vector_caches.push_back(move(cache));
+	}
+}
+
+void DataChunk::Initialize(ClientContext &context, vector<LogicalType>::const_iterator begin,
+                           vector<LogicalType>::const_iterator end, idx_t capacity_p) {
+	Initialize(Allocator::Get(context), begin, end, capacity_p);
+}
+
+void DataChunk::InitializeEmpty(vector<LogicalType>::const_iterator begin, vector<LogicalType>::const_iterator end) {
+	capacity = STANDARD_VECTOR_SIZE;
+	D_ASSERT(data.empty());                   // can only be initialized once
+	D_ASSERT(std::distance(begin, end) != 0); // empty chunk not allowed
+	for (; begin != end; begin++) {
+		data.emplace_back(Vector(*begin, nullptr));
+	}
+}
+
+void DataChunk::Reset() {
+	if (data.empty()) {
+		return;
+	}
+	if (vector_caches.size() != data.size()) {
+		throw InternalException("VectorCache and column count mismatch in DataChunk::Reset");
+	}
+	for (idx_t i = 0; i < ColumnCount(); i++) {
+		data[i].ResetFromCache(vector_caches[i]);
+	}
+	capacity = STANDARD_VECTOR_SIZE;
+	SetCardinality(0);
+}
+
+void DataChunk::Destroy() {
+	data.clear();
+	vector_caches.clear();
+	capacity = 0;
+	SetCardinality(0);
+}
+
+Value DataChunk::GetValue(idx_t col_idx, idx_t index) const {
+	D_ASSERT(index < size());
+	return data[col_idx].GetValue(index);
+}
+
+void DataChunk::SetValue(idx_t col_idx, idx_t index, const Value &val) {
+	data[col_idx].SetValue(index, val);
+}
+
+bool DataChunk::AllConstant() const {
+	for (auto &v : data) {
+		if (v.GetVectorType() != VectorType::CONSTANT_VECTOR) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void DataChunk::Reference(DataChunk &chunk) {
+	D_ASSERT(chunk.ColumnCount() <= ColumnCount());
+	SetCapacity(chunk);
+	SetCardinality(chunk);
+	for (idx_t i = 0; i < chunk.ColumnCount(); i++) {
+		data[i].Reference(chunk.data[i]);
+	}
+}
+
+void DataChunk::Move(DataChunk &chunk) {
+	SetCardinality(chunk);
+	SetCapacity(chunk);
+	data = move(chunk.data);
+	vector_caches = move(chunk.vector_caches);
+
+	chunk.Destroy();
+}
+
+void DataChunk::Copy(DataChunk &other, idx_t offset) const {
+	D_ASSERT(ColumnCount() == other.ColumnCount());
+	D_ASSERT(other.size() == 0);
+
+	for (idx_t i = 0; i < ColumnCount(); i++) {
+		D_ASSERT(other.data[i].GetVectorType() == VectorType::FLAT_VECTOR);
+		VectorOperations::Copy(data[i], other.data[i], size(), offset, 0);
+	}
+	other.SetCardinality(size() - offset);
+}
+
+void DataChunk::Copy(DataChunk &other, const SelectionVector &sel, const idx_t source_count, const idx_t offset) const {
+	D_ASSERT(ColumnCount() == other.ColumnCount());
+	D_ASSERT(other.size() == 0);
+	D_ASSERT((offset + source_count) <= size());
+
+	for (idx_t i = 0; i < ColumnCount(); i++) {
+		D_ASSERT(other.data[i].GetVectorType() == VectorType::FLAT_VECTOR);
+		VectorOperations::Copy(data[i], other.data[i], sel, source_count, offset, 0);
+	}
+	other.SetCardinality(source_count - offset);
+}
+
+void DataChunk::Split(DataChunk &other, idx_t split_idx) {
+	D_ASSERT(other.size() == 0);
+	D_ASSERT(other.data.empty());
+	D_ASSERT(split_idx < data.size());
+	const idx_t num_cols = data.size();
+	for (idx_t col_idx = split_idx; col_idx < num_cols; col_idx++) {
+		other.data.push_back(move(data[col_idx]));
+		other.vector_caches.push_back(move(vector_caches[col_idx]));
+	}
+	for (idx_t col_idx = split_idx; col_idx < num_cols; col_idx++) {
+		data.pop_back();
+		vector_caches.pop_back();
+	}
+	other.SetCapacity(*this);
+	other.SetCardinality(*this);
+}
+
+void DataChunk::Fuse(DataChunk &other) {
+	D_ASSERT(other.size() == size());
+	const idx_t num_cols = other.data.size();
+	for (idx_t col_idx = 0; col_idx < num_cols; ++col_idx) {
+		data.emplace_back(move(other.data[col_idx]));
+		vector_caches.emplace_back(move(other.vector_caches[col_idx]));
+	}
+	other.Destroy();
+}
+
+void DataChunk::ReferenceColumns(DataChunk &other, const vector<column_t> &column_ids) {
+	D_ASSERT(ColumnCount() == column_ids.size());
+	Reset();
+	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
+		auto &other_col = other.data[column_ids[col_idx]];
+		auto &this_col = data[col_idx];
+		D_ASSERT(other_col.GetType() == this_col.GetType());
+		this_col.Reference(other_col);
+	}
+	SetCardinality(other.size());
+}
+
+void DataChunk::Append(const DataChunk &other, bool resize, SelectionVector *sel, idx_t sel_count) {
+	idx_t new_size = sel ? size() + sel_count : size() + other.size();
+	if (other.size() == 0) {
+		return;
+	}
+	if (ColumnCount() != other.ColumnCount()) {
+		throw InternalException("Column counts of appending chunk doesn't match!");
+	}
+	if (new_size > capacity) {
+		if (resize) {
+			auto new_capacity = NextPowerOfTwo(new_size);
+			for (idx_t i = 0; i < ColumnCount(); i++) {
+				data[i].Resize(size(), new_capacity);
+			}
+			capacity = new_capacity;
+		} else {
+			throw InternalException("Can't append chunk to other chunk without resizing");
+		}
+	}
+	for (idx_t i = 0; i < ColumnCount(); i++) {
+		D_ASSERT(data[i].GetVectorType() == VectorType::FLAT_VECTOR);
+		if (sel) {
+			VectorOperations::Copy(other.data[i], data[i], *sel, sel_count, 0, size());
+		} else {
+			VectorOperations::Copy(other.data[i], data[i], other.size(), 0, size());
+		}
+	}
+	SetCardinality(new_size);
+}
+
+void DataChunk::Flatten() {
+	for (idx_t i = 0; i < ColumnCount(); i++) {
+		data[i].Flatten(size());
+	}
+}
+
+vector<LogicalType> DataChunk::GetTypes() {
+	vector<LogicalType> types;
+	for (idx_t i = 0; i < ColumnCount(); i++) {
+		types.push_back(data[i].GetType());
+	}
+	return types;
+}
+
+string DataChunk::ToString() const {
+	string retval = "Chunk - [" + to_string(ColumnCount()) + " Columns]\n";
+	for (idx_t i = 0; i < ColumnCount(); i++) {
+		retval += "- " + data[i].ToString(size()) + "\n";
+	}
+	return retval;
+}
+
+void DataChunk::Serialize(Serializer &serializer) {
+	// write the count
+	serializer.Write<sel_t>(size());
+	serializer.Write<idx_t>(ColumnCount());
+	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
+		// write the types
+		data[col_idx].GetType().Serialize(serializer);
+	}
+	// write the data
+	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
+		data[col_idx].Serialize(size(), serializer);
+	}
+}
+
+void DataChunk::Deserialize(Deserializer &source) {
+	auto rows = source.Read<sel_t>();
+	idx_t column_count = source.Read<idx_t>();
+
+	vector<LogicalType> types;
+	for (idx_t i = 0; i < column_count; i++) {
+		types.push_back(LogicalType::Deserialize(source));
+	}
+	Initialize(Allocator::DefaultAllocator(), types);
+	// now load the column data
+	SetCardinality(rows);
+	for (idx_t i = 0; i < column_count; i++) {
+		data[i].Deserialize(rows, source);
+	}
+	Verify();
+}
+
+void DataChunk::Slice(const SelectionVector &sel_vector, idx_t count_p) {
+	this->count = count_p;
+	SelCache merge_cache;
+	for (idx_t c = 0; c < ColumnCount(); c++) {
+		data[c].Slice(sel_vector, count_p, merge_cache);
+	}
+}
+
+void DataChunk::Slice(DataChunk &other, const SelectionVector &sel, idx_t count_p, idx_t col_offset) {
+	D_ASSERT(other.ColumnCount() <= col_offset + ColumnCount());
+	this->count = count_p;
+	SelCache merge_cache;
+	for (idx_t c = 0; c < other.ColumnCount(); c++) {
+		if (other.data[c].GetVectorType() == VectorType::DICTIONARY_VECTOR) {
+			// already a dictionary! merge the dictionaries
+			data[col_offset + c].Reference(other.data[c]);
+			data[col_offset + c].Slice(sel, count_p, merge_cache);
+		} else {
+			data[col_offset + c].Slice(other.data[c], sel, count_p);
+		}
+	}
+}
+
+unique_ptr<UnifiedVectorFormat[]> DataChunk::ToUnifiedFormat() {
+	auto orrified_data = unique_ptr<UnifiedVectorFormat[]>(new UnifiedVectorFormat[ColumnCount()]);
+	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
+		data[col_idx].ToUnifiedFormat(size(), orrified_data[col_idx]);
+	}
+	return orrified_data;
+}
+
+void DataChunk::Hash(Vector &result) {
+	D_ASSERT(result.GetType().id() == LogicalType::HASH);
+	VectorOperations::Hash(data[0], result, size());
+	for (idx_t i = 1; i < ColumnCount(); i++) {
+		VectorOperations::CombineHash(result, data[i], size());
+	}
+}
+
+void DataChunk::Verify() {
+#ifdef DEBUG
+	D_ASSERT(size() <= capacity);
+	// verify that all vectors in this chunk have the chunk selection vector
+	for (idx_t i = 0; i < ColumnCount(); i++) {
+		data[i].Verify(size());
+	}
+#endif
+}
+
+void DataChunk::Print() {
+	Printer::Print(ToString());
+}
+
+} // namespace duckdb
+
+
+
+
+
+
 
 
 
@@ -204,11 +1889,15 @@ static bool TryConvertDateSpecial(const char *buf, idx_t len, idx_t &pos, const 
 			return false;
 		}
 	}
+	if (*special) {
+		return false;
+	}
 	pos = p;
 	return true;
 }
 
-bool Date::TryConvertDate(const char *buf, idx_t len, idx_t &pos, date_t &result, bool strict) {
+bool Date::TryConvertDate(const char *buf, idx_t len, idx_t &pos, date_t &result, bool &special, bool strict) {
+	special = false;
 	pos = 0;
 	if (len == 0) {
 		return false;
@@ -248,6 +1937,7 @@ bool Date::TryConvertDate(const char *buf, idx_t len, idx_t &pos, date_t &result
 		while (pos < len && StringUtil::CharacterIsSpace(buf[pos])) {
 			pos++;
 		}
+		special = true;
 		return pos == len;
 	}
 	// first parse the year
@@ -338,7 +2028,8 @@ string Date::ConversionError(string_t str) {
 date_t Date::FromCString(const char *buf, idx_t len, bool strict) {
 	date_t result;
 	idx_t pos;
-	if (!TryConvertDate(buf, len, pos, result, strict)) {
+	bool special = false;
+	if (!TryConvertDate(buf, len, pos, result, special, strict)) {
 		throw ConversionException(ConversionError(string(buf, len)));
 	}
 	return result;
@@ -426,6 +2117,14 @@ int64_t Date::Epoch(date_t date) {
 
 int64_t Date::EpochNanoseconds(date_t date) {
 	return ((int64_t)date.days) * (Interval::MICROS_PER_DAY * 1000);
+}
+
+int64_t Date::EpochMicroseconds(date_t date) {
+	int64_t result;
+	if (!TryMultiplyOperator::Operation<int64_t, int64_t, int64_t>(date.days, Interval::MICROS_PER_DAY, result)) {
+		throw ConversionException("Could not convert DATE to microseconds");
+	}
+	return result;
 }
 
 int32_t Date::ExtractYear(date_t d, int32_t *last_year) {
@@ -579,29 +2278,29 @@ date_t Date::GetMondayOfCurrentWeek(date_t date) {
 namespace duckdb {
 
 template <class SIGNED, class UNSIGNED>
-string TemplatedDecimalToString(SIGNED value, uint8_t scale) {
-	auto len = DecimalToString::DecimalLength<SIGNED, UNSIGNED>(value, scale);
+string TemplatedDecimalToString(SIGNED value, uint8_t width, uint8_t scale) {
+	auto len = DecimalToString::DecimalLength<SIGNED, UNSIGNED>(value, width, scale);
 	auto data = unique_ptr<char[]>(new char[len + 1]);
-	DecimalToString::FormatDecimal<SIGNED, UNSIGNED>(value, scale, data.get(), len);
+	DecimalToString::FormatDecimal<SIGNED, UNSIGNED>(value, width, scale, data.get(), len);
 	return string(data.get(), len);
 }
 
-string Decimal::ToString(int16_t value, uint8_t scale) {
-	return TemplatedDecimalToString<int16_t, uint16_t>(value, scale);
+string Decimal::ToString(int16_t value, uint8_t width, uint8_t scale) {
+	return TemplatedDecimalToString<int16_t, uint16_t>(value, width, scale);
 }
 
-string Decimal::ToString(int32_t value, uint8_t scale) {
-	return TemplatedDecimalToString<int32_t, uint32_t>(value, scale);
+string Decimal::ToString(int32_t value, uint8_t width, uint8_t scale) {
+	return TemplatedDecimalToString<int32_t, uint32_t>(value, width, scale);
 }
 
-string Decimal::ToString(int64_t value, uint8_t scale) {
-	return TemplatedDecimalToString<int64_t, uint64_t>(value, scale);
+string Decimal::ToString(int64_t value, uint8_t width, uint8_t scale) {
+	return TemplatedDecimalToString<int64_t, uint64_t>(value, width, scale);
 }
 
-string Decimal::ToString(hugeint_t value, uint8_t scale) {
-	auto len = HugeintToStringCast::DecimalLength(value, scale);
+string Decimal::ToString(hugeint_t value, uint8_t width, uint8_t scale) {
+	auto len = HugeintToStringCast::DecimalLength(value, width, scale);
 	auto data = unique_ptr<char[]>(new char[len + 1]);
-	HugeintToStringCast::FormatDecimal(value, scale, data.get(), len);
+	HugeintToStringCast::FormatDecimal(value, width, scale, data.get(), len);
 	return string(data.get(), len);
 }
 
@@ -611,7 +2310,9 @@ string Decimal::ToString(hugeint_t value, uint8_t scale) {
 
 
 
+
 #include <functional>
+#include <cmath>
 
 namespace duckdb {
 
@@ -630,14 +2331,32 @@ hash_t Hash(hugeint_t val) {
 	return murmurhash64(val.lower) ^ murmurhash64(val.upper);
 }
 
+template <class T>
+struct FloatingPointEqualityTransform {
+	static void OP(T &val) {
+		if (val == (T)0.0) {
+			// Turn negative zero into positive zero
+			val = (T)0.0;
+		} else if (std::isnan(val)) {
+			val = std::numeric_limits<T>::quiet_NaN();
+		}
+	}
+};
+
 template <>
 hash_t Hash(float val) {
-	return std::hash<float> {}(val);
+	static_assert(sizeof(float) == sizeof(uint32_t), "");
+	FloatingPointEqualityTransform<float>::OP(val);
+	uint32_t uval = *((uint32_t *)&val);
+	return murmurhash64(uval);
 }
 
 template <>
 hash_t Hash(double val) {
-	return std::hash<double> {}(val);
+	static_assert(sizeof(double) == sizeof(uint64_t), "");
+	FloatingPointEqualityTransform<double>::OP(val);
+	uint64_t uval = *((uint64_t *)&val);
+	return murmurhash64(uval);
 }
 
 template <>
@@ -725,6 +2444,7 @@ hash_t Hash(uint8_t *val, size_t size) {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -1227,6 +2947,13 @@ bool Hugeint::TryConvert(int8_t value, hugeint_t &result) {
 }
 
 template <>
+bool Hugeint::TryConvert(const char *value, hugeint_t &result) {
+	auto len = strlen(value);
+	string_t string_val(value, len);
+	return TryCast::Operation<string_t, hugeint_t>(string_val, result, true);
+}
+
+template <>
 bool Hugeint::TryConvert(int16_t value, hugeint_t &result) {
 	result = HugeintConvertInteger<int16_t>(value);
 	return true;
@@ -1261,6 +2988,12 @@ bool Hugeint::TryConvert(uint32_t value, hugeint_t &result) {
 template <>
 bool Hugeint::TryConvert(uint64_t value, hugeint_t &result) {
 	result = HugeintConvertInteger<uint64_t>(value);
+	return true;
+}
+
+template <>
+bool Hugeint::TryConvert(hugeint_t value, hugeint_t &result) {
+	result = value;
 	return true;
 }
 
@@ -1676,7 +3409,7 @@ inline uint64_t TemplatedHash(const string_t &elem) {
 }
 
 template <class T>
-void TemplatedComputeHashes(VectorData &vdata, const idx_t &count, uint64_t hashes[]) {
+void TemplatedComputeHashes(UnifiedVectorFormat &vdata, const idx_t &count, uint64_t hashes[]) {
 	T *data = (T *)vdata.data;
 	for (idx_t i = 0; i < count; i++) {
 		auto idx = vdata.sel->get_index(i);
@@ -1688,7 +3421,7 @@ void TemplatedComputeHashes(VectorData &vdata, const idx_t &count, uint64_t hash
 	}
 }
 
-static void ComputeHashes(VectorData &vdata, const LogicalType &type, uint64_t hashes[], idx_t count) {
+static void ComputeHashes(UnifiedVectorFormat &vdata, const LogicalType &type, uint64_t hashes[], idx_t count) {
 	switch (type.InternalType()) {
 	case PhysicalType::BOOL:
 	case PhysicalType::INT8:
@@ -1735,20 +3468,20 @@ static inline void ComputeIndexAndCount(uint64_t &hash, uint8_t &prefix) {
 	hash = index;
 }
 
-void HyperLogLog::ProcessEntries(VectorData &vdata, const LogicalType &type, uint64_t hashes[], uint8_t counts[],
-                                 idx_t count) {
+void HyperLogLog::ProcessEntries(UnifiedVectorFormat &vdata, const LogicalType &type, uint64_t hashes[],
+                                 uint8_t counts[], idx_t count) {
 	ComputeHashes(vdata, type, hashes, count);
 	for (idx_t i = 0; i < count; i++) {
 		ComputeIndexAndCount(hashes[i], counts[i]);
 	}
 }
 
-void HyperLogLog::AddToLogs(VectorData &vdata, idx_t count, uint64_t indices[], uint8_t counts[], HyperLogLog **logs[],
-                            const SelectionVector *log_sel) {
+void HyperLogLog::AddToLogs(UnifiedVectorFormat &vdata, idx_t count, uint64_t indices[], uint8_t counts[],
+                            HyperLogLog **logs[], const SelectionVector *log_sel) {
 	AddToLogsInternal(vdata, count, indices, counts, (void ****)logs, log_sel);
 }
 
-void HyperLogLog::AddToLog(VectorData &vdata, idx_t count, uint64_t indices[], uint8_t counts[]) {
+void HyperLogLog::AddToLog(UnifiedVectorFormat &vdata, idx_t count, uint64_t indices[], uint8_t counts[]) {
 	lock_guard<mutex> guard(lock);
 	AddToSingleLogInternal(vdata, count, indices, counts, hll);
 }
@@ -2194,6 +3927,13 @@ bool Interval::GreaterThanEquals(interval_t left, interval_t right) {
 	return GreaterThan(left, right) || Equals(left, right);
 }
 
+interval_t Interval::Invert(interval_t interval) {
+	interval.days = -interval.days;
+	interval.micros = -interval.micros;
+	interval.months = -interval.months;
+	return interval;
+}
+
 date_t Interval::Add(date_t left, interval_t right) {
 	if (!Date::IsFinite(left)) {
 		return left;
@@ -2261,13 +4001,177 @@ timestamp_t Interval::Add(timestamp_t left, interval_t right) {
 } // namespace duckdb
 
 
+
+
+
+namespace duckdb {
+
+PartitionedColumnData::PartitionedColumnData(PartitionedColumnDataType type_p, ClientContext &context_p,
+                                             vector<LogicalType> types_p)
+    : type(type_p), context(context_p), types(move(types_p)), allocators(make_shared<PartitionAllocators>()) {
+}
+
+PartitionedColumnData::PartitionedColumnData(const PartitionedColumnData &other)
+    : type(other.type), context(other.context), types(other.types), allocators(other.allocators) {
+}
+
+unique_ptr<PartitionedColumnData> PartitionedColumnData::CreateShared() {
+	switch (type) {
+	case PartitionedColumnDataType::RADIX:
+		return make_unique<RadixPartitionedColumnData>((RadixPartitionedColumnData &)*this);
+	default:
+		throw NotImplementedException("CreateShared for this type of PartitionedColumnData");
+	}
+}
+
+PartitionedColumnData::~PartitionedColumnData() {
+}
+
+void PartitionedColumnData::InitializeAppendState(PartitionedColumnDataAppendState &state) const {
+	state.partition_sel.Initialize();
+	state.slice_chunk.Initialize(context, types);
+	InitializeAppendStateInternal(state);
+}
+
+unique_ptr<DataChunk> PartitionedColumnData::CreatePartitionBuffer() const {
+	auto result = make_unique<DataChunk>();
+	result->Initialize(BufferManager::GetBufferManager(context).GetBufferAllocator(), types, BufferSize());
+	return result;
+}
+
+void PartitionedColumnData::Append(PartitionedColumnDataAppendState &state, DataChunk &input) {
+	// Compute partition indices and store them in state.partition_indices
+	ComputePartitionIndices(state, input);
+
+	// Compute the counts per partition
+	const auto count = input.size();
+	unordered_map<idx_t, list_entry_t> partition_entries;
+	const auto partition_indices = FlatVector::GetData<idx_t>(state.partition_indices);
+	switch (state.partition_indices.GetVectorType()) {
+	case VectorType::FLAT_VECTOR:
+		for (idx_t i = 0; i < count; i++) {
+			const auto &partition_index = partition_indices[i];
+			auto partition_entry = partition_entries.find(partition_index);
+			if (partition_entry == partition_entries.end()) {
+				partition_entries[partition_index] = list_entry_t(0, 1);
+			} else {
+				partition_entry->second.length++;
+			}
+		}
+		break;
+	case VectorType::CONSTANT_VECTOR:
+		partition_entries[partition_indices[0]] = list_entry_t(0, count);
+		break;
+	default:
+		throw InternalException("Unexpected VectorType in PartitionedColumnData::Append");
+	}
+
+	// Early out: check if everything belongs to a single partition
+	if (partition_entries.size() == 1) {
+		const auto &partition_index = partition_entries.begin()->first;
+		auto &partition = *partitions[partition_index];
+		auto &partition_append_state = state.partition_append_states[partition_index];
+		partition.Append(*partition_append_state, input);
+		return;
+	}
+
+	// Compute offsets from the counts
+	idx_t offset = 0;
+	for (auto &pc : partition_entries) {
+		auto &partition_entry = pc.second;
+		partition_entry.offset = offset;
+		offset += partition_entry.length;
+	}
+
+	// Now initialize a single selection vector that acts as a selection vector for every partition
+	auto &all_partitions_sel = state.partition_sel;
+	for (idx_t i = 0; i < count; i++) {
+		const auto &partition_index = partition_indices[i];
+		auto &partition_offset = partition_entries[partition_index].offset;
+		all_partitions_sel[partition_offset++] = i;
+	}
+
+	// Loop through the partitions to append the new data to the partition buffers, and flush the buffers if necessary
+	SelectionVector partition_sel;
+	for (auto &pc : partition_entries) {
+		const auto &partition_index = pc.first;
+
+		// Partition, buffer, and append state for this partition index
+		auto &partition = *partitions[partition_index];
+		auto &partition_buffer = *state.partition_buffers[partition_index];
+		auto &partition_append_state = state.partition_append_states[partition_index];
+
+		// Length and offset into the selection vector for this chunk, for this partition
+		const auto &partition_entry = pc.second;
+		const auto &partition_length = partition_entry.length;
+		const auto partition_offset = partition_entry.offset - partition_length;
+
+		// Create a selection vector for this partition using the offset into the single selection vector
+		partition_sel.Initialize(all_partitions_sel.data() + partition_offset);
+
+		if (partition_length >= HalfBufferSize()) {
+			// Slice the input chunk using the selection vector
+			state.slice_chunk.Reset();
+			state.slice_chunk.Slice(input, partition_sel, partition_length);
+
+			// Append it to the partition directly
+			partition.Append(*partition_append_state, state.slice_chunk);
+		} else {
+			// Append the input chunk to the partition buffer using the selection vector
+			partition_buffer.Append(input, false, &partition_sel, partition_length);
+
+			if (partition_buffer.size() >= HalfBufferSize()) {
+				// Next batch won't fit in the buffer, flush it to the partition
+				partition.Append(*partition_append_state, partition_buffer);
+				partition_buffer.Reset();
+				partition_buffer.SetCapacity(BufferSize());
+			}
+		}
+	}
+}
+
+void PartitionedColumnData::FlushAppendState(PartitionedColumnDataAppendState &state) {
+	for (idx_t i = 0; i < state.partition_buffers.size(); i++) {
+		auto &partition_buffer = *state.partition_buffers[i];
+		if (partition_buffer.size() > 0) {
+			partitions[i]->Append(partition_buffer);
+		}
+	}
+}
+
+void PartitionedColumnData::Combine(PartitionedColumnData &other) {
+	// Now combine the state's partitions into this
+	lock_guard<mutex> guard(lock);
+	if (partitions.empty()) {
+		// This is the first merge, we just copy them over
+		partitions = move(other.partitions);
+	} else {
+		// Combine the append state's partitions into this PartitionedColumnData
+		for (idx_t i = 0; i < other.partitions.size(); i++) {
+			partitions[i]->Combine(*other.partitions[i]);
+		}
+	}
+}
+
+vector<unique_ptr<ColumnDataCollection>> &PartitionedColumnData::GetPartitions() {
+	return partitions;
+}
+
+void PartitionedColumnData::CreateAllocator() {
+	allocators->allocators.emplace_back(make_shared<ColumnDataAllocator>(BufferManager::GetBufferManager(context)));
+	allocators->allocators.back()->MakeShared();
+}
+
+} // namespace duckdb
+
+
 namespace duckdb {
 
 RowDataCollection::RowDataCollection(BufferManager &buffer_manager, idx_t block_capacity, idx_t entry_size,
                                      bool keep_pinned)
     : buffer_manager(buffer_manager), count(0), block_capacity(block_capacity), entry_size(entry_size),
       keep_pinned(keep_pinned) {
-	D_ASSERT(block_capacity * entry_size >= Storage::BLOCK_SIZE);
+	D_ASSERT(block_capacity * entry_size + entry_size > Storage::BLOCK_SIZE);
 }
 
 idx_t RowDataCollection::AppendToBlock(RowDataBlock &block, BufferHandle &handle,
@@ -2303,6 +4207,11 @@ idx_t RowDataCollection::AppendToBlock(RowDataBlock &block, BufferHandle &handle
 	return append_count;
 }
 
+RowDataBlock &RowDataCollection::CreateBlock() {
+	blocks.push_back(make_unique<RowDataBlock>(buffer_manager, block_capacity, entry_size));
+	return *blocks.back();
+}
+
 vector<BufferHandle> RowDataCollection::Build(idx_t added_count, data_ptr_t key_locations[], idx_t entry_sizes[],
                                               const SelectionVector *sel) {
 	vector<BufferHandle> handles;
@@ -2316,7 +4225,7 @@ vector<BufferHandle> RowDataCollection::Build(idx_t added_count, data_ptr_t key_
 		count += added_count;
 
 		if (!blocks.empty()) {
-			auto &last_block = blocks.back();
+			auto &last_block = *blocks.back();
 			if (last_block.count < last_block.capacity) {
 				// last block has space: pin the buffer of this block
 				auto handle = buffer_manager.Pin(last_block.block);
@@ -2328,7 +4237,7 @@ vector<BufferHandle> RowDataCollection::Build(idx_t added_count, data_ptr_t key_
 		}
 		while (remaining > 0) {
 			// now for the remaining data, allocate new buffers to store the data and append there
-			RowDataBlock new_block(buffer_manager, block_capacity, entry_size);
+			auto &new_block = CreateBlock();
 			auto handle = buffer_manager.Pin(new_block.block);
 
 			// offset the entry sizes array if we have added entries already
@@ -2338,7 +4247,6 @@ vector<BufferHandle> RowDataCollection::Build(idx_t added_count, data_ptr_t key_
 			D_ASSERT(new_block.count > 0);
 			remaining -= append_count;
 
-			blocks.push_back(move(new_block));
 			if (keep_pinned) {
 				pinned_blocks.push_back(move(handle));
 			} else {
@@ -2368,6 +4276,9 @@ vector<BufferHandle> RowDataCollection::Build(idx_t added_count, data_ptr_t key_
 }
 
 void RowDataCollection::Merge(RowDataCollection &other) {
+	if (other.count == 0) {
+		return;
+	}
 	RowDataCollection temp(buffer_manager, Storage::BLOCK_SIZE, 1);
 	{
 		//	One lock at a time to avoid deadlocks
@@ -2376,8 +4287,9 @@ void RowDataCollection::Merge(RowDataCollection &other) {
 		temp.block_capacity = other.block_capacity;
 		temp.entry_size = other.entry_size;
 		temp.blocks = move(other.blocks);
-		other.count = 0;
+		temp.pinned_blocks = move(other.pinned_blocks);
 	}
+	other.Clear();
 
 	lock_guard<mutex> write_lock(rdc_lock);
 	count += temp.count;
@@ -2388,6 +4300,280 @@ void RowDataCollection::Merge(RowDataCollection &other) {
 	}
 	for (auto &handle : temp.pinned_blocks) {
 		pinned_blocks.emplace_back(move(handle));
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+namespace duckdb {
+
+void RowDataCollectionScanner::AlignHeapBlocks(RowDataCollection &swizzled_block_collection,
+                                               RowDataCollection &swizzled_string_heap,
+                                               RowDataCollection &block_collection, RowDataCollection &string_heap,
+                                               const RowLayout &layout) {
+	if (block_collection.count == 0) {
+		return;
+	}
+
+	if (layout.AllConstant()) {
+		// No heap blocks! Just merge fixed-size data
+		swizzled_block_collection.Merge(block_collection);
+		return;
+	}
+
+	// We create one heap block per data block and swizzle the pointers
+	D_ASSERT(string_heap.keep_pinned == swizzled_string_heap.keep_pinned);
+	auto &buffer_manager = block_collection.buffer_manager;
+	auto &heap_blocks = string_heap.blocks;
+	idx_t heap_block_idx = 0;
+	idx_t heap_block_remaining = heap_blocks[heap_block_idx]->count;
+	for (auto &data_block : block_collection.blocks) {
+		if (heap_block_remaining == 0) {
+			heap_block_remaining = heap_blocks[++heap_block_idx]->count;
+		}
+
+		// Pin the data block and swizzle the pointers within the rows
+		auto data_handle = buffer_manager.Pin(data_block->block);
+		auto data_ptr = data_handle.Ptr();
+		if (!string_heap.keep_pinned) {
+			D_ASSERT(!data_block->block->IsSwizzled());
+			RowOperations::SwizzleColumns(layout, data_ptr, data_block->count);
+			data_block->block->SetSwizzling(nullptr);
+		}
+		// At this point the data block is pinned and the heap pointer is valid
+		// so we can copy heap data as needed
+
+		// We want to copy as little of the heap data as possible, check how the data and heap blocks line up
+		if (heap_block_remaining >= data_block->count) {
+			// Easy: current heap block contains all strings for this data block, just copy (reference) the block
+			swizzled_string_heap.blocks.emplace_back(heap_blocks[heap_block_idx]->Copy());
+			swizzled_string_heap.blocks.back()->count = data_block->count;
+
+			// Swizzle the heap pointer if we are not pinning the heap
+			auto &heap_block = swizzled_string_heap.blocks.back()->block;
+			auto heap_handle = buffer_manager.Pin(heap_block);
+			if (!swizzled_string_heap.keep_pinned) {
+				auto heap_ptr = Load<data_ptr_t>(data_ptr + layout.GetHeapOffset());
+				auto heap_offset = heap_ptr - heap_handle.Ptr();
+				RowOperations::SwizzleHeapPointer(layout, data_ptr, heap_ptr, data_block->count, heap_offset);
+			} else {
+				swizzled_string_heap.pinned_blocks.emplace_back(move(heap_handle));
+			}
+
+			// Update counter
+			heap_block_remaining -= data_block->count;
+		} else {
+			// Strings for this data block are spread over the current heap block and the next (and possibly more)
+			if (string_heap.keep_pinned) {
+				// The heap is changing underneath the data block,
+				// so swizzle the string pointers to make them portable.
+				RowOperations::SwizzleColumns(layout, data_ptr, data_block->count);
+			}
+			idx_t data_block_remaining = data_block->count;
+			vector<std::pair<data_ptr_t, idx_t>> ptrs_and_sizes;
+			idx_t total_size = 0;
+			const auto base_row_ptr = data_ptr;
+			while (data_block_remaining > 0) {
+				if (heap_block_remaining == 0) {
+					heap_block_remaining = heap_blocks[++heap_block_idx]->count;
+				}
+				auto next = MinValue<idx_t>(data_block_remaining, heap_block_remaining);
+
+				// Figure out where to start copying strings, and how many bytes we need to copy
+				auto heap_start_ptr = Load<data_ptr_t>(data_ptr + layout.GetHeapOffset());
+				auto heap_end_ptr =
+				    Load<data_ptr_t>(data_ptr + layout.GetHeapOffset() + (next - 1) * layout.GetRowWidth());
+				idx_t size = heap_end_ptr - heap_start_ptr + Load<uint32_t>(heap_end_ptr);
+				ptrs_and_sizes.emplace_back(heap_start_ptr, size);
+				D_ASSERT(size <= heap_blocks[heap_block_idx]->byte_offset);
+
+				// Swizzle the heap pointer
+				RowOperations::SwizzleHeapPointer(layout, data_ptr, heap_start_ptr, next, total_size);
+				total_size += size;
+
+				// Update where we are in the data and heap blocks
+				data_ptr += next * layout.GetRowWidth();
+				data_block_remaining -= next;
+				heap_block_remaining -= next;
+			}
+
+			// Finally, we allocate a new heap block and copy data to it
+			swizzled_string_heap.blocks.emplace_back(
+			    make_unique<RowDataBlock>(buffer_manager, MaxValue<idx_t>(total_size, (idx_t)Storage::BLOCK_SIZE), 1));
+			auto new_heap_handle = buffer_manager.Pin(swizzled_string_heap.blocks.back()->block);
+			auto new_heap_ptr = new_heap_handle.Ptr();
+			if (swizzled_string_heap.keep_pinned) {
+				// Since the heap blocks are pinned, we can unswizzle the data again.
+				swizzled_string_heap.pinned_blocks.emplace_back(move(new_heap_handle));
+				RowOperations::UnswizzlePointers(layout, base_row_ptr, new_heap_ptr, data_block->count);
+				RowOperations::UnswizzleHeapPointer(layout, base_row_ptr, new_heap_ptr, data_block->count);
+			}
+			for (auto &ptr_and_size : ptrs_and_sizes) {
+				memcpy(new_heap_ptr, ptr_and_size.first, ptr_and_size.second);
+				new_heap_ptr += ptr_and_size.second;
+			}
+		}
+	}
+
+	// We're done with variable-sized data, now just merge the fixed-size data
+	swizzled_block_collection.Merge(block_collection);
+	D_ASSERT(swizzled_block_collection.blocks.size() == swizzled_string_heap.blocks.size());
+
+	// Update counts and cleanup
+	swizzled_string_heap.count = string_heap.count;
+	string_heap.Clear();
+}
+
+void RowDataCollectionScanner::ScanState::PinData() {
+	auto &rows = scanner.rows;
+	D_ASSERT(block_idx < rows.blocks.size());
+	auto &data_block = rows.blocks[block_idx];
+	if (!data_handle.IsValid() || data_handle.GetBlockHandle() != data_block->block) {
+		data_handle = rows.buffer_manager.Pin(data_block->block);
+	}
+	if (scanner.layout.AllConstant() || !scanner.external) {
+		return;
+	}
+
+	auto &heap = scanner.heap;
+	D_ASSERT(block_idx < heap.blocks.size());
+	auto &heap_block = heap.blocks[block_idx];
+	if (!heap_handle.IsValid() || heap_handle.GetBlockHandle() != heap_block->block) {
+		heap_handle = heap.buffer_manager.Pin(heap_block->block);
+	}
+}
+
+RowDataCollectionScanner::RowDataCollectionScanner(RowDataCollection &rows_p, RowDataCollection &heap_p,
+                                                   const RowLayout &layout_p, bool external_p, bool flush_p)
+    : rows(rows_p), heap(heap_p), layout(layout_p), read_state(*this), total_count(rows.count), total_scanned(0),
+      external(external_p), flush(flush_p), unswizzling(!layout.AllConstant() && external && !heap.keep_pinned) {
+
+	if (unswizzling) {
+		D_ASSERT(rows.blocks.size() == heap.blocks.size());
+	}
+
+	ValidateUnscannedBlock();
+}
+
+void RowDataCollectionScanner::SwizzleBlock(RowDataBlock &data_block, RowDataBlock &heap_block) {
+	// Pin the data block and swizzle the pointers within the rows
+	D_ASSERT(!data_block.block->IsSwizzled());
+	auto data_handle = rows.buffer_manager.Pin(data_block.block);
+	auto data_ptr = data_handle.Ptr();
+	RowOperations::SwizzleColumns(layout, data_ptr, data_block.count);
+	data_block.block->SetSwizzling(nullptr);
+
+	// Swizzle the heap pointers
+	auto heap_handle = heap.buffer_manager.Pin(heap_block.block);
+	auto heap_ptr = Load<data_ptr_t>(data_ptr + layout.GetHeapOffset());
+	auto heap_offset = heap_ptr - heap_handle.Ptr();
+	RowOperations::SwizzleHeapPointer(layout, data_ptr, heap_ptr, data_block.count, heap_offset);
+}
+
+void RowDataCollectionScanner::ReSwizzle() {
+	if (rows.count == 0) {
+		return;
+	}
+
+	if (!unswizzling) {
+		// No swizzled blocks!
+		return;
+	}
+
+	D_ASSERT(rows.blocks.size() == heap.blocks.size());
+	for (idx_t i = 0; i < rows.blocks.size(); ++i) {
+		auto &data_block = rows.blocks[i];
+		if (data_block->block && !data_block->block->IsSwizzled()) {
+			SwizzleBlock(*data_block, *heap.blocks[i]);
+		}
+	}
+}
+
+void RowDataCollectionScanner::ValidateUnscannedBlock() const {
+	if (unswizzling && read_state.block_idx < rows.blocks.size()) {
+		D_ASSERT(rows.blocks[read_state.block_idx]->block->IsSwizzled());
+	}
+}
+
+void RowDataCollectionScanner::Scan(DataChunk &chunk) {
+	auto count = MinValue((idx_t)STANDARD_VECTOR_SIZE, total_count - total_scanned);
+	if (count == 0) {
+		chunk.SetCardinality(count);
+		return;
+	}
+
+	const idx_t &row_width = layout.GetRowWidth();
+	// Set up a batch of pointers to scan data from
+	idx_t scanned = 0;
+	auto data_pointers = FlatVector::GetData<data_ptr_t>(addresses);
+
+	// We must pin ALL blocks we are going to gather from
+	vector<BufferHandle> pinned_blocks;
+	while (scanned < count) {
+		read_state.PinData();
+		auto &data_block = rows.blocks[read_state.block_idx];
+		idx_t next = MinValue(data_block->count - read_state.entry_idx, count - scanned);
+		const data_ptr_t data_ptr = read_state.data_handle.Ptr() + read_state.entry_idx * row_width;
+		// Set up the next pointers
+		data_ptr_t row_ptr = data_ptr;
+		for (idx_t i = 0; i < next; i++) {
+			data_pointers[scanned + i] = row_ptr;
+			row_ptr += row_width;
+		}
+		// Unswizzle the offsets back to pointers (if needed)
+		if (unswizzling) {
+			RowOperations::UnswizzlePointers(layout, data_ptr, read_state.heap_handle.Ptr(), next);
+			rows.blocks[read_state.block_idx]->block->SetSwizzling("RowDataCollectionScanner::Scan");
+		}
+		// Update state indices
+		read_state.entry_idx += next;
+		if (read_state.entry_idx == data_block->count) {
+			// Pin completed blocks so we don't lose them
+			pinned_blocks.emplace_back(rows.buffer_manager.Pin(data_block->block));
+			if (unswizzling) {
+				auto &heap_block = heap.blocks[read_state.block_idx];
+				pinned_blocks.emplace_back(heap.buffer_manager.Pin(heap_block->block));
+			}
+			read_state.block_idx++;
+			read_state.entry_idx = 0;
+			ValidateUnscannedBlock();
+		}
+		scanned += next;
+	}
+	D_ASSERT(scanned == count);
+	// Deserialize the payload data
+	for (idx_t col_no = 0; col_no < layout.ColumnCount(); col_no++) {
+		RowOperations::Gather(addresses, *FlatVector::IncrementalSelectionVector(), chunk.data[col_no],
+		                      *FlatVector::IncrementalSelectionVector(), count, layout, col_no);
+	}
+	chunk.SetCardinality(count);
+	chunk.Verify();
+	total_scanned += scanned;
+
+	//	Switch to a new set of pinned blocks
+	read_state.pinned_blocks.swap(pinned_blocks);
+
+	if (flush) {
+		// Release blocks we have passed.
+		for (idx_t i = 0; i < read_state.block_idx; ++i) {
+			rows.blocks[i]->block = nullptr;
+			if (unswizzling) {
+				heap.blocks[i]->block = nullptr;
+			}
+		}
+	} else if (unswizzling) {
+		// Reswizzle blocks we have passed so they can be flushed safely.
+		for (idx_t i = 0; i < read_state.block_idx; ++i) {
+			auto &data_block = rows.blocks[i];
+			if (data_block->block && !data_block->block->IsSwizzled()) {
+				SwizzleBlock(*data_block, *heap.blocks[i]);
+			}
+		}
 	}
 }
 
@@ -2539,7 +4725,7 @@ buffer_ptr<SelectionData> SelectionVector::Slice(const SelectionVector &sel, idx
 
 namespace duckdb {
 
-StringHeap::StringHeap() : allocator(Allocator::DefaultAllocator()) {
+StringHeap::StringHeap(Allocator &allocator) : allocator(allocator) {
 }
 
 void StringHeap::Destroy() {
@@ -2593,7 +4779,7 @@ string_t StringHeap::EmptyString(idx_t len) {
 
 namespace duckdb {
 
-void string_t::Verify() {
+void string_t::Verify() const {
 	auto dataptr = GetDataUnsafe();
 	(void)dataptr;
 	D_ASSERT(dataptr);
@@ -2610,12 +4796,6 @@ void string_t::Verify() {
 	// verify that for strings with length < INLINE_LENGTH, the rest of the string is zero
 	for (idx_t i = GetSize(); i < INLINE_LENGTH; i++) {
 		D_ASSERT(GetDataUnsafe()[i] == '\0');
-	}
-}
-
-void string_t::VerifyNull() {
-	for (idx_t i = 0; i < GetSize(); i++) {
-		D_ASSERT(GetDataUnsafe()[i] != '\0');
 	}
 }
 
@@ -2868,11 +5048,16 @@ static_assert(sizeof(timestamp_t) == sizeof(int64_t), "timestamp_t was padded");
 // T may be a space
 // Z is optional
 // ISO 8601
-bool Timestamp::TryConvertTimestamp(const char *str, idx_t len, timestamp_t &result) {
+static inline bool CharacterIsTimeZone(char c) {
+	return StringUtil::CharacterIsAlpha(c) || StringUtil::CharacterIsDigit(c) || c == '_' || c == '/';
+}
+
+bool Timestamp::TryConvertTimestampTZ(const char *str, idx_t len, timestamp_t &result, bool &has_offset, string_t &tz) {
 	idx_t pos;
 	date_t date;
 	dtime_t time;
-	if (!Date::TryConvertDate(str, len, pos, date)) {
+	has_offset = false;
+	if (!Date::TryConvertDate(str, len, pos, date, has_offset)) {
 		return false;
 	}
 	if (pos == len) {
@@ -2900,12 +5085,27 @@ bool Timestamp::TryConvertTimestamp(const char *str, idx_t len, timestamp_t &res
 	}
 	if (pos < len) {
 		// skip a "Z" at the end (as per the ISO8601 specs)
+		int hour_offset, minute_offset;
 		if (str[pos] == 'Z') {
 			pos++;
-		}
-		int hour_offset, minute_offset;
-		if (Timestamp::TryParseUTCOffset(str, pos, len, hour_offset, minute_offset)) {
+			has_offset = true;
+		} else if (Timestamp::TryParseUTCOffset(str, pos, len, hour_offset, minute_offset)) {
 			result -= hour_offset * Interval::MICROS_PER_HOUR + minute_offset * Interval::MICROS_PER_MINUTE;
+			has_offset = true;
+		} else {
+			// Parse a time zone: / [A-Za-z0-9/_]+/
+			if (str[pos++] != ' ') {
+				return false;
+			}
+			auto tz_name = str + pos;
+			for (; pos < len && CharacterIsTimeZone(str[pos]); ++pos) {
+				continue;
+			}
+			auto tz_len = str + pos - tz_name;
+			if (tz_len) {
+				tz = string_t(tz_name, tz_len);
+			}
+			// Note that the caller must reinterpret the instant we return to the given time zone
 		}
 
 		// skip any spaces at the end
@@ -2919,9 +5119,16 @@ bool Timestamp::TryConvertTimestamp(const char *str, idx_t len, timestamp_t &res
 	return true;
 }
 
+bool Timestamp::TryConvertTimestamp(const char *str, idx_t len, timestamp_t &result) {
+	string_t tz(nullptr, 0);
+	bool has_offset = false;
+	// We don't understand TZ without an extension, so fail if one was provided.
+	return TryConvertTimestampTZ(str, len, result, has_offset, tz) && !tz.GetSize();
+}
+
 string Timestamp::ConversionError(const string &str) {
 	return StringUtil::Format("timestamp field value out of range: \"%s\", "
-	                          "expected format is (YYYY-MM-DD HH:MM:SS[.MS])",
+	                          "expected format is (YYYY-MM-DD HH:MM:SS[.US][±HH:MM| ZONE])",
 	                          str);
 }
 
@@ -3202,12 +5409,12 @@ hugeint_t UUID::GenerateRandomUUID(RandomEngine &engine) {
 	result.upper = 0;
 	result.upper |= ((int64_t)bytes[0] << 56);
 	result.upper |= ((int64_t)bytes[1] << 48);
-	result.upper |= ((int64_t)bytes[3] << 40);
-	result.upper |= ((int64_t)bytes[4] << 32);
-	result.upper |= ((int64_t)bytes[5] << 24);
-	result.upper |= ((int64_t)bytes[6] << 16);
-	result.upper |= ((int64_t)bytes[7] << 8);
-	result.upper |= bytes[8];
+	result.upper |= ((int64_t)bytes[2] << 40);
+	result.upper |= ((int64_t)bytes[3] << 32);
+	result.upper |= ((int64_t)bytes[4] << 24);
+	result.upper |= ((int64_t)bytes[5] << 16);
+	result.upper |= ((int64_t)bytes[6] << 8);
+	result.upper |= bytes[7];
 	result.lower = 0;
 	result.lower |= ((uint64_t)bytes[8] << 56);
 	result.lower |= ((uint64_t)bytes[9] << 48);
@@ -3277,24 +5484,26 @@ string ValidityMask::ToString(idx_t count) const {
 // LCOV_EXCL_STOP
 
 void ValidityMask::Resize(idx_t old_size, idx_t new_size) {
+	D_ASSERT(new_size >= old_size);
 	if (validity_mask) {
 		auto new_size_count = EntryCount(new_size);
 		auto old_size_count = EntryCount(old_size);
-		auto new_owned_data = unique_ptr<validity_t[]>(new validity_t[new_size_count]);
+		auto new_validity_data = make_buffer<ValidityBuffer>(new_size);
+		auto new_owned_data = new_validity_data->owned_data.get();
 		for (idx_t entry_idx = 0; entry_idx < old_size_count; entry_idx++) {
 			new_owned_data[entry_idx] = validity_mask[entry_idx];
 		}
 		for (idx_t entry_idx = old_size_count; entry_idx < new_size_count; entry_idx++) {
 			new_owned_data[entry_idx] = ValidityData::MAX_ENTRY;
 		}
-		validity_data->owned_data = move(new_owned_data);
+		validity_data = move(new_validity_data);
 		validity_mask = validity_data->owned_data.get();
 	} else {
 		Initialize(new_size);
 	}
 }
 
-void ValidityMask::Slice(const ValidityMask &other, idx_t offset) {
+void ValidityMask::Slice(const ValidityMask &other, idx_t offset, idx_t end) {
 	if (other.AllValid()) {
 		validity_mask = nullptr;
 		validity_data.reset();
@@ -3304,11 +5513,11 @@ void ValidityMask::Slice(const ValidityMask &other, idx_t offset) {
 		Initialize(other);
 		return;
 	}
-	ValidityMask new_mask(STANDARD_VECTOR_SIZE);
+	ValidityMask new_mask(end - offset);
 
 // FIXME THIS NEEDS FIXING!
 #if 1
-	for (idx_t i = offset; i < STANDARD_VECTOR_SIZE; i++) {
+	for (idx_t i = offset; i < end; i++) {
 		new_mask.Set(i - offset, other.RowIsValid(i));
 	}
 	Initialize(new_mask);
@@ -3379,6 +5588,8 @@ void ValidityMask::Slice(const ValidityMask &other, idx_t offset) {
 
 
 
+
+
 #include <utility>
 #include <cmath>
 
@@ -3414,7 +5625,7 @@ Value::Value(string_t val) : Value(string(val.GetDataUnsafe(), val.GetSize())) {
 
 Value::Value(string val) : type_(LogicalType::VARCHAR), is_null(false), str_value(move(val)) {
 	if (!Value::StringIsValid(str_value.c_str(), str_value.size())) {
-		throw Exception("String value is not valid UTF8");
+		throw Exception(ErrorManager::InvalidUnicodeError(str_value, "value construction"));
 	}
 }
 
@@ -3484,9 +5695,9 @@ Value Value::MinimumValue(const LogicalType &type) {
 		return Value::TIMESTAMP(Date::FromDate(Timestamp::MIN_YEAR, Timestamp::MIN_MONTH, Timestamp::MIN_DAY),
 		                        dtime_t(0));
 	case LogicalTypeId::TIMESTAMP_SEC:
-		return MinimumValue(LogicalType::TIMESTAMP).CastAs(LogicalType::TIMESTAMP_S);
+		return MinimumValue(LogicalType::TIMESTAMP).DefaultCastAs(LogicalType::TIMESTAMP_S);
 	case LogicalTypeId::TIMESTAMP_MS:
-		return MinimumValue(LogicalType::TIMESTAMP).CastAs(LogicalType::TIMESTAMP_MS);
+		return MinimumValue(LogicalType::TIMESTAMP).DefaultCastAs(LogicalType::TIMESTAMP_MS);
 	case LogicalTypeId::TIMESTAMP_NS:
 		return Value::TIMESTAMPNS(timestamp_t(NumericLimits<int64_t>::Minimum()));
 	case LogicalTypeId::TIME_TZ:
@@ -3553,11 +5764,11 @@ Value Value::MaximumValue(const LogicalType &type) {
 	case LogicalTypeId::TIMESTAMP:
 		return Value::TIMESTAMP(timestamp_t(NumericLimits<int64_t>::Maximum() - 1));
 	case LogicalTypeId::TIMESTAMP_MS:
-		return MaximumValue(LogicalType::TIMESTAMP).CastAs(LogicalType::TIMESTAMP_MS);
+		return MaximumValue(LogicalType::TIMESTAMP).DefaultCastAs(LogicalType::TIMESTAMP_MS);
 	case LogicalTypeId::TIMESTAMP_NS:
 		return Value::TIMESTAMPNS(timestamp_t(NumericLimits<int64_t>::Maximum() - 1));
 	case LogicalTypeId::TIMESTAMP_SEC:
-		return MaximumValue(LogicalType::TIMESTAMP).CastAs(LogicalType::TIMESTAMP_S);
+		return MaximumValue(LogicalType::TIMESTAMP).DefaultCastAs(LogicalType::TIMESTAMP_S);
 	case LogicalTypeId::TIME_TZ:
 		return Value::TIMETZ(dtime_t(Interval::SECS_PER_DAY * Interval::MICROS_PER_SEC - 1));
 	case LogicalTypeId::TIMESTAMP_TZ:
@@ -3892,9 +6103,34 @@ Value Value::MAP(Value key, Value value) {
 	return result;
 }
 
+Value Value::UNION(child_list_t<LogicalType> members, uint8_t tag, Value value) {
+	D_ASSERT(members.size() > 0);
+	D_ASSERT(members.size() <= UnionType::MAX_UNION_MEMBERS);
+	D_ASSERT(members.size() > tag);
+
+	D_ASSERT(value.type() == members[tag].second);
+
+	Value result;
+	result.is_null = false;
+	// add the tag to the front of the struct
+	result.struct_value.emplace_back(Value::TINYINT(tag));
+	for (idx_t i = 0; i < members.size(); i++) {
+		if (i != tag) {
+			result.struct_value.emplace_back(members[i].second);
+		} else {
+			result.struct_value.emplace_back(nullptr);
+		}
+	}
+	result.struct_value[tag + 1] = move(value);
+
+	result.type_ = LogicalType::UNION(move(members));
+	return result;
+}
+
 Value Value::LIST(vector<Value> values) {
 	if (values.empty()) {
-		throw InternalException("Value::LIST requires a non-empty list of values. Use Value::EMPTYLIST instead.");
+		throw InternalException("Value::LIST without providing a child-type requires a non-empty list of values. Use "
+		                        "Value::LIST(child_type, list) instead.");
 	}
 #ifdef DEBUG
 	for (idx_t i = 1; i < values.size(); i++) {
@@ -3913,7 +6149,7 @@ Value Value::LIST(LogicalType child_type, vector<Value> values) {
 		return Value::EMPTYLIST(move(child_type));
 	}
 	for (auto &val : values) {
-		val = val.CastAs(child_type);
+		val = val.DefaultCastAs(child_type);
 	}
 	return Value::LIST(move(values));
 }
@@ -4057,8 +6293,33 @@ Value Value::CreateValue(dtime_t value) {
 }
 
 template <>
+Value Value::CreateValue(dtime_tz_t value) {
+	return Value::TIMETZ(value);
+}
+
+template <>
 Value Value::CreateValue(timestamp_t value) {
 	return Value::TIMESTAMP(value);
+}
+
+template <>
+Value Value::CreateValue(timestamp_sec_t value) {
+	return Value::TIMESTAMPSEC(value);
+}
+
+template <>
+Value Value::CreateValue(timestamp_ms_t value) {
+	return Value::TIMESTAMPMS(value);
+}
+
+template <>
+Value Value::CreateValue(timestamp_ns_t value) {
+	return Value::TIMESTAMPNS(value);
+}
+
+template <>
+Value Value::CreateValue(timestamp_tz_t value) {
+	return Value::TIMESTAMPTZ(value);
 }
 
 template <>
@@ -4102,7 +6363,7 @@ Value Value::CreateValue(Value value) {
 template <class T>
 T Value::GetValueInternal() const {
 	if (IsNull()) {
-		return NullValue<T>();
+		throw InternalException("Calling GetValueInternal on a value that is NULL");
 	}
 	switch (type_.id()) {
 	case LogicalTypeId::BOOLEAN:
@@ -4146,7 +6407,7 @@ T Value::GetValueInternal() const {
 	case LogicalTypeId::INTERVAL:
 		return Cast::Operation<interval_t, T>(value_.interval);
 	case LogicalTypeId::DECIMAL:
-		return CastAs(LogicalType::DOUBLE).GetValueInternal<T>();
+		return DefaultCastAs(LogicalType::DOUBLE).GetValueInternal<T>();
 	case LogicalTypeId::ENUM: {
 		switch (type_.InternalType()) {
 		case PhysicalType::UINT8:
@@ -4159,7 +6420,6 @@ T Value::GetValueInternal() const {
 			throw InternalException("Invalid Internal Type for ENUMs");
 		}
 	}
-
 	default:
 		throw NotImplementedException("Unimplemented type \"%s\" for GetValue()", type_.ToString());
 	}
@@ -4186,6 +6446,9 @@ int32_t Value::GetValue() const {
 }
 template <>
 int64_t Value::GetValue() const {
+	if (IsNull()) {
+		throw InternalException("Calling GetValue on a value that is NULL");
+	}
 	switch (type_.id()) {
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_SEC:
@@ -4336,7 +6599,7 @@ Value Value::Numeric(const LogicalType &type, int64_t value) {
 Value Value::Numeric(const LogicalType &type, hugeint_t value) {
 #ifdef DEBUG
 	// perform a throwing cast to verify that the type fits
-	Value::HUGEINT(value).CastAs(type);
+	Value::HUGEINT(value).DefaultCastAs(type);
 #endif
 	switch (type.id()) {
 	case LogicalTypeId::HUGEINT:
@@ -4559,194 +6822,19 @@ hash_t Value::Hash() const {
 	if (IsNull()) {
 		return 0;
 	}
-	switch (type_.InternalType()) {
-	case PhysicalType::BOOL:
-		return duckdb::Hash(value_.boolean);
-	case PhysicalType::INT8:
-		return duckdb::Hash(value_.tinyint);
-	case PhysicalType::INT16:
-		return duckdb::Hash(value_.smallint);
-	case PhysicalType::INT32:
-		return duckdb::Hash(value_.integer);
-	case PhysicalType::INT64:
-		return duckdb::Hash(value_.bigint);
-	case PhysicalType::UINT8:
-		return duckdb::Hash(value_.utinyint);
-	case PhysicalType::UINT16:
-		return duckdb::Hash(value_.usmallint);
-	case PhysicalType::UINT32:
-		return duckdb::Hash(value_.uinteger);
-	case PhysicalType::UINT64:
-		return duckdb::Hash(value_.ubigint);
-	case PhysicalType::INT128:
-		return duckdb::Hash(value_.hugeint);
-	case PhysicalType::FLOAT:
-		return duckdb::Hash(value_.float_);
-	case PhysicalType::DOUBLE:
-		return duckdb::Hash(value_.double_);
-	case PhysicalType::INTERVAL:
-		return duckdb::Hash(value_.interval);
-	case PhysicalType::VARCHAR:
-		return duckdb::Hash(string_t(StringValue::Get(*this)));
-	case PhysicalType::STRUCT: {
-		auto &struct_children = StructValue::GetChildren(*this);
-		hash_t hash = 0;
-		for (auto &entry : struct_children) {
-			hash ^= entry.Hash();
-		}
-		return hash;
-	}
-	case PhysicalType::LIST: {
-		auto &list_children = ListValue::GetChildren(*this);
-		hash_t hash = 0;
-		for (auto &entry : list_children) {
-			hash ^= entry.Hash();
-		}
-		return hash;
-	}
-	default:
-		throw InternalException("Unimplemented type for value hash");
-	}
+	Vector input(*this);
+	Vector result(LogicalType::HASH);
+	VectorOperations::Hash(input, result, 1);
+
+	auto data = FlatVector::GetData<hash_t>(result);
+	return data[0];
 }
 
 string Value::ToString() const {
 	if (IsNull()) {
 		return "NULL";
 	}
-	switch (type_.id()) {
-	case LogicalTypeId::BOOLEAN:
-		return value_.boolean ? "True" : "False";
-	case LogicalTypeId::TINYINT:
-		return to_string(value_.tinyint);
-	case LogicalTypeId::SMALLINT:
-		return to_string(value_.smallint);
-	case LogicalTypeId::INTEGER:
-		return to_string(value_.integer);
-	case LogicalTypeId::BIGINT:
-		return to_string(value_.bigint);
-	case LogicalTypeId::UTINYINT:
-		return to_string(value_.utinyint);
-	case LogicalTypeId::USMALLINT:
-		return to_string(value_.usmallint);
-	case LogicalTypeId::UINTEGER:
-		return to_string(value_.uinteger);
-	case LogicalTypeId::UBIGINT:
-		return to_string(value_.ubigint);
-	case LogicalTypeId::HUGEINT:
-		return Hugeint::ToString(value_.hugeint);
-	case LogicalTypeId::UUID:
-		return UUID::ToString(value_.hugeint);
-	case LogicalTypeId::FLOAT:
-		return duckdb_fmt::format("{}", value_.float_);
-	case LogicalTypeId::DOUBLE:
-		return duckdb_fmt::format("{}", value_.double_);
-	case LogicalTypeId::DECIMAL: {
-		auto internal_type = type_.InternalType();
-		auto scale = DecimalType::GetScale(type_);
-		if (internal_type == PhysicalType::INT16) {
-			return Decimal::ToString(value_.smallint, scale);
-		} else if (internal_type == PhysicalType::INT32) {
-			return Decimal::ToString(value_.integer, scale);
-		} else if (internal_type == PhysicalType::INT64) {
-			return Decimal::ToString(value_.bigint, scale);
-		} else {
-			D_ASSERT(internal_type == PhysicalType::INT128);
-			return Decimal::ToString(value_.hugeint, scale);
-		}
-	}
-	case LogicalTypeId::DATE:
-		return Date::ToString(value_.date);
-	case LogicalTypeId::TIME:
-		return Time::ToString(value_.time);
-	case LogicalTypeId::TIMESTAMP:
-		return Timestamp::ToString(value_.timestamp);
-	case LogicalTypeId::TIME_TZ:
-		return Time::ToString(value_.time) + Time::ToUTCOffset(0, 0);
-	case LogicalTypeId::TIMESTAMP_TZ: {
-		// Infinite TSTZ values do not display offsets in PG.
-		auto ret = Timestamp::ToString(value_.timestamp);
-		if (Timestamp::IsFinite(value_.timestamp)) {
-			ret += Time::ToUTCOffset(0, 0);
-		}
-		return ret;
-	}
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return Timestamp::ToString(Timestamp::FromEpochSeconds(value_.timestamp.value));
-	case LogicalTypeId::TIMESTAMP_MS:
-		return Timestamp::ToString(Timestamp::FromEpochMs(value_.timestamp.value));
-	case LogicalTypeId::TIMESTAMP_NS:
-		return Timestamp::ToString(Timestamp::FromEpochNanoSeconds(value_.timestamp.value));
-	case LogicalTypeId::INTERVAL:
-		return Interval::ToString(value_.interval);
-	case LogicalTypeId::JSON:
-	case LogicalTypeId::VARCHAR:
-		return str_value;
-	case LogicalTypeId::BLOB:
-		return Blob::ToString(string_t(str_value));
-	case LogicalTypeId::POINTER:
-		return to_string(value_.pointer);
-	case LogicalTypeId::STRUCT: {
-		string ret = "{";
-		auto &child_types = StructType::GetChildTypes(type_);
-		for (size_t i = 0; i < struct_value.size(); i++) {
-			auto &name = child_types[i].first;
-			auto &child = struct_value[i];
-			ret += "'" + name + "': " + child.ToString();
-			if (i < struct_value.size() - 1) {
-				ret += ", ";
-			}
-		}
-		ret += "}";
-		return ret;
-	}
-	case LogicalTypeId::LIST: {
-		string ret = "[";
-		for (size_t i = 0; i < list_value.size(); i++) {
-			auto &child = list_value[i];
-			ret += child.ToString();
-			if (i < list_value.size() - 1) {
-				ret += ", ";
-			}
-		}
-		ret += "]";
-		return ret;
-	}
-	case LogicalTypeId::MAP: {
-		string ret = "{";
-		auto &key_list = struct_value[0].list_value;
-		auto &value_list = struct_value[1].list_value;
-		for (size_t i = 0; i < key_list.size(); i++) {
-			ret += key_list[i].ToString() + "=" + value_list[i].ToString();
-			if (i < key_list.size() - 1) {
-				ret += ", ";
-			}
-		}
-		ret += "}";
-		return ret;
-	}
-	case LogicalTypeId::ENUM: {
-		auto &values_insert_order = EnumType::GetValuesInsertOrder(type_);
-		uint64_t enum_idx;
-		switch (type_.InternalType()) {
-		case PhysicalType::UINT8:
-			enum_idx = value_.utinyint;
-			break;
-		case PhysicalType::UINT16:
-			enum_idx = value_.usmallint;
-			break;
-		case PhysicalType::UINT32:
-			enum_idx = value_.uinteger;
-			break;
-		case PhysicalType::UINT64:
-			return string((const char *)value_.bigint);
-		default:
-			throw InternalException("ENUM can only have unsigned integers as physical types");
-		}
-		return values_insert_order.GetValue(enum_idx).ToString();
-	}
-	default:
-		throw NotImplementedException("Unimplemented type for printing: %s", type_.ToString());
-	}
+	return DefaultCastAs(LogicalType::VARCHAR).str_value;
 }
 
 string Value::ToSQLString() const {
@@ -4897,6 +6985,21 @@ const vector<Value> &ListValue::GetChildren(const Value &value) {
 	return value.list_value;
 }
 
+const Value &UnionValue::GetValue(const Value &value) {
+	D_ASSERT(value.type() == LogicalTypeId::UNION);
+	auto &children = StructValue::GetChildren(value);
+	auto tag = children[0].GetValueUnsafe<uint8_t>();
+	D_ASSERT(tag < children.size() - 1);
+	return children[tag + 1];
+}
+
+uint8_t UnionValue::GetTag(const Value &value) {
+	D_ASSERT(value.type() == LogicalTypeId::UNION);
+	auto children = StructValue::GetChildren(value);
+	auto tag = children[0].GetValueUnsafe<uint8_t>();
+	return tag;
+}
+
 hugeint_t IntegralValue::Get(const Value &value) {
 	switch (value.type().InternalType()) {
 	case PhysicalType::INT8:
@@ -4973,33 +7076,60 @@ bool Value::operator>=(const int64_t &rhs) const {
 	return *this >= Value::Numeric(type_, rhs);
 }
 
-bool Value::TryCastAs(const LogicalType &target_type, Value &new_value, string *error_message, bool strict) const {
+bool Value::TryCastAs(CastFunctionSet &set, GetCastFunctionInput &get_input, const LogicalType &target_type,
+                      Value &new_value, string *error_message, bool strict) const {
 	if (type_ == target_type) {
 		new_value = Copy();
 		return true;
 	}
 	Vector input(*this);
 	Vector result(target_type);
-	if (!VectorOperations::TryCast(input, result, 1, error_message, strict)) {
+	if (!VectorOperations::TryCast(set, get_input, input, result, 1, error_message, strict)) {
 		return false;
 	}
 	new_value = result.GetValue(0);
 	return true;
 }
 
-Value Value::CastAs(const LogicalType &target_type, bool strict) const {
+bool Value::TryCastAs(ClientContext &context, const LogicalType &target_type, Value &new_value, string *error_message,
+                      bool strict) const {
+	GetCastFunctionInput get_input(context);
+	return TryCastAs(CastFunctionSet::Get(context), get_input, target_type, new_value, error_message, strict);
+}
+
+bool Value::DefaultTryCastAs(const LogicalType &target_type, Value &new_value, string *error_message,
+                             bool strict) const {
+	CastFunctionSet set;
+	GetCastFunctionInput get_input;
+	return TryCastAs(set, get_input, target_type, new_value, error_message, strict);
+}
+
+Value Value::CastAs(CastFunctionSet &set, GetCastFunctionInput &get_input, const LogicalType &target_type,
+                    bool strict) const {
 	Value new_value;
 	string error_message;
-	if (!TryCastAs(target_type, new_value, &error_message, strict)) {
+	if (!TryCastAs(set, get_input, target_type, new_value, &error_message, strict)) {
 		throw InvalidInputException("Failed to cast value: %s", error_message);
 	}
 	return new_value;
 }
 
-bool Value::TryCastAs(const LogicalType &target_type, bool strict) {
+Value Value::CastAs(ClientContext &context, const LogicalType &target_type, bool strict) const {
+	GetCastFunctionInput get_input(context);
+	return CastAs(CastFunctionSet::Get(context), get_input, target_type, strict);
+}
+
+Value Value::DefaultCastAs(const LogicalType &target_type, bool strict) const {
+	CastFunctionSet set;
+	GetCastFunctionInput get_input;
+	return CastAs(set, get_input, target_type, strict);
+}
+
+bool Value::TryCastAs(CastFunctionSet &set, GetCastFunctionInput &get_input, const LogicalType &target_type,
+                      bool strict) {
 	Value new_value;
 	string error_message;
-	if (!TryCastAs(target_type, new_value, &error_message, strict)) {
+	if (!TryCastAs(set, get_input, target_type, new_value, &error_message, strict)) {
 		return false;
 	}
 	type_ = target_type;
@@ -5009,6 +7139,17 @@ bool Value::TryCastAs(const LogicalType &target_type, bool strict) {
 	struct_value = new_value.struct_value;
 	list_value = new_value.list_value;
 	return true;
+}
+
+bool Value::TryCastAs(ClientContext &context, const LogicalType &target_type, bool strict) {
+	GetCastFunctionInput get_input(context);
+	return TryCastAs(CastFunctionSet::Get(context), get_input, target_type, strict);
+}
+
+bool Value::DefaultTryCastAs(const LogicalType &target_type, bool strict) {
+	CastFunctionSet set;
+	GetCastFunctionInput get_input;
+	return TryCastAs(set, get_input, target_type, strict);
 }
 
 void Value::Serialize(Serializer &main_serializer) const {
@@ -5143,7 +7284,19 @@ bool Value::NotDistinctFrom(const Value &lvalue, const Value &rvalue) {
 	return ValueOperations::NotDistinctFrom(lvalue, rvalue);
 }
 
-bool Value::ValuesAreEqual(const Value &result_value, const Value &value) {
+static string SanitizeValue(string input) {
+	// some results might contain padding spaces, e.g. when rendering
+	// VARCHAR(10) and the string only has 6 characters, they will be padded
+	// with spaces to 10 in the rendering. We don't do that here yet as we
+	// are looking at internal structures. So just ignore any extra spaces
+	// on the right
+	StringUtil::RTrim(input);
+	// for result checking code, replace null bytes with their escaped value (\0)
+	return StringUtil::Replace(input, string("\0", 1), "\\0");
+}
+
+bool Value::ValuesAreEqual(CastFunctionSet &set, GetCastFunctionInput &get_input, const Value &result_value,
+                           const Value &value) {
 	if (result_value.IsNull() != value.IsNull()) {
 		return false;
 	}
@@ -5153,39 +7306,46 @@ bool Value::ValuesAreEqual(const Value &result_value, const Value &value) {
 	}
 	switch (value.type_.id()) {
 	case LogicalTypeId::FLOAT: {
-		auto other = result_value.CastAs(LogicalType::FLOAT);
+		auto other = result_value.CastAs(set, get_input, LogicalType::FLOAT);
 		float ldecimal = value.value_.float_;
 		float rdecimal = other.value_.float_;
 		return ApproxEqual(ldecimal, rdecimal);
 	}
 	case LogicalTypeId::DOUBLE: {
-		auto other = result_value.CastAs(LogicalType::DOUBLE);
+		auto other = result_value.CastAs(set, get_input, LogicalType::DOUBLE);
 		double ldecimal = value.value_.double_;
 		double rdecimal = other.value_.double_;
 		return ApproxEqual(ldecimal, rdecimal);
 	}
 	case LogicalTypeId::VARCHAR: {
-		auto other = result_value.CastAs(LogicalType::VARCHAR);
-		// some results might contain padding spaces, e.g. when rendering
-		// VARCHAR(10) and the string only has 6 characters, they will be padded
-		// with spaces to 10 in the rendering. We don't do that here yet as we
-		// are looking at internal structures. So just ignore any extra spaces
-		// on the right
-		string left = other.str_value;
-		string right = value.str_value;
-		StringUtil::RTrim(left);
-		StringUtil::RTrim(right);
+		auto other = result_value.CastAs(set, get_input, LogicalType::VARCHAR);
+		string left = SanitizeValue(other.str_value);
+		string right = SanitizeValue(value.str_value);
 		return left == right;
 	}
 	default:
 		if (result_value.type_.id() == LogicalTypeId::FLOAT || result_value.type_.id() == LogicalTypeId::DOUBLE) {
-			return Value::ValuesAreEqual(value, result_value);
+			return Value::ValuesAreEqual(set, get_input, value, result_value);
 		}
 		return value == result_value;
 	}
 }
 
+bool Value::ValuesAreEqual(ClientContext &context, const Value &result_value, const Value &value) {
+	GetCastFunctionInput get_input(context);
+	return Value::ValuesAreEqual(CastFunctionSet::Get(context), get_input, result_value, value);
+}
+bool Value::DefaultValuesAreEqual(const Value &result_value, const Value &value) {
+	CastFunctionSet set;
+	GetCastFunctionInput get_input;
+	return Value::ValuesAreEqual(set, get_input, result_value, value);
+}
+
 } // namespace duckdb
+
+
+
+
 
 
 
@@ -5218,7 +7378,7 @@ Vector::Vector(LogicalType type_p, idx_t capacity) : Vector(move(type_p), true, 
 
 Vector::Vector(LogicalType type_p, data_ptr_t dataptr)
     : vector_type(VectorType::FLAT_VECTOR), type(move(type_p)), data(dataptr) {
-	if (dataptr && type.id() == LogicalTypeId::INVALID) {
+	if (dataptr && !type.IsValid()) {
 		throw InternalException("Cannot create a vector of type INVALID!");
 	}
 }
@@ -5235,8 +7395,8 @@ Vector::Vector(Vector &other, const SelectionVector &sel, idx_t count) : type(ot
 	Slice(other, sel, count);
 }
 
-Vector::Vector(Vector &other, idx_t offset) : type(other.type) {
-	Slice(other, offset);
+Vector::Vector(Vector &other, idx_t offset, idx_t end) : type(other.type) {
+	Slice(other, offset, end);
 }
 
 Vector::Vector(const Value &value) : type(value.type()) {
@@ -5300,7 +7460,7 @@ void Vector::ResetFromCache(const VectorCache &cache) {
 	cache.ResetFromCache(*this);
 }
 
-void Vector::Slice(Vector &other, idx_t offset) {
+void Vector::Slice(Vector &other, idx_t offset, idx_t end) {
 	if (other.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		Reference(other);
 		return;
@@ -5314,10 +7474,10 @@ void Vector::Slice(Vector &other, idx_t offset) {
 		auto &other_entries = StructVector::GetEntries(other);
 		D_ASSERT(entries.size() == other_entries.size());
 		for (idx_t i = 0; i < entries.size(); i++) {
-			entries[i]->Slice(*other_entries[i], offset);
+			entries[i]->Slice(*other_entries[i], offset, end);
 		}
 		if (offset > 0) {
-			new_vector.validity.Slice(other.validity, offset);
+			new_vector.validity.Slice(other.validity, offset, end);
 		} else {
 			new_vector.validity = other.validity;
 		}
@@ -5326,7 +7486,7 @@ void Vector::Slice(Vector &other, idx_t offset) {
 		Reference(other);
 		if (offset > 0) {
 			data = data + GetTypeIdSize(internal_type) * offset;
-			validity.Slice(other.validity, offset);
+			validity.Slice(other.validity, offset, end);
 		}
 	}
 }
@@ -5355,6 +7515,12 @@ void Vector::Slice(const SelectionVector &sel, idx_t count) {
 		}
 		return;
 	}
+
+	if (GetVectorType() == VectorType::FSST_VECTOR) {
+		Flatten(sel, count);
+		return;
+	}
+
 	Vector child_vector(*this);
 	auto internal_type = GetType().InternalType();
 	if (internal_type == PhysicalType::STRUCT) {
@@ -5406,6 +7572,9 @@ void Vector::Initialize(bool zero_data, idx_t capacity) {
 		if (zero_data) {
 			memset(data, 0, capacity * type_size);
 		}
+	}
+	if (capacity > STANDARD_VECTOR_SIZE) {
+		validity.Resize(STANDARD_VECTOR_SIZE, capacity);
 	}
 }
 
@@ -5486,10 +7655,11 @@ void Vector::SetValue(idx_t index, const Value &val) {
 		auto &child = DictionaryVector::Child(*this);
 		return child.SetValue(sel_vector.get_index(index), val);
 	}
-	if (val.type().InternalType() != GetType().InternalType()) {
-		SetValue(index, val.CastAs(GetType()));
+	if (val.type() != GetType()) {
+		SetValue(index, val.DefaultCastAs(GetType()));
 		return;
 	}
+	D_ASSERT(val.type().InternalType() == GetType().InternalType());
 
 	validity.EnsureWritable();
 	validity.Set(index, !val.IsNull());
@@ -5578,7 +7748,7 @@ void Vector::SetValue(idx_t index, const Value &val) {
 	}
 }
 
-Value Vector::GetValue(const Vector &v_p, idx_t index_p) {
+Value Vector::GetValueInternal(const Vector &v_p, idx_t index_p) {
 	const Vector *vector = &v_p;
 	idx_t index = index_p;
 	bool finished = false;
@@ -5591,7 +7761,10 @@ Value Vector::GetValue(const Vector &v_p, idx_t index_p) {
 		case VectorType::FLAT_VECTOR:
 			finished = true;
 			break;
-			// dictionary: apply dictionary and forward to child
+		case VectorType::FSST_VECTOR:
+			finished = true;
+			break;
+		// dictionary: apply dictionary and forward to child
 		case VectorType::DICTIONARY_VECTOR: {
 			auto &sel_vector = DictionaryVector::SelVector(*vector);
 			auto &child = DictionaryVector::Child(*vector);
@@ -5615,6 +7788,18 @@ Value Vector::GetValue(const Vector &v_p, idx_t index_p) {
 	if (!validity.RowIsValid(index)) {
 		return Value(vector->GetType());
 	}
+
+	if (vector->GetVectorType() == VectorType::FSST_VECTOR) {
+		if (vector->GetType().InternalType() != PhysicalType::VARCHAR) {
+			throw InternalException("FSST Vector with non-string datatype found!");
+		}
+		auto str_compressed = ((string_t *)data)[index];
+		Value result =
+		    FSSTPrimitives::DecompressValue(FSSTVector::GetDecoder(const_cast<Vector &>(*vector)),
+		                                    (unsigned char *)str_compressed.GetDataUnsafe(), str_compressed.GetSize());
+		return result;
+	}
+
 	switch (vector->GetType().id()) {
 	case LogicalTypeId::BOOLEAN:
 		return Value::BOOLEAN(((bool *)data)[index]);
@@ -5667,7 +7852,8 @@ Value Vector::GetValue(const Vector &v_p, idx_t index_p) {
 		case PhysicalType::INT128:
 			return Value::DECIMAL(((hugeint_t *)data)[index], width, scale);
 		default:
-			throw InternalException("Widths bigger than 38 are not supported");
+			throw InternalException("Physical type '%s' has a width bigger than 38, which is not supported",
+			                        TypeIdToString(type.InternalType()));
 		}
 	}
 	case LogicalTypeId::ENUM: {
@@ -5711,6 +7897,12 @@ Value Vector::GetValue(const Vector &v_p, idx_t index_p) {
 		Value value = child_entries[1]->GetValue(index);
 		return Value::MAP(move(key), move(value));
 	}
+	case LogicalTypeId::UNION: {
+		auto tag = UnionVector::GetTag(*vector, index);
+		auto value = UnionVector::GetMember(*vector, tag).GetValue(index);
+		auto members = UnionType::CopyMemberTypes(type);
+		return Value::UNION(members, tag, move(value));
+	}
 	case LogicalTypeId::STRUCT: {
 		// we can derive the value schema from the vector schema
 		auto &child_entries = StructVector::GetEntries(*vector);
@@ -5735,6 +7927,18 @@ Value Vector::GetValue(const Vector &v_p, idx_t index_p) {
 	}
 }
 
+Value Vector::GetValue(const Vector &v_p, idx_t index_p) {
+	auto value = GetValueInternal(v_p, index_p);
+	// set the alias of the type to the correct value, if there is a type alias
+	if (v_p.GetType().HasAlias()) {
+		value.type().CopyAuxInfo(v_p.GetType());
+	}
+	if (v_p.GetType().id() != LogicalTypeId::AGGREGATE_STATE && value.type().id() != LogicalTypeId::AGGREGATE_STATE) {
+		D_ASSERT(v_p.GetType() == value.type());
+	}
+	return value;
+}
+
 Value Vector::GetValue(idx_t index) const {
 	return GetValue(*this, index);
 }
@@ -5744,6 +7948,8 @@ string VectorTypeToString(VectorType type) {
 	switch (type) {
 	case VectorType::FLAT_VECTOR:
 		return "FLAT";
+	case VectorType::FSST_VECTOR:
+		return "FSST";
 	case VectorType::SEQUENCE_VECTOR:
 		return "SEQUENCE";
 	case VectorType::DICTIONARY_VECTOR:
@@ -5765,6 +7971,15 @@ string Vector::ToString(idx_t count) const {
 			retval += GetValue(i).ToString() + (i == count - 1 ? "" : ", ");
 		}
 		break;
+	case VectorType::FSST_VECTOR: {
+		for (idx_t i = 0; i < count; i++) {
+			string_t compressed_string = ((string_t *)data)[i];
+			Value val = FSSTPrimitives::DecompressValue(FSSTVector::GetDecoder(const_cast<Vector &>(*this)),
+			                                            (unsigned char *)compressed_string.GetDataUnsafe(),
+			                                            compressed_string.GetSize());
+			retval += GetValue(i).ToString() + (i == count - 1 ? "" : ", ");
+		}
+	} break;
 	case VectorType::CONSTANT_VECTOR:
 		retval += GetValue(0).ToString();
 		break;
@@ -5822,11 +8037,23 @@ static void TemplatedFlattenConstantVector(data_ptr_t data, data_ptr_t old_data,
 	}
 }
 
-void Vector::Normalify(idx_t count) {
+void Vector::Flatten(idx_t count) {
 	switch (GetVectorType()) {
 	case VectorType::FLAT_VECTOR:
 		// already a flat vector
 		break;
+	case VectorType::FSST_VECTOR: {
+		// Even though count may only be a part of the vector, we need to flatten the whole thing due to the way
+		// ToUnifiedFormat uses flatten
+		idx_t total_count = FSSTVector::GetCount(*this);
+		// create vector to decompress into
+		Vector other(GetType(), total_count);
+		// now copy the data of this vector to the other vector, decompressing the strings in the process
+		VectorOperations::Copy(*this, other, total_count, 0, 0);
+		// create a reference to the data in the other vector
+		this->Reference(other);
+		break;
+	}
 	case VectorType::DICTIONARY_VECTOR: {
 		// create a new flat vector of this type
 		Vector other(GetType(), count);
@@ -5907,23 +8134,23 @@ void Vector::Normalify(idx_t count) {
 			for (auto &child : child_entries) {
 				D_ASSERT(child->GetVectorType() == VectorType::CONSTANT_VECTOR);
 				auto vector = make_unique<Vector>(*child);
-				vector->Normalify(count);
+				vector->Flatten(count);
 				new_children.push_back(move(vector));
 			}
 			auxiliary = move(normalified_buffer);
 		} break;
 		default:
-			throw InternalException("Unimplemented type for VectorOperations::Normalify");
+			throw InternalException("Unimplemented type for VectorOperations::Flatten");
 		}
 		break;
 	}
 	case VectorType::SEQUENCE_VECTOR: {
-		int64_t start, increment;
-		SequenceVector::GetSequence(*this, start, increment);
+		int64_t start, increment, sequence_count;
+		SequenceVector::GetSequence(*this, start, increment, sequence_count);
 
 		buffer = VectorBuffer::CreateStandardVector(GetType());
 		data = buffer->GetData();
-		VectorOperations::GenerateSequence(*this, count, start, increment);
+		VectorOperations::GenerateSequence(*this, sequence_count, start, increment);
 		break;
 	}
 	default:
@@ -5931,11 +8158,20 @@ void Vector::Normalify(idx_t count) {
 	}
 }
 
-void Vector::Normalify(const SelectionVector &sel, idx_t count) {
+void Vector::Flatten(const SelectionVector &sel, idx_t count) {
 	switch (GetVectorType()) {
 	case VectorType::FLAT_VECTOR:
 		// already a flat vector
 		break;
+	case VectorType::FSST_VECTOR: {
+		// create a new flat vector of this type
+		Vector other(GetType());
+		// copy the data of this vector to the other vector, removing compression and selection vector in the process
+		VectorOperations::Copy(*this, other, sel, count, 0, 0);
+		// create a reference to the data in the other vector
+		this->Reference(other);
+		break;
+	}
 	case VectorType::SEQUENCE_VECTOR: {
 		int64_t start, increment;
 		SequenceVector::GetSequence(*this, start, increment);
@@ -5950,7 +8186,7 @@ void Vector::Normalify(const SelectionVector &sel, idx_t count) {
 	}
 }
 
-void Vector::Orrify(idx_t count, VectorData &data) {
+void Vector::ToUnifiedFormat(idx_t count, UnifiedVectorFormat &data) {
 	switch (GetVectorType()) {
 	case VectorType::DICTIONARY_VECTOR: {
 		auto &sel = DictionaryVector::SelVector(*this);
@@ -5962,7 +8198,7 @@ void Vector::Orrify(idx_t count, VectorData &data) {
 		} else {
 			// dictionary with non-flat child: create a new reference to the child and normalify it
 			Vector child_vector(child);
-			child_vector.Normalify(sel, count);
+			child_vector.Flatten(sel, count);
 			auto new_aux = make_buffer<VectorChildBuffer>(move(child_vector));
 
 			data.sel = &sel;
@@ -5978,7 +8214,7 @@ void Vector::Orrify(idx_t count, VectorData &data) {
 		data.validity = ConstantVector::Validity(*this);
 		break;
 	default:
-		Normalify(count);
+		Flatten(count);
 		data.sel = FlatVector::IncrementalSelectionVector();
 		data.data = FlatVector::GetData(*this);
 		data.validity = FlatVector::Validity(*this);
@@ -5986,12 +8222,13 @@ void Vector::Orrify(idx_t count, VectorData &data) {
 	}
 }
 
-void Vector::Sequence(int64_t start, int64_t increment) {
+void Vector::Sequence(int64_t start, int64_t increment, idx_t count) {
 	this->vector_type = VectorType::SEQUENCE_VECTOR;
-	this->buffer = make_buffer<VectorBuffer>(sizeof(int64_t) * 2);
+	this->buffer = make_buffer<VectorBuffer>(sizeof(int64_t) * 3);
 	auto data = (int64_t *)buffer->GetData();
 	data[0] = start;
 	data[1] = increment;
+	data[2] = int64_t(count);
 	validity.Reset();
 	auxiliary.reset();
 }
@@ -5999,8 +8236,8 @@ void Vector::Sequence(int64_t start, int64_t increment) {
 void Vector::Serialize(idx_t count, Serializer &serializer) {
 	auto &type = GetType();
 
-	VectorData vdata;
-	Orrify(count, vdata);
+	UnifiedVectorFormat vdata;
+	ToUnifiedFormat(count, vdata);
 
 	const auto write_validity = (count > 0) && !vdata.validity.AllValid();
 	serializer.Write<bool>(write_validity);
@@ -6030,7 +8267,7 @@ void Vector::Serialize(idx_t count, Serializer &serializer) {
 			break;
 		}
 		case PhysicalType::STRUCT: {
-			Normalify(count);
+			Flatten(count);
 			auto &entries = StructVector::GetEntries(*this);
 			for (auto &entry : entries) {
 				entry->Serialize(count, serializer);
@@ -6187,6 +8424,14 @@ void Vector::VerifyMap(Vector &vector_p, const SelectionVector &sel_p, idx_t cou
 #endif // DEBUG
 }
 
+void Vector::VerifyUnion(Vector &vector_p, const SelectionVector &sel_p, idx_t count) {
+#ifdef DEBUG
+	D_ASSERT(vector_p.GetType().id() == LogicalTypeId::UNION);
+	auto valid_check = CheckUnionValidity(vector_p, count, sel_p);
+	D_ASSERT(valid_check == UnionInvalidReason::VALID);
+#endif // DEBUG
+}
+
 void Vector::Verify(Vector &vector_p, const SelectionVector &sel_p, idx_t count) {
 #ifdef DEBUG
 	if (count == 0) {
@@ -6213,7 +8458,7 @@ void Vector::Verify(Vector &vector_p, const SelectionVector &sel_p, idx_t count)
 		D_ASSERT(!vector->auxiliary);
 	}
 	if (type.id() == LogicalTypeId::VARCHAR || type.id() == LogicalTypeId::JSON) {
-		// verify that there are no '\0' bytes in string values
+		// verify that the string is correct unicode
 		switch (vtype) {
 		case VectorType::FLAT_VECTOR: {
 			auto &validity = FlatVector::Validity(*vector);
@@ -6221,7 +8466,7 @@ void Vector::Verify(Vector &vector_p, const SelectionVector &sel_p, idx_t count)
 			for (idx_t i = 0; i < count; i++) {
 				auto oidx = sel->get_index(i);
 				if (validity.RowIsValid(oidx)) {
-					strings[oidx].VerifyNull();
+					strings[oidx].Verify();
 				}
 			}
 			break;
@@ -6280,6 +8525,10 @@ void Vector::Verify(Vector &vector_p, const SelectionVector &sel_p, idx_t count)
 		}
 		if (vector->GetType().id() == LogicalTypeId::MAP) {
 			VerifyMap(*vector, *sel, count);
+		}
+
+		if (vector->GetType().id() == LogicalTypeId::UNION) {
+			VerifyUnion(*vector, *sel, count);
 		}
 	}
 
@@ -6374,8 +8623,8 @@ void ConstantVector::Reference(Vector &vector, Vector &source, idx_t position, i
 	switch (source_type.InternalType()) {
 	case PhysicalType::LIST: {
 		// retrieve the list entry from the source vector
-		VectorData vdata;
-		source.Orrify(count, vdata);
+		UnifiedVectorFormat vdata;
+		source.ToUnifiedFormat(count, vdata);
 
 		auto list_index = vdata.sel->get_index(position);
 		if (!vdata.validity.RowIsValid(list_index)) {
@@ -6402,8 +8651,8 @@ void ConstantVector::Reference(Vector &vector, Vector &source, idx_t position, i
 		break;
 	}
 	case PhysicalType::STRUCT: {
-		VectorData vdata;
-		source.Orrify(count, vdata);
+		UnifiedVectorFormat vdata;
+		source.ToUnifiedFormat(count, vdata);
 
 		auto struct_index = vdata.sel->get_index(position);
 		if (!vdata.validity.RowIsValid(struct_index)) {
@@ -6522,8 +8771,113 @@ void StringVector::AddHeapReference(Vector &vector, Vector &other) {
 	StringVector::AddBuffer(vector, other.auxiliary);
 }
 
+string_t FSSTVector::AddCompressedString(Vector &vector, const char *data, idx_t len) {
+	return FSSTVector::AddCompressedString(vector, string_t(data, len));
+}
+
+string_t FSSTVector::AddCompressedString(Vector &vector, string_t data) {
+	D_ASSERT(vector.GetType().InternalType() == PhysicalType::VARCHAR);
+	if (data.IsInlined()) {
+		// string will be inlined: no need to store in string heap
+		return data;
+	}
+	if (!vector.auxiliary) {
+		vector.auxiliary = make_buffer<VectorFSSTStringBuffer>();
+	}
+	D_ASSERT(vector.auxiliary->GetBufferType() == VectorBufferType::FSST_BUFFER);
+	auto &fsst_string_buffer = (VectorFSSTStringBuffer &)*vector.auxiliary;
+	return fsst_string_buffer.AddBlob(data);
+}
+
+void *FSSTVector::GetDecoder(const Vector &vector) {
+	D_ASSERT(vector.GetType().InternalType() == PhysicalType::VARCHAR);
+	if (!vector.auxiliary) {
+		throw InternalException("GetDecoder called on FSST Vector without registered buffer");
+	}
+	D_ASSERT(vector.auxiliary->GetBufferType() == VectorBufferType::FSST_BUFFER);
+	auto &fsst_string_buffer = (VectorFSSTStringBuffer &)*vector.auxiliary;
+	return (duckdb_fsst_decoder_t *)fsst_string_buffer.GetDecoder();
+}
+
+void FSSTVector::RegisterDecoder(Vector &vector, buffer_ptr<void> &duckdb_fsst_decoder) {
+	D_ASSERT(vector.GetType().InternalType() == PhysicalType::VARCHAR);
+
+	if (!vector.auxiliary) {
+		vector.auxiliary = make_buffer<VectorFSSTStringBuffer>();
+	}
+	D_ASSERT(vector.auxiliary->GetBufferType() == VectorBufferType::FSST_BUFFER);
+
+	auto &fsst_string_buffer = (VectorFSSTStringBuffer &)*vector.auxiliary;
+	fsst_string_buffer.AddDecoder(duckdb_fsst_decoder);
+}
+
+void FSSTVector::SetCount(Vector &vector, idx_t count) {
+	D_ASSERT(vector.GetType().InternalType() == PhysicalType::VARCHAR);
+
+	if (!vector.auxiliary) {
+		vector.auxiliary = make_buffer<VectorFSSTStringBuffer>();
+	}
+	D_ASSERT(vector.auxiliary->GetBufferType() == VectorBufferType::FSST_BUFFER);
+
+	auto &fsst_string_buffer = (VectorFSSTStringBuffer &)*vector.auxiliary;
+	fsst_string_buffer.SetCount(count);
+}
+
+idx_t FSSTVector::GetCount(Vector &vector) {
+	D_ASSERT(vector.GetType().InternalType() == PhysicalType::VARCHAR);
+
+	if (!vector.auxiliary) {
+		vector.auxiliary = make_buffer<VectorFSSTStringBuffer>();
+	}
+	D_ASSERT(vector.auxiliary->GetBufferType() == VectorBufferType::FSST_BUFFER);
+
+	auto &fsst_string_buffer = (VectorFSSTStringBuffer &)*vector.auxiliary;
+	return fsst_string_buffer.GetCount();
+}
+
+void FSSTVector::DecompressVector(const Vector &src, Vector &dst, idx_t src_offset, idx_t dst_offset, idx_t copy_count,
+                                  const SelectionVector *sel) {
+	D_ASSERT(src.GetVectorType() == VectorType::FSST_VECTOR);
+	D_ASSERT(dst.GetVectorType() == VectorType::FLAT_VECTOR);
+	auto dst_mask = FlatVector::Validity(dst);
+	auto ldata = FSSTVector::GetCompressedData<string_t>(src);
+	auto tdata = FlatVector::GetData<string_t>(dst);
+	for (idx_t i = 0; i < copy_count; i++) {
+		auto source_idx = sel->get_index(src_offset + i);
+		auto target_idx = dst_offset + i;
+		string_t compressed_string = ldata[source_idx];
+		if (dst_mask.RowIsValid(target_idx) && compressed_string.GetSize() > 0) {
+			tdata[target_idx] = FSSTPrimitives::DecompressValue(FSSTVector::GetDecoder(src), dst,
+			                                                    (unsigned char *)compressed_string.GetDataUnsafe(),
+			                                                    compressed_string.GetSize());
+		} else {
+			tdata[target_idx] = string_t(nullptr, 0);
+		}
+	}
+}
+
+Vector &MapVector::GetKeys(Vector &vector) {
+	auto &entries = StructVector::GetEntries(vector);
+	D_ASSERT(entries.size() == 2);
+	return *entries[0];
+}
+Vector &MapVector::GetValues(Vector &vector) {
+	auto &entries = StructVector::GetEntries(vector);
+	D_ASSERT(entries.size() == 2);
+	return *entries[1];
+}
+
+const Vector &MapVector::GetKeys(const Vector &vector) {
+	return GetKeys((Vector &)vector);
+}
+const Vector &MapVector::GetValues(const Vector &vector) {
+	return GetValues((Vector &)vector);
+}
+
 vector<unique_ptr<Vector>> &StructVector::GetEntries(Vector &vector) {
-	D_ASSERT(vector.GetType().id() == LogicalTypeId::STRUCT || vector.GetType().id() == LogicalTypeId::MAP);
+	D_ASSERT(vector.GetType().id() == LogicalTypeId::STRUCT || vector.GetType().id() == LogicalTypeId::MAP ||
+	         vector.GetType().id() == LogicalTypeId::UNION);
+
 	if (vector.GetVectorType() == VectorType::DICTIONARY_VECTOR) {
 		auto &child = DictionaryVector::Child(vector);
 		return StructVector::GetEntries(child);
@@ -6570,8 +8924,8 @@ void ListVector::Reserve(Vector &vector, idx_t required_capacity) {
 template <class T>
 void TemplatedSearchInMap(Vector &list, T key, vector<idx_t> &offsets, bool is_key_null, idx_t offset, idx_t length) {
 	auto &list_vector = ListVector::GetEntry(list);
-	VectorData vector_data;
-	list_vector.Orrify(ListVector::GetListSize(list), vector_data);
+	UnifiedVectorFormat vector_data;
+	list_vector.ToUnifiedFormat(ListVector::GetListSize(list), vector_data);
 	auto data = (T *)vector_data.data;
 	auto validity_mask = vector_data.validity;
 
@@ -6602,8 +8956,8 @@ void TemplatedSearchInMap(Vector &list, const Value &key, vector<idx_t> &offsets
 void SearchStringInMap(Vector &list, const string &key, vector<idx_t> &offsets, bool is_key_null, idx_t offset,
                        idx_t length) {
 	auto &list_vector = ListVector::GetEntry(list);
-	VectorData vector_data;
-	list_vector.Orrify(ListVector::GetListSize(list), vector_data);
+	UnifiedVectorFormat vector_data;
+	list_vector.ToUnifiedFormat(ListVector::GetListSize(list), vector_data);
 	auto data = (string_t *)vector_data.data;
 	auto validity_mask = vector_data.validity;
 	if (is_key_null) {
@@ -6629,7 +8983,7 @@ vector<idx_t> ListVector::Search(Vector &list, const Value &key, idx_t row) {
 	vector<idx_t> offsets;
 
 	auto &list_vector = ListVector::GetEntry(list);
-	auto &entry = ((list_entry_t *)list.GetData())[row];
+	auto &entry = ListVector::GetData(list)[row];
 
 	switch (list_vector.GetType().InternalType()) {
 	case PhysicalType::BOOL:
@@ -6694,6 +9048,15 @@ idx_t ListVector::GetListSize(const Vector &vec) {
 	return ((VectorListBuffer &)*vec.auxiliary).size;
 }
 
+idx_t ListVector::GetListCapacity(const Vector &vec) {
+	if (vec.GetVectorType() == VectorType::DICTIONARY_VECTOR) {
+		auto &child = DictionaryVector::Child(vec);
+		return ListVector::GetListSize(child);
+	}
+	D_ASSERT(vec.auxiliary);
+	return ((VectorListBuffer &)*vec.auxiliary).capacity;
+}
+
 void ListVector::ReferenceEntry(Vector &vector, Vector &other) {
 	D_ASSERT(vector.GetType().id() == LogicalTypeId::LIST);
 	D_ASSERT(vector.GetVectorType() == VectorType::FLAT_VECTOR ||
@@ -6735,6 +9098,93 @@ void ListVector::PushBack(Vector &target, const Value &insert) {
 	target_buffer.PushBack(insert);
 }
 
+// Union vector
+const Vector &UnionVector::GetMember(const Vector &vector, idx_t member_index) {
+	D_ASSERT(member_index < UnionType::GetMemberCount(vector.GetType()));
+	auto &entries = StructVector::GetEntries(vector);
+	return *entries[member_index + 1]; // skip the "tag" entry
+}
+
+Vector &UnionVector::GetMember(Vector &vector, idx_t member_index) {
+	D_ASSERT(member_index < UnionType::GetMemberCount(vector.GetType()));
+	auto &entries = StructVector::GetEntries(vector);
+	return *entries[member_index + 1]; // skip the "tag" entry
+}
+
+const Vector &UnionVector::GetTags(const Vector &vector) {
+	// the tag vector is always the first struct child.
+	return *StructVector::GetEntries(vector)[0];
+}
+
+Vector &UnionVector::GetTags(Vector &vector) {
+	// the tag vector is always the first struct child.
+	return *StructVector::GetEntries(vector)[0];
+}
+
+void UnionVector::SetToMember(Vector &union_vector, union_tag_t tag, Vector &member_vector, idx_t count,
+                              bool keep_tags_for_null) {
+	D_ASSERT(union_vector.GetType().id() == LogicalTypeId::UNION);
+	D_ASSERT(tag < UnionType::GetMemberCount(union_vector.GetType()));
+
+	// Set the union member to the specified vector
+	UnionVector::GetMember(union_vector, tag).Reference(member_vector);
+	auto &tag_vector = UnionVector::GetTags(union_vector);
+
+	if (member_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		// if the member vector is constant, we can set the union to constant as well
+		union_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::GetData<union_tag_t>(tag_vector)[0] = tag;
+		ConstantVector::SetNull(union_vector, ConstantVector::IsNull(member_vector));
+
+	} else {
+		// otherwise flatten and set to flatvector
+		member_vector.Flatten(count);
+		union_vector.SetVectorType(VectorType::FLAT_VECTOR);
+
+		if (member_vector.validity.AllValid()) {
+			// if the member vector is all valid, we can set the tag to constant
+			tag_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
+			auto tag_data = ConstantVector::GetData<union_tag_t>(tag_vector);
+			*tag_data = tag;
+		} else {
+			tag_vector.SetVectorType(VectorType::FLAT_VECTOR);
+			if (keep_tags_for_null) {
+				FlatVector::Validity(tag_vector).SetAllValid(count);
+				FlatVector::Validity(union_vector).SetAllValid(count);
+			} else {
+				// ensure the tags have the same validity as the member
+				FlatVector::Validity(union_vector) = FlatVector::Validity(member_vector);
+				FlatVector::Validity(tag_vector) = FlatVector::Validity(member_vector);
+			}
+
+			auto tag_data = FlatVector::GetData<union_tag_t>(tag_vector);
+			memset(tag_data, tag, count);
+		}
+	}
+
+	// Set the non-selected members to constant null vectors
+	for (idx_t i = 0; i < UnionType::GetMemberCount(union_vector.GetType()); i++) {
+		if (i != tag) {
+			auto &member = UnionVector::GetMember(union_vector, i);
+			member.SetVectorType(VectorType::CONSTANT_VECTOR);
+			ConstantVector::SetNull(member, true);
+		}
+	}
+}
+
+union_tag_t UnionVector::GetTag(const Vector &vector, idx_t index) {
+	// the tag vector is always the first struct child.
+	auto &tag_vector = *StructVector::GetEntries(vector)[0];
+	if (tag_vector.GetVectorType() == VectorType::DICTIONARY_VECTOR) {
+		auto &child = DictionaryVector::Child(tag_vector);
+		return FlatVector::GetData<union_tag_t>(child)[index];
+	}
+	if (tag_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		return ConstantVector::GetData<union_tag_t>(tag_vector)[0];
+	}
+	return FlatVector::GetData<union_tag_t>(tag_vector)[index];
+}
+
 } // namespace duckdb
 
 
@@ -6763,6 +9213,12 @@ buffer_ptr<VectorBuffer> VectorBuffer::CreateStandardVector(const LogicalType &t
 }
 
 VectorStringBuffer::VectorStringBuffer() : VectorBuffer(VectorBufferType::STRING_BUFFER) {
+}
+
+VectorStringBuffer::VectorStringBuffer(VectorBufferType type) : VectorBuffer(type) {
+}
+
+VectorFSSTStringBuffer::VectorFSSTStringBuffer() : VectorStringBuffer(VectorBufferType::FSST_BUFFER) {
 }
 
 VectorStructBuffer::VectorStructBuffer() : VectorBuffer(VectorBufferType::STRUCT_BUFFER) {
@@ -6843,17 +9299,18 @@ ManagedVectorBuffer::~ManagedVectorBuffer() {
 
 
 
+
 namespace duckdb {
 
 class VectorCacheBuffer : public VectorBuffer {
 public:
-	explicit VectorCacheBuffer(Allocator &allocator, const LogicalType &type_p)
-	    : VectorBuffer(VectorBufferType::OPAQUE_BUFFER), type(type_p) {
+	explicit VectorCacheBuffer(Allocator &allocator, const LogicalType &type_p, idx_t capacity_p = STANDARD_VECTOR_SIZE)
+	    : VectorBuffer(VectorBufferType::OPAQUE_BUFFER), type(type_p), capacity(capacity_p) {
 		auto internal_type = type.InternalType();
 		switch (internal_type) {
 		case PhysicalType::LIST: {
 			// memory for the list offsets
-			owned_data = allocator.Allocate(STANDARD_VECTOR_SIZE * GetTypeIdSize(internal_type));
+			owned_data = allocator.Allocate(capacity * GetTypeIdSize(internal_type));
 			// child data of the list
 			auto &child_type = ListType::GetChildType(type);
 			child_caches.push_back(make_buffer<VectorCacheBuffer>(allocator, child_type));
@@ -6871,7 +9328,7 @@ public:
 			break;
 		}
 		default:
-			owned_data = allocator.Allocate(STANDARD_VECTOR_SIZE * GetTypeIdSize(internal_type));
+			owned_data = allocator.Allocate(capacity * GetTypeIdSize(internal_type));
 			break;
 		}
 	}
@@ -6884,13 +9341,14 @@ public:
 		result.validity.Reset();
 		switch (internal_type) {
 		case PhysicalType::LIST: {
-			result.data = owned_data->get();
+			result.data = owned_data.get();
 			// reinitialize the VectorListBuffer
 			AssignSharedPointer(result.auxiliary, auxiliary);
 			// propagate through child
 			auto &list_buffer = (VectorListBuffer &)*result.auxiliary;
-			list_buffer.capacity = STANDARD_VECTOR_SIZE;
+			list_buffer.capacity = capacity;
 			list_buffer.size = 0;
+			list_buffer.SetAuxiliaryData(nullptr);
 
 			auto &list_child = list_buffer.GetChild();
 			auto &child_cache = (VectorCacheBuffer &)*child_caches[0];
@@ -6901,6 +9359,7 @@ public:
 			// struct does not have data
 			result.data = nullptr;
 			// reinitialize the VectorStructBuffer
+			auxiliary->SetAuxiliaryData(nullptr);
 			AssignSharedPointer(result.auxiliary, auxiliary);
 			// propagate through children
 			auto &children = ((VectorStructBuffer &)*result.auxiliary).GetChildren();
@@ -6912,7 +9371,7 @@ public:
 		}
 		default:
 			// regular type: no aux data and reset data to cached data
-			result.data = owned_data->get();
+			result.data = owned_data.get();
 			result.auxiliary.reset();
 			break;
 		}
@@ -6926,15 +9385,17 @@ private:
 	//! The type of the vector cache
 	LogicalType type;
 	//! Owned data
-	unique_ptr<AllocatedData> owned_data;
+	AllocatedData owned_data;
 	//! Child caches (if any). Used for nested types.
 	vector<buffer_ptr<VectorBuffer>> child_caches;
 	//! Aux data for the vector (if any)
 	buffer_ptr<VectorBuffer> auxiliary;
+	//! Capacity of the vector
+	idx_t capacity;
 };
 
-VectorCache::VectorCache(Allocator &allocator, const LogicalType &type_p) {
-	buffer = make_unique<VectorCacheBuffer>(allocator, type_p);
+VectorCache::VectorCache(Allocator &allocator, const LogicalType &type_p, idx_t capacity_p) {
+	buffer = make_unique<VectorCacheBuffer>(allocator, type_p, capacity_p);
 }
 
 void VectorCache::ResetFromCache(Vector &result) const {
@@ -6966,6 +9427,9 @@ const SelectionVector *FlatVector::IncrementalSelectionVector() {
 const sel_t ConstantVector::ZERO_VECTOR[STANDARD_VECTOR_SIZE] = {0};
 
 } // namespace duckdb
+
+
+
 
 
 
@@ -7061,7 +9525,8 @@ PhysicalType LogicalType::GetInternalType() {
 		} else if (width <= Decimal::MAX_WIDTH_INT128) {
 			return PhysicalType::INT128;
 		} else {
-			throw InternalException("Widths bigger than %d are not supported", DecimalType::MaxWidth());
+			throw InternalException("Decimal has a width of %d which is bigger than the maximum supported width of %d",
+			                        width, DecimalType::MaxWidth());
 		}
 	}
 	case LogicalTypeId::VARCHAR:
@@ -7072,6 +9537,7 @@ PhysicalType LogicalType::GetInternalType() {
 	case LogicalTypeId::INTERVAL:
 		return PhysicalType::INTERVAL;
 	case LogicalTypeId::MAP:
+	case LogicalTypeId::UNION:
 	case LogicalTypeId::STRUCT:
 		return PhysicalType::STRUCT;
 	case LogicalTypeId::LIST:
@@ -7093,6 +9559,7 @@ PhysicalType LogicalType::GetInternalType() {
 		return EnumType::GetPhysicalType(*this);
 	}
 	case LogicalTypeId::TABLE:
+	case LogicalTypeId::LAMBDA:
 	case LogicalTypeId::ANY:
 	case LogicalTypeId::INVALID:
 	case LogicalTypeId::UNKNOWN:
@@ -7145,6 +9612,7 @@ constexpr const LogicalTypeId LogicalType::ROW_TYPE;
 
 // TODO these are incomplete and should maybe not exist as such
 constexpr const LogicalTypeId LogicalType::TABLE;
+constexpr const LogicalTypeId LogicalType::LAMBDA;
 
 constexpr const LogicalTypeId LogicalType::ANY;
 
@@ -7171,7 +9639,7 @@ const vector<LogicalType> LogicalType::AllTypes() {
 	    LogicalType::HUGEINT,  LogicalTypeId::DECIMAL, LogicalType::UTINYINT,     LogicalType::USMALLINT,
 	    LogicalType::UINTEGER, LogicalType::UBIGINT,   LogicalType::TIME,         LogicalTypeId::LIST,
 	    LogicalTypeId::STRUCT, LogicalType::TIME_TZ,   LogicalType::TIMESTAMP_TZ, LogicalTypeId::MAP,
-	    LogicalType::UUID,     LogicalType::JSON};
+	    LogicalTypeId::UNION,  LogicalType::UUID,      LogicalType::JSON};
 	return types;
 }
 
@@ -7216,44 +9684,8 @@ string TypeIdToString(PhysicalType type) {
 		return "INVALID";
 	case PhysicalType::BIT:
 		return "BIT";
-	case PhysicalType::NA:
-		return "NA";
-	case PhysicalType::HALF_FLOAT:
-		return "HALF_FLOAT";
-	case PhysicalType::STRING:
-		return "ARROW_STRING";
-	case PhysicalType::BINARY:
-		return "BINARY";
-	case PhysicalType::FIXED_SIZE_BINARY:
-		return "FIXED_SIZE_BINARY";
-	case PhysicalType::DATE32:
-		return "DATE32";
-	case PhysicalType::DATE64:
-		return "DATE64";
-	case PhysicalType::TIMESTAMP:
-		return "TIMESTAMP";
-	case PhysicalType::TIME32:
-		return "TIME32";
-	case PhysicalType::TIME64:
-		return "TIME64";
-	case PhysicalType::UNION:
-		return "UNION";
-	case PhysicalType::DICTIONARY:
-		return "DICTIONARY";
 	case PhysicalType::MAP:
 		return "MAP";
-	case PhysicalType::EXTENSION:
-		return "EXTENSION";
-	case PhysicalType::FIXED_SIZE_LIST:
-		return "FIXED_SIZE_LIST";
-	case PhysicalType::DURATION:
-		return "DURATION";
-	case PhysicalType::LARGE_STRING:
-		return "LARGE_STRING";
-	case PhysicalType::LARGE_BINARY:
-		return "LARGE_BINARY";
-	case PhysicalType::LARGE_LIST:
-		return "LARGE_LIST";
 	case PhysicalType::UNKNOWN:
 		return "UNKNOWN";
 	}
@@ -7303,9 +9735,8 @@ idx_t GetTypeIdSize(PhysicalType type) {
 }
 
 bool TypeIsConstantSize(PhysicalType type) {
-	return (type >= PhysicalType::BOOL && type <= PhysicalType::DOUBLE) ||
-	       (type >= PhysicalType::FIXED_SIZE_BINARY && type <= PhysicalType::INTERVAL) ||
-	       type == PhysicalType::INTERVAL || type == PhysicalType::INT128;
+	return (type >= PhysicalType::BOOL && type <= PhysicalType::DOUBLE) || type == PhysicalType::INTERVAL ||
+	       type == PhysicalType::INT128;
 }
 bool TypeIsIntegral(PhysicalType type) {
 	return (type >= PhysicalType::UINT8 && type <= PhysicalType::INT64) || type == PhysicalType::INT128;
@@ -7388,8 +9819,12 @@ string LogicalTypeIdToString(LogicalTypeId id) {
 		return "POINTER";
 	case LogicalTypeId::TABLE:
 		return "TABLE";
+	case LogicalTypeId::LAMBDA:
+		return "LAMBDA";
 	case LogicalTypeId::INVALID:
 		return "INVALID";
+	case LogicalTypeId::UNION:
+		return "UNION";
 	case LogicalTypeId::UNKNOWN:
 		return "UNKNOWN";
 	case LogicalTypeId::ENUM:
@@ -7445,6 +9880,21 @@ string LogicalType::ToString() const {
 		return "MAP(" + ListType::GetChildType(child_types[0].second).ToString() + ", " +
 		       ListType::GetChildType(child_types[1].second).ToString() + ")";
 	}
+	case LogicalTypeId::UNION: {
+		if (!type_info_) {
+			return "UNION";
+		}
+		string ret = "UNION(";
+		size_t count = UnionType::GetMemberCount(*this);
+		for (size_t i = 0; i < count; i++) {
+			ret += UnionType::GetMemberType(*this, i).ToString();
+			if (i < count - 1) {
+				ret += ", ";
+			}
+		}
+		ret += ")";
+		return ret;
+	}
 	case LogicalTypeId::DECIMAL: {
 		if (!type_info_) {
 			return "DECIMAL";
@@ -7485,7 +9935,7 @@ LogicalType TransformStringToLogicalType(const string &str) {
 	if (StringUtil::Lower(str) == "null") {
 		return LogicalType::SQLNULL;
 	}
-	return Parser::ParseColumnList("dummy " + str)[0].Type();
+	return Parser::ParseColumnList("dummy " + str).GetColumn(LogicalIndex(0)).Type();
 }
 
 bool LogicalType::IsIntegral() const {
@@ -7523,6 +9973,10 @@ bool LogicalType::IsNumeric() const {
 	default:
 		return false;
 	}
+}
+
+bool LogicalType::IsValid() const {
+	return id() != LogicalTypeId::INVALID && id() != LogicalTypeId::UNKNOWN;
 }
 
 bool LogicalType::GetDecimalProperties(uint8_t &width, uint8_t &scale) const {
@@ -7591,65 +10045,165 @@ bool LogicalType::GetDecimalProperties(uint8_t &width, uint8_t &scale) const {
 	return true;
 }
 
-LogicalType LogicalType::MaxLogicalType(const LogicalType &left, const LogicalType &right) {
-	if (left.id() < right.id()) {
-		return right;
-	} else if (right.id() < left.id()) {
-		return left;
-	} else {
-		// Since both left and right are equal we get the left type as our type_id for checks
-		auto type_id = left.id();
-		if (type_id == LogicalTypeId::ENUM) {
-			// If both types are different ENUMs we do a string comparison.
-			return left == right ? left : LogicalType::VARCHAR;
+//! Grows Decimal width/scale when appropriate
+static LogicalType DecimalSizeCheck(const LogicalType &left, const LogicalType &right) {
+	D_ASSERT(left.id() == LogicalTypeId::DECIMAL || right.id() == LogicalTypeId::DECIMAL);
+	D_ASSERT(left.id() != right.id());
+
+	//! Make sure the 'right' is the DECIMAL type
+	if (left.id() == LogicalTypeId::DECIMAL) {
+		return DecimalSizeCheck(right, left);
+	}
+	auto width = DecimalType::GetWidth(right);
+	auto scale = DecimalType::GetScale(right);
+
+	uint8_t other_width;
+	uint8_t other_scale;
+	bool success = left.GetDecimalProperties(other_width, other_scale);
+	if (!success) {
+		throw InternalException("Type provided to DecimalSizeCheck was not a numeric type");
+	}
+	D_ASSERT(other_scale == 0);
+	const auto effective_width = width - scale;
+	if (other_width > effective_width) {
+		auto new_width = other_width + scale;
+		//! Cap the width at max, if an actual value exceeds this, an exception will be thrown later
+		if (new_width > DecimalType::MaxWidth()) {
+			new_width = DecimalType::MaxWidth();
 		}
-		if (type_id == LogicalTypeId::VARCHAR) {
-			// varchar: use type that has collation (if any)
-			if (StringType::GetCollation(right).empty()) {
-				return left;
-			} else {
-				return right;
-			}
-		} else if (type_id == LogicalTypeId::DECIMAL) {
-			// unify the width/scale so that the resulting decimal always fits
-			// "width - scale" gives us the number of digits on the left side of the decimal point
-			// "scale" gives us the number of digits allowed on the right of the deciaml point
-			// using the max of these of the two types gives us the new decimal size
-			auto extra_width_left = DecimalType::GetWidth(left) - DecimalType::GetScale(left);
-			auto extra_width_right = DecimalType::GetWidth(right) - DecimalType::GetScale(right);
-			auto extra_width = MaxValue<uint8_t>(extra_width_left, extra_width_right);
-			auto scale = MaxValue<uint8_t>(DecimalType::GetScale(left), DecimalType::GetScale(right));
-			auto width = extra_width + scale;
-			if (width > DecimalType::MaxWidth()) {
-				// if the resulting decimal does not fit, we truncate the scale
-				width = DecimalType::MaxWidth();
-				scale = width - extra_width;
-			}
-			return LogicalType::DECIMAL(width, scale);
-		} else if (type_id == LogicalTypeId::LIST) {
-			// list: perform max recursively on child type
-			auto new_child = MaxLogicalType(ListType::GetChildType(left), ListType::GetChildType(right));
-			return LogicalType::LIST(move(new_child));
-		} else if (type_id == LogicalTypeId::STRUCT) {
-			// struct: perform recursively
-			auto &left_child_types = StructType::GetChildTypes(left);
-			auto &right_child_types = StructType::GetChildTypes(right);
-			if (left_child_types.size() != right_child_types.size()) {
-				// child types are not of equal size, we can't cast anyway
-				// just return the left child
-				return left;
-			}
-			child_list_t<LogicalType> child_types;
-			for (idx_t i = 0; i < left_child_types.size(); i++) {
-				auto child_type = MaxLogicalType(left_child_types[i].second, right_child_types[i].second);
-				child_types.push_back(make_pair(left_child_types[i].first, move(child_type)));
-			}
-			return LogicalType::STRUCT(move(child_types));
-		} else {
-			// types are equal but no extra specifier: just return the type
+		return LogicalType::DECIMAL(new_width, scale);
+	}
+	return right;
+}
+
+static LogicalType CombineNumericTypes(const LogicalType &left, const LogicalType &right) {
+	D_ASSERT(left.id() != right.id());
+	if (left.id() > right.id()) {
+		// this method is symmetric
+		// arrange it so the left type is smaller to limit the number of options we need to check
+		return CombineNumericTypes(right, left);
+	}
+	if (CastRules::ImplicitCast(left, right) >= 0) {
+		// we can implicitly cast left to right, return right
+		//! Depending on the type, we might need to grow the `width` of the DECIMAL type
+		if (right.id() == LogicalTypeId::DECIMAL) {
+			return DecimalSizeCheck(left, right);
+		}
+		return right;
+	}
+	if (CastRules::ImplicitCast(right, left) >= 0) {
+		// we can implicitly cast right to left, return left
+		//! Depending on the type, we might need to grow the `width` of the DECIMAL type
+		if (left.id() == LogicalTypeId::DECIMAL) {
+			return DecimalSizeCheck(right, left);
+		}
+		return left;
+	}
+	// we can't cast implicitly either way and types are not equal
+	// this happens when left is signed and right is unsigned
+	// e.g. INTEGER and UINTEGER
+	// in this case we need to upcast to make sure the types fit
+
+	if (left.id() == LogicalTypeId::BIGINT || right.id() == LogicalTypeId::UBIGINT) {
+		return LogicalType::HUGEINT;
+	}
+	if (left.id() == LogicalTypeId::INTEGER || right.id() == LogicalTypeId::UINTEGER) {
+		return LogicalType::BIGINT;
+	}
+	if (left.id() == LogicalTypeId::SMALLINT || right.id() == LogicalTypeId::USMALLINT) {
+		return LogicalType::INTEGER;
+	}
+	if (left.id() == LogicalTypeId::TINYINT || right.id() == LogicalTypeId::UTINYINT) {
+		return LogicalType::SMALLINT;
+	}
+	throw InternalException("Cannot combine these numeric types!?");
+}
+
+LogicalType LogicalType::MaxLogicalType(const LogicalType &left, const LogicalType &right) {
+	// we always prefer aliased types
+	if (!left.GetAlias().empty()) {
+		return left;
+	}
+	if (!right.GetAlias().empty()) {
+		return right;
+	}
+	if (left.id() != right.id() && left.IsNumeric() && right.IsNumeric()) {
+		return CombineNumericTypes(left, right);
+	} else if (left.id() == LogicalTypeId::UNKNOWN) {
+		return right;
+	} else if (right.id() == LogicalTypeId::UNKNOWN) {
+		return left;
+	} else if (left.id() < right.id()) {
+		return right;
+	}
+	if (right.id() < left.id()) {
+		return left;
+	}
+	// Since both left and right are equal we get the left type as our type_id for checks
+	auto type_id = left.id();
+	if (type_id == LogicalTypeId::ENUM) {
+		// If both types are different ENUMs we do a string comparison.
+		return left == right ? left : LogicalType::VARCHAR;
+	}
+	if (type_id == LogicalTypeId::VARCHAR) {
+		// varchar: use type that has collation (if any)
+		if (StringType::GetCollation(right).empty()) {
 			return left;
 		}
+		return right;
 	}
+	if (type_id == LogicalTypeId::DECIMAL) {
+		// unify the width/scale so that the resulting decimal always fits
+		// "width - scale" gives us the number of digits on the left side of the decimal point
+		// "scale" gives us the number of digits allowed on the right of the decimal point
+		// using the max of these of the two types gives us the new decimal size
+		auto extra_width_left = DecimalType::GetWidth(left) - DecimalType::GetScale(left);
+		auto extra_width_right = DecimalType::GetWidth(right) - DecimalType::GetScale(right);
+		auto extra_width = MaxValue<uint8_t>(extra_width_left, extra_width_right);
+		auto scale = MaxValue<uint8_t>(DecimalType::GetScale(left), DecimalType::GetScale(right));
+		auto width = extra_width + scale;
+		if (width > DecimalType::MaxWidth()) {
+			// if the resulting decimal does not fit, we truncate the scale
+			width = DecimalType::MaxWidth();
+			scale = width - extra_width;
+		}
+		return LogicalType::DECIMAL(width, scale);
+	}
+	if (type_id == LogicalTypeId::LIST) {
+		// list: perform max recursively on child type
+		auto new_child = MaxLogicalType(ListType::GetChildType(left), ListType::GetChildType(right));
+		return LogicalType::LIST(move(new_child));
+	}
+	if (type_id == LogicalTypeId::STRUCT || type_id == LogicalTypeId::MAP) {
+		// struct: perform recursively
+		auto &left_child_types = StructType::GetChildTypes(left);
+		auto &right_child_types = StructType::GetChildTypes(right);
+		if (left_child_types.size() != right_child_types.size()) {
+			// child types are not of equal size, we can't cast anyway
+			// just return the left child
+			return left;
+		}
+		child_list_t<LogicalType> child_types;
+		for (idx_t i = 0; i < left_child_types.size(); i++) {
+			auto child_type = MaxLogicalType(left_child_types[i].second, right_child_types[i].second);
+			child_types.push_back(make_pair(left_child_types[i].first, move(child_type)));
+		}
+
+		return type_id == LogicalTypeId::STRUCT ? LogicalType::STRUCT(move(child_types))
+		                                        : LogicalType::MAP(move(child_types));
+	}
+	if (type_id == LogicalTypeId::UNION) {
+		auto left_member_count = UnionType::GetMemberCount(left);
+		auto right_member_count = UnionType::GetMemberCount(right);
+		if (left_member_count != right_member_count) {
+			// return the "larger" type, with the most members
+			return left_member_count > right_member_count ? left : right;
+		}
+		// otherwise, keep left, dont try to meld the two together.
+		return left;
+	}
+	// types are equal but no extra specifier: just return the type
+	return left;
 }
 
 void LogicalType::Verify() const {
@@ -7718,6 +10272,7 @@ public:
 				if (!alias.empty()) {
 					return false;
 				}
+				//! We only need to compare aliases when both types have them in this case
 				return true;
 			}
 			if (alias != other_p->alias) {
@@ -7731,8 +10286,7 @@ public:
 		if (type != other_p->type) {
 			return false;
 		}
-		auto &other = (ExtraTypeInfo &)*other_p;
-		return alias == other.alias && EqualsInternal(other_p);
+		return alias == other_p->alias && EqualsInternal(other_p);
 	}
 	//! Serializes a ExtraTypeInfo to a stand-alone binary blob
 	virtual void Serialize(FieldWriter &writer) const {};
@@ -7748,11 +10302,11 @@ protected:
 	}
 };
 
-void LogicalType::SetAlias(string &alias) {
+void LogicalType::SetAlias(string alias) {
 	if (!type_info_) {
-		type_info_ = make_shared<ExtraTypeInfo>(ExtraTypeInfoType::GENERIC_TYPE_INFO, alias);
+		type_info_ = make_shared<ExtraTypeInfo>(ExtraTypeInfoType::GENERIC_TYPE_INFO, move(alias));
 	} else {
-		type_info_->alias = alias;
+		type_info_->alias = move(alias);
 	}
 }
 
@@ -7762,6 +10316,13 @@ string LogicalType::GetAlias() const {
 	} else {
 		return type_info_->alias;
 	}
+}
+
+bool LogicalType::HasAlias() const {
+	if (!type_info_) {
+		return false;
+	}
+	return !type_info_->alias.empty();
 }
 
 void LogicalType::SetCatalog(LogicalType &type, TypeCatalogEntry *catalog_entry) {
@@ -7783,6 +10344,7 @@ TypeCatalogEntry *LogicalType::GetCatalog(const LogicalType &type) {
 struct DecimalTypeInfo : public ExtraTypeInfo {
 	DecimalTypeInfo(uint8_t width_p, uint8_t scale_p)
 	    : ExtraTypeInfo(ExtraTypeInfoType::DECIMAL_TYPE_INFO), width(width_p), scale(scale_p) {
+		D_ASSERT(width_p >= scale_p);
 	}
 
 	uint8_t width;
@@ -7822,10 +10384,11 @@ uint8_t DecimalType::GetScale(const LogicalType &type) {
 }
 
 uint8_t DecimalType::MaxWidth() {
-	return 38;
+	return DecimalWidth<hugeint_t>::max;
 }
 
 LogicalType LogicalType::DECIMAL(int width, int scale) {
+	D_ASSERT(width >= scale);
 	auto type_info = make_shared<DecimalTypeInfo>(width, scale);
 	return LogicalType(LogicalTypeId::DECIMAL, move(type_info));
 }
@@ -8018,7 +10581,9 @@ const string AggregateStateType::GetTypeName(const LogicalType &type) {
 }
 
 const child_list_t<LogicalType> &StructType::GetChildTypes(const LogicalType &type) {
-	D_ASSERT(type.id() == LogicalTypeId::STRUCT || type.id() == LogicalTypeId::MAP);
+	D_ASSERT(type.id() == LogicalTypeId::STRUCT || type.id() == LogicalTypeId::MAP ||
+	         type.id() == LogicalTypeId::UNION);
+
 	auto info = type.AuxInfo();
 	D_ASSERT(info);
 	return ((StructTypeInfo &)*info).child_types;
@@ -8073,6 +10638,43 @@ const LogicalType &MapType::KeyType(const LogicalType &type) {
 const LogicalType &MapType::ValueType(const LogicalType &type) {
 	D_ASSERT(type.id() == LogicalTypeId::MAP);
 	return ListType::GetChildType(StructType::GetChildTypes(type)[1].second);
+}
+
+//===--------------------------------------------------------------------===//
+// Union Type
+//===--------------------------------------------------------------------===//
+
+LogicalType LogicalType::UNION(child_list_t<LogicalType> members) {
+	D_ASSERT(members.size() > 0);
+	D_ASSERT(members.size() <= UnionType::MAX_UNION_MEMBERS);
+	// union types always have a hidden "tag" field in front
+	members.insert(members.begin(), {"", LogicalType::TINYINT});
+	auto info = make_shared<StructTypeInfo>(move(members));
+	return LogicalType(LogicalTypeId::UNION, move(info));
+}
+
+const LogicalType &UnionType::GetMemberType(const LogicalType &type, idx_t index) {
+	auto &child_types = StructType::GetChildTypes(type);
+	D_ASSERT(index < child_types.size());
+	// skip the "tag" field
+	return child_types[index + 1].second;
+}
+
+const string &UnionType::GetMemberName(const LogicalType &type, idx_t index) {
+	auto &child_types = StructType::GetChildTypes(type);
+	D_ASSERT(index < child_types.size());
+	// skip the "tag" field
+	return child_types[index + 1].first;
+}
+
+idx_t UnionType::GetMemberCount(const LogicalType &type) {
+	// dont count the "tag" field
+	return StructType::GetChildTypes(type).size() - 1;
+}
+const child_list_t<LogicalType> UnionType::CopyMemberTypes(const LogicalType &type) {
+	auto child_types = StructType::GetChildTypes(type);
+	child_types.erase(child_types.begin());
+	return child_types;
 }
 
 //===--------------------------------------------------------------------===//
@@ -8175,8 +10777,22 @@ template <class T>
 struct EnumTypeInfoTemplated : public EnumTypeInfo {
 	explicit EnumTypeInfoTemplated(const string &enum_name_p, Vector &values_insert_order_p, idx_t size_p)
 	    : EnumTypeInfo(enum_name_p, values_insert_order_p, size_p) {
-		for (idx_t count = 0; count < size_p; count++) {
-			values[values_insert_order_p.GetValue(count).ToString()] = count;
+		D_ASSERT(values_insert_order_p.GetType().InternalType() == PhysicalType::VARCHAR);
+
+		UnifiedVectorFormat vdata;
+		values_insert_order.ToUnifiedFormat(size_p, vdata);
+
+		auto data = (string_t *)vdata.data;
+		for (idx_t i = 0; i < size_p; i++) {
+			auto idx = vdata.sel->get_index(i);
+			if (!vdata.validity.RowIsValid(idx)) {
+				throw InternalException("Attempted to create ENUM type with NULL value");
+			}
+			if (values.count(data[idx]) > 0) {
+				throw InvalidInputException("Attempted to create ENUM type with duplicate value %s",
+				                            data[idx].GetString());
+			}
+			values[data[idx]] = i;
 		}
 	}
 
@@ -8186,7 +10802,8 @@ struct EnumTypeInfoTemplated : public EnumTypeInfo {
 		values_insert_order.Deserialize(size, reader.GetSource());
 		return make_shared<EnumTypeInfoTemplated>(move(enum_name), values_insert_order, size);
 	}
-	unordered_map<string, T> values;
+
+	string_map_t<T> values;
 };
 
 const string &EnumType::GetTypeName(const LogicalType &type) {
@@ -8236,14 +10853,15 @@ LogicalType LogicalType::DEDUP_POINTER_ENUM() { // NOLINT
 }
 
 template <class T>
-int64_t TemplatedGetPos(unordered_map<string, T> &map, const string &key) {
+int64_t TemplatedGetPos(string_map_t<T> &map, const string_t &key) {
 	auto it = map.find(key);
 	if (it == map.end()) {
 		return -1;
 	}
 	return it->second;
 }
-int64_t EnumType::GetPos(const LogicalType &type, const string &key) {
+
+int64_t EnumType::GetPos(const LogicalType &type, const string_t &key) {
 	auto info = type.AuxInfo();
 	switch (type.InternalType()) {
 	case PhysicalType::UINT8:
@@ -8330,7 +10948,7 @@ shared_ptr<ExtraTypeInfo> ExtraTypeInfo::Deserialize(FieldReader &reader) {
 			return make_shared<ExtraTypeInfo>(type, alias);
 		}
 		return nullptr;
-	} break;
+	}
 	case ExtraTypeInfoType::GENERIC_TYPE_INFO: {
 		extra_info = make_shared<ExtraTypeInfo>(type);
 	} break;
@@ -8402,10 +11020,7 @@ LogicalType LogicalType::Deserialize(Deserializer &source) {
 	return LogicalType(id, move(info));
 }
 
-bool LogicalType::operator==(const LogicalType &rhs) const {
-	if (id_ != rhs.id_) {
-		return false;
-	}
+bool LogicalType::EqualTypeInfo(const LogicalType &rhs) const {
 	if (type_info_.get() == rhs.type_info_.get()) {
 		return true;
 	}
@@ -8415,6 +11030,13 @@ bool LogicalType::operator==(const LogicalType &rhs) const {
 		D_ASSERT(rhs.type_info_);
 		return rhs.type_info_->Equals(type_info_.get());
 	}
+}
+
+bool LogicalType::operator==(const LogicalType &rhs) const {
+	if (id_ != rhs.id_) {
+		return false;
+	}
+	return EqualTypeInfo(rhs);
 }
 
 } // namespace duckdb
@@ -8523,7 +11145,7 @@ static bool TemplatedBooleanOperation(const Value &left, const Value &right) {
 		Value right_copy = right;
 
 		LogicalType comparison_type = BoundComparisonExpression::BindComparison(left_type, right_type);
-		if (!left_copy.TryCastAs(comparison_type) || !right_copy.TryCastAs(comparison_type)) {
+		if (!left_copy.DefaultTryCastAs(comparison_type) || !right_copy.DefaultTryCastAs(comparison_type)) {
 			return false;
 		}
 		D_ASSERT(left_copy.type() == right_copy.type());
@@ -8703,9 +11325,9 @@ static void TemplatedBooleanNullmask(Vector &left, Vector &right, Vector &result
 		ConstantVector::SetNull(result, is_null);
 	} else {
 		// perform generic loop
-		VectorData ldata, rdata;
-		left.Orrify(count, ldata);
-		right.Orrify(count, rdata);
+		UnifiedVectorFormat ldata, rdata;
+		left.ToUnifiedFormat(count, ldata);
+		right.ToUnifiedFormat(count, rdata);
 
 		result.SetVectorType(VectorType::FLAT_VECTOR);
 		auto left_data = (uint8_t *)ldata.data; // we use uint8 to avoid load of gunk bools
@@ -8987,7 +11609,8 @@ inline idx_t ComparisonSelector::Select<duckdb::LessThanEquals>(Vector &left, Ve
 	return VectorOperations::LessThanEquals(left, right, sel, count, true_sel, false_sel);
 }
 
-static void ComparesNotNull(VectorData &ldata, VectorData &rdata, ValidityMask &vresult, idx_t count) {
+static void ComparesNotNull(UnifiedVectorFormat &ldata, UnifiedVectorFormat &rdata, ValidityMask &vresult,
+                            idx_t count) {
 	for (idx_t i = 0; i < count; ++i) {
 		auto lidx = ldata.sel->get_index(i);
 		auto ridx = rdata.sel->get_index(i);
@@ -9023,9 +11646,9 @@ static void NestedComparisonExecutor(Vector &left, Vector &right, Vector &result
 	auto result_data = FlatVector::GetData<bool>(result);
 	auto &result_validity = FlatVector::Validity(result);
 
-	VectorData leftv, rightv;
-	left.Orrify(count, leftv);
-	right.Orrify(count, rightv);
+	UnifiedVectorFormat leftv, rightv;
+	left.ToUnifiedFormat(count, leftv);
+	right.ToUnifiedFormat(count, rightv);
 	if (!leftv.validity.AllValid() || !rightv.validity.AllValid()) {
 		ComparesNotNull(leftv, rightv, result_validity, count);
 	}
@@ -9279,10 +11902,10 @@ static void DistinctExecuteGeneric(Vector &left, Vector &right, Vector &result, 
 	if (left.GetVectorType() == VectorType::CONSTANT_VECTOR && right.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		DistinctExecuteConstant<LEFT_TYPE, RIGHT_TYPE, RESULT_TYPE, OP>(left, right, result);
 	} else {
-		VectorData ldata, rdata;
+		UnifiedVectorFormat ldata, rdata;
 
-		left.Orrify(count, ldata);
-		right.Orrify(count, rdata);
+		left.ToUnifiedFormat(count, ldata);
+		right.ToUnifiedFormat(count, rdata);
 
 		result.SetVectorType(VectorType::FLAT_VECTOR);
 		auto result_data = FlatVector::GetData<RESULT_TYPE>(result);
@@ -9378,10 +12001,10 @@ DistinctSelectGenericLoopSwitch(LEFT_TYPE *__restrict ldata, RIGHT_TYPE *__restr
 template <class LEFT_TYPE, class RIGHT_TYPE, class OP>
 static idx_t DistinctSelectGeneric(Vector &left, Vector &right, const SelectionVector *sel, idx_t count,
                                    SelectionVector *true_sel, SelectionVector *false_sel) {
-	VectorData ldata, rdata;
+	UnifiedVectorFormat ldata, rdata;
 
-	left.Orrify(count, ldata);
-	right.Orrify(count, rdata);
+	left.ToUnifiedFormat(count, ldata);
+	right.ToUnifiedFormat(count, rdata);
 
 	return DistinctSelectGenericLoopSwitch<LEFT_TYPE, RIGHT_TYPE, OP>((LEFT_TYPE *)ldata.data, (RIGHT_TYPE *)rdata.data,
 	                                                                  ldata.sel, rdata.sel, sel, count, ldata.validity,
@@ -9517,9 +12140,9 @@ template <class OP>
 static idx_t DistinctSelectNotNull(Vector &left, Vector &right, const idx_t count, idx_t &true_count,
                                    const SelectionVector &sel, SelectionVector &maybe_vec, OptionalSelection &true_opt,
                                    OptionalSelection &false_opt) {
-	VectorData lvdata, rvdata;
-	left.Orrify(count, lvdata);
-	right.Orrify(count, rvdata);
+	UnifiedVectorFormat lvdata, rvdata;
+	left.ToUnifiedFormat(count, lvdata);
+	right.ToUnifiedFormat(count, rvdata);
 
 	auto &lmask = lvdata.validity;
 	auto &rmask = rvdata.validity;
@@ -9727,11 +12350,11 @@ static idx_t DistinctSelectStruct(Vector &left, Vector &right, idx_t count, cons
 	for (idx_t col_no = 0; col_no < lchildren.size(); ++col_no) {
 		// Slice the children to maintain density
 		Vector lchild(*lchildren[col_no]);
-		lchild.Normalify(vcount);
+		lchild.Flatten(vcount);
 		lchild.Slice(slice_sel, count);
 
 		Vector rchild(*rchildren[col_no]);
-		rchild.Normalify(vcount);
+		rchild.Flatten(vcount);
 		rchild.Slice(slice_sel, count);
 
 		// Find everything that definitely matches
@@ -9779,7 +12402,7 @@ static idx_t DistinctSelectStruct(Vector &left, Vector &right, idx_t count, cons
 	return match_count;
 }
 
-static void PositionListCursor(SelectionVector &cursor, VectorData &vdata, const idx_t pos,
+static void PositionListCursor(SelectionVector &cursor, UnifiedVectorFormat &vdata, const idx_t pos,
                                const SelectionVector &slice_sel, const idx_t count) {
 	const auto data = (const list_entry_t *)vdata.data;
 	for (idx_t i = 0; i < count; ++i) {
@@ -9802,8 +12425,8 @@ static idx_t DistinctSelectList(Vector &left, Vector &right, idx_t count, const 
 	SelectionVector lcursor(count);
 	SelectionVector rcursor(count);
 
-	ListVector::GetEntry(left).Normalify(count);
-	ListVector::GetEntry(right).Normalify(count);
+	ListVector::GetEntry(left).Flatten(ListVector::GetListSize(left));
+	ListVector::GetEntry(right).Flatten(ListVector::GetListSize(right));
 	Vector lchild(ListVector::GetEntry(left), lcursor, count);
 	Vector rchild(ListVector::GetEntry(right), rcursor, count);
 
@@ -9822,12 +12445,12 @@ static idx_t DistinctSelectList(Vector &left, Vector &right, idx_t count, const 
 	// }
 
 	// Get pointers to the list entries
-	VectorData lvdata;
-	left.Orrify(count, lvdata);
+	UnifiedVectorFormat lvdata;
+	left.ToUnifiedFormat(count, lvdata);
 	const auto ldata = (const list_entry_t *)lvdata.data;
 
-	VectorData rvdata;
-	right.Orrify(count, rvdata);
+	UnifiedVectorFormat rvdata;
+	right.ToUnifiedFormat(count, rvdata);
 	const auto rdata = (const list_entry_t *)rvdata.data;
 
 	// In order to reuse the comparators, we have to track what passed and failed internally.
@@ -10183,8 +12806,8 @@ void IsNullLoop(Vector &input, Vector &result, idx_t count) {
 		auto result_data = ConstantVector::GetData<bool>(result);
 		*result_data = INVERSE ? !ConstantVector::IsNull(input) : ConstantVector::IsNull(input);
 	} else {
-		VectorData data;
-		input.Orrify(count, data);
+		UnifiedVectorFormat data;
+		input.ToUnifiedFormat(count, data);
 
 		result.SetVectorType(VectorType::FLAT_VECTOR);
 		auto result_data = FlatVector::GetData<bool>(result);
@@ -10210,8 +12833,8 @@ bool VectorOperations::HasNotNull(Vector &input, idx_t count) {
 	if (input.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		return !ConstantVector::IsNull(input);
 	} else {
-		VectorData data;
-		input.Orrify(count, data);
+		UnifiedVectorFormat data;
+		input.ToUnifiedFormat(count, data);
 
 		if (data.validity.AllValid()) {
 			return true;
@@ -10233,8 +12856,8 @@ bool VectorOperations::HasNull(Vector &input, idx_t count) {
 	if (input.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		return ConstantVector::IsNull(input);
 	} else {
-		VectorData data;
-		input.Orrify(count, data);
+		UnifiedVectorFormat data;
+		input.ToUnifiedFormat(count, data);
 
 		if (data.validity.AllValid()) {
 			return false;
@@ -10252,8 +12875,8 @@ bool VectorOperations::HasNull(Vector &input, idx_t count) {
 idx_t VectorOperations::CountNotNull(Vector &input, const idx_t count) {
 	idx_t valid = 0;
 
-	VectorData vdata;
-	input.Orrify(count, vdata);
+	UnifiedVectorFormat vdata;
+	input.ToUnifiedFormat(count, vdata);
 	if (vdata.validity.AllValid()) {
 		return count;
 	}
@@ -10321,881 +12944,35 @@ void VectorOperations::AddInPlace(Vector &input, int64_t right, idx_t count) {
 
 
 
-
-
-
-
-
-
-
 namespace duckdb {
 
-template <class OP>
-struct VectorStringCastOperator {
-	template <class INPUT_TYPE, class RESULT_TYPE>
-	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
-		auto result = (Vector *)dataptr;
-		return OP::template Operation<INPUT_TYPE>(input, *result);
-	}
-};
-
-struct VectorTryCastData {
-	VectorTryCastData(Vector &result_p, string *error_message_p, bool strict_p)
-	    : result(result_p), error_message(error_message_p), strict(strict_p) {
-	}
-
-	Vector &result;
-	string *error_message;
-	bool strict;
-	bool all_converted = true;
-};
-
-template <class OP>
-struct VectorTryCastOperator {
-	template <class INPUT_TYPE, class RESULT_TYPE>
-	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
-		RESULT_TYPE output;
-		if (DUCKDB_LIKELY(OP::template Operation<INPUT_TYPE, RESULT_TYPE>(input, output))) {
-			return output;
-		}
-		auto data = (VectorTryCastData *)dataptr;
-		return HandleVectorCastError::Operation<RESULT_TYPE>(CastExceptionText<INPUT_TYPE, RESULT_TYPE>(input), mask,
-		                                                     idx, data->error_message, data->all_converted);
-	}
-};
-
-template <class OP>
-struct VectorTryCastStrictOperator {
-	template <class INPUT_TYPE, class RESULT_TYPE>
-	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
-		auto data = (VectorTryCastData *)dataptr;
-		RESULT_TYPE output;
-		if (DUCKDB_LIKELY(OP::template Operation<INPUT_TYPE, RESULT_TYPE>(input, output, data->strict))) {
-			return output;
-		}
-		return HandleVectorCastError::Operation<RESULT_TYPE>(CastExceptionText<INPUT_TYPE, RESULT_TYPE>(input), mask,
-		                                                     idx, data->error_message, data->all_converted);
-	}
-};
-
-template <class OP>
-struct VectorTryCastErrorOperator {
-	template <class INPUT_TYPE, class RESULT_TYPE>
-	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
-		auto data = (VectorTryCastData *)dataptr;
-		RESULT_TYPE output;
-		if (DUCKDB_LIKELY(
-		        OP::template Operation<INPUT_TYPE, RESULT_TYPE>(input, output, data->error_message, data->strict))) {
-			return output;
-		}
-		bool has_error = data->error_message && !data->error_message->empty();
-		return HandleVectorCastError::Operation<RESULT_TYPE>(
-		    has_error ? *data->error_message : CastExceptionText<INPUT_TYPE, RESULT_TYPE>(input), mask, idx,
-		    data->error_message, data->all_converted);
-	}
-};
-
-template <class OP>
-struct VectorTryCastStringOperator {
-	template <class INPUT_TYPE, class RESULT_TYPE>
-	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
-		auto data = (VectorTryCastData *)dataptr;
-		RESULT_TYPE output;
-		if (DUCKDB_LIKELY(OP::template Operation<INPUT_TYPE, RESULT_TYPE>(input, output, data->result,
-		                                                                  data->error_message, data->strict))) {
-			return output;
-		}
-		return HandleVectorCastError::Operation<RESULT_TYPE>(CastExceptionText<INPUT_TYPE, RESULT_TYPE>(input), mask,
-		                                                     idx, data->error_message, data->all_converted);
-	}
-};
-
-template <class SRC, class DST, class OP>
-static bool TemplatedVectorTryCastLoop(Vector &source, Vector &result, idx_t count, bool strict,
-                                       string *error_message) {
-	VectorTryCastData input(result, error_message, strict);
-	UnaryExecutor::GenericExecute<SRC, DST, OP>(source, result, count, &input, error_message);
-	return input.all_converted;
+bool VectorOperations::TryCast(CastFunctionSet &set, GetCastFunctionInput &input, Vector &source, Vector &result,
+                               idx_t count, string *error_message, bool strict) {
+	auto cast_function = set.GetCastFunction(source.GetType(), result.GetType(), input);
+	CastParameters parameters(cast_function.cast_data.get(), strict, error_message);
+	return cast_function.function(source, result, count, parameters);
 }
 
-template <class SRC, class DST, class OP>
-static bool VectorTryCastLoop(Vector &source, Vector &result, idx_t count, string *error_message) {
-	return TemplatedVectorTryCastLoop<SRC, DST, VectorTryCastOperator<OP>>(source, result, count, false, error_message);
+bool VectorOperations::DefaultTryCast(Vector &source, Vector &result, idx_t count, string *error_message, bool strict) {
+	CastFunctionSet set;
+	GetCastFunctionInput input;
+	return VectorOperations::TryCast(set, input, source, result, count, error_message, strict);
 }
 
-template <class SRC, class DST, class OP>
-static bool VectorTryCastStrictLoop(Vector &source, Vector &result, idx_t count, bool strict, string *error_message) {
-	return TemplatedVectorTryCastLoop<SRC, DST, VectorTryCastStrictOperator<OP>>(source, result, count, strict,
-	                                                                             error_message);
+void VectorOperations::DefaultCast(Vector &source, Vector &result, idx_t count, bool strict) {
+	VectorOperations::DefaultTryCast(source, result, count, nullptr, strict);
 }
 
-template <class SRC, class DST, class OP>
-static bool VectorTryCastErrorLoop(Vector &source, Vector &result, idx_t count, bool strict, string *error_message) {
-	return TemplatedVectorTryCastLoop<SRC, DST, VectorTryCastErrorOperator<OP>>(source, result, count, strict,
-	                                                                            error_message);
+bool VectorOperations::TryCast(ClientContext &context, Vector &source, Vector &result, idx_t count,
+                               string *error_message, bool strict) {
+	auto &config = DBConfig::GetConfig(context);
+	auto &set = config.GetCastFunctions();
+	GetCastFunctionInput get_input(context);
+	return VectorOperations::TryCast(set, get_input, source, result, count, error_message, strict);
 }
 
-template <class SRC, class DST, class OP>
-static bool VectorTryCastStringLoop(Vector &source, Vector &result, idx_t count, bool strict, string *error_message) {
-	return TemplatedVectorTryCastLoop<SRC, DST, VectorTryCastStringOperator<OP>>(source, result, count, strict,
-	                                                                             error_message);
-}
-
-template <class SRC, class OP>
-static void VectorStringCast(Vector &source, Vector &result, idx_t count) {
-	D_ASSERT(result.GetType().InternalType() == PhysicalType::VARCHAR);
-	UnaryExecutor::GenericExecute<SRC, string_t, VectorStringCastOperator<OP>>(source, result, count, (void *)&result);
-}
-
-template <class SRC>
-static bool NumericCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::BOOLEAN:
-		return VectorTryCastLoop<SRC, bool, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::TINYINT:
-		return VectorTryCastLoop<SRC, int8_t, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::SMALLINT:
-		return VectorTryCastLoop<SRC, int16_t, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::INTEGER:
-		return VectorTryCastLoop<SRC, int32_t, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::BIGINT:
-		return VectorTryCastLoop<SRC, int64_t, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::UTINYINT:
-		return VectorTryCastLoop<SRC, uint8_t, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::USMALLINT:
-		return VectorTryCastLoop<SRC, uint16_t, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::UINTEGER:
-		return VectorTryCastLoop<SRC, uint32_t, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::UBIGINT:
-		return VectorTryCastLoop<SRC, uint64_t, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::HUGEINT:
-		return VectorTryCastLoop<SRC, hugeint_t, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::FLOAT:
-		return VectorTryCastLoop<SRC, float, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::DOUBLE:
-		return VectorTryCastLoop<SRC, double, duckdb::NumericTryCast>(source, result, count, error_message);
-	case LogicalTypeId::DECIMAL:
-		return ToDecimalCast<SRC>(source, result, count, error_message);
-	case LogicalTypeId::JSON:
-	case LogicalTypeId::VARCHAR: {
-		VectorStringCast<SRC, duckdb::StringCast>(source, result, count);
-		return true;
-	}
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-}
-
-template <class T>
-bool FillEnum(string_t *source_data, ValidityMask &source_mask, const LogicalType &source_type, T *result_data,
-              ValidityMask &result_mask, const LogicalType &result_type, idx_t count, string *error_message,
-              const SelectionVector *sel) {
-	bool all_converted = true;
-	for (idx_t i = 0; i < count; i++) {
-		idx_t source_idx = i;
-		if (sel) {
-			source_idx = sel->get_index(i);
-		}
-		if (source_mask.RowIsValid(source_idx)) {
-			auto string_value = source_data[source_idx].GetString();
-			auto pos = EnumType::GetPos(result_type, string_value);
-			if (pos == -1) {
-				result_data[i] =
-				    HandleVectorCastError::Operation<T>(CastExceptionText<string_t, T>(source_data[source_idx]),
-				                                        result_mask, i, error_message, all_converted);
-			} else {
-				result_data[i] = pos;
-			}
-		} else {
-			result_mask.SetInvalid(i);
-		}
-	}
-	return all_converted;
-}
-
-template <class T>
-bool TransformEnum(Vector &source, Vector &result, idx_t count, string *error_message) {
-	D_ASSERT(source.GetType().id() == LogicalTypeId::VARCHAR);
-	auto enum_name = EnumType::GetTypeName(result.GetType());
-	switch (source.GetVectorType()) {
-	case VectorType::CONSTANT_VECTOR: {
-		result.SetVectorType(VectorType::CONSTANT_VECTOR);
-
-		auto source_data = ConstantVector::GetData<string_t>(source);
-		auto source_mask = ConstantVector::Validity(source);
-		auto result_data = ConstantVector::GetData<T>(result);
-		auto &result_mask = ConstantVector::Validity(result);
-
-		return FillEnum(source_data, source_mask, source.GetType(), result_data, result_mask, result.GetType(), 1,
-		                error_message, nullptr);
-	}
-	default: {
-		VectorData vdata;
-		source.Orrify(count, vdata);
-
-		result.SetVectorType(VectorType::FLAT_VECTOR);
-
-		auto source_data = (string_t *)vdata.data;
-		auto source_sel = vdata.sel;
-		auto source_mask = vdata.validity;
-		auto result_data = FlatVector::GetData<T>(result);
-		auto &result_mask = FlatVector::Validity(result);
-
-		return FillEnum(source_data, source_mask, source.GetType(), result_data, result_mask, result.GetType(), count,
-		                error_message, source_sel);
-	}
-	}
-}
-static bool VectorStringCastNumericSwitch(Vector &source, Vector &result, idx_t count, bool strict,
-                                          string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::ENUM: {
-		switch (result.GetType().InternalType()) {
-		case PhysicalType::UINT8:
-			return TransformEnum<uint8_t>(source, result, count, error_message);
-		case PhysicalType::UINT16:
-			return TransformEnum<uint16_t>(source, result, count, error_message);
-		case PhysicalType::UINT32:
-			return TransformEnum<uint32_t>(source, result, count, error_message);
-		default:
-			throw InternalException("ENUM can only have unsigned integers (except UINT64) as physical types");
-		}
-	}
-	case LogicalTypeId::BOOLEAN:
-		return VectorTryCastStrictLoop<string_t, bool, duckdb::TryCast>(source, result, count, strict, error_message);
-	case LogicalTypeId::TINYINT:
-		return VectorTryCastStrictLoop<string_t, int8_t, duckdb::TryCast>(source, result, count, strict, error_message);
-	case LogicalTypeId::SMALLINT:
-		return VectorTryCastStrictLoop<string_t, int16_t, duckdb::TryCast>(source, result, count, strict,
-		                                                                   error_message);
-	case LogicalTypeId::INTEGER:
-		return VectorTryCastStrictLoop<string_t, int32_t, duckdb::TryCast>(source, result, count, strict,
-		                                                                   error_message);
-	case LogicalTypeId::BIGINT:
-		return VectorTryCastStrictLoop<string_t, int64_t, duckdb::TryCast>(source, result, count, strict,
-		                                                                   error_message);
-	case LogicalTypeId::UTINYINT:
-		return VectorTryCastStrictLoop<string_t, uint8_t, duckdb::TryCast>(source, result, count, strict,
-		                                                                   error_message);
-	case LogicalTypeId::USMALLINT:
-		return VectorTryCastStrictLoop<string_t, uint16_t, duckdb::TryCast>(source, result, count, strict,
-		                                                                    error_message);
-	case LogicalTypeId::UINTEGER:
-		return VectorTryCastStrictLoop<string_t, uint32_t, duckdb::TryCast>(source, result, count, strict,
-		                                                                    error_message);
-	case LogicalTypeId::UBIGINT:
-		return VectorTryCastStrictLoop<string_t, uint64_t, duckdb::TryCast>(source, result, count, strict,
-		                                                                    error_message);
-	case LogicalTypeId::HUGEINT:
-		return VectorTryCastStrictLoop<string_t, hugeint_t, duckdb::TryCast>(source, result, count, strict,
-		                                                                     error_message);
-	case LogicalTypeId::FLOAT:
-		return VectorTryCastStrictLoop<string_t, float, duckdb::TryCast>(source, result, count, strict, error_message);
-	case LogicalTypeId::DOUBLE:
-		return VectorTryCastStrictLoop<string_t, double, duckdb::TryCast>(source, result, count, strict, error_message);
-	case LogicalTypeId::INTERVAL:
-		return VectorTryCastErrorLoop<string_t, interval_t, duckdb::TryCastErrorMessage>(source, result, count, strict,
-		                                                                                 error_message);
-	case LogicalTypeId::DECIMAL:
-		return ToDecimalCast<string_t>(source, result, count, error_message);
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-}
-
-static bool StringCastSwitch(Vector &source, Vector &result, idx_t count, bool strict, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::DATE:
-		return VectorTryCastErrorLoop<string_t, date_t, duckdb::TryCastErrorMessage>(source, result, count, strict,
-		                                                                             error_message);
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIME_TZ:
-		return VectorTryCastErrorLoop<string_t, dtime_t, duckdb::TryCastErrorMessage>(source, result, count, strict,
-		                                                                              error_message);
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return VectorTryCastErrorLoop<string_t, timestamp_t, duckdb::TryCastErrorMessage>(source, result, count, strict,
-		                                                                                  error_message);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return VectorTryCastStrictLoop<string_t, timestamp_t, duckdb::TryCastToTimestampNS>(source, result, count,
-		                                                                                    strict, error_message);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return VectorTryCastStrictLoop<string_t, timestamp_t, duckdb::TryCastToTimestampSec>(source, result, count,
-		                                                                                     strict, error_message);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return VectorTryCastStrictLoop<string_t, timestamp_t, duckdb::TryCastToTimestampMS>(source, result, count,
-		                                                                                    strict, error_message);
-	case LogicalTypeId::BLOB:
-		return VectorTryCastStringLoop<string_t, string_t, duckdb::TryCastToBlob>(source, result, count, strict,
-		                                                                          error_message);
-	case LogicalTypeId::UUID:
-		return VectorTryCastStringLoop<string_t, hugeint_t, duckdb::TryCastToUUID>(source, result, count, strict,
-		                                                                           error_message);
-	case LogicalTypeId::SQLNULL:
-		return TryVectorNullCast(source, result, count, error_message);
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		result.Reinterpret(source);
-		return true;
-	default:
-		return VectorStringCastNumericSwitch(source, result, count, strict, error_message);
-	}
-}
-
-static bool DateCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// date to varchar
-		VectorStringCast<date_t, duckdb::StringCast>(source, result, count);
-		return true;
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-		// date to timestamp
-		return VectorTryCastLoop<date_t, timestamp_t, duckdb::TryCast>(source, result, count, error_message);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return VectorTryCastLoop<date_t, timestamp_t, duckdb::TryCastToTimestampNS>(source, result, count,
-		                                                                            error_message);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return VectorTryCastLoop<date_t, timestamp_t, duckdb::TryCastToTimestampSec>(source, result, count,
-		                                                                             error_message);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return VectorTryCastLoop<date_t, timestamp_t, duckdb::TryCastToTimestampMS>(source, result, count,
-		                                                                            error_message);
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-}
-
-static bool TimeCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// time to varchar
-		VectorStringCast<dtime_t, duckdb::StringCast>(source, result, count);
-		return true;
-	case LogicalTypeId::TIME_TZ:
-		// time to time with time zone
-		UnaryExecutor::Execute<dtime_t, dtime_t, duckdb::Cast>(source, result, count);
-		return true;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-}
-
-static bool TimeTzCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// time with time zone to varchar
-		VectorStringCast<dtime_t, duckdb::StringCastTZ>(source, result, count);
-		return true;
-	case LogicalTypeId::TIME:
-		// time with time zone to time
-		UnaryExecutor::Execute<dtime_t, dtime_t, duckdb::Cast>(source, result, count);
-		return true;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-}
-
-static bool TimestampCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// timestamp to varchar
-		VectorStringCast<timestamp_t, duckdb::StringCast>(source, result, count);
-		break;
-	case LogicalTypeId::DATE:
-		// timestamp to date
-		UnaryExecutor::Execute<timestamp_t, date_t, duckdb::Cast>(source, result, count);
-		break;
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIME_TZ:
-		// timestamp to time
-		UnaryExecutor::Execute<timestamp_t, dtime_t, duckdb::Cast>(source, result, count);
-		break;
-	case LogicalTypeId::TIMESTAMP_TZ:
-		// timestamp (us) to timestamp with time zone
-		UnaryExecutor::Execute<timestamp_t, timestamp_t, duckdb::Cast>(source, result, count);
-		break;
-	case LogicalTypeId::TIMESTAMP_NS:
-		// timestamp (us) to timestamp (ns)
-		UnaryExecutor::Execute<timestamp_t, timestamp_t, duckdb::CastTimestampUsToNs>(source, result, count);
-		break;
-	case LogicalTypeId::TIMESTAMP_MS:
-		// timestamp (us) to timestamp (ms)
-		UnaryExecutor::Execute<timestamp_t, timestamp_t, duckdb::CastTimestampUsToMs>(source, result, count);
-		break;
-	case LogicalTypeId::TIMESTAMP_SEC:
-		// timestamp (us) to timestamp (s)
-		UnaryExecutor::Execute<timestamp_t, timestamp_t, duckdb::CastTimestampUsToSec>(source, result, count);
-		break;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-	return true;
-}
-
-static bool TimestampTzCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// timestamp with time zone to varchar
-		VectorStringCast<timestamp_t, duckdb::StringCastTZ>(source, result, count);
-		break;
-	case LogicalTypeId::TIME_TZ:
-		// timestamp with time zone to time with time zone.
-		// TODO: set the offset to +00
-		UnaryExecutor::Execute<timestamp_t, dtime_t, duckdb::Cast>(source, result, count);
-		break;
-	case LogicalTypeId::TIMESTAMP:
-		// timestamp with time zone to timestamp (us)
-		UnaryExecutor::Execute<timestamp_t, timestamp_t, duckdb::Cast>(source, result, count);
-		break;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-	return true;
-}
-
-static bool TimestampNsCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// timestamp (ns) to varchar
-		VectorStringCast<timestamp_t, duckdb::CastFromTimestampNS>(source, result, count);
-		break;
-	case LogicalTypeId::TIMESTAMP:
-		// timestamp (ns) to timestamp (us)
-		UnaryExecutor::Execute<timestamp_t, timestamp_t, duckdb::CastTimestampNsToUs>(source, result, count);
-		break;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-	return true;
-}
-
-static bool TimestampMsCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// timestamp (ms) to varchar
-		VectorStringCast<timestamp_t, duckdb::CastFromTimestampMS>(source, result, count);
-		break;
-	case LogicalTypeId::TIMESTAMP:
-		// timestamp (ms) to timestamp (us)
-		UnaryExecutor::Execute<timestamp_t, timestamp_t, duckdb::CastTimestampMsToUs>(source, result, count);
-		break;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-	return true;
-}
-
-static bool TimestampSecCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// timestamp (sec) to varchar
-		VectorStringCast<timestamp_t, duckdb::CastFromTimestampSec>(source, result, count);
-		break;
-	case LogicalTypeId::TIMESTAMP:
-		// timestamp (s) to timestamp (us)
-		UnaryExecutor::Execute<timestamp_t, timestamp_t, duckdb::CastTimestampSecToUs>(source, result, count);
-		break;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-	return true;
-}
-
-static bool IntervalCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// time to varchar
-		VectorStringCast<interval_t, duckdb::StringCast>(source, result, count);
-		break;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-	return true;
-}
-
-static bool UUIDCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// uuid to varchar
-		VectorStringCast<hugeint_t, duckdb::CastFromUUID>(source, result, count);
-		break;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-	return true;
-}
-
-static bool BlobCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	// now switch on the result type
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		// blob to varchar
-		VectorStringCast<string_t, duckdb::CastFromBlob>(source, result, count);
-		break;
-	case LogicalTypeId::AGGREGATE_STATE:
-		result.Reinterpret(source);
-		break;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-	return true;
-}
-
-static bool ValueStringCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	switch (result.GetType().id()) {
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-			result.SetVectorType(source.GetVectorType());
-		} else {
-			result.SetVectorType(VectorType::FLAT_VECTOR);
-		}
-		for (idx_t i = 0; i < count; i++) {
-			auto src_val = source.GetValue(i);
-			if (src_val.IsNull()) {
-				result.SetValue(i, Value(result.GetType()));
-			} else {
-				auto str_val = src_val.ToString();
-				result.SetValue(i, Value(str_val));
-			}
-		}
-		return true;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-}
-
-static bool ListCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	switch (result.GetType().id()) {
-	case LogicalTypeId::LIST: {
-		// only handle constant and flat vectors here for now
-		if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-			result.SetVectorType(source.GetVectorType());
-			ConstantVector::SetNull(result, ConstantVector::IsNull(source));
-
-			auto ldata = ConstantVector::GetData<list_entry_t>(source);
-			auto tdata = ConstantVector::GetData<list_entry_t>(result);
-			*tdata = *ldata;
-		} else {
-			source.Normalify(count);
-			result.SetVectorType(VectorType::FLAT_VECTOR);
-			FlatVector::SetValidity(result, FlatVector::Validity(source));
-
-			auto ldata = FlatVector::GetData<list_entry_t>(source);
-			auto tdata = FlatVector::GetData<list_entry_t>(result);
-			for (idx_t i = 0; i < count; i++) {
-				tdata[i] = ldata[i];
-			}
-		}
-		auto &source_cc = ListVector::GetEntry(source);
-		auto source_size = ListVector::GetListSize(source);
-
-		ListVector::Reserve(result, source_size);
-		auto &append_vector = ListVector::GetEntry(result);
-
-		VectorOperations::Cast(source_cc, append_vector, source_size);
-		ListVector::SetListSize(result, source_size);
-		D_ASSERT(ListVector::GetListSize(result) == source_size);
-		return true;
-	}
-	default:
-		return ValueStringCastSwitch(source, result, count, error_message);
-	}
-}
-
-template <class SRC_TYPE, class RES_TYPE>
-bool FillEnum(Vector &source, Vector &result, idx_t count, string *error_message) {
-	bool all_converted = true;
-	result.SetVectorType(VectorType::FLAT_VECTOR);
-
-	auto &str_vec = EnumType::GetValuesInsertOrder(source.GetType());
-	auto str_vec_ptr = FlatVector::GetData<string_t>(str_vec);
-
-	auto res_enum_type = result.GetType();
-
-	VectorData vdata;
-	source.Orrify(count, vdata);
-
-	auto source_data = (SRC_TYPE *)vdata.data;
-	auto source_sel = vdata.sel;
-	auto source_mask = vdata.validity;
-
-	auto result_data = FlatVector::GetData<RES_TYPE>(result);
-	auto &result_mask = FlatVector::Validity(result);
-
-	for (idx_t i = 0; i < count; i++) {
-		auto src_idx = source_sel->get_index(i);
-		if (!source_mask.RowIsValid(src_idx)) {
-			result_mask.SetInvalid(i);
-			continue;
-		}
-		auto str = str_vec_ptr[source_data[src_idx]].GetString();
-		auto key = EnumType::GetPos(res_enum_type, str);
-		if (key == -1) {
-			// key doesn't exist on result enum
-			if (!error_message) {
-				result_data[i] = HandleVectorCastError::Operation<RES_TYPE>(
-				    CastExceptionText<SRC_TYPE, RES_TYPE>(source_data[src_idx]), result_mask, i, error_message,
-				    all_converted);
-			} else {
-				result_mask.SetInvalid(i);
-			}
-			continue;
-		}
-		result_data[i] = key;
-	}
-	return all_converted;
-}
-
-template <class SRC_TYPE>
-bool FillEnumResultTemplate(Vector &source, Vector &result, idx_t count, string *error_message) {
-	switch (source.GetType().InternalType()) {
-	case PhysicalType::UINT8:
-		return FillEnum<SRC_TYPE, uint8_t>(source, result, count, error_message);
-	case PhysicalType::UINT16:
-		return FillEnum<SRC_TYPE, uint16_t>(source, result, count, error_message);
-	case PhysicalType::UINT32:
-		return FillEnum<SRC_TYPE, uint32_t>(source, result, count, error_message);
-	default:
-		throw InternalException("ENUM can only have unsigned integers (except UINT64) as physical types");
-	}
-}
-
-void EnumToVarchar(Vector &source, Vector &result, idx_t count, PhysicalType enum_physical_type) {
-	if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-		result.SetVectorType(source.GetVectorType());
-	} else {
-		result.SetVectorType(VectorType::FLAT_VECTOR);
-	}
-	auto &str_vec = EnumType::GetValuesInsertOrder(source.GetType());
-	auto str_vec_ptr = FlatVector::GetData<string_t>(str_vec);
-	auto res_vec_ptr = FlatVector::GetData<string_t>(result);
-
-	// TODO remove value api from this loop
-	for (idx_t i = 0; i < count; i++) {
-		auto src_val = source.GetValue(i);
-		if (src_val.IsNull()) {
-			result.SetValue(i, Value());
-			continue;
-		}
-
-		uint64_t enum_idx;
-		switch (enum_physical_type) {
-		case PhysicalType::UINT8:
-			enum_idx = UTinyIntValue::Get(src_val);
-			break;
-		case PhysicalType::UINT16:
-			enum_idx = USmallIntValue::Get(src_val);
-			break;
-		case PhysicalType::UINT32:
-			enum_idx = UIntegerValue::Get(src_val);
-			break;
-		case PhysicalType::UINT64: //  DEDUP_POINTER_ENUM
-		{
-			res_vec_ptr[i] = (const char *)UBigIntValue::Get(src_val);
-			continue;
-		}
-
-		default:
-			throw InternalException("ENUM can only have unsigned integers as physical types");
-		}
-		res_vec_ptr[i] = str_vec_ptr[enum_idx];
-	}
-}
-
-static bool EnumCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message, bool strict) {
-	auto enum_physical_type = source.GetType().InternalType();
-	switch (result.GetType().id()) {
-	case LogicalTypeId::ENUM: {
-		// This means they are both ENUMs, but of different types.
-		switch (enum_physical_type) {
-		case PhysicalType::UINT8:
-			return FillEnumResultTemplate<uint8_t>(source, result, count, error_message);
-		case PhysicalType::UINT16:
-			return FillEnumResultTemplate<uint16_t>(source, result, count, error_message);
-		case PhysicalType::UINT32:
-			return FillEnumResultTemplate<uint32_t>(source, result, count, error_message);
-		default:
-			throw InternalException("ENUM can only have unsigned integers (except UINT64) as physical types");
-		}
-	}
-	case LogicalTypeId::JSON:
-	case LogicalTypeId::VARCHAR: {
-		EnumToVarchar(source, result, count, enum_physical_type);
-		break;
-	}
-	default: {
-		// Cast to varchar
-		Vector varchar_cast(LogicalType::VARCHAR, count);
-		EnumToVarchar(source, varchar_cast, count, enum_physical_type);
-		// Try to cast from varchar to whatever we wanted before
-		VectorOperations::TryCast(varchar_cast, result, count, error_message, strict);
-		break;
-	}
-	}
-	return true;
-}
-
-static bool AggregateStateToBlobCast(Vector &source, Vector &result, idx_t count, string *error_message, bool strict) {
-	if (result.GetType().id() != LogicalTypeId::BLOB) {
-		throw TypeMismatchException(source.GetType(), result.GetType(),
-		                            "Cannot cast AGGREGATE_STATE to anything but BLOB");
-	}
-	result.Reinterpret(source);
-	return true;
-}
-
-static bool StructCastSwitch(Vector &source, Vector &result, idx_t count, string *error_message) {
-	switch (result.GetType().id()) {
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::MAP: {
-		auto &source_child_types = StructType::GetChildTypes(source.GetType());
-		auto &result_child_types = StructType::GetChildTypes(result.GetType());
-		if (source_child_types.size() != result_child_types.size()) {
-			throw TypeMismatchException(source.GetType(), result.GetType(), "Cannot cast STRUCTs of different size");
-		}
-		auto &source_children = StructVector::GetEntries(source);
-		D_ASSERT(source_children.size() == source_child_types.size());
-
-		auto &result_children = StructVector::GetEntries(result);
-		for (idx_t c_idx = 0; c_idx < result_child_types.size(); c_idx++) {
-			auto &result_child_vector = result_children[c_idx];
-			auto &source_child_vector = *source_children[c_idx];
-			if (result_child_vector->GetType() != source_child_vector.GetType()) {
-				VectorOperations::Cast(source_child_vector, *result_child_vector, count, false);
-			} else {
-				result_child_vector->Reference(source_child_vector);
-			}
-		}
-		if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-			result.SetVectorType(VectorType::CONSTANT_VECTOR);
-			ConstantVector::SetNull(result, ConstantVector::IsNull(source));
-		} else {
-			source.Normalify(count);
-			FlatVector::Validity(result) = FlatVector::Validity(source);
-		}
-		return true;
-	}
-	case LogicalTypeId::JSON:
-	case LogicalTypeId::VARCHAR:
-		if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-			result.SetVectorType(source.GetVectorType());
-		} else {
-			result.SetVectorType(VectorType::FLAT_VECTOR);
-		}
-		for (idx_t i = 0; i < count; i++) {
-			auto src_val = source.GetValue(i);
-			auto str_val = src_val.ToString();
-			result.SetValue(i, Value(str_val));
-		}
-		return true;
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-}
-
-bool VectorOperations::TryCast(Vector &source, Vector &result, idx_t count, string *error_message, bool strict) {
-	D_ASSERT(source.GetType() != result.GetType());
-	// first switch on source type
-	switch (source.GetType().id()) {
-	case LogicalTypeId::BOOLEAN:
-		return NumericCastSwitch<bool>(source, result, count, error_message);
-	case LogicalTypeId::TINYINT:
-		return NumericCastSwitch<int8_t>(source, result, count, error_message);
-	case LogicalTypeId::SMALLINT:
-		return NumericCastSwitch<int16_t>(source, result, count, error_message);
-	case LogicalTypeId::INTEGER:
-		return NumericCastSwitch<int32_t>(source, result, count, error_message);
-	case LogicalTypeId::BIGINT:
-		return NumericCastSwitch<int64_t>(source, result, count, error_message);
-	case LogicalTypeId::UTINYINT:
-		return NumericCastSwitch<uint8_t>(source, result, count, error_message);
-	case LogicalTypeId::USMALLINT:
-		return NumericCastSwitch<uint16_t>(source, result, count, error_message);
-	case LogicalTypeId::UINTEGER:
-		return NumericCastSwitch<uint32_t>(source, result, count, error_message);
-	case LogicalTypeId::UBIGINT:
-		return NumericCastSwitch<uint64_t>(source, result, count, error_message);
-	case LogicalTypeId::HUGEINT:
-		return NumericCastSwitch<hugeint_t>(source, result, count, error_message);
-	case LogicalTypeId::UUID:
-		return UUIDCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::DECIMAL:
-		return DecimalCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::FLOAT:
-		return NumericCastSwitch<float>(source, result, count, error_message);
-	case LogicalTypeId::DOUBLE:
-		return NumericCastSwitch<double>(source, result, count, error_message);
-	case LogicalTypeId::DATE:
-		return DateCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::TIME:
-		return TimeCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::TIME_TZ:
-		return TimeTzCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::TIMESTAMP:
-		return TimestampCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return TimestampTzCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return TimestampNsCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return TimestampMsCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return TimestampSecCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::INTERVAL:
-		return IntervalCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::JSON:
-	case LogicalTypeId::VARCHAR:
-		return StringCastSwitch(source, result, count, strict, error_message);
-	case LogicalTypeId::BLOB:
-		return BlobCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::SQLNULL: {
-		// cast a NULL to another type, just copy the properties and change the type
-		result.SetVectorType(VectorType::CONSTANT_VECTOR);
-		ConstantVector::SetNull(result, true);
-		return true;
-	}
-	case LogicalTypeId::MAP:
-	case LogicalTypeId::STRUCT:
-		return StructCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::LIST:
-		return ListCastSwitch(source, result, count, error_message);
-	case LogicalTypeId::ENUM:
-		return EnumCastSwitch(source, result, count, error_message, strict);
-	case LogicalTypeId::AGGREGATE_STATE:
-		return AggregateStateToBlobCast(source, result, count, error_message, strict);
-	default:
-		return TryVectorNullCast(source, result, count, error_message);
-	}
-}
-
-void VectorOperations::Cast(Vector &source, Vector &result, idx_t count, bool strict) {
-	VectorOperations::TryCast(source, result, count, nullptr, strict);
+void VectorOperations::Cast(ClientContext &context, Vector &source, Vector &result, idx_t count, bool strict) {
+	VectorOperations::TryCast(context, source, result, count, nullptr, strict);
 }
 
 } // namespace duckdb
@@ -11260,6 +13037,9 @@ void VectorOperations::Copy(const Vector &source_p, Vector &target, const Select
 			sel = ConstantVector::ZeroSelectionVector(copy_count, owned_sel);
 			finished = true;
 			break;
+		case VectorType::FSST_VECTOR:
+			finished = true;
+			break;
 		case VectorType::FLAT_VECTOR:
 			finished = true;
 			break;
@@ -11288,12 +13068,20 @@ void VectorOperations::Copy(const Vector &source_p, Vector &target, const Select
 			tmask.Set(target_offset + i, valid);
 		}
 	} else {
-		auto &smask = FlatVector::Validity(*source);
-		if (smask.IsMaskSet()) {
+		const ValidityMask *smask;
+		if (source->GetVectorType() == VectorType::FLAT_VECTOR) {
+			smask = &(FlatVector::Validity(*source));
+		} else if (source->GetVectorType() == VectorType::FSST_VECTOR) {
+			smask = &(FSSTVector::Validity(*source));
+		} else {
+			throw InternalException("Unsupported vector type in vector copy");
+		}
+
+		if (smask->IsMaskSet()) {
 			for (idx_t i = 0; i < copy_count; i++) {
 				auto idx = sel->get_index(source_offset + i);
 
-				if (smask.RowIsValid(idx)) {
+				if (smask->RowIsValid(idx)) {
 					// set valid
 					if (!tmask.AllValid()) {
 						tmask.SetValidUnsafe(target_offset + i);
@@ -11311,6 +13099,12 @@ void VectorOperations::Copy(const Vector &source_p, Vector &target, const Select
 	}
 
 	D_ASSERT(sel);
+
+	// For FSST Vectors we decompress instead of copying.
+	if (source->GetVectorType() == VectorType::FSST_VECTOR) {
+		FSSTVector::DecompressVector(*source, target, source_offset, target_offset, copy_count, sel);
+		return;
+	}
 
 	// now copy over the data
 	switch (source->GetType().InternalType()) {
@@ -11505,8 +13299,8 @@ static inline void TemplatedLoopHash(Vector &input, Vector &result, const Select
 	} else {
 		result.SetVectorType(VectorType::FLAT_VECTOR);
 
-		VectorData idata;
-		input.Orrify(count, idata);
+		UnifiedVectorFormat idata;
+		input.ToUnifiedFormat(count, idata);
 
 		TightLoopHash<HAS_RSEL, T>((T *)idata.data, FlatVector::GetData<hash_t>(result), rsel, count, idata.sel,
 		                           idata.validity);
@@ -11544,8 +13338,8 @@ template <bool HAS_RSEL, bool FIRST_HASH>
 static inline void ListLoopHash(Vector &input, Vector &hashes, const SelectionVector *rsel, idx_t count) {
 	auto hdata = FlatVector::GetData<hash_t>(hashes);
 
-	VectorData idata;
-	input.Orrify(count, idata);
+	UnifiedVectorFormat idata;
+	input.ToUnifiedFormat(count, idata);
 	const auto ldata = (const list_entry_t *)idata.data;
 
 	// Hash the children into a temporary
@@ -11553,7 +13347,9 @@ static inline void ListLoopHash(Vector &input, Vector &hashes, const SelectionVe
 	const auto child_count = ListVector::GetListSize(input);
 
 	Vector child_hashes(LogicalType::HASH, child_count);
-	VectorOperations::Hash(child, child_hashes, child_count);
+	if (child_count > 0) {
+		VectorOperations::Hash(child, child_hashes, child_count);
+	}
 	auto chdata = FlatVector::GetData<hash_t>(child_hashes);
 
 	// Reduce the number of entries to check to the non-empty ones
@@ -11740,8 +13536,8 @@ void TemplatedLoopCombineHash(Vector &input, Vector &hashes, const SelectionVect
 		auto other_hash = HashOp::Operation(*ldata, ConstantVector::IsNull(input));
 		*hash_data = CombineHashScalar(*hash_data, other_hash);
 	} else {
-		VectorData idata;
-		input.Orrify(count, idata);
+		UnifiedVectorFormat idata;
+		input.ToUnifiedFormat(count, idata);
 		if (hashes.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 			// mix constant with non-constant, first get the constant value
 			auto constant_hash = *ConstantVector::GetData<hash_t>(hashes);
@@ -11830,7 +13626,7 @@ void VectorOperations::CombineHash(Vector &hashes, Vector &input, const Selectio
 namespace duckdb {
 
 template <class T>
-static void CopyToStorageLoop(VectorData &vdata, idx_t count, data_ptr_t target) {
+static void CopyToStorageLoop(UnifiedVectorFormat &vdata, idx_t count, data_ptr_t target) {
 	auto ldata = (T *)vdata.data;
 	auto result_data = (T *)target;
 	for (idx_t i = 0; i < count; i++) {
@@ -11847,8 +13643,8 @@ void VectorOperations::WriteToStorage(Vector &source, idx_t count, data_ptr_t ta
 	if (count == 0) {
 		return;
 	}
-	VectorData vdata;
-	source.Orrify(count, vdata);
+	UnifiedVectorFormat vdata;
+	source.ToUnifiedFormat(count, vdata);
 
 	switch (source.GetType().InternalType()) {
 	case PhysicalType::BOOL:
@@ -12152,29 +13948,28 @@ namespace duckdb {
 
 using ValidityBytes = RowLayout::ValidityBytes;
 
-GroupedAggregateHashTable::GroupedAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager,
+GroupedAggregateHashTable::GroupedAggregateHashTable(ClientContext &context, Allocator &allocator,
                                                      vector<LogicalType> group_types, vector<LogicalType> payload_types,
                                                      const vector<BoundAggregateExpression *> &bindings,
                                                      HtEntryType entry_type)
-    : GroupedAggregateHashTable(allocator, buffer_manager, move(group_types), move(payload_types),
+    : GroupedAggregateHashTable(context, allocator, move(group_types), move(payload_types),
                                 AggregateObject::CreateAggregateObjects(bindings), entry_type) {
 }
 
-GroupedAggregateHashTable::GroupedAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager,
+GroupedAggregateHashTable::GroupedAggregateHashTable(ClientContext &context, Allocator &allocator,
                                                      vector<LogicalType> group_types)
-    : GroupedAggregateHashTable(allocator, buffer_manager, move(group_types), {}, vector<AggregateObject>()) {
+    : GroupedAggregateHashTable(context, allocator, move(group_types), {}, vector<AggregateObject>()) {
 }
 
-GroupedAggregateHashTable::GroupedAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager,
+GroupedAggregateHashTable::GroupedAggregateHashTable(ClientContext &context, Allocator &allocator,
                                                      vector<LogicalType> group_types_p,
                                                      vector<LogicalType> payload_types_p,
                                                      vector<AggregateObject> aggregate_objects_p,
                                                      HtEntryType entry_type)
-    : BaseAggregateHashTable(allocator, aggregate_objects_p, buffer_manager, move(payload_types_p)),
-      entry_type(entry_type), capacity(0), entries(0), payload_page_offset(0), is_finalized(false),
-      ht_offsets(LogicalTypeId::BIGINT), hash_salts(LogicalTypeId::SMALLINT),
-      group_compare_vector(STANDARD_VECTOR_SIZE), no_match_vector(STANDARD_VECTOR_SIZE),
-      empty_vector(STANDARD_VECTOR_SIZE) {
+    : BaseAggregateHashTable(context, allocator, aggregate_objects_p, move(payload_types_p)), entry_type(entry_type),
+      capacity(0), entries(0), payload_page_offset(0), is_finalized(false), ht_offsets(LogicalTypeId::BIGINT),
+      hash_salts(LogicalTypeId::SMALLINT), group_compare_vector(STANDARD_VECTOR_SIZE),
+      no_match_vector(STANDARD_VECTOR_SIZE), empty_vector(STANDARD_VECTOR_SIZE) {
 
 	// Append hash column to the end and initialise the row layout
 	group_types_p.emplace_back(LogicalType::HASH);
@@ -12193,37 +13988,18 @@ GroupedAggregateHashTable::GroupedAggregateHashTable(Allocator &allocator, Buffe
 	switch (entry_type) {
 	case HtEntryType::HT_WIDTH_64: {
 		hash_prefix_shift = (HASH_WIDTH - sizeof(aggr_ht_entry_64::salt)) * 8;
-		Resize<aggr_ht_entry_64>(STANDARD_VECTOR_SIZE * 2);
+		Resize<aggr_ht_entry_64>(STANDARD_VECTOR_SIZE * 2L);
 		break;
 	}
 	case HtEntryType::HT_WIDTH_32: {
 		hash_prefix_shift = (HASH_WIDTH - sizeof(aggr_ht_entry_32::salt)) * 8;
-		Resize<aggr_ht_entry_32>(STANDARD_VECTOR_SIZE * 2);
+		Resize<aggr_ht_entry_32>(STANDARD_VECTOR_SIZE * 2L);
 		break;
 	}
 	default:
 		throw InternalException("Unknown HT entry width");
 	}
 
-	// create additional hash tables for distinct aggrs
-	auto &aggregates = layout.GetAggregates();
-	distinct_hashes.resize(aggregates.size());
-
-	idx_t payload_idx = 0;
-	for (idx_t i = 0; i < aggregates.size(); i++) {
-		auto &aggr = aggregates[i];
-		if (aggr.distinct) {
-			// layout types minus hash column plus aggr return type
-			vector<LogicalType> distinct_group_types(layout.GetTypes());
-			(void)distinct_group_types.pop_back();
-			for (idx_t child_idx = 0; child_idx < aggr.child_count; child_idx++) {
-				distinct_group_types.push_back(payload_types[payload_idx + child_idx]);
-			}
-			distinct_hashes[i] =
-			    make_unique<GroupedAggregateHashTable>(allocator, buffer_manager, distinct_group_types);
-		}
-		payload_idx += aggr.child_count;
-	}
 	predicates.resize(layout.ColumnCount() - 1, ExpressionType::COMPARE_EQUAL);
 	string_heap = make_unique<RowDataCollection>(buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1, true);
 }
@@ -12387,14 +14163,28 @@ void GroupedAggregateHashTable::Resize(idx_t size) {
 	Verify();
 }
 
-idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, DataChunk &payload) {
+idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, DataChunk &payload, AggregateType filter) {
+	vector<idx_t> aggregate_filter;
+
+	auto &aggregates = layout.GetAggregates();
+	for (idx_t i = 0; i < aggregates.size(); i++) {
+		auto &aggregate = aggregates[i];
+		if (aggregate.aggr_type == filter) {
+			aggregate_filter.push_back(i);
+		}
+	}
+	return AddChunk(groups, payload, aggregate_filter);
+}
+
+idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, DataChunk &payload, const vector<idx_t> &filter) {
 	Vector hashes(LogicalType::HASH);
 	groups.Hash(hashes);
 
-	return AddChunk(groups, hashes, payload);
+	return AddChunk(groups, hashes, payload, filter);
 }
 
-idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, Vector &group_hashes, DataChunk &payload) {
+idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, Vector &group_hashes, DataChunk &payload,
+                                          const vector<idx_t> &filter) {
 	D_ASSERT(!is_finalized);
 
 	if (groups.size() == 0) {
@@ -12417,54 +14207,19 @@ idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, Vector &group_hashe
 	idx_t payload_idx = 0;
 
 	auto &aggregates = layout.GetAggregates();
-	for (idx_t aggr_idx = 0; aggr_idx < aggregates.size(); aggr_idx++) {
-		// for any entries for which a group was found, update the aggregate
-		auto &aggr = aggregates[aggr_idx];
-		if (aggr.distinct) {
-			// construct chunk for secondary hash table probing
-			vector<LogicalType> probe_types(groups.GetTypes());
-			for (idx_t i = 0; i < aggr.child_count; i++) {
-				probe_types.push_back(payload_types[payload_idx + i]);
-			}
-			DataChunk probe_chunk;
-			probe_chunk.Initialize(Allocator::DefaultAllocator(), probe_types);
-			for (idx_t group_idx = 0; group_idx < groups.ColumnCount(); group_idx++) {
-				probe_chunk.data[group_idx].Reference(groups.data[group_idx]);
-			}
-			for (idx_t i = 0; i < aggr.child_count; i++) {
-				probe_chunk.data[groups.ColumnCount() + i].Reference(payload.data[payload_idx + i]);
-			}
-			probe_chunk.SetCardinality(groups);
-			probe_chunk.Verify();
+	idx_t filter_idx = 0;
+	for (idx_t i = 0; i < aggregates.size(); i++) {
+		auto &aggr = aggregates[i];
+		if (filter_idx >= filter.size() || i < filter[filter_idx]) {
+			// Skip all the aggregates that are not in the filter
+			payload_idx += aggr.child_count;
+			VectorOperations::AddInPlace(addresses, aggr.payload_size, payload.size());
+			continue;
+		}
+		D_ASSERT(i == filter[filter_idx]);
 
-			Vector dummy_addresses(LogicalType::POINTER);
-			// this is the actual meat, find out which groups plus payload
-			// value have not been seen yet
-			idx_t new_group_count =
-			    distinct_hashes[aggr_idx]->FindOrCreateGroups(probe_chunk, dummy_addresses, new_groups);
-			if (new_group_count > 0) {
-				// now fix up the payload and addresses accordingly by creating
-				// a selection vector
-				DataChunk distinct_payload;
-				distinct_payload.Initialize(Allocator::DefaultAllocator(), payload.GetTypes());
-				distinct_payload.Slice(payload, new_groups, new_group_count);
-				distinct_payload.Verify();
-
-				Vector distinct_addresses(addresses, new_groups, new_group_count);
-				distinct_addresses.Verify(new_group_count);
-
-				if (aggr.filter) {
-					distinct_addresses.Normalify(new_group_count);
-					RowOperations::UpdateFilteredStates(filter_set.GetFilterData(aggr_idx), aggr, distinct_addresses,
-					                                    distinct_payload, payload_idx);
-				} else {
-					RowOperations::UpdateStates(aggr, distinct_addresses, distinct_payload, payload_idx,
-					                            new_group_count);
-				}
-			}
-		} else if (aggr.filter) {
-			RowOperations::UpdateFilteredStates(filter_set.GetFilterData(aggr_idx), aggr, addresses, payload,
-			                                    payload_idx);
+		if (aggr.aggr_type != AggregateType::DISTINCT && aggr.filter) {
+			RowOperations::UpdateFilteredStates(filter_set.GetFilterData(i), aggr, addresses, payload, payload_idx);
 		} else {
 			RowOperations::UpdateStates(aggr, addresses, payload, payload_idx, payload.size());
 		}
@@ -12472,6 +14227,7 @@ idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, Vector &group_hashe
 		// move to the next aggregate
 		payload_idx += aggr.child_count;
 		VectorOperations::AddInPlace(addresses, aggr.payload_size, payload.size());
+		filter_idx++;
 	}
 
 	Verify();
@@ -12516,14 +14272,14 @@ idx_t GroupedAggregateHashTable::FindOrCreateGroupsInternal(DataChunk &groups, V
 	D_ASSERT(capacity - entries >= groups.size());
 	D_ASSERT(group_hashes.GetType() == LogicalType::HASH);
 
-	group_hashes.Normalify(groups.size());
+	group_hashes.Flatten(groups.size());
 	auto group_hashes_ptr = FlatVector::GetData<hash_t>(group_hashes);
 
 	D_ASSERT(ht_offsets.GetVectorType() == VectorType::FLAT_VECTOR);
 	D_ASSERT(ht_offsets.GetType() == LogicalType::BIGINT);
 
 	D_ASSERT(addresses.GetType() == LogicalType::POINTER);
-	addresses.Normalify(groups.size());
+	addresses.Flatten(groups.size());
 	auto addresses_ptr = FlatVector::GetData<data_ptr_t>(addresses);
 
 	// now compute the entry in the table based on the hash using a modulo
@@ -12553,8 +14309,8 @@ idx_t GroupedAggregateHashTable::FindOrCreateGroupsInternal(DataChunk &groups, V
 	group_chunk.data[groups.ColumnCount()].Reference(group_hashes);
 	group_chunk.SetCardinality(groups);
 
-	// orrify all the groups
-	auto group_data = group_chunk.Orrify();
+	// convert all vectors to unified format
+	auto group_data = group_chunk.ToUnifiedFormat();
 
 	idx_t new_group_count = 0;
 	while (remaining_entries > 0) {
@@ -12682,11 +14438,10 @@ void GroupedAggregateHashTable::FlushMove(FlushMoveState &state, Vector &source_
 
 	state.groups.Reset();
 	state.groups.SetCardinality(count);
-	for (idx_t i = 0; i < state.groups.ColumnCount(); i++) {
-		auto &column = state.groups.data[i];
-		const auto col_offset = layout.GetOffsets()[i];
+	for (idx_t col_no = 0; col_no < state.groups.ColumnCount(); col_no++) {
+		auto &column = state.groups.data[col_no];
 		RowOperations::Gather(source_addresses, *FlatVector::IncrementalSelectionVector(), column,
-		                      *FlatVector::IncrementalSelectionVector(), count, col_offset, i);
+		                      *FlatVector::IncrementalSelectionVector(), count, layout, col_no);
 	}
 
 	FindOrCreateGroups(state.groups, source_hashes, state.group_addresses, state.new_groups_sel);
@@ -12777,46 +14532,48 @@ void GroupedAggregateHashTable::Partition(vector<GroupedAggregateHashTable *> &p
 		partition_entry->Verify();
 		total_count += partition_entry->Size();
 	}
+	(void)total_count;
 	D_ASSERT(total_count == entries);
 }
 
-idx_t GroupedAggregateHashTable::Scan(idx_t &scan_position, DataChunk &result) {
+idx_t GroupedAggregateHashTable::Scan(AggregateHTScanState &scan_state, DataChunk &result) {
+	idx_t this_n;
 	Vector addresses(LogicalType::POINTER);
 	auto data_pointers = FlatVector::GetData<data_ptr_t>(addresses);
-
-	auto remaining = entries - scan_position;
-	if (remaining == 0) {
-		return 0;
-	}
-	auto this_n = MinValue((idx_t)STANDARD_VECTOR_SIZE, remaining);
-
-	auto chunk_idx = scan_position / tuples_per_block;
-	auto chunk_offset = (scan_position % tuples_per_block) * tuple_size;
-	D_ASSERT(chunk_offset + tuple_size <= Storage::BLOCK_SIZE);
-
-	auto read_ptr = payload_hds_ptrs[chunk_idx++];
-	for (idx_t i = 0; i < this_n; i++) {
-		data_pointers[i] = read_ptr + chunk_offset;
-		chunk_offset += tuple_size;
-		if (chunk_offset >= tuples_per_block * tuple_size) {
-			read_ptr = payload_hds_ptrs[chunk_idx++];
-			chunk_offset = 0;
+	{
+		lock_guard<mutex> l(scan_state.lock);
+		if (scan_state.scan_position >= entries) {
+			return 0;
 		}
+		auto remaining = entries - scan_state.scan_position;
+		this_n = MinValue((idx_t)STANDARD_VECTOR_SIZE, remaining);
+
+		auto chunk_idx = scan_state.scan_position / tuples_per_block;
+		auto chunk_offset = (scan_state.scan_position % tuples_per_block) * tuple_size;
+		D_ASSERT(chunk_offset + tuple_size <= Storage::BLOCK_SIZE);
+
+		auto read_ptr = payload_hds_ptrs[chunk_idx++];
+		for (idx_t i = 0; i < this_n; i++) {
+			data_pointers[i] = read_ptr + chunk_offset;
+			chunk_offset += tuple_size;
+			if (chunk_offset >= tuples_per_block * tuple_size) {
+				read_ptr = payload_hds_ptrs[chunk_idx++];
+				chunk_offset = 0;
+			}
+		}
+		scan_state.scan_position += this_n;
 	}
 
 	result.SetCardinality(this_n);
 	// fetch the group columns (ignoring the final hash column
 	const auto group_cols = layout.ColumnCount() - 1;
-	for (idx_t i = 0; i < group_cols; i++) {
-		auto &column = result.data[i];
-		const auto col_offset = layout.GetOffsets()[i];
+	for (idx_t col_no = 0; col_no < group_cols; col_no++) {
+		auto &column = result.data[col_no];
 		RowOperations::Gather(addresses, *FlatVector::IncrementalSelectionVector(), column,
-		                      *FlatVector::IncrementalSelectionVector(), result.size(), col_offset, i);
+		                      *FlatVector::IncrementalSelectionVector(), result.size(), layout, col_no);
 	}
 
 	RowOperations::FinalizeStates(layout, addresses, result, group_cols);
-
-	scan_position += this_n;
 	return this_n;
 }
 
@@ -12834,12 +14591,15 @@ void GroupedAggregateHashTable::Finalize() {
 
 
 
+
 namespace duckdb {
 
-BaseAggregateHashTable::BaseAggregateHashTable(Allocator &allocator, const vector<AggregateObject> &aggregates,
-                                               BufferManager &buffer_manager, vector<LogicalType> payload_types_p)
-    : allocator(allocator), buffer_manager(buffer_manager), payload_types(move(payload_types_p)) {
-	filter_set.Initialize(allocator, aggregates, payload_types);
+BaseAggregateHashTable::BaseAggregateHashTable(ClientContext &context, Allocator &allocator,
+                                               const vector<AggregateObject> &aggregates,
+                                               vector<LogicalType> payload_types_p)
+    : allocator(allocator), buffer_manager(BufferManager::GetBufferManager(context)),
+      payload_types(move(payload_types_p)) {
+	filter_set.Initialize(context, aggregates, payload_types);
 }
 
 } // namespace duckdb
@@ -12896,7 +14656,7 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 		// CREATE INDEX statement, add the columns of the table with table index 0 to the binding set
 		// afterwards bind the expressions of the CREATE INDEX statement
 		auto &create_index = (LogicalCreateIndex &)op;
-		bindings = LogicalOperator::GenerateColumnBindings(0, create_index.table.columns.size());
+		bindings = LogicalOperator::GenerateColumnBindings(0, create_index.table.columns.LogicalColumnCount());
 		VisitOperatorExpressions(op);
 		return;
 	} else if (op.type == LogicalOperatorType::LOGICAL_GET) {
@@ -12938,6 +14698,35 @@ unique_ptr<Expression> ColumnBindingResolver::VisitReplace(BoundColumnRefExpress
 	throw InternalException("Failed to bind column reference \"%s\" [%d.%d] (bindings: %s)", expr.alias,
 	                        expr.binding.table_index, expr.binding.column_index, bound_columns);
 	// LCOV_EXCL_STOP
+}
+
+unordered_set<idx_t> ColumnBindingResolver::VerifyInternal(LogicalOperator &op) {
+	unordered_set<idx_t> result;
+	for (auto &child : op.children) {
+		auto child_indexes = VerifyInternal(*child);
+		for (auto index : child_indexes) {
+			D_ASSERT(index != DConstants::INVALID_INDEX);
+			if (result.find(index) != result.end()) {
+				throw InternalException("Duplicate table index \"%lld\" found", index);
+			}
+			result.insert(index);
+		}
+	}
+	auto indexes = op.GetTableIndex();
+	for (auto index : indexes) {
+		D_ASSERT(index != DConstants::INVALID_INDEX);
+		if (result.find(index) != result.end()) {
+			throw InternalException("Duplicate table index \"%lld\" found", index);
+		}
+		result.insert(index);
+	}
+	return result;
+}
+
+void ColumnBindingResolver::Verify(LogicalOperator &op) {
+#ifdef DEBUG
+	VerifyInternal(op);
+#endif
 }
 
 } // namespace duckdb
@@ -13195,8 +14984,8 @@ void TemplatedFillLoop(Vector &vector, Vector &result, const SelectionVector &se
 			}
 		}
 	} else {
-		VectorData vdata;
-		vector.Orrify(count, vdata);
+		UnifiedVectorFormat vdata;
+		vector.ToUnifiedFormat(count, vdata);
 		auto data = (T *)vdata.data;
 		for (idx_t i = 0; i < count; i++) {
 			auto source_idx = vdata.sel->get_index(i);
@@ -13218,8 +15007,8 @@ void ValidityFillLoop(Vector &vector, Vector &result, const SelectionVector &sel
 			}
 		}
 	} else {
-		VectorData vdata;
-		vector.Orrify(count, vdata);
+		UnifiedVectorFormat vdata;
+		vector.ToUnifiedFormat(count, vdata);
 		if (vdata.validity.AllValid()) {
 			return;
 		}
@@ -13336,11 +15125,13 @@ void ExpressionExecutor::Execute(const BoundCastExpression &expr, ExpressionStat
 	Execute(*expr.child, child_state, sel, count, child);
 	if (expr.try_cast) {
 		string error_message;
-		VectorOperations::TryCast(child, result, count, &error_message);
+		CastParameters parameters(expr.bound_cast.cast_data.get(), false, &error_message);
+		expr.bound_cast.function(child, result, count, parameters);
 	} else {
 		// cast it to the type specified by the cast expression
 		D_ASSERT(result.GetType() == expr.return_type);
-		VectorOperations::Cast(child, result, count);
+		CastParameters parameters(expr.bound_cast.cast_data.get(), false, nullptr);
+		expr.bound_cast.function(child, result, count, parameters);
 	}
 }
 
@@ -13500,9 +15291,9 @@ idx_t NestedSelector::Select<duckdb::GreaterThanEquals>(Vector &left, Vector &ri
 static inline idx_t SelectNotNull(Vector &left, Vector &right, const idx_t count, const SelectionVector &sel,
                                   SelectionVector &maybe_vec, OptionalSelection &false_opt) {
 
-	VectorData lvdata, rvdata;
-	left.Orrify(count, lvdata);
-	right.Orrify(count, rvdata);
+	UnifiedVectorFormat lvdata, rvdata;
+	left.ToUnifiedFormat(count, lvdata);
+	right.ToUnifiedFormat(count, rvdata);
 
 	auto &lmask = lvdata.validity;
 	auto &rmask = rvdata.validity;
@@ -13840,9 +15631,42 @@ unique_ptr<ExpressionState> ExpressionExecutor::InitializeState(const BoundFunct
 	}
 	result->Finalize();
 	if (expr.function.init_local_state) {
-		result->local_state = expr.function.init_local_state(expr, expr.bind_info.get());
+		result->local_state = expr.function.init_local_state(*result, expr, expr.bind_info.get());
 	}
 	return move(result);
+}
+
+static void VerifyNullHandling(const BoundFunctionExpression &expr, DataChunk &args, Vector &result) {
+#ifdef DEBUG
+	if (args.data.empty() || expr.function.null_handling != FunctionNullHandling::DEFAULT_NULL_HANDLING) {
+		return;
+	}
+
+	// Combine all the argument validity masks into a flat validity mask
+	idx_t count = args.size();
+	ValidityMask combined_mask(count);
+	for (auto &arg : args.data) {
+		UnifiedVectorFormat arg_data;
+		arg.ToUnifiedFormat(count, arg_data);
+
+		for (idx_t i = 0; i < count; i++) {
+			auto idx = arg_data.sel->get_index(i);
+			if (!arg_data.validity.RowIsValid(idx)) {
+				combined_mask.SetInvalid(i);
+			}
+		}
+	}
+
+	// Default is that if any of the arguments are NULL, the result is also NULL
+	UnifiedVectorFormat result_data;
+	result.ToUnifiedFormat(count, result_data);
+	for (idx_t i = 0; i < count; i++) {
+		if (!combined_mask.RowIsValid(i)) {
+			auto idx = result_data.sel->get_index(i);
+			D_ASSERT(!result_data.validity.RowIsValid(idx));
+		}
+	}
+#endif
 }
 
 void ExpressionExecutor::Execute(const BoundFunctionExpression &expr, ExpressionState *state,
@@ -13862,9 +15686,13 @@ void ExpressionExecutor::Execute(const BoundFunctionExpression &expr, Expression
 		arguments.Verify();
 	}
 	arguments.SetCardinality(count);
+
 	state->profiler.BeginSample();
+	D_ASSERT(expr.function.function);
 	expr.function.function(arguments, *state, result);
 	state->profiler.EndSample(count);
+
+	VerifyNullHandling(expr, arguments, result);
 	D_ASSERT(result.GetType() == expr.return_type);
 }
 
@@ -13944,8 +15772,8 @@ void ExpressionExecutor::Execute(const BoundOperatorExpression &expr, Expression
 			Execute(*expr.children[child], state->child_states[child].get(), current_sel, remaining_count,
 			        vector_to_check);
 
-			VectorData vdata;
-			vector_to_check.Orrify(remaining_count, vdata);
+			UnifiedVectorFormat vdata;
+			vector_to_check.ToUnifiedFormat(remaining_count, vdata);
 
 			idx_t result_count = 0;
 			next_count = 0;
@@ -14022,9 +15850,10 @@ unique_ptr<ExpressionState> ExpressionExecutor::InitializeState(const BoundParam
 
 void ExpressionExecutor::Execute(const BoundParameterExpression &expr, ExpressionState *state,
                                  const SelectionVector *sel, idx_t count, Vector &result) {
-	D_ASSERT(expr.value);
-	D_ASSERT(expr.value->type() == expr.return_type);
-	result.Reference(*expr.value);
+	D_ASSERT(expr.parameter_data);
+	D_ASSERT(expr.parameter_data->return_type == expr.return_type);
+	D_ASSERT(expr.parameter_data->value.type() == expr.return_type);
+	result.Reference(expr.parameter_data->value);
 }
 
 } // namespace duckdb
@@ -14044,6 +15873,7 @@ void ExpressionExecutor::Execute(const BoundReferenceExpression &expr, Expressio
                                  const SelectionVector *sel, idx_t count, Vector &result) {
 	D_ASSERT(expr.index != DConstants::INVALID_INDEX);
 	D_ASSERT(expr.index < chunk->ColumnCount());
+
 	if (sel) {
 		result.Slice(chunk->data[expr.index], *sel, count);
 	} else {
@@ -14060,32 +15890,58 @@ void ExpressionExecutor::Execute(const BoundReferenceExpression &expr, Expressio
 
 namespace duckdb {
 
-ExpressionExecutor::ExpressionExecutor(Allocator &allocator) : allocator(allocator) {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context) : context(&context) {
 }
 
-ExpressionExecutor::ExpressionExecutor(Allocator &allocator, const Expression *expression)
-    : ExpressionExecutor(allocator) {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context, const Expression *expression)
+    : ExpressionExecutor(context) {
 	D_ASSERT(expression);
 	AddExpression(*expression);
 }
 
-ExpressionExecutor::ExpressionExecutor(Allocator &allocator, const Expression &expression)
-    : ExpressionExecutor(allocator) {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context, const Expression &expression)
+    : ExpressionExecutor(context) {
 	AddExpression(expression);
 }
 
-ExpressionExecutor::ExpressionExecutor(Allocator &allocator, const vector<unique_ptr<Expression>> &exprs)
-    : ExpressionExecutor(allocator) {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context, const vector<unique_ptr<Expression>> &exprs)
+    : ExpressionExecutor(context) {
 	D_ASSERT(exprs.size() > 0);
 	for (auto &expr : exprs) {
 		AddExpression(*expr);
 	}
 }
 
+ExpressionExecutor::ExpressionExecutor(const vector<unique_ptr<Expression>> &exprs) : context(nullptr) {
+	D_ASSERT(exprs.size() > 0);
+	for (auto &expr : exprs) {
+		AddExpression(*expr);
+	}
+}
+
+ExpressionExecutor::ExpressionExecutor() : context(nullptr) {
+}
+
+bool ExpressionExecutor::HasContext() {
+	return context;
+}
+
+ClientContext &ExpressionExecutor::GetContext() {
+	if (!context) {
+		throw InternalException("Calling ExpressionExecutor::GetContext on an expression executor without a context");
+	}
+	return *context;
+}
+
+Allocator &ExpressionExecutor::GetAllocator() {
+	return context ? Allocator::Get(*context) : Allocator::DefaultAllocator();
+}
+
 void ExpressionExecutor::AddExpression(const Expression &expr) {
 	expressions.push_back(&expr);
 	auto state = make_unique<ExpressionExecutorState>(expr.ToString());
 	Initialize(expr, *state);
+	state->Verify();
 	states.push_back(move(state));
 }
 
@@ -14133,25 +15989,27 @@ void ExpressionExecutor::ExecuteExpression(idx_t expr_idx, Vector &result) {
 	states[expr_idx]->profiler.EndSample(chunk ? chunk->size() : 0);
 }
 
-Value ExpressionExecutor::EvaluateScalar(const Expression &expr) {
-	D_ASSERT(expr.IsFoldable());
+Value ExpressionExecutor::EvaluateScalar(ClientContext &context, const Expression &expr, bool allow_unfoldable) {
+	D_ASSERT(allow_unfoldable || expr.IsFoldable());
 	D_ASSERT(expr.IsScalar());
 	// use an ExpressionExecutor to execute the expression
-	ExpressionExecutor executor(Allocator::DefaultAllocator(), expr);
+	ExpressionExecutor executor(context, expr);
 
 	Vector result(expr.return_type);
 	executor.ExecuteExpression(result);
 
-	D_ASSERT(result.GetVectorType() == VectorType::CONSTANT_VECTOR);
+	D_ASSERT(allow_unfoldable || result.GetVectorType() == VectorType::CONSTANT_VECTOR);
 	auto result_value = result.GetValue(0);
 	D_ASSERT(result_value.type().InternalType() == expr.return_type.InternalType());
 	return result_value;
 }
 
-bool ExpressionExecutor::TryEvaluateScalar(const Expression &expr, Value &result) {
+bool ExpressionExecutor::TryEvaluateScalar(ClientContext &context, const Expression &expr, Value &result) {
 	try {
-		result = EvaluateScalar(expr);
+		result = EvaluateScalar(context, expr);
 		return true;
+	} catch (InternalException &ex) {
+		throw ex;
 	} catch (...) {
 		return false;
 	}
@@ -14196,6 +16054,7 @@ unique_ptr<ExpressionState> ExpressionExecutor::InitializeState(const Expression
 void ExpressionExecutor::Execute(const Expression &expr, ExpressionState *state, const SelectionVector *sel,
                                  idx_t count, Vector &result) {
 #ifdef DEBUG
+	//! The result Vector must be "clean"
 	if (result.GetVectorType() == VectorType::FLAT_VECTOR) {
 		D_ASSERT(FlatVector::Validity(result).CheckAllValid(count));
 	}
@@ -14286,7 +16145,7 @@ static inline idx_t DefaultSelectLoop(const SelectionVector *bsel, uint8_t *__re
 }
 
 template <bool NO_NULL>
-static inline idx_t DefaultSelectSwitch(VectorData &idata, const SelectionVector *sel, idx_t count,
+static inline idx_t DefaultSelectSwitch(UnifiedVectorFormat &idata, const SelectionVector *sel, idx_t count,
                                         SelectionVector *true_sel, SelectionVector *false_sel) {
 	if (true_sel && false_sel) {
 		return DefaultSelectLoop<NO_NULL, true, true>(idata.sel, (uint8_t *)idata.data, idata.validity, sel, count,
@@ -14310,8 +16169,8 @@ idx_t ExpressionExecutor::DefaultSelect(const Expression &expr, ExpressionState 
 	Vector intermediate(LogicalType::BOOLEAN, (data_ptr_t)intermediate_bools);
 	Execute(expr, state, sel, count, intermediate);
 
-	VectorData idata;
-	intermediate.Orrify(count, idata);
+	UnifiedVectorFormat idata;
+	intermediate.ToUnifiedFormat(count, idata);
 
 	if (!sel) {
 		sel = FlatVector::IncrementalSelectionVector();
@@ -14332,6 +16191,7 @@ vector<unique_ptr<ExpressionExecutorState>> &ExpressionExecutor::GetStates() {
 
 
 
+
 namespace duckdb {
 
 void ExpressionState::AddChild(Expression *expr) {
@@ -14341,16 +16201,47 @@ void ExpressionState::AddChild(Expression *expr) {
 
 void ExpressionState::Finalize() {
 	if (!types.empty()) {
-		intermediate_chunk.Initialize(root.executor->allocator, types);
+		intermediate_chunk.Initialize(GetAllocator(), types);
 	}
 }
+
+Allocator &ExpressionState::GetAllocator() {
+	return root.executor->GetAllocator();
+}
+
+bool ExpressionState::HasContext() {
+	return root.executor->HasContext();
+}
+
+ClientContext &ExpressionState::GetContext() {
+	if (!HasContext()) {
+		throw BinderException("Cannot use %s in this context", ((BoundFunctionExpression &)expr).function.name);
+	}
+	return root.executor->GetContext();
+}
+
 ExpressionState::ExpressionState(const Expression &expr, ExpressionExecutorState &root)
     : expr(expr), root(root), name(expr.ToString()) {
 }
 
 ExpressionExecutorState::ExpressionExecutorState(const string &name) : profiler(), name(name) {
 }
+
+void ExpressionState::Verify(ExpressionExecutorState &root_executor) {
+	D_ASSERT(&root_executor == &root);
+	for (auto &entry : child_states) {
+		entry->Verify(root_executor);
+	}
+}
+
+void ExpressionExecutorState::Verify() {
+	D_ASSERT(executor);
+	root_state->Verify(*this);
+}
+
 } // namespace duckdb
+
+
 
 
 
@@ -14363,26 +16254,46 @@ ExpressionExecutorState::ExpressionExecutorState(const string &name) : profiler(
 
 namespace duckdb {
 
-ART::ART(const vector<column_t> &column_ids, const vector<unique_ptr<Expression>> &unbound_expressions,
-         IndexConstraintType constraint_type)
-    : Index(IndexType::ART, column_ids, unbound_expressions, constraint_type) {
-	tree = nullptr;
-	is_little_endian = Radix::IsLittleEndian();
+ART::ART(const vector<column_t> &column_ids, TableIOManager &table_io_manager,
+         const vector<unique_ptr<Expression>> &unbound_expressions, IndexConstraintType constraint_type,
+         DatabaseInstance &db, idx_t block_id, idx_t block_offset)
+    : Index(IndexType::ART, table_io_manager, column_ids, unbound_expressions, constraint_type), db(db),
+      estimated_art_size(0), estimated_key_size(16) {
+	if (!Radix::IsLittleEndian()) {
+		throw NotImplementedException("ART indexes are not supported on big endian architectures");
+	}
+	if (block_id != DConstants::INVALID_INDEX) {
+		tree = Node::Deserialize(*this, block_id, block_offset);
+	} else {
+		tree = nullptr;
+	}
+	serialized_data_pointer = BlockPointer(block_id, block_offset);
 	for (idx_t i = 0; i < types.size(); i++) {
 		switch (types[i]) {
 		case PhysicalType::BOOL:
 		case PhysicalType::INT8:
-		case PhysicalType::INT16:
-		case PhysicalType::INT32:
-		case PhysicalType::INT64:
-		case PhysicalType::INT128:
 		case PhysicalType::UINT8:
+			estimated_key_size += sizeof(int8_t);
+			break;
+		case PhysicalType::INT16:
 		case PhysicalType::UINT16:
+			estimated_key_size += sizeof(int16_t);
+			break;
+		case PhysicalType::INT32:
 		case PhysicalType::UINT32:
-		case PhysicalType::UINT64:
 		case PhysicalType::FLOAT:
+			estimated_key_size += sizeof(int32_t);
+			break;
+		case PhysicalType::INT64:
+		case PhysicalType::UINT64:
 		case PhysicalType::DOUBLE:
+			estimated_key_size += sizeof(int64_t);
+			break;
+		case PhysicalType::INT128:
+			estimated_key_size += sizeof(hugeint_t);
+			break;
 		case PhysicalType::VARCHAR:
+			estimated_key_size += 16; // oh well
 			break;
 		default:
 			throw InvalidTypeException(logical_types[i], "Invalid type for index");
@@ -14391,18 +16302,14 @@ ART::ART(const vector<column_t> &column_ids, const vector<unique_ptr<Expression>
 }
 
 ART::~ART() {
-}
-
-bool ART::LeafMatches(Node *node, Key &key, unsigned depth) {
-	auto leaf = static_cast<Leaf *>(node);
-	Key &leaf_key = *leaf->value;
-	for (idx_t i = depth; i < leaf_key.len; i++) {
-		if (leaf_key[i] != key[i]) {
-			return false;
-		}
+	if (estimated_art_size > 0) {
+		BufferManager::GetBufferManager(db).FreeReservedMemory(estimated_art_size);
+		estimated_art_size = 0;
 	}
-
-	return true;
+	if (tree) {
+		Node::Delete(tree);
+		tree = nullptr;
+	}
 }
 
 unique_ptr<IndexScanState> ART::InitializeScanSinglePredicate(Transaction &transaction, Value value,
@@ -14425,90 +16332,87 @@ unique_ptr<IndexScanState> ART::InitializeScanTwoPredicates(Transaction &transac
 }
 
 //===--------------------------------------------------------------------===//
-// Insert
+// Keys
 //===--------------------------------------------------------------------===//
-template <class T>
-static void TemplatedGenerateKeys(Vector &input, idx_t count, vector<unique_ptr<Key>> &keys, bool is_little_endian) {
-	VectorData idata;
-	input.Orrify(count, idata);
 
+template <class T>
+static void TemplatedGenerateKeys(ArenaAllocator &allocator, Vector &input, idx_t count, vector<Key> &keys) {
+	UnifiedVectorFormat idata;
+	input.ToUnifiedFormat(count, idata);
+
+	D_ASSERT(keys.size() >= count);
 	auto input_data = (T *)idata.data;
 	for (idx_t i = 0; i < count; i++) {
 		auto idx = idata.sel->get_index(i);
 		if (idata.validity.RowIsValid(idx)) {
-			keys.push_back(Key::CreateKey<T>(input_data[idx], is_little_endian));
-		} else {
-			keys.push_back(nullptr);
+			Key::CreateKey<T>(allocator, keys[i], input_data[idx]);
 		}
 	}
 }
 
 template <class T>
-static void ConcatenateKeys(Vector &input, idx_t count, vector<unique_ptr<Key>> &keys, bool is_little_endian) {
-	VectorData idata;
-	input.Orrify(count, idata);
+static void ConcatenateKeys(ArenaAllocator &allocator, Vector &input, idx_t count, vector<Key> &keys) {
+	UnifiedVectorFormat idata;
+	input.ToUnifiedFormat(count, idata);
 
 	auto input_data = (T *)idata.data;
 	for (idx_t i = 0; i < count; i++) {
 		auto idx = idata.sel->get_index(i);
-		if (!idata.validity.RowIsValid(idx) || !keys[i]) {
-			// either this column is NULL, or the previous column is NULL!
-			keys[i] = nullptr;
-		} else {
-			// concatenate the keys
-			auto old_key = move(keys[i]);
-			auto new_key = Key::CreateKey<T>(input_data[idx], is_little_endian);
-			auto key_len = old_key->len + new_key->len;
-			auto compound_data = unique_ptr<data_t[]>(new data_t[key_len]);
-			memcpy(compound_data.get(), old_key->data.get(), old_key->len);
-			memcpy(compound_data.get() + old_key->len, new_key->data.get(), new_key->len);
-			keys[i] = make_unique<Key>(move(compound_data), key_len);
+
+		// key is not NULL (no previous column entry was NULL)
+		if (!keys[i].Empty()) {
+			if (!idata.validity.RowIsValid(idx)) {
+				// this column entry is NULL, set whole key to NULL
+				keys[i] = Key();
+			} else {
+				auto other_key = Key::CreateKey<T>(allocator, input_data[idx]);
+				keys[i].ConcatenateKey(allocator, other_key);
+			}
 		}
 	}
 }
 
-void ART::GenerateKeys(DataChunk &input, vector<unique_ptr<Key>> &keys) {
-	keys.reserve(STANDARD_VECTOR_SIZE);
+void ART::GenerateKeys(ArenaAllocator &allocator, DataChunk &input, vector<Key> &keys) {
 	// generate keys for the first input column
 	switch (input.data[0].GetType().InternalType()) {
 	case PhysicalType::BOOL:
-		TemplatedGenerateKeys<bool>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<bool>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::INT8:
-		TemplatedGenerateKeys<int8_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<int8_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::INT16:
-		TemplatedGenerateKeys<int16_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<int16_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::INT32:
-		TemplatedGenerateKeys<int32_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<int32_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::INT64:
-		TemplatedGenerateKeys<int64_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<int64_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::INT128:
-		TemplatedGenerateKeys<hugeint_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<hugeint_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::UINT8:
-		TemplatedGenerateKeys<uint8_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<uint8_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::UINT16:
-		TemplatedGenerateKeys<uint16_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<uint16_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::UINT32:
-		TemplatedGenerateKeys<uint32_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<uint32_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::UINT64:
-		TemplatedGenerateKeys<uint64_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<uint64_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::FLOAT:
-		TemplatedGenerateKeys<float>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<float>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::DOUBLE:
-		TemplatedGenerateKeys<double>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<double>(allocator, input.data[0], input.size(), keys);
 		break;
 	case PhysicalType::VARCHAR:
-		TemplatedGenerateKeys<string_t>(input.data[0], input.size(), keys, is_little_endian);
+		TemplatedGenerateKeys<string_t>(allocator, input.data[0], input.size(), keys);
 		break;
 	default:
 		throw InternalException("Invalid type for index");
@@ -14518,47 +16422,178 @@ void ART::GenerateKeys(DataChunk &input, vector<unique_ptr<Key>> &keys) {
 		// for each of the remaining columns, concatenate
 		switch (input.data[i].GetType().InternalType()) {
 		case PhysicalType::BOOL:
-			ConcatenateKeys<bool>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<bool>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::INT8:
-			ConcatenateKeys<int8_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<int8_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::INT16:
-			ConcatenateKeys<int16_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<int16_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::INT32:
-			ConcatenateKeys<int32_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<int32_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::INT64:
-			ConcatenateKeys<int64_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<int64_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::INT128:
-			ConcatenateKeys<hugeint_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<hugeint_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::UINT8:
-			ConcatenateKeys<uint8_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<uint8_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::UINT16:
-			ConcatenateKeys<uint16_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<uint16_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::UINT32:
-			ConcatenateKeys<uint32_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<uint32_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::UINT64:
-			ConcatenateKeys<uint64_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<uint64_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::FLOAT:
-			ConcatenateKeys<float>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<float>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::DOUBLE:
-			ConcatenateKeys<double>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<double>(allocator, input.data[i], input.size(), keys);
 			break;
 		case PhysicalType::VARCHAR:
-			ConcatenateKeys<string_t>(input.data[i], input.size(), keys, is_little_endian);
+			ConcatenateKeys<string_t>(allocator, input.data[i], input.size(), keys);
 			break;
 		default:
 			throw InternalException("Invalid type for index");
 		}
+	}
+}
+
+//===--------------------------------------------------------------------===//
+// Insert
+//===--------------------------------------------------------------------===//
+
+struct KeySection {
+	KeySection(idx_t start_p, idx_t end_p, idx_t depth_p, data_t key_byte_p)
+	    : start(start_p), end(end_p), depth(depth_p), key_byte(key_byte_p) {};
+	KeySection(idx_t start_p, idx_t end_p, vector<Key> &keys, KeySection &key_section)
+	    : start(start_p), end(end_p), depth(key_section.depth + 1), key_byte(keys[end_p].data[key_section.depth]) {};
+	idx_t start;
+	idx_t end;
+	idx_t depth;
+	data_t key_byte;
+};
+
+void GetChildSections(vector<KeySection> &child_sections, vector<Key> &keys, KeySection &key_section) {
+
+	idx_t child_start_idx = key_section.start;
+	for (idx_t i = key_section.start + 1; i <= key_section.end; i++) {
+		if (keys[i - 1].data[key_section.depth] != keys[i].data[key_section.depth]) {
+			child_sections.emplace_back(child_start_idx, i - 1, keys, key_section);
+			child_start_idx = i;
+		}
+	}
+	child_sections.emplace_back(child_start_idx, key_section.end, keys, key_section);
+}
+
+void Construct(vector<Key> &keys, row_t *row_ids, Node *&node, KeySection &key_section, bool &has_constraint) {
+
+	D_ASSERT(key_section.start < keys.size());
+	D_ASSERT(key_section.end < keys.size());
+	D_ASSERT(key_section.start <= key_section.end);
+
+	auto &start_key = keys[key_section.start];
+	auto &end_key = keys[key_section.end];
+
+	// increment the depth until we reach a leaf or find a mismatching byte
+	auto prefix_start = key_section.depth;
+	while (start_key.len != key_section.depth && start_key.ByteMatches(end_key, key_section.depth)) {
+		key_section.depth++;
+	}
+
+	// we reached a leaf, i.e. all the bytes of start_key and end_key match
+	if (start_key.len == key_section.depth) {
+		// end_idx is inclusive
+		auto num_row_ids = key_section.end - key_section.start + 1;
+
+		// check for possible constraint violation
+		if (has_constraint && num_row_ids != 1) {
+			throw ConstraintException("New data contains duplicates on indexed column(s)");
+		}
+
+		node = Leaf::New(start_key, prefix_start, row_ids + key_section.start, num_row_ids);
+	} else { // create a new node and recurse
+
+		// we will find at least two child entries of this node, otherwise we'd have reached a leaf
+		vector<KeySection> child_sections;
+		GetChildSections(child_sections, keys, key_section);
+
+		auto node_type = Node::GetTypeBySize(child_sections.size());
+		Node::New(node_type, node);
+
+		auto prefix_length = key_section.depth - prefix_start;
+		node->prefix = Prefix(start_key, prefix_start, prefix_length);
+
+		// recurse on each child section
+		for (auto &child_section : child_sections) {
+			Node *new_child = nullptr;
+			Construct(keys, row_ids, new_child, child_section, has_constraint);
+			Node::InsertChild(node, child_section.key_byte, new_child);
+		}
+	}
+}
+
+void ART::ConstructAndMerge(IndexLock &lock, PayloadScanner &scanner, Allocator &allocator) {
+
+	auto payload_types = logical_types;
+	payload_types.emplace_back(LogicalType::ROW_TYPE);
+
+	ArenaAllocator arena_allocator(BufferAllocator::Get(db));
+	vector<Key> keys(STANDARD_VECTOR_SIZE);
+
+	auto temp_art = make_unique<ART>(this->column_ids, this->table_io_manager, this->unbound_expressions,
+	                                 this->constraint_type, this->db);
+
+	for (;;) {
+		DataChunk ordered_chunk;
+		ordered_chunk.Initialize(allocator, payload_types);
+		ordered_chunk.SetCardinality(0);
+		scanner.Scan(ordered_chunk);
+		if (ordered_chunk.size() == 0) {
+			break;
+		}
+
+		// get the key chunk and the row_identifiers vector
+		DataChunk row_id_chunk;
+		ordered_chunk.Split(row_id_chunk, ordered_chunk.ColumnCount() - 1);
+		auto &row_identifiers = row_id_chunk.data[0];
+
+		D_ASSERT(row_identifiers.GetType().InternalType() == ROW_TYPE);
+		D_ASSERT(logical_types[0] == ordered_chunk.data[0].GetType());
+
+		// generate the keys for the given input
+		arena_allocator.Reset();
+		GenerateKeys(arena_allocator, ordered_chunk, keys);
+
+		// prepare the row_identifiers
+		row_identifiers.Flatten(ordered_chunk.size());
+		auto row_ids = FlatVector::GetData<row_t>(row_identifiers);
+
+		// construct the ART of this chunk
+		auto art = make_unique<ART>(this->column_ids, this->table_io_manager, this->unbound_expressions,
+		                            this->constraint_type, this->db);
+		auto key_section = KeySection(0, ordered_chunk.size() - 1, 0, 0);
+		auto has_constraint = IsUnique();
+		Construct(keys, row_ids, art->tree, key_section, has_constraint);
+
+		// merge art into temp_art
+		if (!temp_art->MergeIndexes(lock, art.get())) {
+			throw ConstraintException("Data contains duplicates on indexed column(s)");
+		}
+	}
+
+	// NOTE: currently this code is only used for index creation, so we can assume that there are no
+	// duplicate violations between the existing index and the new data,
+	// so we do not need to revert any changes
+	if (!this->MergeIndexes(lock, temp_art.get())) {
+		throw ConstraintException("Data contains duplicates on indexed column(s)");
 	}
 }
 
@@ -14567,39 +16602,39 @@ bool ART::Insert(IndexLock &lock, DataChunk &input, Vector &row_ids) {
 	D_ASSERT(logical_types[0] == input.data[0].GetType());
 
 	// generate the keys for the given input
-	vector<unique_ptr<Key>> keys;
-	GenerateKeys(input, keys);
+	ArenaAllocator arena_allocator(BufferAllocator::Get(db));
+	vector<Key> keys(input.size());
+	GenerateKeys(arena_allocator, input, keys);
+
+	idx_t extra_memory = estimated_key_size * input.size();
+	BufferManager::GetBufferManager(db).ReserveMemory(extra_memory);
+	estimated_art_size += extra_memory;
 
 	// now insert the elements into the index
-	row_ids.Normalify(input.size());
+	row_ids.Flatten(input.size());
 	auto row_identifiers = FlatVector::GetData<row_t>(row_ids);
 	idx_t failed_index = DConstants::INVALID_INDEX;
 	for (idx_t i = 0; i < input.size(); i++) {
-		if (!keys[i]) {
+		if (keys[i].Empty()) {
 			continue;
 		}
 
 		row_t row_id = row_identifiers[i];
-		if (!Insert(tree, move(keys[i]), 0, row_id)) {
+		if (!Insert(tree, keys[i], 0, row_id)) {
 			// failed to insert because of constraint violation
 			failed_index = i;
 			break;
 		}
 	}
 	if (failed_index != DConstants::INVALID_INDEX) {
-		// failed to insert because of constraint violation: remove previously inserted entries
-		// generate keys again
-		keys.clear();
-		GenerateKeys(input, keys);
-		unique_ptr<Key> key;
 
-		// now erase the entries
+		// failed to insert because of constraint violation: remove previously inserted entries
 		for (idx_t i = 0; i < failed_index; i++) {
-			if (!keys[i]) {
+			if (keys[i].Empty()) {
 				continue;
 			}
 			row_t row_id = row_identifiers[i];
-			Erase(tree, *keys[i], 0, row_id);
+			Erase(tree, keys[i], 0, row_id);
 		}
 		return false;
 	}
@@ -14630,78 +16665,85 @@ void ART::VerifyDeleteForeignKey(DataChunk &chunk, string *err_msg_ptr) {
 }
 
 bool ART::InsertToLeaf(Leaf &leaf, row_t row_id) {
-	if (IsUnique() && leaf.num_elements != 0) {
+#ifdef DEBUG
+	for (idx_t k = 0; k < leaf.count; k++) {
+		D_ASSERT(leaf.GetRowId(k) != row_id);
+	}
+#endif
+	if (IsUnique() && leaf.count != 0) {
 		return false;
 	}
 	leaf.Insert(row_id);
 	return true;
 }
 
-bool ART::Insert(unique_ptr<Node> &node, unique_ptr<Key> value, unsigned depth, row_t row_id) {
-	Key &key = *value;
+bool ART::Insert(Node *&node, Key &key, idx_t depth, row_t row_id) {
+
 	if (!node) {
 		// node is currently empty, create a leaf here with the key
-		node = make_unique<Leaf>(*this, move(value), row_id);
+		node = Leaf::New(key, depth, row_id);
 		return true;
 	}
 
 	if (node->type == NodeType::NLeaf) {
 		// Replace leaf with Node4 and store both leaves in it
-		auto leaf = static_cast<Leaf *>(node.get());
+		auto leaf = (Leaf *)node;
 
-		Key &existing_key = *leaf->value;
+		auto &leaf_prefix = leaf->prefix;
 		uint32_t new_prefix_length = 0;
-		// Leaf node is already there, update row_id vector
-		if (depth + new_prefix_length == existing_key.len && existing_key.len == key.len) {
+
+		// Leaf node is already there (its key matches the current key), update row_id vector
+		if (new_prefix_length == leaf->prefix.Size() && depth + leaf->prefix.Size() == key.len) {
 			return InsertToLeaf(*leaf, row_id);
 		}
-		while (existing_key[depth + new_prefix_length] == key[depth + new_prefix_length]) {
+		while (leaf_prefix[new_prefix_length] == key[depth + new_prefix_length]) {
 			new_prefix_length++;
-			// Leaf node is already there, update row_id vector
-			if (depth + new_prefix_length == existing_key.len && existing_key.len == key.len) {
+			// Leaf node is already there (its key matches the current key), update row_id vector
+			if (new_prefix_length == leaf->prefix.Size() && depth + leaf->prefix.Size() == key.len) {
 				return InsertToLeaf(*leaf, row_id);
 			}
 		}
 
-		unique_ptr<Node> new_node = make_unique<Node4>(*this, new_prefix_length);
-		new_node->prefix_length = new_prefix_length;
-		memcpy(new_node->prefix.get(), &key[depth], new_prefix_length);
-		Node4::Insert(*this, new_node, existing_key[depth + new_prefix_length], node);
-		unique_ptr<Node> leaf_node = make_unique<Leaf>(*this, move(value), row_id);
-		Node4::Insert(*this, new_node, key[depth + new_prefix_length], leaf_node);
-		node = move(new_node);
+		Node *new_node = Node4::New();
+		new_node->prefix = Prefix(key, depth, new_prefix_length);
+		auto key_byte = node->prefix.Reduce(new_prefix_length);
+		Node4::InsertChild(new_node, key_byte, node);
+		Node *leaf_node = Leaf::New(key, depth + new_prefix_length + 1, row_id);
+		Node4::InsertChild(new_node, key[depth + new_prefix_length], leaf_node);
+		node = new_node;
 		return true;
 	}
 
 	// Handle prefix of inner node
-	if (node->prefix_length) {
-		uint32_t mismatch_pos = Node::PrefixMismatch(*this, node.get(), key, depth);
-		if (mismatch_pos != node->prefix_length) {
+	if (node->prefix.Size()) {
+		uint32_t mismatch_pos = node->prefix.KeyMismatchPosition(key, depth);
+		if (mismatch_pos != node->prefix.Size()) {
 			// Prefix differs, create new node
-			unique_ptr<Node> new_node = make_unique<Node4>(*this, mismatch_pos);
-			new_node->prefix_length = mismatch_pos;
-			memcpy(new_node->prefix.get(), node->prefix.get(), mismatch_pos);
+			Node *new_node = Node4::New();
+			new_node->prefix = Prefix(key, depth, mismatch_pos);
 			// Break up prefix
-			auto node_ptr = node.get();
-			Node4::Insert(*this, new_node, node->prefix[mismatch_pos], node);
-			node_ptr->prefix_length -= (mismatch_pos + 1);
-			memmove(node_ptr->prefix.get(), node_ptr->prefix.get() + mismatch_pos + 1, node_ptr->prefix_length);
-			unique_ptr<Node> leaf_node = make_unique<Leaf>(*this, move(value), row_id);
-			Node4::Insert(*this, new_node, key[depth + mismatch_pos], leaf_node);
-			node = move(new_node);
+			auto key_byte = node->prefix.Reduce(mismatch_pos);
+			Node4::InsertChild(new_node, key_byte, node);
+
+			Node *leaf_node = Leaf::New(key, depth + mismatch_pos + 1, row_id);
+			Node4::InsertChild(new_node, key[depth + mismatch_pos], leaf_node);
+			node = new_node;
 			return true;
 		}
-		depth += node->prefix_length;
+		depth += node->prefix.Size();
 	}
 
 	// Recurse
+	D_ASSERT(depth < key.len);
 	idx_t pos = node->GetChildPos(key[depth]);
 	if (pos != DConstants::INVALID_INDEX) {
-		auto child = node->GetChild(pos);
-		return Insert(*child, move(value), depth + 1, row_id);
+		auto child = node->GetChild(*this, pos);
+		bool insertion_result = Insert(child, key, depth + 1, row_id);
+		node->ReplaceChildPointer(pos, child);
+		return insertion_result;
 	}
-	unique_ptr<Node> new_node = make_unique<Leaf>(*this, move(value), row_id);
-	Node::InsertLeaf(*this, node, key[depth], new_node);
+	Node *new_node = Leaf::New(key, depth + 1, row_id);
+	Node::InsertChild(node, key[depth], new_node);
 	return true;
 }
 
@@ -14709,30 +16751,35 @@ bool ART::Insert(unique_ptr<Node> &node, unique_ptr<Key> value, unsigned depth, 
 // Delete
 //===--------------------------------------------------------------------===//
 void ART::Delete(IndexLock &state, DataChunk &input, Vector &row_ids) {
-	DataChunk expression_result;
-	expression_result.Initialize(Allocator::DefaultAllocator(), logical_types);
+	DataChunk expression;
+	expression.Initialize(Allocator::DefaultAllocator(), logical_types);
 
 	// first resolve the expressions
-	ExecuteExpressions(input, expression_result);
+	ExecuteExpressions(input, expression);
+
+	idx_t released_memory = MinValue<idx_t>(estimated_art_size, estimated_key_size * input.size());
+	BufferManager::GetBufferManager(db).FreeReservedMemory(released_memory);
+	estimated_art_size -= released_memory;
 
 	// then generate the keys for the given input
-	vector<unique_ptr<Key>> keys;
-	GenerateKeys(expression_result, keys);
+	ArenaAllocator arena_allocator(BufferAllocator::Get(db));
+	vector<Key> keys(expression.size());
+	GenerateKeys(arena_allocator, expression, keys);
 
 	// now erase the elements from the database
-	row_ids.Normalify(input.size());
+	row_ids.Flatten(input.size());
 	auto row_identifiers = FlatVector::GetData<row_t>(row_ids);
 
 	for (idx_t i = 0; i < input.size(); i++) {
-		if (!keys[i]) {
+		if (keys[i].Empty()) {
 			continue;
 		}
-		Erase(tree, *keys[i], 0, row_identifiers[i]);
+		Erase(tree, keys[i], 0, row_identifiers[i]);
 #ifdef DEBUG
-		auto node = Lookup(tree, *keys[i], 0);
+		auto node = Lookup(tree, keys[i], 0);
 		if (node) {
 			auto leaf = static_cast<Leaf *>(node);
-			for (idx_t k = 0; k < leaf->num_elements; k++) {
+			for (idx_t k = 0; k < leaf->count; k++) {
 				D_ASSERT(leaf->GetRowId(k) != row_identifiers[i]);
 			}
 		}
@@ -14740,47 +16787,47 @@ void ART::Delete(IndexLock &state, DataChunk &input, Vector &row_ids) {
 	}
 }
 
-void ART::Erase(unique_ptr<Node> &node, Key &key, unsigned depth, row_t row_id) {
+void ART::Erase(Node *&node, Key &key, idx_t depth, row_t row_id) {
 	if (!node) {
 		return;
 	}
 	// Delete a leaf from a tree
 	if (node->type == NodeType::NLeaf) {
 		// Make sure we have the right leaf
-		if (ART::LeafMatches(node.get(), key, depth)) {
-			auto leaf = static_cast<Leaf *>(node.get());
-			leaf->Remove(row_id);
-			if (leaf->num_elements == 0) {
-				node.reset();
-			}
+		auto leaf = static_cast<Leaf *>(node);
+		leaf->Remove(row_id);
+		if (leaf->count == 0) {
+			Node::Delete(node);
+			node = nullptr;
 		}
+
 		return;
 	}
 
 	// Handle prefix
-	if (node->prefix_length) {
-		if (Node::PrefixMismatch(*this, node.get(), key, depth) != node->prefix_length) {
+	if (node->prefix.Size()) {
+		if (node->prefix.KeyMismatchPosition(key, depth) != node->prefix.Size()) {
 			return;
 		}
-		depth += node->prefix_length;
+		depth += node->prefix.Size();
 	}
 	idx_t pos = node->GetChildPos(key[depth]);
 	if (pos != DConstants::INVALID_INDEX) {
-		auto child = node->GetChild(pos);
+		auto child = node->GetChild(*this, pos);
 		D_ASSERT(child);
 
-		unique_ptr<Node> &child_ref = *child;
-		if (child_ref->type == NodeType::NLeaf && LeafMatches(child_ref.get(), key, depth)) {
+		if (child->type == NodeType::NLeaf) {
 			// Leaf found, remove entry
-			auto leaf = static_cast<Leaf *>(child_ref.get());
+			auto leaf = (Leaf *)child;
 			leaf->Remove(row_id);
-			if (leaf->num_elements == 0) {
+			if (leaf->count == 0) {
 				// Leaf is empty, delete leaf, decrement node counter and maybe shrink node
-				Node::Erase(*this, node, pos);
+				Node::EraseChild(node, pos, *this);
 			}
 		} else {
 			// Recurse
-			Erase(*child, key, depth + 1, row_id);
+			Erase(child, key, depth + 1, row_id);
+			node->ReplaceChildPointer(pos, child);
 		}
 	}
 }
@@ -14788,170 +16835,96 @@ void ART::Erase(unique_ptr<Node> &node, Key &key, unsigned depth, row_t row_id) 
 //===--------------------------------------------------------------------===//
 // Point Query
 //===--------------------------------------------------------------------===//
-static unique_ptr<Key> CreateKey(ART &art, PhysicalType type, Value &value) {
+static Key CreateKey(ArenaAllocator &allocator, PhysicalType type, Value &value) {
 	D_ASSERT(type == value.type().InternalType());
 	switch (type) {
 	case PhysicalType::BOOL:
-		return Key::CreateKey<bool>(value, art.is_little_endian);
+		return Key::CreateKey<bool>(allocator, value);
 	case PhysicalType::INT8:
-		return Key::CreateKey<int8_t>(value, art.is_little_endian);
+		return Key::CreateKey<int8_t>(allocator, value);
 	case PhysicalType::INT16:
-		return Key::CreateKey<int16_t>(value, art.is_little_endian);
+		return Key::CreateKey<int16_t>(allocator, value);
 	case PhysicalType::INT32:
-		return Key::CreateKey<int32_t>(value, art.is_little_endian);
+		return Key::CreateKey<int32_t>(allocator, value);
 	case PhysicalType::INT64:
-		return Key::CreateKey<int64_t>(value, art.is_little_endian);
+		return Key::CreateKey<int64_t>(allocator, value);
 	case PhysicalType::UINT8:
-		return Key::CreateKey<uint8_t>(value, art.is_little_endian);
+		return Key::CreateKey<uint8_t>(allocator, value);
 	case PhysicalType::UINT16:
-		return Key::CreateKey<uint16_t>(value, art.is_little_endian);
+		return Key::CreateKey<uint16_t>(allocator, value);
 	case PhysicalType::UINT32:
-		return Key::CreateKey<uint32_t>(value, art.is_little_endian);
+		return Key::CreateKey<uint32_t>(allocator, value);
 	case PhysicalType::UINT64:
-		return Key::CreateKey<uint64_t>(value, art.is_little_endian);
+		return Key::CreateKey<uint64_t>(allocator, value);
 	case PhysicalType::INT128:
-		return Key::CreateKey<hugeint_t>(value, art.is_little_endian);
+		return Key::CreateKey<hugeint_t>(allocator, value);
 	case PhysicalType::FLOAT:
-		return Key::CreateKey<float>(value, art.is_little_endian);
+		return Key::CreateKey<float>(allocator, value);
 	case PhysicalType::DOUBLE:
-		return Key::CreateKey<double>(value, art.is_little_endian);
+		return Key::CreateKey<double>(allocator, value);
 	case PhysicalType::VARCHAR:
-		return Key::CreateKey<string_t>(value, art.is_little_endian);
+		return Key::CreateKey<string_t>(allocator, value);
 	default:
 		throw InternalException("Invalid type for index");
 	}
 }
 
-bool ART::SearchEqual(ARTIndexScanState *state, idx_t max_count, vector<row_t> &result_ids) {
-	auto key = CreateKey(*this, types[0], state->values[0]);
-	auto leaf = static_cast<Leaf *>(Lookup(tree, *key, 0));
+bool ART::SearchEqual(Key &key, idx_t max_count, vector<row_t> &result_ids) {
+
+	auto leaf = static_cast<Leaf *>(Lookup(tree, key, 0));
 	if (!leaf) {
 		return true;
 	}
-	if (leaf->num_elements > max_count) {
+	if (leaf->count > max_count) {
 		return false;
 	}
-	for (idx_t i = 0; i < leaf->num_elements; i++) {
+	for (idx_t i = 0; i < leaf->count; i++) {
 		row_t row_id = leaf->GetRowId(i);
 		result_ids.push_back(row_id);
 	}
 	return true;
 }
 
-void ART::SearchEqualJoinNoFetch(Value &equal_value, idx_t &result_size) {
-	//! We need to look for a leaf
-	auto key = CreateKey(*this, types[0], equal_value);
-	auto leaf = static_cast<Leaf *>(Lookup(tree, *key, 0));
+void ART::SearchEqualJoinNoFetch(Key &key, idx_t &result_size) {
+
+	// we need to look for a leaf
+	auto leaf = Lookup(tree, key, 0);
 	if (!leaf) {
 		return;
 	}
-	result_size = leaf->num_elements;
+	result_size = leaf->count;
 }
 
-Node *ART::Lookup(unique_ptr<Node> &node, Key &key, unsigned depth) {
-	auto node_val = node.get();
-
-	while (node_val) {
-		if (node_val->type == NodeType::NLeaf) {
-			auto leaf = static_cast<Leaf *>(node_val);
-			Key &leaf_key = *leaf->value;
+Leaf *ART::Lookup(Node *node, Key &key, idx_t depth) {
+	while (node) {
+		if (node->type == NodeType::NLeaf) {
+			auto leaf = (Leaf *)node;
+			auto &leaf_prefix = leaf->prefix;
 			//! Check leaf
-			for (idx_t i = depth; i < leaf_key.len; i++) {
-				if (leaf_key[i] != key[i]) {
+			for (idx_t i = 0; i < leaf->prefix.Size(); i++) {
+				if (leaf_prefix[i] != key[i + depth]) {
 					return nullptr;
 				}
 			}
-			return node_val;
+			return (Leaf *)node;
 		}
-		if (node_val->prefix_length) {
-			for (idx_t pos = 0; pos < node_val->prefix_length; pos++) {
-				if (key[depth + pos] != node_val->prefix[pos]) {
+		if (node->prefix.Size()) {
+			for (idx_t pos = 0; pos < node->prefix.Size(); pos++) {
+				if (key[depth + pos] != node->prefix[pos]) {
 					return nullptr;
 				}
 			}
-			depth += node_val->prefix_length;
+			depth += node->prefix.Size();
 		}
-		idx_t pos = node_val->GetChildPos(key[depth]);
+		idx_t pos = node->GetChildPos(key[depth]);
 		if (pos == DConstants::INVALID_INDEX) {
 			return nullptr;
 		}
-		node_val = node_val->GetChild(pos)->get();
-		D_ASSERT(node_val);
-
+		node = node->GetChild(*this, pos);
+		D_ASSERT(node);
 		depth++;
 	}
-
 	return nullptr;
-}
-
-//===--------------------------------------------------------------------===//
-// Iterator scans
-//===--------------------------------------------------------------------===//
-template <bool HAS_BOUND, bool INCLUSIVE>
-bool ART::IteratorScan(ARTIndexScanState *state, Iterator *it, Key *bound, idx_t max_count, vector<row_t> &result_ids) {
-	bool has_next;
-	do {
-		if (HAS_BOUND) {
-			D_ASSERT(bound);
-			if (INCLUSIVE) {
-				if (*it->node->value > *bound) {
-					break;
-				}
-			} else {
-				if (*it->node->value >= *bound) {
-					break;
-				}
-			}
-		}
-		if (result_ids.size() + it->node->num_elements > max_count) {
-			// adding these elements would exceed the max count
-			return false;
-		}
-		for (idx_t i = 0; i < it->node->num_elements; i++) {
-			row_t row_id = it->node->GetRowId(i);
-			result_ids.push_back(row_id);
-		}
-		has_next = ART::IteratorNext(*it);
-	} while (has_next);
-	return true;
-}
-
-void Iterator::SetEntry(idx_t entry_depth, IteratorEntry entry) {
-	if (stack.size() < entry_depth + 1) {
-		stack.resize(MaxValue<idx_t>(8, MaxValue<idx_t>(entry_depth + 1, stack.size() * 2)));
-	}
-	stack[entry_depth] = entry;
-}
-
-bool ART::IteratorNext(Iterator &it) {
-	// Skip leaf
-	if ((it.depth) && ((it.stack[it.depth - 1].node)->type == NodeType::NLeaf)) {
-		it.depth--;
-	}
-
-	// Look for the next leaf
-	while (it.depth > 0) {
-		auto &top = it.stack[it.depth - 1];
-		Node *node = top.node;
-
-		if (node->type == NodeType::NLeaf) {
-			// found a leaf: move to next node
-			it.node = (Leaf *)node;
-			return true;
-		}
-
-		// Find next node
-		top.pos = node->GetNextPos(top.pos);
-		if (top.pos != DConstants::INVALID_INDEX) {
-			// next node found: go there
-			it.SetEntry(it.depth, IteratorEntry(node->GetChild(top.pos)->get(), DConstants::INVALID_INDEX));
-			it.depth++;
-		} else {
-			// no node found: move up the tree
-			it.depth--;
-		}
-	}
-	return false;
 }
 
 //===--------------------------------------------------------------------===//
@@ -14959,238 +16932,127 @@ bool ART::IteratorNext(Iterator &it) {
 // Returns: True (If found leaf >= key)
 //          False (Otherwise)
 //===--------------------------------------------------------------------===//
-bool ART::Bound(unique_ptr<Node> &n, Key &key, Iterator &it, bool inclusive) {
-	it.depth = 0;
-	bool equal = false;
-	if (!n) {
-		return false;
-	}
-	Node *node = n.get();
+bool ART::SearchGreater(ARTIndexScanState *state, Key &key, bool inclusive, idx_t max_count,
+                        vector<row_t> &result_ids) {
 
-	idx_t depth = 0;
-	while (true) {
-		it.SetEntry(it.depth, IteratorEntry(node, 0));
-		auto &top = it.stack[it.depth];
-		it.depth++;
-		if (!equal) {
-			while (node->type != NodeType::NLeaf) {
-				node = node->GetChild(node->GetMin())->get();
-				auto &c_top = it.stack[it.depth];
-				c_top.node = node;
-				it.depth++;
-			}
-		}
-		if (node->type == NodeType::NLeaf) {
-			// found a leaf node: check if it is bigger or equal than the current key
-			auto leaf = static_cast<Leaf *>(node);
-			it.node = leaf;
-			// if the search is not inclusive the leaf node could still be equal to the current value
-			// check if leaf is equal to the current key
-			if (*leaf->value == key) {
-				// if its not inclusive check if there is a next leaf
-				if (!inclusive && !IteratorNext(it)) {
-					return false;
-				} else {
-					return true;
-				}
-			}
-
-			if (*leaf->value > key) {
-				return true;
-			}
-			// Leaf is lower than key
-			// Check if next leaf is still lower than key
-			while (IteratorNext(it)) {
-				if (*it.node->value == key) {
-					// if its not inclusive check if there is a next leaf
-					if (!inclusive && !IteratorNext(it)) {
-						return false;
-					} else {
-						return true;
-					}
-				} else if (*it.node->value > key) {
-					// if its not inclusive check if there is a next leaf
-					return true;
-				}
-			}
-			return false;
-		}
-		uint32_t mismatch_pos = Node::PrefixMismatch(*this, node, key, depth);
-		if (mismatch_pos != node->prefix_length) {
-			if (node->prefix[mismatch_pos] < key[depth + mismatch_pos]) {
-				// Less
-				it.depth--;
-				return IteratorNext(it);
-			} else {
-				// Greater
-				top.pos = DConstants::INVALID_INDEX;
-				return IteratorNext(it);
-			}
-		}
-		// prefix matches, search inside the child for the key
-		depth += node->prefix_length;
-
-		top.pos = node->GetChildGreaterEqual(key[depth], equal);
-		if (top.pos == DConstants::INVALID_INDEX) {
-			// Find min leaf
-			top.pos = node->GetMin();
-		}
-		node = node->GetChild(top.pos)->get();
-		//! This means all children of this node qualify as geq
-
-		depth++;
-	}
-}
-
-bool ART::SearchGreater(ARTIndexScanState *state, bool inclusive, idx_t max_count, vector<row_t> &result_ids) {
 	Iterator *it = &state->iterator;
-	auto key = CreateKey(*this, types[0], state->values[0]);
 
 	// greater than scan: first set the iterator to the node at which we will start our scan by finding the lowest node
 	// that satisfies our requirement
-	if (!it->start) {
-		bool found = ART::Bound(tree, *key, *it, inclusive);
+	if (!it->art) {
+		it->art = this;
+		bool found = it->LowerBound(tree, key, inclusive);
 		if (!found) {
 			return true;
 		}
-		it->start = true;
 	}
 	// after that we continue the scan; we don't need to check the bounds as any value following this value is
 	// automatically bigger and hence satisfies our predicate
-	return IteratorScan<false, false>(state, it, nullptr, max_count, result_ids);
+	Key empty_key = Key();
+	return it->Scan(empty_key, max_count, result_ids, false);
 }
 
 //===--------------------------------------------------------------------===//
 // Less Than
 //===--------------------------------------------------------------------===//
-static Leaf &FindMinimum(Iterator &it, Node &node) {
-	Node *next = nullptr;
-	idx_t pos = 0;
-	switch (node.type) {
-	case NodeType::NLeaf:
-		it.node = (Leaf *)&node;
-		return (Leaf &)node;
-	case NodeType::N4:
-		next = ((Node4 &)node).child[0].get();
-		break;
-	case NodeType::N16:
-		next = ((Node16 &)node).child[0].get();
-		break;
-	case NodeType::N48: {
-		auto &n48 = (Node48 &)node;
-		while (n48.child_index[pos] == Node::EMPTY_MARKER) {
-			pos++;
-		}
-		next = n48.child[n48.child_index[pos]].get();
-		break;
-	}
-	case NodeType::N256: {
-		auto &n256 = (Node256 &)node;
-		while (!n256.child[pos]) {
-			pos++;
-		}
-		next = n256.child[pos].get();
-		break;
-	}
-	}
-	it.SetEntry(it.depth, IteratorEntry(&node, pos));
-	it.depth++;
-	return FindMinimum(it, *next);
-}
+bool ART::SearchLess(ARTIndexScanState *state, Key &upper_bound, bool inclusive, idx_t max_count,
+                     vector<row_t> &result_ids) {
 
-bool ART::SearchLess(ARTIndexScanState *state, bool inclusive, idx_t max_count, vector<row_t> &result_ids) {
 	if (!tree) {
 		return true;
 	}
 
 	Iterator *it = &state->iterator;
-	auto upper_bound = CreateKey(*this, types[0], state->values[0]);
 
-	if (!it->start) {
+	if (!it->art) {
+		it->art = this;
 		// first find the minimum value in the ART: we start scanning from this value
-		auto &minimum = FindMinimum(state->iterator, *tree);
+		it->FindMinimum(*tree);
 		// early out min value higher than upper bound query
-		if (*minimum.value > *upper_bound) {
+		if (it->cur_key > upper_bound) {
 			return true;
 		}
-		it->start = true;
 	}
 	// now continue the scan until we reach the upper bound
-	if (inclusive) {
-		return IteratorScan<true, true>(state, it, upper_bound.get(), max_count, result_ids);
-	} else {
-		return IteratorScan<true, false>(state, it, upper_bound.get(), max_count, result_ids);
-	}
+	return it->Scan(upper_bound, max_count, result_ids, inclusive);
 }
 
 //===--------------------------------------------------------------------===//
 // Closed Range Query
 //===--------------------------------------------------------------------===//
-bool ART::SearchCloseRange(ARTIndexScanState *state, bool left_inclusive, bool right_inclusive, idx_t max_count,
-                           vector<row_t> &result_ids) {
-	auto lower_bound = CreateKey(*this, types[0], state->values[0]);
-	auto upper_bound = CreateKey(*this, types[0], state->values[1]);
+bool ART::SearchCloseRange(ARTIndexScanState *state, Key &lower_bound, Key &upper_bound, bool left_inclusive,
+                           bool right_inclusive, idx_t max_count, vector<row_t> &result_ids) {
+
 	Iterator *it = &state->iterator;
+
 	// first find the first node that satisfies the left predicate
-	if (!it->start) {
-		bool found = ART::Bound(tree, *lower_bound, *it, left_inclusive);
+	if (!it->art) {
+		it->art = this;
+		bool found = it->LowerBound(tree, lower_bound, left_inclusive);
 		if (!found) {
 			return true;
 		}
-		it->start = true;
 	}
 	// now continue the scan until we reach the upper bound
-	if (right_inclusive) {
-		return IteratorScan<true, true>(state, it, upper_bound.get(), max_count, result_ids);
-	} else {
-		return IteratorScan<true, false>(state, it, upper_bound.get(), max_count, result_ids);
-	}
+	return it->Scan(upper_bound, max_count, result_ids, right_inclusive);
 }
 
 bool ART::Scan(Transaction &transaction, DataTable &table, IndexScanState &table_state, idx_t max_count,
                vector<row_t> &result_ids) {
+
 	auto state = (ARTIndexScanState *)&table_state;
-
-	D_ASSERT(state->values[0].type().InternalType() == types[0]);
-
 	vector<row_t> row_ids;
-	bool success = true;
+	bool success;
+
+	// FIXME: the key directly owning the data for a single key might be more efficient
+	D_ASSERT(state->values[0].type().InternalType() == types[0]);
+	ArenaAllocator arena_allocator(Allocator::Get(db));
+	auto key = CreateKey(arena_allocator, types[0], state->values[0]);
+
 	if (state->values[1].IsNull()) {
-		lock_guard<mutex> l(lock);
+
 		// single predicate
+		lock_guard<mutex> l(lock);
 		switch (state->expressions[0]) {
 		case ExpressionType::COMPARE_EQUAL:
-			success = SearchEqual(state, max_count, row_ids);
+			success = SearchEqual(key, max_count, row_ids);
 			break;
 		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			success = SearchGreater(state, true, max_count, row_ids);
+			success = SearchGreater(state, key, true, max_count, row_ids);
 			break;
 		case ExpressionType::COMPARE_GREATERTHAN:
-			success = SearchGreater(state, false, max_count, row_ids);
+			success = SearchGreater(state, key, false, max_count, row_ids);
 			break;
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			success = SearchLess(state, true, max_count, row_ids);
+			success = SearchLess(state, key, true, max_count, row_ids);
 			break;
 		case ExpressionType::COMPARE_LESSTHAN:
-			success = SearchLess(state, false, max_count, row_ids);
+			success = SearchLess(state, key, false, max_count, row_ids);
 			break;
 		default:
 			throw InternalException("Operation not implemented");
 		}
+
 	} else {
-		lock_guard<mutex> l(lock);
+
 		// two predicates
+		lock_guard<mutex> l(lock);
+
 		D_ASSERT(state->values[1].type().InternalType() == types[0]);
+		auto upper_bound = CreateKey(arena_allocator, types[0], state->values[1]);
+
 		bool left_inclusive = state->expressions[0] == ExpressionType ::COMPARE_GREATERTHANOREQUALTO;
 		bool right_inclusive = state->expressions[1] == ExpressionType ::COMPARE_LESSTHANOREQUALTO;
-		success = SearchCloseRange(state, left_inclusive, right_inclusive, max_count, row_ids);
+		success = SearchCloseRange(state, key, upper_bound, left_inclusive, right_inclusive, max_count, row_ids);
 	}
+
 	if (!success) {
 		return false;
 	}
 	if (row_ids.empty()) {
 		return true;
 	}
+
 	// sort the row ids
 	sort(row_ids.begin(), row_ids.end());
 	// duplicate eliminate the row ids and append them to the row ids of the state
@@ -15210,34 +17072,35 @@ void ART::VerifyExistence(DataChunk &chunk, VerifyExistenceType verify_type, str
 		return;
 	}
 
-	DataChunk expression_result;
-	expression_result.Initialize(Allocator::DefaultAllocator(), logical_types);
+	DataChunk expression_chunk;
+	expression_chunk.Initialize(Allocator::DefaultAllocator(), logical_types);
 
 	// unique index, check
 	lock_guard<mutex> l(lock);
 	// first resolve the expressions for the index
-	ExecuteExpressions(chunk, expression_result);
+	ExecuteExpressions(chunk, expression_chunk);
 
 	// generate the keys for the given input
-	vector<unique_ptr<Key>> keys;
-	GenerateKeys(expression_result, keys);
+	ArenaAllocator arena_allocator(BufferAllocator::Get(db));
+	vector<Key> keys(expression_chunk.size());
+	GenerateKeys(arena_allocator, expression_chunk, keys);
 
 	for (idx_t i = 0; i < chunk.size(); i++) {
-		if (!keys[i]) {
+		if (keys[i].Empty()) {
 			continue;
 		}
-		Node *node_ptr = Lookup(tree, *keys[i], 0);
+		Node *node_ptr = Lookup(tree, keys[i], 0);
 		bool throw_exception =
 		    verify_type == VerifyExistenceType::APPEND_FK ? node_ptr == nullptr : node_ptr != nullptr;
 		if (!throw_exception) {
 			continue;
 		}
 		string key_name;
-		for (idx_t k = 0; k < expression_result.ColumnCount(); k++) {
+		for (idx_t k = 0; k < expression_chunk.ColumnCount(); k++) {
 			if (k > 0) {
 				key_name += ", ";
 			}
-			key_name += unbound_expressions[k]->GetName() + ": " + expression_result.data[k].GetValue(i).ToString();
+			key_name += unbound_expressions[k]->GetName() + ": " + expression_chunk.data[k].GetValue(i).ToString();
 		}
 		string exception_msg;
 		switch (verify_type) {
@@ -15269,6 +17132,42 @@ void ART::VerifyExistence(DataChunk &chunk, VerifyExistenceType verify_type, str
 	}
 }
 
+//===--------------------------------------------------------------------===//
+// Serialization
+//===--------------------------------------------------------------------===//
+BlockPointer ART::Serialize(duckdb::MetaBlockWriter &writer) {
+	lock_guard<mutex> l(lock);
+	if (tree) {
+		serialized_data_pointer = tree->Serialize(*this, writer);
+	} else {
+		serialized_data_pointer = {(block_id_t)DConstants::INVALID_INDEX, (uint32_t)DConstants::INVALID_INDEX};
+	}
+	return serialized_data_pointer;
+}
+
+//===--------------------------------------------------------------------===//
+// Merge ARTs
+//===--------------------------------------------------------------------===//
+bool ART::MergeIndexes(IndexLock &state, Index *other_index) {
+	auto other_art = (ART *)other_index;
+	estimated_art_size += other_art->estimated_art_size;
+	other_art->estimated_art_size = 0;
+	if (!this->tree) {
+		this->tree = other_art->tree;
+		other_art->tree = nullptr;
+		return true;
+	}
+
+	return Node::MergeARTs(this, other_art);
+}
+
+string ART::ToString() {
+	if (tree) {
+		return tree->ToString(*this);
+	}
+	return "[empty]";
+}
+
 } // namespace duckdb
 
 
@@ -15276,21 +17175,41 @@ void ART::VerifyExistence(DataChunk &chunk, VerifyExistenceType verify_type, str
 
 namespace duckdb {
 
-Key::Key(unique_ptr<data_t[]> data, idx_t len) : len(len), data(move(data)) {
+Key::Key() : len(0) {
+}
+
+Key::Key(data_ptr_t data, idx_t len) : len(len), data(data) {
+}
+
+Key::Key(ArenaAllocator &allocator, idx_t len) : len(len) {
+	data = allocator.Allocate(len);
 }
 
 template <>
-unique_ptr<Key> Key::CreateKey(string_t value, bool is_little_endian) {
+Key Key::CreateKey(ArenaAllocator &allocator, string_t value) {
 	idx_t len = value.GetSize() + 1;
-	auto data = unique_ptr<data_t[]>(new data_t[len]);
-	memcpy(data.get(), value.GetDataUnsafe(), len - 1);
+	auto data = allocator.Allocate(len);
+	memcpy(data, value.GetDataUnsafe(), len - 1);
 	data[len - 1] = '\0';
-	return make_unique<Key>(move(data), len);
+	return Key(data, len);
 }
 
 template <>
-unique_ptr<Key> Key::CreateKey(const char *value, bool is_little_endian) {
-	return Key::CreateKey(string_t(value, strlen(value)), is_little_endian);
+Key Key::CreateKey(ArenaAllocator &allocator, const char *value) {
+	return Key::CreateKey(allocator, string_t(value, strlen(value)));
+}
+
+template <>
+void Key::CreateKey(ArenaAllocator &allocator, Key &key, string_t value) {
+	key.len = value.GetSize() + 1;
+	key.data = allocator.Allocate(key.len);
+	memcpy(key.data, value.GetDataUnsafe(), key.len - 1);
+	key.data[key.len - 1] = '\0';
+}
+
+template <>
+void Key::CreateKey(ArenaAllocator &allocator, Key &key, const char *value) {
+	Key::CreateKey(allocator, key, string_t(value, strlen(value)));
 }
 
 bool Key::operator>(const Key &k) const {
@@ -15337,36 +17256,413 @@ bool Key::operator==(const Key &k) const {
 	}
 	return true;
 }
+
+bool Key::ByteMatches(Key &other, idx_t &depth) {
+	return data[depth] == other[depth];
+}
+
+bool Key::Empty() {
+	return len == 0;
+}
+
+void Key::ConcatenateKey(ArenaAllocator &allocator, Key &other_key) {
+
+	auto compound_data = allocator.Allocate(len + other_key.len);
+	memcpy(compound_data, data, len);
+	memcpy(compound_data + len, other_key.data, other_key.len);
+	len += other_key.len;
+	data = compound_data;
+}
 } // namespace duckdb
+
+
+
+
+namespace duckdb {
+uint8_t &IteratorCurrentKey::operator[](idx_t idx) {
+	if (idx >= key.size()) {
+		key.push_back(0);
+	}
+	D_ASSERT(idx < key.size());
+	return key[idx];
+}
+
+//! Push Byte
+void IteratorCurrentKey::Push(uint8_t byte) {
+	if (cur_key_pos == key.size()) {
+		key.push_back(byte);
+	}
+	D_ASSERT(cur_key_pos < key.size());
+	key[cur_key_pos++] = byte;
+}
+//! Pops n elements
+void IteratorCurrentKey::Pop(idx_t n) {
+	cur_key_pos -= n;
+	D_ASSERT(cur_key_pos <= key.size());
+}
+
+bool IteratorCurrentKey::operator>(const Key &k) const {
+	for (idx_t i = 0; i < MinValue<idx_t>(cur_key_pos, k.len); i++) {
+		if (key[i] > k.data[i]) {
+			return true;
+		} else if (key[i] < k.data[i]) {
+			return false;
+		}
+	}
+	return cur_key_pos > k.len;
+}
+
+bool IteratorCurrentKey::operator>=(const Key &k) const {
+	for (idx_t i = 0; i < MinValue<idx_t>(cur_key_pos, k.len); i++) {
+		if (key[i] > k.data[i]) {
+			return true;
+		} else if (key[i] < k.data[i]) {
+			return false;
+		}
+	}
+	return cur_key_pos >= k.len;
+}
+
+bool IteratorCurrentKey::operator==(const Key &k) const {
+	if (cur_key_pos != k.len) {
+		return false;
+	}
+	for (idx_t i = 0; i < cur_key_pos; i++) {
+		if (key[i] != k.data[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void Iterator::FindMinimum(Node &node) {
+	Node *next = nullptr;
+	idx_t pos = 0;
+	// reconstruct the prefix
+	for (idx_t i = 0; i < node.prefix.Size(); i++) {
+		cur_key.Push(node.prefix[i]);
+	}
+	switch (node.type) {
+	case NodeType::NLeaf:
+		last_leaf = (Leaf *)&node;
+		return;
+	case NodeType::N4: {
+		next = ((Node4 &)node).children[0].Unswizzle(*art);
+		cur_key.Push(((Node4 &)node).key[0]);
+		break;
+	}
+	case NodeType::N16: {
+		next = ((Node16 &)node).children[0].Unswizzle(*art);
+		cur_key.Push(((Node16 &)node).key[0]);
+		break;
+	}
+	case NodeType::N48: {
+		auto &n48 = (Node48 &)node;
+		while (n48.child_index[pos] == Node::EMPTY_MARKER) {
+			pos++;
+		}
+		cur_key.Push(pos);
+		next = n48.children[n48.child_index[pos]].Unswizzle(*art);
+		break;
+	}
+	case NodeType::N256: {
+		auto &n256 = (Node256 &)node;
+		while (!n256.children[pos]) {
+			pos++;
+		}
+		cur_key.Push(pos);
+		next = (Node *)n256.children[pos].Unswizzle(*art);
+		break;
+	}
+	}
+	nodes.push(IteratorEntry(&node, pos));
+	FindMinimum(*next);
+}
+
+void Iterator::PushKey(Node *cur_node, uint16_t pos) {
+	switch (cur_node->type) {
+	case NodeType::N4:
+		cur_key.Push(((Node4 *)cur_node)->key[pos]);
+		break;
+	case NodeType::N16:
+		cur_key.Push(((Node16 *)cur_node)->key[pos]);
+		break;
+	case NodeType::N48:
+	case NodeType::N256:
+		cur_key.Push(pos);
+		break;
+	case NodeType::NLeaf:
+		break;
+	}
+}
+
+bool Iterator::Scan(Key &bound, idx_t max_count, vector<row_t> &result_ids, bool is_inclusive) {
+	bool has_next;
+	do {
+		if (!bound.Empty()) {
+			if (is_inclusive) {
+				if (cur_key > bound) {
+					break;
+				}
+			} else {
+				if (cur_key >= bound) {
+					break;
+				}
+			}
+		}
+		if (result_ids.size() + last_leaf->count > max_count) {
+			// adding these elements would exceed the max count
+			return false;
+		}
+		for (idx_t i = 0; i < last_leaf->count; i++) {
+			row_t row_id = last_leaf->GetRowId(i);
+			result_ids.push_back(row_id);
+		}
+		has_next = Next();
+	} while (has_next);
+	return true;
+}
+
+void Iterator::PopNode() {
+	auto cur_node = nodes.top();
+	idx_t elements_to_pop = cur_node.node->prefix.Size() + (nodes.size() != 1);
+	cur_key.Pop(elements_to_pop);
+	nodes.pop();
+}
+
+bool Iterator::Next() {
+	if (!nodes.empty()) {
+		auto cur_node = nodes.top().node;
+		if (cur_node->type == NodeType::NLeaf) {
+			// Pop Leaf (We must pop the prefix size + the key to the node (unless we are popping the root)
+			PopNode();
+		}
+	}
+
+	// Look for the next leaf
+	while (!nodes.empty()) {
+		// cur_node
+		auto &top = nodes.top();
+		Node *node = top.node;
+		if (node->type == NodeType::NLeaf) {
+			// found a leaf: move to next node
+			last_leaf = (Leaf *)node;
+			return true;
+		}
+		// Find next node
+		top.pos = node->GetNextPos(top.pos);
+		if (top.pos != DConstants::INVALID_INDEX) {
+			// add key-byte of the new node
+			PushKey(node, top.pos);
+			auto next_node = node->GetChild(*art, top.pos);
+			// add prefix of new node
+			for (idx_t i = 0; i < next_node->prefix.Size(); i++) {
+				cur_key.Push(next_node->prefix[i]);
+			}
+			// next node found: push it
+			nodes.push(IteratorEntry(next_node, DConstants::INVALID_INDEX));
+		} else {
+			// no node found: move up the tree and Pop prefix and key of current node
+			PopNode();
+		}
+	}
+	return false;
+}
+
+bool Iterator::LowerBound(Node *node, Key &key, bool inclusive) {
+	bool equal = true;
+	if (!node) {
+		return false;
+	}
+	idx_t depth = 0;
+	while (true) {
+		nodes.push(IteratorEntry(node, 0));
+		auto &top = nodes.top();
+		// reconstruct the prefix
+		for (idx_t i = 0; i < top.node->prefix.Size(); i++) {
+			cur_key.Push(top.node->prefix[i]);
+		}
+		// greater case: find leftmost leaf node directly
+		if (!equal) {
+			while (node->type != NodeType::NLeaf) {
+				auto min_pos = node->GetMin();
+				PushKey(node, min_pos);
+				nodes.push(IteratorEntry(node, min_pos));
+				node = node->GetChild(*art, min_pos);
+				// reconstruct the prefix
+				for (idx_t i = 0; i < node->prefix.Size(); i++) {
+					cur_key.Push(node->prefix[i]);
+				}
+				auto &c_top = nodes.top();
+				c_top.node = node;
+			}
+		}
+		if (node->type == NodeType::NLeaf) {
+			// found a leaf node: check if it is bigger or equal than the current key
+			auto leaf = static_cast<Leaf *>(node);
+			last_leaf = leaf;
+			// if the search is not inclusive the leaf node could still be equal to the current value
+			// check if leaf is equal to the current key
+			if (cur_key == key) {
+				// if it's not inclusive check if there is a next leaf
+				if (!inclusive && !Next()) {
+					return false;
+				} else {
+					return true;
+				}
+			}
+
+			if (cur_key > key) {
+				return true;
+			}
+			// Case1: When the ART has only one leaf node, the Next() will return false
+			// Case2: This means the previous node prefix(if any) + a_key(one element of of key array of previous node)
+			// == key[q..=w].
+			// But key[w+1..=z] maybe greater than leaf node prefix.
+			// One fact is key[w] is alawys equal to a_key and the next element
+			// of key array of previous node is always > a_key So we just call Next() once.
+
+			return Next();
+		}
+		// equal case:
+		uint32_t mismatch_pos = node->prefix.KeyMismatchPosition(key, depth);
+		if (mismatch_pos != node->prefix.Size()) {
+			if (node->prefix[mismatch_pos] < key[depth + mismatch_pos]) {
+				// Less
+				PopNode();
+				return Next();
+			} else {
+				// Greater
+				top.pos = DConstants::INVALID_INDEX;
+				return Next();
+			}
+		}
+
+		// prefix matches, search inside the child for the key
+		depth += node->prefix.Size();
+
+		top.pos = node->GetChildGreaterEqual(key[depth], equal);
+		// The maximum key byte of the current node is less than the key
+		// So fall back to the previous node
+		if (top.pos == DConstants::INVALID_INDEX) {
+			PopNode();
+			return Next();
+		}
+		PushKey(node, top.pos);
+		node = node->GetChild(*art, top.pos);
+		// This means all children of this node qualify as geq
+		depth++;
+	}
+}
+
+} // namespace duckdb
+
+
 
 
 
 #include <cstring>
 
 namespace duckdb {
+idx_t Leaf::GetCapacity() const {
+	return IsInlined() ? 1 : rowids.ptr[0];
+}
 
-Leaf::Leaf(ART &art, unique_ptr<Key> value, row_t row_id) : Node(art, NodeType::NLeaf, 0) {
-	this->value = move(value);
-	this->capacity = 1;
-	this->row_ids = unique_ptr<row_t[]>(new row_t[this->capacity]);
-	this->row_ids[0] = row_id;
-	this->num_elements = 1;
+bool Leaf::IsInlined() const {
+	return count <= 1;
+}
+
+row_t Leaf::GetRowId(idx_t index) {
+	D_ASSERT(index < count);
+	if (IsInlined()) {
+		return rowids.inlined;
+	} else {
+		D_ASSERT(rowids.ptr[0] >= count);
+		return rowids.ptr[index + 1];
+	}
+}
+
+row_t *Leaf::GetRowIds() {
+	if (IsInlined()) {
+		return &rowids.inlined;
+	} else {
+		return rowids.ptr + 1;
+	}
+}
+
+Leaf::Leaf(Key &value, uint32_t depth, row_t row_id) : Node(NodeType::NLeaf) {
+	count = 1;
+	rowids.inlined = row_id;
+	D_ASSERT(value.len >= depth);
+	prefix = Prefix(value, depth, value.len - depth);
+}
+
+Leaf::Leaf(Key &value, uint32_t depth, row_t *row_ids_p, idx_t num_elements_p) : Node(NodeType::NLeaf) {
+	D_ASSERT(num_elements_p >= 1);
+	if (num_elements_p == 1) {
+		// we can inline the row ids
+		rowids.inlined = row_ids_p[0];
+	} else {
+		// new row ids of this leaf
+		count = 0;
+		Resize(row_ids_p, num_elements_p, num_elements_p);
+	}
+	count = num_elements_p;
+	D_ASSERT(value.len >= depth);
+	prefix = Prefix(value, depth, value.len - depth);
+}
+
+Leaf::Leaf(row_t *row_ids_p, idx_t num_elements_p, Prefix &prefix_p) : Node(NodeType::NLeaf) {
+	D_ASSERT(num_elements_p > 1);
+	D_ASSERT(row_ids_p[0] == row_t(num_elements_p)); // first element should contain capacity
+	rowids.ptr = row_ids_p;
+	count = num_elements_p;
+	prefix = prefix_p;
+}
+
+Leaf::Leaf(row_t row_id, Prefix &prefix_p) : Node(NodeType::NLeaf) {
+	rowids.inlined = row_id;
+	count = 1;
+	prefix = prefix_p;
+}
+
+Leaf::~Leaf() {
+	if (!IsInlined()) {
+		DeleteArray<row_t>(rowids.ptr, rowids.ptr[0] + 1);
+		count = 0;
+	}
+}
+
+row_t *Leaf::Resize(row_t *current_row_ids, uint32_t current_count, idx_t new_capacity) {
+	D_ASSERT(new_capacity >= current_count);
+	auto new_allocation = AllocateArray<row_t>(new_capacity + 1);
+	new_allocation[0] = new_capacity;
+	auto new_row_ids = new_allocation + 1;
+	memcpy(new_row_ids, current_row_ids, current_count * sizeof(row_t));
+	if (!IsInlined()) {
+		// delete the old data
+		DeleteArray<row_t>(rowids.ptr, rowids.ptr[0] + 1);
+	}
+	// set up the new pointers
+	rowids.ptr = new_allocation;
+	return new_row_ids;
 }
 
 void Leaf::Insert(row_t row_id) {
-	// Grow array
-	if (num_elements == capacity) {
-		auto new_row_id = unique_ptr<row_t[]>(new row_t[capacity * 2]);
-		memcpy(new_row_id.get(), row_ids.get(), capacity * sizeof(row_t));
-		capacity *= 2;
-		row_ids = move(new_row_id);
+	auto capacity = GetCapacity();
+	row_t *row_ids = GetRowIds();
+	D_ASSERT(count <= capacity);
+	if (count == capacity) {
+		// Grow array
+		row_ids = Resize(row_ids, count, capacity * 2);
 	}
-	row_ids[num_elements++] = row_id;
+	row_ids[count++] = row_id;
 }
 
 void Leaf::Remove(row_t row_id) {
 	idx_t entry_offset = DConstants::INVALID_INDEX;
-	for (idx_t i = 0; i < num_elements; i++) {
+	row_t *row_ids = GetRowIds();
+	for (idx_t i = 0; i < count; i++) {
 		if (row_ids[i] == row_id) {
 			entry_offset = i;
 			break;
@@ -15375,103 +17671,544 @@ void Leaf::Remove(row_t row_id) {
 	if (entry_offset == DConstants::INVALID_INDEX) {
 		return;
 	}
-	num_elements--;
-	if (capacity > 2 && num_elements < capacity / 2) {
+	if (IsInlined()) {
+		D_ASSERT(count == 1);
+		count--;
+		return;
+	}
+	count--;
+	if (count == 1) {
+		// after erasing we can now inline the leaf
+		// delete the pointer and inline the remaining rowid
+		auto remaining_row_id = row_ids[0] == row_id ? row_ids[1] : row_ids[0];
+		DeleteArray<row_t>(rowids.ptr, rowids.ptr[0] + 1);
+		rowids.inlined = remaining_row_id;
+		return;
+	}
+	auto capacity = GetCapacity();
+	if (capacity > 2 && count < capacity / 2) {
 		// Shrink array, if less than half full
-		auto new_row_id = unique_ptr<row_t[]>(new row_t[capacity / 2]);
-		memcpy(new_row_id.get(), row_ids.get(), entry_offset * sizeof(row_t));
-		memcpy(new_row_id.get() + entry_offset, row_ids.get() + entry_offset + 1,
-		       (num_elements - entry_offset) * sizeof(row_t));
-		capacity /= 2;
-		row_ids = move(new_row_id);
+		auto new_capacity = capacity / 2;
+		auto new_allocation = AllocateArray<row_t>(new_capacity + 1);
+		new_allocation[0] = new_capacity;
+		auto new_row_ids = new_allocation + 1;
+		memcpy(new_row_ids, row_ids, entry_offset * sizeof(row_t));
+		memcpy(new_row_ids + entry_offset, row_ids + entry_offset + 1, (count - entry_offset) * sizeof(row_t));
+		DeleteArray<row_t>(rowids.ptr, rowids.ptr[0] + 1);
+		rowids.ptr = new_allocation;
 	} else {
 		// Copy the rest
-		for (idx_t j = entry_offset; j < num_elements; j++) {
-			row_ids[j] = row_ids[j + 1];
+		memmove(row_ids + entry_offset, row_ids + entry_offset + 1, (count - entry_offset) * sizeof(row_t));
+	}
+}
+
+string Leaf::ToString(Node *node) {
+	Leaf *leaf = (Leaf *)node;
+	string str = "Leaf: [";
+	auto row_ids = leaf->GetRowIds();
+	for (idx_t i = 0; i < leaf->count; i++) {
+		str += i == 0 ? to_string(row_ids[i]) : ", " + to_string(row_ids[i]);
+	}
+	return str + "]";
+}
+
+void Leaf::Merge(Node *&l_node, Node *&r_node) {
+	Leaf *l_n = (Leaf *)l_node;
+	Leaf *r_n = (Leaf *)r_node;
+
+	// append non-duplicate row_ids to l_n
+	for (idx_t i = 0; i < r_n->count; i++) {
+		l_n->Insert(r_n->GetRowId(i));
+	}
+}
+
+BlockPointer Leaf::Serialize(duckdb::MetaBlockWriter &writer) {
+	auto ptr = writer.GetBlockPointer();
+	// Write Node Type
+	writer.Write(type);
+	// Write compression Info
+	prefix.Serialize(writer);
+	// Write Row Ids
+	// Length
+	writer.Write<uint16_t>(count);
+	// Actual Row Ids
+	auto row_ids = GetRowIds();
+	for (idx_t i = 0; i < count; i++) {
+		writer.Write(row_ids[i]);
+	}
+	return ptr;
+}
+
+Leaf *Leaf::Deserialize(MetaBlockReader &reader) {
+	Prefix prefix;
+	prefix.Deserialize(reader);
+	auto num_elements = reader.Read<uint16_t>();
+	if (num_elements == 1) {
+		// inlined
+		auto element = reader.Read<row_t>();
+		return Leaf::New(element, prefix);
+	} else {
+		// non-inlined
+		auto elements = AllocateArray<row_t>(num_elements + 1);
+		elements[0] = num_elements;
+		for (idx_t i = 0; i < num_elements; i++) {
+			elements[i + 1] = reader.Read<row_t>();
 		}
+		return Leaf::New(elements, num_elements, prefix);
 	}
 }
 
 } // namespace duckdb
+
+
+
+
 
 
 
 
 namespace duckdb {
 
-Node::Node(ART &art, NodeType type, size_t compressed_prefix_size) : prefix_length(0), count(0), type(type) {
-	this->prefix = unique_ptr<uint8_t[]>(new uint8_t[compressed_prefix_size]);
+InternalType::InternalType(Node *n) {
+	switch (n->type) {
+	case NodeType::N4: {
+		auto n4 = (Node4 *)n;
+		Set(n4->key, 4, n4->children, 4);
+		break;
+	}
+	case NodeType::N16: {
+		auto n16 = (Node16 *)n;
+		Set(n16->key, 16, n16->children, 16);
+		break;
+	}
+	case NodeType::N48: {
+		auto n48 = (Node48 *)n;
+		Set(n48->child_index, 256, n48->children, 48);
+		break;
+	}
+	case NodeType::N256: {
+		auto n256 = (Node256 *)n;
+		Set(nullptr, 0, n256->children, 256);
+		break;
+	}
+	default:
+		throw InternalException("This is not an Internal ART Node Type");
+	}
 }
 
-void Node::CopyPrefix(ART &art, Node *src, Node *dst) {
-	dst->prefix_length = src->prefix_length;
-	memcpy(dst->prefix.get(), src->prefix.get(), src->prefix_length);
+void InternalType::Set(uint8_t *key_p, uint16_t key_size_p, ARTPointer *children_p, uint16_t children_size_p) {
+	key = key_p;
+	key_size = key_size_p;
+	children = children_p;
+	children_size = children_size_p;
+}
+
+Node::Node(NodeType type) : count(0), type(type) {
 }
 
 // LCOV_EXCL_START
-unique_ptr<Node> *Node::GetChild(idx_t pos) {
-	D_ASSERT(0);
-	return nullptr;
+idx_t Node::GetMin() {
+	throw InternalException("GetMin not implemented for the specific node type.");
 }
 
-idx_t Node::GetMin() {
-	D_ASSERT(0);
-	return 0;
+Node *Node::GetChild(ART &art, idx_t pos) {
+	throw InternalException("GetChild not implemented for the specific node type.");
+}
+
+void Node::ReplaceChildPointer(idx_t pos, Node *node) {
+	throw InternalException("ReplaceChildPointer not implemented for the specific node type.");
 }
 // LCOV_EXCL_STOP
 
-uint32_t Node::PrefixMismatch(ART &art, Node *node, Key &key, uint64_t depth) {
-	uint64_t pos;
-	for (pos = 0; pos < node->prefix_length; pos++) {
-		if (key[depth + pos] != node->prefix[pos]) {
-			return pos;
-		}
-	}
-	return pos;
-}
-
-void Node::InsertLeaf(ART &art, unique_ptr<Node> &node, uint8_t key, unique_ptr<Node> &new_node) {
+void Node::InsertChild(Node *&node, uint8_t key_byte, Node *new_child) {
 	switch (node->type) {
 	case NodeType::N4:
-		Node4::Insert(art, node, key, new_node);
+		Node4::InsertChild(node, key_byte, new_child);
 		break;
 	case NodeType::N16:
-		Node16::Insert(art, node, key, new_node);
+		Node16::InsertChild(node, key_byte, new_child);
 		break;
 	case NodeType::N48:
-		Node48::Insert(art, node, key, new_node);
+		Node48::InsertChild(node, key_byte, new_child);
 		break;
 	case NodeType::N256:
-		Node256::Insert(art, node, key, new_node);
+		Node256::InsertChild(node, key_byte, new_child);
 		break;
 	default:
 		throw InternalException("Unrecognized leaf type for insert");
 	}
 }
 
-void Node::Erase(ART &art, unique_ptr<Node> &node, idx_t pos) {
+void Node::EraseChild(Node *&node, idx_t pos, ART &art) {
 	switch (node->type) {
 	case NodeType::N4: {
-		Node4::Erase(art, node, pos);
+		Node4::EraseChild(node, pos, art);
 		break;
 	}
 	case NodeType::N16: {
-		Node16::Erase(art, node, pos);
+		Node16::EraseChild(node, pos, art);
 		break;
 	}
 	case NodeType::N48: {
-		Node48::Erase(art, node, pos);
+		Node48::EraseChild(node, pos, art);
 		break;
 	}
 	case NodeType::N256:
-		Node256::Erase(art, node, pos);
+		Node256::EraseChild(node, pos, art);
 		break;
 	default:
 		throw InternalException("Unrecognized leaf type for erase");
 	}
 }
 
+NodeType Node::GetTypeBySize(idx_t size) {
+
+	if (size <= Node4::GetSize()) {
+		return NodeType::N4;
+	} else if (size <= Node16::GetSize()) {
+		return NodeType::N16;
+	} else if (size <= Node48::GetSize()) {
+		return NodeType::N48;
+	}
+	D_ASSERT(size <= Node256::GetSize());
+	return NodeType::N256;
+}
+
+void Node::New(NodeType &type, Node *&node) {
+	switch (type) {
+	case NodeType::N4:
+		node = (Node *)Node4::New();
+		return;
+	case NodeType::N16:
+		node = (Node *)Node16::New();
+		return;
+	case NodeType::N48:
+		node = (Node *)Node48::New();
+		return;
+	case NodeType::N256:
+		node = (Node *)Node256::New();
+		return;
+	default:
+		throw InternalException("Unrecognized type for new node creation!");
+	}
+}
+
+Node4 *Node4::New() {
+	return AllocateObject<Node4>();
+}
+
+Node16 *Node16::New() {
+	return AllocateObject<Node16>();
+}
+
+Node48 *Node48::New() {
+	return AllocateObject<Node48>();
+}
+
+Node256 *Node256::New() {
+	return AllocateObject<Node256>();
+}
+
+Leaf *Leaf::New(Key &value, uint32_t depth, row_t row_id) {
+	return AllocateObject<Leaf>(value, depth, row_id);
+}
+
+Leaf *Leaf::New(Key &value, uint32_t depth, row_t *row_ids, idx_t num_elements) {
+	return AllocateObject<Leaf>(value, depth, row_ids, num_elements);
+}
+
+Leaf *Leaf::New(row_t *row_ids, idx_t num_elements, Prefix &prefix) {
+	return AllocateObject<Leaf>(row_ids, num_elements, prefix);
+}
+
+Leaf *Leaf::New(row_t row_id, Prefix &prefix) {
+	return AllocateObject<Leaf>(row_id, prefix);
+}
+
+void Node::Delete(Node *ptr) {
+	switch (ptr->type) {
+	case NodeType::NLeaf:
+		DestroyObject((Leaf *)ptr);
+		break;
+	case NodeType::N4:
+		DestroyObject((Node4 *)ptr);
+		break;
+	case NodeType::N16:
+		DestroyObject((Node16 *)ptr);
+		break;
+	case NodeType::N48:
+		DestroyObject((Node48 *)ptr);
+		break;
+	case NodeType::N256:
+		DestroyObject((Node256 *)ptr);
+		break;
+	default:
+		throw InternalException("eek");
+	}
+}
+
+string Node::ToString(ART &art) {
+
+	string str = "Node";
+	switch (this->type) {
+	case NodeType::NLeaf:
+		return Leaf::ToString(this);
+	case NodeType::N4:
+		str += to_string(Node4::GetSize());
+		break;
+	case NodeType::N16:
+		str += to_string(Node16::GetSize());
+		break;
+	case NodeType::N48:
+		str += to_string(Node48::GetSize());
+		break;
+	case NodeType::N256:
+		str += to_string(Node256::GetSize());
+		break;
+	}
+
+	str += ": [";
+	auto next_pos = GetNextPos(DConstants::INVALID_INDEX);
+	while (next_pos != DConstants::INVALID_INDEX) {
+		auto child = GetChild(art, next_pos);
+		str += "(" + to_string(next_pos) + ", " + child->ToString(art) + ")";
+		next_pos = GetNextPos(next_pos);
+	}
+	return str + "]";
+}
+
+BlockPointer Node::SerializeInternal(ART &art, duckdb::MetaBlockWriter &writer, InternalType &internal_type) {
+	// Iterate through children and annotate their offsets
+	vector<BlockPointer> child_offsets;
+	for (idx_t i = 0; i < internal_type.children_size; i++) {
+		child_offsets.emplace_back(internal_type.children[i].Serialize(art, writer));
+	}
+	auto ptr = writer.GetBlockPointer();
+	// Write Node Type
+	writer.Write(type);
+	// Write count
+	writer.Write<uint16_t>(count);
+	// Write Prefix
+	prefix.Serialize(writer);
+	// Write Key values
+	for (idx_t i = 0; i < internal_type.key_size; i++) {
+		writer.Write(internal_type.key[i]);
+	}
+	// Write child offsets
+	for (auto &offsets : child_offsets) {
+		writer.Write(offsets.block_id);
+		writer.Write(offsets.offset);
+	}
+	return ptr;
+}
+
+BlockPointer Node::Serialize(ART &art, duckdb::MetaBlockWriter &writer) {
+	switch (type) {
+	case NodeType::N4:
+	case NodeType::N16:
+	case NodeType::N48:
+	case NodeType::N256: {
+		InternalType internal_type(this);
+		return SerializeInternal(art, writer, internal_type);
+	}
+	case NodeType::NLeaf: {
+		auto leaf = (Leaf *)this;
+		return leaf->Serialize(writer);
+	}
+	default:
+		throw InternalException("Invalid ART Node");
+	}
+}
+
+void Node::DeserializeInternal(duckdb::MetaBlockReader &reader) {
+	InternalType internal_type(this);
+	count = reader.Read<uint16_t>();
+	prefix.Deserialize(reader);
+	// Get Key values
+	for (idx_t i = 0; i < internal_type.key_size; i++) {
+		internal_type.key[i] = reader.Read<uint8_t>();
+	}
+	// Get Child offsets
+	for (idx_t i = 0; i < internal_type.children_size; i++) {
+		internal_type.children[i] = ARTPointer(reader);
+	}
+}
+
+Node *Node::Deserialize(ART &art, idx_t block_id, idx_t offset) {
+	MetaBlockReader reader(art.table_io_manager.GetIndexBlockManager(), block_id);
+	reader.offset = offset;
+	auto n = reader.Read<uint8_t>();
+	NodeType node_type(static_cast<NodeType>(n));
+	Node *deserialized_node;
+	switch (node_type) {
+	case NodeType::NLeaf:
+		return Leaf::Deserialize(reader);
+	case NodeType::N4: {
+		deserialized_node = (Node *)Node4::New();
+		break;
+	}
+	case NodeType::N16: {
+		deserialized_node = (Node *)Node16::New();
+		break;
+	}
+	case NodeType::N48: {
+		deserialized_node = (Node *)Node48::New();
+		break;
+	}
+	case NodeType::N256: {
+		deserialized_node = (Node *)Node256::New();
+		break;
+	}
+	}
+	deserialized_node->DeserializeInternal(reader);
+	return deserialized_node;
+}
+
+void UpdateParentsOfNodes(Node *&l_node, Node *&r_node, ParentsOfNodes &parents) {
+	if (parents.l_parent) {
+		parents.l_parent->ReplaceChildPointer(parents.l_pos, l_node);
+	}
+	if (parents.r_parent) {
+		parents.r_parent->ReplaceChildPointer(parents.r_pos, r_node);
+	}
+}
+
+bool Merge(MergeInfo &info, idx_t depth, ParentsOfNodes &parents) {
+
+	// always try to merge the smaller node into the bigger node
+	// because maybe there is enough free space in the bigger node to fit the smaller one
+	// without too much recursion
+
+	if (info.l_node->type < info.r_node->type) {
+		// swap subtrees to ensure that l_node has the bigger node type
+		swap(info.l_art, info.r_art);
+		swap(info.l_node, info.r_node);
+		UpdateParentsOfNodes(info.l_node, info.r_node, parents);
+	}
+
+	switch (info.r_node->type) {
+	case NodeType::N256:
+		return Node256::Merge(info, depth, parents.l_parent, parents.l_pos);
+	case NodeType::N48:
+		return Node48::Merge(info, depth, parents.l_parent, parents.l_pos);
+	case NodeType::N16:
+		return Node16::Merge(info, depth, parents.l_parent, parents.l_pos);
+	case NodeType::N4:
+		return Node4::Merge(info, depth, parents.l_parent, parents.l_pos);
+	case NodeType::NLeaf:
+		D_ASSERT(info.l_node->type == NodeType::NLeaf);
+		D_ASSERT(info.r_node->type == NodeType::NLeaf);
+		if (info.l_art->IsUnique()) {
+			return false;
+		}
+		Leaf::Merge(info.l_node, info.r_node);
+		return true;
+	}
+	throw InternalException("Invalid node type for right node in merge.");
+}
+
+bool ResolvePrefixesAndMerge(MergeInfo &info, idx_t depth, ParentsOfNodes &parents) {
+	auto &l_node = info.l_node;
+	auto &r_node = info.r_node;
+	Node *null_parent = nullptr;
+
+	// NOTE: we always merge into the left ART
+	D_ASSERT(l_node);
+
+	// make sure that r_node has the longer (or equally long) prefix
+	if (l_node->prefix.Size() > r_node->prefix.Size()) {
+		swap(info.l_art, info.r_art);
+		swap(l_node, r_node);
+		UpdateParentsOfNodes(l_node, r_node, parents);
+	}
+
+	auto mismatch_pos = l_node->prefix.MismatchPosition(r_node->prefix);
+
+	// both nodes have no prefix or the same prefix
+	if (mismatch_pos == l_node->prefix.Size() && l_node->prefix.Size() == r_node->prefix.Size()) {
+		return Merge(info, depth + mismatch_pos, parents);
+	}
+
+	if (mismatch_pos == l_node->prefix.Size()) {
+		// r_node's prefix contains l_node's prefix
+		// l_node cannot be a leaf, otherwise the key represented by l_node would be a subset of another key
+		// which is not possible by our construction
+		D_ASSERT(l_node->type != NodeType::NLeaf);
+
+		// test if the next byte (mismatch_pos) in r_node (longer prefix) exists in l_node
+		auto mismatch_byte = r_node->prefix[mismatch_pos];
+		auto child_pos = l_node->GetChildPos(mismatch_byte);
+
+		// update the prefix of r_node to only consist of the bytes after mismatch_pos
+		r_node->prefix.Reduce(mismatch_pos);
+
+		// insert r_node as a child of l_node at empty position
+		if (child_pos == DConstants::INVALID_INDEX) {
+			Node::InsertChild(l_node, mismatch_byte, r_node);
+			UpdateParentsOfNodes(l_node, null_parent, parents);
+			r_node = nullptr;
+			return true;
+		}
+
+		// recurse
+		auto child_node = l_node->GetChild(*info.l_art, child_pos);
+		MergeInfo child_info(info.l_art, info.r_art, child_node, r_node);
+		ParentsOfNodes child_parents(l_node, child_pos, parents.r_parent, parents.r_pos);
+		return ResolvePrefixesAndMerge(child_info, depth + mismatch_pos, child_parents);
+	}
+
+	// prefixes differ, create new node and insert both nodes as children
+
+	// create new node
+	Node *new_node = Node4::New();
+	new_node->prefix = Prefix(l_node->prefix, mismatch_pos);
+
+	// insert l_node, break up prefix of l_node
+	auto key_byte = l_node->prefix.Reduce(mismatch_pos);
+	Node4::InsertChild(new_node, key_byte, l_node);
+
+	// insert r_node, break up prefix of r_node
+	key_byte = r_node->prefix.Reduce(mismatch_pos);
+	Node4::InsertChild(new_node, key_byte, r_node);
+
+	l_node = new_node;
+	UpdateParentsOfNodes(l_node, null_parent, parents);
+	r_node = nullptr;
+	return true;
+}
+
+bool Node::MergeAtByte(MergeInfo &info, idx_t depth, idx_t &l_child_pos, idx_t &r_pos, uint8_t &key_byte,
+                       Node *&l_parent, idx_t l_pos) {
+
+	auto r_child = info.r_node->GetChild(*info.r_art, r_pos);
+
+	// insert child at empty position
+	if (l_child_pos == DConstants::INVALID_INDEX) {
+		Node::InsertChild(info.l_node, key_byte, r_child);
+		if (l_parent) {
+			l_parent->ReplaceChildPointer(l_pos, info.l_node);
+		}
+		info.r_node->ReplaceChildPointer(r_pos, nullptr);
+		return true;
+	}
+
+	// recurse
+	auto l_child = info.l_node->GetChild(*info.l_art, l_child_pos);
+	MergeInfo child_info(info.l_art, info.r_art, l_child, r_child);
+	ParentsOfNodes child_parents(info.l_node, l_child_pos, info.r_node, r_pos);
+	return ResolvePrefixesAndMerge(child_info, depth + 1, child_parents);
+}
+
+bool Node::MergeARTs(ART *l_art, ART *r_art) {
+
+	Node *null_parent = nullptr;
+	MergeInfo info(l_art, r_art, l_art->tree, r_art->tree);
+	ParentsOfNodes parents(null_parent, 0, null_parent, 0);
+	return ResolvePrefixesAndMerge(info, 0, parents);
+}
+
 } // namespace duckdb
+
 
 
 
@@ -15480,7 +18217,7 @@ void Node::Erase(ART &art, unique_ptr<Node> &node, idx_t pos) {
 
 namespace duckdb {
 
-Node16::Node16(ART &art, size_t compression_length) : Node(art, NodeType::N16, compression_length) {
+Node16::Node16() : Node(NodeType::N16) {
 	memset(key, 16, sizeof(key));
 }
 
@@ -15505,7 +18242,11 @@ idx_t Node16::GetChildGreaterEqual(uint8_t k, bool &equal) {
 			return pos;
 		}
 	}
-	return Node::GetChildGreaterEqual(k, equal);
+	return DConstants::INVALID_INDEX;
+}
+
+idx_t Node16::GetMin() {
+	return 0;
 }
 
 idx_t Node16::GetNextPos(idx_t pos) {
@@ -15516,81 +18257,113 @@ idx_t Node16::GetNextPos(idx_t pos) {
 	return pos < count ? pos : DConstants::INVALID_INDEX;
 }
 
-unique_ptr<Node> *Node16::GetChild(idx_t pos) {
+Node *Node16::GetChild(ART &art, idx_t pos) {
 	D_ASSERT(pos < count);
-	return &child[pos];
+	return children[pos].Unswizzle(art);
 }
 
-idx_t Node16::GetMin() {
-	return 0;
+void Node16::ReplaceChildPointer(idx_t pos, Node *node) {
+	children[pos] = node;
 }
 
-void Node16::Insert(ART &art, unique_ptr<Node> &node, uint8_t key_byte, unique_ptr<Node> &child) {
-	Node16 *n = static_cast<Node16 *>(node.get());
+void Node16::InsertChild(Node *&node, uint8_t key_byte, Node *new_child) {
+	Node16 *n = (Node16 *)node;
 
+	// Insert new child node into node
 	if (n->count < 16) {
 		// Insert element
 		idx_t pos = 0;
 		while (pos < node->count && n->key[pos] < key_byte) {
 			pos++;
 		}
-		if (n->child[pos] != nullptr) {
+		if (n->children[pos]) {
 			for (idx_t i = n->count; i > pos; i--) {
 				n->key[i] = n->key[i - 1];
-				n->child[i] = move(n->child[i - 1]);
+				n->children[i] = n->children[i - 1];
 			}
 		}
 		n->key[pos] = key_byte;
-		n->child[pos] = move(child);
+		n->children[pos] = new_child;
 		n->count++;
 	} else {
 		// Grow to Node48
-		auto new_node = make_unique<Node48>(art, n->prefix_length);
+		auto new_node = Node48::New();
 		for (idx_t i = 0; i < node->count; i++) {
 			new_node->child_index[n->key[i]] = i;
-			new_node->child[i] = move(n->child[i]);
+			new_node->children[i] = n->children[i];
+			n->children[i] = nullptr;
 		}
-		CopyPrefix(art, n, new_node.get());
+		new_node->prefix = move(n->prefix);
 		new_node->count = node->count;
-		node = move(new_node);
+		Node::Delete(node);
+		node = new_node;
 
-		Node48::Insert(art, node, key_byte, child);
+		Node48::InsertChild(node, key_byte, new_child);
 	}
 }
 
-void Node16::Erase(ART &art, unique_ptr<Node> &node, int pos) {
-	Node16 *n = static_cast<Node16 *>(node.get());
+void Node16::EraseChild(Node *&node, int pos, ART &art) {
+	auto n = (Node16 *)node;
 	// erase the child and decrease the count
-	n->child[pos].reset();
+	n->children[pos].Reset();
 	n->count--;
 	// potentially move any children backwards
 	for (; pos < n->count; pos++) {
 		n->key[pos] = n->key[pos + 1];
-		n->child[pos] = move(n->child[pos + 1]);
+		n->children[pos] = n->children[pos + 1];
 	}
+	// set any remaining nodes as nullptr
+	for (; pos < 16; pos++) {
+		if (!n->children[pos]) {
+			break;
+		}
+		n->children[pos] = nullptr;
+	}
+
 	if (node->count <= 3) {
 		// Shrink node
-		auto new_node = make_unique<Node4>(art, n->prefix_length);
+		auto new_node = Node4::New();
 		for (unsigned i = 0; i < n->count; i++) {
 			new_node->key[new_node->count] = n->key[i];
-			new_node->child[new_node->count++] = move(n->child[i]);
+			new_node->children[new_node->count++] = n->children[i];
+			n->children[i] = nullptr;
 		}
-		CopyPrefix(art, n, new_node.get());
-		node = move(new_node);
+		new_node->prefix = move(n->prefix);
+		Node::Delete(node);
+		node = new_node;
 	}
+}
+
+bool Node16::Merge(MergeInfo &info, idx_t depth, Node *&l_parent, idx_t l_pos) {
+
+	Node16 *r_n = (Node16 *)info.r_node;
+
+	for (idx_t i = 0; i < info.r_node->count; i++) {
+
+		auto l_child_pos = info.l_node->GetChildPos(r_n->key[i]);
+		if (!Node::MergeAtByte(info, depth, l_child_pos, i, r_n->key[i], l_parent, l_pos)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+idx_t Node16::GetSize() {
+	return 16;
 }
 
 } // namespace duckdb
 
 
 
+
 namespace duckdb {
 
-Node256::Node256(ART &art, size_t compression_length) : Node(art, NodeType::N256, compression_length) {
+Node256::Node256() : Node(NodeType::N256) {
 }
 
 idx_t Node256::GetChildPos(uint8_t k) {
-	if (child[k]) {
+	if (children[k]) {
 		return k;
 	} else {
 		return DConstants::INVALID_INDEX;
@@ -15599,7 +18372,7 @@ idx_t Node256::GetChildPos(uint8_t k) {
 
 idx_t Node256::GetChildGreaterEqual(uint8_t k, bool &equal) {
 	for (idx_t pos = k; pos < 256; pos++) {
-		if (child[pos]) {
+		if (children[pos]) {
 			if (pos == k) {
 				equal = true;
 			} else {
@@ -15613,7 +18386,7 @@ idx_t Node256::GetChildGreaterEqual(uint8_t k, bool &equal) {
 
 idx_t Node256::GetMin() {
 	for (idx_t i = 0; i < 256; i++) {
-		if (child[i]) {
+		if (children[i]) {
 			return i;
 		}
 	}
@@ -15622,42 +18395,65 @@ idx_t Node256::GetMin() {
 
 idx_t Node256::GetNextPos(idx_t pos) {
 	for (pos == DConstants::INVALID_INDEX ? pos = 0 : pos++; pos < 256; pos++) {
-		if (child[pos]) {
+		if (children[pos]) {
 			return pos;
 		}
 	}
 	return Node::GetNextPos(pos);
 }
 
-unique_ptr<Node> *Node256::GetChild(idx_t pos) {
-	D_ASSERT(child[pos]);
-	return &child[pos];
+Node *Node256::GetChild(ART &art, idx_t pos) {
+	return children[pos].Unswizzle(art);
 }
 
-void Node256::Insert(ART &art, unique_ptr<Node> &node, uint8_t key_byte, unique_ptr<Node> &child) {
-	Node256 *n = static_cast<Node256 *>(node.get());
+void Node256::ReplaceChildPointer(idx_t pos, Node *node) {
+	children[pos] = node;
+}
+
+void Node256::InsertChild(Node *&node, uint8_t key_byte, Node *new_child) {
+	auto n = (Node256 *)(node);
 
 	n->count++;
-	n->child[key_byte] = move(child);
+	n->children[key_byte] = new_child;
 }
 
-void Node256::Erase(ART &art, unique_ptr<Node> &node, int pos) {
-	Node256 *n = static_cast<Node256 *>(node.get());
-
-	n->child[pos].reset();
+void Node256::EraseChild(Node *&node, int pos, ART &art) {
+	auto n = (Node256 *)(node);
+	n->children[pos].Reset();
 	n->count--;
 	if (node->count <= 36) {
-		auto new_node = make_unique<Node48>(art, n->prefix_length);
-		CopyPrefix(art, n, new_node.get());
+		auto new_node = Node48::New();
+		new_node->prefix = move(n->prefix);
 		for (idx_t i = 0; i < 256; i++) {
-			if (n->child[i]) {
+			if (n->children[i]) {
 				new_node->child_index[i] = new_node->count;
-				new_node->child[new_node->count] = move(n->child[i]);
+				new_node->children[new_node->count] = n->children[i];
+				n->children[i] = nullptr;
 				new_node->count++;
 			}
 		}
-		node = move(new_node);
+		Node::Delete(node);
+		node = new_node;
 	}
+}
+
+bool Node256::Merge(MergeInfo &info, idx_t depth, Node *&l_parent, idx_t l_pos) {
+
+	for (idx_t i = 0; i < 256; i++) {
+		if (info.r_node->GetChildPos(i) != DConstants::INVALID_INDEX) {
+
+			auto l_child_pos = info.l_node->GetChildPos(i);
+			auto key_byte = (uint8_t)i;
+			if (!Node::MergeAtByte(info, depth, l_child_pos, i, key_byte, l_parent, l_pos)) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+idx_t Node256::GetSize() {
+	return 256;
 }
 
 } // namespace duckdb
@@ -15665,9 +18461,11 @@ void Node256::Erase(ART &art, unique_ptr<Node> &node, int pos) {
 
 
 
+
+
 namespace duckdb {
 
-Node4::Node4(ART &art, size_t compression_length) : Node(art, NodeType::N4, compression_length) {
+Node4::Node4() : Node(NodeType::N4) {
 	memset(key, 0, sizeof(key));
 }
 
@@ -15691,7 +18489,7 @@ idx_t Node4::GetChildGreaterEqual(uint8_t k, bool &equal) {
 			return pos;
 		}
 	}
-	return Node::GetChildGreaterEqual(k, equal);
+	return DConstants::INVALID_INDEX;
 }
 
 idx_t Node4::GetMin() {
@@ -15706,80 +18504,94 @@ idx_t Node4::GetNextPos(idx_t pos) {
 	return pos < count ? pos : DConstants::INVALID_INDEX;
 }
 
-unique_ptr<Node> *Node4::GetChild(idx_t pos) {
+Node *Node4::GetChild(ART &art, idx_t pos) {
 	D_ASSERT(pos < count);
-	return &child[pos];
+	return children[pos].Unswizzle(art);
 }
 
-void Node4::Insert(ART &art, unique_ptr<Node> &node, uint8_t key_byte, unique_ptr<Node> &child) {
-	Node4 *n = static_cast<Node4 *>(node.get());
+void Node4::ReplaceChildPointer(idx_t pos, Node *node) {
+	children[pos] = node;
+}
 
-	// Insert leaf into inner node
+void Node4::InsertChild(Node *&node, uint8_t key_byte, Node *new_child) {
+	Node4 *n = (Node4 *)node;
+
+	// Insert new child node into node
 	if (node->count < 4) {
 		// Insert element
 		idx_t pos = 0;
 		while ((pos < node->count) && (n->key[pos] < key_byte)) {
 			pos++;
 		}
-		if (n->child[pos] != nullptr) {
+		if (n->children[pos]) {
 			for (idx_t i = n->count; i > pos; i--) {
 				n->key[i] = n->key[i - 1];
-				n->child[i] = move(n->child[i - 1]);
+				n->children[i] = n->children[i - 1];
 			}
 		}
 		n->key[pos] = key_byte;
-		n->child[pos] = move(child);
+		n->children[pos] = new_child;
 		n->count++;
 	} else {
 		// Grow to Node16
-		auto new_node = make_unique<Node16>(art, n->prefix_length);
+		auto new_node = Node16::New();
 		new_node->count = 4;
-		CopyPrefix(art, node.get(), new_node.get());
+		new_node->prefix = move(node->prefix);
 		for (idx_t i = 0; i < 4; i++) {
 			new_node->key[i] = n->key[i];
-			new_node->child[i] = move(n->child[i]);
+			new_node->children[i] = n->children[i];
+			n->children[i] = nullptr;
 		}
-		node = move(new_node);
-		Node16::Insert(art, node, key_byte, child);
+		// Delete old node and replace it with new Node16
+		Node::Delete(node);
+		node = new_node;
+		Node16::InsertChild(node, key_byte, new_child);
 	}
 }
 
-void Node4::Erase(ART &art, unique_ptr<Node> &node, int pos) {
-	Node4 *n = static_cast<Node4 *>(node.get());
+void Node4::EraseChild(Node *&node, int pos, ART &art) {
+	Node4 *n = (Node4 *)node;
 	D_ASSERT(pos < n->count);
-
 	// erase the child and decrease the count
-	n->child[pos].reset();
+	n->children[pos].Reset();
 	n->count--;
 	// potentially move any children backwards
 	for (; pos < n->count; pos++) {
 		n->key[pos] = n->key[pos + 1];
-		n->child[pos] = move(n->child[pos + 1]);
+		n->children[pos] = n->children[pos + 1];
+	}
+	// set any remaining nodes as nullptr
+	for (; pos < 4; pos++) {
+		n->children[pos] = nullptr;
 	}
 
 	// This is a one way node
 	if (n->count == 1) {
-		auto childref = n->child[0].get();
-		//! concatenate prefixes
-		auto new_length = node->prefix_length + childref->prefix_length + 1;
-		//! have to allocate space in our prefix array
-		unique_ptr<uint8_t[]> new_prefix = unique_ptr<uint8_t[]>(new uint8_t[new_length]);
-
-		//! first move the existing prefix (if any)
-		for (uint32_t i = 0; i < childref->prefix_length; i++) {
-			new_prefix[new_length - (i + 1)] = childref->prefix[childref->prefix_length - (i + 1)];
-		}
-		//! now move the current key as part of the prefix
-		new_prefix[node->prefix_length] = n->key[0];
-		//! finally add the old prefix
-		for (uint32_t i = 0; i < node->prefix_length; i++) {
-			new_prefix[i] = node->prefix[i];
-		}
-		//! set new prefix and move the child
-		childref->prefix = move(new_prefix);
-		childref->prefix_length = new_length;
-		node = move(n->child[0]);
+		auto child_ref = n->GetChild(art, 0);
+		// concatenate prefixes
+		child_ref->prefix.Concatenate(n->key[0], node->prefix);
+		n->children[0] = nullptr;
+		Node::Delete(node);
+		node = child_ref;
 	}
+}
+
+bool Node4::Merge(MergeInfo &info, idx_t depth, Node *&l_parent, idx_t l_pos) {
+
+	Node4 *r_n = (Node4 *)info.r_node;
+
+	for (idx_t i = 0; i < info.r_node->count; i++) {
+
+		auto l_child_pos = info.l_node->GetChildPos(r_n->key[i]);
+		if (!Node::MergeAtByte(info, depth, l_child_pos, i, r_n->key[i], l_parent, l_pos)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+idx_t Node4::GetSize() {
+	return 4;
 }
 
 } // namespace duckdb
@@ -15787,9 +18599,10 @@ void Node4::Erase(ART &art, unique_ptr<Node> &node, int pos) {
 
 
 
+
 namespace duckdb {
 
-Node48::Node48(ART &art, size_t compression_length) : Node(art, NodeType::N48, compression_length) {
+Node48::Node48() : Node(NodeType::N48) {
 	for (idx_t i = 0; i < 256; i++) {
 		child_index[i] = Node::EMPTY_MARKER;
 	}
@@ -15814,21 +18627,7 @@ idx_t Node48::GetChildGreaterEqual(uint8_t k, bool &equal) {
 			return pos;
 		}
 	}
-	return Node::GetChildGreaterEqual(k, equal);
-}
-
-idx_t Node48::GetNextPos(idx_t pos) {
-	for (pos == DConstants::INVALID_INDEX ? pos = 0 : pos++; pos < 256; pos++) {
-		if (child_index[pos] != Node::EMPTY_MARKER) {
-			return pos;
-		}
-	}
-	return Node::GetNextPos(pos);
-}
-
-unique_ptr<Node> *Node48::GetChild(idx_t pos) {
-	D_ASSERT(child_index[pos] != Node::EMPTY_MARKER);
-	return &child[child_index[pos]];
+	return DConstants::INVALID_INDEX;
 }
 
 idx_t Node48::GetMin() {
@@ -15840,54 +18639,372 @@ idx_t Node48::GetMin() {
 	return DConstants::INVALID_INDEX;
 }
 
-void Node48::Insert(ART &art, unique_ptr<Node> &node, uint8_t key_byte, unique_ptr<Node> &child) {
-	Node48 *n = static_cast<Node48 *>(node.get());
+idx_t Node48::GetNextPos(idx_t pos) {
+	for (pos == DConstants::INVALID_INDEX ? pos = 0 : pos++; pos < 256; pos++) {
+		if (child_index[pos] != Node::EMPTY_MARKER) {
+			return pos;
+		}
+	}
+	return Node::GetNextPos(pos);
+}
 
-	// Insert leaf into inner node
+Node *Node48::GetChild(ART &art, idx_t pos) {
+	D_ASSERT(child_index[pos] != Node::EMPTY_MARKER);
+	return children[child_index[pos]].Unswizzle(art);
+}
+
+void Node48::ReplaceChildPointer(idx_t pos, Node *node) {
+	children[child_index[pos]] = node;
+}
+
+void Node48::InsertChild(Node *&node, uint8_t key_byte, Node *new_child) {
+	auto n = (Node48 *)node;
+
+	// Insert new child node into node
 	if (node->count < 48) {
 		// Insert element
 		idx_t pos = n->count;
-		if (n->child[pos]) {
+		if (n->children[pos]) {
 			// find an empty position in the node list if the current position is occupied
 			pos = 0;
-			while (n->child[pos]) {
+			while (n->children[pos]) {
 				pos++;
 			}
 		}
-		n->child[pos] = move(child);
+		n->children[pos] = new_child;
 		n->child_index[key_byte] = pos;
 		n->count++;
 	} else {
 		// Grow to Node256
-		auto new_node = make_unique<Node256>(art, n->prefix_length);
+		auto new_node = Node256::New();
 		for (idx_t i = 0; i < 256; i++) {
 			if (n->child_index[i] != Node::EMPTY_MARKER) {
-				new_node->child[i] = move(n->child[n->child_index[i]]);
+				new_node->children[i] = n->children[n->child_index[i]];
+				n->children[n->child_index[i]] = nullptr;
 			}
 		}
 		new_node->count = n->count;
-		CopyPrefix(art, n, new_node.get());
-		node = move(new_node);
-		Node256::Insert(art, node, key_byte, child);
+		new_node->prefix = move(n->prefix);
+		Node::Delete(node);
+		node = new_node;
+		Node256::InsertChild(node, key_byte, new_child);
 	}
 }
 
-void Node48::Erase(ART &art, unique_ptr<Node> &node, int pos) {
-	Node48 *n = static_cast<Node48 *>(node.get());
-
-	n->child[n->child_index[pos]].reset();
+void Node48::EraseChild(Node *&node, int pos, ART &art) {
+	auto n = (Node48 *)(node);
+	n->children[n->child_index[pos]].Reset();
 	n->child_index[pos] = Node::EMPTY_MARKER;
 	n->count--;
 	if (node->count <= 12) {
-		auto new_node = make_unique<Node16>(art, n->prefix_length);
-		CopyPrefix(art, n, new_node.get());
+		auto new_node = Node16::New();
+		new_node->prefix = move(n->prefix);
 		for (idx_t i = 0; i < 256; i++) {
 			if (n->child_index[i] != Node::EMPTY_MARKER) {
 				new_node->key[new_node->count] = i;
-				new_node->child[new_node->count++] = move(n->child[n->child_index[i]]);
+				new_node->children[new_node->count++] = n->children[n->child_index[i]];
+				n->children[n->child_index[i]] = nullptr;
 			}
 		}
-		node = move(new_node);
+		Node::Delete(node);
+		node = new_node;
+	}
+}
+
+bool Node48::Merge(MergeInfo &info, idx_t depth, Node *&l_parent, idx_t l_pos) {
+
+	Node48 *r_n = (Node48 *)info.r_node;
+
+	for (idx_t i = 0; i < 256; i++) {
+		if (r_n->child_index[i] != Node::EMPTY_MARKER) {
+
+			auto l_child_pos = info.l_node->GetChildPos(i);
+			auto key_byte = (uint8_t)i;
+			if (!Node::MergeAtByte(info, depth, l_child_pos, i, key_byte, l_parent, l_pos)) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+idx_t Node48::GetSize() {
+	return 48;
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+uint32_t Prefix::Size() const {
+	return size;
+}
+
+bool Prefix::IsInlined() const {
+	return size <= PREFIX_INLINE_BYTES;
+}
+
+uint8_t *Prefix::GetPrefixData() {
+	return IsInlined() ? &value.inlined[0] : value.ptr;
+}
+
+const uint8_t *Prefix::GetPrefixData() const {
+	return IsInlined() ? &value.inlined[0] : value.ptr;
+}
+
+uint8_t *Prefix::AllocatePrefix(uint32_t size) {
+	Destroy();
+
+	this->size = size;
+	uint8_t *prefix;
+	if (IsInlined()) {
+		prefix = &value.inlined[0];
+	} else {
+		// allocate new prefix
+		value.ptr = AllocateArray<uint8_t>(size);
+		prefix = value.ptr;
+	}
+	return prefix;
+}
+
+Prefix::Prefix() : size(0) {
+}
+
+Prefix::Prefix(Key &key, uint32_t depth, uint32_t size) : size(0) {
+	auto prefix = AllocatePrefix(size);
+
+	// copy key to prefix
+	idx_t prefix_idx = 0;
+	for (idx_t i = depth; i < size + depth; i++) {
+		prefix[prefix_idx++] = key.data[i];
+	}
+}
+
+Prefix::Prefix(Prefix &other_prefix, uint32_t size) : size(0) {
+	auto prefix = AllocatePrefix(size);
+
+	// copy key to Prefix
+	auto other_data = other_prefix.GetPrefixData();
+	for (idx_t i = 0; i < size; i++) {
+		prefix[i] = other_data[i];
+	}
+}
+
+Prefix::~Prefix() {
+	Destroy();
+}
+
+void Prefix::Destroy() {
+	if (!IsInlined()) {
+		DeleteArray<uint8_t>(value.ptr, size);
+		size = 0;
+	}
+}
+
+uint8_t &Prefix::operator[](idx_t idx) {
+	D_ASSERT(idx < Size());
+	return GetPrefixData()[idx];
+}
+
+Prefix &Prefix::operator=(const Prefix &src) {
+	auto prefix = AllocatePrefix(src.size);
+
+	// copy prefix
+	auto src_prefix = src.GetPrefixData();
+	for (idx_t i = 0; i < src.size; i++) {
+		prefix[i] = src_prefix[i];
+	}
+	size = src.size;
+	return *this;
+}
+
+Prefix &Prefix::operator=(Prefix &&other) noexcept {
+	std::swap(size, other.size);
+	std::swap(value, other.value);
+	return *this;
+}
+
+void Prefix::Overwrite(uint32_t new_size, uint8_t *data) {
+	if (new_size <= PREFIX_INLINE_BYTES) {
+		// new entry would be inlined
+		// inline the data and destroy the pointer
+		auto prefix = AllocatePrefix(new_size);
+		for (idx_t i = 0; i < new_size; i++) {
+			prefix[i] = data[i];
+		}
+		DeleteArray<uint8_t>(data, new_size);
+	} else {
+		// new entry would not be inlined
+		// take over the data directly
+		Destroy();
+		size = new_size;
+		value.ptr = data;
+	}
+}
+
+void Prefix::Concatenate(uint8_t key, Prefix &other) {
+	auto new_length = size + 1 + other.size;
+	// have to allocate space in our prefix array
+	auto new_prefix = AllocateArray<uint8_t>(new_length);
+	idx_t new_prefix_idx = 0;
+	// 1) add the to-be deleted node's prefix
+	for (uint32_t i = 0; i < other.size; i++) {
+		new_prefix[new_prefix_idx++] = other[i];
+	}
+	// 2) now move the current key as part of the prefix
+	new_prefix[new_prefix_idx++] = key;
+	// 3) move the existing prefix (if any)
+	auto prefix = GetPrefixData();
+	for (uint32_t i = 0; i < size; i++) {
+		new_prefix[new_prefix_idx++] = prefix[i];
+	}
+	Overwrite(new_length, new_prefix);
+}
+
+uint8_t Prefix::Reduce(uint32_t n) {
+	auto new_size = size - n - 1;
+	auto prefix = GetPrefixData();
+	auto key = prefix[n];
+	if (new_size == 0) {
+		Destroy();
+		size = 0;
+		return key;
+	}
+	auto new_prefix = AllocateArray<uint8_t>(new_size);
+	for (idx_t i = 0; i < new_size; i++) {
+		new_prefix[i] = prefix[i + n + 1];
+	}
+	Overwrite(new_size, new_prefix);
+	return key;
+}
+
+void Prefix::Serialize(duckdb::MetaBlockWriter &writer) {
+	writer.Write(size);
+	auto prefix = GetPrefixData();
+	writer.WriteData(prefix, size);
+}
+
+void Prefix::Deserialize(duckdb::MetaBlockReader &reader) {
+	auto prefix_size = reader.Read<uint32_t>();
+	auto prefix = AllocatePrefix(prefix_size);
+	this->size = prefix_size;
+	reader.ReadData(prefix, size);
+}
+
+uint32_t Prefix::KeyMismatchPosition(Key &key, uint64_t depth) {
+	uint64_t pos;
+	auto prefix = GetPrefixData();
+	for (pos = 0; pos < size; pos++) {
+		if (key[depth + pos] != prefix[pos]) {
+			return pos;
+		}
+	}
+	return pos;
+}
+
+uint32_t Prefix::MismatchPosition(Prefix &other) {
+	auto prefix = GetPrefixData();
+	auto other_data = other.GetPrefixData();
+	for (idx_t i = 0; i < size; i++) {
+		if (prefix[i] != other_data[i]) {
+			return i;
+		}
+	}
+	return size;
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+SwizzleablePointer::~SwizzleablePointer() {
+	if (pointer) {
+		if (!IsSwizzled()) {
+			Node::Delete((Node *)pointer);
+		}
+	}
+}
+
+SwizzleablePointer::SwizzleablePointer(duckdb::MetaBlockReader &reader) {
+	idx_t block_id = reader.Read<block_id_t>();
+	idx_t offset = reader.Read<uint32_t>();
+	if (block_id == DConstants::INVALID_INDEX || offset == DConstants::INVALID_INDEX) {
+		pointer = 0;
+		return;
+	}
+	idx_t pointer_size = sizeof(pointer) * 8;
+	pointer = block_id;
+	// This assumes high 32 bits of pointer are zero.
+	pointer = pointer << (pointer_size / 2);
+	D_ASSERT((pointer >> (pointer_size / 2)) == block_id);
+	pointer += offset;
+	// Set the left most bit to indicate this is a swizzled pointer and send it back to the mother-ship
+	uint64_t mask = 1;
+	mask = mask << (pointer_size - 1);
+	// This assumes the 33rd most significant bit of the block_id is zero.
+	pointer |= mask;
+}
+
+SwizzleablePointer &SwizzleablePointer::operator=(const Node *ptr) {
+	// If the object already has a non-swizzled pointer, this will leak memory.
+	//
+	// TODO: If enabled, this assert will fire, indicating a possible leak. If an exception
+	// is thrown here, it will cause a double-free. There is some work to do to make all this safer.
+	// D_ASSERT(empty() || IsSwizzled());
+	if (sizeof(ptr) == 4) {
+		pointer = (uint32_t)(size_t)ptr;
+	} else {
+		pointer = (uint64_t)ptr;
+	}
+	return *this;
+}
+
+bool operator!=(const SwizzleablePointer &s_ptr, const uint64_t &ptr) {
+	return (s_ptr.pointer != ptr);
+}
+
+BlockPointer SwizzleablePointer::GetSwizzledBlockInfo() {
+	D_ASSERT(IsSwizzled());
+	idx_t pointer_size = sizeof(pointer) * 8;
+	// This is destructive. Pointer will be invalid after this operation.
+	// That's okay because this is only ever called from Unswizzle.
+	pointer = pointer & ~(1ULL << (pointer_size - 1));
+	uint32_t block_id = pointer >> (pointer_size / 2);
+	uint32_t offset = pointer & 0xffffffff;
+	return {block_id, offset};
+}
+
+bool SwizzleablePointer::IsSwizzled() {
+	idx_t pointer_size = sizeof(pointer) * 8;
+	return (pointer >> (pointer_size - 1)) & 1;
+}
+
+void SwizzleablePointer::Reset() {
+	if (pointer) {
+		if (!IsSwizzled()) {
+			Node::Delete((Node *)pointer);
+		}
+	}
+	*this = nullptr;
+}
+
+Node *SwizzleablePointer::Unswizzle(ART &art) {
+	if (IsSwizzled()) {
+		// This means our pointer is not yet in memory, gotta deserialize this
+		// first we unset the bae
+		auto block_info = GetSwizzledBlockInfo();
+		*this = Node::Deserialize(art, block_info.block_id, block_info.offset);
+	}
+	return (Node *)pointer;
+}
+
+BlockPointer SwizzleablePointer::Serialize(ART &art, duckdb::MetaBlockWriter &writer) {
+	if (pointer) {
+		Unswizzle(art);
+		return ((Node *)pointer)->Serialize(art, writer);
+	} else {
+		return {(block_id_t)DConstants::INVALID_INDEX, (uint32_t)DConstants::INVALID_INDEX};
 	}
 }
 
@@ -15900,15 +19017,21 @@ void Node48::Erase(ART &art, unique_ptr<Node> &node, int pos) {
 
 
 
+
+
+
 namespace duckdb {
 
 using ValidityBytes = JoinHashTable::ValidityBytes;
 using ScanStructure = JoinHashTable::ScanStructure;
+using ProbeSpill = JoinHashTable::ProbeSpill;
+using ProbeSpillLocalState = JoinHashTable::ProbeSpillLocalAppendState;
 
 JoinHashTable::JoinHashTable(BufferManager &buffer_manager, const vector<JoinCondition> &conditions,
                              vector<LogicalType> btypes, JoinType type)
-    : buffer_manager(buffer_manager), build_types(move(btypes)), entry_size(0), tuple_size(0),
-      vfound(Value::BOOLEAN(false)), join_type(type), finalized(false), has_null(false) {
+    : buffer_manager(buffer_manager), conditions(conditions), build_types(move(btypes)), entry_size(0), tuple_size(0),
+      vfound(Value::BOOLEAN(false)), join_type(type), finalized(false), has_null(false), external(false), radix_bits(4),
+      tuples_per_round(0), partition_start(0), partition_end(0) {
 	for (auto &condition : conditions) {
 		D_ASSERT(condition.left->return_type == condition.right->return_type);
 		auto type = condition.left->return_type;
@@ -15948,12 +19071,56 @@ JoinHashTable::JoinHashTable(BufferManager &buffer_manager, const vector<JoinCon
 	entry_size = layout.GetRowWidth();
 
 	// compute the per-block capacity of this HT
-	idx_t block_capacity = MaxValue<idx_t>(STANDARD_VECTOR_SIZE, (Storage::BLOCK_SIZE / entry_size) + 1);
+	idx_t block_capacity = Storage::BLOCK_SIZE / entry_size;
 	block_collection = make_unique<RowDataCollection>(buffer_manager, block_capacity, entry_size);
 	string_heap = make_unique<RowDataCollection>(buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1, true);
+	swizzled_block_collection = block_collection->CloneEmpty();
+	swizzled_string_heap = string_heap->CloneEmpty();
 }
 
 JoinHashTable::~JoinHashTable() {
+}
+
+void JoinHashTable::Merge(JoinHashTable &other) {
+	block_collection->Merge(*other.block_collection);
+	swizzled_block_collection->Merge(*other.swizzled_block_collection);
+	if (!layout.AllConstant()) {
+		string_heap->Merge(*other.string_heap);
+		swizzled_string_heap->Merge(*other.swizzled_string_heap);
+	}
+
+	if (join_type == JoinType::MARK) {
+		auto &info = correlated_mark_join_info;
+		lock_guard<mutex> mj_lock(info.mj_lock);
+		has_null = has_null || other.has_null;
+		if (!info.correlated_types.empty()) {
+			auto &other_info = other.correlated_mark_join_info;
+			info.correlated_counts->Combine(*other_info.correlated_counts);
+		}
+	}
+
+	lock_guard<mutex> lock(partitioned_data_lock);
+	if (partition_block_collections.empty()) {
+		D_ASSERT(partition_string_heaps.empty());
+		// Move partitions to this HT
+		for (idx_t p = 0; p < other.partition_block_collections.size(); p++) {
+			partition_block_collections.push_back(move(other.partition_block_collections[p]));
+			if (!layout.AllConstant()) {
+				partition_string_heaps.push_back(move(other.partition_string_heaps[p]));
+			}
+		}
+		return;
+	}
+
+	// Should have same number of partitions
+	D_ASSERT(partition_block_collections.size() == other.partition_block_collections.size());
+	D_ASSERT(partition_string_heaps.size() == other.partition_string_heaps.size());
+	for (idx_t idx = 0; idx < other.partition_block_collections.size(); idx++) {
+		partition_block_collections[idx]->Merge(*other.partition_block_collections[idx]);
+		if (!layout.AllConstant()) {
+			partition_string_heaps[idx]->Merge(*other.partition_string_heaps[idx]);
+		}
+	}
 }
 
 void JoinHashTable::ApplyBitmask(Vector &hashes, idx_t count) {
@@ -15962,7 +19129,7 @@ void JoinHashTable::ApplyBitmask(Vector &hashes, idx_t count) {
 		auto indices = ConstantVector::GetData<hash_t>(hashes);
 		*indices = *indices & bitmask;
 	} else {
-		hashes.Normalify(count);
+		hashes.Flatten(count);
 		auto indices = FlatVector::GetData<hash_t>(hashes);
 		for (idx_t i = 0; i < count; i++) {
 			indices[i] &= bitmask;
@@ -15971,12 +19138,12 @@ void JoinHashTable::ApplyBitmask(Vector &hashes, idx_t count) {
 }
 
 void JoinHashTable::ApplyBitmask(Vector &hashes, const SelectionVector &sel, idx_t count, Vector &pointers) {
-	VectorData hdata;
-	hashes.Orrify(count, hdata);
+	UnifiedVectorFormat hdata;
+	hashes.ToUnifiedFormat(count, hdata);
 
 	auto hash_data = (hash_t *)hdata.data;
 	auto result_data = FlatVector::GetData<data_ptr_t *>(pointers);
-	auto main_ht = (data_ptr_t *)hash_map.Ptr();
+	auto main_ht = (data_ptr_t *)hash_map.get();
 	for (idx_t i = 0; i < count; i++) {
 		auto rindex = sel.get_index(i);
 		auto hindex = hdata.sel->get_index(rindex);
@@ -16001,7 +19168,8 @@ void JoinHashTable::Hash(DataChunk &keys, const SelectionVector &sel, idx_t coun
 	}
 }
 
-static idx_t FilterNullValues(VectorData &vdata, const SelectionVector &sel, idx_t count, SelectionVector &result) {
+static idx_t FilterNullValues(UnifiedVectorFormat &vdata, const SelectionVector &sel, idx_t count,
+                              SelectionVector &result) {
 	idx_t result_count = 0;
 	for (idx_t i = 0; i < count; i++) {
 		auto idx = sel.get_index(i);
@@ -16013,9 +19181,9 @@ static idx_t FilterNullValues(VectorData &vdata, const SelectionVector &sel, idx
 	return result_count;
 }
 
-idx_t JoinHashTable::PrepareKeys(DataChunk &keys, unique_ptr<VectorData[]> &key_data,
+idx_t JoinHashTable::PrepareKeys(DataChunk &keys, unique_ptr<UnifiedVectorFormat[]> &key_data,
                                  const SelectionVector *&current_sel, SelectionVector &sel, bool build_side) {
-	key_data = keys.Orrify();
+	key_data = keys.ToUnifiedFormat();
 
 	// figure out which keys are NULL, and create a selection vector out of them
 	current_sel = FlatVector::IncrementalSelectionVector();
@@ -16062,11 +19230,11 @@ void JoinHashTable::Build(DataChunk &keys, DataChunk &payload) {
 		}
 		info.correlated_payload.SetCardinality(keys);
 		info.correlated_payload.data[0].Reference(keys.data[info.correlated_types.size()]);
-		info.correlated_counts->AddChunk(info.group_chunk, info.correlated_payload);
+		info.correlated_counts->AddChunk(info.group_chunk, info.correlated_payload, AggregateType::NON_DISTINCT);
 	}
 
 	// prepare the keys for processing
-	unique_ptr<VectorData[]> key_data;
+	unique_ptr<UnifiedVectorFormat[]> key_data;
 	const SelectionVector *current_sel;
 	SelectionVector sel(STANDARD_VECTOR_SIZE);
 	idx_t added_count = PrepareKeys(keys, key_data, current_sel, sel, true);
@@ -16091,7 +19259,7 @@ void JoinHashTable::Build(DataChunk &keys, DataChunk &payload) {
 	DataChunk source_chunk;
 	source_chunk.InitializeEmpty(layout.GetTypes());
 
-	vector<VectorData> source_data;
+	vector<UnifiedVectorFormat> source_data;
 	source_data.reserve(layout.ColumnCount());
 
 	// serialize the keys to the key locations
@@ -16103,22 +19271,22 @@ void JoinHashTable::Build(DataChunk &keys, DataChunk &payload) {
 	D_ASSERT(build_types.size() == payload.ColumnCount());
 	for (idx_t i = 0; i < payload.ColumnCount(); i++) {
 		source_chunk.data[source_data.size()].Reference(payload.data[i]);
-		VectorData pdata;
-		payload.data[i].Orrify(payload.size(), pdata);
+		UnifiedVectorFormat pdata;
+		payload.data[i].ToUnifiedFormat(payload.size(), pdata);
 		source_data.emplace_back(move(pdata));
 	}
 	if (IsRightOuterJoin(join_type)) {
 		// for FULL/RIGHT OUTER joins initialize the "found" boolean to false
 		source_chunk.data[source_data.size()].Reference(vfound);
-		VectorData fdata;
-		vfound.Orrify(keys.size(), fdata);
+		UnifiedVectorFormat fdata;
+		vfound.ToUnifiedFormat(keys.size(), fdata);
 		source_data.emplace_back(move(fdata));
 	}
 
 	// serialise the hashes at the end
 	source_chunk.data[source_data.size()].Reference(hash_values);
-	VectorData hdata;
-	hash_values.Orrify(keys.size(), hdata);
+	UnifiedVectorFormat hdata;
+	hash_values.ToUnifiedFormat(keys.size(), hdata);
 	source_data.emplace_back(move(hdata));
 
 	source_chunk.SetCardinality(keys);
@@ -16127,39 +19295,68 @@ void JoinHashTable::Build(DataChunk &keys, DataChunk &payload) {
 	                       added_count);
 }
 
-void JoinHashTable::InsertHashes(Vector &hashes, idx_t count, data_ptr_t key_locations[]) {
+template <bool PARALLEL>
+static inline void InsertHashesLoop(atomic<data_ptr_t> pointers[], const hash_t indices[], const idx_t count,
+                                    const data_ptr_t key_locations[], const idx_t pointer_offset) {
+	for (idx_t i = 0; i < count; i++) {
+		auto index = indices[i];
+		if (PARALLEL) {
+			data_ptr_t head;
+			do {
+				head = pointers[index];
+				Store<data_ptr_t>(head, key_locations[i] + pointer_offset);
+			} while (!std::atomic_compare_exchange_weak(&pointers[index], &head, key_locations[i]));
+		} else {
+			// set prev in current key to the value (NOTE: this will be nullptr if there is none)
+			Store<data_ptr_t>(pointers[index], key_locations[i] + pointer_offset);
+
+			// set pointer to current tuple
+			pointers[index] = key_locations[i];
+		}
+	}
+}
+
+void JoinHashTable::InsertHashes(Vector &hashes, idx_t count, data_ptr_t key_locations[], bool parallel) {
 	D_ASSERT(hashes.GetType().id() == LogicalType::HASH);
 
 	// use bitmask to get position in array
 	ApplyBitmask(hashes, count);
 
-	hashes.Normalify(count);
-
+	hashes.Flatten(count);
 	D_ASSERT(hashes.GetVectorType() == VectorType::FLAT_VECTOR);
-	auto pointers = (data_ptr_t *)hash_map.Ptr();
-	auto indices = FlatVector::GetData<hash_t>(hashes);
-	for (idx_t i = 0; i < count; i++) {
-		auto index = indices[i];
-		// set prev in current key to the value (NOTE: this will be nullptr if
-		// there is none)
-		Store<data_ptr_t>(pointers[index], key_locations[i] + pointer_offset);
 
-		// set pointer to current tuple
-		pointers[index] = key_locations[i];
+	auto pointers = (atomic<data_ptr_t> *)hash_map.get();
+	auto indices = FlatVector::GetData<hash_t>(hashes);
+
+	if (parallel) {
+		InsertHashesLoop<true>(pointers, indices, count, key_locations, pointer_offset);
+	} else {
+		InsertHashesLoop<false>(pointers, indices, count, key_locations, pointer_offset);
 	}
 }
 
-void JoinHashTable::Finalize() {
-	// the build has finished, now iterate over all the nodes and construct the final hash table
-	// select a HT that has at least 50% empty space
-	idx_t capacity = NextPowerOfTwo(MaxValue<idx_t>(Count() * 2, (Storage::BLOCK_SIZE / sizeof(data_ptr_t)) + 1));
+void JoinHashTable::InitializePointerTable() {
+	idx_t count = external ? MaxValue<idx_t>(tuples_per_round, Count()) : Count();
+	idx_t capacity = PointerTableCapacity(count);
 	// size needs to be a power of 2
 	D_ASSERT((capacity & (capacity - 1)) == 0);
 	bitmask = capacity - 1;
 
-	// allocate the HT and initialize it with all-zero entries
-	hash_map = buffer_manager.Allocate(capacity * sizeof(data_ptr_t));
-	memset(hash_map.Ptr(), 0, capacity * sizeof(data_ptr_t));
+	if (!hash_map.get()) {
+		// allocate the HT if not yet done
+		hash_map = buffer_manager.GetBufferAllocator().Allocate(capacity * sizeof(data_ptr_t));
+	}
+	D_ASSERT(hash_map.GetSize() == capacity * sizeof(data_ptr_t));
+
+	// initialize HT with all-zero entries
+	memset(hash_map.get(), 0, capacity * sizeof(data_ptr_t));
+}
+
+void JoinHashTable::Finalize(idx_t block_idx_start, idx_t block_idx_end, bool parallel) {
+	// Pointer table should be allocated
+	D_ASSERT(hash_map.get());
+
+	vector<BufferHandle> local_pinned_handles;
 
 	Vector hashes(LogicalType::HASH);
 	auto hash_data = FlatVector::GetData<hash_t>(hashes);
@@ -16167,31 +19364,34 @@ void JoinHashTable::Finalize() {
 	// now construct the actual hash table; scan the nodes
 	// as we can the nodes we pin all the blocks of the HT and keep them pinned until the HT is destroyed
 	// this is so that we can keep pointers around to the blocks
-	// FIXME: if we cannot keep everything pinned in memory, we could switch to an out-of-memory merge join or so
-	for (auto &block : block_collection->blocks) {
-		auto handle = buffer_manager.Pin(block.block);
+	for (idx_t block_idx = block_idx_start; block_idx < block_idx_end; block_idx++) {
+		auto &block = block_collection->blocks[block_idx];
+		auto handle = buffer_manager.Pin(block->block);
 		data_ptr_t dataptr = handle.Ptr();
 		idx_t entry = 0;
-		while (entry < block.count) {
+		while (entry < block->count) {
 			// fetch the next vector of entries from the blocks
-			idx_t next = MinValue<idx_t>(STANDARD_VECTOR_SIZE, block.count - entry);
+			idx_t next = MinValue<idx_t>(STANDARD_VECTOR_SIZE, block->count - entry);
 			for (idx_t i = 0; i < next; i++) {
 				hash_data[i] = Load<hash_t>((data_ptr_t)(dataptr + pointer_offset));
 				key_locations[i] = dataptr;
 				dataptr += entry_size;
 			}
 			// now insert into the hash table
-			InsertHashes(hashes, next, key_locations);
+			InsertHashes(hashes, next, key_locations, parallel);
 
 			entry += next;
 		}
-		pinned_handles.push_back(move(handle));
+		local_pinned_handles.push_back(move(handle));
 	}
 
-	finalized = true;
+	lock_guard<mutex> lock(pinned_handles_lock);
+	for (auto &local_pinned_handle : local_pinned_handles) {
+		pinned_handles.push_back(move(local_pinned_handle));
+	}
 }
 
-unique_ptr<ScanStructure> JoinHashTable::Probe(DataChunk &keys) {
+unique_ptr<ScanStructure> JoinHashTable::InitializeScanStructure(DataChunk &keys, const SelectionVector *&current_sel) {
 	D_ASSERT(Count() > 0); // should be handled before
 	D_ASSERT(finalized);
 
@@ -16204,30 +19404,31 @@ unique_ptr<ScanStructure> JoinHashTable::Probe(DataChunk &keys) {
 	}
 
 	// first prepare the keys for probing
-	const SelectionVector *current_sel;
 	ss->count = PrepareKeys(keys, ss->key_data, current_sel, ss->sel_vector, false);
+	return ss;
+}
+
+unique_ptr<ScanStructure> JoinHashTable::Probe(DataChunk &keys, Vector *precomputed_hashes) {
+	const SelectionVector *current_sel;
+	auto ss = InitializeScanStructure(keys, current_sel);
 	if (ss->count == 0) {
 		return ss;
 	}
 
-	// hash all the keys
-	Vector hashes(LogicalType::HASH);
-	Hash(keys, *current_sel, ss->count, hashes);
+	if (precomputed_hashes) {
+		ApplyBitmask(*precomputed_hashes, *current_sel, ss->count, ss->pointers);
+	} else {
+		// hash all the keys
+		Vector hashes(LogicalType::HASH);
+		Hash(keys, *current_sel, ss->count, hashes);
 
-	// now initialize the pointers of the scan structure based on the hashes
-	ApplyBitmask(hashes, *current_sel, ss->count, ss->pointers);
+		// now initialize the pointers of the scan structure based on the hashes
+		ApplyBitmask(hashes, *current_sel, ss->count, ss->pointers);
+	}
 
 	// create the selection vector linking to only non-empty entries
-	idx_t count = 0;
-	auto pointers = FlatVector::GetData<data_ptr_t>(ss->pointers);
-	for (idx_t i = 0; i < ss->count; i++) {
-		auto idx = current_sel->get_index(i);
-		pointers[idx] = Load<data_ptr_t>(pointers[idx]);
-		if (pointers[idx]) {
-			ss->sel_vector.set_index(count++, idx);
-		}
-	}
-	ss->count = count;
+	ss->InitializeSelectionVector(current_sel);
+
 	return ss;
 }
 
@@ -16314,14 +19515,27 @@ void ScanStructure::AdvancePointers(const SelectionVector &sel, idx_t sel_count)
 	this->count = new_count;
 }
 
+void ScanStructure::InitializeSelectionVector(const SelectionVector *&current_sel) {
+	idx_t non_empty_count = 0;
+	auto ptrs = FlatVector::GetData<data_ptr_t>(pointers);
+	auto cnt = count;
+	for (idx_t i = 0; i < cnt; i++) {
+		const auto idx = current_sel->get_index(i);
+		ptrs[idx] = Load<data_ptr_t>(ptrs[idx]);
+		if (ptrs[idx]) {
+			sel_vector.set_index(non_empty_count++, idx);
+		}
+	}
+	count = non_empty_count;
+}
+
 void ScanStructure::AdvancePointers() {
 	AdvancePointers(this->sel_vector, this->count);
 }
 
 void ScanStructure::GatherResult(Vector &result, const SelectionVector &result_vector,
                                  const SelectionVector &sel_vector, const idx_t count, const idx_t col_no) {
-	const auto col_offset = ht.layout.GetOffsets()[col_no];
-	RowOperations::Gather(pointers, sel_vector, result, result_vector, count, col_offset, col_no);
+	RowOperations::Gather(pointers, sel_vector, result, result_vector, count, ht.layout, col_no);
 }
 
 void ScanStructure::GatherResult(Vector &result, const SelectionVector &sel_vector, const idx_t count,
@@ -16443,8 +19657,8 @@ void ScanStructure::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &chi
 		if (ht.null_values_are_equal[col_idx]) {
 			continue;
 		}
-		VectorData jdata;
-		join_keys.data[col_idx].Orrify(join_keys.size(), jdata);
+		UnifiedVectorFormat jdata;
+		join_keys.data[col_idx].ToUnifiedFormat(join_keys.size(), jdata);
 		if (!jdata.validity.AllValid()) {
 			for (idx_t i = 0; i < join_keys.size(); i++) {
 				auto jidx = jdata.sel->get_index(i);
@@ -16512,8 +19726,8 @@ void ScanStructure::NextMarkJoin(DataChunk &keys, DataChunk &input, DataChunk &r
 			mask.Copy(FlatVector::Validity(last_key), input.size());
 			break;
 		default: {
-			VectorData kdata;
-			last_key.Orrify(keys.size(), kdata);
+			UnifiedVectorFormat kdata;
+			last_key.ToUnifiedFormat(keys.size(), kdata);
 			for (idx_t i = 0; i < input.size(); i++) {
 				auto kidx = kdata.sel->get_index(i);
 				mask.Set(i, kdata.validity.RowIsValid(kidx));
@@ -16619,64 +19833,64 @@ void ScanStructure::NextSingleJoin(DataChunk &keys, DataChunk &input, DataChunk 
 	finished = true;
 }
 
-void JoinHashTable::ScanFullOuter(DataChunk &result, JoinHTScanState &state) {
+idx_t JoinHashTable::ScanFullOuter(JoinHTScanState &state, Vector &addresses) {
 	// scan the HT starting from the current position and check which rows from the build side did not find a match
-	Vector addresses(LogicalType::POINTER);
 	auto key_locations = FlatVector::GetData<data_ptr_t>(addresses);
 	idx_t found_entries = 0;
-	{
-		lock_guard<mutex> state_lock(state.lock);
-		for (; state.block_position < block_collection->blocks.size(); state.block_position++, state.position = 0) {
-			auto &block = block_collection->blocks[state.block_position];
-			auto &handle = pinned_handles[state.block_position];
-			auto baseptr = handle.Ptr();
-			for (; state.position < block.count; state.position++) {
-				auto tuple_base = baseptr + state.position * entry_size;
-				auto found_match = Load<bool>(tuple_base + tuple_size);
-				if (!found_match) {
-					key_locations[found_entries++] = tuple_base;
-					if (found_entries == STANDARD_VECTOR_SIZE) {
-						state.position++;
-						break;
-					}
+	for (; state.block_position < block_collection->blocks.size(); state.block_position++, state.position = 0) {
+		auto &block = block_collection->blocks[state.block_position];
+		auto handle = buffer_manager.Pin(block->block);
+		auto baseptr = handle.Ptr();
+		for (; state.position < block->count; state.position++, state.scan_index++) {
+			auto tuple_base = baseptr + state.position * entry_size;
+			auto found_match = Load<bool>(tuple_base + tuple_size);
+			if (!found_match) {
+				key_locations[found_entries++] = tuple_base;
+				if (found_entries == STANDARD_VECTOR_SIZE) {
+					state.position++;
+					state.scan_index++;
+					break;
 				}
 			}
-			if (found_entries == STANDARD_VECTOR_SIZE) {
-				break;
-			}
+		}
+		if (found_entries == STANDARD_VECTOR_SIZE) {
+			break;
 		}
 	}
+	return found_entries;
+}
+
+void JoinHashTable::GatherFullOuter(DataChunk &result, Vector &addresses, idx_t found_entries) {
+	if (found_entries == 0) {
+		return;
+	}
 	result.SetCardinality(found_entries);
-	if (found_entries > 0) {
-		idx_t left_column_count = result.ColumnCount() - build_types.size();
-		const auto &sel_vector = *FlatVector::IncrementalSelectionVector();
-		// set the left side as a constant NULL
-		for (idx_t i = 0; i < left_column_count; i++) {
-			Vector &vec = result.data[i];
-			vec.SetVectorType(VectorType::CONSTANT_VECTOR);
-			ConstantVector::SetNull(vec, true);
-		}
-		// gather the values from the RHS
-		for (idx_t i = 0; i < build_types.size(); i++) {
-			auto &vector = result.data[left_column_count + i];
-			D_ASSERT(vector.GetType() == build_types[i]);
-			const auto col_no = condition_types.size() + i;
-			const auto col_offset = layout.GetOffsets()[col_no];
-			RowOperations::Gather(addresses, sel_vector, vector, sel_vector, found_entries, col_offset, col_no);
-		}
+	idx_t left_column_count = result.ColumnCount() - build_types.size();
+	const auto &sel_vector = *FlatVector::IncrementalSelectionVector();
+	// set the left side as a constant NULL
+	for (idx_t i = 0; i < left_column_count; i++) {
+		Vector &vec = result.data[i];
+		vec.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(vec, true);
+	}
+	// gather the values from the RHS
+	for (idx_t i = 0; i < build_types.size(); i++) {
+		auto &vector = result.data[left_column_count + i];
+		D_ASSERT(vector.GetType() == build_types[i]);
+		const auto col_no = condition_types.size() + i;
+		RowOperations::Gather(addresses, sel_vector, vector, sel_vector, found_entries, layout, col_no);
 	}
 }
 
 idx_t JoinHashTable::FillWithHTOffsets(data_ptr_t *key_locations, JoinHTScanState &state) {
-
 	// iterate over blocks
 	idx_t key_count = 0;
 	while (state.block_position < block_collection->blocks.size()) {
 		auto &block = block_collection->blocks[state.block_position];
-		auto handle = buffer_manager.Pin(block.block);
+		auto handle = buffer_manager.Pin(block->block);
 		auto base_ptr = handle.Ptr();
 		// go through all the tuples within this block
-		while (state.position < block.count) {
+		while (state.position < block->count) {
 			auto tuple_base = base_ptr + state.position * entry_size;
 			// store its locations
 			key_locations[key_count++] = tuple_base;
@@ -16687,6 +19901,405 @@ idx_t JoinHashTable::FillWithHTOffsets(data_ptr_t *key_locations, JoinHTScanStat
 	}
 	return key_count;
 }
+
+void JoinHashTable::PinAllBlocks() {
+	for (auto &block : block_collection->blocks) {
+		pinned_handles.push_back(buffer_manager.Pin(block->block));
+	}
+}
+
+void JoinHashTable::SwizzleBlocks() {
+	if (block_collection->count == 0) {
+		return;
+	}
+
+	if (layout.AllConstant()) {
+		// No heap blocks! Just merge fixed-size data
+		swizzled_block_collection->Merge(*block_collection);
+		return;
+	}
+
+	// We create one heap block per data block and swizzle the pointers
+	auto &heap_blocks = string_heap->blocks;
+	idx_t heap_block_idx = 0;
+	idx_t heap_block_remaining = heap_blocks[heap_block_idx]->count;
+	for (auto &data_block : block_collection->blocks) {
+		if (heap_block_remaining == 0) {
+			heap_block_remaining = heap_blocks[++heap_block_idx]->count;
+		}
+
+		// Pin the data block and swizzle the pointers within the rows
+		auto data_handle = buffer_manager.Pin(data_block->block);
+		auto data_ptr = data_handle.Ptr();
+		RowOperations::SwizzleColumns(layout, data_ptr, data_block->count);
+
+		// We want to copy as little of the heap data as possible, check how the data and heap blocks line up
+		if (heap_block_remaining >= data_block->count) {
+			// Easy: current heap block contains all strings for this data block, just copy (reference) the block
+			swizzled_string_heap->blocks.emplace_back(heap_blocks[heap_block_idx]->Copy());
+			swizzled_string_heap->blocks.back()->count = data_block->count;
+
+			// Swizzle the heap pointer
+			auto heap_handle = buffer_manager.Pin(swizzled_string_heap->blocks.back()->block);
+			auto heap_ptr = Load<data_ptr_t>(data_ptr + layout.GetHeapOffset());
+			auto heap_offset = heap_ptr - heap_handle.Ptr();
+			RowOperations::SwizzleHeapPointer(layout, data_ptr, heap_ptr, data_block->count, heap_offset);
+
+			// Update counter
+			heap_block_remaining -= data_block->count;
+		} else {
+			// Strings for this data block are spread over the current heap block and the next (and possibly more)
+			idx_t data_block_remaining = data_block->count;
+			vector<std::pair<data_ptr_t, idx_t>> ptrs_and_sizes;
+			idx_t total_size = 0;
+			while (data_block_remaining > 0) {
+				if (heap_block_remaining == 0) {
+					heap_block_remaining = heap_blocks[++heap_block_idx]->count;
+				}
+				auto next = MinValue<idx_t>(data_block_remaining, heap_block_remaining);
+
+				// Figure out where to start copying strings, and how many bytes we need to copy
+				auto heap_start_ptr = Load<data_ptr_t>(data_ptr + layout.GetHeapOffset());
+				auto heap_end_ptr =
+				    Load<data_ptr_t>(data_ptr + layout.GetHeapOffset() + (next - 1) * layout.GetRowWidth());
+				idx_t size = heap_end_ptr - heap_start_ptr + Load<uint32_t>(heap_end_ptr);
+				ptrs_and_sizes.emplace_back(heap_start_ptr, size);
+				D_ASSERT(size <= heap_blocks[heap_block_idx]->byte_offset);
+
+				// Swizzle the heap pointer
+				RowOperations::SwizzleHeapPointer(layout, data_ptr, heap_start_ptr, next, total_size);
+				total_size += size;
+
+				// Update where we are in the data and heap blocks
+				data_ptr += next * layout.GetRowWidth();
+				data_block_remaining -= next;
+				heap_block_remaining -= next;
+			}
+
+			// Finally, we allocate a new heap block and copy data to it
+			swizzled_string_heap->blocks.emplace_back(
+			    make_unique<RowDataBlock>(buffer_manager, MaxValue<idx_t>(total_size, (idx_t)Storage::BLOCK_SIZE), 1));
+			auto new_heap_handle = buffer_manager.Pin(swizzled_string_heap->blocks.back()->block);
+			auto new_heap_ptr = new_heap_handle.Ptr();
+			for (auto &ptr_and_size : ptrs_and_sizes) {
+				memcpy(new_heap_ptr, ptr_and_size.first, ptr_and_size.second);
+				new_heap_ptr += ptr_and_size.second;
+			}
+		}
+	}
+
+	// We're done with variable-sized data, now just merge the fixed-size data
+	swizzled_block_collection->Merge(*block_collection);
+	D_ASSERT(swizzled_block_collection->blocks.size() == swizzled_string_heap->blocks.size());
+
+	// Update counts and cleanup
+	swizzled_string_heap->count = string_heap->count;
+	string_heap->Clear();
+}
+
+void JoinHashTable::UnswizzleBlocks() {
+	auto &blocks = swizzled_block_collection->blocks;
+	auto &heap_blocks = swizzled_string_heap->blocks;
+#ifdef DEBUG
+	if (!layout.AllConstant()) {
+		D_ASSERT(blocks.size() == heap_blocks.size());
+		D_ASSERT(swizzled_block_collection->count == swizzled_string_heap->count);
+	}
+#endif
+
+	for (idx_t block_idx = 0; block_idx < blocks.size(); block_idx++) {
+		auto &data_block = blocks[block_idx];
+
+		if (!layout.AllConstant()) {
+			auto block_handle = buffer_manager.Pin(data_block->block);
+
+			auto &heap_block = heap_blocks[block_idx];
+			D_ASSERT(data_block->count == heap_block->count);
+			auto heap_handle = buffer_manager.Pin(heap_block->block);
+
+			// Unswizzle and move
+			RowOperations::UnswizzlePointers(layout, block_handle.Ptr(), heap_handle.Ptr(), data_block->count);
+			string_heap->blocks.push_back(move(heap_block));
+			string_heap->pinned_blocks.push_back(move(heap_handle));
+		}
+
+		// Fixed size stuff can just be moved
+		block_collection->blocks.push_back(move(data_block));
+	}
+
+	// Update counts and clean up
+	block_collection->count = swizzled_block_collection->count;
+	string_heap->count = swizzled_string_heap->count;
+	swizzled_block_collection->Clear();
+	swizzled_string_heap->Clear();
+
+	D_ASSERT(SwizzledCount() == 0);
+}
+
+void JoinHashTable::ComputePartitionSizes(ClientConfig &config, vector<unique_ptr<JoinHashTable>> &local_hts,
+                                          idx_t max_ht_size) {
+	external = true;
+
+	// First set the number of tuples in the HT per partitioned round
+	total_count = 0;
+	idx_t total_size = 0;
+	for (auto &ht : local_hts) {
+		// TODO: SizeInBytes / SwizzledSize overestimates size by a lot because we make extra references of heap blocks
+		//  Need to compute this more accurately
+		total_count += ht->Count() + ht->SwizzledCount();
+		total_size += ht->SizeInBytes() + ht->SwizzledSize();
+	}
+
+	if (total_count == 0) {
+		return;
+	}
+
+	total_size += PointerTableCapacity(total_count) * sizeof(data_ptr_t);
+	idx_t avg_tuple_size = total_size / total_count;
+	tuples_per_round = max_ht_size / avg_tuple_size;
+
+	if (config.force_external) {
+		// For force_external we do three rounds to test all code paths
+		tuples_per_round = (total_count + 2) / 3;
+	}
+
+	// Set the number of radix bits (minimum 4, maximum 8)
+	for (; radix_bits < 8; radix_bits++) {
+		auto num_partitions = RadixPartitioning::NumberOfPartitions(radix_bits);
+		auto avg_partition_size = total_size / num_partitions;
+
+		// We aim for at least 8 partitions per probe round (tweaked experimentally)
+		if (avg_partition_size * 8 < max_ht_size) {
+			break;
+		}
+	}
+}
+
+void JoinHashTable::Partition(JoinHashTable &global_ht) {
+#ifdef DEBUG
+	D_ASSERT(layout.ColumnCount() == global_ht.layout.ColumnCount());
+	for (idx_t col_idx = 0; col_idx < layout.ColumnCount(); col_idx++) {
+		D_ASSERT(layout.GetTypes()[col_idx] == global_ht.layout.GetTypes()[col_idx]);
+	}
+#endif
+
+	// Swizzle and Partition
+	SwizzleBlocks();
+	RadixPartitioning::PartitionRowData(global_ht.buffer_manager, global_ht.layout, global_ht.pointer_offset,
+	                                    *swizzled_block_collection, *swizzled_string_heap, partition_block_collections,
+	                                    partition_string_heaps, global_ht.radix_bits);
+
+	// Add to global HT
+	global_ht.Merge(*this);
+}
+
+void JoinHashTable::Reset() {
+	pinned_handles.clear();
+	block_collection->Clear();
+	string_heap->Clear();
+	finalized = false;
+}
+
+bool JoinHashTable::PrepareExternalFinalize() {
+	idx_t num_partitions = RadixPartitioning::NumberOfPartitions(radix_bits);
+	if (partition_block_collections.empty() || partition_end == num_partitions) {
+		return false;
+	}
+
+	if (finalized) {
+		Reset();
+	}
+
+	// Determine how many partitions we can do next (at least one)
+	idx_t next = 0;
+	idx_t count = 0;
+	partition_start = partition_end;
+	for (idx_t p = partition_start; p < num_partitions; p++) {
+		auto partition_count = partition_block_collections[p]->count;
+		if (partition_count != 0 && count != 0 && count + partition_count > tuples_per_round) {
+			// We skip over empty partitions (partition_count != 0),
+			// and need to have at least one partition (count != 0)
+			break;
+		}
+		next++;
+		count += partition_count;
+	}
+	partition_end += next;
+
+	// Move specific partitions to the swizzled_... collections so they can be unswizzled
+	D_ASSERT(SwizzledCount() == 0);
+	for (idx_t p = partition_start; p < partition_end; p++) {
+		auto &p_block_collection = *partition_block_collections[p];
+		if (!layout.AllConstant()) {
+			auto &p_string_heap = *partition_string_heaps[p];
+			D_ASSERT(p_block_collection.count == p_string_heap.count);
+			swizzled_string_heap->Merge(p_string_heap);
+			// Remove after merging
+			partition_string_heaps[p] = nullptr;
+		}
+		swizzled_block_collection->Merge(p_block_collection);
+		// Remove after merging
+		partition_block_collections[p] = nullptr;
+	}
+	D_ASSERT(count == SwizzledCount());
+
+	// Unswizzle them
+	D_ASSERT(Count() == 0);
+	UnswizzleBlocks();
+	D_ASSERT(count == Count());
+
+	return true;
+}
+
+static void CreateSpillChunk(DataChunk &spill_chunk, DataChunk &keys, DataChunk &payload, Vector &hashes) {
+	spill_chunk.Reset();
+	idx_t spill_col_idx = 0;
+	for (idx_t col_idx = 0; col_idx < keys.ColumnCount(); col_idx++) {
+		spill_chunk.data[col_idx].Reference(keys.data[col_idx]);
+	}
+	spill_col_idx += keys.ColumnCount();
+	for (idx_t col_idx = 0; col_idx < payload.data.size(); col_idx++) {
+		spill_chunk.data[spill_col_idx + col_idx].Reference(payload.data[col_idx]);
+	}
+	spill_col_idx += payload.ColumnCount();
+	spill_chunk.data[spill_col_idx].Reference(hashes);
+}
+
+unique_ptr<ScanStructure> JoinHashTable::ProbeAndSpill(DataChunk &keys, DataChunk &payload, ProbeSpill &probe_spill,
+                                                       ProbeSpillLocalAppendState &spill_state,
+                                                       DataChunk &spill_chunk) {
+	// hash all the keys
+	Vector hashes(LogicalType::HASH);
+	Hash(keys, *FlatVector::IncrementalSelectionVector(), keys.size(), hashes);
+
+	// find out which keys we can match with the current pinned partitions
+	SelectionVector true_sel;
+	SelectionVector false_sel;
+	true_sel.Initialize();
+	false_sel.Initialize();
+	auto true_count = RadixPartitioning::Select(hashes, FlatVector::IncrementalSelectionVector(), keys.size(),
+	                                            radix_bits, partition_end, &true_sel, &false_sel);
+	auto false_count = keys.size() - true_count;
+
+	CreateSpillChunk(spill_chunk, keys, payload, hashes);
+
+	// can't probe these values right now, append to spill
+	spill_chunk.Slice(false_sel, false_count);
+	spill_chunk.Verify();
+	probe_spill.Append(spill_chunk, spill_state);
+
+	// slice the stuff we CAN probe right now
+	hashes.Slice(true_sel, true_count);
+	keys.Slice(true_sel, true_count);
+	payload.Slice(true_sel, true_count);
+
+	const SelectionVector *current_sel;
+	auto ss = InitializeScanStructure(keys, current_sel);
+	if (ss->count == 0) {
+		return ss;
+	}
+
+	// now initialize the pointers of the scan structure based on the hashes
+	ApplyBitmask(hashes, *current_sel, ss->count, ss->pointers);
+
+	// create the selection vector linking to only non-empty entries
+	ss->InitializeSelectionVector(current_sel);
+
+	return ss;
+}
+
+ProbeSpill::ProbeSpill(JoinHashTable &ht, ClientContext &context, const vector<LogicalType> &probe_types)
+    : ht(ht), context(context), probe_types(probe_types) {
+	if (ht.total_count - ht.Count() <= ht.tuples_per_round) {
+		// No need to partition as we will only have one more probe round
+		partitioned = false;
+	} else {
+		// More than one probe round to go, so we need to partition
+		partitioned = true;
+		global_partitions =
+		    make_unique<RadixPartitionedColumnData>(context, probe_types, ht.radix_bits, probe_types.size() - 1);
+	}
+	column_ids.reserve(probe_types.size());
+	for (column_t column_id = 0; column_id < probe_types.size(); column_id++) {
+		column_ids.emplace_back(column_id);
+	}
+}
+
+ProbeSpillLocalState ProbeSpill::RegisterThread() {
+	ProbeSpillLocalAppendState result;
+	lock_guard<mutex> guard(lock);
+	if (partitioned) {
+		local_partitions.emplace_back(global_partitions->CreateShared());
+		local_partition_append_states.emplace_back(make_unique<PartitionedColumnDataAppendState>());
+		local_partitions.back()->InitializeAppendState(*local_partition_append_states.back());
+
+		result.local_partition = local_partitions.back().get();
+		result.local_partition_append_state = local_partition_append_states.back().get();
+	} else {
+		local_spill_collections.emplace_back(
+		    make_unique<ColumnDataCollection>(BufferManager::GetBufferManager(context), probe_types));
+		local_spill_append_states.emplace_back(make_unique<ColumnDataAppendState>());
+		local_spill_collections.back()->InitializeAppend(*local_spill_append_states.back());
+
+		result.local_spill_collection = local_spill_collections.back().get();
+		result.local_spill_append_state = local_spill_append_states.back().get();
+	}
+	return result;
+}
+
+void ProbeSpill::Append(DataChunk &chunk, ProbeSpillLocalAppendState &local_state) {
+	if (partitioned) {
+		local_state.local_partition->Append(*local_state.local_partition_append_state, chunk);
+	} else {
+		local_state.local_spill_collection->Append(*local_state.local_spill_append_state, chunk);
+	}
+}
+
+void ProbeSpill::Finalize() {
+	if (partitioned) {
+		D_ASSERT(local_partitions.size() == local_partition_append_states.size());
+		for (idx_t i = 0; i < local_partition_append_states.size(); i++) {
+			local_partitions[i]->FlushAppendState(*local_partition_append_states[i]);
+		}
+		for (auto &local_partition : local_partitions) {
+			global_partitions->Combine(*local_partition);
+		}
+		local_partitions.clear();
+		local_partition_append_states.clear();
+	} else {
+		if (local_spill_collections.empty()) {
+			global_spill_collection =
+			    make_unique<ColumnDataCollection>(BufferManager::GetBufferManager(context), probe_types);
+		} else {
+			global_spill_collection = move(local_spill_collections[0]);
+			for (idx_t i = 1; i < local_spill_collections.size(); i++) {
+				global_spill_collection->Combine(*local_spill_collections[i]);
+			}
+		}
+		local_spill_collections.clear();
+		local_spill_append_states.clear();
+	}
+}
+
+void ProbeSpill::PrepareNextProbe() {
+	if (partitioned) {
+		auto &partitions = global_partitions->GetPartitions();
+		if (partitions.empty() || ht.partition_start == partitions.size()) {
+			// Can't probe, just make an empty one
+			global_spill_collection =
+			    make_unique<ColumnDataCollection>(BufferManager::GetBufferManager(context), probe_types);
+		} else {
+			// Move specific partitions to the global spill collection
+			global_spill_collection = move(partitions[ht.partition_start]);
+			for (idx_t i = ht.partition_start + 1; i < ht.partition_end; i++) {
+				global_spill_collection->Combine(*partitions[i]);
+			}
+		}
+	}
+	consumer = make_unique<ColumnDataConsumer>(*global_spill_collection, column_ids);
+	consumer->InitializeScan();
+}
+
 } // namespace duckdb
 
 
@@ -16710,9 +20323,9 @@ struct InitialNestedLoopJoin {
 	                       SelectionVector &lvector, SelectionVector &rvector, idx_t current_match_count) {
 		// initialize phase of nested loop join
 		// fill lvector and rvector with matches from the base vectors
-		VectorData left_data, right_data;
-		left.Orrify(left_size, left_data);
-		right.Orrify(right_size, right_data);
+		UnifiedVectorFormat left_data, right_data;
+		left.ToUnifiedFormat(left_size, left_data);
+		right.ToUnifiedFormat(right_size, right_data);
 
 		auto ldata = (T *)left_data.data;
 		auto rdata = (T *)right_data.data;
@@ -16744,9 +20357,9 @@ struct RefineNestedLoopJoin {
 	template <class T, class OP>
 	static idx_t Operation(Vector &left, Vector &right, idx_t left_size, idx_t right_size, idx_t &lpos, idx_t &rpos,
 	                       SelectionVector &lvector, SelectionVector &rvector, idx_t current_match_count) {
-		VectorData left_data, right_data;
-		left.Orrify(left_size, left_data);
-		right.Orrify(right_size, right_data);
+		UnifiedVectorFormat left_data, right_data;
+		left.ToUnifiedFormat(left_size, left_data);
+		right.ToUnifiedFormat(right_size, right_data);
 
 		// refine phase of the nested loop join
 		// refine lvector and rvector based on matches of subsequent conditions (in case there are multiple conditions
@@ -16892,9 +20505,9 @@ namespace duckdb {
 
 template <class T, class OP>
 static void TemplatedMarkJoin(Vector &left, Vector &right, idx_t lcount, idx_t rcount, bool found_match[]) {
-	VectorData left_data, right_data;
-	left.Orrify(lcount, left_data);
-	right.Orrify(rcount, right_data);
+	UnifiedVectorFormat left_data, right_data;
+	left.ToUnifiedFormat(lcount, left_data);
+	right.ToUnifiedFormat(rcount, right_data);
 
 	auto ldata = (T *)left_data.data;
 	auto rdata = (T *)right_data.data;
@@ -16915,6 +20528,44 @@ static void TemplatedMarkJoin(Vector &left, Vector &right, idx_t lcount, idx_t r
 				found_match[i] = true;
 				break;
 			}
+		}
+	}
+}
+
+static void MarkJoinNested(Vector &left, Vector &right, idx_t lcount, idx_t rcount, bool found_match[],
+                           ExpressionType comparison_type) {
+	Vector left_reference(left.GetType());
+	SelectionVector true_sel(rcount);
+	for (idx_t i = 0; i < lcount; i++) {
+		if (found_match[i]) {
+			continue;
+		}
+		ConstantVector::Reference(left_reference, left, i, rcount);
+		idx_t count;
+		switch (comparison_type) {
+		case ExpressionType::COMPARE_EQUAL:
+			count = VectorOperations::Equals(left_reference, right, nullptr, rcount, nullptr, nullptr);
+			break;
+		case ExpressionType::COMPARE_NOTEQUAL:
+			count = VectorOperations::NotEquals(left_reference, right, nullptr, rcount, nullptr, nullptr);
+			break;
+		case ExpressionType::COMPARE_LESSTHAN:
+			count = VectorOperations::LessThan(left_reference, right, nullptr, rcount, nullptr, nullptr);
+			break;
+		case ExpressionType::COMPARE_GREATERTHAN:
+			count = VectorOperations::GreaterThan(left_reference, right, nullptr, rcount, nullptr, nullptr);
+			break;
+		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+			count = VectorOperations::LessThanEquals(left_reference, right, nullptr, rcount, nullptr, nullptr);
+			break;
+		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+			count = VectorOperations::GreaterThanEquals(left_reference, right, nullptr, rcount, nullptr, nullptr);
+			break;
+		default:
+			throw InternalException("Unsupported comparison type for MarkJoinNested");
+		}
+		if (count > 0) {
+			found_match[i] = true;
 		}
 	}
 }
@@ -16954,6 +20605,13 @@ static void MarkJoinSwitch(Vector &left, Vector &right, idx_t lcount, idx_t rcou
 
 static void MarkJoinComparisonSwitch(Vector &left, Vector &right, idx_t lcount, idx_t rcount, bool found_match[],
                                      ExpressionType comparison_type) {
+	switch (left.GetType().InternalType()) {
+	case PhysicalType::STRUCT:
+	case PhysicalType::LIST:
+		return MarkJoinNested(left, right, lcount, rcount, found_match, comparison_type);
+	default:
+		break;
+	}
 	D_ASSERT(left.GetType() == right.GetType());
 	switch (comparison_type) {
 	case ExpressionType::COMPARE_EQUAL:
@@ -16973,14 +20631,19 @@ static void MarkJoinComparisonSwitch(Vector &left, Vector &right, idx_t lcount, 
 	}
 }
 
-void NestedLoopJoinMark::Perform(DataChunk &left, ChunkCollection &right, bool found_match[],
+void NestedLoopJoinMark::Perform(DataChunk &left, ColumnDataCollection &right, bool found_match[],
                                  const vector<JoinCondition> &conditions) {
 	// initialize a new temporary selection vector for the left chunk
 	// loop over all chunks in the RHS
-	for (idx_t chunk_idx = 0; chunk_idx < right.ChunkCount(); chunk_idx++) {
-		DataChunk &right_chunk = right.GetChunk(chunk_idx);
+	ColumnDataScanState scan_state;
+	right.InitializeScan(scan_state);
+
+	DataChunk scan_chunk;
+	right.InitializeScanChunk(scan_chunk);
+
+	while (right.Scan(scan_state, scan_chunk)) {
 		for (idx_t i = 0; i < conditions.size(); i++) {
-			MarkJoinComparisonSwitch(left.data[i], right_chunk.data[i], left.size(), right_chunk.size(), found_match,
+			MarkJoinComparisonSwitch(left.data[i], scan_chunk.data[i], left.size(), scan_chunk.size(), found_match,
 			                         conditions[i].comparison);
 		}
 	}
@@ -16993,14 +20656,15 @@ void NestedLoopJoinMark::Perform(DataChunk &left, ChunkCollection &right, bool f
 namespace duckdb {
 
 AggregateObject::AggregateObject(AggregateFunction function, FunctionData *bind_data, idx_t child_count,
-                                 idx_t payload_size, bool distinct, PhysicalType return_type, Expression *filter)
+                                 idx_t payload_size, AggregateType aggr_type, PhysicalType return_type,
+                                 Expression *filter)
     : function(move(function)), bind_data(bind_data), child_count(child_count), payload_size(payload_size),
-      distinct(distinct), return_type(return_type), filter(filter) {
+      aggr_type(aggr_type), return_type(return_type), filter(filter) {
 }
 
 AggregateObject::AggregateObject(BoundAggregateExpression *aggr)
     : AggregateObject(aggr->function, aggr->bind_info.get(), aggr->children.size(),
-                      AlignValue(aggr->function.state_size()), aggr->distinct, aggr->return_type.InternalType(),
+                      AlignValue(aggr->function.state_size()), aggr->aggr_type, aggr->return_type.InternalType(),
                       aggr->filter.get()) {
 }
 
@@ -17013,13 +20677,13 @@ vector<AggregateObject> AggregateObject::CreateAggregateObjects(const vector<Bou
 	return aggregates;
 }
 
-AggregateFilterData::AggregateFilterData(Allocator &allocator, Expression &filter_expr,
+AggregateFilterData::AggregateFilterData(ClientContext &context, Expression &filter_expr,
                                          const vector<LogicalType> &payload_types)
-    : filter_executor(allocator, &filter_expr), true_sel(STANDARD_VECTOR_SIZE) {
+    : filter_executor(context, &filter_expr), true_sel(STANDARD_VECTOR_SIZE) {
 	if (payload_types.empty()) {
 		return;
 	}
-	filtered_payload.Initialize(allocator, payload_types);
+	filtered_payload.Initialize(Allocator::Get(context), payload_types);
 }
 
 idx_t AggregateFilterData::ApplyFilter(DataChunk &payload) {
@@ -17033,7 +20697,7 @@ idx_t AggregateFilterData::ApplyFilter(DataChunk &payload) {
 AggregateFilterDataSet::AggregateFilterDataSet() {
 }
 
-void AggregateFilterDataSet::Initialize(Allocator &allocator, const vector<AggregateObject> &aggregates,
+void AggregateFilterDataSet::Initialize(ClientContext &context, const vector<AggregateObject> &aggregates,
                                         const vector<LogicalType> &payload_types) {
 	bool has_filters = false;
 	for (auto &aggregate : aggregates) {
@@ -17050,7 +20714,7 @@ void AggregateFilterDataSet::Initialize(Allocator &allocator, const vector<Aggre
 	for (idx_t aggr_idx = 0; aggr_idx < aggregates.size(); aggr_idx++) {
 		auto &aggr = aggregates[aggr_idx];
 		if (aggr.filter) {
-			filter_data[aggr_idx] = make_unique<AggregateFilterData>(allocator, *aggr.filter, payload_types);
+			filter_data[aggr_idx] = make_unique<AggregateFilterData>(context, *aggr.filter, payload_types);
 		}
 	}
 }
@@ -17066,290 +20730,213 @@ AggregateFilterData &AggregateFilterDataSet::GetFilterData(idx_t aggr_idx) {
 
 
 
-
-
-
-
-
-
-
-
-
 namespace duckdb {
 
-PhysicalHashAggregate::PhysicalHashAggregate(ClientContext &context, vector<LogicalType> types,
-                                             vector<unique_ptr<Expression>> expressions, idx_t estimated_cardinality,
-                                             PhysicalOperatorType type)
-    : PhysicalHashAggregate(context, move(types), move(expressions), {}, estimated_cardinality, type) {
+//! Shared information about a collection of distinct aggregates
+DistinctAggregateCollectionInfo::DistinctAggregateCollectionInfo(const vector<unique_ptr<Expression>> &aggregates,
+                                                                 vector<idx_t> indices)
+    : indices(move(indices)), aggregates(aggregates) {
+	table_count = CreateTableIndexMap();
+
+	const idx_t aggregate_count = aggregates.size();
+
+	total_child_count = 0;
+	for (idx_t i = 0; i < aggregate_count; i++) {
+		auto &aggregate = (BoundAggregateExpression &)*aggregates[i];
+
+		if (!aggregate.IsDistinct()) {
+			continue;
+		}
+		total_child_count += aggregate.children.size();
+	}
 }
 
-PhysicalHashAggregate::PhysicalHashAggregate(ClientContext &context, vector<LogicalType> types,
-                                             vector<unique_ptr<Expression>> expressions,
-                                             vector<unique_ptr<Expression>> groups_p, idx_t estimated_cardinality,
-                                             PhysicalOperatorType type)
-    : PhysicalHashAggregate(context, move(types), move(expressions), move(groups_p), {}, {}, estimated_cardinality,
-                            type) {
+//! Stateful data for the distinct aggregates
+
+DistinctAggregateState::DistinctAggregateState(const DistinctAggregateData &data, ClientContext &client)
+    : child_executor(client) {
+
+	radix_states.resize(data.info.table_count);
+	distinct_output_chunks.resize(data.info.table_count);
+
+	idx_t aggregate_count = data.info.aggregates.size();
+	for (idx_t i = 0; i < aggregate_count; i++) {
+		auto &aggregate = (BoundAggregateExpression &)*data.info.aggregates[i];
+
+		// Initialize the child executor and get the payload types for every aggregate
+		for (auto &child : aggregate.children) {
+			child_executor.AddExpression(*child);
+		}
+		if (!aggregate.IsDistinct()) {
+			continue;
+		}
+		D_ASSERT(data.info.table_map.count(i));
+		idx_t table_idx = data.info.table_map.at(i);
+		if (data.radix_tables[table_idx] == nullptr) {
+			//! This table is unused because the aggregate shares its data with another
+			continue;
+		}
+
+		// Get the global sinkstate for the aggregate
+		auto &radix_table = *data.radix_tables[table_idx];
+		radix_states[table_idx] = radix_table.GetGlobalSinkState(client);
+
+		// Fill the chunk_types (group_by + children)
+		vector<LogicalType> chunk_types;
+		for (auto &group_type : data.grouped_aggregate_data[table_idx]->group_types) {
+			chunk_types.push_back(group_type);
+		}
+
+		// This is used in Finalize to get the data from the radix table
+		distinct_output_chunks[table_idx] = make_unique<DataChunk>();
+		distinct_output_chunks[table_idx]->Initialize(client, chunk_types);
+	}
 }
 
-PhysicalHashAggregate::PhysicalHashAggregate(ClientContext &context, vector<LogicalType> types,
-                                             vector<unique_ptr<Expression>> expressions,
-                                             vector<unique_ptr<Expression>> groups_p,
-                                             vector<GroupingSet> grouping_sets_p,
-                                             vector<vector<idx_t>> grouping_functions_p, idx_t estimated_cardinality,
-                                             PhysicalOperatorType type)
-    : PhysicalOperator(type, move(types), estimated_cardinality), groups(move(groups_p)),
-      grouping_sets(move(grouping_sets_p)), grouping_functions(move(grouping_functions_p)), any_distinct(false) {
-	// get a list of all aggregates to be computed
-	for (auto &expr : groups) {
-		group_types.push_back(expr->return_type);
-	}
-	if (grouping_sets.empty()) {
-		GroupingSet set;
-		for (idx_t i = 0; i < group_types.size(); i++) {
-			set.insert(i);
-		}
-		grouping_sets.push_back(move(set));
-	}
-	vector<LogicalType> payload_types_filters;
-	for (auto &expr : expressions) {
-		D_ASSERT(expr->expression_class == ExpressionClass::BOUND_AGGREGATE);
-		D_ASSERT(expr->IsAggregate());
-		auto &aggr = (BoundAggregateExpression &)*expr;
-		bindings.push_back(&aggr);
+//! Persistent + shared (read-only) data for the distinct aggregates
+DistinctAggregateData::DistinctAggregateData(const DistinctAggregateCollectionInfo &info)
+    : DistinctAggregateData(info, {}, nullptr) {
+}
 
-		if (aggr.distinct) {
-			any_distinct = true;
-		}
+DistinctAggregateData::DistinctAggregateData(const DistinctAggregateCollectionInfo &info, const GroupingSet &groups,
+                                             const vector<unique_ptr<Expression>> *group_expressions)
+    : info(info) {
+	grouped_aggregate_data.resize(info.table_count);
+	radix_tables.resize(info.table_count);
+	grouping_sets.resize(info.table_count);
 
-		aggregate_return_types.push_back(aggr.return_type);
-		for (auto &child : aggr.children) {
-			payload_types.push_back(child->return_type);
-		}
-		if (aggr.filter) {
-			payload_types_filters.push_back(aggr.filter->return_type);
-		}
-		if (!aggr.function.combine) {
-			throw InternalException("Aggregate function %s is missing a combine method", aggr.function.name);
-		}
-		aggregates.push_back(move(expr));
-	}
+	for (auto &i : info.indices) {
+		auto &aggregate = (BoundAggregateExpression &)*info.aggregates[i];
 
-	for (const auto &pay_filters : payload_types_filters) {
-		payload_types.push_back(pay_filters);
-	}
+		D_ASSERT(info.table_map.count(i));
+		idx_t table_idx = info.table_map.at(i);
+		if (radix_tables[table_idx] != nullptr) {
+			//! This aggregate shares a table with another aggregate, and the table is already initialized
+			continue;
+		}
+		// The grouping set contains the indices of the chunk that correspond to the data vector
+		// that will be used to figure out in which bucket the payload should be put
+		auto &grouping_set = grouping_sets[table_idx];
+		//! Populate the group with the children of the aggregate
+		for (auto &group : groups) {
+			grouping_set.insert(group);
+		}
+		idx_t group_by_size = group_expressions ? group_expressions->size() : 0;
+		for (idx_t set_idx = 0; set_idx < aggregate.children.size(); set_idx++) {
+			grouping_set.insert(set_idx + group_by_size);
+		}
+		// Create the hashtable for the aggregate
+		grouped_aggregate_data[table_idx] = make_unique<GroupedAggregateData>();
+		grouped_aggregate_data[table_idx]->InitializeDistinct(info.aggregates[i], group_expressions);
+		radix_tables[table_idx] =
+		    make_unique<RadixPartitionedHashTable>(grouping_set, *grouped_aggregate_data[table_idx]);
 
-	// filter_indexes must be pre-built, not lazily instantiated in parallel...
-	idx_t aggregate_input_idx = 0;
-	for (auto &aggregate : aggregates) {
-		auto &aggr = (BoundAggregateExpression &)*aggregate;
-		aggregate_input_idx += aggr.children.size();
+		// Fill the chunk_types (only contains the payload of the distinct aggregates)
+		vector<LogicalType> chunk_types;
+		for (auto &child_p : aggregate.children) {
+			chunk_types.push_back(child_p->return_type);
+		}
 	}
-	for (auto &aggregate : aggregates) {
-		auto &aggr = (BoundAggregateExpression &)*aggregate;
-		if (aggr.filter) {
-			auto &bound_ref_expr = (BoundReferenceExpression &)*aggr.filter;
-			auto it = filter_indexes.find(aggr.filter.get());
-			if (it == filter_indexes.end()) {
-				filter_indexes[aggr.filter.get()] = bound_ref_expr.index;
-				bound_ref_expr.index = aggregate_input_idx++;
-			} else {
-				++aggregate_input_idx;
+}
+
+using aggr_ref_t = std::reference_wrapper<BoundAggregateExpression>;
+
+struct FindMatchingAggregate {
+	explicit FindMatchingAggregate(const aggr_ref_t &aggr) : aggr_r(aggr) {
+	}
+	bool operator()(const aggr_ref_t other_r) {
+		auto &other = other_r.get();
+		auto &aggr = aggr_r.get();
+		if (other.children.size() != aggr.children.size()) {
+			return false;
+		}
+		if (!Expression::Equals(aggr.filter.get(), other.filter.get())) {
+			return false;
+		}
+		for (idx_t i = 0; i < aggr.children.size(); i++) {
+			auto &other_child = (BoundReferenceExpression &)*other.children[i];
+			auto &aggr_child = (BoundReferenceExpression &)*aggr.children[i];
+			if (other_child.index != aggr_child.index) {
+				return false;
 			}
 		}
+		return true;
 	}
-
-	for (auto &grouping_set : grouping_sets) {
-		radix_tables.emplace_back(grouping_set, *this);
-	}
-}
-
-//===--------------------------------------------------------------------===//
-// Sink
-//===--------------------------------------------------------------------===//
-class HashAggregateGlobalState : public GlobalSinkState {
-public:
-	HashAggregateGlobalState(const PhysicalHashAggregate &op, ClientContext &context) {
-		radix_states.reserve(op.radix_tables.size());
-		for (auto &rt : op.radix_tables) {
-			radix_states.push_back(rt.GetGlobalSinkState(context));
-		}
-	}
-
-	vector<unique_ptr<GlobalSinkState>> radix_states;
+	const aggr_ref_t aggr_r;
 };
 
-class HashAggregateLocalState : public LocalSinkState {
-public:
-	HashAggregateLocalState(const PhysicalHashAggregate &op, ExecutionContext &context) {
-		if (!op.payload_types.empty()) {
-			aggregate_input_chunk.InitializeEmpty(op.payload_types);
+idx_t DistinctAggregateCollectionInfo::CreateTableIndexMap() {
+	vector<aggr_ref_t> table_inputs;
+
+	D_ASSERT(table_map.empty());
+	for (auto &agg_idx : indices) {
+		D_ASSERT(agg_idx < aggregates.size());
+		auto &aggregate = (BoundAggregateExpression &)*aggregates[agg_idx];
+
+		auto matching_inputs =
+		    std::find_if(table_inputs.begin(), table_inputs.end(), FindMatchingAggregate(std::ref(aggregate)));
+		if (matching_inputs != table_inputs.end()) {
+			//! Assign the existing table to the aggregate
+			idx_t found_idx = std::distance(table_inputs.begin(), matching_inputs);
+			table_map[agg_idx] = found_idx;
+			continue;
 		}
-
-		radix_states.reserve(op.radix_tables.size());
-		for (auto &rt : op.radix_tables) {
-			radix_states.push_back(rt.GetLocalSinkState(context));
-		}
+		//! Create a new table and assign its index to the aggregate
+		table_map[agg_idx] = table_inputs.size();
+		table_inputs.push_back(std::ref(aggregate));
 	}
+	//! Every distinct aggregate needs to be assigned an index
+	D_ASSERT(table_map.size() == indices.size());
+	//! There can not be more tables than there are distinct aggregates
+	D_ASSERT(table_inputs.size() <= indices.size());
 
-	DataChunk aggregate_input_chunk;
-
-	vector<unique_ptr<LocalSinkState>> radix_states;
-};
-
-void PhysicalHashAggregate::SetMultiScan(GlobalSinkState &state) {
-	auto &gstate = (HashAggregateGlobalState &)state;
-	for (auto &radix_state : gstate.radix_states) {
-		RadixPartitionedHashTable::SetMultiScan(*radix_state);
-	}
+	return table_inputs.size();
 }
 
-unique_ptr<GlobalSinkState> PhysicalHashAggregate::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<HashAggregateGlobalState>(*this, context);
+bool DistinctAggregateCollectionInfo::AnyDistinct() const {
+	return !indices.empty();
 }
 
-unique_ptr<LocalSinkState> PhysicalHashAggregate::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<HashAggregateLocalState>(*this, context);
+const vector<idx_t> &DistinctAggregateCollectionInfo::Indices() const {
+	return this->indices;
 }
 
-SinkResultType PhysicalHashAggregate::Sink(ExecutionContext &context, GlobalSinkState &state, LocalSinkState &lstate,
-                                           DataChunk &input) const {
-	auto &llstate = (HashAggregateLocalState &)lstate;
-	auto &gstate = (HashAggregateGlobalState &)state;
-
-	DataChunk &aggregate_input_chunk = llstate.aggregate_input_chunk;
-
-	idx_t aggregate_input_idx = 0;
-	for (auto &aggregate : aggregates) {
-		auto &aggr = (BoundAggregateExpression &)*aggregate;
-		for (auto &child_expr : aggr.children) {
-			D_ASSERT(child_expr->type == ExpressionType::BOUND_REF);
-			auto &bound_ref_expr = (BoundReferenceExpression &)*child_expr;
-			D_ASSERT(bound_ref_expr.index < input.data.size());
-			aggregate_input_chunk.data[aggregate_input_idx++].Reference(input.data[bound_ref_expr.index]);
-		}
-	}
-	for (auto &aggregate : aggregates) {
-		auto &aggr = (BoundAggregateExpression &)*aggregate;
-		if (aggr.filter) {
-			auto it = filter_indexes.find(aggr.filter.get());
-			D_ASSERT(it != filter_indexes.end());
-			D_ASSERT(it->second < input.data.size());
-			aggregate_input_chunk.data[aggregate_input_idx++].Reference(input.data[it->second]);
-		}
-	}
-
-	aggregate_input_chunk.SetCardinality(input.size());
-	aggregate_input_chunk.Verify();
-
-	for (idx_t i = 0; i < radix_tables.size(); i++) {
-		radix_tables[i].Sink(context, *gstate.radix_states[i], *llstate.radix_states[i], input, aggregate_input_chunk);
-	}
-
-	return SinkResultType::NEED_MORE_INPUT;
-}
-
-void PhysicalHashAggregate::Combine(ExecutionContext &context, GlobalSinkState &state, LocalSinkState &lstate) const {
-	auto &gstate = (HashAggregateGlobalState &)state;
-	auto &llstate = (HashAggregateLocalState &)lstate;
-
-	for (idx_t i = 0; i < radix_tables.size(); i++) {
-		radix_tables[i].Combine(context, *gstate.radix_states[i], *llstate.radix_states[i]);
-	}
-}
-
-class HashAggregateFinalizeEvent : public Event {
-public:
-	HashAggregateFinalizeEvent(const PhysicalHashAggregate &op_p, HashAggregateGlobalState &gstate_p,
-	                           Pipeline *pipeline_p)
-	    : Event(pipeline_p->executor), op(op_p), gstate(gstate_p), pipeline(pipeline_p) {
-	}
-
-	const PhysicalHashAggregate &op;
-	HashAggregateGlobalState &gstate;
-	Pipeline *pipeline;
-
-public:
-	void Schedule() override {
-		vector<unique_ptr<Task>> tasks;
-		for (idx_t i = 0; i < op.radix_tables.size(); i++) {
-			op.radix_tables[i].ScheduleTasks(pipeline->executor, shared_from_this(), *gstate.radix_states[i], tasks);
-		}
-		D_ASSERT(!tasks.empty());
-		SetTasks(move(tasks));
-	}
-};
-
-SinkFinalizeType PhysicalHashAggregate::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
-                                                 GlobalSinkState &gstate_p) const {
-	auto &gstate = (HashAggregateGlobalState &)gstate_p;
-	bool any_partitioned = false;
-	for (idx_t i = 0; i < gstate.radix_states.size(); i++) {
-		bool is_partitioned = radix_tables[i].Finalize(context, *gstate.radix_states[i]);
-		if (is_partitioned) {
-			any_partitioned = true;
-		}
-	}
-	if (any_partitioned) {
-		auto new_event = make_shared<HashAggregateFinalizeEvent>(*this, gstate, &pipeline);
-		event.InsertEvent(move(new_event));
-	}
-	return SinkFinalizeType::READY;
-}
-
-//===--------------------------------------------------------------------===//
-// Source
-//===--------------------------------------------------------------------===//
-class PhysicalHashAggregateState : public GlobalSourceState {
-public:
-	explicit PhysicalHashAggregateState(ClientContext &context, const PhysicalHashAggregate &op) : scan_index(0) {
-		for (auto &rt : op.radix_tables) {
-			radix_states.push_back(rt.GetGlobalSourceState(context));
-		}
-	}
-
-	idx_t scan_index;
-
-	vector<unique_ptr<GlobalSourceState>> radix_states;
-};
-
-unique_ptr<GlobalSourceState> PhysicalHashAggregate::GetGlobalSourceState(ClientContext &context) const {
-	return make_unique<PhysicalHashAggregateState>(context, *this);
-}
-
-void PhysicalHashAggregate::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate_p,
-                                    LocalSourceState &lstate) const {
-	auto &gstate = (HashAggregateGlobalState &)*sink_state;
-	auto &state = (PhysicalHashAggregateState &)gstate_p;
-	while (state.scan_index < state.radix_states.size()) {
-		radix_tables[state.scan_index].GetData(context, chunk, *gstate.radix_states[state.scan_index],
-		                                       *state.radix_states[state.scan_index]);
-		if (chunk.size() != 0) {
-			return;
-		}
-
-		state.scan_index++;
-	}
-}
-
-string PhysicalHashAggregate::ParamsToString() const {
-	string result;
-	for (idx_t i = 0; i < groups.size(); i++) {
-		if (i > 0) {
-			result += "\n";
-		}
-		result += groups[i]->GetName();
-	}
+static vector<idx_t> GetDistinctIndices(vector<unique_ptr<Expression>> &aggregates) {
+	vector<idx_t> distinct_indices;
 	for (idx_t i = 0; i < aggregates.size(); i++) {
-		auto &aggregate = (BoundAggregateExpression &)*aggregates[i];
-		if (i > 0 || !groups.empty()) {
-			result += "\n";
-		}
-		result += aggregates[i]->GetName();
-		if (aggregate.filter) {
-			result += " Filter: " + aggregate.filter->GetName();
+		auto &aggregate = aggregates[i];
+		auto &aggr = (BoundAggregateExpression &)*aggregate;
+		if (aggr.IsDistinct()) {
+			distinct_indices.push_back(i);
 		}
 	}
-	return result;
+	return distinct_indices;
+}
+
+unique_ptr<DistinctAggregateCollectionInfo>
+DistinctAggregateCollectionInfo::Create(vector<unique_ptr<Expression>> &aggregates) {
+	vector<idx_t> indices = GetDistinctIndices(aggregates);
+	if (indices.empty()) {
+		return nullptr;
+	}
+	return make_unique<DistinctAggregateCollectionInfo>(aggregates, move(indices));
+}
+
+bool DistinctAggregateData::IsDistinct(idx_t index) const {
+	bool is_distinct = !radix_tables.empty() && info.table_map.count(index);
+#ifdef DEBUG
+	//! Make sure that if it is distinct, it's also in the indices
+	//! And if it's not distinct, that it's also not in the indices
+	bool found = false;
+	for (auto &idx : info.indices) {
+		if (idx == index) {
+			found = true;
+			break;
+		}
+	}
+	D_ASSERT(found == is_distinct);
+#endif
+	return is_distinct;
 }
 
 } // namespace duckdb

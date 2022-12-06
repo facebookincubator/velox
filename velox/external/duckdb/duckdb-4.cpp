@@ -8,6 +8,1017 @@
 
 
 
+namespace duckdb {
+
+void BuiltinFunctions::RegisterAlgebraicAggregates() {
+	Register<AvgFun>();
+
+	Register<CovarSampFun>();
+	Register<CovarPopFun>();
+
+	Register<StdDevSampFun>();
+	Register<StdDevPopFun>();
+	Register<VarPopFun>();
+	Register<VarSampFun>();
+	Register<VarianceFun>();
+	Register<StandardErrorOfTheMeanFun>();
+	Register<Corr>();
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+struct ApproxDistinctCountState {
+	ApproxDistinctCountState() : log(nullptr) {
+	}
+	~ApproxDistinctCountState() {
+		if (log) {
+			delete log;
+		}
+	}
+	void Resize(idx_t count) {
+		indices.resize(count);
+		counts.resize(count);
+	}
+
+	HyperLogLog *log;
+	vector<uint64_t> indices;
+	vector<uint8_t> counts;
+};
+
+struct ApproxCountDistinctFunction {
+	template <class STATE>
+	static void Initialize(STATE *state) {
+		new (state) STATE;
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
+		if (!source.log) {
+			return;
+		}
+		if (!target->log) {
+			target->log = new HyperLogLog();
+		}
+		D_ASSERT(target->log);
+		D_ASSERT(source.log);
+		auto new_log = target->log->MergePointer(*source.log);
+		delete target->log;
+		target->log = new_log;
+	}
+
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		if (state->log) {
+			target[idx] = state->log->Count();
+		} else {
+			target[idx] = 0;
+		}
+	}
+
+	static bool IgnoreNull() {
+		return true;
+	}
+	template <class STATE>
+	static void Destroy(STATE *state) {
+		state->~STATE();
+	}
+};
+
+static void ApproxCountDistinctSimpleUpdateFunction(Vector inputs[], AggregateInputData &, idx_t input_count,
+                                                    data_ptr_t state, idx_t count) {
+	D_ASSERT(input_count == 1);
+
+	auto agg_state = (ApproxDistinctCountState *)state;
+	if (!agg_state->log) {
+		agg_state->log = new HyperLogLog();
+	}
+
+	UnifiedVectorFormat vdata;
+	inputs[0].ToUnifiedFormat(count, vdata);
+
+	agg_state->Resize(count);
+	auto indices = agg_state->indices.data();
+	auto counts = agg_state->counts.data();
+
+	HyperLogLog::ProcessEntries(vdata, inputs[0].GetType(), indices, counts, count);
+	agg_state->log->AddToLog(vdata, count, indices, counts);
+}
+
+static void ApproxCountDistinctUpdateFunction(Vector inputs[], AggregateInputData &, idx_t input_count,
+                                              Vector &state_vector, idx_t count) {
+	D_ASSERT(input_count == 1);
+
+	UnifiedVectorFormat sdata;
+	state_vector.ToUnifiedFormat(count, sdata);
+	auto states = (ApproxDistinctCountState **)sdata.data;
+
+	uint64_t *indices;
+	uint8_t *counts;
+	for (idx_t i = 0; i < count; i++) {
+		auto agg_state = states[sdata.sel->get_index(i)];
+		if (!agg_state->log) {
+			agg_state->log = new HyperLogLog();
+		}
+		if (i == 0) {
+			agg_state->Resize(count);
+			indices = agg_state->indices.data();
+			counts = agg_state->counts.data();
+		}
+	}
+
+	UnifiedVectorFormat vdata;
+	inputs[0].ToUnifiedFormat(count, vdata);
+
+	HyperLogLog::ProcessEntries(vdata, inputs[0].GetType(), indices, counts, count);
+	HyperLogLog::AddToLogs(vdata, count, indices, counts, (HyperLogLog ***)states, sdata.sel);
+}
+
+AggregateFunction GetApproxCountDistinctFunction(const LogicalType &input_type) {
+	auto fun = AggregateFunction(
+	    {input_type}, LogicalTypeId::BIGINT, AggregateFunction::StateSize<ApproxDistinctCountState>,
+	    AggregateFunction::StateInitialize<ApproxDistinctCountState, ApproxCountDistinctFunction>,
+	    ApproxCountDistinctUpdateFunction,
+	    AggregateFunction::StateCombine<ApproxDistinctCountState, ApproxCountDistinctFunction>,
+	    AggregateFunction::StateFinalize<ApproxDistinctCountState, int64_t, ApproxCountDistinctFunction>,
+	    ApproxCountDistinctSimpleUpdateFunction, nullptr,
+	    AggregateFunction::StateDestroy<ApproxDistinctCountState, ApproxCountDistinctFunction>);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	return fun;
+}
+
+void ApproxCountDistinctFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunctionSet approx_count("approx_count_distinct");
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::UTINYINT));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::USMALLINT));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::UINTEGER));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::UBIGINT));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::TINYINT));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::SMALLINT));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::BIGINT));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::HUGEINT));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::FLOAT));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::DOUBLE));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::VARCHAR));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::TIMESTAMP));
+	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::TIMESTAMP_TZ));
+	set.AddFunction(approx_count);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+namespace duckdb {
+
+template <class T, class T2>
+struct ArgMinMaxState {
+	T arg;
+	T2 value;
+	bool is_initialized;
+};
+
+template <class T>
+static void ArgMinMaxDestroyValue(T value) {
+}
+
+template <>
+void ArgMinMaxDestroyValue(string_t value) {
+	if (!value.IsInlined()) {
+		delete[] value.GetDataUnsafe();
+	}
+}
+
+template <class T>
+static void ArgMinMaxAssignValue(T &target, T new_value, bool is_initialized) {
+	target = new_value;
+}
+
+template <>
+void ArgMinMaxAssignValue(string_t &target, string_t new_value, bool is_initialized) {
+	if (is_initialized) {
+		ArgMinMaxDestroyValue(target);
+	}
+	if (new_value.IsInlined()) {
+		target = new_value;
+	} else {
+		// non-inlined string, need to allocate space for it
+		auto len = new_value.GetSize();
+		auto ptr = new char[len];
+		memcpy(ptr, new_value.GetDataUnsafe(), len);
+
+		target = string_t(ptr, len);
+	}
+}
+
+template <class COMPARATOR>
+struct ArgMinMaxBase {
+	template <class STATE>
+	static void Destroy(STATE *state) {
+		if (state->is_initialized) {
+			ArgMinMaxDestroyValue(state->arg);
+			ArgMinMaxDestroyValue(state->value);
+		}
+	}
+
+	template <class STATE>
+	static void Initialize(STATE *state) {
+		state->is_initialized = false;
+	}
+
+	template <class A_TYPE, class B_TYPE, class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, A_TYPE *x_data, B_TYPE *y_data, ValidityMask &amask,
+	                      ValidityMask &bmask, idx_t xidx, idx_t yidx) {
+		if (!state->is_initialized) {
+			ArgMinMaxAssignValue<A_TYPE>(state->arg, x_data[xidx], false);
+			ArgMinMaxAssignValue<B_TYPE>(state->value, y_data[yidx], false);
+			state->is_initialized = true;
+		} else {
+			OP::template Execute<A_TYPE, B_TYPE, STATE>(state, x_data[xidx], y_data[yidx]);
+		}
+	}
+
+	template <class A_TYPE, class B_TYPE, class STATE>
+	static void Execute(STATE *state, A_TYPE x_data, B_TYPE y_data) {
+		if (COMPARATOR::Operation(y_data, state->value)) {
+			ArgMinMaxAssignValue<A_TYPE>(state->arg, x_data, true);
+			ArgMinMaxAssignValue<B_TYPE>(state->value, y_data, true);
+		}
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
+		if (!source.is_initialized) {
+			return;
+		}
+		if (!target->is_initialized || COMPARATOR::Operation(source.value, target->value)) {
+			ArgMinMaxAssignValue(target->arg, source.arg, target->is_initialized);
+			ArgMinMaxAssignValue(target->value, source.value, target->is_initialized);
+			target->is_initialized = true;
+		}
+	}
+
+	static bool IgnoreNull() {
+		return true;
+	}
+};
+
+template <class COMPARATOR>
+struct StringArgMinMax : public ArgMinMaxBase<COMPARATOR> {
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		if (!state->is_initialized) {
+			mask.SetInvalid(idx);
+		} else {
+			target[idx] = StringVector::AddStringOrBlob(result, state->arg);
+		}
+	}
+};
+
+template <class COMPARATOR>
+struct NumericArgMinMax : public ArgMinMaxBase<COMPARATOR> {
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		if (!state->is_initialized) {
+			mask.SetInvalid(idx);
+		} else {
+			target[idx] = state->arg;
+		}
+	}
+};
+
+using NumericArgMinOperation = NumericArgMinMax<LessThan>;
+using NumericArgMaxOperation = NumericArgMinMax<GreaterThan>;
+using StringArgMinOperation = StringArgMinMax<LessThan>;
+using StringArgMaxOperation = StringArgMinMax<GreaterThan>;
+
+template <class OP, class T, class T2>
+AggregateFunction GetArgMinMaxFunctionInternal(const LogicalType &arg_2, const LogicalType &arg) {
+	auto function = AggregateFunction::BinaryAggregate<ArgMinMaxState<T, T2>, T, T2, T, OP>(arg, arg_2, arg);
+	if (arg.InternalType() == PhysicalType::VARCHAR || arg_2.InternalType() == PhysicalType::VARCHAR) {
+		function.destructor = AggregateFunction::StateDestroy<ArgMinMaxState<T, T2>, OP>;
+	}
+	return function;
+}
+template <class OP, class T>
+AggregateFunction GetArgMinMaxFunctionArg2(const LogicalType &arg_2, const LogicalType &arg) {
+	switch (arg_2.InternalType()) {
+	case PhysicalType::INT32:
+		return GetArgMinMaxFunctionInternal<OP, T, int32_t>(arg_2, arg);
+	case PhysicalType::INT64:
+		return GetArgMinMaxFunctionInternal<OP, T, int64_t>(arg_2, arg);
+	case PhysicalType::DOUBLE:
+		return GetArgMinMaxFunctionInternal<OP, T, double>(arg_2, arg);
+	case PhysicalType::VARCHAR:
+		return GetArgMinMaxFunctionInternal<OP, T, string_t>(arg_2, arg);
+	default:
+		throw InternalException("Unimplemented arg_min/arg_max aggregate");
+	}
+}
+
+template <class OP, class T>
+void AddArgMinMaxFunctionArg2(AggregateFunctionSet &fun, const LogicalType &arg) {
+	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::INTEGER, arg));
+	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::BIGINT, arg));
+	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::DOUBLE, arg));
+	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::VARCHAR, arg));
+	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::DATE, arg));
+	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::TIMESTAMP, arg));
+	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::TIMESTAMP_TZ, arg));
+	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::BLOB, arg));
+}
+
+template <class OP, class STRING_OP>
+static void AddArgMinMaxFunctions(AggregateFunctionSet &fun) {
+	AddArgMinMaxFunctionArg2<OP, int32_t>(fun, LogicalType::INTEGER);
+	AddArgMinMaxFunctionArg2<OP, int64_t>(fun, LogicalType::BIGINT);
+	AddArgMinMaxFunctionArg2<OP, double>(fun, LogicalType::DOUBLE);
+	AddArgMinMaxFunctionArg2<STRING_OP, string_t>(fun, LogicalType::VARCHAR);
+	AddArgMinMaxFunctionArg2<OP, date_t>(fun, LogicalType::DATE);
+	AddArgMinMaxFunctionArg2<OP, timestamp_t>(fun, LogicalType::TIMESTAMP);
+	AddArgMinMaxFunctionArg2<OP, timestamp_t>(fun, LogicalType::TIMESTAMP_TZ);
+	AddArgMinMaxFunctionArg2<STRING_OP, string_t>(fun, LogicalType::BLOB);
+}
+
+void ArgMinFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunctionSet fun("argmin");
+	AddArgMinMaxFunctions<NumericArgMinOperation, StringArgMinOperation>(fun);
+	set.AddFunction(fun);
+
+	//! Add min_by alias
+	fun.name = "min_by";
+	set.AddFunction(fun);
+
+	//! Add arg_min alias
+	fun.name = "arg_min";
+	set.AddFunction(fun);
+}
+
+void ArgMaxFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunctionSet fun("argmax");
+	AddArgMinMaxFunctions<NumericArgMaxOperation, StringArgMaxOperation>(fun);
+	set.AddFunction(fun);
+
+	//! Add max_by alias
+	fun.name = "max_by";
+	set.AddFunction(fun);
+
+	//! Add arg_max alias
+	fun.name = "arg_max";
+	set.AddFunction(fun);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+namespace duckdb {
+
+template <class T>
+struct BitState {
+	bool is_set;
+	T value;
+};
+
+template <class OP>
+static AggregateFunction GetBitfieldUnaryAggregate(LogicalType type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+		return AggregateFunction::UnaryAggregate<BitState<uint8_t>, int8_t, int8_t, OP>(type, type);
+	case LogicalTypeId::SMALLINT:
+		return AggregateFunction::UnaryAggregate<BitState<uint16_t>, int16_t, int16_t, OP>(type, type);
+	case LogicalTypeId::INTEGER:
+		return AggregateFunction::UnaryAggregate<BitState<uint32_t>, int32_t, int32_t, OP>(type, type);
+	case LogicalTypeId::BIGINT:
+		return AggregateFunction::UnaryAggregate<BitState<uint64_t>, int64_t, int64_t, OP>(type, type);
+	case LogicalTypeId::HUGEINT:
+		return AggregateFunction::UnaryAggregate<BitState<hugeint_t>, hugeint_t, hugeint_t, OP>(type, type);
+	case LogicalTypeId::UTINYINT:
+		return AggregateFunction::UnaryAggregate<BitState<uint8_t>, uint8_t, uint8_t, OP>(type, type);
+	case LogicalTypeId::USMALLINT:
+		return AggregateFunction::UnaryAggregate<BitState<uint16_t>, uint16_t, uint16_t, OP>(type, type);
+	case LogicalTypeId::UINTEGER:
+		return AggregateFunction::UnaryAggregate<BitState<uint32_t>, uint32_t, uint32_t, OP>(type, type);
+	case LogicalTypeId::UBIGINT:
+		return AggregateFunction::UnaryAggregate<BitState<uint64_t>, uint64_t, uint64_t, OP>(type, type);
+	default:
+		throw InternalException("Unimplemented bitfield type for unary aggregate");
+	}
+}
+
+struct BitAndOperation {
+	template <class STATE>
+	static void Initialize(STATE *state) {
+		//  If there are no matching rows, BIT_AND() returns a null value.
+		state->is_set = false;
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask, idx_t idx) {
+		if (!state->is_set) {
+			state->is_set = true;
+			state->value = input[idx];
+		} else {
+			state->value &= input[idx];
+		}
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void ConstantOperation(STATE *state, AggregateInputData &aggr_input_data, INPUT_TYPE *input,
+	                              ValidityMask &mask, idx_t count) {
+		//  count is not relevant
+		Operation<INPUT_TYPE, STATE, OP>(state, aggr_input_data, input, mask, 0);
+	}
+
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		if (!state->is_set) {
+			mask.SetInvalid(idx);
+		} else {
+			target[idx] = state->value;
+		}
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
+		if (!source.is_set) {
+			// source is NULL, nothing to do.
+			return;
+		}
+		if (!target->is_set) {
+			// target is NULL, use source value directly.
+			*target = source;
+		} else {
+			target->value &= source.value;
+		}
+	}
+
+	static bool IgnoreNull() {
+		return true;
+	}
+};
+
+void BitAndFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunctionSet bit_and("bit_and");
+	for (auto &type : LogicalType::Integral()) {
+		bit_and.AddFunction(GetBitfieldUnaryAggregate<BitAndOperation>(type));
+	}
+	set.AddFunction(bit_and);
+}
+
+struct BitOrOperation {
+	template <class STATE>
+	static void Initialize(STATE *state) {
+		//  If there are no matching rows, BIT_OR() returns a null value.
+		state->is_set = false;
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask, idx_t idx) {
+		if (!state->is_set) {
+			state->is_set = true;
+			state->value = input[idx];
+		} else {
+			state->value |= input[idx];
+		}
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void ConstantOperation(STATE *state, AggregateInputData &aggr_input_data, INPUT_TYPE *input,
+	                              ValidityMask &mask, idx_t count) {
+		//  count is irrelevant
+		Operation<INPUT_TYPE, STATE, OP>(state, aggr_input_data, input, mask, 0);
+	}
+
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		if (!state->is_set) {
+			mask.SetInvalid(idx);
+		} else {
+			target[idx] = state->value;
+		}
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
+		if (!source.is_set) {
+			// source is NULL, nothing to do.
+			return;
+		}
+		if (!target->is_set) {
+			// target is NULL, use source value directly.
+			*target = source;
+		} else {
+			target->value |= source.value;
+		}
+	}
+
+	static bool IgnoreNull() {
+		return true;
+	}
+};
+
+void BitOrFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunctionSet bit_or("bit_or");
+	for (auto &type : LogicalType::Integral()) {
+		bit_or.AddFunction(GetBitfieldUnaryAggregate<BitOrOperation>(type));
+	}
+	set.AddFunction(bit_or);
+}
+
+struct BitXorOperation {
+	template <class STATE>
+	static void Initialize(STATE *state) {
+		//  If there are no matching rows, BIT_XOR() returns a null value.
+		state->is_set = false;
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask, idx_t idx) {
+		if (!state->is_set) {
+			state->is_set = true;
+			state->value = input[idx];
+		} else {
+			state->value ^= input[idx];
+		}
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void ConstantOperation(STATE *state, AggregateInputData &aggr_input_data, INPUT_TYPE *input,
+	                              ValidityMask &mask, idx_t count) {
+		for (idx_t i = 0; i < count; i++) {
+			Operation<INPUT_TYPE, STATE, OP>(state, aggr_input_data, input, mask, 0);
+		}
+	}
+
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		if (!state->is_set) {
+			mask.SetInvalid(idx);
+		} else {
+			target[idx] = state->value;
+		}
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
+		if (!source.is_set) {
+			// source is NULL, nothing to do.
+			return;
+		}
+		if (!target->is_set) {
+			// target is NULL, use source value directly.
+			*target = source;
+		} else {
+			target->value ^= source.value;
+		}
+	}
+
+	static bool IgnoreNull() {
+		return true;
+	}
+};
+
+void BitXorFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunctionSet bit_xor("bit_xor");
+	for (auto &type : LogicalType::Integral()) {
+		bit_xor.AddFunction(GetBitfieldUnaryAggregate<BitXorOperation>(type));
+	}
+	set.AddFunction(bit_xor);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+namespace duckdb {
+
+struct BoolState {
+	bool empty;
+	bool val;
+};
+
+struct BoolAndFunFunction {
+	template <class STATE>
+	static void Initialize(STATE *state) {
+		state->val = true;
+		state->empty = true;
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
+		target->val = target->val && source.val;
+		target->empty = target->empty && source.empty;
+	}
+
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		if (state->empty) {
+			mask.SetInvalid(idx);
+			return;
+		}
+		target[idx] = state->val;
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask, idx_t idx) {
+		state->empty = false;
+		state->val = input[idx] && state->val;
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void ConstantOperation(STATE *state, AggregateInputData &aggr_input_data, INPUT_TYPE *input,
+	                              ValidityMask &mask, idx_t count) {
+		for (idx_t i = 0; i < count; i++) {
+			Operation<INPUT_TYPE, STATE, OP>(state, aggr_input_data, input, mask, 0);
+		}
+	}
+	static bool IgnoreNull() {
+		return true;
+	}
+};
+
+struct BoolOrFunFunction {
+	template <class STATE>
+	static void Initialize(STATE *state) {
+		state->val = false;
+		state->empty = true;
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
+		target->val = target->val || source.val;
+		target->empty = target->empty && source.empty;
+	}
+
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		if (state->empty) {
+			mask.SetInvalid(idx);
+			return;
+		}
+		target[idx] = state->val;
+	}
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask, idx_t idx) {
+		state->empty = false;
+		state->val = input[idx] || state->val;
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void ConstantOperation(STATE *state, AggregateInputData &aggr_input_data, INPUT_TYPE *input,
+	                              ValidityMask &mask, idx_t count) {
+		for (idx_t i = 0; i < count; i++) {
+			Operation<INPUT_TYPE, STATE, OP>(state, aggr_input_data, input, mask, 0);
+		}
+	}
+
+	static bool IgnoreNull() {
+		return true;
+	}
+};
+
+AggregateFunction BoolOrFun::GetFunction() {
+	auto fun = AggregateFunction::UnaryAggregate<BoolState, bool, bool, BoolOrFunFunction>(
+	    LogicalType(LogicalTypeId::BOOLEAN), LogicalType::BOOLEAN);
+	fun.name = "bool_or";
+	return fun;
+}
+
+AggregateFunction BoolAndFun::GetFunction() {
+	auto fun = AggregateFunction::UnaryAggregate<BoolState, bool, bool, BoolAndFunFunction>(
+	    LogicalType(LogicalTypeId::BOOLEAN), LogicalType::BOOLEAN);
+	fun.name = "bool_and";
+	return fun;
+}
+
+void BoolOrFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunction bool_or_function = BoolOrFun::GetFunction();
+	AggregateFunctionSet bool_or("bool_or");
+	bool_or.AddFunction(bool_or_function);
+	set.AddFunction(bool_or);
+}
+
+void BoolAndFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunction bool_and_function = BoolAndFun::GetFunction();
+	AggregateFunctionSet bool_and("bool_and");
+	bool_and.AddFunction(bool_and_function);
+	set.AddFunction(bool_and);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+namespace duckdb {
+
+struct BaseCountFunction {
+	template <class STATE>
+	static void Initialize(STATE *state) {
+		*state = 0;
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
+		*target += source;
+	}
+
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		target[idx] = *state;
+	}
+};
+
+struct CountStarFunction : public BaseCountFunction {
+	template <class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, idx_t idx) {
+		*state += 1;
+	}
+
+	template <class STATE, class OP>
+	static void ConstantOperation(STATE *state, AggregateInputData &, idx_t count) {
+		*state += count;
+	}
+};
+
+struct CountFunction : public BaseCountFunction {
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask, idx_t idx) {
+		*state += 1;
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void ConstantOperation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask,
+	                              idx_t count) {
+		*state += count;
+	}
+
+	static bool IgnoreNull() {
+		return true;
+	}
+};
+
+AggregateFunction CountFun::GetFunction() {
+	auto fun = AggregateFunction::UnaryAggregate<int64_t, int64_t, int64_t, CountFunction>(
+	    LogicalType(LogicalTypeId::ANY), LogicalType::BIGINT);
+	fun.name = "count";
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	return fun;
+}
+
+static void CountStarSerialize(FieldWriter &writer, const FunctionData *bind_data, const AggregateFunction &function) {
+}
+
+static unique_ptr<FunctionData> CountStarDeserialize(ClientContext &context, FieldReader &reader,
+                                                     AggregateFunction &function) {
+	return nullptr;
+}
+
+AggregateFunction CountStarFun::GetFunction() {
+	auto fun = AggregateFunction::NullaryAggregate<int64_t, int64_t, CountStarFunction>(LogicalType::BIGINT);
+	fun.name = "count_star";
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	// TODO is there a better way to set those?
+	fun.serialize = CountStarSerialize;
+	fun.deserialize = CountStarDeserialize;
+	return fun;
+}
+
+unique_ptr<BaseStatistics> CountPropagateStats(ClientContext &context, BoundAggregateExpression &expr,
+                                               FunctionData *bind_data, vector<unique_ptr<BaseStatistics>> &child_stats,
+                                               NodeStatistics *node_stats) {
+	if (!expr.IsDistinct() && child_stats[0] && !child_stats[0]->CanHaveNull()) {
+		// count on a column without null values: use count star
+		expr.function = CountStarFun::GetFunction();
+		expr.function.name = "count_star";
+		expr.children.clear();
+	}
+	return nullptr;
+}
+
+void CountFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunction count_function = CountFun::GetFunction();
+	count_function.statistics = CountPropagateStats;
+	AggregateFunctionSet count("count");
+	count.AddFunction(count_function);
+	// the count function can also be called without arguments
+	count_function.arguments.clear();
+	count_function.statistics = nullptr;
+	count.AddFunction(count_function);
+	set.AddFunction(count);
+}
+
+void CountStarFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunctionSet count("count_star");
+	count.AddFunction(CountStarFun::GetFunction());
+	set.AddFunction(count);
+}
+
+} // namespace duckdb
+
+
+
+
+
+#include <unordered_map>
+
+namespace duckdb {
+
+template <class T>
+struct EntropyState {
+	using DistinctMap = unordered_map<T, idx_t>;
+
+	idx_t count;
+	DistinctMap *distinct;
+
+	EntropyState &operator=(const EntropyState &other) = delete;
+
+	EntropyState &Assign(const EntropyState &other) {
+		D_ASSERT(!distinct);
+		distinct = new DistinctMap(*other.distinct);
+		count = other.count;
+		return *this;
+	}
+};
+
+struct EntropyFunctionBase {
+	template <class STATE>
+	static void Initialize(STATE *state) {
+		state->distinct = nullptr;
+		state->count = 0;
+	}
+
+	template <class STATE, class OP>
+	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
+		if (!source.distinct) {
+			return;
+		}
+		if (!target->distinct) {
+			target->Assign(source);
+			return;
+		}
+		for (auto &val : *source.distinct) {
+			auto value = val.first;
+			(*target->distinct)[value] += val.second;
+		}
+		target->count += source.count;
+	}
+
+	template <class T, class STATE>
+	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
+		double count = state->count;
+		if (state->distinct) {
+			double entropy = 0;
+			for (auto &val : *state->distinct) {
+				entropy += (val.second / count) * log2(count / val.second);
+			}
+			target[idx] = entropy;
+		} else {
+			target[idx] = 0;
+		}
+	}
+
+	static bool IgnoreNull() {
+		return true;
+	}
+	template <class STATE>
+	static void Destroy(STATE *state) {
+		if (state->distinct) {
+			delete state->distinct;
+		}
+	}
+};
+
+struct EntropyFunction : EntropyFunctionBase {
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask, idx_t idx) {
+		if (!state->distinct) {
+			state->distinct = new unordered_map<INPUT_TYPE, idx_t>();
+		}
+		(*state->distinct)[input[idx]]++;
+		state->count++;
+	}
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void ConstantOperation(STATE *state, AggregateInputData &aggr_input_data, INPUT_TYPE *input,
+	                              ValidityMask &mask, idx_t count) {
+		for (idx_t i = 0; i < count; i++) {
+			Operation<INPUT_TYPE, STATE, OP>(state, aggr_input_data, input, mask, 0);
+		}
+	}
+};
+
+struct EntropyFunctionString : EntropyFunctionBase {
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void Operation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask, idx_t idx) {
+		if (!state->distinct) {
+			state->distinct = new unordered_map<string, idx_t>();
+		}
+		auto value = input[idx].GetString();
+		(*state->distinct)[value]++;
+		state->count++;
+	}
+
+	template <class INPUT_TYPE, class STATE, class OP>
+	static void ConstantOperation(STATE *state, AggregateInputData &aggr_input_data, INPUT_TYPE *input,
+	                              ValidityMask &mask, idx_t count) {
+		for (idx_t i = 0; i < count; i++) {
+			Operation<INPUT_TYPE, STATE, OP>(state, aggr_input_data, input, mask, 0);
+		}
+	}
+};
+
+template <typename INPUT_TYPE, typename RESULT_TYPE>
+AggregateFunction GetEntropyFunction(const LogicalType &input_type, const LogicalType &result_type) {
+	auto fun =
+	    AggregateFunction::UnaryAggregateDestructor<EntropyState<INPUT_TYPE>, INPUT_TYPE, RESULT_TYPE, EntropyFunction>(
+	        input_type, result_type);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	return fun;
+}
+
+AggregateFunction GetEntropyFunctionInternal(PhysicalType type) {
+	switch (type) {
+	case PhysicalType::UINT16:
+		return AggregateFunction::UnaryAggregateDestructor<EntropyState<uint16_t>, uint16_t, double, EntropyFunction>(
+		    LogicalType::USMALLINT, LogicalType::DOUBLE);
+	case PhysicalType::UINT32:
+		return AggregateFunction::UnaryAggregateDestructor<EntropyState<uint32_t>, uint32_t, double, EntropyFunction>(
+		    LogicalType::UINTEGER, LogicalType::DOUBLE);
+	case PhysicalType::UINT64:
+		return AggregateFunction::UnaryAggregateDestructor<EntropyState<uint64_t>, uint64_t, double, EntropyFunction>(
+		    LogicalType::UBIGINT, LogicalType::DOUBLE);
+	case PhysicalType::INT16:
+		return AggregateFunction::UnaryAggregateDestructor<EntropyState<int16_t>, int16_t, double, EntropyFunction>(
+		    LogicalType::SMALLINT, LogicalType::DOUBLE);
+	case PhysicalType::INT32:
+		return AggregateFunction::UnaryAggregateDestructor<EntropyState<int32_t>, int32_t, double, EntropyFunction>(
+		    LogicalType::INTEGER, LogicalType::DOUBLE);
+	case PhysicalType::INT64:
+		return AggregateFunction::UnaryAggregateDestructor<EntropyState<int64_t>, int64_t, double, EntropyFunction>(
+		    LogicalType::BIGINT, LogicalType::DOUBLE);
+	case PhysicalType::FLOAT:
+		return AggregateFunction::UnaryAggregateDestructor<EntropyState<float>, float, double, EntropyFunction>(
+		    LogicalType::FLOAT, LogicalType::DOUBLE);
+	case PhysicalType::DOUBLE:
+		return AggregateFunction::UnaryAggregateDestructor<EntropyState<double>, double, double, EntropyFunction>(
+		    LogicalType::DOUBLE, LogicalType::DOUBLE);
+	case PhysicalType::VARCHAR:
+		return AggregateFunction::UnaryAggregateDestructor<EntropyState<string>, string_t, double,
+		                                                   EntropyFunctionString>(LogicalType::VARCHAR,
+		                                                                          LogicalType::DOUBLE);
+
+	default:
+		throw InternalException("Unimplemented approximate_count aggregate");
+	}
+}
+
+AggregateFunction GetEntropyFunction(PhysicalType type) {
+	auto fun = GetEntropyFunctionInternal(type);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	return fun;
+}
+
+void EntropyFun::RegisterFunction(BuiltinFunctions &set) {
+	AggregateFunctionSet entropy("entropy");
+	entropy.AddFunction(GetEntropyFunction(PhysicalType::UINT16));
+	entropy.AddFunction(GetEntropyFunction(PhysicalType::UINT32));
+	entropy.AddFunction(GetEntropyFunction(PhysicalType::UINT64));
+	entropy.AddFunction(GetEntropyFunction(PhysicalType::FLOAT));
+	entropy.AddFunction(GetEntropyFunction(PhysicalType::INT16));
+	entropy.AddFunction(GetEntropyFunction(PhysicalType::INT32));
+	entropy.AddFunction(GetEntropyFunction(PhysicalType::INT64));
+	entropy.AddFunction(GetEntropyFunction(PhysicalType::DOUBLE));
+	entropy.AddFunction(GetEntropyFunction(PhysicalType::VARCHAR));
+	entropy.AddFunction(GetEntropyFunction<int64_t, double>(LogicalType::TIMESTAMP, LogicalType::DOUBLE));
+	entropy.AddFunction(GetEntropyFunction<int64_t, double>(LogicalType::TIMESTAMP_TZ, LogicalType::DOUBLE));
+	set.AddFunction(entropy);
+}
+
+} // namespace duckdb
+
+
+
 
 
 namespace duckdb {
@@ -31,15 +1042,18 @@ struct FirstFunctionBase {
 	}
 };
 
-template <bool LAST>
+template <bool LAST, bool SKIP_NULLS>
 struct FirstFunction : public FirstFunctionBase {
 	template <class INPUT_TYPE, class STATE, class OP>
 	static void Operation(STATE *state, AggregateInputData &, INPUT_TYPE *input, ValidityMask &mask, idx_t idx) {
 		if (LAST || !state->is_set) {
-			state->is_set = true;
 			if (!mask.RowIsValid(idx)) {
+				if (!SKIP_NULLS) {
+					state->is_set = true;
+				}
 				state->is_null = true;
 			} else {
+				state->is_set = true;
 				state->is_null = false;
 				state->value = input[idx];
 			}
@@ -69,14 +1083,20 @@ struct FirstFunction : public FirstFunctionBase {
 	}
 };
 
-template <bool LAST>
+template <bool LAST, bool SKIP_NULLS>
 struct FirstFunctionString : public FirstFunctionBase {
 	template <class STATE>
 	static void SetValue(STATE *state, string_t value, bool is_null) {
-		state->is_set = true;
+		if (LAST && state->is_set) {
+			Destroy(state);
+		}
 		if (is_null) {
-			state->is_null = true;
+			if (!SKIP_NULLS) {
+				state->is_set = true;
+				state->is_null = true;
+			}
 		} else {
+			state->is_set = true;
 			if (value.IsInlined()) {
 				state->value = value;
 			} else {
@@ -131,7 +1151,7 @@ struct FirstStateVector {
 	Vector *value;
 };
 
-template <bool LAST>
+template <bool LAST, bool SKIP_NULLS>
 struct FirstVectorFunction {
 	template <class STATE>
 	static void Initialize(STATE *state) {
@@ -145,7 +1165,7 @@ struct FirstVectorFunction {
 		}
 	}
 	static bool IgnoreNull() {
-		return false;
+		return SKIP_NULLS;
 	}
 
 	template <class STATE>
@@ -161,11 +1181,18 @@ struct FirstVectorFunction {
 
 	static void Update(Vector inputs[], AggregateInputData &, idx_t input_count, Vector &state_vector, idx_t count) {
 		auto &input = inputs[0];
-		VectorData sdata;
-		state_vector.Orrify(count, sdata);
+		UnifiedVectorFormat idata;
+		input.ToUnifiedFormat(count, idata);
+
+		UnifiedVectorFormat sdata;
+		state_vector.ToUnifiedFormat(count, sdata);
 
 		auto states = (FirstStateVector **)sdata.data;
 		for (idx_t i = 0; i < count; i++) {
+			const auto idx = idata.sel->get_index(i);
+			if (SKIP_NULLS && !idata.validity.RowIsValid(idx)) {
+				continue;
+			}
 			auto state = states[sdata.sel->get_index(i)];
 			if (LAST || !state->value) {
 				SetValue(state, input, i);
@@ -204,79 +1231,77 @@ struct FirstVectorFunction {
 	}
 };
 
-template <class T, bool LAST>
+template <class T, bool LAST, bool SKIP_NULLS>
 static AggregateFunction GetFirstAggregateTemplated(LogicalType type) {
-	auto agg = AggregateFunction::UnaryAggregate<FirstState<T>, T, T, FirstFunction<LAST>>(type, type);
-	return agg;
+	return AggregateFunction::UnaryAggregate<FirstState<T>, T, T, FirstFunction<LAST, SKIP_NULLS>>(type, type);
 }
 
-template <bool LAST>
+template <bool LAST, bool SKIP_NULLS>
 static AggregateFunction GetFirstFunction(const LogicalType &type);
 
-template <bool LAST>
+template <bool LAST, bool SKIP_NULLS>
 AggregateFunction GetDecimalFirstFunction(const LogicalType &type) {
 	D_ASSERT(type.id() == LogicalTypeId::DECIMAL);
 	switch (type.InternalType()) {
 	case PhysicalType::INT16:
-		return GetFirstFunction<LAST>(LogicalType::SMALLINT);
+		return GetFirstFunction<LAST, SKIP_NULLS>(LogicalType::SMALLINT);
 	case PhysicalType::INT32:
-		return GetFirstFunction<LAST>(LogicalType::INTEGER);
+		return GetFirstFunction<LAST, SKIP_NULLS>(LogicalType::INTEGER);
 	case PhysicalType::INT64:
-		return GetFirstFunction<LAST>(LogicalType::BIGINT);
+		return GetFirstFunction<LAST, SKIP_NULLS>(LogicalType::BIGINT);
 	default:
-		return GetFirstFunction<LAST>(LogicalType::HUGEINT);
+		return GetFirstFunction<LAST, SKIP_NULLS>(LogicalType::HUGEINT);
 	}
 }
 
-template <bool LAST>
+template <bool LAST, bool SKIP_NULLS>
 static AggregateFunction GetFirstFunction(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::BOOLEAN:
-		return GetFirstAggregateTemplated<int8_t, LAST>(type);
+		return GetFirstAggregateTemplated<int8_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::TINYINT:
-		return GetFirstAggregateTemplated<int8_t, LAST>(type);
+		return GetFirstAggregateTemplated<int8_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::SMALLINT:
-		return GetFirstAggregateTemplated<int16_t, LAST>(type);
+		return GetFirstAggregateTemplated<int16_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::INTEGER:
 	case LogicalTypeId::DATE:
-		return GetFirstAggregateTemplated<int32_t, LAST>(type);
+		return GetFirstAggregateTemplated<int32_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::BIGINT:
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIME_TZ:
 	case LogicalTypeId::TIMESTAMP_TZ:
-		return GetFirstAggregateTemplated<int64_t, LAST>(type);
+		return GetFirstAggregateTemplated<int64_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::UTINYINT:
-		return GetFirstAggregateTemplated<uint8_t, LAST>(type);
+		return GetFirstAggregateTemplated<uint8_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::USMALLINT:
-		return GetFirstAggregateTemplated<uint16_t, LAST>(type);
+		return GetFirstAggregateTemplated<uint16_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::UINTEGER:
-		return GetFirstAggregateTemplated<uint32_t, LAST>(type);
+		return GetFirstAggregateTemplated<uint32_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::UBIGINT:
-		return GetFirstAggregateTemplated<uint64_t, LAST>(type);
+		return GetFirstAggregateTemplated<uint64_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::HUGEINT:
-		return GetFirstAggregateTemplated<hugeint_t, LAST>(type);
+		return GetFirstAggregateTemplated<hugeint_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::FLOAT:
-		return GetFirstAggregateTemplated<float, LAST>(type);
+		return GetFirstAggregateTemplated<float, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::DOUBLE:
-		return GetFirstAggregateTemplated<double, LAST>(type);
+		return GetFirstAggregateTemplated<double, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::INTERVAL:
-		return GetFirstAggregateTemplated<interval_t, LAST>(type);
+		return GetFirstAggregateTemplated<interval_t, LAST, SKIP_NULLS>(type);
 	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::BLOB: {
-		auto agg = AggregateFunction::UnaryAggregateDestructor<FirstState<string_t>, string_t, string_t,
-		                                                       FirstFunctionString<LAST>>(type, type);
-		return agg;
-	}
+	case LogicalTypeId::BLOB:
+		return AggregateFunction::UnaryAggregateDestructor<FirstState<string_t>, string_t, string_t,
+		                                                   FirstFunctionString<LAST, SKIP_NULLS>>(type, type);
 	case LogicalTypeId::DECIMAL: {
 		type.Verify();
-		AggregateFunction function = GetDecimalFirstFunction<LAST>(type);
+		AggregateFunction function = GetDecimalFirstFunction<LAST, SKIP_NULLS>(type);
 		function.arguments[0] = type;
 		function.return_type = type;
+		// TODO set_key here?
 		return function;
 	}
 	default: {
-		using OP = FirstVectorFunction<LAST>;
+		using OP = FirstVectorFunction<LAST, SKIP_NULLS>;
 		return AggregateFunction({type}, type, AggregateFunction::StateSize<FirstStateVector>,
 		                         AggregateFunction::StateInitialize<FirstStateVector, OP>, OP::Update,
 		                         AggregateFunction::StateCombine<FirstStateVector, OP>,
@@ -287,40 +1312,67 @@ static AggregateFunction GetFirstFunction(const LogicalType &type) {
 }
 
 AggregateFunction FirstFun::GetFunction(const LogicalType &type) {
-	auto fun = GetFirstFunction<false>(type);
+	auto fun = GetFirstFunction<false, false>(type);
 	fun.name = "first";
 	return fun;
 }
 
-template <bool LAST>
+template <bool LAST, bool SKIP_NULLS>
 unique_ptr<FunctionData> BindDecimalFirst(ClientContext &context, AggregateFunction &function,
                                           vector<unique_ptr<Expression>> &arguments) {
 	auto decimal_type = arguments[0]->return_type;
-	function = GetFirstFunction<LAST>(decimal_type);
+	function = GetFirstFunction<LAST, SKIP_NULLS>(decimal_type);
 	function.name = "first";
 	function.return_type = decimal_type;
 	return nullptr;
 }
 
+template <bool LAST, bool SKIP_NULLS>
+static AggregateFunction GetFirstOperator(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::DECIMAL) {
+		throw InternalException("FIXME: this shouldn't happen...");
+	}
+	return GetFirstFunction<LAST, SKIP_NULLS>(type);
+}
+
+template <bool LAST, bool SKIP_NULLS>
+unique_ptr<FunctionData> BindFirst(ClientContext &context, AggregateFunction &function,
+                                   vector<unique_ptr<Expression>> &arguments) {
+	auto input_type = arguments[0]->return_type;
+	auto name = move(function.name);
+	function = GetFirstOperator<LAST, SKIP_NULLS>(input_type);
+	function.name = move(name);
+	if (function.bind) {
+		return function.bind(context, function, arguments);
+	} else {
+		return nullptr;
+	}
+}
+
+template <bool LAST, bool SKIP_NULLS>
+static void AddFirstOperator(AggregateFunctionSet &set) {
+	set.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL}, LogicalTypeId::DECIMAL, nullptr, nullptr, nullptr,
+	                                  nullptr, nullptr, nullptr, BindDecimalFirst<LAST, SKIP_NULLS>));
+	set.AddFunction(AggregateFunction({LogicalType::ANY}, LogicalType::ANY, nullptr, nullptr, nullptr, nullptr, nullptr,
+	                                  nullptr, BindFirst<LAST, SKIP_NULLS>));
+}
+
 void FirstFun::RegisterFunction(BuiltinFunctions &set) {
 	AggregateFunctionSet first("first");
 	AggregateFunctionSet last("last");
-	for (auto &type : LogicalType::AllTypes()) {
-		if (type.id() == LogicalTypeId::DECIMAL) {
-			first.AddFunction(AggregateFunction({type}, type, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-			                                    BindDecimalFirst<false>, nullptr, nullptr, nullptr));
-			last.AddFunction(AggregateFunction({type}, type, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-			                                   BindDecimalFirst<true>, nullptr, nullptr, nullptr));
-		} else {
-			first.AddFunction(GetFirstFunction<false>(type));
-			last.AddFunction(GetFirstFunction<true>(type));
-		}
-	}
+	AggregateFunctionSet any_value("any_value");
+
+	AddFirstOperator<false, false>(first);
+	AddFirstOperator<true, false>(last);
+	AddFirstOperator<false, true>(any_value);
+
 	set.AddFunction(first);
 	first.name = "arbitrary";
 	set.AddFunction(first);
 
 	set.AddFunction(last);
+
+	set.AddFunction(any_value);
 }
 
 } // namespace duckdb
@@ -428,7 +1480,6 @@ void KurtosisFun::RegisterFunction(BuiltinFunctions &set) {
 
 
 
-
 namespace duckdb {
 
 template <class T>
@@ -439,39 +1490,33 @@ struct MinMaxState {
 
 template <class OP>
 static AggregateFunction GetUnaryAggregate(LogicalType type) {
-	switch (type.id()) {
-	case LogicalTypeId::BOOLEAN:
+	switch (type.InternalType()) {
+	case PhysicalType::BOOL:
 		return AggregateFunction::UnaryAggregate<MinMaxState<int8_t>, int8_t, int8_t, OP>(type, type);
-	case LogicalTypeId::TINYINT:
+	case PhysicalType::INT8:
 		return AggregateFunction::UnaryAggregate<MinMaxState<int8_t>, int8_t, int8_t, OP>(type, type);
-	case LogicalTypeId::SMALLINT:
+	case PhysicalType::INT16:
 		return AggregateFunction::UnaryAggregate<MinMaxState<int16_t>, int16_t, int16_t, OP>(type, type);
-	case LogicalTypeId::DATE:
-	case LogicalTypeId::INTEGER:
+	case PhysicalType::INT32:
 		return AggregateFunction::UnaryAggregate<MinMaxState<int32_t>, int32_t, int32_t, OP>(type, type);
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIME_TZ:
-	case LogicalTypeId::BIGINT:
-		return AggregateFunction::UnaryAggregate<MinMaxState<int64_t>, int64_t, int64_t, OP>(type, type, true);
-	case LogicalTypeId::UTINYINT:
-		return AggregateFunction::UnaryAggregate<MinMaxState<uint8_t>, uint8_t, uint8_t, OP>(type, type, true);
-	case LogicalTypeId::USMALLINT:
-		return AggregateFunction::UnaryAggregate<MinMaxState<uint16_t>, uint16_t, uint16_t, OP>(type, type, true);
-	case LogicalTypeId::UINTEGER:
-		return AggregateFunction::UnaryAggregate<MinMaxState<uint32_t>, uint32_t, uint32_t, OP>(type, type, true);
-	case LogicalTypeId::UBIGINT:
-		return AggregateFunction::UnaryAggregate<MinMaxState<uint64_t>, uint64_t, uint64_t, OP>(type, type, true);
-	case LogicalTypeId::HUGEINT:
-	case LogicalTypeId::UUID:
-		return AggregateFunction::UnaryAggregate<MinMaxState<hugeint_t>, hugeint_t, hugeint_t, OP>(type, type, true);
-	case LogicalTypeId::FLOAT:
-		return AggregateFunction::UnaryAggregate<MinMaxState<float>, float, float, OP>(type, type, true);
-	case LogicalTypeId::DOUBLE:
-		return AggregateFunction::UnaryAggregate<MinMaxState<double>, double, double, OP>(type, type, true);
-	case LogicalTypeId::INTERVAL:
-		return AggregateFunction::UnaryAggregate<MinMaxState<interval_t>, interval_t, interval_t, OP>(type, type, true);
+	case PhysicalType::INT64:
+		return AggregateFunction::UnaryAggregate<MinMaxState<int64_t>, int64_t, int64_t, OP>(type, type);
+	case PhysicalType::UINT8:
+		return AggregateFunction::UnaryAggregate<MinMaxState<uint8_t>, uint8_t, uint8_t, OP>(type, type);
+	case PhysicalType::UINT16:
+		return AggregateFunction::UnaryAggregate<MinMaxState<uint16_t>, uint16_t, uint16_t, OP>(type, type);
+	case PhysicalType::UINT32:
+		return AggregateFunction::UnaryAggregate<MinMaxState<uint32_t>, uint32_t, uint32_t, OP>(type, type);
+	case PhysicalType::UINT64:
+		return AggregateFunction::UnaryAggregate<MinMaxState<uint64_t>, uint64_t, uint64_t, OP>(type, type);
+	case PhysicalType::INT128:
+		return AggregateFunction::UnaryAggregate<MinMaxState<hugeint_t>, hugeint_t, hugeint_t, OP>(type, type);
+	case PhysicalType::FLOAT:
+		return AggregateFunction::UnaryAggregate<MinMaxState<float>, float, float, OP>(type, type);
+	case PhysicalType::DOUBLE:
+		return AggregateFunction::UnaryAggregate<MinMaxState<double>, double, double, OP>(type, type);
+	case PhysicalType::INTERVAL:
+		return AggregateFunction::UnaryAggregate<MinMaxState<interval_t>, interval_t, interval_t, OP>(type, type);
 	default:
 		throw InternalException("Unimplemented type for min/max aggregate");
 	}
@@ -637,9 +1682,9 @@ struct MaxOperationString : public StringMinMaxBase {
 
 template <typename T, class OP>
 static bool TemplatedOptimumType(Vector &left, idx_t lidx, idx_t lcount, Vector &right, idx_t ridx, idx_t rcount) {
-	VectorData lvdata, rvdata;
-	left.Orrify(lcount, lvdata);
-	right.Orrify(rcount, rvdata);
+	UnifiedVectorFormat lvdata, rvdata;
+	left.ToUnifiedFormat(lcount, lvdata);
+	right.ToUnifiedFormat(rcount, rvdata);
 
 	lidx = lvdata.sel->get_index(lidx);
 	ridx = rvdata.sel->get_index(ridx);
@@ -708,9 +1753,9 @@ static bool TemplatedOptimumStruct(Vector &left, idx_t lidx_p, idx_t lcount, Vec
                                    idx_t rcount) {
 	// STRUCT dictionaries apply to all the children
 	// so map the indexes first
-	VectorData lvdata, rvdata;
-	left.Orrify(lcount, lvdata);
-	right.Orrify(rcount, rvdata);
+	UnifiedVectorFormat lvdata, rvdata;
+	left.ToUnifiedFormat(lcount, lvdata);
+	right.ToUnifiedFormat(rcount, rvdata);
 
 	idx_t lidx = lvdata.sel->get_index(lidx_p);
 	idx_t ridx = rvdata.sel->get_index(ridx_p);
@@ -750,9 +1795,9 @@ static bool TemplatedOptimumStruct(Vector &left, idx_t lidx_p, idx_t lcount, Vec
 
 template <class OP>
 static bool TemplatedOptimumList(Vector &left, idx_t lidx, idx_t lcount, Vector &right, idx_t ridx, idx_t rcount) {
-	VectorData lvdata, rvdata;
-	left.Orrify(lcount, lvdata);
-	right.Orrify(rcount, rvdata);
+	UnifiedVectorFormat lvdata, rvdata;
+	left.ToUnifiedFormat(lcount, lvdata);
+	right.ToUnifiedFormat(rcount, rvdata);
 
 	// Update the indexes and vector sizes for recursion.
 	lidx = lvdata.sel->get_index(lidx);
@@ -840,11 +1885,11 @@ struct VectorMinMaxBase {
 	template <class STATE, class OP>
 	static void Update(Vector inputs[], AggregateInputData &, idx_t input_count, Vector &state_vector, idx_t count) {
 		auto &input = inputs[0];
-		VectorData idata;
-		input.Orrify(count, idata);
+		UnifiedVectorFormat idata;
+		input.ToUnifiedFormat(count, idata);
 
-		VectorData sdata;
-		state_vector.Orrify(count, sdata);
+		UnifiedVectorFormat sdata;
+		state_vector.ToUnifiedFormat(count, sdata);
 
 		auto states = (STATE **)sdata.data;
 		for (idx_t i = 0; i < count; i++) {
@@ -955,23 +2000,37 @@ static AggregateFunction GetMinMaxFunction(const LogicalType &type) {
 }
 
 template <class OP, class OP_STRING, class OP_VECTOR>
-static void AddMinMaxOperator(AggregateFunctionSet &set) {
-	for (auto &type : LogicalType::AllTypes()) {
-		if (type.id() == LogicalTypeId::VARCHAR || type.id() == LogicalTypeId::BLOB || type.id() == LogicalType::JSON) {
-			set.AddFunction(
-			    AggregateFunction::UnaryAggregateDestructor<MinMaxState<string_t>, string_t, string_t, OP_STRING>(
-			        type.id(), type.id()));
-		} else if (type.id() == LogicalTypeId::DECIMAL) {
-			set.AddFunction(AggregateFunction({type}, type, nullptr, nullptr, nullptr, nullptr, nullptr, false, nullptr,
-			                                  BindDecimalMinMax<OP>));
-		} else if (type.id() == LogicalTypeId::LIST || type.id() == LogicalTypeId::MAP ||
-		           type.id() == LogicalTypeId::STRUCT) {
-			set.AddFunction(GetMinMaxFunction<OP_VECTOR, VectorMinMaxState>(type));
-
-		} else {
-			set.AddFunction(GetUnaryAggregate<OP>(type));
-		}
+static AggregateFunction GetMinMaxOperator(const LogicalType &type) {
+	if (type.InternalType() == PhysicalType::VARCHAR) {
+		return AggregateFunction::UnaryAggregateDestructor<MinMaxState<string_t>, string_t, string_t, OP_STRING>(
+		    type.id(), type.id());
+	} else if (type.InternalType() == PhysicalType::LIST || type.InternalType() == PhysicalType::STRUCT) {
+		return GetMinMaxFunction<OP_VECTOR, VectorMinMaxState>(type);
+	} else {
+		return GetUnaryAggregate<OP>(type);
 	}
+}
+
+template <class OP, class OP_STRING, class OP_VECTOR>
+unique_ptr<FunctionData> BindMinMax(ClientContext &context, AggregateFunction &function,
+                                    vector<unique_ptr<Expression>> &arguments) {
+	auto input_type = arguments[0]->return_type;
+	auto name = move(function.name);
+	function = GetMinMaxOperator<OP, OP_STRING, OP_VECTOR>(input_type);
+	function.name = move(name);
+	if (function.bind) {
+		return function.bind(context, function, arguments);
+	} else {
+		return nullptr;
+	}
+}
+
+template <class OP, class OP_STRING, class OP_VECTOR>
+static void AddMinMaxOperator(AggregateFunctionSet &set) {
+	set.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL}, LogicalTypeId::DECIMAL, nullptr, nullptr, nullptr,
+	                                  nullptr, nullptr, nullptr, BindDecimalMinMax<OP>));
+	set.AddFunction(AggregateFunction({LogicalType::ANY}, LogicalType::ANY, nullptr, nullptr, nullptr, nullptr, nullptr,
+	                                  nullptr, BindMinMax<OP, OP_STRING, OP_VECTOR>));
 }
 
 void MinFun::RegisterFunction(BuiltinFunctions &set) {
@@ -1150,6 +2209,7 @@ void SkewFun::RegisterFunction(BuiltinFunctions &set) {
 
 
 
+
 namespace duckdb {
 
 struct StringAggState {
@@ -1267,36 +2327,48 @@ unique_ptr<FunctionData> StringAggBind(ClientContext &context, AggregateFunction
 		return make_unique<StringAggBindData>(",");
 	}
 	D_ASSERT(arguments.size() == 2);
+	if (arguments[1]->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
 	if (!arguments[1]->IsFoldable()) {
 		throw BinderException("Separator argument to StringAgg must be a constant");
 	}
-	auto separator_val = ExpressionExecutor::EvaluateScalar(*arguments[1]);
+	auto separator_val = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
 	if (separator_val.IsNull()) {
 		arguments[0] = make_unique<BoundConstantExpression>(Value(LogicalType::VARCHAR));
 	}
-	function.arguments.erase(function.arguments.begin() + 1);
+	Function::EraseArgument(function, arguments, arguments.size() - 1);
 	return make_unique<StringAggBindData>(separator_val.ToString());
+}
+
+static void StringAggSerialize(FieldWriter &writer, const FunctionData *bind_data_p,
+                               const AggregateFunction &function) {
+	D_ASSERT(bind_data_p);
+	auto bind_data = (StringAggBindData *)bind_data_p;
+	writer.WriteString(bind_data->sep);
+}
+
+unique_ptr<FunctionData> StringAggDeserialize(ClientContext &context, FieldReader &reader,
+                                              AggregateFunction &bound_function) {
+	auto sep = reader.ReadRequired<string>();
+	return make_unique<StringAggBindData>(move(sep));
 }
 
 void StringAggFun::RegisterFunction(BuiltinFunctions &set) {
 	AggregateFunctionSet string_agg("string_agg");
-	string_agg.AddFunction(
-	    AggregateFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	                      AggregateFunction::StateSize<StringAggState>,
-	                      AggregateFunction::StateInitialize<StringAggState, StringAggFunction>,
-	                      AggregateFunction::UnaryScatterUpdate<StringAggState, string_t, StringAggFunction>,
-	                      AggregateFunction::StateCombine<StringAggState, StringAggFunction>,
-	                      AggregateFunction::StateFinalize<StringAggState, string_t, StringAggFunction>,
-	                      AggregateFunction::UnaryUpdate<StringAggState, string_t, StringAggFunction>, StringAggBind,
-	                      AggregateFunction::StateDestroy<StringAggState, StringAggFunction>));
-	string_agg.AddFunction(
-	    AggregateFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, AggregateFunction::StateSize<StringAggState>,
-	                      AggregateFunction::StateInitialize<StringAggState, StringAggFunction>,
-	                      AggregateFunction::UnaryScatterUpdate<StringAggState, string_t, StringAggFunction>,
-	                      AggregateFunction::StateCombine<StringAggState, StringAggFunction>,
-	                      AggregateFunction::StateFinalize<StringAggState, string_t, StringAggFunction>,
-	                      AggregateFunction::UnaryUpdate<StringAggState, string_t, StringAggFunction>, StringAggBind,
-	                      AggregateFunction::StateDestroy<StringAggState, StringAggFunction>));
+	AggregateFunction string_agg_param(
+	    {LogicalType::VARCHAR}, LogicalType::VARCHAR, AggregateFunction::StateSize<StringAggState>,
+	    AggregateFunction::StateInitialize<StringAggState, StringAggFunction>,
+	    AggregateFunction::UnaryScatterUpdate<StringAggState, string_t, StringAggFunction>,
+	    AggregateFunction::StateCombine<StringAggState, StringAggFunction>,
+	    AggregateFunction::StateFinalize<StringAggState, string_t, StringAggFunction>,
+	    AggregateFunction::UnaryUpdate<StringAggState, string_t, StringAggFunction>, StringAggBind,
+	    AggregateFunction::StateDestroy<StringAggState, StringAggFunction>);
+	string_agg_param.serialize = StringAggSerialize;
+	string_agg_param.deserialize = StringAggDeserialize;
+	string_agg.AddFunction(string_agg_param);
+	string_agg_param.arguments.emplace_back(LogicalType::VARCHAR);
+	string_agg.AddFunction(string_agg_param);
 	set.AddFunction(string_agg);
 	string_agg.name = "group_concat";
 	set.AddFunction(string_agg);
@@ -1410,50 +2482,60 @@ unique_ptr<BaseStatistics> SumPropagateStats(ClientContext &context, BoundAggreg
 			return nullptr;
 		}
 		// total sum is guaranteed to fit in a single int64: use int64 sum instead of hugeint sum
-		switch (internal_type) {
-		case PhysicalType::INT32:
-			expr.function =
-			    AggregateFunction::UnaryAggregate<SumState<int64_t>, int32_t, hugeint_t, IntegerSumOperation>(
-			        LogicalType::INTEGER, LogicalType::HUGEINT, true);
-			expr.function.name = "sum";
-			break;
-		case PhysicalType::INT64:
-			expr.function =
-			    AggregateFunction::UnaryAggregate<SumState<int64_t>, int64_t, hugeint_t, IntegerSumOperation>(
-			        LogicalType::BIGINT, LogicalType::HUGEINT, true);
-			expr.function.name = "sum";
-			break;
-		default:
-			throw InternalException("Unsupported type for propagate sum stats");
-		}
+		expr.function = SumFun::GetSumAggregateNoOverflow(internal_type);
 	}
 	return nullptr;
 }
 
 AggregateFunction SumFun::GetSumAggregate(PhysicalType type) {
 	switch (type) {
-	case PhysicalType::INT16:
-		return AggregateFunction::UnaryAggregate<SumState<int64_t>, int16_t, hugeint_t, IntegerSumOperation>(
-		    LogicalType::SMALLINT, LogicalType::HUGEINT, true);
+	case PhysicalType::INT16: {
+		auto function = AggregateFunction::UnaryAggregate<SumState<int64_t>, int16_t, hugeint_t, IntegerSumOperation>(
+		    LogicalType::SMALLINT, LogicalType::HUGEINT);
+		return function;
+	}
+
 	case PhysicalType::INT32: {
 		auto function =
 		    AggregateFunction::UnaryAggregate<SumState<hugeint_t>, int32_t, hugeint_t, SumToHugeintOperation>(
-		        LogicalType::INTEGER, LogicalType::HUGEINT, true);
+		        LogicalType::INTEGER, LogicalType::HUGEINT);
 		function.statistics = SumPropagateStats;
 		return function;
 	}
 	case PhysicalType::INT64: {
 		auto function =
 		    AggregateFunction::UnaryAggregate<SumState<hugeint_t>, int64_t, hugeint_t, SumToHugeintOperation>(
-		        LogicalType::BIGINT, LogicalType::HUGEINT, true);
+		        LogicalType::BIGINT, LogicalType::HUGEINT);
 		function.statistics = SumPropagateStats;
 		return function;
 	}
-	case PhysicalType::INT128:
-		return AggregateFunction::UnaryAggregate<SumState<hugeint_t>, hugeint_t, hugeint_t, HugeintSumOperation>(
-		    LogicalType::HUGEINT, LogicalType::HUGEINT, true);
+	case PhysicalType::INT128: {
+		auto function =
+		    AggregateFunction::UnaryAggregate<SumState<hugeint_t>, hugeint_t, hugeint_t, HugeintSumOperation>(
+		        LogicalType::HUGEINT, LogicalType::HUGEINT);
+		return function;
+	}
 	default:
 		throw InternalException("Unimplemented sum aggregate");
+	}
+}
+
+AggregateFunction SumFun::GetSumAggregateNoOverflow(PhysicalType type) {
+	switch (type) {
+	case PhysicalType::INT32: {
+		auto function = AggregateFunction::UnaryAggregate<SumState<int64_t>, int32_t, hugeint_t, IntegerSumOperation>(
+		    LogicalType::INTEGER, LogicalType::HUGEINT);
+		function.name = "sum_no_overflow";
+		return function;
+	}
+	case PhysicalType::INT64: {
+		auto function = AggregateFunction::UnaryAggregate<SumState<int64_t>, int64_t, hugeint_t, IntegerSumOperation>(
+		    LogicalType::BIGINT, LogicalType::HUGEINT);
+		function.name = "sum_no_overflow";
+		return function;
+	}
+	default:
+		throw BinderException("Unsupported internal type for sum_no_overflow");
 	}
 }
 
@@ -1467,24 +2549,43 @@ unique_ptr<FunctionData> BindDecimalSum(ClientContext &context, AggregateFunctio
 	return nullptr;
 }
 
+unique_ptr<FunctionData> BindDecimalSumNoOverflow(ClientContext &context, AggregateFunction &function,
+                                                  vector<unique_ptr<Expression>> &arguments) {
+	auto decimal_type = arguments[0]->return_type;
+	function = SumFun::GetSumAggregateNoOverflow(decimal_type.InternalType());
+	function.name = "sum_no_overflow";
+	function.arguments[0] = decimal_type;
+	function.return_type = LogicalType::DECIMAL(Decimal::MAX_WIDTH_DECIMAL, DecimalType::GetScale(decimal_type));
+	return nullptr;
+}
+
 void SumFun::RegisterFunction(BuiltinFunctions &set) {
 	AggregateFunctionSet sum("sum");
 	// decimal
 	sum.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL}, LogicalTypeId::DECIMAL, nullptr, nullptr, nullptr,
-	                                  nullptr, nullptr, true, nullptr, BindDecimalSum));
+	                                  nullptr, nullptr, FunctionNullHandling::DEFAULT_NULL_HANDLING, nullptr,
+	                                  BindDecimalSum));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT16));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT32));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT64));
 	sum.AddFunction(GetSumAggregate(PhysicalType::INT128));
 	sum.AddFunction(AggregateFunction::UnaryAggregate<SumState<double>, double, double, NumericSumOperation>(
-	    LogicalType::DOUBLE, LogicalType::DOUBLE, true));
+	    LogicalType::DOUBLE, LogicalType::DOUBLE));
 
 	set.AddFunction(sum);
+
+	AggregateFunctionSet sum_no_overflow("sum_no_overflow");
+	sum_no_overflow.AddFunction(GetSumAggregateNoOverflow(PhysicalType::INT32));
+	sum_no_overflow.AddFunction(GetSumAggregateNoOverflow(PhysicalType::INT64));
+	sum_no_overflow.AddFunction(
+	    AggregateFunction({LogicalTypeId::DECIMAL}, LogicalTypeId::DECIMAL, nullptr, nullptr, nullptr, nullptr, nullptr,
+	                      FunctionNullHandling::DEFAULT_NULL_HANDLING, nullptr, BindDecimalSumNoOverflow));
+	set.AddFunction(sum_no_overflow);
 
 	// fsum
 	AggregateFunctionSet fsum("fsum");
 	fsum.AddFunction(AggregateFunction::UnaryAggregate<KahanSumState, double, double, KahanSumOperation>(
-	    LogicalType::DOUBLE, LogicalType::DOUBLE, true));
+	    LogicalType::DOUBLE, LogicalType::DOUBLE));
 
 	set.AddFunction(fsum);
 
@@ -1533,6 +2634,7 @@ void BuiltinFunctions::RegisterDistributiveAggregates() {
 
 
 
+
 #include <algorithm>
 #include <cmath>
 #include <stdlib.h>
@@ -1548,7 +2650,7 @@ struct ApproximateQuantileBindData : public FunctionData {
 	explicit ApproximateQuantileBindData(float quantile_p) : quantiles(1, quantile_p) {
 	}
 
-	explicit ApproximateQuantileBindData(const vector<float> &quantiles_p) : quantiles(quantiles_p) {
+	explicit ApproximateQuantileBindData(vector<float> quantiles_p) : quantiles(move(quantiles_p)) {
 	}
 
 	unique_ptr<FunctionData> Copy() const override {
@@ -1557,7 +2659,23 @@ struct ApproximateQuantileBindData : public FunctionData {
 
 	bool Equals(const FunctionData &other_p) const override {
 		auto &other = (ApproximateQuantileBindData &)other_p;
-		return quantiles == other.quantiles;
+		//		return quantiles == other.quantiles;
+		if (quantiles != other.quantiles) {
+			return false;
+		}
+		return true;
+	}
+
+	static void Serialize(FieldWriter &writer, const FunctionData *bind_data_p, const AggregateFunction &function) {
+		D_ASSERT(bind_data_p);
+		auto bind_data = (ApproximateQuantileBindData *)bind_data_p;
+		writer.WriteList<float>(bind_data->quantiles);
+	}
+
+	static unique_ptr<FunctionData> Deserialize(ClientContext &context, FieldReader &reader,
+	                                            AggregateFunction &bound_function) {
+		auto quantiles = reader.ReadRequiredList<float>();
+		return make_unique<ApproximateQuantileBindData>(move(quantiles));
 	}
 
 	vector<float> quantiles;
@@ -1640,30 +2758,33 @@ AggregateFunction GetApproximateQuantileAggregateFunction(PhysicalType type) {
 		return AggregateFunction::UnaryAggregateDestructor<ApproxQuantileState, int16_t, int16_t,
 		                                                   ApproxQuantileScalarOperation>(LogicalType::SMALLINT,
 		                                                                                  LogicalType::SMALLINT);
-
 	case PhysicalType::INT32:
 		return AggregateFunction::UnaryAggregateDestructor<ApproxQuantileState, int32_t, int32_t,
 		                                                   ApproxQuantileScalarOperation>(LogicalType::INTEGER,
 		                                                                                  LogicalType::INTEGER);
-
 	case PhysicalType::INT64:
 		return AggregateFunction::UnaryAggregateDestructor<ApproxQuantileState, int64_t, int64_t,
 		                                                   ApproxQuantileScalarOperation>(LogicalType::BIGINT,
 		                                                                                  LogicalType::BIGINT);
+	case PhysicalType::INT128:
+		return AggregateFunction::UnaryAggregateDestructor<ApproxQuantileState, hugeint_t, hugeint_t,
+		                                                   ApproxQuantileScalarOperation>(LogicalType::HUGEINT,
+		                                                                                  LogicalType::HUGEINT);
 	case PhysicalType::DOUBLE:
 		return AggregateFunction::UnaryAggregateDestructor<ApproxQuantileState, double, double,
 		                                                   ApproxQuantileScalarOperation>(LogicalType::DOUBLE,
 		                                                                                  LogicalType::DOUBLE);
-
 	default:
 		throw InternalException("Unimplemented quantile aggregate");
 	}
 }
 
 static float CheckApproxQuantile(const Value &quantile_val) {
+	if (quantile_val.IsNull()) {
+		throw BinderException("APPROXIMATE QUANTILE parameter cannot be NULL");
+	}
 	auto quantile = quantile_val.GetValue<float>();
-
-	if (quantile_val.IsNull() || quantile < 0 || quantile > 1) {
+	if (quantile < 0 || quantile > 1) {
 		throw BinderException("APPROXIMATE QUANTILE can only take parameters in range [0, 1]");
 	}
 
@@ -1672,10 +2793,13 @@ static float CheckApproxQuantile(const Value &quantile_val) {
 
 unique_ptr<FunctionData> BindApproxQuantile(ClientContext &context, AggregateFunction &function,
                                             vector<unique_ptr<Expression>> &arguments) {
-	if (!arguments[1]->IsScalar()) {
+	if (arguments[1]->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
+	if (!arguments[1]->IsFoldable()) {
 		throw BinderException("APPROXIMATE QUANTILE can only take constant quantile parameters");
 	}
-	Value quantile_val = ExpressionExecutor::EvaluateScalar(*arguments[1]);
+	Value quantile_val = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
 
 	vector<float> quantiles;
 	if (quantile_val.type().id() != LogicalTypeId::LIST) {
@@ -1687,7 +2811,7 @@ unique_ptr<FunctionData> BindApproxQuantile(ClientContext &context, AggregateFun
 	}
 
 	// remove the quantile argument so we can use the unary aggregate
-	arguments.pop_back();
+	Function::EraseArgument(function, arguments, arguments.size() - 1);
 	return make_unique<ApproximateQuantileBindData>(quantiles);
 }
 
@@ -1696,12 +2820,16 @@ unique_ptr<FunctionData> BindApproxQuantileDecimal(ClientContext &context, Aggre
 	auto bind_data = BindApproxQuantile(context, function, arguments);
 	function = GetApproximateQuantileAggregateFunction(arguments[0]->return_type.InternalType());
 	function.name = "approx_quantile";
+	function.serialize = ApproximateQuantileBindData::Serialize;
+	function.deserialize = ApproximateQuantileBindData::Deserialize;
 	return bind_data;
 }
 
 AggregateFunction GetApproximateQuantileAggregate(PhysicalType type) {
 	auto fun = GetApproximateQuantileAggregateFunction(type);
 	fun.bind = BindApproxQuantile;
+	fun.serialize = ApproximateQuantileBindData::Serialize;
+	fun.deserialize = ApproximateQuantileBindData::Deserialize;
 	// temporarily push an argument so we can bind the actual quantile
 	fun.arguments.emplace_back(LogicalType::FLOAT);
 	return fun;
@@ -1788,6 +2916,8 @@ AggregateFunction GetTypedApproxQuantileListAggregateFunction(const LogicalType 
 	using STATE = ApproxQuantileState;
 	using OP = ApproxQuantileListOperation<INPUT_TYPE>;
 	auto fun = ApproxQuantileListAggregate<STATE, INPUT_TYPE, list_entry_t, OP>(type, type);
+	fun.serialize = ApproximateQuantileBindData::Serialize;
+	fun.deserialize = ApproximateQuantileBindData::Deserialize;
 	return fun;
 }
 
@@ -1803,7 +2933,6 @@ AggregateFunction GetApproxQuantileListAggregateFunction(const LogicalType &type
 		return GetTypedApproxQuantileListAggregateFunction<int64_t, int64_t>(type);
 	case LogicalTypeId::HUGEINT:
 		return GetTypedApproxQuantileListAggregateFunction<hugeint_t, hugeint_t>(type);
-
 	case LogicalTypeId::FLOAT:
 		return GetTypedApproxQuantileListAggregateFunction<float, float>(type);
 	case LogicalTypeId::DOUBLE:
@@ -1821,8 +2950,6 @@ AggregateFunction GetApproxQuantileListAggregateFunction(const LogicalType &type
 		default:
 			throw NotImplementedException("Unimplemented approximate quantile list aggregate");
 		}
-		break;
-
 	default:
 		// TODO: Add quantitative temporal types
 		throw NotImplementedException("Unimplemented approximate quantile list aggregate");
@@ -1834,12 +2961,16 @@ unique_ptr<FunctionData> BindApproxQuantileDecimalList(ClientContext &context, A
 	auto bind_data = BindApproxQuantile(context, function, arguments);
 	function = GetApproxQuantileListAggregateFunction(arguments[0]->return_type);
 	function.name = "approx_quantile";
+	function.serialize = ApproximateQuantileBindData::Serialize;
+	function.deserialize = ApproximateQuantileBindData::Deserialize;
 	return bind_data;
 }
 
 AggregateFunction GetApproxQuantileListAggregate(const LogicalType &type) {
 	auto fun = GetApproxQuantileListAggregateFunction(type);
 	fun.bind = BindApproxQuantile;
+	fun.serialize = ApproximateQuantileBindData::Serialize;
+	fun.deserialize = ApproximateQuantileBindData::Deserialize;
 	// temporarily push an argument so we can bind the actual quantile
 	auto list_of_float = LogicalType::LIST(LogicalType::FLOAT);
 	fun.arguments.push_back(list_of_float);
@@ -1855,6 +2986,7 @@ void ApproximateQuantileFun::RegisterFunction(BuiltinFunctions &set) {
 	approx_quantile.AddFunction(GetApproximateQuantileAggregate(PhysicalType::INT16));
 	approx_quantile.AddFunction(GetApproximateQuantileAggregate(PhysicalType::INT32));
 	approx_quantile.AddFunction(GetApproximateQuantileAggregate(PhysicalType::INT64));
+	approx_quantile.AddFunction(GetApproximateQuantileAggregate(PhysicalType::INT128));
 	approx_quantile.AddFunction(GetApproximateQuantileAggregate(PhysicalType::DOUBLE));
 
 	// List variants
@@ -1998,7 +3130,21 @@ struct ModeIncluded {
 	const idx_t bias;
 };
 
-template <typename KEY_TYPE>
+struct ModeAssignmentStandard {
+	template <class INPUT_TYPE, class RESULT_TYPE>
+	static RESULT_TYPE Assign(Vector &result, INPUT_TYPE input) {
+		return RESULT_TYPE(input);
+	}
+};
+
+struct ModeAssignmentString {
+	template <class INPUT_TYPE, class RESULT_TYPE>
+	static RESULT_TYPE Assign(Vector &result, INPUT_TYPE input) {
+		return StringVector::AddString(result, input);
+	}
+};
+
+template <typename KEY_TYPE, typename ASSIGN_OP>
 struct ModeFunction {
 	template <class STATE>
 	static void Initialize(STATE *state) {
@@ -2111,7 +3257,7 @@ struct ModeFunction {
 		}
 
 		if (state->valid) {
-			rdata[rid] = RESULT_TYPE(*state->mode);
+			rdata[rid] = ASSIGN_OP::template Assign<INPUT_TYPE, RESULT_TYPE>(result, *state->mode);
 		} else {
 			rmask.Set(rid, false);
 		}
@@ -2127,10 +3273,10 @@ struct ModeFunction {
 	}
 };
 
-template <typename INPUT_TYPE, typename KEY_TYPE>
+template <typename INPUT_TYPE, typename KEY_TYPE, typename ASSIGN_OP = ModeAssignmentStandard>
 AggregateFunction GetTypedModeFunction(const LogicalType &type) {
 	using STATE = ModeState<KEY_TYPE>;
-	using OP = ModeFunction<KEY_TYPE>;
+	using OP = ModeFunction<KEY_TYPE, ASSIGN_OP>;
 	auto func = AggregateFunction::UnaryAggregateDestructor<STATE, INPUT_TYPE, INPUT_TYPE, OP>(type, type);
 	func.window = AggregateFunction::UnaryWindow<STATE, INPUT_TYPE, INPUT_TYPE, OP>;
 	return func;
@@ -2166,7 +3312,7 @@ AggregateFunction GetModeAggregate(const LogicalType &type) {
 		return GetTypedModeFunction<interval_t, interval_t>(type);
 
 	case PhysicalType::VARCHAR:
-		return GetTypedModeFunction<string_t, string>(type);
+		return GetTypedModeFunction<string_t, string, ModeAssignmentString>(type);
 
 	default:
 		throw NotImplementedException("Unimplemented mode aggregate");
@@ -2212,6 +3358,7 @@ void ModeFun::RegisterFunction(BuiltinFunctions &set) {
 
 
 
+
 #include <algorithm>
 #include <stdlib.h>
 #include <utility>
@@ -2219,13 +3366,13 @@ void ModeFun::RegisterFunction(BuiltinFunctions &set) {
 namespace duckdb {
 
 // Hugeint arithmetic
-hugeint_t operator*(const hugeint_t &h, const double &d) {
+static hugeint_t operator*(const hugeint_t &h, const double &d) {
 	D_ASSERT(d >= 0 && d <= 1);
 	return Hugeint::Convert(Hugeint::Cast<double>(h) * d);
 }
 
 // Interval arithmetic
-interval_t operator*(const interval_t &i, const double &d) {
+static interval_t operator*(const interval_t &i, const double &d) {
 	D_ASSERT(d >= 0 && d <= 1);
 	return Interval::FromMicro(std::llround(Interval::GetMicro(i) * d));
 }
@@ -2524,7 +3671,8 @@ struct Interpolator {
 template <>
 struct Interpolator<true> {
 	Interpolator(const double q, const idx_t n_p)
-	    : n(n_p), RN((double)(n_p - 1) * q), FRN(floor(RN)), CRN(FRN), begin(0), end(n_p) {
+	    : n(n_p), RN((double)(n_p * q)), FRN(MaxValue<idx_t>(1, n_p - floor(n_p - RN)) - 1), CRN(FRN), begin(0),
+	      end(n_p) {
 	}
 
 	template <class INPUT_TYPE, class TARGET_TYPE, typename ACCESSOR = QuantileDirect<INPUT_TYPE>>
@@ -2749,7 +3897,6 @@ AggregateFunction GetDiscreteQuantileAggregateFunction(const LogicalType &type) 
 		return GetTypedDiscreteQuantileAggregateFunction<int64_t, int64_t>(type);
 	case LogicalTypeId::HUGEINT:
 		return GetTypedDiscreteQuantileAggregateFunction<hugeint_t, hugeint_t>(type);
-
 	case LogicalTypeId::FLOAT:
 		return GetTypedDiscreteQuantileAggregateFunction<float, float>(type);
 	case LogicalTypeId::DOUBLE:
@@ -2767,8 +3914,6 @@ AggregateFunction GetDiscreteQuantileAggregateFunction(const LogicalType &type) 
 		default:
 			throw NotImplementedException("Unimplemented discrete quantile aggregate");
 		}
-		break;
-
 	case LogicalTypeId::DATE:
 		return GetTypedDiscreteQuantileAggregateFunction<int32_t, int32_t>(type);
 	case LogicalTypeId::TIMESTAMP:
@@ -2941,7 +4086,6 @@ AggregateFunction GetDiscreteQuantileListAggregateFunction(const LogicalType &ty
 		return GetTypedDiscreteQuantileListAggregateFunction<int64_t, int64_t>(type);
 	case LogicalTypeId::HUGEINT:
 		return GetTypedDiscreteQuantileListAggregateFunction<hugeint_t, hugeint_t>(type);
-
 	case LogicalTypeId::FLOAT:
 		return GetTypedDiscreteQuantileListAggregateFunction<float, float>(type);
 	case LogicalTypeId::DOUBLE:
@@ -2959,8 +4103,6 @@ AggregateFunction GetDiscreteQuantileListAggregateFunction(const LogicalType &ty
 		default:
 			throw NotImplementedException("Unimplemented discrete quantile list aggregate");
 		}
-		break;
-
 	case LogicalTypeId::DATE:
 		return GetTypedDiscreteQuantileListAggregateFunction<date_t, date_t>(type);
 	case LogicalTypeId::TIMESTAMP:
@@ -2971,10 +4113,8 @@ AggregateFunction GetDiscreteQuantileListAggregateFunction(const LogicalType &ty
 		return GetTypedDiscreteQuantileListAggregateFunction<dtime_t, dtime_t>(type);
 	case LogicalTypeId::INTERVAL:
 		return GetTypedDiscreteQuantileListAggregateFunction<interval_t, interval_t>(type);
-
 	case LogicalTypeId::VARCHAR:
 		return GetTypedDiscreteQuantileListAggregateFunction<string_t, std::string>(type);
-
 	default:
 		throw NotImplementedException("Unimplemented discrete quantile list aggregate");
 	}
@@ -3002,7 +4142,6 @@ AggregateFunction GetContinuousQuantileAggregateFunction(const LogicalType &type
 		return GetTypedContinuousQuantileAggregateFunction<int64_t, double>(type, LogicalType::DOUBLE);
 	case LogicalTypeId::HUGEINT:
 		return GetTypedContinuousQuantileAggregateFunction<hugeint_t, double>(type, LogicalType::DOUBLE);
-
 	case LogicalTypeId::FLOAT:
 		return GetTypedContinuousQuantileAggregateFunction<float, float>(type, type);
 	case LogicalTypeId::DOUBLE:
@@ -3020,8 +4159,6 @@ AggregateFunction GetContinuousQuantileAggregateFunction(const LogicalType &type
 		default:
 			throw NotImplementedException("Unimplemented continuous quantile DECIMAL aggregate");
 		}
-		break;
-
 	case LogicalTypeId::DATE:
 		return GetTypedContinuousQuantileAggregateFunction<date_t, timestamp_t>(type, LogicalType::TIMESTAMP);
 	case LogicalTypeId::TIMESTAMP:
@@ -3309,6 +4446,20 @@ AggregateFunction GetMedianAbsoluteDeviationAggregateFunction(const LogicalType 
 	}
 }
 
+static void QuantileSerialize(FieldWriter &writer, const FunctionData *bind_data_p, const AggregateFunction &function) {
+	D_ASSERT(bind_data_p);
+	throw NotImplementedException("FIXME: serializing quantiles is not supported right now");
+	//
+	//	auto bind_data = (QuantileBindData *)bind_data_p;
+	//	writer.WriteList<double>(bind_data->quantiles);
+}
+
+unique_ptr<FunctionData> QuantileDeserialize(ClientContext &context, FieldReader &reader,
+                                             AggregateFunction &bound_function) {
+	auto quantiles = reader.ReadRequiredList<double>();
+	return make_unique<QuantileBindData>(move(quantiles));
+}
+
 unique_ptr<FunctionData> BindMedian(ClientContext &context, AggregateFunction &function,
                                     vector<unique_ptr<Expression>> &arguments) {
 	return make_unique<QuantileBindData>(0.5);
@@ -3320,6 +4471,8 @@ unique_ptr<FunctionData> BindMedianDecimal(ClientContext &context, AggregateFunc
 
 	function = GetDiscreteQuantileAggregateFunction(arguments[0]->return_type);
 	function.name = "median";
+	function.serialize = QuantileSerialize;
+	function.deserialize = QuantileDeserialize;
 	return bind_data;
 }
 
@@ -3331,9 +4484,11 @@ unique_ptr<FunctionData> BindMedianAbsoluteDeviationDecimal(ClientContext &conte
 }
 
 static double CheckQuantile(const Value &quantile_val) {
+	if (quantile_val.IsNull()) {
+		throw BinderException("QUANTILE parameter cannot be NULL");
+	}
 	auto quantile = quantile_val.GetValue<double>();
-
-	if (quantile_val.IsNull() || quantile < 0 || quantile > 1) {
+	if (quantile < 0 || quantile > 1) {
 		throw BinderException("QUANTILE can only take parameters in the range [0, 1]");
 	}
 
@@ -3342,10 +4497,13 @@ static double CheckQuantile(const Value &quantile_val) {
 
 unique_ptr<FunctionData> BindQuantile(ClientContext &context, AggregateFunction &function,
                                       vector<unique_ptr<Expression>> &arguments) {
+	if (arguments[1]->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
 	if (!arguments[1]->IsFoldable()) {
 		throw BinderException("QUANTILE can only take constant parameters");
 	}
-	Value quantile_val = ExpressionExecutor::EvaluateScalar(*arguments[1]);
+	Value quantile_val = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
 	vector<double> quantiles;
 	if (quantile_val.type().id() != LogicalTypeId::LIST) {
 		quantiles.push_back(CheckQuantile(quantile_val));
@@ -3355,8 +4513,13 @@ unique_ptr<FunctionData> BindQuantile(ClientContext &context, AggregateFunction 
 		}
 	}
 
-	arguments.pop_back();
+	Function::EraseArgument(function, arguments, arguments.size() - 1);
 	return make_unique<QuantileBindData>(quantiles);
+}
+
+static void QuantileDecimalSerialize(FieldWriter &writer, const FunctionData *bind_data_p,
+                                     const AggregateFunction &function) {
+	throw NotImplementedException("FIXME: serializing quantiles with decimals is not supported right now");
 }
 
 unique_ptr<FunctionData> BindDiscreteQuantileDecimal(ClientContext &context, AggregateFunction &function,
@@ -3364,6 +4527,8 @@ unique_ptr<FunctionData> BindDiscreteQuantileDecimal(ClientContext &context, Agg
 	auto bind_data = BindQuantile(context, function, arguments);
 	function = GetDiscreteQuantileAggregateFunction(arguments[0]->return_type);
 	function.name = "quantile_disc";
+	function.serialize = QuantileDecimalSerialize;
+	function.deserialize = QuantileDeserialize;
 	return bind_data;
 }
 
@@ -3372,6 +4537,8 @@ unique_ptr<FunctionData> BindDiscreteQuantileDecimalList(ClientContext &context,
 	auto bind_data = BindQuantile(context, function, arguments);
 	function = GetDiscreteQuantileListAggregateFunction(arguments[0]->return_type);
 	function.name = "quantile_disc";
+	function.serialize = QuantileDecimalSerialize;
+	function.deserialize = QuantileDeserialize;
 	return bind_data;
 }
 
@@ -3380,6 +4547,8 @@ unique_ptr<FunctionData> BindContinuousQuantileDecimal(ClientContext &context, A
 	auto bind_data = BindQuantile(context, function, arguments);
 	function = GetContinuousQuantileAggregateFunction(arguments[0]->return_type);
 	function.name = "quantile_cont";
+	function.serialize = QuantileDecimalSerialize;
+	function.deserialize = QuantileDeserialize;
 	return bind_data;
 }
 
@@ -3388,6 +4557,8 @@ unique_ptr<FunctionData> BindContinuousQuantileDecimalList(ClientContext &contex
 	auto bind_data = BindQuantile(context, function, arguments);
 	function = GetContinuousQuantileListAggregateFunction(arguments[0]->return_type);
 	function.name = "quantile_cont";
+	function.serialize = QuantileDecimalSerialize;
+	function.deserialize = QuantileDeserialize;
 	return bind_data;
 }
 
@@ -3405,12 +4576,16 @@ AggregateFunction GetMedianAggregate(const LogicalType &type) {
 	auto fun = CanInterpolate(type) ? GetContinuousQuantileAggregateFunction(type)
 	                                : GetDiscreteQuantileAggregateFunction(type);
 	fun.bind = BindMedian;
+	fun.serialize = QuantileSerialize;
+	fun.deserialize = QuantileDeserialize;
 	return fun;
 }
 
 AggregateFunction GetDiscreteQuantileAggregate(const LogicalType &type) {
 	auto fun = GetDiscreteQuantileAggregateFunction(type);
 	fun.bind = BindQuantile;
+	fun.serialize = QuantileSerialize;
+	fun.deserialize = QuantileDeserialize;
 	// temporarily push an argument so we can bind the actual quantile
 	fun.arguments.emplace_back(LogicalType::DOUBLE);
 	return fun;
@@ -3419,6 +4594,8 @@ AggregateFunction GetDiscreteQuantileAggregate(const LogicalType &type) {
 AggregateFunction GetDiscreteQuantileListAggregate(const LogicalType &type) {
 	auto fun = GetDiscreteQuantileListAggregateFunction(type);
 	fun.bind = BindQuantile;
+	fun.serialize = QuantileSerialize;
+	fun.deserialize = QuantileDeserialize;
 	// temporarily push an argument so we can bind the actual quantile
 	auto list_of_double = LogicalType::LIST(LogicalType::DOUBLE);
 	fun.arguments.push_back(list_of_double);
@@ -3428,6 +4605,8 @@ AggregateFunction GetDiscreteQuantileListAggregate(const LogicalType &type) {
 AggregateFunction GetContinuousQuantileAggregate(const LogicalType &type) {
 	auto fun = GetContinuousQuantileAggregateFunction(type);
 	fun.bind = BindQuantile;
+	fun.serialize = QuantileSerialize;
+	fun.deserialize = QuantileDeserialize;
 	// temporarily push an argument so we can bind the actual quantile
 	fun.arguments.emplace_back(LogicalType::DOUBLE);
 	return fun;
@@ -3436,9 +4615,20 @@ AggregateFunction GetContinuousQuantileAggregate(const LogicalType &type) {
 AggregateFunction GetContinuousQuantileListAggregate(const LogicalType &type) {
 	auto fun = GetContinuousQuantileListAggregateFunction(type);
 	fun.bind = BindQuantile;
+	fun.serialize = QuantileSerialize;
+	fun.deserialize = QuantileDeserialize;
 	// temporarily push an argument so we can bind the actual quantile
 	auto list_of_double = LogicalType::LIST(LogicalType::DOUBLE);
 	fun.arguments.push_back(list_of_double);
+	return fun;
+}
+
+AggregateFunction GetQuantileDecimalAggregate(const vector<LogicalType> &arguments, const LogicalType &return_type,
+                                              bind_aggregate_function_t bind) {
+	AggregateFunction fun(arguments, return_type, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, bind);
+	fun.bind = bind;
+	fun.serialize = QuantileSerialize;
+	fun.deserialize = QuantileDeserialize;
 	return fun;
 }
 
@@ -3450,24 +4640,22 @@ void QuantileFun::RegisterFunction(BuiltinFunctions &set) {
 	                                       LogicalType::INTERVAL, LogicalType::VARCHAR};
 
 	AggregateFunctionSet median("median");
-	median.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL}, LogicalTypeId::DECIMAL, nullptr, nullptr, nullptr,
-	                                     nullptr, nullptr, nullptr, BindMedianDecimal));
+	median.AddFunction(
+	    GetQuantileDecimalAggregate({LogicalTypeId::DECIMAL}, LogicalTypeId::DECIMAL, BindMedianDecimal));
 
 	AggregateFunctionSet quantile_disc("quantile_disc");
-	quantile_disc.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL, LogicalType::DOUBLE}, LogicalTypeId::DECIMAL,
-	                                            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-	                                            BindDiscreteQuantileDecimal));
-	quantile_disc.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL, LogicalType::LIST(LogicalType::DOUBLE)},
-	                                            LogicalType::LIST(LogicalTypeId::DECIMAL), nullptr, nullptr, nullptr,
-	                                            nullptr, nullptr, nullptr, BindDiscreteQuantileDecimalList));
+	quantile_disc.AddFunction(GetQuantileDecimalAggregate({LogicalTypeId::DECIMAL, LogicalType::DOUBLE},
+	                                                      LogicalTypeId::DECIMAL, BindDiscreteQuantileDecimal));
+	quantile_disc.AddFunction(
+	    GetQuantileDecimalAggregate({LogicalTypeId::DECIMAL, LogicalType::LIST(LogicalType::DOUBLE)},
+	                                LogicalType::LIST(LogicalTypeId::DECIMAL), BindDiscreteQuantileDecimalList));
 
 	AggregateFunctionSet quantile_cont("quantile_cont");
-	quantile_cont.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL, LogicalType::DOUBLE}, LogicalTypeId::DECIMAL,
-	                                            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-	                                            BindContinuousQuantileDecimal));
-	quantile_cont.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL, LogicalType::LIST(LogicalType::DOUBLE)},
-	                                            LogicalType::LIST(LogicalTypeId::DECIMAL), nullptr, nullptr, nullptr,
-	                                            nullptr, nullptr, nullptr, BindContinuousQuantileDecimalList));
+	quantile_cont.AddFunction(GetQuantileDecimalAggregate({LogicalTypeId::DECIMAL, LogicalType::DOUBLE},
+	                                                      LogicalTypeId::DECIMAL, BindContinuousQuantileDecimal));
+	quantile_cont.AddFunction(
+	    GetQuantileDecimalAggregate({LogicalTypeId::DECIMAL, LogicalType::LIST(LogicalType::DOUBLE)},
+	                                LogicalType::LIST(LogicalTypeId::DECIMAL), BindContinuousQuantileDecimalList));
 
 	for (const auto &type : QUANTILES) {
 		median.AddFunction(GetMedianAggregate(type));
@@ -3500,6 +4688,7 @@ void QuantileFun::RegisterFunction(BuiltinFunctions &set) {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -3552,8 +4741,8 @@ struct ReservoirQuantileBindData : public FunctionData {
 	    : quantiles(1, quantile_p), sample_size(sample_size_p) {
 	}
 
-	ReservoirQuantileBindData(const vector<double> &quantiles_p, int32_t sample_size_p)
-	    : quantiles(quantiles_p), sample_size(sample_size_p) {
+	ReservoirQuantileBindData(vector<double> quantiles_p, int32_t sample_size_p)
+	    : quantiles(move(quantiles_p)), sample_size(sample_size_p) {
 	}
 
 	unique_ptr<FunctionData> Copy() const override {
@@ -3563,6 +4752,20 @@ struct ReservoirQuantileBindData : public FunctionData {
 	bool Equals(const FunctionData &other_p) const override {
 		auto &other = (ReservoirQuantileBindData &)other_p;
 		return quantiles == other.quantiles && sample_size == other.sample_size;
+	}
+
+	static void Serialize(FieldWriter &writer, const FunctionData *bind_data_p, const AggregateFunction &function) {
+		D_ASSERT(bind_data_p);
+		auto bind_data = (ReservoirQuantileBindData *)bind_data_p;
+		writer.WriteList<double>(bind_data->quantiles);
+		writer.WriteField<int32_t>(bind_data->sample_size);
+	}
+
+	static unique_ptr<FunctionData> Deserialize(ClientContext &context, FieldReader &reader,
+	                                            AggregateFunction &bound_function) {
+		auto quantiles = reader.ReadRequiredList<double>();
+		auto sample_size = reader.ReadRequired<int32_t>();
+		return make_unique<ReservoirQuantileBindData>(move(quantiles), sample_size);
 	}
 
 	vector<double> quantiles;
@@ -3790,7 +4993,6 @@ AggregateFunction GetReservoirQuantileListAggregateFunction(const LogicalType &t
 		return GetTypedReservoirQuantileListAggregateFunction<int64_t, int64_t>(type);
 	case LogicalTypeId::HUGEINT:
 		return GetTypedReservoirQuantileListAggregateFunction<hugeint_t, hugeint_t>(type);
-
 	case LogicalTypeId::FLOAT:
 		return GetTypedReservoirQuantileListAggregateFunction<float, float>(type);
 	case LogicalTypeId::DOUBLE:
@@ -3808,8 +5010,6 @@ AggregateFunction GetReservoirQuantileListAggregateFunction(const LogicalType &t
 		default:
 			throw NotImplementedException("Unimplemented reservoir quantile list aggregate");
 		}
-		break;
-
 	default:
 		// TODO: Add quantitative temporal types
 		throw NotImplementedException("Unimplemented reservoir quantile list aggregate");
@@ -3817,21 +5017,26 @@ AggregateFunction GetReservoirQuantileListAggregateFunction(const LogicalType &t
 }
 
 static double CheckReservoirQuantile(const Value &quantile_val) {
+	if (quantile_val.IsNull()) {
+		throw BinderException("RESERVOIR_QUANTILE QUANTILE parameter cannot be NULL");
+	}
 	auto quantile = quantile_val.GetValue<double>();
-
-	if (quantile_val.IsNull() || quantile < 0 || quantile > 1) {
+	if (quantile < 0 || quantile > 1) {
 		throw BinderException("RESERVOIR_QUANTILE can only take parameters in the range [0, 1]");
 	}
-
 	return quantile;
 }
 
 unique_ptr<FunctionData> BindReservoirQuantile(ClientContext &context, AggregateFunction &function,
                                                vector<unique_ptr<Expression>> &arguments) {
+	D_ASSERT(arguments.size() >= 2);
+	if (arguments[1]->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
 	if (!arguments[1]->IsFoldable()) {
 		throw BinderException("RESERVOIR_QUANTILE can only take constant quantile parameters");
 	}
-	Value quantile_val = ExpressionExecutor::EvaluateScalar(*arguments[1]);
+	Value quantile_val = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
 	vector<double> quantiles;
 	if (quantile_val.type().id() != LogicalTypeId::LIST) {
 		quantiles.push_back(CheckReservoirQuantile(quantile_val));
@@ -3841,14 +5046,21 @@ unique_ptr<FunctionData> BindReservoirQuantile(ClientContext &context, Aggregate
 		}
 	}
 
-	if (arguments.size() <= 2) {
-		arguments.pop_back();
+	if (arguments.size() == 2) {
+		if (function.arguments.size() == 2) {
+			Function::EraseArgument(function, arguments, arguments.size() - 1);
+		} else {
+			arguments.pop_back();
+		}
 		return make_unique<ReservoirQuantileBindData>(quantiles, 8192);
 	}
 	if (!arguments[2]->IsFoldable()) {
 		throw BinderException("RESERVOIR_QUANTILE can only take constant sample size parameters");
 	}
-	Value sample_size_val = ExpressionExecutor::EvaluateScalar(*arguments[2]);
+	Value sample_size_val = ExpressionExecutor::EvaluateScalar(context, *arguments[2]);
+	if (sample_size_val.IsNull()) {
+		throw BinderException("Size of the RESERVOIR_QUANTILE sample cannot be NULL");
+	}
 	auto sample_size = sample_size_val.GetValue<int32_t>();
 
 	if (sample_size_val.IsNull() || sample_size <= 0) {
@@ -3856,22 +5068,26 @@ unique_ptr<FunctionData> BindReservoirQuantile(ClientContext &context, Aggregate
 	}
 
 	// remove the quantile argument so we can use the unary aggregate
-	arguments.pop_back();
-	arguments.pop_back();
+	Function::EraseArgument(function, arguments, arguments.size() - 1);
+	Function::EraseArgument(function, arguments, arguments.size() - 1);
 	return make_unique<ReservoirQuantileBindData>(quantiles, sample_size);
 }
 
 unique_ptr<FunctionData> BindReservoirQuantileDecimal(ClientContext &context, AggregateFunction &function,
                                                       vector<unique_ptr<Expression>> &arguments) {
-	auto bind_data = BindReservoirQuantile(context, function, arguments);
 	function = GetReservoirQuantileAggregateFunction(arguments[0]->return_type.InternalType());
+	auto bind_data = BindReservoirQuantile(context, function, arguments);
 	function.name = "reservoir_quantile";
+	function.serialize = ReservoirQuantileBindData::Serialize;
+	function.deserialize = ReservoirQuantileBindData::Deserialize;
 	return bind_data;
 }
 
 AggregateFunction GetReservoirQuantileAggregate(PhysicalType type) {
 	auto fun = GetReservoirQuantileAggregateFunction(type);
 	fun.bind = BindReservoirQuantile;
+	fun.serialize = ReservoirQuantileBindData::Serialize;
+	fun.deserialize = ReservoirQuantileBindData::Deserialize;
 	// temporarily push an argument so we can bind the actual quantile
 	fun.arguments.emplace_back(LogicalType::DOUBLE);
 	return fun;
@@ -3879,8 +5095,10 @@ AggregateFunction GetReservoirQuantileAggregate(PhysicalType type) {
 
 unique_ptr<FunctionData> BindReservoirQuantileDecimalList(ClientContext &context, AggregateFunction &function,
                                                           vector<unique_ptr<Expression>> &arguments) {
-	auto bind_data = BindReservoirQuantile(context, function, arguments);
 	function = GetReservoirQuantileListAggregateFunction(arguments[0]->return_type);
+	auto bind_data = BindReservoirQuantile(context, function, arguments);
+	function.serialize = ReservoirQuantileBindData::Serialize;
+	function.deserialize = ReservoirQuantileBindData::Deserialize;
 	function.name = "reservoir_quantile";
 	return bind_data;
 }
@@ -3888,6 +5106,8 @@ unique_ptr<FunctionData> BindReservoirQuantileDecimalList(ClientContext &context
 AggregateFunction GetReservoirQuantileListAggregate(const LogicalType &type) {
 	auto fun = GetReservoirQuantileListAggregateFunction(type);
 	fun.bind = BindReservoirQuantile;
+	fun.serialize = ReservoirQuantileBindData::Serialize;
+	fun.deserialize = ReservoirQuantileBindData::Deserialize;
 	// temporarily push an argument so we can bind the actual quantile
 	auto list_of_double = LogicalType::LIST(LogicalType::DOUBLE);
 	fun.arguments.push_back(list_of_double);
@@ -3897,7 +5117,6 @@ AggregateFunction GetReservoirQuantileListAggregate(const LogicalType &type) {
 static void DefineReservoirQuantile(AggregateFunctionSet &set, const LogicalType &type) {
 	//	Four versions: type, scalar/list[, count]
 	auto fun = GetReservoirQuantileAggregate(type.InternalType());
-	fun.bind = BindReservoirQuantile;
 	set.AddFunction(fun);
 
 	fun.arguments.emplace_back(LogicalType::INTEGER);
@@ -3911,24 +5130,27 @@ static void DefineReservoirQuantile(AggregateFunctionSet &set, const LogicalType
 	set.AddFunction(fun);
 }
 
+static void GetReservoirQuantileDecimalFunction(AggregateFunctionSet &set, const vector<LogicalType> &arguments,
+                                                const LogicalType &return_value) {
+	AggregateFunction fun(arguments, return_value, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+	                      BindReservoirQuantileDecimal);
+	fun.serialize = ReservoirQuantileBindData::Serialize;
+	fun.deserialize = ReservoirQuantileBindData::Deserialize;
+	set.AddFunction(fun);
+
+	fun.arguments.emplace_back(LogicalType::INTEGER);
+	set.AddFunction(fun);
+}
+
 void ReservoirQuantileFun::RegisterFunction(BuiltinFunctions &set) {
 	AggregateFunctionSet reservoir_quantile("reservoir_quantile");
 
 	// DECIMAL
-	reservoir_quantile.AddFunction(
-	    AggregateFunction({LogicalTypeId::DECIMAL, LogicalType::DOUBLE, LogicalType::INTEGER}, LogicalTypeId::DECIMAL,
-	                      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, BindReservoirQuantileDecimal));
-	reservoir_quantile.AddFunction(AggregateFunction({LogicalTypeId::DECIMAL, LogicalType::DOUBLE},
-	                                                 LogicalTypeId::DECIMAL, nullptr, nullptr, nullptr, nullptr,
-	                                                 nullptr, nullptr, BindReservoirQuantileDecimal));
-	reservoir_quantile.AddFunction(
-	    AggregateFunction({LogicalTypeId::DECIMAL, LogicalType::LIST(LogicalType::DOUBLE), LogicalType::INTEGER},
-	                      LogicalType::LIST(LogicalTypeId::DECIMAL), nullptr, nullptr, nullptr, nullptr, nullptr,
-	                      nullptr, BindReservoirQuantileDecimalList));
-
-	reservoir_quantile.AddFunction(AggregateFunction(
-	    {LogicalTypeId::DECIMAL, LogicalType::LIST(LogicalType::DOUBLE)}, LogicalType::LIST(LogicalTypeId::DECIMAL),
-	    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, BindReservoirQuantileDecimalList));
+	GetReservoirQuantileDecimalFunction(reservoir_quantile, {LogicalTypeId::DECIMAL, LogicalType::DOUBLE},
+	                                    LogicalTypeId::DECIMAL);
+	GetReservoirQuantileDecimalFunction(reservoir_quantile,
+	                                    {LogicalTypeId::DECIMAL, LogicalType::LIST(LogicalType::DOUBLE)},
+	                                    LogicalType::LIST(LogicalTypeId::DECIMAL));
 
 	DefineReservoirQuantile(reservoir_quantile, LogicalTypeId::TINYINT);
 	DefineReservoirQuantile(reservoir_quantile, LogicalTypeId::SMALLINT);
@@ -3965,7 +5187,7 @@ namespace duckdb {
 
 struct HistogramFunctor {
 	template <class T, class MAP_TYPE = map<T, idx_t>>
-	static void HistogramUpdate(VectorData &sdata, VectorData &input_data, idx_t count) {
+	static void HistogramUpdate(UnifiedVectorFormat &sdata, UnifiedVectorFormat &input_data, idx_t count) {
 
 		auto states = (HistogramAggState<T, MAP_TYPE> **)sdata.data;
 		for (idx_t i = 0; i < count; i++) {
@@ -3988,7 +5210,7 @@ struct HistogramFunctor {
 
 struct HistogramStringFunctor {
 	template <class T, class MAP_TYPE = map<T, idx_t>>
-	static void HistogramUpdate(VectorData &sdata, VectorData &input_data, idx_t count) {
+	static void HistogramUpdate(UnifiedVectorFormat &sdata, UnifiedVectorFormat &input_data, idx_t count) {
 
 		auto states = (HistogramAggState<T, MAP_TYPE> **)sdata.data;
 		for (idx_t i = 0; i < count; i++) {
@@ -4035,10 +5257,10 @@ static void HistogramUpdateFunction(Vector inputs[], AggregateInputData &, idx_t
 	D_ASSERT(input_count == 1);
 
 	auto &input = inputs[0];
-	VectorData sdata;
-	state_vector.Orrify(count, sdata);
-	VectorData input_data;
-	input.Orrify(count, input_data);
+	UnifiedVectorFormat sdata;
+	state_vector.ToUnifiedFormat(count, sdata);
+	UnifiedVectorFormat input_data;
+	input.ToUnifiedFormat(count, input_data);
 
 	OP::template HistogramUpdate<T, MAP_TYPE>(sdata, input_data, count);
 }
@@ -4046,8 +5268,8 @@ static void HistogramUpdateFunction(Vector inputs[], AggregateInputData &, idx_t
 template <class T, class MAP_TYPE>
 static void HistogramCombineFunction(Vector &state, Vector &combined, AggregateInputData &, idx_t count) {
 
-	VectorData sdata;
-	state.Orrify(count, sdata);
+	UnifiedVectorFormat sdata;
+	state.ToUnifiedFormat(count, sdata);
 	auto states_ptr = (HistogramAggState<T, MAP_TYPE> **)sdata.data;
 
 	auto combined_ptr = FlatVector::GetData<HistogramAggState<T, MAP_TYPE> *>(combined);
@@ -4072,8 +5294,8 @@ template <class OP, class T, class MAP_TYPE>
 static void HistogramFinalizeFunction(Vector &state_vector, AggregateInputData &, Vector &result, idx_t count,
                                       idx_t offset) {
 
-	VectorData sdata;
-	state_vector.Orrify(count, sdata);
+	UnifiedVectorFormat sdata;
+	state_vector.ToUnifiedFormat(count, sdata);
 	auto states = (HistogramAggState<T, MAP_TYPE> **)sdata.data;
 
 	auto &mask = FlatVector::Validity(result);
@@ -4120,9 +5342,16 @@ unique_ptr<FunctionData> HistogramBindFunction(ClientContext &context, Aggregate
                                                vector<unique_ptr<Expression>> &arguments) {
 
 	D_ASSERT(arguments.size() == 1);
+
+	if (arguments[0]->return_type.id() == LogicalTypeId::LIST ||
+	    arguments[0]->return_type.id() == LogicalTypeId::STRUCT ||
+	    arguments[0]->return_type.id() == LogicalTypeId::MAP) {
+		throw NotImplementedException("Unimplemented type for histogram %s", arguments[0]->return_type.ToString());
+	}
+
 	child_list_t<LogicalType> struct_children;
-	struct_children.push_back({"bucket", LogicalType::LIST(arguments[0]->return_type)});
-	struct_children.push_back({"count", LogicalType::LIST(LogicalType::UBIGINT)});
+	struct_children.push_back({"key", LogicalType::LIST(arguments[0]->return_type)});
+	struct_children.push_back({"value", LogicalType::LIST(LogicalType::UBIGINT)});
 	auto struct_type = LogicalType::MAP(move(struct_children));
 
 	function.return_type = struct_type;
@@ -4179,21 +5408,21 @@ AggregateFunction GetHistogramFunction(const LogicalType &type) {
 	case LogicalType::VARCHAR:
 		return GetMapType<HistogramStringFunctor, string, IS_ORDERED>(type);
 	case LogicalType::TIMESTAMP:
-		return GetMapType<HistogramFunctor, int64_t, IS_ORDERED>(type);
+		return GetMapType<HistogramFunctor, timestamp_t, IS_ORDERED>(type);
 	case LogicalType::TIMESTAMP_TZ:
-		return GetMapType<HistogramFunctor, int64_t, IS_ORDERED>(type);
+		return GetMapType<HistogramFunctor, timestamp_tz_t, IS_ORDERED>(type);
 	case LogicalType::TIMESTAMP_S:
-		return GetMapType<HistogramFunctor, int64_t, IS_ORDERED>(type);
+		return GetMapType<HistogramFunctor, timestamp_sec_t, IS_ORDERED>(type);
 	case LogicalType::TIMESTAMP_MS:
-		return GetMapType<HistogramFunctor, int64_t, IS_ORDERED>(type);
+		return GetMapType<HistogramFunctor, timestamp_ms_t, IS_ORDERED>(type);
 	case LogicalType::TIMESTAMP_NS:
-		return GetMapType<HistogramFunctor, int64_t, IS_ORDERED>(type);
+		return GetMapType<HistogramFunctor, timestamp_ns_t, IS_ORDERED>(type);
 	case LogicalType::TIME:
-		return GetMapType<HistogramFunctor, int64_t, IS_ORDERED>(type);
+		return GetMapType<HistogramFunctor, dtime_t, IS_ORDERED>(type);
 	case LogicalType::TIME_TZ:
-		return GetMapType<HistogramFunctor, int64_t, IS_ORDERED>(type);
+		return GetMapType<HistogramFunctor, dtime_tz_t, IS_ORDERED>(type);
 	case LogicalType::DATE:
-		return GetMapType<HistogramFunctor, int32_t, IS_ORDERED>(type);
+		return GetMapType<HistogramFunctor, date_t, IS_ORDERED>(type);
 	default:
 		throw InternalException("Unimplemented histogram aggregate");
 	}
@@ -4237,20 +5466,807 @@ AggregateFunction HistogramFun::GetHistogramUnorderedMap(LogicalType &type) {
 
 namespace duckdb {
 
+struct ListSegment {
+	uint16_t count;
+	uint16_t capacity;
+	ListSegment *next;
+};
+struct LinkedList {
+	LinkedList() {};
+	LinkedList(idx_t total_capacity_p, ListSegment *first_segment_p, ListSegment *last_segment_p)
+	    : total_capacity(total_capacity_p), first_segment(first_segment_p), last_segment(last_segment_p) {
+	}
+
+	idx_t total_capacity = 0;
+	ListSegment *first_segment = nullptr;
+	ListSegment *last_segment = nullptr;
+};
+
+// forward declarations
+struct WriteDataToSegment;
+struct ReadDataFromSegment;
+struct CopyDataFromSegment;
+typedef ListSegment *(*create_segment_t)(WriteDataToSegment &write_data_to_segment, Allocator &allocator,
+                                         vector<AllocatedData> &owning_vector, const uint16_t &capacity);
+typedef void (*write_data_to_segment_t)(WriteDataToSegment &write_data_to_segment, Allocator &allocator,
+                                        vector<AllocatedData> &owning_vector, ListSegment *segment, Vector &input,
+                                        idx_t &entry_idx, idx_t &count);
+typedef void (*read_data_from_segment_t)(ReadDataFromSegment &read_data_from_segment, const ListSegment *segment,
+                                         Vector &result, idx_t &total_count);
+typedef ListSegment *(*copy_data_from_segment_t)(CopyDataFromSegment &copy_data_from_segment, const ListSegment *source,
+                                                 Allocator &allocator, vector<AllocatedData> &owning_vector);
+
+struct WriteDataToSegment {
+	create_segment_t create_segment;
+	write_data_to_segment_t segment_function;
+	vector<WriteDataToSegment> child_functions;
+};
+struct ReadDataFromSegment {
+	read_data_from_segment_t segment_function;
+	vector<ReadDataFromSegment> child_functions;
+};
+struct CopyDataFromSegment {
+	copy_data_from_segment_t segment_function;
+	vector<CopyDataFromSegment> child_functions;
+};
+
+// forward declarations
+static void AppendRow(WriteDataToSegment &write_data_to_segment, Allocator &allocator,
+                      vector<AllocatedData> &owning_vector, LinkedList *linked_list, Vector &input, idx_t &entry_idx,
+                      idx_t &count);
+static void BuildListVector(ReadDataFromSegment &read_data_from_segment, LinkedList *linked_list, Vector &result,
+                            idx_t &initial_total_count);
+static void CopyLinkedList(CopyDataFromSegment &copy_data_from_segment, const LinkedList *source_list,
+                           LinkedList &target_list, Allocator &allocator, vector<AllocatedData> &owning_vector);
+
+template <class T>
+static data_ptr_t AllocatePrimitiveData(Allocator &allocator, vector<AllocatedData> &owning_vector,
+                                        const uint16_t &capacity) {
+
+	owning_vector.emplace_back(allocator.Allocate(sizeof(ListSegment) + capacity * (sizeof(bool) + sizeof(T))));
+	return owning_vector.back().get();
+}
+
+static data_ptr_t AllocateListData(Allocator &allocator, vector<AllocatedData> &owning_vector,
+                                   const uint16_t &capacity) {
+
+	owning_vector.emplace_back(
+	    allocator.Allocate(sizeof(ListSegment) + capacity * (sizeof(bool) + sizeof(uint64_t)) + sizeof(LinkedList)));
+	return owning_vector.back().get();
+}
+
+static data_ptr_t AllocateStructData(Allocator &allocator, vector<AllocatedData> &owning_vector,
+                                     const uint16_t &capacity, const idx_t &child_count) {
+
+	owning_vector.emplace_back(
+	    allocator.Allocate(sizeof(ListSegment) + capacity * sizeof(bool) + child_count * sizeof(ListSegment *)));
+	return owning_vector.back().get();
+}
+
+template <class T>
+static T *GetPrimitiveData(const ListSegment *segment) {
+	return (T *)(((char *)segment) + sizeof(ListSegment) + segment->capacity * sizeof(bool));
+}
+
+static uint64_t *GetListLengthData(const ListSegment *segment) {
+	return (uint64_t *)(((char *)segment) + sizeof(ListSegment) + segment->capacity * sizeof(bool));
+}
+
+static LinkedList *GetListChildData(const ListSegment *segment) {
+	return (LinkedList *)(((char *)segment) + sizeof(ListSegment) +
+	                      segment->capacity * (sizeof(bool) + sizeof(uint64_t)));
+}
+
+static ListSegment **GetStructData(const ListSegment *segment) {
+	return (ListSegment **)(((char *)segment) + sizeof(ListSegment) + segment->capacity * sizeof(bool));
+}
+
+static bool *GetNullMask(const ListSegment *segment) {
+	return (bool *)(((char *)segment) + sizeof(ListSegment));
+}
+
+static uint16_t GetCapacityForNewSegment(const LinkedList *linked_list) {
+
+	// consecutive segments grow by the power of two
+	uint16_t capacity = 4;
+	if (linked_list->last_segment) {
+		auto next_power_of_two = linked_list->last_segment->capacity * 2;
+		capacity = next_power_of_two < 65536 ? next_power_of_two : linked_list->last_segment->capacity;
+	}
+	return capacity;
+}
+
+template <class T>
+static ListSegment *CreatePrimitiveSegment(WriteDataToSegment &, Allocator &allocator,
+                                           vector<AllocatedData> &owning_vector, const uint16_t &capacity) {
+
+	// allocate data and set the header
+	auto segment = (ListSegment *)AllocatePrimitiveData<T>(allocator, owning_vector, capacity);
+	segment->capacity = capacity;
+	segment->count = 0;
+	segment->next = nullptr;
+	return segment;
+}
+
+static ListSegment *CreateListSegment(WriteDataToSegment &, Allocator &allocator, vector<AllocatedData> &owning_vector,
+                                      const uint16_t &capacity) {
+
+	// allocate data and set the header
+	auto segment = (ListSegment *)AllocateListData(allocator, owning_vector, capacity);
+	segment->capacity = capacity;
+	segment->count = 0;
+	segment->next = nullptr;
+
+	// create an empty linked list for the child vector
+	auto linked_child_list = GetListChildData(segment);
+	LinkedList linked_list(0, nullptr, nullptr);
+	Store<LinkedList>(linked_list, (data_ptr_t)linked_child_list);
+
+	return segment;
+}
+
+static ListSegment *CreateStructSegment(WriteDataToSegment &write_data_to_segment, Allocator &allocator,
+                                        vector<AllocatedData> &owning_vector, const uint16_t &capacity) {
+
+	// allocate data and set header
+	auto segment = (ListSegment *)AllocateStructData(allocator, owning_vector, capacity,
+	                                                 write_data_to_segment.child_functions.size());
+	segment->capacity = capacity;
+	segment->count = 0;
+	segment->next = nullptr;
+
+	// create a child ListSegment with exactly the same capacity for each child vector
+	auto child_segments = GetStructData(segment);
+	for (idx_t i = 0; i < write_data_to_segment.child_functions.size(); i++) {
+		auto child_function = write_data_to_segment.child_functions[i];
+		auto child_segment = child_function.create_segment(child_function, allocator, owning_vector, capacity);
+		Store<ListSegment *>(child_segment, (data_ptr_t)(child_segments + i));
+	}
+
+	return segment;
+}
+
+static ListSegment *GetSegment(WriteDataToSegment &write_data_to_segment, Allocator &allocator,
+                               vector<AllocatedData> &owning_vector, LinkedList *linked_list) {
+
+	ListSegment *segment = nullptr;
+
+	// determine segment
+	if (!linked_list->last_segment) {
+		// empty linked list, create the first (and last) segment
+		auto capacity = GetCapacityForNewSegment(linked_list);
+		segment = write_data_to_segment.create_segment(write_data_to_segment, allocator, owning_vector, capacity);
+		linked_list->first_segment = segment;
+		linked_list->last_segment = segment;
+
+	} else if (linked_list->last_segment->capacity == linked_list->last_segment->count) {
+		// the last segment of the linked list is full, create a new one and append it
+		auto capacity = GetCapacityForNewSegment(linked_list);
+		segment = write_data_to_segment.create_segment(write_data_to_segment, allocator, owning_vector, capacity);
+		linked_list->last_segment->next = segment;
+		linked_list->last_segment = segment;
+
+	} else {
+		// the last segment of the linked list is not full, append the data to it
+		segment = linked_list->last_segment;
+	}
+
+	D_ASSERT(segment);
+	return segment;
+}
+
+template <class T>
+static void WriteDataToPrimitiveSegment(WriteDataToSegment &, Allocator &allocator,
+                                        vector<AllocatedData> &owning_vector, ListSegment *segment, Vector &input,
+                                        idx_t &entry_idx, idx_t &count) {
+
+	// get the vector data and the source index of the entry that we want to write
+	auto input_data = FlatVector::GetData(input);
+
+	// write null validity
+	auto null_mask = GetNullMask(segment);
+	auto is_null = FlatVector::IsNull(input, entry_idx);
+	null_mask[segment->count] = is_null;
+
+	// write value
+	if (!is_null) {
+		auto data = GetPrimitiveData<T>(segment);
+		Store<T>(((T *)input_data)[entry_idx], (data_ptr_t)(data + segment->count));
+	}
+}
+
+static void WriteDataToVarcharSegment(WriteDataToSegment &write_data_to_segment, Allocator &allocator,
+                                      vector<AllocatedData> &owning_vector, ListSegment *segment, Vector &input,
+                                      idx_t &entry_idx, idx_t &count) {
+
+	// get the vector data and the source index of the entry that we want to write
+	auto input_data = FlatVector::GetData(input);
+
+	// write null validity
+	auto null_mask = GetNullMask(segment);
+	auto is_null = FlatVector::IsNull(input, entry_idx);
+	null_mask[segment->count] = is_null;
+
+	// set the length of this string
+	auto str_length_data = GetListLengthData(segment);
+	uint64_t str_length = 0;
+
+	// get the string
+	string_t str_t;
+	if (!is_null) {
+		str_t = ((string_t *)input_data)[entry_idx];
+		str_length = str_t.GetSize();
+	}
+
+	// we can reconstruct the offset from the length
+	Store<uint64_t>(str_length, (data_ptr_t)(str_length_data + segment->count));
+
+	if (is_null) {
+		return;
+	}
+
+	// write the characters to the linked list of child segments
+	auto child_segments = Load<LinkedList>((data_ptr_t)GetListChildData(segment));
+	for (char &c : str_t.GetString()) {
+		auto child_segment =
+		    GetSegment(write_data_to_segment.child_functions.back(), allocator, owning_vector, &child_segments);
+		auto data = GetPrimitiveData<char>(child_segment);
+		data[child_segment->count] = c;
+		child_segment->count++;
+		child_segments.total_capacity++;
+	}
+
+	// store the updated linked list
+	Store<LinkedList>(child_segments, (data_ptr_t)GetListChildData(segment));
+}
+
+static void WriteDataToListSegment(WriteDataToSegment &write_data_to_segment, Allocator &allocator,
+                                   vector<AllocatedData> &owning_vector, ListSegment *segment, Vector &input,
+                                   idx_t &entry_idx, idx_t &count) {
+
+	// get the vector data and the source index of the entry that we want to write
+	auto input_data = FlatVector::GetData(input);
+
+	// write null validity
+	auto null_mask = GetNullMask(segment);
+	auto is_null = FlatVector::IsNull(input, entry_idx);
+	null_mask[segment->count] = is_null;
+
+	// set the length of this list
+	auto list_length_data = GetListLengthData(segment);
+	uint64_t list_length = 0;
+
+	if (!is_null) {
+		// get list entry information
+		auto list_entries = (list_entry_t *)input_data;
+		const auto &list_entry = list_entries[entry_idx];
+		list_length = list_entry.length;
+
+		// get the child vector and its data
+		auto lists_size = ListVector::GetListSize(input);
+		auto &child_vector = ListVector::GetEntry(input);
+
+		// loop over the child vector entries and recurse on them
+		auto child_segments = Load<LinkedList>((data_ptr_t)GetListChildData(segment));
+		D_ASSERT(write_data_to_segment.child_functions.size() == 1);
+		for (idx_t child_idx = 0; child_idx < list_entry.length; child_idx++) {
+			auto source_idx_child = list_entry.offset + child_idx;
+			AppendRow(write_data_to_segment.child_functions[0], allocator, owning_vector, &child_segments, child_vector,
+			          source_idx_child, lists_size);
+		}
+		// store the updated linked list
+		Store<LinkedList>(child_segments, (data_ptr_t)GetListChildData(segment));
+	}
+
+	Store<uint64_t>(list_length, (data_ptr_t)(list_length_data + segment->count));
+}
+
+static void WriteDataToStructSegment(WriteDataToSegment &write_data_to_segment, Allocator &allocator,
+                                     vector<AllocatedData> &owning_vector, ListSegment *segment, Vector &input,
+                                     idx_t &entry_idx, idx_t &count) {
+
+	// write null validity
+	auto null_mask = GetNullMask(segment);
+	auto is_null = FlatVector::IsNull(input, entry_idx);
+	null_mask[segment->count] = is_null;
+
+	// write value
+	auto &children = StructVector::GetEntries(input);
+	D_ASSERT(children.size() == write_data_to_segment.child_functions.size());
+	auto child_list = GetStructData(segment);
+
+	// write the data of each of the children of the struct
+	for (idx_t child_count = 0; child_count < children.size(); child_count++) {
+		auto child_list_segment = Load<ListSegment *>((data_ptr_t)(child_list + child_count));
+		auto &child_function = write_data_to_segment.child_functions[child_count];
+		child_function.segment_function(child_function, allocator, owning_vector, child_list_segment,
+		                                *children[child_count], entry_idx, count);
+		child_list_segment->count++;
+	}
+}
+
+static void AppendRow(WriteDataToSegment &write_data_to_segment, Allocator &allocator,
+                      vector<AllocatedData> &owning_vector, LinkedList *linked_list, Vector &input, idx_t &entry_idx,
+                      idx_t &count) {
+
+	D_ASSERT(input.GetVectorType() == VectorType::FLAT_VECTOR);
+
+	auto segment = GetSegment(write_data_to_segment, allocator, owning_vector, linked_list);
+	write_data_to_segment.segment_function(write_data_to_segment, allocator, owning_vector, segment, input, entry_idx,
+	                                       count);
+
+	linked_list->total_capacity++;
+	segment->count++;
+}
+
+template <class T>
+static void ReadDataFromPrimitiveSegment(ReadDataFromSegment &, const ListSegment *segment, Vector &result,
+                                         idx_t &total_count) {
+
+	auto &aggr_vector_validity = FlatVector::Validity(result);
+
+	// set NULLs
+	auto null_mask = GetNullMask(segment);
+	for (idx_t i = 0; i < segment->count; i++) {
+		if (null_mask[i]) {
+			aggr_vector_validity.SetInvalid(total_count + i);
+		}
+	}
+
+	auto aggr_vector_data = FlatVector::GetData(result);
+
+	// load values
+	for (idx_t i = 0; i < segment->count; i++) {
+		if (aggr_vector_validity.RowIsValid(total_count + i)) {
+			auto data = GetPrimitiveData<T>(segment);
+			((T *)aggr_vector_data)[total_count + i] = Load<T>((data_ptr_t)(data + i));
+		}
+	}
+}
+
+static void ReadDataFromVarcharSegment(ReadDataFromSegment &, const ListSegment *segment, Vector &result,
+                                       idx_t &total_count) {
+
+	auto &aggr_vector_validity = FlatVector::Validity(result);
+
+	// set NULLs
+	auto null_mask = GetNullMask(segment);
+	for (idx_t i = 0; i < segment->count; i++) {
+		if (null_mask[i]) {
+			aggr_vector_validity.SetInvalid(total_count + i);
+		}
+	}
+
+	// append all the child chars to one string
+	string str = "";
+	auto linked_child_list = Load<LinkedList>((data_ptr_t)GetListChildData(segment));
+	while (linked_child_list.first_segment) {
+		auto child_segment = linked_child_list.first_segment;
+		auto data = GetPrimitiveData<char>(child_segment);
+		str.append(data, child_segment->count);
+		linked_child_list.first_segment = child_segment->next;
+	}
+	linked_child_list.last_segment = nullptr;
+
+	// use length and (reconstructed) offset to get the correct substrings
+	auto aggr_vector_data = FlatVector::GetData(result);
+	auto str_length_data = GetListLengthData(segment);
+
+	// get the substrings and write them to the result vector
+	idx_t offset = 0;
+	for (idx_t i = 0; i < segment->count; i++) {
+		if (!null_mask[i]) {
+			auto str_length = Load<uint64_t>((data_ptr_t)(str_length_data + i));
+			auto substr = str.substr(offset, str_length);
+			auto str_t = StringVector::AddStringOrBlob(result, substr);
+			((string_t *)aggr_vector_data)[total_count + i] = str_t;
+			offset += str_length;
+		}
+	}
+}
+
+static void ReadDataFromListSegment(ReadDataFromSegment &read_data_from_segment, const ListSegment *segment,
+                                    Vector &result, idx_t &total_count) {
+
+	auto &aggr_vector_validity = FlatVector::Validity(result);
+
+	// set NULLs
+	auto null_mask = GetNullMask(segment);
+	for (idx_t i = 0; i < segment->count; i++) {
+		if (null_mask[i]) {
+			aggr_vector_validity.SetInvalid(total_count + i);
+		}
+	}
+
+	auto list_vector_data = FlatVector::GetData<list_entry_t>(result);
+
+	// get the starting offset
+	idx_t offset = 0;
+	if (total_count != 0) {
+		offset = list_vector_data[total_count - 1].offset + list_vector_data[total_count - 1].length;
+	}
+	idx_t starting_offset = offset;
+
+	// set length and offsets
+	auto list_length_data = GetListLengthData(segment);
+	for (idx_t i = 0; i < segment->count; i++) {
+		auto list_length = Load<uint64_t>((data_ptr_t)(list_length_data + i));
+		list_vector_data[total_count + i].length = list_length;
+		list_vector_data[total_count + i].offset = offset;
+		offset += list_length;
+	}
+
+	auto &child_vector = ListVector::GetEntry(result);
+	auto linked_child_list = Load<LinkedList>((data_ptr_t)GetListChildData(segment));
+	ListVector::Reserve(result, offset);
+
+	// recurse into the linked list of child values
+	D_ASSERT(read_data_from_segment.child_functions.size() == 1);
+	BuildListVector(read_data_from_segment.child_functions[0], &linked_child_list, child_vector, starting_offset);
+}
+
+static void ReadDataFromStructSegment(ReadDataFromSegment &read_data_from_segment, const ListSegment *segment,
+                                      Vector &result, idx_t &total_count) {
+
+	auto &aggr_vector_validity = FlatVector::Validity(result);
+
+	// set NULLs
+	auto null_mask = GetNullMask(segment);
+	for (idx_t i = 0; i < segment->count; i++) {
+		if (null_mask[i]) {
+			aggr_vector_validity.SetInvalid(total_count + i);
+		}
+	}
+
+	auto &children = StructVector::GetEntries(result);
+
+	// recurse into the child segments of each child of the struct
+	D_ASSERT(children.size() == read_data_from_segment.child_functions.size());
+	auto struct_children = GetStructData(segment);
+	for (idx_t child_count = 0; child_count < children.size(); child_count++) {
+		auto struct_children_segment = Load<ListSegment *>((data_ptr_t)(struct_children + child_count));
+		auto &child_function = read_data_from_segment.child_functions[child_count];
+		child_function.segment_function(child_function, struct_children_segment, *children[child_count], total_count);
+	}
+}
+
+static void BuildListVector(ReadDataFromSegment &read_data_from_segment, LinkedList *linked_list, Vector &result,
+                            idx_t &initial_total_count) {
+
+	idx_t total_count = initial_total_count;
+	while (linked_list->first_segment) {
+		auto segment = linked_list->first_segment;
+		read_data_from_segment.segment_function(read_data_from_segment, segment, result, total_count);
+
+		total_count += segment->count;
+		linked_list->first_segment = segment->next;
+	}
+
+	linked_list->last_segment = nullptr;
+}
+
+template <class T>
+static ListSegment *CopyDataFromPrimitiveSegment(CopyDataFromSegment &, const ListSegment *source, Allocator &allocator,
+                                                 vector<AllocatedData> &owning_vector) {
+
+	auto target = (ListSegment *)AllocatePrimitiveData<T>(allocator, owning_vector, source->capacity);
+	memcpy(target, source, sizeof(ListSegment) + source->capacity * (sizeof(bool) + sizeof(T)));
+	target->next = nullptr;
+	return target;
+}
+
+static ListSegment *CopyDataFromListSegment(CopyDataFromSegment &copy_data_from_segment, const ListSegment *source,
+                                            Allocator &allocator, vector<AllocatedData> &owning_vector) {
+
+	// create an empty linked list for the child vector of target
+	auto source_linked_child_list = Load<LinkedList>((data_ptr_t)GetListChildData(source));
+
+	// create the segment
+	auto target = (ListSegment *)AllocateListData(allocator, owning_vector, source->capacity);
+	memcpy(target, source,
+	       sizeof(ListSegment) + source->capacity * (sizeof(bool) + sizeof(uint64_t)) + sizeof(LinkedList));
+	target->next = nullptr;
+
+	auto target_linked_list = GetListChildData(target);
+	LinkedList linked_list(source_linked_child_list.total_capacity, nullptr, nullptr);
+	Store<LinkedList>(linked_list, (data_ptr_t)target_linked_list);
+
+	// recurse to copy the linked child list
+	auto target_linked_child_list = Load<LinkedList>((data_ptr_t)GetListChildData(target));
+	D_ASSERT(copy_data_from_segment.child_functions.size() == 1);
+	CopyLinkedList(copy_data_from_segment.child_functions[0], &source_linked_child_list, target_linked_child_list,
+	               allocator, owning_vector);
+
+	// store the updated linked list
+	Store<LinkedList>(target_linked_child_list, (data_ptr_t)GetListChildData(target));
+	return target;
+}
+
+static ListSegment *CopyDataFromStructSegment(CopyDataFromSegment &copy_data_from_segment, const ListSegment *source,
+                                              Allocator &allocator, vector<AllocatedData> &owning_vector) {
+
+	auto source_child_count = copy_data_from_segment.child_functions.size();
+	auto target = (ListSegment *)AllocateStructData(allocator, owning_vector, source->capacity, source_child_count);
+	memcpy(target, source,
+	       sizeof(ListSegment) + source->capacity * sizeof(bool) + source_child_count * sizeof(ListSegment *));
+	target->next = nullptr;
+
+	// recurse and copy the children
+	auto source_child_segments = GetStructData(source);
+	auto target_child_segments = GetStructData(target);
+
+	for (idx_t i = 0; i < copy_data_from_segment.child_functions.size(); i++) {
+		auto child_function = copy_data_from_segment.child_functions[i];
+		auto source_child_segment = Load<ListSegment *>((data_ptr_t)(source_child_segments + i));
+		auto target_child_segment =
+		    child_function.segment_function(child_function, source_child_segment, allocator, owning_vector);
+		Store<ListSegment *>(target_child_segment, (data_ptr_t)(target_child_segments + i));
+	}
+	return target;
+}
+
+static void CopyLinkedList(CopyDataFromSegment &copy_data_from_segment, const LinkedList *source_list,
+                           LinkedList &target_list, Allocator &allocator, vector<AllocatedData> &owning_vector) {
+
+	auto source_segment = source_list->first_segment;
+
+	while (source_segment) {
+		auto target_segment =
+		    copy_data_from_segment.segment_function(copy_data_from_segment, source_segment, allocator, owning_vector);
+		source_segment = source_segment->next;
+
+		if (!target_list.first_segment) {
+			target_list.first_segment = target_segment;
+		}
+		if (target_list.last_segment) {
+			target_list.last_segment->next = target_segment;
+		}
+		target_list.last_segment = target_segment;
+	}
+}
+
+static void InitializeValidities(Vector &vector, idx_t &capacity) {
+
+	auto &validity_mask = FlatVector::Validity(vector);
+	validity_mask.Initialize(capacity);
+
+	auto internal_type = vector.GetType().InternalType();
+	if (internal_type == PhysicalType::LIST) {
+		auto &child_vector = ListVector::GetEntry(vector);
+		InitializeValidities(child_vector, capacity);
+	} else if (internal_type == PhysicalType::STRUCT) {
+		auto &children = StructVector::GetEntries(vector);
+		for (auto &child : children) {
+			InitializeValidities(*child, capacity);
+		}
+	}
+}
+
+static void RecursiveFlatten(Vector &vector, idx_t &count) {
+
+	if (vector.GetVectorType() != VectorType::FLAT_VECTOR) {
+		vector.Flatten(count);
+	}
+
+	auto internal_type = vector.GetType().InternalType();
+	if (internal_type == PhysicalType::LIST) {
+		auto &child_vector = ListVector::GetEntry(vector);
+		auto child_vector_count = ListVector::GetListSize(vector);
+		RecursiveFlatten(child_vector, child_vector_count);
+	} else if (internal_type == PhysicalType::STRUCT) {
+		auto &children = StructVector::GetEntries(vector);
+		for (auto &child : children) {
+			RecursiveFlatten(*child, count);
+		}
+	}
+}
+
+struct ListBindData : public FunctionData {
+	explicit ListBindData(const LogicalType &stype_p);
+	~ListBindData() override;
+
+	LogicalType stype;
+	WriteDataToSegment write_data_to_segment;
+	ReadDataFromSegment read_data_from_segment;
+	CopyDataFromSegment copy_data_from_segment;
+
+	unique_ptr<FunctionData> Copy() const override {
+		return make_unique<ListBindData>(stype);
+	}
+
+	bool Equals(const FunctionData &other_p) const override {
+		auto &other = (const ListBindData &)other_p;
+		return stype == other.stype;
+	}
+};
+
+static void GetSegmentDataFunctions(WriteDataToSegment &write_data_to_segment,
+                                    ReadDataFromSegment &read_data_from_segment,
+                                    CopyDataFromSegment &copy_data_from_segment, const LogicalType &type) {
+
+	auto physical_type = type.InternalType();
+	switch (physical_type) {
+	case PhysicalType::BIT:
+	case PhysicalType::BOOL: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<bool>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<bool>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<bool>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<bool>;
+		break;
+	}
+	case PhysicalType::INT8: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<int8_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<int8_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<int8_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<int8_t>;
+		break;
+	}
+	case PhysicalType::INT16: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<int16_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<int16_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<int16_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<int16_t>;
+		break;
+	}
+	case PhysicalType::INT32: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<int32_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<int32_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<int32_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<int32_t>;
+		break;
+	}
+	case PhysicalType::INT64: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<int64_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<int64_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<int64_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<int64_t>;
+		break;
+	}
+	case PhysicalType::UINT8: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<uint8_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<uint8_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<uint8_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<uint8_t>;
+		break;
+	}
+	case PhysicalType::UINT16: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<uint16_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<uint16_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<uint16_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<uint16_t>;
+		break;
+	}
+	case PhysicalType::UINT32: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<uint32_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<uint32_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<uint32_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<uint32_t>;
+		break;
+	}
+	case PhysicalType::UINT64: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<uint64_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<uint64_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<uint64_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<uint64_t>;
+		break;
+	}
+	case PhysicalType::FLOAT: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<float>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<float>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<float>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<float>;
+		break;
+	}
+	case PhysicalType::DOUBLE: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<double>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<double>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<double>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<double>;
+		break;
+	}
+	case PhysicalType::INT128: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<hugeint_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<hugeint_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<hugeint_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<hugeint_t>;
+		break;
+	}
+	case PhysicalType::INTERVAL: {
+		write_data_to_segment.create_segment = CreatePrimitiveSegment<interval_t>;
+		write_data_to_segment.segment_function = WriteDataToPrimitiveSegment<interval_t>;
+		read_data_from_segment.segment_function = ReadDataFromPrimitiveSegment<interval_t>;
+		copy_data_from_segment.segment_function = CopyDataFromPrimitiveSegment<interval_t>;
+		break;
+	}
+	case PhysicalType::VARCHAR: {
+		write_data_to_segment.create_segment = CreateListSegment;
+		write_data_to_segment.segment_function = WriteDataToVarcharSegment;
+		read_data_from_segment.segment_function = ReadDataFromVarcharSegment;
+		copy_data_from_segment.segment_function = CopyDataFromListSegment;
+
+		write_data_to_segment.child_functions.emplace_back(WriteDataToSegment());
+		write_data_to_segment.child_functions.back().create_segment = CreatePrimitiveSegment<char>;
+		copy_data_from_segment.child_functions.emplace_back(CopyDataFromSegment());
+		copy_data_from_segment.child_functions.back().segment_function = CopyDataFromPrimitiveSegment<char>;
+		break;
+	}
+	case PhysicalType::LIST: {
+		write_data_to_segment.create_segment = CreateListSegment;
+		write_data_to_segment.segment_function = WriteDataToListSegment;
+		read_data_from_segment.segment_function = ReadDataFromListSegment;
+		copy_data_from_segment.segment_function = CopyDataFromListSegment;
+
+		// recurse
+		write_data_to_segment.child_functions.emplace_back(WriteDataToSegment());
+		read_data_from_segment.child_functions.emplace_back(ReadDataFromSegment());
+		copy_data_from_segment.child_functions.emplace_back(CopyDataFromSegment());
+		GetSegmentDataFunctions(write_data_to_segment.child_functions.back(),
+		                        read_data_from_segment.child_functions.back(),
+		                        copy_data_from_segment.child_functions.back(), ListType::GetChildType(type));
+		break;
+	}
+	case PhysicalType::STRUCT: {
+		write_data_to_segment.create_segment = CreateStructSegment;
+		write_data_to_segment.segment_function = WriteDataToStructSegment;
+		read_data_from_segment.segment_function = ReadDataFromStructSegment;
+		copy_data_from_segment.segment_function = CopyDataFromStructSegment;
+
+		// recurse
+		auto child_types = StructType::GetChildTypes(type);
+		for (idx_t i = 0; i < child_types.size(); i++) {
+			write_data_to_segment.child_functions.emplace_back(WriteDataToSegment());
+			read_data_from_segment.child_functions.emplace_back(ReadDataFromSegment());
+			copy_data_from_segment.child_functions.emplace_back(CopyDataFromSegment());
+			GetSegmentDataFunctions(write_data_to_segment.child_functions.back(),
+			                        read_data_from_segment.child_functions.back(),
+			                        copy_data_from_segment.child_functions.back(), child_types[i].second);
+		}
+		break;
+	}
+	default:
+		throw InternalException("LIST aggregate not yet implemented for " + type.ToString());
+	}
+}
+
+ListBindData::ListBindData(const LogicalType &stype_p) : stype(stype_p) {
+
+	// always unnest once because the result vector is of type LIST
+	auto type = ListType::GetChildType(stype_p);
+	GetSegmentDataFunctions(write_data_to_segment, read_data_from_segment, copy_data_from_segment, type);
+}
+
+ListBindData::~ListBindData() {
+}
+
 struct ListAggState {
-	Vector *list_vector;
+	LinkedList *linked_list;
+	LogicalType *type;
+	vector<AllocatedData> *owning_vector;
 };
 
 struct ListFunction {
 	template <class STATE>
 	static void Initialize(STATE *state) {
-		state->list_vector = nullptr;
+		state->linked_list = nullptr;
+		state->type = nullptr;
+		state->owning_vector = nullptr;
 	}
 
 	template <class STATE>
 	static void Destroy(STATE *state) {
-		if (state->list_vector) {
-			delete state->list_vector;
+		D_ASSERT(state);
+		if (state->linked_list) {
+			delete state->linked_list;
+			state->linked_list = nullptr;
+		}
+		if (state->type) {
+			delete state->type;
+			state->type = nullptr;
+		}
+		if (state->owning_vector) {
+			state->owning_vector->clear();
+			delete state->owning_vector;
+			state->owning_vector = nullptr;
 		}
 	}
 	static bool IgnoreNull() {
@@ -4258,89 +6274,133 @@ struct ListFunction {
 	}
 };
 
-static void ListUpdateFunction(Vector inputs[], AggregateInputData &, idx_t input_count, Vector &state_vector,
-                               idx_t count) {
+static void ListUpdateFunction(Vector inputs[], AggregateInputData &aggr_input_data, idx_t input_count,
+                               Vector &state_vector, idx_t count) {
 	D_ASSERT(input_count == 1);
 
 	auto &input = inputs[0];
-	VectorData sdata;
-	state_vector.Orrify(count, sdata);
-
-	auto list_vector_type = LogicalType::LIST(input.GetType());
+	UnifiedVectorFormat sdata;
+	state_vector.ToUnifiedFormat(count, sdata);
 
 	auto states = (ListAggState **)sdata.data;
-	if (input.GetVectorType() == VectorType::SEQUENCE_VECTOR) {
-		input.Normalify(count);
-	}
+	RecursiveFlatten(input, count);
+
+	auto &list_bind_data = (ListBindData &)*aggr_input_data.bind_data;
+
 	for (idx_t i = 0; i < count; i++) {
 		auto state = states[sdata.sel->get_index(i)];
-		if (!state->list_vector) {
-			// NOTE: any number bigger than 1 can cause DuckDB to run out of memory for specific queries
-			// consisting of millions of groups in the group by and complex (nested) vectors
-			state->list_vector = new Vector(list_vector_type, 1);
+		if (!state->linked_list) {
+			state->linked_list = new LinkedList(0, nullptr, nullptr);
+			state->type = new LogicalType(input.GetType());
+			state->owning_vector = new vector<AllocatedData>;
 		}
-		ListVector::Append(*state->list_vector, input, i + 1, i);
+		D_ASSERT(state->type);
+		AppendRow(list_bind_data.write_data_to_segment, aggr_input_data.allocator, *state->owning_vector,
+		          state->linked_list, input, i, count);
 	}
 }
 
-static void ListCombineFunction(Vector &state, Vector &combined, AggregateInputData &, idx_t count) {
-	VectorData sdata;
-	state.Orrify(count, sdata);
+static void ListCombineFunction(Vector &state, Vector &combined, AggregateInputData &aggr_input_data, idx_t count) {
+	UnifiedVectorFormat sdata;
+	state.ToUnifiedFormat(count, sdata);
 	auto states_ptr = (ListAggState **)sdata.data;
+
+	auto &list_bind_data = (ListBindData &)*aggr_input_data.bind_data;
 
 	auto combined_ptr = FlatVector::GetData<ListAggState *>(combined);
 	for (idx_t i = 0; i < count; i++) {
 		auto state = states_ptr[sdata.sel->get_index(i)];
-		if (!state->list_vector) {
+		if (!state->linked_list) {
 			// NULL, no need to append.
 			continue;
 		}
-		if (!combined_ptr[i]->list_vector) {
-			// NOTE: initializing this with a capacity of ListVector::GetListSize(*state->list_vector) causes
-			// DuckDB to run out of memory for multiple threads with millions of groups in the group by and complex
-			// (nested) vectors
-			combined_ptr[i]->list_vector = new Vector(state->list_vector->GetType(), 1);
+		D_ASSERT(state->type);
+		D_ASSERT(state->owning_vector);
+
+		if (!combined_ptr[i]->linked_list) {
+			combined_ptr[i]->linked_list = new LinkedList(0, nullptr, nullptr);
+			combined_ptr[i]->owning_vector = new vector<AllocatedData>;
+			combined_ptr[i]->type = new LogicalType(*state->type);
 		}
-		ListVector::Append(*combined_ptr[i]->list_vector, ListVector::GetEntry(*state->list_vector),
-		                   ListVector::GetListSize(*state->list_vector));
+		auto owning_vector = combined_ptr[i]->owning_vector;
+
+		// copy the linked list of the state
+		auto copied_linked_list = LinkedList(state->linked_list->total_capacity, nullptr, nullptr);
+		CopyLinkedList(list_bind_data.copy_data_from_segment, state->linked_list, copied_linked_list,
+		               aggr_input_data.allocator, *owning_vector);
+
+		// append the copied linked list to the combined state
+		if (combined_ptr[i]->linked_list->last_segment) {
+			combined_ptr[i]->linked_list->last_segment->next = copied_linked_list.first_segment;
+		} else {
+			combined_ptr[i]->linked_list->first_segment = copied_linked_list.first_segment;
+		}
+		combined_ptr[i]->linked_list->last_segment = copied_linked_list.last_segment;
+		combined_ptr[i]->linked_list->total_capacity += copied_linked_list.total_capacity;
 	}
 }
 
-static void ListFinalize(Vector &state_vector, AggregateInputData &, Vector &result, idx_t count, idx_t offset) {
-	VectorData sdata;
-	state_vector.Orrify(count, sdata);
+static void ListFinalize(Vector &state_vector, AggregateInputData &aggr_input_data, Vector &result, idx_t count,
+                         idx_t offset) {
+	UnifiedVectorFormat sdata;
+	state_vector.ToUnifiedFormat(count, sdata);
 	auto states = (ListAggState **)sdata.data;
 
 	D_ASSERT(result.GetType().id() == LogicalTypeId::LIST);
 
 	auto &mask = FlatVector::Validity(result);
-	auto list_struct_data = FlatVector::GetData<list_entry_t>(result);
+	auto result_data = FlatVector::GetData<list_entry_t>(result);
 	size_t total_len = ListVector::GetListSize(result);
 
+	auto &list_bind_data = (ListBindData &)*aggr_input_data.bind_data;
+
 	for (idx_t i = 0; i < count; i++) {
+
 		auto state = states[sdata.sel->get_index(i)];
 		const auto rid = i + offset;
-		if (!state->list_vector) {
+		if (!state->linked_list) {
 			mask.SetInvalid(rid);
 			continue;
 		}
 
-		auto &state_lv = *state->list_vector;
-		auto state_lv_count = ListVector::GetListSize(state_lv);
-		list_struct_data[rid].length = state_lv_count;
-		list_struct_data[rid].offset = total_len;
-		total_len += state_lv_count;
+		// set the length and offset of this list in the result vector
+		auto total_capacity = state->linked_list->total_capacity;
+		result_data[rid].length = total_capacity;
+		result_data[rid].offset = total_len;
+		total_len += total_capacity;
 
-		auto &list_vec_to_append = ListVector::GetEntry(state_lv);
-		ListVector::Append(result, list_vec_to_append, state_lv_count);
+		D_ASSERT(state->type);
+
+		Vector aggr_vector(*state->type, total_capacity);
+		// FIXME: this is a workaround because the constructor of a vector does not set the size
+		// of the validity mask, and by default it is set to STANDARD_VECTOR_SIZE
+		// ListVector::Reserve only increases the validity mask, if (to_reserve > capacity),
+		// which will not be the case if the value passed to the constructor of aggr_vector
+		// is greater than to_reserve
+		InitializeValidities(aggr_vector, total_capacity);
+
+		idx_t total_count = 0;
+		BuildListVector(list_bind_data.read_data_from_segment, state->linked_list, aggr_vector, total_count);
+		ListVector::Append(result, aggr_vector, total_capacity);
+
+		// now destroy the state (for parallel destruction)
+		ListFunction::Destroy<ListAggState>(state);
 	}
 }
 
 unique_ptr<FunctionData> ListBindFunction(ClientContext &context, AggregateFunction &function,
                                           vector<unique_ptr<Expression>> &arguments) {
 	D_ASSERT(arguments.size() == 1);
+	D_ASSERT(function.arguments.size() == 1);
+
+	if (arguments[0]->return_type.id() == LogicalTypeId::UNKNOWN) {
+		function.arguments[0] = LogicalTypeId::UNKNOWN;
+		function.return_type = LogicalType::SQLNULL;
+		return nullptr;
+	}
+
 	function.return_type = LogicalType::LIST(arguments[0]->return_type);
-	return nullptr;
+	return make_unique<ListBindData>(function.return_type);
 }
 
 void ListFun::RegisterFunction(BuiltinFunctions &set) {
@@ -4445,10 +6505,11 @@ void RegrAvgyFun::RegisterFunction(BuiltinFunctions &set) {
 namespace duckdb {
 
 void RegrCountFun::RegisterFunction(BuiltinFunctions &set) {
-	AggregateFunctionSet corr("regr_count");
-	corr.AddFunction(AggregateFunction::BinaryAggregate<size_t, double, double, uint32_t, RegrCountFunction>(
-	    LogicalType::DOUBLE, LogicalType::DOUBLE, LogicalType::UINTEGER));
-	set.AddFunction(corr);
+	auto regr_count = AggregateFunction::BinaryAggregate<size_t, double, double, uint32_t, RegrCountFunction>(
+	    LogicalType::DOUBLE, LogicalType::DOUBLE, LogicalType::UINTEGER);
+	regr_count.name = "regr_count";
+	regr_count.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction(regr_count);
 }
 
 } // namespace duckdb
@@ -4787,6 +6848,7 @@ void BuiltinFunctions::RegisterRegressiveAggregates() {
 
 
 
+
 namespace duckdb {
 
 struct SortedAggregateBindData : public FunctionData {
@@ -4923,8 +6985,8 @@ struct SortedAggregateFunction {
 
 		// We have to scatter the chunks one at a time
 		// so build a selection vector for each one.
-		VectorData svdata;
-		states.Orrify(count, svdata);
+		UnifiedVectorFormat svdata;
+		states.ToUnifiedFormat(count, svdata);
 
 		// Build the selection vector for each state.
 		auto sdata = (SortedAggregateState **)svdata.data;
@@ -4983,7 +7045,7 @@ struct SortedAggregateFunction {
 		// State variables
 		const auto input_count = order_bind->function.arguments.size();
 		auto bind_info = order_bind->bind_info.get();
-		AggregateInputData aggr_bind_info(bind_info);
+		AggregateInputData aggr_bind_info(bind_info, Allocator::DefaultAllocator());
 
 		// Inner aggregate APIs
 		auto initialize = order_bind->function.initialize;
@@ -5025,12 +7087,20 @@ struct SortedAggregateFunction {
 			}
 		}
 	}
+
+	static void Serialize(FieldWriter &writer, const FunctionData *bind_data, const AggregateFunction &function) {
+		throw NotImplementedException("FIXME: serialize sorted aggregate not supported");
+	}
+	static unique_ptr<FunctionData> Deserialize(ClientContext &context, FieldReader &reader,
+	                                            AggregateFunction &function) {
+		throw NotImplementedException("FIXME: deserialize sorted aggregate not supported");
+	}
 };
 
-unique_ptr<FunctionData> AggregateFunction::BindSortedAggregate(AggregateFunction &bound_function,
-                                                                vector<unique_ptr<Expression>> &children,
-                                                                unique_ptr<FunctionData> bind_info,
-                                                                unique_ptr<BoundOrderModifier> order_bys) {
+unique_ptr<FunctionData> FunctionBinder::BindSortedAggregate(AggregateFunction &bound_function,
+                                                             vector<unique_ptr<Expression>> &children,
+                                                             unique_ptr<FunctionData> bind_info,
+                                                             unique_ptr<BoundOrderModifier> order_bys) {
 
 	auto sorted_bind = make_unique<SortedAggregateBindData>(bound_function, children, move(bind_info), *order_bys);
 
@@ -5046,15 +7116,2329 @@ unique_ptr<FunctionData> AggregateFunction::BindSortedAggregate(AggregateFunctio
 	}
 
 	// Replace the aggregate with the wrapper
-	bound_function = AggregateFunction(
+	AggregateFunction ordered_aggregate(
 	    bound_function.name, arguments, bound_function.return_type, AggregateFunction::StateSize<SortedAggregateState>,
 	    AggregateFunction::StateInitialize<SortedAggregateState, SortedAggregateFunction>,
 	    SortedAggregateFunction::ScatterUpdate,
 	    AggregateFunction::StateCombine<SortedAggregateState, SortedAggregateFunction>,
 	    SortedAggregateFunction::Finalize, SortedAggregateFunction::SimpleUpdate, nullptr,
 	    AggregateFunction::StateDestroy<SortedAggregateState, SortedAggregateFunction>);
+	ordered_aggregate.serialize = SortedAggregateFunction::Serialize;
+	ordered_aggregate.deserialize = SortedAggregateFunction::Deserialize;
+	ordered_aggregate.null_handling = bound_function.null_handling;
+
+	bound_function = move(ordered_aggregate);
 
 	return move(sorted_bind);
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+BoundCastInfo DefaultCasts::BlobCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+		// blob to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<string_t, duckdb::CastFromBlob>);
+	case LogicalTypeId::AGGREGATE_STATE:
+		return DefaultCasts::ReinterpretCast;
+	default:
+		return DefaultCasts::TryVectorNullCast;
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+namespace duckdb {
+
+BindCastInput::BindCastInput(CastFunctionSet &function_set, BindCastInfo *info, ClientContext *context)
+    : function_set(function_set), info(info), context(context) {
+}
+
+BoundCastInfo BindCastInput::GetCastFunction(const LogicalType &source, const LogicalType &target) {
+	GetCastFunctionInput input(context);
+	return function_set.GetCastFunction(source, target, input);
+}
+
+BindCastFunction::BindCastFunction(bind_cast_function_t function_p, unique_ptr<BindCastInfo> info_p)
+    : function(function_p), info(move(info_p)) {
+}
+
+CastFunctionSet::CastFunctionSet() : map_info(nullptr) {
+	bind_functions.emplace_back(DefaultCasts::GetDefaultCastFunction);
+}
+
+CastFunctionSet &CastFunctionSet::Get(ClientContext &context) {
+	return DBConfig::GetConfig(context).GetCastFunctions();
+}
+
+CastFunctionSet &CastFunctionSet::Get(DatabaseInstance &db) {
+	return DBConfig::GetConfig(db).GetCastFunctions();
+}
+
+BoundCastInfo CastFunctionSet::GetCastFunction(const LogicalType &source, const LogicalType &target,
+                                               GetCastFunctionInput &get_input) {
+	if (source == target) {
+		return DefaultCasts::NopCast;
+	}
+	// the first function is the default
+	// we iterate the set of bind functions backwards
+	for (idx_t i = bind_functions.size(); i > 0; i--) {
+		auto &bind_function = bind_functions[i - 1];
+		BindCastInput input(*this, bind_function.info.get(), get_input.context);
+		auto result = bind_function.function(input, source, target);
+		if (result.function) {
+			// found a cast function! return it
+			return result;
+		}
+	}
+	// no cast found: return the default null cast
+	return DefaultCasts::TryVectorNullCast;
+}
+
+struct MapCastNode {
+	MapCastNode(BoundCastInfo info, int64_t implicit_cast_cost)
+	    : cast_info(move(info)), bind_function(nullptr), implicit_cast_cost(implicit_cast_cost) {
+	}
+	MapCastNode(bind_cast_function_t func, int64_t implicit_cast_cost)
+	    : cast_info(nullptr), bind_function(func), implicit_cast_cost(implicit_cast_cost) {
+	}
+
+	BoundCastInfo cast_info;
+	bind_cast_function_t bind_function;
+	int64_t implicit_cast_cost;
+};
+
+struct MapCastInfo : public BindCastInfo {
+	type_map_t<type_map_t<MapCastNode>> casts;
+};
+
+int64_t CastFunctionSet::ImplicitCastCost(const LogicalType &source, const LogicalType &target) {
+	// check if a cast has been registered
+	if (map_info) {
+		auto source_entry = map_info->casts.find(source);
+		if (source_entry != map_info->casts.end()) {
+			auto target_entry = source_entry->second.find(target);
+			if (target_entry != source_entry->second.end()) {
+				return target_entry->second.implicit_cast_cost;
+			}
+		}
+	}
+	// if not, fallback to the default implicit cast rules
+	return CastRules::ImplicitCast(source, target);
+}
+
+BoundCastInfo MapCastFunction(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	D_ASSERT(input.info);
+	auto &map_info = (MapCastInfo &)*input.info;
+	auto &casts = map_info.casts;
+
+	auto entry = casts.find(source);
+	if (entry == casts.end()) {
+		// source type not found
+		return nullptr;
+	}
+	auto target_entry = entry->second.find(target);
+	if (target_entry == entry->second.end()) {
+		// target type not found
+		return nullptr;
+	}
+	if (target_entry->second.bind_function) {
+		return target_entry->second.bind_function(input, source, target);
+	}
+	return target_entry->second.cast_info.Copy();
+}
+
+void CastFunctionSet::RegisterCastFunction(const LogicalType &source, const LogicalType &target, BoundCastInfo function,
+                                           int64_t implicit_cast_cost) {
+	RegisterCastFunction(source, target, MapCastNode(move(function), implicit_cast_cost));
+}
+
+void CastFunctionSet::RegisterCastFunction(const LogicalType &source, const LogicalType &target,
+                                           bind_cast_function_t bind_function, int64_t implicit_cast_cost) {
+	RegisterCastFunction(source, target, MapCastNode(bind_function, implicit_cast_cost));
+}
+
+void CastFunctionSet::RegisterCastFunction(const LogicalType &source, const LogicalType &target, MapCastNode node) {
+	if (!map_info) {
+		// create the cast map and the cast map function
+		auto info = make_unique<MapCastInfo>();
+		map_info = info.get();
+		bind_functions.emplace_back(MapCastFunction, move(info));
+	}
+	map_info->casts[source].insert(make_pair(target, move(node)));
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+template <class T>
+static bool FromDecimalCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto &source_type = source.GetType();
+	auto width = DecimalType::GetWidth(source_type);
+	auto scale = DecimalType::GetScale(source_type);
+	switch (source_type.InternalType()) {
+	case PhysicalType::INT16:
+		return VectorCastHelpers::TemplatedDecimalCast<int16_t, T, TryCastFromDecimal>(
+		    source, result, count, parameters.error_message, width, scale);
+	case PhysicalType::INT32:
+		return VectorCastHelpers::TemplatedDecimalCast<int32_t, T, TryCastFromDecimal>(
+		    source, result, count, parameters.error_message, width, scale);
+	case PhysicalType::INT64:
+		return VectorCastHelpers::TemplatedDecimalCast<int64_t, T, TryCastFromDecimal>(
+		    source, result, count, parameters.error_message, width, scale);
+	case PhysicalType::INT128:
+		return VectorCastHelpers::TemplatedDecimalCast<hugeint_t, T, TryCastFromDecimal>(
+		    source, result, count, parameters.error_message, width, scale);
+	default:
+		throw InternalException("Unimplemented internal type for decimal");
+	}
+}
+
+template <class LIMIT_TYPE, class FACTOR_TYPE = LIMIT_TYPE>
+struct DecimalScaleInput {
+	DecimalScaleInput(Vector &result_p, FACTOR_TYPE factor_p) : result(result_p), factor(factor_p) {
+	}
+	DecimalScaleInput(Vector &result_p, LIMIT_TYPE limit_p, FACTOR_TYPE factor_p, string *error_message_p,
+	                  uint8_t source_width_p, uint8_t source_scale_p)
+	    : result(result_p), limit(limit_p), factor(factor_p), error_message(error_message_p),
+	      source_width(source_width_p), source_scale(source_scale_p) {
+	}
+
+	Vector &result;
+	LIMIT_TYPE limit;
+	FACTOR_TYPE factor;
+	bool all_converted = true;
+	string *error_message;
+	uint8_t source_width;
+	uint8_t source_scale;
+};
+
+struct DecimalScaleUpOperator {
+	template <class INPUT_TYPE, class RESULT_TYPE>
+	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
+		auto data = (DecimalScaleInput<INPUT_TYPE, RESULT_TYPE> *)dataptr;
+		return Cast::Operation<INPUT_TYPE, RESULT_TYPE>(input) * data->factor;
+	}
+};
+
+struct DecimalScaleUpCheckOperator {
+	template <class INPUT_TYPE, class RESULT_TYPE>
+	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
+		auto data = (DecimalScaleInput<INPUT_TYPE, RESULT_TYPE> *)dataptr;
+		if (input >= data->limit || input <= -data->limit) {
+			auto error = StringUtil::Format("Casting value \"%s\" to type %s failed: value is out of range!",
+			                                Decimal::ToString(input, data->source_width, data->source_scale),
+			                                data->result.GetType().ToString());
+			return HandleVectorCastError::Operation<RESULT_TYPE>(move(error), mask, idx, data->error_message,
+			                                                     data->all_converted);
+		}
+		return Cast::Operation<INPUT_TYPE, RESULT_TYPE>(input) * data->factor;
+	}
+};
+
+template <class SOURCE, class DEST, class POWERS_SOURCE, class POWERS_DEST>
+bool TemplatedDecimalScaleUp(Vector &source, Vector &result, idx_t count, string *error_message) {
+	auto source_scale = DecimalType::GetScale(source.GetType());
+	auto source_width = DecimalType::GetWidth(source.GetType());
+	auto result_scale = DecimalType::GetScale(result.GetType());
+	auto result_width = DecimalType::GetWidth(result.GetType());
+	D_ASSERT(result_scale >= source_scale);
+	idx_t scale_difference = result_scale - source_scale;
+	DEST multiply_factor = POWERS_DEST::POWERS_OF_TEN[scale_difference];
+	idx_t target_width = result_width - scale_difference;
+	if (source_width < target_width) {
+		DecimalScaleInput<SOURCE, DEST> input(result, multiply_factor);
+		// type will always fit: no need to check limit
+		UnaryExecutor::GenericExecute<SOURCE, DEST, DecimalScaleUpOperator>(source, result, count, &input);
+		return true;
+	} else {
+		// type might not fit: check limit
+		auto limit = POWERS_SOURCE::POWERS_OF_TEN[target_width];
+		DecimalScaleInput<SOURCE, DEST> input(result, limit, multiply_factor, error_message, source_width,
+		                                      source_scale);
+		UnaryExecutor::GenericExecute<SOURCE, DEST, DecimalScaleUpCheckOperator>(source, result, count, &input,
+		                                                                         error_message);
+		return input.all_converted;
+	}
+}
+
+struct DecimalScaleDownOperator {
+	template <class INPUT_TYPE, class RESULT_TYPE>
+	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
+		auto data = (DecimalScaleInput<INPUT_TYPE> *)dataptr;
+		return Cast::Operation<INPUT_TYPE, RESULT_TYPE>(input / data->factor);
+	}
+};
+
+struct DecimalScaleDownCheckOperator {
+	template <class INPUT_TYPE, class RESULT_TYPE>
+	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
+		auto data = (DecimalScaleInput<INPUT_TYPE> *)dataptr;
+		if (input >= data->limit || input <= -data->limit) {
+			auto error = StringUtil::Format("Casting value \"%s\" to type %s failed: value is out of range!",
+			                                Decimal::ToString(input, data->source_width, data->source_scale),
+			                                data->result.GetType().ToString());
+			return HandleVectorCastError::Operation<RESULT_TYPE>(move(error), mask, idx, data->error_message,
+			                                                     data->all_converted);
+		}
+		return Cast::Operation<INPUT_TYPE, RESULT_TYPE>(input / data->factor);
+	}
+};
+
+template <class SOURCE, class DEST, class POWERS_SOURCE>
+bool TemplatedDecimalScaleDown(Vector &source, Vector &result, idx_t count, string *error_message) {
+	auto source_scale = DecimalType::GetScale(source.GetType());
+	auto source_width = DecimalType::GetWidth(source.GetType());
+	auto result_scale = DecimalType::GetScale(result.GetType());
+	auto result_width = DecimalType::GetWidth(result.GetType());
+	D_ASSERT(result_scale < source_scale);
+	idx_t scale_difference = source_scale - result_scale;
+	idx_t target_width = result_width + scale_difference;
+	SOURCE divide_factor = POWERS_SOURCE::POWERS_OF_TEN[scale_difference];
+	if (source_width < target_width) {
+		DecimalScaleInput<SOURCE> input(result, divide_factor);
+		// type will always fit: no need to check limit
+		UnaryExecutor::GenericExecute<SOURCE, DEST, DecimalScaleDownOperator>(source, result, count, &input);
+		return true;
+	} else {
+		// type might not fit: check limit
+		auto limit = POWERS_SOURCE::POWERS_OF_TEN[target_width];
+		DecimalScaleInput<SOURCE> input(result, limit, divide_factor, error_message, source_width, source_scale);
+		UnaryExecutor::GenericExecute<SOURCE, DEST, DecimalScaleDownCheckOperator>(source, result, count, &input,
+		                                                                           error_message);
+		return input.all_converted;
+	}
+}
+
+template <class SOURCE, class POWERS_SOURCE>
+static bool DecimalDecimalCastSwitch(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto source_scale = DecimalType::GetScale(source.GetType());
+	auto result_scale = DecimalType::GetScale(result.GetType());
+	source.GetType().Verify();
+	result.GetType().Verify();
+
+	// we need to either multiply or divide by the difference in scales
+	if (result_scale >= source_scale) {
+		// multiply
+		switch (result.GetType().InternalType()) {
+		case PhysicalType::INT16:
+			return TemplatedDecimalScaleUp<SOURCE, int16_t, POWERS_SOURCE, NumericHelper>(source, result, count,
+			                                                                              parameters.error_message);
+		case PhysicalType::INT32:
+			return TemplatedDecimalScaleUp<SOURCE, int32_t, POWERS_SOURCE, NumericHelper>(source, result, count,
+			                                                                              parameters.error_message);
+		case PhysicalType::INT64:
+			return TemplatedDecimalScaleUp<SOURCE, int64_t, POWERS_SOURCE, NumericHelper>(source, result, count,
+			                                                                              parameters.error_message);
+		case PhysicalType::INT128:
+			return TemplatedDecimalScaleUp<SOURCE, hugeint_t, POWERS_SOURCE, Hugeint>(source, result, count,
+			                                                                          parameters.error_message);
+		default:
+			throw NotImplementedException("Unimplemented internal type for decimal");
+		}
+	} else {
+		// divide
+		switch (result.GetType().InternalType()) {
+		case PhysicalType::INT16:
+			return TemplatedDecimalScaleDown<SOURCE, int16_t, POWERS_SOURCE>(source, result, count,
+			                                                                 parameters.error_message);
+		case PhysicalType::INT32:
+			return TemplatedDecimalScaleDown<SOURCE, int32_t, POWERS_SOURCE>(source, result, count,
+			                                                                 parameters.error_message);
+		case PhysicalType::INT64:
+			return TemplatedDecimalScaleDown<SOURCE, int64_t, POWERS_SOURCE>(source, result, count,
+			                                                                 parameters.error_message);
+		case PhysicalType::INT128:
+			return TemplatedDecimalScaleDown<SOURCE, hugeint_t, POWERS_SOURCE>(source, result, count,
+			                                                                   parameters.error_message);
+		default:
+			throw NotImplementedException("Unimplemented internal type for decimal");
+		}
+	}
+}
+
+struct DecimalCastInput {
+	DecimalCastInput(Vector &result_p, uint8_t width_p, uint8_t scale_p)
+	    : result(result_p), width(width_p), scale(scale_p) {
+	}
+
+	Vector &result;
+	uint8_t width;
+	uint8_t scale;
+};
+
+struct StringCastFromDecimalOperator {
+	template <class INPUT_TYPE, class RESULT_TYPE>
+	static RESULT_TYPE Operation(INPUT_TYPE input, ValidityMask &mask, idx_t idx, void *dataptr) {
+		auto data = (DecimalCastInput *)dataptr;
+		return StringCastFromDecimal::Operation<INPUT_TYPE>(input, data->width, data->scale, data->result);
+	}
+};
+
+template <class SRC>
+static bool DecimalToStringCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto &source_type = source.GetType();
+	auto width = DecimalType::GetWidth(source_type);
+	auto scale = DecimalType::GetScale(source_type);
+	DecimalCastInput input(result, width, scale);
+
+	UnaryExecutor::GenericExecute<SRC, string_t, StringCastFromDecimalOperator>(source, result, count, (void *)&input);
+	return true;
+}
+
+BoundCastInfo DefaultCasts::DecimalCastSwitch(BindCastInput &input, const LogicalType &source,
+                                              const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return FromDecimalCast<bool>;
+	case LogicalTypeId::TINYINT:
+		return FromDecimalCast<int8_t>;
+	case LogicalTypeId::SMALLINT:
+		return FromDecimalCast<int16_t>;
+	case LogicalTypeId::INTEGER:
+		return FromDecimalCast<int32_t>;
+	case LogicalTypeId::BIGINT:
+		return FromDecimalCast<int64_t>;
+	case LogicalTypeId::UTINYINT:
+		return FromDecimalCast<uint8_t>;
+	case LogicalTypeId::USMALLINT:
+		return FromDecimalCast<uint16_t>;
+	case LogicalTypeId::UINTEGER:
+		return FromDecimalCast<uint32_t>;
+	case LogicalTypeId::UBIGINT:
+		return FromDecimalCast<uint64_t>;
+	case LogicalTypeId::HUGEINT:
+		return FromDecimalCast<hugeint_t>;
+	case LogicalTypeId::DECIMAL: {
+		// decimal to decimal cast
+		// first we need to figure out the source and target internal types
+		switch (source.InternalType()) {
+		case PhysicalType::INT16:
+			return DecimalDecimalCastSwitch<int16_t, NumericHelper>;
+		case PhysicalType::INT32:
+			return DecimalDecimalCastSwitch<int32_t, NumericHelper>;
+		case PhysicalType::INT64:
+			return DecimalDecimalCastSwitch<int64_t, NumericHelper>;
+		case PhysicalType::INT128:
+			return DecimalDecimalCastSwitch<hugeint_t, Hugeint>;
+		default:
+			throw NotImplementedException("Unimplemented internal type for decimal in decimal_decimal cast");
+		}
+	}
+	case LogicalTypeId::FLOAT:
+		return FromDecimalCast<float>;
+	case LogicalTypeId::DOUBLE:
+		return FromDecimalCast<double>;
+	case LogicalTypeId::VARCHAR: {
+		switch (source.InternalType()) {
+		case PhysicalType::INT16:
+			return DecimalToStringCast<int16_t>;
+		case PhysicalType::INT32:
+			return DecimalToStringCast<int32_t>;
+		case PhysicalType::INT64:
+			return DecimalToStringCast<int64_t>;
+		case PhysicalType::INT128:
+			return DecimalToStringCast<hugeint_t>;
+		default:
+			throw InternalException("Unimplemented internal decimal type");
+		}
+	}
+	default:
+		return DefaultCasts::TryVectorNullCast;
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+BindCastInfo::~BindCastInfo() {
+}
+
+BoundCastData::~BoundCastData() {
+}
+
+BoundCastInfo::BoundCastInfo(cast_function_t function_p, unique_ptr<BoundCastData> cast_data_p)
+    : function(function_p), cast_data(move(cast_data_p)) {
+}
+
+BoundCastInfo BoundCastInfo::Copy() const {
+	return BoundCastInfo(function, cast_data ? cast_data->Copy() : nullptr);
+}
+
+bool DefaultCasts::NopCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	result.Reference(source);
+	return true;
+}
+
+static string UnimplementedCastMessage(const LogicalType &source_type, const LogicalType &target_type) {
+	return StringUtil::Format("Unimplemented type for cast (%s -> %s)", source_type.ToString(), target_type.ToString());
+}
+
+// NULL cast only works if all values in source are NULL, otherwise an unimplemented cast exception is thrown
+bool DefaultCasts::TryVectorNullCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	bool success = true;
+	if (VectorOperations::HasNotNull(source, count)) {
+		HandleCastError::AssignError(UnimplementedCastMessage(source.GetType(), result.GetType()),
+		                             parameters.error_message);
+		success = false;
+	}
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	ConstantVector::SetNull(result, true);
+	return success;
+}
+
+bool DefaultCasts::ReinterpretCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	result.Reinterpret(source);
+	return true;
+}
+
+static bool AggregateStateToBlobCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	if (result.GetType().id() != LogicalTypeId::BLOB) {
+		throw TypeMismatchException(source.GetType(), result.GetType(),
+		                            "Cannot cast AGGREGATE_STATE to anything but BLOB");
+	}
+	result.Reinterpret(source);
+	return true;
+}
+
+static bool NullTypeCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	// cast a NULL to another type, just copy the properties and change the type
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	ConstantVector::SetNull(result, true);
+	return true;
+}
+
+BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const LogicalType &source,
+                                                   const LogicalType &target) {
+	D_ASSERT(source != target);
+
+	// first check if were casting to a union
+	if (source.id() != LogicalTypeId::UNION && source.id() != LogicalTypeId::SQLNULL &&
+	    target.id() == LogicalTypeId::UNION) {
+		return ImplicitToUnionCast(input, source, target);
+	}
+
+	// else, switch on source type
+	switch (source.id()) {
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+		return NumericCastSwitch(input, source, target);
+	case LogicalTypeId::POINTER:
+		return PointerCastSwitch(input, source, target);
+	case LogicalTypeId::UUID:
+		return UUIDCastSwitch(input, source, target);
+	case LogicalTypeId::DECIMAL:
+		return DecimalCastSwitch(input, source, target);
+	case LogicalTypeId::DATE:
+		return DateCastSwitch(input, source, target);
+	case LogicalTypeId::TIME:
+		return TimeCastSwitch(input, source, target);
+	case LogicalTypeId::TIME_TZ:
+		return TimeTzCastSwitch(input, source, target);
+	case LogicalTypeId::TIMESTAMP:
+		return TimestampCastSwitch(input, source, target);
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return TimestampTzCastSwitch(input, source, target);
+	case LogicalTypeId::TIMESTAMP_NS:
+		return TimestampNsCastSwitch(input, source, target);
+	case LogicalTypeId::TIMESTAMP_MS:
+		return TimestampMsCastSwitch(input, source, target);
+	case LogicalTypeId::TIMESTAMP_SEC:
+		return TimestampSecCastSwitch(input, source, target);
+	case LogicalTypeId::INTERVAL:
+		return IntervalCastSwitch(input, source, target);
+	case LogicalTypeId::JSON:
+	case LogicalTypeId::VARCHAR:
+		return StringCastSwitch(input, source, target);
+	case LogicalTypeId::BLOB:
+		return BlobCastSwitch(input, source, target);
+	case LogicalTypeId::SQLNULL:
+		return NullTypeCast;
+	case LogicalTypeId::MAP:
+		return MapCastSwitch(input, source, target);
+	case LogicalTypeId::STRUCT:
+		return StructCastSwitch(input, source, target);
+	case LogicalTypeId::LIST:
+		return ListCastSwitch(input, source, target);
+	case LogicalTypeId::UNION:
+		return UnionCastSwitch(input, source, target);
+	case LogicalTypeId::ENUM:
+		return EnumCastSwitch(input, source, target);
+	case LogicalTypeId::AGGREGATE_STATE:
+		return AggregateStateToBlobCast;
+	default:
+		return nullptr;
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+template <class SRC_TYPE, class RES_TYPE>
+bool EnumEnumCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	bool all_converted = true;
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+
+	auto &str_vec = EnumType::GetValuesInsertOrder(source.GetType());
+	auto str_vec_ptr = FlatVector::GetData<string_t>(str_vec);
+
+	auto res_enum_type = result.GetType();
+
+	UnifiedVectorFormat vdata;
+	source.ToUnifiedFormat(count, vdata);
+
+	auto source_data = (SRC_TYPE *)vdata.data;
+	auto source_sel = vdata.sel;
+	auto source_mask = vdata.validity;
+
+	auto result_data = FlatVector::GetData<RES_TYPE>(result);
+	auto &result_mask = FlatVector::Validity(result);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto src_idx = source_sel->get_index(i);
+		if (!source_mask.RowIsValid(src_idx)) {
+			result_mask.SetInvalid(i);
+			continue;
+		}
+		auto key = EnumType::GetPos(res_enum_type, str_vec_ptr[source_data[src_idx]]);
+		if (key == -1) {
+			// key doesn't exist on result enum
+			if (!parameters.error_message) {
+				result_data[i] = HandleVectorCastError::Operation<RES_TYPE>(
+				    CastExceptionText<SRC_TYPE, RES_TYPE>(source_data[src_idx]), result_mask, i,
+				    parameters.error_message, all_converted);
+			} else {
+				result_mask.SetInvalid(i);
+			}
+			continue;
+		}
+		result_data[i] = key;
+	}
+	return all_converted;
+}
+
+template <class SRC_TYPE>
+BoundCastInfo EnumEnumCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	switch (target.InternalType()) {
+	case PhysicalType::UINT8:
+		return EnumEnumCast<SRC_TYPE, uint8_t>;
+	case PhysicalType::UINT16:
+		return EnumEnumCast<SRC_TYPE, uint16_t>;
+	case PhysicalType::UINT32:
+		return EnumEnumCast<SRC_TYPE, uint32_t>;
+	default:
+		throw InternalException("ENUM can only have unsigned integers (except UINT64) as physical types");
+	}
+}
+
+template <class SRC>
+static bool EnumToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto &enum_dictionary = EnumType::GetValuesInsertOrder(source.GetType());
+	auto dictionary_data = FlatVector::GetData<string_t>(enum_dictionary);
+	auto result_data = FlatVector::GetData<string_t>(result);
+	auto &result_mask = FlatVector::Validity(result);
+
+	UnifiedVectorFormat vdata;
+	source.ToUnifiedFormat(count, vdata);
+
+	auto source_data = (SRC *)vdata.data;
+	for (idx_t i = 0; i < count; i++) {
+		auto source_idx = vdata.sel->get_index(i);
+		if (!vdata.validity.RowIsValid(source_idx)) {
+			result_mask.SetInvalid(i);
+			continue;
+		}
+		auto enum_idx = source_data[source_idx];
+		result_data[i] = dictionary_data[enum_idx];
+	}
+	if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	} else {
+		result.SetVectorType(VectorType::FLAT_VECTOR);
+	}
+	return true;
+}
+
+struct EnumBoundCastData : public BoundCastData {
+	EnumBoundCastData(BoundCastInfo to_varchar_cast, BoundCastInfo from_varchar_cast)
+	    : to_varchar_cast(move(to_varchar_cast)), from_varchar_cast(move(from_varchar_cast)) {
+	}
+
+	BoundCastInfo to_varchar_cast;
+	BoundCastInfo from_varchar_cast;
+
+public:
+	unique_ptr<BoundCastData> Copy() const override {
+		return make_unique<EnumBoundCastData>(to_varchar_cast.Copy(), from_varchar_cast.Copy());
+	}
+};
+
+unique_ptr<BoundCastData> BindEnumCast(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	auto to_varchar_cast = input.GetCastFunction(source, LogicalType::VARCHAR);
+	auto from_varchar_cast = input.GetCastFunction(LogicalType::VARCHAR, target);
+	return make_unique<EnumBoundCastData>(move(to_varchar_cast), move(from_varchar_cast));
+}
+
+static bool EnumToAnyCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto &cast_data = (EnumBoundCastData &)*parameters.cast_data;
+
+	Vector varchar_cast(LogicalType::VARCHAR, count);
+
+	// cast to varchar
+	CastParameters to_varchar_params(parameters, cast_data.to_varchar_cast.cast_data.get());
+	cast_data.to_varchar_cast.function(source, varchar_cast, count, to_varchar_params);
+
+	// cast from varchar to the target
+	CastParameters from_varchar_params(parameters, cast_data.from_varchar_cast.cast_data.get());
+	cast_data.from_varchar_cast.function(varchar_cast, result, count, from_varchar_params);
+	return true;
+}
+
+BoundCastInfo DefaultCasts::EnumCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	auto enum_physical_type = source.InternalType();
+	switch (target.id()) {
+	case LogicalTypeId::ENUM: {
+		// This means they are both ENUMs, but of different types.
+		switch (enum_physical_type) {
+		case PhysicalType::UINT8:
+			return EnumEnumCastSwitch<uint8_t>(input, source, target);
+		case PhysicalType::UINT16:
+			return EnumEnumCastSwitch<uint16_t>(input, source, target);
+		case PhysicalType::UINT32:
+			return EnumEnumCastSwitch<uint32_t>(input, source, target);
+		default:
+			throw InternalException("ENUM can only have unsigned integers (except UINT64) as physical types");
+		}
+	}
+	case LogicalTypeId::JSON:
+	case LogicalTypeId::VARCHAR:
+		switch (enum_physical_type) {
+		case PhysicalType::UINT8:
+			return EnumToVarcharCast<uint8_t>;
+		case PhysicalType::UINT16:
+			return EnumToVarcharCast<uint16_t>;
+		case PhysicalType::UINT32:
+			return EnumToVarcharCast<uint32_t>;
+		default:
+			throw InternalException("ENUM can only have unsigned integers (except UINT64) as physical types");
+		}
+	default: {
+		return BoundCastInfo(EnumToAnyCast, BindEnumCast(input, source, target));
+	}
+	}
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+unique_ptr<BoundCastData> ListBoundCastData::BindListToListCast(BindCastInput &input, const LogicalType &source,
+                                                                const LogicalType &target) {
+	vector<BoundCastInfo> child_cast_info;
+	auto &source_child_type = ListType::GetChildType(source);
+	auto &result_child_type = ListType::GetChildType(target);
+	auto child_cast = input.GetCastFunction(source_child_type, result_child_type);
+	return make_unique<ListBoundCastData>(move(child_cast));
+}
+
+static bool ListToListCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto &cast_data = (ListBoundCastData &)*parameters.cast_data;
+
+	// only handle constant and flat vectors here for now
+	if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		result.SetVectorType(source.GetVectorType());
+		ConstantVector::SetNull(result, ConstantVector::IsNull(source));
+
+		auto ldata = ConstantVector::GetData<list_entry_t>(source);
+		auto tdata = ConstantVector::GetData<list_entry_t>(result);
+		*tdata = *ldata;
+	} else {
+		source.Flatten(count);
+		result.SetVectorType(VectorType::FLAT_VECTOR);
+		FlatVector::SetValidity(result, FlatVector::Validity(source));
+
+		auto ldata = FlatVector::GetData<list_entry_t>(source);
+		auto tdata = FlatVector::GetData<list_entry_t>(result);
+		for (idx_t i = 0; i < count; i++) {
+			tdata[i] = ldata[i];
+		}
+	}
+	auto &source_cc = ListVector::GetEntry(source);
+	auto source_size = ListVector::GetListSize(source);
+
+	ListVector::Reserve(result, source_size);
+	auto &append_vector = ListVector::GetEntry(result);
+
+	CastParameters child_parameters(parameters, cast_data.child_cast_info.cast_data.get());
+	if (!cast_data.child_cast_info.function(source_cc, append_vector, source_size, child_parameters)) {
+		return false;
+	}
+	ListVector::SetListSize(result, source_size);
+	D_ASSERT(ListVector::GetListSize(result) == source_size);
+	return true;
+}
+
+static bool ListToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto constant = source.GetVectorType() == VectorType::CONSTANT_VECTOR;
+	// first cast the child vector to varchar
+	Vector varchar_list(LogicalType::LIST(LogicalType::VARCHAR), count);
+	ListToListCast(source, varchar_list, count, parameters);
+
+	// now construct the actual varchar vector
+	varchar_list.Flatten(count);
+	auto &child = ListVector::GetEntry(varchar_list);
+	auto list_data = FlatVector::GetData<list_entry_t>(varchar_list);
+	auto &validity = FlatVector::Validity(varchar_list);
+
+	child.Flatten(count);
+	auto child_data = FlatVector::GetData<string_t>(child);
+	auto &child_validity = FlatVector::Validity(child);
+
+	auto result_data = FlatVector::GetData<string_t>(result);
+	static constexpr const idx_t SEP_LENGTH = 2;
+	static constexpr const idx_t NULL_LENGTH = 4;
+	for (idx_t i = 0; i < count; i++) {
+		if (!validity.RowIsValid(i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		auto list = list_data[i];
+		// figure out how long the result needs to be
+		idx_t list_length = 2; // "[" and "]"
+		for (idx_t list_idx = 0; list_idx < list.length; list_idx++) {
+			auto idx = list.offset + list_idx;
+			if (list_idx > 0) {
+				list_length += SEP_LENGTH; // ", "
+			}
+			// string length, or "NULL"
+			list_length += child_validity.RowIsValid(idx) ? child_data[idx].GetSize() : NULL_LENGTH;
+		}
+		result_data[i] = StringVector::EmptyString(result, list_length);
+		auto dataptr = result_data[i].GetDataWriteable();
+		auto offset = 0;
+		dataptr[offset++] = '[';
+		for (idx_t list_idx = 0; list_idx < list.length; list_idx++) {
+			auto idx = list.offset + list_idx;
+			if (list_idx > 0) {
+				memcpy(dataptr + offset, ", ", SEP_LENGTH);
+				offset += SEP_LENGTH;
+			}
+			if (child_validity.RowIsValid(idx)) {
+				auto len = child_data[idx].GetSize();
+				memcpy(dataptr + offset, child_data[idx].GetDataUnsafe(), len);
+				offset += len;
+			} else {
+				memcpy(dataptr + offset, "NULL", NULL_LENGTH);
+				offset += NULL_LENGTH;
+			}
+		}
+		dataptr[offset] = ']';
+		result_data[i].Finalize();
+	}
+
+	if (constant) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+	return true;
+}
+
+BoundCastInfo DefaultCasts::ListCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	switch (target.id()) {
+	case LogicalTypeId::LIST:
+		return BoundCastInfo(ListToListCast, ListBoundCastData::BindListToListCast(input, source, target));
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		return BoundCastInfo(ListToVarcharCast, ListBoundCastData::BindListToListCast(
+		                                            input, source, LogicalType::LIST(LogicalType::VARCHAR)));
+	default:
+		return DefaultCasts::TryVectorNullCast;
+	}
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+struct MapBoundCastData : public BoundCastData {
+	MapBoundCastData(BoundCastInfo key_cast, BoundCastInfo value_cast)
+	    : key_cast(move(key_cast)), value_cast(move(value_cast)) {
+	}
+
+	BoundCastInfo key_cast;
+	BoundCastInfo value_cast;
+
+public:
+	unique_ptr<BoundCastData> Copy() const override {
+		return make_unique<MapBoundCastData>(key_cast.Copy(), value_cast.Copy());
+	}
+};
+
+unique_ptr<BoundCastData> BindMapToMapCast(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	vector<BoundCastInfo> child_cast_info;
+	auto source_key = LogicalType::LIST(MapType::KeyType(source));
+	auto target_key = LogicalType::LIST(MapType::KeyType(target));
+	auto source_val = LogicalType::LIST(MapType::ValueType(source));
+	auto target_val = LogicalType::LIST(MapType::ValueType(target));
+	auto key_cast = input.GetCastFunction(source_key, target_key);
+	auto value_cast = input.GetCastFunction(source_val, target_val);
+	return make_unique<MapBoundCastData>(move(key_cast), move(value_cast));
+}
+
+static bool MapToMapCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto &cast_data = (MapBoundCastData &)*parameters.cast_data;
+	CastParameters key_params(parameters, cast_data.key_cast.cast_data.get());
+	if (!cast_data.key_cast.function(MapVector::GetKeys(source), MapVector::GetKeys(result), count, key_params)) {
+		return false;
+	}
+	CastParameters val_params(parameters, cast_data.value_cast.cast_data.get());
+	if (!cast_data.value_cast.function(MapVector::GetValues(source), MapVector::GetValues(result), count, val_params)) {
+		return false;
+	}
+	if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(result, ConstantVector::IsNull(source));
+	} else {
+		source.Flatten(count);
+		FlatVector::Validity(result) = FlatVector::Validity(source);
+	}
+	return true;
+}
+
+static bool MapToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto constant = source.GetVectorType() == VectorType::CONSTANT_VECTOR;
+	// first cast the child elements to varchar
+	auto varchar_type = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
+	Vector varchar_map(varchar_type, count);
+	MapToMapCast(source, varchar_map, count, parameters);
+
+	// now construct the actual varchar vector
+	varchar_map.Flatten(count);
+
+	auto &validity = FlatVector::Validity(varchar_map);
+	auto &key_lists = MapVector::GetKeys(varchar_map);
+	auto &val_lists = MapVector::GetValues(varchar_map);
+	auto &key_str = ListVector::GetEntry(key_lists);
+	auto &val_str = ListVector::GetEntry(val_lists);
+
+	key_str.Flatten(ListVector::GetListSize(key_lists));
+	val_str.Flatten(ListVector::GetListSize(val_lists));
+
+	auto list_data = FlatVector::GetData<list_entry_t>(key_lists);
+	auto key_data = FlatVector::GetData<string_t>(key_str);
+	auto val_data = FlatVector::GetData<string_t>(val_str);
+	auto &key_validity = FlatVector::Validity(key_str);
+	auto &val_validity = FlatVector::Validity(val_str);
+
+	auto result_data = FlatVector::GetData<string_t>(result);
+	for (idx_t i = 0; i < count; i++) {
+		if (!validity.RowIsValid(i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		auto list = list_data[i];
+		string ret = "{";
+		for (idx_t list_idx = 0; list_idx < list.length; list_idx++) {
+			if (list_idx > 0) {
+				ret += ", ";
+			}
+			auto idx = list.offset + list_idx;
+			if (!key_validity.RowIsValid(idx)) {
+				throw InternalException("Error in map: key validity invalid?!");
+			}
+			ret += key_data[idx].GetString();
+			ret += "=";
+			ret += val_validity.RowIsValid(idx) ? val_data[idx].GetString() : "NULL";
+		}
+		ret += "}";
+		result_data[i] = StringVector::AddString(result, ret);
+	}
+
+	if (constant) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+	return true;
+}
+
+BoundCastInfo DefaultCasts::MapCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	switch (target.id()) {
+	case LogicalTypeId::MAP:
+		return BoundCastInfo(MapToMapCast, BindMapToMapCast(input, source, target));
+	case LogicalTypeId::JSON:
+	case LogicalTypeId::VARCHAR: {
+		// bind a cast in which we convert the key/value to VARCHAR entries
+		auto varchar_type = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
+		return BoundCastInfo(MapToVarcharCast, BindMapToMapCast(input, source, varchar_type));
+	}
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+
+template <class SRC>
+static BoundCastInfo InternalNumericCastSwitch(const LogicalType &source, const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, bool, duckdb::NumericTryCast>);
+	case LogicalTypeId::TINYINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, int8_t, duckdb::NumericTryCast>);
+	case LogicalTypeId::SMALLINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, int16_t, duckdb::NumericTryCast>);
+	case LogicalTypeId::INTEGER:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, int32_t, duckdb::NumericTryCast>);
+	case LogicalTypeId::BIGINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, int64_t, duckdb::NumericTryCast>);
+	case LogicalTypeId::UTINYINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, uint8_t, duckdb::NumericTryCast>);
+	case LogicalTypeId::USMALLINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, uint16_t, duckdb::NumericTryCast>);
+	case LogicalTypeId::UINTEGER:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, uint32_t, duckdb::NumericTryCast>);
+	case LogicalTypeId::UBIGINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, uint64_t, duckdb::NumericTryCast>);
+	case LogicalTypeId::HUGEINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, hugeint_t, duckdb::NumericTryCast>);
+	case LogicalTypeId::FLOAT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, float, duckdb::NumericTryCast>);
+	case LogicalTypeId::DOUBLE:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<SRC, double, duckdb::NumericTryCast>);
+	case LogicalTypeId::DECIMAL:
+		return BoundCastInfo(&VectorCastHelpers::ToDecimalCast<SRC>);
+	case LogicalTypeId::JSON:
+	case LogicalTypeId::VARCHAR:
+		return BoundCastInfo(&VectorCastHelpers::StringCast<SRC, duckdb::StringCast>);
+	default:
+		return DefaultCasts::TryVectorNullCast;
+	}
+}
+
+BoundCastInfo DefaultCasts::NumericCastSwitch(BindCastInput &input, const LogicalType &source,
+                                              const LogicalType &target) {
+	switch (source.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return InternalNumericCastSwitch<bool>(source, target);
+	case LogicalTypeId::TINYINT:
+		return InternalNumericCastSwitch<int8_t>(source, target);
+	case LogicalTypeId::SMALLINT:
+		return InternalNumericCastSwitch<int16_t>(source, target);
+	case LogicalTypeId::INTEGER:
+		return InternalNumericCastSwitch<int32_t>(source, target);
+	case LogicalTypeId::BIGINT:
+		return InternalNumericCastSwitch<int64_t>(source, target);
+	case LogicalTypeId::UTINYINT:
+		return InternalNumericCastSwitch<uint8_t>(source, target);
+	case LogicalTypeId::USMALLINT:
+		return InternalNumericCastSwitch<uint16_t>(source, target);
+	case LogicalTypeId::UINTEGER:
+		return InternalNumericCastSwitch<uint32_t>(source, target);
+	case LogicalTypeId::UBIGINT:
+		return InternalNumericCastSwitch<uint64_t>(source, target);
+	case LogicalTypeId::HUGEINT:
+		return InternalNumericCastSwitch<hugeint_t>(source, target);
+	case LogicalTypeId::FLOAT:
+		return InternalNumericCastSwitch<float>(source, target);
+	case LogicalTypeId::DOUBLE:
+		return InternalNumericCastSwitch<double>(source, target);
+	default:
+		throw InternalException("NumericCastSwitch called with non-numeric argument");
+	}
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+BoundCastInfo DefaultCasts::PointerCastSwitch(BindCastInput &input, const LogicalType &source,
+                                              const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+		// pointer to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<uintptr_t, duckdb::CastFromPointer>);
+	default:
+		return nullptr;
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+
+template <class T>
+bool StringEnumCastLoop(string_t *source_data, ValidityMask &source_mask, const LogicalType &source_type,
+                        T *result_data, ValidityMask &result_mask, const LogicalType &result_type, idx_t count,
+                        string *error_message, const SelectionVector *sel) {
+	bool all_converted = true;
+	for (idx_t i = 0; i < count; i++) {
+		idx_t source_idx = i;
+		if (sel) {
+			source_idx = sel->get_index(i);
+		}
+		if (source_mask.RowIsValid(source_idx)) {
+			auto pos = EnumType::GetPos(result_type, source_data[source_idx]);
+			if (pos == -1) {
+				result_data[i] =
+				    HandleVectorCastError::Operation<T>(CastExceptionText<string_t, T>(source_data[source_idx]),
+				                                        result_mask, i, error_message, all_converted);
+			} else {
+				result_data[i] = pos;
+			}
+		} else {
+			result_mask.SetInvalid(i);
+		}
+	}
+	return all_converted;
+}
+
+template <class T>
+bool StringEnumCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	D_ASSERT(source.GetType().id() == LogicalTypeId::VARCHAR);
+	auto enum_name = EnumType::GetTypeName(result.GetType());
+	switch (source.GetVectorType()) {
+	case VectorType::CONSTANT_VECTOR: {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+
+		auto source_data = ConstantVector::GetData<string_t>(source);
+		auto source_mask = ConstantVector::Validity(source);
+		auto result_data = ConstantVector::GetData<T>(result);
+		auto &result_mask = ConstantVector::Validity(result);
+
+		return StringEnumCastLoop(source_data, source_mask, source.GetType(), result_data, result_mask,
+		                          result.GetType(), 1, parameters.error_message, nullptr);
+	}
+	default: {
+		UnifiedVectorFormat vdata;
+		source.ToUnifiedFormat(count, vdata);
+
+		result.SetVectorType(VectorType::FLAT_VECTOR);
+
+		auto source_data = (string_t *)vdata.data;
+		auto source_sel = vdata.sel;
+		auto source_mask = vdata.validity;
+		auto result_data = FlatVector::GetData<T>(result);
+		auto &result_mask = FlatVector::Validity(result);
+
+		return StringEnumCastLoop(source_data, source_mask, source.GetType(), result_data, result_mask,
+		                          result.GetType(), count, parameters.error_message, source_sel);
+	}
+	}
+}
+
+static BoundCastInfo VectorStringCastNumericSwitch(BindCastInput &input, const LogicalType &source,
+                                                   const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::ENUM: {
+		switch (target.InternalType()) {
+		case PhysicalType::UINT8:
+			return StringEnumCast<uint8_t>;
+		case PhysicalType::UINT16:
+			return StringEnumCast<uint16_t>;
+		case PhysicalType::UINT32:
+			return StringEnumCast<uint32_t>;
+		default:
+			throw InternalException("ENUM can only have unsigned integers (except UINT64) as physical types");
+		}
+	}
+	case LogicalTypeId::BOOLEAN:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, bool, duckdb::TryCast>);
+	case LogicalTypeId::TINYINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, int8_t, duckdb::TryCast>);
+	case LogicalTypeId::SMALLINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, int16_t, duckdb::TryCast>);
+	case LogicalTypeId::INTEGER:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, int32_t, duckdb::TryCast>);
+	case LogicalTypeId::BIGINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, int64_t, duckdb::TryCast>);
+	case LogicalTypeId::UTINYINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, uint8_t, duckdb::TryCast>);
+	case LogicalTypeId::USMALLINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, uint16_t, duckdb::TryCast>);
+	case LogicalTypeId::UINTEGER:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, uint32_t, duckdb::TryCast>);
+	case LogicalTypeId::UBIGINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, uint64_t, duckdb::TryCast>);
+	case LogicalTypeId::HUGEINT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, hugeint_t, duckdb::TryCast>);
+	case LogicalTypeId::FLOAT:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, float, duckdb::TryCast>);
+	case LogicalTypeId::DOUBLE:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, double, duckdb::TryCast>);
+	case LogicalTypeId::INTERVAL:
+		return BoundCastInfo(&VectorCastHelpers::TryCastErrorLoop<string_t, interval_t, duckdb::TryCastErrorMessage>);
+	case LogicalTypeId::DECIMAL:
+		return BoundCastInfo(&VectorCastHelpers::ToDecimalCast<string_t>);
+	default:
+		return DefaultCasts::TryVectorNullCast;
+	}
+}
+
+bool VectorStringToList::StringToNestedTypeCastLoop(string_t *source_data, ValidityMask &source_mask, Vector &result,
+                                                    ValidityMask &result_mask, idx_t count, CastParameters &parameters,
+                                                    const SelectionVector *sel) {
+
+	idx_t total_list_size = 0;
+	for (idx_t i = 0; i < count; i++) {
+		idx_t idx = i;
+		if (sel) {
+			idx = sel->get_index(i);
+		}
+		if (!source_mask.RowIsValid(idx)) {
+			continue;
+		}
+		total_list_size += VectorStringToList::CountParts(source_data[idx]);
+	}
+
+	Vector varchar_vector(LogicalType::VARCHAR, total_list_size);
+
+	ListVector::Reserve(result, total_list_size);
+	ListVector::SetListSize(result, total_list_size);
+
+	auto list_data = ListVector::GetData(result);
+	auto child_data = FlatVector::GetData<string_t>(varchar_vector);
+
+	bool all_converted = true;
+	idx_t total = 0;
+	for (idx_t i = 0; i < count; i++) {
+		idx_t idx = i;
+		if (sel) {
+			idx = sel->get_index(i);
+		}
+		if (!source_mask.RowIsValid(idx)) {
+			result_mask.SetInvalid(i);
+			continue;
+		}
+
+		list_data[i].offset = total;
+		if (!VectorStringToList::SplitStringifiedList(source_data[idx], child_data, total, varchar_vector)) {
+			string text = "Type VARCHAR with value '" + source_data[idx].GetString() +
+			              "' can't be cast to the destination type LIST";
+			HandleVectorCastError::Operation<string_t>(text, result_mask, idx, parameters.error_message, all_converted);
+		}
+		list_data[i].length = total - list_data[i].offset; // length is the amount of parts coming from this string
+	}
+	D_ASSERT(total_list_size == total);
+
+	auto &result_child = ListVector::GetEntry(result);
+	auto &cast_data = (ListBoundCastData &)*parameters.cast_data;
+	CastParameters child_parameters(parameters, cast_data.child_cast_info.cast_data.get());
+	return cast_data.child_cast_info.function(varchar_vector, result_child, total_list_size, child_parameters) &&
+	       all_converted;
+}
+
+static LogicalType InitVarcharStructType(const LogicalType &target) {
+	child_list_t<LogicalType> child_types;
+	for (auto &child : StructType::GetChildTypes(target)) {
+		child_types.push_back(make_pair(child.first, LogicalType::VARCHAR));
+	}
+
+	return LogicalType::STRUCT(child_types);
+}
+
+bool VectorStringToStruct::StringToNestedTypeCastLoop(string_t *source_data, ValidityMask &source_mask, Vector &result,
+                                                      ValidityMask &result_mask, idx_t count,
+                                                      CastParameters &parameters, const SelectionVector *sel) {
+
+	auto varchar_struct_type = InitVarcharStructType(result.GetType());
+	Vector varchar_vector(varchar_struct_type, count);
+	auto &child_vectors = StructVector::GetEntries(varchar_vector);
+	auto &result_children = StructVector::GetEntries(result);
+
+	string_map_t<idx_t> child_names;
+	vector<ValidityMask *> child_masks;
+	for (idx_t child_idx = 0; child_idx < result_children.size(); child_idx++) {
+		child_names.insert({StructType::GetChildName(result.GetType(), child_idx), child_idx});
+		child_masks.emplace_back(&FlatVector::Validity(*child_vectors[child_idx]));
+		child_masks[child_idx]->SetAllInvalid(count);
+	}
+
+	bool all_converted = true;
+	for (idx_t i = 0; i < count; i++) {
+		idx_t idx = i;
+		if (sel) {
+			idx = sel->get_index(i);
+		}
+		if (!source_mask.RowIsValid(idx)) {
+			result_mask.SetInvalid(i);
+			continue;
+		}
+		if (!VectorStringToStruct::SplitStruct(source_data[idx], child_vectors, i, child_names, child_masks)) {
+			string text = "Type VARCHAR with value '" + source_data[idx].GetString() +
+			              "' can't be cast to the destination type STRUCT";
+			for (auto &child_mask : child_masks) {
+				child_mask->SetInvalid(idx); // some values may have already been found and set valid
+			}
+			HandleVectorCastError::Operation<string_t>(text, result_mask, idx, parameters.error_message, all_converted);
+		}
+	}
+
+	auto &cast_data = (StructBoundCastData &)*parameters.cast_data;
+	D_ASSERT(cast_data.child_cast_info.size() == result_children.size());
+
+	for (idx_t child_idx = 0; child_idx < result_children.size(); child_idx++) {
+		auto &varchar_vector = *child_vectors[child_idx];
+		auto &result_child_vector = *result_children[child_idx];
+		auto &child_cast_info = cast_data.child_cast_info[child_idx];
+		// get the correct casting function (VARCHAR -> result_child_type) from cast_data
+		// casting functions are determined by BindStructtoStructCast
+		CastParameters child_parameters(parameters, child_cast_info.cast_data.get());
+		if (!child_cast_info.function(varchar_vector, result_child_vector, count, child_parameters)) {
+			all_converted = false;
+		}
+	}
+	return all_converted;
+}
+
+template <class T>
+bool StringToNestedTypeCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	D_ASSERT(source.GetType().id() == LogicalTypeId::VARCHAR);
+
+	switch (source.GetVectorType()) {
+	case VectorType::CONSTANT_VECTOR: {
+		auto source_data = ConstantVector::GetData<string_t>(source);
+		auto &source_mask = ConstantVector::Validity(source);
+		auto &result_mask = FlatVector::Validity(result);
+
+		auto ret = T::StringToNestedTypeCastLoop(source_data, source_mask, result, result_mask, 1, parameters, nullptr);
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		return ret;
+	}
+	default: {
+		UnifiedVectorFormat unified_source;
+
+		source.ToUnifiedFormat(count, unified_source);
+		auto source_sel = unified_source.sel;
+		auto source_data = (string_t *)unified_source.data;
+		auto &source_mask = unified_source.validity;
+		auto &result_mask = FlatVector::Validity(result);
+
+		return T::StringToNestedTypeCastLoop(source_data, source_mask, result, result_mask, count, parameters,
+		                                     source_sel);
+	}
+	}
+}
+
+BoundCastInfo DefaultCasts::StringCastSwitch(BindCastInput &input, const LogicalType &source,
+                                             const LogicalType &target) {
+	switch (target.id()) {
+	case LogicalTypeId::DATE:
+		return BoundCastInfo(&VectorCastHelpers::TryCastErrorLoop<string_t, date_t, duckdb::TryCastErrorMessage>);
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ:
+		return BoundCastInfo(&VectorCastHelpers::TryCastErrorLoop<string_t, dtime_t, duckdb::TryCastErrorMessage>);
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return BoundCastInfo(&VectorCastHelpers::TryCastErrorLoop<string_t, timestamp_t, duckdb::TryCastErrorMessage>);
+	case LogicalTypeId::TIMESTAMP_NS:
+		return BoundCastInfo(
+		    &VectorCastHelpers::TryCastStrictLoop<string_t, timestamp_t, duckdb::TryCastToTimestampNS>);
+	case LogicalTypeId::TIMESTAMP_SEC:
+		return BoundCastInfo(
+		    &VectorCastHelpers::TryCastStrictLoop<string_t, timestamp_t, duckdb::TryCastToTimestampSec>);
+	case LogicalTypeId::TIMESTAMP_MS:
+		return BoundCastInfo(
+		    &VectorCastHelpers::TryCastStrictLoop<string_t, timestamp_t, duckdb::TryCastToTimestampMS>);
+	case LogicalTypeId::BLOB:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStringLoop<string_t, string_t, duckdb::TryCastToBlob>);
+	case LogicalTypeId::UUID:
+		return BoundCastInfo(&VectorCastHelpers::TryCastStringLoop<string_t, hugeint_t, duckdb::TryCastToUUID>);
+	case LogicalTypeId::SQLNULL:
+		return &DefaultCasts::TryVectorNullCast;
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		return &DefaultCasts::ReinterpretCast;
+	case LogicalTypeId::LIST:
+		// the second argument allows for a secondary casting function to be passed in the CastParameters
+		return BoundCastInfo(
+		    &StringToNestedTypeCast<VectorStringToList>,
+		    ListBoundCastData::BindListToListCast(input, LogicalType::LIST(LogicalType::VARCHAR), target));
+	case LogicalTypeId::STRUCT:
+		return BoundCastInfo(&StringToNestedTypeCast<VectorStringToStruct>,
+		                     StructBoundCastData::BindStructToStructCast(input, InitVarcharStructType(target), target));
+	default:
+		return VectorStringCastNumericSwitch(input, source, target);
+	}
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+unique_ptr<BoundCastData> StructBoundCastData::BindStructToStructCast(BindCastInput &input, const LogicalType &source,
+                                                                      const LogicalType &target) {
+	vector<BoundCastInfo> child_cast_info;
+	auto &source_child_types = StructType::GetChildTypes(source);
+	auto &result_child_types = StructType::GetChildTypes(target);
+	if (source_child_types.size() != result_child_types.size()) {
+		throw TypeMismatchException(source, target, "Cannot cast STRUCTs of different size");
+	}
+	for (idx_t i = 0; i < source_child_types.size(); i++) {
+		auto child_cast = input.GetCastFunction(source_child_types[i].second, result_child_types[i].second);
+		child_cast_info.push_back(move(child_cast));
+	}
+	return make_unique<StructBoundCastData>(move(child_cast_info), target);
+}
+
+static bool StructToStructCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto &cast_data = (StructBoundCastData &)*parameters.cast_data;
+	auto &source_child_types = StructType::GetChildTypes(source.GetType());
+	auto &source_children = StructVector::GetEntries(source);
+	D_ASSERT(source_children.size() == StructType::GetChildTypes(result.GetType()).size());
+
+	auto &result_children = StructVector::GetEntries(result);
+	bool all_converted = true;
+	for (idx_t c_idx = 0; c_idx < source_child_types.size(); c_idx++) {
+		auto &result_child_vector = *result_children[c_idx];
+		auto &source_child_vector = *source_children[c_idx];
+		CastParameters child_parameters(parameters, cast_data.child_cast_info[c_idx].cast_data.get());
+		if (!cast_data.child_cast_info[c_idx].function(source_child_vector, result_child_vector, count,
+		                                               child_parameters)) {
+			all_converted = false;
+		}
+	}
+	if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(result, ConstantVector::IsNull(source));
+	} else {
+		source.Flatten(count);
+		FlatVector::Validity(result) = FlatVector::Validity(source);
+	}
+	return all_converted;
+}
+
+static bool StructToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto constant = source.GetVectorType() == VectorType::CONSTANT_VECTOR;
+	// first cast all child elements to varchar
+	auto &cast_data = (StructBoundCastData &)*parameters.cast_data;
+	Vector varchar_struct(cast_data.target, count);
+	StructToStructCast(source, varchar_struct, count, parameters);
+
+	// now construct the actual varchar vector
+	varchar_struct.Flatten(count);
+	auto &child_types = StructType::GetChildTypes(source.GetType());
+	auto &children = StructVector::GetEntries(varchar_struct);
+	auto &validity = FlatVector::Validity(varchar_struct);
+	auto result_data = FlatVector::GetData<string_t>(result);
+	static constexpr const idx_t SEP_LENGTH = 2;
+	static constexpr const idx_t NAME_SEP_LENGTH = 4;
+	static constexpr const idx_t NULL_LENGTH = 4;
+	for (idx_t i = 0; i < count; i++) {
+		if (!validity.RowIsValid(i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		idx_t string_length = 2; // {}
+		for (idx_t c = 0; c < children.size(); c++) {
+			if (c > 0) {
+				string_length += SEP_LENGTH;
+			}
+			children[c]->Flatten(count);
+			auto &child_validity = FlatVector::Validity(*children[c]);
+			auto data = FlatVector::GetData<string_t>(*children[c]);
+			auto &name = child_types[c].first;
+			string_length += name.size() + NAME_SEP_LENGTH; // "'{name}': "
+			string_length += child_validity.RowIsValid(i) ? data[i].GetSize() : NULL_LENGTH;
+		}
+		result_data[i] = StringVector::EmptyString(result, string_length);
+		auto dataptr = result_data[i].GetDataWriteable();
+		idx_t offset = 0;
+		dataptr[offset++] = '{';
+		for (idx_t c = 0; c < children.size(); c++) {
+			if (c > 0) {
+				memcpy(dataptr + offset, ", ", SEP_LENGTH);
+				offset += SEP_LENGTH;
+			}
+			auto &child_validity = FlatVector::Validity(*children[c]);
+			auto data = FlatVector::GetData<string_t>(*children[c]);
+			auto &name = child_types[c].first;
+			// "'{name}': "
+			dataptr[offset++] = '\'';
+			memcpy(dataptr + offset, name.c_str(), name.size());
+			offset += name.size();
+			dataptr[offset++] = '\'';
+			dataptr[offset++] = ':';
+			dataptr[offset++] = ' ';
+			// value
+			if (child_validity.RowIsValid(i)) {
+				auto len = data[i].GetSize();
+				memcpy(dataptr + offset, data[i].GetDataUnsafe(), len);
+				offset += len;
+			} else {
+				memcpy(dataptr + offset, "NULL", NULL_LENGTH);
+				offset += NULL_LENGTH;
+			}
+		}
+		dataptr[offset++] = '}';
+		result_data[i].Finalize();
+	}
+
+	if (constant) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+	return true;
+}
+
+BoundCastInfo DefaultCasts::StructCastSwitch(BindCastInput &input, const LogicalType &source,
+                                             const LogicalType &target) {
+	switch (target.id()) {
+	case LogicalTypeId::STRUCT:
+		return BoundCastInfo(StructToStructCast, StructBoundCastData::BindStructToStructCast(input, source, target));
+	case LogicalTypeId::JSON:
+	case LogicalTypeId::VARCHAR: {
+		// bind a cast in which we convert all child entries to VARCHAR entries
+		auto &struct_children = StructType::GetChildTypes(source);
+		child_list_t<LogicalType> varchar_children;
+		for (auto &child_entry : struct_children) {
+			varchar_children.push_back(make_pair(child_entry.first, LogicalType::VARCHAR));
+		}
+		auto varchar_type = LogicalType::STRUCT(move(varchar_children));
+		return BoundCastInfo(StructToVarcharCast,
+		                     StructBoundCastData::BindStructToStructCast(input, source, varchar_type));
+	}
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+BoundCastInfo DefaultCasts::DateCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// date to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<date_t, duckdb::StringCast>);
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
+		// date to timestamp
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<date_t, timestamp_t, duckdb::TryCast>);
+	case LogicalTypeId::TIMESTAMP_NS:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<date_t, timestamp_t, duckdb::TryCastToTimestampNS>);
+	case LogicalTypeId::TIMESTAMP_SEC:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<date_t, timestamp_t, duckdb::TryCastToTimestampSec>);
+	case LogicalTypeId::TIMESTAMP_MS:
+		return BoundCastInfo(&VectorCastHelpers::TryCastLoop<date_t, timestamp_t, duckdb::TryCastToTimestampMS>);
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+BoundCastInfo DefaultCasts::TimeCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// time to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<dtime_t, duckdb::StringCast>);
+	case LogicalTypeId::TIME_TZ:
+		// time to time with time zone
+		return ReinterpretCast;
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+BoundCastInfo DefaultCasts::TimeTzCastSwitch(BindCastInput &input, const LogicalType &source,
+                                             const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// time with time zone to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<dtime_t, duckdb::StringCastTZ>);
+	case LogicalTypeId::TIME:
+		// time with time zone to time
+		return ReinterpretCast;
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+BoundCastInfo DefaultCasts::TimestampCastSwitch(BindCastInput &input, const LogicalType &source,
+                                                const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// timestamp to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<timestamp_t, duckdb::StringCast>);
+	case LogicalTypeId::DATE:
+		// timestamp to date
+		return BoundCastInfo(&VectorCastHelpers::TemplatedCastLoop<timestamp_t, date_t, duckdb::Cast>);
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ:
+		// timestamp to time
+		return BoundCastInfo(&VectorCastHelpers::TemplatedCastLoop<timestamp_t, dtime_t, duckdb::Cast>);
+	case LogicalTypeId::TIMESTAMP_TZ:
+		// timestamp (us) to timestamp with time zone
+		return BoundCastInfo(&VectorCastHelpers::TemplatedCastLoop<timestamp_t, timestamp_t, duckdb::Cast>);
+	case LogicalTypeId::TIMESTAMP_NS:
+		// timestamp (us) to timestamp (ns)
+		return BoundCastInfo(
+		    &VectorCastHelpers::TemplatedCastLoop<timestamp_t, timestamp_t, duckdb::CastTimestampUsToNs>);
+	case LogicalTypeId::TIMESTAMP_MS:
+		// timestamp (us) to timestamp (ms)
+		return BoundCastInfo(
+		    &VectorCastHelpers::TemplatedCastLoop<timestamp_t, timestamp_t, duckdb::CastTimestampUsToMs>);
+	case LogicalTypeId::TIMESTAMP_SEC:
+		// timestamp (us) to timestamp (s)
+		return BoundCastInfo(
+		    &VectorCastHelpers::TemplatedCastLoop<timestamp_t, timestamp_t, duckdb::CastTimestampUsToSec>);
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+BoundCastInfo DefaultCasts::TimestampTzCastSwitch(BindCastInput &input, const LogicalType &source,
+                                                  const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// timestamp with time zone to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<timestamp_t, duckdb::StringCastTZ>);
+	case LogicalTypeId::TIME_TZ:
+		// timestamp with time zone to time with time zone.
+		// TODO: set the offset to +00
+		return BoundCastInfo(&VectorCastHelpers::TemplatedCastLoop<timestamp_t, dtime_t, duckdb::Cast>);
+	case LogicalTypeId::TIMESTAMP:
+		// timestamp with time zone to timestamp (us)
+		return BoundCastInfo(&VectorCastHelpers::TemplatedCastLoop<timestamp_t, timestamp_t, duckdb::Cast>);
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+BoundCastInfo DefaultCasts::TimestampNsCastSwitch(BindCastInput &input, const LogicalType &source,
+                                                  const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// timestamp (ns) to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<timestamp_t, duckdb::CastFromTimestampNS>);
+	case LogicalTypeId::TIMESTAMP:
+		// timestamp (ns) to timestamp (us)
+		return BoundCastInfo(
+		    &VectorCastHelpers::TemplatedCastLoop<timestamp_t, timestamp_t, duckdb::CastTimestampNsToUs>);
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+BoundCastInfo DefaultCasts::TimestampMsCastSwitch(BindCastInput &input, const LogicalType &source,
+                                                  const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// timestamp (ms) to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<timestamp_t, duckdb::CastFromTimestampMS>);
+	case LogicalTypeId::TIMESTAMP:
+		// timestamp (ms) to timestamp (us)
+		return BoundCastInfo(
+		    &VectorCastHelpers::TemplatedCastLoop<timestamp_t, timestamp_t, duckdb::CastTimestampMsToUs>);
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+BoundCastInfo DefaultCasts::TimestampSecCastSwitch(BindCastInput &input, const LogicalType &source,
+                                                   const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// timestamp (sec) to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<timestamp_t, duckdb::CastFromTimestampSec>);
+	case LogicalTypeId::TIMESTAMP:
+		// timestamp (s) to timestamp (us)
+		return BoundCastInfo(
+		    &VectorCastHelpers::TemplatedCastLoop<timestamp_t, timestamp_t, duckdb::CastTimestampSecToUs>);
+	default:
+		return TryVectorNullCast;
+	}
+}
+BoundCastInfo DefaultCasts::IntervalCastSwitch(BindCastInput &input, const LogicalType &source,
+                                               const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// time to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<interval_t, duckdb::StringCast>);
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+} // namespace duckdb
+
+
+
+#include <algorithm> // for std::sort
+
+namespace duckdb {
+
+//--------------------------------------------------------------------------------------------------
+// ??? -> UNION
+//--------------------------------------------------------------------------------------------------
+// if the source can be implicitly cast to a member of the target union, the cast is valid
+
+struct ToUnionBoundCastData : public BoundCastData {
+	ToUnionBoundCastData(union_tag_t member_idx, string name, LogicalType type, int64_t cost,
+	                     BoundCastInfo member_cast_info)
+	    : tag(member_idx), name(move(name)), type(move(type)), cost(cost), member_cast_info(move(member_cast_info)) {
+	}
+
+	union_tag_t tag;
+	string name;
+	LogicalType type;
+	int64_t cost;
+	BoundCastInfo member_cast_info;
+
+public:
+	unique_ptr<BoundCastData> Copy() const override {
+		return make_unique<ToUnionBoundCastData>(tag, name, type, cost, member_cast_info.Copy());
+	}
+
+	static bool SortByCostAscending(const ToUnionBoundCastData &left, const ToUnionBoundCastData &right) {
+		return left.cost < right.cost;
+	}
+};
+
+unique_ptr<BoundCastData> BindToUnionCast(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	D_ASSERT(target.id() == LogicalTypeId::UNION);
+
+	vector<ToUnionBoundCastData> candidates;
+
+	for (idx_t member_idx = 0; member_idx < UnionType::GetMemberCount(target); member_idx++) {
+		auto member_type = UnionType::GetMemberType(target, member_idx);
+		auto member_name = UnionType::GetMemberName(target, member_idx);
+		auto member_cast_cost = input.function_set.ImplicitCastCost(source, member_type);
+		if (member_cast_cost != -1) {
+			auto member_cast_info = input.GetCastFunction(source, member_type);
+			candidates.emplace_back(member_idx, member_name, member_type, member_cast_cost, move(member_cast_info));
+		}
+	};
+
+	// no possible casts found!
+	if (candidates.empty()) {
+		auto message = StringUtil::Format(
+		    "Type %s can't be cast as %s. %s can't be implicitly cast to any of the union member types: ",
+		    source.ToString(), target.ToString(), source.ToString());
+
+		auto member_count = UnionType::GetMemberCount(target);
+		for (idx_t member_idx = 0; member_idx < member_count; member_idx++) {
+			auto member_type = UnionType::GetMemberType(target, member_idx);
+			message += member_type.ToString();
+			if (member_idx < member_count - 1) {
+				message += ", ";
+			}
+		}
+		throw CastException(message);
+	}
+
+	// sort the candidate casts by cost
+	std::sort(candidates.begin(), candidates.end(), ToUnionBoundCastData::SortByCostAscending);
+
+	// select the lowest possible cost cast
+	auto &selected_cast = candidates[0];
+	auto selected_cost = candidates[0].cost;
+
+	// check if the cast is ambiguous (2 or more casts have the same cost)
+	if (candidates.size() > 1 && candidates[1].cost == selected_cost) {
+
+		// collect all the ambiguous types
+		auto message = StringUtil::Format(
+		    "Type %s can't be cast as %s. The cast is ambiguous, multiple possible members in target: ", source,
+		    target);
+		for (size_t i = 0; i < candidates.size(); i++) {
+			if (candidates[i].cost == selected_cost) {
+				message += StringUtil::Format("'%s (%s)'", candidates[i].name, candidates[i].type.ToString());
+				if (i < candidates.size() - 1) {
+					message += ", ";
+				}
+			}
+		}
+		message += ". Disambiguate the target type by using the 'union_value(<tag> := <arg>)' function to promote the "
+		           "source value to a single member union before casting.";
+		throw CastException(message);
+	}
+
+	// otherwise, return the selected cast
+	return make_unique<ToUnionBoundCastData>(move(selected_cast));
+}
+
+static bool ToUnionCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	D_ASSERT(result.GetType().id() == LogicalTypeId::UNION);
+	auto &cast_data = (ToUnionBoundCastData &)*parameters.cast_data;
+	auto &selected_member_vector = UnionVector::GetMember(result, cast_data.tag);
+
+	CastParameters child_parameters(parameters, cast_data.member_cast_info.cast_data.get());
+	if (!cast_data.member_cast_info.function(source, selected_member_vector, count, child_parameters)) {
+		return false;
+	}
+
+	// cast succeeded, create union vector
+	UnionVector::SetToMember(result, cast_data.tag, selected_member_vector, count, true);
+
+	result.Verify(count);
+
+	return true;
+}
+
+BoundCastInfo DefaultCasts::ImplicitToUnionCast(BindCastInput &input, const LogicalType &source,
+                                                const LogicalType &target) {
+	return BoundCastInfo(&ToUnionCast, BindToUnionCast(input, source, target));
+}
+
+//--------------------------------------------------------------------------------------------------
+// UNION -> UNION
+//--------------------------------------------------------------------------------------------------
+// if the source member tags is a subset of the target member tags, and all the source members can be
+// implicitly cast to the corresponding target members, the cast is valid.
+//
+// VALID: 	UNION(A, B) 	-> 	UNION(A, B, C)
+// VALID: 	UNION(A, B) 	-> 	UNION(A, C)		if B can be implicitly cast to C
+//
+// INVALID: UNION(A, B, C)	->	UNION(A, B)
+// INVALID:	UNION(A, B) 	->	UNION(A, C)		if B can't be implicitly cast to C
+// INVALID:	UNION(A, B, D) 	->	UNION(A, B, C)
+
+struct UnionToUnionBoundCastData : public BoundCastData {
+
+	// mapping from source member index to target member index
+	// these are always the same size as the source member count
+	// (since all source members must be present in the target)
+	vector<idx_t> tag_map;
+	vector<BoundCastInfo> member_casts;
+
+	LogicalType target_type;
+
+	UnionToUnionBoundCastData(vector<idx_t> tag_map, vector<BoundCastInfo> member_casts, LogicalType target_type)
+	    : tag_map(move(tag_map)), member_casts(move(member_casts)), target_type(move(target_type)) {
+	}
+
+public:
+	unique_ptr<BoundCastData> Copy() const override {
+		vector<BoundCastInfo> member_casts_copy;
+		for (auto &member_cast : member_casts) {
+			member_casts_copy.push_back(member_cast.Copy());
+		}
+		return make_unique<UnionToUnionBoundCastData>(tag_map, move(member_casts_copy), target_type);
+	}
+};
+
+unique_ptr<BoundCastData> BindUnionToUnionCast(BindCastInput &input, const LogicalType &source,
+                                               const LogicalType &target) {
+	D_ASSERT(source.id() == LogicalTypeId::UNION);
+	D_ASSERT(target.id() == LogicalTypeId::UNION);
+
+	auto source_member_count = UnionType::GetMemberCount(source);
+
+	auto tag_map = vector<idx_t>(source_member_count);
+	auto member_casts = vector<BoundCastInfo>();
+
+	for (idx_t source_idx = 0; source_idx < source_member_count; source_idx++) {
+		auto &source_member_type = UnionType::GetMemberType(source, source_idx);
+		auto &source_member_name = UnionType::GetMemberName(source, source_idx);
+
+		bool found = false;
+		for (idx_t target_idx = 0; target_idx < UnionType::GetMemberCount(target); target_idx++) {
+			auto &target_member_name = UnionType::GetMemberName(target, target_idx);
+
+			// found a matching member, check if the types are castable
+			if (source_member_name == target_member_name) {
+				auto &target_member_type = UnionType::GetMemberType(target, target_idx);
+
+				if (input.function_set.ImplicitCastCost(source_member_type, target_member_type) < 0) {
+					auto message = StringUtil::Format(
+					    "Type %s can't be cast as %s. The member '%s' can't be implicitly cast from %s to %s",
+					    source.ToString(), target.ToString(), source_member_name, source_member_type.ToString(),
+					    target_member_type.ToString());
+					throw CastException(message);
+				}
+
+				tag_map[source_idx] = target_idx;
+				member_casts.push_back(input.GetCastFunction(source_member_type, target_member_type));
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			// no matching member tag found in the target set
+			auto message =
+			    StringUtil::Format("Type %s can't be cast as %s. The member '%s' is not present in target union",
+			                       source.ToString(), target.ToString(), source_member_name);
+			throw CastException(message);
+		}
+	}
+
+	return make_unique<UnionToUnionBoundCastData>(tag_map, move(member_casts), target);
+}
+
+static bool UnionToUnionCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto &cast_data = (UnionToUnionBoundCastData &)*parameters.cast_data;
+
+	auto source_member_count = UnionType::GetMemberCount(source.GetType());
+	auto target_member_count = UnionType::GetMemberCount(result.GetType());
+
+	auto target_member_is_mapped = vector<bool>(target_member_count);
+
+	// Perform the casts from source to target members
+	for (idx_t member_idx = 0; member_idx < source_member_count; member_idx++) {
+		auto target_member_idx = cast_data.tag_map[member_idx];
+
+		auto &source_member_vector = UnionVector::GetMember(source, member_idx);
+		auto &target_member_vector = UnionVector::GetMember(result, target_member_idx);
+		auto &member_cast = cast_data.member_casts[member_idx];
+
+		CastParameters child_parameters(parameters, member_cast.cast_data.get());
+		if (!member_cast.function(source_member_vector, target_member_vector, count, child_parameters)) {
+			return false;
+		}
+
+		target_member_is_mapped[target_member_idx] = true;
+	}
+
+	// All member casts succeeded!
+
+	// Set the unmapped target members to constant NULL.
+	// If we cast UNION(A, B) -> UNION(A, B, C) we need to invalidate C so that
+	// the invariants of the result union hold. (only member columns "selected"
+	// by the rowwise corresponding tag in the tag vector should be valid)
+	for (idx_t target_member_idx = 0; target_member_idx < target_member_count; target_member_idx++) {
+		if (!target_member_is_mapped[target_member_idx]) {
+			auto &target_member_vector = UnionVector::GetMember(result, target_member_idx);
+			target_member_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
+			ConstantVector::SetNull(target_member_vector, true);
+		}
+	}
+
+	// Update the tags in the result vector
+	auto &source_tag_vector = UnionVector::GetTags(source);
+	auto &result_tag_vector = UnionVector::GetTags(result);
+
+	if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		// Constant vector case optimization
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		if (ConstantVector::IsNull(source)) {
+			ConstantVector::SetNull(result, true);
+		} else {
+			// map the tag
+			auto source_tag = ConstantVector::GetData<union_tag_t>(source_tag_vector)[0];
+			auto mapped_tag = cast_data.tag_map[source_tag];
+			ConstantVector::GetData<union_tag_t>(result_tag_vector)[0] = mapped_tag;
+		}
+	} else {
+		// Otherwise, use the unified vector format to access the source vector.
+		// We assume that a union tag vector validity matches the union vector validity.
+		UnifiedVectorFormat source_tag_format;
+		source_tag_vector.ToUnifiedFormat(count, source_tag_format);
+
+		for (idx_t row_idx = 0; row_idx < count; row_idx++) {
+			auto source_row_idx = source_tag_format.sel->get_index(row_idx);
+			if (source_tag_format.validity.RowIsValid(source_row_idx)) {
+				// map the tag
+				auto source_tag = ((union_tag_t *)source_tag_format.data)[source_row_idx];
+				auto target_tag = cast_data.tag_map[source_tag];
+				FlatVector::GetData<union_tag_t>(result_tag_vector)[row_idx] = target_tag;
+			} else {
+				FlatVector::SetNull(result, row_idx, true);
+			}
+		}
+	}
+
+	result.Verify(count);
+
+	return true;
+}
+
+static bool UnionToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto constant = source.GetVectorType() == VectorType::CONSTANT_VECTOR;
+	// first cast all union members to varchar
+	auto &cast_data = (UnionToUnionBoundCastData &)*parameters.cast_data;
+	Vector varchar_union(cast_data.target_type, count);
+
+	UnionToUnionCast(source, varchar_union, count, parameters);
+
+	// now construct the actual varchar vector
+	varchar_union.Flatten(count);
+	auto &tag_vector = UnionVector::GetTags(source);
+	auto tags = FlatVector::GetData<union_tag_t>(tag_vector);
+
+	auto &validity = FlatVector::Validity(varchar_union);
+	auto result_data = FlatVector::GetData<string_t>(result);
+
+	for (idx_t i = 0; i < count; i++) {
+		if (!validity.RowIsValid(i)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+
+		auto &member = UnionVector::GetMember(varchar_union, tags[i]);
+		UnifiedVectorFormat member_vdata;
+		member.ToUnifiedFormat(count, member_vdata);
+
+		auto mapped_idx = member_vdata.sel->get_index(i);
+		auto member_valid = member_vdata.validity.RowIsValid(mapped_idx);
+		if (member_valid) {
+			auto member_str = ((string_t *)member_vdata.data)[mapped_idx];
+			result_data[i] = StringVector::AddString(result, member_str);
+		} else {
+			result_data[i] = StringVector::AddString(result, "NULL");
+		}
+	}
+
+	if (constant) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+
+	result.Verify(count);
+	return true;
+}
+
+BoundCastInfo DefaultCasts::UnionCastSwitch(BindCastInput &input, const LogicalType &source,
+                                            const LogicalType &target) {
+	switch (target.id()) {
+	case LogicalTypeId::JSON:
+	case LogicalTypeId::VARCHAR: {
+		// bind a cast in which we convert all members to VARCHAR first
+		child_list_t<LogicalType> varchar_members;
+		for (idx_t member_idx = 0; member_idx < UnionType::GetMemberCount(source); member_idx++) {
+			varchar_members.push_back(make_pair(UnionType::GetMemberName(source, member_idx), LogicalType::VARCHAR));
+		}
+		auto varchar_type = LogicalType::UNION(move(varchar_members));
+		return BoundCastInfo(UnionToVarcharCast, BindUnionToUnionCast(input, source, varchar_type));
+	} break;
+	case LogicalTypeId::UNION:
+		return BoundCastInfo(UnionToUnionCast, BindUnionToUnionCast(input, source, target));
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+BoundCastInfo DefaultCasts::UUIDCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	// now switch on the result type
+	switch (target.id()) {
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		// uuid to varchar
+		return BoundCastInfo(&VectorCastHelpers::StringCast<hugeint_t, duckdb::CastFromUUID>);
+	default:
+		return TryVectorNullCast;
+	}
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+static bool IsNull(const char *buf, idx_t start_pos, Vector &child, idx_t row_idx) {
+	if (buf[start_pos] == 'N' && buf[start_pos + 1] == 'U' && buf[start_pos + 2] == 'L' && buf[start_pos + 3] == 'L') {
+		FlatVector::SetNull(child, row_idx, true);
+		return true;
+	}
+	return false;
+}
+
+inline static void SkipWhitespace(const char *buf, idx_t &pos, idx_t len) {
+	while (pos < len && StringUtil::CharacterIsSpace(buf[pos])) {
+		pos++;
+	}
+}
+
+static idx_t StringTrim(const char *buf, idx_t &start_pos, idx_t pos) {
+	idx_t trailing_whitespace = 0;
+	while (StringUtil::CharacterIsSpace(buf[pos - trailing_whitespace - 1])) {
+		trailing_whitespace++;
+	}
+	if ((buf[start_pos] == '"' && buf[pos - trailing_whitespace - 1] == '"') ||
+	    (buf[start_pos] == '\'' && buf[pos - trailing_whitespace - 1] == '\'')) {
+		start_pos++;
+		trailing_whitespace++;
+	}
+	return (pos - trailing_whitespace);
+}
+
+struct CountPartOperation {
+	idx_t count = 0;
+
+	void HandleValue(const char *buf, idx_t start_pos, idx_t pos) {
+		count++;
+	}
+};
+
+struct SplitStringOperation {
+	SplitStringOperation(string_t *child_data, idx_t &child_start, Vector &child)
+	    : child_data(child_data), child_start(child_start), child(child) {
+	}
+
+	string_t *child_data;
+	idx_t &child_start;
+	Vector &child;
+
+	void HandleValue(const char *buf, idx_t start_pos, idx_t pos) {
+		if ((pos - start_pos) == 4 && IsNull(buf, start_pos, child, child_start)) {
+			child_start++;
+			return;
+		}
+		child_data[child_start] = StringVector::AddString(child, buf + start_pos, pos - start_pos);
+		child_start++;
+	}
+};
+
+static bool SkipToCloseQuotes(idx_t &pos, const char *buf, idx_t &len) {
+	char quote = buf[pos];
+	pos++;
+
+	while (pos < len) {
+		if (buf[pos] == quote) {
+			return true;
+		}
+		pos++;
+	}
+	return false;
+}
+
+static bool SkipToClose(idx_t &idx, const char *buf, idx_t &len, idx_t &lvl, char close_bracket) {
+	idx++;
+
+	while (idx < len) {
+		if (buf[idx] == '"' || buf[idx] == '\'') {
+			if (!SkipToCloseQuotes(idx, buf, len)) {
+				return false;
+			}
+		} else if (buf[idx] == '{') {
+			if (!SkipToClose(idx, buf, len, lvl, '}')) {
+				return false;
+			}
+		} else if (buf[idx] == '[') {
+			if (!SkipToClose(idx, buf, len, lvl, ']')) {
+				return false;
+			}
+			lvl++;
+		} else if (buf[idx] == close_bracket) {
+			if (close_bracket == ']') {
+				lvl--;
+			}
+			return true;
+		}
+		idx++;
+	}
+	return false;
+}
+
+template <class OP>
+static bool SplitStringifiedListInternal(const string_t &input, OP &state) {
+	const char *buf = input.GetDataUnsafe();
+	idx_t len = input.GetSize();
+	idx_t lvl = 1;
+	idx_t pos = 0;
+
+	SkipWhitespace(buf, pos, len);
+	if (pos == len || buf[pos] != '[') {
+		return false;
+	}
+
+	SkipWhitespace(buf, ++pos, len);
+	idx_t start_pos = pos;
+	while (pos < len) {
+		if (buf[pos] == '[') {
+			if (!SkipToClose(pos, buf, len, ++lvl, ']')) {
+				return false;
+			}
+		} else if (buf[pos] == '"' || buf[pos] == '\'') {
+			SkipToCloseQuotes(pos, buf, len);
+		} else if (buf[pos] == '{') {
+			idx_t struct_lvl = 0;
+			SkipToClose(pos, buf, len, struct_lvl, '}');
+		} else if (buf[pos] == ',' || buf[pos] == ']') {
+			idx_t trailing_whitespace = 0;
+			while (StringUtil::CharacterIsSpace(buf[pos - trailing_whitespace - 1])) {
+				trailing_whitespace++;
+			}
+			if (!(buf[pos] == ']' && start_pos == pos)) {
+				state.HandleValue(buf, start_pos, pos - trailing_whitespace);
+			} // else the list is empty
+			if (buf[pos] == ']') {
+				lvl--;
+				break;
+			}
+			SkipWhitespace(buf, ++pos, len);
+			start_pos = pos;
+			continue;
+		}
+		pos++;
+	}
+	SkipWhitespace(buf, ++pos, len);
+	return (pos == len && lvl == 0);
+}
+
+bool VectorStringToList::SplitStringifiedList(const string_t &input, string_t *child_data, idx_t &child_start,
+                                              Vector &child) {
+	SplitStringOperation state(child_data, child_start, child);
+	return SplitStringifiedListInternal<SplitStringOperation>(input, state);
+}
+
+idx_t VectorStringToList::CountParts(const string_t &input) {
+	CountPartOperation state;
+	SplitStringifiedListInternal<CountPartOperation>(input, state);
+	return state.count;
+}
+
+static bool FindKey(const char *buf, idx_t len, idx_t &pos) {
+	while (pos < len) {
+		if (buf[pos] == ':') {
+			return true;
+		}
+		pos++;
+	}
+	return false;
+}
+
+static bool FindValue(const char *buf, idx_t len, idx_t &pos, Vector &varchar_child, idx_t &row_idx,
+                      ValidityMask *child_mask) {
+	auto start_pos = pos;
+	idx_t lvl = 0;
+	while (pos < len) {
+		if (buf[pos] == '"' || buf[pos] == '\'') {
+			SkipToCloseQuotes(pos, buf, len);
+		} else if (buf[pos] == '{') {
+			SkipToClose(pos, buf, len, lvl, '}');
+		} else if (buf[pos] == '[') {
+			SkipToClose(pos, buf, len, lvl, ']');
+		} else if (buf[pos] == ',' || buf[pos] == '}') {
+			idx_t end_pos = StringTrim(buf, start_pos, pos);
+			if ((end_pos - start_pos) == 4 && IsNull(buf, start_pos, varchar_child, row_idx)) {
+				return true;
+			}
+			FlatVector::GetData<string_t>(varchar_child)[row_idx] =
+			    StringVector::AddString(varchar_child, buf + start_pos, end_pos - start_pos);
+			child_mask->SetValid(row_idx); // any child not set to valid will remain invalid
+			return true;
+		}
+		pos++;
+	}
+	return false;
+}
+
+bool VectorStringToStruct::SplitStruct(string_t &input, std::vector<std::unique_ptr<Vector>> &varchar_vectors,
+                                       idx_t &row_idx, string_map_t<idx_t> &child_names,
+                                       std::vector<ValidityMask *> &child_masks) {
+	const char *buf = input.GetDataUnsafe();
+	idx_t len = input.GetSize();
+	idx_t pos = 0;
+	idx_t child_idx;
+
+	SkipWhitespace(buf, pos, len);
+	if (pos == len || buf[pos] != '{') {
+		return false;
+	}
+	SkipWhitespace(buf, ++pos, len);
+	if (buf[pos] == '}') {
+		pos++;
+	} else {
+		while (pos < len) {
+			auto key_start = pos;
+			if (!FindKey(buf, len, pos)) {
+				return false;
+			}
+			auto key_end = StringTrim(buf, key_start, pos);
+			string_t found_key(buf + key_start, key_end - key_start);
+
+			auto it = child_names.find(found_key);
+			if (it == child_names.end()) {
+				return false; // false key
+			}
+			child_idx = it->second;
+			SkipWhitespace(buf, ++pos, len);
+			if (!FindValue(buf, len, pos, *varchar_vectors[child_idx], row_idx, child_masks[child_idx])) {
+				return false;
+			}
+			SkipWhitespace(buf, ++pos, len);
+		}
+	}
+	SkipWhitespace(buf, pos, len);
+	return (pos == len);
 }
 
 } // namespace duckdb
@@ -5082,6 +9466,7 @@ static int64_t TargetTypeCost(const LogicalType &type) {
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::LIST:
+	case LogicalTypeId::UNION:
 		return 160;
 	default:
 		return 110;
@@ -5250,16 +9635,24 @@ static int64_t ImplicitCastDate(const LogicalType &to) {
 }
 
 int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) {
-	if (to.id() == LogicalTypeId::ANY) {
-		// anything can be cast to ANY type for no cost
-		return 0;
-	}
 	if (from.id() == LogicalTypeId::SQLNULL) {
 		// NULL expression can be cast to anything
 		return TargetTypeCost(to);
 	}
 	if (from.id() == LogicalTypeId::UNKNOWN) {
 		// parameter expression can be cast to anything for no cost
+		return 0;
+	}
+	if (to.id() == LogicalTypeId::ANY) {
+		// anything can be cast to ANY type for (almost no) cost
+		return 1;
+	}
+	if (from.GetAlias() != to.GetAlias()) {
+		// if aliases are different, an implicit cast is not possible
+		return -1;
+	}
+	if (from.id() == to.id()) {
+		// arguments match: do nothing
 		return 0;
 	}
 	if (from.id() == LogicalTypeId::BLOB && to.id() == LogicalTypeId::VARCHAR) {
@@ -5279,6 +9672,51 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		// Lists can be cast if their child types can be cast
 		return ImplicitCast(ListType::GetChildType(from), ListType::GetChildType(to));
 	}
+
+	if (from.id() == LogicalTypeId::UNION && to.id() == LogicalTypeId::UNION) {
+		// Unions can be cast if the source tags are a subset of the target tags
+		// in which case the most expensive cost is used
+		int cost = -1;
+		for (idx_t from_member_idx = 0; from_member_idx < UnionType::GetMemberCount(from); from_member_idx++) {
+			auto &from_member_name = UnionType::GetMemberName(from, from_member_idx);
+
+			bool found = false;
+			for (idx_t to_member_idx = 0; to_member_idx < UnionType::GetMemberCount(to); to_member_idx++) {
+				auto &to_member_name = UnionType::GetMemberName(to, to_member_idx);
+
+				if (from_member_name == to_member_name) {
+					auto &from_member_type = UnionType::GetMemberType(from, from_member_idx);
+					auto &to_member_type = UnionType::GetMemberType(to, to_member_idx);
+
+					int child_cost = ImplicitCast(from_member_type, to_member_type);
+					if (child_cost > cost) {
+						cost = child_cost;
+					}
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				return -1;
+			}
+		}
+		return cost;
+	}
+
+	if (to.id() == LogicalTypeId::UNION) {
+		// check that the union type is fully resolved.
+		if (to.AuxInfo() == nullptr) {
+			return -1;
+		}
+		// every type can be implicitly be cast to a union if the source type is a member of the union
+		for (idx_t i = 0; i < UnionType::GetMemberCount(to); i++) {
+			auto member = UnionType::GetMemberType(to, i);
+			if (from == member) {
+				return 0;
+			}
+		}
+	}
+
 	if ((from.id() == LogicalTypeId::TIMESTAMP_SEC || from.id() == LogicalTypeId::TIMESTAMP_MS ||
 	     from.id() == LogicalTypeId::TIMESTAMP_NS) &&
 	    to.id() == LogicalTypeId::TIMESTAMP) {
@@ -5347,6 +9785,9 @@ static DefaultCompressionMethod internal_compression_methods[] = {
     {CompressionType::COMPRESSION_BITPACKING, BitpackingFun::GetFunction, BitpackingFun::TypeIsSupported},
     {CompressionType::COMPRESSION_DICTIONARY, DictionaryCompressionFun::GetFunction,
      DictionaryCompressionFun::TypeIsSupported},
+    {CompressionType::COMPRESSION_CHIMP, ChimpCompressionFun::GetFunction, ChimpCompressionFun::TypeIsSupported},
+    {CompressionType::COMPRESSION_PATAS, PatasCompressionFun::GetFunction, PatasCompressionFun::TypeIsSupported},
+    {CompressionType::COMPRESSION_FSST, FSSTFun::GetFunction, FSSTFun::TypeIsSupported},
     {CompressionType::COMPRESSION_AUTO, nullptr, nullptr}};
 
 static CompressionFunction *FindCompressionFunction(CompressionFunctionSet &set, CompressionType type,
@@ -5397,10 +9838,14 @@ vector<CompressionFunction *> DBConfig::GetCompressionFunctions(PhysicalType dat
 	TryLoadCompression(*this, result, CompressionType::COMPRESSION_RLE, data_type);
 	TryLoadCompression(*this, result, CompressionType::COMPRESSION_BITPACKING, data_type);
 	TryLoadCompression(*this, result, CompressionType::COMPRESSION_DICTIONARY, data_type);
+	TryLoadCompression(*this, result, CompressionType::COMPRESSION_CHIMP, data_type);
+	TryLoadCompression(*this, result, CompressionType::COMPRESSION_PATAS, data_type);
+	TryLoadCompression(*this, result, CompressionType::COMPRESSION_FSST, data_type);
 	return result;
 }
 
 CompressionFunction *DBConfig::GetCompressionFunction(CompressionType type, PhysicalType data_type) {
+	lock_guard<mutex> l(compression_functions->lock);
 	// check if the function is already loaded
 	auto function = FindCompressionFunction(*compression_functions, type, data_type);
 	if (function) {
@@ -5411,11 +9856,6 @@ CompressionFunction *DBConfig::GetCompressionFunction(CompressionType type, Phys
 }
 
 } // namespace duckdb
-
-
-
-
-
 
 
 
@@ -5497,9 +9937,10 @@ bool SimpleNamedParameterFunction::HasNamedParameters() {
 }
 
 BaseScalarFunction::BaseScalarFunction(string name_p, vector<LogicalType> arguments_p, LogicalType return_type_p,
-                                       bool has_side_effects, LogicalType varargs_p, bool propagates_null_values_p)
+                                       FunctionSideEffects side_effects, LogicalType varargs_p,
+                                       FunctionNullHandling null_handling)
     : SimpleFunction(move(name_p), move(arguments_p), move(varargs_p)), return_type(move(return_type_p)),
-      has_side_effects(has_side_effects), propagates_null_values(propagates_null_values_p) {
+      side_effects(side_effects), null_handling(null_handling) {
 }
 
 BaseScalarFunction::~BaseScalarFunction() {
@@ -5511,6 +9952,7 @@ string BaseScalarFunction::ToString() {
 
 // add your initializer for new functions here
 void BuiltinFunctions::Initialize() {
+	RegisterTableScanFunctions();
 	RegisterSQLiteFunctions();
 	RegisterReadFunctions();
 	RegisterTableFunctions();
@@ -5564,7 +10006,7 @@ void BuiltinFunctions::AddFunction(PragmaFunction function) {
 	catalog.CreatePragmaFunction(context, &info);
 }
 
-void BuiltinFunctions::AddFunction(const string &name, vector<PragmaFunction> functions) {
+void BuiltinFunctions::AddFunction(const string &name, PragmaFunctionSet functions) {
 	CreatePragmaFunctionInfo info(name, move(functions));
 	catalog.CreatePragmaFunction(context, &info);
 }
@@ -5636,7 +10078,37 @@ string Function::CallToString(const string &name, const vector<LogicalType> &arg
 	return StringUtil::Format("%s(%s)", name, StringUtil::Join(input_arguments, ", "));
 }
 
-static int64_t BindVarArgsFunctionCost(SimpleFunction &func, vector<LogicalType> &arguments) {
+void Function::EraseArgument(SimpleFunction &bound_function, vector<unique_ptr<Expression>> &arguments,
+                             idx_t argument_index) {
+	if (bound_function.original_arguments.empty()) {
+		bound_function.original_arguments = bound_function.arguments;
+	}
+	D_ASSERT(arguments.size() == bound_function.arguments.size());
+	D_ASSERT(argument_index < arguments.size());
+	arguments.erase(arguments.begin() + argument_index);
+	bound_function.arguments.erase(bound_function.arguments.begin() + argument_index);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+FunctionBinder::FunctionBinder(ClientContext &context) : context(context) {
+}
+
+int64_t FunctionBinder::BindVarArgsFunctionCost(const SimpleFunction &func, const vector<LogicalType> &arguments) {
 	if (arguments.size() < func.arguments.size()) {
 		// not enough arguments to fulfill the non-vararg part of the function
 		return -1;
@@ -5648,7 +10120,7 @@ static int64_t BindVarArgsFunctionCost(SimpleFunction &func, vector<LogicalType>
 			// arguments match: do nothing
 			continue;
 		}
-		int64_t cast_cost = CastRules::ImplicitCast(arguments[i], arg_type);
+		int64_t cast_cost = CastFunctionSet::Get(context).ImplicitCastCost(arguments[i], arg_type);
 		if (cast_cost >= 0) {
 			// we can implicitly cast, add the cost to the total cost
 			cost += cast_cost;
@@ -5660,7 +10132,7 @@ static int64_t BindVarArgsFunctionCost(SimpleFunction &func, vector<LogicalType>
 	return cost;
 }
 
-static int64_t BindFunctionCost(SimpleFunction &func, vector<LogicalType> &arguments) {
+int64_t FunctionBinder::BindFunctionCost(const SimpleFunction &func, const vector<LogicalType> &arguments) {
 	if (func.HasVarArgs()) {
 		// special case varargs function
 		return BindVarArgsFunctionCost(func, arguments);
@@ -5671,11 +10143,7 @@ static int64_t BindFunctionCost(SimpleFunction &func, vector<LogicalType> &argum
 	}
 	int64_t cost = 0;
 	for (idx_t i = 0; i < arguments.size(); i++) {
-		if (arguments[i].id() == func.arguments[i].id()) {
-			// arguments match: do nothing
-			continue;
-		}
-		int64_t cast_cost = CastRules::ImplicitCast(arguments[i], func.arguments[i]);
+		int64_t cast_cost = CastFunctionSet::Get(context).ImplicitCastCost(arguments[i], func.arguments[i]);
 		if (cast_cost >= 0) {
 			// we can implicitly cast, add the cost to the total cost
 			cost += cast_cost;
@@ -5688,13 +10156,13 @@ static int64_t BindFunctionCost(SimpleFunction &func, vector<LogicalType> &argum
 }
 
 template <class T>
-static vector<idx_t> BindFunctionsFromArguments(const string &name, vector<T> &functions,
-                                                vector<LogicalType> &arguments, string &error) {
+vector<idx_t> FunctionBinder::BindFunctionsFromArguments(const string &name, FunctionSet<T> &functions,
+                                                         const vector<LogicalType> &arguments, string &error) {
 	idx_t best_function = DConstants::INVALID_INDEX;
 	int64_t lowest_cost = NumericLimits<int64_t>::Maximum();
 	vector<idx_t> candidate_functions;
-	for (idx_t f_idx = 0; f_idx < functions.size(); f_idx++) {
-		auto &func = functions[f_idx];
+	for (idx_t f_idx = 0; f_idx < functions.functions.size(); f_idx++) {
+		auto &func = functions.functions[f_idx];
 		// check the arguments of the function
 		int64_t cost = BindFunctionCost(func, arguments);
 		if (cost < 0) {
@@ -5716,7 +10184,7 @@ static vector<idx_t> BindFunctionsFromArguments(const string &name, vector<T> &f
 		// no matching function was found, throw an error
 		string call_str = Function::CallToString(name, arguments);
 		string candidate_str = "";
-		for (auto &f : functions) {
+		for (auto &f : functions.functions) {
 			candidate_str += "\t" + f.ToString() + "\n";
 		}
 		error = StringUtil::Format("No function matches the given name and argument types '%s'. You might need to add "
@@ -5729,15 +10197,16 @@ static vector<idx_t> BindFunctionsFromArguments(const string &name, vector<T> &f
 }
 
 template <class T>
-static idx_t MultipleCandidateException(const string &name, vector<T> &functions, vector<idx_t> &candidate_functions,
-                                        vector<LogicalType> &arguments, string &error) {
-	D_ASSERT(functions.size() > 1);
+idx_t FunctionBinder::MultipleCandidateException(const string &name, FunctionSet<T> &functions,
+                                                 vector<idx_t> &candidate_functions,
+                                                 const vector<LogicalType> &arguments, string &error) {
+	D_ASSERT(functions.functions.size() > 1);
 	// there are multiple possible function definitions
 	// throw an exception explaining which overloads are there
 	string call_str = Function::CallToString(name, arguments);
 	string candidate_str = "";
 	for (auto &conf : candidate_functions) {
-		auto &f = functions[conf];
+		T f = functions.GetFunctionByOffset(conf);
 		candidate_str += "\t" + f.ToString() + "\n";
 	}
 	error = StringUtil::Format("Could not choose a best candidate function for the function call \"%s\". In order to "
@@ -5747,23 +10216,20 @@ static idx_t MultipleCandidateException(const string &name, vector<T> &functions
 }
 
 template <class T>
-static idx_t BindFunctionFromArguments(const string &name, vector<T> &functions, vector<LogicalType> &arguments,
-                                       string &error, bool &cast_parameters) {
+idx_t FunctionBinder::BindFunctionFromArguments(const string &name, FunctionSet<T> &functions,
+                                                const vector<LogicalType> &arguments, string &error) {
 	auto candidate_functions = BindFunctionsFromArguments<T>(name, functions, arguments, error);
 	if (candidate_functions.empty()) {
 		// no candidates
 		return DConstants::INVALID_INDEX;
 	}
-	cast_parameters = true;
 	if (candidate_functions.size() > 1) {
 		// multiple candidates, check if there are any unknown arguments
 		bool has_parameters = false;
 		for (auto &arg_type : arguments) {
 			if (arg_type.id() == LogicalTypeId::UNKNOWN) {
-				//! there are! disable casting of parameters, but do not throw an error
-				cast_parameters = false;
-				has_parameters = true;
-				break;
+				//! there are! we could not resolve parameters in this case
+				throw ParameterNotResolvedException();
 			}
 		}
 		if (!has_parameters) {
@@ -5773,49 +10239,41 @@ static idx_t BindFunctionFromArguments(const string &name, vector<T> &functions,
 	return candidate_functions[0];
 }
 
-idx_t Function::BindFunction(const string &name, vector<ScalarFunction> &functions, vector<LogicalType> &arguments,
-                             string &error, bool &cast_parameters) {
-	return BindFunctionFromArguments(name, functions, arguments, error, cast_parameters);
+idx_t FunctionBinder::BindFunction(const string &name, ScalarFunctionSet &functions,
+                                   const vector<LogicalType> &arguments, string &error) {
+	return BindFunctionFromArguments(name, functions, arguments, error);
 }
 
-idx_t Function::BindFunction(const string &name, vector<AggregateFunction> &functions, vector<LogicalType> &arguments,
-                             string &error, bool &cast_parameters) {
-	return BindFunctionFromArguments(name, functions, arguments, error, cast_parameters);
+idx_t FunctionBinder::BindFunction(const string &name, AggregateFunctionSet &functions,
+                                   const vector<LogicalType> &arguments, string &error) {
+	return BindFunctionFromArguments(name, functions, arguments, error);
 }
 
-idx_t Function::BindFunction(const string &name, vector<AggregateFunction> &functions, vector<LogicalType> &arguments,
-                             string &error) {
-	bool cast_parameters;
-	return BindFunction(name, functions, arguments, error, cast_parameters);
+idx_t FunctionBinder::BindFunction(const string &name, TableFunctionSet &functions,
+                                   const vector<LogicalType> &arguments, string &error) {
+	return BindFunctionFromArguments(name, functions, arguments, error);
 }
 
-idx_t Function::BindFunction(const string &name, vector<TableFunction> &functions, vector<LogicalType> &arguments,
-                             string &error) {
-	bool cast_parameters;
-	return BindFunctionFromArguments(name, functions, arguments, error, cast_parameters);
-}
-
-idx_t Function::BindFunction(const string &name, vector<PragmaFunction> &functions, PragmaInfo &info, string &error) {
+idx_t FunctionBinder::BindFunction(const string &name, PragmaFunctionSet &functions, PragmaInfo &info, string &error) {
 	vector<LogicalType> types;
 	for (auto &value : info.parameters) {
 		types.push_back(value.type());
 	}
-	bool cast_parameters;
-	idx_t entry = BindFunctionFromArguments(name, functions, types, error, cast_parameters);
+	idx_t entry = BindFunctionFromArguments(name, functions, types, error);
 	if (entry == DConstants::INVALID_INDEX) {
 		throw BinderException(error);
 	}
-	auto &candidate_function = functions[entry];
+	auto candidate_function = functions.GetFunctionByOffset(entry);
 	// cast the input parameters
 	for (idx_t i = 0; i < info.parameters.size(); i++) {
 		auto target_type =
 		    i < candidate_function.arguments.size() ? candidate_function.arguments[i] : candidate_function.varargs;
-		info.parameters[i] = info.parameters[i].CastAs(target_type);
+		info.parameters[i] = info.parameters[i].CastAs(context, target_type);
 	}
 	return entry;
 }
 
-vector<LogicalType> GetLogicalTypesFromExpressions(vector<unique_ptr<Expression>> &arguments) {
+vector<LogicalType> FunctionBinder::GetLogicalTypesFromExpressions(vector<unique_ptr<Expression>> &arguments) {
 	vector<LogicalType> types;
 	types.reserve(arguments.size());
 	for (auto &argument : arguments) {
@@ -5824,22 +10282,22 @@ vector<LogicalType> GetLogicalTypesFromExpressions(vector<unique_ptr<Expression>
 	return types;
 }
 
-idx_t Function::BindFunction(const string &name, vector<ScalarFunction> &functions,
-                             vector<unique_ptr<Expression>> &arguments, string &error, bool &cast_parameters) {
+idx_t FunctionBinder::BindFunction(const string &name, ScalarFunctionSet &functions,
+                                   vector<unique_ptr<Expression>> &arguments, string &error) {
 	auto types = GetLogicalTypesFromExpressions(arguments);
-	return Function::BindFunction(name, functions, types, error, cast_parameters);
+	return BindFunction(name, functions, types, error);
 }
 
-idx_t Function::BindFunction(const string &name, vector<AggregateFunction> &functions,
-                             vector<unique_ptr<Expression>> &arguments, string &error) {
+idx_t FunctionBinder::BindFunction(const string &name, AggregateFunctionSet &functions,
+                                   vector<unique_ptr<Expression>> &arguments, string &error) {
 	auto types = GetLogicalTypesFromExpressions(arguments);
-	return Function::BindFunction(name, functions, types, error);
+	return BindFunction(name, functions, types, error);
 }
 
-idx_t Function::BindFunction(const string &name, vector<TableFunction> &functions,
-                             vector<unique_ptr<Expression>> &arguments, string &error) {
+idx_t FunctionBinder::BindFunction(const string &name, TableFunctionSet &functions,
+                                   vector<unique_ptr<Expression>> &arguments, string &error) {
 	auto types = GetLogicalTypesFromExpressions(arguments);
-	return Function::BindFunction(name, functions, types, error);
+	return BindFunction(name, functions, types, error);
 }
 
 enum class LogicalTypeComparisonResult { IDENTICAL_TYPE, TARGET_IS_ANY, DIFFERENT_TYPES };
@@ -5857,13 +10315,12 @@ LogicalTypeComparisonResult RequiresCast(const LogicalType &source_type, const L
 	return LogicalTypeComparisonResult::DIFFERENT_TYPES;
 }
 
-void BaseScalarFunction::CastToFunctionArguments(vector<unique_ptr<Expression>> &children,
-                                                 bool cast_parameter_expressions) {
+void FunctionBinder::CastToFunctionArguments(SimpleFunction &function, vector<unique_ptr<Expression>> &children) {
 	for (idx_t i = 0; i < children.size(); i++) {
-		auto target_type = i < this->arguments.size() ? this->arguments[i] : this->varargs;
+		auto target_type = i < function.arguments.size() ? function.arguments[i] : function.varargs;
 		target_type.Verify();
-		// check if the source type is a paramter, and we have disabled casting of parameters
-		if (children[i]->return_type.id() == LogicalTypeId::UNKNOWN && !cast_parameter_expressions) {
+		// don't cast lambda children, they get removed anyways
+		if (children[i]->return_type.id() == LogicalTypeId::LAMBDA) {
 			continue;
 		}
 		// check if the type of child matches the type of function argument
@@ -5872,58 +10329,51 @@ void BaseScalarFunction::CastToFunctionArguments(vector<unique_ptr<Expression>> 
 		// except for one special case: if the function accepts ANY argument
 		// in that case we don't add a cast
 		if (cast_result == LogicalTypeComparisonResult::DIFFERENT_TYPES) {
-			children[i] = BoundCastExpression::AddCastToType(move(children[i]), target_type);
+			children[i] = BoundCastExpression::AddCastToType(context, move(children[i]), target_type);
 		}
 	}
 }
 
-unique_ptr<Expression> ScalarFunction::BindScalarFunction(ClientContext &context, const string &schema,
-                                                          const string &name, vector<unique_ptr<Expression>> children,
-                                                          string &error, bool is_operator, Binder *binder) {
-	// bind the function
-	auto function = Catalog::GetCatalog(context).GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, schema, name);
-	D_ASSERT(function && function->type == CatalogType::SCALAR_FUNCTION_ENTRY);
-	return ScalarFunction::BindScalarFunction(context, (ScalarFunctionCatalogEntry &)*function, move(children), error,
-	                                          is_operator, binder);
-}
-
-unique_ptr<Expression> ScalarFunction::BindScalarFunction(ClientContext &context, ScalarFunctionCatalogEntry &func,
+unique_ptr<Expression> FunctionBinder::BindScalarFunction(const string &schema, const string &name,
                                                           vector<unique_ptr<Expression>> children, string &error,
                                                           bool is_operator, Binder *binder) {
 	// bind the function
-	bool cast_parameters;
-	idx_t best_function = Function::BindFunction(func.name, func.functions, children, error, cast_parameters);
+	auto function = Catalog::GetCatalog(context).GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, schema, name);
+	D_ASSERT(function && function->type == CatalogType::SCALAR_FUNCTION_ENTRY);
+	return BindScalarFunction((ScalarFunctionCatalogEntry &)*function, move(children), error, is_operator, binder);
+}
+
+unique_ptr<Expression> FunctionBinder::BindScalarFunction(ScalarFunctionCatalogEntry &func,
+                                                          vector<unique_ptr<Expression>> children, string &error,
+                                                          bool is_operator, Binder *binder) {
+	// bind the function
+	idx_t best_function = BindFunction(func.name, func.functions, children, error);
 	if (best_function == DConstants::INVALID_INDEX) {
 		return nullptr;
 	}
 
 	// found a matching function!
-	auto &bound_function = func.functions[best_function];
+	auto bound_function = func.functions.GetFunctionByOffset(best_function);
 
-	if (bound_function.null_handling == FunctionNullHandling::NULL_IN_NULL_OUT) {
+	if (bound_function.null_handling == FunctionNullHandling::DEFAULT_NULL_HANDLING) {
 		for (auto &child : children) {
 			if (child->return_type == LogicalTypeId::SQLNULL) {
-				if (binder) {
-					binder->RemoveParameters(children);
-				}
 				return make_unique<BoundConstantExpression>(Value(LogicalType::SQLNULL));
 			}
 		}
 	}
-
-	return ScalarFunction::BindScalarFunction(context, bound_function, move(children), is_operator, cast_parameters);
+	return BindScalarFunction(bound_function, move(children), is_operator);
 }
 
-unique_ptr<BoundFunctionExpression> ScalarFunction::BindScalarFunction(ClientContext &context,
-                                                                       ScalarFunction bound_function,
+unique_ptr<BoundFunctionExpression> FunctionBinder::BindScalarFunction(ScalarFunction bound_function,
                                                                        vector<unique_ptr<Expression>> children,
-                                                                       bool is_operator, bool cast_parameters) {
+                                                                       bool is_operator) {
 	unique_ptr<FunctionData> bind_info;
 	if (bound_function.bind) {
 		bind_info = bound_function.bind(context, bound_function, children);
 	}
 	// check if we need to add casts to the children
-	bound_function.CastToFunctionArguments(children, cast_parameters);
+	CastToFunctionArguments(bound_function, children);
 
 	// now create the function
 	auto return_type = bound_function.return_type;
@@ -5931,9 +10381,11 @@ unique_ptr<BoundFunctionExpression> ScalarFunction::BindScalarFunction(ClientCon
 	                                            move(bind_info), is_operator);
 }
 
-unique_ptr<BoundAggregateExpression> AggregateFunction::BindAggregateFunction(
-    ClientContext &context, AggregateFunction bound_function, vector<unique_ptr<Expression>> children,
-    unique_ptr<Expression> filter, bool is_distinct, unique_ptr<BoundOrderModifier> order_bys, bool cast_parameters) {
+unique_ptr<BoundAggregateExpression> FunctionBinder::BindAggregateFunction(AggregateFunction bound_function,
+                                                                           vector<unique_ptr<Expression>> children,
+                                                                           unique_ptr<Expression> filter,
+                                                                           AggregateType aggr_type,
+                                                                           unique_ptr<BoundOrderModifier> order_bys) {
 	unique_ptr<FunctionData> bind_info;
 	if (bound_function.bind) {
 		bind_info = bound_function.bind(context, bound_function, children);
@@ -5942,7 +10394,7 @@ unique_ptr<BoundAggregateExpression> AggregateFunction::BindAggregateFunction(
 	}
 
 	// check if we need to add casts to the children
-	bound_function.CastToFunctionArguments(children, cast_parameters);
+	CastToFunctionArguments(bound_function, children);
 
 	// Special case: for ORDER BY aggregates, we wrap the aggregate function in a SortedAggregateFunction
 	// The children are the sort clauses and the binding contains the ordering data.
@@ -5951,7 +10403,74 @@ unique_ptr<BoundAggregateExpression> AggregateFunction::BindAggregateFunction(
 	}
 
 	return make_unique<BoundAggregateExpression>(move(bound_function), move(children), move(filter), move(bind_info),
-	                                             is_distinct);
+	                                             aggr_type);
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+ScalarFunctionSet::ScalarFunctionSet(string name) : FunctionSet(move(name)) {
+}
+
+ScalarFunction ScalarFunctionSet::GetFunctionByArguments(ClientContext &context, const vector<LogicalType> &arguments) {
+	string error;
+	FunctionBinder binder(context);
+	idx_t index = binder.BindFunction(name, *this, arguments, error);
+	if (index == DConstants::INVALID_INDEX) {
+		throw InternalException("Failed to find function %s(%s)\n%s", name, StringUtil::ToString(arguments, ","),
+		                        error);
+	}
+	return GetFunctionByOffset(index);
+}
+
+AggregateFunctionSet::AggregateFunctionSet(string name) : FunctionSet(move(name)) {
+}
+
+AggregateFunction AggregateFunctionSet::GetFunctionByArguments(ClientContext &context,
+                                                               const vector<LogicalType> &arguments) {
+	string error;
+	FunctionBinder binder(context);
+	idx_t index = binder.BindFunction(name, *this, arguments, error);
+	if (index == DConstants::INVALID_INDEX) {
+		// check if the arguments are a prefix of any of the arguments
+		// this is used for functions such as quantile or string_agg that delete part of their arguments during bind
+		// FIXME: we should come up with a better solution here
+		for (auto &func : functions) {
+			if (arguments.size() >= func.arguments.size()) {
+				continue;
+			}
+			bool is_prefix = true;
+			for (idx_t k = 0; k < arguments.size(); k++) {
+				if (arguments[k] != func.arguments[k]) {
+					is_prefix = false;
+					break;
+				}
+			}
+			if (is_prefix) {
+				return func;
+			}
+		}
+		throw InternalException("Failed to find function %s(%s)\n%s", name, StringUtil::ToString(arguments, ","),
+		                        error);
+	}
+	return GetFunctionByOffset(index);
+}
+
+TableFunctionSet::TableFunctionSet(string name) : FunctionSet(move(name)) {
+}
+
+TableFunction TableFunctionSet::GetFunctionByArguments(ClientContext &context, const vector<LogicalType> &arguments) {
+	string error;
+	FunctionBinder binder(context);
+	idx_t index = binder.BindFunction(name, *this, arguments, error);
+	if (index == DConstants::INVALID_INDEX) {
+		throw InternalException("Failed to find function %s(%s)\n%s", name, StringUtil::ToString(arguments, ","),
+		                        error);
+	}
+	return GetFunctionByOffset(index);
 }
 
 } // namespace duckdb
@@ -5979,7 +10498,8 @@ string MacroFunction::ValidateArguments(MacroFunction &macro_def, const string &
 
 	// separate positional and default arguments
 	for (auto &arg : function_expr.children) {
-		if (arg->type == ExpressionType::VALUE_CONSTANT && !arg->alias.empty()) {
+		if ((arg->type == ExpressionType::VALUE_CONSTANT || arg->type == ExpressionType::VALUE_PARAMETER) &&
+		    !arg->alias.empty()) {
 			// default argument
 			if (macro_def.default_parameters.find(arg->alias) == macro_def.default_parameters.end()) {
 				return StringUtil::Format("Macro %s does not have default parameter %s!", name, arg->alias);
@@ -6069,8 +10589,8 @@ static void PragmaEnableProfilingStatement(ClientContext &context, const Functio
 }
 
 void RegisterEnableProfiling(BuiltinFunctions &set) {
-	vector<PragmaFunction> functions;
-	functions.push_back(PragmaFunction::PragmaStatement(string(), PragmaEnableProfilingStatement));
+	PragmaFunctionSet functions("");
+	functions.AddFunction(PragmaFunction::PragmaStatement(string(), PragmaEnableProfilingStatement));
 
 	set.AddFunction("enable_profile", functions);
 	set.AddFunction("enable_profiling", functions);
@@ -6099,10 +10619,28 @@ static void PragmaDisablePrintProgressBar(ClientContext &context, const Function
 
 static void PragmaEnableVerification(ClientContext &context, const FunctionParameters &parameters) {
 	ClientConfig::GetConfig(context).query_verification_enabled = true;
+	ClientConfig::GetConfig(context).verify_serializer = true;
 }
 
 static void PragmaDisableVerification(ClientContext &context, const FunctionParameters &parameters) {
 	ClientConfig::GetConfig(context).query_verification_enabled = false;
+	ClientConfig::GetConfig(context).verify_serializer = false;
+}
+
+static void PragmaVerifySerializer(ClientContext &context, const FunctionParameters &parameters) {
+	ClientConfig::GetConfig(context).verify_serializer = true;
+}
+
+static void PragmaDisableVerifySerializer(ClientContext &context, const FunctionParameters &parameters) {
+	ClientConfig::GetConfig(context).verify_serializer = false;
+}
+
+static void PragmaEnableExternalVerification(ClientContext &context, const FunctionParameters &parameters) {
+	ClientConfig::GetConfig(context).verify_external = true;
+}
+
+static void PragmaDisableExternalVerification(ClientContext &context, const FunctionParameters &parameters) {
+	ClientConfig::GetConfig(context).verify_external = false;
 }
 
 static void PragmaEnableForceParallelism(ClientContext &context, const FunctionParameters &parameters) {
@@ -6114,7 +10652,7 @@ static void PragmaEnableForceIndexJoin(ClientContext &context, const FunctionPar
 }
 
 static void PragmaForceCheckpoint(ClientContext &context, const FunctionParameters &parameters) {
-	DBConfig::GetConfig(context).force_checkpoint = true;
+	DBConfig::GetConfig(context).options.force_checkpoint = true;
 }
 
 static void PragmaDisableForceParallelism(ClientContext &context, const FunctionParameters &parameters) {
@@ -6122,19 +10660,19 @@ static void PragmaDisableForceParallelism(ClientContext &context, const Function
 }
 
 static void PragmaEnableObjectCache(ClientContext &context, const FunctionParameters &parameters) {
-	DBConfig::GetConfig(context).object_cache_enable = true;
+	DBConfig::GetConfig(context).options.object_cache_enable = true;
 }
 
 static void PragmaDisableObjectCache(ClientContext &context, const FunctionParameters &parameters) {
-	DBConfig::GetConfig(context).object_cache_enable = false;
+	DBConfig::GetConfig(context).options.object_cache_enable = false;
 }
 
 static void PragmaEnableCheckpointOnShutdown(ClientContext &context, const FunctionParameters &parameters) {
-	DBConfig::GetConfig(context).checkpoint_on_shutdown = true;
+	DBConfig::GetConfig(context).options.checkpoint_on_shutdown = true;
 }
 
 static void PragmaDisableCheckpointOnShutdown(ClientContext &context, const FunctionParameters &parameters) {
-	DBConfig::GetConfig(context).checkpoint_on_shutdown = false;
+	DBConfig::GetConfig(context).options.checkpoint_on_shutdown = false;
 }
 
 static void PragmaEnableOptimizer(ClientContext &context, const FunctionParameters &parameters) {
@@ -6153,6 +10691,12 @@ void PragmaFunctions::RegisterFunction(BuiltinFunctions &set) {
 
 	set.AddFunction(PragmaFunction::PragmaStatement("enable_verification", PragmaEnableVerification));
 	set.AddFunction(PragmaFunction::PragmaStatement("disable_verification", PragmaDisableVerification));
+
+	set.AddFunction(PragmaFunction::PragmaStatement("verify_external", PragmaEnableExternalVerification));
+	set.AddFunction(PragmaFunction::PragmaStatement("disable_verify_external", PragmaDisableExternalVerification));
+
+	set.AddFunction(PragmaFunction::PragmaStatement("verify_serializer", PragmaVerifySerializer));
+	set.AddFunction(PragmaFunction::PragmaStatement("disable_verify_serializer", PragmaDisableVerifySerializer));
 
 	set.AddFunction(PragmaFunction::PragmaStatement("verify_parallelism", PragmaEnableForceParallelism));
 	set.AddFunction(PragmaFunction::PragmaStatement("disable_verify_parallelism", PragmaDisableForceParallelism));
@@ -6239,7 +10783,7 @@ string PragmaVersion(ClientContext &context, const FunctionParameters &parameter
 
 string PragmaImportDatabase(ClientContext &context, const FunctionParameters &parameters) {
 	auto &config = DBConfig::GetConfig(context);
-	if (!config.enable_external_access) {
+	if (!config.options.enable_external_access) {
 		throw PermissionException("Import is disabled through configuration");
 	}
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -6472,30 +11016,12 @@ void AgeFun::RegisterFunction(BuiltinFunctions &set) {
 
 namespace duckdb {
 
-struct CurrentBindData : public FunctionData {
-	ClientContext &context;
-
-	explicit CurrentBindData(ClientContext &context) : context(context) {
-	}
-
-	unique_ptr<FunctionData> Copy() const override {
-		return make_unique<CurrentBindData>(context);
-	}
-
-	bool Equals(const FunctionData &other_p) const override {
-		return true;
-	}
-};
-
 static timestamp_t GetTransactionTimestamp(ExpressionState &state) {
-	auto &func_expr = (BoundFunctionExpression &)state.expr;
-	auto &info = (CurrentBindData &)*func_expr.bind_info;
-	return info.context.ActiveTransaction().start_timestamp;
+	return state.GetContext().ActiveTransaction().start_timestamp;
 }
 
 static void CurrentTimeFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 	D_ASSERT(input.ColumnCount() == 0);
-
 	auto val = Value::TIME(Timestamp::GetTime(GetTransactionTimestamp(state)));
 	result.Reference(val);
 }
@@ -6510,31 +11036,32 @@ static void CurrentDateFunction(DataChunk &input, ExpressionState &state, Vector
 static void CurrentTimestampFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 	D_ASSERT(input.ColumnCount() == 0);
 
-	auto val = Value::TIMESTAMP(GetTransactionTimestamp(state));
+	auto val = Value::TIMESTAMPTZ(GetTransactionTimestamp(state));
 	result.Reference(val);
 }
 
-unique_ptr<FunctionData> BindCurrentTime(ClientContext &context, ScalarFunction &bound_function,
-                                         vector<unique_ptr<Expression>> &arguments) {
-	return make_unique<CurrentBindData>(context);
-}
-
 void CurrentTimeFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(
-	    ScalarFunction("get_current_time", {}, LogicalType::TIME, CurrentTimeFunction, false, BindCurrentTime));
+	ScalarFunction current_time("get_current_time", {}, LogicalType::TIME, CurrentTimeFunction);
+	;
+	current_time.side_effects = FunctionSideEffects::HAS_SIDE_EFFECTS;
+	set.AddFunction(current_time);
 }
 
 void CurrentDateFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("current_date", {}, LogicalType::DATE, CurrentDateFunction, false, BindCurrentTime));
+	ScalarFunction current_date({}, LogicalType::DATE, CurrentDateFunction);
+	;
+	current_date.side_effects = FunctionSideEffects::HAS_SIDE_EFFECTS;
+	set.AddFunction({"today", "current_date"}, current_date);
 }
 
 void CurrentTimestampFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(
-	    {"now", "get_current_timestamp"},
-	    ScalarFunction({}, LogicalType::TIMESTAMP, CurrentTimestampFunction, false, false, BindCurrentTime));
+	ScalarFunction current_timestamp({}, LogicalType::TIMESTAMP_TZ, CurrentTimestampFunction);
+	current_timestamp.side_effects = FunctionSideEffects::HAS_SIDE_EFFECTS;
+	set.AddFunction({"now", "get_current_timestamp", "transaction_timestamp"}, current_timestamp);
 }
 
 } // namespace duckdb
+
 
 
 
@@ -6587,7 +11114,7 @@ struct DateDiff {
 	struct DayOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return Date::EpochDays(enddate) - Date::EpochDays(startdate);
+			return TR(Date::EpochDays(enddate)) - TR(Date::EpochDays(startdate));
 		}
 	};
 
@@ -6628,7 +11155,8 @@ struct DateDiff {
 	struct WeekOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return Date::Epoch(enddate) / Interval::SECS_PER_WEEK - Date::Epoch(startdate) / Interval::SECS_PER_WEEK;
+			return Date::Epoch(Date::GetMondayOfCurrentWeek(enddate)) / Interval::SECS_PER_WEEK -
+			       Date::Epoch(Date::GetMondayOfCurrentWeek(startdate)) / Interval::SECS_PER_WEEK;
 		}
 	};
 
@@ -6642,16 +11170,15 @@ struct DateDiff {
 	struct MicrosecondsOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return Date::EpochNanoseconds(enddate) / Interval::NANOS_PER_MICRO -
-			       Date::EpochNanoseconds(startdate) / Interval::NANOS_PER_MICRO;
+			return Date::EpochMicroseconds(enddate) - Date::EpochMicroseconds(startdate);
 		}
 	};
 
 	struct MillisecondsOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return Date::EpochNanoseconds(enddate) / Interval::NANOS_PER_MSEC -
-			       Date::EpochNanoseconds(startdate) / Interval::NANOS_PER_MSEC;
+			return Date::EpochMicroseconds(enddate) / Interval::MICROS_PER_MSEC -
+			       Date::EpochMicroseconds(startdate) / Interval::MICROS_PER_MSEC;
 		}
 	};
 
@@ -6732,7 +11259,9 @@ int64_t DateDiff::ISOYearOperator::Operation(timestamp_t startdate, timestamp_t 
 
 template <>
 int64_t DateDiff::MicrosecondsOperator::Operation(timestamp_t startdate, timestamp_t enddate) {
-	return Timestamp::GetEpochMicroSeconds(enddate) - Timestamp::GetEpochMicroSeconds(startdate);
+	const auto start = Timestamp::GetEpochMicroSeconds(startdate);
+	const auto end = Timestamp::GetEpochMicroSeconds(enddate);
+	return SubtractOperatorOverflowCheck::Operation<int64_t, int64_t, int64_t>(end, start);
 }
 
 template <>
@@ -6974,6 +11503,7 @@ void DateDiffFun::RegisterFunction(BuiltinFunctions &set) {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -8186,10 +12716,10 @@ void AddGenericDatePartOperator(BuiltinFunctions &set, const string &name, scala
                                 scalar_function_t ts_func, scalar_function_t interval_func,
                                 function_statistics_t date_stats, function_statistics_t ts_stats) {
 	ScalarFunctionSet operator_set(name);
-	operator_set.AddFunction(ScalarFunction({LogicalType::DATE}, LogicalType::BIGINT, move(date_func), false, false,
-	                                        nullptr, nullptr, date_stats));
-	operator_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP}, LogicalType::BIGINT, move(ts_func), false, false,
-	                                        nullptr, nullptr, ts_stats));
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::DATE}, LogicalType::BIGINT, move(date_func), nullptr, nullptr, date_stats));
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::TIMESTAMP}, LogicalType::BIGINT, move(ts_func), nullptr, nullptr, ts_stats));
 	operator_set.AddFunction(ScalarFunction({LogicalType::INTERVAL}, LogicalType::BIGINT, move(interval_func)));
 	set.AddFunction(operator_set);
 }
@@ -8207,13 +12737,13 @@ void AddGenericTimePartOperator(BuiltinFunctions &set, const string &name, scala
                                 function_statistics_t date_stats, function_statistics_t ts_stats,
                                 function_statistics_t time_stats) {
 	ScalarFunctionSet operator_set(name);
-	operator_set.AddFunction(ScalarFunction({LogicalType::DATE}, LogicalType::BIGINT, move(date_func), false, false,
-	                                        nullptr, nullptr, date_stats));
-	operator_set.AddFunction(ScalarFunction({LogicalType::TIMESTAMP}, LogicalType::BIGINT, move(ts_func), false, false,
-	                                        nullptr, nullptr, ts_stats));
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::DATE}, LogicalType::BIGINT, move(date_func), nullptr, nullptr, date_stats));
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::TIMESTAMP}, LogicalType::BIGINT, move(ts_func), nullptr, nullptr, ts_stats));
 	operator_set.AddFunction(ScalarFunction({LogicalType::INTERVAL}, LogicalType::BIGINT, move(interval_func)));
-	operator_set.AddFunction(ScalarFunction({LogicalType::TIME}, LogicalType::BIGINT, move(time_func), false, false,
-	                                        nullptr, nullptr, time_stats));
+	operator_set.AddFunction(
+	    ScalarFunction({LogicalType::TIME}, LogicalType::BIGINT, move(time_func), nullptr, nullptr, time_stats));
 	set.AddFunction(operator_set);
 }
 
@@ -8275,6 +12805,9 @@ struct StructDatePart {
 	static unique_ptr<FunctionData> Bind(ClientContext &context, ScalarFunction &bound_function,
 	                                     vector<unique_ptr<Expression>> &arguments) {
 		// collect names and deconflict, construct return type
+		if (arguments[0]->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
 		if (!arguments[0]->IsFoldable()) {
 			throw BinderException("%s can only take constant lists of part names", bound_function.name);
 		}
@@ -8283,7 +12816,7 @@ struct StructDatePart {
 		child_list_t<LogicalType> struct_children;
 		part_codes_t part_codes;
 
-		Value parts_list = ExpressionExecutor::EvaluateScalar(*arguments[0]);
+		Value parts_list = ExpressionExecutor::EvaluateScalar(context, *arguments[0]);
 		if (parts_list.type().id() == LogicalTypeId::LIST) {
 			auto &list_children = ListValue::GetChildren(parts_list);
 			if (list_children.empty()) {
@@ -8306,8 +12839,7 @@ struct StructDatePart {
 			throw BinderException("%s can only take constant lists of part names", bound_function.name);
 		}
 
-		arguments.erase(arguments.begin());
-		bound_function.arguments.erase(bound_function.arguments.begin());
+		Function::EraseArgument(bound_function, arguments, 0);
 		bound_function.return_type = LogicalType::STRUCT(move(struct_children));
 		return make_unique<BindData>(bound_function.return_type, part_codes);
 	}
@@ -8360,8 +12892,8 @@ struct StructDatePart {
 				}
 			}
 		} else {
-			VectorData rdata;
-			input.Orrify(count, rdata);
+			UnifiedVectorFormat rdata;
+			input.ToUnifiedFormat(count, rdata);
 
 			const auto &arg_valid = rdata.validity;
 			auto tdata = (const INPUT_TYPE *)rdata.data;
@@ -8393,16 +12925,16 @@ struct StructDatePart {
 				const auto idx = rdata.sel->get_index(i);
 				if (arg_valid.RowIsValid(idx)) {
 					if (Value::IsFinite(tdata[idx])) {
-						DatePart::StructOperator::Operation(part_values.data(), tdata[idx], idx, part_mask);
+						DatePart::StructOperator::Operation(part_values.data(), tdata[idx], i, part_mask);
 					} else {
 						for (auto &child_entry : child_entries) {
-							FlatVector::Validity(*child_entry).SetInvalid(idx);
+							FlatVector::Validity(*child_entry).SetInvalid(i);
 						}
 					}
 				} else {
-					res_valid.SetInvalid(idx);
+					res_valid.SetInvalid(i);
 					for (auto &child_entry : child_entries) {
-						FlatVector::Validity(*child_entry).SetInvalid(idx);
+						FlatVector::Validity(*child_entry).SetInvalid(i);
 					}
 				}
 			}
@@ -8420,11 +12952,29 @@ struct StructDatePart {
 		result.Verify(count);
 	}
 
+	static void SerializeFunction(FieldWriter &writer, const FunctionData *bind_data_p,
+	                              const ScalarFunction &function) {
+		D_ASSERT(bind_data_p);
+		auto &info = (BindData &)*bind_data_p;
+		writer.WriteSerializable(info.stype);
+		writer.WriteList<DatePartSpecifier>(info.part_codes);
+	}
+
+	static unique_ptr<FunctionData> DeserializeFunction(ClientContext &context, FieldReader &reader,
+	                                                    ScalarFunction &bound_function) {
+		auto stype = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
+		auto part_codes = reader.ReadRequiredList<DatePartSpecifier>();
+		return make_unique<BindData>(move(stype), move(part_codes));
+	}
+
 	template <typename INPUT_TYPE>
 	static ScalarFunction GetFunction(const LogicalType &temporal_type) {
 		auto part_type = LogicalType::LIST(LogicalType::VARCHAR);
 		auto result_type = LogicalType::STRUCT({});
-		return ScalarFunction({part_type, temporal_type}, result_type, Function<INPUT_TYPE>, false, false, Bind);
+		ScalarFunction result({part_type, temporal_type}, result_type, Function<INPUT_TYPE>, Bind);
+		result.serialize = SerializeFunction;
+		result.deserialize = DeserializeFunction;
+		return result;
 	}
 };
 
@@ -8523,9 +13073,16 @@ void DatePartFun::RegisterFunction(BuiltinFunctions &set) {
 
 
 
+
 namespace duckdb {
 
 struct DateSub {
+	static int64_t SubtractMicros(timestamp_t startdate, timestamp_t enddate) {
+		const auto start = Timestamp::GetEpochMicroSeconds(startdate);
+		const auto end = Timestamp::GetEpochMicroSeconds(enddate);
+		return SubtractOperatorOverflowCheck::Operation<int64_t, int64_t, int64_t>(end, start);
+	}
+
 	template <class TA, class TB, class TR, class OP>
 	static inline void BinaryExecute(Vector &left, Vector &right, Vector &result, idx_t count) {
 		BinaryExecutor::ExecuteWithNulls<TA, TB, TR>(
@@ -8612,55 +13169,49 @@ struct DateSub {
 	struct DayOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return (Timestamp::GetEpochMicroSeconds(enddate) - Timestamp::GetEpochMicroSeconds(startdate)) /
-			       Interval::MICROS_PER_DAY;
+			return SubtractMicros(startdate, enddate) / Interval::MICROS_PER_DAY;
 		}
 	};
 
 	struct WeekOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return (Timestamp::GetEpochMicroSeconds(enddate) - Timestamp::GetEpochMicroSeconds(startdate)) /
-			       Interval::MICROS_PER_WEEK;
+			return SubtractMicros(startdate, enddate) / Interval::MICROS_PER_WEEK;
 		}
 	};
 
 	struct MicrosecondsOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return (Timestamp::GetEpochMicroSeconds(enddate) - Timestamp::GetEpochMicroSeconds(startdate));
+			return SubtractMicros(startdate, enddate);
 		}
 	};
 
 	struct MillisecondsOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return (Timestamp::GetEpochMicroSeconds(enddate) - Timestamp::GetEpochMicroSeconds(startdate)) /
-			       Interval::MICROS_PER_MSEC;
+			return SubtractMicros(startdate, enddate) / Interval::MICROS_PER_MSEC;
 		}
 	};
 
 	struct SecondsOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return (Timestamp::GetEpochMicroSeconds(enddate) - Timestamp::GetEpochMicroSeconds(startdate)) /
-			       Interval::MICROS_PER_SEC;
+			return SubtractMicros(startdate, enddate) / Interval::MICROS_PER_SEC;
 		}
 	};
 
 	struct MinutesOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return (Timestamp::GetEpochMicroSeconds(enddate) - Timestamp::GetEpochMicroSeconds(startdate)) /
-			       Interval::MICROS_PER_MINUTE;
+			return SubtractMicros(startdate, enddate) / Interval::MICROS_PER_MINUTE;
 		}
 	};
 
 	struct HoursOperator {
 		template <class TA, class TB, class TR>
 		static inline TR Operation(TA startdate, TB enddate) {
-			return (Timestamp::GetEpochMicroSeconds(enddate) - Timestamp::GetEpochMicroSeconds(startdate)) /
-			       Interval::MICROS_PER_HOUR;
+			return SubtractMicros(startdate, enddate) / Interval::MICROS_PER_HOUR;
 		}
 	};
 };
@@ -9569,7 +14120,7 @@ static unique_ptr<BaseStatistics> DateTruncStatistics(vector<unique_ptr<BaseStat
 	auto min = nstats.min.GetValueUnsafe<TA>();
 	auto max = nstats.max.GetValueUnsafe<TA>();
 	if (min > max) {
-		throw InternalException("Invalid DATETRUNC child statistics");
+		return nullptr;
 	}
 
 	// Infinite values are unmodified
@@ -9638,7 +14189,7 @@ static unique_ptr<FunctionData> DateTruncBind(ClientContext &context, ScalarFunc
 	}
 
 	// Rebind to return a date if we are truncating that far
-	Value part_value = ExpressionExecutor::EvaluateScalar(*arguments[0]);
+	Value part_value = ExpressionExecutor::EvaluateScalar(context, *arguments[0]);
 	if (part_value.IsNull()) {
 		return nullptr;
 	}
@@ -9658,7 +14209,7 @@ static unique_ptr<FunctionData> DateTruncBind(ClientContext &context, ScalarFunc
 	case DatePartSpecifier::DOW:
 	case DatePartSpecifier::ISODOW:
 	case DatePartSpecifier::DOY:
-		switch (arguments[1]->return_type.id()) {
+		switch (bound_function.arguments[1].id()) {
 		case LogicalType::TIMESTAMP:
 			bound_function.function = DateTruncFunction<timestamp_t, date_t>;
 			bound_function.statistics = DateTruncStats<timestamp_t, date_t>(part_code);
@@ -9668,20 +14219,20 @@ static unique_ptr<FunctionData> DateTruncBind(ClientContext &context, ScalarFunc
 			bound_function.statistics = DateTruncStats<date_t, date_t>(part_code);
 			break;
 		default:
-			break;
+			throw NotImplementedException("Temporal argument type for DATETRUNC");
 		}
 		bound_function.return_type = LogicalType::DATE;
 		break;
 	default:
-		switch (arguments[1]->return_type.id()) {
+		switch (bound_function.arguments[1].id()) {
 		case LogicalType::TIMESTAMP:
 			bound_function.statistics = DateTruncStats<timestamp_t, timestamp_t>(part_code);
 			break;
 		case LogicalType::DATE:
-			bound_function.statistics = DateTruncStats<timestamp_t, date_t>(part_code);
+			bound_function.statistics = DateTruncStats<date_t, timestamp_t>(part_code);
 			break;
 		default:
-			break;
+			throw NotImplementedException("Temporal argument type for DATETRUNC");
 		}
 		break;
 	}
@@ -9692,9 +14243,9 @@ static unique_ptr<FunctionData> DateTruncBind(ClientContext &context, ScalarFunc
 void DateTruncFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet date_trunc("date_trunc");
 	date_trunc.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::TIMESTAMP}, LogicalType::TIMESTAMP,
-	                                      DateTruncFunction<timestamp_t, timestamp_t>, false, false, DateTruncBind));
+	                                      DateTruncFunction<timestamp_t, timestamp_t>, DateTruncBind));
 	date_trunc.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::DATE}, LogicalType::TIMESTAMP,
-	                                      DateTruncFunction<date_t, timestamp_t>, false, false, DateTruncBind));
+	                                      DateTruncFunction<date_t, timestamp_t>, DateTruncBind));
 	date_trunc.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::INTERVAL}, LogicalType::INTERVAL,
 	                                      DateTruncFunction<interval_t, interval_t>));
 	set.AddFunction(date_trunc);
@@ -9867,6 +14418,7 @@ void MakeDateFun::RegisterFunction(BuiltinFunctions &set) {
 
 
 
+
 #include <cctype>
 
 namespace duckdb {
@@ -9932,7 +14484,12 @@ idx_t StrfTimeFormat::GetSpecifierLength(StrTimeSpecifier specifier, date_t date
 		return Date::MONTH_NAMES[Date::ExtractMonth(date) - 1].GetSize();
 	case StrTimeSpecifier::YEAR_DECIMAL: {
 		auto year = Date::ExtractYear(date);
-		return NumericHelper::SignedLength<int32_t, uint32_t>(year);
+		// Be consistent with WriteStandardSpecifier
+		if (0 <= year && year <= 9999) {
+			return 4;
+		} else {
+			return NumericHelper::SignedLength<int32_t, uint32_t>(year);
+		}
 	}
 	case StrTimeSpecifier::MONTH_DECIMAL: {
 		idx_t len = 1;
@@ -9984,7 +14541,7 @@ idx_t StrfTimeFormat::GetSpecifierLength(StrTimeSpecifier specifier, date_t date
 	case StrTimeSpecifier::DAY_OF_YEAR_DECIMAL:
 		return NumericHelper::UnsignedLength<uint32_t>(Date::ExtractDayOfTheYear(date));
 	case StrTimeSpecifier::YEAR_WITHOUT_CENTURY:
-		return NumericHelper::UnsignedLength<uint32_t>(Date::ExtractYear(date) % 100);
+		return NumericHelper::UnsignedLength<uint32_t>(AbsValue(Date::ExtractYear(date)) % 100);
 	default:
 		throw InternalException("Unimplemented specifier for GetSpecifierLength");
 	}
@@ -10201,7 +14758,7 @@ char *StrfTimeFormat::WriteStandardSpecifier(StrTimeSpecifier specifier, int32_t
 		break;
 	}
 	case StrTimeSpecifier::YEAR_WITHOUT_CENTURY: {
-		target = Write2(target, data[0] % 100);
+		target = Write2(target, AbsValue(data[0]) % 100);
 		break;
 	}
 	case StrTimeSpecifier::HOUR_24_DECIMAL: {
@@ -10443,15 +15000,16 @@ string StrTimeFormat::ParseFormatSpecifier(const string &format_string, StrTimeF
 }
 
 struct StrfTimeBindData : public FunctionData {
-	explicit StrfTimeBindData(StrfTimeFormat format_p, string format_string_p)
-	    : format(move(format_p)), format_string(move(format_string_p)) {
+	explicit StrfTimeBindData(StrfTimeFormat format_p, string format_string_p, bool is_null)
+	    : format(move(format_p)), format_string(move(format_string_p)), is_null(is_null) {
 	}
 
 	StrfTimeFormat format;
 	string format_string;
+	bool is_null;
 
 	unique_ptr<FunctionData> Copy() const override {
-		return make_unique<StrfTimeBindData>(format, format_string);
+		return make_unique<StrfTimeBindData>(format, format_string, is_null);
 	}
 
 	bool Equals(const FunctionData &other_p) const override {
@@ -10463,19 +15021,25 @@ struct StrfTimeBindData : public FunctionData {
 template <bool REVERSED>
 static unique_ptr<FunctionData> StrfTimeBindFunction(ClientContext &context, ScalarFunction &bound_function,
                                                      vector<unique_ptr<Expression>> &arguments) {
-	if (!arguments[REVERSED ? 0 : 1]->IsFoldable()) {
+	auto format_idx = REVERSED ? 0 : 1;
+	auto &format_arg = arguments[format_idx];
+	if (format_arg->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
+	if (!format_arg->IsFoldable()) {
 		throw InvalidInputException("strftime format must be a constant");
 	}
-	Value options_str = ExpressionExecutor::EvaluateScalar(*arguments[REVERSED ? 0 : 1]);
+	Value options_str = ExpressionExecutor::EvaluateScalar(context, *format_arg);
 	auto format_string = options_str.GetValue<string>();
 	StrfTimeFormat format;
-	if (!options_str.IsNull()) {
+	bool is_null = options_str.IsNull();
+	if (!is_null) {
 		string error = StrTimeFormat::ParseFormatSpecifier(format_string, format);
 		if (!error.empty()) {
 			throw InvalidInputException("Failed to parse format specifier %s: %s", format_string, error);
 		}
 	}
-	return make_unique<StrfTimeBindData>(format, format_string);
+	return make_unique<StrfTimeBindData>(format, format_string, is_null);
 }
 
 void StrfTimeFormat::ConvertDateVector(Vector &input, Vector &result, idx_t count) {
@@ -10502,7 +15066,7 @@ static void StrfTimeFunctionDate(DataChunk &args, ExpressionState &state, Vector
 	auto &func_expr = (BoundFunctionExpression &)state.expr;
 	auto &info = (StrfTimeBindData &)*func_expr.bind_info;
 
-	if (ConstantVector::IsNull(args.data[REVERSED ? 0 : 1])) {
+	if (info.is_null) {
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 		ConstantVector::SetNull(result, true);
 		return;
@@ -10536,7 +15100,7 @@ static void StrfTimeFunctionTimestamp(DataChunk &args, ExpressionState &state, V
 	auto &func_expr = (BoundFunctionExpression &)state.expr;
 	auto &info = (StrfTimeBindData &)*func_expr.bind_info;
 
-	if (ConstantVector::IsNull(args.data[REVERSED ? 0 : 1])) {
+	if (info.is_null) {
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 		ConstantVector::SetNull(result, true);
 		return;
@@ -10548,16 +15112,16 @@ void StrfTimeFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet strftime("strftime");
 
 	strftime.AddFunction(ScalarFunction({LogicalType::DATE, LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	                                    StrfTimeFunctionDate<false>, false, false, StrfTimeBindFunction<false>));
+	                                    StrfTimeFunctionDate<false>, StrfTimeBindFunction<false>));
 
 	strftime.AddFunction(ScalarFunction({LogicalType::TIMESTAMP, LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	                                    StrfTimeFunctionTimestamp<false>, false, false, StrfTimeBindFunction<false>));
+	                                    StrfTimeFunctionTimestamp<false>, StrfTimeBindFunction<false>));
 
 	strftime.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::DATE}, LogicalType::VARCHAR,
-	                                    StrfTimeFunctionDate<true>, false, false, StrfTimeBindFunction<true>));
+	                                    StrfTimeFunctionDate<true>, StrfTimeBindFunction<true>));
 
 	strftime.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::TIMESTAMP}, LogicalType::VARCHAR,
-	                                    StrfTimeFunctionTimestamp<true>, false, false, StrfTimeBindFunction<true>));
+	                                    StrfTimeFunctionTimestamp<true>, StrfTimeBindFunction<true>));
 
 	set.AddFunction(strftime);
 }
@@ -11048,10 +15612,13 @@ struct StrpTimeBindData : public FunctionData {
 
 static unique_ptr<FunctionData> StrpTimeBindFunction(ClientContext &context, ScalarFunction &bound_function,
                                                      vector<unique_ptr<Expression>> &arguments) {
+	if (arguments[1]->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
 	if (!arguments[1]->IsFoldable()) {
 		throw InvalidInputException("strptime format must be a constant");
 	}
-	Value options_str = ExpressionExecutor::EvaluateScalar(*arguments[1]);
+	Value options_str = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
 	string format_string = options_str.ToString();
 	StrpTimeFormat format;
 	if (!options_str.IsNull()) {
@@ -11162,7 +15729,7 @@ void StrpTimeFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet strptime("strptime");
 
 	auto fun = ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::TIMESTAMP, StrpTimeFunction,
-	                          false, false, StrpTimeBindFunction);
+	                          StrpTimeBindFunction);
 	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	strptime.AddFunction(fun);
 
@@ -11384,8 +15951,15 @@ static void EnumRangeBoundaryFunction(DataChunk &input, ExpressionState &state, 
 	result.Reference(val);
 }
 
+static void CheckEnumParameter(const Expression &expr) {
+	if (expr.HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
+}
+
 unique_ptr<FunctionData> BindEnumFunction(ClientContext &context, ScalarFunction &bound_function,
                                           vector<unique_ptr<Expression>> &arguments) {
+	CheckEnumParameter(*arguments[0]);
 	if (arguments[0]->return_type.id() != LogicalTypeId::ENUM) {
 		throw BinderException("This function needs an ENUM as an argument");
 	}
@@ -11394,6 +15968,8 @@ unique_ptr<FunctionData> BindEnumFunction(ClientContext &context, ScalarFunction
 
 unique_ptr<FunctionData> BindEnumRangeBoundaryFunction(ClientContext &context, ScalarFunction &bound_function,
                                                        vector<unique_ptr<Expression>> &arguments) {
+	CheckEnumParameter(*arguments[0]);
+	CheckEnumParameter(*arguments[1]);
 	if (arguments[0]->return_type.id() != LogicalTypeId::ENUM && arguments[0]->return_type != LogicalType::SQLNULL) {
 		throw BinderException("This function needs an ENUM as an argument");
 	}
@@ -11406,30 +15982,35 @@ unique_ptr<FunctionData> BindEnumRangeBoundaryFunction(ClientContext &context, S
 	if (arguments[0]->return_type.id() == LogicalTypeId::ENUM &&
 	    arguments[1]->return_type.id() == LogicalTypeId::ENUM &&
 	    arguments[0]->return_type != arguments[1]->return_type) {
-
 		throw BinderException("The parameters need to link to ONLY one enum OR be NULL ");
 	}
 	return nullptr;
 }
 
 void EnumFirst::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("enum_first", {LogicalType::ANY}, LogicalType::VARCHAR, EnumFirstFunction, false,
-	                               BindEnumFunction));
+	auto fun =
+	    ScalarFunction("enum_first", {LogicalType::ANY}, LogicalType::VARCHAR, EnumFirstFunction, BindEnumFunction);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction(fun);
 }
 
 void EnumLast::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("enum_last", {LogicalType::ANY}, LogicalType::VARCHAR, EnumLastFunction, false,
-	                               BindEnumFunction));
+	auto fun =
+	    ScalarFunction("enum_last", {LogicalType::ANY}, LogicalType::VARCHAR, EnumLastFunction, BindEnumFunction);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction(fun);
 }
 
 void EnumRange::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("enum_range", {LogicalType::ANY}, LogicalType::LIST(LogicalType::VARCHAR),
-	                               EnumRangeFunction, false, BindEnumFunction));
+	auto fun = ScalarFunction("enum_range", {LogicalType::ANY}, LogicalType::LIST(LogicalType::VARCHAR),
+	                          EnumRangeFunction, BindEnumFunction);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction(fun);
 }
 
 void EnumRangeBoundary::RegisterFunction(BuiltinFunctions &set) {
 	auto fun = ScalarFunction("enum_range_boundary", {LogicalType::ANY, LogicalType::ANY},
-	                          LogicalType::LIST(LogicalType::VARCHAR), EnumRangeBoundaryFunction, false,
+	                          LogicalType::LIST(LogicalType::VARCHAR), EnumRangeBoundaryFunction,
 	                          BindEnumRangeBoundaryFunction);
 	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(fun);
@@ -11460,7 +16041,9 @@ static void AliasFunction(DataChunk &args, ExpressionState &state, Vector &resul
 }
 
 void AliasFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("alias", {LogicalType::ANY}, LogicalType::VARCHAR, AliasFunction));
+	auto fun = ScalarFunction("alias", {LogicalType::ANY}, LogicalType::VARCHAR, AliasFunction);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction(fun);
 }
 
 } // namespace duckdb
@@ -11492,13 +16075,13 @@ static void ConstantOrNullFunction(DataChunk &args, ExpressionState &state, Vect
 	auto &func_expr = (BoundFunctionExpression &)state.expr;
 	auto &info = (ConstantOrNullBindData &)*func_expr.bind_info;
 	result.Reference(info.value);
-	for (idx_t idx = 0; idx < args.ColumnCount(); idx++) {
+	for (idx_t idx = 1; idx < args.ColumnCount(); idx++) {
 		switch (args.data[idx].GetVectorType()) {
 		case VectorType::FLAT_VECTOR: {
 			auto &input_mask = FlatVector::Validity(args.data[idx]);
 			if (!input_mask.AllValid()) {
 				// there are null values: need to merge them into the result
-				result.Normalify(args.size());
+				result.Flatten(args.size());
 				auto &result_mask = FlatVector::Validity(result);
 				result_mask.Combine(input_mask, args.size());
 			}
@@ -11514,10 +16097,10 @@ static void ConstantOrNullFunction(DataChunk &args, ExpressionState &state, Vect
 			break;
 		}
 		default: {
-			VectorData vdata;
-			args.data[idx].Orrify(args.size(), vdata);
+			UnifiedVectorFormat vdata;
+			args.data[idx].ToUnifiedFormat(args.size(), vdata);
 			if (!vdata.validity.AllValid()) {
-				result.Normalify(args.size());
+				result.Flatten(args.size());
 				auto &result_mask = FlatVector::Validity(result);
 				for (idx_t i = 0; i < args.size(); i++) {
 					if (!vdata.validity.RowIsValid(vdata.sel->get_index(i))) {
@@ -11531,8 +16114,8 @@ static void ConstantOrNullFunction(DataChunk &args, ExpressionState &state, Vect
 	}
 }
 
-ScalarFunction ConstantOrNull::GetFunction(LogicalType return_type) {
-	return ScalarFunction("constant_or_null", {}, move(return_type), ConstantOrNullFunction);
+ScalarFunction ConstantOrNull::GetFunction(const LogicalType &return_type) {
+	return ScalarFunction("constant_or_null", {return_type, LogicalType::ANY}, return_type, ConstantOrNullFunction);
 }
 
 unique_ptr<FunctionData> ConstantOrNull::Bind(Value value) {
@@ -11547,6 +16130,27 @@ bool ConstantOrNull::IsConstantOrNull(BoundFunctionExpression &expr, const Value
 	auto &bind_data = (ConstantOrNullBindData &)*expr.bind_info;
 	D_ASSERT(bind_data.value.type() == val.type());
 	return bind_data.value == val;
+}
+
+unique_ptr<FunctionData> ConstantOrNullBind(ClientContext &context, ScalarFunction &bound_function,
+                                            vector<unique_ptr<Expression>> &arguments) {
+	if (arguments[0]->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
+	if (!arguments[0]->IsFoldable()) {
+		throw BinderException("ConstantOrNull requires a constant input");
+	}
+	D_ASSERT(arguments.size() >= 2);
+	auto value = ExpressionExecutor::EvaluateScalar(context, *arguments[0]);
+	bound_function.return_type = arguments[0]->return_type;
+	return make_unique<ConstantOrNullBindData>(move(value));
+}
+
+void ConstantOrNull::RegisterFunction(BuiltinFunctions &set) {
+	auto fun = ConstantOrNull::GetFunction(LogicalType::ANY);
+	fun.bind = ConstantOrNullBind;
+	fun.varargs = LogicalType::ANY;
+	set.AddFunction(fun);
 }
 
 } // namespace duckdb
@@ -11586,12 +16190,14 @@ unique_ptr<FunctionData> CurrentSettingBind(ClientContext &context, ScalarFuncti
                                             vector<unique_ptr<Expression>> &arguments) {
 
 	auto &key_child = arguments[0];
-
+	if (key_child->return_type.id() == LogicalTypeId::UNKNOWN) {
+		throw ParameterNotResolvedException();
+	}
 	if (key_child->return_type.id() != LogicalTypeId::VARCHAR ||
 	    key_child->return_type.id() != LogicalTypeId::VARCHAR || !key_child->IsFoldable()) {
 		throw ParserException("Key name for current_setting needs to be a constant string");
 	}
-	Value key_val = ExpressionExecutor::EvaluateScalar(*key_child.get());
+	Value key_val = ExpressionExecutor::EvaluateScalar(context, *key_child.get());
 	D_ASSERT(key_val.type().id() == LogicalTypeId::VARCHAR);
 	auto &key_str = StringValue::Get(key_val);
 	if (key_val.IsNull() || key_str.empty()) {
@@ -11610,7 +16216,7 @@ unique_ptr<FunctionData> CurrentSettingBind(ClientContext &context, ScalarFuncti
 
 void CurrentSettingFun::RegisterFunction(BuiltinFunctions &set) {
 	auto fun = ScalarFunction("current_setting", {LogicalType::VARCHAR}, LogicalType::ANY, CurrentSettingFunction,
-	                          false, CurrentSettingBind);
+	                          CurrentSettingBind);
 	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(fun);
 }
@@ -11627,6 +16233,7 @@ static void HashFunction(DataChunk &args, ExpressionState &state, Vector &result
 void HashFun::RegisterFunction(BuiltinFunctions &set) {
 	auto hash_fun = ScalarFunction("hash", {LogicalType::ANY}, LogicalType::HASH, HashFunction);
 	hash_fun.varargs = LogicalType::ANY;
+	hash_fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(hash_fun);
 }
 
@@ -11668,8 +16275,8 @@ static void LeastGreatestFunction(DataChunk &args, ExpressionState &state, Vecto
 	// copy over the first column
 	bool result_has_value[STANDARD_VECTOR_SIZE];
 	{
-		VectorData vdata;
-		args.data[0].Orrify(args.size(), vdata);
+		UnifiedVectorFormat vdata;
+		args.data[0].ToUnifiedFormat(args.size(), vdata);
 		auto input_data = (T *)vdata.data;
 		for (idx_t i = 0; i < args.size(); i++) {
 			auto vindex = vdata.sel->get_index(i);
@@ -11689,8 +16296,8 @@ static void LeastGreatestFunction(DataChunk &args, ExpressionState &state, Vecto
 			continue;
 		}
 
-		VectorData vdata;
-		args.data[col_idx].Orrify(args.size(), vdata);
+		UnifiedVectorFormat vdata;
+		args.data[col_idx].ToUnifiedFormat(args.size(), vdata);
 
 		auto input_data = (T *)vdata.data;
 		if (!vdata.validity.AllValid()) {
@@ -11729,25 +16336,26 @@ static void LeastGreatestFunction(DataChunk &args, ExpressionState &state, Vecto
 
 template <typename T, class OP>
 ScalarFunction GetLeastGreatestFunction(const LogicalType &type) {
-	return ScalarFunction({type}, type, LeastGreatestFunction<T, OP>, true, false, nullptr, nullptr, nullptr, nullptr,
-	                      type, FunctionNullHandling::SPECIAL_HANDLING);
+	return ScalarFunction({type}, type, LeastGreatestFunction<T, OP>, nullptr, nullptr, nullptr, nullptr, type,
+	                      FunctionSideEffects::NO_SIDE_EFFECTS, FunctionNullHandling::SPECIAL_HANDLING);
 }
 
 template <class OP>
 static void RegisterLeastGreatest(BuiltinFunctions &set, const string &fun_name) {
 	ScalarFunctionSet fun_set(fun_name);
 	fun_set.AddFunction(ScalarFunction({LogicalType::BIGINT}, LogicalType::BIGINT, LeastGreatestFunction<int64_t, OP>,
-	                                   true, false, nullptr, nullptr, nullptr, nullptr, LogicalType::BIGINT,
-	                                   FunctionNullHandling::SPECIAL_HANDLING));
-	fun_set.AddFunction(ScalarFunction({LogicalType::HUGEINT}, LogicalType::HUGEINT,
-	                                   LeastGreatestFunction<hugeint_t, OP>, true, false, nullptr, nullptr, nullptr,
-	                                   nullptr, LogicalType::HUGEINT, FunctionNullHandling::SPECIAL_HANDLING));
+	                                   nullptr, nullptr, nullptr, nullptr, LogicalType::BIGINT,
+	                                   FunctionSideEffects::NO_SIDE_EFFECTS, FunctionNullHandling::SPECIAL_HANDLING));
+	fun_set.AddFunction(ScalarFunction(
+	    {LogicalType::HUGEINT}, LogicalType::HUGEINT, LeastGreatestFunction<hugeint_t, OP>, nullptr, nullptr, nullptr,
+	    nullptr, LogicalType::HUGEINT, FunctionSideEffects::NO_SIDE_EFFECTS, FunctionNullHandling::SPECIAL_HANDLING));
 	fun_set.AddFunction(ScalarFunction({LogicalType::DOUBLE}, LogicalType::DOUBLE, LeastGreatestFunction<double, OP>,
-	                                   true, false, nullptr, nullptr, nullptr, nullptr, LogicalType::DOUBLE,
-	                                   FunctionNullHandling::SPECIAL_HANDLING));
+	                                   nullptr, nullptr, nullptr, nullptr, LogicalType::DOUBLE,
+	                                   FunctionSideEffects::NO_SIDE_EFFECTS, FunctionNullHandling::SPECIAL_HANDLING));
 	fun_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	                                   LeastGreatestFunction<string_t, OP, true>, true, false, nullptr, nullptr,
-	                                   nullptr, nullptr, LogicalType::VARCHAR, FunctionNullHandling::SPECIAL_HANDLING));
+	                                   LeastGreatestFunction<string_t, OP, true>, nullptr, nullptr, nullptr, nullptr,
+	                                   LogicalType::VARCHAR, FunctionSideEffects::NO_SIDE_EFFECTS,
+	                                   FunctionNullHandling::SPECIAL_HANDLING));
 
 	fun_set.AddFunction(GetLeastGreatestFunction<timestamp_t, OP>(LogicalType::TIMESTAMP));
 	fun_set.AddFunction(GetLeastGreatestFunction<time_t, OP>(LogicalType::TIME));
@@ -11816,8 +16424,11 @@ static unique_ptr<BaseStatistics> StatsPropagateStats(ClientContext &context, Fu
 }
 
 void StatsFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("stats", {LogicalType::ANY}, LogicalType::VARCHAR, StatsFunction, true, StatsBind,
-	                               nullptr, StatsPropagateStats));
+	ScalarFunction stats("stats", {LogicalType::ANY}, LogicalType::VARCHAR, StatsFunction, StatsBind, nullptr,
+	                     StatsPropagateStats);
+	stats.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	stats.side_effects = FunctionSideEffects::HAS_SIDE_EFFECTS;
+	set.AddFunction(stats);
 }
 
 } // namespace duckdb
@@ -11831,7 +16442,9 @@ static void TypeOfFunction(DataChunk &args, ExpressionState &state, Vector &resu
 }
 
 void TypeOfFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("typeof", {LogicalType::ANY}, LogicalType::VARCHAR, TypeOfFunction));
+	auto fun = ScalarFunction("typeof", {LogicalType::ANY}, LogicalType::VARCHAR, TypeOfFunction);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction(fun);
 }
 
 } // namespace duckdb
@@ -11846,6 +16459,7 @@ void BuiltinFunctions::RegisterGenericFunctions() {
 	Register<GreatestFun>();
 	Register<StatsFun>();
 	Register<TypeOfFun>();
+	Register<ConstantOrNull>();
 	Register<CurrentSettingFun>();
 	Register<SystemFun>();
 }
@@ -11929,7 +16543,7 @@ list_entry_t SliceValue(Vector &result, list_entry_t input, int64_t begin, int64
 template <>
 string_t SliceValue(Vector &result, string_t input, int32_t begin, int32_t end) {
 	// one-based - zero has strange semantics
-	return SubstringFun::SubstringScalarFunction(result, input, begin + 1, end - begin);
+	return SubstringFun::SubstringUnicode(result, input, begin + 1, end - begin);
 }
 
 template <typename INPUT_TYPE, typename INDEX_TYPE>
@@ -11955,11 +16569,11 @@ static void ExecuteSlice(Vector &result, Vector &s, Vector &b, Vector &e, const 
 			rdata[0] = SliceValue<INPUT_TYPE, INDEX_TYPE>(result, sliced, begin, end);
 		}
 	} else {
-		VectorData sdata, bdata, edata;
+		UnifiedVectorFormat sdata, bdata, edata;
 
-		s.Orrify(count, sdata);
-		b.Orrify(count, bdata);
-		e.Orrify(count, edata);
+		s.ToUnifiedFormat(count, sdata);
+		b.ToUnifiedFormat(count, bdata);
+		e.ToUnifiedFormat(count, edata);
 
 		auto rdata = FlatVector::GetData<INPUT_TYPE>(result);
 		auto &rmask = FlatVector::Validity(result);
@@ -12000,10 +16614,13 @@ static void ArraySliceFunction(DataChunk &args, ExpressionState &state, Vector &
 	Vector &b = args.data[1];
 	Vector &e = args.data[2];
 
-	s.Normalify(count);
+	result.SetVectorType(args.AllConstant() ? VectorType::CONSTANT_VECTOR : VectorType::FLAT_VECTOR);
 	switch (result.GetType().id()) {
 	case LogicalTypeId::LIST:
 		// Share the value dictionary as we are just going to slice it
+		if (s.GetVectorType() != VectorType::FLAT_VECTOR && s.GetVectorType() != VectorType::CONSTANT_VECTOR) {
+			s.Flatten(count);
+		}
 		ListVector::ReferenceEntry(result, s);
 		ExecuteSlice<list_entry_t, int64_t>(result, s, b, e, count);
 		break;
@@ -12012,14 +16629,6 @@ static void ArraySliceFunction(DataChunk &args, ExpressionState &state, Vector &
 		break;
 	default:
 		throw NotImplementedException("Specifier type not implemented");
-	}
-
-	result.SetVectorType(VectorType::CONSTANT_VECTOR);
-	for (idx_t i = 0; i < args.ColumnCount(); i++) {
-		if (args.data[i].GetVectorType() != VectorType::CONSTANT_VECTOR) {
-			result.SetVectorType(VectorType::FLAT_VECTOR);
-			break;
-		}
 	}
 }
 
@@ -12052,7 +16661,7 @@ static unique_ptr<FunctionData> ArraySliceBind(ClientContext &context, ScalarFun
 void ArraySliceFun::RegisterFunction(BuiltinFunctions &set) {
 	// the arguments and return types are actually set in the binder function
 	ScalarFunction fun({LogicalType::ANY, LogicalType::BIGINT, LogicalType::BIGINT}, LogicalType::ANY,
-	                   ArraySliceFunction, false, false, ArraySliceBind);
+	                   ArraySliceFunction, ArraySliceBind);
 	fun.varargs = LogicalType::ANY;
 	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction({"array_slice", "list_slice"}, fun);
@@ -12063,17 +16672,8 @@ void ArraySliceFun::RegisterFunction(BuiltinFunctions &set) {
 
 
 
+
 namespace duckdb {
-
-template <class T>
-static inline bool ValueEqualsOrNot(const T &left, const T &right) {
-	return left == right;
-}
-
-template <>
-inline bool ValueEqualsOrNot(const string_t &left, const string_t &right) {
-	return StringComparisonOperators::EqualsOrNot<false>(left, right);
-}
 
 struct ContainsFunctor {
 	static inline bool Initialize() {
@@ -12114,19 +16714,19 @@ static void TemplatedContainsOrPosition(DataChunk &args, ExpressionState &state,
 	auto list_size = ListVector::GetListSize(list);
 	auto &child_vector = ListVector::GetEntry(list);
 
-	VectorData child_data;
-	child_vector.Orrify(list_size, child_data);
+	UnifiedVectorFormat child_data;
+	child_vector.ToUnifiedFormat(list_size, child_data);
 
-	VectorData list_data;
-	list.Orrify(count, list_data);
+	UnifiedVectorFormat list_data;
+	list.ToUnifiedFormat(count, list_data);
 	auto list_entries = (list_entry_t *)list_data.data;
 
-	VectorData value_data;
-	value_vector.Orrify(count, value_data);
+	UnifiedVectorFormat value_data;
+	value_vector.ToUnifiedFormat(count, value_data);
 
 	// not required for a comparison of nested types
-	auto child_value = FlatVector::GetData<CHILD_TYPE>(child_vector);
-	auto values = FlatVector::GetData<CHILD_TYPE>(value_vector);
+	auto child_value = (CHILD_TYPE *)child_data.data;
+	auto values = (CHILD_TYPE *)value_data.data;
 
 	for (idx_t i = 0; i < count; i++) {
 		auto list_index = list_data.sel->get_index(i);
@@ -12148,20 +16748,25 @@ static void TemplatedContainsOrPosition(DataChunk &args, ExpressionState &state,
 			}
 
 			if (!is_nested) {
-				if (ValueEqualsOrNot<CHILD_TYPE>(child_value[child_value_idx], values[value_index])) {
+				if (Equals::Operation(child_value[child_value_idx], values[value_index])) {
 					result_entries[i] = OP::UpdateResultEntries(child_idx);
 					break; // Found value in list, no need to look further
 				}
 			} else {
 				// FIXME: using Value is less efficient than modifying the vector comparison code
 				// to more efficiently compare nested types
-				if (ValueEqualsOrNot<Value>(child_vector.GetValue(child_value_idx),
-				                            value_vector.GetValue(value_index))) {
+				auto lvalue = child_vector.GetValue(child_value_idx);
+				auto rvalue = value_vector.GetValue(value_index);
+				if (Value::NotDistinctFrom(lvalue, rvalue)) {
 					result_entries[i] = OP::UpdateResultEntries(child_idx);
 					break; // Found value in list, no need to look further
 				}
 			}
 		}
+	}
+
+	if (args.AllConstant()) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	}
 }
 
@@ -12270,13 +16875,13 @@ static unique_ptr<FunctionData> ListPositionBind(ClientContext &context, ScalarF
 ScalarFunction ListContainsFun::GetFunction() {
 	return ScalarFunction({LogicalType::LIST(LogicalType::ANY), LogicalType::ANY}, // argument list
 	                      LogicalType::BOOLEAN,                                    // return type
-	                      ListContainsFunction, false, false, ListContainsBind, nullptr);
+	                      ListContainsFunction, ListContainsBind, nullptr);
 }
 
 ScalarFunction ListPositionFun::GetFunction() {
 	return ScalarFunction({LogicalType::LIST(LogicalType::ANY), LogicalType::ANY}, // argument list
 	                      LogicalType::INTEGER,                                    // return type
-	                      ListPositionFunction, false, false, ListPositionBind, nullptr);
+	                      ListPositionFunction, ListPositionBind, nullptr);
 }
 
 void ListContainsFun::RegisterFunction(BuiltinFunctions &set) {
@@ -12305,8 +16910,8 @@ void ListFlattenFunction(DataChunk &args, ExpressionState &state, Vector &result
 
 	idx_t count = args.size();
 
-	VectorData list_data;
-	input.Orrify(count, list_data);
+	UnifiedVectorFormat list_data;
+	input.ToUnifiedFormat(count, list_data);
 	auto list_entries = (list_entry_t *)list_data.data;
 
 	auto &child_vector = ListVector::GetEntry(input);
@@ -12326,12 +16931,15 @@ void ListFlattenFunction(DataChunk &args, ExpressionState &state, Vector &result
 			result_entries[i].offset = 0;
 			result_entries[i].length = 0;
 		}
+		if (args.AllConstant()) {
+			result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		}
 		return;
 	}
 
 	auto child_size = ListVector::GetListSize(input);
-	VectorData child_data;
-	child_vector.Orrify(child_size, child_data);
+	UnifiedVectorFormat child_data;
+	child_vector.ToUnifiedFormat(child_size, child_data);
 	auto child_entries = (list_entry_t *)child_data.data;
 	auto &data_vector = ListVector::GetEntry(child_vector);
 
@@ -12371,7 +16979,7 @@ void ListFlattenFunction(DataChunk &args, ExpressionState &state, Vector &result
 		offset += length;
 	}
 
-	if (input.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+	if (args.AllConstant()) {
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	}
 }
@@ -12393,6 +17001,11 @@ static unique_ptr<FunctionData> ListFlattenBind(ClientContext &context, ScalarFu
 	if (child_type.id() == LogicalType::SQLNULL) {
 		bound_function.return_type = input_type;
 		return make_unique<VariableReturnBindData>(bound_function.return_type);
+	}
+	if (child_type.id() == LogicalTypeId::UNKNOWN) {
+		bound_function.arguments[0] = LogicalType(LogicalTypeId::UNKNOWN);
+		bound_function.return_type = LogicalType(LogicalTypeId::SQLNULL);
+		return nullptr;
 	}
 	D_ASSERT(child_type.id() == LogicalTypeId::LIST);
 
@@ -12417,11 +17030,13 @@ static unique_ptr<BaseStatistics> ListFlattenStats(ClientContext &context, Funct
 
 void ListFlattenFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunction fun({LogicalType::LIST(LogicalType::LIST(LogicalType::ANY))}, LogicalType::LIST(LogicalType::ANY),
-	                   ListFlattenFunction, false, false, ListFlattenBind, nullptr, ListFlattenStats);
+	                   ListFlattenFunction, ListFlattenBind, nullptr, ListFlattenStats);
 	set.AddFunction({"flatten"}, fun);
 }
 
 } // namespace duckdb
+
+
 
 
 
@@ -12450,6 +17065,13 @@ struct ListAggregatesBindData : public FunctionData {
 	bool Equals(const FunctionData &other_p) const override {
 		auto &other = (const ListAggregatesBindData &)other_p;
 		return stype == other.stype && aggr_expr->Equals(other.aggr_expr.get());
+	}
+	static void Serialize(FieldWriter &writer, const FunctionData *bind_data_p, const ScalarFunction &function) {
+		throw NotImplementedException("FIXME: list aggr serialize");
+	}
+	static unique_ptr<FunctionData> Deserialize(ClientContext &context, FieldReader &reader,
+	                                            ScalarFunction &bound_function) {
+		throw NotImplementedException("FIXME: list aggr deserialize");
 	}
 };
 
@@ -12503,8 +17125,8 @@ struct DistinctFunctor {
 	template <class OP, class T, class MAP_TYPE = unordered_map<T, idx_t>>
 	static void ListExecuteFunction(Vector &result, Vector &state_vector, idx_t count) {
 
-		VectorData sdata;
-		state_vector.Orrify(count, sdata);
+		UnifiedVectorFormat sdata;
+		state_vector.ToUnifiedFormat(count, sdata);
 		auto states = (HistogramAggState<T, MAP_TYPE> **)sdata.data;
 
 		auto result_data = FlatVector::GetData<list_entry_t>(result);
@@ -12536,8 +17158,8 @@ struct UniqueFunctor {
 	template <class OP, class T, class MAP_TYPE = unordered_map<T, idx_t>>
 	static void ListExecuteFunction(Vector &result, Vector &state_vector, idx_t count) {
 
-		VectorData sdata;
-		state_vector.Orrify(count, sdata);
+		UnifiedVectorFormat sdata;
+		state_vector.ToUnifiedFormat(count, sdata);
 		auto states = (HistogramAggState<T, MAP_TYPE> **)sdata.data;
 
 		auto result_data = FlatVector::GetData<uint64_t>(result);
@@ -12576,18 +17198,18 @@ static void ListAggregatesFunction(DataChunk &args, ExpressionState &state, Vect
 	auto &func_expr = (BoundFunctionExpression &)state.expr;
 	auto &info = (ListAggregatesBindData &)*func_expr.bind_info;
 	auto &aggr = (BoundAggregateExpression &)*info.aggr_expr;
-	AggregateInputData aggr_input_data(aggr.bind_info.get());
+	AggregateInputData aggr_input_data(aggr.bind_info.get(), Allocator::DefaultAllocator());
 
 	D_ASSERT(aggr.function.update);
 
 	auto lists_size = ListVector::GetListSize(lists);
 	auto &child_vector = ListVector::GetEntry(lists);
 
-	VectorData child_data;
-	child_vector.Orrify(lists_size, child_data);
+	UnifiedVectorFormat child_data;
+	child_vector.ToUnifiedFormat(lists_size, child_data);
 
-	VectorData lists_data;
-	lists.Orrify(count, lists_data);
+	UnifiedVectorFormat lists_data;
+	lists.ToUnifiedFormat(count, lists_data);
 	auto list_entries = (list_entry_t *)lists_data.data;
 
 	// state_buffer holds the state for each list of this chunk
@@ -12628,10 +17250,8 @@ static void ListAggregatesFunction(DataChunk &args, ExpressionState &state, Vect
 		}
 
 		for (idx_t child_idx = 0; child_idx < list_entry.length; child_idx++) {
-
 			// states vector is full, update
 			if (states_idx == STANDARD_VECTOR_SIZE) {
-
 				// update the aggregate state(s)
 				Vector slice = Vector(child_vector, sel_vector, states_idx);
 				aggr.function.update(&slice, aggr_input_data, 1, state_vector_update, states_idx);
@@ -12692,12 +17312,49 @@ static void ListAggregatesFunction(DataChunk &args, ExpressionState &state, Vect
 			    result, state_vector.state_vector, count);
 			break;
 		case PhysicalType::INT32:
-			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, int32_t>(
-			    result, state_vector.state_vector, count);
+			if (key_type.id() == LogicalTypeId::DATE) {
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, date_t>(
+				    result, state_vector.state_vector, count);
+			} else {
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, int32_t>(
+				    result, state_vector.state_vector, count);
+			}
 			break;
 		case PhysicalType::INT64:
-			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, int64_t>(
-			    result, state_vector.state_vector, count);
+			switch (key_type.id()) {
+			case LogicalTypeId::TIME:
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, dtime_t>(
+				    result, state_vector.state_vector, count);
+				break;
+			case LogicalTypeId::TIME_TZ:
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, dtime_tz_t>(
+				    result, state_vector.state_vector, count);
+				break;
+			case LogicalTypeId::TIMESTAMP:
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, timestamp_t>(
+				    result, state_vector.state_vector, count);
+				break;
+			case LogicalTypeId::TIMESTAMP_MS:
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, timestamp_ms_t>(
+				    result, state_vector.state_vector, count);
+				break;
+			case LogicalTypeId::TIMESTAMP_NS:
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, timestamp_ns_t>(
+				    result, state_vector.state_vector, count);
+				break;
+			case LogicalTypeId::TIMESTAMP_SEC:
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, timestamp_sec_t>(
+				    result, state_vector.state_vector, count);
+				break;
+			case LogicalTypeId::TIMESTAMP_TZ:
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, timestamp_tz_t>(
+				    result, state_vector.state_vector, count);
+				break;
+			default:
+				FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, int64_t>(
+				    result, state_vector.state_vector, count);
+				break;
+			}
 			break;
 		case PhysicalType::FLOAT:
 			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, float>(
@@ -12707,34 +17364,6 @@ static void ListAggregatesFunction(DataChunk &args, ExpressionState &state, Vect
 			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, double>(
 			    result, state_vector.state_vector, count);
 			break;
-		case PhysicalType::DATE32:
-			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, int32_t>(
-			    result, state_vector.state_vector, count);
-			break;
-		case PhysicalType::DATE64:
-			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, int64_t>(
-			    result, state_vector.state_vector, count);
-			break;
-		case PhysicalType::TIMESTAMP:
-			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, int64_t>(
-			    result, state_vector.state_vector, count);
-			break;
-		case PhysicalType::TIME32:
-			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, int32_t>(
-			    result, state_vector.state_vector, count);
-			break;
-		case PhysicalType::TIME64:
-			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeValueFunctor, int64_t>(
-			    result, state_vector.state_vector, count);
-			break;
-		case PhysicalType::STRING:
-			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeStringValueFunctor, string>(
-			    result, state_vector.state_vector, count);
-			break;
-		case PhysicalType::LARGE_STRING:
-			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeStringValueFunctor, string>(
-			    result, state_vector.state_vector, count);
-			break;
 		case PhysicalType::VARCHAR:
 			FUNCTION_FUNCTOR::template ListExecuteFunction<FinalizeStringValueFunctor, string>(
 			    result, state_vector.state_vector, count);
@@ -12742,6 +17371,10 @@ static void ListAggregatesFunction(DataChunk &args, ExpressionState &state, Vect
 		default:
 			throw InternalException("Unimplemented histogram aggregate");
 		}
+	}
+
+	if (args.AllConstant()) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	}
 }
 
@@ -12764,20 +17397,34 @@ static void ListUniqueFunction(DataChunk &args, ExpressionState &state, Vector &
 }
 
 template <bool IS_AGGR = false>
-static unique_ptr<FunctionData> ListAggregatesBindFunction(ClientContext &context, ScalarFunction &bound_function,
-                                                           const LogicalType &list_child_type,
-                                                           AggregateFunction &aggr_function) {
+static unique_ptr<FunctionData>
+ListAggregatesBindFunction(ClientContext &context, ScalarFunction &bound_function, const LogicalType &list_child_type,
+                           AggregateFunction &aggr_function, vector<unique_ptr<Expression>> &arguments) {
 
 	// create the child expression and its type
 	vector<unique_ptr<Expression>> children;
 	auto expr = make_unique<BoundConstantExpression>(Value(list_child_type));
 	children.push_back(move(expr));
+	// push any extra arguments into the list aggregate bind
+	if (arguments.size() > 2) {
+		for (idx_t i = 2; i < arguments.size(); i++) {
+			children.push_back(move(arguments[i]));
+		}
+		arguments.resize(2);
+	}
 
-	auto bound_aggr_function = AggregateFunction::BindAggregateFunction(context, aggr_function, move(children));
+	FunctionBinder function_binder(context);
+	auto bound_aggr_function = function_binder.BindAggregateFunction(aggr_function, move(children));
 	bound_function.arguments[0] = LogicalType::LIST(bound_aggr_function->function.arguments[0]);
 
 	if (IS_AGGR) {
 		bound_function.return_type = bound_aggr_function->function.return_type;
+	}
+	// check if the aggregate function consumed all the extra input arguments
+	if (bound_aggr_function->children.size() > 1) {
+		throw InvalidInputException(
+		    "Aggregate function %s is not supported for list_aggr: extra arguments were not removed during bind",
+		    bound_aggr_function->ToString());
 	}
 
 	return make_unique<ListAggregatesBindData>(bound_function.return_type, move(bound_aggr_function));
@@ -12797,12 +17444,11 @@ static unique_ptr<FunctionData> ListAggregatesBind(ClientContext &context, Scala
 
 	string function_name = "histogram";
 	if (IS_AGGR) { // get the name of the aggregate function
-
 		if (!arguments[1]->IsFoldable()) {
 			throw InvalidInputException("Aggregate function name must be a constant");
 		}
 		// get the function name
-		Value function_value = ExpressionExecutor::EvaluateScalar(*arguments[1]);
+		Value function_value = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
 		function_name = function_value.ToString();
 	}
 
@@ -12822,31 +17468,36 @@ static unique_ptr<FunctionData> ListAggregatesBind(ClientContext &context, Scala
 	string error;
 	vector<LogicalType> types;
 	types.push_back(list_child_type);
-	auto best_function_idx = Function::BindFunction(func->name, func->functions, types, error);
+	// push any extra arguments into the type list
+	for (idx_t i = 2; i < arguments.size(); i++) {
+		types.push_back(arguments[i]->return_type);
+	}
+
+	FunctionBinder function_binder(context);
+	auto best_function_idx = function_binder.BindFunction(func->name, func->functions, types, error);
 	if (best_function_idx == DConstants::INVALID_INDEX) {
-		throw BinderException("No matching aggregate function");
+		throw BinderException("No matching aggregate function\n%s", error);
 	}
 
 	// found a matching function, bind it as an aggregate
-	auto &best_function = func->functions[best_function_idx];
-
+	auto best_function = func->functions.GetFunctionByOffset(best_function_idx);
 	if (IS_AGGR) {
-		return ListAggregatesBindFunction<IS_AGGR>(context, bound_function, list_child_type, best_function);
+		return ListAggregatesBindFunction<IS_AGGR>(context, bound_function, list_child_type, best_function, arguments);
 	}
 
 	// create the unordered map histogram function
 	D_ASSERT(best_function.arguments.size() == 1);
 	auto key_type = best_function.arguments[0];
 	auto aggr_function = HistogramFun::GetHistogramUnorderedMap(key_type);
-	return ListAggregatesBindFunction<IS_AGGR>(context, bound_function, list_child_type, aggr_function);
+	return ListAggregatesBindFunction<IS_AGGR>(context, bound_function, list_child_type, aggr_function, arguments);
 }
 
 static unique_ptr<FunctionData> ListAggregateBind(ClientContext &context, ScalarFunction &bound_function,
                                                   vector<unique_ptr<Expression>> &arguments) {
 
 	// the list column and the name of the aggregate function
-	D_ASSERT(bound_function.arguments.size() == 2);
-	D_ASSERT(arguments.size() == 2);
+	D_ASSERT(bound_function.arguments.size() >= 2);
+	D_ASSERT(arguments.size() >= 2);
 
 	return ListAggregatesBind<true>(context, bound_function, arguments);
 }
@@ -12873,18 +17524,21 @@ static unique_ptr<FunctionData> ListUniqueBind(ClientContext &context, ScalarFun
 
 ScalarFunction ListAggregateFun::GetFunction() {
 	auto result = ScalarFunction({LogicalType::LIST(LogicalType::ANY), LogicalType::VARCHAR}, LogicalType::ANY,
-	                             ListAggregateFunction, false, false, ListAggregateBind);
+	                             ListAggregateFunction, ListAggregateBind);
 	result.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	result.varargs = LogicalType::ANY;
+	result.serialize = ListAggregatesBindData::Serialize;
+	result.deserialize = ListAggregatesBindData::Deserialize;
 	return result;
 }
 
 ScalarFunction ListDistinctFun::GetFunction() {
 	return ScalarFunction({LogicalType::LIST(LogicalType::ANY)}, LogicalType::LIST(LogicalType::ANY),
-	                      ListDistinctFunction, false, false, ListDistinctBind);
+	                      ListDistinctFunction, ListDistinctBind);
 }
 
 ScalarFunction ListUniqueFun::GetFunction() {
-	return ScalarFunction({LogicalType::LIST(LogicalType::ANY)}, LogicalType::UBIGINT, ListUniqueFunction, false, false,
+	return ScalarFunction({LogicalType::LIST(LogicalType::ANY)}, LogicalType::UBIGINT, ListUniqueFunction,
 	                      ListUniqueBind);
 }
 
@@ -12901,6 +17555,7 @@ void ListUniqueFun::RegisterFunction(BuiltinFunctions &set) {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -12925,10 +17580,10 @@ static void ListConcatFunction(DataChunk &args, ExpressionState &state, Vector &
 		return;
 	}
 
-	VectorData lhs_data;
-	VectorData rhs_data;
-	lhs.Orrify(count, lhs_data);
-	rhs.Orrify(count, rhs_data);
+	UnifiedVectorFormat lhs_data;
+	UnifiedVectorFormat rhs_data;
+	lhs.ToUnifiedFormat(count, lhs_data);
+	rhs.ToUnifiedFormat(count, rhs_data);
 	auto lhs_entries = (list_entry_t *)lhs_data.data;
 	auto rhs_entries = (list_entry_t *)rhs_data.data;
 
@@ -12936,10 +17591,10 @@ static void ListConcatFunction(DataChunk &args, ExpressionState &state, Vector &
 	auto rhs_list_size = ListVector::GetListSize(rhs);
 	auto &lhs_child = ListVector::GetEntry(lhs);
 	auto &rhs_child = ListVector::GetEntry(rhs);
-	VectorData lhs_child_data;
-	VectorData rhs_child_data;
-	lhs_child.Orrify(lhs_list_size, lhs_child_data);
-	rhs_child.Orrify(rhs_list_size, rhs_child_data);
+	UnifiedVectorFormat lhs_child_data;
+	UnifiedVectorFormat rhs_child_data;
+	lhs_child.ToUnifiedFormat(lhs_list_size, lhs_child_data);
+	rhs_child.ToUnifiedFormat(rhs_list_size, rhs_child_data);
 
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	auto result_entries = FlatVector::GetData<list_entry_t>(result);
@@ -12982,7 +17637,9 @@ static unique_ptr<FunctionData> ListConcatBind(ClientContext &context, ScalarFun
 
 	auto &lhs = arguments[0]->return_type;
 	auto &rhs = arguments[1]->return_type;
-	if (lhs.id() == LogicalTypeId::SQLNULL || rhs.id() == LogicalTypeId::SQLNULL) {
+	if (lhs.id() == LogicalTypeId::UNKNOWN || rhs.id() == LogicalTypeId::UNKNOWN) {
+		throw ParameterNotResolvedException();
+	} else if (lhs.id() == LogicalTypeId::SQLNULL || rhs.id() == LogicalTypeId::SQLNULL) {
 		// we mimic postgres behaviour: list_concat(NULL, my_list) = my_list
 		bound_function.arguments[0] = lhs;
 		bound_function.arguments[1] = rhs;
@@ -13024,8 +17681,8 @@ static unique_ptr<BaseStatistics> ListConcatStats(ClientContext &context, Functi
 ScalarFunction ListConcatFun::GetFunction() {
 	// the arguments and return types are actually set in the binder function
 	auto fun = ScalarFunction({LogicalType::LIST(LogicalType::ANY), LogicalType::LIST(LogicalType::ANY)},
-	                          LogicalType::LIST(LogicalType::ANY), ListConcatFunction, false, false, ListConcatBind,
-	                          nullptr, ListConcatStats);
+	                          LogicalType::LIST(LogicalType::ANY), ListConcatFunction, ListConcatBind, nullptr,
+	                          ListConcatStats);
 	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	return fun;
 }
@@ -13050,10 +17707,10 @@ void ListConcatFun::RegisterFunction(BuiltinFunctions &set) {
 namespace duckdb {
 
 template <class T, bool HEAP_REF = false, bool VALIDITY_ONLY = false>
-void ListExtractTemplate(idx_t count, VectorData &list_data, VectorData &offsets_data, Vector &child_vector,
-                         idx_t list_size, Vector &result) {
-	VectorData child_data;
-	child_vector.Orrify(list_size, child_data);
+void ListExtractTemplate(idx_t count, UnifiedVectorFormat &list_data, UnifiedVectorFormat &offsets_data,
+                         Vector &child_vector, idx_t list_size, Vector &result) {
+	UnifiedVectorFormat child_format;
+	child_vector.ToUnifiedFormat(list_size, child_format);
 
 	T *result_data;
 
@@ -13070,40 +17727,46 @@ void ListExtractTemplate(idx_t count, VectorData &list_data, VectorData &offsets
 
 	// this is lifted from ExecuteGenericLoop because we can't push the list child data into this otherwise
 	// should have gone with GetValue perhaps
+	auto child_data = (T *)child_format.data;
 	for (idx_t i = 0; i < count; i++) {
 		auto list_index = list_data.sel->get_index(i);
 		auto offsets_index = offsets_data.sel->get_index(i);
-		if (list_data.validity.RowIsValid(list_index) && offsets_data.validity.RowIsValid(offsets_index)) {
-			auto list_entry = ((list_entry_t *)list_data.data)[list_index];
-			auto offsets_entry = ((int64_t *)offsets_data.data)[offsets_index];
+		if (!list_data.validity.RowIsValid(list_index)) {
+			result_mask.SetInvalid(i);
+			continue;
+		}
+		if (!offsets_data.validity.RowIsValid(offsets_index)) {
+			result_mask.SetInvalid(i);
+			continue;
+		}
+		auto list_entry = ((list_entry_t *)list_data.data)[list_index];
+		auto offsets_entry = ((int64_t *)offsets_data.data)[offsets_index];
 
-			// 1-based indexing
-			if (offsets_entry == 0) {
+		// 1-based indexing
+		if (offsets_entry == 0) {
+			result_mask.SetInvalid(i);
+			continue;
+		}
+		offsets_entry = (offsets_entry > 0) ? offsets_entry - 1 : offsets_entry;
+
+		idx_t child_offset;
+		if (offsets_entry < 0) {
+			if ((idx_t)-offsets_entry > list_entry.length) {
 				result_mask.SetInvalid(i);
 				continue;
 			}
-			offsets_entry = (offsets_entry > 0) ? offsets_entry - 1 : offsets_entry;
-
-			idx_t child_offset;
-			if (offsets_entry < 0) {
-				if ((idx_t)-offsets_entry > list_entry.length) {
-					result_mask.SetInvalid(i);
-					continue;
-				}
-				child_offset = list_entry.offset + list_entry.length + offsets_entry;
-			} else {
-				if ((idx_t)offsets_entry >= list_entry.length) {
-					result_mask.SetInvalid(i);
-					continue;
-				}
-				child_offset = list_entry.offset + offsets_entry;
-			}
-			if (child_data.validity.RowIsValid(child_offset)) {
-				if (!VALIDITY_ONLY) {
-					result_data[i] = ((T *)child_data.data)[child_offset];
-				}
-			} else {
+			child_offset = list_entry.offset + list_entry.length + offsets_entry;
+		} else {
+			if ((idx_t)offsets_entry >= list_entry.length) {
 				result_mask.SetInvalid(i);
+				continue;
+			}
+			child_offset = list_entry.offset + offsets_entry;
+		}
+		auto child_index = child_format.sel->get_index(child_offset);
+		if (child_format.validity.RowIsValid(child_index)) {
+			if (!VALIDITY_ONLY) {
+				result_data[i] = child_data[child_index];
 			}
 		} else {
 			result_mask.SetInvalid(i);
@@ -13113,8 +17776,8 @@ void ListExtractTemplate(idx_t count, VectorData &list_data, VectorData &offsets
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	}
 }
-static void ExecuteListExtractInternal(const idx_t count, VectorData &list, VectorData &offsets, Vector &child_vector,
-                                       idx_t list_size, Vector &result) {
+static void ExecuteListExtractInternal(const idx_t count, UnifiedVectorFormat &list, UnifiedVectorFormat &offsets,
+                                       Vector &child_vector, idx_t list_size, Vector &result) {
 	D_ASSERT(child_vector.GetType() == result.GetType());
 	switch (result.GetType().InternalType()) {
 	case PhysicalType::BOOL:
@@ -13185,11 +17848,11 @@ static void ExecuteListExtractInternal(const idx_t count, VectorData &list, Vect
 
 static void ExecuteListExtract(Vector &result, Vector &list, Vector &offsets, const idx_t count) {
 	D_ASSERT(list.GetType().id() == LogicalTypeId::LIST);
-	VectorData list_data;
-	VectorData offsets_data;
+	UnifiedVectorFormat list_data;
+	UnifiedVectorFormat offsets_data;
 
-	list.Orrify(count, list_data);
-	offsets.Orrify(count, offsets_data);
+	list.ToUnifiedFormat(count, list_data);
+	offsets.ToUnifiedFormat(count, offsets_data);
 	ExecuteListExtractInternal(count, list_data, offsets_data, ListVector::GetEntry(list),
 	                           ListVector::GetListSize(list), result);
 	result.Verify(count);
@@ -13198,7 +17861,7 @@ static void ExecuteListExtract(Vector &result, Vector &list, Vector &offsets, co
 static void ExecuteStringExtract(Vector &result, Vector &input_vector, Vector &subscript_vector, const idx_t count) {
 	BinaryExecutor::Execute<string_t, int64_t, string_t>(
 	    input_vector, subscript_vector, result, count, [&](string_t input_string, int64_t subscript) {
-		    return SubstringFun::SubstringScalarFunction(result, input_string, subscript, 1);
+		    return SubstringFun::SubstringUnicode(result, input_string, subscript, 1);
 	    });
 }
 
@@ -13259,10 +17922,9 @@ static unique_ptr<BaseStatistics> ListExtractStats(ClientContext &context, Funct
 void ListExtractFun::RegisterFunction(BuiltinFunctions &set) {
 	// the arguments and return types are actually set in the binder function
 	ScalarFunction lfun({LogicalType::LIST(LogicalType::ANY), LogicalType::BIGINT}, LogicalType::ANY,
-	                    ListExtractFunction, false, false, ListExtractBind, nullptr, ListExtractStats);
+	                    ListExtractFunction, ListExtractBind, nullptr, ListExtractStats);
 
-	ScalarFunction sfun({LogicalType::VARCHAR, LogicalType::BIGINT}, LogicalType::VARCHAR, ListExtractFunction, false,
-	                    false, nullptr);
+	ScalarFunction sfun({LogicalType::VARCHAR, LogicalType::BIGINT}, LogicalType::VARCHAR, ListExtractFunction);
 
 	ScalarFunctionSet list_extract("list_extract");
 	list_extract.AddFunction(lfun);
@@ -13279,6 +17941,400 @@ void ListExtractFun::RegisterFunction(BuiltinFunctions &set) {
 	array_extract.AddFunction(sfun);
 	array_extract.AddFunction(StructExtractFun::GetFunction());
 	set.AddFunction(array_extract);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+struct ListLambdaBindData : public FunctionData {
+	ListLambdaBindData(const LogicalType &stype_p, unique_ptr<Expression> lambda_expr);
+	~ListLambdaBindData() override;
+
+	LogicalType stype;
+	unique_ptr<Expression> lambda_expr;
+
+public:
+	bool Equals(const FunctionData &other_p) const override;
+	unique_ptr<FunctionData> Copy() const override;
+	static void Serialize(FieldWriter &writer, const FunctionData *bind_data_p, const ScalarFunction &function) {
+		throw NotImplementedException("FIXME: list lambda serialize");
+	}
+	static unique_ptr<FunctionData> Deserialize(ClientContext &context, FieldReader &reader,
+	                                            ScalarFunction &bound_function) {
+		throw NotImplementedException("FIXME: list lambda deserialize");
+	}
+};
+
+ListLambdaBindData::ListLambdaBindData(const LogicalType &stype_p, unique_ptr<Expression> lambda_expr_p)
+    : stype(stype_p), lambda_expr(move(lambda_expr_p)) {
+}
+
+unique_ptr<FunctionData> ListLambdaBindData::Copy() const {
+	return make_unique<ListLambdaBindData>(stype, lambda_expr->Copy());
+}
+
+bool ListLambdaBindData::Equals(const FunctionData &other_p) const {
+	auto &other = (ListLambdaBindData &)other_p;
+	return lambda_expr->Equals(other.lambda_expr.get()) && stype == other.stype;
+}
+
+ListLambdaBindData::~ListLambdaBindData() {
+}
+
+static void AppendTransformedToResult(Vector &lambda_vector, idx_t &elem_cnt, Vector &result) {
+
+	// append the lambda_vector to the result list
+	UnifiedVectorFormat lambda_child_data;
+	lambda_vector.ToUnifiedFormat(elem_cnt, lambda_child_data);
+	ListVector::Append(result, lambda_vector, *lambda_child_data.sel, elem_cnt, 0);
+}
+
+static void AppendFilteredToResult(Vector &lambda_vector, list_entry_t *result_entries, idx_t &elem_cnt, Vector &result,
+                                   idx_t &curr_list_len, idx_t &curr_list_offset, idx_t &appended_lists_cnt,
+                                   vector<idx_t> &lists_len, idx_t &curr_original_list_len, DataChunk &input_chunk) {
+
+	idx_t true_count = 0;
+	SelectionVector true_sel(elem_cnt);
+	auto lambda_values = FlatVector::GetData<bool>(lambda_vector);
+	auto &lambda_validity = FlatVector::Validity(lambda_vector);
+
+	// compute the new lengths and offsets, and create a selection vector
+	for (idx_t i = 0; i < elem_cnt; i++) {
+
+		while (appended_lists_cnt < lists_len.size() && lists_len[appended_lists_cnt] == 0) {
+			result_entries[appended_lists_cnt].offset = curr_list_offset;
+			result_entries[appended_lists_cnt].length = 0;
+			appended_lists_cnt++;
+		}
+
+		// found a true value
+		if (lambda_validity.RowIsValid(i)) {
+			if (lambda_values[i] > 0) {
+				true_sel.set_index(true_count++, i);
+				curr_list_len++;
+			}
+		}
+		curr_original_list_len++;
+
+		if (lists_len[appended_lists_cnt] == curr_original_list_len) {
+			result_entries[appended_lists_cnt].offset = curr_list_offset;
+			result_entries[appended_lists_cnt].length = curr_list_len;
+			curr_list_offset += curr_list_len;
+			appended_lists_cnt++;
+			curr_list_len = 0;
+			curr_original_list_len = 0;
+		}
+	}
+
+	while (appended_lists_cnt < lists_len.size() && lists_len[appended_lists_cnt] == 0) {
+		result_entries[appended_lists_cnt].offset = curr_list_offset;
+		result_entries[appended_lists_cnt].length = 0;
+		appended_lists_cnt++;
+	}
+
+	// slice to get the new lists and append them to the result
+	Vector new_lists(input_chunk.data[0], true_sel, true_count);
+	new_lists.Flatten(true_count);
+	UnifiedVectorFormat new_lists_child_data;
+	new_lists.ToUnifiedFormat(true_count, new_lists_child_data);
+	ListVector::Append(result, new_lists, *new_lists_child_data.sel, true_count, 0);
+}
+
+static void ExecuteExpression(vector<LogicalType> &types, vector<LogicalType> &result_types, idx_t &elem_cnt,
+                              SelectionVector &sel, vector<SelectionVector> &sel_vectors, DataChunk &input_chunk,
+                              DataChunk &lambda_chunk, Vector &child_vector, DataChunk &args,
+                              ExpressionExecutor &expr_executor) {
+
+	input_chunk.SetCardinality(elem_cnt);
+	lambda_chunk.SetCardinality(elem_cnt);
+
+	// set the list child vector
+	Vector slice(child_vector, sel, elem_cnt);
+	slice.Flatten(elem_cnt);
+	input_chunk.data[0].Reference(slice);
+
+	// set the other vectors
+	vector<Vector> slices;
+	for (idx_t col_idx = 0; col_idx < args.ColumnCount() - 1; col_idx++) {
+		slices.emplace_back(Vector(args.data[col_idx + 1], sel_vectors[col_idx], elem_cnt));
+		slices[col_idx].Flatten(elem_cnt);
+		input_chunk.data[col_idx + 1].Reference(slices[col_idx]);
+	}
+
+	// execute the lambda expression
+	expr_executor.Execute(input_chunk, lambda_chunk);
+}
+
+template <bool IS_TRANSFORM = true>
+static void ListLambdaFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+
+	// always at least the list argument
+	D_ASSERT(args.ColumnCount() >= 1);
+
+	auto count = args.size();
+	Vector &lists = args.data[0];
+
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto result_entries = FlatVector::GetData<list_entry_t>(result);
+	auto &result_validity = FlatVector::Validity(result);
+
+	if (lists.GetType().id() == LogicalTypeId::SQLNULL) {
+		result_validity.SetInvalid(0);
+		return;
+	}
+
+	// e.g. window functions in sub queries return dictionary vectors, which segfault on expression execution
+	// if not flattened first
+	for (idx_t i = 1; i < args.ColumnCount(); i++) {
+		if (args.data[i].GetVectorType() != VectorType::FLAT_VECTOR &&
+		    args.data[i].GetVectorType() != VectorType::CONSTANT_VECTOR) {
+			args.data[i].Flatten(count);
+		}
+	}
+
+	// get the lists data
+	UnifiedVectorFormat lists_data;
+	lists.ToUnifiedFormat(count, lists_data);
+	auto list_entries = (list_entry_t *)lists_data.data;
+
+	// get the lambda expression
+	auto &func_expr = (BoundFunctionExpression &)state.expr;
+	auto &info = (ListLambdaBindData &)*func_expr.bind_info;
+	auto &lambda_expr = info.lambda_expr;
+
+	// get the child vector and child data
+	auto lists_size = ListVector::GetListSize(lists);
+	auto &child_vector = ListVector::GetEntry(lists);
+	child_vector.Flatten(lists_size);
+	UnifiedVectorFormat child_data;
+	child_vector.ToUnifiedFormat(lists_size, child_data);
+
+	// to slice the child vector
+	SelectionVector sel(STANDARD_VECTOR_SIZE);
+
+	// this vector never contains more than one element
+	vector<LogicalType> result_types;
+	result_types.push_back(lambda_expr->return_type);
+
+	// non-lambda parameter columns
+	vector<UnifiedVectorFormat> columns;
+	vector<idx_t> indexes;
+	vector<SelectionVector> sel_vectors;
+
+	vector<LogicalType> types;
+	types.push_back(child_vector.GetType());
+
+	// skip the list column
+	for (idx_t i = 1; i < args.ColumnCount(); i++) {
+		columns.emplace_back(UnifiedVectorFormat());
+		args.data[i].ToUnifiedFormat(count, columns[i - 1]);
+		indexes.push_back(0);
+		sel_vectors.emplace_back(SelectionVector(STANDARD_VECTOR_SIZE));
+		types.push_back(args.data[i].GetType());
+	}
+
+	// get the expression executor
+	ExpressionExecutor expr_executor(state.GetContext(), *lambda_expr);
+
+	// these are only for the list_filter
+	vector<idx_t> lists_len;
+	idx_t curr_list_len = 0;
+	idx_t curr_list_offset = 0;
+	idx_t appended_lists_cnt = 0;
+	idx_t curr_original_list_len = 0;
+
+	if (!IS_TRANSFORM) {
+		lists_len.reserve(count);
+	}
+
+	DataChunk input_chunk;
+	DataChunk lambda_chunk;
+	input_chunk.InitializeEmpty(types);
+	lambda_chunk.Initialize(Allocator::DefaultAllocator(), result_types);
+
+	// loop over the child entries and create chunks to be executed by the expression executor
+	idx_t elem_cnt = 0;
+	idx_t offset = 0;
+	for (idx_t row_idx = 0; row_idx < count; row_idx++) {
+
+		auto lists_index = lists_data.sel->get_index(row_idx);
+		const auto &list_entry = list_entries[lists_index];
+
+		// set the result to NULL for this row
+		if (!lists_data.validity.RowIsValid(lists_index)) {
+			result_validity.SetInvalid(row_idx);
+			if (!IS_TRANSFORM) {
+				lists_len.push_back(0);
+			}
+			continue;
+		}
+
+		// set the length and offset of the resulting lists of list_transform
+		if (IS_TRANSFORM) {
+			result_entries[row_idx].offset = offset;
+			result_entries[row_idx].length = list_entry.length;
+			offset += list_entry.length;
+		} else {
+			lists_len.push_back(list_entry.length);
+		}
+
+		// empty list, nothing to execute
+		if (list_entry.length == 0) {
+			continue;
+		}
+
+		// get the data indexes
+		for (idx_t col_idx = 0; col_idx < args.ColumnCount() - 1; col_idx++) {
+			indexes[col_idx] = columns[col_idx].sel->get_index(row_idx);
+		}
+
+		// iterate list elements and create transformed expression columns
+		for (idx_t child_idx = 0; child_idx < list_entry.length; child_idx++) {
+			// reached STANDARD_VECTOR_SIZE elements
+			if (elem_cnt == STANDARD_VECTOR_SIZE) {
+				lambda_chunk.Reset();
+				ExecuteExpression(types, result_types, elem_cnt, sel, sel_vectors, input_chunk, lambda_chunk,
+				                  child_vector, args, expr_executor);
+
+				auto &lambda_vector = lambda_chunk.data[0];
+
+				if (IS_TRANSFORM) {
+					AppendTransformedToResult(lambda_vector, elem_cnt, result);
+				} else {
+					AppendFilteredToResult(lambda_vector, result_entries, elem_cnt, result, curr_list_len,
+					                       curr_list_offset, appended_lists_cnt, lists_len, curr_original_list_len,
+					                       input_chunk);
+				}
+				elem_cnt = 0;
+			}
+
+			// to slice the child vector
+			auto source_idx = child_data.sel->get_index(list_entry.offset + child_idx);
+			sel.set_index(elem_cnt, source_idx);
+
+			// for each column, set the index of the selection vector to slice properly
+			for (idx_t col_idx = 0; col_idx < args.ColumnCount() - 1; col_idx++) {
+				sel_vectors[col_idx].set_index(elem_cnt, indexes[col_idx]);
+			}
+			elem_cnt++;
+		}
+	}
+
+	lambda_chunk.Reset();
+	ExecuteExpression(types, result_types, elem_cnt, sel, sel_vectors, input_chunk, lambda_chunk, child_vector, args,
+	                  expr_executor);
+	auto &lambda_vector = lambda_chunk.data[0];
+
+	if (IS_TRANSFORM) {
+		AppendTransformedToResult(lambda_vector, elem_cnt, result);
+	} else {
+		AppendFilteredToResult(lambda_vector, result_entries, elem_cnt, result, curr_list_len, curr_list_offset,
+		                       appended_lists_cnt, lists_len, curr_original_list_len, input_chunk);
+	}
+
+	if (args.AllConstant()) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+}
+
+static void ListTransformFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	ListLambdaFunction<>(args, state, result);
+}
+
+static void ListFilterFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	ListLambdaFunction<false>(args, state, result);
+}
+
+template <int64_t LAMBDA_PARAM_CNT>
+static unique_ptr<FunctionData> ListLambdaBind(ClientContext &context, ScalarFunction &bound_function,
+                                               vector<unique_ptr<Expression>> &arguments) {
+
+	auto &bound_lambda_expr = (BoundLambdaExpression &)*arguments[1];
+	if (bound_lambda_expr.parameter_count != LAMBDA_PARAM_CNT) {
+		throw BinderException("Incorrect number of parameters in lambda function! " + bound_function.name +
+		                      " expects " + to_string(LAMBDA_PARAM_CNT) + " parameter(s).");
+	}
+
+	if (arguments[0]->return_type.id() == LogicalTypeId::SQLNULL) {
+		bound_function.arguments.pop_back();
+		bound_function.arguments[0] = LogicalType::SQLNULL;
+		bound_function.return_type = LogicalType::SQLNULL;
+		return make_unique<VariableReturnBindData>(bound_function.return_type);
+	}
+
+	if (arguments[0]->return_type.id() == LogicalTypeId::UNKNOWN) {
+		throw ParameterNotResolvedException();
+	}
+
+	D_ASSERT(arguments[0]->return_type.id() == LogicalTypeId::LIST);
+
+	// get the lambda expression and put it in the bind info
+	auto lambda_expr = move(bound_lambda_expr.lambda_expr);
+	return make_unique<ListLambdaBindData>(bound_function.return_type, move(lambda_expr));
+}
+
+static unique_ptr<FunctionData> ListTransformBind(ClientContext &context, ScalarFunction &bound_function,
+                                                  vector<unique_ptr<Expression>> &arguments) {
+
+	// at least the list column and the lambda function
+	D_ASSERT(arguments.size() == 2);
+	if (arguments[1]->expression_class != ExpressionClass::BOUND_LAMBDA) {
+		throw BinderException("Invalid lambda expression!");
+	}
+
+	auto &bound_lambda_expr = (BoundLambdaExpression &)*arguments[1];
+	bound_function.return_type = LogicalType::LIST(bound_lambda_expr.lambda_expr->return_type);
+	return ListLambdaBind<1>(context, bound_function, arguments);
+}
+
+static unique_ptr<FunctionData> ListFilterBind(ClientContext &context, ScalarFunction &bound_function,
+                                               vector<unique_ptr<Expression>> &arguments) {
+
+	// at least the list column and the lambda function
+	D_ASSERT(arguments.size() == 2);
+	if (arguments[1]->expression_class != ExpressionClass::BOUND_LAMBDA) {
+		throw BinderException("Invalid lambda expression!");
+	}
+	bound_function.return_type = arguments[0]->return_type;
+	return ListLambdaBind<1>(context, bound_function, arguments);
+}
+
+void ListTransformFun::RegisterFunction(BuiltinFunctions &set) {
+
+	ScalarFunction fun("list_transform", {LogicalType::LIST(LogicalType::ANY), LogicalType::LAMBDA},
+	                   LogicalType::LIST(LogicalType::ANY), ListTransformFunction, ListTransformBind, nullptr, nullptr);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	fun.serialize = ListLambdaBindData::Serialize;
+	fun.deserialize = ListLambdaBindData::Deserialize;
+	set.AddFunction(fun);
+
+	fun.name = "array_transform";
+	set.AddFunction(fun);
+	fun.name = "list_apply";
+	set.AddFunction(fun);
+	fun.name = "array_apply";
+	set.AddFunction(fun);
+}
+
+void ListFilterFun::RegisterFunction(BuiltinFunctions &set) {
+
+	ScalarFunction fun("list_filter", {LogicalType::LIST(LogicalType::ANY), LogicalType::LAMBDA},
+	                   LogicalType::LIST(LogicalType::ANY), ListFilterFunction, ListFilterBind, nullptr, nullptr);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	fun.serialize = ListLambdaBindData::Serialize;
+	fun.deserialize = ListLambdaBindData::Deserialize;
+	set.AddFunction(fun);
+
+	fun.name = "array_filter";
+	set.AddFunction(fun);
 }
 
 } // namespace duckdb
@@ -13374,6 +18430,9 @@ void SinkDataChunk(Vector *child_vector, SelectionVector &sel, idx_t offset_list
 	payload_chunk.data[0].Reference(payload_vector);
 	payload_chunk.SetCardinality(offset_lists_indices);
 
+	key_chunk.Verify();
+	payload_chunk.Verify();
+
 	// sink
 	local_sort_state.SinkChunk(key_chunk, payload_chunk);
 	data_to_sort = true;
@@ -13382,12 +18441,12 @@ void SinkDataChunk(Vector *child_vector, SelectionVector &sel, idx_t offset_list
 static void ListSortFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() >= 1 && args.ColumnCount() <= 3);
 	auto count = args.size();
-	Vector &lists = args.data[0];
+	Vector &input_lists = args.data[0];
 
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	auto &result_validity = FlatVector::Validity(result);
 
-	if (lists.GetType().id() == LogicalTypeId::SQLNULL) {
+	if (input_lists.GetType().id() == LogicalTypeId::SQLNULL) {
 		result_validity.SetInvalid(0);
 		return;
 	}
@@ -13402,15 +18461,18 @@ static void ListSortFunction(DataChunk &args, ExpressionState &state, Vector &re
 	LocalSortState local_sort_state;
 	local_sort_state.Initialize(global_sort_state, buffer_manager);
 
+	// this ensures that we do not change the order of the entries in the input chunk
+	VectorOperations::Copy(input_lists, result, count, 0, 0);
+
 	// get the child vector
-	auto lists_size = ListVector::GetListSize(lists);
-	auto &child_vector = ListVector::GetEntry(lists);
-	VectorData child_data;
-	child_vector.Orrify(lists_size, child_data);
+	auto lists_size = ListVector::GetListSize(result);
+	auto &child_vector = ListVector::GetEntry(result);
+	UnifiedVectorFormat child_data;
+	child_vector.ToUnifiedFormat(lists_size, child_data);
 
 	// get the lists data
-	VectorData lists_data;
-	lists.Orrify(count, lists_data);
+	UnifiedVectorFormat lists_data;
+	result.ToUnifiedFormat(count, lists_data);
 	auto list_entries = (list_entry_t *)lists_data.data;
 
 	// create the lists_indices vector, this contains an element for each list's entry,
@@ -13434,7 +18496,6 @@ static void ListSortFunction(DataChunk &args, ExpressionState &state, Vector &re
 	bool data_to_sort = false;
 
 	for (idx_t i = 0; i < count; i++) {
-
 		auto lists_index = lists_data.sel->get_index(i);
 		const auto &list_entry = list_entries[lists_index];
 
@@ -13450,7 +18511,6 @@ static void ListSortFunction(DataChunk &args, ExpressionState &state, Vector &re
 		}
 
 		for (idx_t child_idx = 0; child_idx < list_entry.length; child_idx++) {
-
 			// lists_indices vector is full, sink
 			if (offset_lists_indices == STANDARD_VECTOR_SIZE) {
 				SinkDataChunk(&child_vector, sel, offset_lists_indices, info.types, info.payload_types, payload_vector,
@@ -13458,10 +18518,10 @@ static void ListSortFunction(DataChunk &args, ExpressionState &state, Vector &re
 				offset_lists_indices = 0;
 			}
 
-			auto source_idx = child_data.sel->get_index(list_entry.offset + child_idx);
+			auto source_idx = list_entry.offset + child_idx;
 			sel.set_index(offset_lists_indices, source_idx);
 			lists_indices_data[offset_lists_indices] = (uint32_t)i;
-			payload_vector_data[offset_lists_indices] = incr_payload_count;
+			payload_vector_data[offset_lists_indices] = source_idx;
 			offset_lists_indices++;
 			incr_payload_count++;
 		}
@@ -13473,7 +18533,6 @@ static void ListSortFunction(DataChunk &args, ExpressionState &state, Vector &re
 	}
 
 	if (data_to_sort) {
-
 		// add local state to global state, which sorts the data
 		global_sort_state.AddLocalState(local_sort_state);
 		global_sort_state.PrepareMergePhase();
@@ -13500,16 +18559,19 @@ static void ListSortFunction(DataChunk &args, ExpressionState &state, Vector &re
 
 			for (idx_t i = 0; i < row_count; i++) {
 				sel_sorted.set_index(sel_sorted_idx, result_data[i]);
+				D_ASSERT(result_data[i] < lists_size);
 				sel_sorted_idx++;
 			}
 		}
 
 		D_ASSERT(sel_sorted_idx == incr_payload_count);
 		child_vector.Slice(sel_sorted, sel_sorted_idx);
-		child_vector.Normalify(sel_sorted_idx);
+		child_vector.Flatten(sel_sorted_idx);
 	}
 
-	result.Reference(lists);
+	if (args.AllConstant()) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
 }
 
 static unique_ptr<FunctionData> ListSortBind(ClientContext &context, ScalarFunction &bound_function,
@@ -13522,14 +18584,13 @@ static unique_ptr<FunctionData> ListSortBind(ClientContext &context, ScalarFunct
 	return make_unique<ListSortBindData>(order, null_order, bound_function.return_type, child_type, context);
 }
 
-OrderByNullType GetNullOrder(vector<unique_ptr<Expression>> &arguments, idx_t idx) {
+OrderByNullType GetNullOrder(ClientContext &context, vector<unique_ptr<Expression>> &arguments, idx_t idx) {
 
 	if (!arguments[idx]->IsFoldable()) {
 		throw InvalidInputException("Null sorting order must be a constant");
 	}
-	Value null_order_value = ExpressionExecutor::EvaluateScalar(*arguments[idx]);
-	auto null_order_name = null_order_value.ToString();
-	std::transform(null_order_name.begin(), null_order_name.end(), null_order_name.begin(), ::toupper);
+	Value null_order_value = ExpressionExecutor::EvaluateScalar(context, *arguments[idx]);
+	auto null_order_name = StringUtil::Upper(null_order_value.ToString());
 	if (null_order_name != "NULLS FIRST" && null_order_name != "NULLS LAST") {
 		throw InvalidInputException("Null sorting order must be either NULLS FIRST or NULLS LAST");
 	}
@@ -13548,8 +18609,8 @@ static unique_ptr<FunctionData> ListNormalSortBind(ClientContext &context, Scala
 
 	// set default values
 	auto &config = DBConfig::GetConfig(context);
-	auto order = config.default_order_type;
-	auto null_order = config.default_null_order;
+	auto order = config.options.default_order_type;
+	auto null_order = config.options.default_null_order;
 
 	// get the sorting order
 	if (arguments.size() >= 2) {
@@ -13557,9 +18618,8 @@ static unique_ptr<FunctionData> ListNormalSortBind(ClientContext &context, Scala
 		if (!arguments[1]->IsFoldable()) {
 			throw InvalidInputException("Sorting order must be a constant");
 		}
-		Value order_value = ExpressionExecutor::EvaluateScalar(*arguments[1]);
-		auto order_name = order_value.ToString();
-		std::transform(order_name.begin(), order_name.end(), order_name.begin(), ::toupper);
+		Value order_value = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
+		auto order_name = StringUtil::Upper(order_value.ToString());
 		if (order_name != "DESC" && order_name != "ASC") {
 			throw InvalidInputException("Sorting order must be either ASC or DESC");
 		}
@@ -13572,7 +18632,7 @@ static unique_ptr<FunctionData> ListNormalSortBind(ClientContext &context, Scala
 
 	// get the null sorting order
 	if (arguments.size() == 3) {
-		null_order = GetNullOrder(arguments, 2);
+		null_order = GetNullOrder(context, arguments, 2);
 	}
 
 	return ListSortBind(context, bound_function, arguments, order, null_order);
@@ -13586,12 +18646,13 @@ static unique_ptr<FunctionData> ListReverseSortBind(ClientContext &context, Scal
 
 	// set (reverse) default values
 	auto &config = DBConfig::GetConfig(context);
-	auto order = (config.default_order_type == OrderType::ASCENDING) ? OrderType::DESCENDING : OrderType::ASCENDING;
-	auto null_order = config.default_null_order;
+	auto order =
+	    (config.options.default_order_type == OrderType::ASCENDING) ? OrderType::DESCENDING : OrderType::ASCENDING;
+	auto null_order = config.options.default_null_order;
 
 	// get the null sorting order
 	if (arguments.size() == 2) {
-		null_order = GetNullOrder(arguments, 1);
+		null_order = GetNullOrder(context, arguments, 1);
 	}
 
 	return ListSortBind(context, bound_function, arguments, order, null_order);
@@ -13603,15 +18664,15 @@ void ListSortFun::RegisterFunction(BuiltinFunctions &set) {
 
 	// one parameter: list
 	ScalarFunction sort({LogicalType::LIST(LogicalType::ANY)}, LogicalType::LIST(LogicalType::ANY), ListSortFunction,
-	                    false, false, ListNormalSortBind);
+	                    ListNormalSortBind);
 
 	// two parameters: list, order
 	ScalarFunction sort_order({LogicalType::LIST(LogicalType::ANY), LogicalType::VARCHAR},
-	                          LogicalType::LIST(LogicalType::ANY), ListSortFunction, false, false, ListNormalSortBind);
+	                          LogicalType::LIST(LogicalType::ANY), ListSortFunction, ListNormalSortBind);
 
 	// three parameters: list, order, null order
 	ScalarFunction sort_orders({LogicalType::LIST(LogicalType::ANY), LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                           LogicalType::LIST(LogicalType::ANY), ListSortFunction, false, false, ListNormalSortBind);
+	                           LogicalType::LIST(LogicalType::ANY), ListSortFunction, ListNormalSortBind);
 
 	ScalarFunctionSet list_sort("list_sort");
 	list_sort.AddFunction(sort);
@@ -13629,12 +18690,11 @@ void ListSortFun::RegisterFunction(BuiltinFunctions &set) {
 
 	// one parameter: list
 	ScalarFunction sort_reverse({LogicalType::LIST(LogicalType::ANY)}, LogicalType::LIST(LogicalType::ANY),
-	                            ListSortFunction, false, false, ListReverseSortBind);
+	                            ListSortFunction, ListReverseSortBind);
 
 	// two parameters: list, null order
 	ScalarFunction sort_reverse_null_order({LogicalType::LIST(LogicalType::ANY), LogicalType::VARCHAR},
-	                                       LogicalType::LIST(LogicalType::ANY), ListSortFunction, false, false,
-	                                       ListReverseSortBind);
+	                                       LogicalType::LIST(LogicalType::ANY), ListSortFunction, ListReverseSortBind);
 
 	ScalarFunctionSet list_reverse_sort("list_reverse_sort");
 	list_reverse_sort.AddFunction(sort_reverse);
@@ -13674,7 +18734,7 @@ static void ListValueFunction(DataChunk &args, ExpressionState &state, Vector &r
 	for (idx_t i = 0; i < args.size(); i++) {
 		result_data[i].offset = ListVector::GetListSize(result);
 		for (idx_t col_idx = 0; col_idx < args.ColumnCount(); col_idx++) {
-			auto val = args.GetValue(col_idx, i).CastAs(child_type);
+			auto val = args.GetValue(col_idx, i).DefaultCastAs(child_type);
 			ListVector::PushBack(result, val);
 		}
 		result_data[i].length = args.ColumnCount();
@@ -13685,8 +18745,8 @@ static void ListValueFunction(DataChunk &args, ExpressionState &state, Vector &r
 static unique_ptr<FunctionData> ListValueBind(ClientContext &context, ScalarFunction &bound_function,
                                               vector<unique_ptr<Expression>> &arguments) {
 	// collect names and deconflict, construct return type
-	LogicalType child_type = LogicalType::SQLNULL;
-	for (idx_t i = 0; i < arguments.size(); i++) {
+	LogicalType child_type = arguments.empty() ? LogicalType::SQLNULL : arguments[0]->return_type;
+	for (idx_t i = 1; i < arguments.size(); i++) {
 		child_type = LogicalType::MaxLogicalType(child_type, arguments[i]->return_type);
 	}
 
@@ -13713,7 +18773,7 @@ unique_ptr<BaseStatistics> ListValueStats(ClientContext &context, FunctionStatis
 
 void ListValueFun::RegisterFunction(BuiltinFunctions &set) {
 	// the arguments and return types are actually set in the binder function
-	ScalarFunction fun("list_value", {}, LogicalTypeId::LIST, ListValueFunction, false, ListValueBind, nullptr,
+	ScalarFunction fun("list_value", {}, LogicalTypeId::LIST, ListValueFunction, ListValueBind, nullptr,
 	                   ListValueStats);
 	fun.varargs = LogicalType::ANY;
 	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
@@ -13839,16 +18899,16 @@ public:
 	explicit RangeInfoStruct(DataChunk &args_p) : args(args_p) {
 		switch (args.ColumnCount()) {
 		case 1:
-			args.data[0].Orrify(args.size(), vdata[0]);
+			args.data[0].ToUnifiedFormat(args.size(), vdata[0]);
 			break;
 		case 2:
-			args.data[0].Orrify(args.size(), vdata[0]);
-			args.data[1].Orrify(args.size(), vdata[1]);
+			args.data[0].ToUnifiedFormat(args.size(), vdata[0]);
+			args.data[1].ToUnifiedFormat(args.size(), vdata[1]);
 			break;
 		case 3:
-			args.data[0].Orrify(args.size(), vdata[0]);
-			args.data[1].Orrify(args.size(), vdata[1]);
-			args.data[2].Orrify(args.size(), vdata[2]);
+			args.data[0].ToUnifiedFormat(args.size(), vdata[0]);
+			args.data[1].ToUnifiedFormat(args.size(), vdata[1]);
+			args.data[2].ToUnifiedFormat(args.size(), vdata[2]);
 			break;
 		default:
 			throw InternalException("Unsupported number of parameters for range");
@@ -13909,7 +18969,7 @@ public:
 
 private:
 	DataChunk &args;
-	VectorData vdata[3];
+	UnifiedVectorFormat vdata[3];
 };
 
 template <class OP, bool INCLUSIVE_BOUND>
@@ -14006,15 +19066,19 @@ namespace duckdb {
 
 static void CardinalityFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &map = args.data[0];
-	VectorData list_data;
+	UnifiedVectorFormat list_data;
+	UnifiedVectorFormat map_data;
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	auto result_data = FlatVector::GetData<uint64_t>(result);
+	auto &result_validity = FlatVector::Validity(result);
 
+	map.ToUnifiedFormat(args.size(), map_data);
 	auto &children = StructVector::GetEntries(map);
-	children[0]->Orrify(args.size(), list_data);
+	children[0]->ToUnifiedFormat(args.size(), list_data);
 	for (idx_t row = 0; row < args.size(); row++) {
 		auto list_entry = ((list_entry_t *)list_data.data)[list_data.sel->get_index(row)];
 		result_data[row] = list_entry.length;
+		result_validity.Set(row, map_data.validity.RowIsValid(map_data.sel->get_index(row)));
 	}
 
 	if (args.size() == 1) {
@@ -14024,6 +19088,9 @@ static void CardinalityFunction(DataChunk &args, ExpressionState &state, Vector 
 
 static unique_ptr<FunctionData> CardinalityBind(ClientContext &context, ScalarFunction &bound_function,
                                                 vector<unique_ptr<Expression>> &arguments) {
+	if (arguments.size() != 1) {
+		throw BinderException("Cardinality must have exactly one arguments");
+	}
 
 	if (arguments[0]->return_type.id() != LogicalTypeId::MAP) {
 		throw BinderException("Cardinality can only operate on MAPs");
@@ -14034,10 +19101,9 @@ static unique_ptr<FunctionData> CardinalityBind(ClientContext &context, ScalarFu
 }
 
 void CardinalityFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunction fun("cardinality", {LogicalType::ANY}, LogicalType::UBIGINT, CardinalityFunction, false,
-	                   CardinalityBind);
+	ScalarFunction fun("cardinality", {LogicalType::ANY}, LogicalType::UBIGINT, CardinalityFunction, CardinalityBind);
 	fun.varargs = LogicalType::ANY;
-	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	fun.null_handling = FunctionNullHandling::DEFAULT_NULL_HANDLING;
 	set.AddFunction(fun);
 }
 
@@ -14056,19 +19122,19 @@ namespace duckdb {
 // TODO: this doesn't recursively verify maps if maps are nested
 MapInvalidReason CheckMapValidity(Vector &map, idx_t count, const SelectionVector &sel) {
 	D_ASSERT(map.GetType().id() == LogicalTypeId::MAP);
-	VectorData map_vdata;
-	map.Orrify(count, map_vdata);
+	UnifiedVectorFormat map_vdata;
+	map.ToUnifiedFormat(count, map_vdata);
 	auto &map_validity = map_vdata.validity;
 
 	auto &key_vector = *(StructVector::GetEntries(map)[0]);
-	VectorData key_vdata;
-	key_vector.Orrify(count, key_vdata);
+	UnifiedVectorFormat key_vdata;
+	key_vector.ToUnifiedFormat(count, key_vdata);
 	auto key_data = (list_entry_t *)key_vdata.data;
 	auto &key_validity = key_vdata.validity;
 
 	auto &key_entries = ListVector::GetEntry(key_vector);
-	VectorData key_entry_vdata;
-	key_entries.Orrify(count, key_entry_vdata);
+	UnifiedVectorFormat key_entry_vdata;
+	key_entries.ToUnifiedFormat(count, key_entry_vdata);
 	auto &entry_validity = key_entry_vdata.validity;
 
 	for (idx_t row = 0; row < count; row++) {
@@ -14099,7 +19165,7 @@ MapInvalidReason CheckMapValidity(Vector &map, idx_t count, const SelectionVecto
 	return MapInvalidReason::VALID;
 }
 
-static void MapConversionVerify(Vector &vector, idx_t count) {
+void MapConversionVerify(Vector &vector, idx_t count) {
 	auto valid_check = CheckMapValidity(vector, count);
 	switch (valid_check) {
 	case MapInvalidReason::VALID:
@@ -14152,8 +19218,12 @@ static void MapFunction(DataChunk &args, ExpressionState &state, Vector &result)
 		return;
 	}
 
-	if (ListVector::GetListSize(args.data[0]) != ListVector::GetListSize(args.data[1])) {
-		throw Exception("Key list has a different size from Value list");
+	auto key_count = ListVector::GetListSize(args.data[0]);
+	auto value_count = ListVector::GetListSize(args.data[1]);
+	if (key_count != value_count) {
+		throw InvalidInputException(
+		    "Error in MAP creation: key list has a different size from value list (%lld keys, %lld values)", key_count,
+		    value_count);
 	}
 
 	key_vector.Reference(args.data[0]);
@@ -14194,7 +19264,7 @@ static unique_ptr<FunctionData> MapBind(ClientContext &context, ScalarFunction &
 
 void MapFun::RegisterFunction(BuiltinFunctions &set) {
 	//! the arguments and return types are actually set in the binder function
-	ScalarFunction fun("map", {}, LogicalTypeId::MAP, MapFunction, false, MapBind);
+	ScalarFunction fun("map", {}, LogicalTypeId::MAP, MapFunction, MapBind);
 	fun.varargs = LogicalType::ANY;
 	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(fun);
@@ -14218,7 +19288,7 @@ void FillResult(Value &values, Vector &result, idx_t row) {
 	}
 
 	//! now set the pointer
-	auto &entry = ((list_entry_t *)result.GetData())[row];
+	auto &entry = ListVector::GetData(result)[row];
 	entry.length = list_values.size();
 	entry.offset = current_offset;
 }
@@ -14228,21 +19298,36 @@ static void MapExtractFunction(DataChunk &args, ExpressionState &state, Vector &
 	D_ASSERT(args.data[0].GetType().id() == LogicalTypeId::MAP);
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 
+	if (args.data[1].GetType().id() == LogicalTypeId::SQLNULL) {
+		//! We don't need to look through the map if the 'key' to look for is NULL
+		//! Because maps can't have NULL as key
+		ListVector::SetListSize(result, 0);
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		auto list_data = ConstantVector::GetData<list_entry_t>(result);
+		list_data->offset = 0;
+		list_data->length = 0;
+		result.Verify(args.size());
+		return;
+	}
+
 	auto &map = args.data[0];
 	auto &key = args.data[1];
 
-	auto key_value = key.GetValue(0);
-	VectorData offset_data;
+	UnifiedVectorFormat map_keys_data;
+	UnifiedVectorFormat key_data;
 
-	auto &children = StructVector::GetEntries(map);
-	children[0]->Orrify(args.size(), offset_data);
-	auto &key_type = ListType::GetChildType(children[0]->GetType());
-	if (key_type != LogicalTypeId::SQLNULL) {
-		key_value = key_value.CastAs(key_type);
-	}
+	auto &map_keys = MapVector::GetKeys(map);
+	auto &map_values = MapVector::GetValues(map);
+
+	map_keys.ToUnifiedFormat(args.size(), map_keys_data);
+	key.ToUnifiedFormat(args.size(), key_data);
+
 	for (idx_t row = 0; row < args.size(); row++) {
-		auto offsets = ListVector::Search(*children[0], key_value, offset_data.sel->get_index(row));
-		auto values = ListVector::GetValuesFromOffsets(*children[1], offsets);
+		idx_t row_index = map_keys_data.sel->get_index(row);
+		idx_t key_index = key_data.sel->get_index(row);
+		auto key_value = key.GetValue(key_index);
+		auto offsets = ListVector::Search(map_keys, key_value, row_index);
+		auto values = ListVector::GetValuesFromOffsets(map_values, offsets);
 		FillResult(values, result, row);
 	}
 
@@ -14261,16 +19346,19 @@ static unique_ptr<FunctionData> MapExtractBind(ClientContext &context, ScalarFun
 	if (arguments[0]->return_type.id() != LogicalTypeId::MAP) {
 		throw BinderException("MAP_EXTRACT can only operate on MAPs");
 	}
-	auto &child_types = StructType::GetChildTypes(arguments[0]->return_type);
-	auto &value_type = ListType::GetChildType(child_types[1].second);
+	auto &value_type = MapType::ValueType(arguments[0]->return_type);
 
 	//! Here we have to construct the List Type that will be returned
 	bound_function.return_type = LogicalType::LIST(value_type);
+	auto key_type = MapType::KeyType(arguments[0]->return_type);
+	if (key_type.id() != LogicalTypeId::SQLNULL && arguments[1]->return_type.id() != LogicalTypeId::SQLNULL) {
+		bound_function.arguments[1] = MapType::KeyType(arguments[0]->return_type);
+	}
 	return make_unique<VariableReturnBindData>(value_type);
 }
 
 void MapExtractFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunction fun("map_extract", {LogicalType::ANY, LogicalType::ANY}, LogicalType::ANY, MapExtractFunction, false,
+	ScalarFunction fun("map_extract", {LogicalType::ANY, LogicalType::ANY}, LogicalType::ANY, MapExtractFunction,
 	                   MapExtractBind);
 	fun.varargs = LogicalType::ANY;
 	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
@@ -14287,2442 +19375,170 @@ void MapExtractFun::RegisterFunction(BuiltinFunctions &set) {
 
 
 
-
-
-
-
-#include <cmath>
-#include <errno.h>
-
 namespace duckdb {
 
-template <class TR, class OP>
-static scalar_function_t GetScalarIntegerUnaryFunctionFixedReturn(const LogicalType &type) {
-	scalar_function_t function;
-	switch (type.id()) {
-	case LogicalTypeId::TINYINT:
-		function = &ScalarFunction::UnaryFunction<int8_t, TR, OP>;
-		break;
-	case LogicalTypeId::SMALLINT:
-		function = &ScalarFunction::UnaryFunction<int16_t, TR, OP>;
-		break;
-	case LogicalTypeId::INTEGER:
-		function = &ScalarFunction::UnaryFunction<int32_t, TR, OP>;
-		break;
-	case LogicalTypeId::BIGINT:
-		function = &ScalarFunction::UnaryFunction<int64_t, TR, OP>;
-		break;
-	case LogicalTypeId::HUGEINT:
-		function = &ScalarFunction::UnaryFunction<hugeint_t, TR, OP>;
-		break;
-	default:
-		throw NotImplementedException("Unimplemented type for GetScalarIntegerUnaryFunctionFixedReturn");
-	}
-	return function;
-}
-
-//===--------------------------------------------------------------------===//
-// nextafter
-//===--------------------------------------------------------------------===//
-struct NextAfterOperator {
-	template <class TA, class TB, class TR>
-	static inline TR Operation(TA base, TB exponent) {
-		throw NotImplementedException("Unimplemented type for NextAfter Function");
-	}
-
-	template <class TA, class TB, class TR>
-	static inline double Operation(double input, double approximate_to) {
-		return nextafter(input, approximate_to);
-	}
-	template <class TA, class TB, class TR>
-	static inline float Operation(float input, float approximate_to) {
-		return nextafterf(input, approximate_to);
-	}
+struct VectorInfo {
+	Vector &container;
+	list_entry_t &data;
 };
 
-void NextAfterFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet next_after_fun("nextafter");
-	next_after_fun.AddFunction(
-	    ScalarFunction("nextafter", {LogicalType::DOUBLE, LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                   ScalarFunction::BinaryFunction<double, double, double, NextAfterOperator>, false));
-	next_after_fun.AddFunction(ScalarFunction("nextafter", {LogicalType::FLOAT, LogicalType::FLOAT}, LogicalType::FLOAT,
-	                                          ScalarFunction::BinaryFunction<float, float, float, NextAfterOperator>,
-	                                          false));
-	set.AddFunction(next_after_fun);
+static void MapStruct(Value &element, VectorInfo &keys, VectorInfo &values) {
+	D_ASSERT(element.type().id() == LogicalTypeId::STRUCT);
+	D_ASSERT(!element.IsNull());
+	auto &key_value = StructValue::GetChildren(element);
+	auto &key = key_value[0];
+	auto &value = key_value[1];
+
+	if (key.IsNull()) {
+		throw InvalidInputException("None of the keys of the map can be NULL");
+	}
+	// Add to the inner key/value lists of the resulting map
+	ListVector::PushBack(keys.container, key);
+	ListVector::PushBack(values.container, value);
 }
 
-//===--------------------------------------------------------------------===//
-// abs
-//===--------------------------------------------------------------------===//
-static unique_ptr<BaseStatistics> PropagateAbsStats(ClientContext &context, FunctionStatisticsInput &input) {
-	auto &child_stats = input.child_stats;
-	auto &expr = input.expr;
-	D_ASSERT(child_stats.size() == 1);
-	// can only propagate stats if the children have stats
-	if (!child_stats[0]) {
-		return nullptr;
-	}
-	auto &lstats = (NumericStatistics &)*child_stats[0];
-	Value new_min, new_max;
-	bool potential_overflow = true;
-	if (!lstats.min.IsNull() && !lstats.max.IsNull()) {
-		switch (expr.return_type.InternalType()) {
-		case PhysicalType::INT8:
-			potential_overflow = lstats.min.GetValue<int8_t>() == NumericLimits<int8_t>::Minimum();
-			break;
-		case PhysicalType::INT16:
-			potential_overflow = lstats.min.GetValue<int16_t>() == NumericLimits<int16_t>::Minimum();
-			break;
-		case PhysicalType::INT32:
-			potential_overflow = lstats.min.GetValue<int32_t>() == NumericLimits<int32_t>::Minimum();
-			break;
-		case PhysicalType::INT64:
-			potential_overflow = lstats.min.GetValue<int64_t>() == NumericLimits<int64_t>::Minimum();
-			break;
-		default:
-			return nullptr;
-		}
-	}
-	if (potential_overflow) {
-		new_min = Value(expr.return_type);
-		new_max = Value(expr.return_type);
-	} else {
-		// no potential overflow
+// FIXME: this operation has a time complexity of O(n^2)
+void CheckKeyUniqueness(VectorInfo &keys) {
+	auto end = keys.data.offset + keys.data.length;
+	auto &entries = ListVector::GetEntry(keys.container);
+	for (auto lhs = keys.data.offset; lhs < end; lhs++) {
+		auto element = entries.GetValue(lhs);
+		D_ASSERT(!element.IsNull());
+		for (auto rhs = lhs + 1; rhs < end; rhs++) {
+			auto other = entries.GetValue(rhs);
+			D_ASSERT(!other.IsNull());
 
-		// compute stats
-		auto current_min = lstats.min.GetValue<int64_t>();
-		auto current_max = lstats.max.GetValue<int64_t>();
-
-		int64_t min_val, max_val;
-
-		if (current_min < 0 && current_max < 0) {
-			// if both min and max are below zero, then min=abs(cur_max) and max=abs(cur_min)
-			min_val = AbsValue(current_max);
-			max_val = AbsValue(current_min);
-		} else if (current_min < 0) {
-			D_ASSERT(current_max >= 0);
-			// if min is below zero and max is above 0, then min=0 and max=max(cur_max, abs(cur_min))
-			min_val = 0;
-			max_val = MaxValue(AbsValue(current_min), current_max);
-		} else {
-			// if both current_min and current_max are > 0, then the abs is a no-op and can be removed entirely
-			*input.expr_ptr = move(input.expr.children[0]);
-			return move(child_stats[0]);
-		}
-		new_min = Value::Numeric(expr.return_type, min_val);
-		new_max = Value::Numeric(expr.return_type, max_val);
-		expr.function.function = ScalarFunction::GetScalarUnaryFunction<AbsOperator>(expr.return_type);
-	}
-	auto stats =
-	    make_unique<NumericStatistics>(expr.return_type, move(new_min), move(new_max), StatisticsType::LOCAL_STATS);
-	stats->validity_stats = lstats.validity_stats->Copy();
-	return move(stats);
-}
-
-template <class OP>
-unique_ptr<FunctionData> DecimalUnaryOpBind(ClientContext &context, ScalarFunction &bound_function,
-                                            vector<unique_ptr<Expression>> &arguments) {
-	auto decimal_type = arguments[0]->return_type;
-	switch (decimal_type.InternalType()) {
-	case PhysicalType::INT16:
-		bound_function.function = ScalarFunction::GetScalarUnaryFunction<OP>(LogicalTypeId::SMALLINT);
-		break;
-	case PhysicalType::INT32:
-		bound_function.function = ScalarFunction::GetScalarUnaryFunction<OP>(LogicalTypeId::INTEGER);
-		break;
-	case PhysicalType::INT64:
-		bound_function.function = ScalarFunction::GetScalarUnaryFunction<OP>(LogicalTypeId::BIGINT);
-		break;
-	default:
-		bound_function.function = ScalarFunction::GetScalarUnaryFunction<OP>(LogicalTypeId::HUGEINT);
-		break;
-	}
-	bound_function.arguments[0] = decimal_type;
-	bound_function.return_type = decimal_type;
-	return nullptr;
-}
-
-void AbsFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet abs("abs");
-	for (auto &type : LogicalType::Numeric()) {
-		switch (type.id()) {
-		case LogicalTypeId::DECIMAL:
-			abs.AddFunction(ScalarFunction({type}, type, nullptr, false, false, DecimalUnaryOpBind<AbsOperator>));
-			break;
-		case LogicalTypeId::TINYINT:
-		case LogicalTypeId::SMALLINT:
-		case LogicalTypeId::INTEGER:
-		case LogicalTypeId::BIGINT: {
-			ScalarFunction func({type}, type, ScalarFunction::GetScalarUnaryFunction<TryAbsOperator>(type));
-			func.statistics = PropagateAbsStats;
-			abs.AddFunction(func);
-			break;
-		}
-		case LogicalTypeId::UTINYINT:
-		case LogicalTypeId::USMALLINT:
-		case LogicalTypeId::UINTEGER:
-		case LogicalTypeId::UBIGINT:
-			abs.AddFunction(ScalarFunction({type}, type, ScalarFunction::NopFunction));
-			break;
-		default:
-			abs.AddFunction(ScalarFunction({type}, type, ScalarFunction::GetScalarUnaryFunction<AbsOperator>(type)));
-			break;
-		}
-	}
-	set.AddFunction(abs);
-	abs.name = "@";
-	set.AddFunction(abs);
-}
-
-//===--------------------------------------------------------------------===//
-// bit_count
-//===--------------------------------------------------------------------===//
-struct BitCntOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		using TU = typename std::make_unsigned<TA>::type;
-		TR count = 0;
-		for (auto value = TU(input); value > 0; value >>= 1) {
-			count += TR(value & 1);
-		}
-		return count;
-	}
-};
-
-void BitCountFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet functions("bit_count");
-	functions.AddFunction(ScalarFunction({LogicalType::TINYINT}, LogicalType::TINYINT,
-	                                     ScalarFunction::UnaryFunction<int8_t, int8_t, BitCntOperator>));
-	functions.AddFunction(ScalarFunction({LogicalType::SMALLINT}, LogicalType::TINYINT,
-	                                     ScalarFunction::UnaryFunction<int16_t, int8_t, BitCntOperator>));
-	functions.AddFunction(ScalarFunction({LogicalType::INTEGER}, LogicalType::TINYINT,
-	                                     ScalarFunction::UnaryFunction<int32_t, int8_t, BitCntOperator>));
-	functions.AddFunction(ScalarFunction({LogicalType::BIGINT}, LogicalType::TINYINT,
-	                                     ScalarFunction::UnaryFunction<int64_t, int8_t, BitCntOperator>));
-	set.AddFunction(functions);
-}
-
-//===--------------------------------------------------------------------===//
-// sign
-//===--------------------------------------------------------------------===//
-struct SignOperator {
-	template <class TA, class TR>
-	static TR Operation(TA input) {
-		if (input == TA(0)) {
-			return 0;
-		} else if (input > TA(0)) {
-			return 1;
-		} else {
-			return -1;
-		}
-	}
-};
-
-template <>
-int8_t SignOperator::Operation(float input) {
-	if (input == 0 || Value::IsNan(input)) {
-		return 0;
-	} else if (input > 0) {
-		return 1;
-	} else {
-		return -1;
-	}
-}
-
-template <>
-int8_t SignOperator::Operation(double input) {
-	if (input == 0 || Value::IsNan(input)) {
-		return 0;
-	} else if (input > 0) {
-		return 1;
-	} else {
-		return -1;
-	}
-}
-
-void SignFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet sign("sign");
-	for (auto &type : LogicalType::Numeric()) {
-		if (type.id() == LogicalTypeId::DECIMAL) {
-			continue;
-		} else {
-			sign.AddFunction(
-			    ScalarFunction({type}, LogicalType::TINYINT,
-			                   ScalarFunction::GetScalarUnaryFunctionFixedReturn<int8_t, SignOperator>(type)));
-		}
-	}
-	set.AddFunction(sign);
-}
-
-//===--------------------------------------------------------------------===//
-// ceil
-//===--------------------------------------------------------------------===//
-struct CeilOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA left) {
-		return std::ceil(left);
-	}
-};
-
-template <class T, class POWERS_OF_TEN, class OP>
-static void GenericRoundFunctionDecimal(DataChunk &input, ExpressionState &state, Vector &result) {
-	auto &func_expr = (BoundFunctionExpression &)state.expr;
-	OP::template Operation<T, POWERS_OF_TEN>(input, DecimalType::GetScale(func_expr.children[0]->return_type), result);
-}
-
-template <class OP>
-unique_ptr<FunctionData> BindGenericRoundFunctionDecimal(ClientContext &context, ScalarFunction &bound_function,
-                                                         vector<unique_ptr<Expression>> &arguments) {
-	// ceil essentially removes the scale
-	auto &decimal_type = arguments[0]->return_type;
-	auto scale = DecimalType::GetScale(decimal_type);
-	auto width = DecimalType::GetWidth(decimal_type);
-	if (scale == 0) {
-		bound_function.function = ScalarFunction::NopFunction;
-	} else {
-		switch (decimal_type.InternalType()) {
-		case PhysicalType::INT16:
-			bound_function.function = GenericRoundFunctionDecimal<int16_t, NumericHelper, OP>;
-			break;
-		case PhysicalType::INT32:
-			bound_function.function = GenericRoundFunctionDecimal<int32_t, NumericHelper, OP>;
-			break;
-		case PhysicalType::INT64:
-			bound_function.function = GenericRoundFunctionDecimal<int64_t, NumericHelper, OP>;
-			break;
-		default:
-			bound_function.function = GenericRoundFunctionDecimal<hugeint_t, Hugeint, OP>;
-			break;
-		}
-	}
-	bound_function.arguments[0] = decimal_type;
-	bound_function.return_type = LogicalType::DECIMAL(width, 0);
-	return nullptr;
-}
-
-struct CeilDecimalOperator {
-	template <class T, class POWERS_OF_TEN_CLASS>
-	static void Operation(DataChunk &input, uint8_t scale, Vector &result) {
-		T power_of_ten = POWERS_OF_TEN_CLASS::POWERS_OF_TEN[scale];
-		UnaryExecutor::Execute<T, T>(input.data[0], result, input.size(), [&](T input) {
-			if (input < 0) {
-				// below 0 we floor the number (e.g. -10.5 -> -10)
-				return input / power_of_ten;
-			} else {
-				// above 0 we ceil the number
-				return ((input - 1) / power_of_ten) + 1;
+			if (element.type() != other.type()) {
+				throw InvalidInputException("Not all keys are of the same type!");
 			}
-		});
+			if (element == other) {
+				throw InvalidInputException("The given keys aren't unique");
+			}
+		}
 	}
-};
+}
 
-void CeilFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet ceil("ceil");
-	for (auto &type : LogicalType::Numeric()) {
-		scalar_function_t func = nullptr;
-		bind_scalar_function_t bind_func = nullptr;
-		if (type.IsIntegral()) {
-			// no ceil for integral numbers
+static bool MapSingleList(VectorInfo &input, VectorInfo &keys, VectorInfo &values) {
+	// Get the length and offset of this list from the argument data
+	auto pair_amount = input.data.length;
+	auto input_offset = input.data.offset;
+
+	// Loop over the list of structs
+	idx_t inserted_values = 0;
+	for (idx_t i = 0; i < pair_amount; i++) {
+		auto index = i + input_offset;
+		// Get the struct using the offset and the index;
+		auto element = input.container.GetValue(index);
+		if (element.IsNull()) {
 			continue;
 		}
-		switch (type.id()) {
-		case LogicalTypeId::FLOAT:
-			func = ScalarFunction::UnaryFunction<float, float, CeilOperator>;
-			break;
-		case LogicalTypeId::DOUBLE:
-			func = ScalarFunction::UnaryFunction<double, double, CeilOperator>;
-			break;
-		case LogicalTypeId::DECIMAL:
-			bind_func = BindGenericRoundFunctionDecimal<CeilDecimalOperator>;
-			break;
-		default:
-			throw InternalException("Unimplemented numeric type for function \"ceil\"");
-		}
-		ceil.AddFunction(ScalarFunction({type}, type, func, false, false, bind_func));
+		MapStruct(element, keys, values);
+		inserted_values++;
 	}
-
-	set.AddFunction(ceil);
-	ceil.name = "ceiling";
-	set.AddFunction(ceil);
+	// Set the length of the key value lists
+	keys.data.length = inserted_values;
+	values.data.length = inserted_values;
+	return inserted_values != 0;
 }
 
-//===--------------------------------------------------------------------===//
-// floor
-//===--------------------------------------------------------------------===//
-struct FloorOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA left) {
-		return std::floor(left);
-	}
-};
+static void MapFromEntriesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(result.GetType().id() == LogicalTypeId::MAP);
 
-struct FloorDecimalOperator {
-	template <class T, class POWERS_OF_TEN_CLASS>
-	static void Operation(DataChunk &input, uint8_t scale, Vector &result) {
-		T power_of_ten = POWERS_OF_TEN_CLASS::POWERS_OF_TEN[scale];
-		UnaryExecutor::Execute<T, T>(input.data[0], result, input.size(), [&](T input) {
-			if (input < 0) {
-				// below 0 we ceil the number (e.g. -10.5 -> -11)
-				return ((input + 1) / power_of_ten) - 1;
-			} else {
-				// above 0 we floor the number
-				return input / power_of_ten;
-			}
-		});
-	}
-};
+	result.SetVectorType(duckdb::VectorType::FLAT_VECTOR);
 
-void FloorFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet floor("floor");
-	for (auto &type : LogicalType::Numeric()) {
-		scalar_function_t func = nullptr;
-		bind_scalar_function_t bind_func = nullptr;
-		if (type.IsIntegral()) {
-			// no floor for integral numbers
-			continue;
+	// Get the arguments vector
+	auto &input_list = args.data[0];
+	auto arg_data = FlatVector::GetData<list_entry_t>(input_list);
+	auto &entries = ListVector::GetEntry(input_list);
+
+	// Prepare the result vectors
+	auto &child_entries = StructVector::GetEntries(result);
+	D_ASSERT(child_entries.size() == 2);
+	auto &key_vector = *child_entries[0];
+	auto &value_vector = *child_entries[1];
+	auto &result_validity = FlatVector::Validity(result);
+
+	// Get the offset+length data for the list(s)
+	auto key_data = FlatVector::GetData<list_entry_t>(key_vector);
+	auto value_data = FlatVector::GetData<list_entry_t>(value_vector);
+
+	auto &key_validity = FlatVector::Validity(key_vector);
+	auto &value_validity = FlatVector::Validity(value_vector);
+
+	auto count = args.size();
+
+	UnifiedVectorFormat input_list_data;
+	input_list.ToUnifiedFormat(count, input_list_data);
+
+	// Current offset into the keys/values list
+	idx_t offset = 0;
+
+	// Transform to mapped values
+	for (idx_t i = 0; i < count; i++) {
+		VectorInfo input {entries, arg_data[i]};
+		VectorInfo keys {key_vector, key_data[i]};
+		VectorInfo values {value_vector, value_data[i]};
+
+		keys.data.offset = offset;
+		values.data.offset = offset;
+		auto row_valid = MapSingleList(input, keys, values);
+		offset += keys.data.length;
+
+		// Check validity
+		if (!row_valid || !input_list_data.validity.RowIsValid(i)) {
+			key_validity.SetInvalid(i);
+			value_validity.SetInvalid(i);
+			result_validity.SetInvalid(i);
 		}
-		switch (type.id()) {
-		case LogicalTypeId::FLOAT:
-			func = ScalarFunction::UnaryFunction<float, float, FloorOperator>;
-			break;
-		case LogicalTypeId::DOUBLE:
-			func = ScalarFunction::UnaryFunction<double, double, FloorOperator>;
-			break;
-		case LogicalTypeId::DECIMAL:
-			bind_func = BindGenericRoundFunctionDecimal<FloorDecimalOperator>;
-			break;
-		default:
-			throw InternalException("Unimplemented numeric type for function \"floor\"");
-		}
-		floor.AddFunction(ScalarFunction({type}, type, func, false, false, bind_func));
 	}
-	set.AddFunction(floor);
-}
+	MapConversionVerify(result, count);
+	result.Verify(count);
 
-//===--------------------------------------------------------------------===//
-// round
-//===--------------------------------------------------------------------===//
-struct RoundOperatorPrecision {
-	template <class TA, class TB, class TR>
-	static inline TR Operation(TA input, TB precision) {
-		double rounded_value;
-		if (precision < 0) {
-			double modifier = std::pow(10, -precision);
-			rounded_value = (std::round(input / modifier)) * modifier;
-			if (std::isinf(rounded_value) || std::isnan(rounded_value)) {
-				return 0;
-			}
-		} else {
-			double modifier = std::pow(10, precision);
-			rounded_value = (std::round(input * modifier)) / modifier;
-			if (std::isinf(rounded_value) || std::isnan(rounded_value)) {
-				return input;
-			}
-		}
-		return rounded_value;
-	}
-};
-
-struct RoundOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		double rounded_value = round(input);
-		if (std::isinf(rounded_value) || std::isnan(rounded_value)) {
-			return input;
-		}
-		return rounded_value;
-	}
-};
-
-struct RoundDecimalOperator {
-	template <class T, class POWERS_OF_TEN_CLASS>
-	static void Operation(DataChunk &input, uint8_t scale, Vector &result) {
-		T power_of_ten = POWERS_OF_TEN_CLASS::POWERS_OF_TEN[scale];
-		T addition = power_of_ten / 2;
-		// regular round rounds towards the nearest number
-		// in case of a tie we round away from zero
-		// i.e. -10.5 -> -11, 10.5 -> 11
-		// we implement this by adding (positive) or subtracting (negative) 0.5
-		// and then flooring the number
-		// e.g. 10.5 + 0.5 = 11, floor(11) = 11
-		//      10.4 + 0.5 = 10.9, floor(10.9) = 10
-		UnaryExecutor::Execute<T, T>(input.data[0], result, input.size(), [&](T input) {
-			if (input < 0) {
-				input -= addition;
-			} else {
-				input += addition;
-			}
-			return input / power_of_ten;
-		});
-	}
-};
-
-struct RoundPrecisionFunctionData : public FunctionData {
-	explicit RoundPrecisionFunctionData(int32_t target_scale) : target_scale(target_scale) {
-	}
-
-	int32_t target_scale;
-
-	unique_ptr<FunctionData> Copy() const override {
-		return make_unique<RoundPrecisionFunctionData>(target_scale);
-	}
-
-	bool Equals(const FunctionData &other_p) const override {
-		auto &other = (const RoundPrecisionFunctionData &)other_p;
-		return target_scale == other.target_scale;
-	}
-};
-
-template <class T, class POWERS_OF_TEN_CLASS>
-static void DecimalRoundNegativePrecisionFunction(DataChunk &input, ExpressionState &state, Vector &result) {
-	auto &func_expr = (BoundFunctionExpression &)state.expr;
-	auto &info = (RoundPrecisionFunctionData &)*func_expr.bind_info;
-	auto source_scale = DecimalType::GetScale(func_expr.children[0]->return_type);
-	auto width = DecimalType::GetWidth(func_expr.children[0]->return_type);
-	if (-info.target_scale >= width) {
-		// scale too big for width
+	if (args.AllConstant()) {
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
-		result.SetValue(0, Value::INTEGER(0));
-		return;
 	}
-	T divide_power_of_ten = POWERS_OF_TEN_CLASS::POWERS_OF_TEN[-info.target_scale + source_scale];
-	T multiply_power_of_ten = POWERS_OF_TEN_CLASS::POWERS_OF_TEN[-info.target_scale];
-	T addition = divide_power_of_ten / 2;
-
-	UnaryExecutor::Execute<T, T>(input.data[0], result, input.size(), [&](T input) {
-		if (input < 0) {
-			input -= addition;
-		} else {
-			input += addition;
-		}
-		return input / divide_power_of_ten * multiply_power_of_ten;
-	});
 }
 
-template <class T, class POWERS_OF_TEN_CLASS>
-static void DecimalRoundPositivePrecisionFunction(DataChunk &input, ExpressionState &state, Vector &result) {
-	auto &func_expr = (BoundFunctionExpression &)state.expr;
-	auto &info = (RoundPrecisionFunctionData &)*func_expr.bind_info;
-	auto source_scale = DecimalType::GetScale(func_expr.children[0]->return_type);
-	T power_of_ten = POWERS_OF_TEN_CLASS::POWERS_OF_TEN[source_scale - info.target_scale];
-	T addition = power_of_ten / 2;
-	UnaryExecutor::Execute<T, T>(input.data[0], result, input.size(), [&](T input) {
-		if (input < 0) {
-			input -= addition;
-		} else {
-			input += addition;
-		}
-		return input / power_of_ten;
-	});
-}
-
-unique_ptr<FunctionData> BindDecimalRoundPrecision(ClientContext &context, ScalarFunction &bound_function,
+static unique_ptr<FunctionData> MapFromEntriesBind(ClientContext &context, ScalarFunction &bound_function,
                                                    vector<unique_ptr<Expression>> &arguments) {
-	auto &decimal_type = arguments[0]->return_type;
-	if (!arguments[1]->IsFoldable()) {
-		throw NotImplementedException("ROUND(DECIMAL, INTEGER) with non-constant precision is not supported");
+	child_list_t<LogicalType> child_types;
+
+	if (arguments.size() != 1) {
+		throw InvalidInputException("The input argument must be a list of structs.");
 	}
-	Value val = ExpressionExecutor::EvaluateScalar(*arguments[1]).CastAs(LogicalType::INTEGER);
-	if (val.IsNull()) {
-		throw NotImplementedException("ROUND(DECIMAL, INTEGER) with non-constant precision is not supported");
-	}
-	// our new precision becomes the round value
-	// e.g. ROUND(DECIMAL(18,3), 1) -> DECIMAL(18,1)
-	// but ONLY if the round value is positive
-	// if it is negative the scale becomes zero
-	// i.e. ROUND(DECIMAL(18,3), -1) -> DECIMAL(18,0)
-	int32_t round_value = IntegerValue::Get(val);
-	uint8_t target_scale;
-	auto width = DecimalType::GetWidth(decimal_type);
-	auto scale = DecimalType::GetScale(decimal_type);
-	if (round_value < 0) {
-		target_scale = 0;
-		switch (decimal_type.InternalType()) {
-		case PhysicalType::INT16:
-			bound_function.function = DecimalRoundNegativePrecisionFunction<int16_t, NumericHelper>;
-			break;
-		case PhysicalType::INT32:
-			bound_function.function = DecimalRoundNegativePrecisionFunction<int32_t, NumericHelper>;
-			break;
-		case PhysicalType::INT64:
-			bound_function.function = DecimalRoundNegativePrecisionFunction<int64_t, NumericHelper>;
-			break;
-		default:
-			bound_function.function = DecimalRoundNegativePrecisionFunction<hugeint_t, Hugeint>;
-			break;
-		}
-	} else {
-		if (round_value >= (int32_t)scale) {
-			// if round_value is bigger than or equal to scale we do nothing
-			bound_function.function = ScalarFunction::NopFunction;
-			target_scale = scale;
-		} else {
-			target_scale = round_value;
-			switch (decimal_type.InternalType()) {
-			case PhysicalType::INT16:
-				bound_function.function = DecimalRoundPositivePrecisionFunction<int16_t, NumericHelper>;
-				break;
-			case PhysicalType::INT32:
-				bound_function.function = DecimalRoundPositivePrecisionFunction<int32_t, NumericHelper>;
-				break;
-			case PhysicalType::INT64:
-				bound_function.function = DecimalRoundPositivePrecisionFunction<int64_t, NumericHelper>;
-				break;
-			default:
-				bound_function.function = DecimalRoundPositivePrecisionFunction<hugeint_t, Hugeint>;
-				break;
-			}
-		}
-	}
-	bound_function.arguments[0] = decimal_type;
-	bound_function.return_type = LogicalType::DECIMAL(width, target_scale);
-	return make_unique<RoundPrecisionFunctionData>(round_value);
-}
-
-void RoundFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet round("round");
-	for (auto &type : LogicalType::Numeric()) {
-		scalar_function_t round_prec_func = nullptr;
-		scalar_function_t round_func = nullptr;
-		bind_scalar_function_t bind_func = nullptr;
-		bind_scalar_function_t bind_prec_func = nullptr;
-		if (type.IsIntegral()) {
-			// no round for integral numbers
-			continue;
-		}
-		switch (type.id()) {
-		case LogicalTypeId::FLOAT:
-			round_func = ScalarFunction::UnaryFunction<float, float, RoundOperator>;
-			round_prec_func = ScalarFunction::BinaryFunction<float, int32_t, float, RoundOperatorPrecision>;
-			break;
-		case LogicalTypeId::DOUBLE:
-			round_func = ScalarFunction::UnaryFunction<double, double, RoundOperator>;
-			round_prec_func = ScalarFunction::BinaryFunction<double, int32_t, double, RoundOperatorPrecision>;
-			break;
-		case LogicalTypeId::DECIMAL:
-			bind_func = BindGenericRoundFunctionDecimal<RoundDecimalOperator>;
-			bind_prec_func = BindDecimalRoundPrecision;
-			break;
-		default:
-			throw InternalException("Unimplemented numeric type for function \"floor\"");
-		}
-		round.AddFunction(ScalarFunction({type}, type, round_func, false, false, bind_func));
-		round.AddFunction(
-		    ScalarFunction({type, LogicalType::INTEGER}, type, round_prec_func, false, false, bind_prec_func));
-	}
-	set.AddFunction(round);
-}
-
-//===--------------------------------------------------------------------===//
-// exp
-//===--------------------------------------------------------------------===//
-struct ExpOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA left) {
-		return std::exp(left);
-	}
-};
-
-void ExpFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("exp", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, ExpOperator>));
-}
-
-//===--------------------------------------------------------------------===//
-// pow
-//===--------------------------------------------------------------------===//
-struct PowOperator {
-	template <class TA, class TB, class TR>
-	static inline TR Operation(TA base, TB exponent) {
-		return std::pow(base, exponent);
-	}
-};
-
-void PowFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunction power_function("pow", {LogicalType::DOUBLE, LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                              ScalarFunction::BinaryFunction<double, double, double, PowOperator>);
-	set.AddFunction(power_function);
-	power_function.name = "power";
-	set.AddFunction(power_function);
-	power_function.name = "**";
-	set.AddFunction(power_function);
-	power_function.name = "^";
-	set.AddFunction(power_function);
-}
-
-//===--------------------------------------------------------------------===//
-// sqrt
-//===--------------------------------------------------------------------===//
-struct SqrtOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		if (input < 0) {
-			throw OutOfRangeException("cannot take square root of a negative number");
-		}
-		return std::sqrt(input);
-	}
-};
-
-void SqrtFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("sqrt", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, SqrtOperator>));
-}
-
-//===--------------------------------------------------------------------===//
-// cbrt
-//===--------------------------------------------------------------------===//
-struct CbRtOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA left) {
-		return std::cbrt(left);
-	}
-};
-
-void CbrtFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("cbrt", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, CbRtOperator>));
-}
-
-//===--------------------------------------------------------------------===//
-// ln
-//===--------------------------------------------------------------------===//
-
-struct LnOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		if (input < 0) {
-			throw OutOfRangeException("cannot take logarithm of a negative number");
-		}
-		if (input == 0) {
-			throw OutOfRangeException("cannot take logarithm of zero");
-		}
-		return std::log(input);
-	}
-};
-
-void LnFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("ln", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, LnOperator>));
-}
-
-//===--------------------------------------------------------------------===//
-// log
-//===--------------------------------------------------------------------===//
-struct Log10Operator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		if (input < 0) {
-			throw OutOfRangeException("cannot take logarithm of a negative number");
-		}
-		if (input == 0) {
-			throw OutOfRangeException("cannot take logarithm of zero");
-		}
-		return std::log10(input);
-	}
-};
-
-void Log10Fun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction({"log10", "log"}, ScalarFunction({LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                                                 ScalarFunction::UnaryFunction<double, double, Log10Operator>));
-}
-
-//===--------------------------------------------------------------------===//
-// log2
-//===--------------------------------------------------------------------===//
-struct Log2Operator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		if (input < 0) {
-			throw OutOfRangeException("cannot take logarithm of a negative number");
-		}
-		if (input == 0) {
-			throw OutOfRangeException("cannot take logarithm of zero");
-		}
-		return std::log2(input);
-	}
-};
-
-void Log2Fun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("log2", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, Log2Operator>));
-}
-
-//===--------------------------------------------------------------------===//
-// pi
-//===--------------------------------------------------------------------===//
-static void PiFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	D_ASSERT(args.ColumnCount() == 0);
-	Value pi_value = Value::DOUBLE(PI);
-	result.Reference(pi_value);
-}
-
-void PiFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("pi", {}, LogicalType::DOUBLE, PiFunction));
-}
-
-//===--------------------------------------------------------------------===//
-// degrees
-//===--------------------------------------------------------------------===//
-struct DegreesOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA left) {
-		return left * (180 / PI);
-	}
-};
-
-void DegreesFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("degrees", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, DegreesOperator>));
-}
-
-//===--------------------------------------------------------------------===//
-// radians
-//===--------------------------------------------------------------------===//
-struct RadiansOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA left) {
-		return left * (PI / 180);
-	}
-};
-
-void RadiansFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("radians", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, RadiansOperator>));
-}
-
-//===--------------------------------------------------------------------===//
-// isnan
-//===--------------------------------------------------------------------===//
-struct IsNanOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		return Value::IsNan(input);
-	}
-};
-
-void IsNanFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet funcs("isnan");
-	funcs.AddFunction(ScalarFunction({LogicalType::FLOAT}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<float, bool, IsNanOperator>));
-	funcs.AddFunction(ScalarFunction({LogicalType::DOUBLE}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<double, bool, IsNanOperator>));
-	set.AddFunction(funcs);
-}
-
-//===--------------------------------------------------------------------===//
-// isinf
-//===--------------------------------------------------------------------===//
-struct IsInfiniteOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		return !Value::IsNan(input) && !Value::IsFinite(input);
-	}
-};
-
-template <>
-bool IsInfiniteOperator::Operation(date_t input) {
-	return !Value::IsFinite(input);
-}
-
-template <>
-bool IsInfiniteOperator::Operation(timestamp_t input) {
-	return !Value::IsFinite(input);
-}
-
-void IsInfiniteFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet funcs("isinf");
-	funcs.AddFunction(ScalarFunction({LogicalType::FLOAT}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<float, bool, IsInfiniteOperator>));
-	funcs.AddFunction(ScalarFunction({LogicalType::DOUBLE}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<double, bool, IsInfiniteOperator>));
-	funcs.AddFunction(ScalarFunction({LogicalType::DATE}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<date_t, bool, IsInfiniteOperator>));
-	funcs.AddFunction(ScalarFunction({LogicalType::TIMESTAMP}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<timestamp_t, bool, IsInfiniteOperator>));
-	funcs.AddFunction(ScalarFunction({LogicalType::TIMESTAMP_TZ}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<timestamp_t, bool, IsInfiniteOperator>));
-	set.AddFunction(funcs);
-}
-
-//===--------------------------------------------------------------------===//
-// isfinite
-//===--------------------------------------------------------------------===//
-struct IsFiniteOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		return Value::IsFinite(input);
-	}
-};
-
-void IsFiniteFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet funcs("isfinite");
-	funcs.AddFunction(ScalarFunction({LogicalType::FLOAT}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<float, bool, IsFiniteOperator>));
-	funcs.AddFunction(ScalarFunction({LogicalType::DOUBLE}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<double, bool, IsFiniteOperator>));
-	funcs.AddFunction(ScalarFunction({LogicalType::DATE}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<date_t, bool, IsFiniteOperator>));
-	funcs.AddFunction(ScalarFunction({LogicalType::TIMESTAMP}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<timestamp_t, bool, IsFiniteOperator>));
-	funcs.AddFunction(ScalarFunction({LogicalType::TIMESTAMP_TZ}, LogicalType::BOOLEAN,
-	                                 ScalarFunction::UnaryFunction<timestamp_t, bool, IsFiniteOperator>));
-	set.AddFunction(funcs);
-}
-
-//===--------------------------------------------------------------------===//
-// sin
-//===--------------------------------------------------------------------===//
-template <class OP>
-struct NoInfiniteDoubleWrapper {
-	template <class INPUT_TYPE, class RESULT_TYPE>
-	static RESULT_TYPE Operation(INPUT_TYPE input) {
-		if (DUCKDB_UNLIKELY(!Value::IsFinite(input))) {
-			if (Value::IsNan(input)) {
-				return input;
-			}
-			throw OutOfRangeException("input value %lf is out of range for numeric function", input);
-		}
-		return OP::template Operation<INPUT_TYPE, RESULT_TYPE>(input);
-	}
-};
-
-struct SinOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		return std::sin(input);
-	}
-};
-
-void SinFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(
-	    ScalarFunction("sin", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                   ScalarFunction::UnaryFunction<double, double, NoInfiniteDoubleWrapper<SinOperator>>));
-}
-
-//===--------------------------------------------------------------------===//
-// cos
-//===--------------------------------------------------------------------===//
-struct CosOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		return (double)std::cos(input);
-	}
-};
-
-void CosFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(
-	    ScalarFunction("cos", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                   ScalarFunction::UnaryFunction<double, double, NoInfiniteDoubleWrapper<CosOperator>>));
-}
-
-//===--------------------------------------------------------------------===//
-// tan
-//===--------------------------------------------------------------------===//
-struct TanOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		return (double)std::tan(input);
-	}
-};
-
-void TanFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(
-	    ScalarFunction("tan", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                   ScalarFunction::UnaryFunction<double, double, NoInfiniteDoubleWrapper<TanOperator>>));
-}
-
-//===--------------------------------------------------------------------===//
-// asin
-//===--------------------------------------------------------------------===//
-struct ASinOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		if (input < -1 || input > 1) {
-			throw Exception("ASIN is undefined outside [-1,1]");
-		}
-		return (double)std::asin(input);
-	}
-};
-
-void AsinFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(
-	    ScalarFunction("asin", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                   ScalarFunction::UnaryFunction<double, double, NoInfiniteDoubleWrapper<ASinOperator>>));
-}
-
-//===--------------------------------------------------------------------===//
-// atan
-//===--------------------------------------------------------------------===//
-struct ATanOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		return (double)std::atan(input);
-	}
-};
-
-void AtanFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("atan", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, ATanOperator>));
-}
-
-//===--------------------------------------------------------------------===//
-// atan2
-//===--------------------------------------------------------------------===//
-struct ATan2 {
-	template <class TA, class TB, class TR>
-	static inline TR Operation(TA left, TB right) {
-		return (double)std::atan2(left, right);
-	}
-};
-
-void Atan2Fun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("atan2", {LogicalType::DOUBLE, LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::BinaryFunction<double, double, double, ATan2>));
-}
-
-//===--------------------------------------------------------------------===//
-// acos
-//===--------------------------------------------------------------------===//
-struct ACos {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		return (double)std::acos(input);
-	}
-};
-
-void AcosFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("acos", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, NoInfiniteDoubleWrapper<ACos>>));
-}
-
-//===--------------------------------------------------------------------===//
-// cot
-//===--------------------------------------------------------------------===//
-struct CotOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		return 1.0 / (double)std::tan(input);
-	}
-};
-
-void CotFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(
-	    ScalarFunction("cot", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                   ScalarFunction::UnaryFunction<double, double, NoInfiniteDoubleWrapper<CotOperator>>));
-}
-
-//===--------------------------------------------------------------------===//
-// gamma
-//===--------------------------------------------------------------------===//
-struct GammaOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		if (input == 0) {
-			throw OutOfRangeException("cannot take gamma of zero");
-		}
-		return std::tgamma(input);
-	}
-};
-
-void GammaFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("gamma", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, GammaOperator>));
-}
-
-//===--------------------------------------------------------------------===//
-// gamma
-//===--------------------------------------------------------------------===//
-struct LogGammaOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		if (input == 0) {
-			throw OutOfRangeException("cannot take log gamma of zero");
-		}
-		return std::lgamma(input);
-	}
-};
-
-void LogGammaFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("lgamma", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, LogGammaOperator>));
-}
-
-//===--------------------------------------------------------------------===//
-// factorial(), !
-//===--------------------------------------------------------------------===//
-
-struct FactorialOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA left) {
-		TR ret = 1;
-		for (TA i = 2; i <= left; i++) {
-			ret *= i;
-		}
-		return ret;
-	}
-};
-
-void FactorialFun::RegisterFunction(BuiltinFunctions &set) {
-	auto fun = ScalarFunction({LogicalType::INTEGER}, LogicalType::HUGEINT,
-	                          ScalarFunction::UnaryFunction<int32_t, hugeint_t, FactorialOperator>);
-
-	set.AddFunction({"factorial", "!__postfix"}, fun);
-}
-
-//===--------------------------------------------------------------------===//
-// even
-//===--------------------------------------------------------------------===//
-struct EvenOperator {
-	template <class TA, class TR>
-	static inline TR Operation(TA left) {
-		double value;
-		if (left >= 0) {
-			value = std::ceil(left);
-		} else {
-			value = std::ceil(-left);
-			value = -value;
-		}
-		if (std::floor(value / 2) * 2 != value) {
-			if (left >= 0) {
-				return value += 1;
-			}
-			return value -= 1;
-		}
-		return value;
-	}
-};
-
-void EvenFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("even", {LogicalType::DOUBLE}, LogicalType::DOUBLE,
-	                               ScalarFunction::UnaryFunction<double, double, EvenOperator>));
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-namespace duckdb {
-
-struct RandomBindData : public FunctionData {
-	ClientContext &context;
-
-	explicit RandomBindData(ClientContext &context) : context(context) {
-	}
-
-	unique_ptr<FunctionData> Copy() const override {
-		return make_unique<RandomBindData>(context);
-	}
-
-	bool Equals(const FunctionData &other_p) const override {
-		return true;
-	}
-};
-
-struct RandomLocalState : public FunctionLocalState {
-	explicit RandomLocalState(uint32_t seed) : random_engine(seed) {
-	}
-
-	RandomEngine random_engine;
-};
-
-static void RandomFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	D_ASSERT(args.ColumnCount() == 0);
-	auto &lstate = (RandomLocalState &)*ExecuteFunctionState::GetFunctionState(state);
-
-	result.SetVectorType(VectorType::FLAT_VECTOR);
-	auto result_data = FlatVector::GetData<double>(result);
-	for (idx_t i = 0; i < args.size(); i++) {
-		result_data[i] = lstate.random_engine.NextRandom();
-	}
-}
-
-unique_ptr<FunctionData> RandomBind(ClientContext &context, ScalarFunction &bound_function,
-                                    vector<unique_ptr<Expression>> &arguments) {
-	return make_unique<RandomBindData>(context);
-}
-
-static unique_ptr<FunctionLocalState> RandomInitLocalState(const BoundFunctionExpression &expr,
-                                                           FunctionData *bind_data) {
-	auto &info = (RandomBindData &)*bind_data;
-	auto &random_engine = RandomEngine::Get(info.context);
-	return make_unique<RandomLocalState>(random_engine.NextRandomInteger());
-}
-
-void RandomFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("random", {}, LogicalType::DOUBLE, RandomFunction, true, RandomBind, nullptr,
-	                               nullptr, RandomInitLocalState));
-}
-
-static void GenerateUUIDFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	D_ASSERT(args.ColumnCount() == 0);
-	auto &lstate = (RandomLocalState &)*ExecuteFunctionState::GetFunctionState(state);
-
-	result.SetVectorType(VectorType::FLAT_VECTOR);
-	auto result_data = FlatVector::GetData<hugeint_t>(result);
-
-	for (idx_t i = 0; i < args.size(); i++) {
-		result_data[i] = UUID::GenerateRandomUUID(lstate.random_engine);
-	}
-}
-
-void UUIDFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunction uuid_function({}, LogicalType::UUID, GenerateUUIDFunction, false, true, RandomBind, nullptr, nullptr,
-	                             RandomInitLocalState);
-	// generate a random uuid
-	set.AddFunction({"uuid", "gen_random_uuid"}, uuid_function);
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-namespace duckdb {
-
-struct SetseedBindData : public FunctionData {
-	//! The client context for the function call
-	ClientContext &context;
-
-	explicit SetseedBindData(ClientContext &context) : context(context) {
-	}
-
-	unique_ptr<FunctionData> Copy() const override {
-		return make_unique<SetseedBindData>(context);
-	}
-
-	bool Equals(const FunctionData &other_p) const override {
-		return true;
-	}
-};
-
-static void SetSeedFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &func_expr = (BoundFunctionExpression &)state.expr;
-	auto &info = (SetseedBindData &)*func_expr.bind_info;
-	auto &input = args.data[0];
-	input.Normalify(args.size());
-
-	auto input_seeds = FlatVector::GetData<double>(input);
-	uint32_t half_max = NumericLimits<uint32_t>::Maximum() / 2;
-
-	auto &random_engine = RandomEngine::Get(info.context);
-	for (idx_t i = 0; i < args.size(); i++) {
-		if (input_seeds[i] < -1.0 || input_seeds[i] > 1.0) {
-			throw Exception("SETSEED accepts seed values between -1.0 and 1.0, inclusive");
-		}
-		uint32_t norm_seed = (input_seeds[i] + 1.0) * half_max;
-		random_engine.SetSeed(norm_seed);
-	}
-
-	result.SetVectorType(VectorType::CONSTANT_VECTOR);
-	ConstantVector::SetNull(result, true);
-}
-
-unique_ptr<FunctionData> SetSeedBind(ClientContext &context, ScalarFunction &bound_function,
-                                     vector<unique_ptr<Expression>> &arguments) {
-	return make_unique<SetseedBindData>(context);
-}
-
-void SetseedFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(
-	    ScalarFunction("setseed", {LogicalType::DOUBLE}, LogicalType::SQLNULL, SetSeedFunction, true, SetSeedBind));
-}
-
-} // namespace duckdb
-
-
-
-namespace duckdb {
-
-void BuiltinFunctions::RegisterMathFunctions() {
-	Register<AbsFun>();
-	Register<SignFun>();
-
-	Register<CeilFun>();
-	Register<FloorFun>();
-	Register<RoundFun>();
-
-	Register<DegreesFun>();
-	Register<RadiansFun>();
-
-	Register<CbrtFun>();
-	Register<ExpFun>();
-	Register<Log2Fun>();
-	Register<Log10Fun>();
-	Register<LnFun>();
-	Register<PowFun>();
-	Register<RandomFun>();
-	Register<SetseedFun>();
-	Register<SqrtFun>();
-
-	Register<PiFun>();
-
-	Register<BitCountFun>();
-
-	Register<GammaFun>();
-	Register<LogGammaFun>();
-
-	Register<FactorialFun>();
-
-	Register<NextAfterFun>();
-
-	Register<EvenFun>();
-
-	Register<IsNanFun>();
-	Register<IsInfiniteFun>();
-	Register<IsFiniteFun>();
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-void BuiltinFunctions::RegisterNestedFunctions() {
-	Register<ArraySliceFun>();
-	Register<StructPackFun>();
-	Register<StructExtractFun>();
-	Register<StructInsertFun>();
-	Register<ListConcatFun>();
-	Register<ListContainsFun>();
-	Register<ListPositionFun>();
-	Register<ListAggregateFun>();
-	Register<ListDistinctFun>();
-	Register<ListUniqueFun>();
-	Register<ListValueFun>();
-	Register<ListExtractFun>();
-	Register<ListSortFun>();
-	Register<ListRangeFun>();
-	Register<ListFlattenFun>();
-	Register<MapFun>();
-	Register<MapExtractFun>();
-	Register<CardinalityFun>();
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-
-
-#include <limits>
-
-namespace duckdb {
-
-//===--------------------------------------------------------------------===//
-// + [add]
-//===--------------------------------------------------------------------===//
-template <>
-float AddOperator::Operation(float left, float right) {
-	auto result = left + right;
-	if (!Value::FloatIsFinite(result)) {
-		throw OutOfRangeException("Overflow in addition of float!");
-	}
-	return result;
-}
-
-template <>
-double AddOperator::Operation(double left, double right) {
-	auto result = left + right;
-	if (!Value::DoubleIsFinite(result)) {
-		throw OutOfRangeException("Overflow in addition of double!");
-	}
-	return result;
-}
-
-template <>
-interval_t AddOperator::Operation(interval_t left, interval_t right) {
-	left.months = AddOperatorOverflowCheck::Operation<int32_t, int32_t, int32_t>(left.months, right.months);
-	left.days = AddOperatorOverflowCheck::Operation<int32_t, int32_t, int32_t>(left.days, right.days);
-	left.micros = AddOperatorOverflowCheck::Operation<int64_t, int64_t, int64_t>(left.micros, right.micros);
-	return left;
-}
-
-template <>
-date_t AddOperator::Operation(date_t left, int32_t right) {
-	if (!Value::IsFinite(left)) {
-		return left;
-	}
-	int32_t days;
-	if (!TryAddOperator::Operation(left.days, right, days)) {
-		throw OutOfRangeException("Date out of range");
-	}
-	date_t result(days);
-	if (!Value::IsFinite(result)) {
-		throw OutOfRangeException("Date out of range");
-	}
-	return result;
-}
-
-template <>
-date_t AddOperator::Operation(int32_t left, date_t right) {
-	return AddOperator::Operation<date_t, int32_t, date_t>(right, left);
-}
-
-template <>
-timestamp_t AddOperator::Operation(date_t left, dtime_t right) {
-	if (left == date_t::infinity()) {
-		return timestamp_t::infinity();
-	} else if (left == date_t::ninfinity()) {
-		return timestamp_t::ninfinity();
-	}
-	timestamp_t result;
-	if (!Timestamp::TryFromDatetime(left, right, result)) {
-		throw OutOfRangeException("Timestamp out of range");
-	}
-	return result;
-}
-
-template <>
-timestamp_t AddOperator::Operation(dtime_t left, date_t right) {
-	return AddOperator::Operation<date_t, dtime_t, timestamp_t>(right, left);
-}
-
-template <>
-date_t AddOperator::Operation(date_t left, interval_t right) {
-	return Interval::Add(left, right);
-}
-
-template <>
-date_t AddOperator::Operation(interval_t left, date_t right) {
-	return AddOperator::Operation<date_t, interval_t, date_t>(right, left);
-}
-
-template <>
-timestamp_t AddOperator::Operation(timestamp_t left, interval_t right) {
-	return Interval::Add(left, right);
-}
-
-template <>
-timestamp_t AddOperator::Operation(interval_t left, timestamp_t right) {
-	return AddOperator::Operation<timestamp_t, interval_t, timestamp_t>(right, left);
-}
-
-//===--------------------------------------------------------------------===//
-// + [add] with overflow check
-//===--------------------------------------------------------------------===//
-struct OverflowCheckedAddition {
-	template <class SRCTYPE, class UTYPE>
-	static inline bool Operation(SRCTYPE left, SRCTYPE right, SRCTYPE &result) {
-		UTYPE uresult = AddOperator::Operation<UTYPE, UTYPE, UTYPE>(UTYPE(left), UTYPE(right));
-		if (uresult < NumericLimits<SRCTYPE>::Minimum() || uresult > NumericLimits<SRCTYPE>::Maximum()) {
-			return false;
-		}
-		result = SRCTYPE(uresult);
-		return true;
-	}
-};
-
-template <>
-bool TryAddOperator::Operation(uint8_t left, uint8_t right, uint8_t &result) {
-	return OverflowCheckedAddition::Operation<uint8_t, uint16_t>(left, right, result);
-}
-template <>
-bool TryAddOperator::Operation(uint16_t left, uint16_t right, uint16_t &result) {
-	return OverflowCheckedAddition::Operation<uint16_t, uint32_t>(left, right, result);
-}
-template <>
-bool TryAddOperator::Operation(uint32_t left, uint32_t right, uint32_t &result) {
-	return OverflowCheckedAddition::Operation<uint32_t, uint64_t>(left, right, result);
-}
-
-template <>
-bool TryAddOperator::Operation(uint64_t left, uint64_t right, uint64_t &result) {
-	if (NumericLimits<uint64_t>::Maximum() - left < right) {
-		return false;
-	}
-	return OverflowCheckedAddition::Operation<uint64_t, uint64_t>(left, right, result);
-}
-
-template <>
-bool TryAddOperator::Operation(int8_t left, int8_t right, int8_t &result) {
-	return OverflowCheckedAddition::Operation<int8_t, int16_t>(left, right, result);
-}
-
-template <>
-bool TryAddOperator::Operation(int16_t left, int16_t right, int16_t &result) {
-	return OverflowCheckedAddition::Operation<int16_t, int32_t>(left, right, result);
-}
-
-template <>
-bool TryAddOperator::Operation(int32_t left, int32_t right, int32_t &result) {
-	return OverflowCheckedAddition::Operation<int32_t, int64_t>(left, right, result);
-}
-
-template <>
-bool TryAddOperator::Operation(int64_t left, int64_t right, int64_t &result) {
-#if (__GNUC__ >= 5) || defined(__clang__)
-	if (__builtin_add_overflow(left, right, &result)) {
-		return false;
-	}
-#else
-	// https://blog.regehr.org/archives/1139
-	result = int64_t((uint64_t)left + (uint64_t)right);
-	if ((left < 0 && right < 0 && result >= 0) || (left >= 0 && right >= 0 && result < 0)) {
-		return false;
-	}
-#endif
-	return true;
-}
-
-//===--------------------------------------------------------------------===//
-// add decimal with overflow check
-//===--------------------------------------------------------------------===//
-template <class T, T min, T max>
-bool TryDecimalAddTemplated(T left, T right, T &result) {
-	if (right < 0) {
-		if (min - right > left) {
-			return false;
-		}
-	} else {
-		if (max - right < left) {
-			return false;
-		}
-	}
-	result = left + right;
-	return true;
-}
-
-template <>
-bool TryDecimalAdd::Operation(int16_t left, int16_t right, int16_t &result) {
-	return TryDecimalAddTemplated<int16_t, -9999, 9999>(left, right, result);
-}
-
-template <>
-bool TryDecimalAdd::Operation(int32_t left, int32_t right, int32_t &result) {
-	return TryDecimalAddTemplated<int32_t, -999999999, 999999999>(left, right, result);
-}
-
-template <>
-bool TryDecimalAdd::Operation(int64_t left, int64_t right, int64_t &result) {
-	return TryDecimalAddTemplated<int64_t, -999999999999999999, 999999999999999999>(left, right, result);
-}
-
-template <>
-bool TryDecimalAdd::Operation(hugeint_t left, hugeint_t right, hugeint_t &result) {
-	result = left + right;
-	if (result <= -Hugeint::POWERS_OF_TEN[38] || result >= Hugeint::POWERS_OF_TEN[38]) {
-		return false;
-	}
-	return true;
-}
-
-template <>
-hugeint_t DecimalAddOverflowCheck::Operation(hugeint_t left, hugeint_t right) {
-	hugeint_t result;
-	if (!TryDecimalAdd::Operation(left, right, result)) {
-		throw OutOfRangeException("Overflow in addition of DECIMAL(38) (%s + %s);", left.ToString(), right.ToString());
-	}
-	return result;
-}
-
-//===--------------------------------------------------------------------===//
-// add time operator
-//===--------------------------------------------------------------------===//
-template <>
-dtime_t AddTimeOperator::Operation(dtime_t left, interval_t right) {
-	date_t date(0);
-	return Interval::Add(left, right, date);
-}
-
-template <>
-dtime_t AddTimeOperator::Operation(interval_t left, dtime_t right) {
-	return AddTimeOperator::Operation<dtime_t, interval_t, dtime_t>(right, left);
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#include <limits>
-
-namespace duckdb {
-
-template <class OP>
-static scalar_function_t GetScalarIntegerFunction(PhysicalType type) {
-	scalar_function_t function;
-	switch (type) {
-	case PhysicalType::INT8:
-		function = &ScalarFunction::BinaryFunction<int8_t, int8_t, int8_t, OP>;
-		break;
-	case PhysicalType::INT16:
-		function = &ScalarFunction::BinaryFunction<int16_t, int16_t, int16_t, OP>;
-		break;
-	case PhysicalType::INT32:
-		function = &ScalarFunction::BinaryFunction<int32_t, int32_t, int32_t, OP>;
-		break;
-	case PhysicalType::INT64:
-		function = &ScalarFunction::BinaryFunction<int64_t, int64_t, int64_t, OP>;
-		break;
-	case PhysicalType::UINT8:
-		function = &ScalarFunction::BinaryFunction<uint8_t, uint8_t, uint8_t, OP>;
-		break;
-	case PhysicalType::UINT16:
-		function = &ScalarFunction::BinaryFunction<uint16_t, uint16_t, uint16_t, OP>;
-		break;
-	case PhysicalType::UINT32:
-		function = &ScalarFunction::BinaryFunction<uint32_t, uint32_t, uint32_t, OP>;
-		break;
-	case PhysicalType::UINT64:
-		function = &ScalarFunction::BinaryFunction<uint64_t, uint64_t, uint64_t, OP>;
-		break;
-	default:
-		throw NotImplementedException("Unimplemented type for GetScalarBinaryFunction");
-	}
-	return function;
-}
-
-template <class OP>
-static scalar_function_t GetScalarBinaryFunction(PhysicalType type) {
-	scalar_function_t function;
-	switch (type) {
-	case PhysicalType::INT128:
-		function = &ScalarFunction::BinaryFunction<hugeint_t, hugeint_t, hugeint_t, OP>;
-		break;
-	case PhysicalType::FLOAT:
-		function = &ScalarFunction::BinaryFunction<float, float, float, OP>;
-		break;
-	case PhysicalType::DOUBLE:
-		function = &ScalarFunction::BinaryFunction<double, double, double, OP>;
-		break;
-	default:
-		function = GetScalarIntegerFunction<OP>(type);
-		break;
-	}
-	return function;
-}
-
-//===--------------------------------------------------------------------===//
-// + [add]
-//===--------------------------------------------------------------------===//
-struct AddPropagateStatistics {
-	template <class T, class OP>
-	static bool Operation(LogicalType type, NumericStatistics &lstats, NumericStatistics &rstats, Value &new_min,
-	                      Value &new_max) {
-		T min, max;
-		// new min is min+min
-		if (!OP::Operation(lstats.min.GetValueUnsafe<T>(), rstats.min.GetValueUnsafe<T>(), min)) {
-			return true;
-		}
-		// new max is max+max
-		if (!OP::Operation(lstats.max.GetValueUnsafe<T>(), rstats.max.GetValueUnsafe<T>(), max)) {
-			return true;
-		}
-		new_min = Value::Numeric(type, min);
-		new_max = Value::Numeric(type, max);
-		return false;
-	}
-};
-
-struct SubtractPropagateStatistics {
-	template <class T, class OP>
-	static bool Operation(LogicalType type, NumericStatistics &lstats, NumericStatistics &rstats, Value &new_min,
-	                      Value &new_max) {
-		T min, max;
-		if (!OP::Operation(lstats.min.GetValueUnsafe<T>(), rstats.max.GetValueUnsafe<T>(), min)) {
-			return true;
-		}
-		if (!OP::Operation(lstats.max.GetValueUnsafe<T>(), rstats.min.GetValueUnsafe<T>(), max)) {
-			return true;
-		}
-		new_min = Value::Numeric(type, min);
-		new_max = Value::Numeric(type, max);
-		return false;
-	}
-};
-
-template <class OP, class PROPAGATE, class BASEOP>
-static unique_ptr<BaseStatistics> PropagateNumericStats(ClientContext &context, FunctionStatisticsInput &input) {
-	auto &child_stats = input.child_stats;
-	auto &expr = input.expr;
-	D_ASSERT(child_stats.size() == 2);
-	// can only propagate stats if the children have stats
-	if (!child_stats[0] || !child_stats[1]) {
+	auto &list = arguments[0]->return_type;
+
+	if (list.id() == LogicalTypeId::UNKNOWN) {
+		bound_function.arguments.emplace_back(LogicalTypeId::UNKNOWN);
+		bound_function.return_type = LogicalType(LogicalTypeId::SQLNULL);
 		return nullptr;
 	}
-	auto &lstats = (NumericStatistics &)*child_stats[0];
-	auto &rstats = (NumericStatistics &)*child_stats[1];
-	Value new_min, new_max;
-	bool potential_overflow = true;
-	if (!lstats.min.IsNull() && !lstats.max.IsNull() && !rstats.min.IsNull() && !rstats.max.IsNull()) {
-		switch (expr.return_type.InternalType()) {
-		case PhysicalType::INT8:
-			potential_overflow =
-			    PROPAGATE::template Operation<int8_t, OP>(expr.return_type, lstats, rstats, new_min, new_max);
-			break;
-		case PhysicalType::INT16:
-			potential_overflow =
-			    PROPAGATE::template Operation<int16_t, OP>(expr.return_type, lstats, rstats, new_min, new_max);
-			break;
-		case PhysicalType::INT32:
-			potential_overflow =
-			    PROPAGATE::template Operation<int32_t, OP>(expr.return_type, lstats, rstats, new_min, new_max);
-			break;
-		case PhysicalType::INT64:
-			potential_overflow =
-			    PROPAGATE::template Operation<int64_t, OP>(expr.return_type, lstats, rstats, new_min, new_max);
-			break;
-		default:
-			return nullptr;
-		}
+
+	if (list.id() != LogicalTypeId::LIST) {
+		throw InvalidInputException("The provided argument is not a list of structs");
 	}
-	if (potential_overflow) {
-		new_min = Value(expr.return_type);
-		new_max = Value(expr.return_type);
-	} else {
-		// no potential overflow: replace with non-overflowing operator
-		expr.function.function = GetScalarIntegerFunction<BASEOP>(expr.return_type.InternalType());
+	auto &elem_type = ListType::GetChildType(list);
+	if (elem_type.id() != LogicalTypeId::STRUCT) {
+		throw InvalidInputException("The elements of the list must be structs");
 	}
-	auto stats =
-	    make_unique<NumericStatistics>(expr.return_type, move(new_min), move(new_max), StatisticsType::LOCAL_STATS);
-	stats->validity_stats = ValidityStatistics::Combine(lstats.validity_stats, rstats.validity_stats);
-	return move(stats);
+	auto &children = StructType::GetChildTypes(elem_type);
+	if (children.size() != 2) {
+		throw InvalidInputException("The provided struct type should only contain 2 fields, a key and a value");
+	}
+	child_types.push_back(make_pair("key", LogicalType::LIST(children[0].second)));
+	child_types.push_back(make_pair("value", LogicalType::LIST(children[1].second)));
+
+	//! this is more for completeness reasons
+	bound_function.return_type = LogicalType::MAP(move(child_types));
+	return make_unique<VariableReturnBindData>(bound_function.return_type);
 }
 
-template <class OP, class OPOVERFLOWCHECK, bool IS_SUBTRACT = false>
-unique_ptr<FunctionData> BindDecimalAddSubtract(ClientContext &context, ScalarFunction &bound_function,
-                                                vector<unique_ptr<Expression>> &arguments) {
-	// get the max width and scale of the input arguments
-	uint8_t max_width = 0, max_scale = 0, max_width_over_scale = 0;
-	for (idx_t i = 0; i < arguments.size(); i++) {
-		if (arguments[i]->return_type.id() == LogicalTypeId::UNKNOWN) {
-			continue;
-		}
-		uint8_t width, scale;
-		auto can_convert = arguments[i]->return_type.GetDecimalProperties(width, scale);
-		if (!can_convert) {
-			throw InternalException("Could not convert type %s to a decimal.", arguments[i]->return_type.ToString());
-		}
-		max_width = MaxValue<uint8_t>(width, max_width);
-		max_scale = MaxValue<uint8_t>(scale, max_scale);
-		max_width_over_scale = MaxValue<uint8_t>(width - scale, max_width_over_scale);
-	}
-	D_ASSERT(max_width > 0);
-	// for addition/subtraction, we add 1 to the width to ensure we don't overflow
-	bool check_overflow = false;
-	auto required_width = MaxValue<uint8_t>(max_scale + max_width_over_scale, max_width) + 1;
-	if (required_width > Decimal::MAX_WIDTH_INT64 && max_width <= Decimal::MAX_WIDTH_INT64) {
-		// we don't automatically promote past the hugeint boundary to avoid the large hugeint performance penalty
-		check_overflow = true;
-		required_width = Decimal::MAX_WIDTH_INT64;
-	}
-	if (required_width > Decimal::MAX_WIDTH_DECIMAL) {
-		// target width does not fit in decimal at all: truncate the scale and perform overflow detection
-		check_overflow = true;
-		required_width = Decimal::MAX_WIDTH_DECIMAL;
-	}
-	// arithmetic between two decimal arguments: check the types of the input arguments
-	LogicalType result_type = LogicalType::DECIMAL(required_width, max_scale);
-	// we cast all input types to the specified type
-	for (idx_t i = 0; i < arguments.size(); i++) {
-		// first check if the cast is necessary
-		// if the argument has a matching scale and internal type as the output type, no casting is necessary
-		auto &argument_type = arguments[i]->return_type;
-		uint8_t width, scale;
-		argument_type.GetDecimalProperties(width, scale);
-		if (scale == DecimalType::GetScale(result_type) && argument_type.InternalType() == result_type.InternalType()) {
-			bound_function.arguments[i] = argument_type;
-		} else {
-			bound_function.arguments[i] = result_type;
-		}
-	}
-	bound_function.return_type = result_type;
-	// now select the physical function to execute
-	if (check_overflow) {
-		bound_function.function = GetScalarBinaryFunction<OPOVERFLOWCHECK>(result_type.InternalType());
-	} else {
-		bound_function.function = GetScalarBinaryFunction<OP>(result_type.InternalType());
-	}
-	if (result_type.InternalType() != PhysicalType::INT128) {
-		if (IS_SUBTRACT) {
-			bound_function.statistics =
-			    PropagateNumericStats<TryDecimalSubtract, SubtractPropagateStatistics, SubtractOperator>;
-		} else {
-			bound_function.statistics = PropagateNumericStats<TryDecimalAdd, AddPropagateStatistics, AddOperator>;
-		}
-	}
-	return nullptr;
-}
-
-unique_ptr<FunctionData> NopDecimalBind(ClientContext &context, ScalarFunction &bound_function,
-                                        vector<unique_ptr<Expression>> &arguments) {
-	bound_function.return_type = arguments[0]->return_type;
-	bound_function.arguments[0] = arguments[0]->return_type;
-	return nullptr;
-}
-
-ScalarFunction AddFun::GetFunction(const LogicalType &type) {
-	D_ASSERT(type.IsNumeric());
-	if (type.id() == LogicalTypeId::DECIMAL) {
-		return ScalarFunction("+", {type}, type, ScalarFunction::NopFunction, false, NopDecimalBind);
-	} else {
-		return ScalarFunction("+", {type}, type, ScalarFunction::NopFunction);
-	}
-}
-
-ScalarFunction AddFun::GetFunction(const LogicalType &left_type, const LogicalType &right_type) {
-	if (left_type.IsNumeric() && left_type.id() == right_type.id()) {
-		if (left_type.id() == LogicalTypeId::DECIMAL) {
-			return ScalarFunction("+", {left_type, right_type}, left_type, nullptr, false,
-			                      BindDecimalAddSubtract<AddOperator, DecimalAddOverflowCheck>);
-		} else if (left_type.IsIntegral() && left_type.id() != LogicalTypeId::HUGEINT) {
-			return ScalarFunction("+", {left_type, right_type}, left_type,
-			                      GetScalarIntegerFunction<AddOperatorOverflowCheck>(left_type.InternalType()), false,
-			                      nullptr, nullptr,
-			                      PropagateNumericStats<TryAddOperator, AddPropagateStatistics, AddOperator>);
-		} else {
-			return ScalarFunction("+", {left_type, right_type}, left_type,
-			                      GetScalarBinaryFunction<AddOperator>(left_type.InternalType()));
-		}
-	}
-
-	switch (left_type.id()) {
-	case LogicalTypeId::DATE:
-		if (right_type.id() == LogicalTypeId::INTEGER) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::DATE,
-			                      ScalarFunction::BinaryFunction<date_t, int32_t, date_t, AddOperator>);
-		} else if (right_type.id() == LogicalTypeId::INTERVAL) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::DATE,
-			                      ScalarFunction::BinaryFunction<date_t, interval_t, date_t, AddOperator>);
-		} else if (right_type.id() == LogicalTypeId::TIME) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::TIMESTAMP,
-			                      ScalarFunction::BinaryFunction<date_t, dtime_t, timestamp_t, AddOperator>);
-		}
-		break;
-	case LogicalTypeId::INTEGER:
-		if (right_type.id() == LogicalTypeId::DATE) {
-			return ScalarFunction("+", {left_type, right_type}, right_type,
-			                      ScalarFunction::BinaryFunction<int32_t, date_t, date_t, AddOperator>);
-		}
-		break;
-	case LogicalTypeId::INTERVAL:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::INTERVAL,
-			                      ScalarFunction::BinaryFunction<interval_t, interval_t, interval_t, AddOperator>);
-		} else if (right_type.id() == LogicalTypeId::DATE) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::DATE,
-			                      ScalarFunction::BinaryFunction<interval_t, date_t, date_t, AddOperator>);
-		} else if (right_type.id() == LogicalTypeId::TIME) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::TIME,
-			                      ScalarFunction::BinaryFunction<interval_t, dtime_t, dtime_t, AddTimeOperator>);
-		} else if (right_type.id() == LogicalTypeId::TIMESTAMP) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::TIMESTAMP,
-			                      ScalarFunction::BinaryFunction<interval_t, timestamp_t, timestamp_t, AddOperator>);
-		}
-		break;
-	case LogicalTypeId::TIME:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::TIME,
-			                      ScalarFunction::BinaryFunction<dtime_t, interval_t, dtime_t, AddTimeOperator>);
-		} else if (right_type.id() == LogicalTypeId::DATE) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::TIMESTAMP,
-			                      ScalarFunction::BinaryFunction<dtime_t, date_t, timestamp_t, AddOperator>);
-		}
-		break;
-	case LogicalTypeId::TIMESTAMP:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
-			return ScalarFunction("+", {left_type, right_type}, LogicalType::TIMESTAMP,
-			                      ScalarFunction::BinaryFunction<timestamp_t, interval_t, timestamp_t, AddOperator>);
-		}
-		break;
-	default:
-		break;
-	}
-	// LCOV_EXCL_START
-	throw NotImplementedException("AddFun for types %s, %s", LogicalTypeIdToString(left_type.id()),
-	                              LogicalTypeIdToString(right_type.id()));
-	// LCOV_EXCL_STOP
-}
-
-void AddFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet functions("+");
-	for (auto &type : LogicalType::Numeric()) {
-		// unary add function is a nop, but only exists for numeric types
-		functions.AddFunction(GetFunction(type));
-		// binary add function adds two numbers together
-		functions.AddFunction(GetFunction(type, type));
-	}
-	// we can add integers to dates
-	functions.AddFunction(GetFunction(LogicalType::DATE, LogicalType::INTEGER));
-	functions.AddFunction(GetFunction(LogicalType::INTEGER, LogicalType::DATE));
-	// we can add intervals together
-	functions.AddFunction(GetFunction(LogicalType::INTERVAL, LogicalType::INTERVAL));
-	// we can add intervals to dates/times/timestamps
-	functions.AddFunction(GetFunction(LogicalType::DATE, LogicalType::INTERVAL));
-	functions.AddFunction(GetFunction(LogicalType::INTERVAL, LogicalType::DATE));
-
-	functions.AddFunction(GetFunction(LogicalType::TIME, LogicalType::INTERVAL));
-	functions.AddFunction(GetFunction(LogicalType::INTERVAL, LogicalType::TIME));
-
-	functions.AddFunction(GetFunction(LogicalType::TIMESTAMP, LogicalType::INTERVAL));
-	functions.AddFunction(GetFunction(LogicalType::INTERVAL, LogicalType::TIMESTAMP));
-
-	// we can add times to dates
-	functions.AddFunction(GetFunction(LogicalType::TIME, LogicalType::DATE));
-	functions.AddFunction(GetFunction(LogicalType::DATE, LogicalType::TIME));
-
-	// we can add lists together
-	functions.AddFunction(ListConcatFun::GetFunction());
-
-	set.AddFunction(functions);
-
-	functions.name = "add";
-	set.AddFunction(functions);
-}
-
-//===--------------------------------------------------------------------===//
-// - [subtract]
-//===--------------------------------------------------------------------===//
-struct NegateOperator {
-	template <class T>
-	static bool CanNegate(T input) {
-		using Limits = std::numeric_limits<T>;
-		return !(Limits::is_integer && Limits::is_signed && Limits::lowest() == input);
-	}
-
-	template <class TA, class TR>
-	static inline TR Operation(TA input) {
-		auto cast = (TR)input;
-		if (!CanNegate<TR>(cast)) {
-			throw OutOfRangeException("Overflow in negation of integer!");
-		}
-		return -cast;
-	}
-};
-
-template <>
-bool NegateOperator::CanNegate(float input) {
-	return Value::FloatIsFinite(input);
-}
-
-template <>
-bool NegateOperator::CanNegate(double input) {
-	return Value::DoubleIsFinite(input);
-}
-
-template <>
-interval_t NegateOperator::Operation(interval_t input) {
-	interval_t result;
-	result.months = NegateOperator::Operation<int32_t, int32_t>(input.months);
-	result.days = NegateOperator::Operation<int32_t, int32_t>(input.days);
-	result.micros = NegateOperator::Operation<int64_t, int64_t>(input.micros);
-	return result;
-}
-
-unique_ptr<FunctionData> DecimalNegateBind(ClientContext &context, ScalarFunction &bound_function,
-                                           vector<unique_ptr<Expression>> &arguments) {
-	auto &decimal_type = arguments[0]->return_type;
-	auto width = DecimalType::GetWidth(decimal_type);
-	if (width <= Decimal::MAX_WIDTH_INT16) {
-		bound_function.function = ScalarFunction::GetScalarUnaryFunction<NegateOperator>(LogicalTypeId::SMALLINT);
-	} else if (width <= Decimal::MAX_WIDTH_INT32) {
-		bound_function.function = ScalarFunction::GetScalarUnaryFunction<NegateOperator>(LogicalTypeId::INTEGER);
-	} else if (width <= Decimal::MAX_WIDTH_INT64) {
-		bound_function.function = ScalarFunction::GetScalarUnaryFunction<NegateOperator>(LogicalTypeId::BIGINT);
-	} else {
-		D_ASSERT(width <= Decimal::MAX_WIDTH_INT128);
-		bound_function.function = ScalarFunction::GetScalarUnaryFunction<NegateOperator>(LogicalTypeId::HUGEINT);
-	}
-	decimal_type.Verify();
-	bound_function.arguments[0] = decimal_type;
-	bound_function.return_type = decimal_type;
-	return nullptr;
-}
-
-struct NegatePropagateStatistics {
-	template <class T>
-	static bool Operation(LogicalType type, NumericStatistics &istats, Value &new_min, Value &new_max) {
-		auto max_value = istats.max.GetValueUnsafe<T>();
-		auto min_value = istats.min.GetValueUnsafe<T>();
-		if (!NegateOperator::CanNegate<T>(min_value) || !NegateOperator::CanNegate<T>(max_value)) {
-			return true;
-		}
-		// new min is -max
-		new_min = Value::Numeric(type, NegateOperator::Operation<T, T>(max_value));
-		// new max is -min
-		new_max = Value::Numeric(type, NegateOperator::Operation<T, T>(min_value));
-		return false;
-	}
-};
-
-static unique_ptr<BaseStatistics> NegateBindStatistics(ClientContext &context, FunctionStatisticsInput &input) {
-	auto &child_stats = input.child_stats;
-	auto &expr = input.expr;
-	D_ASSERT(child_stats.size() == 1);
-	// can only propagate stats if the children have stats
-	if (!child_stats[0]) {
-		return nullptr;
-	}
-	auto &istats = (NumericStatistics &)*child_stats[0];
-	Value new_min, new_max;
-	bool potential_overflow = true;
-	if (!istats.min.IsNull() && !istats.max.IsNull()) {
-		switch (expr.return_type.InternalType()) {
-		case PhysicalType::INT8:
-			potential_overflow =
-			    NegatePropagateStatistics::Operation<int8_t>(expr.return_type, istats, new_min, new_max);
-			break;
-		case PhysicalType::INT16:
-			potential_overflow =
-			    NegatePropagateStatistics::Operation<int16_t>(expr.return_type, istats, new_min, new_max);
-			break;
-		case PhysicalType::INT32:
-			potential_overflow =
-			    NegatePropagateStatistics::Operation<int32_t>(expr.return_type, istats, new_min, new_max);
-			break;
-		case PhysicalType::INT64:
-			potential_overflow =
-			    NegatePropagateStatistics::Operation<int64_t>(expr.return_type, istats, new_min, new_max);
-			break;
-		default:
-			return nullptr;
-		}
-	}
-	if (potential_overflow) {
-		new_min = Value(expr.return_type);
-		new_max = Value(expr.return_type);
-	}
-	auto stats =
-	    make_unique<NumericStatistics>(expr.return_type, move(new_min), move(new_max), StatisticsType::LOCAL_STATS);
-	if (istats.validity_stats) {
-		stats->validity_stats = istats.validity_stats->Copy();
-	}
-	return move(stats);
-}
-
-ScalarFunction SubtractFun::GetFunction(const LogicalType &type) {
-	if (type.id() == LogicalTypeId::INTERVAL) {
-		return ScalarFunction("-", {type}, type, ScalarFunction::UnaryFunction<interval_t, interval_t, NegateOperator>);
-	} else if (type.id() == LogicalTypeId::DECIMAL) {
-		return ScalarFunction("-", {type}, type, nullptr, false, DecimalNegateBind, nullptr, NegateBindStatistics);
-	} else {
-		D_ASSERT(type.IsNumeric());
-		return ScalarFunction("-", {type}, type, ScalarFunction::GetScalarUnaryFunction<NegateOperator>(type), false,
-		                      nullptr, nullptr, NegateBindStatistics);
-	}
-}
-
-ScalarFunction SubtractFun::GetFunction(const LogicalType &left_type, const LogicalType &right_type) {
-	if (left_type.IsNumeric() && left_type.id() == right_type.id()) {
-		if (left_type.id() == LogicalTypeId::DECIMAL) {
-			return ScalarFunction("-", {left_type, right_type}, left_type, nullptr, false,
-			                      BindDecimalAddSubtract<SubtractOperator, DecimalSubtractOverflowCheck, true>);
-		} else if (left_type.IsIntegral() && left_type.id() != LogicalTypeId::HUGEINT) {
-			return ScalarFunction(
-			    "-", {left_type, right_type}, left_type,
-			    GetScalarIntegerFunction<SubtractOperatorOverflowCheck>(left_type.InternalType()), false, nullptr,
-			    nullptr, PropagateNumericStats<TrySubtractOperator, SubtractPropagateStatistics, SubtractOperator>);
-		} else {
-			return ScalarFunction("-", {left_type, right_type}, left_type,
-			                      GetScalarBinaryFunction<SubtractOperator>(left_type.InternalType()));
-		}
-	}
-
-	switch (left_type.id()) {
-	case LogicalTypeId::DATE:
-		if (right_type.id() == LogicalTypeId::DATE) {
-			return ScalarFunction("-", {left_type, right_type}, LogicalType::BIGINT,
-			                      ScalarFunction::BinaryFunction<date_t, date_t, int64_t, SubtractOperator>);
-		} else if (right_type.id() == LogicalTypeId::INTEGER) {
-			return ScalarFunction("-", {left_type, right_type}, LogicalType::DATE,
-			                      ScalarFunction::BinaryFunction<date_t, int32_t, date_t, SubtractOperator>);
-		} else if (right_type.id() == LogicalTypeId::INTERVAL) {
-			return ScalarFunction("-", {left_type, right_type}, LogicalType::DATE,
-			                      ScalarFunction::BinaryFunction<date_t, interval_t, date_t, SubtractOperator>);
-		}
-		break;
-	case LogicalTypeId::TIMESTAMP:
-		if (right_type.id() == LogicalTypeId::TIMESTAMP) {
-			return ScalarFunction(
-			    "-", {left_type, right_type}, LogicalType::INTERVAL,
-			    ScalarFunction::BinaryFunction<timestamp_t, timestamp_t, interval_t, SubtractOperator>);
-		} else if (right_type.id() == LogicalTypeId::INTERVAL) {
-			return ScalarFunction(
-			    "-", {left_type, right_type}, LogicalType::TIMESTAMP,
-			    ScalarFunction::BinaryFunction<timestamp_t, interval_t, timestamp_t, SubtractOperator>);
-		}
-		break;
-	case LogicalTypeId::INTERVAL:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
-			return ScalarFunction("-", {left_type, right_type}, LogicalType::INTERVAL,
-			                      ScalarFunction::BinaryFunction<interval_t, interval_t, interval_t, SubtractOperator>);
-		}
-		break;
-	case LogicalTypeId::TIME:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
-			return ScalarFunction("-", {left_type, right_type}, LogicalType::TIME,
-			                      ScalarFunction::BinaryFunction<dtime_t, interval_t, dtime_t, SubtractTimeOperator>);
-		}
-		break;
-	default:
-		break;
-	}
-	// LCOV_EXCL_START
-	throw NotImplementedException("SubtractFun for types %s, %s", LogicalTypeIdToString(left_type.id()),
-	                              LogicalTypeIdToString(right_type.id()));
-	// LCOV_EXCL_STOP
-}
-
-void SubtractFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet functions("-");
-	for (auto &type : LogicalType::Numeric()) {
-		// unary subtract function, negates the input (i.e. multiplies by -1)
-		functions.AddFunction(GetFunction(type));
-		// binary subtract function "a - b", subtracts b from a
-		functions.AddFunction(GetFunction(type, type));
-	}
-	// we can subtract dates from each other
-	functions.AddFunction(GetFunction(LogicalType::DATE, LogicalType::DATE));
-	// we can subtract integers from dates
-	functions.AddFunction(GetFunction(LogicalType::DATE, LogicalType::INTEGER));
-	// we can subtract timestamps from each other
-	functions.AddFunction(GetFunction(LogicalType::TIMESTAMP, LogicalType::TIMESTAMP));
-	// we can subtract intervals from each other
-	functions.AddFunction(GetFunction(LogicalType::INTERVAL, LogicalType::INTERVAL));
-	// we can subtract intervals from dates/times/timestamps, but not the other way around
-	functions.AddFunction(GetFunction(LogicalType::DATE, LogicalType::INTERVAL));
-	functions.AddFunction(GetFunction(LogicalType::TIME, LogicalType::INTERVAL));
-	functions.AddFunction(GetFunction(LogicalType::TIMESTAMP, LogicalType::INTERVAL));
-	// we can negate intervals
-	functions.AddFunction(GetFunction(LogicalType::INTERVAL));
-	set.AddFunction(functions);
-
-	functions.name = "subtract";
-	set.AddFunction(functions);
-}
-
-//===--------------------------------------------------------------------===//
-// * [multiply]
-//===--------------------------------------------------------------------===//
-struct MultiplyPropagateStatistics {
-	template <class T, class OP>
-	static bool Operation(LogicalType type, NumericStatistics &lstats, NumericStatistics &rstats, Value &new_min,
-	                      Value &new_max) {
-		// statistics propagation on the multiplication is slightly less straightforward because of negative numbers
-		// the new min/max depend on the signs of the input types
-		// if both are positive the result is [lmin * rmin][lmax * rmax]
-		// if lmin/lmax are negative the result is [lmin * rmax][lmax * rmin]
-		// etc
-		// rather than doing all this switcheroo we just multiply all combinations of lmin/lmax with rmin/rmax
-		// and check what the minimum/maximum value is
-		T lvals[] {lstats.min.GetValueUnsafe<T>(), lstats.max.GetValueUnsafe<T>()};
-		T rvals[] {rstats.min.GetValueUnsafe<T>(), rstats.max.GetValueUnsafe<T>()};
-		T min = NumericLimits<T>::Maximum();
-		T max = NumericLimits<T>::Minimum();
-		// multiplications
-		for (idx_t l = 0; l < 2; l++) {
-			for (idx_t r = 0; r < 2; r++) {
-				T result;
-				if (!OP::Operation(lvals[l], rvals[r], result)) {
-					// potential overflow
-					return true;
-				}
-				if (result < min) {
-					min = result;
-				}
-				if (result > max) {
-					max = result;
-				}
-			}
-		}
-		new_min = Value::Numeric(type, min);
-		new_max = Value::Numeric(type, max);
-		return false;
-	}
-};
-
-unique_ptr<FunctionData> BindDecimalMultiply(ClientContext &context, ScalarFunction &bound_function,
-                                             vector<unique_ptr<Expression>> &arguments) {
-	uint8_t result_width = 0, result_scale = 0;
-	uint8_t max_width = 0;
-	for (idx_t i = 0; i < arguments.size(); i++) {
-		if (arguments[i]->return_type.id() == LogicalTypeId::UNKNOWN) {
-			continue;
-		}
-		uint8_t width, scale;
-		auto can_convert = arguments[i]->return_type.GetDecimalProperties(width, scale);
-		if (!can_convert) {
-			throw InternalException("Could not convert type %s to a decimal?", arguments[i]->return_type.ToString());
-		}
-		if (width > max_width) {
-			max_width = width;
-		}
-		result_width += width;
-		result_scale += scale;
-	}
-	D_ASSERT(max_width > 0);
-	if (result_scale > Decimal::MAX_WIDTH_DECIMAL) {
-		throw OutOfRangeException(
-		    "Needed scale %d to accurately represent the multiplication result, but this is out of range of the "
-		    "DECIMAL type. Max scale is %d; could not perform an accurate multiplication. Either add a cast to DOUBLE, "
-		    "or add an explicit cast to a decimal with a lower scale.",
-		    result_scale, Decimal::MAX_WIDTH_DECIMAL);
-	}
-	bool check_overflow = false;
-	if (result_width > Decimal::MAX_WIDTH_INT64 && max_width <= Decimal::MAX_WIDTH_INT64 &&
-	    result_scale < Decimal::MAX_WIDTH_INT64) {
-		check_overflow = true;
-		result_width = Decimal::MAX_WIDTH_INT64;
-	}
-	if (result_width > Decimal::MAX_WIDTH_DECIMAL) {
-		check_overflow = true;
-		result_width = Decimal::MAX_WIDTH_DECIMAL;
-	}
-	LogicalType result_type = LogicalType::DECIMAL(result_width, result_scale);
-	// since our scale is the summation of our input scales, we do not need to cast to the result scale
-	// however, we might need to cast to the correct internal type
-	for (idx_t i = 0; i < arguments.size(); i++) {
-		auto &argument_type = arguments[i]->return_type;
-		if (argument_type.InternalType() == result_type.InternalType()) {
-			bound_function.arguments[i] = argument_type;
-		} else {
-			uint8_t width, scale;
-			if (!argument_type.GetDecimalProperties(width, scale)) {
-				scale = 0;
-			}
-
-			bound_function.arguments[i] = LogicalType::DECIMAL(result_width, scale);
-		}
-	}
-	result_type.Verify();
-	bound_function.return_type = result_type;
-	// now select the physical function to execute
-	if (check_overflow) {
-		bound_function.function = GetScalarBinaryFunction<DecimalMultiplyOverflowCheck>(result_type.InternalType());
-	} else {
-		bound_function.function = GetScalarBinaryFunction<MultiplyOperator>(result_type.InternalType());
-	}
-	if (result_type.InternalType() != PhysicalType::INT128) {
-		bound_function.statistics =
-		    PropagateNumericStats<TryDecimalMultiply, MultiplyPropagateStatistics, MultiplyOperator>;
-	}
-	return nullptr;
-}
-
-void MultiplyFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet functions("*");
-	for (auto &type : LogicalType::Numeric()) {
-		if (type.id() == LogicalTypeId::DECIMAL) {
-			functions.AddFunction(ScalarFunction({type, type}, type, nullptr, true, false, BindDecimalMultiply));
-		} else if (TypeIsIntegral(type.InternalType()) && type.id() != LogicalTypeId::HUGEINT) {
-			functions.AddFunction(ScalarFunction(
-			    {type, type}, type, GetScalarIntegerFunction<MultiplyOperatorOverflowCheck>(type.InternalType()), true,
-			    false, nullptr, nullptr,
-			    PropagateNumericStats<TryMultiplyOperator, MultiplyPropagateStatistics, MultiplyOperator>));
-		} else {
-			functions.AddFunction(ScalarFunction({type, type}, type,
-			                                     GetScalarBinaryFunction<MultiplyOperator>(type.InternalType()), true));
-		}
-	}
-	functions.AddFunction(
-	    ScalarFunction({LogicalType::INTERVAL, LogicalType::BIGINT}, LogicalType::INTERVAL,
-	                   ScalarFunction::BinaryFunction<interval_t, int64_t, interval_t, MultiplyOperator>, true));
-	functions.AddFunction(
-	    ScalarFunction({LogicalType::BIGINT, LogicalType::INTERVAL}, LogicalType::INTERVAL,
-	                   ScalarFunction::BinaryFunction<int64_t, interval_t, interval_t, MultiplyOperator>, true));
-	set.AddFunction(functions);
-
-	functions.name = "multiply";
-	set.AddFunction(functions);
-}
-
-//===--------------------------------------------------------------------===//
-// / [divide]
-//===--------------------------------------------------------------------===//
-template <>
-float DivideOperator::Operation(float left, float right) {
-	auto result = left / right;
-	if (!Value::FloatIsFinite(result)) {
-		throw OutOfRangeException("Overflow in division of float!");
-	}
-	return result;
-}
-
-template <>
-double DivideOperator::Operation(double left, double right) {
-	auto result = left / right;
-	if (!Value::DoubleIsFinite(result)) {
-		throw OutOfRangeException("Overflow in division of double!");
-	}
-	return result;
-}
-
-template <>
-hugeint_t DivideOperator::Operation(hugeint_t left, hugeint_t right) {
-	if (right.lower == 0 && right.upper == 0) {
-		throw InternalException("Hugeint division by zero!");
-	}
-	return left / right;
-}
-
-template <>
-interval_t DivideOperator::Operation(interval_t left, int64_t right) {
-	left.days /= right;
-	left.months /= right;
-	left.micros /= right;
-	return left;
-}
-
-struct BinaryZeroIsNullWrapper {
-	template <class FUNC, class OP, class LEFT_TYPE, class RIGHT_TYPE, class RESULT_TYPE>
-	static inline RESULT_TYPE Operation(FUNC fun, LEFT_TYPE left, RIGHT_TYPE right, ValidityMask &mask, idx_t idx) {
-		if (right == 0) {
-			mask.SetInvalid(idx);
-			return left;
-		} else {
-			return OP::template Operation<LEFT_TYPE, RIGHT_TYPE, RESULT_TYPE>(left, right);
-		}
-	}
-
-	static bool AddsNulls() {
-		return true;
-	}
-};
-
-struct BinaryZeroIsNullHugeintWrapper {
-	template <class FUNC, class OP, class LEFT_TYPE, class RIGHT_TYPE, class RESULT_TYPE>
-	static inline RESULT_TYPE Operation(FUNC fun, LEFT_TYPE left, RIGHT_TYPE right, ValidityMask &mask, idx_t idx) {
-		if (right.upper == 0 && right.lower == 0) {
-			mask.SetInvalid(idx);
-			return left;
-		} else {
-			return OP::template Operation<LEFT_TYPE, RIGHT_TYPE, RESULT_TYPE>(left, right);
-		}
-	}
-
-	static bool AddsNulls() {
-		return true;
-	}
-};
-
-template <class TA, class TB, class TC, class OP, class ZWRAPPER = BinaryZeroIsNullWrapper>
-static void BinaryScalarFunctionIgnoreZero(DataChunk &input, ExpressionState &state, Vector &result) {
-	BinaryExecutor::Execute<TA, TB, TC, OP, ZWRAPPER>(input.data[0], input.data[1], result, input.size());
-}
-
-template <class OP>
-static scalar_function_t GetBinaryFunctionIgnoreZero(const LogicalType &type) {
-	switch (type.id()) {
-	case LogicalTypeId::TINYINT:
-		return BinaryScalarFunctionIgnoreZero<int8_t, int8_t, int8_t, OP>;
-	case LogicalTypeId::SMALLINT:
-		return BinaryScalarFunctionIgnoreZero<int16_t, int16_t, int16_t, OP>;
-	case LogicalTypeId::INTEGER:
-		return BinaryScalarFunctionIgnoreZero<int32_t, int32_t, int32_t, OP>;
-	case LogicalTypeId::BIGINT:
-		return BinaryScalarFunctionIgnoreZero<int64_t, int64_t, int64_t, OP>;
-	case LogicalTypeId::UTINYINT:
-		return BinaryScalarFunctionIgnoreZero<uint8_t, uint8_t, uint8_t, OP>;
-	case LogicalTypeId::USMALLINT:
-		return BinaryScalarFunctionIgnoreZero<uint16_t, uint16_t, uint16_t, OP>;
-	case LogicalTypeId::UINTEGER:
-		return BinaryScalarFunctionIgnoreZero<uint32_t, uint32_t, uint32_t, OP>;
-	case LogicalTypeId::UBIGINT:
-		return BinaryScalarFunctionIgnoreZero<uint64_t, uint64_t, uint64_t, OP>;
-	case LogicalTypeId::HUGEINT:
-		return BinaryScalarFunctionIgnoreZero<hugeint_t, hugeint_t, hugeint_t, OP, BinaryZeroIsNullHugeintWrapper>;
-	case LogicalTypeId::FLOAT:
-		return BinaryScalarFunctionIgnoreZero<float, float, float, OP>;
-	case LogicalTypeId::DOUBLE:
-		return BinaryScalarFunctionIgnoreZero<double, double, double, OP>;
-	default:
-		throw NotImplementedException("Unimplemented type for GetScalarUnaryFunction");
-	}
-}
-
-void DivideFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet functions("/");
-	for (auto &type : LogicalType::Numeric()) {
-		if (type.id() == LogicalTypeId::DECIMAL) {
-			continue;
-		} else {
-			functions.AddFunction(
-			    ScalarFunction({type, type}, type, GetBinaryFunctionIgnoreZero<DivideOperator>(type)));
-		}
-	}
-	functions.AddFunction(
-	    ScalarFunction({LogicalType::INTERVAL, LogicalType::BIGINT}, LogicalType::INTERVAL,
-	                   BinaryScalarFunctionIgnoreZero<interval_t, int64_t, interval_t, DivideOperator>));
-
-	set.AddFunction(functions);
-
-	functions.name = "divide";
-	set.AddFunction(functions);
-}
-
-//===--------------------------------------------------------------------===//
-// % [modulo]
-//===--------------------------------------------------------------------===//
-template <>
-float ModuloOperator::Operation(float left, float right) {
-	D_ASSERT(right != 0);
-	auto result = std::fmod(left, right);
-	if (!Value::FloatIsFinite(result)) {
-		throw OutOfRangeException("Overflow in modulo of float!");
-	}
-	return result;
-}
-
-template <>
-double ModuloOperator::Operation(double left, double right) {
-	D_ASSERT(right != 0);
-	auto result = std::fmod(left, right);
-	if (!Value::DoubleIsFinite(result)) {
-		throw OutOfRangeException("Overflow in modulo of double!");
-	}
-	return result;
-}
-
-template <>
-hugeint_t ModuloOperator::Operation(hugeint_t left, hugeint_t right) {
-	if (right.lower == 0 && right.upper == 0) {
-		throw InternalException("Hugeint division by zero!");
-	}
-	return left % right;
-}
-
-void ModFun::RegisterFunction(BuiltinFunctions &set) {
-	ScalarFunctionSet functions("%");
-	for (auto &type : LogicalType::Numeric()) {
-		if (type.id() == LogicalTypeId::DECIMAL) {
-			continue;
-		} else {
-			functions.AddFunction(
-			    ScalarFunction({type, type}, type, GetBinaryFunctionIgnoreZero<ModuloOperator>(type)));
-		}
-	}
-	set.AddFunction(functions);
-	functions.name = "mod";
-	set.AddFunction(functions);
+void MapFromEntriesFun::RegisterFunction(BuiltinFunctions &set) {
+	//! the arguments and return types are actually set in the binder function
+	ScalarFunction fun("map_from_entries", {}, LogicalTypeId::MAP, MapFromEntriesFunction, MapFromEntriesBind);
+	fun.null_handling = FunctionNullHandling::DEFAULT_NULL_HANDLING;
+	fun.varargs = LogicalType::ANY;
+	set.AddFunction(fun);
 }
 
 } // namespace duckdb

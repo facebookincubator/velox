@@ -35,6 +35,7 @@
 
 
 
+#include <algorithm>
 namespace duckdb {
 
 string SimilarCatalogEntry::GetQualifiedName() const {
@@ -204,7 +205,7 @@ SchemaCatalogEntry *Catalog::GetSchema(ClientContext &context, const string &sch
                                        QueryErrorContext error_context) {
 	D_ASSERT(!schema_name.empty());
 	if (schema_name == TEMP_SCHEMA) {
-		return ClientData::Get(context).temporary_objects.get();
+		return SchemaCatalogEntry::GetTemporaryObjects(context);
 	}
 	auto entry = schemas->GetEntry(context, schema_name);
 	if (!entry && !if_exists) {
@@ -237,6 +238,16 @@ SimilarCatalogEntry Catalog::SimilarEntryInSchemas(ClientContext &context, const
 	return {most_similar.first, most_similar.second, schema_of_most_similar};
 }
 
+string FindExtension(const string &function_name) {
+	auto size = sizeof(EXTENSION_FUNCTIONS) / sizeof(ExtensionFunction);
+	auto it = std::lower_bound(
+	    EXTENSION_FUNCTIONS, EXTENSION_FUNCTIONS + size, function_name,
+	    [](const ExtensionFunction &element, const string &value) { return element.function < value; });
+	if (it != EXTENSION_FUNCTIONS + size && it->function == function_name) {
+		return it->extension;
+	}
+	return "";
+}
 CatalogException Catalog::CreateMissingEntryException(ClientContext &context, const string &entry_name,
                                                       CatalogType type, const vector<SchemaCatalogEntry *> &schemas,
                                                       QueryErrorContext error_context) {
@@ -250,7 +261,12 @@ CatalogException Catalog::CreateMissingEntryException(ClientContext &context, co
 		}
 	});
 	auto unseen_entry = SimilarEntryInSchemas(context, entry_name, type, unseen_schemas);
-
+	auto extension_name = FindExtension(entry_name);
+	if (!extension_name.empty()) {
+		return CatalogException("Function with name %s is not on the catalog, but it exists in the %s extension. To "
+		                        "Install and Load the extension, run: INSTALL %s; LOAD %s;",
+		                        entry_name, extension_name, extension_name, extension_name);
+	}
 	string did_you_mean;
 	if (unseen_entry.Found() && unseen_entry.distance < entry.distance) {
 		did_you_mean = "\nDid you mean \"" + unseen_entry.GetQualifiedName() + "\"?";
@@ -393,8 +409,10 @@ LogicalType Catalog::GetType(ClientContext &context, const string &schema, const
 
 void Catalog::Alter(ClientContext &context, AlterInfo *info) {
 	ModifyCatalog();
-	auto lookup = LookupEntry(context, info->GetCatalogType(), info->schema, info->name);
-	D_ASSERT(lookup.Found()); // It must have thrown otherwise.
+	auto lookup = LookupEntry(context, info->GetCatalogType(), info->schema, info->name, info->if_exists);
+	if (!lookup.Found()) {
+		return;
+	}
 	return lookup.schema->Alter(context, info);
 }
 
@@ -420,23 +438,22 @@ ColumnDependencyManager::ColumnDependencyManager() {
 ColumnDependencyManager::~ColumnDependencyManager() {
 }
 
-void ColumnDependencyManager::AddGeneratedColumn(const ColumnDefinition &column,
-                                                 const case_insensitive_map_t<column_t> &name_map) {
+void ColumnDependencyManager::AddGeneratedColumn(const ColumnDefinition &column, const ColumnList &list) {
 	D_ASSERT(column.Generated());
 	vector<string> referenced_columns;
 	column.GetListOfDependencies(referenced_columns);
-	vector<column_t> indices;
+	vector<LogicalIndex> indices;
 	for (auto &col : referenced_columns) {
-		auto entry = name_map.find(col);
-		if (entry == name_map.end()) {
-			throw InvalidInputException("Referenced column \"%s\" was not found in the table", col);
+		if (!list.ColumnExists(col)) {
+			throw BinderException("Column \"%s\" referenced by generated column does not exist", col);
 		}
-		indices.push_back(entry->second);
+		auto &entry = list.GetColumn(col);
+		indices.push_back(entry.Logical());
 	}
-	return AddGeneratedColumn(column.Oid(), indices);
+	return AddGeneratedColumn(column.Logical(), indices);
 }
 
-void ColumnDependencyManager::AddGeneratedColumn(column_t index, const vector<column_t> &indices, bool root) {
+void ColumnDependencyManager::AddGeneratedColumn(LogicalIndex index, const vector<LogicalIndex> &indices, bool root) {
 	if (indices.empty()) {
 		return;
 	}
@@ -474,7 +491,7 @@ void ColumnDependencyManager::AddGeneratedColumn(column_t index, const vector<co
 	}
 }
 
-vector<column_t> ColumnDependencyManager::RemoveColumn(column_t index, column_t column_amount) {
+vector<LogicalIndex> ColumnDependencyManager::RemoveColumn(LogicalIndex index, idx_t column_amount) {
 	// Always add the initial column
 	deleted_columns.insert(index);
 
@@ -482,12 +499,12 @@ vector<column_t> ColumnDependencyManager::RemoveColumn(column_t index, column_t 
 	RemoveStandardColumn(index);
 
 	// Clean up the internal list
-	vector<column_t> new_indices = CleanupInternals(column_amount);
+	vector<LogicalIndex> new_indices = CleanupInternals(column_amount);
 	D_ASSERT(deleted_columns.empty());
 	return new_indices;
 }
 
-bool ColumnDependencyManager::IsDependencyOf(column_t gcol, column_t col) const {
+bool ColumnDependencyManager::IsDependencyOf(LogicalIndex gcol, LogicalIndex col) const {
 	auto entry = dependents_map.find(gcol);
 	if (entry == dependents_map.end()) {
 		return false;
@@ -496,7 +513,7 @@ bool ColumnDependencyManager::IsDependencyOf(column_t gcol, column_t col) const 
 	return list.count(col);
 }
 
-bool ColumnDependencyManager::HasDependencies(column_t index) const {
+bool ColumnDependencyManager::HasDependencies(LogicalIndex index) const {
 	auto entry = dependents_map.find(index);
 	if (entry == dependents_map.end()) {
 		return false;
@@ -504,13 +521,13 @@ bool ColumnDependencyManager::HasDependencies(column_t index) const {
 	return true;
 }
 
-const unordered_set<column_t> &ColumnDependencyManager::GetDependencies(column_t index) const {
+const logical_index_set_t &ColumnDependencyManager::GetDependencies(LogicalIndex index) const {
 	auto entry = dependents_map.find(index);
 	D_ASSERT(entry != dependents_map.end());
 	return entry->second;
 }
 
-bool ColumnDependencyManager::HasDependents(column_t index) const {
+bool ColumnDependencyManager::HasDependents(LogicalIndex index) const {
 	auto entry = dependencies_map.find(index);
 	if (entry == dependencies_map.end()) {
 		return false;
@@ -518,13 +535,13 @@ bool ColumnDependencyManager::HasDependents(column_t index) const {
 	return true;
 }
 
-const unordered_set<column_t> &ColumnDependencyManager::GetDependents(column_t index) const {
+const logical_index_set_t &ColumnDependencyManager::GetDependents(LogicalIndex index) const {
 	auto entry = dependencies_map.find(index);
 	D_ASSERT(entry != dependencies_map.end());
 	return entry->second;
 }
 
-void ColumnDependencyManager::RemoveStandardColumn(column_t index) {
+void ColumnDependencyManager::RemoveStandardColumn(LogicalIndex index) {
 	if (!HasDependents(index)) {
 		return;
 	}
@@ -540,7 +557,7 @@ void ColumnDependencyManager::RemoveStandardColumn(column_t index) {
 	dependencies_map.erase(index);
 }
 
-void ColumnDependencyManager::RemoveGeneratedColumn(column_t index) {
+void ColumnDependencyManager::RemoveGeneratedColumn(LogicalIndex index) {
 	deleted_columns.insert(index);
 	if (!HasDependencies(index)) {
 		return;
@@ -560,9 +577,9 @@ void ColumnDependencyManager::RemoveGeneratedColumn(column_t index) {
 	dependents_map.erase(index);
 }
 
-void ColumnDependencyManager::AdjustSingle(column_t idx, idx_t offset) {
-	D_ASSERT(idx >= offset);
-	column_t new_idx = idx - offset;
+void ColumnDependencyManager::AdjustSingle(LogicalIndex idx, idx_t offset) {
+	D_ASSERT(idx.index >= offset);
+	LogicalIndex new_idx = LogicalIndex(idx.index - offset);
 	// Adjust this index in the dependents of this column
 	bool has_dependents = HasDependents(idx);
 	bool has_dependencies = HasDependencies(idx);
@@ -597,38 +614,40 @@ void ColumnDependencyManager::AdjustSingle(column_t idx, idx_t offset) {
 	}
 }
 
-vector<column_t> ColumnDependencyManager::CleanupInternals(column_t column_amount) {
-	vector<column_t> to_adjust;
+vector<LogicalIndex> ColumnDependencyManager::CleanupInternals(idx_t column_amount) {
+	vector<LogicalIndex> to_adjust;
 	D_ASSERT(!deleted_columns.empty());
 	// Get the lowest index that was deleted
-	vector<column_t> new_indices(column_amount, DConstants::INVALID_INDEX);
-	column_t threshold = *deleted_columns.begin();
+	vector<LogicalIndex> new_indices(column_amount, LogicalIndex(DConstants::INVALID_INDEX));
+	idx_t threshold = deleted_columns.begin()->index;
 
 	idx_t offset = 0;
-	for (column_t i = 0; i < column_amount; i++) {
-		new_indices[i] = i - offset;
-		if (deleted_columns.count(i)) {
+	for (idx_t i = 0; i < column_amount; i++) {
+		auto current_index = LogicalIndex(i);
+		auto new_index = LogicalIndex(i - offset);
+		new_indices[i] = new_index;
+		if (deleted_columns.count(current_index)) {
 			offset++;
 			continue;
 		}
-		if (i > threshold && (HasDependencies(i) || HasDependents(i))) {
-			to_adjust.push_back(i);
+		if (i > threshold && (HasDependencies(current_index) || HasDependents(current_index))) {
+			to_adjust.push_back(current_index);
 		}
 	}
 
 	// Adjust all indices inside the dependency managers internal mappings
 	for (auto &col : to_adjust) {
-		offset = col - new_indices[col];
+		auto offset = col.index - new_indices[col.index].index;
 		AdjustSingle(col, offset);
 	}
 	deleted_columns.clear();
 	return new_indices;
 }
 
-stack<column_t> ColumnDependencyManager::GetBindOrder(const vector<ColumnDefinition> &columns) {
-	stack<column_t> bind_order;
-	queue<column_t> to_visit;
-	unordered_set<column_t> visited;
+stack<LogicalIndex> ColumnDependencyManager::GetBindOrder(const ColumnList &columns) {
+	stack<LogicalIndex> bind_order;
+	queue<LogicalIndex> to_visit;
+	logical_index_set_t visited;
 
 	for (auto &entry : direct_dependencies) {
 		auto dependent = entry.first;
@@ -660,17 +679,16 @@ stack<column_t> ColumnDependencyManager::GetBindOrder(const vector<ColumnDefinit
 	}
 
 	// Add generated columns that have no dependencies, but still might need to have their type resolved
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto &col = columns[i];
+	for (auto &col : columns.Logical()) {
 		// Not a generated column
 		if (!col.Generated()) {
 			continue;
 		}
 		// Already added to the bind_order stack
-		if (visited.count(i)) {
+		if (visited.count(col.Logical())) {
 			continue;
 		}
-		bind_order.push(i);
+		bind_order.push(col.Logical());
 	}
 
 	return bind_order;
@@ -688,6 +706,8 @@ CopyFunctionCatalogEntry::CopyFunctionCatalogEntry(Catalog *catalog, SchemaCatal
 }
 
 } // namespace duckdb
+
+
 
 
 
@@ -715,6 +735,48 @@ string IndexCatalogEntry::ToSQL() {
 	return sql;
 }
 
+void IndexCatalogEntry::Serialize(duckdb::MetaBlockWriter &serializer) {
+	// Here we serialize the index metadata in the following order:
+	// schema name, table name, index name, sql, index type, index constraint type, expression list.
+	// column_ids, unbound_expression
+	FieldWriter writer(serializer);
+	writer.WriteString(info->schema);
+	writer.WriteString(info->table);
+	writer.WriteString(name);
+	writer.WriteString(sql);
+	writer.WriteField(index->type);
+	writer.WriteField(index->constraint_type);
+	writer.WriteSerializableList(expressions);
+	writer.WriteSerializableList(parsed_expressions);
+	writer.WriteList<idx_t>(index->column_ids);
+	writer.Finalize();
+}
+
+unique_ptr<CreateIndexInfo> IndexCatalogEntry::Deserialize(Deserializer &source, ClientContext &context) {
+	// Here we deserialize the index metadata in the following order:
+	// root block, root offset, schema name, table name, index name, sql, index type, index constraint type, expression
+	// list.
+
+	auto create_index_info = make_unique<CreateIndexInfo>();
+
+	FieldReader reader(source);
+
+	create_index_info->schema = reader.ReadRequired<string>();
+	create_index_info->table = make_unique<BaseTableRef>();
+	create_index_info->table->schema_name = create_index_info->schema;
+	create_index_info->table->table_name = reader.ReadRequired<string>();
+	create_index_info->index_name = reader.ReadRequired<string>();
+	create_index_info->sql = reader.ReadRequired<string>();
+	create_index_info->index_type = IndexType(reader.ReadRequired<uint8_t>());
+	create_index_info->constraint_type = IndexConstraintType(reader.ReadRequired<uint8_t>());
+	create_index_info->expressions = reader.ReadRequiredSerializableList<ParsedExpression>();
+	create_index_info->parsed_expressions = reader.ReadRequiredSerializableList<ParsedExpression>();
+
+	create_index_info->column_ids = reader.ReadRequiredList<idx_t>();
+	reader.Finalize();
+	return create_index_info;
+}
+
 } // namespace duckdb
 
 
@@ -724,6 +786,35 @@ namespace duckdb {
 PragmaFunctionCatalogEntry::PragmaFunctionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema,
                                                        CreatePragmaFunctionInfo *info)
     : StandardEntry(CatalogType::PRAGMA_FUNCTION_ENTRY, schema, catalog, info->name), functions(move(info->functions)) {
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+ScalarFunctionCatalogEntry::ScalarFunctionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema,
+                                                       CreateScalarFunctionInfo *info)
+    : StandardEntry(CatalogType::SCALAR_FUNCTION_ENTRY, schema, catalog, info->name), functions(info->functions) {
+}
+
+unique_ptr<CatalogEntry> ScalarFunctionCatalogEntry::AlterEntry(ClientContext &context, AlterInfo *info) {
+	if (info->type != AlterType::ALTER_FUNCTION) {
+		throw InternalException("Attempting to alter ScalarFunctionCatalogEntry with unsupported alter type");
+	}
+	auto &function_info = (AlterFunctionInfo &)*info;
+	if (function_info.alter_function_type != AlterFunctionType::ADD_FUNCTION_OVERLOADS) {
+		throw InternalException("Attempting to alter ScalarFunctionCatalogEntry with unsupported alter function type");
+	}
+	auto &add_overloads = (AddFunctionOverloadInfo &)function_info;
+
+	ScalarFunctionSet new_set = functions;
+	if (!new_set.MergeFunctionSet(add_overloads.new_overloads)) {
+		throw BinderException("Failed to add new function overloads to function \"%s\": function already exists", name);
+	}
+	CreateScalarFunctionInfo new_info(move(new_set));
+	return make_unique<ScalarFunctionCatalogEntry>(catalog, schema, &new_info);
 }
 
 } // namespace duckdb
@@ -766,7 +857,7 @@ void ScalarMacroCatalogEntry::Serialize(Serializer &main_serializer) {
 	writer.Finalize();
 }
 
-unique_ptr<CreateMacroInfo> ScalarMacroCatalogEntry::Deserialize(Deserializer &main_source) {
+unique_ptr<CreateMacroInfo> ScalarMacroCatalogEntry::Deserialize(Deserializer &main_source, ClientContext &context) {
 	auto info = make_unique<CreateMacroInfo>(CatalogType::MACRO_ENTRY);
 	FieldReader reader(main_source);
 	info->schema = reader.ReadRequired<string>();
@@ -809,7 +900,7 @@ void TableMacroCatalogEntry::Serialize(Serializer &main_serializer) {
 	writer.Finalize();
 }
 
-unique_ptr<CreateMacroInfo> TableMacroCatalogEntry::Deserialize(Deserializer &main_source) {
+unique_ptr<CreateMacroInfo> TableMacroCatalogEntry::Deserialize(Deserializer &main_source, ClientContext &context) {
 	auto info = make_unique<CreateMacroInfo>(CatalogType::TABLE_MACRO_ENTRY);
 	FieldReader reader(main_source);
 	info->schema = reader.ReadRequired<string>();
@@ -887,7 +978,7 @@ void FindForeignKeyInformation(CatalogEntry *entry, AlterForeignKeyType alter_fk
 		}
 		auto &fk = (ForeignKeyConstraint &)*cond;
 		if (fk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
-			fk_arrays.push_back(make_unique<AlterForeignKeyInfo>(fk.info.schema, fk.info.table, entry->name,
+			fk_arrays.push_back(make_unique<AlterForeignKeyInfo>(fk.info.schema, fk.info.table, false, entry->name,
 			                                                     fk.pk_columns, fk.fk_columns, fk.info.pk_keys,
 			                                                     fk.info.fk_keys, alter_fk_type));
 		} else if (fk.info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE &&
@@ -1017,6 +1108,17 @@ CatalogEntry *SchemaCatalogEntry::CreatePragmaFunction(ClientContext &context, C
 }
 
 CatalogEntry *SchemaCatalogEntry::CreateFunction(ClientContext &context, CreateFunctionInfo *info) {
+	if (info->on_conflict == OnCreateConflict::ALTER_ON_CONFLICT) {
+		// check if the original entry exists
+		auto &catalog_set = GetCatalogSet(info->type);
+		auto current_entry = catalog_set.GetEntry(context, info->name);
+		if (current_entry) {
+			// the current entry exists - alter it instead
+			auto alter_info = info->GetAlterInfo();
+			Alter(context, alter_info.get());
+			return nullptr;
+		}
+	}
 	unique_ptr<StandardEntry> function;
 	switch (info->type) {
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
@@ -1029,7 +1131,7 @@ CatalogEntry *SchemaCatalogEntry::CreateFunction(ClientContext &context, CreateF
 		break;
 
 	case CatalogType::TABLE_MACRO_ENTRY:
-		// create a macro function
+		// create a macro table function
 		function = make_unique_base<StandardEntry, TableMacroCatalogEntry>(catalog, this, (CreateMacroInfo *)info);
 		break;
 	case CatalogType::AGGREGATE_FUNCTION_ENTRY:
@@ -1055,15 +1157,15 @@ CatalogEntry *SchemaCatalogEntry::AddFunction(ClientContext &context, CreateFunc
 	case CatalogType::SCALAR_FUNCTION_ENTRY: {
 		auto scalar_info = (CreateScalarFunctionInfo *)info;
 		auto &scalars = *(ScalarFunctionCatalogEntry *)entry;
-		for (const auto &scalar : scalars.functions) {
-			scalar_info->functions.emplace_back(scalar);
+		for (const auto &scalar : scalars.functions.functions) {
+			scalar_info->functions.AddFunction(scalar);
 		}
 		break;
 	}
 	case CatalogType::AGGREGATE_FUNCTION_ENTRY: {
 		auto agg_info = (CreateAggregateFunctionInfo *)info;
 		auto &aggs = *(AggregateFunctionCatalogEntry *)entry;
-		for (const auto &agg : aggs.functions) {
+		for (const auto &agg : aggs.functions.functions) {
 			agg_info->functions.AddFunction(agg);
 		}
 		break;
@@ -1270,53 +1372,68 @@ string SequenceCatalogEntry::ToSQL() {
 
 
 
+
+
+
 #include <sstream>
 
 namespace duckdb {
 
-const string &TableCatalogEntry::GetColumnName(column_t index) {
-	return columns[index].Name();
+bool TableCatalogEntry::HasGeneratedColumns() const {
+	return columns.LogicalColumnCount() != columns.PhysicalColumnCount();
 }
 
-column_t TableCatalogEntry::GetColumnIndex(string &column_name, bool if_exists) {
-	auto entry = name_map.find(column_name);
-	if (entry == name_map.end()) {
-		// entry not found: try lower-casing the name
-		entry = name_map.find(StringUtil::Lower(column_name));
-		if (entry == name_map.end()) {
-			if (if_exists) {
-				return DConstants::INVALID_INDEX;
-			}
-			throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, column_name);
+LogicalIndex TableCatalogEntry::GetColumnIndex(string &column_name, bool if_exists) {
+	auto entry = columns.GetColumnIndex(column_name);
+	if (!entry.IsValid()) {
+		if (if_exists) {
+			return entry;
 		}
+		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, column_name);
 	}
-	column_name = GetColumnName(entry->second);
-	return entry->second;
+	return entry;
 }
 
-void AddDataTableIndex(DataTable *storage, vector<ColumnDefinition> &columns, vector<idx_t> &keys,
-                       IndexConstraintType constraint_type) {
+void AddDataTableIndex(DataTable *storage, const ColumnList &columns, const vector<PhysicalIndex> &keys,
+                       IndexConstraintType constraint_type, BlockPointer *index_block = nullptr) {
 	// fetch types and create expressions for the index from the columns
 	vector<column_t> column_ids;
 	vector<unique_ptr<Expression>> unbound_expressions;
 	vector<unique_ptr<Expression>> bound_expressions;
 	idx_t key_nr = 0;
-	for (auto &key : keys) {
-		D_ASSERT(key < columns.size());
-		auto &column = columns[key];
-		if (column.Generated()) {
-			throw InvalidInputException("Creating index on generated column is not supported");
-		}
+	column_ids.reserve(keys.size());
+	for (auto &physical_key : keys) {
+		auto &column = columns.GetColumn(physical_key);
+		D_ASSERT(!column.Generated());
+		unbound_expressions.push_back(
+		    make_unique<BoundColumnRefExpression>(column.Name(), column.Type(), ColumnBinding(0, column_ids.size())));
 
-		unbound_expressions.push_back(make_unique<BoundColumnRefExpression>(columns[key].Name(), columns[key].Type(),
-		                                                                    ColumnBinding(0, column_ids.size())));
-
-		bound_expressions.push_back(make_unique<BoundReferenceExpression>(columns[key].Type(), key_nr++));
+		bound_expressions.push_back(make_unique<BoundReferenceExpression>(column.Type(), key_nr++));
 		column_ids.push_back(column.StorageOid());
 	}
+	unique_ptr<ART> art;
 	// create an adaptive radix tree around the expressions
-	auto art = make_unique<ART>(column_ids, move(unbound_expressions), constraint_type);
-	storage->AddIndex(move(art), bound_expressions);
+	if (index_block) {
+		art = make_unique<ART>(column_ids, TableIOManager::Get(*storage), move(unbound_expressions), constraint_type,
+		                       storage->db, index_block->block_id, index_block->offset);
+	} else {
+		art = make_unique<ART>(column_ids, TableIOManager::Get(*storage), move(unbound_expressions), constraint_type,
+		                       storage->db);
+		if (!storage->IsRoot()) {
+			throw TransactionException("Transaction conflict: cannot add an index to a table that has been altered!");
+		}
+	}
+	storage->info->indexes.AddIndex(move(art));
+}
+
+void AddDataTableIndex(DataTable *storage, const ColumnList &columns, vector<LogicalIndex> &keys,
+                       IndexConstraintType constraint_type, BlockPointer *index_block = nullptr) {
+	vector<PhysicalIndex> new_keys;
+	new_keys.reserve(keys.size());
+	for (auto &logical_key : keys) {
+		new_keys.push_back(columns.LogicalToPhysical(logical_key));
+	}
+	AddDataTableIndex(storage, columns, new_keys, constraint_type, index_block);
 }
 
 TableCatalogEntry::TableCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, BoundCreateTableInfo *info,
@@ -1326,32 +1443,18 @@ TableCatalogEntry::TableCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schem
       bound_constraints(move(info->bound_constraints)),
       column_dependency_manager(move(info->column_dependency_manager)) {
 	this->temporary = info->Base().temporary;
-	// add lower case aliases
-	this->name_map = move(info->name_map);
-#ifdef DEBUG
-	D_ASSERT(name_map.size() == columns.size());
-	for (idx_t i = 0; i < columns.size(); i++) {
-		D_ASSERT(name_map[columns[i].Name()] == i);
-	}
-#endif
-	// add the "rowid" alias, if there is no rowid column specified in the table
-	if (name_map.find("rowid") == name_map.end()) {
-		name_map["rowid"] = COLUMN_IDENTIFIER_ROW_ID;
-	}
 	if (!storage) {
 		// create the physical storage
 		vector<ColumnDefinition> storage_columns;
-		vector<ColumnDefinition> get_columns;
-		for (auto &col_def : columns) {
-			get_columns.push_back(col_def.Copy());
-			if (col_def.Generated()) {
-				continue;
-			}
+		for (auto &col_def : columns.Physical()) {
 			storage_columns.push_back(col_def.Copy());
 		}
-		storage = make_shared<DataTable>(catalog->db, schema->name, name, move(storage_columns), move(info->data));
+		storage =
+		    make_shared<DataTable>(catalog->db, StorageManager::GetStorageManager(catalog->db).GetTableIOManager(info),
+		                           schema->name, name, move(storage_columns), move(info->data));
 
 		// create the unique indexes for the UNIQUE and PRIMARY KEY and FOREIGN KEY constraints
+		idx_t indexes_idx = 0;
 		for (idx_t i = 0; i < bound_constraints.size(); i++) {
 			auto &constraint = bound_constraints[i];
 			if (constraint->type == ConstraintType::UNIQUE) {
@@ -1361,13 +1464,23 @@ TableCatalogEntry::TableCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schem
 				if (unique.is_primary_key) {
 					constraint_type = IndexConstraintType::PRIMARY;
 				}
-				AddDataTableIndex(storage.get(), get_columns, unique.keys, constraint_type);
+				if (info->indexes.empty()) {
+					AddDataTableIndex(storage.get(), columns, unique.keys, constraint_type);
+				} else {
+					AddDataTableIndex(storage.get(), columns, unique.keys, constraint_type,
+					                  &info->indexes[indexes_idx++]);
+				}
 			} else if (constraint->type == ConstraintType::FOREIGN_KEY) {
 				// foreign key constraint: create a foreign key index
 				auto &bfk = (BoundForeignKeyConstraint &)*constraint;
 				if (bfk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE ||
 				    bfk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
-					AddDataTableIndex(storage.get(), get_columns, bfk.info.fk_keys, IndexConstraintType::FOREIGN);
+					if (info->indexes.empty()) {
+						AddDataTableIndex(storage.get(), columns, bfk.info.fk_keys, IndexConstraintType::FOREIGN);
+					} else {
+						AddDataTableIndex(storage.get(), columns, bfk.info.fk_keys, IndexConstraintType::FOREIGN,
+						                  &info->indexes[indexes_idx++]);
+					}
 				}
 			}
 		}
@@ -1375,21 +1488,18 @@ TableCatalogEntry::TableCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schem
 }
 
 bool TableCatalogEntry::ColumnExists(const string &name) {
-	auto iterator = name_map.find(name);
-	if (iterator == name_map.end()) {
-		return false;
-	}
-	return true;
+	return columns.ColumnExists(name);
 }
 
-idx_t TableCatalogEntry::StandardColumnCount() const {
-	idx_t count = 0;
-	for (auto &col : columns) {
-		if (col.Category() == TableColumnType::STANDARD) {
-			count++;
-		}
+unique_ptr<BaseStatistics> TableCatalogEntry::GetStatistics(ClientContext &context, column_t column_id) {
+	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
+		return nullptr;
 	}
-	return count;
+	auto &column = columns.GetColumn(LogicalIndex(column_id));
+	if (column.Generated()) {
+		return nullptr;
+	}
+	return storage->GetStatistics(context, column.StorageOid());
 }
 
 unique_ptr<CatalogEntry> TableCatalogEntry::AlterEntry(ClientContext &context, AlterInfo *info) {
@@ -1407,6 +1517,7 @@ unique_ptr<CatalogEntry> TableCatalogEntry::AlterEntry(ClientContext &context, A
 		auto rename_info = (RenameTableInfo *)table_info;
 		auto copied_table = Copy(context);
 		copied_table->name = rename_info->new_table_name;
+		storage->info->table = rename_info->new_table_name;
 		return copied_table;
 	}
 	case AlterTableType::ADD_COLUMN: {
@@ -1427,10 +1538,36 @@ unique_ptr<CatalogEntry> TableCatalogEntry::AlterEntry(ClientContext &context, A
 	}
 	case AlterTableType::FOREIGN_KEY_CONSTRAINT: {
 		auto foreign_key_constraint_info = (AlterForeignKeyInfo *)table_info;
-		return SetForeignKeyConstraint(context, *foreign_key_constraint_info);
+		if (foreign_key_constraint_info->type == AlterForeignKeyType::AFT_ADD) {
+			return AddForeignKeyConstraint(context, *foreign_key_constraint_info);
+		} else {
+			return DropForeignKeyConstraint(context, *foreign_key_constraint_info);
+		}
+	}
+	case AlterTableType::SET_NOT_NULL: {
+		auto set_not_null_info = (SetNotNullInfo *)table_info;
+		return SetNotNull(context, *set_not_null_info);
+	}
+	case AlterTableType::DROP_NOT_NULL: {
+		auto drop_not_null_info = (DropNotNullInfo *)table_info;
+		return DropNotNull(context, *drop_not_null_info);
 	}
 	default:
 		throw InternalException("Unrecognized alter table type!");
+	}
+}
+
+void TableCatalogEntry::UndoAlter(ClientContext &context, AlterInfo *info) {
+	D_ASSERT(!internal);
+	D_ASSERT(info->type == AlterType::ALTER_TABLE);
+	auto table_info = (AlterTableInfo *)info;
+	switch (table_info->alter_table_type) {
+	case AlterTableType::RENAME_TABLE: {
+		storage->info->table = this->name;
+		break;
+	default:
+		break;
+	}
 	}
 }
 
@@ -1447,19 +1584,20 @@ static void RenameExpression(ParsedExpression &expr, RenameColumnInfo &info) {
 
 unique_ptr<CatalogEntry> TableCatalogEntry::RenameColumn(ClientContext &context, RenameColumnInfo &info) {
 	auto rename_idx = GetColumnIndex(info.old_name);
+	if (rename_idx.index == COLUMN_IDENTIFIER_ROW_ID) {
+		throw CatalogException("Cannot rename rowid column");
+	}
 	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
 	create_info->temporary = temporary;
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto copy = columns[i].Copy();
-
-		if (rename_idx == i) {
+	for (auto &col : columns.Logical()) {
+		auto copy = col.Copy();
+		if (rename_idx == col.Logical()) {
 			copy.SetName(info.new_name);
 		}
-		create_info->columns.push_back(move(copy));
-		auto &col = create_info->columns[i];
-		if (col.Generated() && column_dependency_manager.IsDependencyOf(i, rename_idx)) {
-			RenameExpression(col.GeneratedExpressionMutable(), info);
+		if (col.Generated() && column_dependency_manager.IsDependencyOf(col.Logical(), rename_idx)) {
+			RenameExpression(copy.GeneratedExpressionMutable(), info);
 		}
+		create_info->columns.AddColumn(move(copy));
 	}
 	for (idx_t c_idx = 0; c_idx < constraints.size(); c_idx++) {
 		auto copy = constraints[c_idx]->Copy();
@@ -1514,22 +1652,28 @@ unique_ptr<CatalogEntry> TableCatalogEntry::RenameColumn(ClientContext &context,
 }
 
 unique_ptr<CatalogEntry> TableCatalogEntry::AddColumn(ClientContext &context, AddColumnInfo &info) {
+	auto col_name = info.new_column.GetName();
+
+	// We're checking for the opposite condition (ADD COLUMN IF _NOT_ EXISTS ...).
+	if (info.if_column_not_exists && ColumnExists(col_name)) {
+		return nullptr;
+	}
+
 	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
 	create_info->temporary = temporary;
 
-	for (idx_t i = 0; i < columns.size(); i++) {
-		create_info->columns.push_back(columns[i].Copy());
+	for (auto &col : columns.Logical()) {
+		create_info->columns.AddColumn(col.Copy());
 	}
 	for (auto &constraint : constraints) {
 		create_info->constraints.push_back(constraint->Copy());
 	}
 	Binder::BindLogicalType(context, info.new_column.TypeMutable(), schema->name);
-	info.new_column.SetOid(columns.size());
-	info.new_column.SetStorageOid(storage->column_definitions.size());
-
+	info.new_column.SetOid(columns.LogicalColumnCount());
+	info.new_column.SetStorageOid(columns.PhysicalColumnCount());
 	auto col = info.new_column.Copy();
 
-	create_info->columns.push_back(move(col));
+	create_info->columns.AddColumn(move(col));
 
 	auto binder = Binder::CreateBinder(context);
 	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
@@ -1540,32 +1684,34 @@ unique_ptr<CatalogEntry> TableCatalogEntry::AddColumn(ClientContext &context, Ad
 }
 
 unique_ptr<CatalogEntry> TableCatalogEntry::RemoveColumn(ClientContext &context, RemoveColumnInfo &info) {
-	auto removed_index = GetColumnIndex(info.removed_column, info.if_exists);
-	if (removed_index == DConstants::INVALID_INDEX) {
+	auto removed_index = GetColumnIndex(info.removed_column, info.if_column_exists);
+	if (!removed_index.IsValid()) {
+		if (!info.if_column_exists) {
+			throw CatalogException("Cannot drop column: rowid column cannot be dropped");
+		}
 		return nullptr;
 	}
 
 	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
 	create_info->temporary = temporary;
 
-	unordered_set<column_t> removed_columns;
+	logical_index_set_t removed_columns;
 	if (column_dependency_manager.HasDependents(removed_index)) {
 		removed_columns = column_dependency_manager.GetDependents(removed_index);
 	}
 	if (!removed_columns.empty() && !info.cascade) {
 		throw CatalogException("Cannot drop column: column is a dependency of 1 or more generated column(s)");
 	}
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto &col = columns[i];
-		if (i == removed_index || removed_columns.count(i)) {
+	for (auto &col : columns.Logical()) {
+		if (col.Logical() == removed_index || removed_columns.count(col.Logical())) {
 			continue;
 		}
-		create_info->columns.push_back(col.Copy());
+		create_info->columns.AddColumn(col.Copy());
 	}
 	if (create_info->columns.empty()) {
 		throw CatalogException("Cannot drop column: table only has one column remaining!");
 	}
-	vector<column_t> adjusted_indices = column_dependency_manager.RemoveColumn(removed_index, columns.size());
+	auto adjusted_indices = column_dependency_manager.RemoveColumn(removed_index, columns.LogicalColumnCount());
 	// handle constraints for the new table
 	D_ASSERT(constraints.size() == bound_constraints.size());
 	for (idx_t constr_idx = 0; constr_idx < constraints.size(); constr_idx++) {
@@ -1574,11 +1720,11 @@ unique_ptr<CatalogEntry> TableCatalogEntry::RemoveColumn(ClientContext &context,
 		switch (constraint->type) {
 		case ConstraintType::NOT_NULL: {
 			auto &not_null_constraint = (BoundNotNullConstraint &)*bound_constraint;
-			if (not_null_constraint.index != removed_index) {
+			auto not_null_index = columns.PhysicalToLogical(not_null_constraint.index);
+			if (not_null_index != removed_index) {
 				// the constraint is not about this column: we need to copy it
 				// we might need to shift the index back by one though, to account for the removed column
-				idx_t new_index = not_null_constraint.index;
-				new_index = adjusted_indices[new_index];
+				auto new_index = adjusted_indices[not_null_index.index];
 				create_info->constraints.push_back(make_unique<NotNullConstraint>(new_index));
 			}
 			break;
@@ -1587,7 +1733,8 @@ unique_ptr<CatalogEntry> TableCatalogEntry::RemoveColumn(ClientContext &context,
 			// CHECK constraint
 			auto &bound_check = (BoundCheckConstraint &)*bound_constraint;
 			// check if the removed column is part of the check constraint
-			if (bound_check.bound_columns.find(removed_index) != bound_check.bound_columns.end()) {
+			auto physical_index = columns.LogicalToPhysical(removed_index);
+			if (bound_check.bound_columns.find(physical_index) != bound_check.bound_columns.end()) {
 				if (bound_check.bound_columns.size() > 1) {
 					// CHECK constraint that concerns mult
 					throw CatalogException(
@@ -1605,13 +1752,13 @@ unique_ptr<CatalogEntry> TableCatalogEntry::RemoveColumn(ClientContext &context,
 		case ConstraintType::UNIQUE: {
 			auto copy = constraint->Copy();
 			auto &unique = (UniqueConstraint &)*copy;
-			if (unique.index != DConstants::INVALID_INDEX) {
+			if (unique.index.index != DConstants::INVALID_INDEX) {
 				if (unique.index == removed_index) {
 					throw CatalogException(
 					    "Cannot drop column \"%s\" because there is a UNIQUE constraint that depends on it",
 					    info.removed_column);
 				}
-				unique.index = adjusted_indices[unique.index];
+				unique.index = adjusted_indices[unique.index.index];
 			}
 			create_info->constraints.push_back(move(copy));
 			break;
@@ -1644,11 +1791,12 @@ unique_ptr<CatalogEntry> TableCatalogEntry::RemoveColumn(ClientContext &context,
 
 	auto binder = Binder::CreateBinder(context);
 	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
-	if (columns[removed_index].Generated()) {
+	if (columns.GetColumn(LogicalIndex(removed_index)).Generated()) {
 		return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(),
 		                                      storage);
 	}
-	auto new_storage = make_shared<DataTable>(context, *storage, removed_index);
+	auto new_storage =
+	    make_shared<DataTable>(context, *storage, columns.LogicalToPhysical(LogicalIndex(removed_index)).index);
 	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(),
 	                                      new_storage);
 }
@@ -1656,20 +1804,86 @@ unique_ptr<CatalogEntry> TableCatalogEntry::RemoveColumn(ClientContext &context,
 unique_ptr<CatalogEntry> TableCatalogEntry::SetDefault(ClientContext &context, SetDefaultInfo &info) {
 	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
 	auto default_idx = GetColumnIndex(info.column_name);
+	if (default_idx.index == COLUMN_IDENTIFIER_ROW_ID) {
+		throw CatalogException("Cannot SET DEFAULT for rowid column");
+	}
 
 	// Copy all the columns, changing the value of the one that was specified by 'column_name'
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto copy = columns[i].Copy();
-		if (default_idx == i) {
+	for (auto &col : columns.Logical()) {
+		auto copy = col.Copy();
+		if (default_idx == col.Logical()) {
 			// set the default value of this column
-			D_ASSERT(!copy.Generated()); // Shouldnt reach here - DEFAULT value isn't supported for Generated Columns
+			if (copy.Generated()) {
+				throw BinderException("Cannot SET DEFAULT for generated column \"%s\"", col.Name());
+			}
 			copy.SetDefaultValue(info.expression ? info.expression->Copy() : nullptr);
 		}
-		create_info->columns.push_back(move(copy));
+		create_info->columns.AddColumn(move(copy));
 	}
 	// Copy all the constraints
 	for (idx_t i = 0; i < constraints.size(); i++) {
 		auto constraint = constraints[i]->Copy();
+		create_info->constraints.push_back(move(constraint));
+	}
+
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
+	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(), storage);
+}
+
+unique_ptr<CatalogEntry> TableCatalogEntry::SetNotNull(ClientContext &context, SetNotNullInfo &info) {
+
+	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
+	create_info->columns = columns.Copy();
+
+	auto not_null_idx = GetColumnIndex(info.column_name);
+	if (columns.GetColumn(LogicalIndex(not_null_idx)).Generated()) {
+		throw BinderException("Unsupported constraint for generated column!");
+	}
+	bool has_not_null = false;
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		auto constraint = constraints[i]->Copy();
+		if (constraint->type == ConstraintType::NOT_NULL) {
+			auto &not_null = (NotNullConstraint &)*constraint;
+			if (not_null.index == not_null_idx) {
+				has_not_null = true;
+			}
+		}
+		create_info->constraints.push_back(move(constraint));
+	}
+	if (!has_not_null) {
+		create_info->constraints.push_back(make_unique<NotNullConstraint>(not_null_idx));
+	}
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
+
+	// Early return
+	if (has_not_null) {
+		return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(),
+		                                      storage);
+	}
+
+	// Return with new storage info. Note that we need the bound column index here.
+	auto new_storage = make_shared<DataTable>(
+	    context, *storage, make_unique<BoundNotNullConstraint>(columns.LogicalToPhysical(LogicalIndex(not_null_idx))));
+	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(),
+	                                      new_storage);
+}
+
+unique_ptr<CatalogEntry> TableCatalogEntry::DropNotNull(ClientContext &context, DropNotNullInfo &info) {
+	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
+	create_info->columns = columns.Copy();
+
+	auto not_null_idx = GetColumnIndex(info.column_name);
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		auto constraint = constraints[i]->Copy();
+		// Skip/drop not_null
+		if (constraint->type == ConstraintType::NOT_NULL) {
+			auto &not_null = (NotNullConstraint &)*constraint;
+			if (not_null.index == not_null_idx) {
+				continue;
+			}
+		}
 		create_info->constraints.push_back(move(constraint));
 	}
 
@@ -1687,23 +1901,22 @@ unique_ptr<CatalogEntry> TableCatalogEntry::ChangeColumnType(ClientContext &cont
 	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
 	create_info->temporary = temporary;
 
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto copy = columns[i].Copy();
-		if (change_idx == i) {
+	for (auto &col : columns.Logical()) {
+		auto copy = col.Copy();
+		if (change_idx == col.Logical()) {
 			// set the type of this column
 			if (copy.Generated()) {
 				throw NotImplementedException("Changing types of generated columns is not supported yet");
-				// copy.ChangeGeneratedExpressionType(info.target_type);
 			}
 			copy.SetType(info.target_type);
 		}
 		// TODO: check if the generated_expression breaks, only delete it if it does
-		if (copy.Generated() && column_dependency_manager.IsDependencyOf(i, change_idx)) {
+		if (copy.Generated() && column_dependency_manager.IsDependencyOf(col.Logical(), change_idx)) {
 			throw BinderException(
 			    "This column is referenced by the generated column \"%s\", so its type can not be changed",
 			    copy.Name());
 		}
-		create_info->columns.push_back(move(copy));
+		create_info->columns.AddColumn(move(copy));
 	}
 
 	for (idx_t i = 0; i < constraints.size(); i++) {
@@ -1711,7 +1924,8 @@ unique_ptr<CatalogEntry> TableCatalogEntry::ChangeColumnType(ClientContext &cont
 		switch (constraint->type) {
 		case ConstraintType::CHECK: {
 			auto &bound_check = (BoundCheckConstraint &)*bound_constraints[i];
-			if (bound_check.bound_columns.find(change_idx) != bound_check.bound_columns.end()) {
+			auto physical_index = columns.LogicalToPhysical(change_idx);
+			if (bound_check.bound_columns.find(physical_index) != bound_check.bound_columns.end()) {
 				throw BinderException("Cannot change the type of a column that has a CHECK constraint specified");
 			}
 			break;
@@ -1728,7 +1942,7 @@ unique_ptr<CatalogEntry> TableCatalogEntry::ChangeColumnType(ClientContext &cont
 		}
 		case ConstraintType::FOREIGN_KEY: {
 			auto &bfk = (BoundForeignKeyConstraint &)*bound_constraints[i];
-			unordered_set<idx_t> key_set = bfk.pk_key_set;
+			auto key_set = bfk.pk_key_set;
 			if (bfk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
 				key_set = bfk.fk_key_set;
 			} else if (bfk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
@@ -1736,7 +1950,7 @@ unique_ptr<CatalogEntry> TableCatalogEntry::ChangeColumnType(ClientContext &cont
 					key_set.insert(bfk.info.fk_keys[i]);
 				}
 			}
-			if (key_set.find(change_idx) != key_set.end()) {
+			if (key_set.find(columns.LogicalToPhysical(change_idx)) != key_set.end()) {
 				throw BinderException("Cannot change the type of a column that has a FOREIGN KEY constraint specified");
 			}
 			break;
@@ -1749,29 +1963,58 @@ unique_ptr<CatalogEntry> TableCatalogEntry::ChangeColumnType(ClientContext &cont
 
 	auto binder = Binder::CreateBinder(context);
 	// bind the specified expression
-	vector<column_t> bound_columns;
+	vector<LogicalIndex> bound_columns;
 	AlterBinder expr_binder(*binder, context, *this, bound_columns, info.target_type);
 	auto expression = info.expression->Copy();
 	auto bound_expression = expr_binder.Bind(expression);
 	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
-	if (bound_columns.empty()) {
-		bound_columns.push_back(COLUMN_IDENTIFIER_ROW_ID);
+	vector<column_t> storage_oids;
+	for (idx_t i = 0; i < bound_columns.size(); i++) {
+		storage_oids.push_back(columns.LogicalToPhysical(bound_columns[i]).index);
+	}
+	if (storage_oids.empty()) {
+		storage_oids.push_back(COLUMN_IDENTIFIER_ROW_ID);
 	}
 
 	auto new_storage =
-	    make_shared<DataTable>(context, *storage, change_idx, info.target_type, move(bound_columns), *bound_expression);
+	    make_shared<DataTable>(context, *storage, columns.LogicalToPhysical(LogicalIndex(change_idx)).index,
+	                           info.target_type, move(storage_oids), *bound_expression);
 	auto result =
 	    make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(), new_storage);
 	return move(result);
 }
 
-unique_ptr<CatalogEntry> TableCatalogEntry::SetForeignKeyConstraint(ClientContext &context, AlterForeignKeyInfo &info) {
+unique_ptr<CatalogEntry> TableCatalogEntry::AddForeignKeyConstraint(ClientContext &context, AlterForeignKeyInfo &info) {
+	D_ASSERT(info.type == AlterForeignKeyType::AFT_ADD);
 	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
 	create_info->temporary = temporary;
 
-	for (idx_t i = 0; i < columns.size(); i++) {
-		create_info->columns.push_back(columns[i].Copy());
+	create_info->columns = columns.Copy();
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		create_info->constraints.push_back(constraints[i]->Copy());
 	}
+	ForeignKeyInfo fk_info;
+	fk_info.type = ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE;
+	fk_info.schema = info.schema;
+	fk_info.table = info.fk_table;
+	fk_info.pk_keys = info.pk_keys;
+	fk_info.fk_keys = info.fk_keys;
+	create_info->constraints.push_back(
+	    make_unique<ForeignKeyConstraint>(info.pk_columns, info.fk_columns, move(fk_info)));
+
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
+
+	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(), storage);
+}
+
+unique_ptr<CatalogEntry> TableCatalogEntry::DropForeignKeyConstraint(ClientContext &context,
+                                                                     AlterForeignKeyInfo &info) {
+	D_ASSERT(info.type == AlterForeignKeyType::AFT_DELETE);
+	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
+	create_info->temporary = temporary;
+
+	create_info->columns = columns.Copy();
 	for (idx_t i = 0; i < constraints.size(); i++) {
 		auto constraint = constraints[i]->Copy();
 		if (constraint->type == ConstraintType::FOREIGN_KEY) {
@@ -1782,16 +2025,6 @@ unique_ptr<CatalogEntry> TableCatalogEntry::SetForeignKeyConstraint(ClientContex
 		}
 		create_info->constraints.push_back(move(constraint));
 	}
-	if (info.type == AlterForeignKeyType::AFT_ADD) {
-		ForeignKeyInfo fk_info;
-		fk_info.type = ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE;
-		fk_info.schema = info.schema;
-		fk_info.table = info.fk_table;
-		fk_info.pk_keys = info.pk_keys;
-		fk_info.fk_keys = info.fk_keys;
-		create_info->constraints.push_back(
-		    make_unique<ForeignKeyConstraint>(info.pk_columns, info.fk_columns, move(fk_info)));
-	}
 
 	auto binder = Binder::CreateBinder(context);
 	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
@@ -1800,21 +2033,13 @@ unique_ptr<CatalogEntry> TableCatalogEntry::SetForeignKeyConstraint(ClientContex
 }
 
 ColumnDefinition &TableCatalogEntry::GetColumn(const string &name) {
-	auto entry = name_map.find(name);
-	if (entry == name_map.end() || entry->second == COLUMN_IDENTIFIER_ROW_ID) {
-		throw CatalogException("Column with name %s does not exist!", name);
-	}
-	auto column_index = entry->second;
-	return columns[column_index];
+	return columns.GetColumnMutable(name);
 }
 
 vector<LogicalType> TableCatalogEntry::GetTypes() {
 	vector<LogicalType> types;
-	for (auto &it : columns) {
-		if (it.Generated()) {
-			continue;
-		}
-		types.push_back(it.Type());
+	for (auto &col : columns.Physical()) {
+		types.push_back(col.Type());
 	}
 	return types;
 }
@@ -1825,18 +2050,18 @@ void TableCatalogEntry::Serialize(Serializer &serializer) {
 	FieldWriter writer(serializer);
 	writer.WriteString(schema->name);
 	writer.WriteString(name);
-	writer.WriteRegularSerializableList(columns);
+	columns.Serialize(writer);
 	writer.WriteSerializableList(constraints);
 	writer.Finalize();
 }
 
-unique_ptr<CreateTableInfo> TableCatalogEntry::Deserialize(Deserializer &source) {
+unique_ptr<CreateTableInfo> TableCatalogEntry::Deserialize(Deserializer &source, ClientContext &context) {
 	auto info = make_unique<CreateTableInfo>();
 
 	FieldReader reader(source);
 	info->schema = reader.ReadRequired<string>();
 	info->table = reader.ReadRequired<string>();
-	info->columns = reader.ReadRequiredSerializableList<ColumnDefinition, ColumnDefinition>();
+	info->columns = ColumnList::Deserialize(reader);
 	info->constraints = reader.ReadRequiredSerializableList<Constraint>();
 	reader.Finalize();
 
@@ -1855,9 +2080,9 @@ string TableCatalogEntry::ToSQL() {
 	ss << KeywordHelper::WriteOptionallyQuoted(name) << "(";
 
 	// find all columns that have NOT NULL specified, but are NOT primary key columns
-	unordered_set<idx_t> not_null_columns;
-	unordered_set<idx_t> unique_columns;
-	unordered_set<idx_t> pk_columns;
+	logical_index_set_t not_null_columns;
+	logical_index_set_t unique_columns;
+	logical_index_set_t pk_columns;
 	unordered_set<string> multi_key_pks;
 	vector<string> extra_constraints;
 	for (auto &constraint : constraints) {
@@ -1867,7 +2092,7 @@ string TableCatalogEntry::ToSQL() {
 		} else if (constraint->type == ConstraintType::UNIQUE) {
 			auto &pk = (UniqueConstraint &)*constraint;
 			vector<string> constraint_columns = pk.columns;
-			if (pk.index != DConstants::INVALID_INDEX) {
+			if (pk.index.index != DConstants::INVALID_INDEX) {
 				// no columns specified: single column constraint
 				if (pk.is_primary_key) {
 					pk_columns.insert(pk.index);
@@ -1895,17 +2120,16 @@ string TableCatalogEntry::ToSQL() {
 		}
 	}
 
-	for (idx_t i = 0; i < columns.size(); i++) {
-		if (i > 0) {
+	for (auto &column : columns.Logical()) {
+		if (column.Oid() > 0) {
 			ss << ", ";
 		}
-		auto &column = columns[i];
 		ss << KeywordHelper::WriteOptionallyQuoted(column.Name()) << " ";
 		ss << column.Type().ToString();
-		bool not_null = not_null_columns.find(column.Oid()) != not_null_columns.end();
-		bool is_single_key_pk = pk_columns.find(column.Oid()) != pk_columns.end();
+		bool not_null = not_null_columns.find(column.Logical()) != not_null_columns.end();
+		bool is_single_key_pk = pk_columns.find(column.Logical()) != pk_columns.end();
 		bool is_multi_key_pk = multi_key_pks.find(column.Name()) != multi_key_pks.end();
-		bool is_unique = unique_columns.find(column.Oid()) != unique_columns.end();
+		bool is_unique = unique_columns.find(column.Logical()) != unique_columns.end();
 		if (not_null && !is_single_key_pk && !is_multi_key_pk) {
 			// NOT NULL but not a primary key column
 			ss << " NOT NULL";
@@ -1937,9 +2161,7 @@ string TableCatalogEntry::ToSQL() {
 
 unique_ptr<CatalogEntry> TableCatalogEntry::Copy(ClientContext &context) {
 	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
-	for (idx_t i = 0; i < columns.size(); i++) {
-		create_info->columns.push_back(columns[i].Copy());
-	}
+	create_info->columns = columns.Copy();
 
 	for (idx_t i = 0; i < constraints.size(); i++) {
 		auto constraint = constraints[i]->Copy();
@@ -1953,6 +2175,7 @@ unique_ptr<CatalogEntry> TableCatalogEntry::Copy(ClientContext &context) {
 
 void TableCatalogEntry::SetAsRoot() {
 	storage->SetAsRoot();
+	storage->info->table = name;
 }
 
 void TableCatalogEntry::CommitAlter(AlterInfo &info) {
@@ -1977,19 +2200,18 @@ void TableCatalogEntry::CommitAlter(AlterInfo &info) {
 		return;
 	}
 	idx_t removed_index = DConstants::INVALID_INDEX;
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto &col = columns[i];
+	for (auto &col : columns.Logical()) {
 		if (col.Name() == column_name) {
 			// No need to alter storage, removed column is generated column
 			if (col.Generated()) {
 				return;
 			}
-			removed_index = i;
+			removed_index = col.Oid();
 			break;
 		}
 	}
 	D_ASSERT(removed_index != DConstants::INVALID_INDEX);
-	storage->CommitDropColumn(removed_index);
+	storage->CommitDropColumn(columns.LogicalToPhysical(LogicalIndex(removed_index)).index);
 }
 
 void TableCatalogEntry::CommitDrop() {
@@ -2005,7 +2227,7 @@ namespace duckdb {
 TableFunctionCatalogEntry::TableFunctionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema,
                                                      CreateTableFunctionInfo *info)
     : StandardEntry(CatalogType::TABLE_FUNCTION_ENTRY, schema, catalog, info->name), functions(move(info->functions)) {
-	D_ASSERT(this->functions.size() > 0);
+	D_ASSERT(this->functions.Size() > 0);
 }
 
 } // namespace duckdb
@@ -2134,7 +2356,7 @@ void ViewCatalogEntry::Serialize(Serializer &serializer) {
 	writer.Finalize();
 }
 
-unique_ptr<CreateViewInfo> ViewCatalogEntry::Deserialize(Deserializer &source) {
+unique_ptr<CreateViewInfo> ViewCatalogEntry::Deserialize(Deserializer &source, ClientContext &context) {
 	auto info = make_unique<CreateViewInfo>();
 
 	FieldReader reader(source);
@@ -2196,6 +2418,9 @@ unique_ptr<CatalogEntry> CatalogEntry::AlterEntry(ClientContext &context, AlterI
 	throw InternalException("Unsupported alter type for catalog entry!");
 }
 
+void CatalogEntry::UndoAlter(ClientContext &context, AlterInfo *info) {
+}
+
 unique_ptr<CatalogEntry> CatalogEntry::Copy(ClientContext &context) {
 	throw InternalException("Unsupported copy type for catalog entry!");
 }
@@ -2220,8 +2445,7 @@ CatalogSearchPath::CatalogSearchPath(ClientContext &context_p) : context(context
 	SetPaths(ParsePaths(""));
 }
 
-void CatalogSearchPath::Set(const string &new_value, bool is_set_schema) {
-	auto new_paths = ParsePaths(new_value);
+void CatalogSearchPath::Set(vector<string> &new_paths, bool is_set_schema) {
 	if (is_set_schema && new_paths.size() != 1) {
 		throw CatalogException("SET schema can set only 1 schema. This has %d", new_paths.size());
 	}
@@ -2233,6 +2457,11 @@ void CatalogSearchPath::Set(const string &new_value, bool is_set_schema) {
 	}
 	this->set_paths = move(new_paths);
 	SetPaths(set_paths);
+}
+
+void CatalogSearchPath::Set(const string &new_value, bool is_set_schema) {
+	auto new_paths = ParsePaths(new_value);
+	Set(new_paths, is_set_schema);
 }
 
 const vector<string> &CatalogSearchPath::Get() {
@@ -2279,6 +2508,7 @@ vector<string> CatalogSearchPath::ParsePaths(const string &value) {
 
 
 
+
 namespace duckdb {
 
 //! Class responsible to keep track of state when removing entries from the catalog.
@@ -2291,26 +2521,43 @@ namespace duckdb {
 class EntryDropper {
 public:
 	//! Both constructor and destructor are privates because they should only be called by DropEntryDependencies
-	explicit EntryDropper(CatalogSet &catalog_set, idx_t entry_index)
-	    : catalog_set(catalog_set), entry_index(entry_index) {
-		old_deleted = catalog_set.entries[entry_index].get()->deleted;
+	explicit EntryDropper(EntryIndex &entry_index_p) : entry_index(entry_index_p) {
+		old_deleted = entry_index.GetEntry()->deleted;
 	}
 
 	~EntryDropper() {
-		catalog_set.entries[entry_index].get()->deleted = old_deleted;
+		entry_index.GetEntry()->deleted = old_deleted;
 	}
 
 private:
-	//! The current catalog_set
-	CatalogSet &catalog_set;
 	//! Keeps track of the state of the entry before starting the delete
 	bool old_deleted;
 	//! Index of entry to be deleted
-	idx_t entry_index;
+	EntryIndex &entry_index;
 };
 
 CatalogSet::CatalogSet(Catalog &catalog, unique_ptr<DefaultGenerator> defaults)
     : catalog(catalog), defaults(move(defaults)) {
+}
+CatalogSet::~CatalogSet() {
+}
+
+EntryIndex CatalogSet::PutEntry(idx_t entry_index, unique_ptr<CatalogEntry> entry) {
+	if (entries.find(entry_index) != entries.end()) {
+		throw InternalException("Entry with entry index \"%llu\" already exists", entry_index);
+	}
+	entries.insert(make_pair(entry_index, EntryValue(move(entry))));
+	return EntryIndex(*this, entry_index);
+}
+
+void CatalogSet::PutEntry(EntryIndex index, unique_ptr<CatalogEntry> catalog_entry) {
+	auto entry = entries.find(index.GetIndex());
+	if (entry == entries.end()) {
+		throw InternalException("Entry with entry index \"%llu\" does not exist", index.GetIndex());
+	}
+	catalog_entry->child = move(entry->second.entry);
+	catalog_entry->child->parent = catalog_entry.get();
+	entry->second.entry = move(catalog_entry);
 }
 
 bool CatalogSet::CreateEntry(ClientContext &context, const string &name, unique_ptr<CatalogEntry> value,
@@ -2322,7 +2569,7 @@ bool CatalogSet::CreateEntry(ClientContext &context, const string &name, unique_
 	unique_lock<mutex> read_lock(catalog_lock);
 
 	// first check if the entry exists in the unordered set
-	idx_t entry_index;
+	idx_t index;
 	auto mapping_value = GetMapping(context, name);
 	if (mapping_value == nullptr || mapping_value->deleted) {
 		// if it does not: entry has never been created
@@ -2336,17 +2583,17 @@ bool CatalogSet::CreateEntry(ClientContext &context, const string &name, unique_
 		// first create a dummy deleted entry for this entry
 		// so transactions started before the commit of this transaction don't
 		// see it yet
-		entry_index = current_entry++;
 		auto dummy_node = make_unique<CatalogEntry>(CatalogType::INVALID, value->catalog, name);
 		dummy_node->timestamp = 0;
 		dummy_node->deleted = true;
 		dummy_node->set = this;
 
-		entries[entry_index] = move(dummy_node);
-		PutMapping(context, name, entry_index);
+		auto entry_index = PutEntry(current_entry++, move(dummy_node));
+		index = entry_index.GetIndex();
+		PutMapping(context, name, move(entry_index));
 	} else {
-		entry_index = mapping_value->index;
-		auto &current = *entries[entry_index];
+		index = mapping_value->index.GetIndex();
+		auto &current = *mapping_value->index.GetEntry();
 		// if it does, we have to check version numbers
 		if (HasConflict(context, current.timestamp)) {
 			// current version has been written to by a currently active
@@ -2368,16 +2615,16 @@ bool CatalogSet::CreateEntry(ClientContext &context, const string &name, unique_
 	// now add the dependency set of this object to the dependency manager
 	catalog.dependency_manager->AddObject(context, value.get(), dependencies);
 
-	value->child = move(entries[entry_index]);
-	value->child->parent = value.get();
+	auto value_ptr = value.get();
+	EntryIndex entry_index(*this, index);
+	PutEntry(move(entry_index), move(value));
 	// push the old entry in the undo buffer for this transaction
-	transaction.PushCatalogEntry(value->child.get());
-	entries[entry_index] = move(value);
+	transaction.PushCatalogEntry(value_ptr->child.get());
 	return true;
 }
 
-bool CatalogSet::GetEntryInternal(ClientContext &context, idx_t entry_index, CatalogEntry *&catalog_entry) {
-	catalog_entry = entries[entry_index].get();
+bool CatalogSet::GetEntryInternal(ClientContext &context, EntryIndex &entry_index, CatalogEntry *&catalog_entry) {
+	catalog_entry = entry_index.GetEntry().get();
 	// if it does: we have to retrieve the entry and to check version numbers
 	if (HasConflict(context, catalog_entry->timestamp)) {
 		// current version has been written to by a currently active
@@ -2393,21 +2640,22 @@ bool CatalogSet::GetEntryInternal(ClientContext &context, idx_t entry_index, Cat
 	return true;
 }
 
-bool CatalogSet::GetEntryInternal(ClientContext &context, const string &name, idx_t &entry_index,
+bool CatalogSet::GetEntryInternal(ClientContext &context, const string &name, EntryIndex *entry_index,
                                   CatalogEntry *&catalog_entry) {
 	auto mapping_value = GetMapping(context, name);
 	if (mapping_value == nullptr || mapping_value->deleted) {
 		// the entry does not exist, check if we can create a default entry
 		return false;
 	}
-	entry_index = mapping_value->index;
-	return GetEntryInternal(context, entry_index, catalog_entry);
+	if (entry_index) {
+		*entry_index = mapping_value->index.Copy();
+	}
+	return GetEntryInternal(context, mapping_value->index, catalog_entry);
 }
 
 bool CatalogSet::AlterOwnership(ClientContext &context, ChangeOwnershipInfo *info) {
-	idx_t entry_index;
 	CatalogEntry *entry;
-	if (!GetEntryInternal(context, info->name, entry_index, entry)) {
+	if (!GetEntryInternal(context, info->name, nullptr, entry)) {
 		return false;
 	}
 
@@ -2427,9 +2675,9 @@ bool CatalogSet::AlterEntry(ClientContext &context, const string &name, AlterInf
 	lock_guard<mutex> write_lock(catalog.write_lock);
 
 	// first check if the entry exists in the unordered set
-	idx_t entry_index;
+	EntryIndex entry_index;
 	CatalogEntry *entry;
-	if (!GetEntryInternal(context, name, entry_index, entry)) {
+	if (!GetEntryInternal(context, name, &entry_index, entry)) {
 		return false;
 	}
 	if (entry->internal) {
@@ -2452,23 +2700,26 @@ bool CatalogSet::AlterEntry(ClientContext &context, const string &name, AlterInf
 	if (value->name != original_name) {
 		auto mapping_value = GetMapping(context, value->name);
 		if (mapping_value && !mapping_value->deleted) {
-			auto entry = GetEntryForTransaction(context, entries[mapping_value->index].get());
-			if (!entry->deleted) {
+			auto original_entry = GetEntryForTransaction(context, mapping_value->index.GetEntry().get());
+			if (!original_entry->deleted) {
+				entry->UndoAlter(context, alter_info);
 				string rename_err_msg =
 				    "Could not rename \"%s\" to \"%s\": another entry with this name already exists!";
 				throw CatalogException(rename_err_msg, original_name, value->name);
 			}
 		}
-		PutMapping(context, value->name, entry_index);
+	}
+
+	if (value->name != original_name) {
+		// Do PutMapping and DeleteMapping after dependency check
+		PutMapping(context, value->name, entry_index.Copy());
 		DeleteMapping(context, original_name);
 	}
-	//! Check the dependency manager to verify that there are no conflicting dependencies with this alter
-	catalog.dependency_manager->AlterObject(context, entry, value.get());
 
 	value->timestamp = transaction.transaction_id;
-	value->child = move(entries[entry_index]);
-	value->child->parent = value.get();
 	value->set = this;
+	auto new_entry = value.get();
+	PutEntry(move(entry_index), move(value));
 
 	// serialize the AlterInfo into a temporary buffer
 	BufferedSerializer serializer;
@@ -2476,19 +2727,24 @@ bool CatalogSet::AlterEntry(ClientContext &context, const string &name, AlterInf
 	BinaryData serialized_alter = serializer.GetData();
 
 	// push the old entry in the undo buffer for this transaction
-	transaction.PushCatalogEntry(value->child.get(), serialized_alter.data.get(), serialized_alter.size);
-	entries[entry_index] = move(value);
+	transaction.PushCatalogEntry(new_entry->child.get(), serialized_alter.data.get(), serialized_alter.size);
+
+	// Check the dependency manager to verify that there are no conflicting dependencies with this alter
+	// Note that we do this AFTER the new entry has been entirely set up in the catalog set
+	// that is because in case the alter fails because of a dependency conflict, we need to be able to cleanly roll back
+	// to the old entry.
+	catalog.dependency_manager->AlterObject(context, entry, new_entry);
 
 	return true;
 }
 
-void CatalogSet::DropEntryDependencies(ClientContext &context, idx_t entry_index, CatalogEntry &entry, bool cascade) {
-
+void CatalogSet::DropEntryDependencies(ClientContext &context, EntryIndex &entry_index, CatalogEntry &entry,
+                                       bool cascade) {
 	// Stores the deleted value of the entry before starting the process
-	EntryDropper dropper(*this, entry_index);
+	EntryDropper dropper(entry_index);
 
 	// To correctly delete the object and its dependencies, it temporarily is set to deleted.
-	entries[entry_index].get()->deleted = true;
+	entry_index.GetEntry()->deleted = true;
 
 	// check any dependencies of this object
 	entry.catalog->dependency_manager->DropObject(context, &entry, cascade);
@@ -2498,7 +2754,7 @@ void CatalogSet::DropEntryDependencies(ClientContext &context, idx_t entry_index
 	// dropper.~EntryDropper()
 }
 
-void CatalogSet::DropEntryInternal(ClientContext &context, idx_t entry_index, CatalogEntry &entry, bool cascade) {
+void CatalogSet::DropEntryInternal(ClientContext &context, EntryIndex entry_index, CatalogEntry &entry, bool cascade) {
 	auto &transaction = Transaction::GetTransaction(context);
 
 	DropEntryDependencies(context, entry_index, entry, cascade);
@@ -2508,31 +2764,30 @@ void CatalogSet::DropEntryInternal(ClientContext &context, idx_t entry_index, Ca
 	// and point it at the dummy node
 	auto value = make_unique<CatalogEntry>(CatalogType::DELETED_ENTRY, entry.catalog, entry.name);
 	value->timestamp = transaction.transaction_id;
-	value->child = move(entries[entry_index]);
-	value->child->parent = value.get();
 	value->set = this;
 	value->deleted = true;
+	auto value_ptr = value.get();
+	PutEntry(move(entry_index), move(value));
 
 	// push the old entry in the undo buffer for this transaction
-	transaction.PushCatalogEntry(value->child.get());
-
-	entries[entry_index] = move(value);
+	transaction.PushCatalogEntry(value_ptr->child.get());
 }
 
 bool CatalogSet::DropEntry(ClientContext &context, const string &name, bool cascade) {
 	// lock the catalog for writing
 	lock_guard<mutex> write_lock(catalog.write_lock);
 	// we can only delete an entry that exists
-	idx_t entry_index;
+	EntryIndex entry_index;
 	CatalogEntry *entry;
-	if (!GetEntryInternal(context, name, entry_index, entry)) {
+	if (!GetEntryInternal(context, name, &entry_index, entry)) {
 		return false;
 	}
 	if (entry->internal) {
 		throw CatalogException("Cannot drop entry \"%s\" because it is an internal system entry", entry->name);
 	}
 
-	DropEntryInternal(context, entry_index, *entry, cascade);
+	lock_guard<mutex> read_lock(catalog_lock);
+	DropEntryInternal(context, move(entry_index), *entry, cascade);
 	return true;
 }
 
@@ -2550,12 +2805,10 @@ void CatalogSet::CleanupEntry(CatalogEntry *catalog_entry) {
 		if (parent->deleted && !parent->child && !parent->parent) {
 			auto mapping_entry = mapping.find(parent->name);
 			D_ASSERT(mapping_entry != mapping.end());
-			auto index = mapping_entry->second->index;
-			auto entry = entries.find(index);
-			D_ASSERT(entry != entries.end());
-			if (entry->second.get() == parent) {
+			auto entry = mapping_entry->second->index.GetEntry().get();
+			D_ASSERT(entry);
+			if (entry == parent) {
 				mapping.erase(mapping_entry);
-				entries.erase(entry);
 			}
 		}
 	}
@@ -2589,9 +2842,9 @@ MappingValue *CatalogSet::GetMapping(ClientContext &context, const string &name,
 	return mapping_value;
 }
 
-void CatalogSet::PutMapping(ClientContext &context, const string &name, idx_t entry_index) {
+void CatalogSet::PutMapping(ClientContext &context, const string &name, EntryIndex entry_index) {
 	auto entry = mapping.find(name);
-	auto new_value = make_unique<MappingValue>(entry_index);
+	auto new_value = make_unique<MappingValue>(move(entry_index));
 	new_value->timestamp = Transaction::GetTransaction(context).transaction_id;
 	if (entry != mapping.end()) {
 		if (HasConflict(context, entry->second->timestamp)) {
@@ -2606,7 +2859,7 @@ void CatalogSet::PutMapping(ClientContext &context, const string &name, idx_t en
 void CatalogSet::DeleteMapping(ClientContext &context, const string &name) {
 	auto entry = mapping.find(name);
 	D_ASSERT(entry != mapping.end());
-	auto delete_marker = make_unique<MappingValue>(entry->second->index);
+	auto delete_marker = make_unique<MappingValue>(entry->second->index.Copy());
 	delete_marker->deleted = true;
 	delete_marker->timestamp = Transaction::GetTransaction(context).transaction_id;
 	delete_marker->child = move(entry->second);
@@ -2674,15 +2927,14 @@ CatalogEntry *CatalogSet::CreateEntryInternal(ClientContext &context, unique_ptr
 		return nullptr;
 	}
 	auto &name = entry->name;
-	auto entry_index = current_entry++;
 	auto catalog_entry = entry.get();
 
 	entry->set = this;
 	entry->timestamp = 0;
 
-	PutMapping(context, name, entry_index);
+	auto entry_index = PutEntry(current_entry++, move(entry));
+	PutMapping(context, name, move(entry_index));
 	mapping[name]->timestamp = 0;
-	entries[entry_index] = move(entry);
 	return catalog_entry;
 }
 
@@ -2721,7 +2973,7 @@ CatalogEntry *CatalogSet::GetEntry(ClientContext &context, const string &name) {
 		// we found an entry for this name
 		// check the version numbers
 
-		auto catalog_entry = entries[mapping_value->index].get();
+		auto catalog_entry = mapping_value->index.GetEntry().get();
 		CatalogEntry *current = GetEntryForTransaction(context, catalog_entry);
 		if (current->deleted || (current->name != name && !UseTimestamp(context, mapping_value->timestamp))) {
 			return nullptr;
@@ -2753,7 +3005,7 @@ void CatalogSet::AdjustDependency(CatalogEntry *entry, TableCatalogEntry *table,
                                   bool remove) {
 	bool found = false;
 	if (column.Type().id() == LogicalTypeId::ENUM) {
-		for (auto &old_column : table->columns) {
+		for (auto &old_column : table->columns.Logical()) {
 			if (old_column.Name() == column.Name() && old_column.Type().id() != LogicalTypeId::ENUM) {
 				AdjustUserDependency(entry, column, remove);
 				found = true;
@@ -2764,7 +3016,7 @@ void CatalogSet::AdjustDependency(CatalogEntry *entry, TableCatalogEntry *table,
 		}
 	} else if (!(column.Type().GetAlias().empty())) {
 		auto alias = column.Type().GetAlias();
-		for (auto &old_column : table->columns) {
+		for (auto &old_column : table->columns.Logical()) {
 			auto old_alias = old_column.Type().GetAlias();
 			if (old_column.Name() == column.Name() && old_alias != alias) {
 				AdjustUserDependency(entry, column, remove);
@@ -2783,10 +3035,12 @@ void CatalogSet::AdjustTableDependencies(CatalogEntry *entry) {
 		auto old_table = (TableCatalogEntry *)entry->parent;
 		auto new_table = (TableCatalogEntry *)entry;
 
-		for (auto &new_column : new_table->columns) {
+		for (idx_t i = 0; i < new_table->columns.LogicalColumnCount(); i++) {
+			auto &new_column = new_table->columns.GetColumnMutable(LogicalIndex(i));
 			AdjustDependency(entry, old_table, new_column, false);
 		}
-		for (auto &old_column : old_table->columns) {
+		for (idx_t i = 0; i < old_table->columns.LogicalColumnCount(); i++) {
+			auto &old_column = old_table->columns.GetColumnMutable(LogicalIndex(i));
 			AdjustDependency(entry, new_table, old_column, true);
 		}
 	}
@@ -2828,7 +3082,7 @@ void CatalogSet::Undo(CatalogEntry *entry) {
 		// otherwise we need to update the base entry tables
 		auto &name = entry->name;
 		to_be_removed_node->child->SetAsRoot();
-		entries[mapping[name]->index] = move(to_be_removed_node->child);
+		mapping[name]->index.GetEntry() = move(to_be_removed_node->child);
 		entry->parent = nullptr;
 	}
 
@@ -2843,7 +3097,7 @@ void CatalogSet::Undo(CatalogEntry *entry) {
 		}
 	}
 	// we mark the catalog as being modified, since this action can lead to e.g. tables being dropped
-	entry->catalog->ModifyCatalog();
+	catalog.ModifyCatalog();
 }
 
 void CatalogSet::CreateDefaultEntries(ClientContext &context, unique_lock<mutex> &lock) {
@@ -2876,7 +3130,7 @@ void CatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEn
 	CreateDefaultEntries(context, lock);
 
 	for (auto &kv : entries) {
-		auto entry = kv.second.get();
+		auto entry = kv.second.entry.get();
 		entry = GetEntryForTransaction(context, entry);
 		if (!entry->deleted) {
 			callback(entry);
@@ -2888,7 +3142,7 @@ void CatalogSet::Scan(const std::function<void(CatalogEntry *)> &callback) {
 	// lock the catalog set
 	lock_guard<mutex> lock(catalog_lock);
 	for (auto &kv : entries) {
-		auto entry = kv.second.get();
+		auto entry = kv.second.entry.get();
 		entry = GetCommittedEntry(entry);
 		if (!entry->deleted) {
 			callback(entry);
@@ -3011,6 +3265,7 @@ static DefaultMacro internal_macros[] = {
 	{DEFAULT_SCHEMA, "list_entropy", {"l", nullptr}, "list_aggr(l, 'entropy')"},
 	{DEFAULT_SCHEMA, "list_last", {"l", nullptr}, "list_aggr(l, 'last')"},
 	{DEFAULT_SCHEMA, "list_first", {"l", nullptr}, "list_aggr(l, 'first')"},
+	{DEFAULT_SCHEMA, "list_any_value", {"l", nullptr}, "list_aggr(l, 'any_value')"},
 	{DEFAULT_SCHEMA, "list_kurtosis", {"l", nullptr}, "list_aggr(l, 'kurtosis')"},
 	{DEFAULT_SCHEMA, "list_min", {"l", nullptr}, "list_aggr(l, 'min')"},
 	{DEFAULT_SCHEMA, "list_max", {"l", nullptr}, "list_aggr(l, 'max')"},
@@ -3220,6 +3475,7 @@ static DefaultType internal_types[] = {{"int", LogicalTypeId::INTEGER},
                                        {"uint32", LogicalTypeId::UINTEGER},
                                        {"ubigint", LogicalTypeId::UBIGINT},
                                        {"uint64", LogicalTypeId::UBIGINT},
+                                       {"union", LogicalTypeId::UNION},
                                        {"timestamptz", LogicalTypeId::TIMESTAMP_TZ},
                                        {"timetz", LogicalTypeId::TIME_TZ},
                                        {"json", LogicalTypeId::JSON},
@@ -3301,15 +3557,18 @@ static DefaultView internal_views[] = {
     {"pg_catalog", "pg_attribute", "SELECT table_oid attrelid, column_name attname, data_type_id atttypid, 0 attstattarget, NULL attlen, column_index attnum, 0 attndims, -1 attcacheoff, case when data_type ilike '%decimal%' then numeric_precision*1000+numeric_scale else -1 end atttypmod, false attbyval, NULL attstorage, NULL attalign, NOT is_nullable attnotnull, column_default IS NOT NULL atthasdef, false atthasmissing, '' attidentity, '' attgenerated, false attisdropped, true attislocal, 0 attinhcount, 0 attcollation, NULL attcompression, NULL attacl, NULL attoptions, NULL attfdwoptions, NULL attmissingval FROM duckdb_columns()"},
     {"pg_catalog", "pg_attrdef", "SELECT column_index oid, table_oid adrelid, column_index adnum, column_default adbin from duckdb_columns() where column_default is not null;"},
     {"pg_catalog", "pg_class", "SELECT table_oid oid, table_name relname, schema_oid relnamespace, 0 reltype, 0 reloftype, 0 relowner, 0 relam, 0 relfilenode, 0 reltablespace, 0 relpages, estimated_size::real reltuples, 0 relallvisible, 0 reltoastrelid, 0 reltoastidxid, index_count > 0 relhasindex, false relisshared, case when temporary then 't' else 'p' end relpersistence, 'r' relkind, column_count relnatts, check_constraint_count relchecks, false relhasoids, has_primary_key relhaspkey, false relhasrules, false relhastriggers, false relhassubclass, false relrowsecurity, true relispopulated, NULL relreplident, false relispartition, 0 relrewrite, 0 relfrozenxid, NULL relminmxid, NULL relacl, NULL reloptions, NULL relpartbound FROM duckdb_tables() UNION ALL SELECT view_oid oid, view_name relname, schema_oid relnamespace, 0 reltype, 0 reloftype, 0 relowner, 0 relam, 0 relfilenode, 0 reltablespace, 0 relpages, 0 reltuples, 0 relallvisible, 0 reltoastrelid, 0 reltoastidxid, false relhasindex, false relisshared, case when temporary then 't' else 'p' end relpersistence, 'v' relkind, column_count relnatts, 0 relchecks, false relhasoids, false relhaspkey, false relhasrules, false relhastriggers, false relhassubclass, false relrowsecurity, true relispopulated, NULL relreplident, false relispartition, 0 relrewrite, 0 relfrozenxid, NULL relminmxid, NULL relacl, NULL reloptions, NULL relpartbound FROM duckdb_views() UNION ALL SELECT sequence_oid oid, sequence_name relname, schema_oid relnamespace, 0 reltype, 0 reloftype, 0 relowner, 0 relam, 0 relfilenode, 0 reltablespace, 0 relpages, 0 reltuples, 0 relallvisible, 0 reltoastrelid, 0 reltoastidxid, false relhasindex, false relisshared, case when temporary then 't' else 'p' end relpersistence, 'S' relkind, 0 relnatts, 0 relchecks, false relhasoids, false relhaspkey, false relhasrules, false relhastriggers, false relhassubclass, false relrowsecurity, true relispopulated, NULL relreplident, false relispartition, 0 relrewrite, 0 relfrozenxid, NULL relminmxid, NULL relacl, NULL reloptions, NULL relpartbound FROM duckdb_sequences() UNION ALL SELECT index_oid oid, index_name relname, schema_oid relnamespace, 0 reltype, 0 reloftype, 0 relowner, 0 relam, 0 relfilenode, 0 reltablespace, 0 relpages, 0 reltuples, 0 relallvisible, 0 reltoastrelid, 0 reltoastidxid, false relhasindex, false relisshared, 't' relpersistence, 'i' relkind, NULL relnatts, 0 relchecks, false relhasoids, false relhaspkey, false relhasrules, false relhastriggers, false relhassubclass, false relrowsecurity, true relispopulated, NULL relreplident, false relispartition, 0 relrewrite, 0 relfrozenxid, NULL relminmxid, NULL relacl, NULL reloptions, NULL relpartbound FROM duckdb_indexes()"},
-    {"pg_catalog", "pg_constraint", "SELECT table_oid*1000000+constraint_index oid, constraint_text conname, schema_oid connamespace, CASE WHEN constraint_type='CHECK' then 'c' WHEN constraint_type='UNIQUE' then 'u' WHEN constraint_type='PRIMARY KEY' THEN 'p' ELSE 'x' END contype, false condeferrable, false condeferred, true convalidated, table_oid conrelid, 0 contypid, 0 conindid, 0 conparentid, 0 confrelid, NULL confupdtype, NULL confdeltype, NULL confmatchtype, true conislocal, 0 coninhcount, false connoinherit, constraint_column_indexes conkey, NULL confkey, NULL conpfeqop, NULL conppeqop, NULL conffeqop, NULL conexclop, expression conbin FROM duckdb_constraints()"},
+    {"pg_catalog", "pg_constraint", "SELECT table_oid*1000000+constraint_index oid, constraint_text conname, schema_oid connamespace, CASE constraint_type WHEN 'CHECK' then 'c' WHEN 'UNIQUE' then 'u' WHEN 'PRIMARY KEY' THEN 'p' WHEN 'FOREIGN KEY' THEN 'f' ELSE 'x' END contype, false condeferrable, false condeferred, true convalidated, table_oid conrelid, 0 contypid, 0 conindid, 0 conparentid, 0 confrelid, NULL confupdtype, NULL confdeltype, NULL confmatchtype, true conislocal, 0 coninhcount, false connoinherit, constraint_column_indexes conkey, NULL confkey, NULL conpfeqop, NULL conppeqop, NULL conffeqop, NULL conexclop, expression conbin FROM duckdb_constraints()"},
+	{"pg_catalog", "pg_database", "SELECT 0 oid, 'main' datname"},
     {"pg_catalog", "pg_depend", "SELECT * FROM duckdb_dependencies()"},
 	{"pg_catalog", "pg_description", "SELECT NULL objoid, NULL classoid, NULL objsubid, NULL description WHERE 1=0"},
     {"pg_catalog", "pg_enum", "SELECT NULL oid, NULL enumtypid, NULL enumsortorder, NULL enumlabel WHERE 1=0"},
     {"pg_catalog", "pg_index", "SELECT index_oid indexrelid, table_oid indrelid, 0 indnatts, 0 indnkeyatts, is_unique indisunique, is_primary indisprimary, false indisexclusion, true indimmediate, false indisclustered, true indisvalid, false indcheckxmin, true indisready, true indislive, false indisreplident, NULL::INT[] indkey, NULL::OID[] indcollation, NULL::OID[] indclass, NULL::INT[] indoption, expressions indexprs, NULL indpred FROM duckdb_indexes()"},
     {"pg_catalog", "pg_indexes", "SELECT schema_name schemaname, table_name tablename, index_name indexname, NULL \"tablespace\", sql indexdef FROM duckdb_indexes()"},
     {"pg_catalog", "pg_namespace", "SELECT oid, schema_name nspname, 0 nspowner, NULL nspacl FROM duckdb_schemas()"},
+	{"pg_catalog", "pg_proc", "SELECT f.function_oid oid, function_name proname, s.oid pronamespace FROM duckdb_functions() f LEFT JOIN duckdb_schemas() s USING (schema_name)"},
     {"pg_catalog", "pg_sequence", "SELECT sequence_oid seqrelid, 0 seqtypid, start_value seqstart, increment_by seqincrement, max_value seqmax, min_value seqmin, 0 seqcache, cycle seqcycle FROM duckdb_sequences()"},
 	{"pg_catalog", "pg_sequences", "SELECT schema_name schemaname, sequence_name sequencename, 'duckdb' sequenceowner, 0 data_type, start_value, min_value, max_value, increment_by, cycle, 0 cache_size, last_value FROM duckdb_sequences()"},
+	{"pg_catalog", "pg_settings", "SELECT name, value setting, description short_desc, CASE WHEN input_type = 'VARCHAR' THEN 'string' WHEN input_type = 'BOOLEAN' THEN 'bool' WHEN input_type IN ('BIGINT', 'UBIGINT') THEN 'integer' ELSE input_type END vartype FROM duckdb_settings()"},
     {"pg_catalog", "pg_tables", "SELECT schema_name schemaname, table_name tablename, 'duckdb' tableowner, NULL \"tablespace\", index_count > 0 hasindexes, false hasrules, false hastriggers FROM duckdb_tables()"},
     {"pg_catalog", "pg_tablespace", "SELECT 0 oid, 'pg_default' spcname, 0 spcowner, NULL spcacl, NULL spcoptions"},
     {"pg_catalog", "pg_type", "SELECT type_oid oid, format_pg_type(type_name) typname, schema_oid typnamespace, 0 typowner, type_size typlen, false typbyval, 'b' typtype, CASE WHEN type_category='NUMERIC' THEN 'N' WHEN type_category='STRING' THEN 'S' WHEN type_category='DATETIME' THEN 'D' WHEN type_category='BOOLEAN' THEN 'B' WHEN type_category='COMPOSITE' THEN 'C' WHEN type_category='USER' THEN 'U' ELSE 'X' END typcategory, false typispreferred, true typisdefined, NULL typdelim, NULL typrelid, NULL typsubscript, NULL typelem, NULL typarray, NULL typinput, NULL typoutput, NULL typreceive, NULL typsend, NULL typmodin, NULL typmodout, NULL typanalyze, 'd' typalign, 'p' typstorage, NULL typnotnull, NULL typbasetype, NULL typtypmod, NULL typndims, NULL typcollation, NULL typdefaultbin, NULL typdefault, NULL typacl FROM duckdb_types();"},
@@ -3376,6 +3635,7 @@ vector<string> DefaultViewGenerator::GetDefaultEntries() {
 
 
 
+
 namespace duckdb {
 
 DependencyManager::DependencyManager(Catalog &catalog) : catalog(catalog) {
@@ -3385,12 +3645,11 @@ void DependencyManager::AddObject(ClientContext &context, CatalogEntry *object,
                                   unordered_set<CatalogEntry *> &dependencies) {
 	// check for each object in the sources if they were not deleted yet
 	for (auto &dependency : dependencies) {
-		idx_t entry_index;
 		CatalogEntry *catalog_entry;
 		if (!dependency->set) {
 			throw InternalException("Dependency has no set");
 		}
-		if (!dependency->set->GetEntryInternal(context, dependency->name, entry_index, catalog_entry)) {
+		if (!dependency->set->GetEntryInternal(context, dependency->name, nullptr, catalog_entry)) {
 			throw InternalException("Dependency has already been deleted?");
 		}
 	}
@@ -3418,10 +3677,9 @@ void DependencyManager::DropObject(ClientContext &context, CatalogEntry *object,
 		if (mapping_value == nullptr) {
 			continue;
 		}
-		idx_t entry_index = mapping_value->index;
 		CatalogEntry *dependency_entry;
 
-		if (!catalog_set.GetEntryInternal(context, entry_index, dependency_entry)) {
+		if (!catalog_set.GetEntryInternal(context, mapping_value->index, dependency_entry)) {
 			// the dependent object was already deleted, no conflict
 			continue;
 		}
@@ -3429,12 +3687,12 @@ void DependencyManager::DropObject(ClientContext &context, CatalogEntry *object,
 		if (cascade || dep.dependency_type == DependencyType::DEPENDENCY_AUTOMATIC ||
 		    dep.dependency_type == DependencyType::DEPENDENCY_OWNS) {
 			// cascade: drop the dependent object
-			catalog_set.DropEntryInternal(context, entry_index, *dependency_entry, cascade);
+			catalog_set.DropEntryInternal(context, mapping_value->index.Copy(), *dependency_entry, cascade);
 		} else {
 			// no cascade and there are objects that depend on this object: throw error
-			throw CatalogException("Cannot drop entry \"%s\" because there are entries that "
-			                       "depend on it. Use DROP...CASCADE to drop all dependents.",
-			                       object->name);
+			throw DependencyException("Cannot drop entry \"%s\" because there are entries that "
+			                          "depend on it. Use DROP...CASCADE to drop all dependents.",
+			                          object->name);
 		}
 	}
 }
@@ -3449,9 +3707,8 @@ void DependencyManager::AlterObject(ClientContext &context, CatalogEntry *old_ob
 	for (auto &dep : dependent_objects) {
 		// look up the entry in the catalog set
 		auto &catalog_set = *dep.entry->set;
-		idx_t entry_index;
 		CatalogEntry *dependency_entry;
-		if (!catalog_set.GetEntryInternal(context, dep.entry->name, entry_index, dependency_entry)) {
+		if (!catalog_set.GetEntryInternal(context, dep.entry->name, nullptr, dependency_entry)) {
 			// the dependent object was already deleted, no conflict
 			continue;
 		}
@@ -3462,9 +3719,9 @@ void DependencyManager::AlterObject(ClientContext &context, CatalogEntry *old_ob
 		}
 		// conflict: attempting to alter this object but the dependent object still exists
 		// no cascade and there are objects that depend on this object: throw error
-		throw CatalogException("Cannot alter entry \"%s\" because there are entries that "
-		                       "depend on it.",
-		                       old_obj->name);
+		throw DependencyException("Cannot alter entry \"%s\" because there are entries that "
+		                          "depend on it.",
+		                          old_obj->name);
 	}
 	// add the new object to the dependents_map of each object that it depends on
 	auto &old_dependencies = dependencies_map[old_obj];
@@ -3474,7 +3731,7 @@ void DependencyManager::AlterObject(ClientContext &context, CatalogEntry *old_ob
 			auto user_type = (TypeCatalogEntry *)dependency;
 			auto table = (TableCatalogEntry *)new_obj;
 			bool deleted_dependency = true;
-			for (auto &column : table->columns) {
+			for (auto &column : table->columns.Logical()) {
 				if (column.Type() == user_type->user_type) {
 					deleted_dependency = false;
 					break;
@@ -3496,7 +3753,7 @@ void DependencyManager::AlterObject(ClientContext &context, CatalogEntry *old_ob
 	vector<CatalogEntry *> to_add;
 	if (new_obj->type == CatalogType::TABLE_ENTRY) {
 		auto table = (TableCatalogEntry *)new_obj;
-		for (auto &column : table->columns) {
+		for (auto &column : table->columns.Logical()) {
 			auto user_type_catalog = LogicalType::GetCatalog(column.Type());
 			if (user_type_catalog) {
 				to_add.push_back(user_type_catalog);
@@ -3560,7 +3817,7 @@ void DependencyManager::AddOwnership(ClientContext &context, CatalogEntry *owner
 	// If the owner is already owned by something else, throw an error
 	for (auto &dep : dependents_map[owner]) {
 		if (dep.dependency_type == DependencyType::DEPENDENCY_OWNED_BY) {
-			throw CatalogException(owner->name + " already owned by " + dep.entry->name);
+			throw DependencyException(owner->name + " already owned by " + dep.entry->name);
 		}
 	}
 
@@ -3568,12 +3825,12 @@ void DependencyManager::AddOwnership(ClientContext &context, CatalogEntry *owner
 	for (auto &dep : dependents_map[entry]) {
 		// if the entry is already owned, throw error
 		if (dep.entry != owner) {
-			throw CatalogException(entry->name + " already depends on " + dep.entry->name);
+			throw DependencyException(entry->name + " already depends on " + dep.entry->name);
 		}
 		// if the entry owns the owner, throw error
 		if (dep.entry == owner && dep.dependency_type == DependencyType::DEPENDENCY_OWNS) {
-			throw CatalogException(entry->name + " already owns " + owner->name +
-			                       ". Cannot have circular dependencies");
+			throw DependencyException(entry->name + " already owns " + owner->name +
+			                          ". Cannot have circular dependencies");
 		}
 	}
 
@@ -3590,27 +3847,57 @@ void DependencyManager::AddOwnership(ClientContext &context, CatalogEntry *owner
 
 
 
+
+
+#include <cstdint>
+
 #ifdef DUCKDB_DEBUG_ALLOCATION
+
 
 
 
 #include <execinfo.h>
 #endif
 
+#if defined(BUILD_JEMALLOC_EXTENSION) && !defined(WIN32)
+#include "jemalloc-extension.hpp"
+#endif
+
 namespace duckdb {
 
+AllocatedData::AllocatedData() : allocator(nullptr), pointer(nullptr), allocated_size(0) {
+}
+
 AllocatedData::AllocatedData(Allocator &allocator, data_ptr_t pointer, idx_t allocated_size)
-    : allocator(allocator), pointer(pointer), allocated_size(allocated_size) {
+    : allocator(&allocator), pointer(pointer), allocated_size(allocated_size) {
+	if (!pointer) {
+		throw InternalException("AllocatedData object constructed with nullptr");
+	}
 }
 AllocatedData::~AllocatedData() {
 	Reset();
+}
+
+AllocatedData::AllocatedData(AllocatedData &&other) noexcept
+    : allocator(other.allocator), pointer(nullptr), allocated_size(0) {
+	std::swap(pointer, other.pointer);
+	std::swap(allocated_size, other.allocated_size);
+}
+
+AllocatedData &AllocatedData::operator=(AllocatedData &&other) noexcept {
+	std::swap(allocator, other.allocator);
+	std::swap(pointer, other.pointer);
+	std::swap(allocated_size, other.allocated_size);
+	return *this;
 }
 
 void AllocatedData::Reset() {
 	if (!pointer) {
 		return;
 	}
-	allocator.FreeData(pointer, allocated_size);
+	D_ASSERT(allocator);
+	allocator->FreeData(pointer, allocated_size);
+	allocated_size = 0;
 	pointer = nullptr;
 }
 
@@ -3621,8 +3908,6 @@ struct AllocatorDebugInfo {
 #ifdef DEBUG
 	AllocatorDebugInfo();
 	~AllocatorDebugInfo();
-
-	static string GetStackTrace(int max_depth = 128);
 
 	void AllocateData(data_ptr_t pointer, idx_t size);
 	void FreeData(data_ptr_t pointer, idx_t size);
@@ -3649,9 +3934,15 @@ PrivateAllocatorData::~PrivateAllocatorData() {
 //===--------------------------------------------------------------------===//
 // Allocator
 //===--------------------------------------------------------------------===//
+#if defined(BUILD_JEMALLOC_EXTENSION) && !defined(WIN32)
+Allocator::Allocator()
+    : Allocator(JEMallocExtension::Allocate, JEMallocExtension::Free, JEMallocExtension::Reallocate, nullptr) {
+}
+#else
 Allocator::Allocator()
     : Allocator(Allocator::DefaultAllocate, Allocator::DefaultFree, Allocator::DefaultReallocate, nullptr) {
 }
+#endif
 
 Allocator::Allocator(allocate_function_ptr_t allocate_function_p, free_function_ptr_t free_function_p,
                      reallocate_function_ptr_t reallocate_function_p, unique_ptr<PrivateAllocatorData> private_data_p)
@@ -3672,11 +3963,20 @@ Allocator::~Allocator() {
 }
 
 data_ptr_t Allocator::AllocateData(idx_t size) {
+	D_ASSERT(size > 0);
+	if (size >= MAXIMUM_ALLOC_SIZE) {
+		D_ASSERT(false);
+		throw InternalException("Requested allocation size of %llu is out of range - maximum allocation size is %llu",
+		                        size, MAXIMUM_ALLOC_SIZE);
+	}
 	auto result = allocate_function(private_data.get(), size);
 #ifdef DEBUG
 	D_ASSERT(private_data);
 	private_data->debug_info->AllocateData(result, size);
 #endif
+	if (!result) {
+		throw std::bad_alloc();
+	}
 	return result;
 }
 
@@ -3684,6 +3984,7 @@ void Allocator::FreeData(data_ptr_t pointer, idx_t size) {
 	if (!pointer) {
 		return;
 	}
+	D_ASSERT(size > 0);
 #ifdef DEBUG
 	D_ASSERT(private_data);
 	private_data->debug_info->FreeData(pointer, size);
@@ -3695,17 +3996,30 @@ data_ptr_t Allocator::ReallocateData(data_ptr_t pointer, idx_t old_size, idx_t s
 	if (!pointer) {
 		return nullptr;
 	}
+	if (size >= MAXIMUM_ALLOC_SIZE) {
+		D_ASSERT(false);
+		throw InternalException(
+		    "Requested re-allocation size of %llu is out of range - maximum allocation size is %llu", size,
+		    MAXIMUM_ALLOC_SIZE);
+	}
 	auto new_pointer = reallocate_function(private_data.get(), pointer, old_size, size);
 #ifdef DEBUG
 	D_ASSERT(private_data);
 	private_data->debug_info->ReallocateData(pointer, new_pointer, old_size, size);
 #endif
+	if (!new_pointer) {
+		throw std::bad_alloc();
+	}
 	return new_pointer;
 }
 
-Allocator &Allocator::DefaultAllocator() {
-	static Allocator DEFAULT_ALLOCATOR;
+shared_ptr<Allocator> &Allocator::DefaultAllocatorReference() {
+	static shared_ptr<Allocator> DEFAULT_ALLOCATOR = make_shared<Allocator>();
 	return DEFAULT_ALLOCATOR;
+}
+
+Allocator &Allocator::DefaultAllocator() {
+	return *DefaultAllocatorReference();
 }
 
 //===--------------------------------------------------------------------===//
@@ -3720,7 +4034,7 @@ AllocatorDebugInfo::~AllocatorDebugInfo() {
 	if (allocation_count != 0) {
 		printf("Outstanding allocations found for Allocator\n");
 		for (auto &entry : pointers) {
-			printf("Allocation of size %lld at address %p\n", entry.second.first, (void *)entry.first);
+			printf("Allocation of size %llu at address %p\n", entry.second.first, (void *)entry.first);
 			printf("Stack trace:\n%s\n", entry.second.second.c_str());
 			printf("\n");
 		}
@@ -3732,28 +4046,11 @@ AllocatorDebugInfo::~AllocatorDebugInfo() {
 	D_ASSERT(allocation_count == 0);
 }
 
-string AllocatorDebugInfo::GetStackTrace(int max_depth) {
-#ifdef DUCKDB_DEBUG_ALLOCATION
-	string result;
-	auto callstack = unique_ptr<void *[]>(new void *[max_depth]);
-	int frames = backtrace(callstack.get(), max_depth);
-	char **strs = backtrace_symbols(callstack.get(), frames);
-	for (int i = 0; i < frames; i++) {
-		result += strs[i];
-		result += "\n";
-	}
-	free(strs);
-	return result;
-#else
-	throw InternalException("GetStackTrace not supported without DUCKDB_DEBUG_ALLOCATION");
-#endif
-}
-
 void AllocatorDebugInfo::AllocateData(data_ptr_t pointer, idx_t size) {
 	allocation_count += size;
 #ifdef DUCKDB_DEBUG_ALLOCATION
 	lock_guard<mutex> l(pointer_lock);
-	pointers[pointer] = make_pair(size, GetStackTrace());
+	pointers[pointer] = make_pair(size, Exception::GetStackTrace());
 #endif
 }
 
@@ -3779,6 +4076,1035 @@ void AllocatorDebugInfo::ReallocateData(data_ptr_t pointer, data_ptr_t new_point
 #endif
 
 } // namespace duckdb
+
+
+
+
+
+
+
+namespace duckdb {
+
+//===--------------------------------------------------------------------===//
+// Arrow append data
+//===--------------------------------------------------------------------===//
+typedef void (*initialize_t)(ArrowAppendData &result, const LogicalType &type, idx_t capacity);
+typedef void (*append_vector_t)(ArrowAppendData &append_data, Vector &input, idx_t size);
+typedef void (*finalize_t)(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result);
+
+struct ArrowAppendData {
+	// the buffers of the arrow vector
+	ArrowBuffer validity;
+	ArrowBuffer main_buffer;
+	ArrowBuffer aux_buffer;
+
+	idx_t row_count = 0;
+	idx_t null_count = 0;
+
+	// function pointers for construction
+	initialize_t initialize = nullptr;
+	append_vector_t append_vector = nullptr;
+	finalize_t finalize = nullptr;
+
+	// child data (if any)
+	vector<unique_ptr<ArrowAppendData>> child_data;
+
+	//! the arrow array C API data, only set after Finalize
+	unique_ptr<ArrowArray> array;
+	duckdb::array<const void *, 3> buffers = {{nullptr, nullptr, nullptr}};
+	vector<ArrowArray *> child_pointers;
+};
+
+//===--------------------------------------------------------------------===//
+// ArrowAppender
+//===--------------------------------------------------------------------===//
+static unique_ptr<ArrowAppendData> InitializeArrowChild(const LogicalType &type, idx_t capacity);
+static ArrowArray *FinalizeArrowChild(const LogicalType &type, ArrowAppendData &append_data);
+
+ArrowAppender::ArrowAppender(vector<LogicalType> types_p, idx_t initial_capacity) : types(move(types_p)) {
+	for (auto &type : types) {
+		auto entry = InitializeArrowChild(type, initial_capacity);
+		root_data.push_back(move(entry));
+	}
+}
+
+ArrowAppender::~ArrowAppender() {
+}
+
+//===--------------------------------------------------------------------===//
+// Append Helper Functions
+//===--------------------------------------------------------------------===//
+static void GetBitPosition(idx_t row_idx, idx_t &current_byte, uint8_t &current_bit) {
+	current_byte = row_idx / 8;
+	current_bit = row_idx % 8;
+}
+
+static void UnsetBit(uint8_t *data, idx_t current_byte, uint8_t current_bit) {
+	data[current_byte] &= ~((uint64_t)1 << current_bit);
+}
+
+static void NextBit(idx_t &current_byte, uint8_t &current_bit) {
+	current_bit++;
+	if (current_bit == 8) {
+		current_byte++;
+		current_bit = 0;
+	}
+}
+
+static void ResizeValidity(ArrowBuffer &buffer, idx_t row_count) {
+	auto byte_count = (row_count + 7) / 8;
+	buffer.resize(byte_count, 0xFF);
+}
+
+static void SetNull(ArrowAppendData &append_data, uint8_t *validity_data, idx_t current_byte, uint8_t current_bit) {
+	UnsetBit(validity_data, current_byte, current_bit);
+	append_data.null_count++;
+}
+
+static void AppendValidity(ArrowAppendData &append_data, UnifiedVectorFormat &format, idx_t size) {
+	// resize the buffer, filling the validity buffer with all valid values
+	ResizeValidity(append_data.validity, append_data.row_count + size);
+	if (format.validity.AllValid()) {
+		// if all values are valid we don't need to do anything else
+		return;
+	}
+
+	// otherwise we iterate through the validity mask
+	auto validity_data = (uint8_t *)append_data.validity.data();
+	uint8_t current_bit;
+	idx_t current_byte;
+	GetBitPosition(append_data.row_count, current_byte, current_bit);
+	for (idx_t i = 0; i < size; i++) {
+		auto source_idx = format.sel->get_index(i);
+		// append the validity mask
+		if (!format.validity.RowIsValid(source_idx)) {
+			SetNull(append_data, validity_data, current_byte, current_bit);
+		}
+		NextBit(current_byte, current_bit);
+	}
+}
+
+//===--------------------------------------------------------------------===//
+// Scalar Types
+//===--------------------------------------------------------------------===//
+struct ArrowScalarConverter {
+	template <class TGT, class SRC>
+	static TGT Operation(SRC input) {
+		return input;
+	}
+
+	static bool SkipNulls() {
+		return false;
+	}
+
+	template <class TGT>
+	static void SetNull(TGT &value) {
+	}
+};
+
+struct ArrowIntervalConverter {
+	template <class TGT, class SRC>
+	static TGT Operation(SRC input) {
+		return Interval::GetMilli(input);
+	}
+
+	static bool SkipNulls() {
+		return true;
+	}
+
+	template <class TGT>
+	static void SetNull(TGT &value) {
+		value = 0;
+	}
+};
+
+template <class TGT, class SRC = TGT, class OP = ArrowScalarConverter>
+struct ArrowScalarBaseData {
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t size) {
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(size, format);
+
+		// append the validity mask
+		AppendValidity(append_data, format, size);
+
+		// append the main data
+		append_data.main_buffer.resize(append_data.main_buffer.size() + sizeof(TGT) * size);
+		auto data = (SRC *)format.data;
+		auto result_data = (TGT *)append_data.main_buffer.data();
+
+		for (idx_t i = 0; i < size; i++) {
+			auto source_idx = format.sel->get_index(i);
+			auto result_idx = append_data.row_count + i;
+
+			if (OP::SkipNulls() && !format.validity.RowIsValid(source_idx)) {
+				OP::template SetNull<TGT>(result_data[result_idx]);
+				continue;
+			}
+			result_data[result_idx] = OP::template Operation<TGT, SRC>(data[source_idx]);
+		}
+		append_data.row_count += size;
+	}
+};
+
+template <class TGT, class SRC = TGT, class OP = ArrowScalarConverter>
+struct ArrowScalarData : public ArrowScalarBaseData<TGT, SRC, OP> {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		result.main_buffer.reserve(capacity * sizeof(TGT));
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Enums
+//===--------------------------------------------------------------------===//
+template <class TGT>
+struct ArrowEnumData : public ArrowScalarBaseData<TGT> {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		result.main_buffer.reserve(capacity * sizeof(TGT));
+		// construct the enum child data
+		auto enum_data = InitializeArrowChild(LogicalType::VARCHAR, EnumType::GetSize(type));
+		enum_data->append_vector(*enum_data, EnumType::GetValuesInsertOrder(type), EnumType::GetSize(type));
+		result.child_data.push_back(move(enum_data));
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+		// finalize the enum child data, and assign it to the dictionary
+		result->dictionary = FinalizeArrowChild(LogicalType::VARCHAR, *append_data.child_data[0]);
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Boolean
+//===--------------------------------------------------------------------===//
+struct ArrowBoolData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		auto byte_count = (capacity + 7) / 8;
+		result.main_buffer.reserve(byte_count);
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t size) {
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(size, format);
+
+		// we initialize both the validity and the bit set to 1's
+		ResizeValidity(append_data.validity, append_data.row_count + size);
+		ResizeValidity(append_data.main_buffer, append_data.row_count + size);
+		auto data = (bool *)format.data;
+
+		auto result_data = (uint8_t *)append_data.main_buffer.data();
+		auto validity_data = (uint8_t *)append_data.validity.data();
+		uint8_t current_bit;
+		idx_t current_byte;
+		GetBitPosition(append_data.row_count, current_byte, current_bit);
+		for (idx_t i = 0; i < size; i++) {
+			auto source_idx = format.sel->get_index(i);
+			// append the validity mask
+			if (!format.validity.RowIsValid(source_idx)) {
+				SetNull(append_data, validity_data, current_byte, current_bit);
+			} else if (!data[source_idx]) {
+				UnsetBit(result_data, current_byte, current_bit);
+			}
+			NextBit(current_byte, current_bit);
+		}
+		append_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Varchar
+//===--------------------------------------------------------------------===//
+struct ArrowVarcharConverter {
+	template <class SRC>
+	static idx_t GetLength(SRC input) {
+		return input.GetSize();
+	}
+
+	template <class SRC>
+	static void WriteData(data_ptr_t target, SRC input) {
+		memcpy(target, input.GetDataUnsafe(), input.GetSize());
+	}
+};
+
+struct ArrowUUIDConverter {
+	template <class SRC>
+	static idx_t GetLength(SRC input) {
+		return UUID::STRING_SIZE;
+	}
+
+	template <class SRC>
+	static void WriteData(data_ptr_t target, SRC input) {
+		UUID::ToString(input, (char *)target);
+	}
+};
+
+template <class SRC = string_t, class OP = ArrowVarcharConverter>
+struct ArrowVarcharData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		result.main_buffer.reserve((capacity + 1) * sizeof(uint32_t));
+		result.aux_buffer.reserve(capacity);
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t size) {
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(size, format);
+
+		// resize the validity mask and set up the validity buffer for iteration
+		ResizeValidity(append_data.validity, append_data.row_count + size);
+		auto validity_data = (uint8_t *)append_data.validity.data();
+
+		// resize the offset buffer - the offset buffer holds the offsets into the child array
+		append_data.main_buffer.resize(append_data.main_buffer.size() + sizeof(uint32_t) * (size + 1));
+		auto data = (SRC *)format.data;
+		auto offset_data = (uint32_t *)append_data.main_buffer.data();
+		if (append_data.row_count == 0) {
+			// first entry
+			offset_data[0] = 0;
+		}
+		// now append the string data to the auxiliary buffer
+		// the auxiliary buffer's length depends on the string lengths, so we resize as required
+		auto last_offset = offset_data[append_data.row_count];
+		for (idx_t i = 0; i < size; i++) {
+			auto source_idx = format.sel->get_index(i);
+			auto offset_idx = append_data.row_count + i + 1;
+
+			if (!format.validity.RowIsValid(source_idx)) {
+				uint8_t current_bit;
+				idx_t current_byte;
+				GetBitPosition(append_data.row_count + i, current_byte, current_bit);
+				SetNull(append_data, validity_data, current_byte, current_bit);
+				offset_data[offset_idx] = last_offset;
+				continue;
+			}
+
+			auto string_length = OP::GetLength(data[source_idx]);
+
+			// append the offset data
+			auto current_offset = last_offset + string_length;
+			offset_data[offset_idx] = current_offset;
+
+			// resize the string buffer if required, and write the string data
+			append_data.aux_buffer.resize(current_offset);
+			OP::WriteData(append_data.aux_buffer.data() + last_offset, data[source_idx]);
+
+			last_offset = current_offset;
+		}
+		append_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 3;
+		result->buffers[1] = append_data.main_buffer.data();
+		result->buffers[2] = append_data.aux_buffer.data();
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Structs
+//===--------------------------------------------------------------------===//
+struct ArrowStructData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		auto &children = StructType::GetChildTypes(type);
+		for (auto &child : children) {
+			auto child_buffer = InitializeArrowChild(child.second, capacity);
+			result.child_data.push_back(move(child_buffer));
+		}
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t size) {
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(size, format);
+
+		AppendValidity(append_data, format, size);
+		// append the children of the struct
+		auto &children = StructVector::GetEntries(input);
+		for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
+			auto &child = children[child_idx];
+			auto &child_data = *append_data.child_data[child_idx];
+			child_data.append_vector(child_data, *child, size);
+		}
+		append_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 1;
+
+		auto &child_types = StructType::GetChildTypes(type);
+		append_data.child_pointers.resize(child_types.size());
+		result->children = append_data.child_pointers.data();
+		result->n_children = child_types.size();
+		for (idx_t i = 0; i < child_types.size(); i++) {
+			auto &child_type = child_types[i].second;
+			append_data.child_pointers[i] = FinalizeArrowChild(child_type, *append_data.child_data[i]);
+		}
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Lists
+//===--------------------------------------------------------------------===//
+void AppendListOffsets(ArrowAppendData &append_data, UnifiedVectorFormat &format, idx_t size,
+                       vector<sel_t> &child_sel) {
+	// resize the offset buffer - the offset buffer holds the offsets into the child array
+	append_data.main_buffer.resize(append_data.main_buffer.size() + sizeof(uint32_t) * (size + 1));
+	auto data = (list_entry_t *)format.data;
+	auto offset_data = (uint32_t *)append_data.main_buffer.data();
+	if (append_data.row_count == 0) {
+		// first entry
+		offset_data[0] = 0;
+	}
+	// set up the offsets using the list entries
+	auto last_offset = offset_data[append_data.row_count];
+	for (idx_t i = 0; i < size; i++) {
+		auto source_idx = format.sel->get_index(i);
+		auto offset_idx = append_data.row_count + i + 1;
+
+		if (!format.validity.RowIsValid(source_idx)) {
+			offset_data[offset_idx] = last_offset;
+			continue;
+		}
+
+		// append the offset data
+		auto list_length = data[source_idx].length;
+		last_offset += list_length;
+		offset_data[offset_idx] = last_offset;
+
+		for (idx_t k = 0; k < list_length; k++) {
+			child_sel.push_back(data[source_idx].offset + k);
+		}
+	}
+}
+
+struct ArrowListData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		auto &child_type = ListType::GetChildType(type);
+		result.main_buffer.reserve((capacity + 1) * sizeof(uint32_t));
+		auto child_buffer = InitializeArrowChild(child_type, capacity);
+		result.child_data.push_back(move(child_buffer));
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t size) {
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(size, format);
+
+		vector<sel_t> child_indices;
+		AppendValidity(append_data, format, size);
+		AppendListOffsets(append_data, format, size, child_indices);
+
+		// append the child vector of the list
+		SelectionVector child_sel(child_indices.data());
+		auto &child = ListVector::GetEntry(input);
+		auto child_size = child_indices.size();
+		child.Slice(child_sel, child_size);
+
+		append_data.child_data[0]->append_vector(*append_data.child_data[0], child, child_size);
+		append_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+
+		auto &child_type = ListType::GetChildType(type);
+		append_data.child_pointers.resize(1);
+		result->children = append_data.child_pointers.data();
+		result->n_children = 1;
+		append_data.child_pointers[0] = FinalizeArrowChild(child_type, *append_data.child_data[0]);
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Maps
+//===--------------------------------------------------------------------===//
+struct ArrowMapData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		// map types are stored in a (too) clever way
+		// the main buffer holds the null values and the offsets
+		// then we have a single child, which is a struct of the map_type, and the key_type
+		result.main_buffer.reserve((capacity + 1) * sizeof(uint32_t));
+
+		auto &key_type = MapType::KeyType(type);
+		auto &value_type = MapType::ValueType(type);
+		auto internal_struct = make_unique<ArrowAppendData>();
+		internal_struct->child_data.push_back(InitializeArrowChild(key_type, capacity));
+		internal_struct->child_data.push_back(InitializeArrowChild(value_type, capacity));
+
+		result.child_data.push_back(move(internal_struct));
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t size) {
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(size, format);
+
+		AppendValidity(append_data, format, size);
+		// maps exist as a struct of two lists, e.g. STRUCT(key VARCHAR[], value VARCHAR[])
+		// since both lists are the same, arrow tries to be smart by storing the offsets only once
+		// we can append the offsets from any of the two children
+		auto &children = StructVector::GetEntries(input);
+
+		UnifiedVectorFormat child_format;
+		children[0]->ToUnifiedFormat(size, child_format);
+		vector<sel_t> child_indices;
+		AppendListOffsets(append_data, child_format, size, child_indices);
+
+		// now we can append the children to the lists
+		auto &struct_entries = StructVector::GetEntries(input);
+		D_ASSERT(struct_entries.size() == 2);
+		SelectionVector child_sel(child_indices.data());
+		auto &key_vector = ListVector::GetEntry(*struct_entries[0]);
+		auto &value_vector = ListVector::GetEntry(*struct_entries[1]);
+		auto list_size = child_indices.size();
+		key_vector.Slice(child_sel, list_size);
+		value_vector.Slice(child_sel, list_size);
+
+		// perform the append
+		auto &struct_data = *append_data.child_data[0];
+		auto &key_data = *struct_data.child_data[0];
+		auto &value_data = *struct_data.child_data[1];
+		key_data.append_vector(key_data, key_vector, list_size);
+		value_data.append_vector(value_data, value_vector, list_size);
+
+		append_data.row_count += size;
+		struct_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		// set up the main map buffer
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+
+		// the main map buffer has a single child: a struct
+		append_data.child_pointers.resize(1);
+		result->children = append_data.child_pointers.data();
+		result->n_children = 1;
+		append_data.child_pointers[0] = FinalizeArrowChild(type, *append_data.child_data[0]);
+
+		// now that struct has two children: the key and the value type
+		auto &struct_data = *append_data.child_data[0];
+		auto &struct_result = append_data.child_pointers[0];
+		struct_data.child_pointers.resize(2);
+		struct_result->n_buffers = 1;
+		struct_result->n_children = 2;
+		struct_result->length = struct_data.child_data[0]->row_count;
+		struct_result->children = struct_data.child_pointers.data();
+
+		D_ASSERT(struct_data.child_data[0]->row_count == struct_data.child_data[1]->row_count);
+
+		auto &key_type = MapType::KeyType(type);
+		auto &value_type = MapType::ValueType(type);
+		struct_data.child_pointers[0] = FinalizeArrowChild(key_type, *struct_data.child_data[0]);
+		struct_data.child_pointers[1] = FinalizeArrowChild(value_type, *struct_data.child_data[1]);
+
+		// keys cannot have null values
+		if (struct_data.child_pointers[0]->null_count > 0) {
+			throw std::runtime_error("Arrow doesn't accept NULL keys on Maps");
+		}
+	}
+};
+
+//! Append a data chunk to the underlying arrow array
+void ArrowAppender::Append(DataChunk &input) {
+	D_ASSERT(types == input.GetTypes());
+	for (idx_t i = 0; i < input.ColumnCount(); i++) {
+		root_data[i]->append_vector(*root_data[i], input.data[i], input.size());
+	}
+	row_count += input.size();
+}
+//===--------------------------------------------------------------------===//
+// Initialize Arrow Child
+//===--------------------------------------------------------------------===//
+template <class OP>
+static void InitializeFunctionPointers(ArrowAppendData &append_data) {
+	append_data.initialize = OP::Initialize;
+	append_data.append_vector = OP::Append;
+	append_data.finalize = OP::Finalize;
+}
+
+static void InitializeFunctionPointers(ArrowAppendData &append_data, const LogicalType &type) {
+	// handle special logical types
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		InitializeFunctionPointers<ArrowBoolData>(append_data);
+		break;
+	case LogicalTypeId::TINYINT:
+		InitializeFunctionPointers<ArrowScalarData<int8_t>>(append_data);
+		break;
+	case LogicalTypeId::SMALLINT:
+		InitializeFunctionPointers<ArrowScalarData<int16_t>>(append_data);
+		break;
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::INTEGER:
+		InitializeFunctionPointers<ArrowScalarData<int32_t>>(append_data);
+		break;
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIME_TZ:
+	case LogicalTypeId::BIGINT:
+		InitializeFunctionPointers<ArrowScalarData<int64_t>>(append_data);
+		break;
+	case LogicalTypeId::HUGEINT:
+		InitializeFunctionPointers<ArrowScalarData<hugeint_t>>(append_data);
+		break;
+	case LogicalTypeId::UTINYINT:
+		InitializeFunctionPointers<ArrowScalarData<uint8_t>>(append_data);
+		break;
+	case LogicalTypeId::USMALLINT:
+		InitializeFunctionPointers<ArrowScalarData<uint16_t>>(append_data);
+		break;
+	case LogicalTypeId::UINTEGER:
+		InitializeFunctionPointers<ArrowScalarData<uint32_t>>(append_data);
+		break;
+	case LogicalTypeId::UBIGINT:
+		InitializeFunctionPointers<ArrowScalarData<uint64_t>>(append_data);
+		break;
+	case LogicalTypeId::FLOAT:
+		InitializeFunctionPointers<ArrowScalarData<float>>(append_data);
+		break;
+	case LogicalTypeId::DOUBLE:
+		InitializeFunctionPointers<ArrowScalarData<double>>(append_data);
+		break;
+	case LogicalTypeId::DECIMAL:
+		switch (type.InternalType()) {
+		case PhysicalType::INT16:
+			InitializeFunctionPointers<ArrowScalarData<hugeint_t, int16_t>>(append_data);
+			break;
+		case PhysicalType::INT32:
+			InitializeFunctionPointers<ArrowScalarData<hugeint_t, int32_t>>(append_data);
+			break;
+		case PhysicalType::INT64:
+			InitializeFunctionPointers<ArrowScalarData<hugeint_t, int64_t>>(append_data);
+			break;
+		case PhysicalType::INT128:
+			InitializeFunctionPointers<ArrowScalarData<hugeint_t>>(append_data);
+			break;
+		default:
+			throw InternalException("Unsupported internal decimal type");
+		}
+		break;
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::BLOB:
+	case LogicalTypeId::JSON:
+		InitializeFunctionPointers<ArrowVarcharData<string_t>>(append_data);
+		break;
+	case LogicalTypeId::UUID:
+		InitializeFunctionPointers<ArrowVarcharData<hugeint_t, ArrowUUIDConverter>>(append_data);
+		break;
+	case LogicalTypeId::ENUM:
+		switch (type.InternalType()) {
+		case PhysicalType::UINT8:
+			InitializeFunctionPointers<ArrowEnumData<uint8_t>>(append_data);
+			break;
+		case PhysicalType::UINT16:
+			InitializeFunctionPointers<ArrowEnumData<uint16_t>>(append_data);
+			break;
+		case PhysicalType::UINT32:
+			InitializeFunctionPointers<ArrowEnumData<uint32_t>>(append_data);
+			break;
+		default:
+			throw InternalException("Unsupported internal enum type");
+		}
+		break;
+	case LogicalTypeId::INTERVAL:
+		InitializeFunctionPointers<ArrowScalarData<int64_t, interval_t, ArrowIntervalConverter>>(append_data);
+		break;
+	case LogicalTypeId::STRUCT:
+		InitializeFunctionPointers<ArrowStructData>(append_data);
+		break;
+	case LogicalTypeId::LIST:
+		InitializeFunctionPointers<ArrowListData>(append_data);
+		break;
+	case LogicalTypeId::MAP:
+		InitializeFunctionPointers<ArrowMapData>(append_data);
+		break;
+	default:
+		throw InternalException("Unsupported type in DuckDB -> Arrow Conversion: %s\n", type.ToString());
+	}
+}
+
+unique_ptr<ArrowAppendData> InitializeArrowChild(const LogicalType &type, idx_t capacity) {
+	auto result = make_unique<ArrowAppendData>();
+	InitializeFunctionPointers(*result, type);
+
+	auto byte_count = (capacity + 7) / 8;
+	result->validity.reserve(byte_count);
+	result->initialize(*result, type, capacity);
+	return result;
+}
+
+static void ReleaseDuckDBArrowAppendArray(ArrowArray *array) {
+	if (!array || !array->release) {
+		return;
+	}
+	array->release = nullptr;
+	auto holder = static_cast<ArrowAppendData *>(array->private_data);
+	delete holder;
+}
+
+//===--------------------------------------------------------------------===//
+// Finalize Arrow Child
+//===--------------------------------------------------------------------===//
+ArrowArray *FinalizeArrowChild(const LogicalType &type, ArrowAppendData &append_data) {
+	auto result = make_unique<ArrowArray>();
+
+	result->private_data = nullptr;
+	result->release = ReleaseDuckDBArrowAppendArray;
+	result->n_children = 0;
+	result->null_count = 0;
+	result->offset = 0;
+	result->dictionary = nullptr;
+	result->buffers = append_data.buffers.data();
+	result->null_count = append_data.null_count;
+	result->length = append_data.row_count;
+	result->buffers[0] = append_data.validity.data();
+
+	if (append_data.finalize) {
+		append_data.finalize(append_data, type, result.get());
+	}
+
+	append_data.array = move(result);
+	return append_data.array.get();
+}
+
+//! Returns the underlying arrow array
+ArrowArray ArrowAppender::Finalize() {
+	D_ASSERT(root_data.size() == types.size());
+	auto root_holder = make_unique<ArrowAppendData>();
+
+	ArrowArray result;
+	root_holder->child_pointers.resize(types.size());
+	result.children = root_holder->child_pointers.data();
+	result.n_children = types.size();
+
+	// Configure root array
+	result.length = row_count;
+	result.n_children = types.size();
+	result.n_buffers = 1;
+	result.buffers = root_holder->buffers.data(); // there is no actual buffer there since we don't have NULLs
+	result.offset = 0;
+	result.null_count = 0; // needs to be 0
+	result.dictionary = nullptr;
+	root_holder->child_data = move(root_data);
+
+	for (idx_t i = 0; i < root_holder->child_data.size(); i++) {
+		root_holder->child_pointers[i] = FinalizeArrowChild(types[i], *root_holder->child_data[i]);
+	}
+
+	// Release ownership to caller
+	result.private_data = root_holder.release();
+	result.release = ReleaseDuckDBArrowAppendArray;
+	return result;
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+
+#include <list>
+
+
+namespace duckdb {
+
+void ArrowConverter::ToArrowArray(DataChunk &input, ArrowArray *out_array) {
+	ArrowAppender appender(input.GetTypes(), input.size());
+	appender.Append(input);
+	*out_array = appender.Finalize();
+}
+
+//===--------------------------------------------------------------------===//
+// Arrow Schema
+//===--------------------------------------------------------------------===//
+struct DuckDBArrowSchemaHolder {
+	// unused in children
+	vector<ArrowSchema> children;
+	// unused in children
+	vector<ArrowSchema *> children_ptrs;
+	//! used for nested structures
+	std::list<std::vector<ArrowSchema>> nested_children;
+	std::list<std::vector<ArrowSchema *>> nested_children_ptr;
+	//! This holds strings created to represent decimal types
+	vector<unique_ptr<char[]>> owned_type_names;
+};
+
+static void ReleaseDuckDBArrowSchema(ArrowSchema *schema) {
+	if (!schema || !schema->release) {
+		return;
+	}
+	schema->release = nullptr;
+	auto holder = static_cast<DuckDBArrowSchemaHolder *>(schema->private_data);
+	delete holder;
+}
+
+void InitializeChild(ArrowSchema &child, const string &name = "") {
+	//! Child is cleaned up by parent
+	child.private_data = nullptr;
+	child.release = ReleaseDuckDBArrowSchema;
+
+	//! Store the child schema
+	child.flags = ARROW_FLAG_NULLABLE;
+	child.name = name.c_str();
+	child.n_children = 0;
+	child.children = nullptr;
+	child.metadata = nullptr;
+	child.dictionary = nullptr;
+}
+void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
+                    string &config_timezone);
+
+void SetArrowMapFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
+                       string &config_timezone) {
+	child.format = "+m";
+	//! Map has one child which is a struct
+	child.n_children = 1;
+	root_holder.nested_children.emplace_back();
+	root_holder.nested_children.back().resize(1);
+	root_holder.nested_children_ptr.emplace_back();
+	root_holder.nested_children_ptr.back().push_back(&root_holder.nested_children.back()[0]);
+	InitializeChild(root_holder.nested_children.back()[0]);
+	child.children = &root_holder.nested_children_ptr.back()[0];
+	child.children[0]->name = "entries";
+	child_list_t<LogicalType> struct_child_types;
+	struct_child_types.push_back(std::make_pair("key", ListType::GetChildType(StructType::GetChildType(type, 0))));
+	struct_child_types.push_back(std::make_pair("value", ListType::GetChildType(StructType::GetChildType(type, 1))));
+	auto struct_type = LogicalType::STRUCT(move(struct_child_types));
+	SetArrowFormat(root_holder, *child.children[0], struct_type, config_timezone);
+}
+
+void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
+                    string &config_timezone) {
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		child.format = "b";
+		break;
+	case LogicalTypeId::TINYINT:
+		child.format = "c";
+		break;
+	case LogicalTypeId::SMALLINT:
+		child.format = "s";
+		break;
+	case LogicalTypeId::INTEGER:
+		child.format = "i";
+		break;
+	case LogicalTypeId::BIGINT:
+		child.format = "l";
+		break;
+	case LogicalTypeId::UTINYINT:
+		child.format = "C";
+		break;
+	case LogicalTypeId::USMALLINT:
+		child.format = "S";
+		break;
+	case LogicalTypeId::UINTEGER:
+		child.format = "I";
+		break;
+	case LogicalTypeId::UBIGINT:
+		child.format = "L";
+		break;
+	case LogicalTypeId::FLOAT:
+		child.format = "f";
+		break;
+	case LogicalTypeId::HUGEINT:
+		child.format = "d:38,0";
+		break;
+	case LogicalTypeId::DOUBLE:
+		child.format = "g";
+		break;
+	case LogicalTypeId::UUID:
+	case LogicalTypeId::JSON:
+	case LogicalTypeId::VARCHAR:
+		child.format = "u";
+		break;
+	case LogicalTypeId::DATE:
+		child.format = "tdD";
+		break;
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ:
+		child.format = "ttu";
+		break;
+	case LogicalTypeId::TIMESTAMP:
+		child.format = "tsu:";
+		break;
+	case LogicalTypeId::TIMESTAMP_TZ: {
+		string format = "tsu:" + config_timezone;
+		unique_ptr<char[]> format_ptr = unique_ptr<char[]>(new char[format.size() + 1]);
+		for (size_t i = 0; i < format.size(); i++) {
+			format_ptr[i] = format[i];
+		}
+		format_ptr[format.size()] = '\0';
+		root_holder.owned_type_names.push_back(move(format_ptr));
+		child.format = root_holder.owned_type_names.back().get();
+		break;
+	}
+	case LogicalTypeId::TIMESTAMP_SEC:
+		child.format = "tss:";
+		break;
+	case LogicalTypeId::TIMESTAMP_NS:
+		child.format = "tsn:";
+		break;
+	case LogicalTypeId::TIMESTAMP_MS:
+		child.format = "tsm:";
+		break;
+	case LogicalTypeId::INTERVAL:
+		child.format = "tDm";
+		break;
+	case LogicalTypeId::DECIMAL: {
+		uint8_t width, scale;
+		type.GetDecimalProperties(width, scale);
+		string format = "d:" + to_string(width) + "," + to_string(scale);
+		unique_ptr<char[]> format_ptr = unique_ptr<char[]>(new char[format.size() + 1]);
+		for (size_t i = 0; i < format.size(); i++) {
+			format_ptr[i] = format[i];
+		}
+		format_ptr[format.size()] = '\0';
+		root_holder.owned_type_names.push_back(move(format_ptr));
+		child.format = root_holder.owned_type_names.back().get();
+		break;
+	}
+	case LogicalTypeId::SQLNULL: {
+		child.format = "n";
+		break;
+	}
+	case LogicalTypeId::BLOB: {
+		child.format = "z";
+		break;
+	}
+	case LogicalTypeId::LIST: {
+		child.format = "+l";
+		child.n_children = 1;
+		root_holder.nested_children.emplace_back();
+		root_holder.nested_children.back().resize(1);
+		root_holder.nested_children_ptr.emplace_back();
+		root_holder.nested_children_ptr.back().push_back(&root_holder.nested_children.back()[0]);
+		InitializeChild(root_holder.nested_children.back()[0]);
+		child.children = &root_holder.nested_children_ptr.back()[0];
+		child.children[0]->name = "l";
+		SetArrowFormat(root_holder, **child.children, ListType::GetChildType(type), config_timezone);
+		break;
+	}
+	case LogicalTypeId::STRUCT: {
+		child.format = "+s";
+		auto &child_types = StructType::GetChildTypes(type);
+		child.n_children = child_types.size();
+		root_holder.nested_children.emplace_back();
+		root_holder.nested_children.back().resize(child_types.size());
+		root_holder.nested_children_ptr.emplace_back();
+		root_holder.nested_children_ptr.back().resize(child_types.size());
+		for (idx_t type_idx = 0; type_idx < child_types.size(); type_idx++) {
+			root_holder.nested_children_ptr.back()[type_idx] = &root_holder.nested_children.back()[type_idx];
+		}
+		child.children = &root_holder.nested_children_ptr.back()[0];
+		for (size_t type_idx = 0; type_idx < child_types.size(); type_idx++) {
+
+			InitializeChild(*child.children[type_idx]);
+
+			auto &struct_col_name = child_types[type_idx].first;
+			unique_ptr<char[]> name_ptr = unique_ptr<char[]>(new char[struct_col_name.size() + 1]);
+			for (size_t i = 0; i < struct_col_name.size(); i++) {
+				name_ptr[i] = struct_col_name[i];
+			}
+			name_ptr[struct_col_name.size()] = '\0';
+			root_holder.owned_type_names.push_back(move(name_ptr));
+
+			child.children[type_idx]->name = root_holder.owned_type_names.back().get();
+			SetArrowFormat(root_holder, *child.children[type_idx], child_types[type_idx].second, config_timezone);
+		}
+		break;
+	}
+	case LogicalTypeId::MAP: {
+		SetArrowMapFormat(root_holder, child, type, config_timezone);
+		break;
+	}
+	case LogicalTypeId::ENUM: {
+		// TODO what do we do with pointer enums here?
+		switch (EnumType::GetPhysicalType(type)) {
+		case PhysicalType::UINT8:
+			child.format = "C";
+			break;
+		case PhysicalType::UINT16:
+			child.format = "S";
+			break;
+		case PhysicalType::UINT32:
+			child.format = "I";
+			break;
+		default:
+			throw InternalException("Unsupported Enum Internal Type");
+		}
+		root_holder.nested_children.emplace_back();
+		root_holder.nested_children.back().resize(1);
+		root_holder.nested_children_ptr.emplace_back();
+		root_holder.nested_children_ptr.back().push_back(&root_holder.nested_children.back()[0]);
+		InitializeChild(root_holder.nested_children.back()[0]);
+		child.dictionary = root_holder.nested_children_ptr.back()[0];
+		child.dictionary->format = "u";
+		break;
+	}
+	default:
+		throw InternalException("Unsupported Arrow type " + type.ToString());
+	}
+}
+
+void ArrowConverter::ToArrowSchema(ArrowSchema *out_schema, vector<LogicalType> &types, vector<string> &names,
+                                   string &config_timezone) {
+	D_ASSERT(out_schema);
+	D_ASSERT(types.size() == names.size());
+	idx_t column_count = types.size();
+	// Allocate as unique_ptr first to cleanup properly on error
+	auto root_holder = make_unique<DuckDBArrowSchemaHolder>();
+
+	// Allocate the children
+	root_holder->children.resize(column_count);
+	root_holder->children_ptrs.resize(column_count, nullptr);
+	for (size_t i = 0; i < column_count; ++i) {
+		root_holder->children_ptrs[i] = &root_holder->children[i];
+	}
+	out_schema->children = root_holder->children_ptrs.data();
+	out_schema->n_children = column_count;
+
+	// Store the schema
+	out_schema->format = "+s"; // struct apparently
+	out_schema->flags = 0;
+	out_schema->metadata = nullptr;
+	out_schema->name = "duckdb_query_result";
+	out_schema->dictionary = nullptr;
+
+	// Configure all child schemas
+	for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
+
+		auto &child = root_holder->children[col_idx];
+		InitializeChild(child, names[col_idx]);
+		SetArrowFormat(*root_holder, child, types[col_idx], config_timezone);
+	}
+
+	// Release ownership to caller
+	out_schema->private_data = root_holder.release();
+	out_schema->release = ReleaseDuckDBArrowSchema;
+}
+
+} // namespace duckdb
+
+
 
 
 
@@ -3858,19 +5184,20 @@ int ResultArrowArrayStreamWrapper::MyStreamGetSchema(struct ArrowArrayStream *st
 	}
 	auto my_stream = (ResultArrowArrayStreamWrapper *)stream->private_data;
 	if (!my_stream->column_types.empty()) {
-		QueryResult::ToArrowSchema(out, my_stream->column_types, my_stream->column_names, my_stream->timezone_config);
+		ArrowConverter::ToArrowSchema(out, my_stream->column_types, my_stream->column_names,
+		                              my_stream->timezone_config);
 		return 0;
 	}
 
 	auto &result = *my_stream->result;
-	if (!result.success) {
-		my_stream->last_error = "Query Failed";
+	if (result.HasError()) {
+		my_stream->last_error = result.GetErrorObject();
 		return -1;
 	}
 	if (result.type == QueryResultType::STREAM_RESULT) {
 		auto &stream_result = (StreamQueryResult &)result;
 		if (!stream_result.IsOpen()) {
-			my_stream->last_error = "Query Stream is closed";
+			my_stream->last_error = PreservedError("Query Stream is closed");
 			return -1;
 		}
 	}
@@ -3878,7 +5205,7 @@ int ResultArrowArrayStreamWrapper::MyStreamGetSchema(struct ArrowArrayStream *st
 		my_stream->column_types = result.types;
 		my_stream->column_names = result.names;
 	}
-	QueryResult::ToArrowSchema(out, my_stream->column_types, my_stream->column_names, my_stream->timezone_config);
+	ArrowConverter::ToArrowSchema(out, my_stream->column_types, my_stream->column_names, my_stream->timezone_config);
 	return 0;
 }
 
@@ -3888,8 +5215,8 @@ int ResultArrowArrayStreamWrapper::MyStreamGetNext(struct ArrowArrayStream *stre
 	}
 	auto my_stream = (ResultArrowArrayStreamWrapper *)stream->private_data;
 	auto &result = *my_stream->result;
-	if (!result.success) {
-		my_stream->last_error = "Query Failed";
+	if (result.HasError()) {
+		my_stream->last_error = result.GetErrorObject();
 		return -1;
 	}
 	if (result.type == QueryResultType::STREAM_RESULT) {
@@ -3904,25 +5231,17 @@ int ResultArrowArrayStreamWrapper::MyStreamGetNext(struct ArrowArrayStream *stre
 		my_stream->column_types = result.types;
 		my_stream->column_names = result.names;
 	}
-	unique_ptr<DataChunk> chunk_result = result.Fetch();
-	if (!chunk_result) {
+	idx_t result_count;
+	PreservedError error;
+	if (!ArrowUtil::TryFetchChunk(&result, my_stream->batch_size, out, result_count, error)) {
+		D_ASSERT(error);
+		my_stream->last_error = error;
+		return -1;
+	}
+	if (result_count == 0) {
 		// Nothing to output
 		out->release = nullptr;
-		return 0;
 	}
-	unique_ptr<DataChunk> agg_chunk_result = make_unique<DataChunk>();
-	agg_chunk_result->Initialize(Allocator::DefaultAllocator(), chunk_result->GetTypes());
-	agg_chunk_result->Append(*chunk_result, true);
-
-	while (agg_chunk_result->size() < my_stream->batch_size) {
-		auto new_chunk = result.Fetch();
-		if (!new_chunk) {
-			break;
-		} else {
-			agg_chunk_result->Append(*new_chunk, true);
-		}
-	}
-	agg_chunk_result->ToArrowArray(out);
 	return 0;
 }
 
@@ -3940,8 +5259,9 @@ const char *ResultArrowArrayStreamWrapper::MyStreamGetLastError(struct ArrowArra
 	}
 	D_ASSERT(stream->private_data);
 	auto my_stream = (ResultArrowArrayStreamWrapper *)stream->private_data;
-	return my_stream->last_error.c_str();
+	return my_stream->last_error.Message().c_str();
 }
+
 ResultArrowArrayStreamWrapper::ResultArrowArrayStreamWrapper(unique_ptr<QueryResult> result_p, idx_t batch_size_p)
     : result(move(result_p)) {
 	//! We first initialize the private data of the stream
@@ -3958,28 +5278,47 @@ ResultArrowArrayStreamWrapper::ResultArrowArrayStreamWrapper(unique_ptr<QueryRes
 	stream.get_last_error = ResultArrowArrayStreamWrapper::MyStreamGetLastError;
 }
 
-unique_ptr<DataChunk> ArrowUtil::FetchNext(QueryResult &result) {
-	auto chunk = result.Fetch();
-	if (!result.success) {
-		throw std::runtime_error(result.error);
+bool ArrowUtil::TryFetchNext(QueryResult &result, unique_ptr<DataChunk> &chunk, PreservedError &error) {
+	if (result.type == QueryResultType::STREAM_RESULT) {
+		auto &stream_result = (StreamQueryResult &)result;
+		if (!stream_result.IsOpen()) {
+			return true;
+		}
 	}
-	return chunk;
+	return result.TryFetch(chunk, error);
 }
 
-unique_ptr<DataChunk> ArrowUtil::FetchChunk(QueryResult *result, idx_t chunk_size) {
-
-	auto data_chunk = FetchNext(*result);
-	if (!data_chunk) {
-		return data_chunk;
-	}
-	while (data_chunk->size() < chunk_size) {
-		auto next_chunk = FetchNext(*result);
-		if (!next_chunk || next_chunk->size() == 0) {
+bool ArrowUtil::TryFetchChunk(QueryResult *result, idx_t chunk_size, ArrowArray *out, idx_t &count,
+                              PreservedError &error) {
+	count = 0;
+	ArrowAppender appender(result->types, chunk_size);
+	while (count < chunk_size) {
+		unique_ptr<DataChunk> data_chunk;
+		if (!TryFetchNext(*result, data_chunk, error)) {
+			if (result->HasError()) {
+				error = result->GetErrorObject();
+			}
+			return false;
+		}
+		if (!data_chunk || data_chunk->size() == 0) {
 			break;
 		}
-		data_chunk->Append(*next_chunk, true);
+		count += data_chunk->size();
+		appender.Append(*data_chunk);
 	}
-	return data_chunk;
+	if (count > 0) {
+		*out = appender.Finalize();
+	}
+	return true;
+}
+
+idx_t ArrowUtil::FetchChunk(QueryResult *result, idx_t chunk_size, ArrowArray *out) {
+	PreservedError error;
+	idx_t result_count;
+	if (!TryFetchChunk(result, chunk_size, out, result_count, error)) {
+		error.Throw();
+	}
+	return result_count;
 }
 
 } // namespace duckdb
@@ -3992,7 +5331,660 @@ void DuckDBAssertInternal(bool condition, const char *condition_name, const char
 	if (condition) {
 		return;
 	}
-	throw InternalException("Assertion triggered in file \"%s\" on line %d: %s", file, linenr, condition_name);
+	throw InternalException("Assertion triggered in file \"%s\" on line %d: %s%s", file, linenr, condition_name,
+	                        Exception::GetStackTrace());
+}
+
+} // namespace duckdb
+
+
+
+
+
+#include <sstream>
+
+namespace duckdb {
+
+const idx_t BoxRenderer::SPLIT_COLUMN = idx_t(-1);
+
+BoxRenderer::BoxRenderer(BoxRendererConfig config_p) : config(move(config_p)) {
+}
+
+string BoxRenderer::ToString(ClientContext &context, const vector<string> &names, const ColumnDataCollection &result) {
+	std::stringstream ss;
+	Render(context, names, result, ss);
+	return ss.str();
+}
+
+void BoxRenderer::Print(ClientContext &context, const vector<string> &names, const ColumnDataCollection &result) {
+	Printer::Print(ToString(context, names, result));
+}
+
+void BoxRenderer::RenderValue(std::ostream &ss, const string &value, idx_t column_width,
+                              ValueRenderAlignment alignment) {
+	auto render_width = Utf8Proc::RenderWidth(value);
+
+	const string *render_value = &value;
+	string small_value;
+	if (render_width > column_width) {
+		// the string is too large to fit in this column!
+		// the size of this column must have been reduced
+		// figure out how much of this value we can render
+		idx_t pos = 0;
+		idx_t current_render_width = config.DOTDOTDOT_LENGTH;
+		while (pos < value.size()) {
+			// check if this character fits...
+			auto char_size = Utf8Proc::RenderWidth(value.c_str(), value.size(), pos);
+			if (current_render_width + char_size >= column_width) {
+				// it doesn't! stop
+				break;
+			}
+			// it does! move to the next character
+			current_render_width += char_size;
+			pos = Utf8Proc::NextGraphemeCluster(value.c_str(), value.size(), pos);
+		}
+		small_value = value.substr(0, pos) + config.DOTDOTDOT;
+		render_value = &small_value;
+		render_width = current_render_width;
+	}
+	auto padding_count = (column_width - render_width) + 2;
+	idx_t lpadding;
+	idx_t rpadding;
+	switch (alignment) {
+	case ValueRenderAlignment::LEFT:
+		lpadding = 1;
+		rpadding = padding_count - 1;
+		break;
+	case ValueRenderAlignment::MIDDLE:
+		lpadding = padding_count / 2;
+		rpadding = padding_count - lpadding;
+		break;
+	case ValueRenderAlignment::RIGHT:
+		lpadding = padding_count - 1;
+		rpadding = 1;
+		break;
+	default:
+		throw InternalException("Unrecognized value renderer alignment");
+	}
+	ss << config.VERTICAL;
+	ss << string(lpadding, ' ');
+	ss << *render_value;
+	ss << string(rpadding, ' ');
+}
+
+string BoxRenderer::RenderType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+		return "int8";
+	case LogicalTypeId::SMALLINT:
+		return "int16";
+	case LogicalTypeId::INTEGER:
+		return "int32";
+	case LogicalTypeId::BIGINT:
+		return "int64";
+	case LogicalTypeId::HUGEINT:
+		return "int128";
+	case LogicalTypeId::UTINYINT:
+		return "uint8";
+	case LogicalTypeId::USMALLINT:
+		return "uint16";
+	case LogicalTypeId::UINTEGER:
+		return "uint32";
+	case LogicalTypeId::UBIGINT:
+		return "uint64";
+	case LogicalTypeId::LIST: {
+		auto child = RenderType(ListType::GetChildType(type));
+		return child + "[]";
+	}
+	default:
+		return StringUtil::Lower(type.ToString());
+	}
+}
+
+ValueRenderAlignment BoxRenderer::TypeAlignment(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::DECIMAL:
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+		return ValueRenderAlignment::RIGHT;
+	default:
+		return ValueRenderAlignment::LEFT;
+	}
+}
+
+list<ColumnDataCollection> BoxRenderer::FetchRenderCollections(ClientContext &context,
+                                                               const ColumnDataCollection &result, idx_t top_rows,
+                                                               idx_t bottom_rows) {
+	auto column_count = result.ColumnCount();
+	vector<LogicalType> varchar_types;
+	for (idx_t c = 0; c < column_count; c++) {
+		varchar_types.emplace_back(LogicalType::VARCHAR);
+	}
+	std::list<ColumnDataCollection> collections;
+	collections.emplace_back(context, varchar_types);
+	collections.emplace_back(context, varchar_types);
+
+	auto &top_collection = collections.front();
+	auto &bottom_collection = collections.back();
+
+	DataChunk fetch_result;
+	fetch_result.Initialize(context, result.Types());
+
+	DataChunk insert_result;
+	insert_result.Initialize(context, varchar_types);
+
+	// fetch the top rows from the ColumnDataCollection
+	idx_t chunk_idx = 0;
+	idx_t row_idx = 0;
+	while (row_idx < top_rows) {
+		fetch_result.Reset();
+		insert_result.Reset();
+		// fetch the next chunk
+		result.FetchChunk(chunk_idx, fetch_result);
+		idx_t insert_count = MinValue<idx_t>(fetch_result.size(), top_rows - row_idx);
+
+		// cast all columns to varchar
+		for (idx_t c = 0; c < column_count; c++) {
+			VectorOperations::Cast(context, fetch_result.data[c], insert_result.data[c], insert_count);
+		}
+		insert_result.SetCardinality(insert_count);
+
+		// construct the render collection
+		top_collection.Append(insert_result);
+
+		chunk_idx++;
+		row_idx += fetch_result.size();
+	}
+
+	// fetch the bottom rows from the ColumnDataCollection
+	row_idx = 0;
+	chunk_idx = result.ChunkCount() - 1;
+	while (row_idx < bottom_rows) {
+		fetch_result.Reset();
+		insert_result.Reset();
+		// fetch the next chunk
+		result.FetchChunk(chunk_idx, fetch_result);
+		idx_t insert_count = MinValue<idx_t>(fetch_result.size(), bottom_rows - row_idx);
+
+		// invert the rows
+		SelectionVector inverted_sel(insert_count);
+		for (idx_t r = 0; r < insert_count; r++) {
+			inverted_sel.set_index(r, fetch_result.size() - r - 1);
+		}
+
+		for (idx_t c = 0; c < column_count; c++) {
+			Vector slice(fetch_result.data[c], inverted_sel, insert_count);
+			VectorOperations::Cast(context, slice, insert_result.data[c], insert_count);
+		}
+		insert_result.SetCardinality(insert_count);
+		// construct the render collection
+		bottom_collection.Append(insert_result);
+
+		chunk_idx--;
+		row_idx += fetch_result.size();
+	}
+	return collections;
+}
+
+string ConvertRenderValue(const string &input) {
+	return StringUtil::Replace(StringUtil::Replace(input, "\n", "\\n"), string("\0", 1), "\\0");
+}
+
+string BoxRenderer::GetRenderValue(ColumnDataRowCollection &rows, idx_t c, idx_t r) {
+	try {
+		auto row = rows.GetValue(c, r);
+		if (row.IsNull()) {
+			return config.null_value;
+		}
+		return ConvertRenderValue(StringValue::Get(row));
+	} catch (std::exception &ex) {
+		return "????INVALID VALUE - " + string(ex.what()) + "?????";
+	}
+}
+
+vector<idx_t> BoxRenderer::ComputeRenderWidths(const vector<string> &names, const ColumnDataCollection &result,
+                                               list<ColumnDataCollection> &collections, idx_t min_width,
+                                               idx_t max_width, vector<idx_t> &column_map, idx_t &total_length) {
+	auto column_count = result.ColumnCount();
+	auto &result_types = result.Types();
+
+	vector<idx_t> widths;
+	widths.reserve(column_count);
+	for (idx_t c = 0; c < column_count; c++) {
+		auto name_width = Utf8Proc::RenderWidth(ConvertRenderValue(names[c]));
+		auto type_width = Utf8Proc::RenderWidth(RenderType(result_types[c]));
+		widths.push_back(MaxValue<idx_t>(name_width, type_width));
+	}
+
+	// now iterate over the data in the render collection and find out the true max width
+	for (auto &collection : collections) {
+		for (auto &chunk : collection.Chunks()) {
+			for (idx_t c = 0; c < column_count; c++) {
+				auto string_data = FlatVector::GetData<string_t>(chunk.data[c]);
+				for (idx_t r = 0; r < chunk.size(); r++) {
+					string render_value;
+					if (FlatVector::IsNull(chunk.data[c], r)) {
+						render_value = config.null_value;
+					} else {
+						render_value = ConvertRenderValue(string_data[r].GetString());
+					}
+					auto render_width = Utf8Proc::RenderWidth(render_value);
+					widths[c] = MaxValue<idx_t>(render_width, widths[c]);
+				}
+			}
+		}
+	}
+
+	// figure out the total length
+	// we start off with a pipe (|)
+	total_length = 1;
+	for (idx_t c = 0; c < widths.size(); c++) {
+		// each column has a space at the beginning, and a space plus a pipe (|) at the end
+		// hence + 3
+		total_length += widths[c] + 3;
+	}
+	if (total_length < min_width) {
+		// if there are hidden rows we should always display that
+		// stretch up the first column until we have space to show the row count
+		widths[0] += min_width - total_length;
+		total_length = min_width;
+	}
+	// now we need to constrain the length
+	unordered_set<idx_t> pruned_columns;
+	if (total_length > max_width) {
+		// before we remove columns, check if we can just reduce the size of columns
+		for (auto &w : widths) {
+			if (w > config.max_col_width) {
+				auto max_diff = w - config.max_col_width;
+				if (total_length - max_diff <= max_width) {
+					// if we reduce the size of this column we fit within the limits!
+					// reduce the width exactly enough so that the box fits
+					w -= total_length - max_width;
+					total_length = max_width;
+					break;
+				} else {
+					// reducing the width of this column does not make the result fit
+					// reduce the column width by the maximum amount anyway
+					w = config.max_col_width;
+					total_length -= max_diff;
+				}
+			}
+		}
+
+		if (total_length > max_width) {
+			// the total length is still too large
+			// we need to remove columns!
+			// first, we add 6 characters to the total length
+			// this is what we need to add the "..." in the middle
+			total_length += 3 + config.DOTDOTDOT_LENGTH;
+			// now select columns to prune
+			// we select columns in zig-zag order starting from the middle
+			// e.g. if we have 10 columns, we remove #5, then #4, then #6, then #3, then #7, etc
+			int64_t offset = 0;
+			while (total_length > max_width) {
+				idx_t c = column_count / 2 + offset;
+				total_length -= widths[c] + 3;
+				pruned_columns.insert(c);
+				if (offset >= 0) {
+					offset = -offset - 1;
+				} else {
+					offset = -offset;
+				}
+			}
+		}
+	}
+
+	bool added_split_column = false;
+	vector<idx_t> new_widths;
+	for (idx_t c = 0; c < column_count; c++) {
+		if (pruned_columns.find(c) == pruned_columns.end()) {
+			column_map.push_back(c);
+			new_widths.push_back(widths[c]);
+		} else {
+			if (!added_split_column) {
+				// "..."
+				column_map.push_back(SPLIT_COLUMN);
+				new_widths.push_back(config.DOTDOTDOT_LENGTH);
+				added_split_column = true;
+			}
+		}
+	}
+	return new_widths;
+}
+
+void BoxRenderer::RenderHeader(const vector<string> &names, const vector<LogicalType> &result_types,
+                               const vector<idx_t> &column_map, const vector<idx_t> &widths,
+                               const vector<idx_t> &boundaries, idx_t total_length, bool has_results,
+                               std::ostream &ss) {
+	auto column_count = column_map.size();
+	// render the top line
+	ss << config.LTCORNER;
+	idx_t column_index = 0;
+	for (idx_t k = 0; k < total_length - 2; k++) {
+		if (column_index + 1 < column_count && k == boundaries[column_index]) {
+			ss << config.TMIDDLE;
+			column_index++;
+		} else {
+			ss << config.HORIZONTAL;
+		}
+	}
+	ss << config.RTCORNER;
+	ss << std::endl;
+
+	// render the header names
+	for (idx_t c = 0; c < column_count; c++) {
+		auto column_idx = column_map[c];
+		string name;
+		if (column_idx == SPLIT_COLUMN) {
+			name = config.DOTDOTDOT;
+		} else {
+			name = ConvertRenderValue(names[column_idx]);
+		}
+		RenderValue(ss, name, widths[c]);
+	}
+	ss << config.VERTICAL;
+	ss << std::endl;
+
+	// render the types
+	for (idx_t c = 0; c < column_count; c++) {
+		auto column_idx = column_map[c];
+		auto type = column_idx == SPLIT_COLUMN ? "" : RenderType(result_types[column_idx]);
+		RenderValue(ss, type, widths[c]);
+	}
+	ss << config.VERTICAL;
+	ss << std::endl;
+
+	// render the line under the header
+	ss << config.LMIDDLE;
+	column_index = 0;
+	for (idx_t k = 0; k < total_length - 2; k++) {
+		if (has_results && column_index + 1 < column_count && k == boundaries[column_index]) {
+			ss << config.MIDDLE;
+			column_index++;
+		} else {
+			ss << config.HORIZONTAL;
+		}
+	}
+	ss << config.RMIDDLE;
+	ss << std::endl;
+}
+
+void BoxRenderer::RenderValues(const list<ColumnDataCollection> &collections, const vector<idx_t> &column_map,
+                               const vector<idx_t> &widths, const vector<LogicalType> &result_types, std::ostream &ss) {
+	auto &top_collection = collections.front();
+	auto &bottom_collection = collections.back();
+	// render the top rows
+	auto top_rows = top_collection.Count();
+	auto bottom_rows = bottom_collection.Count();
+	auto column_count = column_map.size();
+
+	vector<ValueRenderAlignment> alignments;
+	for (idx_t c = 0; c < column_count; c++) {
+		auto column_idx = column_map[c];
+		if (column_idx == SPLIT_COLUMN) {
+			alignments.push_back(ValueRenderAlignment::MIDDLE);
+		} else {
+			alignments.push_back(TypeAlignment(result_types[column_idx]));
+		}
+	}
+
+	auto rows = top_collection.GetRows();
+	for (idx_t r = 0; r < top_rows; r++) {
+		for (idx_t c = 0; c < column_count; c++) {
+			auto column_idx = column_map[c];
+			string str;
+			if (column_idx == SPLIT_COLUMN) {
+				str = config.DOTDOTDOT;
+			} else {
+				str = GetRenderValue(rows, column_idx, r);
+			}
+			RenderValue(ss, str, widths[c], alignments[c]);
+		}
+		ss << config.VERTICAL;
+		ss << std::endl;
+	}
+
+	if (bottom_rows > 0) {
+		// render the bottom rows
+		// first render the divider
+		auto brows = bottom_collection.GetRows();
+		for (idx_t k = 0; k < 3; k++) {
+			for (idx_t c = 0; c < column_count; c++) {
+				auto column_idx = column_map[c];
+				string str;
+				auto alignment = alignments[c];
+				if (alignment == ValueRenderAlignment::MIDDLE || column_idx == SPLIT_COLUMN) {
+					str = config.DOT;
+				} else {
+					// align the dots in the center of the column
+					auto top_value = GetRenderValue(rows, column_idx, top_rows - 1);
+					auto bottom_value = GetRenderValue(brows, column_idx, bottom_rows - 1);
+					auto top_length = MinValue<idx_t>(widths[c], Utf8Proc::RenderWidth(top_value));
+					auto bottom_length = MinValue<idx_t>(widths[c], Utf8Proc::RenderWidth(bottom_value));
+					auto dot_length = MinValue<idx_t>(top_length, bottom_length);
+					if (top_length == 0) {
+						dot_length = bottom_length;
+					} else if (bottom_length == 0) {
+						dot_length = top_length;
+					}
+					if (dot_length > 1) {
+						auto padding = dot_length - 1;
+						idx_t left_padding, right_padding;
+						switch (alignment) {
+						case ValueRenderAlignment::LEFT:
+							left_padding = padding / 2;
+							right_padding = padding - left_padding;
+							break;
+						case ValueRenderAlignment::RIGHT:
+							right_padding = padding / 2;
+							left_padding = padding - right_padding;
+							break;
+						default:
+							throw InternalException("Unrecognized value renderer alignment");
+						}
+						str = string(left_padding, ' ') + config.DOT + string(right_padding, ' ');
+					} else {
+						if (dot_length == 0) {
+							// everything is empty
+							alignment = ValueRenderAlignment::MIDDLE;
+						}
+						str = config.DOT;
+					}
+				}
+				RenderValue(ss, str, widths[c], alignment);
+			}
+			ss << config.VERTICAL;
+			ss << std::endl;
+		}
+		// note that the bottom rows are in reverse order
+		for (idx_t r = 0; r < bottom_rows; r++) {
+			for (idx_t c = 0; c < column_count; c++) {
+				auto column_idx = column_map[c];
+				string str;
+				if (column_idx == SPLIT_COLUMN) {
+					str = config.DOTDOTDOT;
+				} else {
+					str = GetRenderValue(brows, column_idx, bottom_rows - r - 1);
+				}
+				RenderValue(ss, str, widths[c], alignments[c]);
+			}
+			ss << config.VERTICAL;
+			ss << std::endl;
+		}
+	}
+}
+
+void BoxRenderer::RenderRowCount(string row_count_str, string shown_str, const string &column_count_str,
+                                 const vector<idx_t> &boundaries, bool has_hidden_rows, bool has_hidden_columns,
+                                 idx_t total_length, idx_t row_count, idx_t column_count, idx_t minimum_row_length,
+                                 std::ostream &ss) {
+	// check if we can merge the row_count_str and the shown_str
+	bool display_shown_separately = has_hidden_rows;
+	if (has_hidden_rows && total_length >= row_count_str.size() + shown_str.size() + 5) {
+		// we can!
+		row_count_str += " " + shown_str;
+		shown_str = string();
+		display_shown_separately = false;
+		minimum_row_length = row_count_str.size() + 4;
+	}
+	auto minimum_length = row_count_str.size() + column_count_str.size() + 6;
+	bool render_rows_and_columns = total_length >= minimum_length &&
+	                               ((has_hidden_columns && row_count > 0) || (row_count >= 10 && column_count > 1));
+	bool render_rows = total_length >= minimum_row_length && (row_count == 0 || row_count >= 10);
+	bool render_anything = true;
+	if (!render_rows && !render_rows_and_columns) {
+		render_anything = false;
+	}
+	// render the bottom of the result values, if there are any
+	if (row_count > 0) {
+		ss << (render_anything ? config.LMIDDLE : config.LDCORNER);
+		idx_t column_index = 0;
+		for (idx_t k = 0; k < total_length - 2; k++) {
+			if (column_index + 1 < boundaries.size() && k == boundaries[column_index]) {
+				ss << config.DMIDDLE;
+				column_index++;
+			} else {
+				ss << config.HORIZONTAL;
+			}
+		}
+		ss << (render_anything ? config.RMIDDLE : config.RDCORNER);
+		ss << std::endl;
+	}
+	if (!render_anything) {
+		return;
+	}
+
+	if (render_rows_and_columns) {
+		ss << config.VERTICAL;
+		ss << " ";
+		ss << row_count_str;
+		ss << string(total_length - row_count_str.size() - column_count_str.size() - 4, ' ');
+		ss << column_count_str;
+		ss << " ";
+		ss << config.VERTICAL;
+		ss << std::endl;
+	} else if (render_rows) {
+		RenderValue(ss, row_count_str, total_length - 4);
+		ss << config.VERTICAL;
+		ss << std::endl;
+
+		if (display_shown_separately) {
+			RenderValue(ss, shown_str, total_length - 4);
+			ss << config.VERTICAL;
+			ss << std::endl;
+		}
+	}
+	// render the bottom line
+	ss << config.LDCORNER;
+	for (idx_t k = 0; k < total_length - 2; k++) {
+		ss << config.HORIZONTAL;
+	}
+	ss << config.RDCORNER;
+	ss << std::endl;
+}
+
+void BoxRenderer::Render(ClientContext &context, const vector<string> &names, const ColumnDataCollection &result,
+                         std::ostream &ss) {
+	if (result.ColumnCount() != names.size()) {
+		throw InternalException("Error in BoxRenderer::Render - unaligned columns and names");
+	}
+	auto max_width = config.max_width;
+	if (max_width == 0) {
+		if (Printer::IsTerminal(OutputStream::STREAM_STDOUT)) {
+			max_width = Printer::TerminalWidth();
+		} else {
+			max_width = 120;
+		}
+	}
+	// we do not support max widths under 80
+	max_width = MaxValue<idx_t>(80, max_width);
+
+	// figure out how many/which rows to render
+	idx_t row_count = result.Count();
+	idx_t rows_to_render = MinValue<idx_t>(row_count, config.max_rows);
+	if (row_count <= config.max_rows + 3) {
+		// hiding rows adds 3 extra rows
+		// so hiding rows makes no sense if we are only slightly over the limit
+		// if we are 1 row over the limit hiding rows will actually increase the number of lines we display!
+		// in this case render all the rows
+		rows_to_render = row_count;
+	}
+	idx_t top_rows;
+	idx_t bottom_rows;
+	if (rows_to_render == row_count) {
+		top_rows = row_count;
+		bottom_rows = 0;
+	} else {
+		top_rows = rows_to_render / 2 + (rows_to_render % 2 != 0 ? 1 : 0);
+		bottom_rows = rows_to_render - top_rows;
+	}
+	auto row_count_str = to_string(row_count) + " rows";
+	string shown_str;
+	bool has_hidden_rows = top_rows < row_count;
+	if (has_hidden_rows) {
+		shown_str = "(" + to_string(top_rows + bottom_rows) + " shown)";
+	}
+	auto minimum_row_length = MaxValue<idx_t>(row_count_str.size(), shown_str.size()) + 4;
+
+	// fetch the top and bottom render collections from the result
+	auto collections = FetchRenderCollections(context, result, top_rows, bottom_rows);
+
+	auto &result_types = result.Types();
+
+	// for each column, figure out the width
+	// start off by figuring out the name of the header by looking at the column name and column type
+	idx_t min_width = has_hidden_rows || row_count == 0 ? minimum_row_length : 0;
+	vector<idx_t> column_map;
+	idx_t total_length;
+	auto widths = ComputeRenderWidths(names, result, collections, min_width, max_width, column_map, total_length);
+
+	// render boundaries for the individual columns
+	vector<idx_t> boundaries;
+	for (idx_t c = 0; c < widths.size(); c++) {
+		idx_t render_boundary;
+		if (c == 0) {
+			render_boundary = widths[c] + 2;
+		} else {
+			render_boundary = boundaries[c - 1] + widths[c] + 3;
+		}
+		boundaries.push_back(render_boundary);
+	}
+
+	// now begin rendering
+	// first render the header
+	RenderHeader(names, result_types, column_map, widths, boundaries, total_length, row_count > 0, ss);
+
+	// render the values, if there are any
+	RenderValues(collections, column_map, widths, result_types, ss);
+
+	// render the row count and column count
+	auto column_count_str = to_string(result.ColumnCount()) + " column";
+	if (result.ColumnCount() > 1) {
+		column_count_str += "s";
+	}
+	bool has_hidden_columns = false;
+	for (auto entry : column_map) {
+		if (entry == SPLIT_COLUMN) {
+			has_hidden_columns = true;
+			break;
+		}
+	}
+	idx_t column_count = column_map.size();
+	if (has_hidden_columns) {
+		column_count--;
+		column_count_str += " (" + to_string(column_count) + " shown)";
+	}
+	RenderRowCount(move(row_count_str), move(shown_str), column_count_str, boundaries, has_hidden_rows,
+	               has_hidden_columns, total_length, row_count, column_count, minimum_row_length, ss);
 }
 
 } // namespace duckdb
@@ -4001,13 +5993,17 @@ void DuckDBAssertInternal(bool condition, const char *condition_name, const char
 
 namespace duckdb {
 
+hash_t Checksum(uint64_t x) {
+	return x * UINT64_C(0xbf58476d1ce4e5b9);
+}
+
 uint64_t Checksum(uint8_t *buffer, size_t size) {
 	uint64_t result = 5381;
 	uint64_t *ptr = (uint64_t *)buffer;
 	size_t i;
-	// for efficiency, we first hash uint64_t values
+	// for efficiency, we first checksum uint64_t values
 	for (i = 0; i < size / 8; i++) {
-		result ^= Hash(ptr[i]);
+		result ^= Checksum(ptr[i]);
 	}
 	if (size - i * 8 > 0) {
 		// the remaining 0-7 bytes we hash using a string hash
@@ -4176,6 +6172,10 @@ uint64_t NextPowerOfTwo(uint64_t v) {
 	v |= v >> 32;
 	v++;
 	return v;
+}
+
+bool IsRowIdColumnId(column_t column_id) {
+	return column_id == COLUMN_IDENTIFIER_ROW_ID;
 }
 
 } // namespace duckdb
@@ -4591,6 +6591,10 @@ CompressionType CompressionTypeFromString(const string &str) {
 		return CompressionType::COMPRESSION_BITPACKING;
 	} else if (compression == "fsst") {
 		return CompressionType::COMPRESSION_FSST;
+	} else if (compression == "chimp") {
+		return CompressionType::COMPRESSION_CHIMP;
+	} else if (compression == "patas") {
+		return CompressionType::COMPRESSION_PATAS;
 	} else {
 		return CompressionType::COMPRESSION_AUTO;
 	}
@@ -4612,6 +6616,10 @@ string CompressionTypeToString(CompressionType type) {
 		return "BitPacking";
 	case CompressionType::COMPRESSION_FSST:
 		return "FSST";
+	case CompressionType::COMPRESSION_CHIMP:
+		return "Chimp";
+	case CompressionType::COMPRESSION_PATAS:
+		return "Patas";
 	default:
 		throw InternalException("Unrecognized compression type!");
 	}
@@ -4863,6 +6871,87 @@ ExpressionType OperatorToExpressionType(const string &op) {
 	return ExpressionType::INVALID;
 }
 
+string ExpressionClassToString(ExpressionClass type) {
+	switch (type) {
+	case ExpressionClass::INVALID:
+		return "INVALID";
+	case ExpressionClass::AGGREGATE:
+		return "AGGREGATE";
+	case ExpressionClass::CASE:
+		return "CASE";
+	case ExpressionClass::CAST:
+		return "CAST";
+	case ExpressionClass::COLUMN_REF:
+		return "COLUMN_REF";
+	case ExpressionClass::COMPARISON:
+		return "COMPARISON";
+	case ExpressionClass::CONJUNCTION:
+		return "CONJUNCTION";
+	case ExpressionClass::CONSTANT:
+		return "CONSTANT";
+	case ExpressionClass::DEFAULT:
+		return "DEFAULT";
+	case ExpressionClass::FUNCTION:
+		return "FUNCTION";
+	case ExpressionClass::OPERATOR:
+		return "OPERATOR";
+	case ExpressionClass::STAR:
+		return "STAR";
+	case ExpressionClass::SUBQUERY:
+		return "SUBQUERY";
+	case ExpressionClass::WINDOW:
+		return "WINDOW";
+	case ExpressionClass::PARAMETER:
+		return "PARAMETER";
+	case ExpressionClass::COLLATE:
+		return "COLLATE";
+	case ExpressionClass::LAMBDA:
+		return "LAMBDA";
+	case ExpressionClass::POSITIONAL_REFERENCE:
+		return "POSITIONAL_REFERENCE";
+	case ExpressionClass::BETWEEN:
+		return "BETWEEN";
+	case ExpressionClass::BOUND_AGGREGATE:
+		return "BOUND_AGGREGATE";
+	case ExpressionClass::BOUND_CASE:
+		return "BOUND_CASE";
+	case ExpressionClass::BOUND_CAST:
+		return "BOUND_CAST";
+	case ExpressionClass::BOUND_COLUMN_REF:
+		return "BOUND_COLUMN_REF";
+	case ExpressionClass::BOUND_COMPARISON:
+		return "BOUND_COMPARISON";
+	case ExpressionClass::BOUND_CONJUNCTION:
+		return "BOUND_CONJUNCTION";
+	case ExpressionClass::BOUND_CONSTANT:
+		return "BOUND_CONSTANT";
+	case ExpressionClass::BOUND_DEFAULT:
+		return "BOUND_DEFAULT";
+	case ExpressionClass::BOUND_FUNCTION:
+		return "BOUND_FUNCTION";
+	case ExpressionClass::BOUND_OPERATOR:
+		return "BOUND_OPERATOR";
+	case ExpressionClass::BOUND_PARAMETER:
+		return "BOUND_PARAMETER";
+	case ExpressionClass::BOUND_REF:
+		return "BOUND_REF";
+	case ExpressionClass::BOUND_SUBQUERY:
+		return "BOUND_SUBQUERY";
+	case ExpressionClass::BOUND_WINDOW:
+		return "BOUND_WINDOW";
+	case ExpressionClass::BOUND_BETWEEN:
+		return "BOUND_BETWEEN";
+	case ExpressionClass::BOUND_UNNEST:
+		return "BOUND_UNNEST";
+	case ExpressionClass::BOUND_LAMBDA:
+		return "BOUND_LAMBDA";
+	case ExpressionClass::BOUND_EXPRESSION:
+		return "BOUND_EXPRESSION";
+	default:
+		return "ExpressionClass::!!UNIMPLEMENTED_CASE!!";
+	}
+}
+
 } // namespace duckdb
 
 
@@ -5034,6 +7123,8 @@ string LogicalOperatorToString(LogicalOperatorType type) {
 		return "LOAD";
 	case LogicalOperatorType::LOGICAL_INVALID:
 		break;
+	case LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR:
+		return "CUSTOM_OP";
 	}
 	return "INVALID";
 }
@@ -5067,6 +7158,7 @@ static DefaultOptimizerType internal_optimizer_types[] = {
     {"column_lifetime", OptimizerType::COLUMN_LIFETIME},
     {"top_n", OptimizerType::TOP_N},
     {"reorder_filter", OptimizerType::REORDER_FILTER},
+    {"extension", OptimizerType::EXTENSION},
     {nullptr, OptimizerType::INVALID}};
 
 string OptimizerTypeToString(OptimizerType type) {
@@ -5107,6 +7199,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "DUMMY_SCAN";
 	case PhysicalOperatorType::CHUNK_SCAN:
 		return "CHUNK_SCAN";
+	case PhysicalOperatorType::COLUMN_DATA_SCAN:
+		return "COLUMN_DATA_SCAN";
 	case PhysicalOperatorType::DELIM_SCAN:
 		return "DELIM_SCAN";
 	case PhysicalOperatorType::ORDER_BY:
@@ -5129,8 +7223,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "STREAMING_WINDOW";
 	case PhysicalOperatorType::UNNEST:
 		return "UNNEST";
-	case PhysicalOperatorType::SIMPLE_AGGREGATE:
-		return "SIMPLE_AGGREGATE";
+	case PhysicalOperatorType::UNGROUPED_AGGREGATE:
+		return "UNGROUPED_AGGREGATE";
 	case PhysicalOperatorType::HASH_GROUP_BY:
 		return "HASH_GROUP_BY";
 	case PhysicalOperatorType::PERFECT_HASH_GROUP_BY:
@@ -5161,6 +7255,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "UNION";
 	case PhysicalOperatorType::INSERT:
 		return "INSERT";
+	case PhysicalOperatorType::BATCH_INSERT:
+		return "BATCH_INSERT";
 	case PhysicalOperatorType::DELETE_OPERATOR:
 		return "DELETE";
 	case PhysicalOperatorType::UPDATE:
@@ -5171,6 +7267,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "CREATE_TABLE";
 	case PhysicalOperatorType::CREATE_TABLE_AS:
 		return "CREATE_TABLE_AS";
+	case PhysicalOperatorType::BATCH_CREATE_TABLE_AS:
+		return "BATCH_CREATE_TABLE_AS";
 	case PhysicalOperatorType::CREATE_INDEX:
 		return "CREATE_INDEX";
 	case PhysicalOperatorType::EXPLAIN:
@@ -5343,6 +7441,8 @@ string StatementTypeToString(StatementType type) {
 		return "LOAD";
 	case StatementType::EXTENSION_STATEMENT:
 		return "EXTENSION";
+	case StatementType::LOGICAL_PLAN_STATEMENT:
+		return "LOGICAL_PLAN";
 	case StatementType::INVALID_STATEMENT:
 		break;
 	}
@@ -5369,13 +7469,23 @@ string StatementReturnTypeToString(StatementReturnType type) {
 
 
 
+#ifdef DUCKDB_CRASH_ON_ASSERT
+
+#include <stdio.h>
+#include <stdlib.h>
+#endif
+#ifdef DUCKDB_DEBUG_STACKTRACE
+#include <execinfo.h>
+#endif
+
 namespace duckdb {
 
-Exception::Exception(const string &msg) : std::exception(), type(ExceptionType::INVALID) {
+Exception::Exception(const string &msg) : std::exception(), type(ExceptionType::INVALID), raw_message_(msg) {
 	exception_message_ = msg;
 }
 
-Exception::Exception(ExceptionType exception_type, const string &message) : std::exception(), type(exception_type) {
+Exception::Exception(ExceptionType exception_type, const string &message)
+    : std::exception(), type(exception_type), raw_message_(message) {
 	exception_message_ = ExceptionTypeToString(exception_type) + " Error: " + message;
 }
 
@@ -5383,11 +7493,33 @@ const char *Exception::what() const noexcept {
 	return exception_message_.c_str();
 }
 
+const string &Exception::RawMessage() const {
+	return raw_message_;
+}
+
 bool Exception::UncaughtException() {
 #if __cplusplus >= 201703L
 	return std::uncaught_exceptions() > 0;
 #else
 	return std::uncaught_exception();
+#endif
+}
+
+string Exception::GetStackTrace(int max_depth) {
+#ifdef DUCKDB_DEBUG_STACKTRACE
+	string result;
+	auto callstack = unique_ptr<void *[]>(new void *[max_depth]);
+	int frames = backtrace(callstack.get(), max_depth);
+	char **strs = backtrace_symbols(callstack.get(), frames);
+	for (int i = 0; i < frames; i++) {
+		result += strs[i];
+		result += "\n";
+	}
+	free(strs);
+	return "\n" + result;
+#else
+	// Stack trace not available. Toggle DUCKDB_DEBUG_STACKTRACE in exception.cpp to enable stack traces.
+	return "";
 #endif
 }
 
@@ -5465,8 +7597,67 @@ string Exception::ExceptionTypeToString(ExceptionType type) {
 		return "Out of Memory";
 	case ExceptionType::PERMISSION:
 		return "Permission";
+	case ExceptionType::PARAMETER_NOT_RESOLVED:
+		return "Parameter Not Resolved";
+	case ExceptionType::PARAMETER_NOT_ALLOWED:
+		return "Parameter Not Allowed";
+	case ExceptionType::DEPENDENCY:
+		return "Dependency";
 	default:
 		return "Unknown";
+	}
+}
+
+void Exception::ThrowAsTypeWithMessage(ExceptionType type, const string &message) {
+	switch (type) {
+	case ExceptionType::OUT_OF_RANGE:
+		throw OutOfRangeException(message);
+	case ExceptionType::CONVERSION:
+		throw ConversionException(message); // FIXME: make a separation between Conversion/Cast exception?
+	case ExceptionType::INVALID_TYPE:
+		throw InvalidTypeException(message);
+	case ExceptionType::MISMATCH_TYPE:
+		throw TypeMismatchException(message);
+	case ExceptionType::TRANSACTION:
+		throw TransactionException(message);
+	case ExceptionType::NOT_IMPLEMENTED:
+		throw NotImplementedException(message);
+	case ExceptionType::CATALOG:
+		throw CatalogException(message);
+	case ExceptionType::CONNECTION:
+		throw ConnectionException(message);
+	case ExceptionType::PARSER:
+		throw ParserException(message);
+	case ExceptionType::PERMISSION:
+		throw PermissionException(message);
+	case ExceptionType::SYNTAX:
+		throw SyntaxException(message);
+	case ExceptionType::CONSTRAINT:
+		throw ConstraintException(message);
+	case ExceptionType::BINDER:
+		throw BinderException(message);
+	case ExceptionType::IO:
+		throw IOException(message);
+	case ExceptionType::SERIALIZATION:
+		throw SerializationException(message);
+	case ExceptionType::INTERRUPT:
+		throw InterruptException();
+	case ExceptionType::INTERNAL:
+		throw InternalException(message);
+	case ExceptionType::INVALID_INPUT:
+		throw InvalidInputException(message);
+	case ExceptionType::OUT_OF_MEMORY:
+		throw OutOfMemoryException(message);
+	case ExceptionType::PARAMETER_NOT_ALLOWED:
+		throw ParameterNotAllowedException(message);
+	case ExceptionType::PARAMETER_NOT_RESOLVED:
+		throw ParameterNotResolvedException();
+	case ExceptionType::FATAL:
+		throw FatalException(message);
+	case ExceptionType::DEPENDENCY:
+		throw DependencyException(message);
+	default:
+		throw Exception(type, message);
 	}
 }
 
@@ -5482,6 +7673,9 @@ CastException::CastException(const PhysicalType orig_type, const PhysicalType ne
 CastException::CastException(const LogicalType &orig_type, const LogicalType &new_type)
     : Exception(ExceptionType::CONVERSION,
                 "Type " + orig_type.ToString() + " can't be cast as " + new_type.ToString()) {
+}
+
+CastException::CastException(const string &msg) : Exception(ExceptionType::CONVERSION, msg) {
 }
 
 ValueOutOfRangeException::ValueOutOfRangeException(const int64_t value, const PhysicalType orig_type,
@@ -5514,6 +7708,9 @@ ValueOutOfRangeException::ValueOutOfRangeException(const PhysicalType var_type, 
                 "The value is too long to fit into type " + TypeIdToString(var_type) + "(" + to_string(length) + ")") {
 }
 
+ValueOutOfRangeException::ValueOutOfRangeException(const string &msg) : Exception(ExceptionType::OUT_OF_RANGE, msg) {
+}
+
 ConversionException::ConversionException(const string &msg) : Exception(ExceptionType::CONVERSION, msg) {
 }
 
@@ -5525,6 +7722,9 @@ InvalidTypeException::InvalidTypeException(const LogicalType &type, const string
     : Exception(ExceptionType::INVALID_TYPE, "Invalid Type [" + type.ToString() + "]: " + msg) {
 }
 
+InvalidTypeException::InvalidTypeException(const string &msg) : Exception(ExceptionType::INVALID_TYPE, msg) {
+}
+
 TypeMismatchException::TypeMismatchException(const PhysicalType type_1, const PhysicalType type_2, const string &msg)
     : Exception(ExceptionType::MISMATCH_TYPE,
                 "Type " + TypeIdToString(type_1) + " does not match with " + TypeIdToString(type_2) + ". " + msg) {
@@ -5533,6 +7733,9 @@ TypeMismatchException::TypeMismatchException(const PhysicalType type_1, const Ph
 TypeMismatchException::TypeMismatchException(const LogicalType &type_1, const LogicalType &type_2, const string &msg)
     : Exception(ExceptionType::MISMATCH_TYPE,
                 "Type " + type_1.ToString() + " does not match with " + type_2.ToString() + ". " + msg) {
+}
+
+TypeMismatchException::TypeMismatchException(const string &msg) : Exception(ExceptionType::MISMATCH_TYPE, msg) {
 }
 
 TransactionException::TransactionException(const string &msg) : Exception(ExceptionType::TRANSACTION, msg) {
@@ -5547,6 +7750,9 @@ OutOfRangeException::OutOfRangeException(const string &msg) : Exception(Exceptio
 CatalogException::CatalogException(const string &msg) : StandardException(ExceptionType::CATALOG, msg) {
 }
 
+ConnectionException::ConnectionException(const string &msg) : StandardException(ExceptionType::CONNECTION, msg) {
+}
+
 ParserException::ParserException(const string &msg) : StandardException(ExceptionType::PARSER, msg) {
 }
 
@@ -5557,6 +7763,9 @@ SyntaxException::SyntaxException(const string &msg) : Exception(ExceptionType::S
 }
 
 ConstraintException::ConstraintException(const string &msg) : Exception(ExceptionType::CONSTRAINT, msg) {
+}
+
+DependencyException::DependencyException(const string &msg) : Exception(ExceptionType::DEPENDENCY, msg) {
 }
 
 BinderException::BinderException(const string &msg) : StandardException(ExceptionType::BINDER, msg) {
@@ -5574,16 +7783,28 @@ SequenceException::SequenceException(const string &msg) : Exception(ExceptionTyp
 InterruptException::InterruptException() : Exception(ExceptionType::INTERRUPT, "Interrupted!") {
 }
 
-FatalException::FatalException(const string &msg) : Exception(ExceptionType::FATAL, msg) {
+FatalException::FatalException(ExceptionType type, const string &msg) : Exception(type, msg) {
 }
 
-InternalException::InternalException(const string &msg) : Exception(ExceptionType::INTERNAL, msg) {
+InternalException::InternalException(const string &msg) : FatalException(ExceptionType::INTERNAL, msg) {
+#ifdef DUCKDB_CRASH_ON_ASSERT
+	Printer::Print("ABORT THROWN BY INTERNAL EXCEPTION: " + msg);
+	abort();
+#endif
 }
 
 InvalidInputException::InvalidInputException(const string &msg) : Exception(ExceptionType::INVALID_INPUT, msg) {
 }
 
 OutOfMemoryException::OutOfMemoryException(const string &msg) : Exception(ExceptionType::OUT_OF_MEMORY, msg) {
+}
+
+ParameterNotAllowedException::ParameterNotAllowedException(const string &msg)
+    : StandardException(ExceptionType::PARAMETER_NOT_ALLOWED, msg) {
+}
+
+ParameterNotResolvedException::ParameterNotResolvedException()
+    : Exception(ExceptionType::PARAMETER_NOT_RESOLVED, "Parameter types could not be resolved") {
 }
 
 } // namespace duckdb
@@ -5671,6 +7892,7 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 FieldWriter::FieldWriter(Serializer &serializer_p)
     : serializer(serializer_p), buffer(make_unique<BufferedSerializer>()), field_count(0), finalized(false) {
+	buffer->SetVersion(serializer.GetVersion());
 }
 
 FieldWriter::~FieldWriter() {
@@ -5710,6 +7932,7 @@ void FieldWriter::Finalize() {
 // Field Deserializer
 //===--------------------------------------------------------------------===//
 FieldDeserializer::FieldDeserializer(Deserializer &root) : root(root), remaining_data(idx_t(-1)) {
+	SetVersion(root.GetVersion());
 }
 
 void FieldDeserializer::ReadData(data_ptr_t buffer, idx_t read_size) {
@@ -5768,11 +7991,21 @@ void FieldReader::Finalize() {
 
 namespace duckdb {
 
-FileBuffer::FileBuffer(Allocator &allocator, FileBufferType type, uint64_t bufsiz)
-    : allocator(allocator), type(type), malloced_buffer(nullptr) {
-	SetMallocedSize(bufsiz);
-	malloced_buffer = allocator.AllocateData(malloced_size);
-	Construct(bufsiz);
+FileBuffer::FileBuffer(Allocator &allocator, FileBufferType type, uint64_t user_size)
+    : allocator(allocator), type(type) {
+	Init();
+	if (user_size) {
+		Resize(user_size);
+	}
+}
+
+void FileBuffer::Init() {
+	buffer = nullptr;
+	size = 0;
+	internal_buffer = nullptr;
+	internal_size = 0;
+	malloced_buffer = nullptr;
+	malloced_size = 0;
 }
 
 FileBuffer::FileBuffer(FileBuffer &source, FileBufferType type_p) : allocator(source.allocator), type(type_p) {
@@ -5784,12 +8017,7 @@ FileBuffer::FileBuffer(FileBuffer &source, FileBufferType type_p) : allocator(so
 	malloced_buffer = source.malloced_buffer;
 	malloced_size = source.malloced_size;
 
-	source.buffer = nullptr;
-	source.size = 0;
-	source.internal_buffer = nullptr;
-	source.internal_size = 0;
-	source.malloced_buffer = nullptr;
-	source.malloced_size = 0;
+	source.Init();
 }
 
 FileBuffer::~FileBuffer() {
@@ -5799,33 +8027,49 @@ FileBuffer::~FileBuffer() {
 	allocator.FreeData(malloced_buffer, malloced_size);
 }
 
-void FileBuffer::SetMallocedSize(uint64_t &bufsiz) {
-	// make room for the block header (if this is not the db file header)
-	if (type == FileBufferType::MANAGED_BUFFER && bufsiz != Storage::FILE_HEADER_SIZE) {
-		bufsiz += Storage::BLOCK_HEADER_SIZE;
+void FileBuffer::ReallocBuffer(size_t new_size) {
+	if (malloced_buffer) {
+		malloced_buffer = allocator.ReallocateData(malloced_buffer, malloced_size, new_size);
+	} else {
+		malloced_buffer = allocator.AllocateData(new_size);
 	}
-	malloced_size = bufsiz;
-}
-
-void FileBuffer::Construct(uint64_t bufsiz) {
 	if (!malloced_buffer) {
 		throw std::bad_alloc();
 	}
+	malloced_size = new_size;
 	internal_buffer = malloced_buffer;
 	internal_size = malloced_size;
-	buffer = internal_buffer + Storage::BLOCK_HEADER_SIZE;
-	size = internal_size - Storage::BLOCK_HEADER_SIZE;
+	// Caller must update these.
+	buffer = nullptr;
+	size = 0;
 }
 
-void FileBuffer::Resize(uint64_t bufsiz) {
-	D_ASSERT(type == FileBufferType::MANAGED_BUFFER);
-	auto old_size = malloced_size;
-	SetMallocedSize(bufsiz);
-	malloced_buffer = allocator.ReallocateData(malloced_buffer, old_size, malloced_size);
-	Construct(bufsiz);
+FileBuffer::MemoryRequirement FileBuffer::CalculateMemory(uint64_t user_size) {
+	FileBuffer::MemoryRequirement result;
+
+	if (type == FileBufferType::TINY_BUFFER) {
+		// We never do IO on tiny buffers, so there's no need to add a header or sector-align.
+		result.header_size = 0;
+		result.alloc_size = user_size;
+	} else {
+		result.header_size = Storage::BLOCK_HEADER_SIZE;
+		result.alloc_size = AlignValue<uint32_t, Storage::SECTOR_SIZE>(result.header_size + user_size);
+	}
+	return result;
+}
+
+void FileBuffer::Resize(uint64_t new_size) {
+	auto req = CalculateMemory(new_size);
+	ReallocBuffer(req.alloc_size);
+
+	if (new_size > 0) {
+		buffer = internal_buffer + req.header_size;
+		size = internal_size - req.header_size;
+	}
 }
 
 void FileBuffer::Read(FileHandle &handle, uint64_t location) {
+	D_ASSERT(type != FileBufferType::TINY_BUFFER);
 	handle.Read(internal_buffer, internal_size, location);
 }
 
@@ -5843,6 +8087,7 @@ void FileBuffer::ReadAndChecksum(FileHandle &handle, uint64_t location) {
 }
 
 void FileBuffer::Write(FileHandle &handle, uint64_t location) {
+	D_ASSERT(type != FileBufferType::TINY_BUFFER);
 	handle.Write(internal_buffer, internal_size, location);
 }
 
@@ -5859,6 +8104,7 @@ void FileBuffer::Clear() {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -5906,7 +8152,20 @@ FileOpener *FileSystem::GetFileOpener(ClientContext &context) {
 	return ClientData::Get(context).file_opener.get();
 }
 
+bool PathMatched(const string &path, const string &sub_path) {
+	if (path.rfind(sub_path, 0) == 0) {
+		return true;
+	}
+	return false;
+}
+
 #ifndef _WIN32
+
+bool FileSystem::IsPathAbsolute(const string &path) {
+	auto path_separator = FileSystem::PathSeparator();
+	return PathMatched(path, path_separator);
+}
+
 string FileSystem::PathSeparator() {
 	return "/";
 }
@@ -5935,6 +8194,27 @@ string FileSystem::GetWorkingDirectory() {
 	return string(buffer.get());
 }
 #else
+
+bool FileSystem::IsPathAbsolute(const string &path) {
+	// 1) A single backslash
+	auto sub_path = FileSystem::PathSeparator();
+	if (PathMatched(path, sub_path)) {
+		return true;
+	}
+	// 2) check if starts with a double-backslash (i.e., \\)
+	sub_path += FileSystem::PathSeparator();
+	if (PathMatched(path, sub_path)) {
+		return true;
+	}
+	// 3) A disk designator with a backslash (e.g., C:\)
+	auto path_aux = path;
+	path_aux.erase(0, 1);
+	sub_path = ":" + FileSystem::PathSeparator();
+	if (PathMatched(path_aux, sub_path)) {
+		return true;
+	}
+	return false;
+}
 
 string FileSystem::PathSeparator() {
 	return "\\";
@@ -5999,13 +8279,29 @@ string FileSystem::ConvertSeparators(const string &path) {
 }
 
 string FileSystem::ExtractBaseName(const string &path) {
+	if (path.empty()) {
+		return string();
+	}
 	auto normalized_path = ConvertSeparators(path);
 	auto sep = PathSeparator();
-	auto vec = StringUtil::Split(StringUtil::Split(normalized_path, sep).back(), ".");
+	auto splits = StringUtil::Split(normalized_path, sep);
+	D_ASSERT(!splits.empty());
+	auto vec = StringUtil::Split(splits.back(), ".");
+	D_ASSERT(!vec.empty());
 	return vec[0];
 }
 
-string FileSystem::GetHomeDirectory() {
+string FileSystem::GetHomeDirectory(FileOpener *opener) {
+	// read the home_directory setting first, if it is set
+	if (opener) {
+		Value result;
+		if (opener->TryGetCurrentSetting("home_directory", result)) {
+			if (!result.IsNull() && !result.ToString().empty()) {
+				return result.ToString();
+			}
+		}
+	}
+	// fallback to the default home directories for the specified system
 #ifdef DUCKDB_WINDOWS
 	const char *homedir = getenv("USERPROFILE");
 #else
@@ -6015,6 +8311,16 @@ string FileSystem::GetHomeDirectory() {
 		return homedir;
 	}
 	return string();
+}
+
+string FileSystem::ExpandPath(const string &path, FileOpener *opener) {
+	if (path.empty()) {
+		return path;
+	}
+	if (path[0] == '~') {
+		return GetHomeDirectory(opener) + path.substr(1);
+	}
+	return path;
 }
 
 // LCOV_EXCL_START
@@ -6206,6 +8512,36 @@ void FileHandle::Truncate(int64_t new_size) {
 
 FileType FileHandle::GetType() {
 	return file_system.GetFileType(*this);
+}
+
+} // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+string_t FSSTPrimitives::DecompressValue(void *duckdb_fsst_decoder, Vector &result, unsigned char *compressed_string,
+                                         idx_t compressed_string_len) {
+	D_ASSERT(result.GetVectorType() == VectorType::FLAT_VECTOR);
+	unsigned char decompress_buffer[StringUncompressed::STRING_BLOCK_LIMIT + 1];
+	auto decompressed_string_size =
+	    duckdb_fsst_decompress((duckdb_fsst_decoder_t *)duckdb_fsst_decoder, compressed_string_len, compressed_string,
+	                           StringUncompressed::STRING_BLOCK_LIMIT + 1, &decompress_buffer[0]);
+	D_ASSERT(decompressed_string_size <= StringUncompressed::STRING_BLOCK_LIMIT);
+
+	return StringVector::AddStringOrBlob(result, (const char *)decompress_buffer, decompressed_string_size);
+}
+
+Value FSSTPrimitives::DecompressValue(void *duckdb_fsst_decoder, unsigned char *compressed_string,
+                                      idx_t compressed_string_len) {
+	unsigned char decompress_buffer[StringUncompressed::STRING_BLOCK_LIMIT + 1];
+	auto decompressed_string_size =
+	    duckdb_fsst_decompress((duckdb_fsst_decoder_t *)duckdb_fsst_decoder, compressed_string_len, compressed_string,
+	                           StringUncompressed::STRING_BLOCK_LIMIT + 1, &decompress_buffer[0]);
+	D_ASSERT(decompressed_string_size <= StringUncompressed::STRING_BLOCK_LIMIT);
+
+	return Value(string((char *)decompress_buffer, decompressed_string_size));
 }
 
 } // namespace duckdb
@@ -6551,6 +8887,139 @@ idx_t GZipFileSystem::OutBufferSize() {
 
 
 
+
+
+
+
+#include <iostream>
+
+namespace duckdb {
+
+static unordered_map<column_t, string> GetKnownColumnValues(string &filename,
+                                                            unordered_map<string, column_t> &column_map,
+                                                            duckdb_re2::RE2 &compiled_regex, bool filename_col,
+                                                            bool hive_partition_cols) {
+	unordered_map<column_t, string> result;
+
+	if (filename_col) {
+		auto lookup_column_id = column_map.find("filename");
+		if (lookup_column_id != column_map.end()) {
+			result[lookup_column_id->second] = filename;
+		}
+	}
+
+	if (hive_partition_cols) {
+		auto partitions = HivePartitioning::Parse(filename, compiled_regex);
+		for (auto &partition : partitions) {
+			auto lookup_column_id = column_map.find(partition.first);
+			if (lookup_column_id != column_map.end()) {
+				result[lookup_column_id->second] = partition.second;
+			}
+		}
+	}
+
+	return result;
+}
+
+// Takes an expression and converts a list of known column_refs to constants
+static void ConvertKnownColRefToConstants(unique_ptr<Expression> &expr,
+                                          unordered_map<column_t, string> &known_column_values, idx_t table_index) {
+	if (expr->type == ExpressionType::BOUND_COLUMN_REF) {
+		auto &bound_colref = (BoundColumnRefExpression &)*expr;
+
+		// This bound column ref is for another table
+		if (table_index != bound_colref.binding.table_index) {
+			return;
+		}
+
+		auto lookup = known_column_values.find(bound_colref.binding.column_index);
+		if (lookup != known_column_values.end()) {
+			expr = make_unique<BoundConstantExpression>(Value(lookup->second));
+		}
+	} else {
+		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+			ConvertKnownColRefToConstants(child, known_column_values, table_index);
+		});
+	}
+}
+
+// matches hive partitions in file name. For example:
+// 	- s3://bucket/var1=value1/bla/bla/var2=value2
+//  - http(s)://domain(:port)/lala/kasdl/var1=value1/?not-a-var=not-a-value
+//  - folder/folder/folder/../var1=value1/etc/.//var2=value2
+const string HivePartitioning::REGEX_STRING = "[\\/\\\\]([^\\/\\?\\\\]+)=([^\\/\\n\\?\\\\]+)";
+
+std::map<string, string> HivePartitioning::Parse(string &filename, duckdb_re2::RE2 &regex) {
+	std::map<string, string> result;
+	duckdb_re2::StringPiece input(filename); // Wrap a StringPiece around it
+
+	string var;
+	string value;
+	while (RE2::FindAndConsume(&input, regex, &var, &value)) {
+		result.insert(std::pair<string, string>(var, value));
+	}
+	return result;
+}
+
+std::map<string, string> HivePartitioning::Parse(string &filename) {
+	duckdb_re2::RE2 regex(REGEX_STRING);
+	return Parse(filename, regex);
+}
+
+// TODO: this can still be improved by removing the parts of filter expressions that are true for all remaining files.
+//		 currently, only expressions that cannot be evaluated during pushdown are removed.
+void HivePartitioning::ApplyFiltersToFileList(ClientContext &context, vector<string> &files,
+                                              vector<unique_ptr<Expression>> &filters,
+                                              unordered_map<string, column_t> &column_map, idx_t table_index,
+                                              bool hive_enabled, bool filename_enabled) {
+	vector<string> pruned_files;
+	vector<unique_ptr<Expression>> pruned_filters;
+	duckdb_re2::RE2 regex(REGEX_STRING);
+
+	if ((!filename_enabled && !hive_enabled) || filters.empty()) {
+		return;
+	}
+
+	for (idx_t i = 0; i < files.size(); i++) {
+		auto &file = files[i];
+		bool should_prune_file = false;
+		auto known_values = GetKnownColumnValues(file, column_map, regex, filename_enabled, hive_enabled);
+
+		FilterCombiner combiner(context);
+		for (auto &filter : filters) {
+			unique_ptr<Expression> filter_copy = filter->Copy();
+			ConvertKnownColRefToConstants(filter_copy, known_values, table_index);
+			// Evaluate the filter, if it can be evaluated here, we can not prune this filter
+			Value result_value;
+			if (!filter_copy->IsScalar() || !filter_copy->IsFoldable() ||
+			    !ExpressionExecutor::TryEvaluateScalar(context, *filter_copy, result_value)) {
+				// can not be evaluated only with the filename/hive columns added, we can not prune this filter
+				pruned_filters.emplace_back(filter->Copy());
+			} else if (!result_value.GetValue<bool>()) {
+				// filter evaluates to false
+				should_prune_file = true;
+			}
+
+			// Use filter combiner to determine that this filter makes
+			if (!should_prune_file && combiner.AddFilter(std::move(filter_copy)) == FilterResult::UNSATISFIABLE) {
+				should_prune_file = true;
+			}
+		}
+
+		if (!should_prune_file) {
+			pruned_files.push_back(file);
+		}
+	}
+
+	filters = std::move(pruned_filters);
+	files = std::move(pruned_files);
+}
+
+} // namespace duckdb
+
+
+
+
 #include <limits>
 
 namespace duckdb {
@@ -6786,6 +9255,7 @@ public:
 	void Close() override {
 		if (fd != -1) {
 			close(fd);
+			fd = -1;
 		}
 	};
 };
@@ -7209,7 +9679,11 @@ unique_ptr<FileHandle> LocalFileSystem::OpenFile(const string &path, uint8_t fla
 }
 
 void LocalFileSystem::SetFilePointer(FileHandle &handle, idx_t location) {
-	((WindowsFileHandle &)handle).position = location;
+	auto &whandle = (WindowsFileHandle &)handle;
+	whandle.position = location;
+	LARGE_INTEGER wlocation;
+	wlocation.QuadPart = location;
+	SetFilePointerEx(whandle.fd, wlocation, NULL, FILE_BEGIN);
 }
 
 idx_t LocalFileSystem::GetFilePointer(FileHandle &handle) {
@@ -7227,7 +9701,8 @@ static DWORD FSInternalRead(FileHandle &handle, HANDLE hFile, void *buffer, int6
 	auto rc = ReadFile(hFile, buffer, (DWORD)nr_bytes, &bytes_read, &ov);
 	if (!rc) {
 		auto error = LocalFileSystem::GetLastErrorAsString();
-		throw IOException("Could not read file \"%s\" (error in ReadFile): %s", handle.path, error);
+		throw IOException("Could not read file \"%s\" (error in ReadFile(location: %llu, nr_bytes: %lld)): %s",
+		                  handle.path, location, nr_bytes, error);
 	}
 	return bytes_read;
 }
@@ -7495,6 +9970,26 @@ static void GlobFiles(FileSystem &fs, const string &path, const string &glob, bo
 	});
 }
 
+vector<string> LocalFileSystem::FetchFileWithoutGlob(const string &path, FileOpener *opener, bool absolute_path) {
+	vector<string> result;
+	if (FileExists(path) || IsPipe(path)) {
+		result.push_back(path);
+	} else if (!absolute_path) {
+		Value value;
+		if (opener && opener->TryGetCurrentSetting("file_search_path", value)) {
+			auto search_paths_str = value.ToString();
+			std::vector<std::string> search_paths = StringUtil::Split(search_paths_str, ',');
+			for (const auto &search_path : search_paths) {
+				auto joined_path = JoinPath(search_path, path);
+				if (FileExists(joined_path) || IsPipe(joined_path)) {
+					result.push_back(joined_path);
+				}
+			}
+		}
+	}
+	return result;
+}
+
 vector<string> LocalFileSystem::Glob(const string &path, FileOpener *opener) {
 	if (path.empty()) {
 		return vector<string>();
@@ -7528,38 +10023,37 @@ vector<string> LocalFileSystem::Glob(const string &path, FileOpener *opener) {
 		absolute_path = true;
 	} else if (splits[0] == "~") {
 		// starts with home directory
-		auto home_directory = GetHomeDirectory();
+		auto home_directory = GetHomeDirectory(opener);
 		if (!home_directory.empty()) {
 			absolute_path = true;
 			splits[0] = home_directory;
+			D_ASSERT(path[0] == '~');
+			if (!HasGlob(path)) {
+				return Glob(home_directory + path.substr(1));
+			}
 		}
 	}
 	// Check if the path has a glob at all
 	if (!HasGlob(path)) {
 		// no glob: return only the file (if it exists or is a pipe)
-		vector<string> result;
-		if (FileExists(path) || IsPipe(path)) {
-			result.push_back(path);
-		} else if (!absolute_path) {
-			Value value;
-			if (opener->TryGetCurrentSetting("file_search_path", value)) {
-				auto search_paths_str = value.ToString();
-				std::vector<std::string> search_paths = StringUtil::Split(search_paths_str, ',');
-				for (const auto &search_path : search_paths) {
-					auto joined_path = JoinPath(search_path, path);
-					if (FileExists(joined_path) || IsPipe(joined_path)) {
-						result.push_back(joined_path);
-					}
-				}
-			}
-		}
-		return result;
+		return FetchFileWithoutGlob(path, opener, absolute_path);
 	}
 	vector<string> previous_directories;
 	if (absolute_path) {
 		// for absolute paths, we don't start by scanning the current directory
 		previous_directories.push_back(splits[0]);
+	} else {
+		// If file_search_path is set, use those paths as the first glob elements
+		Value value;
+		if (opener && opener->TryGetCurrentSetting("file_search_path", value)) {
+			auto search_paths_str = value.ToString();
+			std::vector<std::string> search_paths = StringUtil::Split(search_paths_str, ',');
+			for (const auto &search_path : search_paths) {
+				previous_directories.push_back(search_path);
+			}
+		}
 	}
+
 	for (idx_t i = absolute_path ? 1 : 0; i < splits.size(); i++) {
 		bool is_last_chunk = i + 1 == splits.size();
 		bool has_glob = HasGlob(splits[i]);
@@ -7587,7 +10081,12 @@ vector<string> LocalFileSystem::Glob(const string &path, FileOpener *opener) {
 				}
 			}
 		}
-		if (is_last_chunk || result.empty()) {
+		if (result.empty()) {
+			// no result found that matches the glob
+			// last ditch effort: search the path as a string literal
+			return FetchFileWithoutGlob(path, opener, absolute_path);
+		}
+		if (is_last_chunk) {
 			return result;
 		}
 		previous_directories = move(result);
@@ -7600,6 +10099,7 @@ unique_ptr<FileSystem> FileSystem::CreateLocal() {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -8413,6 +10913,16 @@ struct IntegerCastOperation {
 	}
 
 	template <class T, bool NEGATIVE>
+	static bool HandleHexDigit(T &state, uint8_t digit) {
+		using result_t = typename T::Result;
+		if (state.result > (NumericLimits<result_t>::Maximum() - digit) / 16) {
+			return false;
+		}
+		state.result = state.result * 16 + digit;
+		return true;
+	}
+
+	template <class T, bool NEGATIVE>
 	static bool HandleExponent(T &state, int32_t exponent) {
 		using result_t = typename T::Result;
 		double dbl_res = state.result * std::pow(10.0L, exponent);
@@ -8423,7 +10933,7 @@ struct IntegerCastOperation {
 		return true;
 	}
 
-	template <class T, bool NEGATIVE>
+	template <class T, bool NEGATIVE, bool ALLOW_EXPONENT>
 	static bool HandleDecimal(T &state, uint8_t digit) {
 		if (state.seen_decimal) {
 			return true;
@@ -8449,7 +10959,7 @@ struct IntegerCastOperation {
 		return true;
 	}
 
-	template <class T>
+	template <class T, bool NEGATIVE>
 	static bool Finalize(T &state) {
 		return true;
 	}
@@ -8476,7 +10986,7 @@ static bool IntegerCastLoop(const char *buf, idx_t len, T &result, bool strict) 
 					if (!StringUtil::CharacterIsDigit(buf[pos])) {
 						break;
 					}
-					if (!OP::template HandleDecimal<T, NEGATIVE>(result, buf[pos] - '0')) {
+					if (!OP::template HandleDecimal<T, NEGATIVE, ALLOW_EXPONENT>(result, buf[pos] - '0')) {
 						return false;
 					}
 					pos++;
@@ -8530,7 +11040,37 @@ static bool IntegerCastLoop(const char *buf, idx_t len, T &result, bool strict) 
 			return false;
 		}
 	}
-	if (!OP::template Finalize<T>(result)) {
+	if (!OP::template Finalize<T, NEGATIVE>(result)) {
+		return false;
+	}
+	return pos > start_pos;
+}
+
+template <class T, bool NEGATIVE, bool ALLOW_EXPONENT, class OP = IntegerCastOperation>
+static bool IntegerHexCastLoop(const char *buf, idx_t len, T &result, bool strict) {
+	if (ALLOW_EXPONENT || NEGATIVE) {
+		return false;
+	}
+	idx_t start_pos = 1;
+	idx_t pos = start_pos;
+	char current_char;
+	while (pos < len) {
+		current_char = StringUtil::CharacterToLower(buf[pos]);
+		if (!StringUtil::CharacterIsHex(current_char)) {
+			return false;
+		}
+		uint8_t digit;
+		if (current_char >= 'a') {
+			digit = current_char - 'a' + 10;
+		} else {
+			digit = current_char - '0';
+		}
+		pos++;
+		if (!OP::template HandleHexDigit<T, NEGATIVE>(result, digit)) {
+			return false;
+		}
+	}
+	if (!OP::template Finalize<T, NEGATIVE>(result)) {
 		return false;
 	}
 	return pos > start_pos;
@@ -8549,11 +11089,21 @@ static bool TryIntegerCast(const char *buf, idx_t len, T &result, bool strict) {
 	}
 	int negative = *buf == '-';
 
+	// If it starts with 0x or 0X, we parse it as a hex value
+	int hex = len > 1 && *buf == '0' && (buf[1] == 'x' || buf[1] == 'X');
+
 	if (ZERO_INITIALIZE) {
 		memset(&result, 0, sizeof(T));
 	}
 	if (!negative) {
-		return IntegerCastLoop<T, false, ALLOW_EXPONENT, OP>(buf, len, result, strict);
+		if (hex) {
+			// Skip the 0x
+			buf++;
+			len--;
+			return IntegerHexCastLoop<T, false, false, OP>(buf, len, result, strict);
+		} else {
+			return IntegerCastLoop<T, false, ALLOW_EXPONENT, OP>(buf, len, result, strict);
+		}
 	} else {
 		if (!IS_SIGNED) {
 			// Need to check if its not -0
@@ -8878,6 +11428,15 @@ string_t CastFromBlob::Operation(string_t input, Vector &vector) {
 }
 
 //===--------------------------------------------------------------------===//
+// Cast From Pointer
+//===--------------------------------------------------------------------===//
+template <>
+string_t CastFromPointer::Operation(uintptr_t input, Vector &vector) {
+	std::string s = duckdb_fmt::format("0x{:x}", input);
+	return StringVector::AddString(vector, s);
+}
+
+//===--------------------------------------------------------------------===//
 // Cast To Blob
 //===--------------------------------------------------------------------===//
 template <>
@@ -8929,7 +11488,8 @@ bool TryCastErrorMessage::Operation(string_t input, date_t &result, string *erro
 template <>
 bool TryCast::Operation(string_t input, date_t &result, bool strict) {
 	idx_t pos;
-	return Date::TryConvertDate(input.GetDataUnsafe(), input.GetSize(), pos, result, strict);
+	bool special = false;
+	return Date::TryConvertDate(input.GetDataUnsafe(), input.GetSize(), pos, result, special, strict);
 }
 
 template <>
@@ -9051,6 +11611,11 @@ struct HugeIntegerCastOperation {
 	}
 
 	template <class T, bool NEGATIVE>
+	static bool HandleHexDigit(T &result, uint8_t digit) {
+		return false;
+	}
+
+	template <class T, bool NEGATIVE>
 	static bool HandleExponent(T &result, int32_t exponent) {
 		if (!result.Flush()) {
 			return false;
@@ -9075,7 +11640,7 @@ struct HugeIntegerCastOperation {
 		}
 	}
 
-	template <class T, bool NEGATIVE>
+	template <class T, bool NEGATIVE, bool ALLOW_EXPONENT>
 	static bool HandleDecimal(T &result, uint8_t digit) {
 		// Integer casts round
 		if (!result.decimal) {
@@ -9093,7 +11658,7 @@ struct HugeIntegerCastOperation {
 		return true;
 	}
 
-	template <class T>
+	template <class T, bool NEGATIVE>
 	static bool Finalize(T &result) {
 		return result.Flush();
 	}
@@ -9113,13 +11678,17 @@ bool TryCast::Operation(string_t input, hugeint_t &result, bool strict) {
 //===--------------------------------------------------------------------===//
 // Decimal String Cast
 //===--------------------------------------------------------------------===//
-template <class T>
+template <class TYPE>
 struct DecimalCastData {
-	T result;
+	typedef TYPE type_t;
+	TYPE result;
 	uint8_t width;
 	uint8_t scale;
 	uint8_t digit_count;
 	uint8_t decimal_count;
+	//! Only set when ALLOW_EXPONENT is enabled
+	uint8_t excessive_decimals;
+	bool positive_exponent;
 };
 
 struct DecimalCastOperation {
@@ -9135,22 +11704,64 @@ struct DecimalCastOperation {
 		}
 		state.digit_count++;
 		if (NEGATIVE) {
+			if (state.result < (NumericLimits<typename T::type_t>::Minimum() / 10)) {
+				return false;
+			}
 			state.result = state.result * 10 - digit;
 		} else {
+			if (state.result > (NumericLimits<typename T::type_t>::Maximum() / 10)) {
+				return false;
+			}
 			state.result = state.result * 10 + digit;
 		}
 		return true;
 	}
 
 	template <class T, bool NEGATIVE>
+	static bool HandleHexDigit(T &state, uint8_t digit) {
+		return false;
+	}
+
+	template <class T, bool NEGATIVE>
+	static void RoundUpResult(T &state) {
+		if (NEGATIVE) {
+			state.result -= 1;
+		} else {
+			state.result += 1;
+		}
+	}
+
+	template <class T, bool NEGATIVE>
 	static bool HandleExponent(T &state, int32_t exponent) {
-		Finalize<T>(state);
+		auto decimal_excess = (state.decimal_count > state.scale) ? state.decimal_count - state.scale : 0;
+		if (exponent > 0) {
+			state.positive_exponent = true;
+			//! Positive exponents need up to 'exponent' amount of digits
+			//! Everything beyond that amount needs to be truncated
+			if (decimal_excess > exponent) {
+				//! We've allowed too many decimals
+				state.excessive_decimals = decimal_excess - exponent;
+				exponent = 0;
+			} else {
+				exponent -= decimal_excess;
+			}
+			D_ASSERT(exponent >= 0);
+		}
+		if (!Finalize<T, NEGATIVE>(state)) {
+			return false;
+		}
 		if (exponent < 0) {
+			bool round_up = false;
 			for (idx_t i = 0; i < idx_t(-int64_t(exponent)); i++) {
+				auto mod = state.result % 10;
+				round_up = NEGATIVE ? mod <= -5 : mod >= 5;
 				state.result /= 10;
 				if (state.result == 0) {
 					break;
 				}
+			}
+			if (round_up) {
+				RoundUpResult<T, NEGATIVE>(state);
 			}
 			return true;
 		} else {
@@ -9164,12 +11775,17 @@ struct DecimalCastOperation {
 		}
 	}
 
-	template <class T, bool NEGATIVE>
+	template <class T, bool NEGATIVE, bool ALLOW_EXPONENT>
 	static bool HandleDecimal(T &state, uint8_t digit) {
-		if (state.decimal_count == state.scale) {
+		if (!ALLOW_EXPONENT && state.decimal_count == state.scale) {
 			// we exceeded the amount of supported decimals
 			// however, we don't throw an error here
 			// we just truncate the decimal
+			return true;
+		}
+		//! If we expect an exponent, we need to preserve the decimals
+		//! But we don't want to overflow, so we prevent overflowing the result with this check
+		if (state.digit_count + state.decimal_count >= DecimalWidth<decltype(state.result)>::max) {
 			return true;
 		}
 		state.decimal_count++;
@@ -9181,11 +11797,36 @@ struct DecimalCastOperation {
 		return true;
 	}
 
-	template <class T>
+	template <class T, bool NEGATIVE>
+	static bool TruncateExcessiveDecimals(T &state) {
+		D_ASSERT(state.excessive_decimals);
+		bool round_up = false;
+		for (idx_t i = 0; i < state.excessive_decimals; i++) {
+			auto mod = state.result % 10;
+			round_up = NEGATIVE ? mod <= -5 : mod >= 5;
+			state.result /= 10.0;
+		}
+		//! Only round up when exponents are involved
+		if (state.positive_exponent && round_up) {
+			RoundUpResult<T, NEGATIVE>(state);
+		}
+		D_ASSERT(state.decimal_count > state.scale);
+		state.decimal_count = state.scale;
+		return true;
+	}
+
+	template <class T, bool NEGATIVE>
 	static bool Finalize(T &state) {
-		// if we have not gotten exactly "scale" decimals, we need to multiply the result
-		// e.g. if we have a string "1.0" that is cast to a DECIMAL(9,3), the value needs to be 1000
-		// but we have only gotten the value "10" so far, so we multiply by 1000
+		if (!state.positive_exponent && state.decimal_count > state.scale) {
+			//! Did not encounter an exponent, but ALLOW_EXPONENT was on
+			state.excessive_decimals = state.decimal_count - state.scale;
+		}
+		if (state.excessive_decimals && !TruncateExcessiveDecimals<T, NEGATIVE>(state)) {
+			return false;
+		}
+		//  if we have not gotten exactly "scale" decimals, we need to multiply the result
+		//  e.g. if we have a string "1.0" that is cast to a DECIMAL(9,3), the value needs to be 1000
+		//  but we have only gotten the value "10" so far, so we multiply by 1000
 		for (uint8_t i = state.decimal_count; i < state.scale; i++) {
 			state.result *= 10;
 		}
@@ -9201,6 +11842,8 @@ bool TryDecimalStringCast(string_t input, T &result, string *error_message, uint
 	state.scale = scale;
 	state.digit_count = 0;
 	state.decimal_count = 0;
+	state.excessive_decimals = 0;
+	state.positive_exponent = false;
 	if (!TryIntegerCast<DecimalCastData<T>, true, true, DecimalCastOperation, false>(input.GetDataUnsafe(),
 	                                                                                 input.GetSize(), state, false)) {
 		string error = StringUtil::Format("Could not convert string \"%s\" to DECIMAL(%d,%d)", input.GetString(),
@@ -9235,22 +11878,22 @@ bool TryCastToDecimal::Operation(string_t input, hugeint_t &result, string *erro
 
 template <>
 string_t StringCastFromDecimal::Operation(int16_t input, uint8_t width, uint8_t scale, Vector &result) {
-	return DecimalToString::Format<int16_t, uint16_t>(input, scale, result);
+	return DecimalToString::Format<int16_t, uint16_t>(input, width, scale, result);
 }
 
 template <>
 string_t StringCastFromDecimal::Operation(int32_t input, uint8_t width, uint8_t scale, Vector &result) {
-	return DecimalToString::Format<int32_t, uint32_t>(input, scale, result);
+	return DecimalToString::Format<int32_t, uint32_t>(input, width, scale, result);
 }
 
 template <>
 string_t StringCastFromDecimal::Operation(int64_t input, uint8_t width, uint8_t scale, Vector &result) {
-	return DecimalToString::Format<int64_t, uint64_t>(input, scale, result);
+	return DecimalToString::Format<int64_t, uint64_t>(input, width, scale, result);
 }
 
 template <>
 string_t StringCastFromDecimal::Operation(hugeint_t input, uint8_t width, uint8_t scale, Vector &result) {
-	return HugeintToStringCast::FormatDecimal(input, scale, result);
+	return HugeintToStringCast::FormatDecimal(input, width, scale, result);
 }
 
 //===--------------------------------------------------------------------===//
@@ -10021,7 +12664,6 @@ string ConvertToString::Operation(string_t input) {
 
 
 
-
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
@@ -10299,57 +12941,148 @@ unique_ptr<FileHandle> PipeFileSystem::OpenPipe(unique_ptr<FileHandle> handle) {
 
 
 
+
+
+
+namespace duckdb {
+
+PreservedError::PreservedError() : initialized(false) {
+}
+
+PreservedError::PreservedError(const Exception &exception)
+    : initialized(true), type(exception.type), raw_message(SanitizeErrorMessage(exception.RawMessage())) {
+}
+
+PreservedError::PreservedError(const std::exception &exception)
+    : initialized(true), type(ExceptionType::INVALID), raw_message(SanitizeErrorMessage(exception.what())) {
+}
+
+PreservedError::PreservedError(const string &message)
+    : initialized(true), type(ExceptionType::INVALID), raw_message(SanitizeErrorMessage(message)) {
+}
+
+const string &PreservedError::Message() {
+	if (final_message.empty()) {
+		final_message = Exception::ExceptionTypeToString(type) + " Error: " + raw_message;
+	}
+	return final_message;
+}
+
+string PreservedError::SanitizeErrorMessage(string error) {
+	return StringUtil::Replace(move(error), string("\0", 1), "\\0");
+}
+
+void PreservedError::Throw(const string &prepended_message) const {
+	D_ASSERT(initialized);
+	if (!prepended_message.empty()) {
+		string new_message = prepended_message + raw_message;
+		Exception::ThrowAsTypeWithMessage(type, new_message);
+	}
+	Exception::ThrowAsTypeWithMessage(type, raw_message);
+}
+
+const ExceptionType &PreservedError::Type() const {
+	D_ASSERT(initialized);
+	return this->type;
+}
+
+PreservedError &PreservedError::AddToMessage(const string &prepended_message) {
+	raw_message = prepended_message + raw_message;
+	return *this;
+}
+
+PreservedError::operator bool() const {
+	return initialized;
+}
+
+bool PreservedError::operator==(const PreservedError &other) const {
+	if (initialized != other.initialized) {
+		return false;
+	}
+	if (type != other.type) {
+		return false;
+	}
+	return raw_message == other.raw_message;
+}
+
+} // namespace duckdb
+
+
+
+
 #include <stdio.h>
 
 #ifndef DUCKDB_DISABLE_PRINT
 #ifdef DUCKDB_WINDOWS
 #include <io.h>
+#else
+#include <sys/ioctl.h>
+#include <stdio.h>
+#include <unistd.h>
 #endif
 #endif
 
 namespace duckdb {
 
-// LCOV_EXCL_START
-void Printer::Print(const string &str) {
+void Printer::RawPrint(OutputStream stream, const string &str) {
 #ifndef DUCKDB_DISABLE_PRINT
 #ifdef DUCKDB_WINDOWS
-	if (IsTerminal()) {
+	if (IsTerminal(stream)) {
 		// print utf8 to terminal
 		auto unicode = WindowsUtil::UTF8ToMBCS(str.c_str());
-		fprintf(stderr, "%s\n", unicode.c_str());
+		fprintf(stream == OutputStream::STREAM_STDERR ? stderr : stdout, "%s", unicode.c_str());
 		return;
 	}
 #endif
-	fprintf(stderr, "%s\n", str.c_str());
+	fprintf(stream == OutputStream::STREAM_STDERR ? stderr : stdout, "%s", str.c_str());
 #endif
 }
 
-void Printer::PrintProgress(int percentage, const char *pbstr, int pbwidth) {
+// LCOV_EXCL_START
+void Printer::Print(OutputStream stream, const string &str) {
+	Printer::RawPrint(stream, str);
+	Printer::RawPrint(stream, "\n");
+}
+void Printer::Flush(OutputStream stream) {
 #ifndef DUCKDB_DISABLE_PRINT
-	int lpad = (int)(percentage / 100.0 * pbwidth);
-	int rpad = pbwidth - lpad;
-	printf("\r%3d%% [%.*s%*s]", percentage, lpad, pbstr, rpad, "");
-	fflush(stdout);
+	fflush(stream == OutputStream::STREAM_STDERR ? stderr : stdout);
 #endif
 }
 
-void Printer::FinishProgressBarPrint(const char *pbstr, int pbwidth) {
-#ifndef DUCKDB_DISABLE_PRINT
-	PrintProgress(100, pbstr, pbwidth);
-	printf(" \n");
-	fflush(stdout);
-#endif
+void Printer::Print(const string &str) {
+	Printer::Print(OutputStream::STREAM_STDERR, str);
 }
 
-bool Printer::IsTerminal() {
+bool Printer::IsTerminal(OutputStream stream) {
 #ifndef DUCKDB_DISABLE_PRINT
 #ifdef DUCKDB_WINDOWS
-	return GetFileType(GetStdHandle(STD_ERROR_HANDLE)) == FILE_TYPE_CHAR;
+	auto stream_handle = stream == OutputStream::STREAM_STDERR ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE;
+	return GetFileType(GetStdHandle(stream_handle)) == FILE_TYPE_CHAR;
 #else
-	throw InternalException("IsTerminal is only implemented for Windows");
+	return isatty(stream == OutputStream::STREAM_STDERR ? 2 : 1);
 #endif
+#else
+	throw InternalException("IsTerminal called while printing is disabled");
 #endif
-	return false;
+}
+
+idx_t Printer::TerminalWidth() {
+#ifndef DUCKDB_DISABLE_PRINT
+#ifdef DUCKDB_WINDOWS
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+	int columns, rows;
+
+	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+	rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+	return rows;
+#else
+	struct winsize w;
+	ioctl(0, TIOCGWINSZ, &w);
+	return w.ws_col;
+#endif
+#else
+	throw InternalException("TerminalWidth called while printing is disabled");
+#endif
 }
 // LCOV_EXCL_STOP
 
@@ -10389,12 +13122,547 @@ void ProgressBar::Update(bool final) {
 		current_percentage = new_percentage;
 	}
 	if (supported && print_progress && sufficient_time_elapsed && current_percentage > -1 && print_progress) {
+#ifndef DUCKDB_DISABLE_PRINT
 		if (final) {
-			Printer::FinishProgressBarPrint(PROGRESS_BAR_STRING.c_str(), PROGRESS_BAR_WIDTH);
+			FinishProgressBarPrint();
 		} else {
-			Printer::PrintProgress(current_percentage, PROGRESS_BAR_STRING.c_str(), PROGRESS_BAR_WIDTH);
+			PrintProgress(current_percentage);
+		}
+#endif
+	}
+}
+
+void ProgressBar::PrintProgressInternal(int percentage) {
+	if (percentage > 100) {
+		percentage = 100;
+	}
+	if (percentage < 0) {
+		percentage = 0;
+	}
+	string result;
+	// we divide the number of blocks by the percentage
+	// 0%   = 0
+	// 100% = PROGRESS_BAR_WIDTH
+	// the percentage determines how many blocks we need to draw
+	double blocks_to_draw = PROGRESS_BAR_WIDTH * (percentage / 100.0);
+	// because of the power of unicode, we can also draw partial blocks
+
+	// render the percentage with some padding to ensure everything stays nicely aligned
+	result = "\r";
+	if (percentage < 100) {
+		result += " ";
+	}
+	if (percentage < 10) {
+		result += " ";
+	}
+	result += to_string(percentage) + "%";
+	result += " ";
+	result += PROGRESS_START;
+	idx_t i;
+	for (i = 0; i < idx_t(blocks_to_draw); i++) {
+		result += PROGRESS_BLOCK;
+	}
+	if (i < PROGRESS_BAR_WIDTH) {
+		// print a partial block based on the percentage of the progress bar remaining
+		idx_t index = idx_t((blocks_to_draw - idx_t(blocks_to_draw)) * PARTIAL_BLOCK_COUNT);
+		if (index >= PARTIAL_BLOCK_COUNT) {
+			index = PARTIAL_BLOCK_COUNT - 1;
+		}
+		result += PROGRESS_PARTIAL[index];
+		i++;
+	}
+	for (; i < PROGRESS_BAR_WIDTH; i++) {
+		result += PROGRESS_EMPTY;
+	}
+	result += PROGRESS_END;
+	result += " ";
+
+	Printer::RawPrint(OutputStream::STREAM_STDOUT, result);
+}
+void ProgressBar::PrintProgress(int percentage) {
+	PrintProgressInternal(percentage);
+	Printer::Flush(OutputStream::STREAM_STDOUT);
+}
+
+void ProgressBar::FinishProgressBarPrint() {
+	PrintProgressInternal(100);
+	Printer::RawPrint(OutputStream::STREAM_STDOUT, "\n");
+	Printer::Flush(OutputStream::STREAM_STDOUT);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+template <class OP, class RETURN_TYPE, typename... ARGS>
+RETURN_TYPE RadixBitsSwitch(idx_t radix_bits, ARGS &&...args) {
+	D_ASSERT(radix_bits <= sizeof(hash_t) * 8);
+	switch (radix_bits) {
+	case 1:
+		return OP::template Operation<1>(std::forward<ARGS>(args)...);
+	case 2:
+		return OP::template Operation<2>(std::forward<ARGS>(args)...);
+	case 3:
+		return OP::template Operation<3>(std::forward<ARGS>(args)...);
+	case 4:
+		return OP::template Operation<4>(std::forward<ARGS>(args)...);
+	case 5:
+		return OP::template Operation<5>(std::forward<ARGS>(args)...);
+	case 6:
+		return OP::template Operation<6>(std::forward<ARGS>(args)...);
+	case 7:
+		return OP::template Operation<7>(std::forward<ARGS>(args)...);
+	case 8:
+		return OP::template Operation<8>(std::forward<ARGS>(args)...);
+	case 9:
+		return OP::template Operation<9>(std::forward<ARGS>(args)...);
+	case 10:
+		return OP::template Operation<10>(std::forward<ARGS>(args)...);
+	default:
+		throw InternalException("TODO");
+	}
+}
+
+template <class OP, class RETURN_TYPE, idx_t radix_bits_1, typename... ARGS>
+RETURN_TYPE DoubleRadixBitsSwitch2(idx_t radix_bits_2, ARGS &&...args) {
+	D_ASSERT(radix_bits_2 <= sizeof(hash_t) * 8);
+	switch (radix_bits_2) {
+	case 1:
+		return OP::template Operation<radix_bits_1, 1>(std::forward<ARGS>(args)...);
+	case 2:
+		return OP::template Operation<radix_bits_1, 2>(std::forward<ARGS>(args)...);
+	case 3:
+		return OP::template Operation<radix_bits_1, 3>(std::forward<ARGS>(args)...);
+	case 4:
+		return OP::template Operation<radix_bits_1, 4>(std::forward<ARGS>(args)...);
+	case 5:
+		return OP::template Operation<radix_bits_1, 5>(std::forward<ARGS>(args)...);
+	case 6:
+		return OP::template Operation<radix_bits_1, 6>(std::forward<ARGS>(args)...);
+	case 7:
+		return OP::template Operation<radix_bits_1, 7>(std::forward<ARGS>(args)...);
+	case 8:
+		return OP::template Operation<radix_bits_1, 8>(std::forward<ARGS>(args)...);
+	case 9:
+		return OP::template Operation<radix_bits_1, 9>(std::forward<ARGS>(args)...);
+	case 10:
+		return OP::template Operation<radix_bits_1, 10>(std::forward<ARGS>(args)...);
+	default:
+		throw InternalException("TODO");
+	}
+}
+
+template <class OP, class RETURN_TYPE, typename... ARGS>
+RETURN_TYPE DoubleRadixBitsSwitch1(idx_t radix_bits_1, idx_t radix_bits_2, ARGS &&...args) {
+	D_ASSERT(radix_bits_1 <= sizeof(hash_t) * 8);
+	switch (radix_bits_1) {
+	case 1:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 1>(radix_bits_2, std::forward<ARGS>(args)...);
+	case 2:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 2>(radix_bits_2, std::forward<ARGS>(args)...);
+	case 3:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 3>(radix_bits_2, std::forward<ARGS>(args)...);
+	case 4:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 4>(radix_bits_2, std::forward<ARGS>(args)...);
+	case 5:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 5>(radix_bits_2, std::forward<ARGS>(args)...);
+	case 6:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 6>(radix_bits_2, std::forward<ARGS>(args)...);
+	case 7:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 7>(radix_bits_2, std::forward<ARGS>(args)...);
+	case 8:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 8>(radix_bits_2, std::forward<ARGS>(args)...);
+	case 9:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 9>(radix_bits_2, std::forward<ARGS>(args)...);
+	case 10:
+		return DoubleRadixBitsSwitch2<OP, RETURN_TYPE, 10>(radix_bits_2, std::forward<ARGS>(args)...);
+	default:
+		throw InternalException("TODO");
+	}
+}
+
+template <idx_t radix_bits>
+struct RadixLessThan {
+	static inline bool Operation(hash_t hash, hash_t cutoff) {
+		using CONSTANTS = RadixPartitioningConstants<radix_bits>;
+		return CONSTANTS::ApplyMask(hash) < cutoff;
+	}
+};
+
+struct SelectFunctor {
+	template <idx_t radix_bits>
+	static idx_t Operation(Vector &hashes, const SelectionVector *sel, idx_t count, idx_t cutoff,
+	                       SelectionVector *true_sel, SelectionVector *false_sel) {
+		Vector cutoff_vector(Value::HASH(cutoff));
+		return BinaryExecutor::Select<hash_t, hash_t, RadixLessThan<radix_bits>>(hashes, cutoff_vector, sel, count,
+		                                                                         true_sel, false_sel);
+	}
+};
+
+idx_t RadixPartitioning::Select(Vector &hashes, const SelectionVector *sel, idx_t count, idx_t radix_bits, idx_t cutoff,
+                                SelectionVector *true_sel, SelectionVector *false_sel) {
+	return RadixBitsSwitch<SelectFunctor, idx_t>(radix_bits, hashes, sel, count, cutoff, true_sel, false_sel);
+}
+
+//===--------------------------------------------------------------------===//
+// Row Data Partitioning
+//===--------------------------------------------------------------------===//
+template <idx_t radix_bits>
+static void InitPartitions(BufferManager &buffer_manager, vector<unique_ptr<RowDataCollection>> &partition_collections,
+                           RowDataBlock *partition_blocks[], vector<BufferHandle> &partition_handles,
+                           data_ptr_t partition_ptrs[], idx_t block_capacity, idx_t row_width) {
+	using CONSTANTS = RadixPartitioningConstants<radix_bits>;
+
+	partition_collections.reserve(CONSTANTS::NUM_PARTITIONS);
+	partition_handles.reserve(CONSTANTS::NUM_PARTITIONS);
+	for (idx_t i = 0; i < CONSTANTS::NUM_PARTITIONS; i++) {
+		partition_collections.push_back(make_unique<RowDataCollection>(buffer_manager, block_capacity, row_width));
+		partition_blocks[i] = &partition_collections[i]->CreateBlock();
+		partition_handles.push_back(buffer_manager.Pin(partition_blocks[i]->block));
+		if (partition_ptrs) {
+			partition_ptrs[i] = partition_handles[i].Ptr();
 		}
 	}
+}
+
+struct PartitionFunctor {
+	template <idx_t radix_bits>
+	static void Operation(BufferManager &buffer_manager, const RowLayout &layout, const idx_t hash_offset,
+	                      RowDataCollection &block_collection, RowDataCollection &string_heap,
+	                      vector<unique_ptr<RowDataCollection>> &partition_block_collections,
+	                      vector<unique_ptr<RowDataCollection>> &partition_string_heaps) {
+		using CONSTANTS = RadixPartitioningConstants<radix_bits>;
+
+		const auto block_capacity = block_collection.block_capacity;
+		const auto row_width = layout.GetRowWidth();
+		const auto has_heap = !layout.AllConstant();
+
+		block_collection.VerifyBlockSizes();
+		string_heap.VerifyBlockSizes();
+
+		// Fixed-size data
+		RowDataBlock *partition_data_blocks[CONSTANTS::NUM_PARTITIONS];
+		vector<BufferHandle> partition_data_handles;
+		data_ptr_t partition_data_ptrs[CONSTANTS::NUM_PARTITIONS];
+		InitPartitions<radix_bits>(buffer_manager, partition_block_collections, partition_data_blocks,
+		                           partition_data_handles, partition_data_ptrs, block_capacity, row_width);
+
+		// Variable-size data
+		RowDataBlock *partition_heap_blocks[CONSTANTS::NUM_PARTITIONS];
+		vector<BufferHandle> partition_heap_handles;
+		if (has_heap) {
+			InitPartitions<radix_bits>(buffer_manager, partition_string_heaps, partition_heap_blocks,
+			                           partition_heap_handles, nullptr, (idx_t)Storage::BLOCK_SIZE, 1);
+		}
+
+		// We track the count of the current block for each partition in this array
+		uint32_t block_counts[CONSTANTS::NUM_PARTITIONS];
+		memset(block_counts, 0, sizeof(block_counts));
+
+		// Allocate "SWWCB" temporary buffer
+		auto temp_buf_ptr =
+		    unique_ptr<data_t[]>(new data_t[CONSTANTS::TMP_BUF_SIZE * CONSTANTS::NUM_PARTITIONS * row_width]);
+		const auto tmp_buf = temp_buf_ptr.get();
+
+		// Initialize temporary buffer offsets
+		uint32_t pos[CONSTANTS::NUM_PARTITIONS];
+		for (uint32_t idx = 0; idx < CONSTANTS::NUM_PARTITIONS; idx++) {
+			pos[idx] = idx * CONSTANTS::TMP_BUF_SIZE;
+		}
+
+		auto &data_blocks = block_collection.blocks;
+		auto &heap_blocks = string_heap.blocks;
+		for (idx_t block_idx_plus_one = data_blocks.size(); block_idx_plus_one > 0; block_idx_plus_one--) {
+			// We loop through blocks in reverse to save some of that PRECIOUS I/O
+			idx_t block_idx = block_idx_plus_one - 1;
+
+			RowDataBlock *data_block;
+			BufferHandle data_handle;
+			data_ptr_t data_ptr;
+			PinAndSet(buffer_manager, *data_blocks[block_idx], &data_block, data_handle, data_ptr);
+
+			// Pin the heap block (if necessary)
+			RowDataBlock *heap_block;
+			BufferHandle heap_handle;
+			if (has_heap) {
+				heap_block = heap_blocks[block_idx].get();
+				heap_handle = buffer_manager.Pin(heap_block->block);
+			}
+
+			idx_t remaining = data_block->count;
+			while (remaining != 0) {
+				const auto next = MinValue<idx_t>(remaining, STANDARD_VECTOR_SIZE);
+
+				if (has_heap) {
+					// Unswizzle so that the rows that we copy have a pointer to their heap rows
+					RowOperations::UnswizzleHeapPointer(layout, data_ptr, heap_handle.Ptr(), next);
+				}
+
+				for (idx_t i = 0; i < next; i++) {
+					const auto bin = CONSTANTS::ApplyMask(Load<hash_t>(data_ptr + hash_offset));
+
+					// Write entry to bin in temp buf
+					FastMemcpy(tmp_buf + pos[bin] * row_width, data_ptr, row_width);
+					data_ptr += row_width;
+
+					if ((++pos[bin] & (CONSTANTS::TMP_BUF_SIZE - 1)) == 0) {
+						// Temp buf for this bin is full, flush temp buf to partition
+						auto &block_count = block_counts[bin];
+						FlushTempBuf(partition_data_ptrs[bin], row_width, block_count, tmp_buf, pos[bin],
+						             CONSTANTS::TMP_BUF_SIZE);
+						D_ASSERT(block_count <= block_capacity);
+						if (block_count + CONSTANTS::TMP_BUF_SIZE > block_capacity) {
+							// The block can't fit the next flush of the temp buf
+							partition_data_blocks[bin]->count = block_count;
+							if (has_heap) {
+								// Write last bit of heap data
+								PartitionHeap(buffer_manager, layout, *partition_string_heaps[bin],
+								              *partition_data_blocks[bin], partition_data_ptrs[bin],
+								              *partition_heap_blocks[bin], partition_heap_handles[bin]);
+							}
+							// Now we can create new blocks for this partition
+							CreateNewBlock(buffer_manager, has_heap, partition_block_collections, partition_data_blocks,
+							               partition_data_handles, partition_data_ptrs, partition_string_heaps,
+							               partition_heap_blocks, partition_heap_handles, block_counts, bin);
+						}
+					}
+				}
+				remaining -= next;
+			}
+
+			// We are done with this input block
+			for (idx_t bin = 0; bin < CONSTANTS::NUM_PARTITIONS; bin++) {
+				auto count = pos[bin] & (CONSTANTS::TMP_BUF_SIZE - 1);
+				if (count != 0) {
+					// Clean up the temporary buffer
+					FlushTempBuf(partition_data_ptrs[bin], row_width, block_counts[bin], tmp_buf, pos[bin], count);
+				}
+				D_ASSERT(block_counts[bin] <= block_capacity);
+				partition_data_blocks[bin]->count = block_counts[bin];
+				if (has_heap) {
+					// Write heap data so we can safely unpin the current input heap block
+					PartitionHeap(buffer_manager, layout, *partition_string_heaps[bin], *partition_data_blocks[bin],
+					              partition_data_ptrs[bin], *partition_heap_blocks[bin], partition_heap_handles[bin]);
+				}
+				if (block_counts[bin] + CONSTANTS::TMP_BUF_SIZE > block_capacity) {
+					// The block can't fit the next flush of the temp buf
+					CreateNewBlock(buffer_manager, has_heap, partition_block_collections, partition_data_blocks,
+					               partition_data_handles, partition_data_ptrs, partition_string_heaps,
+					               partition_heap_blocks, partition_heap_handles, block_counts, bin);
+				}
+			}
+
+			// Delete references to the input block we just finished processing to free up memory
+			data_blocks[block_idx] = nullptr;
+			if (has_heap) {
+				heap_blocks[block_idx] = nullptr;
+			}
+		}
+
+		// Update counts
+		for (idx_t bin = 0; bin < CONSTANTS::NUM_PARTITIONS; bin++) {
+			partition_block_collections[bin]->count += block_counts[bin];
+			if (has_heap) {
+				partition_string_heaps[bin]->count += block_counts[bin];
+			}
+		}
+
+		// Input data collections are empty, reset them
+		block_collection.Clear();
+		string_heap.Clear();
+
+#ifdef DEBUG
+		for (idx_t bin = 0; bin < CONSTANTS::NUM_PARTITIONS; bin++) {
+			auto &p_block_collection = *partition_block_collections[bin];
+			p_block_collection.VerifyBlockSizes();
+			if (!layout.AllConstant()) {
+				partition_string_heaps[bin]->VerifyBlockSizes();
+			}
+			idx_t p_count = 0;
+			for (idx_t b = 0; b < p_block_collection.blocks.size(); b++) {
+				auto &data_block = *p_block_collection.blocks[b];
+				p_count += data_block.count;
+				if (!layout.AllConstant()) {
+					auto &p_string_heap = *partition_string_heaps[bin];
+					D_ASSERT(p_block_collection.blocks.size() == p_string_heap.blocks.size());
+					auto &heap_block = *p_string_heap.blocks[b];
+					D_ASSERT(data_block.count == heap_block.count);
+				}
+			}
+			D_ASSERT(p_count == p_block_collection.count);
+		}
+#endif
+	}
+
+	static inline void FlushTempBuf(data_ptr_t &data_ptr, const idx_t &row_width, uint32_t &block_count,
+	                                const data_ptr_t &tmp_buf, uint32_t &pos, const idx_t count) {
+		pos -= count;
+		FastMemcpy(data_ptr, tmp_buf + pos * row_width, count * row_width);
+		data_ptr += count * row_width;
+		block_count += count;
+	}
+
+	static inline void CreateNewBlock(BufferManager &buffer_manager, const bool &has_heap,
+	                                  vector<unique_ptr<RowDataCollection>> &partition_block_collections,
+	                                  RowDataBlock *partition_data_blocks[],
+	                                  vector<BufferHandle> &partition_data_handles, data_ptr_t partition_data_ptrs[],
+	                                  vector<unique_ptr<RowDataCollection>> &partition_string_heaps,
+	                                  RowDataBlock *partition_heap_blocks[],
+	                                  vector<BufferHandle> &partition_heap_handles, uint32_t block_counts[],
+	                                  const idx_t &bin) {
+		D_ASSERT(partition_data_blocks[bin]->count == block_counts[bin]);
+		partition_block_collections[bin]->count += block_counts[bin];
+		PinAndSet(buffer_manager, partition_block_collections[bin]->CreateBlock(), &partition_data_blocks[bin],
+		          partition_data_handles[bin], partition_data_ptrs[bin]);
+
+		if (has_heap) {
+			partition_string_heaps[bin]->count += block_counts[bin];
+
+			auto &p_heap_block = *partition_heap_blocks[bin];
+			// Set a new heap block
+			if (p_heap_block.byte_offset != p_heap_block.capacity) {
+				// More data fits on the heap block, just copy (reference) the block
+				partition_string_heaps[bin]->blocks.push_back(partition_heap_blocks[bin]->Copy());
+				partition_string_heaps[bin]->blocks.back()->count = 0;
+			} else {
+				// Heap block is full, create a new one
+				partition_string_heaps[bin]->CreateBlock();
+			}
+
+			partition_heap_blocks[bin] = partition_string_heaps[bin]->blocks.back().get();
+			partition_heap_handles[bin] = buffer_manager.Pin(partition_heap_blocks[bin]->block);
+		}
+
+		block_counts[bin] = 0;
+	}
+
+	static inline void PinAndSet(BufferManager &buffer_manager, RowDataBlock &block, RowDataBlock **block_ptr,
+	                             BufferHandle &handle, data_ptr_t &ptr) {
+		*block_ptr = &block;
+		handle = buffer_manager.Pin(block.block);
+		ptr = handle.Ptr();
+	}
+
+	static inline void PartitionHeap(BufferManager &buffer_manager, const RowLayout &layout,
+	                                 RowDataCollection &string_heap, RowDataBlock &data_block,
+	                                 const data_ptr_t data_ptr, RowDataBlock &heap_block, BufferHandle &heap_handle) {
+		D_ASSERT(!layout.AllConstant());
+		D_ASSERT(heap_block.block == heap_handle.GetBlockHandle());
+		D_ASSERT(data_block.count >= heap_block.count);
+		const auto count = data_block.count - heap_block.count;
+		if (count == 0) {
+			return;
+		}
+		const auto row_width = layout.GetRowWidth();
+		const auto base_row_ptr = data_ptr - count * row_width;
+
+		// Compute size of remaining heap rows
+		idx_t size = 0;
+		auto row_ptr = base_row_ptr + layout.GetHeapOffset();
+		for (idx_t i = 0; i < count; i++) {
+			size += Load<uint32_t>(Load<data_ptr_t>(row_ptr));
+			row_ptr += row_width;
+		}
+
+		// Resize block if it doesn't fit
+		auto required_size = heap_block.byte_offset + size;
+		if (required_size > heap_block.capacity) {
+			buffer_manager.ReAllocate(heap_block.block, required_size);
+			heap_block.capacity = required_size;
+		}
+		auto heap_ptr = heap_handle.Ptr() + heap_block.byte_offset;
+
+#ifdef DEBUG
+		if (data_block.count > count) {
+			auto previous_row_heap_offset = Load<idx_t>(base_row_ptr - layout.GetRowWidth() + layout.GetHeapOffset());
+			auto previous_row_heap_ptr = heap_handle.Ptr() + previous_row_heap_offset;
+			auto current_heap_ptr = previous_row_heap_ptr + Load<uint32_t>(previous_row_heap_ptr);
+			D_ASSERT(current_heap_ptr == heap_ptr);
+		}
+#endif
+
+		// Copy corresponding heap rows, swizzle, and update counts
+		RowOperations::CopyHeapAndSwizzle(layout, base_row_ptr, heap_handle.Ptr(), heap_ptr, count);
+		heap_block.count += count;
+		heap_block.byte_offset += size;
+		D_ASSERT(data_block.count == heap_block.count);
+		D_ASSERT(heap_ptr + size == heap_handle.Ptr() + heap_block.byte_offset);
+		D_ASSERT(heap_ptr <= heap_handle.Ptr() + heap_block.capacity);
+	}
+};
+
+void RadixPartitioning::PartitionRowData(BufferManager &buffer_manager, const RowLayout &layout,
+                                         const idx_t hash_offset, RowDataCollection &block_collection,
+                                         RowDataCollection &string_heap,
+                                         vector<unique_ptr<RowDataCollection>> &partition_block_collections,
+                                         vector<unique_ptr<RowDataCollection>> &partition_string_heaps,
+                                         idx_t radix_bits) {
+	return RadixBitsSwitch<PartitionFunctor, void>(radix_bits, buffer_manager, layout, hash_offset, block_collection,
+	                                               string_heap, partition_block_collections, partition_string_heaps);
+}
+
+//===--------------------------------------------------------------------===//
+// Column Data Partitioning
+//===--------------------------------------------------------------------===//
+RadixPartitionedColumnData::RadixPartitionedColumnData(ClientContext &context_p, vector<LogicalType> types_p,
+                                                       idx_t radix_bits_p, idx_t hash_col_idx_p)
+    : PartitionedColumnData(PartitionedColumnDataType::RADIX, context_p, move(types_p)), radix_bits(radix_bits_p),
+      hash_col_idx(hash_col_idx_p) {
+	D_ASSERT(hash_col_idx < types.size());
+	const auto num_partitions = RadixPartitioning::NumberOfPartitions(radix_bits);
+	allocators->allocators.reserve(num_partitions);
+	for (idx_t i = 0; i < num_partitions; i++) {
+		CreateAllocator();
+	}
+	D_ASSERT(allocators->allocators.size() == num_partitions);
+}
+
+RadixPartitionedColumnData::RadixPartitionedColumnData(const RadixPartitionedColumnData &other)
+    : PartitionedColumnData(other), radix_bits(other.radix_bits), hash_col_idx(other.hash_col_idx) {
+	for (idx_t i = 0; i < RadixPartitioning::NumberOfPartitions(radix_bits); i++) {
+		partitions.emplace_back(CreatePartitionCollection(i));
+	}
+}
+
+RadixPartitionedColumnData::~RadixPartitionedColumnData() {
+}
+
+void RadixPartitionedColumnData::InitializeAppendStateInternal(PartitionedColumnDataAppendState &state) const {
+	const auto num_partitions = RadixPartitioning::NumberOfPartitions(radix_bits);
+	state.partition_buffers.reserve(num_partitions);
+	state.partition_append_states.reserve(num_partitions);
+	for (idx_t i = 0; i < num_partitions; i++) {
+		// TODO only initialize the append if partition idx > ...
+		state.partition_append_states.emplace_back(make_unique<ColumnDataAppendState>());
+		partitions[i]->InitializeAppend(*state.partition_append_states[i]);
+		state.partition_buffers.emplace_back(CreatePartitionBuffer());
+	}
+}
+
+struct ComputePartitionIndicesFunctor {
+	template <idx_t radix_bits>
+	static void Operation(Vector &hashes, Vector &partition_indices, idx_t count) {
+		UnaryExecutor::Execute<hash_t, hash_t>(hashes, partition_indices, count, [&](hash_t hash) {
+			using CONSTANTS = RadixPartitioningConstants<radix_bits>;
+			return CONSTANTS::ApplyMask(hash);
+		});
+	}
+};
+
+void RadixPartitionedColumnData::ComputePartitionIndices(PartitionedColumnDataAppendState &state, DataChunk &input) {
+	D_ASSERT(partitions.size() == RadixPartitioning::NumberOfPartitions(radix_bits));
+	D_ASSERT(state.partition_buffers.size() == RadixPartitioning::NumberOfPartitions(radix_bits));
+	RadixBitsSwitch<ComputePartitionIndicesFunctor, void>(radix_bits, input.data[hash_col_idx], state.partition_indices,
+	                                                      input.size());
 }
 
 } // namespace duckdb
@@ -10552,7 +13820,7 @@ void RowOperations::DestroyStates(RowLayout &layout, Vector &addresses, idx_t co
 
 void RowOperations::UpdateStates(AggregateObject &aggr, Vector &addresses, DataChunk &payload, idx_t arg_idx,
                                  idx_t count) {
-	AggregateInputData aggr_input_data(aggr.bind_data);
+	AggregateInputData aggr_input_data(aggr.bind_data, Allocator::DefaultAllocator());
 	aggr.function.update(aggr.child_count == 0 ? nullptr : &payload.data[arg_idx], aggr_input_data, aggr.child_count,
 	                     addresses, count);
 }
@@ -10562,7 +13830,7 @@ void RowOperations::UpdateFilteredStates(AggregateFilterData &filter_data, Aggre
 	idx_t count = filter_data.ApplyFilter(payload);
 
 	Vector filtered_addresses(addresses, filter_data.true_sel, count);
-	filtered_addresses.Normalify(count);
+	filtered_addresses.Flatten(count);
 
 	UpdateStates(aggr, filtered_addresses, filter_data.filtered_payload, arg_idx, count);
 }
@@ -10577,7 +13845,7 @@ void RowOperations::CombineStates(RowLayout &layout, Vector &sources, Vector &ta
 	VectorOperations::AddInPlace(targets, layout.GetAggrOffset(), count);
 	for (auto &aggr : layout.GetAggregates()) {
 		D_ASSERT(aggr.function.combine);
-		AggregateInputData aggr_input_data(aggr.bind_data);
+		AggregateInputData aggr_input_data(aggr.bind_data, Allocator::DefaultAllocator());
 		aggr.function.combine(sources, targets, aggr_input_data, count);
 
 		// Move to the next aggregate states
@@ -10594,7 +13862,7 @@ void RowOperations::FinalizeStates(RowLayout &layout, Vector &addresses, DataChu
 	for (idx_t i = 0; i < aggregates.size(); i++) {
 		auto &target = result.data[aggr_idx + i];
 		auto &aggr = aggregates[i];
-		AggregateInputData aggr_input_data(aggr.bind_data);
+		AggregateInputData aggr_input_data(aggr.bind_data, Allocator::DefaultAllocator());
 		aggr.function.finalize(addresses, aggr_input_data, target, result.size(), 0);
 
 		// Move to the next aggregate state
@@ -10615,6 +13883,8 @@ void RowOperations::FinalizeStates(RowLayout &layout, Vector &addresses, DataChu
 
 namespace duckdb {
 
+using ValidityBytes = RowLayout::ValidityBytes;
+
 void RowOperations::SwizzleColumns(const RowLayout &layout, const data_ptr_t base_row_ptr, const idx_t count) {
 	const idx_t row_width = layout.GetRowWidth();
 	data_ptr_t heap_row_ptrs[STANDARD_VECTOR_SIZE];
@@ -10623,7 +13893,7 @@ void RowOperations::SwizzleColumns(const RowLayout &layout, const data_ptr_t bas
 		const idx_t next = MinValue<idx_t>(count - done, STANDARD_VECTOR_SIZE);
 		const data_ptr_t row_ptr = base_row_ptr + done * row_width;
 		// Load heap row pointers
-		data_ptr_t heap_ptr_ptr = row_ptr + layout.GetHeapPointerOffset();
+		data_ptr_t heap_ptr_ptr = row_ptr + layout.GetHeapOffset();
 		for (idx_t i = 0; i < next; i++) {
 			heap_row_ptrs[i] = Load<data_ptr_t>(heap_ptr_ptr);
 			heap_ptr_ptr += row_width;
@@ -10636,7 +13906,7 @@ void RowOperations::SwizzleColumns(const RowLayout &layout, const data_ptr_t bas
 			}
 			data_ptr_t col_ptr = row_ptr + layout.GetOffsets()[col_idx];
 			if (physical_type == PhysicalType::VARCHAR) {
-				data_ptr_t string_ptr = col_ptr + sizeof(uint32_t) + string_t::PREFIX_LENGTH;
+				data_ptr_t string_ptr = col_ptr + string_t::HEADER_SIZE;
 				for (idx_t i = 0; i < next; i++) {
 					if (Load<uint32_t>(col_ptr) > string_t::INLINE_LENGTH) {
 						// Overwrite the string pointer with the within-row offset (if not inlined)
@@ -10659,15 +13929,62 @@ void RowOperations::SwizzleColumns(const RowLayout &layout, const data_ptr_t bas
 }
 
 void RowOperations::SwizzleHeapPointer(const RowLayout &layout, data_ptr_t row_ptr, const data_ptr_t heap_base_ptr,
-                                       const idx_t count) {
+                                       const idx_t count, const idx_t base_offset) {
 	const idx_t row_width = layout.GetRowWidth();
-	row_ptr += layout.GetHeapPointerOffset();
+	row_ptr += layout.GetHeapOffset();
 	idx_t cumulative_offset = 0;
 	for (idx_t i = 0; i < count; i++) {
-		Store<idx_t>(cumulative_offset, row_ptr);
+		Store<idx_t>(base_offset + cumulative_offset, row_ptr);
 		cumulative_offset += Load<uint32_t>(heap_base_ptr + cumulative_offset);
 		row_ptr += row_width;
 	}
+}
+
+void RowOperations::CopyHeapAndSwizzle(const RowLayout &layout, data_ptr_t row_ptr, const data_ptr_t heap_base_ptr,
+                                       data_ptr_t heap_ptr, const idx_t count) {
+	const auto row_width = layout.GetRowWidth();
+	const auto heap_offset = layout.GetHeapOffset();
+	for (idx_t i = 0; i < count; i++) {
+		// Figure out source and size
+		const auto source_heap_ptr = Load<data_ptr_t>(row_ptr + heap_offset);
+		const auto size = Load<uint32_t>(source_heap_ptr);
+		D_ASSERT(size >= sizeof(uint32_t));
+
+		// Copy and swizzle
+		memcpy(heap_ptr, source_heap_ptr, size);
+		Store<idx_t>(heap_ptr - heap_base_ptr, row_ptr + heap_offset);
+
+		// Increment for next iteration
+		row_ptr += row_width;
+		heap_ptr += size;
+	}
+}
+
+void RowOperations::UnswizzleHeapPointer(const RowLayout &layout, const data_ptr_t base_row_ptr,
+                                         const data_ptr_t base_heap_ptr, const idx_t count) {
+	const auto row_width = layout.GetRowWidth();
+	data_ptr_t heap_ptr_ptr = base_row_ptr + layout.GetHeapOffset();
+	for (idx_t i = 0; i < count; i++) {
+		Store<data_ptr_t>(base_heap_ptr + Load<idx_t>(heap_ptr_ptr), heap_ptr_ptr);
+		heap_ptr_ptr += row_width;
+	}
+}
+
+static inline void VerifyUnswizzledString(const RowLayout &layout, const idx_t &col_idx, const data_ptr_t &row_ptr) {
+#ifdef DEBUG
+	if (layout.GetTypes()[col_idx] == LogicalTypeId::BLOB) {
+		return;
+	}
+	idx_t entry_idx;
+	idx_t idx_in_entry;
+	ValidityBytes::GetEntryIndex(col_idx, entry_idx, idx_in_entry);
+
+	ValidityBytes row_mask(row_ptr);
+	if (row_mask.RowIsValid(row_mask.GetValidityEntry(entry_idx), idx_in_entry)) {
+		auto str = Load<string_t>(row_ptr + layout.GetOffsets()[col_idx]);
+		str.Verify();
+	}
+#endif
 }
 
 void RowOperations::UnswizzlePointers(const RowLayout &layout, const data_ptr_t base_row_ptr,
@@ -10679,7 +13996,7 @@ void RowOperations::UnswizzlePointers(const RowLayout &layout, const data_ptr_t 
 		const idx_t next = MinValue<idx_t>(count - done, STANDARD_VECTOR_SIZE);
 		const data_ptr_t row_ptr = base_row_ptr + done * row_width;
 		// Restore heap row pointers
-		data_ptr_t heap_ptr_ptr = row_ptr + layout.GetHeapPointerOffset();
+		data_ptr_t heap_ptr_ptr = row_ptr + layout.GetHeapOffset();
 		for (idx_t i = 0; i < next; i++) {
 			heap_row_ptrs[i] = base_heap_ptr + Load<idx_t>(heap_ptr_ptr);
 			Store<data_ptr_t>(heap_row_ptrs[i], heap_ptr_ptr);
@@ -10693,11 +14010,12 @@ void RowOperations::UnswizzlePointers(const RowLayout &layout, const data_ptr_t 
 			}
 			data_ptr_t col_ptr = row_ptr + layout.GetOffsets()[col_idx];
 			if (physical_type == PhysicalType::VARCHAR) {
-				data_ptr_t string_ptr = col_ptr + sizeof(uint32_t) + string_t::PREFIX_LENGTH;
+				data_ptr_t string_ptr = col_ptr + string_t::HEADER_SIZE;
 				for (idx_t i = 0; i < next; i++) {
 					if (Load<uint32_t>(col_ptr) > string_t::INLINE_LENGTH) {
 						// Overwrite the string offset with the pointer (if not inlined)
 						Store<data_ptr_t>(heap_row_ptrs[i] + Load<idx_t>(string_ptr), string_ptr);
+						VerifyUnswizzledString(layout, col_idx, row_ptr + i * row_width);
 					}
 					col_ptr += row_width;
 					string_ptr += row_width;
@@ -10733,9 +14051,11 @@ using ValidityBytes = RowLayout::ValidityBytes;
 
 template <class T>
 static void TemplatedGatherLoop(Vector &rows, const SelectionVector &row_sel, Vector &col,
-                                const SelectionVector &col_sel, idx_t count, idx_t col_offset, idx_t col_no,
+                                const SelectionVector &col_sel, idx_t count, const RowLayout &layout, idx_t col_no,
                                 idx_t build_size) {
 	// Precompute mask indexes
+	const auto &offsets = layout.GetOffsets();
+	const auto col_offset = offsets[col_no];
 	idx_t entry_idx;
 	idx_t idx_in_entry;
 	ValidityBytes::GetEntryIndex(col_no, entry_idx, idx_in_entry);
@@ -10760,8 +14080,53 @@ static void TemplatedGatherLoop(Vector &rows, const SelectionVector &row_sel, Ve
 	}
 }
 
+static void GatherVarchar(Vector &rows, const SelectionVector &row_sel, Vector &col, const SelectionVector &col_sel,
+                          idx_t count, const RowLayout &layout, idx_t col_no, idx_t build_size,
+                          data_ptr_t base_heap_ptr) {
+	// Precompute mask indexes
+	const auto &offsets = layout.GetOffsets();
+	const auto col_offset = offsets[col_no];
+	const auto heap_offset = layout.GetHeapOffset();
+	idx_t entry_idx;
+	idx_t idx_in_entry;
+	ValidityBytes::GetEntryIndex(col_no, entry_idx, idx_in_entry);
+
+	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
+	auto data = FlatVector::GetData<string_t>(col);
+	auto &col_mask = FlatVector::Validity(col);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto row_idx = row_sel.get_index(i);
+		auto row = ptrs[row_idx];
+		auto col_idx = col_sel.get_index(i);
+		auto col_ptr = row + col_offset;
+		data[col_idx] = Load<string_t>(col_ptr);
+		ValidityBytes row_mask(row);
+		if (!row_mask.RowIsValid(row_mask.GetValidityEntry(entry_idx), idx_in_entry)) {
+			if (build_size > STANDARD_VECTOR_SIZE && col_mask.AllValid()) {
+				//! We need to initialize the mask with the vector size.
+				col_mask.Initialize(build_size);
+			}
+			col_mask.SetInvalid(col_idx);
+		} else if (base_heap_ptr && Load<uint32_t>(col_ptr) > string_t::INLINE_LENGTH) {
+			//	Not inline, so unswizzle the copied pointer the pointer
+			auto heap_ptr_ptr = row + heap_offset;
+			auto heap_row_ptr = base_heap_ptr + Load<idx_t>(heap_ptr_ptr);
+			auto string_ptr = data_ptr_t(data + col_idx) + string_t::HEADER_SIZE;
+			Store<data_ptr_t>(heap_row_ptr + Load<idx_t>(string_ptr), string_ptr);
+#ifdef DEBUG
+			data[col_idx].Verify();
+#endif
+		}
+	}
+}
+
 static void GatherNestedVector(Vector &rows, const SelectionVector &row_sel, Vector &col,
-                               const SelectionVector &col_sel, idx_t count, idx_t col_offset, idx_t col_no) {
+                               const SelectionVector &col_sel, idx_t count, const RowLayout &layout, idx_t col_no,
+                               data_ptr_t base_heap_ptr) {
+	const auto &offsets = layout.GetOffsets();
+	const auto col_offset = offsets[col_no];
+	const auto heap_offset = layout.GetHeapOffset();
 	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
 
 	// Build the gather locations
@@ -10769,8 +14134,16 @@ static void GatherNestedVector(Vector &rows, const SelectionVector &row_sel, Vec
 	auto mask_locations = unique_ptr<data_ptr_t[]>(new data_ptr_t[count]);
 	for (idx_t i = 0; i < count; i++) {
 		auto row_idx = row_sel.get_index(i);
-		mask_locations[i] = ptrs[row_idx];
-		data_locations[i] = Load<data_ptr_t>(ptrs[row_idx] + col_offset);
+		auto row = ptrs[row_idx];
+		mask_locations[i] = row;
+		auto col_ptr = ptrs[row_idx] + col_offset;
+		if (base_heap_ptr) {
+			auto heap_ptr_ptr = row + heap_offset;
+			auto heap_row_ptr = base_heap_ptr + Load<idx_t>(heap_ptr_ptr);
+			data_locations[i] = heap_row_ptr + Load<idx_t>(col_ptr);
+		} else {
+			data_locations[i] = Load<data_ptr_t>(col_ptr);
+		}
 	}
 
 	// Deserialise into the selected locations
@@ -10778,56 +14151,57 @@ static void GatherNestedVector(Vector &rows, const SelectionVector &row_sel, Vec
 }
 
 void RowOperations::Gather(Vector &rows, const SelectionVector &row_sel, Vector &col, const SelectionVector &col_sel,
-                           const idx_t count, const idx_t col_offset, const idx_t col_no, const idx_t build_size) {
+                           const idx_t count, const RowLayout &layout, const idx_t col_no, const idx_t build_size,
+                           data_ptr_t heap_ptr) {
 	D_ASSERT(rows.GetVectorType() == VectorType::FLAT_VECTOR);
 	D_ASSERT(rows.GetType().id() == LogicalTypeId::POINTER); // "Cannot gather from non-pointer type!"
 
 	col.SetVectorType(VectorType::FLAT_VECTOR);
 	switch (col.GetType().InternalType()) {
 	case PhysicalType::UINT8:
-		TemplatedGatherLoop<uint8_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<uint8_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::UINT16:
-		TemplatedGatherLoop<uint16_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<uint16_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::UINT32:
-		TemplatedGatherLoop<uint32_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<uint32_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::UINT64:
-		TemplatedGatherLoop<uint64_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<uint64_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::BOOL:
 	case PhysicalType::INT8:
-		TemplatedGatherLoop<int8_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<int8_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INT16:
-		TemplatedGatherLoop<int16_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<int16_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INT32:
-		TemplatedGatherLoop<int32_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<int32_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INT64:
-		TemplatedGatherLoop<int64_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<int64_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INT128:
-		TemplatedGatherLoop<hugeint_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<hugeint_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::FLOAT:
-		TemplatedGatherLoop<float>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<float>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::DOUBLE:
-		TemplatedGatherLoop<double>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<double>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INTERVAL:
-		TemplatedGatherLoop<interval_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<interval_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::VARCHAR:
-		TemplatedGatherLoop<string_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		GatherVarchar(rows, row_sel, col, col_sel, count, layout, col_no, build_size, heap_ptr);
 		break;
 	case PhysicalType::LIST:
 	case PhysicalType::MAP:
 	case PhysicalType::STRUCT:
-		GatherNestedVector(rows, row_sel, col, col_sel, count, col_offset, col_no);
+		GatherNestedVector(rows, row_sel, col, col_sel, count, layout, col_no, heap_ptr);
 		break;
 	default:
 		throw InternalException("Unimplemented type for RowOperations::Gather");
@@ -11106,12 +14480,12 @@ namespace duckdb {
 
 using ValidityBytes = TemplatedValidityMask<uint8_t>;
 
-static void ComputeStringEntrySizes(VectorData &vdata, idx_t entry_sizes[], const idx_t ser_count,
+static void ComputeStringEntrySizes(UnifiedVectorFormat &vdata, idx_t entry_sizes[], const idx_t ser_count,
                                     const SelectionVector &sel, const idx_t offset) {
 	auto strings = (string_t *)vdata.data;
 	for (idx_t i = 0; i < ser_count; i++) {
 		auto idx = sel.get_index(i);
-		auto str_idx = vdata.sel->get_index(idx) + offset;
+		auto str_idx = vdata.sel->get_index(idx + offset);
 		if (vdata.validity.RowIsValid(str_idx)) {
 			entry_sizes[i] += sizeof(uint32_t) + strings[str_idx].GetSize();
 		}
@@ -11135,14 +14509,14 @@ static void ComputeStructEntrySizes(Vector &v, idx_t entry_sizes[], idx_t vcount
 	}
 }
 
-static void ComputeListEntrySizes(Vector &v, VectorData &vdata, idx_t entry_sizes[], idx_t ser_count,
+static void ComputeListEntrySizes(Vector &v, UnifiedVectorFormat &vdata, idx_t entry_sizes[], idx_t ser_count,
                                   const SelectionVector &sel, idx_t offset) {
 	auto list_data = ListVector::GetData(v);
 	auto &child_vector = ListVector::GetEntry(v);
 	idx_t list_entry_sizes[STANDARD_VECTOR_SIZE];
 	for (idx_t i = 0; i < ser_count; i++) {
 		auto idx = sel.get_index(i);
-		auto source_idx = vdata.sel->get_index(idx) + offset;
+		auto source_idx = vdata.sel->get_index(idx + offset);
 		if (vdata.validity.RowIsValid(source_idx)) {
 			auto list_entry = list_data[source_idx];
 
@@ -11178,8 +14552,8 @@ static void ComputeListEntrySizes(Vector &v, VectorData &vdata, idx_t entry_size
 	}
 }
 
-void RowOperations::ComputeEntrySizes(Vector &v, VectorData &vdata, idx_t entry_sizes[], idx_t vcount, idx_t ser_count,
-                                      const SelectionVector &sel, idx_t offset) {
+void RowOperations::ComputeEntrySizes(Vector &v, UnifiedVectorFormat &vdata, idx_t entry_sizes[], idx_t vcount,
+                                      idx_t ser_count, const SelectionVector &sel, idx_t offset) {
 	const auto physical_type = v.GetType().InternalType();
 	if (TypeIsConstantSize(physical_type)) {
 		const auto type_size = GetTypeIdSize(physical_type);
@@ -11208,19 +14582,19 @@ void RowOperations::ComputeEntrySizes(Vector &v, VectorData &vdata, idx_t entry_
 
 void RowOperations::ComputeEntrySizes(Vector &v, idx_t entry_sizes[], idx_t vcount, idx_t ser_count,
                                       const SelectionVector &sel, idx_t offset) {
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
 	ComputeEntrySizes(v, vdata, entry_sizes, vcount, ser_count, sel, offset);
 }
 
 template <class T>
-static void TemplatedHeapScatter(VectorData &vdata, const SelectionVector &sel, idx_t count, idx_t col_idx,
+static void TemplatedHeapScatter(UnifiedVectorFormat &vdata, const SelectionVector &sel, idx_t count, idx_t col_idx,
                                  data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
 	auto source = (T *)vdata.data;
 	if (!validitymask_locations) {
 		for (idx_t i = 0; i < count; i++) {
 			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
+			auto source_idx = vdata.sel->get_index(idx + offset);
 
 			auto target = (T *)key_locations[i];
 			Store<T>(source[source_idx], (data_ptr_t)target);
@@ -11233,7 +14607,7 @@ static void TemplatedHeapScatter(VectorData &vdata, const SelectionVector &sel, 
 		const auto bit = ~(1UL << idx_in_entry);
 		for (idx_t i = 0; i < count; i++) {
 			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
+			auto source_idx = vdata.sel->get_index(idx + offset);
 
 			auto target = (T *)key_locations[i];
 			Store<T>(source[source_idx], (data_ptr_t)target);
@@ -11249,14 +14623,14 @@ static void TemplatedHeapScatter(VectorData &vdata, const SelectionVector &sel, 
 
 static void HeapScatterStringVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count, idx_t col_idx,
                                     data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
 
 	auto strings = (string_t *)vdata.data;
 	if (!validitymask_locations) {
 		for (idx_t i = 0; i < ser_count; i++) {
 			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
+			auto source_idx = vdata.sel->get_index(idx + offset);
 			if (vdata.validity.RowIsValid(source_idx)) {
 				auto &string_entry = strings[source_idx];
 				// store string size
@@ -11274,7 +14648,7 @@ static void HeapScatterStringVector(Vector &v, idx_t vcount, const SelectionVect
 		const auto bit = ~(1UL << idx_in_entry);
 		for (idx_t i = 0; i < ser_count; i++) {
 			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
+			auto source_idx = vdata.sel->get_index(idx + offset);
 			if (vdata.validity.RowIsValid(source_idx)) {
 				auto &string_entry = strings[source_idx];
 				// store string size
@@ -11293,8 +14667,8 @@ static void HeapScatterStringVector(Vector &v, idx_t vcount, const SelectionVect
 
 static void HeapScatterStructVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count, idx_t col_idx,
                                     data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
 
 	auto &children = StructVector::GetEntries(v);
 	idx_t num_children = children.size();
@@ -11332,8 +14706,8 @@ static void HeapScatterStructVector(Vector &v, idx_t vcount, const SelectionVect
 
 static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count, idx_t col_no,
                                   data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
 
 	idx_t entry_idx;
 	idx_t idx_in_entry;
@@ -11343,8 +14717,8 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 
 	auto &child_vector = ListVector::GetEntry(v);
 
-	VectorData list_vdata;
-	child_vector.Orrify(ListVector::GetListSize(v), list_vdata);
+	UnifiedVectorFormat list_vdata;
+	child_vector.ToUnifiedFormat(ListVector::GetListSize(v), list_vdata);
 	auto child_type = ListType::GetChildType(v.GetType()).InternalType();
 
 	idx_t list_entry_sizes[STANDARD_VECTOR_SIZE];
@@ -11352,7 +14726,7 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 
 	for (idx_t i = 0; i < ser_count; i++) {
 		auto idx = sel.get_index(i);
-		auto source_idx = vdata.sel->get_index(idx) + offset;
+		auto source_idx = vdata.sel->get_index(idx + offset);
 		if (!vdata.validity.RowIsValid(source_idx)) {
 			if (validitymask_locations) {
 				// set the row validitymask for this column to invalid
@@ -11389,7 +14763,7 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 
 			// serialize list validity
 			for (idx_t entry_idx = 0; entry_idx < next; entry_idx++) {
-				auto list_idx = list_vdata.sel->get_index(entry_idx) + entry_offset;
+				auto list_idx = list_vdata.sel->get_index(entry_idx + entry_offset);
 				if (!list_vdata.validity.RowIsValid(list_idx)) {
 					*(list_validitymask_location) &= ~(1UL << entry_offset_in_byte);
 				}
@@ -11434,8 +14808,8 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 void RowOperations::HeapScatter(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count, idx_t col_idx,
                                 data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
 	if (TypeIsConstantSize(v.GetType().InternalType())) {
-		VectorData vdata;
-		v.Orrify(vcount, vdata);
+		UnifiedVectorFormat vdata;
+		v.ToUnifiedFormat(vcount, vdata);
 		RowOperations::HeapScatterVData(vdata, v.GetType().InternalType(), sel, ser_count, col_idx, key_locations,
 		                                validitymask_locations, offset);
 	} else {
@@ -11458,9 +14832,9 @@ void RowOperations::HeapScatter(Vector &v, idx_t vcount, const SelectionVector &
 	}
 }
 
-void RowOperations::HeapScatterVData(VectorData &vdata, PhysicalType type, const SelectionVector &sel, idx_t ser_count,
-                                     idx_t col_idx, data_ptr_t *key_locations, data_ptr_t *validitymask_locations,
-                                     idx_t offset) {
+void RowOperations::HeapScatterVData(UnifiedVectorFormat &vdata, PhysicalType type, const SelectionVector &sel,
+                                     idx_t ser_count, idx_t col_idx, data_ptr_t *key_locations,
+                                     data_ptr_t *validitymask_locations, idx_t offset) {
 	switch (type) {
 	case PhysicalType::BOOL:
 	case PhysicalType::INT8:
@@ -11564,8 +14938,8 @@ idx_t SelectComparison<LessThanEquals>(Vector &left, Vector &right, const Select
 }
 
 template <class T, class OP, bool NO_MATCH_SEL>
-static void TemplatedMatchType(VectorData &col, Vector &rows, SelectionVector &sel, idx_t &count, idx_t col_offset,
-                               idx_t col_no, SelectionVector *no_match, idx_t &no_match_count) {
+static void TemplatedMatchType(UnifiedVectorFormat &col, Vector &rows, SelectionVector &sel, idx_t &count,
+                               idx_t col_offset, idx_t col_no, SelectionVector *no_match, idx_t &no_match_count) {
 	// Precompute row_mask indexes
 	idx_t entry_idx;
 	idx_t idx_in_entry;
@@ -11626,11 +15000,11 @@ static void TemplatedMatchType(VectorData &col, Vector &rows, SelectionVector &s
 }
 
 template <class OP, bool NO_MATCH_SEL>
-static void TemplatedMatchNested(Vector &col, Vector &rows, SelectionVector &sel, idx_t &count, const idx_t col_offset,
+static void TemplatedMatchNested(Vector &col, Vector &rows, SelectionVector &sel, idx_t &count, const RowLayout &layout,
                                  const idx_t col_no, SelectionVector *no_match, idx_t &no_match_count) {
 	// Gather a dense Vector containing the column values being matched
 	Vector key(col.GetType());
-	RowOperations::Gather(rows, sel, key, *FlatVector::IncrementalSelectionVector(), count, col_offset, col_no);
+	RowOperations::Gather(rows, sel, key, *FlatVector::IncrementalSelectionVector(), count, layout, col_no);
 
 	// Densify the input column
 	Vector sliced(col, sel, count);
@@ -11646,8 +15020,9 @@ static void TemplatedMatchNested(Vector &col, Vector &rows, SelectionVector &sel
 }
 
 template <class OP, bool NO_MATCH_SEL>
-static void TemplatedMatchOp(Vector &vec, VectorData &col, const RowLayout &layout, Vector &rows, SelectionVector &sel,
-                             idx_t &count, idx_t col_no, SelectionVector *no_match, idx_t &no_match_count) {
+static void TemplatedMatchOp(Vector &vec, UnifiedVectorFormat &col, const RowLayout &layout, Vector &rows,
+                             SelectionVector &sel, idx_t &count, idx_t col_no, SelectionVector *no_match,
+                             idx_t &no_match_count) {
 	if (count == 0) {
 		return;
 	}
@@ -11709,7 +15084,7 @@ static void TemplatedMatchOp(Vector &vec, VectorData &col, const RowLayout &layo
 	case PhysicalType::LIST:
 	case PhysicalType::MAP:
 	case PhysicalType::STRUCT:
-		TemplatedMatchNested<OP, NO_MATCH_SEL>(vec, rows, sel, count, col_offset, col_no, no_match, no_match_count);
+		TemplatedMatchNested<OP, NO_MATCH_SEL>(vec, rows, sel, count, layout, col_no, no_match, no_match_count);
 		break;
 	default:
 		throw InternalException("Unsupported column type for RowOperations::Match");
@@ -11717,7 +15092,7 @@ static void TemplatedMatchOp(Vector &vec, VectorData &col, const RowLayout &layo
 }
 
 template <bool NO_MATCH_SEL>
-static void TemplatedMatch(DataChunk &columns, VectorData col_data[], const RowLayout &layout, Vector &rows,
+static void TemplatedMatch(DataChunk &columns, UnifiedVectorFormat col_data[], const RowLayout &layout, Vector &rows,
                            const Predicates &predicates, SelectionVector &sel, idx_t &count, SelectionVector *no_match,
                            idx_t &no_match_count) {
 	for (idx_t col_no = 0; col_no < predicates.size(); ++col_no) {
@@ -11756,7 +15131,7 @@ static void TemplatedMatch(DataChunk &columns, VectorData col_data[], const RowL
 	}
 }
 
-idx_t RowOperations::Match(DataChunk &columns, VectorData col_data[], const RowLayout &layout, Vector &rows,
+idx_t RowOperations::Match(DataChunk &columns, UnifiedVectorFormat col_data[], const RowLayout &layout, Vector &rows,
                            const Predicates &predicates, SelectionVector &sel, idx_t count, SelectionVector *no_match,
                            idx_t &no_match_count) {
 	if (no_match) {
@@ -11777,8 +15152,8 @@ idx_t RowOperations::Match(DataChunk &columns, VectorData col_data[], const RowL
 namespace duckdb {
 
 template <class T>
-void TemplatedRadixScatter(VectorData &vdata, const SelectionVector &sel, idx_t add_count, data_ptr_t *key_locations,
-                           const bool desc, const bool has_null, const bool nulls_first, const bool is_little_endian,
+void TemplatedRadixScatter(UnifiedVectorFormat &vdata, const SelectionVector &sel, idx_t add_count,
+                           data_ptr_t *key_locations, const bool desc, const bool has_null, const bool nulls_first,
                            const idx_t offset) {
 	auto source = (T *)vdata.data;
 	if (has_null) {
@@ -11792,7 +15167,7 @@ void TemplatedRadixScatter(VectorData &vdata, const SelectionVector &sel, idx_t 
 			// write validity and according value
 			if (validity.RowIsValid(source_idx)) {
 				key_locations[i][0] = valid;
-				Radix::EncodeData<T>(key_locations[i] + 1, source[source_idx], is_little_endian);
+				Radix::EncodeData<T>(key_locations[i] + 1, source[source_idx]);
 				// invert bits if desc
 				if (desc) {
 					for (idx_t s = 1; s < sizeof(T) + 1; s++) {
@@ -11810,7 +15185,7 @@ void TemplatedRadixScatter(VectorData &vdata, const SelectionVector &sel, idx_t 
 			auto idx = sel.get_index(i);
 			auto source_idx = vdata.sel->get_index(idx) + offset;
 			// write value
-			Radix::EncodeData<T>(key_locations[i], source[source_idx], is_little_endian);
+			Radix::EncodeData<T>(key_locations[i], source[source_idx]);
 			// invert bits if desc
 			if (desc) {
 				for (idx_t s = 0; s < sizeof(T); s++) {
@@ -11822,9 +15197,9 @@ void TemplatedRadixScatter(VectorData &vdata, const SelectionVector &sel, idx_t 
 	}
 }
 
-void RadixScatterStringVector(VectorData &vdata, const SelectionVector &sel, idx_t add_count, data_ptr_t *key_locations,
-                              const bool desc, const bool has_null, const bool nulls_first, const idx_t prefix_len,
-                              idx_t offset) {
+void RadixScatterStringVector(UnifiedVectorFormat &vdata, const SelectionVector &sel, idx_t add_count,
+                              data_ptr_t *key_locations, const bool desc, const bool has_null, const bool nulls_first,
+                              const idx_t prefix_len, idx_t offset) {
 	auto source = (string_t *)vdata.data;
 	if (has_null) {
 		auto &validity = vdata.validity;
@@ -11867,12 +15242,13 @@ void RadixScatterStringVector(VectorData &vdata, const SelectionVector &sel, idx
 	}
 }
 
-void RadixScatterListVector(Vector &v, VectorData &vdata, const SelectionVector &sel, idx_t add_count,
+void RadixScatterListVector(Vector &v, UnifiedVectorFormat &vdata, const SelectionVector &sel, idx_t add_count,
                             data_ptr_t *key_locations, const bool desc, const bool has_null, const bool nulls_first,
                             const idx_t prefix_len, const idx_t width, const idx_t offset) {
 	auto list_data = ListVector::GetData(v);
 	auto &child_vector = ListVector::GetEntry(v);
 	auto list_size = ListVector::GetListSize(v);
+	child_vector.Flatten(list_size);
 
 	// serialize null values
 	if (has_null) {
@@ -11943,9 +15319,9 @@ void RadixScatterListVector(Vector &v, VectorData &vdata, const SelectionVector 
 	}
 }
 
-void RadixScatterStructVector(Vector &v, VectorData &vdata, idx_t vcount, const SelectionVector &sel, idx_t add_count,
-                              data_ptr_t *key_locations, const bool desc, const bool has_null, const bool nulls_first,
-                              const idx_t prefix_len, idx_t width, const idx_t offset) {
+void RadixScatterStructVector(Vector &v, UnifiedVectorFormat &vdata, idx_t vcount, const SelectionVector &sel,
+                              idx_t add_count, data_ptr_t *key_locations, const bool desc, const bool has_null,
+                              const bool nulls_first, const idx_t prefix_len, idx_t width, const idx_t offset) {
 	// serialize null values
 	if (has_null) {
 		auto &validity = vdata.validity;
@@ -11982,59 +15358,45 @@ void RadixScatterStructVector(Vector &v, VectorData &vdata, idx_t vcount, const 
 void RowOperations::RadixScatter(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count,
                                  data_ptr_t *key_locations, bool desc, bool has_null, bool nulls_first,
                                  idx_t prefix_len, idx_t width, idx_t offset) {
-	auto is_little_endian = Radix::IsLittleEndian();
-
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
 	switch (v.GetType().InternalType()) {
 	case PhysicalType::BOOL:
 	case PhysicalType::INT8:
-		TemplatedRadixScatter<int8_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                              is_little_endian, offset);
+		TemplatedRadixScatter<int8_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::INT16:
-		TemplatedRadixScatter<int16_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                               is_little_endian, offset);
+		TemplatedRadixScatter<int16_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::INT32:
-		TemplatedRadixScatter<int32_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                               is_little_endian, offset);
+		TemplatedRadixScatter<int32_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::INT64:
-		TemplatedRadixScatter<int64_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                               is_little_endian, offset);
+		TemplatedRadixScatter<int64_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::UINT8:
-		TemplatedRadixScatter<uint8_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                               is_little_endian, offset);
+		TemplatedRadixScatter<uint8_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::UINT16:
-		TemplatedRadixScatter<uint16_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                is_little_endian, offset);
+		TemplatedRadixScatter<uint16_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::UINT32:
-		TemplatedRadixScatter<uint32_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                is_little_endian, offset);
+		TemplatedRadixScatter<uint32_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::UINT64:
-		TemplatedRadixScatter<uint64_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                is_little_endian, offset);
+		TemplatedRadixScatter<uint64_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::INT128:
-		TemplatedRadixScatter<hugeint_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                 is_little_endian, offset);
+		TemplatedRadixScatter<hugeint_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::FLOAT:
-		TemplatedRadixScatter<float>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                             is_little_endian, offset);
+		TemplatedRadixScatter<float>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::DOUBLE:
-		TemplatedRadixScatter<double>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                              is_little_endian, offset);
+		TemplatedRadixScatter<double>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::INTERVAL:
-		TemplatedRadixScatter<interval_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                  is_little_endian, offset);
+		TemplatedRadixScatter<interval_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, offset);
 		break;
 	case PhysicalType::VARCHAR:
 		RadixScatterStringVector(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, prefix_len, offset);
@@ -12073,7 +15435,7 @@ namespace duckdb {
 using ValidityBytes = RowLayout::ValidityBytes;
 
 template <class T>
-static void TemplatedScatter(VectorData &col, Vector &rows, const SelectionVector &sel, const idx_t count,
+static void TemplatedScatter(UnifiedVectorFormat &col, Vector &rows, const SelectionVector &sel, const idx_t count,
                              const idx_t col_offset, const idx_t col_no) {
 	auto data = (T *)col.data;
 	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
@@ -12103,7 +15465,7 @@ static void TemplatedScatter(VectorData &col, Vector &rows, const SelectionVecto
 	}
 }
 
-static void ComputeStringEntrySizes(const VectorData &col, idx_t entry_sizes[], const SelectionVector &sel,
+static void ComputeStringEntrySizes(const UnifiedVectorFormat &col, idx_t entry_sizes[], const SelectionVector &sel,
                                     const idx_t count, const idx_t offset = 0) {
 	auto data = (const string_t *)col.data;
 	for (idx_t i = 0; i < count; i++) {
@@ -12116,8 +15478,9 @@ static void ComputeStringEntrySizes(const VectorData &col, idx_t entry_sizes[], 
 	}
 }
 
-static void ScatterStringVector(VectorData &col, Vector &rows, data_ptr_t str_locations[], const SelectionVector &sel,
-                                const idx_t count, const idx_t col_offset, const idx_t col_no) {
+static void ScatterStringVector(UnifiedVectorFormat &col, Vector &rows, data_ptr_t str_locations[],
+                                const SelectionVector &sel, const idx_t count, const idx_t col_offset,
+                                const idx_t col_no) {
 	auto string_data = (string_t *)col.data;
 	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
 
@@ -12142,7 +15505,7 @@ static void ScatterStringVector(VectorData &col, Vector &rows, data_ptr_t str_lo
 	}
 }
 
-static void ScatterNestedVector(Vector &vec, VectorData &col, Vector &rows, data_ptr_t data_locations[],
+static void ScatterNestedVector(Vector &vec, UnifiedVectorFormat &col, Vector &rows, data_ptr_t data_locations[],
                                 const SelectionVector &sel, const idx_t count, const idx_t col_offset,
                                 const idx_t col_no, const idx_t vcount) {
 	// Store pointers to the data in the row
@@ -12161,7 +15524,7 @@ static void ScatterNestedVector(Vector &vec, VectorData &col, Vector &rows, data
 	RowOperations::HeapScatter(vec, vcount, sel, count, col_no, data_locations, validitymask_locations);
 }
 
-void RowOperations::Scatter(DataChunk &columns, VectorData col_data[], const RowLayout &layout, Vector &rows,
+void RowOperations::Scatter(DataChunk &columns, UnifiedVectorFormat col_data[], const RowLayout &layout, Vector &rows,
                             RowDataCollection &string_heap, const SelectionVector &sel, idx_t count) {
 	if (count == 0) {
 		return;
@@ -12210,7 +15573,7 @@ void RowOperations::Scatter(DataChunk &columns, VectorData col_data[], const Row
 		string_heap.Build(count, data_locations, entry_sizes);
 
 		// Serialize information that is needed for swizzling if the computation goes out-of-core
-		const idx_t heap_pointer_offset = layout.GetHeapPointerOffset();
+		const idx_t heap_pointer_offset = layout.GetHeapOffset();
 		for (idx_t i = 0; i < count; i++) {
 			auto row_idx = sel.get_index(i);
 			auto row = ptrs[row_idx];
@@ -12291,6 +15654,7 @@ BufferedDeserializer::BufferedDeserializer(data_ptr_t ptr, idx_t data_size) : pt
 
 BufferedDeserializer::BufferedDeserializer(BufferedSerializer &serializer)
     : BufferedDeserializer(serializer.data, serializer.maximum_size) {
+	SetVersion(serializer.GetVersion());
 }
 
 void BufferedDeserializer::ReadData(data_ptr_t buffer, idx_t read_size) {
@@ -12311,10 +15675,9 @@ void BufferedDeserializer::ReadData(data_ptr_t buffer, idx_t read_size) {
 
 namespace duckdb {
 
-BufferedFileReader::BufferedFileReader(FileSystem &fs, const char *path, FileOpener *opener)
+BufferedFileReader::BufferedFileReader(FileSystem &fs, const char *path, FileLockType lock_type, FileOpener *opener)
     : fs(fs), data(unique_ptr<data_t[]>(new data_t[FILE_BUFFER_SIZE])), offset(0), read_data(0), total_read(0) {
-	handle =
-	    fs.OpenFile(path, FileFlags::FILE_FLAGS_READ, FileLockType::READ_LOCK, FileSystem::DEFAULT_COMPRESSION, opener);
+	handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ, lock_type, FileSystem::DEFAULT_COMPRESSION, opener);
 	file_size = fs.GetFileSize(*handle);
 }
 
@@ -12348,6 +15711,17 @@ bool BufferedFileReader::Finished() {
 	return total_read + offset == file_size;
 }
 
+void BufferedFileReader::Seek(uint64_t location) {
+	D_ASSERT(location <= file_size);
+	handle->Seek(location);
+	total_read = location;
+	read_data = offset = 0;
+}
+
+uint64_t BufferedFileReader::CurrentOffset() {
+	return total_read + offset;
+}
+
 } // namespace duckdb
 
 
@@ -12365,7 +15739,7 @@ BufferedFileWriter::BufferedFileWriter(FileSystem &fs, const string &path_p, uin
 }
 
 int64_t BufferedFileWriter::GetFileSize() {
-	return fs.GetFileSize(*handle);
+	return fs.GetFileSize(*handle) + offset;
 }
 
 idx_t BufferedFileWriter::GetTotalWritten() {
@@ -12402,10 +15776,17 @@ void BufferedFileWriter::Sync() {
 }
 
 void BufferedFileWriter::Truncate(int64_t size) {
-	// truncate the physical file on disk
-	handle->Truncate(size);
-	// reset anything written in the buffer
-	offset = 0;
+	uint64_t persistent = fs.GetFileSize(*handle);
+	D_ASSERT((uint64_t)size <= persistent + offset);
+	if (persistent <= (uint64_t)size) {
+		// truncating into the pending write buffer.
+		offset = size - persistent;
+	} else {
+		// truncate the physical file on disk
+		handle->Truncate(size);
+		// reset anything written in the buffer
+		offset = 0;
+	}
 }
 
 } // namespace duckdb
@@ -12475,7 +15856,8 @@ void Deserializer::ReadStringVector(vector<string> &list) {
 
 namespace duckdb {
 
-bool Comparators::TieIsBreakable(const idx_t &col_idx, const data_ptr_t row_ptr, const RowLayout &row_layout) {
+bool Comparators::TieIsBreakable(const idx_t &tie_col, const data_ptr_t &row_ptr, const SortLayout &sort_layout) {
+	const auto &col_idx = sort_layout.sorting_to_blob_col.at(tie_col);
 	// Check if the blob is NULL
 	ValidityBytes row_mask(row_ptr);
 	idx_t entry_idx;
@@ -12485,13 +15867,16 @@ bool Comparators::TieIsBreakable(const idx_t &col_idx, const data_ptr_t row_ptr,
 		// Can't break a NULL tie
 		return false;
 	}
-	if (row_layout.GetTypes()[col_idx].InternalType() == PhysicalType::VARCHAR) {
-		const auto &tie_col_offset = row_layout.GetOffsets()[col_idx];
-		string_t tie_string = Load<string_t>(row_ptr + tie_col_offset);
-		if (tie_string.GetSize() < string_t::INLINE_LENGTH) {
-			// No need to break the tie - we already compared the full string
-			return false;
-		}
+	auto &row_layout = sort_layout.blob_layout;
+	if (row_layout.GetTypes()[col_idx].InternalType() != PhysicalType::VARCHAR) {
+		// Nested type, must be broken
+		return true;
+	}
+	const auto &tie_col_offset = row_layout.GetOffsets()[col_idx];
+	auto tie_string = Load<string_t>(row_ptr + tie_col_offset);
+	if (tie_string.GetSize() < sort_layout.prefix_lengths[tie_col]) {
+		// No need to break the tie - we already compared the full string
+		return false;
 	}
 	return true;
 }
@@ -12533,14 +15918,14 @@ int Comparators::CompareVal(const data_ptr_t l_ptr, const data_ptr_t r_ptr, cons
 
 int Comparators::BreakBlobTie(const idx_t &tie_col, const SBScanState &left, const SBScanState &right,
                               const SortLayout &sort_layout, const bool &external) {
-	const idx_t &col_idx = sort_layout.sorting_to_blob_col.at(tie_col);
 	data_ptr_t l_data_ptr = left.DataPtr(*left.sb->blob_sorting_data);
 	data_ptr_t r_data_ptr = right.DataPtr(*right.sb->blob_sorting_data);
-	if (!TieIsBreakable(col_idx, l_data_ptr, sort_layout.blob_layout)) {
+	if (!TieIsBreakable(tie_col, l_data_ptr, sort_layout)) {
 		// Quick check to see if ties can be broken
 		return 0;
 	}
 	// Align the pointers
+	const idx_t &col_idx = sort_layout.sorting_to_blob_col.at(tie_col);
 	const auto &tie_col_offset = sort_layout.blob_layout.GetOffsets()[col_idx];
 	l_data_ptr += tie_col_offset;
 	r_data_ptr += tie_col_offset;
@@ -12815,14 +16200,14 @@ int Comparators::TemplatedCompareListLoop(data_ptr_t &left_ptr, data_ptr_t &righ
 
 void Comparators::UnswizzleSingleValue(data_ptr_t data_ptr, const data_ptr_t &heap_ptr, const LogicalType &type) {
 	if (type.InternalType() == PhysicalType::VARCHAR) {
-		data_ptr += sizeof(uint32_t) + string_t::PREFIX_LENGTH;
+		data_ptr += string_t::HEADER_SIZE;
 	}
 	Store<data_ptr_t>(heap_ptr + Load<idx_t>(data_ptr), data_ptr);
 }
 
 void Comparators::SwizzleSingleValue(data_ptr_t data_ptr, const data_ptr_t &heap_ptr, const LogicalType &type) {
 	if (type.InternalType() == PhysicalType::VARCHAR) {
-		data_ptr += sizeof(uint32_t) + string_t::PREFIX_LENGTH;
+		data_ptr += string_t::HEADER_SIZE;
 	}
 	Store<idx_t>(Load<data_ptr_t>(data_ptr) - heap_ptr, data_ptr);
 }
@@ -13087,12 +16472,12 @@ void MergeSorter::ComputeMerge(const idx_t &count, bool left_smaller[]) {
 	while (compared < count) {
 		// Move to the next block (if needed)
 		if (l.block_idx < l_sorted_block.radix_sorting_data.size() &&
-		    l.entry_idx == l_sorted_block.radix_sorting_data[l.block_idx].count) {
+		    l.entry_idx == l_sorted_block.radix_sorting_data[l.block_idx]->count) {
 			l.block_idx++;
 			l.entry_idx = 0;
 		}
 		if (r.block_idx < r_sorted_block.radix_sorting_data.size() &&
-		    r.entry_idx == r_sorted_block.radix_sorting_data[r.block_idx].count) {
+		    r.entry_idx == r_sorted_block.radix_sorting_data[r.block_idx]->count) {
 			r.block_idx++;
 			r.entry_idx = 0;
 		}
@@ -13111,8 +16496,8 @@ void MergeSorter::ComputeMerge(const idx_t &count, bool left_smaller[]) {
 			right->PinRadix(r.block_idx);
 			r_radix_ptr = right->RadixPtr();
 		}
-		const idx_t &l_count = !l_done ? l_sorted_block.radix_sorting_data[l.block_idx].count : 0;
-		const idx_t &r_count = !r_done ? r_sorted_block.radix_sorting_data[r.block_idx].count : 0;
+		const idx_t &l_count = !l_done ? l_sorted_block.radix_sorting_data[l.block_idx]->count : 0;
+		const idx_t &r_count = !r_done ? r_sorted_block.radix_sorting_data[r.block_idx]->count : 0;
 		// Compute the merge
 		if (sort_layout.all_constant) {
 			// All sorting columns are constant size
@@ -13170,23 +16555,23 @@ void MergeSorter::MergeRadix(const idx_t &count, const bool left_smaller[]) {
 	data_ptr_t l_ptr;
 	data_ptr_t r_ptr;
 
-	RowDataBlock *result_block = &result->radix_sorting_data.back();
+	RowDataBlock *result_block = result->radix_sorting_data.back().get();
 	auto result_handle = buffer_manager.Pin(result_block->block);
 	data_ptr_t result_ptr = result_handle.Ptr() + result_block->count * sort_layout.entry_size;
 
 	idx_t copied = 0;
 	while (copied < count) {
 		// Move to the next block (if needed)
-		if (l.block_idx < l_blocks.size() && l.entry_idx == l_blocks[l.block_idx].count) {
+		if (l.block_idx < l_blocks.size() && l.entry_idx == l_blocks[l.block_idx]->count) {
 			// Delete reference to previous block
-			l_blocks[l.block_idx].block = nullptr;
+			l_blocks[l.block_idx]->block = nullptr;
 			// Advance block
 			l.block_idx++;
 			l.entry_idx = 0;
 		}
-		if (r.block_idx < r_blocks.size() && r.entry_idx == r_blocks[r.block_idx].count) {
+		if (r.block_idx < r_blocks.size() && r.entry_idx == r_blocks[r.block_idx]->count) {
 			// Delete reference to previous block
-			r_blocks[r.block_idx].block = nullptr;
+			r_blocks[r.block_idx]->block = nullptr;
 			// Advance block
 			r.block_idx++;
 			r.entry_idx = 0;
@@ -13195,12 +16580,12 @@ void MergeSorter::MergeRadix(const idx_t &count, const bool left_smaller[]) {
 		const bool r_done = r.block_idx == r_blocks.size();
 		// Pin the radix sortable blocks
 		if (!l_done) {
-			l_block = &l_blocks[l.block_idx];
+			l_block = l_blocks[l.block_idx].get();
 			left->PinRadix(l.block_idx);
 			l_ptr = l.RadixPtr();
 		}
 		if (!r_done) {
-			r_block = &r_blocks[r.block_idx];
+			r_block = r_blocks[r.block_idx].get();
 			r.PinRadix(r.block_idx);
 			r_ptr = r.RadixPtr();
 		}
@@ -13209,14 +16594,14 @@ void MergeSorter::MergeRadix(const idx_t &count, const bool left_smaller[]) {
 		// Copy using computed merge
 		if (!l_done && !r_done) {
 			// Both sides have data - merge
-			MergeRows(l_ptr, l.entry_idx, l_count, r_ptr, r.entry_idx, r_count, result_block, result_ptr,
+			MergeRows(l_ptr, l.entry_idx, l_count, r_ptr, r.entry_idx, r_count, *result_block, result_ptr,
 			          sort_layout.entry_size, left_smaller, copied, count);
 		} else if (r_done) {
 			// Right side is exhausted
-			FlushRows(l_ptr, l.entry_idx, l_count, result_block, result_ptr, sort_layout.entry_size, copied, count);
+			FlushRows(l_ptr, l.entry_idx, l_count, *result_block, result_ptr, sort_layout.entry_size, copied, count);
 		} else {
 			// Left side is exhausted
-			FlushRows(r_ptr, r.entry_idx, r_count, result_block, result_ptr, sort_layout.entry_size, copied, count);
+			FlushRows(r_ptr, r.entry_idx, r_count, *result_block, result_ptr, sort_layout.entry_size, copied, count);
 		}
 	}
 	// Reset block indices
@@ -13236,7 +16621,7 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 
 	const auto &layout = result_data.layout;
 	const idx_t row_width = layout.GetRowWidth();
-	const idx_t heap_pointer_offset = layout.GetHeapPointerOffset();
+	const idx_t heap_pointer_offset = layout.GetHeapOffset();
 
 	// Left and right row data to merge
 	data_ptr_t l_ptr;
@@ -13246,7 +16631,7 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 	data_ptr_t r_heap_ptr;
 
 	// Result rows to write to
-	RowDataBlock *result_data_block = &result_data.data_blocks.back();
+	RowDataBlock *result_data_block = result_data.data_blocks.back().get();
 	auto result_data_handle = buffer_manager.Pin(result_data_block->block);
 	data_ptr_t result_data_ptr = result_data_handle.Ptr() + result_data_block->count * row_width;
 	// Result heap to write to (if needed)
@@ -13254,7 +16639,7 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 	BufferHandle result_heap_handle;
 	data_ptr_t result_heap_ptr;
 	if (!layout.AllConstant() && state.external) {
-		result_heap_block = &result_data.heap_blocks.back();
+		result_heap_block = result_data.heap_blocks.back().get();
 		result_heap_handle = buffer_manager.Pin(result_heap_block->block);
 		result_heap_ptr = result_heap_handle.Ptr() + result_heap_block->byte_offset;
 	}
@@ -13262,21 +16647,21 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 	idx_t copied = 0;
 	while (copied < count) {
 		// Move to new data blocks (if needed)
-		if (l.block_idx < l_data.data_blocks.size() && l.entry_idx == l_data.data_blocks[l.block_idx].count) {
+		if (l.block_idx < l_data.data_blocks.size() && l.entry_idx == l_data.data_blocks[l.block_idx]->count) {
 			// Delete reference to previous block
-			l_data.data_blocks[l.block_idx].block = nullptr;
+			l_data.data_blocks[l.block_idx]->block = nullptr;
 			if (!layout.AllConstant() && state.external) {
-				l_data.heap_blocks[l.block_idx].block = nullptr;
+				l_data.heap_blocks[l.block_idx]->block = nullptr;
 			}
 			// Advance block
 			l.block_idx++;
 			l.entry_idx = 0;
 		}
-		if (r.block_idx < r_data.data_blocks.size() && r.entry_idx == r_data.data_blocks[r.block_idx].count) {
+		if (r.block_idx < r_data.data_blocks.size() && r.entry_idx == r_data.data_blocks[r.block_idx]->count) {
 			// Delete reference to previous block
-			r_data.data_blocks[r.block_idx].block = nullptr;
+			r_data.data_blocks[r.block_idx]->block = nullptr;
 			if (!layout.AllConstant() && state.external) {
-				r_data.heap_blocks[r.block_idx].block = nullptr;
+				r_data.heap_blocks[r.block_idx]->block = nullptr;
 			}
 			// Advance block
 			r.block_idx++;
@@ -13293,33 +16678,33 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 			r.PinData(r_data);
 			r_ptr = r.DataPtr(r_data);
 		}
-		const idx_t &l_count = !l_done ? l_data.data_blocks[l.block_idx].count : 0;
-		const idx_t &r_count = !r_done ? r_data.data_blocks[r.block_idx].count : 0;
+		const idx_t &l_count = !l_done ? l_data.data_blocks[l.block_idx]->count : 0;
+		const idx_t &r_count = !r_done ? r_data.data_blocks[r.block_idx]->count : 0;
 		// Perform the merge
 		if (layout.AllConstant() || !state.external) {
 			// If all constant size, or if we are doing an in-memory sort, we do not need to touch the heap
 			if (!l_done && !r_done) {
 				// Both sides have data - merge
-				MergeRows(l_ptr, l.entry_idx, l_count, r_ptr, r.entry_idx, r_count, result_data_block, result_data_ptr,
+				MergeRows(l_ptr, l.entry_idx, l_count, r_ptr, r.entry_idx, r_count, *result_data_block, result_data_ptr,
 				          row_width, left_smaller, copied, count);
 			} else if (r_done) {
 				// Right side is exhausted
-				FlushRows(l_ptr, l.entry_idx, l_count, result_data_block, result_data_ptr, row_width, copied, count);
+				FlushRows(l_ptr, l.entry_idx, l_count, *result_data_block, result_data_ptr, row_width, copied, count);
 			} else {
 				// Left side is exhausted
-				FlushRows(r_ptr, r.entry_idx, r_count, result_data_block, result_data_ptr, row_width, copied, count);
+				FlushRows(r_ptr, r.entry_idx, r_count, *result_data_block, result_data_ptr, row_width, copied, count);
 			}
 		} else {
 			// External sorting with variable size data. Pin the heap blocks too
 			if (!l_done) {
 				l_heap_ptr = l.BaseHeapPtr(l_data) + Load<idx_t>(l_ptr + heap_pointer_offset);
 				D_ASSERT(l_heap_ptr - l.BaseHeapPtr(l_data) >= 0);
-				D_ASSERT((idx_t)(l_heap_ptr - l.BaseHeapPtr(l_data)) < l_data.heap_blocks[l.block_idx].byte_offset);
+				D_ASSERT((idx_t)(l_heap_ptr - l.BaseHeapPtr(l_data)) < l_data.heap_blocks[l.block_idx]->byte_offset);
 			}
 			if (!r_done) {
 				r_heap_ptr = r.BaseHeapPtr(r_data) + Load<idx_t>(r_ptr + heap_pointer_offset);
 				D_ASSERT(r_heap_ptr - r.BaseHeapPtr(r_data) >= 0);
-				D_ASSERT((idx_t)(r_heap_ptr - r.BaseHeapPtr(r_data)) < r_data.heap_blocks[r.block_idx].byte_offset);
+				D_ASSERT((idx_t)(r_heap_ptr - r.BaseHeapPtr(r_data)) < r_data.heap_blocks[r.block_idx]->byte_offset);
 			}
 			// Both the row and heap data need to be dealt with
 			if (!l_done && !r_done) {
@@ -13329,7 +16714,7 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 				data_ptr_t result_data_ptr_copy = result_data_ptr;
 				idx_t copied_copy = copied;
 				// Merge row data
-				MergeRows(l_ptr, l_idx_copy, l_count, r_ptr, r_idx_copy, r_count, result_data_block,
+				MergeRows(l_ptr, l_idx_copy, l_count, r_ptr, r_idx_copy, r_count, *result_data_block,
 				          result_data_ptr_copy, row_width, left_smaller, copied_copy, count);
 				const idx_t merged = copied_copy - copied;
 				// Compute the entry sizes and number of heap bytes that will be copied
@@ -13348,9 +16733,9 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 					    l_smaller * Load<uint32_t>(l_heap_ptr_copy) + r_smaller * Load<uint32_t>(r_heap_ptr_copy);
 					D_ASSERT(entry_size >= sizeof(uint32_t));
 					D_ASSERT(l_heap_ptr_copy - l.BaseHeapPtr(l_data) + l_smaller * entry_size <=
-					         l_data.heap_blocks[l.block_idx].byte_offset);
+					         l_data.heap_blocks[l.block_idx]->byte_offset);
 					D_ASSERT(r_heap_ptr_copy - r.BaseHeapPtr(r_data) + r_smaller * entry_size <=
-					         r_data.heap_blocks[r.block_idx].byte_offset);
+					         r_data.heap_blocks[r.block_idx]->byte_offset);
 					l_heap_ptr_copy += l_smaller * entry_size;
 					r_heap_ptr_copy += r_smaller * entry_size;
 					copy_bytes += entry_size;
@@ -13383,12 +16768,12 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 				copied += merged;
 			} else if (r_done) {
 				// Right side is exhausted - flush left
-				FlushBlobs(layout, l_count, l_ptr, l.entry_idx, l_heap_ptr, result_data_block, result_data_ptr,
-				           result_heap_block, result_heap_handle, result_heap_ptr, copied, count);
+				FlushBlobs(layout, l_count, l_ptr, l.entry_idx, l_heap_ptr, *result_data_block, result_data_ptr,
+				           *result_heap_block, result_heap_handle, result_heap_ptr, copied, count);
 			} else {
 				// Left side is exhausted - flush right
-				FlushBlobs(layout, r_count, r_ptr, r.entry_idx, r_heap_ptr, result_data_block, result_data_ptr,
-				           result_heap_block, result_heap_handle, result_heap_ptr, copied, count);
+				FlushBlobs(layout, r_count, r_ptr, r.entry_idx, r_heap_ptr, *result_data_block, result_data_ptr,
+				           *result_heap_block, result_heap_handle, result_heap_ptr, copied, count);
 			}
 			D_ASSERT(result_data_block->count == result_heap_block->count);
 		}
@@ -13400,10 +16785,10 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 }
 
 void MergeSorter::MergeRows(data_ptr_t &l_ptr, idx_t &l_entry_idx, const idx_t &l_count, data_ptr_t &r_ptr,
-                            idx_t &r_entry_idx, const idx_t &r_count, RowDataBlock *target_block,
+                            idx_t &r_entry_idx, const idx_t &r_count, RowDataBlock &target_block,
                             data_ptr_t &target_ptr, const idx_t &entry_size, const bool left_smaller[], idx_t &copied,
                             const idx_t &count) {
-	const idx_t next = MinValue(count - copied, target_block->capacity - target_block->count);
+	const idx_t next = MinValue(count - copied, target_block.capacity - target_block.count);
 	idx_t i;
 	for (i = 0; i < next && l_entry_idx < l_count && r_entry_idx < r_count; i++) {
 		const bool &l_smaller = left_smaller[copied + i];
@@ -13418,15 +16803,15 @@ void MergeSorter::MergeRows(data_ptr_t &l_ptr, idx_t &l_entry_idx, const idx_t &
 		r_ptr += r_smaller * entry_size;
 	}
 	// Update counts
-	target_block->count += i;
+	target_block.count += i;
 	copied += i;
 }
 
 void MergeSorter::FlushRows(data_ptr_t &source_ptr, idx_t &source_entry_idx, const idx_t &source_count,
-                            RowDataBlock *target_block, data_ptr_t &target_ptr, const idx_t &entry_size, idx_t &copied,
+                            RowDataBlock &target_block, data_ptr_t &target_ptr, const idx_t &entry_size, idx_t &copied,
                             const idx_t &count) {
 	// Compute how many entries we can fit
-	idx_t next = MinValue(count - copied, target_block->capacity - target_block->count);
+	idx_t next = MinValue(count - copied, target_block.capacity - target_block.count);
 	next = MinValue(next, source_count - source_entry_idx);
 	// Copy them all in a single memcpy
 	const idx_t copy_bytes = next * entry_size;
@@ -13435,17 +16820,17 @@ void MergeSorter::FlushRows(data_ptr_t &source_ptr, idx_t &source_entry_idx, con
 	source_ptr += copy_bytes;
 	// Update counts
 	source_entry_idx += next;
-	target_block->count += next;
+	target_block.count += next;
 	copied += next;
 }
 
 void MergeSorter::FlushBlobs(const RowLayout &layout, const idx_t &source_count, data_ptr_t &source_data_ptr,
-                             idx_t &source_entry_idx, data_ptr_t &source_heap_ptr, RowDataBlock *target_data_block,
-                             data_ptr_t &target_data_ptr, RowDataBlock *target_heap_block,
+                             idx_t &source_entry_idx, data_ptr_t &source_heap_ptr, RowDataBlock &target_data_block,
+                             data_ptr_t &target_data_ptr, RowDataBlock &target_heap_block,
                              BufferHandle &target_heap_handle, data_ptr_t &target_heap_ptr, idx_t &copied,
                              const idx_t &count) {
 	const idx_t row_width = layout.GetRowWidth();
-	const idx_t heap_pointer_offset = layout.GetHeapPointerOffset();
+	const idx_t heap_pointer_offset = layout.GetHeapOffset();
 	idx_t source_entry_idx_copy = source_entry_idx;
 	data_ptr_t target_data_ptr_copy = target_data_ptr;
 	idx_t copied_copy = copied;
@@ -13458,7 +16843,7 @@ void MergeSorter::FlushBlobs(const RowLayout &layout, const idx_t &source_count,
 	data_ptr_t source_heap_ptr_copy = source_heap_ptr;
 	for (idx_t i = 0; i < flushed; i++) {
 		// Store base heap offset in the row data
-		Store<idx_t>(target_heap_block->byte_offset + copy_bytes, target_data_ptr + heap_pointer_offset);
+		Store<idx_t>(target_heap_block.byte_offset + copy_bytes, target_data_ptr + heap_pointer_offset);
 		target_data_ptr += row_width;
 		// Compute entry size and add to total
 		auto entry_size = Load<uint32_t>(source_heap_ptr_copy);
@@ -13467,13 +16852,13 @@ void MergeSorter::FlushBlobs(const RowLayout &layout, const idx_t &source_count,
 		copy_bytes += entry_size;
 	}
 	// Reallocate result heap block size (if needed)
-	if (target_heap_block->byte_offset + copy_bytes > target_heap_block->capacity) {
-		idx_t new_capacity = target_heap_block->byte_offset + copy_bytes;
-		buffer_manager.ReAllocate(target_heap_block->block, new_capacity);
-		target_heap_block->capacity = new_capacity;
-		target_heap_ptr = target_heap_handle.Ptr() + target_heap_block->byte_offset;
+	if (target_heap_block.byte_offset + copy_bytes > target_heap_block.capacity) {
+		idx_t new_capacity = target_heap_block.byte_offset + copy_bytes;
+		buffer_manager.ReAllocate(target_heap_block.block, new_capacity);
+		target_heap_block.capacity = new_capacity;
+		target_heap_ptr = target_heap_handle.Ptr() + target_heap_block.byte_offset;
 	}
-	D_ASSERT(target_heap_block->byte_offset + copy_bytes <= target_heap_block->capacity);
+	D_ASSERT(target_heap_block.byte_offset + copy_bytes <= target_heap_block.capacity);
 	// Copy the heap data in one go
 	memcpy(target_heap_ptr, source_heap_ptr, copy_bytes);
 	target_heap_ptr += copy_bytes;
@@ -13481,12 +16866,13 @@ void MergeSorter::FlushBlobs(const RowLayout &layout, const idx_t &source_count,
 	source_entry_idx += flushed;
 	copied += flushed;
 	// Update result indices and pointers
-	target_heap_block->count += flushed;
-	target_heap_block->byte_offset += copy_bytes;
-	D_ASSERT(target_heap_block->byte_offset <= target_heap_block->capacity);
+	target_heap_block.count += flushed;
+	target_heap_block.byte_offset += copy_bytes;
+	D_ASSERT(target_heap_block.byte_offset <= target_heap_block.capacity);
 }
 
 } // namespace duckdb
+
 
 
 
@@ -13497,11 +16883,10 @@ namespace duckdb {
 static void SortTiedBlobs(BufferManager &buffer_manager, const data_ptr_t dataptr, const idx_t &start, const idx_t &end,
                           const idx_t &tie_col, bool *ties, const data_ptr_t blob_ptr, const SortLayout &sort_layout) {
 	const auto row_width = sort_layout.blob_layout.GetRowWidth();
-	const idx_t &col_idx = sort_layout.sorting_to_blob_col.at(tie_col);
 	// Locate the first blob row in question
 	data_ptr_t row_ptr = dataptr + start * sort_layout.entry_size;
 	data_ptr_t blob_row_ptr = blob_ptr + Load<uint32_t>(row_ptr + sort_layout.comparison_size) * row_width;
-	if (!Comparators::TieIsBreakable(col_idx, blob_row_ptr, sort_layout.blob_layout)) {
+	if (!Comparators::TieIsBreakable(tie_col, blob_row_ptr, sort_layout)) {
 		// Quick check to see if ties can be broken
 		return;
 	}
@@ -13514,6 +16899,7 @@ static void SortTiedBlobs(BufferManager &buffer_manager, const data_ptr_t datapt
 	}
 	// Slow pointer-based sorting
 	const int order = sort_layout.order_types[tie_col] == OrderType::DESCENDING ? -1 : 1;
+	const idx_t &col_idx = sort_layout.sorting_to_blob_col.at(tie_col);
 	const auto &tie_col_offset = sort_layout.blob_layout.GetOffsets()[col_idx];
 	auto logical_type = sort_layout.blob_layout.GetTypes()[col_idx];
 	std::sort(entry_ptrs, entry_ptrs + end - start,
@@ -13526,14 +16912,13 @@ static void SortTiedBlobs(BufferManager &buffer_manager, const data_ptr_t datapt
 		          return order * Comparators::CompareVal(left_ptr, right_ptr, logical_type) < 0;
 	          });
 	// Re-order
-	auto temp_block =
-	    buffer_manager.Allocate(MaxValue((end - start) * sort_layout.entry_size, (idx_t)Storage::BLOCK_SIZE));
-	data_ptr_t temp_ptr = temp_block.Ptr();
+	auto temp_block = buffer_manager.GetBufferAllocator().Allocate((end - start) * sort_layout.entry_size);
+	data_ptr_t temp_ptr = temp_block.get();
 	for (idx_t i = 0; i < end - start; i++) {
 		FastMemcpy(temp_ptr, entry_ptrs[i], sort_layout.entry_size);
 		temp_ptr += sort_layout.entry_size;
 	}
-	memcpy(dataptr + start * sort_layout.entry_size, temp_block.Ptr(), (end - start) * sort_layout.entry_size);
+	memcpy(dataptr + start * sort_layout.entry_size, temp_block.get(), (end - start) * sort_layout.entry_size);
 	// Determine if there are still ties (if this is not the last column)
 	if (tie_col < sort_layout.column_count - 1) {
 		data_ptr_t idx_ptr = dataptr + start * sort_layout.entry_size + sort_layout.comparison_size;
@@ -13553,7 +16938,7 @@ static void SortTiedBlobs(BufferManager &buffer_manager, const data_ptr_t datapt
 static void SortTiedBlobs(BufferManager &buffer_manager, SortedBlock &sb, bool *ties, data_ptr_t dataptr,
                           const idx_t &count, const idx_t &tie_col, const SortLayout &sort_layout) {
 	D_ASSERT(!ties[count - 1]);
-	auto &blob_block = sb.blob_sorting_data->data_blocks.back();
+	auto &blob_block = *sb.blob_sorting_data->data_blocks.back();
 	auto blob_handle = buffer_manager.Pin(blob_block.block);
 	const data_ptr_t blob_ptr = blob_handle.Ptr();
 
@@ -13598,7 +16983,7 @@ static void ComputeTies(data_ptr_t dataptr, const idx_t &count, const idx_t &col
 //! Textbook LSD radix sort
 void RadixSortLSD(BufferManager &buffer_manager, const data_ptr_t &dataptr, const idx_t &count, const idx_t &col_offset,
                   const idx_t &row_width, const idx_t &sorting_size) {
-	auto temp_block = buffer_manager.Allocate(MaxValue(count * row_width, (idx_t)Storage::BLOCK_SIZE));
+	auto temp_block = buffer_manager.GetBufferAllocator().Allocate(count * row_width);
 	bool swap = false;
 
 	idx_t counts[SortConstants::VALUES_PER_RADIX];
@@ -13606,8 +16991,8 @@ void RadixSortLSD(BufferManager &buffer_manager, const data_ptr_t &dataptr, cons
 		// Init counts to 0
 		memset(counts, 0, sizeof(counts));
 		// Const some values for convenience
-		const data_ptr_t source_ptr = swap ? temp_block.Ptr() : dataptr;
-		const data_ptr_t target_ptr = swap ? dataptr : temp_block.Ptr();
+		const data_ptr_t source_ptr = swap ? temp_block.get() : dataptr;
+		const data_ptr_t target_ptr = swap ? dataptr : temp_block.get();
 		const idx_t offset = col_offset + sorting_size - r;
 		// Collect counts
 		data_ptr_t offset_ptr = source_ptr + offset;
@@ -13635,7 +17020,7 @@ void RadixSortLSD(BufferManager &buffer_manager, const data_ptr_t &dataptr, cons
 	}
 	// Move data back to original buffer (if it was swapped)
 	if (swap) {
-		memcpy(dataptr, temp_block.Ptr(), count * row_width);
+		memcpy(dataptr, temp_block.get(), count * row_width);
 	}
 }
 
@@ -13726,8 +17111,13 @@ void RadixSortMSD(const data_ptr_t orig_ptr, const data_ptr_t temp_ptr, const id
 
 //! Calls different sort functions, depending on the count and sorting sizes
 void RadixSort(BufferManager &buffer_manager, const data_ptr_t &dataptr, const idx_t &count, const idx_t &col_offset,
-               const idx_t &sorting_size, const SortLayout &sort_layout) {
-	if (count <= SortConstants::INSERTION_SORT_THRESHOLD) {
+               const idx_t &sorting_size, const SortLayout &sort_layout, bool contains_string) {
+	if (contains_string) {
+		auto begin = duckdb_pdqsort::PDQIterator(dataptr, sort_layout.entry_size);
+		auto end = begin + count;
+		duckdb_pdqsort::PDQConstants constants(sort_layout.entry_size, col_offset, sorting_size, *end);
+		duckdb_pdqsort::pdqsort_branchless(begin, begin + count, constants);
+	} else if (count <= SortConstants::INSERTION_SORT_THRESHOLD) {
 		InsertionSort(dataptr, nullptr, count, 0, sort_layout.entry_size, sort_layout.comparison_size, 0, false);
 	} else if (sorting_size <= SortConstants::MSD_RADIX_SORT_SIZE_THRESHOLD) {
 		RadixSortLSD(buffer_manager, dataptr, count, col_offset, sort_layout.entry_size, sorting_size);
@@ -13742,7 +17132,7 @@ void RadixSort(BufferManager &buffer_manager, const data_ptr_t &dataptr, const i
 //! Identifies sequences of rows that are tied, and calls radix sort on these
 static void SubSortTiedTuples(BufferManager &buffer_manager, const data_ptr_t dataptr, const idx_t &count,
                               const idx_t &col_offset, const idx_t &sorting_size, bool ties[],
-                              const SortLayout &sort_layout) {
+                              const SortLayout &sort_layout, bool contains_string) {
 	D_ASSERT(!ties[count - 1]);
 	for (idx_t i = 0; i < count; i++) {
 		if (!ties[i]) {
@@ -13755,14 +17145,14 @@ static void SubSortTiedTuples(BufferManager &buffer_manager, const data_ptr_t da
 			}
 		}
 		RadixSort(buffer_manager, dataptr + i * sort_layout.entry_size, j - i + 1, col_offset, sorting_size,
-		          sort_layout);
+		          sort_layout, contains_string);
 		i = j;
 	}
 }
 
 void LocalSortState::SortInMemory() {
 	auto &sb = *sorted_blocks.back();
-	auto &block = sb.radix_sorting_data.back();
+	auto &block = *sb.radix_sorting_data.back();
 	const auto &count = block.count;
 	auto handle = buffer_manager->Pin(block.block);
 	const auto dataptr = handle.Ptr();
@@ -13777,8 +17167,10 @@ void LocalSortState::SortInMemory() {
 	idx_t col_offset = 0;
 	unique_ptr<bool[]> ties_ptr;
 	bool *ties = nullptr;
+	bool contains_string = false;
 	for (idx_t i = 0; i < sort_layout->column_count; i++) {
 		sorting_size += sort_layout->column_sizes[i];
+		contains_string = contains_string || sort_layout->logical_types[i].InternalType() == PhysicalType::VARCHAR;
 		if (sort_layout->constant_size[i] && i < sort_layout->column_count - 1) {
 			// Add columns to the sorting size until we reach a variable size column, or the last column
 			continue;
@@ -13786,15 +17178,18 @@ void LocalSortState::SortInMemory() {
 
 		if (!ties) {
 			// This is the first sort
-			RadixSort(*buffer_manager, dataptr, count, col_offset, sorting_size, *sort_layout);
+			RadixSort(*buffer_manager, dataptr, count, col_offset, sorting_size, *sort_layout, contains_string);
 			ties_ptr = unique_ptr<bool[]>(new bool[count]);
 			ties = ties_ptr.get();
 			std::fill_n(ties, count - 1, true);
 			ties[count - 1] = false;
 		} else {
 			// For subsequent sorts, we only have to subsort the tied tuples
-			SubSortTiedTuples(*buffer_manager, dataptr, count, col_offset, sorting_size, ties, *sort_layout);
+			SubSortTiedTuples(*buffer_manager, dataptr, count, col_offset, sorting_size, ties, *sort_layout,
+			                  contains_string);
 		}
+
+		contains_string = false;
 
 		if (sort_layout->constant_size[i] && i == sort_layout->column_count - 1) {
 			// All columns are sorted, no ties to break because last column is constant size
@@ -13946,11 +17341,36 @@ SortLayout::SortLayout(const vector<BoundOrderByNode> &orders)
 	blob_layout.Initialize(blob_layout_types);
 }
 
-LocalSortState::LocalSortState() : initialized(false) {
+SortLayout SortLayout::GetPrefixComparisonLayout(idx_t num_prefix_cols) const {
+	SortLayout result;
+	result.column_count = num_prefix_cols;
+	result.all_constant = true;
+	result.comparison_size = 0;
+	for (idx_t col_idx = 0; col_idx < num_prefix_cols; col_idx++) {
+		result.order_types.push_back(order_types[col_idx]);
+		result.order_by_null_types.push_back(order_by_null_types[col_idx]);
+		result.logical_types.push_back(logical_types[col_idx]);
+
+		result.all_constant = result.all_constant && constant_size[col_idx];
+		result.constant_size.push_back(constant_size[col_idx]);
+
+		result.comparison_size += column_sizes[col_idx];
+		result.column_sizes.push_back(column_sizes[col_idx]);
+
+		result.prefix_lengths.push_back(prefix_lengths[col_idx]);
+		result.stats.push_back(stats[col_idx]);
+		result.has_null.push_back(has_null[col_idx]);
+	}
+	result.entry_size = entry_size;
+	result.blob_layout = blob_layout;
+	result.sorting_to_blob_col = sorting_to_blob_col;
+	return result;
 }
 
-static idx_t EntriesPerBlock(idx_t width) {
-	return (Storage::BLOCK_SIZE + width * STANDARD_VECTOR_SIZE - 1) / width;
+LocalSortState::LocalSortState() : initialized(false) {
+	if (!Radix::IsLittleEndian()) {
+		throw NotImplementedException("Sorting is not supported on big endian architectures");
+	}
 }
 
 void LocalSortState::Initialize(GlobalSortState &global_sort_state, BufferManager &buffer_manager_p) {
@@ -13958,19 +17378,19 @@ void LocalSortState::Initialize(GlobalSortState &global_sort_state, BufferManage
 	payload_layout = &global_sort_state.payload_layout;
 	buffer_manager = &buffer_manager_p;
 	// Radix sorting data
-	radix_sorting_data = make_unique<RowDataCollection>(*buffer_manager, EntriesPerBlock(sort_layout->entry_size),
-	                                                    sort_layout->entry_size);
+	radix_sorting_data = make_unique<RowDataCollection>(
+	    *buffer_manager, RowDataCollection::EntriesPerBlock(sort_layout->entry_size), sort_layout->entry_size);
 	// Blob sorting data
 	if (!sort_layout->all_constant) {
 		auto blob_row_width = sort_layout->blob_layout.GetRowWidth();
-		blob_sorting_data =
-		    make_unique<RowDataCollection>(*buffer_manager, EntriesPerBlock(blob_row_width), blob_row_width);
+		blob_sorting_data = make_unique<RowDataCollection>(
+		    *buffer_manager, RowDataCollection::EntriesPerBlock(blob_row_width), blob_row_width);
 		blob_sorting_heap = make_unique<RowDataCollection>(*buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1, true);
 	}
 	// Payload data
 	auto payload_row_width = payload_layout->GetRowWidth();
-	payload_data =
-	    make_unique<RowDataCollection>(*buffer_manager, EntriesPerBlock(payload_row_width), payload_row_width);
+	payload_data = make_unique<RowDataCollection>(
+	    *buffer_manager, RowDataCollection::EntriesPerBlock(payload_row_width), payload_row_width);
 	payload_heap = make_unique<RowDataCollection>(*buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1, true);
 	// Init done
 	initialized = true;
@@ -14000,16 +17420,18 @@ void LocalSortState::SinkChunk(DataChunk &sort, DataChunk &payload) {
 			}
 		}
 		handles = blob_sorting_data->Build(blob_chunk.size(), data_pointers, nullptr);
-		auto blob_data = blob_chunk.Orrify();
+		auto blob_data = blob_chunk.ToUnifiedFormat();
 		RowOperations::Scatter(blob_chunk, blob_data.get(), sort_layout->blob_layout, addresses, *blob_sorting_heap,
 		                       sel_ptr, blob_chunk.size());
+		D_ASSERT(blob_sorting_heap->keep_pinned);
 	}
 
 	// Finally, serialize payload data
 	handles = payload_data->Build(payload.size(), data_pointers, nullptr);
-	auto input_data = payload.Orrify();
+	auto input_data = payload.ToUnifiedFormat();
 	RowOperations::Scatter(payload, input_data.get(), *payload_layout, addresses, *payload_heap, sel_ptr,
 	                       payload.size());
+	D_ASSERT(payload_heap->keep_pinned);
 }
 
 idx_t LocalSortState::SizeInBytes() const {
@@ -14049,19 +17471,27 @@ void LocalSortState::Sort(GlobalSortState &global_sort_state, bool reorder_heap)
 	ReOrder(global_sort_state, reorder_heap);
 }
 
-RowDataBlock LocalSortState::ConcatenateBlocks(RowDataCollection &row_data) {
+unique_ptr<RowDataBlock> LocalSortState::ConcatenateBlocks(RowDataCollection &row_data) {
+	//	Don't copy and delete if there is only one block.
+	if (row_data.blocks.size() == 1) {
+		auto new_block = move(row_data.blocks[0]);
+		row_data.blocks.clear();
+		row_data.count = 0;
+		return new_block;
+	}
 	// Create block with the correct capacity
+	auto buffer_manager = &row_data.buffer_manager;
 	const idx_t &entry_size = row_data.entry_size;
 	idx_t capacity = MaxValue(((idx_t)Storage::BLOCK_SIZE + entry_size - 1) / entry_size, row_data.count);
-	RowDataBlock new_block(*buffer_manager, capacity, entry_size);
-	new_block.count = row_data.count;
-	auto new_block_handle = buffer_manager->Pin(new_block.block);
+	auto new_block = make_unique<RowDataBlock>(*buffer_manager, capacity, entry_size);
+	new_block->count = row_data.count;
+	auto new_block_handle = buffer_manager->Pin(new_block->block);
 	data_ptr_t new_block_ptr = new_block_handle.Ptr();
 	// Copy the data of the blocks into a single block
 	for (auto &block : row_data.blocks) {
-		auto block_handle = buffer_manager->Pin(block.block);
-		memcpy(new_block_ptr, block_handle.Ptr(), block.count * entry_size);
-		new_block_ptr += block.count * entry_size;
+		auto block_handle = buffer_manager->Pin(block->block);
+		memcpy(new_block_ptr, block_handle.Ptr(), block->count * entry_size);
+		new_block_ptr += block->count * entry_size;
 	}
 	row_data.blocks.clear();
 	row_data.count = 0;
@@ -14072,13 +17502,14 @@ void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataColl
                              bool reorder_heap) {
 	sd.swizzled = reorder_heap;
 	auto &unordered_data_block = sd.data_blocks.back();
-	const idx_t &count = unordered_data_block.count;
-	auto unordered_data_handle = buffer_manager->Pin(unordered_data_block.block);
+	const idx_t count = unordered_data_block->count;
+	auto unordered_data_handle = buffer_manager->Pin(unordered_data_block->block);
 	const data_ptr_t unordered_data_ptr = unordered_data_handle.Ptr();
 	// Create new block that will hold re-ordered row data
-	RowDataBlock ordered_data_block(*buffer_manager, unordered_data_block.capacity, unordered_data_block.entry_size);
-	ordered_data_block.count = count;
-	auto ordered_data_handle = buffer_manager->Pin(ordered_data_block.block);
+	auto ordered_data_block =
+	    make_unique<RowDataBlock>(*buffer_manager, unordered_data_block->capacity, unordered_data_block->entry_size);
+	ordered_data_block->count = count;
+	auto ordered_data_handle = buffer_manager->Pin(ordered_data_block->block);
 	data_ptr_t ordered_data_ptr = ordered_data_handle.Ptr();
 	// Re-order fixed-size row layout
 	const idx_t row_width = sd.layout.GetRowWidth();
@@ -14089,6 +17520,7 @@ void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataColl
 		ordered_data_ptr += row_width;
 		sorting_ptr += sorting_entry_size;
 	}
+	ordered_data_block->block->SetSwizzling(sd.layout.AllConstant() ? nullptr : "LocalSortState::ReOrder.ordered_data");
 	// Replace the unordered data block with the re-ordered data block
 	sd.data_blocks.clear();
 	sd.data_blocks.push_back(move(ordered_data_block));
@@ -14096,18 +17528,20 @@ void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataColl
 	if (!sd.layout.AllConstant() && reorder_heap) {
 		// Swizzle the column pointers to offsets
 		RowOperations::SwizzleColumns(sd.layout, ordered_data_handle.Ptr(), count);
+		sd.data_blocks.back()->block->SetSwizzling(nullptr);
 		// Create a single heap block to store the ordered heap
-		idx_t total_byte_offset = std::accumulate(heap.blocks.begin(), heap.blocks.end(), 0,
-		                                          [](idx_t a, const RowDataBlock &b) { return a + b.byte_offset; });
+		idx_t total_byte_offset =
+		    std::accumulate(heap.blocks.begin(), heap.blocks.end(), 0,
+		                    [](idx_t a, const unique_ptr<RowDataBlock> &b) { return a + b->byte_offset; });
 		idx_t heap_block_size = MaxValue(total_byte_offset, (idx_t)Storage::BLOCK_SIZE);
-		RowDataBlock ordered_heap_block(*buffer_manager, heap_block_size, 1);
-		ordered_heap_block.count = count;
-		ordered_heap_block.byte_offset = total_byte_offset;
-		auto ordered_heap_handle = buffer_manager->Pin(ordered_heap_block.block);
+		auto ordered_heap_block = make_unique<RowDataBlock>(*buffer_manager, heap_block_size, 1);
+		ordered_heap_block->count = count;
+		ordered_heap_block->byte_offset = total_byte_offset;
+		auto ordered_heap_handle = buffer_manager->Pin(ordered_heap_block->block);
 		data_ptr_t ordered_heap_ptr = ordered_heap_handle.Ptr();
 		// Fill the heap in order
 		ordered_data_ptr = ordered_data_handle.Ptr();
-		const idx_t heap_pointer_offset = sd.layout.GetHeapPointerOffset();
+		const idx_t heap_pointer_offset = sd.layout.GetHeapOffset();
 		for (idx_t i = 0; i < count; i++) {
 			auto heap_row_ptr = Load<data_ptr_t>(ordered_data_ptr + heap_pointer_offset);
 			auto heap_row_size = Load<uint32_t>(heap_row_ptr);
@@ -14127,7 +17561,7 @@ void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataColl
 
 void LocalSortState::ReOrder(GlobalSortState &gstate, bool reorder_heap) {
 	auto &sb = *sorted_blocks.back();
-	auto sorting_handle = buffer_manager->Pin(sb.radix_sorting_data.back().block);
+	auto sorting_handle = buffer_manager->Pin(sb.radix_sorting_data.back()->block);
 	const data_ptr_t sorting_ptr = sorting_handle.Ptr() + gstate.sort_layout.comparison_size;
 	// Re-order variable size sorting columns
 	if (!gstate.sort_layout.all_constant) {
@@ -14265,6 +17699,7 @@ void GlobalSortState::Print() {
 
 
 
+
 #include <numeric>
 
 namespace duckdb {
@@ -14276,10 +17711,10 @@ SortedData::SortedData(SortedDataType type, const RowLayout &layout, BufferManag
 
 idx_t SortedData::Count() {
 	idx_t count = std::accumulate(data_blocks.begin(), data_blocks.end(), (idx_t)0,
-	                              [](idx_t a, const RowDataBlock &b) { return a + b.count; });
+	                              [](idx_t a, const unique_ptr<RowDataBlock> &b) { return a + b->count; });
 	if (!layout.AllConstant() && state.external) {
 		D_ASSERT(count == std::accumulate(heap_blocks.begin(), heap_blocks.end(), (idx_t)0,
-		                                  [](idx_t a, const RowDataBlock &b) { return a + b.count; }));
+		                                  [](idx_t a, const unique_ptr<RowDataBlock> &b) { return a + b->count; }));
 	}
 	return count;
 }
@@ -14287,9 +17722,9 @@ idx_t SortedData::Count() {
 void SortedData::CreateBlock() {
 	auto capacity =
 	    MaxValue(((idx_t)Storage::BLOCK_SIZE + layout.GetRowWidth() - 1) / layout.GetRowWidth(), state.block_capacity);
-	data_blocks.emplace_back(buffer_manager, capacity, layout.GetRowWidth());
+	data_blocks.push_back(make_unique<RowDataBlock>(buffer_manager, capacity, layout.GetRowWidth()));
 	if (!layout.AllConstant() && state.external) {
-		heap_blocks.emplace_back(buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1);
+		heap_blocks.push_back(make_unique<RowDataBlock>(buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1));
 		D_ASSERT(data_blocks.size() == heap_blocks.size());
 	}
 }
@@ -14298,23 +17733,23 @@ unique_ptr<SortedData> SortedData::CreateSlice(idx_t start_block_index, idx_t en
 	// Add the corresponding blocks to the result
 	auto result = make_unique<SortedData>(type, layout, buffer_manager, state);
 	for (idx_t i = start_block_index; i <= end_block_index; i++) {
-		result->data_blocks.push_back(data_blocks[i]);
+		result->data_blocks.push_back(data_blocks[i]->Copy());
 		if (!layout.AllConstant() && state.external) {
-			result->heap_blocks.push_back(heap_blocks[i]);
+			result->heap_blocks.push_back(heap_blocks[i]->Copy());
 		}
 	}
 	// All of the blocks that come before block with idx = start_block_idx can be reset (other references exist)
 	for (idx_t i = 0; i < start_block_index; i++) {
-		data_blocks[i].block = nullptr;
+		data_blocks[i]->block = nullptr;
 		if (!layout.AllConstant() && state.external) {
-			heap_blocks[i].block = nullptr;
+			heap_blocks[i]->block = nullptr;
 		}
 	}
 	// Use start and end entry indices to set the boundaries
-	D_ASSERT(end_entry_index <= result->data_blocks.back().count);
-	result->data_blocks.back().count = end_entry_index;
+	D_ASSERT(end_entry_index <= result->data_blocks.back()->count);
+	result->data_blocks.back()->count = end_entry_index;
 	if (!layout.AllConstant() && state.external) {
-		result->heap_blocks.back().count = end_entry_index;
+		result->heap_blocks.back()->count = end_entry_index;
 	}
 	return result;
 }
@@ -14326,9 +17761,11 @@ void SortedData::Unswizzle() {
 	for (idx_t i = 0; i < data_blocks.size(); i++) {
 		auto &data_block = data_blocks[i];
 		auto &heap_block = heap_blocks[i];
-		auto data_handle_p = buffer_manager.Pin(data_block.block);
-		auto heap_handle_p = buffer_manager.Pin(heap_block.block);
-		RowOperations::UnswizzlePointers(layout, data_handle_p.Ptr(), heap_handle_p.Ptr(), data_block.count);
+		D_ASSERT(data_block->block->IsSwizzled());
+		auto data_handle_p = buffer_manager.Pin(data_block->block);
+		auto heap_handle_p = buffer_manager.Pin(heap_block->block);
+		RowOperations::UnswizzlePointers(layout, data_handle_p.Ptr(), heap_handle_p.Ptr(), data_block->count);
+		data_block->block->SetSwizzling("SortedData::Unswizzle");
 		state.heap_blocks.push_back(move(heap_block));
 		state.pinned_blocks.push_back(move(heap_handle_p));
 	}
@@ -14344,7 +17781,7 @@ SortedBlock::SortedBlock(BufferManager &buffer_manager, GlobalSortState &state)
 
 idx_t SortedBlock::Count() const {
 	idx_t count = std::accumulate(radix_sorting_data.begin(), radix_sorting_data.end(), 0,
-	                              [](idx_t a, const RowDataBlock &b) { return a + b.count; });
+	                              [](idx_t a, const unique_ptr<RowDataBlock> &b) { return a + b->count; });
 	if (!sort_layout.all_constant) {
 		D_ASSERT(count == blob_sorting_data->Count());
 	}
@@ -14363,7 +17800,7 @@ void SortedBlock::InitializeWrite() {
 void SortedBlock::CreateBlock() {
 	auto capacity = MaxValue(((idx_t)Storage::BLOCK_SIZE + sort_layout.entry_size - 1) / sort_layout.entry_size,
 	                         state.block_capacity);
-	radix_sorting_data.emplace_back(buffer_manager, capacity, sort_layout.entry_size);
+	radix_sorting_data.push_back(make_unique<RowDataBlock>(buffer_manager, capacity, sort_layout.entry_size));
 }
 
 void SortedBlock::AppendSortedBlocks(vector<unique_ptr<SortedBlock>> &sorted_blocks) {
@@ -14394,20 +17831,20 @@ void SortedBlock::AppendSortedBlocks(vector<unique_ptr<SortedBlock>> &sorted_blo
 void SortedBlock::GlobalToLocalIndex(const idx_t &global_idx, idx_t &local_block_index, idx_t &local_entry_index) {
 	if (global_idx == Count()) {
 		local_block_index = radix_sorting_data.size() - 1;
-		local_entry_index = radix_sorting_data.back().count;
+		local_entry_index = radix_sorting_data.back()->count;
 		return;
 	}
 	D_ASSERT(global_idx < Count());
 	local_entry_index = global_idx;
 	for (local_block_index = 0; local_block_index < radix_sorting_data.size(); local_block_index++) {
-		const idx_t &block_count = radix_sorting_data[local_block_index].count;
+		const idx_t &block_count = radix_sorting_data[local_block_index]->count;
 		if (local_entry_index >= block_count) {
 			local_entry_index -= block_count;
 		} else {
 			break;
 		}
 	}
-	D_ASSERT(local_entry_index < radix_sorting_data[local_block_index].count);
+	D_ASSERT(local_entry_index < radix_sorting_data[local_block_index]->count);
 }
 
 unique_ptr<SortedBlock> SortedBlock::CreateSlice(const idx_t start, const idx_t end, idx_t &entry_idx) {
@@ -14421,16 +17858,16 @@ unique_ptr<SortedBlock> SortedBlock::CreateSlice(const idx_t start, const idx_t 
 	// Add the corresponding blocks to the result
 	auto result = make_unique<SortedBlock>(buffer_manager, state);
 	for (idx_t i = start_block_index; i <= end_block_index; i++) {
-		result->radix_sorting_data.push_back(radix_sorting_data[i]);
+		result->radix_sorting_data.push_back(radix_sorting_data[i]->Copy());
 	}
 	// Reset all blocks that come before block with idx = start_block_idx (slice holds new reference)
 	for (idx_t i = 0; i < start_block_index; i++) {
-		radix_sorting_data[i].block = nullptr;
+		radix_sorting_data[i]->block = nullptr;
 	}
 	// Use start and end entry indices to set the boundaries
 	entry_idx = start_entry_index;
-	D_ASSERT(end_entry_index <= result->radix_sorting_data.back().count);
-	result->radix_sorting_data.back().count = end_entry_index;
+	D_ASSERT(end_entry_index <= result->radix_sorting_data.back()->count);
+	result->radix_sorting_data.back()->count = end_entry_index;
 	// Same for the var size sorting data
 	if (!sort_layout.all_constant) {
 		result->blob_sorting_data = blob_sorting_data->CreateSlice(start_block_index, end_block_index, end_entry_index);
@@ -14444,12 +17881,12 @@ idx_t SortedBlock::HeapSize() const {
 	idx_t result = 0;
 	if (!sort_layout.all_constant) {
 		for (auto &block : blob_sorting_data->heap_blocks) {
-			result += block.capacity;
+			result += block->capacity;
 		}
 	}
 	if (!payload_layout.AllConstant()) {
 		for (auto &block : payload_data->heap_blocks) {
-			result += block.capacity;
+			result += block->capacity;
 		}
 	}
 	return result;
@@ -14458,14 +17895,14 @@ idx_t SortedBlock::HeapSize() const {
 idx_t SortedBlock::SizeInBytes() const {
 	idx_t bytes = 0;
 	for (idx_t i = 0; i < radix_sorting_data.size(); i++) {
-		bytes += radix_sorting_data[i].capacity * sort_layout.entry_size;
+		bytes += radix_sorting_data[i]->capacity * sort_layout.entry_size;
 		if (!sort_layout.all_constant) {
-			bytes += blob_sorting_data->data_blocks[i].capacity * sort_layout.blob_layout.GetRowWidth();
-			bytes += blob_sorting_data->heap_blocks[i].capacity;
+			bytes += blob_sorting_data->data_blocks[i]->capacity * sort_layout.blob_layout.GetRowWidth();
+			bytes += blob_sorting_data->heap_blocks[i]->capacity;
 		}
-		bytes += payload_data->data_blocks[i].capacity * payload_layout.GetRowWidth();
+		bytes += payload_data->data_blocks[i]->capacity * payload_layout.GetRowWidth();
 		if (!payload_layout.AllConstant()) {
-			bytes += payload_data->heap_blocks[i].capacity;
+			bytes += payload_data->heap_blocks[i]->capacity;
 		}
 	}
 	return bytes;
@@ -14479,8 +17916,8 @@ void SBScanState::PinRadix(idx_t block_idx_to) {
 	auto &radix_sorting_data = sb->radix_sorting_data;
 	D_ASSERT(block_idx_to < radix_sorting_data.size());
 	auto &block = radix_sorting_data[block_idx_to];
-	if (!radix_handle.IsValid() || radix_handle.GetBlockId() != block.block->BlockId()) {
-		radix_handle = buffer_manager.Pin(block.block);
+	if (!radix_handle.IsValid() || radix_handle.GetBlockHandle() != block->block) {
+		radix_handle = buffer_manager.Pin(block->block);
 	}
 }
 
@@ -14490,15 +17927,15 @@ void SBScanState::PinData(SortedData &sd) {
 	auto &heap_handle = sd.type == SortedDataType::BLOB ? blob_sorting_heap_handle : payload_heap_handle;
 
 	auto &data_block = sd.data_blocks[block_idx];
-	if (!data_handle.IsValid() || data_handle.GetBlockId() != data_block.block->BlockId()) {
-		data_handle = buffer_manager.Pin(data_block.block);
+	if (!data_handle.IsValid() || data_handle.GetBlockHandle() != data_block->block) {
+		data_handle = buffer_manager.Pin(data_block->block);
 	}
 	if (sd.layout.AllConstant() || !state.external) {
 		return;
 	}
 	auto &heap_block = sd.heap_blocks[block_idx];
-	if (!heap_handle.IsValid() || heap_handle.GetBlockId() != heap_block.block->BlockId()) {
-		heap_handle = buffer_manager.Pin(heap_block.block);
+	if (!heap_handle.IsValid() || heap_handle.GetBlockHandle() != heap_block->block) {
+		heap_handle = buffer_manager.Pin(heap_block->block);
 	}
 }
 
@@ -14508,20 +17945,20 @@ data_ptr_t SBScanState::RadixPtr() const {
 
 data_ptr_t SBScanState::DataPtr(SortedData &sd) const {
 	auto &data_handle = sd.type == SortedDataType::BLOB ? blob_sorting_data_handle : payload_data_handle;
-	D_ASSERT(sd.data_blocks[block_idx].block->Readers() != 0 &&
-	         data_handle.GetBlockId() == sd.data_blocks[block_idx].block->BlockId());
+	D_ASSERT(sd.data_blocks[block_idx]->block->Readers() != 0 &&
+	         data_handle.GetBlockHandle() == sd.data_blocks[block_idx]->block);
 	return data_handle.Ptr() + entry_idx * sd.layout.GetRowWidth();
 }
 
 data_ptr_t SBScanState::HeapPtr(SortedData &sd) const {
-	return BaseHeapPtr(sd) + Load<idx_t>(DataPtr(sd) + sd.layout.GetHeapPointerOffset());
+	return BaseHeapPtr(sd) + Load<idx_t>(DataPtr(sd) + sd.layout.GetHeapOffset());
 }
 
 data_ptr_t SBScanState::BaseHeapPtr(SortedData &sd) const {
 	auto &heap_handle = sd.type == SortedDataType::BLOB ? blob_sorting_heap_handle : payload_heap_handle;
 	D_ASSERT(!sd.layout.AllConstant() && state.external);
-	D_ASSERT(sd.heap_blocks[block_idx].block->Readers() != 0 &&
-	         heap_handle.GetBlockId() == sd.heap_blocks[block_idx].block->BlockId());
+	D_ASSERT(sd.heap_blocks[block_idx]->block->Readers() != 0 &&
+	         heap_handle.GetBlockHandle() == sd.heap_blocks[block_idx]->block);
 	return heap_handle.Ptr();
 }
 
@@ -14529,9 +17966,9 @@ idx_t SBScanState::Remaining() const {
 	const auto &blocks = sb->radix_sorting_data;
 	idx_t remaining = 0;
 	if (block_idx < blocks.size()) {
-		remaining += blocks[block_idx].count - entry_idx;
+		remaining += blocks[block_idx]->count - entry_idx;
 		for (idx_t i = block_idx + 1; i < blocks.size(); i++) {
-			remaining += blocks[i].count;
+			remaining += blocks[i]->count;
 		}
 	}
 	return remaining;
@@ -14542,76 +17979,92 @@ void SBScanState::SetIndices(idx_t block_idx_to, idx_t entry_idx_to) {
 	entry_idx = entry_idx_to;
 }
 
-PayloadScanner::PayloadScanner(SortedData &sorted_data, GlobalSortState &global_sort_state, bool flush_p)
-    : sorted_data(sorted_data), read_state(global_sort_state.buffer_manager, global_sort_state),
-      total_count(sorted_data.Count()), global_sort_state(global_sort_state), total_scanned(0), flush(flush_p) {
+PayloadScanner::PayloadScanner(SortedData &sorted_data, GlobalSortState &global_sort_state, bool flush_p) {
+	auto count = sorted_data.Count();
+	auto &layout = sorted_data.layout;
+
+	// Create collections to put the data into so we can use RowDataCollectionScanner
+	rows = make_unique<RowDataCollection>(global_sort_state.buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1);
+	rows->count = count;
+
+	heap = make_unique<RowDataCollection>(global_sort_state.buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1);
+	if (!sorted_data.layout.AllConstant()) {
+		heap->count = count;
+	}
+
+	if (flush_p) {
+		// If we are flushing, we can just move the data
+		rows->blocks = move(sorted_data.data_blocks);
+		if (!layout.AllConstant()) {
+			heap->blocks = move(sorted_data.heap_blocks);
+		}
+	} else {
+		// Not flushing, create references to the blocks
+		for (auto &block : sorted_data.data_blocks) {
+			rows->blocks.emplace_back(block->Copy());
+		}
+		if (!layout.AllConstant()) {
+			for (auto &block : sorted_data.heap_blocks) {
+				heap->blocks.emplace_back(block->Copy());
+			}
+		}
+	}
+
+	scanner = make_unique<RowDataCollectionScanner>(*rows, *heap, layout, global_sort_state.external, flush_p);
 }
 
 PayloadScanner::PayloadScanner(GlobalSortState &global_sort_state, bool flush_p)
     : PayloadScanner(*global_sort_state.sorted_blocks[0]->payload_data, global_sort_state, flush_p) {
 }
 
-PayloadScanner::PayloadScanner(GlobalSortState &global_sort_state, idx_t block_idx)
-    : sorted_data(*global_sort_state.sorted_blocks[0]->payload_data),
-      read_state(global_sort_state.buffer_manager, global_sort_state),
-      total_count(sorted_data.data_blocks[block_idx].count), global_sort_state(global_sort_state), total_scanned(0),
-      flush(false) {
-	read_state.SetIndices(block_idx, 0);
+PayloadScanner::PayloadScanner(GlobalSortState &global_sort_state, idx_t block_idx) {
+	auto &sorted_data = *global_sort_state.sorted_blocks[0]->payload_data;
+	auto count = sorted_data.data_blocks[block_idx]->count;
+	auto &layout = sorted_data.layout;
+
+	// Create collections to put the data into so we can use RowDataCollectionScanner
+	rows = make_unique<RowDataCollection>(global_sort_state.buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1);
+	rows->blocks.emplace_back(sorted_data.data_blocks[block_idx]->Copy());
+	rows->count = count;
+
+	heap = make_unique<RowDataCollection>(global_sort_state.buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1);
+	if (!sorted_data.layout.AllConstant() && sorted_data.swizzled) {
+		heap->blocks.emplace_back(sorted_data.heap_blocks[block_idx]->Copy());
+		heap->count = count;
+	}
+
+	scanner = make_unique<RowDataCollectionScanner>(*rows, *heap, layout, global_sort_state.external, false);
 }
 
 void PayloadScanner::Scan(DataChunk &chunk) {
-	auto count = MinValue((idx_t)STANDARD_VECTOR_SIZE, total_count - total_scanned);
-	if (count == 0) {
-		chunk.SetCardinality(count);
-		return;
+	scanner->Scan(chunk);
+}
+
+int SBIterator::ComparisonValue(ExpressionType comparison) {
+	switch (comparison) {
+	case ExpressionType::COMPARE_LESSTHAN:
+	case ExpressionType::COMPARE_GREATERTHAN:
+		return -1;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return 0;
+	default:
+		throw InternalException("Unimplemented comparison type for IEJoin!");
 	}
-	// Eagerly delete references to blocks that we've passed
-	if (flush) {
-		for (idx_t i = 0; i < read_state.block_idx; i++) {
-			sorted_data.data_blocks[i].block = nullptr;
-		}
-	}
-	const idx_t &row_width = sorted_data.layout.GetRowWidth();
-	// Set up a batch of pointers to scan data from
-	idx_t scanned = 0;
-	auto data_pointers = FlatVector::GetData<data_ptr_t>(addresses);
-	while (scanned < count) {
-		read_state.PinData(sorted_data);
-		auto &data_block = sorted_data.data_blocks[read_state.block_idx];
-		idx_t next = MinValue(data_block.count - read_state.entry_idx, count - scanned);
-		const data_ptr_t data_ptr = read_state.payload_data_handle.Ptr() + read_state.entry_idx * row_width;
-		// Set up the next pointers
-		data_ptr_t row_ptr = data_ptr;
-		for (idx_t i = 0; i < next; i++) {
-			data_pointers[scanned + i] = row_ptr;
-			row_ptr += row_width;
-		}
-		// Unswizzle the offsets back to pointers (if needed)
-		if (!sorted_data.layout.AllConstant() && global_sort_state.external) {
-			RowOperations::UnswizzlePointers(sorted_data.layout, data_ptr, read_state.payload_heap_handle.Ptr(), next);
-		}
-		// Update state indices
-		read_state.entry_idx += next;
-		if (read_state.entry_idx == data_block.count) {
-			read_state.block_idx++;
-			read_state.entry_idx = 0;
-		}
-		scanned += next;
-	}
-	D_ASSERT(scanned == count);
-	// Deserialize the payload data
-	for (idx_t col_idx = 0; col_idx < sorted_data.layout.ColumnCount(); col_idx++) {
-		const auto col_offset = sorted_data.layout.GetOffsets()[col_idx];
-		RowOperations::Gather(addresses, *FlatVector::IncrementalSelectionVector(), chunk.data[col_idx],
-		                      *FlatVector::IncrementalSelectionVector(), count, col_offset, col_idx);
-	}
-	chunk.SetCardinality(count);
-	chunk.Verify();
-	total_scanned += scanned;
+}
+
+SBIterator::SBIterator(GlobalSortState &gss, ExpressionType comparison, idx_t entry_idx_p)
+    : sort_layout(gss.sort_layout), block_count(gss.sorted_blocks[0]->radix_sorting_data.size()),
+      block_capacity(gss.block_capacity), cmp_size(sort_layout.comparison_size), entry_size(sort_layout.entry_size),
+      all_constant(sort_layout.all_constant), external(gss.external), cmp(ComparisonValue(comparison)),
+      scan(gss.buffer_manager, gss), block_ptr(nullptr), entry_ptr(nullptr) {
+
+	scan.sb = gss.sorted_blocks[0].get();
+	scan.block_idx = block_count;
+	SetIndex(entry_idx_p);
 }
 
 } // namespace duckdb
-
 
 
 
@@ -14802,6 +18255,9 @@ vector<string> StringUtil::Split(const string &input, const string &split) {
 }
 
 string StringUtil::Replace(string source, const string &from, const string &to) {
+	if (from.empty()) {
+		throw InternalException("Invalid argument to StringUtil::Replace - empty FROM");
+	}
 	idx_t start_pos = 0;
 	while ((start_pos = source.find(from, start_pos)) != string::npos) {
 		source.replace(start_pos, from.length(), to);
@@ -14815,8 +18271,9 @@ vector<string> StringUtil::TopNStrings(vector<pair<string, idx_t>> scores, idx_t
 	if (scores.empty()) {
 		return vector<string>();
 	}
-	sort(scores.begin(), scores.end(),
-	     [](const pair<string, idx_t> &a, const pair<string, idx_t> &b) -> bool { return a.second < b.second; });
+	sort(scores.begin(), scores.end(), [](const pair<string, idx_t> &a, const pair<string, idx_t> &b) -> bool {
+		return a.second < b.second || (a.second == b.second && a.first.size() < b.first.size());
+	});
 	vector<string> result;
 	result.push_back(scores[0].first);
 	for (idx_t i = 1; i < MinValue<idx_t>(scores.size(), n); i++) {
@@ -14888,7 +18345,11 @@ vector<string> StringUtil::TopNLevenshtein(const vector<string> &strings, const 
 	vector<pair<string, idx_t>> scores;
 	scores.reserve(strings.size());
 	for (auto &str : strings) {
-		scores.emplace_back(str, LevenshteinDistance(str, target));
+		if (target.size() < str.size()) {
+			scores.emplace_back(str, LevenshteinDistance(str.substr(0, target.size()), target));
+		} else {
+			scores.emplace_back(str, LevenshteinDistance(str, target));
+		}
 	}
 	return TopNStrings(scores, n, threshold);
 }
@@ -15462,30 +18923,41 @@ unique_ptr<RenderTree> TreeRenderer::CreateTree(const Pipeline &op) {
 
 
 
+
 namespace duckdb {
 
-BatchedChunkCollection::BatchedChunkCollection(Allocator &allocator) : allocator(allocator) {
+BatchedDataCollection::BatchedDataCollection(vector<LogicalType> types_p) : types(move(types_p)) {
 }
 
-void BatchedChunkCollection::Append(DataChunk &input, idx_t batch_index) {
+void BatchedDataCollection::Append(DataChunk &input, idx_t batch_index) {
 	D_ASSERT(batch_index != DConstants::INVALID_INDEX);
-	auto entry = data.find(batch_index);
-	ChunkCollection *collection;
-	if (entry == data.end()) {
-		auto new_collection = make_unique<ChunkCollection>(allocator);
+	ColumnDataCollection *collection;
+	if (last_collection.collection && last_collection.batch_index == batch_index) {
+		// we are inserting into the same collection as before: use it directly
+		collection = last_collection.collection;
+	} else {
+		// new collection: check if there is already an entry
+		D_ASSERT(data.find(batch_index) == data.end());
+		unique_ptr<ColumnDataCollection> new_collection;
+		if (last_collection.collection) {
+			new_collection = make_unique<ColumnDataCollection>(*last_collection.collection);
+		} else {
+			new_collection = make_unique<ColumnDataCollection>(Allocator::DefaultAllocator(), types);
+		}
+		last_collection.collection = new_collection.get();
+		last_collection.batch_index = batch_index;
+		new_collection->InitializeAppend(last_collection.append_state);
 		collection = new_collection.get();
 		data.insert(make_pair(batch_index, move(new_collection)));
-	} else {
-		collection = entry->second.get();
 	}
-	collection->Append(input);
+	collection->Append(last_collection.append_state, input);
 }
 
-void BatchedChunkCollection::Merge(BatchedChunkCollection &other) {
+void BatchedDataCollection::Merge(BatchedDataCollection &other) {
 	for (auto &entry : other.data) {
 		if (data.find(entry.first) != data.end()) {
 			throw InternalException(
-			    "BatchChunkCollection::Merge error - batch index %d is present in both collections. This occurs when "
+			    "BatchedDataCollection::Merge error - batch index %d is present in both collections. This occurs when "
 			    "batch indexes are not uniquely distributed over threads",
 			    entry.first);
 		}
@@ -15494,30 +18966,51 @@ void BatchedChunkCollection::Merge(BatchedChunkCollection &other) {
 	other.data.clear();
 }
 
-void BatchedChunkCollection::InitializeScan(BatchedChunkScanState &state) {
+void BatchedDataCollection::InitializeScan(BatchedChunkScanState &state) {
 	state.iterator = data.begin();
-	state.chunk_index = 0;
+	if (state.iterator == data.end()) {
+		return;
+	}
+	state.iterator->second->InitializeScan(state.scan_state);
 }
 
-void BatchedChunkCollection::Scan(BatchedChunkScanState &state, DataChunk &output) {
+void BatchedDataCollection::Scan(BatchedChunkScanState &state, DataChunk &output) {
 	while (state.iterator != data.end()) {
 		// check if there is a chunk remaining in this collection
 		auto collection = state.iterator->second.get();
-		if (state.chunk_index < collection->ChunkCount()) {
-			// there is! increment the chunk count
-			output.Reference(collection->GetChunk(state.chunk_index));
-			state.chunk_index++;
+		collection->Scan(state.scan_state, output);
+		if (output.size() > 0) {
 			return;
 		}
 		// there isn't! move to the next collection
 		state.iterator++;
-		state.chunk_index = 0;
+		if (state.iterator == data.end()) {
+			return;
+		}
+		state.iterator->second->InitializeScan(state.scan_state);
 	}
 }
 
-string BatchedChunkCollection::ToString() const {
+unique_ptr<ColumnDataCollection> BatchedDataCollection::FetchCollection() {
+	unique_ptr<ColumnDataCollection> result;
+	for (auto &entry : data) {
+		if (!result) {
+			result = move(entry.second);
+		} else {
+			result->Combine(*entry.second);
+		}
+	}
+	data.clear();
+	if (!result) {
+		// empty result
+		return make_unique<ColumnDataCollection>(Allocator::DefaultAllocator(), types);
+	}
+	return result;
+}
+
+string BatchedDataCollection::ToString() const {
 	string result;
-	result += "Batched Chunk Collection\n";
+	result += "Batched Data Collection\n";
 	for (auto &entry : data) {
 		result += "Batch Index - " + to_string(entry.first) + "\n";
 		result += entry.second->ToString() + "\n\n";
@@ -15525,7 +19018,7 @@ string BatchedChunkCollection::ToString() const {
 	return result;
 }
 
-void BatchedChunkCollection::Print() const {
+void BatchedDataCollection::Print() const {
 	Printer::Print(ToString());
 }
 
@@ -15551,12 +19044,16 @@ const int Blob::HEX_MAP[256] = {
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 
+bool IsRegularCharacter(data_t c) {
+	return c >= 32 && c <= 127 && c != '\\' && c != '\'' && c != '"';
+}
+
 idx_t Blob::GetStringSize(string_t blob) {
 	auto data = (const_data_ptr_t)blob.GetDataUnsafe();
 	auto len = blob.GetSize();
 	idx_t str_len = 0;
 	for (idx_t i = 0; i < len; i++) {
-		if (data[i] >= 32 && data[i] <= 127 && data[i] != '\\') {
+		if (IsRegularCharacter(data[i])) {
 			// ascii characters are rendered as-is
 			str_len++;
 		} else {
@@ -15572,7 +19069,7 @@ void Blob::ToString(string_t blob, char *output) {
 	auto len = blob.GetSize();
 	idx_t str_idx = 0;
 	for (idx_t i = 0; i < len; i++) {
-		if (data[i] >= 32 && data[i] <= 127 && data[i] != '\\') {
+		if (IsRegularCharacter(data[i])) {
 			// ascii characters are rendered as-is
 			output[str_idx++] = data[i];
 		} else {
@@ -15618,7 +19115,7 @@ bool Blob::TryGetBlobSize(string_t str, idx_t &str_len, string *error_message) {
 			}
 			str_len++;
 			i += 3;
-		} else if (data[i] >= 32 && data[i] <= 127) {
+		} else if (data[i] <= 127) {
 			str_len++;
 		} else {
 			string error = "Invalid byte encountered in STRING -> BLOB conversion. All non-ascii characters "
@@ -15652,7 +19149,7 @@ void Blob::ToBlob(string_t str, data_ptr_t output) {
 			D_ASSERT(data[i + 1] == 'x');
 			output[blob_idx++] = (byte_a << 4) + byte_b;
 			i += 3;
-		} else if (data[i] >= 32 && data[i] <= 127) {
+		} else if (data[i] <= 127) {
 			output[blob_idx++] = data_t(data[i]);
 		} else {
 			throw ConversionException("Invalid byte encountered in STRING -> BLOB conversion. All non-ascii characters "
@@ -16007,7 +19504,7 @@ void ChunkCollection::Append(DataChunk &new_chunk) {
 		idx_t added_data = MinValue<idx_t>(remaining_data, STANDARD_VECTOR_SIZE - last_chunk.size());
 		if (added_data > 0) {
 			// copy <added_data> elements to the last chunk
-			new_chunk.Normalify();
+			new_chunk.Flatten();
 			// have to be careful here: setting the cardinality without calling normalify can cause incorrect partial
 			// decompression
 			idx_t old_count = new_chunk.size();
@@ -16086,6 +19583,19 @@ static int8_t TemplatedCompareValue(Vector &left_vec, Vector &right_vec, idx_t l
 	return 1;
 }
 
+template <>
+int8_t TemplatedCompareValue<Value>(Vector &left_vec, Vector &right_vec, idx_t left_idx, idx_t right_idx) {
+	auto left_val = left_vec.GetValue(left_idx);
+	auto right_val = right_vec.GetValue(right_idx);
+	if (ValueOperations::Equals(left_val, right_val)) {
+		return 0;
+	}
+	if (ValueOperations::LessThan(left_val, right_val)) {
+		return -1;
+	}
+	return 1;
+}
+
 // return type here is int32 because strcmp() on some platforms returns rather large values
 static int32_t CompareValue(Vector &left_vec, Vector &right_vec, idx_t vector_idx_left, idx_t vector_idx_right,
                             OrderByNullType null_order) {
@@ -16129,7 +19639,7 @@ static int32_t CompareValue(Vector &left_vec, Vector &right_vec, idx_t vector_id
 	case PhysicalType::INTERVAL:
 		return TemplatedCompareValue<interval_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
 	default:
-		throw NotImplementedException("Type for comparison");
+		return TemplatedCompareValue<Value>(left_vec, right_vec, vector_idx_left, vector_idx_right);
 	}
 }
 
@@ -16352,7 +19862,7 @@ bool ChunkCollection::Equals(ChunkCollection &other) {
 		for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
 			auto lvalue = GetValue(col_idx, row_idx);
 			auto rvalue = other.GetValue(col_idx, row_idx);
-			if (!Value::ValuesAreEqual(lvalue, rvalue)) {
+			if (!Value::DefaultValuesAreEqual(lvalue, rvalue)) {
 				compare_equals = false;
 				break;
 			}
@@ -16385,761 +19895,12 @@ bool ChunkCollection::Equals(ChunkCollection &other) {
 		for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
 			auto lvalue = GetValue(col_idx, lrow);
 			auto rvalue = other.GetValue(col_idx, rrow);
-			if (!Value::ValuesAreEqual(lvalue, rvalue)) {
+			if (!Value::DefaultValuesAreEqual(lvalue, rvalue)) {
 				return false;
 			}
 		}
 	}
 	return true;
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-namespace duckdb {
-
-DataChunk::DataChunk() : count(0), capacity(STANDARD_VECTOR_SIZE) {
-}
-
-DataChunk::~DataChunk() {
-}
-
-void DataChunk::InitializeEmpty(const vector<LogicalType> &types) {
-	capacity = STANDARD_VECTOR_SIZE;
-	D_ASSERT(data.empty());   // can only be initialized once
-	D_ASSERT(!types.empty()); // empty chunk not allowed
-	for (idx_t i = 0; i < types.size(); i++) {
-		data.emplace_back(Vector(types[i], nullptr));
-	}
-}
-
-void DataChunk::Initialize(Allocator &allocator, const vector<LogicalType> &types) {
-	D_ASSERT(data.empty());   // can only be initialized once
-	D_ASSERT(!types.empty()); // empty chunk not allowed
-	capacity = STANDARD_VECTOR_SIZE;
-	for (idx_t i = 0; i < types.size(); i++) {
-		VectorCache cache(allocator, types[i]);
-		data.emplace_back(cache);
-		vector_caches.push_back(move(cache));
-	}
-}
-
-void DataChunk::Initialize(ClientContext &context, const vector<LogicalType> &types) {
-	Initialize(Allocator::Get(context), types);
-}
-
-void DataChunk::Reset() {
-	if (data.empty()) {
-		return;
-	}
-	if (vector_caches.size() != data.size()) {
-		throw InternalException("VectorCache and column count mismatch in DataChunk::Reset");
-	}
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		data[i].ResetFromCache(vector_caches[i]);
-	}
-	capacity = STANDARD_VECTOR_SIZE;
-	SetCardinality(0);
-}
-
-void DataChunk::Destroy() {
-	data.clear();
-	vector_caches.clear();
-	capacity = 0;
-	SetCardinality(0);
-}
-
-Value DataChunk::GetValue(idx_t col_idx, idx_t index) const {
-	D_ASSERT(index < size());
-	return data[col_idx].GetValue(index);
-}
-
-void DataChunk::SetValue(idx_t col_idx, idx_t index, const Value &val) {
-	data[col_idx].SetValue(index, val);
-}
-
-void DataChunk::Reference(DataChunk &chunk) {
-	D_ASSERT(chunk.ColumnCount() <= ColumnCount());
-	SetCardinality(chunk);
-	SetCapacity(chunk);
-	for (idx_t i = 0; i < chunk.ColumnCount(); i++) {
-		data[i].Reference(chunk.data[i]);
-	}
-}
-
-void DataChunk::Move(DataChunk &chunk) {
-	SetCardinality(chunk);
-	SetCapacity(chunk);
-	data = move(chunk.data);
-	vector_caches = move(chunk.vector_caches);
-
-	chunk.Destroy();
-}
-
-void DataChunk::Copy(DataChunk &other, idx_t offset) const {
-	D_ASSERT(ColumnCount() == other.ColumnCount());
-	D_ASSERT(other.size() == 0);
-
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		D_ASSERT(other.data[i].GetVectorType() == VectorType::FLAT_VECTOR);
-		VectorOperations::Copy(data[i], other.data[i], size(), offset, 0);
-	}
-	other.SetCardinality(size() - offset);
-}
-
-void DataChunk::Copy(DataChunk &other, const SelectionVector &sel, const idx_t source_count, const idx_t offset) const {
-	D_ASSERT(ColumnCount() == other.ColumnCount());
-	D_ASSERT(other.size() == 0);
-	D_ASSERT((offset + source_count) <= size());
-
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		D_ASSERT(other.data[i].GetVectorType() == VectorType::FLAT_VECTOR);
-		VectorOperations::Copy(data[i], other.data[i], sel, source_count, offset, 0);
-	}
-	other.SetCardinality(source_count - offset);
-}
-
-void DataChunk::Split(DataChunk &other, idx_t split_idx) {
-	D_ASSERT(other.size() == 0);
-	D_ASSERT(other.data.empty());
-	D_ASSERT(split_idx < data.size());
-	const idx_t num_cols = data.size();
-	for (idx_t col_idx = split_idx; col_idx < num_cols; col_idx++) {
-		other.data.push_back(move(data[col_idx]));
-		other.vector_caches.push_back(move(vector_caches[col_idx]));
-	}
-	for (idx_t col_idx = split_idx; col_idx < num_cols; col_idx++) {
-		data.pop_back();
-		vector_caches.pop_back();
-	}
-	other.SetCardinality(*this);
-	other.SetCapacity(*this);
-}
-
-void DataChunk::Fuse(DataChunk &other) {
-	D_ASSERT(other.size() == size());
-	const idx_t num_cols = other.data.size();
-	for (idx_t col_idx = 0; col_idx < num_cols; ++col_idx) {
-		data.emplace_back(move(other.data[col_idx]));
-		vector_caches.emplace_back(move(other.vector_caches[col_idx]));
-	}
-	other.Destroy();
-}
-
-void DataChunk::Append(const DataChunk &other, bool resize, SelectionVector *sel, idx_t sel_count) {
-	idx_t new_size = sel ? size() + sel_count : size() + other.size();
-	if (other.size() == 0) {
-		return;
-	}
-	if (ColumnCount() != other.ColumnCount()) {
-		throw InternalException("Column counts of appending chunk doesn't match!");
-	}
-	if (new_size > capacity) {
-		if (resize) {
-			for (idx_t i = 0; i < ColumnCount(); i++) {
-				data[i].Resize(size(), new_size);
-			}
-			capacity = new_size;
-		} else {
-			throw InternalException("Can't append chunk to other chunk without resizing");
-		}
-	}
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		D_ASSERT(data[i].GetVectorType() == VectorType::FLAT_VECTOR);
-		if (sel) {
-			VectorOperations::Copy(other.data[i], data[i], *sel, sel_count, 0, size());
-		} else {
-			VectorOperations::Copy(other.data[i], data[i], other.size(), 0, size());
-		}
-	}
-	SetCardinality(new_size);
-}
-
-void DataChunk::Normalify() {
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		data[i].Normalify(size());
-	}
-}
-
-vector<LogicalType> DataChunk::GetTypes() {
-	vector<LogicalType> types;
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		types.push_back(data[i].GetType());
-	}
-	return types;
-}
-
-string DataChunk::ToString() const {
-	string retval = "Chunk - [" + to_string(ColumnCount()) + " Columns]\n";
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		retval += "- " + data[i].ToString(size()) + "\n";
-	}
-	return retval;
-}
-
-void DataChunk::Serialize(Serializer &serializer) {
-	// write the count
-	serializer.Write<sel_t>(size());
-	serializer.Write<idx_t>(ColumnCount());
-	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-		// write the types
-		data[col_idx].GetType().Serialize(serializer);
-	}
-	// write the data
-	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-		data[col_idx].Serialize(size(), serializer);
-	}
-}
-
-void DataChunk::Deserialize(Deserializer &source) {
-	auto rows = source.Read<sel_t>();
-	idx_t column_count = source.Read<idx_t>();
-
-	vector<LogicalType> types;
-	for (idx_t i = 0; i < column_count; i++) {
-		types.push_back(LogicalType::Deserialize(source));
-	}
-	Initialize(Allocator::DefaultAllocator(), types);
-	// now load the column data
-	SetCardinality(rows);
-	for (idx_t i = 0; i < column_count; i++) {
-		data[i].Deserialize(rows, source);
-	}
-	Verify();
-}
-
-void DataChunk::Slice(const SelectionVector &sel_vector, idx_t count_p) {
-	this->count = count_p;
-	SelCache merge_cache;
-	for (idx_t c = 0; c < ColumnCount(); c++) {
-		data[c].Slice(sel_vector, count_p, merge_cache);
-	}
-}
-
-void DataChunk::Slice(DataChunk &other, const SelectionVector &sel, idx_t count_p, idx_t col_offset) {
-	D_ASSERT(other.ColumnCount() <= col_offset + ColumnCount());
-	this->count = count_p;
-	SelCache merge_cache;
-	for (idx_t c = 0; c < other.ColumnCount(); c++) {
-		if (other.data[c].GetVectorType() == VectorType::DICTIONARY_VECTOR) {
-			// already a dictionary! merge the dictionaries
-			data[col_offset + c].Reference(other.data[c]);
-			data[col_offset + c].Slice(sel, count_p, merge_cache);
-		} else {
-			data[col_offset + c].Slice(other.data[c], sel, count_p);
-		}
-	}
-}
-
-unique_ptr<VectorData[]> DataChunk::Orrify() {
-	auto orrified_data = unique_ptr<VectorData[]>(new VectorData[ColumnCount()]);
-	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-		data[col_idx].Orrify(size(), orrified_data[col_idx]);
-	}
-	return orrified_data;
-}
-
-void DataChunk::Hash(Vector &result) {
-	D_ASSERT(result.GetType().id() == LogicalType::HASH);
-	VectorOperations::Hash(data[0], result, size());
-	for (idx_t i = 1; i < ColumnCount(); i++) {
-		VectorOperations::CombineHash(result, data[i], size());
-	}
-}
-
-void DataChunk::Verify() {
-#ifdef DEBUG
-	D_ASSERT(size() <= capacity);
-	// verify that all vectors in this chunk have the chunk selection vector
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		data[i].Verify(size());
-	}
-#endif
-}
-
-void DataChunk::Print() {
-	Printer::Print(ToString());
-}
-
-struct DuckDBArrowArrayChildHolder {
-	ArrowArray array;
-	//! need max three pointers for strings
-	duckdb::array<const void *, 3> buffers = {{nullptr, nullptr, nullptr}};
-	unique_ptr<Vector> vector;
-	unique_ptr<data_t[]> offsets;
-	unique_ptr<data_t[]> data;
-	//! Children of nested structures
-	::duckdb::vector<DuckDBArrowArrayChildHolder> children;
-	::duckdb::vector<ArrowArray *> children_ptrs;
-};
-
-struct DuckDBArrowArrayHolder {
-	vector<DuckDBArrowArrayChildHolder> children = {};
-	vector<ArrowArray *> children_ptrs = {};
-	array<const void *, 1> buffers = {{nullptr}};
-	vector<shared_ptr<ArrowArrayWrapper>> arrow_original_array;
-};
-
-static void ReleaseDuckDBArrowArray(ArrowArray *array) {
-	if (!array || !array->release) {
-		return;
-	}
-	array->release = nullptr;
-	auto holder = static_cast<DuckDBArrowArrayHolder *>(array->private_data);
-	delete holder;
-}
-
-void InitializeChild(DuckDBArrowArrayChildHolder &child_holder, idx_t size) {
-	auto &child = child_holder.array;
-	child.private_data = nullptr;
-	child.release = ReleaseDuckDBArrowArray;
-	child.n_children = 0;
-	child.null_count = 0;
-	child.offset = 0;
-	child.dictionary = nullptr;
-	child.buffers = child_holder.buffers.data();
-
-	child.length = size;
-}
-
-void SetChildValidityMask(Vector &vector, ArrowArray &child) {
-	D_ASSERT(vector.GetVectorType() == VectorType::FLAT_VECTOR);
-	auto &mask = FlatVector::Validity(vector);
-	if (!mask.AllValid()) {
-		//! any bits are set: might have nulls
-		child.null_count = -1;
-	} else {
-		//! no bits are set; we know there are no nulls
-		child.null_count = 0;
-	}
-	child.buffers[0] = (void *)mask.GetData();
-}
-
-void SetArrowChild(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size);
-
-void SetList(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	child_holder.vector = make_unique<Vector>(data);
-
-	//! Lists have two buffers
-	child.n_buffers = 2;
-	//! Second Buffer is the list offsets
-	child_holder.offsets = unique_ptr<data_t[]>(new data_t[sizeof(uint32_t) * (size + 1)]);
-	child.buffers[1] = child_holder.offsets.get();
-	auto offset_ptr = (uint32_t *)child.buffers[1];
-	auto list_data = FlatVector::GetData<list_entry_t>(data);
-	auto list_mask = FlatVector::Validity(data);
-	idx_t offset = 0;
-	offset_ptr[0] = 0;
-	for (idx_t i = 0; i < size; i++) {
-		auto &le = list_data[i];
-
-		if (list_mask.RowIsValid(i)) {
-			offset += le.length;
-		}
-
-		offset_ptr[i + 1] = offset;
-	}
-	auto list_size = ListVector::GetListSize(data);
-	child_holder.children.resize(1);
-	InitializeChild(child_holder.children[0], list_size);
-	child.n_children = 1;
-	child_holder.children_ptrs.push_back(&child_holder.children[0].array);
-	child.children = &child_holder.children_ptrs[0];
-	auto &child_vector = ListVector::GetEntry(data);
-	auto &child_type = ListType::GetChildType(type);
-	SetArrowChild(child_holder.children[0], child_type, child_vector, list_size);
-	SetChildValidityMask(child_vector, child_holder.children[0].array);
-}
-
-void SetStruct(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	child_holder.vector = make_unique<Vector>(data);
-
-	//! Structs only have validity buffers
-	child.n_buffers = 1;
-	auto &children = StructVector::GetEntries(*child_holder.vector);
-	child.n_children = children.size();
-	child_holder.children.resize(child.n_children);
-	for (auto &struct_child : child_holder.children) {
-		InitializeChild(struct_child, size);
-		child_holder.children_ptrs.push_back(&struct_child.array);
-	}
-	child.children = &child_holder.children_ptrs[0];
-	for (idx_t child_idx = 0; child_idx < child_holder.children.size(); child_idx++) {
-		SetArrowChild(child_holder.children[child_idx], StructType::GetChildType(type, child_idx), *children[child_idx],
-		              size);
-		SetChildValidityMask(*children[child_idx], child_holder.children[child_idx].array);
-	}
-}
-
-void SetStructMap(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	child_holder.vector = make_unique<Vector>(data);
-
-	//! Structs only have validity buffers
-	child.n_buffers = 1;
-	auto &children = StructVector::GetEntries(*child_holder.vector);
-	child.n_children = children.size();
-	child_holder.children.resize(child.n_children);
-	auto list_size = ListVector::GetListSize(*children[0]);
-	child.length = list_size;
-	for (auto &struct_child : child_holder.children) {
-		InitializeChild(struct_child, list_size);
-		child_holder.children_ptrs.push_back(&struct_child.array);
-	}
-	child.children = &child_holder.children_ptrs[0];
-	auto &child_types = StructType::GetChildTypes(type);
-	for (idx_t child_idx = 0; child_idx < child_holder.children.size(); child_idx++) {
-		auto &list_vector_child = ListVector::GetEntry(*children[child_idx]);
-		if (child_idx == 0) {
-			VectorData list_data;
-			children[child_idx]->Orrify(size, list_data);
-			auto list_child_validity = FlatVector::Validity(list_vector_child);
-			if (!list_child_validity.AllValid()) {
-				//! Get the offsets to check from the selection vector
-				auto list_offsets = FlatVector::GetData<list_entry_t>(*children[child_idx]);
-				for (idx_t list_idx = 0; list_idx < size; list_idx++) {
-					auto offset = list_offsets[list_data.sel->get_index(list_idx)];
-					if (!list_child_validity.CheckAllValid(offset.length + offset.offset, offset.offset)) {
-						throw std::runtime_error("Arrow doesnt accept NULL keys on Maps");
-					}
-				}
-			}
-		} else {
-			SetChildValidityMask(list_vector_child, child_holder.children[child_idx].array);
-		}
-		SetArrowChild(child_holder.children[child_idx], ListType::GetChildType(child_types[child_idx].second),
-		              list_vector_child, list_size);
-	}
-}
-
-struct ArrowUUIDConversion {
-	using internal_type_t = hugeint_t;
-
-	static unique_ptr<Vector> InitializeVector(Vector &data, idx_t size) {
-		return make_unique<Vector>(LogicalType::VARCHAR, size);
-	}
-
-	static idx_t GetStringLength(hugeint_t value) {
-		return UUID::STRING_SIZE;
-	}
-
-	static string_t ConvertValue(Vector &tgt_vec, string_t *tgt_ptr, internal_type_t *src_ptr, idx_t row) {
-		auto str_value = UUID::ToString(src_ptr[row]);
-		// Have to store this string
-		tgt_ptr[row] = StringVector::AddStringOrBlob(tgt_vec, str_value);
-		return tgt_ptr[row];
-	}
-};
-
-struct ArrowVarcharConversion {
-	using internal_type_t = string_t;
-
-	static unique_ptr<Vector> InitializeVector(Vector &data, idx_t size) {
-		return make_unique<Vector>(data);
-	}
-	static idx_t GetStringLength(string_t value) {
-		return value.GetSize();
-	}
-
-	static string_t ConvertValue(Vector &tgt_vec, string_t *tgt_ptr, internal_type_t *src_ptr, idx_t row) {
-		return src_ptr[row];
-	}
-};
-
-template <class CONVERT, class VECTOR_TYPE>
-void SetVarchar(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	child_holder.vector = CONVERT::InitializeVector(data, size);
-	auto target_data_ptr = FlatVector::GetData<string_t>(data);
-	child.n_buffers = 3;
-	child_holder.offsets = unique_ptr<data_t[]>(new data_t[sizeof(uint32_t) * (size + 1)]);
-	child.buffers[1] = child_holder.offsets.get();
-	D_ASSERT(child.buffers[1]);
-	//! step 1: figure out total string length:
-	idx_t total_string_length = 0;
-	auto source_ptr = FlatVector::GetData<VECTOR_TYPE>(data);
-	auto &mask = FlatVector::Validity(data);
-	for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-		if (!mask.RowIsValid(row_idx)) {
-			continue;
-		}
-		total_string_length += CONVERT::GetStringLength(source_ptr[row_idx]);
-	}
-	//! step 2: allocate this much
-	child_holder.data = unique_ptr<data_t[]>(new data_t[total_string_length]);
-	child.buffers[2] = child_holder.data.get();
-	D_ASSERT(child.buffers[2]);
-	//! step 3: assign buffers
-	idx_t current_heap_offset = 0;
-	auto target_ptr = (uint32_t *)child.buffers[1];
-
-	for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-		target_ptr[row_idx] = current_heap_offset;
-		if (!mask.RowIsValid(row_idx)) {
-			continue;
-		}
-		string_t str = CONVERT::ConvertValue(*child_holder.vector, target_data_ptr, source_ptr, row_idx);
-		memcpy((void *)((uint8_t *)child.buffers[2] + current_heap_offset), str.GetDataUnsafe(), str.GetSize());
-		current_heap_offset += str.GetSize();
-	}
-	target_ptr[size] = current_heap_offset; //! need to terminate last string!
-}
-
-void SetArrowChild(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	switch (type.id()) {
-	case LogicalTypeId::BOOLEAN: {
-		//! Gotta bitpack these booleans
-		child_holder.vector = make_unique<Vector>(data);
-		child.n_buffers = 2;
-		idx_t num_bytes = (size + 8 - 1) / 8;
-		child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(uint8_t) * num_bytes]);
-		child.buffers[1] = child_holder.data.get();
-		auto source_ptr = FlatVector::GetData<uint8_t>(*child_holder.vector);
-		auto target_ptr = (uint8_t *)child.buffers[1];
-		idx_t target_pos = 0;
-		idx_t cur_bit = 0;
-		for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-			if (cur_bit == 8) {
-				target_pos++;
-				cur_bit = 0;
-			}
-			if (source_ptr[row_idx] == 0) {
-				//! We set the bit to 0
-				target_ptr[target_pos] &= ~(1 << cur_bit);
-			} else {
-				//! We set the bit to 1
-				target_ptr[target_pos] |= 1 << cur_bit;
-			}
-			cur_bit++;
-		}
-		break;
-	}
-	case LogicalTypeId::TINYINT:
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::UINTEGER:
-	case LogicalTypeId::UBIGINT:
-	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
-	case LogicalTypeId::HUGEINT:
-	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIME_TZ:
-		child_holder.vector = make_unique<Vector>(data);
-		child.n_buffers = 2;
-		child.buffers[1] = (void *)FlatVector::GetData(*child_holder.vector);
-		break;
-	case LogicalTypeId::SQLNULL:
-		child.n_buffers = 1;
-		break;
-	case LogicalTypeId::DECIMAL: {
-		child.n_buffers = 2;
-		child_holder.vector = make_unique<Vector>(data);
-
-		//! We have to convert to INT128
-		switch (type.InternalType()) {
-
-		case PhysicalType::INT16: {
-			child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(hugeint_t) * (size)]);
-			child.buffers[1] = child_holder.data.get();
-			auto source_ptr = FlatVector::GetData<int16_t>(*child_holder.vector);
-			auto target_ptr = (hugeint_t *)child.buffers[1];
-			for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-				target_ptr[row_idx] = source_ptr[row_idx];
-			}
-			break;
-		}
-		case PhysicalType::INT32: {
-			child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(hugeint_t) * (size)]);
-			child.buffers[1] = child_holder.data.get();
-			auto source_ptr = FlatVector::GetData<int32_t>(*child_holder.vector);
-			auto target_ptr = (hugeint_t *)child.buffers[1];
-			for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-				target_ptr[row_idx] = source_ptr[row_idx];
-			}
-			break;
-		}
-		case PhysicalType::INT64: {
-			child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(hugeint_t) * (size)]);
-			child.buffers[1] = child_holder.data.get();
-			auto source_ptr = FlatVector::GetData<int64_t>(*child_holder.vector);
-			auto target_ptr = (hugeint_t *)child.buffers[1];
-			for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-				target_ptr[row_idx] = source_ptr[row_idx];
-			}
-			break;
-		}
-		case PhysicalType::INT128: {
-			child.buffers[1] = (void *)FlatVector::GetData(*child_holder.vector);
-			break;
-		}
-		default:
-			throw std::runtime_error("Unsupported physical type for Decimal" + TypeIdToString(type.InternalType()));
-		}
-		break;
-	}
-	case LogicalTypeId::BLOB:
-	case LogicalTypeId::JSON:
-	case LogicalTypeId::VARCHAR: {
-		SetVarchar<ArrowVarcharConversion, string_t>(child_holder, type, data, size);
-		break;
-	}
-	case LogicalTypeId::UUID: {
-		SetVarchar<ArrowUUIDConversion, hugeint_t>(child_holder, type, data, size);
-		break;
-	}
-	case LogicalTypeId::LIST: {
-		SetList(child_holder, type, data, size);
-		break;
-	}
-	case LogicalTypeId::STRUCT: {
-		SetStruct(child_holder, type, data, size);
-		break;
-	}
-	case LogicalTypeId::MAP: {
-		child_holder.vector = make_unique<Vector>(data);
-
-		auto &map_mask = FlatVector::Validity(*child_holder.vector);
-		child.n_buffers = 2;
-		//! Maps have one child
-		child.n_children = 1;
-		child_holder.children.resize(1);
-		InitializeChild(child_holder.children[0], size);
-		child_holder.children_ptrs.push_back(&child_holder.children[0].array);
-		//! Second Buffer is the offsets
-		child_holder.offsets = unique_ptr<data_t[]>(new data_t[sizeof(uint32_t) * (size + 1)]);
-		child.buffers[1] = child_holder.offsets.get();
-		auto &struct_children = StructVector::GetEntries(data);
-		auto offset_ptr = (uint32_t *)child.buffers[1];
-		auto list_data = FlatVector::GetData<list_entry_t>(*struct_children[0]);
-		idx_t offset = 0;
-		offset_ptr[0] = 0;
-		for (idx_t i = 0; i < size; i++) {
-			auto &le = list_data[i];
-			if (map_mask.RowIsValid(i)) {
-				offset += le.length;
-			}
-			offset_ptr[i + 1] = offset;
-		}
-		child.children = &child_holder.children_ptrs[0];
-		//! We need to set up a struct
-		auto struct_type = LogicalType::STRUCT(StructType::GetChildTypes(type));
-
-		SetStructMap(child_holder.children[0], struct_type, *child_holder.vector, size);
-		break;
-	}
-	case LogicalTypeId::INTERVAL: {
-		//! convert interval from month/days/ucs to milliseconds
-		child_holder.vector = make_unique<Vector>(data);
-		child.n_buffers = 2;
-		child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(int64_t) * (size)]);
-		child.buffers[1] = child_holder.data.get();
-		auto source_ptr = FlatVector::GetData<interval_t>(*child_holder.vector);
-		auto target_ptr = (int64_t *)child.buffers[1];
-		for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-			target_ptr[row_idx] = Interval::GetMilli(source_ptr[row_idx]);
-		}
-		break;
-	}
-	case LogicalTypeId::ENUM: {
-		// We need to initialize our dictionary
-		child_holder.children.resize(1);
-		idx_t dict_size = EnumType::GetSize(type);
-		InitializeChild(child_holder.children[0], dict_size);
-		Vector dictionary(EnumType::GetValuesInsertOrder(type));
-		SetArrowChild(child_holder.children[0], dictionary.GetType(), dictionary, dict_size);
-		child_holder.children_ptrs.push_back(&child_holder.children[0].array);
-
-		// now we set the data
-		child.dictionary = child_holder.children_ptrs[0];
-		child_holder.vector = make_unique<Vector>(data);
-		child.n_buffers = 2;
-		child.buffers[1] = (void *)FlatVector::GetData(*child_holder.vector);
-
-		break;
-	}
-	default:
-		throw std::runtime_error("Unsupported type " + type.ToString());
-	}
-}
-
-void DataChunk::ToArrowArray(ArrowArray *out_array) {
-	Normalify();
-	D_ASSERT(out_array);
-
-	// Allocate as unique_ptr first to cleanup properly on error
-	auto root_holder = make_unique<DuckDBArrowArrayHolder>();
-
-	// Allocate the children
-	root_holder->children.resize(ColumnCount());
-	root_holder->children_ptrs.resize(ColumnCount(), nullptr);
-	for (size_t i = 0; i < ColumnCount(); ++i) {
-		root_holder->children_ptrs[i] = &root_holder->children[i].array;
-	}
-	out_array->children = root_holder->children_ptrs.data();
-	out_array->n_children = ColumnCount();
-
-	// Configure root array
-	out_array->length = size();
-	out_array->n_children = ColumnCount();
-	out_array->n_buffers = 1;
-	out_array->buffers = root_holder->buffers.data(); // there is no actual buffer there since we don't have NULLs
-	out_array->offset = 0;
-	out_array->null_count = 0; // needs to be 0
-	out_array->dictionary = nullptr;
-
-	//! Configure child arrays
-	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-		auto &child_holder = root_holder->children[col_idx];
-		InitializeChild(child_holder, size());
-		auto &vector = child_holder.vector;
-		auto &child = child_holder.array;
-		auto vec_buffer = data[col_idx].GetBuffer();
-		if (vec_buffer->GetAuxiliaryData() &&
-		    vec_buffer->GetAuxiliaryDataType() == VectorAuxiliaryDataType::ARROW_AUXILIARY) {
-			auto arrow_aux_data = (ArrowAuxiliaryData *)vec_buffer->GetAuxiliaryData();
-			root_holder->arrow_original_array.push_back(arrow_aux_data->arrow_array);
-		}
-		//! We could, in theory, output other types of vectors here, currently only FLAT Vectors
-		SetArrowChild(child_holder, GetTypes()[col_idx], data[col_idx], size());
-		SetChildValidityMask(*vector, child);
-		out_array->children[col_idx] = &child;
-	}
-
-	// Release ownership to caller
-	out_array->private_data = root_holder.release();
-	out_array->release = ReleaseDuckDBArrowArray;
 }
 
 } // namespace duckdb

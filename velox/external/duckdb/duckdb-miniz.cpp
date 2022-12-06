@@ -8,7 +8,7 @@
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
 // See the end of this file for a list
 
 /**************************************************************************

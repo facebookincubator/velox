@@ -510,7 +510,8 @@ void DuckDbQueryPlanner::registerTable(
   auto createTableSql =
       duckdb::makeCreateTableSql(name, *asRowType(data[0]->type()));
   auto res = conn_.Query(createTableSql);
-  VELOX_CHECK(res->success, "Failed to create DuckDB table: {}", res->error);
+  VELOX_CHECK(
+      !res->HasError(), "Failed to create DuckDB table: {}", res->GetError());
 
   tables_.insert({name, data});
 }

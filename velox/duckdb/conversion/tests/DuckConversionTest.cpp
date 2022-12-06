@@ -134,10 +134,10 @@ TEST(DuckConversionTest, createTable) {
 
   auto testCreateTable = [&](const RowTypePtr& rowType) {
     auto result = con.Query("DROP TABLE IF EXISTS t");
-    VELOX_CHECK(result->success, "{}", result->error);
+    VELOX_CHECK(!result->HasError(), "{}", result->GetError());
 
     result = con.Query(makeCreateTableSql("t", *rowType));
-    VELOX_CHECK(result->success, "{}", result->error);
+    VELOX_CHECK(!result->HasError(), "{}", result->GetError());
   };
 
   testCreateTable(

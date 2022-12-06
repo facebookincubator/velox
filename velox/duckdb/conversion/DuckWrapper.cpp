@@ -98,11 +98,11 @@ DuckResult::DuckResult(
 DuckResult::~DuckResult() {}
 
 bool DuckResult::success() {
-  return queryResult_->success;
+  return !queryResult_->HasError();
 }
 
 std::string DuckResult::errorMessage() {
-  return queryResult_->error;
+  return queryResult_->GetError();
 }
 
 RowVectorPtr DuckResult::getVector() {
@@ -345,7 +345,7 @@ bool DuckResult::next() {
   if (!currentChunk_) {
     return false;
   }
-  currentChunk_->Normalify();
+  currentChunk_->Flatten();
   return currentChunk_->size() > 0;
 }
 

@@ -475,7 +475,7 @@ std::shared_ptr<const core::IExpr> parseLambdaExpr(
     const ParseOptions& options) {
   const auto& lambdaExpr = dynamic_cast<::duckdb::LambdaExpression&>(expr);
   auto capture = parseExpr(*lambdaExpr.lhs, options);
-  auto body = parseExpr(*lambdaExpr.rhs, options);
+  auto body = parseExpr(*lambdaExpr.expr, options);
 
   // capture is either a core::FieldAccessExpr or a 'row' core::CallExpr with 2
   // or more core::FieldAccessExpr inputs.

@@ -7,6 +7,530 @@
 #endif
 
 
+
+
+namespace duckdb {
+
+bool ResultModifier::Equals(const ResultModifier *other) const {
+	if (!other) {
+		return false;
+	}
+	return type == other->type;
+}
+
+void ResultModifier::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteField<ResultModifierType>(type);
+	Serialize(writer);
+	writer.Finalize();
+}
+
+unique_ptr<ResultModifier> ResultModifier::Deserialize(Deserializer &source) {
+	FieldReader reader(source);
+	auto type = reader.ReadRequired<ResultModifierType>();
+
+	unique_ptr<ResultModifier> result;
+	switch (type) {
+	case ResultModifierType::LIMIT_MODIFIER:
+		result = LimitModifier::Deserialize(reader);
+		break;
+	case ResultModifierType::ORDER_MODIFIER:
+		result = OrderModifier::Deserialize(reader);
+		break;
+	case ResultModifierType::DISTINCT_MODIFIER:
+		result = DistinctModifier::Deserialize(reader);
+		break;
+	case ResultModifierType::LIMIT_PERCENT_MODIFIER:
+		result = LimitPercentModifier::Deserialize(reader);
+		break;
+	default:
+		throw InternalException("Unrecognized ResultModifierType for Deserialization");
+	}
+	reader.Finalize();
+	return result;
+}
+
+bool LimitModifier::Equals(const ResultModifier *other_p) const {
+	if (!ResultModifier::Equals(other_p)) {
+		return false;
+	}
+	auto &other = (LimitModifier &)*other_p;
+	if (!BaseExpression::Equals(limit.get(), other.limit.get())) {
+		return false;
+	}
+	if (!BaseExpression::Equals(offset.get(), other.offset.get())) {
+		return false;
+	}
+	return true;
+}
+
+unique_ptr<ResultModifier> LimitModifier::Copy() const {
+	auto copy = make_unique<LimitModifier>();
+	if (limit) {
+		copy->limit = limit->Copy();
+	}
+	if (offset) {
+		copy->offset = offset->Copy();
+	}
+	return move(copy);
+}
+
+void LimitModifier::Serialize(FieldWriter &writer) const {
+	writer.WriteOptional(limit);
+	writer.WriteOptional(offset);
+}
+
+unique_ptr<ResultModifier> LimitModifier::Deserialize(FieldReader &reader) {
+	auto mod = make_unique<LimitModifier>();
+	mod->limit = reader.ReadOptional<ParsedExpression>(nullptr);
+	mod->offset = reader.ReadOptional<ParsedExpression>(nullptr);
+	return move(mod);
+}
+
+bool DistinctModifier::Equals(const ResultModifier *other_p) const {
+	if (!ResultModifier::Equals(other_p)) {
+		return false;
+	}
+	auto &other = (DistinctModifier &)*other_p;
+	if (!ExpressionUtil::ListEquals(distinct_on_targets, other.distinct_on_targets)) {
+		return false;
+	}
+	return true;
+}
+
+unique_ptr<ResultModifier> DistinctModifier::Copy() const {
+	auto copy = make_unique<DistinctModifier>();
+	for (auto &expr : distinct_on_targets) {
+		copy->distinct_on_targets.push_back(expr->Copy());
+	}
+	return move(copy);
+}
+
+void DistinctModifier::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializableList(distinct_on_targets);
+}
+
+unique_ptr<ResultModifier> DistinctModifier::Deserialize(FieldReader &reader) {
+	auto mod = make_unique<DistinctModifier>();
+	mod->distinct_on_targets = reader.ReadRequiredSerializableList<ParsedExpression>();
+	return move(mod);
+}
+
+bool OrderModifier::Equals(const ResultModifier *other_p) const {
+	if (!ResultModifier::Equals(other_p)) {
+		return false;
+	}
+	auto &other = (OrderModifier &)*other_p;
+	if (orders.size() != other.orders.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < orders.size(); i++) {
+		if (orders[i].type != other.orders[i].type) {
+			return false;
+		}
+		if (!BaseExpression::Equals(orders[i].expression.get(), other.orders[i].expression.get())) {
+			return false;
+		}
+	}
+	return true;
+}
+
+unique_ptr<ResultModifier> OrderModifier::Copy() const {
+	auto copy = make_unique<OrderModifier>();
+	for (auto &order : orders) {
+		copy->orders.emplace_back(order.type, order.null_order, order.expression->Copy());
+	}
+	return move(copy);
+}
+
+string OrderByNode::ToString() const {
+	auto str = expression->ToString();
+	switch (type) {
+	case OrderType::ASCENDING:
+		str += " ASC";
+		break;
+	case OrderType::DESCENDING:
+		str += " DESC";
+		break;
+	default:
+		break;
+	}
+
+	switch (null_order) {
+	case OrderByNullType::NULLS_FIRST:
+		str += " NULLS FIRST";
+		break;
+	case OrderByNullType::NULLS_LAST:
+		str += " NULLS LAST";
+		break;
+	default:
+		break;
+	}
+	return str;
+}
+
+void OrderByNode::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteField<OrderType>(type);
+	writer.WriteField<OrderByNullType>(null_order);
+	writer.WriteSerializable(*expression);
+	writer.Finalize();
+}
+
+OrderByNode OrderByNode::Deserialize(Deserializer &source) {
+	FieldReader reader(source);
+	auto type = reader.ReadRequired<OrderType>();
+	auto null_order = reader.ReadRequired<OrderByNullType>();
+	auto expression = reader.ReadRequiredSerializable<ParsedExpression>();
+	reader.Finalize();
+	return OrderByNode(type, null_order, move(expression));
+}
+
+void OrderModifier::Serialize(FieldWriter &writer) const {
+	writer.WriteRegularSerializableList(orders);
+}
+
+unique_ptr<ResultModifier> OrderModifier::Deserialize(FieldReader &reader) {
+	auto mod = make_unique<OrderModifier>();
+	mod->orders = reader.ReadRequiredSerializableList<OrderByNode, OrderByNode>();
+	return move(mod);
+}
+
+bool LimitPercentModifier::Equals(const ResultModifier *other_p) const {
+	if (!ResultModifier::Equals(other_p)) {
+		return false;
+	}
+	auto &other = (LimitPercentModifier &)*other_p;
+	if (!BaseExpression::Equals(limit.get(), other.limit.get())) {
+		return false;
+	}
+	if (!BaseExpression::Equals(offset.get(), other.offset.get())) {
+		return false;
+	}
+	return true;
+}
+
+unique_ptr<ResultModifier> LimitPercentModifier::Copy() const {
+	auto copy = make_unique<LimitPercentModifier>();
+	if (limit) {
+		copy->limit = limit->Copy();
+	}
+	if (offset) {
+		copy->offset = offset->Copy();
+	}
+	return move(copy);
+}
+
+void LimitPercentModifier::Serialize(FieldWriter &writer) const {
+	writer.WriteOptional(limit);
+	writer.WriteOptional(offset);
+}
+
+unique_ptr<ResultModifier> LimitPercentModifier::Deserialize(FieldReader &reader) {
+	auto mod = make_unique<LimitPercentModifier>();
+	mod->limit = reader.ReadOptional<ParsedExpression>(nullptr);
+	mod->offset = reader.ReadOptional<ParsedExpression>(nullptr);
+	return move(mod);
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+AlterStatement::AlterStatement() : SQLStatement(StatementType::ALTER_STATEMENT) {
+}
+
+AlterStatement::AlterStatement(const AlterStatement &other) : SQLStatement(other), info(other.info->Copy()) {
+}
+
+unique_ptr<SQLStatement> AlterStatement::Copy() const {
+	return unique_ptr<AlterStatement>(new AlterStatement(*this));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+CallStatement::CallStatement() : SQLStatement(StatementType::CALL_STATEMENT) {
+}
+
+CallStatement::CallStatement(const CallStatement &other) : SQLStatement(other), function(other.function->Copy()) {
+}
+
+unique_ptr<SQLStatement> CallStatement::Copy() const {
+	return unique_ptr<CallStatement>(new CallStatement(*this));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+CopyStatement::CopyStatement() : SQLStatement(StatementType::COPY_STATEMENT), info(make_unique<CopyInfo>()) {
+}
+
+CopyStatement::CopyStatement(const CopyStatement &other) : SQLStatement(other), info(other.info->Copy()) {
+	if (other.select_statement) {
+		select_statement = other.select_statement->Copy();
+	}
+}
+
+unique_ptr<SQLStatement> CopyStatement::Copy() const {
+	return unique_ptr<CopyStatement>(new CopyStatement(*this));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+CreateStatement::CreateStatement() : SQLStatement(StatementType::CREATE_STATEMENT) {
+}
+
+CreateStatement::CreateStatement(const CreateStatement &other) : SQLStatement(other), info(other.info->Copy()) {
+}
+
+unique_ptr<SQLStatement> CreateStatement::Copy() const {
+	return unique_ptr<CreateStatement>(new CreateStatement(*this));
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+DeleteStatement::DeleteStatement() : SQLStatement(StatementType::DELETE_STATEMENT) {
+}
+
+DeleteStatement::DeleteStatement(const DeleteStatement &other) : SQLStatement(other), table(other.table->Copy()) {
+	if (other.condition) {
+		condition = other.condition->Copy();
+	}
+	for (const auto &using_clause : other.using_clauses) {
+		using_clauses.push_back(using_clause->Copy());
+	}
+	cte_map = other.cte_map.Copy();
+}
+
+string DeleteStatement::ToString() const {
+	string result;
+	result = cte_map.ToString();
+	result += "DELETE FROM ";
+	result += table->ToString();
+	if (!using_clauses.empty()) {
+		result += " USING ";
+		for (idx_t i = 0; i < using_clauses.size(); i++) {
+			if (i > 0) {
+				result += ", ";
+			}
+			result += using_clauses[i]->ToString();
+		}
+	}
+	if (condition) {
+		result += " WHERE " + condition->ToString();
+	}
+
+	if (!returning_list.empty()) {
+		result += " RETURNING ";
+		for (idx_t i = 0; i < returning_list.size(); i++) {
+			if (i > 0) {
+				result += ", ";
+			}
+			result += returning_list[i]->ToString();
+		}
+	}
+	return result;
+}
+
+unique_ptr<SQLStatement> DeleteStatement::Copy() const {
+	return unique_ptr<DeleteStatement>(new DeleteStatement(*this));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+DropStatement::DropStatement() : SQLStatement(StatementType::DROP_STATEMENT), info(make_unique<DropInfo>()) {
+}
+
+DropStatement::DropStatement(const DropStatement &other) : SQLStatement(other), info(other.info->Copy()) {
+}
+
+unique_ptr<SQLStatement> DropStatement::Copy() const {
+	return unique_ptr<DropStatement>(new DropStatement(*this));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+ExecuteStatement::ExecuteStatement() : SQLStatement(StatementType::EXECUTE_STATEMENT) {
+}
+
+ExecuteStatement::ExecuteStatement(const ExecuteStatement &other) : SQLStatement(other), name(other.name) {
+	for (const auto &value : other.values) {
+		values.push_back(value->Copy());
+	}
+}
+
+unique_ptr<SQLStatement> ExecuteStatement::Copy() const {
+	return unique_ptr<ExecuteStatement>(new ExecuteStatement(*this));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+ExplainStatement::ExplainStatement(unique_ptr<SQLStatement> stmt, ExplainType explain_type)
+    : SQLStatement(StatementType::EXPLAIN_STATEMENT), stmt(move(stmt)), explain_type(explain_type) {
+}
+
+ExplainStatement::ExplainStatement(const ExplainStatement &other)
+    : SQLStatement(other), stmt(other.stmt->Copy()), explain_type(other.explain_type) {
+}
+
+unique_ptr<SQLStatement> ExplainStatement::Copy() const {
+	return unique_ptr<ExplainStatement>(new ExplainStatement(*this));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+ExportStatement::ExportStatement(unique_ptr<CopyInfo> info)
+    : SQLStatement(StatementType::EXPORT_STATEMENT), info(move(info)) {
+}
+
+ExportStatement::ExportStatement(const ExportStatement &other) : SQLStatement(other), info(other.info->Copy()) {
+}
+
+unique_ptr<SQLStatement> ExportStatement::Copy() const {
+	return unique_ptr<ExportStatement>(new ExportStatement(*this));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+ExtensionStatement::ExtensionStatement(ParserExtension extension_p, unique_ptr<ParserExtensionParseData> parse_data_p)
+    : SQLStatement(StatementType::EXTENSION_STATEMENT), extension(move(extension_p)), parse_data(move(parse_data_p)) {
+}
+
+unique_ptr<SQLStatement> ExtensionStatement::Copy() const {
+	return make_unique<ExtensionStatement>(extension, parse_data->Copy());
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+InsertStatement::InsertStatement() : SQLStatement(StatementType::INSERT_STATEMENT), schema(DEFAULT_SCHEMA) {
+}
+
+InsertStatement::InsertStatement(const InsertStatement &other)
+    : SQLStatement(other),
+      select_statement(unique_ptr_cast<SQLStatement, SelectStatement>(other.select_statement->Copy())),
+      columns(other.columns), table(other.table), schema(other.schema) {
+	cte_map = other.cte_map.Copy();
+}
+
+string InsertStatement::ToString() const {
+	string result;
+	result = cte_map.ToString();
+	result += "INSERT INTO ";
+	if (!schema.empty()) {
+		result += KeywordHelper::WriteOptionallyQuoted(schema) + ".";
+	}
+	result += KeywordHelper::WriteOptionallyQuoted(table);
+	if (!columns.empty()) {
+		result += " (";
+		for (idx_t i = 0; i < columns.size(); i++) {
+			if (i > 0) {
+				result += ", ";
+			}
+			result += KeywordHelper::WriteOptionallyQuoted(columns[i]);
+		}
+		result += " )";
+	}
+	result += " ";
+	auto values_list = GetValuesList();
+	if (values_list) {
+		values_list->alias = string();
+		result += values_list->ToString();
+	} else {
+		result += select_statement->ToString();
+	}
+	if (!returning_list.empty()) {
+		result += " RETURNING ";
+		for (idx_t i = 0; i < returning_list.size(); i++) {
+			if (i > 0) {
+				result += ", ";
+			}
+			result += returning_list[i]->ToString();
+		}
+	}
+	return result;
+}
+
+unique_ptr<SQLStatement> InsertStatement::Copy() const {
+	return unique_ptr<InsertStatement>(new InsertStatement(*this));
+}
+
+ExpressionListRef *InsertStatement::GetValuesList() const {
+	if (select_statement->node->type != QueryNodeType::SELECT_NODE) {
+		return nullptr;
+	}
+	auto &node = (SelectNode &)*select_statement->node;
+	if (node.where_clause || node.qualify || node.having) {
+		return nullptr;
+	}
+	if (!node.cte_map.map.empty()) {
+		return nullptr;
+	}
+	if (!node.groups.grouping_sets.empty()) {
+		return nullptr;
+	}
+	if (node.aggregate_handling != AggregateHandling::STANDARD_HANDLING) {
+		return nullptr;
+	}
+	if (node.select_list.size() != 1 || node.select_list[0]->type != ExpressionType::STAR) {
+		return nullptr;
+	}
+	if (!node.from_table || node.from_table->type != TableReferenceType::EXPRESSION_LIST) {
+		return nullptr;
+	}
+	return (ExpressionListRef *)node.from_table.get();
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+LoadStatement::LoadStatement() : SQLStatement(StatementType::LOAD_STATEMENT) {
+}
+
+LoadStatement::LoadStatement(const LoadStatement &other) : SQLStatement(other), info(other.info->Copy()) {
+}
+
+unique_ptr<SQLStatement> LoadStatement::Copy() const {
+	return unique_ptr<LoadStatement>(new LoadStatement(*this));
+}
+
+} // namespace duckdb
+
+
 namespace duckdb {
 
 PragmaStatement::PragmaStatement() : SQLStatement(StatementType::PRAGMA_STATEMENT), info(make_unique<PragmaInfo>()) {
@@ -164,7 +688,7 @@ string UpdateStatement::ToString() const {
 			result += ", ";
 		}
 		result += KeywordHelper::WriteOptionallyQuoted(columns[i]);
-		result += "=";
+		result += " = ";
 		result += expressions[i]->ToString();
 	}
 	if (from_table) {
@@ -194,7 +718,11 @@ unique_ptr<SQLStatement> UpdateStatement::Copy() const {
 
 namespace duckdb {
 
-VacuumStatement::VacuumStatement() : SQLStatement(StatementType::VACUUM_STATEMENT) {
+VacuumStatement::VacuumStatement(const VacuumOptions &options)
+    : SQLStatement(StatementType::VACUUM_STATEMENT), info(make_unique<VacuumInfo>(options)) {
+}
+
+VacuumStatement::VacuumStatement(const VacuumStatement &other) : SQLStatement(other), info(other.info->Copy()) {
 }
 
 unique_ptr<SQLStatement> VacuumStatement::Copy() const {
@@ -756,13 +1284,13 @@ unique_ptr<Constraint> Transformer::TransformConstraint(duckdb_libpgquery::PGLis
 	D_ASSERT(constraint);
 	switch (constraint->contype) {
 	case duckdb_libpgquery::PG_CONSTR_NOTNULL:
-		return make_unique<NotNullConstraint>(index);
+		return make_unique<NotNullConstraint>(LogicalIndex(index));
 	case duckdb_libpgquery::PG_CONSTR_CHECK:
 		return TransformConstraint(cell);
 	case duckdb_libpgquery::PG_CONSTR_PRIMARY:
-		return make_unique<UniqueConstraint>(index, true);
+		return make_unique<UniqueConstraint>(LogicalIndex(index), true);
 	case duckdb_libpgquery::PG_CONSTR_UNIQUE:
-		return make_unique<UniqueConstraint>(index, false);
+		return make_unique<UniqueConstraint>(LogicalIndex(index), false);
 	case duckdb_libpgquery::PG_CONSTR_NULL:
 		return nullptr;
 	case duckdb_libpgquery::PG_CONSTR_GENERATED_VIRTUAL: {
@@ -1052,6 +1580,13 @@ unique_ptr<ParsedExpression> Transformer::TransformStarExpression(duckdb_libpgqu
 			result->replace_list.insert(make_pair(move(exclude_entry), move(replace_expression)));
 		}
 	}
+	if (star->regex) {
+		D_ASSERT(result->relation_name.empty());
+		D_ASSERT(result->exclude_list.empty());
+		D_ASSERT(result->replace_list.empty());
+		result->regex = star->regex;
+	}
+	result->columns = star->columns;
 	return move(result);
 }
 
@@ -1139,7 +1674,7 @@ unique_ptr<ConstantExpression> Transformer::TransformValue(duckdb_libpgquery::PG
 			if (width <= Decimal::MAX_WIDTH_DECIMAL) {
 				// we can cast the value as a decimal
 				Value val = Value(str_val);
-				val = val.CastAs(LogicalType::DECIMAL(width, scale));
+				val = val.DefaultCastAs(LogicalType::DECIMAL(width, scale));
 				return make_unique<ConstantExpression>(move(val));
 			}
 		}
@@ -1757,11 +2292,14 @@ unique_ptr<ParsedExpression> Transformer::TransformNullTest(duckdb_libpgquery::P
 namespace duckdb {
 
 unique_ptr<ParsedExpression> Transformer::TransformLambda(duckdb_libpgquery::PGLambdaFunction *node) {
-	if (!node->lhs) {
-		throw ParserException("Lambda function must have parameters");
-	}
+
+	D_ASSERT(node->lhs);
+	D_ASSERT(node->rhs);
+
 	auto lhs = TransformExpression(node->lhs);
 	auto rhs = TransformExpression(node->rhs);
+	D_ASSERT(lhs);
+	D_ASSERT(rhs);
 	return make_unique<LambdaExpression>(move(lhs), move(rhs));
 }
 
@@ -2024,6 +2562,7 @@ unique_ptr<ParsedExpression> Transformer::TransformPositionalReference(duckdb_li
 
 
 
+
 namespace duckdb {
 
 unique_ptr<ParsedExpression> Transformer::TransformSubquery(duckdb_libpgquery::PGSubLink *root) {
@@ -2073,6 +2612,46 @@ unique_ptr<ParsedExpression> Transformer::TransformSubquery(duckdb_libpgquery::P
 	case duckdb_libpgquery::PG_EXPR_SUBLINK: {
 		// return a single scalar value from the subquery
 		// no child expression to compare to
+		subquery_expr->subquery_type = SubqueryType::SCALAR;
+		break;
+	}
+	case duckdb_libpgquery::PG_ARRAY_SUBLINK: {
+		auto subquery_table_alias = "__subquery";
+		auto subquery_column_alias = "__arr_element";
+
+		// ARRAY expression
+		// wrap subquery into "SELECT CASE WHEN ARRAY_AGG(i) IS NULL THEN [] ELSE ARRAY_AGG(i) END FROM (...) tbl(i)"
+		auto select_node = make_unique<SelectNode>();
+
+		// ARRAY_AGG(i)
+		vector<unique_ptr<ParsedExpression>> children;
+		children.push_back(
+		    make_unique_base<ParsedExpression, ColumnRefExpression>(subquery_column_alias, subquery_table_alias));
+		auto aggr = make_unique<FunctionExpression>("array_agg", move(children));
+		// ARRAY_AGG(i) IS NULL
+		auto agg_is_null = make_unique<OperatorExpression>(ExpressionType::OPERATOR_IS_NULL, aggr->Copy());
+		// empty list
+		vector<unique_ptr<ParsedExpression>> list_children;
+		auto empty_list = make_unique<FunctionExpression>("list_value", move(list_children));
+		// CASE
+		auto case_expr = make_unique<CaseExpression>();
+		CaseCheck check;
+		check.when_expr = move(agg_is_null);
+		check.then_expr = move(empty_list);
+		case_expr->case_checks.push_back(move(check));
+		case_expr->else_expr = move(aggr);
+
+		select_node->select_list.push_back(move(case_expr));
+
+		// FROM (...) tbl(i)
+		auto child_subquery = make_unique<SubqueryRef>(move(subquery_expr->subquery), subquery_table_alias);
+		child_subquery->column_name_alias.emplace_back(subquery_column_alias);
+		select_node->from_table = move(child_subquery);
+
+		auto new_subquery = make_unique<SelectStatement>();
+		new_subquery->node = move(select_node);
+		subquery_expr->subquery = move(new_subquery);
+
 		subquery_expr->subquery_type = SubqueryType::SCALAR;
 		break;
 	}
@@ -2960,7 +3539,7 @@ void Transformer::TransformCTE(duckdb_libpgquery::PGWithClause *de_with_clause, 
 		}
 		// we need a query
 		if (!cte->ctequery || cte->ctequery->type != duckdb_libpgquery::T_PGSelectStmt) {
-			throw InternalException("A CTE needs a SELECT");
+			throw NotImplementedException("A CTE needs a SELECT");
 		}
 
 		// CTE transformation can either result in inlining for non recursive CTEs, or in recursive CTE bindings
@@ -3209,6 +3788,7 @@ bool Transformer::TransformGroupBy(duckdb_libpgquery::PGList *group, SelectNode 
 
 
 
+
 namespace duckdb {
 
 bool Transformer::TransformOrderBy(duckdb_libpgquery::PGList *order, vector<OrderByNode> &result) {
@@ -3242,6 +3822,13 @@ bool Transformer::TransformOrderBy(duckdb_libpgquery::PGList *order, vector<Orde
 				throw NotImplementedException("Unimplemented order by type");
 			}
 			auto order_expression = TransformExpression(target);
+			if (order_expression->GetExpressionClass() == ExpressionClass::STAR) {
+				auto &star_expr = (StarExpression &)*order_expression;
+				D_ASSERT(star_expr.relation_name.empty());
+				if (star_expr.columns) {
+					throw ParserException("COLUMNS expr is not supported in ORDER BY");
+				}
+			}
 			result.emplace_back(type, null_order, move(order_expression));
 		} else {
 			throw NotImplementedException("ORDER BY list member type %d\n", temp->type);
@@ -3300,7 +3887,9 @@ unique_ptr<SampleOptions> Transformer::TransformSampleOptions(duckdb_libpgquery:
 	if (sample_options.method) {
 		result->method = GetSampleMethod(sample_options.method);
 	}
-	result->seed = sample_options.seed == 0 ? -1 : sample_options.seed;
+	if (sample_options.has_seed) {
+		result->seed = sample_options.seed;
+	}
 	return result;
 }
 
@@ -3325,12 +3914,14 @@ LogicalType Transformer::TransformTypeName(duckdb_libpgquery::PGTypeName *type_n
 	LogicalTypeId base_type = TransformStringToLogicalTypeId(name);
 
 	LogicalType result_type;
-	if (base_type == LogicalTypeId::STRUCT) {
+	if (base_type == LogicalTypeId::LIST) {
+		throw ParserException("LIST is not valid as a stand-alone type");
+	} else if (base_type == LogicalTypeId::STRUCT) {
 		if (!type_name->typmods || type_name->typmods->length == 0) {
 			throw ParserException("Struct needs a name and entries");
 		}
 		child_list_t<LogicalType> children;
-		unordered_set<string> name_collision_set;
+		case_insensitive_set_t name_collision_set;
 
 		for (auto node = type_name->typmods->head; node; node = node->next) {
 			auto &type_val = *((duckdb_libpgquery::PGList *)node->data.ptr_value);
@@ -3372,8 +3963,44 @@ LogicalType Transformer::TransformTypeName(duckdb_libpgquery::PGTypeName *type_n
 		D_ASSERT(children.size() == 2);
 
 		result_type = LogicalType::MAP(move(children));
+	} else if (base_type == LogicalTypeId::UNION) {
+		if (!type_name->typmods || type_name->typmods->length == 0) {
+			throw ParserException("Union type needs at least one member");
+		}
+		if (type_name->typmods->length > (int)UnionType::MAX_UNION_MEMBERS) {
+			throw ParserException("Union types can have at most %d members", UnionType::MAX_UNION_MEMBERS);
+		}
+
+		child_list_t<LogicalType> children;
+		case_insensitive_set_t name_collision_set;
+
+		for (auto node = type_name->typmods->head; node; node = node->next) {
+			auto &type_val = *((duckdb_libpgquery::PGList *)node->data.ptr_value);
+			if (type_val.length != 2) {
+				throw ParserException("Union type member needs a tag name and a type name");
+			}
+
+			auto entry_name_node = (duckdb_libpgquery::PGValue *)(type_val.head->data.ptr_value);
+			D_ASSERT(entry_name_node->type == duckdb_libpgquery::T_PGString);
+			auto entry_type_node = (duckdb_libpgquery::PGValue *)(type_val.tail->data.ptr_value);
+			D_ASSERT(entry_type_node->type == duckdb_libpgquery::T_PGTypeName);
+
+			auto entry_name = string(entry_name_node->val.str);
+			D_ASSERT(!entry_name.empty());
+
+			if (name_collision_set.find(entry_name) != name_collision_set.end()) {
+				throw ParserException("Duplicate union type tag name \"%s\"", entry_name);
+			}
+
+			name_collision_set.insert(entry_name);
+
+			auto entry_type = TransformTypeName((duckdb_libpgquery::PGTypeName *)entry_type_node);
+			children.push_back(make_pair(entry_name, entry_type));
+		}
+		D_ASSERT(!children.empty());
+		result_type = LogicalType::UNION(move(children));
 	} else {
-		int8_t width, scale;
+		int64_t width, scale;
 		if (base_type == LogicalTypeId::DECIMAL) {
 			// default decimal width/scale
 			width = 18;
@@ -3462,6 +4089,9 @@ LogicalType Transformer::TransformTypeName(duckdb_libpgquery::PGTypeName *type_n
 
 
 
+
+
+
 namespace duckdb {
 
 unique_ptr<AlterStatement> Transformer::TransformAlterSequence(duckdb_libpgquery::PGNode *node) {
@@ -3477,12 +4107,18 @@ unique_ptr<AlterStatement> Transformer::TransformAlterSequence(duckdb_libpgquery
 		throw InternalException("Expected an argument for ALTER SEQUENCE.");
 	}
 
+	unordered_set<SequenceInfo, EnumClassHash> used;
 	duckdb_libpgquery::PGListCell *cell = nullptr;
 	for_each_cell(cell, stmt->options->head) {
 		auto *def_elem = reinterpret_cast<duckdb_libpgquery::PGDefElem *>(cell->data.ptr_value);
 		string opt_name = string(def_elem->defname);
 
 		if (opt_name == "owned_by") {
+			if (used.find(SequenceInfo::SEQ_OWN) != used.end()) {
+				throw ParserException("Owned by value should be passed as most once");
+			}
+			used.insert(SequenceInfo::SEQ_OWN);
+
 			auto val = (duckdb_libpgquery::PGValue *)def_elem->arg;
 			if (!val) {
 				throw InternalException("Expected an argument for option %s", opt_name);
@@ -3511,12 +4147,13 @@ unique_ptr<AlterStatement> Transformer::TransformAlterSequence(duckdb_libpgquery
 				throw InternalException("Wrong argument for %s. Expected either <schema>.<name> or <name>", opt_name);
 			}
 			auto info = make_unique<ChangeOwnershipInfo>(CatalogType::SEQUENCE_ENTRY, sequence_schema, sequence_name,
-			                                             owner_schema, owner_name);
+			                                             owner_schema, owner_name, stmt->missing_ok);
 			result->info = move(info);
 		} else {
 			throw NotImplementedException("ALTER SEQUENCE option not supported yet!");
 		}
 	}
+	result->info->if_exists = stmt->missing_ok;
 	return result;
 }
 } // namespace duckdb
@@ -3533,8 +4170,11 @@ unique_ptr<AlterStatement> Transformer::TransformAlter(duckdb_libpgquery::PGNode
 	D_ASSERT(stmt);
 	D_ASSERT(stmt->relation);
 
-	auto result = make_unique<AlterStatement>();
+	if (stmt->cmds->length != 1) {
+		throw ParserException("Only one ALTER command per statement is supported");
+	}
 
+	auto result = make_unique<AlterStatement>();
 	auto qname = TransformQualifiedName(stmt->relation);
 
 	// first we check the type of ALTER
@@ -3544,6 +4184,10 @@ unique_ptr<AlterStatement> Transformer::TransformAlter(duckdb_libpgquery::PGNode
 		switch (command->subtype) {
 		case duckdb_libpgquery::PG_AT_AddColumn: {
 			auto cdef = (duckdb_libpgquery::PGColumnDef *)command->def;
+
+			if (stmt->relkind != duckdb_libpgquery::PG_OBJECT_TABLE) {
+				throw ParserException("Adding columns is only supported for tables");
+			}
 			if (cdef->category == duckdb_libpgquery::COL_GENERATED) {
 				throw ParserException("Adding generated columns after table creation is not supported yet");
 			}
@@ -3558,37 +4202,57 @@ unique_ptr<AlterStatement> Transformer::TransformAlter(duckdb_libpgquery::PGNode
 					throw ParserException("Adding columns with constraints not yet supported");
 				}
 			}
-			result->info = make_unique<AddColumnInfo>(qname.schema, qname.name, move(centry));
+			result->info = make_unique<AddColumnInfo>(qname.schema, qname.name, stmt->missing_ok, move(centry),
+			                                          command->missing_ok);
 			break;
 		}
 		case duckdb_libpgquery::PG_AT_DropColumn: {
 			bool cascade = command->behavior == duckdb_libpgquery::PG_DROP_CASCADE;
-			result->info =
-			    make_unique<RemoveColumnInfo>(qname.schema, qname.name, command->name, command->missing_ok, cascade);
+
+			if (stmt->relkind != duckdb_libpgquery::PG_OBJECT_TABLE) {
+				throw ParserException("Dropping columns is only supported for tables");
+			}
+			result->info = make_unique<RemoveColumnInfo>(qname.schema, qname.name, stmt->missing_ok, command->name,
+			                                             command->missing_ok, cascade);
 			break;
 		}
 		case duckdb_libpgquery::PG_AT_ColumnDefault: {
 			auto expr = TransformExpression(command->def);
-			result->info = make_unique<SetDefaultInfo>(qname.schema, qname.name, command->name, move(expr));
+
+			if (stmt->relkind != duckdb_libpgquery::PG_OBJECT_TABLE) {
+				throw ParserException("Alter column's default is only supported for tables");
+			}
+			result->info =
+			    make_unique<SetDefaultInfo>(qname.schema, qname.name, stmt->missing_ok, command->name, move(expr));
 			break;
 		}
 		case duckdb_libpgquery::PG_AT_AlterColumnType: {
 			auto cdef = (duckdb_libpgquery::PGColumnDef *)command->def;
 			auto column_definition = TransformColumnDefinition(cdef);
-
 			unique_ptr<ParsedExpression> expr;
+
+			if (stmt->relkind != duckdb_libpgquery::PG_OBJECT_TABLE) {
+				throw ParserException("Alter column's type is only supported for tables");
+			}
 			if (cdef->raw_default) {
 				expr = TransformExpression(cdef->raw_default);
 			} else {
 				auto colref = make_unique<ColumnRefExpression>(command->name);
 				expr = make_unique<CastExpression>(column_definition.Type(), move(colref));
 			}
-			result->info = make_unique<ChangeColumnTypeInfo>(qname.schema, qname.name, command->name,
+			result->info = make_unique<ChangeColumnTypeInfo>(qname.schema, qname.name, stmt->missing_ok, command->name,
 			                                                 column_definition.Type(), move(expr));
 			break;
 		}
+		case duckdb_libpgquery::PG_AT_SetNotNull: {
+			result->info = make_unique<SetNotNullInfo>(qname.schema, qname.name, stmt->missing_ok, command->name);
+			break;
+		}
+		case duckdb_libpgquery::PG_AT_DropNotNull: {
+			result->info = make_unique<DropNotNullInfo>(qname.schema, qname.name, stmt->missing_ok, command->name);
+			break;
+		}
 		case duckdb_libpgquery::PG_AT_DropConstraint:
-		case duckdb_libpgquery::PG_AT_DropNotNull:
 		default:
 			throw NotImplementedException("ALTER TABLE option not supported yet!");
 		}
@@ -3757,7 +4421,6 @@ unique_ptr<CreateStatement> Transformer::TransformCreateFunction(duckdb_libpgque
 	auto qname = TransformQualifiedName(stmt->name);
 
 	unique_ptr<MacroFunction> macro_func;
-	;
 
 	// function can be null here
 	if (stmt->function) {
@@ -3773,7 +4436,8 @@ unique_ptr<CreateStatement> Transformer::TransformCreateFunction(duckdb_libpgque
 	info->schema = qname.schema;
 	info->name = qname.name;
 
-	switch (stmt->relpersistence) {
+	// temporary macro
+	switch (stmt->name->relpersistence) {
 	case duckdb_libpgquery::PG_RELPERSISTENCE_TEMP:
 		info->temporary = true;
 		break;
@@ -3784,6 +4448,9 @@ unique_ptr<CreateStatement> Transformer::TransformCreateFunction(duckdb_libpgque
 		info->temporary = false;
 		break;
 	}
+
+	// what to do on conflict
+	info->on_conflict = TransformOnConflict(stmt->onconflict);
 
 	if (stmt->params) {
 		vector<unique_ptr<ParsedExpression>> parameters;
@@ -3843,8 +4510,12 @@ unique_ptr<CreateStatement> Transformer::TransformCreateIndex(duckdb_libpgquery:
 	D_ASSERT(stmt);
 	auto result = make_unique<CreateStatement>();
 	auto info = make_unique<CreateIndexInfo>();
+	if (stmt->unique) {
+		info->constraint_type = IndexConstraintType::UNIQUE;
+	} else {
+		info->constraint_type = IndexConstraintType::NONE;
+	}
 
-	info->unique = stmt->unique;
 	info->on_conflict = TransformOnConflict(stmt->onconflict);
 
 	for (auto cell = stmt->indexParams->head; cell != nullptr; cell = cell->next) {
@@ -3876,7 +4547,10 @@ unique_ptr<CreateStatement> Transformer::TransformCreateIndex(duckdb_libpgquery:
 	if (stmt->idxname) {
 		info->index_name = stmt->idxname;
 	} else {
-		throw NotImplementedException("Index wout a name not supported yet!");
+		throw NotImplementedException("Index without a name not supported yet!");
+	}
+	for (auto &expr : info->expressions) {
+		info->parsed_expressions.emplace_back(expr->Copy());
 	}
 	result->info = move(info);
 	return result;
@@ -3921,6 +4595,8 @@ unique_ptr<CreateStatement> Transformer::TransformCreateSchema(duckdb_libpgquery
 
 
 
+
+
 namespace duckdb {
 
 unique_ptr<CreateStatement> Transformer::TransformCreateSequence(duckdb_libpgquery::PGNode *node) {
@@ -3934,27 +4610,35 @@ unique_ptr<CreateStatement> Transformer::TransformCreateSequence(duckdb_libpgque
 	info->name = qname.name;
 
 	if (stmt->options) {
+		unordered_set<SequenceInfo, EnumClassHash> used;
 		duckdb_libpgquery::PGListCell *cell = nullptr;
 		for_each_cell(cell, stmt->options->head) {
 			auto *def_elem = reinterpret_cast<duckdb_libpgquery::PGDefElem *>(cell->data.ptr_value);
 			string opt_name = string(def_elem->defname);
-
 			auto val = (duckdb_libpgquery::PGValue *)def_elem->arg;
-			if (def_elem->defaction == duckdb_libpgquery::PG_DEFELEM_UNSPEC && !val) { // e.g. NO MINVALUE
-				continue;
-			}
-			D_ASSERT(val);
-			int64_t opt_value;
-			if (val->type == duckdb_libpgquery::T_PGInteger) {
-				opt_value = val->val.ival;
-			} else if (val->type == duckdb_libpgquery::T_PGFloat) {
-				if (!TryCast::Operation<string_t, int64_t>(string_t(val->val.str), opt_value, true)) {
+			bool nodef = def_elem->defaction == duckdb_libpgquery::PG_DEFELEM_UNSPEC && !val; // e.g. NO MINVALUE
+			int64_t opt_value = 0;
+
+			if (val) {
+				if (val->type == duckdb_libpgquery::T_PGInteger) {
+					opt_value = val->val.ival;
+				} else if (val->type == duckdb_libpgquery::T_PGFloat) {
+					if (!TryCast::Operation<string_t, int64_t>(string_t(val->val.str), opt_value, true)) {
+						throw ParserException("Expected an integer argument for option %s", opt_name);
+					}
+				} else {
 					throw ParserException("Expected an integer argument for option %s", opt_name);
 				}
-			} else {
-				throw ParserException("Expected an integer argument for option %s", opt_name);
 			}
 			if (opt_name == "increment") {
+				if (used.find(SequenceInfo::SEQ_INC) != used.end()) {
+					throw ParserException("Increment value should be passed as most once");
+				}
+				used.insert(SequenceInfo::SEQ_INC);
+				if (nodef) {
+					continue;
+				}
+
 				info->increment = opt_value;
 				if (info->increment == 0) {
 					throw ParserException("Increment must not be zero");
@@ -3967,18 +4651,50 @@ unique_ptr<CreateStatement> Transformer::TransformCreateSequence(duckdb_libpgque
 					info->max_value = NumericLimits<int64_t>::Maximum();
 				}
 			} else if (opt_name == "minvalue") {
+				if (used.find(SequenceInfo::SEQ_MIN) != used.end()) {
+					throw ParserException("Minvalue should be passed as most once");
+				}
+				used.insert(SequenceInfo::SEQ_MIN);
+				if (nodef) {
+					continue;
+				}
+
 				info->min_value = opt_value;
 				if (info->increment > 0) {
 					info->start_value = info->min_value;
 				}
 			} else if (opt_name == "maxvalue") {
+				if (used.find(SequenceInfo::SEQ_MAX) != used.end()) {
+					throw ParserException("Maxvalue should be passed as most once");
+				}
+				used.insert(SequenceInfo::SEQ_MAX);
+				if (nodef) {
+					continue;
+				}
+
 				info->max_value = opt_value;
 				if (info->increment < 0) {
 					info->start_value = info->max_value;
 				}
 			} else if (opt_name == "start") {
+				if (used.find(SequenceInfo::SEQ_START) != used.end()) {
+					throw ParserException("Start value should be passed as most once");
+				}
+				used.insert(SequenceInfo::SEQ_START);
+				if (nodef) {
+					continue;
+				}
+
 				info->start_value = opt_value;
 			} else if (opt_name == "cycle") {
+				if (used.find(SequenceInfo::SEQ_CYCLE) != used.end()) {
+					throw ParserException("Cycle value should be passed as most once");
+				}
+				used.insert(SequenceInfo::SEQ_CYCLE);
+				if (nodef) {
+					continue;
+				}
+
 				info->cycle = opt_value > 0;
 			} else {
 				throw ParserException("Unrecognized option \"%s\" for CREATE SEQUENCE", opt_name);
@@ -4109,13 +4825,13 @@ unique_ptr<CreateStatement> Transformer::TransformCreateTable(duckdb_libpgquery:
 			auto centry = TransformColumnDefinition(cdef);
 			if (cdef->constraints) {
 				for (auto constr = cdef->constraints->head; constr != nullptr; constr = constr->next) {
-					auto constraint = TransformConstraint(constr, centry, info->columns.size());
+					auto constraint = TransformConstraint(constr, centry, info->columns.LogicalColumnCount());
 					if (constraint) {
 						info->constraints.push_back(move(constraint));
 					}
 				}
 			}
-			info->columns.push_back(move(centry));
+			info->columns.AddColumn(move(centry));
 			column_count++;
 			break;
 		}
@@ -4228,9 +4944,18 @@ unique_ptr<CreateStatement> Transformer::TransformCreateType(duckdb_libpgquery::
 	switch (stmt->kind) {
 	case duckdb_libpgquery::PG_NEWTYPE_ENUM: {
 		info->internal = false;
-		idx_t size = 0;
-		auto ordered_array = ReadPgListToVector(stmt->vals, size);
-		info->type = LogicalType::ENUM(info->name, ordered_array, size);
+		if (stmt->query) {
+			// CREATE TYPE mood AS ENUM (SELECT ...)
+			D_ASSERT(stmt->vals == nullptr);
+			auto query = TransformSelect(stmt->query, false);
+			info->query = move(query);
+			info->type = LogicalType::INVALID;
+		} else {
+			D_ASSERT(stmt->query == nullptr);
+			idx_t size = 0;
+			auto ordered_array = ReadPgListToVector(stmt->vals, size);
+			info->type = LogicalType::ENUM(info->name, ordered_array, size);
+		}
 	} break;
 
 	case duckdb_libpgquery::PG_NEWTYPE_ALIAS: {
@@ -4716,14 +5441,14 @@ unique_ptr<AlterStatement> Transformer::TransformRename(duckdb_libpgquery::PGNod
 		// get the old name and the new name
 		string old_name = stmt->subname;
 		string new_name = stmt->newname;
-		info = make_unique<RenameColumnInfo>(schema, table, old_name, new_name);
+		info = make_unique<RenameColumnInfo>(schema, table, stmt->missing_ok, old_name, new_name);
 		break;
 	}
 	case duckdb_libpgquery::PG_OBJECT_TABLE: {
 		// change table name
 
 		// get the table and schema
-		string schema = DEFAULT_SCHEMA;
+		string schema = INVALID_SCHEMA;
 		string table;
 		D_ASSERT(stmt->relation->relname);
 		if (stmt->relation->relname) {
@@ -4733,7 +5458,7 @@ unique_ptr<AlterStatement> Transformer::TransformRename(duckdb_libpgquery::PGNod
 			schema = stmt->relation->schemaname;
 		}
 		string new_name = stmt->newname;
-		info = make_unique<RenameTableInfo>(schema, table, new_name);
+		info = make_unique<RenameTableInfo>(schema, table, stmt->missing_ok, new_name);
 		break;
 	}
 
@@ -4741,7 +5466,7 @@ unique_ptr<AlterStatement> Transformer::TransformRename(duckdb_libpgquery::PGNod
 		// change view name
 
 		// get the view and schema
-		string schema = DEFAULT_SCHEMA;
+		string schema = INVALID_SCHEMA;
 		string view;
 		D_ASSERT(stmt->relation->relname);
 		if (stmt->relation->relname) {
@@ -4751,7 +5476,7 @@ unique_ptr<AlterStatement> Transformer::TransformRename(duckdb_libpgquery::PGNod
 			schema = stmt->relation->schemaname;
 		}
 		string new_name = stmt->newname;
-		info = make_unique<RenameViewInfo>(schema, view, new_name);
+		info = make_unique<RenameViewInfo>(schema, view, stmt->missing_ok, new_name);
 		break;
 	}
 	case duckdb_libpgquery::PG_OBJECT_DATABASE:
@@ -4759,6 +5484,7 @@ unique_ptr<AlterStatement> Transformer::TransformRename(duckdb_libpgquery::PGNod
 		throw NotImplementedException("Schema element not supported yet!");
 	}
 	D_ASSERT(info);
+	info->if_exists = stmt->missing_ok;
 
 	auto result = make_unique<AlterStatement>();
 	result->info = move(info);
@@ -4870,7 +5596,8 @@ unique_ptr<QueryNode> Transformer::TransformSelectNode(duckdb_libpgquery::PGSele
 	}
 	case duckdb_libpgquery::PG_SETOP_UNION:
 	case duckdb_libpgquery::PG_SETOP_EXCEPT:
-	case duckdb_libpgquery::PG_SETOP_INTERSECT: {
+	case duckdb_libpgquery::PG_SETOP_INTERSECT:
+	case duckdb_libpgquery::PG_SETOP_UNION_BY_NAME: {
 		node = make_unique<SetOperationNode>();
 		auto result = (SetOperationNode *)node.get();
 		if (stmt->withClause) {
@@ -4893,6 +5620,10 @@ unique_ptr<QueryNode> Transformer::TransformSelectNode(duckdb_libpgquery::PGSele
 			break;
 		case duckdb_libpgquery::PG_SETOP_INTERSECT:
 			result->setop_type = SetOperationType::INTERSECT;
+			break;
+		case duckdb_libpgquery::PG_SETOP_UNION_BY_NAME:
+			select_distinct = !stmt->all;
+			result->setop_type = SetOperationType::UNION_BY_NAME;
 			break;
 		default:
 			throw Exception("Unexpected setop type");
@@ -5002,6 +5733,21 @@ unique_ptr<SetStatement> Transformer::TransformSet(duckdb_libpgquery::PGNode *no
 
 namespace duckdb {
 
+static void TransformShowName(unique_ptr<PragmaStatement> &result, const string &name) {
+	auto &info = *result->info;
+
+	if (name == "\"tables\"") {
+		// show all tables
+		info.name = "show_tables";
+	} else if (name == "__show_tables_expanded") {
+		info.name = "show_tables_expanded";
+	} else {
+		// show one specific table
+		info.name = "show";
+		info.parameters.emplace_back(name);
+	}
+}
+
 unique_ptr<SQLStatement> Transformer::TransformShow(duckdb_libpgquery::PGNode *node) {
 	// we transform SHOW x into PRAGMA SHOW('x')
 
@@ -5014,7 +5760,9 @@ unique_ptr<SQLStatement> Transformer::TransformShow(duckdb_libpgquery::PGNode *n
 		auto select = make_unique<SelectNode>();
 		select->select_list.push_back(make_unique<StarExpression>());
 		auto basetable = make_unique<BaseTableRef>();
-		basetable->table_name = stmt->name;
+		auto qualified_name = QualifiedName::Parse(stmt->name);
+		basetable->schema_name = qualified_name.schema;
+		basetable->table_name = qualified_name.name;
 		select->from_table = move(basetable);
 
 		info.query = move(select);
@@ -5022,20 +5770,9 @@ unique_ptr<SQLStatement> Transformer::TransformShow(duckdb_libpgquery::PGNode *n
 	}
 
 	auto result = make_unique<PragmaStatement>();
-	auto &info = *result->info;
 
-	string name = stmt->name;
-	if (name == "tables") {
-		// show all tables
-		info.name = "show_tables";
-	} else if (name == "__show_tables_expanded") {
-		info.name = "show_tables_expanded";
-	} else {
-		// show one specific table
-		info.name = "show";
-		info.parameters.emplace_back(stmt->name);
-	}
-
+	auto show_name = stmt->name;
+	TransformShowName(result, show_name);
 	return move(result);
 }
 
@@ -5124,12 +5861,55 @@ unique_ptr<UpdateStatement> Transformer::TransformUpdate(duckdb_libpgquery::PGNo
 
 namespace duckdb {
 
-unique_ptr<VacuumStatement> Transformer::TransformVacuum(duckdb_libpgquery::PGNode *node) {
+VacuumOptions ParseOptions(int options) {
+	VacuumOptions result;
+	if (options & duckdb_libpgquery::PGVacuumOption::PG_VACOPT_VACUUM) {
+		result.vacuum = true;
+	}
+	if (options & duckdb_libpgquery::PGVacuumOption::PG_VACOPT_ANALYZE) {
+		result.analyze = true;
+	}
+	if (options & duckdb_libpgquery::PGVacuumOption::PG_VACOPT_VERBOSE) {
+		throw NotImplementedException("Verbose vacuum option");
+	}
+	if (options & duckdb_libpgquery::PGVacuumOption::PG_VACOPT_FREEZE) {
+		throw NotImplementedException("Freeze vacuum option");
+	}
+	if (options & duckdb_libpgquery::PGVacuumOption::PG_VACOPT_FULL) {
+		throw NotImplementedException("Full vacuum option");
+	}
+	if (options & duckdb_libpgquery::PGVacuumOption::PG_VACOPT_NOWAIT) {
+		throw NotImplementedException("No Wait vacuum option");
+	}
+	if (options & duckdb_libpgquery::PGVacuumOption::PG_VACOPT_SKIPTOAST) {
+		throw NotImplementedException("Skip Toast vacuum option");
+	}
+	if (options & duckdb_libpgquery::PGVacuumOption::PG_VACOPT_DISABLE_PAGE_SKIPPING) {
+		throw NotImplementedException("Disable Page Skipping vacuum option");
+	}
+	return result;
+}
+
+unique_ptr<SQLStatement> Transformer::TransformVacuum(duckdb_libpgquery::PGNode *node) {
 	auto stmt = reinterpret_cast<duckdb_libpgquery::PGVacuumStmt *>(node);
 	D_ASSERT(stmt);
-	(void)stmt;
-	auto result = make_unique<VacuumStatement>();
-	return result;
+
+	auto result = make_unique<VacuumStatement>(ParseOptions(stmt->options));
+
+	if (stmt->relation) {
+		result->info->ref = TransformRangeVar(stmt->relation);
+		result->info->has_table = true;
+	}
+
+	if (stmt->va_cols) {
+		D_ASSERT(result->info->has_table);
+		for (auto col_node = stmt->va_cols->head; col_node != nullptr; col_node = col_node->next) {
+			result->info->columns.emplace_back(
+			    reinterpret_cast<duckdb_libpgquery::PGValue *>(col_node->data.ptr_value)->val.str);
+		}
+	}
+
+	return move(result);
 }
 
 } // namespace duckdb
@@ -5286,6 +6066,9 @@ unique_ptr<TableRef> Transformer::TransformRangeSubselect(duckdb_libpgquery::PGR
 	auto subquery = subquery_transformer.TransformSelect(root->subquery);
 	if (!subquery) {
 		return nullptr;
+	}
+	if (root->lateral) {
+		throw NotImplementedException("LATERAL not implemented");
 	}
 	auto result = make_unique<SubqueryRef>(move(subquery));
 	result->alias = TransformAlias(root->alias, result->column_name_alias);
@@ -5534,8 +6317,6 @@ unique_ptr<SQLStatement> Transformer::TransformStatementInternal(duckdb_libpgque
 
 
 
-
-
 #include <algorithm>
 
 namespace duckdb {
@@ -5689,7 +6470,9 @@ unique_ptr<ParsedExpression> BindContext::ExpandGeneratedColumn(const string &ta
 	auto binding = GetBinding(table_name, error_message);
 	D_ASSERT(binding);
 	auto &table_binding = *(TableBinding *)binding;
-	return table_binding.ExpandGeneratedColumn(column_name);
+	auto result = table_binding.ExpandGeneratedColumn(column_name);
+	result->alias = column_name;
+	return result;
 }
 
 unique_ptr<ParsedExpression> BindContext::CreateColumnReference(const string &table_name, const string &column_name) {
@@ -5711,8 +6494,7 @@ static bool ColumnIsGenerated(Binding *binding, column_t index) {
 	}
 	D_ASSERT(catalog_entry->type == CatalogType::TABLE_ENTRY);
 	auto table_entry = (TableCatalogEntry *)catalog_entry;
-	D_ASSERT(table_entry->columns.size() >= index);
-	return table_entry->columns[index].Generated();
+	return table_entry->columns.GetColumn(LogicalIndex(index)).Generated();
 }
 
 unique_ptr<ParsedExpression> BindContext::CreateColumnReference(const string &schema_name, const string &table_name,
@@ -5830,6 +6612,13 @@ bool BindContext::CheckExclusionList(StarExpression &expr, Binding *binding, con
 	return false;
 }
 
+bool CheckRegex(const string &column_name, duckdb_re2::RE2 *regex) {
+	if (!regex) {
+		return true;
+	}
+	return RE2::PartialMatch(column_name, *regex);
+}
+
 void BindContext::GenerateAllColumnExpressions(StarExpression &expr,
                                                vector<unique_ptr<ParsedExpression>> &new_select_list) {
 	if (bindings_list.empty()) {
@@ -5839,6 +6628,15 @@ void BindContext::GenerateAllColumnExpressions(StarExpression &expr,
 	if (expr.relation_name.empty()) {
 		// SELECT * case
 		// bind all expressions of each table in-order
+		unique_ptr<duckdb_re2::RE2> regex;
+		bool found_match = true;
+		if (!expr.regex.empty()) {
+			regex = make_unique<duckdb_re2::RE2>(expr.regex);
+			if (!regex->error().empty()) {
+				throw BinderException("Failed to compile regex \"%s\": %s", expr.regex, regex->error());
+			}
+			found_match = false;
+		}
 		unordered_set<UsingColumnSet *> handled_using_columns;
 		for (auto &entry : bindings_list) {
 			auto binding = entry.second;
@@ -5846,6 +6644,10 @@ void BindContext::GenerateAllColumnExpressions(StarExpression &expr,
 				if (CheckExclusionList(expr, binding, column_name, new_select_list, excluded_columns)) {
 					continue;
 				}
+				if (!CheckRegex(column_name, regex.get())) {
+					continue;
+				}
+				found_match = true;
 				// check if this column is a USING column
 				auto using_binding = GetUsingBinding(column_name, binding->alias);
 				if (using_binding) {
@@ -5875,18 +6677,50 @@ void BindContext::GenerateAllColumnExpressions(StarExpression &expr,
 				new_select_list.push_back(make_unique<ColumnRefExpression>(column_name, binding->alias));
 			}
 		}
+		if (!found_match) {
+			throw BinderException("No matching columns found that match regex \"%s\"", expr.regex);
+		}
 	} else {
 		// SELECT tbl.* case
+		// SELECT struct.* case
 		string error;
 		auto binding = GetBinding(expr.relation_name, error);
+		bool is_struct_ref = false;
 		if (!binding) {
-			throw BinderException(error);
-		}
-		for (auto &column_name : binding->names) {
-			if (CheckExclusionList(expr, binding, column_name, new_select_list, excluded_columns)) {
-				continue;
+			auto binding_name = GetMatchingBinding(expr.relation_name);
+			if (binding_name.empty()) {
+				throw BinderException(error);
 			}
-			new_select_list.push_back(make_unique<ColumnRefExpression>(column_name, binding->alias));
+			binding = bindings[binding_name].get();
+			is_struct_ref = true;
+		}
+
+		if (is_struct_ref) {
+			auto col_idx = binding->GetBindingIndex(expr.relation_name);
+			auto col_type = binding->types[col_idx];
+			if (col_type.id() != LogicalTypeId::STRUCT) {
+				throw BinderException(StringUtil::Format(
+				    "Cannot extract field from expression \"%s\" because it is not a struct", expr.ToString()));
+			}
+			auto &struct_children = StructType::GetChildTypes(col_type);
+			vector<string> column_names(3);
+			column_names[0] = binding->alias;
+			column_names[1] = expr.relation_name;
+			for (auto &child : struct_children) {
+				if (CheckExclusionList(expr, binding, child.first, new_select_list, excluded_columns)) {
+					continue;
+				}
+				column_names[2] = child.first;
+				new_select_list.push_back(make_unique<ColumnRefExpression>(column_names));
+			}
+		} else {
+			for (auto &column_name : binding->names) {
+				if (CheckExclusionList(expr, binding, column_name, new_select_list, excluded_columns)) {
+					continue;
+				}
+
+				new_select_list.push_back(make_unique<ColumnRefExpression>(column_name, binding->alias));
+			}
 		}
 	}
 	for (auto &excluded : expr.exclude_list) {
@@ -5912,13 +6746,15 @@ void BindContext::AddBinding(const string &alias, unique_ptr<Binding> binding) {
 }
 
 void BindContext::AddBaseTable(idx_t index, const string &alias, const vector<string> &names,
-                               const vector<LogicalType> &types, LogicalGet &get) {
-	AddBinding(alias, make_unique<TableBinding>(alias, types, names, get, index, true));
+                               const vector<LogicalType> &types, vector<column_t> &bound_column_ids,
+                               StandardEntry *entry) {
+	AddBinding(alias, make_unique<TableBinding>(alias, types, names, bound_column_ids, entry, index, true));
 }
 
 void BindContext::AddTableFunction(idx_t index, const string &alias, const vector<string> &names,
-                                   const vector<LogicalType> &types, LogicalGet &get) {
-	AddBinding(alias, make_unique<TableBinding>(alias, types, names, get, index));
+                                   const vector<LogicalType> &types, vector<column_t> &bound_column_ids,
+                                   StandardEntry *entry) {
+	AddBinding(alias, make_unique<TableBinding>(alias, types, names, bound_column_ids, entry, index));
 }
 
 static string AddColumnNameToBinding(const string &base_name, case_insensitive_set_t &current_names) {
@@ -6026,9 +6862,12 @@ void BindContext::AddContext(BindContext other) {
 
 
 
+
+
+
 namespace duckdb {
 
-static void InvertPercentileFractions(unique_ptr<ParsedExpression> &fractions) {
+static void InvertPercentileFractions(ClientContext &context, unique_ptr<ParsedExpression> &fractions) {
 	D_ASSERT(fractions.get());
 	D_ASSERT(fractions->expression_class == ExpressionClass::BOUND_EXPRESSION);
 	auto &bound = (BoundExpression &)*fractions;
@@ -6037,13 +6876,19 @@ static void InvertPercentileFractions(unique_ptr<ParsedExpression> &fractions) {
 		return;
 	}
 
-	Value value = ExpressionExecutor::EvaluateScalar(*bound.expr);
+	Value value = ExpressionExecutor::EvaluateScalar(context, *bound.expr);
 	if (value.type().id() == LogicalTypeId::LIST) {
 		vector<Value> values;
 		for (const auto &element_val : ListValue::GetChildren(value)) {
-			values.push_back(Value::DOUBLE(1 - element_val.GetValue<double>()));
+			if (element_val.IsNull()) {
+				values.push_back(element_val);
+			} else {
+				values.push_back(Value::DOUBLE(1 - element_val.GetValue<double>()));
+			}
 		}
 		bound.expr = make_unique<BoundConstantExpression>(Value::LIST(values));
+	} else if (value.IsNull()) {
+		bound.expr = make_unique<BoundConstantExpression>(value);
 	} else {
 		bound.expr = make_unique<BoundConstantExpression>(Value::DOUBLE(1 - value.GetValue<double>()));
 	}
@@ -6072,7 +6917,8 @@ BindResult SelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 		if (ordered_set_agg) {
 			auto &config = DBConfig::GetConfig(context);
 			const auto &order = aggr.order_bys->orders[0];
-			const auto sense = (order.type == OrderType::ORDER_DEFAULT) ? config.default_order_type : order.type;
+			const auto sense =
+			    (order.type == OrderType::ORDER_DEFAULT) ? config.options.default_order_type : order.type;
 			invert_fractions = (sense == OrderType::DESCENDING);
 		}
 	}
@@ -6080,8 +6926,8 @@ BindResult SelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	for (auto &child : aggr.children) {
 		aggregate_binder.BindChild(child, 0, error);
 		// We have to invert the fractions for PERCENTILE_XXXX DESC
-		if (invert_fractions) {
-			InvertPercentileFractions(child);
+		if (error.empty() && invert_fractions) {
+			InvertPercentileFractions(context, child);
 		}
 	}
 
@@ -6130,6 +6976,8 @@ BindResult SelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 			// we didn't bind columns, try again in children
 			return BindResult(error);
 		}
+	} else if (depth > 0 && !aggregate_binder.HasBoundColumns()) {
+		return BindResult("Aggregate with only constant parameters has to be bound in the root subquery");
 	}
 	if (!filter_error.empty()) {
 		return BindResult(filter_error);
@@ -6137,8 +6985,9 @@ BindResult SelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 
 	if (aggr.filter) {
 		auto &child = (BoundExpression &)*aggr.filter;
-		bound_filter = move(child.expr);
+		bound_filter = BoundCastExpression::AddCastToType(context, move(child.expr), LogicalType::BOOLEAN);
 	}
+
 	// all children bound successfully
 	// extract the children and types
 	vector<LogicalType> types;
@@ -6163,13 +7012,13 @@ BindResult SelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	}
 
 	// bind the aggregate
-	bool cast_parameters;
-	idx_t best_function = Function::BindFunction(func->name, func->functions, types, error, cast_parameters);
+	FunctionBinder function_binder(context);
+	idx_t best_function = function_binder.BindFunction(func->name, func->functions, types, error);
 	if (best_function == DConstants::INVALID_INDEX) {
 		throw BinderException(binder.FormatError(aggr, error));
 	}
 	// found a matching function!
-	auto &bound_function = func->functions[best_function];
+	auto bound_function = func->functions.GetFunctionByOffset(best_function);
 
 	// Bind any sort columns, unless the aggregate is order-insensitive
 	auto order_bys = make_unique<BoundOrderModifier>();
@@ -6177,15 +7026,18 @@ BindResult SelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 		auto &config = DBConfig::GetConfig(context);
 		for (auto &order : aggr.order_bys->orders) {
 			auto &order_expr = (BoundExpression &)*order.expression;
-			const auto sense = (order.type == OrderType::ORDER_DEFAULT) ? config.default_order_type : order.type;
-			const auto null_order =
-			    (order.null_order == OrderByNullType::ORDER_DEFAULT) ? config.default_null_order : order.null_order;
+			const auto sense =
+			    (order.type == OrderType::ORDER_DEFAULT) ? config.options.default_order_type : order.type;
+			const auto null_order = (order.null_order == OrderByNullType::ORDER_DEFAULT)
+			                            ? config.options.default_null_order
+			                            : order.null_order;
 			order_bys->orders.emplace_back(BoundOrderByNode(sense, null_order, move(order_expr.expr)));
 		}
 	}
 
-	auto aggregate = AggregateFunction::BindAggregateFunction(
-	    context, bound_function, move(children), move(bound_filter), aggr.distinct, move(order_bys), cast_parameters);
+	auto aggregate = function_binder.BindAggregateFunction(
+	    bound_function, move(children), move(bound_filter),
+	    aggr.distinct ? AggregateType::DISTINCT : AggregateType::NON_DISTINCT, move(order_bys));
 	if (aggr.export_state) {
 		aggregate = ExportAggregateFunction::Bind(move(aggregate));
 	}
@@ -6218,6 +7070,7 @@ BindResult SelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 
 
 
+
 namespace duckdb {
 
 BindResult ExpressionBinder::BindExpression(BetweenExpression &expr, idx_t depth) {
@@ -6243,9 +7096,9 @@ BindResult ExpressionBinder::BindExpression(BetweenExpression &expr, idx_t depth
 	auto input_type = BoundComparisonExpression::BindComparison(input_sql_type, lower_sql_type);
 	input_type = BoundComparisonExpression::BindComparison(input_type, upper_sql_type);
 	// add casts (if necessary)
-	input.expr = BoundCastExpression::AddCastToType(move(input.expr), input_type);
-	lower.expr = BoundCastExpression::AddCastToType(move(lower.expr), input_type);
-	upper.expr = BoundCastExpression::AddCastToType(move(upper.expr), input_type);
+	input.expr = BoundCastExpression::AddCastToType(context, move(input.expr), input_type);
+	lower.expr = BoundCastExpression::AddCastToType(context, move(lower.expr), input_type);
+	upper.expr = BoundCastExpression::AddCastToType(context, move(upper.expr), input_type);
 	if (input_type.id() == LogicalTypeId::VARCHAR) {
 		// handle collation
 		auto collation = StringType::GetCollation(input_type);
@@ -6305,12 +7158,13 @@ BindResult ExpressionBinder::BindExpression(CaseExpression &expr, idx_t depth) {
 		auto &when_expr = (BoundExpression &)*check.when_expr;
 		auto &then_expr = (BoundExpression &)*check.then_expr;
 		BoundCaseCheck result_check;
-		result_check.when_expr = BoundCastExpression::AddCastToType(move(when_expr.expr), LogicalType::BOOLEAN);
-		result_check.then_expr = BoundCastExpression::AddCastToType(move(then_expr.expr), return_type);
+		result_check.when_expr =
+		    BoundCastExpression::AddCastToType(context, move(when_expr.expr), LogicalType::BOOLEAN);
+		result_check.then_expr = BoundCastExpression::AddCastToType(context, move(then_expr.expr), return_type);
 		result->case_checks.push_back(move(result_check));
 	}
 	auto &else_expr = (BoundExpression &)*expr.else_expr;
-	result->else_expr = BoundCastExpression::AddCastToType(move(else_expr.expr), return_type);
+	result->else_expr = BoundCastExpression::AddCastToType(context, move(else_expr.expr), return_type);
 	return BindResult(move(result));
 }
 } // namespace duckdb
@@ -6338,20 +7192,15 @@ BindResult ExpressionBinder::BindExpression(CastExpression &expr, idx_t depth) {
 			// no cast required: type matches
 			return BindResult(move(child.expr));
 		}
-		child.expr = make_unique<BoundCastExpression>(move(child.expr), expr.cast_type, true);
+		child.expr = BoundCastExpression::AddCastToType(context, move(child.expr), expr.cast_type, true);
 	} else {
-		if (child.expr->type == ExpressionType::VALUE_PARAMETER) {
-			auto &parameter = (BoundParameterExpression &)*child.expr;
-			// parameter: move types into the parameter expression itself
-			parameter.return_type = expr.cast_type;
-		} else {
-			// otherwise add a cast to the target type
-			child.expr = BoundCastExpression::AddCastToType(move(child.expr), expr.cast_type);
-		}
+		// otherwise add a cast to the target type
+		child.expr = BoundCastExpression::AddCastToType(context, move(child.expr), expr.cast_type);
 	}
 	return BindResult(move(child.expr));
 }
 } // namespace duckdb
+
 
 
 
@@ -6364,9 +7213,14 @@ BindResult ExpressionBinder::BindExpression(CollateExpression &expr, idx_t depth
 		return BindResult(error);
 	}
 	auto &child = (BoundExpression &)*expr.child;
+	if (child.expr->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
 	if (child.expr->return_type.id() != LogicalTypeId::VARCHAR) {
 		throw BinderException("collations are only supported for type varchar");
 	}
+	// Validate the collation, but don't use it
+	PushCollation(context, child.expr->Copy(), expr.collation, false);
 	child.expr->return_type = LogicalType::VARCHAR_COLLATION(expr.collation);
 	return BindResult(move(child.expr));
 }
@@ -6398,7 +7252,7 @@ unique_ptr<ParsedExpression> ExpressionBinder::QualifyColumnName(const string &c
 		unique_ptr<Expression> expression;
 		if (!using_binding->primary_binding.empty()) {
 			// we can! just assign the table name and re-bind
-			return make_unique<ColumnRefExpression>(column_name, using_binding->primary_binding);
+			return binder.bind_context.CreateColumnReference(using_binding->primary_binding, column_name);
 		} else {
 			// // we cannot! we need to bind this as a coalesce between all the relevant columns
 			auto coalesce = make_unique<OperatorExpression>(ExpressionType::OPERATOR_COALESCE);
@@ -6408,17 +7262,40 @@ unique_ptr<ParsedExpression> ExpressionBinder::QualifyColumnName(const string &c
 			return move(coalesce);
 		}
 	}
-	// no table name: find a binding that contains this
+
+	// find a binding that contains this
+	string table_name = binder.bind_context.GetMatchingBinding(column_name);
+
+	// throw an error if a macro conflicts with a column name
+	auto is_macro_column = false;
 	if (binder.macro_binding != nullptr && binder.macro_binding->HasMatchingBinding(column_name)) {
-		// priority to macro parameter bindings TODO: throw a warning when this name conflicts
+		is_macro_column = true;
+		if (!table_name.empty()) {
+			throw BinderException("Conflicting column names for column " + column_name + "!");
+		}
+	}
+
+	if (lambda_bindings) {
+		for (idx_t i = 0; i < lambda_bindings->size(); i++) {
+			if ((*lambda_bindings)[i].HasMatchingBinding(column_name)) {
+
+				// throw an error if a lambda conflicts with a column name or a macro
+				if (!table_name.empty() || is_macro_column) {
+					throw BinderException("Conflicting column names for column " + column_name + "!");
+				}
+
+				D_ASSERT(!(*lambda_bindings)[i].alias.empty());
+				return make_unique<ColumnRefExpression>(column_name, (*lambda_bindings)[i].alias);
+			}
+		}
+	}
+
+	if (is_macro_column) {
 		D_ASSERT(!binder.macro_binding->alias.empty());
 		return make_unique<ColumnRefExpression>(column_name, binder.macro_binding->alias);
-	} else {
-		// see if it's a column
-		string table_name = binder.bind_context.GetMatchingBinding(column_name);
-		if (!table_name.empty()) {
-			return binder.bind_context.CreateColumnReference(table_name, column_name);
-		}
+	}
+	// see if it's a column
+	if (table_name.empty()) {
 		// it's not, find candidates and error
 		auto similar_bindings = binder.bind_context.GetSimilarBindings(column_name);
 		string candidate_str = StringUtil::CandidatesMessage(similar_bindings, "Candidate bindings");
@@ -6426,6 +7303,7 @@ unique_ptr<ParsedExpression> ExpressionBinder::QualifyColumnName(const string &c
 		    StringUtil::Format("Referenced column \"%s\" not found in FROM clause!%s", column_name, candidate_str);
 		return nullptr;
 	}
+	return binder.bind_context.CreateColumnReference(table_name, column_name);
 }
 
 void ExpressionBinder::QualifyColumnNames(unique_ptr<ParsedExpression> &expr) {
@@ -6438,6 +7316,7 @@ void ExpressionBinder::QualifyColumnNames(unique_ptr<ParsedExpression> &expr) {
 			if (!expr->alias.empty()) {
 				new_expr->alias = expr->alias;
 			}
+			new_expr->query_location = colref.query_location;
 			expr = move(new_expr);
 		}
 		break;
@@ -6467,6 +7346,21 @@ void ExpressionBinder::QualifyColumnNames(Binder &binder, unique_ptr<ParsedExpre
 
 unique_ptr<ParsedExpression> ExpressionBinder::CreateStructExtract(unique_ptr<ParsedExpression> base,
                                                                    string field_name) {
+
+	// we need to transform the struct extract if it is inside a lambda expression
+	// because we cannot bind to an existing table, so we remove the dummy table also
+	if (lambda_bindings && base->type == ExpressionType::COLUMN_REF) {
+		auto &lambda_column_ref = (ColumnRefExpression &)*base;
+		D_ASSERT(!lambda_column_ref.column_names.empty());
+
+		if (lambda_column_ref.column_names[0].find(DummyBinding::DUMMY_NAME) != string::npos) {
+			D_ASSERT(lambda_column_ref.column_names.size() == 2);
+			auto lambda_param_name = lambda_column_ref.column_names.back();
+			lambda_column_ref.column_names.clear();
+			lambda_column_ref.column_names.push_back(lambda_param_name);
+		}
+	}
+
 	vector<unique_ptr<ParsedExpression>> children;
 	children.push_back(move(base));
 	children.push_back(make_unique_base<ParsedExpression, ConstantExpression>(Value(move(field_name))));
@@ -6593,10 +7487,18 @@ BindResult ExpressionBinder::BindExpression(ColumnRefExpression &colref_p, idx_t
 	if (!expr) {
 		return BindResult(binder.FormatError(colref_p, error_message));
 	}
-	//! Generated column returns generated expression
+	expr->query_location = colref_p.query_location;
+
+	// a generated column returns a generated expression, a struct on a column returns a struct extract
 	if (expr->type != ExpressionType::COLUMN_REF) {
-		return BindExpression(&expr, depth);
+		auto alias = expr->alias;
+		auto result = BindExpression(&expr, depth);
+		if (result.expression) {
+			result.expression->alias = move(alias);
+		}
+		return result;
 	}
+
 	auto &colref = (ColumnRefExpression &)*expr;
 	D_ASSERT(colref.IsQualified());
 	auto &table_name = colref.GetTableName();
@@ -6604,12 +7506,29 @@ BindResult ExpressionBinder::BindExpression(ColumnRefExpression &colref_p, idx_t
 	// individual column reference
 	// resolve to either a base table or a subquery expression
 	// if it was a macro parameter, let macro_binding bind it to the argument
+	// if it was a lambda parameter, let lambda_bindings bind it to the argument
+
 	BindResult result;
-	if (binder.macro_binding && table_name == binder.macro_binding->alias) {
-		result = binder.macro_binding->Bind(colref, depth);
-	} else {
-		result = binder.bind_context.BindColumn(colref, depth);
+
+	auto found_lambda_binding = false;
+	if (lambda_bindings) {
+		for (idx_t i = 0; i < lambda_bindings->size(); i++) {
+			if (table_name == (*lambda_bindings)[i].alias) {
+				result = (*lambda_bindings)[i].Bind(colref, depth);
+				found_lambda_binding = true;
+				break;
+			}
+		}
 	}
+
+	if (!found_lambda_binding) {
+		if (binder.macro_binding && table_name == binder.macro_binding->alias) {
+			result = binder.macro_binding->Bind(colref, depth);
+		} else {
+			result = binder.bind_context.BindColumn(colref, depth);
+		}
+	}
+
 	if (!result.HasError()) {
 		BoundColumnReferenceInfo ref;
 		ref.name = colref.column_names.back();
@@ -6638,6 +7557,8 @@ BindResult ExpressionBinder::BindExpression(ColumnRefExpression &colref_p, idx_t
 
 
 
+
+
 namespace duckdb {
 
 unique_ptr<Expression> ExpressionBinder::PushCollation(ClientContext &context, unique_ptr<Expression> source,
@@ -6645,7 +7566,7 @@ unique_ptr<Expression> ExpressionBinder::PushCollation(ClientContext &context, u
 	// replace default collation with system collation
 	string collation;
 	if (collation_p.empty()) {
-		collation = DBConfig::GetConfig(context).collation;
+		collation = DBConfig::GetConfig(context).options.collation;
 	} else {
 		collation = collation_p;
 	}
@@ -6676,7 +7597,9 @@ unique_ptr<Expression> ExpressionBinder::PushCollation(ClientContext &context, u
 		}
 		vector<unique_ptr<Expression>> children;
 		children.push_back(move(source));
-		auto function = ScalarFunction::BindScalarFunction(context, collation_entry->function, move(children));
+
+		FunctionBinder function_binder(context);
+		auto function = function_binder.BindScalarFunction(collation_entry->function, move(children));
 		source = move(function);
 	}
 	return source;
@@ -6747,9 +7670,10 @@ BindResult ExpressionBinder::BindExpression(ComparisonExpression &expr, idx_t de
 	// now obtain the result type of the input types
 	auto input_type = BoundComparisonExpression::BindComparison(left_sql_type, right_sql_type);
 	// add casts (if necessary)
-	left.expr = BoundCastExpression::AddCastToType(move(left.expr), input_type, input_type.id() == LogicalTypeId::ENUM);
-	right.expr =
-	    BoundCastExpression::AddCastToType(move(right.expr), input_type, input_type.id() == LogicalTypeId::ENUM);
+	left.expr = BoundCastExpression::AddCastToType(context, move(left.expr), input_type,
+	                                               input_type.id() == LogicalTypeId::ENUM);
+	right.expr = BoundCastExpression::AddCastToType(context, move(right.expr), input_type,
+	                                                input_type.id() == LogicalTypeId::ENUM);
 
 	if (input_type.id() == LogicalTypeId::VARCHAR) {
 		// handle collation
@@ -6784,7 +7708,7 @@ BindResult ExpressionBinder::BindExpression(ConjunctionExpression &expr, idx_t d
 	auto result = make_unique<BoundConjunctionExpression>(expr.type);
 	for (auto &child_expr : expr.children) {
 		auto &child = (BoundExpression &)*child_expr;
-		result->children.push_back(BoundCastExpression::AddCastToType(move(child.expr), LogicalType::BOOLEAN));
+		result->children.push_back(BoundCastExpression::AddCastToType(context, move(child.expr), LogicalType::BOOLEAN));
 	}
 	// now create the bound conjunction expression
 	return BindResult(move(result));
@@ -6812,6 +7736,9 @@ BindResult ExpressionBinder::BindExpression(ConstantExpression &expr, idx_t dept
 
 
 
+
+
+
 namespace duckdb {
 
 BindResult ExpressionBinder::BindExpression(FunctionExpression &function, idx_t depth,
@@ -6828,10 +7755,23 @@ BindResult ExpressionBinder::BindExpression(FunctionExpression &function, idx_t 
 	auto &catalog = Catalog::GetCatalog(context);
 	auto func = catalog.GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, function.schema, function.function_name,
 	                             false, error_context);
+
 	switch (func->type) {
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
 		// scalar function
+
+		// check for lambda parameters, ignore ->> operator (JSON extension)
+		if (function.function_name != "->>") {
+			for (auto &child : function.children) {
+				if (child->expression_class == ExpressionClass::LAMBDA) {
+					return BindLambdaFunction(function, (ScalarFunctionCatalogEntry *)func, depth);
+				}
+			}
+		}
+
+		// other scalar function
 		return BindFunction(function, (ScalarFunctionCatalogEntry *)func, depth);
+
 	case CatalogType::MACRO_ENTRY:
 		// macro function
 		return BindMacro(function, (ScalarMacroCatalogEntry *)func, depth, expr_ptr);
@@ -6842,11 +7782,15 @@ BindResult ExpressionBinder::BindExpression(FunctionExpression &function, idx_t 
 }
 
 BindResult ExpressionBinder::BindFunction(FunctionExpression &function, ScalarFunctionCatalogEntry *func, idx_t depth) {
+
 	// bind the children of the function expression
 	string error;
+
+	// bind of each child
 	for (idx_t i = 0; i < function.children.size(); i++) {
 		BindChild(function.children[i], depth, error);
 	}
+
 	if (!error.empty()) {
 		return BindResult(error);
 	}
@@ -6862,11 +7806,106 @@ BindResult ExpressionBinder::BindFunction(FunctionExpression &function, ScalarFu
 		D_ASSERT(child.expr);
 		children.push_back(move(child.expr));
 	}
+
+	FunctionBinder function_binder(context);
 	unique_ptr<Expression> result =
-	    ScalarFunction::BindScalarFunction(context, *func, move(children), error, function.is_operator, &binder);
+	    function_binder.BindScalarFunction(*func, move(children), error, function.is_operator, &binder);
 	if (!result) {
 		throw BinderException(binder.FormatError(function, error));
 	}
+	return BindResult(move(result));
+}
+
+BindResult ExpressionBinder::BindLambdaFunction(FunctionExpression &function, ScalarFunctionCatalogEntry *func,
+                                                idx_t depth) {
+
+	// bind the children of the function expression
+	string error;
+
+	if (function.children.size() != 2) {
+		throw BinderException("Invalid function arguments!");
+	}
+	D_ASSERT(function.children[1]->GetExpressionClass() == ExpressionClass::LAMBDA);
+
+	// bind the list parameter
+	BindChild(function.children[0], depth, error);
+	if (!error.empty()) {
+		return BindResult(error);
+	}
+
+	// get the logical type of the children of the list
+	auto &list_child = (BoundExpression &)*function.children[0];
+
+	if (list_child.expr->return_type.id() != LogicalTypeId::LIST &&
+	    list_child.expr->return_type.id() != LogicalTypeId::SQLNULL &&
+	    list_child.expr->return_type.id() != LogicalTypeId::UNKNOWN) {
+		throw BinderException(" Invalid LIST argument to " + function.function_name + "!");
+	}
+
+	LogicalType list_child_type = list_child.expr->return_type.id();
+	if (list_child.expr->return_type.id() != LogicalTypeId::SQLNULL &&
+	    list_child.expr->return_type.id() != LogicalTypeId::UNKNOWN) {
+		list_child_type = ListType::GetChildType(list_child.expr->return_type);
+	}
+
+	// bind the lambda parameter
+	auto &lambda_expr = (LambdaExpression &)*function.children[1];
+	BindResult bind_lambda_result = BindExpression(lambda_expr, depth, true, list_child_type);
+
+	if (bind_lambda_result.HasError()) {
+		error = bind_lambda_result.error;
+	} else {
+		// successfully bound: replace the node with a BoundExpression
+		auto alias = function.children[1]->alias;
+		function.children[1] = make_unique<BoundExpression>(move(bind_lambda_result.expression));
+		auto be = (BoundExpression *)function.children[1].get();
+		D_ASSERT(be);
+		be->alias = alias;
+		if (!alias.empty()) {
+			be->expr->alias = alias;
+		}
+	}
+
+	if (!error.empty()) {
+		return BindResult(error);
+	}
+	if (binder.GetBindingMode() == BindingMode::EXTRACT_NAMES) {
+		return BindResult(make_unique<BoundConstantExpression>(Value(LogicalType::SQLNULL)));
+	}
+
+	// all children bound successfully
+	// extract the children and types
+	vector<unique_ptr<Expression>> children;
+	for (idx_t i = 0; i < function.children.size(); i++) {
+		auto &child = (BoundExpression &)*function.children[i];
+		D_ASSERT(child.expr);
+		children.push_back(move(child.expr));
+	}
+
+	// capture the (lambda) columns
+	auto &bound_lambda_expr = (BoundLambdaExpression &)*children.back();
+	CaptureLambdaColumns(bound_lambda_expr.captures, list_child_type, bound_lambda_expr.lambda_expr,
+	                     children[0]->alias);
+
+	FunctionBinder function_binder(context);
+	unique_ptr<Expression> result =
+	    function_binder.BindScalarFunction(*func, move(children), error, function.is_operator, &binder);
+	if (!result) {
+		throw BinderException(binder.FormatError(function, error));
+	}
+
+	// remove the lambda expression from the children
+	auto &bound_function_expr = (BoundFunctionExpression &)*result;
+	auto lambda = move(bound_function_expr.children.back());
+	bound_function_expr.children.pop_back();
+	auto &bound_lambda = (BoundLambdaExpression &)*lambda;
+
+	// push back the captures into the children vector and the correct return types into the bound_function arguments
+	for (auto &capture : bound_lambda.captures) {
+		bound_function_expr.function.arguments.push_back(capture->return_type);
+		bound_function_expr.children.push_back(move(capture));
+	}
+
 	return BindResult(move(result));
 }
 
@@ -6892,37 +7931,158 @@ string ExpressionBinder::UnsupportedUnnestMessage() {
 
 
 
+
+
+
+
+
+
+
 namespace duckdb {
 
-// static string ExtractColumnFromLambda(ParsedExpression &expr) {
-//	if (expr.type != ExpressionType::COLUMN_REF) {
-//		throw ParserException("Lambda parameter must be a column name");
-//	}
-//	auto &colref = (ColumnRefExpression &)expr;
-//	if (colref.IsQualified()) {
-//		throw ParserException("Lambda parameter must be an unqualified name (e.g. 'x', not 'a.x')");
-//	}
-//	return colref.column_names[0];
-// }
+BindResult ExpressionBinder::BindExpression(LambdaExpression &expr, idx_t depth, const bool is_lambda,
+                                            const LogicalType &list_child_type) {
 
-BindResult ExpressionBinder::BindExpression(LambdaExpression &expr, idx_t depth) {
-	string error;
+	if (!is_lambda) {
+		// this is for binding JSON
+		auto lhs_expr = expr.lhs->Copy();
+		OperatorExpression arrow_expr(ExpressionType::ARROW, move(lhs_expr), expr.expr->Copy());
+		return BindExpression(arrow_expr, depth);
+	}
 
-	// FIXME: decide from the context whether this is actually a LambdaExpression
-	//  If it is, bind it as a lambda here
-	// // set up the lambda capture
-	// FIXME: need to get the type from the list for binding
-	// lambda_capture = expr.capture_name;
-	// // bind the child
-	// BindChild(expr.expression, depth, error);
-	// // clear the lambda capture
-	// lambda_capture = "";
-	// if (!error.empty()) {
-	// 	return BindResult(error);
-	// }
-	// expr.Print();
-	OperatorExpression arrow_expr(ExpressionType::ARROW, move(expr.lhs), move(expr.rhs));
-	return ExpressionBinder::BindExpression(arrow_expr, depth);
+	// binding the lambda expression
+	D_ASSERT(expr.lhs);
+	if (expr.lhs->expression_class != ExpressionClass::FUNCTION &&
+	    expr.lhs->expression_class != ExpressionClass::COLUMN_REF) {
+		throw BinderException(
+		    "Invalid parameter list! Parameters must be comma-separated column names, e.g. x or (x, y).");
+	}
+
+	// move the lambda parameters to the params vector
+	if (expr.lhs->expression_class == ExpressionClass::COLUMN_REF) {
+		expr.params.push_back(move(expr.lhs));
+	} else {
+		auto &func_expr = (FunctionExpression &)*expr.lhs;
+		for (idx_t i = 0; i < func_expr.children.size(); i++) {
+			expr.params.push_back(move(func_expr.children[i]));
+		}
+	}
+	D_ASSERT(!expr.params.empty());
+
+	// create dummy columns for the lambda parameters (lhs)
+	vector<LogicalType> column_types;
+	vector<string> column_names;
+	vector<string> params_strings;
+
+	// positional parameters as column references
+	for (idx_t i = 0; i < expr.params.size(); i++) {
+
+		if (expr.params[i]->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+			throw BinderException("Parameter must be a column name.");
+		}
+
+		auto column_ref = (ColumnRefExpression &)*expr.params[i];
+		if (column_ref.IsQualified()) {
+			throw BinderException("Invalid parameter name '%s': must be unqualified", column_ref.ToString());
+		}
+
+		column_types.emplace_back(list_child_type);
+		column_names.push_back(column_ref.GetColumnName());
+		params_strings.push_back(expr.params[i]->ToString());
+	}
+
+	// base table alias
+	auto params_alias = StringUtil::Join(params_strings, ", ");
+	if (params_strings.size() > 1) {
+		params_alias = "(" + params_alias + ")";
+	}
+
+	// create a lambda binding and push it to the lambda bindings vector
+	vector<DummyBinding> local_bindings;
+	if (!lambda_bindings) {
+		lambda_bindings = &local_bindings;
+	}
+	DummyBinding new_lambda_binding(column_types, column_names, params_alias);
+	lambda_bindings->push_back(new_lambda_binding);
+
+	// bind the parameter expressions
+	for (idx_t i = 0; i < expr.params.size(); i++) {
+		auto result = BindExpression(&expr.params[i], depth, false);
+		D_ASSERT(!result.HasError());
+	}
+
+	auto result = BindExpression(&expr.expr, depth, false);
+	lambda_bindings->pop_back();
+
+	// successfully bound a subtree of nested lambdas, set this to nullptr in case other parts of the
+	// query also contain lambdas
+	if (lambda_bindings->empty()) {
+		lambda_bindings = nullptr;
+	}
+
+	if (result.HasError()) {
+		throw BinderException(result.error);
+	}
+
+	return BindResult(make_unique<BoundLambdaExpression>(ExpressionType::LAMBDA, LogicalType::LAMBDA,
+	                                                     move(result.expression), params_strings.size()));
+}
+
+void ExpressionBinder::TransformCapturedLambdaColumn(unique_ptr<Expression> &original,
+                                                     unique_ptr<Expression> &replacement,
+                                                     vector<unique_ptr<Expression>> &captures,
+                                                     LogicalType &list_child_type, string &alias) {
+
+	// check if the original expression is a lambda parameter
+	bool is_lambda_parameter = false;
+	if (original->expression_class == ExpressionClass::BOUND_COLUMN_REF) {
+
+		// determine if this is the lambda parameter
+		auto &bound_col_ref = (BoundColumnRefExpression &)*original;
+		if (bound_col_ref.binding.table_index == DConstants::INVALID_INDEX) {
+			is_lambda_parameter = true;
+		}
+	}
+
+	if (is_lambda_parameter) {
+		// this is a lambda parameter, so the replacement refers to the first argument, which is the list
+		replacement = make_unique<BoundReferenceExpression>(alias, list_child_type, 0);
+
+	} else {
+		// this is not a lambda parameter, so we need to create a new argument for the arguments vector
+		replacement =
+		    make_unique<BoundReferenceExpression>(original->alias, original->return_type, captures.size() + 1);
+		captures.push_back(move(original));
+	}
+}
+
+void ExpressionBinder::CaptureLambdaColumns(vector<unique_ptr<Expression>> &captures, LogicalType &list_child_type,
+                                            unique_ptr<Expression> &expr, string &alias) {
+
+	if (expr->expression_class == ExpressionClass::BOUND_SUBQUERY) {
+		throw InvalidInputException("Subqueries are not supported in lambda expressions!");
+	}
+
+	// these expression classes do not have children, transform them
+	if (expr->expression_class == ExpressionClass::BOUND_CONSTANT ||
+	    expr->expression_class == ExpressionClass::BOUND_COLUMN_REF ||
+	    expr->expression_class == ExpressionClass::BOUND_PARAMETER) {
+
+		// move the expr because we are going to replace it
+		auto original = move(expr);
+		unique_ptr<Expression> replacement;
+
+		TransformCapturedLambdaColumn(original, replacement, captures, list_child_type, alias);
+
+		// replace the expression
+		expr = move(replacement);
+
+	} else {
+		// recursively enumerate the children of the expression
+		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+			CaptureLambdaColumns(captures, list_child_type, child, alias);
+		});
+	}
 }
 
 } // namespace duckdb
@@ -6944,7 +8104,10 @@ void ExpressionBinder::ReplaceMacroParametersRecursive(unique_ptr<ParsedExpressi
 		auto &colref = (ColumnRefExpression &)*expr;
 		bool bind_macro_parameter = false;
 		if (colref.IsQualified()) {
-			bind_macro_parameter = colref.GetTableName() == MacroBinding::MACRO_NAME;
+			bind_macro_parameter = false;
+			if (colref.GetTableName().find(DummyBinding::DUMMY_NAME) != string::npos) {
+				bind_macro_parameter = true;
+			}
 		} else {
 			bind_macro_parameter = macro_binding->HasMatchingBinding(colref.GetColumnName());
 		}
@@ -6971,7 +8134,6 @@ void ExpressionBinder::ReplaceMacroParametersRecursive(unique_ptr<ParsedExpressi
 
 BindResult ExpressionBinder::BindMacro(FunctionExpression &function, ScalarMacroCatalogEntry *macro_func, idx_t depth,
                                        unique_ptr<ParsedExpression> *expr) {
-
 	// recast function so we can access the scalar member function->expression
 	auto &macro_def = (ScalarMacroFunction &)*macro_func->function;
 
@@ -6982,7 +8144,7 @@ BindResult ExpressionBinder::BindMacro(FunctionExpression &function, ScalarMacro
 	string error =
 	    MacroFunction::ValidateArguments(*macro_func->function, macro_func->name, function, positionals, defaults);
 	if (!error.empty()) {
-		return BindResult(binder.FormatError(*expr->get(), error));
+		throw BinderException(binder.FormatError(*expr->get(), error));
 	}
 
 	// create a MacroBinding to bind this macro's parameters to its arguments
@@ -7001,8 +8163,8 @@ BindResult ExpressionBinder::BindMacro(FunctionExpression &function, ScalarMacro
 		// now push the defaults into the positionals
 		positionals.push_back(move(defaults[it->first]));
 	}
-	auto new_macro_binding = make_unique<MacroBinding>(types, names, macro_func->name);
-	new_macro_binding->arguments = move(positionals);
+	auto new_macro_binding = make_unique<DummyBinding>(types, names, macro_func->name);
+	new_macro_binding->arguments = &positionals;
 	macro_binding = new_macro_binding.get();
 
 	// replace current expression with stored macro expression, and replace params
@@ -7021,12 +8183,13 @@ BindResult ExpressionBinder::BindMacro(FunctionExpression &function, ScalarMacro
 
 
 
+
 namespace duckdb {
 
 static LogicalType ResolveNotType(OperatorExpression &op, vector<BoundExpression *> &children) {
 	// NOT expression, cast child to BOOLEAN
 	D_ASSERT(children.size() == 1);
-	children[0]->expr = BoundCastExpression::AddCastToType(move(children[0]->expr), LogicalType::BOOLEAN);
+	children[0]->expr = BoundCastExpression::AddDefaultCastToType(move(children[0]->expr), LogicalType::BOOLEAN);
 	return LogicalType(LogicalTypeId::BOOLEAN);
 }
 
@@ -7042,7 +8205,7 @@ static LogicalType ResolveInType(OperatorExpression &op, vector<BoundExpression 
 
 	// cast all children to the same type
 	for (idx_t i = 0; i < children.size(); i++) {
-		children[i]->expr = BoundCastExpression::AddCastToType(move(children[i]->expr), max_type);
+		children[i]->expr = BoundCastExpression::AddDefaultCastToType(move(children[i]->expr), max_type);
 	}
 	// (NOT) IN always returns a boolean
 	return LogicalType::BOOLEAN;
@@ -7053,6 +8216,9 @@ static LogicalType ResolveOperatorType(OperatorExpression &op, vector<BoundExpre
 	case ExpressionType::OPERATOR_IS_NULL:
 	case ExpressionType::OPERATOR_IS_NOT_NULL:
 		// IS (NOT) NULL always returns a boolean, and does not cast its children
+		if (!children[0]->expr->return_type.IsValid()) {
+			throw ParameterNotResolvedException();
+		}
 		return LogicalType::BOOLEAN;
 	case ExpressionType::COMPARE_IN:
 	case ExpressionType::COMPARE_NOT_IN:
@@ -7106,13 +8272,14 @@ BindResult ExpressionBinder::BindExpression(OperatorExpression &op, idx_t depth)
 		D_ASSERT(op.children[1]->expression_class == ExpressionClass::BOUND_EXPRESSION);
 		auto &extract_exp = (BoundExpression &)*op.children[0];
 		auto &name_exp = (BoundExpression &)*op.children[1];
-		if (extract_exp.expr->return_type.id() != LogicalTypeId::STRUCT &&
-		    extract_exp.expr->return_type.id() != LogicalTypeId::SQLNULL) {
-			return BindResult(
-			    StringUtil::Format("Cannot extract field %s from expression \"%s\" because it is not a struct",
-			                       name_exp.ToString(), extract_exp.ToString()));
+		auto extract_expr_type = extract_exp.expr->return_type.id();
+		if (extract_expr_type != LogicalTypeId::STRUCT && extract_expr_type != LogicalTypeId::UNION &&
+		    extract_expr_type != LogicalTypeId::SQLNULL) {
+			return BindResult(StringUtil::Format(
+			    "Cannot extract field %s from expression \"%s\" because it is not a struct or a union",
+			    name_exp.ToString(), extract_exp.ToString()));
 		}
-		function_name = "struct_extract";
+		function_name = extract_expr_type == LogicalTypeId::UNION ? "union_extract" : "struct_extract";
 		break;
 	}
 	case ExpressionType::ARRAY_CONSTRUCTOR:
@@ -7158,17 +8325,38 @@ BindResult ExpressionBinder::BindExpression(OperatorExpression &op, idx_t depth)
 
 
 
+
 namespace duckdb {
 
 BindResult ExpressionBinder::BindExpression(ParameterExpression &expr, idx_t depth) {
 	D_ASSERT(expr.parameter_nr > 0);
 	auto bound_parameter = make_unique<BoundParameterExpression>(expr.parameter_nr);
+	bound_parameter->alias = expr.alias;
 	if (!binder.parameters) {
-		throw std::runtime_error("Unexpected prepared parameter. This type of statement can't be prepared!");
+		throw BinderException("Unexpected prepared parameter. This type of statement can't be prepared!");
 	}
-	binder.parameters->push_back(bound_parameter.get());
-	if (binder.parameter_types && expr.parameter_nr <= binder.parameter_types->size()) {
-		bound_parameter->return_type = (*binder.parameter_types)[expr.parameter_nr - 1];
+	auto parameter_idx = expr.parameter_nr;
+	// check if a parameter value has already been supplied
+	if (parameter_idx <= binder.parameters->parameter_data.size()) {
+		// it has! emit a constant directly
+		auto &data = binder.parameters->parameter_data[parameter_idx - 1];
+		auto constant = make_unique<BoundConstantExpression>(data.value);
+		constant->alias = expr.alias;
+		return BindResult(move(constant));
+	}
+	auto entry = binder.parameters->parameters.find(parameter_idx);
+	if (entry == binder.parameters->parameters.end()) {
+		// no entry yet: create a new one
+		auto data = make_shared<BoundParameterData>();
+		data->return_type = binder.parameters->GetReturnType(parameter_idx - 1);
+		bound_parameter->return_type = data->return_type;
+		bound_parameter->parameter_data = data;
+		binder.parameters->parameters[parameter_idx] = move(data);
+	} else {
+		// a prepared statement with this parameter index was already there: use it
+		auto &data = entry->second;
+		bound_parameter->parameter_data = data;
+		bound_parameter->return_type = binder.parameters->GetReturnType(parameter_idx - 1);
 	}
 	return BindResult(move(bound_parameter));
 }
@@ -7276,7 +8464,7 @@ BindResult ExpressionBinder::BindExpression(SubqueryExpression &expr, idx_t dept
 		// cast child and subquery child to equivalent types
 		D_ASSERT(bound_node->types.size() == 1);
 		auto compare_type = LogicalType::MaxLogicalType(child->expr->return_type, bound_node->types[0]);
-		child->expr = BoundCastExpression::AddCastToType(move(child->expr), compare_type);
+		child->expr = BoundCastExpression::AddCastToType(context, move(child->expr), compare_type);
 		result->child_type = bound_node->types[0];
 		result->child_target = compare_type;
 	}
@@ -7290,6 +8478,7 @@ BindResult ExpressionBinder::BindExpression(SubqueryExpression &expr, idx_t dept
 }
 
 } // namespace duckdb
+
 
 
 
@@ -7322,7 +8511,8 @@ BindResult SelectBinder::BindUnnest(FunctionExpression &function, idx_t depth) {
 	auto &child = (BoundExpression &)*function.children[0];
 	auto &child_type = child.expr->return_type;
 
-	if (child_type.id() != LogicalTypeId::LIST && child_type.id() != LogicalTypeId::SQLNULL) {
+	if (child_type.id() != LogicalTypeId::LIST && child_type.id() != LogicalTypeId::SQLNULL &&
+	    child_type.id() != LogicalTypeId::UNKNOWN) {
 		return BindResult(binder.FormatError(function, "Unnest() can only be applied to lists and NULL"));
 	}
 
@@ -7333,6 +8523,8 @@ BindResult SelectBinder::BindUnnest(FunctionExpression &function, idx_t depth) {
 	auto return_type = LogicalType(LogicalTypeId::SQLNULL);
 	if (child_type.id() == LogicalTypeId::LIST) {
 		return_type = ListType::GetChildType(child_type);
+	} else if (child_type.id() == LogicalTypeId::UNKNOWN) {
+		throw ParameterNotResolvedException();
 	}
 
 	auto result = make_unique<BoundUnnestExpression>(return_type);
@@ -7352,6 +8544,7 @@ BindResult SelectBinder::BindUnnest(FunctionExpression &function, idx_t depth) {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -7418,11 +8611,11 @@ static LogicalType ResolveWindowExpressionType(ExpressionType window_type, const
 }
 
 static inline OrderType ResolveOrderType(const DBConfig &config, OrderType type) {
-	return (type == OrderType::ORDER_DEFAULT) ? config.default_order_type : type;
+	return (type == OrderType::ORDER_DEFAULT) ? config.options.default_order_type : type;
 }
 
 static inline OrderByNullType ResolveNullOrder(const DBConfig &config, OrderByNullType null_order) {
-	return (null_order == OrderByNullType::ORDER_DEFAULT) ? config.default_null_order : null_order;
+	return (null_order == OrderByNullType::ORDER_DEFAULT) ? config.options.default_null_order : null_order;
 }
 
 static unique_ptr<Expression> GetExpression(unique_ptr<ParsedExpression> &expr) {
@@ -7442,7 +8635,7 @@ static unique_ptr<Expression> CastWindowExpression(unique_ptr<ParsedExpression> 
 	D_ASSERT(expr->expression_class == ExpressionClass::BOUND_EXPRESSION);
 
 	auto &bound = (BoundExpression &)*expr;
-	bound.expr = BoundCastExpression::AddCastToType(move(bound.expr), type);
+	bound.expr = BoundCastExpression::AddDefaultCastToType(move(bound.expr), type);
 
 	return move(bound.expr);
 }
@@ -7463,7 +8656,8 @@ static LogicalType BindRangeExpression(ClientContext &context, const string &nam
 	children.emplace_back(move(bound.expr));
 
 	string error;
-	auto function = ScalarFunction::BindScalarFunction(context, DEFAULT_SCHEMA, name, move(children), error, true);
+	FunctionBinder function_binder(context);
+	auto function = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, move(children), error, true);
 	if (!function) {
 		throw BinderException(error);
 	}
@@ -7524,13 +8718,13 @@ BindResult SelectBinder::BindWindow(WindowExpression &window, idx_t depth) {
 		case ExpressionType::WINDOW_NTILE:
 			// ntile(bigint)
 			if (argno == 0) {
-				bound.expr = BoundCastExpression::AddCastToType(move(bound.expr), LogicalType::BIGINT);
+				bound.expr = BoundCastExpression::AddCastToType(context, move(bound.expr), LogicalType::BIGINT);
 			}
 			break;
 		case ExpressionType::WINDOW_NTH_VALUE:
 			// nth_value(<expr>, index)
 			if (argno == 1) {
-				bound.expr = BoundCastExpression::AddCastToType(move(bound.expr), LogicalType::BIGINT);
+				bound.expr = BoundCastExpression::AddCastToType(context, move(bound.expr), LogicalType::BIGINT);
 			}
 		default:
 			break;
@@ -7551,13 +8745,14 @@ BindResult SelectBinder::BindWindow(WindowExpression &window, idx_t depth) {
 
 		// bind the aggregate
 		string error;
-		auto best_function = Function::BindFunction(func->name, func->functions, types, error);
+		FunctionBinder function_binder(context);
+		auto best_function = function_binder.BindFunction(func->name, func->functions, types, error);
 		if (best_function == DConstants::INVALID_INDEX) {
 			throw BinderException(binder.FormatError(window, error));
 		}
 		// found a matching function! bind it as an aggregate
-		auto &bound_function = func->functions[best_function];
-		auto bound_aggregate = AggregateFunction::BindAggregateFunction(context, bound_function, move(children));
+		auto bound_function = func->functions.GetFunctionByOffset(best_function);
+		auto bound_aggregate = function_binder.BindAggregateFunction(bound_function, move(children));
 		// create the aggregate
 		aggregate = make_unique<AggregateFunction>(bound_aggregate->function);
 		bind_info = move(bound_aggregate->bind_info);
@@ -7623,7 +8818,7 @@ BindResult SelectBinder::BindWindow(WindowExpression &window, idx_t depth) {
 		}
 
 		// Cast all three to match
-		bound_order.expr = BoundCastExpression::AddCastToType(move(bound_order.expr), order_type);
+		bound_order.expr = BoundCastExpression::AddCastToType(context, move(bound_order.expr), order_type);
 		start_type = end_type = order_type;
 	}
 
@@ -7735,6 +8930,8 @@ unique_ptr<BoundQueryNode> Binder::BindNode(RecursiveCTENode &statement) {
 
 
 
+
+
 namespace duckdb {
 
 unique_ptr<Expression> Binder::BindOrderExpression(OrderBinder &order_binder, unique_ptr<ParsedExpression> expr) {
@@ -7754,6 +8951,9 @@ unique_ptr<Expression> Binder::BindDelimiter(ClientContext &context, OrderBinder
                                              Value &delimiter_value) {
 	auto new_binder = Binder::CreateBinder(context, this, true);
 	if (delimiter->HasSubquery()) {
+		if (!order_binder.HasExtraList()) {
+			throw BinderException("Subquery in LIMIT/OFFSET not supported in set operation");
+		}
 		return order_binder.CreateExtraReference(move(delimiter));
 	}
 	ExpressionBinder expr_binder(*new_binder, context);
@@ -7761,9 +8961,14 @@ unique_ptr<Expression> Binder::BindDelimiter(ClientContext &context, OrderBinder
 	auto expr = expr_binder.Bind(delimiter);
 	if (expr->IsFoldable()) {
 		//! this is a constant
-		delimiter_value = ExpressionExecutor::EvaluateScalar(*expr).CastAs(type);
+		delimiter_value = ExpressionExecutor::EvaluateScalar(context, *expr).CastAs(context, type);
 		return nullptr;
 	}
+	if (!new_binder->correlated_columns.empty()) {
+		throw BinderException("Correlated columns not supported in LIMIT/OFFSET");
+	}
+	// move any correlated columns to this binder
+	MoveCorrelatedExpressions(*new_binder);
 	return expr;
 }
 
@@ -7773,7 +8978,7 @@ unique_ptr<BoundResultModifier> Binder::BindLimit(OrderBinder &order_binder, Lim
 		Value val;
 		result->limit = BindDelimiter(context, order_binder, move(limit_mod.limit), LogicalType::BIGINT, val);
 		if (!result->limit) {
-			result->limit_val = val.GetValue<int64_t>();
+			result->limit_val = val.IsNull() ? NumericLimits<int64_t>::Maximum() : val.GetValue<int64_t>();
 			if (result->limit_val < 0) {
 				throw BinderException("LIMIT cannot be negative");
 			}
@@ -7783,7 +8988,7 @@ unique_ptr<BoundResultModifier> Binder::BindLimit(OrderBinder &order_binder, Lim
 		Value val;
 		result->offset = BindDelimiter(context, order_binder, move(limit_mod.offset), LogicalType::BIGINT, val);
 		if (!result->offset) {
-			result->offset_val = val.GetValue<int64_t>();
+			result->offset_val = val.IsNull() ? 0 : val.GetValue<int64_t>();
 			if (result->offset_val < 0) {
 				throw BinderException("OFFSET cannot be negative");
 			}
@@ -7798,7 +9003,7 @@ unique_ptr<BoundResultModifier> Binder::BindLimitPercent(OrderBinder &order_bind
 		Value val;
 		result->limit = BindDelimiter(context, order_binder, move(limit_mod.limit), LogicalType::DOUBLE, val);
 		if (!result->limit) {
-			result->limit_percent = val.GetValue<double>();
+			result->limit_percent = val.IsNull() ? 100 : val.GetValue<double>();
 			if (result->limit_percent < 0.0) {
 				throw Exception("Limit percentage can't be negative value");
 			}
@@ -7808,7 +9013,7 @@ unique_ptr<BoundResultModifier> Binder::BindLimitPercent(OrderBinder &order_bind
 		Value val;
 		result->offset = BindDelimiter(context, order_binder, move(limit_mod.offset), LogicalType::BIGINT, val);
 		if (!result->offset) {
-			result->offset_val = val.GetValue<int64_t>();
+			result->offset_val = val.IsNull() ? 0 : val.GetValue<int64_t>();
 		}
 	}
 	return move(result);
@@ -7860,9 +9065,11 @@ void Binder::BindModifiers(OrderBinder &order_binder, QueryNode &statement, Boun
 				if (!order_expression) {
 					continue;
 				}
-				auto type = order_node.type == OrderType::ORDER_DEFAULT ? config.default_order_type : order_node.type;
-				auto null_order = order_node.null_order == OrderByNullType::ORDER_DEFAULT ? config.default_null_order
-				                                                                          : order_node.null_order;
+				auto type =
+				    order_node.type == OrderType::ORDER_DEFAULT ? config.options.default_order_type : order_node.type;
+				auto null_order = order_node.null_order == OrderByNullType::ORDER_DEFAULT
+				                      ? config.options.default_null_order
+				                      : order_node.null_order;
 				bound_order->orders.emplace_back(type, null_order, move(order_expression));
 			}
 			if (!bound_order->orders.empty()) {
@@ -7922,7 +9129,7 @@ void Binder::BindModifierTypes(BoundQueryNode &result, const vector<LogicalType>
 			}
 			for (auto &target_distinct : distinct.target_distincts) {
 				auto &bound_colref = (BoundColumnRefExpression &)*target_distinct;
-				auto sql_type = sql_types[bound_colref.binding.column_index];
+				const auto &sql_type = sql_types[bound_colref.binding.column_index];
 				if (sql_type.id() == LogicalTypeId::VARCHAR) {
 					target_distinct = ExpressionBinder::PushCollation(context, move(target_distinct),
 					                                                  StringType::GetCollation(sql_type), true);
@@ -7952,7 +9159,7 @@ void Binder::BindModifierTypes(BoundQueryNode &result, const vector<LogicalType>
 					throw BinderException("Ambiguous name in ORDER BY!");
 				}
 				D_ASSERT(bound_colref.binding.column_index < sql_types.size());
-				auto sql_type = sql_types[bound_colref.binding.column_index];
+				const auto &sql_type = sql_types[bound_colref.binding.column_index];
 				bound_colref.return_type = sql_types[bound_colref.binding.column_index];
 				if (sql_type.id() == LogicalTypeId::VARCHAR) {
 					order_node.expression = ExpressionBinder::PushCollation(context, move(order_node.expression),
@@ -7964,6 +9171,69 @@ void Binder::BindModifierTypes(BoundQueryNode &result, const vector<LogicalType>
 		default:
 			break;
 		}
+	}
+}
+
+bool Binder::FindStarExpression(ParsedExpression &expr, StarExpression **star) {
+	if (expr.GetExpressionClass() == ExpressionClass::STAR) {
+		auto current_star = (StarExpression *)&expr;
+		if (*star) {
+			// we can have multiple
+			if (!StarExpression::Equals(*star, current_star)) {
+				throw BinderException(
+				    FormatError(expr, "Multiple different STAR/COLUMNS in the same expression are not supported"));
+			}
+			return true;
+		}
+		*star = current_star;
+		return true;
+	}
+	bool has_star = false;
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child_expr) {
+		if (FindStarExpression(child_expr, star)) {
+			has_star = true;
+		}
+	});
+	return has_star;
+}
+
+void Binder::ReplaceStarExpression(unique_ptr<ParsedExpression> &expr, unique_ptr<ParsedExpression> &replacement) {
+	D_ASSERT(expr);
+	if (expr->GetExpressionClass() == ExpressionClass::STAR) {
+		D_ASSERT(replacement);
+		expr = replacement->Copy();
+		return;
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    *expr, [&](unique_ptr<ParsedExpression> &child_expr) { ReplaceStarExpression(child_expr, replacement); });
+}
+
+void Binder::ExpandStarExpression(unique_ptr<ParsedExpression> expr,
+                                  vector<unique_ptr<ParsedExpression>> &new_select_list) {
+	StarExpression *star = nullptr;
+	if (!FindStarExpression(*expr, &star)) {
+		// no star expression: add it as-is
+		D_ASSERT(!star);
+		new_select_list.push_back(move(expr));
+		return;
+	}
+	D_ASSERT(star);
+	vector<unique_ptr<ParsedExpression>> star_list;
+	// we have star expressions! expand the list of star expressions
+	bind_context.GenerateAllColumnExpressions(*star, star_list);
+
+	// now perform the replacement
+	for (idx_t i = 0; i < star_list.size(); i++) {
+		auto new_expr = expr->Copy();
+		ReplaceStarExpression(new_expr, star_list[i]);
+		new_select_list.push_back(move(new_expr));
+	}
+}
+
+void Binder::ExpandStarExpressions(vector<unique_ptr<ParsedExpression>> &select_list,
+                                   vector<unique_ptr<ParsedExpression>> &new_select_list) {
+	for (auto &select_element : select_list) {
+		ExpandStarExpression(move(select_element), new_select_list);
 	}
 }
 
@@ -7987,15 +9257,8 @@ unique_ptr<BoundQueryNode> Binder::BindNode(SelectNode &statement) {
 
 	// visit the select list and expand any "*" statements
 	vector<unique_ptr<ParsedExpression>> new_select_list;
-	for (auto &select_element : statement.select_list) {
-		if (select_element->GetExpressionType() == ExpressionType::STAR) {
-			// * statement, expand to all columns from the FROM clause
-			bind_context.GenerateAllColumnExpressions((StarExpression &)*select_element, new_select_list);
-		} else {
-			// regular statement, add it to the list
-			new_select_list.push_back(move(select_element));
-		}
-	}
+	ExpandStarExpressions(statement.select_list, new_select_list);
+
 	if (new_select_list.empty()) {
 		throw BinderException("SELECT list is empty after resolving * expressions!");
 	}
@@ -8069,27 +9332,37 @@ unique_ptr<BoundQueryNode> Binder::BindNode(SelectNode &statement) {
 
 	// bind the HAVING clause, if any
 	if (statement.having) {
-		HavingBinder having_binder(*this, context, *result, info, alias_map);
+		HavingBinder having_binder(*this, context, *result, info, alias_map, statement.aggregate_handling);
 		ExpressionBinder::QualifyColumnNames(*this, statement.having);
 		result->having = having_binder.Bind(statement.having);
 	}
 
 	// bind the QUALIFY clause, if any
 	if (statement.qualify) {
+		if (statement.aggregate_handling == AggregateHandling::FORCE_AGGREGATES) {
+			throw BinderException("Combining QUALIFY with GROUP BY ALL is not supported yet");
+		}
 		QualifyBinder qualify_binder(*this, context, *result, info, alias_map);
 		ExpressionBinder::QualifyColumnNames(*this, statement.qualify);
 		result->qualify = qualify_binder.Bind(statement.qualify);
+		if (qualify_binder.HasBoundColumns() && qualify_binder.BoundAggregates()) {
+			throw BinderException("Cannot mix aggregates with non-aggregated columns!");
+		}
 	}
 
 	// after that, we bind to the SELECT list
-	SelectBinder select_binder(*this, context, *result, info);
+	SelectBinder select_binder(*this, context, *result, info, alias_map);
 	vector<LogicalType> internal_sql_types;
 	for (idx_t i = 0; i < statement.select_list.size(); i++) {
+		bool is_window = statement.select_list[i]->IsWindow();
 		LogicalType result_type;
 		auto expr = select_binder.Bind(statement.select_list[i], &result_type);
 		if (statement.aggregate_handling == AggregateHandling::FORCE_AGGREGATES && select_binder.HasBoundColumns()) {
 			if (select_binder.BoundAggregates()) {
 				throw BinderException("Cannot mix aggregates with non-aggregated columns!");
+			}
+			if (is_window) {
+				throw BinderException("Cannot group on a window clause");
 			}
 			// we are forcing aggregates, and the node has columns bound
 			// this entry becomes a group
@@ -8120,10 +9393,12 @@ unique_ptr<BoundQueryNode> Binder::BindNode(SelectNode &statement) {
 		} else if (statement.aggregate_handling == AggregateHandling::STANDARD_HANDLING) {
 			if (select_binder.HasBoundColumns()) {
 				auto &bound_columns = select_binder.GetBoundColumns();
-				throw BinderException(
-				    FormatError(bound_columns[0].query_location,
-				                "column \"%s\" must appear in the GROUP BY clause or be used in an aggregate function",
-				                bound_columns[0].name));
+				string error;
+				error = "column \"%s\" must appear in the GROUP BY clause or must be part of an aggregate function.";
+				error += "\nEither add it to the GROUP BY list, or use \"ANY_VALUE(%s)\" if the exact value of \"%s\" "
+				         "is not important.";
+				throw BinderException(FormatError(bound_columns[0].query_location, error, bound_columns[0].name,
+				                                  bound_columns[0].name, bound_columns[0].name));
 			}
 		}
 	}
@@ -8151,15 +9426,35 @@ unique_ptr<BoundQueryNode> Binder::BindNode(SelectNode &statement) {
 
 
 
+
 namespace duckdb {
 
 static void GatherAliases(BoundQueryNode &node, case_insensitive_map_t<idx_t> &aliases,
-                          expression_map_t<idx_t> &expressions) {
+                          expression_map_t<idx_t> &expressions, const vector<idx_t> &reorder_idx) {
 	if (node.type == QueryNodeType::SET_OPERATION_NODE) {
 		// setop, recurse
 		auto &setop = (BoundSetOperationNode &)node;
-		GatherAliases(*setop.left, aliases, expressions);
-		GatherAliases(*setop.right, aliases, expressions);
+
+		// create new reorder index
+		if (setop.setop_type == SetOperationType::UNION_BY_NAME) {
+			vector<idx_t> new_left_reorder_idx(setop.left_reorder_idx.size());
+			vector<idx_t> new_right_reorder_idx(setop.right_reorder_idx.size());
+			for (idx_t i = 0; i < setop.left_reorder_idx.size(); ++i) {
+				new_left_reorder_idx[i] = reorder_idx[setop.left_reorder_idx[i]];
+			}
+
+			for (idx_t i = 0; i < setop.right_reorder_idx.size(); ++i) {
+				new_right_reorder_idx[i] = reorder_idx[setop.right_reorder_idx[i]];
+			}
+
+			// use new reorder index
+			GatherAliases(*setop.left, aliases, expressions, new_left_reorder_idx);
+			GatherAliases(*setop.right, aliases, expressions, new_right_reorder_idx);
+			return;
+		}
+
+		GatherAliases(*setop.left, aliases, expressions, reorder_idx);
+		GatherAliases(*setop.right, aliases, expressions, reorder_idx);
 	} else {
 		// query node
 		D_ASSERT(node.type == QueryNodeType::SELECT_NODE);
@@ -8170,10 +9465,14 @@ static void GatherAliases(BoundQueryNode &node, case_insensitive_map_t<idx_t> &a
 			auto &expr = select.original_expressions[i];
 			// first check if the alias is already in there
 			auto entry = aliases.find(name);
+
+			idx_t index = reorder_idx[i];
+
 			if (entry != aliases.end()) {
 				// the alias already exists
 				// check if there is a conflict
-				if (entry->second != i) {
+
+				if (entry->second != index) {
 					// there is a conflict
 					// we place "-1" in the aliases map at this location
 					// "-1" signifies that there is an ambiguous reference
@@ -8181,20 +9480,126 @@ static void GatherAliases(BoundQueryNode &node, case_insensitive_map_t<idx_t> &a
 				}
 			} else {
 				// the alias is not in there yet, just assign it
-				aliases[name] = i;
+				aliases[name] = index;
 			}
 			// now check if the node is already in the set of expressions
 			auto expr_entry = expressions.find(expr.get());
 			if (expr_entry != expressions.end()) {
 				// the node is in there
 				// repeat the same as with the alias: if there is an ambiguity we insert "-1"
-				if (expr_entry->second != i) {
+				if (expr_entry->second != index) {
 					expressions[expr.get()] = DConstants::INVALID_INDEX;
 				}
 			} else {
 				// not in there yet, just place it in there
-				expressions[expr.get()] = i;
+				expressions[expr.get()] = index;
 			}
+		}
+	}
+}
+
+static void BuildUnionByNameInfo(BoundSetOperationNode &result, bool can_contain_nulls) {
+	D_ASSERT(result.setop_type == SetOperationType::UNION_BY_NAME);
+	case_insensitive_map_t<idx_t> left_names_map;
+	case_insensitive_map_t<idx_t> right_names_map;
+
+	BoundQueryNode *left_node = result.left.get();
+	BoundQueryNode *right_node = result.right.get();
+
+	// Build a name_map to use to check if a name exists
+	// We throw a binder exception if two same name in the SELECT list
+	for (idx_t i = 0; i < left_node->names.size(); ++i) {
+		if (left_names_map.find(left_node->names[i]) != left_names_map.end()) {
+			throw BinderException("UNION(ALL) BY NAME operation doesn't support same name in SELECT list");
+		}
+		left_names_map[left_node->names[i]] = i;
+	}
+
+	for (idx_t i = 0; i < right_node->names.size(); ++i) {
+		if (right_names_map.find(right_node->names[i]) != right_names_map.end()) {
+			throw BinderException("UNION(ALL) BY NAME operation doesn't support same name in SELECT list");
+		}
+		if (left_names_map.find(right_node->names[i]) == left_names_map.end()) {
+			result.names.push_back(right_node->names[i]);
+		}
+		right_names_map[right_node->names[i]] = i;
+	}
+
+	idx_t new_size = result.names.size();
+	bool need_reorder = false;
+	vector<idx_t> left_reorder_idx(left_node->names.size());
+	vector<idx_t> right_reorder_idx(right_node->names.size());
+
+	// Construct return type and reorder_idxs
+	// reorder_idxs is used to gather correct alias_map
+	// and expression_map in GatherAlias(...)
+	for (idx_t i = 0; i < new_size; ++i) {
+		auto left_index = left_names_map.find(result.names[i]);
+		auto right_index = right_names_map.find(result.names[i]);
+		bool left_exist = left_index != left_names_map.end();
+		bool right_exist = right_index != right_names_map.end();
+		LogicalType result_type;
+		if (left_exist && right_exist) {
+			result_type = LogicalType::MaxLogicalType(left_node->types[left_index->second],
+			                                          right_node->types[right_index->second]);
+			if (left_index->second != i || right_index->second != i) {
+				need_reorder = true;
+			}
+			left_reorder_idx[left_index->second] = i;
+			right_reorder_idx[right_index->second] = i;
+		} else if (left_exist) {
+			result_type = left_node->types[left_index->second];
+			need_reorder = true;
+			left_reorder_idx[left_index->second] = i;
+		} else {
+			D_ASSERT(right_exist);
+			result_type = right_node->types[right_index->second];
+			need_reorder = true;
+			right_reorder_idx[right_index->second] = i;
+		}
+
+		if (!can_contain_nulls) {
+			if (ExpressionBinder::ContainsNullType(result_type)) {
+				result_type = ExpressionBinder::ExchangeNullType(result_type);
+			}
+		}
+
+		result.types.push_back(result_type);
+	}
+
+	result.left_reorder_idx = move(left_reorder_idx);
+	result.right_reorder_idx = move(right_reorder_idx);
+
+	// If reorder is required, collect reorder expressions for push projection
+	// into the two child nodes of union node
+	if (need_reorder) {
+		for (idx_t i = 0; i < new_size; ++i) {
+			auto left_index = left_names_map.find(result.names[i]);
+			auto right_index = right_names_map.find(result.names[i]);
+			bool left_exist = left_index != left_names_map.end();
+			bool right_exist = right_index != right_names_map.end();
+			unique_ptr<Expression> left_reorder_expr;
+			unique_ptr<Expression> right_reorder_expr;
+			if (left_exist && right_exist) {
+				left_reorder_expr = make_unique<BoundColumnRefExpression>(
+				    left_node->types[left_index->second], ColumnBinding(left_node->GetRootIndex(), left_index->second));
+				right_reorder_expr = make_unique<BoundColumnRefExpression>(
+				    right_node->types[right_index->second],
+				    ColumnBinding(right_node->GetRootIndex(), right_index->second));
+			} else if (left_exist) {
+				left_reorder_expr = make_unique<BoundColumnRefExpression>(
+				    left_node->types[left_index->second], ColumnBinding(left_node->GetRootIndex(), left_index->second));
+				// create null value here
+				right_reorder_expr = make_unique<BoundConstantExpression>(Value(result.types[i]));
+			} else {
+				D_ASSERT(right_exist);
+				left_reorder_expr = make_unique<BoundConstantExpression>(Value(result.types[i]));
+				right_reorder_expr = make_unique<BoundColumnRefExpression>(
+				    right_node->types[right_index->second],
+				    ColumnBinding(right_node->GetRootIndex(), right_index->second));
+			}
+			result.left_reorder_exprs.push_back(move(left_reorder_expr));
+			result.right_reorder_exprs.push_back(move(right_reorder_expr));
 		}
 	}
 }
@@ -8213,25 +9618,9 @@ unique_ptr<BoundQueryNode> Binder::BindNode(SetOperationNode &statement) {
 	result->left_binder = Binder::CreateBinder(context, this);
 	result->left_binder->can_contain_nulls = true;
 	result->left = result->left_binder->BindNode(*statement.left);
-
 	result->right_binder = Binder::CreateBinder(context, this);
 	result->right_binder->can_contain_nulls = true;
 	result->right = result->right_binder->BindNode(*statement.right);
-
-	if (!statement.modifiers.empty()) {
-		// handle the ORDER BY/DISTINCT clauses
-
-		// we recursively visit the children of this node to extract aliases and expressions that can be referenced in
-		// the ORDER BY
-		case_insensitive_map_t<idx_t> alias_map;
-		expression_map_t<idx_t> expression_map;
-		GatherAliases(*result, alias_map, expression_map);
-
-		// now we perform the actual resolution of the ORDER BY/DISTINCT expressions
-		OrderBinder order_binder({result->left_binder.get(), result->right_binder.get()}, result->setop_index,
-		                         alias_map, expression_map, statement.left->GetSelectList().size());
-		BindModifiers(order_binder, statement, *result);
-	}
 
 	result->names = result->left->names;
 
@@ -8240,20 +9629,50 @@ unique_ptr<BoundQueryNode> Binder::BindNode(SetOperationNode &statement) {
 	MoveCorrelatedExpressions(*result->right_binder);
 
 	// now both sides have been bound we can resolve types
-	if (result->left->types.size() != result->right->types.size()) {
+	if (result->setop_type != SetOperationType::UNION_BY_NAME &&
+	    result->left->types.size() != result->right->types.size()) {
 		throw BinderException("Set operations can only apply to expressions with the "
 		                      "same number of result columns");
 	}
 
-	// figure out the types of the setop result by picking the max of both
-	for (idx_t i = 0; i < result->left->types.size(); i++) {
-		auto result_type = LogicalType::MaxLogicalType(result->left->types[i], result->right->types[i]);
-		if (!can_contain_nulls) {
-			if (ExpressionBinder::ContainsNullType(result_type)) {
-				result_type = ExpressionBinder::ExchangeNullType(result_type);
+	if (result->setop_type == SetOperationType::UNION_BY_NAME) {
+		BuildUnionByNameInfo(*result, can_contain_nulls);
+
+	} else {
+		// figure out the types of the setop result by picking the max of both
+		for (idx_t i = 0; i < result->left->types.size(); i++) {
+			auto result_type = LogicalType::MaxLogicalType(result->left->types[i], result->right->types[i]);
+			if (!can_contain_nulls) {
+				if (ExpressionBinder::ContainsNullType(result_type)) {
+					result_type = ExpressionBinder::ExchangeNullType(result_type);
+				}
 			}
+			result->types.push_back(result_type);
 		}
-		result->types.push_back(result_type);
+	}
+
+	if (!statement.modifiers.empty()) {
+		// handle the ORDER BY/DISTINCT clauses
+
+		// we recursively visit the children of this node to extract aliases and expressions that can be referenced
+		// in the ORDER BY
+		case_insensitive_map_t<idx_t> alias_map;
+		expression_map_t<idx_t> expression_map;
+
+		if (result->setop_type == SetOperationType::UNION_BY_NAME) {
+			GatherAliases(*result->left, alias_map, expression_map, result->left_reorder_idx);
+			GatherAliases(*result->right, alias_map, expression_map, result->right_reorder_idx);
+		} else {
+			vector<idx_t> reorder_idx;
+			for (idx_t i = 0; i < result->names.size(); i++) {
+				reorder_idx.push_back(i);
+			}
+			GatherAliases(*result, alias_map, expression_map, reorder_idx);
+		}
+		// now we perform the actual resolution of the ORDER BY/DISTINCT expressions
+		OrderBinder order_binder({result->left_binder.get(), result->right_binder.get()}, result->setop_index,
+		                         alias_map, expression_map, result->names.size());
+		BindModifiers(order_binder, statement, *result);
 	}
 
 	// finally bind the types of the ORDER/DISTINCT clause expressions
@@ -8315,10 +9734,10 @@ unique_ptr<QueryNode> Binder::BindTableMacro(FunctionExpression &function, Table
 		// now push the defaults into the positionals
 		positionals.push_back(move(defaults[it->first]));
 	}
-	auto new_macro_binding = make_unique<MacroBinding>(types, names, macro_func->name);
-	new_macro_binding->arguments = move(positionals);
+	auto new_macro_binding = make_unique<DummyBinding>(types, names, macro_func->name);
+	new_macro_binding->arguments = &positionals;
 
-	// We need an EXpressionBinder So that we can call ExpressionBinder::ReplaceMacroParametersRecursive()
+	// We need an ExpressionBinder so that we can call ExpressionBinder::ReplaceMacroParametersRecursive()
 	auto eb = ExpressionBinder(*this, this->context);
 
 	eb.macro_binding = new_macro_binding.get();
@@ -8581,7 +10000,8 @@ unique_ptr<LogicalOperator> Binder::CastLogicalOperatorToTypes(vector<LogicalTyp
 			if (source_types[i] != target_types[i]) {
 				// differing types, have to add a cast
 				string alias = node->expressions[i]->alias;
-				node->expressions[i] = make_unique<BoundCastExpression>(move(node->expressions[i]), target_types[i]);
+				node->expressions[i] =
+				    BoundCastExpression::AddCastToType(context, move(node->expressions[i]), target_types[i]);
 				node->expressions[i]->alias = alias;
 			}
 		}
@@ -8600,7 +10020,7 @@ unique_ptr<LogicalOperator> Binder::CastLogicalOperatorToTypes(vector<LogicalTyp
 			unique_ptr<Expression> result = make_unique<BoundColumnRefExpression>(source_types[i], setop_columns[i]);
 			if (source_types[i] != target_types[i]) {
 				// add a cast only if the source and target types are not equivalent
-				result = make_unique<BoundCastExpression>(move(result), target_types[i]);
+				result = BoundCastExpression::AddCastToType(context, move(result), target_types[i]);
 			}
 			select_list.push_back(move(result));
 		}
@@ -8618,18 +10038,43 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSetOperationNode &node) {
 	auto left_node = node.left_binder->CreatePlan(*node.left);
 	auto right_node = node.right_binder->CreatePlan(*node.right);
 
+	// Add a new projection to child node
+	D_ASSERT(node.left_reorder_exprs.size() == node.right_reorder_exprs.size());
+	if (!node.left_reorder_exprs.empty()) {
+		D_ASSERT(node.setop_type == SetOperationType::UNION_BY_NAME);
+		vector<LogicalType> left_types;
+		vector<LogicalType> right_types;
+		// We are going to add a new projection operator, so collect the type
+		// of reorder exprs in order to call CastLogicalOperatorToTypes()
+		for (idx_t i = 0; i < node.left_reorder_exprs.size(); ++i) {
+			left_types.push_back(node.left_reorder_exprs[i]->return_type);
+			right_types.push_back(node.right_reorder_exprs[i]->return_type);
+		}
+
+		auto left_projection = make_unique<LogicalProjection>(GenerateTableIndex(), move(node.left_reorder_exprs));
+		left_projection->children.push_back(move(left_node));
+		left_node = move(left_projection);
+
+		auto right_projection = make_unique<LogicalProjection>(GenerateTableIndex(), move(node.right_reorder_exprs));
+		right_projection->children.push_back(move(right_node));
+		right_node = move(right_projection);
+
+		left_node = CastLogicalOperatorToTypes(left_types, node.types, move(left_node));
+		right_node = CastLogicalOperatorToTypes(right_types, node.types, move(right_node));
+	} else {
+		left_node = CastLogicalOperatorToTypes(node.left->types, node.types, move(left_node));
+		right_node = CastLogicalOperatorToTypes(node.right->types, node.types, move(right_node));
+	}
+
 	// check if there are any unplanned subqueries left in either child
 	has_unplanned_subqueries =
 	    node.left_binder->has_unplanned_subqueries || node.right_binder->has_unplanned_subqueries;
-
-	// for both the left and right sides, cast them to the same types
-	left_node = CastLogicalOperatorToTypes(node.left->types, node.types, move(left_node));
-	right_node = CastLogicalOperatorToTypes(node.right->types, node.types, move(right_node));
 
 	// create actual logical ops for setops
 	LogicalOperatorType logical_type;
 	switch (node.setop_type) {
 	case SetOperationType::UNION:
+	case SetOperationType::UNION_BY_NAME:
 		logical_type = LogicalOperatorType::LOGICAL_UNION;
 		break;
 	case SetOperationType::EXCEPT:
@@ -8640,6 +10085,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSetOperationNode &node) {
 		logical_type = LogicalOperatorType::LOGICAL_INTERSECT;
 		break;
 	}
+
 	auto root = make_unique<LogicalSetOperation>(node.setop_index, node.types.size(), move(left_node), move(right_node),
 	                                             logical_type);
 
@@ -8680,7 +10126,10 @@ static unique_ptr<Expression> PlanUncorrelatedSubquery(Binder &binder, BoundSubq
 
 		// now we push a COUNT(*) aggregate onto the limit, this will be either 0 or 1 (EXISTS or NOT EXISTS)
 		auto count_star_fun = CountStarFun::GetFunction();
-		auto count_star = AggregateFunction::BindAggregateFunction(binder.context, count_star_fun, {}, nullptr, false);
+
+		FunctionBinder function_binder(binder.context);
+		auto count_star =
+		    function_binder.BindAggregateFunction(count_star_fun, {}, nullptr, AggregateType::NON_DISTINCT);
 		auto idx_type = count_star->return_type;
 		vector<unique_ptr<Expression>> aggregate_list;
 		aggregate_list.push_back(move(count_star));
@@ -8705,10 +10154,7 @@ static unique_ptr<Expression> PlanUncorrelatedSubquery(Binder &binder, BoundSubq
 
 		// we add it to the main query by adding a cross product
 		// FIXME: should use something else besides cross product as we always add only one scalar constant
-		auto cross_product = make_unique<LogicalCrossProduct>();
-		cross_product->AddChild(move(root));
-		cross_product->AddChild(move(plan));
-		root = move(cross_product);
+		root = LogicalCrossProduct::Create(move(root), move(plan));
 
 		// we replace the original subquery with a ColumnRefExpression referring to the result of the projection (either
 		// TRUE or FALSE)
@@ -8733,8 +10179,10 @@ static unique_ptr<Expression> PlanUncorrelatedSubquery(Binder &binder, BoundSubq
 		auto bound = make_unique<BoundColumnRefExpression>(expr.return_type, ColumnBinding(table_idx, 0));
 		vector<unique_ptr<Expression>> first_children;
 		first_children.push_back(move(bound));
-		auto first_agg = AggregateFunction::BindAggregateFunction(
-		    binder.context, FirstFun::GetFunction(expr.return_type), move(first_children), nullptr, false);
+
+		FunctionBinder function_binder(binder.context);
+		auto first_agg = function_binder.BindAggregateFunction(
+		    FirstFun::GetFunction(expr.return_type), move(first_children), nullptr, AggregateType::NON_DISTINCT);
 
 		expressions.push_back(move(first_agg));
 		auto aggr_index = binder.GenerateTableIndex();
@@ -8746,10 +10194,7 @@ static unique_ptr<Expression> PlanUncorrelatedSubquery(Binder &binder, BoundSubq
 		// FIXME: should use something else besides cross product as we always add only one scalar constant and cross
 		// product is not optimized for this.
 		D_ASSERT(root);
-		auto cross_product = make_unique<LogicalCrossProduct>();
-		cross_product->AddChild(move(root));
-		cross_product->AddChild(move(plan));
-		root = move(cross_product);
+		root = LogicalCrossProduct::Create(move(root), move(plan));
 
 		// we replace the original subquery with a BoundColumnRefExpression referring to the first result of the
 		// aggregation
@@ -8772,7 +10217,7 @@ static unique_ptr<Expression> PlanUncorrelatedSubquery(Binder &binder, BoundSubq
 		// create the JOIN condition
 		JoinCondition cond;
 		cond.left = move(expr.child);
-		cond.right = BoundCastExpression::AddCastToType(
+		cond.right = BoundCastExpression::AddDefaultCastToType(
 		    make_unique<BoundColumnRefExpression>(expr.child_type, plan_columns[0]), expr.child_target);
 		cond.comparison = expr.comparison_type;
 		join->conditions.push_back(move(cond));
@@ -8921,7 +10366,7 @@ static unique_ptr<Expression> PlanCorrelatedSubquery(Binder &binder, BoundSubque
 		auto delim_join = CreateDuplicateEliminatedJoin(correlated_columns, JoinType::MARK, move(root), perform_delim);
 		delim_join->mark_index = mark_index;
 		// RHS
-		FlattenDependentJoins flatten(binder, correlated_columns, perform_delim);
+		FlattenDependentJoins flatten(binder, correlated_columns, perform_delim, true);
 		flatten.DetectCorrelatedExpressions(plan.get());
 		auto dependent_join = flatten.PushDownDependentJoin(move(plan));
 
@@ -8948,7 +10393,7 @@ static unique_ptr<Expression> PlanCorrelatedSubquery(Binder &binder, BoundSubque
 		auto delim_join = CreateDuplicateEliminatedJoin(correlated_columns, JoinType::MARK, move(root), perform_delim);
 		delim_join->mark_index = mark_index;
 		// RHS
-		FlattenDependentJoins flatten(binder, correlated_columns, true);
+		FlattenDependentJoins flatten(binder, correlated_columns, true, true);
 		flatten.DetectCorrelatedExpressions(plan.get());
 		auto dependent_join = flatten.PushDownDependentJoin(move(plan));
 
@@ -8960,7 +10405,7 @@ static unique_ptr<Expression> PlanCorrelatedSubquery(Binder &binder, BoundSubque
 		// add the actual condition based on the ANY/ALL predicate
 		JoinCondition compare_cond;
 		compare_cond.left = move(expr.child);
-		compare_cond.right = BoundCastExpression::AddCastToType(
+		compare_cond.right = BoundCastExpression::AddDefaultCastToType(
 		    make_unique<BoundColumnRefExpression>(expr.child_type, plan_columns[0]), expr.child_target);
 		compare_cond.comparison = expr.comparison_type;
 		delim_join->conditions.push_back(move(compare_cond));
@@ -9003,7 +10448,7 @@ unique_ptr<Expression> Binder::PlanSubquery(BoundSubqueryExpression &expr, uniqu
 	D_ASSERT(root);
 	// first we translate the QueryNode of the subquery into a logical plan
 	// note that we do not plan nested subqueries yet
-	auto sub_binder = Binder::CreateBinder(context);
+	auto sub_binder = Binder::CreateBinder(context, this);
 	sub_binder->plan_subquery = false;
 	auto subquery_root = sub_binder->CreatePlan(*expr.subquery);
 	D_ASSERT(subquery_root);
@@ -9104,7 +10549,7 @@ namespace duckdb {
 BoundStatement Binder::BindCopyTo(CopyStatement &stmt) {
 	// COPY TO a file
 	auto &config = DBConfig::GetConfig(context);
-	if (!config.enable_external_access) {
+	if (!config.options.enable_external_access) {
 		throw PermissionException("COPY TO is disabled by configuration");
 	}
 	BoundStatement result;
@@ -9124,7 +10569,7 @@ BoundStatement Binder::BindCopyTo(CopyStatement &stmt) {
 	for (auto &option : stmt.info->options) {
 		auto loption = StringUtil::Lower(option.first);
 		if (loption == "use_tmp_file") {
-			use_tmp_file = option.second[0].CastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			use_tmp_file = option.second[0].CastAs(context, LogicalType::BOOLEAN).GetValue<bool>();
 			stmt.info->options.erase(option.first);
 			break;
 		}
@@ -9146,7 +10591,7 @@ BoundStatement Binder::BindCopyTo(CopyStatement &stmt) {
 
 BoundStatement Binder::BindCopyFrom(CopyStatement &stmt) {
 	auto &config = DBConfig::GetConfig(context);
-	if (!config.enable_external_access) {
+	if (!config.options.enable_external_access) {
 		throw PermissionException("COPY FROM is disabled by configuration");
 	}
 	BoundStatement result;
@@ -9178,22 +10623,23 @@ BoundStatement Binder::BindCopyFrom(CopyStatement &stmt) {
 	vector<string> expected_names;
 	if (!bound_insert.column_index_map.empty()) {
 		expected_names.resize(bound_insert.expected_types.size());
-		for (idx_t i = 0; i < table->columns.size(); i++) {
+		for (auto &col : table->columns.Logical()) {
+			auto i = col.Physical();
 			if (bound_insert.column_index_map[i] != DConstants::INVALID_INDEX) {
-				expected_names[bound_insert.column_index_map[i]] = table->columns[i].Name();
+				expected_names[bound_insert.column_index_map[i]] = col.Name();
 			}
 		}
 	} else {
 		expected_names.reserve(bound_insert.expected_types.size());
-		for (idx_t i = 0; i < table->columns.size(); i++) {
-			expected_names.push_back(table->columns[i].Name());
+		for (auto &col : table->columns.Logical()) {
+			expected_names.push_back(col.Name());
 		}
 	}
 
 	auto function_data =
 	    copy_function->function.copy_from_bind(context, *stmt.info, expected_names, bound_insert.expected_types);
-	auto get = make_unique<LogicalGet>(0, copy_function->function.copy_from_function, move(function_data),
-	                                   bound_insert.expected_types, expected_names);
+	auto get = make_unique<LogicalGet>(GenerateTableIndex(), copy_function->function.copy_from_function,
+	                                   move(function_data), bound_insert.expected_types, expected_names);
 	for (idx_t i = 0; i < bound_insert.expected_types.size(); i++) {
 		get->column_ids.push_back(i);
 	}
@@ -9231,6 +10677,7 @@ BoundStatement Binder::Bind(CopyStatement &stmt) {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -9334,7 +10781,7 @@ SchemaCatalogEntry *Binder::BindCreateFunctionInfo(CreateInfo &info) {
 		dummy_types.push_back(val.value.type());
 		dummy_names.push_back(it->first);
 	}
-	auto this_macro_binding = make_unique<MacroBinding>(dummy_types, dummy_names, base.name);
+	auto this_macro_binding = make_unique<DummyBinding>(dummy_types, dummy_names, base.name);
 	macro_binding = this_macro_binding.get();
 	ExpressionBinder::QualifyColumnNames(*this, scalar_function.expression);
 
@@ -9359,18 +10806,31 @@ void Binder::BindLogicalType(ClientContext &context, LogicalType &type, const st
 	if (type.id() == LogicalTypeId::LIST) {
 		auto child_type = ListType::GetChildType(type);
 		BindLogicalType(context, child_type, schema);
+		auto alias = type.GetAlias();
 		type = LogicalType::LIST(child_type);
+		type.SetAlias(alias);
 	} else if (type.id() == LogicalTypeId::STRUCT || type.id() == LogicalTypeId::MAP) {
 		auto child_types = StructType::GetChildTypes(type);
 		for (auto &child_type : child_types) {
 			BindLogicalType(context, child_type.second, schema);
 		}
 		// Generate new Struct/Map Type
+		auto alias = type.GetAlias();
 		if (type.id() == LogicalTypeId::STRUCT) {
 			type = LogicalType::STRUCT(child_types);
 		} else {
 			type = LogicalType::MAP(child_types);
 		}
+		type.SetAlias(alias);
+	} else if (type.id() == LogicalTypeId::UNION) {
+		auto member_types = UnionType::CopyMemberTypes(type);
+		for (auto &member_type : member_types) {
+			BindLogicalType(context, member_type.second, schema);
+		}
+		// Generate new Union Type
+		auto alias = type.GetAlias();
+		type = LogicalType::UNION(member_types);
+		type.SetAlias(alias);
 	} else if (type.id() == LogicalTypeId::USER) {
 		auto &catalog = Catalog::GetCatalog(context);
 		type = catalog.GetType(context, schema, UserType::GetTypeName(type));
@@ -9382,33 +10842,94 @@ void Binder::BindLogicalType(ClientContext &context, LogicalType &type, const st
 	}
 }
 
-static void FindMatchingPrimaryKeyColumns(vector<unique_ptr<Constraint>> &constraints, ForeignKeyConstraint &fk) {
-	if (!fk.pk_columns.empty()) {
-		return;
-	}
+static void FindMatchingPrimaryKeyColumns(const ColumnList &columns, const vector<unique_ptr<Constraint>> &constraints,
+                                          ForeignKeyConstraint &fk) {
 	// find the matching primary key constraint
+	bool found_constraint = false;
+	// if no columns are defined, we will automatically try to bind to the primary key
+	bool find_primary_key = fk.pk_columns.empty();
 	for (auto &constr : constraints) {
 		if (constr->type != ConstraintType::UNIQUE) {
 			continue;
 		}
 		auto &unique = (UniqueConstraint &)*constr;
-		if (!unique.is_primary_key) {
+		if (find_primary_key && !unique.is_primary_key) {
 			continue;
 		}
-		idx_t column_count;
-		if (unique.index != DConstants::INVALID_INDEX) {
-			fk.info.pk_keys.push_back(unique.index);
-			column_count = 1;
+		found_constraint = true;
+
+		vector<string> pk_names;
+		if (unique.index.index != DConstants::INVALID_INDEX) {
+			pk_names.push_back(columns.GetColumn(LogicalIndex(unique.index)).Name());
 		} else {
-			fk.pk_columns = unique.columns;
-			column_count = unique.columns.size();
+			pk_names = unique.columns;
 		}
-		if (column_count != fk.fk_columns.size()) {
-			throw BinderException("The number of referencing and referenced columns for foreign keys must be the same");
+		if (pk_names.size() != fk.fk_columns.size()) {
+			// the number of referencing and referenced columns for foreign keys must be the same
+			continue;
 		}
+		if (find_primary_key) {
+			// found matching primary key
+			fk.pk_columns = pk_names;
+			return;
+		}
+		if (fk.pk_columns != pk_names) {
+			// Name mismatch
+			continue;
+		}
+		// found match
 		return;
 	}
-	throw BinderException("there is no primary key for referenced table \"%s\"", fk.info.table);
+	// no match found! examine why
+	if (!found_constraint) {
+		// no unique constraint or primary key
+		string search_term = find_primary_key ? "primary key" : "primary key or unique constraint";
+		throw BinderException("Failed to create foreign key: there is no %s for referenced table \"%s\"", search_term,
+		                      fk.info.table);
+	}
+	// check if all the columns exist
+	for (auto &name : fk.pk_columns) {
+		bool found = columns.ColumnExists(name);
+		if (!found) {
+			throw BinderException(
+			    "Failed to create foreign key: referenced table \"%s\" does not have a column named \"%s\"",
+			    fk.info.table, name);
+		}
+	}
+	auto fk_names = StringUtil::Join(fk.pk_columns, ",");
+	throw BinderException("Failed to create foreign key: referenced table \"%s\" does not have a primary key or unique "
+	                      "constraint on the columns %s",
+	                      fk.info.table, fk_names);
+}
+
+static void FindForeignKeyIndexes(const ColumnList &columns, const vector<string> &names,
+                                  vector<PhysicalIndex> &indexes) {
+	D_ASSERT(indexes.empty());
+	D_ASSERT(!names.empty());
+	for (auto &name : names) {
+		if (!columns.ColumnExists(name)) {
+			throw BinderException("column \"%s\" named in key does not exist", name);
+		}
+		auto &column = columns.GetColumn(name);
+		if (column.Generated()) {
+			throw BinderException("Failed to create foreign key: referenced column \"%s\" is a generated column",
+			                      column.Name());
+		}
+		indexes.push_back(column.Physical());
+	}
+}
+
+static void CheckForeignKeyTypes(const ColumnList &pk_columns, const ColumnList &fk_columns, ForeignKeyConstraint &fk) {
+	D_ASSERT(fk.info.pk_keys.size() == fk.info.fk_keys.size());
+	for (idx_t c_idx = 0; c_idx < fk.info.pk_keys.size(); c_idx++) {
+		auto &pk_col = pk_columns.GetColumn(fk.info.pk_keys[c_idx]);
+		auto &fk_col = fk_columns.GetColumn(fk.info.fk_keys[c_idx]);
+		if (pk_col.Type() != fk_col.Type()) {
+			throw BinderException("Failed to create foreign key: incompatible types between column \"%s\" (\"%s\") and "
+			                      "column \"%s\" (\"%s\")",
+			                      pk_col.Name(), pk_col.Type().ToString(), fk_col.Name(), fk_col.Type().ToString());
+		}
+	}
 }
 
 void ExpressionContainsGeneratedColumn(const ParsedExpression &expr, const unordered_set<string> &gcols,
@@ -9430,7 +10951,7 @@ void ExpressionContainsGeneratedColumn(const ParsedExpression &expr, const unord
 
 static bool AnyConstraintReferencesGeneratedColumn(CreateTableInfo &table_info) {
 	unordered_set<string> generated_columns;
-	for (auto &col : table_info.columns) {
+	for (auto &col : table_info.columns.Logical()) {
 		if (!col.Generated()) {
 			continue;
 		}
@@ -9454,8 +10975,7 @@ static bool AnyConstraintReferencesGeneratedColumn(CreateTableInfo &table_info) 
 		}
 		case ConstraintType::NOT_NULL: {
 			auto &constraint = (NotNullConstraint &)*constr;
-			auto index = constraint.index;
-			if (table_info.columns[index].Generated()) {
+			if (table_info.columns.GetColumn(constraint.index).Generated()) {
 				return true;
 			}
 			break;
@@ -9463,14 +10983,14 @@ static bool AnyConstraintReferencesGeneratedColumn(CreateTableInfo &table_info) 
 		case ConstraintType::UNIQUE: {
 			auto &constraint = (UniqueConstraint &)*constr;
 			auto index = constraint.index;
-			if (index == DConstants::INVALID_INDEX) {
+			if (index.index == DConstants::INVALID_INDEX) {
 				for (auto &col : constraint.columns) {
 					if (generated_columns.count(col)) {
 						return true;
 					}
 				}
 			} else {
-				if (table_info.columns[index].Generated()) {
+				if (table_info.columns.GetColumn(index).Generated()) {
 					return true;
 				}
 			}
@@ -9524,6 +11044,7 @@ BoundStatement Binder::Bind(CreateStatement &stmt) {
 	}
 	case CatalogType::INDEX_ENTRY: {
 		auto &base = (CreateIndexInfo &)*stmt.info;
+
 		// visit the table reference
 		auto bound_table = Bind(*base.table);
 		if (bound_table->type != TableReferenceType::BASE_TABLE) {
@@ -9531,6 +11052,7 @@ BoundStatement Binder::Bind(CreateStatement &stmt) {
 		}
 		auto &table_binding = (BoundBaseTableRef &)*bound_table;
 		auto table = table_binding.table;
+
 		// bind the index expressions
 		vector<unique_ptr<Expression>> expressions;
 		IndexBinder binder(*this, context);
@@ -9542,24 +11064,31 @@ BoundStatement Binder::Bind(CreateStatement &stmt) {
 		if (plan->type != LogicalOperatorType::LOGICAL_GET) {
 			throw BinderException("Cannot create index on a view!");
 		}
+
 		auto &get = (LogicalGet &)*plan;
 		for (auto &column_id : get.column_ids) {
 			if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
 				throw BinderException("Cannot create an index on the rowid!");
 			}
 		}
-		// this gives us a logical table scan
-		// we take the required columns from here
-		// create the logical operator
-		result.plan = make_unique<LogicalCreateIndex>(*table, get.column_ids, move(expressions),
-		                                              unique_ptr_cast<CreateInfo, CreateIndexInfo>(move(stmt.info)));
+
+		auto create_index_info = unique_ptr_cast<CreateInfo, CreateIndexInfo>(move(stmt.info));
+		for (auto &index : get.column_ids) {
+			create_index_info->scan_types.push_back(get.returned_types[index]);
+		}
+		create_index_info->scan_types.emplace_back(LogicalType::ROW_TYPE);
+		create_index_info->names = get.names;
+		create_index_info->column_ids = get.column_ids;
+
+		// the logical CREATE INDEX also needs all fields to scan the referenced table
+		result.plan = make_unique<LogicalCreateIndex>(move(get.bind_data), move(create_index_info), move(expressions),
+		                                              *table, move(get.function));
 		break;
 	}
 	case CatalogType::TABLE_ENTRY: {
-		// If there is a foreign key constraint, resolve primary key column's index from primary key column's name
 		auto &create_info = (CreateTableInfo &)*stmt.info;
 		auto &catalog = Catalog::GetCatalog(context);
-		// We first check if there are any user types, if yes we check to which custom types they refer.
+		// If there is a foreign key constraint, resolve primary key column's index from primary key column's name
 		unordered_set<SchemaCatalogEntry *> fk_schemas;
 		for (idx_t i = 0; i < create_info.constraints.size(); i++) {
 			auto &cond = create_info.constraints[i];
@@ -9571,24 +11100,21 @@ BoundStatement Binder::Bind(CreateStatement &stmt) {
 				continue;
 			}
 			D_ASSERT(fk.info.pk_keys.empty());
+			D_ASSERT(fk.info.fk_keys.empty());
+			FindForeignKeyIndexes(create_info.columns, fk.fk_columns, fk.info.fk_keys);
 			if (create_info.table == fk.info.table) {
+				// self-referential foreign key constraint
 				fk.info.type = ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE;
-				FindMatchingPrimaryKeyColumns(create_info.constraints, fk);
+				FindMatchingPrimaryKeyColumns(create_info.columns, create_info.constraints, fk);
+				FindForeignKeyIndexes(create_info.columns, fk.pk_columns, fk.info.pk_keys);
+				CheckForeignKeyTypes(create_info.columns, create_info.columns, fk);
 			} else {
 				// have to resolve referenced table
 				auto pk_table_entry_ptr = catalog.GetEntry<TableCatalogEntry>(context, fk.info.schema, fk.info.table);
 				fk_schemas.insert(pk_table_entry_ptr->schema);
-				D_ASSERT(fk.info.pk_keys.empty());
-				FindMatchingPrimaryKeyColumns(pk_table_entry_ptr->constraints, fk);
-				for (auto &keyname : fk.pk_columns) {
-					auto entry = pk_table_entry_ptr->name_map.find(keyname);
-					if (entry == pk_table_entry_ptr->name_map.end()) {
-						throw BinderException("column \"%s\" named in key does not exist", keyname);
-					}
-					auto column_index = entry->second;
-					auto &column = pk_table_entry_ptr->columns[column_index];
-					fk.info.pk_keys.push_back(column.StorageOid());
-				}
+				FindMatchingPrimaryKeyColumns(pk_table_entry_ptr->columns, pk_table_entry_ptr->constraints, fk);
+				FindForeignKeyIndexes(pk_table_entry_ptr->columns, fk.pk_columns, fk.info.pk_keys);
+				CheckForeignKeyTypes(pk_table_entry_ptr->columns, create_info.columns, fk);
 				auto index = pk_table_entry_ptr->storage->info->indexes.FindForeignKeyIndex(
 				    fk.info.pk_keys, ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE);
 				if (!index) {
@@ -9598,13 +11124,15 @@ BoundStatement Binder::Bind(CreateStatement &stmt) {
 					                      pk_table_entry_ptr->name, fk_column_names);
 				}
 			}
+			D_ASSERT(fk.info.pk_keys.size() == fk.info.fk_keys.size());
+			D_ASSERT(fk.info.pk_keys.size() == fk.pk_columns.size());
+			D_ASSERT(fk.info.fk_keys.size() == fk.fk_columns.size());
 		}
 		if (AnyConstraintReferencesGeneratedColumn(create_info)) {
 			throw BinderException("Constraints on generated columns are not supported yet");
 		}
 		auto bound_info = BindCreateTableInfo(move(stmt.info));
 		auto root = move(bound_info->query);
-
 		for (auto &fk_schema : fk_schemas) {
 			if (fk_schema != bound_info->schema) {
 				throw BinderException("Creating foreign keys across different schemas is not supported");
@@ -9624,7 +11152,45 @@ BoundStatement Binder::Bind(CreateStatement &stmt) {
 	}
 	case CatalogType::TYPE_ENTRY: {
 		auto schema = BindSchema(*stmt.info);
+		auto &create_type_info = (CreateTypeInfo &)(*stmt.info);
 		result.plan = make_unique<LogicalCreate>(LogicalOperatorType::LOGICAL_CREATE_TYPE, move(stmt.info), schema);
+		if (create_type_info.query) {
+			// CREATE TYPE mood AS ENUM (SELECT 'happy')
+			auto &select_stmt = (SelectStatement &)*create_type_info.query;
+			auto &query_node = *select_stmt.node;
+
+			// We always add distinct modifier implicitly
+			bool need_to_add = true;
+			if (!query_node.modifiers.empty()) {
+				if (query_node.modifiers[0]->type == ResultModifierType::DISTINCT_MODIFIER) {
+					// There are cases where the same column is grouped repeatedly
+					// CREATE TYPE mood AS ENUM (SELECT DISTINCT ON(x) x FROM test);
+					// When we push into a constant expression
+					// => CREATE TYPE mood AS ENUM (SELECT DISTINCT ON(x, x) x FROM test);
+					auto &distinct_modifier = (DistinctModifier &)*query_node.modifiers[0];
+					distinct_modifier.distinct_on_targets.push_back(make_unique<ConstantExpression>(Value::INTEGER(1)));
+					need_to_add = false;
+				}
+			}
+
+			// Add distinct modifier
+			if (need_to_add) {
+				auto distinct_modifier = make_unique<DistinctModifier>();
+				distinct_modifier->distinct_on_targets.push_back(make_unique<ConstantExpression>(Value::INTEGER(1)));
+				query_node.modifiers.emplace(query_node.modifiers.begin(), move(distinct_modifier));
+			}
+
+			auto query_obj = Bind(*create_type_info.query);
+			auto query = move(query_obj.plan);
+
+			auto &sql_types = query_obj.types;
+			if (sql_types.size() != 1 || sql_types[0].id() != LogicalType::VARCHAR) {
+				// add cast expression?
+				throw BinderException("The query must return one varchar column");
+			}
+
+			result.plan->AddChild(move(query));
+		}
 		break;
 	}
 	default:
@@ -9652,46 +11218,19 @@ BoundStatement Binder::Bind(CreateStatement &stmt) {
 
 
 
+
+
 #include <algorithm>
 
 namespace duckdb {
 
-static void CreateColumnMap(BoundCreateTableInfo &info, bool allow_duplicate_names) {
-	auto &base = (CreateTableInfo &)*info.base;
-
-	idx_t storage_idx = 0;
-	for (uint64_t oid = 0; oid < base.columns.size(); oid++) {
-		auto &col = base.columns[oid];
-		if (allow_duplicate_names) {
-			idx_t index = 1;
-			string base_name = col.Name();
-			while (info.name_map.find(col.Name()) != info.name_map.end()) {
-				col.SetName(base_name + ":" + to_string(index++));
-			}
-		} else {
-			if (info.name_map.find(col.Name()) != info.name_map.end()) {
-				throw CatalogException("Column with name %s already exists!", col.Name());
-			}
-		}
-
-		info.name_map[col.Name()] = oid;
-		col.SetOid(oid);
-		if (col.Generated()) {
-			continue;
-		}
-		col.SetStorageOid(storage_idx++);
-	}
-}
-
 static void CreateColumnDependencyManager(BoundCreateTableInfo &info) {
 	auto &base = (CreateTableInfo &)*info.base;
-	D_ASSERT(!info.name_map.empty());
-
-	for (auto &col : base.columns) {
+	for (auto &col : base.columns.Logical()) {
 		if (!col.Generated()) {
 			continue;
 		}
-		info.column_dependency_manager.AddGeneratedColumn(col, info.name_map);
+		info.column_dependency_manager.AddGeneratedColumn(col, base.columns);
 	}
 }
 
@@ -9715,7 +11254,8 @@ static void BindConstraints(Binder &binder, BoundCreateTableInfo &info) {
 	auto &base = (CreateTableInfo &)*info.base;
 
 	bool has_primary_key = false;
-	vector<idx_t> primary_keys;
+	logical_index_set_t not_null_columns;
+	vector<LogicalIndex> primary_keys;
 	for (idx_t i = 0; i < base.constraints.size(); i++) {
 		auto &cond = base.constraints[i];
 		switch (cond->type) {
@@ -9725,19 +11265,20 @@ static void BindConstraints(Binder &binder, BoundCreateTableInfo &info) {
 		}
 		case ConstraintType::NOT_NULL: {
 			auto &not_null = (NotNullConstraint &)*cond;
-			auto &col = base.columns[not_null.index];
-			info.bound_constraints.push_back(make_unique<BoundNotNullConstraint>(col.StorageOid()));
+			auto &col = base.columns.GetColumn(LogicalIndex(not_null.index));
+			info.bound_constraints.push_back(make_unique<BoundNotNullConstraint>(PhysicalIndex(col.StorageOid())));
+			not_null_columns.insert(not_null.index);
 			break;
 		}
 		case ConstraintType::UNIQUE: {
 			auto &unique = (UniqueConstraint &)*cond;
 			// have to resolve columns of the unique constraint
-			vector<idx_t> keys;
-			unordered_set<idx_t> key_set;
-			if (unique.index != DConstants::INVALID_INDEX) {
-				D_ASSERT(unique.index < base.columns.size());
+			vector<LogicalIndex> keys;
+			logical_index_set_t key_set;
+			if (unique.index.index != DConstants::INVALID_INDEX) {
+				D_ASSERT(unique.index.index < base.columns.LogicalColumnCount());
 				// unique constraint is given by single index
-				unique.columns.push_back(base.columns[unique.index].Name());
+				unique.columns.push_back(base.columns.GetColumn(unique.index).Name());
 				keys.push_back(unique.index);
 				key_set.insert(unique.index);
 			} else {
@@ -9745,11 +11286,11 @@ static void BindConstraints(Binder &binder, BoundCreateTableInfo &info) {
 				// have to resolve names
 				D_ASSERT(!unique.columns.empty());
 				for (auto &keyname : unique.columns) {
-					auto entry = info.name_map.find(keyname);
-					if (entry == info.name_map.end()) {
+					if (!base.columns.ColumnExists(keyname)) {
 						throw ParserException("column \"%s\" named in key does not exist", keyname);
 					}
-					auto &column_index = entry->second;
+					auto &column = base.columns.GetColumn(keyname);
+					auto column_index = column.Logical();
 					if (key_set.find(column_index) != key_set.end()) {
 						throw ParserException("column \"%s\" appears twice in "
 						                      "primary key constraint",
@@ -9777,34 +11318,15 @@ static void BindConstraints(Binder &binder, BoundCreateTableInfo &info) {
 			D_ASSERT((fk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE && !fk.info.pk_keys.empty()) ||
 			         (fk.info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE && !fk.info.pk_keys.empty()) ||
 			         fk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE);
-			if (fk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE && fk.info.pk_keys.empty()) {
-				for (auto &keyname : fk.pk_columns) {
-					auto entry = info.name_map.find(keyname);
-					if (entry == info.name_map.end()) {
-						throw BinderException("column \"%s\" named in key does not exist", keyname);
-					}
-					auto column_index = entry->second;
-					fk.info.pk_keys.push_back(column_index);
-				}
-			}
-			if (fk.info.fk_keys.empty()) {
-				for (auto &keyname : fk.fk_columns) {
-					auto entry = info.name_map.find(keyname);
-					if (entry == info.name_map.end()) {
-						throw BinderException("column \"%s\" named in key does not exist", keyname);
-					}
-					auto column_index = entry->second;
-					fk.info.fk_keys.push_back(column_index);
-				}
-			}
-			unordered_set<idx_t> fk_key_set, pk_key_set;
+			physical_index_set_t fk_key_set, pk_key_set;
 			for (idx_t i = 0; i < fk.info.pk_keys.size(); i++) {
 				pk_key_set.insert(fk.info.pk_keys[i]);
 			}
 			for (idx_t i = 0; i < fk.info.fk_keys.size(); i++) {
 				fk_key_set.insert(fk.info.fk_keys[i]);
 			}
-			info.bound_constraints.push_back(make_unique<BoundForeignKeyConstraint>(fk.info, pk_key_set, fk_key_set));
+			info.bound_constraints.push_back(
+			    make_unique<BoundForeignKeyConstraint>(fk.info, move(pk_key_set), move(fk_key_set)));
 			break;
 		}
 		default:
@@ -9814,9 +11336,13 @@ static void BindConstraints(Binder &binder, BoundCreateTableInfo &info) {
 	if (has_primary_key) {
 		// if there is a primary key index, also create a NOT NULL constraint for each of the columns
 		for (auto &column_index : primary_keys) {
-			auto &column = base.columns[column_index];
+			if (not_null_columns.count(column_index)) {
+				//! No need to create a NotNullConstraint, it's already present
+				continue;
+			}
+			auto physical_index = base.columns.LogicalToPhysical(column_index);
 			base.constraints.push_back(make_unique<NotNullConstraint>(column_index));
-			info.bound_constraints.push_back(make_unique<BoundNotNullConstraint>(column.StorageOid()));
+			info.bound_constraints.push_back(make_unique<BoundNotNullConstraint>(physical_index));
 		}
 	}
 }
@@ -9828,8 +11354,7 @@ void Binder::BindGeneratedColumns(BoundCreateTableInfo &info) {
 	vector<LogicalType> types;
 
 	D_ASSERT(base.type == CatalogType::TABLE_ENTRY);
-	for (idx_t i = 0; i < base.columns.size(); i++) {
-		auto &col = base.columns[i];
+	for (auto &col : base.columns.Logical()) {
 		names.push_back(col.Name());
 		types.push_back(col.Type());
 	}
@@ -9844,12 +11369,12 @@ void Binder::BindGeneratedColumns(BoundCreateTableInfo &info) {
 	D_ASSERT(table_binding && ignore.empty());
 
 	auto bind_order = info.column_dependency_manager.GetBindOrder(base.columns);
-	unordered_set<column_t> bound_indices;
+	logical_index_set_t bound_indices;
 
 	while (!bind_order.empty()) {
 		auto i = bind_order.top();
 		bind_order.pop();
-		auto &col = base.columns[i];
+		auto &col = base.columns.GetColumnMutable(i);
 
 		//! Already bound this previously
 		//! This can not be optimized out of the GetBindOrder function
@@ -9871,27 +11396,52 @@ void Binder::BindGeneratedColumns(BoundCreateTableInfo &info) {
 
 			// Update the type in the binding, for future expansions
 			string ignore;
-			table_binding->types[i] = col.Type();
+			table_binding->types[i.index] = col.Type();
 		}
 		bound_indices.insert(i);
 	}
 }
 
-void Binder::BindDefaultValues(vector<ColumnDefinition> &columns, vector<unique_ptr<Expression>> &bound_defaults) {
-	for (idx_t i = 0; i < columns.size(); i++) {
+void Binder::BindDefaultValues(ColumnList &columns, vector<unique_ptr<Expression>> &bound_defaults) {
+	for (auto &column : columns.Physical()) {
 		unique_ptr<Expression> bound_default;
-		if (columns[i].DefaultValue()) {
+		if (column.DefaultValue()) {
 			// we bind a copy of the DEFAULT value because binding is destructive
 			// and we want to keep the original expression around for serialization
-			auto default_copy = columns[i].DefaultValue()->Copy();
+			auto default_copy = column.DefaultValue()->Copy();
 			ConstantBinder default_binder(*this, context, "DEFAULT value");
-			default_binder.target_type = columns[i].Type();
+			default_binder.target_type = column.Type();
 			bound_default = default_binder.Bind(default_copy);
 		} else {
 			// no default value specified: push a default value of constant null
-			bound_default = make_unique<BoundConstantExpression>(Value(columns[i].Type()));
+			bound_default = make_unique<BoundConstantExpression>(Value(column.Type()));
 		}
 		bound_defaults.push_back(move(bound_default));
+	}
+}
+
+static void ExtractExpressionDependencies(Expression &expr, unordered_set<CatalogEntry *> &dependencies) {
+	if (expr.type == ExpressionType::BOUND_FUNCTION) {
+		auto &function = (BoundFunctionExpression &)expr;
+		if (function.function.dependency) {
+			function.function.dependency(function, dependencies);
+		}
+	}
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](Expression &child) { ExtractExpressionDependencies(child, dependencies); });
+}
+
+static void ExtractDependencies(BoundCreateTableInfo &info) {
+	for (auto &default_value : info.bound_defaults) {
+		if (default_value) {
+			ExtractExpressionDependencies(*default_value, info.dependencies);
+		}
+	}
+	for (auto &constraint : info.bound_constraints) {
+		if (constraint->type == ConstraintType::CHECK) {
+			auto &bound_check = (BoundCheckConstraint &)*constraint;
+			ExtractExpressionDependencies(*bound_check.expression, info.dependencies);
+		}
 	}
 }
 
@@ -9909,17 +11459,14 @@ unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableInfo(unique_ptr<CreateIn
 		auto &names = query_obj.names;
 		auto &sql_types = query_obj.types;
 		D_ASSERT(names.size() == sql_types.size());
+		base.columns.SetAllowDuplicates(true);
 		for (idx_t i = 0; i < names.size(); i++) {
-			base.columns.emplace_back(names[i], sql_types[i]);
+			base.columns.AddColumn(ColumnDefinition(names[i], sql_types[i]));
 		}
-		// create the name map for the statement
-		CreateColumnMap(*result, true);
 		CreateColumnDependencyManager(*result);
 		// bind the generated column expressions
 		BindGeneratedColumns(*result);
 	} else {
-		// create the name map for the statement
-		CreateColumnMap(*result, false);
 		CreateColumnDependencyManager(*result);
 		// bind the generated column expressions
 		BindGeneratedColumns(*result);
@@ -9928,12 +11475,15 @@ unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableInfo(unique_ptr<CreateIn
 		// bind the default values
 		BindDefaultValues(base.columns, result->bound_defaults);
 	}
+	// extract dependencies from any default values or CHECK constraints
+	ExtractDependencies(*result);
 
+	if (base.columns.PhysicalColumnCount() == 0) {
+		throw BinderException("Creating a table without physical (non-generated) columns is not supported");
+	}
 	// bind collations to detect any unsupported collation errors
-	for (auto &column : base.columns) {
-		if (column.Generated()) {
-			continue;
-		}
+	for (idx_t i = 0; i < base.columns.PhysicalColumnCount(); i++) {
+		auto &column = base.columns.GetColumnMutable(PhysicalIndex(i));
 		if (column.Type().id() == LogicalTypeId::VARCHAR) {
 			ExpressionBinder::TestCollation(context, StringType::GetCollation(column.Type()));
 		}
@@ -9991,23 +11541,19 @@ BoundStatement Binder::Bind(DeleteStatement &stmt) {
 		unique_ptr<LogicalOperator> child_operator;
 		for (auto &using_clause : stmt.using_clauses) {
 			// bind the using clause
-			auto bound_node = Bind(*using_clause);
+			auto using_binder = Binder::CreateBinder(context, this);
+			auto bound_node = using_binder->Bind(*using_clause);
 			auto op = CreatePlan(*bound_node);
 			if (child_operator) {
 				// already bound a child: create a cross product to unify the two
-				auto cross_product = make_unique<LogicalCrossProduct>();
-				cross_product->children.push_back(move(child_operator));
-				cross_product->children.push_back(move(op));
-				child_operator = move(cross_product);
+				child_operator = LogicalCrossProduct::Create(move(child_operator), move(op));
 			} else {
 				child_operator = move(op);
 			}
+			bind_context.AddContext(move(using_binder->bind_context));
 		}
 		if (child_operator) {
-			auto cross_product = make_unique<LogicalCrossProduct>();
-			cross_product->children.push_back(move(root));
-			cross_product->children.push_back(move(child_operator));
-			root = move(cross_product);
+			root = LogicalCrossProduct::Create(move(root), move(child_operator));
 		}
 	}
 
@@ -10023,7 +11569,7 @@ BoundStatement Binder::Bind(DeleteStatement &stmt) {
 		root = move(filter);
 	}
 	// create the delete node
-	auto del = make_unique<LogicalDelete>(table);
+	auto del = make_unique<LogicalDelete>(table, GenerateTableIndex());
 	del->AddChild(move(root));
 
 	// set up the delete expression
@@ -10040,13 +11586,13 @@ BoundStatement Binder::Bind(DeleteStatement &stmt) {
 		unique_ptr<LogicalOperator> del_as_logicaloperator = move(del);
 		return BindReturning(move(stmt.returning_list), table, update_table_index, move(del_as_logicaloperator),
 		                     move(result));
-	} else {
-		result.plan = move(del);
-		result.names = {"Count"};
-		result.types = {LogicalType::BIGINT};
-		properties.allow_stream_result = false;
-		properties.return_type = StatementReturnType::CHANGED_ROWS;
 	}
+	result.plan = move(del);
+	result.names = {"Count"};
+	result.types = {LogicalType::BIGINT};
+	properties.allow_stream_result = false;
+	properties.return_type = StatementReturnType::CHANGED_ROWS;
+
 	return result;
 }
 
@@ -10100,6 +11646,74 @@ BoundStatement Binder::Bind(DropStatement &stmt) {
 	result.types = {LogicalType::BOOLEAN};
 	properties.allow_stream_result = false;
 	properties.return_type = StatementReturnType::NOTHING;
+	return result;
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+BoundStatement Binder::Bind(ExecuteStatement &stmt) {
+	auto parameter_count = stmt.n_param;
+
+	// bind the prepared statement
+	auto &client_data = ClientData::Get(context);
+
+	auto entry = client_data.prepared_statements.find(stmt.name);
+	if (entry == client_data.prepared_statements.end()) {
+		throw BinderException("Prepared statement \"%s\" does not exist", stmt.name);
+	}
+
+	// check if we need to rebind the prepared statement
+	// this happens if the catalog changes, since in this case e.g. tables we relied on may have been deleted
+	auto prepared = entry->second;
+
+	// bind any supplied parameters
+	vector<Value> bind_values;
+	auto constant_binder = Binder::CreateBinder(context);
+	constant_binder->SetCanContainNulls(true);
+	for (idx_t i = 0; i < stmt.values.size(); i++) {
+		ConstantBinder cbinder(*constant_binder, context, "EXECUTE statement");
+		auto bound_expr = cbinder.Bind(stmt.values[i]);
+
+		Value value = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+		bind_values.push_back(move(value));
+	}
+	unique_ptr<LogicalOperator> rebound_plan;
+	if (prepared->RequireRebind(context, bind_values)) {
+		// catalog was modified or statement does not have clear types: rebind the statement before running the execute
+		Planner prepared_planner(context);
+		for (idx_t i = 0; i < bind_values.size(); i++) {
+			prepared_planner.parameter_data.emplace_back(bind_values[i]);
+		}
+		prepared = prepared_planner.PrepareSQLStatement(entry->second->unbound_statement->Copy());
+		rebound_plan = move(prepared_planner.plan);
+		D_ASSERT(prepared->properties.bound_all_parameters);
+		this->bound_tables = prepared_planner.binder->bound_tables;
+	}
+	// copy the properties of the prepared statement into the planner
+	this->properties = prepared->properties;
+	this->properties.parameter_count = parameter_count;
+	BoundStatement result;
+	result.names = prepared->names;
+	result.types = prepared->types;
+
+	prepared->Bind(move(bind_values));
+	if (rebound_plan) {
+		auto execute_plan = make_unique<LogicalExecute>(move(prepared));
+		execute_plan->children.push_back(move(rebound_plan));
+		result.plan = move(execute_plan);
+	} else {
+		result.plan = make_unique<LogicalExecute>(move(prepared));
+	}
 	return result;
 }
 
@@ -10218,7 +11832,7 @@ void ReorderTableEntries(vector<TableCatalogEntry *> &tables) {
 BoundStatement Binder::Bind(ExportStatement &stmt) {
 	// COPY TO a file
 	auto &config = DBConfig::GetConfig(context);
-	if (!config.enable_external_access) {
+	if (!config.options.enable_external_access) {
 		throw PermissionException("COPY TO is disabled through configuration");
 	}
 	BoundStatement result;
@@ -10286,6 +11900,11 @@ BoundStatement Binder::Bind(ExportStatement &stmt) {
 		info->schema = table->schema->name;
 		info->table = table->name;
 
+		// We can not export generated columns
+		for (auto &col : table->columns.Physical()) {
+			info->select_list.push_back(col.GetName());
+		}
+
 		exported_data.table_name = info->table;
 		exported_data.schema_name = info->schema;
 		exported_data.file_path = info->file_path;
@@ -10300,7 +11919,7 @@ BoundStatement Binder::Bind(ExportStatement &stmt) {
 		CopyStatement copy_stmt;
 		copy_stmt.info = move(info);
 
-		auto copy_binder = Binder::CreateBinder(context);
+		auto copy_binder = Binder::CreateBinder(context, this);
 		auto bound_statement = copy_binder->Bind(copy_stmt);
 		if (child_operator) {
 			// use UNION ALL to combine the individual copy statements into a single node
@@ -10403,13 +12022,12 @@ BoundStatement Binder::Bind(InsertStatement &stmt) {
 		properties.read_only = false;
 	}
 
-	auto insert = make_unique<LogicalInsert>(table);
+	auto insert = make_unique<LogicalInsert>(table, GenerateTableIndex());
 
 	// Add CTEs as bindable
 	AddCTEMap(stmt.cte_map);
 
-	idx_t generated_column_count = 0;
-	vector<idx_t> named_column_map;
+	vector<LogicalIndex> named_column_map;
 	if (!stmt.columns.empty()) {
 		// insertion statement specifies column list
 
@@ -10417,25 +12035,18 @@ BoundStatement Binder::Bind(InsertStatement &stmt) {
 		case_insensitive_map_t<idx_t> column_name_map;
 		for (idx_t i = 0; i < stmt.columns.size(); i++) {
 			column_name_map[stmt.columns[i]] = i;
-			auto entry = table->name_map.find(stmt.columns[i]);
-			if (entry == table->name_map.end()) {
-				throw BinderException("Column %s not found in table %s", stmt.columns[i], table->name);
-			}
-			auto column_index = entry->second;
-			if (column_index == COLUMN_IDENTIFIER_ROW_ID) {
+			auto column_index = table->GetColumnIndex(stmt.columns[i]);
+			if (column_index.index == COLUMN_IDENTIFIER_ROW_ID) {
 				throw BinderException("Cannot explicitly insert values into rowid column");
 			}
-			if (table->columns[column_index].Generated()) {
+			auto &col = table->columns.GetColumn(column_index);
+			if (col.Generated()) {
 				throw BinderException("Cannot insert into a generated column");
 			}
-			insert->expected_types.push_back(table->columns[column_index].Type());
+			insert->expected_types.push_back(col.Type());
 			named_column_map.push_back(column_index);
 		}
-		for (idx_t i = 0; i < table->columns.size(); i++) {
-			auto &col = table->columns[i];
-			if (col.Generated()) {
-				generated_column_count++;
-			}
+		for (auto &col : table->columns.Physical()) {
 			auto entry = column_name_map.find(col.Name());
 			if (entry == column_name_map.end()) {
 				// column not specified, set index to DConstants::INVALID_INDEX
@@ -10446,14 +12057,9 @@ BoundStatement Binder::Bind(InsertStatement &stmt) {
 			}
 		}
 	} else {
-		for (idx_t i = 0; i < table->columns.size(); i++) {
-			auto &col = table->columns[i];
-			if (col.Generated()) {
-				generated_column_count++;
-				continue;
-			}
-			named_column_map.push_back(i);
-			insert->expected_types.push_back(table->columns[i].Type());
+		for (auto &col : table->columns.Physical()) {
+			named_column_map.push_back(col.Logical());
+			insert->expected_types.push_back(col.Type());
 		}
 	}
 
@@ -10465,8 +12071,7 @@ BoundStatement Binder::Bind(InsertStatement &stmt) {
 	}
 
 	// Exclude the generated columns from this amount
-	idx_t expected_columns =
-	    stmt.columns.empty() ? (table->columns.size() - generated_column_count) : stmt.columns.size();
+	idx_t expected_columns = stmt.columns.empty() ? table->columns.PhysicalColumnCount() : stmt.columns.size();
 
 	// special case: check if we are inserting from a VALUES statement
 	auto values_list = stmt.GetValuesList();
@@ -10481,11 +12086,10 @@ BoundStatement Binder::Bind(InsertStatement &stmt) {
 
 		// VALUES list!
 		for (idx_t col_idx = 0; col_idx < expected_columns; col_idx++) {
-			idx_t table_col_idx = named_column_map[col_idx];
-			D_ASSERT(table_col_idx < table->columns.size());
+			auto table_col_idx = named_column_map[col_idx];
 
 			// set the expected types as the types for the INSERT statement
-			auto &column = table->columns[table_col_idx];
+			auto &column = table->columns.GetColumn(table_col_idx);
 			expr_list.expected_types[col_idx] = column.Type();
 			expr_list.expected_names[col_idx] = column.Name();
 
@@ -10504,7 +12108,10 @@ BoundStatement Binder::Bind(InsertStatement &stmt) {
 	}
 
 	// parse select statement and add to logical plan
-	auto root_select = Bind(*stmt.select_statement);
+	auto select_binder = Binder::CreateBinder(context, this);
+	auto root_select = select_binder->Bind(*stmt.select_statement);
+	MoveCorrelatedExpressions(*select_binder);
+
 	CheckInsertColumnCountMismatch(expected_columns, root_select.types.size(), !stmt.columns.empty(),
 	                               table->name.c_str());
 
@@ -10522,13 +12129,13 @@ BoundStatement Binder::Bind(InsertStatement &stmt) {
 
 		return BindReturning(move(stmt.returning_list), table, insert_table_index, move(index_as_logicaloperator),
 		                     move(result));
-	} else {
-		D_ASSERT(result.types.size() == result.names.size());
-		result.plan = move(insert);
-		properties.allow_stream_result = false;
-		properties.return_type = StatementReturnType::CHANGED_ROWS;
-		return result;
 	}
+
+	D_ASSERT(result.types.size() == result.names.size());
+	result.plan = move(insert);
+	properties.allow_stream_result = false;
+	properties.return_type = StatementReturnType::CHANGED_ROWS;
+	return result;
 }
 
 } // namespace duckdb
@@ -10553,6 +12160,27 @@ BoundStatement Binder::Bind(LoadStatement &stmt) {
 } // namespace duckdb
 
 
+#include <algorithm>
+
+namespace duckdb {
+
+BoundStatement Binder::Bind(LogicalPlanStatement &stmt) {
+	BoundStatement result;
+	result.types = stmt.plan->types;
+	for (idx_t i = 0; i < result.types.size(); i++) {
+		result.names.push_back(StringUtil::Format("col%d", i));
+	}
+	result.plan = move(stmt.plan);
+	properties.allow_stream_result = true;
+	properties.return_type = StatementReturnType::QUERY_RESULT; // TODO could also be something else
+
+	return result;
+}
+
+} // namespace duckdb
+
+
+
 
 
 
@@ -10564,11 +12192,12 @@ BoundStatement Binder::Bind(PragmaStatement &stmt) {
 	// bind the pragma function
 	auto entry = catalog.GetEntry<PragmaFunctionCatalogEntry>(context, DEFAULT_SCHEMA, stmt.info->name, false);
 	string error;
-	idx_t bound_idx = Function::BindFunction(entry->name, entry->functions, *stmt.info, error);
+	FunctionBinder function_binder(context);
+	idx_t bound_idx = function_binder.BindFunction(entry->name, entry->functions, *stmt.info, error);
 	if (bound_idx == DConstants::INVALID_INDEX) {
 		throw BinderException(FormatError(stmt.stmt_location, error));
 	}
-	auto &bound_function = entry->functions[bound_idx];
+	auto bound_function = entry->functions.GetFunctionByOffset(bound_idx);
 	if (!bound_function.function) {
 		throw BinderException("PRAGMA function does not have a function specified");
 	}
@@ -10583,6 +12212,37 @@ BoundStatement Binder::Bind(PragmaStatement &stmt) {
 	result.types = {LogicalType::BOOLEAN};
 	result.plan = make_unique<LogicalPragma>(bound_function, *stmt.info);
 	properties.return_type = StatementReturnType::QUERY_RESULT;
+	return result;
+}
+
+} // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+
+BoundStatement Binder::Bind(PrepareStatement &stmt) {
+	Planner prepared_planner(context);
+	auto prepared_data = prepared_planner.PrepareSQLStatement(move(stmt.statement));
+	this->bound_tables = prepared_planner.binder->bound_tables;
+
+	auto prepare = make_unique<LogicalPrepare>(stmt.name, move(prepared_data), move(prepared_planner.plan));
+	// we can prepare in read-only mode: prepared statements are not written to the catalog
+	properties.read_only = true;
+	// we can always prepare, even if the transaction has been invalidated
+	// this is required because most clients ALWAYS invoke prepared statements
+	properties.requires_valid_transaction = false;
+	properties.allow_stream_result = false;
+	properties.bound_all_parameters = true;
+	properties.parameter_count = 0;
+	properties.return_type = StatementReturnType::NOTHING;
+
+	BoundStatement result;
+	result.names = {"Success"};
+	result.types = {LogicalType::BOOLEAN};
+	result.plan = move(prepare);
 	return result;
 }
 
@@ -10680,7 +12340,8 @@ BoundStatement Binder::Bind(AlterStatement &stmt) {
 	result.names = {"Success"};
 	result.types = {LogicalType::BOOLEAN};
 	Catalog &catalog = Catalog::GetCatalog(context);
-	auto entry = catalog.GetEntry(context, stmt.info->GetCatalogType(), stmt.info->schema, stmt.info->name, true);
+	auto entry = catalog.GetEntry(context, stmt.info->GetCatalogType(), stmt.info->schema, stmt.info->name,
+	                              stmt.info->if_exists);
 	if (entry && !entry->temporary) {
 		// we can only alter temporary tables/views in read-only mode
 		properties.read_only = false;
@@ -10692,7 +12353,7 @@ BoundStatement Binder::Bind(AlterStatement &stmt) {
 
 BoundStatement Binder::Bind(TransactionStatement &stmt) {
 	// transaction statements do not require a valid transaction
-	properties.requires_valid_transaction = false;
+	properties.requires_valid_transaction = stmt.info->type == TransactionType::BEGIN_TRANSACTION;
 
 	BoundStatement result;
 	result.names = {"Success"};
@@ -10854,17 +12515,18 @@ BoundStatement Binder::BindSummarize(ShowStatement &stmt) {
 
 
 
+
 #include <algorithm>
 
 namespace duckdb {
 
 static void BindExtraColumns(TableCatalogEntry &table, LogicalGet &get, LogicalProjection &proj, LogicalUpdate &update,
-                             unordered_set<column_t> &bound_columns) {
+                             physical_index_set_t &bound_columns) {
 	if (bound_columns.size() <= 1) {
 		return;
 	}
 	idx_t found_column_count = 0;
-	unordered_set<idx_t> found_columns;
+	physical_index_set_t found_columns;
 	for (idx_t i = 0; i < update.columns.size(); i++) {
 		if (bound_columns.find(update.columns[i]) != bound_columns.end()) {
 			// this column is referenced in the CHECK constraint
@@ -10881,12 +12543,12 @@ static void BindExtraColumns(TableCatalogEntry &table, LogicalGet &get, LogicalP
 				continue;
 			}
 			// column is not projected yet: project it by adding the clause "i=i" to the set of updated columns
-			auto &column = table.columns[check_column_id];
+			auto &column = table.columns.GetColumn(check_column_id);
 			update.expressions.push_back(make_unique<BoundColumnRefExpression>(
 			    column.Type(), ColumnBinding(proj.table_index, proj.expressions.size())));
 			proj.expressions.push_back(make_unique<BoundColumnRefExpression>(
 			    column.Type(), ColumnBinding(get.table_index, get.column_ids.size())));
-			get.column_ids.push_back(check_column_id);
+			get.column_ids.push_back(check_column_id.index);
 			update.columns.push_back(check_column_id);
 		}
 	}
@@ -10896,7 +12558,8 @@ static bool TypeSupportsRegularUpdate(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP:
-		// lists and maps don't support updates directly
+	case LogicalTypeId::UNION:
+		// lists and maps and unions don't support updates directly
 		return false;
 	case LogicalTypeId::STRUCT: {
 		auto &child_types = StructType::GetChildTypes(type);
@@ -10926,6 +12589,13 @@ static void BindUpdateConstraints(TableCatalogEntry &table, LogicalGet &get, Log
 			BindExtraColumns(table, get, proj, update, check.bound_columns);
 		}
 	}
+	if (update.return_chunk) {
+		physical_index_set_t all_columns;
+		for (idx_t i = 0; i < table.storage->column_definitions.size(); i++) {
+			all_columns.insert(PhysicalIndex(i));
+		}
+		BindExtraColumns(table, get, proj, update, all_columns);
+	}
 	// for index updates we always turn any update into an insert and a delete
 	// we thus need all the columns to be available, hence we check if the update touches any index columns
 	// If the returning keyword is used, we need access to the whole row in case the user requests it.
@@ -10940,19 +12610,20 @@ static void BindUpdateConstraints(TableCatalogEntry &table, LogicalGet &get, Log
 	});
 
 	// we also convert any updates on LIST columns into delete + insert
-	for (auto &col : update.columns) {
-		if (!TypeSupportsRegularUpdate(table.columns[col].Type())) {
+	for (auto &col_index : update.columns) {
+		auto &column = table.columns.GetColumn(col_index);
+		if (!TypeSupportsRegularUpdate(column.Type())) {
 			update.update_is_del_and_insert = true;
 			break;
 		}
 	}
 
-	if (update.update_is_del_and_insert || update.return_chunk) {
+	if (update.update_is_del_and_insert) {
 		// the update updates a column required by an index or requires returning the updated rows,
 		// push projections for all columns
-		unordered_set<column_t> all_columns;
+		physical_index_set_t all_columns;
 		for (idx_t i = 0; i < table.storage->column_definitions.size(); i++) {
-			all_columns.insert(i);
+			all_columns.insert(PhysicalIndex(i));
 		}
 		BindExtraColumns(table, get, proj, update, all_columns);
 	}
@@ -11024,10 +12695,10 @@ BoundStatement Binder::Bind(UpdateStatement &stmt) {
 		if (column.Generated()) {
 			throw BinderException("Cant update column \"%s\" because it is a generated column!", column.Name());
 		}
-		if (std::find(update->columns.begin(), update->columns.end(), column.Oid()) != update->columns.end()) {
+		if (std::find(update->columns.begin(), update->columns.end(), column.Physical()) != update->columns.end()) {
 			throw BinderException("Multiple assignments to same column \"%s\"", colname);
 		}
-		update->columns.push_back(column.Oid());
+		update->columns.push_back(column.Physical());
 
 		if (expr->type == ExpressionType::VALUE_DEFAULT) {
 			update->expressions.push_back(make_unique<BoundDefaultExpression>(column.Type()));
@@ -11058,22 +12729,20 @@ BoundStatement Binder::Bind(UpdateStatement &stmt) {
 	// set the projection as child of the update node and finalize the result
 	update->AddChild(move(proj));
 
+	auto update_table_index = GenerateTableIndex();
+	update->table_index = update_table_index;
 	if (!stmt.returning_list.empty()) {
-		auto update_table_index = GenerateTableIndex();
-		update->table_index = update_table_index;
 		unique_ptr<LogicalOperator> update_as_logicaloperator = move(update);
 
 		return BindReturning(move(stmt.returning_list), table, update_table_index, move(update_as_logicaloperator),
 		                     move(result));
-
-	} else {
-		update->table_index = 0;
-		result.names = {"Count"};
-		result.types = {LogicalType::BIGINT};
-		result.plan = move(update);
-		properties.allow_stream_result = false;
-		properties.return_type = StatementReturnType::CHANGED_ROWS;
 	}
+
+	result.names = {"Count"};
+	result.types = {LogicalType::BIGINT};
+	result.plan = move(update);
+	properties.allow_stream_result = false;
+	properties.return_type = StatementReturnType::CHANGED_ROWS;
 	return result;
 }
 
@@ -11082,13 +12751,90 @@ BoundStatement Binder::Bind(UpdateStatement &stmt) {
 
 
 
+
+
+
 namespace duckdb {
 
 BoundStatement Binder::Bind(VacuumStatement &stmt) {
 	BoundStatement result;
+
+	unique_ptr<LogicalOperator> root;
+
+	if (stmt.info->has_table) {
+		D_ASSERT(!stmt.info->table);
+		D_ASSERT(stmt.info->column_id_map.empty());
+		auto bound_table = Bind(*stmt.info->ref);
+		if (bound_table->type != TableReferenceType::BASE_TABLE) {
+			throw InvalidInputException("Can only vacuum/analyze base tables!");
+		}
+		auto ref = unique_ptr_cast<BoundTableRef, BoundBaseTableRef>(move(bound_table));
+		stmt.info->table = ref->table;
+
+		auto &columns = stmt.info->columns;
+		vector<unique_ptr<Expression>> select_list;
+		if (columns.empty()) {
+			// Empty means ALL columns should be vacuumed/analyzed
+			auto &get = (LogicalGet &)*ref->get;
+			columns.insert(columns.end(), get.names.begin(), get.names.end());
+		}
+
+		case_insensitive_set_t column_name_set;
+		vector<string> non_generated_column_names;
+		for (auto &col_name : columns) {
+			if (column_name_set.count(col_name) > 0) {
+				throw BinderException("Vacuum the same column twice(same name in column name list)");
+			}
+			column_name_set.insert(col_name);
+			if (!ref->table->ColumnExists(col_name)) {
+				throw BinderException("Column with name \"%s\" does not exist", col_name);
+			}
+			auto &col = ref->table->GetColumn(col_name);
+			// ignore generated column
+			if (col.Generated()) {
+				continue;
+			}
+			non_generated_column_names.push_back(col_name);
+			ColumnRefExpression colref(col_name, ref->table->name);
+			auto result = bind_context.BindColumn(colref, 0);
+			if (result.HasError()) {
+				throw BinderException(result.error);
+			}
+			select_list.push_back(move(result.expression));
+		}
+		stmt.info->columns = move(non_generated_column_names);
+		if (!select_list.empty()) {
+			auto table_scan = CreatePlan(*ref);
+			D_ASSERT(table_scan->type == LogicalOperatorType::LOGICAL_GET);
+
+			auto &get = (LogicalGet &)*table_scan;
+
+			D_ASSERT(select_list.size() == get.column_ids.size());
+			D_ASSERT(stmt.info->columns.size() == get.column_ids.size());
+			for (idx_t i = 0; i < get.column_ids.size(); i++) {
+				stmt.info->column_id_map[i] =
+				    ref->table->columns.LogicalToPhysical(LogicalIndex(get.column_ids[i])).index;
+			}
+
+			auto projection = make_unique<LogicalProjection>(GenerateTableIndex(), move(select_list));
+			projection->children.push_back(move(table_scan));
+
+			root = move(projection);
+		} else {
+			// eg. CREATE TABLE test (x AS (1));
+			//     ANALYZE test;
+			// Make it not a SINK so it doesn't have to do anything
+			stmt.info->has_table = false;
+		}
+	}
+	auto vacuum = make_unique<LogicalSimple>(LogicalOperatorType::LOGICAL_VACUUM, move(stmt.info));
+	if (root) {
+		vacuum->children.push_back(move(root));
+	}
+
 	result.names = {"Success"};
 	result.types = {LogicalType::BOOLEAN};
-	result.plan = make_unique<LogicalSimple>(LogicalOperatorType::LOGICAL_VACUUM, move(stmt.info));
+	result.plan = move(vacuum);
 	properties.return_type = StatementReturnType::NOTHING;
 	return result;
 }
@@ -11206,7 +12952,7 @@ unique_ptr<BoundTableRef> Binder::Bind(BaseTableRef &ref) {
 
 		vector<LogicalType> return_types;
 		vector<string> return_names;
-		for (auto &col : table->columns) {
+		for (auto &col : table->columns.Logical()) {
 			table_types.push_back(col.Type());
 			table_names.push_back(col.Name());
 			return_types.push_back(col.Type());
@@ -11216,7 +12962,8 @@ unique_ptr<BoundTableRef> Binder::Bind(BaseTableRef &ref) {
 
 		auto logical_get = make_unique<LogicalGet>(table_index, scan_function, move(bind_data), move(return_types),
 		                                           move(return_names));
-		bind_context.AddBaseTable(table_index, alias, table_names, table_types, *logical_get);
+		bind_context.AddBaseTable(table_index, alias, table_names, table_types, logical_get->column_ids,
+		                          logical_get->GetTable());
 		return make_unique_base<BoundTableRef, BoundBaseTableRef>(table, move(logical_get));
 	}
 	case CatalogType::VIEW_ENTRY: {
@@ -11235,6 +12982,9 @@ unique_ptr<BoundTableRef> Binder::Bind(BaseTableRef &ref) {
 		// bind the child subquery
 		view_binder->AddBoundView(view_catalog_entry);
 		auto bound_child = view_binder->Bind(subquery);
+		if (!view_binder->correlated_columns.empty()) {
+			throw BinderException("Contents of view were altered - view bound correlated columns");
+		}
 
 		D_ASSERT(bound_child->type == TableReferenceType::SUBQUERY);
 		// verify that the types and names match up with the expected types and names
@@ -11340,7 +13090,8 @@ unique_ptr<BoundTableRef> Binder::Bind(ExpressionListRef &expr) {
 		for (idx_t list_idx = 0; list_idx < result->values.size(); list_idx++) {
 			auto &list = result->values[list_idx];
 			for (idx_t val_idx = 0; val_idx < list.size(); val_idx++) {
-				list[val_idx] = BoundCastExpression::AddCastToType(move(list[val_idx]), result->types[val_idx]);
+				list[val_idx] =
+				    BoundCastExpression::AddCastToType(context, move(list[val_idx]), result->types[val_idx]);
 			}
 		}
 	}
@@ -11455,6 +13206,18 @@ string Binder::RetrieveUsingBinding(Binder &current_binder, UsingColumnSet *curr
 	return binding;
 }
 
+static vector<string> RemoveDuplicateUsingColumns(const vector<string> &using_columns) {
+	vector<string> result;
+	case_insensitive_set_t handled_columns;
+	for (auto &using_column : using_columns) {
+		if (handled_columns.find(using_column) == handled_columns.end()) {
+			handled_columns.insert(using_column);
+			result.push_back(using_column);
+		}
+	}
+	return result;
+}
+
 unique_ptr<BoundTableRef> Binder::Bind(JoinRef &ref) {
 	auto result = make_unique<BoundJoinRef>();
 	result->left_binder = Binder::CreateBinder(context, this);
@@ -11524,6 +13287,8 @@ unique_ptr<BoundTableRef> Binder::Bind(JoinRef &ref) {
 		D_ASSERT(!result->condition);
 		extra_using_columns = ref.using_columns;
 	}
+	extra_using_columns = RemoveDuplicateUsingColumns(extra_using_columns);
+
 	if (!extra_using_columns.empty()) {
 		vector<UsingColumnSet *> left_using_bindings;
 		vector<UsingColumnSet *> right_using_bindings;
@@ -11618,7 +13383,7 @@ void Binder::BindNamedParameters(named_parameter_type_map_t &types, named_parame
 			                                                kv.first, func_name, error_msg));
 		}
 		if (entry->second.id() != LogicalTypeId::ANY) {
-			kv.second = kv.second.CastAs(entry->second);
+			kv.second = kv.second.DefaultCastAs(entry->second);
 		}
 	}
 }
@@ -11671,11 +13436,13 @@ unique_ptr<BoundTableRef> Binder::Bind(SubqueryRef &ref, CommonTableExpressionIn
 
 
 
+
 namespace duckdb {
 
 static bool IsTableInTableOutFunction(TableFunctionCatalogEntry &table_function) {
-	return table_function.functions.size() == 1 && table_function.functions[0].arguments.size() == 1 &&
-	       table_function.functions[0].arguments[0].id() == LogicalTypeId::TABLE;
+	auto fun = table_function.functions.GetFunctionByOffset(0);
+	return table_function.functions.Size() == 1 && fun.arguments.size() == 1 &&
+	       fun.arguments[0].id() == LogicalTypeId::TABLE;
 }
 
 bool Binder::BindTableInTableOutFunction(vector<unique_ptr<ParsedExpression>> &expressions,
@@ -11738,14 +13505,17 @@ bool Binder::BindTableFunctionParameters(TableFunctionCatalogEntry &table_functi
 			continue;
 		}
 
-		ConstantBinder binder(*this, context, "TABLE FUNCTION parameter");
+		TableFunctionBinder binder(*this, context);
 		LogicalType sql_type;
 		auto expr = binder.Bind(child, &sql_type);
-		if (!expr->IsFoldable()) {
+		if (expr->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
+		if (!expr->IsScalar()) {
 			error = "Table function requires a constant parameter";
 			return false;
 		}
-		auto constant = ExpressionExecutor::EvaluateScalar(*expr);
+		auto constant = ExpressionExecutor::EvaluateScalar(context, *expr, true);
 		if (parameter_name.empty()) {
 			// unnamed parameter
 			if (!named_parameters.empty()) {
@@ -11799,8 +13569,13 @@ Binder::BindTableFunctionInternal(TableFunction &table_function, const string &f
 		}
 	}
 	auto get = make_unique<LogicalGet>(bind_index, table_function, move(bind_data), return_types, return_names);
+	get->parameters = parameters;
+	get->named_parameters = named_parameters;
+	get->input_table_types = input_table_types;
+	get->input_table_names = input_table_names;
 	// now add the table function to the bind context so its columns can be bound
-	bind_context.AddTableFunction(bind_index, function_name, return_names, return_types, *get);
+	bind_context.AddTableFunction(bind_index, function_name, return_names, return_types, get->column_ids,
+	                              get->GetTable());
 	return move(get);
 }
 
@@ -11863,11 +13638,12 @@ unique_ptr<BoundTableRef> Binder::Bind(TableFunctionRef &ref) {
 	}
 
 	// select the function based on the input parameters
-	idx_t best_function_idx = Function::BindFunction(function->name, function->functions, arguments, error);
+	FunctionBinder function_binder(context);
+	idx_t best_function_idx = function_binder.BindFunction(function->name, function->functions, arguments, error);
 	if (best_function_idx == DConstants::INVALID_INDEX) {
 		throw BinderException(FormatError(ref, error));
 	}
-	auto &table_function = function->functions[best_function_idx];
+	auto table_function = function->functions.GetFunctionByOffset(best_function_idx);
 
 	// now check the named parameters
 	BindNamedParameters(table_function.named_parameters, named_parameters, error_context, table_function.name);
@@ -11877,7 +13653,7 @@ unique_ptr<BoundTableRef> Binder::Bind(TableFunctionRef &ref) {
 		if (table_function.arguments[i] != LogicalType::ANY && table_function.arguments[i] != LogicalType::TABLE &&
 		    table_function.arguments[i] != LogicalType::POINTER &&
 		    table_function.arguments[i].id() != LogicalTypeId::LIST) {
-			parameters[i] = parameters[i].CastAs(table_function.arguments[i]);
+			parameters[i] = parameters[i].CastAs(context, table_function.arguments[i]);
 		}
 	}
 
@@ -11917,15 +13693,10 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundBaseTableRef &ref) {
 namespace duckdb {
 
 unique_ptr<LogicalOperator> Binder::CreatePlan(BoundCrossProductRef &expr) {
-	auto cross_product = make_unique<LogicalCrossProduct>();
-
 	auto left = CreatePlan(*expr.left);
 	auto right = CreatePlan(*expr.right);
 
-	cross_product->AddChild(move(left));
-	cross_product->AddChild(move(right));
-
-	return move(cross_product);
+	return LogicalCrossProduct::Create(move(left), move(right));
 }
 
 } // namespace duckdb
@@ -11966,7 +13737,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundEmptyTableRef &ref) {
 namespace duckdb {
 
 unique_ptr<LogicalOperator> Binder::CreatePlan(BoundExpressionListRef &ref) {
-	auto root = make_unique_base<LogicalOperator, LogicalDummyScan>(0);
+	auto root = make_unique_base<LogicalOperator, LogicalDummyScan>(GenerateTableIndex());
 	// values list, first plan any subqueries in the list
 	for (auto &expr_list : ref.values) {
 		for (auto &expr : expr_list) {
@@ -12148,12 +13919,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundJoinRef &ref) {
 	if (ref.type == JoinType::INNER && (ref.condition->HasSubquery() || HasCorrelatedColumns(*ref.condition))) {
 		// inner join, generate a cross product + filter
 		// this will be later turned into a proper join by the join order optimizer
-		auto cross_product = make_unique<LogicalCrossProduct>();
-
-		cross_product->AddChild(move(left));
-		cross_product->AddChild(move(right));
-
-		unique_ptr<LogicalOperator> root = move(cross_product);
+		auto root = LogicalCrossProduct::Create(move(left), move(right));
 
 		auto filter = make_unique<LogicalFilter>(move(ref.condition));
 		// visit the expressions in the filter
@@ -12255,6 +14021,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundTableFunction &ref) {
 
 
 
+
 #include <algorithm>
 
 namespace duckdb {
@@ -12266,16 +14033,17 @@ shared_ptr<Binder> Binder::CreateBinder(ClientContext &context, Binder *parent, 
 Binder::Binder(bool, ClientContext &context, shared_ptr<Binder> parent_p, bool inherit_ctes_p)
     : context(context), parent(move(parent_p)), bound_tables(0), inherit_ctes(inherit_ctes_p) {
 	parameters = nullptr;
-	parameter_types = nullptr;
 	if (parent) {
-		// We have to inherit macro parameter bindings from the parent binder, if there is a parent.
+
+		// We have to inherit macro and lambda parameter bindings and from the parent binder, if there is a parent.
 		macro_binding = parent->macro_binding;
+		lambda_bindings = parent->lambda_bindings;
+
 		if (inherit_ctes) {
 			// We have to inherit CTE bindings from the parent bind_context, if there is a parent.
 			bind_context.SetCTEBindings(parent->bind_context.GetCTEBindings());
 			bind_context.cte_references = parent->bind_context.cte_references;
 			parameters = parent->parameters;
-			parameter_types = parent->parameter_types;
 		}
 	}
 }
@@ -12321,6 +14089,12 @@ BoundStatement Binder::Bind(SQLStatement &statement) {
 		return Bind((LoadStatement &)statement);
 	case StatementType::EXTENSION_STATEMENT:
 		return Bind((ExtensionStatement &)statement);
+	case StatementType::PREPARE_STATEMENT:
+		return Bind((PrepareStatement &)statement);
+	case StatementType::EXECUTE_STATEMENT:
+		return Bind((ExecuteStatement &)statement);
+	case StatementType::LOGICAL_PLAN_STATEMENT:
+		return Bind((LogicalPlanStatement &)statement);
 	default: // LCOV_EXCL_START
 		throw NotImplementedException("Unimplemented statement type \"%s\" for Bind",
 		                              StatementTypeToString(statement.type));
@@ -12561,12 +14335,14 @@ bool Binder::HasMatchingBinding(const string &table_name, const string &column_n
 
 bool Binder::HasMatchingBinding(const string &schema_name, const string &table_name, const string &column_name,
                                 string &error_message) {
-	Binding *binding;
+	Binding *binding = nullptr;
+	D_ASSERT(!lambda_bindings);
 	if (macro_binding && table_name == macro_binding->alias) {
 		binding = macro_binding;
 	} else {
 		binding = bind_context.GetBinding(table_name, error_message);
 	}
+
 	if (!binding) {
 		return false;
 	}
@@ -12601,6 +14377,10 @@ BindingMode Binder::GetBindingMode() {
 	return mode;
 }
 
+void Binder::SetCanContainNulls(bool can_contain_nulls_p) {
+	can_contain_nulls = can_contain_nulls_p;
+}
+
 void Binder::AddTableName(string table_name) {
 	if (parent) {
 		parent->AddTableName(move(table_name));
@@ -12614,22 +14394,6 @@ const unordered_set<string> &Binder::GetTableNames() {
 		return parent->GetTableNames();
 	}
 	return table_names;
-}
-
-void Binder::RemoveParameters(vector<unique_ptr<Expression>> &expressions) {
-	for (auto &expr : expressions) {
-		if (!expr->HasParameter()) {
-			continue;
-		}
-		ExpressionIterator::EnumerateExpression(expr, [&](Expression &child) {
-			for (auto param_it = parameters->begin(); param_it != parameters->end(); param_it++) {
-				if (expr->Equals(*param_it)) {
-					parameters->erase(param_it);
-					break;
-				}
-			}
-		});
-	}
 }
 
 string Binder::FormatError(ParsedExpression &expr_context, const string &message) {
@@ -12654,12 +14418,18 @@ BoundStatement Binder::BindReturning(vector<unique_ptr<ParsedExpression>> return
 
 	auto binder = Binder::CreateBinder(context);
 
-	for (auto &col : table->columns) {
+	vector<column_t> bound_columns;
+	idx_t column_count = 0;
+	for (auto &col : table->columns.Logical()) {
 		names.push_back(col.Name());
 		types.push_back(col.Type());
+		if (!col.Generated()) {
+			bound_columns.push_back(column_count);
+		}
+		column_count++;
 	}
 
-	binder->bind_context.AddGenericBinding(update_table_index, table->name, names, types);
+	binder->bind_context.AddBaseTable(update_table_index, table->name, names, types, bound_columns, table);
 	ReturningBinder returning_binder(*binder, context);
 
 	vector<unique_ptr<Expression>> projection_expressions;
@@ -12694,6 +14464,7 @@ BoundStatement Binder::BindReturning(vector<unique_ptr<ParsedExpression>> return
 }
 
 } // namespace duckdb
+
 
 
 namespace duckdb {
@@ -12746,6 +14517,24 @@ string BoundOrderByNode::ToString() const {
 	return str;
 }
 
+void BoundOrderByNode::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteField(type);
+	writer.WriteField(null_order);
+	writer.WriteSerializable(*expression);
+	// TODO statistics
+	writer.Finalize();
+}
+
+BoundOrderByNode BoundOrderByNode::Deserialize(Deserializer &source, PlanDeserializationState &state) {
+	FieldReader reader(source);
+	auto type = reader.ReadRequired<OrderType>();
+	auto null_order = reader.ReadRequired<OrderByNullType>();
+	auto expression = reader.ReadRequiredSerializable<Expression>(state);
+	reader.Finalize();
+	return BoundOrderByNode(type, null_order, move(expression));
+}
+
 BoundLimitModifier::BoundLimitModifier() : BoundResultModifier(ResultModifierType::LIMIT_MODIFIER) {
 }
 
@@ -12767,26 +14556,28 @@ BoundLimitPercentModifier::BoundLimitPercentModifier()
 
 
 
+
+
 namespace duckdb {
 
 BoundAggregateExpression::BoundAggregateExpression(AggregateFunction function, vector<unique_ptr<Expression>> children,
                                                    unique_ptr<Expression> filter, unique_ptr<FunctionData> bind_info,
-                                                   bool distinct)
+                                                   AggregateType aggr_type)
     : Expression(ExpressionType::BOUND_AGGREGATE, ExpressionClass::BOUND_AGGREGATE, function.return_type),
-      function(move(function)), children(move(children)), bind_info(move(bind_info)), distinct(distinct),
+      function(move(function)), children(move(children)), bind_info(move(bind_info)), aggr_type(aggr_type),
       filter(move(filter)) {
 	D_ASSERT(!function.name.empty());
 }
 
 string BoundAggregateExpression::ToString() const {
 	return FunctionExpression::ToString<BoundAggregateExpression, Expression>(*this, string(), function.name, false,
-	                                                                          distinct, filter.get());
+	                                                                          IsDistinct(), filter.get());
 }
 
 hash_t BoundAggregateExpression::Hash() const {
 	hash_t result = Expression::Hash();
 	result = CombineHash(result, function.Hash());
-	result = CombineHash(result, duckdb::Hash(distinct));
+	result = CombineHash(result, duckdb::Hash(IsDistinct()));
 	return result;
 }
 
@@ -12795,7 +14586,7 @@ bool BoundAggregateExpression::Equals(const BaseExpression *other_p) const {
 		return false;
 	}
 	auto other = (BoundAggregateExpression *)other_p;
-	if (other->distinct != distinct) {
+	if (other->aggr_type != aggr_type) {
 		return false;
 	}
 	if (other->function != function) {
@@ -12819,7 +14610,8 @@ bool BoundAggregateExpression::Equals(const BaseExpression *other_p) const {
 }
 
 bool BoundAggregateExpression::PropagatesNullValues() const {
-	return !function.propagates_null_values ? false : Expression::PropagatesNullValues();
+	return function.null_handling == FunctionNullHandling::SPECIAL_HANDLING ? false
+	                                                                        : Expression::PropagatesNullValues();
 }
 
 unique_ptr<Expression> BoundAggregateExpression::Copy() {
@@ -12830,12 +14622,32 @@ unique_ptr<Expression> BoundAggregateExpression::Copy() {
 	auto new_bind_info = bind_info ? bind_info->Copy() : nullptr;
 	auto new_filter = filter ? filter->Copy() : nullptr;
 	auto copy = make_unique<BoundAggregateExpression>(function, move(new_children), move(new_filter),
-	                                                  move(new_bind_info), distinct);
+	                                                  move(new_bind_info), aggr_type);
 	copy->CopyProperties(*this);
 	return move(copy);
 }
 
+void BoundAggregateExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteField(IsDistinct());
+	writer.WriteOptional(filter);
+	FunctionSerializer::Serialize<AggregateFunction>(writer, function, return_type, children, bind_info.get());
+}
+
+unique_ptr<Expression> BoundAggregateExpression::Deserialize(ExpressionDeserializationState &state,
+                                                             FieldReader &reader) {
+	auto distinct = reader.ReadRequired<bool>();
+	auto filter = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	vector<unique_ptr<Expression>> children;
+	unique_ptr<FunctionData> bind_info;
+	auto function = FunctionSerializer::Deserialize<AggregateFunction, AggregateFunctionCatalogEntry>(
+	    reader, state, CatalogType::AGGREGATE_FUNCTION_ENTRY, children, bind_info);
+
+	return make_unique<BoundAggregateExpression>(function, move(children), move(filter), move(bind_info),
+	                                             distinct ? AggregateType::DISTINCT : AggregateType::NON_DISTINCT);
+}
+
 } // namespace duckdb
+
 
 
 
@@ -12876,7 +14688,25 @@ unique_ptr<Expression> BoundBetweenExpression::Copy() {
 	return move(copy);
 }
 
+void BoundBetweenExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteOptional(input);
+	writer.WriteOptional(lower);
+	writer.WriteOptional(upper);
+	writer.WriteField(lower_inclusive);
+	writer.WriteField(upper_inclusive);
+}
+
+unique_ptr<Expression> BoundBetweenExpression::Deserialize(ExpressionDeserializationState &state, FieldReader &reader) {
+	auto input = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	auto lower = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	auto upper = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	auto lower_inclusive = reader.ReadRequired<bool>();
+	auto upper_inclusive = reader.ReadRequired<bool>();
+	return make_unique<BoundBetweenExpression>(move(input), move(lower), move(upper), lower_inclusive, upper_inclusive);
+}
+
 } // namespace duckdb
+
 
 
 
@@ -12936,42 +14766,142 @@ unique_ptr<Expression> BoundCaseExpression::Copy() {
 	return move(new_case);
 }
 
+void BoundCaseCheck::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteSerializable(*when_expr);
+	writer.WriteSerializable(*then_expr);
+	writer.Finalize();
+}
+
+BoundCaseCheck BoundCaseCheck::Deserialize(Deserializer &source, PlanDeserializationState &state) {
+	FieldReader reader(source);
+	auto when_expr = reader.ReadRequiredSerializable<Expression>(state);
+	auto then_expr = reader.ReadRequiredSerializable<Expression>(state);
+	reader.Finalize();
+	BoundCaseCheck result;
+	result.when_expr = move(when_expr);
+	result.then_expr = move(then_expr);
+	return result;
+}
+
+void BoundCaseExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializable(return_type);
+	writer.WriteRegularSerializableList(case_checks);
+	writer.WriteSerializable(*else_expr);
+}
+
+unique_ptr<Expression> BoundCaseExpression::Deserialize(ExpressionDeserializationState &state, FieldReader &reader) {
+	auto return_type = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
+	auto case_checks = reader.ReadRequiredSerializableList<BoundCaseCheck, BoundCaseCheck>(state.gstate);
+	auto else_expr = reader.ReadRequiredSerializable<Expression>(state.gstate);
+
+	auto result = make_unique<BoundCaseExpression>(return_type);
+	result->else_expr = move(else_expr);
+	result->case_checks = move(case_checks);
+	return move(result);
+}
+
 } // namespace duckdb
+
+
+
+
 
 
 
 
 namespace duckdb {
 
-BoundCastExpression::BoundCastExpression(unique_ptr<Expression> child_p, LogicalType target_type_p, bool try_cast_p)
+BoundCastExpression::BoundCastExpression(unique_ptr<Expression> child_p, LogicalType target_type_p,
+                                         BoundCastInfo bound_cast_p, bool try_cast_p)
     : Expression(ExpressionType::OPERATOR_CAST, ExpressionClass::BOUND_CAST, move(target_type_p)), child(move(child_p)),
-      try_cast(try_cast_p) {
+      try_cast(try_cast_p), bound_cast(move(bound_cast_p)) {
 }
 
-unique_ptr<Expression> BoundCastExpression::AddCastToType(unique_ptr<Expression> expr, const LogicalType &target_type,
-                                                          bool try_cast) {
+unique_ptr<Expression> AddCastExpressionInternal(unique_ptr<Expression> expr, const LogicalType &target_type,
+                                                 BoundCastInfo bound_cast, bool try_cast) {
+	if (expr->return_type == target_type) {
+		return expr;
+	}
+	auto &expr_type = expr->return_type;
+	if (target_type.id() == LogicalTypeId::LIST && expr_type.id() == LogicalTypeId::LIST) {
+		auto &target_list = ListType::GetChildType(target_type);
+		auto &expr_list = ListType::GetChildType(expr_type);
+		if (target_list.id() == LogicalTypeId::ANY || expr_list == target_list) {
+			return expr;
+		}
+	}
+	return make_unique<BoundCastExpression>(move(expr), target_type, move(bound_cast), try_cast);
+}
+
+static BoundCastInfo BindCastFunction(ClientContext &context, const LogicalType &source, const LogicalType &target) {
+	auto &cast_functions = DBConfig::GetConfig(context).GetCastFunctions();
+	GetCastFunctionInput input(context);
+	return cast_functions.GetCastFunction(source, target, input);
+}
+
+unique_ptr<Expression> AddCastToTypeInternal(unique_ptr<Expression> expr, const LogicalType &target_type,
+                                             CastFunctionSet &cast_functions, GetCastFunctionInput &get_input,
+                                             bool try_cast) {
 	D_ASSERT(expr);
 	if (expr->expression_class == ExpressionClass::BOUND_PARAMETER) {
 		auto &parameter = (BoundParameterExpression &)*expr;
+		if (!target_type.IsValid()) {
+			// invalidate the parameter
+			parameter.parameter_data->return_type = LogicalType::INVALID;
+			parameter.return_type = target_type;
+			return expr;
+		}
+		if (parameter.parameter_data->return_type.id() == LogicalTypeId::INVALID) {
+			// we don't know the type of this parameter
+			parameter.return_type = target_type;
+			return expr;
+		}
+		if (parameter.parameter_data->return_type.id() == LogicalTypeId::UNKNOWN) {
+			// prepared statement parameter cast - but there is no type, convert the type
+			parameter.parameter_data->return_type = target_type;
+			parameter.return_type = target_type;
+			return expr;
+		}
+		// prepared statement parameter already has a type
+		if (parameter.parameter_data->return_type == target_type) {
+			// this type! we are done
+			parameter.return_type = parameter.parameter_data->return_type;
+			return expr;
+		}
+		// invalidate the type
+		parameter.parameter_data->return_type = LogicalType::INVALID;
 		parameter.return_type = target_type;
+		return expr;
 	} else if (expr->expression_class == ExpressionClass::BOUND_DEFAULT) {
+		D_ASSERT(target_type.IsValid());
 		auto &def = (BoundDefaultExpression &)*expr;
 		def.return_type = target_type;
-	} else if (expr->return_type != target_type) {
-		auto &expr_type = expr->return_type;
-		if (target_type.id() == LogicalTypeId::LIST && expr_type.id() == LogicalTypeId::LIST) {
-			auto &target_list = ListType::GetChildType(target_type);
-			auto &expr_list = ListType::GetChildType(expr_type);
-			if (target_list.id() == LogicalTypeId::ANY || expr_list == target_list) {
-				return expr;
-			}
-		}
-		return make_unique<BoundCastExpression>(move(expr), target_type, try_cast);
 	}
-	return expr;
+	if (!target_type.IsValid()) {
+		return expr;
+	}
+
+	auto cast_function = cast_functions.GetCastFunction(expr->return_type, target_type, get_input);
+	return AddCastExpressionInternal(move(expr), target_type, move(cast_function), try_cast);
+}
+
+unique_ptr<Expression> BoundCastExpression::AddDefaultCastToType(unique_ptr<Expression> expr,
+                                                                 const LogicalType &target_type, bool try_cast) {
+	CastFunctionSet default_set;
+	GetCastFunctionInput get_input;
+	return AddCastToTypeInternal(move(expr), target_type, default_set, get_input, try_cast);
+}
+
+unique_ptr<Expression> BoundCastExpression::AddCastToType(ClientContext &context, unique_ptr<Expression> expr,
+                                                          const LogicalType &target_type, bool try_cast) {
+	auto &cast_functions = DBConfig::GetConfig(context).GetCastFunctions();
+	GetCastFunctionInput get_input(context);
+	return AddCastToTypeInternal(move(expr), target_type, cast_functions, get_input, try_cast);
 }
 
 bool BoundCastExpression::CastIsInvertible(const LogicalType &source_type, const LogicalType &target_type) {
+	D_ASSERT(source_type.IsValid() && target_type.IsValid());
 	if (source_type.id() == LogicalTypeId::BOOLEAN || target_type.id() == LogicalTypeId::BOOLEAN) {
 		return false;
 	}
@@ -13009,7 +14939,6 @@ bool BoundCastExpression::CastIsInvertible(const LogicalType &source_type, const
 	}
 	if (source_type.id() == LogicalTypeId::VARCHAR) {
 		switch (target_type.id()) {
-		case LogicalTypeId::DATE:
 		case LogicalTypeId::TIME:
 		case LogicalTypeId::TIMESTAMP:
 		case LogicalTypeId::TIMESTAMP_NS:
@@ -13059,12 +14988,27 @@ bool BoundCastExpression::Equals(const BaseExpression *other_p) const {
 }
 
 unique_ptr<Expression> BoundCastExpression::Copy() {
-	auto copy = make_unique<BoundCastExpression>(child->Copy(), return_type, try_cast);
+	auto copy = make_unique<BoundCastExpression>(child->Copy(), return_type, bound_cast.Copy(), try_cast);
 	copy->CopyProperties(*this);
 	return move(copy);
 }
 
+void BoundCastExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializable(*child);
+	writer.WriteSerializable(return_type);
+	writer.WriteField(try_cast);
+}
+
+unique_ptr<Expression> BoundCastExpression::Deserialize(ExpressionDeserializationState &state, FieldReader &reader) {
+	auto child = reader.ReadRequiredSerializable<Expression>(state.gstate);
+	auto target_type = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
+	auto try_cast = reader.ReadRequired<bool>();
+	auto cast_function = BindCastFunction(state.gstate.context, child->return_type, target_type);
+	return make_unique<BoundCastExpression>(move(child), move(target_type), move(cast_function), try_cast);
+}
+
 } // namespace duckdb
+
 
 
 
@@ -13108,7 +15052,27 @@ string BoundColumnRefExpression::ToString() const {
 	return "#[" + to_string(binding.table_index) + "." + to_string(binding.column_index) + "]";
 }
 
+void BoundColumnRefExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteString(alias);
+	writer.WriteSerializable(return_type);
+	writer.WriteField(binding.table_index);
+	writer.WriteField(binding.column_index);
+	writer.WriteField(depth);
+}
+
+unique_ptr<Expression> BoundColumnRefExpression::Deserialize(ExpressionDeserializationState &state,
+                                                             FieldReader &reader) {
+	auto alias = reader.ReadRequired<string>();
+	auto return_type = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto column_index = reader.ReadRequired<idx_t>();
+	auto depth = reader.ReadRequired<idx_t>();
+
+	return make_unique<BoundColumnRefExpression>(alias, return_type, ColumnBinding(table_index, column_index), depth);
+}
+
 } // namespace duckdb
+
 
 
 
@@ -13144,7 +15108,20 @@ unique_ptr<Expression> BoundComparisonExpression::Copy() {
 	return move(copy);
 }
 
+void BoundComparisonExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteOptional(left);
+	writer.WriteOptional(right);
+}
+
+unique_ptr<Expression> BoundComparisonExpression::Deserialize(ExpressionDeserializationState &state,
+                                                              FieldReader &reader) {
+	auto left = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	auto right = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	return make_unique<BoundComparisonExpression>(state.type, move(left), move(right));
+}
+
 } // namespace duckdb
+
 
 
 
@@ -13187,6 +15164,18 @@ unique_ptr<Expression> BoundConjunctionExpression::Copy() {
 	return move(copy);
 }
 
+void BoundConjunctionExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializableList(children);
+}
+
+unique_ptr<Expression> BoundConjunctionExpression::Deserialize(ExpressionDeserializationState &state,
+                                                               FieldReader &reader) {
+	auto children = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	auto res = make_unique<BoundConjunctionExpression>(state.type);
+	res->children = move(children);
+	return move(res);
+}
+
 } // namespace duckdb
 
 
@@ -13209,7 +15198,7 @@ bool BoundConstantExpression::Equals(const BaseExpression *other_p) const {
 		return false;
 	}
 	auto other = (BoundConstantExpression *)other_p;
-	return !ValueOperations::DistinctFrom(value, other->value);
+	return value.type() == other->value.type() && !ValueOperations::DistinctFrom(value, other->value);
 }
 
 hash_t BoundConstantExpression::Hash() const {
@@ -13223,7 +15212,59 @@ unique_ptr<Expression> BoundConstantExpression::Copy() {
 	return move(copy);
 }
 
+void BoundConstantExpression::Serialize(FieldWriter &writer) const {
+	value.Serialize(writer.GetSerializer());
+}
+
+unique_ptr<Expression> BoundConstantExpression::Deserialize(ExpressionDeserializationState &state,
+                                                            FieldReader &reader) {
+	auto value = Value::Deserialize(reader.GetSource());
+	return make_unique<BoundConstantExpression>(value);
+}
+
 } // namespace duckdb
+
+
+
+namespace duckdb {
+
+void BoundDefaultExpression::Serialize(FieldWriter &writer) const {
+	throw NotImplementedException(ExpressionTypeToString(type));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+BoundExpression::BoundExpression(unique_ptr<Expression> expr)
+    : ParsedExpression(ExpressionType::INVALID, ExpressionClass::BOUND_EXPRESSION), expr(move(expr)) {
+}
+
+string BoundExpression::ToString() const {
+	if (!expr) {
+		throw InternalException("ToString(): BoundExpression does not have a child");
+	}
+	return expr->ToString();
+}
+
+bool BoundExpression::Equals(const BaseExpression *other) const {
+	return false;
+}
+hash_t BoundExpression::Hash() const {
+	return 0;
+}
+
+unique_ptr<ParsedExpression> BoundExpression::Copy() const {
+	throw SerializationException("Cannot copy or serialize bound expression");
+}
+
+void BoundExpression::Serialize(FieldWriter &writer) const {
+	throw SerializationException("Cannot copy or serialize bound expression");
+}
+
+} // namespace duckdb
+
 
 
 
@@ -13241,12 +15282,12 @@ BoundFunctionExpression::BoundFunctionExpression(LogicalType return_type, Scalar
 }
 
 bool BoundFunctionExpression::HasSideEffects() const {
-	return function.has_side_effects ? true : Expression::HasSideEffects();
+	return function.side_effects == FunctionSideEffects::HAS_SIDE_EFFECTS ? true : Expression::HasSideEffects();
 }
 
 bool BoundFunctionExpression::IsFoldable() const {
 	// functions with side effects cannot be folded: they have to be executed once for every row
-	return function.has_side_effects ? false : Expression::IsFoldable();
+	return function.side_effects == FunctionSideEffects::HAS_SIDE_EFFECTS ? false : Expression::IsFoldable();
 }
 
 string BoundFunctionExpression::ToString() const {
@@ -13254,7 +15295,8 @@ string BoundFunctionExpression::ToString() const {
 	                                                                         is_operator);
 }
 bool BoundFunctionExpression::PropagatesNullValues() const {
-	return !function.propagates_null_values ? false : Expression::PropagatesNullValues();
+	return function.null_handling == FunctionNullHandling::SPECIAL_HANDLING ? false
+	                                                                        : Expression::PropagatesNullValues();
 }
 
 hash_t BoundFunctionExpression::Hash() const {
@@ -13296,7 +15338,73 @@ void BoundFunctionExpression::Verify() const {
 	D_ASSERT(!function.name.empty());
 }
 
+void BoundFunctionExpression::Serialize(FieldWriter &writer) const {
+	D_ASSERT(!function.name.empty());
+	D_ASSERT(return_type == function.return_type);
+	writer.WriteField(is_operator);
+	FunctionSerializer::Serialize<ScalarFunction>(writer, function, return_type, children, bind_info.get());
+}
+
+unique_ptr<Expression> BoundFunctionExpression::Deserialize(ExpressionDeserializationState &state,
+                                                            FieldReader &reader) {
+	auto is_operator = reader.ReadRequired<bool>();
+	vector<unique_ptr<Expression>> children;
+	unique_ptr<FunctionData> bind_info;
+	auto function = FunctionSerializer::Deserialize<ScalarFunction, ScalarFunctionCatalogEntry>(
+	    reader, state, CatalogType::SCALAR_FUNCTION_ENTRY, children, bind_info);
+
+	auto return_type = function.return_type;
+	return make_unique<BoundFunctionExpression>(move(return_type), move(function), move(children), move(bind_info),
+	                                            is_operator);
+}
 } // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+BoundLambdaExpression::BoundLambdaExpression(ExpressionType type_p, LogicalType return_type_p,
+                                             unique_ptr<Expression> lambda_expr_p, idx_t parameter_count_p)
+    : Expression(type_p, ExpressionClass::BOUND_LAMBDA, move(return_type_p)), lambda_expr(move(lambda_expr_p)),
+      parameter_count(parameter_count_p) {
+}
+
+string BoundLambdaExpression::ToString() const {
+	return lambda_expr->ToString();
+}
+
+bool BoundLambdaExpression::Equals(const BaseExpression *other_p) const {
+	if (!Expression::Equals(other_p)) {
+		return false;
+	}
+	auto other = (BoundLambdaExpression *)other_p;
+	if (!Expression::Equals(lambda_expr.get(), other->lambda_expr.get())) {
+		return false;
+	}
+	if (!ExpressionUtil::ListEquals(captures, other->captures)) {
+		return false;
+	}
+	if (parameter_count != other->parameter_count) {
+		return false;
+	}
+	return true;
+}
+
+unique_ptr<Expression> BoundLambdaExpression::Copy() {
+	auto copy = make_unique<BoundLambdaExpression>(type, return_type, lambda_expr->Copy(), parameter_count);
+	for (auto &capture : captures) {
+		copy->captures.push_back(capture->Copy());
+	}
+	return move(copy);
+}
+
+void BoundLambdaExpression::Serialize(FieldWriter &writer) const {
+	throw NotImplementedException(ExpressionTypeToString(type));
+}
+
+} // namespace duckdb
+
 
 
 
@@ -13332,7 +15440,24 @@ unique_ptr<Expression> BoundOperatorExpression::Copy() {
 	return move(copy);
 }
 
+void BoundOperatorExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializable(return_type);
+	writer.WriteSerializableList(children);
+}
+
+unique_ptr<Expression> BoundOperatorExpression::Deserialize(ExpressionDeserializationState &state,
+                                                            FieldReader &reader) {
+	auto return_type = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
+	auto children = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+
+	auto result = make_unique<BoundOperatorExpression>(state.type, return_type);
+	result->children = move(children);
+	return move(result);
+}
+
 } // namespace duckdb
+
+
 
 
 
@@ -13342,7 +15467,24 @@ namespace duckdb {
 BoundParameterExpression::BoundParameterExpression(idx_t parameter_nr)
     : Expression(ExpressionType::VALUE_PARAMETER, ExpressionClass::BOUND_PARAMETER,
                  LogicalType(LogicalTypeId::UNKNOWN)),
-      parameter_nr(parameter_nr), value(nullptr) {
+      parameter_nr(parameter_nr) {
+}
+
+void BoundParameterExpression::Invalidate(Expression &expr) {
+	if (expr.type != ExpressionType::VALUE_PARAMETER) {
+		throw InternalException("BoundParameterExpression::Invalidate requires a parameter as input");
+	}
+	auto &bound_parameter = (BoundParameterExpression &)expr;
+	bound_parameter.return_type = LogicalTypeId::SQLNULL;
+	bound_parameter.parameter_data->return_type = LogicalTypeId::INVALID;
+}
+
+void BoundParameterExpression::InvalidateRecursive(Expression &expr) {
+	if (expr.type == ExpressionType::VALUE_PARAMETER) {
+		Invalidate(expr);
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { InvalidateRecursive(child); });
 }
 
 bool BoundParameterExpression::IsScalar() const {
@@ -13356,7 +15498,7 @@ bool BoundParameterExpression::IsFoldable() const {
 }
 
 string BoundParameterExpression::ToString() const {
-	return to_string(parameter_nr);
+	return "$" + to_string(parameter_nr);
 }
 
 bool BoundParameterExpression::Equals(const BaseExpression *other_p) const {
@@ -13375,13 +15517,40 @@ hash_t BoundParameterExpression::Hash() const {
 
 unique_ptr<Expression> BoundParameterExpression::Copy() {
 	auto result = make_unique<BoundParameterExpression>(parameter_nr);
-	result->value = value;
+	result->parameter_data = parameter_data;
 	result->return_type = return_type;
 	result->CopyProperties(*this);
 	return move(result);
 }
 
+void BoundParameterExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteField(parameter_nr);
+	writer.WriteSerializable(return_type);
+	writer.WriteSerializable(*parameter_data);
+}
+
+unique_ptr<Expression> BoundParameterExpression::Deserialize(ExpressionDeserializationState &state,
+                                                             FieldReader &reader) {
+	auto &global_parameter_set = state.gstate.parameter_data;
+	auto parameter_nr = reader.ReadRequired<idx_t>();
+	auto result = make_unique<BoundParameterExpression>(parameter_nr);
+	result->return_type = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
+	auto parameter_data = reader.ReadRequiredSerializable<BoundParameterData, shared_ptr<BoundParameterData>>();
+	// check if we have already deserialized a parameter with this number
+	auto entry = global_parameter_set.find(parameter_nr);
+	if (entry == global_parameter_set.end()) {
+		// we have not - store the entry we deserialized from this parameter expression
+		global_parameter_set[parameter_nr] = parameter_data;
+	} else {
+		// we have! use the previously deserialized entry
+		parameter_data = entry->second;
+	}
+	result->parameter_data = move(parameter_data);
+	return move(result);
+}
+
 } // namespace duckdb
+
 
 
 
@@ -13421,6 +15590,20 @@ unique_ptr<Expression> BoundReferenceExpression::Copy() {
 	return make_unique<BoundReferenceExpression>(alias, return_type, index);
 }
 
+void BoundReferenceExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteString(alias);
+	writer.WriteSerializable(return_type);
+	writer.WriteField(index);
+}
+
+unique_ptr<Expression> BoundReferenceExpression::Deserialize(ExpressionDeserializationState &state,
+                                                             FieldReader &reader) {
+	auto alias = reader.ReadRequired<string>();
+	auto return_type = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
+	auto index = reader.ReadRequired<idx_t>();
+	return make_unique<BoundReferenceExpression>(alias, return_type, index);
+}
+
 } // namespace duckdb
 
 
@@ -13450,7 +15633,12 @@ bool BoundSubqueryExpression::PropagatesNullValues() const {
 	return false;
 }
 
+void BoundSubqueryExpression::Serialize(FieldWriter &writer) const {
+	throw NotImplementedException(ExpressionTypeToString(type));
+}
+
 } // namespace duckdb
+
 
 
 
@@ -13492,7 +15680,23 @@ unique_ptr<Expression> BoundUnnestExpression::Copy() {
 	return move(copy);
 }
 
+void BoundUnnestExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializable(return_type);
+	writer.WriteSerializable(*child);
+}
+
+unique_ptr<Expression> BoundUnnestExpression::Deserialize(ExpressionDeserializationState &state, FieldReader &reader) {
+	auto return_type = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
+	auto child = reader.ReadRequiredSerializable<Expression>(state.gstate);
+
+	auto result = make_unique<BoundUnnestExpression>(return_type);
+	result->child = move(child);
+	return move(result);
+}
+
 } // namespace duckdb
+
+
 
 
 
@@ -13617,7 +15821,63 @@ unique_ptr<Expression> BoundWindowExpression::Copy() {
 	return move(new_window);
 }
 
+void BoundWindowExpression::Serialize(FieldWriter &writer) const {
+	writer.WriteField<bool>(aggregate.get());
+	if (aggregate) {
+		D_ASSERT(return_type == aggregate->return_type);
+		FunctionSerializer::Serialize<AggregateFunction>(writer, *aggregate, return_type, children, bind_info.get());
+	} else {
+		// children and return_type are written as part of the aggregate function otherwise
+		writer.WriteSerializableList(children);
+		writer.WriteSerializable(return_type);
+	}
+	writer.WriteSerializableList(partitions);
+	writer.WriteRegularSerializableList(orders);
+	// FIXME: partitions_stats
+	writer.WriteOptional(filter_expr);
+	writer.WriteField<bool>(ignore_nulls);
+	writer.WriteField<WindowBoundary>(start);
+	writer.WriteField<WindowBoundary>(end);
+	writer.WriteOptional(start_expr);
+	writer.WriteOptional(end_expr);
+	writer.WriteOptional(offset_expr);
+	writer.WriteOptional(default_expr);
+}
+
+unique_ptr<Expression> BoundWindowExpression::Deserialize(ExpressionDeserializationState &state, FieldReader &reader) {
+	auto has_aggregate = reader.ReadRequired<bool>();
+	unique_ptr<AggregateFunction> aggregate;
+	unique_ptr<FunctionData> bind_info;
+	vector<unique_ptr<Expression>> children;
+	LogicalType return_type;
+	if (has_aggregate) {
+		auto aggr_function = FunctionSerializer::Deserialize<AggregateFunction, AggregateFunctionCatalogEntry>(
+		    reader, state, CatalogType::AGGREGATE_FUNCTION_ENTRY, children, bind_info);
+		aggregate = make_unique<AggregateFunction>(move(aggr_function));
+		return_type = aggregate->return_type;
+	} else {
+		children = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+		return_type = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
+	}
+	auto result = make_unique<BoundWindowExpression>(state.type, return_type, move(aggregate), move(bind_info));
+
+	result->partitions = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	result->orders = reader.ReadRequiredSerializableList<BoundOrderByNode, BoundOrderByNode>(state.gstate);
+	result->filter_expr = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	result->ignore_nulls = reader.ReadRequired<bool>();
+	result->start = reader.ReadRequired<WindowBoundary>();
+	result->end = reader.ReadRequired<WindowBoundary>();
+	result->start_expr = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	result->end_expr = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	result->offset_expr = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	result->default_expr = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	result->children = move(children);
+	return move(result);
+}
+
 } // namespace duckdb
+
+
 
 
 
@@ -13712,6 +15972,76 @@ hash_t Expression::Hash() const {
 	return hash;
 }
 
+void Expression::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteField<ExpressionClass>(expression_class);
+	writer.WriteField<ExpressionType>(type);
+	writer.WriteString(alias);
+	Serialize(writer);
+	writer.Finalize();
+}
+
+unique_ptr<Expression> Expression::Deserialize(Deserializer &source, PlanDeserializationState &gstate) {
+	FieldReader reader(source);
+	auto expression_class = reader.ReadRequired<ExpressionClass>();
+	auto type = reader.ReadRequired<ExpressionType>();
+	auto alias = reader.ReadRequired<string>();
+
+	ExpressionDeserializationState state(gstate, type);
+
+	unique_ptr<Expression> result;
+	switch (expression_class) {
+	case ExpressionClass::BOUND_REF:
+		result = BoundReferenceExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_COLUMN_REF:
+		result = BoundColumnRefExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_AGGREGATE:
+		result = BoundAggregateExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_BETWEEN:
+		result = BoundBetweenExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_CONSTANT:
+		result = BoundConstantExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_FUNCTION:
+		result = BoundFunctionExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_CAST:
+		result = BoundCastExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_CASE:
+		result = BoundCaseExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_CONJUNCTION:
+		result = BoundConjunctionExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_COMPARISON:
+		result = BoundComparisonExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_OPERATOR:
+		result = BoundOperatorExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_WINDOW:
+		result = BoundWindowExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_UNNEST:
+		result = BoundUnnestExpression::Deserialize(state, reader);
+		break;
+	case ExpressionClass::BOUND_PARAMETER:
+		result = BoundParameterExpression::Deserialize(state, reader);
+		break;
+	default:
+		throw SerializationException("Unsupported type for expression deserialization %s",
+		                             ExpressionTypeToString(type));
+	}
+	result->alias = alias;
+	reader.Finalize();
+	return result;
+}
+
 } // namespace duckdb
 
 
@@ -13745,7 +16075,7 @@ string AggregateBinder::UnsupportedAggregateMessage() {
 namespace duckdb {
 
 AlterBinder::AlterBinder(Binder &binder, ClientContext &context, TableCatalogEntry &table,
-                         vector<column_t> &bound_columns, LogicalType target_type)
+                         vector<LogicalIndex> &bound_columns, LogicalType target_type)
     : ExpressionBinder(binder, context), table(table), bound_columns(bound_columns) {
 	this->target_type = move(target_type);
 }
@@ -13773,12 +16103,16 @@ BindResult AlterBinder::BindColumn(ColumnRefExpression &colref) {
 		return BindQualifiedColumnName(colref, table.name);
 	}
 	auto idx = table.GetColumnIndex(colref.column_names[0], true);
-	if (idx == DConstants::INVALID_INDEX) {
+	if (!idx.IsValid()) {
 		throw BinderException("Table does not contain column %s referenced in alter statement!",
 		                      colref.column_names[0]);
 	}
+	if (table.columns.GetColumn(LogicalIndex(idx)).Generated()) {
+		throw BinderException("Using generated columns in alter statement not supported");
+	}
 	bound_columns.push_back(idx);
-	return BindResult(make_unique<BoundReferenceExpression>(table.columns[idx].Type(), bound_columns.size() - 1));
+	return BindResult(
+	    make_unique<BoundReferenceExpression>(table.columns.GetColumn(idx).Type(), bound_columns.size() - 1));
 }
 
 } // namespace duckdb
@@ -13789,8 +16123,8 @@ BindResult AlterBinder::BindColumn(ColumnRefExpression &colref) {
 
 namespace duckdb {
 
-CheckBinder::CheckBinder(Binder &binder, ClientContext &context, string table_p, vector<ColumnDefinition> &columns,
-                         unordered_set<column_t> &bound_columns)
+CheckBinder::CheckBinder(Binder &binder, ClientContext &context, string table_p, const ColumnList &columns,
+                         physical_index_set_t &bound_columns)
     : ExpressionBinder(binder, context), table(move(table_p)), columns(columns), bound_columns(bound_columns) {
 	target_type = LogicalType::INTEGER;
 }
@@ -13829,19 +16163,18 @@ BindResult CheckBinder::BindCheckColumn(ColumnRefExpression &colref) {
 	if (colref.column_names.size() > 1) {
 		return BindQualifiedColumnName(colref, table);
 	}
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto &col = columns[i];
-		if (colref.column_names[0] == col.Name()) {
-			if (col.Generated()) {
-				auto bound_expression = col.GeneratedExpression().Copy();
-				return BindExpression(&bound_expression, 0, false);
-			}
-			bound_columns.insert(i);
-			D_ASSERT(col.StorageOid() != DConstants::INVALID_INDEX);
-			return BindResult(make_unique<BoundReferenceExpression>(col.Type(), col.StorageOid()));
-		}
+	if (!columns.ColumnExists(colref.column_names[0])) {
+		throw BinderException("Table does not contain column %s referenced in check constraint!",
+		                      colref.column_names[0]);
 	}
-	throw BinderException("Table does not contain column %s referenced in check constraint!", colref.column_names[0]);
+	auto &col = columns.GetColumn(colref.column_names[0]);
+	if (col.Generated()) {
+		auto bound_expression = col.GeneratedExpression().Copy();
+		return BindExpression(&bound_expression, 0, false);
+	}
+	bound_columns.insert(col.Physical());
+	D_ASSERT(col.StorageOid() != DConstants::INVALID_INDEX);
+	return BindResult(make_unique<BoundReferenceExpression>(col.Type(), col.StorageOid()));
 }
 
 } // namespace duckdb
@@ -13868,11 +16201,17 @@ BindResult ColumnAliasBinder::BindAlias(ExpressionBinder &enclosing_binder, Colu
 		return BindResult(StringUtil::Format("Alias %s is not found.", expr.ToString()));
 	}
 
+	if (in_alias) {
+		return BindResult("Cannot resolve self-referential alias");
+	}
+
 	// found an alias: bind the alias expression
-	D_ASSERT(!in_alias);
 	auto expression = node.original_expressions[alias_entry->second]->Copy();
 	in_alias = true;
-	auto result = enclosing_binder.BindExpression(&expression, depth, root_expression);
+
+	// since the alias has been found, pass a depth of 0. See Issue 4978 (#16)
+	// ColumnAliasBinders are only in Having, Qualify and Where Binders
+	auto result = enclosing_binder.BindExpression(&expression, 0, root_expression);
 	in_alias = false;
 	return result;
 }
@@ -13892,7 +16231,7 @@ BindResult ConstantBinder::BindExpression(unique_ptr<ParsedExpression> *expr_ptr
 	case ExpressionClass::COLUMN_REF:
 		return BindResult(clause + " cannot contain column names");
 	case ExpressionClass::SUBQUERY:
-		return BindResult(clause + " cannot contain subqueries");
+		throw BinderException(clause + " cannot contain subqueries");
 	case ExpressionClass::DEFAULT:
 		return BindResult(clause + " cannot contain DEFAULT clause");
 	case ExpressionClass::WINDOW:
@@ -13903,7 +16242,7 @@ BindResult ConstantBinder::BindExpression(unique_ptr<ParsedExpression> *expr_ptr
 }
 
 string ConstantBinder::UnsupportedAggregateMessage() {
-	return clause + "cannot contain aggregates!";
+	return clause + " cannot contain aggregates!";
 }
 
 } // namespace duckdb
@@ -13931,6 +16270,8 @@ BindResult GroupBinder::BindExpression(unique_ptr<ParsedExpression> *expr_ptr, i
 			return BindColumnRef((ColumnRefExpression &)expr);
 		case ExpressionClass::CONSTANT:
 			return BindConstant((ConstantExpression &)expr);
+		case ExpressionClass::PARAMETER:
+			throw ParameterNotAllowedException("Parameter not supported in GROUP BY clause");
 		default:
 			break;
 		}
@@ -14026,8 +16367,9 @@ BindResult GroupBinder::BindColumnRef(ColumnRefExpression &colref) {
 namespace duckdb {
 
 HavingBinder::HavingBinder(Binder &binder, ClientContext &context, BoundSelectNode &node, BoundGroupInformation &info,
-                           case_insensitive_map_t<idx_t> &alias_map)
-    : SelectBinder(binder, context, node, info), column_alias_binder(node, alias_map) {
+                           case_insensitive_map_t<idx_t> &alias_map, AggregateHandling aggregate_handling)
+    : SelectBinder(binder, context, node, info), column_alias_binder(node, alias_map),
+      aggregate_handling(aggregate_handling) {
 	target_type = LogicalType(LogicalTypeId::BOOLEAN);
 }
 
@@ -14037,7 +16379,16 @@ BindResult HavingBinder::BindColumnRef(unique_ptr<ParsedExpression> *expr_ptr, i
 	if (!alias_result.HasError()) {
 		return alias_result;
 	}
-
+	if (aggregate_handling == AggregateHandling::FORCE_AGGREGATES) {
+		auto expr = duckdb::SelectBinder::BindExpression(expr_ptr, depth);
+		if (expr.HasError()) {
+			return expr;
+		}
+		auto group_ref = make_unique<BoundColumnRefExpression>(
+		    expr.expression->return_type, ColumnBinding(node.group_index, node.groups.group_expressions.size()));
+		node.groups.group_expressions.push_back(move(expr.expression));
+		return BindResult(move(group_ref));
+	}
 	return BindResult(StringUtil::Format(
 	    "column %s must appear in the GROUP BY clause or be used in an aggregate function", expr.ToString()));
 }
@@ -14119,6 +16470,9 @@ string InsertBinder::UnsupportedAggregateMessage() {
 
 
 
+
+
+
 namespace duckdb {
 
 OrderBinder::OrderBinder(vector<Binder *> binders, idx_t projection_index, case_insensitive_map_t<idx_t> &alias_map,
@@ -14138,16 +16492,37 @@ unique_ptr<Expression> OrderBinder::CreateProjectionReference(ParsedExpression &
 	if (extra_list && index < extra_list->size()) {
 		alias = extra_list->at(index)->ToString();
 	} else {
-		alias = expr.GetName();
+		if (!expr.alias.empty()) {
+			alias = expr.alias;
+		}
 	}
 	return make_unique<BoundColumnRefExpression>(move(alias), LogicalType::INVALID,
 	                                             ColumnBinding(projection_index, index));
 }
 
 unique_ptr<Expression> OrderBinder::CreateExtraReference(unique_ptr<ParsedExpression> expr) {
+	if (!extra_list) {
+		throw InternalException("CreateExtraReference called without extra_list");
+	}
 	auto result = CreateProjectionReference(*expr, extra_list->size());
 	extra_list->push_back(move(expr));
 	return result;
+}
+
+unique_ptr<Expression> OrderBinder::BindConstant(ParsedExpression &expr, const Value &val) {
+	// ORDER BY a constant
+	if (!val.type().IsIntegral()) {
+		// non-integral expression, we just leave the constant here.
+		// ORDER BY <constant> has no effect
+		// CONTROVERSIAL: maybe we should throw an error
+		return nullptr;
+	}
+	// INTEGER constant: we use the integer as an index into the select list (e.g. ORDER BY 1)
+	auto index = (idx_t)val.GetValue<int64_t>();
+	if (index < 1 || index > max_count) {
+		throw BinderException("ORDER term out of range - should be between 1 and %lld", (idx_t)max_count);
+	}
+	return CreateProjectionReference(expr, index - 1);
 }
 
 unique_ptr<Expression> OrderBinder::Bind(unique_ptr<ParsedExpression> expr) {
@@ -14161,19 +16536,7 @@ unique_ptr<Expression> OrderBinder::Bind(unique_ptr<ParsedExpression> expr) {
 		// ORDER BY constant
 		// is the ORDER BY expression a constant integer? (e.g. ORDER BY 1)
 		auto &constant = (ConstantExpression &)*expr;
-		// ORDER BY a constant
-		if (!constant.value.type().IsIntegral()) {
-			// non-integral expression, we just leave the constant here.
-			// ORDER BY <constant> has no effect
-			// CONTROVERSIAL: maybe we should throw an error
-			return nullptr;
-		}
-		// INTEGER constant: we use the integer as an index into the select list (e.g. ORDER BY 1)
-		auto index = (idx_t)constant.value.GetValue<int64_t>();
-		if (index < 1 || index > max_count) {
-			throw BinderException("ORDER term out of range - should be between 1 and %lld", (idx_t)max_count);
-		}
-		return CreateProjectionReference(*expr, index - 1);
+		return BindConstant(*expr, constant.value);
 	}
 	case ExpressionClass::COLUMN_REF: {
 		// COLUMN REF expression
@@ -14193,7 +16556,13 @@ unique_ptr<Expression> OrderBinder::Bind(unique_ptr<ParsedExpression> expr) {
 	}
 	case ExpressionClass::POSITIONAL_REFERENCE: {
 		auto &posref = (PositionalReferenceExpression &)*expr;
+		if (posref.index < 1 || posref.index > max_count) {
+			throw BinderException("ORDER term out of range - should be between 1 and %lld", (idx_t)max_count);
+		}
 		return CreateProjectionReference(*expr, posref.index - 1);
+	}
+	case ExpressionClass::PARAMETER: {
+		throw ParameterNotAllowedException("Parameter not supported in ORDER BY clause");
 	}
 	default:
 		break;
@@ -14312,6 +16681,14 @@ namespace duckdb {
 ReturningBinder::ReturningBinder(Binder &binder, ClientContext &context) : ExpressionBinder(binder, context) {
 }
 
+BindResult ReturningBinder::BindColumnRef(unique_ptr<ParsedExpression> *expr_ptr, idx_t depth) {
+	auto &expr = **expr_ptr;
+	if (expr.GetName() == "rowid") {
+		return BindResult("rowid is not supported in returning statements");
+	}
+	return ExpressionBinder::BindExpression(expr_ptr, depth);
+}
+
 BindResult ReturningBinder::BindExpression(unique_ptr<ParsedExpression> *expr_ptr, idx_t depth, bool root_expression) {
 	auto &expr = **expr_ptr;
 	switch (expr.GetExpressionClass()) {
@@ -14319,6 +16696,8 @@ BindResult ReturningBinder::BindExpression(unique_ptr<ParsedExpression> *expr_pt
 		return BindResult("SUBQUERY is not supported in returning statements");
 	case ExpressionClass::BOUND_SUBQUERY:
 		return BindResult("BOUND SUBQUERY is not supported in returning statements");
+	case ExpressionClass::COLUMN_REF:
+		return BindColumnRef(expr_ptr, depth);
 	default:
 		return ExpressionBinder::BindExpression(expr_ptr, depth);
 	}
@@ -14340,8 +16719,13 @@ BindResult ReturningBinder::BindExpression(unique_ptr<ParsedExpression> *expr_pt
 
 namespace duckdb {
 
+SelectBinder::SelectBinder(Binder &binder, ClientContext &context, BoundSelectNode &node, BoundGroupInformation &info,
+                           case_insensitive_map_t<idx_t> alias_map)
+    : ExpressionBinder(binder, context), inside_window(false), node(node), info(info), alias_map(move(alias_map)) {
+}
+
 SelectBinder::SelectBinder(Binder &binder, ClientContext &context, BoundSelectNode &node, BoundGroupInformation &info)
-    : ExpressionBinder(binder, context), inside_window(false), node(node), info(info) {
+    : SelectBinder(binder, context, node, info, case_insensitive_map_t<idx_t>()) {
 }
 
 BindResult SelectBinder::BindExpression(unique_ptr<ParsedExpression> *expr_ptr, idx_t depth, bool root_expression) {
@@ -14352,6 +16736,8 @@ BindResult SelectBinder::BindExpression(unique_ptr<ParsedExpression> *expr_ptr, 
 		return BindGroup(expr, depth, group_index);
 	}
 	switch (expr.expression_class) {
+	case ExpressionClass::COLUMN_REF:
+		return BindColumnRef(expr_ptr, depth);
 	case ExpressionClass::DEFAULT:
 		return BindResult("SELECT clause cannot contain DEFAULT clause");
 	case ExpressionClass::WINDOW:
@@ -14388,6 +16774,37 @@ idx_t SelectBinder::TryBindGroup(ParsedExpression &expr, idx_t depth) {
 	return DConstants::INVALID_INDEX;
 }
 
+BindResult SelectBinder::BindColumnRef(unique_ptr<ParsedExpression> *expr_ptr, idx_t depth) {
+	// first try to bind the column reference regularly
+	auto result = ExpressionBinder::BindExpression(expr_ptr, depth);
+	if (!result.HasError()) {
+		return result;
+	}
+	// binding failed
+	// check in the alias map
+	auto &colref = (ColumnRefExpression &)**expr_ptr;
+	if (!colref.IsQualified()) {
+		auto alias_entry = alias_map.find(colref.column_names[0]);
+		if (alias_entry != alias_map.end()) {
+			// found entry!
+			auto index = alias_entry->second;
+			if (index >= node.select_list.size()) {
+				throw BinderException("Column \"%s\" referenced that exists in the SELECT clause - but this column "
+				                      "cannot be referenced before it is defined",
+				                      colref.column_names[0]);
+			}
+			if (node.select_list[index]->HasSideEffects()) {
+				throw BinderException("Alias \"%s\" referenced in a SELECT clause - but the expression has side "
+				                      "effects. This is not yet supported.",
+				                      colref.column_names[0]);
+			}
+			return BindResult(node.select_list[index]->Copy());
+		}
+	}
+	// entry was not found in the alias map: return the original error
+	return result;
+}
+
 BindResult SelectBinder::BindGroupingFunction(OperatorExpression &op, idx_t depth) {
 	if (op.children.empty()) {
 		throw InternalException("GROUPING requires at least one child");
@@ -14419,6 +16836,42 @@ BindResult SelectBinder::BindGroup(ParsedExpression &expr, idx_t depth, idx_t gr
 	auto &group = node.groups.group_expressions[group_index];
 	return BindResult(make_unique<BoundColumnRefExpression>(expr.GetName(), group->return_type,
 	                                                        ColumnBinding(node.group_index, group_index), depth));
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+TableFunctionBinder::TableFunctionBinder(Binder &binder, ClientContext &context) : ExpressionBinder(binder, context) {
+}
+
+BindResult TableFunctionBinder::BindColumnReference(ColumnRefExpression &expr) {
+	auto result_name = StringUtil::Join(expr.column_names, ".");
+	return BindResult(make_unique<BoundConstantExpression>(Value(result_name)));
+}
+
+BindResult TableFunctionBinder::BindExpression(unique_ptr<ParsedExpression> *expr_ptr, idx_t depth,
+                                               bool root_expression) {
+	auto &expr = **expr_ptr;
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::COLUMN_REF:
+		return BindColumnReference((ColumnRefExpression &)expr);
+	case ExpressionClass::SUBQUERY:
+		throw BinderException("Table function cannot contain subqueries");
+	case ExpressionClass::DEFAULT:
+		return BindResult("Table function cannot contain DEFAULT clause");
+	case ExpressionClass::WINDOW:
+		return BindResult("Table function cannot contain window functions!");
+	default:
+		return ExpressionBinder::BindExpression(expr_ptr, depth);
+	}
+}
+
+string TableFunctionBinder::UnsupportedAggregateMessage() {
+	return "Table function cannot contain aggregates!";
 }
 
 } // namespace duckdb
@@ -14547,7 +17000,7 @@ BindResult ExpressionBinder::BindExpression(unique_ptr<ParsedExpression> *expr, 
 		// binding function expression has extra parameter needed for macro's
 		return BindExpression((FunctionExpression &)expr_ref, depth, expr);
 	case ExpressionClass::LAMBDA:
-		return BindExpression((LambdaExpression &)expr_ref, depth);
+		return BindExpression((LambdaExpression &)expr_ref, depth, false, LogicalTypeId::INVALID);
 	case ExpressionClass::OPERATOR:
 		return BindExpression((OperatorExpression &)expr_ref, depth);
 	case ExpressionClass::SUBQUERY:
@@ -14556,6 +17009,8 @@ BindResult ExpressionBinder::BindExpression(unique_ptr<ParsedExpression> *expr, 
 		return BindExpression((ParameterExpression &)expr_ref, depth);
 	case ExpressionClass::POSITIONAL_REFERENCE:
 		return BindExpression((PositionalReferenceExpression &)expr_ref, depth);
+	case ExpressionClass::STAR:
+		return BindResult(binder.FormatError(expr_ref, "STAR expression is not supported here"));
 	default:
 		throw NotImplementedException("Unimplemented expression class");
 	}
@@ -14619,6 +17074,15 @@ bool ExpressionBinder::ContainsType(const LogicalType &type, LogicalTypeId targe
 		}
 		return false;
 	}
+	case LogicalTypeId::UNION: {
+		auto member_count = UnionType::GetMemberCount(type);
+		for (idx_t i = 0; i < member_count; i++) {
+			if (ContainsType(UnionType::GetMemberType(type, i), target)) {
+				return true;
+			}
+		}
+		return false;
+	}
 	case LogicalTypeId::LIST:
 		return ContainsType(ListType::GetChildType(type), target);
 	default:
@@ -14640,6 +17104,13 @@ LogicalType ExpressionBinder::ExchangeType(const LogicalType &type, LogicalTypeI
 		}
 		return type.id() == LogicalTypeId::MAP ? LogicalType::MAP(move(child_types))
 		                                       : LogicalType::STRUCT(move(child_types));
+	}
+	case LogicalTypeId::UNION: {
+		auto member_types = UnionType::CopyMemberTypes(type);
+		for (auto &member_type : member_types) {
+			member_type.second = ExchangeType(member_type.second, target, new_type);
+		}
+		return LogicalType::UNION(move(member_types));
 	}
 	case LogicalTypeId::LIST:
 		return LogicalType::LIST(ExchangeType(ListType::GetChildType(type), target, new_type));
@@ -14674,15 +17145,18 @@ unique_ptr<Expression> ExpressionBinder::Bind(unique_ptr<ParsedExpression> &expr
 	unique_ptr<Expression> result = move(bound_expr->expr);
 	if (target_type.id() != LogicalTypeId::INVALID) {
 		// the binder has a specific target type: add a cast to that type
-		result = BoundCastExpression::AddCastToType(move(result), target_type);
+		result = BoundCastExpression::AddCastToType(context, move(result), target_type);
 	} else {
 		if (!binder.can_contain_nulls) {
 			// SQL NULL type is only used internally in the binder
 			// cast to INTEGER if we encounter it outside of the binder
 			if (ContainsNullType(result->return_type)) {
 				auto result_type = ExchangeNullType(result->return_type);
-				result = BoundCastExpression::AddCastToType(move(result), result_type);
+				result = BoundCastExpression::AddCastToType(context, move(result), result_type);
 			}
+		}
+		if (result->return_type.id() == LogicalTypeId::UNKNOWN) {
+			throw ParameterNotResolvedException();
 		}
 	}
 	if (result_type) {
@@ -14962,6 +17436,7 @@ void ExpressionIterator::EnumerateQueryNodeChildren(BoundQueryNode &node,
 } // namespace duckdb
 
 
+
 namespace duckdb {
 
 ConjunctionOrFilter::ConjunctionOrFilter() : ConjunctionFilter(TableFilterType::CONJUNCTION_OR) {
@@ -15006,6 +17481,16 @@ bool ConjunctionOrFilter::Equals(const TableFilter &other_p) const {
 		}
 	}
 	return true;
+}
+
+void ConjunctionOrFilter::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializableList(child_filters);
+}
+
+unique_ptr<TableFilter> ConjunctionOrFilter::Deserialize(FieldReader &source) {
+	auto res = make_unique<ConjunctionOrFilter>();
+	res->child_filters = source.ReadRequiredSerializableList<TableFilter>();
+	return move(res);
 }
 
 ConjunctionAndFilter::ConjunctionAndFilter() : ConjunctionFilter(TableFilterType::CONJUNCTION_AND) {
@@ -15053,7 +17538,19 @@ bool ConjunctionAndFilter::Equals(const TableFilter &other_p) const {
 	return true;
 }
 
+void ConjunctionAndFilter::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializableList(child_filters);
+}
+
+unique_ptr<TableFilter> ConjunctionAndFilter::Deserialize(FieldReader &source) {
+	auto res = make_unique<ConjunctionAndFilter>();
+	res->child_filters = source.ReadRequiredSerializableList<TableFilter>();
+	return move(res);
+}
+
 } // namespace duckdb
+
+
 
 
 
@@ -15081,7 +17578,7 @@ FilterPropagateResult ConstantFilter::CheckStatistics(BaseStatistics &stats) {
 	case PhysicalType::DOUBLE:
 		return ((NumericStatistics &)stats).CheckZonemap(comparison_type, constant);
 	case PhysicalType::VARCHAR:
-		return ((StringStatistics &)stats).CheckZonemap(comparison_type, constant.ToString());
+		return ((StringStatistics &)stats).CheckZonemap(comparison_type, StringValue::Get(constant));
 	default:
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
@@ -15097,6 +17594,17 @@ bool ConstantFilter::Equals(const TableFilter &other_p) const {
 	}
 	auto &other = (ConstantFilter &)other_p;
 	return other.comparison_type == comparison_type && other.constant == constant;
+}
+
+void ConstantFilter::Serialize(FieldWriter &writer) const {
+	writer.WriteField(comparison_type);
+	writer.WriteSerializable(constant);
+}
+
+unique_ptr<TableFilter> ConstantFilter::Deserialize(FieldReader &source) {
+	auto comparision_type = source.ReadRequired<ExpressionType>();
+	auto constant = source.ReadRequiredSerializable<Value, Value>();
+	return make_unique<ConstantFilter>(comparision_type, constant);
 }
 
 } // namespace duckdb
@@ -15143,7 +17651,22 @@ string IsNotNullFilter::ToString(const string &column_name) {
 	return column_name + " IS NOT NULL";
 }
 
+void IsNotNullFilter::Serialize(FieldWriter &writer) const {
+}
+
+unique_ptr<TableFilter> IsNotNullFilter::Deserialize(FieldReader &source) {
+	return make_unique<IsNotNullFilter>();
+}
+
+void IsNullFilter::Serialize(FieldWriter &writer) const {
+}
+
+unique_ptr<TableFilter> IsNullFilter::Deserialize(FieldReader &source) {
+	return make_unique<IsNullFilter>();
+}
+
 } // namespace duckdb
+
 
 
 
@@ -15171,6 +17694,29 @@ unique_ptr<Expression> JoinCondition::CreateExpression(vector<JoinCondition> con
 			result = move(conj);
 		}
 	}
+	return result;
+}
+
+//! Serializes a JoinCondition to a stand-alone binary blob
+void JoinCondition::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteOptional(left);
+	writer.WriteOptional(right);
+	writer.WriteField<ExpressionType>(comparison);
+	writer.Finalize();
+}
+
+//! Deserializes a blob back into a JoinCondition
+JoinCondition JoinCondition::Deserialize(Deserializer &source, PlanDeserializationState &state) {
+	auto result = JoinCondition();
+
+	FieldReader reader(source);
+	auto left = reader.ReadOptional<Expression>(nullptr, state);
+	auto right = reader.ReadOptional<Expression>(nullptr, state);
+	result.left = move(left);
+	result.right = move(right);
+	result.comparison = reader.ReadRequired<ExpressionType>();
+	reader.Finalize();
 	return result;
 }
 
@@ -15254,13 +17800,20 @@ JoinSide JoinSide::GetJoinSide(const unordered_set<idx_t> &bindings, unordered_s
 
 
 
+
+
+
+
 namespace duckdb {
 
-LogicalOperator::LogicalOperator(LogicalOperatorType type) : type(type) {
+const uint64_t PLAN_SERIALIZATION_VERSION = 1;
+
+LogicalOperator::LogicalOperator(LogicalOperatorType type)
+    : type(type), estimated_cardinality(0), has_estimated_cardinality(false) {
 }
 
 LogicalOperator::LogicalOperator(LogicalOperatorType type, vector<unique_ptr<Expression>> expressions)
-    : type(type), expressions(move(expressions)) {
+    : type(type), expressions(move(expressions)), estimated_cardinality(0), has_estimated_cardinality(false) {
 }
 
 LogicalOperator::~LogicalOperator() {
@@ -15286,10 +17839,7 @@ string LogicalOperator::ParamsToString() const {
 }
 
 void LogicalOperator::ResolveOperatorTypes() {
-	// if (types.size() > 0) {
-	// 	// types already resolved for this node
-	// 	return;
-	// }
+
 	types.clear();
 	// first resolve child types
 	for (auto &child : children) {
@@ -15340,7 +17890,7 @@ string LogicalOperator::ToString() const {
 	return renderer.ToString(*this);
 }
 
-void LogicalOperator::Verify() {
+void LogicalOperator::Verify(ClientContext &context) {
 #ifdef DEBUG
 	// verify expressions
 	for (idx_t expr_idx = 0; expr_idx < expressions.size(); expr_idx++) {
@@ -15365,10 +17915,32 @@ void LogicalOperator::Verify() {
 			}
 		}
 		D_ASSERT(!str.empty());
+
+		// verify that serialization + deserialization round-trips correctly
+		if (expressions[expr_idx]->HasParameter()) {
+			continue;
+		}
+		BufferedSerializer serializer;
+		try {
+			expressions[expr_idx]->Serialize(serializer);
+		} catch (NotImplementedException &ex) {
+			// ignore for now (FIXME)
+			return;
+		}
+
+		auto data = serializer.GetData();
+		auto deserializer = BufferedDeserializer(data.data.get(), data.size);
+
+		PlanDeserializationState state(context);
+		auto deserialized_expression = Expression::Deserialize(deserializer, state);
+		// FIXME: expressions might not be equal yet because of statistics propagation
+		continue;
+		D_ASSERT(Expression::Equals(expressions[expr_idx].get(), deserialized_expression.get()));
+		D_ASSERT(expressions[expr_idx]->Hash() == deserialized_expression->Hash());
 	}
 	D_ASSERT(!ToString().empty());
 	for (auto &child : children) {
-		child->Verify();
+		child->Verify(context);
 	}
 #endif
 }
@@ -15380,15 +17952,220 @@ void LogicalOperator::AddChild(unique_ptr<LogicalOperator> child) {
 
 idx_t LogicalOperator::EstimateCardinality(ClientContext &context) {
 	// simple estimator, just take the max of the children
+	if (has_estimated_cardinality) {
+		return estimated_cardinality;
+	}
 	idx_t max_cardinality = 0;
 	for (auto &child : children) {
 		max_cardinality = MaxValue(child->EstimateCardinality(context), max_cardinality);
 	}
+	has_estimated_cardinality = true;
 	return max_cardinality;
 }
 
 void LogicalOperator::Print() {
 	Printer::Print(ToString());
+}
+
+void LogicalOperator::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteField<LogicalOperatorType>(type);
+	writer.WriteSerializableList(children);
+
+	Serialize(writer);
+	writer.Finalize();
+}
+
+unique_ptr<LogicalOperator> LogicalOperator::Deserialize(Deserializer &deserializer, PlanDeserializationState &gstate) {
+	unique_ptr<LogicalOperator> result;
+
+	FieldReader reader(deserializer);
+	auto type = reader.ReadRequired<LogicalOperatorType>();
+	auto children = reader.ReadRequiredSerializableList<LogicalOperator>(gstate);
+
+	LogicalDeserializationState state(gstate, type, children);
+	switch (type) {
+	case LogicalOperatorType::LOGICAL_PROJECTION:
+		result = LogicalProjection::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_FILTER:
+		result = LogicalFilter::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
+		result = LogicalAggregate::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_WINDOW:
+		result = LogicalWindow::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_UNNEST:
+		result = LogicalUnnest::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_LIMIT:
+		result = LogicalLimit::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_ORDER_BY:
+		result = LogicalOrder::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_TOP_N:
+		result = LogicalTopN::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_COPY_TO_FILE:
+		result = LogicalCopyToFile::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_DISTINCT:
+		result = LogicalDistinct::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_SAMPLE:
+		result = LogicalSample::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_LIMIT_PERCENT:
+		result = LogicalLimitPercent::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_GET:
+		result = LogicalGet::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CHUNK_GET:
+		result = LogicalColumnDataGet::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_DELIM_GET:
+		result = LogicalDelimGet::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_EXPRESSION_GET:
+		result = LogicalExpressionGet::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_DUMMY_SCAN:
+		result = LogicalDummyScan::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_EMPTY_RESULT:
+		result = LogicalEmptyResult::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CTE_REF:
+		result = LogicalCTERef::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_JOIN:
+		throw InternalException("LogicalJoin deserialize not supported");
+	case LogicalOperatorType::LOGICAL_DELIM_JOIN:
+		result = LogicalDelimJoin::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
+		result = LogicalComparisonJoin::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_ANY_JOIN:
+		result = LogicalAnyJoin::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CROSS_PRODUCT:
+		result = LogicalCrossProduct::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_UNION:
+		result = LogicalSetOperation::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_EXCEPT:
+		result = LogicalSetOperation::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_INTERSECT:
+		result = LogicalSetOperation::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_RECURSIVE_CTE:
+		result = LogicalRecursiveCTE::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_INSERT:
+		result = LogicalInsert::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_DELETE:
+		result = LogicalDelete::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_UPDATE:
+		result = LogicalUpdate::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_ALTER:
+		result = LogicalSimple::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CREATE_TABLE:
+		result = LogicalCreateTable::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CREATE_INDEX:
+		result = LogicalCreateIndex::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CREATE_SEQUENCE:
+		result = LogicalCreate::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CREATE_VIEW:
+		result = LogicalCreate::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CREATE_SCHEMA:
+		result = LogicalCreate::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CREATE_MACRO:
+		result = LogicalCreate::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_DROP:
+		result = LogicalSimple::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_PRAGMA:
+		result = LogicalPragma::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_TRANSACTION:
+		result = LogicalSimple::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_CREATE_TYPE:
+		result = LogicalCreate::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_EXPLAIN:
+		result = LogicalExplain::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_SHOW:
+		result = LogicalShow::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_PREPARE:
+		result = LogicalPrepare::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_EXECUTE:
+		result = LogicalExecute::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_EXPORT:
+		result = LogicalExport::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_VACUUM:
+		result = LogicalSimple::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_SET:
+		result = LogicalSet::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_LOAD:
+		result = LogicalSimple::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR:
+		result = LogicalExtensionOperator::Deserialize(state, reader);
+		break;
+	case LogicalOperatorType::LOGICAL_INVALID:
+		/* no default here to trigger a warning if we forget to implement deserialize for a new operator */
+		throw SerializationException("Invalid type for operator deserialization");
+	}
+
+	reader.Finalize();
+	result->children = move(children);
+
+	return result;
+}
+
+vector<idx_t> LogicalOperator::GetTableIndex() const {
+	return vector<idx_t> {};
+}
+
+unique_ptr<LogicalOperator> LogicalOperator::Copy(ClientContext &context) const {
+	BufferedSerializer logical_op_serializer;
+	try {
+		this->Serialize(logical_op_serializer);
+	} catch (NotImplementedException &ex) {
+		throw NotImplementedException("Logical Operator Copy requires the logical operator and all of its children to "
+		                              "be serializable: " +
+		                              std::string(ex.what()));
+	}
+	auto data = logical_op_serializer.GetData();
+	auto logical_op_deserializer = BufferedDeserializer(data.data.get(), data.size);
+	PlanDeserializationState state(context);
+	auto op_copy = LogicalOperator::Deserialize(logical_op_deserializer, state);
+	return op_copy;
 }
 
 } // namespace duckdb
@@ -15659,6 +18436,7 @@ unique_ptr<Expression> LogicalOperatorVisitor::VisitReplace(BoundUnnestExpressio
 
 
 
+
 namespace duckdb {
 
 LogicalAggregate::LogicalAggregate(idx_t group_index, idx_t aggregate_index, vector<unique_ptr<Expression>> select_list)
@@ -15712,7 +18490,69 @@ string LogicalAggregate::ParamsToString() const {
 	return result;
 }
 
+void LogicalAggregate::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializableList(expressions);
+
+	writer.WriteField(group_index);
+	writer.WriteField(aggregate_index);
+	writer.WriteField(groupings_index);
+	writer.WriteSerializableList(groups);
+	writer.WriteField<idx_t>(grouping_sets.size());
+	for (auto &entry : grouping_sets) {
+		writer.WriteList<idx_t>(entry);
+	}
+	writer.WriteField<idx_t>(grouping_functions.size());
+	for (auto &entry : grouping_functions) {
+		writer.WriteList<idx_t>(entry);
+	}
+
+	// TODO statistics
+}
+
+unique_ptr<LogicalOperator> LogicalAggregate::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto expressions = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+
+	auto group_index = reader.ReadRequired<idx_t>();
+	auto aggregate_index = reader.ReadRequired<idx_t>();
+	auto groupings_index = reader.ReadRequired<idx_t>();
+	auto groups = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	auto grouping_sets_size = reader.ReadRequired<idx_t>();
+	vector<GroupingSet> grouping_sets;
+	for (idx_t i = 0; i < grouping_sets_size; i++) {
+		grouping_sets.push_back(reader.ReadRequiredSet<idx_t>());
+	}
+	vector<vector<idx_t>> grouping_functions;
+	auto grouping_functions_size = reader.ReadRequired<idx_t>();
+	for (idx_t i = 0; i < grouping_functions_size; i++) {
+		grouping_functions.push_back(reader.ReadRequiredList<idx_t>());
+	}
+	auto result = make_unique<LogicalAggregate>(group_index, aggregate_index, move(expressions));
+	result->groupings_index = groupings_index;
+	result->groups = move(groups);
+	result->grouping_functions = move(grouping_functions);
+	result->grouping_sets = move(grouping_sets);
+
+	return move(result);
+}
+
+idx_t LogicalAggregate::EstimateCardinality(ClientContext &context) {
+	if (groups.empty()) {
+		// ungrouped aggregate
+		return 1;
+	}
+	return LogicalOperator::EstimateCardinality(context);
+}
+
+vector<idx_t> LogicalAggregate::GetTableIndex() const {
+	vector<idx_t> result {group_index, aggregate_index};
+	if (groupings_index != DConstants::INVALID_INDEX) {
+		result.push_back(groupings_index);
+	}
+	return result;
+}
+
 } // namespace duckdb
+
 
 
 namespace duckdb {
@@ -15724,7 +18564,65 @@ string LogicalAnyJoin::ParamsToString() const {
 	return condition->ToString();
 }
 
+void LogicalAnyJoin::Serialize(FieldWriter &writer) const {
+	writer.WriteField(join_type);
+	writer.WriteOptional(condition);
+}
+
+unique_ptr<LogicalOperator> LogicalAnyJoin::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto join_type = reader.ReadRequired<JoinType>();
+	auto condition = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	auto result = make_unique<LogicalAnyJoin>(join_type);
+	result->condition = move(condition);
+	return move(result);
+}
+
 } // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+LogicalColumnDataGet::LogicalColumnDataGet(idx_t table_index, vector<LogicalType> types,
+                                           unique_ptr<ColumnDataCollection> collection)
+    : LogicalOperator(LogicalOperatorType::LOGICAL_CHUNK_GET), table_index(table_index), collection(move(collection)) {
+	D_ASSERT(types.size() > 0);
+	chunk_types = move(types);
+}
+
+vector<ColumnBinding> LogicalColumnDataGet::GetColumnBindings() {
+	return GenerateColumnBindings(table_index, chunk_types.size());
+}
+
+void LogicalColumnDataGet::Serialize(FieldWriter &writer) const {
+	writer.WriteField(table_index);
+	writer.WriteRegularSerializableList(chunk_types);
+	writer.WriteField(collection->ChunkCount());
+	for (auto &chunk : collection->Chunks()) {
+		chunk.Serialize(writer.GetSerializer());
+	}
+}
+
+unique_ptr<LogicalOperator> LogicalColumnDataGet::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto chunk_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+	auto chunk_count = reader.ReadRequired<idx_t>();
+	auto collection = make_unique<ColumnDataCollection>(state.gstate.context, chunk_types);
+	for (idx_t i = 0; i < chunk_count; i++) {
+		DataChunk chunk;
+		chunk.Deserialize(reader.GetSource());
+		collection->Append(chunk);
+	}
+	return make_unique<LogicalColumnDataGet>(table_index, move(chunk_types), move(collection));
+}
+
+vector<idx_t> LogicalColumnDataGet::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
+} // namespace duckdb
+
 
 
 
@@ -15747,12 +18645,191 @@ string LogicalComparisonJoin::ParamsToString() const {
 	return result;
 }
 
+void LogicalComparisonJoin::Serialize(FieldWriter &writer) const {
+	LogicalJoin::Serialize(writer);
+	writer.WriteRegularSerializableList(conditions);
+	writer.WriteRegularSerializableList(delim_types);
+}
+
+void LogicalComparisonJoin::Deserialize(LogicalComparisonJoin &comparison_join, LogicalDeserializationState &state,
+                                        FieldReader &reader) {
+	LogicalJoin::Deserialize(comparison_join, state, reader);
+	comparison_join.conditions = reader.ReadRequiredSerializableList<JoinCondition, JoinCondition>(state.gstate);
+	comparison_join.delim_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+}
+
+unique_ptr<LogicalOperator> LogicalComparisonJoin::Deserialize(LogicalDeserializationState &state,
+                                                               FieldReader &reader) {
+	auto result = make_unique<LogicalComparisonJoin>(JoinType::INVALID, state.type);
+	LogicalComparisonJoin::Deserialize(*result, state, reader);
+	return move(result);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+namespace duckdb {
+
+void LogicalCopyToFile::Serialize(FieldWriter &writer) const {
+	writer.WriteString(file_path);
+	writer.WriteField(use_tmp_file);
+	writer.WriteField(is_file_and_exists);
+
+	D_ASSERT(!function.name.empty());
+	writer.WriteString(function.name);
+
+	writer.WriteField(bind_data != nullptr);
+	if (bind_data && !function.serialize) {
+		throw InvalidInputException("Can't serialize copy function %s", function.name);
+	}
+
+	function.serialize(writer, *bind_data, function);
+}
+
+unique_ptr<LogicalOperator> LogicalCopyToFile::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto file_path = reader.ReadRequired<string>();
+	auto use_tmp_file = reader.ReadRequired<bool>();
+	auto is_file_and_exists = reader.ReadRequired<bool>();
+
+	auto copy_func_name = reader.ReadRequired<string>();
+
+	auto has_bind_data = reader.ReadRequired<bool>();
+
+	auto &context = state.gstate.context;
+	auto &catalog = Catalog::GetCatalog(context);
+	auto func_catalog = catalog.GetEntry(context, CatalogType::COPY_FUNCTION_ENTRY, DEFAULT_SCHEMA, copy_func_name);
+	if (!func_catalog || func_catalog->type != CatalogType::COPY_FUNCTION_ENTRY) {
+		throw InternalException("Cant find catalog entry for function %s", copy_func_name);
+	}
+	auto copy_func_catalog_entry = (CopyFunctionCatalogEntry *)func_catalog;
+	CopyFunction copy_func = copy_func_catalog_entry->function;
+
+	unique_ptr<FunctionData> bind_data;
+	if (has_bind_data) {
+		if (!copy_func.deserialize) {
+			throw SerializationException("Have bind info but no deserialization function for %s", copy_func.name);
+		}
+		bind_data = copy_func.deserialize(context, reader, copy_func);
+	}
+
+	auto result = make_unique<LogicalCopyToFile>(copy_func, move(bind_data));
+	result->file_path = file_path;
+	result->use_tmp_file = use_tmp_file;
+	result->is_file_and_exists = is_file_and_exists;
+	return move(result);
+}
+
+idx_t LogicalCopyToFile::EstimateCardinality(ClientContext &context) {
+	return 1;
+}
+
 } // namespace duckdb
 
 
 namespace duckdb {
 
-LogicalCrossProduct::LogicalCrossProduct() : LogicalOperator(LogicalOperatorType::LOGICAL_CROSS_PRODUCT) {
+void LogicalCreate::Serialize(FieldWriter &writer) const {
+	info->Serialize(writer.GetSerializer());
+}
+
+unique_ptr<LogicalOperator> LogicalCreate::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto &context = state.gstate.context;
+	auto info = CreateInfo::Deserialize(reader.GetSource());
+
+	auto &catalog = Catalog::GetCatalog(context);
+	// TODO(stephwang): review if below is necessary or just not pass schema_catalog_entry
+	SchemaCatalogEntry *schema_catalog_entry = catalog.GetSchema(context, info->schema, true);
+
+	return make_unique<LogicalCreate>(state.type, move(info), schema_catalog_entry);
+}
+
+idx_t LogicalCreate::EstimateCardinality(ClientContext &context) {
+	return 1;
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+namespace duckdb {
+
+void LogicalCreateIndex::Serialize(FieldWriter &writer) const {
+
+	writer.WriteOptional(info);
+	table.Serialize(writer.GetSerializer());
+	FunctionSerializer::SerializeBase<TableFunction>(writer, function, bind_data.get());
+	writer.WriteSerializableList(unbound_expressions);
+
+	writer.Finalize();
+}
+
+unique_ptr<LogicalOperator> LogicalCreateIndex::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+
+	auto &context = state.gstate.context;
+	auto catalog_info = TableCatalogEntry::Deserialize(reader.GetSource(), context);
+	auto &catalog = Catalog::GetCatalog(context);
+	TableCatalogEntry *table = catalog.GetEntry<TableCatalogEntry>(context, catalog_info->schema, catalog_info->table);
+
+	auto unbound_expressions = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+
+	auto create_info = reader.ReadOptional<CreateInfo>(nullptr);
+	if (create_info->type != CatalogType::INDEX_ENTRY) {
+		throw InternalException("Unexpected type: '%s', expected '%s'", CatalogTypeToString(create_info->type),
+		                        CatalogTypeToString(CatalogType::INDEX_ENTRY));
+	}
+
+	CreateInfo *raw_create_info_ptr = create_info.release();
+	CreateIndexInfo *raw_create_index_info_ptr = static_cast<CreateIndexInfo *>(raw_create_info_ptr);
+	unique_ptr<CreateIndexInfo> uptr_create_index_info = unique_ptr<CreateIndexInfo> {raw_create_index_info_ptr};
+	auto info = unique_ptr<CreateIndexInfo> {static_cast<CreateIndexInfo *>(create_info.release())};
+
+	unique_ptr<FunctionData> bind_data;
+	bool has_deserialize;
+	auto function = FunctionSerializer::DeserializeBaseInternal<TableFunction, TableFunctionCatalogEntry>(
+	    reader, state.gstate, CatalogType::TABLE_FUNCTION_ENTRY, bind_data, has_deserialize);
+
+	reader.Finalize();
+	return make_unique<LogicalCreateIndex>(move(bind_data), move(info), move(unbound_expressions), *table,
+	                                       move(function));
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+void LogicalCreateTable::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializable(*info);
+}
+
+unique_ptr<LogicalOperator> LogicalCreateTable::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto info = reader.ReadRequiredSerializable<BoundCreateTableInfo>(state.gstate);
+	auto schema = info->schema;
+	return make_unique<LogicalCreateTable>(schema, move(info));
+}
+
+idx_t LogicalCreateTable::EstimateCardinality(ClientContext &context) {
+	return 1;
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+LogicalCrossProduct::LogicalCrossProduct(unique_ptr<LogicalOperator> left, unique_ptr<LogicalOperator> right)
+    : LogicalOperator(LogicalOperatorType::LOGICAL_CROSS_PRODUCT) {
+	D_ASSERT(left);
+	D_ASSERT(right);
+	children.push_back(move(left));
+	children.push_back(move(right));
 }
 
 vector<ColumnBinding> LogicalCrossProduct::GetColumnBindings() {
@@ -15767,7 +18844,135 @@ void LogicalCrossProduct::ResolveTypes() {
 	types.insert(types.end(), children[1]->types.begin(), children[1]->types.end());
 }
 
+unique_ptr<LogicalOperator> LogicalCrossProduct::Create(unique_ptr<LogicalOperator> left,
+                                                        unique_ptr<LogicalOperator> right) {
+	if (left->type == LogicalOperatorType::LOGICAL_DUMMY_SCAN) {
+		return right;
+	}
+	if (right->type == LogicalOperatorType::LOGICAL_DUMMY_SCAN) {
+		return left;
+	}
+	return make_unique<LogicalCrossProduct>(move(left), move(right));
+}
+
+void LogicalCrossProduct::Serialize(FieldWriter &writer) const {
+}
+
+unique_ptr<LogicalOperator> LogicalCrossProduct::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	// TODO(stephwang): review if unique_ptr<LogicalOperator> plan is needed
+	auto result = unique_ptr<LogicalCrossProduct>(new LogicalCrossProduct());
+	return move(result);
+}
+
 } // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalCTERef::Serialize(FieldWriter &writer) const {
+	writer.WriteField(table_index);
+	writer.WriteField(cte_index);
+	writer.WriteRegularSerializableList(chunk_types);
+	writer.WriteList<string>(bound_columns);
+}
+
+unique_ptr<LogicalOperator> LogicalCTERef::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto cte_index = reader.ReadRequired<idx_t>();
+	auto chunk_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+	auto bound_columns = reader.ReadRequiredList<string>();
+	return make_unique<LogicalCTERef>(table_index, cte_index, chunk_types, bound_columns);
+}
+
+vector<idx_t> LogicalCTERef::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalDelete::Serialize(FieldWriter &writer) const {
+	table->Serialize(writer.GetSerializer());
+	writer.WriteField(table_index);
+	writer.WriteField(return_chunk);
+}
+
+unique_ptr<LogicalOperator> LogicalDelete::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto &context = state.gstate.context;
+	auto info = TableCatalogEntry::Deserialize(reader.GetSource(), context);
+
+	auto &catalog = Catalog::GetCatalog(context);
+
+	TableCatalogEntry *table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(context, info->schema, info->table);
+
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto result = make_unique<LogicalDelete>(table_catalog_entry, table_index);
+	result->return_chunk = reader.ReadRequired<bool>();
+	return move(result);
+}
+
+idx_t LogicalDelete::EstimateCardinality(ClientContext &context) {
+	return return_chunk ? LogicalOperator::EstimateCardinality(context) : 1;
+}
+
+vector<idx_t> LogicalDelete::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalDelimGet::Serialize(FieldWriter &writer) const {
+	writer.WriteField(table_index);
+	writer.WriteRegularSerializableList(chunk_types);
+}
+
+unique_ptr<LogicalOperator> LogicalDelimGet::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto chunk_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+	return make_unique<LogicalDelimGet>(table_index, chunk_types);
+}
+
+vector<idx_t> LogicalDelimGet::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+LogicalDelimJoin::LogicalDelimJoin(JoinType type)
+    : LogicalComparisonJoin(type, LogicalOperatorType::LOGICAL_DELIM_JOIN) {
+}
+
+void LogicalDelimJoin::Serialize(FieldWriter &writer) const {
+	LogicalComparisonJoin::Serialize(writer);
+	if (type == LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
+		D_ASSERT(duplicate_eliminated_columns.empty());
+		// if the delim join has no delim columns anymore it is turned into a regular comparison join
+		return;
+	}
+	writer.WriteSerializableList(duplicate_eliminated_columns);
+}
+
+unique_ptr<LogicalOperator> LogicalDelimJoin::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto result = make_unique<LogicalDelimJoin>(JoinType::INVALID);
+	LogicalComparisonJoin::Deserialize(*result, state, reader);
+	result->duplicate_eliminated_columns = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	return move(result);
+}
+
+} // namespace duckdb
+
 
 
 
@@ -15782,8 +18987,36 @@ string LogicalDistinct::ParamsToString() const {
 
 	return result;
 }
+void LogicalDistinct::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializableList(distinct_targets);
+}
+
+unique_ptr<LogicalOperator> LogicalDistinct::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto distinct_targets = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	return make_unique<LogicalDistinct>(move(distinct_targets));
+}
 
 } // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalDummyScan::Serialize(FieldWriter &writer) const {
+	writer.WriteField(table_index);
+}
+
+unique_ptr<LogicalOperator> LogicalDummyScan::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto table_index = reader.ReadRequired<idx_t>();
+	return make_unique<LogicalDummyScan>(table_index);
+}
+
+vector<idx_t> LogicalDummyScan::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
+} // namespace duckdb
+
 
 
 namespace duckdb {
@@ -15797,6 +19030,121 @@ LogicalEmptyResult::LogicalEmptyResult(unique_ptr<LogicalOperator> op)
 	this->return_types = op->types;
 }
 
+LogicalEmptyResult::LogicalEmptyResult() : LogicalOperator(LogicalOperatorType::LOGICAL_EMPTY_RESULT) {
+}
+
+void LogicalEmptyResult::Serialize(FieldWriter &writer) const {
+	writer.WriteRegularSerializableList(return_types);
+	writer.WriteList<ColumnBinding>(bindings);
+}
+
+unique_ptr<LogicalOperator> LogicalEmptyResult::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto return_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+	auto bindings = reader.ReadRequiredList<ColumnBinding>();
+	auto result = unique_ptr<LogicalEmptyResult>(new LogicalEmptyResult());
+	result->return_types = return_types;
+	result->bindings = bindings;
+	return move(result);
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+void LogicalExecute::Serialize(FieldWriter &writer) const {
+	throw NotImplementedException(LogicalOperatorToString(type));
+}
+
+unique_ptr<LogicalOperator> LogicalExecute::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	throw NotImplementedException(LogicalOperatorToString(state.type));
+}
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalExplain::Serialize(FieldWriter &writer) const {
+	writer.WriteField(explain_type);
+	writer.WriteString(physical_plan);
+	writer.WriteString(logical_plan_unopt);
+	writer.WriteString(logical_plan_opt);
+}
+
+unique_ptr<LogicalOperator> LogicalExplain::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto explain_type = reader.ReadRequired<ExplainType>();
+	// TODO(stephwang) review if unique_ptr<LogicalOperator> plan is needed
+	auto result = unique_ptr<LogicalExplain>(new LogicalExplain(explain_type));
+	result->physical_plan = reader.ReadRequired<string>();
+	result->logical_plan_unopt = reader.ReadRequired<string>();
+	result->logical_plan_opt = reader.ReadRequired<string>();
+	return move(result);
+}
+} // namespace duckdb
+
+
+namespace duckdb {
+
+void LogicalExport::Serialize(FieldWriter &writer) const {
+	throw NotImplementedException(LogicalOperatorToString(type));
+}
+
+unique_ptr<LogicalOperator> LogicalExport::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	throw NotImplementedException(LogicalOperatorToString(state.type));
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalExpressionGet::Serialize(FieldWriter &writer) const {
+	writer.WriteField(table_index);
+	writer.WriteRegularSerializableList(expr_types);
+
+	writer.WriteField<idx_t>(expressions.size());
+	for (auto &entry : expressions) {
+		writer.WriteSerializableList(entry);
+	}
+}
+
+unique_ptr<LogicalOperator> LogicalExpressionGet::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto expr_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+
+	auto expressions_size = reader.ReadRequired<idx_t>();
+	vector<vector<unique_ptr<Expression>>> expressions;
+	for (idx_t i = 0; i < expressions_size; i++) {
+		expressions.push_back(reader.ReadRequiredSerializableList<Expression>(state.gstate));
+	}
+
+	return make_unique<LogicalExpressionGet>(table_index, expr_types, move(expressions));
+}
+
+vector<idx_t> LogicalExpressionGet::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+unique_ptr<LogicalExtensionOperator> LogicalExtensionOperator::Deserialize(LogicalDeserializationState &state,
+                                                                           FieldReader &reader) {
+	auto &config = DBConfig::GetConfig(state.gstate.context);
+
+	auto extension_name = reader.ReadRequired<std::string>();
+	for (auto &extension : config.operator_extensions) {
+		if (extension->GetName() == extension_name) {
+			return extension->Deserialize(state, reader);
+		}
+	}
+
+	throw SerializationException("No serialization method exists for extension: " + extension_name);
+}
 } // namespace duckdb
 
 
@@ -15843,7 +19191,23 @@ bool LogicalFilter::SplitPredicates(vector<unique_ptr<Expression>> &expressions)
 	return found_conjunction;
 }
 
+void LogicalFilter::Serialize(FieldWriter &writer) const {
+	writer.WriteSerializableList<Expression>(expressions);
+	writer.WriteList<idx_t>(projection_map);
+}
+
+unique_ptr<LogicalOperator> LogicalFilter::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto expressions = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	auto projection_map = reader.ReadRequiredList<idx_t>();
+	auto result = make_unique<LogicalFilter>();
+	result->expressions = move(expressions);
+	result->projection_map = move(projection_map);
+	return move(result);
+}
+
 } // namespace duckdb
+
+
 
 
 
@@ -15889,8 +19253,14 @@ vector<ColumnBinding> LogicalGet::GetColumnBindings() {
 		return {ColumnBinding(table_index, 0)};
 	}
 	vector<ColumnBinding> result;
-	for (idx_t i = 0; i < column_ids.size(); i++) {
-		result.emplace_back(table_index, i);
+	if (projection_ids.empty()) {
+		for (idx_t col_idx = 0; col_idx < column_ids.size(); col_idx++) {
+			result.emplace_back(table_index, col_idx);
+		}
+	} else {
+		for (auto proj_id : projection_ids) {
+			result.emplace_back(table_index, proj_id);
+		}
 	}
 	return result;
 }
@@ -15899,11 +19269,23 @@ void LogicalGet::ResolveTypes() {
 	if (column_ids.empty()) {
 		column_ids.push_back(COLUMN_IDENTIFIER_ROW_ID);
 	}
-	for (auto &index : column_ids) {
-		if (index == COLUMN_IDENTIFIER_ROW_ID) {
-			types.emplace_back(LogicalType::ROW_TYPE);
-		} else {
-			types.push_back(returned_types[index]);
+
+	if (projection_ids.empty()) {
+		for (auto &index : column_ids) {
+			if (index == COLUMN_IDENTIFIER_ROW_ID) {
+				types.emplace_back(LogicalType::ROW_TYPE);
+			} else {
+				types.push_back(returned_types[index]);
+			}
+		}
+	} else {
+		for (auto &proj_index : projection_ids) {
+			auto &index = column_ids[proj_index];
+			if (index == COLUMN_IDENTIFIER_ROW_ID) {
+				types.emplace_back(LogicalType::ROW_TYPE);
+			} else {
+				types.push_back(returned_types[index]);
+			}
 		}
 	}
 }
@@ -15918,7 +19300,158 @@ idx_t LogicalGet::EstimateCardinality(ClientContext &context) {
 	return 1;
 }
 
+void LogicalGet::Serialize(FieldWriter &writer) const {
+	writer.WriteField(table_index);
+	writer.WriteRegularSerializableList(returned_types);
+	writer.WriteList<string>(names);
+	writer.WriteList<column_t>(column_ids);
+	writer.WriteList<column_t>(projection_ids);
+	writer.WriteSerializable(table_filters);
+
+	FunctionSerializer::SerializeBase<TableFunction>(writer, function, bind_data.get());
+	if (!function.serialize) {
+		D_ASSERT(!function.deserialize);
+		// no serialize method: serialize input values and named_parameters for rebinding purposes
+		writer.WriteRegularSerializableList(parameters);
+		writer.WriteField<idx_t>(named_parameters.size());
+		for (auto &pair : named_parameters) {
+			writer.WriteString(pair.first);
+			writer.WriteSerializable(pair.second);
+		}
+		writer.WriteRegularSerializableList(input_table_types);
+		writer.WriteList<string>(input_table_names);
+	}
+}
+
+unique_ptr<LogicalOperator> LogicalGet::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto returned_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+	auto returned_names = reader.ReadRequiredList<string>();
+	auto column_ids = reader.ReadRequiredList<column_t>();
+	auto projection_ids = reader.ReadRequiredList<column_t>();
+	auto table_filters = reader.ReadRequiredSerializable<TableFilterSet>();
+
+	unique_ptr<FunctionData> bind_data;
+	bool has_deserialize;
+	auto function = FunctionSerializer::DeserializeBaseInternal<TableFunction, TableFunctionCatalogEntry>(
+	    reader, state.gstate, CatalogType::TABLE_FUNCTION_ENTRY, bind_data, has_deserialize);
+
+	vector<Value> parameters;
+	named_parameter_map_t named_parameters;
+	vector<LogicalType> input_table_types;
+	vector<string> input_table_names;
+	if (!has_deserialize) {
+		D_ASSERT(!bind_data);
+		parameters = reader.ReadRequiredSerializableList<Value, Value>();
+
+		auto named_parameters_size = reader.ReadRequired<idx_t>();
+		for (idx_t i = 0; i < named_parameters_size; i++) {
+			auto first = reader.ReadRequired<string>();
+			auto second = reader.ReadRequiredSerializable<Value, Value>();
+			auto pair = make_pair(first, second);
+			named_parameters.insert(pair);
+		}
+
+		input_table_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+		input_table_names = reader.ReadRequiredList<string>();
+		TableFunctionBindInput input(parameters, named_parameters, input_table_types, input_table_names,
+		                             function.function_info.get());
+
+		vector<LogicalType> bind_return_types;
+		vector<string> bind_names;
+		bind_data = function.bind(state.gstate.context, input, bind_return_types, bind_names);
+		if (returned_types != bind_return_types) {
+			throw SerializationException(
+			    "Table function deserialization failure - bind returned different return types than were serialized");
+		}
+		// names can actually be different because of aliases - only the sizes cannot be different
+		if (returned_names.size() != bind_names.size()) {
+			throw SerializationException(
+			    "Table function deserialization failure - bind returned different returned names than were serialized");
+		}
+	}
+
+	auto result = make_unique<LogicalGet>(table_index, function, move(bind_data), returned_types, returned_names);
+	result->column_ids = move(column_ids);
+	result->projection_ids = move(projection_ids);
+	result->table_filters = move(*table_filters);
+	result->parameters = move(parameters);
+	result->named_parameters = move(named_parameters);
+	result->input_table_types = input_table_types;
+	result->input_table_names = input_table_names;
+	return move(result);
+}
+
+vector<idx_t> LogicalGet::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
 } // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+
+void LogicalInsert::Serialize(FieldWriter &writer) const {
+	writer.WriteField<idx_t>(insert_values.size());
+	for (auto &entry : insert_values) {
+		writer.WriteSerializableList(entry);
+	}
+
+	writer.WriteList<idx_t>(column_index_map);
+	writer.WriteRegularSerializableList(expected_types);
+	table->Serialize(writer.GetSerializer());
+	writer.WriteField(table_index);
+	writer.WriteField(return_chunk);
+	writer.WriteSerializableList(bound_defaults);
+}
+
+unique_ptr<LogicalOperator> LogicalInsert::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto &context = state.gstate.context;
+	auto insert_values_size = reader.ReadRequired<idx_t>();
+	vector<vector<unique_ptr<Expression>>> insert_values;
+	for (idx_t i = 0; i < insert_values_size; ++i) {
+		insert_values.push_back(reader.ReadRequiredSerializableList<Expression>(state.gstate));
+	}
+
+	auto column_index_map = reader.ReadRequiredList<idx_t, physical_index_vector_t<idx_t>>();
+	auto expected_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+	auto info = TableCatalogEntry::Deserialize(reader.GetSource(), context);
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto return_chunk = reader.ReadRequired<bool>();
+	auto bound_defaults = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+
+	auto &catalog = Catalog::GetCatalog(context);
+
+	TableCatalogEntry *table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(context, info->schema, info->table);
+
+	if (!table_catalog_entry) {
+		throw InternalException("Cant find catalog entry for table %s", info->table);
+	}
+
+	auto result = make_unique<LogicalInsert>(table_catalog_entry, table_index);
+	result->type = state.type;
+	result->table = table_catalog_entry;
+	result->return_chunk = return_chunk;
+	result->insert_values = move(insert_values);
+	result->column_index_map = column_index_map;
+	result->expected_types = expected_types;
+	result->bound_defaults = move(bound_defaults);
+	return move(result);
+}
+
+idx_t LogicalInsert::EstimateCardinality(ClientContext &context) {
+	return return_chunk ? LogicalOperator::EstimateCardinality(context) : 1;
+}
+
+vector<idx_t> LogicalInsert::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
+} // namespace duckdb
+
 
 
 
@@ -15979,7 +19512,24 @@ void LogicalJoin::GetExpressionBindings(Expression &expr, unordered_set<idx_t> &
 	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { GetExpressionBindings(child, bindings); });
 }
 
+void LogicalJoin::Serialize(FieldWriter &writer) const {
+	writer.WriteField<JoinType>(join_type);
+	writer.WriteField<idx_t>(mark_index);
+	writer.WriteList<idx_t>(left_projection_map);
+	writer.WriteList<idx_t>(right_projection_map);
+	//	writer.WriteSerializableList(join_stats);
+}
+
+void LogicalJoin::Deserialize(LogicalJoin &join, LogicalDeserializationState &state, FieldReader &reader) {
+	join.join_type = reader.ReadRequired<JoinType>();
+	join.mark_index = reader.ReadRequired<idx_t>();
+	join.left_projection_map = reader.ReadRequiredList<idx_t>();
+	join.right_projection_map = reader.ReadRequiredList<idx_t>();
+	//	join.join_stats = reader.ReadRequiredSerializableList<BaseStatistics>(reader.GetSource());
+}
+
 } // namespace duckdb
+
 
 
 namespace duckdb {
@@ -16006,7 +19556,107 @@ void LogicalLimit::ResolveTypes() {
 	types = children[0]->types;
 }
 
+void LogicalLimit::Serialize(FieldWriter &writer) const {
+	writer.WriteField(limit_val);
+	writer.WriteField(offset_val);
+	writer.WriteOptional(limit);
+	writer.WriteOptional(offset);
+}
+
+unique_ptr<LogicalOperator> LogicalLimit::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto limit_val = reader.ReadRequired<int64_t>();
+	auto offset_val = reader.ReadRequired<int64_t>();
+	auto limit = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	auto offset = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	return make_unique<LogicalLimit>(limit_val, offset_val, move(limit), move(offset));
+}
+
 } // namespace duckdb
+
+
+#include <cmath>
+
+namespace duckdb {
+
+void LogicalLimitPercent::Serialize(FieldWriter &writer) const {
+	writer.WriteField(limit_percent);
+	writer.WriteField(offset_val);
+	writer.WriteOptional(limit);
+	writer.WriteOptional(offset);
+}
+
+unique_ptr<LogicalOperator> LogicalLimitPercent::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto limit_percent = reader.ReadRequired<double>();
+	auto offset_val = reader.ReadRequired<int64_t>();
+	auto limit = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	auto offset = reader.ReadOptional<Expression>(nullptr, state.gstate);
+	return make_unique<LogicalLimitPercent>(limit_percent, offset_val, move(limit), move(offset));
+}
+
+idx_t LogicalLimitPercent::EstimateCardinality(ClientContext &context) {
+	auto child_cardinality = LogicalOperator::EstimateCardinality(context);
+	if ((limit_percent < 0 || limit_percent > 100) || std::isnan(limit_percent)) {
+		return child_cardinality;
+	}
+	return idx_t(child_cardinality * (limit_percent / 100.0));
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+void LogicalOrder::Serialize(FieldWriter &writer) const {
+	writer.WriteRegularSerializableList(orders);
+	writer.WriteList<idx_t>(projections);
+}
+
+unique_ptr<LogicalOperator> LogicalOrder::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto orders = reader.ReadRequiredSerializableList<BoundOrderByNode, BoundOrderByNode>(state.gstate);
+	auto projections = reader.ReadRequiredList<idx_t>();
+	auto result = make_unique<LogicalOrder>(move(orders));
+	result->projections = move(projections);
+	return move(result);
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+void LogicalPragma::Serialize(FieldWriter &writer) const {
+	throw NotImplementedException(LogicalOperatorToString(type));
+}
+
+unique_ptr<LogicalOperator> LogicalPragma::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	throw NotImplementedException(LogicalOperatorToString(state.type));
+}
+
+idx_t LogicalPragma::EstimateCardinality(ClientContext &context) {
+	return 1;
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+void LogicalPrepare::Serialize(FieldWriter &writer) const {
+	throw NotImplementedException(LogicalOperatorToString(type));
+}
+
+unique_ptr<LogicalOperator> LogicalPrepare::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	throw NotImplementedException(LogicalOperatorToString(state.type));
+}
+
+idx_t LogicalPrepare::EstimateCardinality(ClientContext &context) {
+	return 1;
+}
+
+} // namespace duckdb
+
 
 
 namespace duckdb {
@@ -16025,7 +19675,47 @@ void LogicalProjection::ResolveTypes() {
 	}
 }
 
+void LogicalProjection::Serialize(FieldWriter &writer) const {
+	writer.WriteField(table_index);
+	writer.WriteSerializableList<Expression>(expressions);
+}
+
+unique_ptr<LogicalOperator> LogicalProjection::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto expressions = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	return make_unique<LogicalProjection>(table_index, move(expressions));
+}
+
+vector<idx_t> LogicalProjection::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
 } // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalRecursiveCTE::Serialize(FieldWriter &writer) const {
+	writer.WriteField(table_index);
+	writer.WriteField(column_count);
+	writer.WriteField(union_all);
+}
+
+unique_ptr<LogicalOperator> LogicalRecursiveCTE::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto column_count = reader.ReadRequired<idx_t>();
+	auto union_all = reader.ReadRequired<bool>();
+	// TODO(stephwang): review if unique_ptr<LogicalOperator> plan is needed
+	return unique_ptr<LogicalRecursiveCTE>(new LogicalRecursiveCTE(table_index, column_count, union_all, state.type));
+}
+
+vector<idx_t> LogicalRecursiveCTE::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
+} // namespace duckdb
+
 
 
 namespace duckdb {
@@ -16042,7 +19732,12 @@ vector<ColumnBinding> LogicalSample::GetColumnBindings() {
 idx_t LogicalSample::EstimateCardinality(ClientContext &context) {
 	auto child_cardinality = children[0]->EstimateCardinality(context);
 	if (sample_options->is_percentage) {
-		return idx_t(child_cardinality * sample_options->sample_size.GetValue<double>());
+		double sample_cardinality =
+		    double(child_cardinality) * (sample_options->sample_size.GetValue<double>() / 100.0);
+		if (sample_cardinality > double(child_cardinality)) {
+			return child_cardinality;
+		}
+		return idx_t(sample_cardinality);
 	} else {
 		auto sample_size = sample_options->sample_size.GetValue<uint64_t>();
 		if (sample_size < child_cardinality) {
@@ -16056,7 +19751,128 @@ void LogicalSample::ResolveTypes() {
 	types = children[0]->types;
 }
 
+void LogicalSample::Serialize(FieldWriter &writer) const {
+	sample_options->Serialize(writer.GetSerializer());
+}
+
+unique_ptr<LogicalOperator> LogicalSample::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto sample_options = SampleOptions::Deserialize(reader.GetSource());
+	// TODO(stephwang): review how to pass child LogicalOperator
+	auto result = make_unique<LogicalSample>(move(sample_options), nullptr);
+	return move(result);
+}
 } // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalSet::Serialize(FieldWriter &writer) const {
+	writer.WriteString(name);
+	value.Serialize(writer.GetSerializer());
+	writer.WriteField(scope);
+}
+
+unique_ptr<LogicalOperator> LogicalSet::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto name = reader.ReadRequired<std::string>();
+	auto value = Value::Deserialize(reader.GetSource());
+	auto scope = reader.ReadRequired<SetScope>();
+	return make_unique<LogicalSet>(name, value, scope);
+}
+
+idx_t LogicalSet::EstimateCardinality(ClientContext &context) {
+	return 1;
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalSetOperation::Serialize(FieldWriter &writer) const {
+	writer.WriteField(table_index);
+	writer.WriteField(column_count);
+}
+
+unique_ptr<LogicalOperator> LogicalSetOperation::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto table_index = reader.ReadRequired<idx_t>();
+	auto column_count = reader.ReadRequired<idx_t>();
+	// TODO(stephwang): review if unique_ptr<LogicalOperator> plan is needed
+	return unique_ptr<LogicalSetOperation>(new LogicalSetOperation(table_index, column_count, state.type));
+}
+
+vector<idx_t> LogicalSetOperation::GetTableIndex() const {
+	return vector<idx_t> {table_index};
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalShow::Serialize(FieldWriter &writer) const {
+	writer.WriteRegularSerializableList(types_select);
+	writer.WriteList<string>(aliases);
+}
+
+unique_ptr<LogicalOperator> LogicalShow::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto types_select = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+	auto aliases = reader.ReadRequiredList<string>();
+
+	// TODO(stephwang): review if we need to pass unique_ptr<LogicalOperator> plan
+	auto result = unique_ptr<LogicalShow>(new LogicalShow());
+	result->types_select = types_select;
+	result->aliases = aliases;
+	return move(result);
+}
+} // namespace duckdb
+
+
+namespace duckdb {
+
+void LogicalSimple::Serialize(FieldWriter &writer) const {
+	throw NotImplementedException(LogicalOperatorToString(type));
+}
+
+unique_ptr<LogicalOperator> LogicalSimple::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	throw NotImplementedException(LogicalOperatorToString(state.type));
+}
+
+idx_t LogicalSimple::EstimateCardinality(ClientContext &context) {
+	return 1;
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+void LogicalTopN::Serialize(FieldWriter &writer) const {
+	writer.WriteRegularSerializableList(orders);
+	writer.WriteField(offset);
+	writer.WriteField(limit);
+}
+
+unique_ptr<LogicalOperator> LogicalTopN::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto orders = reader.ReadRequiredSerializableList<BoundOrderByNode, BoundOrderByNode>(state.gstate);
+	auto offset = reader.ReadRequired<idx_t>();
+	auto limit = reader.ReadRequired<idx_t>();
+	return make_unique<LogicalTopN>(move(orders), limit, offset);
+}
+
+idx_t LogicalTopN::EstimateCardinality(ClientContext &context) {
+	auto child_cardinality = LogicalOperator::EstimateCardinality(context);
+	if (limit >= 0 && child_cardinality < idx_t(limit)) {
+		return limit;
+	}
+	return child_cardinality;
+}
+
+} // namespace duckdb
+
 
 
 namespace duckdb {
@@ -16076,7 +19892,66 @@ void LogicalUnnest::ResolveTypes() {
 	}
 }
 
+void LogicalUnnest::Serialize(FieldWriter &writer) const {
+	writer.WriteField(unnest_index);
+	writer.WriteSerializableList<Expression>(expressions);
+}
+
+unique_ptr<LogicalOperator> LogicalUnnest::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto unnest_index = reader.ReadRequired<idx_t>();
+	auto expressions = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	auto result = make_unique<LogicalUnnest>(unnest_index);
+	result->expressions = move(expressions);
+	return move(result);
+}
+
+vector<idx_t> LogicalUnnest::GetTableIndex() const {
+	return vector<idx_t> {unnest_index};
+}
+
 } // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+
+void LogicalUpdate::Serialize(FieldWriter &writer) const {
+	table->Serialize(writer.GetSerializer());
+	writer.WriteField(table_index);
+	writer.WriteField(return_chunk);
+	writer.WriteIndexList<PhysicalIndex>(columns);
+	writer.WriteSerializableList(bound_defaults);
+	writer.WriteField(update_is_del_and_insert);
+}
+
+unique_ptr<LogicalOperator> LogicalUpdate::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto &context = state.gstate.context;
+	auto info = TableCatalogEntry::Deserialize(reader.GetSource(), context);
+	auto &catalog = Catalog::GetCatalog(context);
+
+	TableCatalogEntry *table_catalog_entry = catalog.GetEntry<TableCatalogEntry>(context, info->schema, info->table);
+
+	if (!table_catalog_entry) {
+		throw InternalException("Cant find catalog entry for table %s", info->table);
+	}
+
+	auto result = make_unique<LogicalUpdate>(table_catalog_entry);
+	result->table_index = reader.ReadRequired<idx_t>();
+	result->return_chunk = reader.ReadRequired<bool>();
+	result->columns = reader.ReadRequiredIndexList<PhysicalIndex>();
+	result->bound_defaults = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	result->update_is_del_and_insert = reader.ReadRequired<bool>();
+	return move(result);
+}
+
+idx_t LogicalUpdate::EstimateCardinality(ClientContext &context) {
+	return return_chunk ? LogicalOperator::EstimateCardinality(context) : 1;
+}
+
+} // namespace duckdb
+
 
 
 namespace duckdb {
@@ -16096,12 +19971,95 @@ void LogicalWindow::ResolveTypes() {
 	}
 }
 
+void LogicalWindow::Serialize(FieldWriter &writer) const {
+	writer.WriteField(window_index);
+	writer.WriteSerializableList<Expression>(expressions);
+}
+
+unique_ptr<LogicalOperator> LogicalWindow::Deserialize(LogicalDeserializationState &state, FieldReader &reader) {
+	auto window_index = reader.ReadRequired<idx_t>();
+	auto result = make_unique<LogicalWindow>(window_index);
+	result->expressions = reader.ReadRequiredSerializableList<Expression>(state.gstate);
+	return move(result);
+}
+
+vector<idx_t> LogicalWindow::GetTableIndex() const {
+	return vector<idx_t> {window_index};
+}
+
 } // namespace duckdb
 
 
 
 
 
+namespace duckdb {
+void BoundCreateTableInfo::Serialize(Serializer &serializer) const {
+	D_ASSERT(schema);
+	schema->Serialize(serializer);
+	serializer.WriteOptional(base);
+
+	// TODO[YLM]: Review if we want/need to serialize more of the fields.
+	//! The map of column names -> column index, used during binding
+	// case_insensitive_map_t<column_t> name_map;
+
+	//! Column dependency manager of the table
+	// ColumnDependencyManager column_dependency_manager;
+
+	serializer.WriteList(constraints);
+	serializer.WriteList(bound_constraints);
+	serializer.WriteList(bound_defaults);
+
+	//! Dependents of the table (in e.g. default values)
+	// unordered_set<CatalogEntry *> dependencies;
+
+	//! The existing table data on disk (if any)
+	// unique_ptr<PersistentTableData> data;
+
+	//! CREATE TABLE from QUERY
+	serializer.WriteOptional(query);
+
+	//! Indexes created by this table <Block_ID, Offset>
+	// vector<BlockPointer> indexes;
+}
+
+unique_ptr<BoundCreateTableInfo> BoundCreateTableInfo::Deserialize(Deserializer &source,
+                                                                   PlanDeserializationState &state) {
+	auto create_info = SchemaCatalogEntry::Deserialize(source);
+	auto schema_name = create_info->schema;
+	auto result = make_unique<BoundCreateTableInfo>(move(create_info));
+	auto &context = state.context;
+	result->schema = Catalog::GetCatalog(context).GetSchema(context, schema_name);
+	result->base = source.ReadOptional<CreateInfo>();
+
+	source.ReadList<Constraint>(result->constraints);
+	source.ReadList<BoundConstraint>(result->bound_constraints);
+	source.ReadList<Expression>(result->bound_defaults, state);
+
+	result->query = source.ReadOptional<LogicalOperator>(state);
+	return result;
+}
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+PlanDeserializationState::PlanDeserializationState(ClientContext &context) : context(context) {
+}
+PlanDeserializationState::~PlanDeserializationState() {
+}
+
+LogicalDeserializationState::LogicalDeserializationState(PlanDeserializationState &gstate, LogicalOperatorType type,
+                                                         vector<unique_ptr<LogicalOperator>> &children)
+    : gstate(gstate), type(type), children(children) {
+}
+
+ExpressionDeserializationState::ExpressionDeserializationState(PlanDeserializationState &gstate, ExpressionType type)
+    : gstate(gstate), type(type) {
+}
+
+} // namespace duckdb
 
 
 
@@ -16120,47 +20078,79 @@ namespace duckdb {
 Planner::Planner(ClientContext &context) : binder(Binder::CreateBinder(context)), context(context) {
 }
 
+static void CheckTreeDepth(const LogicalOperator &op, idx_t max_depth, idx_t depth = 0) {
+	if (depth >= max_depth) {
+		throw ParserException("Maximum tree depth of %lld exceeded in logical planner", max_depth);
+	}
+	for (auto &child : op.children) {
+		CheckTreeDepth(*child, max_depth, depth + 1);
+	}
+}
+
 void Planner::CreatePlan(SQLStatement &statement) {
 	auto &profiler = QueryProfiler::Get(context);
 	auto parameter_count = statement.n_param;
 
-	vector<BoundParameterExpression *> bound_parameters;
+	BoundParameterMap bound_parameters(parameter_data);
 
 	// first bind the tables and columns to the catalog
-	profiler.StartPhase("binder");
-	binder->parameters = &bound_parameters;
-	binder->parameter_types = &parameter_types;
-	auto bound_statement = binder->Bind(statement);
-	profiler.EndPhase();
+	bool parameters_resolved = true;
+	try {
+		profiler.StartPhase("binder");
+		binder->parameters = &bound_parameters;
+		auto bound_statement = binder->Bind(statement);
+		profiler.EndPhase();
 
+		this->names = bound_statement.names;
+		this->types = bound_statement.types;
+		this->plan = move(bound_statement.plan);
+
+		auto max_tree_depth = ClientConfig::GetConfig(context).max_expression_depth;
+		CheckTreeDepth(*plan, max_tree_depth);
+	} catch (const ParameterNotResolvedException &ex) {
+		// parameter types could not be resolved
+		this->names = {"unknown"};
+		this->types = {LogicalTypeId::UNKNOWN};
+		this->plan = nullptr;
+		parameters_resolved = false;
+	} catch (const Exception &ex) {
+		auto &config = DBConfig::GetConfig(context);
+
+		this->plan = nullptr;
+		for (auto &extension_op : config.operator_extensions) {
+			auto bound_statement =
+			    extension_op->Bind(context, *this->binder, extension_op->operator_info.get(), statement);
+			if (bound_statement.plan != nullptr) {
+				this->names = bound_statement.names;
+				this->types = bound_statement.types;
+				this->plan = move(bound_statement.plan);
+				break;
+			}
+		}
+
+		if (!this->plan) {
+			throw;
+		}
+	} catch (std::exception &ex) {
+		throw;
+	}
 	this->properties = binder->properties;
 	this->properties.parameter_count = parameter_count;
-	this->names = bound_statement.names;
-	this->types = bound_statement.types;
-	this->plan = move(bound_statement.plan);
-	properties.bound_all_parameters = true;
+	properties.bound_all_parameters = parameters_resolved;
+
+	Planner::VerifyPlan(context, plan, &bound_parameters.parameters);
 
 	// set up a map of parameter number -> value entries
-	for (auto &expr : bound_parameters) {
+	for (auto &kv : bound_parameters.parameters) {
+		auto parameter_index = kv.first;
+		auto &parameter_data = kv.second;
 		// check if the type of the parameter could be resolved
-		if (expr->return_type.id() == LogicalTypeId::INVALID || expr->return_type.id() == LogicalTypeId::UNKNOWN) {
+		if (!parameter_data->return_type.IsValid()) {
 			properties.bound_all_parameters = false;
 			continue;
 		}
-		auto value = make_unique<Value>(expr->return_type);
-		expr->value = value.get();
-		// check if the parameter number has been used before
-		auto entry = value_map.find(expr->parameter_nr);
-		if (entry == value_map.end()) {
-			// not used before, create vector
-			value_map[expr->parameter_nr] = vector<unique_ptr<Value>>();
-		} else if (entry->second.back()->type() != value->type()) {
-			// used before, but types are inconsistent
-			throw BinderException(
-			    "Inconsistent types found for parameter with index %llu, current type %s, new type %s",
-			    expr->parameter_nr, entry->second.back()->type().ToString(), value->type().ToString());
-		}
-		value_map[expr->parameter_nr].push_back(move(value));
+		parameter_data->value = Value(parameter_data->return_type);
+		value_map[parameter_index] = parameter_data;
 	}
 }
 
@@ -16177,91 +20167,6 @@ shared_ptr<PreparedStatementData> Planner::PrepareSQLStatement(unique_ptr<SQLSta
 	prepared_data->properties = properties;
 	prepared_data->catalog_version = Transaction::GetTransaction(context).catalog_version;
 	return prepared_data;
-}
-
-void Planner::PlanExecute(unique_ptr<SQLStatement> statement) {
-	auto &stmt = (ExecuteStatement &)*statement;
-	auto parameter_count = stmt.n_param;
-
-	// bind the prepared statement
-	auto &client_data = ClientData::Get(context);
-
-	auto entry = client_data.prepared_statements.find(stmt.name);
-	if (entry == client_data.prepared_statements.end()) {
-		throw BinderException("Prepared statement \"%s\" does not exist", stmt.name);
-	}
-
-	// check if we need to rebind the prepared statement
-	// this happens if the catalog changes, since in this case e.g. tables we relied on may have been deleted
-	auto prepared = entry->second;
-	auto &catalog = Catalog::GetCatalog(context);
-	bool rebound = false;
-
-	// bind any supplied parameters
-	vector<Value> bind_values;
-	for (idx_t i = 0; i < stmt.values.size(); i++) {
-		ConstantBinder cbinder(*binder, context, "EXECUTE statement");
-		auto bound_expr = cbinder.Bind(stmt.values[i]);
-
-		Value value = ExpressionExecutor::EvaluateScalar(*bound_expr);
-		bind_values.push_back(move(value));
-	}
-	bool all_bound = prepared->properties.bound_all_parameters;
-	if (catalog.GetCatalogVersion() != entry->second->catalog_version || !all_bound) {
-		// catalog was modified or statement does not have clear types: rebind the statement before running the execute
-		for (auto &value : bind_values) {
-			parameter_types.push_back(value.type());
-		}
-		prepared = PrepareSQLStatement(entry->second->unbound_statement->Copy());
-		if (all_bound && prepared->types != entry->second->types) {
-			throw BinderException("Rebinding statement \"%s\" after catalog change resulted in change of types",
-			                      stmt.name);
-		}
-		D_ASSERT(prepared->properties.bound_all_parameters);
-		rebound = true;
-	}
-	// copy the properties of the prepared statement into the planner
-	this->properties = prepared->properties;
-	this->properties.parameter_count = parameter_count;
-	this->names = prepared->names;
-	this->types = prepared->types;
-
-	// add casts to the prepared statement parameters as required
-	for (idx_t i = 0; i < bind_values.size(); i++) {
-		if (prepared->value_map.count(i + 1) == 0) {
-			continue;
-		}
-		bind_values[i] = bind_values[i].CastAs(prepared->GetType(i + 1));
-	}
-
-	prepared->Bind(move(bind_values));
-	if (rebound) {
-		auto execute_plan = make_unique<LogicalExecute>(move(prepared));
-		execute_plan->children.push_back(move(plan));
-		this->plan = move(execute_plan);
-		return;
-	}
-
-	this->plan = make_unique<LogicalExecute>(move(prepared));
-}
-
-void Planner::PlanPrepare(unique_ptr<SQLStatement> statement) {
-	auto &stmt = (PrepareStatement &)*statement;
-	auto prepared_data = PrepareSQLStatement(move(stmt.statement));
-
-	auto prepare = make_unique<LogicalPrepare>(stmt.name, move(prepared_data), move(plan));
-	// we can prepare in read-only mode: prepared statements are not written to the catalog
-	properties.read_only = true;
-	// we can always prepare, even if the transaction has been invalidated
-	// this is required because most clients ALWAYS invoke prepared statements
-	properties.requires_valid_transaction = false;
-	properties.allow_stream_result = false;
-	properties.bound_all_parameters = true;
-	properties.parameter_count = 0;
-	properties.return_type = StatementReturnType::NOTHING;
-	this->names = {"Success"};
-	this->types = {LogicalType::BOOLEAN};
-	this->plan = move(prepare);
 }
 
 void Planner::CreatePlan(unique_ptr<SQLStatement> statement) {
@@ -16286,20 +20191,80 @@ void Planner::CreatePlan(unique_ptr<SQLStatement> statement) {
 	case StatementType::SET_STATEMENT:
 	case StatementType::LOAD_STATEMENT:
 	case StatementType::EXTENSION_STATEMENT:
-		CreatePlan(*statement);
-		break;
-	case StatementType::EXECUTE_STATEMENT:
-		PlanExecute(move(statement));
-		break;
 	case StatementType::PREPARE_STATEMENT:
-		PlanPrepare(move(statement));
+	case StatementType::EXECUTE_STATEMENT:
+	case StatementType::LOGICAL_PLAN_STATEMENT:
+		CreatePlan(*statement);
 		break;
 	default:
 		throw NotImplementedException("Cannot plan statement of type %s!", StatementTypeToString(statement->type));
 	}
 }
 
+static bool OperatorSupportsSerialization(LogicalOperator &op) {
+	switch (op.type) {
+	case LogicalOperatorType::LOGICAL_INSERT:
+	case LogicalOperatorType::LOGICAL_UPDATE:
+	case LogicalOperatorType::LOGICAL_DELETE:
+	case LogicalOperatorType::LOGICAL_PREPARE:
+	case LogicalOperatorType::LOGICAL_EXECUTE:
+	case LogicalOperatorType::LOGICAL_ALTER:
+	case LogicalOperatorType::LOGICAL_CREATE_TABLE:
+	case LogicalOperatorType::LOGICAL_CREATE_INDEX:
+	case LogicalOperatorType::LOGICAL_CREATE_SEQUENCE:
+	case LogicalOperatorType::LOGICAL_CREATE_VIEW:
+	case LogicalOperatorType::LOGICAL_CREATE_SCHEMA:
+	case LogicalOperatorType::LOGICAL_CREATE_MACRO:
+	case LogicalOperatorType::LOGICAL_DROP:
+	case LogicalOperatorType::LOGICAL_PRAGMA:
+	case LogicalOperatorType::LOGICAL_TRANSACTION:
+	case LogicalOperatorType::LOGICAL_CREATE_TYPE:
+	case LogicalOperatorType::LOGICAL_EXPLAIN:
+	case LogicalOperatorType::LOGICAL_COPY_TO_FILE:
+	case LogicalOperatorType::LOGICAL_LOAD:
+	case LogicalOperatorType::LOGICAL_VACUUM:
+		// unsupported (for now)
+		return false;
+	default:
+		break;
+	}
+	for (auto &child : op.children) {
+		if (!OperatorSupportsSerialization(*child)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void Planner::VerifyPlan(ClientContext &context, unique_ptr<LogicalOperator> &op, bound_parameter_map_t *map) {
+	if (!op || !ClientConfig::GetConfig(context).verify_serializer) {
+		return;
+	}
+	//! SELECT only for now
+	if (!OperatorSupportsSerialization(*op)) {
+		return;
+	}
+
+	BufferedSerializer serializer;
+	try {
+		op->Serialize(serializer);
+	} catch (NotImplementedException &ex) {
+		// ignore for now (FIXME)
+		return;
+	}
+	auto data = serializer.GetData();
+	auto deserializer = BufferedDeserializer(data.data.get(), data.size);
+
+	PlanDeserializationState state(context);
+	auto new_plan = LogicalOperator::Deserialize(deserializer, state);
+	if (map) {
+		*map = move(state.parameter_data);
+	}
+	op = move(new_plan);
+}
+
 } // namespace duckdb
+
 
 
 
@@ -16326,14 +20291,13 @@ void PragmaHandler::HandlePragmaStatementsInternal(vector<unique_ptr<SQLStatemen
 		if (statements[i]->type == StatementType::PRAGMA_STATEMENT) {
 			// PRAGMA statement: check if we need to replace it by a new set of statements
 			PragmaHandler handler(context);
-			auto new_query = handler.HandlePragma(statements[i].get()); //*((PragmaStatement &)*statements[i]).info
+			auto new_query = handler.HandlePragma(statements[i].get());
 			if (!new_query.empty()) {
 				// this PRAGMA statement gets replaced by a new query string
 				// push the new query string through the parser again and add it to the transformer
 				Parser parser(context.GetParserOptions());
 				parser.ParseQuery(new_query);
 				// insert the new statements and remove the old statement
-				// FIXME: off by one here maybe?
 				for (idx_t j = 0; j < parser.statements.size(); j++) {
 					new_statements.push_back(move(parser.statements[j]));
 				}
@@ -16366,11 +20330,13 @@ string PragmaHandler::HandlePragma(SQLStatement *statement) { // PragmaInfo &inf
 	auto entry =
 	    Catalog::GetCatalog(context).GetEntry<PragmaFunctionCatalogEntry>(context, DEFAULT_SCHEMA, info.name, false);
 	string error;
-	idx_t bound_idx = Function::BindFunction(entry->name, entry->functions, info, error);
+
+	FunctionBinder function_binder(context);
+	idx_t bound_idx = function_binder.BindFunction(entry->name, entry->functions, info, error);
 	if (bound_idx == DConstants::INVALID_INDEX) {
 		throw BinderException(error);
 	}
-	auto &bound_function = entry->functions[bound_idx];
+	auto bound_function = entry->functions.GetFunctionByOffset(bound_idx);
 	if (bound_function.query) {
 		QueryErrorContext error_context(statement, statement->stmt_location);
 		Binder::BindNamedParameters(bound_function.named_parameters, info.named_parameters, error_context,
@@ -16461,14 +20427,14 @@ unique_ptr<LogicalOperator> FlattenDependentJoins::PushDownDependentJoinInternal
 	if (!entry->second) {
 		// we reached a node without correlated expressions
 		// we can eliminate the dependent join now and create a simple cross product
-		auto cross_product = make_unique<LogicalCrossProduct>();
 		// now create the duplicate eliminated scan for this node
+		auto left_columns = plan->GetColumnBindings().size();
 		auto delim_index = binder.GenerateTableIndex();
 		this->base_binding = ColumnBinding(delim_index, 0);
+		this->delim_offset = 0;
+		this->data_offset = left_columns;
 		auto delim_scan = make_unique<LogicalDelimGet>(delim_index, delim_types);
-		cross_product->children.push_back(move(delim_scan));
-		cross_product->children.push_back(move(plan));
-		return move(cross_product);
+		return LogicalCrossProduct::Create(move(plan), move(delim_scan));
 	}
 	switch (plan->type) {
 	case LogicalOperatorType::LOGICAL_UNNEST:
@@ -16549,7 +20515,7 @@ unique_ptr<LogicalOperator> FlattenDependentJoins::PushDownDependentJoinInternal
 				vector<unique_ptr<Expression>> aggr_children;
 				aggr_children.push_back(move(colref));
 				auto first_fun = make_unique<BoundAggregateExpression>(move(first_aggregate), move(aggr_children),
-				                                                       nullptr, nullptr, false);
+				                                                       nullptr, nullptr, AggregateType::NON_DISTINCT);
 				aggr.expressions.push_back(move(first_fun));
 			}
 		} else {
@@ -16737,22 +20703,78 @@ unique_ptr<LogicalOperator> FlattenDependentJoins::PushDownDependentJoinInternal
 	}
 	case LogicalOperatorType::LOGICAL_LIMIT: {
 		auto &limit = (LogicalLimit &)*plan;
-		if (limit.offset_val > 0) {
-			throw ParserException("OFFSET not supported in correlated subquery");
+		if (limit.limit || limit.offset) {
+			throw ParserException("Non-constant limit or offset not supported in correlated subquery");
 		}
-		if (limit.limit) {
-			throw ParserException("Non-constant limit not supported in correlated subquery");
-		}
-		plan->children[0] = PushDownDependentJoinInternal(move(plan->children[0]), parent_propagate_null_values);
-		if (limit.limit_val == 0) {
-			// limit = 0 means we return zero columns here
-			return plan;
+		auto rownum_alias = "limit_rownum";
+		unique_ptr<LogicalOperator> child;
+		unique_ptr<LogicalOrder> order_by;
+
+		// check if the direct child of this LIMIT node is an ORDER BY node, if so, keep it separate
+		// this is done for an optimization to avoid having to compute the total order
+		if (plan->children[0]->type == LogicalOperatorType::LOGICAL_ORDER_BY) {
+			order_by = unique_ptr_cast<LogicalOperator, LogicalOrder>(move(plan->children[0]));
+			child = PushDownDependentJoinInternal(move(order_by->children[0]), parent_propagate_null_values);
 		} else {
-			// limit > 0 does nothing
-			return move(plan->children[0]);
+			child = PushDownDependentJoinInternal(move(plan->children[0]), parent_propagate_null_values);
 		}
+		auto child_column_count = child->GetColumnBindings().size();
+		// we push a row_number() OVER (PARTITION BY [correlated columns])
+		auto window_index = binder.GenerateTableIndex();
+		auto window = make_unique<LogicalWindow>(window_index);
+		auto row_number = make_unique<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT,
+		                                                     nullptr, nullptr);
+		auto partition_count = perform_delim ? correlated_columns.size() : 1;
+		for (idx_t i = 0; i < partition_count; i++) {
+			auto &col = correlated_columns[i];
+			auto colref = make_unique<BoundColumnRefExpression>(
+			    col.name, col.type, ColumnBinding(base_binding.table_index, base_binding.column_index + i));
+			row_number->partitions.push_back(move(colref));
+		}
+		if (order_by) {
+			// optimization: if there is an ORDER BY node followed by a LIMIT
+			// rather than computing the entire order, we push the ORDER BY expressions into the row_num computation
+			// this way, the order only needs to be computed per partition
+			row_number->orders = move(order_by->orders);
+		}
+		row_number->start = WindowBoundary::UNBOUNDED_PRECEDING;
+		row_number->end = WindowBoundary::CURRENT_ROW_ROWS;
+		window->expressions.push_back(move(row_number));
+		window->children.push_back(move(child));
+
+		// add a filter based on the row_number
+		// the filter we add is "row_number > offset AND row_number <= offset + limit"
+		auto filter = make_unique<LogicalFilter>();
+		unique_ptr<Expression> condition;
+		auto row_num_ref =
+		    make_unique<BoundColumnRefExpression>(rownum_alias, LogicalType::BIGINT, ColumnBinding(window_index, 0));
+
+		int64_t upper_bound_limit = NumericLimits<int64_t>::Maximum();
+		TryAddOperator::Operation(limit.offset_val, limit.limit_val, upper_bound_limit);
+		auto upper_bound = make_unique<BoundConstantExpression>(Value::BIGINT(upper_bound_limit));
+		condition = make_unique<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+		                                                   row_num_ref->Copy(), move(upper_bound));
+		// we only need to add "row_number >= offset + 1" if offset is bigger than 0
+		if (limit.offset_val > 0) {
+			auto lower_bound = make_unique<BoundConstantExpression>(Value::BIGINT(limit.offset_val));
+			auto lower_comp = make_unique<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHAN,
+			                                                         row_num_ref->Copy(), move(lower_bound));
+			auto conj = make_unique<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, move(lower_comp),
+			                                                    move(condition));
+			condition = move(conj);
+		}
+		filter->expressions.push_back(move(condition));
+		filter->children.push_back(move(window));
+		// we prune away the row_number after the filter clause using the projection map
+		for (idx_t i = 0; i < child_column_count; i++) {
+			filter->projection_map.push_back(i);
+		}
+		return move(filter);
 	}
 	case LogicalOperatorType::LOGICAL_LIMIT_PERCENT: {
+		// NOTE: limit percent could be supported in a manner similar to the LIMIT above
+		// but instead of filtering by an exact number of rows, the limit should be expressed as
+		// COUNT computed over the partition multiplied by the percentage
 		throw ParserException("Limit percent operator not supported in correlated subquery");
 	}
 	case LogicalOperatorType::LOGICAL_WINDOW: {
@@ -16776,17 +20798,36 @@ unique_ptr<LogicalOperator> FlattenDependentJoins::PushDownDependentJoinInternal
 	case LogicalOperatorType::LOGICAL_UNION: {
 		auto &setop = (LogicalSetOperation &)*plan;
 		// set operator, push into both children
+#ifdef DEBUG
+		plan->children[0]->ResolveOperatorTypes();
+		plan->children[1]->ResolveOperatorTypes();
+		D_ASSERT(plan->children[0]->types == plan->children[1]->types);
+#endif
 		plan->children[0] = PushDownDependentJoin(move(plan->children[0]));
 		plan->children[1] = PushDownDependentJoin(move(plan->children[1]));
+#ifdef DEBUG
+		D_ASSERT(plan->children[0]->GetColumnBindings().size() == plan->children[1]->GetColumnBindings().size());
+		plan->children[0]->ResolveOperatorTypes();
+		plan->children[1]->ResolveOperatorTypes();
+		D_ASSERT(plan->children[0]->types == plan->children[1]->types);
+#endif
 		// we have to refer to the setop index now
 		base_binding.table_index = setop.table_index;
 		base_binding.column_index = setop.column_count;
 		setop.column_count += correlated_columns.size();
 		return plan;
 	}
-	case LogicalOperatorType::LOGICAL_DISTINCT:
-		plan->children[0] = PushDownDependentJoin(move(plan->children[0]));
+	case LogicalOperatorType::LOGICAL_DISTINCT: {
+		auto &distinct = (LogicalDistinct &)*plan;
+		// push down into child
+		distinct.children[0] = PushDownDependentJoin(move(distinct.children[0]));
+		// add all correlated columns to the distinct targets
+		for (idx_t i = 0; i < correlated_columns.size(); i++) {
+			distinct.distinct_targets.push_back(make_unique<BoundColumnRefExpression>(
+			    correlated_columns[i].type, ColumnBinding(base_binding.table_index, base_binding.column_index + i)));
+		}
 		return plan;
+	}
 	case LogicalOperatorType::LOGICAL_EXPRESSION_GET: {
 		// expression get
 		// first we flatten the dependent join in the child
@@ -16811,172 +20852,14 @@ unique_ptr<LogicalOperator> FlattenDependentJoins::PushDownDependentJoinInternal
 		return plan;
 	}
 	case LogicalOperatorType::LOGICAL_ORDER_BY:
-		throw ParserException("ORDER BY not supported in correlated subquery");
+		plan->children[0] = PushDownDependentJoin(move(plan->children[0]));
+		return plan;
+	case LogicalOperatorType::LOGICAL_RECURSIVE_CTE: {
+		throw ParserException("Recursive CTEs not supported in correlated subquery");
+	}
 	default:
 		throw InternalException("Logical operator type \"%s\" for dependent join", LogicalOperatorToString(plan->type));
 	}
-}
-
-} // namespace duckdb
-
-
-
-
-
-#include <algorithm>
-
-namespace duckdb {
-
-HasCorrelatedExpressions::HasCorrelatedExpressions(const vector<CorrelatedColumnInfo> &correlated)
-    : has_correlated_expressions(false), correlated_columns(correlated) {
-}
-
-void HasCorrelatedExpressions::VisitOperator(LogicalOperator &op) {
-	//! The HasCorrelatedExpressions does not recursively visit logical operators, it only visits the current one
-	VisitOperatorExpressions(op);
-}
-
-unique_ptr<Expression> HasCorrelatedExpressions::VisitReplace(BoundColumnRefExpression &expr,
-                                                              unique_ptr<Expression> *expr_ptr) {
-	if (expr.depth == 0) {
-		return nullptr;
-	}
-	// correlated column reference
-	D_ASSERT(expr.depth == 1);
-	has_correlated_expressions = true;
-	return nullptr;
-}
-
-unique_ptr<Expression> HasCorrelatedExpressions::VisitReplace(BoundSubqueryExpression &expr,
-                                                              unique_ptr<Expression> *expr_ptr) {
-	if (!expr.IsCorrelated()) {
-		return nullptr;
-	}
-	// check if the subquery contains any of the correlated expressions that we are concerned about in this node
-	for (idx_t i = 0; i < correlated_columns.size(); i++) {
-		if (std::find(expr.binder->correlated_columns.begin(), expr.binder->correlated_columns.end(),
-		              correlated_columns[i]) != expr.binder->correlated_columns.end()) {
-			has_correlated_expressions = true;
-			break;
-		}
-	}
-	return nullptr;
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-namespace duckdb {
-
-RewriteCorrelatedExpressions::RewriteCorrelatedExpressions(ColumnBinding base_binding,
-                                                           column_binding_map_t<idx_t> &correlated_map)
-    : base_binding(base_binding), correlated_map(correlated_map) {
-}
-
-void RewriteCorrelatedExpressions::VisitOperator(LogicalOperator &op) {
-	VisitOperatorExpressions(op);
-}
-
-unique_ptr<Expression> RewriteCorrelatedExpressions::VisitReplace(BoundColumnRefExpression &expr,
-                                                                  unique_ptr<Expression> *expr_ptr) {
-	if (expr.depth == 0) {
-		return nullptr;
-	}
-	// correlated column reference
-	// replace with the entry referring to the duplicate eliminated scan
-	// if this assertion occurs it generally means the correlated expressions were not propagated correctly
-	// through different binders
-	D_ASSERT(expr.depth == 1);
-	auto entry = correlated_map.find(expr.binding);
-	D_ASSERT(entry != correlated_map.end());
-
-	expr.binding = ColumnBinding(base_binding.table_index, base_binding.column_index + entry->second);
-	expr.depth = 0;
-	return nullptr;
-}
-
-unique_ptr<Expression> RewriteCorrelatedExpressions::VisitReplace(BoundSubqueryExpression &expr,
-                                                                  unique_ptr<Expression> *expr_ptr) {
-	if (!expr.IsCorrelated()) {
-		return nullptr;
-	}
-	// subquery detected within this subquery
-	// recursively rewrite it using the RewriteCorrelatedRecursive class
-	RewriteCorrelatedRecursive rewrite(expr, base_binding, correlated_map);
-	rewrite.RewriteCorrelatedSubquery(expr);
-	return nullptr;
-}
-
-RewriteCorrelatedExpressions::RewriteCorrelatedRecursive::RewriteCorrelatedRecursive(
-    BoundSubqueryExpression &parent, ColumnBinding base_binding, column_binding_map_t<idx_t> &correlated_map)
-    : parent(parent), base_binding(base_binding), correlated_map(correlated_map) {
-}
-
-void RewriteCorrelatedExpressions::RewriteCorrelatedRecursive::RewriteCorrelatedSubquery(
-    BoundSubqueryExpression &expr) {
-	// rewrite the binding in the correlated list of the subquery)
-	for (auto &corr : expr.binder->correlated_columns) {
-		auto entry = correlated_map.find(corr.binding);
-		if (entry != correlated_map.end()) {
-			corr.binding = ColumnBinding(base_binding.table_index, base_binding.column_index + entry->second);
-		}
-	}
-	// now rewrite any correlated BoundColumnRef expressions inside the subquery
-	ExpressionIterator::EnumerateQueryNodeChildren(*expr.subquery,
-	                                               [&](Expression &child) { RewriteCorrelatedExpressions(child); });
-}
-
-void RewriteCorrelatedExpressions::RewriteCorrelatedRecursive::RewriteCorrelatedExpressions(Expression &child) {
-	if (child.type == ExpressionType::BOUND_COLUMN_REF) {
-		// bound column reference
-		auto &bound_colref = (BoundColumnRefExpression &)child;
-		if (bound_colref.depth == 0) {
-			// not a correlated column, ignore
-			return;
-		}
-		// correlated column
-		// check the correlated map
-		auto entry = correlated_map.find(bound_colref.binding);
-		if (entry != correlated_map.end()) {
-			// we found the column in the correlated map!
-			// update the binding and reduce the depth by 1
-			bound_colref.binding = ColumnBinding(base_binding.table_index, base_binding.column_index + entry->second);
-			bound_colref.depth--;
-		}
-	} else if (child.type == ExpressionType::SUBQUERY) {
-		// we encountered another subquery: rewrite recursively
-		D_ASSERT(child.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY);
-		auto &bound_subquery = (BoundSubqueryExpression &)child;
-		RewriteCorrelatedRecursive rewrite(bound_subquery, base_binding, correlated_map);
-		rewrite.RewriteCorrelatedSubquery(bound_subquery);
-	}
-}
-
-RewriteCountAggregates::RewriteCountAggregates(column_binding_map_t<idx_t> &replacement_map)
-    : replacement_map(replacement_map) {
-}
-
-unique_ptr<Expression> RewriteCountAggregates::VisitReplace(BoundColumnRefExpression &expr,
-                                                            unique_ptr<Expression> *expr_ptr) {
-	auto entry = replacement_map.find(expr.binding);
-	if (entry != replacement_map.end()) {
-		// reference to a COUNT(*) aggregate
-		// replace this with CASE WHEN COUNT(*) IS NULL THEN 0 ELSE COUNT(*) END
-		auto is_null = make_unique<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
-		is_null->children.push_back(expr.Copy());
-		auto check = move(is_null);
-		auto result_if_true = make_unique<BoundConstantExpression>(Value::Numeric(expr.return_type, 0));
-		auto result_if_false = move(*expr_ptr);
-		return make_unique<BoundCaseExpression>(move(check), move(result_if_true), move(result_if_false));
-	}
-	return nullptr;
 }
 
 } // namespace duckdb

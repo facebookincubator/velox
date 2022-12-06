@@ -8,7 +8,7 @@
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #1
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
 // Formatting library for C++
@@ -21,7 +21,7 @@
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #1
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
 // Formatting library for C++ - implementation

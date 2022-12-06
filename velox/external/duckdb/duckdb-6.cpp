@@ -9,6 +9,1635 @@
 
 
 
+namespace duckdb {
+
+bool ClientContextFileOpener::TryGetCurrentSetting(const string &key, Value &result) {
+	return context.TryGetCurrentSetting(key, result);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+ClientData::ClientData(ClientContext &context) : catalog_search_path(make_unique<CatalogSearchPath>(context)) {
+	profiler = make_shared<QueryProfiler>(context);
+	query_profiler_history = make_unique<QueryProfilerHistory>();
+	temporary_objects = make_shared<SchemaCatalogEntry>(&Catalog::GetCatalog(context), TEMP_SCHEMA, true);
+	random_engine = make_unique<RandomEngine>();
+	file_opener = make_unique<ClientContextFileOpener>(context);
+}
+ClientData::~ClientData() {
+}
+
+ClientData &ClientData::Get(ClientContext &context) {
+	return *context.client_data;
+}
+
+RandomEngine &RandomEngine::Get(ClientContext &context) {
+	return *ClientData::Get(context).random_engine;
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+namespace duckdb {
+
+PreservedError ClientContext::VerifyQuery(ClientContextLock &lock, const string &query,
+                                          unique_ptr<SQLStatement> statement) {
+	D_ASSERT(statement->type == StatementType::SELECT_STATEMENT);
+	// Aggressive query verification
+
+	// The purpose of this function is to test correctness of otherwise hard to test features:
+	// Copy() of statements and expressions
+	// Serialize()/Deserialize() of expressions
+	// Hash() of expressions
+	// Equality() of statements and expressions
+	// ToString() of statements and expressions
+	// Correctness of plans both with and without optimizers
+
+	const auto &stmt = *statement;
+	vector<unique_ptr<StatementVerifier>> statement_verifiers;
+	unique_ptr<StatementVerifier> prepared_statement_verifier;
+	if (config.query_verification_enabled) {
+		statement_verifiers.emplace_back(StatementVerifier::Create(VerificationType::COPIED, stmt));
+		statement_verifiers.emplace_back(StatementVerifier::Create(VerificationType::DESERIALIZED, stmt));
+		statement_verifiers.emplace_back(StatementVerifier::Create(VerificationType::UNOPTIMIZED, stmt));
+		prepared_statement_verifier = StatementVerifier::Create(VerificationType::PREPARED, stmt);
+	}
+	if (config.verify_external) {
+		statement_verifiers.emplace_back(StatementVerifier::Create(VerificationType::EXTERNAL, stmt));
+	}
+
+	auto original = make_unique<StatementVerifier>(move(statement));
+	for (auto &verifier : statement_verifiers) {
+		original->CheckExpressions(*verifier);
+	}
+	original->CheckExpressions();
+
+	// See below
+	auto statement_copy_for_explain = stmt.Copy();
+
+	// Save settings
+	bool optimizer_enabled = config.enable_optimizer;
+	bool profiling_is_enabled = config.enable_profiler;
+	bool force_external = config.force_external;
+
+	// Disable profiling if it is enabled
+	if (profiling_is_enabled) {
+		config.enable_profiler = false;
+	}
+
+	// Execute the original statement
+	bool any_failed = original->Run(*this, query, [&](const string &q, unique_ptr<SQLStatement> s) {
+		return RunStatementInternal(lock, q, move(s), false, false);
+	});
+	if (!any_failed) {
+		statement_verifiers.emplace_back(
+		    StatementVerifier::Create(VerificationType::PARSED, *statement_copy_for_explain));
+	}
+	// Execute the verifiers
+	for (auto &verifier : statement_verifiers) {
+		bool failed = verifier->Run(*this, query, [&](const string &q, unique_ptr<SQLStatement> s) {
+			return RunStatementInternal(lock, q, move(s), false, false);
+		});
+		any_failed = any_failed || failed;
+	}
+
+	if (!any_failed && prepared_statement_verifier) {
+		// If none failed, we execute the prepared statement verifier
+		bool failed = prepared_statement_verifier->Run(*this, query, [&](const string &q, unique_ptr<SQLStatement> s) {
+			return RunStatementInternal(lock, q, move(s), false, false);
+		});
+		if (!failed) {
+			// PreparedStatementVerifier fails if it runs into a ParameterNotAllowedException, which is OK
+			statement_verifiers.push_back(move(prepared_statement_verifier));
+		}
+	} else {
+		if (ValidChecker::IsInvalidated(*db)) {
+			return original->materialized_result->GetErrorObject();
+		}
+	}
+
+	// Restore config setting
+	config.enable_optimizer = optimizer_enabled;
+	config.force_external = force_external;
+
+	// Check explain, only if q does not already contain EXPLAIN
+	if (original->materialized_result->success) {
+		auto explain_q = "EXPLAIN " + query;
+		auto explain_stmt = make_unique<ExplainStatement>(move(statement_copy_for_explain));
+		try {
+			RunStatementInternal(lock, explain_q, move(explain_stmt), false, false);
+		} catch (std::exception &ex) { // LCOV_EXCL_START
+			interrupted = false;
+			return PreservedError("EXPLAIN failed but query did not (" + string(ex.what()) + ")");
+		} // LCOV_EXCL_STOP
+
+#ifdef DUCKDB_VERIFY_BOX_RENDERER
+		// this is pretty slow, so disabled by default
+		// test the box renderer on the result
+		// we mostly care that this does not crash
+		RandomEngine random;
+		BoxRendererConfig config;
+		// test with a random width
+		config.max_width = random.NextRandomInteger() % 500;
+		BoxRenderer renderer(config);
+		renderer.ToString(*this, original->materialized_result->names, original->materialized_result->Collection());
+#endif
+	}
+
+	// Restore profiler setting
+	if (profiling_is_enabled) {
+		config.enable_profiler = true;
+	}
+
+	// Now compare the results
+	// The results of all runs should be identical
+	for (auto &verifier : statement_verifiers) {
+		auto result = original->CompareResults(*verifier);
+		if (!result.empty()) {
+			return PreservedError(result);
+		}
+	}
+
+	return PreservedError();
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+namespace duckdb {
+
+#define DUCKDB_GLOBAL(_PARAM)                                                                                          \
+	{ _PARAM::Name, _PARAM::Description, _PARAM::InputType, _PARAM::SetGlobal, nullptr, _PARAM::GetSetting }
+#define DUCKDB_GLOBAL_ALIAS(_ALIAS, _PARAM)                                                                            \
+	{ _ALIAS, _PARAM::Description, _PARAM::InputType, _PARAM::SetGlobal, nullptr, _PARAM::GetSetting }
+
+#define DUCKDB_LOCAL(_PARAM)                                                                                           \
+	{ _PARAM::Name, _PARAM::Description, _PARAM::InputType, nullptr, _PARAM::SetLocal, _PARAM::GetSetting }
+#define DUCKDB_LOCAL_ALIAS(_ALIAS, _PARAM)                                                                             \
+	{ _ALIAS, _PARAM::Description, _PARAM::InputType, nullptr, _PARAM::SetLocal, _PARAM::GetSetting }
+
+#define DUCKDB_GLOBAL_LOCAL(_PARAM)                                                                                    \
+	{ _PARAM::Name, _PARAM::Description, _PARAM::InputType, _PARAM::SetGlobal, _PARAM::SetLocal, _PARAM::GetSetting }
+#define DUCKDB_GLOBAL_LOCAL_ALIAS(_ALIAS, _PARAM)                                                                      \
+	{ _ALIAS, _PARAM::Description, _PARAM::InputType, _PARAM::SetGlobal, _PARAM::SetLocal, _PARAM::GetSetting }
+#define FINAL_SETTING                                                                                                  \
+	{ nullptr, nullptr, LogicalTypeId::INVALID, nullptr, nullptr, nullptr }
+
+static ConfigurationOption internal_options[] = {DUCKDB_GLOBAL(AccessModeSetting),
+                                                 DUCKDB_GLOBAL(CheckpointThresholdSetting),
+                                                 DUCKDB_GLOBAL(DebugCheckpointAbort),
+                                                 DUCKDB_LOCAL(DebugForceExternal),
+                                                 DUCKDB_LOCAL(DebugForceNoCrossProduct),
+                                                 DUCKDB_GLOBAL(DebugWindowMode),
+                                                 DUCKDB_GLOBAL_LOCAL(DefaultCollationSetting),
+                                                 DUCKDB_GLOBAL(DefaultOrderSetting),
+                                                 DUCKDB_GLOBAL(DefaultNullOrderSetting),
+                                                 DUCKDB_GLOBAL(DisabledOptimizersSetting),
+                                                 DUCKDB_GLOBAL(EnableExternalAccessSetting),
+                                                 DUCKDB_GLOBAL(EnableFSSTVectors),
+                                                 DUCKDB_GLOBAL(AllowUnsignedExtensionsSetting),
+                                                 DUCKDB_GLOBAL(EnableObjectCacheSetting),
+                                                 DUCKDB_LOCAL(EnableProfilingSetting),
+                                                 DUCKDB_LOCAL(EnableProgressBarSetting),
+                                                 DUCKDB_GLOBAL(ExperimentalParallelCSVSetting),
+                                                 DUCKDB_LOCAL(ExplainOutputSetting),
+                                                 DUCKDB_GLOBAL(ExternalThreadsSetting),
+                                                 DUCKDB_LOCAL(FileSearchPathSetting),
+                                                 DUCKDB_GLOBAL(ForceCompressionSetting),
+                                                 DUCKDB_LOCAL(HomeDirectorySetting),
+                                                 DUCKDB_LOCAL(LogQueryPathSetting),
+                                                 DUCKDB_LOCAL(MaximumExpressionDepthSetting),
+                                                 DUCKDB_GLOBAL(MaximumMemorySetting),
+                                                 DUCKDB_GLOBAL_ALIAS("memory_limit", MaximumMemorySetting),
+                                                 DUCKDB_GLOBAL_ALIAS("null_order", DefaultNullOrderSetting),
+                                                 DUCKDB_GLOBAL(PasswordSetting),
+                                                 DUCKDB_LOCAL(PerfectHashThresholdSetting),
+                                                 DUCKDB_LOCAL(PreserveIdentifierCase),
+                                                 DUCKDB_GLOBAL(PreserveInsertionOrder),
+                                                 DUCKDB_LOCAL(ProfilerHistorySize),
+                                                 DUCKDB_LOCAL(ProfileOutputSetting),
+                                                 DUCKDB_LOCAL(ProfilingModeSetting),
+                                                 DUCKDB_LOCAL_ALIAS("profiling_output", ProfileOutputSetting),
+                                                 DUCKDB_LOCAL(ProgressBarTimeSetting),
+                                                 DUCKDB_LOCAL(SchemaSetting),
+                                                 DUCKDB_LOCAL(SearchPathSetting),
+                                                 DUCKDB_GLOBAL(TempDirectorySetting),
+                                                 DUCKDB_GLOBAL(ThreadsSetting),
+                                                 DUCKDB_GLOBAL(UsernameSetting),
+                                                 DUCKDB_GLOBAL_ALIAS("user", UsernameSetting),
+                                                 DUCKDB_GLOBAL_ALIAS("wal_autocheckpoint", CheckpointThresholdSetting),
+                                                 DUCKDB_GLOBAL_ALIAS("worker_threads", ThreadsSetting),
+                                                 FINAL_SETTING};
+
+vector<ConfigurationOption> DBConfig::GetOptions() {
+	vector<ConfigurationOption> options;
+	for (idx_t index = 0; internal_options[index].name; index++) {
+		options.push_back(internal_options[index]);
+	}
+	return options;
+}
+
+idx_t DBConfig::GetOptionCount() {
+	idx_t count = 0;
+	for (idx_t index = 0; internal_options[index].name; index++) {
+		count++;
+	}
+	return count;
+}
+
+vector<std::string> DBConfig::GetOptionNames() {
+	vector<string> names;
+	for (idx_t i = 0, option_count = DBConfig::GetOptionCount(); i < option_count; i++) {
+		names.emplace_back(DBConfig::GetOptionByIndex(i)->name);
+	}
+	return names;
+}
+
+ConfigurationOption *DBConfig::GetOptionByIndex(idx_t target_index) {
+	for (idx_t index = 0; internal_options[index].name; index++) {
+		if (index == target_index) {
+			return internal_options + index;
+		}
+	}
+	return nullptr;
+}
+
+ConfigurationOption *DBConfig::GetOptionByName(const string &name) {
+	auto lname = StringUtil::Lower(name);
+	for (idx_t index = 0; internal_options[index].name; index++) {
+		D_ASSERT(StringUtil::Lower(internal_options[index].name) == string(internal_options[index].name));
+		if (internal_options[index].name == lname) {
+			return internal_options + index;
+		}
+	}
+	return nullptr;
+}
+
+void DBConfig::SetOption(const ConfigurationOption &option, const Value &value) {
+	SetOption(nullptr, option, value);
+}
+
+void DBConfig::SetOption(DatabaseInstance *db, const ConfigurationOption &option, const Value &value) {
+	lock_guard<mutex> l(config_lock);
+	if (!option.set_global) {
+		throw InternalException("Could not set option \"%s\" as a global option", option.name);
+	}
+	Value input = value.DefaultCastAs(option.parameter_type);
+	option.set_global(db, *this, input);
+}
+
+void DBConfig::SetOption(const string &name, Value value) {
+	lock_guard<mutex> l(config_lock);
+	options.set_variables[name] = move(value);
+}
+
+void DBConfig::AddExtensionOption(string name, string description, LogicalType parameter,
+                                  set_option_callback_t function) {
+	extension_parameters.insert(make_pair(move(name), ExtensionOption(move(description), move(parameter), function)));
+}
+
+CastFunctionSet &DBConfig::GetCastFunctions() {
+	return *cast_functions;
+}
+
+idx_t DBConfig::ParseMemoryLimit(const string &arg) {
+	if (arg[0] == '-' || arg == "null" || arg == "none") {
+		return DConstants::INVALID_INDEX;
+	}
+	// split based on the number/non-number
+	idx_t idx = 0;
+	while (StringUtil::CharacterIsSpace(arg[idx])) {
+		idx++;
+	}
+	idx_t num_start = idx;
+	while ((arg[idx] >= '0' && arg[idx] <= '9') || arg[idx] == '.' || arg[idx] == 'e' || arg[idx] == 'E' ||
+	       arg[idx] == '-') {
+		idx++;
+	}
+	if (idx == num_start) {
+		throw ParserException("Memory limit must have a number (e.g. SET memory_limit=1GB");
+	}
+	string number = arg.substr(num_start, idx - num_start);
+
+	// try to parse the number
+	double limit = Cast::Operation<string_t, double>(string_t(number));
+
+	// now parse the memory limit unit (e.g. bytes, gb, etc)
+	while (StringUtil::CharacterIsSpace(arg[idx])) {
+		idx++;
+	}
+	idx_t start = idx;
+	while (idx < arg.size() && !StringUtil::CharacterIsSpace(arg[idx])) {
+		idx++;
+	}
+	if (limit < 0) {
+		// limit < 0, set limit to infinite
+		return (idx_t)-1;
+	}
+	string unit = StringUtil::Lower(arg.substr(start, idx - start));
+	idx_t multiplier;
+	if (unit == "byte" || unit == "bytes" || unit == "b") {
+		multiplier = 1;
+	} else if (unit == "kilobyte" || unit == "kilobytes" || unit == "kb" || unit == "k") {
+		multiplier = 1000LL;
+	} else if (unit == "megabyte" || unit == "megabytes" || unit == "mb" || unit == "m") {
+		multiplier = 1000LL * 1000LL;
+	} else if (unit == "gigabyte" || unit == "gigabytes" || unit == "gb" || unit == "g") {
+		multiplier = 1000LL * 1000LL * 1000LL;
+	} else if (unit == "terabyte" || unit == "terabytes" || unit == "tb" || unit == "t") {
+		multiplier = 1000LL * 1000LL * 1000LL * 1000LL;
+	} else {
+		throw ParserException("Unknown unit for memory_limit: %s (expected: b, mb, gb or tb)", unit);
+	}
+	return (idx_t)multiplier * limit;
+}
+
+// Right now we only really care about access mode when comparing DBConfigs
+bool DBConfigOptions::operator==(const DBConfigOptions &other) const {
+	return other.access_mode == access_mode;
+}
+
+bool DBConfig::operator==(const DBConfig &other) {
+	return other.options == options;
+}
+
+bool DBConfig::operator!=(const DBConfig &other) {
+	return !(other.options == options);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+Connection::Connection(DatabaseInstance &database) : context(make_shared<ClientContext>(database.shared_from_this())) {
+	ConnectionManager::Get(database).AddConnection(*context);
+#ifdef DEBUG
+	EnableProfiling();
+	context->config.emit_profiler_output = false;
+#endif
+}
+
+Connection::Connection(DuckDB &database) : Connection(*database.instance) {
+}
+
+Connection::~Connection() {
+	ConnectionManager::Get(*context->db).RemoveConnection(*context);
+}
+
+string Connection::GetProfilingInformation(ProfilerPrintFormat format) {
+	auto &profiler = QueryProfiler::Get(*context);
+	if (format == ProfilerPrintFormat::JSON) {
+		return profiler.ToJSON();
+	} else {
+		return profiler.QueryTreeToString();
+	}
+}
+
+void Connection::Interrupt() {
+	context->Interrupt();
+}
+
+void Connection::EnableProfiling() {
+	context->EnableProfiling();
+}
+
+void Connection::DisableProfiling() {
+	context->DisableProfiling();
+}
+
+void Connection::EnableQueryVerification() {
+	ClientConfig::GetConfig(*context).query_verification_enabled = true;
+}
+
+void Connection::DisableQueryVerification() {
+	ClientConfig::GetConfig(*context).query_verification_enabled = false;
+}
+
+void Connection::ForceParallelism() {
+	ClientConfig::GetConfig(*context).verify_parallelism = true;
+}
+
+unique_ptr<QueryResult> Connection::SendQuery(const string &query) {
+	return context->Query(query, true);
+}
+
+unique_ptr<MaterializedQueryResult> Connection::Query(const string &query) {
+	auto result = context->Query(query, false);
+	D_ASSERT(result->type == QueryResultType::MATERIALIZED_RESULT);
+	return unique_ptr_cast<QueryResult, MaterializedQueryResult>(move(result));
+}
+
+unique_ptr<MaterializedQueryResult> Connection::Query(unique_ptr<SQLStatement> statement) {
+	auto result = context->Query(move(statement), false);
+	D_ASSERT(result->type == QueryResultType::MATERIALIZED_RESULT);
+	return unique_ptr_cast<QueryResult, MaterializedQueryResult>(move(result));
+}
+
+unique_ptr<PendingQueryResult> Connection::PendingQuery(const string &query, bool allow_stream_result) {
+	return context->PendingQuery(query, allow_stream_result);
+}
+
+unique_ptr<PendingQueryResult> Connection::PendingQuery(unique_ptr<SQLStatement> statement, bool allow_stream_result) {
+	return context->PendingQuery(move(statement), allow_stream_result);
+}
+
+unique_ptr<PreparedStatement> Connection::Prepare(const string &query) {
+	return context->Prepare(query);
+}
+
+unique_ptr<PreparedStatement> Connection::Prepare(unique_ptr<SQLStatement> statement) {
+	return context->Prepare(move(statement));
+}
+
+unique_ptr<QueryResult> Connection::QueryParamsRecursive(const string &query, vector<Value> &values) {
+	auto statement = Prepare(query);
+	if (statement->HasError()) {
+		return make_unique<MaterializedQueryResult>(statement->error);
+	}
+	return statement->Execute(values, false);
+}
+
+unique_ptr<TableDescription> Connection::TableInfo(const string &table_name) {
+	return TableInfo(DEFAULT_SCHEMA, table_name);
+}
+
+unique_ptr<TableDescription> Connection::TableInfo(const string &schema_name, const string &table_name) {
+	return context->TableInfo(schema_name, table_name);
+}
+
+vector<unique_ptr<SQLStatement>> Connection::ExtractStatements(const string &query) {
+	return context->ParseStatements(query);
+}
+
+unique_ptr<LogicalOperator> Connection::ExtractPlan(const string &query) {
+	return context->ExtractPlan(query);
+}
+
+void Connection::Append(TableDescription &description, DataChunk &chunk) {
+	if (chunk.size() == 0) {
+		return;
+	}
+	ColumnDataCollection collection(Allocator::Get(*context), chunk.GetTypes());
+	collection.Append(chunk);
+	Append(description, collection);
+}
+
+void Connection::Append(TableDescription &description, ColumnDataCollection &collection) {
+	context->Append(description, collection);
+}
+
+shared_ptr<Relation> Connection::Table(const string &table_name) {
+	return Table(DEFAULT_SCHEMA, table_name);
+}
+
+shared_ptr<Relation> Connection::Table(const string &schema_name, const string &table_name) {
+	auto table_info = TableInfo(schema_name, table_name);
+	if (!table_info) {
+		throw Exception("Table does not exist!");
+	}
+	return make_shared<TableRelation>(context, move(table_info));
+}
+
+shared_ptr<Relation> Connection::View(const string &tname) {
+	return View(DEFAULT_SCHEMA, tname);
+}
+
+shared_ptr<Relation> Connection::View(const string &schema_name, const string &table_name) {
+	return make_shared<ViewRelation>(context, schema_name, table_name);
+}
+
+shared_ptr<Relation> Connection::TableFunction(const string &fname) {
+	vector<Value> values;
+	named_parameter_map_t named_parameters;
+	return TableFunction(fname, values, named_parameters);
+}
+
+shared_ptr<Relation> Connection::TableFunction(const string &fname, const vector<Value> &values,
+                                               const named_parameter_map_t &named_parameters) {
+	return make_shared<TableFunctionRelation>(context, fname, values, named_parameters);
+}
+
+shared_ptr<Relation> Connection::TableFunction(const string &fname, const vector<Value> &values) {
+	return make_shared<TableFunctionRelation>(context, fname, values);
+}
+
+shared_ptr<Relation> Connection::Values(const vector<vector<Value>> &values) {
+	vector<string> column_names;
+	return Values(values, column_names);
+}
+
+shared_ptr<Relation> Connection::Values(const vector<vector<Value>> &values, const vector<string> &column_names,
+                                        const string &alias) {
+	return make_shared<ValueRelation>(context, values, column_names, alias);
+}
+
+shared_ptr<Relation> Connection::Values(const string &values) {
+	vector<string> column_names;
+	return Values(values, column_names);
+}
+
+shared_ptr<Relation> Connection::Values(const string &values, const vector<string> &column_names, const string &alias) {
+	return make_shared<ValueRelation>(context, values, column_names, alias);
+}
+
+shared_ptr<Relation> Connection::ReadCSV(const string &csv_file) {
+	BufferedCSVReaderOptions options;
+	options.file_path = csv_file;
+	options.auto_detect = true;
+	BufferedCSVReader reader(*context, options);
+	vector<ColumnDefinition> column_list;
+	for (idx_t i = 0; i < reader.sql_types.size(); i++) {
+		column_list.emplace_back(reader.col_names[i], reader.sql_types[i]);
+	}
+	return make_shared<ReadCSVRelation>(context, csv_file, move(column_list), true);
+}
+
+shared_ptr<Relation> Connection::ReadCSV(const string &csv_file, const vector<string> &columns) {
+	// parse columns
+	vector<ColumnDefinition> column_list;
+	for (auto &column : columns) {
+		auto col_list = Parser::ParseColumnList(column, context->GetParserOptions());
+		if (col_list.LogicalColumnCount() != 1) {
+			throw ParserException("Expected a single column definition");
+		}
+		column_list.push_back(move(col_list.GetColumnMutable(LogicalIndex(0))));
+	}
+	return make_shared<ReadCSVRelation>(context, csv_file, move(column_list));
+}
+
+unordered_set<string> Connection::GetTableNames(const string &query) {
+	return context->GetTableNames(query);
+}
+
+shared_ptr<Relation> Connection::RelationFromQuery(const string &query, const string &alias, const string &error) {
+	return RelationFromQuery(QueryRelation::ParseStatement(*context, query, error), alias);
+}
+
+shared_ptr<Relation> Connection::RelationFromQuery(unique_ptr<SelectStatement> select_stmt, const string &alias) {
+	return make_shared<QueryRelation>(context, move(select_stmt), alias);
+}
+
+void Connection::BeginTransaction() {
+	auto result = Query("BEGIN TRANSACTION");
+	if (result->HasError()) {
+		result->ThrowError();
+	}
+}
+
+void Connection::Commit() {
+	auto result = Query("COMMIT");
+	if (result->HasError()) {
+		result->ThrowError();
+	}
+}
+
+void Connection::Rollback() {
+	auto result = Query("ROLLBACK");
+	if (result->HasError()) {
+		result->ThrowError();
+	}
+}
+
+void Connection::SetAutoCommit(bool auto_commit) {
+	context->transaction.SetAutoCommit(auto_commit);
+}
+
+bool Connection::IsAutoCommit() {
+	return context->transaction.IsAutoCommit();
+}
+bool Connection::HasActiveTransaction() {
+	return context->transaction.HasActiveTransaction();
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#ifndef DUCKDB_NO_THREADS
+
+#endif
+
+namespace duckdb {
+
+DBConfig::DBConfig() {
+	compression_functions = make_unique<CompressionFunctionSet>();
+	replacement_opens.push_back(ExtensionPrefixReplacementOpen());
+	cast_functions = make_unique<CastFunctionSet>();
+	error_manager = make_unique<ErrorManager>();
+}
+
+DBConfig::DBConfig(std::unordered_map<string, string> &config_dict, bool read_only) {
+	compression_functions = make_unique<CompressionFunctionSet>();
+	if (read_only) {
+		options.access_mode = AccessMode::READ_ONLY;
+	}
+	for (auto &kv : config_dict) {
+		string key = kv.first;
+		string val = kv.second;
+		auto config_property = DBConfig::GetOptionByName(key);
+		if (!config_property) {
+			throw InvalidInputException("Unrecognized configuration property \"%s\"", key);
+		}
+		auto opt_val = Value(val);
+		DBConfig::SetOption(*config_property, opt_val);
+	}
+}
+
+DBConfig::~DBConfig() {
+}
+
+DatabaseInstance::DatabaseInstance() {
+}
+
+DatabaseInstance::~DatabaseInstance() {
+	if (Exception::UncaughtException()) {
+		return;
+	}
+
+	// shutting down: attempt to checkpoint the database
+	// but only if we are not cleaning up as part of an exception unwind
+	try {
+		auto &storage = StorageManager::GetStorageManager(*this);
+		if (!storage.InMemory()) {
+			auto &config = storage.db.config;
+			if (!config.options.checkpoint_on_shutdown) {
+				return;
+			}
+			storage.CreateCheckpoint(true);
+		}
+	} catch (...) {
+	}
+}
+
+BufferManager &BufferManager::GetBufferManager(DatabaseInstance &db) {
+	return *db.GetStorageManager().buffer_manager;
+}
+
+DatabaseInstance &DatabaseInstance::GetDatabase(ClientContext &context) {
+	return *context.db;
+}
+
+StorageManager &StorageManager::GetStorageManager(DatabaseInstance &db) {
+	return db.GetStorageManager();
+}
+
+Catalog &Catalog::GetCatalog(DatabaseInstance &db) {
+	return db.GetCatalog();
+}
+
+FileSystem &FileSystem::GetFileSystem(DatabaseInstance &db) {
+	return db.GetFileSystem();
+}
+
+DBConfig &DBConfig::GetConfig(DatabaseInstance &db) {
+	return db.config;
+}
+
+ClientConfig &ClientConfig::GetConfig(ClientContext &context) {
+	return context.config;
+}
+
+const DBConfig &DBConfig::GetConfig(const DatabaseInstance &db) {
+	return db.config;
+}
+
+const ClientConfig &ClientConfig::GetConfig(const ClientContext &context) {
+	return context.config;
+}
+
+TransactionManager &TransactionManager::Get(ClientContext &context) {
+	return TransactionManager::Get(DatabaseInstance::GetDatabase(context));
+}
+
+TransactionManager &TransactionManager::Get(DatabaseInstance &db) {
+	return db.GetTransactionManager();
+}
+
+ConnectionManager &ConnectionManager::Get(DatabaseInstance &db) {
+	return db.GetConnectionManager();
+}
+
+ConnectionManager &ConnectionManager::Get(ClientContext &context) {
+	return ConnectionManager::Get(DatabaseInstance::GetDatabase(context));
+}
+
+void DatabaseInstance::Initialize(const char *database_path, DBConfig *user_config) {
+	DBConfig default_config;
+	DBConfig *config_ptr = &default_config;
+	if (user_config) {
+		config_ptr = user_config;
+	}
+
+	if (config_ptr->options.temporary_directory.empty() && database_path) {
+		// no directory specified: use default temp path
+		config_ptr->options.temporary_directory = string(database_path) + ".tmp";
+
+		// special treatment for in-memory mode
+		if (strcmp(database_path, ":memory:") == 0) {
+			config_ptr->options.temporary_directory = ".tmp";
+		}
+	}
+
+	if (database_path) {
+		config_ptr->options.database_path = database_path;
+	} else {
+		config_ptr->options.database_path.clear();
+	}
+
+	for (auto &open : config_ptr->replacement_opens) {
+		if (open.pre_func) {
+			open.data = open.pre_func(*config_ptr, open.static_data.get());
+			if (open.data) {
+				break;
+			}
+		}
+	}
+	Configure(*config_ptr);
+
+	if (user_config && !user_config->options.use_temporary_directory) {
+		// temporary directories explicitly disabled
+		config.options.temporary_directory = string();
+	}
+
+	// TODO: Support an extension here, to generate different storage managers
+	// depending on the DB path structure/prefix.
+	const string dbPath = config.options.database_path;
+	storage = make_unique<SingleFileStorageManager>(*this, dbPath, config.options.access_mode == AccessMode::READ_ONLY);
+
+	catalog = make_unique<Catalog>(*this);
+	transaction_manager = make_unique<TransactionManager>(*this);
+	scheduler = make_unique<TaskScheduler>(*this);
+	object_cache = make_unique<ObjectCache>();
+	connection_manager = make_unique<ConnectionManager>();
+
+	// initialize the database
+	storage->Initialize();
+
+	// only increase thread count after storage init because we get races on catalog otherwise
+	scheduler->SetThreads(config.options.maximum_threads);
+
+	for (auto &open : config.replacement_opens) {
+		if (open.post_func && open.data) {
+			open.post_func(*this, open.data.get());
+			break;
+		}
+	}
+}
+
+DuckDB::DuckDB(const char *path, DBConfig *new_config) : instance(make_shared<DatabaseInstance>()) {
+	instance->Initialize(path, new_config);
+	if (instance->config.options.load_extensions) {
+		ExtensionHelper::LoadAllExtensions(*this);
+	}
+}
+
+DuckDB::DuckDB(const string &path, DBConfig *config) : DuckDB(path.c_str(), config) {
+}
+
+DuckDB::DuckDB(DatabaseInstance &instance_p) : instance(instance_p.shared_from_this()) {
+}
+
+DuckDB::~DuckDB() {
+}
+
+StorageManager &DatabaseInstance::GetStorageManager() {
+	return *storage;
+}
+
+Catalog &DatabaseInstance::GetCatalog() {
+	return *catalog;
+}
+
+TransactionManager &DatabaseInstance::GetTransactionManager() {
+	return *transaction_manager;
+}
+
+TaskScheduler &DatabaseInstance::GetScheduler() {
+	return *scheduler;
+}
+
+ObjectCache &DatabaseInstance::GetObjectCache() {
+	return *object_cache;
+}
+
+FileSystem &DatabaseInstance::GetFileSystem() {
+	return *config.file_system;
+}
+
+ConnectionManager &DatabaseInstance::GetConnectionManager() {
+	return *connection_manager;
+}
+
+FileSystem &DuckDB::GetFileSystem() {
+	return instance->GetFileSystem();
+}
+
+Allocator &Allocator::Get(ClientContext &context) {
+	return Allocator::Get(*context.db);
+}
+
+Allocator &Allocator::Get(DatabaseInstance &db) {
+	return *db.config.allocator;
+}
+
+void DatabaseInstance::Configure(DBConfig &new_config) {
+	config.options = new_config.options;
+	if (config.options.access_mode == AccessMode::UNDEFINED) {
+		config.options.access_mode = AccessMode::READ_WRITE;
+	}
+	if (new_config.file_system) {
+		config.file_system = move(new_config.file_system);
+	} else {
+		config.file_system = make_unique<VirtualFileSystem>();
+	}
+	if (config.options.maximum_memory == (idx_t)-1) {
+		auto memory = FileSystem::GetAvailableMemory();
+		if (memory != DConstants::INVALID_INDEX) {
+			config.options.maximum_memory = memory * 8 / 10;
+		}
+	}
+	if (new_config.options.maximum_threads == (idx_t)-1) {
+#ifndef DUCKDB_NO_THREADS
+		config.options.maximum_threads = std::thread::hardware_concurrency();
+#else
+		config.options.maximum_threads = 1;
+#endif
+	}
+	config.allocator = move(new_config.allocator);
+	if (!config.allocator) {
+		config.allocator = make_unique<Allocator>();
+	}
+	config.replacement_scans = move(new_config.replacement_scans);
+	config.replacement_opens = move(new_config.replacement_opens);
+	config.parser_extensions = move(new_config.parser_extensions);
+	config.error_manager = move(new_config.error_manager);
+	if (!config.error_manager) {
+		config.error_manager = make_unique<ErrorManager>();
+	}
+	if (!config.default_allocator) {
+		config.default_allocator = Allocator::DefaultAllocatorReference();
+	}
+}
+
+DBConfig &DBConfig::GetConfig(ClientContext &context) {
+	return context.db->config;
+}
+
+const DBConfig &DBConfig::GetConfig(const ClientContext &context) {
+	return context.db->config;
+}
+
+idx_t DatabaseInstance::NumberOfThreads() {
+	return scheduler->NumberOfThreads();
+}
+
+const unordered_set<std::string> &DatabaseInstance::LoadedExtensions() {
+	return loaded_extensions;
+}
+
+idx_t DuckDB::NumberOfThreads() {
+	return instance->NumberOfThreads();
+}
+
+bool DuckDB::ExtensionIsLoaded(const std::string &name) {
+	return instance->loaded_extensions.find(name) != instance->loaded_extensions.end();
+}
+void DatabaseInstance::SetExtensionLoaded(const std::string &name) {
+	loaded_extensions.insert(name);
+}
+
+bool DatabaseInstance::TryGetCurrentSetting(const std::string &key, Value &result) {
+	// check the session values
+	auto &db_config = DBConfig::GetConfig(*this);
+	const auto &global_config_map = db_config.options.set_variables;
+
+	auto global_value = global_config_map.find(key);
+	bool found_global_value = global_value != global_config_map.end();
+	if (!found_global_value) {
+		return false;
+	}
+	result = global_value->second;
+	return true;
+}
+
+string ClientConfig::ExtractTimezone() const {
+	auto entry = set_variables.find("TimeZone");
+	if (entry == set_variables.end()) {
+		return "UTC";
+	} else {
+		return entry->second.GetValue<std::string>();
+	}
+}
+
+ValidChecker &DatabaseInstance::GetValidChecker() {
+	return db_validity;
+}
+
+ValidChecker &ValidChecker::Get(DatabaseInstance &db) {
+	return db.GetValidChecker();
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+string GetDBAbsolutePath(const string &database) {
+	if (database.empty()) {
+		return ":memory:";
+	}
+	if (database.rfind(":memory:", 0) == 0) {
+		// this is a memory db, just return it.
+		return database;
+	}
+	if (FileSystem::IsPathAbsolute(database)) {
+		return database;
+	}
+	return FileSystem::JoinPath(FileSystem::GetWorkingDirectory(), database);
+}
+
+shared_ptr<DuckDB> DBInstanceCache::GetInstanceInternal(const string &database, const DBConfig &config) {
+	shared_ptr<DuckDB> db_instance;
+	auto abs_database_path = GetDBAbsolutePath(database);
+	if (db_instances.find(abs_database_path) != db_instances.end()) {
+		db_instance = db_instances[abs_database_path].lock();
+		if (db_instance) {
+			if (db_instance->instance->config != config) {
+				throw duckdb::Exception(ExceptionType::CONNECTION,
+				                        "Can't open a connection to same database file with a different configuration "
+				                        "than existing connections");
+			}
+		} else {
+			// clean-up
+			db_instances.erase(abs_database_path);
+		}
+	}
+	return db_instance;
+}
+
+shared_ptr<DuckDB> DBInstanceCache::GetInstance(const string &database, const DBConfig &config) {
+	lock_guard<mutex> l(cache_lock);
+	return GetInstanceInternal(database, config);
+}
+
+shared_ptr<DuckDB> DBInstanceCache::CreateInstanceInternal(const string &database, DBConfig &config,
+                                                           bool cache_instance) {
+	auto abs_database_path = GetDBAbsolutePath(database);
+	if (db_instances.find(abs_database_path) != db_instances.end()) {
+		throw duckdb::Exception(ExceptionType::CONNECTION,
+		                        "Instance with path: " + abs_database_path + " already exists.");
+	}
+	// Creates new instance
+	string instance_path = abs_database_path;
+	if (abs_database_path.rfind(":memory:", 0) == 0) {
+		instance_path = ":memory:";
+	}
+	auto db_instance = make_shared<DuckDB>(instance_path, &config);
+	if (cache_instance) {
+		db_instances[abs_database_path] = db_instance;
+	}
+	return db_instance;
+}
+
+shared_ptr<DuckDB> DBInstanceCache::CreateInstance(const string &database, DBConfig &config, bool cache_instance) {
+	lock_guard<mutex> l(cache_lock);
+	return CreateInstanceInternal(database, config, cache_instance);
+}
+
+shared_ptr<DuckDB> DBInstanceCache::GetOrCreateInstance(const string &database, DBConfig &config_dict,
+                                                        bool cache_instance) {
+	lock_guard<mutex> l(cache_lock);
+	if (cache_instance) {
+		auto instance = GetInstanceInternal(database, config_dict);
+		if (instance) {
+			return instance;
+		}
+	}
+	return CreateInstanceInternal(database, config_dict, cache_instance);
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+struct DefaultError {
+	ErrorType type;
+	const char *error;
+};
+
+static DefaultError internal_errors[] = {
+    {ErrorType::UNSIGNED_EXTENSION,
+     "Extension \"%s\" could not be loaded because its signature is either missing or invalid and unsigned extensions "
+     "are disabled by configuration (allow_unsigned_extensions)"},
+    {ErrorType::INVALIDATED_TRANSACTION, "Current transaction is aborted (please ROLLBACK)"},
+    {ErrorType::INVALIDATED_DATABASE, "Failed: database has been invalidated because of a previous fatal error. The "
+                                      "database must be restarted prior to being used again.\nOriginal error: \"%s\""},
+    {ErrorType::INVALID, nullptr}};
+
+string ErrorManager::FormatExceptionRecursive(ErrorType error_type, vector<ExceptionFormatValue> &values) {
+	if (error_type >= ErrorType::ERROR_COUNT) {
+		throw InternalException("Invalid error type passed to ErrorManager::FormatError");
+	}
+	auto entry = custom_errors.find(error_type);
+	string error;
+	if (entry == custom_errors.end()) {
+		// error was not overwritten
+		error = internal_errors[int(error_type)].error;
+	} else {
+		// error was overwritten
+		error = entry->second;
+	}
+	return ExceptionFormatValue::Format(error, values);
+}
+
+string ErrorManager::InvalidUnicodeError(const string &input, const string &context) {
+	UnicodeInvalidReason reason;
+	size_t pos;
+	auto unicode = Utf8Proc::Analyze((const char *)input.c_str(), input.size(), &reason, &pos);
+	if (unicode != UnicodeType::INVALID) {
+		return "Invalid unicode error thrown but no invalid unicode detected in " + context;
+	}
+	string base_message;
+	switch (reason) {
+	case UnicodeInvalidReason::BYTE_MISMATCH:
+		base_message = "Invalid unicode (byte sequence mismatch)";
+		break;
+	case UnicodeInvalidReason::INVALID_UNICODE:
+		base_message = "Invalid unicode";
+		break;
+	default:
+		break;
+	}
+	return base_message + " detected in " + context;
+}
+
+void ErrorManager::AddCustomError(ErrorType type, string new_error) {
+	custom_errors.insert(make_pair(type, move(new_error)));
+}
+
+ErrorManager &ErrorManager::Get(ClientContext &context) {
+	return *DBConfig::GetConfig(context).error_manager;
+}
+
+ErrorManager &ErrorManager::Get(DatabaseInstance &context) {
+	return *DBConfig::GetConfig(context).error_manager;
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+static ExtensionAlias internal_aliases[] = {{"http", "httpfs"}, // httpfs
+                                            {"https", "httpfs"},
+                                            {"s3", "httpfs"},
+                                            {"postgres", "postgres_scanner"}, // postgres
+                                            {"sqlite", "sqlite_scanner"},     // sqlite
+                                            {"sqlite3", "sqlite_scanner"},
+                                            {nullptr, nullptr}};
+
+idx_t ExtensionHelper::ExtensionAliasCount() {
+	idx_t index;
+	for (index = 0; internal_aliases[index].alias != nullptr; index++) {
+	}
+	return index;
+}
+
+ExtensionAlias ExtensionHelper::GetExtensionAlias(idx_t index) {
+	D_ASSERT(index < ExtensionAliasCount());
+	return internal_aliases[index];
+}
+
+string ExtensionHelper::ApplyExtensionAlias(string extension_name) {
+	for (idx_t index = 0; internal_aliases[index].alias; index++) {
+		if (extension_name == internal_aliases[index].alias) {
+			return internal_aliases[index].extension;
+		}
+	}
+	return extension_name;
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+#if defined(BUILD_ICU_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#define ICU_STATICALLY_LOADED true
+#include "icu-extension.hpp"
+#else
+#define ICU_STATICALLY_LOADED false
+#endif
+
+#if defined(BUILD_PARQUET_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#define PARQUET_STATICALLY_LOADED true
+#include "parquet-extension.hpp"
+#else
+#define PARQUET_STATICALLY_LOADED false
+#endif
+
+#if defined(BUILD_TPCH_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#define TPCH_STATICALLY_LOADED true
+#include "tpch-extension.hpp"
+#else
+#define TPCH_STATICALLY_LOADED false
+#endif
+
+#if defined(BUILD_TPCDS_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#define TPCDS_STATICALLY_LOADED true
+#include "tpcds-extension.hpp"
+#else
+#define TPCDS_STATICALLY_LOADED false
+#endif
+
+#if defined(BUILD_FTS_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#define FTS_STATICALLY_LOADED true
+#include "fts-extension.hpp"
+#else
+#define FTS_STATICALLY_LOADED false
+#endif
+
+#if defined(BUILD_HTTPFS_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#define HTTPFS_STATICALLY_LOADED true
+#include "httpfs-extension.hpp"
+#else
+#define HTTPFS_STATICALLY_LOADED false
+#endif
+
+#if defined(BUILD_VISUALIZER_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#include "visualizer-extension.hpp"
+#endif
+
+#if defined(BUILD_JSON_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#define JSON_STATICALLY_LOADED true
+#include "json-extension.hpp"
+#else
+#define JSON_STATICALLY_LOADED false
+#endif
+
+#if defined(BUILD_JEMALLOC_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#define JEMALLOC_STATICALLY_LOADED true
+#include "jemalloc-extension.hpp"
+#else
+#define JEMALLOC_STATICALLY_LOADED false
+#endif
+
+#if defined(BUILD_EXCEL_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#include "excel-extension.hpp"
+#endif
+
+#if defined(BUILD_SQLSMITH_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#include "sqlsmith-extension.hpp"
+#endif
+
+#if defined(BUILD_INET_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+#include "inet-extension.hpp"
+#endif
+
+namespace duckdb {
+
+//===--------------------------------------------------------------------===//
+// Default Extensions
+//===--------------------------------------------------------------------===//
+static DefaultExtension internal_extensions[] = {
+    {"icu", "Adds support for time zones and collations using the ICU library", ICU_STATICALLY_LOADED},
+    {"parquet", "Adds support for reading and writing parquet files", PARQUET_STATICALLY_LOADED},
+    {"tpch", "Adds TPC-H data generation and query support", TPCH_STATICALLY_LOADED},
+    {"tpcds", "Adds TPC-DS data generation and query support", TPCDS_STATICALLY_LOADED},
+    {"fts", "Adds support for Full-Text Search Indexes", FTS_STATICALLY_LOADED},
+    {"httpfs", "Adds support for reading and writing files over a HTTP(S) connection", HTTPFS_STATICALLY_LOADED},
+    {"json", "Adds support for JSON operations", JSON_STATICALLY_LOADED},
+    {"jemalloc", "Overwrites system allocator with JEMalloc", JEMALLOC_STATICALLY_LOADED},
+    {"sqlite_scanner", "Adds support for reading SQLite database files", false},
+    {"postgres_scanner", "Adds support for reading from a Postgres database", false},
+    {"inet", "Adds support for IP-related data types and functions", false},
+    {nullptr, nullptr, false}};
+
+idx_t ExtensionHelper::DefaultExtensionCount() {
+	idx_t index;
+	for (index = 0; internal_extensions[index].name != nullptr; index++) {
+	}
+	return index;
+}
+
+DefaultExtension ExtensionHelper::GetDefaultExtension(idx_t index) {
+	D_ASSERT(index < DefaultExtensionCount());
+	return internal_extensions[index];
+}
+
+//===--------------------------------------------------------------------===//
+// Load Statically Compiled Extension
+//===--------------------------------------------------------------------===//
+void ExtensionHelper::LoadAllExtensions(DuckDB &db) {
+	unordered_set<string> extensions {"parquet",    "icu",  "tpch",  "tpcds",    "fts",  "httpfs",
+	                                  "visualizer", "json", "excel", "sqlsmith", "inet", "jemalloc"};
+	for (auto &ext : extensions) {
+		LoadExtensionInternal(db, ext, true);
+	}
+}
+
+ExtensionLoadResult ExtensionHelper::LoadExtension(DuckDB &db, const std::string &extension) {
+	return LoadExtensionInternal(db, extension, false);
+}
+
+ExtensionLoadResult ExtensionHelper::LoadExtensionInternal(DuckDB &db, const std::string &extension,
+                                                           bool initial_load) {
+#ifdef DUCKDB_TEST_REMOTE_INSTALL
+	if (!initial_load && StringUtil::Contains(DUCKDB_TEST_REMOTE_INSTALL, extension)) {
+		Connection con(db);
+		auto result = con.Query("INSTALL " + extension);
+		if (result->HasError()) {
+			result->Print();
+			return ExtensionLoadResult::EXTENSION_UNKNOWN;
+		}
+		result = con.Query("LOAD " + extension);
+		if (result->HasError()) {
+			result->Print();
+			return ExtensionLoadResult::EXTENSION_UNKNOWN;
+		}
+		return ExtensionLoadResult::LOADED_EXTENSION;
+	}
+#endif
+	if (extension == "parquet") {
+#if PARQUET_STATICALLY_LOADED
+		db.LoadExtension<ParquetExtension>();
+#else
+		// parquet extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "icu") {
+#if ICU_STATICALLY_LOADED
+		db.LoadExtension<ICUExtension>();
+#else
+		// icu extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "tpch") {
+#if TPCH_STATICALLY_LOADED
+		db.LoadExtension<TPCHExtension>();
+#else
+		// icu extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "tpcds") {
+#if TPCDS_STATICALLY_LOADED
+		db.LoadExtension<TPCDSExtension>();
+#else
+		// icu extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "fts") {
+#if FTS_STATICALLY_LOADED
+		db.LoadExtension<FTSExtension>();
+#else
+		// fts extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "httpfs") {
+#if HTTPFS_STATICALLY_LOADED
+		db.LoadExtension<HTTPFsExtension>();
+#else
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "visualizer") {
+#if defined(BUILD_VISUALIZER_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+		db.LoadExtension<VisualizerExtension>();
+#else
+		// visualizer extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "json") {
+#if JSON_STATICALLY_LOADED
+		db.LoadExtension<JSONExtension>();
+#else
+		// json extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "excel") {
+#if defined(BUILD_EXCEL_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+		db.LoadExtension<EXCELExtension>();
+#else
+		// excel extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "sqlsmith") {
+#if defined(BUILD_SQLSMITH_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+		db.LoadExtension<SQLSmithExtension>();
+#else
+		// excel extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "jemalloc") {
+#if defined(BUILD_JEMALLOC_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+		db.LoadExtension<JEMallocExtension>();
+#else
+		// jemalloc extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "inet") {
+#if defined(BUILD_INET_EXTENSION) && !defined(DISABLE_BUILTIN_EXTENSIONS)
+		db.LoadExtension<INETExtension>();
+#else
+		// inet extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else {
+		// unknown extension
+		return ExtensionLoadResult::EXTENSION_UNKNOWN;
+	}
+	return ExtensionLoadResult::LOADED_EXTENSION;
+}
+
+static std::vector<std::string> public_keys = {
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6aZuHUa1cLR9YDDYaEfi
+UDbWY8m2t7b71S+k1ZkXfHqu+5drAxm+dIDzdOHOKZSIdwnJbT3sSqwFoG6PlXF3
+g3dsJjax5qESIhbVvf98nyipwNINxoyHCkcCIPkX17QP2xpnT7V59+CqcfDJXLqB
+ymjqoFSlaH8dUCHybM4OXlWnAtVHW/nmw0khF8CetcWn4LxaTUHptByaBz8CasSs
+gWpXgSfaHc3R9eArsYhtsVFGyL/DEWgkEHWolxY3Llenhgm/zOf3s7PsAMe7EJX4
+qlSgiXE6OVBXnqd85z4k20lCw/LAOe5hoTMmRWXIj74MudWe2U91J6GrrGEZa7zT
+7QIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq8Gg1S/LI6ApMAYsFc9m
+PrkFIY+nc0LXSpxm77twU8D5M0Xkz/Av4f88DQmj1OE3164bEtR7sl7xDPZojFHj
+YYyucJxEI97l5OU1d3Pc1BdKXL4+mnW5FlUGj218u8qD+G1hrkySXQkrUzIjPPNw
+o6knF3G/xqQF+KI+tc7ajnTni8CAlnUSxfnstycqbVS86m238PLASVPK9/SmIRgO
+XCEV+ZNMlerq8EwsW4cJPHH0oNVMcaG+QT4z79roW1rbJghn9ubAVdQU6VLUAikI
+b8keUyY+D0XdY9DpDBeiorb1qPYt8BPLOAQrIUAw1CgpMM9KFp9TNvW47KcG4bcB
+dQIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyYATA9KOQ0Azf97QAPfY
+Jc/WeZyE4E1qlRgKWKqNtYSXZqk5At0V7w2ntAWtYSpczFrVepCJ0oPMDpZTigEr
+NgOgfo5LEhPx5XmtCf62xY/xL3kgtfz9Mm5TBkuQy4KwY4z1npGr4NYYDXtF7kkf
+LQE+FnD8Yr4E0wHBib7ey7aeeKWmwqvUjzDqG+TzaqwzO/RCUsSctqSS0t1oo2hv
+4q1ofanUXsV8MXk/ujtgxu7WkVvfiSpK1zRazgeZjcrQFO9qL/pla0vBUxa1U8He
+GMLnL0oRfcMg7yKrbIMrvlEl2ZmiR9im44dXJWfY42quObwr1PuEkEoCMcMisSWl
+jwIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4RvbWx3zLblDHH/lGUF5
+Q512MT+v3YPriuibROMllv8WiCLAMeJ0QXbVaIzBOeHDeLx8yvoZZN+TENKxtT6u
+IfMMneUzxHBqy0AQNfIsSsOnG5nqoeE/AwbS6VqCdH1aLfoCoPffacHYa0XvTcsi
+aVlZfr+UzJS+ty8pRmFVi1UKSOADDdK8XfIovJl/zMP2TxYX2Y3fnjeLtl8Sqs2e
+P+eHDoy7Wi4EPTyY7tNTCfxwKNHn1HQ5yrv5dgvMxFWIWXGz24yikFvtwLGHe8uJ
+Wi+fBX+0PF0diZ6pIthZ149VU8qCqYAXjgpxZ0EZdrsiF6Ewz0cfg20SYApFcmW4
+pwIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyhd5AfwrUohG3O4DE0K9
+O3FmgB7zE4aDnkL8UUfGCh5kdP8q7ewMjekY+c6LwWOmpdJpSwqhfV1q5ZU1l6rk
+3hlt03LO3sgs28kcfOVH15hqfxts6Sg5KcRjxStE50ORmXGwXDcS9vqkJ60J1EHA
+lcZqbCRSO73ZPLhdepfd0/C6tM0L7Ge6cAE62/MTmYNGv8fDzwQr/kYIJMdoS8Zp
+thRpctFZJtPs3b0fffZA/TCLVKMvEVgTWs48751qKid7N/Lm/iEGx/tOf4o23Nec
+Pz1IQaGLP+UOLVQbqQBHJWNOqigm7kWhDgs3N4YagWgxPEQ0WVLtFji/ZjlKZc7h
+dwIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnFDg3LhyV6BVE2Z3zQvN
+6urrKvPhygTa5+wIPGwYTzJ8DfGALqlsX3VOXMvcJTca6SbuwwkoXHuSU5wQxfcs
+bt4jTXD3NIoRwQPl+D9IbgIMuX0ACl27rJmr/f9zkY7qui4k1X82pQkxBe+/qJ4r
+TBwVNONVx1fekTMnSCEhwg5yU3TNbkObu0qlQeJfuMWLDQbW/8v/qfr/Nz0JqHDN
+yYKfKvFMlORxyJYiOyeOsbzNGEhkGQGOmKhRUhS35kD+oA0jqwPwMCM9O4kFg/L8
+iZbpBBX2By1K3msejWMRAewTOyPas6YMQOYq9BMmWQqzVtG5xcaSJwN/YnMpJyqb
+sQIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1z0RU8vGrfEkrscEoZKA
+GiOcGh2EMcKwjQpl4nKuR9H4o/dg+CZregVSHg7MP2f8mhLZZyoFev49oWOV4Rmi
+qs99UNxm7DyKW1fF1ovowsUW5lsDoKYLvpuzHo0s4laiV4AnIYP7tHGLdzsnK2Os
+Cp5dSuMwKHPZ9N25hXxFB/dRrAdIiXHvbSqr4N29XzfQloQpL3bGHLKY6guFHluH
+X5dJ9eirVakWWou7BR2rnD0k9vER6oRdVnJ6YKb5uhWEOQ3NmV961oyr+uiDTcep
+qqtGHWuFhENixtiWGjFJJcACwqxEAW3bz9lyrfnPDsHSW/rlQVDIAkik+fOp+R7L
+kQIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxwO27e1vnbNcpiDg7Wwx
+K/w5aEGukXotu3529ieq+O39H0+Bak4vIbzGhDUh3/ElmxaFMAs4PYrWe/hc2WFD
+H4JCOoFIn4y9gQeE855DGGFgeIVd1BnSs5S+5wUEMxLNyHdHSmINN6FsoZ535iUg
+KdYjRh1iZevezg7ln8o/O36uthu925ehFBXSy6jLJgQlwmq0KxZJE0OAZhuDBM60
+MtIunNa/e5y+Gw3GknFwtRLmn/nEckZx1nEtepYvvUa7UGy+8KuGuhOerCZTutbG
+k8liCVgGenRve8unA2LrBbpL+AUf3CrZU/uAxxTqWmw6Z/S6TeW5ozeeyOCh8ii6
+TwIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsGIFOfIQ4RI5qu4klOxf
+ge6eXwBMAkuTXyhyIIJDtE8CurnwQvUXVlt+Kf0SfuIFW6MY5ErcWE/vMFbc81IR
+9wByOAAV2CTyiLGZT63uE8pN6FSHd6yGYCLjXd3P3cnP3Qj5pBncpLuAUDfHG4wP
+bs9jIADw3HysD+eCNja8p7ZC7CzWxTcO7HsEu9deAAU19YywdpagXvQ0pJ9zV5qU
+jrHxBygl31t6TmmX+3d+azjGu9Hu36E+5wcSOOhuwAFXDejb40Ixv53ItJ3fZzzH
+PF2nj9sQvQ8c5ptjyOvQCBRdqkEWXIVHClxqWb+o59pDIh1G0UGcmiDN7K9Gz5HA
+ZQIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAt9uUnlW/CoUXT68yaZh9
+SeXHzGRCPNEI98Tara+dgYxDX1z7nfOh8o15liT0QsAzx34EewZOxcKCNiV/dZX5
+z4clCkD8uUbZut6IVx8Eu+7Qcd5jZthRc6hQrN9Ltv7ZQEh7KGXOHa53kT2K01ws
+4jbVmd/7Nx7y0Yyqhja01pIu/CUaTkODfQxBXwriLdIzp7y/iJeF/TLqCwZWHKQx
+QOZnsPEveB1F00Va9MeAtTlXFUJ/TQXquqTjeLj4HuIRtbyuNgWoc0JyF+mcafAl
+bnrNEBIfxZhAT81aUCIAzRJp6AqfdeZxnZ/WwohtZQZLXAxFQPTWCcP+Z9M7OIQL
+WwIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA56NhfACkeCyZM07l2wmd
+iTp24E2tLLKU3iByKlIRWRAvXsOejRMJTHTNHWa3cQ7uLP++Tf2St7ksNsyPMNZy
+9QRTLNCYr9rN9loLwdb2sMWxFBwwzCaAOTahGI7GJQy30UB7FEND0X/5U2rZvQij
+Q6K+O4aa+K9M5qyOHNMmXywmTnAgWKNaNxQHPRtD2+dSj60T6zXdtIuCrPfcNGg5
+gj07qWGEXX83V/L7nSqCiIVYg/wqds1x52Yjk1nhXYNBTqlnhmOd8LynGxz/sXC7
+h2Q9XsHjXIChW4FHyLIOl6b4zPMBSxzCigYm3QZJWfAkZv5PBRtnq7vhYOLHzLQj
+CwIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmfPLe0IWGYC0MZC6YiM3
+QGfhT6zSKB0I2DW44nlBlWUcF+32jW2bFJtgE76qGGKFeU4kJBWYr99ufHoAodNg
+M1Ehl/JfQ5KmbC1WIqnFTrgbmqJde79jeCvCpbFLuqnzidwO1PbXDbfRFQcgWaXT
+mDVLNNVmLxA0GkCv+kydE2gtcOD9BDceg7F/56TDvclyI5QqAnjE2XIRMPZlXQP4
+oF2kgz4Cn7LxLHYmkU2sS9NYLzHoyUqFplWlxkQjA4eQ0neutV1Ydmc1IX8W7R38
+A7nFtaT8iI8w6Vkv7ijYN6xf5cVBPKZ3Dv7AdwPet86JD5mf5v+r7iwg5xl3r77Z
+iwIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoB1kWsX8YmCcFOD9ilBY
+xK076HmUAN026uJ8JpmU9Hz+QT1FNXOsnj1h2G6U6btYVIdHUTHy/BvAumrDKqRz
+qcEAzCuhxUjPjss54a/Zqu6nQcoIPHuG/Er39oZHIVkPR1WCvWj8wmyYv6T//dPH
+unO6tW29sXXxS+J1Gah6vpbtJw1pI/liah1DZzb13KWPDI6ZzviTNnW4S05r6js/
+30He+Yud6aywrdaP/7G90qcrteEFcjFy4Xf+5vG960oKoGoDplwX5poay1oCP9tb
+g8AC8VSRAGi3oviTeSWZcrLXS8AtJhGvF48cXQj2q+8YeVKVDpH6fPQxJ9Sh9aeU
+awIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4NTMAIYIlCMID00ufy/I
+AZXc8pocDx9N1Q5x5/cL3aIpLmx02AKo9BvTJaJuHiTjlwYhPtlhIrHV4HUVTkOX
+sISp8B8v9i2I1RIvCTAcvy3gcH6rdRWZ0cdTUiMEqnnxBX9zdzl8oMzZcyauv19D
+BeqJvzflIT96b8g8K3mvgJHs9a1j9f0gN8FuTA0c52DouKnrh8UwH7mlrumYerJw
+6goJGQuK1HEOt6bcQuvogkbgJWOoEYwjNrPwQvIcP4wyrgSnOHg1yXOFE84oVynJ
+czQEOz9ke42I3h8wrnQxilEYBVo2uX8MenqTyfGnE32lPRt3Wv1iEVQls8Cxiuy2
+CQIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3bUtfp66OtRyvIF/oucn
+id8mo7gvbNEH04QMLO3Ok43dlWgWI3hekJAqOYc0mvoI5anqr98h8FI7aCYZm/bY
+vpz0I1aXBaEPh3aWh8f/w9HME7ykBvmhMe3J+VFGWWL4eswfRl//GCtnSMBzDFhM
+SaQOTvADWHkC0njeI5yXjf/lNm6fMACP1cnhuvCtnx7VP/DAtvUk9usDKG56MJnZ
+UoVM3HHjbJeRwxCdlSWe12ilCdwMRKSDY92Hk38/zBLenH04C3HRQLjBGewACUmx
+uvNInehZ4kSYFGa+7UxBxFtzJhlKzGR73qUjpWzZivCe1K0WfRVP5IWsKNCCESJ/
+nQIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyV2dE/CRUAUE8ybq/DoS
+Lc7QlYXh04K+McbhN724TbHahLTuDk5mR5TAunA8Nea4euRzknKdMFAz1eh9gyy3
+5x4UfXQW1fIZqNo6WNrGxYJgWAXU+pov+OvxsMQWzqS4jrTHDHbblCCLKp1akwJk
+aFNyqgjAL373PcqXC+XAn8vHx4xHFoFP5lq4lLcJCOW5ee9v9El3w0USLwS+t1cF
+RY3kuV6Njlr4zsRH9iM6/zaSuCALYWJ/JrPEurSJXzFZnWsvn6aQdeNeAn08+z0F
+k2NwaauEo0xmLqzqTRGzjHqKKmeefN3/+M/FN2FrApDlxWQfhD2Y3USdAiN547Nj
+1wIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvm2+kTrEQWZXuxhWzBdl
+PCbQGqbrukbeS6JKSlQLJDC8ayZIxFxatqg1Q8UPyv89MVRsHOGlG1OqFaOEtPjQ
+Oo6j/moFwB4GPyJhJHOGpCKa4CLB5clhfDCLJw6ty7PcDU3T6yW4X4Qc5k4LRRWy
+yzC8lVHfBdarN+1iEe0ALMOGoeiJjVn6i/AFxktRwgd8njqv/oWQyfjJZXkNMsb6
+7ZDxNVAUrp/WXpE4Kq694bB9xa/pWsqv7FjQJUgTnEzvbN+qXnVPtA7dHcOYYJ8Z
+SbrJUfHrf8TS5B54AiopFpWG+hIbjqqdigqabBqFpmjiRDZgDy4zJJj52xJZMnrp
+rwIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwEAcVmY3589O02pLA22f
+MlarLyJUgy0BeJDG5AUsi17ct8sHZzRiv9zKQVCBk1CtZY//jyqnrM7iCBLWsyby
+TiTOtGYHHApaLnNjjtaHdQ6zplhbc3g2XLy+4ab8GNKG3zc8iXpsQM6r+JO5n9pm
+V9vollz9dkFxS9l+1P17lZdIgCh9O3EIFJv5QCd5c9l2ezHAan2OhkWhiDtldnH/
+MfRXbz7X5sqlwWLa/jhPtvY45x7dZaCHGqNzbupQZs0vHnAVdDu3vAWDmT/3sXHG
+vmGxswKA9tPU0prSvQWLz4LUCnGi/cC5R+fiu+fovFM/BwvaGtqBFIF/1oWVq7bZ
+4wIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA25qGwNO1+qHygC8mjm8L
+3I66mV/IzslgBDHC91mE8YcI5Fq0sdrtsbUhK3z89wIN/zOhbHX0NEiXm2GxUnsI
+vb5tDZXAh7AbTnXTMVbxO/e/8sPLUiObGjDvjVzyzrxOeG87yK/oIiilwk9wTsIb
+wMn2Grj4ht9gVKx3oGHYV7STNdWBlzSaJj4Ou7+5M1InjPDRFZG1K31D2d3IHByX
+lmcRPZtPFTa5C1uVJw00fI4F4uEFlPclZQlR5yA0G9v+0uDgLcjIUB4eqwMthUWc
+dHhlmrPp04LI19eksWHCtG30RzmUaxDiIC7J2Ut0zHDqUe7aXn8tOVI7dE9tTKQD
+KQIDAQAB
+-----END PUBLIC KEY-----
+)",
+    R"(
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7EC2bx7aRnf3TcRg5gmw
+QOKNCUheCelK8hoXLMsKSJqmufyJ+IHUejpXGOpvyYRbACiJ5GiNcww20MVpTBU7
+YESWB2QSU2eEJJXMq84qsZSO8WGmAuKpUckI+hNHKQYJBEDOougV6/vVVEm5c5bc
+SLWQo0+/ciQ21Zwz5SwimX8ep1YpqYirO04gcyGZzAfGboXRvdUwA+1bZvuUXdKC
+4zsCw2QALlcVpzPwjB5mqA/3a+SPgdLAiLOwWXFDRMnQw44UjsnPJFoXgEZiUpZm
+EMS5gLv50CzQqJXK9mNzPuYXNUIc4Pw4ssVWe0OfN3Od90gl5uFUwk/G9lWSYnBN
+3wIDAQAB
+-----END PUBLIC KEY-----
+)"};
+
+const vector<string> ExtensionHelper::GetPublicKeys() {
+	return public_keys;
+}
+
+} // namespace duckdb
+
+
+
+
+
 #ifndef DISABLE_DUCKDB_REMOTE_INSTALL
 
 #endif
@@ -21,14 +1650,36 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 // Install Extension
 //===--------------------------------------------------------------------===//
-const vector<string> ExtensionHelper::PathComponents() {
-	return vector<string> {".duckdb", "extensions", DuckDB::SourceID(), DuckDB::Platform()};
+const string ExtensionHelper::NormalizeVersionTag(const string &version_tag) {
+	if (version_tag.length() > 0 && version_tag[0] != 'v') {
+		return "v" + version_tag;
+	}
+	return version_tag;
 }
 
-string ExtensionHelper::ExtensionDirectory(FileSystem &fs) {
-	string local_path = fs.GetHomeDirectory();
+bool ExtensionHelper::IsRelease(const string &version_tag) {
+	return !StringUtil::Contains(version_tag, "-dev");
+}
+
+const string ExtensionHelper::GetVersionDirectoryName() {
+	if (IsRelease(DuckDB::LibraryVersion())) {
+		return NormalizeVersionTag(DuckDB::LibraryVersion());
+	} else {
+		return DuckDB::SourceID();
+	}
+}
+
+const vector<string> ExtensionHelper::PathComponents() {
+	return vector<string> {".duckdb", "extensions", GetVersionDirectoryName(), DuckDB::Platform()};
+}
+
+string ExtensionHelper::ExtensionDirectory(ClientContext &context) {
+	auto &fs = FileSystem::GetFileSystem(context);
+	string local_path = fs.GetHomeDirectory(FileSystem::GetFileOpener(context));
 	if (!fs.DirectoryExists(local_path)) {
-		throw InternalException("Can't find the home directory at " + local_path);
+		throw IOException("Can't find the home directory at '%s'\nSpecify a home directory using the SET "
+		                  "home_directory='/path/to/dir' option.",
+		                  local_path);
 	}
 	auto path_components = PathComponents();
 	for (auto &path_ele : path_components) {
@@ -40,16 +1691,16 @@ string ExtensionHelper::ExtensionDirectory(FileSystem &fs) {
 	return local_path;
 }
 
-void ExtensionHelper::InstallExtension(DatabaseInstance &db, const string &extension, bool force_install) {
-	auto &config = DBConfig::GetConfig(db);
-	if (!config.enable_external_access) {
+void ExtensionHelper::InstallExtension(ClientContext &context, const string &extension, bool force_install) {
+	auto &config = DBConfig::GetConfig(context);
+	if (!config.options.enable_external_access) {
 		throw PermissionException("Installing extensions is disabled through configuration");
 	}
-	auto &fs = FileSystem::GetFileSystem(db);
+	auto &fs = FileSystem::GetFileSystem(context);
 
-	string local_path = ExtensionDirectory(fs);
+	string local_path = ExtensionDirectory(context);
 
-	auto extension_name = fs.ExtractBaseName(extension);
+	auto extension_name = ApplyExtensionAlias(fs.ExtractBaseName(extension));
 
 	string local_extension_path = fs.JoinPath(local_path, extension_name + ".duckdb_extension");
 	if (fs.FileExists(local_extension_path) && !force_install) {
@@ -92,7 +1743,7 @@ void ExtensionHelper::InstallExtension(DatabaseInstance &db, const string &exten
 		extension_name = "";
 	}
 
-	auto url = StringUtil::Replace(url_template, "${REVISION}", DuckDB::SourceID());
+	auto url = StringUtil::Replace(url_template, "${REVISION}", GetVersionDirectoryName());
 	url = StringUtil::Replace(url, "${PLATFORM}", DuckDB::Platform());
 	url = StringUtil::Replace(url, "${NAME}", extension_name);
 
@@ -114,8 +1765,27 @@ void ExtensionHelper::InstallExtension(DatabaseInstance &db, const string &exten
 	                                                                     DuckDB::SourceID(), DuckDB::Platform())}};
 
 	auto res = cli.Get(url_local_part.c_str(), headers);
+
 	if (!res || res->status != 200) {
-		throw IOException("Failed to download extension %s%s", url_base, url_local_part);
+		// create suggestions
+		vector<string> candidates;
+		for (idx_t ext_count = ExtensionHelper::DefaultExtensionCount(), i = 0; i < ext_count; i++) {
+			candidates.emplace_back(ExtensionHelper::GetDefaultExtension(i).name);
+		}
+		for (idx_t ext_count = ExtensionHelper::ExtensionAliasCount(), i = 0; i < ext_count; i++) {
+			candidates.emplace_back(ExtensionHelper::GetExtensionAlias(i).alias);
+		}
+		auto closest_extensions = StringUtil::TopNLevenshtein(candidates, extension_name);
+		auto message = StringUtil::CandidatesMessage(closest_extensions, "Candidate extensions");
+		for (auto &closest : closest_extensions) {
+			if (closest == extension_name) {
+				message = "Extension \"" + extension_name + "\" is an existing extension.\n";
+				message += "Are you using a development build? In this case, extensions might not (yet) be uploaded.";
+				break;
+			}
+		}
+		throw IOException("Failed to download extension \"%s\" at URL \"%s%s\"\n%s", extension_name, url_base,
+		                  url_local_part, message);
 	}
 	auto decompressed_body = GZipFileSystem::UncompressGZIPString(res->body);
 	std::ofstream out(temp_path, std::ios::binary);
@@ -129,6 +1799,10 @@ void ExtensionHelper::InstallExtension(DatabaseInstance &db, const string &exten
 }
 
 } // namespace duckdb
+
+
+
+
 
 
 
@@ -149,40 +1823,68 @@ static T LoadFunctionFromDLL(void *dll, const string &function_name, const strin
 	return (T)function;
 }
 
-void ExtensionHelper::LoadExternalExtension(DatabaseInstance &db, const string &extension) {
-	auto &config = DBConfig::GetConfig(db);
-	if (!config.enable_external_access) {
+ExtensionInitResult ExtensionHelper::InitialLoad(DBConfig &config, FileOpener *opener, const string &extension) {
+	if (!config.options.enable_external_access) {
 		throw PermissionException("Loading external extensions is disabled through configuration");
 	}
-	auto &fs = FileSystem::GetFileSystem(db);
+	VirtualFileSystem fallback_file_system; // config may not contain one yet
+	auto &fs = config.file_system ? *config.file_system : fallback_file_system;
 	auto filename = fs.ConvertSeparators(extension);
 
 	// shorthand case
 	if (!StringUtil::Contains(extension, ".") && !StringUtil::Contains(extension, fs.PathSeparator())) {
-		string local_path = fs.GetHomeDirectory();
+		string local_path = fs.GetHomeDirectory(opener);
 		auto path_components = PathComponents();
 		for (auto &path_ele : path_components) {
 			local_path = fs.JoinPath(local_path, path_ele);
 		}
-		filename = fs.JoinPath(local_path, extension + ".duckdb_extension");
+		string extension_name = ApplyExtensionAlias(extension);
+		filename = fs.JoinPath(local_path, extension_name + ".duckdb_extension");
 	}
 
 	if (!fs.FileExists(filename)) {
-		throw IOException("File \"%s\" not found", filename);
+		throw IOException("Extension \"%s\" not found", filename);
+	}
+	{
+		auto handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+
+		// signature is the last 265 bytes of the file
+
+		string signature;
+		signature.resize(256);
+
+		auto signature_offset = handle->GetFileSize() - signature.size();
+
+		string file_content;
+		file_content.resize(signature_offset);
+		handle->Read((void *)file_content.data(), signature_offset, 0);
+
+		// TODO maybe we should do a stream read / hash update here
+		handle->Read((void *)signature.data(), signature.size(), signature_offset);
+
+		auto hash = duckdb_mbedtls::MbedTlsWrapper::ComputeSha256Hash(file_content);
+
+		bool any_valid = false;
+		for (auto &key : ExtensionHelper::GetPublicKeys()) {
+			if (duckdb_mbedtls::MbedTlsWrapper::IsValidSha256Signature(key, signature, hash)) {
+				any_valid = true;
+				break;
+			}
+		}
+		if (!any_valid && !config.options.allow_unsigned_extensions) {
+			throw IOException(config.error_manager->FormatException(ErrorType::UNSIGNED_EXTENSION, filename));
+		}
 	}
 	auto lib_hdl = dlopen(filename.c_str(), RTLD_NOW | RTLD_LOCAL);
 	if (!lib_hdl) {
-		throw IOException("File \"%s\" could not be loaded: %s", filename, GetDLError());
+		throw IOException("Extension \"%s\" could not be loaded: %s", filename, GetDLError());
 	}
 
 	auto basename = fs.ExtractBaseName(filename);
-	auto init_fun_name = basename + "_init";
+
+	ext_version_fun_t version_fun;
 	auto version_fun_name = basename + "_version";
 
-	ext_init_fun_t init_fun;
-	ext_version_fun_t version_fun;
-
-	init_fun = LoadFunctionFromDLL<ext_init_fun_t>(lib_hdl, init_fun_name, filename);
 	version_fun = LoadFunctionFromDLL<ext_version_fun_t>(lib_hdl, version_fun_name, filename);
 
 	std::string engine_version = std::string(DuckDB::LibraryVersion());
@@ -208,11 +1910,61 @@ void ExtensionHelper::LoadExternalExtension(DatabaseInstance &db, const string &
 		                            extension_version, engine_version);
 	}
 
+	ExtensionInitResult res;
+	res.basename = basename;
+	res.filename = filename;
+	res.lib_hdl = lib_hdl;
+	return res;
+}
+
+void ExtensionHelper::LoadExternalExtension(ClientContext &context, const string &extension) {
+	auto &db = DatabaseInstance::GetDatabase(context);
+
+	auto res = InitialLoad(DBConfig::GetConfig(context), FileSystem::GetFileOpener(context), extension);
+	auto init_fun_name = res.basename + "_init";
+
+	ext_init_fun_t init_fun;
+	init_fun = LoadFunctionFromDLL<ext_init_fun_t>(res.lib_hdl, init_fun_name, res.filename);
+
 	try {
 		(*init_fun)(db);
 	} catch (std::exception &e) {
 		throw InvalidInputException("Initialization function \"%s\" from file \"%s\" threw an exception: \"%s\"",
-		                            init_fun_name, filename, e.what());
+		                            init_fun_name, res.filename, e.what());
+	}
+
+	DatabaseInstance::GetDatabase(context).SetExtensionLoaded(extension);
+}
+
+unique_ptr<ReplacementOpenData> ExtensionHelper::ReplacementOpenPre(const string &extension, DBConfig &config) {
+
+	auto res = InitialLoad(config, nullptr, extension); // TODO opener
+	auto init_fun_name = res.basename + "_replacement_open_pre";
+
+	replacement_open_pre_t open_pre_fun;
+	open_pre_fun = LoadFunctionFromDLL<replacement_open_pre_t>(res.lib_hdl, init_fun_name, res.filename);
+
+	try {
+		return (*open_pre_fun)(config, nullptr);
+	} catch (std::exception &e) {
+		throw InvalidInputException("Initialization function \"%s\" from file \"%s\" threw an exception: \"%s\"",
+		                            init_fun_name, res.filename, e.what());
+	}
+}
+
+void ExtensionHelper::ReplacementOpenPost(ClientContext &context, const string &extension, DatabaseInstance &instance,
+                                          ReplacementOpenData *open_data) {
+	auto res = InitialLoad(DBConfig::GetConfig(context), FileSystem::GetFileOpener(context), extension);
+	auto init_fun_name = res.basename + "_replacement_open_post";
+
+	replacement_open_post_t open_post_fun;
+	open_post_fun = LoadFunctionFromDLL<replacement_open_post_t>(res.lib_hdl, init_fun_name, res.filename);
+
+	try {
+		(*open_post_fun)(instance, open_data);
+	} catch (std::exception &e) {
+		throw InvalidInputException("Initialization function \"%s\" from file \"%s\" threw an exception: \"%s\"",
+		                            init_fun_name, res.filename, e.what());
 	}
 }
 
@@ -228,43 +1980,119 @@ Extension::~Extension() {
 
 
 
+
+
+namespace duckdb {
+
+struct ExtensionPrefixOpenData : public ReplacementOpenData {
+	ExtensionPrefixOpenData(string extension, string path, unique_ptr<ReplacementOpenData> data)
+	    : extension(move(extension)), path(move(path)), data(move(data)) {
+	}
+	string extension;
+	string path;
+	unique_ptr<ReplacementOpenData> data;
+};
+
+static unique_ptr<ReplacementOpenData> ExtensionPrefixPreOpen(DBConfig &config, ReplacementOpenStaticData *) {
+	auto path = config.options.database_path;
+	auto first_colon = path.find(':');
+	if (first_colon == string::npos || first_colon < 2) { // needs to be at least two characters because windows c: ...
+		return nullptr;
+	}
+	auto extension = path.substr(0, first_colon);
+	D_ASSERT(extension.size() > 1);
+	// needs to be alphanumeric
+	for (auto &ch : extension) {
+		if (!isalnum(ch) && ch != '_') {
+			return nullptr;
+		}
+	}
+	auto extension_data = ExtensionHelper::ReplacementOpenPre(extension, config);
+	if (extension_data) {
+		return make_unique<ExtensionPrefixOpenData>(extension, path, move(extension_data));
+	}
+	return nullptr;
+}
+
+static void ExtensionPrefixPostOpen(DatabaseInstance &instance, ReplacementOpenData *open_data) {
+	if (!open_data) {
+		return;
+	}
+	D_ASSERT(open_data);
+	auto prefix_open_data = (ExtensionPrefixOpenData *)open_data;
+
+	Connection con(instance);
+	ExtensionHelper::LoadExternalExtension(*con.context, prefix_open_data->extension);
+	ExtensionHelper::ReplacementOpenPost(*con.context, prefix_open_data->extension, instance,
+	                                     prefix_open_data->data.get());
+}
+
+ExtensionPrefixReplacementOpen::ExtensionPrefixReplacementOpen()
+    : ReplacementOpen(ExtensionPrefixPreOpen, ExtensionPrefixPostOpen) {
+}
+
+} // namespace duckdb
+
+
+
+
 namespace duckdb {
 
 MaterializedQueryResult::MaterializedQueryResult(StatementType statement_type, StatementProperties properties,
-                                                 vector<LogicalType> types, vector<string> names,
-                                                 const shared_ptr<ClientContext> &context_p)
-    : QueryResult(QueryResultType::MATERIALIZED_RESULT, statement_type, properties, move(types), move(names)),
-      collection(Allocator::DefaultAllocator()), context(context_p) {
+                                                 vector<string> names_p, unique_ptr<ColumnDataCollection> collection_p,
+                                                 ClientProperties client_properties)
+    : QueryResult(QueryResultType::MATERIALIZED_RESULT, statement_type, properties, collection_p->Types(),
+                  move(names_p), move(client_properties)),
+      collection(move(collection_p)), scan_initialized(false) {
 }
 
-MaterializedQueryResult::MaterializedQueryResult(string error)
-    : QueryResult(QueryResultType::MATERIALIZED_RESULT, move(error)), collection(Allocator::DefaultAllocator()) {
-}
-
-Value MaterializedQueryResult::GetValue(idx_t column, idx_t index) {
-	auto &data = collection.GetChunkForRow(index).data[column];
-	auto offset_in_chunk = index % STANDARD_VECTOR_SIZE;
-	return data.GetValue(offset_in_chunk);
+MaterializedQueryResult::MaterializedQueryResult(PreservedError error)
+    : QueryResult(QueryResultType::MATERIALIZED_RESULT, move(error)), scan_initialized(false) {
 }
 
 string MaterializedQueryResult::ToString() {
 	string result;
 	if (success) {
 		result = HeaderToString();
-		result += "[ Rows: " + to_string(collection.Count()) + "]\n";
-		for (idx_t j = 0; j < collection.Count(); j++) {
-			for (idx_t i = 0; i < collection.ColumnCount(); i++) {
-				auto val = collection.GetValue(i, j);
-				result += val.IsNull() ? "NULL" : val.ToString();
-				result += "\t";
+		result += "[ Rows: " + to_string(collection->Count()) + "]\n";
+		auto &coll = Collection();
+		for (auto &row : coll.Rows()) {
+			for (idx_t col_idx = 0; col_idx < coll.ColumnCount(); col_idx++) {
+				if (col_idx > 0) {
+					result += "\t";
+				}
+				auto val = row.GetValue(col_idx);
+				result += val.IsNull() ? "NULL" : StringUtil::Replace(val.ToString(), string("\0", 1), "\\0");
 			}
 			result += "\n";
 		}
 		result += "\n";
 	} else {
-		result = error + "\n";
+		result = GetError() + "\n";
 	}
 	return result;
+}
+
+Value MaterializedQueryResult::GetValue(idx_t column, idx_t index) {
+	if (!row_collection) {
+		row_collection = make_unique<ColumnDataRowCollection>(collection->GetRows());
+	}
+	return row_collection->GetValue(column, index);
+}
+
+idx_t MaterializedQueryResult::RowCount() const {
+	return collection ? collection->Count() : 0;
+}
+
+ColumnDataCollection &MaterializedQueryResult::Collection() {
+	if (HasError()) {
+		throw InvalidInputException("Attempting to get collection from an unsuccessful query result\n: Error %s",
+		                            GetError());
+	}
+	if (!collection) {
+		throw InternalException("Missing collection from materialized query result");
+	}
+	return *collection;
 }
 
 unique_ptr<DataChunk> MaterializedQueryResult::Fetch() {
@@ -272,10 +2100,21 @@ unique_ptr<DataChunk> MaterializedQueryResult::Fetch() {
 }
 
 unique_ptr<DataChunk> MaterializedQueryResult::FetchRaw() {
-	if (!success) {
-		throw InvalidInputException("Attempting to fetch from an unsuccessful query result\nError: %s", error);
+	if (HasError()) {
+		throw InvalidInputException("Attempting to fetch from an unsuccessful query result\nError: %s", GetError());
 	}
-	return collection.Fetch();
+	auto result = make_unique<DataChunk>();
+	collection->InitializeScanChunk(*result);
+	if (!scan_initialized) {
+		// we disallow zero copy so the chunk is independently usable even after the result is destroyed
+		collection->InitializeScan(scan_state, ColumnDataScanProperties::DISALLOW_ZERO_COPY);
+		scan_initialized = true;
+	}
+	collection->Scan(scan_state, *result);
+	if (result->size() == 0) {
+		return nullptr;
+	}
+	return result;
 }
 
 } // namespace duckdb
@@ -292,7 +2131,8 @@ PendingQueryResult::PendingQueryResult(shared_ptr<ClientContext> context_p, Prep
       context(move(context_p)), allow_stream_result(allow_stream_result) {
 }
 
-PendingQueryResult::PendingQueryResult(string error) : BaseQueryResult(QueryResultType::PENDING_RESULT, move(error)) {
+PendingQueryResult::PendingQueryResult(PreservedError error)
+    : BaseQueryResult(QueryResultType::PENDING_RESULT, move(error)) {
 }
 
 PendingQueryResult::~PendingQueryResult() {
@@ -300,20 +2140,26 @@ PendingQueryResult::~PendingQueryResult() {
 
 unique_ptr<ClientContextLock> PendingQueryResult::LockContext() {
 	if (!context) {
-		throw InvalidInputException("Attempting to execute an unsuccessful or closed pending query result\nError: %s",
-		                            error);
+		if (HasError()) {
+			throw InvalidInputException(
+			    "Attempting to execute an unsuccessful or closed pending query result\nError: %s", GetError());
+		}
+		throw InvalidInputException("Attempting to execute an unsuccessful or closed pending query result");
 	}
 	return context->LockContext();
 }
 
 void PendingQueryResult::CheckExecutableInternal(ClientContextLock &lock) {
-	bool invalidated = !success || !context;
+	bool invalidated = HasError() || !context;
 	if (!invalidated) {
 		invalidated = !context->IsActiveResult(lock, this);
 	}
 	if (invalidated) {
-		throw InvalidInputException("Attempting to execute an unsuccessful or closed pending query result\nError: %s",
-		                            error);
+		if (HasError()) {
+			throw InvalidInputException(
+			    "Attempting to execute an unsuccessful or closed pending query result\nError: %s", GetError());
+		}
+		throw InvalidInputException("Attempting to execute an unsuccessful or closed pending query result");
 	}
 }
 
@@ -331,7 +2177,7 @@ unique_ptr<QueryResult> PendingQueryResult::ExecuteInternal(ClientContextLock &l
 	CheckExecutableInternal(lock);
 	while (ExecuteTaskInternal(lock) == PendingExecutionResult::RESULT_NOT_READY) {
 	}
-	if (!success) {
+	if (HasError()) {
 		return make_unique<MaterializedQueryResult>(error);
 	}
 	auto result = context->FetchResultInternal(lock, *this);
@@ -362,10 +2208,19 @@ PreparedStatement::PreparedStatement(shared_ptr<ClientContext> context, shared_p
 	D_ASSERT(data || !success);
 }
 
-PreparedStatement::PreparedStatement(string error) : context(nullptr), success(false), error(move(error)) {
+PreparedStatement::PreparedStatement(PreservedError error) : context(nullptr), success(false), error(move(error)) {
 }
 
 PreparedStatement::~PreparedStatement() {
+}
+
+const string &PreparedStatement::GetError() {
+	D_ASSERT(HasError());
+	return error.Message();
+}
+
+bool PreparedStatement::HasError() const {
+	return !success;
 }
 
 idx_t PreparedStatement::ColumnCount() {
@@ -395,8 +2250,8 @@ const vector<string> &PreparedStatement::GetNames() {
 
 unique_ptr<QueryResult> PreparedStatement::Execute(vector<Value> &values, bool allow_stream_result) {
 	auto pending = PendingQuery(values, allow_stream_result);
-	if (!pending->success) {
-		return make_unique<MaterializedQueryResult>(pending->error);
+	if (pending->HasError()) {
+		return make_unique<MaterializedQueryResult>(pending->GetErrorObject());
 	}
 	return pending->Execute();
 }
@@ -426,14 +2281,42 @@ PreparedStatementData::PreparedStatementData(StatementType type) : statement_typ
 PreparedStatementData::~PreparedStatementData() {
 }
 
+void PreparedStatementData::CheckParameterCount(idx_t parameter_count) {
+	const auto required = properties.parameter_count;
+	if (parameter_count != required) {
+		throw BinderException("Parameter/argument count mismatch for prepared statement. Expected %llu, got %llu",
+		                      required, parameter_count);
+	}
+}
+
+bool PreparedStatementData::RequireRebind(ClientContext &context, const vector<Value> &values) {
+	CheckParameterCount(values.size());
+	if (!unbound_statement) {
+		// no unbound statement!? cannot rebind?
+		return false;
+	}
+	if (!properties.bound_all_parameters) {
+		// parameters not yet bound: query always requires a rebind
+		return true;
+	}
+	auto &catalog = Catalog::GetCatalog(context);
+	if (catalog.GetCatalogVersion() != catalog_version) {
+		//! context is out of bounds
+		return true;
+	}
+	for (auto &it : value_map) {
+		const idx_t i = it.first - 1;
+		if (values[i].type() != it.second->return_type) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void PreparedStatementData::Bind(vector<Value> values) {
 	// set parameters
-	const auto required = properties.parameter_count;
 	D_ASSERT(!unbound_statement || unbound_statement->n_param == properties.parameter_count);
-	if (values.size() != required) {
-		throw BinderException("Parameter/argument count mismatch for prepared statement. Expected %llu, got %llu",
-		                      required, values.size());
-	}
+	CheckParameterCount(values.size());
 
 	// bind the required values
 	for (auto &it : value_map) {
@@ -441,25 +2324,35 @@ void PreparedStatementData::Bind(vector<Value> values) {
 		if (i >= values.size()) {
 			throw BinderException("Could not find parameter with index %llu", i + 1);
 		}
-		D_ASSERT(!it.second.empty());
-		if (!values[i].TryCastAs(it.second[0]->type())) {
+		D_ASSERT(it.second);
+		if (!values[i].DefaultTryCastAs(it.second->return_type)) {
 			throw BinderException(
 			    "Type mismatch for binding parameter with index %llu, expected type %s but got type %s", i + 1,
-			    it.second[0]->type().ToString().c_str(), values[i].type().ToString().c_str());
+			    it.second->return_type.ToString().c_str(), values[i].type().ToString().c_str());
 		}
-		for (auto &target : it.second) {
-			*target = values[i];
-		}
+		it.second->value = values[i];
 	}
 }
 
-LogicalType PreparedStatementData::GetType(idx_t param_idx) {
+bool PreparedStatementData::TryGetType(idx_t param_idx, LogicalType &result) {
 	auto it = value_map.find(param_idx);
 	if (it == value_map.end()) {
+		return false;
+	}
+	if (it->second->return_type.id() != LogicalTypeId::INVALID) {
+		result = it->second->return_type;
+	} else {
+		result = it->second->value.type();
+	}
+	return true;
+}
+
+LogicalType PreparedStatementData::GetType(idx_t param_idx) {
+	LogicalType result;
+	if (!TryGetType(param_idx, result)) {
 		throw BinderException("Could not find parameter with index %llu", param_idx);
 	}
-	D_ASSERT(!it->second.empty());
-	return it->second[0]->type();
+	return result;
 }
 
 } // namespace duckdb
@@ -499,6 +2392,10 @@ ProfilerPrintFormat QueryProfiler::GetPrintFormat() const {
 	return ClientConfig::GetConfig(context).profiler_print_format;
 }
 
+bool QueryProfiler::PrintOptimizerOutput() const {
+	return GetPrintFormat() == ProfilerPrintFormat::QUERY_TREE_OPTIMIZER || IsDetailedEnabled();
+}
+
 string QueryProfiler::GetSaveLocation() const {
 	return is_explain_analyze ? string() : ClientConfig::GetConfig(context).profiler_save_location;
 }
@@ -507,11 +2404,20 @@ QueryProfiler &QueryProfiler::Get(ClientContext &context) {
 	return *ClientData::Get(context).profiler;
 }
 
-void QueryProfiler::StartQuery(string query, bool is_explain_analyze) {
+void QueryProfiler::StartQuery(string query, bool is_explain_analyze, bool start_at_optimizer) {
 	if (is_explain_analyze) {
 		StartExplainAnalyze();
 	}
 	if (!IsEnabled()) {
+		return;
+	}
+	if (start_at_optimizer && !PrintOptimizerOutput()) {
+		// This is the StartQuery call before the optimizer, but we don't have to print optimizer output
+		return;
+	}
+	if (running) {
+		// Called while already running: this should only happen when we print optimizer output
+		D_ASSERT(PrintOptimizerOutput());
 		return;
 	}
 	this->running = true;
@@ -535,7 +2441,7 @@ bool QueryProfiler::OperatorRequiresProfiling(PhysicalOperatorType op_type) {
 	case PhysicalOperatorType::TOP_N:
 	case PhysicalOperatorType::WINDOW:
 	case PhysicalOperatorType::UNNEST:
-	case PhysicalOperatorType::SIMPLE_AGGREGATE:
+	case PhysicalOperatorType::UNGROUPED_AGGREGATE:
 	case PhysicalOperatorType::HASH_GROUP_BY:
 	case PhysicalOperatorType::FILTER:
 	case PhysicalOperatorType::PROJECTION:
@@ -604,11 +2510,10 @@ string QueryProfiler::ToString() const {
 	const auto format = GetPrintFormat();
 	switch (format) {
 	case ProfilerPrintFormat::QUERY_TREE:
+	case ProfilerPrintFormat::QUERY_TREE_OPTIMIZER:
 		return QueryTreeToString();
 	case ProfilerPrintFormat::JSON:
 		return ToJSON();
-	case ProfilerPrintFormat::QUERY_TREE_OPTIMIZER:
-		return QueryTreeToString(true);
 	default:
 		throw InternalException("Unknown ProfilerPrintFormat \"%s\"", format);
 	}
@@ -804,13 +2709,13 @@ static string RenderTiming(double timing) {
 	return timing_s + "s";
 }
 
-string QueryProfiler::QueryTreeToString(bool print_optimizer_output) const {
+string QueryProfiler::QueryTreeToString() const {
 	std::stringstream str;
-	QueryTreeToStream(str, print_optimizer_output);
+	QueryTreeToStream(str);
 	return str.str();
 }
 
-void QueryProfiler::QueryTreeToStream(std::ostream &ss, bool print_optimizer_output) const {
+void QueryProfiler::QueryTreeToStream(std::ostream &ss) const {
 	if (!IsEnabled()) {
 		ss << "Query profiling is disabled. Call "
 		      "Connection::EnableProfiling() to enable profiling!";
@@ -834,7 +2739,7 @@ void QueryProfiler::QueryTreeToStream(std::ostream &ss, bool print_optimizer_out
 	ss << "│└───────────────────────────────────┘│\n";
 	ss << "└─────────────────────────────────────┘\n";
 	// print phase timings
-	if (print_optimizer_output) {
+	if (PrintOptimizerOutput()) {
 		bool has_previous_phase = false;
 		for (const auto &entry : GetOrderedPhaseTimings()) {
 			if (!StringUtil::Contains(entry.first, " > ")) {
@@ -925,10 +2830,9 @@ static void PrintRow(std::ostream &ss, const string &annotation, int id, const s
 
 static void ExtractFunctions(std::ostream &ss, ExpressionInfo &info, int &fun_id, int depth) {
 	if (info.hasfunction) {
-		D_ASSERT(info.sample_tuples_count != 0);
-		PrintRow(ss, "Function", fun_id++, info.function_name,
-		         int(info.function_time) / double(info.sample_tuples_count), info.sample_tuples_count,
-		         info.tuples_count, "", depth);
+		double time = info.sample_tuples_count == 0 ? 0 : int(info.function_time) / double(info.sample_tuples_count);
+		PrintRow(ss, "Function", fun_id++, info.function_name, time, info.sample_tuples_count, info.tuples_count, "",
+		         depth);
 	}
 	if (info.children.empty()) {
 		return;
@@ -955,10 +2859,11 @@ static void ToJSONRecursive(QueryProfiler::TreeNode &node, std::ostream &ss, int
 			continue;
 		}
 		for (auto &expr_timer : expr_executor->roots) {
-			D_ASSERT(expr_timer->sample_tuples_count != 0);
-			PrintRow(ss, "ExpressionRoot", expression_counter++, expr_timer->name,
-			         int(expr_timer->time) / double(expr_timer->sample_tuples_count), expr_timer->sample_tuples_count,
-			         expr_timer->tuples_count, expr_timer->extra_info, depth + 1);
+			double time = expr_timer->sample_tuples_count == 0
+			                  ? 0
+			                  : double(expr_timer->time) / double(expr_timer->sample_tuples_count);
+			PrintRow(ss, "ExpressionRoot", expression_counter++, expr_timer->name, time,
+			         expr_timer->sample_tuples_count, expr_timer->tuples_count, expr_timer->extra_info, depth + 1);
 			// Extract all functions inside the tree
 			ExtractFunctions(ss, *expr_timer->root, function_counter, depth + 1);
 		}
@@ -1128,8 +3033,6 @@ ExpressionRootInfo::ExpressionRootInfo(ExpressionExecutorState &state, string na
 	root = move(expression_info_p);
 }
 } // namespace duckdb
-#include <list>
-
 
 
 
@@ -1144,28 +3047,52 @@ BaseQueryResult::BaseQueryResult(QueryResultType type, StatementType statement_t
 	D_ASSERT(types.size() == names.size());
 }
 
-BaseQueryResult::BaseQueryResult(QueryResultType type, string error) : type(type), success(false), error(move(error)) {
+BaseQueryResult::BaseQueryResult(QueryResultType type, PreservedError error)
+    : type(type), success(false), error(move(error)) {
 }
 
 BaseQueryResult::~BaseQueryResult() {
 }
 
-bool BaseQueryResult::HasError() {
+void BaseQueryResult::ThrowError(const string &prepended_message) const {
+	D_ASSERT(HasError());
+	error.Throw(prepended_message);
+}
+
+void BaseQueryResult::SetError(PreservedError error) {
+	success = !error;
+	this->error = move(error);
+}
+
+bool BaseQueryResult::HasError() const {
+	D_ASSERT((bool)error == !success);
 	return !success;
 }
-const string &BaseQueryResult::GetError() {
+
+const ExceptionType &BaseQueryResult::GetErrorType() const {
+	return error.Type();
+}
+
+const std::string &BaseQueryResult::GetError() {
+	D_ASSERT(HasError());
+	return error.Message();
+}
+
+PreservedError &BaseQueryResult::GetErrorObject() {
 	return error;
 }
+
 idx_t BaseQueryResult::ColumnCount() {
 	return types.size();
 }
 
 QueryResult::QueryResult(QueryResultType type, StatementType statement_type, StatementProperties properties,
-                         vector<LogicalType> types_p, vector<string> names_p)
-    : BaseQueryResult(type, statement_type, properties, move(types_p), move(names_p)) {
+                         vector<LogicalType> types_p, vector<string> names_p, ClientProperties client_properties_p)
+    : BaseQueryResult(type, statement_type, properties, move(types_p), move(names_p)),
+      client_properties(move(client_properties_p)) {
 }
 
-QueryResult::QueryResult(QueryResultType type, string error) : BaseQueryResult(type, move(error)) {
+QueryResult::QueryResult(QueryResultType type, PreservedError error) : BaseQueryResult(type, move(error)) {
 }
 
 QueryResult::~QueryResult() {
@@ -1176,7 +3103,7 @@ unique_ptr<DataChunk> QueryResult::Fetch() {
 	if (!chunk) {
 		return nullptr;
 	}
-	chunk->Normalify();
+	chunk->Flatten();
 	return chunk;
 }
 
@@ -1221,6 +3148,9 @@ bool QueryResult::Equals(QueryResult &other) { // LCOV_EXCL_START
 				if (lvalue.IsNull() && rvalue.IsNull()) {
 					continue;
 				}
+				if (lvalue.IsNull() != rvalue.IsNull()) {
+					return false;
+				}
 				if (lvalue != rvalue) {
 					return false;
 				}
@@ -1246,287 +3176,8 @@ string QueryResult::HeaderToString() {
 	return result;
 }
 
-struct DuckDBArrowSchemaHolder {
-	// unused in children
-	vector<ArrowSchema> children;
-	// unused in children
-	vector<ArrowSchema *> children_ptrs;
-	//! used for nested structures
-	std::list<std::vector<ArrowSchema>> nested_children;
-	std::list<std::vector<ArrowSchema *>> nested_children_ptr;
-	//! This holds strings created to represent decimal types
-	vector<unique_ptr<char[]>> owned_type_names;
-};
-
-static void ReleaseDuckDBArrowSchema(ArrowSchema *schema) {
-	if (!schema || !schema->release) {
-		return;
-	}
-	schema->release = nullptr;
-	auto holder = static_cast<DuckDBArrowSchemaHolder *>(schema->private_data);
-	delete holder;
-}
-
-void InitializeChild(ArrowSchema &child, const string &name = "") {
-	//! Child is cleaned up by parent
-	child.private_data = nullptr;
-	child.release = ReleaseDuckDBArrowSchema;
-
-	//! Store the child schema
-	child.flags = ARROW_FLAG_NULLABLE;
-	child.name = name.c_str();
-	child.n_children = 0;
-	child.children = nullptr;
-	child.metadata = nullptr;
-	child.dictionary = nullptr;
-}
-void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
-                    string &config_timezone);
-
-void SetArrowMapFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
-                       string &config_timezone) {
-	child.format = "+m";
-	//! Map has one child which is a struct
-	child.n_children = 1;
-	root_holder.nested_children.emplace_back();
-	root_holder.nested_children.back().resize(1);
-	root_holder.nested_children_ptr.emplace_back();
-	root_holder.nested_children_ptr.back().push_back(&root_holder.nested_children.back()[0]);
-	InitializeChild(root_holder.nested_children.back()[0]);
-	child.children = &root_holder.nested_children_ptr.back()[0];
-	child.children[0]->name = "entries";
-	child_list_t<LogicalType> struct_child_types;
-	struct_child_types.push_back(std::make_pair("key", ListType::GetChildType(StructType::GetChildType(type, 0))));
-	struct_child_types.push_back(std::make_pair("value", ListType::GetChildType(StructType::GetChildType(type, 1))));
-	auto struct_type = LogicalType::STRUCT(move(struct_child_types));
-	SetArrowFormat(root_holder, *child.children[0], struct_type, config_timezone);
-}
-
-void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
-                    string &config_timezone) {
-	switch (type.id()) {
-	case LogicalTypeId::BOOLEAN:
-		child.format = "b";
-		break;
-	case LogicalTypeId::TINYINT:
-		child.format = "c";
-		break;
-	case LogicalTypeId::SMALLINT:
-		child.format = "s";
-		break;
-	case LogicalTypeId::INTEGER:
-		child.format = "i";
-		break;
-	case LogicalTypeId::BIGINT:
-		child.format = "l";
-		break;
-	case LogicalTypeId::UTINYINT:
-		child.format = "C";
-		break;
-	case LogicalTypeId::USMALLINT:
-		child.format = "S";
-		break;
-	case LogicalTypeId::UINTEGER:
-		child.format = "I";
-		break;
-	case LogicalTypeId::UBIGINT:
-		child.format = "L";
-		break;
-	case LogicalTypeId::FLOAT:
-		child.format = "f";
-		break;
-	case LogicalTypeId::HUGEINT:
-		child.format = "d:38,0";
-		break;
-	case LogicalTypeId::DOUBLE:
-		child.format = "g";
-		break;
-	case LogicalTypeId::UUID:
-	case LogicalTypeId::JSON:
-	case LogicalTypeId::VARCHAR:
-		child.format = "u";
-		break;
-	case LogicalTypeId::DATE:
-		child.format = "tdD";
-		break;
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIME_TZ:
-		child.format = "ttu";
-		break;
-	case LogicalTypeId::TIMESTAMP:
-		child.format = "tsu:";
-		break;
-	case LogicalTypeId::TIMESTAMP_TZ: {
-		string format = "tsu:" + config_timezone;
-		unique_ptr<char[]> format_ptr = unique_ptr<char[]>(new char[format.size() + 1]);
-		for (size_t i = 0; i < format.size(); i++) {
-			format_ptr[i] = format[i];
-		}
-		format_ptr[format.size()] = '\0';
-		root_holder.owned_type_names.push_back(move(format_ptr));
-		child.format = root_holder.owned_type_names.back().get();
-		break;
-	}
-	case LogicalTypeId::TIMESTAMP_SEC:
-		child.format = "tss:";
-		break;
-	case LogicalTypeId::TIMESTAMP_NS:
-		child.format = "tsn:";
-		break;
-	case LogicalTypeId::TIMESTAMP_MS:
-		child.format = "tsm:";
-		break;
-	case LogicalTypeId::INTERVAL:
-		child.format = "tDm";
-		break;
-	case LogicalTypeId::DECIMAL: {
-		uint8_t width, scale;
-		type.GetDecimalProperties(width, scale);
-		string format = "d:" + to_string(width) + "," + to_string(scale);
-		unique_ptr<char[]> format_ptr = unique_ptr<char[]>(new char[format.size() + 1]);
-		for (size_t i = 0; i < format.size(); i++) {
-			format_ptr[i] = format[i];
-		}
-		format_ptr[format.size()] = '\0';
-		root_holder.owned_type_names.push_back(move(format_ptr));
-		child.format = root_holder.owned_type_names.back().get();
-		break;
-	}
-	case LogicalTypeId::SQLNULL: {
-		child.format = "n";
-		break;
-	}
-	case LogicalTypeId::BLOB: {
-		child.format = "z";
-		break;
-	}
-	case LogicalTypeId::LIST: {
-		child.format = "+l";
-		child.n_children = 1;
-		root_holder.nested_children.emplace_back();
-		root_holder.nested_children.back().resize(1);
-		root_holder.nested_children_ptr.emplace_back();
-		root_holder.nested_children_ptr.back().push_back(&root_holder.nested_children.back()[0]);
-		InitializeChild(root_holder.nested_children.back()[0]);
-		child.children = &root_holder.nested_children_ptr.back()[0];
-		child.children[0]->name = "l";
-		SetArrowFormat(root_holder, **child.children, ListType::GetChildType(type), config_timezone);
-		break;
-	}
-	case LogicalTypeId::STRUCT: {
-		child.format = "+s";
-		auto &child_types = StructType::GetChildTypes(type);
-		child.n_children = child_types.size();
-		root_holder.nested_children.emplace_back();
-		root_holder.nested_children.back().resize(child_types.size());
-		root_holder.nested_children_ptr.emplace_back();
-		root_holder.nested_children_ptr.back().resize(child_types.size());
-		for (idx_t type_idx = 0; type_idx < child_types.size(); type_idx++) {
-			root_holder.nested_children_ptr.back()[type_idx] = &root_holder.nested_children.back()[type_idx];
-		}
-		child.children = &root_holder.nested_children_ptr.back()[0];
-		for (size_t type_idx = 0; type_idx < child_types.size(); type_idx++) {
-
-			InitializeChild(*child.children[type_idx]);
-
-			auto &struct_col_name = child_types[type_idx].first;
-			unique_ptr<char[]> name_ptr = unique_ptr<char[]>(new char[struct_col_name.size() + 1]);
-			for (size_t i = 0; i < struct_col_name.size(); i++) {
-				name_ptr[i] = struct_col_name[i];
-			}
-			name_ptr[struct_col_name.size()] = '\0';
-			root_holder.owned_type_names.push_back(move(name_ptr));
-
-			child.children[type_idx]->name = root_holder.owned_type_names.back().get();
-			SetArrowFormat(root_holder, *child.children[type_idx], child_types[type_idx].second, config_timezone);
-		}
-		break;
-	}
-	case LogicalTypeId::MAP: {
-		SetArrowMapFormat(root_holder, child, type, config_timezone);
-		break;
-	}
-	case LogicalTypeId::ENUM: {
-		// TODO what do we do with pointer enums here?
-		switch (EnumType::GetPhysicalType(type)) {
-		case PhysicalType::UINT8:
-			child.format = "C";
-			break;
-		case PhysicalType::UINT16:
-			child.format = "S";
-			break;
-		case PhysicalType::UINT32:
-			child.format = "I";
-			break;
-		default:
-			throw InternalException("Unsupported Enum Internal Type");
-		}
-		root_holder.nested_children.emplace_back();
-		root_holder.nested_children.back().resize(1);
-		root_holder.nested_children_ptr.emplace_back();
-		root_holder.nested_children_ptr.back().push_back(&root_holder.nested_children.back()[0]);
-		InitializeChild(root_holder.nested_children.back()[0]);
-		child.dictionary = root_holder.nested_children_ptr.back()[0];
-		child.dictionary->format = "u";
-		break;
-	}
-	default:
-		throw InternalException("Unsupported Arrow type " + type.ToString());
-	}
-}
-
-void QueryResult::ToArrowSchema(ArrowSchema *out_schema, vector<LogicalType> &types, vector<string> &names,
-                                string &config_timezone) {
-	D_ASSERT(out_schema);
-	D_ASSERT(types.size() == names.size());
-	idx_t column_count = types.size();
-	// Allocate as unique_ptr first to cleanup properly on error
-	auto root_holder = make_unique<DuckDBArrowSchemaHolder>();
-
-	// Allocate the children
-	root_holder->children.resize(column_count);
-	root_holder->children_ptrs.resize(column_count, nullptr);
-	for (size_t i = 0; i < column_count; ++i) {
-		root_holder->children_ptrs[i] = &root_holder->children[i];
-	}
-	out_schema->children = root_holder->children_ptrs.data();
-	out_schema->n_children = column_count;
-
-	// Store the schema
-	out_schema->format = "+s"; // struct apparently
-	out_schema->flags = 0;
-	out_schema->metadata = nullptr;
-	out_schema->name = "duckdb_query_result";
-	out_schema->dictionary = nullptr;
-
-	// Configure all child schemas
-	for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
-
-		auto &child = root_holder->children[col_idx];
-		InitializeChild(child, names[col_idx]);
-		SetArrowFormat(*root_holder, child, types[col_idx], config_timezone);
-	}
-
-	// Release ownership to caller
-	out_schema->private_data = root_holder.release();
-	out_schema->release = ReleaseDuckDBArrowSchema;
-}
-
 string QueryResult::GetConfigTimezone(QueryResult &query_result) {
-	switch (query_result.type) {
-	case QueryResultType::MATERIALIZED_RESULT: {
-		auto actual_context = ((MaterializedQueryResult &)query_result).context.lock();
-		if (!actual_context) {
-			throw std::runtime_error("This connection is closed");
-		}
-		return ClientConfig::ExtractTimezoneFromConfig(actual_context->config);
-	}
-	case QueryResultType::STREAM_RESULT: {
-		return ClientConfig::ExtractTimezoneFromConfig(((StreamQueryResult &)query_result).context->config);
-	}
-	default:
-		throw std::runtime_error("Can't extract timezone configuration from query type ");
-	}
+	return query_result.client_properties.timezone;
 }
 
 } // namespace duckdb
@@ -1665,6 +3316,13 @@ CreateViewRelation::CreateViewRelation(shared_ptr<Relation> child_p, string view
 	context.GetContext()->TryBindRelation(*this, this->columns);
 }
 
+CreateViewRelation::CreateViewRelation(shared_ptr<Relation> child_p, string schema_name_p, string view_name_p,
+                                       bool replace_p, bool temporary_p)
+    : Relation(child_p->context, RelationType::CREATE_VIEW_RELATION), child(move(child_p)),
+      schema_name(move(schema_name_p)), view_name(move(view_name_p)), replace(replace_p), temporary(temporary_p) {
+	context.GetContext()->TryBindRelation(*this, this->columns);
+}
+
 BoundStatement CreateViewRelation::Bind(Binder &binder) {
 	auto select = make_unique<SelectStatement>();
 	select->node = child->GetQueryNode();
@@ -1674,7 +3332,7 @@ BoundStatement CreateViewRelation::Bind(Binder &binder) {
 	info->query = move(select);
 	info->view_name = view_name;
 	info->temporary = temporary;
-	info->schema = "";
+	info->schema = schema_name;
 	info->on_conflict = replace ? OnCreateConflict::REPLACE_ON_CONFLICT : OnCreateConflict::ERROR_ON_CONFLICT;
 	stmt.info = move(info);
 	return binder.Bind((SQLStatement &)stmt);
@@ -1778,13 +3436,14 @@ namespace duckdb {
 
 DistinctRelation::DistinctRelation(shared_ptr<Relation> child_p)
     : Relation(child_p->context, RelationType::DISTINCT_RELATION), child(move(child_p)) {
+	D_ASSERT(child.get() != this);
 	vector<ColumnDefinition> dummy_columns;
 	context.GetContext()->TryBindRelation(*this, dummy_columns);
 }
 
 unique_ptr<QueryNode> DistinctRelation::GetQueryNode() {
 	auto child_node = child->GetQueryNode();
-	child_node->modifiers.push_back(make_unique<DistinctModifier>());
+	child_node->AddDistinct();
 	return child_node;
 }
 
@@ -1845,6 +3504,7 @@ namespace duckdb {
 
 FilterRelation::FilterRelation(shared_ptr<Relation> child_p, unique_ptr<ParsedExpression> condition_p)
     : Relation(child_p->context, RelationType::FILTER_RELATION), condition(move(condition_p)), child(move(child_p)) {
+	D_ASSERT(child.get() != this);
 	vector<ColumnDefinition> dummy_columns;
 	context.GetContext()->TryBindRelation(*this, dummy_columns);
 }
@@ -1998,6 +3658,7 @@ namespace duckdb {
 LimitRelation::LimitRelation(shared_ptr<Relation> child_p, int64_t limit, int64_t offset)
     : Relation(child_p->context, RelationType::PROJECTION_RELATION), limit(limit), offset(offset),
       child(move(child_p)) {
+	D_ASSERT(child.get() != this);
 }
 
 unique_ptr<QueryNode> LimitRelation::GetQueryNode() {
@@ -2042,6 +3703,7 @@ namespace duckdb {
 
 OrderRelation::OrderRelation(shared_ptr<Relation> child_p, vector<OrderByNode> orders)
     : Relation(child_p->context, RelationType::ORDER_RELATION), orders(move(orders)), child(move(child_p)) {
+	D_ASSERT(child.get() != this);
 	// bind the expressions
 	context.GetContext()->TryBindRelation(*this, this->columns);
 }
@@ -2334,6 +3996,7 @@ namespace duckdb {
 
 SubqueryRelation::SubqueryRelation(shared_ptr<Relation> child_p, string alias_p)
     : Relation(child_p->context, RelationType::SUBQUERY_RELATION), child(move(child_p)), alias(move(alias_p)) {
+	D_ASSERT(child.get() != this);
 	vector<ColumnDefinition> dummy_columns;
 	context.GetContext()->TryBindRelation(*this, dummy_columns);
 }
@@ -2937,8 +4600,9 @@ void Relation::Insert(const string &table_name) {
 void Relation::Insert(const string &schema_name, const string &table_name) {
 	auto insert = make_shared<InsertRelation>(shared_from_this(), schema_name, table_name);
 	auto res = insert->Execute();
-	if (!res->success) {
-		throw Exception("Failed to insert into table '" + table_name + "': " + res->error);
+	if (res->HasError()) {
+		const string prepended_message = "Failed to insert into table '" + table_name + "': ";
+		res->ThrowError(prepended_message);
 	}
 }
 
@@ -2955,24 +4619,37 @@ void Relation::Create(const string &table_name) {
 void Relation::Create(const string &schema_name, const string &table_name) {
 	auto create = make_shared<CreateTableRelation>(shared_from_this(), schema_name, table_name);
 	auto res = create->Execute();
-	if (!res->success) {
-		throw Exception("Failed to create table '" + table_name + "': " + res->error);
+	if (res->HasError()) {
+		const string prepended_message = "Failed to create table '" + table_name + "': ";
+		res->ThrowError(prepended_message);
 	}
 }
 
 void Relation::WriteCSV(const string &csv_file) {
 	auto write_csv = make_shared<WriteCSVRelation>(shared_from_this(), csv_file);
 	auto res = write_csv->Execute();
-	if (!res->success) {
-		throw Exception("Failed to write '" + csv_file + "': " + res->error);
+	if (res->HasError()) {
+		const string prepended_message = "Failed to write '" + csv_file + "': ";
+		res->ThrowError(prepended_message);
 	}
 }
 
 shared_ptr<Relation> Relation::CreateView(const string &name, bool replace, bool temporary) {
 	auto view = make_shared<CreateViewRelation>(shared_from_this(), name, replace, temporary);
 	auto res = view->Execute();
-	if (!res->success) {
-		throw Exception("Failed to create view '" + name + "': " + res->error);
+	if (res->HasError()) {
+		const string prepended_message = "Failed to create view '" + name + "': ";
+		res->ThrowError(prepended_message);
+	}
+	return shared_from_this();
+}
+
+shared_ptr<Relation> Relation::CreateView(const string &schema_name, const string &name, bool replace, bool temporary) {
+	auto view = make_shared<CreateViewRelation>(shared_from_this(), schema_name, name, replace, temporary);
+	auto res = view->Execute();
+	if (res->HasError()) {
+		const string prepended_message = "Failed to create view '" + name + "': ";
+		res->ThrowError(prepended_message);
 	}
 	return shared_from_this();
 }
@@ -3052,7 +4729,7 @@ vector<shared_ptr<ExternalDependency>> Relation::GetAllDependencies() {
 		if (cur->extra_dependencies) {
 			all_dependencies.push_back(cur->extra_dependencies);
 		}
-		cur = ChildRelation();
+		cur = cur->ChildRelation();
 	}
 	return all_dependencies;
 }
@@ -3080,11 +4757,11 @@ namespace duckdb {
 void AccessModeSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
 	auto parameter = StringUtil::Lower(input.ToString());
 	if (parameter == "automatic") {
-		config.access_mode = AccessMode::AUTOMATIC;
+		config.options.access_mode = AccessMode::AUTOMATIC;
 	} else if (parameter == "read_only") {
-		config.access_mode = AccessMode::READ_ONLY;
+		config.options.access_mode = AccessMode::READ_ONLY;
 	} else if (parameter == "read_write") {
-		config.access_mode = AccessMode::READ_WRITE;
+		config.options.access_mode = AccessMode::READ_WRITE;
 	} else {
 		throw InvalidInputException(
 		    "Unrecognized parameter for option ACCESS_MODE \"%s\". Expected READ_ONLY or READ_WRITE.", parameter);
@@ -3093,7 +4770,7 @@ void AccessModeSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const 
 
 Value AccessModeSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	switch (config.access_mode) {
+	switch (config.options.access_mode) {
 	case AccessMode::AUTOMATIC:
 		return "automatic";
 	case AccessMode::READ_ONLY:
@@ -3110,12 +4787,12 @@ Value AccessModeSetting::GetSetting(ClientContext &context) {
 //===--------------------------------------------------------------------===//
 void CheckpointThresholdSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
 	idx_t new_limit = DBConfig::ParseMemoryLimit(input.ToString());
-	config.checkpoint_wal_size = new_limit;
+	config.options.checkpoint_wal_size = new_limit;
 }
 
 Value CheckpointThresholdSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	return Value(StringUtil::BytesToHumanReadableString(config.checkpoint_wal_size));
+	return Value(StringUtil::BytesToHumanReadableString(config.options.checkpoint_wal_size));
 }
 
 //===--------------------------------------------------------------------===//
@@ -3124,13 +4801,13 @@ Value CheckpointThresholdSetting::GetSetting(ClientContext &context) {
 void DebugCheckpointAbort::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
 	auto checkpoint_abort = StringUtil::Lower(input.ToString());
 	if (checkpoint_abort == "none") {
-		config.checkpoint_abort = CheckpointAbort::NO_ABORT;
+		config.options.checkpoint_abort = CheckpointAbort::NO_ABORT;
 	} else if (checkpoint_abort == "before_truncate") {
-		config.checkpoint_abort = CheckpointAbort::DEBUG_ABORT_BEFORE_TRUNCATE;
+		config.options.checkpoint_abort = CheckpointAbort::DEBUG_ABORT_BEFORE_TRUNCATE;
 	} else if (checkpoint_abort == "before_header") {
-		config.checkpoint_abort = CheckpointAbort::DEBUG_ABORT_BEFORE_HEADER;
+		config.options.checkpoint_abort = CheckpointAbort::DEBUG_ABORT_BEFORE_HEADER;
 	} else if (checkpoint_abort == "after_free_list_write") {
-		config.checkpoint_abort = CheckpointAbort::DEBUG_ABORT_AFTER_FREE_LIST_WRITE;
+		config.options.checkpoint_abort = CheckpointAbort::DEBUG_ABORT_AFTER_FREE_LIST_WRITE;
 	} else {
 		throw ParserException(
 		    "Unrecognized option for PRAGMA debug_checkpoint_abort, expected none, before_truncate or before_header");
@@ -3164,28 +4841,16 @@ Value DebugForceNoCrossProduct::GetSetting(ClientContext &context) {
 }
 
 //===--------------------------------------------------------------------===//
-// Debug Many Free List blocks
-//===--------------------------------------------------------------------===//
-void DebugManyFreeListBlocks::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
-	config.debug_many_free_list_blocks = input.GetValue<bool>();
-}
-
-Value DebugManyFreeListBlocks::GetSetting(ClientContext &context) {
-	auto &config = DBConfig::GetConfig(context);
-	return Value::BOOLEAN(config.debug_many_free_list_blocks);
-}
-
-//===--------------------------------------------------------------------===//
 // Debug Window Mode
 //===--------------------------------------------------------------------===//
 void DebugWindowMode::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
 	auto param = StringUtil::Lower(input.ToString());
 	if (param == "window") {
-		config.window_mode = WindowAggregationMode::WINDOW;
+		config.options.window_mode = WindowAggregationMode::WINDOW;
 	} else if (param == "combine") {
-		config.window_mode = WindowAggregationMode::COMBINE;
+		config.options.window_mode = WindowAggregationMode::COMBINE;
 	} else if (param == "separate") {
-		config.window_mode = WindowAggregationMode::SEPARATE;
+		config.options.window_mode = WindowAggregationMode::SEPARATE;
 	} else {
 		throw ParserException("Unrecognized option for PRAGMA debug_window_mode, expected window, combine or separate");
 	}
@@ -3200,7 +4865,7 @@ Value DebugWindowMode::GetSetting(ClientContext &context) {
 //===--------------------------------------------------------------------===//
 void DefaultCollationSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
 	auto parameter = StringUtil::Lower(input.ToString());
-	config.collation = parameter;
+	config.options.collation = parameter;
 }
 
 void DefaultCollationSetting::SetLocal(ClientContext &context, const Value &input) {
@@ -3208,12 +4873,12 @@ void DefaultCollationSetting::SetLocal(ClientContext &context, const Value &inpu
 	// bind the collation to verify that it exists
 	ExpressionBinder::TestCollation(context, parameter);
 	auto &config = DBConfig::GetConfig(context);
-	config.collation = parameter;
+	config.options.collation = parameter;
 }
 
 Value DefaultCollationSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	return Value(config.collation);
+	return Value(config.options.collation);
 }
 
 //===--------------------------------------------------------------------===//
@@ -3222,9 +4887,9 @@ Value DefaultCollationSetting::GetSetting(ClientContext &context) {
 void DefaultOrderSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
 	auto parameter = StringUtil::Lower(input.ToString());
 	if (parameter == "ascending" || parameter == "asc") {
-		config.default_order_type = OrderType::ASCENDING;
+		config.options.default_order_type = OrderType::ASCENDING;
 	} else if (parameter == "descending" || parameter == "desc") {
-		config.default_order_type = OrderType::DESCENDING;
+		config.options.default_order_type = OrderType::DESCENDING;
 	} else {
 		throw InvalidInputException("Unrecognized parameter for option DEFAULT_ORDER \"%s\". Expected ASC or DESC.",
 		                            parameter);
@@ -3233,7 +4898,7 @@ void DefaultOrderSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, cons
 
 Value DefaultOrderSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	switch (config.default_order_type) {
+	switch (config.options.default_order_type) {
 	case OrderType::ASCENDING:
 		return "asc";
 	case OrderType::DESCENDING:
@@ -3250,10 +4915,10 @@ void DefaultNullOrderSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, 
 	auto parameter = StringUtil::Lower(input.ToString());
 
 	if (parameter == "nulls_first" || parameter == "nulls first" || parameter == "null first" || parameter == "first") {
-		config.default_null_order = OrderByNullType::NULLS_FIRST;
+		config.options.default_null_order = OrderByNullType::NULLS_FIRST;
 	} else if (parameter == "nulls_last" || parameter == "nulls last" || parameter == "null last" ||
 	           parameter == "last") {
-		config.default_null_order = OrderByNullType::NULLS_LAST;
+		config.options.default_null_order = OrderByNullType::NULLS_LAST;
 	} else {
 		throw ParserException(
 		    "Unrecognized parameter for option NULL_ORDER \"%s\", expected either NULLS FIRST or NULLS LAST",
@@ -3263,7 +4928,7 @@ void DefaultNullOrderSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, 
 
 Value DefaultNullOrderSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	switch (config.default_null_order) {
+	switch (config.options.default_null_order) {
 	case OrderByNullType::NULLS_FIRST:
 		return "nulls_first";
 	case OrderByNullType::NULLS_LAST:
@@ -3287,13 +4952,13 @@ void DisabledOptimizersSetting::SetGlobal(DatabaseInstance *db, DBConfig &config
 		}
 		disabled_optimizers.insert(OptimizerTypeFromString(param));
 	}
-	config.disabled_optimizers = move(disabled_optimizers);
+	config.options.disabled_optimizers = move(disabled_optimizers);
 }
 
 Value DisabledOptimizersSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
 	string result;
-	for (auto &optimizer : config.disabled_optimizers) {
+	for (auto &optimizer : config.options.disabled_optimizers) {
 		if (!result.empty()) {
 			result += ",";
 		}
@@ -3310,24 +4975,52 @@ void EnableExternalAccessSetting::SetGlobal(DatabaseInstance *db, DBConfig &conf
 	if (db && new_value) {
 		throw InvalidInputException("Cannot change enable_external_access setting while database is running");
 	}
-	config.enable_external_access = new_value;
+	config.options.enable_external_access = new_value;
 }
 
 Value EnableExternalAccessSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	return Value::BOOLEAN(config.enable_external_access);
+	return Value::BOOLEAN(config.options.enable_external_access);
+}
+
+//===--------------------------------------------------------------------===//
+// Enable FSST Vectors
+//===--------------------------------------------------------------------===//
+void EnableFSSTVectors::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
+	config.options.enable_fsst_vectors = input.GetValue<bool>();
+}
+
+Value EnableFSSTVectors::GetSetting(ClientContext &context) {
+	auto &config = DBConfig::GetConfig(context);
+	return Value::BOOLEAN(config.options.enable_fsst_vectors);
+}
+
+//===--------------------------------------------------------------------===//
+// Allow Unsigned Extensions
+//===--------------------------------------------------------------------===//
+void AllowUnsignedExtensionsSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
+	auto new_value = input.GetValue<bool>();
+	if (db && new_value) {
+		throw InvalidInputException("Cannot change allow_unsigned_extensions setting while database is running");
+	}
+	config.options.allow_unsigned_extensions = new_value;
+}
+
+Value AllowUnsignedExtensionsSetting::GetSetting(ClientContext &context) {
+	auto &config = DBConfig::GetConfig(context);
+	return Value::BOOLEAN(config.options.allow_unsigned_extensions);
 }
 
 //===--------------------------------------------------------------------===//
 // Enable Object Cache
 //===--------------------------------------------------------------------===//
 void EnableObjectCacheSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
-	config.object_cache_enable = input.GetValue<bool>();
+	config.options.object_cache_enable = input.GetValue<bool>();
 }
 
 Value EnableObjectCacheSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	return Value::BOOLEAN(config.object_cache_enable);
+	return Value::BOOLEAN(config.options.object_cache_enable);
 }
 
 //===--------------------------------------------------------------------===//
@@ -3380,6 +5073,18 @@ Value EnableProgressBarSetting::GetSetting(ClientContext &context) {
 }
 
 //===--------------------------------------------------------------------===//
+// Experimental Parallel CSV
+//===--------------------------------------------------------------------===//
+void ExperimentalParallelCSVSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
+	config.options.experimental_parallel_csv_reader = input.GetValue<bool>();
+}
+
+Value ExperimentalParallelCSVSetting::GetSetting(ClientContext &context) {
+	auto &config = DBConfig::GetConfig(context);
+	return Value::BIGINT(config.options.experimental_parallel_csv_reader);
+}
+
+//===--------------------------------------------------------------------===//
 // Explain Output
 //===--------------------------------------------------------------------===//
 void ExplainOutputSetting::SetLocal(ClientContext &context, const Value &input) {
@@ -3413,12 +5118,12 @@ Value ExplainOutputSetting::GetSetting(ClientContext &context) {
 // External Threads Setting
 //===--------------------------------------------------------------------===//
 void ExternalThreadsSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
-	config.external_threads = input.GetValue<int64_t>();
+	config.options.external_threads = input.GetValue<int64_t>();
 }
 
 Value ExternalThreadsSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	return Value::BIGINT(config.external_threads);
+	return Value::BIGINT(config.options.external_threads);
 }
 
 //===--------------------------------------------------------------------===//
@@ -3441,19 +5146,32 @@ Value FileSearchPathSetting::GetSetting(ClientContext &context) {
 void ForceCompressionSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
 	auto compression = StringUtil::Lower(input.ToString());
 	if (compression == "none") {
-		config.force_compression = CompressionType::COMPRESSION_AUTO;
+		config.options.force_compression = CompressionType::COMPRESSION_AUTO;
 	} else {
 		auto compression_type = CompressionTypeFromString(compression);
 		if (compression_type == CompressionType::COMPRESSION_AUTO) {
 			throw ParserException("Unrecognized option for PRAGMA force_compression, expected none, uncompressed, rle, "
 			                      "dictionary, pfor, bitpacking or fsst");
 		}
-		config.force_compression = compression_type;
+		config.options.force_compression = compression_type;
 	}
 }
 
 Value ForceCompressionSetting::GetSetting(ClientContext &context) {
 	return Value();
+}
+
+//===--------------------------------------------------------------------===//
+// Home Directory
+//===--------------------------------------------------------------------===//
+void HomeDirectorySetting::SetLocal(ClientContext &context, const Value &input) {
+	auto &config = ClientConfig::GetConfig(context);
+	config.home_directory = input.IsNull() ? string() : input.ToString();
+}
+
+Value HomeDirectorySetting::GetSetting(ClientContext &context) {
+	auto &config = ClientConfig::GetConfig(context);
+	return Value(config.home_directory);
 }
 
 //===--------------------------------------------------------------------===//
@@ -3492,15 +5210,26 @@ Value MaximumExpressionDepthSetting::GetSetting(ClientContext &context) {
 // Maximum Memory
 //===--------------------------------------------------------------------===//
 void MaximumMemorySetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
-	config.maximum_memory = DBConfig::ParseMemoryLimit(input.ToString());
+	config.options.maximum_memory = DBConfig::ParseMemoryLimit(input.ToString());
 	if (db) {
-		BufferManager::GetBufferManager(*db).SetLimit(config.maximum_memory);
+		BufferManager::GetBufferManager(*db).SetLimit(config.options.maximum_memory);
 	}
 }
 
 Value MaximumMemorySetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	return Value(StringUtil::BytesToHumanReadableString(config.maximum_memory));
+	return Value(StringUtil::BytesToHumanReadableString(config.options.maximum_memory));
+}
+
+//===--------------------------------------------------------------------===//
+// Password Setting
+//===--------------------------------------------------------------------===//
+void PasswordSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
+	// nop
+}
+
+Value PasswordSetting::GetSetting(ClientContext &context) {
+	return Value();
 }
 
 //===--------------------------------------------------------------------===//
@@ -3533,12 +5262,12 @@ Value PreserveIdentifierCase::GetSetting(ClientContext &context) {
 // PreserveInsertionOrder
 //===--------------------------------------------------------------------===//
 void PreserveInsertionOrder::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
-	config.preserve_insertion_order = input.GetValue<bool>();
+	config.options.preserve_insertion_order = input.GetValue<bool>();
 }
 
 Value PreserveInsertionOrder::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	return Value::BOOLEAN(config.preserve_insertion_order);
+	return Value::BOOLEAN(config.options.preserve_insertion_order);
 }
 
 //===--------------------------------------------------------------------===//
@@ -3641,11 +5370,11 @@ Value SearchPathSetting::GetSetting(ClientContext &context) {
 // Temp Directory
 //===--------------------------------------------------------------------===//
 void TempDirectorySetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
-	config.temporary_directory = input.ToString();
-	config.use_temporary_directory = !config.temporary_directory.empty();
+	config.options.temporary_directory = input.ToString();
+	config.options.use_temporary_directory = !config.options.temporary_directory.empty();
 	if (db) {
 		auto &buffer_manager = BufferManager::GetBufferManager(*db);
-		buffer_manager.SetTemporaryDirectory(config.temporary_directory);
+		buffer_manager.SetTemporaryDirectory(config.options.temporary_directory);
 	}
 }
 
@@ -3658,15 +5387,26 @@ Value TempDirectorySetting::GetSetting(ClientContext &context) {
 // Threads Setting
 //===--------------------------------------------------------------------===//
 void ThreadsSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
-	config.maximum_threads = input.GetValue<int64_t>();
+	config.options.maximum_threads = input.GetValue<int64_t>();
 	if (db) {
-		TaskScheduler::GetScheduler(*db).SetThreads(config.maximum_threads);
+		TaskScheduler::GetScheduler(*db).SetThreads(config.options.maximum_threads);
 	}
 }
 
 Value ThreadsSetting::GetSetting(ClientContext &context) {
 	auto &config = DBConfig::GetConfig(context);
-	return Value::BIGINT(config.maximum_threads);
+	return Value::BIGINT(config.options.maximum_threads);
+}
+
+//===--------------------------------------------------------------------===//
+// Username Setting
+//===--------------------------------------------------------------------===//
+void UsernameSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
+	// nop
+}
+
+Value UsernameSetting::GetSetting(ClientContext &context) {
+	return Value();
 }
 
 } // namespace duckdb
@@ -3678,9 +5418,12 @@ Value ThreadsSetting::GetSetting(ClientContext &context) {
 namespace duckdb {
 
 StreamQueryResult::StreamQueryResult(StatementType statement_type, StatementProperties properties,
-                                     shared_ptr<ClientContext> context, vector<LogicalType> types, vector<string> names)
-    : QueryResult(QueryResultType::STREAM_RESULT, statement_type, properties, move(types), move(names)),
-      context(move(context)) {
+                                     shared_ptr<ClientContext> context_p, vector<LogicalType> types,
+                                     vector<string> names)
+    : QueryResult(QueryResultType::STREAM_RESULT, statement_type, properties, move(types), move(names),
+                  context_p->GetClientProperties()),
+      context(move(context_p)) {
+	D_ASSERT(context);
 }
 
 StreamQueryResult::~StreamQueryResult() {
@@ -3692,23 +5435,29 @@ string StreamQueryResult::ToString() {
 		result = HeaderToString();
 		result += "[[STREAM RESULT]]";
 	} else {
-		result = error + "\n";
+		result = GetError() + "\n";
 	}
 	return result;
 }
 
 unique_ptr<ClientContextLock> StreamQueryResult::LockContext() {
 	if (!context) {
-		throw InvalidInputException("Attempting to execute an unsuccessful or closed pending query result\nError: %s",
-		                            error);
+		string error_str = "Attempting to execute an unsuccessful or closed pending query result";
+		if (HasError()) {
+			error_str += StringUtil::Format("\nError: %s", GetError());
+		}
+		throw InvalidInputException(error_str);
 	}
 	return context->LockContext();
 }
 
 void StreamQueryResult::CheckExecutableInternal(ClientContextLock &lock) {
 	if (!IsOpenInternal(lock)) {
-		throw InvalidInputException("Attempting to execute an unsuccessful or closed pending query result\nError: %s",
-		                            error);
+		string error_str = "Attempting to execute an unsuccessful or closed pending query result";
+		if (HasError()) {
+			error_str += StringUtil::Format("\nError: %s", GetError());
+		}
+		throw InvalidInputException(error_str);
 	}
 }
 
@@ -3727,19 +5476,24 @@ unique_ptr<DataChunk> StreamQueryResult::FetchRaw() {
 }
 
 unique_ptr<MaterializedQueryResult> StreamQueryResult::Materialize() {
-	if (!success) {
-		return make_unique<MaterializedQueryResult>(error);
+	if (HasError() || !context) {
+		return make_unique<MaterializedQueryResult>(GetErrorObject());
 	}
-	auto result = make_unique<MaterializedQueryResult>(statement_type, properties, types, names, context);
+	auto collection = make_unique<ColumnDataCollection>(Allocator::DefaultAllocator(), types);
+
+	ColumnDataAppendState append_state;
+	collection->InitializeAppend(append_state);
 	while (true) {
 		auto chunk = Fetch();
 		if (!chunk || chunk->size() == 0) {
 			break;
 		}
-		result->collection.Append(*chunk);
+		collection->Append(append_state, *chunk);
 	}
-	if (!success) {
-		return make_unique<MaterializedQueryResult>(error);
+	auto result =
+	    make_unique<MaterializedQueryResult>(statement_type, properties, names, move(collection), client_properties);
+	if (HasError()) {
+		return make_unique<MaterializedQueryResult>(GetErrorObject());
 	}
 	return result;
 }
@@ -3762,6 +5516,605 @@ bool StreamQueryResult::IsOpen() {
 
 void StreamQueryResult::Close() {
 	context.reset();
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+ValidChecker::ValidChecker() : is_invalidated(false) {
+}
+
+void ValidChecker::Invalidate(string error) {
+	lock_guard<mutex> l(invalidate_lock);
+	this->is_invalidated = true;
+	this->invalidated_msg = move(error);
+}
+
+bool ValidChecker::IsInvalidated() {
+	return this->is_invalidated;
+}
+
+string ValidChecker::InvalidatedMessage() {
+	lock_guard<mutex> l(invalidate_lock);
+	return invalidated_msg;
+}
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+static TableCatalogEntry *GetCatalogTableEntry(LogicalOperator *op) {
+	if (op->type == LogicalOperatorType::LOGICAL_GET) {
+		auto get = (LogicalGet *)op;
+		TableCatalogEntry *entry = get->GetTable();
+		return entry;
+	}
+	for (auto &child : op->children) {
+		TableCatalogEntry *entry = GetCatalogTableEntry(child.get());
+		if (entry != nullptr) {
+			return entry;
+		}
+	}
+	return nullptr;
+}
+
+// The filter was made on top of a logical sample or other projection,
+// but no specific columns are referenced. See issue 4978 number 4.
+bool CardinalityEstimator::EmptyFilter(FilterInfo *filter_info) {
+	if (!filter_info->left_set && !filter_info->right_set) {
+		return true;
+	}
+	return false;
+}
+
+void CardinalityEstimator::AddRelationTdom(FilterInfo *filter_info) {
+	D_ASSERT(filter_info->set->count >= 1);
+	for (const RelationsToTDom &r2tdom : relations_to_tdoms) {
+		auto &i_set = r2tdom.equivalent_relations;
+		if (i_set.find(filter_info->left_binding) != i_set.end()) {
+			// found an equivalent filter
+			return;
+		}
+	}
+	auto key = ColumnBinding(filter_info->left_binding.table_index, filter_info->left_binding.column_index);
+	column_binding_set_t tmp({key});
+	relations_to_tdoms.emplace_back(RelationsToTDom(tmp));
+}
+
+bool CardinalityEstimator::SingleColumnFilter(FilterInfo *filter_info) {
+	if (filter_info->left_set && filter_info->right_set) {
+		// Both set
+		return false;
+	}
+	if (EmptyFilter(filter_info)) {
+		return false;
+	}
+	return true;
+}
+
+vector<idx_t> CardinalityEstimator::DetermineMatchingEquivalentSets(FilterInfo *filter_info) {
+	vector<idx_t> matching_equivalent_sets;
+	auto equivalent_relation_index = 0;
+
+	for (const RelationsToTDom &r2tdom : relations_to_tdoms) {
+		auto &i_set = r2tdom.equivalent_relations;
+		if (i_set.find(filter_info->left_binding) != i_set.end()) {
+			matching_equivalent_sets.push_back(equivalent_relation_index);
+		} else if (i_set.find(filter_info->right_binding) != i_set.end()) {
+			// don't add both left and right to the matching_equivalent_sets
+			// since both left and right get added to that index anyway.
+			matching_equivalent_sets.push_back(equivalent_relation_index);
+		}
+		equivalent_relation_index++;
+	}
+	return matching_equivalent_sets;
+}
+
+void CardinalityEstimator::AddToEquivalenceSets(FilterInfo *filter_info, vector<idx_t> matching_equivalent_sets) {
+	D_ASSERT(matching_equivalent_sets.size() <= 2);
+	if (matching_equivalent_sets.size() > 1) {
+		// an equivalence relation is connecting to sets of equivalence relations
+		// so push all relations from the second set into the first. Later we will delete
+		// the second set.
+		for (ColumnBinding i : relations_to_tdoms.at(matching_equivalent_sets[1]).equivalent_relations) {
+			relations_to_tdoms.at(matching_equivalent_sets[0]).equivalent_relations.insert(i);
+		}
+		relations_to_tdoms.at(matching_equivalent_sets[1]).equivalent_relations.clear();
+		relations_to_tdoms.at(matching_equivalent_sets[0]).filters.push_back(filter_info);
+		// add all values of one set to the other, delete the empty one
+	} else if (matching_equivalent_sets.size() == 1) {
+		auto &tdom_i = relations_to_tdoms.at(matching_equivalent_sets.at(0));
+		tdom_i.equivalent_relations.insert(filter_info->left_binding);
+		tdom_i.equivalent_relations.insert(filter_info->right_binding);
+		tdom_i.filters.push_back(filter_info);
+	} else if (matching_equivalent_sets.empty()) {
+		column_binding_set_t tmp;
+		tmp.insert(filter_info->left_binding);
+		tmp.insert(filter_info->right_binding);
+		relations_to_tdoms.emplace_back(RelationsToTDom(tmp));
+		relations_to_tdoms.back().filters.push_back(filter_info);
+	}
+}
+
+void CardinalityEstimator::AddRelationToColumnMapping(ColumnBinding key, ColumnBinding value) {
+	relation_column_to_original_column[key] = value;
+}
+
+void CardinalityEstimator::CopyRelationMap(column_binding_map_t<ColumnBinding> &child_binding_map) {
+	for (auto &binding_map : relation_column_to_original_column) {
+		child_binding_map[binding_map.first] = binding_map.second;
+	}
+}
+
+void CardinalityEstimator::AddColumnToRelationMap(idx_t table_index, idx_t column_index) {
+	relation_attributes[table_index].columns.insert(column_index);
+}
+
+void CardinalityEstimator::InitEquivalentRelations(vector<unique_ptr<FilterInfo>> *filter_infos) {
+	// For each filter, we fill keep track of the index of the equivalent relation set
+	// the left and right relation needs to be added to.
+	for (auto &filter : *filter_infos) {
+		if (SingleColumnFilter(filter.get())) {
+			// Filter on one relation, (i.e string or range filter on a column).
+			// Grab the first relation and add it to  the equivalence_relations
+			AddRelationTdom(filter.get());
+			continue;
+		} else if (EmptyFilter(filter.get())) {
+			continue;
+		}
+		D_ASSERT(filter->left_set->count >= 1);
+		D_ASSERT(filter->right_set->count >= 1);
+
+		auto matching_equivalent_sets = DetermineMatchingEquivalentSets(filter.get());
+		AddToEquivalenceSets(filter.get(), matching_equivalent_sets);
+	}
+}
+
+void CardinalityEstimator::VerifySymmetry(JoinNode *result, JoinNode *entry) {
+	if (result->GetCardinality<double>() != entry->GetCardinality<double>()) {
+		// Currently it's possible that some entries are cartesian joins.
+		// When this is the case, you don't always have symmetry, but
+		// if the cost of the result is less, then just assure the cardinality
+		// is also less, then you have the same effect of symmetry.
+		D_ASSERT(ceil(result->GetCardinality<double>()) <= ceil(entry->GetCardinality<double>()) ||
+		         floor(result->GetCardinality<double>()) <= floor(entry->GetCardinality<double>()));
+	}
+}
+
+void CardinalityEstimator::InitTotalDomains() {
+	auto remove_start = std::remove_if(relations_to_tdoms.begin(), relations_to_tdoms.end(),
+	                                   [](RelationsToTDom &r_2_tdom) { return r_2_tdom.equivalent_relations.empty(); });
+	relations_to_tdoms.erase(remove_start, relations_to_tdoms.end());
+}
+
+double CardinalityEstimator::ComputeCost(JoinNode *left, JoinNode *right, double expected_cardinality) {
+	return expected_cardinality + left->GetCost() + right->GetCost();
+}
+
+double CardinalityEstimator::EstimateCrossProduct(const JoinNode *left, const JoinNode *right) {
+	// need to explicity use double here, otherwise auto converts it to an int, then
+	// there is an autocast in the return.
+	return left->GetCardinality<double>() >= (NumericLimits<double>::Maximum() / right->GetCardinality<double>())
+	           ? NumericLimits<double>::Maximum()
+	           : left->GetCardinality<double>() * right->GetCardinality<double>();
+}
+
+void CardinalityEstimator::AddRelationColumnMapping(LogicalGet *get, idx_t relation_id) {
+	for (idx_t it = 0; it < get->column_ids.size(); it++) {
+		auto key = ColumnBinding(relation_id, it);
+		auto value = ColumnBinding(get->table_index, get->column_ids[it]);
+		AddRelationToColumnMapping(key, value);
+	}
+}
+
+void UpdateDenom(Subgraph2Denominator *relation_2_denom, RelationsToTDom *relation_to_tdom) {
+	relation_2_denom->denom *=
+	    relation_to_tdom->has_tdom_hll ? relation_to_tdom->tdom_hll : relation_to_tdom->tdom_no_hll;
+}
+
+void FindSubgraphMatchAndMerge(Subgraph2Denominator &merge_to, idx_t find_me,
+                               vector<Subgraph2Denominator>::iterator subgraph,
+                               vector<Subgraph2Denominator>::iterator end) {
+	for (; subgraph != end; subgraph++) {
+		if (subgraph->relations.count(find_me) >= 1) {
+			for (auto &relation : subgraph->relations) {
+				merge_to.relations.insert(relation);
+			}
+			subgraph->relations.clear();
+			merge_to.denom *= subgraph->denom;
+			return;
+		}
+	}
+}
+
+double CardinalityEstimator::EstimateCardinalityWithSet(JoinRelationSet *new_set) {
+	double numerator = 1;
+	unordered_set<idx_t> actual_set;
+	for (idx_t i = 0; i < new_set->count; i++) {
+		numerator *= relation_attributes[new_set->relations[i]].cardinality;
+		actual_set.insert(new_set->relations[i]);
+	}
+	vector<Subgraph2Denominator> subgraphs;
+	bool done = false;
+	bool found_match = false;
+
+	// Finding the denominator is tricky. You need to go through the tdoms in decreasing order
+	// Then loop through all filters in the equivalence set of the tdom to see if both the
+	// left and right relations are in the new set, if so you can use that filter.
+	// You must also make sure that the filters all relations in the given set, so we use subgraphs
+	// that should eventually merge into one connected graph that joins all the relations
+	// TODO: Implement a method to cache subgraphs so you don't have to build them up every
+	// time the cardinality of a new set is requested
+
+	// relations_to_tdoms has already been sorted.
+	for (auto &relation_2_tdom : relations_to_tdoms) {
+		// loop through each filter in the tdom.
+		if (done) {
+			break;
+		}
+		for (auto &filter : relation_2_tdom.filters) {
+			if (actual_set.count(filter->left_binding.table_index) == 0 ||
+			    actual_set.count(filter->right_binding.table_index) == 0) {
+				continue;
+			}
+			// the join filter is on relations in the new set.
+			found_match = false;
+			vector<Subgraph2Denominator>::iterator it;
+			for (it = subgraphs.begin(); it != subgraphs.end(); it++) {
+				auto left_in = it->relations.count(filter->left_binding.table_index);
+				auto right_in = it->relations.count(filter->right_binding.table_index);
+				if (left_in && right_in) {
+					// if both left and right bindings are in the subgraph, continue.
+					// This means another filter is connecting relations already in the
+					// subgraph it, but it has a tdom that is less, and we don't care.
+					found_match = true;
+					continue;
+				}
+				if (!left_in && !right_in) {
+					// if both left and right bindings are *not* in the subgraph, continue
+					// without finding a match. This will trigger the process to add a new
+					// subgraph
+					continue;
+				}
+				idx_t find_table;
+				if (left_in) {
+					find_table = filter->right_binding.table_index;
+				} else {
+					D_ASSERT(right_in);
+					find_table = filter->left_binding.table_index;
+				}
+				auto next_subgraph = it + 1;
+				// iterate through other subgraphs and merge.
+				FindSubgraphMatchAndMerge(*it, find_table, next_subgraph, subgraphs.end());
+				// Now insert the right binding and update denominator with the
+				// tdom of the filter
+				it->relations.insert(find_table);
+				UpdateDenom(&(*it), &relation_2_tdom);
+				found_match = true;
+				break;
+			}
+			// means that the filter joins relations in the given set, but there is no
+			// connection to any subgraph in subgraphs. Add a new subgraph, and maybe later there will be
+			// a connection.
+			if (!found_match) {
+				subgraphs.emplace_back(Subgraph2Denominator());
+				auto subgraph = &subgraphs.back();
+				subgraph->relations.insert(filter->left_binding.table_index);
+				subgraph->relations.insert(filter->right_binding.table_index);
+				UpdateDenom(subgraph, &relation_2_tdom);
+			}
+			auto remove_start = std::remove_if(subgraphs.begin(), subgraphs.end(),
+			                                   [](Subgraph2Denominator &s) { return s.relations.empty(); });
+			subgraphs.erase(remove_start, subgraphs.end());
+
+			if (subgraphs.size() == 1 && subgraphs.at(0).relations.size() == new_set->count) {
+				// You have found enough filters to connect the relations. These are guaranteed
+				// to be the filters with the highest Tdoms.
+				done = true;
+				break;
+			}
+		}
+	}
+	double denom = 1;
+	// TODO: It's possible cross-products were added and are not present in the filters in the relation_2_tdom
+	//       structures. When that's the case, multiply the denom structures that have no intersection
+	for (auto &match : subgraphs) {
+		// It's possible that in production, one of the D_ASSERTS above will fail and not all subgraphs
+		// were connected. When this happens, just use the largest denominator of all the subgraphs.
+		if (match.denom > denom) {
+			denom = match.denom;
+		}
+	}
+	// can happen if a table has cardinality 0, or a tdom is set to 0
+	if (denom == 0) {
+		denom = 1;
+	}
+	return numerator / denom;
+}
+
+static bool IsLogicalFilter(LogicalOperator *op) {
+	return op->type == LogicalOperatorType::LOGICAL_FILTER;
+}
+
+static LogicalGet *GetLogicalGet(LogicalOperator *op) {
+	LogicalGet *get = nullptr;
+	switch (op->type) {
+	case LogicalOperatorType::LOGICAL_GET:
+		get = (LogicalGet *)op;
+		break;
+	case LogicalOperatorType::LOGICAL_FILTER:
+		get = GetLogicalGet(op->children.at(0).get());
+		break;
+	case LogicalOperatorType::LOGICAL_PROJECTION:
+		get = GetLogicalGet(op->children.at(0).get());
+		break;
+	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN: {
+		LogicalComparisonJoin *join = (LogicalComparisonJoin *)op;
+		if (join->join_type == JoinType::MARK || join->join_type == JoinType::LEFT) {
+			auto child = join->children.at(0).get();
+			get = GetLogicalGet(child);
+		}
+		break;
+	}
+	default:
+		// return null pointer, maybe there is no logical get under this child
+		break;
+	}
+	return get;
+}
+
+void CardinalityEstimator::MergeBindings(idx_t binding_index, idx_t relation_id,
+                                         vector<column_binding_map_t<ColumnBinding>> &child_binding_maps) {
+	for (auto &map_set : child_binding_maps) {
+		for (auto &mapping : map_set) {
+			ColumnBinding relation_bindings = mapping.first;
+			ColumnBinding actual_bindings = mapping.second;
+
+			if (actual_bindings.table_index == binding_index) {
+				auto key = ColumnBinding(relation_id, relation_bindings.column_index);
+				AddRelationToColumnMapping(key, actual_bindings);
+			}
+		}
+	}
+}
+
+bool SortTdoms(const RelationsToTDom &a, const RelationsToTDom &b) {
+	if (a.has_tdom_hll && b.has_tdom_hll) {
+		return a.tdom_hll > b.tdom_hll;
+	}
+	if (a.has_tdom_hll) {
+		return a.tdom_hll > b.tdom_no_hll;
+	}
+	if (b.has_tdom_hll) {
+		return a.tdom_no_hll > b.tdom_hll;
+	}
+	return a.tdom_no_hll > b.tdom_no_hll;
+}
+
+void CardinalityEstimator::InitCardinalityEstimatorProps(vector<struct NodeOp> *node_ops,
+                                                         vector<unique_ptr<FilterInfo>> *filter_infos) {
+	InitEquivalentRelations(filter_infos);
+	InitTotalDomains();
+	for (idx_t i = 0; i < node_ops->size(); i++) {
+		auto join_node = (*node_ops)[i].node.get();
+		auto op = (*node_ops)[i].op;
+		join_node->SetBaseTableCardinality(op->EstimateCardinality(context));
+		if (op->type == LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
+			auto &join = (LogicalComparisonJoin &)*op;
+			if (join.join_type == JoinType::LEFT) {
+				// TODO: inspect child operators to get a more accurate cost
+				// and cardinality estimation. If an base op is a Logical Comparison join
+				// it is probably a left join, so cost of the larger table is a fine
+				// estimate
+				// No need to update a mark join cost because I say so.
+				join_node->SetCost(join_node->GetBaseTableCardinality());
+			}
+		}
+		// update cardinality with filters
+		EstimateBaseTableCardinality(join_node, op);
+		UpdateTotalDomains(join_node, op);
+	}
+
+	// sort relations from greatest tdom to lowest tdom.
+	std::sort(relations_to_tdoms.begin(), relations_to_tdoms.end(), SortTdoms);
+}
+
+void CardinalityEstimator::UpdateTotalDomains(JoinNode *node, LogicalOperator *op) {
+	auto relation_id = node->set->relations[0];
+	relation_attributes[relation_id].cardinality = node->GetCardinality<double>();
+	TableCatalogEntry *catalog_table = nullptr;
+	auto get = GetLogicalGet(op);
+	if (get) {
+		catalog_table = GetCatalogTableEntry(get);
+	}
+
+	//! Initialize the tdoms for all columns the relation uses in join conditions.
+	unordered_set<idx_t>::iterator ite;
+	idx_t count = node->GetBaseTableCardinality();
+
+	bool direct_filter = false;
+	for (auto &column : relation_attributes[relation_id].columns) {
+		//! for every column in the relation, get the count via either HLL, or assume it to be
+		//! the cardinality
+		ColumnBinding key = ColumnBinding(relation_id, column);
+
+		if (catalog_table) {
+			relation_attributes[relation_id].original_name = catalog_table->name;
+			// Get HLL stats here
+			auto actual_binding = relation_column_to_original_column[key];
+
+			auto base_stats = catalog_table->GetStatistics(context, actual_binding.column_index);
+			if (base_stats) {
+				count = base_stats->GetDistinctCount();
+			}
+
+			// means you have a direct filter on a column. The count/total domain for the column
+			// should be decreased to match the predicted total domain matching the filter.
+			// We decrease the total domain for all columns in the equivalence set because filter pushdown
+			// will mean all columns are affected.
+			if (direct_filter) {
+				count = node->GetCardinality<idx_t>();
+			}
+
+			// HLL has estimation error, count can't be greater than cardinality of the table before filters
+			if (count > node->GetBaseTableCardinality()) {
+				count = node->GetBaseTableCardinality();
+			}
+		} else {
+			// No HLL. So if we know there is a direct filter, reduce count to cardinality with filter
+			// otherwise assume the total domain is still the cardinality
+			if (direct_filter) {
+				count = node->GetCardinality<idx_t>();
+			} else {
+				count = node->GetBaseTableCardinality();
+			}
+		}
+
+		for (auto &relation_to_tdom : relations_to_tdoms) {
+			column_binding_set_t i_set = relation_to_tdom.equivalent_relations;
+			if (i_set.count(key) != 1) {
+				continue;
+			}
+			if (catalog_table) {
+				if (relation_to_tdom.tdom_hll < count) {
+					relation_to_tdom.tdom_hll = count;
+					relation_to_tdom.has_tdom_hll = true;
+				}
+				if (relation_to_tdom.tdom_no_hll > count) {
+					relation_to_tdom.tdom_no_hll = count;
+				}
+			} else {
+				// Here we don't have catalog statistics, and the following is how we determine
+				// the tdom
+				// 1. If there is any hll data in the equivalence set, use that
+				// 2. Otherwise, use the table with the smallest cardinality
+				if (relation_to_tdom.tdom_no_hll > count && !relation_to_tdom.has_tdom_hll) {
+					relation_to_tdom.tdom_no_hll = count;
+				}
+			}
+			break;
+		}
+	}
+}
+
+TableFilterSet *CardinalityEstimator::GetTableFilters(LogicalOperator *op) {
+	// First check table filters
+	auto get = GetLogicalGet(op);
+	return get ? &get->table_filters : nullptr;
+}
+
+idx_t CardinalityEstimator::InspectConjunctionAND(idx_t cardinality, idx_t column_index, ConjunctionAndFilter *filter,
+                                                  unique_ptr<BaseStatistics> base_stats) {
+	auto has_equality_filter = false;
+	auto cardinality_after_filters = cardinality;
+	for (auto &child_filter : filter->child_filters) {
+		if (child_filter->filter_type != TableFilterType::CONSTANT_COMPARISON) {
+			continue;
+		}
+		auto comparison_filter = (ConstantFilter &)*child_filter;
+		if (comparison_filter.comparison_type != ExpressionType::COMPARE_EQUAL) {
+			continue;
+		}
+		auto column_count = 0;
+		if (base_stats) {
+			column_count = base_stats->GetDistinctCount();
+		}
+		auto filtered_card = cardinality;
+		// column_count = 0 when there is no column count (i.e parquet scans)
+		if (column_count > 0) {
+			// we want the ceil of cardinality/column_count. We also want to avoid compiler errors
+			filtered_card = (cardinality + column_count - 1) / column_count;
+			cardinality_after_filters = filtered_card;
+		}
+		if (has_equality_filter) {
+			cardinality_after_filters = MinValue(filtered_card, cardinality_after_filters);
+		}
+		has_equality_filter = true;
+	}
+	return cardinality_after_filters;
+}
+
+idx_t CardinalityEstimator::InspectConjunctionOR(idx_t cardinality, idx_t column_index, ConjunctionOrFilter *filter,
+                                                 unique_ptr<BaseStatistics> base_stats) {
+	auto has_equality_filter = false;
+	auto cardinality_after_filters = cardinality;
+	for (auto &child_filter : filter->child_filters) {
+		if (child_filter->filter_type != TableFilterType::CONSTANT_COMPARISON) {
+			continue;
+		}
+		auto comparison_filter = (ConstantFilter &)*child_filter;
+		if (comparison_filter.comparison_type == ExpressionType::COMPARE_EQUAL) {
+			auto column_count = cardinality_after_filters;
+			if (base_stats) {
+				column_count = base_stats->GetDistinctCount();
+			}
+			auto increment = MaxValue<idx_t>(((cardinality + column_count - 1) / column_count), 1);
+			if (has_equality_filter) {
+				cardinality_after_filters += increment;
+			} else {
+				cardinality_after_filters = increment;
+			}
+			has_equality_filter = true;
+		}
+	}
+	D_ASSERT(cardinality_after_filters > 0);
+	return cardinality_after_filters;
+}
+
+idx_t CardinalityEstimator::InspectTableFilters(idx_t cardinality, LogicalOperator *op, TableFilterSet *table_filters) {
+	idx_t cardinality_after_filters = cardinality;
+	auto get = GetLogicalGet(op);
+	unique_ptr<BaseStatistics> column_statistics;
+	for (auto &it : table_filters->filters) {
+		column_statistics = nullptr;
+		if (get->bind_data && get->function.name.compare("seq_scan") == 0) {
+			auto &table_scan_bind_data = (TableScanBindData &)*get->bind_data;
+			column_statistics = get->function.statistics(context, &table_scan_bind_data, it.first);
+		}
+		if (it.second->filter_type == TableFilterType::CONJUNCTION_AND) {
+			auto &filter = (ConjunctionAndFilter &)*it.second;
+			idx_t cardinality_with_and_filter =
+			    InspectConjunctionAND(cardinality, it.first, &filter, move(column_statistics));
+			cardinality_after_filters = MinValue(cardinality_after_filters, cardinality_with_and_filter);
+		} else if (it.second->filter_type == TableFilterType::CONJUNCTION_OR) {
+			auto &filter = (ConjunctionOrFilter &)*it.second;
+			idx_t cardinality_with_or_filter =
+			    InspectConjunctionOR(cardinality, it.first, &filter, move(column_statistics));
+			cardinality_after_filters = MinValue(cardinality_after_filters, cardinality_with_or_filter);
+		}
+	}
+	// if the above code didn't find an equality filter (i.e country_code = "[us]")
+	// and there are other table filters, use default selectivity.
+	bool has_equality_filter = (cardinality_after_filters != cardinality);
+	if (!has_equality_filter && !table_filters->filters.empty()) {
+		cardinality_after_filters = MaxValue<idx_t>(cardinality * DEFAULT_SELECTIVITY, 1);
+	}
+	return cardinality_after_filters;
+}
+
+void CardinalityEstimator::EstimateBaseTableCardinality(JoinNode *node, LogicalOperator *op) {
+	auto has_logical_filter = IsLogicalFilter(op);
+	auto table_filters = GetTableFilters(op);
+
+	auto card_after_filters = node->GetBaseTableCardinality();
+	// Logical Filter on a seq scan
+	if (has_logical_filter) {
+		card_after_filters *= DEFAULT_SELECTIVITY;
+	} else if (table_filters) {
+		double inspect_result = (double)InspectTableFilters(card_after_filters, op, table_filters);
+		card_after_filters = MinValue(inspect_result, (double)card_after_filters);
+	}
+	node->SetEstimatedCardinality(card_after_filters);
 }
 
 } // namespace duckdb
@@ -4141,6 +6494,7 @@ void CommonSubExpressionOptimizer::ExtractCommonSubExpresions(LogicalOperator &o
 
 
 
+
 namespace duckdb {
 
 class DeliminatorPlanUpdater : LogicalOperatorVisitor {
@@ -4150,25 +6504,66 @@ public:
 	//! Update the plan after a DelimGet has been removed
 	void VisitOperator(LogicalOperator &op) override;
 	void VisitExpression(unique_ptr<Expression> *expression) override;
-	//! Whether the operator has one or more children of type DELIM_GET
-	bool HasChildDelimGet(LogicalOperator &op);
+
+public:
 	expression_map_t<Expression *> expr_map;
 	column_binding_map_t<bool> projection_map;
+	column_binding_map_t<Expression *> reverse_proj_or_agg_map;
 	unique_ptr<LogicalOperator> temp_ptr;
 };
+
+static idx_t DelimGetCount(LogicalOperator &op) {
+	if (op.type == LogicalOperatorType::LOGICAL_DELIM_GET) {
+		return 1;
+	}
+	idx_t child_count = 0;
+	for (auto &child : op.children) {
+		child_count += DelimGetCount(*child);
+	}
+	return child_count;
+}
+
+static bool IsEqualityJoinCondition(JoinCondition &cond) {
+	switch (cond.comparison) {
+	case ExpressionType::COMPARE_EQUAL:
+	case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool InequalityDelimJoinCanBeEliminated(JoinType &join_type) {
+	switch (join_type) {
+	case JoinType::ANTI:
+	case JoinType::MARK:
+	case JoinType::SEMI:
+	case JoinType::SINGLE:
+		return true;
+	default:
+		return false;
+	}
+}
 
 void DeliminatorPlanUpdater::VisitOperator(LogicalOperator &op) {
 	VisitOperatorChildren(op);
 	VisitOperatorExpressions(op);
-	if (op.type == LogicalOperatorType::LOGICAL_DELIM_JOIN && !HasChildDelimGet(op)) {
+	if (op.type == LogicalOperatorType::LOGICAL_DELIM_JOIN && DelimGetCount(op) == 0) {
 		auto &delim_join = (LogicalDelimJoin &)op;
 		auto decs = &delim_join.duplicate_eliminated_columns;
 		for (auto &cond : delim_join.conditions) {
-			if (cond.comparison != ExpressionType::COMPARE_EQUAL &&
-			    cond.comparison != ExpressionType::COMPARE_NOT_DISTINCT_FROM) {
+			if (!IsEqualityJoinCondition(cond)) {
 				continue;
 			}
-			auto &colref = (BoundColumnRefExpression &)*cond.right;
+			auto rhs = cond.right.get();
+			while (rhs->type == ExpressionType::OPERATOR_CAST) {
+				auto &cast = (BoundCastExpression &)*rhs;
+				rhs = cast.child.get();
+			}
+			if (rhs->type != ExpressionType::BOUND_COLUMN_REF) {
+				throw InternalException("Error in Deliminator: expected a bound column reference");
+			}
+			auto &colref = (BoundColumnRefExpression &)*rhs;
 			if (projection_map.find(colref.binding) != projection_map.end()) {
 				// value on the right is a projection of removed DelimGet
 				for (idx_t i = 0; i < decs->size(); i++) {
@@ -4197,25 +6592,13 @@ void DeliminatorPlanUpdater::VisitExpression(unique_ptr<Expression> *expression)
 	}
 }
 
-bool DeliminatorPlanUpdater::HasChildDelimGet(LogicalOperator &op) {
-	if (op.type == LogicalOperatorType::LOGICAL_DELIM_GET) {
-		return true;
-	}
-	for (auto &child : op.children) {
-		if (HasChildDelimGet(*child)) {
-			return true;
-		}
-	}
-	return false;
-}
-
 unique_ptr<LogicalOperator> Deliminator::Optimize(unique_ptr<LogicalOperator> op) {
 	vector<unique_ptr<LogicalOperator> *> candidates;
 	FindCandidates(&op, candidates);
 
-	for (auto candidate : candidates) {
+	for (auto &candidate : candidates) {
 		DeliminatorPlanUpdater updater;
-		if (RemoveCandidate(candidate, updater)) {
+		if (RemoveCandidate(&op, candidate, updater)) {
 			updater.VisitOperator(*op);
 		}
 	}
@@ -4270,10 +6653,21 @@ static bool OperatorIsDelimGet(LogicalOperator &op) {
 	return false;
 }
 
-bool Deliminator::RemoveCandidate(unique_ptr<LogicalOperator> *op_ptr, DeliminatorPlanUpdater &updater) {
-	auto &proj_or_agg = **op_ptr;
+static bool ChildJoinTypeCanBeDeliminated(JoinType &join_type) {
+	switch (join_type) {
+	case JoinType::INNER:
+	case JoinType::SEMI:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool Deliminator::RemoveCandidate(unique_ptr<LogicalOperator> *plan, unique_ptr<LogicalOperator> *candidate,
+                                  DeliminatorPlanUpdater &updater) {
+	auto &proj_or_agg = **candidate;
 	auto &join = (LogicalComparisonJoin &)*proj_or_agg.children[0];
-	if (join.join_type != JoinType::INNER && join.join_type != JoinType::SEMI) {
+	if (!ChildJoinTypeCanBeDeliminated(join.join_type)) {
 		return false;
 	}
 
@@ -4291,13 +6685,10 @@ bool Deliminator::RemoveCandidate(unique_ptr<LogicalOperator> *op_ptr, Deliminat
 		return false;
 	}
 	// check if joining with the DelimGet is redundant, and collect relevant column information
+	bool all_equality_conditions = true;
 	vector<Expression *> nulls_are_not_equal_exprs;
 	for (auto &cond : join.conditions) {
-		if (cond.comparison != ExpressionType::COMPARE_EQUAL &&
-		    cond.comparison != ExpressionType::COMPARE_NOT_DISTINCT_FROM) {
-			// non-equality join condition
-			return false;
-		}
+		all_equality_conditions = all_equality_conditions && IsEqualityJoinCondition(cond);
 		auto delim_side = delim_idx == 0 ? cond.left.get() : cond.right.get();
 		auto other_side = delim_idx == 0 ? cond.right.get() : cond.left.get();
 		if (delim_side->type != ExpressionType::BOUND_COLUMN_REF) {
@@ -4310,10 +6701,12 @@ bool Deliminator::RemoveCandidate(unique_ptr<LogicalOperator> *op_ptr, Deliminat
 			nulls_are_not_equal_exprs.push_back(other_side);
 		}
 	}
+
 	// removed DelimGet columns are assigned a new ColumnBinding by Projection/Aggregation, keep track here
 	if (proj_or_agg.type == LogicalOperatorType::LOGICAL_PROJECTION) {
 		for (auto &cb : proj_or_agg.GetColumnBindings()) {
 			updater.projection_map[cb] = true;
+			updater.reverse_proj_or_agg_map[cb] = proj_or_agg.expressions[cb.column_index].get();
 			for (auto &expr : nulls_are_not_equal_exprs) {
 				if (proj_or_agg.expressions[cb.column_index]->Equals(expr)) {
 					updater.projection_map[cb] = false;
@@ -4323,8 +6716,19 @@ bool Deliminator::RemoveCandidate(unique_ptr<LogicalOperator> *op_ptr, Deliminat
 		}
 	} else {
 		auto &agg = (LogicalAggregate &)proj_or_agg;
+
+		// Create a vector of all exprs in the agg
+		vector<Expression *> all_agg_exprs;
+		for (auto &expr : agg.groups) {
+			all_agg_exprs.push_back(expr.get());
+		}
+		for (auto &expr : agg.expressions) {
+			all_agg_exprs.push_back(expr.get());
+		}
+
 		for (auto &cb : agg.GetColumnBindings()) {
 			updater.projection_map[cb] = true;
+			updater.reverse_proj_or_agg_map[cb] = all_agg_exprs[cb.column_index];
 			for (auto &expr : nulls_are_not_equal_exprs) {
 				if ((cb.table_index == agg.group_index && agg.groups[cb.column_index]->Equals(expr)) ||
 				    (cb.table_index == agg.aggregate_index && agg.expressions[cb.column_index]->Equals(expr))) {
@@ -4334,6 +6738,14 @@ bool Deliminator::RemoveCandidate(unique_ptr<LogicalOperator> *op_ptr, Deliminat
 			}
 		}
 	}
+
+	if (!all_equality_conditions) {
+		// we can get rid of an inequality join with a DelimGet, but only under specific circumstances
+		if (!RemoveInequalityCandidate(plan, candidate, updater)) {
+			return false;
+		}
+	}
+
 	// make a filter if needed
 	if (!nulls_are_not_equal_exprs.empty() || filter != nullptr) {
 		auto filter_op = make_unique<LogicalFilter>();
@@ -4359,6 +6771,176 @@ bool Deliminator::RemoveCandidate(unique_ptr<LogicalOperator> *op_ptr, Deliminat
 	// replace the redundant join
 	proj_or_agg.children[0] = move(join.children[1 - delim_idx]);
 	return true;
+}
+
+static void GetDelimJoins(LogicalOperator &op, vector<LogicalOperator *> &delim_joins) {
+	for (auto &child : op.children) {
+		GetDelimJoins(*child, delim_joins);
+	}
+	if (op.type == LogicalOperatorType::LOGICAL_DELIM_JOIN) {
+		delim_joins.push_back(&op);
+	}
+}
+
+static bool HasChild(LogicalOperator *haystack, LogicalOperator *needle, idx_t &side) {
+	if (haystack == needle) {
+		return true;
+	}
+	for (idx_t i = 0; i < haystack->children.size(); i++) {
+		auto &child = haystack->children[i];
+		idx_t dummy_side;
+		if (HasChild(child.get(), needle, dummy_side)) {
+			side = i;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool Deliminator::RemoveInequalityCandidate(unique_ptr<LogicalOperator> *plan, unique_ptr<LogicalOperator> *candidate,
+                                            DeliminatorPlanUpdater &updater) {
+	auto &proj_or_agg = **candidate;
+	// first, we find a DelimJoin in "plan" that has only one DelimGet as a child, which is in "candidate"
+	if (DelimGetCount(proj_or_agg) != 1) {
+		// the candidate therefore must have only a single DelimGet in its children
+		return false;
+	}
+
+	vector<LogicalOperator *> delim_joins;
+	GetDelimJoins(**plan, delim_joins);
+
+	LogicalOperator *parent = nullptr;
+	idx_t parent_delim_get_side;
+	for (auto dj : delim_joins) {
+		D_ASSERT(dj->type == LogicalOperatorType::LOGICAL_DELIM_JOIN);
+		if (!HasChild(dj, &proj_or_agg, parent_delim_get_side)) {
+			continue;
+		}
+		// we found a parent DelimJoin
+		if (DelimGetCount(*dj) != 1) {
+			// it has more than one DelimGet children
+			continue;
+		}
+
+		// we can only remove inequality join with a DelimGet if the parent DelimJoin has one of these join types
+		auto &delim_join = (LogicalDelimJoin &)*dj;
+		if (!InequalityDelimJoinCanBeEliminated(delim_join.join_type)) {
+			continue;
+		}
+
+		parent = dj;
+		break;
+	}
+	if (!parent) {
+		return false;
+	}
+
+	// we found the parent delim join, and we may be able to remove the child DelimGet join
+	// but we need to make sure that their conditions refer to exactly the same columns
+	auto &parent_delim_join = (LogicalDelimJoin &)*parent;
+	auto &join = (LogicalComparisonJoin &)*proj_or_agg.children[0];
+	if (parent_delim_join.conditions.size() != join.conditions.size()) {
+		// different number of conditions, can't replace
+		return false;
+	}
+
+	// we can only do this optimization under the following conditions:
+	// 1. all join expressions coming from the DelimGet side are colrefs
+	// 2. these expressions refer to colrefs coming from the proj/agg on top of the child DelimGet join
+	// 3. the expression (before it was proj/agg) can be found in the conditions of the child DelimGet join
+	for (auto &parent_cond : parent_delim_join.conditions) {
+		auto &parent_expr = parent_delim_get_side == 0 ? parent_cond.left : parent_cond.right;
+		if (parent_expr->type != ExpressionType::BOUND_COLUMN_REF) {
+			// can only deal with colrefs
+			return false;
+		}
+		auto &parent_colref = (BoundColumnRefExpression &)*parent_expr;
+		auto it = updater.reverse_proj_or_agg_map.find(parent_colref.binding);
+		if (it == updater.reverse_proj_or_agg_map.end()) {
+			// refers to a column that was not in the child DelimGet join
+			return false;
+		}
+		// try to find the corresponding child condition
+		// TODO: can be more flexible - allow CAST
+		auto child_expr = it->second;
+		bool found = false;
+		for (auto &child_cond : join.conditions) {
+			if (child_cond.left->Equals(child_expr) || child_cond.right->Equals(child_expr)) {
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			// could not find the mapped expression in the child condition expressions
+			return false;
+		}
+	}
+
+	// TODO: we cannot perform the optimization here because our pure inequality joins don't implement
+	//  JoinType::SINGLE yet
+	if (parent_delim_join.join_type == JoinType::SINGLE) {
+		bool has_one_equality = false;
+		for (auto &cond : join.conditions) {
+			has_one_equality = has_one_equality || IsEqualityJoinCondition(cond);
+		}
+		if (!has_one_equality) {
+			return false;
+		}
+	}
+
+	// we are now sure that we can remove the child DelimGet join, so we basically do the same loop as above
+	// this time without checks because we already did them, and replace the expressions
+	for (auto &parent_cond : parent_delim_join.conditions) {
+		auto &parent_expr = parent_delim_get_side == 0 ? parent_cond.left : parent_cond.right;
+		auto &parent_colref = (BoundColumnRefExpression &)*parent_expr;
+		auto it = updater.reverse_proj_or_agg_map.find(parent_colref.binding);
+		auto child_expr = it->second;
+		for (auto &child_cond : join.conditions) {
+			if (!child_cond.left->Equals(child_expr) && !child_cond.right->Equals(child_expr)) {
+				continue;
+			}
+			parent_expr =
+			    make_unique<BoundColumnRefExpression>(parent_expr->alias, parent_expr->return_type, it->first);
+			parent_cond.comparison =
+			    parent_delim_get_side == 0 ? child_cond.comparison : FlipComparisionExpression(child_cond.comparison);
+			break;
+		}
+	}
+
+	// no longer needs to be a delim join
+	parent_delim_join.duplicate_eliminated_columns.clear();
+	parent_delim_join.type = LogicalOperatorType::LOGICAL_COMPARISON_JOIN;
+
+	return true;
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+template <>
+double EstimatedProperties::GetCardinality() const {
+	return cardinality;
+}
+
+template <>
+idx_t EstimatedProperties::GetCardinality() const {
+	auto max_idx_t = NumericLimits<idx_t>::Maximum() - 10000;
+	return MinValue<double>(cardinality, max_idx_t);
+}
+
+double EstimatedProperties::GetCost() const {
+	return cost;
+}
+
+void EstimatedProperties::SetCardinality(double new_card) {
+	cardinality = new_card;
+}
+
+void EstimatedProperties::SetCost(double new_cost) {
+	cost = new_cost;
 }
 
 } // namespace duckdb
@@ -4577,6 +7159,7 @@ idx_t ExpressionHeuristics::Cost(Expression &expr) {
 
 
 
+
 namespace duckdb {
 
 unique_ptr<Expression> ExpressionRewriter::ApplyRules(LogicalOperator &op, const vector<Rule *> &rules,
@@ -4611,12 +7194,14 @@ unique_ptr<Expression> ExpressionRewriter::ApplyRules(LogicalOperator &op, const
 
 unique_ptr<Expression> ExpressionRewriter::ConstantOrNull(unique_ptr<Expression> child, Value value) {
 	vector<unique_ptr<Expression>> children;
+	children.push_back(make_unique<BoundConstantExpression>(value));
 	children.push_back(move(child));
 	return ConstantOrNull(move(children), move(value));
 }
 
 unique_ptr<Expression> ExpressionRewriter::ConstantOrNull(vector<unique_ptr<Expression>> children, Value value) {
 	auto type = value.type();
+	children.insert(children.begin(), make_unique<BoundConstantExpression>(value));
 	return make_unique<BoundFunctionExpression>(type, ConstantOrNull::GetFunction(type), move(children),
 	                                            ConstantOrNull::Bind(move(value)));
 }
@@ -4655,6 +7240,10 @@ void ExpressionRewriter::VisitExpression(unique_ptr<Expression> *expression) {
 	} while (changes_made);
 }
 
+ClientContext &Rule::GetContext() const {
+	return rewriter.context;
+}
+
 } // namespace duckdb
 
 
@@ -4681,6 +7270,12 @@ namespace duckdb {
 using ExpressionValueInformation = FilterCombiner::ExpressionValueInformation;
 
 ValueComparisonResult CompareValueInformation(ExpressionValueInformation &left, ExpressionValueInformation &right);
+
+FilterCombiner::FilterCombiner(ClientContext &context) : context(context) {
+}
+
+FilterCombiner::FilterCombiner(Optimizer &optimizer) : FilterCombiner(optimizer.context) {
+}
 
 Expression *FilterCombiner::GetNode(Expression *expr) {
 	auto entry = stored_expressions.find(expr);
@@ -4713,6 +7308,9 @@ idx_t FilterCombiner::GetEquivalenceSet(Expression *expr) {
 
 FilterResult FilterCombiner::AddConstantComparison(vector<ExpressionValueInformation> &info_list,
                                                    ExpressionValueInformation info) {
+	if (info.constant.IsNull()) {
+		return FilterResult::UNSATISFIABLE;
+	}
 	for (idx_t i = 0; i < info_list.size(); i++) {
 		auto comparison = CompareValueInformation(info_list[i], info);
 		switch (comparison) {
@@ -5239,7 +7837,10 @@ FilterResult FilterCombiner::AddBoundComparisonFilter(Expression *expr) {
 		auto node = GetNode(left_is_scalar ? comparison.right.get() : comparison.left.get());
 		idx_t equivalence_set = GetEquivalenceSet(node);
 		auto scalar = left_is_scalar ? comparison.left.get() : comparison.right.get();
-		auto constant_value = ExpressionExecutor::EvaluateScalar(*scalar);
+		Value constant_value;
+		if (!ExpressionExecutor::TryEvaluateScalar(context, *scalar, constant_value)) {
+			return FilterResult::UNSATISFIABLE;
+		}
 		if (constant_value.IsNull()) {
 			// comparisons with null are always null (i.e. will never result in rows)
 			return FilterResult::UNSATISFIABLE;
@@ -5320,7 +7921,11 @@ FilterResult FilterCombiner::AddFilter(Expression *expr) {
 	}
 	if (expr->IsFoldable()) {
 		// scalar condition, evaluate it
-		auto result = ExpressionExecutor::EvaluateScalar(*expr).CastAs(LogicalType::BOOLEAN);
+		Value result;
+		if (!ExpressionExecutor::TryEvaluateScalar(context, *expr, result)) {
+			return FilterResult::UNSUPPORTED;
+		}
+		result = result.DefaultCastAs(LogicalType::BOOLEAN);
 		// check if the filter passes
 		if (result.IsNull() || !BooleanValue::Get(result)) {
 			// the filter does not pass the scalar test, create an empty result
@@ -5344,7 +7949,10 @@ FilterResult FilterCombiner::AddFilter(Expression *expr) {
 
 			if (lower_is_scalar) {
 				auto scalar = comparison.lower.get();
-				auto constant_value = ExpressionExecutor::EvaluateScalar(*scalar);
+				Value constant_value;
+				if (!ExpressionExecutor::TryEvaluateScalar(context, *scalar, constant_value)) {
+					return FilterResult::UNSUPPORTED;
+				}
 
 				// create the ExpressionValueInformation
 				ExpressionValueInformation info;
@@ -5377,7 +7985,10 @@ FilterResult FilterCombiner::AddFilter(Expression *expr) {
 
 			if (upper_is_scalar) {
 				auto scalar = comparison.upper.get();
-				auto constant_value = ExpressionExecutor::EvaluateScalar(*scalar);
+				Value constant_value;
+				if (!ExpressionExecutor::TryEvaluateScalar(context, *scalar, constant_value)) {
+					return FilterResult::UNSUPPORTED;
+				}
 
 				// create the ExpressionValueInformation
 				ExpressionValueInformation info;
@@ -5891,7 +8502,6 @@ unique_ptr<LogicalOperator> FilterPullup::PullupJoin(unique_ptr<LogicalOperator>
 	case JoinType::LEFT:
 	case JoinType::ANTI:
 	case JoinType::SEMI: {
-		can_add_column = true;
 		return PullupFromLeft(move(op));
 	}
 	default:
@@ -5943,9 +8553,13 @@ unique_ptr<LogicalOperator> FilterPullup::FinishPullup(unique_ptr<LogicalOperato
 
 
 
+
 namespace duckdb {
 
 using Filter = FilterPushdown::Filter;
+
+FilterPushdown::FilterPushdown(Optimizer &optimizer) : optimizer(optimizer), combiner(optimizer.context) {
+}
 
 unique_ptr<LogicalOperator> FilterPushdown::Rewrite(unique_ptr<LogicalOperator> op) {
 	D_ASSERT(!combiner.HasFilters());
@@ -6006,7 +8620,7 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownJoin(unique_ptr<LogicalOpera
 void FilterPushdown::PushFilters() {
 	for (auto &f : filters) {
 		auto result = combiner.AddFilter(move(f->filter));
-		D_ASSERT(result == FilterResult::SUCCESS);
+		D_ASSERT(result != FilterResult::UNSUPPORTED);
 		(void)result;
 	}
 	filters.clear();
@@ -6101,7 +8715,6 @@ unique_ptr<Expression> InClauseRewriter::VisitReplace(BoundOperatorExpression &e
 	// IN clause with many children: try to generate a mark join that replaces this IN expression
 	// we can only do this if the expressions in the expression list are scalar
 	for (idx_t i = 1; i < expr.children.size(); i++) {
-		D_ASSERT(expr.children[i]->return_type == in_type);
 		if (!expr.children[i]->IsFoldable()) {
 			// non-scalar expression
 			all_scalar = false;
@@ -6130,26 +8743,29 @@ unique_ptr<Expression> InClauseRewriter::VisitReplace(BoundOperatorExpression &e
 	}
 	// IN clause with many constant children
 	// generate a mark join that replaces this IN expression
-	// first generate a ChunkCollection from the set of expressions
+	// first generate a ColumnDataCollection from the set of expressions
 	vector<LogicalType> types = {in_type};
-	auto collection = make_unique<ChunkCollection>(context);
+	auto collection = make_unique<ColumnDataCollection>(context, types);
+	ColumnDataAppendState append_state;
+	collection->InitializeAppend(append_state);
+
 	DataChunk chunk;
 	chunk.Initialize(context, types);
 	for (idx_t i = 1; i < expr.children.size(); i++) {
 		// resolve this expression to a constant
-		auto value = ExpressionExecutor::EvaluateScalar(*expr.children[i]);
+		auto value = ExpressionExecutor::EvaluateScalar(context, *expr.children[i]);
 		idx_t index = chunk.size();
 		chunk.SetCardinality(chunk.size() + 1);
 		chunk.SetValue(0, index, value);
 		if (chunk.size() == STANDARD_VECTOR_SIZE || i + 1 == expr.children.size()) {
 			// chunk full: append to chunk collection
-			collection->Append(chunk);
+			collection->Append(append_state, chunk);
 			chunk.Reset();
 		}
 	}
 	// now generate a ChunkGet that scans this collection
 	auto chunk_index = optimizer.binder.GenerateTableIndex();
-	auto chunk_scan = make_unique<LogicalChunkGet>(chunk_index, types, move(collection));
+	auto chunk_scan = make_unique<LogicalColumnDataGet>(chunk_index, types, move(collection));
 
 	// then we generate the MARK join with the chunk scan on the RHS
 	auto join = make_unique<LogicalComparisonJoin>(JoinType::MARK);
@@ -6177,6 +8793,76 @@ unique_ptr<Expression> InClauseRewriter::VisitReplace(BoundOperatorExpression &e
 	return result;
 }
 
+} // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+
+JoinNode::JoinNode(JoinRelationSet *set, const double base_cardinality)
+    : set(set), info(nullptr), has_filter(false), left(nullptr), right(nullptr), base_cardinality(base_cardinality) {
+	estimated_props = make_unique<EstimatedProperties>(base_cardinality, 0);
+}
+
+JoinNode::JoinNode(JoinRelationSet *set, NeighborInfo *info, JoinNode *left, JoinNode *right,
+                   const double base_cardinality, double cost)
+    : set(set), info(info), has_filter(false), left(left), right(right), base_cardinality(base_cardinality) {
+	estimated_props = make_unique<EstimatedProperties>(base_cardinality, cost);
+}
+
+unique_ptr<EstimatedProperties> EstimatedProperties::Copy() {
+	auto result = make_unique<EstimatedProperties>(cardinality, cost);
+	return result;
+}
+
+double JoinNode::GetCost() {
+	return estimated_props->GetCost();
+}
+
+void JoinNode::SetCost(double cost) {
+	estimated_props->SetCost(cost);
+}
+
+double JoinNode::GetBaseTableCardinality() {
+	if (set->count > 1) {
+		throw InvalidInputException("Cannot call get base table cardinality on intermediate join node");
+	}
+	return base_cardinality;
+}
+
+void JoinNode::SetBaseTableCardinality(double base_card) {
+	base_cardinality = base_card;
+}
+
+void JoinNode::SetEstimatedCardinality(double estimated_card) {
+	estimated_props->SetCardinality(estimated_card);
+}
+
+string JoinNode::ToString() {
+	if (!set) {
+		return "";
+	}
+	string result = "-------------------------------\n";
+	result += set->ToString() + "\n";
+	result += "card = " + to_string(GetCardinality<double>()) + "\n";
+	bool is_cartesian = false;
+	if (left && right) {
+		is_cartesian = (GetCardinality<double>() == left->GetCardinality<double>() * right->GetCardinality<double>());
+	}
+	result += "cartesian = " + to_string(is_cartesian) + "\n";
+	result += "cost = " + to_string(estimated_props->GetCost()) + "\n";
+	result += "left = \n";
+	if (left) {
+		result += left->ToString();
+	}
+	result += "right = \n";
+	if (right) {
+		result += right->ToString();
+	}
+	return result;
+}
 } // namespace duckdb
 
 
@@ -6442,16 +9128,15 @@ vector<idx_t> QueryGraph::GetNeighbors(JoinRelationSet *node, unordered_set<idx_
 	return neighbors;
 }
 
-NeighborInfo *QueryGraph::GetConnection(JoinRelationSet *node, JoinRelationSet *other) {
-	NeighborInfo *connection = nullptr;
+vector<NeighborInfo *> QueryGraph::GetConnections(JoinRelationSet *node, JoinRelationSet *other) {
+	vector<NeighborInfo *> connections;
 	EnumerateNeighbors(node, [&](NeighborInfo *info) -> bool {
 		if (JoinRelationSet::IsSubset(other, info->neighbor)) {
-			connection = info;
-			return true;
+			connections.push_back(info);
 		}
 		return false;
 	});
-	return connection;
+	return connections;
 }
 
 } // namespace duckdb
@@ -6465,9 +9150,18 @@ NeighborInfo *QueryGraph::GetConnection(JoinRelationSet *node, JoinRelationSet *
 
 #include <algorithm>
 
-namespace duckdb {
+namespace std {
 
-using JoinNode = JoinOrderOptimizer::JoinNode;
+//! A JoinNode is defined by the relations it joins.
+template <>
+struct hash<duckdb::JoinNode> {
+	inline string operator()(const duckdb::JoinNode &join_node) const {
+		return join_node.set->ToString();
+	}
+};
+} // namespace std
+
+namespace duckdb {
 
 //! Returns true if A and B are disjoint, false otherwise
 template <class T>
@@ -6488,6 +9182,9 @@ bool JoinOrderOptimizer::ExtractBindings(Expression &expression, unordered_set<i
 		D_ASSERT(colref.binding.table_index != DConstants::INVALID_INDEX);
 		// map the base table index to the relation index used by the JoinOrderOptimizer
 		D_ASSERT(relation_mapping.find(colref.binding.table_index) != relation_mapping.end());
+		auto catalog_table = relation_mapping[colref.binding.table_index];
+		auto column_index = colref.binding.column_index;
+		cardinality_estimator.AddColumnToRelationMap(catalog_table, column_index);
 		bindings.insert(relation_mapping[colref.binding.table_index]);
 	}
 	if (expression.type == ExpressionType::BOUND_REF) {
@@ -6504,6 +9201,21 @@ bool JoinOrderOptimizer::ExtractBindings(Expression &expression, unordered_set<i
 		}
 	});
 	return can_reorder;
+}
+
+void JoinOrderOptimizer::GetColumnBinding(Expression &expression, ColumnBinding &binding) {
+	if (expression.type == ExpressionType::BOUND_COLUMN_REF) {
+		// Here you have a filter on a single column in a table. Return a binding for the column
+		// being filtered on so the filter estimator knows what HLL count to pull
+		auto &colref = (BoundColumnRefExpression &)expression;
+		D_ASSERT(colref.depth == 0);
+		D_ASSERT(colref.binding.table_index != DConstants::INVALID_INDEX);
+		// map the base table index to the relation index used by the JoinOrderOptimizer
+		D_ASSERT(relation_mapping.find(colref.binding.table_index) != relation_mapping.end());
+		binding = ColumnBinding(relation_mapping[colref.binding.table_index], colref.binding.column_index);
+	}
+	// TODO: handle inequality filters with functions.
+	ExpressionIterator::EnumerateChildren(expression, [&](Expression &expr) { GetColumnBinding(expr, binding); });
 }
 
 static unique_ptr<LogicalOperator> PushFilter(unique_ptr<LogicalOperator> node, unique_ptr<Expression> expr) {
@@ -6581,9 +9293,18 @@ bool JoinOrderOptimizer::ExtractJoinRelations(LogicalOperator &input_op, vector<
 		// e.g. suppose we have (left LEFT OUTER JOIN right WHERE right IS NOT NULL), the join can generate
 		// new NULL values in the right side, so pushing this condition through the join leads to incorrect results
 		// for this reason, we just start a new JoinOptimizer pass in each of the children of the join
+
+		// Keep track of all of the filter bindings the new join order optimizer makes
+		vector<column_binding_map_t<ColumnBinding>> child_binding_maps;
+		idx_t child_bindings_it = 0;
 		for (auto &child : op->children) {
+			child_binding_maps.emplace_back(column_binding_map_t<ColumnBinding>());
 			JoinOrderOptimizer optimizer(context);
 			child = optimizer.Optimize(move(child));
+			// save the relation bindings from the optimized child. These later all get added to the
+			// parent cardinality_estimator relation column binding map.
+			optimizer.cardinality_estimator.CopyRelationMap(child_binding_maps.at(child_bindings_it));
+			child_bindings_it += 1;
 		}
 		// after this we want to treat this node as one  "end node" (like e.g. a base relation)
 		// however the join refers to multiple base relations
@@ -6594,8 +9315,11 @@ bool JoinOrderOptimizer::ExtractJoinRelations(LogicalOperator &input_op, vector<
 		LogicalJoin::GetTableReferences(*op, bindings);
 		// now create the relation that refers to all these bindings
 		auto relation = make_unique<SingleJoinRelation>(&input_op, parent);
+		auto relation_id = relations.size();
+		// Add binding information from the nonreorderable join to this relation.
 		for (idx_t it : bindings) {
-			relation_mapping[it] = relations.size();
+			cardinality_estimator.MergeBindings(it, relation_id, child_binding_maps);
+			relation_mapping[it] = relation_id;
 		}
 		relations.push_back(move(relation));
 		return true;
@@ -6610,14 +9334,21 @@ bool JoinOrderOptimizer::ExtractJoinRelations(LogicalOperator &input_op, vector<
 		// base table scan, add to set of relations
 		auto get = (LogicalGet *)op;
 		auto relation = make_unique<SingleJoinRelation>(&input_op, parent);
-		relation_mapping[get->table_index] = relations.size();
+		idx_t relation_id = relations.size();
+		//! make sure the optimizer has knowledge of the exact column bindings as well.
+		auto table_index = get->table_index;
+		relation_mapping[table_index] = relation_id;
+		cardinality_estimator.AddRelationColumnMapping(get, relation_id);
 		relations.push_back(move(relation));
 		return true;
 	} else if (op->type == LogicalOperatorType::LOGICAL_EXPRESSION_GET) {
 		// base table scan, add to set of relations
 		auto get = (LogicalExpressionGet *)op;
 		auto relation = make_unique<SingleJoinRelation>(&input_op, parent);
-		relation_mapping[get->table_index] = relations.size();
+		idx_t relation_id = relations.size();
+		//! make sure the optimizer has knowledge of the exact column bindings as well.
+		auto table_index = get->table_index;
+		relation_mapping[table_index] = relation_id;
 		relations.push_back(move(relation));
 		return true;
 	} else if (op->type == LogicalOperatorType::LOGICAL_DUMMY_SCAN) {
@@ -6649,51 +9380,110 @@ static void UpdateExclusionSet(JoinRelationSet *node, unordered_set<idx_t> &excl
 }
 
 //! Create a new JoinTree node by joining together two previous JoinTree nodes
-static unique_ptr<JoinNode> CreateJoinTree(JoinRelationSet *set, NeighborInfo *info, JoinNode *left, JoinNode *right) {
+unique_ptr<JoinNode> JoinOrderOptimizer::CreateJoinTree(JoinRelationSet *set,
+                                                        const vector<NeighborInfo *> &possible_connections,
+                                                        JoinNode *left, JoinNode *right) {
 	// for the hash join we want the right side (build side) to have the smallest cardinality
 	// also just a heuristic but for now...
 	// FIXME: we should probably actually benchmark that as well
 	// FIXME: should consider different join algorithms, should we pick a join algorithm here as well? (probably)
-	if (left->cardinality < right->cardinality) {
-		return CreateJoinTree(set, info, right, left);
+	double expected_cardinality;
+	NeighborInfo *best_connection = nullptr;
+	auto plan = plans.find(set);
+	// if we have already calculated an expected cardinality for this set,
+	// just re-use that cardinality
+	if (left->GetCardinality<double>() < right->GetCardinality<double>()) {
+		return CreateJoinTree(set, possible_connections, right, left);
 	}
-	// the expected cardinality is the max of the child cardinalities
-	// FIXME: we should obviously use better cardinality estimation here
-	// but for now we just assume foreign key joins only
-	idx_t expected_cardinality;
-	if (info->filters.empty()) {
+	if (plan != plans.end()) {
+		if (!plan->second) {
+			throw InternalException("No plan: internal error in join order optimizer");
+		}
+		expected_cardinality = plan->second->GetCardinality<double>();
+		best_connection = possible_connections.back();
+	} else if (possible_connections.empty()) {
 		// cross product
-		expected_cardinality = left->cardinality * right->cardinality;
+		expected_cardinality = cardinality_estimator.EstimateCrossProduct(left, right);
 	} else {
 		// normal join, expect foreign key join
-		expected_cardinality = MaxValue(left->cardinality, right->cardinality);
+		expected_cardinality = cardinality_estimator.EstimateCardinalityWithSet(set);
+		best_connection = possible_connections.back();
 	}
-	// cost is expected_cardinality plus the cost of the previous plans
-	idx_t cost = expected_cardinality;
-	return make_unique<JoinNode>(set, info, left, right, expected_cardinality, cost);
+
+	auto cost = CardinalityEstimator::ComputeCost(left, right, expected_cardinality);
+	auto result = make_unique<JoinNode>(set, best_connection, left, right, expected_cardinality, cost);
+	D_ASSERT(cost >= expected_cardinality);
+	return result;
 }
 
-JoinNode *JoinOrderOptimizer::EmitPair(JoinRelationSet *left, JoinRelationSet *right, NeighborInfo *info) {
+void JoinOrderOptimizer::UpdateJoinNodesInFullPlan(JoinNode *node) {
+	if (!node) {
+		return;
+	}
+	if (node->set->count == relations.size()) {
+		join_nodes_in_full_plan.clear();
+	}
+	if (node->set->count < relations.size()) {
+		join_nodes_in_full_plan.insert(node->set->ToString());
+	}
+	UpdateJoinNodesInFullPlan(node->left);
+	UpdateJoinNodesInFullPlan(node->right);
+}
+
+JoinNode *JoinOrderOptimizer::EmitPair(JoinRelationSet *left, JoinRelationSet *right,
+                                       const vector<NeighborInfo *> &info) {
 	// get the left and right join plans
 	auto &left_plan = plans[left];
 	auto &right_plan = plans[right];
+	if (!left_plan || !right_plan) {
+		throw InternalException("No left or right plan: internal error in join order optimizer");
+	}
 	auto new_set = set_manager.Union(left, right);
 	// create the join tree based on combining the two plans
 	auto new_plan = CreateJoinTree(new_set, info, left_plan.get(), right_plan.get());
 	// check if this plan is the optimal plan we found for this set of relations
 	auto entry = plans.find(new_set);
-	if (entry == plans.end() || new_plan->cost < entry->second->cost) {
+	if (entry == plans.end() || new_plan->GetCost() < entry->second->GetCost()) {
 		// the plan is the optimal plan, move it into the dynamic programming tree
 		auto result = new_plan.get();
+
+		//! make sure plans are symmetric for cardinality estimation
+		if (entry != plans.end()) {
+			cardinality_estimator.VerifySymmetry(result, entry->second.get());
+		}
+		if (full_plan_found &&
+		    join_nodes_in_full_plan.find(new_plan->set->ToString()) != join_nodes_in_full_plan.end()) {
+			must_update_full_plan = true;
+		}
+		if (new_set->count == relations.size()) {
+			full_plan_found = true;
+			// If we find a full plan, we need to keep track of which nodes are in the full plan.
+			// It's possible the DP algorithm updates one of these nodes, then goes on to solve
+			// the order approximately. In the approximate algorithm, it's not guaranteed that the
+			// node references are updated. If the original full plan is determined to still have
+			// the lowest cost, it's possible to get use-after-free errors.
+			// If we know a node in the full plan is updated, we can prevent ourselves from exiting the
+			// DP algorithm until the last plan updated is a full plan
+			UpdateJoinNodesInFullPlan(result);
+			if (must_update_full_plan) {
+				must_update_full_plan = false;
+			}
+		}
+
+		D_ASSERT(new_plan);
 		plans[new_set] = move(new_plan);
 		return result;
 	}
 	return entry->second.get();
 }
 
-bool JoinOrderOptimizer::TryEmitPair(JoinRelationSet *left, JoinRelationSet *right, NeighborInfo *info) {
+bool JoinOrderOptimizer::TryEmitPair(JoinRelationSet *left, JoinRelationSet *right,
+                                     const vector<NeighborInfo *> &info) {
 	pairs++;
-	if (pairs >= 2000) {
+	// If a full plan is created, it's possible a node in the plan gets updated. When this happens, make sure you keep
+	// emitting pairs until you emit another final plan. Another final plan is guaranteed to be produced because of
+	// our symmetry guarantees.
+	if (pairs >= 10000 && !must_update_full_plan) {
 		// when the amount of pairs gets too large we exit the dynamic programming and resort to a greedy algorithm
 		// FIXME: simple heuristic currently
 		// at 10K pairs stop searching exactly and switch to heuristic
@@ -6718,15 +9508,19 @@ bool JoinOrderOptimizer::EmitCSG(JoinRelationSet *node) {
 	if (neighbors.empty()) {
 		return true;
 	}
-	// we iterate over the neighbors ordered by their first node
-	sort(neighbors.begin(), neighbors.end());
+
+	//! Neighbors should be reversed when iterating over them.
+	std::sort(neighbors.begin(), neighbors.end(), std::greater_equal<idx_t>());
+	for (idx_t i = 0; i < neighbors.size() - 1; i++) {
+		D_ASSERT(neighbors[i] >= neighbors[i + 1]);
+	}
 	for (auto neighbor : neighbors) {
 		// since the GetNeighbors only returns the smallest element in a list, the entry might not be connected to
 		// (only!) this neighbor,  hence we have to do a connectedness check before we can emit it
 		auto neighbor_relation = set_manager.GetJoinRelation(neighbor);
-		auto connection = query_graph.GetConnection(node, neighbor_relation);
-		if (connection) {
-			if (!TryEmitPair(node, neighbor_relation, connection)) {
+		auto connections = query_graph.GetConnections(node, neighbor_relation);
+		if (!connections.empty()) {
+			if (!TryEmitPair(node, neighbor_relation, connections)) {
 				return false;
 			}
 		}
@@ -6751,9 +9545,9 @@ bool JoinOrderOptimizer::EnumerateCmpRecursive(JoinRelationSet *left, JoinRelati
 		// emit the combinations of this node and its neighbors
 		auto combined_set = set_manager.Union(right, neighbor);
 		if (combined_set->count > right->count && plans.find(combined_set) != plans.end()) {
-			auto connection = query_graph.GetConnection(left, combined_set);
-			if (connection) {
-				if (!TryEmitPair(left, combined_set, connection)) {
+			auto connections = query_graph.GetConnections(left, combined_set);
+			if (!connections.empty()) {
+				if (!TryEmitPair(left, combined_set, connections)) {
 					return false;
 				}
 			}
@@ -6773,12 +9567,11 @@ bool JoinOrderOptimizer::EnumerateCmpRecursive(JoinRelationSet *left, JoinRelati
 }
 
 bool JoinOrderOptimizer::EnumerateCSGRecursive(JoinRelationSet *node, unordered_set<idx_t> &exclusion_set) {
-	// find neighbors of S under the exlusion set
+	// find neighbors of S under the exclusion set
 	auto neighbors = query_graph.GetNeighbors(node, exclusion_set);
 	if (neighbors.empty()) {
 		return true;
 	}
-	// now first emit the connected subgraphs of the neighbors
 	vector<JoinRelationSet *> union_sets;
 	union_sets.resize(neighbors.size());
 	for (idx_t i = 0; i < neighbors.size(); i++) {
@@ -6795,8 +9588,11 @@ bool JoinOrderOptimizer::EnumerateCSGRecursive(JoinRelationSet *node, unordered_
 	// recursively enumerate the sets
 	unordered_set<idx_t> new_exclusion_set = exclusion_set;
 	for (idx_t i = 0; i < neighbors.size(); i++) {
-		// updated the set of excluded entries with this neighbor
+		// Reset the exclusion set so that the algorithm considers all combinations
+		// of the exclusion_set with a subset of neighbors.
+		new_exclusion_set = exclusion_set;
 		new_exclusion_set.insert(neighbors[i]);
+		// updated the set of excluded entries with this neighbor
 		if (!EnumerateCSGRecursive(union_sets[i], new_exclusion_set)) {
 			return false;
 		}
@@ -6827,6 +9623,99 @@ bool JoinOrderOptimizer::SolveJoinOrderExactly() {
 	return true;
 }
 
+static vector<unordered_set<idx_t>> AddSuperSets(vector<unordered_set<idx_t>> current,
+                                                 const vector<idx_t> &all_neighbors) {
+	vector<unordered_set<idx_t>> ret;
+	for (auto &neighbor : all_neighbors) {
+		for (auto &neighbor_set : current) {
+			auto max_val = std::max_element(neighbor_set.begin(), neighbor_set.end());
+			if (*max_val >= neighbor) {
+				continue;
+			}
+			if (neighbor_set.count(neighbor) == 0) {
+				unordered_set<idx_t> new_set;
+				for (auto &n : neighbor_set) {
+					new_set.insert(n);
+				}
+				new_set.insert(neighbor);
+				ret.push_back(new_set);
+			}
+		}
+	}
+	return ret;
+}
+
+// works by first creating all sets with cardinality 1
+// then iterates over each previously create group of subsets and will only add a neighbor if the neighbor
+// is greater than all relations in the set.
+static vector<unordered_set<idx_t>> GetAllNeighborSets(JoinRelationSet *new_set, unordered_set<idx_t> &exclusion_set,
+                                                       vector<idx_t> neighbors) {
+	vector<unordered_set<idx_t>> ret;
+	sort(neighbors.begin(), neighbors.end());
+	vector<unordered_set<idx_t>> added;
+	for (auto &neighbor : neighbors) {
+		added.push_back(unordered_set<idx_t>({neighbor}));
+		ret.push_back(unordered_set<idx_t>({neighbor}));
+	}
+	do {
+		added = AddSuperSets(added, neighbors);
+		for (auto &d : added) {
+			ret.push_back(d);
+		}
+	} while (!added.empty());
+#if DEBUG
+	// drive by test to make sure we have an accurate amount of
+	// subsets, and that each neighbor is in a correct amount
+	// of those subsets.
+	D_ASSERT(ret.size() == pow(2, neighbors.size()) - 1);
+	for (auto &n : neighbors) {
+		idx_t count = 0;
+		for (auto &set : ret) {
+			if (set.count(n) >= 1) {
+				count += 1;
+			}
+		}
+		D_ASSERT(count == pow(2, neighbors.size() - 1));
+	}
+#endif
+	return ret;
+}
+
+void JoinOrderOptimizer::UpdateDPTree(JoinNode *new_plan) {
+	auto new_set = new_plan->set;
+	// now update every plan that uses this plan
+	unordered_set<idx_t> exclusion_set;
+	for (idx_t i = 0; i < new_set->count; i++) {
+		exclusion_set.insert(new_set->relations[i]);
+	}
+	auto neighbors = query_graph.GetNeighbors(new_set, exclusion_set);
+	auto all_neighbors = GetAllNeighborSets(new_set, exclusion_set, neighbors);
+	for (auto neighbor : all_neighbors) {
+		auto neighbor_relation = set_manager.GetJoinRelation(neighbor);
+		auto combined_set = set_manager.Union(new_set, neighbor_relation);
+
+		auto combined_set_plan = plans.find(combined_set);
+		if (combined_set_plan == plans.end()) {
+			continue;
+		}
+
+		double combined_set_plan_cost = combined_set_plan->second->GetCost();
+		auto connections = query_graph.GetConnections(new_set, neighbor_relation);
+		// recurse and update up the tree if the combined set produces a plan with a lower cost
+		// only recurse on neighbor relations that have plans.
+		auto right_plan = plans.find(neighbor_relation);
+		if (right_plan == plans.end()) {
+			continue;
+		}
+		auto updated_plan = EmitPair(new_set, neighbor_relation, connections);
+		// <= because the child node has already been replaced. You need to
+		// replace the parent node as well in this case
+		if (updated_plan->GetCost() < combined_set_plan_cost) {
+			UpdateDPTree(updated_plan);
+		}
+	}
+}
+
 void JoinOrderOptimizer::SolveJoinOrderApproximately() {
 	// at this point, we exited the dynamic programming but did not compute the final join order because it took too
 	// long instead, we use a greedy heuristic to obtain a join ordering now we use Greedy Operator Ordering to
@@ -6846,11 +9735,17 @@ void JoinOrderOptimizer::SolveJoinOrderApproximately() {
 			for (idx_t j = i + 1; j < join_relations.size(); j++) {
 				auto right = join_relations[j];
 				// check if we can connect these two relations
-				auto connection = query_graph.GetConnection(left, right);
-				if (connection) {
-					// we can! check the cost of this connection
+				auto connection = query_graph.GetConnections(left, right);
+				if (!connection.empty()) {
+					// we can check the cost of this connection
 					auto node = EmitPair(left, right, connection);
-					if (!best_connection || node->cost < best_connection->cost) {
+
+					// update the DP tree in case a plan created by the DP algorithm uses the node
+					// that was potentially just updated by EmitPair. You will get a use-after-free
+					// error if future plans rely on the old node that was just replaced.
+					UpdateDPTree(node);
+
+					if (!best_connection || node->GetCost() < best_connection->GetCost()) {
 						// best pair found so far
 						best_connection = node;
 						best_left = i;
@@ -6869,7 +9764,8 @@ void JoinOrderOptimizer::SolveJoinOrderApproximately() {
 				auto current_plan = plans[join_relations[i]].get();
 				// check if the cardinality is smaller than the smallest two found so far
 				for (idx_t j = 0; j < 2; j++) {
-					if (!smallest_plans[j] || smallest_plans[j]->cardinality > current_plan->cardinality) {
+					if (!smallest_plans[j] ||
+					    smallest_plans[j]->GetCardinality<double>() > current_plan->GetCardinality<double>()) {
 						smallest_plans[j] = current_plan;
 						smallest_index[j] = i;
 						break;
@@ -6886,12 +9782,14 @@ void JoinOrderOptimizer::SolveJoinOrderApproximately() {
 			// create a cross product edge (i.e. edge with empty filter) between these two sets in the query graph
 			query_graph.CreateEdge(left, right, nullptr);
 			// now emit the pair and continue with the algorithm
-			auto connection = query_graph.GetConnection(left, right);
-			D_ASSERT(connection);
+			auto connections = query_graph.GetConnections(left, right);
+			D_ASSERT(!connections.empty());
 
-			best_connection = EmitPair(left, right, connection);
+			best_connection = EmitPair(left, right, connections);
 			best_left = smallest_index[0];
 			best_right = smallest_index[1];
+
+			UpdateDPTree(best_connection);
 			// the code below assumes best_right > best_left
 			if (best_left > best_right) {
 				std::swap(best_left, best_right);
@@ -6957,10 +9855,7 @@ JoinOrderOptimizer::GenerateJoins(vector<unique_ptr<LogicalOperator>> &extracted
 
 		if (node->info->filters.empty()) {
 			// no filters, create a cross product
-			auto join = make_unique<LogicalCrossProduct>();
-			join->children.push_back(move(left.second));
-			join->children.push_back(move(right.second));
-			result_operator = move(join);
+			result_operator = LogicalCrossProduct::Create(move(left.second), move(right.second));
 		} else {
 			// we have filters, create a join node
 			auto join = make_unique<LogicalComparisonJoin>(JoinType::INNER);
@@ -6996,6 +9891,7 @@ JoinOrderOptimizer::GenerateJoins(vector<unique_ptr<LogicalOperator>> &extracted
 		}
 		left_node = left.first;
 		right_node = right.first;
+		right_node = right.first;
 		result_relation = set_manager.Union(left_node, right_node);
 	} else {
 		// base node, get the entry from the list of extracted relations
@@ -7004,6 +9900,9 @@ JoinOrderOptimizer::GenerateJoins(vector<unique_ptr<LogicalOperator>> &extracted
 		result_relation = node->set;
 		result_operator = move(extracted_relations[node->set->relations[0]]);
 	}
+	result_operator->estimated_cardinality = node->GetCardinality<idx_t>();
+	result_operator->has_estimated_cardinality = true;
+	result_operator->estimated_props = node->estimated_props->Copy();
 	// check if we should do a pushdown on this node
 	// basically, any remaining filter that is a subset of the current relation will no longer be used in joins
 	// hence we should push it here
@@ -7186,6 +10085,8 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
 			unordered_set<idx_t> left_bindings, right_bindings;
 			ExtractBindings(*comparison->left, left_bindings);
 			ExtractBindings(*comparison->right, right_bindings);
+			GetColumnBinding(*comparison->left, filter_info->left_binding);
+			GetColumnBinding(*comparison->right, filter_info->right_binding);
 			if (!left_bindings.empty() && !right_bindings.empty()) {
 				// both the left and the right side have bindings
 				// first create the relation sets, if they do not exist
@@ -7210,10 +10111,18 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
 	// First we initialize each of the single-node plans with themselves and with their cardinalities these are the leaf
 	// nodes of the join tree NOTE: we can just use pointers to JoinRelationSet* here because the GetJoinRelation
 	// function ensures that a unique combination of relations will have a unique JoinRelationSet object.
+	vector<NodeOp> nodes_ops;
 	for (idx_t i = 0; i < relations.size(); i++) {
 		auto &rel = *relations[i];
 		auto node = set_manager.GetJoinRelation(i);
-		plans[node] = make_unique<JoinNode>(node, rel.op->EstimateCardinality(context));
+		nodes_ops.emplace_back(NodeOp(make_unique<JoinNode>(node, 0), rel.op));
+	}
+
+	cardinality_estimator.InitCardinalityEstimatorProps(&nodes_ops, &filter_infos);
+
+	for (auto &node_op : nodes_ops) {
+		D_ASSERT(node_op.node);
+		plans[node_op.node->set] = move(node_op.node);
 	}
 	// now we perform the actual dynamic programming to compute the final result
 	SolveJoinOrder();
@@ -7230,7 +10139,8 @@ unique_ptr<LogicalOperator> JoinOrderOptimizer::Optimize(unique_ptr<LogicalOpera
 		// this should only happen in case the sets are actually disjunct
 		// in this case we need to generate cross product to connect the disjoint sets
 		if (context.config.force_no_cross_product) {
-			throw InternalException("HyperGraph isn't connected");
+			throw InvalidInputException(
+			    "Query requires a cross-product, but 'force_no_cross_product' PRAGMA is enabled");
 		}
 		GenerateCrossProducts();
 		//! solve the join order again
@@ -7369,6 +10279,8 @@ bool FoldableConstantMatcher::Match(Expression *expr, vector<Expression *> &bind
 
 
 
+
+
 namespace duckdb {
 
 Optimizer::Optimizer(Binder &binder, ClientContext &context) : context(context), binder(binder), rewriter(context) {
@@ -7397,7 +10309,7 @@ Optimizer::Optimizer(Binder &binder, ClientContext &context) : context(context),
 
 void Optimizer::RunOptimizer(OptimizerType type, const std::function<void()> &callback) {
 	auto &config = DBConfig::GetConfig(context);
-	if (config.disabled_optimizers.find(type) != config.disabled_optimizers.end()) {
+	if (config.options.disabled_optimizers.find(type) != config.options.disabled_optimizers.end()) {
 		// optimizer is marked as disabled: skip
 		return;
 	}
@@ -7405,9 +10317,18 @@ void Optimizer::RunOptimizer(OptimizerType type, const std::function<void()> &ca
 	profiler.StartPhase(OptimizerTypeToString(type));
 	callback();
 	profiler.EndPhase();
+	if (plan) {
+		Verify(*plan);
+	}
 }
 
-unique_ptr<LogicalOperator> Optimizer::Optimize(unique_ptr<LogicalOperator> plan) {
+void Optimizer::Verify(LogicalOperator &op) {
+	ColumnBindingResolver::Verify(op);
+}
+
+unique_ptr<LogicalOperator> Optimizer::Optimize(unique_ptr<LogicalOperator> plan_p) {
+	Verify(*plan_p);
+	this->plan = move(plan_p);
 	// first we perform expression rewrites using the ExpressionRewriter
 	// this does not change the logical plan structure, but only simplifies the expression trees
 	RunOptimizer(OptimizerType::EXPRESSION_REWRITER, [&]() { rewriter.VisitOperator(*plan); });
@@ -7486,7 +10407,15 @@ unique_ptr<LogicalOperator> Optimizer::Optimize(unique_ptr<LogicalOperator> plan
 		plan = expression_heuristics.Rewrite(move(plan));
 	});
 
-	return plan;
+	for (auto &optimizer_extension : DBConfig::GetConfig(context).optimizer_extensions) {
+		RunOptimizer(OptimizerType::EXTENSION, [&]() {
+			optimizer_extension.optimize_function(context, optimizer_extension.optimizer_info.get(), plan);
+		});
+	}
+
+	Planner::VerifyPlan(context, plan);
+
+	return move(plan);
 }
 
 } // namespace duckdb
@@ -7499,6 +10428,8 @@ unique_ptr<LogicalOperator> FilterPullup::PullupBothSide(unique_ptr<LogicalOpera
 	FilterPullup right_pullup(true, can_add_column);
 	op->children[0] = left_pullup.Rewrite(move(op->children[0]));
 	op->children[1] = right_pullup.Rewrite(move(op->children[1]));
+	D_ASSERT(left_pullup.can_add_column == can_add_column);
+	D_ASSERT(right_pullup.can_add_column == can_add_column);
 
 	// merging filter expressions
 	for (idx_t i = 0; i < right_pullup.filters_expr_pullup.size(); ++i) {
@@ -7523,7 +10454,8 @@ namespace duckdb {
 unique_ptr<LogicalOperator> FilterPullup::PullupFilter(unique_ptr<LogicalOperator> op) {
 	D_ASSERT(op->type == LogicalOperatorType::LOGICAL_FILTER);
 
-	if (can_pullup) {
+	auto &filter = (LogicalFilter &)*op;
+	if (can_pullup && filter.projection_map.empty()) {
 		unique_ptr<LogicalOperator> child = move(op->children[0]);
 		child = Rewrite(move(child));
 		// moving filter's expressions
@@ -7545,7 +10477,8 @@ namespace duckdb {
 
 unique_ptr<LogicalOperator> FilterPullup::PullupFromLeft(unique_ptr<LogicalOperator> op) {
 	D_ASSERT(op->type == LogicalOperatorType::LOGICAL_COMPARISON_JOIN ||
-	         op->type == LogicalOperatorType::LOGICAL_ANY_JOIN || op->type == LogicalOperatorType::LOGICAL_EXCEPT);
+	         op->type == LogicalOperatorType::LOGICAL_ANY_JOIN || op->type == LogicalOperatorType::LOGICAL_EXCEPT ||
+	         op->type == LogicalOperatorType::LOGICAL_DELIM_JOIN);
 
 	FilterPullup left_pullup(true, can_add_column);
 	FilterPullup right_pullup(false, can_add_column);
@@ -7732,21 +10665,35 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownAggregate(unique_ptr<Logical
 	FilterPushdown child_pushdown(optimizer);
 	for (idx_t i = 0; i < filters.size(); i++) {
 		auto &f = *filters[i];
-		// check if any aggregate or GROUPING functions are in the set
-		if (f.bindings.find(aggr.aggregate_index) == f.bindings.end() &&
-		    f.bindings.find(aggr.groupings_index) == f.bindings.end()) {
-			// no aggregate! we can push this down
-			// rewrite any group bindings within the filter
-			f.filter = ReplaceGroupBindings(aggr, move(f.filter));
-			// add the filter to the child node
-			if (child_pushdown.AddFilter(move(f.filter)) == FilterResult::UNSATISFIABLE) {
-				// filter statically evaluates to false, strip tree
-				return make_unique<LogicalEmptyResult>(move(op));
-			}
-			// erase the filter from here
-			filters.erase(filters.begin() + i);
-			i--;
+		if (f.bindings.find(aggr.aggregate_index) != f.bindings.end()) {
+			// filter on aggregate: cannot pushdown
+			continue;
 		}
+		if (f.bindings.find(aggr.groupings_index) != f.bindings.end()) {
+			// filter on GROUPINGS function: cannot pushdown
+			continue;
+		}
+		// if there are any empty grouping sets, we cannot push down filters
+		bool has_empty_grouping_sets = false;
+		for (auto &grp : aggr.grouping_sets) {
+			if (grp.empty()) {
+				has_empty_grouping_sets = true;
+			}
+		}
+		if (has_empty_grouping_sets) {
+			continue;
+		}
+		// no aggregate! we can push this down
+		// rewrite any group bindings within the filter
+		f.filter = ReplaceGroupBindings(aggr, move(f.filter));
+		// add the filter to the child node
+		if (child_pushdown.AddFilter(move(f.filter)) == FilterResult::UNSATISFIABLE) {
+			// filter statically evaluates to false, strip tree
+			return make_unique<LogicalEmptyResult>(move(op));
+		}
+		// erase the filter from here
+		filters.erase(filters.begin() + i);
+		i--;
 	}
 	child_pushdown.GenerateFilters();
 
@@ -7783,7 +10730,7 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownCrossProduct(unique_ptr<Logi
 				// bindings match right side: push into right
 				right_pushdown.filters.push_back(move(f));
 			} else {
-				D_ASSERT(side == JoinSide::BOTH);
+				D_ASSERT(side == JoinSide::BOTH || side == JoinSide::NONE);
 				// bindings match both: turn into join condition
 				join_conditions.push_back(move(f->filter));
 			}
@@ -7815,6 +10762,9 @@ using Filter = FilterPushdown::Filter;
 unique_ptr<LogicalOperator> FilterPushdown::PushdownFilter(unique_ptr<LogicalOperator> op) {
 	D_ASSERT(op->type == LogicalOperatorType::LOGICAL_FILTER);
 	auto &filter = (LogicalFilter &)*op;
+	if (!filter.projection_map.empty()) {
+		return FinishPushdown(move(op));
+	}
 	// filter: gather the filters and remove the filter from the set of operations
 	for (auto &expression : filter.expressions) {
 		if (AddFilter(move(expression)) == FilterResult::UNSATISFIABLE) {
@@ -7834,12 +10784,24 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownFilter(unique_ptr<LogicalOpe
 
 
 
+
 namespace duckdb {
 
 unique_ptr<LogicalOperator> FilterPushdown::PushdownGet(unique_ptr<LogicalOperator> op) {
 	D_ASSERT(op->type == LogicalOperatorType::LOGICAL_GET);
 	auto &get = (LogicalGet &)*op;
 
+	if (get.function.pushdown_complex_filter || get.function.filter_pushdown) {
+		// this scan supports some form of filter push-down
+		// check if there are any parameters
+		// if there are, invalidate them to force a re-bind on execution
+		for (auto &filter : filters) {
+			if (filter->filter->HasParameter()) {
+				// there is a parameter in the filters! invalidate it
+				BoundParameterExpression::InvalidateRecursive(*filter->filter);
+			}
+		}
+	}
 	if (get.function.pushdown_complex_filter) {
 		// for the remaining filters, check if we can push any of them into the scan as well
 		vector<unique_ptr<Expression>> expressions;
@@ -7935,15 +10897,12 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownInnerJoin(unique_ptr<Logical
 	GenerateFilters();
 
 	// turn the inner join into a cross product
-	auto cross_product = make_unique<LogicalCrossProduct>();
-	cross_product->children.push_back(move(op->children[0]));
-	cross_product->children.push_back(move(op->children[1]));
+	auto cross_product = make_unique<LogicalCrossProduct>(move(op->children[0]), move(op->children[1]));
 	// then push down cross product
 	return PushdownCrossProduct(move(cross_product));
 }
 
 } // namespace duckdb
-
 
 
 
@@ -7973,7 +10932,8 @@ static unique_ptr<Expression> ReplaceColRefWithNull(unique_ptr<Expression> expr,
 	return expr;
 }
 
-static bool FilterRemovesNull(ExpressionRewriter &rewriter, Expression *expr, unordered_set<idx_t> &right_bindings) {
+static bool FilterRemovesNull(ClientContext &context, ExpressionRewriter &rewriter, Expression *expr,
+                              unordered_set<idx_t> &right_bindings) {
 	// make a copy of the expression
 	auto copy = expr->Copy();
 	// replace all BoundColumnRef expressions frmo the RHS with NULL constants in the copied expression
@@ -7990,7 +10950,8 @@ static bool FilterRemovesNull(ExpressionRewriter &rewriter, Expression *expr, un
 			return false;
 		}
 		// we flattened the result into a scalar, check if it is FALSE or NULL
-		auto val = ExpressionExecutor::EvaluateScalar(*filter->expressions[i]).CastAs(LogicalType::BOOLEAN);
+		auto val =
+		    ExpressionExecutor::EvaluateScalar(context, *filter->expressions[i]).DefaultCastAs(LogicalType::BOOLEAN);
 		// if the result of the expression with all expressions replaced with NULL is "NULL" or "false"
 		// then any extra entries generated by the LEFT OUTER JOIN will be filtered out!
 		// hence the LEFT OUTER JOIN is equivalent to an inner join
@@ -8010,7 +10971,7 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownLeftJoin(unique_ptr<LogicalO
 	FilterPushdown left_pushdown(optimizer), right_pushdown(optimizer);
 	// for a comparison join we create a FilterCombiner that checks if we can push conditions on LHS join conditions
 	// into the RHS of the join
-	FilterCombiner filter_combiner;
+	FilterCombiner filter_combiner(optimizer);
 	if (op->type == LogicalOperatorType::LOGICAL_COMPARISON_JOIN) {
 		// add all comparison conditions
 		auto &comparison_join = (LogicalComparisonJoin &)*op;
@@ -8038,7 +10999,7 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownLeftJoin(unique_ptr<LogicalO
 			// bindings match right side or both sides: we cannot directly push it into the right
 			// however, if the filter removes rows with null values from the RHS we can turn the left outer join
 			// in an inner join, and then push down as we would push down an inner join
-			if (FilterRemovesNull(optimizer.rewriter, filters[i]->filter.get(), right_bindings)) {
+			if (FilterRemovesNull(optimizer.context, optimizer.rewriter, filters[i]->filter.get(), right_bindings)) {
 				// the filter removes NULL values, turn it into an inner join
 				join.join_type = JoinType::INNER;
 				// now we can do more pushdown
@@ -8107,8 +11068,8 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownMarkJoin(unique_ptr<LogicalO
 
 	right_bindings.insert(comp_join.mark_index);
 	FilterPushdown left_pushdown(optimizer), right_pushdown(optimizer);
-#ifndef NDEBUG
-	bool found_mark_reference = false;
+#ifdef DEBUG
+	bool simplified_mark_join = false;
 #endif
 	// now check the set of filters
 	for (idx_t i = 0; i < filters.size(); i++) {
@@ -8120,15 +11081,16 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownMarkJoin(unique_ptr<LogicalO
 			filters.erase(filters.begin() + i);
 			i--;
 		} else if (side == JoinSide::RIGHT) {
-			// there can only be at most one filter referencing the marker
-#ifndef NDEBUG
-			D_ASSERT(!found_mark_reference);
-			found_mark_reference = true;
+#ifdef DEBUG
+			D_ASSERT(!simplified_mark_join);
 #endif
 			// this filter references the marker
 			// we can turn this into a SEMI join if the filter is on only the marker
 			if (filters[i]->filter->type == ExpressionType::BOUND_COLUMN_REF) {
 				// filter just references the marker: turn into semi join
+#ifdef DEBUG
+				simplified_mark_join = true;
+#endif
 				join.join_type = JoinType::SEMI;
 				filters.erase(filters.begin() + i);
 				i--;
@@ -8151,6 +11113,9 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownMarkJoin(unique_ptr<LogicalO
 						}
 					}
 					if (all_null_values_are_equal) {
+#ifdef DEBUG
+						simplified_mark_join = true;
+#endif
 						// all null values are equal, convert to ANTI join
 						join.join_type = JoinType::ANTI;
 						filters.erase(filters.begin() + i);
@@ -8255,6 +11220,9 @@ unique_ptr<LogicalOperator> FilterPushdown::PushdownSetOperation(unique_ptr<Logi
 	D_ASSERT(op->children.size() == 2);
 	auto left_bindings = op->children[0]->GetColumnBindings();
 	auto right_bindings = op->children[1]->GetColumnBindings();
+	if (left_bindings.size() != right_bindings.size()) {
+		throw InternalException("Filter pushdown - set operation LHS and RHS have incompatible counts");
+	}
 
 	// pushdown into set operation, we can duplicate the condition and pushdown the expressions into both sides
 	FilterPushdown left_pushdown(optimizer), right_pushdown(optimizer);
@@ -8437,7 +11405,9 @@ unique_ptr<LogicalOperator> RegexRangeFilter::Rewrite(unique_ptr<LogicalOperator
 
 
 
-#include <map>
+
+
+
 
 namespace duckdb {
 
@@ -8452,7 +11422,7 @@ void RemoveUnusedColumns::ReplaceBinding(ColumnBinding current_binding, ColumnBi
 }
 
 template <class T>
-void RemoveUnusedColumns::ClearUnusedExpressions(vector<T> &list, idx_t table_idx) {
+void RemoveUnusedColumns::ClearUnusedExpressions(vector<T> &list, idx_t table_idx, bool replace) {
 	idx_t offset = 0;
 	for (idx_t col_idx = 0; col_idx < list.size(); col_idx++) {
 		auto current_binding = ColumnBinding(table_idx, col_idx + offset);
@@ -8462,7 +11432,7 @@ void RemoveUnusedColumns::ClearUnusedExpressions(vector<T> &list, idx_t table_id
 			list.erase(list.begin() + col_idx);
 			offset++;
 			col_idx--;
-		} else if (offset > 0) {
+		} else if (offset > 0 && replace) {
 			// column is used but the ColumnBinding has changed because of removed columns
 			ReplaceBinding(current_binding, ColumnBinding(table_idx, col_idx));
 		}
@@ -8480,8 +11450,9 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 			if (aggr.expressions.empty() && aggr.groups.empty()) {
 				// removed all expressions from the aggregate: push a COUNT(*)
 				auto count_star_fun = CountStarFun::GetFunction();
+				FunctionBinder function_binder(context);
 				aggr.expressions.push_back(
-				    AggregateFunction::BindAggregateFunction(context, count_star_fun, {}, nullptr, false));
+				    function_binder.BindAggregateFunction(count_star_fun, {}, nullptr, AggregateType::NON_DISTINCT));
 			}
 		}
 
@@ -8583,6 +11554,23 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 			remove.VisitOperator(*child);
 		}
 		return;
+	case LogicalOperatorType::LOGICAL_ORDER_BY:
+		if (!everything_referenced) {
+			auto &order = (LogicalOrder &)op;
+			D_ASSERT(order.projections.empty()); // should not yet be set
+			const auto all_bindings = order.GetColumnBindings();
+
+			for (idx_t col_idx = 0; col_idx < all_bindings.size(); col_idx++) {
+				if (column_references.find(all_bindings[col_idx]) != column_references.end()) {
+					order.projections.push_back(col_idx);
+				}
+			}
+		}
+		for (auto &child : op.children) {
+			RemoveUnusedColumns remove(binder, context, true);
+			remove.VisitOperator(*child);
+		}
+		return;
 	case LogicalOperatorType::LOGICAL_PROJECTION: {
 		if (!everything_referenced) {
 			auto &proj = (LogicalProjection &)op;
@@ -8618,6 +11606,17 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 		LogicalOperatorVisitor::VisitOperatorExpressions(op);
 		if (!everything_referenced) {
 			auto &get = (LogicalGet &)op;
+
+			// Create "selection vector" of all column ids
+			vector<idx_t> proj_sel;
+			for (idx_t col_idx = 0; col_idx < get.column_ids.size(); col_idx++) {
+				proj_sel.push_back(col_idx);
+			}
+			// Create a copy that we can use to match ids later
+			auto col_sel = proj_sel;
+			// Clear unused ids, exclude filter columns that are projected out immediately
+			ClearUnusedExpressions(proj_sel, get.table_index, false);
+
 			// for every table filter, push a column binding into the column references map to prevent the column from
 			// being projected out
 			for (auto &filter : get.table_filters.filters) {
@@ -8636,8 +11635,31 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 					column_references.insert(make_pair(filter_binding, vector<BoundColumnRefExpression *>()));
 				}
 			}
-			// table scan: figure out which columns are referenced
-			ClearUnusedExpressions(get.column_ids, get.table_index);
+
+			// Clear unused ids, include filter columns that are projected out immediately
+			ClearUnusedExpressions(col_sel, get.table_index);
+
+			// Now set the column ids in the LogicalGet using the "selection vector"
+			vector<column_t> column_ids;
+			column_ids.reserve(col_sel.size());
+			for (auto col_sel_idx : col_sel) {
+				column_ids.push_back(get.column_ids[col_sel_idx]);
+			}
+			get.column_ids = move(column_ids);
+
+			if (get.function.filter_prune) {
+				// Now set the projection cols by matching the "selection vector" that excludes filter columns
+				// with the "selection vector" that includes filter columns
+				idx_t col_idx = 0;
+				for (auto proj_sel_idx : proj_sel) {
+					for (; col_idx < col_sel.size(); col_idx++) {
+						if (proj_sel_idx == col_sel[col_idx]) {
+							get.projection_ids.push_back(col_idx);
+							break;
+						}
+					}
+				}
+			}
 
 			if (get.column_ids.empty()) {
 				// this generally means we are only interested in whether or not anything exists in the table (e.g.
@@ -8776,10 +11798,10 @@ unique_ptr<Expression> CaseSimplificationRule::Apply(LogicalOperator &op, vector
 		if (case_check.when_expr->IsFoldable()) {
 			// the WHEN check is a foldable expression
 			// use an ExpressionExecutor to execute the expression
-			auto constant_value = ExpressionExecutor::EvaluateScalar(*case_check.when_expr);
+			auto constant_value = ExpressionExecutor::EvaluateScalar(GetContext(), *case_check.when_expr);
 
 			// fold based on the constant condition
-			auto condition = constant_value.CastAs(LogicalType::BOOLEAN);
+			auto condition = constant_value.DefaultCastAs(LogicalType::BOOLEAN);
 			if (condition.IsNull() || !BooleanValue::Get(condition)) {
 				// the condition is always false: remove this case check
 				root->case_checks.erase(root->case_checks.begin() + i);
@@ -8829,7 +11851,7 @@ unique_ptr<Expression> ComparisonSimplificationRule::Apply(LogicalOperator &op, 
 	// use an ExpressionExecutor to execute the expression
 	D_ASSERT(constant_expr->IsFoldable());
 	Value constant_value;
-	if (!ExpressionExecutor::TryEvaluateScalar(*constant_expr, constant_value)) {
+	if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), *constant_expr, constant_value)) {
 		return nullptr;
 	}
 	if (constant_value.IsNull() && !(expr->type == ExpressionType::COMPARE_NOT_DISTINCT_FROM ||
@@ -8839,23 +11861,42 @@ unique_ptr<Expression> ComparisonSimplificationRule::Apply(LogicalOperator &op, 
 	}
 	if (column_ref_expr->expression_class == ExpressionClass::BOUND_CAST) {
 		//! Here we check if we can apply the expression on the constant side
+		//! We can do this if the cast itself is invertible and casting the constant is
+		//! invertible in practice.
 		auto cast_expression = (BoundCastExpression *)column_ref_expr;
 		auto target_type = cast_expression->source_type();
 		if (!BoundCastExpression::CastIsInvertible(target_type, cast_expression->return_type)) {
 			return nullptr;
 		}
-		auto new_constant = constant_value.TryCastAs(target_type);
-		if (new_constant) {
-			auto child_expression = move(cast_expression->child);
-			auto new_constant_expr = make_unique<BoundConstantExpression>(constant_value);
-			//! We can cast, now we change our column_ref_expression from an operator cast to a column reference
-			if (column_ref_left) {
-				expr->left = move(child_expression);
-				expr->right = move(new_constant_expr);
-			} else {
-				expr->left = move(new_constant_expr);
-				expr->right = move(child_expression);
+
+		// Can we cast the constant at all?
+		string error_message;
+		Value cast_constant;
+		auto new_constant = constant_value.DefaultTryCastAs(target_type, cast_constant, &error_message, true);
+		if (!new_constant) {
+			return nullptr;
+		}
+
+		// Is the constant cast invertible?
+		if (!cast_constant.IsNull() &&
+		    !BoundCastExpression::CastIsInvertible(cast_expression->return_type, target_type)) {
+			// Is it actually invertible?
+			Value uncast_constant;
+			if (!cast_constant.DefaultTryCastAs(constant_value.type(), uncast_constant, &error_message, true) ||
+			    uncast_constant != constant_value) {
+				return nullptr;
 			}
+		}
+
+		//! We can cast, now we change our column_ref_expression from an operator cast to a column reference
+		auto child_expression = move(cast_expression->child);
+		auto new_constant_expr = make_unique<BoundConstantExpression>(cast_constant);
+		if (column_ref_left) {
+			expr->left = move(child_expression);
+			expr->right = move(new_constant_expr);
+		} else {
+			expr->left = move(new_constant_expr);
+			expr->right = move(child_expression);
 		}
 	}
 	return nullptr;
@@ -8902,10 +11943,10 @@ unique_ptr<Expression> ConjunctionSimplificationRule::Apply(LogicalOperator &op,
 	// use an ExpressionExecutor to execute the expression
 	D_ASSERT(constant_expr->IsFoldable());
 	Value constant_value;
-	if (!ExpressionExecutor::TryEvaluateScalar(*constant_expr, constant_value)) {
+	if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), *constant_expr, constant_value)) {
 		return nullptr;
 	}
-	constant_value = constant_value.CastAs(LogicalType::BOOLEAN);
+	constant_value = constant_value.DefaultCastAs(LogicalType::BOOLEAN);
 	if (constant_value.IsNull()) {
 		// we can't simplify conjunctions with a constant NULL
 		return nullptr;
@@ -8965,7 +12006,7 @@ unique_ptr<Expression> ConstantFoldingRule::Apply(LogicalOperator &op, vector<Ex
 
 	// use an ExpressionExecutor to execute the expression
 	Value result_value;
-	if (!ExpressionExecutor::TryEvaluateScalar(*root, result_value)) {
+	if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), *root, result_value)) {
 		return nullptr;
 	}
 	D_ASSERT(result_value.type().InternalType() == root->return_type.InternalType());
@@ -8974,6 +12015,7 @@ unique_ptr<Expression> ConstantFoldingRule::Apply(LogicalOperator &op, vector<Ex
 }
 
 } // namespace duckdb
+
 
 
 
@@ -9071,8 +12113,8 @@ unique_ptr<Expression> DatePartSimplificationRule::Apply(LogicalOperator &op, ve
 	children.push_back(move(date_part.children[1]));
 
 	string error;
-	auto function = ScalarFunction::BindScalarFunction(rewriter.context, DEFAULT_SCHEMA, new_function_name,
-	                                                   move(children), error, false);
+	FunctionBinder binder(rewriter.context);
+	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, new_function_name, move(children), error, false);
 	if (!function) {
 		throw BinderException(error);
 	}
@@ -9251,7 +12293,7 @@ unique_ptr<Expression> EmptyNeedleRemovalRule::Apply(LogicalOperator &op, vector
 	}
 	D_ASSERT(root->return_type.id() == LogicalTypeId::BOOLEAN);
 
-	auto prefix_value = ExpressionExecutor::EvaluateScalar(*prefix_expr);
+	auto prefix_value = ExpressionExecutor::EvaluateScalar(GetContext(), *prefix_expr);
 
 	if (prefix_value.IsNull()) {
 		return make_unique<BoundConstantExpression>(Value(LogicalType::BOOLEAN));
@@ -9335,8 +12377,7 @@ unique_ptr<Expression> EnumComparisonRule::Apply(LogicalOperator &op, vector<Exp
 	}
 
 	auto cast_left_to_right =
-	    make_unique<BoundCastExpression>(move(left_child->child), right_child->child->return_type, true);
-
+	    BoundCastExpression::AddDefaultCastToType(move(left_child->child), right_child->child->return_type, true);
 	return make_unique<BoundComparisonExpression>(root->type, move(cast_left_to_right), move(right_child->child));
 }
 
@@ -9490,8 +12531,8 @@ unique_ptr<Expression> InClauseSimplificationRule::Apply(LogicalOperator &op, ve
 			return nullptr;
 		}
 		D_ASSERT(expr->children[i]->IsFoldable());
-		auto constant_value = ExpressionExecutor::EvaluateScalar(*expr->children[i]);
-		auto new_constant = constant_value.TryCastAs(target_type);
+		auto constant_value = ExpressionExecutor::EvaluateScalar(GetContext(), *expr->children[i]);
+		auto new_constant = constant_value.DefaultTryCastAs(target_type);
 		if (!new_constant) {
 			return nullptr;
 		} else {
@@ -9627,7 +12668,7 @@ unique_ptr<Expression> LikeOptimizationRule::Apply(LogicalOperator &op, vector<E
 		return nullptr;
 	}
 
-	auto constant_value = ExpressionExecutor::EvaluateScalar(*constant_expr);
+	auto constant_value = ExpressionExecutor::EvaluateScalar(GetContext(), *constant_expr);
 	D_ASSERT(constant_value.type() == constant_expr->return_type);
 	auto &patt_str = StringValue::Get(constant_value);
 
@@ -9729,7 +12770,7 @@ unique_ptr<Expression> MoveConstantsRule::Apply(LogicalOperator &op, vector<Expr
 			return nullptr;
 		}
 		auto result_value = Value::HUGEINT(outer_value);
-		if (!result_value.TryCastAs(constant_type)) {
+		if (!result_value.DefaultTryCastAs(constant_type)) {
 			// if the cast is not possible then the comparison is not possible
 			// for example, if we have x + 5 = 3, where x is an unsigned number, we will get x = -2
 			// since this is not possible we can remove the entire branch here
@@ -9747,7 +12788,7 @@ unique_ptr<Expression> MoveConstantsRule::Apply(LogicalOperator &op, vector<Expr
 				return nullptr;
 			}
 			auto result_value = Value::HUGEINT(outer_value);
-			if (!result_value.TryCastAs(constant_type)) {
+			if (!result_value.DefaultTryCastAs(constant_type)) {
 				// if the cast is not possible then the comparison is not possible
 				return ExpressionRewriter::ConstantOrNull(move(arithmetic->children[arithmetic_child_index]),
 				                                          Value::BOOLEAN(false));
@@ -9760,7 +12801,7 @@ unique_ptr<Expression> MoveConstantsRule::Apply(LogicalOperator &op, vector<Expr
 				return nullptr;
 			}
 			auto result_value = Value::HUGEINT(inner_value);
-			if (!result_value.TryCastAs(constant_type)) {
+			if (!result_value.DefaultTryCastAs(constant_type)) {
 				// if the cast is not possible then the comparison is not possible
 				return ExpressionRewriter::ConstantOrNull(move(arithmetic->children[arithmetic_child_index]),
 				                                          Value::BOOLEAN(false));
@@ -9804,7 +12845,7 @@ unique_ptr<Expression> MoveConstantsRule::Apply(LogicalOperator &op, vector<Expr
 		// we need to do a range check on the cast even though we do a division
 		// because e.g. -128 / -1 = 128, which is out of range
 		auto result_value = Value::HUGEINT(outer_value / inner_value);
-		if (!result_value.TryCastAs(constant_type)) {
+		if (!result_value.DefaultTryCastAs(constant_type)) {
 			return ExpressionRewriter::ConstantOrNull(move(arithmetic->children[arithmetic_child_index]),
 			                                          Value::BOOLEAN(false));
 		}
@@ -9859,7 +12900,7 @@ unique_ptr<Expression> RegexOptimizationRule::Apply(LogicalOperator &op, vector<
 		return nullptr;
 	}
 
-	auto constant_value = ExpressionExecutor::EvaluateScalar(*constant_expr);
+	auto constant_value = ExpressionExecutor::EvaluateScalar(GetContext(), *constant_expr);
 	D_ASSERT(constant_value.type() == constant_expr->return_type);
 	auto &patt_str = StringValue::Get(constant_value);
 
@@ -9980,7 +13021,7 @@ unique_ptr<Expression> TemplatedCastToSmallestType(unique_ptr<Expression> expr, 
 	                                                       move(arguments), nullptr, true);
 
 	// Cast to smaller type
-	return make_unique<BoundCastExpression>(move(minus_expr), cast_type);
+	return BoundCastExpression::AddDefaultCastToType(move(minus_expr), cast_type);
 }
 
 unique_ptr<Expression> CastToSmallestType(unique_ptr<Expression> expr, NumericStatistics &num_stats) {
@@ -10114,7 +13155,7 @@ static unique_ptr<BaseStatistics> StatisticsOperationsNumericNumericCast(const B
 	auto &input = (NumericStatistics &)*input_p;
 
 	Value min = input.min, max = input.max;
-	if (!min.TryCastAs(target) || !max.TryCastAs(target)) {
+	if (!min.DefaultTryCastAs(target) || !max.DefaultTryCastAs(target)) {
 		// overflow in cast: bailout
 		return nullptr;
 	}
@@ -10333,7 +13374,7 @@ unique_ptr<BaseStatistics> StatisticsPropagator::PropagateExpression(BoundConjun
 		// we have a constant in a conjunction
 		// we (1) either prune the child
 		// or (2) replace the entire conjunction with a constant
-		auto constant = ExpressionExecutor::EvaluateScalar(*child);
+		auto constant = ExpressionExecutor::EvaluateScalar(context, *child);
 		if (constant.IsNull()) {
 			continue;
 		}
@@ -10992,6 +14033,7 @@ unique_ptr<NodeStatistics> StatisticsPropagator::PropagateStatistics(LogicalGet 
 
 
 
+
 namespace duckdb {
 
 void StatisticsPropagator::PropagateStatistics(LogicalComparisonJoin &join, unique_ptr<LogicalOperator> *node_ptr) {
@@ -11021,10 +14063,15 @@ void StatisticsPropagator::PropagateStatistics(LogicalComparisonJoin &join, uniq
 					// semi or inner join on false; entire node can be pruned
 					ReplaceWithEmptyResult(*node_ptr);
 					return;
-				case JoinType::ANTI:
-					// anti join: replace entire join with LHS
-					*node_ptr = move(join.children[0]);
+				case JoinType::ANTI: {
+					// when the right child has data, return the left child
+					// when the right child has no data, return an empty set
+					auto limit = make_unique<LogicalLimit>(1, 0, nullptr, nullptr);
+					limit->AddChild(move(join.children[1]));
+					auto cross_product = LogicalCrossProduct::Create(move(join.children[0]), move(limit));
+					*node_ptr = move(cross_product);
 					return;
+				}
 				case JoinType::LEFT:
 					// anti/left outer join: replace right side with empty node
 					ReplaceWithEmptyResult(join.children[1]);
@@ -11052,18 +14099,23 @@ void StatisticsPropagator::PropagateStatistics(LogicalComparisonJoin &join, uniq
 				} else {
 					// this is the only condition and it is always true: all conditions are true
 					switch (join.join_type) {
-					case JoinType::SEMI:
-						// semi join on true: replace entire join with LHS
-						*node_ptr = move(join.children[0]);
+					case JoinType::SEMI: {
+						// when the right child has data, return the left child
+						// when the right child has no data, return an empty set
+						auto limit = make_unique<LogicalLimit>(1, 0, nullptr, nullptr);
+						limit->AddChild(move(join.children[1]));
+						auto cross_product = LogicalCrossProduct::Create(move(join.children[0]), move(limit));
+						*node_ptr = move(cross_product);
 						return;
+					}
 					case JoinType::INNER:
 					case JoinType::LEFT:
 					case JoinType::RIGHT:
 					case JoinType::OUTER: {
 						// inner/left/right/full outer join, replace with cross product
 						// since the condition is always true, left/right/outer join are equivalent to inner join here
-						auto cross_product = make_unique<LogicalCrossProduct>();
-						cross_product->children = move(join.children);
+						auto cross_product =
+						    LogicalCrossProduct::Create(move(join.children[0]), move(join.children[1]));
 						*node_ptr = move(cross_product);
 						return;
 					}
@@ -11172,6 +14224,7 @@ unique_ptr<NodeStatistics> StatisticsPropagator::PropagateStatistics(LogicalJoin
 	// then propagate into the join conditions
 	switch (join.type) {
 	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
+	case LogicalOperatorType::LOGICAL_DELIM_JOIN:
 		PropagateStatistics((LogicalComparisonJoin &)join, node_ptr);
 		break;
 	case LogicalOperatorType::LOGICAL_ANY_JOIN:
@@ -11405,6 +14458,7 @@ unique_ptr<NodeStatistics> StatisticsPropagator::PropagateStatistics(LogicalOper
 	case LogicalOperatorType::LOGICAL_ANY_JOIN:
 	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
 	case LogicalOperatorType::LOGICAL_JOIN:
+	case LogicalOperatorType::LOGICAL_DELIM_JOIN:
 		return PropagateStatistics((LogicalJoin &)node, node_ptr);
 	case LogicalOperatorType::LOGICAL_UNION:
 	case LogicalOperatorType::LOGICAL_EXCEPT:
@@ -11494,6 +14548,19 @@ unique_ptr<LogicalOperator> TopN::Optimize(unique_ptr<LogicalOperator> op) {
 } // namespace duckdb
 
 
+namespace duckdb {
+
+BasePipelineEvent::BasePipelineEvent(shared_ptr<Pipeline> pipeline_p)
+    : Event(pipeline_p->executor), pipeline(move(pipeline_p)) {
+}
+
+BasePipelineEvent::BasePipelineEvent(Pipeline &pipeline_p)
+    : Event(pipeline_p.executor), pipeline(pipeline_p.shared_from_this()) {
+}
+
+} // namespace duckdb
+
+
 
 
 
@@ -11537,6 +14604,14 @@ void Event::Finish() {
 void Event::AddDependency(Event &event) {
 	total_dependencies++;
 	event.parents.push_back(weak_ptr<Event>(shared_from_this()));
+#ifdef DEBUG
+	event.parents_raw.push_back(this);
+#endif
+}
+
+const vector<Event *> &Event::GetParentsVerification() const {
+	D_ASSERT(parents.size() == parents_raw.size());
+	return parents_raw;
 }
 
 void Event::FinishTask() {
@@ -11551,6 +14626,9 @@ void Event::FinishTask() {
 
 void Event::InsertEvent(shared_ptr<Event> replacement_event) {
 	replacement_event->parents = move(parents);
+#ifdef DEBUG
+	replacement_event->parents_raw = move(parents_raw);
+#endif
 	replacement_event->AddDependency(*this);
 	executor.AddEvent(move(replacement_event));
 }
@@ -11566,6 +14644,7 @@ void Event::SetTasks(vector<unique_ptr<Task>> tasks) {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -11598,140 +14677,122 @@ Executor &Executor::Get(ClientContext &context) {
 
 void Executor::AddEvent(shared_ptr<Event> event) {
 	lock_guard<mutex> elock(executor_lock);
+	if (cancelled) {
+		return;
+	}
 	events.push_back(move(event));
 }
 
 struct PipelineEventStack {
+	Event *pipeline_initialize_event;
 	Event *pipeline_event;
 	Event *pipeline_finish_event;
 	Event *pipeline_complete_event;
 };
 
-Pipeline *Executor::ScheduleUnionPipeline(const shared_ptr<Pipeline> &pipeline, const Pipeline *parent,
-                                          event_map_t &event_map, vector<shared_ptr<Event>> &events) {
-	pipeline->Ready();
+using event_map_t = unordered_map<const Pipeline *, PipelineEventStack>;
 
-	D_ASSERT(pipeline);
-	auto pipeline_event = make_shared<PipelineEvent>(pipeline);
-
-	auto parent_stack_entry = event_map.find(parent);
-	D_ASSERT(parent_stack_entry != event_map.end());
-
-	auto &parent_stack = parent_stack_entry->second;
-
-	PipelineEventStack stack;
-	stack.pipeline_event = pipeline_event.get();
-	stack.pipeline_finish_event = parent_stack.pipeline_finish_event;
-	stack.pipeline_complete_event = parent_stack.pipeline_complete_event;
-
-	stack.pipeline_event->AddDependency(*parent_stack.pipeline_event);
-	parent_stack.pipeline_finish_event->AddDependency(*pipeline_event);
-
-	events.push_back(move(pipeline_event));
-	event_map.insert(make_pair(pipeline.get(), stack));
-
-	auto parent_pipeline = pipeline.get();
-
-	auto union_entry = union_pipelines.find(pipeline.get());
-	if (union_entry != union_pipelines.end()) {
-		for (auto &entry : union_entry->second) {
-			parent_pipeline = ScheduleUnionPipeline(entry, parent_pipeline, event_map, events);
-		}
+struct ScheduleEventData {
+	ScheduleEventData(const vector<shared_ptr<MetaPipeline>> &meta_pipelines, vector<shared_ptr<Event>> &events,
+	                  bool initial_schedule)
+	    : meta_pipelines(meta_pipelines), events(events), initial_schedule(initial_schedule) {
 	}
 
-	return parent_pipeline;
-}
-
-void Executor::ScheduleChildPipeline(Pipeline *parent, const shared_ptr<Pipeline> &pipeline, event_map_t &event_map,
-                                     vector<shared_ptr<Event>> &events) {
-	pipeline->Ready();
-
-	auto child_ptr = pipeline.get();
-	auto dependencies = child_dependencies.find(child_ptr);
-	D_ASSERT(union_pipelines.find(child_ptr) == union_pipelines.end());
-	D_ASSERT(dependencies != child_dependencies.end());
-	// create the pipeline event and the event stack
-	auto pipeline_event = make_shared<PipelineEvent>(pipeline);
-
-	auto parent_entry = event_map.find(parent);
-	PipelineEventStack stack;
-	stack.pipeline_event = pipeline_event.get();
-	stack.pipeline_finish_event = parent_entry->second.pipeline_finish_event;
-	stack.pipeline_complete_event = parent_entry->second.pipeline_complete_event;
-
-	// set up the dependencies for this child pipeline
-	unordered_set<Event *> finish_events;
-	for (auto &dep : dependencies->second) {
-		auto dep_entry = event_map.find(dep);
-		D_ASSERT(dep_entry != event_map.end());
-		D_ASSERT(dep_entry->second.pipeline_event);
-		D_ASSERT(dep_entry->second.pipeline_finish_event);
-
-		auto finish_event = dep_entry->second.pipeline_finish_event;
-		stack.pipeline_event->AddDependency(*dep_entry->second.pipeline_event);
-		if (finish_events.find(finish_event) == finish_events.end()) {
-			finish_event->AddDependency(*stack.pipeline_event);
-			finish_events.insert(finish_event);
-		}
-	}
-
-	events.push_back(move(pipeline_event));
-	event_map.insert(make_pair(child_ptr, stack));
-}
-
-void Executor::SchedulePipeline(const shared_ptr<Pipeline> &pipeline, event_map_t &event_map,
-                                vector<shared_ptr<Event>> &events, bool complete_pipeline) {
-	D_ASSERT(pipeline);
-
-	pipeline->Ready();
-
-	auto pipeline_event = make_shared<PipelineEvent>(pipeline);
-	auto pipeline_finish_event = make_shared<PipelineFinishEvent>(pipeline);
-	auto pipeline_complete_event = make_shared<PipelineCompleteEvent>(pipeline->executor, complete_pipeline);
-
-	PipelineEventStack stack;
-	stack.pipeline_event = pipeline_event.get();
-	stack.pipeline_finish_event = pipeline_finish_event.get();
-	stack.pipeline_complete_event = pipeline_complete_event.get();
-
-	pipeline_finish_event->AddDependency(*pipeline_event);
-	pipeline_complete_event->AddDependency(*pipeline_finish_event);
-
-	events.push_back(move(pipeline_event));
-	events.push_back(move(pipeline_finish_event));
-	events.push_back(move(pipeline_complete_event));
-
-	event_map.insert(make_pair(pipeline.get(), stack));
-
-	auto union_entry = union_pipelines.find(pipeline.get());
-	if (union_entry != union_pipelines.end()) {
-		auto parent_pipeline = pipeline.get();
-		for (auto &entry : union_entry->second) {
-			parent_pipeline = ScheduleUnionPipeline(entry, parent_pipeline, event_map, events);
-		}
-	}
-}
-
-void Executor::ScheduleEventsInternal(const vector<shared_ptr<Pipeline>> &pipelines,
-                                      unordered_map<Pipeline *, vector<shared_ptr<Pipeline>>> &child_pipelines,
-                                      vector<shared_ptr<Event>> &events, bool main_schedule) {
-	D_ASSERT(events.empty());
-	// create all the required pipeline events
+	const vector<shared_ptr<MetaPipeline>> &meta_pipelines;
+	vector<shared_ptr<Event>> &events;
+	bool initial_schedule;
 	event_map_t event_map;
-	for (auto &pipeline : pipelines) {
-		SchedulePipeline(pipeline, event_map, events, main_schedule);
+};
+
+void Executor::SchedulePipeline(const shared_ptr<MetaPipeline> &meta_pipeline, ScheduleEventData &event_data) {
+	D_ASSERT(meta_pipeline);
+	auto &events = event_data.events;
+	auto &event_map = event_data.event_map;
+
+	// create events/stack for the base pipeline
+	auto base_pipeline = meta_pipeline->GetBasePipeline();
+	auto base_initialize_event = make_shared<PipelineInitializeEvent>(base_pipeline);
+	auto base_event = make_shared<PipelineEvent>(base_pipeline);
+	auto base_finish_event = make_shared<PipelineFinishEvent>(base_pipeline);
+	auto base_complete_event = make_shared<PipelineCompleteEvent>(base_pipeline->executor, event_data.initial_schedule);
+	PipelineEventStack base_stack {base_initialize_event.get(), base_event.get(), base_finish_event.get(),
+	                               base_complete_event.get()};
+	events.push_back(move(base_initialize_event));
+	events.push_back(move(base_event));
+	events.push_back(move(base_finish_event));
+	events.push_back(move(base_complete_event));
+
+	// dependencies: initialize -> event -> finish -> complete
+	base_stack.pipeline_event->AddDependency(*base_stack.pipeline_initialize_event);
+	base_stack.pipeline_finish_event->AddDependency(*base_stack.pipeline_event);
+	base_stack.pipeline_complete_event->AddDependency(*base_stack.pipeline_finish_event);
+
+	// create an event and stack for all pipelines in the MetaPipeline
+	vector<shared_ptr<Pipeline>> pipelines;
+	meta_pipeline->GetPipelines(pipelines, false);
+	for (idx_t i = 1; i < pipelines.size(); i++) { // loop starts at 1 because 0 is the base pipeline
+		auto &pipeline = pipelines[i];
+		D_ASSERT(pipeline);
+
+		// create events/stack for this pipeline
+		auto pipeline_event = make_shared<PipelineEvent>(pipeline);
+		Event *pipeline_finish_event_ptr;
+		if (meta_pipeline->HasFinishEvent(pipeline.get())) {
+			// this pipeline has its own finish event (despite going into the same sink - Finalize twice!)
+			auto pipeline_finish_event = make_unique<PipelineFinishEvent>(pipeline);
+			pipeline_finish_event_ptr = pipeline_finish_event.get();
+			events.push_back(move(pipeline_finish_event));
+			base_stack.pipeline_complete_event->AddDependency(*pipeline_finish_event_ptr);
+		} else {
+			pipeline_finish_event_ptr = base_stack.pipeline_finish_event;
+		}
+		PipelineEventStack pipeline_stack {base_stack.pipeline_initialize_event, pipeline_event.get(),
+		                                   pipeline_finish_event_ptr, base_stack.pipeline_complete_event};
+		events.push_back(move(pipeline_event));
+
+		// dependencies: base_initialize -> pipeline_event -> base_finish
+		pipeline_stack.pipeline_event->AddDependency(*base_stack.pipeline_initialize_event);
+		pipeline_stack.pipeline_finish_event->AddDependency(*pipeline_stack.pipeline_event);
+
+		// add pipeline stack to event map
+		event_map.insert(make_pair(pipeline.get(), pipeline_stack));
 	}
-	// schedule child pipelines
-	for (auto &entry : child_pipelines) {
-		// iterate in reverse order
-		// since child entries are added from top to bottom
-		// dependencies are in reverse order (bottom to top)
-		for (idx_t i = entry.second.size(); i > 0; i--) {
-			auto &child_entry = entry.second[i - 1];
-			ScheduleChildPipeline(entry.first, child_entry, event_map, events);
+
+	// add base stack to the event data too
+	event_map.insert(make_pair(base_pipeline.get(), base_stack));
+
+	// set up the dependencies within this MetaPipeline
+	for (auto &pipeline : pipelines) {
+		auto source = pipeline->GetSource();
+		if (source->type == PhysicalOperatorType::TABLE_SCAN) {
+			// we have to reset the source here (in the main thread), because some of our clients (looking at you, R)
+			// do not like it when threads other than the main thread call into R, for e.g., arrow scans
+			pipeline->ResetSource(true);
+		}
+
+		auto dependencies = meta_pipeline->GetDependencies(pipeline.get());
+		if (!dependencies) {
+			continue;
+		}
+		auto &pipeline_stack = event_map[pipeline.get()];
+		for (auto &dependency : *dependencies) {
+			auto &dependency_stack = event_map[dependency];
+			pipeline_stack.pipeline_event->AddDependency(*dependency_stack.pipeline_event);
 		}
 	}
-	// set up the dependencies between pipeline events
+}
+
+void Executor::ScheduleEventsInternal(ScheduleEventData &event_data) {
+	auto &events = event_data.events;
+	D_ASSERT(events.empty());
+
+	// create all the required pipeline events
+	for (auto &pipeline : event_data.meta_pipelines) {
+		SchedulePipeline(pipeline, event_data);
+	}
+
+	// set up the dependencies across MetaPipelines
+	auto &event_map = event_data.event_map;
 	for (auto &entry : event_map) {
 		auto pipeline = entry.first;
 		for (auto &dependency : pipeline->dependencies) {
@@ -11744,6 +14805,10 @@ void Executor::ScheduleEventsInternal(const vector<shared_ptr<Pipeline>> &pipeli
 			entry.second.pipeline_event->AddDependency(*dep_entry.pipeline_complete_event);
 		}
 	}
+
+	// verify that we have no cyclic dependencies
+	VerifyScheduledEvents(event_data);
+
 	// schedule the pipelines that do not have dependencies
 	for (auto &event : events) {
 		if (!event->HasDependencies()) {
@@ -11752,41 +14817,81 @@ void Executor::ScheduleEventsInternal(const vector<shared_ptr<Pipeline>> &pipeli
 	}
 }
 
-void Executor::ScheduleEvents() {
-	ScheduleEventsInternal(pipelines, child_pipelines, events);
+void Executor::ScheduleEvents(const vector<shared_ptr<MetaPipeline>> &meta_pipelines) {
+	ScheduleEventData event_data(meta_pipelines, events, true);
+	ScheduleEventsInternal(event_data);
 }
 
-void Executor::ReschedulePipelines(const vector<shared_ptr<Pipeline>> &pipelines, vector<shared_ptr<Event>> &events) {
-	unordered_map<Pipeline *, vector<shared_ptr<Pipeline>>> child_pipelines;
-	ScheduleEventsInternal(pipelines, child_pipelines, events, false);
+void Executor::VerifyScheduledEvents(const ScheduleEventData &event_data) {
+#ifdef DEBUG
+	const idx_t count = event_data.events.size();
+	vector<Event *> vertices;
+	vertices.reserve(count);
+	for (const auto &event : event_data.events) {
+		vertices.push_back(event.get());
+	}
+	vector<bool> visited(count, false);
+	vector<bool> recursion_stack(count, false);
+	for (idx_t i = 0; i < count; i++) {
+		VerifyScheduledEventsInternal(i, vertices, visited, recursion_stack);
+	}
+#endif
 }
 
-void Executor::ExtractPipelines(shared_ptr<Pipeline> &pipeline, vector<shared_ptr<Pipeline>> &result) {
-	pipeline->Ready();
+void Executor::VerifyScheduledEventsInternal(const idx_t vertex, const vector<Event *> &vertices, vector<bool> &visited,
+                                             vector<bool> &recursion_stack) {
+	D_ASSERT(!recursion_stack[vertex]); // this vertex is in the recursion stack: circular dependency!
+	if (visited[vertex]) {
+		return; // early out: we already visited this vertex
+	}
 
-	auto pipeline_ptr = pipeline.get();
-	result.push_back(move(pipeline));
-	auto union_entry = union_pipelines.find(pipeline_ptr);
-	if (union_entry != union_pipelines.end()) {
-		auto &union_pipeline_list = union_entry->second;
-		for (auto &pipeline : union_pipeline_list) {
-			ExtractPipelines(pipeline, result);
-		}
-		union_pipelines.erase(pipeline_ptr);
+	auto &parents = vertices[vertex]->GetParentsVerification();
+	if (parents.empty()) {
+		return; // early out: outgoing edges
 	}
-	auto child_entry = child_pipelines.find(pipeline_ptr);
-	if (child_entry != child_pipelines.end()) {
-		for (auto &entry : child_entry->second) {
-			ExtractPipelines(entry, result);
+
+	// create a vector the indices of the adjacent events
+	vector<idx_t> adjacent;
+	const idx_t count = vertices.size();
+	for (auto parent : parents) {
+		idx_t i;
+		for (i = 0; i < count; i++) {
+			if (vertices[i] == parent) {
+				adjacent.push_back(i);
+				break;
+			}
 		}
-		child_pipelines.erase(pipeline_ptr);
+		D_ASSERT(i != count); // dependency must be in there somewhere
 	}
+
+	// mark vertex as visited and add to recursion stack
+	visited[vertex] = true;
+	recursion_stack[vertex] = true;
+
+	// recurse into adjacent vertices
+	for (const auto &i : adjacent) {
+		VerifyScheduledEventsInternal(i, vertices, visited, recursion_stack);
+	}
+
+	// remove vertex from recursion stack
+	recursion_stack[vertex] = false;
+}
+
+void Executor::AddRecursiveCTE(PhysicalOperator *rec_cte) {
+	recursive_ctes.push_back(rec_cte);
+}
+
+void Executor::ReschedulePipelines(const vector<shared_ptr<MetaPipeline>> &pipelines_p,
+                                   vector<shared_ptr<Event>> &events_p) {
+	ScheduleEventData event_data(pipelines_p, events_p, false);
+	ScheduleEventsInternal(event_data);
 }
 
 bool Executor::NextExecutor() {
 	if (root_pipeline_idx >= root_pipelines.size()) {
 		return false;
 	}
+	root_pipelines[root_pipeline_idx]->Reset();
 	root_executor = make_unique<PipelineExecutor>(context, *root_pipelines[root_pipeline_idx]);
 	root_pipeline_idx++;
 	return true;
@@ -11816,9 +14921,6 @@ void Executor::VerifyPipelines() {
 	for (auto &pipeline : pipelines) {
 		VerifyPipeline(*pipeline);
 	}
-	for (auto &pipeline : root_pipelines) {
-		VerifyPipeline(*pipeline);
-	}
 #endif
 }
 
@@ -11844,20 +14946,36 @@ void Executor::InitializeInternal(PhysicalOperator *plan) {
 		profiler->Initialize(physical_plan);
 		this->producer = scheduler.CreateProducer();
 
-		auto root_pipeline = make_shared<Pipeline>(*this);
-		root_pipeline->sink = nullptr;
-
+		// build and ready the pipelines
 		PipelineBuildState state;
-		physical_plan->BuildPipelines(*this, *root_pipeline, state);
+		auto root_pipeline = make_shared<MetaPipeline>(*this, state, nullptr);
+		root_pipeline->Build(physical_plan);
+		root_pipeline->Ready();
 
-		this->total_pipelines = pipelines.size();
+		// ready recursive cte pipelines too
+		for (auto &rec_cte : recursive_ctes) {
+			D_ASSERT(rec_cte->type == PhysicalOperatorType::RECURSIVE_CTE);
+			auto &rec_cte_op = (PhysicalRecursiveCTE &)*rec_cte;
+			rec_cte_op.recursive_meta_pipeline->Ready();
+		}
 
+		// set root pipelines, i.e., all pipelines that end in the final sink
+		root_pipeline->GetPipelines(root_pipelines, false);
 		root_pipeline_idx = 0;
-		ExtractPipelines(root_pipeline, root_pipelines);
 
+		// collect all meta-pipelines from the root pipeline
+		vector<shared_ptr<MetaPipeline>> to_schedule;
+		root_pipeline->GetMetaPipelines(to_schedule, true, true);
+
+		// number of 'PipelineCompleteEvent's is equal to the number of meta pipelines, so we have to set it here
+		total_pipelines = to_schedule.size();
+
+		// collect all pipelines from the root pipelines (recursively) for the progress bar and verify them
+		root_pipeline->GetPipelines(pipelines, true);
+
+		// finally, verify and schedule
 		VerifyPipelines();
-
-		ScheduleEvents();
+		ScheduleEvents(to_schedule);
 	}
 }
 
@@ -11870,22 +14988,17 @@ void Executor::CancelTasks() {
 	{
 		lock_guard<mutex> elock(executor_lock);
 		weak_references.reserve(pipelines.size());
+		cancelled = true;
 		for (auto &pipeline : pipelines) {
 			weak_references.push_back(weak_ptr<Pipeline>(pipeline));
 		}
-		for (auto &kv : union_pipelines) {
-			for (auto &pipeline : kv.second) {
-				weak_references.push_back(weak_ptr<Pipeline>(pipeline));
-			}
-		}
-		for (auto &kv : child_pipelines) {
-			for (auto &pipeline : kv.second) {
-				weak_references.push_back(weak_ptr<Pipeline>(pipeline));
-			}
+		for (auto op : recursive_ctes) {
+			D_ASSERT(op->type == PhysicalOperatorType::RECURSIVE_CTE);
+			auto &rec_cte = (PhysicalRecursiveCTE &)*op;
+			rec_cte.recursive_meta_pipeline.reset();
 		}
 		pipelines.clear();
-		union_pipelines.clear();
-		child_pipelines.clear();
+		root_pipelines.clear();
 		events.clear();
 	}
 	WorkOnTasks();
@@ -11945,10 +15058,10 @@ PendingExecutionResult Executor::ExecuteTask() {
 	lock_guard<mutex> elock(executor_lock);
 	pipelines.clear();
 	NextExecutor();
-	if (!exceptions.empty()) { // LCOV_EXCL_START
+	if (HasError()) { // LCOV_EXCL_START
 		// an exception has occurred executing one of the pipelines
 		execution_result = PendingExecutionResult::EXECUTION_ERROR;
-		ThrowExceptionInternal();
+		ThrowException();
 	} // LCOV_EXCL_STOP
 	execution_result = PendingExecutionResult::RESULT_READY;
 	return execution_result;
@@ -11957,6 +15070,7 @@ PendingExecutionResult Executor::ExecuteTask() {
 void Executor::Reset() {
 	lock_guard<mutex> elock(executor_lock);
 	physical_plan = nullptr;
+	cancelled = false;
 	owned_plan.reset();
 	root_executor.reset();
 	root_pipelines.clear();
@@ -11966,36 +15080,27 @@ void Executor::Reset() {
 	exceptions.clear();
 	pipelines.clear();
 	events.clear();
-	union_pipelines.clear();
-	child_pipelines.clear();
-	child_dependencies.clear();
 	execution_result = PendingExecutionResult::RESULT_NOT_READY;
 }
 
-void Executor::AddChildPipeline(Pipeline *current) {
+shared_ptr<Pipeline> Executor::CreateChildPipeline(Pipeline *current, PhysicalOperator *op) {
 	D_ASSERT(!current->operators.empty());
-	// found another operator that is a source
-	// schedule a child pipeline
+	D_ASSERT(op->IsSource());
+	// found another operator that is a source, schedule a child pipeline
+	// 'op' is the source, and the sink is the same
 	auto child_pipeline = make_shared<Pipeline>(*this);
-	auto child_pipeline_ptr = child_pipeline.get();
 	child_pipeline->sink = current->sink;
-	child_pipeline->operators = current->operators;
-	child_pipeline->source = current->operators.back();
-	D_ASSERT(child_pipeline->source->IsSource());
-	child_pipeline->operators.pop_back();
+	child_pipeline->source = op;
 
-	vector<Pipeline *> dependencies;
-	dependencies.push_back(current);
-	auto child_entry = child_pipelines.find(current);
-	if (child_entry != child_pipelines.end()) {
-		for (auto &current_child : child_entry->second) {
-			D_ASSERT(child_dependencies.find(current_child.get()) != child_dependencies.end());
-			child_dependencies[current_child.get()].push_back(child_pipeline_ptr);
+	// the child pipeline has the same operators up until 'op'
+	for (auto current_op : current->operators) {
+		if (current_op == op) {
+			break;
 		}
+		child_pipeline->operators.push_back(current_op);
 	}
-	D_ASSERT(child_dependencies.find(child_pipeline_ptr) == child_dependencies.end());
-	child_dependencies.insert(make_pair(child_pipeline_ptr, move(dependencies)));
-	child_pipelines[current].push_back(move(child_pipeline));
+
+	return child_pipeline;
 }
 
 vector<LogicalType> Executor::GetTypes() {
@@ -12003,52 +15108,25 @@ vector<LogicalType> Executor::GetTypes() {
 	return physical_plan->GetTypes();
 }
 
-void Executor::PushError(ExceptionType type, const string &exception) {
-	lock_guard<mutex> elock(executor_lock);
+void Executor::PushError(PreservedError exception) {
+	lock_guard<mutex> elock(error_lock);
 	// interrupt execution of any other pipelines that belong to this executor
 	context.interrupted = true;
 	// push the exception onto the stack
-	exceptions.emplace_back(type, exception);
+	exceptions.push_back(move(exception));
 }
 
 bool Executor::HasError() {
-	lock_guard<mutex> elock(executor_lock);
+	lock_guard<mutex> elock(error_lock);
 	return !exceptions.empty();
 }
 
 void Executor::ThrowException() {
-	lock_guard<mutex> elock(executor_lock);
-	ThrowExceptionInternal();
-}
-
-void Executor::ThrowExceptionInternal() { // LCOV_EXCL_START
+	lock_guard<mutex> elock(error_lock);
 	D_ASSERT(!exceptions.empty());
 	auto &entry = exceptions[0];
-	switch (entry.first) {
-	case ExceptionType::TRANSACTION:
-		throw TransactionException(entry.second);
-	case ExceptionType::CATALOG:
-		throw CatalogException(entry.second);
-	case ExceptionType::PARSER:
-		throw ParserException(entry.second);
-	case ExceptionType::BINDER:
-		throw BinderException(entry.second);
-	case ExceptionType::INTERRUPT:
-		throw InterruptException();
-	case ExceptionType::FATAL:
-		throw FatalException(entry.second);
-	case ExceptionType::INTERNAL:
-		throw InternalException(entry.second);
-	case ExceptionType::IO:
-		throw IOException(entry.second);
-	case ExceptionType::CONSTRAINT:
-		throw ConstraintException(entry.second);
-	case ExceptionType::CONVERSION:
-		throw ConversionException(entry.second);
-	default:
-		throw Exception(entry.second);
-	}
-} // LCOV_EXCL_STOP
+	entry.Throw();
+}
 
 void Executor::Flush(ThreadContext &tcontext) {
 	profiler->Flush(tcontext.profiler);
@@ -12063,6 +15141,7 @@ bool Executor::GetPipelinesProgress(double &current_progress) { // LCOV_EXCL_STA
 	for (auto &pipeline : pipelines) {
 		double child_percentage;
 		idx_t child_cardinality;
+
 		if (!pipeline->GetProgress(child_percentage, child_cardinality)) {
 			return false;
 		}
@@ -12127,17 +15206,195 @@ TaskExecutionResult ExecutorTask::Execute(TaskExecutionMode mode) {
 	try {
 		return ExecuteTask(mode);
 	} catch (Exception &ex) {
-		executor.PushError(ex.type, ex.what());
+		executor.PushError(PreservedError(ex));
 	} catch (std::exception &ex) {
-		executor.PushError(ExceptionType::UNKNOWN_TYPE, ex.what());
+		executor.PushError(PreservedError(ex));
 	} catch (...) { // LCOV_EXCL_START
-		executor.PushError(ExceptionType::UNKNOWN_TYPE, "Unknown exception in Finalize!");
+		executor.PushError(PreservedError("Unknown exception in Finalize!"));
 	} // LCOV_EXCL_STOP
 	return TaskExecutionResult::TASK_ERROR;
 }
 
 } // namespace duckdb
 
+
+
+
+
+namespace duckdb {
+
+MetaPipeline::MetaPipeline(Executor &executor_p, PipelineBuildState &state_p, PhysicalOperator *sink_p)
+    : executor(executor_p), state(state_p), sink(sink_p), recursive_cte(false), next_batch_index(0) {
+	CreatePipeline();
+}
+
+Executor &MetaPipeline::GetExecutor() const {
+	return executor;
+}
+
+PipelineBuildState &MetaPipeline::GetState() const {
+	return state;
+}
+
+PhysicalOperator *MetaPipeline::GetSink() const {
+	return sink;
+}
+
+shared_ptr<Pipeline> &MetaPipeline::GetBasePipeline() {
+	return pipelines[0];
+}
+
+void MetaPipeline::GetPipelines(vector<shared_ptr<Pipeline>> &result, bool recursive) {
+	result.insert(result.end(), pipelines.begin(), pipelines.end());
+	if (recursive) {
+		for (auto &child : children) {
+			child->GetPipelines(result, true);
+		}
+	}
+}
+
+void MetaPipeline::GetMetaPipelines(vector<shared_ptr<MetaPipeline>> &result, bool recursive, bool skip) {
+	if (!skip) {
+		result.push_back(shared_from_this());
+	}
+	if (recursive) {
+		for (auto &child : children) {
+			child->GetMetaPipelines(result, true, false);
+		}
+	}
+}
+
+const vector<Pipeline *> *MetaPipeline::GetDependencies(Pipeline *dependant) const {
+	auto it = dependencies.find(dependant);
+	if (it == dependencies.end()) {
+		return nullptr;
+	} else {
+		return &it->second;
+	}
+}
+
+bool MetaPipeline::HasRecursiveCTE() const {
+	return recursive_cte;
+}
+
+void MetaPipeline::SetRecursiveCTE() {
+	recursive_cte = true;
+}
+
+void MetaPipeline::AssignNextBatchIndex(Pipeline *pipeline) {
+	pipeline->base_batch_index = next_batch_index++ * PipelineBuildState::BATCH_INCREMENT;
+}
+
+void MetaPipeline::Build(PhysicalOperator *op) {
+	D_ASSERT(pipelines.size() == 1);
+	D_ASSERT(children.empty());
+	D_ASSERT(final_pipelines.empty());
+	op->BuildPipelines(*pipelines.back(), *this);
+}
+
+void MetaPipeline::Ready() {
+	for (auto &pipeline : pipelines) {
+		pipeline->Ready();
+	}
+	for (auto &child : children) {
+		child->Ready();
+	}
+}
+
+MetaPipeline *MetaPipeline::CreateChildMetaPipeline(Pipeline &current, PhysicalOperator *op) {
+	children.push_back(make_unique<MetaPipeline>(executor, state, op));
+	auto child_meta_pipeline = children.back().get();
+	// child MetaPipeline must finish completely before this MetaPipeline can start
+	current.AddDependency(child_meta_pipeline->GetBasePipeline());
+	// child meta pipeline is part of the recursive CTE too
+	child_meta_pipeline->recursive_cte = recursive_cte;
+	return child_meta_pipeline;
+}
+
+Pipeline *MetaPipeline::CreatePipeline() {
+	pipelines.emplace_back(make_unique<Pipeline>(executor));
+	state.SetPipelineSink(*pipelines.back(), sink, next_batch_index++);
+	return pipelines.back().get();
+}
+
+void MetaPipeline::AddDependenciesFrom(Pipeline *dependant, Pipeline *start, bool including) {
+	// find 'start'
+	auto it = pipelines.begin();
+	for (; it->get() != start; it++) {
+	}
+
+	if (!including) {
+		it++;
+	}
+
+	// collect pipelines that were created from then
+	vector<Pipeline *> created_pipelines;
+	for (; it != pipelines.end(); it++) {
+		if (it->get() == dependant) {
+			// cannot depend on itself
+			continue;
+		}
+		created_pipelines.push_back(it->get());
+	}
+
+	// add them to the dependencies
+	auto &deps = dependencies[dependant];
+	deps.insert(deps.begin(), created_pipelines.begin(), created_pipelines.end());
+}
+
+void MetaPipeline::AddFinishEvent(Pipeline *pipeline) {
+	finish_pipelines.insert(pipeline);
+}
+
+bool MetaPipeline::HasFinishEvent(Pipeline *pipeline) {
+	return finish_pipelines.find(pipeline) != finish_pipelines.end();
+}
+
+Pipeline *MetaPipeline::CreateUnionPipeline(Pipeline &current, bool order_matters) {
+	if (HasRecursiveCTE()) {
+		throw NotImplementedException("UNIONS are not supported in recursive CTEs yet");
+	}
+
+	// create the union pipeline (batch index 0, should be set correctly afterwards)
+	auto union_pipeline = CreatePipeline();
+	state.SetPipelineOperators(*union_pipeline, state.GetPipelineOperators(current));
+	state.SetPipelineSink(*union_pipeline, sink, 0);
+
+	// 'union_pipeline' inherits ALL dependencies of 'current' (within this MetaPipeline, and across MetaPipelines)
+	union_pipeline->dependencies = current.dependencies;
+	auto current_deps = GetDependencies(&current);
+	if (current_deps) {
+		dependencies[union_pipeline] = *current_deps;
+	}
+
+	if (order_matters) {
+		// if we need to preserve order, or if the sink is not parallel, we set a dependency
+		dependencies[union_pipeline].push_back(&current);
+	}
+
+	return union_pipeline;
+}
+
+void MetaPipeline::CreateChildPipeline(Pipeline &current, PhysicalOperator *op, Pipeline *last_pipeline) {
+	// rule 2: 'current' must be fully built (down to the source) before creating the child pipeline
+	D_ASSERT(current.source);
+	if (HasRecursiveCTE()) {
+		throw NotImplementedException("Child pipelines are not supported in recursive CTEs yet");
+	}
+
+	// create the child pipeline (same batch index)
+	pipelines.emplace_back(state.CreateChildPipeline(executor, current, op));
+	auto child_pipeline = pipelines.back().get();
+	child_pipeline->base_batch_index = current.base_batch_index;
+
+	// child pipeline has a depency (within this MetaPipeline on all pipelines that were scheduled
+	// between 'current' and now (including 'current') - set them up
+	dependencies[child_pipeline].push_back(&current);
+	AddDependenciesFrom(child_pipeline, last_pipeline, false);
+	D_ASSERT(!GetDependencies(child_pipeline)->empty());
+}
+
+} // namespace duckdb
 
 
 
@@ -12187,7 +15444,8 @@ public:
 	}
 };
 
-Pipeline::Pipeline(Executor &executor_p) : executor(executor_p), ready(false), source(nullptr), sink(nullptr) {
+Pipeline::Pipeline(Executor &executor_p)
+    : executor(executor_p), ready(false), initialized(false), source(nullptr), sink(nullptr) {
 }
 
 ClientContext &Pipeline::GetClientContext() {
@@ -12196,10 +15454,13 @@ ClientContext &Pipeline::GetClientContext() {
 
 bool Pipeline::GetProgress(double &current_percentage, idx_t &source_cardinality) {
 	D_ASSERT(source);
-
+	source_cardinality = source->estimated_cardinality;
+	if (!initialized) {
+		current_percentage = 0;
+		return true;
+	}
 	auto &client = executor.context;
 	current_percentage = source->GetProgress(client, *source_state);
-	source_cardinality = source->estimated_cardinality;
 	return current_percentage >= 0;
 }
 
@@ -12234,13 +15495,13 @@ bool Pipeline::ScheduleParallel(shared_ptr<Event> &event) {
 
 bool Pipeline::IsOrderDependent() const {
 	auto &config = DBConfig::GetConfig(executor.context);
-	if (!config.preserve_insertion_order) {
+	if (!config.options.preserve_insertion_order) {
 		return false;
 	}
 	if (sink && sink->IsOrderDependent()) {
 		return true;
 	}
-	if (source->IsOrderDependent()) {
+	if (source && source->IsOrderDependent()) {
 		return true;
 	}
 	for (auto &op : operators) {
@@ -12254,6 +15515,7 @@ bool Pipeline::IsOrderDependent() const {
 void Pipeline::Schedule(shared_ptr<Event> &event) {
 	D_ASSERT(ready);
 	D_ASSERT(sink);
+	Reset();
 	if (!ScheduleParallel(event)) {
 		// could not parallelize this pipeline: push a sequential task instead
 		ScheduleSequentialTask(event);
@@ -12281,22 +15543,35 @@ bool Pipeline::LaunchScanTasks(shared_ptr<Event> &event, idx_t max_threads) {
 	return true;
 }
 
-void Pipeline::Reset() {
-	if (sink && !sink->sink_state) {
-		sink->sink_state = sink->GetGlobalSinkState(GetClientContext());
-	}
-
-	for (auto &op : operators) {
-		if (op && !op->op_state) {
-			op->op_state = op->GetGlobalOperatorState(GetClientContext());
+void Pipeline::ResetSink() {
+	if (sink) {
+		lock_guard<mutex> guard(sink->lock);
+		if (!sink->sink_state) {
+			sink->sink_state = sink->GetGlobalSinkState(GetClientContext());
 		}
 	}
-
-	ResetSource();
 }
 
-void Pipeline::ResetSource() {
-	source_state = source->GetGlobalSourceState(GetClientContext());
+void Pipeline::Reset() {
+	ResetSink();
+	for (auto &op : operators) {
+		if (op) {
+			lock_guard<mutex> guard(op->lock);
+			if (!op->op_state) {
+				op->op_state = op->GetGlobalOperatorState(GetClientContext());
+			}
+		}
+	}
+	ResetSource(false);
+	// we no longer reset source here because this function is no longer guaranteed to be called by the main thread
+	// source reset needs to be called by the main thread because resetting a source may call into clients like R
+	initialized = true;
+}
+
+void Pipeline::ResetSource(bool force) {
+	if (force || !source_state) {
+		source_state = source->GetGlobalSourceState(GetClientContext());
+	}
 }
 
 void Pipeline::Ready() {
@@ -12305,20 +15580,22 @@ void Pipeline::Ready() {
 	}
 	ready = true;
 	std::reverse(operators.begin(), operators.end());
-	Reset();
 }
 
 void Pipeline::Finalize(Event &event) {
+	if (executor.HasError()) {
+		return;
+	}
 	D_ASSERT(ready);
 	try {
 		auto sink_state = sink->Finalize(*this, event, executor.context, *sink->sink_state);
 		sink->sink_state->state = sink_state;
 	} catch (Exception &ex) { // LCOV_EXCL_START
-		executor.PushError(ex.type, ex.what());
+		executor.PushError(PreservedError(ex));
 	} catch (std::exception &ex) {
-		executor.PushError(ExceptionType::UNKNOWN_TYPE, ex.what());
+		executor.PushError(PreservedError(ex));
 	} catch (...) {
-		executor.PushError(ExceptionType::UNKNOWN_TYPE, "Unknown exception in Finalize!");
+		executor.PushError(PreservedError("Unknown exception in Finalize!"));
 	} // LCOV_EXCL_STOP
 }
 
@@ -12335,6 +15612,12 @@ string Pipeline::ToString() const {
 
 void Pipeline::Print() const {
 	Printer::Print(ToString());
+}
+
+void Pipeline::PrintDependencies() const {
+	for (auto &dep : dependencies) {
+		shared_ptr<Pipeline>(dep)->Print();
+	}
 }
 
 vector<PhysicalOperator *> Pipeline::GetOperators() const {
@@ -12355,20 +15638,14 @@ void PipelineBuildState::SetPipelineSource(Pipeline &pipeline, PhysicalOperator 
 	pipeline.source = op;
 }
 
-void PipelineBuildState::SetPipelineSink(Pipeline &pipeline, PhysicalOperator *op) {
+void PipelineBuildState::SetPipelineSink(Pipeline &pipeline, PhysicalOperator *op, idx_t sink_pipeline_count) {
 	pipeline.sink = op;
 	// set the base batch index of this pipeline based on how many other pipelines have this node as their sink
-	pipeline.base_batch_index = BATCH_INCREMENT * sink_pipeline_count[op];
-	// increment the number of nodes that have this pipeline as their sink
-	sink_pipeline_count[op]++;
+	pipeline.base_batch_index = BATCH_INCREMENT * sink_pipeline_count;
 }
 
 void PipelineBuildState::AddPipelineOperator(Pipeline &pipeline, PhysicalOperator *op) {
 	pipeline.operators.push_back(op);
-}
-
-void PipelineBuildState::AddPipeline(Executor &executor, shared_ptr<Pipeline> pipeline) {
-	executor.pipelines.push_back(move(pipeline));
 }
 
 PhysicalOperator *PipelineBuildState::GetPipelineSource(Pipeline &pipeline) {
@@ -12383,18 +15660,9 @@ void PipelineBuildState::SetPipelineOperators(Pipeline &pipeline, vector<Physica
 	pipeline.operators = move(operators);
 }
 
-void PipelineBuildState::AddChildPipeline(Executor &executor, Pipeline &pipeline) {
-	executor.AddChildPipeline(&pipeline);
-}
-
-unordered_map<Pipeline *, vector<shared_ptr<Pipeline>>> &PipelineBuildState::GetUnionPipelines(Executor &executor) {
-	return executor.union_pipelines;
-}
-unordered_map<Pipeline *, vector<shared_ptr<Pipeline>>> &PipelineBuildState::GetChildPipelines(Executor &executor) {
-	return executor.child_pipelines;
-}
-unordered_map<Pipeline *, vector<Pipeline *>> &PipelineBuildState::GetChildDependencies(Executor &executor) {
-	return executor.child_dependencies;
+shared_ptr<Pipeline> PipelineBuildState::CreateChildPipeline(Executor &executor, Pipeline &pipeline,
+                                                             PhysicalOperator *op) {
+	return executor.CreateChildPipeline(&pipeline, op);
 }
 
 vector<PhysicalOperator *> PipelineBuildState::GetPipelineOperators(Pipeline &pipeline) {
@@ -12423,16 +15691,25 @@ void PipelineCompleteEvent::FinalizeFinish() {
 } // namespace duckdb
 
 
+
 namespace duckdb {
 
-PipelineEvent::PipelineEvent(shared_ptr<Pipeline> pipeline_p)
-    : Event(pipeline_p->executor), pipeline(move(pipeline_p)) {
+PipelineEvent::PipelineEvent(shared_ptr<Pipeline> pipeline_p) : BasePipelineEvent(move(pipeline_p)) {
 }
 
 void PipelineEvent::Schedule() {
 	auto event = shared_from_this();
-	pipeline->Schedule(event);
-	D_ASSERT(total_tasks > 0);
+	auto &executor = pipeline->executor;
+	try {
+		pipeline->Schedule(event);
+		D_ASSERT(total_tasks > 0);
+	} catch (Exception &ex) {
+		executor.PushError(PreservedError(ex));
+	} catch (std::exception &ex) {
+		executor.PushError(PreservedError(ex));
+	} catch (...) { // LCOV_EXCL_START
+		executor.PushError(PreservedError("Unknown exception in Finalize!"));
+	} // LCOV_EXCL_STOP
 }
 
 void PipelineEvent::FinishEvent() {
@@ -12446,39 +15723,27 @@ void PipelineEvent::FinishEvent() {
 namespace duckdb {
 
 PipelineExecutor::PipelineExecutor(ClientContext &context_p, Pipeline &pipeline_p)
-    : pipeline(pipeline_p), thread(context_p), context(context_p, thread) {
+    : pipeline(pipeline_p), thread(context_p), context(context_p, thread, &pipeline_p) {
 	D_ASSERT(pipeline.source_state);
 	local_source_state = pipeline.source->GetLocalSourceState(context, *pipeline.source_state);
 	if (pipeline.sink) {
 		local_sink_state = pipeline.sink->GetLocalSinkState(context);
 		requires_batch_index = pipeline.sink->RequiresBatchIndex() && pipeline.source->SupportsBatchIndex();
 	}
-	bool can_cache_in_pipeline = pipeline.sink && !pipeline.IsOrderDependent() && !requires_batch_index;
+
 	intermediate_chunks.reserve(pipeline.operators.size());
 	intermediate_states.reserve(pipeline.operators.size());
-	cached_chunks.resize(pipeline.operators.size());
 	for (idx_t i = 0; i < pipeline.operators.size(); i++) {
 		auto prev_operator = i == 0 ? pipeline.source : pipeline.operators[i - 1];
 		auto current_operator = pipeline.operators[i];
+
 		auto chunk = make_unique<DataChunk>();
 		chunk->Initialize(Allocator::Get(context.client), prev_operator->GetTypes());
 		intermediate_chunks.push_back(move(chunk));
-		intermediate_states.push_back(current_operator->GetOperatorState(context));
-		if (can_cache_in_pipeline && current_operator->RequiresCache()) {
-			auto &cache_types = current_operator->GetTypes();
-			bool can_cache = true;
-			for (auto &type : cache_types) {
-				if (!CanCacheType(type)) {
-					can_cache = false;
-					break;
-				}
-			}
-			if (!can_cache) {
-				continue;
-			}
-			cached_chunks[i] = make_unique<DataChunk>();
-			cached_chunks[i]->Initialize(Allocator::Get(context.client), current_operator->GetTypes());
-		}
+
+		auto op_state = current_operator->GetOperatorState(context);
+		intermediate_states.push_back(std::move(op_state));
+
 		if (current_operator->IsSink() && current_operator->sink_state->state == SinkFinalizeType::NO_OUTPUT_POSSIBLE) {
 			// one of the operators has already figured out no output is possible
 			// we can skip executing the pipeline
@@ -12539,7 +15804,8 @@ OperatorResultType PipelineExecutor::ExecutePushInternal(DataChunk &input, idx_t
 	} // LCOV_EXCL_STOP
 	while (true) {
 		OperatorResultType result;
-		if (!pipeline.operators.empty()) {
+		// Note: if input is the final_chunk, we don't do any executing, the chunk just needs to be sinked
+		if (&input != &final_chunk) {
 			final_chunk.Reset();
 			result = Execute(input, final_chunk, initial_idx);
 			if (result == OperatorResultType::FINISHED) {
@@ -12548,7 +15814,7 @@ OperatorResultType PipelineExecutor::ExecutePushInternal(DataChunk &input, idx_t
 		} else {
 			result = OperatorResultType::NEED_MORE_INPUT;
 		}
-		auto &sink_chunk = pipeline.operators.empty() ? input : final_chunk;
+		auto &sink_chunk = final_chunk;
 		if (sink_chunk.size() > 0) {
 			StartOperator(pipeline.sink);
 			D_ASSERT(pipeline.sink);
@@ -12566,23 +15832,88 @@ OperatorResultType PipelineExecutor::ExecutePushInternal(DataChunk &input, idx_t
 	}
 }
 
+// Pull a single DataChunk from the pipeline by flushing any operators holding cached output
+void PipelineExecutor::FlushCachingOperatorsPull(DataChunk &result) {
+	idx_t start_idx = IsFinished() ? idx_t(finished_processing_idx) : 0;
+	idx_t op_idx = start_idx;
+	while (op_idx < pipeline.operators.size()) {
+		if (!pipeline.operators[op_idx]->RequiresFinalExecute()) {
+			op_idx++;
+			continue;
+		}
+
+		OperatorFinalizeResultType finalize_result;
+		DataChunk &curr_chunk =
+		    op_idx + 1 >= intermediate_chunks.size() ? final_chunk : *intermediate_chunks[op_idx + 1];
+
+		if (pending_final_execute) {
+			// Still have a cached chunk from a last pull, reuse chunk
+			finalize_result = cached_final_execute_result;
+		} else {
+			// Flush the current operator
+			finalize_result = pipeline.operators[op_idx]->FinalExecute(
+			    context, curr_chunk, *pipeline.operators[op_idx]->op_state, *intermediate_states[op_idx]);
+		}
+
+		auto execute_result = Execute(curr_chunk, result, op_idx + 1);
+
+		if (execute_result == OperatorResultType::HAVE_MORE_OUTPUT) {
+			pending_final_execute = true;
+			cached_final_execute_result = finalize_result;
+		} else {
+			pending_final_execute = false;
+			if (finalize_result == OperatorFinalizeResultType::FINISHED) {
+				FinishProcessing(op_idx);
+				op_idx++;
+			}
+		}
+
+		// Some non-empty result was pulled from some caching operator, we're done for this pull
+		if (result.size() > 0) {
+			break;
+		}
+	}
+}
+
+// Push all remaining cached operator output through the pipeline
+void PipelineExecutor::FlushCachingOperatorsPush() {
+	idx_t start_idx = IsFinished() ? idx_t(finished_processing_idx) : 0;
+	for (idx_t op_idx = start_idx; op_idx < pipeline.operators.size(); op_idx++) {
+		if (!pipeline.operators[op_idx]->RequiresFinalExecute()) {
+			continue;
+		}
+
+		OperatorFinalizeResultType finalize_result;
+		OperatorResultType push_result;
+
+		do {
+			auto &curr_chunk =
+			    op_idx + 1 >= intermediate_chunks.size() ? final_chunk : *intermediate_chunks[op_idx + 1];
+			finalize_result = pipeline.operators[op_idx]->FinalExecute(
+			    context, curr_chunk, *pipeline.operators[op_idx]->op_state, *intermediate_states[op_idx]);
+			push_result = ExecutePushInternal(curr_chunk, op_idx + 1);
+		} while (finalize_result != OperatorFinalizeResultType::FINISHED &&
+		         push_result != OperatorResultType::FINISHED);
+
+		if (push_result == OperatorResultType::FINISHED) {
+			break;
+		}
+	}
+}
+
 void PipelineExecutor::PushFinalize() {
 	if (finalized) {
 		throw InternalException("Calling PushFinalize on a pipeline that has been finalized already");
 	}
 	finalized = true;
-	// flush all caches
-	// note that even if an operator has finished, we might still need to flush caches AFTER that operator
-	// e.g. if we have SOURCE -> LIMIT -> CROSS_PRODUCT -> SINK, if the LIMIT reports no more rows will be passed on
-	// we still need to flush caches from the CROSS_PRODUCT
+	// flush all caching operators
+	// note that even if an operator has finished, we might still need to flush caches AFTER
+	// that operator e.g. if we have SOURCE -> LIMIT -> CROSS_PRODUCT -> SINK, if the
+	// LIMIT reports no more rows will be passed on we still need to flush caches from the CROSS_PRODUCT
 	D_ASSERT(in_process_operators.empty());
-	idx_t start_idx = IsFinished() ? idx_t(finished_processing_idx) : 0;
-	for (idx_t i = start_idx; i < cached_chunks.size(); i++) {
-		if (cached_chunks[i] && cached_chunks[i]->size() > 0) {
-			ExecutePushInternal(*cached_chunks[i], i + 1);
-			cached_chunks[i].reset();
-		}
-	}
+
+	FlushCachingOperatorsPush();
+
 	D_ASSERT(local_sink_state);
 	// run the combine for the sink
 	pipeline.sink->Combine(context, *pipeline.sink->sink_state, *local_sink_state);
@@ -12595,46 +15926,6 @@ void PipelineExecutor::PushFinalize() {
 	local_sink_state.reset();
 }
 
-bool PipelineExecutor::CanCacheType(const LogicalType &type) {
-	switch (type.id()) {
-	case LogicalTypeId::LIST:
-	case LogicalTypeId::MAP:
-		return false;
-	case LogicalTypeId::STRUCT: {
-		auto &entries = StructType::GetChildTypes(type);
-		for (auto &entry : entries) {
-			if (!CanCacheType(entry.second)) {
-				return false;
-			}
-		}
-		return true;
-	}
-	default:
-		return true;
-	}
-}
-
-void PipelineExecutor::CacheChunk(DataChunk &current_chunk, idx_t operator_idx) {
-#if STANDARD_VECTOR_SIZE >= 128
-	if (cached_chunks[operator_idx]) {
-		if (current_chunk.size() < CACHE_THRESHOLD) {
-			// we have filtered out a significant amount of tuples
-			// add this chunk to the cache and continue
-			auto &chunk_cache = *cached_chunks[operator_idx];
-			chunk_cache.Append(current_chunk);
-			if (chunk_cache.size() >= (STANDARD_VECTOR_SIZE - CACHE_THRESHOLD)) {
-				// chunk cache full: return it
-				current_chunk.Move(chunk_cache);
-				chunk_cache.Initialize(Allocator::Get(context.client), pipeline.operators[operator_idx]->GetTypes());
-			} else {
-				// chunk cache not full: probe again
-				current_chunk.Reset();
-			}
-		}
-	}
-#endif
-}
-
 void PipelineExecutor::ExecutePull(DataChunk &result) {
 	if (IsFinished()) {
 		return;
@@ -12644,13 +15935,21 @@ void PipelineExecutor::ExecutePull(DataChunk &result) {
 		D_ASSERT(!pipeline.sink);
 		auto &source_chunk = pipeline.operators.empty() ? result : *intermediate_chunks[0];
 		while (result.size() == 0) {
+			if (source_empty) {
+				FlushCachingOperatorsPull(result);
+				break;
+			}
+
 			if (in_process_operators.empty()) {
 				source_chunk.Reset();
 				FetchFromSource(source_chunk);
+
 				if (source_chunk.size() == 0) {
-					break;
+					source_empty = true;
+					continue;
 				}
 			}
+
 			if (!pipeline.operators.empty()) {
 				auto state = Execute(source_chunk, result);
 				if (state == OperatorResultType::FINISHED) {
@@ -12658,7 +15957,12 @@ void PipelineExecutor::ExecutePull(DataChunk &result) {
 				}
 			}
 		}
-	} catch (std::exception &ex) { // LCOV_EXCL_START
+	} catch (const Exception &ex) { // LCOV_EXCL_START
+		if (executor.HasError()) {
+			executor.ThrowException();
+		}
+		throw;
+	} catch (std::exception &ex) {
 		if (executor.HasError()) {
 			executor.ThrowException();
 		}
@@ -12743,7 +16047,6 @@ OperatorResultType PipelineExecutor::Execute(DataChunk &input, DataChunk &result
 				return OperatorResultType::FINISHED;
 			}
 			current_chunk.Verify();
-			CacheChunk(current_chunk, operator_idx);
 		}
 
 		if (current_chunk.size() == 0) {
@@ -12810,8 +16113,7 @@ void PipelineExecutor::EndOperator(PhysicalOperator *op, DataChunk *chunk) {
 
 namespace duckdb {
 
-PipelineFinishEvent::PipelineFinishEvent(shared_ptr<Pipeline> pipeline_p)
-    : Event(pipeline_p->executor), pipeline(move(pipeline_p)) {
+PipelineFinishEvent::PipelineFinishEvent(shared_ptr<Pipeline> pipeline_p) : BasePipelineEvent(move(pipeline_p)) {
 }
 
 void PipelineFinishEvent::Schedule() {
@@ -12819,6 +16121,44 @@ void PipelineFinishEvent::Schedule() {
 
 void PipelineFinishEvent::FinishEvent() {
 	pipeline->Finalize(*this);
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+PipelineInitializeEvent::PipelineInitializeEvent(shared_ptr<Pipeline> pipeline_p)
+    : BasePipelineEvent(move(pipeline_p)) {
+}
+
+class PipelineInitializeTask : public ExecutorTask {
+public:
+	explicit PipelineInitializeTask(Pipeline &pipeline_p, shared_ptr<Event> event_p)
+	    : ExecutorTask(pipeline_p.executor), pipeline(pipeline_p), event(move(event_p)) {
+	}
+
+	Pipeline &pipeline;
+	shared_ptr<Event> event;
+
+public:
+	TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override {
+		pipeline.ResetSink();
+		event->FinishTask();
+		return TaskExecutionResult::TASK_FINISHED;
+	}
+};
+
+void PipelineInitializeEvent::Schedule() {
+	// needs to spawn a task to get the chain of tasks for the query plan going
+	vector<unique_ptr<Task>> tasks;
+	tasks.push_back(make_unique<PipelineInitializeTask>(*pipeline, shared_from_this()));
+	SetTasks(move(tasks));
+}
+
+void PipelineInitializeEvent::FinishEvent() {
 }
 
 } // namespace duckdb
@@ -12953,13 +16293,32 @@ void TaskScheduler::ExecuteForever(atomic<bool> *marker) {
 	unique_ptr<Task> task;
 	// loop until the marker is set to false
 	while (*marker) {
-		// wait for a signal with a timeout; the timeout allows us to periodically check
+		// wait for a signal with a timeout
 		queue->semaphore.wait();
 		if (queue->q.try_dequeue(task)) {
 			task->Execute(TaskExecutionMode::PROCESS_ALL);
 			task.reset();
 		}
 	}
+#else
+	throw NotImplementedException("DuckDB was compiled without threads! Background thread loop is not allowed.");
+#endif
+}
+
+idx_t TaskScheduler::ExecuteTasks(atomic<bool> *marker, idx_t max_tasks) {
+#ifndef DUCKDB_NO_THREADS
+	idx_t completed_tasks = 0;
+	// loop until the marker is set to false
+	while (*marker && completed_tasks < max_tasks) {
+		unique_ptr<Task> task;
+		if (!queue->q.try_dequeue(task)) {
+			return completed_tasks;
+		}
+		task->Execute(TaskExecutionMode::PROCESS_ALL);
+		task.reset();
+		completed_tasks++;
+	}
+	return completed_tasks;
 #else
 	throw NotImplementedException("DuckDB was compiled without threads! Background thread loop is not allowed.");
 #endif
@@ -12992,12 +16351,14 @@ static void ThreadExecuteTasks(TaskScheduler *scheduler, atomic<bool> *marker) {
 #endif
 
 int32_t TaskScheduler::NumberOfThreads() {
+	lock_guard<mutex> t(thread_lock);
 	auto &config = DBConfig::GetConfig(db);
-	return threads.size() + config.external_threads + 1;
+	return threads.size() + config.options.external_threads + 1;
 }
 
 void TaskScheduler::SetThreads(int32_t n) {
 #ifndef DUCKDB_NO_THREADS
+	lock_guard<mutex> t(thread_lock);
 	if (n < 1) {
 		throw SyntaxException("Must have at least 1 thread!");
 	}
@@ -13006,6 +16367,12 @@ void TaskScheduler::SetThreads(int32_t n) {
 	if (n != 1) {
 		throw NotImplementedException("DuckDB was compiled without threads! Setting threads > 1 is not allowed.");
 	}
+#endif
+}
+
+void TaskScheduler::Signal(idx_t n) {
+#ifndef DUCKDB_NO_THREADS
+	queue->semaphore.signal(n);
 #endif
 }
 
@@ -13020,7 +16387,7 @@ void TaskScheduler::SetThreadsInternal(int32_t n) {
 		for (idx_t i = 0; i < threads.size(); i++) {
 			*markers[i] = false;
 		}
-		queue->semaphore.signal(threads.size());
+		Signal(threads.size());
 		// now join the threads to ensure they are fully stopped before erasing them
 		for (idx_t i = 0; i < threads.size(); i++) {
 			threads[i]->internal_thread->join();
@@ -13196,6 +16563,14 @@ const storage_t &ColumnDefinition::StorageOid() const {
 	return storage_oid;
 }
 
+LogicalIndex ColumnDefinition::Logical() const {
+	return LogicalIndex(oid);
+}
+
+PhysicalIndex ColumnDefinition::Physical() const {
+	return PhysicalIndex(storage_oid);
+}
+
 void ColumnDefinition::SetStorageOid(storage_t storage_oid) {
 	this->storage_oid = storage_oid;
 }
@@ -13248,6 +16623,14 @@ void ColumnDefinition::GetListOfDependencies(vector<string> &dependencies) const
 	InnerGetListOfDependencies(*generated_expression, dependencies);
 }
 
+string ColumnDefinition::GetName() const {
+	return name;
+}
+
+LogicalType ColumnDefinition::GetType() const {
+	return type;
+}
+
 void ColumnDefinition::SetGeneratedExpression(unique_ptr<ParsedExpression> expression) {
 	category = TableColumnType::GENERATED;
 
@@ -13285,6 +16668,162 @@ const ParsedExpression &ColumnDefinition::GeneratedExpression() const {
 ParsedExpression &ColumnDefinition::GeneratedExpressionMutable() {
 	D_ASSERT(Generated());
 	return *generated_expression;
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+ColumnList::ColumnList(bool allow_duplicate_names) : allow_duplicate_names(allow_duplicate_names) {
+}
+void ColumnList::AddColumn(ColumnDefinition column) {
+	auto oid = columns.size();
+	if (!column.Generated()) {
+		column.SetStorageOid(physical_columns.size());
+		physical_columns.push_back(oid);
+	} else {
+		column.SetStorageOid(DConstants::INVALID_INDEX);
+	}
+	column.SetOid(columns.size());
+	AddToNameMap(column);
+	columns.push_back(move(column));
+}
+
+void ColumnList::Finalize() {
+	// add the "rowid" alias, if there is no rowid column specified in the table
+	if (name_map.find("rowid") == name_map.end()) {
+		name_map["rowid"] = COLUMN_IDENTIFIER_ROW_ID;
+	}
+}
+
+void ColumnList::AddToNameMap(ColumnDefinition &col) {
+	if (allow_duplicate_names) {
+		idx_t index = 1;
+		string base_name = col.Name();
+		while (name_map.find(col.Name()) != name_map.end()) {
+			col.SetName(base_name + ":" + to_string(index++));
+		}
+	} else {
+		if (name_map.find(col.Name()) != name_map.end()) {
+			throw CatalogException("Column with name %s already exists!", col.Name());
+		}
+	}
+	name_map[col.Name()] = col.Oid();
+}
+
+ColumnDefinition &ColumnList::GetColumnMutable(LogicalIndex logical) {
+	if (logical.index >= columns.size()) {
+		throw InternalException("Logical column index %lld out of range", logical.index);
+	}
+	return columns[logical.index];
+}
+
+ColumnDefinition &ColumnList::GetColumnMutable(PhysicalIndex physical) {
+	if (physical.index >= physical_columns.size()) {
+		throw InternalException("Physical column index %lld out of range", physical.index);
+	}
+	auto logical_index = physical_columns[physical.index];
+	D_ASSERT(logical_index < columns.size());
+	return columns[logical_index];
+}
+
+ColumnDefinition &ColumnList::GetColumnMutable(const string &name) {
+	auto entry = name_map.find(name);
+	if (entry == name_map.end()) {
+		throw InternalException("Column with name \"%s\" does not exist", name);
+	}
+	auto logical_index = entry->second;
+	D_ASSERT(logical_index < columns.size());
+	return columns[logical_index];
+}
+
+const ColumnDefinition &ColumnList::GetColumn(LogicalIndex logical) const {
+	if (logical.index >= columns.size()) {
+		throw InternalException("Logical column index %lld out of range", logical.index);
+	}
+	return columns[logical.index];
+}
+
+const ColumnDefinition &ColumnList::GetColumn(PhysicalIndex physical) const {
+	if (physical.index >= physical_columns.size()) {
+		throw InternalException("Physical column index %lld out of range", physical.index);
+	}
+	auto logical_index = physical_columns[physical.index];
+	D_ASSERT(logical_index < columns.size());
+	return columns[logical_index];
+}
+
+const ColumnDefinition &ColumnList::GetColumn(const string &name) const {
+	auto entry = name_map.find(name);
+	if (entry == name_map.end()) {
+		throw InternalException("Column with name \"%s\" does not exist", name);
+	}
+	auto logical_index = entry->second;
+	D_ASSERT(logical_index < columns.size());
+	return columns[logical_index];
+}
+
+bool ColumnList::ColumnExists(const string &name) const {
+	auto entry = name_map.find(name);
+	return entry != name_map.end();
+}
+
+PhysicalIndex ColumnList::LogicalToPhysical(LogicalIndex logical) const {
+	auto &column = GetColumn(logical);
+	if (column.Generated()) {
+		throw InternalException("Column at position %d is not a physical column", logical.index);
+	}
+	return column.Physical();
+}
+
+LogicalIndex ColumnList::PhysicalToLogical(PhysicalIndex index) const {
+	auto &column = GetColumn(index);
+	return column.Logical();
+}
+
+LogicalIndex ColumnList::GetColumnIndex(string &column_name) const {
+	auto entry = name_map.find(column_name);
+	if (entry == name_map.end()) {
+		return LogicalIndex(DConstants::INVALID_INDEX);
+	}
+	if (entry->second == COLUMN_IDENTIFIER_ROW_ID) {
+		column_name = "rowid";
+		return LogicalIndex(COLUMN_IDENTIFIER_ROW_ID);
+	}
+	column_name = columns[entry->second].Name();
+	return LogicalIndex(entry->second);
+}
+
+ColumnList ColumnList::Copy() const {
+	ColumnList result(allow_duplicate_names);
+	for (auto &col : columns) {
+		result.AddColumn(col.Copy());
+	}
+	return result;
+}
+
+void ColumnList::Serialize(FieldWriter &writer) const {
+	writer.WriteRegularSerializableList(columns);
+}
+
+ColumnList ColumnList::Deserialize(FieldReader &reader) {
+	ColumnList result;
+	auto columns = reader.ReadRequiredSerializableList<ColumnDefinition, ColumnDefinition>();
+	for (auto &col : columns) {
+		result.AddColumn(move(col));
+	}
+	return result;
+}
+
+ColumnList::ColumnListIterator ColumnList::Logical() const {
+	return ColumnListIterator(*this, false);
+}
+
+ColumnList::ColumnListIterator ColumnList::Physical() const {
+	return ColumnListIterator(*this, true);
 }
 
 } // namespace duckdb
@@ -13424,8 +16963,8 @@ void ForeignKeyConstraint::Serialize(FieldWriter &writer) const {
 	writer.WriteField<ForeignKeyType>(info.type);
 	writer.WriteString(info.schema);
 	writer.WriteString(info.table);
-	writer.WriteList<idx_t>(info.pk_keys);
-	writer.WriteList<idx_t>(info.fk_keys);
+	writer.WriteIndexList<PhysicalIndex>(info.pk_keys);
+	writer.WriteIndexList<PhysicalIndex>(info.fk_keys);
 }
 
 unique_ptr<Constraint> ForeignKeyConstraint::Deserialize(FieldReader &source) {
@@ -13435,8 +16974,8 @@ unique_ptr<Constraint> ForeignKeyConstraint::Deserialize(FieldReader &source) {
 	read_info.type = source.ReadRequired<ForeignKeyType>();
 	read_info.schema = source.ReadRequired<string>();
 	read_info.table = source.ReadRequired<string>();
-	read_info.pk_keys = source.ReadRequiredList<idx_t>();
-	read_info.fk_keys = source.ReadRequiredList<idx_t>();
+	read_info.pk_keys = source.ReadRequiredIndexList<PhysicalIndex>();
+	read_info.fk_keys = source.ReadRequiredIndexList<PhysicalIndex>();
 
 	// column list parsed constraint
 	return make_unique<ForeignKeyConstraint>(pk_columns, fk_columns, move(read_info));
@@ -13449,7 +16988,7 @@ unique_ptr<Constraint> ForeignKeyConstraint::Deserialize(FieldReader &source) {
 
 namespace duckdb {
 
-NotNullConstraint::NotNullConstraint(column_t index) : Constraint(ConstraintType::NOT_NULL), index(index) {
+NotNullConstraint::NotNullConstraint(LogicalIndex index) : Constraint(ConstraintType::NOT_NULL), index(index) {
 }
 
 NotNullConstraint::~NotNullConstraint() {
@@ -13464,12 +17003,12 @@ unique_ptr<Constraint> NotNullConstraint::Copy() const {
 }
 
 void NotNullConstraint::Serialize(FieldWriter &writer) const {
-	writer.WriteField<idx_t>(index);
+	writer.WriteField<idx_t>(index.index);
 }
 
 unique_ptr<Constraint> NotNullConstraint::Deserialize(FieldReader &source) {
 	auto index = source.ReadRequired<idx_t>();
-	return make_unique_base<Constraint, NotNullConstraint>(index);
+	return make_unique_base<Constraint, NotNullConstraint>(LogicalIndex(index));
 }
 
 } // namespace duckdb
@@ -13481,7 +17020,7 @@ unique_ptr<Constraint> NotNullConstraint::Deserialize(FieldReader &source) {
 
 namespace duckdb {
 
-UniqueConstraint::UniqueConstraint(uint64_t index, bool is_primary_key)
+UniqueConstraint::UniqueConstraint(LogicalIndex index, bool is_primary_key)
     : Constraint(ConstraintType::UNIQUE), index(index), is_primary_key(is_primary_key) {
 }
 UniqueConstraint::UniqueConstraint(vector<string> columns, bool is_primary_key)
@@ -13501,7 +17040,7 @@ string UniqueConstraint::ToString() const {
 }
 
 unique_ptr<Constraint> UniqueConstraint::Copy() const {
-	if (index == DConstants::INVALID_INDEX) {
+	if (index.index == DConstants::INVALID_INDEX) {
 		return make_unique<UniqueConstraint>(columns, is_primary_key);
 	} else {
 		auto result = make_unique<UniqueConstraint>(index, is_primary_key);
@@ -13512,7 +17051,7 @@ unique_ptr<Constraint> UniqueConstraint::Copy() const {
 
 void UniqueConstraint::Serialize(FieldWriter &writer) const {
 	writer.WriteField<bool>(is_primary_key);
-	writer.WriteField<uint64_t>(index);
+	writer.WriteField<uint64_t>(index.index);
 	D_ASSERT(columns.size() <= NumericLimits<uint32_t>::Maximum());
 	writer.WriteList<string>(columns);
 }
@@ -13524,7 +17063,7 @@ unique_ptr<Constraint> UniqueConstraint::Deserialize(FieldReader &source) {
 
 	if (index != DConstants::INVALID_INDEX) {
 		// single column parsed constraint
-		auto result = make_unique<UniqueConstraint>(index, is_primary_key);
+		auto result = make_unique<UniqueConstraint>(LogicalIndex(index), is_primary_key);
 		result->columns = move(columns);
 		return move(result);
 	} else {
@@ -13719,7 +17258,7 @@ CollateExpression::CollateExpression(string collation_p, unique_ptr<ParsedExpres
 }
 
 string CollateExpression::ToString() const {
-	return child->ToString() + " COLLATE " + collation;
+	return child->ToString() + " COLLATE " + KeywordHelper::WriteOptionallyQuoted(collation);
 }
 
 bool CollateExpression::Equals(const CollateExpression *a, const CollateExpression *b) {
@@ -13855,9 +17394,7 @@ namespace duckdb {
 
 ComparisonExpression::ComparisonExpression(ExpressionType type, unique_ptr<ParsedExpression> left,
                                            unique_ptr<ParsedExpression> right)
-    : ParsedExpression(type, ExpressionClass::COMPARISON) {
-	this->left = move(left);
-	this->right = move(right);
+    : ParsedExpression(type, ExpressionClass::COMPARISON), left(move(left)), right(move(right)) {
 }
 
 string ComparisonExpression::ToString() const {
@@ -13976,7 +17513,7 @@ string ConstantExpression::ToString() const {
 }
 
 bool ConstantExpression::Equals(const ConstantExpression *a, const ConstantExpression *b) {
-	return !ValueOperations::DistinctFrom(a->value, b->value);
+	return a->value.type() == b->value.type() && !ValueOperations::DistinctFrom(a->value, b->value);
 }
 
 hash_t ConstantExpression::Hash() const {
@@ -14152,40 +17689,43 @@ void FunctionExpression::Verify() const {
 
 
 
+
 namespace duckdb {
 
-LambdaExpression::LambdaExpression(unique_ptr<ParsedExpression> lhs, unique_ptr<ParsedExpression> rhs)
-    : ParsedExpression(ExpressionType::LAMBDA, ExpressionClass::LAMBDA), lhs(move(lhs)), rhs(move(rhs)) {
+LambdaExpression::LambdaExpression(unique_ptr<ParsedExpression> lhs, unique_ptr<ParsedExpression> expr)
+    : ParsedExpression(ExpressionType::LAMBDA, ExpressionClass::LAMBDA), lhs(move(lhs)), expr(move(expr)) {
 }
 
 string LambdaExpression::ToString() const {
-	return lhs->ToString() + " -> " + rhs->ToString();
+	return lhs->ToString() + " -> " + expr->ToString();
 }
 
 bool LambdaExpression::Equals(const LambdaExpression *a, const LambdaExpression *b) {
-	return a->lhs->Equals(b->lhs.get()) && a->rhs->Equals(b->rhs.get());
+	return a->lhs->Equals(b->lhs.get()) && a->expr->Equals(b->expr.get());
 }
 
 hash_t LambdaExpression::Hash() const {
 	hash_t result = lhs->Hash();
 	ParsedExpression::Hash();
-	result = CombineHash(result, rhs->Hash());
+	result = CombineHash(result, expr->Hash());
 	return result;
 }
 
 unique_ptr<ParsedExpression> LambdaExpression::Copy() const {
-	return make_unique<LambdaExpression>(lhs->Copy(), rhs->Copy());
+	auto copy = make_unique<LambdaExpression>(lhs->Copy(), expr->Copy());
+	copy->CopyProperties(*this);
+	return move(copy);
 }
 
 void LambdaExpression::Serialize(FieldWriter &writer) const {
 	writer.WriteSerializable(*lhs);
-	writer.WriteSerializable(*rhs);
+	writer.WriteSerializable(*expr);
 }
 
 unique_ptr<ParsedExpression> LambdaExpression::Deserialize(ExpressionType type, FieldReader &reader) {
 	auto lhs = reader.ReadRequiredSerializable<ParsedExpression>();
-	auto rhs = reader.ReadRequiredSerializable<ParsedExpression>();
-	return make_unique<LambdaExpression>(move(lhs), move(rhs));
+	auto expr = reader.ReadRequiredSerializable<ParsedExpression>();
+	return make_unique<LambdaExpression>(move(lhs), move(expr));
 }
 
 } // namespace duckdb
@@ -14271,6 +17811,10 @@ unique_ptr<ParsedExpression> ParameterExpression::Copy() const {
 	return move(copy);
 }
 
+bool ParameterExpression::Equals(const ParameterExpression *a, const ParameterExpression *b) {
+	return a->parameter_nr == b->parameter_nr;
+}
+
 hash_t ParameterExpression::Hash() const {
 	hash_t result = ParsedExpression::Hash();
 	return CombineHash(duckdb::Hash(parameter_nr), result);
@@ -14342,7 +17886,15 @@ StarExpression::StarExpression(string relation_name_p)
 }
 
 string StarExpression::ToString() const {
-	string result = relation_name.empty() ? "*" : relation_name + ".*";
+	if (!regex.empty()) {
+		D_ASSERT(columns);
+		return "COLUMNS('" + regex + "')";
+	}
+	string result;
+	if (columns) {
+		result += "COLUMNS(";
+	}
+	result += relation_name.empty() ? "*" : relation_name + ".*";
 	if (!exclude_list.empty()) {
 		result += " EXCLUDE (";
 		bool first_entry = true;
@@ -14369,11 +17921,17 @@ string StarExpression::ToString() const {
 		}
 		result += ")";
 	}
+	if (columns) {
+		result += ")";
+	}
 	return result;
 }
 
 bool StarExpression::Equals(const StarExpression *a, const StarExpression *b) {
 	if (a->relation_name != b->relation_name || a->exclude_list != b->exclude_list) {
+		return false;
+	}
+	if (a->columns != b->columns) {
 		return false;
 	}
 	if (a->replace_list.size() != b->replace_list.size()) {
@@ -14387,6 +17945,9 @@ bool StarExpression::Equals(const StarExpression *a, const StarExpression *b) {
 		if (!entry.second->Equals(other_entry->second.get())) {
 			return false;
 		}
+	}
+	if (a->regex != b->regex) {
+		return false;
 	}
 	return true;
 }
@@ -14407,6 +17968,8 @@ void StarExpression::Serialize(FieldWriter &writer) const {
 		serializer.WriteString(entry.first);
 		entry.second->Serialize(serializer);
 	}
+	writer.WriteField<bool>(columns);
+	writer.WriteString(regex);
 }
 
 unique_ptr<ParsedExpression> StarExpression::Deserialize(ExpressionType type, FieldReader &reader) {
@@ -14424,6 +17987,8 @@ unique_ptr<ParsedExpression> StarExpression::Deserialize(ExpressionType type, Fi
 		auto expr = ParsedExpression::Deserialize(source);
 		result->replace_list.insert(make_pair(name, move(expr)));
 	}
+	result->columns = reader.ReadField<bool>(false);
+	result->regex = reader.ReadField<string>(string());
 	return move(result);
 }
 
@@ -14433,6 +17998,8 @@ unique_ptr<ParsedExpression> StarExpression::Copy() const {
 	for (auto &entry : replace_list) {
 		copy->replace_list[entry.first] = entry.second->Copy();
 	}
+	copy->columns = columns;
+	copy->regex = regex;
 	copy->CopyProperties(*this);
 	return move(copy);
 }
@@ -14453,8 +18020,8 @@ SubqueryExpression::SubqueryExpression()
 string SubqueryExpression::ToString() const {
 	switch (subquery_type) {
 	case SubqueryType::ANY:
-		return child->ToString() + " " + ExpressionTypeToOperator(comparison_type) + " ANY(" + subquery->ToString() +
-		       ")";
+		return "(" + child->ToString() + " " + ExpressionTypeToOperator(comparison_type) + " ANY(" +
+		       subquery->ToString() + "))";
 	case SubqueryType::EXISTS:
 		return "EXISTS(" + subquery->ToString() + ")";
 	case SubqueryType::NOT_EXISTS:
@@ -14663,7 +18230,7 @@ unique_ptr<ParsedExpression> WindowExpression::Deserialize(ExpressionType type, 
 	auto order_count = reader.ReadRequired<uint32_t>();
 	auto &source = reader.GetSource();
 	for (idx_t i = 0; i < order_count; i++) {
-		expr->orders.push_back(OrderByNode::Deserialize((source)));
+		expr->orders.push_back(OrderByNode::Deserialize(source));
 	}
 	expr->start = reader.ReadRequired<WindowBoundary>();
 	expr->end = reader.ReadRequired<WindowBoundary>();
@@ -14760,13 +18327,18 @@ bool KeywordHelper::IsKeyword(const string &text) {
 	return Parser::IsKeyword(text);
 }
 
-bool KeywordHelper::RequiresQuotes(const string &text) {
+bool KeywordHelper::RequiresQuotes(const string &text, bool allow_caps) {
 	for (size_t i = 0; i < text.size(); i++) {
 		if (i > 0 && (text[i] >= '0' && text[i] <= '9')) {
 			continue;
 		}
 		if (text[i] >= 'a' && text[i] <= 'z') {
 			continue;
+		}
+		if (allow_caps) {
+			if (text[i] >= 'A' && text[i] <= 'Z') {
+				continue;
+			}
 		}
 		if (text[i] == '_') {
 			continue;
@@ -14776,8 +18348,8 @@ bool KeywordHelper::RequiresQuotes(const string &text) {
 	return IsKeyword(text);
 }
 
-string KeywordHelper::WriteOptionallyQuoted(const string &text, char quote) {
-	if (!RequiresQuotes(text)) {
+string KeywordHelper::WriteOptionallyQuoted(const string &text, char quote, bool allow_caps) {
+	if (!RequiresQuotes(text, allow_caps)) {
 		return text;
 	}
 	return string(1, quote) + StringUtil::Replace(text, string(1, quote), string(2, quote)) + string(1, quote);
@@ -14788,10 +18360,64 @@ string KeywordHelper::WriteOptionallyQuoted(const string &text, char quote) {
 
 
 
+
 namespace duckdb {
 
-AlterInfo::AlterInfo(AlterType type, string schema_p, string name_p)
-    : type(type), schema(move(schema_p)), name(move(name_p)) {
+//===--------------------------------------------------------------------===//
+// AlterFunctionInfo
+//===--------------------------------------------------------------------===//
+AlterFunctionInfo::AlterFunctionInfo(AlterFunctionType type, string schema_p, string table_p, bool if_exists)
+    : AlterInfo(AlterType::ALTER_FUNCTION, move(move(schema_p)), move(table_p), if_exists), alter_function_type(type) {
+}
+AlterFunctionInfo::~AlterFunctionInfo() {
+}
+
+CatalogType AlterFunctionInfo::GetCatalogType() const {
+	return CatalogType::SCALAR_FUNCTION_ENTRY;
+}
+
+void AlterFunctionInfo::Serialize(FieldWriter &writer) const {
+	writer.WriteField<AlterFunctionType>(alter_function_type);
+	writer.WriteString(schema);
+	writer.WriteString(name);
+	writer.WriteField(if_exists);
+}
+
+unique_ptr<AlterInfo> AlterFunctionInfo::Deserialize(FieldReader &reader) {
+	//	auto type = reader.ReadRequired<AlterFunctionType>();
+	//	auto schema = reader.ReadRequired<string>();
+	//	auto table = reader.ReadRequired<string>();
+	//	auto if_exists = reader.ReadRequired<bool>();
+
+	throw NotImplementedException("AlterFunctionInfo cannot be deserialized");
+}
+
+//===--------------------------------------------------------------------===//
+// AddFunctionOverloadInfo
+//===--------------------------------------------------------------------===//
+AddFunctionOverloadInfo::AddFunctionOverloadInfo(string schema_p, string name_p, bool if_exists_p,
+                                                 ScalarFunctionSet new_overloads_p)
+    : AlterFunctionInfo(AlterFunctionType::ADD_FUNCTION_OVERLOADS, move(schema_p), move(name_p), if_exists_p),
+      new_overloads(move(new_overloads_p)) {
+}
+AddFunctionOverloadInfo::~AddFunctionOverloadInfo() {
+}
+
+unique_ptr<AlterInfo> AddFunctionOverloadInfo::Copy() const {
+	return make_unique_base<AlterInfo, AddFunctionOverloadInfo>(schema, name, if_exists, new_overloads);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+namespace duckdb {
+
+AlterInfo::AlterInfo(AlterType type, string schema_p, string name_p, bool if_exists)
+    : type(type), if_exists(if_exists), schema(move(schema_p)), name(move(name_p)) {
 }
 
 AlterInfo::~AlterInfo() {
@@ -14816,6 +18442,9 @@ unique_ptr<AlterInfo> AlterInfo::Deserialize(Deserializer &source) {
 	case AlterType::ALTER_VIEW:
 		result = AlterViewInfo::Deserialize(reader);
 		break;
+	case AlterType::ALTER_FUNCTION:
+		result = AlterFunctionInfo::Deserialize(reader);
+		break;
 	default:
 		throw SerializationException("Unknown alter type for deserialization!");
 	}
@@ -14824,12 +18453,20 @@ unique_ptr<AlterInfo> AlterInfo::Deserialize(Deserializer &source) {
 	return result;
 }
 
+} // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+
 //===--------------------------------------------------------------------===//
 // ChangeOwnershipInfo
 //===--------------------------------------------------------------------===//
 ChangeOwnershipInfo::ChangeOwnershipInfo(CatalogType entry_catalog_type, string entry_schema_p, string entry_name_p,
-                                         string owner_schema_p, string owner_name_p)
-    : AlterInfo(AlterType::CHANGE_OWNERSHIP, move(entry_schema_p), move(entry_name_p)),
+                                         string owner_schema_p, string owner_name_p, bool if_exists)
+    : AlterInfo(AlterType::CHANGE_OWNERSHIP, move(entry_schema_p), move(entry_name_p), if_exists),
       entry_catalog_type(entry_catalog_type), owner_schema(move(owner_schema_p)), owner_name(move(owner_name_p)) {
 }
 
@@ -14838,7 +18475,8 @@ CatalogType ChangeOwnershipInfo::GetCatalogType() const {
 }
 
 unique_ptr<AlterInfo> ChangeOwnershipInfo::Copy() const {
-	return make_unique_base<AlterInfo, ChangeOwnershipInfo>(entry_catalog_type, schema, name, owner_schema, owner_name);
+	return make_unique_base<AlterInfo, ChangeOwnershipInfo>(entry_catalog_type, schema, name, owner_schema, owner_name,
+	                                                        if_exists);
 }
 
 void ChangeOwnershipInfo::Serialize(FieldWriter &writer) const {
@@ -14848,8 +18486,8 @@ void ChangeOwnershipInfo::Serialize(FieldWriter &writer) const {
 //===--------------------------------------------------------------------===//
 // AlterTableInfo
 //===--------------------------------------------------------------------===//
-AlterTableInfo::AlterTableInfo(AlterTableType type, string schema_p, string table_p)
-    : AlterInfo(AlterType::ALTER_TABLE, move(move(schema_p)), move(table_p)), alter_table_type(type) {
+AlterTableInfo::AlterTableInfo(AlterTableType type, string schema_p, string table_p, bool if_exists)
+    : AlterInfo(AlterType::ALTER_TABLE, move(move(schema_p)), move(table_p), if_exists), alter_table_type(type) {
 }
 AlterTableInfo::~AlterTableInfo() {
 }
@@ -14862,6 +18500,7 @@ void AlterTableInfo::Serialize(FieldWriter &writer) const {
 	writer.WriteField<AlterTableType>(alter_table_type);
 	writer.WriteString(schema);
 	writer.WriteString(name);
+	writer.WriteField(if_exists);
 	SerializeAlterTable(writer);
 }
 
@@ -14869,22 +18508,28 @@ unique_ptr<AlterInfo> AlterTableInfo::Deserialize(FieldReader &reader) {
 	auto type = reader.ReadRequired<AlterTableType>();
 	auto schema = reader.ReadRequired<string>();
 	auto table = reader.ReadRequired<string>();
+	auto if_exists = reader.ReadRequired<bool>();
+
 	unique_ptr<AlterTableInfo> info;
 	switch (type) {
 	case AlterTableType::RENAME_COLUMN:
-		return RenameColumnInfo::Deserialize(reader, schema, table);
+		return RenameColumnInfo::Deserialize(reader, schema, table, if_exists);
 	case AlterTableType::RENAME_TABLE:
-		return RenameTableInfo::Deserialize(reader, schema, table);
+		return RenameTableInfo::Deserialize(reader, schema, table, if_exists);
 	case AlterTableType::ADD_COLUMN:
-		return AddColumnInfo::Deserialize(reader, schema, table);
+		return AddColumnInfo::Deserialize(reader, schema, table, if_exists);
 	case AlterTableType::REMOVE_COLUMN:
-		return RemoveColumnInfo::Deserialize(reader, schema, table);
+		return RemoveColumnInfo::Deserialize(reader, schema, table, if_exists);
 	case AlterTableType::ALTER_COLUMN_TYPE:
-		return ChangeColumnTypeInfo::Deserialize(reader, schema, table);
+		return ChangeColumnTypeInfo::Deserialize(reader, schema, table, if_exists);
 	case AlterTableType::SET_DEFAULT:
-		return SetDefaultInfo::Deserialize(reader, schema, table);
+		return SetDefaultInfo::Deserialize(reader, schema, table, if_exists);
 	case AlterTableType::FOREIGN_KEY_CONSTRAINT:
-		return AlterForeignKeyInfo::Deserialize(reader, schema, table);
+		return AlterForeignKeyInfo::Deserialize(reader, schema, table, if_exists);
+	case AlterTableType::SET_NOT_NULL:
+		return SetNotNullInfo::Deserialize(reader, schema, table, if_exists);
+	case AlterTableType::DROP_NOT_NULL:
+		return DropNotNullInfo::Deserialize(reader, schema, table, if_exists);
 	default:
 		throw SerializationException("Unknown alter table type for deserialization!");
 	}
@@ -14893,15 +18538,16 @@ unique_ptr<AlterInfo> AlterTableInfo::Deserialize(FieldReader &reader) {
 //===--------------------------------------------------------------------===//
 // RenameColumnInfo
 //===--------------------------------------------------------------------===//
-RenameColumnInfo::RenameColumnInfo(string schema_p, string table_p, string old_name_p, string new_name_p)
-    : AlterTableInfo(AlterTableType::RENAME_COLUMN, move(schema_p), move(table_p)), old_name(move(old_name_p)),
-      new_name(move(new_name_p)) {
+RenameColumnInfo::RenameColumnInfo(string schema_p, string table_p, bool if_exists_p, string old_name_p,
+                                   string new_name_p)
+    : AlterTableInfo(AlterTableType::RENAME_COLUMN, move(schema_p), move(table_p), if_exists_p),
+      old_name(move(old_name_p)), new_name(move(new_name_p)) {
 }
 RenameColumnInfo::~RenameColumnInfo() {
 }
 
 unique_ptr<AlterInfo> RenameColumnInfo::Copy() const {
-	return make_unique_base<AlterInfo, RenameColumnInfo>(schema, name, old_name, new_name);
+	return make_unique_base<AlterInfo, RenameColumnInfo>(schema, name, if_exists, old_name, new_name);
 }
 
 void RenameColumnInfo::SerializeAlterTable(FieldWriter &writer) const {
@@ -14909,96 +18555,104 @@ void RenameColumnInfo::SerializeAlterTable(FieldWriter &writer) const {
 	writer.WriteString(new_name);
 }
 
-unique_ptr<AlterInfo> RenameColumnInfo::Deserialize(FieldReader &reader, string schema, string table) {
+unique_ptr<AlterInfo> RenameColumnInfo::Deserialize(FieldReader &reader, string schema, string table, bool if_exists) {
 	auto old_name = reader.ReadRequired<string>();
 	auto new_name = reader.ReadRequired<string>();
-	return make_unique<RenameColumnInfo>(move(schema), move(table), old_name, new_name);
+	return make_unique<RenameColumnInfo>(move(schema), move(table), if_exists, old_name, new_name);
 }
 
 //===--------------------------------------------------------------------===//
 // RenameTableInfo
 //===--------------------------------------------------------------------===//
-RenameTableInfo::RenameTableInfo(string schema_p, string table_p, string new_name_p)
-    : AlterTableInfo(AlterTableType::RENAME_TABLE, move(schema_p), move(table_p)), new_table_name(move(new_name_p)) {
+RenameTableInfo::RenameTableInfo(string schema_p, string table_p, bool if_exists, string new_name_p)
+    : AlterTableInfo(AlterTableType::RENAME_TABLE, move(schema_p), move(table_p), if_exists),
+      new_table_name(move(new_name_p)) {
 }
 RenameTableInfo::~RenameTableInfo() {
 }
 
 unique_ptr<AlterInfo> RenameTableInfo::Copy() const {
-	return make_unique_base<AlterInfo, RenameTableInfo>(schema, name, new_table_name);
+	return make_unique_base<AlterInfo, RenameTableInfo>(schema, name, if_exists, new_table_name);
 }
 
 void RenameTableInfo::SerializeAlterTable(FieldWriter &writer) const {
 	writer.WriteString(new_table_name);
 }
 
-unique_ptr<AlterInfo> RenameTableInfo::Deserialize(FieldReader &reader, string schema, string table) {
+unique_ptr<AlterInfo> RenameTableInfo::Deserialize(FieldReader &reader, string schema, string table, bool if_exists) {
 	auto new_name = reader.ReadRequired<string>();
-	return make_unique<RenameTableInfo>(move(schema), move(table), new_name);
+	return make_unique<RenameTableInfo>(move(schema), move(table), if_exists, new_name);
 }
 
 //===--------------------------------------------------------------------===//
 // AddColumnInfo
 //===--------------------------------------------------------------------===//
-AddColumnInfo::AddColumnInfo(string schema_p, string table_p, ColumnDefinition new_column)
-    : AlterTableInfo(AlterTableType::ADD_COLUMN, move(schema_p), move(table_p)), new_column(move(new_column)) {
+AddColumnInfo::AddColumnInfo(string schema_p, string table_p, bool if_exists_p, ColumnDefinition new_column,
+                             bool if_column_not_exists)
+    : AlterTableInfo(AlterTableType::ADD_COLUMN, move(schema_p), move(table_p), if_exists_p),
+      new_column(move(new_column)), if_column_not_exists(if_column_not_exists) {
 }
+
 AddColumnInfo::~AddColumnInfo() {
 }
 
 unique_ptr<AlterInfo> AddColumnInfo::Copy() const {
-	return make_unique_base<AlterInfo, AddColumnInfo>(schema, name, new_column.Copy());
+	return make_unique_base<AlterInfo, AddColumnInfo>(schema, name, if_exists, new_column.Copy(), if_column_not_exists);
 }
 
 void AddColumnInfo::SerializeAlterTable(FieldWriter &writer) const {
 	writer.WriteSerializable(new_column);
+	writer.WriteField<bool>(if_column_not_exists);
 }
 
-unique_ptr<AlterInfo> AddColumnInfo::Deserialize(FieldReader &reader, string schema, string table) {
+unique_ptr<AlterInfo> AddColumnInfo::Deserialize(FieldReader &reader, string schema, string table, bool if_exists) {
 	auto new_column = reader.ReadRequiredSerializable<ColumnDefinition, ColumnDefinition>();
-	return make_unique<AddColumnInfo>(move(schema), move(table), move(new_column));
+	auto if_column_not_exists = reader.ReadRequired<bool>();
+	return make_unique<AddColumnInfo>(move(schema), move(table), if_exists, move(new_column), if_column_not_exists);
 }
 
 //===--------------------------------------------------------------------===//
 // RemoveColumnInfo
 //===--------------------------------------------------------------------===//
-RemoveColumnInfo::RemoveColumnInfo(string schema, string table, string removed_column, bool if_exists, bool cascade)
-    : AlterTableInfo(AlterTableType::REMOVE_COLUMN, move(schema), move(table)), removed_column(move(removed_column)),
-      if_exists(if_exists), cascade(cascade) {
+RemoveColumnInfo::RemoveColumnInfo(string schema, string table, bool if_exists, string removed_column,
+                                   bool if_column_exists, bool cascade)
+    : AlterTableInfo(AlterTableType::REMOVE_COLUMN, move(schema), move(table), if_exists),
+      removed_column(move(removed_column)), if_column_exists(if_column_exists), cascade(cascade) {
 }
 RemoveColumnInfo::~RemoveColumnInfo() {
 }
 
 unique_ptr<AlterInfo> RemoveColumnInfo::Copy() const {
-	return make_unique_base<AlterInfo, RemoveColumnInfo>(schema, name, removed_column, if_exists, cascade);
+	return make_unique_base<AlterInfo, RemoveColumnInfo>(schema, name, if_exists, removed_column, if_column_exists,
+	                                                     cascade);
 }
 
 void RemoveColumnInfo::SerializeAlterTable(FieldWriter &writer) const {
 	writer.WriteString(removed_column);
-	writer.WriteField<bool>(if_exists);
+	writer.WriteField<bool>(if_column_exists);
 	writer.WriteField<bool>(cascade);
 }
 
-unique_ptr<AlterInfo> RemoveColumnInfo::Deserialize(FieldReader &reader, string schema, string table) {
+unique_ptr<AlterInfo> RemoveColumnInfo::Deserialize(FieldReader &reader, string schema, string table, bool if_exists) {
 	auto new_name = reader.ReadRequired<string>();
-	auto if_exists = reader.ReadRequired<bool>();
+	auto if_column_exists = reader.ReadRequired<bool>();
 	auto cascade = reader.ReadRequired<bool>();
-	return make_unique<RemoveColumnInfo>(move(schema), move(table), new_name, if_exists, cascade);
+	return make_unique<RemoveColumnInfo>(move(schema), move(table), if_exists, new_name, if_column_exists, cascade);
 }
 
 //===--------------------------------------------------------------------===//
 // ChangeColumnTypeInfo
 //===--------------------------------------------------------------------===//
-ChangeColumnTypeInfo::ChangeColumnTypeInfo(string schema_p, string table_p, string column_name, LogicalType target_type,
-                                           unique_ptr<ParsedExpression> expression)
-    : AlterTableInfo(AlterTableType::ALTER_COLUMN_TYPE, move(schema_p), move(table_p)), column_name(move(column_name)),
-      target_type(move(target_type)), expression(move(expression)) {
+ChangeColumnTypeInfo::ChangeColumnTypeInfo(string schema_p, string table_p, bool if_exists_p, string column_name,
+                                           LogicalType target_type, unique_ptr<ParsedExpression> expression)
+    : AlterTableInfo(AlterTableType::ALTER_COLUMN_TYPE, move(schema_p), move(table_p), if_exists_p),
+      column_name(move(column_name)), target_type(move(target_type)), expression(move(expression)) {
 }
 ChangeColumnTypeInfo::~ChangeColumnTypeInfo() {
 }
 
 unique_ptr<AlterInfo> ChangeColumnTypeInfo::Copy() const {
-	return make_unique_base<AlterInfo, ChangeColumnTypeInfo>(schema, name, column_name, target_type,
+	return make_unique_base<AlterInfo, ChangeColumnTypeInfo>(schema, name, if_exists, column_name, target_type,
 	                                                         expression->Copy());
 }
 
@@ -15008,27 +18662,28 @@ void ChangeColumnTypeInfo::SerializeAlterTable(FieldWriter &writer) const {
 	writer.WriteOptional(expression);
 }
 
-unique_ptr<AlterInfo> ChangeColumnTypeInfo::Deserialize(FieldReader &reader, string schema, string table) {
+unique_ptr<AlterInfo> ChangeColumnTypeInfo::Deserialize(FieldReader &reader, string schema, string table,
+                                                        bool if_exists) {
 	auto column_name = reader.ReadRequired<string>();
 	auto target_type = reader.ReadRequiredSerializable<LogicalType, LogicalType>();
 	auto expression = reader.ReadOptional<ParsedExpression>(nullptr);
-	return make_unique<ChangeColumnTypeInfo>(move(schema), move(table), move(column_name), move(target_type),
+	return make_unique<ChangeColumnTypeInfo>(move(schema), move(table), if_exists, move(column_name), move(target_type),
 	                                         move(expression));
 }
 
 //===--------------------------------------------------------------------===//
 // SetDefaultInfo
 //===--------------------------------------------------------------------===//
-SetDefaultInfo::SetDefaultInfo(string schema_p, string table_p, string column_name_p,
+SetDefaultInfo::SetDefaultInfo(string schema_p, string table_p, bool if_exists_p, string column_name_p,
                                unique_ptr<ParsedExpression> new_default)
-    : AlterTableInfo(AlterTableType::SET_DEFAULT, move(schema_p), move(table_p)), column_name(move(column_name_p)),
-      expression(move(new_default)) {
+    : AlterTableInfo(AlterTableType::SET_DEFAULT, move(schema_p), move(table_p), if_exists_p),
+      column_name(move(column_name_p)), expression(move(new_default)) {
 }
 SetDefaultInfo::~SetDefaultInfo() {
 }
 
 unique_ptr<AlterInfo> SetDefaultInfo::Copy() const {
-	return make_unique_base<AlterInfo, SetDefaultInfo>(schema, name, column_name,
+	return make_unique_base<AlterInfo, SetDefaultInfo>(schema, name, if_exists, column_name,
 	                                                   expression ? expression->Copy() : nullptr);
 }
 
@@ -15037,55 +18692,103 @@ void SetDefaultInfo::SerializeAlterTable(FieldWriter &writer) const {
 	writer.WriteOptional(expression);
 }
 
-unique_ptr<AlterInfo> SetDefaultInfo::Deserialize(FieldReader &reader, string schema, string table) {
+unique_ptr<AlterInfo> SetDefaultInfo::Deserialize(FieldReader &reader, string schema, string table, bool if_exists) {
 	auto column_name = reader.ReadRequired<string>();
 	auto new_default = reader.ReadOptional<ParsedExpression>(nullptr);
-	return make_unique<SetDefaultInfo>(move(schema), move(table), move(column_name), move(new_default));
+	return make_unique<SetDefaultInfo>(move(schema), move(table), if_exists, move(column_name), move(new_default));
+}
+
+//===--------------------------------------------------------------------===//
+// SetNotNullInfo
+//===--------------------------------------------------------------------===//
+SetNotNullInfo::SetNotNullInfo(string schema_p, string table_p, bool if_exists_p, string column_name_p)
+    : AlterTableInfo(AlterTableType::SET_NOT_NULL, move(schema_p), move(table_p), if_exists_p),
+      column_name(move(column_name_p)) {
+}
+SetNotNullInfo::~SetNotNullInfo() {
+}
+
+unique_ptr<AlterInfo> SetNotNullInfo::Copy() const {
+	return make_unique_base<AlterInfo, SetNotNullInfo>(schema, name, if_exists, column_name);
+}
+
+void SetNotNullInfo::SerializeAlterTable(FieldWriter &writer) const {
+	writer.WriteString(column_name);
+}
+
+unique_ptr<AlterInfo> SetNotNullInfo::Deserialize(FieldReader &reader, string schema, string table, bool if_exists) {
+	auto column_name = reader.ReadRequired<string>();
+	return make_unique<SetNotNullInfo>(move(schema), move(table), if_exists, move(column_name));
+}
+
+//===--------------------------------------------------------------------===//
+// DropNotNullInfo
+//===--------------------------------------------------------------------===//
+DropNotNullInfo::DropNotNullInfo(string schema_p, string table_p, bool if_exists_p, string column_name_p)
+    : AlterTableInfo(AlterTableType::DROP_NOT_NULL, move(schema_p), move(table_p), if_exists_p),
+      column_name(move(column_name_p)) {
+}
+DropNotNullInfo::~DropNotNullInfo() {
+}
+
+unique_ptr<AlterInfo> DropNotNullInfo::Copy() const {
+	return make_unique_base<AlterInfo, DropNotNullInfo>(schema, name, if_exists, column_name);
+}
+
+void DropNotNullInfo::SerializeAlterTable(FieldWriter &writer) const {
+	writer.WriteString(column_name);
+}
+
+unique_ptr<AlterInfo> DropNotNullInfo::Deserialize(FieldReader &reader, string schema, string table, bool if_exists) {
+	auto column_name = reader.ReadRequired<string>();
+	return make_unique<DropNotNullInfo>(move(schema), move(table), if_exists, move(column_name));
 }
 
 //===--------------------------------------------------------------------===//
 // AlterForeignKeyInfo
 //===--------------------------------------------------------------------===//
-AlterForeignKeyInfo::AlterForeignKeyInfo(string schema_p, string table_p, string fk_table, vector<string> pk_columns,
-                                         vector<string> fk_columns, vector<idx_t> pk_keys, vector<idx_t> fk_keys,
+AlterForeignKeyInfo::AlterForeignKeyInfo(string schema_p, string table_p, bool if_exists_p, string fk_table,
+                                         vector<string> pk_columns, vector<string> fk_columns,
+                                         vector<PhysicalIndex> pk_keys, vector<PhysicalIndex> fk_keys,
                                          AlterForeignKeyType type_p)
-    : AlterTableInfo(AlterTableType::FOREIGN_KEY_CONSTRAINT, move(schema_p), move(table_p)), fk_table(move(fk_table)),
-      pk_columns(move(pk_columns)), fk_columns(move(fk_columns)), pk_keys(move(pk_keys)), fk_keys(move(fk_keys)),
-      type(type_p) {
+    : AlterTableInfo(AlterTableType::FOREIGN_KEY_CONSTRAINT, move(schema_p), move(table_p), if_exists_p),
+      fk_table(move(fk_table)), pk_columns(move(pk_columns)), fk_columns(move(fk_columns)), pk_keys(move(pk_keys)),
+      fk_keys(move(fk_keys)), type(type_p) {
 }
 AlterForeignKeyInfo::~AlterForeignKeyInfo() {
 }
 
 unique_ptr<AlterInfo> AlterForeignKeyInfo::Copy() const {
-	return make_unique_base<AlterInfo, AlterForeignKeyInfo>(schema, name, fk_table, pk_columns, fk_columns, pk_keys,
-	                                                        fk_keys, type);
+	return make_unique_base<AlterInfo, AlterForeignKeyInfo>(schema, name, if_exists, fk_table, pk_columns, fk_columns,
+	                                                        pk_keys, fk_keys, type);
 }
 
 void AlterForeignKeyInfo::SerializeAlterTable(FieldWriter &writer) const {
 	writer.WriteString(fk_table);
 	writer.WriteList<string>(pk_columns);
 	writer.WriteList<string>(fk_columns);
-	writer.WriteList<idx_t>(pk_keys);
-	writer.WriteList<idx_t>(fk_keys);
+	writer.WriteIndexList<PhysicalIndex>(pk_keys);
+	writer.WriteIndexList<PhysicalIndex>(fk_keys);
 	writer.WriteField<AlterForeignKeyType>(type);
 }
 
-unique_ptr<AlterInfo> AlterForeignKeyInfo::Deserialize(FieldReader &reader, string schema, string table) {
+unique_ptr<AlterInfo> AlterForeignKeyInfo::Deserialize(FieldReader &reader, string schema, string table,
+                                                       bool if_exists) {
 	auto fk_table = reader.ReadRequired<string>();
 	auto pk_columns = reader.ReadRequiredList<string>();
 	auto fk_columns = reader.ReadRequiredList<string>();
-	auto pk_keys = reader.ReadRequiredList<idx_t>();
-	auto fk_keys = reader.ReadRequiredList<idx_t>();
+	auto pk_keys = reader.ReadRequiredIndexList<PhysicalIndex>();
+	auto fk_keys = reader.ReadRequiredIndexList<PhysicalIndex>();
 	auto type = reader.ReadRequired<AlterForeignKeyType>();
-	return make_unique<AlterForeignKeyInfo>(move(schema), move(table), move(fk_table), move(pk_columns),
+	return make_unique<AlterForeignKeyInfo>(move(schema), move(table), if_exists, move(fk_table), move(pk_columns),
 	                                        move(fk_columns), move(pk_keys), move(fk_keys), type);
 }
 
 //===--------------------------------------------------------------------===//
 // Alter View
 //===--------------------------------------------------------------------===//
-AlterViewInfo::AlterViewInfo(AlterViewType type, string schema_p, string view_p)
-    : AlterInfo(AlterType::ALTER_VIEW, move(schema_p), move(view_p)), alter_view_type(type) {
+AlterViewInfo::AlterViewInfo(AlterViewType type, string schema_p, string view_p, bool if_exists_p)
+    : AlterInfo(AlterType::ALTER_VIEW, move(schema_p), move(view_p), if_exists_p), alter_view_type(type) {
 }
 AlterViewInfo::~AlterViewInfo() {
 }
@@ -15098,6 +18801,7 @@ void AlterViewInfo::Serialize(FieldWriter &writer) const {
 	writer.WriteField<AlterViewType>(alter_view_type);
 	writer.WriteString(schema);
 	writer.WriteString(name);
+	writer.WriteField<bool>(if_exists);
 	SerializeAlterView(writer);
 }
 
@@ -15105,10 +18809,11 @@ unique_ptr<AlterInfo> AlterViewInfo::Deserialize(FieldReader &reader) {
 	auto type = reader.ReadRequired<AlterViewType>();
 	auto schema = reader.ReadRequired<string>();
 	auto view = reader.ReadRequired<string>();
+	auto if_exists = reader.ReadRequired<bool>();
 	unique_ptr<AlterViewInfo> info;
 	switch (type) {
 	case AlterViewType::RENAME_VIEW:
-		return RenameViewInfo::Deserialize(reader, schema, view);
+		return RenameViewInfo::Deserialize(reader, schema, view, if_exists);
 	default:
 		throw SerializationException("Unknown alter view type for deserialization!");
 	}
@@ -15117,24 +18822,228 @@ unique_ptr<AlterInfo> AlterViewInfo::Deserialize(FieldReader &reader) {
 //===--------------------------------------------------------------------===//
 // RenameViewInfo
 //===--------------------------------------------------------------------===//
-RenameViewInfo::RenameViewInfo(string schema_p, string view_p, string new_name_p)
-    : AlterViewInfo(AlterViewType::RENAME_VIEW, move(schema_p), move(view_p)), new_view_name(move(new_name_p)) {
+RenameViewInfo::RenameViewInfo(string schema_p, string view_p, bool if_exists_p, string new_name_p)
+    : AlterViewInfo(AlterViewType::RENAME_VIEW, move(schema_p), move(view_p), if_exists_p),
+      new_view_name(move(new_name_p)) {
 }
 RenameViewInfo::~RenameViewInfo() {
 }
 
 unique_ptr<AlterInfo> RenameViewInfo::Copy() const {
-	return make_unique_base<AlterInfo, RenameViewInfo>(schema, name, new_view_name);
+	return make_unique_base<AlterInfo, RenameViewInfo>(schema, name, if_exists, new_view_name);
 }
 
 void RenameViewInfo::SerializeAlterView(FieldWriter &writer) const {
 	writer.WriteString(new_view_name);
 }
 
-unique_ptr<AlterInfo> RenameViewInfo::Deserialize(FieldReader &reader, string schema, string view) {
+unique_ptr<AlterInfo> RenameViewInfo::Deserialize(FieldReader &reader, string schema, string view, bool if_exists) {
 	auto new_name = reader.ReadRequired<string>();
-	return make_unique<RenameViewInfo>(move(schema), move(view), new_name);
+	return make_unique<RenameViewInfo>(move(schema), move(view), if_exists, new_name);
 }
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+unique_ptr<CreateInfo> CreateIndexInfo::Copy() const {
+
+	auto result = make_unique<CreateIndexInfo>();
+	CopyProperties(*result);
+
+	result->index_type = index_type;
+	result->index_name = index_name;
+	result->constraint_type = constraint_type;
+	result->table = unique_ptr_cast<TableRef, BaseTableRef>(table->Copy());
+	for (auto &expr : expressions) {
+		result->expressions.push_back(expr->Copy());
+	}
+
+	result->scan_types = scan_types;
+	result->names = names;
+	result->column_ids = column_ids;
+	return move(result);
+}
+
+void CreateIndexInfo::SerializeInternal(Serializer &serializer) const {
+
+	FieldWriter writer(serializer);
+	writer.WriteField(index_type);
+	writer.WriteString(index_name);
+	writer.WriteField(constraint_type);
+
+	writer.WriteSerializableList<ParsedExpression>(expressions);
+	writer.WriteSerializableList<ParsedExpression>(parsed_expressions);
+
+	writer.WriteRegularSerializableList(scan_types);
+	writer.WriteList<string>(names);
+	writer.WriteList<column_t>(column_ids);
+
+	writer.Finalize();
+}
+
+unique_ptr<CreateIndexInfo> CreateIndexInfo::Deserialize(Deserializer &deserializer) {
+
+	auto result = make_unique<CreateIndexInfo>();
+	result->DeserializeBase(deserializer);
+
+	FieldReader reader(deserializer);
+	result->index_type = reader.ReadRequired<IndexType>();
+	result->index_name = reader.ReadRequired<string>();
+	result->constraint_type = reader.ReadRequired<IndexConstraintType>();
+
+	result->expressions = reader.ReadRequiredSerializableList<ParsedExpression>();
+	result->parsed_expressions = reader.ReadRequiredSerializableList<ParsedExpression>();
+
+	result->scan_types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+	result->names = reader.ReadRequiredList<string>();
+	result->column_ids = reader.ReadRequiredList<column_t>();
+
+	reader.Finalize();
+	return result;
+}
+} // namespace duckdb
+
+
+
+
+
+
+
+
+namespace duckdb {
+void CreateInfo::DeserializeBase(Deserializer &deserializer) {
+	this->schema = deserializer.Read<string>();
+	this->on_conflict = deserializer.Read<OnCreateConflict>();
+	this->temporary = deserializer.Read<bool>();
+	this->internal = deserializer.Read<bool>();
+	this->sql = deserializer.Read<string>();
+}
+
+void CreateInfo::Serialize(Serializer &serializer) const {
+	serializer.Write(type);
+	serializer.WriteString(schema);
+	serializer.Write(on_conflict);
+	serializer.Write(temporary);
+	serializer.Write(internal);
+	serializer.WriteString(sql);
+	SerializeInternal(serializer);
+}
+
+unique_ptr<CreateInfo> CreateInfo::Deserialize(Deserializer &deserializer) {
+	auto type = deserializer.Read<CatalogType>();
+	switch (type) {
+	case CatalogType::INDEX_ENTRY:
+		return CreateIndexInfo::Deserialize(deserializer);
+	case CatalogType::TABLE_ENTRY:
+		return CreateTableInfo::Deserialize(deserializer);
+	case CatalogType::SCHEMA_ENTRY:
+		return CreateSchemaInfo::Deserialize(deserializer);
+	case CatalogType::VIEW_ENTRY:
+		return CreateViewInfo::Deserialize(deserializer);
+	default:
+		throw NotImplementedException("Cannot deserialize '%s'", CatalogTypeToString(type));
+	}
+}
+
+unique_ptr<CreateInfo> CreateInfo::Deserialize(Deserializer &source, PlanDeserializationState &state) {
+	return Deserialize(source);
+}
+
+void CreateInfo::CopyProperties(CreateInfo &other) const {
+	other.type = type;
+	other.schema = schema;
+	other.on_conflict = on_conflict;
+	other.temporary = temporary;
+	other.internal = internal;
+	other.sql = sql;
+}
+
+unique_ptr<AlterInfo> CreateInfo::GetAlterInfo() const {
+	throw NotImplementedException("GetAlterInfo not implemented for this type");
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+CreateScalarFunctionInfo::CreateScalarFunctionInfo(ScalarFunction function)
+    : CreateFunctionInfo(CatalogType::SCALAR_FUNCTION_ENTRY), functions(function.name) {
+	name = function.name;
+	functions.AddFunction(move(function));
+}
+CreateScalarFunctionInfo::CreateScalarFunctionInfo(ScalarFunctionSet set)
+    : CreateFunctionInfo(CatalogType::SCALAR_FUNCTION_ENTRY), functions(move(set)) {
+	name = functions.name;
+	for (auto &func : functions.functions) {
+		func.name = functions.name;
+	}
+}
+
+unique_ptr<CreateInfo> CreateScalarFunctionInfo::Copy() const {
+	ScalarFunctionSet set(name);
+	set.functions = functions.functions;
+	auto result = make_unique<CreateScalarFunctionInfo>(move(set));
+	CopyProperties(*result);
+	return move(result);
+}
+
+unique_ptr<AlterInfo> CreateScalarFunctionInfo::GetAlterInfo() const {
+	return make_unique_base<AlterInfo, AddFunctionOverloadInfo>(schema, name, true, functions);
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+CreateTableInfo::CreateTableInfo() : CreateInfo(CatalogType::TABLE_ENTRY, INVALID_SCHEMA) {
+}
+
+CreateTableInfo::CreateTableInfo(string schema_p, string name_p)
+    : CreateInfo(CatalogType::TABLE_ENTRY, move(schema_p)), table(move(name_p)) {
+}
+
+void CreateTableInfo::SerializeInternal(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteString(table);
+	columns.Serialize(writer);
+	writer.WriteSerializableList(constraints);
+	writer.WriteOptional(query);
+	writer.Finalize();
+}
+
+unique_ptr<CreateTableInfo> CreateTableInfo::Deserialize(Deserializer &deserializer) {
+	auto result = make_unique<CreateTableInfo>();
+	result->DeserializeBase(deserializer);
+
+	FieldReader reader(deserializer);
+	result->table = reader.ReadRequired<string>();
+	result->columns = ColumnList::Deserialize(reader);
+	result->constraints = reader.ReadRequiredSerializableList<Constraint>();
+	result->query = reader.ReadOptional<SelectStatement>(nullptr);
+	reader.Finalize();
+
+	return result;
+}
+
+unique_ptr<CreateInfo> CreateTableInfo::Copy() const {
+	auto result = make_unique<CreateTableInfo>(schema, table);
+	CopyProperties(*result);
+	result->columns = columns.Copy();
+	for (auto &constraint : constraints) {
+		result->constraints.push_back(constraint->Copy());
+	}
+	if (query) {
+		result->query = unique_ptr_cast<SQLStatement, SelectStatement>(query->Copy());
+	}
+	return move(result);
+}
+
 } // namespace duckdb
 
 
@@ -15200,6 +19109,7 @@ bool SampleOptions::Equals(SampleOptions *a, SampleOptions *b) {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -15277,7 +19187,7 @@ bool ParsedExpression::Equals(const BaseExpression *other) const {
 	case ExpressionClass::OPERATOR:
 		return OperatorExpression::Equals((OperatorExpression *)this, (OperatorExpression *)other);
 	case ExpressionClass::PARAMETER:
-		return true;
+		return ParameterExpression::Equals((ParameterExpression *)this, (ParameterExpression *)other);
 	case ExpressionClass::POSITIONAL_REFERENCE:
 		return PositionalReferenceExpression::Equals((PositionalReferenceExpression *)this,
 		                                             (PositionalReferenceExpression *)other);
@@ -15367,7 +19277,8 @@ unique_ptr<ParsedExpression> ParsedExpression::Deserialize(Deserializer &source)
 		result = WindowExpression::Deserialize(type, reader);
 		break;
 	default:
-		throw SerializationException("Unsupported type for expression deserialization!");
+		throw SerializationException("Unsupported type for expression deserialization: '%s'!",
+		                             ExpressionClassToString(expression_class));
 	}
 	result->alias = alias;
 	reader.Finalize();
@@ -15463,7 +19374,7 @@ void ParsedExpressionIterator::EnumerateChildren(
 	case ExpressionClass::LAMBDA: {
 		auto &lambda_expr = (LambdaExpression &)expr;
 		callback(lambda_expr.lhs);
-		callback(lambda_expr.rhs);
+		callback(lambda_expr.expr);
 		break;
 	}
 	case ExpressionClass::OPERATOR: {
@@ -15591,7 +19502,9 @@ void ParsedExpressionIterator::EnumerateTableRefChildren(
 		auto &j_ref = (JoinRef &)ref;
 		EnumerateTableRefChildren(*j_ref.left, callback);
 		EnumerateTableRefChildren(*j_ref.right, callback);
-		callback(j_ref.condition);
+		if (j_ref.condition) {
+			callback(j_ref.condition);
+		}
 		break;
 	}
 	case TableReferenceType::SUBQUERY: {
@@ -15829,12 +19742,12 @@ vector<OrderByNode> Parser::ParseOrderList(const string &select_list, ParserOpti
 	}
 	auto &select = (SelectStatement &)*parser.statements[0];
 	if (select.node->type != QueryNodeType::SELECT_NODE) {
-		throw InternalException("Expected a single SELECT node");
+		throw ParserException("Expected a single SELECT node");
 	}
 	auto &select_node = (SelectNode &)*select.node;
 	if (select_node.modifiers.empty() || select_node.modifiers[0]->type != ResultModifierType::ORDER_MODIFIER ||
 	    select_node.modifiers.size() != 1) {
-		throw InternalException("Expected a single ORDER clause");
+		throw ParserException("Expected a single ORDER clause");
 	}
 	auto &order = (OrderModifier &)*select_node.modifiers[0];
 	return move(order.orders);
@@ -15872,13 +19785,13 @@ vector<vector<unique_ptr<ParsedExpression>>> Parser::ParseValuesList(const strin
 	}
 	auto &select_node = (SelectNode &)*select.node;
 	if (!select_node.from_table || select_node.from_table->type != TableReferenceType::EXPRESSION_LIST) {
-		throw InternalException("Expected a single VALUES statement");
+		throw ParserException("Expected a single VALUES statement");
 	}
 	auto &values_list = (ExpressionListRef &)*select_node.from_table;
 	return move(values_list.values);
 }
 
-vector<ColumnDefinition> Parser::ParseColumnList(const string &column_list, ParserOptions options) {
+ColumnList Parser::ParseColumnList(const string &column_list, ParserOptions options) {
 	string mock_query = "CREATE TABLE blabla (" + column_list + ")";
 	Parser parser(options);
 	parser.ParseQuery(mock_query);
@@ -16293,6 +20206,7 @@ unique_ptr<QueryNode> SelectNode::Deserialize(FieldReader &reader) {
 		}
 		result->groups.grouping_sets.push_back(grouping_set);
 	}
+
 	result->aggregate_handling = reader.ReadRequired<AggregateHandling>();
 	result->having = reader.ReadOptional<ParsedExpression>(nullptr);
 	result->sample = reader.ReadOptional<SampleOptions>(nullptr);
@@ -16301,6 +20215,7 @@ unique_ptr<QueryNode> SelectNode::Deserialize(FieldReader &reader) {
 }
 
 } // namespace duckdb
+
 
 
 
@@ -16321,6 +20236,9 @@ string SetOperationNode::ToString() const {
 	switch (setop_type) {
 	case SetOperationType::UNION:
 		result += is_distinct ? "UNION" : "UNION ALL";
+		break;
+	case SetOperationType::UNION_BY_NAME:
+		result += is_distinct ? "UNION BY NAME" : "UNION ALL BY NAME";
 		break;
 	case SetOperationType::EXCEPT:
 		D_ASSERT(is_distinct);
@@ -16472,7 +20390,7 @@ string QueryNode::ResultModifiersToString() const {
 		} else if (modifier.type == ResultModifierType::LIMIT_PERCENT_MODIFIER) {
 			auto &limit_p_modifier = (LimitPercentModifier &)modifier;
 			if (limit_p_modifier.limit) {
-				result += " LIMIT " + limit_p_modifier.limit->ToString() + " %";
+				result += " LIMIT (" + limit_p_modifier.limit->ToString() + ") %";
 			}
 			if (limit_p_modifier.offset) {
 				result += " OFFSET " + limit_p_modifier.offset->ToString();
@@ -16585,528 +20503,24 @@ unique_ptr<QueryNode> QueryNode::Deserialize(Deserializer &main_source) {
 	return result;
 }
 
-} // namespace duckdb
-
-
-
-
-namespace duckdb {
-
-bool ResultModifier::Equals(const ResultModifier *other) const {
-	if (!other) {
-		return false;
-	}
-	return type == other->type;
-}
-
-void ResultModifier::Serialize(Serializer &serializer) const {
-	FieldWriter writer(serializer);
-	writer.WriteField<ResultModifierType>(type);
-	Serialize(writer);
-	writer.Finalize();
-}
-
-unique_ptr<ResultModifier> ResultModifier::Deserialize(Deserializer &source) {
-	FieldReader reader(source);
-	auto type = reader.ReadRequired<ResultModifierType>();
-
-	unique_ptr<ResultModifier> result;
-	switch (type) {
-	case ResultModifierType::LIMIT_MODIFIER:
-		result = LimitModifier::Deserialize(reader);
-		break;
-	case ResultModifierType::ORDER_MODIFIER:
-		result = OrderModifier::Deserialize(reader);
-		break;
-	case ResultModifierType::DISTINCT_MODIFIER:
-		result = DistinctModifier::Deserialize(reader);
-		break;
-	case ResultModifierType::LIMIT_PERCENT_MODIFIER:
-		result = LimitPercentModifier::Deserialize(reader);
-		break;
-	default:
-		throw InternalException("Unrecognized ResultModifierType for Deserialization");
-	}
-	reader.Finalize();
-	return result;
-}
-
-bool LimitModifier::Equals(const ResultModifier *other_p) const {
-	if (!ResultModifier::Equals(other_p)) {
-		return false;
-	}
-	auto &other = (LimitModifier &)*other_p;
-	if (!BaseExpression::Equals(limit.get(), other.limit.get())) {
-		return false;
-	}
-	if (!BaseExpression::Equals(offset.get(), other.offset.get())) {
-		return false;
-	}
-	return true;
-}
-
-unique_ptr<ResultModifier> LimitModifier::Copy() const {
-	auto copy = make_unique<LimitModifier>();
-	if (limit) {
-		copy->limit = limit->Copy();
-	}
-	if (offset) {
-		copy->offset = offset->Copy();
-	}
-	return move(copy);
-}
-
-void LimitModifier::Serialize(FieldWriter &writer) const {
-	writer.WriteOptional(limit);
-	writer.WriteOptional(offset);
-}
-
-unique_ptr<ResultModifier> LimitModifier::Deserialize(FieldReader &reader) {
-	auto mod = make_unique<LimitModifier>();
-	mod->limit = reader.ReadOptional<ParsedExpression>(nullptr);
-	mod->offset = reader.ReadOptional<ParsedExpression>(nullptr);
-	return move(mod);
-}
-
-bool DistinctModifier::Equals(const ResultModifier *other_p) const {
-	if (!ResultModifier::Equals(other_p)) {
-		return false;
-	}
-	auto &other = (DistinctModifier &)*other_p;
-	if (!ExpressionUtil::ListEquals(distinct_on_targets, other.distinct_on_targets)) {
-		return false;
-	}
-	return true;
-}
-
-unique_ptr<ResultModifier> DistinctModifier::Copy() const {
-	auto copy = make_unique<DistinctModifier>();
-	for (auto &expr : distinct_on_targets) {
-		copy->distinct_on_targets.push_back(expr->Copy());
-	}
-	return move(copy);
-}
-
-void DistinctModifier::Serialize(FieldWriter &writer) const {
-	writer.WriteSerializableList(distinct_on_targets);
-}
-
-unique_ptr<ResultModifier> DistinctModifier::Deserialize(FieldReader &reader) {
-	auto mod = make_unique<DistinctModifier>();
-	mod->distinct_on_targets = reader.ReadRequiredSerializableList<ParsedExpression>();
-	return move(mod);
-}
-
-bool OrderModifier::Equals(const ResultModifier *other_p) const {
-	if (!ResultModifier::Equals(other_p)) {
-		return false;
-	}
-	auto &other = (OrderModifier &)*other_p;
-	if (orders.size() != other.orders.size()) {
-		return false;
-	}
-	for (idx_t i = 0; i < orders.size(); i++) {
-		if (orders[i].type != other.orders[i].type) {
-			return false;
-		}
-		if (!BaseExpression::Equals(orders[i].expression.get(), other.orders[i].expression.get())) {
-			return false;
-		}
-	}
-	return true;
-}
-
-unique_ptr<ResultModifier> OrderModifier::Copy() const {
-	auto copy = make_unique<OrderModifier>();
-	for (auto &order : orders) {
-		copy->orders.emplace_back(order.type, order.null_order, order.expression->Copy());
-	}
-	return move(copy);
-}
-
-string OrderByNode::ToString() const {
-	auto str = expression->ToString();
-	switch (type) {
-	case OrderType::ASCENDING:
-		str += " ASC";
-		break;
-	case OrderType::DESCENDING:
-		str += " DESC";
-		break;
-	default:
-		break;
-	}
-
-	switch (null_order) {
-	case OrderByNullType::NULLS_FIRST:
-		str += " NULLS FIRST";
-		break;
-	case OrderByNullType::NULLS_LAST:
-		str += " NULLS LAST";
-		break;
-	default:
-		break;
-	}
-	return str;
-}
-
-void OrderByNode::Serialize(Serializer &serializer) const {
-	FieldWriter writer(serializer);
-	writer.WriteField<OrderType>(type);
-	writer.WriteField<OrderByNullType>(null_order);
-	writer.WriteSerializable(*expression);
-	writer.Finalize();
-}
-
-OrderByNode OrderByNode::Deserialize(Deserializer &source) {
-	FieldReader reader(source);
-	auto type = reader.ReadRequired<OrderType>();
-	auto null_order = reader.ReadRequired<OrderByNullType>();
-	auto expression = reader.ReadRequiredSerializable<ParsedExpression>();
-	reader.Finalize();
-	return OrderByNode(type, null_order, move(expression));
-}
-
-void OrderModifier::Serialize(FieldWriter &writer) const {
-	writer.WriteRegularSerializableList(orders);
-}
-
-unique_ptr<ResultModifier> OrderModifier::Deserialize(FieldReader &reader) {
-	auto mod = make_unique<OrderModifier>();
-	mod->orders = reader.ReadRequiredSerializableList<OrderByNode, OrderByNode>();
-	return move(mod);
-}
-
-bool LimitPercentModifier::Equals(const ResultModifier *other_p) const {
-	if (!ResultModifier::Equals(other_p)) {
-		return false;
-	}
-	auto &other = (LimitPercentModifier &)*other_p;
-	if (!BaseExpression::Equals(limit.get(), other.limit.get())) {
-		return false;
-	}
-	if (!BaseExpression::Equals(offset.get(), other.offset.get())) {
-		return false;
-	}
-	return true;
-}
-
-unique_ptr<ResultModifier> LimitPercentModifier::Copy() const {
-	auto copy = make_unique<LimitPercentModifier>();
-	if (limit) {
-		copy->limit = limit->Copy();
-	}
-	if (offset) {
-		copy->offset = offset->Copy();
-	}
-	return move(copy);
-}
-
-void LimitPercentModifier::Serialize(FieldWriter &writer) const {
-	writer.WriteOptional(limit);
-	writer.WriteOptional(offset);
-}
-
-unique_ptr<ResultModifier> LimitPercentModifier::Deserialize(FieldReader &reader) {
-	auto mod = make_unique<LimitPercentModifier>();
-	mod->limit = reader.ReadOptional<ParsedExpression>(nullptr);
-	mod->offset = reader.ReadOptional<ParsedExpression>(nullptr);
-	return move(mod);
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-AlterStatement::AlterStatement() : SQLStatement(StatementType::ALTER_STATEMENT) {
-}
-
-AlterStatement::AlterStatement(const AlterStatement &other) : SQLStatement(other), info(other.info->Copy()) {
-}
-
-unique_ptr<SQLStatement> AlterStatement::Copy() const {
-	return unique_ptr<AlterStatement>(new AlterStatement(*this));
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-CallStatement::CallStatement() : SQLStatement(StatementType::CALL_STATEMENT) {
-}
-
-CallStatement::CallStatement(const CallStatement &other) : SQLStatement(other), function(other.function->Copy()) {
-}
-
-unique_ptr<SQLStatement> CallStatement::Copy() const {
-	return unique_ptr<CallStatement>(new CallStatement(*this));
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-CopyStatement::CopyStatement() : SQLStatement(StatementType::COPY_STATEMENT), info(make_unique<CopyInfo>()) {
-}
-
-CopyStatement::CopyStatement(const CopyStatement &other) : SQLStatement(other), info(other.info->Copy()) {
-	if (other.select_statement) {
-		select_statement = other.select_statement->Copy();
-	}
-}
-
-unique_ptr<SQLStatement> CopyStatement::Copy() const {
-	return unique_ptr<CopyStatement>(new CopyStatement(*this));
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-CreateStatement::CreateStatement() : SQLStatement(StatementType::CREATE_STATEMENT) {
-}
-
-CreateStatement::CreateStatement(const CreateStatement &other) : SQLStatement(other), info(other.info->Copy()) {
-}
-
-unique_ptr<SQLStatement> CreateStatement::Copy() const {
-	return unique_ptr<CreateStatement>(new CreateStatement(*this));
-}
-
-} // namespace duckdb
-
-
-
-namespace duckdb {
-
-DeleteStatement::DeleteStatement() : SQLStatement(StatementType::DELETE_STATEMENT) {
-}
-
-DeleteStatement::DeleteStatement(const DeleteStatement &other) : SQLStatement(other), table(other.table->Copy()) {
-	if (other.condition) {
-		condition = other.condition->Copy();
-	}
-	for (const auto &using_clause : other.using_clauses) {
-		using_clauses.push_back(using_clause->Copy());
-	}
-	cte_map = other.cte_map.Copy();
-}
-
-string DeleteStatement::ToString() const {
-	string result;
-	result = cte_map.ToString();
-	result += "DELETE FROM ";
-	result += table->ToString();
-	if (!using_clauses.empty()) {
-		result += " USING ";
-		for (idx_t i = 0; i < using_clauses.size(); i++) {
-			if (i > 0) {
-				result += ", ";
+void QueryNode::AddDistinct() {
+	// check if we already have a DISTINCT modifier
+	for (idx_t modifier_idx = modifiers.size(); modifier_idx > 0; modifier_idx--) {
+		auto &modifier = *modifiers[modifier_idx - 1];
+		if (modifier.type == ResultModifierType::DISTINCT_MODIFIER) {
+			auto &distinct_modifier = (DistinctModifier &)modifier;
+			if (distinct_modifier.distinct_on_targets.empty()) {
+				// we have a DISTINCT without an ON clause - this distinct does not need to be added
+				return;
 			}
-			result += using_clauses[i]->ToString();
+		} else if (modifier.type == ResultModifierType::LIMIT_MODIFIER ||
+		           modifier.type == ResultModifierType::LIMIT_PERCENT_MODIFIER) {
+			// we encountered a LIMIT or LIMIT PERCENT - these change the result of DISTINCT, so we do need to push a
+			// DISTINCT relation
+			break;
 		}
 	}
-	if (condition) {
-		result += " WHERE " + condition->ToString();
-	}
-
-	if (!returning_list.empty()) {
-		result += " RETURNING ";
-		for (idx_t i = 0; i < returning_list.size(); i++) {
-			if (i > 0) {
-				result += ", ";
-			}
-			result += returning_list[i]->ToString();
-		}
-	}
-	return result;
-}
-
-unique_ptr<SQLStatement> DeleteStatement::Copy() const {
-	return unique_ptr<DeleteStatement>(new DeleteStatement(*this));
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-DropStatement::DropStatement() : SQLStatement(StatementType::DROP_STATEMENT), info(make_unique<DropInfo>()) {
-}
-
-DropStatement::DropStatement(const DropStatement &other) : SQLStatement(other), info(other.info->Copy()) {
-}
-
-unique_ptr<SQLStatement> DropStatement::Copy() const {
-	return unique_ptr<DropStatement>(new DropStatement(*this));
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-ExecuteStatement::ExecuteStatement() : SQLStatement(StatementType::EXECUTE_STATEMENT) {
-}
-
-ExecuteStatement::ExecuteStatement(const ExecuteStatement &other) : SQLStatement(other), name(other.name) {
-	for (const auto &value : other.values) {
-		values.push_back(value->Copy());
-	}
-}
-
-unique_ptr<SQLStatement> ExecuteStatement::Copy() const {
-	return unique_ptr<ExecuteStatement>(new ExecuteStatement(*this));
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-ExplainStatement::ExplainStatement(unique_ptr<SQLStatement> stmt, ExplainType explain_type)
-    : SQLStatement(StatementType::EXPLAIN_STATEMENT), stmt(move(stmt)), explain_type(explain_type) {
-}
-
-ExplainStatement::ExplainStatement(const ExplainStatement &other)
-    : SQLStatement(other), stmt(other.stmt->Copy()), explain_type(other.explain_type) {
-}
-
-unique_ptr<SQLStatement> ExplainStatement::Copy() const {
-	return unique_ptr<ExplainStatement>(new ExplainStatement(*this));
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-ExportStatement::ExportStatement(unique_ptr<CopyInfo> info)
-    : SQLStatement(StatementType::EXPORT_STATEMENT), info(move(info)) {
-}
-
-ExportStatement::ExportStatement(const ExportStatement &other) : SQLStatement(other), info(other.info->Copy()) {
-}
-
-unique_ptr<SQLStatement> ExportStatement::Copy() const {
-	return unique_ptr<ExportStatement>(new ExportStatement(*this));
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-ExtensionStatement::ExtensionStatement(ParserExtension extension_p, unique_ptr<ParserExtensionParseData> parse_data_p)
-    : SQLStatement(StatementType::EXTENSION_STATEMENT), extension(move(extension_p)), parse_data(move(parse_data_p)) {
-}
-
-unique_ptr<SQLStatement> ExtensionStatement::Copy() const {
-	return make_unique<ExtensionStatement>(extension, parse_data->Copy());
-}
-
-} // namespace duckdb
-
-
-
-
-namespace duckdb {
-
-InsertStatement::InsertStatement() : SQLStatement(StatementType::INSERT_STATEMENT), schema(DEFAULT_SCHEMA) {
-}
-
-InsertStatement::InsertStatement(const InsertStatement &other)
-    : SQLStatement(other),
-      select_statement(unique_ptr_cast<SQLStatement, SelectStatement>(other.select_statement->Copy())),
-      columns(other.columns), table(other.table), schema(other.schema) {
-	cte_map = other.cte_map.Copy();
-}
-
-string InsertStatement::ToString() const {
-	string result;
-	result = cte_map.ToString();
-	result += "INSERT INTO ";
-	if (!schema.empty()) {
-		result += KeywordHelper::WriteOptionallyQuoted(schema) + ".";
-	}
-	result += KeywordHelper::WriteOptionallyQuoted(table);
-	if (!columns.empty()) {
-		result += " (";
-		for (idx_t i = 0; i < columns.size(); i++) {
-			if (i > 0) {
-				result += ", ";
-			}
-			result += KeywordHelper::WriteOptionallyQuoted(columns[i]);
-		}
-		result += " )";
-	}
-	result += " ";
-	auto values_list = GetValuesList();
-	if (values_list) {
-		values_list->alias = string();
-		result += values_list->ToString();
-	} else {
-		result += select_statement->ToString();
-	}
-	if (!returning_list.empty()) {
-		result += " RETURNING ";
-		for (idx_t i = 0; i < returning_list.size(); i++) {
-			if (i > 0) {
-				result += ", ";
-			}
-			result += returning_list[i]->ToString();
-		}
-	}
-	return result;
-}
-
-unique_ptr<SQLStatement> InsertStatement::Copy() const {
-	return unique_ptr<InsertStatement>(new InsertStatement(*this));
-}
-
-ExpressionListRef *InsertStatement::GetValuesList() const {
-	if (select_statement->node->type != QueryNodeType::SELECT_NODE) {
-		return nullptr;
-	}
-	auto &node = (SelectNode &)*select_statement->node;
-	if (node.where_clause || node.qualify || node.having) {
-		return nullptr;
-	}
-	if (!node.cte_map.map.empty()) {
-		return nullptr;
-	}
-	if (!node.groups.grouping_sets.empty()) {
-		return nullptr;
-	}
-	if (node.aggregate_handling != AggregateHandling::STANDARD_HANDLING) {
-		return nullptr;
-	}
-	if (node.select_list.size() != 1 || node.select_list[0]->type != ExpressionType::STAR) {
-		return nullptr;
-	}
-	if (!node.from_table || node.from_table->type != TableReferenceType::EXPRESSION_LIST) {
-		return nullptr;
-	}
-	return (ExpressionListRef *)node.from_table.get();
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-LoadStatement::LoadStatement() : SQLStatement(StatementType::LOAD_STATEMENT) {
-}
-
-LoadStatement::LoadStatement(const LoadStatement &other) : SQLStatement(other), info(other.info->Copy()) {
-}
-
-unique_ptr<SQLStatement> LoadStatement::Copy() const {
-	return unique_ptr<LoadStatement>(new LoadStatement(*this));
+	modifiers.push_back(make_unique<DistinctModifier>());
 }
 
 } // namespace duckdb

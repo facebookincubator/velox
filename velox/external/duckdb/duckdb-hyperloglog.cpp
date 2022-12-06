@@ -8,7 +8,7 @@
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #7
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #1
 // See the end of this file for a list
 
 /* hyperloglog.c - Redis HyperLogLog probabilistic cardinality approximation.
@@ -49,7 +49,7 @@
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #7
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #1
 // See the end of this file for a list
 
 /* SDSLib 2.0 -- A C dynamic strings library
@@ -1563,7 +1563,7 @@ static inline int AddToLog(void *log, const uint64_t &index, const uint8_t &coun
 	return duckdb_hll::hllDenseSet(hdr->registers + 1, index, count);
 }
 
-void AddToLogsInternal(VectorData &vdata, idx_t count, uint64_t indices[], uint8_t counts[], void ***logs[],
+void AddToLogsInternal(UnifiedVectorFormat &vdata, idx_t count, uint64_t indices[], uint8_t counts[], void ***logs[],
                        const SelectionVector *log_sel) {
 	// 'logs' is an array of pointers to AggregateStates
 	// AggregateStates have a pointer to a HyperLogLog object
@@ -1576,7 +1576,7 @@ void AddToLogsInternal(VectorData &vdata, idx_t count, uint64_t indices[], uint8
 	}
 }
 
-void AddToSingleLogInternal(VectorData &vdata, idx_t count, uint64_t indices[], uint8_t counts[], void *log) {
+void AddToSingleLogInternal(UnifiedVectorFormat &vdata, idx_t count, uint64_t indices[], uint8_t counts[], void *log) {
 	const auto o = (duckdb_hll::robj *)log;
 	duckdb_hll::hllhdr *hdr = (duckdb_hll::hllhdr *)o->ptr;
 	D_ASSERT(hdr->encoding == HLL_DENSE);
@@ -1596,7 +1596,7 @@ void AddToSingleLogInternal(VectorData &vdata, idx_t count, uint64_t indices[], 
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #7
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #1
 // See the end of this file for a list
 
 /* SDSLib 2.0 -- A C dynamic strings library

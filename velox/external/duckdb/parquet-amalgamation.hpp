@@ -34,6 +34,10 @@ public:
 
 #include "duckdb.hpp"
 #ifndef DUCKDB_AMALGAMATION
+#include "duckdb/planner/table_filter.hpp"
+#include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/null_filter.hpp"
+#include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -345,8 +349,6 @@ public:
 #include <stdint.h>
 #endif
 
-//namespace duckdb_apache {
-//namespace thrift {
 /**
  * T_GLOBAL_DEBUGGING_LEVEL = 0: all debugging turned off, debug macros undefined
  * T_GLOBAL_DEBUGGING_LEVEL = 1: all debugging turned on
@@ -455,9 +457,6 @@ public:
 #define T_VIRTUAL_CALL()
 #define T_GENERIC_PROTOCOL(template_class, generic_prot, specific_prot)
 #endif
-
-//}
-//} // end of duckdb_apache::thrift
 
 #endif // #ifndef _DUCKDB_THRIFT_TLOGGING_H_
 
@@ -800,7 +799,6 @@ protected:
 #ifndef _DUCKDB_THRIFT_TRANSPORT_TTRANSPORTEXCEPTION_H_
 #define _DUCKDB_THRIFT_TRANSPORT_TTRANSPORTEXCEPTION_H_ 1
 
-// FUCK OFF #include <boost/numeric/conversion/cast.hpp>
 #include <string>
 
 
@@ -6298,7 +6296,6 @@ TType TCompactProtocolT<Transport_>::getTType(int8_t type) {
 #include <cstddef>
 #include <cstring>
 #include <limits>
-//#include <boost/scoped_array.hpp> // FUCK OFF
 
 
 
@@ -6931,7 +6928,7 @@ struct ReadHead {
 	uint64_t size;
 
 	// Current info
-	unique_ptr<AllocatedData> data;
+	AllocatedData data;
 	bool data_isset = false;
 
 	idx_t GetEnd() const {
@@ -7026,7 +7023,7 @@ struct ReadAheadBuffer {
 				throw std::runtime_error("Prefetch registered requested for bytes outside file");
 			}
 
-			handle.Read(read_head.data->get(), read_head.size, read_head.location);
+			handle.Read(read_head.data.get(), read_head.size, read_head.location);
 			read_head.data_isset = true;
 		}
 	}
@@ -7048,16 +7045,16 @@ public:
 
 			if (!prefetch_buffer->data_isset) {
 				prefetch_buffer->Allocate(allocator);
-				handle.Read(prefetch_buffer->data->get(), prefetch_buffer->size, prefetch_buffer->location);
+				handle.Read(prefetch_buffer->data.get(), prefetch_buffer->size, prefetch_buffer->location);
 				prefetch_buffer->data_isset = true;
 			}
-			memcpy(buf, prefetch_buffer->data->get() + location - prefetch_buffer->location, len);
+			memcpy(buf, prefetch_buffer->data.get() + location - prefetch_buffer->location, len);
 		} else {
 			if (prefetch_mode && len < PREFETCH_FALLBACK_BUFFERSIZE && len > 0) {
 				Prefetch(location, MinValue<uint64_t>(PREFETCH_FALLBACK_BUFFERSIZE, handle.GetFileSize() - location));
 				auto prefetch_buffer_fallback = ra_buffer.GetReadHead(location);
 				D_ASSERT(location - prefetch_buffer_fallback->location + len <= prefetch_buffer_fallback->size);
-				memcpy(buf, prefetch_buffer_fallback->data->get() + location - prefetch_buffer_fallback->location, len);
+				memcpy(buf, prefetch_buffer_fallback->data.get() + location - prefetch_buffer_fallback->location, len);
 			} else {
 				handle.Read(buf, len, location);
 			}
@@ -7198,12 +7195,12 @@ public:
 		if (new_size > alloc_len) {
 			alloc_len = new_size;
 			allocated_data = allocator.Allocate(alloc_len);
-			ptr = (char *)allocated_data->get();
+			ptr = (char *)allocated_data.get();
 		}
 	}
 
 private:
-	unique_ptr<AllocatedData> allocated_data;
+	AllocatedData allocated_data;
 	idx_t alloc_len = 0;
 };
 
@@ -7542,6 +7539,7 @@ class ParquetReader;
 using duckdb_apache::thrift::protocol::TProtocol;
 
 using duckdb_parquet::format::ColumnChunk;
+using duckdb_parquet::format::CompressionCodec;
 using duckdb_parquet::format::FieldRepetitionType;
 using duckdb_parquet::format::PageHeader;
 using duckdb_parquet::format::SchemaElement;
@@ -7559,7 +7557,7 @@ public:
 	static unique_ptr<ColumnReader> CreateReader(ParquetReader &reader, const LogicalType &type_p,
 	                                             const SchemaElement &schema_p, idx_t schema_idx_p, idx_t max_define,
 	                                             idx_t max_repeat);
-	virtual void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p);
+	virtual void InitializeRead(idx_t row_group_index, const std::vector<ColumnChunk> &columns, TProtocol &protocol_p);
 	virtual idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
 	                   Vector &result_out);
 
@@ -7579,7 +7577,7 @@ public:
 	// register the range this reader will touch for prefetching
 	virtual void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge);
 
-	virtual unique_ptr<BaseStatistics> Stats(const std::vector<ColumnChunk> &columns);
+	virtual unique_ptr<BaseStatistics> Stats(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns);
 
 protected:
 	// readers that use the default Read() need to implement those
@@ -7618,9 +7616,10 @@ protected:
 
 private:
 	void PrepareRead(parquet_filter_t &filter);
-	void PreparePage(idx_t compressed_page_size, idx_t uncompressed_page_size);
+	void PreparePage(PageHeader &page_hdr);
 	void PrepareDataPage(PageHeader &page_hdr);
 	void PreparePageV2(PageHeader &page_hdr);
+	void DecompressInternal(CompressionCodec::type codec, const char *src, idx_t src_size, char *dst, idx_t dst_size);
 
 	const duckdb_parquet::format::ColumnChunk *chunk = nullptr;
 
@@ -7706,7 +7705,6 @@ class FileMetaData;
 namespace duckdb {
 class Allocator;
 class ClientContext;
-class ChunkCollection;
 class BaseStatistics;
 class TableFilterSet;
 
@@ -7741,6 +7739,13 @@ struct ParquetOptions {
 	explicit ParquetOptions(ClientContext &context);
 
 	bool binary_as_string = false;
+	bool filename = false;
+	bool file_row_number = false;
+	bool hive_partitioning = false;
+
+public:
+	void Serialize(FieldWriter &writer) const;
+	void Deserialize(FieldReader &reader);
 };
 
 class ParquetReader {
@@ -7837,7 +7842,7 @@ private:
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/serializer/buffered_file_writer.hpp"
-#include "duckdb/common/types/chunk_collection.hpp"
+#include "duckdb/common/types/column_data_collection.hpp"
 #endif
 
 
@@ -7858,7 +7863,7 @@ namespace duckdb {
 class BufferedSerializer;
 class ParquetWriter;
 class ColumnWriterPageState;
-class StandardColumnWriterState;
+class BasicColumnWriterState;
 
 class ColumnWriterState {
 public:
@@ -7880,9 +7885,6 @@ public:
 };
 
 class ColumnWriter {
-	//! We limit the uncompressed page size to 100MB
-	// The max size in Parquet is 2GB, but we choose a more conservative limit
-	static constexpr const idx_t MAX_UNCOMPRESSED_PAGE_SIZE = 100000000;
 
 public:
 	ColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path, idx_t max_repeat,
@@ -7906,46 +7908,35 @@ public:
 	                                                      idx_t max_repeat = 0, idx_t max_define = 1,
 	                                                      bool can_have_nulls = true);
 
-	virtual unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group);
-	virtual void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count);
+	virtual unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) = 0;
 
-	virtual void BeginWrite(ColumnWriterState &state);
-	virtual void Write(ColumnWriterState &state, Vector &vector, idx_t count);
-	virtual void FinalizeWrite(ColumnWriterState &state);
+	//! indicates whether the write need to analyse the data before preparing it
+	virtual bool HasAnalyze() {
+		return false;
+	}
+
+	virtual void Analyze(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) {
+		throw NotImplementedException("Writer does not need analysis");
+	}
+
+	//! Called after all data has been passed to Analyze
+	virtual void FinalizeAnalyze(ColumnWriterState &state) {
+		throw NotImplementedException("Writer does not need analysis");
+	}
+
+	virtual void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) = 0;
+
+	virtual void BeginWrite(ColumnWriterState &state) = 0;
+	virtual void Write(ColumnWriterState &state, Vector &vector, idx_t count) = 0;
+	virtual void FinalizeWrite(ColumnWriterState &state) = 0;
 
 protected:
 	void HandleDefineLevels(ColumnWriterState &state, ColumnWriterState *parent, ValidityMask &validity, idx_t count,
 	                        uint16_t define_value, uint16_t null_value);
 	void HandleRepeatLevels(ColumnWriterState &state_p, ColumnWriterState *parent, idx_t count, idx_t max_repeat);
 
-	void WriteLevels(Serializer &temp_writer, const vector<uint16_t> &levels, idx_t max_value, idx_t start_offset,
-	                 idx_t count);
-
-	virtual duckdb_parquet::format::Encoding::type GetEncoding();
-
-	void NextPage(ColumnWriterState &state_p);
-	void FlushPage(ColumnWriterState &state_p);
-	void WriteDictionary(ColumnWriterState &state_p, unique_ptr<BufferedSerializer> temp_writer, idx_t row_count);
-
-	virtual void FlushDictionary(ColumnWriterState &state, ColumnWriterStatistics *stats);
-
-	//! Initializes the state used to track statistics during writing. Only used for scalar types.
-	virtual unique_ptr<ColumnWriterStatistics> InitializeStatsState();
-	//! Retrieves the row size of a vector at the specified location. Only used for scalar types.
-	virtual idx_t GetRowSize(Vector &vector, idx_t index);
-	//! Writes a (subset of a) vector to the specified serializer. Only used for scalar types.
-	virtual void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats, ColumnWriterPageState *page_state,
-	                         Vector &vector, idx_t chunk_start, idx_t chunk_end);
-
-	//! Initialize the writer for a specific page. Only used for scalar types.
-	virtual unique_ptr<ColumnWriterPageState> InitializePageState();
-	//! Flushes the writer for a specific page. Only used for scalar types.
-	virtual void FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state);
-
 	void CompressPage(BufferedSerializer &temp_writer, size_t &compressed_size, data_ptr_t &compressed_data,
 	                  unique_ptr<data_t[]> &compressed_buf);
-
-	void SetParquetStatistics(StandardColumnWriterState &state, duckdb_parquet::format::ColumnChunk &column);
 };
 
 } // namespace duckdb
@@ -7958,6 +7949,7 @@ class FileOpener;
 
 class ParquetWriter {
 	friend class ColumnWriter;
+	friend class BasicColumnWriter;
 	friend class ListColumnWriter;
 	friend class StructColumnWriter;
 
@@ -7966,7 +7958,7 @@ public:
 	              vector<string> names, duckdb_parquet::format::CompressionCodec::type codec);
 
 public:
-	void Flush(ChunkCollection &buffer);
+	void Flush(ColumnDataCollection &buffer);
 	void Finalize();
 
 	static duckdb_parquet::format::Type::type DuckDBTypeToParquetType(const LogicalType &duckdb_type);

@@ -12,3090 +12,6 @@
 // The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-#include <string.h>
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
-// See the end of this file for a list
-
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-#ifndef THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
-#define THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
-
-#include <stddef.h>
-
-namespace duckdb_snappy {
-
-// A Sink is an interface that consumes a sequence of bytes.
-class Sink {
- public:
-  Sink() { }
-  virtual ~Sink();
-
-  // Append "bytes[0,n-1]" to this.
-  virtual void Append(const char* bytes, size_t n) = 0;
-
-  // Returns a writable buffer of the specified length for appending.
-  // May return a pointer to the caller-owned scratch buffer which
-  // must have at least the indicated length.  The returned buffer is
-  // only valid until the next operation on this Sink.
-  //
-  // After writing at most "length" bytes, call Append() with the
-  // pointer returned from this function and the number of bytes
-  // written.  Many Append() implementations will avoid copying
-  // bytes if this function returned an internal buffer.
-  //
-  // If a non-scratch buffer is returned, the caller may only pass a
-  // prefix of it to Append().  That is, it is not correct to pass an
-  // interior pointer of the returned array to Append().
-  //
-  // The default implementation always returns the scratch buffer.
-  virtual char* GetAppendBuffer(size_t length, char* scratch);
-
-  // For higher performance, Sink implementations can provide custom
-  // AppendAndTakeOwnership() and GetAppendBufferVariable() methods.
-  // These methods can reduce the number of copies done during
-  // compression/decompression.
-
-  // Append "bytes[0,n-1] to the sink. Takes ownership of "bytes"
-  // and calls the deleter function as (*deleter)(deleter_arg, bytes, n)
-  // to free the buffer. deleter function must be non NULL.
-  //
-  // The default implementation just calls Append and frees "bytes".
-  // Other implementations may avoid a copy while appending the buffer.
-  virtual void AppendAndTakeOwnership(
-      char* bytes, size_t n, void (*deleter)(void*, const char*, size_t),
-      void *deleter_arg);
-
-  // Returns a writable buffer for appending and writes the buffer's capacity to
-  // *allocated_size. Guarantees *allocated_size >= min_size.
-  // May return a pointer to the caller-owned scratch buffer which must have
-  // scratch_size >= min_size.
-  //
-  // The returned buffer is only valid until the next operation
-  // on this ByteSink.
-  //
-  // After writing at most *allocated_size bytes, call Append() with the
-  // pointer returned from this function and the number of bytes written.
-  // Many Append() implementations will avoid copying bytes if this function
-  // returned an internal buffer.
-  //
-  // If the sink implementation allocates or reallocates an internal buffer,
-  // it should use the desired_size_hint if appropriate. If a caller cannot
-  // provide a reasonable guess at the desired capacity, it should set
-  // desired_size_hint = 0.
-  //
-  // If a non-scratch buffer is returned, the caller may only pass
-  // a prefix to it to Append(). That is, it is not correct to pass an
-  // interior pointer to Append().
-  //
-  // The default implementation always returns the scratch buffer.
-  virtual char* GetAppendBufferVariable(
-      size_t min_size, size_t desired_size_hint, char* scratch,
-      size_t scratch_size, size_t* allocated_size);
-
- private:
-  // No copying
-  Sink(const Sink&);
-  void operator=(const Sink&);
-};
-
-// A Source is an interface that yields a sequence of bytes
-class Source {
- public:
-  Source() { }
-  virtual ~Source();
-
-  // Return the number of bytes left to read from the source
-  virtual size_t Available() const = 0;
-
-  // Peek at the next flat region of the source.  Does not reposition
-  // the source.  The returned region is empty iff Available()==0.
-  //
-  // Returns a pointer to the beginning of the region and store its
-  // length in *len.
-  //
-  // The returned region is valid until the next call to Skip() or
-  // until this object is destroyed, whichever occurs first.
-  //
-  // The returned region may be larger than Available() (for example
-  // if this ByteSource is a view on a substring of a larger source).
-  // The caller is responsible for ensuring that it only reads the
-  // Available() bytes.
-  virtual const char* Peek(size_t* len) = 0;
-
-  // Skip the next n bytes.  Invalidates any buffer returned by
-  // a previous call to Peek().
-  // REQUIRES: Available() >= n
-  virtual void Skip(size_t n) = 0;
-
- private:
-  // No copying
-  Source(const Source&);
-  void operator=(const Source&);
-};
-
-// A Source implementation that yields the contents of a flat array
-class ByteArraySource : public Source {
- public:
-  ByteArraySource(const char* p, size_t n) : ptr_(p), left_(n) { }
-  virtual ~ByteArraySource();
-  virtual size_t Available() const;
-  virtual const char* Peek(size_t* len);
-  virtual void Skip(size_t n);
- private:
-  const char* ptr_;
-  size_t left_;
-};
-
-// A Sink implementation that writes to a flat array without any bound checks.
-class UncheckedByteArraySink : public Sink {
- public:
-  explicit UncheckedByteArraySink(char* dest) : dest_(dest) { }
-  virtual ~UncheckedByteArraySink();
-  virtual void Append(const char* data, size_t n);
-  virtual char* GetAppendBuffer(size_t len, char* scratch);
-  virtual char* GetAppendBufferVariable(
-      size_t min_size, size_t desired_size_hint, char* scratch,
-      size_t scratch_size, size_t* allocated_size);
-  virtual void AppendAndTakeOwnership(
-      char* bytes, size_t n, void (*deleter)(void*, const char*, size_t),
-      void *deleter_arg);
-
-  // Return the current output pointer so that a caller can see how
-  // many bytes were produced.
-  // Note: this is not a Sink method.
-  char* CurrentDestination() const { return dest_; }
- private:
-  char* dest_;
-};
-
-}  // namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
-
-
-// LICENSE_CHANGE_END
-
-
-namespace duckdb_snappy {
-
-Source::~Source() { }
-
-Sink::~Sink() { }
-
-char* Sink::GetAppendBuffer(size_t length, char* scratch) {
-  return scratch;
-}
-
-char* Sink::GetAppendBufferVariable(
-      size_t min_size, size_t desired_size_hint, char* scratch,
-      size_t scratch_size, size_t* allocated_size) {
-  *allocated_size = scratch_size;
-  return scratch;
-}
-
-void Sink::AppendAndTakeOwnership(
-    char* bytes, size_t n,
-    void (*deleter)(void*, const char*, size_t),
-    void *deleter_arg) {
-  Append(bytes, n);
-  (*deleter)(deleter_arg, bytes, n);
-}
-
-ByteArraySource::~ByteArraySource() { }
-
-size_t ByteArraySource::Available() const { return left_; }
-
-const char* ByteArraySource::Peek(size_t* len) {
-  *len = left_;
-  return ptr_;
-}
-
-void ByteArraySource::Skip(size_t n) {
-  left_ -= n;
-  ptr_ += n;
-}
-
-UncheckedByteArraySink::~UncheckedByteArraySink() { }
-
-void UncheckedByteArraySink::Append(const char* data, size_t n) {
-  // Do no copying if the caller filled in the result of GetAppendBuffer()
-  if (data != dest_) {
-    memcpy(dest_, data, n);
-  }
-  dest_ += n;
-}
-
-char* UncheckedByteArraySink::GetAppendBuffer(size_t len, char* scratch) {
-  return dest_;
-}
-
-void UncheckedByteArraySink::AppendAndTakeOwnership(
-    char* data, size_t n,
-    void (*deleter)(void*, const char*, size_t),
-    void *deleter_arg) {
-  if (data != dest_) {
-    memcpy(dest_, data, n);
-    (*deleter)(deleter_arg, data, n);
-  }
-  dest_ += n;
-}
-
-char* UncheckedByteArraySink::GetAppendBufferVariable(
-      size_t min_size, size_t desired_size_hint, char* scratch,
-      size_t scratch_size, size_t* allocated_size) {
-  *allocated_size = desired_size_hint;
-  return dest_;
-}
-
-}  // namespace duckdb_snappy
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
-// See the end of this file for a list
-
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-#include <algorithm>
-#include <string>
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
-// See the end of this file for a list
-
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Various stubs for the open-source version of Snappy.
-
-#ifndef THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
-#define THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
-
-// #ifdef HAVE_CONFIG_H
-// #include "config.h"
-// #endif
-
-#include <string>
-
-#include <assert.h>
-#include <stdlib.h>
-#include <string.h>
-
-#ifdef HAVE_SYS_MMAN_H
-#include <sys/mman.h>
-#endif
-
-#ifdef HAVE_UNISTD_H
-#include <unistd.h>
-#endif
-
-#if defined(_MSC_VER)
-#include <intrin.h>
-#endif  // defined(_MSC_VER)
-
-#ifndef __has_feature
-#define __has_feature(x) 0
-#endif
-
-#if __has_feature(memory_sanitizer)
-#include <sanitizer/msan_interface.h>
-#define SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(address, size) \
-    __msan_unpoison((address), (size))
-#else
-#define SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(address, size) /* empty */
-#endif  // __has_feature(memory_sanitizer)
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
-// See the end of this file for a list
-
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Various type stubs for the open-source version of Snappy.
-//
-// This file cannot include config.h, as it is included from snappy.h,
-// which is a public header. Instead, snappy-stubs-public.h is generated by
-// from snappy-stubs-public.h.in at configure time.
-
-#ifndef THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
-#define THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
-
-#include <cstddef>
-#include <cstdint>
-#include <string>
-
-#ifndef _WIN32  // HAVE_SYS_UIO_H
-#include <sys/uio.h>
-#endif  // HAVE_SYS_UIO_H
-
-#define SNAPPY_MAJOR 1
-#define SNAPPY_MINOR 1
-#define SNAPPY_PATCHLEVEL 7
-#define SNAPPY_VERSION \
-    ((SNAPPY_MAJOR << 16) | (SNAPPY_MINOR << 8) | SNAPPY_PATCHLEVEL)
-
-namespace duckdb_snappy {
-
-using int8 = std::int8_t;
-using uint8 = std::uint8_t;
-using int16 = std::int16_t;
-using uint16 = std::uint16_t;
-using int32 = std::int32_t;
-using uint32 = std::uint32_t;
-using int64 = std::int64_t;
-using uint64 = std::uint64_t;
-
-using string = std::string;
-
-#ifdef _WIN32  // !HAVE_SYS_UIO_H
-// Windows does not have an iovec type, yet the concept is universally useful.
-// It is simple to define it ourselves, so we put it inside our own namespace.
-struct iovec {
-  void* iov_base;
-  size_t iov_len;
-};
-#endif  // !HAVE_SYS_UIO_H
-
-}  // namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
-
-
-// LICENSE_CHANGE_END
-
-
-#if defined(__x86_64__)
-
-// Enable 64-bit optimized versions of some routines.
-#define ARCH_K8 1
-
-#elif defined(__ppc64__)
-
-#define ARCH_PPC 1
-
-#elif defined(__aarch64__)
-
-#define ARCH_ARM 1
-
-#endif
-
-// Needed by OS X, among others.
-#ifndef MAP_ANONYMOUS
-#define MAP_ANONYMOUS MAP_ANON
-#endif
-
-// The size of an array, if known at compile-time.
-// Will give unexpected results if used on a pointer.
-// We undefine it first, since some compilers already have a definition.
-#ifdef ARRAYSIZE
-#undef ARRAYSIZE
-#endif
-#define ARRAYSIZE(a) (sizeof(a) / sizeof(*(a)))
-
-// Static prediction hints.
-#ifdef HAVE_BUILTIN_EXPECT
-#define SNAPPY_PREDICT_FALSE(x) (__builtin_expect(x, 0))
-#define SNAPPY_PREDICT_TRUE(x) (__builtin_expect(!!(x), 1))
-#else
-#define SNAPPY_PREDICT_FALSE(x) x
-#define SNAPPY_PREDICT_TRUE(x) x
-#endif
-
-// This is only used for recomputing the tag byte table used during
-// decompression; for simplicity we just remove it from the open-source
-// version (anyone who wants to regenerate it can just do the call
-// themselves within main()).
-#define DEFINE_bool(flag_name, default_value, description) \
-  bool FLAGS_ ## flag_name = default_value
-#define DECLARE_bool(flag_name) \
-  extern bool FLAGS_ ## flag_name
-
-namespace duckdb_snappy {
-
-//static const uint32 kuint32max = static_cast<uint32>(0xFFFFFFFF);
-//static const int64 kint64max = static_cast<int64>(0x7FFFFFFFFFFFFFFFLL);
-
-
-// HM: Always use aligned load to keep ourselves out of trouble. Sorry.
-
-inline uint16 UNALIGNED_LOAD16(const void *p) {
-  uint16 t;
-  memcpy(&t, p, sizeof t);
-  return t;
-}
-
-inline uint32 UNALIGNED_LOAD32(const void *p) {
-  uint32 t;
-  memcpy(&t, p, sizeof t);
-  return t;
-}
-
-inline uint64 UNALIGNED_LOAD64(const void *p) {
-  uint64 t;
-  memcpy(&t, p, sizeof t);
-  return t;
-}
-
-inline void UNALIGNED_STORE16(void *p, uint16 v) {
-  memcpy(p, &v, sizeof v);
-}
-
-inline void UNALIGNED_STORE32(void *p, uint32 v) {
-  memcpy(p, &v, sizeof v);
-}
-
-inline void UNALIGNED_STORE64(void *p, uint64 v) {
-  memcpy(p, &v, sizeof v);
-}
-
-
-// The following guarantees declaration of the byte swap functions.
-#if defined(SNAPPY_IS_BIG_ENDIAN)
-
-#ifdef HAVE_SYS_BYTEORDER_H
-#include <sys/byteorder.h>
-#endif
-
-#ifdef HAVE_SYS_ENDIAN_H
-#include <sys/endian.h>
-#endif
-
-#ifdef _MSC_VER
-#include <stdlib.h>
-#define bswap_16(x) _byteswap_ushort(x)
-#define bswap_32(x) _byteswap_ulong(x)
-#define bswap_64(x) _byteswap_uint64(x)
-
-#elif defined(__APPLE__)
-// Mac OS X / Darwin features
-#include <libkern/OSByteOrder.h>
-#define bswap_16(x) OSSwapInt16(x)
-#define bswap_32(x) OSSwapInt32(x)
-#define bswap_64(x) OSSwapInt64(x)
-
-#elif defined(HAVE_BYTESWAP_H)
-#include <byteswap.h>
-
-#elif defined(bswap32)
-// FreeBSD defines bswap{16,32,64} in <sys/endian.h> (already #included).
-#define bswap_16(x) bswap16(x)
-#define bswap_32(x) bswap32(x)
-#define bswap_64(x) bswap64(x)
-
-#elif defined(BSWAP_64)
-// Solaris 10 defines BSWAP_{16,32,64} in <sys/byteorder.h> (already #included).
-#define bswap_16(x) BSWAP_16(x)
-#define bswap_32(x) BSWAP_32(x)
-#define bswap_64(x) BSWAP_64(x)
-
-#else
-
-inline uint16 bswap_16(uint16 x) {
-  return (x << 8) | (x >> 8);
-}
-
-inline uint32 bswap_32(uint32 x) {
-  x = ((x & 0xff00ff00UL) >> 8) | ((x & 0x00ff00ffUL) << 8);
-  return (x >> 16) | (x << 16);
-}
-
-inline uint64 bswap_64(uint64 x) {
-  x = ((x & 0xff00ff00ff00ff00ULL) >> 8) | ((x & 0x00ff00ff00ff00ffULL) << 8);
-  x = ((x & 0xffff0000ffff0000ULL) >> 16) | ((x & 0x0000ffff0000ffffULL) << 16);
-  return (x >> 32) | (x << 32);
-}
-
-#endif
-
-#endif  // defined(SNAPPY_IS_BIG_ENDIAN)
-
-// Convert to little-endian storage, opposite of network format.
-// Convert x from host to little endian: x = LittleEndian.FromHost(x);
-// convert x from little endian to host: x = LittleEndian.ToHost(x);
-//
-//  Store values into unaligned memory converting to little endian order:
-//    LittleEndian.Store16(p, x);
-//
-//  Load unaligned values stored in little endian converting to host order:
-//    x = LittleEndian.Load16(p);
-class LittleEndian {
- public:
-  // Conversion functions.
-#if defined(SNAPPY_IS_BIG_ENDIAN)
-
-  static uint16 FromHost16(uint16 x) { return bswap_16(x); }
-  static uint16 ToHost16(uint16 x) { return bswap_16(x); }
-
-  static uint32 FromHost32(uint32 x) { return bswap_32(x); }
-  static uint32 ToHost32(uint32 x) { return bswap_32(x); }
-
-  static bool IsLittleEndian() { return false; }
-
-#else  // !defined(SNAPPY_IS_BIG_ENDIAN)
-
-  static uint16 FromHost16(uint16 x) { return x; }
-  static uint16 ToHost16(uint16 x) { return x; }
-
-  static uint32 FromHost32(uint32 x) { return x; }
-  static uint32 ToHost32(uint32 x) { return x; }
-
-  static bool IsLittleEndian() { return true; }
-
-#endif  // !defined(SNAPPY_IS_BIG_ENDIAN)
-
-  // Functions to do unaligned loads and stores in little-endian order.
-  static uint16 Load16(const void *p) {
-    return ToHost16(UNALIGNED_LOAD16(p));
-  }
-
-  static void Store16(void *p, uint16 v) {
-    UNALIGNED_STORE16(p, FromHost16(v));
-  }
-
-  static uint32 Load32(const void *p) {
-    return ToHost32(UNALIGNED_LOAD32(p));
-  }
-
-  static void Store32(void *p, uint32 v) {
-    UNALIGNED_STORE32(p, FromHost32(v));
-  }
-};
-
-// Some bit-manipulation functions.
-class Bits {
- public:
-  // Return floor(log2(n)) for positive integer n.
-  static int Log2FloorNonZero(uint32 n);
-
-  // Return floor(log2(n)) for positive integer n.  Returns -1 iff n == 0.
-  static int Log2Floor(uint32 n);
-
-  // Return the first set least / most significant bit, 0-indexed.  Returns an
-  // undefined value if n == 0.  FindLSBSetNonZero() is similar to ffs() except
-  // that it's 0-indexed.
-  static int FindLSBSetNonZero(uint32 n);
-
-#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-  static int FindLSBSetNonZero64(uint64 n);
-#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-
- private:
-  // No copying
-  Bits(const Bits&);
-  void operator=(const Bits&);
-};
-
-#ifdef HAVE_BUILTIN_CTZ
-
-inline int Bits::Log2FloorNonZero(uint32 n) {
-  assert(n != 0);
-  // (31 ^ x) is equivalent to (31 - x) for x in [0, 31]. An easy proof
-  // represents subtraction in base 2 and observes that there's no carry.
-  //
-  // GCC and Clang represent __builtin_clz on x86 as 31 ^ _bit_scan_reverse(x).
-  // Using "31 ^" here instead of "31 -" allows the optimizer to strip the
-  // function body down to _bit_scan_reverse(x).
-  return 31 ^ __builtin_clz(n);
-}
-
-inline int Bits::Log2Floor(uint32 n) {
-  return (n == 0) ? -1 : Bits::Log2FloorNonZero(n);
-}
-
-inline int Bits::FindLSBSetNonZero(uint32 n) {
-  assert(n != 0);
-  return __builtin_ctz(n);
-}
-
-#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-inline int Bits::FindLSBSetNonZero64(uint64 n) {
-  assert(n != 0);
-  return __builtin_ctzll(n);
-}
-#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-
-#elif defined(_MSC_VER)
-
-inline int Bits::Log2FloorNonZero(uint32 n) {
-  assert(n != 0);
-  unsigned long where;
-  _BitScanReverse(&where, n);
-  return static_cast<int>(where);
-}
-
-inline int Bits::Log2Floor(uint32 n) {
-  unsigned long where;
-  if (_BitScanReverse(&where, n))
-    return static_cast<int>(where);
-  return -1;
-}
-
-inline int Bits::FindLSBSetNonZero(uint32 n) {
-  assert(n != 0);
-  unsigned long where;
-  if (_BitScanForward(&where, n))
-    return static_cast<int>(where);
-  return 32;
-}
-
-#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-inline int Bits::FindLSBSetNonZero64(uint64 n) {
-  assert(n != 0);
-  unsigned long where;
-  if (_BitScanForward64(&where, n))
-    return static_cast<int>(where);
-  return 64;
-}
-#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-
-#else  // Portable versions.
-
-inline int Bits::Log2FloorNonZero(uint32 n) {
-  assert(n != 0);
-
-  int log = 0;
-  uint32 value = n;
-  for (int i = 4; i >= 0; --i) {
-    int shift = (1 << i);
-    uint32 x = value >> shift;
-    if (x != 0) {
-      value = x;
-      log += shift;
-    }
-  }
-  assert(value == 1);
-  return log;
-}
-
-inline int Bits::Log2Floor(uint32 n) {
-  return (n == 0) ? -1 : Bits::Log2FloorNonZero(n);
-}
-
-inline int Bits::FindLSBSetNonZero(uint32 n) {
-  assert(n != 0);
-
-  int rc = 31;
-  for (int i = 4, shift = 1 << 4; i >= 0; --i) {
-    const uint32 x = n << shift;
-    if (x != 0) {
-      n = x;
-      rc -= shift;
-    }
-    shift >>= 1;
-  }
-  return rc;
-}
-
-#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-// FindLSBSetNonZero64() is defined in terms of FindLSBSetNonZero().
-inline int Bits::FindLSBSetNonZero64(uint64 n) {
-  assert(n != 0);
-
-  const uint32 bottombits = static_cast<uint32>(n);
-  if (bottombits == 0) {
-    // Bottom bits are zero, so scan in top bits
-    return 32 + FindLSBSetNonZero(static_cast<uint32>(n >> 32));
-  } else {
-    return FindLSBSetNonZero(bottombits);
-  }
-}
-#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-
-#endif  // End portable versions.
-
-// Variable-length integer encoding.
-class Varint {
- public:
-  // Maximum lengths of varint encoding of uint32.
-  static const int kMax32 = 5;
-
-  // Attempts to parse a varint32 from a prefix of the bytes in [ptr,limit-1].
-  // Never reads a character at or beyond limit.  If a valid/terminated varint32
-  // was found in the range, stores it in *OUTPUT and returns a pointer just
-  // past the last byte of the varint32. Else returns NULL.  On success,
-  // "result <= limit".
-  static const char* Parse32WithLimit(const char* ptr, const char* limit,
-                                      uint32* OUTPUT);
-
-  // REQUIRES   "ptr" points to a buffer of length sufficient to hold "v".
-  // EFFECTS    Encodes "v" into "ptr" and returns a pointer to the
-  //            byte just past the last encoded byte.
-  static char* Encode32(char* ptr, uint32 v);
-
-  // EFFECTS    Appends the varint representation of "value" to "*s".
-  static void Append32(string* s, uint32 value);
-};
-
-inline const char* Varint::Parse32WithLimit(const char* p,
-                                            const char* l,
-                                            uint32* OUTPUT) {
-  const unsigned char* ptr = reinterpret_cast<const unsigned char*>(p);
-  const unsigned char* limit = reinterpret_cast<const unsigned char*>(l);
-  uint32 b, result;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result = b & 127;          if (b < 128) goto done;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result |= (b & 127) <<  7; if (b < 128) goto done;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result |= (b & 127) << 14; if (b < 128) goto done;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result |= (b & 127) << 21; if (b < 128) goto done;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result |= (b & 127) << 28; if (b < 16) goto done;
-  return NULL;       // Value is too long to be a varint32
- done:
-  *OUTPUT = result;
-  return reinterpret_cast<const char*>(ptr);
-}
-
-inline char* Varint::Encode32(char* sptr, uint32 v) {
-  // Operate on characters as unsigneds
-  unsigned char* ptr = reinterpret_cast<unsigned char*>(sptr);
-  static const int B = 128;
-  if (v < (1<<7)) {
-    *(ptr++) = v;
-  } else if (v < (1<<14)) {
-    *(ptr++) = v | B;
-    *(ptr++) = v>>7;
-  } else if (v < (1<<21)) {
-    *(ptr++) = v | B;
-    *(ptr++) = (v>>7) | B;
-    *(ptr++) = v>>14;
-  } else if (v < (1<<28)) {
-    *(ptr++) = v | B;
-    *(ptr++) = (v>>7) | B;
-    *(ptr++) = (v>>14) | B;
-    *(ptr++) = v>>21;
-  } else {
-    *(ptr++) = v | B;
-    *(ptr++) = (v>>7) | B;
-    *(ptr++) = (v>>14) | B;
-    *(ptr++) = (v>>21) | B;
-    *(ptr++) = v>>28;
-  }
-  return reinterpret_cast<char*>(ptr);
-}
-
-// If you know the internal layout of the std::string in use, you can
-// replace this function with one that resizes the string without
-// filling the new space with zeros (if applicable) --
-// it will be non-portable but faster.
-inline void STLStringResizeUninitialized(string* s, size_t new_size) {
-  s->resize(new_size);
-}
-
-// Return a mutable char* pointing to a string's internal buffer,
-// which may not be null-terminated. Writing through this pointer will
-// modify the string.
-//
-// string_as_array(&str)[i] is valid for 0 <= i < str.size() until the
-// next call to a string method that invalidates iterators.
-//
-// As of 2006-04, there is no standard-blessed way of getting a
-// mutable reference to a string's internal buffer. However, issue 530
-// (http://www.open-std.org/JTC1/SC22/WG21/docs/lwg-defects.html#530)
-// proposes this as the method. It will officially be part of the standard
-// for C++0x. This should already work on all current implementations.
-inline char* string_as_array(string* str) {
-  return str->empty() ? NULL : &*str->begin();
-}
-
-}  // namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
-
-
-// LICENSE_CHANGE_END
-
-
-namespace duckdb_snappy {
-
-void Varint::Append32(string* s, uint32 value) {
-  char buf[Varint::kMax32];
-  const char* p = Varint::Encode32(buf, value);
-  s->append(buf, p - buf);
-}
-
-}  // namespace duckdb_snappy
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
-// See the end of this file for a list
-
-// Copyright 2005 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
-// See the end of this file for a list
-
-// Copyright 2005 and onwards Google Inc.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// A light-weight compression algorithm.  It is designed for speed of
-// compression and decompression, rather than for the utmost in space
-// savings.
-//
-// For getting better compression ratios when you are compressing data
-// with long repeated sequences or compressing data that is similar to
-// other data, while still compressing fast, you might look at first
-// using BMDiff and then compressing the output of BMDiff with
-// Snappy.
-
-#ifndef THIRD_PARTY_SNAPPY_SNAPPY_H__
-#define THIRD_PARTY_SNAPPY_SNAPPY_H__
-
-#include <cstddef>
-#include <string>
-
-
-
-namespace duckdb_snappy {
-  class Source;
-  class Sink;
-
-  // ------------------------------------------------------------------------
-  // Generic compression/decompression routines.
-  // ------------------------------------------------------------------------
-
-  // Compress the bytes read from "*source" and append to "*sink". Return the
-  // number of bytes written.
-  size_t Compress(Source* source, Sink* sink);
-
-  // Find the uncompressed length of the given stream, as given by the header.
-  // Note that the true length could deviate from this; the stream could e.g.
-  // be truncated.
-  //
-  // Also note that this leaves "*source" in a state that is unsuitable for
-  // further operations, such as RawUncompress(). You will need to rewind
-  // or recreate the source yourself before attempting any further calls.
-  bool GetUncompressedLength(Source* source, uint32* result);
-
-  // ------------------------------------------------------------------------
-  // Higher-level string based routines (should be sufficient for most users)
-  // ------------------------------------------------------------------------
-
-  // Sets "*output" to the compressed version of "input[0,input_length-1]".
-  // Original contents of *output are lost.
-  //
-  // REQUIRES: "input[]" is not an alias of "*output".
-  size_t Compress(const char* input, size_t input_length, string* output);
-
-  // Decompresses "compressed[0,compressed_length-1]" to "*uncompressed".
-  // Original contents of "*uncompressed" are lost.
-  //
-  // REQUIRES: "compressed[]" is not an alias of "*uncompressed".
-  //
-  // returns false if the message is corrupted and could not be decompressed
-  bool Uncompress(const char* compressed, size_t compressed_length,
-                  string* uncompressed);
-
-  // Decompresses "compressed" to "*uncompressed".
-  //
-  // returns false if the message is corrupted and could not be decompressed
-  bool Uncompress(Source* compressed, Sink* uncompressed);
-
-  // This routine uncompresses as much of the "compressed" as possible
-  // into sink.  It returns the number of valid bytes added to sink
-  // (extra invalid bytes may have been added due to errors; the caller
-  // should ignore those). The emitted data typically has length
-  // GetUncompressedLength(), but may be shorter if an error is
-  // encountered.
-  size_t UncompressAsMuchAsPossible(Source* compressed, Sink* uncompressed);
-
-  // ------------------------------------------------------------------------
-  // Lower-level character array based routines.  May be useful for
-  // efficiency reasons in certain circumstances.
-  // ------------------------------------------------------------------------
-
-  // REQUIRES: "compressed" must point to an area of memory that is at
-  // least "MaxCompressedLength(input_length)" bytes in length.
-  //
-  // Takes the data stored in "input[0..input_length]" and stores
-  // it in the array pointed to by "compressed".
-  //
-  // "*compressed_length" is set to the length of the compressed output.
-  //
-  // Example:
-  //    char* output = new char[snappy::MaxCompressedLength(input_length)];
-  //    size_t output_length;
-  //    RawCompress(input, input_length, output, &output_length);
-  //    ... Process(output, output_length) ...
-  //    delete [] output;
-  void RawCompress(const char* input,
-                   size_t input_length,
-                   char* compressed,
-                   size_t* compressed_length);
-
-  // Given data in "compressed[0..compressed_length-1]" generated by
-  // calling the Snappy::Compress routine, this routine
-  // stores the uncompressed data to
-  //    uncompressed[0..GetUncompressedLength(compressed)-1]
-  // returns false if the message is corrupted and could not be decrypted
-  bool RawUncompress(const char* compressed, size_t compressed_length,
-                     char* uncompressed);
-
-  // Given data from the byte source 'compressed' generated by calling
-  // the Snappy::Compress routine, this routine stores the uncompressed
-  // data to
-  //    uncompressed[0..GetUncompressedLength(compressed,compressed_length)-1]
-  // returns false if the message is corrupted and could not be decrypted
-  bool RawUncompress(Source* compressed, char* uncompressed);
-
-  // Given data in "compressed[0..compressed_length-1]" generated by
-  // calling the Snappy::Compress routine, this routine
-  // stores the uncompressed data to the iovec "iov". The number of physical
-  // buffers in "iov" is given by iov_cnt and their cumulative size
-  // must be at least GetUncompressedLength(compressed). The individual buffers
-  // in "iov" must not overlap with each other.
-  //
-  // returns false if the message is corrupted and could not be decrypted
-  bool RawUncompressToIOVec(const char* compressed, size_t compressed_length,
-                            const struct iovec* iov, size_t iov_cnt);
-
-  // Given data from the byte source 'compressed' generated by calling
-  // the Snappy::Compress routine, this routine stores the uncompressed
-  // data to the iovec "iov". The number of physical
-  // buffers in "iov" is given by iov_cnt and their cumulative size
-  // must be at least GetUncompressedLength(compressed). The individual buffers
-  // in "iov" must not overlap with each other.
-  //
-  // returns false if the message is corrupted and could not be decrypted
-  bool RawUncompressToIOVec(Source* compressed, const struct iovec* iov,
-                            size_t iov_cnt);
-
-  // Returns the maximal size of the compressed representation of
-  // input data that is "source_bytes" bytes in length;
-  size_t MaxCompressedLength(size_t source_bytes);
-
-  // REQUIRES: "compressed[]" was produced by RawCompress() or Compress()
-  // Returns true and stores the length of the uncompressed data in
-  // *result normally.  Returns false on parsing error.
-  // This operation takes O(1) time.
-  bool GetUncompressedLength(const char* compressed, size_t compressed_length,
-                             size_t* result);
-
-  // Returns true iff the contents of "compressed[]" can be uncompressed
-  // successfully.  Does not return the uncompressed data.  Takes
-  // time proportional to compressed_length, but is usually at least
-  // a factor of four faster than actual decompression.
-  bool IsValidCompressedBuffer(const char* compressed,
-                               size_t compressed_length);
-
-  // Returns true iff the contents of "compressed" can be uncompressed
-  // successfully.  Does not return the uncompressed data.  Takes
-  // time proportional to *compressed length, but is usually at least
-  // a factor of four faster than actual decompression.
-  // On success, consumes all of *compressed.  On failure, consumes an
-  // unspecified prefix of *compressed.
-  bool IsValidCompressed(Source* compressed);
-
-}  // end namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_SNAPPY_H__
-
-
-// LICENSE_CHANGE_END
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
-// See the end of this file for a list
-
-// Copyright 2008 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Internals shared between the Snappy implementation and its unittest.
-
-#ifndef THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
-#define THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
-
-
-
-namespace duckdb_snappy {
-namespace internal {
-
-// Working memory performs a single allocation to hold all scratch space
-// required for compression.
-class WorkingMemory {
- public:
-  explicit WorkingMemory(size_t input_size);
-  ~WorkingMemory();
-
-  // Allocates and clears a hash table using memory in "*this",
-  // stores the number of buckets in "*table_size" and returns a pointer to
-  // the base of the hash table.
-  uint16* GetHashTable(size_t fragment_size, int* table_size) const;
-  char* GetScratchInput() const { return input_; }
-  char* GetScratchOutput() const { return output_; }
-
- private:
-  char* mem_;      // the allocated memory, never nullptr
-  size_t size_;    // the size of the allocated memory, never 0
-  uint16* table_;  // the pointer to the hashtable
-  char* input_;    // the pointer to the input scratch buffer
-  char* output_;   // the pointer to the output scratch buffer
-
-  // No copying
-  WorkingMemory(const WorkingMemory&);
-  void operator=(const WorkingMemory&);
-};
-
-// Flat array compression that does not emit the "uncompressed length"
-// prefix. Compresses "input" string to the "*op" buffer.
-//
-// REQUIRES: "input_length <= kBlockSize"
-// REQUIRES: "op" points to an array of memory that is at least
-// "MaxCompressedLength(input_length)" in size.
-// REQUIRES: All elements in "table[0..table_size-1]" are initialized to zero.
-// REQUIRES: "table_size" is a power of two
-//
-// Returns an "end" pointer into "op" buffer.
-// "end - op" is the compressed size of "input".
-char* CompressFragment(const char* input,
-                       size_t input_length,
-                       char* op,
-                       uint16* table,
-                       const int table_size);
-
-// Find the largest n such that
-//
-//   s1[0,n-1] == s2[0,n-1]
-//   and n <= (s2_limit - s2).
-//
-// Return make_pair(n, n < 8).
-// Does not read *s2_limit or beyond.
-// Does not read *(s1 + (s2_limit - s2)) or beyond.
-// Requires that s2_limit >= s2.
-//
-// Separate implementation for 64-bit, little-endian cpus.
-#if !defined(SNAPPY_IS_BIG_ENDIAN) && \
-    (defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM))
-static inline std::pair<size_t, bool> FindMatchLength(const char* s1,
-                                                      const char* s2,
-                                                      const char* s2_limit) {
-  assert(s2_limit >= s2);
-  size_t matched = 0;
-
-  // This block isn't necessary for correctness; we could just start looping
-  // immediately.  As an optimization though, it is useful.  It creates some not
-  // uncommon code paths that determine, without extra effort, whether the match
-  // length is less than 8.  In short, we are hoping to avoid a conditional
-  // branch, and perhaps get better code layout from the C++ compiler.
-  if (SNAPPY_PREDICT_TRUE(s2 <= s2_limit - 8)) {
-    uint64 a1 = UNALIGNED_LOAD64(s1);
-    uint64 a2 = UNALIGNED_LOAD64(s2);
-    if (a1 != a2) {
-      return std::pair<size_t, bool>(Bits::FindLSBSetNonZero64(a1 ^ a2) >> 3,
-                                     true);
-    } else {
-      matched = 8;
-      s2 += 8;
-    }
-  }
-
-  // Find out how long the match is. We loop over the data 64 bits at a
-  // time until we find a 64-bit block that doesn't match; then we find
-  // the first non-matching bit and use that to calculate the total
-  // length of the match.
-  while (SNAPPY_PREDICT_TRUE(s2 <= s2_limit - 8)) {
-    if (UNALIGNED_LOAD64(s2) == UNALIGNED_LOAD64(s1 + matched)) {
-      s2 += 8;
-      matched += 8;
-    } else {
-      uint64 x = UNALIGNED_LOAD64(s2) ^ UNALIGNED_LOAD64(s1 + matched);
-      int matching_bits = Bits::FindLSBSetNonZero64(x);
-      matched += matching_bits >> 3;
-      assert(matched >= 8);
-      return std::pair<size_t, bool>(matched, false);
-    }
-  }
-  while (SNAPPY_PREDICT_TRUE(s2 < s2_limit)) {
-    if (s1[matched] == *s2) {
-      ++s2;
-      ++matched;
-    } else {
-      return std::pair<size_t, bool>(matched, matched < 8);
-    }
-  }
-  return std::pair<size_t, bool>(matched, matched < 8);
-}
-#else
-static inline std::pair<size_t, bool> FindMatchLength(const char* s1,
-                                                      const char* s2,
-                                                      const char* s2_limit) {
-  // Implementation based on the x86-64 version, above.
-  assert(s2_limit >= s2);
-  int matched = 0;
-
-  while (s2 <= s2_limit - 4 &&
-         UNALIGNED_LOAD32(s2) == UNALIGNED_LOAD32(s1 + matched)) {
-    s2 += 4;
-    matched += 4;
-  }
-  if (LittleEndian::IsLittleEndian() && s2 <= s2_limit - 4) {
-    uint32 x = UNALIGNED_LOAD32(s2) ^ UNALIGNED_LOAD32(s1 + matched);
-    int matching_bits = Bits::FindLSBSetNonZero(x);
-    matched += matching_bits >> 3;
-  } else {
-    while ((s2 < s2_limit) && (s1[matched] == *s2)) {
-      ++s2;
-      ++matched;
-    }
-  }
-  return std::pair<size_t, bool>(matched, matched < 8);
-}
-#endif
-
-// Lookup tables for decompression code.  Give --snappy_dump_decompression_table
-// to the unit test to recompute char_table.
-
-enum {
-  LITERAL = 0,
-  COPY_1_BYTE_OFFSET = 1,  // 3 bit length + 3 bits of offset in opcode
-  COPY_2_BYTE_OFFSET = 2,
-  COPY_4_BYTE_OFFSET = 3
-};
-static const int kMaximumTagLength = 5;  // COPY_4_BYTE_OFFSET plus the actual offset.
-
-// Data stored per entry in lookup table:
-//      Range   Bits-used       Description
-//      ------------------------------------
-//      1..64   0..7            Literal/copy length encoded in opcode byte
-//      0..7    8..10           Copy offset encoded in opcode byte / 256
-//      0..4    11..13          Extra bytes after opcode
-//
-// We use eight bits for the length even though 7 would have sufficed
-// because of efficiency reasons:
-//      (1) Extracting a byte is faster than a bit-field
-//      (2) It properly aligns copy offset so we do not need a <<8
-static const uint16 char_table[256] = {
-  0x0001, 0x0804, 0x1001, 0x2001, 0x0002, 0x0805, 0x1002, 0x2002,
-  0x0003, 0x0806, 0x1003, 0x2003, 0x0004, 0x0807, 0x1004, 0x2004,
-  0x0005, 0x0808, 0x1005, 0x2005, 0x0006, 0x0809, 0x1006, 0x2006,
-  0x0007, 0x080a, 0x1007, 0x2007, 0x0008, 0x080b, 0x1008, 0x2008,
-  0x0009, 0x0904, 0x1009, 0x2009, 0x000a, 0x0905, 0x100a, 0x200a,
-  0x000b, 0x0906, 0x100b, 0x200b, 0x000c, 0x0907, 0x100c, 0x200c,
-  0x000d, 0x0908, 0x100d, 0x200d, 0x000e, 0x0909, 0x100e, 0x200e,
-  0x000f, 0x090a, 0x100f, 0x200f, 0x0010, 0x090b, 0x1010, 0x2010,
-  0x0011, 0x0a04, 0x1011, 0x2011, 0x0012, 0x0a05, 0x1012, 0x2012,
-  0x0013, 0x0a06, 0x1013, 0x2013, 0x0014, 0x0a07, 0x1014, 0x2014,
-  0x0015, 0x0a08, 0x1015, 0x2015, 0x0016, 0x0a09, 0x1016, 0x2016,
-  0x0017, 0x0a0a, 0x1017, 0x2017, 0x0018, 0x0a0b, 0x1018, 0x2018,
-  0x0019, 0x0b04, 0x1019, 0x2019, 0x001a, 0x0b05, 0x101a, 0x201a,
-  0x001b, 0x0b06, 0x101b, 0x201b, 0x001c, 0x0b07, 0x101c, 0x201c,
-  0x001d, 0x0b08, 0x101d, 0x201d, 0x001e, 0x0b09, 0x101e, 0x201e,
-  0x001f, 0x0b0a, 0x101f, 0x201f, 0x0020, 0x0b0b, 0x1020, 0x2020,
-  0x0021, 0x0c04, 0x1021, 0x2021, 0x0022, 0x0c05, 0x1022, 0x2022,
-  0x0023, 0x0c06, 0x1023, 0x2023, 0x0024, 0x0c07, 0x1024, 0x2024,
-  0x0025, 0x0c08, 0x1025, 0x2025, 0x0026, 0x0c09, 0x1026, 0x2026,
-  0x0027, 0x0c0a, 0x1027, 0x2027, 0x0028, 0x0c0b, 0x1028, 0x2028,
-  0x0029, 0x0d04, 0x1029, 0x2029, 0x002a, 0x0d05, 0x102a, 0x202a,
-  0x002b, 0x0d06, 0x102b, 0x202b, 0x002c, 0x0d07, 0x102c, 0x202c,
-  0x002d, 0x0d08, 0x102d, 0x202d, 0x002e, 0x0d09, 0x102e, 0x202e,
-  0x002f, 0x0d0a, 0x102f, 0x202f, 0x0030, 0x0d0b, 0x1030, 0x2030,
-  0x0031, 0x0e04, 0x1031, 0x2031, 0x0032, 0x0e05, 0x1032, 0x2032,
-  0x0033, 0x0e06, 0x1033, 0x2033, 0x0034, 0x0e07, 0x1034, 0x2034,
-  0x0035, 0x0e08, 0x1035, 0x2035, 0x0036, 0x0e09, 0x1036, 0x2036,
-  0x0037, 0x0e0a, 0x1037, 0x2037, 0x0038, 0x0e0b, 0x1038, 0x2038,
-  0x0039, 0x0f04, 0x1039, 0x2039, 0x003a, 0x0f05, 0x103a, 0x203a,
-  0x003b, 0x0f06, 0x103b, 0x203b, 0x003c, 0x0f07, 0x103c, 0x203c,
-  0x0801, 0x0f08, 0x103d, 0x203d, 0x1001, 0x0f09, 0x103e, 0x203e,
-  0x1801, 0x0f0a, 0x103f, 0x203f, 0x2001, 0x0f0b, 0x1040, 0x2040
-};
-
-}  // end namespace internal
-
-
-// The size of a compression block. Note that many parts of the compression
-// code assumes that kBlockSize <= 65536; in particular, the hash table
-// can only store 16-bit offsets, and EmitCopy() also assumes the offset
-// is 65535 bytes or less. Note also that if you change this, it will
-// affect the framing format (see framing_format.txt).
-//
-// Note that there might be older data around that is compressed with larger
-// block sizes, so the decompression code should not rely on the
-// non-existence of long backreferences.
-static const int kBlockLog = 16;
-static const size_t kBlockSize = 1 << kBlockLog;
-
-static const int kMaxHashTableBits = 14;
-static const size_t kMaxHashTableSize = 1 << kMaxHashTableBits;
-
-
-}  // end namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
-
-
-// LICENSE_CHANGE_END
-
-
-
-#if !defined(SNAPPY_HAVE_SSSE3)
-// __SSSE3__ is defined by GCC and Clang. Visual Studio doesn't target SIMD
-// support between SSE2 and AVX (so SSSE3 instructions require AVX support), and
-// defines __AVX__ when AVX support is available.
-#if defined(__SSSE3__) || defined(__AVX__)
-#define SNAPPY_HAVE_SSSE3 1
-#else
-#define SNAPPY_HAVE_SSSE3 0
-#endif
-#endif  // !defined(SNAPPY_HAVE_SSSE3)
-
-#if !defined(SNAPPY_HAVE_BMI2)
-// __BMI2__ is defined by GCC and Clang. Visual Studio doesn't target BMI2
-// specifically, but it does define __AVX2__ when AVX2 support is available.
-// Fortunately, AVX2 was introduced in Haswell, just like BMI2.
-//
-// BMI2 is not defined as a subset of AVX2 (unlike SSSE3 and AVX above). So,
-// GCC and Clang can build code with AVX2 enabled but BMI2 disabled, in which
-// case issuing BMI2 instructions results in a compiler error.
-#if defined(__BMI2__) || (defined(_MSC_VER) && defined(__AVX2__))
-#define SNAPPY_HAVE_BMI2 1
-#else
-#define SNAPPY_HAVE_BMI2 0
-#endif
-#endif  // !defined(SNAPPY_HAVE_BMI2)
-
-#if SNAPPY_HAVE_SSSE3
-// Please do not replace with <x86intrin.h>. or with headers that assume more
-// advanced SSE versions without checking with all the OWNERS.
-#include <tmmintrin.h>
-#endif
-
-#if SNAPPY_HAVE_BMI2
-// Please do not replace with <x86intrin.h>. or with headers that assume more
-// advanced SSE versions without checking with all the OWNERS.
-#include <immintrin.h>
-#endif
-
-#include <stdio.h>
-
-#include <algorithm>
-#include <string>
-#include <vector>
-
-namespace duckdb_snappy {
-
-using internal::COPY_1_BYTE_OFFSET;
-using internal::COPY_2_BYTE_OFFSET;
-using internal::LITERAL;
-using internal::char_table;
-using internal::kMaximumTagLength;
-
-// Any hash function will produce a valid compressed bitstream, but a good
-// hash function reduces the number of collisions and thus yields better
-// compression for compressible input, and more speed for incompressible
-// input. Of course, it doesn't hurt if the hash function is reasonably fast
-// either, as it gets called a lot.
-static inline uint32 HashBytes(uint32 bytes, int shift) {
-  uint32 kMul = 0x1e35a7bd;
-  return (bytes * kMul) >> shift;
-}
-static inline uint32 Hash(const char* p, int shift) {
-  return HashBytes(UNALIGNED_LOAD32(p), shift);
-}
-
-size_t MaxCompressedLength(size_t source_len) {
-  // Compressed data can be defined as:
-  //    compressed := item* literal*
-  //    item       := literal* copy
-  //
-  // The trailing literal sequence has a space blowup of at most 62/60
-  // since a literal of length 60 needs one tag byte + one extra byte
-  // for length information.
-  //
-  // Item blowup is trickier to measure.  Suppose the "copy" op copies
-  // 4 bytes of data.  Because of a special check in the encoding code,
-  // we produce a 4-byte copy only if the offset is < 65536.  Therefore
-  // the copy op takes 3 bytes to encode, and this type of item leads
-  // to at most the 62/60 blowup for representing literals.
-  //
-  // Suppose the "copy" op copies 5 bytes of data.  If the offset is big
-  // enough, it will take 5 bytes to encode the copy op.  Therefore the
-  // worst case here is a one-byte literal followed by a five-byte copy.
-  // I.e., 6 bytes of input turn into 7 bytes of "compressed" data.
-  //
-  // This last factor dominates the blowup, so the final estimate is:
-  return 32 + source_len + source_len/6;
-}
-
-namespace {
-
-void UnalignedCopy64(const void* src, void* dst) {
-  char tmp[8];
-  memcpy(tmp, src, 8);
-  memcpy(dst, tmp, 8);
-}
-
-void UnalignedCopy128(const void* src, void* dst) {
-  // memcpy gets vectorized when the appropriate compiler options are used.
-  // For example, x86 compilers targeting SSE2+ will optimize to an SSE2 load
-  // and store.
-  char tmp[16];
-  memcpy(tmp, src, 16);
-  memcpy(dst, tmp, 16);
-}
-
-// Copy [src, src+(op_limit-op)) to [op, (op_limit-op)) a byte at a time. Used
-// for handling COPY operations where the input and output regions may overlap.
-// For example, suppose:
-//    src       == "ab"
-//    op        == src + 2
-//    op_limit  == op + 20
-// After IncrementalCopySlow(src, op, op_limit), the result will have eleven
-// copies of "ab"
-//    ababababababababababab
-// Note that this does not match the semantics of either memcpy() or memmove().
-inline char* IncrementalCopySlow(const char* src, char* op,
-                                 char* const op_limit) {
-  // TODO: Remove pragma when LLVM is aware this
-  // function is only called in cold regions and when cold regions don't get
-  // vectorized or unrolled.
-#ifdef __clang__
-#pragma clang loop unroll(disable)
-#endif
-  while (op < op_limit) {
-    *op++ = *src++;
-  }
-  return op_limit;
-}
-
-#if SNAPPY_HAVE_SSSE3
-
-// This is a table of shuffle control masks that can be used as the source
-// operand for PSHUFB to permute the contents of the destination XMM register
-// into a repeating byte pattern.
-alignas(16) const char pshufb_fill_patterns[7][16] = {
-  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-  {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
-  {0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0},
-  {0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3},
-  {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0},
-  {0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3},
-  {0, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3, 4, 5, 6, 0, 1},
-};
-
-#endif  // SNAPPY_HAVE_SSSE3
-
-// Copy [src, src+(op_limit-op)) to [op, (op_limit-op)) but faster than
-// IncrementalCopySlow. buf_limit is the address past the end of the writable
-// region of the buffer.
-inline char* IncrementalCopy(const char* src, char* op, char* const op_limit,
-                             char* const buf_limit) {
-  // Terminology:
-  //
-  // slop = buf_limit - op
-  // pat  = op - src
-  // len  = limit - op
-  assert(src < op);
-  assert(op <= op_limit);
-  assert(op_limit <= buf_limit);
-  // NOTE: The compressor always emits 4 <= len <= 64. It is ok to assume that
-  // to optimize this function but we have to also handle other cases in case
-  // the input does not satisfy these conditions.
-
-  size_t pattern_size = op - src;
-  // The cases are split into different branches to allow the branch predictor,
-  // FDO, and static prediction hints to work better. For each input we list the
-  // ratio of invocations that match each condition.
-  //
-  // input        slop < 16   pat < 8  len > 16
-  // ------------------------------------------
-  // html|html4|cp   0%         1.01%    27.73%
-  // urls            0%         0.88%    14.79%
-  // jpg             0%        64.29%     7.14%
-  // pdf             0%         2.56%    58.06%
-  // txt[1-4]        0%         0.23%     0.97%
-  // pb              0%         0.96%    13.88%
-  // bin             0.01%     22.27%    41.17%
-  //
-  // It is very rare that we don't have enough slop for doing block copies. It
-  // is also rare that we need to expand a pattern. Small patterns are common
-  // for incompressible formats and for those we are plenty fast already.
-  // Lengths are normally not greater than 16 but they vary depending on the
-  // input. In general if we always predict len <= 16 it would be an ok
-  // prediction.
-  //
-  // In order to be fast we want a pattern >= 8 bytes and an unrolled loop
-  // copying 2x 8 bytes at a time.
-
-  // Handle the uncommon case where pattern is less than 8 bytes.
-  if (SNAPPY_PREDICT_FALSE(pattern_size < 8)) {
-#if SNAPPY_HAVE_SSSE3
-    // Load the first eight bytes into an 128-bit XMM register, then use PSHUFB
-    // to permute the register's contents in-place into a repeating sequence of
-    // the first "pattern_size" bytes.
-    // For example, suppose:
-    //    src       == "abc"
-    //    op        == op + 3
-    // After _mm_shuffle_epi8(), "pattern" will have five copies of "abc"
-    // followed by one byte of slop: abcabcabcabcabca.
-    //
-    // The non-SSE fallback implementation suffers from store-forwarding stalls
-    // because its loads and stores partly overlap. By expanding the pattern
-    // in-place, we avoid the penalty.
-    if (SNAPPY_PREDICT_TRUE(op <= buf_limit - 16)) {
-      const __m128i shuffle_mask = _mm_load_si128(
-          reinterpret_cast<const __m128i*>(pshufb_fill_patterns)
-          + pattern_size - 1);
-      const __m128i pattern = _mm_shuffle_epi8(
-          _mm_loadl_epi64(reinterpret_cast<const __m128i*>(src)), shuffle_mask);
-      // Uninitialized bytes are masked out by the shuffle mask.
-      // TODO: remove annotation and macro defs once MSan is fixed.
-      SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(&pattern, sizeof(pattern));
-      pattern_size *= 16 / pattern_size;
-      char* op_end = std::min(op_limit, buf_limit - 15);
-      while (op < op_end) {
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(op), pattern);
-        op += pattern_size;
-      }
-      if (SNAPPY_PREDICT_TRUE(op >= op_limit)) return op_limit;
-    }
-    return IncrementalCopySlow(src, op, op_limit);
-#else  // !SNAPPY_HAVE_SSSE3
-    // If plenty of buffer space remains, expand the pattern to at least 8
-    // bytes. The way the following loop is written, we need 8 bytes of buffer
-    // space if pattern_size >= 4, 11 bytes if pattern_size is 1 or 3, and 10
-    // bytes if pattern_size is 2.  Precisely encoding that is probably not
-    // worthwhile; instead, invoke the slow path if we cannot write 11 bytes
-    // (because 11 are required in the worst case).
-    if (SNAPPY_PREDICT_TRUE(op <= buf_limit - 11)) {
-      while (pattern_size < 8) {
-        UnalignedCopy64(src, op);
-        op += pattern_size;
-        pattern_size *= 2;
-      }
-      if (SNAPPY_PREDICT_TRUE(op >= op_limit)) return op_limit;
-    } else {
-      return IncrementalCopySlow(src, op, op_limit);
-    }
-#endif  // SNAPPY_HAVE_SSSE3
-  }
-  assert(pattern_size >= 8);
-
-  // Copy 2x 8 bytes at a time. Because op - src can be < 16, a single
-  // UnalignedCopy128 might overwrite data in op. UnalignedCopy64 is safe
-  // because expanding the pattern to at least 8 bytes guarantees that
-  // op - src >= 8.
-  //
-  // Typically, the op_limit is the gating factor so try to simplify the loop
-  // based on that.
-  if (SNAPPY_PREDICT_TRUE(op_limit <= buf_limit - 16)) {
-    // Factor the displacement from op to the source into a variable. This helps
-    // simplify the loop below by only varying the op pointer which we need to
-    // test for the end. Note that this was done after carefully examining the
-    // generated code to allow the addressing modes in the loop below to
-    // maximize micro-op fusion where possible on modern Intel processors. The
-    // generated code should be checked carefully for new processors or with
-    // major changes to the compiler.
-    // TODO: Simplify this code when the compiler reliably produces
-    // the correct x86 instruction sequence.
-    ptrdiff_t op_to_src = src - op;
-
-    // The trip count of this loop is not large and so unrolling will only hurt
-    // code size without helping performance.
-    //
-    // TODO: Replace with loop trip count hint.
-#ifdef __clang__
-#pragma clang loop unroll(disable)
-#endif
-    do {
-      UnalignedCopy64(op + op_to_src, op);
-      UnalignedCopy64(op + op_to_src + 8, op + 8);
-      op += 16;
-    } while (op < op_limit);
-    return op_limit;
-  }
-
-  // Fall back to doing as much as we can with the available slop in the
-  // buffer. This code path is relatively cold however so we save code size by
-  // avoiding unrolling and vectorizing.
-  //
-  // TODO: Remove pragma when when cold regions don't get vectorized
-  // or unrolled.
-#ifdef __clang__
-#pragma clang loop unroll(disable)
-#endif
-  for (char *op_end = buf_limit - 16; op < op_end; op += 16, src += 16) {
-    UnalignedCopy64(src, op);
-    UnalignedCopy64(src + 8, op + 8);
-  }
-  if (op >= op_limit)
-    return op_limit;
-
-  // We only take this branch if we didn't have enough slop and we can do a
-  // single 8 byte copy.
-  if (SNAPPY_PREDICT_FALSE(op <= buf_limit - 8)) {
-    UnalignedCopy64(src, op);
-    src += 8;
-    op += 8;
-  }
-  return IncrementalCopySlow(src, op, op_limit);
-}
-
-}  // namespace
-
-template <bool allow_fast_path>
-static inline char* EmitLiteral(char* op,
-                                const char* literal,
-                                int len) {
-  // The vast majority of copies are below 16 bytes, for which a
-  // call to memcpy is overkill. This fast path can sometimes
-  // copy up to 15 bytes too much, but that is okay in the
-  // main loop, since we have a bit to go on for both sides:
-  //
-  //   - The input will always have kInputMarginBytes = 15 extra
-  //     available bytes, as long as we're in the main loop, and
-  //     if not, allow_fast_path = false.
-  //   - The output will always have 32 spare bytes (see
-  //     MaxCompressedLength).
-  assert(len > 0);      // Zero-length literals are disallowed
-  int n = len - 1;
-  if (allow_fast_path && len <= 16) {
-    // Fits in tag byte
-    *op++ = LITERAL | (n << 2);
-
-    UnalignedCopy128(literal, op);
-    return op + len;
-  }
-
-  if (n < 60) {
-    // Fits in tag byte
-    *op++ = LITERAL | (n << 2);
-  } else {
-    int count = (Bits::Log2Floor(n) >> 3) + 1;
-    assert(count >= 1);
-    assert(count <= 4);
-    *op++ = LITERAL | ((59 + count) << 2);
-    // Encode in upcoming bytes.
-    // Write 4 bytes, though we may care about only 1 of them. The output buffer
-    // is guaranteed to have at least 3 more spaces left as 'len >= 61' holds
-    // here and there is a memcpy of size 'len' below.
-    LittleEndian::Store32(op, n);
-    op += count;
-  }
-  memcpy(op, literal, len);
-  return op + len;
-}
-
-template <bool len_less_than_12>
-static inline char* EmitCopyAtMost64(char* op, size_t offset, size_t len) {
-  assert(len <= 64);
-  assert(len >= 4);
-  assert(offset < 65536);
-  assert(len_less_than_12 == (len < 12));
-
-  if (len_less_than_12 && SNAPPY_PREDICT_TRUE(offset < 2048)) {
-    // offset fits in 11 bits.  The 3 highest go in the top of the first byte,
-    // and the rest go in the second byte.
-    *op++ = COPY_1_BYTE_OFFSET + ((len - 4) << 2) + ((offset >> 3) & 0xe0);
-    *op++ = offset & 0xff;
-  } else {
-    // Write 4 bytes, though we only care about 3 of them.  The output buffer
-    // is required to have some slack, so the extra byte won't overrun it.
-    uint32 u = COPY_2_BYTE_OFFSET + ((len - 1) << 2) + (offset << 8);
-    LittleEndian::Store32(op, u);
-    op += 3;
-  }
-  return op;
-}
-
-template <bool len_less_than_12>
-static inline char* EmitCopy(char* op, size_t offset, size_t len) {
-  assert(len_less_than_12 == (len < 12));
-  if (len_less_than_12) {
-    return EmitCopyAtMost64</*len_less_than_12=*/true>(op, offset, len);
-  } else {
-    // A special case for len <= 64 might help, but so far measurements suggest
-    // it's in the noise.
-
-    // Emit 64 byte copies but make sure to keep at least four bytes reserved.
-    while (SNAPPY_PREDICT_FALSE(len >= 68)) {
-      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, 64);
-      len -= 64;
-    }
-
-    // One or two copies will now finish the job.
-    if (len > 64) {
-      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, 60);
-      len -= 60;
-    }
-
-    // Emit remainder.
-    if (len < 12) {
-      op = EmitCopyAtMost64</*len_less_than_12=*/true>(op, offset, len);
-    } else {
-      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, len);
-    }
-    return op;
-  }
-}
-
-bool GetUncompressedLength(const char* start, size_t n, size_t* result) {
-  uint32 v = 0;
-  const char* limit = start + n;
-  if (Varint::Parse32WithLimit(start, limit, &v) != NULL) {
-    *result = v;
-    return true;
-  } else {
-    return false;
-  }
-}
-
-namespace {
-uint32 CalculateTableSize(uint32 input_size) {
-  assert(kMaxHashTableSize >= 256);
-  if (input_size > kMaxHashTableSize) {
-    return kMaxHashTableSize;
-  }
-  if (input_size < 256) {
-    return 256;
-  }
-  // This is equivalent to Log2Ceiling(input_size), assuming input_size > 1.
-  // 2 << Log2Floor(x - 1) is equivalent to 1 << (1 + Log2Floor(x - 1)).
-  return 2u << Bits::Log2Floor(input_size - 1);
-}
-}  // namespace
-
-namespace internal {
-WorkingMemory::WorkingMemory(size_t input_size) {
-  const size_t max_fragment_size = std::min(input_size, kBlockSize);
-  const size_t table_size = CalculateTableSize(max_fragment_size);
-  size_ = table_size * sizeof(*table_) + max_fragment_size +
-          MaxCompressedLength(max_fragment_size);
-  mem_ = std::allocator<char>().allocate(size_);
-  table_ = reinterpret_cast<uint16*>(mem_);
-  input_ = mem_ + table_size * sizeof(*table_);
-  output_ = input_ + max_fragment_size;
-}
-
-WorkingMemory::~WorkingMemory() {
-  std::allocator<char>().deallocate(mem_, size_);
-}
-
-uint16* WorkingMemory::GetHashTable(size_t fragment_size,
-                                    int* table_size) const {
-  const size_t htsize = CalculateTableSize(fragment_size);
-  memset(table_, 0, htsize * sizeof(*table_));
-  *table_size = htsize;
-  return table_;
-}
-}  // end namespace internal
-
-// For 0 <= offset <= 4, GetUint32AtOffset(GetEightBytesAt(p), offset) will
-// equal UNALIGNED_LOAD32(p + offset).  Motivation: On x86-64 hardware we have
-// empirically found that overlapping loads such as
-//  UNALIGNED_LOAD32(p) ... UNALIGNED_LOAD32(p+1) ... UNALIGNED_LOAD32(p+2)
-// are slower than UNALIGNED_LOAD64(p) followed by shifts and casts to uint32.
-//
-// We have different versions for 64- and 32-bit; ideally we would avoid the
-// two functions and just inline the UNALIGNED_LOAD64 call into
-// GetUint32AtOffset, but GCC (at least not as of 4.6) is seemingly not clever
-// enough to avoid loading the value multiple times then. For 64-bit, the load
-// is done when GetEightBytesAt() is called, whereas for 32-bit, the load is
-// done at GetUint32AtOffset() time.
-
-#ifdef ARCH_K8
-
-typedef uint64 EightBytesReference;
-
-static inline EightBytesReference GetEightBytesAt(const char* ptr) {
-  return UNALIGNED_LOAD64(ptr);
-}
-
-static inline uint32 GetUint32AtOffset(uint64 v, int offset) {
-  assert(offset >= 0);
-  assert(offset <= 4);
-  return v >> (LittleEndian::IsLittleEndian() ? 8 * offset : 32 - 8 * offset);
-}
-
-#else
-
-typedef const char* EightBytesReference;
-
-static inline EightBytesReference GetEightBytesAt(const char* ptr) {
-  return ptr;
-}
-
-static inline uint32 GetUint32AtOffset(const char* v, int offset) {
-  assert(offset >= 0);
-  assert(offset <= 4);
-  return UNALIGNED_LOAD32(v + offset);
-}
-
-#endif
-
-// Flat array compression that does not emit the "uncompressed length"
-// prefix. Compresses "input" string to the "*op" buffer.
-//
-// REQUIRES: "input" is at most "kBlockSize" bytes long.
-// REQUIRES: "op" points to an array of memory that is at least
-// "MaxCompressedLength(input.size())" in size.
-// REQUIRES: All elements in "table[0..table_size-1]" are initialized to zero.
-// REQUIRES: "table_size" is a power of two
-//
-// Returns an "end" pointer into "op" buffer.
-// "end - op" is the compressed size of "input".
-namespace internal {
-char* CompressFragment(const char* input,
-                       size_t input_size,
-                       char* op,
-                       uint16* table,
-                       const int table_size) {
-  // "ip" is the input pointer, and "op" is the output pointer.
-  const char* ip = input;
-  assert(input_size <= kBlockSize);
-  assert((table_size & (table_size - 1)) == 0);  // table must be power of two
-  const int shift = 32 - Bits::Log2Floor(table_size);
-  // assert(static_cast<int>(kuint32max >> shift) == table_size - 1);
-  const char* ip_end = input + input_size;
-  const char* base_ip = ip;
-  // Bytes in [next_emit, ip) will be emitted as literal bytes.  Or
-  // [next_emit, ip_end) after the main loop.
-  const char* next_emit = ip;
-
-  const size_t kInputMarginBytes = 15;
-  if (SNAPPY_PREDICT_TRUE(input_size >= kInputMarginBytes)) {
-    const char* ip_limit = input + input_size - kInputMarginBytes;
-
-    for (uint32 next_hash = Hash(++ip, shift); ; ) {
-      assert(next_emit < ip);
-      // The body of this loop calls EmitLiteral once and then EmitCopy one or
-      // more times.  (The exception is that when we're close to exhausting
-      // the input we goto emit_remainder.)
-      //
-      // In the first iteration of this loop we're just starting, so
-      // there's nothing to copy, so calling EmitLiteral once is
-      // necessary.  And we only start a new iteration when the
-      // current iteration has determined that a call to EmitLiteral will
-      // precede the next call to EmitCopy (if any).
-      //
-      // Step 1: Scan forward in the input looking for a 4-byte-long match.
-      // If we get close to exhausting the input then goto emit_remainder.
-      //
-      // Heuristic match skipping: If 32 bytes are scanned with no matches
-      // found, start looking only at every other byte. If 32 more bytes are
-      // scanned (or skipped), look at every third byte, etc.. When a match is
-      // found, immediately go back to looking at every byte. This is a small
-      // loss (~5% performance, ~0.1% density) for compressible data due to more
-      // bookkeeping, but for non-compressible data (such as JPEG) it's a huge
-      // win since the compressor quickly "realizes" the data is incompressible
-      // and doesn't bother looking for matches everywhere.
-      //
-      // The "skip" variable keeps track of how many bytes there are since the
-      // last match; dividing it by 32 (ie. right-shifting by five) gives the
-      // number of bytes to move ahead for each iteration.
-      uint32 skip = 32;
-
-      const char* next_ip = ip;
-      const char* candidate;
-      do {
-        ip = next_ip;
-        uint32 hash = next_hash;
-        assert(hash == Hash(ip, shift));
-        uint32 bytes_between_hash_lookups = skip >> 5;
-        skip += bytes_between_hash_lookups;
-        next_ip = ip + bytes_between_hash_lookups;
-        if (SNAPPY_PREDICT_FALSE(next_ip > ip_limit)) {
-          goto emit_remainder;
-        }
-        next_hash = Hash(next_ip, shift);
-        candidate = base_ip + table[hash];
-        assert(candidate >= base_ip);
-        assert(candidate < ip);
-
-        table[hash] = ip - base_ip;
-      } while (SNAPPY_PREDICT_TRUE(UNALIGNED_LOAD32(ip) !=
-                                 UNALIGNED_LOAD32(candidate)));
-
-      // Step 2: A 4-byte match has been found.  We'll later see if more
-      // than 4 bytes match.  But, prior to the match, input
-      // bytes [next_emit, ip) are unmatched.  Emit them as "literal bytes."
-      assert(next_emit + 16 <= ip_end);
-      op = EmitLiteral</*allow_fast_path=*/true>(op, next_emit, ip - next_emit);
-
-      // Step 3: Call EmitCopy, and then see if another EmitCopy could
-      // be our next move.  Repeat until we find no match for the
-      // input immediately after what was consumed by the last EmitCopy call.
-      //
-      // If we exit this loop normally then we need to call EmitLiteral next,
-      // though we don't yet know how big the literal will be.  We handle that
-      // by proceeding to the next iteration of the main loop.  We also can exit
-      // this loop via goto if we get close to exhausting the input.
-      EightBytesReference input_bytes;
-      uint32 candidate_bytes = 0;
-
-      do {
-        // We have a 4-byte match at ip, and no need to emit any
-        // "literal bytes" prior to ip.
-        const char* base = ip;
-        std::pair<size_t, bool> p =
-            FindMatchLength(candidate + 4, ip + 4, ip_end);
-        size_t matched = 4 + p.first;
-        ip += matched;
-        size_t offset = base - candidate;
-        assert(0 == memcmp(base, candidate, matched));
-        if (p.second) {
-          op = EmitCopy</*len_less_than_12=*/true>(op, offset, matched);
-        } else {
-          op = EmitCopy</*len_less_than_12=*/false>(op, offset, matched);
-        }
-        next_emit = ip;
-        if (SNAPPY_PREDICT_FALSE(ip >= ip_limit)) {
-          goto emit_remainder;
-        }
-        // We are now looking for a 4-byte match again.  We read
-        // table[Hash(ip, shift)] for that.  To improve compression,
-        // we also update table[Hash(ip - 1, shift)] and table[Hash(ip, shift)].
-        input_bytes = GetEightBytesAt(ip - 1);
-        uint32 prev_hash = HashBytes(GetUint32AtOffset(input_bytes, 0), shift);
-        table[prev_hash] = ip - base_ip - 1;
-        uint32 cur_hash = HashBytes(GetUint32AtOffset(input_bytes, 1), shift);
-        candidate = base_ip + table[cur_hash];
-        candidate_bytes = UNALIGNED_LOAD32(candidate);
-        table[cur_hash] = ip - base_ip;
-      } while (GetUint32AtOffset(input_bytes, 1) == candidate_bytes);
-
-      next_hash = HashBytes(GetUint32AtOffset(input_bytes, 2), shift);
-      ++ip;
-    }
-  }
-
- emit_remainder:
-  // Emit the remaining bytes as a literal
-  if (next_emit < ip_end) {
-    op = EmitLiteral</*allow_fast_path=*/false>(op, next_emit,
-                                                ip_end - next_emit);
-  }
-
-  return op;
-}
-}  // end namespace internal
-
-// Called back at avery compression call to trace parameters and sizes.
-static inline void Report(const char *algorithm, size_t compressed_size,
-                          size_t uncompressed_size) {}
-
-// Signature of output types needed by decompression code.
-// The decompression code is templatized on a type that obeys this
-// signature so that we do not pay virtual function call overhead in
-// the middle of a tight decompression loop.
-//
-// class DecompressionWriter {
-//  public:
-//   // Called before decompression
-//   void SetExpectedLength(size_t length);
-//
-//   // Called after decompression
-//   bool CheckLength() const;
-//
-//   // Called repeatedly during decompression
-//   bool Append(const char* ip, size_t length);
-//   bool AppendFromSelf(uint32 offset, size_t length);
-//
-//   // The rules for how TryFastAppend differs from Append are somewhat
-//   // convoluted:
-//   //
-//   //  - TryFastAppend is allowed to decline (return false) at any
-//   //    time, for any reason -- just "return false" would be
-//   //    a perfectly legal implementation of TryFastAppend.
-//   //    The intention is for TryFastAppend to allow a fast path
-//   //    in the common case of a small append.
-//   //  - TryFastAppend is allowed to read up to <available> bytes
-//   //    from the input buffer, whereas Append is allowed to read
-//   //    <length>. However, if it returns true, it must leave
-//   //    at least five (kMaximumTagLength) bytes in the input buffer
-//   //    afterwards, so that there is always enough space to read the
-//   //    next tag without checking for a refill.
-//   //  - TryFastAppend must always return decline (return false)
-//   //    if <length> is 61 or more, as in this case the literal length is not
-//   //    decoded fully. In practice, this should not be a big problem,
-//   //    as it is unlikely that one would implement a fast path accepting
-//   //    this much data.
-//   //
-//   bool TryFastAppend(const char* ip, size_t available, size_t length);
-// };
-
-static inline uint32 ExtractLowBytes(uint32 v, int n) {
-  assert(n >= 0);
-  assert(n <= 4);
-#if SNAPPY_HAVE_BMI2
-  return _bzhi_u32(v, 8 * n);
-#else
-  // This needs to be wider than uint32 otherwise `mask << 32` will be
-  // undefined.
-  uint64 mask = 0xffffffff;
-  return v & ~(mask << (8 * n));
-#endif
-}
-
-static inline bool LeftShiftOverflows(uint8 value, uint32 shift) {
-  assert(shift < 32);
-  static const uint8 masks[] = {
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
-      0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe};
-  return (value & masks[shift]) != 0;
-}
-
-// Helper class for decompression
-class SnappyDecompressor {
- private:
-  Source*       reader_;         // Underlying source of bytes to decompress
-  const char*   ip_;             // Points to next buffered byte
-  const char*   ip_limit_;       // Points just past buffered bytes
-  uint32        peeked_;         // Bytes peeked from reader (need to skip)
-  bool          eof_;            // Hit end of input without an error?
-  char          scratch_[kMaximumTagLength];  // See RefillTag().
-
-  // Ensure that all of the tag metadata for the next tag is available
-  // in [ip_..ip_limit_-1].  Also ensures that [ip,ip+4] is readable even
-  // if (ip_limit_ - ip_ < 5).
-  //
-  // Returns true on success, false on error or end of input.
-  bool RefillTag();
-
- public:
-  explicit SnappyDecompressor(Source* reader)
-      : reader_(reader),
-        ip_(NULL),
-        ip_limit_(NULL),
-        peeked_(0),
-        eof_(false) {
-  }
-
-  ~SnappyDecompressor() {
-    // Advance past any bytes we peeked at from the reader
-    reader_->Skip(peeked_);
-  }
-
-  // Returns true iff we have hit the end of the input without an error.
-  bool eof() const {
-    return eof_;
-  }
-
-  // Read the uncompressed length stored at the start of the compressed data.
-  // On success, stores the length in *result and returns true.
-  // On failure, returns false.
-  bool ReadUncompressedLength(uint32* result) {
-    assert(ip_ == NULL);       // Must not have read anything yet
-    // Length is encoded in 1..5 bytes
-    *result = 0;
-    uint32 shift = 0;
-    while (true) {
-      if (shift >= 32) return false;
-      size_t n;
-      const char* ip = reader_->Peek(&n);
-      if (n == 0) return false;
-      const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip));
-      reader_->Skip(1);
-      uint32 val = c & 0x7f;
-      if (LeftShiftOverflows(static_cast<uint8>(val), shift)) return false;
-      *result |= val << shift;
-      if (c < 128) {
-        break;
-      }
-      shift += 7;
-    }
-    return true;
-  }
-
-  // Process the next item found in the input.
-  // Returns true if successful, false on error or end of input.
-  template <class Writer>
-#if defined(__GNUC__) && defined(__x86_64__)
-  __attribute__((aligned(32)))
-#endif
-  void DecompressAllTags(Writer* writer) {
-    // In x86, pad the function body to start 16 bytes later. This function has
-    // a couple of hotspots that are highly sensitive to alignment: we have
-    // observed regressions by more than 20% in some metrics just by moving the
-    // exact same code to a different position in the benchmark binary.
-    //
-    // Putting this code on a 32-byte-aligned boundary + 16 bytes makes us hit
-    // the "lucky" case consistently. Unfortunately, this is a very brittle
-    // workaround, and future differences in code generation may reintroduce
-    // this regression. If you experience a big, difficult to explain, benchmark
-    // performance regression here, first try removing this hack.
-#if defined(__GNUC__) && defined(__x86_64__)
-    // Two 8-byte "NOP DWORD ptr [EAX + EAX*1 + 00000000H]" instructions.
-    asm(".byte 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00");
-    asm(".byte 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00");
-#endif
-
-    const char* ip = ip_;
-    // We could have put this refill fragment only at the beginning of the loop.
-    // However, duplicating it at the end of each branch gives the compiler more
-    // scope to optimize the <ip_limit_ - ip> expression based on the local
-    // context, which overall increases speed.
-    #define MAYBE_REFILL() \
-        if (ip_limit_ - ip < kMaximumTagLength) { \
-          ip_ = ip; \
-          if (!RefillTag()) return; \
-          ip = ip_; \
-        }
-
-    MAYBE_REFILL();
-    for ( ;; ) {
-      const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip++));
-
-      // Ratio of iterations that have LITERAL vs non-LITERAL for different
-      // inputs.
-      //
-      // input          LITERAL  NON_LITERAL
-      // -----------------------------------
-      // html|html4|cp   23%        77%
-      // urls            36%        64%
-      // jpg             47%        53%
-      // pdf             19%        81%
-      // txt[1-4]        25%        75%
-      // pb              24%        76%
-      // bin             24%        76%
-      if (SNAPPY_PREDICT_FALSE((c & 0x3) == LITERAL)) {
-        size_t literal_length = (c >> 2) + 1u;
-        if (writer->TryFastAppend(ip, ip_limit_ - ip, literal_length)) {
-          assert(literal_length < 61);
-          ip += literal_length;
-          // NOTE: There is no MAYBE_REFILL() here, as TryFastAppend()
-          // will not return true unless there's already at least five spare
-          // bytes in addition to the literal.
-          continue;
-        }
-        if (SNAPPY_PREDICT_FALSE(literal_length >= 61)) {
-          // Long literal.
-          const size_t literal_length_length = literal_length - 60;
-          literal_length =
-              ExtractLowBytes(LittleEndian::Load32(ip), literal_length_length) +
-              1;
-          ip += literal_length_length;
-        }
-
-        size_t avail = ip_limit_ - ip;
-        while (avail < literal_length) {
-          if (!writer->Append(ip, avail)) return;
-          literal_length -= avail;
-          reader_->Skip(peeked_);
-          size_t n;
-          ip = reader_->Peek(&n);
-          avail = n;
-          peeked_ = avail;
-          if (avail == 0) return;  // Premature end of input
-          ip_limit_ = ip + avail;
-        }
-        if (!writer->Append(ip, literal_length)) {
-          return;
-        }
-        ip += literal_length;
-        MAYBE_REFILL();
-      } else {
-        const size_t entry = char_table[c];
-        const size_t trailer =
-            ExtractLowBytes(LittleEndian::Load32(ip), entry >> 11);
-        const size_t length = entry & 0xff;
-        ip += entry >> 11;
-
-        // copy_offset/256 is encoded in bits 8..10.  By just fetching
-        // those bits, we get copy_offset (since the bit-field starts at
-        // bit 8).
-        const size_t copy_offset = entry & 0x700;
-        if (!writer->AppendFromSelf(copy_offset + trailer, length)) {
-          return;
-        }
-        MAYBE_REFILL();
-      }
-    }
-
-#undef MAYBE_REFILL
-  }
-};
-
-bool SnappyDecompressor::RefillTag() {
-  const char* ip = ip_;
-  if (ip == ip_limit_) {
-    // Fetch a new fragment from the reader
-    reader_->Skip(peeked_);   // All peeked bytes are used up
-    size_t n;
-    ip = reader_->Peek(&n);
-    peeked_ = n;
-    eof_ = (n == 0);
-    if (eof_) return false;
-    ip_limit_ = ip + n;
-  }
-
-  // Read the tag character
-  assert(ip < ip_limit_);
-  const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip));
-  const uint32 entry = char_table[c];
-  const uint32 needed = (entry >> 11) + 1;  // +1 byte for 'c'
-  assert(needed <= sizeof(scratch_));
-
-  // Read more bytes from reader if needed
-  uint32 nbuf = ip_limit_ - ip;
-  if (nbuf < needed) {
-    // Stitch together bytes from ip and reader to form the word
-    // contents.  We store the needed bytes in "scratch_".  They
-    // will be consumed immediately by the caller since we do not
-    // read more than we need.
-    memmove(scratch_, ip, nbuf);
-    reader_->Skip(peeked_);  // All peeked bytes are used up
-    peeked_ = 0;
-    while (nbuf < needed) {
-      size_t length;
-      const char* src = reader_->Peek(&length);
-      if (length == 0) return false;
-      uint32 to_add = std::min<uint32>(needed - nbuf, length);
-      memcpy(scratch_ + nbuf, src, to_add);
-      nbuf += to_add;
-      reader_->Skip(to_add);
-    }
-    assert(nbuf == needed);
-    ip_ = scratch_;
-    ip_limit_ = scratch_ + needed;
-  } else if (nbuf < kMaximumTagLength) {
-    // Have enough bytes, but move into scratch_ so that we do not
-    // read past end of input
-    memmove(scratch_, ip, nbuf);
-    reader_->Skip(peeked_);  // All peeked bytes are used up
-    peeked_ = 0;
-    ip_ = scratch_;
-    ip_limit_ = scratch_ + nbuf;
-  } else {
-    // Pass pointer to buffer returned by reader_.
-    ip_ = ip;
-  }
-  return true;
-}
-
-template <typename Writer>
-static bool InternalUncompress(Source* r, Writer* writer) {
-  // Read the uncompressed length from the front of the compressed input
-  SnappyDecompressor decompressor(r);
-  uint32 uncompressed_len = 0;
-  if (!decompressor.ReadUncompressedLength(&uncompressed_len)) return false;
-
-  return InternalUncompressAllTags(&decompressor, writer, r->Available(),
-                                   uncompressed_len);
-}
-
-template <typename Writer>
-static bool InternalUncompressAllTags(SnappyDecompressor* decompressor,
-                                      Writer* writer,
-                                      uint32 compressed_len,
-                                      uint32 uncompressed_len) {
-  Report("snappy_uncompress", compressed_len, uncompressed_len);
-
-  writer->SetExpectedLength(uncompressed_len);
-
-  // Process the entire input
-  decompressor->DecompressAllTags(writer);
-  writer->Flush();
-  return (decompressor->eof() && writer->CheckLength());
-}
-
-bool GetUncompressedLength(Source* source, uint32* result) {
-  SnappyDecompressor decompressor(source);
-  return decompressor.ReadUncompressedLength(result);
-}
-
-size_t Compress(Source* reader, Sink* writer) {
-  size_t written = 0;
-  size_t N = reader->Available();
-  const size_t uncompressed_size = N;
-  char ulength[Varint::kMax32];
-  char* p = Varint::Encode32(ulength, N);
-  writer->Append(ulength, p-ulength);
-  written += (p - ulength);
-
-  internal::WorkingMemory wmem(N);
-
-  while (N > 0) {
-    // Get next block to compress (without copying if possible)
-    size_t fragment_size;
-    const char* fragment = reader->Peek(&fragment_size);
-    assert(fragment_size != 0);  // premature end of input
-    const size_t num_to_read = std::min(N, kBlockSize);
-    size_t bytes_read = fragment_size;
-
-    size_t pending_advance = 0;
-    if (bytes_read >= num_to_read) {
-      // Buffer returned by reader is large enough
-      pending_advance = num_to_read;
-      fragment_size = num_to_read;
-    } else {
-      char* scratch = wmem.GetScratchInput();
-      memcpy(scratch, fragment, bytes_read);
-      reader->Skip(bytes_read);
-
-      while (bytes_read < num_to_read) {
-        fragment = reader->Peek(&fragment_size);
-        size_t n = std::min<size_t>(fragment_size, num_to_read - bytes_read);
-        memcpy(scratch + bytes_read, fragment, n);
-        bytes_read += n;
-        reader->Skip(n);
-      }
-      assert(bytes_read == num_to_read);
-      fragment = scratch;
-      fragment_size = num_to_read;
-    }
-    assert(fragment_size == num_to_read);
-
-    // Get encoding table for compression
-    int table_size;
-    uint16* table = wmem.GetHashTable(num_to_read, &table_size);
-
-    // Compress input_fragment and append to dest
-    const int max_output = MaxCompressedLength(num_to_read);
-
-    // Need a scratch buffer for the output, in case the byte sink doesn't
-    // have room for us directly.
-
-    // Since we encode kBlockSize regions followed by a region
-    // which is <= kBlockSize in length, a previously allocated
-    // scratch_output[] region is big enough for this iteration.
-    char* dest = writer->GetAppendBuffer(max_output, wmem.GetScratchOutput());
-    char* end = internal::CompressFragment(fragment, fragment_size, dest, table,
-                                           table_size);
-    writer->Append(dest, end - dest);
-    written += (end - dest);
-
-    N -= num_to_read;
-    reader->Skip(pending_advance);
-  }
-
-  Report("snappy_compress", written, uncompressed_size);
-
-  return written;
-}
-
-// -----------------------------------------------------------------------
-// IOVec interfaces
-// -----------------------------------------------------------------------
-
-// A type that writes to an iovec.
-// Note that this is not a "ByteSink", but a type that matches the
-// Writer template argument to SnappyDecompressor::DecompressAllTags().
-class SnappyIOVecWriter {
- private:
-  // output_iov_end_ is set to iov + count and used to determine when
-  // the end of the iovs is reached.
-  const struct iovec* output_iov_end_;
-
-#if !defined(NDEBUG)
-  const struct iovec* output_iov_;
-#endif  // !defined(NDEBUG)
-
-  // Current iov that is being written into.
-  const struct iovec* curr_iov_;
-
-  // Pointer to current iov's write location.
-  char* curr_iov_output_;
-
-  // Remaining bytes to write into curr_iov_output.
-  size_t curr_iov_remaining_;
-
-  // Total bytes decompressed into output_iov_ so far.
-  size_t total_written_;
-
-  // Maximum number of bytes that will be decompressed into output_iov_.
-  size_t output_limit_;
-
-  static inline char* GetIOVecPointer(const struct iovec* iov, size_t offset) {
-    return reinterpret_cast<char*>(iov->iov_base) + offset;
-  }
-
- public:
-  // Does not take ownership of iov. iov must be valid during the
-  // entire lifetime of the SnappyIOVecWriter.
-  inline SnappyIOVecWriter(const struct iovec* iov, size_t iov_count)
-      : output_iov_end_(iov + iov_count),
-#if !defined(NDEBUG)
-        output_iov_(iov),
-#endif  // !defined(NDEBUG)
-        curr_iov_(iov),
-        curr_iov_output_(iov_count ? reinterpret_cast<char*>(iov->iov_base)
-                                   : nullptr),
-        curr_iov_remaining_(iov_count ? iov->iov_len : 0),
-        total_written_(0),
-        output_limit_(-1) {}
-
-  inline void SetExpectedLength(size_t len) {
-    output_limit_ = len;
-  }
-
-  inline bool CheckLength() const {
-    return total_written_ == output_limit_;
-  }
-
-  inline bool Append(const char* ip, size_t len) {
-    if (total_written_ + len > output_limit_) {
-      return false;
-    }
-
-    return AppendNoCheck(ip, len);
-  }
-
-  inline bool AppendNoCheck(const char* ip, size_t len) {
-    while (len > 0) {
-      if (curr_iov_remaining_ == 0) {
-        // This iovec is full. Go to the next one.
-        if (curr_iov_ + 1 >= output_iov_end_) {
-          return false;
-        }
-        ++curr_iov_;
-        curr_iov_output_ = reinterpret_cast<char*>(curr_iov_->iov_base);
-        curr_iov_remaining_ = curr_iov_->iov_len;
-      }
-
-      const size_t to_write = std::min(len, curr_iov_remaining_);
-      memcpy(curr_iov_output_, ip, to_write);
-      curr_iov_output_ += to_write;
-      curr_iov_remaining_ -= to_write;
-      total_written_ += to_write;
-      ip += to_write;
-      len -= to_write;
-    }
-
-    return true;
-  }
-
-  inline bool TryFastAppend(const char* ip, size_t available, size_t len) {
-    const size_t space_left = output_limit_ - total_written_;
-    if (len <= 16 && available >= 16 + kMaximumTagLength && space_left >= 16 &&
-        curr_iov_remaining_ >= 16) {
-      // Fast path, used for the majority (about 95%) of invocations.
-      UnalignedCopy128(ip, curr_iov_output_);
-      curr_iov_output_ += len;
-      curr_iov_remaining_ -= len;
-      total_written_ += len;
-      return true;
-    }
-
-    return false;
-  }
-
-  inline bool AppendFromSelf(size_t offset, size_t len) {
-    // See SnappyArrayWriter::AppendFromSelf for an explanation of
-    // the "offset - 1u" trick.
-    if (offset - 1u >= total_written_) {
-      return false;
-    }
-    const size_t space_left = output_limit_ - total_written_;
-    if (len > space_left) {
-      return false;
-    }
-
-    // Locate the iovec from which we need to start the copy.
-    const iovec* from_iov = curr_iov_;
-    size_t from_iov_offset = curr_iov_->iov_len - curr_iov_remaining_;
-    while (offset > 0) {
-      if (from_iov_offset >= offset) {
-        from_iov_offset -= offset;
-        break;
-      }
-
-      offset -= from_iov_offset;
-      --from_iov;
-#if !defined(NDEBUG)
-      assert(from_iov >= output_iov_);
-#endif  // !defined(NDEBUG)
-      from_iov_offset = from_iov->iov_len;
-    }
-
-    // Copy <len> bytes starting from the iovec pointed to by from_iov_index to
-    // the current iovec.
-    while (len > 0) {
-      assert(from_iov <= curr_iov_);
-      if (from_iov != curr_iov_) {
-        const size_t to_copy =
-            std::min((unsigned long)(from_iov->iov_len - from_iov_offset), (unsigned long)len);
-        AppendNoCheck(GetIOVecPointer(from_iov, from_iov_offset), to_copy);
-        len -= to_copy;
-        if (len > 0) {
-          ++from_iov;
-          from_iov_offset = 0;
-        }
-      } else {
-        size_t to_copy = curr_iov_remaining_;
-        if (to_copy == 0) {
-          // This iovec is full. Go to the next one.
-          if (curr_iov_ + 1 >= output_iov_end_) {
-            return false;
-          }
-          ++curr_iov_;
-          curr_iov_output_ = reinterpret_cast<char*>(curr_iov_->iov_base);
-          curr_iov_remaining_ = curr_iov_->iov_len;
-          continue;
-        }
-        if (to_copy > len) {
-          to_copy = len;
-        }
-
-        IncrementalCopy(GetIOVecPointer(from_iov, from_iov_offset),
-                        curr_iov_output_, curr_iov_output_ + to_copy,
-                        curr_iov_output_ + curr_iov_remaining_);
-        curr_iov_output_ += to_copy;
-        curr_iov_remaining_ -= to_copy;
-        from_iov_offset += to_copy;
-        total_written_ += to_copy;
-        len -= to_copy;
-      }
-    }
-
-    return true;
-  }
-
-  inline void Flush() {}
-};
-
-bool RawUncompressToIOVec(const char* compressed, size_t compressed_length,
-                          const struct iovec* iov, size_t iov_cnt) {
-  ByteArraySource reader(compressed, compressed_length);
-  return RawUncompressToIOVec(&reader, iov, iov_cnt);
-}
-
-bool RawUncompressToIOVec(Source* compressed, const struct iovec* iov,
-                          size_t iov_cnt) {
-  SnappyIOVecWriter output(iov, iov_cnt);
-  return InternalUncompress(compressed, &output);
-}
-
-// -----------------------------------------------------------------------
-// Flat array interfaces
-// -----------------------------------------------------------------------
-
-// A type that writes to a flat array.
-// Note that this is not a "ByteSink", but a type that matches the
-// Writer template argument to SnappyDecompressor::DecompressAllTags().
-class SnappyArrayWriter {
- private:
-  char* base_;
-  char* op_;
-  char* op_limit_;
-
- public:
-  inline explicit SnappyArrayWriter(char* dst)
-      : base_(dst),
-        op_(dst),
-        op_limit_(dst) {
-  }
-
-  inline void SetExpectedLength(size_t len) {
-    op_limit_ = op_ + len;
-  }
-
-  inline bool CheckLength() const {
-    return op_ == op_limit_;
-  }
-
-  inline bool Append(const char* ip, size_t len) {
-    char* op = op_;
-    const size_t space_left = op_limit_ - op;
-    if (space_left < len) {
-      return false;
-    }
-    memcpy(op, ip, len);
-    op_ = op + len;
-    return true;
-  }
-
-  inline bool TryFastAppend(const char* ip, size_t available, size_t len) {
-    char* op = op_;
-    const size_t space_left = op_limit_ - op;
-    if (len <= 16 && available >= 16 + kMaximumTagLength && space_left >= 16) {
-      // Fast path, used for the majority (about 95%) of invocations.
-      UnalignedCopy128(ip, op);
-      op_ = op + len;
-      return true;
-    } else {
-      return false;
-    }
-  }
-
-  inline bool AppendFromSelf(size_t offset, size_t len) {
-    char* const op_end = op_ + len;
-
-    // Check if we try to append from before the start of the buffer.
-    // Normally this would just be a check for "produced < offset",
-    // but "produced <= offset - 1u" is equivalent for every case
-    // except the one where offset==0, where the right side will wrap around
-    // to a very big number. This is convenient, as offset==0 is another
-    // invalid case that we also want to catch, so that we do not go
-    // into an infinite loop.
-    if (Produced() <= offset - 1u || op_end > op_limit_) return false;
-    op_ = IncrementalCopy(op_ - offset, op_, op_end, op_limit_);
-
-    return true;
-  }
-  inline size_t Produced() const {
-    assert(op_ >= base_);
-    return op_ - base_;
-  }
-  inline void Flush() {}
-};
-
-bool RawUncompress(const char* compressed, size_t n, char* uncompressed) {
-  ByteArraySource reader(compressed, n);
-  return RawUncompress(&reader, uncompressed);
-}
-
-bool RawUncompress(Source* compressed, char* uncompressed) {
-  SnappyArrayWriter output(uncompressed);
-  return InternalUncompress(compressed, &output);
-}
-
-bool Uncompress(const char* compressed, size_t n, string* uncompressed) {
-  size_t ulength;
-  if (!GetUncompressedLength(compressed, n, &ulength)) {
-    return false;
-  }
-  // On 32-bit builds: max_size() < kuint32max.  Check for that instead
-  // of crashing (e.g., consider externally specified compressed data).
-  if (ulength > uncompressed->max_size()) {
-    return false;
-  }
-  STLStringResizeUninitialized(uncompressed, ulength);
-  return RawUncompress(compressed, n, string_as_array(uncompressed));
-}
-
-// A Writer that drops everything on the floor and just does validation
-class SnappyDecompressionValidator {
- private:
-  size_t expected_;
-  size_t produced_;
-
- public:
-  inline SnappyDecompressionValidator() : expected_(0), produced_(0) { }
-  inline void SetExpectedLength(size_t len) {
-    expected_ = len;
-  }
-  inline bool CheckLength() const {
-    return expected_ == produced_;
-  }
-  inline bool Append(const char* ip, size_t len) {
-    produced_ += len;
-    return produced_ <= expected_;
-  }
-  inline bool TryFastAppend(const char* ip, size_t available, size_t length) {
-    return false;
-  }
-  inline bool AppendFromSelf(size_t offset, size_t len) {
-    // See SnappyArrayWriter::AppendFromSelf for an explanation of
-    // the "offset - 1u" trick.
-    if (produced_ <= offset - 1u) return false;
-    produced_ += len;
-    return produced_ <= expected_;
-  }
-  inline void Flush() {}
-};
-
-bool IsValidCompressedBuffer(const char* compressed, size_t n) {
-  ByteArraySource reader(compressed, n);
-  SnappyDecompressionValidator writer;
-  return InternalUncompress(&reader, &writer);
-}
-
-bool IsValidCompressed(Source* compressed) {
-  SnappyDecompressionValidator writer;
-  return InternalUncompress(compressed, &writer);
-}
-
-void RawCompress(const char* input,
-                 size_t input_length,
-                 char* compressed,
-                 size_t* compressed_length) {
-  ByteArraySource reader(input, input_length);
-  UncheckedByteArraySink writer(compressed);
-  Compress(&reader, &writer);
-
-  // Compute how many bytes were added
-  *compressed_length = (writer.CurrentDestination() - compressed);
-}
-
-size_t Compress(const char* input, size_t input_length, string* compressed) {
-  // Pre-grow the buffer to the max length of the compressed output
-  STLStringResizeUninitialized(compressed, MaxCompressedLength(input_length));
-
-  size_t compressed_length;
-  RawCompress(input, input_length, string_as_array(compressed),
-              &compressed_length);
-  compressed->resize(compressed_length);
-  return compressed_length;
-}
-
-// -----------------------------------------------------------------------
-// Sink interface
-// -----------------------------------------------------------------------
-
-// A type that decompresses into a Sink. The template parameter
-// Allocator must export one method "char* Allocate(int size);", which
-// allocates a buffer of "size" and appends that to the destination.
-template <typename Allocator>
-class SnappyScatteredWriter {
-  Allocator allocator_;
-
-  // We need random access into the data generated so far.  Therefore
-  // we keep track of all of the generated data as an array of blocks.
-  // All of the blocks except the last have length kBlockSize.
-  std::vector<char*> blocks_;
-  size_t expected_;
-
-  // Total size of all fully generated blocks so far
-  size_t full_size_;
-
-  // Pointer into current output block
-  char* op_base_;       // Base of output block
-  char* op_ptr_;        // Pointer to next unfilled byte in block
-  char* op_limit_;      // Pointer just past block
-
-  inline size_t Size() const {
-    return full_size_ + (op_ptr_ - op_base_);
-  }
-
-  bool SlowAppend(const char* ip, size_t len);
-  bool SlowAppendFromSelf(size_t offset, size_t len);
-
- public:
-  inline explicit SnappyScatteredWriter(const Allocator& allocator)
-      : allocator_(allocator),
-        full_size_(0),
-        op_base_(NULL),
-        op_ptr_(NULL),
-        op_limit_(NULL) {
-  }
-
-  inline void SetExpectedLength(size_t len) {
-    assert(blocks_.empty());
-    expected_ = len;
-  }
-
-  inline bool CheckLength() const {
-    return Size() == expected_;
-  }
-
-  // Return the number of bytes actually uncompressed so far
-  inline size_t Produced() const {
-    return Size();
-  }
-
-  inline bool Append(const char* ip, size_t len) {
-    size_t avail = op_limit_ - op_ptr_;
-    if (len <= avail) {
-      // Fast path
-      memcpy(op_ptr_, ip, len);
-      op_ptr_ += len;
-      return true;
-    } else {
-      return SlowAppend(ip, len);
-    }
-  }
-
-  inline bool TryFastAppend(const char* ip, size_t available, size_t length) {
-    char* op = op_ptr_;
-    const int space_left = op_limit_ - op;
-    if (length <= 16 && available >= 16 + kMaximumTagLength &&
-        space_left >= 16) {
-      // Fast path, used for the majority (about 95%) of invocations.
-      UnalignedCopy128(ip, op);
-      op_ptr_ = op + length;
-      return true;
-    } else {
-      return false;
-    }
-  }
-
-  inline bool AppendFromSelf(size_t offset, size_t len) {
-    char* const op_end = op_ptr_ + len;
-    // See SnappyArrayWriter::AppendFromSelf for an explanation of
-    // the "offset - 1u" trick.
-    if (SNAPPY_PREDICT_TRUE(offset - 1u < (size_t)(op_ptr_ - op_base_) &&
-                          op_end <= op_limit_)) {
-      // Fast path: src and dst in current block.
-      op_ptr_ = IncrementalCopy(op_ptr_ - offset, op_ptr_, op_end, op_limit_);
-      return true;
-    }
-    return SlowAppendFromSelf(offset, len);
-  }
-
-  // Called at the end of the decompress. We ask the allocator
-  // write all blocks to the sink.
-  inline void Flush() { allocator_.Flush(Produced()); }
-};
-
-template<typename Allocator>
-bool SnappyScatteredWriter<Allocator>::SlowAppend(const char* ip, size_t len) {
-  size_t avail = op_limit_ - op_ptr_;
-  while (len > avail) {
-    // Completely fill this block
-    memcpy(op_ptr_, ip, avail);
-    op_ptr_ += avail;
-    assert(op_limit_ - op_ptr_ == 0);
-    full_size_ += (op_ptr_ - op_base_);
-    len -= avail;
-    ip += avail;
-
-    // Bounds check
-    if (full_size_ + len > expected_) {
-      return false;
-    }
-
-    // Make new block
-    size_t bsize = std::min<size_t>(kBlockSize, expected_ - full_size_);
-    op_base_ = allocator_.Allocate(bsize);
-    op_ptr_ = op_base_;
-    op_limit_ = op_base_ + bsize;
-    blocks_.push_back(op_base_);
-    avail = bsize;
-  }
-
-  memcpy(op_ptr_, ip, len);
-  op_ptr_ += len;
-  return true;
-}
-
-template<typename Allocator>
-bool SnappyScatteredWriter<Allocator>::SlowAppendFromSelf(size_t offset,
-                                                         size_t len) {
-  // Overflow check
-  // See SnappyArrayWriter::AppendFromSelf for an explanation of
-  // the "offset - 1u" trick.
-  const size_t cur = Size();
-  if (offset - 1u >= cur) return false;
-  if (expected_ - cur < len) return false;
-
-  // Currently we shouldn't ever hit this path because Compress() chops the
-  // input into blocks and does not create cross-block copies. However, it is
-  // nice if we do not rely on that, since we can get better compression if we
-  // allow cross-block copies and thus might want to change the compressor in
-  // the future.
-  size_t src = cur - offset;
-  while (len-- > 0) {
-    char c = blocks_[src >> kBlockLog][src & (kBlockSize-1)];
-    Append(&c, 1);
-    src++;
-  }
-  return true;
-}
-
-class SnappySinkAllocator {
- public:
-  explicit SnappySinkAllocator(Sink* dest): dest_(dest) {}
-  ~SnappySinkAllocator() {}
-
-  char* Allocate(int size) {
-    Datablock block(new char[size], size);
-    blocks_.push_back(block);
-    return block.data;
-  }
-
-  // We flush only at the end, because the writer wants
-  // random access to the blocks and once we hand the
-  // block over to the sink, we can't access it anymore.
-  // Also we don't write more than has been actually written
-  // to the blocks.
-  void Flush(size_t size) {
-    size_t size_written = 0;
-    size_t block_size;
-    for (size_t i = 0; i < blocks_.size(); ++i) {
-      block_size = std::min<size_t>(blocks_[i].size, size - size_written);
-      dest_->AppendAndTakeOwnership(blocks_[i].data, block_size,
-                                    &SnappySinkAllocator::Deleter, NULL);
-      size_written += block_size;
-    }
-    blocks_.clear();
-  }
-
- private:
-  struct Datablock {
-    char* data;
-    size_t size;
-    Datablock(char* p, size_t s) : data(p), size(s) {}
-  };
-
-  static void Deleter(void* arg, const char* bytes, size_t size) {
-    delete[] bytes;
-  }
-
-  Sink* dest_;
-  std::vector<Datablock> blocks_;
-
-  // Note: copying this object is allowed
-};
-
-size_t UncompressAsMuchAsPossible(Source* compressed, Sink* uncompressed) {
-  SnappySinkAllocator allocator(uncompressed);
-  SnappyScatteredWriter<SnappySinkAllocator> writer(allocator);
-  InternalUncompress(compressed, &writer);
-  return writer.Produced();
-}
-
-bool Uncompress(Source* compressed, Sink* uncompressed) {
-  // Read the uncompressed length from the front of the compressed input
-  SnappyDecompressor decompressor(compressed);
-  uint32 uncompressed_len = 0;
-  if (!decompressor.ReadUncompressedLength(&uncompressed_len)) {
-    return false;
-  }
-
-  char c;
-  size_t allocated_size;
-  char* buf = uncompressed->GetAppendBufferVariable(
-      1, uncompressed_len, &c, 1, &allocated_size);
-
-  const size_t compressed_len = compressed->Available();
-  // If we can get a flat buffer, then use it, otherwise do block by block
-  // uncompression
-  if (allocated_size >= uncompressed_len) {
-    SnappyArrayWriter writer(buf);
-    bool result = InternalUncompressAllTags(&decompressor, &writer,
-                                            compressed_len, uncompressed_len);
-    uncompressed->Append(buf, writer.Produced());
-    return result;
-  } else {
-    SnappySinkAllocator allocator(uncompressed);
-    SnappyScatteredWriter<SnappySinkAllocator> writer(allocator);
-    return InternalUncompressAllTags(&decompressor, &writer, compressed_len,
-                                     uncompressed_len);
-  }
-}
-
-}  // namespace duckdb_snappy
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
 /* ******************************************************************
  * FSE : Finite State Entropy encoder
  * Copyright (c) 2013-2020, Yann Collet, Facebook, Inc.
@@ -3118,7 +34,7 @@ bool Uncompress(Source* compressed, Sink* uncompressed) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -3301,7 +217,7 @@ bool Uncompress(Source* compressed, Sink* uncompressed) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -3691,7 +607,7 @@ MEM_STATIC void MEM_writeBEST(void* memPtr, size_t val)
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
@@ -3815,7 +731,7 @@ extern int g_debuglevel; /* the variable is only declared,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
@@ -3903,7 +819,7 @@ unsigned HIST_count_simple(unsigned* count, unsigned* maxSymbolValuePtr,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
@@ -3937,7 +853,7 @@ unsigned HIST_count_simple(unsigned* count, unsigned* maxSymbolValuePtr,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -3962,7 +878,7 @@ unsigned HIST_count_simple(unsigned* count, unsigned* maxSymbolValuePtr,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -4540,7 +1456,7 @@ MEM_STATIC unsigned BIT_endOfDStream(const BIT_DStream_t* DStream)
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
@@ -4827,7 +1743,7 @@ If there is an error, the function will return an error code, which can be teste
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
@@ -5935,7 +2851,7 @@ size_t FSE_compress (void* dst, size_t dstCapacity, const void* src, size_t srcS
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
@@ -6131,7 +3047,7 @@ size_t HIST_count(unsigned* count, unsigned* maxSymbolValuePtr,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
@@ -6169,7 +3085,7 @@ size_t HIST_count(unsigned* count, unsigned* maxSymbolValuePtr,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
@@ -6276,7 +3192,7 @@ HUF_PUBLIC_API size_t HUF_compress4X_wksp (void* dst, size_t dstCapacity,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
@@ -7294,7 +4210,7 @@ size_t HUF_compress (void* dst, size_t maxDstSize, const void* src, size_t srcSi
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -7321,7 +4237,7 @@ size_t HUF_compress (void* dst, size_t maxDstSize, const void* src, size_t srcSi
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -7347,7 +4263,7 @@ size_t HUF_compress (void* dst, size_t maxDstSize, const void* src, size_t srcSi
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -7381,7 +4297,7 @@ size_t HUF_compress (void* dst, size_t maxDstSize, const void* src, size_t srcSi
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -8406,7 +5322,7 @@ ZSTDLIB_API size_t ZSTD_sizeof_DDict(const ZSTD_DDict* ddict);
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 
@@ -9490,7 +6406,7 @@ ZSTDLIB_API size_t ZSTD_insertBlock    (ZSTD_DCtx* dctx, const void* blockStart,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -9735,7 +6651,7 @@ XXH_PUBLIC_API XXH64_hash_t XXH64_hashFromCanonical(const XXH64_canonical_t* src
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 
@@ -10178,7 +7094,7 @@ size_t ZSTD_decodeSeqHeaders(ZSTD_DCtx* dctx, int* nbSeqPtr,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -11809,7 +8725,7 @@ U32 ZSTD_cycleLog(U32 hashLog, ZSTD_strategy strat);
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -11878,7 +8794,7 @@ size_t ZSTD_crossEntropyCost(short const* norm, unsigned accuracyLog,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -11920,7 +8836,7 @@ size_t ZSTD_compressLiterals (ZSTD_hufCTables_t const* prevHuf,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -11963,7 +8879,7 @@ size_t ZSTD_compressBlock_fast_extDict(
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -12006,7 +8922,7 @@ size_t ZSTD_compressBlock_doubleFast_extDict(
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -12079,7 +8995,7 @@ size_t ZSTD_compressBlock_btlazy2_extDict(
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -12141,7 +9057,7 @@ size_t ZSTD_compressBlock_btultra_extDict(
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -12257,7 +9173,7 @@ void ZSTD_ldm_adjustParameters(ldmParams_t* params,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -16555,7 +13471,7 @@ ZSTD_parameters ZSTD_getParams(int compressionLevel, unsigned long long srcSizeH
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -16725,7 +13641,7 @@ size_t ZSTD_compressLiterals (ZSTD_hufCTables_t const* prevHuf,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -17156,7 +14072,7 @@ size_t ZSTD_encodeSequences(
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -18007,7 +14923,7 @@ size_t ZSTD_compressSuperBlock(ZSTD_CCtx* zc,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -18540,7 +15456,7 @@ size_t ZSTD_compressBlock_doubleFast_extDict(
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -19048,7 +15964,7 @@ size_t ZSTD_compressBlock_fast_extDict(
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -20199,7 +17115,7 @@ size_t ZSTD_compressBlock_btlazy2_extDict(
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -20831,7 +17747,7 @@ size_t ZSTD_ldm_blockCompress(rawSeqStore_t* rawSeqStore,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -22047,1287 +18963,35 @@ size_t ZSTD_compressBlock_btultra_extDict(
 // The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
-/* ******************************************************************
- * huff0 huffman decoder,
- * part of Finite State Entropy library
- * Copyright (c) 2013-2020, Yann Collet, Facebook, Inc.
- *
- *  You can contact the author at :
- *  - FSE+HUF source repository : https://github.com/Cyan4973/FiniteStateEntropy
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
-****************************************************************** */
-
-/* **************************************************************
-*  Dependencies
-****************************************************************/
-#include <string.h>     /* memcpy, memset */
-
-  /* BIT_* */
-        /* to compress headers */
-
-
-
-
-namespace duckdb_zstd {
-/* **************************************************************
-*  Macros
-****************************************************************/
-
-/* These two optional macros force the use one way or another of the two
- * Huffman decompression implementations. You can't force in both directions
- * at the same time.
- */
-#if defined(HUF_FORCE_DECOMPRESS_X1) && \
-    defined(HUF_FORCE_DECOMPRESS_X2)
-#error "Cannot force the use of the X1 and X2 decoders at the same time!"
-#endif
-
-
-/* **************************************************************
-*  Error Management
-****************************************************************/
-// #define HUF_isError ERR_isError
-
-
-/* **************************************************************
-*  Byte alignment for workSpace management
-****************************************************************/
-#define HUF_ALIGN(x, a)         HUF_ALIGN_MASK((x), (a) - 1)
-#define HUF_ALIGN_MASK(x, mask) (((x) + (mask)) & ~(mask))
-
-
-/* **************************************************************
-*  BMI2 Variant Wrappers
-****************************************************************/
-#if DYNAMIC_BMI2
-
-#define HUF_DGEN(fn)                                                        \
-                                                                            \
-    static size_t fn##_default(                                             \
-                  void* dst,  size_t dstSize,                               \
-            const void* cSrc, size_t cSrcSize,                              \
-            const HUF_DTable* DTable)                                       \
-    {                                                                       \
-        return fn##_body(dst, dstSize, cSrc, cSrcSize, DTable);             \
-    }                                                                       \
-                                                                            \
-    static TARGET_ATTRIBUTE("bmi2") size_t fn##_bmi2(                       \
-                  void* dst,  size_t dstSize,                               \
-            const void* cSrc, size_t cSrcSize,                              \
-            const HUF_DTable* DTable)                                       \
-    {                                                                       \
-        return fn##_body(dst, dstSize, cSrc, cSrcSize, DTable);             \
-    }                                                                       \
-                                                                            \
-    static size_t fn(void* dst, size_t dstSize, void const* cSrc,           \
-                     size_t cSrcSize, HUF_DTable const* DTable, int bmi2)   \
-    {                                                                       \
-        if (bmi2) {                                                         \
-            return fn##_bmi2(dst, dstSize, cSrc, cSrcSize, DTable);         \
-        }                                                                   \
-        return fn##_default(dst, dstSize, cSrc, cSrcSize, DTable);          \
-    }
-
-#else
-
-#define HUF_DGEN(fn)                                                        \
-    static size_t fn(void* dst, size_t dstSize, void const* cSrc,           \
-                     size_t cSrcSize, HUF_DTable const* DTable, int bmi2)   \
-    {                                                                       \
-        (void)bmi2;                                                         \
-        return fn##_body(dst, dstSize, cSrc, cSrcSize, DTable);             \
-    }
-
-#endif
-
-
-/*-***************************/
-/*  generic DTableDesc       */
-/*-***************************/
-typedef struct { BYTE maxTableLog; BYTE tableType; BYTE tableLog; BYTE reserved; } DTableDesc;
-
-static DTableDesc HUF_getDTableDesc(const HUF_DTable* table)
-{
-    DTableDesc dtd;
-    memcpy(&dtd, table, sizeof(dtd));
-    return dtd;
-}
-
-
-#ifndef HUF_FORCE_DECOMPRESS_X2
-
-/*-***************************/
-/*  single-symbol decoding   */
-/*-***************************/
-typedef struct { BYTE byte; BYTE nbBits; } HUF_DEltX1;   /* single-symbol decoding */
-
-size_t HUF_readDTableX1_wksp(HUF_DTable* DTable, const void* src, size_t srcSize, void* workSpace, size_t wkspSize)
-{
-    U32 tableLog = 0;
-    U32 nbSymbols = 0;
-    size_t iSize;
-    void* const dtPtr = DTable + 1;
-    HUF_DEltX1* const dt = (HUF_DEltX1*)dtPtr;
-
-    U32* rankVal;
-    BYTE* huffWeight;
-    size_t spaceUsed32 = 0;
-
-    rankVal = (U32 *)workSpace + spaceUsed32;
-    spaceUsed32 += HUF_TABLELOG_ABSOLUTEMAX + 1;
-    huffWeight = (BYTE *)((U32 *)workSpace + spaceUsed32);
-    spaceUsed32 += HUF_ALIGN(HUF_SYMBOLVALUE_MAX + 1, sizeof(U32)) >> 2;
-
-    if ((spaceUsed32 << 2) > wkspSize) return ERROR(tableLog_tooLarge);
-
-    DEBUG_STATIC_ASSERT(sizeof(DTableDesc) == sizeof(HUF_DTable));
-    /* memset(huffWeight, 0, sizeof(huffWeight)); */   /* is not necessary, even though some analyzer complain ... */
-
-    iSize = HUF_readStats(huffWeight, HUF_SYMBOLVALUE_MAX + 1, rankVal, &nbSymbols, &tableLog, src, srcSize);
-    if (HUF_isError(iSize)) return iSize;
-
-    /* Table header */
-    {   DTableDesc dtd = HUF_getDTableDesc(DTable);
-        if (tableLog > (U32)(dtd.maxTableLog+1)) return ERROR(tableLog_tooLarge);   /* DTable too small, Huffman tree cannot fit in */
-        dtd.tableType = 0;
-        dtd.tableLog = (BYTE)tableLog;
-        memcpy(DTable, &dtd, sizeof(dtd));
-    }
-
-    /* Calculate starting value for each rank */
-    {   U32 n, nextRankStart = 0;
-        for (n=1; n<tableLog+1; n++) {
-            U32 const current = nextRankStart;
-            nextRankStart += (rankVal[n] << (n-1));
-            rankVal[n] = current;
-    }   }
-
-    /* fill DTable */
-    {   U32 n;
-        size_t const nEnd = nbSymbols;
-        for (n=0; n<nEnd; n++) {
-            size_t const w = huffWeight[n];
-            size_t const length = (1 << w) >> 1;
-            size_t const uStart = rankVal[w];
-            size_t const uEnd = uStart + length;
-            size_t u;
-            HUF_DEltX1 D;
-            D.byte = (BYTE)n;
-            D.nbBits = (BYTE)(tableLog + 1 - w);
-            rankVal[w] = (U32)uEnd;
-            if (length < 4) {
-                /* Use length in the loop bound so the compiler knows it is short. */
-                for (u = 0; u < length; ++u)
-                    dt[uStart + u] = D;
-            } else {
-                /* Unroll the loop 4 times, we know it is a power of 2. */
-                for (u = uStart; u < uEnd; u += 4) {
-                    dt[u + 0] = D;
-                    dt[u + 1] = D;
-                    dt[u + 2] = D;
-                    dt[u + 3] = D;
-    }   }   }   }
-    return iSize;
-}
-
-size_t HUF_readDTableX1(HUF_DTable* DTable, const void* src, size_t srcSize)
-{
-    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
-    return HUF_readDTableX1_wksp(DTable, src, srcSize,
-                                 workSpace, sizeof(workSpace));
-}
-
-FORCE_INLINE_TEMPLATE BYTE
-HUF_decodeSymbolX1(BIT_DStream_t* Dstream, const HUF_DEltX1* dt, const U32 dtLog)
-{
-    size_t const val = BIT_lookBitsFast(Dstream, dtLog); /* note : dtLog >= 1 */
-    BYTE const c = dt[val].byte;
-    BIT_skipBits(Dstream, dt[val].nbBits);
-    return c;
-}
-
-#define HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr) \
-    *ptr++ = HUF_decodeSymbolX1(DStreamPtr, dt, dtLog)
-
-#define HUF_DECODE_SYMBOLX1_1(ptr, DStreamPtr)  \
-    if (MEM_64bits() || (HUF_TABLELOG_MAX<=12)) \
-        HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr)
-
-#define HUF_DECODE_SYMBOLX1_2(ptr, DStreamPtr) \
-    if (MEM_64bits()) \
-        HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr)
-
-HINT_INLINE size_t
-HUF_decodeStreamX1(BYTE* p, BIT_DStream_t* const bitDPtr, BYTE* const pEnd, const HUF_DEltX1* const dt, const U32 dtLog)
-{
-    BYTE* const pStart = p;
-
-    /* up to 4 symbols at a time */
-    while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd-3)) {
-        HUF_DECODE_SYMBOLX1_2(p, bitDPtr);
-        HUF_DECODE_SYMBOLX1_1(p, bitDPtr);
-        HUF_DECODE_SYMBOLX1_2(p, bitDPtr);
-        HUF_DECODE_SYMBOLX1_0(p, bitDPtr);
-    }
-
-    /* [0-3] symbols remaining */
-    if (MEM_32bits())
-        while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd))
-            HUF_DECODE_SYMBOLX1_0(p, bitDPtr);
-
-    /* no more data to retrieve from bitstream, no need to reload */
-    while (p < pEnd)
-        HUF_DECODE_SYMBOLX1_0(p, bitDPtr);
-
-    return pEnd-pStart;
-}
-
-FORCE_INLINE_TEMPLATE size_t
-HUF_decompress1X1_usingDTable_internal_body(
-          void* dst,  size_t dstSize,
-    const void* cSrc, size_t cSrcSize,
-    const HUF_DTable* DTable)
-{
-    BYTE* op = (BYTE*)dst;
-    BYTE* const oend = op + dstSize;
-    const void* dtPtr = DTable + 1;
-    const HUF_DEltX1* const dt = (const HUF_DEltX1*)dtPtr;
-    BIT_DStream_t bitD;
-    DTableDesc const dtd = HUF_getDTableDesc(DTable);
-    U32 const dtLog = dtd.tableLog;
-
-    CHECK_F( BIT_initDStream(&bitD, cSrc, cSrcSize) );
-
-    HUF_decodeStreamX1(op, &bitD, oend, dt, dtLog);
-
-    if (!BIT_endOfDStream(&bitD)) return ERROR(corruption_detected);
-
-    return dstSize;
-}
-
-FORCE_INLINE_TEMPLATE size_t
-HUF_decompress4X1_usingDTable_internal_body(
-          void* dst,  size_t dstSize,
-    const void* cSrc, size_t cSrcSize,
-    const HUF_DTable* DTable)
-{
-    /* Check */
-    if (cSrcSize < 10) return ERROR(corruption_detected);  /* strict minimum : jump table + 1 byte per stream */
-
-    {   const BYTE* const istart = (const BYTE*) cSrc;
-        BYTE* const ostart = (BYTE*) dst;
-        BYTE* const oend = ostart + dstSize;
-        BYTE* const olimit = oend - 3;
-        const void* const dtPtr = DTable + 1;
-        const HUF_DEltX1* const dt = (const HUF_DEltX1*)dtPtr;
-
-        /* Init */
-        BIT_DStream_t bitD1;
-        BIT_DStream_t bitD2;
-        BIT_DStream_t bitD3;
-        BIT_DStream_t bitD4;
-        size_t const length1 = MEM_readLE16(istart);
-        size_t const length2 = MEM_readLE16(istart+2);
-        size_t const length3 = MEM_readLE16(istart+4);
-        size_t const length4 = cSrcSize - (length1 + length2 + length3 + 6);
-        const BYTE* const istart1 = istart + 6;  /* jumpTable */
-        const BYTE* const istart2 = istart1 + length1;
-        const BYTE* const istart3 = istart2 + length2;
-        const BYTE* const istart4 = istart3 + length3;
-        const size_t segmentSize = (dstSize+3) / 4;
-        BYTE* const opStart2 = ostart + segmentSize;
-        BYTE* const opStart3 = opStart2 + segmentSize;
-        BYTE* const opStart4 = opStart3 + segmentSize;
-        BYTE* op1 = ostart;
-        BYTE* op2 = opStart2;
-        BYTE* op3 = opStart3;
-        BYTE* op4 = opStart4;
-        DTableDesc const dtd = HUF_getDTableDesc(DTable);
-        U32 const dtLog = dtd.tableLog;
-        U32 endSignal = 1;
-
-        if (length4 > cSrcSize) return ERROR(corruption_detected);   /* overflow */
-        CHECK_F( BIT_initDStream(&bitD1, istart1, length1) );
-        CHECK_F( BIT_initDStream(&bitD2, istart2, length2) );
-        CHECK_F( BIT_initDStream(&bitD3, istart3, length3) );
-        CHECK_F( BIT_initDStream(&bitD4, istart4, length4) );
-
-        /* up to 16 symbols per loop (4 symbols per stream) in 64-bit mode */
-        for ( ; (endSignal) & (op4 < olimit) ; ) {
-            HUF_DECODE_SYMBOLX1_2(op1, &bitD1);
-            HUF_DECODE_SYMBOLX1_2(op2, &bitD2);
-            HUF_DECODE_SYMBOLX1_2(op3, &bitD3);
-            HUF_DECODE_SYMBOLX1_2(op4, &bitD4);
-            HUF_DECODE_SYMBOLX1_1(op1, &bitD1);
-            HUF_DECODE_SYMBOLX1_1(op2, &bitD2);
-            HUF_DECODE_SYMBOLX1_1(op3, &bitD3);
-            HUF_DECODE_SYMBOLX1_1(op4, &bitD4);
-            HUF_DECODE_SYMBOLX1_2(op1, &bitD1);
-            HUF_DECODE_SYMBOLX1_2(op2, &bitD2);
-            HUF_DECODE_SYMBOLX1_2(op3, &bitD3);
-            HUF_DECODE_SYMBOLX1_2(op4, &bitD4);
-            HUF_DECODE_SYMBOLX1_0(op1, &bitD1);
-            HUF_DECODE_SYMBOLX1_0(op2, &bitD2);
-            HUF_DECODE_SYMBOLX1_0(op3, &bitD3);
-            HUF_DECODE_SYMBOLX1_0(op4, &bitD4);
-            endSignal &= BIT_reloadDStreamFast(&bitD1) == BIT_DStream_unfinished;
-            endSignal &= BIT_reloadDStreamFast(&bitD2) == BIT_DStream_unfinished;
-            endSignal &= BIT_reloadDStreamFast(&bitD3) == BIT_DStream_unfinished;
-            endSignal &= BIT_reloadDStreamFast(&bitD4) == BIT_DStream_unfinished;
-        }
-
-        /* check corruption */
-        /* note : should not be necessary : op# advance in lock step, and we control op4.
-         *        but curiously, binary generated by gcc 7.2 & 7.3 with -mbmi2 runs faster when >=1 test is present */
-        if (op1 > opStart2) return ERROR(corruption_detected);
-        if (op2 > opStart3) return ERROR(corruption_detected);
-        if (op3 > opStart4) return ERROR(corruption_detected);
-        /* note : op4 supposed already verified within main loop */
-
-        /* finish bitStreams one by one */
-        HUF_decodeStreamX1(op1, &bitD1, opStart2, dt, dtLog);
-        HUF_decodeStreamX1(op2, &bitD2, opStart3, dt, dtLog);
-        HUF_decodeStreamX1(op3, &bitD3, opStart4, dt, dtLog);
-        HUF_decodeStreamX1(op4, &bitD4, oend,     dt, dtLog);
-
-        /* check */
-        { U32 const endCheck = BIT_endOfDStream(&bitD1) & BIT_endOfDStream(&bitD2) & BIT_endOfDStream(&bitD3) & BIT_endOfDStream(&bitD4);
-          if (!endCheck) return ERROR(corruption_detected); }
-
-        /* decoded size */
-        return dstSize;
-    }
-}
-
-
-typedef size_t (*HUF_decompress_usingDTable_t)(void *dst, size_t dstSize,
-                                               const void *cSrc,
-                                               size_t cSrcSize,
-                                               const HUF_DTable *DTable);
-
-HUF_DGEN(HUF_decompress1X1_usingDTable_internal)
-HUF_DGEN(HUF_decompress4X1_usingDTable_internal)
-
-
-
-size_t HUF_decompress1X1_usingDTable(
-          void* dst,  size_t dstSize,
-    const void* cSrc, size_t cSrcSize,
-    const HUF_DTable* DTable)
-{
-    DTableDesc dtd = HUF_getDTableDesc(DTable);
-    if (dtd.tableType != 0) return ERROR(GENERIC);
-    return HUF_decompress1X1_usingDTable_internal(dst, dstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-}
-
-size_t HUF_decompress1X1_DCtx_wksp(HUF_DTable* DCtx, void* dst, size_t dstSize,
-                                   const void* cSrc, size_t cSrcSize,
-                                   void* workSpace, size_t wkspSize)
-{
-    const BYTE* ip = (const BYTE*) cSrc;
-
-    size_t const hSize = HUF_readDTableX1_wksp(DCtx, cSrc, cSrcSize, workSpace, wkspSize);
-    if (HUF_isError(hSize)) return hSize;
-    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
-    ip += hSize; cSrcSize -= hSize;
-
-    return HUF_decompress1X1_usingDTable_internal(dst, dstSize, ip, cSrcSize, DCtx, /* bmi2 */ 0);
-}
-
-
-size_t HUF_decompress1X1_DCtx(HUF_DTable* DCtx, void* dst, size_t dstSize,
-                              const void* cSrc, size_t cSrcSize)
-{
-    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
-    return HUF_decompress1X1_DCtx_wksp(DCtx, dst, dstSize, cSrc, cSrcSize,
-                                       workSpace, sizeof(workSpace));
-}
-
-size_t HUF_decompress1X1 (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
-{
-    HUF_CREATE_STATIC_DTABLEX1(DTable, HUF_TABLELOG_MAX);
-    return HUF_decompress1X1_DCtx (DTable, dst, dstSize, cSrc, cSrcSize);
-}
-
-size_t HUF_decompress4X1_usingDTable(
-          void* dst,  size_t dstSize,
-    const void* cSrc, size_t cSrcSize,
-    const HUF_DTable* DTable)
-{
-    DTableDesc dtd = HUF_getDTableDesc(DTable);
-    if (dtd.tableType != 0) return ERROR(GENERIC);
-    return HUF_decompress4X1_usingDTable_internal(dst, dstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-}
-
-static size_t HUF_decompress4X1_DCtx_wksp_bmi2(HUF_DTable* dctx, void* dst, size_t dstSize,
-                                   const void* cSrc, size_t cSrcSize,
-                                   void* workSpace, size_t wkspSize, int bmi2)
-{
-    const BYTE* ip = (const BYTE*) cSrc;
-
-    size_t const hSize = HUF_readDTableX1_wksp (dctx, cSrc, cSrcSize,
-                                                workSpace, wkspSize);
-    if (HUF_isError(hSize)) return hSize;
-    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
-    ip += hSize; cSrcSize -= hSize;
-
-    return HUF_decompress4X1_usingDTable_internal(dst, dstSize, ip, cSrcSize, dctx, bmi2);
-}
-
-size_t HUF_decompress4X1_DCtx_wksp(HUF_DTable* dctx, void* dst, size_t dstSize,
-                                   const void* cSrc, size_t cSrcSize,
-                                   void* workSpace, size_t wkspSize)
-{
-    return HUF_decompress4X1_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, 0);
-}
-
-
-size_t HUF_decompress4X1_DCtx (HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
-{
-    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
-    return HUF_decompress4X1_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize,
-                                       workSpace, sizeof(workSpace));
-}
-size_t HUF_decompress4X1 (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
-{
-    HUF_CREATE_STATIC_DTABLEX1(DTable, HUF_TABLELOG_MAX);
-    return HUF_decompress4X1_DCtx(DTable, dst, dstSize, cSrc, cSrcSize);
-}
-
-#endif /* HUF_FORCE_DECOMPRESS_X2 */
-
-
-#ifndef HUF_FORCE_DECOMPRESS_X1
-
-/* *************************/
-/* double-symbols decoding */
-/* *************************/
-
-typedef struct { U16 sequence; BYTE nbBits; BYTE length; } HUF_DEltX2;  /* double-symbols decoding */
-typedef struct { BYTE symbol; BYTE weight; } sortedSymbol_t;
-typedef U32 rankValCol_t[HUF_TABLELOG_MAX + 1];
-typedef rankValCol_t rankVal_t[HUF_TABLELOG_MAX];
-
-
-/* HUF_fillDTableX2Level2() :
- * `rankValOrigin` must be a table of at least (HUF_TABLELOG_MAX + 1) U32 */
-static void HUF_fillDTableX2Level2(HUF_DEltX2* DTable, U32 sizeLog, const U32 consumed,
-                           const U32* rankValOrigin, const int minWeight,
-                           const sortedSymbol_t* sortedSymbols, const U32 sortedListSize,
-                           U32 nbBitsBaseline, U16 baseSeq)
-{
-    HUF_DEltX2 DElt;
-    U32 rankVal[HUF_TABLELOG_MAX + 1];
-
-    /* get pre-calculated rankVal */
-    memcpy(rankVal, rankValOrigin, sizeof(rankVal));
-
-    /* fill skipped values */
-    if (minWeight>1) {
-        U32 i, skipSize = rankVal[minWeight];
-        MEM_writeLE16(&(DElt.sequence), baseSeq);
-        DElt.nbBits   = (BYTE)(consumed);
-        DElt.length   = 1;
-        for (i = 0; i < skipSize; i++)
-            DTable[i] = DElt;
-    }
-
-    /* fill DTable */
-    {   U32 s; for (s=0; s<sortedListSize; s++) {   /* note : sortedSymbols already skipped */
-            const U32 symbol = sortedSymbols[s].symbol;
-            const U32 weight = sortedSymbols[s].weight;
-            const U32 nbBits = nbBitsBaseline - weight;
-            const U32 length = 1 << (sizeLog-nbBits);
-            const U32 start = rankVal[weight];
-            U32 i = start;
-            const U32 end = start + length;
-
-            MEM_writeLE16(&(DElt.sequence), (U16)(baseSeq + (symbol << 8)));
-            DElt.nbBits = (BYTE)(nbBits + consumed);
-            DElt.length = 2;
-            do { DTable[i++] = DElt; } while (i<end);   /* since length >= 1 */
-
-            rankVal[weight] += length;
-    }   }
-}
-
-
-static void HUF_fillDTableX2(HUF_DEltX2* DTable, const U32 targetLog,
-                           const sortedSymbol_t* sortedList, const U32 sortedListSize,
-                           const U32* rankStart, rankVal_t rankValOrigin, const U32 maxWeight,
-                           const U32 nbBitsBaseline)
-{
-    U32 rankVal[HUF_TABLELOG_MAX + 1];
-    const int scaleLog = nbBitsBaseline - targetLog;   /* note : targetLog >= srcLog, hence scaleLog <= 1 */
-    const U32 minBits  = nbBitsBaseline - maxWeight;
-    U32 s;
-
-    memcpy(rankVal, rankValOrigin, sizeof(rankVal));
-
-    /* fill DTable */
-    for (s=0; s<sortedListSize; s++) {
-        const U16 symbol = sortedList[s].symbol;
-        const U32 weight = sortedList[s].weight;
-        const U32 nbBits = nbBitsBaseline - weight;
-        const U32 start = rankVal[weight];
-        const U32 length = 1 << (targetLog-nbBits);
-
-        if (targetLog-nbBits >= minBits) {   /* enough room for a second symbol */
-            U32 sortedRank;
-            int minWeight = nbBits + scaleLog;
-            if (minWeight < 1) minWeight = 1;
-            sortedRank = rankStart[minWeight];
-            HUF_fillDTableX2Level2(DTable+start, targetLog-nbBits, nbBits,
-                           rankValOrigin[nbBits], minWeight,
-                           sortedList+sortedRank, sortedListSize-sortedRank,
-                           nbBitsBaseline, symbol);
-        } else {
-            HUF_DEltX2 DElt;
-            MEM_writeLE16(&(DElt.sequence), symbol);
-            DElt.nbBits = (BYTE)(nbBits);
-            DElt.length = 1;
-            {   U32 const end = start + length;
-                U32 u;
-                for (u = start; u < end; u++) DTable[u] = DElt;
-        }   }
-        rankVal[weight] += length;
-    }
-}
-
-size_t HUF_readDTableX2_wksp(HUF_DTable* DTable,
-                       const void* src, size_t srcSize,
-                             void* workSpace, size_t wkspSize)
-{
-    U32 tableLog, maxW, sizeOfSort, nbSymbols;
-    DTableDesc dtd = HUF_getDTableDesc(DTable);
-    U32 const maxTableLog = dtd.maxTableLog;
-    size_t iSize;
-    void* dtPtr = DTable+1;   /* force compiler to avoid strict-aliasing */
-    HUF_DEltX2* const dt = (HUF_DEltX2*)dtPtr;
-    U32 *rankStart;
-
-    rankValCol_t* rankVal;
-    U32* rankStats;
-    U32* rankStart0;
-    sortedSymbol_t* sortedSymbol;
-    BYTE* weightList;
-    size_t spaceUsed32 = 0;
-
-    rankVal = (rankValCol_t *)((U32 *)workSpace + spaceUsed32);
-    spaceUsed32 += (sizeof(rankValCol_t) * HUF_TABLELOG_MAX) >> 2;
-    rankStats = (U32 *)workSpace + spaceUsed32;
-    spaceUsed32 += HUF_TABLELOG_MAX + 1;
-    rankStart0 = (U32 *)workSpace + spaceUsed32;
-    spaceUsed32 += HUF_TABLELOG_MAX + 2;
-    sortedSymbol = (sortedSymbol_t *)workSpace + (spaceUsed32 * sizeof(U32)) / sizeof(sortedSymbol_t);
-    spaceUsed32 += HUF_ALIGN(sizeof(sortedSymbol_t) * (HUF_SYMBOLVALUE_MAX + 1), sizeof(U32)) >> 2;
-    weightList = (BYTE *)((U32 *)workSpace + spaceUsed32);
-    spaceUsed32 += HUF_ALIGN(HUF_SYMBOLVALUE_MAX + 1, sizeof(U32)) >> 2;
-
-    if ((spaceUsed32 << 2) > wkspSize) return ERROR(tableLog_tooLarge);
-
-    rankStart = rankStart0 + 1;
-    memset(rankStats, 0, sizeof(U32) * (2 * HUF_TABLELOG_MAX + 2 + 1));
-
-    DEBUG_STATIC_ASSERT(sizeof(HUF_DEltX2) == sizeof(HUF_DTable));   /* if compiler fails here, assertion is wrong */
-    if (maxTableLog > HUF_TABLELOG_MAX) return ERROR(tableLog_tooLarge);
-    /* memset(weightList, 0, sizeof(weightList)); */  /* is not necessary, even though some analyzer complain ... */
-
-    iSize = HUF_readStats(weightList, HUF_SYMBOLVALUE_MAX + 1, rankStats, &nbSymbols, &tableLog, src, srcSize);
-    if (HUF_isError(iSize)) return iSize;
-
-    /* check result */
-    if (tableLog > maxTableLog) return ERROR(tableLog_tooLarge);   /* DTable can't fit code depth */
-
-    /* find maxWeight */
-    for (maxW = tableLog; rankStats[maxW]==0; maxW--) {}  /* necessarily finds a solution before 0 */
-
-    /* Get start index of each weight */
-    {   U32 w, nextRankStart = 0;
-        for (w=1; w<maxW+1; w++) {
-            U32 current = nextRankStart;
-            nextRankStart += rankStats[w];
-            rankStart[w] = current;
-        }
-        rankStart[0] = nextRankStart;   /* put all 0w symbols at the end of sorted list*/
-        sizeOfSort = nextRankStart;
-    }
-
-    /* sort symbols by weight */
-    {   U32 s;
-        for (s=0; s<nbSymbols; s++) {
-            U32 const w = weightList[s];
-            U32 const r = rankStart[w]++;
-            sortedSymbol[r].symbol = (BYTE)s;
-            sortedSymbol[r].weight = (BYTE)w;
-        }
-        rankStart[0] = 0;   /* forget 0w symbols; this is beginning of weight(1) */
-    }
-
-    /* Build rankVal */
-    {   U32* const rankVal0 = rankVal[0];
-        {   int const rescale = (maxTableLog-tableLog) - 1;   /* tableLog <= maxTableLog */
-            U32 nextRankVal = 0;
-            U32 w;
-            for (w=1; w<maxW+1; w++) {
-                U32 current = nextRankVal;
-                nextRankVal += rankStats[w] << (w+rescale);
-                rankVal0[w] = current;
-        }   }
-        {   U32 const minBits = tableLog+1 - maxW;
-            U32 consumed;
-            for (consumed = minBits; consumed < maxTableLog - minBits + 1; consumed++) {
-                U32* const rankValPtr = rankVal[consumed];
-                U32 w;
-                for (w = 1; w < maxW+1; w++) {
-                    rankValPtr[w] = rankVal0[w] >> consumed;
-    }   }   }   }
-
-    HUF_fillDTableX2(dt, maxTableLog,
-                   sortedSymbol, sizeOfSort,
-                   rankStart0, rankVal, maxW,
-                   tableLog+1);
-
-    dtd.tableLog = (BYTE)maxTableLog;
-    dtd.tableType = 1;
-    memcpy(DTable, &dtd, sizeof(dtd));
-    return iSize;
-}
-
-size_t HUF_readDTableX2(HUF_DTable* DTable, const void* src, size_t srcSize)
-{
-  U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
-  return HUF_readDTableX2_wksp(DTable, src, srcSize,
-                               workSpace, sizeof(workSpace));
-}
-
-
-FORCE_INLINE_TEMPLATE U32
-HUF_decodeSymbolX2(void* op, BIT_DStream_t* DStream, const HUF_DEltX2* dt, const U32 dtLog)
-{
-    size_t const val = BIT_lookBitsFast(DStream, dtLog);   /* note : dtLog >= 1 */
-    memcpy(op, dt+val, 2);
-    BIT_skipBits(DStream, dt[val].nbBits);
-    return dt[val].length;
-}
-
-FORCE_INLINE_TEMPLATE U32
-HUF_decodeLastSymbolX2(void* op, BIT_DStream_t* DStream, const HUF_DEltX2* dt, const U32 dtLog)
-{
-    size_t const val = BIT_lookBitsFast(DStream, dtLog);   /* note : dtLog >= 1 */
-    memcpy(op, dt+val, 1);
-    if (dt[val].length==1) BIT_skipBits(DStream, dt[val].nbBits);
-    else {
-        if (DStream->bitsConsumed < (sizeof(DStream->bitContainer)*8)) {
-            BIT_skipBits(DStream, dt[val].nbBits);
-            if (DStream->bitsConsumed > (sizeof(DStream->bitContainer)*8))
-                /* ugly hack; works only because it's the last symbol. Note : can't easily extract nbBits from just this symbol */
-                DStream->bitsConsumed = (sizeof(DStream->bitContainer)*8);
-    }   }
-    return 1;
-}
-
-#define HUF_DECODE_SYMBOLX2_0(ptr, DStreamPtr) \
-    ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
-
-#define HUF_DECODE_SYMBOLX2_1(ptr, DStreamPtr) \
-    if (MEM_64bits() || (HUF_TABLELOG_MAX<=12)) \
-        ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
-
-#define HUF_DECODE_SYMBOLX2_2(ptr, DStreamPtr) \
-    if (MEM_64bits()) \
-        ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
-
-HINT_INLINE size_t
-HUF_decodeStreamX2(BYTE* p, BIT_DStream_t* bitDPtr, BYTE* const pEnd,
-                const HUF_DEltX2* const dt, const U32 dtLog)
-{
-    BYTE* const pStart = p;
-
-    /* up to 8 symbols at a time */
-    while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd-(sizeof(bitDPtr->bitContainer)-1))) {
-        HUF_DECODE_SYMBOLX2_2(p, bitDPtr);
-        HUF_DECODE_SYMBOLX2_1(p, bitDPtr);
-        HUF_DECODE_SYMBOLX2_2(p, bitDPtr);
-        HUF_DECODE_SYMBOLX2_0(p, bitDPtr);
-    }
-
-    /* closer to end : up to 2 symbols at a time */
-    while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p <= pEnd-2))
-        HUF_DECODE_SYMBOLX2_0(p, bitDPtr);
-
-    while (p <= pEnd-2)
-        HUF_DECODE_SYMBOLX2_0(p, bitDPtr);   /* no need to reload : reached the end of DStream */
-
-    if (p < pEnd)
-        p += HUF_decodeLastSymbolX2(p, bitDPtr, dt, dtLog);
-
-    return p-pStart;
-}
-
-FORCE_INLINE_TEMPLATE size_t
-HUF_decompress1X2_usingDTable_internal_body(
-          void* dst,  size_t dstSize,
-    const void* cSrc, size_t cSrcSize,
-    const HUF_DTable* DTable)
-{
-    BIT_DStream_t bitD;
-
-    /* Init */
-    CHECK_F( BIT_initDStream(&bitD, cSrc, cSrcSize) );
-
-    /* decode */
-    {   BYTE* const ostart = (BYTE*) dst;
-        BYTE* const oend = ostart + dstSize;
-        const void* const dtPtr = DTable+1;   /* force compiler to not use strict-aliasing */
-        const HUF_DEltX2* const dt = (const HUF_DEltX2*)dtPtr;
-        DTableDesc const dtd = HUF_getDTableDesc(DTable);
-        HUF_decodeStreamX2(ostart, &bitD, oend, dt, dtd.tableLog);
-    }
-
-    /* check */
-    if (!BIT_endOfDStream(&bitD)) return ERROR(corruption_detected);
-
-    /* decoded size */
-    return dstSize;
-}
-
-FORCE_INLINE_TEMPLATE size_t
-HUF_decompress4X2_usingDTable_internal_body(
-          void* dst,  size_t dstSize,
-    const void* cSrc, size_t cSrcSize,
-    const HUF_DTable* DTable)
-{
-    if (cSrcSize < 10) return ERROR(corruption_detected);   /* strict minimum : jump table + 1 byte per stream */
-
-    {   const BYTE* const istart = (const BYTE*) cSrc;
-        BYTE* const ostart = (BYTE*) dst;
-        BYTE* const oend = ostart + dstSize;
-        BYTE* const olimit = oend - (sizeof(size_t)-1);
-        const void* const dtPtr = DTable+1;
-        const HUF_DEltX2* const dt = (const HUF_DEltX2*)dtPtr;
-
-        /* Init */
-        BIT_DStream_t bitD1;
-        BIT_DStream_t bitD2;
-        BIT_DStream_t bitD3;
-        BIT_DStream_t bitD4;
-        size_t const length1 = MEM_readLE16(istart);
-        size_t const length2 = MEM_readLE16(istart+2);
-        size_t const length3 = MEM_readLE16(istart+4);
-        size_t const length4 = cSrcSize - (length1 + length2 + length3 + 6);
-        const BYTE* const istart1 = istart + 6;  /* jumpTable */
-        const BYTE* const istart2 = istart1 + length1;
-        const BYTE* const istart3 = istart2 + length2;
-        const BYTE* const istart4 = istart3 + length3;
-        size_t const segmentSize = (dstSize+3) / 4;
-        BYTE* const opStart2 = ostart + segmentSize;
-        BYTE* const opStart3 = opStart2 + segmentSize;
-        BYTE* const opStart4 = opStart3 + segmentSize;
-        BYTE* op1 = ostart;
-        BYTE* op2 = opStart2;
-        BYTE* op3 = opStart3;
-        BYTE* op4 = opStart4;
-        U32 endSignal = 1;
-        DTableDesc const dtd = HUF_getDTableDesc(DTable);
-        U32 const dtLog = dtd.tableLog;
-
-        if (length4 > cSrcSize) return ERROR(corruption_detected);   /* overflow */
-        CHECK_F( BIT_initDStream(&bitD1, istart1, length1) );
-        CHECK_F( BIT_initDStream(&bitD2, istart2, length2) );
-        CHECK_F( BIT_initDStream(&bitD3, istart3, length3) );
-        CHECK_F( BIT_initDStream(&bitD4, istart4, length4) );
-
-        /* 16-32 symbols per loop (4-8 symbols per stream) */
-        for ( ; (endSignal) & (op4 < olimit); ) {
-#if defined(__clang__) && (defined(__x86_64__) || defined(__i386__))
-            HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
-            HUF_DECODE_SYMBOLX2_1(op1, &bitD1);
-            HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
-            HUF_DECODE_SYMBOLX2_0(op1, &bitD1);
-            HUF_DECODE_SYMBOLX2_2(op2, &bitD2);
-            HUF_DECODE_SYMBOLX2_1(op2, &bitD2);
-            HUF_DECODE_SYMBOLX2_2(op2, &bitD2);
-            HUF_DECODE_SYMBOLX2_0(op2, &bitD2);
-            endSignal &= BIT_reloadDStreamFast(&bitD1) == BIT_DStream_unfinished;
-            endSignal &= BIT_reloadDStreamFast(&bitD2) == BIT_DStream_unfinished;
-            HUF_DECODE_SYMBOLX2_2(op3, &bitD3);
-            HUF_DECODE_SYMBOLX2_1(op3, &bitD3);
-            HUF_DECODE_SYMBOLX2_2(op3, &bitD3);
-            HUF_DECODE_SYMBOLX2_0(op3, &bitD3);
-            HUF_DECODE_SYMBOLX2_2(op4, &bitD4);
-            HUF_DECODE_SYMBOLX2_1(op4, &bitD4);
-            HUF_DECODE_SYMBOLX2_2(op4, &bitD4);
-            HUF_DECODE_SYMBOLX2_0(op4, &bitD4);
-            endSignal &= BIT_reloadDStreamFast(&bitD3) == BIT_DStream_unfinished;
-            endSignal &= BIT_reloadDStreamFast(&bitD4) == BIT_DStream_unfinished;
-#else
-            HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
-            HUF_DECODE_SYMBOLX2_2(op2, &bitD2);
-            HUF_DECODE_SYMBOLX2_2(op3, &bitD3);
-            HUF_DECODE_SYMBOLX2_2(op4, &bitD4);
-            HUF_DECODE_SYMBOLX2_1(op1, &bitD1);
-            HUF_DECODE_SYMBOLX2_1(op2, &bitD2);
-            HUF_DECODE_SYMBOLX2_1(op3, &bitD3);
-            HUF_DECODE_SYMBOLX2_1(op4, &bitD4);
-            HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
-            HUF_DECODE_SYMBOLX2_2(op2, &bitD2);
-            HUF_DECODE_SYMBOLX2_2(op3, &bitD3);
-            HUF_DECODE_SYMBOLX2_2(op4, &bitD4);
-            HUF_DECODE_SYMBOLX2_0(op1, &bitD1);
-            HUF_DECODE_SYMBOLX2_0(op2, &bitD2);
-            HUF_DECODE_SYMBOLX2_0(op3, &bitD3);
-            HUF_DECODE_SYMBOLX2_0(op4, &bitD4);
-            endSignal = (U32)LIKELY(
-                        (BIT_reloadDStreamFast(&bitD1) == BIT_DStream_unfinished)
-                      & (BIT_reloadDStreamFast(&bitD2) == BIT_DStream_unfinished)
-                      & (BIT_reloadDStreamFast(&bitD3) == BIT_DStream_unfinished)
-                      & (BIT_reloadDStreamFast(&bitD4) == BIT_DStream_unfinished));
-#endif
-        }
-
-        /* check corruption */
-        if (op1 > opStart2) return ERROR(corruption_detected);
-        if (op2 > opStart3) return ERROR(corruption_detected);
-        if (op3 > opStart4) return ERROR(corruption_detected);
-        /* note : op4 already verified within main loop */
-
-        /* finish bitStreams one by one */
-        HUF_decodeStreamX2(op1, &bitD1, opStart2, dt, dtLog);
-        HUF_decodeStreamX2(op2, &bitD2, opStart3, dt, dtLog);
-        HUF_decodeStreamX2(op3, &bitD3, opStart4, dt, dtLog);
-        HUF_decodeStreamX2(op4, &bitD4, oend,     dt, dtLog);
-
-        /* check */
-        { U32 const endCheck = BIT_endOfDStream(&bitD1) & BIT_endOfDStream(&bitD2) & BIT_endOfDStream(&bitD3) & BIT_endOfDStream(&bitD4);
-          if (!endCheck) return ERROR(corruption_detected); }
-
-        /* decoded size */
-        return dstSize;
-    }
-}
-
-HUF_DGEN(HUF_decompress1X2_usingDTable_internal)
-HUF_DGEN(HUF_decompress4X2_usingDTable_internal)
-
-size_t HUF_decompress1X2_usingDTable(
-          void* dst,  size_t dstSize,
-    const void* cSrc, size_t cSrcSize,
-    const HUF_DTable* DTable)
-{
-    DTableDesc dtd = HUF_getDTableDesc(DTable);
-    if (dtd.tableType != 1) return ERROR(GENERIC);
-    return HUF_decompress1X2_usingDTable_internal(dst, dstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-}
-
-size_t HUF_decompress1X2_DCtx_wksp(HUF_DTable* DCtx, void* dst, size_t dstSize,
-                                   const void* cSrc, size_t cSrcSize,
-                                   void* workSpace, size_t wkspSize)
-{
-    const BYTE* ip = (const BYTE*) cSrc;
-
-    size_t const hSize = HUF_readDTableX2_wksp(DCtx, cSrc, cSrcSize,
-                                               workSpace, wkspSize);
-    if (HUF_isError(hSize)) return hSize;
-    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
-    ip += hSize; cSrcSize -= hSize;
-
-    return HUF_decompress1X2_usingDTable_internal(dst, dstSize, ip, cSrcSize, DCtx, /* bmi2 */ 0);
-}
-
-
-size_t HUF_decompress1X2_DCtx(HUF_DTable* DCtx, void* dst, size_t dstSize,
-                              const void* cSrc, size_t cSrcSize)
-{
-    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
-    return HUF_decompress1X2_DCtx_wksp(DCtx, dst, dstSize, cSrc, cSrcSize,
-                                       workSpace, sizeof(workSpace));
-}
-
-size_t HUF_decompress1X2 (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
-{
-    HUF_CREATE_STATIC_DTABLEX2(DTable, HUF_TABLELOG_MAX);
-    return HUF_decompress1X2_DCtx(DTable, dst, dstSize, cSrc, cSrcSize);
-}
-
-size_t HUF_decompress4X2_usingDTable(
-          void* dst,  size_t dstSize,
-    const void* cSrc, size_t cSrcSize,
-    const HUF_DTable* DTable)
-{
-    DTableDesc dtd = HUF_getDTableDesc(DTable);
-    if (dtd.tableType != 1) return ERROR(GENERIC);
-    return HUF_decompress4X2_usingDTable_internal(dst, dstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-}
-
-static size_t HUF_decompress4X2_DCtx_wksp_bmi2(HUF_DTable* dctx, void* dst, size_t dstSize,
-                                   const void* cSrc, size_t cSrcSize,
-                                   void* workSpace, size_t wkspSize, int bmi2)
-{
-    const BYTE* ip = (const BYTE*) cSrc;
-
-    size_t hSize = HUF_readDTableX2_wksp(dctx, cSrc, cSrcSize,
-                                         workSpace, wkspSize);
-    if (HUF_isError(hSize)) return hSize;
-    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
-    ip += hSize; cSrcSize -= hSize;
-
-    return HUF_decompress4X2_usingDTable_internal(dst, dstSize, ip, cSrcSize, dctx, bmi2);
-}
-
-size_t HUF_decompress4X2_DCtx_wksp(HUF_DTable* dctx, void* dst, size_t dstSize,
-                                   const void* cSrc, size_t cSrcSize,
-                                   void* workSpace, size_t wkspSize)
-{
-    return HUF_decompress4X2_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, /* bmi2 */ 0);
-}
-
-
-size_t HUF_decompress4X2_DCtx(HUF_DTable* dctx, void* dst, size_t dstSize,
-                              const void* cSrc, size_t cSrcSize)
-{
-    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
-    return HUF_decompress4X2_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize,
-                                       workSpace, sizeof(workSpace));
-}
-
-size_t HUF_decompress4X2 (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
-{
-    HUF_CREATE_STATIC_DTABLEX2(DTable, HUF_TABLELOG_MAX);
-    return HUF_decompress4X2_DCtx(DTable, dst, dstSize, cSrc, cSrcSize);
-}
-
-#endif /* HUF_FORCE_DECOMPRESS_X1 */
-
-
-/* ***********************************/
-/* Universal decompression selectors */
-/* ***********************************/
-
-size_t HUF_decompress1X_usingDTable(void* dst, size_t maxDstSize,
-                                    const void* cSrc, size_t cSrcSize,
-                                    const HUF_DTable* DTable)
-{
-    DTableDesc const dtd = HUF_getDTableDesc(DTable);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-    (void)dtd;
-    assert(dtd.tableType == 0);
-    return HUF_decompress1X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-    (void)dtd;
-    assert(dtd.tableType == 1);
-    return HUF_decompress1X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-#else
-    return dtd.tableType ? HUF_decompress1X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0) :
-                           HUF_decompress1X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-#endif
-}
-
-size_t HUF_decompress4X_usingDTable(void* dst, size_t maxDstSize,
-                                    const void* cSrc, size_t cSrcSize,
-                                    const HUF_DTable* DTable)
-{
-    DTableDesc const dtd = HUF_getDTableDesc(DTable);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-    (void)dtd;
-    assert(dtd.tableType == 0);
-    return HUF_decompress4X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-    (void)dtd;
-    assert(dtd.tableType == 1);
-    return HUF_decompress4X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-#else
-    return dtd.tableType ? HUF_decompress4X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0) :
-                           HUF_decompress4X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
-#endif
-}
-
-
-#if !defined(HUF_FORCE_DECOMPRESS_X1) && !defined(HUF_FORCE_DECOMPRESS_X2)
-typedef struct { U32 tableTime; U32 decode256Time; } algo_time_t;
-static const algo_time_t algoTime[16 /* Quantization */][3 /* single, double, quad */] =
-{
-    /* single, double, quad */
-    {{0,0}, {1,1}, {2,2}},  /* Q==0 : impossible */
-    {{0,0}, {1,1}, {2,2}},  /* Q==1 : impossible */
-    {{  38,130}, {1313, 74}, {2151, 38}},   /* Q == 2 : 12-18% */
-    {{ 448,128}, {1353, 74}, {2238, 41}},   /* Q == 3 : 18-25% */
-    {{ 556,128}, {1353, 74}, {2238, 47}},   /* Q == 4 : 25-32% */
-    {{ 714,128}, {1418, 74}, {2436, 53}},   /* Q == 5 : 32-38% */
-    {{ 883,128}, {1437, 74}, {2464, 61}},   /* Q == 6 : 38-44% */
-    {{ 897,128}, {1515, 75}, {2622, 68}},   /* Q == 7 : 44-50% */
-    {{ 926,128}, {1613, 75}, {2730, 75}},   /* Q == 8 : 50-56% */
-    {{ 947,128}, {1729, 77}, {3359, 77}},   /* Q == 9 : 56-62% */
-    {{1107,128}, {2083, 81}, {4006, 84}},   /* Q ==10 : 62-69% */
-    {{1177,128}, {2379, 87}, {4785, 88}},   /* Q ==11 : 69-75% */
-    {{1242,128}, {2415, 93}, {5155, 84}},   /* Q ==12 : 75-81% */
-    {{1349,128}, {2644,106}, {5260,106}},   /* Q ==13 : 81-87% */
-    {{1455,128}, {2422,124}, {4174,124}},   /* Q ==14 : 87-93% */
-    {{ 722,128}, {1891,145}, {1936,146}},   /* Q ==15 : 93-99% */
-};
-#endif
-
-/** HUF_selectDecoder() :
- *  Tells which decoder is likely to decode faster,
- *  based on a set of pre-computed metrics.
- * @return : 0==HUF_decompress4X1, 1==HUF_decompress4X2 .
- *  Assumption : 0 < dstSize <= 128 KB */
-U32 HUF_selectDecoder (size_t dstSize, size_t cSrcSize)
-{
-    assert(dstSize > 0);
-    assert(dstSize <= 128*1024);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-    (void)dstSize;
-    (void)cSrcSize;
-    return 0;
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-    (void)dstSize;
-    (void)cSrcSize;
-    return 1;
-#else
-    /* decoder timing evaluation */
-    {   U32 const Q = (cSrcSize >= dstSize) ? 15 : (U32)(cSrcSize * 16 / dstSize);   /* Q < 16 */
-        U32 const D256 = (U32)(dstSize >> 8);
-        U32 const DTime0 = algoTime[Q][0].tableTime + (algoTime[Q][0].decode256Time * D256);
-        U32 DTime1 = algoTime[Q][1].tableTime + (algoTime[Q][1].decode256Time * D256);
-        DTime1 += DTime1 >> 3;  /* advantage to algorithm using less memory, to reduce cache eviction */
-        return DTime1 < DTime0;
-    }
-#endif
-}
-
-
-typedef size_t (*decompressionAlgo)(void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize);
-
-size_t HUF_decompress (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
-{
-#if !defined(HUF_FORCE_DECOMPRESS_X1) && !defined(HUF_FORCE_DECOMPRESS_X2)
-    static const decompressionAlgo decompress[2] = { HUF_decompress4X1, HUF_decompress4X2 };
-#endif
-
-    /* validation checks */
-    if (dstSize == 0) return ERROR(dstSize_tooSmall);
-    if (cSrcSize > dstSize) return ERROR(corruption_detected);   /* invalid */
-    if (cSrcSize == dstSize) { memcpy(dst, cSrc, dstSize); return dstSize; }   /* not compressed */
-    if (cSrcSize == 1) { memset(dst, *(const BYTE*)cSrc, dstSize); return dstSize; }   /* RLE */
-
-    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-        (void)algoNb;
-        assert(algoNb == 0);
-        return HUF_decompress4X1(dst, dstSize, cSrc, cSrcSize);
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-        (void)algoNb;
-        assert(algoNb == 1);
-        return HUF_decompress4X2(dst, dstSize, cSrc, cSrcSize);
-#else
-        return decompress[algoNb](dst, dstSize, cSrc, cSrcSize);
-#endif
-    }
-}
-
-size_t HUF_decompress4X_DCtx (HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
-{
-    /* validation checks */
-    if (dstSize == 0) return ERROR(dstSize_tooSmall);
-    if (cSrcSize > dstSize) return ERROR(corruption_detected);   /* invalid */
-    if (cSrcSize == dstSize) { memcpy(dst, cSrc, dstSize); return dstSize; }   /* not compressed */
-    if (cSrcSize == 1) { memset(dst, *(const BYTE*)cSrc, dstSize); return dstSize; }   /* RLE */
-
-    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-        (void)algoNb;
-        assert(algoNb == 0);
-        return HUF_decompress4X1_DCtx(dctx, dst, dstSize, cSrc, cSrcSize);
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-        (void)algoNb;
-        assert(algoNb == 1);
-        return HUF_decompress4X2_DCtx(dctx, dst, dstSize, cSrc, cSrcSize);
-#else
-        return algoNb ? HUF_decompress4X2_DCtx(dctx, dst, dstSize, cSrc, cSrcSize) :
-                        HUF_decompress4X1_DCtx(dctx, dst, dstSize, cSrc, cSrcSize) ;
-#endif
-    }
-}
-
-size_t HUF_decompress4X_hufOnly(HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
-{
-    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
-    return HUF_decompress4X_hufOnly_wksp(dctx, dst, dstSize, cSrc, cSrcSize,
-                                         workSpace, sizeof(workSpace));
-}
-
-
-size_t HUF_decompress4X_hufOnly_wksp(HUF_DTable* dctx, void* dst,
-                                     size_t dstSize, const void* cSrc,
-                                     size_t cSrcSize, void* workSpace,
-                                     size_t wkspSize)
-{
-    /* validation checks */
-    if (dstSize == 0) return ERROR(dstSize_tooSmall);
-    if (cSrcSize == 0) return ERROR(corruption_detected);
-
-    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-        (void)algoNb;
-        assert(algoNb == 0);
-        return HUF_decompress4X1_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize);
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-        (void)algoNb;
-        assert(algoNb == 1);
-        return HUF_decompress4X2_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize);
-#else
-        return algoNb ? HUF_decompress4X2_DCtx_wksp(dctx, dst, dstSize, cSrc,
-                            cSrcSize, workSpace, wkspSize):
-                        HUF_decompress4X1_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize);
-#endif
-    }
-}
-
-size_t HUF_decompress1X_DCtx_wksp(HUF_DTable* dctx, void* dst, size_t dstSize,
-                                  const void* cSrc, size_t cSrcSize,
-                                  void* workSpace, size_t wkspSize)
-{
-    /* validation checks */
-    if (dstSize == 0) return ERROR(dstSize_tooSmall);
-    if (cSrcSize > dstSize) return ERROR(corruption_detected);   /* invalid */
-    if (cSrcSize == dstSize) { memcpy(dst, cSrc, dstSize); return dstSize; }   /* not compressed */
-    if (cSrcSize == 1) { memset(dst, *(const BYTE*)cSrc, dstSize); return dstSize; }   /* RLE */
-
-    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-        (void)algoNb;
-        assert(algoNb == 0);
-        return HUF_decompress1X1_DCtx_wksp(dctx, dst, dstSize, cSrc,
-                                cSrcSize, workSpace, wkspSize);
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-        (void)algoNb;
-        assert(algoNb == 1);
-        return HUF_decompress1X2_DCtx_wksp(dctx, dst, dstSize, cSrc,
-                                cSrcSize, workSpace, wkspSize);
-#else
-        return algoNb ? HUF_decompress1X2_DCtx_wksp(dctx, dst, dstSize, cSrc,
-                                cSrcSize, workSpace, wkspSize):
-                        HUF_decompress1X1_DCtx_wksp(dctx, dst, dstSize, cSrc,
-                                cSrcSize, workSpace, wkspSize);
-#endif
-    }
-}
-
-size_t HUF_decompress1X_DCtx(HUF_DTable* dctx, void* dst, size_t dstSize,
-                             const void* cSrc, size_t cSrcSize)
-{
-    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
-    return HUF_decompress1X_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize,
-                                      workSpace, sizeof(workSpace));
-}
-
-
-size_t HUF_decompress1X_usingDTable_bmi2(void* dst, size_t maxDstSize, const void* cSrc, size_t cSrcSize, const HUF_DTable* DTable, int bmi2)
-{
-    DTableDesc const dtd = HUF_getDTableDesc(DTable);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-    (void)dtd;
-    assert(dtd.tableType == 0);
-    return HUF_decompress1X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-    (void)dtd;
-    assert(dtd.tableType == 1);
-    return HUF_decompress1X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
-#else
-    return dtd.tableType ? HUF_decompress1X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2) :
-                           HUF_decompress1X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
-#endif
-}
-
-#ifndef HUF_FORCE_DECOMPRESS_X2
-size_t HUF_decompress1X1_DCtx_wksp_bmi2(HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize, void* workSpace, size_t wkspSize, int bmi2)
-{
-    const BYTE* ip = (const BYTE*) cSrc;
-
-    size_t const hSize = HUF_readDTableX1_wksp(dctx, cSrc, cSrcSize, workSpace, wkspSize);
-    if (HUF_isError(hSize)) return hSize;
-    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
-    ip += hSize; cSrcSize -= hSize;
-
-    return HUF_decompress1X1_usingDTable_internal(dst, dstSize, ip, cSrcSize, dctx, bmi2);
-}
-#endif
-
-size_t HUF_decompress4X_usingDTable_bmi2(void* dst, size_t maxDstSize, const void* cSrc, size_t cSrcSize, const HUF_DTable* DTable, int bmi2)
-{
-    DTableDesc const dtd = HUF_getDTableDesc(DTable);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-    (void)dtd;
-    assert(dtd.tableType == 0);
-    return HUF_decompress4X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-    (void)dtd;
-    assert(dtd.tableType == 1);
-    return HUF_decompress4X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
-#else
-    return dtd.tableType ? HUF_decompress4X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2) :
-                           HUF_decompress4X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
-#endif
-}
-
-size_t HUF_decompress4X_hufOnly_wksp_bmi2(HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize, void* workSpace, size_t wkspSize, int bmi2)
-{
-    /* validation checks */
-    if (dstSize == 0) return ERROR(dstSize_tooSmall);
-    if (cSrcSize == 0) return ERROR(corruption_detected);
-
-    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
-#if defined(HUF_FORCE_DECOMPRESS_X1)
-        (void)algoNb;
-        assert(algoNb == 0);
-        return HUF_decompress4X1_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, bmi2);
-#elif defined(HUF_FORCE_DECOMPRESS_X2)
-        (void)algoNb;
-        assert(algoNb == 1);
-        return HUF_decompress4X2_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, bmi2);
-#else
-        return algoNb ? HUF_decompress4X2_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, bmi2) :
-                        HUF_decompress4X1_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, bmi2);
-#endif
-    }
-}
-
-}
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-/*
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
- */
-
-/* zstd_ddict.c :
- * concentrates all logic that needs to know the internals of ZSTD_DDict object */
-
-/*-*******************************************************
-*  Dependencies
-*********************************************************/
-#include <string.h>      /* memcpy, memmove, memset */
-         /* low level memory routines */
-
-
-
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#include <string.h>
 
 
 
@@ -23335,178 +18999,304 @@ size_t HUF_decompress4X_hufOnly_wksp_bmi2(HUF_DTable* dctx, void* dst, size_t ds
 // The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
-/*
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
- */
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#ifndef THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
+#define THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
 
-/* zstd_decompress_internal:
- * objects and definitions shared within lib/decompress modules */
+#include <stddef.h>
 
- #ifndef ZSTD_DECOMPRESS_INTERNAL_H
- #define ZSTD_DECOMPRESS_INTERNAL_H
+namespace duckdb_snappy {
 
+// A Sink is an interface that consumes a sequence of bytes.
+class Sink {
+ public:
+  Sink() { }
+  virtual ~Sink();
 
-/*-*******************************************************
- *  Dependencies
- *********************************************************/
-             /* BYTE, U16, U32 */
-   /* ZSTD_seqSymbol */
+  // Append "bytes[0,n-1]" to this.
+  virtual void Append(const char* bytes, size_t n) = 0;
 
-namespace duckdb_zstd {
+  // Returns a writable buffer of the specified length for appending.
+  // May return a pointer to the caller-owned scratch buffer which
+  // must have at least the indicated length.  The returned buffer is
+  // only valid until the next operation on this Sink.
+  //
+  // After writing at most "length" bytes, call Append() with the
+  // pointer returned from this function and the number of bytes
+  // written.  Many Append() implementations will avoid copying
+  // bytes if this function returned an internal buffer.
+  //
+  // If a non-scratch buffer is returned, the caller may only pass a
+  // prefix of it to Append().  That is, it is not correct to pass an
+  // interior pointer of the returned array to Append().
+  //
+  // The default implementation always returns the scratch buffer.
+  virtual char* GetAppendBuffer(size_t length, char* scratch);
 
-/*-*******************************************************
- *  Constants
- *********************************************************/
-struct ZSTDConstants {
-    static const U32 LL_base[MaxLL+1];
-    static const U32 OF_base[MaxOff+1];
-    static const U32 OF_bits[MaxOff+1];
-    static const U32 ML_base[MaxML+1];
+  // For higher performance, Sink implementations can provide custom
+  // AppendAndTakeOwnership() and GetAppendBufferVariable() methods.
+  // These methods can reduce the number of copies done during
+  // compression/decompression.
+
+  // Append "bytes[0,n-1] to the sink. Takes ownership of "bytes"
+  // and calls the deleter function as (*deleter)(deleter_arg, bytes, n)
+  // to free the buffer. deleter function must be non NULL.
+  //
+  // The default implementation just calls Append and frees "bytes".
+  // Other implementations may avoid a copy while appending the buffer.
+  virtual void AppendAndTakeOwnership(
+      char* bytes, size_t n, void (*deleter)(void*, const char*, size_t),
+      void *deleter_arg);
+
+  // Returns a writable buffer for appending and writes the buffer's capacity to
+  // *allocated_size. Guarantees *allocated_size >= min_size.
+  // May return a pointer to the caller-owned scratch buffer which must have
+  // scratch_size >= min_size.
+  //
+  // The returned buffer is only valid until the next operation
+  // on this ByteSink.
+  //
+  // After writing at most *allocated_size bytes, call Append() with the
+  // pointer returned from this function and the number of bytes written.
+  // Many Append() implementations will avoid copying bytes if this function
+  // returned an internal buffer.
+  //
+  // If the sink implementation allocates or reallocates an internal buffer,
+  // it should use the desired_size_hint if appropriate. If a caller cannot
+  // provide a reasonable guess at the desired capacity, it should set
+  // desired_size_hint = 0.
+  //
+  // If a non-scratch buffer is returned, the caller may only pass
+  // a prefix to it to Append(). That is, it is not correct to pass an
+  // interior pointer to Append().
+  //
+  // The default implementation always returns the scratch buffer.
+  virtual char* GetAppendBufferVariable(
+      size_t min_size, size_t desired_size_hint, char* scratch,
+      size_t scratch_size, size_t* allocated_size);
+
+ private:
+  // No copying
+  Sink(const Sink&);
+  void operator=(const Sink&);
 };
 
+// A Source is an interface that yields a sequence of bytes
+class Source {
+ public:
+  Source() { }
+  virtual ~Source();
 
-/*-*******************************************************
- *  Decompression types
- *********************************************************/
- typedef struct {
-     U32 fastMode;
-     U32 tableLog;
- } ZSTD_seqSymbol_header;
+  // Return the number of bytes left to read from the source
+  virtual size_t Available() const = 0;
 
- typedef struct {
-     U16  nextState;
-     BYTE nbAdditionalBits;
-     BYTE nbBits;
-     U32  baseValue;
- } ZSTD_seqSymbol;
+  // Peek at the next flat region of the source.  Does not reposition
+  // the source.  The returned region is empty iff Available()==0.
+  //
+  // Returns a pointer to the beginning of the region and store its
+  // length in *len.
+  //
+  // The returned region is valid until the next call to Skip() or
+  // until this object is destroyed, whichever occurs first.
+  //
+  // The returned region may be larger than Available() (for example
+  // if this ByteSource is a view on a substring of a larger source).
+  // The caller is responsible for ensuring that it only reads the
+  // Available() bytes.
+  virtual const char* Peek(size_t* len) = 0;
 
- #define SEQSYMBOL_TABLE_SIZE(log)   (1 + (1 << (log)))
+  // Skip the next n bytes.  Invalidates any buffer returned by
+  // a previous call to Peek().
+  // REQUIRES: Available() >= n
+  virtual void Skip(size_t n) = 0;
 
-typedef struct {
-    ZSTD_seqSymbol LLTable[SEQSYMBOL_TABLE_SIZE(LLFSELog)];    /* Note : Space reserved for FSE Tables */
-    ZSTD_seqSymbol OFTable[SEQSYMBOL_TABLE_SIZE(OffFSELog)];   /* is also used as temporary workspace while building hufTable during DDict creation */
-    ZSTD_seqSymbol MLTable[SEQSYMBOL_TABLE_SIZE(MLFSELog)];    /* and therefore must be at least HUF_DECOMPRESS_WORKSPACE_SIZE large */
-    HUF_DTable hufTable[HUF_DTABLE_SIZE(HufLog)];  /* can accommodate HUF_decompress4X */
-    U32 rep[ZSTD_REP_NUM];
-} ZSTD_entropyDTables_t;
+ private:
+  // No copying
+  Source(const Source&);
+  void operator=(const Source&);
+};
 
-typedef enum { ZSTDds_getFrameHeaderSize, ZSTDds_decodeFrameHeader,
-               ZSTDds_decodeBlockHeader, ZSTDds_decompressBlock,
-               ZSTDds_decompressLastBlock, ZSTDds_checkChecksum,
-               ZSTDds_decodeSkippableHeader, ZSTDds_skipFrame } ZSTD_dStage;
+// A Source implementation that yields the contents of a flat array
+class ByteArraySource : public Source {
+ public:
+  ByteArraySource(const char* p, size_t n) : ptr_(p), left_(n) { }
+  virtual ~ByteArraySource();
+  virtual size_t Available() const;
+  virtual const char* Peek(size_t* len);
+  virtual void Skip(size_t n);
+ private:
+  const char* ptr_;
+  size_t left_;
+};
 
-typedef enum { zdss_init=0, zdss_loadHeader,
-               zdss_read, zdss_load, zdss_flush } ZSTD_dStreamStage;
+// A Sink implementation that writes to a flat array without any bound checks.
+class UncheckedByteArraySink : public Sink {
+ public:
+  explicit UncheckedByteArraySink(char* dest) : dest_(dest) { }
+  virtual ~UncheckedByteArraySink();
+  virtual void Append(const char* data, size_t n);
+  virtual char* GetAppendBuffer(size_t len, char* scratch);
+  virtual char* GetAppendBufferVariable(
+      size_t min_size, size_t desired_size_hint, char* scratch,
+      size_t scratch_size, size_t* allocated_size);
+  virtual void AppendAndTakeOwnership(
+      char* bytes, size_t n, void (*deleter)(void*, const char*, size_t),
+      void *deleter_arg);
 
-typedef enum {
-    ZSTD_use_indefinitely = -1,  /* Use the dictionary indefinitely */
-    ZSTD_dont_use = 0,           /* Do not use the dictionary (if one exists free it) */
-    ZSTD_use_once = 1            /* Use the dictionary once and set to ZSTD_dont_use */
-} ZSTD_dictUses_e;
+  // Return the current output pointer so that a caller can see how
+  // many bytes were produced.
+  // Note: this is not a Sink method.
+  char* CurrentDestination() const { return dest_; }
+ private:
+  char* dest_;
+};
 
-typedef enum {
-    ZSTD_obm_buffered = 0,  /* Buffer the output */
-    ZSTD_obm_stable = 1     /* ZSTD_outBuffer is stable */
-} ZSTD_outBufferMode_e;
+}  // namespace duckdb_snappy
 
-struct ZSTD_DCtx_s
-{
-    const ZSTD_seqSymbol* LLTptr;
-    const ZSTD_seqSymbol* MLTptr;
-    const ZSTD_seqSymbol* OFTptr;
-    const HUF_DTable* HUFptr;
-    ZSTD_entropyDTables_t entropy;
-    U32 workspace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];   /* space needed when building huffman tables */
-    const void* previousDstEnd;   /* detect continuity */
-    const void* prefixStart;      /* start of current segment */
-    const void* virtualStart;     /* virtual start of previous segment if it was just before current one */
-    const void* dictEnd;          /* end of previous segment */
-    size_t expected;
-    ZSTD_frameHeader fParams;
-    U64 decodedSize;
-    blockType_e bType;            /* used in ZSTD_decompressContinue(), store blockType between block header decoding and block decompression stages */
-    ZSTD_dStage stage;
-    U32 litEntropy;
-    U32 fseEntropy;
-    XXH64_state_t xxhState;
-    size_t headerSize;
-    ZSTD_format_e format;
-    const BYTE* litPtr;
-    ZSTD_customMem customMem;
-    size_t litSize;
-    size_t rleSize;
-    size_t staticSize;
-    int bmi2;                     /* == 1 if the CPU supports BMI2 and 0 otherwise. CPU support is determined dynamically once per context lifetime. */
-
-    /* dictionary */
-    ZSTD_DDict* ddictLocal;
-    const ZSTD_DDict* ddict;     /* set by ZSTD_initDStream_usingDDict(), or ZSTD_DCtx_refDDict() */
-    U32 dictID;
-    int ddictIsCold;             /* if == 1 : dictionary is "new" for working context, and presumed "cold" (not in cpu cache) */
-    ZSTD_dictUses_e dictUses;
-
-    /* streaming */
-    ZSTD_dStreamStage streamStage;
-    char*  inBuff;
-    size_t inBuffSize;
-    size_t inPos;
-    size_t maxWindowSize;
-    char*  outBuff;
-    size_t outBuffSize;
-    size_t outStart;
-    size_t outEnd;
-    size_t lhSize;
-    void* legacyContext;
-    U32 previousLegacyVersion;
-    U32 legacyVersion;
-    U32 hostageByte;
-    int noForwardProgress;
-    ZSTD_outBufferMode_e outBufferMode;
-    ZSTD_outBuffer expectedOutBuffer;
-
-    /* workspace */
-    BYTE litBuffer[ZSTD_BLOCKSIZE_MAX + WILDCOPY_OVERLENGTH];
-    BYTE headerBuffer[ZSTD_FRAMEHEADERSIZE_MAX];
-
-    size_t oversizedDuration;
-
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    void const* dictContentBeginForFuzzing;
-    void const* dictContentEndForFuzzing;
-#endif
-};  /* typedef'd to ZSTD_DCtx within "zstd.h" */
-
-
-/*-*******************************************************
- *  Shared internal functions
- *********************************************************/
-
-/*! ZSTD_loadDEntropy() :
- *  dict : must point at beginning of a valid zstd dictionary.
- * @return : size of dictionary header (size of magic number + dict ID + entropy tables) */
-size_t ZSTD_loadDEntropy(ZSTD_entropyDTables_t* entropy,
-                   const void* const dict, size_t const dictSize);
-
-/*! ZSTD_checkContinuity() :
- *  check if next `dst` follows previous position, where decompression ended.
- *  If yes, do nothing (continue on current segment).
- *  If not, classify previous segment as "external dictionary", and start a new segment.
- *  This function cannot fail. */
-void ZSTD_checkContinuity(ZSTD_DCtx* dctx, const void* dst);
-
-}
-
-#endif /* ZSTD_DECOMPRESS_INTERNAL_H */
+#endif  // THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
 
 
 // LICENSE_CHANGE_END
+
+
+namespace duckdb_snappy {
+
+Source::~Source() { }
+
+Sink::~Sink() { }
+
+char* Sink::GetAppendBuffer(size_t length, char* scratch) {
+  return scratch;
+}
+
+char* Sink::GetAppendBufferVariable(
+      size_t min_size, size_t desired_size_hint, char* scratch,
+      size_t scratch_size, size_t* allocated_size) {
+  *allocated_size = scratch_size;
+  return scratch;
+}
+
+void Sink::AppendAndTakeOwnership(
+    char* bytes, size_t n,
+    void (*deleter)(void*, const char*, size_t),
+    void *deleter_arg) {
+  Append(bytes, n);
+  (*deleter)(deleter_arg, bytes, n);
+}
+
+ByteArraySource::~ByteArraySource() { }
+
+size_t ByteArraySource::Available() const { return left_; }
+
+const char* ByteArraySource::Peek(size_t* len) {
+  *len = left_;
+  return ptr_;
+}
+
+void ByteArraySource::Skip(size_t n) {
+  left_ -= n;
+  ptr_ += n;
+}
+
+UncheckedByteArraySink::~UncheckedByteArraySink() { }
+
+void UncheckedByteArraySink::Append(const char* data, size_t n) {
+  // Do no copying if the caller filled in the result of GetAppendBuffer()
+  if (data != dest_) {
+    memcpy(dest_, data, n);
+  }
+  dest_ += n;
+}
+
+char* UncheckedByteArraySink::GetAppendBuffer(size_t len, char* scratch) {
+  return dest_;
+}
+
+void UncheckedByteArraySink::AppendAndTakeOwnership(
+    char* data, size_t n,
+    void (*deleter)(void*, const char*, size_t),
+    void *deleter_arg) {
+  if (data != dest_) {
+    memcpy(dest_, data, n);
+    (*deleter)(deleter_arg, data, n);
+  }
+  dest_ += n;
+}
+
+char* UncheckedByteArraySink::GetAppendBufferVariable(
+      size_t min_size, size_t desired_size_hint, char* scratch,
+      size_t scratch_size, size_t* allocated_size) {
+  *allocated_size = desired_size_hint;
+  return dest_;
+}
+
+}  // namespace duckdb_snappy
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// See the end of this file for a list
+
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#include <algorithm>
+#include <string>
 
 
 
@@ -23514,275 +19304,613 @@ void ZSTD_checkContinuity(ZSTD_DCtx* dctx, const void* dst);
 // The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
-/*
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
- */
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// Various stubs for the open-source version of Snappy.
 
+#ifndef THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
+#define THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
 
-#ifndef ZSTD_DDICT_H
-#define ZSTD_DDICT_H
-
-/*-*******************************************************
- *  Dependencies
- *********************************************************/
-#include <stddef.h>   /* size_t */
-     /* ZSTD_DDict, and several public functions */
-
-namespace duckdb_zstd {
-/*-*******************************************************
- *  Interface
- *********************************************************/
-
-/* note: several prototypes are already published in `zstd.h` :
- * ZSTD_createDDict()
- * ZSTD_createDDict_byReference()
- * ZSTD_createDDict_advanced()
- * ZSTD_freeDDict()
- * ZSTD_initStaticDDict()
- * ZSTD_sizeof_DDict()
- * ZSTD_estimateDDictSize()
- * ZSTD_getDictID_fromDict()
- */
-
-const void* ZSTD_DDict_dictContent(const ZSTD_DDict* ddict);
-size_t ZSTD_DDict_dictSize(const ZSTD_DDict* ddict);
-
-void ZSTD_copyDDictParameters(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict);
-
-}
-
-#endif /* ZSTD_DDICT_H */
-
-
-// LICENSE_CHANGE_END
-
-
-// #if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
-// #  include "../legacy/zstd_legacy.h"
+// #ifdef HAVE_CONFIG_H
+// #include "config.h"
 // #endif
 
-namespace duckdb_zstd {
+#include <string>
 
-/*-*******************************************************
-*  Types
-*********************************************************/
-struct ZSTD_DDict_s {
-    void* dictBuffer;
-    const void* dictContent;
-    size_t dictSize;
-    ZSTD_entropyDTables_t entropy;
-    U32 dictID;
-    U32 entropyPresent;
-    ZSTD_customMem cMem;
-};  /* typedef'd to ZSTD_DDict within "zstd.h" */
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
 
-const void* ZSTD_DDict_dictContent(const ZSTD_DDict* ddict)
-{
-    assert(ddict != NULL);
-    return ddict->dictContent;
-}
-
-size_t ZSTD_DDict_dictSize(const ZSTD_DDict* ddict)
-{
-    assert(ddict != NULL);
-    return ddict->dictSize;
-}
-
-void ZSTD_copyDDictParameters(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict)
-{
-    DEBUGLOG(4, "ZSTD_copyDDictParameters");
-    assert(dctx != NULL);
-    assert(ddict != NULL);
-    dctx->dictID = ddict->dictID;
-    dctx->prefixStart = ddict->dictContent;
-    dctx->virtualStart = ddict->dictContent;
-    dctx->dictEnd = (const BYTE*)ddict->dictContent + ddict->dictSize;
-    dctx->previousDstEnd = dctx->dictEnd;
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    dctx->dictContentBeginForFuzzing = dctx->prefixStart;
-    dctx->dictContentEndForFuzzing = dctx->previousDstEnd;
+#ifdef HAVE_SYS_MMAN_H
+#include <sys/mman.h>
 #endif
-    if (ddict->entropyPresent) {
-        dctx->litEntropy = 1;
-        dctx->fseEntropy = 1;
-        dctx->LLTptr = ddict->entropy.LLTable;
-        dctx->MLTptr = ddict->entropy.MLTable;
-        dctx->OFTptr = ddict->entropy.OFTable;
-        dctx->HUFptr = ddict->entropy.hufTable;
-        dctx->entropy.rep[0] = ddict->entropy.rep[0];
-        dctx->entropy.rep[1] = ddict->entropy.rep[1];
-        dctx->entropy.rep[2] = ddict->entropy.rep[2];
-    } else {
-        dctx->litEntropy = 0;
-        dctx->fseEntropy = 0;
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif  // defined(_MSC_VER)
+
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+
+#if __has_feature(memory_sanitizer)
+#include <sanitizer/msan_interface.h>
+#define SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(address, size) \
+    __msan_unpoison((address), (size))
+#else
+#define SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(address, size) /* empty */
+#endif  // __has_feature(memory_sanitizer)
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// See the end of this file for a list
+
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// Various type stubs for the open-source version of Snappy.
+//
+// This file cannot include config.h, as it is included from snappy.h,
+// which is a public header. Instead, snappy-stubs-public.h is generated by
+// from snappy-stubs-public.h.in at configure time.
+
+#ifndef THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
+#define THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+
+#ifndef _WIN32  // HAVE_SYS_UIO_H
+#include <sys/uio.h>
+#endif  // HAVE_SYS_UIO_H
+
+#define SNAPPY_MAJOR 1
+#define SNAPPY_MINOR 1
+#define SNAPPY_PATCHLEVEL 7
+#define SNAPPY_VERSION \
+    ((SNAPPY_MAJOR << 16) | (SNAPPY_MINOR << 8) | SNAPPY_PATCHLEVEL)
+
+namespace duckdb_snappy {
+
+using int8 = std::int8_t;
+using uint8 = std::uint8_t;
+using int16 = std::int16_t;
+using uint16 = std::uint16_t;
+using int32 = std::int32_t;
+using uint32 = std::uint32_t;
+using int64 = std::int64_t;
+using uint64 = std::uint64_t;
+
+using string = std::string;
+
+#ifdef _WIN32  // !HAVE_SYS_UIO_H
+// Windows does not have an iovec type, yet the concept is universally useful.
+// It is simple to define it ourselves, so we put it inside our own namespace.
+struct iovec {
+  void* iov_base;
+  size_t iov_len;
+};
+#endif  // !HAVE_SYS_UIO_H
+
+}  // namespace duckdb_snappy
+
+#endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
+
+
+// LICENSE_CHANGE_END
+
+
+#if defined(__x86_64__)
+
+// Enable 64-bit optimized versions of some routines.
+#define ARCH_K8 1
+
+#elif defined(__ppc64__)
+
+#define ARCH_PPC 1
+
+#elif defined(__aarch64__)
+
+#define ARCH_ARM 1
+
+#endif
+
+// Needed by OS X, among others.
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+
+// The size of an array, if known at compile-time.
+// Will give unexpected results if used on a pointer.
+// We undefine it first, since some compilers already have a definition.
+#ifdef ARRAYSIZE
+#undef ARRAYSIZE
+#endif
+#define ARRAYSIZE(a) (sizeof(a) / sizeof(*(a)))
+
+// Static prediction hints.
+#ifdef HAVE_BUILTIN_EXPECT
+#define SNAPPY_PREDICT_FALSE(x) (__builtin_expect(x, 0))
+#define SNAPPY_PREDICT_TRUE(x) (__builtin_expect(!!(x), 1))
+#else
+#define SNAPPY_PREDICT_FALSE(x) x
+#define SNAPPY_PREDICT_TRUE(x) x
+#endif
+
+// This is only used for recomputing the tag byte table used during
+// decompression; for simplicity we just remove it from the open-source
+// version (anyone who wants to regenerate it can just do the call
+// themselves within main()).
+#define DEFINE_bool(flag_name, default_value, description) \
+  bool FLAGS_ ## flag_name = default_value
+#define DECLARE_bool(flag_name) \
+  extern bool FLAGS_ ## flag_name
+
+namespace duckdb_snappy {
+
+//static const uint32 kuint32max = static_cast<uint32>(0xFFFFFFFF);
+//static const int64 kint64max = static_cast<int64>(0x7FFFFFFFFFFFFFFFLL);
+
+
+// HM: Always use aligned load to keep ourselves out of trouble. Sorry.
+
+inline uint16 UNALIGNED_LOAD16(const void *p) {
+  uint16 t;
+  memcpy(&t, p, sizeof t);
+  return t;
+}
+
+inline uint32 UNALIGNED_LOAD32(const void *p) {
+  uint32 t;
+  memcpy(&t, p, sizeof t);
+  return t;
+}
+
+inline uint64 UNALIGNED_LOAD64(const void *p) {
+  uint64 t;
+  memcpy(&t, p, sizeof t);
+  return t;
+}
+
+inline void UNALIGNED_STORE16(void *p, uint16 v) {
+  memcpy(p, &v, sizeof v);
+}
+
+inline void UNALIGNED_STORE32(void *p, uint32 v) {
+  memcpy(p, &v, sizeof v);
+}
+
+inline void UNALIGNED_STORE64(void *p, uint64 v) {
+  memcpy(p, &v, sizeof v);
+}
+
+
+// The following guarantees declaration of the byte swap functions.
+#if defined(SNAPPY_IS_BIG_ENDIAN)
+
+#ifdef HAVE_SYS_BYTEORDER_H
+#include <sys/byteorder.h>
+#endif
+
+#ifdef HAVE_SYS_ENDIAN_H
+#include <sys/endian.h>
+#endif
+
+#ifdef _MSC_VER
+#include <stdlib.h>
+#define bswap_16(x) _byteswap_ushort(x)
+#define bswap_32(x) _byteswap_ulong(x)
+#define bswap_64(x) _byteswap_uint64(x)
+
+#elif defined(__APPLE__)
+// Mac OS X / Darwin features
+#include <libkern/OSByteOrder.h>
+#define bswap_16(x) OSSwapInt16(x)
+#define bswap_32(x) OSSwapInt32(x)
+#define bswap_64(x) OSSwapInt64(x)
+
+#elif defined(HAVE_BYTESWAP_H)
+#include <byteswap.h>
+
+#elif defined(bswap32)
+// FreeBSD defines bswap{16,32,64} in <sys/endian.h> (already #included).
+#define bswap_16(x) bswap16(x)
+#define bswap_32(x) bswap32(x)
+#define bswap_64(x) bswap64(x)
+
+#elif defined(BSWAP_64)
+// Solaris 10 defines BSWAP_{16,32,64} in <sys/byteorder.h> (already #included).
+#define bswap_16(x) BSWAP_16(x)
+#define bswap_32(x) BSWAP_32(x)
+#define bswap_64(x) BSWAP_64(x)
+
+#else
+
+inline uint16 bswap_16(uint16 x) {
+  return (x << 8) | (x >> 8);
+}
+
+inline uint32 bswap_32(uint32 x) {
+  x = ((x & 0xff00ff00UL) >> 8) | ((x & 0x00ff00ffUL) << 8);
+  return (x >> 16) | (x << 16);
+}
+
+inline uint64 bswap_64(uint64 x) {
+  x = ((x & 0xff00ff00ff00ff00ULL) >> 8) | ((x & 0x00ff00ff00ff00ffULL) << 8);
+  x = ((x & 0xffff0000ffff0000ULL) >> 16) | ((x & 0x0000ffff0000ffffULL) << 16);
+  return (x >> 32) | (x << 32);
+}
+
+#endif
+
+#endif  // defined(SNAPPY_IS_BIG_ENDIAN)
+
+// Convert to little-endian storage, opposite of network format.
+// Convert x from host to little endian: x = LittleEndian.FromHost(x);
+// convert x from little endian to host: x = LittleEndian.ToHost(x);
+//
+//  Store values into unaligned memory converting to little endian order:
+//    LittleEndian.Store16(p, x);
+//
+//  Load unaligned values stored in little endian converting to host order:
+//    x = LittleEndian.Load16(p);
+class LittleEndian {
+ public:
+  // Conversion functions.
+#if defined(SNAPPY_IS_BIG_ENDIAN)
+
+  static uint16 FromHost16(uint16 x) { return bswap_16(x); }
+  static uint16 ToHost16(uint16 x) { return bswap_16(x); }
+
+  static uint32 FromHost32(uint32 x) { return bswap_32(x); }
+  static uint32 ToHost32(uint32 x) { return bswap_32(x); }
+
+  static bool IsLittleEndian() { return false; }
+
+#else  // !defined(SNAPPY_IS_BIG_ENDIAN)
+
+  static uint16 FromHost16(uint16 x) { return x; }
+  static uint16 ToHost16(uint16 x) { return x; }
+
+  static uint32 FromHost32(uint32 x) { return x; }
+  static uint32 ToHost32(uint32 x) { return x; }
+
+  static bool IsLittleEndian() { return true; }
+
+#endif  // !defined(SNAPPY_IS_BIG_ENDIAN)
+
+  // Functions to do unaligned loads and stores in little-endian order.
+  static uint16 Load16(const void *p) {
+    return ToHost16(UNALIGNED_LOAD16(p));
+  }
+
+  static void Store16(void *p, uint16 v) {
+    UNALIGNED_STORE16(p, FromHost16(v));
+  }
+
+  static uint32 Load32(const void *p) {
+    return ToHost32(UNALIGNED_LOAD32(p));
+  }
+
+  static void Store32(void *p, uint32 v) {
+    UNALIGNED_STORE32(p, FromHost32(v));
+  }
+};
+
+// Some bit-manipulation functions.
+class Bits {
+ public:
+  // Return floor(log2(n)) for positive integer n.
+  static int Log2FloorNonZero(uint32 n);
+
+  // Return floor(log2(n)) for positive integer n.  Returns -1 iff n == 0.
+  static int Log2Floor(uint32 n);
+
+  // Return the first set least / most significant bit, 0-indexed.  Returns an
+  // undefined value if n == 0.  FindLSBSetNonZero() is similar to ffs() except
+  // that it's 0-indexed.
+  static int FindLSBSetNonZero(uint32 n);
+
+#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+  static int FindLSBSetNonZero64(uint64 n);
+#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+
+ private:
+  // No copying
+  Bits(const Bits&);
+  void operator=(const Bits&);
+};
+
+#ifdef HAVE_BUILTIN_CTZ
+
+inline int Bits::Log2FloorNonZero(uint32 n) {
+  assert(n != 0);
+  // (31 ^ x) is equivalent to (31 - x) for x in [0, 31]. An easy proof
+  // represents subtraction in base 2 and observes that there's no carry.
+  //
+  // GCC and Clang represent __builtin_clz on x86 as 31 ^ _bit_scan_reverse(x).
+  // Using "31 ^" here instead of "31 -" allows the optimizer to strip the
+  // function body down to _bit_scan_reverse(x).
+  return 31 ^ __builtin_clz(n);
+}
+
+inline int Bits::Log2Floor(uint32 n) {
+  return (n == 0) ? -1 : Bits::Log2FloorNonZero(n);
+}
+
+inline int Bits::FindLSBSetNonZero(uint32 n) {
+  assert(n != 0);
+  return __builtin_ctz(n);
+}
+
+#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+inline int Bits::FindLSBSetNonZero64(uint64 n) {
+  assert(n != 0);
+  return __builtin_ctzll(n);
+}
+#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+
+#elif defined(_MSC_VER)
+
+inline int Bits::Log2FloorNonZero(uint32 n) {
+  assert(n != 0);
+  unsigned long where;
+  _BitScanReverse(&where, n);
+  return static_cast<int>(where);
+}
+
+inline int Bits::Log2Floor(uint32 n) {
+  unsigned long where;
+  if (_BitScanReverse(&where, n))
+    return static_cast<int>(where);
+  return -1;
+}
+
+inline int Bits::FindLSBSetNonZero(uint32 n) {
+  assert(n != 0);
+  unsigned long where;
+  if (_BitScanForward(&where, n))
+    return static_cast<int>(where);
+  return 32;
+}
+
+#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+inline int Bits::FindLSBSetNonZero64(uint64 n) {
+  assert(n != 0);
+  unsigned long where;
+  if (_BitScanForward64(&where, n))
+    return static_cast<int>(where);
+  return 64;
+}
+#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+
+#else  // Portable versions.
+
+inline int Bits::Log2FloorNonZero(uint32 n) {
+  assert(n != 0);
+
+  int log = 0;
+  uint32 value = n;
+  for (int i = 4; i >= 0; --i) {
+    int shift = (1 << i);
+    uint32 x = value >> shift;
+    if (x != 0) {
+      value = x;
+      log += shift;
     }
+  }
+  assert(value == 1);
+  return log;
 }
 
+inline int Bits::Log2Floor(uint32 n) {
+  return (n == 0) ? -1 : Bits::Log2FloorNonZero(n);
+}
 
-static size_t
-ZSTD_loadEntropy_intoDDict(ZSTD_DDict* ddict,
-                           ZSTD_dictContentType_e dictContentType)
-{
-    ddict->dictID = 0;
-    ddict->entropyPresent = 0;
-    if (dictContentType == ZSTD_dct_rawContent) return 0;
+inline int Bits::FindLSBSetNonZero(uint32 n) {
+  assert(n != 0);
 
-    if (ddict->dictSize < 8) {
-        if (dictContentType == ZSTD_dct_fullDict)
-            return ERROR(dictionary_corrupted);   /* only accept specified dictionaries */
-        return 0;   /* pure content mode */
+  int rc = 31;
+  for (int i = 4, shift = 1 << 4; i >= 0; --i) {
+    const uint32 x = n << shift;
+    if (x != 0) {
+      n = x;
+      rc -= shift;
     }
-    {   U32 const magic = MEM_readLE32(ddict->dictContent);
-        if (magic != ZSTD_MAGIC_DICTIONARY) {
-            if (dictContentType == ZSTD_dct_fullDict)
-                return ERROR(dictionary_corrupted);   /* only accept specified dictionaries */
-            return 0;   /* pure content mode */
-        }
-    }
-    ddict->dictID = MEM_readLE32((const char*)ddict->dictContent + ZSTD_FRAMEIDSIZE);
-
-    /* load entropy tables */
-    RETURN_ERROR_IF(ZSTD_isError(ZSTD_loadDEntropy(
-            &ddict->entropy, ddict->dictContent, ddict->dictSize)),
-        dictionary_corrupted, "");
-    ddict->entropyPresent = 1;
-    return 0;
+    shift >>= 1;
+  }
+  return rc;
 }
 
+#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+// FindLSBSetNonZero64() is defined in terms of FindLSBSetNonZero().
+inline int Bits::FindLSBSetNonZero64(uint64 n) {
+  assert(n != 0);
 
-static size_t ZSTD_initDDict_internal(ZSTD_DDict* ddict,
-                                      const void* dict, size_t dictSize,
-                                      ZSTD_dictLoadMethod_e dictLoadMethod,
-                                      ZSTD_dictContentType_e dictContentType)
-{
-    if ((dictLoadMethod == ZSTD_dlm_byRef) || (!dict) || (!dictSize)) {
-        ddict->dictBuffer = NULL;
-        ddict->dictContent = dict;
-        if (!dict) dictSize = 0;
-    } else {
-        void* const internalBuffer = ZSTD_malloc(dictSize, ddict->cMem);
-        ddict->dictBuffer = internalBuffer;
-        ddict->dictContent = internalBuffer;
-        if (!internalBuffer) return ERROR(memory_allocation);
-        memcpy(internalBuffer, dict, dictSize);
-    }
-    ddict->dictSize = dictSize;
-    ddict->entropy.hufTable[0] = (HUF_DTable)((HufLog)*0x1000001);  /* cover both little and big endian */
+  const uint32 bottombits = static_cast<uint32>(n);
+  if (bottombits == 0) {
+    // Bottom bits are zero, so scan in top bits
+    return 32 + FindLSBSetNonZero(static_cast<uint32>(n >> 32));
+  } else {
+    return FindLSBSetNonZero(bottombits);
+  }
+}
+#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
 
-    /* parse dictionary content */
-    FORWARD_IF_ERROR( ZSTD_loadEntropy_intoDDict(ddict, dictContentType) , "");
+#endif  // End portable versions.
 
-    return 0;
+// Variable-length integer encoding.
+class Varint {
+ public:
+  // Maximum lengths of varint encoding of uint32.
+  static const int kMax32 = 5;
+
+  // Attempts to parse a varint32 from a prefix of the bytes in [ptr,limit-1].
+  // Never reads a character at or beyond limit.  If a valid/terminated varint32
+  // was found in the range, stores it in *OUTPUT and returns a pointer just
+  // past the last byte of the varint32. Else returns NULL.  On success,
+  // "result <= limit".
+  static const char* Parse32WithLimit(const char* ptr, const char* limit,
+                                      uint32* OUTPUT);
+
+  // REQUIRES   "ptr" points to a buffer of length sufficient to hold "v".
+  // EFFECTS    Encodes "v" into "ptr" and returns a pointer to the
+  //            byte just past the last encoded byte.
+  static char* Encode32(char* ptr, uint32 v);
+
+  // EFFECTS    Appends the varint representation of "value" to "*s".
+  static void Append32(string* s, uint32 value);
+};
+
+inline const char* Varint::Parse32WithLimit(const char* p,
+                                            const char* l,
+                                            uint32* OUTPUT) {
+  const unsigned char* ptr = reinterpret_cast<const unsigned char*>(p);
+  const unsigned char* limit = reinterpret_cast<const unsigned char*>(l);
+  uint32 b, result;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result = b & 127;          if (b < 128) goto done;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result |= (b & 127) <<  7; if (b < 128) goto done;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result |= (b & 127) << 14; if (b < 128) goto done;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result |= (b & 127) << 21; if (b < 128) goto done;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result |= (b & 127) << 28; if (b < 16) goto done;
+  return NULL;       // Value is too long to be a varint32
+ done:
+  *OUTPUT = result;
+  return reinterpret_cast<const char*>(ptr);
 }
 
-ZSTD_DDict* ZSTD_createDDict_advanced(const void* dict, size_t dictSize,
-                                      ZSTD_dictLoadMethod_e dictLoadMethod,
-                                      ZSTD_dictContentType_e dictContentType,
-                                      ZSTD_customMem customMem)
-{
-    if (!customMem.customAlloc ^ !customMem.customFree) return NULL;
-
-    {   ZSTD_DDict* const ddict = (ZSTD_DDict*) ZSTD_malloc(sizeof(ZSTD_DDict), customMem);
-        if (ddict == NULL) return NULL;
-        ddict->cMem = customMem;
-        {   size_t const initResult = ZSTD_initDDict_internal(ddict,
-                                            dict, dictSize,
-                                            dictLoadMethod, dictContentType);
-            if (ZSTD_isError(initResult)) {
-                ZSTD_freeDDict(ddict);
-                return NULL;
-        }   }
-        return ddict;
-    }
+inline char* Varint::Encode32(char* sptr, uint32 v) {
+  // Operate on characters as unsigneds
+  unsigned char* ptr = reinterpret_cast<unsigned char*>(sptr);
+  static const int B = 128;
+  if (v < (1<<7)) {
+    *(ptr++) = v;
+  } else if (v < (1<<14)) {
+    *(ptr++) = v | B;
+    *(ptr++) = v>>7;
+  } else if (v < (1<<21)) {
+    *(ptr++) = v | B;
+    *(ptr++) = (v>>7) | B;
+    *(ptr++) = v>>14;
+  } else if (v < (1<<28)) {
+    *(ptr++) = v | B;
+    *(ptr++) = (v>>7) | B;
+    *(ptr++) = (v>>14) | B;
+    *(ptr++) = v>>21;
+  } else {
+    *(ptr++) = v | B;
+    *(ptr++) = (v>>7) | B;
+    *(ptr++) = (v>>14) | B;
+    *(ptr++) = (v>>21) | B;
+    *(ptr++) = v>>28;
+  }
+  return reinterpret_cast<char*>(ptr);
 }
 
-/*! ZSTD_createDDict() :
-*   Create a digested dictionary, to start decompression without startup delay.
-*   `dict` content is copied inside DDict.
-*   Consequently, `dict` can be released after `ZSTD_DDict` creation */
-ZSTD_DDict* ZSTD_createDDict(const void* dict, size_t dictSize)
-{
-    ZSTD_customMem const allocator = { NULL, NULL, NULL };
-    return ZSTD_createDDict_advanced(dict, dictSize, ZSTD_dlm_byCopy, ZSTD_dct_auto, allocator);
+// If you know the internal layout of the std::string in use, you can
+// replace this function with one that resizes the string without
+// filling the new space with zeros (if applicable) --
+// it will be non-portable but faster.
+inline void STLStringResizeUninitialized(string* s, size_t new_size) {
+  s->resize(new_size);
 }
 
-/*! ZSTD_createDDict_byReference() :
- *  Create a digested dictionary, to start decompression without startup delay.
- *  Dictionary content is simply referenced, it will be accessed during decompression.
- *  Warning : dictBuffer must outlive DDict (DDict must be freed before dictBuffer) */
-ZSTD_DDict* ZSTD_createDDict_byReference(const void* dictBuffer, size_t dictSize)
-{
-    ZSTD_customMem const allocator = { NULL, NULL, NULL };
-    return ZSTD_createDDict_advanced(dictBuffer, dictSize, ZSTD_dlm_byRef, ZSTD_dct_auto, allocator);
+// Return a mutable char* pointing to a string's internal buffer,
+// which may not be null-terminated. Writing through this pointer will
+// modify the string.
+//
+// string_as_array(&str)[i] is valid for 0 <= i < str.size() until the
+// next call to a string method that invalidates iterators.
+//
+// As of 2006-04, there is no standard-blessed way of getting a
+// mutable reference to a string's internal buffer. However, issue 530
+// (http://www.open-std.org/JTC1/SC22/WG21/docs/lwg-defects.html#530)
+// proposes this as the method. It will officially be part of the standard
+// for C++0x. This should already work on all current implementations.
+inline char* string_as_array(string* str) {
+  return str->empty() ? NULL : &*str->begin();
 }
 
+}  // namespace duckdb_snappy
 
-const ZSTD_DDict* ZSTD_initStaticDDict(
-                                void* sBuffer, size_t sBufferSize,
-                                const void* dict, size_t dictSize,
-                                ZSTD_dictLoadMethod_e dictLoadMethod,
-                                ZSTD_dictContentType_e dictContentType)
-{
-    size_t const neededSpace = sizeof(ZSTD_DDict)
-                             + (dictLoadMethod == ZSTD_dlm_byRef ? 0 : dictSize);
-    ZSTD_DDict* const ddict = (ZSTD_DDict*)sBuffer;
-    assert(sBuffer != NULL);
-    assert(dict != NULL);
-    if ((size_t)sBuffer & 7) return NULL;   /* 8-aligned */
-    if (sBufferSize < neededSpace) return NULL;
-    if (dictLoadMethod == ZSTD_dlm_byCopy) {
-        memcpy(ddict+1, dict, dictSize);  /* local copy */
-        dict = ddict+1;
-    }
-    if (ZSTD_isError( ZSTD_initDDict_internal(ddict,
-                                              dict, dictSize,
-                                              ZSTD_dlm_byRef, dictContentType) ))
-        return NULL;
-    return ddict;
+#endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
+
+
+// LICENSE_CHANGE_END
+
+
+namespace duckdb_snappy {
+
+void Varint::Append32(string* s, uint32 value) {
+  char buf[Varint::kMax32];
+  const char* p = Varint::Encode32(buf, value);
+  s->append(buf, p - buf);
 }
 
-
-size_t ZSTD_freeDDict(ZSTD_DDict* ddict)
-{
-    if (ddict==NULL) return 0;   /* support free on NULL */
-    {   ZSTD_customMem const cMem = ddict->cMem;
-        ZSTD_free(ddict->dictBuffer, cMem);
-        ZSTD_free(ddict, cMem);
-        return 0;
-    }
-}
-
-/*! ZSTD_estimateDDictSize() :
- *  Estimate amount of memory that will be needed to create a dictionary for decompression.
- *  Note : dictionary created by reference using ZSTD_dlm_byRef are smaller */
-size_t ZSTD_estimateDDictSize(size_t dictSize, ZSTD_dictLoadMethod_e dictLoadMethod)
-{
-    return sizeof(ZSTD_DDict) + (dictLoadMethod == ZSTD_dlm_byRef ? 0 : dictSize);
-}
-
-size_t ZSTD_sizeof_DDict(const ZSTD_DDict* ddict)
-{
-    if (ddict==NULL) return 0;   /* support sizeof on NULL */
-    return sizeof(*ddict) + (ddict->dictBuffer ? ddict->dictSize : 0) ;
-}
-
-/*! ZSTD_getDictID_fromDDict() :
- *  Provides the dictID of the dictionary loaded into `ddict`.
- *  If @return == 0, the dictionary is not conformant to Zstandard specification, or empty.
- *  Non-conformant dictionaries can still be loaded, but as content-only dictionaries. */
-unsigned ZSTD_getDictID_fromDDict(const ZSTD_DDict* ddict)
-{
-    if (ddict==NULL) return 0;
-    return ZSTD_getDictID_fromDict(ddict->dictContent, ddict->dictSize);
-}
-
-}
+}  // namespace duckdb_snappy
 
 
 // LICENSE_CHANGE_END
@@ -23792,3460 +19920,2125 @@ unsigned ZSTD_getDictID_fromDDict(const ZSTD_DDict* ddict)
 // The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
-/*
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
- */
+// Copyright 2005 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
-/* ***************************************************************
-*  Tuning parameters
-*****************************************************************/
-/*!
- * HEAPMODE :
- * Select how default decompression function ZSTD_decompress() allocates its context,
- * on stack (0), or into heap (1, default; requires malloc()).
- * Note that functions with explicit context such as ZSTD_decompressDCtx() are unaffected.
- */
-#ifndef ZSTD_HEAPMODE
-#  define ZSTD_HEAPMODE 1
-#endif
-
-/*!
-*  LEGACY_SUPPORT :
-*  if set to 1+, ZSTD_decompress() can decode older formats (v0.1+)
-*/
-#ifndef ZSTD_LEGACY_SUPPORT
-#  define ZSTD_LEGACY_SUPPORT 0
-#endif
-
-/*!
- *  MAXWINDOWSIZE_DEFAULT :
- *  maximum window size accepted by DStream __by default__.
- *  Frames requiring more memory will be rejected.
- *  It's possible to set a different limit using ZSTD_DCtx_setMaxWindowSize().
- */
-#ifndef ZSTD_MAXWINDOWSIZE_DEFAULT
-#  define ZSTD_MAXWINDOWSIZE_DEFAULT (((U32)1 << ZSTD_WINDOWLOG_LIMIT_DEFAULT) + 1)
-#endif
-
-/*!
- *  NO_FORWARD_PROGRESS_MAX :
- *  maximum allowed nb of calls to ZSTD_decompressStream()
- *  without any forward progress
- *  (defined as: no byte read from input, and no byte flushed to output)
- *  before triggering an error.
- */
-#ifndef ZSTD_NO_FORWARD_PROGRESS_MAX
-#  define ZSTD_NO_FORWARD_PROGRESS_MAX 16
-#endif
-
-
-/*-*******************************************************
-*  Dependencies
-*********************************************************/
-#include <string.h>      /* memcpy, memmove, memset */
-         /* low level memory routines */
-
-
-
-
-  /* blockProperties_t */
-   /* ZSTD_DCtx */
-  /* ZSTD_DDictDictContent */
 
 
 // LICENSE_CHANGE_BEGIN
 // The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
-/*
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
- */
+// Copyright 2005 and onwards Google Inc.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// A light-weight compression algorithm.  It is designed for speed of
+// compression and decompression, rather than for the utmost in space
+// savings.
+//
+// For getting better compression ratios when you are compressing data
+// with long repeated sequences or compressing data that is similar to
+// other data, while still compressing fast, you might look at first
+// using BMDiff and then compressing the output of BMDiff with
+// Snappy.
+
+#ifndef THIRD_PARTY_SNAPPY_SNAPPY_H__
+#define THIRD_PARTY_SNAPPY_SNAPPY_H__
+
+#include <cstddef>
+#include <string>
 
 
-#ifndef ZSTD_DEC_BLOCK_H
-#define ZSTD_DEC_BLOCK_H
 
-/*-*******************************************************
- *  Dependencies
- *********************************************************/
-#include <stddef.h>   /* size_t */
-    /* DCtx, and some public functions */
-  /* blockProperties_t, and some public functions */
-  /* ZSTD_seqSymbol */
+namespace duckdb_snappy {
+  class Source;
+  class Sink;
 
-namespace duckdb_zstd {
+  // ------------------------------------------------------------------------
+  // Generic compression/decompression routines.
+  // ------------------------------------------------------------------------
 
-/* ===   Prototypes   === */
+  // Compress the bytes read from "*source" and append to "*sink". Return the
+  // number of bytes written.
+  size_t Compress(Source* source, Sink* sink);
 
-/* note: prototypes already published within `zstd.h` :
- * ZSTD_decompressBlock()
- */
+  // Find the uncompressed length of the given stream, as given by the header.
+  // Note that the true length could deviate from this; the stream could e.g.
+  // be truncated.
+  //
+  // Also note that this leaves "*source" in a state that is unsuitable for
+  // further operations, such as RawUncompress(). You will need to rewind
+  // or recreate the source yourself before attempting any further calls.
+  bool GetUncompressedLength(Source* source, uint32* result);
 
-/* note: prototypes already published within `zstd_internal.h` :
- * ZSTD_getcBlockSize()
- * ZSTD_decodeSeqHeaders()
- */
+  // ------------------------------------------------------------------------
+  // Higher-level string based routines (should be sufficient for most users)
+  // ------------------------------------------------------------------------
 
+  // Sets "*output" to the compressed version of "input[0,input_length-1]".
+  // Original contents of *output are lost.
+  //
+  // REQUIRES: "input[]" is not an alias of "*output".
+  size_t Compress(const char* input, size_t input_length, string* output);
 
-/* ZSTD_decompressBlock_internal() :
- * decompress block, starting at `src`,
- * into destination buffer `dst`.
- * @return : decompressed block size,
- *           or an error code (which can be tested using ZSTD_isError())
- */
-size_t ZSTD_decompressBlock_internal(ZSTD_DCtx* dctx,
-                               void* dst, size_t dstCapacity,
-                         const void* src, size_t srcSize, const int frame);
+  // Decompresses "compressed[0,compressed_length-1]" to "*uncompressed".
+  // Original contents of "*uncompressed" are lost.
+  //
+  // REQUIRES: "compressed[]" is not an alias of "*uncompressed".
+  //
+  // returns false if the message is corrupted and could not be decompressed
+  bool Uncompress(const char* compressed, size_t compressed_length,
+                  string* uncompressed);
 
-/* ZSTD_buildFSETable() :
- * generate FSE decoding table for one symbol (ll, ml or off)
- * this function must be called with valid parameters only
- * (dt is large enough, normalizedCounter distribution total is a power of 2, max is within range, etc.)
- * in which case it cannot fail.
- * Internal use only.
- */
-void ZSTD_buildFSETable(ZSTD_seqSymbol* dt,
-             const short* normalizedCounter, unsigned maxSymbolValue,
-             const U32* baseValue, const U32* nbAdditionalBits,
-                   unsigned tableLog);
+  // Decompresses "compressed" to "*uncompressed".
+  //
+  // returns false if the message is corrupted and could not be decompressed
+  bool Uncompress(Source* compressed, Sink* uncompressed);
 
-}
+  // This routine uncompresses as much of the "compressed" as possible
+  // into sink.  It returns the number of valid bytes added to sink
+  // (extra invalid bytes may have been added due to errors; the caller
+  // should ignore those). The emitted data typically has length
+  // GetUncompressedLength(), but may be shorter if an error is
+  // encountered.
+  size_t UncompressAsMuchAsPossible(Source* compressed, Sink* uncompressed);
 
-#endif /* ZSTD_DEC_BLOCK_H */
+  // ------------------------------------------------------------------------
+  // Lower-level character array based routines.  May be useful for
+  // efficiency reasons in certain circumstances.
+  // ------------------------------------------------------------------------
+
+  // REQUIRES: "compressed" must point to an area of memory that is at
+  // least "MaxCompressedLength(input_length)" bytes in length.
+  //
+  // Takes the data stored in "input[0..input_length]" and stores
+  // it in the array pointed to by "compressed".
+  //
+  // "*compressed_length" is set to the length of the compressed output.
+  //
+  // Example:
+  //    char* output = new char[snappy::MaxCompressedLength(input_length)];
+  //    size_t output_length;
+  //    RawCompress(input, input_length, output, &output_length);
+  //    ... Process(output, output_length) ...
+  //    delete [] output;
+  void RawCompress(const char* input,
+                   size_t input_length,
+                   char* compressed,
+                   size_t* compressed_length);
+
+  // Given data in "compressed[0..compressed_length-1]" generated by
+  // calling the Snappy::Compress routine, this routine
+  // stores the uncompressed data to
+  //    uncompressed[0..GetUncompressedLength(compressed)-1]
+  // returns false if the message is corrupted and could not be decrypted
+  bool RawUncompress(const char* compressed, size_t compressed_length,
+                     char* uncompressed);
+
+  // Given data from the byte source 'compressed' generated by calling
+  // the Snappy::Compress routine, this routine stores the uncompressed
+  // data to
+  //    uncompressed[0..GetUncompressedLength(compressed,compressed_length)-1]
+  // returns false if the message is corrupted and could not be decrypted
+  bool RawUncompress(Source* compressed, char* uncompressed);
+
+  // Given data in "compressed[0..compressed_length-1]" generated by
+  // calling the Snappy::Compress routine, this routine
+  // stores the uncompressed data to the iovec "iov". The number of physical
+  // buffers in "iov" is given by iov_cnt and their cumulative size
+  // must be at least GetUncompressedLength(compressed). The individual buffers
+  // in "iov" must not overlap with each other.
+  //
+  // returns false if the message is corrupted and could not be decrypted
+  bool RawUncompressToIOVec(const char* compressed, size_t compressed_length,
+                            const struct iovec* iov, size_t iov_cnt);
+
+  // Given data from the byte source 'compressed' generated by calling
+  // the Snappy::Compress routine, this routine stores the uncompressed
+  // data to the iovec "iov". The number of physical
+  // buffers in "iov" is given by iov_cnt and their cumulative size
+  // must be at least GetUncompressedLength(compressed). The individual buffers
+  // in "iov" must not overlap with each other.
+  //
+  // returns false if the message is corrupted and could not be decrypted
+  bool RawUncompressToIOVec(Source* compressed, const struct iovec* iov,
+                            size_t iov_cnt);
+
+  // Returns the maximal size of the compressed representation of
+  // input data that is "source_bytes" bytes in length;
+  size_t MaxCompressedLength(size_t source_bytes);
+
+  // REQUIRES: "compressed[]" was produced by RawCompress() or Compress()
+  // Returns true and stores the length of the uncompressed data in
+  // *result normally.  Returns false on parsing error.
+  // This operation takes O(1) time.
+  bool GetUncompressedLength(const char* compressed, size_t compressed_length,
+                             size_t* result);
+
+  // Returns true iff the contents of "compressed[]" can be uncompressed
+  // successfully.  Does not return the uncompressed data.  Takes
+  // time proportional to compressed_length, but is usually at least
+  // a factor of four faster than actual decompression.
+  bool IsValidCompressedBuffer(const char* compressed,
+                               size_t compressed_length);
+
+  // Returns true iff the contents of "compressed" can be uncompressed
+  // successfully.  Does not return the uncompressed data.  Takes
+  // time proportional to *compressed length, but is usually at least
+  // a factor of four faster than actual decompression.
+  // On success, consumes all of *compressed.  On failure, consumes an
+  // unspecified prefix of *compressed.
+  bool IsValidCompressed(Source* compressed);
+
+}  // end namespace duckdb_snappy
+
+#endif  // THIRD_PARTY_SNAPPY_SNAPPY_H__
 
 
 // LICENSE_CHANGE_END
-   /* ZSTD_decompressBlock_internal */
 
-// #if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
-// #  include "../legacy/zstd_legacy.h"
-// #endif
-namespace duckdb_zstd {
-const U32 ZSTDConstants::LL_base[MaxLL+1] = {
-                0,    1,    2,     3,     4,     5,     6,      7,
-                8,    9,   10,    11,    12,    13,    14,     15,
-                16,   18,   20,    22,    24,    28,    32,     40,
-                48,   64, 0x80, 0x100, 0x200, 0x400, 0x800, 0x1000,
-                0x2000, 0x4000, 0x8000, 0x10000 };
-
-const U32 ZSTDConstants::OF_base[MaxOff+1] = {
-                0,        1,       1,       5,     0xD,     0x1D,     0x3D,     0x7D,
-                0xFD,   0x1FD,   0x3FD,   0x7FD,   0xFFD,   0x1FFD,   0x3FFD,   0x7FFD,
-                0xFFFD, 0x1FFFD, 0x3FFFD, 0x7FFFD, 0xFFFFD, 0x1FFFFD, 0x3FFFFD, 0x7FFFFD,
-                0xFFFFFD, 0x1FFFFFD, 0x3FFFFFD, 0x7FFFFFD, 0xFFFFFFD, 0x1FFFFFFD, 0x3FFFFFFD, 0x7FFFFFFD };
-
-const U32 ZSTDConstants::OF_bits[MaxOff+1] = {
-                    0,  1,  2,  3,  4,  5,  6,  7,
-                    8,  9, 10, 11, 12, 13, 14, 15,
-                    16, 17, 18, 19, 20, 21, 22, 23,
-                    24, 25, 26, 27, 28, 29, 30, 31 };
-
-const U32 ZSTDConstants::ML_base[MaxML+1] = {
-                    3,  4,  5,    6,     7,     8,     9,    10,
-                    11, 12, 13,   14,    15,    16,    17,    18,
-                    19, 20, 21,   22,    23,    24,    25,    26,
-                    27, 28, 29,   30,    31,    32,    33,    34,
-                    35, 37, 39,   41,    43,    47,    51,    59,
-                    67, 83, 99, 0x83, 0x103, 0x203, 0x403, 0x803,
-                    0x1003, 0x2003, 0x4003, 0x8003, 0x10003 };
-
-const size_t ZSTDInternalConstants::ZSTD_blockHeaderSize = ZSTD_BLOCKHEADERSIZE;
-const U32 ZSTDInternalConstants::LL_bits[MaxLL+1] = { 0, 0, 0, 0, 0, 0, 0, 0,
-                                    0, 0, 0, 0, 0, 0, 0, 0,
-                                    1, 1, 1, 1, 2, 2, 3, 3,
-                                    4, 6, 7, 8, 9,10,11,12,
-                                    13,14,15,16 };
-const S16 ZSTDInternalConstants::LL_defaultNorm[MaxLL+1] = { 4, 3, 2, 2, 2, 2, 2, 2,
-                                            2, 2, 2, 2, 2, 1, 1, 1,
-                                            2, 2, 2, 2, 2, 2, 2, 2,
-                                            2, 3, 2, 1, 1, 1, 1, 1,
-                                            -1,-1,-1,-1 };
-#define LL_DEFAULTNORMLOG 6  /* for static allocation */
-const U32 ZSTDInternalConstants::LL_defaultNormLog = LL_DEFAULTNORMLOG;
-const U32 ZSTDInternalConstants::ML_bits[MaxML+1] = { 0, 0, 0, 0, 0, 0, 0, 0,
-                                    0, 0, 0, 0, 0, 0, 0, 0,
-                                    0, 0, 0, 0, 0, 0, 0, 0,
-                                    0, 0, 0, 0, 0, 0, 0, 0,
-                                    1, 1, 1, 1, 2, 2, 3, 3,
-                                    4, 4, 5, 7, 8, 9,10,11,
-                                    12,13,14,15,16 };
-const S16 ZSTDInternalConstants::ML_defaultNorm[MaxML+1] = { 1, 4, 3, 2, 2, 2, 2, 2,
-                                             2, 1, 1, 1, 1, 1, 1, 1,
-                                             1, 1, 1, 1, 1, 1, 1, 1,
-                                             1, 1, 1, 1, 1, 1, 1, 1,
-                                             1, 1, 1, 1, 1, 1, 1, 1,
-                                             1, 1, 1, 1, 1, 1,-1,-1,
-                                            -1,-1,-1,-1,-1 };
-#define ML_DEFAULTNORMLOG 6  /* for static allocation */
-const U32 ZSTDInternalConstants::ML_defaultNormLog = ML_DEFAULTNORMLOG;
-
-const S16 ZSTDInternalConstants::OF_defaultNorm[DefaultMaxOff+1] = { 1, 1, 1, 1, 1, 1, 2, 2,
-                                                     2, 1, 1, 1, 1, 1, 1, 1,
-                                                     1, 1, 1, 1, 1, 1, 1, 1,
-                                                    -1,-1,-1,-1,-1 };
-#define OF_DEFAULTNORMLOG 5  /* for static allocation */
-const U32 ZSTDInternalConstants::OF_defaultNormLog = OF_DEFAULTNORMLOG;
-const U32 ZSTDInternalConstants::repStartValue[ZSTD_REP_NUM] = { 1, 4, 8 };
-
-const ZSTD_customMem ZSTDInternalConstants::ZSTD_defaultCMem = { NULL, NULL, NULL };  /**< this constant defers to stdlib's functions */
-
-/*-*************************************************************
-*   Context management
-***************************************************************/
-size_t ZSTD_sizeof_DCtx (const ZSTD_DCtx* dctx)
-{
-    if (dctx==NULL) return 0;   /* support sizeof NULL */
-    return sizeof(*dctx)
-           + ZSTD_sizeof_DDict(dctx->ddictLocal)
-           + dctx->inBuffSize + dctx->outBuffSize;
-}
-
-size_t ZSTD_estimateDCtxSize(void) { return sizeof(ZSTD_DCtx); }
-
-
-static size_t ZSTD_startingInputLength(ZSTD_format_e format)
-{
-    size_t const startingInputLength = ZSTD_FRAMEHEADERSIZE_PREFIX(format);
-    /* only supports formats ZSTD_f_zstd1 and ZSTD_f_zstd1_magicless */
-    assert( (format == ZSTD_f_zstd1) || (format == ZSTD_f_zstd1_magicless) );
-    return startingInputLength;
-}
-
-static void ZSTD_initDCtx_internal(ZSTD_DCtx* dctx)
-{
-    dctx->format = ZSTD_f_zstd1;  /* ZSTD_decompressBegin() invokes ZSTD_startingInputLength() with argument dctx->format */
-    dctx->staticSize  = 0;
-    dctx->maxWindowSize = ZSTD_MAXWINDOWSIZE_DEFAULT;
-    dctx->ddict       = NULL;
-    dctx->ddictLocal  = NULL;
-    dctx->dictEnd     = NULL;
-    dctx->ddictIsCold = 0;
-    dctx->dictUses = ZSTD_dont_use;
-    dctx->inBuff      = NULL;
-    dctx->inBuffSize  = 0;
-    dctx->outBuffSize = 0;
-    dctx->streamStage = zdss_init;
-    dctx->legacyContext = NULL;
-    dctx->previousLegacyVersion = 0;
-    dctx->noForwardProgress = 0;
-    dctx->oversizedDuration = 0;
-    dctx->bmi2 = 0;
-    dctx->outBufferMode = ZSTD_obm_buffered;
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    dctx->dictContentEndForFuzzing = NULL;
-#endif
-}
-
-ZSTD_DCtx* ZSTD_initStaticDCtx(void *workspace, size_t workspaceSize)
-{
-    ZSTD_DCtx* const dctx = (ZSTD_DCtx*) workspace;
-
-    if ((size_t)workspace & 7) return NULL;  /* 8-aligned */
-    if (workspaceSize < sizeof(ZSTD_DCtx)) return NULL;  /* minimum size */
-
-    ZSTD_initDCtx_internal(dctx);
-    dctx->staticSize = workspaceSize;
-    dctx->inBuff = (char*)(dctx+1);
-    return dctx;
-}
-
-ZSTD_DCtx* ZSTD_createDCtx_advanced(ZSTD_customMem customMem)
-{
-    if (!customMem.customAlloc ^ !customMem.customFree) return NULL;
-
-    {   ZSTD_DCtx* const dctx = (ZSTD_DCtx*)ZSTD_malloc(sizeof(*dctx), customMem);
-        if (!dctx) return NULL;
-        dctx->customMem = customMem;
-        ZSTD_initDCtx_internal(dctx);
-        return dctx;
-    }
-}
-
-ZSTD_DCtx* ZSTD_createDCtx(void)
-{
-    DEBUGLOG(3, "ZSTD_createDCtx");
-    return ZSTD_createDCtx_advanced(ZSTDInternalConstants::ZSTD_defaultCMem);
-}
-
-static void ZSTD_clearDict(ZSTD_DCtx* dctx)
-{
-    ZSTD_freeDDict(dctx->ddictLocal);
-    dctx->ddictLocal = NULL;
-    dctx->ddict = NULL;
-    dctx->dictUses = ZSTD_dont_use;
-}
-
-size_t ZSTD_freeDCtx(ZSTD_DCtx* dctx)
-{
-    if (dctx==NULL) return 0;   /* support free on NULL */
-    RETURN_ERROR_IF(dctx->staticSize, memory_allocation, "not compatible with static DCtx");
-    {   ZSTD_customMem const cMem = dctx->customMem;
-        ZSTD_clearDict(dctx);
-        ZSTD_free(dctx->inBuff, cMem);
-        dctx->inBuff = NULL;
-#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
-        if (dctx->legacyContext)
-            ZSTD_freeLegacyStreamContext(dctx->legacyContext, dctx->previousLegacyVersion);
-#endif
-        ZSTD_free(dctx, cMem);
-        return 0;
-    }
-}
-
-/* no longer useful */
-void ZSTD_copyDCtx(ZSTD_DCtx* dstDCtx, const ZSTD_DCtx* srcDCtx)
-{
-    size_t const toCopy = (size_t)((char*)(&dstDCtx->inBuff) - (char*)dstDCtx);
-    memcpy(dstDCtx, srcDCtx, toCopy);  /* no need to copy workspace */
-}
-
-
-/*-*************************************************************
- *   Frame header decoding
- ***************************************************************/
-
-/*! ZSTD_isFrame() :
- *  Tells if the content of `buffer` starts with a valid Frame Identifier.
- *  Note : Frame Identifier is 4 bytes. If `size < 4`, @return will always be 0.
- *  Note 2 : Legacy Frame Identifiers are considered valid only if Legacy Support is enabled.
- *  Note 3 : Skippable Frame Identifiers are considered valid. */
-unsigned ZSTD_isFrame(const void* buffer, size_t size)
-{
-    if (size < ZSTD_FRAMEIDSIZE) return 0;
-    {   U32 const magic = MEM_readLE32(buffer);
-        if (magic == ZSTD_MAGICNUMBER) return 1;
-        if ((magic & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) return 1;
-    }
-#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
-    if (ZSTD_isLegacy(buffer, size)) return 1;
-#endif
-    return 0;
-}
-
-static const size_t ZSTD_fcs_fieldSize[4] = { 0, 2, 4, 8 };
-static const size_t ZSTD_did_fieldSize[4] = { 0, 1, 2, 4 };
-/** ZSTD_frameHeaderSize_internal() :
- *  srcSize must be large enough to reach header size fields.
- *  note : only works for formats ZSTD_f_zstd1 and ZSTD_f_zstd1_magicless.
- * @return : size of the Frame Header
- *           or an error code, which can be tested with ZSTD_isError() */
-static size_t ZSTD_frameHeaderSize_internal(const void* src, size_t srcSize, ZSTD_format_e format)
-{
-    size_t const minInputSize = ZSTD_startingInputLength(format);
-    RETURN_ERROR_IF(srcSize < minInputSize, srcSize_wrong, "");
-
-    {   BYTE const fhd = ((const BYTE*)src)[minInputSize-1];
-        U32 const dictID= fhd & 3;
-        U32 const singleSegment = (fhd >> 5) & 1;
-        U32 const fcsId = fhd >> 6;
-        return minInputSize + !singleSegment
-             + ZSTD_did_fieldSize[dictID] + ZSTD_fcs_fieldSize[fcsId]
-             + (singleSegment && !fcsId);
-    }
-}
-
-/** ZSTD_frameHeaderSize() :
- *  srcSize must be >= ZSTD_frameHeaderSize_prefix.
- * @return : size of the Frame Header,
- *           or an error code (if srcSize is too small) */
-size_t ZSTD_frameHeaderSize(const void* src, size_t srcSize)
-{
-    return ZSTD_frameHeaderSize_internal(src, srcSize, ZSTD_f_zstd1);
-}
-
-
-/** ZSTD_getFrameHeader_advanced() :
- *  decode Frame Header, or require larger `srcSize`.
- *  note : only works for formats ZSTD_f_zstd1 and ZSTD_f_zstd1_magicless
- * @return : 0, `zfhPtr` is correctly filled,
- *          >0, `srcSize` is too small, value is wanted `srcSize` amount,
- *           or an error code, which can be tested using ZSTD_isError() */
-size_t ZSTD_getFrameHeader_advanced(ZSTD_frameHeader* zfhPtr, const void* src, size_t srcSize, ZSTD_format_e format)
-{
-    const BYTE* ip = (const BYTE*)src;
-    size_t const minInputSize = ZSTD_startingInputLength(format);
-
-    memset(zfhPtr, 0, sizeof(*zfhPtr));   /* not strictly necessary, but static analyzer do not understand that zfhPtr is only going to be read only if return value is zero, since they are 2 different signals */
-    if (srcSize < minInputSize) return minInputSize;
-    RETURN_ERROR_IF(src==NULL, GENERIC, "invalid parameter");
-
-    if ( (format != ZSTD_f_zstd1_magicless)
-      && (MEM_readLE32(src) != ZSTD_MAGICNUMBER) ) {
-        if ((MEM_readLE32(src) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
-            /* skippable frame */
-            if (srcSize < ZSTD_SKIPPABLEHEADERSIZE)
-                return ZSTD_SKIPPABLEHEADERSIZE; /* magic number + frame length */
-            memset(zfhPtr, 0, sizeof(*zfhPtr));
-            zfhPtr->frameContentSize = MEM_readLE32((const char *)src + ZSTD_FRAMEIDSIZE);
-            zfhPtr->frameType = ZSTD_skippableFrame;
-            return 0;
-        }
-        RETURN_ERROR(prefix_unknown, "");
-    }
-
-    /* ensure there is enough `srcSize` to fully read/decode frame header */
-    {   size_t const fhsize = ZSTD_frameHeaderSize_internal(src, srcSize, format);
-        if (srcSize < fhsize) return fhsize;
-        zfhPtr->headerSize = (U32)fhsize;
-    }
-
-    {   BYTE const fhdByte = ip[minInputSize-1];
-        size_t pos = minInputSize;
-        U32 const dictIDSizeCode = fhdByte&3;
-        U32 const checksumFlag = (fhdByte>>2)&1;
-        U32 const singleSegment = (fhdByte>>5)&1;
-        U32 const fcsID = fhdByte>>6;
-        U64 windowSize = 0;
-        U32 dictID = 0;
-        U64 frameContentSize = ZSTD_CONTENTSIZE_UNKNOWN;
-        RETURN_ERROR_IF((fhdByte & 0x08) != 0, frameParameter_unsupported,
-                        "reserved bits, must be zero");
-
-        if (!singleSegment) {
-            BYTE const wlByte = ip[pos++];
-            U32 const windowLog = (wlByte >> 3) + ZSTD_WINDOWLOG_ABSOLUTEMIN;
-            RETURN_ERROR_IF(windowLog > ZSTD_WINDOWLOG_MAX, frameParameter_windowTooLarge, "");
-            windowSize = (1ULL << windowLog);
-            windowSize += (windowSize >> 3) * (wlByte&7);
-        }
-        switch(dictIDSizeCode)
-        {
-            default: assert(0);  /* impossible */
-            case 0 : break;
-            case 1 : dictID = ip[pos]; pos++; break;
-            case 2 : dictID = MEM_readLE16(ip+pos); pos+=2; break;
-            case 3 : dictID = MEM_readLE32(ip+pos); pos+=4; break;
-        }
-        switch(fcsID)
-        {
-            default: assert(0);  /* impossible */
-            case 0 : if (singleSegment) frameContentSize = ip[pos]; break;
-            case 1 : frameContentSize = MEM_readLE16(ip+pos)+256; break;
-            case 2 : frameContentSize = MEM_readLE32(ip+pos); break;
-            case 3 : frameContentSize = MEM_readLE64(ip+pos); break;
-        }
-        if (singleSegment) windowSize = frameContentSize;
-
-        zfhPtr->frameType = ZSTD_frame;
-        zfhPtr->frameContentSize = frameContentSize;
-        zfhPtr->windowSize = windowSize;
-        zfhPtr->blockSizeMax = (unsigned) MIN(windowSize, ZSTD_BLOCKSIZE_MAX);
-        zfhPtr->dictID = dictID;
-        zfhPtr->checksumFlag = checksumFlag;
-    }
-    return 0;
-}
-
-/** ZSTD_getFrameHeader() :
- *  decode Frame Header, or require larger `srcSize`.
- *  note : this function does not consume input, it only reads it.
- * @return : 0, `zfhPtr` is correctly filled,
- *          >0, `srcSize` is too small, value is wanted `srcSize` amount,
- *           or an error code, which can be tested using ZSTD_isError() */
-size_t ZSTD_getFrameHeader(ZSTD_frameHeader* zfhPtr, const void* src, size_t srcSize)
-{
-    return ZSTD_getFrameHeader_advanced(zfhPtr, src, srcSize, ZSTD_f_zstd1);
-}
-
-
-/** ZSTD_getFrameContentSize() :
- *  compatible with legacy mode
- * @return : decompressed size of the single frame pointed to be `src` if known, otherwise
- *         - ZSTD_CONTENTSIZE_UNKNOWN if the size cannot be determined
- *         - ZSTD_CONTENTSIZE_ERROR if an error occurred (e.g. invalid magic number, srcSize too small) */
-unsigned long long ZSTD_getFrameContentSize(const void *src, size_t srcSize)
-{
-#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
-    if (ZSTD_isLegacy(src, srcSize)) {
-        unsigned long long const ret = ZSTD_getDecompressedSize_legacy(src, srcSize);
-        return ret == 0 ? ZSTD_CONTENTSIZE_UNKNOWN : ret;
-    }
-#endif
-    {   ZSTD_frameHeader zfh;
-        if (ZSTD_getFrameHeader(&zfh, src, srcSize) != 0)
-            return ZSTD_CONTENTSIZE_ERROR;
-        if (zfh.frameType == ZSTD_skippableFrame) {
-            return 0;
-        } else {
-            return zfh.frameContentSize;
-    }   }
-}
-
-static size_t readSkippableFrameSize(void const* src, size_t srcSize)
-{
-    size_t const skippableHeaderSize = ZSTD_SKIPPABLEHEADERSIZE;
-    U32 sizeU32;
-
-    RETURN_ERROR_IF(srcSize < ZSTD_SKIPPABLEHEADERSIZE, srcSize_wrong, "");
-
-    sizeU32 = MEM_readLE32((BYTE const*)src + ZSTD_FRAMEIDSIZE);
-    RETURN_ERROR_IF((U32)(sizeU32 + ZSTD_SKIPPABLEHEADERSIZE) < sizeU32,
-                    frameParameter_unsupported, "");
-    {
-        size_t const skippableSize = skippableHeaderSize + sizeU32;
-        RETURN_ERROR_IF(skippableSize > srcSize, srcSize_wrong, "");
-        return skippableSize;
-    }
-}
-
-/** ZSTD_findDecompressedSize() :
- *  compatible with legacy mode
- *  `srcSize` must be the exact length of some number of ZSTD compressed and/or
- *      skippable frames
- *  @return : decompressed size of the frames contained */
-unsigned long long ZSTD_findDecompressedSize(const void* src, size_t srcSize)
-{
-    unsigned long long totalDstSize = 0;
-
-    while (srcSize >= ZSTD_startingInputLength(ZSTD_f_zstd1)) {
-        U32 const magicNumber = MEM_readLE32(src);
-
-        if ((magicNumber & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
-            size_t const skippableSize = readSkippableFrameSize(src, srcSize);
-            if (ZSTD_isError(skippableSize)) {
-                return ZSTD_CONTENTSIZE_ERROR;
-            }
-            assert(skippableSize <= srcSize);
-
-            src = (const BYTE *)src + skippableSize;
-            srcSize -= skippableSize;
-            continue;
-        }
-
-        {   unsigned long long const ret = ZSTD_getFrameContentSize(src, srcSize);
-            if (ret >= ZSTD_CONTENTSIZE_ERROR) return ret;
-
-            /* check for overflow */
-            if (totalDstSize + ret < totalDstSize) return ZSTD_CONTENTSIZE_ERROR;
-            totalDstSize += ret;
-        }
-        {   size_t const frameSrcSize = ZSTD_findFrameCompressedSize(src, srcSize);
-            if (ZSTD_isError(frameSrcSize)) {
-                return ZSTD_CONTENTSIZE_ERROR;
-            }
-
-            src = (const BYTE *)src + frameSrcSize;
-            srcSize -= frameSrcSize;
-        }
-    }  /* while (srcSize >= ZSTD_frameHeaderSize_prefix) */
-
-    if (srcSize) return ZSTD_CONTENTSIZE_ERROR;
-
-    return totalDstSize;
-}
-
-/** ZSTD_getDecompressedSize() :
- *  compatible with legacy mode
- * @return : decompressed size if known, 0 otherwise
-             note : 0 can mean any of the following :
-                   - frame content is empty
-                   - decompressed size field is not present in frame header
-                   - frame header unknown / not supported
-                   - frame header not complete (`srcSize` too small) */
-unsigned long long ZSTD_getDecompressedSize(const void* src, size_t srcSize)
-{
-    unsigned long long const ret = ZSTD_getFrameContentSize(src, srcSize);
-    ZSTD_STATIC_ASSERT(ZSTD_CONTENTSIZE_ERROR < ZSTD_CONTENTSIZE_UNKNOWN);
-    return (ret >= ZSTD_CONTENTSIZE_ERROR) ? 0 : ret;
-}
-
-
-/** ZSTD_decodeFrameHeader() :
- * `headerSize` must be the size provided by ZSTD_frameHeaderSize().
- * @return : 0 if success, or an error code, which can be tested using ZSTD_isError() */
-static size_t ZSTD_decodeFrameHeader(ZSTD_DCtx* dctx, const void* src, size_t headerSize)
-{
-    size_t const result = ZSTD_getFrameHeader_advanced(&(dctx->fParams), src, headerSize, dctx->format);
-    if (ZSTD_isError(result)) return result;    /* invalid header */
-    RETURN_ERROR_IF(result>0, srcSize_wrong, "headerSize too small");
-#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    /* Skip the dictID check in fuzzing mode, because it makes the search
-     * harder.
-     */
-    RETURN_ERROR_IF(dctx->fParams.dictID && (dctx->dictID != dctx->fParams.dictID),
-                    dictionary_wrong, "");
-#endif
-    if (dctx->fParams.checksumFlag) XXH64_reset(&dctx->xxhState, 0);
-    return 0;
-}
-
-static ZSTD_frameSizeInfo ZSTD_errorFrameSizeInfo(size_t ret)
-{
-    ZSTD_frameSizeInfo frameSizeInfo;
-    frameSizeInfo.compressedSize = ret;
-    frameSizeInfo.decompressedBound = ZSTD_CONTENTSIZE_ERROR;
-    return frameSizeInfo;
-}
-
-static ZSTD_frameSizeInfo ZSTD_findFrameSizeInfo(const void* src, size_t srcSize)
-{
-    ZSTD_frameSizeInfo frameSizeInfo;
-    memset(&frameSizeInfo, 0, sizeof(ZSTD_frameSizeInfo));
-
-#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
-    if (ZSTD_isLegacy(src, srcSize))
-        return ZSTD_findFrameSizeInfoLegacy(src, srcSize);
-#endif
-
-    if ((srcSize >= ZSTD_SKIPPABLEHEADERSIZE)
-        && (MEM_readLE32(src) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
-        frameSizeInfo.compressedSize = readSkippableFrameSize(src, srcSize);
-        assert(ZSTD_isError(frameSizeInfo.compressedSize) ||
-               frameSizeInfo.compressedSize <= srcSize);
-        return frameSizeInfo;
-    } else {
-        const BYTE* ip = (const BYTE*)src;
-        const BYTE* const ipstart = ip;
-        size_t remainingSize = srcSize;
-        size_t nbBlocks = 0;
-        ZSTD_frameHeader zfh;
-
-        /* Extract Frame Header */
-        {   size_t const ret = ZSTD_getFrameHeader(&zfh, src, srcSize);
-            if (ZSTD_isError(ret))
-                return ZSTD_errorFrameSizeInfo(ret);
-            if (ret > 0)
-                return ZSTD_errorFrameSizeInfo(ERROR(srcSize_wrong));
-        }
-
-        ip += zfh.headerSize;
-        remainingSize -= zfh.headerSize;
-
-        /* Iterate over each block */
-        while (1) {
-            blockProperties_t blockProperties;
-            size_t const cBlockSize = ZSTD_getcBlockSize(ip, remainingSize, &blockProperties);
-            if (ZSTD_isError(cBlockSize))
-                return ZSTD_errorFrameSizeInfo(cBlockSize);
-
-            if (ZSTDInternalConstants::ZSTD_blockHeaderSize + cBlockSize > remainingSize)
-                return ZSTD_errorFrameSizeInfo(ERROR(srcSize_wrong));
-
-            ip += ZSTDInternalConstants::ZSTD_blockHeaderSize + cBlockSize;
-            remainingSize -= ZSTDInternalConstants::ZSTD_blockHeaderSize + cBlockSize;
-            nbBlocks++;
-
-            if (blockProperties.lastBlock) break;
-        }
-
-        /* Final frame content checksum */
-        if (zfh.checksumFlag) {
-            if (remainingSize < 4)
-                return ZSTD_errorFrameSizeInfo(ERROR(srcSize_wrong));
-            ip += 4;
-        }
-
-        frameSizeInfo.compressedSize = ip - ipstart;
-        frameSizeInfo.decompressedBound = (zfh.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN)
-                                        ? zfh.frameContentSize
-                                        : nbBlocks * zfh.blockSizeMax;
-        return frameSizeInfo;
-    }
-}
-
-/** ZSTD_findFrameCompressedSize() :
- *  compatible with legacy mode
- *  `src` must point to the start of a ZSTD frame, ZSTD legacy frame, or skippable frame
- *  `srcSize` must be at least as large as the frame contained
- *  @return : the compressed size of the frame starting at `src` */
-size_t ZSTD_findFrameCompressedSize(const void *src, size_t srcSize)
-{
-    ZSTD_frameSizeInfo const frameSizeInfo = ZSTD_findFrameSizeInfo(src, srcSize);
-    return frameSizeInfo.compressedSize;
-}
-
-/** ZSTD_decompressBound() :
- *  compatible with legacy mode
- *  `src` must point to the start of a ZSTD frame or a skippeable frame
- *  `srcSize` must be at least as large as the frame contained
- *  @return : the maximum decompressed size of the compressed source
- */
-unsigned long long ZSTD_decompressBound(const void* src, size_t srcSize)
-{
-    unsigned long long bound = 0;
-    /* Iterate over each frame */
-    while (srcSize > 0) {
-        ZSTD_frameSizeInfo const frameSizeInfo = ZSTD_findFrameSizeInfo(src, srcSize);
-        size_t const compressedSize = frameSizeInfo.compressedSize;
-        unsigned long long const decompressedBound = frameSizeInfo.decompressedBound;
-        if (ZSTD_isError(compressedSize) || decompressedBound == ZSTD_CONTENTSIZE_ERROR)
-            return ZSTD_CONTENTSIZE_ERROR;
-        assert(srcSize >= compressedSize);
-        src = (const BYTE*)src + compressedSize;
-        srcSize -= compressedSize;
-        bound += decompressedBound;
-    }
-    return bound;
-}
-
-
-/*-*************************************************************
- *   Frame decoding
- ***************************************************************/
-
-/** ZSTD_insertBlock() :
- *  insert `src` block into `dctx` history. Useful to track uncompressed blocks. */
-size_t ZSTD_insertBlock(ZSTD_DCtx* dctx, const void* blockStart, size_t blockSize)
-{
-    DEBUGLOG(5, "ZSTD_insertBlock: %u bytes", (unsigned)blockSize);
-    ZSTD_checkContinuity(dctx, blockStart);
-    dctx->previousDstEnd = (const char*)blockStart + blockSize;
-    return blockSize;
-}
-
-
-static size_t ZSTD_copyRawBlock(void* dst, size_t dstCapacity,
-                          const void* src, size_t srcSize)
-{
-    DEBUGLOG(5, "ZSTD_copyRawBlock");
-    if (dst == NULL) {
-        if (srcSize == 0) return 0;
-        RETURN_ERROR(dstBuffer_null, "");
-    }
-    RETURN_ERROR_IF(srcSize > dstCapacity, dstSize_tooSmall, "");
-    memcpy(dst, src, srcSize);
-    return srcSize;
-}
-
-static size_t ZSTD_setRleBlock(void* dst, size_t dstCapacity,
-                               BYTE b,
-                               size_t regenSize)
-{
-    if (dst == NULL) {
-        if (regenSize == 0) return 0;
-        RETURN_ERROR(dstBuffer_null, "");
-    }
-    RETURN_ERROR_IF(regenSize > dstCapacity, dstSize_tooSmall, "");
-    memset(dst, b, regenSize);
-    return regenSize;
-}
-
-
-/*! ZSTD_decompressFrame() :
- * @dctx must be properly initialized
- *  will update *srcPtr and *srcSizePtr,
- *  to make *srcPtr progress by one frame. */
-static size_t ZSTD_decompressFrame(ZSTD_DCtx* dctx,
-                                   void* dst, size_t dstCapacity,
-                             const void** srcPtr, size_t *srcSizePtr)
-{
-    const BYTE* ip = (const BYTE*)(*srcPtr);
-    BYTE* const ostart = (BYTE* const)dst;
-    BYTE* const oend = dstCapacity != 0 ? ostart + dstCapacity : ostart;
-    BYTE* op = ostart;
-    size_t remainingSrcSize = *srcSizePtr;
-
-    DEBUGLOG(4, "ZSTD_decompressFrame (srcSize:%i)", (int)*srcSizePtr);
-
-    /* check */
-    RETURN_ERROR_IF(
-        remainingSrcSize < ZSTD_FRAMEHEADERSIZE_MIN(dctx->format)+ZSTDInternalConstants::ZSTD_blockHeaderSize,
-        srcSize_wrong, "");
-
-    /* Frame Header */
-    {   size_t const frameHeaderSize = ZSTD_frameHeaderSize_internal(
-                ip, ZSTD_FRAMEHEADERSIZE_PREFIX(dctx->format), dctx->format);
-        if (ZSTD_isError(frameHeaderSize)) return frameHeaderSize;
-        RETURN_ERROR_IF(remainingSrcSize < frameHeaderSize+ZSTDInternalConstants::ZSTD_blockHeaderSize,
-                        srcSize_wrong, "");
-        FORWARD_IF_ERROR( ZSTD_decodeFrameHeader(dctx, ip, frameHeaderSize) , "");
-        ip += frameHeaderSize; remainingSrcSize -= frameHeaderSize;
-    }
-
-    /* Loop on each block */
-    while (1) {
-        size_t decodedSize;
-        blockProperties_t blockProperties;
-        size_t const cBlockSize = ZSTD_getcBlockSize(ip, remainingSrcSize, &blockProperties);
-        if (ZSTD_isError(cBlockSize)) return cBlockSize;
-
-        ip += ZSTDInternalConstants::ZSTD_blockHeaderSize;
-        remainingSrcSize -= ZSTDInternalConstants::ZSTD_blockHeaderSize;
-        RETURN_ERROR_IF(cBlockSize > remainingSrcSize, srcSize_wrong, "");
-
-        switch(blockProperties.blockType)
-        {
-        case bt_compressed:
-            decodedSize = ZSTD_decompressBlock_internal(dctx, op, oend-op, ip, cBlockSize, /* frame */ 1);
-            break;
-        case bt_raw :
-            decodedSize = ZSTD_copyRawBlock(op, oend-op, ip, cBlockSize);
-            break;
-        case bt_rle :
-            decodedSize = ZSTD_setRleBlock(op, oend-op, *ip, blockProperties.origSize);
-            break;
-        case bt_reserved :
-        default:
-            RETURN_ERROR(corruption_detected, "invalid block type");
-        }
-
-        if (ZSTD_isError(decodedSize)) return decodedSize;
-        if (dctx->fParams.checksumFlag)
-            XXH64_update(&dctx->xxhState, op, decodedSize);
-        if (decodedSize != 0)
-            op += decodedSize;
-        assert(ip != NULL);
-        ip += cBlockSize;
-        remainingSrcSize -= cBlockSize;
-        if (blockProperties.lastBlock) break;
-    }
-
-    if (dctx->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN) {
-        RETURN_ERROR_IF((U64)(op-ostart) != dctx->fParams.frameContentSize,
-                        corruption_detected, "");
-    }
-    if (dctx->fParams.checksumFlag) { /* Frame content checksum verification */
-        U32 const checkCalc = (U32)XXH64_digest(&dctx->xxhState);
-        U32 checkRead;
-        RETURN_ERROR_IF(remainingSrcSize<4, checksum_wrong, "");
-        checkRead = MEM_readLE32(ip);
-        RETURN_ERROR_IF(checkRead != checkCalc, checksum_wrong, "");
-        ip += 4;
-        remainingSrcSize -= 4;
-    }
-
-    /* Allow caller to get size read */
-    *srcPtr = ip;
-    *srcSizePtr = remainingSrcSize;
-    return op-ostart;
-}
-
-static size_t ZSTD_decompressMultiFrame(ZSTD_DCtx* dctx,
-                                        void* dst, size_t dstCapacity,
-                                  const void* src, size_t srcSize,
-                                  const void* dict, size_t dictSize,
-                                  const ZSTD_DDict* ddict)
-{
-    void* const dststart = dst;
-    int moreThan1Frame = 0;
-
-    DEBUGLOG(5, "ZSTD_decompressMultiFrame");
-    assert(dict==NULL || ddict==NULL);  /* either dict or ddict set, not both */
-
-    if (ddict) {
-        dict = ZSTD_DDict_dictContent(ddict);
-        dictSize = ZSTD_DDict_dictSize(ddict);
-    }
-
-    while (srcSize >= ZSTD_startingInputLength(dctx->format)) {
-
-#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
-        if (ZSTD_isLegacy(src, srcSize)) {
-            size_t decodedSize;
-            size_t const frameSize = ZSTD_findFrameCompressedSizeLegacy(src, srcSize);
-            if (ZSTD_isError(frameSize)) return frameSize;
-            RETURN_ERROR_IF(dctx->staticSize, memory_allocation,
-                "legacy support is not compatible with static dctx");
-
-            decodedSize = ZSTD_decompressLegacy(dst, dstCapacity, src, frameSize, dict, dictSize);
-            if (ZSTD_isError(decodedSize)) return decodedSize;
-
-            assert(decodedSize <=- dstCapacity);
-            dst = (BYTE*)dst + decodedSize;
-            dstCapacity -= decodedSize;
-
-            src = (const BYTE*)src + frameSize;
-            srcSize -= frameSize;
-
-            continue;
-        }
-#endif
-
-        {   U32 const magicNumber = MEM_readLE32(src);
-            DEBUGLOG(4, "reading magic number %08X (expecting %08X)",
-                        (unsigned)magicNumber, ZSTD_MAGICNUMBER);
-            if ((magicNumber & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
-                size_t const skippableSize = readSkippableFrameSize(src, srcSize);
-                FORWARD_IF_ERROR(skippableSize, "readSkippableFrameSize failed");
-                assert(skippableSize <= srcSize);
-
-                src = (const BYTE *)src + skippableSize;
-                srcSize -= skippableSize;
-                continue;
-        }   }
-
-        if (ddict) {
-            /* we were called from ZSTD_decompress_usingDDict */
-            FORWARD_IF_ERROR(ZSTD_decompressBegin_usingDDict(dctx, ddict), "");
-        } else {
-            /* this will initialize correctly with no dict if dict == NULL, so
-             * use this in all cases but ddict */
-            FORWARD_IF_ERROR(ZSTD_decompressBegin_usingDict(dctx, dict, dictSize), "");
-        }
-        ZSTD_checkContinuity(dctx, dst);
-
-        {   const size_t res = ZSTD_decompressFrame(dctx, dst, dstCapacity,
-                                                    &src, &srcSize);
-            RETURN_ERROR_IF(
-                (ZSTD_getErrorCode(res) == ZSTD_error_prefix_unknown)
-             && (moreThan1Frame==1),
-                srcSize_wrong,
-                "at least one frame successfully completed, but following "
-                "bytes are garbage: it's more likely to be a srcSize error, "
-                "specifying more bytes than compressed size of frame(s). This "
-                "error message replaces ERROR(prefix_unknown), which would be "
-                "confusing, as the first header is actually correct. Note that "
-                "one could be unlucky, it might be a corruption error instead, "
-                "happening right at the place where we expect zstd magic "
-                "bytes. But this is _much_ less likely than a srcSize field "
-                "error.");
-            if (ZSTD_isError(res)) return res;
-            assert(res <= dstCapacity);
-            if (res != 0)
-                dst = (BYTE*)dst + res;
-            dstCapacity -= res;
-        }
-        moreThan1Frame = 1;
-    }  /* while (srcSize >= ZSTD_frameHeaderSize_prefix) */
-
-    RETURN_ERROR_IF(srcSize, srcSize_wrong, "input not entirely consumed");
-
-    return (BYTE*)dst - (BYTE*)dststart;
-}
-
-size_t ZSTD_decompress_usingDict(ZSTD_DCtx* dctx,
-                                 void* dst, size_t dstCapacity,
-                           const void* src, size_t srcSize,
-                           const void* dict, size_t dictSize)
-{
-    return ZSTD_decompressMultiFrame(dctx, dst, dstCapacity, src, srcSize, dict, dictSize, NULL);
-}
-
-
-static ZSTD_DDict const* ZSTD_getDDict(ZSTD_DCtx* dctx)
-{
-    switch (dctx->dictUses) {
-    default:
-        assert(0 /* Impossible */);
-        /* fall-through */
-    case ZSTD_dont_use:
-        ZSTD_clearDict(dctx);
-        return NULL;
-    case ZSTD_use_indefinitely:
-        return dctx->ddict;
-    case ZSTD_use_once:
-        dctx->dictUses = ZSTD_dont_use;
-        return dctx->ddict;
-    }
-}
-
-size_t ZSTD_decompressDCtx(ZSTD_DCtx* dctx, void* dst, size_t dstCapacity, const void* src, size_t srcSize)
-{
-    return ZSTD_decompress_usingDDict(dctx, dst, dstCapacity, src, srcSize, ZSTD_getDDict(dctx));
-}
-
-
-size_t ZSTD_decompress(void* dst, size_t dstCapacity, const void* src, size_t srcSize)
-{
-#if defined(ZSTD_HEAPMODE) && (ZSTD_HEAPMODE>=1)
-    size_t regenSize;
-    ZSTD_DCtx* const dctx = ZSTD_createDCtx();
-    RETURN_ERROR_IF(dctx==NULL, memory_allocation, "NULL pointer!");
-    regenSize = ZSTD_decompressDCtx(dctx, dst, dstCapacity, src, srcSize);
-    ZSTD_freeDCtx(dctx);
-    return regenSize;
-#else   /* stack mode */
-    ZSTD_DCtx dctx;
-    ZSTD_initDCtx_internal(&dctx);
-    return ZSTD_decompressDCtx(&dctx, dst, dstCapacity, src, srcSize);
-#endif
-}
-
-
-/*-**************************************
-*   Advanced Streaming Decompression API
-*   Bufferless and synchronous
-****************************************/
-size_t ZSTD_nextSrcSizeToDecompress(ZSTD_DCtx* dctx) { return dctx->expected; }
-
-/**
- * Similar to ZSTD_nextSrcSizeToDecompress(), but when when a block input can be streamed,
- * we allow taking a partial block as the input. Currently only raw uncompressed blocks can
- * be streamed.
- *
- * For blocks that can be streamed, this allows us to reduce the latency until we produce
- * output, and avoid copying the input.
- *
- * @param inputSize - The total amount of input that the caller currently has.
- */
-static size_t ZSTD_nextSrcSizeToDecompressWithInputSize(ZSTD_DCtx* dctx, size_t inputSize) {
-    if (!(dctx->stage == ZSTDds_decompressBlock || dctx->stage == ZSTDds_decompressLastBlock))
-        return dctx->expected;
-    if (dctx->bType != bt_raw)
-        return dctx->expected;
-    return MIN(MAX(inputSize, 1), dctx->expected);
-}
-
-ZSTD_nextInputType_e ZSTD_nextInputType(ZSTD_DCtx* dctx) {
-    switch(dctx->stage)
-    {
-    default:   /* should not happen */
-        assert(0);
-    case ZSTDds_getFrameHeaderSize:
-    case ZSTDds_decodeFrameHeader:
-        return ZSTDnit_frameHeader;
-    case ZSTDds_decodeBlockHeader:
-        return ZSTDnit_blockHeader;
-    case ZSTDds_decompressBlock:
-        return ZSTDnit_block;
-    case ZSTDds_decompressLastBlock:
-        return ZSTDnit_lastBlock;
-    case ZSTDds_checkChecksum:
-        return ZSTDnit_checksum;
-    case ZSTDds_decodeSkippableHeader:
-    case ZSTDds_skipFrame:
-        return ZSTDnit_skippableFrame;
-    }
-}
-
-static int ZSTD_isSkipFrame(ZSTD_DCtx* dctx) { return dctx->stage == ZSTDds_skipFrame; }
-
-/** ZSTD_decompressContinue() :
- *  srcSize : must be the exact nb of bytes expected (see ZSTD_nextSrcSizeToDecompress())
- *  @return : nb of bytes generated into `dst` (necessarily <= `dstCapacity)
- *            or an error code, which can be tested using ZSTD_isError() */
-size_t ZSTD_decompressContinue(ZSTD_DCtx* dctx, void* dst, size_t dstCapacity, const void* src, size_t srcSize)
-{
-    DEBUGLOG(5, "ZSTD_decompressContinue (srcSize:%u)", (unsigned)srcSize);
-    /* Sanity check */
-    RETURN_ERROR_IF(srcSize != ZSTD_nextSrcSizeToDecompressWithInputSize(dctx, srcSize), srcSize_wrong, "not allowed");
-    if (dstCapacity) ZSTD_checkContinuity(dctx, dst);
-
-    switch (dctx->stage)
-    {
-    case ZSTDds_getFrameHeaderSize :
-        assert(src != NULL);
-        if (dctx->format == ZSTD_f_zstd1) {  /* allows header */
-            assert(srcSize >= ZSTD_FRAMEIDSIZE);  /* to read skippable magic number */
-            if ((MEM_readLE32(src) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {        /* skippable frame */
-                memcpy(dctx->headerBuffer, src, srcSize);
-                dctx->expected = ZSTD_SKIPPABLEHEADERSIZE - srcSize;  /* remaining to load to get full skippable frame header */
-                dctx->stage = ZSTDds_decodeSkippableHeader;
-                return 0;
-        }   }
-        dctx->headerSize = ZSTD_frameHeaderSize_internal(src, srcSize, dctx->format);
-        if (ZSTD_isError(dctx->headerSize)) return dctx->headerSize;
-        memcpy(dctx->headerBuffer, src, srcSize);
-        dctx->expected = dctx->headerSize - srcSize;
-        dctx->stage = ZSTDds_decodeFrameHeader;
-        return 0;
-
-    case ZSTDds_decodeFrameHeader:
-        assert(src != NULL);
-        memcpy(dctx->headerBuffer + (dctx->headerSize - srcSize), src, srcSize);
-        FORWARD_IF_ERROR(ZSTD_decodeFrameHeader(dctx, dctx->headerBuffer, dctx->headerSize), "");
-        dctx->expected = ZSTDInternalConstants::ZSTD_blockHeaderSize;
-        dctx->stage = ZSTDds_decodeBlockHeader;
-        return 0;
-
-    case ZSTDds_decodeBlockHeader:
-        {   blockProperties_t bp;
-            size_t const cBlockSize = ZSTD_getcBlockSize(src, ZSTDInternalConstants::ZSTD_blockHeaderSize, &bp);
-            if (ZSTD_isError(cBlockSize)) return cBlockSize;
-            RETURN_ERROR_IF(cBlockSize > dctx->fParams.blockSizeMax, corruption_detected, "Block Size Exceeds Maximum");
-            dctx->expected = cBlockSize;
-            dctx->bType = bp.blockType;
-            dctx->rleSize = bp.origSize;
-            if (cBlockSize) {
-                dctx->stage = bp.lastBlock ? ZSTDds_decompressLastBlock : ZSTDds_decompressBlock;
-                return 0;
-            }
-            /* empty block */
-            if (bp.lastBlock) {
-                if (dctx->fParams.checksumFlag) {
-                    dctx->expected = 4;
-                    dctx->stage = ZSTDds_checkChecksum;
-                } else {
-                    dctx->expected = 0; /* end of frame */
-                    dctx->stage = ZSTDds_getFrameHeaderSize;
-                }
-            } else {
-                dctx->expected = ZSTDInternalConstants::ZSTD_blockHeaderSize;  /* jump to next header */
-                dctx->stage = ZSTDds_decodeBlockHeader;
-            }
-            return 0;
-        }
-
-    case ZSTDds_decompressLastBlock:
-    case ZSTDds_decompressBlock:
-        DEBUGLOG(5, "ZSTD_decompressContinue: case ZSTDds_decompressBlock");
-        {   size_t rSize;
-            switch(dctx->bType)
-            {
-            case bt_compressed:
-                DEBUGLOG(5, "ZSTD_decompressContinue: case bt_compressed");
-                rSize = ZSTD_decompressBlock_internal(dctx, dst, dstCapacity, src, srcSize, /* frame */ 1);
-                dctx->expected = 0;  /* Streaming not supported */
-                break;
-            case bt_raw :
-                assert(srcSize <= dctx->expected);
-                rSize = ZSTD_copyRawBlock(dst, dstCapacity, src, srcSize);
-                FORWARD_IF_ERROR(rSize, "ZSTD_copyRawBlock failed");
-                assert(rSize == srcSize);
-                dctx->expected -= rSize;
-                break;
-            case bt_rle :
-                rSize = ZSTD_setRleBlock(dst, dstCapacity, *(const BYTE*)src, dctx->rleSize);
-                dctx->expected = 0;  /* Streaming not supported */
-                break;
-            case bt_reserved :   /* should never happen */
-            default:
-                RETURN_ERROR(corruption_detected, "invalid block type");
-            }
-            FORWARD_IF_ERROR(rSize, "");
-            RETURN_ERROR_IF(rSize > dctx->fParams.blockSizeMax, corruption_detected, "Decompressed Block Size Exceeds Maximum");
-            DEBUGLOG(5, "ZSTD_decompressContinue: decoded size from block : %u", (unsigned)rSize);
-            dctx->decodedSize += rSize;
-            if (dctx->fParams.checksumFlag) XXH64_update(&dctx->xxhState, dst, rSize);
-            dctx->previousDstEnd = (char*)dst + rSize;
-
-            /* Stay on the same stage until we are finished streaming the block. */
-            if (dctx->expected > 0) {
-                return rSize;
-            }
-
-            if (dctx->stage == ZSTDds_decompressLastBlock) {   /* end of frame */
-                DEBUGLOG(4, "ZSTD_decompressContinue: decoded size from frame : %u", (unsigned)dctx->decodedSize);
-                RETURN_ERROR_IF(
-                    dctx->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN
-                 && dctx->decodedSize != dctx->fParams.frameContentSize,
-                    corruption_detected, "");
-                if (dctx->fParams.checksumFlag) {  /* another round for frame checksum */
-                    dctx->expected = 4;
-                    dctx->stage = ZSTDds_checkChecksum;
-                } else {
-                    dctx->expected = 0;   /* ends here */
-                    dctx->stage = ZSTDds_getFrameHeaderSize;
-                }
-            } else {
-                dctx->stage = ZSTDds_decodeBlockHeader;
-                dctx->expected = ZSTDInternalConstants::ZSTD_blockHeaderSize;
-            }
-            return rSize;
-        }
-
-    case ZSTDds_checkChecksum:
-        assert(srcSize == 4);  /* guaranteed by dctx->expected */
-        {   U32 const h32 = (U32)XXH64_digest(&dctx->xxhState);
-            U32 const check32 = MEM_readLE32(src);
-            DEBUGLOG(4, "ZSTD_decompressContinue: checksum : calculated %08X :: %08X read", (unsigned)h32, (unsigned)check32);
-            RETURN_ERROR_IF(check32 != h32, checksum_wrong, "");
-            dctx->expected = 0;
-            dctx->stage = ZSTDds_getFrameHeaderSize;
-            return 0;
-        }
-
-    case ZSTDds_decodeSkippableHeader:
-        assert(src != NULL);
-        assert(srcSize <= ZSTD_SKIPPABLEHEADERSIZE);
-        memcpy(dctx->headerBuffer + (ZSTD_SKIPPABLEHEADERSIZE - srcSize), src, srcSize);   /* complete skippable header */
-        dctx->expected = MEM_readLE32(dctx->headerBuffer + ZSTD_FRAMEIDSIZE);   /* note : dctx->expected can grow seriously large, beyond local buffer size */
-        dctx->stage = ZSTDds_skipFrame;
-        return 0;
-
-    case ZSTDds_skipFrame:
-        dctx->expected = 0;
-        dctx->stage = ZSTDds_getFrameHeaderSize;
-        return 0;
-
-    default:
-        assert(0);   /* impossible */
-        RETURN_ERROR(GENERIC, "impossible to reach");   /* some compiler require default to do something */
-    }
-}
-
-
-static size_t ZSTD_refDictContent(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
-{
-    dctx->dictEnd = dctx->previousDstEnd;
-    dctx->virtualStart = (const char*)dict - ((const char*)(dctx->previousDstEnd) - (const char*)(dctx->prefixStart));
-    dctx->prefixStart = dict;
-    dctx->previousDstEnd = (const char*)dict + dictSize;
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    dctx->dictContentBeginForFuzzing = dctx->prefixStart;
-    dctx->dictContentEndForFuzzing = dctx->previousDstEnd;
-#endif
-    return 0;
-}
-
-/*! ZSTD_loadDEntropy() :
- *  dict : must point at beginning of a valid zstd dictionary.
- * @return : size of entropy tables read */
-size_t
-ZSTD_loadDEntropy(ZSTD_entropyDTables_t* entropy,
-                  const void* const dict, size_t const dictSize)
-{
-    const BYTE* dictPtr = (const BYTE*)dict;
-    const BYTE* const dictEnd = dictPtr + dictSize;
-
-    RETURN_ERROR_IF(dictSize <= 8, dictionary_corrupted, "dict is too small");
-    assert(MEM_readLE32(dict) == ZSTD_MAGIC_DICTIONARY);   /* dict must be valid */
-    dictPtr += 8;   /* skip header = magic + dictID */
-
-    ZSTD_STATIC_ASSERT(offsetof(ZSTD_entropyDTables_t, OFTable) == offsetof(ZSTD_entropyDTables_t, LLTable) + sizeof(entropy->LLTable));
-    ZSTD_STATIC_ASSERT(offsetof(ZSTD_entropyDTables_t, MLTable) == offsetof(ZSTD_entropyDTables_t, OFTable) + sizeof(entropy->OFTable));
-    ZSTD_STATIC_ASSERT(sizeof(entropy->LLTable) + sizeof(entropy->OFTable) + sizeof(entropy->MLTable) >= HUF_DECOMPRESS_WORKSPACE_SIZE);
-    {   void* const workspace = &entropy->LLTable;   /* use fse tables as temporary workspace; implies fse tables are grouped together */
-        size_t const workspaceSize = sizeof(entropy->LLTable) + sizeof(entropy->OFTable) + sizeof(entropy->MLTable);
-#ifdef HUF_FORCE_DECOMPRESS_X1
-        /* in minimal huffman, we always use X1 variants */
-        size_t const hSize = HUF_readDTableX1_wksp(entropy->hufTable,
-                                                dictPtr, dictEnd - dictPtr,
-                                                workspace, workspaceSize);
-#else
-        size_t const hSize = HUF_readDTableX2_wksp(entropy->hufTable,
-                                                dictPtr, dictEnd - dictPtr,
-                                                workspace, workspaceSize);
-#endif
-        RETURN_ERROR_IF(HUF_isError(hSize), dictionary_corrupted, "");
-        dictPtr += hSize;
-    }
-
-    {   short offcodeNCount[MaxOff+1];
-        unsigned offcodeMaxValue = MaxOff, offcodeLog;
-        size_t const offcodeHeaderSize = FSE_readNCount(offcodeNCount, &offcodeMaxValue, &offcodeLog, dictPtr, dictEnd-dictPtr);
-        RETURN_ERROR_IF(FSE_isError(offcodeHeaderSize), dictionary_corrupted, "");
-        RETURN_ERROR_IF(offcodeMaxValue > MaxOff, dictionary_corrupted, "");
-        RETURN_ERROR_IF(offcodeLog > OffFSELog, dictionary_corrupted, "");
-        ZSTD_buildFSETable( entropy->OFTable,
-                            offcodeNCount, offcodeMaxValue,
-                            ZSTDConstants::OF_base, ZSTDConstants::OF_bits,
-                            offcodeLog);
-        dictPtr += offcodeHeaderSize;
-    }
-
-    {   short matchlengthNCount[MaxML+1];
-        unsigned matchlengthMaxValue = MaxML, matchlengthLog;
-        size_t const matchlengthHeaderSize = FSE_readNCount(matchlengthNCount, &matchlengthMaxValue, &matchlengthLog, dictPtr, dictEnd-dictPtr);
-        RETURN_ERROR_IF(FSE_isError(matchlengthHeaderSize), dictionary_corrupted, "");
-        RETURN_ERROR_IF(matchlengthMaxValue > MaxML, dictionary_corrupted, "");
-        RETURN_ERROR_IF(matchlengthLog > MLFSELog, dictionary_corrupted, "");
-        ZSTD_buildFSETable( entropy->MLTable,
-                            matchlengthNCount, matchlengthMaxValue,
-                            ZSTDConstants::ML_base, ZSTDInternalConstants::ML_bits,
-                            matchlengthLog);
-        dictPtr += matchlengthHeaderSize;
-    }
-
-    {   short litlengthNCount[MaxLL+1];
-        unsigned litlengthMaxValue = MaxLL, litlengthLog;
-        size_t const litlengthHeaderSize = FSE_readNCount(litlengthNCount, &litlengthMaxValue, &litlengthLog, dictPtr, dictEnd-dictPtr);
-        RETURN_ERROR_IF(FSE_isError(litlengthHeaderSize), dictionary_corrupted, "");
-        RETURN_ERROR_IF(litlengthMaxValue > MaxLL, dictionary_corrupted, "");
-        RETURN_ERROR_IF(litlengthLog > LLFSELog, dictionary_corrupted, "");
-        ZSTD_buildFSETable( entropy->LLTable,
-                            litlengthNCount, litlengthMaxValue,
-                            ZSTDConstants::LL_base, ZSTDInternalConstants::LL_bits,
-                            litlengthLog);
-        dictPtr += litlengthHeaderSize;
-    }
-
-    RETURN_ERROR_IF(dictPtr+12 > dictEnd, dictionary_corrupted, "");
-    {   int i;
-        size_t const dictContentSize = (size_t)(dictEnd - (dictPtr+12));
-        for (i=0; i<3; i++) {
-            U32 const rep = MEM_readLE32(dictPtr); dictPtr += 4;
-            RETURN_ERROR_IF(rep==0 || rep > dictContentSize,
-                            dictionary_corrupted, "");
-            entropy->rep[i] = rep;
-    }   }
-
-    return dictPtr - (const BYTE*)dict;
-}
-
-static size_t ZSTD_decompress_insertDictionary(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
-{
-    if (dictSize < 8) return ZSTD_refDictContent(dctx, dict, dictSize);
-    {   U32 const magic = MEM_readLE32(dict);
-        if (magic != ZSTD_MAGIC_DICTIONARY) {
-            return ZSTD_refDictContent(dctx, dict, dictSize);   /* pure content mode */
-    }   }
-    dctx->dictID = MEM_readLE32((const char*)dict + ZSTD_FRAMEIDSIZE);
-
-    /* load entropy tables */
-    {   size_t const eSize = ZSTD_loadDEntropy(&dctx->entropy, dict, dictSize);
-        RETURN_ERROR_IF(ZSTD_isError(eSize), dictionary_corrupted, "");
-        dict = (const char*)dict + eSize;
-        dictSize -= eSize;
-    }
-    dctx->litEntropy = dctx->fseEntropy = 1;
-
-    /* reference dictionary content */
-    return ZSTD_refDictContent(dctx, dict, dictSize);
-}
-
-static const U32 repStartValue[ZSTD_REP_NUM] = { 1, 4, 8 };
-
-size_t ZSTD_decompressBegin(ZSTD_DCtx* dctx)
-{
-    assert(dctx != NULL);
-    dctx->expected = ZSTD_startingInputLength(dctx->format);  /* dctx->format must be properly set */
-    dctx->stage = ZSTDds_getFrameHeaderSize;
-    dctx->decodedSize = 0;
-    dctx->previousDstEnd = NULL;
-    dctx->prefixStart = NULL;
-    dctx->virtualStart = NULL;
-    dctx->dictEnd = NULL;
-    dctx->entropy.hufTable[0] = (HUF_DTable)((HufLog)*0x1000001);  /* cover both little and big endian */
-    dctx->litEntropy = dctx->fseEntropy = 0;
-    dctx->dictID = 0;
-    dctx->bType = bt_reserved;
-    ZSTD_STATIC_ASSERT(sizeof(dctx->entropy.rep) == sizeof(repStartValue));
-    memcpy(dctx->entropy.rep, repStartValue, sizeof(repStartValue));  /* initial repcodes */
-    dctx->LLTptr = dctx->entropy.LLTable;
-    dctx->MLTptr = dctx->entropy.MLTable;
-    dctx->OFTptr = dctx->entropy.OFTable;
-    dctx->HUFptr = dctx->entropy.hufTable;
-    return 0;
-}
-
-size_t ZSTD_decompressBegin_usingDict(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
-{
-    FORWARD_IF_ERROR( ZSTD_decompressBegin(dctx) , "");
-    if (dict && dictSize)
-        RETURN_ERROR_IF(
-            ZSTD_isError(ZSTD_decompress_insertDictionary(dctx, dict, dictSize)),
-            dictionary_corrupted, "");
-    return 0;
-}
-
-
-/* ======   ZSTD_DDict   ====== */
-
-size_t ZSTD_decompressBegin_usingDDict(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict)
-{
-    DEBUGLOG(4, "ZSTD_decompressBegin_usingDDict");
-    assert(dctx != NULL);
-    if (ddict) {
-        const char* const dictStart = (const char*)ZSTD_DDict_dictContent(ddict);
-        size_t const dictSize = ZSTD_DDict_dictSize(ddict);
-        const void* const dictEnd = dictStart + dictSize;
-        dctx->ddictIsCold = (dctx->dictEnd != dictEnd);
-        DEBUGLOG(4, "DDict is %s",
-                    dctx->ddictIsCold ? "~cold~" : "hot!");
-    }
-    FORWARD_IF_ERROR( ZSTD_decompressBegin(dctx) , "");
-    if (ddict) {   /* NULL ddict is equivalent to no dictionary */
-        ZSTD_copyDDictParameters(dctx, ddict);
-    }
-    return 0;
-}
-
-/*! ZSTD_getDictID_fromDict() :
- *  Provides the dictID stored within dictionary.
- *  if @return == 0, the dictionary is not conformant with Zstandard specification.
- *  It can still be loaded, but as a content-only dictionary. */
-unsigned ZSTD_getDictID_fromDict(const void* dict, size_t dictSize)
-{
-    if (dictSize < 8) return 0;
-    if (MEM_readLE32(dict) != ZSTD_MAGIC_DICTIONARY) return 0;
-    return MEM_readLE32((const char*)dict + ZSTD_FRAMEIDSIZE);
-}
-
-/*! ZSTD_getDictID_fromFrame() :
- *  Provides the dictID required to decompress frame stored within `src`.
- *  If @return == 0, the dictID could not be decoded.
- *  This could for one of the following reasons :
- *  - The frame does not require a dictionary (most common case).
- *  - The frame was built with dictID intentionally removed.
- *    Needed dictionary is a hidden information.
- *    Note : this use case also happens when using a non-conformant dictionary.
- *  - `srcSize` is too small, and as a result, frame header could not be decoded.
- *    Note : possible if `srcSize < ZSTD_FRAMEHEADERSIZE_MAX`.
- *  - This is not a Zstandard frame.
- *  When identifying the exact failure cause, it's possible to use
- *  ZSTD_getFrameHeader(), which will provide a more precise error code. */
-unsigned ZSTD_getDictID_fromFrame(const void* src, size_t srcSize)
-{
-    ZSTD_frameHeader zfp = { 0, 0, 0, ZSTD_frame, 0, 0, 0 };
-    size_t const hError = ZSTD_getFrameHeader(&zfp, src, srcSize);
-    if (ZSTD_isError(hError)) return 0;
-    return zfp.dictID;
-}
-
-
-/*! ZSTD_decompress_usingDDict() :
-*   Decompression using a pre-digested Dictionary
-*   Use dictionary without significant overhead. */
-size_t ZSTD_decompress_usingDDict(ZSTD_DCtx* dctx,
-                                  void* dst, size_t dstCapacity,
-                            const void* src, size_t srcSize,
-                            const ZSTD_DDict* ddict)
-{
-    /* pass content and size in case legacy frames are encountered */
-    return ZSTD_decompressMultiFrame(dctx, dst, dstCapacity, src, srcSize,
-                                     NULL, 0,
-                                     ddict);
-}
-
-
-/*=====================================
-*   Streaming decompression
-*====================================*/
-
-ZSTD_DStream* ZSTD_createDStream(void)
-{
-    DEBUGLOG(3, "ZSTD_createDStream");
-    return ZSTD_createDStream_advanced(ZSTDInternalConstants::ZSTD_defaultCMem);
-}
-
-ZSTD_DStream* ZSTD_initStaticDStream(void *workspace, size_t workspaceSize)
-{
-    return ZSTD_initStaticDCtx(workspace, workspaceSize);
-}
-
-ZSTD_DStream* ZSTD_createDStream_advanced(ZSTD_customMem customMem)
-{
-    return ZSTD_createDCtx_advanced(customMem);
-}
-
-size_t ZSTD_freeDStream(ZSTD_DStream* zds)
-{
-    return ZSTD_freeDCtx(zds);
-}
-
-
-/* ***  Initialization  *** */
-
-size_t ZSTD_DStreamInSize(void)  { return ZSTD_BLOCKSIZE_MAX + ZSTDInternalConstants::ZSTD_blockHeaderSize; }
-size_t ZSTD_DStreamOutSize(void) { return ZSTD_BLOCKSIZE_MAX; }
-
-size_t ZSTD_DCtx_loadDictionary_advanced(ZSTD_DCtx* dctx,
-                                   const void* dict, size_t dictSize,
-                                         ZSTD_dictLoadMethod_e dictLoadMethod,
-                                         ZSTD_dictContentType_e dictContentType)
-{
-    RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
-    ZSTD_clearDict(dctx);
-    if (dict && dictSize != 0) {
-        dctx->ddictLocal = ZSTD_createDDict_advanced(dict, dictSize, dictLoadMethod, dictContentType, dctx->customMem);
-        RETURN_ERROR_IF(dctx->ddictLocal == NULL, memory_allocation, "NULL pointer!");
-        dctx->ddict = dctx->ddictLocal;
-        dctx->dictUses = ZSTD_use_indefinitely;
-    }
-    return 0;
-}
-
-size_t ZSTD_DCtx_loadDictionary_byReference(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
-{
-    return ZSTD_DCtx_loadDictionary_advanced(dctx, dict, dictSize, ZSTD_dlm_byRef, ZSTD_dct_auto);
-}
-
-size_t ZSTD_DCtx_loadDictionary(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
-{
-    return ZSTD_DCtx_loadDictionary_advanced(dctx, dict, dictSize, ZSTD_dlm_byCopy, ZSTD_dct_auto);
-}
-
-size_t ZSTD_DCtx_refPrefix_advanced(ZSTD_DCtx* dctx, const void* prefix, size_t prefixSize, ZSTD_dictContentType_e dictContentType)
-{
-    FORWARD_IF_ERROR(ZSTD_DCtx_loadDictionary_advanced(dctx, prefix, prefixSize, ZSTD_dlm_byRef, dictContentType), "");
-    dctx->dictUses = ZSTD_use_once;
-    return 0;
-}
-
-size_t ZSTD_DCtx_refPrefix(ZSTD_DCtx* dctx, const void* prefix, size_t prefixSize)
-{
-    return ZSTD_DCtx_refPrefix_advanced(dctx, prefix, prefixSize, ZSTD_dct_rawContent);
-}
-
-
-/* ZSTD_initDStream_usingDict() :
- * return : expected size, aka ZSTD_startingInputLength().
- * this function cannot fail */
-size_t ZSTD_initDStream_usingDict(ZSTD_DStream* zds, const void* dict, size_t dictSize)
-{
-    DEBUGLOG(4, "ZSTD_initDStream_usingDict");
-    FORWARD_IF_ERROR( ZSTD_DCtx_reset(zds, ZSTD_reset_session_only) , "");
-    FORWARD_IF_ERROR( ZSTD_DCtx_loadDictionary(zds, dict, dictSize) , "");
-    return ZSTD_startingInputLength(zds->format);
-}
-
-/* note : this variant can't fail */
-size_t ZSTD_initDStream(ZSTD_DStream* zds)
-{
-    DEBUGLOG(4, "ZSTD_initDStream");
-    return ZSTD_initDStream_usingDDict(zds, NULL);
-}
-
-/* ZSTD_initDStream_usingDDict() :
- * ddict will just be referenced, and must outlive decompression session
- * this function cannot fail */
-size_t ZSTD_initDStream_usingDDict(ZSTD_DStream* dctx, const ZSTD_DDict* ddict)
-{
-    FORWARD_IF_ERROR( ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only) , "");
-    FORWARD_IF_ERROR( ZSTD_DCtx_refDDict(dctx, ddict) , "");
-    return ZSTD_startingInputLength(dctx->format);
-}
-
-/* ZSTD_resetDStream() :
- * return : expected size, aka ZSTD_startingInputLength().
- * this function cannot fail */
-size_t ZSTD_resetDStream(ZSTD_DStream* dctx)
-{
-    FORWARD_IF_ERROR(ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only), "");
-    return ZSTD_startingInputLength(dctx->format);
-}
-
-
-size_t ZSTD_DCtx_refDDict(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict)
-{
-    RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
-    ZSTD_clearDict(dctx);
-    if (ddict) {
-        dctx->ddict = ddict;
-        dctx->dictUses = ZSTD_use_indefinitely;
-    }
-    return 0;
-}
-
-/* ZSTD_DCtx_setMaxWindowSize() :
- * note : no direct equivalence in ZSTD_DCtx_setParameter,
- * since this version sets windowSize, and the other sets windowLog */
-size_t ZSTD_DCtx_setMaxWindowSize(ZSTD_DCtx* dctx, size_t maxWindowSize)
-{
-    ZSTD_bounds const bounds = ZSTD_dParam_getBounds(ZSTD_d_windowLogMax);
-    size_t const min = (size_t)1 << bounds.lowerBound;
-    size_t const max = (size_t)1 << bounds.upperBound;
-    RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
-    RETURN_ERROR_IF(maxWindowSize < min, parameter_outOfBound, "");
-    RETURN_ERROR_IF(maxWindowSize > max, parameter_outOfBound, "");
-    dctx->maxWindowSize = maxWindowSize;
-    return 0;
-}
-
-size_t ZSTD_DCtx_setFormat(ZSTD_DCtx* dctx, ZSTD_format_e format)
-{
-    return ZSTD_DCtx_setParameter(dctx, ZSTD_d_format, format);
-}
-
-ZSTD_bounds ZSTD_dParam_getBounds(ZSTD_dParameter dParam)
-{
-    ZSTD_bounds bounds = { 0, 0, 0 };
-    switch(dParam) {
-        case ZSTD_d_windowLogMax:
-            bounds.lowerBound = ZSTD_WINDOWLOG_ABSOLUTEMIN;
-            bounds.upperBound = ZSTD_WINDOWLOG_MAX;
-            return bounds;
-        case ZSTD_d_format:
-            bounds.lowerBound = (int)ZSTD_f_zstd1;
-            bounds.upperBound = (int)ZSTD_f_zstd1_magicless;
-            ZSTD_STATIC_ASSERT(ZSTD_f_zstd1 < ZSTD_f_zstd1_magicless);
-            return bounds;
-        case ZSTD_d_stableOutBuffer:
-            bounds.lowerBound = (int)ZSTD_obm_buffered;
-            bounds.upperBound = (int)ZSTD_obm_stable;
-            return bounds;
-        default:;
-    }
-    bounds.error = ERROR(parameter_unsupported);
-    return bounds;
-}
-
-/* ZSTD_dParam_withinBounds:
- * @return 1 if value is within dParam bounds,
- * 0 otherwise */
-static int ZSTD_dParam_withinBounds(ZSTD_dParameter dParam, int value)
-{
-    ZSTD_bounds const bounds = ZSTD_dParam_getBounds(dParam);
-    if (ZSTD_isError(bounds.error)) return 0;
-    if (value < bounds.lowerBound) return 0;
-    if (value > bounds.upperBound) return 0;
-    return 1;
-}
-
-#define CHECK_DBOUNDS(p,v) {                \
-    RETURN_ERROR_IF(!ZSTD_dParam_withinBounds(p, v), parameter_outOfBound, ""); \
-}
-
-size_t ZSTD_DCtx_setParameter(ZSTD_DCtx* dctx, ZSTD_dParameter dParam, int value)
-{
-    RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
-    switch(dParam) {
-        case ZSTD_d_windowLogMax:
-            if (value == 0) value = ZSTD_WINDOWLOG_LIMIT_DEFAULT;
-            CHECK_DBOUNDS(ZSTD_d_windowLogMax, value);
-            dctx->maxWindowSize = ((size_t)1) << value;
-            return 0;
-        case ZSTD_d_format:
-            CHECK_DBOUNDS(ZSTD_d_format, value);
-            dctx->format = (ZSTD_format_e)value;
-            return 0;
-        case ZSTD_d_stableOutBuffer:
-            CHECK_DBOUNDS(ZSTD_d_stableOutBuffer, value);
-            dctx->outBufferMode = (ZSTD_outBufferMode_e)value;
-            return 0;
-        default:;
-    }
-    RETURN_ERROR(parameter_unsupported, "");
-}
-
-size_t ZSTD_DCtx_reset(ZSTD_DCtx* dctx, ZSTD_ResetDirective reset)
-{
-    if ( (reset == ZSTD_reset_session_only)
-      || (reset == ZSTD_reset_session_and_parameters) ) {
-        dctx->streamStage = zdss_init;
-        dctx->noForwardProgress = 0;
-    }
-    if ( (reset == ZSTD_reset_parameters)
-      || (reset == ZSTD_reset_session_and_parameters) ) {
-        RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
-        ZSTD_clearDict(dctx);
-        dctx->format = ZSTD_f_zstd1;
-        dctx->maxWindowSize = ZSTD_MAXWINDOWSIZE_DEFAULT;
-    }
-    return 0;
-}
-
-
-size_t ZSTD_sizeof_DStream(const ZSTD_DStream* dctx)
-{
-    return ZSTD_sizeof_DCtx(dctx);
-}
-
-size_t ZSTD_decodingBufferSize_min(unsigned long long windowSize, unsigned long long frameContentSize)
-{
-    size_t const blockSize = (size_t) MIN(windowSize, ZSTD_BLOCKSIZE_MAX);
-    unsigned long long const neededRBSize = windowSize + blockSize + (WILDCOPY_OVERLENGTH * 2);
-    unsigned long long const neededSize = MIN(frameContentSize, neededRBSize);
-    size_t const minRBSize = (size_t) neededSize;
-    RETURN_ERROR_IF((unsigned long long)minRBSize != neededSize,
-                    frameParameter_windowTooLarge, "");
-    return minRBSize;
-}
-
-size_t ZSTD_estimateDStreamSize(size_t windowSize)
-{
-    size_t const blockSize = MIN(windowSize, ZSTD_BLOCKSIZE_MAX);
-    size_t const inBuffSize = blockSize;  /* no block can be larger */
-    size_t const outBuffSize = ZSTD_decodingBufferSize_min(windowSize, ZSTD_CONTENTSIZE_UNKNOWN);
-    return ZSTD_estimateDCtxSize() + inBuffSize + outBuffSize;
-}
-
-size_t ZSTD_estimateDStreamSize_fromFrame(const void* src, size_t srcSize)
-{
-    U32 const windowSizeMax = 1U << ZSTD_WINDOWLOG_MAX;   /* note : should be user-selectable, but requires an additional parameter (or a dctx) */
-    ZSTD_frameHeader zfh;
-    size_t const err = ZSTD_getFrameHeader(&zfh, src, srcSize);
-    if (ZSTD_isError(err)) return err;
-    RETURN_ERROR_IF(err>0, srcSize_wrong, "");
-    RETURN_ERROR_IF(zfh.windowSize > windowSizeMax,
-                    frameParameter_windowTooLarge, "");
-    return ZSTD_estimateDStreamSize((size_t)zfh.windowSize);
-}
-
-
-/* *****   Decompression   ***** */
-
-static int ZSTD_DCtx_isOverflow(ZSTD_DStream* zds, size_t const neededInBuffSize, size_t const neededOutBuffSize)
-{
-    return (zds->inBuffSize + zds->outBuffSize) >= (neededInBuffSize + neededOutBuffSize) * ZSTD_WORKSPACETOOLARGE_FACTOR;
-}
-
-static void ZSTD_DCtx_updateOversizedDuration(ZSTD_DStream* zds, size_t const neededInBuffSize, size_t const neededOutBuffSize)
-{
-    if (ZSTD_DCtx_isOverflow(zds, neededInBuffSize, neededOutBuffSize))
-        zds->oversizedDuration++;
-    else
-        zds->oversizedDuration = 0;
-}
-
-static int ZSTD_DCtx_isOversizedTooLong(ZSTD_DStream* zds)
-{
-    return zds->oversizedDuration >= ZSTD_WORKSPACETOOLARGE_MAXDURATION;
-}
-
-/* Checks that the output buffer hasn't changed if ZSTD_obm_stable is used. */
-static size_t ZSTD_checkOutBuffer(ZSTD_DStream const* zds, ZSTD_outBuffer const* output)
-{
-    ZSTD_outBuffer const expect = zds->expectedOutBuffer;
-    /* No requirement when ZSTD_obm_stable is not enabled. */
-    if (zds->outBufferMode != ZSTD_obm_stable)
-        return 0;
-    /* Any buffer is allowed in zdss_init, this must be the same for every other call until
-     * the context is reset.
-     */
-    if (zds->streamStage == zdss_init)
-        return 0;
-    /* The buffer must match our expectation exactly. */
-    if (expect.dst == output->dst && expect.pos == output->pos && expect.size == output->size)
-        return 0;
-    RETURN_ERROR(dstBuffer_wrong, "ZSTD_obm_stable enabled but output differs!");
-}
-
-/* Calls ZSTD_decompressContinue() with the right parameters for ZSTD_decompressStream()
- * and updates the stage and the output buffer state. This call is extracted so it can be
- * used both when reading directly from the ZSTD_inBuffer, and in buffered input mode.
- * NOTE: You must break after calling this function since the streamStage is modified.
- */
-static size_t ZSTD_decompressContinueStream(
-            ZSTD_DStream* zds, char** op, char* oend,
-            void const* src, size_t srcSize) {
-    int const isSkipFrame = ZSTD_isSkipFrame(zds);
-    if (zds->outBufferMode == ZSTD_obm_buffered) {
-        size_t const dstSize = isSkipFrame ? 0 : zds->outBuffSize - zds->outStart;
-        size_t const decodedSize = ZSTD_decompressContinue(zds,
-                zds->outBuff + zds->outStart, dstSize, src, srcSize);
-        FORWARD_IF_ERROR(decodedSize, "");
-        if (!decodedSize && !isSkipFrame) {
-            zds->streamStage = zdss_read;
-        } else {
-            zds->outEnd = zds->outStart + decodedSize;
-            zds->streamStage = zdss_flush;
-        }
-    } else {
-        /* Write directly into the output buffer */
-        size_t const dstSize = isSkipFrame ? 0 : oend - *op;
-        size_t const decodedSize = ZSTD_decompressContinue(zds, *op, dstSize, src, srcSize);
-        FORWARD_IF_ERROR(decodedSize, "");
-        *op += decodedSize;
-        /* Flushing is not needed. */
-        zds->streamStage = zdss_read;
-        assert(*op <= oend);
-        assert(zds->outBufferMode == ZSTD_obm_stable);
-    }
-    return 0;
-}
-
-size_t ZSTD_decompressStream(ZSTD_DStream* zds, ZSTD_outBuffer* output, ZSTD_inBuffer* input)
-{
-    const char* const src = (const char*)input->src;
-    const char* const istart = input->pos != 0 ? src + input->pos : src;
-    const char* const iend = input->size != 0 ? src + input->size : src;
-    const char* ip = istart;
-    char* const dst = (char*)output->dst;
-    char* const ostart = output->pos != 0 ? dst + output->pos : dst;
-    char* const oend = output->size != 0 ? dst + output->size : dst;
-    char* op = ostart;
-    U32 someMoreWork = 1;
-
-    DEBUGLOG(5, "ZSTD_decompressStream");
-    RETURN_ERROR_IF(
-        input->pos > input->size,
-        srcSize_wrong,
-        "forbidden. in: pos: %u   vs size: %u",
-        (U32)input->pos, (U32)input->size);
-    RETURN_ERROR_IF(
-        output->pos > output->size,
-        dstSize_tooSmall,
-        "forbidden. out: pos: %u   vs size: %u",
-        (U32)output->pos, (U32)output->size);
-    DEBUGLOG(5, "input size : %u", (U32)(input->size - input->pos));
-    FORWARD_IF_ERROR(ZSTD_checkOutBuffer(zds, output), "");
-
-    while (someMoreWork) {
-        switch(zds->streamStage)
-        {
-        case zdss_init :
-            DEBUGLOG(5, "stage zdss_init => transparent reset ");
-            zds->streamStage = zdss_loadHeader;
-            zds->lhSize = zds->inPos = zds->outStart = zds->outEnd = 0;
-            zds->legacyVersion = 0;
-            zds->hostageByte = 0;
-            zds->expectedOutBuffer = *output;
-            /* fall-through */
-
-        case zdss_loadHeader :
-            DEBUGLOG(5, "stage zdss_loadHeader (srcSize : %u)", (U32)(iend - ip));
-#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
-            if (zds->legacyVersion) {
-                RETURN_ERROR_IF(zds->staticSize, memory_allocation,
-                    "legacy support is incompatible with static dctx");
-                {   size_t const hint = ZSTD_decompressLegacyStream(zds->legacyContext, zds->legacyVersion, output, input);
-                    if (hint==0) zds->streamStage = zdss_init;
-                    return hint;
-            }   }
-#endif
-            {   size_t const hSize = ZSTD_getFrameHeader_advanced(&zds->fParams, zds->headerBuffer, zds->lhSize, zds->format);
-                DEBUGLOG(5, "header size : %u", (U32)hSize);
-                if (ZSTD_isError(hSize)) {
-#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
-                    U32 const legacyVersion = ZSTD_isLegacy(istart, iend-istart);
-                    if (legacyVersion) {
-                        ZSTD_DDict const* const ddict = ZSTD_getDDict(zds);
-                        const void* const dict = ddict ? ZSTD_DDict_dictContent(ddict) : NULL;
-                        size_t const dictSize = ddict ? ZSTD_DDict_dictSize(ddict) : 0;
-                        DEBUGLOG(5, "ZSTD_decompressStream: detected legacy version v0.%u", legacyVersion);
-                        RETURN_ERROR_IF(zds->staticSize, memory_allocation,
-                            "legacy support is incompatible with static dctx");
-                        FORWARD_IF_ERROR(ZSTD_initLegacyStream(&zds->legacyContext,
-                                    zds->previousLegacyVersion, legacyVersion,
-                                    dict, dictSize), "");
-                        zds->legacyVersion = zds->previousLegacyVersion = legacyVersion;
-                        {   size_t const hint = ZSTD_decompressLegacyStream(zds->legacyContext, legacyVersion, output, input);
-                            if (hint==0) zds->streamStage = zdss_init;   /* or stay in stage zdss_loadHeader */
-                            return hint;
-                    }   }
-#endif
-                    return hSize;   /* error */
-                }
-                if (hSize != 0) {   /* need more input */
-                    size_t const toLoad = hSize - zds->lhSize;   /* if hSize!=0, hSize > zds->lhSize */
-                    size_t const remainingInput = (size_t)(iend-ip);
-                    assert(iend >= ip);
-                    if (toLoad > remainingInput) {   /* not enough input to load full header */
-                        if (remainingInput > 0) {
-                            memcpy(zds->headerBuffer + zds->lhSize, ip, remainingInput);
-                            zds->lhSize += remainingInput;
-                        }
-                        input->pos = input->size;
-                        return (MAX((size_t)ZSTD_FRAMEHEADERSIZE_MIN(zds->format), hSize) - zds->lhSize) + ZSTDInternalConstants::ZSTD_blockHeaderSize;   /* remaining header bytes + next block header */
-                    }
-                    assert(ip != NULL);
-                    memcpy(zds->headerBuffer + zds->lhSize, ip, toLoad); zds->lhSize = hSize; ip += toLoad;
-                    break;
-            }   }
-
-            /* check for single-pass mode opportunity */
-            if (zds->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN
-                && zds->fParams.frameType != ZSTD_skippableFrame
-                && (U64)(size_t)(oend-op) >= zds->fParams.frameContentSize) {
-                size_t const cSize = ZSTD_findFrameCompressedSize(istart, iend-istart);
-                if (cSize <= (size_t)(iend-istart)) {
-                    /* shortcut : using single-pass mode */
-                    size_t const decompressedSize = ZSTD_decompress_usingDDict(zds, op, oend-op, istart, cSize, ZSTD_getDDict(zds));
-                    if (ZSTD_isError(decompressedSize)) return decompressedSize;
-                    DEBUGLOG(4, "shortcut to single-pass ZSTD_decompress_usingDDict()")
-                    ip = istart + cSize;
-                    op += decompressedSize;
-                    zds->expected = 0;
-                    zds->streamStage = zdss_init;
-                    someMoreWork = 0;
-                    break;
-            }   }
-
-            /* Check output buffer is large enough for ZSTD_odm_stable. */
-            if (zds->outBufferMode == ZSTD_obm_stable
-                && zds->fParams.frameType != ZSTD_skippableFrame
-                && zds->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN
-                && (U64)(size_t)(oend-op) < zds->fParams.frameContentSize) {
-                RETURN_ERROR(dstSize_tooSmall, "ZSTD_obm_stable passed but ZSTD_outBuffer is too small");
-            }
-
-            /* Consume header (see ZSTDds_decodeFrameHeader) */
-            DEBUGLOG(4, "Consume header");
-            FORWARD_IF_ERROR(ZSTD_decompressBegin_usingDDict(zds, ZSTD_getDDict(zds)), "");
-
-            if ((MEM_readLE32(zds->headerBuffer) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {  /* skippable frame */
-                zds->expected = MEM_readLE32(zds->headerBuffer + ZSTD_FRAMEIDSIZE);
-                zds->stage = ZSTDds_skipFrame;
-            } else {
-                FORWARD_IF_ERROR(ZSTD_decodeFrameHeader(zds, zds->headerBuffer, zds->lhSize), "");
-                zds->expected = ZSTDInternalConstants::ZSTD_blockHeaderSize;
-                zds->stage = ZSTDds_decodeBlockHeader;
-            }
-
-            /* control buffer memory usage */
-            DEBUGLOG(4, "Control max memory usage (%u KB <= max %u KB)",
-                        (U32)(zds->fParams.windowSize >>10),
-                        (U32)(zds->maxWindowSize >> 10) );
-            zds->fParams.windowSize = MAX(zds->fParams.windowSize, 1U << ZSTD_WINDOWLOG_ABSOLUTEMIN);
-            RETURN_ERROR_IF(zds->fParams.windowSize > zds->maxWindowSize,
-                            frameParameter_windowTooLarge, "");
-
-            /* Adapt buffer sizes to frame header instructions */
-            {   size_t const neededInBuffSize = MAX(zds->fParams.blockSizeMax, 4 /* frame checksum */);
-                size_t const neededOutBuffSize = zds->outBufferMode == ZSTD_obm_buffered
-                        ? ZSTD_decodingBufferSize_min(zds->fParams.windowSize, zds->fParams.frameContentSize)
-                        : 0;
-
-                ZSTD_DCtx_updateOversizedDuration(zds, neededInBuffSize, neededOutBuffSize);
-
-                {   int const tooSmall = (zds->inBuffSize < neededInBuffSize) || (zds->outBuffSize < neededOutBuffSize);
-                    int const tooLarge = ZSTD_DCtx_isOversizedTooLong(zds);
-
-                    if (tooSmall || tooLarge) {
-                        size_t const bufferSize = neededInBuffSize + neededOutBuffSize;
-                        DEBUGLOG(4, "inBuff  : from %u to %u",
-                                    (U32)zds->inBuffSize, (U32)neededInBuffSize);
-                        DEBUGLOG(4, "outBuff : from %u to %u",
-                                    (U32)zds->outBuffSize, (U32)neededOutBuffSize);
-                        if (zds->staticSize) {  /* static DCtx */
-                            DEBUGLOG(4, "staticSize : %u", (U32)zds->staticSize);
-                            assert(zds->staticSize >= sizeof(ZSTD_DCtx));  /* controlled at init */
-                            RETURN_ERROR_IF(
-                                bufferSize > zds->staticSize - sizeof(ZSTD_DCtx),
-                                memory_allocation, "");
-                        } else {
-                            ZSTD_free(zds->inBuff, zds->customMem);
-                            zds->inBuffSize = 0;
-                            zds->outBuffSize = 0;
-                            zds->inBuff = (char*)ZSTD_malloc(bufferSize, zds->customMem);
-                            RETURN_ERROR_IF(zds->inBuff == NULL, memory_allocation, "");
-                        }
-                        zds->inBuffSize = neededInBuffSize;
-                        zds->outBuff = zds->inBuff + zds->inBuffSize;
-                        zds->outBuffSize = neededOutBuffSize;
-            }   }   }
-            zds->streamStage = zdss_read;
-            /* fall-through */
-
-        case zdss_read:
-            DEBUGLOG(5, "stage zdss_read");
-            {   size_t const neededInSize = ZSTD_nextSrcSizeToDecompressWithInputSize(zds, iend - ip);
-                DEBUGLOG(5, "neededInSize = %u", (U32)neededInSize);
-                if (neededInSize==0) {  /* end of frame */
-                    zds->streamStage = zdss_init;
-                    someMoreWork = 0;
-                    break;
-                }
-                if ((size_t)(iend-ip) >= neededInSize) {  /* decode directly from src */
-                    FORWARD_IF_ERROR(ZSTD_decompressContinueStream(zds, &op, oend, ip, neededInSize), "");
-                    ip += neededInSize;
-                    /* Function modifies the stage so we must break */
-                    break;
-            }   }
-            if (ip==iend) { someMoreWork = 0; break; }   /* no more input */
-            zds->streamStage = zdss_load;
-            /* fall-through */
-
-        case zdss_load:
-            {   size_t const neededInSize = ZSTD_nextSrcSizeToDecompress(zds);
-                size_t const toLoad = neededInSize - zds->inPos;
-                int const isSkipFrame = ZSTD_isSkipFrame(zds);
-                size_t loadedSize;
-                /* At this point we shouldn't be decompressing a block that we can stream. */
-                assert(neededInSize == ZSTD_nextSrcSizeToDecompressWithInputSize(zds, iend - ip));
-                if (isSkipFrame) {
-                    loadedSize = MIN(toLoad, (size_t)(iend-ip));
-                } else {
-                    RETURN_ERROR_IF(toLoad > zds->inBuffSize - zds->inPos,
-                                    corruption_detected,
-                                    "should never happen");
-                    loadedSize = ZSTD_limitCopy(zds->inBuff + zds->inPos, toLoad, ip, iend-ip);
-                }
-                ip += loadedSize;
-                zds->inPos += loadedSize;
-                if (loadedSize < toLoad) { someMoreWork = 0; break; }   /* not enough input, wait for more */
-
-                /* decode loaded input */
-                zds->inPos = 0;   /* input is consumed */
-                FORWARD_IF_ERROR(ZSTD_decompressContinueStream(zds, &op, oend, zds->inBuff, neededInSize), "");
-                /* Function modifies the stage so we must break */
-                break;
-            }
-        case zdss_flush:
-            {   size_t const toFlushSize = zds->outEnd - zds->outStart;
-                size_t const flushedSize = ZSTD_limitCopy(op, oend-op, zds->outBuff + zds->outStart, toFlushSize);
-                op += flushedSize;
-                zds->outStart += flushedSize;
-                if (flushedSize == toFlushSize) {  /* flush completed */
-                    zds->streamStage = zdss_read;
-                    if ( (zds->outBuffSize < zds->fParams.frameContentSize)
-                      && (zds->outStart + zds->fParams.blockSizeMax > zds->outBuffSize) ) {
-                        DEBUGLOG(5, "restart filling outBuff from beginning (left:%i, needed:%u)",
-                                (int)(zds->outBuffSize - zds->outStart),
-                                (U32)zds->fParams.blockSizeMax);
-                        zds->outStart = zds->outEnd = 0;
-                    }
-                    break;
-            }   }
-            /* cannot complete flush */
-            someMoreWork = 0;
-            break;
-
-        default:
-            assert(0);    /* impossible */
-            RETURN_ERROR(GENERIC, "impossible to reach");   /* some compiler require default to do something */
-    }   }
-
-    /* result */
-    input->pos = (size_t)(ip - (const char*)(input->src));
-    output->pos = (size_t)(op - (char*)(output->dst));
-
-    /* Update the expected output buffer for ZSTD_obm_stable. */
-    zds->expectedOutBuffer = *output;
-
-    if ((ip==istart) && (op==ostart)) {  /* no forward progress */
-        zds->noForwardProgress ++;
-        if (zds->noForwardProgress >= ZSTD_NO_FORWARD_PROGRESS_MAX) {
-            RETURN_ERROR_IF(op==oend, dstSize_tooSmall, "");
-            RETURN_ERROR_IF(ip==iend, srcSize_wrong, "");
-            assert(0);
-        }
-    } else {
-        zds->noForwardProgress = 0;
-    }
-    {   size_t nextSrcSizeHint = ZSTD_nextSrcSizeToDecompress(zds);
-        if (!nextSrcSizeHint) {   /* frame fully decoded */
-            if (zds->outEnd == zds->outStart) {  /* output fully flushed */
-                if (zds->hostageByte) {
-                    if (input->pos >= input->size) {
-                        /* can't release hostage (not present) */
-                        zds->streamStage = zdss_read;
-                        return 1;
-                    }
-                    input->pos++;  /* release hostage */
-                }   /* zds->hostageByte */
-                return 0;
-            }  /* zds->outEnd == zds->outStart */
-            if (!zds->hostageByte) { /* output not fully flushed; keep last byte as hostage; will be released when all output is flushed */
-                input->pos--;   /* note : pos > 0, otherwise, impossible to finish reading last block */
-                zds->hostageByte=1;
-            }
-            return 1;
-        }  /* nextSrcSizeHint==0 */
-        nextSrcSizeHint += ZSTDInternalConstants::ZSTD_blockHeaderSize * (ZSTD_nextInputType(zds) == ZSTDnit_block);   /* preload header of next block */
-        assert(zds->inPos <= nextSrcSizeHint);
-        nextSrcSizeHint -= zds->inPos;   /* part already loaded*/
-        return nextSrcSizeHint;
-    }
-}
-
-size_t ZSTD_decompressStream_simpleArgs (
-                            ZSTD_DCtx* dctx,
-                            void* dst, size_t dstCapacity, size_t* dstPos,
-                      const void* src, size_t srcSize, size_t* srcPos)
-{
-    ZSTD_outBuffer output = { dst, dstCapacity, *dstPos };
-    ZSTD_inBuffer  input  = { src, srcSize, *srcPos };
-    /* ZSTD_compress_generic() will check validity of dstPos and srcPos */
-    size_t const cErr = ZSTD_decompressStream(dctx, &output, &input);
-    *dstPos = output.pos;
-    *srcPos = input.pos;
-    return cErr;
-}
-
-}
-
-
-// LICENSE_CHANGE_END
 
 
 // LICENSE_CHANGE_BEGIN
 // The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
-/*
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
- */
+// Copyright 2008 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// Internals shared between the Snappy implementation and its unittest.
 
-/* zstd_decompress_block :
- * this module takes care of decompressing _compressed_ block */
-
-/*-*******************************************************
-*  Dependencies
-*********************************************************/
-#include <string.h>      /* memcpy, memmove, memset */
-    /* prefetch */
-         /* low level memory routines */
-
-
-
-
-
-   /* ZSTD_DCtx */
-  /* ZSTD_DDictDictContent */
-
-namespace duckdb_zstd {
-/*_*******************************************************
-*  Macros
-**********************************************************/
-
-/* These two optional macros force the use one way or another of the two
- * ZSTD_decompressSequences implementations. You can't force in both directions
- * at the same time.
- */
-#if defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
-    defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
-#error "Cannot force the use of the short and the long ZSTD_decompressSequences variants!"
-#endif
+#ifndef THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
+#define THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
 
 
-/*_*******************************************************
-*  Memory operations
-**********************************************************/
-static void ZSTD_copy4(void* dst, const void* src) { memcpy(dst, src, 4); }
 
+namespace duckdb_snappy {
+namespace internal {
 
-/*-*************************************************************
- *   Block decoding
- ***************************************************************/
+// Working memory performs a single allocation to hold all scratch space
+// required for compression.
+class WorkingMemory {
+ public:
+  explicit WorkingMemory(size_t input_size);
+  ~WorkingMemory();
 
-/*! ZSTD_getcBlockSize() :
- *  Provides the size of compressed block from block header `src` */
-size_t ZSTD_getcBlockSize(const void* src, size_t srcSize,
-                          blockProperties_t* bpPtr)
-{
-    RETURN_ERROR_IF(srcSize < ZSTDInternalConstants::ZSTD_blockHeaderSize, srcSize_wrong, "");
+  // Allocates and clears a hash table using memory in "*this",
+  // stores the number of buckets in "*table_size" and returns a pointer to
+  // the base of the hash table.
+  uint16* GetHashTable(size_t fragment_size, int* table_size) const;
+  char* GetScratchInput() const { return input_; }
+  char* GetScratchOutput() const { return output_; }
 
-    {   U32 const cBlockHeader = MEM_readLE24(src);
-        U32 const cSize = cBlockHeader >> 3;
-        bpPtr->lastBlock = cBlockHeader & 1;
-        bpPtr->blockType = (blockType_e)((cBlockHeader >> 1) & 3);
-        bpPtr->origSize = cSize;   /* only useful for RLE */
-        if (bpPtr->blockType == bt_rle) return 1;
-        RETURN_ERROR_IF(bpPtr->blockType == bt_reserved, corruption_detected, "");
-        return cSize;
-    }
-}
+ private:
+  char* mem_;      // the allocated memory, never nullptr
+  size_t size_;    // the size of the allocated memory, never 0
+  uint16* table_;  // the pointer to the hashtable
+  char* input_;    // the pointer to the input scratch buffer
+  char* output_;   // the pointer to the output scratch buffer
 
+  // No copying
+  WorkingMemory(const WorkingMemory&);
+  void operator=(const WorkingMemory&);
+};
 
-/* Hidden declaration for fullbench */
-size_t ZSTD_decodeLiteralsBlock(ZSTD_DCtx* dctx,
-                          const void* src, size_t srcSize);
-/*! ZSTD_decodeLiteralsBlock() :
- * @return : nb of bytes read from src (< srcSize )
- *  note : symbol not declared but exposed for fullbench */
-size_t ZSTD_decodeLiteralsBlock(ZSTD_DCtx* dctx,
-                          const void* src, size_t srcSize)   /* note : srcSize < BLOCKSIZE */
-{
-    DEBUGLOG(5, "ZSTD_decodeLiteralsBlock");
-    RETURN_ERROR_IF(srcSize < MIN_CBLOCK_SIZE, corruption_detected, "");
+// Flat array compression that does not emit the "uncompressed length"
+// prefix. Compresses "input" string to the "*op" buffer.
+//
+// REQUIRES: "input_length <= kBlockSize"
+// REQUIRES: "op" points to an array of memory that is at least
+// "MaxCompressedLength(input_length)" in size.
+// REQUIRES: All elements in "table[0..table_size-1]" are initialized to zero.
+// REQUIRES: "table_size" is a power of two
+//
+// Returns an "end" pointer into "op" buffer.
+// "end - op" is the compressed size of "input".
+char* CompressFragment(const char* input,
+                       size_t input_length,
+                       char* op,
+                       uint16* table,
+                       const int table_size);
 
-    {   const BYTE* const istart = (const BYTE*) src;
-        symbolEncodingType_e const litEncType = (symbolEncodingType_e)(istart[0] & 3);
+// Find the largest n such that
+//
+//   s1[0,n-1] == s2[0,n-1]
+//   and n <= (s2_limit - s2).
+//
+// Return make_pair(n, n < 8).
+// Does not read *s2_limit or beyond.
+// Does not read *(s1 + (s2_limit - s2)) or beyond.
+// Requires that s2_limit >= s2.
+//
+// Separate implementation for 64-bit, little-endian cpus.
+#if !defined(SNAPPY_IS_BIG_ENDIAN) && \
+    (defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM))
+static inline std::pair<size_t, bool> FindMatchLength(const char* s1,
+                                                      const char* s2,
+                                                      const char* s2_limit) {
+  assert(s2_limit >= s2);
+  size_t matched = 0;
 
-        switch(litEncType)
-        {
-        case set_repeat:
-            DEBUGLOG(5, "set_repeat flag : re-using stats from previous compressed literals block");
-            RETURN_ERROR_IF(dctx->litEntropy==0, dictionary_corrupted, "");
-            /* fall-through */
-
-        case set_compressed:
-            RETURN_ERROR_IF(srcSize < 5, corruption_detected, "srcSize >= MIN_CBLOCK_SIZE == 3; here we need up to 5 for case 3");
-            {   size_t lhSize, litSize, litCSize;
-                U32 singleStream=0;
-                U32 const lhlCode = (istart[0] >> 2) & 3;
-                U32 const lhc = MEM_readLE32(istart);
-                size_t hufSuccess;
-                switch(lhlCode)
-                {
-                case 0: case 1: default:   /* note : default is impossible, since lhlCode into [0..3] */
-                    /* 2 - 2 - 10 - 10 */
-                    singleStream = !lhlCode;
-                    lhSize = 3;
-                    litSize  = (lhc >> 4) & 0x3FF;
-                    litCSize = (lhc >> 14) & 0x3FF;
-                    break;
-                case 2:
-                    /* 2 - 2 - 14 - 14 */
-                    lhSize = 4;
-                    litSize  = (lhc >> 4) & 0x3FFF;
-                    litCSize = lhc >> 18;
-                    break;
-                case 3:
-                    /* 2 - 2 - 18 - 18 */
-                    lhSize = 5;
-                    litSize  = (lhc >> 4) & 0x3FFFF;
-                    litCSize = (lhc >> 22) + ((size_t)istart[4] << 10);
-                    break;
-                }
-                RETURN_ERROR_IF(litSize > ZSTD_BLOCKSIZE_MAX, corruption_detected, "");
-                RETURN_ERROR_IF(litCSize + lhSize > srcSize, corruption_detected, "");
-
-                /* prefetch huffman table if cold */
-                if (dctx->ddictIsCold && (litSize > 768 /* heuristic */)) {
-                    PREFETCH_AREA(dctx->HUFptr, sizeof(dctx->entropy.hufTable));
-                }
-
-                if (litEncType==set_repeat) {
-                    if (singleStream) {
-                        hufSuccess = HUF_decompress1X_usingDTable_bmi2(
-                            dctx->litBuffer, litSize, istart+lhSize, litCSize,
-                            dctx->HUFptr, dctx->bmi2);
-                    } else {
-                        hufSuccess = HUF_decompress4X_usingDTable_bmi2(
-                            dctx->litBuffer, litSize, istart+lhSize, litCSize,
-                            dctx->HUFptr, dctx->bmi2);
-                    }
-                } else {
-                    if (singleStream) {
-#if defined(HUF_FORCE_DECOMPRESS_X2)
-                        hufSuccess = HUF_decompress1X_DCtx_wksp(
-                            dctx->entropy.hufTable, dctx->litBuffer, litSize,
-                            istart+lhSize, litCSize, dctx->workspace,
-                            sizeof(dctx->workspace));
-#else
-                        hufSuccess = HUF_decompress1X1_DCtx_wksp_bmi2(
-                            dctx->entropy.hufTable, dctx->litBuffer, litSize,
-                            istart+lhSize, litCSize, dctx->workspace,
-                            sizeof(dctx->workspace), dctx->bmi2);
-#endif
-                    } else {
-                        hufSuccess = HUF_decompress4X_hufOnly_wksp_bmi2(
-                            dctx->entropy.hufTable, dctx->litBuffer, litSize,
-                            istart+lhSize, litCSize, dctx->workspace,
-                            sizeof(dctx->workspace), dctx->bmi2);
-                    }
-                }
-
-                RETURN_ERROR_IF(HUF_isError(hufSuccess), corruption_detected, "");
-
-                dctx->litPtr = dctx->litBuffer;
-                dctx->litSize = litSize;
-                dctx->litEntropy = 1;
-                if (litEncType==set_compressed) dctx->HUFptr = dctx->entropy.hufTable;
-                memset(dctx->litBuffer + dctx->litSize, 0, WILDCOPY_OVERLENGTH);
-                return litCSize + lhSize;
-            }
-
-        case set_basic:
-            {   size_t litSize, lhSize;
-                U32 const lhlCode = ((istart[0]) >> 2) & 3;
-                switch(lhlCode)
-                {
-                case 0: case 2: default:   /* note : default is impossible, since lhlCode into [0..3] */
-                    lhSize = 1;
-                    litSize = istart[0] >> 3;
-                    break;
-                case 1:
-                    lhSize = 2;
-                    litSize = MEM_readLE16(istart) >> 4;
-                    break;
-                case 3:
-                    lhSize = 3;
-                    litSize = MEM_readLE24(istart) >> 4;
-                    break;
-                }
-
-                if (lhSize+litSize+WILDCOPY_OVERLENGTH > srcSize) {  /* risk reading beyond src buffer with wildcopy */
-                    RETURN_ERROR_IF(litSize+lhSize > srcSize, corruption_detected, "");
-                    memcpy(dctx->litBuffer, istart+lhSize, litSize);
-                    dctx->litPtr = dctx->litBuffer;
-                    dctx->litSize = litSize;
-                    memset(dctx->litBuffer + dctx->litSize, 0, WILDCOPY_OVERLENGTH);
-                    return lhSize+litSize;
-                }
-                /* direct reference into compressed stream */
-                dctx->litPtr = istart+lhSize;
-                dctx->litSize = litSize;
-                return lhSize+litSize;
-            }
-
-        case set_rle:
-            {   U32 const lhlCode = ((istart[0]) >> 2) & 3;
-                size_t litSize, lhSize;
-                switch(lhlCode)
-                {
-                case 0: case 2: default:   /* note : default is impossible, since lhlCode into [0..3] */
-                    lhSize = 1;
-                    litSize = istart[0] >> 3;
-                    break;
-                case 1:
-                    lhSize = 2;
-                    litSize = MEM_readLE16(istart) >> 4;
-                    break;
-                case 3:
-                    lhSize = 3;
-                    litSize = MEM_readLE24(istart) >> 4;
-                    RETURN_ERROR_IF(srcSize<4, corruption_detected, "srcSize >= MIN_CBLOCK_SIZE == 3; here we need lhSize+1 = 4");
-                    break;
-                }
-                RETURN_ERROR_IF(litSize > ZSTD_BLOCKSIZE_MAX, corruption_detected, "");
-                memset(dctx->litBuffer, istart[lhSize], litSize + WILDCOPY_OVERLENGTH);
-                dctx->litPtr = dctx->litBuffer;
-                dctx->litSize = litSize;
-                return lhSize+1;
-            }
-        default:
-            RETURN_ERROR(corruption_detected, "impossible");
-        }
-    }
-}
-
-/* Default FSE distribution tables.
- * These are pre-calculated FSE decoding tables using default distributions as defined in specification :
- * https://github.com/facebook/zstd/blob/master/doc/zstd_compression_format.md#default-distributions
- * They were generated programmatically with following method :
- * - start from default distributions, present in /lib/common/zstd_internal.h
- * - generate tables normally, using ZSTD_buildFSETable()
- * - printout the content of tables
- * - pretify output, report below, test with fuzzer to ensure it's correct */
-
-/* Default FSE distribution table for Literal Lengths */
-static const ZSTD_seqSymbol LL_defaultDTable[(1<<LL_DEFAULTNORMLOG)+1] = {
-     {  1,  1,  1, LL_DEFAULTNORMLOG},  /* header : fastMode, tableLog */
-     /* nextState, nbAddBits, nbBits, baseVal */
-     {  0,  0,  4,    0},  { 16,  0,  4,    0},
-     { 32,  0,  5,    1},  {  0,  0,  5,    3},
-     {  0,  0,  5,    4},  {  0,  0,  5,    6},
-     {  0,  0,  5,    7},  {  0,  0,  5,    9},
-     {  0,  0,  5,   10},  {  0,  0,  5,   12},
-     {  0,  0,  6,   14},  {  0,  1,  5,   16},
-     {  0,  1,  5,   20},  {  0,  1,  5,   22},
-     {  0,  2,  5,   28},  {  0,  3,  5,   32},
-     {  0,  4,  5,   48},  { 32,  6,  5,   64},
-     {  0,  7,  5,  128},  {  0,  8,  6,  256},
-     {  0, 10,  6, 1024},  {  0, 12,  6, 4096},
-     { 32,  0,  4,    0},  {  0,  0,  4,    1},
-     {  0,  0,  5,    2},  { 32,  0,  5,    4},
-     {  0,  0,  5,    5},  { 32,  0,  5,    7},
-     {  0,  0,  5,    8},  { 32,  0,  5,   10},
-     {  0,  0,  5,   11},  {  0,  0,  6,   13},
-     { 32,  1,  5,   16},  {  0,  1,  5,   18},
-     { 32,  1,  5,   22},  {  0,  2,  5,   24},
-     { 32,  3,  5,   32},  {  0,  3,  5,   40},
-     {  0,  6,  4,   64},  { 16,  6,  4,   64},
-     { 32,  7,  5,  128},  {  0,  9,  6,  512},
-     {  0, 11,  6, 2048},  { 48,  0,  4,    0},
-     { 16,  0,  4,    1},  { 32,  0,  5,    2},
-     { 32,  0,  5,    3},  { 32,  0,  5,    5},
-     { 32,  0,  5,    6},  { 32,  0,  5,    8},
-     { 32,  0,  5,    9},  { 32,  0,  5,   11},
-     { 32,  0,  5,   12},  {  0,  0,  6,   15},
-     { 32,  1,  5,   18},  { 32,  1,  5,   20},
-     { 32,  2,  5,   24},  { 32,  2,  5,   28},
-     { 32,  3,  5,   40},  { 32,  4,  5,   48},
-     {  0, 16,  6,65536},  {  0, 15,  6,32768},
-     {  0, 14,  6,16384},  {  0, 13,  6, 8192},
-};   /* LL_defaultDTable */
-
-/* Default FSE distribution table for Offset Codes */
-static const ZSTD_seqSymbol OF_defaultDTable[(1<<OF_DEFAULTNORMLOG)+1] = {
-    {  1,  1,  1, OF_DEFAULTNORMLOG},  /* header : fastMode, tableLog */
-    /* nextState, nbAddBits, nbBits, baseVal */
-    {  0,  0,  5,    0},     {  0,  6,  4,   61},
-    {  0,  9,  5,  509},     {  0, 15,  5,32765},
-    {  0, 21,  5,2097149},   {  0,  3,  5,    5},
-    {  0,  7,  4,  125},     {  0, 12,  5, 4093},
-    {  0, 18,  5,262141},    {  0, 23,  5,8388605},
-    {  0,  5,  5,   29},     {  0,  8,  4,  253},
-    {  0, 14,  5,16381},     {  0, 20,  5,1048573},
-    {  0,  2,  5,    1},     { 16,  7,  4,  125},
-    {  0, 11,  5, 2045},     {  0, 17,  5,131069},
-    {  0, 22,  5,4194301},   {  0,  4,  5,   13},
-    { 16,  8,  4,  253},     {  0, 13,  5, 8189},
-    {  0, 19,  5,524285},    {  0,  1,  5,    1},
-    { 16,  6,  4,   61},     {  0, 10,  5, 1021},
-    {  0, 16,  5,65533},     {  0, 28,  5,268435453},
-    {  0, 27,  5,134217725}, {  0, 26,  5,67108861},
-    {  0, 25,  5,33554429},  {  0, 24,  5,16777213},
-};   /* OF_defaultDTable */
-
-
-/* Default FSE distribution table for Match Lengths */
-static const ZSTD_seqSymbol ML_defaultDTable[(1<<ML_DEFAULTNORMLOG)+1] = {
-    {  1,  1,  1, ML_DEFAULTNORMLOG},  /* header : fastMode, tableLog */
-    /* nextState, nbAddBits, nbBits, baseVal */
-    {  0,  0,  6,    3},  {  0,  0,  4,    4},
-    { 32,  0,  5,    5},  {  0,  0,  5,    6},
-    {  0,  0,  5,    8},  {  0,  0,  5,    9},
-    {  0,  0,  5,   11},  {  0,  0,  6,   13},
-    {  0,  0,  6,   16},  {  0,  0,  6,   19},
-    {  0,  0,  6,   22},  {  0,  0,  6,   25},
-    {  0,  0,  6,   28},  {  0,  0,  6,   31},
-    {  0,  0,  6,   34},  {  0,  1,  6,   37},
-    {  0,  1,  6,   41},  {  0,  2,  6,   47},
-    {  0,  3,  6,   59},  {  0,  4,  6,   83},
-    {  0,  7,  6,  131},  {  0,  9,  6,  515},
-    { 16,  0,  4,    4},  {  0,  0,  4,    5},
-    { 32,  0,  5,    6},  {  0,  0,  5,    7},
-    { 32,  0,  5,    9},  {  0,  0,  5,   10},
-    {  0,  0,  6,   12},  {  0,  0,  6,   15},
-    {  0,  0,  6,   18},  {  0,  0,  6,   21},
-    {  0,  0,  6,   24},  {  0,  0,  6,   27},
-    {  0,  0,  6,   30},  {  0,  0,  6,   33},
-    {  0,  1,  6,   35},  {  0,  1,  6,   39},
-    {  0,  2,  6,   43},  {  0,  3,  6,   51},
-    {  0,  4,  6,   67},  {  0,  5,  6,   99},
-    {  0,  8,  6,  259},  { 32,  0,  4,    4},
-    { 48,  0,  4,    4},  { 16,  0,  4,    5},
-    { 32,  0,  5,    7},  { 32,  0,  5,    8},
-    { 32,  0,  5,   10},  { 32,  0,  5,   11},
-    {  0,  0,  6,   14},  {  0,  0,  6,   17},
-    {  0,  0,  6,   20},  {  0,  0,  6,   23},
-    {  0,  0,  6,   26},  {  0,  0,  6,   29},
-    {  0,  0,  6,   32},  {  0, 16,  6,65539},
-    {  0, 15,  6,32771},  {  0, 14,  6,16387},
-    {  0, 13,  6, 8195},  {  0, 12,  6, 4099},
-    {  0, 11,  6, 2051},  {  0, 10,  6, 1027},
-};   /* ML_defaultDTable */
-
-
-static void ZSTD_buildSeqTable_rle(ZSTD_seqSymbol* dt, U32 baseValue, U32 nbAddBits)
-{
-    void* ptr = dt;
-    ZSTD_seqSymbol_header* const DTableH = (ZSTD_seqSymbol_header*)ptr;
-    ZSTD_seqSymbol* const cell = dt + 1;
-
-    DTableH->tableLog = 0;
-    DTableH->fastMode = 0;
-
-    cell->nbBits = 0;
-    cell->nextState = 0;
-    assert(nbAddBits < 255);
-    cell->nbAdditionalBits = (BYTE)nbAddBits;
-    cell->baseValue = baseValue;
-}
-
-
-/* ZSTD_buildFSETable() :
- * generate FSE decoding table for one symbol (ll, ml or off)
- * cannot fail if input is valid =>
- * all inputs are presumed validated at this stage */
-void
-ZSTD_buildFSETable(ZSTD_seqSymbol* dt,
-            const short* normalizedCounter, unsigned maxSymbolValue,
-            const U32* baseValue, const U32* nbAdditionalBits,
-            unsigned tableLog)
-{
-    ZSTD_seqSymbol* const tableDecode = dt+1;
-    U16 symbolNext[MaxSeq+1];
-
-    U32 const maxSV1 = maxSymbolValue + 1;
-    U32 const tableSize = 1 << tableLog;
-    U32 highThreshold = tableSize-1;
-
-    /* Sanity Checks */
-    assert(maxSymbolValue <= MaxSeq);
-    assert(tableLog <= MaxFSELog);
-
-    /* Init, lay down lowprob symbols */
-    {   ZSTD_seqSymbol_header DTableH;
-        DTableH.tableLog = tableLog;
-        DTableH.fastMode = 1;
-        {   S16 const largeLimit= (S16)(1 << (tableLog-1));
-            U32 s;
-            for (s=0; s<maxSV1; s++) {
-                if (normalizedCounter[s]==-1) {
-                    tableDecode[highThreshold--].baseValue = s;
-                    symbolNext[s] = 1;
-                } else {
-                    if (normalizedCounter[s] >= largeLimit) DTableH.fastMode=0;
-                    assert(normalizedCounter[s]>=0);
-                    symbolNext[s] = (U16)normalizedCounter[s];
-        }   }   }
-        memcpy(dt, &DTableH, sizeof(DTableH));
-    }
-
-    /* Spread symbols */
-    {   U32 const tableMask = tableSize-1;
-        U32 const step = FSE_TABLESTEP(tableSize);
-        U32 s, position = 0;
-        for (s=0; s<maxSV1; s++) {
-            int i;
-            for (i=0; i<normalizedCounter[s]; i++) {
-                tableDecode[position].baseValue = s;
-                position = (position + step) & tableMask;
-                while (position > highThreshold) position = (position + step) & tableMask;   /* lowprob area */
-        }   }
-        assert(position == 0); /* position must reach all cells once, otherwise normalizedCounter is incorrect */
-    }
-
-    /* Build Decoding table */
-    {   U32 u;
-        for (u=0; u<tableSize; u++) {
-            U32 const symbol = tableDecode[u].baseValue;
-            U32 const nextState = symbolNext[symbol]++;
-            tableDecode[u].nbBits = (BYTE) (tableLog - BIT_highbit32(nextState) );
-            tableDecode[u].nextState = (U16) ( (nextState << tableDecode[u].nbBits) - tableSize);
-            assert(nbAdditionalBits[symbol] < 255);
-            tableDecode[u].nbAdditionalBits = (BYTE)nbAdditionalBits[symbol];
-            tableDecode[u].baseValue = baseValue[symbol];
-    }   }
-}
-
-
-/*! ZSTD_buildSeqTable() :
- * @return : nb bytes read from src,
- *           or an error code if it fails */
-static size_t ZSTD_buildSeqTable(ZSTD_seqSymbol* DTableSpace, const ZSTD_seqSymbol** DTablePtr,
-                                 symbolEncodingType_e type, unsigned max, U32 maxLog,
-                                 const void* src, size_t srcSize,
-                                 const U32* baseValue, const U32* nbAdditionalBits,
-                                 const ZSTD_seqSymbol* defaultTable, U32 flagRepeatTable,
-                                 int ddictIsCold, int nbSeq)
-{
-    switch(type)
-    {
-    case set_rle :
-        RETURN_ERROR_IF(!srcSize, srcSize_wrong, "");
-        RETURN_ERROR_IF((*(const BYTE*)src) > max, corruption_detected, "");
-        {   U32 const symbol = *(const BYTE*)src;
-            U32 const baseline = baseValue[symbol];
-            U32 const nbBits = nbAdditionalBits[symbol];
-            ZSTD_buildSeqTable_rle(DTableSpace, baseline, nbBits);
-        }
-        *DTablePtr = DTableSpace;
-        return 1;
-    case set_basic :
-        *DTablePtr = defaultTable;
-        return 0;
-    case set_repeat:
-        RETURN_ERROR_IF(!flagRepeatTable, corruption_detected, "");
-        /* prefetch FSE table if used */
-        if (ddictIsCold && (nbSeq > 24 /* heuristic */)) {
-            const void* const pStart = *DTablePtr;
-            size_t const pSize = sizeof(ZSTD_seqSymbol) * (SEQSYMBOL_TABLE_SIZE(maxLog));
-            PREFETCH_AREA(pStart, pSize);
-        }
-        return 0;
-    case set_compressed :
-        {   unsigned tableLog;
-            S16 norm[MaxSeq+1];
-            size_t const headerSize = FSE_readNCount(norm, &max, &tableLog, src, srcSize);
-            RETURN_ERROR_IF(FSE_isError(headerSize), corruption_detected, "");
-            RETURN_ERROR_IF(tableLog > maxLog, corruption_detected, "");
-            ZSTD_buildFSETable(DTableSpace, norm, max, baseValue, nbAdditionalBits, tableLog);
-            *DTablePtr = DTableSpace;
-            return headerSize;
-        }
-    default :
-        assert(0);
-        RETURN_ERROR(GENERIC, "impossible");
-    }
-}
-
-size_t ZSTD_decodeSeqHeaders(ZSTD_DCtx* dctx, int* nbSeqPtr,
-                             const void* src, size_t srcSize)
-{
-    const BYTE* const istart = (const BYTE* const)src;
-    const BYTE* const iend = istart + srcSize;
-    const BYTE* ip = istart;
-    int nbSeq;
-    DEBUGLOG(5, "ZSTD_decodeSeqHeaders");
-
-    /* check */
-    RETURN_ERROR_IF(srcSize < MIN_SEQUENCES_SIZE, srcSize_wrong, "");
-
-    /* SeqHead */
-    nbSeq = *ip++;
-    if (!nbSeq) {
-        *nbSeqPtr=0;
-        RETURN_ERROR_IF(srcSize != 1, srcSize_wrong, "");
-        return 1;
-    }
-    if (nbSeq > 0x7F) {
-        if (nbSeq == 0xFF) {
-            RETURN_ERROR_IF(ip+2 > iend, srcSize_wrong, "");
-            nbSeq = MEM_readLE16(ip) + LONGNBSEQ, ip+=2;
-        } else {
-            RETURN_ERROR_IF(ip >= iend, srcSize_wrong, "");
-            nbSeq = ((nbSeq-0x80)<<8) + *ip++;
-        }
-    }
-    *nbSeqPtr = nbSeq;
-
-    /* FSE table descriptors */
-    RETURN_ERROR_IF(ip+1 > iend, srcSize_wrong, ""); /* minimum possible size: 1 byte for symbol encoding types */
-    {   symbolEncodingType_e const LLtype = (symbolEncodingType_e)(*ip >> 6);
-        symbolEncodingType_e const OFtype = (symbolEncodingType_e)((*ip >> 4) & 3);
-        symbolEncodingType_e const MLtype = (symbolEncodingType_e)((*ip >> 2) & 3);
-        ip++;
-
-        /* Build DTables */
-        {   size_t const llhSize = ZSTD_buildSeqTable(dctx->entropy.LLTable, &dctx->LLTptr,
-                                                      LLtype, MaxLL, LLFSELog,
-                                                      ip, iend-ip,
-                                                      ZSTDConstants::LL_base, ZSTDInternalConstants::LL_bits,
-                                                      LL_defaultDTable, dctx->fseEntropy,
-                                                      dctx->ddictIsCold, nbSeq);
-            RETURN_ERROR_IF(ZSTD_isError(llhSize), corruption_detected, "ZSTD_buildSeqTable failed");
-            ip += llhSize;
-        }
-
-        {   size_t const ofhSize = ZSTD_buildSeqTable(dctx->entropy.OFTable, &dctx->OFTptr,
-                                                      OFtype, MaxOff, OffFSELog,
-                                                      ip, iend-ip,
-                                                      ZSTDConstants::OF_base, ZSTDConstants::OF_bits,
-                                                      OF_defaultDTable, dctx->fseEntropy,
-                                                      dctx->ddictIsCold, nbSeq);
-            RETURN_ERROR_IF(ZSTD_isError(ofhSize), corruption_detected, "ZSTD_buildSeqTable failed");
-            ip += ofhSize;
-        }
-
-        {   size_t const mlhSize = ZSTD_buildSeqTable(dctx->entropy.MLTable, &dctx->MLTptr,
-                                                      MLtype, MaxML, MLFSELog,
-                                                      ip, iend-ip,
-                                                      ZSTDConstants::ML_base, ZSTDInternalConstants::ML_bits,
-                                                      ML_defaultDTable, dctx->fseEntropy,
-                                                      dctx->ddictIsCold, nbSeq);
-            RETURN_ERROR_IF(ZSTD_isError(mlhSize), corruption_detected, "ZSTD_buildSeqTable failed");
-            ip += mlhSize;
-        }
-    }
-
-    return ip-istart;
-}
-
-
-typedef struct {
-    size_t litLength;
-    size_t matchLength;
-    size_t offset;
-    const BYTE* match;
-} seq_t;
-
-typedef struct {
-    size_t state;
-    const ZSTD_seqSymbol* table;
-} ZSTD_fseState;
-
-typedef struct {
-    BIT_DStream_t DStream;
-    ZSTD_fseState stateLL;
-    ZSTD_fseState stateOffb;
-    ZSTD_fseState stateML;
-    size_t prevOffset[ZSTD_REP_NUM];
-    const BYTE* prefixStart;
-    const BYTE* dictEnd;
-    size_t pos;
-} seqState_t;
-
-/*! ZSTD_overlapCopy8() :
- *  Copies 8 bytes from ip to op and updates op and ip where ip <= op.
- *  If the offset is < 8 then the offset is spread to at least 8 bytes.
- *
- *  Precondition: *ip <= *op
- *  Postcondition: *op - *op >= 8
- */
-HINT_INLINE void ZSTD_overlapCopy8(BYTE** op, BYTE const** ip, size_t offset) {
-    assert(*ip <= *op);
-    if (offset < 8) {
-        /* close range match, overlap */
-        static const U32 dec32table[] = { 0, 1, 2, 1, 4, 4, 4, 4 };   /* added */
-        static const int dec64table[] = { 8, 8, 8, 7, 8, 9,10,11 };   /* subtracted */
-        int const sub2 = dec64table[offset];
-        (*op)[0] = (*ip)[0];
-        (*op)[1] = (*ip)[1];
-        (*op)[2] = (*ip)[2];
-        (*op)[3] = (*ip)[3];
-        *ip += dec32table[offset];
-        ZSTD_copy4(*op+4, *ip);
-        *ip -= sub2;
+  // This block isn't necessary for correctness; we could just start looping
+  // immediately.  As an optimization though, it is useful.  It creates some not
+  // uncommon code paths that determine, without extra effort, whether the match
+  // length is less than 8.  In short, we are hoping to avoid a conditional
+  // branch, and perhaps get better code layout from the C++ compiler.
+  if (SNAPPY_PREDICT_TRUE(s2 <= s2_limit - 8)) {
+    uint64 a1 = UNALIGNED_LOAD64(s1);
+    uint64 a2 = UNALIGNED_LOAD64(s2);
+    if (a1 != a2) {
+      return std::pair<size_t, bool>(Bits::FindLSBSetNonZero64(a1 ^ a2) >> 3,
+                                     true);
     } else {
-        ZSTD_copy8(*op, *ip);
+      matched = 8;
+      s2 += 8;
     }
-    *ip += 8;
-    *op += 8;
-    assert(*op - *ip >= 8);
-}
+  }
 
-/*! ZSTD_safecopy() :
- *  Specialized version of memcpy() that is allowed to READ up to WILDCOPY_OVERLENGTH past the input buffer
- *  and write up to 16 bytes past oend_w (op >= oend_w is allowed).
- *  This function is only called in the uncommon case where the sequence is near the end of the block. It
- *  should be fast for a single long sequence, but can be slow for several short sequences.
- *
- *  @param ovtype controls the overlap detection
- *         - ZSTD_no_overlap: The source and destination are guaranteed to be at least WILDCOPY_VECLEN bytes apart.
- *         - ZSTD_overlap_src_before_dst: The src and dst may overlap and may be any distance apart.
- *           The src buffer must be before the dst buffer.
- */
-static void ZSTD_safecopy(BYTE* op, BYTE* const oend_w, BYTE const* ip, ptrdiff_t length, ZSTD_overlap_e ovtype) {
-    ptrdiff_t const diff = op - ip;
-    BYTE* const oend = op + length;
-
-    assert((ovtype == ZSTD_no_overlap && (diff <= -8 || diff >= 8 || op >= oend_w)) ||
-           (ovtype == ZSTD_overlap_src_before_dst && diff >= 0));
-
-    if (length < 8) {
-        /* Handle short lengths. */
-        while (op < oend) *op++ = *ip++;
-        return;
-    }
-    if (ovtype == ZSTD_overlap_src_before_dst) {
-        /* Copy 8 bytes and ensure the offset >= 8 when there can be overlap. */
-        assert(length >= 8);
-        ZSTD_overlapCopy8(&op, &ip, diff);
-        assert(op - ip >= 8);
-        assert(op <= oend);
-    }
-
-    if (oend <= oend_w) {
-        /* No risk of overwrite. */
-        ZSTD_wildcopy(op, ip, length, ovtype);
-        return;
-    }
-    if (op <= oend_w) {
-        /* Wildcopy until we get close to the end. */
-        assert(oend > oend_w);
-        ZSTD_wildcopy(op, ip, oend_w - op, ovtype);
-        ip += oend_w - op;
-        op = oend_w;
-    }
-    /* Handle the leftovers. */
-    while (op < oend) *op++ = *ip++;
-}
-
-/* ZSTD_execSequenceEnd():
- * This version handles cases that are near the end of the output buffer. It requires
- * more careful checks to make sure there is no overflow. By separating out these hard
- * and unlikely cases, we can speed up the common cases.
- *
- * NOTE: This function needs to be fast for a single long sequence, but doesn't need
- * to be optimized for many small sequences, since those fall into ZSTD_execSequence().
- */
-FORCE_NOINLINE
-size_t ZSTD_execSequenceEnd(BYTE* op,
-                            BYTE* const oend, seq_t sequence,
-                            const BYTE** litPtr, const BYTE* const litLimit,
-                            const BYTE* const prefixStart, const BYTE* const virtualStart, const BYTE* const dictEnd)
-{
-    BYTE* const oLitEnd = op + sequence.litLength;
-    size_t const sequenceLength = sequence.litLength + sequence.matchLength;
-    const BYTE* const iLitEnd = *litPtr + sequence.litLength;
-    const BYTE* match = oLitEnd - sequence.offset;
-    BYTE* const oend_w = oend - WILDCOPY_OVERLENGTH;
-
-    /* bounds checks : careful of address space overflow in 32-bit mode */
-    RETURN_ERROR_IF(sequenceLength > (size_t)(oend - op), dstSize_tooSmall, "last match must fit within dstBuffer");
-    RETURN_ERROR_IF(sequence.litLength > (size_t)(litLimit - *litPtr), corruption_detected, "try to read beyond literal buffer");
-    assert(op < op + sequenceLength);
-    assert(oLitEnd < op + sequenceLength);
-
-    /* copy literals */
-    ZSTD_safecopy(op, oend_w, *litPtr, sequence.litLength, ZSTD_no_overlap);
-    op = oLitEnd;
-    *litPtr = iLitEnd;
-
-    /* copy Match */
-    if (sequence.offset > (size_t)(oLitEnd - prefixStart)) {
-        /* offset beyond prefix */
-        RETURN_ERROR_IF(sequence.offset > (size_t)(oLitEnd - virtualStart), corruption_detected, "");
-        match = dictEnd - (prefixStart-match);
-        if (match + sequence.matchLength <= dictEnd) {
-            memmove(oLitEnd, match, sequence.matchLength);
-            return sequenceLength;
-        }
-        /* span extDict & currentPrefixSegment */
-        {   size_t const length1 = dictEnd - match;
-            memmove(oLitEnd, match, length1);
-            op = oLitEnd + length1;
-            sequence.matchLength -= length1;
-            match = prefixStart;
-    }   }
-    ZSTD_safecopy(op, oend_w, match, sequence.matchLength, ZSTD_overlap_src_before_dst);
-    return sequenceLength;
-}
-
-HINT_INLINE
-size_t ZSTD_execSequence(BYTE* op,
-                         BYTE* const oend, seq_t sequence,
-                         const BYTE** litPtr, const BYTE* const litLimit,
-                         const BYTE* const prefixStart, const BYTE* const virtualStart, const BYTE* const dictEnd)
-{
-    BYTE* const oLitEnd = op + sequence.litLength;
-    size_t const sequenceLength = sequence.litLength + sequence.matchLength;
-    BYTE* const oMatchEnd = op + sequenceLength;   /* risk : address space overflow (32-bits) */
-    BYTE* const oend_w = oend - WILDCOPY_OVERLENGTH;   /* risk : address space underflow on oend=NULL */
-    const BYTE* const iLitEnd = *litPtr + sequence.litLength;
-    const BYTE* match = oLitEnd - sequence.offset;
-
-    assert(op != NULL /* Precondition */);
-    assert(oend_w < oend /* No underflow */);
-    /* Handle edge cases in a slow path:
-     *   - Read beyond end of literals
-     *   - Match end is within WILDCOPY_OVERLIMIT of oend
-     *   - 32-bit mode and the match length overflows
-     */
-    if (UNLIKELY(
-            iLitEnd > litLimit ||
-            oMatchEnd > oend_w ||
-            (MEM_32bits() && (size_t)(oend - op) < sequenceLength + WILDCOPY_OVERLENGTH)))
-        return ZSTD_execSequenceEnd(op, oend, sequence, litPtr, litLimit, prefixStart, virtualStart, dictEnd);
-
-    /* Assumptions (everything else goes into ZSTD_execSequenceEnd()) */
-    assert(op <= oLitEnd /* No overflow */);
-    assert(oLitEnd < oMatchEnd /* Non-zero match & no overflow */);
-    assert(oMatchEnd <= oend /* No underflow */);
-    assert(iLitEnd <= litLimit /* Literal length is in bounds */);
-    assert(oLitEnd <= oend_w /* Can wildcopy literals */);
-    assert(oMatchEnd <= oend_w /* Can wildcopy matches */);
-
-    /* Copy Literals:
-     * Split out litLength <= 16 since it is nearly always true. +1.6% on gcc-9.
-     * We likely don't need the full 32-byte wildcopy.
-     */
-    assert(WILDCOPY_OVERLENGTH >= 16);
-    ZSTD_copy16(op, (*litPtr));
-    if (UNLIKELY(sequence.litLength > 16)) {
-        ZSTD_wildcopy(op+16, (*litPtr)+16, sequence.litLength-16, ZSTD_no_overlap);
-    }
-    op = oLitEnd;
-    *litPtr = iLitEnd;   /* update for next sequence */
-
-    /* Copy Match */
-    if (sequence.offset > (size_t)(oLitEnd - prefixStart)) {
-        /* offset beyond prefix -> go into extDict */
-        RETURN_ERROR_IF(UNLIKELY(sequence.offset > (size_t)(oLitEnd - virtualStart)), corruption_detected, "");
-        match = dictEnd + (match - prefixStart);
-        if (match + sequence.matchLength <= dictEnd) {
-            memmove(oLitEnd, match, sequence.matchLength);
-            return sequenceLength;
-        }
-        /* span extDict & currentPrefixSegment */
-        {   size_t const length1 = dictEnd - match;
-            memmove(oLitEnd, match, length1);
-            op = oLitEnd + length1;
-            sequence.matchLength -= length1;
-            match = prefixStart;
-    }   }
-    /* Match within prefix of 1 or more bytes */
-    assert(op <= oMatchEnd);
-    assert(oMatchEnd <= oend_w);
-    assert(match >= prefixStart);
-    assert(sequence.matchLength >= 1);
-
-    /* Nearly all offsets are >= WILDCOPY_VECLEN bytes, which means we can use wildcopy
-     * without overlap checking.
-     */
-    if (LIKELY(sequence.offset >= WILDCOPY_VECLEN)) {
-        /* We bet on a full wildcopy for matches, since we expect matches to be
-         * longer than literals (in general). In silesia, ~10% of matches are longer
-         * than 16 bytes.
-         */
-        ZSTD_wildcopy(op, match, (ptrdiff_t)sequence.matchLength, ZSTD_no_overlap);
-        return sequenceLength;
-    }
-    assert(sequence.offset < WILDCOPY_VECLEN);
-
-    /* Copy 8 bytes and spread the offset to be >= 8. */
-    ZSTD_overlapCopy8(&op, &match, sequence.offset);
-
-    /* If the match length is > 8 bytes, then continue with the wildcopy. */
-    if (sequence.matchLength > 8) {
-        assert(op < oMatchEnd);
-        ZSTD_wildcopy(op, match, (ptrdiff_t)sequence.matchLength-8, ZSTD_overlap_src_before_dst);
-    }
-    return sequenceLength;
-}
-
-static void
-ZSTD_initFseState(ZSTD_fseState* DStatePtr, BIT_DStream_t* bitD, const ZSTD_seqSymbol* dt)
-{
-    const void* ptr = dt;
-    const ZSTD_seqSymbol_header* const DTableH = (const ZSTD_seqSymbol_header*)ptr;
-    DStatePtr->state = BIT_readBits(bitD, DTableH->tableLog);
-    DEBUGLOG(6, "ZSTD_initFseState : val=%u using %u bits",
-                (U32)DStatePtr->state, DTableH->tableLog);
-    BIT_reloadDStream(bitD);
-    DStatePtr->table = dt + 1;
-}
-
-FORCE_INLINE_TEMPLATE void
-ZSTD_updateFseState(ZSTD_fseState* DStatePtr, BIT_DStream_t* bitD)
-{
-    ZSTD_seqSymbol const DInfo = DStatePtr->table[DStatePtr->state];
-    U32 const nbBits = DInfo.nbBits;
-    size_t const lowBits = BIT_readBits(bitD, nbBits);
-    DStatePtr->state = DInfo.nextState + lowBits;
-}
-
-FORCE_INLINE_TEMPLATE void
-ZSTD_updateFseStateWithDInfo(ZSTD_fseState* DStatePtr, BIT_DStream_t* bitD, ZSTD_seqSymbol const DInfo)
-{
-    U32 const nbBits = DInfo.nbBits;
-    size_t const lowBits = BIT_readBits(bitD, nbBits);
-    DStatePtr->state = DInfo.nextState + lowBits;
-}
-
-/* We need to add at most (ZSTD_WINDOWLOG_MAX_32 - 1) bits to read the maximum
- * offset bits. But we can only read at most (STREAM_ACCUMULATOR_MIN_32 - 1)
- * bits before reloading. This value is the maximum number of bytes we read
- * after reloading when we are decoding long offsets.
- */
-#define LONG_OFFSETS_MAX_EXTRA_BITS_32                       \
-    (ZSTD_WINDOWLOG_MAX_32 > STREAM_ACCUMULATOR_MIN_32       \
-        ? ZSTD_WINDOWLOG_MAX_32 - STREAM_ACCUMULATOR_MIN_32  \
-        : 0)
-
-typedef enum { ZSTD_lo_isRegularOffset, ZSTD_lo_isLongOffset=1 } ZSTD_longOffset_e;
-typedef enum { ZSTD_p_noPrefetch=0, ZSTD_p_prefetch=1 } ZSTD_prefetch_e;
-
-FORCE_INLINE_TEMPLATE seq_t
-ZSTD_decodeSequence(seqState_t* seqState, const ZSTD_longOffset_e longOffsets, const ZSTD_prefetch_e prefetch)
-{
-    seq_t seq;
-    ZSTD_seqSymbol const llDInfo = seqState->stateLL.table[seqState->stateLL.state];
-    ZSTD_seqSymbol const mlDInfo = seqState->stateML.table[seqState->stateML.state];
-    ZSTD_seqSymbol const ofDInfo = seqState->stateOffb.table[seqState->stateOffb.state];
-    U32 const llBase = llDInfo.baseValue;
-    U32 const mlBase = mlDInfo.baseValue;
-    U32 const ofBase = ofDInfo.baseValue;
-    BYTE const llBits = llDInfo.nbAdditionalBits;
-    BYTE const mlBits = mlDInfo.nbAdditionalBits;
-    BYTE const ofBits = ofDInfo.nbAdditionalBits;
-    BYTE const totalBits = llBits+mlBits+ofBits;
-
-    /* sequence */
-    {   size_t offset;
-        if (ofBits > 1) {
-            ZSTD_STATIC_ASSERT(ZSTD_lo_isLongOffset == 1);
-            ZSTD_STATIC_ASSERT(LONG_OFFSETS_MAX_EXTRA_BITS_32 == 5);
-            assert(ofBits <= MaxOff);
-            if (MEM_32bits() && longOffsets && (ofBits >= STREAM_ACCUMULATOR_MIN_32)) {
-                U32 const extraBits = ofBits - MIN(ofBits, 32 - seqState->DStream.bitsConsumed);
-                offset = ofBase + (BIT_readBitsFast(&seqState->DStream, ofBits - extraBits) << extraBits);
-                BIT_reloadDStream(&seqState->DStream);
-                if (extraBits) offset += BIT_readBitsFast(&seqState->DStream, extraBits);
-                assert(extraBits <= LONG_OFFSETS_MAX_EXTRA_BITS_32);   /* to avoid another reload */
-            } else {
-                offset = ofBase + BIT_readBitsFast(&seqState->DStream, ofBits/*>0*/);   /* <=  (ZSTD_WINDOWLOG_MAX-1) bits */
-                if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);
-            }
-            seqState->prevOffset[2] = seqState->prevOffset[1];
-            seqState->prevOffset[1] = seqState->prevOffset[0];
-            seqState->prevOffset[0] = offset;
-        } else {
-            U32 const ll0 = (llBase == 0);
-            if (LIKELY((ofBits == 0))) {
-                if (LIKELY(!ll0))
-                    offset = seqState->prevOffset[0];
-                else {
-                    offset = seqState->prevOffset[1];
-                    seqState->prevOffset[1] = seqState->prevOffset[0];
-                    seqState->prevOffset[0] = offset;
-                }
-            } else {
-                offset = ofBase + ll0 + BIT_readBitsFast(&seqState->DStream, 1);
-                {   size_t temp = (offset==3) ? seqState->prevOffset[0] - 1 : seqState->prevOffset[offset];
-                    temp += !temp;   /* 0 is not valid; input is corrupted; force offset to 1 */
-                    if (offset != 1) seqState->prevOffset[2] = seqState->prevOffset[1];
-                    seqState->prevOffset[1] = seqState->prevOffset[0];
-                    seqState->prevOffset[0] = offset = temp;
-        }   }   }
-        seq.offset = offset;
-    }
-
-    seq.matchLength = mlBase;
-    if (mlBits > 0)
-        seq.matchLength += BIT_readBitsFast(&seqState->DStream, mlBits/*>0*/);
-
-    if (MEM_32bits() && (mlBits+llBits >= STREAM_ACCUMULATOR_MIN_32-LONG_OFFSETS_MAX_EXTRA_BITS_32))
-        BIT_reloadDStream(&seqState->DStream);
-    if (MEM_64bits() && UNLIKELY(totalBits >= STREAM_ACCUMULATOR_MIN_64-(LLFSELog+MLFSELog+OffFSELog)))
-        BIT_reloadDStream(&seqState->DStream);
-    /* Ensure there are enough bits to read the rest of data in 64-bit mode. */
-    ZSTD_STATIC_ASSERT(16+LLFSELog+MLFSELog+OffFSELog < STREAM_ACCUMULATOR_MIN_64);
-
-    seq.litLength = llBase;
-    if (llBits > 0)
-        seq.litLength += BIT_readBitsFast(&seqState->DStream, llBits/*>0*/);
-
-    if (MEM_32bits())
-        BIT_reloadDStream(&seqState->DStream);
-
-    DEBUGLOG(6, "seq: litL=%u, matchL=%u, offset=%u",
-                (U32)seq.litLength, (U32)seq.matchLength, (U32)seq.offset);
-
-    if (prefetch == ZSTD_p_prefetch) {
-        size_t const pos = seqState->pos + seq.litLength;
-        const BYTE* const matchBase = (seq.offset > pos) ? seqState->dictEnd : seqState->prefixStart;
-        seq.match = matchBase + pos - seq.offset;  /* note : this operation can overflow when seq.offset is really too large, which can only happen when input is corrupted.
-                                                    * No consequence though : no memory access will occur, offset is only used for prefetching */
-        seqState->pos = pos + seq.matchLength;
-    }
-
-    /* ANS state update
-     * gcc-9.0.0 does 2.5% worse with ZSTD_updateFseStateWithDInfo().
-     * clang-9.2.0 does 7% worse with ZSTD_updateFseState().
-     * Naturally it seems like ZSTD_updateFseStateWithDInfo() should be the
-     * better option, so it is the default for other compilers. But, if you
-     * measure that it is worse, please put up a pull request.
-     */
-    {
-#if defined(__GNUC__) && !defined(__clang__)
-        const int kUseUpdateFseState = 1;
-#else
-        const int kUseUpdateFseState = 0;
-#endif
-        if (kUseUpdateFseState) {
-            ZSTD_updateFseState(&seqState->stateLL, &seqState->DStream);    /* <=  9 bits */
-            ZSTD_updateFseState(&seqState->stateML, &seqState->DStream);    /* <=  9 bits */
-            if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);    /* <= 18 bits */
-            ZSTD_updateFseState(&seqState->stateOffb, &seqState->DStream);  /* <=  8 bits */
-        } else {
-            ZSTD_updateFseStateWithDInfo(&seqState->stateLL, &seqState->DStream, llDInfo);    /* <=  9 bits */
-            ZSTD_updateFseStateWithDInfo(&seqState->stateML, &seqState->DStream, mlDInfo);    /* <=  9 bits */
-            if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);    /* <= 18 bits */
-            ZSTD_updateFseStateWithDInfo(&seqState->stateOffb, &seqState->DStream, ofDInfo);  /* <=  8 bits */
-        }
-    }
-
-    return seq;
-}
-
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-static int ZSTD_dictionaryIsActive(ZSTD_DCtx const* dctx, BYTE const* prefixStart, BYTE const* oLitEnd)
-{
-    size_t const windowSize = dctx->fParams.windowSize;
-    /* No dictionary used. */
-    if (dctx->dictContentEndForFuzzing == NULL) return 0;
-    /* Dictionary is our prefix. */
-    if (prefixStart == dctx->dictContentBeginForFuzzing) return 1;
-    /* Dictionary is not our ext-dict. */
-    if (dctx->dictEnd != dctx->dictContentEndForFuzzing) return 0;
-    /* Dictionary is not within our window size. */
-    if ((size_t)(oLitEnd - prefixStart) >= windowSize) return 0;
-    /* Dictionary is active. */
-    return 1;
-}
-
-MEM_STATIC void ZSTD_assertValidSequence(
-        ZSTD_DCtx const* dctx,
-        BYTE const* op, BYTE const* oend,
-        seq_t const seq,
-        BYTE const* prefixStart, BYTE const* virtualStart)
-{
-    size_t const windowSize = dctx->fParams.windowSize;
-    size_t const sequenceSize = seq.litLength + seq.matchLength;
-    BYTE const* const oLitEnd = op + seq.litLength;
-    DEBUGLOG(6, "Checking sequence: litL=%u matchL=%u offset=%u",
-            (U32)seq.litLength, (U32)seq.matchLength, (U32)seq.offset);
-    assert(op <= oend);
-    assert((size_t)(oend - op) >= sequenceSize);
-    assert(sequenceSize <= ZSTD_BLOCKSIZE_MAX);
-    if (ZSTD_dictionaryIsActive(dctx, prefixStart, oLitEnd)) {
-        size_t const dictSize = (size_t)((char const*)dctx->dictContentEndForFuzzing - (char const*)dctx->dictContentBeginForFuzzing);
-        /* Offset must be within the dictionary. */
-        assert(seq.offset <= (size_t)(oLitEnd - virtualStart));
-        assert(seq.offset <= windowSize + dictSize);
+  // Find out how long the match is. We loop over the data 64 bits at a
+  // time until we find a 64-bit block that doesn't match; then we find
+  // the first non-matching bit and use that to calculate the total
+  // length of the match.
+  while (SNAPPY_PREDICT_TRUE(s2 <= s2_limit - 8)) {
+    if (UNALIGNED_LOAD64(s2) == UNALIGNED_LOAD64(s1 + matched)) {
+      s2 += 8;
+      matched += 8;
     } else {
-        /* Offset must be within our window. */
-        assert(seq.offset <= windowSize);
+      uint64 x = UNALIGNED_LOAD64(s2) ^ UNALIGNED_LOAD64(s1 + matched);
+      int matching_bits = Bits::FindLSBSetNonZero64(x);
+      matched += matching_bits >> 3;
+      assert(matched >= 8);
+      return std::pair<size_t, bool>(matched, false);
     }
+  }
+  while (SNAPPY_PREDICT_TRUE(s2 < s2_limit)) {
+    if (s1[matched] == *s2) {
+      ++s2;
+      ++matched;
+    } else {
+      return std::pair<size_t, bool>(matched, matched < 8);
+    }
+  }
+  return std::pair<size_t, bool>(matched, matched < 8);
+}
+#else
+static inline std::pair<size_t, bool> FindMatchLength(const char* s1,
+                                                      const char* s2,
+                                                      const char* s2_limit) {
+  // Implementation based on the x86-64 version, above.
+  assert(s2_limit >= s2);
+  int matched = 0;
+
+  while (s2 <= s2_limit - 4 &&
+         UNALIGNED_LOAD32(s2) == UNALIGNED_LOAD32(s1 + matched)) {
+    s2 += 4;
+    matched += 4;
+  }
+  if (LittleEndian::IsLittleEndian() && s2 <= s2_limit - 4) {
+    uint32 x = UNALIGNED_LOAD32(s2) ^ UNALIGNED_LOAD32(s1 + matched);
+    int matching_bits = Bits::FindLSBSetNonZero(x);
+    matched += matching_bits >> 3;
+  } else {
+    while ((s2 < s2_limit) && (s1[matched] == *s2)) {
+      ++s2;
+      ++matched;
+    }
+  }
+  return std::pair<size_t, bool>(matched, matched < 8);
 }
 #endif
 
-#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG
-FORCE_INLINE_TEMPLATE size_t
-DONT_VECTORIZE
-ZSTD_decompressSequences_body( ZSTD_DCtx* dctx,
-                               void* dst, size_t maxDstSize,
-                         const void* seqStart, size_t seqSize, int nbSeq,
-                         const ZSTD_longOffset_e isLongOffset,
-                         const int frame)
-{
-    const BYTE* ip = (const BYTE*)seqStart;
-    const BYTE* const iend = ip + seqSize;
-    BYTE* const ostart = (BYTE* const)dst;
-    BYTE* const oend = ostart + maxDstSize;
-    BYTE* op = ostart;
-    const BYTE* litPtr = dctx->litPtr;
-    const BYTE* const litEnd = litPtr + dctx->litSize;
-    const BYTE* const prefixStart = (const BYTE*) (dctx->prefixStart);
-    const BYTE* const vBase = (const BYTE*) (dctx->virtualStart);
-    const BYTE* const dictEnd = (const BYTE*) (dctx->dictEnd);
-    DEBUGLOG(5, "ZSTD_decompressSequences_body");
-    (void)frame;
+// Lookup tables for decompression code.  Give --snappy_dump_decompression_table
+// to the unit test to recompute char_table.
 
-    /* Regen sequences */
-    if (nbSeq) {
-        seqState_t seqState;
-        size_t error = 0;
-        dctx->fseEntropy = 1;
-        { U32 i; for (i=0; i<ZSTD_REP_NUM; i++) seqState.prevOffset[i] = dctx->entropy.rep[i]; }
-        RETURN_ERROR_IF(
-            ERR_isError(BIT_initDStream(&seqState.DStream, ip, iend-ip)),
-            corruption_detected, "");
-        ZSTD_initFseState(&seqState.stateLL, &seqState.DStream, dctx->LLTptr);
-        ZSTD_initFseState(&seqState.stateOffb, &seqState.DStream, dctx->OFTptr);
-        ZSTD_initFseState(&seqState.stateML, &seqState.DStream, dctx->MLTptr);
-        assert(dst != NULL);
+enum {
+  LITERAL = 0,
+  COPY_1_BYTE_OFFSET = 1,  // 3 bit length + 3 bits of offset in opcode
+  COPY_2_BYTE_OFFSET = 2,
+  COPY_4_BYTE_OFFSET = 3
+};
+static const int kMaximumTagLength = 5;  // COPY_4_BYTE_OFFSET plus the actual offset.
 
-        ZSTD_STATIC_ASSERT(
-                BIT_DStream_unfinished < BIT_DStream_completed &&
-                BIT_DStream_endOfBuffer < BIT_DStream_completed &&
-                BIT_DStream_completed < BIT_DStream_overflow);
+// Data stored per entry in lookup table:
+//      Range   Bits-used       Description
+//      ------------------------------------
+//      1..64   0..7            Literal/copy length encoded in opcode byte
+//      0..7    8..10           Copy offset encoded in opcode byte / 256
+//      0..4    11..13          Extra bytes after opcode
+//
+// We use eight bits for the length even though 7 would have sufficed
+// because of efficiency reasons:
+//      (1) Extracting a byte is faster than a bit-field
+//      (2) It properly aligns copy offset so we do not need a <<8
+static const uint16 char_table[256] = {
+  0x0001, 0x0804, 0x1001, 0x2001, 0x0002, 0x0805, 0x1002, 0x2002,
+  0x0003, 0x0806, 0x1003, 0x2003, 0x0004, 0x0807, 0x1004, 0x2004,
+  0x0005, 0x0808, 0x1005, 0x2005, 0x0006, 0x0809, 0x1006, 0x2006,
+  0x0007, 0x080a, 0x1007, 0x2007, 0x0008, 0x080b, 0x1008, 0x2008,
+  0x0009, 0x0904, 0x1009, 0x2009, 0x000a, 0x0905, 0x100a, 0x200a,
+  0x000b, 0x0906, 0x100b, 0x200b, 0x000c, 0x0907, 0x100c, 0x200c,
+  0x000d, 0x0908, 0x100d, 0x200d, 0x000e, 0x0909, 0x100e, 0x200e,
+  0x000f, 0x090a, 0x100f, 0x200f, 0x0010, 0x090b, 0x1010, 0x2010,
+  0x0011, 0x0a04, 0x1011, 0x2011, 0x0012, 0x0a05, 0x1012, 0x2012,
+  0x0013, 0x0a06, 0x1013, 0x2013, 0x0014, 0x0a07, 0x1014, 0x2014,
+  0x0015, 0x0a08, 0x1015, 0x2015, 0x0016, 0x0a09, 0x1016, 0x2016,
+  0x0017, 0x0a0a, 0x1017, 0x2017, 0x0018, 0x0a0b, 0x1018, 0x2018,
+  0x0019, 0x0b04, 0x1019, 0x2019, 0x001a, 0x0b05, 0x101a, 0x201a,
+  0x001b, 0x0b06, 0x101b, 0x201b, 0x001c, 0x0b07, 0x101c, 0x201c,
+  0x001d, 0x0b08, 0x101d, 0x201d, 0x001e, 0x0b09, 0x101e, 0x201e,
+  0x001f, 0x0b0a, 0x101f, 0x201f, 0x0020, 0x0b0b, 0x1020, 0x2020,
+  0x0021, 0x0c04, 0x1021, 0x2021, 0x0022, 0x0c05, 0x1022, 0x2022,
+  0x0023, 0x0c06, 0x1023, 0x2023, 0x0024, 0x0c07, 0x1024, 0x2024,
+  0x0025, 0x0c08, 0x1025, 0x2025, 0x0026, 0x0c09, 0x1026, 0x2026,
+  0x0027, 0x0c0a, 0x1027, 0x2027, 0x0028, 0x0c0b, 0x1028, 0x2028,
+  0x0029, 0x0d04, 0x1029, 0x2029, 0x002a, 0x0d05, 0x102a, 0x202a,
+  0x002b, 0x0d06, 0x102b, 0x202b, 0x002c, 0x0d07, 0x102c, 0x202c,
+  0x002d, 0x0d08, 0x102d, 0x202d, 0x002e, 0x0d09, 0x102e, 0x202e,
+  0x002f, 0x0d0a, 0x102f, 0x202f, 0x0030, 0x0d0b, 0x1030, 0x2030,
+  0x0031, 0x0e04, 0x1031, 0x2031, 0x0032, 0x0e05, 0x1032, 0x2032,
+  0x0033, 0x0e06, 0x1033, 0x2033, 0x0034, 0x0e07, 0x1034, 0x2034,
+  0x0035, 0x0e08, 0x1035, 0x2035, 0x0036, 0x0e09, 0x1036, 0x2036,
+  0x0037, 0x0e0a, 0x1037, 0x2037, 0x0038, 0x0e0b, 0x1038, 0x2038,
+  0x0039, 0x0f04, 0x1039, 0x2039, 0x003a, 0x0f05, 0x103a, 0x203a,
+  0x003b, 0x0f06, 0x103b, 0x203b, 0x003c, 0x0f07, 0x103c, 0x203c,
+  0x0801, 0x0f08, 0x103d, 0x203d, 0x1001, 0x0f09, 0x103e, 0x203e,
+  0x1801, 0x0f0a, 0x103f, 0x203f, 0x2001, 0x0f0b, 0x1040, 0x2040
+};
 
+}  // end namespace internal
+
+
+// The size of a compression block. Note that many parts of the compression
+// code assumes that kBlockSize <= 65536; in particular, the hash table
+// can only store 16-bit offsets, and EmitCopy() also assumes the offset
+// is 65535 bytes or less. Note also that if you change this, it will
+// affect the framing format (see framing_format.txt).
+//
+// Note that there might be older data around that is compressed with larger
+// block sizes, so the decompression code should not rely on the
+// non-existence of long backreferences.
+static const int kBlockLog = 16;
+static const size_t kBlockSize = 1 << kBlockLog;
+
+static const int kMaxHashTableBits = 14;
+static const size_t kMaxHashTableSize = 1 << kMaxHashTableBits;
+
+
+}  // end namespace duckdb_snappy
+
+#endif  // THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
+
+
+// LICENSE_CHANGE_END
+
+
+
+#if !defined(SNAPPY_HAVE_SSSE3)
+// __SSSE3__ is defined by GCC and Clang. Visual Studio doesn't target SIMD
+// support between SSE2 and AVX (so SSSE3 instructions require AVX support), and
+// defines __AVX__ when AVX support is available.
+#if defined(__SSSE3__) || defined(__AVX__)
+#define SNAPPY_HAVE_SSSE3 1
+#else
+#define SNAPPY_HAVE_SSSE3 0
+#endif
+#endif  // !defined(SNAPPY_HAVE_SSSE3)
+
+#if !defined(SNAPPY_HAVE_BMI2)
+// __BMI2__ is defined by GCC and Clang. Visual Studio doesn't target BMI2
+// specifically, but it does define __AVX2__ when AVX2 support is available.
+// Fortunately, AVX2 was introduced in Haswell, just like BMI2.
+//
+// BMI2 is not defined as a subset of AVX2 (unlike SSSE3 and AVX above). So,
+// GCC and Clang can build code with AVX2 enabled but BMI2 disabled, in which
+// case issuing BMI2 instructions results in a compiler error.
+#if defined(__BMI2__) || (defined(_MSC_VER) && defined(__AVX2__))
+#define SNAPPY_HAVE_BMI2 1
+#else
+#define SNAPPY_HAVE_BMI2 0
+#endif
+#endif  // !defined(SNAPPY_HAVE_BMI2)
+
+#if SNAPPY_HAVE_SSSE3
+// Please do not replace with <x86intrin.h>. or with headers that assume more
+// advanced SSE versions without checking with all the OWNERS.
+#include <tmmintrin.h>
+#endif
+
+#if SNAPPY_HAVE_BMI2
+// Please do not replace with <x86intrin.h>. or with headers that assume more
+// advanced SSE versions without checking with all the OWNERS.
+#include <immintrin.h>
+#endif
+
+#include <stdio.h>
+
+#include <algorithm>
+#include <string>
+#include <vector>
+
+namespace duckdb_snappy {
+
+using internal::COPY_1_BYTE_OFFSET;
+using internal::COPY_2_BYTE_OFFSET;
+using internal::LITERAL;
+using internal::char_table;
+using internal::kMaximumTagLength;
+
+// Any hash function will produce a valid compressed bitstream, but a good
+// hash function reduces the number of collisions and thus yields better
+// compression for compressible input, and more speed for incompressible
+// input. Of course, it doesn't hurt if the hash function is reasonably fast
+// either, as it gets called a lot.
+static inline uint32 HashBytes(uint32 bytes, int shift) {
+  uint32 kMul = 0x1e35a7bd;
+  return (bytes * kMul) >> shift;
+}
+static inline uint32 Hash(const char* p, int shift) {
+  return HashBytes(UNALIGNED_LOAD32(p), shift);
+}
+
+size_t MaxCompressedLength(size_t source_len) {
+  // Compressed data can be defined as:
+  //    compressed := item* literal*
+  //    item       := literal* copy
+  //
+  // The trailing literal sequence has a space blowup of at most 62/60
+  // since a literal of length 60 needs one tag byte + one extra byte
+  // for length information.
+  //
+  // Item blowup is trickier to measure.  Suppose the "copy" op copies
+  // 4 bytes of data.  Because of a special check in the encoding code,
+  // we produce a 4-byte copy only if the offset is < 65536.  Therefore
+  // the copy op takes 3 bytes to encode, and this type of item leads
+  // to at most the 62/60 blowup for representing literals.
+  //
+  // Suppose the "copy" op copies 5 bytes of data.  If the offset is big
+  // enough, it will take 5 bytes to encode the copy op.  Therefore the
+  // worst case here is a one-byte literal followed by a five-byte copy.
+  // I.e., 6 bytes of input turn into 7 bytes of "compressed" data.
+  //
+  // This last factor dominates the blowup, so the final estimate is:
+  return 32 + source_len + source_len/6;
+}
+
+namespace {
+
+void UnalignedCopy64(const void* src, void* dst) {
+  char tmp[8];
+  memcpy(tmp, src, 8);
+  memcpy(dst, tmp, 8);
+}
+
+void UnalignedCopy128(const void* src, void* dst) {
+  // memcpy gets vectorized when the appropriate compiler options are used.
+  // For example, x86 compilers targeting SSE2+ will optimize to an SSE2 load
+  // and store.
+  char tmp[16];
+  memcpy(tmp, src, 16);
+  memcpy(dst, tmp, 16);
+}
+
+// Copy [src, src+(op_limit-op)) to [op, (op_limit-op)) a byte at a time. Used
+// for handling COPY operations where the input and output regions may overlap.
+// For example, suppose:
+//    src       == "ab"
+//    op        == src + 2
+//    op_limit  == op + 20
+// After IncrementalCopySlow(src, op, op_limit), the result will have eleven
+// copies of "ab"
+//    ababababababababababab
+// Note that this does not match the semantics of either memcpy() or memmove().
+inline char* IncrementalCopySlow(const char* src, char* op,
+                                 char* const op_limit) {
+  // TODO: Remove pragma when LLVM is aware this
+  // function is only called in cold regions and when cold regions don't get
+  // vectorized or unrolled.
+#ifdef __clang__
+#pragma clang loop unroll(disable)
+#endif
+  while (op < op_limit) {
+    *op++ = *src++;
+  }
+  return op_limit;
+}
+
+#if SNAPPY_HAVE_SSSE3
+
+// This is a table of shuffle control masks that can be used as the source
+// operand for PSHUFB to permute the contents of the destination XMM register
+// into a repeating byte pattern.
+alignas(16) const char pshufb_fill_patterns[7][16] = {
+  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+  {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
+  {0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0},
+  {0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3},
+  {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0},
+  {0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3},
+  {0, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3, 4, 5, 6, 0, 1},
+};
+
+#endif  // SNAPPY_HAVE_SSSE3
+
+// Copy [src, src+(op_limit-op)) to [op, (op_limit-op)) but faster than
+// IncrementalCopySlow. buf_limit is the address past the end of the writable
+// region of the buffer.
+inline char* IncrementalCopy(const char* src, char* op, char* const op_limit,
+                             char* const buf_limit) {
+  // Terminology:
+  //
+  // slop = buf_limit - op
+  // pat  = op - src
+  // len  = limit - op
+  assert(src < op);
+  assert(op <= op_limit);
+  assert(op_limit <= buf_limit);
+  // NOTE: The compressor always emits 4 <= len <= 64. It is ok to assume that
+  // to optimize this function but we have to also handle other cases in case
+  // the input does not satisfy these conditions.
+
+  size_t pattern_size = op - src;
+  // The cases are split into different branches to allow the branch predictor,
+  // FDO, and static prediction hints to work better. For each input we list the
+  // ratio of invocations that match each condition.
+  //
+  // input        slop < 16   pat < 8  len > 16
+  // ------------------------------------------
+  // html|html4|cp   0%         1.01%    27.73%
+  // urls            0%         0.88%    14.79%
+  // jpg             0%        64.29%     7.14%
+  // pdf             0%         2.56%    58.06%
+  // txt[1-4]        0%         0.23%     0.97%
+  // pb              0%         0.96%    13.88%
+  // bin             0.01%     22.27%    41.17%
+  //
+  // It is very rare that we don't have enough slop for doing block copies. It
+  // is also rare that we need to expand a pattern. Small patterns are common
+  // for incompressible formats and for those we are plenty fast already.
+  // Lengths are normally not greater than 16 but they vary depending on the
+  // input. In general if we always predict len <= 16 it would be an ok
+  // prediction.
+  //
+  // In order to be fast we want a pattern >= 8 bytes and an unrolled loop
+  // copying 2x 8 bytes at a time.
+
+  // Handle the uncommon case where pattern is less than 8 bytes.
+  if (SNAPPY_PREDICT_FALSE(pattern_size < 8)) {
+#if SNAPPY_HAVE_SSSE3
+    // Load the first eight bytes into an 128-bit XMM register, then use PSHUFB
+    // to permute the register's contents in-place into a repeating sequence of
+    // the first "pattern_size" bytes.
+    // For example, suppose:
+    //    src       == "abc"
+    //    op        == op + 3
+    // After _mm_shuffle_epi8(), "pattern" will have five copies of "abc"
+    // followed by one byte of slop: abcabcabcabcabca.
+    //
+    // The non-SSE fallback implementation suffers from store-forwarding stalls
+    // because its loads and stores partly overlap. By expanding the pattern
+    // in-place, we avoid the penalty.
+    if (SNAPPY_PREDICT_TRUE(op <= buf_limit - 16)) {
+      const __m128i shuffle_mask = _mm_load_si128(
+          reinterpret_cast<const __m128i*>(pshufb_fill_patterns)
+          + pattern_size - 1);
+      const __m128i pattern = _mm_shuffle_epi8(
+          _mm_loadl_epi64(reinterpret_cast<const __m128i*>(src)), shuffle_mask);
+      // Uninitialized bytes are masked out by the shuffle mask.
+      // TODO: remove annotation and macro defs once MSan is fixed.
+      SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(&pattern, sizeof(pattern));
+      pattern_size *= 16 / pattern_size;
+      char* op_end = std::min(op_limit, buf_limit - 15);
+      while (op < op_end) {
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(op), pattern);
+        op += pattern_size;
+      }
+      if (SNAPPY_PREDICT_TRUE(op >= op_limit)) return op_limit;
+    }
+    return IncrementalCopySlow(src, op, op_limit);
+#else  // !SNAPPY_HAVE_SSSE3
+    // If plenty of buffer space remains, expand the pattern to at least 8
+    // bytes. The way the following loop is written, we need 8 bytes of buffer
+    // space if pattern_size >= 4, 11 bytes if pattern_size is 1 or 3, and 10
+    // bytes if pattern_size is 2.  Precisely encoding that is probably not
+    // worthwhile; instead, invoke the slow path if we cannot write 11 bytes
+    // (because 11 are required in the worst case).
+    if (SNAPPY_PREDICT_TRUE(op <= buf_limit - 11)) {
+      while (pattern_size < 8) {
+        UnalignedCopy64(src, op);
+        op += pattern_size;
+        pattern_size *= 2;
+      }
+      if (SNAPPY_PREDICT_TRUE(op >= op_limit)) return op_limit;
+    } else {
+      return IncrementalCopySlow(src, op, op_limit);
+    }
+#endif  // SNAPPY_HAVE_SSSE3
+  }
+  assert(pattern_size >= 8);
+
+  // Copy 2x 8 bytes at a time. Because op - src can be < 16, a single
+  // UnalignedCopy128 might overwrite data in op. UnalignedCopy64 is safe
+  // because expanding the pattern to at least 8 bytes guarantees that
+  // op - src >= 8.
+  //
+  // Typically, the op_limit is the gating factor so try to simplify the loop
+  // based on that.
+  if (SNAPPY_PREDICT_TRUE(op_limit <= buf_limit - 16)) {
+    // Factor the displacement from op to the source into a variable. This helps
+    // simplify the loop below by only varying the op pointer which we need to
+    // test for the end. Note that this was done after carefully examining the
+    // generated code to allow the addressing modes in the loop below to
+    // maximize micro-op fusion where possible on modern Intel processors. The
+    // generated code should be checked carefully for new processors or with
+    // major changes to the compiler.
+    // TODO: Simplify this code when the compiler reliably produces
+    // the correct x86 instruction sequence.
+    ptrdiff_t op_to_src = src - op;
+
+    // The trip count of this loop is not large and so unrolling will only hurt
+    // code size without helping performance.
+    //
+    // TODO: Replace with loop trip count hint.
+#ifdef __clang__
+#pragma clang loop unroll(disable)
+#endif
+    do {
+      UnalignedCopy64(op + op_to_src, op);
+      UnalignedCopy64(op + op_to_src + 8, op + 8);
+      op += 16;
+    } while (op < op_limit);
+    return op_limit;
+  }
+
+  // Fall back to doing as much as we can with the available slop in the
+  // buffer. This code path is relatively cold however so we save code size by
+  // avoiding unrolling and vectorizing.
+  //
+  // TODO: Remove pragma when when cold regions don't get vectorized
+  // or unrolled.
+#ifdef __clang__
+#pragma clang loop unroll(disable)
+#endif
+  for (char *op_end = buf_limit - 16; op < op_end; op += 16, src += 16) {
+    UnalignedCopy64(src, op);
+    UnalignedCopy64(src + 8, op + 8);
+  }
+  if (op >= op_limit)
+    return op_limit;
+
+  // We only take this branch if we didn't have enough slop and we can do a
+  // single 8 byte copy.
+  if (SNAPPY_PREDICT_FALSE(op <= buf_limit - 8)) {
+    UnalignedCopy64(src, op);
+    src += 8;
+    op += 8;
+  }
+  return IncrementalCopySlow(src, op, op_limit);
+}
+
+}  // namespace
+
+template <bool allow_fast_path>
+static inline char* EmitLiteral(char* op,
+                                const char* literal,
+                                int len) {
+  // The vast majority of copies are below 16 bytes, for which a
+  // call to memcpy is overkill. This fast path can sometimes
+  // copy up to 15 bytes too much, but that is okay in the
+  // main loop, since we have a bit to go on for both sides:
+  //
+  //   - The input will always have kInputMarginBytes = 15 extra
+  //     available bytes, as long as we're in the main loop, and
+  //     if not, allow_fast_path = false.
+  //   - The output will always have 32 spare bytes (see
+  //     MaxCompressedLength).
+  assert(len > 0);      // Zero-length literals are disallowed
+  int n = len - 1;
+  if (allow_fast_path && len <= 16) {
+    // Fits in tag byte
+    *op++ = LITERAL | (n << 2);
+
+    UnalignedCopy128(literal, op);
+    return op + len;
+  }
+
+  if (n < 60) {
+    // Fits in tag byte
+    *op++ = LITERAL | (n << 2);
+  } else {
+    int count = (Bits::Log2Floor(n) >> 3) + 1;
+    assert(count >= 1);
+    assert(count <= 4);
+    *op++ = LITERAL | ((59 + count) << 2);
+    // Encode in upcoming bytes.
+    // Write 4 bytes, though we may care about only 1 of them. The output buffer
+    // is guaranteed to have at least 3 more spaces left as 'len >= 61' holds
+    // here and there is a memcpy of size 'len' below.
+    LittleEndian::Store32(op, n);
+    op += count;
+  }
+  memcpy(op, literal, len);
+  return op + len;
+}
+
+template <bool len_less_than_12>
+static inline char* EmitCopyAtMost64(char* op, size_t offset, size_t len) {
+  assert(len <= 64);
+  assert(len >= 4);
+  assert(offset < 65536);
+  assert(len_less_than_12 == (len < 12));
+
+  if (len_less_than_12 && SNAPPY_PREDICT_TRUE(offset < 2048)) {
+    // offset fits in 11 bits.  The 3 highest go in the top of the first byte,
+    // and the rest go in the second byte.
+    *op++ = COPY_1_BYTE_OFFSET + ((len - 4) << 2) + ((offset >> 3) & 0xe0);
+    *op++ = offset & 0xff;
+  } else {
+    // Write 4 bytes, though we only care about 3 of them.  The output buffer
+    // is required to have some slack, so the extra byte won't overrun it.
+    uint32 u = COPY_2_BYTE_OFFSET + ((len - 1) << 2) + (offset << 8);
+    LittleEndian::Store32(op, u);
+    op += 3;
+  }
+  return op;
+}
+
+template <bool len_less_than_12>
+static inline char* EmitCopy(char* op, size_t offset, size_t len) {
+  assert(len_less_than_12 == (len < 12));
+  if (len_less_than_12) {
+    return EmitCopyAtMost64</*len_less_than_12=*/true>(op, offset, len);
+  } else {
+    // A special case for len <= 64 might help, but so far measurements suggest
+    // it's in the noise.
+
+    // Emit 64 byte copies but make sure to keep at least four bytes reserved.
+    while (SNAPPY_PREDICT_FALSE(len >= 68)) {
+      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, 64);
+      len -= 64;
+    }
+
+    // One or two copies will now finish the job.
+    if (len > 64) {
+      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, 60);
+      len -= 60;
+    }
+
+    // Emit remainder.
+    if (len < 12) {
+      op = EmitCopyAtMost64</*len_less_than_12=*/true>(op, offset, len);
+    } else {
+      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, len);
+    }
+    return op;
+  }
+}
+
+bool GetUncompressedLength(const char* start, size_t n, size_t* result) {
+  uint32 v = 0;
+  const char* limit = start + n;
+  if (Varint::Parse32WithLimit(start, limit, &v) != NULL) {
+    *result = v;
+    return true;
+  } else {
+    return false;
+  }
+}
+
+namespace {
+uint32 CalculateTableSize(uint32 input_size) {
+  assert(kMaxHashTableSize >= 256);
+  if (input_size > kMaxHashTableSize) {
+    return kMaxHashTableSize;
+  }
+  if (input_size < 256) {
+    return 256;
+  }
+  // This is equivalent to Log2Ceiling(input_size), assuming input_size > 1.
+  // 2 << Log2Floor(x - 1) is equivalent to 1 << (1 + Log2Floor(x - 1)).
+  return 2u << Bits::Log2Floor(input_size - 1);
+}
+}  // namespace
+
+namespace internal {
+WorkingMemory::WorkingMemory(size_t input_size) {
+  const size_t max_fragment_size = std::min(input_size, kBlockSize);
+  const size_t table_size = CalculateTableSize(max_fragment_size);
+  size_ = table_size * sizeof(*table_) + max_fragment_size +
+          MaxCompressedLength(max_fragment_size);
+  mem_ = std::allocator<char>().allocate(size_);
+  table_ = reinterpret_cast<uint16*>(mem_);
+  input_ = mem_ + table_size * sizeof(*table_);
+  output_ = input_ + max_fragment_size;
+}
+
+WorkingMemory::~WorkingMemory() {
+  std::allocator<char>().deallocate(mem_, size_);
+}
+
+uint16* WorkingMemory::GetHashTable(size_t fragment_size,
+                                    int* table_size) const {
+  const size_t htsize = CalculateTableSize(fragment_size);
+  memset(table_, 0, htsize * sizeof(*table_));
+  *table_size = htsize;
+  return table_;
+}
+}  // end namespace internal
+
+// For 0 <= offset <= 4, GetUint32AtOffset(GetEightBytesAt(p), offset) will
+// equal UNALIGNED_LOAD32(p + offset).  Motivation: On x86-64 hardware we have
+// empirically found that overlapping loads such as
+//  UNALIGNED_LOAD32(p) ... UNALIGNED_LOAD32(p+1) ... UNALIGNED_LOAD32(p+2)
+// are slower than UNALIGNED_LOAD64(p) followed by shifts and casts to uint32.
+//
+// We have different versions for 64- and 32-bit; ideally we would avoid the
+// two functions and just inline the UNALIGNED_LOAD64 call into
+// GetUint32AtOffset, but GCC (at least not as of 4.6) is seemingly not clever
+// enough to avoid loading the value multiple times then. For 64-bit, the load
+// is done when GetEightBytesAt() is called, whereas for 32-bit, the load is
+// done at GetUint32AtOffset() time.
+
+#ifdef ARCH_K8
+
+typedef uint64 EightBytesReference;
+
+static inline EightBytesReference GetEightBytesAt(const char* ptr) {
+  return UNALIGNED_LOAD64(ptr);
+}
+
+static inline uint32 GetUint32AtOffset(uint64 v, int offset) {
+  assert(offset >= 0);
+  assert(offset <= 4);
+  return v >> (LittleEndian::IsLittleEndian() ? 8 * offset : 32 - 8 * offset);
+}
+
+#else
+
+typedef const char* EightBytesReference;
+
+static inline EightBytesReference GetEightBytesAt(const char* ptr) {
+  return ptr;
+}
+
+static inline uint32 GetUint32AtOffset(const char* v, int offset) {
+  assert(offset >= 0);
+  assert(offset <= 4);
+  return UNALIGNED_LOAD32(v + offset);
+}
+
+#endif
+
+// Flat array compression that does not emit the "uncompressed length"
+// prefix. Compresses "input" string to the "*op" buffer.
+//
+// REQUIRES: "input" is at most "kBlockSize" bytes long.
+// REQUIRES: "op" points to an array of memory that is at least
+// "MaxCompressedLength(input.size())" in size.
+// REQUIRES: All elements in "table[0..table_size-1]" are initialized to zero.
+// REQUIRES: "table_size" is a power of two
+//
+// Returns an "end" pointer into "op" buffer.
+// "end - op" is the compressed size of "input".
+namespace internal {
+char* CompressFragment(const char* input,
+                       size_t input_size,
+                       char* op,
+                       uint16* table,
+                       const int table_size) {
+  // "ip" is the input pointer, and "op" is the output pointer.
+  const char* ip = input;
+  assert(input_size <= kBlockSize);
+  assert((table_size & (table_size - 1)) == 0);  // table must be power of two
+  const int shift = 32 - Bits::Log2Floor(table_size);
+  // assert(static_cast<int>(kuint32max >> shift) == table_size - 1);
+  const char* ip_end = input + input_size;
+  const char* base_ip = ip;
+  // Bytes in [next_emit, ip) will be emitted as literal bytes.  Or
+  // [next_emit, ip_end) after the main loop.
+  const char* next_emit = ip;
+
+  const size_t kInputMarginBytes = 15;
+  if (SNAPPY_PREDICT_TRUE(input_size >= kInputMarginBytes)) {
+    const char* ip_limit = input + input_size - kInputMarginBytes;
+
+    for (uint32 next_hash = Hash(++ip, shift); ; ) {
+      assert(next_emit < ip);
+      // The body of this loop calls EmitLiteral once and then EmitCopy one or
+      // more times.  (The exception is that when we're close to exhausting
+      // the input we goto emit_remainder.)
+      //
+      // In the first iteration of this loop we're just starting, so
+      // there's nothing to copy, so calling EmitLiteral once is
+      // necessary.  And we only start a new iteration when the
+      // current iteration has determined that a call to EmitLiteral will
+      // precede the next call to EmitCopy (if any).
+      //
+      // Step 1: Scan forward in the input looking for a 4-byte-long match.
+      // If we get close to exhausting the input then goto emit_remainder.
+      //
+      // Heuristic match skipping: If 32 bytes are scanned with no matches
+      // found, start looking only at every other byte. If 32 more bytes are
+      // scanned (or skipped), look at every third byte, etc.. When a match is
+      // found, immediately go back to looking at every byte. This is a small
+      // loss (~5% performance, ~0.1% density) for compressible data due to more
+      // bookkeeping, but for non-compressible data (such as JPEG) it's a huge
+      // win since the compressor quickly "realizes" the data is incompressible
+      // and doesn't bother looking for matches everywhere.
+      //
+      // The "skip" variable keeps track of how many bytes there are since the
+      // last match; dividing it by 32 (ie. right-shifting by five) gives the
+      // number of bytes to move ahead for each iteration.
+      uint32 skip = 32;
+
+      const char* next_ip = ip;
+      const char* candidate;
+      do {
+        ip = next_ip;
+        uint32 hash = next_hash;
+        assert(hash == Hash(ip, shift));
+        uint32 bytes_between_hash_lookups = skip >> 5;
+        skip += bytes_between_hash_lookups;
+        next_ip = ip + bytes_between_hash_lookups;
+        if (SNAPPY_PREDICT_FALSE(next_ip > ip_limit)) {
+          goto emit_remainder;
+        }
+        next_hash = Hash(next_ip, shift);
+        candidate = base_ip + table[hash];
+        assert(candidate >= base_ip);
+        assert(candidate < ip);
+
+        table[hash] = ip - base_ip;
+      } while (SNAPPY_PREDICT_TRUE(UNALIGNED_LOAD32(ip) !=
+                                 UNALIGNED_LOAD32(candidate)));
+
+      // Step 2: A 4-byte match has been found.  We'll later see if more
+      // than 4 bytes match.  But, prior to the match, input
+      // bytes [next_emit, ip) are unmatched.  Emit them as "literal bytes."
+      assert(next_emit + 16 <= ip_end);
+      op = EmitLiteral</*allow_fast_path=*/true>(op, next_emit, ip - next_emit);
+
+      // Step 3: Call EmitCopy, and then see if another EmitCopy could
+      // be our next move.  Repeat until we find no match for the
+      // input immediately after what was consumed by the last EmitCopy call.
+      //
+      // If we exit this loop normally then we need to call EmitLiteral next,
+      // though we don't yet know how big the literal will be.  We handle that
+      // by proceeding to the next iteration of the main loop.  We also can exit
+      // this loop via goto if we get close to exhausting the input.
+      EightBytesReference input_bytes;
+      uint32 candidate_bytes = 0;
+
+      do {
+        // We have a 4-byte match at ip, and no need to emit any
+        // "literal bytes" prior to ip.
+        const char* base = ip;
+        std::pair<size_t, bool> p =
+            FindMatchLength(candidate + 4, ip + 4, ip_end);
+        size_t matched = 4 + p.first;
+        ip += matched;
+        size_t offset = base - candidate;
+        assert(0 == memcmp(base, candidate, matched));
+        if (p.second) {
+          op = EmitCopy</*len_less_than_12=*/true>(op, offset, matched);
+        } else {
+          op = EmitCopy</*len_less_than_12=*/false>(op, offset, matched);
+        }
+        next_emit = ip;
+        if (SNAPPY_PREDICT_FALSE(ip >= ip_limit)) {
+          goto emit_remainder;
+        }
+        // We are now looking for a 4-byte match again.  We read
+        // table[Hash(ip, shift)] for that.  To improve compression,
+        // we also update table[Hash(ip - 1, shift)] and table[Hash(ip, shift)].
+        input_bytes = GetEightBytesAt(ip - 1);
+        uint32 prev_hash = HashBytes(GetUint32AtOffset(input_bytes, 0), shift);
+        table[prev_hash] = ip - base_ip - 1;
+        uint32 cur_hash = HashBytes(GetUint32AtOffset(input_bytes, 1), shift);
+        candidate = base_ip + table[cur_hash];
+        candidate_bytes = UNALIGNED_LOAD32(candidate);
+        table[cur_hash] = ip - base_ip;
+      } while (GetUint32AtOffset(input_bytes, 1) == candidate_bytes);
+
+      next_hash = HashBytes(GetUint32AtOffset(input_bytes, 2), shift);
+      ++ip;
+    }
+  }
+
+ emit_remainder:
+  // Emit the remaining bytes as a literal
+  if (next_emit < ip_end) {
+    op = EmitLiteral</*allow_fast_path=*/false>(op, next_emit,
+                                                ip_end - next_emit);
+  }
+
+  return op;
+}
+}  // end namespace internal
+
+// Called back at avery compression call to trace parameters and sizes.
+static inline void Report(const char *algorithm, size_t compressed_size,
+                          size_t uncompressed_size) {}
+
+// Signature of output types needed by decompression code.
+// The decompression code is templatized on a type that obeys this
+// signature so that we do not pay virtual function call overhead in
+// the middle of a tight decompression loop.
+//
+// class DecompressionWriter {
+//  public:
+//   // Called before decompression
+//   void SetExpectedLength(size_t length);
+//
+//   // Called after decompression
+//   bool CheckLength() const;
+//
+//   // Called repeatedly during decompression
+//   bool Append(const char* ip, size_t length);
+//   bool AppendFromSelf(uint32 offset, size_t length);
+//
+//   // The rules for how TryFastAppend differs from Append are somewhat
+//   // convoluted:
+//   //
+//   //  - TryFastAppend is allowed to decline (return false) at any
+//   //    time, for any reason -- just "return false" would be
+//   //    a perfectly legal implementation of TryFastAppend.
+//   //    The intention is for TryFastAppend to allow a fast path
+//   //    in the common case of a small append.
+//   //  - TryFastAppend is allowed to read up to <available> bytes
+//   //    from the input buffer, whereas Append is allowed to read
+//   //    <length>. However, if it returns true, it must leave
+//   //    at least five (kMaximumTagLength) bytes in the input buffer
+//   //    afterwards, so that there is always enough space to read the
+//   //    next tag without checking for a refill.
+//   //  - TryFastAppend must always return decline (return false)
+//   //    if <length> is 61 or more, as in this case the literal length is not
+//   //    decoded fully. In practice, this should not be a big problem,
+//   //    as it is unlikely that one would implement a fast path accepting
+//   //    this much data.
+//   //
+//   bool TryFastAppend(const char* ip, size_t available, size_t length);
+// };
+
+static inline uint32 ExtractLowBytes(uint32 v, int n) {
+  assert(n >= 0);
+  assert(n <= 4);
+#if SNAPPY_HAVE_BMI2
+  return _bzhi_u32(v, 8 * n);
+#else
+  // This needs to be wider than uint32 otherwise `mask << 32` will be
+  // undefined.
+  uint64 mask = 0xffffffff;
+  return v & ~(mask << (8 * n));
+#endif
+}
+
+static inline bool LeftShiftOverflows(uint8 value, uint32 shift) {
+  assert(shift < 32);
+  static const uint8 masks[] = {
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
+      0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe};
+  return (value & masks[shift]) != 0;
+}
+
+// Helper class for decompression
+class SnappyDecompressor {
+ private:
+  Source*       reader_;         // Underlying source of bytes to decompress
+  const char*   ip_;             // Points to next buffered byte
+  const char*   ip_limit_;       // Points just past buffered bytes
+  uint32        peeked_;         // Bytes peeked from reader (need to skip)
+  bool          eof_;            // Hit end of input without an error?
+  char          scratch_[kMaximumTagLength];  // See RefillTag().
+
+  // Ensure that all of the tag metadata for the next tag is available
+  // in [ip_..ip_limit_-1].  Also ensures that [ip,ip+4] is readable even
+  // if (ip_limit_ - ip_ < 5).
+  //
+  // Returns true on success, false on error or end of input.
+  bool RefillTag();
+
+ public:
+  explicit SnappyDecompressor(Source* reader)
+      : reader_(reader),
+        ip_(NULL),
+        ip_limit_(NULL),
+        peeked_(0),
+        eof_(false) {
+  }
+
+  ~SnappyDecompressor() {
+    // Advance past any bytes we peeked at from the reader
+    reader_->Skip(peeked_);
+  }
+
+  // Returns true iff we have hit the end of the input without an error.
+  bool eof() const {
+    return eof_;
+  }
+
+  // Read the uncompressed length stored at the start of the compressed data.
+  // On success, stores the length in *result and returns true.
+  // On failure, returns false.
+  bool ReadUncompressedLength(uint32* result) {
+    assert(ip_ == NULL);       // Must not have read anything yet
+    // Length is encoded in 1..5 bytes
+    *result = 0;
+    uint32 shift = 0;
+    while (true) {
+      if (shift >= 32) return false;
+      size_t n;
+      const char* ip = reader_->Peek(&n);
+      if (n == 0) return false;
+      const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip));
+      reader_->Skip(1);
+      uint32 val = c & 0x7f;
+      if (LeftShiftOverflows(static_cast<uint8>(val), shift)) return false;
+      *result |= val << shift;
+      if (c < 128) {
+        break;
+      }
+      shift += 7;
+    }
+    return true;
+  }
+
+  // Process the next item found in the input.
+  // Returns true if successful, false on error or end of input.
+  template <class Writer>
 #if defined(__GNUC__) && defined(__x86_64__)
-        /* Align the decompression loop to 32 + 16 bytes.
-         *
-         * zstd compiled with gcc-9 on an Intel i9-9900k shows 10% decompression
-         * speed swings based on the alignment of the decompression loop. This
-         * performance swing is caused by parts of the decompression loop falling
-         * out of the DSB. The entire decompression loop should fit in the DSB,
-         * when it can't we get much worse performance. You can measure if you've
-         * hit the good case or the bad case with this perf command for some
-         * compressed file test.zst:
-         *
-         *   perf stat -e cycles -e instructions -e idq.all_dsb_cycles_any_uops \
-         *             -e idq.all_mite_cycles_any_uops -- ./zstd -tq test.zst
-         *
-         * If you see most cycles served out of the MITE you've hit the bad case.
-         * If you see most cycles served out of the DSB you've hit the good case.
-         * If it is pretty even then you may be in an okay case.
-         *
-         * I've been able to reproduce this issue on the following CPUs:
-         *   - Kabylake: Macbook Pro (15-inch, 2019) 2.4 GHz Intel Core i9
-         *               Use Instruments->Counters to get DSB/MITE cycles.
-         *               I never got performance swings, but I was able to
-         *               go from the good case of mostly DSB to half of the
-         *               cycles served from MITE.
-         *   - Coffeelake: Intel i9-9900k
-         *
-         * I haven't been able to reproduce the instability or DSB misses on any
-         * of the following CPUS:
-         *   - Haswell
-         *   - Broadwell: Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GH
-         *   - Skylake
-         *
-         * If you are seeing performance stability this script can help test.
-         * It tests on 4 commits in zstd where I saw performance change.
-         *
-         *   https://gist.github.com/terrelln/9889fc06a423fd5ca6e99351564473f4
-         */
-        __asm__(".p2align 5");
-        __asm__("nop");
-        __asm__(".p2align 4");
+  __attribute__((aligned(32)))
 #endif
-        for ( ; ; ) {
-            seq_t const sequence = ZSTD_decodeSequence(&seqState, isLongOffset, ZSTD_p_noPrefetch);
-            size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequence, &litPtr, litEnd, prefixStart, vBase, dictEnd);
-#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
-            assert(!ZSTD_isError(oneSeqSize));
-            if (frame) ZSTD_assertValidSequence(dctx, op, oend, sequence, prefixStart, vBase);
+  void DecompressAllTags(Writer* writer) {
+    // In x86, pad the function body to start 16 bytes later. This function has
+    // a couple of hotspots that are highly sensitive to alignment: we have
+    // observed regressions by more than 20% in some metrics just by moving the
+    // exact same code to a different position in the benchmark binary.
+    //
+    // Putting this code on a 32-byte-aligned boundary + 16 bytes makes us hit
+    // the "lucky" case consistently. Unfortunately, this is a very brittle
+    // workaround, and future differences in code generation may reintroduce
+    // this regression. If you experience a big, difficult to explain, benchmark
+    // performance regression here, first try removing this hack.
+#if defined(__GNUC__) && defined(__x86_64__)
+    // Two 8-byte "NOP DWORD ptr [EAX + EAX*1 + 00000000H]" instructions.
+    asm(".byte 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00");
+    asm(".byte 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00");
 #endif
-            DEBUGLOG(6, "regenerated sequence size : %u", (U32)oneSeqSize);
-            BIT_reloadDStream(&(seqState.DStream));
-            /* gcc and clang both don't like early returns in this loop.
-             * gcc doesn't like early breaks either.
-             * Instead save an error and report it at the end.
-             * When there is an error, don't increment op, so we don't
-             * overwrite.
-             */
-            if (UNLIKELY(ZSTD_isError(oneSeqSize))) error = oneSeqSize;
-            else op += oneSeqSize;
-            if (UNLIKELY(!--nbSeq)) break;
+
+    const char* ip = ip_;
+    // We could have put this refill fragment only at the beginning of the loop.
+    // However, duplicating it at the end of each branch gives the compiler more
+    // scope to optimize the <ip_limit_ - ip> expression based on the local
+    // context, which overall increases speed.
+    #define MAYBE_REFILL() \
+        if (ip_limit_ - ip < kMaximumTagLength) { \
+          ip_ = ip; \
+          if (!RefillTag()) return; \
+          ip = ip_; \
         }
 
-        /* check if reached exact end */
-        DEBUGLOG(5, "ZSTD_decompressSequences_body: after decode loop, remaining nbSeq : %i", nbSeq);
-        if (ZSTD_isError(error)) return error;
-        RETURN_ERROR_IF(nbSeq, corruption_detected, "");
-        RETURN_ERROR_IF(BIT_reloadDStream(&seqState.DStream) < BIT_DStream_completed, corruption_detected, "");
-        /* save reps for next block */
-        { U32 i; for (i=0; i<ZSTD_REP_NUM; i++) dctx->entropy.rep[i] = (U32)(seqState.prevOffset[i]); }
-    }
+    MAYBE_REFILL();
+    for ( ;; ) {
+      const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip++));
 
-    /* last literal segment */
-    {   size_t const lastLLSize = litEnd - litPtr;
-        RETURN_ERROR_IF(lastLLSize > (size_t)(oend-op), dstSize_tooSmall, "");
-        if (op != NULL) {
-            memcpy(op, litPtr, lastLLSize);
-            op += lastLLSize;
+      // Ratio of iterations that have LITERAL vs non-LITERAL for different
+      // inputs.
+      //
+      // input          LITERAL  NON_LITERAL
+      // -----------------------------------
+      // html|html4|cp   23%        77%
+      // urls            36%        64%
+      // jpg             47%        53%
+      // pdf             19%        81%
+      // txt[1-4]        25%        75%
+      // pb              24%        76%
+      // bin             24%        76%
+      if (SNAPPY_PREDICT_FALSE((c & 0x3) == LITERAL)) {
+        size_t literal_length = (c >> 2) + 1u;
+        if (writer->TryFastAppend(ip, ip_limit_ - ip, literal_length)) {
+          assert(literal_length < 61);
+          ip += literal_length;
+          // NOTE: There is no MAYBE_REFILL() here, as TryFastAppend()
+          // will not return true unless there's already at least five spare
+          // bytes in addition to the literal.
+          continue;
         }
-    }
-
-    return op-ostart;
-}
-
-static size_t
-ZSTD_decompressSequences_default(ZSTD_DCtx* dctx,
-                                 void* dst, size_t maxDstSize,
-                           const void* seqStart, size_t seqSize, int nbSeq,
-                           const ZSTD_longOffset_e isLongOffset,
-                           const int frame)
-{
-    return ZSTD_decompressSequences_body(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
-}
-#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG */
-
-#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
-FORCE_INLINE_TEMPLATE size_t
-ZSTD_decompressSequencesLong_body(
-                               ZSTD_DCtx* dctx,
-                               void* dst, size_t maxDstSize,
-                         const void* seqStart, size_t seqSize, int nbSeq,
-                         const ZSTD_longOffset_e isLongOffset,
-                         const int frame)
-{
-    const BYTE* ip = (const BYTE*)seqStart;
-    const BYTE* const iend = ip + seqSize;
-    BYTE* const ostart = (BYTE* const)dst;
-    BYTE* const oend = ostart + maxDstSize;
-    BYTE* op = ostart;
-    const BYTE* litPtr = dctx->litPtr;
-    const BYTE* const litEnd = litPtr + dctx->litSize;
-    const BYTE* const prefixStart = (const BYTE*) (dctx->prefixStart);
-    const BYTE* const dictStart = (const BYTE*) (dctx->virtualStart);
-    const BYTE* const dictEnd = (const BYTE*) (dctx->dictEnd);
-    (void)frame;
-
-    /* Regen sequences */
-    if (nbSeq) {
-#define STORED_SEQS 4
-#define STORED_SEQS_MASK (STORED_SEQS-1)
-#define ADVANCED_SEQS 4
-        seq_t sequences[STORED_SEQS];
-        int const seqAdvance = MIN(nbSeq, ADVANCED_SEQS);
-        seqState_t seqState;
-        int seqNb;
-        dctx->fseEntropy = 1;
-        { int i; for (i=0; i<ZSTD_REP_NUM; i++) seqState.prevOffset[i] = dctx->entropy.rep[i]; }
-        seqState.prefixStart = prefixStart;
-        seqState.pos = (size_t)(op-prefixStart);
-        seqState.dictEnd = dictEnd;
-        assert(dst != NULL);
-        assert(iend >= ip);
-        RETURN_ERROR_IF(
-            ERR_isError(BIT_initDStream(&seqState.DStream, ip, iend-ip)),
-            corruption_detected, "");
-        ZSTD_initFseState(&seqState.stateLL, &seqState.DStream, dctx->LLTptr);
-        ZSTD_initFseState(&seqState.stateOffb, &seqState.DStream, dctx->OFTptr);
-        ZSTD_initFseState(&seqState.stateML, &seqState.DStream, dctx->MLTptr);
-
-        /* prepare in advance */
-        for (seqNb=0; (BIT_reloadDStream(&seqState.DStream) <= BIT_DStream_completed) && (seqNb<seqAdvance); seqNb++) {
-            sequences[seqNb] = ZSTD_decodeSequence(&seqState, isLongOffset, ZSTD_p_prefetch);
-            PREFETCH_L1(sequences[seqNb].match); PREFETCH_L1(sequences[seqNb].match + sequences[seqNb].matchLength - 1); /* note : it's safe to invoke PREFETCH() on any memory address, including invalid ones */
-        }
-        RETURN_ERROR_IF(seqNb<seqAdvance, corruption_detected, "");
-
-        /* decode and decompress */
-        for ( ; (BIT_reloadDStream(&(seqState.DStream)) <= BIT_DStream_completed) && (seqNb<nbSeq) ; seqNb++) {
-            seq_t const sequence = ZSTD_decodeSequence(&seqState, isLongOffset, ZSTD_p_prefetch);
-            size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequences[(seqNb-ADVANCED_SEQS) & STORED_SEQS_MASK], &litPtr, litEnd, prefixStart, dictStart, dictEnd);
-#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
-            assert(!ZSTD_isError(oneSeqSize));
-            if (frame) ZSTD_assertValidSequence(dctx, op, oend, sequences[(seqNb-ADVANCED_SEQS) & STORED_SEQS_MASK], prefixStart, dictStart);
-#endif
-            if (ZSTD_isError(oneSeqSize)) return oneSeqSize;
-            PREFETCH_L1(sequence.match); PREFETCH_L1(sequence.match + sequence.matchLength - 1); /* note : it's safe to invoke PREFETCH() on any memory address, including invalid ones */
-            sequences[seqNb & STORED_SEQS_MASK] = sequence;
-            op += oneSeqSize;
-        }
-        RETURN_ERROR_IF(seqNb<nbSeq, corruption_detected, "");
-
-        /* finish queue */
-        seqNb -= seqAdvance;
-        for ( ; seqNb<nbSeq ; seqNb++) {
-            size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequences[seqNb&STORED_SEQS_MASK], &litPtr, litEnd, prefixStart, dictStart, dictEnd);
-#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
-            assert(!ZSTD_isError(oneSeqSize));
-            if (frame) ZSTD_assertValidSequence(dctx, op, oend, sequences[seqNb&STORED_SEQS_MASK], prefixStart, dictStart);
-#endif
-            if (ZSTD_isError(oneSeqSize)) return oneSeqSize;
-            op += oneSeqSize;
+        if (SNAPPY_PREDICT_FALSE(literal_length >= 61)) {
+          // Long literal.
+          const size_t literal_length_length = literal_length - 60;
+          literal_length =
+              ExtractLowBytes(LittleEndian::Load32(ip), literal_length_length) +
+              1;
+          ip += literal_length_length;
         }
 
-        /* save reps for next block */
-        { U32 i; for (i=0; i<ZSTD_REP_NUM; i++) dctx->entropy.rep[i] = (U32)(seqState.prevOffset[i]); }
-    }
-
-    /* last literal segment */
-    {   size_t const lastLLSize = litEnd - litPtr;
-        RETURN_ERROR_IF(lastLLSize > (size_t)(oend-op), dstSize_tooSmall, "");
-        if (op != NULL) {
-            memcpy(op, litPtr, lastLLSize);
-            op += lastLLSize;
+        size_t avail = ip_limit_ - ip;
+        while (avail < literal_length) {
+          if (!writer->Append(ip, avail)) return;
+          literal_length -= avail;
+          reader_->Skip(peeked_);
+          size_t n;
+          ip = reader_->Peek(&n);
+          avail = n;
+          peeked_ = avail;
+          if (avail == 0) return;  // Premature end of input
+          ip_limit_ = ip + avail;
         }
-    }
-
-    return op-ostart;
-}
-
-static size_t
-ZSTD_decompressSequencesLong_default(ZSTD_DCtx* dctx,
-                                 void* dst, size_t maxDstSize,
-                           const void* seqStart, size_t seqSize, int nbSeq,
-                           const ZSTD_longOffset_e isLongOffset,
-                           const int frame)
-{
-    return ZSTD_decompressSequencesLong_body(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
-}
-#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT */
-
-
-
-#if DYNAMIC_BMI2
-
-#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG
-#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG */
-
-#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
-static TARGET_ATTRIBUTE("bmi2") size_t
-ZSTD_decompressSequencesLong_bmi2(ZSTD_DCtx* dctx,
-                                 void* dst, size_t maxDstSize,
-                           const void* seqStart, size_t seqSize, int nbSeq,
-                           const ZSTD_longOffset_e isLongOffset,
-                           const int frame)
-{
-    return ZSTD_decompressSequencesLong_body(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
-}
-#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT */
-
-#endif /* DYNAMIC_BMI2 */
-
-typedef size_t (*ZSTD_decompressSequences_t)(
-                            ZSTD_DCtx* dctx,
-                            void* dst, size_t maxDstSize,
-                            const void* seqStart, size_t seqSize, int nbSeq,
-                            const ZSTD_longOffset_e isLongOffset,
-                            const int frame);
-
-#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG
-static size_t
-ZSTD_decompressSequences(ZSTD_DCtx* dctx, void* dst, size_t maxDstSize,
-                   const void* seqStart, size_t seqSize, int nbSeq,
-                   const ZSTD_longOffset_e isLongOffset,
-                   const int frame)
-{
-    DEBUGLOG(5, "ZSTD_decompressSequences");
-  return ZSTD_decompressSequences_default(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
-}
-#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG */
-
-
-#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
-/* ZSTD_decompressSequencesLong() :
- * decompression function triggered when a minimum share of offsets is considered "long",
- * aka out of cache.
- * note : "long" definition seems overloaded here, sometimes meaning "wider than bitstream register", and sometimes meaning "farther than memory cache distance".
- * This function will try to mitigate main memory latency through the use of prefetching */
-static size_t
-ZSTD_decompressSequencesLong(ZSTD_DCtx* dctx,
-                             void* dst, size_t maxDstSize,
-                             const void* seqStart, size_t seqSize, int nbSeq,
-                             const ZSTD_longOffset_e isLongOffset,
-                             const int frame)
-{
-    DEBUGLOG(5, "ZSTD_decompressSequencesLong");
-#if DYNAMIC_BMI2
-    if (dctx->bmi2) {
-        return ZSTD_decompressSequencesLong_bmi2(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
-    }
-#endif
-  return ZSTD_decompressSequencesLong_default(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
-}
-#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT */
-
-
-
-#if !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
-    !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
-/* ZSTD_getLongOffsetsShare() :
- * condition : offTable must be valid
- * @return : "share" of long offsets (arbitrarily defined as > (1<<23))
- *           compared to maximum possible of (1<<OffFSELog) */
-static unsigned
-ZSTD_getLongOffsetsShare(const ZSTD_seqSymbol* offTable)
-{
-    const void* ptr = offTable;
-    U32 const tableLog = ((const ZSTD_seqSymbol_header*)ptr)[0].tableLog;
-    const ZSTD_seqSymbol* table = offTable + 1;
-    U32 const max = 1 << tableLog;
-    U32 u, total = 0;
-    DEBUGLOG(5, "ZSTD_getLongOffsetsShare: (tableLog=%u)", tableLog);
-
-    assert(max <= (1 << OffFSELog));  /* max not too large */
-    for (u=0; u<max; u++) {
-        if (table[u].nbAdditionalBits > 22) total += 1;
-    }
-
-    assert(tableLog <= OffFSELog);
-    total <<= (OffFSELog - tableLog);  /* scale to OffFSELog */
-
-    return total;
-}
-#endif
-
-size_t
-ZSTD_decompressBlock_internal(ZSTD_DCtx* dctx,
-                              void* dst, size_t dstCapacity,
-                        const void* src, size_t srcSize, const int frame)
-{   /* blockType == blockCompressed */
-    const BYTE* ip = (const BYTE*)src;
-    /* isLongOffset must be true if there are long offsets.
-     * Offsets are long if they are larger than 2^STREAM_ACCUMULATOR_MIN.
-     * We don't expect that to be the case in 64-bit mode.
-     * In block mode, window size is not known, so we have to be conservative.
-     * (note: but it could be evaluated from current-lowLimit)
-     */
-    ZSTD_longOffset_e const isLongOffset = (ZSTD_longOffset_e)(MEM_32bits() && (!frame || (dctx->fParams.windowSize > (1ULL << STREAM_ACCUMULATOR_MIN))));
-    DEBUGLOG(5, "ZSTD_decompressBlock_internal (size : %u)", (U32)srcSize);
-
-    RETURN_ERROR_IF(srcSize >= ZSTD_BLOCKSIZE_MAX, srcSize_wrong, "");
-
-    /* Decode literals section */
-    {   size_t const litCSize = ZSTD_decodeLiteralsBlock(dctx, src, srcSize);
-        DEBUGLOG(5, "ZSTD_decodeLiteralsBlock : %u", (U32)litCSize);
-        if (ZSTD_isError(litCSize)) return litCSize;
-        ip += litCSize;
-        srcSize -= litCSize;
-    }
-
-    /* Build Decoding Tables */
-    {
-        /* These macros control at build-time which decompressor implementation
-         * we use. If neither is defined, we do some inspection and dispatch at
-         * runtime.
-         */
-#if !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
-    !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
-        int usePrefetchDecoder = dctx->ddictIsCold;
-#endif
-        int nbSeq;
-        size_t const seqHSize = ZSTD_decodeSeqHeaders(dctx, &nbSeq, ip, srcSize);
-        if (ZSTD_isError(seqHSize)) return seqHSize;
-        ip += seqHSize;
-        srcSize -= seqHSize;
-
-        RETURN_ERROR_IF(dst == NULL && nbSeq > 0, dstSize_tooSmall, "NULL not handled");
-
-#if !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
-    !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
-        if ( !usePrefetchDecoder
-          && (!frame || (dctx->fParams.windowSize > (1<<24)))
-          && (nbSeq>ADVANCED_SEQS) ) {  /* could probably use a larger nbSeq limit */
-            U32 const shareLongOffsets = ZSTD_getLongOffsetsShare(dctx->OFTptr);
-            U32 const minShare = MEM_64bits() ? 7 : 20; /* heuristic values, correspond to 2.73% and 7.81% */
-            usePrefetchDecoder = (shareLongOffsets >= minShare);
+        if (!writer->Append(ip, literal_length)) {
+          return;
         }
-#endif
+        ip += literal_length;
+        MAYBE_REFILL();
+      } else {
+        const size_t entry = char_table[c];
+        const size_t trailer =
+            ExtractLowBytes(LittleEndian::Load32(ip), entry >> 11);
+        const size_t length = entry & 0xff;
+        ip += entry >> 11;
 
-        dctx->ddictIsCold = 0;
-
-#if !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
-    !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
-        if (usePrefetchDecoder)
-#endif
-#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
-            return ZSTD_decompressSequencesLong(dctx, dst, dstCapacity, ip, srcSize, nbSeq, isLongOffset, frame);
-#endif
-
-#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG
-        /* else */
-        return ZSTD_decompressSequences(dctx, dst, dstCapacity, ip, srcSize, nbSeq, isLongOffset, frame);
-#endif
+        // copy_offset/256 is encoded in bits 8..10.  By just fetching
+        // those bits, we get copy_offset (since the bit-field starts at
+        // bit 8).
+        const size_t copy_offset = entry & 0x700;
+        if (!writer->AppendFromSelf(copy_offset + trailer, length)) {
+          return;
+        }
+        MAYBE_REFILL();
+      }
     }
-}
 
+#undef MAYBE_REFILL
+  }
+};
 
-void ZSTD_checkContinuity(ZSTD_DCtx* dctx, const void* dst)
-{
-    if (dst != dctx->previousDstEnd) {   /* not contiguous */
-        dctx->dictEnd = dctx->previousDstEnd;
-        dctx->virtualStart = (const char*)dst - ((const char*)(dctx->previousDstEnd) - (const char*)(dctx->prefixStart));
-        dctx->prefixStart = dst;
-        dctx->previousDstEnd = dst;
+bool SnappyDecompressor::RefillTag() {
+  const char* ip = ip_;
+  if (ip == ip_limit_) {
+    // Fetch a new fragment from the reader
+    reader_->Skip(peeked_);   // All peeked bytes are used up
+    size_t n;
+    ip = reader_->Peek(&n);
+    peeked_ = n;
+    eof_ = (n == 0);
+    if (eof_) return false;
+    ip_limit_ = ip + n;
+  }
+
+  // Read the tag character
+  assert(ip < ip_limit_);
+  const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip));
+  const uint32 entry = char_table[c];
+  const uint32 needed = (entry >> 11) + 1;  // +1 byte for 'c'
+  assert(needed <= sizeof(scratch_));
+
+  // Read more bytes from reader if needed
+  uint32 nbuf = ip_limit_ - ip;
+  if (nbuf < needed) {
+    // Stitch together bytes from ip and reader to form the word
+    // contents.  We store the needed bytes in "scratch_".  They
+    // will be consumed immediately by the caller since we do not
+    // read more than we need.
+    memmove(scratch_, ip, nbuf);
+    reader_->Skip(peeked_);  // All peeked bytes are used up
+    peeked_ = 0;
+    while (nbuf < needed) {
+      size_t length;
+      const char* src = reader_->Peek(&length);
+      if (length == 0) return false;
+      uint32 to_add = std::min<uint32>(needed - nbuf, length);
+      memcpy(scratch_ + nbuf, src, to_add);
+      nbuf += to_add;
+      reader_->Skip(to_add);
     }
+    assert(nbuf == needed);
+    ip_ = scratch_;
+    ip_limit_ = scratch_ + needed;
+  } else if (nbuf < kMaximumTagLength) {
+    // Have enough bytes, but move into scratch_ so that we do not
+    // read past end of input
+    memmove(scratch_, ip, nbuf);
+    reader_->Skip(peeked_);  // All peeked bytes are used up
+    peeked_ = 0;
+    ip_ = scratch_;
+    ip_limit_ = scratch_ + nbuf;
+  } else {
+    // Pass pointer to buffer returned by reader_.
+    ip_ = ip;
+  }
+  return true;
 }
 
+template <typename Writer>
+static bool InternalUncompress(Source* r, Writer* writer) {
+  // Read the uncompressed length from the front of the compressed input
+  SnappyDecompressor decompressor(r);
+  uint32 uncompressed_len = 0;
+  if (!decompressor.ReadUncompressedLength(&uncompressed_len)) return false;
 
-size_t ZSTD_decompressBlock(ZSTD_DCtx* dctx,
-                            void* dst, size_t dstCapacity,
-                      const void* src, size_t srcSize)
-{
-    size_t dSize;
-    ZSTD_checkContinuity(dctx, dst);
-    dSize = ZSTD_decompressBlock_internal(dctx, dst, dstCapacity, src, srcSize, /* frame */ 0);
-    dctx->previousDstEnd = (char*)dst + dSize;
-    return dSize;
+  return InternalUncompressAllTags(&decompressor, writer, r->Available(),
+                                   uncompressed_len);
 }
 
+template <typename Writer>
+static bool InternalUncompressAllTags(SnappyDecompressor* decompressor,
+                                      Writer* writer,
+                                      uint32 compressed_len,
+                                      uint32 uncompressed_len) {
+  Report("snappy_uncompress", compressed_len, uncompressed_len);
+
+  writer->SetExpectedLength(uncompressed_len);
+
+  // Process the entire input
+  decompressor->DecompressAllTags(writer);
+  writer->Flush();
+  return (decompressor->eof() && writer->CheckLength());
 }
+
+bool GetUncompressedLength(Source* source, uint32* result) {
+  SnappyDecompressor decompressor(source);
+  return decompressor.ReadUncompressedLength(result);
+}
+
+size_t Compress(Source* reader, Sink* writer) {
+  size_t written = 0;
+  size_t N = reader->Available();
+  const size_t uncompressed_size = N;
+  char ulength[Varint::kMax32];
+  char* p = Varint::Encode32(ulength, N);
+  writer->Append(ulength, p-ulength);
+  written += (p - ulength);
+
+  internal::WorkingMemory wmem(N);
+
+  while (N > 0) {
+    // Get next block to compress (without copying if possible)
+    size_t fragment_size;
+    const char* fragment = reader->Peek(&fragment_size);
+    assert(fragment_size != 0);  // premature end of input
+    const size_t num_to_read = std::min(N, kBlockSize);
+    size_t bytes_read = fragment_size;
+
+    size_t pending_advance = 0;
+    if (bytes_read >= num_to_read) {
+      // Buffer returned by reader is large enough
+      pending_advance = num_to_read;
+      fragment_size = num_to_read;
+    } else {
+      char* scratch = wmem.GetScratchInput();
+      memcpy(scratch, fragment, bytes_read);
+      reader->Skip(bytes_read);
+
+      while (bytes_read < num_to_read) {
+        fragment = reader->Peek(&fragment_size);
+        size_t n = std::min<size_t>(fragment_size, num_to_read - bytes_read);
+        memcpy(scratch + bytes_read, fragment, n);
+        bytes_read += n;
+        reader->Skip(n);
+      }
+      assert(bytes_read == num_to_read);
+      fragment = scratch;
+      fragment_size = num_to_read;
+    }
+    assert(fragment_size == num_to_read);
+
+    // Get encoding table for compression
+    int table_size;
+    uint16* table = wmem.GetHashTable(num_to_read, &table_size);
+
+    // Compress input_fragment and append to dest
+    const int max_output = MaxCompressedLength(num_to_read);
+
+    // Need a scratch buffer for the output, in case the byte sink doesn't
+    // have room for us directly.
+
+    // Since we encode kBlockSize regions followed by a region
+    // which is <= kBlockSize in length, a previously allocated
+    // scratch_output[] region is big enough for this iteration.
+    char* dest = writer->GetAppendBuffer(max_output, wmem.GetScratchOutput());
+    char* end = internal::CompressFragment(fragment, fragment_size, dest, table,
+                                           table_size);
+    writer->Append(dest, end - dest);
+    written += (end - dest);
+
+    N -= num_to_read;
+    reader->Skip(pending_advance);
+  }
+
+  Report("snappy_compress", written, uncompressed_size);
+
+  return written;
+}
+
+// -----------------------------------------------------------------------
+// IOVec interfaces
+// -----------------------------------------------------------------------
+
+// A type that writes to an iovec.
+// Note that this is not a "ByteSink", but a type that matches the
+// Writer template argument to SnappyDecompressor::DecompressAllTags().
+class SnappyIOVecWriter {
+ private:
+  // output_iov_end_ is set to iov + count and used to determine when
+  // the end of the iovs is reached.
+  const struct iovec* output_iov_end_;
+
+#if !defined(NDEBUG)
+  const struct iovec* output_iov_;
+#endif  // !defined(NDEBUG)
+
+  // Current iov that is being written into.
+  const struct iovec* curr_iov_;
+
+  // Pointer to current iov's write location.
+  char* curr_iov_output_;
+
+  // Remaining bytes to write into curr_iov_output.
+  size_t curr_iov_remaining_;
+
+  // Total bytes decompressed into output_iov_ so far.
+  size_t total_written_;
+
+  // Maximum number of bytes that will be decompressed into output_iov_.
+  size_t output_limit_;
+
+  static inline char* GetIOVecPointer(const struct iovec* iov, size_t offset) {
+    return reinterpret_cast<char*>(iov->iov_base) + offset;
+  }
+
+ public:
+  // Does not take ownership of iov. iov must be valid during the
+  // entire lifetime of the SnappyIOVecWriter.
+  inline SnappyIOVecWriter(const struct iovec* iov, size_t iov_count)
+      : output_iov_end_(iov + iov_count),
+#if !defined(NDEBUG)
+        output_iov_(iov),
+#endif  // !defined(NDEBUG)
+        curr_iov_(iov),
+        curr_iov_output_(iov_count ? reinterpret_cast<char*>(iov->iov_base)
+                                   : nullptr),
+        curr_iov_remaining_(iov_count ? iov->iov_len : 0),
+        total_written_(0),
+        output_limit_(-1) {}
+
+  inline void SetExpectedLength(size_t len) {
+    output_limit_ = len;
+  }
+
+  inline bool CheckLength() const {
+    return total_written_ == output_limit_;
+  }
+
+  inline bool Append(const char* ip, size_t len) {
+    if (total_written_ + len > output_limit_) {
+      return false;
+    }
+
+    return AppendNoCheck(ip, len);
+  }
+
+  inline bool AppendNoCheck(const char* ip, size_t len) {
+    while (len > 0) {
+      if (curr_iov_remaining_ == 0) {
+        // This iovec is full. Go to the next one.
+        if (curr_iov_ + 1 >= output_iov_end_) {
+          return false;
+        }
+        ++curr_iov_;
+        curr_iov_output_ = reinterpret_cast<char*>(curr_iov_->iov_base);
+        curr_iov_remaining_ = curr_iov_->iov_len;
+      }
+
+      const size_t to_write = std::min(len, curr_iov_remaining_);
+      memcpy(curr_iov_output_, ip, to_write);
+      curr_iov_output_ += to_write;
+      curr_iov_remaining_ -= to_write;
+      total_written_ += to_write;
+      ip += to_write;
+      len -= to_write;
+    }
+
+    return true;
+  }
+
+  inline bool TryFastAppend(const char* ip, size_t available, size_t len) {
+    const size_t space_left = output_limit_ - total_written_;
+    if (len <= 16 && available >= 16 + kMaximumTagLength && space_left >= 16 &&
+        curr_iov_remaining_ >= 16) {
+      // Fast path, used for the majority (about 95%) of invocations.
+      UnalignedCopy128(ip, curr_iov_output_);
+      curr_iov_output_ += len;
+      curr_iov_remaining_ -= len;
+      total_written_ += len;
+      return true;
+    }
+
+    return false;
+  }
+
+  inline bool AppendFromSelf(size_t offset, size_t len) {
+    // See SnappyArrayWriter::AppendFromSelf for an explanation of
+    // the "offset - 1u" trick.
+    if (offset - 1u >= total_written_) {
+      return false;
+    }
+    const size_t space_left = output_limit_ - total_written_;
+    if (len > space_left) {
+      return false;
+    }
+
+    // Locate the iovec from which we need to start the copy.
+    const iovec* from_iov = curr_iov_;
+    size_t from_iov_offset = curr_iov_->iov_len - curr_iov_remaining_;
+    while (offset > 0) {
+      if (from_iov_offset >= offset) {
+        from_iov_offset -= offset;
+        break;
+      }
+
+      offset -= from_iov_offset;
+      --from_iov;
+#if !defined(NDEBUG)
+      assert(from_iov >= output_iov_);
+#endif  // !defined(NDEBUG)
+      from_iov_offset = from_iov->iov_len;
+    }
+
+    // Copy <len> bytes starting from the iovec pointed to by from_iov_index to
+    // the current iovec.
+    while (len > 0) {
+      assert(from_iov <= curr_iov_);
+      if (from_iov != curr_iov_) {
+        const size_t to_copy =
+            std::min((unsigned long)(from_iov->iov_len - from_iov_offset), (unsigned long)len);
+        AppendNoCheck(GetIOVecPointer(from_iov, from_iov_offset), to_copy);
+        len -= to_copy;
+        if (len > 0) {
+          ++from_iov;
+          from_iov_offset = 0;
+        }
+      } else {
+        size_t to_copy = curr_iov_remaining_;
+        if (to_copy == 0) {
+          // This iovec is full. Go to the next one.
+          if (curr_iov_ + 1 >= output_iov_end_) {
+            return false;
+          }
+          ++curr_iov_;
+          curr_iov_output_ = reinterpret_cast<char*>(curr_iov_->iov_base);
+          curr_iov_remaining_ = curr_iov_->iov_len;
+          continue;
+        }
+        if (to_copy > len) {
+          to_copy = len;
+        }
+
+        IncrementalCopy(GetIOVecPointer(from_iov, from_iov_offset),
+                        curr_iov_output_, curr_iov_output_ + to_copy,
+                        curr_iov_output_ + curr_iov_remaining_);
+        curr_iov_output_ += to_copy;
+        curr_iov_remaining_ -= to_copy;
+        from_iov_offset += to_copy;
+        total_written_ += to_copy;
+        len -= to_copy;
+      }
+    }
+
+    return true;
+  }
+
+  inline void Flush() {}
+};
+
+bool RawUncompressToIOVec(const char* compressed, size_t compressed_length,
+                          const struct iovec* iov, size_t iov_cnt) {
+  ByteArraySource reader(compressed, compressed_length);
+  return RawUncompressToIOVec(&reader, iov, iov_cnt);
+}
+
+bool RawUncompressToIOVec(Source* compressed, const struct iovec* iov,
+                          size_t iov_cnt) {
+  SnappyIOVecWriter output(iov, iov_cnt);
+  return InternalUncompress(compressed, &output);
+}
+
+// -----------------------------------------------------------------------
+// Flat array interfaces
+// -----------------------------------------------------------------------
+
+// A type that writes to a flat array.
+// Note that this is not a "ByteSink", but a type that matches the
+// Writer template argument to SnappyDecompressor::DecompressAllTags().
+class SnappyArrayWriter {
+ private:
+  char* base_;
+  char* op_;
+  char* op_limit_;
+
+ public:
+  inline explicit SnappyArrayWriter(char* dst)
+      : base_(dst),
+        op_(dst),
+        op_limit_(dst) {
+  }
+
+  inline void SetExpectedLength(size_t len) {
+    op_limit_ = op_ + len;
+  }
+
+  inline bool CheckLength() const {
+    return op_ == op_limit_;
+  }
+
+  inline bool Append(const char* ip, size_t len) {
+    char* op = op_;
+    const size_t space_left = op_limit_ - op;
+    if (space_left < len) {
+      return false;
+    }
+    memcpy(op, ip, len);
+    op_ = op + len;
+    return true;
+  }
+
+  inline bool TryFastAppend(const char* ip, size_t available, size_t len) {
+    char* op = op_;
+    const size_t space_left = op_limit_ - op;
+    if (len <= 16 && available >= 16 + kMaximumTagLength && space_left >= 16) {
+      // Fast path, used for the majority (about 95%) of invocations.
+      UnalignedCopy128(ip, op);
+      op_ = op + len;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  inline bool AppendFromSelf(size_t offset, size_t len) {
+    char* const op_end = op_ + len;
+
+    // Check if we try to append from before the start of the buffer.
+    // Normally this would just be a check for "produced < offset",
+    // but "produced <= offset - 1u" is equivalent for every case
+    // except the one where offset==0, where the right side will wrap around
+    // to a very big number. This is convenient, as offset==0 is another
+    // invalid case that we also want to catch, so that we do not go
+    // into an infinite loop.
+    if (Produced() <= offset - 1u || op_end > op_limit_) return false;
+    op_ = IncrementalCopy(op_ - offset, op_, op_end, op_limit_);
+
+    return true;
+  }
+  inline size_t Produced() const {
+    assert(op_ >= base_);
+    return op_ - base_;
+  }
+  inline void Flush() {}
+};
+
+bool RawUncompress(const char* compressed, size_t n, char* uncompressed) {
+  ByteArraySource reader(compressed, n);
+  return RawUncompress(&reader, uncompressed);
+}
+
+bool RawUncompress(Source* compressed, char* uncompressed) {
+  SnappyArrayWriter output(uncompressed);
+  return InternalUncompress(compressed, &output);
+}
+
+bool Uncompress(const char* compressed, size_t n, string* uncompressed) {
+  size_t ulength;
+  if (!GetUncompressedLength(compressed, n, &ulength)) {
+    return false;
+  }
+  // On 32-bit builds: max_size() < kuint32max.  Check for that instead
+  // of crashing (e.g., consider externally specified compressed data).
+  if (ulength > uncompressed->max_size()) {
+    return false;
+  }
+  STLStringResizeUninitialized(uncompressed, ulength);
+  return RawUncompress(compressed, n, string_as_array(uncompressed));
+}
+
+// A Writer that drops everything on the floor and just does validation
+class SnappyDecompressionValidator {
+ private:
+  size_t expected_;
+  size_t produced_;
+
+ public:
+  inline SnappyDecompressionValidator() : expected_(0), produced_(0) { }
+  inline void SetExpectedLength(size_t len) {
+    expected_ = len;
+  }
+  inline bool CheckLength() const {
+    return expected_ == produced_;
+  }
+  inline bool Append(const char* ip, size_t len) {
+    produced_ += len;
+    return produced_ <= expected_;
+  }
+  inline bool TryFastAppend(const char* ip, size_t available, size_t length) {
+    return false;
+  }
+  inline bool AppendFromSelf(size_t offset, size_t len) {
+    // See SnappyArrayWriter::AppendFromSelf for an explanation of
+    // the "offset - 1u" trick.
+    if (produced_ <= offset - 1u) return false;
+    produced_ += len;
+    return produced_ <= expected_;
+  }
+  inline void Flush() {}
+};
+
+bool IsValidCompressedBuffer(const char* compressed, size_t n) {
+  ByteArraySource reader(compressed, n);
+  SnappyDecompressionValidator writer;
+  return InternalUncompress(&reader, &writer);
+}
+
+bool IsValidCompressed(Source* compressed) {
+  SnappyDecompressionValidator writer;
+  return InternalUncompress(compressed, &writer);
+}
+
+void RawCompress(const char* input,
+                 size_t input_length,
+                 char* compressed,
+                 size_t* compressed_length) {
+  ByteArraySource reader(input, input_length);
+  UncheckedByteArraySink writer(compressed);
+  Compress(&reader, &writer);
+
+  // Compute how many bytes were added
+  *compressed_length = (writer.CurrentDestination() - compressed);
+}
+
+size_t Compress(const char* input, size_t input_length, string* compressed) {
+  // Pre-grow the buffer to the max length of the compressed output
+  STLStringResizeUninitialized(compressed, MaxCompressedLength(input_length));
+
+  size_t compressed_length;
+  RawCompress(input, input_length, string_as_array(compressed),
+              &compressed_length);
+  compressed->resize(compressed_length);
+  return compressed_length;
+}
+
+// -----------------------------------------------------------------------
+// Sink interface
+// -----------------------------------------------------------------------
+
+// A type that decompresses into a Sink. The template parameter
+// Allocator must export one method "char* Allocate(int size);", which
+// allocates a buffer of "size" and appends that to the destination.
+template <typename Allocator>
+class SnappyScatteredWriter {
+  Allocator allocator_;
+
+  // We need random access into the data generated so far.  Therefore
+  // we keep track of all of the generated data as an array of blocks.
+  // All of the blocks except the last have length kBlockSize.
+  std::vector<char*> blocks_;
+  size_t expected_;
+
+  // Total size of all fully generated blocks so far
+  size_t full_size_;
+
+  // Pointer into current output block
+  char* op_base_;       // Base of output block
+  char* op_ptr_;        // Pointer to next unfilled byte in block
+  char* op_limit_;      // Pointer just past block
+
+  inline size_t Size() const {
+    return full_size_ + (op_ptr_ - op_base_);
+  }
+
+  bool SlowAppend(const char* ip, size_t len);
+  bool SlowAppendFromSelf(size_t offset, size_t len);
+
+ public:
+  inline explicit SnappyScatteredWriter(const Allocator& allocator)
+      : allocator_(allocator),
+        full_size_(0),
+        op_base_(NULL),
+        op_ptr_(NULL),
+        op_limit_(NULL) {
+  }
+
+  inline void SetExpectedLength(size_t len) {
+    assert(blocks_.empty());
+    expected_ = len;
+  }
+
+  inline bool CheckLength() const {
+    return Size() == expected_;
+  }
+
+  // Return the number of bytes actually uncompressed so far
+  inline size_t Produced() const {
+    return Size();
+  }
+
+  inline bool Append(const char* ip, size_t len) {
+    size_t avail = op_limit_ - op_ptr_;
+    if (len <= avail) {
+      // Fast path
+      memcpy(op_ptr_, ip, len);
+      op_ptr_ += len;
+      return true;
+    } else {
+      return SlowAppend(ip, len);
+    }
+  }
+
+  inline bool TryFastAppend(const char* ip, size_t available, size_t length) {
+    char* op = op_ptr_;
+    const int space_left = op_limit_ - op;
+    if (length <= 16 && available >= 16 + kMaximumTagLength &&
+        space_left >= 16) {
+      // Fast path, used for the majority (about 95%) of invocations.
+      UnalignedCopy128(ip, op);
+      op_ptr_ = op + length;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  inline bool AppendFromSelf(size_t offset, size_t len) {
+    char* const op_end = op_ptr_ + len;
+    // See SnappyArrayWriter::AppendFromSelf for an explanation of
+    // the "offset - 1u" trick.
+    if (SNAPPY_PREDICT_TRUE(offset - 1u < (size_t)(op_ptr_ - op_base_) &&
+                          op_end <= op_limit_)) {
+      // Fast path: src and dst in current block.
+      op_ptr_ = IncrementalCopy(op_ptr_ - offset, op_ptr_, op_end, op_limit_);
+      return true;
+    }
+    return SlowAppendFromSelf(offset, len);
+  }
+
+  // Called at the end of the decompress. We ask the allocator
+  // write all blocks to the sink.
+  inline void Flush() { allocator_.Flush(Produced()); }
+};
+
+template<typename Allocator>
+bool SnappyScatteredWriter<Allocator>::SlowAppend(const char* ip, size_t len) {
+  size_t avail = op_limit_ - op_ptr_;
+  while (len > avail) {
+    // Completely fill this block
+    memcpy(op_ptr_, ip, avail);
+    op_ptr_ += avail;
+    assert(op_limit_ - op_ptr_ == 0);
+    full_size_ += (op_ptr_ - op_base_);
+    len -= avail;
+    ip += avail;
+
+    // Bounds check
+    if (full_size_ + len > expected_) {
+      return false;
+    }
+
+    // Make new block
+    size_t bsize = std::min<size_t>(kBlockSize, expected_ - full_size_);
+    op_base_ = allocator_.Allocate(bsize);
+    op_ptr_ = op_base_;
+    op_limit_ = op_base_ + bsize;
+    blocks_.push_back(op_base_);
+    avail = bsize;
+  }
+
+  memcpy(op_ptr_, ip, len);
+  op_ptr_ += len;
+  return true;
+}
+
+template<typename Allocator>
+bool SnappyScatteredWriter<Allocator>::SlowAppendFromSelf(size_t offset,
+                                                         size_t len) {
+  // Overflow check
+  // See SnappyArrayWriter::AppendFromSelf for an explanation of
+  // the "offset - 1u" trick.
+  const size_t cur = Size();
+  if (offset - 1u >= cur) return false;
+  if (expected_ - cur < len) return false;
+
+  // Currently we shouldn't ever hit this path because Compress() chops the
+  // input into blocks and does not create cross-block copies. However, it is
+  // nice if we do not rely on that, since we can get better compression if we
+  // allow cross-block copies and thus might want to change the compressor in
+  // the future.
+  size_t src = cur - offset;
+  while (len-- > 0) {
+    char c = blocks_[src >> kBlockLog][src & (kBlockSize-1)];
+    Append(&c, 1);
+    src++;
+  }
+  return true;
+}
+
+class SnappySinkAllocator {
+ public:
+  explicit SnappySinkAllocator(Sink* dest): dest_(dest) {}
+  ~SnappySinkAllocator() {}
+
+  char* Allocate(int size) {
+    Datablock block(new char[size], size);
+    blocks_.push_back(block);
+    return block.data;
+  }
+
+  // We flush only at the end, because the writer wants
+  // random access to the blocks and once we hand the
+  // block over to the sink, we can't access it anymore.
+  // Also we don't write more than has been actually written
+  // to the blocks.
+  void Flush(size_t size) {
+    size_t size_written = 0;
+    size_t block_size;
+    for (size_t i = 0; i < blocks_.size(); ++i) {
+      block_size = std::min<size_t>(blocks_[i].size, size - size_written);
+      dest_->AppendAndTakeOwnership(blocks_[i].data, block_size,
+                                    &SnappySinkAllocator::Deleter, NULL);
+      size_written += block_size;
+    }
+    blocks_.clear();
+  }
+
+ private:
+  struct Datablock {
+    char* data;
+    size_t size;
+    Datablock(char* p, size_t s) : data(p), size(s) {}
+  };
+
+  static void Deleter(void* arg, const char* bytes, size_t size) {
+    delete[] bytes;
+  }
+
+  Sink* dest_;
+  std::vector<Datablock> blocks_;
+
+  // Note: copying this object is allowed
+};
+
+size_t UncompressAsMuchAsPossible(Source* compressed, Sink* uncompressed) {
+  SnappySinkAllocator allocator(uncompressed);
+  SnappyScatteredWriter<SnappySinkAllocator> writer(allocator);
+  InternalUncompress(compressed, &writer);
+  return writer.Produced();
+}
+
+bool Uncompress(Source* compressed, Sink* uncompressed) {
+  // Read the uncompressed length from the front of the compressed input
+  SnappyDecompressor decompressor(compressed);
+  uint32 uncompressed_len = 0;
+  if (!decompressor.ReadUncompressedLength(&uncompressed_len)) {
+    return false;
+  }
+
+  char c;
+  size_t allocated_size;
+  char* buf = uncompressed->GetAppendBufferVariable(
+      1, uncompressed_len, &c, 1, &allocated_size);
+
+  const size_t compressed_len = compressed->Available();
+  // If we can get a flat buffer, then use it, otherwise do block by block
+  // uncompression
+  if (allocated_size >= uncompressed_len) {
+    SnappyArrayWriter writer(buf);
+    bool result = InternalUncompressAllTags(&decompressor, &writer,
+                                            compressed_len, uncompressed_len);
+    uncompressed->Append(buf, writer.Produced());
+    return result;
+  } else {
+    SnappySinkAllocator allocator(uncompressed);
+    SnappyScatteredWriter<SnappySinkAllocator> writer(allocator);
+    return InternalUncompressAllTags(&decompressor, &writer, compressed_len,
+                                     uncompressed_len);
+  }
+}
+
+}  // namespace duckdb_snappy
+
 
 // LICENSE_CHANGE_END
 
@@ -27272,6 +22065,7 @@ timestamp_t ImpalaTimestampToTimestamp(const Int96 &raw_ts);
 Int96 TimestampToImpalaTimestamp(timestamp_t &ts);
 timestamp_t ParquetTimestampMicrosToTimestamp(const int64_t &raw_ts);
 timestamp_t ParquetTimestampMsToTimestamp(const int64_t &raw_ts);
+timestamp_t ParquetTimestampNsToTimestamp(const int64_t &raw_ts);
 date_t ParquetIntToDate(const int32_t &raw_date);
 dtime_t ParquetIntToTime(const int64_t &raw_time);
 
@@ -27292,7 +22086,7 @@ dtime_t ParquetIntToTime(const int64_t &raw_time);
 namespace duckdb {
 
 enum class UnicodeType { INVALID, ASCII, UNICODE };
-enum class UnicodeInvalidReason { BYTE_MISMATCH, NULL_BYTE };
+enum class UnicodeInvalidReason { BYTE_MISMATCH, INVALID_UNICODE };
 
 class Utf8Proc {
 public:
@@ -27313,7 +22107,9 @@ public:
 	static int CodepointLength(int cp);
 	//! Transform a UTF8 string to a codepoint; returns the codepoint and writes the length of the codepoint (in UTF8) to sz
 	static int32_t UTF8ToCodepoint(const char *c, int &sz);
+	//! Returns the render width of a single character in a string
 	static size_t RenderWidth(const char *s, size_t len, size_t pos);
+	static size_t RenderWidth(const std::string &str);
 
 };
 
@@ -27451,9 +22247,11 @@ public:
 
 	uint8_t byte_pos;
 
-	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override {
+	void InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns,
+	                    TProtocol &protocol_p) override {
 		byte_pos = 0;
-		TemplatedColumnReader<bool, BooleanParquetValueConversion>::InitializeRead(columns, protocol_p);
+		TemplatedColumnReader<bool, BooleanParquetValueConversion>::InitializeRead(row_group_idx_p, columns,
+		                                                                           protocol_p);
 	}
 };
 
@@ -27505,8 +22303,8 @@ public:
 	DataChunk intermediate_chunk;
 
 public:
-	unique_ptr<BaseStatistics> Stats(const std::vector<ColumnChunk> &columns) override;
-	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override;
+	unique_ptr<BaseStatistics> Stats(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns) override;
+	void InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override;
 
 	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
 	           Vector &result) override;
@@ -27525,6 +22323,125 @@ public:
 	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override {
 		child_reader->RegisterPrefetch(transport, allow_merge);
 	}
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// generated_column_reader.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/limits.hpp"
+#endif
+
+
+
+namespace duckdb {
+
+//! Reads a constant that is not read from the parquet file but instead generated by the parquet reader, used for
+//! filename column. Can be used for handling hive partitioning later.
+class GeneratedConstantColumnReader : public ColumnReader {
+public:
+	GeneratedConstantColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p,
+	                              idx_t schema_idx_p, idx_t max_define_p, idx_t max_repeat_p, Value constant);
+	Value constant;
+
+public:
+	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
+	           Vector &result) override;
+
+	unique_ptr<BaseStatistics> Stats(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns) override {
+		switch (type.id()) {
+		case LogicalTypeId::VARCHAR: {
+			auto string_stats = make_unique<StringStatistics>(type, StatisticsType::LOCAL_STATS);
+			string string = constant.ToString();
+			string_stats->Update(string);
+			string_stats->max_string_length = string.length();
+			return move(string_stats);
+		}
+		default:
+			return nullptr;
+		}
+	};
+
+	void InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns,
+	                    TProtocol &protocol_p) override {
+		return;
+	};
+	void Skip(idx_t num_values) override {
+		return;
+	}
+	idx_t GroupRowsAvailable() override {
+		return NumericLimits<idx_t>::Maximum();
+	};
+	uint64_t TotalCompressedSize() override {
+		return 0;
+	}
+	idx_t FileOffset() const override {
+		return 0;
+	}
+	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override {
+	}
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// generated_column_reader.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/limits.hpp"
+#endif
+
+
+
+namespace duckdb {
+
+//! Reads a file-absolute row number as a virtual column that's not actually stored in the file
+class RowNumberColumnReader : public ColumnReader {
+public:
+	RowNumberColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
+	                      idx_t max_define_p, idx_t max_repeat_p);
+
+public:
+	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
+	           Vector &result) override;
+
+	unique_ptr<BaseStatistics> Stats(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns) override;
+
+	void InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override;
+
+	void Skip(idx_t num_values) override {
+		row_group_offset += num_values;
+	}
+	idx_t GroupRowsAvailable() override {
+		return NumericLimits<idx_t>::Maximum();
+	};
+	uint64_t TotalCompressedSize() override {
+		return 0;
+	}
+	idx_t FileOffset() const override {
+		return 0;
+	}
+	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override {
+	}
+
+private:
+	idx_t row_group_offset;
 };
 
 } // namespace duckdb
@@ -27640,8 +22557,9 @@ public:
 
 	void ApplyPendingSkips(idx_t num_values) override;
 
-	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override {
-		child_column_reader->InitializeRead(columns, protocol_p);
+	void InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns,
+	                    TProtocol &protocol_p) override {
+		child_column_reader->InitializeRead(row_group_idx_p, columns, protocol_p);
 	}
 
 	idx_t GroupRowsAvailable() override {
@@ -27740,7 +22658,7 @@ public:
 public:
 	ColumnReader *GetChildReader(idx_t child_idx);
 
-	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override;
+	void InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override;
 
 	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
 	           Vector &result) override;
@@ -29232,7 +24150,6 @@ ColumnReader::ColumnReader(ParquetReader &reader, LogicalType type_p, const Sche
       type(move(type_p)), page_rows_available(0) {
 
 	// dummies for Skip()
-	none_filter.none();
 	dummy_define.resize(reader.allocator, STANDARD_VECTOR_SIZE);
 	dummy_repeat.resize(reader.allocator, STANDARD_VECTOR_SIZE);
 }
@@ -29302,7 +24219,7 @@ idx_t ColumnReader::GroupRowsAvailable() {
 	return group_rows_available;
 }
 
-unique_ptr<BaseStatistics> ColumnReader::Stats(const std::vector<ColumnChunk> &columns) {
+unique_ptr<BaseStatistics> ColumnReader::Stats(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns) {
 	if (Type().id() == LogicalTypeId::LIST || Type().id() == LogicalTypeId::STRUCT ||
 	    Type().id() == LogicalTypeId::MAP) {
 		return nullptr;
@@ -29329,7 +24246,8 @@ void ColumnReader::DictReference(Vector &result) {
 void ColumnReader::PlainReference(shared_ptr<ByteBuffer>, Vector &result) { // NOLINT
 }
 
-void ColumnReader::InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) {
+void ColumnReader::InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns,
+                                  TProtocol &protocol_p) {
 	D_ASSERT(file_idx < columns.size());
 	chunk = &columns[file_idx];
 	protocol = &protocol_p;
@@ -29363,11 +24281,11 @@ void ColumnReader::PrepareRead(parquet_filter_t &filter) {
 		PrepareDataPage(page_hdr);
 		break;
 	case PageType::DATA_PAGE:
-		PreparePage(page_hdr.compressed_page_size, page_hdr.uncompressed_page_size);
+		PreparePage(page_hdr);
 		PrepareDataPage(page_hdr);
 		break;
 	case PageType::DICTIONARY_PAGE:
-		PreparePage(page_hdr.compressed_page_size, page_hdr.uncompressed_page_size);
+		PreparePage(page_hdr);
 		Dictionary(move(block), page_hdr.dictionary_page_header.num_values);
 		break;
 	default:
@@ -29376,95 +24294,92 @@ void ColumnReader::PrepareRead(parquet_filter_t &filter) {
 }
 
 void ColumnReader::PreparePageV2(PageHeader &page_hdr) {
-	// FIXME this is copied from the other prepare, merge the decomp part
-
 	D_ASSERT(page_hdr.type == PageType::DATA_PAGE_V2);
 
 	auto &trans = (ThriftFileTransport &)*protocol->getTransport();
 
 	block = make_shared<ResizeableBuffer>(reader.allocator, page_hdr.uncompressed_page_size + 1);
+
+	if (chunk->meta_data.codec == CompressionCodec::UNCOMPRESSED) {
+		if (page_hdr.compressed_page_size != page_hdr.uncompressed_page_size) {
+			throw std::runtime_error("Page size mismatch");
+		}
+		trans.read((uint8_t *)block->ptr, page_hdr.compressed_page_size);
+		return;
+	}
+
 	// copy repeats & defines as-is because FOR SOME REASON they are uncompressed
 	auto uncompressed_bytes = page_hdr.data_page_header_v2.repetition_levels_byte_length +
 	                          page_hdr.data_page_header_v2.definition_levels_byte_length;
-	auto possibly_compressed_bytes = page_hdr.compressed_page_size - uncompressed_bytes;
 	trans.read((uint8_t *)block->ptr, uncompressed_bytes);
 
-	switch (chunk->meta_data.codec) {
-	case CompressionCodec::UNCOMPRESSED:
-		trans.read(((uint8_t *)block->ptr) + uncompressed_bytes, possibly_compressed_bytes);
-		break;
+	auto compressed_bytes = page_hdr.compressed_page_size - uncompressed_bytes;
+	ResizeableBuffer compressed_buffer(reader.allocator, compressed_bytes);
+	trans.read((uint8_t *)compressed_buffer.ptr, compressed_bytes);
 
-	case CompressionCodec::SNAPPY: {
-		// TODO move allocation outta here
-		ResizeableBuffer compressed_bytes_buffer(reader.allocator, possibly_compressed_bytes);
-		trans.read((uint8_t *)compressed_bytes_buffer.ptr, possibly_compressed_bytes);
-
-		auto res = duckdb_snappy::RawUncompress((const char *)compressed_bytes_buffer.ptr, possibly_compressed_bytes,
-		                                        ((char *)block->ptr) + uncompressed_bytes);
-		if (!res) {
-			throw std::runtime_error("Decompression failure");
-		}
-		break;
-	}
-
-	default: {
-		std::stringstream codec_name;
-		codec_name << chunk->meta_data.codec;
-		throw std::runtime_error("Unsupported compression codec \"" + codec_name.str() +
-		                         "\". Supported options are uncompressed, gzip or snappy");
-		break;
-	}
-	}
+	DecompressInternal(chunk->meta_data.codec, (const char *)compressed_buffer.ptr, compressed_bytes,
+	                   (char *)block->ptr + uncompressed_bytes, page_hdr.uncompressed_page_size - uncompressed_bytes);
 }
 
-void ColumnReader::PreparePage(idx_t compressed_page_size, idx_t uncompressed_page_size) {
+void ColumnReader::PreparePage(PageHeader &page_hdr) {
 	auto &trans = (ThriftFileTransport &)*protocol->getTransport();
 
-	block = make_shared<ResizeableBuffer>(reader.allocator, compressed_page_size + 1);
-	trans.read((uint8_t *)block->ptr, compressed_page_size);
+	block = make_shared<ResizeableBuffer>(reader.allocator, page_hdr.uncompressed_page_size + 1);
 
-	// TODO this allocation should probably be avoided
-	shared_ptr<ResizeableBuffer> unpacked_block;
-	if (chunk->meta_data.codec != CompressionCodec::UNCOMPRESSED) {
-		unpacked_block = make_shared<ResizeableBuffer>(reader.allocator, uncompressed_page_size + 1);
+	if (chunk->meta_data.codec == CompressionCodec::UNCOMPRESSED) {
+		if (page_hdr.compressed_page_size != page_hdr.uncompressed_page_size) {
+			throw std::runtime_error("Page size mismatch");
+		}
+		trans.read((uint8_t *)block->ptr, page_hdr.compressed_page_size);
+		return;
 	}
 
-	switch (chunk->meta_data.codec) {
+	ResizeableBuffer compressed_buffer(reader.allocator, page_hdr.compressed_page_size + 1);
+	trans.read((uint8_t *)compressed_buffer.ptr, page_hdr.compressed_page_size);
+
+	DecompressInternal(chunk->meta_data.codec, (const char *)compressed_buffer.ptr, page_hdr.compressed_page_size,
+	                   (char *)block->ptr, page_hdr.uncompressed_page_size);
+}
+
+void ColumnReader::DecompressInternal(CompressionCodec::type codec, const char *src, idx_t src_size, char *dst,
+                                      idx_t dst_size) {
+	switch (codec) {
 	case CompressionCodec::UNCOMPRESSED:
-		break;
+		throw InternalException("Parquet data unexpectedly uncompressed");
 	case CompressionCodec::GZIP: {
 		MiniZStream s;
-
-		s.Decompress((const char *)block->ptr, compressed_page_size, (char *)unpacked_block->ptr,
-		             uncompressed_page_size);
-		block = move(unpacked_block);
-
+		s.Decompress(src, src_size, dst, dst_size);
 		break;
 	}
 	case CompressionCodec::SNAPPY: {
-		auto res =
-		    duckdb_snappy::RawUncompress((const char *)block->ptr, compressed_page_size, (char *)unpacked_block->ptr);
-		if (!res) {
-			throw std::runtime_error("Decompression failure");
+		{
+			size_t uncompressed_size = 0;
+			auto res = duckdb_snappy::GetUncompressedLength(src, src_size, &uncompressed_size);
+			if (!res) {
+				throw std::runtime_error("Snappy decompression failure");
+			}
+			if (uncompressed_size != (size_t)dst_size) {
+				throw std::runtime_error("Snappy decompression failure: Uncompressed data size mismatch");
+			}
 		}
-		block = move(unpacked_block);
+		auto res = duckdb_snappy::RawUncompress(src, src_size, dst);
+		if (!res) {
+			throw std::runtime_error("Snappy decompression failure");
+		}
 		break;
 	}
 	case CompressionCodec::ZSTD: {
-		auto res = duckdb_zstd::ZSTD_decompress((char *)unpacked_block->ptr, uncompressed_page_size,
-		                                        (const char *)block->ptr, compressed_page_size);
-		if (duckdb_zstd::ZSTD_isError(res) || res != (size_t)uncompressed_page_size) {
+		auto res = duckdb_zstd::ZSTD_decompress(dst, dst_size, src, src_size);
+		if (duckdb_zstd::ZSTD_isError(res) || res != (size_t)dst_size) {
 			throw std::runtime_error("ZSTD Decompression failure");
 		}
-		block = move(unpacked_block);
 		break;
 	}
-
 	default: {
 		std::stringstream codec_name;
-		codec_name << chunk->meta_data.codec;
+		codec_name << codec;
 		throw std::runtime_error("Unsupported compression codec \"" + codec_name.str() +
-		                         "\". Supported options are uncompressed, gzip or snappy");
+		                         "\". Supported options are uncompressed, gzip, snappy or zstd");
 		break;
 	}
 	}
@@ -29699,10 +24614,6 @@ uint32_t StringColumnReader::VerifyString(const char *str_data, uint32_t str_len
 	size_t pos;
 	auto utf_type = Utf8Proc::Analyze(str_data, str_len, &reason, &pos);
 	if (utf_type == UnicodeType::INVALID) {
-		if (reason == UnicodeInvalidReason::NULL_BYTE) {
-			// for null bytes we just truncate the string
-			return pos;
-		}
 		throw InvalidInputException("Invalid string encoding found in Parquet file: value \"" +
 		                            Blob::ToString(string_t(str_data, str_len)) + "\" is not valid UTF8!");
 	}
@@ -29856,7 +24767,7 @@ idx_t ListColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint
 		// we have read more values from the child reader than we can fit into the result for this read
 		// we have to pass everything from child_idx to child_actual_num_values into the next call
 		if (child_idx < child_actual_num_values && result_offset == num_values) {
-			read_vector.Slice(read_vector, child_idx);
+			read_vector.Slice(read_vector, child_idx, child_actual_num_values);
 			overflow_child_count = child_actual_num_values - child_idx;
 			read_vector.Verify(overflow_child_count);
 
@@ -29907,6 +24818,67 @@ void ListColumnReader::ApplyPendingSkips(idx_t num_values) {
 		throw InternalException("Not all skips done!");
 	}
 }
+
+//===--------------------------------------------------------------------===//
+// Generated Constant Column Reader
+//===--------------------------------------------------------------------===//
+GeneratedConstantColumnReader::GeneratedConstantColumnReader(ParquetReader &reader, LogicalType type_p,
+                                                             const SchemaElement &schema_p, idx_t schema_idx_p,
+                                                             idx_t max_define_p, idx_t max_repeat_p, Value constant_p)
+    : ColumnReader(reader, move(type_p), schema_p, schema_idx_p, max_define_p, max_repeat_p),
+      constant(move(constant_p)) {
+}
+idx_t GeneratedConstantColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out,
+                                          uint8_t *repeat_out, Vector &result) {
+	result.SetValue(0, constant);
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	return num_values;
+}
+
+//===--------------------------------------------------------------------===//
+// Row NumberColumn Reader
+//===--------------------------------------------------------------------===//
+RowNumberColumnReader::RowNumberColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p,
+                                             idx_t schema_idx_p, idx_t max_define_p, idx_t max_repeat_p)
+    : ColumnReader(reader, move(type_p), schema_p, schema_idx_p, max_define_p, max_repeat_p) {
+}
+
+unique_ptr<BaseStatistics> RowNumberColumnReader::Stats(idx_t row_group_idx_p,
+                                                        const std::vector<ColumnChunk> &columns) {
+	auto stats = make_unique<NumericStatistics>(type, StatisticsType::LOCAL_STATS);
+	auto &row_groups = reader.GetFileMetadata()->row_groups;
+	D_ASSERT(row_group_idx_p < row_groups.size());
+	idx_t row_group_offset_min = 0;
+	for (idx_t i = 0; i < row_group_idx_p; i++) {
+		row_group_offset_min += row_groups[i].num_rows;
+	}
+
+	stats->min = Value::BIGINT(row_group_offset_min);
+	stats->max = Value::BIGINT(row_group_offset_min + row_groups[row_group_idx_p].num_rows);
+
+	D_ASSERT(!stats->CanHaveNull() && stats->CanHaveNoNull());
+	return move(stats);
+}
+
+void RowNumberColumnReader::InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns,
+                                           TProtocol &protocol_p) {
+	row_group_offset = 0;
+	auto &row_groups = reader.GetFileMetadata()->row_groups;
+	for (idx_t i = 0; i < row_group_idx_p; i++) {
+		row_group_offset += row_groups[i].num_rows;
+	}
+}
+
+idx_t RowNumberColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out,
+                                  uint8_t *repeat_out, Vector &result) {
+
+	auto data_ptr = FlatVector::GetData<int64_t>(result);
+	for (idx_t i = 0; i < num_values; i++) {
+		data_ptr[i] = row_group_offset++;
+	}
+	return num_values;
+}
+
 //===--------------------------------------------------------------------===//
 // Cast Column Reader
 //===--------------------------------------------------------------------===//
@@ -29918,13 +24890,14 @@ CastColumnReader::CastColumnReader(unique_ptr<ColumnReader> child_reader_p, Logi
 	intermediate_chunk.Initialize(reader.allocator, intermediate_types);
 }
 
-unique_ptr<BaseStatistics> CastColumnReader::Stats(const std::vector<ColumnChunk> &columns) {
+unique_ptr<BaseStatistics> CastColumnReader::Stats(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns) {
 	// casting stats is not supported (yet)
 	return nullptr;
 }
 
-void CastColumnReader::InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) {
-	child_reader->InitializeRead(columns, protocol_p);
+void CastColumnReader::InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns,
+                                      TProtocol &protocol_p) {
+	child_reader->InitializeRead(row_group_idx_p, columns, protocol_p);
 }
 
 idx_t CastColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
@@ -29936,7 +24909,7 @@ idx_t CastColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint
 	if (!filter.all()) {
 		// work-around for filters: set all values that are filtered to NULL to prevent the cast from failing on
 		// uninitialized data
-		intermediate_vector.Normalify(amount);
+		intermediate_vector.Flatten(amount);
 		auto &validity = FlatVector::Validity(intermediate_vector);
 		for (idx_t i = 0; i < amount; i++) {
 			if (!filter[i]) {
@@ -29944,7 +24917,7 @@ idx_t CastColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint
 			}
 		}
 	}
-	VectorOperations::Cast(intermediate_vector, result, amount);
+	VectorOperations::DefaultCast(intermediate_vector, result, amount);
 	return amount;
 }
 
@@ -29968,12 +24941,14 @@ StructColumnReader::StructColumnReader(ParquetReader &reader, LogicalType type_p
 }
 
 ColumnReader *StructColumnReader::GetChildReader(idx_t child_idx) {
+	D_ASSERT(child_idx < child_readers.size());
 	return child_readers[child_idx].get();
 }
 
-void StructColumnReader::InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) {
+void StructColumnReader::InitializeRead(idx_t row_group_idx_p, const std::vector<ColumnChunk> &columns,
+                                        TProtocol &protocol_p) {
 	for (auto &child : child_readers) {
-		child->InitializeRead(columns, protocol_p);
+		child->InitializeRead(row_group_idx_p, columns, protocol_p);
 	}
 }
 
@@ -30033,7 +25008,7 @@ static bool TypeHasExactRowCount(const LogicalType &type) {
 		return false;
 	case LogicalTypeId::STRUCT:
 		for (auto &kv : StructType::GetChildTypes(type)) {
-			if (TypeHasExactRowCount(kv.second.id())) {
+			if (TypeHasExactRowCount(kv.second)) {
 				return true;
 			}
 		}
@@ -30311,15 +25286,28 @@ unique_ptr<ColumnReader> ColumnReader::CreateReader(ParquetReader &reader, const
 			return make_unique<CallbackColumnReader<Int96, timestamp_t, ImpalaTimestampToTimestamp>>(
 			    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
 		case Type::INT64:
-			switch (schema_p.converted_type) {
-			case ConvertedType::TIMESTAMP_MICROS:
-				return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMicrosToTimestamp>>(
-				    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-			case ConvertedType::TIMESTAMP_MILLIS:
-				return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMsToTimestamp>>(
-				    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-			default:
-				break;
+			if (schema_p.__isset.logicalType && schema_p.logicalType.__isset.TIMESTAMP) {
+				if (schema_p.logicalType.TIMESTAMP.unit.__isset.MILLIS) {
+					return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMsToTimestamp>>(
+					    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+				} else if (schema_p.logicalType.TIMESTAMP.unit.__isset.MICROS) {
+					return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMicrosToTimestamp>>(
+					    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+				} else if (schema_p.logicalType.TIMESTAMP.unit.__isset.NANOS) {
+					return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampNsToTimestamp>>(
+					    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+				}
+			} else if (schema_p.__isset.converted_type) {
+				switch (schema_p.converted_type) {
+				case ConvertedType::TIMESTAMP_MICROS:
+					return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMicrosToTimestamp>>(
+					    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+				case ConvertedType::TIMESTAMP_MILLIS:
+					return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMsToTimestamp>>(
+					    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+				default:
+					break;
+				}
 			}
 		default:
 			break;
@@ -30333,6 +25321,7 @@ unique_ptr<ColumnReader> ColumnReader::CreateReader(ParquetReader &reader, const
 		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
 		return make_unique<StringColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
 	case LogicalTypeId::DECIMAL:
 		// we have to figure out what kind of int we need
@@ -30426,6 +25415,7 @@ private:
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/serializer/buffered_serializer.hpp"
 #include "duckdb/common/operator/comparison_operators.hpp"
+#include "duckdb/common/string_map_set.hpp"
 #endif
 
 
@@ -30542,6 +25532,7 @@ void RleBpEncoder::WriteRun(Serializer &writer) {
 	// write the header of the run
 	VarintEncode(current_run_count << 1, writer);
 	// now write the value
+	D_ASSERT(last_value >> (byte_width * 8) == 0);
 	switch (byte_width) {
 	case 1:
 		writer.Write<uint8_t>(last_value);
@@ -30634,61 +25625,6 @@ void ColumnWriter::CompressPage(BufferedSerializer &temp_writer, size_t &compres
 	}
 }
 
-class ColumnWriterPageState {
-public:
-	virtual ~ColumnWriterPageState() {
-	}
-};
-
-struct PageInformation {
-	idx_t offset = 0;
-	idx_t row_count = 0;
-	idx_t empty_count = 0;
-	idx_t estimated_page_size = 0;
-};
-
-struct PageWriteInformation {
-	PageHeader page_header;
-	unique_ptr<BufferedSerializer> temp_writer;
-	unique_ptr<ColumnWriterPageState> page_state;
-	idx_t write_page_idx = 0;
-	idx_t write_count = 0;
-	idx_t max_write_count = 0;
-	size_t compressed_size;
-	data_ptr_t compressed_data;
-	unique_ptr<data_t[]> compressed_buf;
-};
-
-class StandardColumnWriterState : public ColumnWriterState {
-public:
-	StandardColumnWriterState(duckdb_parquet::format::RowGroup &row_group, idx_t col_idx)
-	    : row_group(row_group), col_idx(col_idx) {
-		page_info.emplace_back();
-	}
-	~StandardColumnWriterState() override = default;
-
-	duckdb_parquet::format::RowGroup &row_group;
-	idx_t col_idx;
-	vector<PageInformation> page_info;
-	vector<PageWriteInformation> write_info;
-	unique_ptr<ColumnWriterStatistics> stats_state;
-	idx_t current_page = 0;
-};
-
-unique_ptr<ColumnWriterState> ColumnWriter::InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) {
-	auto result = make_unique<StandardColumnWriterState>(row_group, row_group.columns.size());
-
-	duckdb_parquet::format::ColumnChunk column_chunk;
-	column_chunk.__isset.meta_data = true;
-	column_chunk.meta_data.codec = writer.codec;
-	column_chunk.meta_data.path_in_schema = schema_path;
-	column_chunk.meta_data.num_values = 0;
-	column_chunk.meta_data.type = writer.file_meta_data.schema[schema_idx].type;
-	row_group.columns.push_back(move(column_chunk));
-
-	return move(result);
-}
-
 void ColumnWriter::HandleRepeatLevels(ColumnWriterState &state, ColumnWriterState *parent, idx_t count,
                                       idx_t max_repeat) {
 	if (!parent) {
@@ -30738,16 +25674,148 @@ void ColumnWriter::HandleDefineLevels(ColumnWriterState &state, ColumnWriterStat
 	}
 }
 
-void ColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
-	auto &state = (StandardColumnWriterState &)state_p;
+class ColumnWriterPageState {
+public:
+	virtual ~ColumnWriterPageState() {
+	}
+};
+
+struct PageInformation {
+	idx_t offset = 0;
+	idx_t row_count = 0;
+	idx_t empty_count = 0;
+	idx_t estimated_page_size = 0;
+};
+
+struct PageWriteInformation {
+	PageHeader page_header;
+	unique_ptr<BufferedSerializer> temp_writer;
+	unique_ptr<ColumnWriterPageState> page_state;
+	idx_t write_page_idx = 0;
+	idx_t write_count = 0;
+	idx_t max_write_count = 0;
+	size_t compressed_size;
+	data_ptr_t compressed_data;
+	unique_ptr<data_t[]> compressed_buf;
+};
+
+class BasicColumnWriterState : public ColumnWriterState {
+public:
+	BasicColumnWriterState(duckdb_parquet::format::RowGroup &row_group, idx_t col_idx)
+	    : row_group(row_group), col_idx(col_idx) {
+		page_info.emplace_back();
+	}
+	~BasicColumnWriterState() override = default;
+
+	duckdb_parquet::format::RowGroup &row_group;
+	idx_t col_idx;
+	vector<PageInformation> page_info;
+	vector<PageWriteInformation> write_info;
+	unique_ptr<ColumnWriterStatistics> stats_state;
+	idx_t current_page = 0;
+};
+
+//===--------------------------------------------------------------------===//
+// BasicColumnWriter
+// A base class for writing all non-compound types (ex. numerics, strings)
+//===--------------------------------------------------------------------===//
+class BasicColumnWriter : public ColumnWriter {
+public:
+	BasicColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path, idx_t max_repeat,
+	                  idx_t max_define, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path), max_repeat, max_define, can_have_nulls) {
+	}
+
+	~BasicColumnWriter() override = default;
+
+	//! We limit the uncompressed page size to 100MB
+	// The max size in Parquet is 2GB, but we choose a more conservative limit
+	static constexpr const idx_t MAX_UNCOMPRESSED_PAGE_SIZE = 100000000;
+	//! Dictionary pages must be below 2GB. Unlike data pages, there's only one dictionary page.
+	//  For this reason we go with a much higher, but still a conservative upper bound of 1GB;
+	static constexpr const idx_t MAX_UNCOMPRESSED_DICT_PAGE_SIZE = 1e9;
+
+	// the maximum size a key entry in an RLE page takes
+	static constexpr const idx_t MAX_DICTIONARY_KEY_SIZE = sizeof(uint32_t);
+	// the size of encoding the string length
+	static constexpr const idx_t STRING_LENGTH_SIZE = sizeof(uint32_t);
+
+public:
+	unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) override;
+	void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) override;
+	void BeginWrite(ColumnWriterState &state) override;
+	void Write(ColumnWriterState &state, Vector &vector, idx_t count) override;
+	void FinalizeWrite(ColumnWriterState &state) override;
+
+protected:
+	void WriteLevels(Serializer &temp_writer, const vector<uint16_t> &levels, idx_t max_value, idx_t start_offset,
+	                 idx_t count);
+
+	virtual duckdb_parquet::format::Encoding::type GetEncoding(BasicColumnWriterState &state);
+
+	void NextPage(BasicColumnWriterState &state);
+	void FlushPage(BasicColumnWriterState &state);
+
+	//! Initializes the state used to track statistics during writing. Only used for scalar types.
+	virtual unique_ptr<ColumnWriterStatistics> InitializeStatsState();
+
+	//! Initialize the writer for a specific page. Only used for scalar types.
+	virtual unique_ptr<ColumnWriterPageState> InitializePageState(BasicColumnWriterState &state);
+
+	//! Flushes the writer for a specific page. Only used for scalar types.
+	virtual void FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state);
+
+	//! Retrieves the row size of a vector at the specified location. Only used for scalar types.
+	virtual idx_t GetRowSize(Vector &vector, idx_t index, BasicColumnWriterState &state);
+	//! Writes a (subset of a) vector to the specified serializer. Only used for scalar types.
+	virtual void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats, ColumnWriterPageState *page_state,
+	                         Vector &vector, idx_t chunk_start, idx_t chunk_end) = 0;
+
+	virtual bool HasDictionary(BasicColumnWriterState &state_p) {
+		return false;
+	}
+	//! The number of elements in the dictionary
+	virtual idx_t DictionarySize(BasicColumnWriterState &state_p);
+	void WriteDictionary(BasicColumnWriterState &state, unique_ptr<BufferedSerializer> temp_writer, idx_t row_count);
+	virtual void FlushDictionary(BasicColumnWriterState &state, ColumnWriterStatistics *stats);
+
+	void SetParquetStatistics(BasicColumnWriterState &state, duckdb_parquet::format::ColumnChunk &column);
+	void RegisterToRowGroup(duckdb_parquet::format::RowGroup &row_group);
+};
+
+unique_ptr<ColumnWriterState> BasicColumnWriter::InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) {
+	auto result = make_unique<BasicColumnWriterState>(row_group, row_group.columns.size());
+	RegisterToRowGroup(row_group);
+	return move(result);
+}
+
+void BasicColumnWriter::RegisterToRowGroup(duckdb_parquet::format::RowGroup &row_group) {
+	format::ColumnChunk column_chunk;
+	column_chunk.__isset.meta_data = true;
+	column_chunk.meta_data.codec = writer.codec;
+	column_chunk.meta_data.path_in_schema = schema_path;
+	column_chunk.meta_data.num_values = 0;
+	column_chunk.meta_data.type = writer.file_meta_data.schema[schema_idx].type;
+	row_group.columns.push_back(move(column_chunk));
+}
+
+unique_ptr<ColumnWriterPageState> BasicColumnWriter::InitializePageState(BasicColumnWriterState &state) {
+	return nullptr;
+}
+
+void BasicColumnWriter::FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state) {
+}
+
+void BasicColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
+	auto &state = (BasicColumnWriterState &)state_p;
 	auto &col_chunk = state.row_group.columns[state.col_idx];
 
 	idx_t start = 0;
 	idx_t vcount = parent ? parent->definition_levels.size() - state.definition_levels.size() : count;
 	idx_t parent_index = state.definition_levels.size();
 	auto &validity = FlatVector::Validity(vector);
-	HandleRepeatLevels(state_p, parent, count, max_repeat);
-	HandleDefineLevels(state_p, parent, validity, count, max_define, max_define - 1);
+	HandleRepeatLevels(state, parent, count, max_repeat);
+	HandleDefineLevels(state, parent, validity, count, max_define, max_define - 1);
 
 	idx_t vector_index = 0;
 	for (idx_t i = start; i < vcount; i++) {
@@ -30759,7 +25827,7 @@ void ColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent
 			continue;
 		}
 		if (validity.RowIsValid(vector_index)) {
-			page_info.estimated_page_size += GetRowSize(vector, vector_index);
+			page_info.estimated_page_size += GetRowSize(vector, vector_index, state);
 			if (page_info.estimated_page_size >= MAX_UNCOMPRESSED_PAGE_SIZE) {
 				PageInformation new_info;
 				new_info.offset = page_info.offset + page_info.row_count;
@@ -30770,19 +25838,12 @@ void ColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent
 	}
 }
 
-unique_ptr<ColumnWriterPageState> ColumnWriter::InitializePageState() {
-	return nullptr;
-}
-
-void ColumnWriter::FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state) {
-}
-
-duckdb_parquet::format::Encoding::type ColumnWriter::GetEncoding() {
+duckdb_parquet::format::Encoding::type BasicColumnWriter::GetEncoding(BasicColumnWriterState &state) {
 	return Encoding::PLAIN;
 }
 
-void ColumnWriter::BeginWrite(ColumnWriterState &state_p) {
-	auto &state = (StandardColumnWriterState &)state_p;
+void BasicColumnWriter::BeginWrite(ColumnWriterState &state_p) {
+	auto &state = (BasicColumnWriterState &)state_p;
 
 	// set up the page write info
 	state.stats_state = InitializeStatsState();
@@ -30802,14 +25863,14 @@ void ColumnWriter::BeginWrite(ColumnWriterState &state_p) {
 		hdr.__isset.data_page_header = true;
 
 		hdr.data_page_header.num_values = page_info.row_count;
-		hdr.data_page_header.encoding = GetEncoding();
+		hdr.data_page_header.encoding = GetEncoding(state);
 		hdr.data_page_header.definition_level_encoding = Encoding::RLE;
 		hdr.data_page_header.repetition_level_encoding = Encoding::RLE;
 
 		write_info.temp_writer = make_unique<BufferedSerializer>();
 		write_info.write_count = page_info.empty_count;
 		write_info.max_write_count = page_info.row_count;
-		write_info.page_state = InitializePageState();
+		write_info.page_state = InitializePageState(state);
 
 		write_info.compressed_size = 0;
 		write_info.compressed_data = nullptr;
@@ -30818,11 +25879,11 @@ void ColumnWriter::BeginWrite(ColumnWriterState &state_p) {
 	}
 
 	// start writing the first page
-	NextPage(state_p);
+	NextPage(state);
 }
 
-void ColumnWriter::WriteLevels(Serializer &temp_writer, const vector<uint16_t> &levels, idx_t max_value, idx_t offset,
-                               idx_t count) {
+void BasicColumnWriter::WriteLevels(Serializer &temp_writer, const vector<uint16_t> &levels, idx_t max_value,
+                                    idx_t offset, idx_t count) {
 	if (levels.empty() || count == 0) {
 		return;
 	}
@@ -30846,12 +25907,10 @@ void ColumnWriter::WriteLevels(Serializer &temp_writer, const vector<uint16_t> &
 	rle_encoder.FinishWrite(temp_writer);
 }
 
-void ColumnWriter::NextPage(ColumnWriterState &state_p) {
-	auto &state = (StandardColumnWriterState &)state_p;
-
+void BasicColumnWriter::NextPage(BasicColumnWriterState &state) {
 	if (state.current_page > 0) {
 		// need to flush the current page
-		FlushPage(state_p);
+		FlushPage(state);
 	}
 	if (state.current_page >= state.write_info.size()) {
 		state.current_page = state.write_info.size() + 1;
@@ -30870,8 +25929,7 @@ void ColumnWriter::NextPage(ColumnWriterState &state_p) {
 	WriteLevels(temp_writer, state.definition_levels, max_define, page_info.offset, page_info.row_count);
 }
 
-void ColumnWriter::FlushPage(ColumnWriterState &state_p) {
-	auto &state = (StandardColumnWriterState &)state_p;
+void BasicColumnWriter::FlushPage(BasicColumnWriterState &state) {
 	D_ASSERT(state.current_page > 0);
 	if (state.current_page > state.write_info.size()) {
 		return;
@@ -30904,22 +25962,16 @@ void ColumnWriter::FlushPage(ColumnWriterState &state_p) {
 	}
 }
 
-unique_ptr<ColumnWriterStatistics> ColumnWriter::InitializeStatsState() {
+unique_ptr<ColumnWriterStatistics> BasicColumnWriter::InitializeStatsState() {
 	return make_unique<ColumnWriterStatistics>();
 }
 
-void ColumnWriter::WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats,
-                               ColumnWriterPageState *page_state, Vector &input_column, idx_t chunk_start,
-                               idx_t chunk_end) {
-	throw InternalException("WriteVector unsupported for struct/list column writers");
-}
-
-idx_t ColumnWriter::GetRowSize(Vector &vector, idx_t index) {
+idx_t BasicColumnWriter::GetRowSize(Vector &vector, idx_t index, BasicColumnWriterState &state) {
 	throw InternalException("GetRowSize unsupported for struct/list column writers");
 }
 
-void ColumnWriter::Write(ColumnWriterState &state_p, Vector &vector, idx_t count) {
-	auto &state = (StandardColumnWriterState &)state_p;
+void BasicColumnWriter::Write(ColumnWriterState &state_p, Vector &vector, idx_t count) {
+	auto &state = (BasicColumnWriterState &)state_p;
 
 	idx_t remaining = count;
 	idx_t offset = 0;
@@ -30937,15 +25989,15 @@ void ColumnWriter::Write(ColumnWriterState &state_p, Vector &vector, idx_t count
 
 		write_info.write_count += write_count;
 		if (write_info.write_count == write_info.max_write_count) {
-			NextPage(state_p);
+			NextPage(state);
 		}
 		offset += write_count;
 		remaining -= write_count;
 	}
 }
 
-void ColumnWriter::SetParquetStatistics(StandardColumnWriterState &state,
-                                        duckdb_parquet::format::ColumnChunk &column_chunk) {
+void BasicColumnWriter::SetParquetStatistics(BasicColumnWriterState &state,
+                                             duckdb_parquet::format::ColumnChunk &column_chunk) {
 	if (max_repeat == 0) {
 		column_chunk.meta_data.statistics.null_count = null_count;
 		column_chunk.meta_data.statistics.__isset.null_count = true;
@@ -30977,34 +26029,59 @@ void ColumnWriter::SetParquetStatistics(StandardColumnWriterState &state,
 		column_chunk.meta_data.statistics.__isset.max_value = true;
 		column_chunk.meta_data.__isset.statistics = true;
 	}
+	for (const auto &write_info : state.write_info) {
+		column_chunk.meta_data.encodings.push_back(write_info.page_header.data_page_header.encoding);
+	}
 }
 
-void ColumnWriter::FinalizeWrite(ColumnWriterState &state_p) {
-	auto &state = (StandardColumnWriterState &)state_p;
+void BasicColumnWriter::FinalizeWrite(ColumnWriterState &state_p) {
+	auto &state = (BasicColumnWriterState &)state_p;
 	auto &column_chunk = state.row_group.columns[state.col_idx];
 
 	// flush the last page (if any remains)
 	FlushPage(state);
+
+	auto start_offset = writer.writer->GetTotalWritten();
+	auto page_offset = start_offset;
 	// flush the dictionary
-	FlushDictionary(state, state.stats_state.get());
+	if (HasDictionary(state)) {
+		column_chunk.meta_data.statistics.distinct_count = DictionarySize(state);
+		column_chunk.meta_data.statistics.__isset.distinct_count = true;
+		column_chunk.meta_data.dictionary_page_offset = page_offset;
+		column_chunk.meta_data.__isset.dictionary_page_offset = true;
+		FlushDictionary(state, state.stats_state.get());
+		page_offset += state.write_info[0].compressed_size;
+	}
 
 	// record the start position of the pages for this column
-	column_chunk.meta_data.data_page_offset = writer.writer->GetTotalWritten();
+	column_chunk.meta_data.data_page_offset = page_offset;
 	SetParquetStatistics(state, column_chunk);
 
 	// write the individual pages to disk
+	idx_t total_uncompressed_size = 0;
 	for (auto &write_info : state.write_info) {
 		D_ASSERT(write_info.page_header.uncompressed_page_size > 0);
+		auto header_start_offset = writer.writer->GetTotalWritten();
 		write_info.page_header.write(writer.protocol.get());
+		// total uncompressed size in the column chunk includes the header size (!)
+		total_uncompressed_size += writer.writer->GetTotalWritten() - header_start_offset;
+		total_uncompressed_size += write_info.page_header.uncompressed_page_size;
 		writer.writer->WriteData(write_info.compressed_data, write_info.compressed_size);
 	}
-	column_chunk.meta_data.total_compressed_size =
-	    writer.writer->GetTotalWritten() - column_chunk.meta_data.data_page_offset;
+	column_chunk.meta_data.total_compressed_size = writer.writer->GetTotalWritten() - start_offset;
+	column_chunk.meta_data.total_uncompressed_size = total_uncompressed_size;
 }
 
-void ColumnWriter::WriteDictionary(ColumnWriterState &state_p, unique_ptr<BufferedSerializer> temp_writer,
-                                   idx_t row_count) {
-	auto &state = (StandardColumnWriterState &)state_p;
+void BasicColumnWriter::FlushDictionary(BasicColumnWriterState &state, ColumnWriterStatistics *stats) {
+	throw InternalException("This page does not have a dictionary");
+}
+
+idx_t BasicColumnWriter::DictionarySize(BasicColumnWriterState &state) {
+	throw InternalException("This page does not have a dictionary");
+}
+
+void BasicColumnWriter::WriteDictionary(BasicColumnWriterState &state, unique_ptr<BufferedSerializer> temp_writer,
+                                        idx_t row_count) {
 	D_ASSERT(temp_writer);
 	D_ASSERT(temp_writer->blob.size > 0);
 
@@ -31031,10 +26108,6 @@ void ColumnWriter::WriteDictionary(ColumnWriterState &state_p, unique_ptr<Buffer
 
 	// insert the dictionary page as the first page to write for this column
 	state.write_info.insert(state.write_info.begin(), move(write_info));
-}
-
-void ColumnWriter::FlushDictionary(ColumnWriterState &state, ColumnWriterStatistics *stats) {
-	// nop: standard pages do not have a dictionary
 }
 
 //===--------------------------------------------------------------------===//
@@ -31137,11 +26210,11 @@ static void TemplatedWritePlain(Vector &col, ColumnWriterStatistics *stats, idx_
 }
 
 template <class SRC, class TGT, class OP = ParquetCastOperator>
-class StandardColumnWriter : public ColumnWriter {
+class StandardColumnWriter : public BasicColumnWriter {
 public:
 	StandardColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, // NOLINT
 	                     idx_t max_repeat, idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	    : BasicColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
 	}
 	~StandardColumnWriter() override = default;
 
@@ -31156,7 +26229,7 @@ public:
 		TemplatedWritePlain<SRC, TGT, OP>(input_column, stats, chunk_start, chunk_end, mask, temp_writer);
 	}
 
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
+	idx_t GetRowSize(Vector &vector, idx_t index, BasicColumnWriterState &state) override {
 		return sizeof(TGT);
 	}
 };
@@ -31197,11 +26270,11 @@ public:
 	uint8_t byte_pos = 0;
 };
 
-class BooleanColumnWriter : public ColumnWriter {
+class BooleanColumnWriter : public BasicColumnWriter {
 public:
 	BooleanColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
 	                    idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	    : BasicColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
 	}
 	~BooleanColumnWriter() override = default;
 
@@ -31237,7 +26310,7 @@ public:
 		}
 	}
 
-	unique_ptr<ColumnWriterPageState> InitializePageState() override {
+	unique_ptr<ColumnWriterPageState> InitializePageState(BasicColumnWriterState &state) override {
 		return make_unique<BooleanWriterPageState>();
 	}
 
@@ -31250,7 +26323,7 @@ public:
 		}
 	}
 
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
+	idx_t GetRowSize(Vector &vector, idx_t index, BasicColumnWriterState &state) override {
 		return sizeof(bool);
 	}
 };
@@ -31322,11 +26395,11 @@ public:
 	}
 };
 
-class FixedDecimalColumnWriter : public ColumnWriter {
+class FixedDecimalColumnWriter : public BasicColumnWriter {
 public:
 	FixedDecimalColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
 	                         idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	    : BasicColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
 	}
 	~FixedDecimalColumnWriter() override = default;
 
@@ -31351,7 +26424,7 @@ public:
 		}
 	}
 
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
+	idx_t GetRowSize(Vector &vector, idx_t index, BasicColumnWriterState &state) override {
 		return sizeof(hugeint_t);
 	}
 };
@@ -31359,13 +26432,13 @@ public:
 //===--------------------------------------------------------------------===//
 // UUID Column Writer
 //===--------------------------------------------------------------------===//
-class UUIDColumnWriter : public ColumnWriter {
+class UUIDColumnWriter : public BasicColumnWriter {
 	static constexpr const idx_t PARQUET_UUID_SIZE = 16;
 
 public:
 	UUIDColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
 	                 idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	    : BasicColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
 	}
 	~UUIDColumnWriter() override = default;
 
@@ -31398,7 +26471,7 @@ public:
 		}
 	}
 
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
+	idx_t GetRowSize(Vector &vector, idx_t index, BasicColumnWriterState &state) override {
 		return PARQUET_UUID_SIZE;
 	}
 };
@@ -31406,13 +26479,13 @@ public:
 //===--------------------------------------------------------------------===//
 // Interval Column Writer
 //===--------------------------------------------------------------------===//
-class IntervalColumnWriter : public ColumnWriter {
+class IntervalColumnWriter : public BasicColumnWriter {
 	static constexpr const idx_t PARQUET_INTERVAL_SIZE = 12;
 
 public:
 	IntervalColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
 	                     idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	    : BasicColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
 	}
 	~IntervalColumnWriter() override = default;
 
@@ -31440,7 +26513,7 @@ public:
 		}
 	}
 
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
+	idx_t GetRowSize(Vector &vector, idx_t index, BasicColumnWriterState &state) override {
 		return PARQUET_INTERVAL_SIZE;
 	}
 };
@@ -31503,11 +26576,50 @@ public:
 	}
 };
 
-class StringColumnWriter : public ColumnWriter {
+class StringColumnWriterState : public BasicColumnWriterState {
+public:
+	StringColumnWriterState(duckdb_parquet::format::RowGroup &row_group, idx_t col_idx)
+	    : BasicColumnWriterState(row_group, col_idx) {
+	}
+	~StringColumnWriterState() override = default;
+
+	// analysis state
+	idx_t estimated_dict_page_size = 0;
+	idx_t estimated_rle_pages_size = 0;
+	idx_t estimated_plain_size = 0;
+
+	// Dictionary
+	string_map_t<uint32_t> dictionary;
+	// key_bit_width== 0 signifies the chunk is written in plain encoding
+	uint32_t key_bit_width;
+
+	bool IsDictionaryEncoded() {
+		return key_bit_width != 0;
+	}
+};
+
+class StringWriterPageState : public ColumnWriterPageState {
+public:
+	explicit StringWriterPageState(uint32_t bit_width, const string_map_t<uint32_t> &values)
+	    : bit_width(bit_width), dictionary(values), encoder(bit_width), written_value(false) {
+		D_ASSERT(IsDictionaryEncoded() || (bit_width == 0 && dictionary.empty()));
+	}
+
+	bool IsDictionaryEncoded() {
+		return bit_width != 0;
+	}
+	// if 0, we're writing a plain page
+	uint32_t bit_width;
+	const string_map_t<uint32_t> &dictionary;
+	RleBpEncoder encoder;
+	bool written_value;
+};
+
+class StringColumnWriter : public BasicColumnWriter {
 public:
 	StringColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
 	                   idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	    : BasicColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
 	}
 	~StringColumnWriter() override = default;
 
@@ -31516,14 +26628,106 @@ public:
 		return make_unique<StringStatisticsState>();
 	}
 
-	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state,
+	unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) override {
+		auto result = make_unique<StringColumnWriterState>(row_group, row_group.columns.size());
+		RegisterToRowGroup(row_group);
+		return move(result);
+	}
+
+	bool HasAnalyze() override {
+		return true;
+	}
+
+	void Analyze(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) override {
+		auto &state = (StringColumnWriterState &)state_p;
+
+		idx_t vcount = parent ? parent->definition_levels.size() - state.definition_levels.size() : count;
+		idx_t parent_index = state.definition_levels.size();
+		auto &validity = FlatVector::Validity(vector);
+		idx_t vector_index = 0;
+		uint32_t new_value_index = state.dictionary.size();
+		uint32_t last_value_index = -1;
+		idx_t run_length = 0;
+		idx_t run_count = 0;
+		auto strings = FlatVector::GetData<string_t>(vector);
+		for (idx_t i = 0; i < vcount; i++) {
+
+			if (parent && !parent->is_empty.empty() && parent->is_empty[parent_index + i]) {
+				continue;
+			}
+
+			if (validity.RowIsValid(vector_index)) {
+				run_length++;
+				const auto &value = strings[vector_index];
+				auto found = state.dictionary.insert(string_map_t<uint32_t>::value_type(value, new_value_index));
+				state.estimated_plain_size += value.GetSize() + STRING_LENGTH_SIZE;
+				if (found.second) {
+					// string didn't exist yet in the dictionary
+					new_value_index++;
+					state.estimated_dict_page_size += value.GetSize() + MAX_DICTIONARY_KEY_SIZE;
+				}
+				// if the value changed, we will encode it in the page
+				if (last_value_index != found.first->second) {
+					// we will add the value index size later, when we know the total number of keys
+					state.estimated_rle_pages_size += GetVarintSize(run_length);
+					run_length = 0;
+					run_count++;
+					last_value_index = found.first->second;
+				}
+			}
+			vector_index++;
+		}
+		// Add the costs of keys sizes. We don't know yet how many bytes the keys need as we haven't
+		// seen all the values. therefore we use an over-estimation of
+		state.estimated_rle_pages_size += MAX_DICTIONARY_KEY_SIZE * run_count;
+	}
+
+	void FinalizeAnalyze(ColumnWriterState &state_p) override {
+		auto &state = (StringColumnWriterState &)state_p;
+
+		// check if a dictionary will require more space than a plain write, or if the dictionary page is going to
+		// be too large
+		if (state.estimated_dict_page_size > MAX_UNCOMPRESSED_DICT_PAGE_SIZE ||
+		    state.estimated_rle_pages_size + state.estimated_dict_page_size > state.estimated_plain_size) {
+			// clearing the dictionary signals a plain write
+			state.dictionary.clear();
+			state.key_bit_width = 0;
+		} else {
+			state.key_bit_width = RleBpDecoder::ComputeBitWidth(state.dictionary.size());
+		}
+	}
+
+	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state_p,
 	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
+		auto &page_state = (StringWriterPageState &)*page_state_p;
 		auto &mask = FlatVector::Validity(input_column);
 		auto &stats = (StringStatisticsState &)*stats_p;
 
 		auto *ptr = FlatVector::GetData<string_t>(input_column);
-		for (idx_t r = chunk_start; r < chunk_end; r++) {
-			if (mask.RowIsValid(r)) {
+		if (page_state.IsDictionaryEncoded()) {
+			// dictionary based page
+			for (idx_t r = chunk_start; r < chunk_end; r++) {
+				if (!mask.RowIsValid(r)) {
+					continue;
+				}
+				auto value_index = page_state.dictionary.at(ptr[r].GetString());
+				if (!page_state.written_value) {
+					// first value
+					// write the bit-width as a one-byte entry
+					temp_writer.Write<uint8_t>(page_state.bit_width);
+					// now begin writing the actual value
+					page_state.encoder.BeginWrite(temp_writer, value_index);
+					page_state.written_value = true;
+				} else {
+					page_state.encoder.WriteValue(temp_writer, value_index);
+				}
+			}
+		} else {
+			// plain page
+			for (idx_t r = chunk_start; r < chunk_end; r++) {
+				if (!mask.RowIsValid(r)) {
+					continue;
+				}
 				stats.Update(ptr[r]);
 				temp_writer.Write<uint32_t>(ptr[r].GetSize());
 				temp_writer.WriteData((const_data_ptr_t)ptr[r].GetDataUnsafe(), ptr[r].GetSize());
@@ -31531,9 +26735,74 @@ public:
 		}
 	}
 
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
-		auto strings = FlatVector::GetData<string_t>(vector);
-		return strings[index].GetSize();
+	unique_ptr<ColumnWriterPageState> InitializePageState(BasicColumnWriterState &state_p) override {
+		auto &state = (StringColumnWriterState &)state_p;
+		return make_unique<StringWriterPageState>(state.key_bit_width, state.dictionary);
+	}
+
+	void FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state_p) override {
+		auto &page_state = (StringWriterPageState &)*state_p;
+		if (page_state.bit_width != 0) {
+			if (!page_state.written_value) {
+				// all values are null
+				// just write the bit width
+				temp_writer.Write<uint8_t>(page_state.bit_width);
+				return;
+			}
+			page_state.encoder.FinishWrite(temp_writer);
+		}
+	}
+
+	duckdb_parquet::format::Encoding::type GetEncoding(BasicColumnWriterState &state_p) override {
+		auto &state = (StringColumnWriterState &)state_p;
+		return state.IsDictionaryEncoded() ? Encoding::RLE_DICTIONARY : Encoding::PLAIN;
+	}
+
+	bool HasDictionary(BasicColumnWriterState &state_p) override {
+		auto &state = (StringColumnWriterState &)state_p;
+		return state.IsDictionaryEncoded();
+	}
+
+	idx_t DictionarySize(BasicColumnWriterState &state_p) override {
+		auto &state = (StringColumnWriterState &)state_p;
+		D_ASSERT(state.IsDictionaryEncoded());
+		return state.dictionary.size();
+	}
+
+	void FlushDictionary(BasicColumnWriterState &state_p, ColumnWriterStatistics *stats_p) override {
+		auto &stats = (StringStatisticsState &)*stats_p;
+		auto &state = (StringColumnWriterState &)state_p;
+		if (!state.IsDictionaryEncoded()) {
+			return;
+		}
+		// first we need to sort the values in index order
+		auto values = vector<string_t>(state.dictionary.size());
+		for (const auto &entry : state.dictionary) {
+			D_ASSERT(values[entry.second].GetSize() == 0);
+			values[entry.second] = entry.first;
+		}
+		// first write the contents of the dictionary page to a temporary buffer
+		auto temp_writer = make_unique<BufferedSerializer>();
+		for (idx_t r = 0; r < values.size(); r++) {
+			auto &value = values[r];
+			// update the statistics
+			stats.Update(value);
+			// write this string value to the dictionary
+			temp_writer->Write<uint32_t>(value.GetSize());
+			temp_writer->WriteData((const_data_ptr_t)(value.GetDataUnsafe()), value.GetSize());
+		}
+		// flush the dictionary page and add it to the to-be-written pages
+		WriteDictionary(state, move(temp_writer), values.size());
+	}
+
+	idx_t GetRowSize(Vector &vector, idx_t index, BasicColumnWriterState &state_p) override {
+		auto &state = (StringColumnWriterState &)state_p;
+		if (state.IsDictionaryEncoded()) {
+			return (state.key_bit_width + 7) / 8;
+		} else {
+			auto strings = FlatVector::GetData<string_t>(vector);
+			return strings[index].GetSize();
+		}
 	}
 };
 
@@ -31549,11 +26818,11 @@ public:
 	bool written_value;
 };
 
-class EnumColumnWriter : public ColumnWriter {
+class EnumColumnWriter : public BasicColumnWriter {
 public:
 	EnumColumnWriter(ParquetWriter &writer, LogicalType enum_type_p, idx_t schema_idx, vector<string> schema_path_p,
 	                 idx_t max_repeat, idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls),
+	    : BasicColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls),
 	      enum_type(move(enum_type_p)) {
 		bit_width = RleBpDecoder::ComputeBitWidth(EnumType::GetSize(enum_type));
 	}
@@ -31606,7 +26875,7 @@ public:
 		}
 	}
 
-	unique_ptr<ColumnWriterPageState> InitializePageState() override {
+	unique_ptr<ColumnWriterPageState> InitializePageState(BasicColumnWriterState &state) override {
 		return make_unique<EnumWriterPageState>(bit_width);
 	}
 
@@ -31621,11 +26890,19 @@ public:
 		page_state.encoder.FinishWrite(temp_writer);
 	}
 
-	duckdb_parquet::format::Encoding::type GetEncoding() override {
+	duckdb_parquet::format::Encoding::type GetEncoding(BasicColumnWriterState &state) override {
 		return Encoding::RLE_DICTIONARY;
 	}
 
-	void FlushDictionary(ColumnWriterState &state, ColumnWriterStatistics *stats_p) override {
+	bool HasDictionary(BasicColumnWriterState &state) override {
+		return true;
+	}
+
+	idx_t DictionarySize(BasicColumnWriterState &state_p) override {
+		return EnumType::GetSize(enum_type);
+	}
+
+	void FlushDictionary(BasicColumnWriterState &state, ColumnWriterStatistics *stats_p) override {
 		auto &stats = (StringStatisticsState &)*stats_p;
 		// write the enum values to a dictionary page
 		auto &enum_values = EnumType::GetValuesInsertOrder(enum_type);
@@ -31645,7 +26922,7 @@ public:
 		WriteDictionary(state, move(temp_writer), enum_count);
 	}
 
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
+	idx_t GetRowSize(Vector &vector, idx_t index, BasicColumnWriterState &state) override {
 		return (bit_width + 7) / 8;
 	}
 };
@@ -31666,6 +26943,9 @@ public:
 
 public:
 	unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) override;
+	bool HasAnalyze() override;
+	void Analyze(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) override;
+	void FinalizeAnalyze(ColumnWriterState &state) override;
 	void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) override;
 
 	void BeginWrite(ColumnWriterState &state) override;
@@ -31693,6 +26973,37 @@ unique_ptr<ColumnWriterState> StructColumnWriter::InitializeWriteState(duckdb_pa
 		result->child_states.push_back(child_writer->InitializeWriteState(row_group));
 	}
 	return move(result);
+}
+
+bool StructColumnWriter::HasAnalyze() {
+	for (auto &child_writer : child_writers) {
+		if (child_writer->HasAnalyze()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void StructColumnWriter::Analyze(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
+	auto &state = (StructColumnWriterState &)state_p;
+	auto &child_vectors = StructVector::GetEntries(vector);
+	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
+		// Need to check again. It might be that just one child needs it but the rest not
+		if (child_writers[child_idx]->HasAnalyze()) {
+			child_writers[child_idx]->Analyze(*state.child_states[child_idx], &state_p, *child_vectors[child_idx],
+			                                  count);
+		}
+	}
+}
+
+void StructColumnWriter::FinalizeAnalyze(ColumnWriterState &state_p) {
+	auto &state = (StructColumnWriterState &)state_p;
+	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
+		// Need to check again. It might be that just one child needs it but the rest not
+		if (child_writers[child_idx]->HasAnalyze()) {
+			child_writers[child_idx]->FinalizeAnalyze(*state.child_states[child_idx]);
+		}
+	}
 }
 
 void StructColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
@@ -31753,6 +27064,9 @@ public:
 
 public:
 	unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) override;
+	bool HasAnalyze() override;
+	void Analyze(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) override;
+	void FinalizeAnalyze(ColumnWriterState &state) override;
 	void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) override;
 
 	void BeginWrite(ColumnWriterState &state) override;
@@ -31777,6 +27091,21 @@ unique_ptr<ColumnWriterState> ListColumnWriter::InitializeWriteState(duckdb_parq
 	auto result = make_unique<ListColumnWriterState>(row_group, row_group.columns.size());
 	result->child_state = child_writer->InitializeWriteState(row_group);
 	return move(result);
+}
+
+bool ListColumnWriter::HasAnalyze() {
+	return child_writer->HasAnalyze();
+}
+void ListColumnWriter::Analyze(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
+	auto &state = (ListColumnWriterState &)state_p;
+	auto &list_child = ListVector::GetEntry(vector);
+	auto list_count = ListVector::GetListSize(vector);
+	child_writer->Analyze(*state.child_state, &state_p, list_child, list_count);
+}
+
+void ListColumnWriter::FinalizeAnalyze(ColumnWriterState &state_p) {
+	auto &state = (ListColumnWriterState &)state_p;
+	child_writer->FinalizeAnalyze(*state.child_state);
 }
 
 void ListColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
@@ -31974,8 +27303,7 @@ unique_ptr<ColumnWriter> ColumnWriter::CreateWriterRecursive(vector<duckdb_parqu
 	duckdb_parquet::format::SchemaElement schema_element;
 	schema_element.type = ParquetWriter::DuckDBTypeToParquetType(type);
 	schema_element.repetition_type = null_type;
-	schema_element.num_children = 0;
-	schema_element.__isset.num_children = true;
+	schema_element.__isset.num_children = false;
 	schema_element.__isset.type = true;
 	schema_element.__isset.repetition_type = true;
 	schema_element.name = name;
@@ -32069,14 +27397,9 @@ unique_ptr<ColumnWriter> ColumnWriter::CreateWriterRecursive(vector<duckdb_parqu
 } // namespace duckdb
 #define DUCKDB_EXTENSION_MAIN
 
-#include <string>
-#include <vector>
-#include <fstream>
-#include <iostream>
 
 
-
-
+#include "duckdb.hpp"
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
@@ -32102,6 +27425,8 @@ public:
 };
 
 } // namespace duckdb
+
+
 
 //===----------------------------------------------------------------------===//
 //                         DuckDB
@@ -32136,26 +27461,30 @@ public:
 } // namespace duckdb
 
 
-#include "duckdb.hpp"
+#include <fstream>
+#include <iostream>
+#include <numeric>
+#include <string>
+#include <vector>
 #ifndef DUCKDB_AMALGAMATION
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/common/constants.hpp"
+#include "duckdb/common/enums/file_compression_type.hpp"
+#include "duckdb/common/field_writer.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/hive_partitioning.hpp"
 #include "duckdb/common/types/chunk_collection.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/function/table_function.hpp"
-#include "duckdb/common/file_system.hpp"
-#include "duckdb/parser/parsed_data/create_copy_function_info.hpp"
-#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
-
-#include "duckdb/common/enums/file_compression_type.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/parsed_data/create_copy_function_info.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
-
+#include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
-
-#include "duckdb/main/client_context.hpp"
-#include "duckdb/catalog/catalog.hpp"
 #endif
 
 namespace duckdb {
@@ -32168,6 +27497,18 @@ struct ParquetReadBindData : public TableFunctionData {
 	atomic<idx_t> cur_file;
 	vector<string> names;
 	vector<LogicalType> types;
+
+	// These come from the initial_reader, but need to be stored in case the initial_reader is removed by a filter
+	idx_t initial_file_cardinality;
+	idx_t initial_file_row_groups;
+	ParquetOptions parquet_options;
+
+	void SetInitialReader(shared_ptr<ParquetReader> reader) {
+		initial_reader = std::move(reader);
+		initial_file_cardinality = initial_reader->NumRows();
+		initial_file_row_groups = initial_reader->NumRowGroups();
+		parquet_options = initial_reader->parquet_options;
+	}
 };
 
 struct ParquetReadLocalState : public LocalTableFunctionState {
@@ -32178,6 +27519,8 @@ struct ParquetReadLocalState : public LocalTableFunctionState {
 	idx_t file_index;
 	vector<column_t> column_ids;
 	TableFilterSet *table_filters;
+	//! The DataChunk containing all read columns (even filter columns that are immediately removed)
+	DataChunk all_columns;
 };
 
 struct ParquetReadGlobalState : public GlobalTableFunctionState {
@@ -32188,10 +27531,50 @@ struct ParquetReadGlobalState : public GlobalTableFunctionState {
 	idx_t row_group_index;
 	idx_t max_threads;
 
+	vector<idx_t> projection_ids;
+	vector<LogicalType> scanned_types;
+
 	idx_t MaxThreads() const override {
 		return max_threads;
 	}
+
+	bool CanRemoveFilterColumns() const {
+		return !projection_ids.empty();
+	}
 };
+
+struct ParquetWriteBindData : public TableFunctionData {
+	vector<LogicalType> sql_types;
+	string file_name;
+	vector<string> column_names;
+	duckdb_parquet::format::CompressionCodec::type codec = duckdb_parquet::format::CompressionCodec::SNAPPY;
+	idx_t row_group_size = RowGroup::ROW_GROUP_SIZE;
+};
+
+struct ParquetWriteGlobalState : public GlobalFunctionData {
+	unique_ptr<ParquetWriter> writer;
+};
+
+struct ParquetWriteLocalState : public LocalFunctionData {
+	explicit ParquetWriteLocalState(ClientContext &context, const vector<LogicalType> &types) : buffer(context, types) {
+	}
+
+	ColumnDataCollection buffer;
+};
+
+void ParquetOptions::Serialize(FieldWriter &writer) const {
+	writer.WriteField<bool>(binary_as_string);
+	writer.WriteField<bool>(filename);
+	writer.WriteField<bool>(file_row_number);
+	writer.WriteField<bool>(hive_partitioning);
+}
+
+void ParquetOptions::Deserialize(FieldReader &reader) {
+	binary_as_string = reader.ReadRequired<bool>();
+	filename = reader.ReadRequired<bool>();
+	file_row_number = reader.ReadRequired<bool>();
+	hive_partitioning = reader.ReadRequired<bool>();
+}
 
 class ParquetScanFunction {
 public:
@@ -32203,13 +27586,24 @@ public:
 		table_function.cardinality = ParquetCardinality;
 		table_function.table_scan_progress = ParquetProgress;
 		table_function.named_parameters["binary_as_string"] = LogicalType::BOOLEAN;
+		table_function.named_parameters["filename"] = LogicalType::BOOLEAN;
+		table_function.named_parameters["file_row_number"] = LogicalType::BOOLEAN;
+		table_function.named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
 		table_function.get_batch_index = ParquetScanGetBatchIndex;
+		table_function.serialize = ParquetScanSerialize;
+		table_function.deserialize = ParquetScanDeserialize;
+
 		table_function.projection_pushdown = true;
 		table_function.filter_pushdown = true;
+		table_function.filter_prune = true;
+		table_function.pushdown_complex_filter = ParquetComplexFilterPushdown;
 		set.AddFunction(table_function);
 		table_function.arguments = {LogicalType::LIST(LogicalType::VARCHAR)};
 		table_function.bind = ParquetScanBindList;
 		table_function.named_parameters["binary_as_string"] = LogicalType::BOOLEAN;
+		table_function.named_parameters["filename"] = LogicalType::BOOLEAN;
+		table_function.named_parameters["file_row_number"] = LogicalType::BOOLEAN;
+		table_function.named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
 		set.AddFunction(table_function);
 		return set;
 	}
@@ -32218,11 +27612,19 @@ public:
 	                                                vector<string> &expected_names,
 	                                                vector<LogicalType> &expected_types) {
 		D_ASSERT(expected_names.size() == expected_types.size());
+		ParquetOptions parquet_options(context);
+
 		for (auto &option : info.options) {
 			auto loption = StringUtil::Lower(option.first);
 			if (loption == "compression" || loption == "codec") {
 				// CODEC option has no effect on parquet read: we determine codec from the file
 				continue;
+			} else if (loption == "filename") {
+				parquet_options.filename = true;
+			} else if (loption == "file_row_number") {
+				parquet_options.file_row_number = true;
+			} else if (loption == "hive_partitioning") {
+				parquet_options.hive_partitioning = true;
 			} else {
 				throw NotImplementedException("Unsupported option for COPY FROM parquet: %s", option.first);
 			}
@@ -32234,8 +27636,8 @@ public:
 		if (result->files.empty()) {
 			throw IOException("No files found that match the pattern \"%s\"", info.file_path);
 		}
-		ParquetOptions parquet_options(context);
-		result->initial_reader = make_shared<ParquetReader>(context, result->files[0], expected_types, parquet_options);
+		result->SetInitialReader(
+		    make_shared<ParquetReader>(context, result->files[0], expected_types, parquet_options));
 		result->names = result->initial_reader->names;
 		result->types = result->initial_reader->return_types;
 		return move(result);
@@ -32245,31 +27647,36 @@ public:
 	                                                   column_t column_index) {
 		auto &bind_data = (ParquetReadBindData &)*bind_data_p;
 
-		if (column_index == COLUMN_IDENTIFIER_ROW_ID) {
+		if (IsRowIdColumnId(column_index)) {
 			return nullptr;
 		}
 
-		// we do not want to parse the Parquet metadata for the sole purpose of getting column statistics
+		// NOTE: we do not want to parse the Parquet metadata for the sole purpose of getting column statistics
 
-		// We already parsed the metadata for the first file in a glob because we need some type info.
-		auto overall_stats = ParquetReader::ReadStatistics(
-		    *bind_data.initial_reader, bind_data.initial_reader->return_types[column_index], column_index,
-		    bind_data.initial_reader->metadata->metadata.get());
-
-		if (!overall_stats) {
-			return nullptr;
-		}
-
-		// if there is only one file in the glob (quite common case), we are done
 		auto &config = DBConfig::GetConfig(context);
 		if (bind_data.files.size() < 2) {
-			return overall_stats;
-		} else if (config.object_cache_enable) {
+			if (bind_data.initial_reader) {
+				// most common path, scanning single parquet file
+				return ParquetReader::ReadStatistics(*bind_data.initial_reader,
+				                                     bind_data.initial_reader->return_types[column_index], column_index,
+				                                     bind_data.initial_reader->metadata->metadata.get());
+			} else if (!config.options.object_cache_enable) {
+				// our initial reader was reset
+				return nullptr;
+			}
+		} else if (config.options.object_cache_enable) {
+			// multiple files, object cache enabled: merge statistics
+			unique_ptr<BaseStatistics> overall_stats;
+
 			auto &cache = ObjectCache::GetObjectCache(context);
 			// for more than one file, we could be lucky and metadata for *every* file is in the object cache (if
 			// enabled at all)
 			FileSystem &fs = FileSystem::GetFileSystem(context);
-			for (idx_t file_idx = 1; file_idx < bind_data.files.size(); file_idx++) {
+
+			// If we don't have an initial_reader anymore, we may need to allocate a new one here.
+			shared_ptr<ParquetReader> reader;
+
+			for (idx_t file_idx = 0; file_idx < bind_data.files.size(); file_idx++) {
 				auto &file_name = bind_data.files[file_idx];
 				auto metadata = cache.Get<ParquetFileMetadataCache>(file_name);
 				if (!metadata) {
@@ -32283,19 +27690,36 @@ public:
 					// missing or invalid metadata entry in cache, no usable stats overall
 					return nullptr;
 				}
+
+				// If we don't have an initial reader anymore we need to create a reader
+				auto &current_reader = bind_data.initial_reader ? bind_data.initial_reader : reader;
+				if (!current_reader) {
+					std::vector<column_t> ids(bind_data.names.size());
+					std::iota(std::begin(ids), std::end(ids), 0); // fill with 0,1,2,3.. etc
+
+					current_reader =
+					    make_shared<ParquetReader>(context, bind_data.files[0], bind_data.names, bind_data.types, ids,
+					                               bind_data.parquet_options, bind_data.files[0]);
+				}
+
 				// get and merge stats for file
-				auto file_stats = ParquetReader::ReadStatistics(*bind_data.initial_reader,
-				                                                bind_data.initial_reader->return_types[column_index],
-				                                                column_index, metadata->metadata.get());
+				auto file_stats =
+				    ParquetReader::ReadStatistics(*current_reader, current_reader->return_types[column_index],
+				                                  column_index, metadata->metadata.get());
 				if (!file_stats) {
 					return nullptr;
 				}
-				overall_stats->Merge(*file_stats);
+				if (overall_stats) {
+					overall_stats->Merge(*file_stats);
+				} else {
+					overall_stats = std::move(file_stats);
+				}
 			}
 			// success!
 			return overall_stats;
 		}
-		// we have more than one file and no object cache so no statistics overall
+
+		// multiple files and no object cache, no luck!
 		return nullptr;
 	}
 
@@ -32305,7 +27729,7 @@ public:
 		auto result = make_unique<ParquetReadBindData>();
 		result->files = move(files);
 
-		result->initial_reader = make_shared<ParquetReader>(context, result->files[0], parquet_options);
+		result->SetInitialReader(make_shared<ParquetReader>(context, result->files[0], parquet_options));
 		return_types = result->types = result->initial_reader->return_types;
 		names = result->names = result->initial_reader->names;
 		return move(result);
@@ -32322,14 +27746,21 @@ public:
 	static unique_ptr<FunctionData> ParquetScanBind(ClientContext &context, TableFunctionBindInput &input,
 	                                                vector<LogicalType> &return_types, vector<string> &names) {
 		auto &config = DBConfig::GetConfig(context);
-		if (!config.enable_external_access) {
+		if (!config.options.enable_external_access) {
 			throw PermissionException("Scanning Parquet files is disabled through configuration");
 		}
 		auto file_name = input.inputs[0].GetValue<string>();
 		ParquetOptions parquet_options(context);
 		for (auto &kv : input.named_parameters) {
-			if (kv.first == "binary_as_string") {
+			auto loption = StringUtil::Lower(kv.first);
+			if (loption == "binary_as_string") {
 				parquet_options.binary_as_string = BooleanValue::Get(kv.second);
+			} else if (loption == "filename") {
+				parquet_options.filename = BooleanValue::Get(kv.second);
+			} else if (loption == "file_row_number") {
+				parquet_options.file_row_number = BooleanValue::Get(kv.second);
+			} else if (loption == "hive_partitioning") {
+				parquet_options.hive_partitioning = BooleanValue::Get(kv.second);
 			}
 		}
 		FileSystem &fs = FileSystem::GetFileSystem(context);
@@ -32340,7 +27771,7 @@ public:
 	static unique_ptr<FunctionData> ParquetScanBindList(ClientContext &context, TableFunctionBindInput &input,
 	                                                    vector<LogicalType> &return_types, vector<string> &names) {
 		auto &config = DBConfig::GetConfig(context);
-		if (!config.enable_external_access) {
+		if (!config.options.enable_external_access) {
 			throw PermissionException("Scanning Parquet files is disabled through configuration");
 		}
 		FileSystem &fs = FileSystem::GetFileSystem(context);
@@ -32354,8 +27785,15 @@ public:
 		}
 		ParquetOptions parquet_options(context);
 		for (auto &kv : input.named_parameters) {
-			if (kv.first == "binary_as_string") {
+			auto loption = StringUtil::Lower(kv.first);
+			if (loption == "binary_as_string") {
 				parquet_options.binary_as_string = BooleanValue::Get(kv.second);
+			} else if (loption == "filename") {
+				parquet_options.filename = BooleanValue::Get(kv.second);
+			} else if (loption == "file_row_number") {
+				parquet_options.file_row_number = BooleanValue::Get(kv.second);
+			} else if (loption == "hive_partitioning") {
+				parquet_options.hive_partitioning = BooleanValue::Get(kv.second);
 			}
 		}
 		return ParquetScanBindInternal(context, move(files), return_types, names, parquet_options);
@@ -32364,10 +27802,13 @@ public:
 	static double ParquetProgress(ClientContext &context, const FunctionData *bind_data_p,
 	                              const GlobalTableFunctionState *global_state) {
 		auto &bind_data = (ParquetReadBindData &)*bind_data_p;
-		if (bind_data.initial_reader->NumRows() == 0) {
+		if (bind_data.files.empty()) {
+			return 100.0;
+		}
+		if (bind_data.initial_file_cardinality == 0) {
 			return (100.0 * (bind_data.cur_file + 1)) / bind_data.files.size();
 		}
-		auto percentage = (bind_data.chunk_count * STANDARD_VECTOR_SIZE * 100.0 / bind_data.initial_reader->NumRows()) /
+		auto percentage = (bind_data.chunk_count * STANDARD_VECTOR_SIZE * 100.0 / bind_data.initial_file_cardinality) /
 		                  bind_data.files.size();
 		percentage += 100.0 * bind_data.cur_file / bind_data.files.size();
 		return percentage;
@@ -32383,6 +27824,9 @@ public:
 		result->is_parallel = true;
 		result->batch_index = 0;
 		result->table_filters = input.filters;
+		if (input.CanRemoveFilterColumns()) {
+			result->all_columns.Initialize(context.client, gstate.scanned_types);
+		}
 		if (!ParquetParallelStateNext(context.client, bind_data, *result, gstate)) {
 			return nullptr;
 		}
@@ -32392,12 +27836,36 @@ public:
 	static unique_ptr<GlobalTableFunctionState> ParquetScanInitGlobal(ClientContext &context,
 	                                                                  TableFunctionInitInput &input) {
 		auto &bind_data = (ParquetReadBindData &)*input.bind_data;
+
 		auto result = make_unique<ParquetReadGlobalState>();
-		result->current_reader = bind_data.initial_reader;
+
+		if (bind_data.initial_reader) {
+			result->current_reader = bind_data.initial_reader;
+		} else {
+			if (bind_data.files.empty()) {
+				result->current_reader = nullptr;
+			} else {
+				result->current_reader =
+				    make_shared<ParquetReader>(context, bind_data.files[0], bind_data.names, bind_data.types,
+				                               input.column_ids, bind_data.parquet_options, bind_data.files[0]);
+			}
+		}
+
 		result->row_group_index = 0;
 		result->file_index = 0;
 		result->batch_index = 0;
 		result->max_threads = ParquetScanMaxThreads(context, input.bind_data);
+		if (input.CanRemoveFilterColumns()) {
+			result->projection_ids = input.projection_ids;
+			const auto table_types = bind_data.types;
+			for (const auto &col_idx : input.column_ids) {
+				if (IsRowIdColumnId(col_idx)) {
+					result->scanned_types.emplace_back(LogicalType::ROW_TYPE);
+				} else {
+					result->scanned_types.push_back(table_types[col_idx]);
+				}
+			}
+		}
 		return move(result);
 	}
 
@@ -32406,6 +27874,26 @@ public:
 	                                      GlobalTableFunctionState *global_state) {
 		auto &data = (ParquetReadLocalState &)*local_state;
 		return data.batch_index;
+	}
+
+	static void ParquetScanSerialize(FieldWriter &writer, const FunctionData *bind_data_p,
+	                                 const TableFunction &function) {
+		auto &bind_data = (ParquetReadBindData &)*bind_data_p;
+		writer.WriteList<string>(bind_data.files);
+		writer.WriteRegularSerializableList(bind_data.types);
+		writer.WriteList<string>(bind_data.names);
+		bind_data.parquet_options.Serialize(writer);
+	}
+
+	static unique_ptr<FunctionData> ParquetScanDeserialize(ClientContext &context, FieldReader &reader,
+	                                                       TableFunction &function) {
+		auto files = reader.ReadRequiredList<string>();
+		auto types = reader.ReadRequiredSerializableList<LogicalType, LogicalType>();
+		auto names = reader.ReadRequiredList<string>();
+		ParquetOptions options(context);
+		options.Deserialize(reader);
+
+		return ParquetScanBindInternal(context, files, types, names, options);
 	}
 
 	static void ParquetScanImplementation(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -32417,7 +27905,14 @@ public:
 		auto &bind_data = (ParquetReadBindData &)*data_p.bind_data;
 
 		do {
-			data.reader->Scan(data.scan_state, output);
+			if (gstate.CanRemoveFilterColumns()) {
+				data.all_columns.Reset();
+				data.reader->Scan(data.scan_state, data.all_columns);
+				output.ReferenceColumns(data.all_columns, gstate.projection_ids);
+			} else {
+				data.reader->Scan(data.scan_state, output);
+			}
+
 			bind_data.chunk_count++;
 			if (output.size() > 0) {
 				return;
@@ -32430,18 +27925,22 @@ public:
 
 	static unique_ptr<NodeStatistics> ParquetCardinality(ClientContext &context, const FunctionData *bind_data) {
 		auto &data = (ParquetReadBindData &)*bind_data;
-		return make_unique<NodeStatistics>(data.initial_reader->NumRows() * data.files.size());
+		return make_unique<NodeStatistics>(data.initial_file_cardinality * data.files.size());
 	}
 
 	static idx_t ParquetScanMaxThreads(ClientContext &context, const FunctionData *bind_data) {
 		auto &data = (ParquetReadBindData &)*bind_data;
-		return data.initial_reader->NumRowGroups() * data.files.size();
+		return data.initial_file_row_groups * data.files.size();
 	}
 
 	static bool ParquetParallelStateNext(ClientContext &context, const ParquetReadBindData &bind_data,
 	                                     ParquetReadLocalState &scan_data, ParquetReadGlobalState &parallel_state) {
-
 		lock_guard<mutex> parallel_lock(parallel_state.lock);
+
+		if (parallel_state.current_reader == nullptr) {
+			return false;
+		}
+
 		if (parallel_state.row_group_index < parallel_state.current_reader->NumRowGroups()) {
 			// groups remain in the current parquet file: read the next group
 			scan_data.reader = parallel_state.current_reader;
@@ -32457,6 +27956,7 @@ public:
 			while (parallel_state.file_index + 1 < bind_data.files.size()) {
 				// read the next file
 				string file = bind_data.files[++parallel_state.file_index];
+
 				parallel_state.current_reader =
 				    make_shared<ParquetReader>(context, file, bind_data.names, bind_data.types, scan_data.column_ids,
 				                               parallel_state.current_reader->parquet_options, bind_data.files[0]);
@@ -32477,26 +27977,30 @@ public:
 		}
 		return false;
 	}
-};
 
-struct ParquetWriteBindData : public TableFunctionData {
-	vector<LogicalType> sql_types;
-	string file_name;
-	vector<string> column_names;
-	duckdb_parquet::format::CompressionCodec::type codec = duckdb_parquet::format::CompressionCodec::SNAPPY;
-	idx_t row_group_size = 100000;
-};
+	static void ParquetComplexFilterPushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data_p,
+	                                         vector<unique_ptr<Expression>> &filters) {
+		auto data = (ParquetReadBindData *)bind_data_p;
+		if (!data->files.empty()) {
+			auto initial_filename = data->files[0];
 
-struct ParquetWriteGlobalState : public GlobalFunctionData {
-	unique_ptr<ParquetWriter> writer;
-};
+			if (data->parquet_options.hive_partitioning || data->parquet_options.filename) {
+				unordered_map<string, column_t> column_map;
+				for (idx_t i = 0; i < get.column_ids.size(); i++) {
+					column_map.insert({get.names[get.column_ids[i]], i});
+				}
 
-struct ParquetWriteLocalState : public LocalFunctionData {
-	explicit ParquetWriteLocalState(Allocator &allocator) {
-		buffer = make_unique<ChunkCollection>(allocator);
+				HivePartitioning::ApplyFiltersToFileList(context, data->files, filters, column_map, get.table_index,
+				                                         data->parquet_options.hive_partitioning,
+				                                         data->parquet_options.filename);
+
+				if (data->files.empty() || initial_filename != data->files[0]) {
+					// Remove initial reader in case the first file gets filtered out
+					data->initial_reader.reset();
+				}
+			}
+		}
 	}
-
-	unique_ptr<ChunkCollection> buffer;
 };
 
 unique_ptr<FunctionData> ParquetWriteBind(ClientContext &context, CopyInfo &info, vector<string> &names,
@@ -32553,12 +28057,12 @@ void ParquetWriteSink(ExecutionContext &context, FunctionData &bind_data_p, Glob
 	auto &local_state = (ParquetWriteLocalState &)lstate;
 
 	// append data to the local (buffered) chunk collection
-	local_state.buffer->Append(input);
-	if (local_state.buffer->Count() > bind_data.row_group_size) {
+	local_state.buffer.Append(input);
+	if (local_state.buffer.Count() > bind_data.row_group_size) {
 		// if the chunk collection exceeds a certain size we flush it to the parquet file
-		global_state.writer->Flush(*local_state.buffer);
+		global_state.writer->Flush(local_state.buffer);
 		// and reset the buffer
-		local_state.buffer = make_unique<ChunkCollection>(Allocator::Get(context.client));
+		local_state.buffer.Reset();
 	}
 }
 
@@ -32567,7 +28071,7 @@ void ParquetWriteCombine(ExecutionContext &context, FunctionData &bind_data, Glo
 	auto &global_state = (ParquetWriteGlobalState &)gstate;
 	auto &local_state = (ParquetWriteLocalState &)lstate;
 	// flush any data left in the local state to the file
-	global_state.writer->Flush(*local_state.buffer);
+	global_state.writer->Flush(local_state.buffer);
 }
 
 void ParquetWriteFinalize(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate) {
@@ -32576,13 +28080,15 @@ void ParquetWriteFinalize(ClientContext &context, FunctionData &bind_data, Globa
 	global_state.writer->Finalize();
 }
 
-unique_ptr<LocalFunctionData> ParquetWriteInitializeLocal(ExecutionContext &context, FunctionData &bind_data) {
-	return make_unique<ParquetWriteLocalState>(Allocator::Get(context.client));
+unique_ptr<LocalFunctionData> ParquetWriteInitializeLocal(ExecutionContext &context, FunctionData &bind_data_p) {
+	auto &bind_data = (ParquetWriteBindData &)bind_data_p;
+	return make_unique<ParquetWriteLocalState>(context.client, bind_data.sql_types);
 }
 
 unique_ptr<TableFunctionRef> ParquetScanReplacement(ClientContext &context, const string &table_name,
                                                     ReplacementScanData *data) {
-	if (!StringUtil::EndsWith(StringUtil::Lower(table_name), ".parquet")) {
+	auto lower_name = StringUtil::Lower(table_name);
+	if (!StringUtil::EndsWith(lower_name, ".parquet") && !StringUtil::Contains(lower_name, ".parquet?")) {
 		return nullptr;
 	}
 	auto table_function = make_unique<TableFunctionRef>();
@@ -32625,6 +28131,11 @@ void ParquetExtension::Load(DuckDB &db) {
 	con.BeginTransaction();
 	auto &context = *con.context;
 	auto &catalog = Catalog::GetCatalog(context);
+
+	if (catalog.GetEntry<TableFunctionCatalogEntry>(context, DEFAULT_SCHEMA, "parquet_scan", true)) {
+		throw InvalidInputException("Parquet extension is either already loaded or built-in");
+	}
+
 	catalog.CreateCopyFunction(context, &info);
 	catalog.CreateTableFunction(context, &cinfo);
 	catalog.CreateTableFunction(context, &pq_scan);
@@ -32644,6 +28155,20 @@ std::string ParquetExtension::Name() {
 
 } // namespace duckdb
 
+#ifdef DUCKDB_BUILD_LOADABLE_EXTENSION
+extern "C" {
+
+DUCKDB_EXTENSION_API void parquet_init(duckdb::DatabaseInstance &db) { // NOLINT
+	duckdb::DuckDB db_wrapper(db);
+	db_wrapper.LoadExtension<duckdb::ParquetExtension>();
+}
+
+DUCKDB_EXTENSION_API const char *parquet_version() { // NOLINT
+	return duckdb::DuckDB::LibraryVersion();
+}
+}
+#endif
+
 #ifndef DUCKDB_EXTENSION_MAIN
 #error DUCKDB_EXTENSION_MAIN not defined
 #endif
@@ -32655,6 +28180,7 @@ std::string ParquetExtension::Name() {
 #ifndef DUCKDB_AMALGAMATION
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/common/types/column_data_collection.hpp"
 #endif
 
 namespace duckdb {
@@ -32671,12 +28197,15 @@ public:
 };
 
 struct ParquetMetaDataOperatorData : public GlobalTableFunctionState {
-	explicit ParquetMetaDataOperatorData(Allocator &allocator) : collection(allocator) {
+	explicit ParquetMetaDataOperatorData(ClientContext &context, const vector<LogicalType> &types)
+	    : collection(context, types) {
 	}
 
 	idx_t file_index;
-	ChunkCollection collection;
+	ColumnDataCollection collection;
+	ColumnDataScanState scan_state;
 
+public:
 	static void BindMetaData(vector<LogicalType> &return_types, vector<string> &names);
 	static void BindSchema(vector<LogicalType> &return_types, vector<string> &names);
 
@@ -32774,7 +28303,7 @@ Value ConvertParquetStats(const LogicalType &type, const duckdb_parquet::format:
 	if (!stats_is_set) {
 		return Value(LogicalType::VARCHAR);
 	}
-	return ParquetStatisticsUtils::ConvertValue(type, schema_ele, stats).CastAs(LogicalType::VARCHAR);
+	return ParquetStatisticsUtils::ConvertValue(type, schema_ele, stats).DefaultCastAs(LogicalType::VARCHAR);
 }
 
 void ParquetMetaDataOperatorData::LoadFileMetaData(ClientContext &context, const vector<LogicalType> &return_types,
@@ -32902,6 +28431,8 @@ void ParquetMetaDataOperatorData::LoadFileMetaData(ClientContext &context, const
 	}
 	current_chunk.SetCardinality(count);
 	collection.Append(current_chunk);
+
+	collection.InitializeScan(scan_state);
 }
 
 void ParquetMetaDataOperatorData::BindSchema(vector<LogicalType> &return_types, vector<string> &names) {
@@ -33039,13 +28570,15 @@ void ParquetMetaDataOperatorData::LoadSchemaData(ClientContext &context, const v
 	}
 	current_chunk.SetCardinality(count);
 	collection.Append(current_chunk);
+
+	collection.InitializeScan(scan_state);
 }
 
 template <bool SCHEMA>
 unique_ptr<FunctionData> ParquetMetaDataBind(ClientContext &context, TableFunctionBindInput &input,
                                              vector<LogicalType> &return_types, vector<string> &names) {
 	auto &config = DBConfig::GetConfig(context);
-	if (!config.enable_external_access) {
+	if (!config.options.enable_external_access) {
 		throw PermissionException("Scanning Parquet files is disabled through configuration");
 	}
 	if (SCHEMA) {
@@ -33071,7 +28604,7 @@ unique_ptr<GlobalTableFunctionState> ParquetMetaDataInit(ClientContext &context,
 	auto &bind_data = (ParquetMetaDataBindData &)*input.bind_data;
 	D_ASSERT(!bind_data.files.empty());
 
-	auto result = make_unique<ParquetMetaDataOperatorData>(Allocator::Get(context));
+	auto result = make_unique<ParquetMetaDataOperatorData>(context, bind_data.return_types);
 	if (SCHEMA) {
 		result->LoadSchemaData(context, bind_data.return_types, bind_data.files[0]);
 	} else {
@@ -33085,9 +28618,9 @@ template <bool SCHEMA>
 void ParquetMetaDataImplementation(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = (ParquetMetaDataOperatorData &)*data_p.global_state;
 	auto &bind_data = (ParquetMetaDataBindData &)*data_p.bind_data;
+
 	while (true) {
-		auto chunk = data.collection.Fetch();
-		if (!chunk) {
+		if (!data.collection.Scan(data.scan_state, output)) {
 			if (data.file_index + 1 < bind_data.files.size()) {
 				// load the metadata for the next file
 				data.file_index++;
@@ -33102,7 +28635,6 @@ void ParquetMetaDataImplementation(ClientContext &context, TableFunctionInput &d
 				return;
 			}
 		}
-		output.Move(*chunk);
 		if (output.size() != 0) {
 			return;
 		}
@@ -33137,6 +28669,8 @@ ParquetSchemaFunction::ParquetSchemaFunction()
 
 
 
+
+
 #include "duckdb.hpp"
 #ifndef DUCKDB_AMALGAMATION
 #include "duckdb/planner/table_filter.hpp"
@@ -33147,6 +28681,7 @@ ParquetSchemaFunction::ParquetSchemaFunction()
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/pair.hpp"
+#include "duckdb/common/hive_partitioning.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 #include "duckdb/storage/object_cache.hpp"
@@ -33215,8 +28750,14 @@ LogicalType ParquetReader::DeriveLogicalType(const SchemaElement &s_ele, bool bi
 	if (s_ele.type == Type::FIXED_LEN_BYTE_ARRAY && !s_ele.__isset.type_length) {
 		throw IOException("FIXED_LEN_BYTE_ARRAY requires length to be set");
 	}
-	if (s_ele.type == Type::FIXED_LEN_BYTE_ARRAY && s_ele.__isset.logicalType && s_ele.logicalType.__isset.UUID) {
-		return LogicalType::UUID;
+	if (s_ele.__isset.logicalType) {
+		if (s_ele.logicalType.__isset.UUID) {
+			if (s_ele.type == Type::FIXED_LEN_BYTE_ARRAY) {
+				return LogicalType::UUID;
+			}
+		} else if (s_ele.logicalType.__isset.TIMESTAMP) {
+			return LogicalType::TIMESTAMP;
+		}
 	}
 	if (s_ele.__isset.converted_type) {
 		switch (s_ele.converted_type) {
@@ -33313,10 +28854,11 @@ LogicalType ParquetReader::DeriveLogicalType(const SchemaElement &s_ele, bool bi
 			}
 		case ConvertedType::INTERVAL:
 			return LogicalType::INTERVAL;
+		case ConvertedType::JSON:
+			return LogicalType::JSON;
 		case ConvertedType::MAP:
 		case ConvertedType::MAP_KEY_VALUE:
 		case ConvertedType::LIST:
-		case ConvertedType::JSON:
 		case ConvertedType::BSON:
 		default:
 			throw IOException("Unsupported converted type");
@@ -33372,7 +28914,7 @@ unique_ptr<ColumnReader> ParquetReader::CreateReaderRecursive(const FileMetaData
 
 	if (!s_ele.__isset.type) { // inner node
 		if (s_ele.num_children == 0) {
-			throw std::runtime_error("Node has no children but should");
+			throw InvalidInputException("Node has no children but should");
 		}
 		child_list_t<LogicalType> child_types;
 		vector<unique_ptr<ColumnReader>> child_readers;
@@ -33465,16 +29007,38 @@ unique_ptr<ColumnReader> ParquetReader::CreateReader(const duckdb_parquet::forma
 	D_ASSERT(next_schema_idx == file_meta_data->schema.size() - 1);
 	D_ASSERT(file_meta_data->row_groups.empty() || next_file_idx == file_meta_data->row_groups[0].columns.size());
 
+	auto &root_struct_reader = (StructColumnReader &)*ret;
+
 	// add casts if required
 	for (auto &entry : cast_map) {
 		auto column_idx = entry.first;
 		auto &expected_type = entry.second;
-
-		auto &root_struct_reader = (StructColumnReader &)*ret;
 		auto child_reader = move(root_struct_reader.child_readers[column_idx]);
 		auto cast_reader = make_unique<CastColumnReader>(move(child_reader), expected_type);
 		root_struct_reader.child_readers[column_idx] = move(cast_reader);
 	}
+
+	if (parquet_options.filename) {
+		Value val = Value(file_name);
+		root_struct_reader.child_readers.push_back(make_unique<GeneratedConstantColumnReader>(
+		    *this, LogicalType::VARCHAR, SchemaElement(), next_file_idx, 0, 0, val));
+	}
+
+	if (parquet_options.file_row_number) {
+		root_struct_reader.child_readers.push_back(
+		    make_unique<RowNumberColumnReader>(*this, LogicalType::BIGINT, SchemaElement(), next_file_idx, 0, 0));
+	}
+
+	if (parquet_options.hive_partitioning) {
+		auto res = HivePartitioning::Parse(file_name);
+
+		for (auto &partition : res) {
+			Value val = Value(partition.second);
+			root_struct_reader.child_readers.push_back(make_unique<GeneratedConstantColumnReader>(
+			    *this, LogicalType::VARCHAR, SchemaElement(), next_file_idx, 0, 0, val));
+		}
+	}
+
 	return ret;
 }
 
@@ -33502,6 +29066,35 @@ void ParquetReader::InitializeSchema(const vector<string> &expected_names, const
 		names.push_back(type_pair.first);
 		return_types.push_back(type_pair.second);
 	}
+
+	// Add generated constant column for filename
+	if (parquet_options.filename) {
+		if (std::find(names.begin(), names.end(), "filename") != names.end()) {
+			throw BinderException("Using filename option on file with column named filename is not supported");
+		}
+		return_types.emplace_back(LogicalType::VARCHAR);
+		names.emplace_back("filename");
+	}
+
+	// Add generated constant column for row number
+	if (parquet_options.file_row_number) {
+		if (std::find(names.begin(), names.end(), "file_row_number") != names.end()) {
+			throw BinderException(
+			    "Using file_row_number option on file with column named file_row_number is not supported");
+		}
+		return_types.emplace_back(LogicalType::BIGINT);
+		names.emplace_back("file_row_number");
+	}
+
+	// Add generated constant column for filename
+	if (parquet_options.hive_partitioning) {
+		auto partitions = HivePartitioning::Parse(file_name);
+		for (auto &part : partitions) {
+			return_types.emplace_back(LogicalType::VARCHAR);
+			names.emplace_back(part.first);
+		}
+	}
+
 	D_ASSERT(!names.empty());
 	D_ASSERT(!return_types.empty());
 	if (!has_expected_types) {
@@ -33532,7 +29125,7 @@ void ParquetReader::InitializeSchema(const vector<string> &expected_names, const
 	// now for each of the expected names, look it up in the name map and fill the column_id_map
 	D_ASSERT(column_id_map.empty());
 	for (idx_t i = 0; i < column_ids.size(); i++) {
-		if (column_ids[i] == COLUMN_IDENTIFIER_ROW_ID) {
+		if (IsRowIdColumnId(column_ids[i])) {
 			continue;
 		}
 		auto &expected_name = expected_names[column_ids[i]];
@@ -33616,8 +29209,9 @@ unique_ptr<BaseStatistics> ParquetReader::ReadStatistics(ParquetReader &reader, 
 	auto root_reader = reader.CreateReader(file_meta_data);
 	auto column_reader = ((StructColumnReader *)root_reader.get())->GetChildReader(file_col_idx);
 
-	for (auto &row_group : file_meta_data->row_groups) {
-		auto chunk_stats = column_reader->Stats(row_group.columns);
+	for (idx_t row_group_idx = 0; row_group_idx < file_meta_data->row_groups.size(); row_group_idx++) {
+		auto &row_group = file_meta_data->row_groups[row_group_idx];
+		auto chunk_stats = column_reader->Stats(row_group_idx, row_group.columns);
 		if (!chunk_stats) {
 			return nullptr;
 		}
@@ -33653,7 +29247,7 @@ uint64_t ParquetReader::GetGroupCompressedSize(ParquetReaderScanState &state) {
 
 	if (total_compressed_size != 0 && calc_compressed_size != 0 &&
 	    (idx_t)total_compressed_size != calc_compressed_size) {
-		throw std::runtime_error("mismatch between calculated compressed size and reported compressed size");
+		throw InvalidInputException("mismatch between calculated compressed size and reported compressed size");
 	}
 
 	return total_compressed_size ? total_compressed_size : calc_compressed_size;
@@ -33706,7 +29300,7 @@ void ParquetReader::PrepareRowGroupBuffer(ParquetReaderScanState &state, idx_t o
 
 	// TODO move this to columnreader too
 	if (state.filters) {
-		auto stats = column_reader->Stats(group.columns);
+		auto stats = column_reader->Stats(state.group_idx_list[state.current_group], group.columns);
 		// filters contain output chunk index, not file col idx!
 		auto filter_entry = state.filters->filters.find(out_col_idx);
 		if (stats && filter_entry != state.filters->filters.end()) {
@@ -33724,7 +29318,8 @@ void ParquetReader::PrepareRowGroupBuffer(ParquetReaderScanState &state, idx_t o
 		}
 	}
 
-	state.root_reader->InitializeRead(group.columns, *state.thrift_file_proto);
+	state.root_reader->InitializeRead(state.group_idx_list[state.current_group], group.columns,
+	                                  *state.thrift_file_proto);
 }
 
 idx_t ParquetReader::NumRows() {
@@ -33767,6 +29362,15 @@ void ParquetReader::InitializeScan(ParquetReaderScanState &state, vector<column_
 }
 
 void FilterIsNull(Vector &v, parquet_filter_t &filter_mask, idx_t count) {
+	if (v.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		auto &mask = ConstantVector::Validity(v);
+		if (mask.RowIsValid(0)) {
+			filter_mask.reset();
+		}
+		return;
+	}
+	D_ASSERT(v.GetVectorType() == VectorType::FLAT_VECTOR);
+
 	auto &mask = FlatVector::Validity(v);
 	if (mask.AllValid()) {
 		filter_mask.reset();
@@ -33778,6 +29382,15 @@ void FilterIsNull(Vector &v, parquet_filter_t &filter_mask, idx_t count) {
 }
 
 void FilterIsNotNull(Vector &v, parquet_filter_t &filter_mask, idx_t count) {
+	if (v.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		auto &mask = ConstantVector::Validity(v);
+		if (!mask.RowIsValid(0)) {
+			filter_mask.reset();
+		}
+		return;
+	}
+	D_ASSERT(v.GetVectorType() == VectorType::FLAT_VECTOR);
+
 	auto &mask = FlatVector::Validity(v);
 	if (!mask.AllValid()) {
 		for (idx_t i = 0; i < count; i++) {
@@ -33788,8 +29401,19 @@ void FilterIsNotNull(Vector &v, parquet_filter_t &filter_mask, idx_t count) {
 
 template <class T, class OP>
 void TemplatedFilterOperation(Vector &v, T constant, parquet_filter_t &filter_mask, idx_t count) {
-	D_ASSERT(v.GetVectorType() == VectorType::FLAT_VECTOR); // we just created the damn thing it better be
+	if (v.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		auto v_ptr = ConstantVector::GetData<T>(v);
+		auto &mask = ConstantVector::Validity(v);
 
+		if (mask.RowIsValid(0)) {
+			if (!OP::Operation(v_ptr[0], constant)) {
+				filter_mask.reset();
+			}
+		}
+		return;
+	}
+
+	D_ASSERT(v.GetVectorType() == VectorType::FLAT_VECTOR);
 	auto v_ptr = FlatVector::GetData<T>(v);
 	auto &mask = FlatVector::Validity(v);
 
@@ -33947,7 +29571,7 @@ bool ParquetReader::ScanInternal(ParquetReaderScanState &state, DataChunk &resul
 		uint64_t to_scan_compressed_bytes = 0;
 		for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
 			// this is a special case where we are not interested in the actual contents of the file
-			if (state.column_ids[out_col_idx] == COLUMN_IDENTIFIER_ROW_ID) {
+			if (IsRowIdColumnId(state.column_ids[out_col_idx])) {
 				continue;
 			}
 
@@ -33967,7 +29591,7 @@ bool ParquetReader::ScanInternal(ParquetReaderScanState &state, DataChunk &resul
 			double scan_percentage = (double)(to_scan_compressed_bytes) / total_row_group_span;
 
 			if (to_scan_compressed_bytes > total_row_group_span) {
-				throw std::runtime_error(
+				throw InvalidInputException(
 				    "Malformed parquet file: sum of total compressed bytes of columns seems incorrect");
 			}
 
@@ -33988,7 +29612,7 @@ bool ParquetReader::ScanInternal(ParquetReaderScanState &state, DataChunk &resul
 				// Prefetch column-wise
 				for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
 
-					if (state.column_ids[out_col_idx] == COLUMN_IDENTIFIER_ROW_ID) {
+					if (IsRowIdColumnId(state.column_ids[out_col_idx])) {
 						continue;
 					}
 
@@ -34085,17 +29709,18 @@ bool ParquetReader::ScanInternal(ParquetReaderScanState &state, DataChunk &resul
 		for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
 			auto file_col_idx = state.column_ids[out_col_idx];
 
-			if (file_col_idx == COLUMN_IDENTIFIER_ROW_ID) {
+			if (IsRowIdColumnId(file_col_idx)) {
 				Value constant_42 = Value::BIGINT(42);
 				result.data[out_col_idx].Reference(constant_42);
 				continue;
 			}
 
-			//			std::cout << "Reading nofilter for col " <<
-			// root_reader->GetChildReader(file_col_idx)->Schema().name
-			//<< "\n";
-			root_reader->GetChildReader(file_col_idx)
-			    ->Read(result.size(), filter_mask, define_ptr, repeat_ptr, result.data[out_col_idx]);
+			auto rows_read = root_reader->GetChildReader(file_col_idx)
+			                     ->Read(result.size(), filter_mask, define_ptr, repeat_ptr, result.data[out_col_idx]);
+			if (rows_read != result.size()) {
+				throw InvalidInputException("Mismatch in parquet read for column %llu, expected %llu rows, got %llu",
+				                            file_col_idx, result.size(), rows_read);
+			}
 		}
 	}
 
@@ -34129,16 +29754,18 @@ static unique_ptr<BaseStatistics> CreateNumericStats(const LogicalType &type,
 	// for reasons unknown to science, Parquet defines *both* `min` and `min_value` as well as `max` and
 	// `max_value`. All are optional. such elegance.
 	if (parquet_stats.__isset.min) {
-		stats->min = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.min).CastAs(type);
+		stats->min = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.min).DefaultCastAs(type);
 	} else if (parquet_stats.__isset.min_value) {
-		stats->min = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.min_value).CastAs(type);
+		stats->min =
+		    ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.min_value).DefaultCastAs(type);
 	} else {
 		stats->min = Value(type);
 	}
 	if (parquet_stats.__isset.max) {
-		stats->max = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.max).CastAs(type);
+		stats->max = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.max).DefaultCastAs(type);
 	} else if (parquet_stats.__isset.max_value) {
-		stats->max = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.max_value).CastAs(type);
+		stats->max =
+		    ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.max_value).DefaultCastAs(type);
 	} else {
 		stats->max = Value(type);
 	}
@@ -34273,6 +29900,18 @@ Value ParquetStatisticsUtils::ConvertValue(const LogicalType &type,
 				throw InternalException("Incorrect stats size for type TIMESTAMP");
 			}
 			auto val = Load<int64_t>((data_ptr_t)stats.c_str());
+			if (schema_ele.__isset.logicalType && schema_ele.logicalType.__isset.TIMESTAMP) {
+				// logical type
+				if (schema_ele.logicalType.TIMESTAMP.unit.__isset.MILLIS) {
+					return Value::TIMESTAMPMS(timestamp_t(val));
+				} else if (schema_ele.logicalType.TIMESTAMP.unit.__isset.NANOS) {
+					return Value::TIMESTAMPNS(timestamp_t(val));
+				} else if (schema_ele.logicalType.TIMESTAMP.unit.__isset.MICROS) {
+					return Value::TIMESTAMP(timestamp_t(val));
+				} else {
+					throw InternalException("Timestamp logicalType is set but unit is not defined");
+				}
+			}
 			if (schema_ele.converted_type == duckdb_parquet::format::ConvertedType::TIMESTAMP_MILLIS) {
 				return Value::TIMESTAMPMS(timestamp_t(val));
 			} else {
@@ -34406,6 +30045,9 @@ timestamp_t ParquetTimestampMicrosToTimestamp(const int64_t &raw_ts) {
 }
 timestamp_t ParquetTimestampMsToTimestamp(const int64_t &raw_ts) {
 	return Timestamp::FromEpochMs(raw_ts);
+}
+timestamp_t ParquetTimestampNsToTimestamp(const int64_t &raw_ts) {
+	return Timestamp::FromEpochNanoSeconds(raw_ts);
 }
 
 date_t ParquetIntToDate(const int32_t &raw_date) {
@@ -34664,7 +30306,7 @@ ParquetWriter::ParquetWriter(FileSystem &fs, string file_name_p, FileOpener *fil
 	}
 }
 
-void ParquetWriter::Flush(ChunkCollection &buffer) {
+void ParquetWriter::Flush(ColumnDataCollection &buffer) {
 	if (buffer.Count() == 0) {
 		return;
 	}
@@ -34677,19 +30319,24 @@ void ParquetWriter::Flush(ChunkCollection &buffer) {
 	row_group.__isset.file_offset = true;
 
 	// iterate over each of the columns of the chunk collection and write them
-	auto &chunks = buffer.Chunks();
 	D_ASSERT(buffer.ColumnCount() == column_writers.size());
 	for (idx_t col_idx = 0; col_idx < buffer.ColumnCount(); col_idx++) {
-		auto write_state = column_writers[col_idx]->InitializeWriteState(row_group);
-		for (idx_t chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-			column_writers[col_idx]->Prepare(*write_state, nullptr, chunks[chunk_idx]->data[col_idx],
-			                                 chunks[chunk_idx]->size());
+		const unique_ptr<ColumnWriter> &col_writer = column_writers[col_idx];
+		auto write_state = col_writer->InitializeWriteState(row_group);
+		if (col_writer->HasAnalyze()) {
+			for (auto &chunk : buffer.Chunks()) {
+				col_writer->Analyze(*write_state, nullptr, chunk.data[col_idx], chunk.size());
+			}
+			col_writer->FinalizeAnalyze(*write_state);
 		}
-		column_writers[col_idx]->BeginWrite(*write_state);
-		for (idx_t chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-			column_writers[col_idx]->Write(*write_state, chunks[chunk_idx]->data[col_idx], chunks[chunk_idx]->size());
+		for (auto &chunk : buffer.Chunks()) {
+			col_writer->Prepare(*write_state, nullptr, chunk.data[col_idx], chunk.size());
 		}
-		column_writers[col_idx]->FinalizeWrite(*write_state);
+		col_writer->BeginWrite(*write_state);
+		for (auto &chunk : buffer.Chunks()) {
+			col_writer->Write(*write_state, chunk.data[col_idx], chunk.size());
+		}
+		col_writer->FinalizeWrite(*write_state);
 	}
 
 	// append the row group to the file meta data
@@ -34895,6 +30542,1561 @@ idx_t ZStdFileSystem::OutBufferSize() {
 }
 
 } // namespace duckdb
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+/* ******************************************************************
+ * Common functions of New Generation Entropy library
+ * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ *
+ *  You can contact the author at :
+ *  - FSE+HUF source repository : https://github.com/Cyan4973/FiniteStateEntropy
+ *  - Public forum : https://groups.google.com/forum/#!forum/lz4c
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+****************************************************************** */
+
+/* *************************************
+*  Dependencies
+***************************************/
+
+       /* ERR_*, ERROR */
+
+
+
+
+
+namespace duckdb_zstd {
+
+/*===   Version   ===*/
+unsigned FSE_versionNumber(void) { return FSE_VERSION_NUMBER; }
+
+
+/*===   Error Management   ===*/
+unsigned FSE_isError(size_t code) { return ERR_isError(code); }
+const char* FSE_getErrorName(size_t code) { return ERR_getErrorName(code); }
+
+unsigned HUF_isError(size_t code) { return ERR_isError(code); }
+const char* HUF_getErrorName(size_t code) { return ERR_getErrorName(code); }
+
+
+/*-**************************************************************
+*  FSE NCount encoding-decoding
+****************************************************************/
+size_t FSE_readNCount (short* normalizedCounter, unsigned* maxSVPtr, unsigned* tableLogPtr,
+                 const void* headerBuffer, size_t hbSize)
+{
+    const BYTE* const istart = (const BYTE*) headerBuffer;
+    const BYTE* const iend = istart + hbSize;
+    const BYTE* ip = istart;
+    int nbBits;
+    int remaining;
+    int threshold;
+    U32 bitStream;
+    int bitCount;
+    unsigned charnum = 0;
+    int previous0 = 0;
+
+    if (hbSize < 4) {
+        /* This function only works when hbSize >= 4 */
+        char buffer[4];
+        memset(buffer, 0, sizeof(buffer));
+        memcpy(buffer, headerBuffer, hbSize);
+        {   size_t const countSize = FSE_readNCount(normalizedCounter, maxSVPtr, tableLogPtr,
+                                                    buffer, sizeof(buffer));
+            if (FSE_isError(countSize)) return countSize;
+            if (countSize > hbSize) return ERROR(corruption_detected);
+            return countSize;
+    }   }
+    assert(hbSize >= 4);
+
+    /* init */
+    memset(normalizedCounter, 0, (*maxSVPtr+1) * sizeof(normalizedCounter[0]));   /* all symbols not present in NCount have a frequency of 0 */
+    bitStream = MEM_readLE32(ip);
+    nbBits = (bitStream & 0xF) + FSE_MIN_TABLELOG;   /* extract tableLog */
+    if (nbBits > FSE_TABLELOG_ABSOLUTE_MAX) return ERROR(tableLog_tooLarge);
+    bitStream >>= 4;
+    bitCount = 4;
+    *tableLogPtr = nbBits;
+    remaining = (1<<nbBits)+1;
+    threshold = 1<<nbBits;
+    nbBits++;
+
+    while ((remaining>1) & (charnum<=*maxSVPtr)) {
+        if (previous0) {
+            unsigned n0 = charnum;
+            while ((bitStream & 0xFFFF) == 0xFFFF) {
+                n0 += 24;
+                if (ip < iend-5) {
+                    ip += 2;
+                    bitStream = MEM_readLE32(ip) >> bitCount;
+                } else {
+                    bitStream >>= 16;
+                    bitCount   += 16;
+            }   }
+            while ((bitStream & 3) == 3) {
+                n0 += 3;
+                bitStream >>= 2;
+                bitCount += 2;
+            }
+            n0 += bitStream & 3;
+            bitCount += 2;
+            if (n0 > *maxSVPtr) return ERROR(maxSymbolValue_tooSmall);
+            while (charnum < n0) normalizedCounter[charnum++] = 0;
+            if ((ip <= iend-7) || (ip + (bitCount>>3) <= iend-4)) {
+                assert((bitCount >> 3) <= 3); /* For first condition to work */
+                ip += bitCount>>3;
+                bitCount &= 7;
+                bitStream = MEM_readLE32(ip) >> bitCount;
+            } else {
+                bitStream >>= 2;
+        }   }
+        {   int const max = (2*threshold-1) - remaining;
+            int count;
+
+            if ((bitStream & (threshold-1)) < (U32)max) {
+                count = bitStream & (threshold-1);
+                bitCount += nbBits-1;
+            } else {
+                count = bitStream & (2*threshold-1);
+                if (count >= threshold) count -= max;
+                bitCount += nbBits;
+            }
+
+            count--;   /* extra accuracy */
+            remaining -= count < 0 ? -count : count;   /* -1 means +1 */
+            normalizedCounter[charnum++] = (short)count;
+            previous0 = !count;
+            while (remaining < threshold) {
+                nbBits--;
+                threshold >>= 1;
+            }
+
+            if ((ip <= iend-7) || (ip + (bitCount>>3) <= iend-4)) {
+                ip += bitCount>>3;
+                bitCount &= 7;
+            } else {
+                bitCount -= (int)(8 * (iend - 4 - ip));
+                ip = iend - 4;
+            }
+            bitStream = MEM_readLE32(ip) >> (bitCount & 31);
+    }   }   /* while ((remaining>1) & (charnum<=*maxSVPtr)) */
+    if (remaining != 1) return ERROR(corruption_detected);
+    if (bitCount > 32) return ERROR(corruption_detected);
+    *maxSVPtr = charnum-1;
+
+    ip += (bitCount+7)>>3;
+    return ip-istart;
+}
+
+
+/*! HUF_readStats() :
+    Read compact Huffman tree, saved by HUF_writeCTable().
+    `huffWeight` is destination buffer.
+    `rankStats` is assumed to be a table of at least HUF_TABLELOG_MAX U32.
+    @return : size read from `src` , or an error Code .
+    Note : Needed by HUF_readCTable() and HUF_readDTableX?() .
+*/
+size_t HUF_readStats(BYTE* huffWeight, size_t hwSize, U32* rankStats,
+                     U32* nbSymbolsPtr, U32* tableLogPtr,
+                     const void* src, size_t srcSize)
+{
+    U32 weightTotal;
+    const BYTE* ip = (const BYTE*) src;
+    size_t iSize;
+    size_t oSize;
+
+    if (!srcSize) return ERROR(srcSize_wrong);
+    iSize = ip[0];
+    /* memset(huffWeight, 0, hwSize);   *//* is not necessary, even though some analyzer complain ... */
+
+    if (iSize >= 128) {  /* special header */
+        oSize = iSize - 127;
+        iSize = ((oSize+1)/2);
+        if (iSize+1 > srcSize) return ERROR(srcSize_wrong);
+        if (oSize >= hwSize) return ERROR(corruption_detected);
+        ip += 1;
+        {   U32 n;
+            for (n=0; n<oSize; n+=2) {
+                huffWeight[n]   = ip[n/2] >> 4;
+                huffWeight[n+1] = ip[n/2] & 15;
+    }   }   }
+    else  {   /* header compressed with FSE (normal case) */
+        FSE_DTable fseWorkspace[FSE_DTABLE_SIZE_U32(6)];  /* 6 is max possible tableLog for HUF header (maybe even 5, to be tested) */
+        if (iSize+1 > srcSize) return ERROR(srcSize_wrong);
+        oSize = FSE_decompress_wksp(huffWeight, hwSize-1, ip+1, iSize, fseWorkspace, 6);   /* max (hwSize-1) values decoded, as last one is implied */
+        if (FSE_isError(oSize)) return oSize;
+    }
+
+    /* collect weight stats */
+    memset(rankStats, 0, (HUF_TABLELOG_MAX + 1) * sizeof(U32));
+    weightTotal = 0;
+    {   U32 n; for (n=0; n<oSize; n++) {
+            if (huffWeight[n] >= HUF_TABLELOG_MAX) return ERROR(corruption_detected);
+            rankStats[huffWeight[n]]++;
+            weightTotal += (1 << huffWeight[n]) >> 1;
+    }   }
+    if (weightTotal == 0) return ERROR(corruption_detected);
+
+    /* get last non-null symbol weight (implied, total must be 2^n) */
+    {   U32 const tableLog = BIT_highbit32(weightTotal) + 1;
+        if (tableLog > HUF_TABLELOG_MAX) return ERROR(corruption_detected);
+        *tableLogPtr = tableLog;
+        /* determine last weight */
+        {   U32 const total = 1 << tableLog;
+            U32 const rest = total - weightTotal;
+            U32 const verif = 1 << BIT_highbit32(rest);
+            U32 const lastWeight = BIT_highbit32(rest) + 1;
+            if (verif != rest) return ERROR(corruption_detected);    /* last value must be a clean power of 2 */
+            huffWeight[oSize] = (BYTE)lastWeight;
+            rankStats[lastWeight]++;
+    }   }
+
+    /* check tree construction validity */
+    if ((rankStats[1] < 2) || (rankStats[1] & 1)) return ERROR(corruption_detected);   /* by construction : at least 2 elts of rank 1, must be even */
+
+    /* results */
+    *nbSymbolsPtr = (U32)(oSize+1);
+    return iSize+1;
+}
+
+}
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+/*
+ * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+ */
+
+/* The purpose of this file is to have a single list of error strings embedded in binary */
+
+
+
+namespace duckdb_zstd {
+
+const char* ERR_getErrorString(ERR_enum code)
+{
+#ifdef ZSTD_STRIP_ERROR_STRINGS
+    (void)code;
+    return "Error strings stripped";
+#else
+    static const char* const notErrorCode = "Unspecified error code";
+    switch( code )
+    {
+    case PREFIX(no_error): return "No error detected";
+    case PREFIX(GENERIC):  return "Error (generic)";
+    case PREFIX(prefix_unknown): return "Unknown frame descriptor";
+    case PREFIX(version_unsupported): return "Version not supported";
+    case PREFIX(frameParameter_unsupported): return "Unsupported frame parameter";
+    case PREFIX(frameParameter_windowTooLarge): return "Frame requires too much memory for decoding";
+    case PREFIX(corruption_detected): return "Corrupted block detected";
+    case PREFIX(checksum_wrong): return "Restored data doesn't match checksum";
+    case PREFIX(parameter_unsupported): return "Unsupported parameter";
+    case PREFIX(parameter_outOfBound): return "Parameter is out of bound";
+    case PREFIX(init_missing): return "Context should be init first";
+    case PREFIX(memory_allocation): return "Allocation error : not enough memory";
+    case PREFIX(workSpace_tooSmall): return "workSpace buffer is not large enough";
+    case PREFIX(stage_wrong): return "Operation not authorized at current processing stage";
+    case PREFIX(tableLog_tooLarge): return "tableLog requires too much memory : unsupported";
+    case PREFIX(maxSymbolValue_tooLarge): return "Unsupported max Symbol Value : too large";
+    case PREFIX(maxSymbolValue_tooSmall): return "Specified maxSymbolValue is too small";
+    case PREFIX(dictionary_corrupted): return "Dictionary is corrupted";
+    case PREFIX(dictionary_wrong): return "Dictionary mismatch";
+    case PREFIX(dictionaryCreation_failed): return "Cannot create Dictionary from provided samples";
+    case PREFIX(dstSize_tooSmall): return "Destination buffer is too small";
+    case PREFIX(srcSize_wrong): return "Src size is incorrect";
+    case PREFIX(dstBuffer_null): return "Operation on NULL destination buffer";
+        /* following error codes are not stable and may be removed or changed in a future version */
+    case PREFIX(frameIndex_tooLarge): return "Frame index is too large";
+    case PREFIX(seekableIO): return "An I/O error occurred when reading/seeking";
+    case PREFIX(dstBuffer_wrong): return "Destination buffer is wrong";
+    case PREFIX(maxCode):
+    default: return notErrorCode;
+    }
+#endif
+}
+
+}
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+/* ******************************************************************
+ * FSE : Finite State Entropy decoder
+ * Copyright (c) 2013-2020, Yann Collet, Facebook, Inc.
+ *
+ *  You can contact the author at :
+ *  - FSE source repository : https://github.com/Cyan4973/FiniteStateEntropy
+ *  - Public forum : https://groups.google.com/forum/#!forum/lz4c
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+****************************************************************** */
+
+
+/* **************************************************************
+*  Includes
+****************************************************************/
+#include <stdlib.h>     /* malloc, free, qsort */
+#include <string.h>     /* memcpy, memset */
+
+
+
+
+
+
+
+/* **************************************************************
+*  Error Management
+****************************************************************/
+// #define FSE_isError ERR_isError
+#define FSE_STATIC_ASSERT(c) DEBUG_STATIC_ASSERT(c)   /* use only *after* variable declarations */
+
+
+/* **************************************************************
+*  Templates
+****************************************************************/
+/*
+  designed to be included
+  for type-specific functions (template emulation in C)
+  Objective is to write these functions only once, for improved maintenance
+*/
+
+/* safety checks */
+#ifndef FSE_FUNCTION_EXTENSION
+#  error "FSE_FUNCTION_EXTENSION must be defined"
+#endif
+#ifndef FSE_FUNCTION_TYPE
+#  error "FSE_FUNCTION_TYPE must be defined"
+#endif
+
+/* Function names */
+#define FSE_CAT(X,Y) X##Y
+#define FSE_FUNCTION_NAME(X,Y) FSE_CAT(X,Y)
+#define FSE_TYPE_NAME(X,Y) FSE_CAT(X,Y)
+
+namespace duckdb_zstd {
+
+/* Function templates */
+FSE_DTable* FSE_createDTable (unsigned tableLog)
+{
+    if (tableLog > FSE_TABLELOG_ABSOLUTE_MAX) tableLog = FSE_TABLELOG_ABSOLUTE_MAX;
+    return (FSE_DTable*)malloc( FSE_DTABLE_SIZE_U32(tableLog) * sizeof (U32) );
+}
+
+void FSE_freeDTable (FSE_DTable* dt)
+{
+    free(dt);
+}
+
+size_t FSE_buildDTable(FSE_DTable* dt, const short* normalizedCounter, unsigned maxSymbolValue, unsigned tableLog)
+{
+    void* const tdPtr = dt+1;   /* because *dt is unsigned, 32-bits aligned on 32-bits */
+    FSE_DECODE_TYPE* const tableDecode = (FSE_DECODE_TYPE*) (tdPtr);
+    U16 symbolNext[FSE_MAX_SYMBOL_VALUE+1];
+
+    U32 const maxSV1 = maxSymbolValue + 1;
+    U32 const tableSize = 1 << tableLog;
+    U32 highThreshold = tableSize-1;
+
+    /* Sanity Checks */
+    if (maxSymbolValue > FSE_MAX_SYMBOL_VALUE) return ERROR(maxSymbolValue_tooLarge);
+    if (tableLog > FSE_MAX_TABLELOG) return ERROR(tableLog_tooLarge);
+
+    /* Init, lay down lowprob symbols */
+    {   FSE_DTableHeader DTableH;
+        DTableH.tableLog = (U16)tableLog;
+        DTableH.fastMode = 1;
+        {   S16 const largeLimit= (S16)(1 << (tableLog-1));
+            U32 s;
+            for (s=0; s<maxSV1; s++) {
+                if (normalizedCounter[s]==-1) {
+                    tableDecode[highThreshold--].symbol = (FSE_FUNCTION_TYPE)s;
+                    symbolNext[s] = 1;
+                } else {
+                    if (normalizedCounter[s] >= largeLimit) DTableH.fastMode=0;
+                    symbolNext[s] = normalizedCounter[s];
+        }   }   }
+        memcpy(dt, &DTableH, sizeof(DTableH));
+    }
+
+    /* Spread symbols */
+    {   U32 const tableMask = tableSize-1;
+        U32 const step = FSE_TABLESTEP(tableSize);
+        U32 s, position = 0;
+        for (s=0; s<maxSV1; s++) {
+            int i;
+            for (i=0; i<normalizedCounter[s]; i++) {
+                tableDecode[position].symbol = (FSE_FUNCTION_TYPE)s;
+                position = (position + step) & tableMask;
+                while (position > highThreshold) position = (position + step) & tableMask;   /* lowprob area */
+        }   }
+        if (position!=0) return ERROR(GENERIC);   /* position must reach all cells once, otherwise normalizedCounter is incorrect */
+    }
+
+    /* Build Decoding table */
+    {   U32 u;
+        for (u=0; u<tableSize; u++) {
+            FSE_FUNCTION_TYPE const symbol = (FSE_FUNCTION_TYPE)(tableDecode[u].symbol);
+            U32 const nextState = symbolNext[symbol]++;
+            tableDecode[u].nbBits = (BYTE) (tableLog - BIT_highbit32(nextState) );
+            tableDecode[u].newState = (U16) ( (nextState << tableDecode[u].nbBits) - tableSize);
+    }   }
+
+    return 0;
+}
+
+
+#ifndef FSE_COMMONDEFS_ONLY
+
+/*-*******************************************************
+*  Decompression (Byte symbols)
+*********************************************************/
+size_t FSE_buildDTable_rle (FSE_DTable* dt, BYTE symbolValue)
+{
+    void* ptr = dt;
+    FSE_DTableHeader* const DTableH = (FSE_DTableHeader*)ptr;
+    void* dPtr = dt + 1;
+    FSE_decode_t* const cell = (FSE_decode_t*)dPtr;
+
+    DTableH->tableLog = 0;
+    DTableH->fastMode = 0;
+
+    cell->newState = 0;
+    cell->symbol = symbolValue;
+    cell->nbBits = 0;
+
+    return 0;
+}
+
+
+size_t FSE_buildDTable_raw (FSE_DTable* dt, unsigned nbBits)
+{
+    void* ptr = dt;
+    FSE_DTableHeader* const DTableH = (FSE_DTableHeader*)ptr;
+    void* dPtr = dt + 1;
+    FSE_decode_t* const dinfo = (FSE_decode_t*)dPtr;
+    const unsigned tableSize = 1 << nbBits;
+    const unsigned tableMask = tableSize - 1;
+    const unsigned maxSV1 = tableMask+1;
+    unsigned s;
+
+    /* Sanity checks */
+    if (nbBits < 1) return ERROR(GENERIC);         /* min size */
+
+    /* Build Decoding Table */
+    DTableH->tableLog = (U16)nbBits;
+    DTableH->fastMode = 1;
+    for (s=0; s<maxSV1; s++) {
+        dinfo[s].newState = 0;
+        dinfo[s].symbol = (BYTE)s;
+        dinfo[s].nbBits = (BYTE)nbBits;
+    }
+
+    return 0;
+}
+
+FORCE_INLINE_TEMPLATE size_t FSE_decompress_usingDTable_generic(
+          void* dst, size_t maxDstSize,
+    const void* cSrc, size_t cSrcSize,
+    const FSE_DTable* dt, const unsigned fast)
+{
+    BYTE* const ostart = (BYTE*) dst;
+    BYTE* op = ostart;
+    BYTE* const omax = op + maxDstSize;
+    BYTE* const olimit = omax-3;
+
+    BIT_DStream_t bitD;
+    FSE_DState_t state1;
+    FSE_DState_t state2;
+
+    /* Init */
+    CHECK_F(BIT_initDStream(&bitD, cSrc, cSrcSize));
+
+    FSE_initDState(&state1, &bitD, dt);
+    FSE_initDState(&state2, &bitD, dt);
+
+#define FSE_GETSYMBOL(statePtr) fast ? FSE_decodeSymbolFast(statePtr, &bitD) : FSE_decodeSymbol(statePtr, &bitD)
+
+    /* 4 symbols per loop */
+    for ( ; (BIT_reloadDStream(&bitD)==BIT_DStream_unfinished) & (op<olimit) ; op+=4) {
+        op[0] = FSE_GETSYMBOL(&state1);
+
+        if (FSE_MAX_TABLELOG*2+7 > sizeof(bitD.bitContainer)*8)    /* This test must be static */
+            BIT_reloadDStream(&bitD);
+
+        op[1] = FSE_GETSYMBOL(&state2);
+
+        if (FSE_MAX_TABLELOG*4+7 > sizeof(bitD.bitContainer)*8)    /* This test must be static */
+            { if (BIT_reloadDStream(&bitD) > BIT_DStream_unfinished) { op+=2; break; } }
+
+        op[2] = FSE_GETSYMBOL(&state1);
+
+        if (FSE_MAX_TABLELOG*2+7 > sizeof(bitD.bitContainer)*8)    /* This test must be static */
+            BIT_reloadDStream(&bitD);
+
+        op[3] = FSE_GETSYMBOL(&state2);
+    }
+
+    /* tail */
+    /* note : BIT_reloadDStream(&bitD) >= FSE_DStream_partiallyFilled; Ends at exactly BIT_DStream_completed */
+    while (1) {
+        if (op>(omax-2)) return ERROR(dstSize_tooSmall);
+        *op++ = FSE_GETSYMBOL(&state1);
+        if (BIT_reloadDStream(&bitD)==BIT_DStream_overflow) {
+            *op++ = FSE_GETSYMBOL(&state2);
+            break;
+        }
+
+        if (op>(omax-2)) return ERROR(dstSize_tooSmall);
+        *op++ = FSE_GETSYMBOL(&state2);
+        if (BIT_reloadDStream(&bitD)==BIT_DStream_overflow) {
+            *op++ = FSE_GETSYMBOL(&state1);
+            break;
+    }   }
+
+    return op-ostart;
+}
+
+
+size_t FSE_decompress_usingDTable(void* dst, size_t originalSize,
+                            const void* cSrc, size_t cSrcSize,
+                            const FSE_DTable* dt)
+{
+    const void* ptr = dt;
+    const FSE_DTableHeader* DTableH = (const FSE_DTableHeader*)ptr;
+    const U32 fastMode = DTableH->fastMode;
+
+    /* select fast mode (static) */
+    if (fastMode) return FSE_decompress_usingDTable_generic(dst, originalSize, cSrc, cSrcSize, dt, 1);
+    return FSE_decompress_usingDTable_generic(dst, originalSize, cSrc, cSrcSize, dt, 0);
+}
+
+
+size_t FSE_decompress_wksp(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, FSE_DTable* workSpace, unsigned maxLog)
+{
+    const BYTE* const istart = (const BYTE*)cSrc;
+    const BYTE* ip = istart;
+    short counting[FSE_MAX_SYMBOL_VALUE+1];
+    unsigned tableLog;
+    unsigned maxSymbolValue = FSE_MAX_SYMBOL_VALUE;
+
+    /* normal FSE decoding mode */
+    size_t const NCountLength = FSE_readNCount (counting, &maxSymbolValue, &tableLog, istart, cSrcSize);
+    if (FSE_isError(NCountLength)) return NCountLength;
+    /* if (NCountLength >= cSrcSize) return ERROR(srcSize_wrong); */  /* too small input size; supposed to be already checked in NCountLength, only remaining case : NCountLength==cSrcSize */
+    if (tableLog > maxLog) return ERROR(tableLog_tooLarge);
+    ip += NCountLength;
+    cSrcSize -= NCountLength;
+
+    CHECK_F( FSE_buildDTable (workSpace, counting, maxSymbolValue, tableLog) );
+
+    return FSE_decompress_usingDTable (dst, dstCapacity, ip, cSrcSize, workSpace);   /* always return, even if it is an error code */
+}
+
+
+typedef FSE_DTable DTable_max_t[FSE_DTABLE_SIZE_U32(FSE_MAX_TABLELOG)];
+
+size_t FSE_decompress(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize)
+{
+    DTable_max_t dt;   /* Static analyzer seems unable to understand this table will be properly initialized later */
+    return FSE_decompress_wksp(dst, dstCapacity, cSrc, cSrcSize, dt, FSE_MAX_TABLELOG);
+}
+
+}
+
+#endif   /* FSE_COMMONDEFS_ONLY */
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+/*
+ *  xxHash - Fast Hash algorithm
+ *  Copyright (c) 2012-2020, Yann Collet, Facebook, Inc.
+ *
+ *  You can contact the author at :
+ *  - xxHash homepage: http://www.xxhash.com
+ *  - xxHash source repository : https://github.com/Cyan4973/xxHash
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+*/
+
+
+/* *************************************
+*  Tuning parameters
+***************************************/
+/*!XXH_FORCE_MEMORY_ACCESS :
+ * By default, access to unaligned memory is controlled by `memcpy()`, which is safe and portable.
+ * Unfortunately, on some target/compiler combinations, the generated assembly is sub-optimal.
+ * The below switch allow to select different access method for improved performance.
+ * Method 0 (default) : use `memcpy()`. Safe and portable.
+ * Method 1 : `__packed` statement. It depends on compiler extension (ie, not portable).
+ *            This method is safe if your compiler supports it, and *generally* as fast or faster than `memcpy`.
+ * Method 2 : direct access. This method doesn't depend on compiler but violate C standard.
+ *            It can generate buggy code on targets which do not support unaligned memory accesses.
+ *            But in some circumstances, it's the only known way to get the most performance (ie GCC + ARMv6)
+ * See http://stackoverflow.com/a/32095106/646947 for details.
+ * Prefer these methods in priority order (0 > 1 > 2)
+ */
+#ifndef XXH_FORCE_MEMORY_ACCESS   /* can be defined externally, on command line for example */
+#  if defined(__GNUC__) && ( defined(__ARM_ARCH_6__) || defined(__ARM_ARCH_6J__) || defined(__ARM_ARCH_6K__) || defined(__ARM_ARCH_6Z__) || defined(__ARM_ARCH_6ZK__) || defined(__ARM_ARCH_6T2__) )
+#    define XXH_FORCE_MEMORY_ACCESS 2
+#  elif (defined(__INTEL_COMPILER) && !defined(WIN32)) || \
+  (defined(__GNUC__) && ( defined(__ARM_ARCH_7__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7R__) || defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7S__) )) || \
+  defined(__ICCARM__)
+#    define XXH_FORCE_MEMORY_ACCESS 1
+#  endif
+#endif
+
+/*!XXH_ACCEPT_NULL_INPUT_POINTER :
+ * If the input pointer is a null pointer, xxHash default behavior is to trigger a memory access error, since it is a bad pointer.
+ * When this option is enabled, xxHash output for null input pointers will be the same as a null-length input.
+ * By default, this option is disabled. To enable it, uncomment below define :
+ */
+/* #define XXH_ACCEPT_NULL_INPUT_POINTER 1 */
+
+/*!XXH_FORCE_NATIVE_FORMAT :
+ * By default, xxHash library provides endian-independent Hash values, based on little-endian convention.
+ * Results are therefore identical for little-endian and big-endian CPU.
+ * This comes at a performance cost for big-endian CPU, since some swapping is required to emulate little-endian format.
+ * Should endian-independence be of no importance for your application, you may set the #define below to 1,
+ * to improve speed for Big-endian CPU.
+ * This option has no impact on Little_Endian CPU.
+ */
+#ifndef XXH_FORCE_NATIVE_FORMAT   /* can be defined externally */
+#  define XXH_FORCE_NATIVE_FORMAT 0
+#endif
+
+/*!XXH_FORCE_ALIGN_CHECK :
+ * This is a minor performance trick, only useful with lots of very small keys.
+ * It means : check for aligned/unaligned input.
+ * The check costs one initial branch per hash; set to 0 when the input data
+ * is guaranteed to be aligned.
+ */
+#ifndef XXH_FORCE_ALIGN_CHECK /* can be defined externally */
+#  if defined(__i386) || defined(_M_IX86) || defined(__x86_64__) || defined(_M_X64)
+#    define XXH_FORCE_ALIGN_CHECK 0
+#  else
+#    define XXH_FORCE_ALIGN_CHECK 1
+#  endif
+#endif
+
+
+/* *************************************
+*  Includes & Memory related functions
+***************************************/
+/* Modify the local functions below should you wish to use some other memory routines */
+/* for malloc(), free() */
+#include <stdlib.h>
+#include <stddef.h>     /* size_t */
+/* for memcpy() */
+#include <string.h>
+
+
+
+
+/* *************************************
+*  Compiler Specific Options
+***************************************/
+#if (defined(__GNUC__) && !defined(__STRICT_ANSI__)) || defined(__cplusplus) || defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L   /* C99 */
+#  define INLINE_KEYWORD inline
+#else
+#  define INLINE_KEYWORD
+#endif
+
+#if defined(__GNUC__) || defined(__ICCARM__)
+#  define FORCE_INLINE_ATTR __attribute__((always_inline))
+#elif defined(_MSC_VER)
+#  define FORCE_INLINE_ATTR __forceinline
+#else
+#  define FORCE_INLINE_ATTR
+#endif
+
+#define FORCE_INLINE_TEMPLATE static INLINE_KEYWORD FORCE_INLINE_ATTR
+
+
+/* *************************************
+*  Basic Types
+***************************************/
+#ifndef MEM_MODULE
+# define MEM_MODULE
+# if !defined (__VMS) && (defined (__cplusplus) || (defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */) )
+#   include <stdint.h>
+    typedef uint8_t  BYTE;
+    typedef uint16_t U16;
+    typedef uint32_t U32;
+    typedef  int32_t S32;
+    typedef uint64_t U64;
+#  else
+    typedef unsigned char      BYTE;
+    typedef unsigned short     U16;
+    typedef unsigned int       U32;
+    typedef   signed int       S32;
+    typedef unsigned long long U64;   /* if your compiler doesn't support unsigned long long, replace by another 64-bit type here. Note that xxhash.h will also need to be updated. */
+#  endif
+#endif
+
+namespace duckdb_zstd {
+static void* XXH_malloc(size_t s) { return malloc(s); }
+static void  XXH_free  (void* p)  { free(p); }
+static void* XXH_memcpy(void* dest, const void* src, size_t size) { return memcpy(dest,src,size); }
+
+#if (defined(XXH_FORCE_MEMORY_ACCESS) && (XXH_FORCE_MEMORY_ACCESS==2))
+
+/* Force direct memory access. Only works on CPU which support unaligned memory access in hardware */
+static U32 XXH_read32(const void* memPtr) { return *(const U32*) memPtr; }
+static U64 XXH_read64(const void* memPtr) { return *(const U64*) memPtr; }
+
+#elif (defined(XXH_FORCE_MEMORY_ACCESS) && (XXH_FORCE_MEMORY_ACCESS==1))
+
+/* __pack instructions are safer, but compiler specific, hence potentially problematic for some compilers */
+/* currently only defined for gcc and icc */
+typedef union { U32 u32; U64 u64; } __attribute__((packed)) unalign;
+
+static U32 XXH_read32(const void* ptr) { return ((const unalign*)ptr)->u32; }
+static U64 XXH_read64(const void* ptr) { return ((const unalign*)ptr)->u64; }
+
+#else
+
+/* portable and safe solution. Generally efficient.
+ * see : http://stackoverflow.com/a/32095106/646947
+ */
+
+static U32 XXH_read32(const void* memPtr)
+{
+    U32 val;
+    memcpy(&val, memPtr, sizeof(val));
+    return val;
+}
+
+static U64 XXH_read64(const void* memPtr)
+{
+    U64 val;
+    memcpy(&val, memPtr, sizeof(val));
+    return val;
+}
+
+#endif   /* XXH_FORCE_DIRECT_MEMORY_ACCESS */
+
+
+/* ****************************************
+*  Compiler-specific Functions and Macros
+******************************************/
+#define GCC_VERSION (__GNUC__ * 100 + __GNUC_MINOR__)
+
+/* Note : although _rotl exists for minGW (GCC under windows), performance seems poor */
+#if defined(_MSC_VER)
+#  define XXH_rotl32(x,r) _rotl(x,r)
+#  define XXH_rotl64(x,r) _rotl64(x,r)
+#else
+#if defined(__ICCARM__)
+#  include <intrinsics.h>
+#  define XXH_rotl32(x,r) __ROR(x,(32 - r))
+#else
+#  define XXH_rotl32(x,r) ((x << r) | (x >> (32 - r)))
+#endif
+#  define XXH_rotl64(x,r) ((x << r) | (x >> (64 - r)))
+#endif
+
+#if defined(_MSC_VER)     /* Visual Studio */
+#  define XXH_swap32 _byteswap_ulong
+#  define XXH_swap64 _byteswap_uint64
+#elif GCC_VERSION >= 403
+#  define XXH_swap32 __builtin_bswap32
+#  define XXH_swap64 __builtin_bswap64
+#else
+static U32 XXH_swap32 (U32 x)
+{
+    return  ((x << 24) & 0xff000000 ) |
+            ((x <<  8) & 0x00ff0000 ) |
+            ((x >>  8) & 0x0000ff00 ) |
+            ((x >> 24) & 0x000000ff );
+}
+static U64 XXH_swap64 (U64 x)
+{
+    return  ((x << 56) & 0xff00000000000000ULL) |
+            ((x << 40) & 0x00ff000000000000ULL) |
+            ((x << 24) & 0x0000ff0000000000ULL) |
+            ((x << 8)  & 0x000000ff00000000ULL) |
+            ((x >> 8)  & 0x00000000ff000000ULL) |
+            ((x >> 24) & 0x0000000000ff0000ULL) |
+            ((x >> 40) & 0x000000000000ff00ULL) |
+            ((x >> 56) & 0x00000000000000ffULL);
+}
+#endif
+
+
+/* *************************************
+*  Architecture Macros
+***************************************/
+typedef enum { XXH_bigEndian=0, XXH_littleEndian=1 } XXH_endianess;
+
+/* XXH_CPU_LITTLE_ENDIAN can be defined externally, for example on the compiler command line */
+#ifndef XXH_CPU_LITTLE_ENDIAN
+    static const int g_one = 1;
+#   define XXH_CPU_LITTLE_ENDIAN   (*(const char*)(&g_one))
+#endif
+
+
+/* ***************************
+*  Memory reads
+*****************************/
+typedef enum { XXH_aligned, XXH_unaligned } XXH_alignment;
+
+FORCE_INLINE_TEMPLATE U32 XXH_readLE32_align(const void* ptr, XXH_endianess endian, XXH_alignment align)
+{
+    if (align==XXH_unaligned)
+        return endian==XXH_littleEndian ? XXH_read32(ptr) : XXH_swap32(XXH_read32(ptr));
+    else
+        return endian==XXH_littleEndian ? *(const U32*)ptr : XXH_swap32(*(const U32*)ptr);
+}
+
+FORCE_INLINE_TEMPLATE U32 XXH_readLE32(const void* ptr, XXH_endianess endian)
+{
+    return XXH_readLE32_align(ptr, endian, XXH_unaligned);
+}
+
+static U32 XXH_readBE32(const void* ptr)
+{
+    return XXH_CPU_LITTLE_ENDIAN ? XXH_swap32(XXH_read32(ptr)) : XXH_read32(ptr);
+}
+
+FORCE_INLINE_TEMPLATE U64 XXH_readLE64_align(const void* ptr, XXH_endianess endian, XXH_alignment align)
+{
+    if (align==XXH_unaligned)
+        return endian==XXH_littleEndian ? XXH_read64(ptr) : XXH_swap64(XXH_read64(ptr));
+    else
+        return endian==XXH_littleEndian ? *(const U64*)ptr : XXH_swap64(*(const U64*)ptr);
+}
+
+FORCE_INLINE_TEMPLATE U64 XXH_readLE64(const void* ptr, XXH_endianess endian)
+{
+    return XXH_readLE64_align(ptr, endian, XXH_unaligned);
+}
+
+static U64 XXH_readBE64(const void* ptr)
+{
+    return XXH_CPU_LITTLE_ENDIAN ? XXH_swap64(XXH_read64(ptr)) : XXH_read64(ptr);
+}
+
+
+/* *************************************
+*  Macros
+***************************************/
+#define XXH_STATIC_ASSERT(c)   { enum { XXH_static_assert = 1/(int)(!!(c)) }; }    /* use only *after* variable declarations */
+
+
+/* *************************************
+*  Constants
+***************************************/
+static const U32 PRIME32_1 = 2654435761U;
+static const U32 PRIME32_2 = 2246822519U;
+static const U32 PRIME32_3 = 3266489917U;
+static const U32 PRIME32_4 =  668265263U;
+static const U32 PRIME32_5 =  374761393U;
+
+static const U64 PRIME64_1 = 11400714785074694791ULL;
+static const U64 PRIME64_2 = 14029467366897019727ULL;
+static const U64 PRIME64_3 =  1609587929392839161ULL;
+static const U64 PRIME64_4 =  9650029242287828579ULL;
+static const U64 PRIME64_5 =  2870177450012600261ULL;
+
+XXH_PUBLIC_API unsigned XXH_versionNumber (void) { return XXH_VERSION_NUMBER; }
+
+
+/* **************************
+*  Utils
+****************************/
+XXH_PUBLIC_API void XXH32_copyState(XXH32_state_t* __restrict dstState, const XXH32_state_t* __restrict srcState)
+{
+    memcpy(dstState, srcState, sizeof(*dstState));
+}
+
+XXH_PUBLIC_API void XXH64_copyState(XXH64_state_t* __restrict dstState, const XXH64_state_t* __restrict srcState)
+{
+    memcpy(dstState, srcState, sizeof(*dstState));
+}
+
+
+/* ***************************
+*  Simple Hash Functions
+*****************************/
+
+static U32 XXH32_round(U32 seed, U32 input)
+{
+    seed += input * PRIME32_2;
+    seed  = XXH_rotl32(seed, 13);
+    seed *= PRIME32_1;
+    return seed;
+}
+
+FORCE_INLINE_TEMPLATE U32 XXH32_endian_align(const void* input, size_t len, U32 seed, XXH_endianess endian, XXH_alignment align)
+{
+    const BYTE* p = (const BYTE*)input;
+    const BYTE* bEnd = p + len;
+    U32 h32;
+#define XXH_get32bits(p) XXH_readLE32_align(p, endian, align)
+
+#ifdef XXH_ACCEPT_NULL_INPUT_POINTER
+    if (p==NULL) {
+        len=0;
+        bEnd=p=(const BYTE*)(size_t)16;
+    }
+#endif
+
+    if (len>=16) {
+        const BYTE* const limit = bEnd - 16;
+        U32 v1 = seed + PRIME32_1 + PRIME32_2;
+        U32 v2 = seed + PRIME32_2;
+        U32 v3 = seed + 0;
+        U32 v4 = seed - PRIME32_1;
+
+        do {
+            v1 = XXH32_round(v1, XXH_get32bits(p)); p+=4;
+            v2 = XXH32_round(v2, XXH_get32bits(p)); p+=4;
+            v3 = XXH32_round(v3, XXH_get32bits(p)); p+=4;
+            v4 = XXH32_round(v4, XXH_get32bits(p)); p+=4;
+        } while (p<=limit);
+
+        h32 = XXH_rotl32(v1, 1) + XXH_rotl32(v2, 7) + XXH_rotl32(v3, 12) + XXH_rotl32(v4, 18);
+    } else {
+        h32  = seed + PRIME32_5;
+    }
+
+    h32 += (U32) len;
+
+    while (p+4<=bEnd) {
+        h32 += XXH_get32bits(p) * PRIME32_3;
+        h32  = XXH_rotl32(h32, 17) * PRIME32_4 ;
+        p+=4;
+    }
+
+    while (p<bEnd) {
+        h32 += (*p) * PRIME32_5;
+        h32 = XXH_rotl32(h32, 11) * PRIME32_1 ;
+        p++;
+    }
+
+    h32 ^= h32 >> 15;
+    h32 *= PRIME32_2;
+    h32 ^= h32 >> 13;
+    h32 *= PRIME32_3;
+    h32 ^= h32 >> 16;
+
+    return h32;
+}
+
+
+XXH_PUBLIC_API unsigned int XXH32 (const void* input, size_t len, unsigned int seed)
+{
+#if 0
+    /* Simple version, good for code maintenance, but unfortunately slow for small inputs */
+    XXH32_CREATESTATE_STATIC(state);
+    XXH32_reset(state, seed);
+    XXH32_update(state, input, len);
+    return XXH32_digest(state);
+#else
+    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
+
+    if (XXH_FORCE_ALIGN_CHECK) {
+        if ((((size_t)input) & 3) == 0) {   /* Input is 4-bytes aligned, leverage the speed benefit */
+            if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
+                return XXH32_endian_align(input, len, seed, XXH_littleEndian, XXH_aligned);
+            else
+                return XXH32_endian_align(input, len, seed, XXH_bigEndian, XXH_aligned);
+    }   }
+
+    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
+        return XXH32_endian_align(input, len, seed, XXH_littleEndian, XXH_unaligned);
+    else
+        return XXH32_endian_align(input, len, seed, XXH_bigEndian, XXH_unaligned);
+#endif
+}
+
+
+static U64 XXH64_round(U64 acc, U64 input)
+{
+    acc += input * PRIME64_2;
+    acc  = XXH_rotl64(acc, 31);
+    acc *= PRIME64_1;
+    return acc;
+}
+
+static U64 XXH64_mergeRound(U64 acc, U64 val)
+{
+    val  = XXH64_round(0, val);
+    acc ^= val;
+    acc  = acc * PRIME64_1 + PRIME64_4;
+    return acc;
+}
+
+FORCE_INLINE_TEMPLATE U64 XXH64_endian_align(const void* input, size_t len, U64 seed, XXH_endianess endian, XXH_alignment align)
+{
+    const BYTE* p = (const BYTE*)input;
+    const BYTE* const bEnd = p + len;
+    U64 h64;
+#define XXH_get64bits(p) XXH_readLE64_align(p, endian, align)
+
+#ifdef XXH_ACCEPT_NULL_INPUT_POINTER
+    if (p==NULL) {
+        len=0;
+        bEnd=p=(const BYTE*)(size_t)32;
+    }
+#endif
+
+    if (len>=32) {
+        const BYTE* const limit = bEnd - 32;
+        U64 v1 = seed + PRIME64_1 + PRIME64_2;
+        U64 v2 = seed + PRIME64_2;
+        U64 v3 = seed + 0;
+        U64 v4 = seed - PRIME64_1;
+
+        do {
+            v1 = XXH64_round(v1, XXH_get64bits(p)); p+=8;
+            v2 = XXH64_round(v2, XXH_get64bits(p)); p+=8;
+            v3 = XXH64_round(v3, XXH_get64bits(p)); p+=8;
+            v4 = XXH64_round(v4, XXH_get64bits(p)); p+=8;
+        } while (p<=limit);
+
+        h64 = XXH_rotl64(v1, 1) + XXH_rotl64(v2, 7) + XXH_rotl64(v3, 12) + XXH_rotl64(v4, 18);
+        h64 = XXH64_mergeRound(h64, v1);
+        h64 = XXH64_mergeRound(h64, v2);
+        h64 = XXH64_mergeRound(h64, v3);
+        h64 = XXH64_mergeRound(h64, v4);
+
+    } else {
+        h64  = seed + PRIME64_5;
+    }
+
+    h64 += (U64) len;
+
+    while (p+8<=bEnd) {
+        U64 const k1 = XXH64_round(0, XXH_get64bits(p));
+        h64 ^= k1;
+        h64  = XXH_rotl64(h64,27) * PRIME64_1 + PRIME64_4;
+        p+=8;
+    }
+
+    if (p+4<=bEnd) {
+        h64 ^= (U64)(XXH_get32bits(p)) * PRIME64_1;
+        h64 = XXH_rotl64(h64, 23) * PRIME64_2 + PRIME64_3;
+        p+=4;
+    }
+
+    while (p<bEnd) {
+        h64 ^= (*p) * PRIME64_5;
+        h64 = XXH_rotl64(h64, 11) * PRIME64_1;
+        p++;
+    }
+
+    h64 ^= h64 >> 33;
+    h64 *= PRIME64_2;
+    h64 ^= h64 >> 29;
+    h64 *= PRIME64_3;
+    h64 ^= h64 >> 32;
+
+    return h64;
+}
+
+
+XXH_PUBLIC_API unsigned long long XXH64 (const void* input, size_t len, unsigned long long seed)
+{
+#if 0
+    /* Simple version, good for code maintenance, but unfortunately slow for small inputs */
+    XXH64_CREATESTATE_STATIC(state);
+    XXH64_reset(state, seed);
+    XXH64_update(state, input, len);
+    return XXH64_digest(state);
+#else
+    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
+
+    if (XXH_FORCE_ALIGN_CHECK) {
+        if ((((size_t)input) & 7)==0) {  /* Input is aligned, let's leverage the speed advantage */
+            if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
+                return XXH64_endian_align(input, len, seed, XXH_littleEndian, XXH_aligned);
+            else
+                return XXH64_endian_align(input, len, seed, XXH_bigEndian, XXH_aligned);
+    }   }
+
+    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
+        return XXH64_endian_align(input, len, seed, XXH_littleEndian, XXH_unaligned);
+    else
+        return XXH64_endian_align(input, len, seed, XXH_bigEndian, XXH_unaligned);
+#endif
+}
+
+
+/* **************************************************
+*  Advanced Hash Functions
+****************************************************/
+
+XXH_PUBLIC_API XXH32_state_t* XXH32_createState(void)
+{
+    return (XXH32_state_t*)XXH_malloc(sizeof(XXH32_state_t));
+}
+XXH_PUBLIC_API XXH_errorcode XXH32_freeState(XXH32_state_t* statePtr)
+{
+    XXH_free(statePtr);
+    return XXH_OK;
+}
+
+XXH_PUBLIC_API XXH64_state_t* XXH64_createState(void)
+{
+    return (XXH64_state_t*)XXH_malloc(sizeof(XXH64_state_t));
+}
+XXH_PUBLIC_API XXH_errorcode XXH64_freeState(XXH64_state_t* statePtr)
+{
+    XXH_free(statePtr);
+    return XXH_OK;
+}
+
+
+/*** Hash feed ***/
+
+XXH_PUBLIC_API XXH_errorcode XXH32_reset(XXH32_state_t* statePtr, unsigned int seed)
+{
+    XXH32_state_t state;   /* using a local state to memcpy() in order to avoid strict-aliasing warnings */
+    memset(&state, 0, sizeof(state)-4);   /* do not write into reserved, for future removal */
+    state.v1 = seed + PRIME32_1 + PRIME32_2;
+    state.v2 = seed + PRIME32_2;
+    state.v3 = seed + 0;
+    state.v4 = seed - PRIME32_1;
+    memcpy(statePtr, &state, sizeof(state));
+    return XXH_OK;
+}
+
+
+XXH_PUBLIC_API XXH_errorcode XXH64_reset(XXH64_state_t* statePtr, unsigned long long seed)
+{
+    XXH64_state_t state;   /* using a local state to memcpy() in order to avoid strict-aliasing warnings */
+    memset(&state, 0, sizeof(state)-8);   /* do not write into reserved, for future removal */
+    state.v1 = seed + PRIME64_1 + PRIME64_2;
+    state.v2 = seed + PRIME64_2;
+    state.v3 = seed + 0;
+    state.v4 = seed - PRIME64_1;
+    memcpy(statePtr, &state, sizeof(state));
+    return XXH_OK;
+}
+
+
+FORCE_INLINE_TEMPLATE XXH_errorcode XXH32_update_endian (XXH32_state_t* state, const void* input, size_t len, XXH_endianess endian)
+{
+    const BYTE* p = (const BYTE*)input;
+    const BYTE* const bEnd = p + len;
+
+#ifdef XXH_ACCEPT_NULL_INPUT_POINTER
+    if (input==NULL) return XXH_ERROR;
+#endif
+
+    state->total_len_32 += (unsigned)len;
+    state->large_len |= (len>=16) | (state->total_len_32>=16);
+
+    if (state->memsize + len < 16)  {   /* fill in tmp buffer */
+        XXH_memcpy((BYTE*)(state->mem32) + state->memsize, input, len);
+        state->memsize += (unsigned)len;
+        return XXH_OK;
+    }
+
+    if (state->memsize) {   /* some data left from previous update */
+        XXH_memcpy((BYTE*)(state->mem32) + state->memsize, input, 16-state->memsize);
+        {   const U32* p32 = state->mem32;
+            state->v1 = XXH32_round(state->v1, XXH_readLE32(p32, endian)); p32++;
+            state->v2 = XXH32_round(state->v2, XXH_readLE32(p32, endian)); p32++;
+            state->v3 = XXH32_round(state->v3, XXH_readLE32(p32, endian)); p32++;
+            state->v4 = XXH32_round(state->v4, XXH_readLE32(p32, endian)); p32++;
+        }
+        p += 16-state->memsize;
+        state->memsize = 0;
+    }
+
+    if (p <= bEnd-16) {
+        const BYTE* const limit = bEnd - 16;
+        U32 v1 = state->v1;
+        U32 v2 = state->v2;
+        U32 v3 = state->v3;
+        U32 v4 = state->v4;
+
+        do {
+            v1 = XXH32_round(v1, XXH_readLE32(p, endian)); p+=4;
+            v2 = XXH32_round(v2, XXH_readLE32(p, endian)); p+=4;
+            v3 = XXH32_round(v3, XXH_readLE32(p, endian)); p+=4;
+            v4 = XXH32_round(v4, XXH_readLE32(p, endian)); p+=4;
+        } while (p<=limit);
+
+        state->v1 = v1;
+        state->v2 = v2;
+        state->v3 = v3;
+        state->v4 = v4;
+    }
+
+    if (p < bEnd) {
+        XXH_memcpy(state->mem32, p, (size_t)(bEnd-p));
+        state->memsize = (unsigned)(bEnd-p);
+    }
+
+    return XXH_OK;
+}
+
+XXH_PUBLIC_API XXH_errorcode XXH32_update (XXH32_state_t* state_in, const void* input, size_t len)
+{
+    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
+
+    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
+        return XXH32_update_endian(state_in, input, len, XXH_littleEndian);
+    else
+        return XXH32_update_endian(state_in, input, len, XXH_bigEndian);
+}
+
+
+
+FORCE_INLINE_TEMPLATE U32 XXH32_digest_endian (const XXH32_state_t* state, XXH_endianess endian)
+{
+    const BYTE * p = (const BYTE*)state->mem32;
+    const BYTE* const bEnd = (const BYTE*)(state->mem32) + state->memsize;
+    U32 h32;
+
+    if (state->large_len) {
+        h32 = XXH_rotl32(state->v1, 1) + XXH_rotl32(state->v2, 7) + XXH_rotl32(state->v3, 12) + XXH_rotl32(state->v4, 18);
+    } else {
+        h32 = state->v3 /* == seed */ + PRIME32_5;
+    }
+
+    h32 += state->total_len_32;
+
+    while (p+4<=bEnd) {
+        h32 += XXH_readLE32(p, endian) * PRIME32_3;
+        h32  = XXH_rotl32(h32, 17) * PRIME32_4;
+        p+=4;
+    }
+
+    while (p<bEnd) {
+        h32 += (*p) * PRIME32_5;
+        h32  = XXH_rotl32(h32, 11) * PRIME32_1;
+        p++;
+    }
+
+    h32 ^= h32 >> 15;
+    h32 *= PRIME32_2;
+    h32 ^= h32 >> 13;
+    h32 *= PRIME32_3;
+    h32 ^= h32 >> 16;
+
+    return h32;
+}
+
+
+XXH_PUBLIC_API unsigned int XXH32_digest (const XXH32_state_t* state_in)
+{
+    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
+
+    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
+        return XXH32_digest_endian(state_in, XXH_littleEndian);
+    else
+        return XXH32_digest_endian(state_in, XXH_bigEndian);
+}
+
+
+
+/* **** XXH64 **** */
+
+FORCE_INLINE_TEMPLATE XXH_errorcode XXH64_update_endian (XXH64_state_t* state, const void* input, size_t len, XXH_endianess endian)
+{
+    const BYTE* p = (const BYTE*)input;
+    const BYTE* const bEnd = p + len;
+
+#ifdef XXH_ACCEPT_NULL_INPUT_POINTER
+    if (input==NULL) return XXH_ERROR;
+#endif
+
+    state->total_len += len;
+
+    if (state->memsize + len < 32) {  /* fill in tmp buffer */
+        if (input != NULL) {
+            XXH_memcpy(((BYTE*)state->mem64) + state->memsize, input, len);
+        }
+        state->memsize += (U32)len;
+        return XXH_OK;
+    }
+
+    if (state->memsize) {   /* tmp buffer is full */
+        XXH_memcpy(((BYTE*)state->mem64) + state->memsize, input, 32-state->memsize);
+        state->v1 = XXH64_round(state->v1, XXH_readLE64(state->mem64+0, endian));
+        state->v2 = XXH64_round(state->v2, XXH_readLE64(state->mem64+1, endian));
+        state->v3 = XXH64_round(state->v3, XXH_readLE64(state->mem64+2, endian));
+        state->v4 = XXH64_round(state->v4, XXH_readLE64(state->mem64+3, endian));
+        p += 32-state->memsize;
+        state->memsize = 0;
+    }
+
+    if (p+32 <= bEnd) {
+        const BYTE* const limit = bEnd - 32;
+        U64 v1 = state->v1;
+        U64 v2 = state->v2;
+        U64 v3 = state->v3;
+        U64 v4 = state->v4;
+
+        do {
+            v1 = XXH64_round(v1, XXH_readLE64(p, endian)); p+=8;
+            v2 = XXH64_round(v2, XXH_readLE64(p, endian)); p+=8;
+            v3 = XXH64_round(v3, XXH_readLE64(p, endian)); p+=8;
+            v4 = XXH64_round(v4, XXH_readLE64(p, endian)); p+=8;
+        } while (p<=limit);
+
+        state->v1 = v1;
+        state->v2 = v2;
+        state->v3 = v3;
+        state->v4 = v4;
+    }
+
+    if (p < bEnd) {
+        XXH_memcpy(state->mem64, p, (size_t)(bEnd-p));
+        state->memsize = (unsigned)(bEnd-p);
+    }
+
+    return XXH_OK;
+}
+
+XXH_PUBLIC_API XXH_errorcode XXH64_update (XXH64_state_t* state_in, const void* input, size_t len)
+{
+    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
+
+    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
+        return XXH64_update_endian(state_in, input, len, XXH_littleEndian);
+    else
+        return XXH64_update_endian(state_in, input, len, XXH_bigEndian);
+}
+
+
+
+FORCE_INLINE_TEMPLATE U64 XXH64_digest_endian (const XXH64_state_t* state, XXH_endianess endian)
+{
+    const BYTE * p = (const BYTE*)state->mem64;
+    const BYTE* const bEnd = (const BYTE*)state->mem64 + state->memsize;
+    U64 h64;
+
+    if (state->total_len >= 32) {
+        U64 const v1 = state->v1;
+        U64 const v2 = state->v2;
+        U64 const v3 = state->v3;
+        U64 const v4 = state->v4;
+
+        h64 = XXH_rotl64(v1, 1) + XXH_rotl64(v2, 7) + XXH_rotl64(v3, 12) + XXH_rotl64(v4, 18);
+        h64 = XXH64_mergeRound(h64, v1);
+        h64 = XXH64_mergeRound(h64, v2);
+        h64 = XXH64_mergeRound(h64, v3);
+        h64 = XXH64_mergeRound(h64, v4);
+    } else {
+        h64  = state->v3 + PRIME64_5;
+    }
+
+    h64 += (U64) state->total_len;
+
+    while (p+8<=bEnd) {
+        U64 const k1 = XXH64_round(0, XXH_readLE64(p, endian));
+        h64 ^= k1;
+        h64  = XXH_rotl64(h64,27) * PRIME64_1 + PRIME64_4;
+        p+=8;
+    }
+
+    if (p+4<=bEnd) {
+        h64 ^= (U64)(XXH_readLE32(p, endian)) * PRIME64_1;
+        h64  = XXH_rotl64(h64, 23) * PRIME64_2 + PRIME64_3;
+        p+=4;
+    }
+
+    while (p<bEnd) {
+        h64 ^= (*p) * PRIME64_5;
+        h64  = XXH_rotl64(h64, 11) * PRIME64_1;
+        p++;
+    }
+
+    h64 ^= h64 >> 33;
+    h64 *= PRIME64_2;
+    h64 ^= h64 >> 29;
+    h64 *= PRIME64_3;
+    h64 ^= h64 >> 32;
+
+    return h64;
+}
+
+
+XXH_PUBLIC_API unsigned long long XXH64_digest (const XXH64_state_t* state_in)
+{
+    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
+
+    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
+        return XXH64_digest_endian(state_in, XXH_littleEndian);
+    else
+        return XXH64_digest_endian(state_in, XXH_bigEndian);
+}
+
+
+/* **************************
+*  Canonical representation
+****************************/
+
+/*! Default XXH result types are basic unsigned 32 and 64 bits.
+*   The canonical representation follows human-readable write convention, aka big-endian (large digits first).
+*   These functions allow transformation of hash result into and from its canonical format.
+*   This way, hash values can be written into a file or buffer, and remain comparable across different systems and programs.
+*/
+
+XXH_PUBLIC_API void XXH32_canonicalFromHash(XXH32_canonical_t* dst, XXH32_hash_t hash)
+{
+    XXH_STATIC_ASSERT(sizeof(XXH32_canonical_t) == sizeof(XXH32_hash_t));
+    if (XXH_CPU_LITTLE_ENDIAN) hash = XXH_swap32(hash);
+    memcpy(dst, &hash, sizeof(*dst));
+}
+
+XXH_PUBLIC_API void XXH64_canonicalFromHash(XXH64_canonical_t* dst, XXH64_hash_t hash)
+{
+    XXH_STATIC_ASSERT(sizeof(XXH64_canonical_t) == sizeof(XXH64_hash_t));
+    if (XXH_CPU_LITTLE_ENDIAN) hash = XXH_swap64(hash);
+    memcpy(dst, &hash, sizeof(*dst));
+}
+
+XXH_PUBLIC_API XXH32_hash_t XXH32_hashFromCanonical(const XXH32_canonical_t* src)
+{
+    return XXH_readBE32(src);
+}
+
+XXH_PUBLIC_API XXH64_hash_t XXH64_hashFromCanonical(const XXH64_canonical_t* src)
+{
+    return XXH_readBE64(src);
+}
+
+}
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+/*
+ * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+ */
+
+
+
+/*-*************************************
+*  Dependencies
+***************************************/
+#include <stdlib.h>      /* malloc, calloc, free */
+#include <string.h>      /* memset */
+
+
+
+namespace duckdb_zstd {
+
+/*-****************************************
+*  Version
+******************************************/
+unsigned ZSTD_versionNumber(void) { return ZSTD_VERSION_NUMBER; }
+
+const char* ZSTD_versionString(void) { return ZSTD_VERSION_STRING; }
+
+
+/*-****************************************
+*  ZSTD Error Management
+******************************************/
+#undef ZSTD_isError   /* defined within zstd_internal.h */
+/*! ZSTD_isError() :
+ *  tells if a return value is an error code
+ *  symbol is required for external callers */
+unsigned ZSTD_isError(size_t code) { return ERR_isError(code); }
+
+/*! ZSTD_getErrorName() :
+ *  provides error code string from function result (useful for debugging) */
+const char* ZSTD_getErrorName(size_t code) { return ERR_getErrorName(code); }
+
+/*! ZSTD_getError() :
+ *  convert a `size_t` function result into a proper ZSTD_errorCode enum */
+ZSTD_ErrorCode ZSTD_getErrorCode(size_t code) { return ERR_getErrorCode(code); }
+
+/*! ZSTD_getErrorString() :
+ *  provides error code string from enum */
+const char* ZSTD_getErrorString(ZSTD_ErrorCode code) { return ERR_getErrorString(code); }
+
+
+
+/*=**************************************************************
+*  Custom allocator
+****************************************************************/
+void* ZSTD_malloc(size_t size, ZSTD_customMem customMem)
+{
+    if (customMem.customAlloc)
+        return customMem.customAlloc(customMem.opaque, size);
+    return malloc(size);
+}
+
+void* ZSTD_calloc(size_t size, ZSTD_customMem customMem)
+{
+    if (customMem.customAlloc) {
+        /* calloc implemented as malloc+memset;
+         * not as efficient as calloc, but next best guess for custom malloc */
+        void* const ptr = customMem.customAlloc(customMem.opaque, size);
+        memset(ptr, 0, size);
+        return ptr;
+    }
+    return calloc(1, size);
+}
+
+void ZSTD_free(void* ptr, ZSTD_customMem customMem)
+{
+    if (ptr!=NULL) {
+        if (customMem.customFree)
+            customMem.customFree(customMem.opaque, ptr);
+        else
+            free(ptr);
+    }
+}
+
+}
+
+
+// LICENSE_CHANGE_END
 
 
 // LICENSE_CHANGE_BEGIN
@@ -35137,6 +32339,48 @@ const char* TTransportException::what() const noexcept {
 }
 }
 } // duckdb_apache::thrift::transport
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
+// See the end of this file for a list
+
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+
+
+namespace duckdb_apache {
+namespace thrift {
+namespace protocol {
+
+TProtocol::~TProtocol() = default;
+uint32_t TProtocol::skip_virt(TType type) {
+  return ::duckdb_apache::thrift::protocol::skip(*this, type);
+}
+
+TProtocolFactory::~TProtocolFactory() = default;
+
+}}} // duckdb_apache::thrift::protocol
 
 
 // LICENSE_CHANGE_END
@@ -42012,16 +39256,16 @@ void FileCryptoMetaData::printTo(std::ostream& out) const {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /* ******************************************************************
- * Common functions of New Generation Entropy library
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * huff0 huffman decoder,
+ * part of Finite State Entropy library
+ * Copyright (c) 2013-2020, Yann Collet, Facebook, Inc.
  *
  *  You can contact the author at :
  *  - FSE+HUF source repository : https://github.com/Cyan4973/FiniteStateEntropy
- *  - Public forum : https://groups.google.com/forum/#!forum/lz4c
  *
  * This source code is licensed under both the BSD-style license (found in the
  * LICENSE file in the root directory of this source tree) and the GPLv2 (found
@@ -42029,208 +39273,1240 @@ void FileCryptoMetaData::printTo(std::ostream& out) const {
  * You may select, at your option, one of the above-listed licenses.
 ****************************************************************** */
 
-/* *************************************
+/* **************************************************************
 *  Dependencies
-***************************************/
+****************************************************************/
+#include <string.h>     /* memcpy, memset */
 
-       /* ERR_*, ERROR */
-
+  /* BIT_* */
+        /* to compress headers */
 
 
 
 
 namespace duckdb_zstd {
-
-/*===   Version   ===*/
-unsigned FSE_versionNumber(void) { return FSE_VERSION_NUMBER; }
-
-
-/*===   Error Management   ===*/
-unsigned FSE_isError(size_t code) { return ERR_isError(code); }
-const char* FSE_getErrorName(size_t code) { return ERR_getErrorName(code); }
-
-unsigned HUF_isError(size_t code) { return ERR_isError(code); }
-const char* HUF_getErrorName(size_t code) { return ERR_getErrorName(code); }
-
-
-/*-**************************************************************
-*  FSE NCount encoding-decoding
+/* **************************************************************
+*  Macros
 ****************************************************************/
-size_t FSE_readNCount (short* normalizedCounter, unsigned* maxSVPtr, unsigned* tableLogPtr,
-                 const void* headerBuffer, size_t hbSize)
+
+/* These two optional macros force the use one way or another of the two
+ * Huffman decompression implementations. You can't force in both directions
+ * at the same time.
+ */
+#if defined(HUF_FORCE_DECOMPRESS_X1) && \
+    defined(HUF_FORCE_DECOMPRESS_X2)
+#error "Cannot force the use of the X1 and X2 decoders at the same time!"
+#endif
+
+
+/* **************************************************************
+*  Error Management
+****************************************************************/
+// #define HUF_isError ERR_isError
+
+
+/* **************************************************************
+*  Byte alignment for workSpace management
+****************************************************************/
+#define HUF_ALIGN(x, a)         HUF_ALIGN_MASK((x), (a) - 1)
+#define HUF_ALIGN_MASK(x, mask) (((x) + (mask)) & ~(mask))
+
+
+/* **************************************************************
+*  BMI2 Variant Wrappers
+****************************************************************/
+#if DYNAMIC_BMI2
+
+#define HUF_DGEN(fn)                                                        \
+                                                                            \
+    static size_t fn##_default(                                             \
+                  void* dst,  size_t dstSize,                               \
+            const void* cSrc, size_t cSrcSize,                              \
+            const HUF_DTable* DTable)                                       \
+    {                                                                       \
+        return fn##_body(dst, dstSize, cSrc, cSrcSize, DTable);             \
+    }                                                                       \
+                                                                            \
+    static TARGET_ATTRIBUTE("bmi2") size_t fn##_bmi2(                       \
+                  void* dst,  size_t dstSize,                               \
+            const void* cSrc, size_t cSrcSize,                              \
+            const HUF_DTable* DTable)                                       \
+    {                                                                       \
+        return fn##_body(dst, dstSize, cSrc, cSrcSize, DTable);             \
+    }                                                                       \
+                                                                            \
+    static size_t fn(void* dst, size_t dstSize, void const* cSrc,           \
+                     size_t cSrcSize, HUF_DTable const* DTable, int bmi2)   \
+    {                                                                       \
+        if (bmi2) {                                                         \
+            return fn##_bmi2(dst, dstSize, cSrc, cSrcSize, DTable);         \
+        }                                                                   \
+        return fn##_default(dst, dstSize, cSrc, cSrcSize, DTable);          \
+    }
+
+#else
+
+#define HUF_DGEN(fn)                                                        \
+    static size_t fn(void* dst, size_t dstSize, void const* cSrc,           \
+                     size_t cSrcSize, HUF_DTable const* DTable, int bmi2)   \
+    {                                                                       \
+        (void)bmi2;                                                         \
+        return fn##_body(dst, dstSize, cSrc, cSrcSize, DTable);             \
+    }
+
+#endif
+
+
+/*-***************************/
+/*  generic DTableDesc       */
+/*-***************************/
+typedef struct { BYTE maxTableLog; BYTE tableType; BYTE tableLog; BYTE reserved; } DTableDesc;
+
+static DTableDesc HUF_getDTableDesc(const HUF_DTable* table)
 {
-    const BYTE* const istart = (const BYTE*) headerBuffer;
-    const BYTE* const iend = istart + hbSize;
-    const BYTE* ip = istart;
-    int nbBits;
-    int remaining;
-    int threshold;
-    U32 bitStream;
-    int bitCount;
-    unsigned charnum = 0;
-    int previous0 = 0;
-
-    if (hbSize < 4) {
-        /* This function only works when hbSize >= 4 */
-        char buffer[4];
-        memset(buffer, 0, sizeof(buffer));
-        memcpy(buffer, headerBuffer, hbSize);
-        {   size_t const countSize = FSE_readNCount(normalizedCounter, maxSVPtr, tableLogPtr,
-                                                    buffer, sizeof(buffer));
-            if (FSE_isError(countSize)) return countSize;
-            if (countSize > hbSize) return ERROR(corruption_detected);
-            return countSize;
-    }   }
-    assert(hbSize >= 4);
-
-    /* init */
-    memset(normalizedCounter, 0, (*maxSVPtr+1) * sizeof(normalizedCounter[0]));   /* all symbols not present in NCount have a frequency of 0 */
-    bitStream = MEM_readLE32(ip);
-    nbBits = (bitStream & 0xF) + FSE_MIN_TABLELOG;   /* extract tableLog */
-    if (nbBits > FSE_TABLELOG_ABSOLUTE_MAX) return ERROR(tableLog_tooLarge);
-    bitStream >>= 4;
-    bitCount = 4;
-    *tableLogPtr = nbBits;
-    remaining = (1<<nbBits)+1;
-    threshold = 1<<nbBits;
-    nbBits++;
-
-    while ((remaining>1) & (charnum<=*maxSVPtr)) {
-        if (previous0) {
-            unsigned n0 = charnum;
-            while ((bitStream & 0xFFFF) == 0xFFFF) {
-                n0 += 24;
-                if (ip < iend-5) {
-                    ip += 2;
-                    bitStream = MEM_readLE32(ip) >> bitCount;
-                } else {
-                    bitStream >>= 16;
-                    bitCount   += 16;
-            }   }
-            while ((bitStream & 3) == 3) {
-                n0 += 3;
-                bitStream >>= 2;
-                bitCount += 2;
-            }
-            n0 += bitStream & 3;
-            bitCount += 2;
-            if (n0 > *maxSVPtr) return ERROR(maxSymbolValue_tooSmall);
-            while (charnum < n0) normalizedCounter[charnum++] = 0;
-            if ((ip <= iend-7) || (ip + (bitCount>>3) <= iend-4)) {
-                assert((bitCount >> 3) <= 3); /* For first condition to work */
-                ip += bitCount>>3;
-                bitCount &= 7;
-                bitStream = MEM_readLE32(ip) >> bitCount;
-            } else {
-                bitStream >>= 2;
-        }   }
-        {   int const max = (2*threshold-1) - remaining;
-            int count;
-
-            if ((bitStream & (threshold-1)) < (U32)max) {
-                count = bitStream & (threshold-1);
-                bitCount += nbBits-1;
-            } else {
-                count = bitStream & (2*threshold-1);
-                if (count >= threshold) count -= max;
-                bitCount += nbBits;
-            }
-
-            count--;   /* extra accuracy */
-            remaining -= count < 0 ? -count : count;   /* -1 means +1 */
-            normalizedCounter[charnum++] = (short)count;
-            previous0 = !count;
-            while (remaining < threshold) {
-                nbBits--;
-                threshold >>= 1;
-            }
-
-            if ((ip <= iend-7) || (ip + (bitCount>>3) <= iend-4)) {
-                ip += bitCount>>3;
-                bitCount &= 7;
-            } else {
-                bitCount -= (int)(8 * (iend - 4 - ip));
-                ip = iend - 4;
-            }
-            bitStream = MEM_readLE32(ip) >> (bitCount & 31);
-    }   }   /* while ((remaining>1) & (charnum<=*maxSVPtr)) */
-    if (remaining != 1) return ERROR(corruption_detected);
-    if (bitCount > 32) return ERROR(corruption_detected);
-    *maxSVPtr = charnum-1;
-
-    ip += (bitCount+7)>>3;
-    return ip-istart;
+    DTableDesc dtd;
+    memcpy(&dtd, table, sizeof(dtd));
+    return dtd;
 }
 
 
-/*! HUF_readStats() :
-    Read compact Huffman tree, saved by HUF_writeCTable().
-    `huffWeight` is destination buffer.
-    `rankStats` is assumed to be a table of at least HUF_TABLELOG_MAX U32.
-    @return : size read from `src` , or an error Code .
-    Note : Needed by HUF_readCTable() and HUF_readDTableX?() .
-*/
-size_t HUF_readStats(BYTE* huffWeight, size_t hwSize, U32* rankStats,
-                     U32* nbSymbolsPtr, U32* tableLogPtr,
-                     const void* src, size_t srcSize)
+#ifndef HUF_FORCE_DECOMPRESS_X2
+
+/*-***************************/
+/*  single-symbol decoding   */
+/*-***************************/
+typedef struct { BYTE byte; BYTE nbBits; } HUF_DEltX1;   /* single-symbol decoding */
+
+size_t HUF_readDTableX1_wksp(HUF_DTable* DTable, const void* src, size_t srcSize, void* workSpace, size_t wkspSize)
 {
-    U32 weightTotal;
-    const BYTE* ip = (const BYTE*) src;
+    U32 tableLog = 0;
+    U32 nbSymbols = 0;
     size_t iSize;
-    size_t oSize;
+    void* const dtPtr = DTable + 1;
+    HUF_DEltX1* const dt = (HUF_DEltX1*)dtPtr;
 
-    if (!srcSize) return ERROR(srcSize_wrong);
-    iSize = ip[0];
-    /* memset(huffWeight, 0, hwSize);   *//* is not necessary, even though some analyzer complain ... */
+    U32* rankVal;
+    BYTE* huffWeight;
+    size_t spaceUsed32 = 0;
 
-    if (iSize >= 128) {  /* special header */
-        oSize = iSize - 127;
-        iSize = ((oSize+1)/2);
-        if (iSize+1 > srcSize) return ERROR(srcSize_wrong);
-        if (oSize >= hwSize) return ERROR(corruption_detected);
-        ip += 1;
-        {   U32 n;
-            for (n=0; n<oSize; n+=2) {
-                huffWeight[n]   = ip[n/2] >> 4;
-                huffWeight[n+1] = ip[n/2] & 15;
-    }   }   }
-    else  {   /* header compressed with FSE (normal case) */
-        FSE_DTable fseWorkspace[FSE_DTABLE_SIZE_U32(6)];  /* 6 is max possible tableLog for HUF header (maybe even 5, to be tested) */
-        if (iSize+1 > srcSize) return ERROR(srcSize_wrong);
-        oSize = FSE_decompress_wksp(huffWeight, hwSize-1, ip+1, iSize, fseWorkspace, 6);   /* max (hwSize-1) values decoded, as last one is implied */
-        if (FSE_isError(oSize)) return oSize;
+    rankVal = (U32 *)workSpace + spaceUsed32;
+    spaceUsed32 += HUF_TABLELOG_ABSOLUTEMAX + 1;
+    huffWeight = (BYTE *)((U32 *)workSpace + spaceUsed32);
+    spaceUsed32 += HUF_ALIGN(HUF_SYMBOLVALUE_MAX + 1, sizeof(U32)) >> 2;
+
+    if ((spaceUsed32 << 2) > wkspSize) return ERROR(tableLog_tooLarge);
+
+    DEBUG_STATIC_ASSERT(sizeof(DTableDesc) == sizeof(HUF_DTable));
+    /* memset(huffWeight, 0, sizeof(huffWeight)); */   /* is not necessary, even though some analyzer complain ... */
+
+    iSize = HUF_readStats(huffWeight, HUF_SYMBOLVALUE_MAX + 1, rankVal, &nbSymbols, &tableLog, src, srcSize);
+    if (HUF_isError(iSize)) return iSize;
+
+    /* Table header */
+    {   DTableDesc dtd = HUF_getDTableDesc(DTable);
+        if (tableLog > (U32)(dtd.maxTableLog+1)) return ERROR(tableLog_tooLarge);   /* DTable too small, Huffman tree cannot fit in */
+        dtd.tableType = 0;
+        dtd.tableLog = (BYTE)tableLog;
+        memcpy(DTable, &dtd, sizeof(dtd));
     }
 
-    /* collect weight stats */
-    memset(rankStats, 0, (HUF_TABLELOG_MAX + 1) * sizeof(U32));
-    weightTotal = 0;
-    {   U32 n; for (n=0; n<oSize; n++) {
-            if (huffWeight[n] >= HUF_TABLELOG_MAX) return ERROR(corruption_detected);
-            rankStats[huffWeight[n]]++;
-            weightTotal += (1 << huffWeight[n]) >> 1;
-    }   }
-    if (weightTotal == 0) return ERROR(corruption_detected);
-
-    /* get last non-null symbol weight (implied, total must be 2^n) */
-    {   U32 const tableLog = BIT_highbit32(weightTotal) + 1;
-        if (tableLog > HUF_TABLELOG_MAX) return ERROR(corruption_detected);
-        *tableLogPtr = tableLog;
-        /* determine last weight */
-        {   U32 const total = 1 << tableLog;
-            U32 const rest = total - weightTotal;
-            U32 const verif = 1 << BIT_highbit32(rest);
-            U32 const lastWeight = BIT_highbit32(rest) + 1;
-            if (verif != rest) return ERROR(corruption_detected);    /* last value must be a clean power of 2 */
-            huffWeight[oSize] = (BYTE)lastWeight;
-            rankStats[lastWeight]++;
+    /* Calculate starting value for each rank */
+    {   U32 n, nextRankStart = 0;
+        for (n=1; n<tableLog+1; n++) {
+            U32 const current = nextRankStart;
+            nextRankStart += (rankVal[n] << (n-1));
+            rankVal[n] = current;
     }   }
 
-    /* check tree construction validity */
-    if ((rankStats[1] < 2) || (rankStats[1] & 1)) return ERROR(corruption_detected);   /* by construction : at least 2 elts of rank 1, must be even */
+    /* fill DTable */
+    {   U32 n;
+        size_t const nEnd = nbSymbols;
+        for (n=0; n<nEnd; n++) {
+            size_t const w = huffWeight[n];
+            size_t const length = (1 << w) >> 1;
+            size_t const uStart = rankVal[w];
+            size_t const uEnd = uStart + length;
+            size_t u;
+            HUF_DEltX1 D;
+            D.byte = (BYTE)n;
+            D.nbBits = (BYTE)(tableLog + 1 - w);
+            rankVal[w] = (U32)uEnd;
+            if (length < 4) {
+                /* Use length in the loop bound so the compiler knows it is short. */
+                for (u = 0; u < length; ++u)
+                    dt[uStart + u] = D;
+            } else {
+                /* Unroll the loop 4 times, we know it is a power of 2. */
+                for (u = uStart; u < uEnd; u += 4) {
+                    dt[u + 0] = D;
+                    dt[u + 1] = D;
+                    dt[u + 2] = D;
+                    dt[u + 3] = D;
+    }   }   }   }
+    return iSize;
+}
 
-    /* results */
-    *nbSymbolsPtr = (U32)(oSize+1);
-    return iSize+1;
+size_t HUF_readDTableX1(HUF_DTable* DTable, const void* src, size_t srcSize)
+{
+    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
+    return HUF_readDTableX1_wksp(DTable, src, srcSize,
+                                 workSpace, sizeof(workSpace));
+}
+
+FORCE_INLINE_TEMPLATE BYTE
+HUF_decodeSymbolX1(BIT_DStream_t* Dstream, const HUF_DEltX1* dt, const U32 dtLog)
+{
+    size_t const val = BIT_lookBitsFast(Dstream, dtLog); /* note : dtLog >= 1 */
+    BYTE const c = dt[val].byte;
+    BIT_skipBits(Dstream, dt[val].nbBits);
+    return c;
+}
+
+#define HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr) \
+    *ptr++ = HUF_decodeSymbolX1(DStreamPtr, dt, dtLog)
+
+#define HUF_DECODE_SYMBOLX1_1(ptr, DStreamPtr)  \
+    if (MEM_64bits() || (HUF_TABLELOG_MAX<=12)) \
+        HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr)
+
+#define HUF_DECODE_SYMBOLX1_2(ptr, DStreamPtr) \
+    if (MEM_64bits()) \
+        HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr)
+
+HINT_INLINE size_t
+HUF_decodeStreamX1(BYTE* p, BIT_DStream_t* const bitDPtr, BYTE* const pEnd, const HUF_DEltX1* const dt, const U32 dtLog)
+{
+    BYTE* const pStart = p;
+
+    /* up to 4 symbols at a time */
+    while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd-3)) {
+        HUF_DECODE_SYMBOLX1_2(p, bitDPtr);
+        HUF_DECODE_SYMBOLX1_1(p, bitDPtr);
+        HUF_DECODE_SYMBOLX1_2(p, bitDPtr);
+        HUF_DECODE_SYMBOLX1_0(p, bitDPtr);
+    }
+
+    /* [0-3] symbols remaining */
+    if (MEM_32bits())
+        while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd))
+            HUF_DECODE_SYMBOLX1_0(p, bitDPtr);
+
+    /* no more data to retrieve from bitstream, no need to reload */
+    while (p < pEnd)
+        HUF_DECODE_SYMBOLX1_0(p, bitDPtr);
+
+    return pEnd-pStart;
+}
+
+FORCE_INLINE_TEMPLATE size_t
+HUF_decompress1X1_usingDTable_internal_body(
+          void* dst,  size_t dstSize,
+    const void* cSrc, size_t cSrcSize,
+    const HUF_DTable* DTable)
+{
+    BYTE* op = (BYTE*)dst;
+    BYTE* const oend = op + dstSize;
+    const void* dtPtr = DTable + 1;
+    const HUF_DEltX1* const dt = (const HUF_DEltX1*)dtPtr;
+    BIT_DStream_t bitD;
+    DTableDesc const dtd = HUF_getDTableDesc(DTable);
+    U32 const dtLog = dtd.tableLog;
+
+    CHECK_F( BIT_initDStream(&bitD, cSrc, cSrcSize) );
+
+    HUF_decodeStreamX1(op, &bitD, oend, dt, dtLog);
+
+    if (!BIT_endOfDStream(&bitD)) return ERROR(corruption_detected);
+
+    return dstSize;
+}
+
+FORCE_INLINE_TEMPLATE size_t
+HUF_decompress4X1_usingDTable_internal_body(
+          void* dst,  size_t dstSize,
+    const void* cSrc, size_t cSrcSize,
+    const HUF_DTable* DTable)
+{
+    /* Check */
+    if (cSrcSize < 10) return ERROR(corruption_detected);  /* strict minimum : jump table + 1 byte per stream */
+
+    {   const BYTE* const istart = (const BYTE*) cSrc;
+        BYTE* const ostart = (BYTE*) dst;
+        BYTE* const oend = ostart + dstSize;
+        BYTE* const olimit = oend - 3;
+        const void* const dtPtr = DTable + 1;
+        const HUF_DEltX1* const dt = (const HUF_DEltX1*)dtPtr;
+
+        /* Init */
+        BIT_DStream_t bitD1;
+        BIT_DStream_t bitD2;
+        BIT_DStream_t bitD3;
+        BIT_DStream_t bitD4;
+        size_t const length1 = MEM_readLE16(istart);
+        size_t const length2 = MEM_readLE16(istart+2);
+        size_t const length3 = MEM_readLE16(istart+4);
+        size_t const length4 = cSrcSize - (length1 + length2 + length3 + 6);
+        const BYTE* const istart1 = istart + 6;  /* jumpTable */
+        const BYTE* const istart2 = istart1 + length1;
+        const BYTE* const istart3 = istart2 + length2;
+        const BYTE* const istart4 = istart3 + length3;
+        const size_t segmentSize = (dstSize+3) / 4;
+        BYTE* const opStart2 = ostart + segmentSize;
+        BYTE* const opStart3 = opStart2 + segmentSize;
+        BYTE* const opStart4 = opStart3 + segmentSize;
+        BYTE* op1 = ostart;
+        BYTE* op2 = opStart2;
+        BYTE* op3 = opStart3;
+        BYTE* op4 = opStart4;
+        DTableDesc const dtd = HUF_getDTableDesc(DTable);
+        U32 const dtLog = dtd.tableLog;
+        U32 endSignal = 1;
+
+        if (length4 > cSrcSize) return ERROR(corruption_detected);   /* overflow */
+        CHECK_F( BIT_initDStream(&bitD1, istart1, length1) );
+        CHECK_F( BIT_initDStream(&bitD2, istart2, length2) );
+        CHECK_F( BIT_initDStream(&bitD3, istart3, length3) );
+        CHECK_F( BIT_initDStream(&bitD4, istart4, length4) );
+
+        /* up to 16 symbols per loop (4 symbols per stream) in 64-bit mode */
+        for ( ; (endSignal) & (op4 < olimit) ; ) {
+            HUF_DECODE_SYMBOLX1_2(op1, &bitD1);
+            HUF_DECODE_SYMBOLX1_2(op2, &bitD2);
+            HUF_DECODE_SYMBOLX1_2(op3, &bitD3);
+            HUF_DECODE_SYMBOLX1_2(op4, &bitD4);
+            HUF_DECODE_SYMBOLX1_1(op1, &bitD1);
+            HUF_DECODE_SYMBOLX1_1(op2, &bitD2);
+            HUF_DECODE_SYMBOLX1_1(op3, &bitD3);
+            HUF_DECODE_SYMBOLX1_1(op4, &bitD4);
+            HUF_DECODE_SYMBOLX1_2(op1, &bitD1);
+            HUF_DECODE_SYMBOLX1_2(op2, &bitD2);
+            HUF_DECODE_SYMBOLX1_2(op3, &bitD3);
+            HUF_DECODE_SYMBOLX1_2(op4, &bitD4);
+            HUF_DECODE_SYMBOLX1_0(op1, &bitD1);
+            HUF_DECODE_SYMBOLX1_0(op2, &bitD2);
+            HUF_DECODE_SYMBOLX1_0(op3, &bitD3);
+            HUF_DECODE_SYMBOLX1_0(op4, &bitD4);
+            endSignal &= BIT_reloadDStreamFast(&bitD1) == BIT_DStream_unfinished;
+            endSignal &= BIT_reloadDStreamFast(&bitD2) == BIT_DStream_unfinished;
+            endSignal &= BIT_reloadDStreamFast(&bitD3) == BIT_DStream_unfinished;
+            endSignal &= BIT_reloadDStreamFast(&bitD4) == BIT_DStream_unfinished;
+        }
+
+        /* check corruption */
+        /* note : should not be necessary : op# advance in lock step, and we control op4.
+         *        but curiously, binary generated by gcc 7.2 & 7.3 with -mbmi2 runs faster when >=1 test is present */
+        if (op1 > opStart2) return ERROR(corruption_detected);
+        if (op2 > opStart3) return ERROR(corruption_detected);
+        if (op3 > opStart4) return ERROR(corruption_detected);
+        /* note : op4 supposed already verified within main loop */
+
+        /* finish bitStreams one by one */
+        HUF_decodeStreamX1(op1, &bitD1, opStart2, dt, dtLog);
+        HUF_decodeStreamX1(op2, &bitD2, opStart3, dt, dtLog);
+        HUF_decodeStreamX1(op3, &bitD3, opStart4, dt, dtLog);
+        HUF_decodeStreamX1(op4, &bitD4, oend,     dt, dtLog);
+
+        /* check */
+        { U32 const endCheck = BIT_endOfDStream(&bitD1) & BIT_endOfDStream(&bitD2) & BIT_endOfDStream(&bitD3) & BIT_endOfDStream(&bitD4);
+          if (!endCheck) return ERROR(corruption_detected); }
+
+        /* decoded size */
+        return dstSize;
+    }
+}
+
+
+typedef size_t (*HUF_decompress_usingDTable_t)(void *dst, size_t dstSize,
+                                               const void *cSrc,
+                                               size_t cSrcSize,
+                                               const HUF_DTable *DTable);
+
+HUF_DGEN(HUF_decompress1X1_usingDTable_internal)
+HUF_DGEN(HUF_decompress4X1_usingDTable_internal)
+
+
+
+size_t HUF_decompress1X1_usingDTable(
+          void* dst,  size_t dstSize,
+    const void* cSrc, size_t cSrcSize,
+    const HUF_DTable* DTable)
+{
+    DTableDesc dtd = HUF_getDTableDesc(DTable);
+    if (dtd.tableType != 0) return ERROR(GENERIC);
+    return HUF_decompress1X1_usingDTable_internal(dst, dstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+}
+
+size_t HUF_decompress1X1_DCtx_wksp(HUF_DTable* DCtx, void* dst, size_t dstSize,
+                                   const void* cSrc, size_t cSrcSize,
+                                   void* workSpace, size_t wkspSize)
+{
+    const BYTE* ip = (const BYTE*) cSrc;
+
+    size_t const hSize = HUF_readDTableX1_wksp(DCtx, cSrc, cSrcSize, workSpace, wkspSize);
+    if (HUF_isError(hSize)) return hSize;
+    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
+    ip += hSize; cSrcSize -= hSize;
+
+    return HUF_decompress1X1_usingDTable_internal(dst, dstSize, ip, cSrcSize, DCtx, /* bmi2 */ 0);
+}
+
+
+size_t HUF_decompress1X1_DCtx(HUF_DTable* DCtx, void* dst, size_t dstSize,
+                              const void* cSrc, size_t cSrcSize)
+{
+    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
+    return HUF_decompress1X1_DCtx_wksp(DCtx, dst, dstSize, cSrc, cSrcSize,
+                                       workSpace, sizeof(workSpace));
+}
+
+size_t HUF_decompress1X1 (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
+{
+    HUF_CREATE_STATIC_DTABLEX1(DTable, HUF_TABLELOG_MAX);
+    return HUF_decompress1X1_DCtx (DTable, dst, dstSize, cSrc, cSrcSize);
+}
+
+size_t HUF_decompress4X1_usingDTable(
+          void* dst,  size_t dstSize,
+    const void* cSrc, size_t cSrcSize,
+    const HUF_DTable* DTable)
+{
+    DTableDesc dtd = HUF_getDTableDesc(DTable);
+    if (dtd.tableType != 0) return ERROR(GENERIC);
+    return HUF_decompress4X1_usingDTable_internal(dst, dstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+}
+
+static size_t HUF_decompress4X1_DCtx_wksp_bmi2(HUF_DTable* dctx, void* dst, size_t dstSize,
+                                   const void* cSrc, size_t cSrcSize,
+                                   void* workSpace, size_t wkspSize, int bmi2)
+{
+    const BYTE* ip = (const BYTE*) cSrc;
+
+    size_t const hSize = HUF_readDTableX1_wksp (dctx, cSrc, cSrcSize,
+                                                workSpace, wkspSize);
+    if (HUF_isError(hSize)) return hSize;
+    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
+    ip += hSize; cSrcSize -= hSize;
+
+    return HUF_decompress4X1_usingDTable_internal(dst, dstSize, ip, cSrcSize, dctx, bmi2);
+}
+
+size_t HUF_decompress4X1_DCtx_wksp(HUF_DTable* dctx, void* dst, size_t dstSize,
+                                   const void* cSrc, size_t cSrcSize,
+                                   void* workSpace, size_t wkspSize)
+{
+    return HUF_decompress4X1_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, 0);
+}
+
+
+size_t HUF_decompress4X1_DCtx (HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
+{
+    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
+    return HUF_decompress4X1_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize,
+                                       workSpace, sizeof(workSpace));
+}
+size_t HUF_decompress4X1 (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
+{
+    HUF_CREATE_STATIC_DTABLEX1(DTable, HUF_TABLELOG_MAX);
+    return HUF_decompress4X1_DCtx(DTable, dst, dstSize, cSrc, cSrcSize);
+}
+
+#endif /* HUF_FORCE_DECOMPRESS_X2 */
+
+
+#ifndef HUF_FORCE_DECOMPRESS_X1
+
+/* *************************/
+/* double-symbols decoding */
+/* *************************/
+
+typedef struct { U16 sequence; BYTE nbBits; BYTE length; } HUF_DEltX2;  /* double-symbols decoding */
+typedef struct { BYTE symbol; BYTE weight; } sortedSymbol_t;
+typedef U32 rankValCol_t[HUF_TABLELOG_MAX + 1];
+typedef rankValCol_t rankVal_t[HUF_TABLELOG_MAX];
+
+
+/* HUF_fillDTableX2Level2() :
+ * `rankValOrigin` must be a table of at least (HUF_TABLELOG_MAX + 1) U32 */
+static void HUF_fillDTableX2Level2(HUF_DEltX2* DTable, U32 sizeLog, const U32 consumed,
+                           const U32* rankValOrigin, const int minWeight,
+                           const sortedSymbol_t* sortedSymbols, const U32 sortedListSize,
+                           U32 nbBitsBaseline, U16 baseSeq)
+{
+    HUF_DEltX2 DElt;
+    U32 rankVal[HUF_TABLELOG_MAX + 1];
+
+    /* get pre-calculated rankVal */
+    memcpy(rankVal, rankValOrigin, sizeof(rankVal));
+
+    /* fill skipped values */
+    if (minWeight>1) {
+        U32 i, skipSize = rankVal[minWeight];
+        MEM_writeLE16(&(DElt.sequence), baseSeq);
+        DElt.nbBits   = (BYTE)(consumed);
+        DElt.length   = 1;
+        for (i = 0; i < skipSize; i++)
+            DTable[i] = DElt;
+    }
+
+    /* fill DTable */
+    {   U32 s; for (s=0; s<sortedListSize; s++) {   /* note : sortedSymbols already skipped */
+            const U32 symbol = sortedSymbols[s].symbol;
+            const U32 weight = sortedSymbols[s].weight;
+            const U32 nbBits = nbBitsBaseline - weight;
+            const U32 length = 1 << (sizeLog-nbBits);
+            const U32 start = rankVal[weight];
+            U32 i = start;
+            const U32 end = start + length;
+
+            MEM_writeLE16(&(DElt.sequence), (U16)(baseSeq + (symbol << 8)));
+            DElt.nbBits = (BYTE)(nbBits + consumed);
+            DElt.length = 2;
+            do { DTable[i++] = DElt; } while (i<end);   /* since length >= 1 */
+
+            rankVal[weight] += length;
+    }   }
+}
+
+
+static void HUF_fillDTableX2(HUF_DEltX2* DTable, const U32 targetLog,
+                           const sortedSymbol_t* sortedList, const U32 sortedListSize,
+                           const U32* rankStart, rankVal_t rankValOrigin, const U32 maxWeight,
+                           const U32 nbBitsBaseline)
+{
+    U32 rankVal[HUF_TABLELOG_MAX + 1];
+    const int scaleLog = nbBitsBaseline - targetLog;   /* note : targetLog >= srcLog, hence scaleLog <= 1 */
+    const U32 minBits  = nbBitsBaseline - maxWeight;
+    U32 s;
+
+    memcpy(rankVal, rankValOrigin, sizeof(rankVal));
+
+    /* fill DTable */
+    for (s=0; s<sortedListSize; s++) {
+        const U16 symbol = sortedList[s].symbol;
+        const U32 weight = sortedList[s].weight;
+        const U32 nbBits = nbBitsBaseline - weight;
+        const U32 start = rankVal[weight];
+        const U32 length = 1 << (targetLog-nbBits);
+
+        if (targetLog-nbBits >= minBits) {   /* enough room for a second symbol */
+            U32 sortedRank;
+            int minWeight = nbBits + scaleLog;
+            if (minWeight < 1) minWeight = 1;
+            sortedRank = rankStart[minWeight];
+            HUF_fillDTableX2Level2(DTable+start, targetLog-nbBits, nbBits,
+                           rankValOrigin[nbBits], minWeight,
+                           sortedList+sortedRank, sortedListSize-sortedRank,
+                           nbBitsBaseline, symbol);
+        } else {
+            HUF_DEltX2 DElt;
+            MEM_writeLE16(&(DElt.sequence), symbol);
+            DElt.nbBits = (BYTE)(nbBits);
+            DElt.length = 1;
+            {   U32 const end = start + length;
+                U32 u;
+                for (u = start; u < end; u++) DTable[u] = DElt;
+        }   }
+        rankVal[weight] += length;
+    }
+}
+
+size_t HUF_readDTableX2_wksp(HUF_DTable* DTable,
+                       const void* src, size_t srcSize,
+                             void* workSpace, size_t wkspSize)
+{
+    U32 tableLog, maxW, sizeOfSort, nbSymbols;
+    DTableDesc dtd = HUF_getDTableDesc(DTable);
+    U32 const maxTableLog = dtd.maxTableLog;
+    size_t iSize;
+    void* dtPtr = DTable+1;   /* force compiler to avoid strict-aliasing */
+    HUF_DEltX2* const dt = (HUF_DEltX2*)dtPtr;
+    U32 *rankStart;
+
+    rankValCol_t* rankVal;
+    U32* rankStats;
+    U32* rankStart0;
+    sortedSymbol_t* sortedSymbol;
+    BYTE* weightList;
+    size_t spaceUsed32 = 0;
+
+    rankVal = (rankValCol_t *)((U32 *)workSpace + spaceUsed32);
+    spaceUsed32 += (sizeof(rankValCol_t) * HUF_TABLELOG_MAX) >> 2;
+    rankStats = (U32 *)workSpace + spaceUsed32;
+    spaceUsed32 += HUF_TABLELOG_MAX + 1;
+    rankStart0 = (U32 *)workSpace + spaceUsed32;
+    spaceUsed32 += HUF_TABLELOG_MAX + 2;
+    sortedSymbol = (sortedSymbol_t *)workSpace + (spaceUsed32 * sizeof(U32)) / sizeof(sortedSymbol_t);
+    spaceUsed32 += HUF_ALIGN(sizeof(sortedSymbol_t) * (HUF_SYMBOLVALUE_MAX + 1), sizeof(U32)) >> 2;
+    weightList = (BYTE *)((U32 *)workSpace + spaceUsed32);
+    spaceUsed32 += HUF_ALIGN(HUF_SYMBOLVALUE_MAX + 1, sizeof(U32)) >> 2;
+
+    if ((spaceUsed32 << 2) > wkspSize) return ERROR(tableLog_tooLarge);
+
+    rankStart = rankStart0 + 1;
+    memset(rankStats, 0, sizeof(U32) * (2 * HUF_TABLELOG_MAX + 2 + 1));
+
+    DEBUG_STATIC_ASSERT(sizeof(HUF_DEltX2) == sizeof(HUF_DTable));   /* if compiler fails here, assertion is wrong */
+    if (maxTableLog > HUF_TABLELOG_MAX) return ERROR(tableLog_tooLarge);
+    /* memset(weightList, 0, sizeof(weightList)); */  /* is not necessary, even though some analyzer complain ... */
+
+    iSize = HUF_readStats(weightList, HUF_SYMBOLVALUE_MAX + 1, rankStats, &nbSymbols, &tableLog, src, srcSize);
+    if (HUF_isError(iSize)) return iSize;
+
+    /* check result */
+    if (tableLog > maxTableLog) return ERROR(tableLog_tooLarge);   /* DTable can't fit code depth */
+
+    /* find maxWeight */
+    for (maxW = tableLog; rankStats[maxW]==0; maxW--) {}  /* necessarily finds a solution before 0 */
+
+    /* Get start index of each weight */
+    {   U32 w, nextRankStart = 0;
+        for (w=1; w<maxW+1; w++) {
+            U32 current = nextRankStart;
+            nextRankStart += rankStats[w];
+            rankStart[w] = current;
+        }
+        rankStart[0] = nextRankStart;   /* put all 0w symbols at the end of sorted list*/
+        sizeOfSort = nextRankStart;
+    }
+
+    /* sort symbols by weight */
+    {   U32 s;
+        for (s=0; s<nbSymbols; s++) {
+            U32 const w = weightList[s];
+            U32 const r = rankStart[w]++;
+            sortedSymbol[r].symbol = (BYTE)s;
+            sortedSymbol[r].weight = (BYTE)w;
+        }
+        rankStart[0] = 0;   /* forget 0w symbols; this is beginning of weight(1) */
+    }
+
+    /* Build rankVal */
+    {   U32* const rankVal0 = rankVal[0];
+        {   int const rescale = (maxTableLog-tableLog) - 1;   /* tableLog <= maxTableLog */
+            U32 nextRankVal = 0;
+            U32 w;
+            for (w=1; w<maxW+1; w++) {
+                U32 current = nextRankVal;
+                nextRankVal += rankStats[w] << (w+rescale);
+                rankVal0[w] = current;
+        }   }
+        {   U32 const minBits = tableLog+1 - maxW;
+            U32 consumed;
+            for (consumed = minBits; consumed < maxTableLog - minBits + 1; consumed++) {
+                U32* const rankValPtr = rankVal[consumed];
+                U32 w;
+                for (w = 1; w < maxW+1; w++) {
+                    rankValPtr[w] = rankVal0[w] >> consumed;
+    }   }   }   }
+
+    HUF_fillDTableX2(dt, maxTableLog,
+                   sortedSymbol, sizeOfSort,
+                   rankStart0, rankVal, maxW,
+                   tableLog+1);
+
+    dtd.tableLog = (BYTE)maxTableLog;
+    dtd.tableType = 1;
+    memcpy(DTable, &dtd, sizeof(dtd));
+    return iSize;
+}
+
+size_t HUF_readDTableX2(HUF_DTable* DTable, const void* src, size_t srcSize)
+{
+  U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
+  return HUF_readDTableX2_wksp(DTable, src, srcSize,
+                               workSpace, sizeof(workSpace));
+}
+
+
+FORCE_INLINE_TEMPLATE U32
+HUF_decodeSymbolX2(void* op, BIT_DStream_t* DStream, const HUF_DEltX2* dt, const U32 dtLog)
+{
+    size_t const val = BIT_lookBitsFast(DStream, dtLog);   /* note : dtLog >= 1 */
+    memcpy(op, dt+val, 2);
+    BIT_skipBits(DStream, dt[val].nbBits);
+    return dt[val].length;
+}
+
+FORCE_INLINE_TEMPLATE U32
+HUF_decodeLastSymbolX2(void* op, BIT_DStream_t* DStream, const HUF_DEltX2* dt, const U32 dtLog)
+{
+    size_t const val = BIT_lookBitsFast(DStream, dtLog);   /* note : dtLog >= 1 */
+    memcpy(op, dt+val, 1);
+    if (dt[val].length==1) BIT_skipBits(DStream, dt[val].nbBits);
+    else {
+        if (DStream->bitsConsumed < (sizeof(DStream->bitContainer)*8)) {
+            BIT_skipBits(DStream, dt[val].nbBits);
+            if (DStream->bitsConsumed > (sizeof(DStream->bitContainer)*8))
+                /* ugly hack; works only because it's the last symbol. Note : can't easily extract nbBits from just this symbol */
+                DStream->bitsConsumed = (sizeof(DStream->bitContainer)*8);
+    }   }
+    return 1;
+}
+
+#define HUF_DECODE_SYMBOLX2_0(ptr, DStreamPtr) \
+    ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
+
+#define HUF_DECODE_SYMBOLX2_1(ptr, DStreamPtr) \
+    if (MEM_64bits() || (HUF_TABLELOG_MAX<=12)) \
+        ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
+
+#define HUF_DECODE_SYMBOLX2_2(ptr, DStreamPtr) \
+    if (MEM_64bits()) \
+        ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
+
+HINT_INLINE size_t
+HUF_decodeStreamX2(BYTE* p, BIT_DStream_t* bitDPtr, BYTE* const pEnd,
+                const HUF_DEltX2* const dt, const U32 dtLog)
+{
+    BYTE* const pStart = p;
+
+    /* up to 8 symbols at a time */
+    while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd-(sizeof(bitDPtr->bitContainer)-1))) {
+        HUF_DECODE_SYMBOLX2_2(p, bitDPtr);
+        HUF_DECODE_SYMBOLX2_1(p, bitDPtr);
+        HUF_DECODE_SYMBOLX2_2(p, bitDPtr);
+        HUF_DECODE_SYMBOLX2_0(p, bitDPtr);
+    }
+
+    /* closer to end : up to 2 symbols at a time */
+    while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p <= pEnd-2))
+        HUF_DECODE_SYMBOLX2_0(p, bitDPtr);
+
+    while (p <= pEnd-2)
+        HUF_DECODE_SYMBOLX2_0(p, bitDPtr);   /* no need to reload : reached the end of DStream */
+
+    if (p < pEnd)
+        p += HUF_decodeLastSymbolX2(p, bitDPtr, dt, dtLog);
+
+    return p-pStart;
+}
+
+FORCE_INLINE_TEMPLATE size_t
+HUF_decompress1X2_usingDTable_internal_body(
+          void* dst,  size_t dstSize,
+    const void* cSrc, size_t cSrcSize,
+    const HUF_DTable* DTable)
+{
+    BIT_DStream_t bitD;
+
+    /* Init */
+    CHECK_F( BIT_initDStream(&bitD, cSrc, cSrcSize) );
+
+    /* decode */
+    {   BYTE* const ostart = (BYTE*) dst;
+        BYTE* const oend = ostart + dstSize;
+        const void* const dtPtr = DTable+1;   /* force compiler to not use strict-aliasing */
+        const HUF_DEltX2* const dt = (const HUF_DEltX2*)dtPtr;
+        DTableDesc const dtd = HUF_getDTableDesc(DTable);
+        HUF_decodeStreamX2(ostart, &bitD, oend, dt, dtd.tableLog);
+    }
+
+    /* check */
+    if (!BIT_endOfDStream(&bitD)) return ERROR(corruption_detected);
+
+    /* decoded size */
+    return dstSize;
+}
+
+FORCE_INLINE_TEMPLATE size_t
+HUF_decompress4X2_usingDTable_internal_body(
+          void* dst,  size_t dstSize,
+    const void* cSrc, size_t cSrcSize,
+    const HUF_DTable* DTable)
+{
+    if (cSrcSize < 10) return ERROR(corruption_detected);   /* strict minimum : jump table + 1 byte per stream */
+
+    {   const BYTE* const istart = (const BYTE*) cSrc;
+        BYTE* const ostart = (BYTE*) dst;
+        BYTE* const oend = ostart + dstSize;
+        BYTE* const olimit = oend - (sizeof(size_t)-1);
+        const void* const dtPtr = DTable+1;
+        const HUF_DEltX2* const dt = (const HUF_DEltX2*)dtPtr;
+
+        /* Init */
+        BIT_DStream_t bitD1;
+        BIT_DStream_t bitD2;
+        BIT_DStream_t bitD3;
+        BIT_DStream_t bitD4;
+        size_t const length1 = MEM_readLE16(istart);
+        size_t const length2 = MEM_readLE16(istart+2);
+        size_t const length3 = MEM_readLE16(istart+4);
+        size_t const length4 = cSrcSize - (length1 + length2 + length3 + 6);
+        const BYTE* const istart1 = istart + 6;  /* jumpTable */
+        const BYTE* const istart2 = istart1 + length1;
+        const BYTE* const istart3 = istart2 + length2;
+        const BYTE* const istart4 = istart3 + length3;
+        size_t const segmentSize = (dstSize+3) / 4;
+        BYTE* const opStart2 = ostart + segmentSize;
+        BYTE* const opStart3 = opStart2 + segmentSize;
+        BYTE* const opStart4 = opStart3 + segmentSize;
+        BYTE* op1 = ostart;
+        BYTE* op2 = opStart2;
+        BYTE* op3 = opStart3;
+        BYTE* op4 = opStart4;
+        U32 endSignal = 1;
+        DTableDesc const dtd = HUF_getDTableDesc(DTable);
+        U32 const dtLog = dtd.tableLog;
+
+        if (length4 > cSrcSize) return ERROR(corruption_detected);   /* overflow */
+        CHECK_F( BIT_initDStream(&bitD1, istart1, length1) );
+        CHECK_F( BIT_initDStream(&bitD2, istart2, length2) );
+        CHECK_F( BIT_initDStream(&bitD3, istart3, length3) );
+        CHECK_F( BIT_initDStream(&bitD4, istart4, length4) );
+
+        /* 16-32 symbols per loop (4-8 symbols per stream) */
+        for ( ; (endSignal) & (op4 < olimit); ) {
+#if defined(__clang__) && (defined(__x86_64__) || defined(__i386__))
+            HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
+            HUF_DECODE_SYMBOLX2_1(op1, &bitD1);
+            HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
+            HUF_DECODE_SYMBOLX2_0(op1, &bitD1);
+            HUF_DECODE_SYMBOLX2_2(op2, &bitD2);
+            HUF_DECODE_SYMBOLX2_1(op2, &bitD2);
+            HUF_DECODE_SYMBOLX2_2(op2, &bitD2);
+            HUF_DECODE_SYMBOLX2_0(op2, &bitD2);
+            endSignal &= BIT_reloadDStreamFast(&bitD1) == BIT_DStream_unfinished;
+            endSignal &= BIT_reloadDStreamFast(&bitD2) == BIT_DStream_unfinished;
+            HUF_DECODE_SYMBOLX2_2(op3, &bitD3);
+            HUF_DECODE_SYMBOLX2_1(op3, &bitD3);
+            HUF_DECODE_SYMBOLX2_2(op3, &bitD3);
+            HUF_DECODE_SYMBOLX2_0(op3, &bitD3);
+            HUF_DECODE_SYMBOLX2_2(op4, &bitD4);
+            HUF_DECODE_SYMBOLX2_1(op4, &bitD4);
+            HUF_DECODE_SYMBOLX2_2(op4, &bitD4);
+            HUF_DECODE_SYMBOLX2_0(op4, &bitD4);
+            endSignal &= BIT_reloadDStreamFast(&bitD3) == BIT_DStream_unfinished;
+            endSignal &= BIT_reloadDStreamFast(&bitD4) == BIT_DStream_unfinished;
+#else
+            HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
+            HUF_DECODE_SYMBOLX2_2(op2, &bitD2);
+            HUF_DECODE_SYMBOLX2_2(op3, &bitD3);
+            HUF_DECODE_SYMBOLX2_2(op4, &bitD4);
+            HUF_DECODE_SYMBOLX2_1(op1, &bitD1);
+            HUF_DECODE_SYMBOLX2_1(op2, &bitD2);
+            HUF_DECODE_SYMBOLX2_1(op3, &bitD3);
+            HUF_DECODE_SYMBOLX2_1(op4, &bitD4);
+            HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
+            HUF_DECODE_SYMBOLX2_2(op2, &bitD2);
+            HUF_DECODE_SYMBOLX2_2(op3, &bitD3);
+            HUF_DECODE_SYMBOLX2_2(op4, &bitD4);
+            HUF_DECODE_SYMBOLX2_0(op1, &bitD1);
+            HUF_DECODE_SYMBOLX2_0(op2, &bitD2);
+            HUF_DECODE_SYMBOLX2_0(op3, &bitD3);
+            HUF_DECODE_SYMBOLX2_0(op4, &bitD4);
+            endSignal = (U32)LIKELY(
+                        (BIT_reloadDStreamFast(&bitD1) == BIT_DStream_unfinished)
+                      & (BIT_reloadDStreamFast(&bitD2) == BIT_DStream_unfinished)
+                      & (BIT_reloadDStreamFast(&bitD3) == BIT_DStream_unfinished)
+                      & (BIT_reloadDStreamFast(&bitD4) == BIT_DStream_unfinished));
+#endif
+        }
+
+        /* check corruption */
+        if (op1 > opStart2) return ERROR(corruption_detected);
+        if (op2 > opStart3) return ERROR(corruption_detected);
+        if (op3 > opStart4) return ERROR(corruption_detected);
+        /* note : op4 already verified within main loop */
+
+        /* finish bitStreams one by one */
+        HUF_decodeStreamX2(op1, &bitD1, opStart2, dt, dtLog);
+        HUF_decodeStreamX2(op2, &bitD2, opStart3, dt, dtLog);
+        HUF_decodeStreamX2(op3, &bitD3, opStart4, dt, dtLog);
+        HUF_decodeStreamX2(op4, &bitD4, oend,     dt, dtLog);
+
+        /* check */
+        { U32 const endCheck = BIT_endOfDStream(&bitD1) & BIT_endOfDStream(&bitD2) & BIT_endOfDStream(&bitD3) & BIT_endOfDStream(&bitD4);
+          if (!endCheck) return ERROR(corruption_detected); }
+
+        /* decoded size */
+        return dstSize;
+    }
+}
+
+HUF_DGEN(HUF_decompress1X2_usingDTable_internal)
+HUF_DGEN(HUF_decompress4X2_usingDTable_internal)
+
+size_t HUF_decompress1X2_usingDTable(
+          void* dst,  size_t dstSize,
+    const void* cSrc, size_t cSrcSize,
+    const HUF_DTable* DTable)
+{
+    DTableDesc dtd = HUF_getDTableDesc(DTable);
+    if (dtd.tableType != 1) return ERROR(GENERIC);
+    return HUF_decompress1X2_usingDTable_internal(dst, dstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+}
+
+size_t HUF_decompress1X2_DCtx_wksp(HUF_DTable* DCtx, void* dst, size_t dstSize,
+                                   const void* cSrc, size_t cSrcSize,
+                                   void* workSpace, size_t wkspSize)
+{
+    const BYTE* ip = (const BYTE*) cSrc;
+
+    size_t const hSize = HUF_readDTableX2_wksp(DCtx, cSrc, cSrcSize,
+                                               workSpace, wkspSize);
+    if (HUF_isError(hSize)) return hSize;
+    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
+    ip += hSize; cSrcSize -= hSize;
+
+    return HUF_decompress1X2_usingDTable_internal(dst, dstSize, ip, cSrcSize, DCtx, /* bmi2 */ 0);
+}
+
+
+size_t HUF_decompress1X2_DCtx(HUF_DTable* DCtx, void* dst, size_t dstSize,
+                              const void* cSrc, size_t cSrcSize)
+{
+    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
+    return HUF_decompress1X2_DCtx_wksp(DCtx, dst, dstSize, cSrc, cSrcSize,
+                                       workSpace, sizeof(workSpace));
+}
+
+size_t HUF_decompress1X2 (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
+{
+    HUF_CREATE_STATIC_DTABLEX2(DTable, HUF_TABLELOG_MAX);
+    return HUF_decompress1X2_DCtx(DTable, dst, dstSize, cSrc, cSrcSize);
+}
+
+size_t HUF_decompress4X2_usingDTable(
+          void* dst,  size_t dstSize,
+    const void* cSrc, size_t cSrcSize,
+    const HUF_DTable* DTable)
+{
+    DTableDesc dtd = HUF_getDTableDesc(DTable);
+    if (dtd.tableType != 1) return ERROR(GENERIC);
+    return HUF_decompress4X2_usingDTable_internal(dst, dstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+}
+
+static size_t HUF_decompress4X2_DCtx_wksp_bmi2(HUF_DTable* dctx, void* dst, size_t dstSize,
+                                   const void* cSrc, size_t cSrcSize,
+                                   void* workSpace, size_t wkspSize, int bmi2)
+{
+    const BYTE* ip = (const BYTE*) cSrc;
+
+    size_t hSize = HUF_readDTableX2_wksp(dctx, cSrc, cSrcSize,
+                                         workSpace, wkspSize);
+    if (HUF_isError(hSize)) return hSize;
+    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
+    ip += hSize; cSrcSize -= hSize;
+
+    return HUF_decompress4X2_usingDTable_internal(dst, dstSize, ip, cSrcSize, dctx, bmi2);
+}
+
+size_t HUF_decompress4X2_DCtx_wksp(HUF_DTable* dctx, void* dst, size_t dstSize,
+                                   const void* cSrc, size_t cSrcSize,
+                                   void* workSpace, size_t wkspSize)
+{
+    return HUF_decompress4X2_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, /* bmi2 */ 0);
+}
+
+
+size_t HUF_decompress4X2_DCtx(HUF_DTable* dctx, void* dst, size_t dstSize,
+                              const void* cSrc, size_t cSrcSize)
+{
+    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
+    return HUF_decompress4X2_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize,
+                                       workSpace, sizeof(workSpace));
+}
+
+size_t HUF_decompress4X2 (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
+{
+    HUF_CREATE_STATIC_DTABLEX2(DTable, HUF_TABLELOG_MAX);
+    return HUF_decompress4X2_DCtx(DTable, dst, dstSize, cSrc, cSrcSize);
+}
+
+#endif /* HUF_FORCE_DECOMPRESS_X1 */
+
+
+/* ***********************************/
+/* Universal decompression selectors */
+/* ***********************************/
+
+size_t HUF_decompress1X_usingDTable(void* dst, size_t maxDstSize,
+                                    const void* cSrc, size_t cSrcSize,
+                                    const HUF_DTable* DTable)
+{
+    DTableDesc const dtd = HUF_getDTableDesc(DTable);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+    (void)dtd;
+    assert(dtd.tableType == 0);
+    return HUF_decompress1X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+    (void)dtd;
+    assert(dtd.tableType == 1);
+    return HUF_decompress1X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+#else
+    return dtd.tableType ? HUF_decompress1X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0) :
+                           HUF_decompress1X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+#endif
+}
+
+size_t HUF_decompress4X_usingDTable(void* dst, size_t maxDstSize,
+                                    const void* cSrc, size_t cSrcSize,
+                                    const HUF_DTable* DTable)
+{
+    DTableDesc const dtd = HUF_getDTableDesc(DTable);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+    (void)dtd;
+    assert(dtd.tableType == 0);
+    return HUF_decompress4X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+    (void)dtd;
+    assert(dtd.tableType == 1);
+    return HUF_decompress4X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+#else
+    return dtd.tableType ? HUF_decompress4X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0) :
+                           HUF_decompress4X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, /* bmi2 */ 0);
+#endif
+}
+
+
+#if !defined(HUF_FORCE_DECOMPRESS_X1) && !defined(HUF_FORCE_DECOMPRESS_X2)
+typedef struct { U32 tableTime; U32 decode256Time; } algo_time_t;
+static const algo_time_t algoTime[16 /* Quantization */][3 /* single, double, quad */] =
+{
+    /* single, double, quad */
+    {{0,0}, {1,1}, {2,2}},  /* Q==0 : impossible */
+    {{0,0}, {1,1}, {2,2}},  /* Q==1 : impossible */
+    {{  38,130}, {1313, 74}, {2151, 38}},   /* Q == 2 : 12-18% */
+    {{ 448,128}, {1353, 74}, {2238, 41}},   /* Q == 3 : 18-25% */
+    {{ 556,128}, {1353, 74}, {2238, 47}},   /* Q == 4 : 25-32% */
+    {{ 714,128}, {1418, 74}, {2436, 53}},   /* Q == 5 : 32-38% */
+    {{ 883,128}, {1437, 74}, {2464, 61}},   /* Q == 6 : 38-44% */
+    {{ 897,128}, {1515, 75}, {2622, 68}},   /* Q == 7 : 44-50% */
+    {{ 926,128}, {1613, 75}, {2730, 75}},   /* Q == 8 : 50-56% */
+    {{ 947,128}, {1729, 77}, {3359, 77}},   /* Q == 9 : 56-62% */
+    {{1107,128}, {2083, 81}, {4006, 84}},   /* Q ==10 : 62-69% */
+    {{1177,128}, {2379, 87}, {4785, 88}},   /* Q ==11 : 69-75% */
+    {{1242,128}, {2415, 93}, {5155, 84}},   /* Q ==12 : 75-81% */
+    {{1349,128}, {2644,106}, {5260,106}},   /* Q ==13 : 81-87% */
+    {{1455,128}, {2422,124}, {4174,124}},   /* Q ==14 : 87-93% */
+    {{ 722,128}, {1891,145}, {1936,146}},   /* Q ==15 : 93-99% */
+};
+#endif
+
+/** HUF_selectDecoder() :
+ *  Tells which decoder is likely to decode faster,
+ *  based on a set of pre-computed metrics.
+ * @return : 0==HUF_decompress4X1, 1==HUF_decompress4X2 .
+ *  Assumption : 0 < dstSize <= 128 KB */
+U32 HUF_selectDecoder (size_t dstSize, size_t cSrcSize)
+{
+    assert(dstSize > 0);
+    assert(dstSize <= 128*1024);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+    (void)dstSize;
+    (void)cSrcSize;
+    return 0;
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+    (void)dstSize;
+    (void)cSrcSize;
+    return 1;
+#else
+    /* decoder timing evaluation */
+    {   U32 const Q = (cSrcSize >= dstSize) ? 15 : (U32)(cSrcSize * 16 / dstSize);   /* Q < 16 */
+        U32 const D256 = (U32)(dstSize >> 8);
+        U32 const DTime0 = algoTime[Q][0].tableTime + (algoTime[Q][0].decode256Time * D256);
+        U32 DTime1 = algoTime[Q][1].tableTime + (algoTime[Q][1].decode256Time * D256);
+        DTime1 += DTime1 >> 3;  /* advantage to algorithm using less memory, to reduce cache eviction */
+        return DTime1 < DTime0;
+    }
+#endif
+}
+
+
+typedef size_t (*decompressionAlgo)(void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize);
+
+size_t HUF_decompress (void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
+{
+#if !defined(HUF_FORCE_DECOMPRESS_X1) && !defined(HUF_FORCE_DECOMPRESS_X2)
+    static const decompressionAlgo decompress[2] = { HUF_decompress4X1, HUF_decompress4X2 };
+#endif
+
+    /* validation checks */
+    if (dstSize == 0) return ERROR(dstSize_tooSmall);
+    if (cSrcSize > dstSize) return ERROR(corruption_detected);   /* invalid */
+    if (cSrcSize == dstSize) { memcpy(dst, cSrc, dstSize); return dstSize; }   /* not compressed */
+    if (cSrcSize == 1) { memset(dst, *(const BYTE*)cSrc, dstSize); return dstSize; }   /* RLE */
+
+    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+        (void)algoNb;
+        assert(algoNb == 0);
+        return HUF_decompress4X1(dst, dstSize, cSrc, cSrcSize);
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+        (void)algoNb;
+        assert(algoNb == 1);
+        return HUF_decompress4X2(dst, dstSize, cSrc, cSrcSize);
+#else
+        return decompress[algoNb](dst, dstSize, cSrc, cSrcSize);
+#endif
+    }
+}
+
+size_t HUF_decompress4X_DCtx (HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
+{
+    /* validation checks */
+    if (dstSize == 0) return ERROR(dstSize_tooSmall);
+    if (cSrcSize > dstSize) return ERROR(corruption_detected);   /* invalid */
+    if (cSrcSize == dstSize) { memcpy(dst, cSrc, dstSize); return dstSize; }   /* not compressed */
+    if (cSrcSize == 1) { memset(dst, *(const BYTE*)cSrc, dstSize); return dstSize; }   /* RLE */
+
+    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+        (void)algoNb;
+        assert(algoNb == 0);
+        return HUF_decompress4X1_DCtx(dctx, dst, dstSize, cSrc, cSrcSize);
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+        (void)algoNb;
+        assert(algoNb == 1);
+        return HUF_decompress4X2_DCtx(dctx, dst, dstSize, cSrc, cSrcSize);
+#else
+        return algoNb ? HUF_decompress4X2_DCtx(dctx, dst, dstSize, cSrc, cSrcSize) :
+                        HUF_decompress4X1_DCtx(dctx, dst, dstSize, cSrc, cSrcSize) ;
+#endif
+    }
+}
+
+size_t HUF_decompress4X_hufOnly(HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize)
+{
+    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
+    return HUF_decompress4X_hufOnly_wksp(dctx, dst, dstSize, cSrc, cSrcSize,
+                                         workSpace, sizeof(workSpace));
+}
+
+
+size_t HUF_decompress4X_hufOnly_wksp(HUF_DTable* dctx, void* dst,
+                                     size_t dstSize, const void* cSrc,
+                                     size_t cSrcSize, void* workSpace,
+                                     size_t wkspSize)
+{
+    /* validation checks */
+    if (dstSize == 0) return ERROR(dstSize_tooSmall);
+    if (cSrcSize == 0) return ERROR(corruption_detected);
+
+    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+        (void)algoNb;
+        assert(algoNb == 0);
+        return HUF_decompress4X1_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize);
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+        (void)algoNb;
+        assert(algoNb == 1);
+        return HUF_decompress4X2_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize);
+#else
+        return algoNb ? HUF_decompress4X2_DCtx_wksp(dctx, dst, dstSize, cSrc,
+                            cSrcSize, workSpace, wkspSize):
+                        HUF_decompress4X1_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize);
+#endif
+    }
+}
+
+size_t HUF_decompress1X_DCtx_wksp(HUF_DTable* dctx, void* dst, size_t dstSize,
+                                  const void* cSrc, size_t cSrcSize,
+                                  void* workSpace, size_t wkspSize)
+{
+    /* validation checks */
+    if (dstSize == 0) return ERROR(dstSize_tooSmall);
+    if (cSrcSize > dstSize) return ERROR(corruption_detected);   /* invalid */
+    if (cSrcSize == dstSize) { memcpy(dst, cSrc, dstSize); return dstSize; }   /* not compressed */
+    if (cSrcSize == 1) { memset(dst, *(const BYTE*)cSrc, dstSize); return dstSize; }   /* RLE */
+
+    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+        (void)algoNb;
+        assert(algoNb == 0);
+        return HUF_decompress1X1_DCtx_wksp(dctx, dst, dstSize, cSrc,
+                                cSrcSize, workSpace, wkspSize);
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+        (void)algoNb;
+        assert(algoNb == 1);
+        return HUF_decompress1X2_DCtx_wksp(dctx, dst, dstSize, cSrc,
+                                cSrcSize, workSpace, wkspSize);
+#else
+        return algoNb ? HUF_decompress1X2_DCtx_wksp(dctx, dst, dstSize, cSrc,
+                                cSrcSize, workSpace, wkspSize):
+                        HUF_decompress1X1_DCtx_wksp(dctx, dst, dstSize, cSrc,
+                                cSrcSize, workSpace, wkspSize);
+#endif
+    }
+}
+
+size_t HUF_decompress1X_DCtx(HUF_DTable* dctx, void* dst, size_t dstSize,
+                             const void* cSrc, size_t cSrcSize)
+{
+    U32 workSpace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];
+    return HUF_decompress1X_DCtx_wksp(dctx, dst, dstSize, cSrc, cSrcSize,
+                                      workSpace, sizeof(workSpace));
+}
+
+
+size_t HUF_decompress1X_usingDTable_bmi2(void* dst, size_t maxDstSize, const void* cSrc, size_t cSrcSize, const HUF_DTable* DTable, int bmi2)
+{
+    DTableDesc const dtd = HUF_getDTableDesc(DTable);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+    (void)dtd;
+    assert(dtd.tableType == 0);
+    return HUF_decompress1X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+    (void)dtd;
+    assert(dtd.tableType == 1);
+    return HUF_decompress1X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
+#else
+    return dtd.tableType ? HUF_decompress1X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2) :
+                           HUF_decompress1X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
+#endif
+}
+
+#ifndef HUF_FORCE_DECOMPRESS_X2
+size_t HUF_decompress1X1_DCtx_wksp_bmi2(HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize, void* workSpace, size_t wkspSize, int bmi2)
+{
+    const BYTE* ip = (const BYTE*) cSrc;
+
+    size_t const hSize = HUF_readDTableX1_wksp(dctx, cSrc, cSrcSize, workSpace, wkspSize);
+    if (HUF_isError(hSize)) return hSize;
+    if (hSize >= cSrcSize) return ERROR(srcSize_wrong);
+    ip += hSize; cSrcSize -= hSize;
+
+    return HUF_decompress1X1_usingDTable_internal(dst, dstSize, ip, cSrcSize, dctx, bmi2);
+}
+#endif
+
+size_t HUF_decompress4X_usingDTable_bmi2(void* dst, size_t maxDstSize, const void* cSrc, size_t cSrcSize, const HUF_DTable* DTable, int bmi2)
+{
+    DTableDesc const dtd = HUF_getDTableDesc(DTable);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+    (void)dtd;
+    assert(dtd.tableType == 0);
+    return HUF_decompress4X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+    (void)dtd;
+    assert(dtd.tableType == 1);
+    return HUF_decompress4X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
+#else
+    return dtd.tableType ? HUF_decompress4X2_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2) :
+                           HUF_decompress4X1_usingDTable_internal(dst, maxDstSize, cSrc, cSrcSize, DTable, bmi2);
+#endif
+}
+
+size_t HUF_decompress4X_hufOnly_wksp_bmi2(HUF_DTable* dctx, void* dst, size_t dstSize, const void* cSrc, size_t cSrcSize, void* workSpace, size_t wkspSize, int bmi2)
+{
+    /* validation checks */
+    if (dstSize == 0) return ERROR(dstSize_tooSmall);
+    if (cSrcSize == 0) return ERROR(corruption_detected);
+
+    {   U32 const algoNb = HUF_selectDecoder(dstSize, cSrcSize);
+#if defined(HUF_FORCE_DECOMPRESS_X1)
+        (void)algoNb;
+        assert(algoNb == 0);
+        return HUF_decompress4X1_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, bmi2);
+#elif defined(HUF_FORCE_DECOMPRESS_X2)
+        (void)algoNb;
+        assert(algoNb == 1);
+        return HUF_decompress4X2_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, bmi2);
+#else
+        return algoNb ? HUF_decompress4X2_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, bmi2) :
+                        HUF_decompress4X1_DCtx_wksp_bmi2(dctx, dst, dstSize, cSrc, cSrcSize, workSpace, wkspSize, bmi2);
+#endif
+    }
 }
 
 }
@@ -42240,7 +40516,7 @@ size_t HUF_readStats(BYTE* huffWeight, size_t hwSize, U32* rankStats,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
 /*
@@ -42253,52 +40529,469 @@ size_t HUF_readStats(BYTE* huffWeight, size_t hwSize, U32* rankStats,
  * You may select, at your option, one of the above-listed licenses.
  */
 
-/* The purpose of this file is to have a single list of error strings embedded in binary */
+/* zstd_ddict.c :
+ * concentrates all logic that needs to know the internals of ZSTD_DDict object */
+
+/*-*******************************************************
+*  Dependencies
+*********************************************************/
+#include <string.h>      /* memcpy, memmove, memset */
+         /* low level memory routines */
 
 
+
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+/*
+ * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+ */
+
+
+/* zstd_decompress_internal:
+ * objects and definitions shared within lib/decompress modules */
+
+ #ifndef ZSTD_DECOMPRESS_INTERNAL_H
+ #define ZSTD_DECOMPRESS_INTERNAL_H
+
+
+/*-*******************************************************
+ *  Dependencies
+ *********************************************************/
+             /* BYTE, U16, U32 */
+   /* ZSTD_seqSymbol */
 
 namespace duckdb_zstd {
 
-const char* ERR_getErrorString(ERR_enum code)
+/*-*******************************************************
+ *  Constants
+ *********************************************************/
+struct ZSTDConstants {
+    static const U32 LL_base[MaxLL+1];
+    static const U32 OF_base[MaxOff+1];
+    static const U32 OF_bits[MaxOff+1];
+    static const U32 ML_base[MaxML+1];
+};
+
+
+/*-*******************************************************
+ *  Decompression types
+ *********************************************************/
+ typedef struct {
+     U32 fastMode;
+     U32 tableLog;
+ } ZSTD_seqSymbol_header;
+
+ typedef struct {
+     U16  nextState;
+     BYTE nbAdditionalBits;
+     BYTE nbBits;
+     U32  baseValue;
+ } ZSTD_seqSymbol;
+
+ #define SEQSYMBOL_TABLE_SIZE(log)   (1 + (1 << (log)))
+
+typedef struct {
+    ZSTD_seqSymbol LLTable[SEQSYMBOL_TABLE_SIZE(LLFSELog)];    /* Note : Space reserved for FSE Tables */
+    ZSTD_seqSymbol OFTable[SEQSYMBOL_TABLE_SIZE(OffFSELog)];   /* is also used as temporary workspace while building hufTable during DDict creation */
+    ZSTD_seqSymbol MLTable[SEQSYMBOL_TABLE_SIZE(MLFSELog)];    /* and therefore must be at least HUF_DECOMPRESS_WORKSPACE_SIZE large */
+    HUF_DTable hufTable[HUF_DTABLE_SIZE(HufLog)];  /* can accommodate HUF_decompress4X */
+    U32 rep[ZSTD_REP_NUM];
+} ZSTD_entropyDTables_t;
+
+typedef enum { ZSTDds_getFrameHeaderSize, ZSTDds_decodeFrameHeader,
+               ZSTDds_decodeBlockHeader, ZSTDds_decompressBlock,
+               ZSTDds_decompressLastBlock, ZSTDds_checkChecksum,
+               ZSTDds_decodeSkippableHeader, ZSTDds_skipFrame } ZSTD_dStage;
+
+typedef enum { zdss_init=0, zdss_loadHeader,
+               zdss_read, zdss_load, zdss_flush } ZSTD_dStreamStage;
+
+typedef enum {
+    ZSTD_use_indefinitely = -1,  /* Use the dictionary indefinitely */
+    ZSTD_dont_use = 0,           /* Do not use the dictionary (if one exists free it) */
+    ZSTD_use_once = 1            /* Use the dictionary once and set to ZSTD_dont_use */
+} ZSTD_dictUses_e;
+
+typedef enum {
+    ZSTD_obm_buffered = 0,  /* Buffer the output */
+    ZSTD_obm_stable = 1     /* ZSTD_outBuffer is stable */
+} ZSTD_outBufferMode_e;
+
+struct ZSTD_DCtx_s
 {
-#ifdef ZSTD_STRIP_ERROR_STRINGS
-    (void)code;
-    return "Error strings stripped";
-#else
-    static const char* const notErrorCode = "Unspecified error code";
-    switch( code )
-    {
-    case PREFIX(no_error): return "No error detected";
-    case PREFIX(GENERIC):  return "Error (generic)";
-    case PREFIX(prefix_unknown): return "Unknown frame descriptor";
-    case PREFIX(version_unsupported): return "Version not supported";
-    case PREFIX(frameParameter_unsupported): return "Unsupported frame parameter";
-    case PREFIX(frameParameter_windowTooLarge): return "Frame requires too much memory for decoding";
-    case PREFIX(corruption_detected): return "Corrupted block detected";
-    case PREFIX(checksum_wrong): return "Restored data doesn't match checksum";
-    case PREFIX(parameter_unsupported): return "Unsupported parameter";
-    case PREFIX(parameter_outOfBound): return "Parameter is out of bound";
-    case PREFIX(init_missing): return "Context should be init first";
-    case PREFIX(memory_allocation): return "Allocation error : not enough memory";
-    case PREFIX(workSpace_tooSmall): return "workSpace buffer is not large enough";
-    case PREFIX(stage_wrong): return "Operation not authorized at current processing stage";
-    case PREFIX(tableLog_tooLarge): return "tableLog requires too much memory : unsupported";
-    case PREFIX(maxSymbolValue_tooLarge): return "Unsupported max Symbol Value : too large";
-    case PREFIX(maxSymbolValue_tooSmall): return "Specified maxSymbolValue is too small";
-    case PREFIX(dictionary_corrupted): return "Dictionary is corrupted";
-    case PREFIX(dictionary_wrong): return "Dictionary mismatch";
-    case PREFIX(dictionaryCreation_failed): return "Cannot create Dictionary from provided samples";
-    case PREFIX(dstSize_tooSmall): return "Destination buffer is too small";
-    case PREFIX(srcSize_wrong): return "Src size is incorrect";
-    case PREFIX(dstBuffer_null): return "Operation on NULL destination buffer";
-        /* following error codes are not stable and may be removed or changed in a future version */
-    case PREFIX(frameIndex_tooLarge): return "Frame index is too large";
-    case PREFIX(seekableIO): return "An I/O error occurred when reading/seeking";
-    case PREFIX(dstBuffer_wrong): return "Destination buffer is wrong";
-    case PREFIX(maxCode):
-    default: return notErrorCode;
-    }
+    const ZSTD_seqSymbol* LLTptr;
+    const ZSTD_seqSymbol* MLTptr;
+    const ZSTD_seqSymbol* OFTptr;
+    const HUF_DTable* HUFptr;
+    ZSTD_entropyDTables_t entropy;
+    U32 workspace[HUF_DECOMPRESS_WORKSPACE_SIZE_U32];   /* space needed when building huffman tables */
+    const void* previousDstEnd;   /* detect continuity */
+    const void* prefixStart;      /* start of current segment */
+    const void* virtualStart;     /* virtual start of previous segment if it was just before current one */
+    const void* dictEnd;          /* end of previous segment */
+    size_t expected;
+    ZSTD_frameHeader fParams;
+    U64 decodedSize;
+    blockType_e bType;            /* used in ZSTD_decompressContinue(), store blockType between block header decoding and block decompression stages */
+    ZSTD_dStage stage;
+    U32 litEntropy;
+    U32 fseEntropy;
+    XXH64_state_t xxhState;
+    size_t headerSize;
+    ZSTD_format_e format;
+    const BYTE* litPtr;
+    ZSTD_customMem customMem;
+    size_t litSize;
+    size_t rleSize;
+    size_t staticSize;
+    int bmi2;                     /* == 1 if the CPU supports BMI2 and 0 otherwise. CPU support is determined dynamically once per context lifetime. */
+
+    /* dictionary */
+    ZSTD_DDict* ddictLocal;
+    const ZSTD_DDict* ddict;     /* set by ZSTD_initDStream_usingDDict(), or ZSTD_DCtx_refDDict() */
+    U32 dictID;
+    int ddictIsCold;             /* if == 1 : dictionary is "new" for working context, and presumed "cold" (not in cpu cache) */
+    ZSTD_dictUses_e dictUses;
+
+    /* streaming */
+    ZSTD_dStreamStage streamStage;
+    char*  inBuff;
+    size_t inBuffSize;
+    size_t inPos;
+    size_t maxWindowSize;
+    char*  outBuff;
+    size_t outBuffSize;
+    size_t outStart;
+    size_t outEnd;
+    size_t lhSize;
+    void* legacyContext;
+    U32 previousLegacyVersion;
+    U32 legacyVersion;
+    U32 hostageByte;
+    int noForwardProgress;
+    ZSTD_outBufferMode_e outBufferMode;
+    ZSTD_outBuffer expectedOutBuffer;
+
+    /* workspace */
+    BYTE litBuffer[ZSTD_BLOCKSIZE_MAX + WILDCOPY_OVERLENGTH];
+    BYTE headerBuffer[ZSTD_FRAMEHEADERSIZE_MAX];
+
+    size_t oversizedDuration;
+
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    void const* dictContentBeginForFuzzing;
+    void const* dictContentEndForFuzzing;
 #endif
+};  /* typedef'd to ZSTD_DCtx within "zstd.h" */
+
+
+/*-*******************************************************
+ *  Shared internal functions
+ *********************************************************/
+
+/*! ZSTD_loadDEntropy() :
+ *  dict : must point at beginning of a valid zstd dictionary.
+ * @return : size of dictionary header (size of magic number + dict ID + entropy tables) */
+size_t ZSTD_loadDEntropy(ZSTD_entropyDTables_t* entropy,
+                   const void* const dict, size_t const dictSize);
+
+/*! ZSTD_checkContinuity() :
+ *  check if next `dst` follows previous position, where decompression ended.
+ *  If yes, do nothing (continue on current segment).
+ *  If not, classify previous segment as "external dictionary", and start a new segment.
+ *  This function cannot fail. */
+void ZSTD_checkContinuity(ZSTD_DCtx* dctx, const void* dst);
+
+}
+
+#endif /* ZSTD_DECOMPRESS_INTERNAL_H */
+
+
+// LICENSE_CHANGE_END
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+/*
+ * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+ */
+
+
+#ifndef ZSTD_DDICT_H
+#define ZSTD_DDICT_H
+
+/*-*******************************************************
+ *  Dependencies
+ *********************************************************/
+#include <stddef.h>   /* size_t */
+     /* ZSTD_DDict, and several public functions */
+
+namespace duckdb_zstd {
+/*-*******************************************************
+ *  Interface
+ *********************************************************/
+
+/* note: several prototypes are already published in `zstd.h` :
+ * ZSTD_createDDict()
+ * ZSTD_createDDict_byReference()
+ * ZSTD_createDDict_advanced()
+ * ZSTD_freeDDict()
+ * ZSTD_initStaticDDict()
+ * ZSTD_sizeof_DDict()
+ * ZSTD_estimateDDictSize()
+ * ZSTD_getDictID_fromDict()
+ */
+
+const void* ZSTD_DDict_dictContent(const ZSTD_DDict* ddict);
+size_t ZSTD_DDict_dictSize(const ZSTD_DDict* ddict);
+
+void ZSTD_copyDDictParameters(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict);
+
+}
+
+#endif /* ZSTD_DDICT_H */
+
+
+// LICENSE_CHANGE_END
+
+
+// #if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+// #  include "../legacy/zstd_legacy.h"
+// #endif
+
+namespace duckdb_zstd {
+
+/*-*******************************************************
+*  Types
+*********************************************************/
+struct ZSTD_DDict_s {
+    void* dictBuffer;
+    const void* dictContent;
+    size_t dictSize;
+    ZSTD_entropyDTables_t entropy;
+    U32 dictID;
+    U32 entropyPresent;
+    ZSTD_customMem cMem;
+};  /* typedef'd to ZSTD_DDict within "zstd.h" */
+
+const void* ZSTD_DDict_dictContent(const ZSTD_DDict* ddict)
+{
+    assert(ddict != NULL);
+    return ddict->dictContent;
+}
+
+size_t ZSTD_DDict_dictSize(const ZSTD_DDict* ddict)
+{
+    assert(ddict != NULL);
+    return ddict->dictSize;
+}
+
+void ZSTD_copyDDictParameters(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict)
+{
+    DEBUGLOG(4, "ZSTD_copyDDictParameters");
+    assert(dctx != NULL);
+    assert(ddict != NULL);
+    dctx->dictID = ddict->dictID;
+    dctx->prefixStart = ddict->dictContent;
+    dctx->virtualStart = ddict->dictContent;
+    dctx->dictEnd = (const BYTE*)ddict->dictContent + ddict->dictSize;
+    dctx->previousDstEnd = dctx->dictEnd;
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    dctx->dictContentBeginForFuzzing = dctx->prefixStart;
+    dctx->dictContentEndForFuzzing = dctx->previousDstEnd;
+#endif
+    if (ddict->entropyPresent) {
+        dctx->litEntropy = 1;
+        dctx->fseEntropy = 1;
+        dctx->LLTptr = ddict->entropy.LLTable;
+        dctx->MLTptr = ddict->entropy.MLTable;
+        dctx->OFTptr = ddict->entropy.OFTable;
+        dctx->HUFptr = ddict->entropy.hufTable;
+        dctx->entropy.rep[0] = ddict->entropy.rep[0];
+        dctx->entropy.rep[1] = ddict->entropy.rep[1];
+        dctx->entropy.rep[2] = ddict->entropy.rep[2];
+    } else {
+        dctx->litEntropy = 0;
+        dctx->fseEntropy = 0;
+    }
+}
+
+
+static size_t
+ZSTD_loadEntropy_intoDDict(ZSTD_DDict* ddict,
+                           ZSTD_dictContentType_e dictContentType)
+{
+    ddict->dictID = 0;
+    ddict->entropyPresent = 0;
+    if (dictContentType == ZSTD_dct_rawContent) return 0;
+
+    if (ddict->dictSize < 8) {
+        if (dictContentType == ZSTD_dct_fullDict)
+            return ERROR(dictionary_corrupted);   /* only accept specified dictionaries */
+        return 0;   /* pure content mode */
+    }
+    {   U32 const magic = MEM_readLE32(ddict->dictContent);
+        if (magic != ZSTD_MAGIC_DICTIONARY) {
+            if (dictContentType == ZSTD_dct_fullDict)
+                return ERROR(dictionary_corrupted);   /* only accept specified dictionaries */
+            return 0;   /* pure content mode */
+        }
+    }
+    ddict->dictID = MEM_readLE32((const char*)ddict->dictContent + ZSTD_FRAMEIDSIZE);
+
+    /* load entropy tables */
+    RETURN_ERROR_IF(ZSTD_isError(ZSTD_loadDEntropy(
+            &ddict->entropy, ddict->dictContent, ddict->dictSize)),
+        dictionary_corrupted, "");
+    ddict->entropyPresent = 1;
+    return 0;
+}
+
+
+static size_t ZSTD_initDDict_internal(ZSTD_DDict* ddict,
+                                      const void* dict, size_t dictSize,
+                                      ZSTD_dictLoadMethod_e dictLoadMethod,
+                                      ZSTD_dictContentType_e dictContentType)
+{
+    if ((dictLoadMethod == ZSTD_dlm_byRef) || (!dict) || (!dictSize)) {
+        ddict->dictBuffer = NULL;
+        ddict->dictContent = dict;
+        if (!dict) dictSize = 0;
+    } else {
+        void* const internalBuffer = ZSTD_malloc(dictSize, ddict->cMem);
+        ddict->dictBuffer = internalBuffer;
+        ddict->dictContent = internalBuffer;
+        if (!internalBuffer) return ERROR(memory_allocation);
+        memcpy(internalBuffer, dict, dictSize);
+    }
+    ddict->dictSize = dictSize;
+    ddict->entropy.hufTable[0] = (HUF_DTable)((HufLog)*0x1000001);  /* cover both little and big endian */
+
+    /* parse dictionary content */
+    FORWARD_IF_ERROR( ZSTD_loadEntropy_intoDDict(ddict, dictContentType) , "");
+
+    return 0;
+}
+
+ZSTD_DDict* ZSTD_createDDict_advanced(const void* dict, size_t dictSize,
+                                      ZSTD_dictLoadMethod_e dictLoadMethod,
+                                      ZSTD_dictContentType_e dictContentType,
+                                      ZSTD_customMem customMem)
+{
+    if (!customMem.customAlloc ^ !customMem.customFree) return NULL;
+
+    {   ZSTD_DDict* const ddict = (ZSTD_DDict*) ZSTD_malloc(sizeof(ZSTD_DDict), customMem);
+        if (ddict == NULL) return NULL;
+        ddict->cMem = customMem;
+        {   size_t const initResult = ZSTD_initDDict_internal(ddict,
+                                            dict, dictSize,
+                                            dictLoadMethod, dictContentType);
+            if (ZSTD_isError(initResult)) {
+                ZSTD_freeDDict(ddict);
+                return NULL;
+        }   }
+        return ddict;
+    }
+}
+
+/*! ZSTD_createDDict() :
+*   Create a digested dictionary, to start decompression without startup delay.
+*   `dict` content is copied inside DDict.
+*   Consequently, `dict` can be released after `ZSTD_DDict` creation */
+ZSTD_DDict* ZSTD_createDDict(const void* dict, size_t dictSize)
+{
+    ZSTD_customMem const allocator = { NULL, NULL, NULL };
+    return ZSTD_createDDict_advanced(dict, dictSize, ZSTD_dlm_byCopy, ZSTD_dct_auto, allocator);
+}
+
+/*! ZSTD_createDDict_byReference() :
+ *  Create a digested dictionary, to start decompression without startup delay.
+ *  Dictionary content is simply referenced, it will be accessed during decompression.
+ *  Warning : dictBuffer must outlive DDict (DDict must be freed before dictBuffer) */
+ZSTD_DDict* ZSTD_createDDict_byReference(const void* dictBuffer, size_t dictSize)
+{
+    ZSTD_customMem const allocator = { NULL, NULL, NULL };
+    return ZSTD_createDDict_advanced(dictBuffer, dictSize, ZSTD_dlm_byRef, ZSTD_dct_auto, allocator);
+}
+
+
+const ZSTD_DDict* ZSTD_initStaticDDict(
+                                void* sBuffer, size_t sBufferSize,
+                                const void* dict, size_t dictSize,
+                                ZSTD_dictLoadMethod_e dictLoadMethod,
+                                ZSTD_dictContentType_e dictContentType)
+{
+    size_t const neededSpace = sizeof(ZSTD_DDict)
+                             + (dictLoadMethod == ZSTD_dlm_byRef ? 0 : dictSize);
+    ZSTD_DDict* const ddict = (ZSTD_DDict*)sBuffer;
+    assert(sBuffer != NULL);
+    assert(dict != NULL);
+    if ((size_t)sBuffer & 7) return NULL;   /* 8-aligned */
+    if (sBufferSize < neededSpace) return NULL;
+    if (dictLoadMethod == ZSTD_dlm_byCopy) {
+        memcpy(ddict+1, dict, dictSize);  /* local copy */
+        dict = ddict+1;
+    }
+    if (ZSTD_isError( ZSTD_initDDict_internal(ddict,
+                                              dict, dictSize,
+                                              ZSTD_dlm_byRef, dictContentType) ))
+        return NULL;
+    return ddict;
+}
+
+
+size_t ZSTD_freeDDict(ZSTD_DDict* ddict)
+{
+    if (ddict==NULL) return 0;   /* support free on NULL */
+    {   ZSTD_customMem const cMem = ddict->cMem;
+        ZSTD_free(ddict->dictBuffer, cMem);
+        ZSTD_free(ddict, cMem);
+        return 0;
+    }
+}
+
+/*! ZSTD_estimateDDictSize() :
+ *  Estimate amount of memory that will be needed to create a dictionary for decompression.
+ *  Note : dictionary created by reference using ZSTD_dlm_byRef are smaller */
+size_t ZSTD_estimateDDictSize(size_t dictSize, ZSTD_dictLoadMethod_e dictLoadMethod)
+{
+    return sizeof(ZSTD_DDict) + (dictLoadMethod == ZSTD_dlm_byRef ? 0 : dictSize);
+}
+
+size_t ZSTD_sizeof_DDict(const ZSTD_DDict* ddict)
+{
+    if (ddict==NULL) return 0;   /* support sizeof on NULL */
+    return sizeof(*ddict) + (ddict->dictBuffer ? ddict->dictSize : 0) ;
+}
+
+/*! ZSTD_getDictID_fromDDict() :
+ *  Provides the dictID of the dictionary loaded into `ddict`.
+ *  If @return == 0, the dictionary is not conformant to Zstandard specification, or empty.
+ *  Non-conformant dictionaries can still be loaded, but as content-only dictionaries. */
+unsigned ZSTD_getDictID_fromDDict(const ZSTD_DDict* ddict)
+{
+    if (ddict==NULL) return 0;
+    return ZSTD_getDictID_fromDict(ddict->dictContent, ddict->dictSize);
 }
 
 }
@@ -42308,106 +41001,2441 @@ const char* ERR_getErrorString(ERR_enum code)
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
 // See the end of this file for a list
 
-/* ******************************************************************
- * FSE : Finite State Entropy decoder
- * Copyright (c) 2013-2020, Yann Collet, Facebook, Inc.
- *
- *  You can contact the author at :
- *  - FSE source repository : https://github.com/Cyan4973/FiniteStateEntropy
- *  - Public forum : https://groups.google.com/forum/#!forum/lz4c
+/*
+ * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * All rights reserved.
  *
  * This source code is licensed under both the BSD-style license (found in the
  * LICENSE file in the root directory of this source tree) and the GPLv2 (found
  * in the COPYING file in the root directory of this source tree).
  * You may select, at your option, one of the above-listed licenses.
-****************************************************************** */
+ */
 
 
-/* **************************************************************
-*  Includes
-****************************************************************/
-#include <stdlib.h>     /* malloc, free, qsort */
-#include <string.h>     /* memcpy, memset */
+/* ***************************************************************
+*  Tuning parameters
+*****************************************************************/
+/*!
+ * HEAPMODE :
+ * Select how default decompression function ZSTD_decompress() allocates its context,
+ * on stack (0), or into heap (1, default; requires malloc()).
+ * Note that functions with explicit context such as ZSTD_decompressDCtx() are unaffected.
+ */
+#ifndef ZSTD_HEAPMODE
+#  define ZSTD_HEAPMODE 1
+#endif
 
-
-
-
-
-
-
-/* **************************************************************
-*  Error Management
-****************************************************************/
-// #define FSE_isError ERR_isError
-#define FSE_STATIC_ASSERT(c) DEBUG_STATIC_ASSERT(c)   /* use only *after* variable declarations */
-
-
-/* **************************************************************
-*  Templates
-****************************************************************/
-/*
-  designed to be included
-  for type-specific functions (template emulation in C)
-  Objective is to write these functions only once, for improved maintenance
+/*!
+*  LEGACY_SUPPORT :
+*  if set to 1+, ZSTD_decompress() can decode older formats (v0.1+)
 */
-
-/* safety checks */
-#ifndef FSE_FUNCTION_EXTENSION
-#  error "FSE_FUNCTION_EXTENSION must be defined"
-#endif
-#ifndef FSE_FUNCTION_TYPE
-#  error "FSE_FUNCTION_TYPE must be defined"
+#ifndef ZSTD_LEGACY_SUPPORT
+#  define ZSTD_LEGACY_SUPPORT 0
 #endif
 
-/* Function names */
-#define FSE_CAT(X,Y) X##Y
-#define FSE_FUNCTION_NAME(X,Y) FSE_CAT(X,Y)
-#define FSE_TYPE_NAME(X,Y) FSE_CAT(X,Y)
+/*!
+ *  MAXWINDOWSIZE_DEFAULT :
+ *  maximum window size accepted by DStream __by default__.
+ *  Frames requiring more memory will be rejected.
+ *  It's possible to set a different limit using ZSTD_DCtx_setMaxWindowSize().
+ */
+#ifndef ZSTD_MAXWINDOWSIZE_DEFAULT
+#  define ZSTD_MAXWINDOWSIZE_DEFAULT (((U32)1 << ZSTD_WINDOWLOG_LIMIT_DEFAULT) + 1)
+#endif
+
+/*!
+ *  NO_FORWARD_PROGRESS_MAX :
+ *  maximum allowed nb of calls to ZSTD_decompressStream()
+ *  without any forward progress
+ *  (defined as: no byte read from input, and no byte flushed to output)
+ *  before triggering an error.
+ */
+#ifndef ZSTD_NO_FORWARD_PROGRESS_MAX
+#  define ZSTD_NO_FORWARD_PROGRESS_MAX 16
+#endif
+
+
+/*-*******************************************************
+*  Dependencies
+*********************************************************/
+#include <string.h>      /* memcpy, memmove, memset */
+         /* low level memory routines */
+
+
+
+
+  /* blockProperties_t */
+   /* ZSTD_DCtx */
+  /* ZSTD_DDictDictContent */
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+/*
+ * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+ */
+
+
+#ifndef ZSTD_DEC_BLOCK_H
+#define ZSTD_DEC_BLOCK_H
+
+/*-*******************************************************
+ *  Dependencies
+ *********************************************************/
+#include <stddef.h>   /* size_t */
+    /* DCtx, and some public functions */
+  /* blockProperties_t, and some public functions */
+  /* ZSTD_seqSymbol */
 
 namespace duckdb_zstd {
 
-/* Function templates */
-FSE_DTable* FSE_createDTable (unsigned tableLog)
-{
-    if (tableLog > FSE_TABLELOG_ABSOLUTE_MAX) tableLog = FSE_TABLELOG_ABSOLUTE_MAX;
-    return (FSE_DTable*)malloc( FSE_DTABLE_SIZE_U32(tableLog) * sizeof (U32) );
+/* ===   Prototypes   === */
+
+/* note: prototypes already published within `zstd.h` :
+ * ZSTD_decompressBlock()
+ */
+
+/* note: prototypes already published within `zstd_internal.h` :
+ * ZSTD_getcBlockSize()
+ * ZSTD_decodeSeqHeaders()
+ */
+
+
+/* ZSTD_decompressBlock_internal() :
+ * decompress block, starting at `src`,
+ * into destination buffer `dst`.
+ * @return : decompressed block size,
+ *           or an error code (which can be tested using ZSTD_isError())
+ */
+size_t ZSTD_decompressBlock_internal(ZSTD_DCtx* dctx,
+                               void* dst, size_t dstCapacity,
+                         const void* src, size_t srcSize, const int frame);
+
+/* ZSTD_buildFSETable() :
+ * generate FSE decoding table for one symbol (ll, ml or off)
+ * this function must be called with valid parameters only
+ * (dt is large enough, normalizedCounter distribution total is a power of 2, max is within range, etc.)
+ * in which case it cannot fail.
+ * Internal use only.
+ */
+void ZSTD_buildFSETable(ZSTD_seqSymbol* dt,
+             const short* normalizedCounter, unsigned maxSymbolValue,
+             const U32* baseValue, const U32* nbAdditionalBits,
+                   unsigned tableLog);
+
 }
 
-void FSE_freeDTable (FSE_DTable* dt)
+#endif /* ZSTD_DEC_BLOCK_H */
+
+
+// LICENSE_CHANGE_END
+   /* ZSTD_decompressBlock_internal */
+
+// #if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+// #  include "../legacy/zstd_legacy.h"
+// #endif
+namespace duckdb_zstd {
+const U32 ZSTDConstants::LL_base[MaxLL+1] = {
+                0,    1,    2,     3,     4,     5,     6,      7,
+                8,    9,   10,    11,    12,    13,    14,     15,
+                16,   18,   20,    22,    24,    28,    32,     40,
+                48,   64, 0x80, 0x100, 0x200, 0x400, 0x800, 0x1000,
+                0x2000, 0x4000, 0x8000, 0x10000 };
+
+const U32 ZSTDConstants::OF_base[MaxOff+1] = {
+                0,        1,       1,       5,     0xD,     0x1D,     0x3D,     0x7D,
+                0xFD,   0x1FD,   0x3FD,   0x7FD,   0xFFD,   0x1FFD,   0x3FFD,   0x7FFD,
+                0xFFFD, 0x1FFFD, 0x3FFFD, 0x7FFFD, 0xFFFFD, 0x1FFFFD, 0x3FFFFD, 0x7FFFFD,
+                0xFFFFFD, 0x1FFFFFD, 0x3FFFFFD, 0x7FFFFFD, 0xFFFFFFD, 0x1FFFFFFD, 0x3FFFFFFD, 0x7FFFFFFD };
+
+const U32 ZSTDConstants::OF_bits[MaxOff+1] = {
+                    0,  1,  2,  3,  4,  5,  6,  7,
+                    8,  9, 10, 11, 12, 13, 14, 15,
+                    16, 17, 18, 19, 20, 21, 22, 23,
+                    24, 25, 26, 27, 28, 29, 30, 31 };
+
+const U32 ZSTDConstants::ML_base[MaxML+1] = {
+                    3,  4,  5,    6,     7,     8,     9,    10,
+                    11, 12, 13,   14,    15,    16,    17,    18,
+                    19, 20, 21,   22,    23,    24,    25,    26,
+                    27, 28, 29,   30,    31,    32,    33,    34,
+                    35, 37, 39,   41,    43,    47,    51,    59,
+                    67, 83, 99, 0x83, 0x103, 0x203, 0x403, 0x803,
+                    0x1003, 0x2003, 0x4003, 0x8003, 0x10003 };
+
+const size_t ZSTDInternalConstants::ZSTD_blockHeaderSize = ZSTD_BLOCKHEADERSIZE;
+const U32 ZSTDInternalConstants::LL_bits[MaxLL+1] = { 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0,
+                                    1, 1, 1, 1, 2, 2, 3, 3,
+                                    4, 6, 7, 8, 9,10,11,12,
+                                    13,14,15,16 };
+const S16 ZSTDInternalConstants::LL_defaultNorm[MaxLL+1] = { 4, 3, 2, 2, 2, 2, 2, 2,
+                                            2, 2, 2, 2, 2, 1, 1, 1,
+                                            2, 2, 2, 2, 2, 2, 2, 2,
+                                            2, 3, 2, 1, 1, 1, 1, 1,
+                                            -1,-1,-1,-1 };
+#define LL_DEFAULTNORMLOG 6  /* for static allocation */
+const U32 ZSTDInternalConstants::LL_defaultNormLog = LL_DEFAULTNORMLOG;
+const U32 ZSTDInternalConstants::ML_bits[MaxML+1] = { 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0,
+                                    1, 1, 1, 1, 2, 2, 3, 3,
+                                    4, 4, 5, 7, 8, 9,10,11,
+                                    12,13,14,15,16 };
+const S16 ZSTDInternalConstants::ML_defaultNorm[MaxML+1] = { 1, 4, 3, 2, 2, 2, 2, 2,
+                                             2, 1, 1, 1, 1, 1, 1, 1,
+                                             1, 1, 1, 1, 1, 1, 1, 1,
+                                             1, 1, 1, 1, 1, 1, 1, 1,
+                                             1, 1, 1, 1, 1, 1, 1, 1,
+                                             1, 1, 1, 1, 1, 1,-1,-1,
+                                            -1,-1,-1,-1,-1 };
+#define ML_DEFAULTNORMLOG 6  /* for static allocation */
+const U32 ZSTDInternalConstants::ML_defaultNormLog = ML_DEFAULTNORMLOG;
+
+const S16 ZSTDInternalConstants::OF_defaultNorm[DefaultMaxOff+1] = { 1, 1, 1, 1, 1, 1, 2, 2,
+                                                     2, 1, 1, 1, 1, 1, 1, 1,
+                                                     1, 1, 1, 1, 1, 1, 1, 1,
+                                                    -1,-1,-1,-1,-1 };
+#define OF_DEFAULTNORMLOG 5  /* for static allocation */
+const U32 ZSTDInternalConstants::OF_defaultNormLog = OF_DEFAULTNORMLOG;
+const U32 ZSTDInternalConstants::repStartValue[ZSTD_REP_NUM] = { 1, 4, 8 };
+
+const ZSTD_customMem ZSTDInternalConstants::ZSTD_defaultCMem = { NULL, NULL, NULL };  /**< this constant defers to stdlib's functions */
+
+/*-*************************************************************
+*   Context management
+***************************************************************/
+size_t ZSTD_sizeof_DCtx (const ZSTD_DCtx* dctx)
 {
-    free(dt);
+    if (dctx==NULL) return 0;   /* support sizeof NULL */
+    return sizeof(*dctx)
+           + ZSTD_sizeof_DDict(dctx->ddictLocal)
+           + dctx->inBuffSize + dctx->outBuffSize;
 }
 
-size_t FSE_buildDTable(FSE_DTable* dt, const short* normalizedCounter, unsigned maxSymbolValue, unsigned tableLog)
+size_t ZSTD_estimateDCtxSize(void) { return sizeof(ZSTD_DCtx); }
+
+
+static size_t ZSTD_startingInputLength(ZSTD_format_e format)
 {
-    void* const tdPtr = dt+1;   /* because *dt is unsigned, 32-bits aligned on 32-bits */
-    FSE_DECODE_TYPE* const tableDecode = (FSE_DECODE_TYPE*) (tdPtr);
-    U16 symbolNext[FSE_MAX_SYMBOL_VALUE+1];
+    size_t const startingInputLength = ZSTD_FRAMEHEADERSIZE_PREFIX(format);
+    /* only supports formats ZSTD_f_zstd1 and ZSTD_f_zstd1_magicless */
+    assert( (format == ZSTD_f_zstd1) || (format == ZSTD_f_zstd1_magicless) );
+    return startingInputLength;
+}
+
+static void ZSTD_initDCtx_internal(ZSTD_DCtx* dctx)
+{
+    dctx->format = ZSTD_f_zstd1;  /* ZSTD_decompressBegin() invokes ZSTD_startingInputLength() with argument dctx->format */
+    dctx->staticSize  = 0;
+    dctx->maxWindowSize = ZSTD_MAXWINDOWSIZE_DEFAULT;
+    dctx->ddict       = NULL;
+    dctx->ddictLocal  = NULL;
+    dctx->dictEnd     = NULL;
+    dctx->ddictIsCold = 0;
+    dctx->dictUses = ZSTD_dont_use;
+    dctx->inBuff      = NULL;
+    dctx->inBuffSize  = 0;
+    dctx->outBuffSize = 0;
+    dctx->streamStage = zdss_init;
+    dctx->legacyContext = NULL;
+    dctx->previousLegacyVersion = 0;
+    dctx->noForwardProgress = 0;
+    dctx->oversizedDuration = 0;
+    dctx->bmi2 = 0;
+    dctx->outBufferMode = ZSTD_obm_buffered;
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    dctx->dictContentEndForFuzzing = NULL;
+#endif
+}
+
+ZSTD_DCtx* ZSTD_initStaticDCtx(void *workspace, size_t workspaceSize)
+{
+    ZSTD_DCtx* const dctx = (ZSTD_DCtx*) workspace;
+
+    if ((size_t)workspace & 7) return NULL;  /* 8-aligned */
+    if (workspaceSize < sizeof(ZSTD_DCtx)) return NULL;  /* minimum size */
+
+    ZSTD_initDCtx_internal(dctx);
+    dctx->staticSize = workspaceSize;
+    dctx->inBuff = (char*)(dctx+1);
+    return dctx;
+}
+
+ZSTD_DCtx* ZSTD_createDCtx_advanced(ZSTD_customMem customMem)
+{
+    if (!customMem.customAlloc ^ !customMem.customFree) return NULL;
+
+    {   ZSTD_DCtx* const dctx = (ZSTD_DCtx*)ZSTD_malloc(sizeof(*dctx), customMem);
+        if (!dctx) return NULL;
+        dctx->customMem = customMem;
+        ZSTD_initDCtx_internal(dctx);
+        return dctx;
+    }
+}
+
+ZSTD_DCtx* ZSTD_createDCtx(void)
+{
+    DEBUGLOG(3, "ZSTD_createDCtx");
+    return ZSTD_createDCtx_advanced(ZSTDInternalConstants::ZSTD_defaultCMem);
+}
+
+static void ZSTD_clearDict(ZSTD_DCtx* dctx)
+{
+    ZSTD_freeDDict(dctx->ddictLocal);
+    dctx->ddictLocal = NULL;
+    dctx->ddict = NULL;
+    dctx->dictUses = ZSTD_dont_use;
+}
+
+size_t ZSTD_freeDCtx(ZSTD_DCtx* dctx)
+{
+    if (dctx==NULL) return 0;   /* support free on NULL */
+    RETURN_ERROR_IF(dctx->staticSize, memory_allocation, "not compatible with static DCtx");
+    {   ZSTD_customMem const cMem = dctx->customMem;
+        ZSTD_clearDict(dctx);
+        ZSTD_free(dctx->inBuff, cMem);
+        dctx->inBuff = NULL;
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+        if (dctx->legacyContext)
+            ZSTD_freeLegacyStreamContext(dctx->legacyContext, dctx->previousLegacyVersion);
+#endif
+        ZSTD_free(dctx, cMem);
+        return 0;
+    }
+}
+
+/* no longer useful */
+void ZSTD_copyDCtx(ZSTD_DCtx* dstDCtx, const ZSTD_DCtx* srcDCtx)
+{
+    size_t const toCopy = (size_t)((char*)(&dstDCtx->inBuff) - (char*)dstDCtx);
+    memcpy(dstDCtx, srcDCtx, toCopy);  /* no need to copy workspace */
+}
+
+
+/*-*************************************************************
+ *   Frame header decoding
+ ***************************************************************/
+
+/*! ZSTD_isFrame() :
+ *  Tells if the content of `buffer` starts with a valid Frame Identifier.
+ *  Note : Frame Identifier is 4 bytes. If `size < 4`, @return will always be 0.
+ *  Note 2 : Legacy Frame Identifiers are considered valid only if Legacy Support is enabled.
+ *  Note 3 : Skippable Frame Identifiers are considered valid. */
+unsigned ZSTD_isFrame(const void* buffer, size_t size)
+{
+    if (size < ZSTD_FRAMEIDSIZE) return 0;
+    {   U32 const magic = MEM_readLE32(buffer);
+        if (magic == ZSTD_MAGICNUMBER) return 1;
+        if ((magic & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) return 1;
+    }
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+    if (ZSTD_isLegacy(buffer, size)) return 1;
+#endif
+    return 0;
+}
+
+static const size_t ZSTD_fcs_fieldSize[4] = { 0, 2, 4, 8 };
+static const size_t ZSTD_did_fieldSize[4] = { 0, 1, 2, 4 };
+/** ZSTD_frameHeaderSize_internal() :
+ *  srcSize must be large enough to reach header size fields.
+ *  note : only works for formats ZSTD_f_zstd1 and ZSTD_f_zstd1_magicless.
+ * @return : size of the Frame Header
+ *           or an error code, which can be tested with ZSTD_isError() */
+static size_t ZSTD_frameHeaderSize_internal(const void* src, size_t srcSize, ZSTD_format_e format)
+{
+    size_t const minInputSize = ZSTD_startingInputLength(format);
+    RETURN_ERROR_IF(srcSize < minInputSize, srcSize_wrong, "");
+
+    {   BYTE const fhd = ((const BYTE*)src)[minInputSize-1];
+        U32 const dictID= fhd & 3;
+        U32 const singleSegment = (fhd >> 5) & 1;
+        U32 const fcsId = fhd >> 6;
+        return minInputSize + !singleSegment
+             + ZSTD_did_fieldSize[dictID] + ZSTD_fcs_fieldSize[fcsId]
+             + (singleSegment && !fcsId);
+    }
+}
+
+/** ZSTD_frameHeaderSize() :
+ *  srcSize must be >= ZSTD_frameHeaderSize_prefix.
+ * @return : size of the Frame Header,
+ *           or an error code (if srcSize is too small) */
+size_t ZSTD_frameHeaderSize(const void* src, size_t srcSize)
+{
+    return ZSTD_frameHeaderSize_internal(src, srcSize, ZSTD_f_zstd1);
+}
+
+
+/** ZSTD_getFrameHeader_advanced() :
+ *  decode Frame Header, or require larger `srcSize`.
+ *  note : only works for formats ZSTD_f_zstd1 and ZSTD_f_zstd1_magicless
+ * @return : 0, `zfhPtr` is correctly filled,
+ *          >0, `srcSize` is too small, value is wanted `srcSize` amount,
+ *           or an error code, which can be tested using ZSTD_isError() */
+size_t ZSTD_getFrameHeader_advanced(ZSTD_frameHeader* zfhPtr, const void* src, size_t srcSize, ZSTD_format_e format)
+{
+    const BYTE* ip = (const BYTE*)src;
+    size_t const minInputSize = ZSTD_startingInputLength(format);
+
+    memset(zfhPtr, 0, sizeof(*zfhPtr));   /* not strictly necessary, but static analyzer do not understand that zfhPtr is only going to be read only if return value is zero, since they are 2 different signals */
+    if (srcSize < minInputSize) return minInputSize;
+    RETURN_ERROR_IF(src==NULL, GENERIC, "invalid parameter");
+
+    if ( (format != ZSTD_f_zstd1_magicless)
+      && (MEM_readLE32(src) != ZSTD_MAGICNUMBER) ) {
+        if ((MEM_readLE32(src) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
+            /* skippable frame */
+            if (srcSize < ZSTD_SKIPPABLEHEADERSIZE)
+                return ZSTD_SKIPPABLEHEADERSIZE; /* magic number + frame length */
+            memset(zfhPtr, 0, sizeof(*zfhPtr));
+            zfhPtr->frameContentSize = MEM_readLE32((const char *)src + ZSTD_FRAMEIDSIZE);
+            zfhPtr->frameType = ZSTD_skippableFrame;
+            return 0;
+        }
+        RETURN_ERROR(prefix_unknown, "");
+    }
+
+    /* ensure there is enough `srcSize` to fully read/decode frame header */
+    {   size_t const fhsize = ZSTD_frameHeaderSize_internal(src, srcSize, format);
+        if (srcSize < fhsize) return fhsize;
+        zfhPtr->headerSize = (U32)fhsize;
+    }
+
+    {   BYTE const fhdByte = ip[minInputSize-1];
+        size_t pos = minInputSize;
+        U32 const dictIDSizeCode = fhdByte&3;
+        U32 const checksumFlag = (fhdByte>>2)&1;
+        U32 const singleSegment = (fhdByte>>5)&1;
+        U32 const fcsID = fhdByte>>6;
+        U64 windowSize = 0;
+        U32 dictID = 0;
+        U64 frameContentSize = ZSTD_CONTENTSIZE_UNKNOWN;
+        RETURN_ERROR_IF((fhdByte & 0x08) != 0, frameParameter_unsupported,
+                        "reserved bits, must be zero");
+
+        if (!singleSegment) {
+            BYTE const wlByte = ip[pos++];
+            U32 const windowLog = (wlByte >> 3) + ZSTD_WINDOWLOG_ABSOLUTEMIN;
+            RETURN_ERROR_IF(windowLog > ZSTD_WINDOWLOG_MAX, frameParameter_windowTooLarge, "");
+            windowSize = (1ULL << windowLog);
+            windowSize += (windowSize >> 3) * (wlByte&7);
+        }
+        switch(dictIDSizeCode)
+        {
+            default: assert(0);  /* impossible */
+            case 0 : break;
+            case 1 : dictID = ip[pos]; pos++; break;
+            case 2 : dictID = MEM_readLE16(ip+pos); pos+=2; break;
+            case 3 : dictID = MEM_readLE32(ip+pos); pos+=4; break;
+        }
+        switch(fcsID)
+        {
+            default: assert(0);  /* impossible */
+            case 0 : if (singleSegment) frameContentSize = ip[pos]; break;
+            case 1 : frameContentSize = MEM_readLE16(ip+pos)+256; break;
+            case 2 : frameContentSize = MEM_readLE32(ip+pos); break;
+            case 3 : frameContentSize = MEM_readLE64(ip+pos); break;
+        }
+        if (singleSegment) windowSize = frameContentSize;
+
+        zfhPtr->frameType = ZSTD_frame;
+        zfhPtr->frameContentSize = frameContentSize;
+        zfhPtr->windowSize = windowSize;
+        zfhPtr->blockSizeMax = (unsigned) MIN(windowSize, ZSTD_BLOCKSIZE_MAX);
+        zfhPtr->dictID = dictID;
+        zfhPtr->checksumFlag = checksumFlag;
+    }
+    return 0;
+}
+
+/** ZSTD_getFrameHeader() :
+ *  decode Frame Header, or require larger `srcSize`.
+ *  note : this function does not consume input, it only reads it.
+ * @return : 0, `zfhPtr` is correctly filled,
+ *          >0, `srcSize` is too small, value is wanted `srcSize` amount,
+ *           or an error code, which can be tested using ZSTD_isError() */
+size_t ZSTD_getFrameHeader(ZSTD_frameHeader* zfhPtr, const void* src, size_t srcSize)
+{
+    return ZSTD_getFrameHeader_advanced(zfhPtr, src, srcSize, ZSTD_f_zstd1);
+}
+
+
+/** ZSTD_getFrameContentSize() :
+ *  compatible with legacy mode
+ * @return : decompressed size of the single frame pointed to be `src` if known, otherwise
+ *         - ZSTD_CONTENTSIZE_UNKNOWN if the size cannot be determined
+ *         - ZSTD_CONTENTSIZE_ERROR if an error occurred (e.g. invalid magic number, srcSize too small) */
+unsigned long long ZSTD_getFrameContentSize(const void *src, size_t srcSize)
+{
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+    if (ZSTD_isLegacy(src, srcSize)) {
+        unsigned long long const ret = ZSTD_getDecompressedSize_legacy(src, srcSize);
+        return ret == 0 ? ZSTD_CONTENTSIZE_UNKNOWN : ret;
+    }
+#endif
+    {   ZSTD_frameHeader zfh;
+        if (ZSTD_getFrameHeader(&zfh, src, srcSize) != 0)
+            return ZSTD_CONTENTSIZE_ERROR;
+        if (zfh.frameType == ZSTD_skippableFrame) {
+            return 0;
+        } else {
+            return zfh.frameContentSize;
+    }   }
+}
+
+static size_t readSkippableFrameSize(void const* src, size_t srcSize)
+{
+    size_t const skippableHeaderSize = ZSTD_SKIPPABLEHEADERSIZE;
+    U32 sizeU32;
+
+    RETURN_ERROR_IF(srcSize < ZSTD_SKIPPABLEHEADERSIZE, srcSize_wrong, "");
+
+    sizeU32 = MEM_readLE32((BYTE const*)src + ZSTD_FRAMEIDSIZE);
+    RETURN_ERROR_IF((U32)(sizeU32 + ZSTD_SKIPPABLEHEADERSIZE) < sizeU32,
+                    frameParameter_unsupported, "");
+    {
+        size_t const skippableSize = skippableHeaderSize + sizeU32;
+        RETURN_ERROR_IF(skippableSize > srcSize, srcSize_wrong, "");
+        return skippableSize;
+    }
+}
+
+/** ZSTD_findDecompressedSize() :
+ *  compatible with legacy mode
+ *  `srcSize` must be the exact length of some number of ZSTD compressed and/or
+ *      skippable frames
+ *  @return : decompressed size of the frames contained */
+unsigned long long ZSTD_findDecompressedSize(const void* src, size_t srcSize)
+{
+    unsigned long long totalDstSize = 0;
+
+    while (srcSize >= ZSTD_startingInputLength(ZSTD_f_zstd1)) {
+        U32 const magicNumber = MEM_readLE32(src);
+
+        if ((magicNumber & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
+            size_t const skippableSize = readSkippableFrameSize(src, srcSize);
+            if (ZSTD_isError(skippableSize)) {
+                return ZSTD_CONTENTSIZE_ERROR;
+            }
+            assert(skippableSize <= srcSize);
+
+            src = (const BYTE *)src + skippableSize;
+            srcSize -= skippableSize;
+            continue;
+        }
+
+        {   unsigned long long const ret = ZSTD_getFrameContentSize(src, srcSize);
+            if (ret >= ZSTD_CONTENTSIZE_ERROR) return ret;
+
+            /* check for overflow */
+            if (totalDstSize + ret < totalDstSize) return ZSTD_CONTENTSIZE_ERROR;
+            totalDstSize += ret;
+        }
+        {   size_t const frameSrcSize = ZSTD_findFrameCompressedSize(src, srcSize);
+            if (ZSTD_isError(frameSrcSize)) {
+                return ZSTD_CONTENTSIZE_ERROR;
+            }
+
+            src = (const BYTE *)src + frameSrcSize;
+            srcSize -= frameSrcSize;
+        }
+    }  /* while (srcSize >= ZSTD_frameHeaderSize_prefix) */
+
+    if (srcSize) return ZSTD_CONTENTSIZE_ERROR;
+
+    return totalDstSize;
+}
+
+/** ZSTD_getDecompressedSize() :
+ *  compatible with legacy mode
+ * @return : decompressed size if known, 0 otherwise
+             note : 0 can mean any of the following :
+                   - frame content is empty
+                   - decompressed size field is not present in frame header
+                   - frame header unknown / not supported
+                   - frame header not complete (`srcSize` too small) */
+unsigned long long ZSTD_getDecompressedSize(const void* src, size_t srcSize)
+{
+    unsigned long long const ret = ZSTD_getFrameContentSize(src, srcSize);
+    ZSTD_STATIC_ASSERT(ZSTD_CONTENTSIZE_ERROR < ZSTD_CONTENTSIZE_UNKNOWN);
+    return (ret >= ZSTD_CONTENTSIZE_ERROR) ? 0 : ret;
+}
+
+
+/** ZSTD_decodeFrameHeader() :
+ * `headerSize` must be the size provided by ZSTD_frameHeaderSize().
+ * @return : 0 if success, or an error code, which can be tested using ZSTD_isError() */
+static size_t ZSTD_decodeFrameHeader(ZSTD_DCtx* dctx, const void* src, size_t headerSize)
+{
+    size_t const result = ZSTD_getFrameHeader_advanced(&(dctx->fParams), src, headerSize, dctx->format);
+    if (ZSTD_isError(result)) return result;    /* invalid header */
+    RETURN_ERROR_IF(result>0, srcSize_wrong, "headerSize too small");
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    /* Skip the dictID check in fuzzing mode, because it makes the search
+     * harder.
+     */
+    RETURN_ERROR_IF(dctx->fParams.dictID && (dctx->dictID != dctx->fParams.dictID),
+                    dictionary_wrong, "");
+#endif
+    if (dctx->fParams.checksumFlag) XXH64_reset(&dctx->xxhState, 0);
+    return 0;
+}
+
+static ZSTD_frameSizeInfo ZSTD_errorFrameSizeInfo(size_t ret)
+{
+    ZSTD_frameSizeInfo frameSizeInfo;
+    frameSizeInfo.compressedSize = ret;
+    frameSizeInfo.decompressedBound = ZSTD_CONTENTSIZE_ERROR;
+    return frameSizeInfo;
+}
+
+static ZSTD_frameSizeInfo ZSTD_findFrameSizeInfo(const void* src, size_t srcSize)
+{
+    ZSTD_frameSizeInfo frameSizeInfo;
+    memset(&frameSizeInfo, 0, sizeof(ZSTD_frameSizeInfo));
+
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+    if (ZSTD_isLegacy(src, srcSize))
+        return ZSTD_findFrameSizeInfoLegacy(src, srcSize);
+#endif
+
+    if ((srcSize >= ZSTD_SKIPPABLEHEADERSIZE)
+        && (MEM_readLE32(src) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
+        frameSizeInfo.compressedSize = readSkippableFrameSize(src, srcSize);
+        assert(ZSTD_isError(frameSizeInfo.compressedSize) ||
+               frameSizeInfo.compressedSize <= srcSize);
+        return frameSizeInfo;
+    } else {
+        const BYTE* ip = (const BYTE*)src;
+        const BYTE* const ipstart = ip;
+        size_t remainingSize = srcSize;
+        size_t nbBlocks = 0;
+        ZSTD_frameHeader zfh;
+
+        /* Extract Frame Header */
+        {   size_t const ret = ZSTD_getFrameHeader(&zfh, src, srcSize);
+            if (ZSTD_isError(ret))
+                return ZSTD_errorFrameSizeInfo(ret);
+            if (ret > 0)
+                return ZSTD_errorFrameSizeInfo(ERROR(srcSize_wrong));
+        }
+
+        ip += zfh.headerSize;
+        remainingSize -= zfh.headerSize;
+
+        /* Iterate over each block */
+        while (1) {
+            blockProperties_t blockProperties;
+            size_t const cBlockSize = ZSTD_getcBlockSize(ip, remainingSize, &blockProperties);
+            if (ZSTD_isError(cBlockSize))
+                return ZSTD_errorFrameSizeInfo(cBlockSize);
+
+            if (ZSTDInternalConstants::ZSTD_blockHeaderSize + cBlockSize > remainingSize)
+                return ZSTD_errorFrameSizeInfo(ERROR(srcSize_wrong));
+
+            ip += ZSTDInternalConstants::ZSTD_blockHeaderSize + cBlockSize;
+            remainingSize -= ZSTDInternalConstants::ZSTD_blockHeaderSize + cBlockSize;
+            nbBlocks++;
+
+            if (blockProperties.lastBlock) break;
+        }
+
+        /* Final frame content checksum */
+        if (zfh.checksumFlag) {
+            if (remainingSize < 4)
+                return ZSTD_errorFrameSizeInfo(ERROR(srcSize_wrong));
+            ip += 4;
+        }
+
+        frameSizeInfo.compressedSize = ip - ipstart;
+        frameSizeInfo.decompressedBound = (zfh.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN)
+                                        ? zfh.frameContentSize
+                                        : nbBlocks * zfh.blockSizeMax;
+        return frameSizeInfo;
+    }
+}
+
+/** ZSTD_findFrameCompressedSize() :
+ *  compatible with legacy mode
+ *  `src` must point to the start of a ZSTD frame, ZSTD legacy frame, or skippable frame
+ *  `srcSize` must be at least as large as the frame contained
+ *  @return : the compressed size of the frame starting at `src` */
+size_t ZSTD_findFrameCompressedSize(const void *src, size_t srcSize)
+{
+    ZSTD_frameSizeInfo const frameSizeInfo = ZSTD_findFrameSizeInfo(src, srcSize);
+    return frameSizeInfo.compressedSize;
+}
+
+/** ZSTD_decompressBound() :
+ *  compatible with legacy mode
+ *  `src` must point to the start of a ZSTD frame or a skippeable frame
+ *  `srcSize` must be at least as large as the frame contained
+ *  @return : the maximum decompressed size of the compressed source
+ */
+unsigned long long ZSTD_decompressBound(const void* src, size_t srcSize)
+{
+    unsigned long long bound = 0;
+    /* Iterate over each frame */
+    while (srcSize > 0) {
+        ZSTD_frameSizeInfo const frameSizeInfo = ZSTD_findFrameSizeInfo(src, srcSize);
+        size_t const compressedSize = frameSizeInfo.compressedSize;
+        unsigned long long const decompressedBound = frameSizeInfo.decompressedBound;
+        if (ZSTD_isError(compressedSize) || decompressedBound == ZSTD_CONTENTSIZE_ERROR)
+            return ZSTD_CONTENTSIZE_ERROR;
+        assert(srcSize >= compressedSize);
+        src = (const BYTE*)src + compressedSize;
+        srcSize -= compressedSize;
+        bound += decompressedBound;
+    }
+    return bound;
+}
+
+
+/*-*************************************************************
+ *   Frame decoding
+ ***************************************************************/
+
+/** ZSTD_insertBlock() :
+ *  insert `src` block into `dctx` history. Useful to track uncompressed blocks. */
+size_t ZSTD_insertBlock(ZSTD_DCtx* dctx, const void* blockStart, size_t blockSize)
+{
+    DEBUGLOG(5, "ZSTD_insertBlock: %u bytes", (unsigned)blockSize);
+    ZSTD_checkContinuity(dctx, blockStart);
+    dctx->previousDstEnd = (const char*)blockStart + blockSize;
+    return blockSize;
+}
+
+
+static size_t ZSTD_copyRawBlock(void* dst, size_t dstCapacity,
+                          const void* src, size_t srcSize)
+{
+    DEBUGLOG(5, "ZSTD_copyRawBlock");
+    if (dst == NULL) {
+        if (srcSize == 0) return 0;
+        RETURN_ERROR(dstBuffer_null, "");
+    }
+    RETURN_ERROR_IF(srcSize > dstCapacity, dstSize_tooSmall, "");
+    memcpy(dst, src, srcSize);
+    return srcSize;
+}
+
+static size_t ZSTD_setRleBlock(void* dst, size_t dstCapacity,
+                               BYTE b,
+                               size_t regenSize)
+{
+    if (dst == NULL) {
+        if (regenSize == 0) return 0;
+        RETURN_ERROR(dstBuffer_null, "");
+    }
+    RETURN_ERROR_IF(regenSize > dstCapacity, dstSize_tooSmall, "");
+    memset(dst, b, regenSize);
+    return regenSize;
+}
+
+
+/*! ZSTD_decompressFrame() :
+ * @dctx must be properly initialized
+ *  will update *srcPtr and *srcSizePtr,
+ *  to make *srcPtr progress by one frame. */
+static size_t ZSTD_decompressFrame(ZSTD_DCtx* dctx,
+                                   void* dst, size_t dstCapacity,
+                             const void** srcPtr, size_t *srcSizePtr)
+{
+    const BYTE* ip = (const BYTE*)(*srcPtr);
+    BYTE* const ostart = (BYTE* const)dst;
+    BYTE* const oend = dstCapacity != 0 ? ostart + dstCapacity : ostart;
+    BYTE* op = ostart;
+    size_t remainingSrcSize = *srcSizePtr;
+
+    DEBUGLOG(4, "ZSTD_decompressFrame (srcSize:%i)", (int)*srcSizePtr);
+
+    /* check */
+    RETURN_ERROR_IF(
+        remainingSrcSize < ZSTD_FRAMEHEADERSIZE_MIN(dctx->format)+ZSTDInternalConstants::ZSTD_blockHeaderSize,
+        srcSize_wrong, "");
+
+    /* Frame Header */
+    {   size_t const frameHeaderSize = ZSTD_frameHeaderSize_internal(
+                ip, ZSTD_FRAMEHEADERSIZE_PREFIX(dctx->format), dctx->format);
+        if (ZSTD_isError(frameHeaderSize)) return frameHeaderSize;
+        RETURN_ERROR_IF(remainingSrcSize < frameHeaderSize+ZSTDInternalConstants::ZSTD_blockHeaderSize,
+                        srcSize_wrong, "");
+        FORWARD_IF_ERROR( ZSTD_decodeFrameHeader(dctx, ip, frameHeaderSize) , "");
+        ip += frameHeaderSize; remainingSrcSize -= frameHeaderSize;
+    }
+
+    /* Loop on each block */
+    while (1) {
+        size_t decodedSize;
+        blockProperties_t blockProperties;
+        size_t const cBlockSize = ZSTD_getcBlockSize(ip, remainingSrcSize, &blockProperties);
+        if (ZSTD_isError(cBlockSize)) return cBlockSize;
+
+        ip += ZSTDInternalConstants::ZSTD_blockHeaderSize;
+        remainingSrcSize -= ZSTDInternalConstants::ZSTD_blockHeaderSize;
+        RETURN_ERROR_IF(cBlockSize > remainingSrcSize, srcSize_wrong, "");
+
+        switch(blockProperties.blockType)
+        {
+        case bt_compressed:
+            decodedSize = ZSTD_decompressBlock_internal(dctx, op, oend-op, ip, cBlockSize, /* frame */ 1);
+            break;
+        case bt_raw :
+            decodedSize = ZSTD_copyRawBlock(op, oend-op, ip, cBlockSize);
+            break;
+        case bt_rle :
+            decodedSize = ZSTD_setRleBlock(op, oend-op, *ip, blockProperties.origSize);
+            break;
+        case bt_reserved :
+        default:
+            RETURN_ERROR(corruption_detected, "invalid block type");
+        }
+
+        if (ZSTD_isError(decodedSize)) return decodedSize;
+        if (dctx->fParams.checksumFlag)
+            XXH64_update(&dctx->xxhState, op, decodedSize);
+        if (decodedSize != 0)
+            op += decodedSize;
+        assert(ip != NULL);
+        ip += cBlockSize;
+        remainingSrcSize -= cBlockSize;
+        if (blockProperties.lastBlock) break;
+    }
+
+    if (dctx->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN) {
+        RETURN_ERROR_IF((U64)(op-ostart) != dctx->fParams.frameContentSize,
+                        corruption_detected, "");
+    }
+    if (dctx->fParams.checksumFlag) { /* Frame content checksum verification */
+        U32 const checkCalc = (U32)XXH64_digest(&dctx->xxhState);
+        U32 checkRead;
+        RETURN_ERROR_IF(remainingSrcSize<4, checksum_wrong, "");
+        checkRead = MEM_readLE32(ip);
+        RETURN_ERROR_IF(checkRead != checkCalc, checksum_wrong, "");
+        ip += 4;
+        remainingSrcSize -= 4;
+    }
+
+    /* Allow caller to get size read */
+    *srcPtr = ip;
+    *srcSizePtr = remainingSrcSize;
+    return op-ostart;
+}
+
+static size_t ZSTD_decompressMultiFrame(ZSTD_DCtx* dctx,
+                                        void* dst, size_t dstCapacity,
+                                  const void* src, size_t srcSize,
+                                  const void* dict, size_t dictSize,
+                                  const ZSTD_DDict* ddict)
+{
+    void* const dststart = dst;
+    int moreThan1Frame = 0;
+
+    DEBUGLOG(5, "ZSTD_decompressMultiFrame");
+    assert(dict==NULL || ddict==NULL);  /* either dict or ddict set, not both */
+
+    if (ddict) {
+        dict = ZSTD_DDict_dictContent(ddict);
+        dictSize = ZSTD_DDict_dictSize(ddict);
+    }
+
+    while (srcSize >= ZSTD_startingInputLength(dctx->format)) {
+
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+        if (ZSTD_isLegacy(src, srcSize)) {
+            size_t decodedSize;
+            size_t const frameSize = ZSTD_findFrameCompressedSizeLegacy(src, srcSize);
+            if (ZSTD_isError(frameSize)) return frameSize;
+            RETURN_ERROR_IF(dctx->staticSize, memory_allocation,
+                "legacy support is not compatible with static dctx");
+
+            decodedSize = ZSTD_decompressLegacy(dst, dstCapacity, src, frameSize, dict, dictSize);
+            if (ZSTD_isError(decodedSize)) return decodedSize;
+
+            assert(decodedSize <=- dstCapacity);
+            dst = (BYTE*)dst + decodedSize;
+            dstCapacity -= decodedSize;
+
+            src = (const BYTE*)src + frameSize;
+            srcSize -= frameSize;
+
+            continue;
+        }
+#endif
+
+        {   U32 const magicNumber = MEM_readLE32(src);
+            DEBUGLOG(4, "reading magic number %08X (expecting %08X)",
+                        (unsigned)magicNumber, ZSTD_MAGICNUMBER);
+            if ((magicNumber & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
+                size_t const skippableSize = readSkippableFrameSize(src, srcSize);
+                FORWARD_IF_ERROR(skippableSize, "readSkippableFrameSize failed");
+                assert(skippableSize <= srcSize);
+
+                src = (const BYTE *)src + skippableSize;
+                srcSize -= skippableSize;
+                continue;
+        }   }
+
+        if (ddict) {
+            /* we were called from ZSTD_decompress_usingDDict */
+            FORWARD_IF_ERROR(ZSTD_decompressBegin_usingDDict(dctx, ddict), "");
+        } else {
+            /* this will initialize correctly with no dict if dict == NULL, so
+             * use this in all cases but ddict */
+            FORWARD_IF_ERROR(ZSTD_decompressBegin_usingDict(dctx, dict, dictSize), "");
+        }
+        ZSTD_checkContinuity(dctx, dst);
+
+        {   const size_t res = ZSTD_decompressFrame(dctx, dst, dstCapacity,
+                                                    &src, &srcSize);
+            RETURN_ERROR_IF(
+                (ZSTD_getErrorCode(res) == ZSTD_error_prefix_unknown)
+             && (moreThan1Frame==1),
+                srcSize_wrong,
+                "at least one frame successfully completed, but following "
+                "bytes are garbage: it's more likely to be a srcSize error, "
+                "specifying more bytes than compressed size of frame(s). This "
+                "error message replaces ERROR(prefix_unknown), which would be "
+                "confusing, as the first header is actually correct. Note that "
+                "one could be unlucky, it might be a corruption error instead, "
+                "happening right at the place where we expect zstd magic "
+                "bytes. But this is _much_ less likely than a srcSize field "
+                "error.");
+            if (ZSTD_isError(res)) return res;
+            assert(res <= dstCapacity);
+            if (res != 0)
+                dst = (BYTE*)dst + res;
+            dstCapacity -= res;
+        }
+        moreThan1Frame = 1;
+    }  /* while (srcSize >= ZSTD_frameHeaderSize_prefix) */
+
+    RETURN_ERROR_IF(srcSize, srcSize_wrong, "input not entirely consumed");
+
+    return (BYTE*)dst - (BYTE*)dststart;
+}
+
+size_t ZSTD_decompress_usingDict(ZSTD_DCtx* dctx,
+                                 void* dst, size_t dstCapacity,
+                           const void* src, size_t srcSize,
+                           const void* dict, size_t dictSize)
+{
+    return ZSTD_decompressMultiFrame(dctx, dst, dstCapacity, src, srcSize, dict, dictSize, NULL);
+}
+
+
+static ZSTD_DDict const* ZSTD_getDDict(ZSTD_DCtx* dctx)
+{
+    switch (dctx->dictUses) {
+    default:
+        assert(0 /* Impossible */);
+        /* fall-through */
+    case ZSTD_dont_use:
+        ZSTD_clearDict(dctx);
+        return NULL;
+    case ZSTD_use_indefinitely:
+        return dctx->ddict;
+    case ZSTD_use_once:
+        dctx->dictUses = ZSTD_dont_use;
+        return dctx->ddict;
+    }
+}
+
+size_t ZSTD_decompressDCtx(ZSTD_DCtx* dctx, void* dst, size_t dstCapacity, const void* src, size_t srcSize)
+{
+    return ZSTD_decompress_usingDDict(dctx, dst, dstCapacity, src, srcSize, ZSTD_getDDict(dctx));
+}
+
+
+size_t ZSTD_decompress(void* dst, size_t dstCapacity, const void* src, size_t srcSize)
+{
+#if defined(ZSTD_HEAPMODE) && (ZSTD_HEAPMODE>=1)
+    size_t regenSize;
+    ZSTD_DCtx* const dctx = ZSTD_createDCtx();
+    RETURN_ERROR_IF(dctx==NULL, memory_allocation, "NULL pointer!");
+    regenSize = ZSTD_decompressDCtx(dctx, dst, dstCapacity, src, srcSize);
+    ZSTD_freeDCtx(dctx);
+    return regenSize;
+#else   /* stack mode */
+    ZSTD_DCtx dctx;
+    ZSTD_initDCtx_internal(&dctx);
+    return ZSTD_decompressDCtx(&dctx, dst, dstCapacity, src, srcSize);
+#endif
+}
+
+
+/*-**************************************
+*   Advanced Streaming Decompression API
+*   Bufferless and synchronous
+****************************************/
+size_t ZSTD_nextSrcSizeToDecompress(ZSTD_DCtx* dctx) { return dctx->expected; }
+
+/**
+ * Similar to ZSTD_nextSrcSizeToDecompress(), but when when a block input can be streamed,
+ * we allow taking a partial block as the input. Currently only raw uncompressed blocks can
+ * be streamed.
+ *
+ * For blocks that can be streamed, this allows us to reduce the latency until we produce
+ * output, and avoid copying the input.
+ *
+ * @param inputSize - The total amount of input that the caller currently has.
+ */
+static size_t ZSTD_nextSrcSizeToDecompressWithInputSize(ZSTD_DCtx* dctx, size_t inputSize) {
+    if (!(dctx->stage == ZSTDds_decompressBlock || dctx->stage == ZSTDds_decompressLastBlock))
+        return dctx->expected;
+    if (dctx->bType != bt_raw)
+        return dctx->expected;
+    return MIN(MAX(inputSize, 1), dctx->expected);
+}
+
+ZSTD_nextInputType_e ZSTD_nextInputType(ZSTD_DCtx* dctx) {
+    switch(dctx->stage)
+    {
+    default:   /* should not happen */
+        assert(0);
+    case ZSTDds_getFrameHeaderSize:
+    case ZSTDds_decodeFrameHeader:
+        return ZSTDnit_frameHeader;
+    case ZSTDds_decodeBlockHeader:
+        return ZSTDnit_blockHeader;
+    case ZSTDds_decompressBlock:
+        return ZSTDnit_block;
+    case ZSTDds_decompressLastBlock:
+        return ZSTDnit_lastBlock;
+    case ZSTDds_checkChecksum:
+        return ZSTDnit_checksum;
+    case ZSTDds_decodeSkippableHeader:
+    case ZSTDds_skipFrame:
+        return ZSTDnit_skippableFrame;
+    }
+}
+
+static int ZSTD_isSkipFrame(ZSTD_DCtx* dctx) { return dctx->stage == ZSTDds_skipFrame; }
+
+/** ZSTD_decompressContinue() :
+ *  srcSize : must be the exact nb of bytes expected (see ZSTD_nextSrcSizeToDecompress())
+ *  @return : nb of bytes generated into `dst` (necessarily <= `dstCapacity)
+ *            or an error code, which can be tested using ZSTD_isError() */
+size_t ZSTD_decompressContinue(ZSTD_DCtx* dctx, void* dst, size_t dstCapacity, const void* src, size_t srcSize)
+{
+    DEBUGLOG(5, "ZSTD_decompressContinue (srcSize:%u)", (unsigned)srcSize);
+    /* Sanity check */
+    RETURN_ERROR_IF(srcSize != ZSTD_nextSrcSizeToDecompressWithInputSize(dctx, srcSize), srcSize_wrong, "not allowed");
+    if (dstCapacity) ZSTD_checkContinuity(dctx, dst);
+
+    switch (dctx->stage)
+    {
+    case ZSTDds_getFrameHeaderSize :
+        assert(src != NULL);
+        if (dctx->format == ZSTD_f_zstd1) {  /* allows header */
+            assert(srcSize >= ZSTD_FRAMEIDSIZE);  /* to read skippable magic number */
+            if ((MEM_readLE32(src) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {        /* skippable frame */
+                memcpy(dctx->headerBuffer, src, srcSize);
+                dctx->expected = ZSTD_SKIPPABLEHEADERSIZE - srcSize;  /* remaining to load to get full skippable frame header */
+                dctx->stage = ZSTDds_decodeSkippableHeader;
+                return 0;
+        }   }
+        dctx->headerSize = ZSTD_frameHeaderSize_internal(src, srcSize, dctx->format);
+        if (ZSTD_isError(dctx->headerSize)) return dctx->headerSize;
+        memcpy(dctx->headerBuffer, src, srcSize);
+        dctx->expected = dctx->headerSize - srcSize;
+        dctx->stage = ZSTDds_decodeFrameHeader;
+        return 0;
+
+    case ZSTDds_decodeFrameHeader:
+        assert(src != NULL);
+        memcpy(dctx->headerBuffer + (dctx->headerSize - srcSize), src, srcSize);
+        FORWARD_IF_ERROR(ZSTD_decodeFrameHeader(dctx, dctx->headerBuffer, dctx->headerSize), "");
+        dctx->expected = ZSTDInternalConstants::ZSTD_blockHeaderSize;
+        dctx->stage = ZSTDds_decodeBlockHeader;
+        return 0;
+
+    case ZSTDds_decodeBlockHeader:
+        {   blockProperties_t bp;
+            size_t const cBlockSize = ZSTD_getcBlockSize(src, ZSTDInternalConstants::ZSTD_blockHeaderSize, &bp);
+            if (ZSTD_isError(cBlockSize)) return cBlockSize;
+            RETURN_ERROR_IF(cBlockSize > dctx->fParams.blockSizeMax, corruption_detected, "Block Size Exceeds Maximum");
+            dctx->expected = cBlockSize;
+            dctx->bType = bp.blockType;
+            dctx->rleSize = bp.origSize;
+            if (cBlockSize) {
+                dctx->stage = bp.lastBlock ? ZSTDds_decompressLastBlock : ZSTDds_decompressBlock;
+                return 0;
+            }
+            /* empty block */
+            if (bp.lastBlock) {
+                if (dctx->fParams.checksumFlag) {
+                    dctx->expected = 4;
+                    dctx->stage = ZSTDds_checkChecksum;
+                } else {
+                    dctx->expected = 0; /* end of frame */
+                    dctx->stage = ZSTDds_getFrameHeaderSize;
+                }
+            } else {
+                dctx->expected = ZSTDInternalConstants::ZSTD_blockHeaderSize;  /* jump to next header */
+                dctx->stage = ZSTDds_decodeBlockHeader;
+            }
+            return 0;
+        }
+
+    case ZSTDds_decompressLastBlock:
+    case ZSTDds_decompressBlock:
+        DEBUGLOG(5, "ZSTD_decompressContinue: case ZSTDds_decompressBlock");
+        {   size_t rSize;
+            switch(dctx->bType)
+            {
+            case bt_compressed:
+                DEBUGLOG(5, "ZSTD_decompressContinue: case bt_compressed");
+                rSize = ZSTD_decompressBlock_internal(dctx, dst, dstCapacity, src, srcSize, /* frame */ 1);
+                dctx->expected = 0;  /* Streaming not supported */
+                break;
+            case bt_raw :
+                assert(srcSize <= dctx->expected);
+                rSize = ZSTD_copyRawBlock(dst, dstCapacity, src, srcSize);
+                FORWARD_IF_ERROR(rSize, "ZSTD_copyRawBlock failed");
+                assert(rSize == srcSize);
+                dctx->expected -= rSize;
+                break;
+            case bt_rle :
+                rSize = ZSTD_setRleBlock(dst, dstCapacity, *(const BYTE*)src, dctx->rleSize);
+                dctx->expected = 0;  /* Streaming not supported */
+                break;
+            case bt_reserved :   /* should never happen */
+            default:
+                RETURN_ERROR(corruption_detected, "invalid block type");
+            }
+            FORWARD_IF_ERROR(rSize, "");
+            RETURN_ERROR_IF(rSize > dctx->fParams.blockSizeMax, corruption_detected, "Decompressed Block Size Exceeds Maximum");
+            DEBUGLOG(5, "ZSTD_decompressContinue: decoded size from block : %u", (unsigned)rSize);
+            dctx->decodedSize += rSize;
+            if (dctx->fParams.checksumFlag) XXH64_update(&dctx->xxhState, dst, rSize);
+            dctx->previousDstEnd = (char*)dst + rSize;
+
+            /* Stay on the same stage until we are finished streaming the block. */
+            if (dctx->expected > 0) {
+                return rSize;
+            }
+
+            if (dctx->stage == ZSTDds_decompressLastBlock) {   /* end of frame */
+                DEBUGLOG(4, "ZSTD_decompressContinue: decoded size from frame : %u", (unsigned)dctx->decodedSize);
+                RETURN_ERROR_IF(
+                    dctx->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN
+                 && dctx->decodedSize != dctx->fParams.frameContentSize,
+                    corruption_detected, "");
+                if (dctx->fParams.checksumFlag) {  /* another round for frame checksum */
+                    dctx->expected = 4;
+                    dctx->stage = ZSTDds_checkChecksum;
+                } else {
+                    dctx->expected = 0;   /* ends here */
+                    dctx->stage = ZSTDds_getFrameHeaderSize;
+                }
+            } else {
+                dctx->stage = ZSTDds_decodeBlockHeader;
+                dctx->expected = ZSTDInternalConstants::ZSTD_blockHeaderSize;
+            }
+            return rSize;
+        }
+
+    case ZSTDds_checkChecksum:
+        assert(srcSize == 4);  /* guaranteed by dctx->expected */
+        {   U32 const h32 = (U32)XXH64_digest(&dctx->xxhState);
+            U32 const check32 = MEM_readLE32(src);
+            DEBUGLOG(4, "ZSTD_decompressContinue: checksum : calculated %08X :: %08X read", (unsigned)h32, (unsigned)check32);
+            RETURN_ERROR_IF(check32 != h32, checksum_wrong, "");
+            dctx->expected = 0;
+            dctx->stage = ZSTDds_getFrameHeaderSize;
+            return 0;
+        }
+
+    case ZSTDds_decodeSkippableHeader:
+        assert(src != NULL);
+        assert(srcSize <= ZSTD_SKIPPABLEHEADERSIZE);
+        memcpy(dctx->headerBuffer + (ZSTD_SKIPPABLEHEADERSIZE - srcSize), src, srcSize);   /* complete skippable header */
+        dctx->expected = MEM_readLE32(dctx->headerBuffer + ZSTD_FRAMEIDSIZE);   /* note : dctx->expected can grow seriously large, beyond local buffer size */
+        dctx->stage = ZSTDds_skipFrame;
+        return 0;
+
+    case ZSTDds_skipFrame:
+        dctx->expected = 0;
+        dctx->stage = ZSTDds_getFrameHeaderSize;
+        return 0;
+
+    default:
+        assert(0);   /* impossible */
+        RETURN_ERROR(GENERIC, "impossible to reach");   /* some compiler require default to do something */
+    }
+}
+
+
+static size_t ZSTD_refDictContent(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
+{
+    dctx->dictEnd = dctx->previousDstEnd;
+    dctx->virtualStart = (const char*)dict - ((const char*)(dctx->previousDstEnd) - (const char*)(dctx->prefixStart));
+    dctx->prefixStart = dict;
+    dctx->previousDstEnd = (const char*)dict + dictSize;
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    dctx->dictContentBeginForFuzzing = dctx->prefixStart;
+    dctx->dictContentEndForFuzzing = dctx->previousDstEnd;
+#endif
+    return 0;
+}
+
+/*! ZSTD_loadDEntropy() :
+ *  dict : must point at beginning of a valid zstd dictionary.
+ * @return : size of entropy tables read */
+size_t
+ZSTD_loadDEntropy(ZSTD_entropyDTables_t* entropy,
+                  const void* const dict, size_t const dictSize)
+{
+    const BYTE* dictPtr = (const BYTE*)dict;
+    const BYTE* const dictEnd = dictPtr + dictSize;
+
+    RETURN_ERROR_IF(dictSize <= 8, dictionary_corrupted, "dict is too small");
+    assert(MEM_readLE32(dict) == ZSTD_MAGIC_DICTIONARY);   /* dict must be valid */
+    dictPtr += 8;   /* skip header = magic + dictID */
+
+    ZSTD_STATIC_ASSERT(offsetof(ZSTD_entropyDTables_t, OFTable) == offsetof(ZSTD_entropyDTables_t, LLTable) + sizeof(entropy->LLTable));
+    ZSTD_STATIC_ASSERT(offsetof(ZSTD_entropyDTables_t, MLTable) == offsetof(ZSTD_entropyDTables_t, OFTable) + sizeof(entropy->OFTable));
+    ZSTD_STATIC_ASSERT(sizeof(entropy->LLTable) + sizeof(entropy->OFTable) + sizeof(entropy->MLTable) >= HUF_DECOMPRESS_WORKSPACE_SIZE);
+    {   void* const workspace = &entropy->LLTable;   /* use fse tables as temporary workspace; implies fse tables are grouped together */
+        size_t const workspaceSize = sizeof(entropy->LLTable) + sizeof(entropy->OFTable) + sizeof(entropy->MLTable);
+#ifdef HUF_FORCE_DECOMPRESS_X1
+        /* in minimal huffman, we always use X1 variants */
+        size_t const hSize = HUF_readDTableX1_wksp(entropy->hufTable,
+                                                dictPtr, dictEnd - dictPtr,
+                                                workspace, workspaceSize);
+#else
+        size_t const hSize = HUF_readDTableX2_wksp(entropy->hufTable,
+                                                dictPtr, dictEnd - dictPtr,
+                                                workspace, workspaceSize);
+#endif
+        RETURN_ERROR_IF(HUF_isError(hSize), dictionary_corrupted, "");
+        dictPtr += hSize;
+    }
+
+    {   short offcodeNCount[MaxOff+1];
+        unsigned offcodeMaxValue = MaxOff, offcodeLog;
+        size_t const offcodeHeaderSize = FSE_readNCount(offcodeNCount, &offcodeMaxValue, &offcodeLog, dictPtr, dictEnd-dictPtr);
+        RETURN_ERROR_IF(FSE_isError(offcodeHeaderSize), dictionary_corrupted, "");
+        RETURN_ERROR_IF(offcodeMaxValue > MaxOff, dictionary_corrupted, "");
+        RETURN_ERROR_IF(offcodeLog > OffFSELog, dictionary_corrupted, "");
+        ZSTD_buildFSETable( entropy->OFTable,
+                            offcodeNCount, offcodeMaxValue,
+                            ZSTDConstants::OF_base, ZSTDConstants::OF_bits,
+                            offcodeLog);
+        dictPtr += offcodeHeaderSize;
+    }
+
+    {   short matchlengthNCount[MaxML+1];
+        unsigned matchlengthMaxValue = MaxML, matchlengthLog;
+        size_t const matchlengthHeaderSize = FSE_readNCount(matchlengthNCount, &matchlengthMaxValue, &matchlengthLog, dictPtr, dictEnd-dictPtr);
+        RETURN_ERROR_IF(FSE_isError(matchlengthHeaderSize), dictionary_corrupted, "");
+        RETURN_ERROR_IF(matchlengthMaxValue > MaxML, dictionary_corrupted, "");
+        RETURN_ERROR_IF(matchlengthLog > MLFSELog, dictionary_corrupted, "");
+        ZSTD_buildFSETable( entropy->MLTable,
+                            matchlengthNCount, matchlengthMaxValue,
+                            ZSTDConstants::ML_base, ZSTDInternalConstants::ML_bits,
+                            matchlengthLog);
+        dictPtr += matchlengthHeaderSize;
+    }
+
+    {   short litlengthNCount[MaxLL+1];
+        unsigned litlengthMaxValue = MaxLL, litlengthLog;
+        size_t const litlengthHeaderSize = FSE_readNCount(litlengthNCount, &litlengthMaxValue, &litlengthLog, dictPtr, dictEnd-dictPtr);
+        RETURN_ERROR_IF(FSE_isError(litlengthHeaderSize), dictionary_corrupted, "");
+        RETURN_ERROR_IF(litlengthMaxValue > MaxLL, dictionary_corrupted, "");
+        RETURN_ERROR_IF(litlengthLog > LLFSELog, dictionary_corrupted, "");
+        ZSTD_buildFSETable( entropy->LLTable,
+                            litlengthNCount, litlengthMaxValue,
+                            ZSTDConstants::LL_base, ZSTDInternalConstants::LL_bits,
+                            litlengthLog);
+        dictPtr += litlengthHeaderSize;
+    }
+
+    RETURN_ERROR_IF(dictPtr+12 > dictEnd, dictionary_corrupted, "");
+    {   int i;
+        size_t const dictContentSize = (size_t)(dictEnd - (dictPtr+12));
+        for (i=0; i<3; i++) {
+            U32 const rep = MEM_readLE32(dictPtr); dictPtr += 4;
+            RETURN_ERROR_IF(rep==0 || rep > dictContentSize,
+                            dictionary_corrupted, "");
+            entropy->rep[i] = rep;
+    }   }
+
+    return dictPtr - (const BYTE*)dict;
+}
+
+static size_t ZSTD_decompress_insertDictionary(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
+{
+    if (dictSize < 8) return ZSTD_refDictContent(dctx, dict, dictSize);
+    {   U32 const magic = MEM_readLE32(dict);
+        if (magic != ZSTD_MAGIC_DICTIONARY) {
+            return ZSTD_refDictContent(dctx, dict, dictSize);   /* pure content mode */
+    }   }
+    dctx->dictID = MEM_readLE32((const char*)dict + ZSTD_FRAMEIDSIZE);
+
+    /* load entropy tables */
+    {   size_t const eSize = ZSTD_loadDEntropy(&dctx->entropy, dict, dictSize);
+        RETURN_ERROR_IF(ZSTD_isError(eSize), dictionary_corrupted, "");
+        dict = (const char*)dict + eSize;
+        dictSize -= eSize;
+    }
+    dctx->litEntropy = dctx->fseEntropy = 1;
+
+    /* reference dictionary content */
+    return ZSTD_refDictContent(dctx, dict, dictSize);
+}
+
+static const U32 repStartValue[ZSTD_REP_NUM] = { 1, 4, 8 };
+
+size_t ZSTD_decompressBegin(ZSTD_DCtx* dctx)
+{
+    assert(dctx != NULL);
+    dctx->expected = ZSTD_startingInputLength(dctx->format);  /* dctx->format must be properly set */
+    dctx->stage = ZSTDds_getFrameHeaderSize;
+    dctx->decodedSize = 0;
+    dctx->previousDstEnd = NULL;
+    dctx->prefixStart = NULL;
+    dctx->virtualStart = NULL;
+    dctx->dictEnd = NULL;
+    dctx->entropy.hufTable[0] = (HUF_DTable)((HufLog)*0x1000001);  /* cover both little and big endian */
+    dctx->litEntropy = dctx->fseEntropy = 0;
+    dctx->dictID = 0;
+    dctx->bType = bt_reserved;
+    ZSTD_STATIC_ASSERT(sizeof(dctx->entropy.rep) == sizeof(repStartValue));
+    memcpy(dctx->entropy.rep, repStartValue, sizeof(repStartValue));  /* initial repcodes */
+    dctx->LLTptr = dctx->entropy.LLTable;
+    dctx->MLTptr = dctx->entropy.MLTable;
+    dctx->OFTptr = dctx->entropy.OFTable;
+    dctx->HUFptr = dctx->entropy.hufTable;
+    return 0;
+}
+
+size_t ZSTD_decompressBegin_usingDict(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
+{
+    FORWARD_IF_ERROR( ZSTD_decompressBegin(dctx) , "");
+    if (dict && dictSize)
+        RETURN_ERROR_IF(
+            ZSTD_isError(ZSTD_decompress_insertDictionary(dctx, dict, dictSize)),
+            dictionary_corrupted, "");
+    return 0;
+}
+
+
+/* ======   ZSTD_DDict   ====== */
+
+size_t ZSTD_decompressBegin_usingDDict(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict)
+{
+    DEBUGLOG(4, "ZSTD_decompressBegin_usingDDict");
+    assert(dctx != NULL);
+    if (ddict) {
+        const char* const dictStart = (const char*)ZSTD_DDict_dictContent(ddict);
+        size_t const dictSize = ZSTD_DDict_dictSize(ddict);
+        const void* const dictEnd = dictStart + dictSize;
+        dctx->ddictIsCold = (dctx->dictEnd != dictEnd);
+        DEBUGLOG(4, "DDict is %s",
+                    dctx->ddictIsCold ? "~cold~" : "hot!");
+    }
+    FORWARD_IF_ERROR( ZSTD_decompressBegin(dctx) , "");
+    if (ddict) {   /* NULL ddict is equivalent to no dictionary */
+        ZSTD_copyDDictParameters(dctx, ddict);
+    }
+    return 0;
+}
+
+/*! ZSTD_getDictID_fromDict() :
+ *  Provides the dictID stored within dictionary.
+ *  if @return == 0, the dictionary is not conformant with Zstandard specification.
+ *  It can still be loaded, but as a content-only dictionary. */
+unsigned ZSTD_getDictID_fromDict(const void* dict, size_t dictSize)
+{
+    if (dictSize < 8) return 0;
+    if (MEM_readLE32(dict) != ZSTD_MAGIC_DICTIONARY) return 0;
+    return MEM_readLE32((const char*)dict + ZSTD_FRAMEIDSIZE);
+}
+
+/*! ZSTD_getDictID_fromFrame() :
+ *  Provides the dictID required to decompress frame stored within `src`.
+ *  If @return == 0, the dictID could not be decoded.
+ *  This could for one of the following reasons :
+ *  - The frame does not require a dictionary (most common case).
+ *  - The frame was built with dictID intentionally removed.
+ *    Needed dictionary is a hidden information.
+ *    Note : this use case also happens when using a non-conformant dictionary.
+ *  - `srcSize` is too small, and as a result, frame header could not be decoded.
+ *    Note : possible if `srcSize < ZSTD_FRAMEHEADERSIZE_MAX`.
+ *  - This is not a Zstandard frame.
+ *  When identifying the exact failure cause, it's possible to use
+ *  ZSTD_getFrameHeader(), which will provide a more precise error code. */
+unsigned ZSTD_getDictID_fromFrame(const void* src, size_t srcSize)
+{
+    ZSTD_frameHeader zfp = { 0, 0, 0, ZSTD_frame, 0, 0, 0 };
+    size_t const hError = ZSTD_getFrameHeader(&zfp, src, srcSize);
+    if (ZSTD_isError(hError)) return 0;
+    return zfp.dictID;
+}
+
+
+/*! ZSTD_decompress_usingDDict() :
+*   Decompression using a pre-digested Dictionary
+*   Use dictionary without significant overhead. */
+size_t ZSTD_decompress_usingDDict(ZSTD_DCtx* dctx,
+                                  void* dst, size_t dstCapacity,
+                            const void* src, size_t srcSize,
+                            const ZSTD_DDict* ddict)
+{
+    /* pass content and size in case legacy frames are encountered */
+    return ZSTD_decompressMultiFrame(dctx, dst, dstCapacity, src, srcSize,
+                                     NULL, 0,
+                                     ddict);
+}
+
+
+/*=====================================
+*   Streaming decompression
+*====================================*/
+
+ZSTD_DStream* ZSTD_createDStream(void)
+{
+    DEBUGLOG(3, "ZSTD_createDStream");
+    return ZSTD_createDStream_advanced(ZSTDInternalConstants::ZSTD_defaultCMem);
+}
+
+ZSTD_DStream* ZSTD_initStaticDStream(void *workspace, size_t workspaceSize)
+{
+    return ZSTD_initStaticDCtx(workspace, workspaceSize);
+}
+
+ZSTD_DStream* ZSTD_createDStream_advanced(ZSTD_customMem customMem)
+{
+    return ZSTD_createDCtx_advanced(customMem);
+}
+
+size_t ZSTD_freeDStream(ZSTD_DStream* zds)
+{
+    return ZSTD_freeDCtx(zds);
+}
+
+
+/* ***  Initialization  *** */
+
+size_t ZSTD_DStreamInSize(void)  { return ZSTD_BLOCKSIZE_MAX + ZSTDInternalConstants::ZSTD_blockHeaderSize; }
+size_t ZSTD_DStreamOutSize(void) { return ZSTD_BLOCKSIZE_MAX; }
+
+size_t ZSTD_DCtx_loadDictionary_advanced(ZSTD_DCtx* dctx,
+                                   const void* dict, size_t dictSize,
+                                         ZSTD_dictLoadMethod_e dictLoadMethod,
+                                         ZSTD_dictContentType_e dictContentType)
+{
+    RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
+    ZSTD_clearDict(dctx);
+    if (dict && dictSize != 0) {
+        dctx->ddictLocal = ZSTD_createDDict_advanced(dict, dictSize, dictLoadMethod, dictContentType, dctx->customMem);
+        RETURN_ERROR_IF(dctx->ddictLocal == NULL, memory_allocation, "NULL pointer!");
+        dctx->ddict = dctx->ddictLocal;
+        dctx->dictUses = ZSTD_use_indefinitely;
+    }
+    return 0;
+}
+
+size_t ZSTD_DCtx_loadDictionary_byReference(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
+{
+    return ZSTD_DCtx_loadDictionary_advanced(dctx, dict, dictSize, ZSTD_dlm_byRef, ZSTD_dct_auto);
+}
+
+size_t ZSTD_DCtx_loadDictionary(ZSTD_DCtx* dctx, const void* dict, size_t dictSize)
+{
+    return ZSTD_DCtx_loadDictionary_advanced(dctx, dict, dictSize, ZSTD_dlm_byCopy, ZSTD_dct_auto);
+}
+
+size_t ZSTD_DCtx_refPrefix_advanced(ZSTD_DCtx* dctx, const void* prefix, size_t prefixSize, ZSTD_dictContentType_e dictContentType)
+{
+    FORWARD_IF_ERROR(ZSTD_DCtx_loadDictionary_advanced(dctx, prefix, prefixSize, ZSTD_dlm_byRef, dictContentType), "");
+    dctx->dictUses = ZSTD_use_once;
+    return 0;
+}
+
+size_t ZSTD_DCtx_refPrefix(ZSTD_DCtx* dctx, const void* prefix, size_t prefixSize)
+{
+    return ZSTD_DCtx_refPrefix_advanced(dctx, prefix, prefixSize, ZSTD_dct_rawContent);
+}
+
+
+/* ZSTD_initDStream_usingDict() :
+ * return : expected size, aka ZSTD_startingInputLength().
+ * this function cannot fail */
+size_t ZSTD_initDStream_usingDict(ZSTD_DStream* zds, const void* dict, size_t dictSize)
+{
+    DEBUGLOG(4, "ZSTD_initDStream_usingDict");
+    FORWARD_IF_ERROR( ZSTD_DCtx_reset(zds, ZSTD_reset_session_only) , "");
+    FORWARD_IF_ERROR( ZSTD_DCtx_loadDictionary(zds, dict, dictSize) , "");
+    return ZSTD_startingInputLength(zds->format);
+}
+
+/* note : this variant can't fail */
+size_t ZSTD_initDStream(ZSTD_DStream* zds)
+{
+    DEBUGLOG(4, "ZSTD_initDStream");
+    return ZSTD_initDStream_usingDDict(zds, NULL);
+}
+
+/* ZSTD_initDStream_usingDDict() :
+ * ddict will just be referenced, and must outlive decompression session
+ * this function cannot fail */
+size_t ZSTD_initDStream_usingDDict(ZSTD_DStream* dctx, const ZSTD_DDict* ddict)
+{
+    FORWARD_IF_ERROR( ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only) , "");
+    FORWARD_IF_ERROR( ZSTD_DCtx_refDDict(dctx, ddict) , "");
+    return ZSTD_startingInputLength(dctx->format);
+}
+
+/* ZSTD_resetDStream() :
+ * return : expected size, aka ZSTD_startingInputLength().
+ * this function cannot fail */
+size_t ZSTD_resetDStream(ZSTD_DStream* dctx)
+{
+    FORWARD_IF_ERROR(ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only), "");
+    return ZSTD_startingInputLength(dctx->format);
+}
+
+
+size_t ZSTD_DCtx_refDDict(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict)
+{
+    RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
+    ZSTD_clearDict(dctx);
+    if (ddict) {
+        dctx->ddict = ddict;
+        dctx->dictUses = ZSTD_use_indefinitely;
+    }
+    return 0;
+}
+
+/* ZSTD_DCtx_setMaxWindowSize() :
+ * note : no direct equivalence in ZSTD_DCtx_setParameter,
+ * since this version sets windowSize, and the other sets windowLog */
+size_t ZSTD_DCtx_setMaxWindowSize(ZSTD_DCtx* dctx, size_t maxWindowSize)
+{
+    ZSTD_bounds const bounds = ZSTD_dParam_getBounds(ZSTD_d_windowLogMax);
+    size_t const min = (size_t)1 << bounds.lowerBound;
+    size_t const max = (size_t)1 << bounds.upperBound;
+    RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
+    RETURN_ERROR_IF(maxWindowSize < min, parameter_outOfBound, "");
+    RETURN_ERROR_IF(maxWindowSize > max, parameter_outOfBound, "");
+    dctx->maxWindowSize = maxWindowSize;
+    return 0;
+}
+
+size_t ZSTD_DCtx_setFormat(ZSTD_DCtx* dctx, ZSTD_format_e format)
+{
+    return ZSTD_DCtx_setParameter(dctx, ZSTD_d_format, format);
+}
+
+ZSTD_bounds ZSTD_dParam_getBounds(ZSTD_dParameter dParam)
+{
+    ZSTD_bounds bounds = { 0, 0, 0 };
+    switch(dParam) {
+        case ZSTD_d_windowLogMax:
+            bounds.lowerBound = ZSTD_WINDOWLOG_ABSOLUTEMIN;
+            bounds.upperBound = ZSTD_WINDOWLOG_MAX;
+            return bounds;
+        case ZSTD_d_format:
+            bounds.lowerBound = (int)ZSTD_f_zstd1;
+            bounds.upperBound = (int)ZSTD_f_zstd1_magicless;
+            ZSTD_STATIC_ASSERT(ZSTD_f_zstd1 < ZSTD_f_zstd1_magicless);
+            return bounds;
+        case ZSTD_d_stableOutBuffer:
+            bounds.lowerBound = (int)ZSTD_obm_buffered;
+            bounds.upperBound = (int)ZSTD_obm_stable;
+            return bounds;
+        default:;
+    }
+    bounds.error = ERROR(parameter_unsupported);
+    return bounds;
+}
+
+/* ZSTD_dParam_withinBounds:
+ * @return 1 if value is within dParam bounds,
+ * 0 otherwise */
+static int ZSTD_dParam_withinBounds(ZSTD_dParameter dParam, int value)
+{
+    ZSTD_bounds const bounds = ZSTD_dParam_getBounds(dParam);
+    if (ZSTD_isError(bounds.error)) return 0;
+    if (value < bounds.lowerBound) return 0;
+    if (value > bounds.upperBound) return 0;
+    return 1;
+}
+
+#define CHECK_DBOUNDS(p,v) {                \
+    RETURN_ERROR_IF(!ZSTD_dParam_withinBounds(p, v), parameter_outOfBound, ""); \
+}
+
+size_t ZSTD_DCtx_setParameter(ZSTD_DCtx* dctx, ZSTD_dParameter dParam, int value)
+{
+    RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
+    switch(dParam) {
+        case ZSTD_d_windowLogMax:
+            if (value == 0) value = ZSTD_WINDOWLOG_LIMIT_DEFAULT;
+            CHECK_DBOUNDS(ZSTD_d_windowLogMax, value);
+            dctx->maxWindowSize = ((size_t)1) << value;
+            return 0;
+        case ZSTD_d_format:
+            CHECK_DBOUNDS(ZSTD_d_format, value);
+            dctx->format = (ZSTD_format_e)value;
+            return 0;
+        case ZSTD_d_stableOutBuffer:
+            CHECK_DBOUNDS(ZSTD_d_stableOutBuffer, value);
+            dctx->outBufferMode = (ZSTD_outBufferMode_e)value;
+            return 0;
+        default:;
+    }
+    RETURN_ERROR(parameter_unsupported, "");
+}
+
+size_t ZSTD_DCtx_reset(ZSTD_DCtx* dctx, ZSTD_ResetDirective reset)
+{
+    if ( (reset == ZSTD_reset_session_only)
+      || (reset == ZSTD_reset_session_and_parameters) ) {
+        dctx->streamStage = zdss_init;
+        dctx->noForwardProgress = 0;
+    }
+    if ( (reset == ZSTD_reset_parameters)
+      || (reset == ZSTD_reset_session_and_parameters) ) {
+        RETURN_ERROR_IF(dctx->streamStage != zdss_init, stage_wrong, "");
+        ZSTD_clearDict(dctx);
+        dctx->format = ZSTD_f_zstd1;
+        dctx->maxWindowSize = ZSTD_MAXWINDOWSIZE_DEFAULT;
+    }
+    return 0;
+}
+
+
+size_t ZSTD_sizeof_DStream(const ZSTD_DStream* dctx)
+{
+    return ZSTD_sizeof_DCtx(dctx);
+}
+
+size_t ZSTD_decodingBufferSize_min(unsigned long long windowSize, unsigned long long frameContentSize)
+{
+    size_t const blockSize = (size_t) MIN(windowSize, ZSTD_BLOCKSIZE_MAX);
+    unsigned long long const neededRBSize = windowSize + blockSize + (WILDCOPY_OVERLENGTH * 2);
+    unsigned long long const neededSize = MIN(frameContentSize, neededRBSize);
+    size_t const minRBSize = (size_t) neededSize;
+    RETURN_ERROR_IF((unsigned long long)minRBSize != neededSize,
+                    frameParameter_windowTooLarge, "");
+    return minRBSize;
+}
+
+size_t ZSTD_estimateDStreamSize(size_t windowSize)
+{
+    size_t const blockSize = MIN(windowSize, ZSTD_BLOCKSIZE_MAX);
+    size_t const inBuffSize = blockSize;  /* no block can be larger */
+    size_t const outBuffSize = ZSTD_decodingBufferSize_min(windowSize, ZSTD_CONTENTSIZE_UNKNOWN);
+    return ZSTD_estimateDCtxSize() + inBuffSize + outBuffSize;
+}
+
+size_t ZSTD_estimateDStreamSize_fromFrame(const void* src, size_t srcSize)
+{
+    U32 const windowSizeMax = 1U << ZSTD_WINDOWLOG_MAX;   /* note : should be user-selectable, but requires an additional parameter (or a dctx) */
+    ZSTD_frameHeader zfh;
+    size_t const err = ZSTD_getFrameHeader(&zfh, src, srcSize);
+    if (ZSTD_isError(err)) return err;
+    RETURN_ERROR_IF(err>0, srcSize_wrong, "");
+    RETURN_ERROR_IF(zfh.windowSize > windowSizeMax,
+                    frameParameter_windowTooLarge, "");
+    return ZSTD_estimateDStreamSize((size_t)zfh.windowSize);
+}
+
+
+/* *****   Decompression   ***** */
+
+static int ZSTD_DCtx_isOverflow(ZSTD_DStream* zds, size_t const neededInBuffSize, size_t const neededOutBuffSize)
+{
+    return (zds->inBuffSize + zds->outBuffSize) >= (neededInBuffSize + neededOutBuffSize) * ZSTD_WORKSPACETOOLARGE_FACTOR;
+}
+
+static void ZSTD_DCtx_updateOversizedDuration(ZSTD_DStream* zds, size_t const neededInBuffSize, size_t const neededOutBuffSize)
+{
+    if (ZSTD_DCtx_isOverflow(zds, neededInBuffSize, neededOutBuffSize))
+        zds->oversizedDuration++;
+    else
+        zds->oversizedDuration = 0;
+}
+
+static int ZSTD_DCtx_isOversizedTooLong(ZSTD_DStream* zds)
+{
+    return zds->oversizedDuration >= ZSTD_WORKSPACETOOLARGE_MAXDURATION;
+}
+
+/* Checks that the output buffer hasn't changed if ZSTD_obm_stable is used. */
+static size_t ZSTD_checkOutBuffer(ZSTD_DStream const* zds, ZSTD_outBuffer const* output)
+{
+    ZSTD_outBuffer const expect = zds->expectedOutBuffer;
+    /* No requirement when ZSTD_obm_stable is not enabled. */
+    if (zds->outBufferMode != ZSTD_obm_stable)
+        return 0;
+    /* Any buffer is allowed in zdss_init, this must be the same for every other call until
+     * the context is reset.
+     */
+    if (zds->streamStage == zdss_init)
+        return 0;
+    /* The buffer must match our expectation exactly. */
+    if (expect.dst == output->dst && expect.pos == output->pos && expect.size == output->size)
+        return 0;
+    RETURN_ERROR(dstBuffer_wrong, "ZSTD_obm_stable enabled but output differs!");
+}
+
+/* Calls ZSTD_decompressContinue() with the right parameters for ZSTD_decompressStream()
+ * and updates the stage and the output buffer state. This call is extracted so it can be
+ * used both when reading directly from the ZSTD_inBuffer, and in buffered input mode.
+ * NOTE: You must break after calling this function since the streamStage is modified.
+ */
+static size_t ZSTD_decompressContinueStream(
+            ZSTD_DStream* zds, char** op, char* oend,
+            void const* src, size_t srcSize) {
+    int const isSkipFrame = ZSTD_isSkipFrame(zds);
+    if (zds->outBufferMode == ZSTD_obm_buffered) {
+        size_t const dstSize = isSkipFrame ? 0 : zds->outBuffSize - zds->outStart;
+        size_t const decodedSize = ZSTD_decompressContinue(zds,
+                zds->outBuff + zds->outStart, dstSize, src, srcSize);
+        FORWARD_IF_ERROR(decodedSize, "");
+        if (!decodedSize && !isSkipFrame) {
+            zds->streamStage = zdss_read;
+        } else {
+            zds->outEnd = zds->outStart + decodedSize;
+            zds->streamStage = zdss_flush;
+        }
+    } else {
+        /* Write directly into the output buffer */
+        size_t const dstSize = isSkipFrame ? 0 : oend - *op;
+        size_t const decodedSize = ZSTD_decompressContinue(zds, *op, dstSize, src, srcSize);
+        FORWARD_IF_ERROR(decodedSize, "");
+        *op += decodedSize;
+        /* Flushing is not needed. */
+        zds->streamStage = zdss_read;
+        assert(*op <= oend);
+        assert(zds->outBufferMode == ZSTD_obm_stable);
+    }
+    return 0;
+}
+
+size_t ZSTD_decompressStream(ZSTD_DStream* zds, ZSTD_outBuffer* output, ZSTD_inBuffer* input)
+{
+    const char* const src = (const char*)input->src;
+    const char* const istart = input->pos != 0 ? src + input->pos : src;
+    const char* const iend = input->size != 0 ? src + input->size : src;
+    const char* ip = istart;
+    char* const dst = (char*)output->dst;
+    char* const ostart = output->pos != 0 ? dst + output->pos : dst;
+    char* const oend = output->size != 0 ? dst + output->size : dst;
+    char* op = ostart;
+    U32 someMoreWork = 1;
+
+    DEBUGLOG(5, "ZSTD_decompressStream");
+    RETURN_ERROR_IF(
+        input->pos > input->size,
+        srcSize_wrong,
+        "forbidden. in: pos: %u   vs size: %u",
+        (U32)input->pos, (U32)input->size);
+    RETURN_ERROR_IF(
+        output->pos > output->size,
+        dstSize_tooSmall,
+        "forbidden. out: pos: %u   vs size: %u",
+        (U32)output->pos, (U32)output->size);
+    DEBUGLOG(5, "input size : %u", (U32)(input->size - input->pos));
+    FORWARD_IF_ERROR(ZSTD_checkOutBuffer(zds, output), "");
+
+    while (someMoreWork) {
+        switch(zds->streamStage)
+        {
+        case zdss_init :
+            DEBUGLOG(5, "stage zdss_init => transparent reset ");
+            zds->streamStage = zdss_loadHeader;
+            zds->lhSize = zds->inPos = zds->outStart = zds->outEnd = 0;
+            zds->legacyVersion = 0;
+            zds->hostageByte = 0;
+            zds->expectedOutBuffer = *output;
+            /* fall-through */
+
+        case zdss_loadHeader :
+            DEBUGLOG(5, "stage zdss_loadHeader (srcSize : %u)", (U32)(iend - ip));
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+            if (zds->legacyVersion) {
+                RETURN_ERROR_IF(zds->staticSize, memory_allocation,
+                    "legacy support is incompatible with static dctx");
+                {   size_t const hint = ZSTD_decompressLegacyStream(zds->legacyContext, zds->legacyVersion, output, input);
+                    if (hint==0) zds->streamStage = zdss_init;
+                    return hint;
+            }   }
+#endif
+            {   size_t const hSize = ZSTD_getFrameHeader_advanced(&zds->fParams, zds->headerBuffer, zds->lhSize, zds->format);
+                DEBUGLOG(5, "header size : %u", (U32)hSize);
+                if (ZSTD_isError(hSize)) {
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+                    U32 const legacyVersion = ZSTD_isLegacy(istart, iend-istart);
+                    if (legacyVersion) {
+                        ZSTD_DDict const* const ddict = ZSTD_getDDict(zds);
+                        const void* const dict = ddict ? ZSTD_DDict_dictContent(ddict) : NULL;
+                        size_t const dictSize = ddict ? ZSTD_DDict_dictSize(ddict) : 0;
+                        DEBUGLOG(5, "ZSTD_decompressStream: detected legacy version v0.%u", legacyVersion);
+                        RETURN_ERROR_IF(zds->staticSize, memory_allocation,
+                            "legacy support is incompatible with static dctx");
+                        FORWARD_IF_ERROR(ZSTD_initLegacyStream(&zds->legacyContext,
+                                    zds->previousLegacyVersion, legacyVersion,
+                                    dict, dictSize), "");
+                        zds->legacyVersion = zds->previousLegacyVersion = legacyVersion;
+                        {   size_t const hint = ZSTD_decompressLegacyStream(zds->legacyContext, legacyVersion, output, input);
+                            if (hint==0) zds->streamStage = zdss_init;   /* or stay in stage zdss_loadHeader */
+                            return hint;
+                    }   }
+#endif
+                    return hSize;   /* error */
+                }
+                if (hSize != 0) {   /* need more input */
+                    size_t const toLoad = hSize - zds->lhSize;   /* if hSize!=0, hSize > zds->lhSize */
+                    size_t const remainingInput = (size_t)(iend-ip);
+                    assert(iend >= ip);
+                    if (toLoad > remainingInput) {   /* not enough input to load full header */
+                        if (remainingInput > 0) {
+                            memcpy(zds->headerBuffer + zds->lhSize, ip, remainingInput);
+                            zds->lhSize += remainingInput;
+                        }
+                        input->pos = input->size;
+                        return (MAX((size_t)ZSTD_FRAMEHEADERSIZE_MIN(zds->format), hSize) - zds->lhSize) + ZSTDInternalConstants::ZSTD_blockHeaderSize;   /* remaining header bytes + next block header */
+                    }
+                    assert(ip != NULL);
+                    memcpy(zds->headerBuffer + zds->lhSize, ip, toLoad); zds->lhSize = hSize; ip += toLoad;
+                    break;
+            }   }
+
+            /* check for single-pass mode opportunity */
+            if (zds->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN
+                && zds->fParams.frameType != ZSTD_skippableFrame
+                && (U64)(size_t)(oend-op) >= zds->fParams.frameContentSize) {
+                size_t const cSize = ZSTD_findFrameCompressedSize(istart, iend-istart);
+                if (cSize <= (size_t)(iend-istart)) {
+                    /* shortcut : using single-pass mode */
+                    size_t const decompressedSize = ZSTD_decompress_usingDDict(zds, op, oend-op, istart, cSize, ZSTD_getDDict(zds));
+                    if (ZSTD_isError(decompressedSize)) return decompressedSize;
+                    DEBUGLOG(4, "shortcut to single-pass ZSTD_decompress_usingDDict()")
+                    ip = istart + cSize;
+                    op += decompressedSize;
+                    zds->expected = 0;
+                    zds->streamStage = zdss_init;
+                    someMoreWork = 0;
+                    break;
+            }   }
+
+            /* Check output buffer is large enough for ZSTD_odm_stable. */
+            if (zds->outBufferMode == ZSTD_obm_stable
+                && zds->fParams.frameType != ZSTD_skippableFrame
+                && zds->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN
+                && (U64)(size_t)(oend-op) < zds->fParams.frameContentSize) {
+                RETURN_ERROR(dstSize_tooSmall, "ZSTD_obm_stable passed but ZSTD_outBuffer is too small");
+            }
+
+            /* Consume header (see ZSTDds_decodeFrameHeader) */
+            DEBUGLOG(4, "Consume header");
+            FORWARD_IF_ERROR(ZSTD_decompressBegin_usingDDict(zds, ZSTD_getDDict(zds)), "");
+
+            if ((MEM_readLE32(zds->headerBuffer) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {  /* skippable frame */
+                zds->expected = MEM_readLE32(zds->headerBuffer + ZSTD_FRAMEIDSIZE);
+                zds->stage = ZSTDds_skipFrame;
+            } else {
+                FORWARD_IF_ERROR(ZSTD_decodeFrameHeader(zds, zds->headerBuffer, zds->lhSize), "");
+                zds->expected = ZSTDInternalConstants::ZSTD_blockHeaderSize;
+                zds->stage = ZSTDds_decodeBlockHeader;
+            }
+
+            /* control buffer memory usage */
+            DEBUGLOG(4, "Control max memory usage (%u KB <= max %u KB)",
+                        (U32)(zds->fParams.windowSize >>10),
+                        (U32)(zds->maxWindowSize >> 10) );
+            zds->fParams.windowSize = MAX(zds->fParams.windowSize, 1U << ZSTD_WINDOWLOG_ABSOLUTEMIN);
+            RETURN_ERROR_IF(zds->fParams.windowSize > zds->maxWindowSize,
+                            frameParameter_windowTooLarge, "");
+
+            /* Adapt buffer sizes to frame header instructions */
+            {   size_t const neededInBuffSize = MAX(zds->fParams.blockSizeMax, 4 /* frame checksum */);
+                size_t const neededOutBuffSize = zds->outBufferMode == ZSTD_obm_buffered
+                        ? ZSTD_decodingBufferSize_min(zds->fParams.windowSize, zds->fParams.frameContentSize)
+                        : 0;
+
+                ZSTD_DCtx_updateOversizedDuration(zds, neededInBuffSize, neededOutBuffSize);
+
+                {   int const tooSmall = (zds->inBuffSize < neededInBuffSize) || (zds->outBuffSize < neededOutBuffSize);
+                    int const tooLarge = ZSTD_DCtx_isOversizedTooLong(zds);
+
+                    if (tooSmall || tooLarge) {
+                        size_t const bufferSize = neededInBuffSize + neededOutBuffSize;
+                        DEBUGLOG(4, "inBuff  : from %u to %u",
+                                    (U32)zds->inBuffSize, (U32)neededInBuffSize);
+                        DEBUGLOG(4, "outBuff : from %u to %u",
+                                    (U32)zds->outBuffSize, (U32)neededOutBuffSize);
+                        if (zds->staticSize) {  /* static DCtx */
+                            DEBUGLOG(4, "staticSize : %u", (U32)zds->staticSize);
+                            assert(zds->staticSize >= sizeof(ZSTD_DCtx));  /* controlled at init */
+                            RETURN_ERROR_IF(
+                                bufferSize > zds->staticSize - sizeof(ZSTD_DCtx),
+                                memory_allocation, "");
+                        } else {
+                            ZSTD_free(zds->inBuff, zds->customMem);
+                            zds->inBuffSize = 0;
+                            zds->outBuffSize = 0;
+                            zds->inBuff = (char*)ZSTD_malloc(bufferSize, zds->customMem);
+                            RETURN_ERROR_IF(zds->inBuff == NULL, memory_allocation, "");
+                        }
+                        zds->inBuffSize = neededInBuffSize;
+                        zds->outBuff = zds->inBuff + zds->inBuffSize;
+                        zds->outBuffSize = neededOutBuffSize;
+            }   }   }
+            zds->streamStage = zdss_read;
+            /* fall-through */
+
+        case zdss_read:
+            DEBUGLOG(5, "stage zdss_read");
+            {   size_t const neededInSize = ZSTD_nextSrcSizeToDecompressWithInputSize(zds, iend - ip);
+                DEBUGLOG(5, "neededInSize = %u", (U32)neededInSize);
+                if (neededInSize==0) {  /* end of frame */
+                    zds->streamStage = zdss_init;
+                    someMoreWork = 0;
+                    break;
+                }
+                if ((size_t)(iend-ip) >= neededInSize) {  /* decode directly from src */
+                    FORWARD_IF_ERROR(ZSTD_decompressContinueStream(zds, &op, oend, ip, neededInSize), "");
+                    ip += neededInSize;
+                    /* Function modifies the stage so we must break */
+                    break;
+            }   }
+            if (ip==iend) { someMoreWork = 0; break; }   /* no more input */
+            zds->streamStage = zdss_load;
+            /* fall-through */
+
+        case zdss_load:
+            {   size_t const neededInSize = ZSTD_nextSrcSizeToDecompress(zds);
+                size_t const toLoad = neededInSize - zds->inPos;
+                int const isSkipFrame = ZSTD_isSkipFrame(zds);
+                size_t loadedSize;
+                /* At this point we shouldn't be decompressing a block that we can stream. */
+                assert(neededInSize == ZSTD_nextSrcSizeToDecompressWithInputSize(zds, iend - ip));
+                if (isSkipFrame) {
+                    loadedSize = MIN(toLoad, (size_t)(iend-ip));
+                } else {
+                    RETURN_ERROR_IF(toLoad > zds->inBuffSize - zds->inPos,
+                                    corruption_detected,
+                                    "should never happen");
+                    loadedSize = ZSTD_limitCopy(zds->inBuff + zds->inPos, toLoad, ip, iend-ip);
+                }
+                ip += loadedSize;
+                zds->inPos += loadedSize;
+                if (loadedSize < toLoad) { someMoreWork = 0; break; }   /* not enough input, wait for more */
+
+                /* decode loaded input */
+                zds->inPos = 0;   /* input is consumed */
+                FORWARD_IF_ERROR(ZSTD_decompressContinueStream(zds, &op, oend, zds->inBuff, neededInSize), "");
+                /* Function modifies the stage so we must break */
+                break;
+            }
+        case zdss_flush:
+            {   size_t const toFlushSize = zds->outEnd - zds->outStart;
+                size_t const flushedSize = ZSTD_limitCopy(op, oend-op, zds->outBuff + zds->outStart, toFlushSize);
+                op += flushedSize;
+                zds->outStart += flushedSize;
+                if (flushedSize == toFlushSize) {  /* flush completed */
+                    zds->streamStage = zdss_read;
+                    if ( (zds->outBuffSize < zds->fParams.frameContentSize)
+                      && (zds->outStart + zds->fParams.blockSizeMax > zds->outBuffSize) ) {
+                        DEBUGLOG(5, "restart filling outBuff from beginning (left:%i, needed:%u)",
+                                (int)(zds->outBuffSize - zds->outStart),
+                                (U32)zds->fParams.blockSizeMax);
+                        zds->outStart = zds->outEnd = 0;
+                    }
+                    break;
+            }   }
+            /* cannot complete flush */
+            someMoreWork = 0;
+            break;
+
+        default:
+            assert(0);    /* impossible */
+            RETURN_ERROR(GENERIC, "impossible to reach");   /* some compiler require default to do something */
+    }   }
+
+    /* result */
+    input->pos = (size_t)(ip - (const char*)(input->src));
+    output->pos = (size_t)(op - (char*)(output->dst));
+
+    /* Update the expected output buffer for ZSTD_obm_stable. */
+    zds->expectedOutBuffer = *output;
+
+    if ((ip==istart) && (op==ostart)) {  /* no forward progress */
+        zds->noForwardProgress ++;
+        if (zds->noForwardProgress >= ZSTD_NO_FORWARD_PROGRESS_MAX) {
+            RETURN_ERROR_IF(op==oend, dstSize_tooSmall, "");
+            RETURN_ERROR_IF(ip==iend, srcSize_wrong, "");
+            assert(0);
+        }
+    } else {
+        zds->noForwardProgress = 0;
+    }
+    {   size_t nextSrcSizeHint = ZSTD_nextSrcSizeToDecompress(zds);
+        if (!nextSrcSizeHint) {   /* frame fully decoded */
+            if (zds->outEnd == zds->outStart) {  /* output fully flushed */
+                if (zds->hostageByte) {
+                    if (input->pos >= input->size) {
+                        /* can't release hostage (not present) */
+                        zds->streamStage = zdss_read;
+                        return 1;
+                    }
+                    input->pos++;  /* release hostage */
+                }   /* zds->hostageByte */
+                return 0;
+            }  /* zds->outEnd == zds->outStart */
+            if (!zds->hostageByte) { /* output not fully flushed; keep last byte as hostage; will be released when all output is flushed */
+                input->pos--;   /* note : pos > 0, otherwise, impossible to finish reading last block */
+                zds->hostageByte=1;
+            }
+            return 1;
+        }  /* nextSrcSizeHint==0 */
+        nextSrcSizeHint += ZSTDInternalConstants::ZSTD_blockHeaderSize * (ZSTD_nextInputType(zds) == ZSTDnit_block);   /* preload header of next block */
+        assert(zds->inPos <= nextSrcSizeHint);
+        nextSrcSizeHint -= zds->inPos;   /* part already loaded*/
+        return nextSrcSizeHint;
+    }
+}
+
+size_t ZSTD_decompressStream_simpleArgs (
+                            ZSTD_DCtx* dctx,
+                            void* dst, size_t dstCapacity, size_t* dstPos,
+                      const void* src, size_t srcSize, size_t* srcPos)
+{
+    ZSTD_outBuffer output = { dst, dstCapacity, *dstPos };
+    ZSTD_inBuffer  input  = { src, srcSize, *srcPos };
+    /* ZSTD_compress_generic() will check validity of dstPos and srcPos */
+    size_t const cErr = ZSTD_decompressStream(dctx, &output, &input);
+    *dstPos = output.pos;
+    *srcPos = input.pos;
+    return cErr;
+}
+
+}
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+/*
+ * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+ */
+
+/* zstd_decompress_block :
+ * this module takes care of decompressing _compressed_ block */
+
+/*-*******************************************************
+*  Dependencies
+*********************************************************/
+#include <string.h>      /* memcpy, memmove, memset */
+    /* prefetch */
+         /* low level memory routines */
+
+
+
+
+
+   /* ZSTD_DCtx */
+  /* ZSTD_DDictDictContent */
+
+namespace duckdb_zstd {
+/*_*******************************************************
+*  Macros
+**********************************************************/
+
+/* These two optional macros force the use one way or another of the two
+ * ZSTD_decompressSequences implementations. You can't force in both directions
+ * at the same time.
+ */
+#if defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
+    defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
+#error "Cannot force the use of the short and the long ZSTD_decompressSequences variants!"
+#endif
+
+
+/*_*******************************************************
+*  Memory operations
+**********************************************************/
+static void ZSTD_copy4(void* dst, const void* src) { memcpy(dst, src, 4); }
+
+
+/*-*************************************************************
+ *   Block decoding
+ ***************************************************************/
+
+/*! ZSTD_getcBlockSize() :
+ *  Provides the size of compressed block from block header `src` */
+size_t ZSTD_getcBlockSize(const void* src, size_t srcSize,
+                          blockProperties_t* bpPtr)
+{
+    RETURN_ERROR_IF(srcSize < ZSTDInternalConstants::ZSTD_blockHeaderSize, srcSize_wrong, "");
+
+    {   U32 const cBlockHeader = MEM_readLE24(src);
+        U32 const cSize = cBlockHeader >> 3;
+        bpPtr->lastBlock = cBlockHeader & 1;
+        bpPtr->blockType = (blockType_e)((cBlockHeader >> 1) & 3);
+        bpPtr->origSize = cSize;   /* only useful for RLE */
+        if (bpPtr->blockType == bt_rle) return 1;
+        RETURN_ERROR_IF(bpPtr->blockType == bt_reserved, corruption_detected, "");
+        return cSize;
+    }
+}
+
+
+/* Hidden declaration for fullbench */
+size_t ZSTD_decodeLiteralsBlock(ZSTD_DCtx* dctx,
+                          const void* src, size_t srcSize);
+/*! ZSTD_decodeLiteralsBlock() :
+ * @return : nb of bytes read from src (< srcSize )
+ *  note : symbol not declared but exposed for fullbench */
+size_t ZSTD_decodeLiteralsBlock(ZSTD_DCtx* dctx,
+                          const void* src, size_t srcSize)   /* note : srcSize < BLOCKSIZE */
+{
+    DEBUGLOG(5, "ZSTD_decodeLiteralsBlock");
+    RETURN_ERROR_IF(srcSize < MIN_CBLOCK_SIZE, corruption_detected, "");
+
+    {   const BYTE* const istart = (const BYTE*) src;
+        symbolEncodingType_e const litEncType = (symbolEncodingType_e)(istart[0] & 3);
+
+        switch(litEncType)
+        {
+        case set_repeat:
+            DEBUGLOG(5, "set_repeat flag : re-using stats from previous compressed literals block");
+            RETURN_ERROR_IF(dctx->litEntropy==0, dictionary_corrupted, "");
+            /* fall-through */
+
+        case set_compressed:
+            RETURN_ERROR_IF(srcSize < 5, corruption_detected, "srcSize >= MIN_CBLOCK_SIZE == 3; here we need up to 5 for case 3");
+            {   size_t lhSize, litSize, litCSize;
+                U32 singleStream=0;
+                U32 const lhlCode = (istart[0] >> 2) & 3;
+                U32 const lhc = MEM_readLE32(istart);
+                size_t hufSuccess;
+                switch(lhlCode)
+                {
+                case 0: case 1: default:   /* note : default is impossible, since lhlCode into [0..3] */
+                    /* 2 - 2 - 10 - 10 */
+                    singleStream = !lhlCode;
+                    lhSize = 3;
+                    litSize  = (lhc >> 4) & 0x3FF;
+                    litCSize = (lhc >> 14) & 0x3FF;
+                    break;
+                case 2:
+                    /* 2 - 2 - 14 - 14 */
+                    lhSize = 4;
+                    litSize  = (lhc >> 4) & 0x3FFF;
+                    litCSize = lhc >> 18;
+                    break;
+                case 3:
+                    /* 2 - 2 - 18 - 18 */
+                    lhSize = 5;
+                    litSize  = (lhc >> 4) & 0x3FFFF;
+                    litCSize = (lhc >> 22) + ((size_t)istart[4] << 10);
+                    break;
+                }
+                RETURN_ERROR_IF(litSize > ZSTD_BLOCKSIZE_MAX, corruption_detected, "");
+                RETURN_ERROR_IF(litCSize + lhSize > srcSize, corruption_detected, "");
+
+                /* prefetch huffman table if cold */
+                if (dctx->ddictIsCold && (litSize > 768 /* heuristic */)) {
+                    PREFETCH_AREA(dctx->HUFptr, sizeof(dctx->entropy.hufTable));
+                }
+
+                if (litEncType==set_repeat) {
+                    if (singleStream) {
+                        hufSuccess = HUF_decompress1X_usingDTable_bmi2(
+                            dctx->litBuffer, litSize, istart+lhSize, litCSize,
+                            dctx->HUFptr, dctx->bmi2);
+                    } else {
+                        hufSuccess = HUF_decompress4X_usingDTable_bmi2(
+                            dctx->litBuffer, litSize, istart+lhSize, litCSize,
+                            dctx->HUFptr, dctx->bmi2);
+                    }
+                } else {
+                    if (singleStream) {
+#if defined(HUF_FORCE_DECOMPRESS_X2)
+                        hufSuccess = HUF_decompress1X_DCtx_wksp(
+                            dctx->entropy.hufTable, dctx->litBuffer, litSize,
+                            istart+lhSize, litCSize, dctx->workspace,
+                            sizeof(dctx->workspace));
+#else
+                        hufSuccess = HUF_decompress1X1_DCtx_wksp_bmi2(
+                            dctx->entropy.hufTable, dctx->litBuffer, litSize,
+                            istart+lhSize, litCSize, dctx->workspace,
+                            sizeof(dctx->workspace), dctx->bmi2);
+#endif
+                    } else {
+                        hufSuccess = HUF_decompress4X_hufOnly_wksp_bmi2(
+                            dctx->entropy.hufTable, dctx->litBuffer, litSize,
+                            istart+lhSize, litCSize, dctx->workspace,
+                            sizeof(dctx->workspace), dctx->bmi2);
+                    }
+                }
+
+                RETURN_ERROR_IF(HUF_isError(hufSuccess), corruption_detected, "");
+
+                dctx->litPtr = dctx->litBuffer;
+                dctx->litSize = litSize;
+                dctx->litEntropy = 1;
+                if (litEncType==set_compressed) dctx->HUFptr = dctx->entropy.hufTable;
+                memset(dctx->litBuffer + dctx->litSize, 0, WILDCOPY_OVERLENGTH);
+                return litCSize + lhSize;
+            }
+
+        case set_basic:
+            {   size_t litSize, lhSize;
+                U32 const lhlCode = ((istart[0]) >> 2) & 3;
+                switch(lhlCode)
+                {
+                case 0: case 2: default:   /* note : default is impossible, since lhlCode into [0..3] */
+                    lhSize = 1;
+                    litSize = istart[0] >> 3;
+                    break;
+                case 1:
+                    lhSize = 2;
+                    litSize = MEM_readLE16(istart) >> 4;
+                    break;
+                case 3:
+                    lhSize = 3;
+                    litSize = MEM_readLE24(istart) >> 4;
+                    break;
+                }
+
+                if (lhSize+litSize+WILDCOPY_OVERLENGTH > srcSize) {  /* risk reading beyond src buffer with wildcopy */
+                    RETURN_ERROR_IF(litSize+lhSize > srcSize, corruption_detected, "");
+                    memcpy(dctx->litBuffer, istart+lhSize, litSize);
+                    dctx->litPtr = dctx->litBuffer;
+                    dctx->litSize = litSize;
+                    memset(dctx->litBuffer + dctx->litSize, 0, WILDCOPY_OVERLENGTH);
+                    return lhSize+litSize;
+                }
+                /* direct reference into compressed stream */
+                dctx->litPtr = istart+lhSize;
+                dctx->litSize = litSize;
+                return lhSize+litSize;
+            }
+
+        case set_rle:
+            {   U32 const lhlCode = ((istart[0]) >> 2) & 3;
+                size_t litSize, lhSize;
+                switch(lhlCode)
+                {
+                case 0: case 2: default:   /* note : default is impossible, since lhlCode into [0..3] */
+                    lhSize = 1;
+                    litSize = istart[0] >> 3;
+                    break;
+                case 1:
+                    lhSize = 2;
+                    litSize = MEM_readLE16(istart) >> 4;
+                    break;
+                case 3:
+                    lhSize = 3;
+                    litSize = MEM_readLE24(istart) >> 4;
+                    RETURN_ERROR_IF(srcSize<4, corruption_detected, "srcSize >= MIN_CBLOCK_SIZE == 3; here we need lhSize+1 = 4");
+                    break;
+                }
+                RETURN_ERROR_IF(litSize > ZSTD_BLOCKSIZE_MAX, corruption_detected, "");
+                memset(dctx->litBuffer, istart[lhSize], litSize + WILDCOPY_OVERLENGTH);
+                dctx->litPtr = dctx->litBuffer;
+                dctx->litSize = litSize;
+                return lhSize+1;
+            }
+        default:
+            RETURN_ERROR(corruption_detected, "impossible");
+        }
+    }
+}
+
+/* Default FSE distribution tables.
+ * These are pre-calculated FSE decoding tables using default distributions as defined in specification :
+ * https://github.com/facebook/zstd/blob/master/doc/zstd_compression_format.md#default-distributions
+ * They were generated programmatically with following method :
+ * - start from default distributions, present in /lib/common/zstd_internal.h
+ * - generate tables normally, using ZSTD_buildFSETable()
+ * - printout the content of tables
+ * - pretify output, report below, test with fuzzer to ensure it's correct */
+
+/* Default FSE distribution table for Literal Lengths */
+static const ZSTD_seqSymbol LL_defaultDTable[(1<<LL_DEFAULTNORMLOG)+1] = {
+     {  1,  1,  1, LL_DEFAULTNORMLOG},  /* header : fastMode, tableLog */
+     /* nextState, nbAddBits, nbBits, baseVal */
+     {  0,  0,  4,    0},  { 16,  0,  4,    0},
+     { 32,  0,  5,    1},  {  0,  0,  5,    3},
+     {  0,  0,  5,    4},  {  0,  0,  5,    6},
+     {  0,  0,  5,    7},  {  0,  0,  5,    9},
+     {  0,  0,  5,   10},  {  0,  0,  5,   12},
+     {  0,  0,  6,   14},  {  0,  1,  5,   16},
+     {  0,  1,  5,   20},  {  0,  1,  5,   22},
+     {  0,  2,  5,   28},  {  0,  3,  5,   32},
+     {  0,  4,  5,   48},  { 32,  6,  5,   64},
+     {  0,  7,  5,  128},  {  0,  8,  6,  256},
+     {  0, 10,  6, 1024},  {  0, 12,  6, 4096},
+     { 32,  0,  4,    0},  {  0,  0,  4,    1},
+     {  0,  0,  5,    2},  { 32,  0,  5,    4},
+     {  0,  0,  5,    5},  { 32,  0,  5,    7},
+     {  0,  0,  5,    8},  { 32,  0,  5,   10},
+     {  0,  0,  5,   11},  {  0,  0,  6,   13},
+     { 32,  1,  5,   16},  {  0,  1,  5,   18},
+     { 32,  1,  5,   22},  {  0,  2,  5,   24},
+     { 32,  3,  5,   32},  {  0,  3,  5,   40},
+     {  0,  6,  4,   64},  { 16,  6,  4,   64},
+     { 32,  7,  5,  128},  {  0,  9,  6,  512},
+     {  0, 11,  6, 2048},  { 48,  0,  4,    0},
+     { 16,  0,  4,    1},  { 32,  0,  5,    2},
+     { 32,  0,  5,    3},  { 32,  0,  5,    5},
+     { 32,  0,  5,    6},  { 32,  0,  5,    8},
+     { 32,  0,  5,    9},  { 32,  0,  5,   11},
+     { 32,  0,  5,   12},  {  0,  0,  6,   15},
+     { 32,  1,  5,   18},  { 32,  1,  5,   20},
+     { 32,  2,  5,   24},  { 32,  2,  5,   28},
+     { 32,  3,  5,   40},  { 32,  4,  5,   48},
+     {  0, 16,  6,65536},  {  0, 15,  6,32768},
+     {  0, 14,  6,16384},  {  0, 13,  6, 8192},
+};   /* LL_defaultDTable */
+
+/* Default FSE distribution table for Offset Codes */
+static const ZSTD_seqSymbol OF_defaultDTable[(1<<OF_DEFAULTNORMLOG)+1] = {
+    {  1,  1,  1, OF_DEFAULTNORMLOG},  /* header : fastMode, tableLog */
+    /* nextState, nbAddBits, nbBits, baseVal */
+    {  0,  0,  5,    0},     {  0,  6,  4,   61},
+    {  0,  9,  5,  509},     {  0, 15,  5,32765},
+    {  0, 21,  5,2097149},   {  0,  3,  5,    5},
+    {  0,  7,  4,  125},     {  0, 12,  5, 4093},
+    {  0, 18,  5,262141},    {  0, 23,  5,8388605},
+    {  0,  5,  5,   29},     {  0,  8,  4,  253},
+    {  0, 14,  5,16381},     {  0, 20,  5,1048573},
+    {  0,  2,  5,    1},     { 16,  7,  4,  125},
+    {  0, 11,  5, 2045},     {  0, 17,  5,131069},
+    {  0, 22,  5,4194301},   {  0,  4,  5,   13},
+    { 16,  8,  4,  253},     {  0, 13,  5, 8189},
+    {  0, 19,  5,524285},    {  0,  1,  5,    1},
+    { 16,  6,  4,   61},     {  0, 10,  5, 1021},
+    {  0, 16,  5,65533},     {  0, 28,  5,268435453},
+    {  0, 27,  5,134217725}, {  0, 26,  5,67108861},
+    {  0, 25,  5,33554429},  {  0, 24,  5,16777213},
+};   /* OF_defaultDTable */
+
+
+/* Default FSE distribution table for Match Lengths */
+static const ZSTD_seqSymbol ML_defaultDTable[(1<<ML_DEFAULTNORMLOG)+1] = {
+    {  1,  1,  1, ML_DEFAULTNORMLOG},  /* header : fastMode, tableLog */
+    /* nextState, nbAddBits, nbBits, baseVal */
+    {  0,  0,  6,    3},  {  0,  0,  4,    4},
+    { 32,  0,  5,    5},  {  0,  0,  5,    6},
+    {  0,  0,  5,    8},  {  0,  0,  5,    9},
+    {  0,  0,  5,   11},  {  0,  0,  6,   13},
+    {  0,  0,  6,   16},  {  0,  0,  6,   19},
+    {  0,  0,  6,   22},  {  0,  0,  6,   25},
+    {  0,  0,  6,   28},  {  0,  0,  6,   31},
+    {  0,  0,  6,   34},  {  0,  1,  6,   37},
+    {  0,  1,  6,   41},  {  0,  2,  6,   47},
+    {  0,  3,  6,   59},  {  0,  4,  6,   83},
+    {  0,  7,  6,  131},  {  0,  9,  6,  515},
+    { 16,  0,  4,    4},  {  0,  0,  4,    5},
+    { 32,  0,  5,    6},  {  0,  0,  5,    7},
+    { 32,  0,  5,    9},  {  0,  0,  5,   10},
+    {  0,  0,  6,   12},  {  0,  0,  6,   15},
+    {  0,  0,  6,   18},  {  0,  0,  6,   21},
+    {  0,  0,  6,   24},  {  0,  0,  6,   27},
+    {  0,  0,  6,   30},  {  0,  0,  6,   33},
+    {  0,  1,  6,   35},  {  0,  1,  6,   39},
+    {  0,  2,  6,   43},  {  0,  3,  6,   51},
+    {  0,  4,  6,   67},  {  0,  5,  6,   99},
+    {  0,  8,  6,  259},  { 32,  0,  4,    4},
+    { 48,  0,  4,    4},  { 16,  0,  4,    5},
+    { 32,  0,  5,    7},  { 32,  0,  5,    8},
+    { 32,  0,  5,   10},  { 32,  0,  5,   11},
+    {  0,  0,  6,   14},  {  0,  0,  6,   17},
+    {  0,  0,  6,   20},  {  0,  0,  6,   23},
+    {  0,  0,  6,   26},  {  0,  0,  6,   29},
+    {  0,  0,  6,   32},  {  0, 16,  6,65539},
+    {  0, 15,  6,32771},  {  0, 14,  6,16387},
+    {  0, 13,  6, 8195},  {  0, 12,  6, 4099},
+    {  0, 11,  6, 2051},  {  0, 10,  6, 1027},
+};   /* ML_defaultDTable */
+
+
+static void ZSTD_buildSeqTable_rle(ZSTD_seqSymbol* dt, U32 baseValue, U32 nbAddBits)
+{
+    void* ptr = dt;
+    ZSTD_seqSymbol_header* const DTableH = (ZSTD_seqSymbol_header*)ptr;
+    ZSTD_seqSymbol* const cell = dt + 1;
+
+    DTableH->tableLog = 0;
+    DTableH->fastMode = 0;
+
+    cell->nbBits = 0;
+    cell->nextState = 0;
+    assert(nbAddBits < 255);
+    cell->nbAdditionalBits = (BYTE)nbAddBits;
+    cell->baseValue = baseValue;
+}
+
+
+/* ZSTD_buildFSETable() :
+ * generate FSE decoding table for one symbol (ll, ml or off)
+ * cannot fail if input is valid =>
+ * all inputs are presumed validated at this stage */
+void
+ZSTD_buildFSETable(ZSTD_seqSymbol* dt,
+            const short* normalizedCounter, unsigned maxSymbolValue,
+            const U32* baseValue, const U32* nbAdditionalBits,
+            unsigned tableLog)
+{
+    ZSTD_seqSymbol* const tableDecode = dt+1;
+    U16 symbolNext[MaxSeq+1];
 
     U32 const maxSV1 = maxSymbolValue + 1;
     U32 const tableSize = 1 << tableLog;
     U32 highThreshold = tableSize-1;
 
     /* Sanity Checks */
-    if (maxSymbolValue > FSE_MAX_SYMBOL_VALUE) return ERROR(maxSymbolValue_tooLarge);
-    if (tableLog > FSE_MAX_TABLELOG) return ERROR(tableLog_tooLarge);
+    assert(maxSymbolValue <= MaxSeq);
+    assert(tableLog <= MaxFSELog);
 
     /* Init, lay down lowprob symbols */
-    {   FSE_DTableHeader DTableH;
-        DTableH.tableLog = (U16)tableLog;
+    {   ZSTD_seqSymbol_header DTableH;
+        DTableH.tableLog = tableLog;
         DTableH.fastMode = 1;
         {   S16 const largeLimit= (S16)(1 << (tableLog-1));
             U32 s;
             for (s=0; s<maxSV1; s++) {
                 if (normalizedCounter[s]==-1) {
-                    tableDecode[highThreshold--].symbol = (FSE_FUNCTION_TYPE)s;
+                    tableDecode[highThreshold--].baseValue = s;
                     symbolNext[s] = 1;
                 } else {
                     if (normalizedCounter[s] >= largeLimit) DTableH.fastMode=0;
-                    symbolNext[s] = normalizedCounter[s];
+                    assert(normalizedCounter[s]>=0);
+                    symbolNext[s] = (U16)normalizedCounter[s];
         }   }   }
         memcpy(dt, &DTableH, sizeof(DTableH));
     }
@@ -42419,1190 +43447,1016 @@ size_t FSE_buildDTable(FSE_DTable* dt, const short* normalizedCounter, unsigned 
         for (s=0; s<maxSV1; s++) {
             int i;
             for (i=0; i<normalizedCounter[s]; i++) {
-                tableDecode[position].symbol = (FSE_FUNCTION_TYPE)s;
+                tableDecode[position].baseValue = s;
                 position = (position + step) & tableMask;
                 while (position > highThreshold) position = (position + step) & tableMask;   /* lowprob area */
         }   }
-        if (position!=0) return ERROR(GENERIC);   /* position must reach all cells once, otherwise normalizedCounter is incorrect */
+        assert(position == 0); /* position must reach all cells once, otherwise normalizedCounter is incorrect */
     }
 
     /* Build Decoding table */
     {   U32 u;
         for (u=0; u<tableSize; u++) {
-            FSE_FUNCTION_TYPE const symbol = (FSE_FUNCTION_TYPE)(tableDecode[u].symbol);
+            U32 const symbol = tableDecode[u].baseValue;
             U32 const nextState = symbolNext[symbol]++;
             tableDecode[u].nbBits = (BYTE) (tableLog - BIT_highbit32(nextState) );
-            tableDecode[u].newState = (U16) ( (nextState << tableDecode[u].nbBits) - tableSize);
+            tableDecode[u].nextState = (U16) ( (nextState << tableDecode[u].nbBits) - tableSize);
+            assert(nbAdditionalBits[symbol] < 255);
+            tableDecode[u].nbAdditionalBits = (BYTE)nbAdditionalBits[symbol];
+            tableDecode[u].baseValue = baseValue[symbol];
     }   }
-
-    return 0;
 }
 
 
-#ifndef FSE_COMMONDEFS_ONLY
-
-/*-*******************************************************
-*  Decompression (Byte symbols)
-*********************************************************/
-size_t FSE_buildDTable_rle (FSE_DTable* dt, BYTE symbolValue)
+/*! ZSTD_buildSeqTable() :
+ * @return : nb bytes read from src,
+ *           or an error code if it fails */
+static size_t ZSTD_buildSeqTable(ZSTD_seqSymbol* DTableSpace, const ZSTD_seqSymbol** DTablePtr,
+                                 symbolEncodingType_e type, unsigned max, U32 maxLog,
+                                 const void* src, size_t srcSize,
+                                 const U32* baseValue, const U32* nbAdditionalBits,
+                                 const ZSTD_seqSymbol* defaultTable, U32 flagRepeatTable,
+                                 int ddictIsCold, int nbSeq)
 {
-    void* ptr = dt;
-    FSE_DTableHeader* const DTableH = (FSE_DTableHeader*)ptr;
-    void* dPtr = dt + 1;
-    FSE_decode_t* const cell = (FSE_decode_t*)dPtr;
-
-    DTableH->tableLog = 0;
-    DTableH->fastMode = 0;
-
-    cell->newState = 0;
-    cell->symbol = symbolValue;
-    cell->nbBits = 0;
-
-    return 0;
-}
-
-
-size_t FSE_buildDTable_raw (FSE_DTable* dt, unsigned nbBits)
-{
-    void* ptr = dt;
-    FSE_DTableHeader* const DTableH = (FSE_DTableHeader*)ptr;
-    void* dPtr = dt + 1;
-    FSE_decode_t* const dinfo = (FSE_decode_t*)dPtr;
-    const unsigned tableSize = 1 << nbBits;
-    const unsigned tableMask = tableSize - 1;
-    const unsigned maxSV1 = tableMask+1;
-    unsigned s;
-
-    /* Sanity checks */
-    if (nbBits < 1) return ERROR(GENERIC);         /* min size */
-
-    /* Build Decoding Table */
-    DTableH->tableLog = (U16)nbBits;
-    DTableH->fastMode = 1;
-    for (s=0; s<maxSV1; s++) {
-        dinfo[s].newState = 0;
-        dinfo[s].symbol = (BYTE)s;
-        dinfo[s].nbBits = (BYTE)nbBits;
+    switch(type)
+    {
+    case set_rle :
+        RETURN_ERROR_IF(!srcSize, srcSize_wrong, "");
+        RETURN_ERROR_IF((*(const BYTE*)src) > max, corruption_detected, "");
+        {   U32 const symbol = *(const BYTE*)src;
+            U32 const baseline = baseValue[symbol];
+            U32 const nbBits = nbAdditionalBits[symbol];
+            ZSTD_buildSeqTable_rle(DTableSpace, baseline, nbBits);
+        }
+        *DTablePtr = DTableSpace;
+        return 1;
+    case set_basic :
+        *DTablePtr = defaultTable;
+        return 0;
+    case set_repeat:
+        RETURN_ERROR_IF(!flagRepeatTable, corruption_detected, "");
+        /* prefetch FSE table if used */
+        if (ddictIsCold && (nbSeq > 24 /* heuristic */)) {
+            const void* const pStart = *DTablePtr;
+            size_t const pSize = sizeof(ZSTD_seqSymbol) * (SEQSYMBOL_TABLE_SIZE(maxLog));
+            PREFETCH_AREA(pStart, pSize);
+        }
+        return 0;
+    case set_compressed :
+        {   unsigned tableLog;
+            S16 norm[MaxSeq+1];
+            size_t const headerSize = FSE_readNCount(norm, &max, &tableLog, src, srcSize);
+            RETURN_ERROR_IF(FSE_isError(headerSize), corruption_detected, "");
+            RETURN_ERROR_IF(tableLog > maxLog, corruption_detected, "");
+            ZSTD_buildFSETable(DTableSpace, norm, max, baseValue, nbAdditionalBits, tableLog);
+            *DTablePtr = DTableSpace;
+            return headerSize;
+        }
+    default :
+        assert(0);
+        RETURN_ERROR(GENERIC, "impossible");
     }
-
-    return 0;
 }
 
-FORCE_INLINE_TEMPLATE size_t FSE_decompress_usingDTable_generic(
-          void* dst, size_t maxDstSize,
-    const void* cSrc, size_t cSrcSize,
-    const FSE_DTable* dt, const unsigned fast)
+size_t ZSTD_decodeSeqHeaders(ZSTD_DCtx* dctx, int* nbSeqPtr,
+                             const void* src, size_t srcSize)
 {
-    BYTE* const ostart = (BYTE*) dst;
-    BYTE* op = ostart;
-    BYTE* const omax = op + maxDstSize;
-    BYTE* const olimit = omax-3;
+    const BYTE* const istart = (const BYTE* const)src;
+    const BYTE* const iend = istart + srcSize;
+    const BYTE* ip = istart;
+    int nbSeq;
+    DEBUGLOG(5, "ZSTD_decodeSeqHeaders");
 
-    BIT_DStream_t bitD;
-    FSE_DState_t state1;
-    FSE_DState_t state2;
+    /* check */
+    RETURN_ERROR_IF(srcSize < MIN_SEQUENCES_SIZE, srcSize_wrong, "");
 
-    /* Init */
-    CHECK_F(BIT_initDStream(&bitD, cSrc, cSrcSize));
-
-    FSE_initDState(&state1, &bitD, dt);
-    FSE_initDState(&state2, &bitD, dt);
-
-#define FSE_GETSYMBOL(statePtr) fast ? FSE_decodeSymbolFast(statePtr, &bitD) : FSE_decodeSymbol(statePtr, &bitD)
-
-    /* 4 symbols per loop */
-    for ( ; (BIT_reloadDStream(&bitD)==BIT_DStream_unfinished) & (op<olimit) ; op+=4) {
-        op[0] = FSE_GETSYMBOL(&state1);
-
-        if (FSE_MAX_TABLELOG*2+7 > sizeof(bitD.bitContainer)*8)    /* This test must be static */
-            BIT_reloadDStream(&bitD);
-
-        op[1] = FSE_GETSYMBOL(&state2);
-
-        if (FSE_MAX_TABLELOG*4+7 > sizeof(bitD.bitContainer)*8)    /* This test must be static */
-            { if (BIT_reloadDStream(&bitD) > BIT_DStream_unfinished) { op+=2; break; } }
-
-        op[2] = FSE_GETSYMBOL(&state1);
-
-        if (FSE_MAX_TABLELOG*2+7 > sizeof(bitD.bitContainer)*8)    /* This test must be static */
-            BIT_reloadDStream(&bitD);
-
-        op[3] = FSE_GETSYMBOL(&state2);
+    /* SeqHead */
+    nbSeq = *ip++;
+    if (!nbSeq) {
+        *nbSeqPtr=0;
+        RETURN_ERROR_IF(srcSize != 1, srcSize_wrong, "");
+        return 1;
     }
+    if (nbSeq > 0x7F) {
+        if (nbSeq == 0xFF) {
+            RETURN_ERROR_IF(ip+2 > iend, srcSize_wrong, "");
+            nbSeq = MEM_readLE16(ip) + LONGNBSEQ, ip+=2;
+        } else {
+            RETURN_ERROR_IF(ip >= iend, srcSize_wrong, "");
+            nbSeq = ((nbSeq-0x80)<<8) + *ip++;
+        }
+    }
+    *nbSeqPtr = nbSeq;
 
-    /* tail */
-    /* note : BIT_reloadDStream(&bitD) >= FSE_DStream_partiallyFilled; Ends at exactly BIT_DStream_completed */
-    while (1) {
-        if (op>(omax-2)) return ERROR(dstSize_tooSmall);
-        *op++ = FSE_GETSYMBOL(&state1);
-        if (BIT_reloadDStream(&bitD)==BIT_DStream_overflow) {
-            *op++ = FSE_GETSYMBOL(&state2);
-            break;
+    /* FSE table descriptors */
+    RETURN_ERROR_IF(ip+1 > iend, srcSize_wrong, ""); /* minimum possible size: 1 byte for symbol encoding types */
+    {   symbolEncodingType_e const LLtype = (symbolEncodingType_e)(*ip >> 6);
+        symbolEncodingType_e const OFtype = (symbolEncodingType_e)((*ip >> 4) & 3);
+        symbolEncodingType_e const MLtype = (symbolEncodingType_e)((*ip >> 2) & 3);
+        ip++;
+
+        /* Build DTables */
+        {   size_t const llhSize = ZSTD_buildSeqTable(dctx->entropy.LLTable, &dctx->LLTptr,
+                                                      LLtype, MaxLL, LLFSELog,
+                                                      ip, iend-ip,
+                                                      ZSTDConstants::LL_base, ZSTDInternalConstants::LL_bits,
+                                                      LL_defaultDTable, dctx->fseEntropy,
+                                                      dctx->ddictIsCold, nbSeq);
+            RETURN_ERROR_IF(ZSTD_isError(llhSize), corruption_detected, "ZSTD_buildSeqTable failed");
+            ip += llhSize;
         }
 
-        if (op>(omax-2)) return ERROR(dstSize_tooSmall);
-        *op++ = FSE_GETSYMBOL(&state2);
-        if (BIT_reloadDStream(&bitD)==BIT_DStream_overflow) {
-            *op++ = FSE_GETSYMBOL(&state1);
-            break;
+        {   size_t const ofhSize = ZSTD_buildSeqTable(dctx->entropy.OFTable, &dctx->OFTptr,
+                                                      OFtype, MaxOff, OffFSELog,
+                                                      ip, iend-ip,
+                                                      ZSTDConstants::OF_base, ZSTDConstants::OF_bits,
+                                                      OF_defaultDTable, dctx->fseEntropy,
+                                                      dctx->ddictIsCold, nbSeq);
+            RETURN_ERROR_IF(ZSTD_isError(ofhSize), corruption_detected, "ZSTD_buildSeqTable failed");
+            ip += ofhSize;
+        }
+
+        {   size_t const mlhSize = ZSTD_buildSeqTable(dctx->entropy.MLTable, &dctx->MLTptr,
+                                                      MLtype, MaxML, MLFSELog,
+                                                      ip, iend-ip,
+                                                      ZSTDConstants::ML_base, ZSTDInternalConstants::ML_bits,
+                                                      ML_defaultDTable, dctx->fseEntropy,
+                                                      dctx->ddictIsCold, nbSeq);
+            RETURN_ERROR_IF(ZSTD_isError(mlhSize), corruption_detected, "ZSTD_buildSeqTable failed");
+            ip += mlhSize;
+        }
+    }
+
+    return ip-istart;
+}
+
+
+typedef struct {
+    size_t litLength;
+    size_t matchLength;
+    size_t offset;
+    const BYTE* match;
+} seq_t;
+
+typedef struct {
+    size_t state;
+    const ZSTD_seqSymbol* table;
+} ZSTD_fseState;
+
+typedef struct {
+    BIT_DStream_t DStream;
+    ZSTD_fseState stateLL;
+    ZSTD_fseState stateOffb;
+    ZSTD_fseState stateML;
+    size_t prevOffset[ZSTD_REP_NUM];
+    const BYTE* prefixStart;
+    const BYTE* dictEnd;
+    size_t pos;
+} seqState_t;
+
+/*! ZSTD_overlapCopy8() :
+ *  Copies 8 bytes from ip to op and updates op and ip where ip <= op.
+ *  If the offset is < 8 then the offset is spread to at least 8 bytes.
+ *
+ *  Precondition: *ip <= *op
+ *  Postcondition: *op - *op >= 8
+ */
+HINT_INLINE void ZSTD_overlapCopy8(BYTE** op, BYTE const** ip, size_t offset) {
+    assert(*ip <= *op);
+    if (offset < 8) {
+        /* close range match, overlap */
+        static const U32 dec32table[] = { 0, 1, 2, 1, 4, 4, 4, 4 };   /* added */
+        static const int dec64table[] = { 8, 8, 8, 7, 8, 9,10,11 };   /* subtracted */
+        int const sub2 = dec64table[offset];
+        (*op)[0] = (*ip)[0];
+        (*op)[1] = (*ip)[1];
+        (*op)[2] = (*ip)[2];
+        (*op)[3] = (*ip)[3];
+        *ip += dec32table[offset];
+        ZSTD_copy4(*op+4, *ip);
+        *ip -= sub2;
+    } else {
+        ZSTD_copy8(*op, *ip);
+    }
+    *ip += 8;
+    *op += 8;
+    assert(*op - *ip >= 8);
+}
+
+/*! ZSTD_safecopy() :
+ *  Specialized version of memcpy() that is allowed to READ up to WILDCOPY_OVERLENGTH past the input buffer
+ *  and write up to 16 bytes past oend_w (op >= oend_w is allowed).
+ *  This function is only called in the uncommon case where the sequence is near the end of the block. It
+ *  should be fast for a single long sequence, but can be slow for several short sequences.
+ *
+ *  @param ovtype controls the overlap detection
+ *         - ZSTD_no_overlap: The source and destination are guaranteed to be at least WILDCOPY_VECLEN bytes apart.
+ *         - ZSTD_overlap_src_before_dst: The src and dst may overlap and may be any distance apart.
+ *           The src buffer must be before the dst buffer.
+ */
+static void ZSTD_safecopy(BYTE* op, BYTE* const oend_w, BYTE const* ip, ptrdiff_t length, ZSTD_overlap_e ovtype) {
+    ptrdiff_t const diff = op - ip;
+    BYTE* const oend = op + length;
+
+    assert((ovtype == ZSTD_no_overlap && (diff <= -8 || diff >= 8 || op >= oend_w)) ||
+           (ovtype == ZSTD_overlap_src_before_dst && diff >= 0));
+
+    if (length < 8) {
+        /* Handle short lengths. */
+        while (op < oend) *op++ = *ip++;
+        return;
+    }
+    if (ovtype == ZSTD_overlap_src_before_dst) {
+        /* Copy 8 bytes and ensure the offset >= 8 when there can be overlap. */
+        assert(length >= 8);
+        ZSTD_overlapCopy8(&op, &ip, diff);
+        assert(op - ip >= 8);
+        assert(op <= oend);
+    }
+
+    if (oend <= oend_w) {
+        /* No risk of overwrite. */
+        ZSTD_wildcopy(op, ip, length, ovtype);
+        return;
+    }
+    if (op <= oend_w) {
+        /* Wildcopy until we get close to the end. */
+        assert(oend > oend_w);
+        ZSTD_wildcopy(op, ip, oend_w - op, ovtype);
+        ip += oend_w - op;
+        op = oend_w;
+    }
+    /* Handle the leftovers. */
+    while (op < oend) *op++ = *ip++;
+}
+
+/* ZSTD_execSequenceEnd():
+ * This version handles cases that are near the end of the output buffer. It requires
+ * more careful checks to make sure there is no overflow. By separating out these hard
+ * and unlikely cases, we can speed up the common cases.
+ *
+ * NOTE: This function needs to be fast for a single long sequence, but doesn't need
+ * to be optimized for many small sequences, since those fall into ZSTD_execSequence().
+ */
+FORCE_NOINLINE
+size_t ZSTD_execSequenceEnd(BYTE* op,
+                            BYTE* const oend, seq_t sequence,
+                            const BYTE** litPtr, const BYTE* const litLimit,
+                            const BYTE* const prefixStart, const BYTE* const virtualStart, const BYTE* const dictEnd)
+{
+    BYTE* const oLitEnd = op + sequence.litLength;
+    size_t const sequenceLength = sequence.litLength + sequence.matchLength;
+    const BYTE* const iLitEnd = *litPtr + sequence.litLength;
+    const BYTE* match = oLitEnd - sequence.offset;
+    BYTE* const oend_w = oend - WILDCOPY_OVERLENGTH;
+
+    /* bounds checks : careful of address space overflow in 32-bit mode */
+    RETURN_ERROR_IF(sequenceLength > (size_t)(oend - op), dstSize_tooSmall, "last match must fit within dstBuffer");
+    RETURN_ERROR_IF(sequence.litLength > (size_t)(litLimit - *litPtr), corruption_detected, "try to read beyond literal buffer");
+    assert(op < op + sequenceLength);
+    assert(oLitEnd < op + sequenceLength);
+
+    /* copy literals */
+    ZSTD_safecopy(op, oend_w, *litPtr, sequence.litLength, ZSTD_no_overlap);
+    op = oLitEnd;
+    *litPtr = iLitEnd;
+
+    /* copy Match */
+    if (sequence.offset > (size_t)(oLitEnd - prefixStart)) {
+        /* offset beyond prefix */
+        RETURN_ERROR_IF(sequence.offset > (size_t)(oLitEnd - virtualStart), corruption_detected, "");
+        match = dictEnd - (prefixStart-match);
+        if (match + sequence.matchLength <= dictEnd) {
+            memmove(oLitEnd, match, sequence.matchLength);
+            return sequenceLength;
+        }
+        /* span extDict & currentPrefixSegment */
+        {   size_t const length1 = dictEnd - match;
+            memmove(oLitEnd, match, length1);
+            op = oLitEnd + length1;
+            sequence.matchLength -= length1;
+            match = prefixStart;
     }   }
+    ZSTD_safecopy(op, oend_w, match, sequence.matchLength, ZSTD_overlap_src_before_dst);
+    return sequenceLength;
+}
+
+HINT_INLINE
+size_t ZSTD_execSequence(BYTE* op,
+                         BYTE* const oend, seq_t sequence,
+                         const BYTE** litPtr, const BYTE* const litLimit,
+                         const BYTE* const prefixStart, const BYTE* const virtualStart, const BYTE* const dictEnd)
+{
+    BYTE* const oLitEnd = op + sequence.litLength;
+    size_t const sequenceLength = sequence.litLength + sequence.matchLength;
+    BYTE* const oMatchEnd = op + sequenceLength;   /* risk : address space overflow (32-bits) */
+    BYTE* const oend_w = oend - WILDCOPY_OVERLENGTH;   /* risk : address space underflow on oend=NULL */
+    const BYTE* const iLitEnd = *litPtr + sequence.litLength;
+    const BYTE* match = oLitEnd - sequence.offset;
+
+    assert(op != NULL /* Precondition */);
+    assert(oend_w < oend /* No underflow */);
+    /* Handle edge cases in a slow path:
+     *   - Read beyond end of literals
+     *   - Match end is within WILDCOPY_OVERLIMIT of oend
+     *   - 32-bit mode and the match length overflows
+     */
+    if (UNLIKELY(
+            iLitEnd > litLimit ||
+            oMatchEnd > oend_w ||
+            (MEM_32bits() && (size_t)(oend - op) < sequenceLength + WILDCOPY_OVERLENGTH)))
+        return ZSTD_execSequenceEnd(op, oend, sequence, litPtr, litLimit, prefixStart, virtualStart, dictEnd);
+
+    /* Assumptions (everything else goes into ZSTD_execSequenceEnd()) */
+    assert(op <= oLitEnd /* No overflow */);
+    assert(oLitEnd < oMatchEnd /* Non-zero match & no overflow */);
+    assert(oMatchEnd <= oend /* No underflow */);
+    assert(iLitEnd <= litLimit /* Literal length is in bounds */);
+    assert(oLitEnd <= oend_w /* Can wildcopy literals */);
+    assert(oMatchEnd <= oend_w /* Can wildcopy matches */);
+
+    /* Copy Literals:
+     * Split out litLength <= 16 since it is nearly always true. +1.6% on gcc-9.
+     * We likely don't need the full 32-byte wildcopy.
+     */
+    assert(WILDCOPY_OVERLENGTH >= 16);
+    ZSTD_copy16(op, (*litPtr));
+    if (UNLIKELY(sequence.litLength > 16)) {
+        ZSTD_wildcopy(op+16, (*litPtr)+16, sequence.litLength-16, ZSTD_no_overlap);
+    }
+    op = oLitEnd;
+    *litPtr = iLitEnd;   /* update for next sequence */
+
+    /* Copy Match */
+    if (sequence.offset > (size_t)(oLitEnd - prefixStart)) {
+        /* offset beyond prefix -> go into extDict */
+        RETURN_ERROR_IF(UNLIKELY(sequence.offset > (size_t)(oLitEnd - virtualStart)), corruption_detected, "");
+        match = dictEnd + (match - prefixStart);
+        if (match + sequence.matchLength <= dictEnd) {
+            memmove(oLitEnd, match, sequence.matchLength);
+            return sequenceLength;
+        }
+        /* span extDict & currentPrefixSegment */
+        {   size_t const length1 = dictEnd - match;
+            memmove(oLitEnd, match, length1);
+            op = oLitEnd + length1;
+            sequence.matchLength -= length1;
+            match = prefixStart;
+    }   }
+    /* Match within prefix of 1 or more bytes */
+    assert(op <= oMatchEnd);
+    assert(oMatchEnd <= oend_w);
+    assert(match >= prefixStart);
+    assert(sequence.matchLength >= 1);
+
+    /* Nearly all offsets are >= WILDCOPY_VECLEN bytes, which means we can use wildcopy
+     * without overlap checking.
+     */
+    if (LIKELY(sequence.offset >= WILDCOPY_VECLEN)) {
+        /* We bet on a full wildcopy for matches, since we expect matches to be
+         * longer than literals (in general). In silesia, ~10% of matches are longer
+         * than 16 bytes.
+         */
+        ZSTD_wildcopy(op, match, (ptrdiff_t)sequence.matchLength, ZSTD_no_overlap);
+        return sequenceLength;
+    }
+    assert(sequence.offset < WILDCOPY_VECLEN);
+
+    /* Copy 8 bytes and spread the offset to be >= 8. */
+    ZSTD_overlapCopy8(&op, &match, sequence.offset);
+
+    /* If the match length is > 8 bytes, then continue with the wildcopy. */
+    if (sequence.matchLength > 8) {
+        assert(op < oMatchEnd);
+        ZSTD_wildcopy(op, match, (ptrdiff_t)sequence.matchLength-8, ZSTD_overlap_src_before_dst);
+    }
+    return sequenceLength;
+}
+
+static void
+ZSTD_initFseState(ZSTD_fseState* DStatePtr, BIT_DStream_t* bitD, const ZSTD_seqSymbol* dt)
+{
+    const void* ptr = dt;
+    const ZSTD_seqSymbol_header* const DTableH = (const ZSTD_seqSymbol_header*)ptr;
+    DStatePtr->state = BIT_readBits(bitD, DTableH->tableLog);
+    DEBUGLOG(6, "ZSTD_initFseState : val=%u using %u bits",
+                (U32)DStatePtr->state, DTableH->tableLog);
+    BIT_reloadDStream(bitD);
+    DStatePtr->table = dt + 1;
+}
+
+FORCE_INLINE_TEMPLATE void
+ZSTD_updateFseState(ZSTD_fseState* DStatePtr, BIT_DStream_t* bitD)
+{
+    ZSTD_seqSymbol const DInfo = DStatePtr->table[DStatePtr->state];
+    U32 const nbBits = DInfo.nbBits;
+    size_t const lowBits = BIT_readBits(bitD, nbBits);
+    DStatePtr->state = DInfo.nextState + lowBits;
+}
+
+FORCE_INLINE_TEMPLATE void
+ZSTD_updateFseStateWithDInfo(ZSTD_fseState* DStatePtr, BIT_DStream_t* bitD, ZSTD_seqSymbol const DInfo)
+{
+    U32 const nbBits = DInfo.nbBits;
+    size_t const lowBits = BIT_readBits(bitD, nbBits);
+    DStatePtr->state = DInfo.nextState + lowBits;
+}
+
+/* We need to add at most (ZSTD_WINDOWLOG_MAX_32 - 1) bits to read the maximum
+ * offset bits. But we can only read at most (STREAM_ACCUMULATOR_MIN_32 - 1)
+ * bits before reloading. This value is the maximum number of bytes we read
+ * after reloading when we are decoding long offsets.
+ */
+#define LONG_OFFSETS_MAX_EXTRA_BITS_32                       \
+    (ZSTD_WINDOWLOG_MAX_32 > STREAM_ACCUMULATOR_MIN_32       \
+        ? ZSTD_WINDOWLOG_MAX_32 - STREAM_ACCUMULATOR_MIN_32  \
+        : 0)
+
+typedef enum { ZSTD_lo_isRegularOffset, ZSTD_lo_isLongOffset=1 } ZSTD_longOffset_e;
+typedef enum { ZSTD_p_noPrefetch=0, ZSTD_p_prefetch=1 } ZSTD_prefetch_e;
+
+FORCE_INLINE_TEMPLATE seq_t
+ZSTD_decodeSequence(seqState_t* seqState, const ZSTD_longOffset_e longOffsets, const ZSTD_prefetch_e prefetch)
+{
+    seq_t seq;
+    ZSTD_seqSymbol const llDInfo = seqState->stateLL.table[seqState->stateLL.state];
+    ZSTD_seqSymbol const mlDInfo = seqState->stateML.table[seqState->stateML.state];
+    ZSTD_seqSymbol const ofDInfo = seqState->stateOffb.table[seqState->stateOffb.state];
+    U32 const llBase = llDInfo.baseValue;
+    U32 const mlBase = mlDInfo.baseValue;
+    U32 const ofBase = ofDInfo.baseValue;
+    BYTE const llBits = llDInfo.nbAdditionalBits;
+    BYTE const mlBits = mlDInfo.nbAdditionalBits;
+    BYTE const ofBits = ofDInfo.nbAdditionalBits;
+    BYTE const totalBits = llBits+mlBits+ofBits;
+
+    /* sequence */
+    {   size_t offset;
+        if (ofBits > 1) {
+            ZSTD_STATIC_ASSERT(ZSTD_lo_isLongOffset == 1);
+            ZSTD_STATIC_ASSERT(LONG_OFFSETS_MAX_EXTRA_BITS_32 == 5);
+            assert(ofBits <= MaxOff);
+            if (MEM_32bits() && longOffsets && (ofBits >= STREAM_ACCUMULATOR_MIN_32)) {
+                U32 const extraBits = ofBits - MIN(ofBits, 32 - seqState->DStream.bitsConsumed);
+                offset = ofBase + (BIT_readBitsFast(&seqState->DStream, ofBits - extraBits) << extraBits);
+                BIT_reloadDStream(&seqState->DStream);
+                if (extraBits) offset += BIT_readBitsFast(&seqState->DStream, extraBits);
+                assert(extraBits <= LONG_OFFSETS_MAX_EXTRA_BITS_32);   /* to avoid another reload */
+            } else {
+                offset = ofBase + BIT_readBitsFast(&seqState->DStream, ofBits/*>0*/);   /* <=  (ZSTD_WINDOWLOG_MAX-1) bits */
+                if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);
+            }
+            seqState->prevOffset[2] = seqState->prevOffset[1];
+            seqState->prevOffset[1] = seqState->prevOffset[0];
+            seqState->prevOffset[0] = offset;
+        } else {
+            U32 const ll0 = (llBase == 0);
+            if (LIKELY((ofBits == 0))) {
+                if (LIKELY(!ll0))
+                    offset = seqState->prevOffset[0];
+                else {
+                    offset = seqState->prevOffset[1];
+                    seqState->prevOffset[1] = seqState->prevOffset[0];
+                    seqState->prevOffset[0] = offset;
+                }
+            } else {
+                offset = ofBase + ll0 + BIT_readBitsFast(&seqState->DStream, 1);
+                {   size_t temp = (offset==3) ? seqState->prevOffset[0] - 1 : seqState->prevOffset[offset];
+                    temp += !temp;   /* 0 is not valid; input is corrupted; force offset to 1 */
+                    if (offset != 1) seqState->prevOffset[2] = seqState->prevOffset[1];
+                    seqState->prevOffset[1] = seqState->prevOffset[0];
+                    seqState->prevOffset[0] = offset = temp;
+        }   }   }
+        seq.offset = offset;
+    }
+
+    seq.matchLength = mlBase;
+    if (mlBits > 0)
+        seq.matchLength += BIT_readBitsFast(&seqState->DStream, mlBits/*>0*/);
+
+    if (MEM_32bits() && (mlBits+llBits >= STREAM_ACCUMULATOR_MIN_32-LONG_OFFSETS_MAX_EXTRA_BITS_32))
+        BIT_reloadDStream(&seqState->DStream);
+    if (MEM_64bits() && UNLIKELY(totalBits >= STREAM_ACCUMULATOR_MIN_64-(LLFSELog+MLFSELog+OffFSELog)))
+        BIT_reloadDStream(&seqState->DStream);
+    /* Ensure there are enough bits to read the rest of data in 64-bit mode. */
+    ZSTD_STATIC_ASSERT(16+LLFSELog+MLFSELog+OffFSELog < STREAM_ACCUMULATOR_MIN_64);
+
+    seq.litLength = llBase;
+    if (llBits > 0)
+        seq.litLength += BIT_readBitsFast(&seqState->DStream, llBits/*>0*/);
+
+    if (MEM_32bits())
+        BIT_reloadDStream(&seqState->DStream);
+
+    DEBUGLOG(6, "seq: litL=%u, matchL=%u, offset=%u",
+                (U32)seq.litLength, (U32)seq.matchLength, (U32)seq.offset);
+
+    if (prefetch == ZSTD_p_prefetch) {
+        size_t const pos = seqState->pos + seq.litLength;
+        const BYTE* const matchBase = (seq.offset > pos) ? seqState->dictEnd : seqState->prefixStart;
+        seq.match = matchBase + pos - seq.offset;  /* note : this operation can overflow when seq.offset is really too large, which can only happen when input is corrupted.
+                                                    * No consequence though : no memory access will occur, offset is only used for prefetching */
+        seqState->pos = pos + seq.matchLength;
+    }
+
+    /* ANS state update
+     * gcc-9.0.0 does 2.5% worse with ZSTD_updateFseStateWithDInfo().
+     * clang-9.2.0 does 7% worse with ZSTD_updateFseState().
+     * Naturally it seems like ZSTD_updateFseStateWithDInfo() should be the
+     * better option, so it is the default for other compilers. But, if you
+     * measure that it is worse, please put up a pull request.
+     */
+    {
+#if defined(__GNUC__) && !defined(__clang__)
+        const int kUseUpdateFseState = 1;
+#else
+        const int kUseUpdateFseState = 0;
+#endif
+        if (kUseUpdateFseState) {
+            ZSTD_updateFseState(&seqState->stateLL, &seqState->DStream);    /* <=  9 bits */
+            ZSTD_updateFseState(&seqState->stateML, &seqState->DStream);    /* <=  9 bits */
+            if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);    /* <= 18 bits */
+            ZSTD_updateFseState(&seqState->stateOffb, &seqState->DStream);  /* <=  8 bits */
+        } else {
+            ZSTD_updateFseStateWithDInfo(&seqState->stateLL, &seqState->DStream, llDInfo);    /* <=  9 bits */
+            ZSTD_updateFseStateWithDInfo(&seqState->stateML, &seqState->DStream, mlDInfo);    /* <=  9 bits */
+            if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);    /* <= 18 bits */
+            ZSTD_updateFseStateWithDInfo(&seqState->stateOffb, &seqState->DStream, ofDInfo);  /* <=  8 bits */
+        }
+    }
+
+    return seq;
+}
+
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+static int ZSTD_dictionaryIsActive(ZSTD_DCtx const* dctx, BYTE const* prefixStart, BYTE const* oLitEnd)
+{
+    size_t const windowSize = dctx->fParams.windowSize;
+    /* No dictionary used. */
+    if (dctx->dictContentEndForFuzzing == NULL) return 0;
+    /* Dictionary is our prefix. */
+    if (prefixStart == dctx->dictContentBeginForFuzzing) return 1;
+    /* Dictionary is not our ext-dict. */
+    if (dctx->dictEnd != dctx->dictContentEndForFuzzing) return 0;
+    /* Dictionary is not within our window size. */
+    if ((size_t)(oLitEnd - prefixStart) >= windowSize) return 0;
+    /* Dictionary is active. */
+    return 1;
+}
+
+MEM_STATIC void ZSTD_assertValidSequence(
+        ZSTD_DCtx const* dctx,
+        BYTE const* op, BYTE const* oend,
+        seq_t const seq,
+        BYTE const* prefixStart, BYTE const* virtualStart)
+{
+    size_t const windowSize = dctx->fParams.windowSize;
+    size_t const sequenceSize = seq.litLength + seq.matchLength;
+    BYTE const* const oLitEnd = op + seq.litLength;
+    DEBUGLOG(6, "Checking sequence: litL=%u matchL=%u offset=%u",
+            (U32)seq.litLength, (U32)seq.matchLength, (U32)seq.offset);
+    assert(op <= oend);
+    assert((size_t)(oend - op) >= sequenceSize);
+    assert(sequenceSize <= ZSTD_BLOCKSIZE_MAX);
+    if (ZSTD_dictionaryIsActive(dctx, prefixStart, oLitEnd)) {
+        size_t const dictSize = (size_t)((char const*)dctx->dictContentEndForFuzzing - (char const*)dctx->dictContentBeginForFuzzing);
+        /* Offset must be within the dictionary. */
+        assert(seq.offset <= (size_t)(oLitEnd - virtualStart));
+        assert(seq.offset <= windowSize + dictSize);
+    } else {
+        /* Offset must be within our window. */
+        assert(seq.offset <= windowSize);
+    }
+}
+#endif
+
+#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG
+FORCE_INLINE_TEMPLATE size_t
+DONT_VECTORIZE
+ZSTD_decompressSequences_body( ZSTD_DCtx* dctx,
+                               void* dst, size_t maxDstSize,
+                         const void* seqStart, size_t seqSize, int nbSeq,
+                         const ZSTD_longOffset_e isLongOffset,
+                         const int frame)
+{
+    const BYTE* ip = (const BYTE*)seqStart;
+    const BYTE* const iend = ip + seqSize;
+    BYTE* const ostart = (BYTE* const)dst;
+    BYTE* const oend = ostart + maxDstSize;
+    BYTE* op = ostart;
+    const BYTE* litPtr = dctx->litPtr;
+    const BYTE* const litEnd = litPtr + dctx->litSize;
+    const BYTE* const prefixStart = (const BYTE*) (dctx->prefixStart);
+    const BYTE* const vBase = (const BYTE*) (dctx->virtualStart);
+    const BYTE* const dictEnd = (const BYTE*) (dctx->dictEnd);
+    DEBUGLOG(5, "ZSTD_decompressSequences_body");
+    (void)frame;
+
+    /* Regen sequences */
+    if (nbSeq) {
+        seqState_t seqState;
+        size_t error = 0;
+        dctx->fseEntropy = 1;
+        { U32 i; for (i=0; i<ZSTD_REP_NUM; i++) seqState.prevOffset[i] = dctx->entropy.rep[i]; }
+        RETURN_ERROR_IF(
+            ERR_isError(BIT_initDStream(&seqState.DStream, ip, iend-ip)),
+            corruption_detected, "");
+        ZSTD_initFseState(&seqState.stateLL, &seqState.DStream, dctx->LLTptr);
+        ZSTD_initFseState(&seqState.stateOffb, &seqState.DStream, dctx->OFTptr);
+        ZSTD_initFseState(&seqState.stateML, &seqState.DStream, dctx->MLTptr);
+        assert(dst != NULL);
+
+        ZSTD_STATIC_ASSERT(
+                BIT_DStream_unfinished < BIT_DStream_completed &&
+                BIT_DStream_endOfBuffer < BIT_DStream_completed &&
+                BIT_DStream_completed < BIT_DStream_overflow);
+
+#if defined(__GNUC__) && defined(__x86_64__)
+        /* Align the decompression loop to 32 + 16 bytes.
+         *
+         * zstd compiled with gcc-9 on an Intel i9-9900k shows 10% decompression
+         * speed swings based on the alignment of the decompression loop. This
+         * performance swing is caused by parts of the decompression loop falling
+         * out of the DSB. The entire decompression loop should fit in the DSB,
+         * when it can't we get much worse performance. You can measure if you've
+         * hit the good case or the bad case with this perf command for some
+         * compressed file test.zst:
+         *
+         *   perf stat -e cycles -e instructions -e idq.all_dsb_cycles_any_uops \
+         *             -e idq.all_mite_cycles_any_uops -- ./zstd -tq test.zst
+         *
+         * If you see most cycles served out of the MITE you've hit the bad case.
+         * If you see most cycles served out of the DSB you've hit the good case.
+         * If it is pretty even then you may be in an okay case.
+         *
+         * I've been able to reproduce this issue on the following CPUs:
+         *   - Kabylake: Macbook Pro (15-inch, 2019) 2.4 GHz Intel Core i9
+         *               Use Instruments->Counters to get DSB/MITE cycles.
+         *               I never got performance swings, but I was able to
+         *               go from the good case of mostly DSB to half of the
+         *               cycles served from MITE.
+         *   - Coffeelake: Intel i9-9900k
+         *
+         * I haven't been able to reproduce the instability or DSB misses on any
+         * of the following CPUS:
+         *   - Haswell
+         *   - Broadwell: Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GH
+         *   - Skylake
+         *
+         * If you are seeing performance stability this script can help test.
+         * It tests on 4 commits in zstd where I saw performance change.
+         *
+         *   https://gist.github.com/terrelln/9889fc06a423fd5ca6e99351564473f4
+         */
+        __asm__(".p2align 5");
+        __asm__("nop");
+        __asm__(".p2align 4");
+#endif
+        for ( ; ; ) {
+            seq_t const sequence = ZSTD_decodeSequence(&seqState, isLongOffset, ZSTD_p_noPrefetch);
+            size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequence, &litPtr, litEnd, prefixStart, vBase, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+            assert(!ZSTD_isError(oneSeqSize));
+            if (frame) ZSTD_assertValidSequence(dctx, op, oend, sequence, prefixStart, vBase);
+#endif
+            DEBUGLOG(6, "regenerated sequence size : %u", (U32)oneSeqSize);
+            BIT_reloadDStream(&(seqState.DStream));
+            /* gcc and clang both don't like early returns in this loop.
+             * gcc doesn't like early breaks either.
+             * Instead save an error and report it at the end.
+             * When there is an error, don't increment op, so we don't
+             * overwrite.
+             */
+            if (UNLIKELY(ZSTD_isError(oneSeqSize))) error = oneSeqSize;
+            else op += oneSeqSize;
+            if (UNLIKELY(!--nbSeq)) break;
+        }
+
+        /* check if reached exact end */
+        DEBUGLOG(5, "ZSTD_decompressSequences_body: after decode loop, remaining nbSeq : %i", nbSeq);
+        if (ZSTD_isError(error)) return error;
+        RETURN_ERROR_IF(nbSeq, corruption_detected, "");
+        RETURN_ERROR_IF(BIT_reloadDStream(&seqState.DStream) < BIT_DStream_completed, corruption_detected, "");
+        /* save reps for next block */
+        { U32 i; for (i=0; i<ZSTD_REP_NUM; i++) dctx->entropy.rep[i] = (U32)(seqState.prevOffset[i]); }
+    }
+
+    /* last literal segment */
+    {   size_t const lastLLSize = litEnd - litPtr;
+        RETURN_ERROR_IF(lastLLSize > (size_t)(oend-op), dstSize_tooSmall, "");
+        if (op != NULL) {
+            memcpy(op, litPtr, lastLLSize);
+            op += lastLLSize;
+        }
+    }
 
     return op-ostart;
 }
 
-
-size_t FSE_decompress_usingDTable(void* dst, size_t originalSize,
-                            const void* cSrc, size_t cSrcSize,
-                            const FSE_DTable* dt)
+static size_t
+ZSTD_decompressSequences_default(ZSTD_DCtx* dctx,
+                                 void* dst, size_t maxDstSize,
+                           const void* seqStart, size_t seqSize, int nbSeq,
+                           const ZSTD_longOffset_e isLongOffset,
+                           const int frame)
 {
-    const void* ptr = dt;
-    const FSE_DTableHeader* DTableH = (const FSE_DTableHeader*)ptr;
-    const U32 fastMode = DTableH->fastMode;
-
-    /* select fast mode (static) */
-    if (fastMode) return FSE_decompress_usingDTable_generic(dst, originalSize, cSrc, cSrcSize, dt, 1);
-    return FSE_decompress_usingDTable_generic(dst, originalSize, cSrc, cSrcSize, dt, 0);
+    return ZSTD_decompressSequences_body(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
 }
+#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG */
 
-
-size_t FSE_decompress_wksp(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize, FSE_DTable* workSpace, unsigned maxLog)
+#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
+FORCE_INLINE_TEMPLATE size_t
+ZSTD_decompressSequencesLong_body(
+                               ZSTD_DCtx* dctx,
+                               void* dst, size_t maxDstSize,
+                         const void* seqStart, size_t seqSize, int nbSeq,
+                         const ZSTD_longOffset_e isLongOffset,
+                         const int frame)
 {
-    const BYTE* const istart = (const BYTE*)cSrc;
-    const BYTE* ip = istart;
-    short counting[FSE_MAX_SYMBOL_VALUE+1];
-    unsigned tableLog;
-    unsigned maxSymbolValue = FSE_MAX_SYMBOL_VALUE;
-
-    /* normal FSE decoding mode */
-    size_t const NCountLength = FSE_readNCount (counting, &maxSymbolValue, &tableLog, istart, cSrcSize);
-    if (FSE_isError(NCountLength)) return NCountLength;
-    /* if (NCountLength >= cSrcSize) return ERROR(srcSize_wrong); */  /* too small input size; supposed to be already checked in NCountLength, only remaining case : NCountLength==cSrcSize */
-    if (tableLog > maxLog) return ERROR(tableLog_tooLarge);
-    ip += NCountLength;
-    cSrcSize -= NCountLength;
-
-    CHECK_F( FSE_buildDTable (workSpace, counting, maxSymbolValue, tableLog) );
-
-    return FSE_decompress_usingDTable (dst, dstCapacity, ip, cSrcSize, workSpace);   /* always return, even if it is an error code */
-}
-
-
-typedef FSE_DTable DTable_max_t[FSE_DTABLE_SIZE_U32(FSE_MAX_TABLELOG)];
-
-size_t FSE_decompress(void* dst, size_t dstCapacity, const void* cSrc, size_t cSrcSize)
-{
-    DTable_max_t dt;   /* Static analyzer seems unable to understand this table will be properly initialized later */
-    return FSE_decompress_wksp(dst, dstCapacity, cSrc, cSrcSize, dt, FSE_MAX_TABLELOG);
-}
-
-}
-
-#endif   /* FSE_COMMONDEFS_ONLY */
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-/*
- *  xxHash - Fast Hash algorithm
- *  Copyright (c) 2012-2020, Yann Collet, Facebook, Inc.
- *
- *  You can contact the author at :
- *  - xxHash homepage: http://www.xxhash.com
- *  - xxHash source repository : https://github.com/Cyan4973/xxHash
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
-*/
-
-
-/* *************************************
-*  Tuning parameters
-***************************************/
-/*!XXH_FORCE_MEMORY_ACCESS :
- * By default, access to unaligned memory is controlled by `memcpy()`, which is safe and portable.
- * Unfortunately, on some target/compiler combinations, the generated assembly is sub-optimal.
- * The below switch allow to select different access method for improved performance.
- * Method 0 (default) : use `memcpy()`. Safe and portable.
- * Method 1 : `__packed` statement. It depends on compiler extension (ie, not portable).
- *            This method is safe if your compiler supports it, and *generally* as fast or faster than `memcpy`.
- * Method 2 : direct access. This method doesn't depend on compiler but violate C standard.
- *            It can generate buggy code on targets which do not support unaligned memory accesses.
- *            But in some circumstances, it's the only known way to get the most performance (ie GCC + ARMv6)
- * See http://stackoverflow.com/a/32095106/646947 for details.
- * Prefer these methods in priority order (0 > 1 > 2)
- */
-#ifndef XXH_FORCE_MEMORY_ACCESS   /* can be defined externally, on command line for example */
-#  if defined(__GNUC__) && ( defined(__ARM_ARCH_6__) || defined(__ARM_ARCH_6J__) || defined(__ARM_ARCH_6K__) || defined(__ARM_ARCH_6Z__) || defined(__ARM_ARCH_6ZK__) || defined(__ARM_ARCH_6T2__) )
-#    define XXH_FORCE_MEMORY_ACCESS 2
-#  elif (defined(__INTEL_COMPILER) && !defined(WIN32)) || \
-  (defined(__GNUC__) && ( defined(__ARM_ARCH_7__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7R__) || defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7S__) )) || \
-  defined(__ICCARM__)
-#    define XXH_FORCE_MEMORY_ACCESS 1
-#  endif
-#endif
-
-/*!XXH_ACCEPT_NULL_INPUT_POINTER :
- * If the input pointer is a null pointer, xxHash default behavior is to trigger a memory access error, since it is a bad pointer.
- * When this option is enabled, xxHash output for null input pointers will be the same as a null-length input.
- * By default, this option is disabled. To enable it, uncomment below define :
- */
-/* #define XXH_ACCEPT_NULL_INPUT_POINTER 1 */
-
-/*!XXH_FORCE_NATIVE_FORMAT :
- * By default, xxHash library provides endian-independent Hash values, based on little-endian convention.
- * Results are therefore identical for little-endian and big-endian CPU.
- * This comes at a performance cost for big-endian CPU, since some swapping is required to emulate little-endian format.
- * Should endian-independence be of no importance for your application, you may set the #define below to 1,
- * to improve speed for Big-endian CPU.
- * This option has no impact on Little_Endian CPU.
- */
-#ifndef XXH_FORCE_NATIVE_FORMAT   /* can be defined externally */
-#  define XXH_FORCE_NATIVE_FORMAT 0
-#endif
-
-/*!XXH_FORCE_ALIGN_CHECK :
- * This is a minor performance trick, only useful with lots of very small keys.
- * It means : check for aligned/unaligned input.
- * The check costs one initial branch per hash; set to 0 when the input data
- * is guaranteed to be aligned.
- */
-#ifndef XXH_FORCE_ALIGN_CHECK /* can be defined externally */
-#  if defined(__i386) || defined(_M_IX86) || defined(__x86_64__) || defined(_M_X64)
-#    define XXH_FORCE_ALIGN_CHECK 0
-#  else
-#    define XXH_FORCE_ALIGN_CHECK 1
-#  endif
-#endif
-
-
-/* *************************************
-*  Includes & Memory related functions
-***************************************/
-/* Modify the local functions below should you wish to use some other memory routines */
-/* for malloc(), free() */
-#include <stdlib.h>
-#include <stddef.h>     /* size_t */
-/* for memcpy() */
-#include <string.h>
-
-
-
-
-/* *************************************
-*  Compiler Specific Options
-***************************************/
-#if (defined(__GNUC__) && !defined(__STRICT_ANSI__)) || defined(__cplusplus) || defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L   /* C99 */
-#  define INLINE_KEYWORD inline
-#else
-#  define INLINE_KEYWORD
-#endif
-
-#if defined(__GNUC__) || defined(__ICCARM__)
-#  define FORCE_INLINE_ATTR __attribute__((always_inline))
-#elif defined(_MSC_VER)
-#  define FORCE_INLINE_ATTR __forceinline
-#else
-#  define FORCE_INLINE_ATTR
-#endif
-
-#define FORCE_INLINE_TEMPLATE static INLINE_KEYWORD FORCE_INLINE_ATTR
-
-
-/* *************************************
-*  Basic Types
-***************************************/
-#ifndef MEM_MODULE
-# define MEM_MODULE
-# if !defined (__VMS) && (defined (__cplusplus) || (defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */) )
-#   include <stdint.h>
-    typedef uint8_t  BYTE;
-    typedef uint16_t U16;
-    typedef uint32_t U32;
-    typedef  int32_t S32;
-    typedef uint64_t U64;
-#  else
-    typedef unsigned char      BYTE;
-    typedef unsigned short     U16;
-    typedef unsigned int       U32;
-    typedef   signed int       S32;
-    typedef unsigned long long U64;   /* if your compiler doesn't support unsigned long long, replace by another 64-bit type here. Note that xxhash.h will also need to be updated. */
-#  endif
-#endif
-
-namespace duckdb_zstd {
-static void* XXH_malloc(size_t s) { return malloc(s); }
-static void  XXH_free  (void* p)  { free(p); }
-static void* XXH_memcpy(void* dest, const void* src, size_t size) { return memcpy(dest,src,size); }
-
-#if (defined(XXH_FORCE_MEMORY_ACCESS) && (XXH_FORCE_MEMORY_ACCESS==2))
-
-/* Force direct memory access. Only works on CPU which support unaligned memory access in hardware */
-static U32 XXH_read32(const void* memPtr) { return *(const U32*) memPtr; }
-static U64 XXH_read64(const void* memPtr) { return *(const U64*) memPtr; }
-
-#elif (defined(XXH_FORCE_MEMORY_ACCESS) && (XXH_FORCE_MEMORY_ACCESS==1))
-
-/* __pack instructions are safer, but compiler specific, hence potentially problematic for some compilers */
-/* currently only defined for gcc and icc */
-typedef union { U32 u32; U64 u64; } __attribute__((packed)) unalign;
-
-static U32 XXH_read32(const void* ptr) { return ((const unalign*)ptr)->u32; }
-static U64 XXH_read64(const void* ptr) { return ((const unalign*)ptr)->u64; }
-
-#else
-
-/* portable and safe solution. Generally efficient.
- * see : http://stackoverflow.com/a/32095106/646947
- */
-
-static U32 XXH_read32(const void* memPtr)
-{
-    U32 val;
-    memcpy(&val, memPtr, sizeof(val));
-    return val;
-}
-
-static U64 XXH_read64(const void* memPtr)
-{
-    U64 val;
-    memcpy(&val, memPtr, sizeof(val));
-    return val;
-}
-
-#endif   /* XXH_FORCE_DIRECT_MEMORY_ACCESS */
-
-
-/* ****************************************
-*  Compiler-specific Functions and Macros
-******************************************/
-#define GCC_VERSION (__GNUC__ * 100 + __GNUC_MINOR__)
-
-/* Note : although _rotl exists for minGW (GCC under windows), performance seems poor */
-#if defined(_MSC_VER)
-#  define XXH_rotl32(x,r) _rotl(x,r)
-#  define XXH_rotl64(x,r) _rotl64(x,r)
-#else
-#if defined(__ICCARM__)
-#  include <intrinsics.h>
-#  define XXH_rotl32(x,r) __ROR(x,(32 - r))
-#else
-#  define XXH_rotl32(x,r) ((x << r) | (x >> (32 - r)))
-#endif
-#  define XXH_rotl64(x,r) ((x << r) | (x >> (64 - r)))
-#endif
-
-#if defined(_MSC_VER)     /* Visual Studio */
-#  define XXH_swap32 _byteswap_ulong
-#  define XXH_swap64 _byteswap_uint64
-#elif GCC_VERSION >= 403
-#  define XXH_swap32 __builtin_bswap32
-#  define XXH_swap64 __builtin_bswap64
-#else
-static U32 XXH_swap32 (U32 x)
-{
-    return  ((x << 24) & 0xff000000 ) |
-            ((x <<  8) & 0x00ff0000 ) |
-            ((x >>  8) & 0x0000ff00 ) |
-            ((x >> 24) & 0x000000ff );
-}
-static U64 XXH_swap64 (U64 x)
-{
-    return  ((x << 56) & 0xff00000000000000ULL) |
-            ((x << 40) & 0x00ff000000000000ULL) |
-            ((x << 24) & 0x0000ff0000000000ULL) |
-            ((x << 8)  & 0x000000ff00000000ULL) |
-            ((x >> 8)  & 0x00000000ff000000ULL) |
-            ((x >> 24) & 0x0000000000ff0000ULL) |
-            ((x >> 40) & 0x000000000000ff00ULL) |
-            ((x >> 56) & 0x00000000000000ffULL);
-}
-#endif
-
-
-/* *************************************
-*  Architecture Macros
-***************************************/
-typedef enum { XXH_bigEndian=0, XXH_littleEndian=1 } XXH_endianess;
-
-/* XXH_CPU_LITTLE_ENDIAN can be defined externally, for example on the compiler command line */
-#ifndef XXH_CPU_LITTLE_ENDIAN
-    static const int g_one = 1;
-#   define XXH_CPU_LITTLE_ENDIAN   (*(const char*)(&g_one))
-#endif
-
-
-/* ***************************
-*  Memory reads
-*****************************/
-typedef enum { XXH_aligned, XXH_unaligned } XXH_alignment;
-
-FORCE_INLINE_TEMPLATE U32 XXH_readLE32_align(const void* ptr, XXH_endianess endian, XXH_alignment align)
-{
-    if (align==XXH_unaligned)
-        return endian==XXH_littleEndian ? XXH_read32(ptr) : XXH_swap32(XXH_read32(ptr));
-    else
-        return endian==XXH_littleEndian ? *(const U32*)ptr : XXH_swap32(*(const U32*)ptr);
-}
-
-FORCE_INLINE_TEMPLATE U32 XXH_readLE32(const void* ptr, XXH_endianess endian)
-{
-    return XXH_readLE32_align(ptr, endian, XXH_unaligned);
-}
-
-static U32 XXH_readBE32(const void* ptr)
-{
-    return XXH_CPU_LITTLE_ENDIAN ? XXH_swap32(XXH_read32(ptr)) : XXH_read32(ptr);
-}
-
-FORCE_INLINE_TEMPLATE U64 XXH_readLE64_align(const void* ptr, XXH_endianess endian, XXH_alignment align)
-{
-    if (align==XXH_unaligned)
-        return endian==XXH_littleEndian ? XXH_read64(ptr) : XXH_swap64(XXH_read64(ptr));
-    else
-        return endian==XXH_littleEndian ? *(const U64*)ptr : XXH_swap64(*(const U64*)ptr);
-}
-
-FORCE_INLINE_TEMPLATE U64 XXH_readLE64(const void* ptr, XXH_endianess endian)
-{
-    return XXH_readLE64_align(ptr, endian, XXH_unaligned);
-}
-
-static U64 XXH_readBE64(const void* ptr)
-{
-    return XXH_CPU_LITTLE_ENDIAN ? XXH_swap64(XXH_read64(ptr)) : XXH_read64(ptr);
-}
-
-
-/* *************************************
-*  Macros
-***************************************/
-#define XXH_STATIC_ASSERT(c)   { enum { XXH_static_assert = 1/(int)(!!(c)) }; }    /* use only *after* variable declarations */
-
-
-/* *************************************
-*  Constants
-***************************************/
-static const U32 PRIME32_1 = 2654435761U;
-static const U32 PRIME32_2 = 2246822519U;
-static const U32 PRIME32_3 = 3266489917U;
-static const U32 PRIME32_4 =  668265263U;
-static const U32 PRIME32_5 =  374761393U;
-
-static const U64 PRIME64_1 = 11400714785074694791ULL;
-static const U64 PRIME64_2 = 14029467366897019727ULL;
-static const U64 PRIME64_3 =  1609587929392839161ULL;
-static const U64 PRIME64_4 =  9650029242287828579ULL;
-static const U64 PRIME64_5 =  2870177450012600261ULL;
-
-XXH_PUBLIC_API unsigned XXH_versionNumber (void) { return XXH_VERSION_NUMBER; }
-
-
-/* **************************
-*  Utils
-****************************/
-XXH_PUBLIC_API void XXH32_copyState(XXH32_state_t* __restrict dstState, const XXH32_state_t* __restrict srcState)
-{
-    memcpy(dstState, srcState, sizeof(*dstState));
-}
-
-XXH_PUBLIC_API void XXH64_copyState(XXH64_state_t* __restrict dstState, const XXH64_state_t* __restrict srcState)
-{
-    memcpy(dstState, srcState, sizeof(*dstState));
-}
-
-
-/* ***************************
-*  Simple Hash Functions
-*****************************/
-
-static U32 XXH32_round(U32 seed, U32 input)
-{
-    seed += input * PRIME32_2;
-    seed  = XXH_rotl32(seed, 13);
-    seed *= PRIME32_1;
-    return seed;
-}
-
-FORCE_INLINE_TEMPLATE U32 XXH32_endian_align(const void* input, size_t len, U32 seed, XXH_endianess endian, XXH_alignment align)
-{
-    const BYTE* p = (const BYTE*)input;
-    const BYTE* bEnd = p + len;
-    U32 h32;
-#define XXH_get32bits(p) XXH_readLE32_align(p, endian, align)
-
-#ifdef XXH_ACCEPT_NULL_INPUT_POINTER
-    if (p==NULL) {
-        len=0;
-        bEnd=p=(const BYTE*)(size_t)16;
-    }
-#endif
-
-    if (len>=16) {
-        const BYTE* const limit = bEnd - 16;
-        U32 v1 = seed + PRIME32_1 + PRIME32_2;
-        U32 v2 = seed + PRIME32_2;
-        U32 v3 = seed + 0;
-        U32 v4 = seed - PRIME32_1;
-
-        do {
-            v1 = XXH32_round(v1, XXH_get32bits(p)); p+=4;
-            v2 = XXH32_round(v2, XXH_get32bits(p)); p+=4;
-            v3 = XXH32_round(v3, XXH_get32bits(p)); p+=4;
-            v4 = XXH32_round(v4, XXH_get32bits(p)); p+=4;
-        } while (p<=limit);
-
-        h32 = XXH_rotl32(v1, 1) + XXH_rotl32(v2, 7) + XXH_rotl32(v3, 12) + XXH_rotl32(v4, 18);
-    } else {
-        h32  = seed + PRIME32_5;
-    }
-
-    h32 += (U32) len;
-
-    while (p+4<=bEnd) {
-        h32 += XXH_get32bits(p) * PRIME32_3;
-        h32  = XXH_rotl32(h32, 17) * PRIME32_4 ;
-        p+=4;
-    }
-
-    while (p<bEnd) {
-        h32 += (*p) * PRIME32_5;
-        h32 = XXH_rotl32(h32, 11) * PRIME32_1 ;
-        p++;
-    }
-
-    h32 ^= h32 >> 15;
-    h32 *= PRIME32_2;
-    h32 ^= h32 >> 13;
-    h32 *= PRIME32_3;
-    h32 ^= h32 >> 16;
-
-    return h32;
-}
-
-
-XXH_PUBLIC_API unsigned int XXH32 (const void* input, size_t len, unsigned int seed)
-{
-#if 0
-    /* Simple version, good for code maintenance, but unfortunately slow for small inputs */
-    XXH32_CREATESTATE_STATIC(state);
-    XXH32_reset(state, seed);
-    XXH32_update(state, input, len);
-    return XXH32_digest(state);
-#else
-    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
-
-    if (XXH_FORCE_ALIGN_CHECK) {
-        if ((((size_t)input) & 3) == 0) {   /* Input is 4-bytes aligned, leverage the speed benefit */
-            if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
-                return XXH32_endian_align(input, len, seed, XXH_littleEndian, XXH_aligned);
-            else
-                return XXH32_endian_align(input, len, seed, XXH_bigEndian, XXH_aligned);
-    }   }
-
-    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
-        return XXH32_endian_align(input, len, seed, XXH_littleEndian, XXH_unaligned);
-    else
-        return XXH32_endian_align(input, len, seed, XXH_bigEndian, XXH_unaligned);
-#endif
-}
-
-
-static U64 XXH64_round(U64 acc, U64 input)
-{
-    acc += input * PRIME64_2;
-    acc  = XXH_rotl64(acc, 31);
-    acc *= PRIME64_1;
-    return acc;
-}
-
-static U64 XXH64_mergeRound(U64 acc, U64 val)
-{
-    val  = XXH64_round(0, val);
-    acc ^= val;
-    acc  = acc * PRIME64_1 + PRIME64_4;
-    return acc;
-}
-
-FORCE_INLINE_TEMPLATE U64 XXH64_endian_align(const void* input, size_t len, U64 seed, XXH_endianess endian, XXH_alignment align)
-{
-    const BYTE* p = (const BYTE*)input;
-    const BYTE* const bEnd = p + len;
-    U64 h64;
-#define XXH_get64bits(p) XXH_readLE64_align(p, endian, align)
-
-#ifdef XXH_ACCEPT_NULL_INPUT_POINTER
-    if (p==NULL) {
-        len=0;
-        bEnd=p=(const BYTE*)(size_t)32;
-    }
-#endif
-
-    if (len>=32) {
-        const BYTE* const limit = bEnd - 32;
-        U64 v1 = seed + PRIME64_1 + PRIME64_2;
-        U64 v2 = seed + PRIME64_2;
-        U64 v3 = seed + 0;
-        U64 v4 = seed - PRIME64_1;
-
-        do {
-            v1 = XXH64_round(v1, XXH_get64bits(p)); p+=8;
-            v2 = XXH64_round(v2, XXH_get64bits(p)); p+=8;
-            v3 = XXH64_round(v3, XXH_get64bits(p)); p+=8;
-            v4 = XXH64_round(v4, XXH_get64bits(p)); p+=8;
-        } while (p<=limit);
-
-        h64 = XXH_rotl64(v1, 1) + XXH_rotl64(v2, 7) + XXH_rotl64(v3, 12) + XXH_rotl64(v4, 18);
-        h64 = XXH64_mergeRound(h64, v1);
-        h64 = XXH64_mergeRound(h64, v2);
-        h64 = XXH64_mergeRound(h64, v3);
-        h64 = XXH64_mergeRound(h64, v4);
-
-    } else {
-        h64  = seed + PRIME64_5;
-    }
-
-    h64 += (U64) len;
-
-    while (p+8<=bEnd) {
-        U64 const k1 = XXH64_round(0, XXH_get64bits(p));
-        h64 ^= k1;
-        h64  = XXH_rotl64(h64,27) * PRIME64_1 + PRIME64_4;
-        p+=8;
-    }
-
-    if (p+4<=bEnd) {
-        h64 ^= (U64)(XXH_get32bits(p)) * PRIME64_1;
-        h64 = XXH_rotl64(h64, 23) * PRIME64_2 + PRIME64_3;
-        p+=4;
-    }
-
-    while (p<bEnd) {
-        h64 ^= (*p) * PRIME64_5;
-        h64 = XXH_rotl64(h64, 11) * PRIME64_1;
-        p++;
-    }
-
-    h64 ^= h64 >> 33;
-    h64 *= PRIME64_2;
-    h64 ^= h64 >> 29;
-    h64 *= PRIME64_3;
-    h64 ^= h64 >> 32;
-
-    return h64;
-}
-
-
-XXH_PUBLIC_API unsigned long long XXH64 (const void* input, size_t len, unsigned long long seed)
-{
-#if 0
-    /* Simple version, good for code maintenance, but unfortunately slow for small inputs */
-    XXH64_CREATESTATE_STATIC(state);
-    XXH64_reset(state, seed);
-    XXH64_update(state, input, len);
-    return XXH64_digest(state);
-#else
-    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
-
-    if (XXH_FORCE_ALIGN_CHECK) {
-        if ((((size_t)input) & 7)==0) {  /* Input is aligned, let's leverage the speed advantage */
-            if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
-                return XXH64_endian_align(input, len, seed, XXH_littleEndian, XXH_aligned);
-            else
-                return XXH64_endian_align(input, len, seed, XXH_bigEndian, XXH_aligned);
-    }   }
-
-    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
-        return XXH64_endian_align(input, len, seed, XXH_littleEndian, XXH_unaligned);
-    else
-        return XXH64_endian_align(input, len, seed, XXH_bigEndian, XXH_unaligned);
-#endif
-}
-
-
-/* **************************************************
-*  Advanced Hash Functions
-****************************************************/
-
-XXH_PUBLIC_API XXH32_state_t* XXH32_createState(void)
-{
-    return (XXH32_state_t*)XXH_malloc(sizeof(XXH32_state_t));
-}
-XXH_PUBLIC_API XXH_errorcode XXH32_freeState(XXH32_state_t* statePtr)
-{
-    XXH_free(statePtr);
-    return XXH_OK;
-}
-
-XXH_PUBLIC_API XXH64_state_t* XXH64_createState(void)
-{
-    return (XXH64_state_t*)XXH_malloc(sizeof(XXH64_state_t));
-}
-XXH_PUBLIC_API XXH_errorcode XXH64_freeState(XXH64_state_t* statePtr)
-{
-    XXH_free(statePtr);
-    return XXH_OK;
-}
-
-
-/*** Hash feed ***/
-
-XXH_PUBLIC_API XXH_errorcode XXH32_reset(XXH32_state_t* statePtr, unsigned int seed)
-{
-    XXH32_state_t state;   /* using a local state to memcpy() in order to avoid strict-aliasing warnings */
-    memset(&state, 0, sizeof(state)-4);   /* do not write into reserved, for future removal */
-    state.v1 = seed + PRIME32_1 + PRIME32_2;
-    state.v2 = seed + PRIME32_2;
-    state.v3 = seed + 0;
-    state.v4 = seed - PRIME32_1;
-    memcpy(statePtr, &state, sizeof(state));
-    return XXH_OK;
-}
-
-
-XXH_PUBLIC_API XXH_errorcode XXH64_reset(XXH64_state_t* statePtr, unsigned long long seed)
-{
-    XXH64_state_t state;   /* using a local state to memcpy() in order to avoid strict-aliasing warnings */
-    memset(&state, 0, sizeof(state)-8);   /* do not write into reserved, for future removal */
-    state.v1 = seed + PRIME64_1 + PRIME64_2;
-    state.v2 = seed + PRIME64_2;
-    state.v3 = seed + 0;
-    state.v4 = seed - PRIME64_1;
-    memcpy(statePtr, &state, sizeof(state));
-    return XXH_OK;
-}
-
-
-FORCE_INLINE_TEMPLATE XXH_errorcode XXH32_update_endian (XXH32_state_t* state, const void* input, size_t len, XXH_endianess endian)
-{
-    const BYTE* p = (const BYTE*)input;
-    const BYTE* const bEnd = p + len;
-
-#ifdef XXH_ACCEPT_NULL_INPUT_POINTER
-    if (input==NULL) return XXH_ERROR;
-#endif
-
-    state->total_len_32 += (unsigned)len;
-    state->large_len |= (len>=16) | (state->total_len_32>=16);
-
-    if (state->memsize + len < 16)  {   /* fill in tmp buffer */
-        XXH_memcpy((BYTE*)(state->mem32) + state->memsize, input, len);
-        state->memsize += (unsigned)len;
-        return XXH_OK;
-    }
-
-    if (state->memsize) {   /* some data left from previous update */
-        XXH_memcpy((BYTE*)(state->mem32) + state->memsize, input, 16-state->memsize);
-        {   const U32* p32 = state->mem32;
-            state->v1 = XXH32_round(state->v1, XXH_readLE32(p32, endian)); p32++;
-            state->v2 = XXH32_round(state->v2, XXH_readLE32(p32, endian)); p32++;
-            state->v3 = XXH32_round(state->v3, XXH_readLE32(p32, endian)); p32++;
-            state->v4 = XXH32_round(state->v4, XXH_readLE32(p32, endian)); p32++;
+    const BYTE* ip = (const BYTE*)seqStart;
+    const BYTE* const iend = ip + seqSize;
+    BYTE* const ostart = (BYTE* const)dst;
+    BYTE* const oend = ostart + maxDstSize;
+    BYTE* op = ostart;
+    const BYTE* litPtr = dctx->litPtr;
+    const BYTE* const litEnd = litPtr + dctx->litSize;
+    const BYTE* const prefixStart = (const BYTE*) (dctx->prefixStart);
+    const BYTE* const dictStart = (const BYTE*) (dctx->virtualStart);
+    const BYTE* const dictEnd = (const BYTE*) (dctx->dictEnd);
+    (void)frame;
+
+    /* Regen sequences */
+    if (nbSeq) {
+#define STORED_SEQS 4
+#define STORED_SEQS_MASK (STORED_SEQS-1)
+#define ADVANCED_SEQS 4
+        seq_t sequences[STORED_SEQS];
+        int const seqAdvance = MIN(nbSeq, ADVANCED_SEQS);
+        seqState_t seqState;
+        int seqNb;
+        dctx->fseEntropy = 1;
+        { int i; for (i=0; i<ZSTD_REP_NUM; i++) seqState.prevOffset[i] = dctx->entropy.rep[i]; }
+        seqState.prefixStart = prefixStart;
+        seqState.pos = (size_t)(op-prefixStart);
+        seqState.dictEnd = dictEnd;
+        assert(dst != NULL);
+        assert(iend >= ip);
+        RETURN_ERROR_IF(
+            ERR_isError(BIT_initDStream(&seqState.DStream, ip, iend-ip)),
+            corruption_detected, "");
+        ZSTD_initFseState(&seqState.stateLL, &seqState.DStream, dctx->LLTptr);
+        ZSTD_initFseState(&seqState.stateOffb, &seqState.DStream, dctx->OFTptr);
+        ZSTD_initFseState(&seqState.stateML, &seqState.DStream, dctx->MLTptr);
+
+        /* prepare in advance */
+        for (seqNb=0; (BIT_reloadDStream(&seqState.DStream) <= BIT_DStream_completed) && (seqNb<seqAdvance); seqNb++) {
+            sequences[seqNb] = ZSTD_decodeSequence(&seqState, isLongOffset, ZSTD_p_prefetch);
+            PREFETCH_L1(sequences[seqNb].match); PREFETCH_L1(sequences[seqNb].match + sequences[seqNb].matchLength - 1); /* note : it's safe to invoke PREFETCH() on any memory address, including invalid ones */
         }
-        p += 16-state->memsize;
-        state->memsize = 0;
+        RETURN_ERROR_IF(seqNb<seqAdvance, corruption_detected, "");
+
+        /* decode and decompress */
+        for ( ; (BIT_reloadDStream(&(seqState.DStream)) <= BIT_DStream_completed) && (seqNb<nbSeq) ; seqNb++) {
+            seq_t const sequence = ZSTD_decodeSequence(&seqState, isLongOffset, ZSTD_p_prefetch);
+            size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequences[(seqNb-ADVANCED_SEQS) & STORED_SEQS_MASK], &litPtr, litEnd, prefixStart, dictStart, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+            assert(!ZSTD_isError(oneSeqSize));
+            if (frame) ZSTD_assertValidSequence(dctx, op, oend, sequences[(seqNb-ADVANCED_SEQS) & STORED_SEQS_MASK], prefixStart, dictStart);
+#endif
+            if (ZSTD_isError(oneSeqSize)) return oneSeqSize;
+            PREFETCH_L1(sequence.match); PREFETCH_L1(sequence.match + sequence.matchLength - 1); /* note : it's safe to invoke PREFETCH() on any memory address, including invalid ones */
+            sequences[seqNb & STORED_SEQS_MASK] = sequence;
+            op += oneSeqSize;
+        }
+        RETURN_ERROR_IF(seqNb<nbSeq, corruption_detected, "");
+
+        /* finish queue */
+        seqNb -= seqAdvance;
+        for ( ; seqNb<nbSeq ; seqNb++) {
+            size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequences[seqNb&STORED_SEQS_MASK], &litPtr, litEnd, prefixStart, dictStart, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+            assert(!ZSTD_isError(oneSeqSize));
+            if (frame) ZSTD_assertValidSequence(dctx, op, oend, sequences[seqNb&STORED_SEQS_MASK], prefixStart, dictStart);
+#endif
+            if (ZSTD_isError(oneSeqSize)) return oneSeqSize;
+            op += oneSeqSize;
+        }
+
+        /* save reps for next block */
+        { U32 i; for (i=0; i<ZSTD_REP_NUM; i++) dctx->entropy.rep[i] = (U32)(seqState.prevOffset[i]); }
     }
 
-    if (p <= bEnd-16) {
-        const BYTE* const limit = bEnd - 16;
-        U32 v1 = state->v1;
-        U32 v2 = state->v2;
-        U32 v3 = state->v3;
-        U32 v4 = state->v4;
-
-        do {
-            v1 = XXH32_round(v1, XXH_readLE32(p, endian)); p+=4;
-            v2 = XXH32_round(v2, XXH_readLE32(p, endian)); p+=4;
-            v3 = XXH32_round(v3, XXH_readLE32(p, endian)); p+=4;
-            v4 = XXH32_round(v4, XXH_readLE32(p, endian)); p+=4;
-        } while (p<=limit);
-
-        state->v1 = v1;
-        state->v2 = v2;
-        state->v3 = v3;
-        state->v4 = v4;
+    /* last literal segment */
+    {   size_t const lastLLSize = litEnd - litPtr;
+        RETURN_ERROR_IF(lastLLSize > (size_t)(oend-op), dstSize_tooSmall, "");
+        if (op != NULL) {
+            memcpy(op, litPtr, lastLLSize);
+            op += lastLLSize;
+        }
     }
 
-    if (p < bEnd) {
-        XXH_memcpy(state->mem32, p, (size_t)(bEnd-p));
-        state->memsize = (unsigned)(bEnd-p);
-    }
-
-    return XXH_OK;
+    return op-ostart;
 }
 
-XXH_PUBLIC_API XXH_errorcode XXH32_update (XXH32_state_t* state_in, const void* input, size_t len)
+static size_t
+ZSTD_decompressSequencesLong_default(ZSTD_DCtx* dctx,
+                                 void* dst, size_t maxDstSize,
+                           const void* seqStart, size_t seqSize, int nbSeq,
+                           const ZSTD_longOffset_e isLongOffset,
+                           const int frame)
 {
-    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
-
-    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
-        return XXH32_update_endian(state_in, input, len, XXH_littleEndian);
-    else
-        return XXH32_update_endian(state_in, input, len, XXH_bigEndian);
+    return ZSTD_decompressSequencesLong_body(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
 }
+#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT */
 
 
 
-FORCE_INLINE_TEMPLATE U32 XXH32_digest_endian (const XXH32_state_t* state, XXH_endianess endian)
+#if DYNAMIC_BMI2
+
+#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG
+#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG */
+
+#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
+static TARGET_ATTRIBUTE("bmi2") size_t
+ZSTD_decompressSequencesLong_bmi2(ZSTD_DCtx* dctx,
+                                 void* dst, size_t maxDstSize,
+                           const void* seqStart, size_t seqSize, int nbSeq,
+                           const ZSTD_longOffset_e isLongOffset,
+                           const int frame)
 {
-    const BYTE * p = (const BYTE*)state->mem32;
-    const BYTE* const bEnd = (const BYTE*)(state->mem32) + state->memsize;
-    U32 h32;
+    return ZSTD_decompressSequencesLong_body(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
+}
+#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT */
 
-    if (state->large_len) {
-        h32 = XXH_rotl32(state->v1, 1) + XXH_rotl32(state->v2, 7) + XXH_rotl32(state->v3, 12) + XXH_rotl32(state->v4, 18);
-    } else {
-        h32 = state->v3 /* == seed */ + PRIME32_5;
+#endif /* DYNAMIC_BMI2 */
+
+typedef size_t (*ZSTD_decompressSequences_t)(
+                            ZSTD_DCtx* dctx,
+                            void* dst, size_t maxDstSize,
+                            const void* seqStart, size_t seqSize, int nbSeq,
+                            const ZSTD_longOffset_e isLongOffset,
+                            const int frame);
+
+#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG
+static size_t
+ZSTD_decompressSequences(ZSTD_DCtx* dctx, void* dst, size_t maxDstSize,
+                   const void* seqStart, size_t seqSize, int nbSeq,
+                   const ZSTD_longOffset_e isLongOffset,
+                   const int frame)
+{
+    DEBUGLOG(5, "ZSTD_decompressSequences");
+  return ZSTD_decompressSequences_default(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
+}
+#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG */
+
+
+#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
+/* ZSTD_decompressSequencesLong() :
+ * decompression function triggered when a minimum share of offsets is considered "long",
+ * aka out of cache.
+ * note : "long" definition seems overloaded here, sometimes meaning "wider than bitstream register", and sometimes meaning "farther than memory cache distance".
+ * This function will try to mitigate main memory latency through the use of prefetching */
+static size_t
+ZSTD_decompressSequencesLong(ZSTD_DCtx* dctx,
+                             void* dst, size_t maxDstSize,
+                             const void* seqStart, size_t seqSize, int nbSeq,
+                             const ZSTD_longOffset_e isLongOffset,
+                             const int frame)
+{
+    DEBUGLOG(5, "ZSTD_decompressSequencesLong");
+#if DYNAMIC_BMI2
+    if (dctx->bmi2) {
+        return ZSTD_decompressSequencesLong_bmi2(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
+    }
+#endif
+  return ZSTD_decompressSequencesLong_default(dctx, dst, maxDstSize, seqStart, seqSize, nbSeq, isLongOffset, frame);
+}
+#endif /* ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT */
+
+
+
+#if !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
+    !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
+/* ZSTD_getLongOffsetsShare() :
+ * condition : offTable must be valid
+ * @return : "share" of long offsets (arbitrarily defined as > (1<<23))
+ *           compared to maximum possible of (1<<OffFSELog) */
+static unsigned
+ZSTD_getLongOffsetsShare(const ZSTD_seqSymbol* offTable)
+{
+    const void* ptr = offTable;
+    U32 const tableLog = ((const ZSTD_seqSymbol_header*)ptr)[0].tableLog;
+    const ZSTD_seqSymbol* table = offTable + 1;
+    U32 const max = 1 << tableLog;
+    U32 u, total = 0;
+    DEBUGLOG(5, "ZSTD_getLongOffsetsShare: (tableLog=%u)", tableLog);
+
+    assert(max <= (1 << OffFSELog));  /* max not too large */
+    for (u=0; u<max; u++) {
+        if (table[u].nbAdditionalBits > 22) total += 1;
     }
 
-    h32 += state->total_len_32;
+    assert(tableLog <= OffFSELog);
+    total <<= (OffFSELog - tableLog);  /* scale to OffFSELog */
 
-    while (p+4<=bEnd) {
-        h32 += XXH_readLE32(p, endian) * PRIME32_3;
-        h32  = XXH_rotl32(h32, 17) * PRIME32_4;
-        p+=4;
-    }
-
-    while (p<bEnd) {
-        h32 += (*p) * PRIME32_5;
-        h32  = XXH_rotl32(h32, 11) * PRIME32_1;
-        p++;
-    }
-
-    h32 ^= h32 >> 15;
-    h32 *= PRIME32_2;
-    h32 ^= h32 >> 13;
-    h32 *= PRIME32_3;
-    h32 ^= h32 >> 16;
-
-    return h32;
+    return total;
 }
-
-
-XXH_PUBLIC_API unsigned int XXH32_digest (const XXH32_state_t* state_in)
-{
-    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
-
-    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
-        return XXH32_digest_endian(state_in, XXH_littleEndian);
-    else
-        return XXH32_digest_endian(state_in, XXH_bigEndian);
-}
-
-
-
-/* **** XXH64 **** */
-
-FORCE_INLINE_TEMPLATE XXH_errorcode XXH64_update_endian (XXH64_state_t* state, const void* input, size_t len, XXH_endianess endian)
-{
-    const BYTE* p = (const BYTE*)input;
-    const BYTE* const bEnd = p + len;
-
-#ifdef XXH_ACCEPT_NULL_INPUT_POINTER
-    if (input==NULL) return XXH_ERROR;
 #endif
 
-    state->total_len += len;
+size_t
+ZSTD_decompressBlock_internal(ZSTD_DCtx* dctx,
+                              void* dst, size_t dstCapacity,
+                        const void* src, size_t srcSize, const int frame)
+{   /* blockType == blockCompressed */
+    const BYTE* ip = (const BYTE*)src;
+    /* isLongOffset must be true if there are long offsets.
+     * Offsets are long if they are larger than 2^STREAM_ACCUMULATOR_MIN.
+     * We don't expect that to be the case in 64-bit mode.
+     * In block mode, window size is not known, so we have to be conservative.
+     * (note: but it could be evaluated from current-lowLimit)
+     */
+    ZSTD_longOffset_e const isLongOffset = (ZSTD_longOffset_e)(MEM_32bits() && (!frame || (dctx->fParams.windowSize > (1ULL << STREAM_ACCUMULATOR_MIN))));
+    DEBUGLOG(5, "ZSTD_decompressBlock_internal (size : %u)", (U32)srcSize);
 
-    if (state->memsize + len < 32) {  /* fill in tmp buffer */
-        if (input != NULL) {
-            XXH_memcpy(((BYTE*)state->mem64) + state->memsize, input, len);
+    RETURN_ERROR_IF(srcSize >= ZSTD_BLOCKSIZE_MAX, srcSize_wrong, "");
+
+    /* Decode literals section */
+    {   size_t const litCSize = ZSTD_decodeLiteralsBlock(dctx, src, srcSize);
+        DEBUGLOG(5, "ZSTD_decodeLiteralsBlock : %u", (U32)litCSize);
+        if (ZSTD_isError(litCSize)) return litCSize;
+        ip += litCSize;
+        srcSize -= litCSize;
+    }
+
+    /* Build Decoding Tables */
+    {
+        /* These macros control at build-time which decompressor implementation
+         * we use. If neither is defined, we do some inspection and dispatch at
+         * runtime.
+         */
+#if !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
+    !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
+        int usePrefetchDecoder = dctx->ddictIsCold;
+#endif
+        int nbSeq;
+        size_t const seqHSize = ZSTD_decodeSeqHeaders(dctx, &nbSeq, ip, srcSize);
+        if (ZSTD_isError(seqHSize)) return seqHSize;
+        ip += seqHSize;
+        srcSize -= seqHSize;
+
+        RETURN_ERROR_IF(dst == NULL && nbSeq > 0, dstSize_tooSmall, "NULL not handled");
+
+#if !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
+    !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
+        if ( !usePrefetchDecoder
+          && (!frame || (dctx->fParams.windowSize > (1<<24)))
+          && (nbSeq>ADVANCED_SEQS) ) {  /* could probably use a larger nbSeq limit */
+            U32 const shareLongOffsets = ZSTD_getLongOffsetsShare(dctx->OFTptr);
+            U32 const minShare = MEM_64bits() ? 7 : 20; /* heuristic values, correspond to 2.73% and 7.81% */
+            usePrefetchDecoder = (shareLongOffsets >= minShare);
         }
-        state->memsize += (U32)len;
-        return XXH_OK;
-    }
+#endif
 
-    if (state->memsize) {   /* tmp buffer is full */
-        XXH_memcpy(((BYTE*)state->mem64) + state->memsize, input, 32-state->memsize);
-        state->v1 = XXH64_round(state->v1, XXH_readLE64(state->mem64+0, endian));
-        state->v2 = XXH64_round(state->v2, XXH_readLE64(state->mem64+1, endian));
-        state->v3 = XXH64_round(state->v3, XXH_readLE64(state->mem64+2, endian));
-        state->v4 = XXH64_round(state->v4, XXH_readLE64(state->mem64+3, endian));
-        p += 32-state->memsize;
-        state->memsize = 0;
-    }
+        dctx->ddictIsCold = 0;
 
-    if (p+32 <= bEnd) {
-        const BYTE* const limit = bEnd - 32;
-        U64 v1 = state->v1;
-        U64 v2 = state->v2;
-        U64 v3 = state->v3;
-        U64 v4 = state->v4;
+#if !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT) && \
+    !defined(ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG)
+        if (usePrefetchDecoder)
+#endif
+#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
+            return ZSTD_decompressSequencesLong(dctx, dst, dstCapacity, ip, srcSize, nbSeq, isLongOffset, frame);
+#endif
 
-        do {
-            v1 = XXH64_round(v1, XXH_readLE64(p, endian)); p+=8;
-            v2 = XXH64_round(v2, XXH_readLE64(p, endian)); p+=8;
-            v3 = XXH64_round(v3, XXH_readLE64(p, endian)); p+=8;
-            v4 = XXH64_round(v4, XXH_readLE64(p, endian)); p+=8;
-        } while (p<=limit);
-
-        state->v1 = v1;
-        state->v2 = v2;
-        state->v3 = v3;
-        state->v4 = v4;
-    }
-
-    if (p < bEnd) {
-        XXH_memcpy(state->mem64, p, (size_t)(bEnd-p));
-        state->memsize = (unsigned)(bEnd-p);
-    }
-
-    return XXH_OK;
-}
-
-XXH_PUBLIC_API XXH_errorcode XXH64_update (XXH64_state_t* state_in, const void* input, size_t len)
-{
-    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
-
-    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
-        return XXH64_update_endian(state_in, input, len, XXH_littleEndian);
-    else
-        return XXH64_update_endian(state_in, input, len, XXH_bigEndian);
-}
-
-
-
-FORCE_INLINE_TEMPLATE U64 XXH64_digest_endian (const XXH64_state_t* state, XXH_endianess endian)
-{
-    const BYTE * p = (const BYTE*)state->mem64;
-    const BYTE* const bEnd = (const BYTE*)state->mem64 + state->memsize;
-    U64 h64;
-
-    if (state->total_len >= 32) {
-        U64 const v1 = state->v1;
-        U64 const v2 = state->v2;
-        U64 const v3 = state->v3;
-        U64 const v4 = state->v4;
-
-        h64 = XXH_rotl64(v1, 1) + XXH_rotl64(v2, 7) + XXH_rotl64(v3, 12) + XXH_rotl64(v4, 18);
-        h64 = XXH64_mergeRound(h64, v1);
-        h64 = XXH64_mergeRound(h64, v2);
-        h64 = XXH64_mergeRound(h64, v3);
-        h64 = XXH64_mergeRound(h64, v4);
-    } else {
-        h64  = state->v3 + PRIME64_5;
-    }
-
-    h64 += (U64) state->total_len;
-
-    while (p+8<=bEnd) {
-        U64 const k1 = XXH64_round(0, XXH_readLE64(p, endian));
-        h64 ^= k1;
-        h64  = XXH_rotl64(h64,27) * PRIME64_1 + PRIME64_4;
-        p+=8;
-    }
-
-    if (p+4<=bEnd) {
-        h64 ^= (U64)(XXH_readLE32(p, endian)) * PRIME64_1;
-        h64  = XXH_rotl64(h64, 23) * PRIME64_2 + PRIME64_3;
-        p+=4;
-    }
-
-    while (p<bEnd) {
-        h64 ^= (*p) * PRIME64_5;
-        h64  = XXH_rotl64(h64, 11) * PRIME64_1;
-        p++;
-    }
-
-    h64 ^= h64 >> 33;
-    h64 *= PRIME64_2;
-    h64 ^= h64 >> 29;
-    h64 *= PRIME64_3;
-    h64 ^= h64 >> 32;
-
-    return h64;
-}
-
-
-XXH_PUBLIC_API unsigned long long XXH64_digest (const XXH64_state_t* state_in)
-{
-    XXH_endianess endian_detected = (XXH_endianess)XXH_CPU_LITTLE_ENDIAN;
-
-    if ((endian_detected==XXH_littleEndian) || XXH_FORCE_NATIVE_FORMAT)
-        return XXH64_digest_endian(state_in, XXH_littleEndian);
-    else
-        return XXH64_digest_endian(state_in, XXH_bigEndian);
-}
-
-
-/* **************************
-*  Canonical representation
-****************************/
-
-/*! Default XXH result types are basic unsigned 32 and 64 bits.
-*   The canonical representation follows human-readable write convention, aka big-endian (large digits first).
-*   These functions allow transformation of hash result into and from its canonical format.
-*   This way, hash values can be written into a file or buffer, and remain comparable across different systems and programs.
-*/
-
-XXH_PUBLIC_API void XXH32_canonicalFromHash(XXH32_canonical_t* dst, XXH32_hash_t hash)
-{
-    XXH_STATIC_ASSERT(sizeof(XXH32_canonical_t) == sizeof(XXH32_hash_t));
-    if (XXH_CPU_LITTLE_ENDIAN) hash = XXH_swap32(hash);
-    memcpy(dst, &hash, sizeof(*dst));
-}
-
-XXH_PUBLIC_API void XXH64_canonicalFromHash(XXH64_canonical_t* dst, XXH64_hash_t hash)
-{
-    XXH_STATIC_ASSERT(sizeof(XXH64_canonical_t) == sizeof(XXH64_hash_t));
-    if (XXH_CPU_LITTLE_ENDIAN) hash = XXH_swap64(hash);
-    memcpy(dst, &hash, sizeof(*dst));
-}
-
-XXH_PUBLIC_API XXH32_hash_t XXH32_hashFromCanonical(const XXH32_canonical_t* src)
-{
-    return XXH_readBE32(src);
-}
-
-XXH_PUBLIC_API XXH64_hash_t XXH64_hashFromCanonical(const XXH64_canonical_t* src)
-{
-    return XXH_readBE64(src);
-}
-
-}
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-/*
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
- */
-
-
-
-/*-*************************************
-*  Dependencies
-***************************************/
-#include <stdlib.h>      /* malloc, calloc, free */
-#include <string.h>      /* memset */
-
-
-
-namespace duckdb_zstd {
-
-/*-****************************************
-*  Version
-******************************************/
-unsigned ZSTD_versionNumber(void) { return ZSTD_VERSION_NUMBER; }
-
-const char* ZSTD_versionString(void) { return ZSTD_VERSION_STRING; }
-
-
-/*-****************************************
-*  ZSTD Error Management
-******************************************/
-#undef ZSTD_isError   /* defined within zstd_internal.h */
-/*! ZSTD_isError() :
- *  tells if a return value is an error code
- *  symbol is required for external callers */
-unsigned ZSTD_isError(size_t code) { return ERR_isError(code); }
-
-/*! ZSTD_getErrorName() :
- *  provides error code string from function result (useful for debugging) */
-const char* ZSTD_getErrorName(size_t code) { return ERR_getErrorName(code); }
-
-/*! ZSTD_getError() :
- *  convert a `size_t` function result into a proper ZSTD_errorCode enum */
-ZSTD_ErrorCode ZSTD_getErrorCode(size_t code) { return ERR_getErrorCode(code); }
-
-/*! ZSTD_getErrorString() :
- *  provides error code string from enum */
-const char* ZSTD_getErrorString(ZSTD_ErrorCode code) { return ERR_getErrorString(code); }
-
-
-
-/*=**************************************************************
-*  Custom allocator
-****************************************************************/
-void* ZSTD_malloc(size_t size, ZSTD_customMem customMem)
-{
-    if (customMem.customAlloc)
-        return customMem.customAlloc(customMem.opaque, size);
-    return malloc(size);
-}
-
-void* ZSTD_calloc(size_t size, ZSTD_customMem customMem)
-{
-    if (customMem.customAlloc) {
-        /* calloc implemented as malloc+memset;
-         * not as efficient as calloc, but next best guess for custom malloc */
-        void* const ptr = customMem.customAlloc(customMem.opaque, size);
-        memset(ptr, 0, size);
-        return ptr;
-    }
-    return calloc(1, size);
-}
-
-void ZSTD_free(void* ptr, ZSTD_customMem customMem)
-{
-    if (ptr!=NULL) {
-        if (customMem.customFree)
-            customMem.customFree(customMem.opaque, ptr);
-        else
-            free(ptr);
+#ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG
+        /* else */
+        return ZSTD_decompressSequences(dctx, dst, dstCapacity, ip, srcSize, nbSeq, isLongOffset, frame);
+#endif
     }
 }
 
+
+void ZSTD_checkContinuity(ZSTD_DCtx* dctx, const void* dst)
+{
+    if (dst != dctx->previousDstEnd) {   /* not contiguous */
+        dctx->dictEnd = dctx->previousDstEnd;
+        dctx->virtualStart = (const char*)dst - ((const char*)(dctx->previousDstEnd) - (const char*)(dctx->prefixStart));
+        dctx->prefixStart = dst;
+        dctx->previousDstEnd = dst;
+    }
 }
 
 
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
-// See the end of this file for a list
-
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-
-
-
-namespace duckdb_apache {
-namespace thrift {
-namespace protocol {
-
-TProtocol::~TProtocol() = default;
-uint32_t TProtocol::skip_virt(TType type) {
-  return ::duckdb_apache::thrift::protocol::skip(*this, type);
+size_t ZSTD_decompressBlock(ZSTD_DCtx* dctx,
+                            void* dst, size_t dstCapacity,
+                      const void* src, size_t srcSize)
+{
+    size_t dSize;
+    ZSTD_checkContinuity(dctx, dst);
+    dSize = ZSTD_decompressBlock_internal(dctx, dst, dstCapacity, src, srcSize, /* frame */ 0);
+    dctx->previousDstEnd = (char*)dst + dSize;
+    return dSize;
 }
 
-TProtocolFactory::~TProtocolFactory() = default;
-
-}}} // duckdb_apache::thrift::protocol
-
+}
 
 // LICENSE_CHANGE_END
