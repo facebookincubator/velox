@@ -126,6 +126,139 @@ bool SubstraitToVeloxPlanValidator::validate(
   return true;
 }
 
+bool validateBoundType(::substrait::Expression_WindowFunction_Bound boundType) {
+  switch (boundType.kind_case()) {
+    case ::substrait::Expression_WindowFunction_Bound::kUnboundedFollowing:
+    case ::substrait::Expression_WindowFunction_Bound::kUnboundedPreceding:
+    case ::substrait::Expression_WindowFunction_Bound::kCurrentRow:
+      break;
+    default:
+      std::cout << "The Bound Type is not supported. "
+                << "\n";
+      return false;
+  }
+  return true;
+}
+
+bool SubstraitToVeloxPlanValidator::validate(
+    const ::substrait::WindowRel& sWindow) {
+  if (sWindow.has_input() && !validate(sWindow.input())) {
+    return false;
+  }
+
+  // Get and validate the input types from extension.
+  if (!sWindow.has_advanced_extension()) {
+    std::cout << "Input types are expected in WindowRel." << std::endl;
+    return false;
+  }
+  const auto& extension = sWindow.advanced_extension();
+  std::vector<TypePtr> types;
+  if (!validateInputTypes(extension, types)) {
+    std::cout << "Validation failed for input types in WindowRel." << std::endl;
+    return false;
+  }
+
+  int32_t inputPlanNodeId = 0;
+  std::vector<std::string> names;
+  names.reserve(types.size());
+  for (auto colIdx = 0; colIdx < types.size(); colIdx++) {
+    names.emplace_back(subParser_->makeNodeName(inputPlanNodeId, colIdx));
+  }
+  auto rowType = std::make_shared<RowType>(std::move(names), std::move(types));
+
+  // Validate WindowFunction
+  std::vector<std::string> funcSpecs;
+  funcSpecs.reserve(sWindow.measures().size());
+  for (const auto& smea : sWindow.measures()) {
+    try {
+      const auto& windowFunction = smea.measure();
+      funcSpecs.emplace_back(
+          planConverter_->findFuncSpec(windowFunction.function_reference()));
+      toVeloxType(subParser_->parseType(windowFunction.output_type())->type);
+      for (const auto& arg : windowFunction.arguments()) {
+        auto typeCase = arg.value().rex_type_case();
+        switch (typeCase) {
+          case ::substrait::Expression::RexTypeCase::kSelection:
+          case ::substrait::Expression::RexTypeCase::kLiteral:
+            break;
+          default:
+            std::cout << "Only field is supported in window functions."
+                      << std::endl;
+            return false;
+        }
+      }
+      // Validate BoundType and Frame Type
+      switch (windowFunction.window_type()) {
+        case ::substrait::WindowType::ROWS:
+        case ::substrait::WindowType::RANGE:
+          break;
+        default:
+          VELOX_FAIL(
+              "the window type only support ROWS and RANGE, and the input type is ",
+              windowFunction.window_type());
+      }
+
+      validateBoundType(windowFunction.upper_bound());
+      validateBoundType(windowFunction.lower_bound());
+
+    } catch (const VeloxException& err) {
+      std::cout << "Validation failed for window function due to: "
+                << err.message() << std::endl;
+      return false;
+    }
+  }
+
+  // Validate groupby expression
+  const auto& groupByExprs = sWindow.partition_expressions();
+  std::vector<std::shared_ptr<const core::ITypedExpr>> expressions;
+  expressions.reserve(groupByExprs.size());
+  try {
+    for (const auto& expr : groupByExprs) {
+      expressions.emplace_back(exprConverter_->toVeloxExpr(expr, rowType));
+    }
+    // Try to compile the expressions. If there is any unregistred funciton or
+    // mismatched type, exception will be thrown.
+    exec::ExprSet exprSet(std::move(expressions), execCtx_);
+  } catch (const VeloxException& err) {
+    std::cout << "Validation failed for expression in ProjectRel due to:"
+              << err.message() << std::endl;
+    return false;
+  }
+
+  // Validate Sort expression
+  const auto& sorts = sWindow.sorts();
+  for (const auto& sort : sorts) {
+    switch (sort.direction()) {
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_FIRST:
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_LAST:
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_FIRST:
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_LAST:
+        break;
+      default:
+        return false;
+    }
+
+    if (sort.has_expr()) {
+      try {
+        auto expression = exprConverter_->toVeloxExpr(sort.expr(), rowType);
+        auto expr_field =
+            dynamic_cast<const core::FieldAccessTypedExpr*>(expression.get());
+        VELOX_CHECK(
+            expr_field != nullptr,
+            " the sorting key in Sort Operator only support field")
+
+        exec::ExprSet exprSet({std::move(expression)}, execCtx_);
+      } catch (const VeloxException& err) {
+        std::cout << "Validation failed for expression in SortRel due to:"
+                  << err.message() << std::endl;
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 bool SubstraitToVeloxPlanValidator::validate(
     const ::substrait::SortRel& sSort) {
   if (sSort.has_input() && !validate(sSort.input())) {
@@ -581,6 +714,9 @@ bool SubstraitToVeloxPlanValidator::validate(const ::substrait::Rel& sRel) {
   }
   if (sRel.has_fetch()) {
     return validate(sRel.fetch());
+  }
+  if (sRel.has_window()) {
+    return validate(sRel.window());
   }
   return false;
 }

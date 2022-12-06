@@ -489,6 +489,155 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       childNode);
 }
 
+const core::WindowNode::Frame createWindowFrame(
+    const ::substrait::Expression_WindowFunction_Bound& lower_bound,
+    const ::substrait::Expression_WindowFunction_Bound& upper_bound,
+    const ::substrait::WindowType& type) {
+  core::WindowNode::Frame frame;
+  switch (type) {
+    case ::substrait::WindowType::ROWS:
+      frame.type = core::WindowNode::WindowType::kRows;
+      break;
+    case ::substrait::WindowType::RANGE:
+
+      frame.type = core::WindowNode::WindowType::kRange;
+      break;
+    default:
+      VELOX_FAIL(
+          "the window type only support ROWS and RANGE, and the input type is ",
+          type);
+  }
+
+  auto boundTypeConversion =
+      [](::substrait::Expression_WindowFunction_Bound boundType)
+      -> core::WindowNode::BoundType {
+    if (boundType.has_current_row()) {
+      return core::WindowNode::BoundType::kCurrentRow;
+    } else if (boundType.has_unbounded_following()) {
+      return core::WindowNode::BoundType::kUnboundedFollowing;
+    } else if (boundType.has_unbounded_preceding()) {
+      return core::WindowNode::BoundType::kUnboundedPreceding;
+    } else {
+      VELOX_FAIL("The BoundType is not supported.");
+    }
+  };
+  frame.startType = boundTypeConversion(lower_bound);
+  frame.startValue = nullptr;
+  frame.endType = boundTypeConversion(upper_bound);
+  frame.endValue = nullptr;
+  return frame;
+}
+
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+    const ::substrait::WindowRel& windowRel) {
+  core::PlanNodePtr childNode;
+  if (windowRel.has_input()) {
+    childNode = toVeloxPlan(windowRel.input());
+  } else {
+    VELOX_FAIL("Child Rel is expected in WindowRel.");
+  }
+
+  const auto& inputType = childNode->outputType();
+
+  // Parse measures and get the window expressions.
+  // Each measure represents one window expression.
+  bool ignoreNullKeys = false;
+  std::vector<core::WindowNode::Function> windowNodeFunctions;
+  std::vector<std::string> windowColumnNames;
+
+  windowNodeFunctions.reserve(windowRel.measures().size());
+  for (const auto& smea : windowRel.measures()) {
+    const auto& windowFunction = smea.measure();
+    std::string funcName = subParser_->findVeloxFunction(
+        functionMap_, windowFunction.function_reference());
+    std::vector<std::shared_ptr<const core::ITypedExpr>> windowParams;
+    windowParams.reserve(windowFunction.arguments().size());
+    for (const auto& arg : windowFunction.arguments()) {
+      windowParams.emplace_back(
+          exprConverter_->toVeloxExpr(arg.value(), inputType));
+    }
+    auto windowVeloxType =
+        toVeloxType(subParser_->parseType(windowFunction.output_type())->type);
+    auto windowCall = std::make_shared<const core::CallTypedExpr>(
+        windowVeloxType, std::move(windowParams), funcName);
+    auto upperBound = windowFunction.upper_bound();
+    auto lowerBound = windowFunction.lower_bound();
+    auto type = windowFunction.window_type();
+
+    windowColumnNames.push_back(windowFunction.column_name());
+
+    windowNodeFunctions.push_back(
+        {std::move(windowCall),
+         createWindowFrame(lowerBound, upperBound, type),
+         ignoreNullKeys});
+  }
+
+  // Construct partitionKeys
+  std::vector<core::FieldAccessTypedExprPtr> partitionKeys;
+  const auto& partitions = windowRel.partition_expressions();
+  partitionKeys.reserve(partitions.size());
+  for (const auto& partition : partitions) {
+    auto expression = exprConverter_->toVeloxExpr(partition, inputType);
+    auto expr_field =
+        dynamic_cast<const core::FieldAccessTypedExpr*>(expression.get());
+    VELOX_CHECK(
+        expr_field != nullptr,
+        " the partition key in Window Operator only support field")
+
+    partitionKeys.emplace_back(
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+            expression));
+  }
+
+  std::vector<core::FieldAccessTypedExprPtr> sortingKeys;
+  std::vector<core::SortOrder> sortingOrders;
+
+  const auto& sorts = windowRel.sorts();
+  sortingKeys.reserve(sorts.size());
+  sortingOrders.reserve(sorts.size());
+
+  for (const auto& sort : sorts) {
+    switch (sort.direction()) {
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_FIRST:
+        sortingOrders.emplace_back(core::kAscNullsFirst);
+        break;
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_LAST:
+        sortingOrders.emplace_back(core::kAscNullsLast);
+        break;
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_FIRST:
+        sortingOrders.emplace_back(core::kDescNullsFirst);
+        break;
+      case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_LAST:
+        sortingOrders.emplace_back(core::kDescNullsLast);
+        break;
+      default:
+        VELOX_FAIL("Sort direction is not support in WindowRel");
+    }
+
+    if (sort.has_expr()) {
+      auto expression = exprConverter_->toVeloxExpr(sort.expr(), inputType);
+      auto expr_field =
+          dynamic_cast<const core::FieldAccessTypedExpr*>(expression.get());
+      VELOX_CHECK(
+          expr_field != nullptr,
+          " the sorting key in Window Operator only support field")
+
+      sortingKeys.emplace_back(
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+              expression));
+    }
+  }
+
+  return std::make_shared<core::WindowNode>(
+      nextPlanNodeId(),
+      partitionKeys,
+      sortingKeys,
+      sortingOrders,
+      windowColumnNames,
+      windowNodeFunctions,
+      childNode);
+}
+
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::SortRel& sortRel) {
   auto childNode = convertSingleInput<::substrait::SortRel>(sortRel);
@@ -873,6 +1022,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   }
   if (sRel.has_fetch()) {
     return toVeloxPlan(sRel.fetch());
+  }
+  if (sRel.has_window()) {
+    return toVeloxPlan(sRel.window());
   }
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }

@@ -103,14 +103,14 @@ void registerRankInternal(
           const std::vector<exec::WindowFunctionArg>& /*args*/,
           const TypePtr& resultType,
           velox::memory::MemoryPool* /*pool*/,
-          HashStringAllocator* /*stringAllocator*/)
-          -> std::unique_ptr<exec::WindowFunction> {
+          HashStringAllocator *
+          /*stringAllocator*/) -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RankFunction<TRank, TResult>>(resultType);
       });
 }
 
 void registerRank(const std::string& name) {
-  registerRankInternal<RankType::kRank, int64_t>(name, "bigint");
+  registerRankInternal<RankType::kRank, int32_t>(name, "integer");
 }
 void registerDenseRank(const std::string& name) {
   registerRankInternal<RankType::kDenseRank, int64_t>(name, "bigint");

@@ -39,7 +39,7 @@ class RowNumberFunction : public exec::WindowFunction {
       vector_size_t resultOffset,
       const VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
-    auto* rawValues = result->asFlatVector<int64_t>()->mutableRawValues();
+    auto* rawValues = result->asFlatVector<int32_t>()->mutableRawValues();
     for (int i = 0; i < numRows; i++) {
       rawValues[resultOffset + i] = rowNumber_++;
     }
@@ -64,8 +64,8 @@ void registerRowNumber(const std::string& name) {
           const std::vector<exec::WindowFunctionArg>& /*args*/,
           const TypePtr& /*resultType*/,
           velox::memory::MemoryPool* /*pool*/,
-          HashStringAllocator* /*stringAllocator*/)
-          -> std::unique_ptr<exec::WindowFunction> {
+          HashStringAllocator *
+          /*stringAllocator*/) -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RowNumberFunction>();
       });
 }

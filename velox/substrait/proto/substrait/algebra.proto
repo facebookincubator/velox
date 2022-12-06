@@ -238,6 +238,19 @@ message SortRel {
   substrait.extensions.AdvancedExtension advanced_extension = 10;
 }
 
+message WindowRel {
+  RelCommon common = 1;
+  Rel input = 2;
+  repeated Measure measures = 3;
+  repeated Expression partition_expressions = 4;
+  repeated SortField sorts = 5;
+  substrait.extensions.AdvancedExtension advanced_extension = 10;
+
+  message Measure {
+    Expression.WindowFunction measure = 1;
+  }
+}
+
 // The relational operator capturing simple FILTERs (as in the WHERE clause of SQL)
 message FilterRel {
   RelCommon common = 1;
@@ -384,6 +397,7 @@ message Rel {
     ExtensionLeafRel extension_leaf = 11;
     CrossRel cross = 12;
     ExpandRel expand = 13;
+    WindowRel window = 14;
   }
 }
 
@@ -560,6 +574,8 @@ message Expression {
     AggregationPhase phase = 6;
     Type output_type = 7;
     repeated FunctionArgument arguments = 9;
+    string column_name = 10;
+    WindowType window_type = 11;
 
     // deprecated; use args instead
     repeated Expression args = 8 [deprecated = true];
@@ -575,13 +591,16 @@ message Expression {
 
       message CurrentRow {}
 
-      message Unbounded {}
+      message Unbounded_Preceding {}
+
+      message Unbounded_Following {}
 
       oneof kind {
         Preceding preceding = 1;
         Following following = 2;
         CurrentRow current_row = 3;
-        Unbounded unbounded = 4;
+        Unbounded_Preceding unbounded_preceding = 4;
+        Unbounded_Following unbounded_following = 5;
       }
     }
   }
@@ -895,6 +914,11 @@ enum AggregationPhase {
   AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE = 2;
   AGGREGATION_PHASE_INITIAL_TO_RESULT = 3;
   AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT = 4;
+}
+
+enum WindowType {
+  ROWS = 0;
+  RANGE = 1;
 }
 
 message AggregateFunction {
