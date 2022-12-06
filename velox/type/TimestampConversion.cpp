@@ -190,7 +190,13 @@ bool tryParseDateString(
     }
   }
 
-  if (pos >= len) {
+  // No month or day.
+  if (pos == len) {
+    daysSinceEpoch = daysSinceEpochFromDate(year, 1, 1);
+    return true;
+  }
+
+  if (pos > len) {
     return false;
   }
 
@@ -206,7 +212,13 @@ bool tryParseDateString(
     return false;
   }
 
-  if (pos >= len) {
+  // No day.
+  if (pos == len) {
+    daysSinceEpoch = daysSinceEpochFromDate(year, month, 1);
+    return true;
+  }
+
+  if (pos > len) {
     return false;
   }
 
@@ -239,13 +251,25 @@ bool tryParseDateString(
 
   // In strict mode, check remaining string for non-space characters.
   if (strict) {
-    // Skip trailing spaces.
-    while (pos < len && characterIsSpace(buf[pos])) {
+    // Check for an optional trailing 'T' followed by optional digits.
+    if (pos < len && buf[pos] == 'T') {
       pos++;
-    }
-    // Check position. if end was not reached, non-space chars remaining.
-    if (pos < len) {
-      return false;
+      while (pos < len && characterIsDigit(buf[pos])) {
+        pos++;
+      }
+    } else {
+      // Skip trailing spaces.
+      while (pos < len && characterIsSpace(buf[pos])) {
+        pos++;
+      }
+      // Skip trailing digits after spaces.
+      while (pos < len && characterIsDigit(buf[pos])) {
+        pos++;
+      }
+      // Check position. if end was not reached, non-space chars remaining.
+      if (pos < len) {
+        return false;
+      }
     }
   } else {
     // In non-strict mode, check for any direct trailing digits.
