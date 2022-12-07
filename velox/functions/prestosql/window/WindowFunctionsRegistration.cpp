@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
-#include "velox/exec/Aggregate.h"
-#include "velox/exec/AggregateWindow.h"
 
 namespace facebook::velox::window {
 
