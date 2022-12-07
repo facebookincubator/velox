@@ -25,6 +25,7 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/TypeAliases.h"
+#include "velox/vector/tests/TestingDictionaryOverConstFunction.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -919,5 +920,18 @@ TEST_F(CastExprTest, castAsCall) {
 
   auto result = evaluate(callExpr, input);
   auto expected = makeNullableFlatVector(outputValues);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(CastExprTest, dictionaryOverConst) {
+  exec::registerVectorFunction(
+      "dictionary_over_const",
+      TestingDictionaryOverConstFunction::signatures(),
+      std::make_unique<TestingDictionaryOverConstFunction>());
+
+  auto data = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+  auto result = evaluate(
+      "cast(dictionary_over_const(c0) as smallint)", makeRowVector({data}));
+  auto expected = makeNullableFlatVector<int16_t>({1, 1, 1, 1, 1});
   assertEqualVectors(expected, result);
 }

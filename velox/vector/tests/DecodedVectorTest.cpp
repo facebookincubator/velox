@@ -299,6 +299,17 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
       DecodedVector decoded(*dictionaryVector, false);
       check(decoded);
     }
+
+    {
+      DecodedVector decoded(*dictionaryVector, false);
+      if (!decoded.isConstantMapping()) {
+        auto wrapping =
+            decoded.dictionaryWrapping(*dictionaryVector, dictionarySize);
+        auto rewrapped = BaseVector::wrapInDictionary(
+            wrapping.nulls, wrapping.indices, dictionarySize, base);
+        assertEqualVectors(dictionaryVector, rewrapped);
+      }
+    }
   }
 
   template <typename T>
@@ -340,6 +351,18 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     {
       DecodedVector decoded(*dictionaryVector, false);
       check(decoded);
+    }
+
+    {
+      DecodedVector decoded(*dictionaryVector, false);
+      if (!decoded.isConstantMapping()) {
+        auto wrapping =
+            decoded.dictionaryWrapping(*dictionaryVector, dictionarySize);
+        auto base = makeFlatVector<T>(std::vector<T>{value});
+        auto rewrapped = BaseVector::wrapInDictionary(
+            wrapping.nulls, wrapping.indices, dictionarySize, base);
+        assertEqualVectors(dictionaryVector, rewrapped);
+      }
     }
   }
 

@@ -442,8 +442,9 @@ void DecodedVector::setBaseDataForBias(
 
 namespace {
 bool isWrapper(VectorEncoding::Simple encoding) {
-  return encoding == VectorEncoding::Simple::SEQUENCE ||
-      encoding == VectorEncoding::Simple::DICTIONARY;
+  return encoding == VectorEncoding::Simple::CONSTANT ||
+      encoding == VectorEncoding::Simple::DICTIONARY ||
+      encoding == VectorEncoding::Simple::SEQUENCE;
 }
 
 /// Returns true if 'wrapper' is a dictionary vector wrapping non-dictionary
