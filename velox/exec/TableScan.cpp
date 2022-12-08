@@ -144,6 +144,8 @@ bool TableScan::isFinished() {
 }
 
 void TableScan::setBatchSize() {
+  readBatchSize_ = kDefaultBatchSize;
+  /*
   constexpr int64_t kMB = 1 << 20;
   auto estimate = dataSource_->estimatedRowSize();
   if (estimate == connector::DataSource::kUnknownRowSize) {
@@ -155,6 +157,7 @@ void TableScan::setBatchSize() {
     return;
   }
   readBatchSize_ = std::min<int64_t>(100, 10 * kMB / estimate);
+  */
 }
 
 void TableScan::addDynamicFilter(

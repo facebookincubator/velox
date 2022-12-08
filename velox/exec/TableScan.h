@@ -48,7 +48,7 @@ class TableScan : public SourceOperator {
       const std::shared_ptr<common::Filter>& filter) override;
 
  private:
-  static constexpr int32_t kDefaultBatchSize = 1024;
+  static constexpr int32_t kDefaultBatchSize = 20000;
 
   // Adjust batch size according to split information.
   void setBatchSize();
