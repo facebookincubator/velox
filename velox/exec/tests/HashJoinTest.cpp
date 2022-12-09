@@ -43,23 +43,6 @@ struct TestParam {
 using SplitInput =
     std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>;
 
-std::function<void(Task* task)> makeAddSplit(
-    bool& noMoreSplits,
-    SplitInput splits) {
-  return [&](Task* task) {
-    if (noMoreSplits) {
-      return;
-    }
-    for (auto& [nodeId, nodeSplits] : splits) {
-      for (auto& split : nodeSplits) {
-        task->addSplit(nodeId, std::move(split));
-      }
-      task->noMoreSplits(nodeId);
-    }
-    noMoreSplits = true;
-  };
-}
-
 // Shuffle batches.
 void shuffleBatches(std::vector<RowVectorPtr>& batches) {
   std::default_random_engine rng(1234);

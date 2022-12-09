@@ -23,20 +23,22 @@ namespace facebook::velox::core {
 /// config properties and accessor methods.
 class QueryConfig {
  public:
-  explicit QueryConfig(BaseConfigManager* configManager)
+  explicit QueryConfig(BaseConfigManager* FOLLY_NONNULL configManager)
       : configManager_{configManager} {}
 
-  static constexpr const char* kCodegenEnabled = "driver.codegen.enabled";
+  static constexpr const char* FOLLY_NONNULL kCodegenEnabled =
+      "driver.codegen.enabled";
 
-  static constexpr const char* kCodegenConfigurationFilePath =
+  static constexpr const char* FOLLY_NONNULL kCodegenConfigurationFilePath =
       "driver.codegen.configuration_file_path";
 
-  static constexpr const char* kCodegenLazyLoading =
+  static constexpr const char* FOLLY_NONNULL kCodegenLazyLoading =
       "driver.codegen.lazy_loading";
 
   // User provided session timezone. Stores a string with the actual timezone
   // name, e.g: "America/Los_Angeles".
-  static constexpr const char* kSessionTimezone = "driver.session.timezone";
+  static constexpr const char* FOLLY_NONNULL kSessionTimezone =
+      "driver.session.timezone";
 
   // If true, timezone-less timestamp conversions (e.g. string to timestamp,
   // when the string does not specify a timezone) will be adjusted to the user
@@ -48,22 +50,22 @@ class QueryConfig {
   //  "1970-01-01" will be converted to -28800 instead of 0.
   //
   // False by default.
-  static constexpr const char* kAdjustTimestampToTimezone =
+  static constexpr const char* FOLLY_NONNULL kAdjustTimestampToTimezone =
       "driver.session.adjust_timestamp_to_timezone";
 
   // Whether to use the simplified expression evaluation path. False by default.
-  static constexpr const char* kExprEvalSimplified =
+  static constexpr const char* FOLLY_NONNULL kExprEvalSimplified =
       "expression.eval_simplified";
 
   // Whether to track CPU usage for individual expressions (supported by call
   // and cast expressions). False by default. Can be expensive when processing
   // small batches, e.g. < 10K rows.
-  static constexpr const char* kExprTrackCpuUsage =
+  static constexpr const char* FOLLY_NONNULL kExprTrackCpuUsage =
       "expression.track_cpu_usage";
 
   // Whether to track CPU usage for stages of individual operators. True by
   // default. Can be expensive when processing small batches, e.g. < 10K rows.
-  static constexpr const char* kOperatorTrackCpuUsage =
+  static constexpr const char* FOLLY_NONNULL kOperatorTrackCpuUsage =
       "driver.track_operator_cpu_usage";
 
   // Flags used to configure the CAST operator:
@@ -71,77 +73,82 @@ class QueryConfig {
   // This flag makes the Row conversion to by applied
   // in a way that the casting row field are matched by
   // name instead of position
-  static constexpr const char* kCastMatchStructByName =
+  static constexpr const char* FOLLY_NONNULL kCastMatchStructByName =
       "driver.cast.match_struct_by_name";
 
   // This flags forces the cast from float/double to integer to be performed by
   // truncating the decimal part instead of rounding.
-  static constexpr const char* kCastIntByTruncate =
+  static constexpr const char* FOLLY_NONNULL kCastIntByTruncate =
       "driver.cast.int_by_truncate";
 
-  static constexpr const char* kMaxLocalExchangeBufferSize =
+  static constexpr const char* FOLLY_NONNULL kMaxLocalExchangeBufferSize =
       "max_local_exchange_buffer_size";
 
-  static constexpr const char* kMaxPartialAggregationMemory =
+  static constexpr const char* FOLLY_NONNULL kMaxPartialAggregationMemory =
       "max_partial_aggregation_memory";
 
-  static constexpr const char* kMaxExtendedPartialAggregationMemory =
-      "max_extended_partial_aggregation_memory";
+  static constexpr const char* FOLLY_NONNULL
+      kMaxExtendedPartialAggregationMemory =
+          "max_extended_partial_aggregation_memory";
 
   /// Output volume as percentage of input volume below which we will not seek
   /// to increase reduction by using more memory. the data volume is measured as
   /// the number of rows.
-  static constexpr const char* kPartialAggregationGoodPct =
+  static constexpr const char* FOLLY_NONNULL kPartialAggregationGoodPct =
       "partial_aggregation_reduction_ratio_threshold";
 
-  static constexpr const char* kMaxPartitionedOutputBufferSize =
+  static constexpr const char* FOLLY_NONNULL kMaxPartitionedOutputBufferSize =
       "driver.max-page-partitioning-buffer-size";
 
   /// Preffered number of rows to be returned by operators from
   /// Operator::getOutput.
-  static constexpr const char* kPreferredOutputBatchSize =
+  static constexpr const char* FOLLY_NONNULL kPreferredOutputBatchSize =
       "preferred_output_batch_size";
 
-  static constexpr const char* kHashAdaptivityEnabled =
+  static constexpr const char* FOLLY_NONNULL kHashAdaptivityEnabled =
       "driver.hash_adaptivity_enabled";
 
-  static constexpr const char* kAdaptiveFilterReorderingEnabled =
+  static constexpr const char* FOLLY_NONNULL kAdaptiveFilterReorderingEnabled =
       "driver.adaptive_filter_reordering_enabled";
 
-  static constexpr const char* kCreateEmptyFiles = "driver.create_empty_files";
+  static constexpr const char* FOLLY_NONNULL kCreateEmptyFiles =
+      "driver.create_empty_files";
 
   /// Global enable spilling flag.
-  static constexpr const char* kSpillEnabled = "spill_enabled";
+  static constexpr const char* FOLLY_NONNULL kSpillEnabled = "spill_enabled";
 
   /// Spill path. "/tmp" by default.
-  static constexpr const char* kSpillPath = "spiller-spill-path";
+  static constexpr const char* FOLLY_NONNULL kSpillPath = "spiller-spill-path";
 
   /// Aggregation spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kAggregationSpillEnabled =
+  static constexpr const char* FOLLY_NONNULL kAggregationSpillEnabled =
       "aggregation_spill_enabled";
 
   /// Join spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kJoinSpillEnabled = "join_spill_enabled";
+  static constexpr const char* FOLLY_NONNULL kJoinSpillEnabled =
+      "join_spill_enabled";
 
   /// OrderBy spilling flag, only applies if "spill_enabled" flag is set.
-  static constexpr const char* kOrderBySpillEnabled = "order_by_spill_enabled";
+  static constexpr const char* FOLLY_NONNULL kOrderBySpillEnabled =
+      "order_by_spill_enabled";
 
   /// The max memory that a final aggregation can use before spilling. If it 0,
   /// then there is no limit.
-  static constexpr const char* kAggregationSpillMemoryThreshold =
+  static constexpr const char* FOLLY_NONNULL kAggregationSpillMemoryThreshold =
       "aggregation_spill_memory_threshold";
 
   /// The max memory that a hash join can use before spilling. If it 0, then
   /// there is no limit.
-  static constexpr const char* kJoinSpillMemoryThreshold =
+  static constexpr const char* FOLLY_NONNULL kJoinSpillMemoryThreshold =
       "join_spill_memory_threshold";
 
   /// The max memory that an order by can use before spilling. If it 0, then
   /// there is no limit.
-  static constexpr const char* kOrderBySpillMemoryThreshold =
+  static constexpr const char* FOLLY_NONNULL kOrderBySpillMemoryThreshold =
       "order_by_spill_memory_threshold";
 
-  static constexpr const char* kTestingSpillPct = "testing.spill-pct";
+  static constexpr const char* FOLLY_NONNULL kTestingSpillPct =
+      "testing.spill-pct";
 
   /// The max allowed spilling level with zero being the initial spilling level.
   /// This only applies for hash build spilling which might trigger recursive
@@ -150,10 +157,11 @@ class QueryConfig {
   /// partition bits (see kSpillPartitionBits) at the end. The max spill level
   /// is used in production to prevent some bad user queries from using too much
   /// io and cpu resources.
-  static constexpr const char* kMaxSpillLevel = "max-spill-level";
+  static constexpr const char* FOLLY_NONNULL kMaxSpillLevel = "max-spill-level";
 
   /// The max allowed spill file size. If it is zero, then there is no limit.
-  static constexpr const char* kMaxSpillFileSize = "max-spill-file-size";
+  static constexpr const char* FOLLY_NONNULL kMaxSpillFileSize =
+      "max-spill-file-size";
 
   /// The min spill run size limit used to select partitions for spilling. The
   /// spiller tries to spill a previously spilled partitions if its data size
@@ -162,14 +170,16 @@ class QueryConfig {
   /// partition if it has any data. This is to avoid spill from a partition with
   /// a small amount of data which might result in generating too many small
   /// spilled files.
-  static constexpr const char* kMinSpillRunSize = "min-spill-run-size";
+  static constexpr const char* FOLLY_NONNULL kMinSpillRunSize =
+      "min-spill-run-size";
 
-  static constexpr const char* kSpillStartPartitionBit =
+  static constexpr const char* FOLLY_NONNULL kSpillStartPartitionBit =
       "spiller-start-partition-bit";
 
-  static constexpr const char* kSpillPartitionBits = "spiller-partition-bits";
+  static constexpr const char* FOLLY_NONNULL kSpillPartitionBits =
+      "spiller-partition-bits";
 
-  static constexpr const char* kSpillableReservationGrowthPct =
+  static constexpr const char* FOLLY_NONNULL kSpillableReservationGrowthPct =
       "spillable-reservation-growth-pct";
 
   uint64_t maxPartialAggregationMemoryUsage() const {
