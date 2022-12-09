@@ -278,20 +278,17 @@ message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(Boost_USE_MULTITHREADED TRUE)
-find_package(
-  Boost
-  1.66.0
-  REQUIRED
-  program_options
-  context
-  filesystem
-  regex
-  thread
-  system
-  date_time
-  atomic)
-include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
+set(BOOST_INCLUDE_LIBRARIES
+    atomic
+    context
+    date_time
+    filesystem
+    program_options
+    regex
+    system
+    thread)
+set_source(Boost)
+resolve_dependency(Boost REQUIRED_VERSION 1.66.0)
 
 # Range-v3 will be enable when the codegen code actually lands keeping it here
 # for reference. find_package(range-v3)
@@ -306,11 +303,12 @@ find_library(EVENT event)
 
 find_library(DOUBLE_CONVERSION double-conversion)
 
+find_package(ZLIB)
+
 if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(LZ4 lz4)
   find_library(LZO lzo2)
   find_library(ZSTD zstd)
-  find_package(ZLIB)
   find_library(SNAPPY snappy)
 endif()
 
@@ -340,6 +338,12 @@ endif()
 # Locate or build folly.
 set_source(folly)
 resolve_dependency(folly)
+
+# If we use BUNDLED boost we need to set this manually AFTER folly is configured
+if(NOT DEFINED ${Boost_LIBRARIES})
+  set(Boost_LIBRARIES ${BOOST_INCLUDE_LIBRARIES})
+  list(TRANSFORM Boost_LIBRARIES PREPEND boost_)
+endif()
 
 set(FOLLY_WITH_DEPENDENCIES
     ${FOLLY_LIBRARIES}

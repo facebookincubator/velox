@@ -264,6 +264,57 @@ endmacro()
 
 # ================================ END ICU4C ================================
 
+# ================================== BOOST ==================================
+if(DEFINED ENV{VELOX_BOOST_URL})
+  set(BOOST_SOURCE_URL "$ENV{VELOX_BOOST_URL}")
+else()
+  # We need to sue boost > 1.70 to build it with CMake
+  set(VELOX_BOOST_BUILD_VERSION 1.80.0)
+  string(REPLACE "." "_" VELOX_BOOST_UNDERSCORE_VERSION
+                 ${VELOX_BOOST_BUILD_VERSION})
+  string(
+    CONCAT BOOST_SOURCE_URL
+           "https://boostorg.jfrog.io/artifactory/main/release/"
+           "${VELOX_BOOST_BUILD_VERSION}/source/boost_"
+           "${VELOX_BOOST_UNDERSCORE_VERSION}.tar.gz")
+  set(VELOX_BOOST_BUILD_SHA256_CHECKSUM
+      4b2136f98bdd1f5857f1c3dea9ac2018effe65286cf251534b6ae20cc45e1847)
+endif()
+
+macro(build_boost)
+  message(STATUS "Building boost from source")
+  set(FETCHCONTENT_QUIET OFF)
+  FetchContent_Declare(
+    Boost
+    GIT_REPOSITORY https://github.com/boostorg/boost.git
+    GIT_TAG boost-1.80.0
+    GIT_SHALLOW TRUE)
+  FetchContent_Populate(Boost)
+  # Boost cmake uses the global option
+  set(BUILD_SHARED_LIBS ON)
+  add_subdirectory(${boost_SOURCE_DIR} ${boost_BINARY_DIR})
+  unset(BUILD_SHARED_LIBS)
+
+  # Manually construct include dirs. This is only necessary until we switch to
+  # properly using targets.
+  list_subdirs(boost_INCLUDE_DIRS ${boost_SOURCE_DIR}/libs)
+  list(TRANSFORM boost_INCLUDE_DIRS APPEND /include)
+
+  # numeric contains subdirs with their own include dir
+  list_subdirs(numeric_subdirs ${boost_SOURCE_DIR}/libs/numeric)
+  list(TRANSFORM numeric_subdirs APPEND /include)
+
+  include_directories(${boost_INCLUDE_DIRS} ${numeric_subdirs})
+
+  # this prevents system boost from leaking in
+  set(Boost_NO_SYSTEM_PATHS ON)
+  list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/CMake)
+  set(FETCHCONTENT_QUIET ON)
+
+endmacro()
+
+# ================================ END BOOST ================================
+
 macro(build_dependency DEPENDENCY_NAME)
   if("${DEPENDENCY_NAME}" STREQUAL "folly")
     build_folly()
@@ -275,6 +326,8 @@ macro(build_dependency DEPENDENCY_NAME)
     build_fmt()
   elseif("${DEPENDENCY_NAME}" STREQUAL "ICU")
     build_icu4c()
+  elseif("${DEPENDENCY_NAME}" STREQUAL "Boost")
+    build_boost()
   else()
     message(
       FATAL_ERROR "Unknown thirdparty dependency to build: ${DEPENDENCY_NAME}")
@@ -358,4 +411,25 @@ function(set_with_default var_name envvar_name default)
         ${default}
         PARENT_SCOPE)
   endif()
+endfunction()
+
+# List subdirectories of ${dir}
+function(list_subdirs var dir)
+  if(NOT IS_DIRECTORY ${dir})
+    message(FATAL_ERROR "${dir} is not a directory!")
+  endif()
+
+  # finds files & dirs
+  file(GLOB children ${dir}/*)
+  set(dirs "")
+
+  foreach(child ${children})
+    if(IS_DIRECTORY ${child})
+      list(APPEND dirs ${child})
+    endif()
+  endforeach()
+
+  set(${var}
+      ${dirs}
+      PARENT_SCOPE)
 endfunction()
