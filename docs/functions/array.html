@@ -149,8 +149,8 @@ Returns null if there are no non-null elements in common but either array contai
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">array_position</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">array_position</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><p>If <code class="docutils literal notranslate"><span class="pre">instance</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>, returns the position of the <code class="docutils literal notranslate"><span class="pre">instance</span></code>-th occurrence of the <code class="docutils literal notranslate"><span class="pre">element</span></code> in array <code class="docutils literal notranslate"><span class="pre">x</span></code>. If <code class="docutils literal notranslate"><span class="pre">instance</span> <span class="pre">&lt;</span> <span class="pre">0</span></code>, returns the position of the <code class="docutils literal notranslate"><span class="pre">instance</span></code>-to-last occurrence of the <code class="docutils literal notranslate"><span class="pre">element</span></code> in array <code class="docutils literal notranslate"><span class="pre">x</span></code>. If no matching element instance is found, 0 is returned.</p>
 </dd></dl>
 
@@ -280,7 +280,9 @@ Throws if the element is not present in the array. Corresponds to SQL subscript 
 <dd><p>Returns the merge of the given arrays, element-wise into a single array of rows.
 The M-th element of the N-th argument will be the N-th field of the M-th output element.
 If the arguments have an uneven length, missing values are filled with <code class="docutils literal notranslate"><span class="pre">NULL</span></code></p>
-<p>SELECT zip(ARRAY[1, 2], ARRAY[‘1b’, null, ‘3b’]); – [ROW(1, ‘1b’), ROW(2, null), ROW(null, ‘3b’)]</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">zip</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;1b&#39;</span><span class="p">,</span> <span class="n">null</span><span class="p">,</span> <span class="s1">&#39;3b&#39;</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="n">ROW</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;1b&#39;</span><span class="p">),</span> <span class="n">ROW</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">null</span><span class="p">),</span> <span class="n">ROW</span><span class="p">(</span><span class="n">null</span><span class="p">,</span> <span class="s1">&#39;3b&#39;</span><span class="p">)]</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py function">
@@ -319,7 +321,6 @@ If one array is shorter, nulls are appended at the end to match the length of th
 <li><a class="reference internal" href="#array_min"><code class="docutils literal notranslate"><span class="pre">array_min()</span></code></a></li>
 <li><a class="reference internal" href="#arrays_overlap"><code class="docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a></li>
 <li><a class="reference internal" href="#array_position"><code class="docutils literal notranslate"><span class="pre">array_position()</span></code></a></li>
-<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">array_position()</span></code></a></li>
 <li><a class="reference internal" href="#array_sort"><code class="docutils literal notranslate"><span class="pre">array_sort()</span></code></a></li>
 <li><a class="reference internal" href="#array_sum"><code class="docutils literal notranslate"><span class="pre">array_sum()</span></code></a></li>
 <li><a class="reference internal" href="#cardinality"><code class="docutils literal notranslate"><span class="pre">cardinality()</span></code></a></li>

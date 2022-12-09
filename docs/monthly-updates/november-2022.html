@@ -1,0 +1,182 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>November 2022 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="October 2022 Update" href="october-2022.html" />
+    <link rel="prev" title="Monthly Updates" href="../monthly-updates.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="october-2022.html" title="October 2022 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">November 2022 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="november-2022-update">
+<h1>November 2022 Update<a class="headerlink" href="#november-2022-update" title="Permalink to this heading">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Document <a class="reference internal" href="../develop/spilling.html"><span class="doc">spilling</span></a>.</p></li>
+<li><p>Document <a class="reference internal" href="../configs.html"><span class="doc">configuration properties</span></a>.</p></li>
+<li><p>Document <a class="reference internal" href="../develop/testing/fuzzer.html"><span class="doc">expression and aggregation fuzzers</span></a>.</p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for semi join project. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/3068">#3068</a></p></li>
+<li><p>Add support for using aggregate functions in window operator.</p></li>
+<li><p>Add support for unbounded preceding, unbounded following, and current row frame
+bounds in range mode to window operator.</p></li>
+<li><p>Add support for ROWS frame mode to window operator.</p></li>
+<li><p>Add support for reporting ‘live’ runtime statistics while Task is running.</p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/string.html#id3" title="strrpos"><code class="xref py py-func docutils literal notranslate"><span class="pre">strrpos()</span></code></a> and <a class="reference internal" href="../functions/math.html#id1" title="truncate"><code class="xref py py-func docutils literal notranslate"><span class="pre">truncate()</span></code></a> scalar functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/window.html#ntile" title="ntile"><code class="xref py py-func docutils literal notranslate"><span class="pre">ntile()</span></code></a> window function.</p></li>
+<li><p>Add support for BOOLEAN and INTERVAL DAY TO SECOND inputs to <a class="reference internal" href="../functions/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>,
+<a class="reference internal" href="../functions/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#histogram" title="histogram"><code class="xref py py-func docutils literal notranslate"><span class="pre">histogram()</span></code></a> aggregate functions.</p></li>
+<li><p>Add support for BOOLEAN, TIMESTAMP, DATE and INTERVAL DAY TO SECOND input types
+to <a class="reference internal" href="../functions/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> aggregate function.</p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add bitwise_and, bitwise_or, xxhash64 functions.</p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add aggregation and join fuzzers.</p></li>
+<li><p>Add functions with variadic signatures to expression fuzzer.</p></li>
+<li><p>Add COALESCE and IF special forms to expression fuzzer.</p></li>
+<li><p>Add support for Lazy Vectors to expression fuzzer.</p></li>
+<li><p>Add support to expression fuzzer for saving repro data for crashes. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/3074">#3074</a></p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<p>Aditi Pandit, Amit Dutta, Austin Dickey, Behnam Robatmili, Bikramjeet Vig,
+Chad Austin, Chengcheng Jin, Ge Gao, Gosh Arzumanyan, Huameng Jiang,
+Jacob Wujciak-Jens, Jake Jung, Jia Ke, Jimmy Lu, Karteek Murthy Samba Murthy,
+Kevin Wilfong, KevinyhZou, Krishna Pai, Laith Sakka, Luca Niccolini, Masha Basmanova,
+Orri Erling, PHILO-HE, Pedro Eugenio Rocha Pedreira, Pramod,
+Qitian Zeng, Raúl Cumplido, Rong Ma, Sasha Krassovsky, Sergey Pershin,
+Shengxuan Liu, Wei He, Zhenyuan Zhao, lingbin, macduan, tanjialiang,
+xiaoxmeng, yingsu00, zhixingheyi-tian</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">November 2022 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../monthly-updates.html"
+                          title="previous chapter">Monthly Updates</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="october-2022.html"
+                          title="next chapter">October 2022 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/monthly-updates/november-2022.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="october-2022.html" title="October 2022 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">November 2022 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
+    </div>
+  </body>
+</html>

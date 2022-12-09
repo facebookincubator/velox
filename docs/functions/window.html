@@ -123,8 +123,8 @@ distribution value.</p>
 <p>Returns the rank of a value in a group of values. This is similar to rank(), except that tie values do
 not produce gaps in the sequence.</p>
 <dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">ntile(n)</span> <span class="pre">→</span> <span class="pre">bigint</span></span></dt>
+<dt class="sig sig-object py" id="ntile">
+<span class="sig-name descname"><span class="pre">ntile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#ntile" title="Permalink to this definition">¶</a></dt>
 <dd></dd></dl>
 
 <p>Divides the rows for each window partition into n buckets ranging from 1 to at most <code class="docutils literal notranslate"><span class="pre">n</span></code>. Bucket values
@@ -191,6 +191,7 @@ for each row over the rows within the current row’s window frame.</p>
 <li><a class="reference internal" href="#ranking-functions">Ranking functions</a><ul>
 <li><a class="reference internal" href="#cume_dist"><code class="docutils literal notranslate"><span class="pre">cume_dist()</span></code></a></li>
 <li><a class="reference internal" href="#dense_rank"><code class="docutils literal notranslate"><span class="pre">dense_rank()</span></code></a></li>
+<li><a class="reference internal" href="#ntile"><code class="docutils literal notranslate"><span class="pre">ntile()</span></code></a></li>
 <li><a class="reference internal" href="#percent_rank"><code class="docutils literal notranslate"><span class="pre">percent_rank()</span></code></a></li>
 <li><a class="reference internal" href="#rank"><code class="docutils literal notranslate"><span class="pre">rank()</span></code></a></li>
 <li><a class="reference internal" href="#row_number"><code class="docutils literal notranslate"><span class="pre">row_number()</span></code></a></li>
