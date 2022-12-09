@@ -31,7 +31,7 @@ namespace py = pybind11;
 
 std::string serializeType(const std::shared_ptr<const velox::Type>& type);
 
-inline void checkBounds(std::shared_ptr<BaseVector>& v, int64_t idx) {
+inline void checkBounds(VectorPtr& v, vector_size_t idx) {
   if (idx < 0 || idx >= v->size()) {
     throw std::out_of_range("Index out of range");
   }
@@ -127,9 +127,7 @@ inline VectorPtr pyListToVector(
 }
 
 template <TypeKind T>
-inline py::object getItemFromVector(
-    std::shared_ptr<BaseVector>& v,
-    int64_t idx) {
+inline py::object getItemFromVector(VectorPtr& v, vector_size_t idx) {
   using NativeType = typename TypeTraits<T>::NativeType;
   if (std::is_same_v<NativeType, velox::StringView>) {
     const auto* flat = v->asFlatVector<velox::StringView>();
@@ -143,9 +141,7 @@ inline py::object getItemFromVector(
   }
 }
 
-inline py::object getItemFromVector(
-    std::shared_ptr<BaseVector>& v,
-    int64_t idx) {
+inline py::object getItemFromVector(VectorPtr& v, vector_size_t idx) {
   checkBounds(v, idx);
   if (v->isNullAt(idx)) {
     return py::none();
@@ -155,17 +151,14 @@ inline py::object getItemFromVector(
 }
 
 template <TypeKind T>
-inline void setItemInVector(
-    std::shared_ptr<BaseVector>& v,
-    int64_t idx,
-    velox::variant& var) {
+inline void
+setItemInVector(VectorPtr& v, vector_size_t idx, velox::variant& var) {
   using NativeType = typename TypeTraits<T>::NativeType;
   auto* flat = v->asFlatVector<NativeType>();
   flat->set(idx, NativeType{var.value<NativeType>()});
 }
 
-inline void
-setItemInVector(std::shared_ptr<BaseVector>& v, int64_t idx, py::handle& obj) {
+inline void setItemInVector(VectorPtr& v, vector_size_t idx, py::handle& obj) {
   checkBounds(v, idx);
 
   velox::variant var = pyToVariant(obj);
@@ -180,9 +173,7 @@ setItemInVector(std::shared_ptr<BaseVector>& v, int64_t idx, py::handle& obj) {
       setItemInVector, v->typeKind(), v, idx, var);
 }
 
-inline void appendVectors(
-    std::shared_ptr<BaseVector>& u,
-    std::shared_ptr<BaseVector>& v) {
+inline void appendVectors(VectorPtr& u, VectorPtr& v) {
   if (u->typeKind() != v->typeKind()) {
     throw py::type_error("Tried to append vectors of two different types");
   }
@@ -342,21 +333,19 @@ inline void addVectorBindings(
       .value("LAZY", velox::VectorEncoding::Simple::LAZY)
       .value("FUNCTION", velox::VectorEncoding::Simple::FUNCTION);
 
-  py::class_<BaseVector, std::shared_ptr<BaseVector>>(
+  py::class_<BaseVector, VectorPtr>(
       m, "BaseVector", py::module_local(asModuleLocalDefinitions))
-      .def(
-          "__str__",
-          [](std::shared_ptr<BaseVector>& v) { return v->toString(); })
+      .def("__str__", [](VectorPtr& v) { return v->toString(); })
       .def("__len__", &BaseVector::size)
       .def("size", &BaseVector::size)
       .def(
           "__getitem__",
-          [](std::shared_ptr<BaseVector>& v, int64_t idx) {
+          [](VectorPtr& v, vector_size_t idx) {
             return getItemFromVector(v, idx);
           })
       .def(
           "__setitem__",
-          [](std::shared_ptr<BaseVector>& v, int64_t idx, py::handle& obj) {
+          [](VectorPtr& v, vector_size_t idx, py::handle& obj) {
             setItemInVector(v, idx, obj);
           })
       .def("dtype", &BaseVector::type)
@@ -365,22 +354,18 @@ inline void addVectorBindings(
       .def("isLazy", &BaseVector::isLazy)
       .def(
           "isNullAt",
-          [](std::shared_ptr<BaseVector>& v, int64_t idx) {
+          [](VectorPtr& v, vector_size_t idx) {
             checkBounds(v, idx);
             return v->isNullAt(idx);
           })
       .def(
           "hashValueAt",
-          [](std::shared_ptr<BaseVector>& v, int64_t idx) {
+          [](VectorPtr& v, vector_size_t idx) {
             checkBounds(v, idx);
             return v->hashValueAt(idx);
           })
       .def("encoding", &BaseVector::encoding)
-      .def(
-          "append",
-          [](std::shared_ptr<BaseVector>& u, std::shared_ptr<BaseVector>& v) {
-            appendVectors(u, v);
-          });
+      .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); });
   m.def("from_list", [pool](const py::list& list) mutable {
     return pyListToVector(list, pool.get());
   });
