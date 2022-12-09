@@ -125,10 +125,10 @@ template <typename T>
 struct HmacSha256Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  template <typename TOuput, typename TInput>
-  FOLLY_ALWAYS_INLINE bool
-  call(TOuput& result, const TInput& data, const TInput& key) {
-    return stringImpl::HmacSha256(result, key, data);
+  template <typename TTo, typename TFrom>
+  FOLLY_ALWAYS_INLINE void
+  call(TTo& result, const TFrom& data, const TFrom& key) {
+    stringImpl::HmacSha256(result, key, data);
   }
 };
 
@@ -137,10 +137,10 @@ template <typename T>
 struct HmacSha512Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  template <typename TOuput, typename TInput>
-  FOLLY_ALWAYS_INLINE bool
-  call(TOuput& result, const TInput& data, const TInput& key) {
-    return stringImpl::HmacSha512(result, key, data);
+  template <typename TTo, typename TFrom>
+  FOLLY_ALWAYS_INLINE void
+  call(TTo& result, const TFrom& data, const TFrom& key) {
+    stringImpl::HmacSha512(result, key, data);
   }
 };
 
