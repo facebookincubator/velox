@@ -56,11 +56,11 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 
-  void prepareRead(
-      vector_size_t offset,
+  void readNulls(
       RowSet rows,
-      const uint64_t* FOLLY_NULLABLE incomingNulls) {
-    // The prepare is done by the topmost list/struct.
+      int32_t extraRows,
+      const uint64_t* FOLLY_NULLABLE incomingNulls) override {
+    // No need
   }
 
   void seekToRowGroup(uint32_t index) override;

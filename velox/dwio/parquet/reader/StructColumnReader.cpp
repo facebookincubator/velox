@@ -34,6 +34,7 @@ StructColumnReader::StructColumnReader(
     addChild(ParquetColumnReader::build(childDataType, params, *childSpecs[i]));
     childSpecs[i]->setSubscript(children_.size() - 1);
   }
+  setIsTopLevel();
 }
 
 void StructColumnReader::enqueueRowGroup(

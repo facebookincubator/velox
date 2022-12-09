@@ -112,6 +112,15 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   // know how much to skip when seeking forward within the row group.
   void recordParentNullsInChildren(vector_size_t offset, RowSet rows);
 
+  void readNulls(
+      RowSet rows,
+      int32_t extraRows,
+      const uint64_t* incomingNulls) override {
+    if (!isTopLevel_) {
+      SelectiveColumnReader::readNulls(rows, extraRows);
+    }
+  }
+
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
 
   std::vector<SelectiveColumnReader*> children_;

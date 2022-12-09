@@ -72,6 +72,14 @@ void PageReader::seekToPage(int64_t row) {
         bufferStart_,
         bufferEnd_);
   }
+
+  printf(
+      "seekToPage numRowsInPage_=%d, rowOfPage_=%d, numLeafNullsConsumed_=%d, bufferStart_=%llx, bufferEnd_=%llx\n",
+      numRowsInPage_,
+      rowOfPage_,
+      numLeafNullsConsumed_,
+      bufferStart_,
+      bufferEnd_);
 }
 
 PageHeader PageReader::readPageHeader(int64_t remainingSize) {
@@ -228,10 +236,10 @@ void PageReader::setPageRowInfo(bool forRepDef) {
     ++pageIndex_;
     VELOX_CHECK_LT(
         pageIndex_,
-        numLeavesInPage_.size(),
+        numRowsInPages_.size(),
         "Seeking past known repdefs for non top level column page {}",
         pageIndex_);
-    numRowsInPage_ = numLeavesInPage_[pageIndex_];
+    numRowsInPage_ = numRowsInPages_[pageIndex_];
   }
 }
 
@@ -251,6 +259,12 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   if (row != kRepDefOnly && numRowsInPage_ + rowOfPage_ <= row) {
     return;
   }
+
+  printf(
+      "pageData_ %llx, pageHeader.compressed_page_size %lld\n",
+      pageData_,
+      pageHeader.compressed_page_size);
+
   pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
   pageData_ = uncompressData(
       pageData_,
@@ -283,6 +297,9 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
     pageData_ += defineLength;
   }
   encodedDataSize_ = pageEnd - pageData_;
+
+  printf(
+      "pageData_ %llx, encodedDataSize_ %lld\n", pageData_, encodedDataSize_);
 
   encoding_ = pageHeader.data_page_header.encoding;
   if (row != kRepDefOnly) {
@@ -521,18 +538,19 @@ void PageReader::preloadRepDefs() {
         definitionLevels_.data() + begin, numRepDefsInPage_);
     repeatDecoder_->GetBatch(
         repetitionLevels_.data() + begin, numRepDefsInPage_);
-    leafNulls_.resize(bits::nwords(leafNullsSize_ + numRepDefsInPage_));
-    auto numLeaves = getLengthsAndNulls(
-        LevelMode::kNulls,
-        leafInfo_,
-        begin,
-        begin + numRepDefsInPage_,
-        numRepDefsInPage_,
-        nullptr,
-        leafNulls_.data(),
-        leafNullsSize_);
-    leafNullsSize_ += numLeaves;
-    numLeavesInPage_.push_back(numLeaves);
+    numRowsInPages_.push_back(numRepDefsInPage_);
+    //    leafNulls_.resize(bits::nwords(leafNullsSize_ + numRepDefsInPage_));
+    //    auto numLeaves = getLengthsAndNulls(
+    //        LevelMode::kNulls,
+    //        leafInfo_,
+    //        begin,
+    //        begin + numRepDefsInPage_,
+    //        numRepDefsInPage_,
+    //        nullptr,
+    //        leafNulls_.data(),
+    //        leafNullsSize_);
+    //    leafNullsSize_ += numLeaves;
+    //    numLeavesInPages_.push_back(numLeaves);
   }
 
   // Reset the input to start of column chunk.
@@ -546,10 +564,12 @@ void PageReader::preloadRepDefs() {
   pageData_ = nullptr;
 }
 
-void PageReader::decodeRepDefs(int32_t numTopLevelRows) {
+void PageReader::loadNextPage(int32_t numTopLevelRows) {
   if (repetitionLevels_.empty()) {
     preloadRepDefs();
+    //    readNulls(repetitionLevels_.size(), )
   }
+
   repDefBegin_ = repDefEnd_;
   int32_t numLevels = definitionLevels_.size();
   int32_t topFound = 0;
@@ -618,7 +638,7 @@ void PageReader::makeDecoder() {
     case Encoding::RLE_DICTIONARY:
     case Encoding::PLAIN_DICTIONARY:
       dictionaryIdDecoder_ = std::make_unique<RleBpDataDecoder>(
-          pageData_ + 1, pageData_ + encodedDataSize_, pageData_[0]);
+          pageData_ + 1, pageData_ + encodedDataSize_ + 1, pageData_[0]);
       break;
     case Encoding::PLAIN:
       switch (parquetType) {
@@ -679,6 +699,48 @@ void PageReader::skip(int64_t numRows) {
   }
 }
 
+// int32_t PageReader::skipNulls(int32_t numValues) {
+//   if (!defineDecoder_ && isTopLevel_) {
+//     return numValues;
+//   }
+//   VELOX_CHECK(1 == maxDefine_);
+//   //  VELOX_CHECK(1 == maxDefine_ || !leafNulls_.empty());
+//   // TODO: implement skipValues in the decoders and remove tempNulls_
+//   dwio::common::ensureCapacity<bool>(tempNulls_, numValues, &pool_);
+//   tempNulls_->setSize(0);
+//   readNulls(numValues, tempNulls_);
+//   auto words = tempNulls_->as<uint64_t>();
+//   return bits::countBits(words, 0, numValues);
+// }
+//
+// int32_t PageReader::skipNulls(int32_t numRows) {
+//   if (!numRows && firstUnvisited_ != rowOfPage_ + numRowsInPage_) {
+//     // Return if no skip and position not at end of page or before first
+//     page. return;
+//   }
+//   auto toSkip = numRows;
+//   if (firstUnvisited_ + numRows >= rowOfPage_ + numRowsInPage_) {
+//     seekToPage(firstUnvisited_ + numRows);
+//     firstUnvisited_ += numRows;
+//     toSkip = firstUnvisited_ - rowOfPage_;
+//   }
+//   firstUnvisited_ += numRows;
+//
+//   // Skip nulls
+//   //  skipNulls(toSkip);
+//   if (!defineDecoder_ && isTopLevel_) {
+//     return numValues;
+//   }
+//   VELOX_CHECK(1 == maxDefine_);
+//   //  VELOX_CHECK(1 == maxDefine_ || !leafNulls_.empty());
+//   // TODO: implement skipValues in the decoders and remove tempNulls_
+//   dwio::common::ensureCapacity<bool>(tempNulls_, numValues, &pool_);
+//   tempNulls_->setSize(0);
+//   readNulls(numValues, tempNulls_);
+//   auto words = tempNulls_->as<uint64_t>();
+//   return bits::countBits(words, 0, numValues);
+// }
+
 int32_t PageReader::skipNulls(int32_t numValues) {
   if (!defineDecoder_ && isTopLevel_) {
     return numValues;
@@ -717,51 +779,173 @@ void PageReader::skipNullsOnly(int64_t numRows) {
   skipNulls(toSkip);
 }
 
-void PageReader::readNullsOnly(int64_t numValues, BufferPtr& buffer) {
-  VELOX_CHECK(isTopLevel_);
-  auto toRead = numValues;
-  if (buffer) {
-    dwio::common::ensureCapacity<bool>(buffer, numValues, &pool_);
-  }
-  nullConcatenation_.reset(buffer);
-  while (toRead) {
-    auto availableOnPage = rowOfPage_ + numRowsInPage_ - firstUnvisited_;
-    if (!availableOnPage) {
-      seekToPage(firstUnvisited_);
-      availableOnPage = numRowsInPage_;
-    }
-    auto numRead = std::min(availableOnPage, toRead);
-    auto nulls = readNulls(numRead, nullsInReadRange_);
-    toRead -= numRead;
-    nullConcatenation_.append(nulls, 0, numRead);
-    firstUnvisited_ += numRead;
-  }
-  buffer = nullConcatenation_.buffer();
-}
-
-const uint64_t* FOLLY_NULLABLE
-PageReader::readNulls(int32_t numValues, BufferPtr& buffer) {
+void PageReader::readNulls(int64_t numValues, BufferPtr& buffer) {
   if (maxDefine_ == 0) {
     buffer = nullptr;
-    return nullptr;
+    return;
   }
+
+  auto numValuesCopy = numValues;
+
   dwio::common::ensureCapacity<bool>(buffer, numValues, &pool_);
-  if (isTopLevel_) {
-    VELOX_CHECK_EQ(1, maxDefine_);
-    bool allOnes;
-    defineDecoder_->readBits(
-        numValues, buffer->asMutable<uint64_t>(), &allOnes);
-    return allOnes ? nullptr : buffer->as<uint64_t>();
+  nullConcatenation_.reset(buffer);
+
+  auto firstUnvisited = firstUnvisited_;
+  auto availableOnPage = rowOfPage_ + numRowsInPage_ - firstUnvisited_;
+  //  int32_t pageNo = -1;
+  bool noNulls = true;
+  int32_t pageNo = -1;
+  while (numValues) {
+    if (availableOnPage == 0) {
+      seekToPage(firstUnvisited);
+      availableOnPage = numRowsInPage_;
+
+
+
+//      if (numValues > 0 && !noNulls) {
+
+//      }
+    }
+
+    auto numToRead = std::min(availableOnPage, numValues);
+
+    if (isTopLevel_) {
+      VELOX_CHECK_EQ(1, maxDefine_);
+      bool allOnesInPage = false;
+      defineDecoder_->readBits(
+          numToRead, buffer->asMutable<uint64_t>(), &allOnesInPage);
+      noNulls &= allOnesInPage;
+
+      printf(
+          "readBits finished %d, (%d) bytes, read to %llx\n",
+          numToRead,
+          bits::nbytes(numToRead),
+          buffer->asMutable<char>());
+      if (allOnesInPage) {
+        printf("All ones in page\n");
+      }
+      printNulls(buffer->asMutable<char>(), bits::nbytes(numToRead));
+
+    } else {
+      auto numNonEmptyValues = getLengthsAndNulls(
+          LevelMode::kNulls,
+          leafInfo_,
+          numLeafNullsConsumed_,
+          numLeafNullsConsumed_ + numToRead,
+          numToRead,
+          nullptr,
+          buffer->asMutable<uint64_t>(),
+          0);
+      numLeafNullsConsumed_ += numToRead;
+      numLeavesInPages_.push_back(numNonEmptyValues);
+      // TODO: get real numNonNulls
+      noNulls = false;
+    }
+
+    numValues -= numToRead;
+    availableOnPage -= numToRead;
+    firstUnvisited += numToRead;
+
+
+    if (++pageNo == 0) {
+      if( numValues > 0) {
+        //          && nullConcatenation_.buffer() &&
+        //          !nullConcatenation_.buffer()->unique()) {
+        //        BufferPtr buffer = nullptr;
+        BufferPtr emptyBuffer = nullptr;
+        nullConcatenation_.reset(emptyBuffer);
+        nullConcatenation_.append(buffer->as<uint64_t>(), 0, numToRead);
+
+        printf(
+            "appended (%d) bytes to %llx\n",
+            bits::nbytes(numToRead),
+            nullConcatenation_.buffer()->asMutable<char>());
+        printNulls(
+            nullConcatenation_.buffer()->asMutable<char>(),
+            bits::nbytes(numValuesCopy));
+      }
+    } else {
+      VELOX_CHECK(pageNo > 0);
+      if (!noNulls) {
+        nullConcatenation_.append(buffer->as<uint64_t>(), 0, numToRead);
+
+        printf(
+            "appended (%d) bytes to %llx\n",
+            bits::nbytes(numToRead),
+            nullConcatenation_.buffer()->asMutable<char>());
+        printNulls(
+            nullConcatenation_.buffer()->asMutable<char>(),
+            bits::nbytes(numValuesCopy));
+      }
+    }
+
+
+
   }
-  bits::copyBits(
-      leafNulls_.data(),
-      numLeafNullsConsumed_,
-      buffer->asMutable<uint64_t>(),
-      0,
-      numValues);
-  numLeafNullsConsumed_ += numValues;
-  return buffer->as<uint64_t>();
+
+  buffer = nullConcatenation_.rawBuffer();
 }
+
+// void PageReader::readNullsOnly(int64_t numValues, BufferPtr& buffer) {
+////  VELOX_CHECK(isTopLevel_);
+//  auto toRead = numValues;
+//  if (buffer) {
+//    dwio::common::ensureCapacity<bool>(buffer, numValues, &pool_);
+//  }
+//  nullConcatenation_.reset(buffer);
+//  while (toRead) {
+//    auto availableOnPage = rowOfPage_ + numRowsInPage_ - firstUnvisited_;
+//    if (!availableOnPage) {
+//      seekToPage(firstUnvisited_);
+//      availableOnPage = numRowsInPage_;
+//    }
+//    auto numRead = std::min(availableOnPage, toRead);
+//    auto nulls = readNulls(numRead, nullsInReadRange_);
+//    toRead -= numRead;
+//    nullConcatenation_.append(nulls, 0, numRead);
+////    firstUnvisited_ += numRead;
+//  }
+//  buffer = nullConcatenation_.buffer();
+//}
+//
+// const uint64_t* FOLLY_NULLABLE
+// PageReader::readNulls(int32_t numValues, BufferPtr& buffer) {
+//  if (maxDefine_ == 0) {
+//    buffer = nullptr;
+//    return nullptr;
+//  }
+//
+//  dwio::common::ensureCapacity<bool>(buffer, numValues, &pool_);
+//  if (isTopLevel_) {
+//    VELOX_CHECK_EQ(1, maxDefine_);
+//    bool noNulls;
+//    defineDecoder_->readBits(
+//        numValues, buffer->asMutable<uint64_t>(), &noNulls);
+//    return noNulls ? nullptr : buffer->as<uint64_t>();
+//  }
+//
+//  auto numLeaves = getLengthsAndNulls(
+//      LevelMode::kNulls,
+//      leafInfo_,
+//      numLeafNullsConsumed_,
+//      numLeafNullsConsumed_ + numValues,
+//      numValues,
+//      nullptr,
+//      buffer->asMutable<uint64_t>(),
+//      0);
+//  numLeafNullsConsumed_ += numLeaves;
+//  numLeavesInPages_.push_back(numLeaves);
+//
+//  //  bits::copyBits(
+//  //      leafNulls_.data(),
+//  //      numLeafNullsConsumed_,
+//  //      buffer->asMutable<uint64_t>(),
+//  //      0,
+//  //      numValues);
+//  //  numLeafNullsConsumed_ += numValues;
+//  return buffer->as<uint64_t>();
+//}
+//}
 
 void PageReader::startVisit(folly::Range<const vector_size_t*> rows) {
   visitorRows_ = rows.data();
@@ -775,20 +959,20 @@ bool PageReader::rowsForPage(
     dwio::common::SelectiveColumnReader& reader,
     bool hasFilter,
     bool mayProduceNulls,
-    folly::Range<const vector_size_t*>& rows,
-    const uint64_t* FOLLY_NULLABLE& nulls) {
+    folly::Range<const vector_size_t*>& rows) {
+  printf("rowsForPage currentVisitorRow_ %d, numVisitorRows_ %d\n", currentVisitorRow_, numVisitorRows_);
   if (currentVisitorRow_ == numVisitorRows_) {
     return false;
   }
   int32_t numToVisit;
-  // Check if the first row to go to is in the current page. If not, seek to the
-  // page that contains the row.
+  // Check if the first row to go to is in the current page. If not, seek to
+  // the page that contains the row.
   auto rowZero = visitBase_ + visitorRows_[currentVisitorRow_];
   if (rowZero >= rowOfPage_ + numRowsInPage_) {
     seekToPage(rowZero);
-    if (!leafNulls_.empty()) {
-      numLeafNullsConsumed_ = rowOfPage_;
-    }
+    //    if (!leafNulls_.empty()) {
+    //      numLeafNullsConsumed_ = rowOfPage_;
+    //    }
   }
   auto& scanState = reader.scanState();
   if (isDictionary()) {
@@ -834,11 +1018,14 @@ bool PageReader::rowsForPage(
     assert(it != rangeLeft.begin());
     numToVisit = it - (visitorRows_ + currentVisitorRow_);
   }
-  // If the page did not change and this is the first call, we can return a view
-  // on the original visitor rows.
+  // If the page did not change and this is the first call, we can return a
+  // view on the original visitor rows.
+  //  auto numValuesToRead;
   if (rowOfPage_ == initialRowOfPage_ && currentVisitorRow_ == 0) {
-    nulls =
-        readNulls(visitorRows_[numToVisit - 1] + 1, reader.nullsInReadRange());
+    //    numValuesToRead = visitorRows_[numToVisit - 1] + 1;
+    //    nulls =
+    //        readNulls(visitorRows_[numToVisit - 1] + 1,
+    //        reader.nullsInReadRange());
     rowNumberBias_ = 0;
     rows = folly::Range<const vector_size_t*>(visitorRows_, numToVisit);
   } else {
@@ -861,11 +1048,14 @@ bool PageReader::rowsForPage(
       numbers.store_unaligned(copy);
       copy += xsimd::batch<int32_t>::size;
     }
-    nulls = readNulls(rowsCopy_->back() + 1, reader.nullsInReadRange());
+    //    numValuesToRead = rowsCopy_->back() + 1;
+    //    nulls = readNulls(rowsCopy_->back() + 1, reader.nullsInReadRange());
     rows = folly::Range<const vector_size_t*>(
         rowsCopy_->data(), rowsCopy_->size());
   }
-  reader.prepareNulls(rows, nulls != nullptr, currentVisitorRow_);
+
+  //  reader.prepareNulls(rows,  currentVisitorRow_);
+  // firstUnvisited_ += numToVisit;
   currentVisitorRow_ += numToVisit;
   firstUnvisited_ = visitBase_ + visitorRows_[currentVisitorRow_ - 1] + 1;
   return true;

@@ -103,6 +103,7 @@ void E2EFilterTestBase::readWithoutFilter(
     {
       MicrosecondTimer timer(&time);
       hasData = rowReader->next(1000, resultBatch);
+      printf("\nnext finished with %d rows\n", resultBatch->size());
     }
     if (!hasData) {
       break;
@@ -110,6 +111,12 @@ void E2EFilterTestBase::readWithoutFilter(
 
     ownershipChecker.check(resultBatch);
     for (int32_t i = 0; i < resultBatch->size(); ++i) {
+      if (!resultBatch->equalValueAt(batches[batchIndex].get(), i, rowIndex)) {
+        std::cout << rowIndex
+        << ": expected: " << batches[batchIndex]->toString(rowIndex)
+        << " actual: " << resultBatch->toString(i) << std::endl;
+        break;
+      }
       ASSERT_TRUE(
           resultBatch->equalValueAt(batches[batchIndex].get(), i, rowIndex))
           << "Content mismatch at resultBatch " << batchIndex << " at index "

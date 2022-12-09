@@ -26,9 +26,10 @@ PageReader* readLeafRepDefs(
   auto children = reader->children();
   if (children.empty()) {
     auto pageReader = reader->formatData().as<ParquetData>().reader();
-    pageReader->decodeRepDefs(numTop);
+    pageReader->loadNextPage(numTop);
     return pageReader;
   }
+
   PageReader* pageReader;
   for (auto i = 0; i < children.size(); ++i) {
     auto child = children[i];
@@ -120,9 +121,10 @@ void ListColumnReader::setLengthsFromRepDefs(PageReader& pageReader) {
       nullsInReadRange()->asMutable<uint64_t>(),
       0);
   lengths->setSize(numLists * sizeof(int32_t));
-  formatData_->as<ParquetData>().setNulls(nullsInReadRange(), numLists);
+//  formatData_->as<ParquetData>().setNulls(nullsInReadRange(), numLists);
   setLengths(std::move(lengths));
 }
+
 void ListColumnReader::read(
     vector_size_t offset,
     RowSet rows,

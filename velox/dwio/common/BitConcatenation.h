@@ -40,12 +40,21 @@ class BitConcatenation {
   /// A nullptr 'bits' is treated as a bit range with all bits set.
   void append(const uint64_t* FOLLY_NULLABLE bits, int32_t begin, int32_t end);
 
+  void appendRaw(
+      const uint64_t* FOLLY_NULLABLE bits,
+      int32_t begin,
+      int32_t end);
+
   /// Appends 'numOnes' ones.
   void appendOnes(int32_t numOnes);
 
   // Returns 'buffer_' or nullptr if only ones have been appended.
   BufferPtr buffer() const {
     return hasZeros_ ? *buffer_ : nullptr;
+  }
+
+  BufferPtr rawBuffer() const {
+    return *buffer_;
   }
 
   int32_t numBits() const {

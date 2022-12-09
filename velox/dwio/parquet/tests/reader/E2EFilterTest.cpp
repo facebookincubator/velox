@@ -108,6 +108,19 @@ TEST_F(E2EFilterTest, integerDirect) {
       20);
 }
 
+TEST_F(E2EFilterTest, integerDirect2) {
+  writerProperties_ = ::parquet::WriterProperties::Builder()
+      .disable_dictionary()
+      ->data_pagesize(4 * 1024)
+      ->build();
+  testWithTypes(
+      "int_val:int,",
+      [&]() {},
+      false,
+      {},
+      1);
+}
+
 TEST_F(E2EFilterTest, integerDictionary) {
   for (const auto compression :
        {::parquet::Compression::SNAPPY,

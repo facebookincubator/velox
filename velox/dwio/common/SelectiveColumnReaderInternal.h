@@ -63,28 +63,33 @@ void SelectiveColumnReader::prepareRead(
     RowSet rows,
     const uint64_t* incomingNulls) {
   seekTo(offset, scanSpec_->readsNullsOnly());
-  vector_size_t numRows = rows.back() + 1;
 
-  // Do not re-use unless singly-referenced.
-  if (nullsInReadRange_ && !nullsInReadRange_->unique()) {
-    nullsInReadRange_.reset();
+  prepareNulls(rows, 0, incomingNulls);
+
+  valueSize_ = sizeof(T);
+
+  inputRows_ = rows;
+  innerNonNullRows_.clear();
+  outerNonNullRows_.clear();
+  outputRows_.clear();
+  if (scanSpec_->filter()) {
+    outputRows_.reserve(rows.size());
   }
-  formatData_->readNulls(
-      numRows, incomingNulls, nullsInReadRange_, readsNullsOnly());
-  // We check for all nulls and no nulls. We expect both calls to
-  // bits::isAllSet to fail early in the common case. We could do a
-  // single traversal of null bits counting the bits and then compare
-  // this to 0 and the total number of rows but this would end up
-  // reading more in the mixed case and would not be better in the all
-  // (non)-null case.
-  allNull_ = nullsInReadRange_ &&
-      bits::isAllSet(
-                 nullsInReadRange_->as<uint64_t>(), 0, numRows, bits::kNull);
-  if (nullsInReadRange_ &&
-      bits::isAllSet(
-          nullsInReadRange_->as<uint64_t>(), 0, numRows, bits::kNotNull)) {
-    nullsInReadRange_ = nullptr;
+
+  // is part of read() and after read returns getValues may be called.
+  mayGetValues_ = true;
+  numOutConfirmed_ = 0;
+  numValues_ = 0;
+
+  if (scanSpec_->keepValues() && !scanSpec_->valueHook()) {
+    valueRows_.clear();
   }
+
+  ensureValuesCapacity<T>(rows.size());
+}
+
+template <typename T>
+void SelectiveColumnReader::init(RowSet& rows) {
   innerNonNullRows_.clear();
   outerNonNullRows_.clear();
   outputRows_.clear();
@@ -97,11 +102,15 @@ void SelectiveColumnReader::prepareRead(
   if (scanSpec_->filter()) {
     outputRows_.reserve(rows.size());
   }
-  ensureValuesCapacity<T>(rows.size());
+
   if (scanSpec_->keepValues() && !scanSpec_->valueHook()) {
     valueRows_.clear();
-    prepareNulls(rows, nullsInReadRange_ != nullptr);
   }
+
+  //  if (scanSpec_->keepValues() && !scanSpec_->valueHook()) {
+  //    valueRows_.clear();
+  //    prepareNulls(rows, nullsInReadRange_ != nullptr);
+  //  }
 }
 
 template <typename T, typename TVector>

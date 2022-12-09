@@ -225,7 +225,7 @@ class SelectiveColumnReader {
   // capacity and is unique. If extending existing buffer, preserves
   // previous contents.
   uint64_t* FOLLY_NONNULL mutableNulls(int32_t size) {
-    if (!resultNulls_->unique()) {
+    if (!resultNulls_ || !resultNulls_->unique()) {
       resultNulls_ = AlignedBuffer::allocate<bool>(
           numValues_ + size, &memoryPool_, bits::kNotNull);
       rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
@@ -385,11 +385,20 @@ class SelectiveColumnReader {
     auto filter = scanSpec_->filter();
     return hasBulkPath() && process::hasAvx2() &&
         (!filter ||
-         (filter->isDeterministic() &&
-          (!nullsInReadRange_ || !filter->testNull()))) &&
-        (!scanSpec_->valueHook() || !nullsInReadRange_ ||
+         (filter->isDeterministic() && (!anyNulls_ || !filter->testNull()))) &&
+        (!scanSpec_->valueHook() || !anyNulls_ ||
          !scanSpec_->valueHook()->acceptsNulls());
   }
+
+  //  virtual bool useBulkPath() const {
+  //    auto filter = scanSpec_->filter();
+  //    return hasBulkPath() && process::hasAvx2() &&
+  //    (!filter ||
+  //    (filter->isDeterministic() &&
+  //    (!nullsInReadRange_ || !filter->testNull()))) &&
+  //    (!scanSpec_->valueHook() || !nullsInReadRange_ ||
+  //    !scanSpec_->valueHook()->acceptsNulls());
+  //  }
 
   // true if 'this' has a fast path.
   virtual bool hasBulkPath() const {
@@ -443,7 +452,10 @@ class SelectiveColumnReader {
 
   // Prepares the result buffer for nulls for reading 'rows'. Leaves
   // 'extraSpace' bits worth of space in the nulls buffer.
-  void prepareNulls(RowSet rows, bool hasNulls, int32_t extraRows = 0);
+  void prepareNulls(
+      RowSet rows,
+      int32_t extraRows = 0,
+      const uint64_t* FOLLY_NULLABLE incomingNulls = nullptr);
 
  protected:
   // Filters 'rows' according to 'is_null'. Only applies to cases where
@@ -456,6 +468,10 @@ class SelectiveColumnReader {
       vector_size_t offset,
       RowSet rows,
       const uint64_t* FOLLY_NULLABLE incomingNulls);
+  virtual void readNulls(
+      RowSet rows,
+      int32_t extraRows = 0,
+      const uint64_t* FOLLY_NULLABLE incomingNulls = nullptr);
 
   void setOutputRows(RowSet rows) {
     outputRows_.resize(rows.size());
@@ -506,6 +522,9 @@ class SelectiveColumnReader {
   // Copies 'value' to buffers owned by 'this' and returns the start of the
   // copy.
   char* FOLLY_NONNULL copyStringValue(folly::StringPiece value);
+
+  template <typename T>
+  void init(RowSet& rows);
 
   memory::MemoryPool& memoryPool_;
 
@@ -606,6 +625,7 @@ class SelectiveColumnReader {
 
   // Encoding-related state to keep between reads, e.g. dictionaries.
   ScanState scanState_;
+
 };
 
 template <>

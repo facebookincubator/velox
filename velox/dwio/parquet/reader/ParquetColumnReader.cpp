@@ -64,7 +64,7 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
       return std::make_unique<StringColumnReader>(dataType, params, scanSpec);
 
     case TypeKind::ARRAY:
-      return std::make_unique<ListColumnReader>(dataType, params, scanSpec);
+      return std::make_unique<ListColumnReader>(dataType, params.withNested(), scanSpec);
 
     case TypeKind::BOOLEAN:
     case TypeKind::MAP:

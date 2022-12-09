@@ -57,3 +57,14 @@ TEST(BitConcatenationTests, basic) {
   EXPECT_TRUE(!bits.buffer());
   EXPECT_FALSE(!result);
 }
+
+TEST(BitConcatenationTests, null) {
+  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  BitConcatenation bits(*pool);
+  BufferPtr result = AlignedBuffer::allocate<uint64_t>(1, pool.get());
+  *result->asMutable<uint64_t>() = 0x7F7F7F7F7F7F7F7F;
+  bits.reset(result);
+
+  EXPECT_EQ(bits.numBits(), 64 - 8);
+  EXPECT_NE(bits.buffer().get(), nullptr);
+}

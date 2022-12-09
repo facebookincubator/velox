@@ -36,6 +36,22 @@ void BitConcatenation::append(
   setSize();
 }
 
+void BitConcatenation::appendRaw(
+    const uint64_t* FOLLY_NULLABLE bits,
+    int32_t begin,
+    int32_t end) {
+  int32_t numBits = end - begin;
+
+  if (!bits) {
+    appendOnes(numBits);
+    return;
+  }
+
+  bits::copyBits(bits, begin, ensureSpace(numBits), numBits_, numBits);
+  numBits_ += numBits;
+  setSize();
+}
+
 void BitConcatenation::appendOnes(int32_t numOnes) {
   if (hasZeros_) {
     bits::fillBits(ensureSpace(numOnes), numBits_, numBits_ + numOnes, 1);

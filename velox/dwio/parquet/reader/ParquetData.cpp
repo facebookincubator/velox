@@ -24,7 +24,8 @@ using thrift::RowGroup;
 std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
-  return std::make_unique<ParquetData>(type, metaData_.row_groups, pool());
+  return std::make_unique<ParquetData>(
+      type, metaData_.row_groups, isNested_, pool());
 }
 
 std::vector<uint32_t> ParquetData::filterRowGroups(

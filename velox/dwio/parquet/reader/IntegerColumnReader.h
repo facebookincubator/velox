@@ -32,7 +32,9 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
             std::move(requestedType),
             params,
             scanSpec,
-            dataType->type) {}
+            dataType->type) {
+      returnReaderNulls_ = true;
+  }
 
   bool hasBulkPath() const override {
     return !this->type()->isLongDecimal() &&

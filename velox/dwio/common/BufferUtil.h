@@ -32,6 +32,18 @@ inline void ensureCapacity(
 }
 
 template <typename T>
+inline void ensureAdditionalCapacity(
+    BufferPtr& data,
+    size_t additionalCapacity,
+    velox::memory::MemoryPool* pool) {
+  auto capacity = data? data->size() + additionalCapacity : additionalCapacity;
+  if (!data || !data->unique() || !data->isMutable() ||
+  data->capacity() < BaseVector::byteSize<T>(capacity)) {
+    data = AlignedBuffer::allocate<T>(capacity, pool);
+  }
+}
+
+template <typename T>
 inline T* resetIfWrongVectorType(VectorPtr& result) {
   if (result) {
     auto casted = result->as<T>();

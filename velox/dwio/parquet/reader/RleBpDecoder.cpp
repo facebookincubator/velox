@@ -47,6 +47,14 @@ void RleBpDecoder::readBits(
     // initialize the all ones indicator to false for safety.
     *allOnes = false;
   }
+//  printf(
+//      "readBits begin \nbufferStart_ %llx, numValues %d, numWritten %d, remainingValues_ %d,value_ %d, bitOffset_=%d\n",
+//      bufferStart_,
+//      numValues,
+//      numWritten,
+//      remainingValues_,
+//      value_,
+//      bitOffset_);
   while (toRead) {
     if (!remainingValues_) {
       readHeader();
@@ -54,18 +62,37 @@ void RleBpDecoder::readBits(
     auto consumed = std::min<int32_t>(toRead, remainingValues_);
 
     if (repeating_) {
+//      printf(
+//          "repeating_ remainingValues_ %d, consumed %d, value %d\n",
+//          remainingValues_,
+//          consumed, value_);
       if (allOnes && value_ && toRead == numValues &&
-          remainingValues_ >= numValues) {
+      remainingValues_ >= numValues) {
         // The whole read is covered by a RLE of ones and 'allOnes' is
         // provided, so we can shortcut the read.
         remainingValues_ -= toRead;
         *allOnes = true;
+
+//        printf(
+//            "readBits repeating_ allones \nbufferStart_ %llx, numValues %d, numWritten %d, remainingValues_ %d,value_ %d, bitOffset_=%d\n",
+//            bufferStart_,
+//            numValues,
+//            numWritten,
+//            remainingValues_,
+//            value_,
+//            bitOffset_);
+
         return;
       }
 
       bits::fillBits(
           outputBuffer, numWritten, numWritten + consumed, value_ != 0);
     } else {
+//      printf(
+//          "bitpacking remainingValues_ %d, consumed %d, first byte %x\n",
+//          remainingValues_,
+//          consumed,
+//          *bufferStart_ & 0xff);
       bits::copyBits(
           reinterpret_cast<const uint64_t*>(bufferStart_),
           bitOffset_,
@@ -80,6 +107,14 @@ void RleBpDecoder::readBits(
     toRead -= consumed;
     remainingValues_ -= consumed;
   }
+  printf(
+      "readBits end \nbufferStart_ %llx, numValues %d, numWritten %d, remainingValues_ %d,value_ %d, bitOffset_=%d\n",
+      bufferStart_,
+      numValues,
+      numWritten,
+      remainingValues_,
+      value_,
+      bitOffset_);
 }
 
 void RleBpDecoder::readHeader() {
