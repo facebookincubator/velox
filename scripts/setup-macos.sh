@@ -60,7 +60,18 @@ function update_brew {
   /usr/local/bin/brew update --force --quiet
 }
 
+function check_brew_arch_consistency {
+  if [[ ${CPU_TARGET} == "arm64" ]] && [[ $(arch) == "i386" ]];
+  then
+    echo "Avoid to install x86 dependencies with brew for Mac M1"
+    exit 1
+  fi
+}
+
 function install_build_prerequisites {
+
+  run_and_time check_brew_arch_consistency
+
   for pkg in ${MACOS_DEPS}
   do
     if [[ "${pkg}" =~ ^([0-9a-z-]*):([0-9](\.[0-9\])*)$ ]];
