@@ -321,7 +321,7 @@ struct ArraySumFunction {
 };
 
 /// Function Signature: array_duplicates(array(T)) -> array(T)
-/// where T must be coercible to bigint or varchar.
+/// where T must be bigint or varchar.
 /// Returns a set of elements that occur more than once in array.
 ///
 /// Internally, we maintain a hashmap to indicate non-null tri-state:
@@ -336,22 +336,21 @@ template <typename TExecCtx, typename T>
 struct ArrayDuplicatesFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
 
+  // TODO: add complex type support in SimpleFunctionAdapter.h L360
+  static constexpr int32_t reuse_strings_from_arg = -1; // 0
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<velox::Array<T>>& out,
       const arg_type<velox::Array<T>>& inputArray) {
     folly::F14FastMap<arg_type<T>, bool> uniqueMap;
+    folly::F14FastSet<arg_type<T>> duplicateNonNullElements;
     std::optional<bool> nullState = std::nullopt;
-    // TODO: Introducing an ordered set is redundant
-    //  if std::sort() in ArrayWriter is implemented
-    std::set<arg_type<T>> duplicateNonNullElements;
 
     for (const auto& item : inputArray) {
       if (item.has_value()) {
-        auto it = uniqueMap.find(*item);
-        if (it == uniqueMap.end()) {
-          uniqueMap[*item] = true;
-        } else if (it->second) {
-          it->second = false;
+        if (!uniqueMap.insert(std::make_pair(*item, true)).second) {
+          // duplicate item found
+          uniqueMap[*item] = false;
           duplicateNonNullElements.insert(*item);
         }
       } else {
@@ -366,7 +365,7 @@ struct ArrayDuplicatesFunction {
     }
 
     if (!nullState.value_or(true)) {
-      out.add_null();
+      out.add_null(); // null first
     }
     for (const auto& item : duplicateNonNullElements) {
       if constexpr (std::is_same_v<T, Varchar>) {
@@ -382,14 +381,12 @@ struct ArrayDuplicatesFunction {
       out_type<velox::Array<T>>& out,
       const null_free_arg_type<velox::Array<T>>& inputArray) {
     folly::F14FastMap<null_free_arg_type<T>, bool> uniqueMap;
-    std::set<null_free_arg_type<T>> duplicateNonNullElements;
+    folly::F14FastSet<null_free_arg_type<T>> duplicateNonNullElements;
 
     for (const auto& item : inputArray) {
-      auto it = uniqueMap.find(item);
-      if (it == uniqueMap.end()) {
-        uniqueMap[item] = true;
-      } else if (it->second) {
-        it->second = false;
+      if (!uniqueMap.insert(std::make_pair(item, true)).second) {
+        // duplicate item is found
+        uniqueMap[item] = false;
         duplicateNonNullElements.insert(item);
       }
     }

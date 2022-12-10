@@ -37,40 +37,37 @@ class ArrayDuplicatesTest : public FunctionBaseTest {
 
   // Execute test for bigint type.
   void testBigint() {
-    auto array = makeNullableArrayVector<int64_t>({
-        {},
-        {1,
-         std::numeric_limits<int64_t>::min(),
-         std::numeric_limits<int64_t>::max()},
-        {std::nullopt},
-        {1, 2, 3},
-        {2, 1, 1, -2},
-        {1, 1, 1},
-        {-1, std::nullopt, -1, -1},
-        {std::nullopt, std::nullopt, std::nullopt},
-        {1, -2, -2, 8, -2, 4, 8, 1},
-        {std::numeric_limits<int64_t>::max(),
-         std::numeric_limits<int64_t>::max(),
-         1,
-         std::nullopt,
-         0,
-         1,
-         std::nullopt,
-         0},
-    });
+    auto array = makeNullableArrayVector<int64_t>(
+        {{},
+         {1,
+          std::numeric_limits<int64_t>::min(),
+          std::numeric_limits<int64_t>::max()},
+         {std::nullopt},
+         {1, 2, 3},
+         {2, 1, 1, -2},
+         {1, 1, 1},
+         {-1, std::nullopt, -1, -1},
+         {std::nullopt, std::nullopt, std::nullopt},
+         {1, -2, -2, 8, -2, 4, 0},
+         {std::numeric_limits<int64_t>::max(),
+          std::numeric_limits<int64_t>::max(),
+          1,
+          std::nullopt,
+          0,
+          -1,
+          std::nullopt}});
 
-    auto expected = makeNullableArrayVector<int64_t>({
-        {},
-        {},
-        {},
-        {},
-        {1},
-        {1},
-        {-1},
-        {std::nullopt},
-        {-2, 1, 8},
-        {std::nullopt, 0, 1, std::numeric_limits<int64_t>::max()},
-    });
+    auto expected = makeNullableArrayVector<int64_t>(
+        {{},
+         {},
+         {},
+         {},
+         {1},
+         {1},
+         {-1},
+         {std::nullopt},
+         {-2},
+         {std::nullopt, std::numeric_limits<int64_t>::max()}});
 
     testExpr(expected, "array_duplicates(C0)", {array});
   }
@@ -87,29 +84,27 @@ TEST_F(ArrayDuplicatesTest, integerArrays) {
 TEST_F(ArrayDuplicatesTest, inlineStringArrays) {
   using S = StringView;
 
-  auto array = makeNullableArrayVector<StringView>({
-      {},
-      {S("")},
-      {std::nullopt},
-      {S("a"), S("b")},
-      {S("a"), std::nullopt, S("b")},
-      {S("a"), S("a")},
-      {S("b"), S("a"), S("b"), S("a"), S("a")},
-      {std::nullopt, std::nullopt},
-      {S("b"), std::nullopt, S("a"), S("a"), std::nullopt, S("b")},
-  });
+  auto array = makeNullableArrayVector<StringView>(
+      {{},
+       {S("")},
+       {std::nullopt},
+       {S("a"), S("b")},
+       {S("a"), std::nullopt, S("b")},
+       {S("a"), S("a")},
+       {S("b"), S("a"), S("b"), S("b")},
+       {std::nullopt, std::nullopt},
+       {S("b"), std::nullopt, S("a"), S("a"), std::nullopt}});
 
-  auto expected = makeNullableArrayVector<StringView>({
-      {},
-      {},
-      {},
-      {},
-      {},
-      {S("a")},
-      {S("a"), S("b")},
-      {std::nullopt},
-      {std::nullopt, S("a"), S("b")},
-  });
+  auto expected = makeNullableArrayVector<StringView>(
+      {{},
+       {},
+       {},
+       {},
+       {},
+       {S("a")},
+       {S("b")},
+       {std::nullopt},
+       {std::nullopt, S("a")}});
 
   testExpr(expected, "array_duplicates(C0)", {array});
 }
@@ -129,7 +124,6 @@ TEST_F(ArrayDuplicatesTest, stringArrays) {
           S("red shiny car ahead"),
           std::nullopt,
           S("purple is an elegant color"),
-          S("red shiny car ahead"),
           S("green plants make us happy"),
           S("purple is an elegant color"),
           std::nullopt,
@@ -140,44 +134,15 @@ TEST_F(ArrayDuplicatesTest, stringArrays) {
   auto expected = makeNullableArrayVector<StringView>({
       {},
       {S("blue clear sky above")},
-      {std::nullopt, S("purple is an elegant color"), S("red shiny car ahead")},
+      {std::nullopt, S("purple is an elegant color")},
   });
 
   testExpr(expected, "array_duplicates(C0)", {array});
 }
 
-TEST_F(ArrayDuplicatesTest, nonContiguousRows) {
-  auto c0 = makeFlatVector<int64_t>(4, [](auto row) { return row; });
-  auto c1 = makeArrayVector<int64_t>({
-      {1, 1, 2, 3, 3},
-      {1, 1, 2, 3, 4, 4},
-      {1, 1, 2, 3, 4, 5, 5},
-      {1, 1, 2, 3, 3, 4, 5, 6, 6},
-  });
-
-  auto c2 = makeArrayVector<int64_t>({
-      {0, 0, 1, 1, 2, 3, 3},
-      {0, 0, 1, 1, 2, 3, 4, 4},
-      {0, 0, 1, 1, 2, 3, 4, 5, 5},
-      {0, 0, 1, 1, 2, 3, 4, 5, 6, 6},
-  });
-
-  auto expected = makeArrayVector<int64_t>({
-      {1, 3},
-      {0, 1, 4},
-      {1, 5},
-      {0, 1, 6},
-  });
-
-  auto result = evaluate<ArrayVector>(
-      "if(c0 % 2 = 0, array_duplicates(c1), array_duplicates(c2))",
-      makeRowVector({c0, c1, c2}));
-  assertEqualVectors(expected, result);
-}
-
 TEST_F(ArrayDuplicatesTest, constant) {
   vector_size_t size = 1'000;
-  auto data = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5, 4, 5}, {6, 6, 6, 6}});
+  auto data = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5, 4}, {6, 6, 6, 6}});
 
   auto evaluateConstant = [&](vector_size_t row, const VectorPtr& vector) {
     return evaluate(
@@ -190,7 +155,7 @@ TEST_F(ArrayDuplicatesTest, constant) {
   assertEqualVectors(expected, result);
 
   result = evaluateConstant(1, data);
-  expected = makeConstantArray<int64_t>(size, {4, 5});
+  expected = makeConstantArray<int64_t>(size, {4});
   assertEqualVectors(expected, result);
 
   result = evaluateConstant(2, data);
