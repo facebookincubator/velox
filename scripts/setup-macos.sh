@@ -34,11 +34,11 @@ source $SCRIPTDIR/setup-helper-functions.sh
 NPROC=$(getconf _NPROCESSORS_ONLN)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja flex bison cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
+MACOS_DEPS="ninja flex bison cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1 libsodium"
 
 function run_and_time {
   time "$@"
-  { echo "+ Finished running $*"; } 2> /dev/null
+  { echo "+ Finished running $*"; } 2>/dev/null
 }
 
 function prompt {
@@ -53,18 +53,16 @@ function prompt {
         return 1
       fi
     done
-  ) 2> /dev/null
+  ) 2>/dev/null
 }
 
 function update_brew {
-  /usr/local/bin/brew update --force --quiet
+  $(brew --prefix)/bin/brew update --force --quiet
 }
 
 function install_build_prerequisites {
-  for pkg in ${MACOS_DEPS}
-  do
-    if [[ "${pkg}" =~ ^([0-9a-z-]*):([0-9](\.[0-9\])*)$ ]];
-    then
+  for pkg in ${MACOS_DEPS}; do
+    if [[ "${pkg}" =~ ^([0-9a-z-]*):([0-9](\.[0-9\])*)$ ]]; then
       pkg=${BASH_REMATCH[1]}
       ver=${BASH_REMATCH[2]}
       echo "Installing '${pkg}' at '${ver}'"
@@ -110,7 +108,7 @@ function install_velox_deps {
   run_and_time install_re2
 }
 
-(return 2> /dev/null) && return # If script was sourced, don't run commands.
+(return 2>/dev/null) && return # If script was sourced, don't run commands.
 
 (
   if [[ $# -ne 0 ]]; then
@@ -122,6 +120,6 @@ function install_velox_deps {
   fi
 )
 
-echo "All deps for Velox installed! Now try \"make\""
-echo 'To add cmake-format bin to your $PATH, consider adding this to your ~/.profile:'
+echo "All deps for Velox installed! Now try \"make debug\""
+echo 'To add cmake-format bin to your $PATH, consider adding this to your ~/.profile or ~/.zshrc:'
 echo 'export PATH=$HOME/bin:$HOME/Library/Python/3.7/bin:$PATH'
