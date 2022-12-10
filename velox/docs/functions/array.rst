@@ -34,6 +34,13 @@ Array Functions
 
         select array_has_duplicates(ARRAY [5, 2, 5, 1, 1, 5, null, null])); -- true
 
+.. function:: array_union(x, y) -> array
+
+    Returns an array of the elements in the union of array ``x`` and array ``y``, without duplicates. ::
+
+        SELECT array_union(ARRAY ['c', 'a', null, 'b'], ARRAY ['b', 'a']); -- [c, a, null, b]
+        SELECT array_union(ARRAY [1, 2, 3, null, 4], ARRAY [3, 1, 5]); -- [1, 2, 3, null, 4, 5]
+
 .. function:: array_intersect(array(E) x, array(E) y) -> array(E)
 
     Returns an array of the elements in the intersection of array ``x`` and array ``y``, without duplicates. ::

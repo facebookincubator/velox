@@ -356,4 +356,93 @@ struct ArrayHasDuplicatesFunction {
   }
 };
 
+// Return the union of two arrays without duplicates. The output order is
+// stable, that the elements in each array maintain their original order, and
+// the elements of the second array follow the first one.
+template <typename TExecCtx, typename T>
+struct ArrayUnionFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
+
+  template <typename TOutput, typename TInput, typename U>
+  FOLLY_ALWAYS_INLINE void update(
+      TOutput& result,
+      const TInput& array,
+      folly::F14FastSet<U>& uniqSet,
+      bool& hasNull) {
+    for (const auto& item : array) {
+      if (item.has_value()) {
+        if (uniqSet.insert(item.value()).second) {
+          result.add_item() = item.value();
+        }
+      } else if (!hasNull) {
+        hasNull = true;
+        result.add_null();
+      }
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE
+  void update(
+      out_type<velox::Array<Varchar>>& result,
+      const arg_type<velox::Array<Varchar>>& array,
+      folly::F14FastSet<StringView>& uniqSet,
+      bool& hasNull) {
+    for (const auto& item : array) {
+      if (item.has_value()) {
+        if (uniqSet.insert(item.value()).second) {
+          result.add_item().setNoCopy(item.value());
+        }
+      } else if (!hasNull) {
+        hasNull = true;
+        result.add_null();
+      }
+    }
+  }
+
+  template <typename TOutput, typename TInput, typename U>
+  FOLLY_ALWAYS_INLINE void updateNullFree(
+      TOutput& result,
+      const TInput& array,
+      folly::F14FastSet<U>& uniqSet) {
+    for (const auto& item : array) {
+      if (uniqSet.insert(item).second) {
+        result.add_item() = item;
+      }
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE
+  void updateNullFree(
+      out_type<velox::Array<Varchar>>& result,
+      const null_free_arg_type<velox::Array<Varchar>>& array,
+      folly::F14FastSet<StringView>& uniqSet) {
+    for (const auto& item : array) {
+      if (uniqSet.insert(item).second) {
+        result.add_item().setNoCopy(item);
+      }
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE
+  void call(
+      out_type<velox::Array<T>>& result,
+      const arg_type<velox::Array<T>>& array1,
+      const arg_type<velox::Array<T>>& array2) {
+    folly::F14FastSet<arg_type<T>> uniqSet;
+    bool hasNull = false;
+    update(result, array1, uniqSet, hasNull);
+    update(result, array2, uniqSet, hasNull);
+  }
+
+  FOLLY_ALWAYS_INLINE
+  void callNullFree(
+      out_type<velox::Array<T>>& result,
+      const null_free_arg_type<velox::Array<T>>& array1,
+      const null_free_arg_type<velox::Array<T>>& array2) {
+    folly::F14FastSet<null_free_arg_type<T>> uniqSet;
+    updateNullFree(result, array1, uniqSet);
+    updateNullFree(result, array2, uniqSet);
+  }
+};
+
 } // namespace facebook::velox::functions

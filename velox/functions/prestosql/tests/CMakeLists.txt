@@ -33,6 +33,7 @@ add_executable(
   ArraySortTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
+  ArrayUnionTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
   CeilFloorTest.cpp
