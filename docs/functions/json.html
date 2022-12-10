@@ -168,6 +168,18 @@ Returns NULL if <code class="docutils literal notranslate"><span class="pre">jso
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="json_size">
+<span class="sig-name descname"><span class="pre">json_size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#json_size" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the size of the <code class="docutils literal notranslate"><span class="pre">value</span></code>. For <code class="docutils literal notranslate"><span class="pre">objects</span></code> or <code class="docutils literal notranslate"><span class="pre">arrays</span></code>, the size
+is the number of members, and the size of a <code class="docutils literal notranslate"><span class="pre">scalar</span></code> value is zero:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_size</span><span class="p">(</span><span class="s1">&#39;{&quot;x&quot;: {&quot;a&quot;: 1, &quot;b&quot;: 2}}&#39;</span><span class="p">,</span> <span class="s1">&#39;$.x&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">json_size</span><span class="p">(</span><span class="s1">&#39;{&quot;x&quot;: [1, 2, 3]}&#39;</span><span class="p">,</span> <span class="s1">&#39;$.x&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
+<span class="n">SELECT</span> <span class="n">json_size</span><span class="p">(</span><span class="s1">&#39;{&quot;x&quot;: {&quot;a&quot;: 1, &quot;b&quot;: 2}}&#39;</span><span class="p">,</span> <span class="s1">&#39;$.x.a&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 </section>
 <section id="json-vectors">
@@ -202,6 +214,7 @@ VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
 <li><a class="reference internal" href="#is_json_scalar"><code class="docutils literal notranslate"><span class="pre">is_json_scalar()</span></code></a></li>
 <li><a class="reference internal" href="#json_array_length"><code class="docutils literal notranslate"><span class="pre">json_array_length()</span></code></a></li>
 <li><a class="reference internal" href="#json_array_contains"><code class="docutils literal notranslate"><span class="pre">json_array_contains()</span></code></a></li>
+<li><a class="reference internal" href="#json_size"><code class="docutils literal notranslate"><span class="pre">json_size()</span></code></a></li>
 </ul>
 </li>
 </ul>
