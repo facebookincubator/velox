@@ -96,7 +96,6 @@ int NonPOD::alive = 0;
 class VectorTest : public testing::Test, public test::VectorTestBase {
  protected:
   void SetUp() override {
-    mappedMemory_ = memory::MappedMemory::getInstance();
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();
@@ -757,10 +756,10 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     auto sourceRow = makeRowVector({"c"}, {source});
     auto sourceRowType = asRowType(sourceRow->type());
 
-    VectorStreamGroup even(mappedMemory_);
+    VectorStreamGroup even(pool_.get());
     even.createStreamTree(sourceRowType, source->size() / 4);
 
-    VectorStreamGroup odd(mappedMemory_);
+    VectorStreamGroup odd(pool_.get());
     odd.createStreamTree(sourceRowType, source->size() / 3);
 
     std::vector<IndexRange> evenIndices;
@@ -866,8 +865,6 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     slice->mutableSizes(slice->size());
     EXPECT_NE(slice->rawSizes(), sizes);
   }
-
-  memory::MappedMemory* mappedMemory_;
 
   size_t vectorSize_{100};
   size_t numIterations_{3};
@@ -2167,4 +2164,12 @@ TEST_F(VectorTest, lifetime) {
         v.reset();
       },
       "Memory pool should be destroyed only after all allocated memory has been freed.");
+}
+
+TEST_F(VectorTest, ensureNullsCapacity) {
+  // Has to be more than 1 byte's worth of bits.
+  size_t size = 100;
+  auto vec = makeFlatVector<int64_t>(size, [](vector_size_t i) { return i; });
+  auto nulls = vec->mutableNulls(2);
+  ASSERT_GE(nulls->size(), bits::nbytes(size));
 }

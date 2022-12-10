@@ -1201,6 +1201,37 @@ TEST_F(StringFunctionsTest, sha512) {
   EXPECT_EQ(std::nullopt, sha512(std::nullopt));
 }
 
+TEST_F(StringFunctionsTest, HmacSha256) {
+  const auto hmacSha256 = [&](std::optional<std::string> arg,
+                              std::optional<std::string> key) {
+    return evaluateOnce<std::string, std::string>(
+        "hmac_sha256(c0, c1)", {arg, key}, {VARBINARY(), VARBINARY()});
+  };
+  // Use python hmac lib results as the expected value.
+  // >>> import hmac
+  // >>> def sha256(data, key):
+  //         print(hmac.new(key, data, digestmod='sha256').hexdigest())
+  // >>> sha256(b"hashme", b"velox")
+  // 24bb7fa25fd592ef6a4c939d4fb91b7f7f04f8813260961101117ec30f865794
+  // >>> sha256(b"Infinity", b"velox")
+  // f45718c9586ae7d761194485d15cbf6284b5b606ade4f9d5820fbdd1eaf52b75
+  // >>> sha256(b"", b"velox")
+  // fd8658b6a6b6601155fecf9a39b6f95cf030863e550073423a8e250a35c6f5a4
+  EXPECT_EQ(
+      hexToDec(
+          "24bb7fa25fd592ef6a4c939d4fb91b7f7f04f8813260961101117ec30f865794"),
+      hmacSha256("hashme", "velox"));
+  EXPECT_EQ(
+      hexToDec(
+          "f45718c9586ae7d761194485d15cbf6284b5b606ade4f9d5820fbdd1eaf52b75"),
+      hmacSha256("Infinity", "velox"));
+  EXPECT_EQ(
+      hexToDec(
+          "fd8658b6a6b6601155fecf9a39b6f95cf030863e550073423a8e250a35c6f5a4"),
+      hmacSha256("", "velox"));
+  EXPECT_EQ(std::nullopt, hmacSha256(std::nullopt, "velox"));
+}
+
 void StringFunctionsTest::testReplaceInPlace(
     const std::vector<std::pair<std::string, std::string>>& tests,
     const std::string& search,
@@ -1382,6 +1413,26 @@ TEST_F(StringFunctionsTest, controlExprEncodingPropagation) {
   test("if(1=1, lower(C1), lower(C2))", true);
 
   test("if(1!=1, lower(C1), lower(C2))", false);
+}
+
+TEST_F(StringFunctionsTest, crc32) {
+  const auto crc32 = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t, std::string>(
+        "crc32(c0)", {value}, {VARBINARY()});
+  };
+  // use python3 zlib result as the expected values,
+  // >>> import zlib
+  // >>> print(zlib.crc32(b"DEAD_BEEF"))
+  // 2634114297
+  // >>> print(zlib.crc32(b"CRC32"))
+  // 4128576900
+  // >>> print(zlib.crc32(b"velox is an open source unified execution engine."))
+  // 2173230066
+  EXPECT_EQ(std::nullopt, crc32(std::nullopt));
+  EXPECT_EQ(2634114297L, crc32("DEAD_BEEF"));
+  EXPECT_EQ(4128576900L, crc32("CRC32"));
+  EXPECT_EQ(
+      2173230066L, crc32("velox is an open source unified execution engine."));
 }
 
 TEST_F(StringFunctionsTest, xxhash64) {

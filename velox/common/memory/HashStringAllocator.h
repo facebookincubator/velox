@@ -19,6 +19,7 @@
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/memory/CompactDoubleList.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/common/memory/StreamArena.h"
 #include "velox/type/StringView.h"
 
@@ -130,9 +131,8 @@ class HashStringAllocator : public StreamArena {
     char* FOLLY_NULLABLE position;
   };
 
-  explicit HashStringAllocator(memory::MappedMemory* FOLLY_NONNULL mappedMemory)
-      : StreamArena(mappedMemory),
-        pool_(mappedMemory, AllocationPool::kHashTableOwner) {}
+  explicit HashStringAllocator(memory::MemoryPool* FOLLY_NONNULL pool)
+      : StreamArena(pool), pool_(pool) {}
 
   // Copies a StringView at 'offset' in 'group' to storage owned by
   // the hash table. Updates the StringView.
@@ -270,8 +270,8 @@ class HashStringAllocator : public StreamArena {
     pool_.clear();
   }
 
-  memory::MappedMemory* FOLLY_NONNULL mappedMemory() const {
-    return pool_.mappedMemory();
+  memory::MemoryPool* FOLLY_NONNULL pool() const {
+    return pool_.pool();
   }
 
   uint64_t cumulativeBytes() const {
@@ -283,7 +283,7 @@ class HashStringAllocator : public StreamArena {
   void checkConsistency() const;
 
  private:
-  static constexpr int32_t kUnitSize = 16 * memory::MappedMemory::kPageSize;
+  static constexpr int32_t kUnitSize = 16 * memory::MemoryAllocator::kPageSize;
   static constexpr int32_t kMinContiguous = 48;
 
   // Adds 'bytes' worth of contiguous space to the free list. This

@@ -114,7 +114,7 @@ class HiveDataSource : public DataSource {
       FileHandleFactory* FOLLY_NONNULL fileHandleFactory,
       velox::memory::MemoryPool* FOLLY_NONNULL pool,
       ExpressionEvaluator* FOLLY_NONNULL expressionEvaluator,
-      memory::MappedMemory* FOLLY_NONNULL mappedMemory,
+      memory::MemoryAllocator* FOLLY_NONNULL allocator,
       const std::string& scanId,
       folly::Executor* FOLLY_NULLABLE executor);
 
@@ -170,7 +170,6 @@ class HiveDataSource : public DataSource {
   FileHandleFactory* FOLLY_NONNULL fileHandleFactory_;
   velox::memory::MemoryPool* FOLLY_NONNULL pool_;
   std::shared_ptr<dwio::common::IoStatistics> ioStats_;
-  std::shared_ptr<dwio::common::BufferedInputFactory> bufferedInputFactory_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
   std::shared_ptr<HiveConnectorSplit> split_;
   dwio::common::ReaderOptions readerOpts_;
@@ -193,7 +192,7 @@ class HiveDataSource : public DataSource {
   SelectivityVector filterRows_;
   exec::FilterEvalCtx filterEvalCtx_;
 
-  memory::MappedMemory* const FOLLY_NONNULL mappedMemory_;
+  memory::MemoryAllocator* const FOLLY_NONNULL allocator_;
   const std::string& scanId_;
   folly::Executor* FOLLY_NULLABLE executor_;
 };
@@ -236,7 +235,7 @@ class HiveConnector final : public Connector {
         &fileHandleFactory_,
         connectorQueryCtx->memoryPool(),
         connectorQueryCtx->expressionEvaluator(),
-        connectorQueryCtx->mappedMemory(),
+        connectorQueryCtx->allocator(),
         connectorQueryCtx->scanId(),
         executor_);
   }

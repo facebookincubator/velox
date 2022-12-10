@@ -83,6 +83,10 @@ class ExpressionFuzzer {
   std::vector<core::TypedExprPtr> generateRegexpReplaceArgs(
       const CallableSignature& input);
 
+  // Return a vector of expressions for each argument of callable in order.
+  std::vector<core::TypedExprPtr> getArgsForCallable(
+      const CallableSignature& callable);
+
   core::TypedExprPtr getCallExprFromCallable(const CallableSignature& callable);
 
   /// Generate an expression with a random concrete function signature that
@@ -102,10 +106,27 @@ class ExpressionFuzzer {
   core::TypedExprPtr generateExpressionFromSignatureTemplate(
       const TypePtr& returnType);
 
+  /// Generate a cast expression that returns the specified type. Return a
+  /// nullptr if casting to the specified type is not supported. The supported
+  /// types include primitive types, array, map, and row types right now.
+  core::TypedExprPtr generateCastExpression(const TypePtr& returnType);
+
+  /// Choose a random type to be casted to the specified type. If the specified
+  /// type is primitive, return a random primitive type. If the specified type
+  /// is complex, return a type whose top-level being the same and child types
+  /// being determined by chooseCastFromType() recursively. Casting to or from
+  /// custom types is not supported yet. In case of an unsupported `to` type,
+  /// this function returns a nullptr.
+  TypePtr chooseCastFromType(const TypePtr& to);
+
   /// If --duration_sec > 0, check if we expired the time budget. Otherwise,
   /// check if we expired the number of iterations (--steps).
   template <typename T>
   bool isDone(size_t i, T startTime) const;
+
+  /// Reset any stateful members. Should be called before every fuzzer
+  /// iteration.
+  void reset();
 
   FuzzerGenerator rng_;
   size_t currentSeed_{0};
@@ -148,6 +169,20 @@ class ExpressionFuzzer {
   /// particular iteration.
   std::vector<TypePtr> inputRowTypes_;
   std::vector<std::string> inputRowNames_;
+
+  /// Maps a 'Type' serialized as a string to the column names that have already
+  /// been generated. Used to easily look up columns that can be re-used when a
+  /// specific type is required as input to a callable.
+  std::unordered_map<std::string, std::vector<std::string>> typeToColumnNames_;
+
+  /// Maps a 'Type' serialized as a string to the expressions that have already
+  /// been generated and have the same return type. Used to easily look up
+  /// expressions that can be re-used when a specific return type is required.
+  /// Only expressions with no nested expressions are tracked here and can be
+  /// re-used.
+  /// TODO: add support for sharing multi-level expressions.
+  std::unordered_map<std::string, std::vector<core::TypedExprPtr>>
+      typeToExpressions_;
 };
 
 } // namespace facebook::velox::test

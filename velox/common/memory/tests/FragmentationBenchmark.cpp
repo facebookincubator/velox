@@ -34,15 +34,22 @@ using namespace facebook::velox;
 using namespace facebook::velox::memory;
 
 struct Block {
+  explicit Block(MemoryAllocator& _allocator) : allocator(_allocator) {}
+
   ~Block() {
-    if (data) {
+    if (data != nullptr) {
       free(data);
     }
+    if (allocation != nullptr) {
+      allocator.freeNonContiguous(*allocation);
+    }
+    allocator.freeContiguous(contiguous);
   }
 
+  MemoryAllocator& allocator;
   size_t size = 0;
   char* data = nullptr;
-  std::shared_ptr<MappedMemory::Allocation> allocation;
+  std::shared_ptr<MemoryAllocator::Allocation> allocation;
   MmapAllocator::ContiguousAllocation contiguous;
 };
 
@@ -84,13 +91,12 @@ class FragmentationTest {
   }
 
   void allocate(size_t size) {
-    auto block = std::make_unique<Block>();
+    auto block = std::make_unique<Block>(*memory_);
     block->size = size;
     if (memory_) {
       if (size <= 8 << 20) {
-        block->allocation =
-            std::make_shared<MappedMemory::Allocation>(memory_.get());
-        if (!memory_->allocate(size / 4096, 0, *block->allocation)) {
+        block->allocation = std::make_shared<MemoryAllocator::Allocation>();
+        if (!memory_->allocateNonContiguous(size / 4096, *block->allocation)) {
           VELOX_FAIL("allocate() faild");
         }
         for (int i = 0; i < block->allocation->numRuns(); ++i) {
@@ -165,9 +171,9 @@ class FragmentationTest {
   std::string sizeString(size_t size) {
     char str[20];
     if (size < 1 << 20) {
-      sprintf(str, "%ldK", size >> 10);
+      snprintf(str, 18, "%ldK", size >> 10);
     } else {
-      sprintf(str, "%ldM", size >> 20);
+      snprintf(str, 18, "%ldM", size >> 20);
     }
     return str;
   }

@@ -38,9 +38,11 @@ workflows:
                - main
     jobs:
       - doc-gen-job
-      - linux-fuzzer-run
+      - linux-presto-fuzzer-run
+      - linux-spark-fuzzer-run
       - linux-aggregate-fuzzer-run
       - docker-compose-ubuntu-cpp
+      - docker-compose-centos-cpp
 
   # Hourly build on weekdays
   weekday:
@@ -235,6 +237,14 @@ jobs:
             ccache -s
           no_output_timeout: 1h
       - run:
+          name: "Build and Test PyVelox"
+          command: |
+            conda init bash
+            source ~/.bashrc
+            conda create -y --name pyveloxenv python=3.7
+            conda activate pyveloxenv
+            LD_LIBRARY_PATH=/usr/local/lib make python-test
+      - run:
           name: "Run Unit Tests"
           command: |
             cd _build/debug && ctest -j 16 -VV --output-on-failure
@@ -253,6 +263,8 @@ jobs:
                 --enable_variadic_signatures \
                 --velox_fuzzer_enable_complex_types \
                 --lazy_vector_generation_ratio 0.2 \
+                --velox_fuzzer_enable_column_reuse \
+                --velox_fuzzer_enable_expression_reuse \
                 --duration_sec 60 \
                 --logtostderr=1 \
                 --minloglevel=0 \
@@ -318,6 +330,8 @@ jobs:
       CONBENCH_HOST: "CircleCI-runner-dedicated"
       LINUX_DISTRO: "ubuntu"
       VELOX_DEPENDENCY_SOURCE: BUNDLED
+      BASELINE_OUTPUT_PATH: "/tmp/baseline_output/"
+      TARGET_OUTPUT_PATH: "/tmp/target_output/"
     steps:
       - checkout
       - update-submodules
@@ -327,17 +341,31 @@ jobs:
             sudo ./scripts/setup-ubuntu.sh
       - setup-environment
       - build-benchmarks
+      # TODO: For now we just compare the target binary with itself, until we
+      # stabilize benchmark runs. We should eventually have two different
+      # set of binaries.
       - run:
-          name: "Install benchmark dependencies"
+          name: "Run Benchmarks - Baseline"
           command: |
-            pip3 install -r scripts/benchmark-requirements.txt
-      - run-benchmarks
-      # TODO: Disabling conbench github notifications for now until results are more stable.
-      #- run:
-      #    name: "Analyze Benchmark Regressions and Post to Github"
-      #    command: |
-      #      export GITHUB_APP_PRIVATE_KEY=$(echo $GITHUB_APP_PRIVATE_KEY_ENCODED | base64 -d)
-      #      python3 scripts/benchmark-github-status.py --z-score-threshold 50
+            ./scripts/benchmark-runner.py run \
+                --bm_estimate_time \
+                --bm_max_secs 10 \
+                --bm_max_trials 10000 \
+                --output_path ${BASELINE_OUTPUT_PATH}
+      - run:
+          name: "Run Benchmarks - Target"
+          command: |
+            ./scripts/benchmark-runner.py run \
+                --bm_estimate_time \
+                --bm_max_secs 10 \
+                --bm_max_trials 10000 \
+                --output_path ${TARGET_OUTPUT_PATH}
+      - run:
+          name: "Benchmark Summary"
+          command: |
+            ./scripts/benchmark-runner.py compare \
+                --baseline_path ${BASELINE_OUTPUT_PATH} \
+                --target_path ${TARGET_OUTPUT_PATH} || true
       - post-steps
 
   # Build with different options
@@ -404,7 +432,7 @@ jobs:
           no_output_timeout: 1h
       - post-steps
 
-  linux-fuzzer-run:
+  linux-presto-fuzzer-run:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
@@ -431,6 +459,8 @@ jobs:
                 --duration_sec 600 \
                 --enable_variadic_signatures \
                 --velox_fuzzer_enable_complex_types \
+                --velox_fuzzer_enable_column_reuse \
+                --velox_fuzzer_enable_expression_reuse \
                 --logtostderr=1 \
                 --minloglevel=0 \
               2>&1 | tee /tmp/fuzzer.log || ( \
@@ -442,6 +472,43 @@ jobs:
           no_output_timeout: 20m
       - store_artifacts:
           path: '/tmp/fuzzer.log'
+      - post-steps
+
+  linux-spark-fuzzer-run:
+    executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - pre-steps
+      - run:
+          name: Build
+          command: |
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            ccache -s
+          no_output_timeout: 1h
+      - run:
+          # Run Spark Fuzzer, save the output to /tmp/spark_fuzzer.log, and upload the file
+          # as job artifact to make it convenient for users to inspect it -
+          # these logs can also be quite large. Always prints the last 1k lines to
+          # the job output for context.
+          name: "Run Spark Fuzzer Tests"
+          command: |
+            echo -e "The logs will be saved to \"/tmp/spark_fuzzer.log\" and uploaded" \
+                    "as a job artifact (check the \"Artifacts\" tab above)."
+            _build/debug/velox/expression/tests/spark_expression_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 600 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+              2>&1 | tee /tmp/spark_fuzzer.log || ( \
+                tail -n 1000 /tmp/spark_fuzzer.log;
+                echo "FAIL: Fuzzer run failed";
+                exit 1; \
+              )
+            echo -e "\n\nSpark Fuzzer run finished successfully."
+          no_output_timeout: 20m
+      - store_artifacts:
+          path: '/tmp/spark_fuzzer.log'
       - post-steps
 
   linux-aggregate-fuzzer-run:
@@ -547,3 +614,20 @@ jobs:
       - run:
           name: "Run ubuntu-cpp image"
           command: docker-compose run -e NUM_THREADS=16 --rm ubuntu-cpp
+
+  docker-compose-centos-cpp:
+    machine: # Use machine executor type to use docker-compose
+      # Ubuntu 22.04 is the base image but we use centos 8 on
+      # the docker-compose container. There are no centos on
+      # circle-ci base images
+      image: ubuntu-2204:2022.10.1
+    resource_class: 2xlarge
+    steps:
+      - checkout
+      - update-submodules
+      - run:
+          name: "Build images for centos-cpp declared in docker-compose.yml"
+          command: docker-compose build centos-cpp
+      - run:
+          name: "Run centos-cpp image"
+          command: docker-compose run -e NUM_THREADS=16 --rm centos-cpp

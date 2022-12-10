@@ -117,6 +117,32 @@ void applyDecimalCastKernel(
     }
   });
 }
+
+template <typename TOutput>
+void applyBigintToDecimalCastKernel(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    VectorPtr castResult,
+    const bool nullOnFailure) {
+  auto sourceVector = input.as<SimpleVector<int64_t>>();
+  auto castResultRawBuffer =
+      castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
+  const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    auto rescaledValue = DecimalUtil::rescaleBigint<TOutput>(
+        sourceVector->valueAt(row),
+        toPrecisionScale.first,
+        toPrecisionScale.second,
+        nullOnFailure);
+    if (rescaledValue.has_value()) {
+      castResultRawBuffer[row] = rescaledValue.value();
+    } else {
+      castResult->setNull(row, true);
+    }
+  });
+}
 } // namespace
 
 template <typename To, typename From>
@@ -125,7 +151,7 @@ void CastExpr::applyCastWithTry(
     exec::EvalCtx& context,
     const BaseVector& input,
     FlatVector<To>* resultFlatVector) {
-  const auto& queryConfig = context.execCtx()->queryCtx()->config();
+  const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
   auto isCastIntByTruncate = queryConfig.isCastIntByTruncate();
 
   if (!nullOnFailure_) {
@@ -408,14 +434,15 @@ VectorPtr CastExpr::applyRow(
     const RowVector* input,
     exec::EvalCtx& context,
     const RowType& fromType,
-    const RowType& toType) {
+    const TypePtr& toType) {
+  const RowType& toRowType = toType->asRow();
   int numInputChildren = input->children().size();
-  int numOutputChildren = toType.size();
+  int numOutputChildren = toRowType.size();
 
   // Extract the flag indicating matching of children must be done by name or
   // position
   auto matchByName =
-      context.execCtx()->queryCtx()->config().isMatchStructByName();
+      context.execCtx()->queryCtx()->queryConfig().isMatchStructByName();
 
   // Cast each row child to its corresponding output child
   std::vector<VectorPtr> newChildren;
@@ -424,7 +451,7 @@ VectorPtr CastExpr::applyRow(
   for (auto toChildrenIndex = 0; toChildrenIndex < numOutputChildren;
        toChildrenIndex++) {
     // For each child, find the corresponding column index in the output
-    auto toFieldName = toType.nameOf(toChildrenIndex);
+    const auto& toFieldName = toRowType.nameOf(toChildrenIndex);
     bool matchNotFound = false;
 
     // If match is by field name and the input field name is not found
@@ -435,7 +462,7 @@ VectorPtr CastExpr::applyRow(
         matchNotFound = true;
       } else {
         fromChildrenIndex = fromType.getChildIdx(toFieldName);
-        toChildrenIndex = toType.getChildIdx(toFieldName);
+        toChildrenIndex = toRowType.getChildIdx(toFieldName);
       }
     } else {
       fromChildrenIndex = toChildrenIndex;
@@ -446,7 +473,7 @@ VectorPtr CastExpr::applyRow(
 
     // Updating output types and names
     VectorPtr outputChild;
-    auto toChildType = toType.childAt(toChildrenIndex);
+    const auto& toChildType = toRowType.childAt(toChildrenIndex);
 
     if (matchNotFound) {
       if (nullOnFailure_) {
@@ -458,7 +485,7 @@ VectorPtr CastExpr::applyRow(
       context.ensureWritable(rows, toChildType, outputChild);
       outputChild->addNulls(nullptr, rows);
     } else {
-      auto inputChild = input->children()[fromChildrenIndex];
+      const auto& inputChild = input->children()[fromChildrenIndex];
       if (toChildType == inputChild->type()) {
         outputChild = inputChild;
       } else {
@@ -472,16 +499,13 @@ VectorPtr CastExpr::applyRow(
             outputChild);
       }
     }
-    newChildren.emplace_back(outputChild);
+    newChildren.emplace_back(std::move(outputChild));
   }
 
   // Assemble the output row
-  auto toNames = toType.names();
-  auto toTypes = toType.children();
-  auto finalRowType = ROW(std::move(toNames), std::move(toTypes));
   return std::make_shared<RowVector>(
       context.pool(),
-      finalRowType,
+      toType,
       input->nulls(),
       rows.size(),
       std::move(newChildren));
@@ -514,6 +538,16 @@ VectorPtr CastExpr::applyDecimal(
       } else {
         applyDecimalCastKernel<UnscaledLongDecimal, UnscaledLongDecimal>(
             rows, input, context, fromType, toType, castResult, nullOnFailure_);
+      }
+      break;
+    }
+    case TypeKind::BIGINT: {
+      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
+        applyBigintToDecimalCastKernel<UnscaledShortDecimal>(
+            rows, input, context, toType, castResult, nullOnFailure_);
+      } else {
+        applyBigintToDecimalCastKernel<UnscaledLongDecimal>(
+            rows, input, context, toType, castResult, nullOnFailure_);
       }
       break;
     }
@@ -571,7 +605,7 @@ void CastExpr::applyPeeled(
             input.asUnchecked<RowVector>(),
             context,
             fromType->asRow(),
-            toType->asRow());
+            toType);
         break;
       case TypeKind::SHORT_DECIMAL:
       case TypeKind::LONG_DECIMAL:
@@ -595,7 +629,7 @@ void CastExpr::applyPeeled(
 
 void CastExpr::apply(
     const SelectivityVector& rows,
-    VectorPtr& input,
+    const VectorPtr& input,
     exec::EvalCtx& context,
     const TypePtr& fromType,
     const TypePtr& toType,

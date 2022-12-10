@@ -17,8 +17,8 @@
 
 #include <folly/Executor.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
-#include "velox/common/memory/MappedMemory.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryAllocator.h"
 #include "velox/core/Context.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/vector/DecodedVector.h"
@@ -40,17 +40,17 @@ class QueryCtx : public Context {
       std::shared_ptr<Config> config = std::make_shared<MemConfig>(),
       std::unordered_map<std::string, std::shared_ptr<Config>>
           connectorConfigs = {},
-      memory::MappedMemory* FOLLY_NONNULL mappedMemory =
-          memory::MappedMemory::getInstance(),
+      memory::MemoryAllocator* FOLLY_NONNULL allocator =
+          memory::MemoryAllocator::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       std::shared_ptr<folly::Executor> spillExecutor = nullptr,
       const std::string& queryId = "")
       : Context{ContextScope::QUERY},
         pool_(std::move(pool)),
-        mappedMemory_(mappedMemory),
+        allocator_(allocator),
         connectorConfigs_(connectorConfigs),
         executor_(executor),
-        config_{this},
+        queryConfig_{this},
         queryId_(queryId),
         spillExecutor_(std::move(spillExecutor)) {
     setConfigOverrides(config);
@@ -63,21 +63,21 @@ class QueryCtx : public Context {
   // object is alive.
   //
   // This constructor does not keep the ownership of executor.
-  QueryCtx(
+  explicit QueryCtx(
       folly::Executor::KeepAlive<> executorKeepalive,
       std::shared_ptr<Config> config = std::make_shared<MemConfig>(),
       std::unordered_map<std::string, std::shared_ptr<Config>>
           connectorConfigs = {},
-      memory::MappedMemory* FOLLY_NONNULL mappedMemory =
-          memory::MappedMemory::getInstance(),
+      memory::MemoryAllocator* FOLLY_NONNULL allocator =
+          memory::MemoryAllocator::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       const std::string& queryId = "")
       : Context{ContextScope::QUERY},
         pool_(std::move(pool)),
-        mappedMemory_(mappedMemory),
+        allocator_(allocator),
         connectorConfigs_(connectorConfigs),
         executorKeepalive_(std::move(executorKeepalive)),
-        config_{this},
+        queryConfig_{this},
         queryId_(queryId) {
     setConfigOverrides(config);
     if (!pool_) {
@@ -93,8 +93,8 @@ class QueryCtx : public Context {
     return pool_.get();
   }
 
-  memory::MappedMemory* FOLLY_NONNULL mappedMemory() const {
-    return mappedMemory_;
+  memory::MemoryAllocator* FOLLY_NONNULL allocator() const {
+    return allocator_;
   }
 
   folly::Executor* FOLLY_NONNULL executor() const {
@@ -106,8 +106,8 @@ class QueryCtx : public Context {
     return executor;
   }
 
-  const QueryConfig& config() const {
-    return config_;
+  const QueryConfig& queryConfig() const {
+    return queryConfig_;
   }
 
   Config* FOLLY_NONNULL
@@ -151,11 +151,11 @@ class QueryCtx : public Context {
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
-  memory::MappedMemory* FOLLY_NONNULL mappedMemory_;
+  memory::MemoryAllocator* FOLLY_NONNULL allocator_;
   std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs_;
   folly::Executor* FOLLY_NULLABLE executor_;
   folly::Executor::KeepAlive<> executorKeepalive_;
-  QueryConfig config_;
+  QueryConfig queryConfig_;
   const std::string queryId_;
   std::shared_ptr<folly::Executor> spillExecutor_;
 };

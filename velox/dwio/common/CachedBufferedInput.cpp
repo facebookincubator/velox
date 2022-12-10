@@ -32,7 +32,7 @@ using cache::ScanTracker;
 using cache::SsdFile;
 using cache::SsdPin;
 using cache::TrackingId;
-using memory::MappedMemory;
+using memory::MemoryAllocator;
 
 std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
     Region region,
@@ -49,7 +49,9 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
   VELOX_CHECK_LE(region.offset + region.length, fileSize_);
   requests_.emplace_back(
       RawFileCacheKey{fileNum_, region.offset}, region.length, id);
-  tracker_->recordReference(id, region.length, fileNum_, groupId_);
+  if (tracker_) {
+    tracker_->recordReference(id, region.length, fileNum_, groupId_);
+  }
   auto stream = std::make_unique<CacheInputStream>(
       this,
       ioStats_.get(),
@@ -69,21 +71,20 @@ bool CachedBufferedInput::isBuffered(uint64_t /*offset*/, uint64_t /*length*/)
   return false;
 }
 
-bool CachedBufferedInput::shouldPreload() {
+bool CachedBufferedInput::shouldPreload(int32_t numPages) {
   // True if after scheduling this for preload, half the capacity
   // would be in a loading but not yet accessed state.
-  if (requests_.empty()) {
+  if (requests_.empty() && !numPages) {
     return false;
   }
-  int32_t numPages = 0;
   for (auto& request : requests_) {
     numPages += bits::roundUp(
                     std::min<int32_t>(request.size, loadQuantum_),
-                    MappedMemory::kPageSize) /
-        MappedMemory::kPageSize;
+                    MemoryAllocator::kPageSize) /
+        MemoryAllocator::kPageSize;
   }
   auto cachePages = cache_->incrementCachedPages(0);
-  auto maxPages = cache_->maxBytes() / MappedMemory::kPageSize;
+  auto maxPages = cache_->maxBytes() / MemoryAllocator::kPageSize;
   auto allocatedPages = cache_->numAllocated();
   if (numPages < maxPages - allocatedPages) {
     // There is free space for the read-ahead.
@@ -115,6 +116,8 @@ std::vector<CacheRequest*> makeRequestParts(
   // Large columns will be part of coalesced reads if the access frequency
   // qualifies for read ahead and if over 80% of the column gets accessed. Large
   // metadata columns (empty no trackingData) always coalesce.
+  bool prefetchOne =
+      request.trackingId.id() == StreamIdentifier::sequentialFile().id_;
   auto readPct =
       (100 * trackingData.numReads) / (1 + trackingData.numReferences);
   auto readDensity =
@@ -130,6 +133,9 @@ std::vector<CacheRequest*> makeRequestParts(
         request.trackingId));
     parts.push_back(extraRequests.back().get());
     parts.back()->coalesces = prefetch;
+    if (prefetchOne) {
+      break;
+    }
   }
   return parts;
 }
@@ -166,11 +172,12 @@ void CachedBufferedInput::load(const LogType) {
         continue;
       }
       cache::TrackingData trackingData;
-      if (!request.trackingId.empty()) {
+      bool prefetchAnyway = request.trackingId.empty() ||
+          request.trackingId.id() == StreamIdentifier::sequentialFile().id_;
+      if (!prefetchAnyway && tracker_) {
         trackingData = tracker_->trackingData(request.trackingId);
       }
-      if (request.trackingId.empty() ||
-          adjustedReadPct(trackingData) >= readPct) {
+      if (prefetchAnyway || adjustedReadPct(trackingData) >= readPct) {
         request.processed = true;
         auto parts = makeRequestParts(
             request, trackingData, loadQuantum_, extraRequests);
@@ -248,13 +255,23 @@ void CachedBufferedInput::makeLoads(
         readRegion(ranges, prefetch);
       });
   if (prefetch && executor_) {
-    for (auto& load : allCoalescedLoads_) {
+    std::vector<int32_t> doneIndices;
+    for (auto i = 0; i < allCoalescedLoads_.size(); ++i) {
+      auto& load = allCoalescedLoads_[i];
       if (load->state() == LoadState::kPlanned) {
         executor_->add([pendingLoad = load]() {
           process::TraceContext trace("Read Ahead");
           pendingLoad->loadOrFuture(nullptr);
         });
+      } else {
+        doneIndices.push_back(i);
       }
+    }
+    // Remove the loads that were complete. There can be done loads if the same
+    // CachedBufferedInput has multiple cycles of enqueues and loads.
+    for (int32_t i = doneIndices.size() - 1; i >= 0; --i) {
+      assert(!doneIndices.empty()); // lint
+      allCoalescedLoads_.erase(allCoalescedLoads_.begin() + doneIndices[i]);
     }
   }
 }
@@ -341,7 +358,7 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
  public:
   DwioCoalescedLoad(
       cache::AsyncDataCache& cache,
-      std::unique_ptr<AbstractInputStreamHolder> input,
+      std::shared_ptr<ReadFileInputStream> input,
       std::shared_ptr<IoStatistics> ioStats,
       uint64_t groupId,
       std::vector<CacheRequest*> requests,
@@ -351,13 +368,15 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
         maxCoalesceDistance_(maxCoalesceDistance) {}
 
   std::vector<CachePin> loadData(bool isPrefetch) override {
-    auto& stream = input_->get();
     std::vector<CachePin> pins;
     pins.reserve(keys_.size());
     cache_.makePins(
         keys_,
         [&](int32_t index) { return sizes_[index]; },
         [&](int32_t /*index*/, CachePin pin) {
+          if (isPrefetch) {
+            pin.checkedEntry()->setPrefetch(true);
+          }
           pins.push_back(std::move(pin));
         });
     if (pins.empty()) {
@@ -373,13 +392,13 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
             int32_t /*end*/,
             uint64_t offset,
             const std::vector<folly::Range<char*>>& buffers) {
-          stream.read(buffers, offset, LogType::FILE);
+          input_->read(buffers, offset, LogType::FILE);
         });
     updateStats(stats, isPrefetch, false);
     return pins;
   }
 
-  std::unique_ptr<AbstractInputStreamHolder> input_;
+  std::shared_ptr<ReadFileInputStream> input_;
   const int32_t maxCoalesceDistance_;
 };
 
@@ -400,6 +419,9 @@ class SsdLoad : public DwioCoalescedLoadBase {
         keys_,
         [&](int32_t index) { return sizes_[index]; },
         [&](int32_t index, CachePin pin) {
+          if (isPrefetch) {
+            pin.checkedEntry()->setPrefetch(true);
+          }
           pins.push_back(std::move(pin));
           ssdPins.push_back(std::move(requests_[index].ssdPin));
         });
@@ -426,12 +448,7 @@ void CachedBufferedInput::readRegion(
     load = std::make_shared<SsdLoad>(*cache_, ioStats_, groupId_, requests);
   } else {
     load = std::make_shared<DwioCoalescedLoad>(
-        *cache_,
-        streamSource_(),
-        ioStats_,
-        groupId_,
-        requests,
-        maxCoalesceDistance_);
+        *cache_, input_, ioStats_, groupId_, requests, maxCoalesceDistance_);
   }
   allCoalescedLoads_.push_back(load);
   coalescedLoads_.withWLock([&](auto& loads) {
@@ -473,6 +490,20 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
       TrackingId(),
       0,
       loadQuantum_);
+}
+
+bool CachedBufferedInput::prefetch(Region region) {
+  int32_t numPages = bits::roundUp(region.length, MemoryAllocator::kPageSize) /
+      MemoryAllocator::kPageSize;
+  if (!shouldPreload(numPages)) {
+    return false;
+  }
+  auto stream = enqueue(region, nullptr);
+  load(LogType::FILE);
+  // Remove the coalesced load made for the stream. It will not be accessed. The
+  // cache entry will be accessed.
+  coalescedLoad(stream.get());
+  return true;
 }
 
 } // namespace facebook::velox::dwio::common

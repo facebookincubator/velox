@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/hash/Checksum.h>
 #include <cstdint>
 #define XXH_INLINE_ALL
 #include <xxhash.h>
@@ -49,6 +50,20 @@ struct CodePointFunction {
       int32_t& result,
       const arg_type<Varchar>& inputChar) {
     result = stringImpl::charToCodePoint(inputChar);
+    return true;
+  }
+};
+
+/// crc32(varbinary) → bigint
+/// Return an int64_t checksum calculated using the crc32 method in zlib.
+template <typename T>
+struct CRC32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  bool call(out_type<int64_t>& result, const arg_type<Varchar>& input) {
+    result = static_cast<int64_t>(folly::crc32_type(
+        reinterpret_cast<const unsigned char*>(input.data()), input.size()));
     return true;
   }
 };
@@ -102,6 +117,18 @@ struct Sha512Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void call(TTo& result, const TFrom& input) {
     stringImpl::sha512(result, input);
+  }
+};
+
+/// sha1(varbinary) -> varbinary
+template <typename T>
+struct HmacSha256Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TOuput, typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(TOuput& result, const TInput& data, const TInput& key) {
+    return stringImpl::HmacSha256(result, key, data);
   }
 };
 

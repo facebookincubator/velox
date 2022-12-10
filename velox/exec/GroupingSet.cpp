@@ -61,15 +61,16 @@ GroupingSet::GroupingSet(
       constantLists_(std::move(constantLists)),
       intermediateTypes_(std::move(intermediateTypes)),
       ignoreNullKeys_(ignoreNullKeys),
-      mappedMemory_(operatorCtx->mappedMemory()),
       spillMemoryThreshold_(operatorCtx->driverCtx()
                                 ->queryConfig()
                                 .aggregationSpillMemoryThreshold()),
       spillConfig_(spillConfig),
-      stringAllocator_(mappedMemory_),
-      rows_(mappedMemory_),
-      isAdaptive_(
-          operatorCtx->task()->queryCtx()->config().hashAdaptivityEnabled()),
+      stringAllocator_(operatorCtx->pool()),
+      rows_(operatorCtx->pool()),
+      isAdaptive_(operatorCtx->task()
+                      ->queryCtx()
+                      ->queryConfig()
+                      .hashAdaptivityEnabled()),
       pool_(*operatorCtx->pool()) {
   for (auto& hasher : hashers_) {
     keyChannels_.push_back(hasher->channel());
@@ -249,10 +250,10 @@ void GroupingSet::addRemainingInput() {
 void GroupingSet::createHashTable() {
   if (ignoreNullKeys_) {
     table_ = HashTable<true>::createForAggregation(
-        std::move(hashers_), aggregates_, mappedMemory_);
+        std::move(hashers_), aggregates_, &pool_);
   } else {
     table_ = HashTable<false>::createForAggregation(
-        std::move(hashers_), aggregates_, mappedMemory_);
+        std::move(hashers_), aggregates_, &pool_);
   }
   lookup_ = std::make_unique<HashLookup>(table_->hashers());
   if (!isAdaptive_ && table_->hashMode() != BaseHashTable::HashMode::kHash) {
@@ -504,7 +505,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  auto tracker = mappedMemory_->tracker();
+  auto tracker = pool_.getMemoryUsageTracker();
   const auto currentUsage = tracker->getCurrentUserBytes();
   if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
     const int64_t bytesToSpill =
@@ -561,7 +562,7 @@ void GroupingSet::spill(int64_t targetRows, int64_t targetBytes) {
     for (auto i = 0; i < types.size(); ++i) {
       names.push_back(fmt::format("s{}", i));
     }
-    VELOX_DCHECK(mappedMemory_->tracker() != nullptr);
+    VELOX_DCHECK(pool_.getMemoryUsageTracker() != nullptr);
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kAggregate,
         rows,
@@ -599,7 +600,7 @@ bool GroupingSet::getOutputWithSpill(
         false,
         false,
         false,
-        mappedMemory_,
+        &pool_,
         ContainerRowSerde::instance());
     // Take ownership of the rows and free the hash table. The table will not be
     // needed for producing spill output.
