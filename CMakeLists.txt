@@ -342,7 +342,10 @@ resolve_dependency(folly)
 # If we use BUNDLED boost we need to set this manually AFTER folly is configured
 if(NOT DEFINED ${Boost_LIBRARIES})
   set(Boost_LIBRARIES ${BOOST_INCLUDE_LIBRARIES})
+  set(BoostCC_LIBRARIES ${BOOST_INCLUDE_LIBRARIES})
   list(TRANSFORM Boost_LIBRARIES PREPEND boost_)
+  list(TRANSFORM BoostCC_LIBRARIES PREPEND Boost::)
+  list(APPEND Boost_LIBRARIES ${BoostCC_LIBRARIES})
 endif()
 
 set(FOLLY_WITH_DEPENDENCIES
