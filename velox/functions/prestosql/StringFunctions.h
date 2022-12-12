@@ -126,7 +126,7 @@ struct HmacSha1Function {
   template <typename TOuput, typename TInput>
   FOLLY_ALWAYS_INLINE void
   call(TOuput& result, const TInput& data, const TInput& key) {
-    return stringImpl::HmacSha1(result, key, data);
+    stringImpl::HmacSha1(result, key, data);
   }
 };
 
