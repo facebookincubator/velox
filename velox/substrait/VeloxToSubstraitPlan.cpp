@@ -151,9 +151,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     ::substrait::FilterRel* filterRel) {
   const auto& source = getSingleSource(filterNode);
 
-  ::substrait::Rel* filterInput = filterRel->mutable_input();
-
-  toSubstrait(arena, source, filterInput);
+  toSubstrait(arena, source, filterRel->mutable_input());
 
   // Construct substrait expr(Filter condition).
   auto filterCondition = filterNode->filter();
@@ -212,8 +210,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   const auto& source = getSingleSource(projectNode);
 
   // Process the source Node.
-  ::substrait::Rel* projectRelInput = projectRel->mutable_input();
-  toSubstrait(arena, source, projectRelInput);
+  toSubstrait(arena, source, projectRel->mutable_input());
 
   // Remap the output.
   ::substrait::RelCommon_Emit* projRelEmit =
