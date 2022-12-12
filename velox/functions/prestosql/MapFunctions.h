@@ -36,15 +36,16 @@ struct MapFromEntriesFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Map<K, V>>& out,
       const arg_type<Array<Row<K, V>>>& inputArray) {
-    // Do not accept any nulls from the input array
-    VELOX_USER_CHECK(!inputArray.mayHaveNulls(), "map entry cannot be null");
-
     folly::F14FastSet<arg_type<K>> uniqueSet;
     for (const auto& tuple : inputArray) {
+      // 1. Do not accept null for any map entry
+      // NOTE: Do not use inputArray.mayHaveNulls() here because it will
+      // return false in simplyEval path (all initial nulls will be removed)
+      VELOX_USER_CHECK(tuple.has_value(), "map entry cannot be null");
       const auto& key = tuple.value().template at<0>();
-      // 1. Do not accept null for any map key, but accept a null map value
+      // 2. Do not accept null for any map key, but accept a null map value
       VELOX_USER_CHECK(key.has_value(), "map key cannot be null");
-      // 2. Do not accept duplicate keys
+      // 3. Do not accept duplicate keys
       VELOX_USER_CHECK(
           uniqueSet.insert(*key).second,
           fmt::format(
@@ -56,7 +57,7 @@ struct MapFromEntriesFunction {
     return;
   }
 
-  // TODO: turn this function as a member function of `MapWriter` class
+  // TODO: move this function to `MapWriter` class
   void emplace(
       out_type<Map<K, V>>& out,
       const exec::OptionalAccessor<K>& key,
