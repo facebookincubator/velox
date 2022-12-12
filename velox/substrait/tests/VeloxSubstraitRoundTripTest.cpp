@@ -287,7 +287,7 @@ TEST_F(VeloxSubstraitRoundTripTest, ifThen) {
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, orderBySingleKey) {
-  auto vectors = makeVectors(3, 4, 2);
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder()
                   .values(vectors)
@@ -297,7 +297,7 @@ TEST_F(VeloxSubstraitRoundTripTest, orderBySingleKey) {
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, orderBy) {
-  auto vectors = makeVectors(3, 4, 2);
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder()
                   .values(vectors)
@@ -308,39 +308,39 @@ TEST_F(VeloxSubstraitRoundTripTest, orderBy) {
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, orderByPartial) {
-  auto vectors = makeVectors(3, 4, 2);
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder()
                   .values(vectors)
-                  .orderBy({"c0 ASC NULLS FIRST", "c1 ASC NULLS LAST"}, true)
+                  .orderBy({"c0 DESC NULLS FIRST", "c1 ASC NULLS LAST"}, true)
                   .planNode();
   assertPlanConversion(
-      plan, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST, c1 NULLS LAST");
+      plan, "SELECT * FROM tmp ORDER BY c0 DESC NULLS FIRST, c1 NULLS LAST");
 }
 
-TEST_F(VeloxSubstraitRoundTripTest, Limit) {
-  auto vectors = makeVectors(3, 4, 2);
+TEST_F(VeloxSubstraitRoundTripTest, limit) {
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder().values(vectors).limit(0, 10, false).planNode();
   assertPlanConversion(plan, "SELECT * FROM tmp LIMIT 10");
 }
 
-TEST_F(VeloxSubstraitRoundTripTest, LimitPartial) {
-  auto vectors = makeVectors(3, 4, 2);
+TEST_F(VeloxSubstraitRoundTripTest, limitPartial) {
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder().values(vectors).limit(0, 10, true).planNode();
   assertPlanConversion(plan, "SELECT * FROM tmp LIMIT 10");
 }
 
-TEST_F(VeloxSubstraitRoundTripTest, LimitOffest) {
-  auto vectors = makeVectors(3, 4, 2);
+TEST_F(VeloxSubstraitRoundTripTest, limitOffest) {
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder().values(vectors).limit(5, 10, false).planNode();
   assertPlanConversion(plan, "SELECT * FROM tmp OFFSET 5 LIMIT 10");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, topN) {
-  auto vectors = makeVectors(3, 4, 2);
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder()
                   .values(vectors)
@@ -351,30 +351,31 @@ TEST_F(VeloxSubstraitRoundTripTest, topN) {
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, topNPartial) {
-  auto vectors = makeVectors(3, 4, 2);
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder()
                   .values(vectors)
-                  .topN({"c0 NULLS FIRST"}, 10, true)
+                  .topN({"c0 NULLS LAST"}, 10, true)
                   .planNode();
   assertPlanConversion(
-      plan, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST LIMIT 10");
+      plan, "SELECT * FROM tmp ORDER BY c0 NULLS LAST LIMIT 10");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, topNFilter) {
-  auto vectors = makeVectors(3, 4, 2);
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder()
                   .values(vectors)
                   .filter("c0 > 15")
-                  .topN({"c0 NULLS FIRST"}, 10, true)
+                  .topN({"c0 DESC NULLS FIRST"}, 10, true)
                   .planNode();
   assertPlanConversion(
-      plan, "SELECT * FROM tmp WHERE c0 > 15 ORDER BY c0 NULLS FIRST LIMIT 10");
+      plan,
+      "SELECT * FROM tmp WHERE c0 > 15 ORDER BY c0 DESC NULLS FIRST LIMIT 10");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, topNTwoKeys) {
-  auto vectors = makeVectors(3, 4, 2);
+  auto vectors = makeVectors(10, 4, 2);
   createDuckDbTable(vectors);
   auto plan = PlanBuilder()
                   .values(vectors)

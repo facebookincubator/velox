@@ -194,10 +194,6 @@ message FetchRel {
   int64 offset = 3;
   // the amount of records to return
   int64 count = 4;
-  // A Boolean indicating whether the node generates partial
-  // results on local workers or finalizes the partial results.
-  bool is_partial = 5;
-
   substrait.extensions.AdvancedExtension advanced_extension = 10;
 }
 
@@ -236,10 +232,6 @@ message SortRel {
   RelCommon common = 1;
   Rel input = 2;
   repeated SortField sorts = 3;
-
-  // True if this node only sorts a portion of the final result. If it is true,
-  // a local merge or merge exchange is required to merge the sorted runs.
-  bool is_partial = 4;
   substrait.extensions.AdvancedExtension advanced_extension = 10;
 }
 

@@ -61,7 +61,8 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::ReadRel& readRel,
       std::shared_ptr<SplitInfo>& splitInfo);
 
-  /// Convert Substrait FetchRel into Velox LimitNode.
+  /// Convert Substrait FetchRel into Velox LimitNode or TopNNode according the
+  /// different input of fetchRel.
   core::PlanNodePtr toVeloxPlan(const ::substrait::FetchRel& fetchRel);
 
   /// Convert Substrait ReadRel into Velox Values Node.
@@ -75,7 +76,7 @@ class SubstraitVeloxPlanConverter {
   /// Convert Substrait RelRoot into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::RelRoot& root);
 
-  /// Convert Substrait SortRel into Velox PlanNode.
+  /// Convert Substrait SortRel into Velox OrderByNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::SortRel& sortRel);
 
   /// Convert Substrait Plan into Velox PlanNode.
@@ -131,7 +132,8 @@ class SubstraitVeloxPlanConverter {
   std::shared_ptr<SubstraitParser> substraitParser_{
       std::make_shared<SubstraitParser>()};
 
-  /// Helper Function to convert Substrait SortField.
+  /// Helper Function to convert Substrait sortField to Velox sortingKeys and
+  /// sortingOrders.
   std::pair<
       std::vector<core::FieldAccessTypedExprPtr>,
       std::vector<core::SortOrder>>
@@ -157,6 +159,13 @@ class SubstraitVeloxPlanConverter {
 
   /// Memory pool.
   memory::MemoryPool* pool_;
+
+  /// Helper function to convert the input of Substrait Rel to Velox Node.
+  template <typename T>
+  core::PlanNodePtr convertSingleInput(T rel) {
+    VELOX_CHECK(rel.has_input(), "Child Rel is expected here.");
+    return toVeloxPlan(rel.input());
+  }
 };
 
 } // namespace facebook::velox::substrait

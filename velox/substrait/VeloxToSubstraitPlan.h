@@ -85,7 +85,8 @@ class VeloxToSubstraitPlanConvertor {
       const std::shared_ptr<const core::TopNNode>& topNNode,
       ::substrait::FetchRel* fetchRel);
 
-  /// Helper function to process sortingKeys and sortingOrders.
+  /// Helper function to process sortingKeys and sortingOrders in Velox to
+  /// convert them to the sortField of SortRel in Substrait.
   const ::substrait::SortRel& processSortFields(
       google::protobuf::Arena& arena,
       const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys,
@@ -97,6 +98,9 @@ class VeloxToSubstraitPlanConvertor {
       google::protobuf::Arena& arena,
       const std::shared_ptr<const core::LimitNode>& limitNode,
       ::substrait::FetchRel* fetchRel);
+
+  /// Check there only have one source for the velox node and return it.
+  const core::PlanNodePtr& getSingleSource(const core::PlanNodePtr& node);
 
   /// The Expression converter used to convert Velox representations into
   /// Substrait expressions.

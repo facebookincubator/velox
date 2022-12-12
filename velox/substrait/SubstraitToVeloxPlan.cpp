@@ -64,12 +64,7 @@ core::SortOrder toSortOrder(const ::substrait::SortField& sortField) {
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::AggregateRel& aggRel) {
-  core::PlanNodePtr childNode;
-  if (aggRel.has_input()) {
-    childNode = toVeloxPlan(aggRel.input());
-  } else {
-    VELOX_FAIL("Child Rel is expected in AggregateRel.");
-  }
+  auto childNode = convertSingleInput<::substrait::AggregateRel>(aggRel);
   core::AggregationNode::Step aggStep = toAggregationStep(aggRel);
   const auto& inputType = childNode->outputType();
   std::vector<core::FieldAccessTypedExprPtr> veloxGroupingExprs;
@@ -148,12 +143,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ProjectRel& projectRel) {
-  core::PlanNodePtr childNode;
-  if (projectRel.has_input()) {
-    childNode = toVeloxPlan(projectRel.input());
-  } else {
-    VELOX_FAIL("Child Rel is expected in ProjectRel.");
-  }
+  auto childNode = convertSingleInput<::substrait::ProjectRel>(projectRel);
 
   // Construct Velox Expressions.
   auto projectExprs = projectRel.expressions();
@@ -180,12 +170,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::SortRel& sortRel) {
-  core::PlanNodePtr childNode;
-  if (sortRel.has_input()) {
-    childNode = toVeloxPlan(sortRel.input());
-  } else {
-    VELOX_FAIL("Child Rel is expected in SortRel.");
-  }
+  auto childNode = convertSingleInput<::substrait::SortRel>(sortRel);
 
   auto [sortingKeys, sortingOrders] =
       processSortField(sortRel.sorts(), childNode->outputType());
@@ -194,7 +179,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       nextPlanNodeId(),
       sortingKeys,
       sortingOrders,
-      sortRel.is_partial(),
+      false /*isPartial*/,
       childNode);
 }
 
@@ -215,15 +200,12 @@ SubstraitVeloxPlanConverter::processSortField(
 
     if (sort.has_expr()) {
       auto expression = exprConverter_->toVeloxExpr(sort.expr(), inputType);
-      auto expr_field =
-          dynamic_cast<const core::FieldAccessTypedExpr*>(expression.get());
-      VELOX_CHECK(
-          expr_field != nullptr,
-          " the sorting key in Sort Operator only support field")
-
-      sortingKeys.emplace_back(
+      auto fieldExpr =
           std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
-              expression));
+              expression);
+      VELOX_CHECK_NOT_NULL(
+          fieldExpr, " the sorting key in Sort Operator only support field");
+      sortingKeys.emplace_back(fieldExpr);
     }
   }
   return {sortingKeys, sortingOrders};
@@ -231,13 +213,7 @@ SubstraitVeloxPlanConverter::processSortField(
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::FilterRel& filterRel) {
-  core::PlanNodePtr childNode;
-  if (filterRel.has_input()) {
-    childNode = toVeloxPlan(filterRel.input());
-  } else {
-    VELOX_FAIL("Child Rel is expected in FilterRel.");
-  }
-
+  auto childNode = convertSingleInput<::substrait::FilterRel>(filterRel);
   const auto& inputType = childNode->outputType();
   const auto& sExpr = filterRel.condition();
 
@@ -270,17 +246,14 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     auto [sortingKeys, sortingOrders] =
         processSortField(sortRel.sorts(), childNode->outputType());
 
-    VELOX_CHECK_EQ(
-        sortRel.is_partial(),
-        fetchRel.is_partial(),
-        "The isPartial flag should be the same since they are for the same TopN Node.");
+    VELOX_CHECK_EQ(fetchRel.offset(), 0);
 
     return std::make_shared<core::TopNNode>(
         nextPlanNodeId(),
         sortingKeys,
         sortingOrders,
-        fetchRel.count(),
-        sortRel.is_partial(),
+        (int32_t)fetchRel.count(),
+        false /*isPartial*/,
         childNode);
 
   } else {
@@ -288,7 +261,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         nextPlanNodeId(),
         (int32_t)fetchRel.offset(),
         (int32_t)fetchRel.count(),
-        fetchRel.is_partial() /*isPartial*/,
+        false /*isPartial*/,
         childNode);
   }
 }
