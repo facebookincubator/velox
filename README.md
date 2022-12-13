@@ -99,7 +99,7 @@ You can also produce intel binaries on an M1, use `CPU_TARGET="sse"` for the abo
 
 ### Setting up on aarch64 Linux (Ubuntu 20.04 or later)
 
-On an AWS Graviton2/3 (aarch64) based machine, you can build like so:
+On an aarch64 based machine, you can build like so:
 
 ```shell
 $ CPU_TARGET="aarch64" ./scripts/setup-ubuntu.sh
