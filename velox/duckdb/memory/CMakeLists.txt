@@ -14,7 +14,8 @@
 
 add_library(velox_duckdb_allocator Allocator.cpp)
 
-target_link_libraries(velox_duckdb_allocator velox_dwio_common duckdb ${FMT} ${FOLLY_WITH_DEPENDENCIES})
+target_link_libraries(velox_duckdb_allocator velox_dwio_common duckdb ${FMT}
+                      ${FOLLY_WITH_DEPENDENCIES})
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
   target_link_libraries(velox_duckdb_allocator gtest)

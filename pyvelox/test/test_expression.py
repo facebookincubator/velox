@@ -37,4 +37,3 @@ class TestVeloxExpression(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             d = pv.from_list(["hi", "bye", "hello", "goodbye"])
             expr.evaluate(["a", "b"], [a, d])
-
