@@ -194,6 +194,14 @@ class MemoryAllocatorImpl : public MemoryAllocator {
   void* allocateBytes(uint64_t bytes, uint16_t alignment, uint64_t /*unused*/)
       override;
 
+  void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override;
+
+  void* reallocateBytes(
+      void* p,
+      int64_t size,
+      int64_t newSize,
+      uint16_t alignment) override;
+
   void freeBytes(void* p, uint64_t bytes, uint64_t /*unused*/) noexcept
       override;
 
@@ -266,8 +274,9 @@ void* MemoryAllocatorImpl::allocateBytes(
     uint16_t alignment,
     uint64_t /*unused*/) {
   alignmentCheck(bytes, alignment);
-  auto* result =
-      alignment != 0 ? ::aligned_alloc(alignment, bytes) : ::malloc(bytes);
+  auto* result = (alignment > MemoryAllocator::kMinAlignment)
+      ? ::aligned_alloc(alignment, bytes)
+      : ::malloc(bytes);
   if (result != nullptr) {
     totalSmallAllocateBytes_ += bytes;
   } else {
@@ -275,6 +284,40 @@ void* MemoryAllocatorImpl::allocateBytes(
                << " alignment and " << bytes << " bytes";
   }
   return result;
+}
+
+void* MemoryAllocatorImpl::allocateZeroFilled(
+    int64_t numEntries,
+    int64_t sizeEach) {
+  void* result = std::calloc(numEntries, sizeEach);
+  if (result != nullptr) {
+    totalSmallAllocateBytes_ += numEntries * sizeEach;
+  }
+  return result;
+}
+
+void* MemoryAllocatorImpl::reallocateBytes(
+    void* p,
+    int64_t size,
+    int64_t newSize,
+    uint16_t alignment) {
+  VELOX_CHECK_GT(newSize, 0);
+  void* ptr{nullptr};
+  if (alignment <= MemoryAllocator::kMinAlignment) {
+    ptr = std::realloc(p, newSize);
+    if (ptr != nullptr) {
+      totalSmallAllocateBytes_ += newSize - size;
+      VELOX_CHECK_GE(totalSmallAllocateBytes_, 0);
+    }
+  } else {
+    ptr = std::aligned_alloc(alignment, newSize);
+    if (ptr != nullptr) {
+      ::memcpy(ptr, p, std::min(size, newSize));
+      freeBytes(p, size, kMaxMallocBytes);
+      totalSmallAllocateBytes_ += newSize;
+    }
+  }
+  return ptr;
 }
 
 void MemoryAllocatorImpl::freeBytes(
@@ -519,28 +562,6 @@ MachinePageCount MemoryAllocator::roundUpToSizeClassSize(
 
 std::string MemoryAllocator::toString() const {
   return fmt::format("MemoryAllocator: Allocated pages {}", numAllocated());
-}
-
-void* MemoryAllocator::allocateZeroFilled(uint64_t bytes, uint64_t alignment) {
-  auto* result = allocateBytes(bytes, alignment);
-  if (result != nullptr) {
-    ::memset(result, 0, bytes);
-  }
-  return result;
-}
-
-void* FOLLY_NULLABLE MemoryAllocator::reallocateBytes(
-    void* FOLLY_NULLABLE p,
-    int64_t size,
-    int64_t newSize,
-    uint16_t alignment) {
-  auto* newAlloc = allocateBytes(newSize, alignment);
-  if (p == nullptr || newAlloc == nullptr) {
-    return newAlloc;
-  }
-  ::memcpy(newAlloc, p, std::min(size, newSize));
-  freeBytes(p, size);
-  return newAlloc;
 }
 
 Stats Stats::operator-(const Stats& other) const {

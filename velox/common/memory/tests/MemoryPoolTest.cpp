@@ -522,7 +522,6 @@ TEST_P(MemoryPoolTest, allocateZeroFilled) {
       SCOPED_TRACE(
           fmt::format("numEntries{}, sizeEach{}", numEntries, sizeEach));
       void* ptr = pool->allocateZeroFilled(numEntries, sizeEach);
-      ASSERT_EQ(reinterpret_cast<uint64_t>(ptr) % pool->alignment(), 0);
       allocationPtrs.push_back(ptr);
       allocationSizes.push_back(numEntries * sizeEach);
     }

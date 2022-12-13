@@ -66,7 +66,7 @@ class MockMemoryPool : public velox::memory::MemoryPool {
 
   void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override {
     updateLocalMemoryUsage(numEntries * sizeEach);
-    return allocator_->allocateZeroFilled(numEntries * sizeEach);
+    return allocator_->allocateZeroFilled(numEntries, sizeEach);
   }
 
   // No-op for attempts to shrink buffer.

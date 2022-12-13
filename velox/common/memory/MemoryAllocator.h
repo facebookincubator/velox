@@ -427,7 +427,7 @@ class MemoryAllocator : std::enable_shared_from_this<MemoryAllocator> {
   /// NOTE: if not zero, 'alignment' must be power of two and in range of
   /// [kMinAlignment, kMaxAlignment].
   virtual void* FOLLY_NULLABLE
-  allocateZeroFilled(uint64_t bytes, uint64_t alignment = 0);
+  allocateZeroFilled(int64_t numEntries, int64_t sizeEach) = 0;
 
   /// Allocates 'newSize' contiguous bytes. If 'p' is not null, this function
   /// copies std::min(size, newSize) bytes from 'p' to the newly allocated
@@ -439,7 +439,7 @@ class MemoryAllocator : std::enable_shared_from_this<MemoryAllocator> {
       void* FOLLY_NULLABLE p,
       int64_t size,
       int64_t newSize,
-      uint16_t alignment = 0);
+      uint16_t alignment = 0) = 0;
 
   /// Frees contiguous memory allocated by allocateBytes, allocateZeroFilled,
   /// reallocateBytes.

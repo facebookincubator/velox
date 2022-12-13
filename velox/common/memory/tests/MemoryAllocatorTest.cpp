@@ -48,6 +48,18 @@ class MockMemoryAllocator final : public MemoryAllocator {
     return allocator_->allocateBytes(bytes, alignment, maxMallocSize);
   }
 
+  void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override {
+    return allocator_->allocateZeroFilled(numEntries, sizeEach);
+  }
+
+  void* reallocateBytes(
+      void* p,
+      int64_t size,
+      int64_t newSize,
+      uint16_t alignment) override {
+    return allocator_->reallocateBytes(p, size, newSize, alignment);
+  }
+
   void freeBytes(
       void* FOLLY_NONNULL p,
       uint64_t size,

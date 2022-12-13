@@ -71,6 +71,15 @@ class MmapAllocator : public MemoryAllocator {
       uint16_t alignment,
       uint64_t maxMallocSize) override;
 
+  void* FOLLY_NULLABLE
+  allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override;
+
+  void* FOLLY_NULLABLE reallocateBytes(
+      void* FOLLY_NULLABLE p,
+      int64_t size,
+      int64_t newSize,
+      uint16_t alignment) override;
+
   void freeBytes(
       void* FOLLY_NONNULL p,
       uint64_t size,

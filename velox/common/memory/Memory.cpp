@@ -164,7 +164,7 @@ void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   }
   const auto alignedSize = sizeAlign(sizeEach * numEntries);
   reserve(alignedSize);
-  return allocator_.allocateZeroFilled(alignedSize, alignment_);
+  return allocator_.allocateZeroFilled(1, alignedSize);
 }
 
 void* MemoryPoolImpl::reallocate(

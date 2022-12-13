@@ -619,6 +619,18 @@ bool AsyncDataCache::allocateNonContiguous(
   });
 }
 
+void* AsyncDataCache::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
+  return allocator_->allocateZeroFilled(numEntries, sizeEach);
+}
+
+void* AsyncDataCache::reallocateBytes(
+    void* p,
+    int64_t size,
+    int64_t newSize,
+    uint16_t alignment) {
+  return allocator_->reallocateBytes(p, size, newSize, alignment);
+}
+
 bool AsyncDataCache::allocateContiguous(
     MachinePageCount numPages,
     Allocation* collateral,

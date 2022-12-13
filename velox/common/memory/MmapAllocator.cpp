@@ -88,6 +88,28 @@ void* FOLLY_NULLABLE MmapAllocator::allocateBytes(
   return nullptr;
 }
 
+void* MmapAllocator::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
+  auto* result = allocateBytes(numEntries * sizeEach, 0, kMaxMallocBytes);
+  if (result != nullptr) {
+    ::memset(result, 0, numEntries * sizeEach);
+  }
+  return result;
+}
+
+void* MmapAllocator::reallocateBytes(
+    void* p,
+    int64_t size,
+    int64_t newSize,
+    uint16_t alignment) {
+  auto* newAlloc = allocateBytes(newSize, alignment, kMaxMallocBytes);
+  if (p == nullptr || newAlloc == nullptr) {
+    return newAlloc;
+  }
+  ::memcpy(newAlloc, p, std::min(size, newSize));
+  freeBytes(p, size);
+  return newAlloc;
+}
+
 void MmapAllocator::freeBytes(
     void* p,
     uint64_t bytes,
