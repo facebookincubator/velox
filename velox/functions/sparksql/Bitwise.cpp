@@ -37,6 +37,14 @@ template <typename T>
 struct ShiftLeftFunction {
   template <typename TInput1, typename TInput2>
   FOLLY_ALWAYS_INLINE void call(TInput1& result, TInput1 a, TInput2 b) {
+    if constexpr (std::is_same_v<TInput1, int32_t>) {
+      if (b >= 32)
+        b = b % 32;
+    }
+    if constexpr (std::is_same_v<TInput1, int64_t>) {
+      if (b >= 64)
+        b = b % 64;
+    }
     result = a << b;
   }
 };
@@ -45,6 +53,14 @@ template <typename T>
 struct ShiftRightFunction {
   template <typename TInput1, typename TInput2>
   FOLLY_ALWAYS_INLINE void call(TInput1& result, TInput1 a, TInput2 b) {
+    if constexpr (std::is_same_v<TInput1, int32_t>) {
+      if (b >= 32)
+        b = b % 32;
+    }
+    if constexpr (std::is_same_v<TInput1, int64_t>) {
+      if (b >= 64)
+        b = b % 64;
+    }
     result = a >> b;
   }
 };
@@ -52,18 +68,16 @@ struct ShiftRightFunction {
 void registerBitwiseFunctions(const std::string& prefix) {
   registerBinaryIntegral<BitwiseAndFunction>({prefix + "bitwise_and"});
   registerBinaryIntegral<BitwiseOrFunction>({prefix + "bitwise_or"});
-  registerBinaryIntegral<ShiftLeftFunction>({prefix + "shiftleft"});
-  registerBinaryIntegral<ShiftRightFunction>({prefix + "shiftright"});
 
- registerFunction<ShiftLeftFunction, int32_t, int32_t, int32_t>({prefix + "shiftleft"});
- registerFunction<ShiftLeftFunction, int32_t, int32_t, int64_t>({prefix + "shiftleft"});
- registerFunction<ShiftLeftFunction, int64_t, int64_t, int32_t>({prefix + "shiftleft"});
- registerFunction<ShiftLeftFunction, int64_t, int64_t, int64_t>({prefix + "shiftleft"});
+  registerFunction<ShiftLeftFunction, int32_t, int32_t, int32_t>(
+      {prefix + "shiftleft"});
+  registerFunction<ShiftLeftFunction, int64_t, int64_t, int32_t>(
+      {prefix + "shiftleft"});
 
- registerFunction<ShiftRightFunction, int32_t, int32_t, int32_t>({prefix + "shiftright"});
- registerFunction<ShiftRightFunction, int32_t, int32_t, int64_t>({prefix + "shiftright"});
- registerFunction<ShiftRightFunction, int64_t, int64_t, int32_t>({prefix + "shiftright"});
- registerFunction<ShiftRightFunction, int64_t, int64_t, int64_t>({prefix + "shiftright"});
+  registerFunction<ShiftRightFunction, int32_t, int32_t, int32_t>(
+      {prefix + "shiftright"});
+  registerFunction<ShiftRightFunction, int64_t, int64_t, int32_t>(
+      {prefix + "shiftright"});
 }
 
 } // namespace facebook::velox::functions::sparksql
