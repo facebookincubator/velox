@@ -14,6 +14,10 @@
 # limitations under the License.
 
 set -eu
+# TODO only activate conda if conda build and fix conda activation
+source /opt/miniconda-for-velox/etc/profile.d/conda.sh
+conda activate velox
+
 # Compilation and testing
 make
 cd _build/release && ctest -j${NUM_THREADS} -VV --output-on-failure

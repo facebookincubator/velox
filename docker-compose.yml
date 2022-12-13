@@ -32,6 +32,20 @@ services:
       - .:/velox:delegated
     command: scripts/docker-command.sh
 
+  conda-cpp:
+    # Usage:
+    #   docker-compose pull conda-cpp or docker-compose build conda-cpp
+    #   docker-compose run --rm conda-cpp
+    image: ghcr.io/facebookincubator/velox-dev-conda:amd64-ubuntu-22.04-avx
+    build:
+      context: .
+      dockerfile: scripts/conda-cpp.dockerfile
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM # Use conda dependencies
+    volumes:
+      - .:/velox:delegated
+    command: scripts/docker-command.sh
+
   centos-cpp:
     # Usage:
     #   docker-compose pull centos-cpp or docker-compose build centos-cpp
