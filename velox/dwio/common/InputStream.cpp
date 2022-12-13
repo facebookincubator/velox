@@ -137,13 +137,12 @@ void FileInputStream::read(
   }
 }
 
-static constexpr char kReadFilePath[] = "ReadFileFakePath";
-
 ReadFileInputStream::ReadFileInputStream(
-    velox::ReadFile* readFile,
+    std::shared_ptr<velox::ReadFile> readFile,
     const MetricsLogPtr& metricsLog,
     IoStatistics* stats)
-    : InputStream(kReadFilePath, metricsLog, stats), readFile_(readFile) {}
+    : InputStream(readFile->getName(), metricsLog, stats),
+      readFile_(std::move(readFile)) {}
 
 void ReadFileInputStream::read(
     void* buf,

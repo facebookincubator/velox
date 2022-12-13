@@ -78,7 +78,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
             buildType->childAt(channel), channel));
       }
       auto table = HashTable<true>::createForJoin(
-          std::move(keyHashers), dependentTypes, true, false, mappedMemory_);
+          std::move(keyHashers), dependentTypes, true, false, pool_.get());
 
       makeRows(size, 1, sequence, buildType, batches);
       copyVectorsToTable(batches, startOffset, table.get());
@@ -104,9 +104,12 @@ class HashTableTest : public testing::TestWithParam<bool> {
 
   // Inserts and deletes rows in a HashTable, similarly to a group by
   // that periodically spills a fraction of the groups.
-  void testGroupBySpill(int32_t size, TypePtr tableType, int32_t numKeys) {
-    constexpr int32_t kBatchSize = 1000;
-    constexpr int32_t kNumErasePerRound = 500;
+  void testGroupBySpill(
+      int32_t size,
+      TypePtr tableType,
+      int32_t numKeys,
+      int32_t batchSize = 1000,
+      int32_t eraseSize = 500) {
     int32_t sequence = 0;
     std::vector<RowVectorPtr> batches;
     auto table = createHashTableForAggregation(tableType, numKeys);
@@ -114,17 +117,16 @@ class HashTableTest : public testing::TestWithParam<bool> {
     std::vector<char*> allInserted;
     int32_t numErased = 0;
     // We insert 1000 and delete 500.
-    for (auto round = 0; round < size; round += kBatchSize) {
-      makeRows(kBatchSize, 1, sequence, tableType, batches);
-      sequence += kBatchSize;
-      lookup->reset(kBatchSize);
+    for (auto round = 0; round < size; round += batchSize) {
+      makeRows(batchSize, 1, sequence, tableType, batches);
+      sequence += batchSize;
+      lookup->reset(batchSize);
       insertGroups(*batches.back(), *lookup, *table);
       allInserted.insert(
           allInserted.end(), lookup->hits.begin(), lookup->hits.end());
 
-      table->erase(
-          folly::Range<char**>(&allInserted[numErased], kNumErasePerRound));
-      numErased += kNumErasePerRound;
+      table->erase(folly::Range<char**>(&allInserted[numErased], eraseSize));
+      numErased += eraseSize;
     }
     int32_t batchStart = 0;
     // We loop over the keys one more time. The first half will be all
@@ -132,14 +134,13 @@ class HashTableTest : public testing::TestWithParam<bool> {
     int32_t row = 0;
     for (auto i = 0; i < batches.size(); ++i) {
       insertGroups(*batches[0], *lookup, *table);
-      for (; row < batchStart + kBatchSize; ++row) {
-        if (row < numErased) {
-          ASSERT_NE(lookup->hits[row - batchStart], allInserted[row]);
-        } else {
+      for (; row < batchStart + batchSize; ++row) {
+        if (row >= numErased) {
           ASSERT_EQ(lookup->hits[row - batchStart], allInserted[row]);
         }
       }
     }
+    table->checkConsistency();
   }
 
   std::unique_ptr<HashTable<false>> createHashTableForAggregation(
@@ -152,7 +153,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
     }
     static std::vector<std::unique_ptr<Aggregate>> empty;
     return HashTable<false>::createForAggregation(
-        std::move(keyHashers), empty, mappedMemory_);
+        std::move(keyHashers), empty, pool_.get());
   }
 
   void insertGroups(
@@ -435,7 +436,6 @@ class HashTableTest : public testing::TestWithParam<bool> {
   }
 
   std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
-  memory::MappedMemory* mappedMemory_{memory::MappedMemory::getInstance()};
   std::unique_ptr<test::VectorMaker> vectorMaker_{
       std::make_unique<test::VectorMaker>(pool_.get())};
   // Bitmap of positions in batches_ that end up in the table.
@@ -517,7 +517,7 @@ TEST_P(HashTableTest, clear) {
       std::vector<TypePtr>{BIGINT()},
       BIGINT()));
   auto table = HashTable<true>::createForAggregation(
-      std::move(keyHashers), aggregates, mappedMemory_);
+      std::move(keyHashers), aggregates, pool_.get());
   table->clear();
 }
 
@@ -583,7 +583,7 @@ TEST_P(HashTableTest, arrayProbeNormalizedKey) {
     insertGroups(*data, rows, *lookup, *table);
   }
 
-  ASSERT_TRUE(table->hashMode() == BaseHashTable::HashMode::kNormalizedKey);
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
 }
 
 TEST_P(HashTableTest, regularHashingTableSize) {
@@ -596,7 +596,7 @@ TEST_P(HashTableTest, regularHashingTableSize) {
           std::make_unique<VectorHasher>(type->childAt(channel), channel));
     }
     auto table = HashTable<true>::createForJoin(
-        std::move(keyHashers), {}, true, false, mappedMemory_);
+        std::move(keyHashers), {}, true, false, pool_.get());
     std::vector<RowVectorPtr> batches;
     makeRows(1 << 12, 1, 0, type, batches);
     copyVectorsToTable(batches, 0, table.get());
@@ -614,7 +614,54 @@ TEST_P(HashTableTest, regularHashingTableSize) {
   }
 }
 
+TEST_P(HashTableTest, groupBySpill) {
+  auto type = ROW({"k1"}, {BIGINT()});
+  testGroupBySpill(5'000'000, type, 1, 1000, 1000);
+}
+
+TEST_P(HashTableTest, checkSizeValidation) {
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto table = createHashTableForAggregation(rowType, 1);
+  auto lookup = std::make_unique<HashLookup>(table->hashers());
+
+  // The initial set hash mode with table size of 256K entries.
+  table->testingSetHashMode(BaseHashTable::HashMode::kHash, 131'072);
+  ASSERT_EQ(table->capacity(), 256 << 10);
+
+  auto vector1 = vectorMaker_->rowVector({vectorMaker_->flatVector<int64_t>(
+      131'072, [&](auto row) { return row; })});
+  // The first insertion of 128KB distinct entries.
+  insertGroups(*vector1, *lookup, *table);
+  ASSERT_EQ(table->capacity(), 256 << 10);
+
+  auto vector2 = vectorMaker_->rowVector({vectorMaker_->flatVector<int64_t>(
+      131'072, [&](auto row) { return 131'072 + row; })});
+  // The second insertion of 128KB distinct entries triggers the table resizing.
+  // And we expect the table size bumps up to 512KB.
+  insertGroups(*vector2, *lookup, *table);
+  ASSERT_EQ(table->capacity(), 512 << 10);
+
+  auto vector3 = vectorMaker_->rowVector(
+      {vectorMaker_->flatVector<int64_t>(1, [&](auto row) { return row; })});
+  // The last insertion triggers the check size which see the table size matches
+  // the number of distinct entries that it stores.
+  insertGroups(*vector3, *lookup, *table);
+  ASSERT_EQ(table->capacity(), 512 << 10);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     HashTableTests,
     HashTableTest,
     testing::Values(true, false));
+
+TEST(HashTableTest, modeString) {
+  ASSERT_EQ("HASH", BaseHashTable::modeString(BaseHashTable::HashMode::kHash));
+  ASSERT_EQ(
+      "NORMALIZED_KEY",
+      BaseHashTable::modeString(BaseHashTable::HashMode::kNormalizedKey));
+  ASSERT_EQ(
+      "ARRAY", BaseHashTable::modeString(BaseHashTable::HashMode::kArray));
+  ASSERT_EQ(
+      "Unknown HashTable mode:100",
+      BaseHashTable::modeString(static_cast<BaseHashTable::HashMode>(100)));
+}

@@ -39,6 +39,12 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
     return evaluateOnce<bool>("json_array_contains(c0, c1)", json, value);
   }
 
+  std::optional<int64_t> json_size(
+      std::optional<std::string> json,
+      std::optional<std::string> path) {
+    return evaluateOnce<int64_t>("json_size(c0, c1)", json, path);
+  }
+
   static std::unordered_set<std::string> getSignatureStrings(
       const std::string& functionName) {
     auto allSignatures = getFunctionSignatures();
@@ -51,6 +57,37 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
     return signatureStrings;
   }
 };
+
+TEST_F(JsonFunctionsTest, JsonFormat) {
+  const auto json_format = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string, std::string>(
+        "json_format(c0)", {value}, {JSON()});
+  };
+
+  EXPECT_EQ(json_format(R"(true)"), "true");
+  EXPECT_EQ(json_format(R"(null)"), "null");
+  EXPECT_EQ(json_format(R"(42)"), "42");
+  EXPECT_EQ(json_format(R"("abc")"), "\"abc\"");
+  EXPECT_EQ(json_format(R"([1, 2, 3])"), "[1, 2, 3]");
+  EXPECT_EQ(json_format(R"({"k1":"v1"})"), "{\"k1\":\"v1\"}");
+
+  // check keys and values are there
+  const std::string jsonStr = json_format(R"({"k1":"v1","k2":"v2"})").value();
+  folly::dynamic object = folly::parseJson(jsonStr);
+
+  std::set<std::string> keys{"k1", "k2"};
+
+  for (const auto& key : object.keys()) {
+    EXPECT_TRUE(keys.find(key.getString()) != keys.end());
+  }
+
+  std::unordered_map<std::string, std::string> jsonMap{
+      {"k1", "v1"}, {"k2", "v2"}};
+
+  for (const auto& key : jsonMap) {
+    EXPECT_EQ(object.at(key.first), jsonMap.at(key.first));
+  }
+}
 
 TEST_F(JsonFunctionsTest, isJsonScalarSignatures) {
   auto signatures = getSignatureStrings("is_json_scalar");
@@ -81,6 +118,13 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsSignatures) {
   ASSERT_EQ(1, signatures.count("(json,bigint) -> boolean"));
   ASSERT_EQ(1, signatures.count("(json,double) -> boolean"));
   ASSERT_EQ(1, signatures.count("(json,boolean) -> boolean"));
+}
+
+TEST_F(JsonFunctionsTest, jsonSizeSignatures) {
+  auto signatures = getSignatureStrings("json_size");
+  ASSERT_EQ(1, signatures.size());
+
+  ASSERT_EQ(1, signatures.count("(json,varchar) -> bigint"));
 }
 
 TEST_F(JsonFunctionsTest, isJsonScalar) {
@@ -292,6 +336,32 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsString) {
           R"(["the fox jumped over the fence", "hello presto world"])",
           "the fox jumped over the fence"),
       true);
+}
+
+TEST_F(JsonFunctionsTest, jsonSize) {
+  EXPECT_EQ(json_size(R"({"k1":{"k2": 999}, "k3": 1})", "$.k1.k2"), 0);
+  EXPECT_EQ(json_size(R"({"k1":{"k2": 999}, "k3": 1})", "$.k1"), 1);
+  EXPECT_EQ(json_size(R"({"k1":{"k2": 999}, "k3": 1})", "$"), 2);
+  EXPECT_EQ(json_size(R"({"k1":{"k2": 999}, "k3": 1})", "$.k3"), 0);
+  EXPECT_EQ(json_size(R"({"k1":{"k2": 999}, "k3": [1, 2, 3, 4]})", "$.k3"), 4);
+  EXPECT_EQ(json_size(R"({"k1":{"k2": 999}, "k3": 1})", "$.k4"), std::nullopt);
+  EXPECT_EQ(json_size(R"({"k1":{"k2": 999}, "k3"})", "$.k4"), std::nullopt);
+  EXPECT_EQ(json_size(R"({"k1":{"k2": 999}, "k3": true})", "$.k3"), 0);
+  EXPECT_EQ(json_size(R"({"k1":{"k2": 999}, "k3": null})", "$.k3"), 0);
+  EXPECT_EQ(
+      json_size(
+          R"({"k1":{"k2": 999, "k3": [{"k4": [1, 2, 3]}]}})", "$.k1.k3[0].k4"),
+      3);
+}
+
+TEST_F(JsonFunctionsTest, invalidPath) {
+  EXPECT_THROW(json_size(R"([0,1,2])", ""), VeloxUserError);
+  EXPECT_THROW(json_size(R"([0,1,2])", "$[]"), VeloxUserError);
+  EXPECT_THROW(json_size(R"([0,1,2])", "$[-1]"), VeloxUserError);
+  EXPECT_THROW(json_size(R"({"k1":"v1"})", "$k1"), VeloxUserError);
+  EXPECT_THROW(json_size(R"({"k1":"v1"})", "$.k1."), VeloxUserError);
+  EXPECT_THROW(json_size(R"({"k1":"v1"})", "$.k1]"), VeloxUserError);
+  EXPECT_THROW(json_size(R"({"k1":"v1)", "$.k1]"), VeloxUserError);
 }
 
 } // namespace

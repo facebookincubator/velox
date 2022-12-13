@@ -26,6 +26,33 @@
 
 namespace facebook::velox {
 
+std::string ReadFile::pread(uint64_t offset, uint64_t length) const {
+  std::string buf;
+  buf.resize(length);
+  auto res = pread(offset, length, buf.data());
+  buf.resize(res.size());
+  return buf;
+}
+
+uint64_t ReadFile::preadv(
+    uint64_t offset,
+    const std::vector<folly::Range<char*>>& buffers) const {
+  auto fileSize = size();
+  uint64_t numRead = 0;
+  if (offset >= fileSize) {
+    return 0;
+  }
+  for (auto& range : buffers) {
+    auto copySize = std::min<size_t>(range.size(), fileSize - offset);
+    if (range.data()) {
+      pread(offset, copySize, range.data());
+    }
+    offset += copySize;
+    numRead += copySize;
+  }
+  return numRead;
+}
+
 std::string_view
 InMemoryReadFile::pread(uint64_t offset, uint64_t length, void* buf) const {
   bytesRead_ += length;
@@ -38,24 +65,6 @@ std::string InMemoryReadFile::pread(uint64_t offset, uint64_t length) const {
   return std::string(file_.data() + offset, length);
 }
 
-uint64_t InMemoryReadFile::preadv(
-    uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers) const {
-  uint64_t numRead = 0;
-  if (offset >= file_.size()) {
-    return 0;
-  }
-  for (auto& range : buffers) {
-    auto copySize = std::min<size_t>(range.size(), file_.size() - offset);
-    if (range.data()) {
-      memcpy(range.data(), file_.data() + offset, copySize);
-    }
-    offset += copySize;
-    numRead += copySize;
-  }
-  return numRead;
-}
-
 void InMemoryWriteFile::append(std::string_view data) {
   file_->append(data);
 }
@@ -64,11 +73,8 @@ uint64_t InMemoryWriteFile::size() const {
   return file_->size();
 }
 
-LocalReadFile::LocalReadFile(std::string_view path) {
-  std::unique_ptr<char[]> buf(new char[path.size() + 1]);
-  buf[path.size()] = 0;
-  memcpy(buf.get(), path.data(), path.size());
-  fd_ = open(buf.get(), O_RDONLY);
+LocalReadFile::LocalReadFile(std::string_view path) : path_(path) {
+  fd_ = open(path_.c_str(), O_RDONLY);
   VELOX_CHECK_GE(
       fd_,
       0,
@@ -113,13 +119,6 @@ std::string_view
 LocalReadFile::pread(uint64_t offset, uint64_t length, void* buf) const {
   preadInternal(offset, length, static_cast<char*>(buf));
   return {static_cast<char*>(buf), length};
-}
-
-std::string LocalReadFile::pread(uint64_t offset, uint64_t length) const {
-  std::string result(length, 0);
-  char* pos = result.data();
-  preadInternal(offset, length, pos);
-  return result;
 }
 
 uint64_t LocalReadFile::preadv(

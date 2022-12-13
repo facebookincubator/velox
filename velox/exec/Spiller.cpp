@@ -22,8 +22,9 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
-
-constexpr int kLogEveryN = 32;
+namespace {
+constexpr int32_t kLogEveryN = 32;
+}
 
 Spiller::Spiller(
     Type type,
@@ -103,8 +104,7 @@ Spiller::Spiller(
           numSortingKeys,
           sortCompareFlags,
           targetFileSize,
-          pool,
-          spillMappedMemory()),
+          pool),
       pool_(pool),
       executor_(executor) {
   TestValue::adjust(
@@ -115,7 +115,7 @@ Spiller::Spiller(
   VELOX_CHECK((type_ != Type::kOrderBy) || (state_.maxPartitions() == 1));
   spillRuns_.reserve(state_.maxPartitions());
   for (int i = 0; i < state_.maxPartitions(); ++i) {
-    spillRuns_.emplace_back(spillMappedMemory());
+    spillRuns_.emplace_back(spillMemoryAllocator());
   }
 }
 
@@ -135,7 +135,6 @@ void Spiller::extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr) {
   auto& aggregates = container_->aggregates();
   auto numKeys = types.size();
   for (auto i = 0; i < aggregates.size(); ++i) {
-    aggregates[i]->finalize(rows.data(), rows.size());
     aggregates[i]->extractAccumulators(
         rows.data(), rows.size(), &result->childAt(i + numKeys));
   }
@@ -498,7 +497,7 @@ Spiller::SpillRows Spiller::finishSpill() {
   spillFinalized_ = true;
 
   SpillRows rowsFromNonSpillingPartitions(
-      0, memory::StlMappedMemoryAllocator<char*>(&spillMappedMemory()));
+      0, memory::StlMemoryAllocator<char*>(&spillMemoryAllocator()));
   if (type_ != Spiller::Type::kHashJoinProbe) {
     fillSpillRuns(&rowsFromNonSpillingPartitions);
   }
@@ -651,12 +650,12 @@ void Spiller::fillSpillRuns(std::vector<SpillableStats>& statsList) {
 }
 
 // static
-memory::MappedMemory& Spiller::spillMappedMemory() {
+memory::MemoryAllocator& Spiller::spillMemoryAllocator() {
   // Return the top level instance. Since this too may be full,
   // another possibility is to return an emergency instance that
   // delegates to the process wide one and makes a file-backed mmap
   // if the allocation fails.
-  return *memory::MappedMemory::getInstance();
+  return *memory::MemoryAllocator::getInstance();
 }
 
 // static

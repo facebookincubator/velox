@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/Portability.h"
 #include "velox/dwio/common/tests/E2EFilterTestBase.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
@@ -92,7 +93,7 @@ class E2EFilterTest : public E2EFilterTestBase {
 
   std::unique_ptr<dwio::common::Reader> makeReader(
       const dwio::common::ReaderOptions& opts,
-      std::unique_ptr<dwio::common::InputStream> input) override {
+      std::unique_ptr<dwio::common::BufferedInput> input) override {
     return std::make_unique<DwrfReader>(opts, std::move(input));
   }
 
@@ -134,11 +135,11 @@ class E2EFilterTest : public E2EFilterTestBase {
         }
         flatmapNodeIdsAsStruct_[child->id] = mapFlatColsStructKeys[i];
       }
-      config->set(Config::FLATTEN_MAP, true);
+      config->set(dwrf::Config::FLATTEN_MAP, true);
       config->set<const std::vector<uint32_t>>(
-          Config::MAP_FLAT_COLS, mapFlatCols);
+          dwrf::Config::MAP_FLAT_COLS, mapFlatCols);
       config->set<const std::vector<std::vector<std::string>>>(
-          Config::MAP_FLAT_COLS_STRUCT_KEYS, mapFlatColsStructKeys);
+          dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS, mapFlatColsStructKeys);
     }
     WriterOptions options;
     options.config = config;
@@ -278,6 +279,12 @@ TEST_F(E2EFilterTest, timestamp) {
 }
 
 TEST_F(E2EFilterTest, listAndMap) {
+  int numCombinations = 10;
+#ifdef TSAN_BUILD
+  // The test is running slow under TSAN; reduce the number of combinations to
+  // avoid timeout.
+  numCombinations = 2;
+#endif
   testWithTypes(
       "long_val:bigint,"
       "long_val_2:bigint,"
@@ -287,7 +294,7 @@ TEST_F(E2EFilterTest, listAndMap) {
       [&]() {},
       true,
       {"long_val", "long_val_2", "int_val"},
-      10);
+      numCombinations);
 }
 
 TEST_F(E2EFilterTest, nullCompactRanges) {

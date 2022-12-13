@@ -173,9 +173,9 @@ TEST(LocalFile, list) {
     auto writeFile = localFs->openFileForWrite(a);
     writeFile = localFs->openFileForWrite(b);
   }
-  ASSERT_EQ(
-      localFs->list(std::string_view(tempFolder->path)),
-      std::vector<std::string>({a, b}));
+  auto files = localFs->list(std::string_view(tempFolder->path));
+  std::sort(files.begin(), files.end());
+  ASSERT_EQ(files, std::vector<std::string>({a, b}));
   localFs->remove(a);
   ASSERT_EQ(
       localFs->list(std::string_view(tempFolder->path)),
@@ -214,4 +214,27 @@ TEST(LocalFile, readFileDestructor) {
     LocalReadFile readFile(readFd);
     ASSERT_ANY_THROW(readData(&readFile, false));
   }
+}
+
+TEST(LocalFile, mkdir) {
+  filesystems::registerLocalFileSystem();
+  auto tempFolder = ::exec::test::TempDirectoryPath::create();
+
+  std::string path = tempFolder->path;
+  auto localFs = filesystems::getFileSystem(path, nullptr);
+
+  // Create 3 levels of directories and ensure they exist.
+  path += "/level1/level2/level3";
+  EXPECT_NO_THROW(localFs->mkdir(path));
+  EXPECT_TRUE(localFs->exists(path));
+
+  // Write a file to our directory to double check it exist.
+  path += "/a.txt";
+  const std::string data("aaaaa");
+  {
+    auto writeFile = localFs->openFileForWrite(path);
+    writeFile->append(data);
+    writeFile->close();
+  }
+  EXPECT_TRUE(localFs->exists(path));
 }

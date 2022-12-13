@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/hash/Checksum.h>
 #include <cstdint>
 #define XXH_INLINE_ALL
 #include <xxhash.h>
@@ -53,6 +54,19 @@ struct CodePointFunction {
   }
 };
 
+/// crc32(varbinary) → bigint
+/// Return an int64_t checksum calculated using the crc32 method in zlib.
+template <typename T>
+struct CRC32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varchar>& input) {
+    result = static_cast<int64_t>(folly::crc32_type(
+        reinterpret_cast<const unsigned char*>(input.data()), input.size()));
+  }
+};
+
 /// xxhash64(varbinary) → varbinary
 /// Return an 8-byte binary to hash64 of input (varbinary such as string)
 template <typename T>
@@ -60,7 +74,7 @@ struct XxHash64Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE
-  bool call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
+  void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
     // Seed is set to 0.
     int64_t hash = XXH64(input.data(), input.size(), 0);
     static const auto kLen = sizeof(int64_t);
@@ -68,7 +82,6 @@ struct XxHash64Function {
     // Resizing output and copy
     result.resize(kLen);
     std::memcpy(result.data(), &hash, kLen);
-    return true;
   }
 };
 
@@ -78,8 +91,8 @@ struct Md5Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TTo, typename TFrom>
-  FOLLY_ALWAYS_INLINE bool call(TTo& result, const TFrom& input) {
-    return stringImpl::md5(result, input);
+  FOLLY_ALWAYS_INLINE void call(TTo& result, const TFrom& input) {
+    stringImpl::md5(result, input);
   }
 };
 
@@ -89,8 +102,8 @@ struct Sha256Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TTo, typename TFrom>
-  FOLLY_ALWAYS_INLINE bool call(TTo& result, const TFrom& input) {
-    return stringImpl::sha256(result, input);
+  FOLLY_ALWAYS_INLINE void call(TTo& result, const TFrom& input) {
+    stringImpl::sha256(result, input);
   }
 };
 
@@ -102,6 +115,30 @@ struct Sha512Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void call(TTo& result, const TFrom& input) {
     stringImpl::sha512(result, input);
+  }
+};
+
+/// hmac_sha256(varbinary) -> varbinary
+template <typename T>
+struct HmacSha256Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TTo, typename TFrom>
+  FOLLY_ALWAYS_INLINE void
+  call(TTo& result, const TFrom& data, const TFrom& key) {
+    stringImpl::HmacSha256(result, key, data);
+  }
+};
+
+/// hmac_sha512(varbinary) -> varbinary
+template <typename T>
+struct HmacSha512Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TTo, typename TFrom>
+  FOLLY_ALWAYS_INLINE void
+  call(TTo& result, const TFrom& data, const TFrom& key) {
+    stringImpl::HmacSha512(result, key, data);
   }
 };
 
