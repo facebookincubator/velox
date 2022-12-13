@@ -180,6 +180,16 @@ is the number of members, and the size of a <code class="docutils literal notran
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="json_format">
+<span class="sig-name descname"><span class="pre">json_format</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#json_format" title="Permalink to this definition">¶</a></dt>
+<dd><p>Serializes the input JSON value to JSON text conforming to RFC 7159.
+The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, true, false or null</p>
+<blockquote>
+<div><p>SELECT json_format(JSON ‘{“a”: 1, “b”: 2}’)</p>
+</div></blockquote>
+</dd></dl>
+
 </section>
 </section>
 <section id="json-vectors">
@@ -215,6 +225,7 @@ VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
 <li><a class="reference internal" href="#json_array_length"><code class="docutils literal notranslate"><span class="pre">json_array_length()</span></code></a></li>
 <li><a class="reference internal" href="#json_array_contains"><code class="docutils literal notranslate"><span class="pre">json_array_contains()</span></code></a></li>
 <li><a class="reference internal" href="#json_size"><code class="docutils literal notranslate"><span class="pre">json_size()</span></code></a></li>
+<li><a class="reference internal" href="#json_format"><code class="docutils literal notranslate"><span class="pre">json_format()</span></code></a></li>
 </ul>
 </li>
 </ul>
