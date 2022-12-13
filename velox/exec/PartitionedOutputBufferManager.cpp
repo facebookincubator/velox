@@ -544,7 +544,14 @@ void PartitionedOutputBufferManager::getData(
     uint64_t maxBytes,
     int64_t sequence,
     DataAvailableCallback notify) {
-  getBuffer(taskId)->getData(destination, maxBytes, sequence, notify);
+  std::shared_ptr<PartitionedOutputBuffer> buffer;
+  try {
+    buffer = getBuffer(taskId);
+  } catch (const VeloxException& e) {
+    notify({}, sequence);
+    return;
+  }
+  buffer->getData(destination, maxBytes, sequence, notify);
 }
 
 void PartitionedOutputBufferManager::initializeTask(
