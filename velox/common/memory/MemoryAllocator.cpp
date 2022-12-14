@@ -28,6 +28,15 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
+
+namespace {
+std::shared_ptr<MemoryAllocator>& getDefaultInstance() {
+  static std::shared_ptr<MemoryAllocator> instance_ =
+      MemoryAllocator::createDefaultInstance();
+  return instance_;
+}
+} // namespace
+
 /*static*/
 void MemoryAllocator::validateAlignment(uint16_t alignment) {
   if (alignment == 0) {
@@ -476,15 +485,7 @@ MemoryAllocator* MemoryAllocator::getInstance() {
   if (customInstance_) {
     return customInstance_;
   }
-  if (instance_) {
-    return instance_.get();
-  }
-  std::lock_guard<std::mutex> l(initMutex_);
-  if (instance_) {
-    return instance_.get();
-  }
-  instance_ = createDefaultInstance();
-  return instance_.get();
+  return getDefaultInstance().get();
 }
 
 // static
@@ -498,8 +499,8 @@ void MemoryAllocator::setDefaultInstance(MemoryAllocator* instance) {
 }
 
 // static
-void MemoryAllocator::testingDestroyInstance() {
-  instance_ = nullptr;
+void MemoryAllocator::testingResetDefaultInstance() {
+  getDefaultInstance() = MemoryAllocator::createDefaultInstance();
 }
 
 // static

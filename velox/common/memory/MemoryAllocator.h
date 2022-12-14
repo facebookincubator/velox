@@ -173,7 +173,9 @@ class MemoryAllocator : std::enable_shared_from_this<MemoryAllocator> {
   /// process default.
   static std::shared_ptr<MemoryAllocator> createDefaultInstance();
 
-  static void testingDestroyInstance();
+  /// Recreate default memory allocator instance for testing purpose.
+  /// This is NOT threadsafe.
+  static void testingResetDefaultInstance();
 
   MemoryAllocator() = default;
   virtual ~MemoryAllocator() = default;
@@ -582,9 +584,6 @@ class MemoryAllocator : std::enable_shared_from_this<MemoryAllocator> {
   inline static std::atomic<uint64_t> totalLargeAllocateBytes_;
 
  private:
-  inline static std::mutex initMutex_;
-  // Singleton instance.
-  inline static std::shared_ptr<MemoryAllocator> instance_;
   // Application-supplied custom implementation of MemoryAllocator to be
   // returned by getInstance().
   inline static MemoryAllocator* FOLLY_NULLABLE customInstance_;

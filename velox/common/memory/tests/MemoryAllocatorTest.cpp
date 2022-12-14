@@ -166,7 +166,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<TestParam> {
   }
 
   void SetUp() override {
-    MemoryAllocator::testingDestroyInstance();
+    MemoryAllocator::testingResetDefaultInstance();
     useMmap_ = GetParam().useMmap;
     if (useMmap_) {
       MmapAllocatorOptions options;
@@ -195,7 +195,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<TestParam> {
   }
 
   void TearDown() override {
-    MemoryAllocator::testingDestroyInstance();
+    MemoryAllocator::testingResetDefaultInstance();
   }
 
   bool allocate(int32_t numPages, MemoryAllocator::Allocation& result) {

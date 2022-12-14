@@ -38,7 +38,7 @@ class ByteStreamTest : public testing::TestWithParam<bool> {
   }
 
   void TearDown() override {
-    MmapAllocator::testingDestroyInstance();
+    MmapAllocator::testingResetDefaultInstance();
     MemoryAllocator::setDefaultInstance(nullptr);
   }
 
