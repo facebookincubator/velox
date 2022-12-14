@@ -144,14 +144,12 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
   return std::make_shared<SubstraitType>(type);
 }
 
-std::string SubstraitParser::parseType(
-    const std::string& substraitType) {
-      auto it = typeMap_.find(substraitType);
-      if (it == typeMap_.end()) {
-        VELOX_NYI(
-          "Substrait parsing for type {} not supported.", substraitType);
-      }
-      return it->second;
+std::string SubstraitParser::parseType(const std::string& substraitType) {
+  auto it = typeMap_.find(substraitType);
+  if (it == typeMap_.end()) {
+    VELOX_NYI("Substrait parsing for type {} not supported.", substraitType);
+  }
+  return it->second;
 };
 
 std::vector<std::shared_ptr<SubstraitParser::SubstraitType>>
@@ -286,7 +284,7 @@ void SubstraitParser::getSubFunctionTypes(
   std::string delimiter = "_";
   while ((pos = funcTypes.find(delimiter)) != std::string::npos) {
     auto type = funcTypes.substr(0, pos);
-    if (type != "opt" && type !="req") {
+    if (type != "opt" && type != "req") {
       types.emplace_back(type);
     }
     funcTypes.erase(0, pos + delimiter.length());
@@ -312,6 +310,21 @@ std::string SubstraitParser::mapToVeloxFunction(
   // If not finding the mapping from Substrait function name to Velox function
   // name, the original Substrait function name will be used.
   return subFunc;
+}
+
+bool SubstraitParser::configSetInOptimization(
+    const ::substrait::extensions::AdvancedExtension& extension,
+    const std::string& config) const {
+  if (extension.has_optimization()) {
+    google::protobuf::StringValue msg;
+    extension.optimization().UnpackTo(&msg);
+    std::size_t pos = msg.value().find(config);
+    if ((pos != std::string::npos) &&
+        (msg.value().substr(pos + config.size(), 1) == "1")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace facebook::velox::substrait

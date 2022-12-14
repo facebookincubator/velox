@@ -16,8 +16,6 @@
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 
-#include <google/protobuf/wrappers.pb.h>
-
 #include "velox/substrait/TypeUtils.h"
 #include "velox/substrait/VariantToVectorConverter.h"
 #include "velox/type/Type.h"
@@ -79,26 +77,6 @@ const std::string sNot = "not";
 // Substrait types.
 const std::string sI32 = "i32";
 const std::string sI64 = "i64";
-
-/// @brief Return whether a config is set as true in AdvancedExtension
-/// optimization.
-/// @param extension Substrait advanced extension.
-/// @param config the key string of a config.
-/// @return Whether the config is set as true.
-bool configSetInOptimization(
-    const ::substrait::extensions::AdvancedExtension& extension,
-    const std::string& config) {
-  if (extension.has_optimization()) {
-    google::protobuf::StringValue msg;
-    extension.optimization().UnpackTo(&msg);
-    std::size_t pos = msg.value().find(config);
-    if ((pos != std::string::npos) &&
-        (msg.value().substr(pos + config.size(), 1) == "1")) {
-      return true;
-    }
-  }
-  return false;
-}
 
 /// @brief Get the input type from both sides of join.
 /// @param leftNode the plan node of left side.
@@ -236,7 +214,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_LEFT_SEMI:
       // Determine the semi join type based on extracted information.
       if (sJoin.has_advanced_extension() &&
-          configSetInOptimization(
+          subParser_->configSetInOptimization(
               sJoin.advanced_extension(), "isExistenceJoin=")) {
         joinType = core::JoinType::kLeftSemiProject;
       } else {
@@ -246,7 +224,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_RIGHT_SEMI:
       // Determine the semi join type based on extracted information.
       if (sJoin.has_advanced_extension() &&
-          configSetInOptimization(
+          subParser_->configSetInOptimization(
               sJoin.advanced_extension(), "isExistenceJoin=")) {
         joinType = core::JoinType::kRightSemiProject;
       } else {
@@ -256,7 +234,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_ANTI: {
       // Determine the anti join type based on extracted information.
       if (sJoin.has_advanced_extension() &&
-          configSetInOptimization(
+          subParser_->configSetInOptimization(
               sJoin.advanced_extension(), "isNullAwareAntiJoin=")) {
         joinType = core::JoinType::kNullAwareAnti;
       } else {
@@ -293,16 +271,32 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         exprConverter_->toVeloxExpr(sJoin.post_join_filter(), inputRowType);
   }
 
-  // Create join node
-  return std::make_shared<core::HashJoinNode>(
-      nextPlanNodeId(),
-      joinType,
-      leftKeys,
-      rightKeys,
-      filter,
-      leftNode,
-      rightNode,
-      getJoinOutputType(leftNode, rightNode, joinType));
+  if (sJoin.has_advanced_extension() &&
+      subParser_->configSetInOptimization(
+          sJoin.advanced_extension(), "isSMJ=")) {
+    // Create MergeJoinNode node
+    return std::make_shared<core::MergeJoinNode>(
+        nextPlanNodeId(),
+        joinType,
+        leftKeys,
+        rightKeys,
+        filter,
+        leftNode,
+        rightNode,
+        getJoinOutputType(leftNode, rightNode, joinType));
+
+  } else {
+    // Create HashJoinNode node
+    return std::make_shared<core::HashJoinNode>(
+        nextPlanNodeId(),
+        joinType,
+        leftKeys,
+        rightKeys,
+        filter,
+        leftNode,
+        rightNode,
+        getJoinOutputType(leftNode, rightNode, joinType));
+  }
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(

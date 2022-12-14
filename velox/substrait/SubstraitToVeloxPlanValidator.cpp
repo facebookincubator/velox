@@ -429,6 +429,19 @@ bool SubstraitToVeloxPlanValidator::validate(
     return false;
   }
 
+  if (sJoin.has_advanced_extension() &&
+      subParser_->configSetInOptimization(
+          sJoin.advanced_extension(), "isSMJ=")) {
+    switch (sJoin.type()) {
+      case ::substrait::JoinRel_JoinType_JOIN_TYPE_INNER:
+      case ::substrait::JoinRel_JoinType_JOIN_TYPE_LEFT:
+        break;
+      default:
+        std::cout << "Sort merge join only support inner and left join"
+                  << std::endl;
+        return false;
+    }
+  }
   switch (sJoin.type()) {
     case ::substrait::JoinRel_JoinType_JOIN_TYPE_INNER:
     case ::substrait::JoinRel_JoinType_JOIN_TYPE_OUTER:

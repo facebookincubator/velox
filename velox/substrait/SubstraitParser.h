@@ -25,6 +25,8 @@
 #include "velox/substrait/proto/substrait/type.pb.h"
 #include "velox/substrait/proto/substrait/type_expressions.pb.h"
 
+#include <google/protobuf/wrappers.pb.h>
+
 namespace facebook::velox::substrait {
 
 /// This class contains some common functions used to parse Substrait
@@ -93,6 +95,15 @@ class SubstraitParser {
 
   /// Map the Substrait function keyword into Velox function keyword.
   std::string mapToVeloxFunction(const std::string& substraitFunction) const;
+
+  /// @brief Return whether a config is set as true in AdvancedExtension
+  /// optimization.
+  /// @param extension Substrait advanced extension.
+  /// @param config the key string of a config.
+  /// @return Whether the config is set as true.
+  bool configSetInOptimization(
+      const ::substrait::extensions::AdvancedExtension& extension,
+      const std::string& config) const;
 
  private:
   /// A map used for mapping Substrait function keywords into Velox functions'
