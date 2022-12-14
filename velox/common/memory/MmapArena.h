@@ -21,8 +21,7 @@
 #include <map>
 #include <memory>
 #include <unordered_set>
-
-#include "velox/common/memory/MemoryAllocator.h"
+#include "velox/common/memory/MappedMemory.h"
 
 namespace facebook::velox::memory {
 

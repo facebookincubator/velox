@@ -179,6 +179,8 @@ class GroupingSet {
 
   const bool ignoreNullKeys_;
 
+  memory::MappedMemory* FOLLY_NONNULL const mappedMemory_;
+
   // The maximum memory usage that a final aggregation can hold before spilling.
   // If it is zero, then there is no such limit.
   const uint64_t spillMemoryThreshold_;

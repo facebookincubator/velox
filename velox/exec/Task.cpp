@@ -214,6 +214,13 @@ velox::memory::MemoryPool* FOLLY_NONNULL Task::addOperatorPool(
   return childPools_.back().get();
 }
 
+memory::MappedMemory* FOLLY_NONNULL Task::addOperatorMemory(
+    const std::shared_ptr<memory::MemoryUsageTracker>& tracker) {
+  auto mappedMemory = queryCtx_->mappedMemory()->addChild(tracker);
+  childMappedMemories_.emplace_back(mappedMemory);
+  return mappedMemory.get();
+}
+
 bool Task::supportsSingleThreadedExecution() const {
   std::vector<std::unique_ptr<DriverFactory>> driverFactories;
 

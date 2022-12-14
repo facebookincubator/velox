@@ -31,7 +31,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
 
-using facebook::velox::memory::MemoryAllocator;
+using facebook::velox::memory::MappedMemory;
 
 // Represents a planned load from a file. Many of these constitute a load plan.
 struct Request {
@@ -155,6 +155,28 @@ class AsyncDataCacheTest : public testing::Test {
     }
   }
 
+ public:
+  // Deterministically fills 'allocation'  based on 'sequence'
+  static void initializeContents(
+      int64_t sequence,
+      MappedMemory::Allocation& alloc) {
+    bool first = true;
+    for (int32_t i = 0; i < alloc.numRuns(); ++i) {
+      MappedMemory::PageRun run = alloc.runAt(i);
+      int64_t* ptr = reinterpret_cast<int64_t*>(run.data());
+      int32_t numWords =
+          run.numPages() * MappedMemory::kPageSize / sizeof(void*);
+      for (int32_t offset = 0; offset < numWords; offset++) {
+        if (first) {
+          ptr[offset] = sequence;
+          first = false;
+        } else {
+          ptr[offset] = offset + sequence;
+        }
+      }
+    }
+  }
+
   // Checks that the contents are consistent with what is set in
   // initializeContents.
   static void checkContents(const AsyncDataCacheEntry& entry) {
@@ -165,10 +187,10 @@ class AsyncDataCacheTest : public testing::Test {
     int64_t sequence;
     int32_t bytesChecked = sizeof(int64_t);
     for (int32_t i = 0; i < alloc.numRuns(); ++i) {
-      MemoryAllocator::PageRun run = alloc.runAt(i);
+      MappedMemory::PageRun run = alloc.runAt(i);
       int64_t* ptr = reinterpret_cast<int64_t*>(run.data());
       int32_t numWords =
-          run.numPages() * MemoryAllocator::kPageSize / sizeof(void*);
+          run.numPages() * MappedMemory::kPageSize / sizeof(void*);
       for (int32_t offset = 0; offset < numWords; offset++) {
         if (first) {
           sequence = ptr[offset];
@@ -545,16 +567,16 @@ TEST_F(AsyncDataCacheTest, replace) {
   auto stats = cache_->refreshStats();
   EXPECT_LT(0, stats.numEvict);
   EXPECT_GE(
-      kMaxBytes / memory::MemoryAllocator::kPageSize,
+      kMaxBytes / memory::MappedMemory::kPageSize,
       cache_->incrementCachedPages(0));
 }
 
 TEST_F(AsyncDataCacheTest, outOfCapacity) {
   constexpr int64_t kMaxBytes = 16 << 20;
   constexpr int32_t kSize = 16 << 10;
-  constexpr int32_t kSizeInPages = kSize / MemoryAllocator::kPageSize;
+  constexpr int32_t kSizeInPages = kSize / MappedMemory::kPageSize;
   std::deque<CachePin> pins;
-  std::deque<MemoryAllocator::Allocation> allocations;
+  std::deque<MappedMemory::Allocation> allocations;
   initializeCache(kMaxBytes);
   // We pin 2 16K entries and unpin 1. Eventually the whole capacity
   // is pinned and we fail making a ew entry.
@@ -568,8 +590,8 @@ TEST_F(AsyncDataCacheTest, outOfCapacity) {
     }
     pins.pop_front();
   }
-  MemoryAllocator::Allocation allocation;
-  ASSERT_FALSE(cache_->allocateNonContiguous(kSizeInPages, allocation));
+  MappedMemory::Allocation allocation(cache_.get());
+  EXPECT_FALSE(cache_->allocate(kSizeInPages, 0, allocation));
   // One 4 page entry below the max size of 4K 4 page entries in 16MB of
   // capacity.
   ASSERT_EQ(4092, cache_->incrementCachedPages(0));
@@ -578,7 +600,8 @@ TEST_F(AsyncDataCacheTest, outOfCapacity) {
 
   // We allocate the full capacity and expect the cache entries to go.
   for (;;) {
-    if (!cache_->allocateNonContiguous(kSizeInPages, allocation)) {
+    MappedMemory::Allocation(cache_.get());
+    if (!cache_->allocate(kSizeInPages, 0, allocation)) {
       break;
     }
     allocations.push_back(std::move(allocation));
