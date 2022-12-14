@@ -38,10 +38,14 @@ struct ShiftLeftFunction {
   template <typename TInput1, typename TInput2>
   FOLLY_ALWAYS_INLINE void call(TInput1& result, TInput1 a, TInput2 b) {
     if constexpr (std::is_same_v<TInput1, int32_t>) {
+      if (b < 0)
+        b = b % 32 + 32;
       if (b >= 32)
         b = b % 32;
     }
     if constexpr (std::is_same_v<TInput1, int64_t>) {
+      if (b < 0)
+        b = b % 64 + 64;
       if (b >= 64)
         b = b % 64;
     }
@@ -54,10 +58,14 @@ struct ShiftRightFunction {
   template <typename TInput1, typename TInput2>
   FOLLY_ALWAYS_INLINE void call(TInput1& result, TInput1 a, TInput2 b) {
     if constexpr (std::is_same_v<TInput1, int32_t>) {
+      if (b < 0)
+        b = b % 32 + 32;
       if (b >= 32)
         b = b % 32;
     }
     if constexpr (std::is_same_v<TInput1, int64_t>) {
+      if (b < 0)
+        b = b % 64 + 64;
       if (b >= 64)
         b = b % 64;
     }
