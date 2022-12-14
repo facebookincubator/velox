@@ -60,6 +60,13 @@ struct RangeTraits<TypeKind::VARCHAR> {
   using NativeType = std::string;
 };
 
+template <>
+struct RangeTraits<TypeKind::DATE> {
+  using RangeType = common::BigintRange;
+  using MultiRangeType = common::BigintMultiRange;
+  using NativeType = int32_t;
+};
+
 #endif /* RANGETRAITS_H */
 
 } // namespace facebook::velox::substrait

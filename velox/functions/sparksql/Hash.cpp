@@ -69,6 +69,7 @@ void applyWithType(
       CASE(VARBINARY, hash.hashBytes, StringView);
       CASE(REAL, hash.hashFloat, float);
       CASE(DOUBLE, hash.hashDouble, double);
+      CASE(DATE, hash.hashDate, int32_t);
 #undef CASE
       default:
         VELOX_NYI(
@@ -133,6 +134,10 @@ class Murmur3Hash final {
       h1 = mixH1(h1, mixK1(*i));
     }
     return fmix(h1, input.size());
+  }
+
+  uint32_t hashDate(Date input, uint32_t seed) {
+    return hashInt32(input.days(), seed);
   }
 
  private:
@@ -233,6 +238,10 @@ class XxHash64 final {
       offset++;
     }
     return fmix(hash);
+  }
+
+  uint32_t hashDate(Date input, uint32_t seed) {
+    return hashInt32(input.days(), seed);
   }
 
  private:
