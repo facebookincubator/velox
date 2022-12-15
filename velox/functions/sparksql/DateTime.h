@@ -19,7 +19,6 @@
 #include "velox/external/date/tz.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
-#include "velox/functions/lib/JodaDateTime.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
@@ -144,22 +143,19 @@ struct YearFunction : public InitSessionTimezone<T>,
   }
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE
-  void call(
+  FOLLY_ALWAYS_INLINE void call(
       TInput& result,
       const arg_type<Timestamp>& timestamp) {
     result = getYear(getDateTime(timestamp, this->timeZone_));
   }
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE
-  void call(TInput& result, const arg_type<Date>& date) {
+  FOLLY_ALWAYS_INLINE void call(TInput& result, const arg_type<Date>& date) {
     result = getYear(getDateTime(date));
   }
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE
-  void call(
+  FOLLY_ALWAYS_INLINE void call(
       TInput& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
@@ -239,7 +235,6 @@ struct DayFunction : public InitSessionTimezone<T>,
     result = getDateTime(timestamp, this->timeZone_).tm_mday;
   }
 
-
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(TInput& result, const arg_type<Date>& date) {
     result = getDateTime(date).tm_mday;
@@ -312,9 +307,7 @@ struct DayOfYearFunction : public InitSessionTimezone<T>,
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getDayOfYear(getDateTime(timestamp, nullptr));
   }
-
 };
-
 
 template <typename T>
 struct YearOfWeekFunction : public InitSessionTimezone<T>,
@@ -362,7 +355,6 @@ struct YearOfWeekFunction : public InitSessionTimezone<T>,
     result = computeYearOfWeek(getDateTime(timestamp, nullptr));
   }
 };
-
 
 template <typename T>
 struct HourFunction : public InitSessionTimezone<T>,
