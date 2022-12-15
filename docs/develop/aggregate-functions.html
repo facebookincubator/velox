@@ -104,10 +104,15 @@ input and output.</p>
 <p>In some cases, the calculations performed by partial and final aggregations are
 the same. This is the case for the <a class="reference internal" href="../functions/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>
 aggregates. In most cases they are different. For example, partial <a class="reference internal" href="../functions/aggregate.html#id0" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a>
-aggregate counts incoming values and final :func:count` aggregate sums up partial
+aggregate counts incoming values and final <a class="reference internal" href="../functions/aggregate.html#id0" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a> aggregate sums up partial
 counts to produce a total.</p>
 <p>The signature of an aggregate function consists of the type of the raw input data,
 the type of the intermediate result and the type of the final result.</p>
+<p>Aggregate functions can also be used in a window operator. Here is an example of
+computing running total that uses <a class="reference internal" href="../functions/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a> aggregate function in a window operator.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">d</span><span class="w"> </span><span class="k">DESC</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
+</pre></div>
+</div>
 <section id="memory-layout">
 <h2>Memory Layout<a class="headerlink" href="#memory-layout" title="Permalink to this heading">¶</a></h2>
 <p>HashAggregation operator stores data in rows. Each row corresponds to a unique combination of grouping key values. Global aggregations store data in a single row.</p>
@@ -393,7 +398,11 @@ tables shows which methods are used in which workflows.</p>
 </section>
 <section id="global-aggregation">
 <h2>Global aggregation<a class="headerlink" href="#global-aggregation" title="Permalink to this heading">¶</a></h2>
-<p>Global aggregation is similar to group-by aggregation, but there is only one group and one accumulator. After implementing group-by aggregation, the only thing needed to enable global aggregation is to implement addSingleGroupRawInput() method (addSingleGroupIntermediateResults() method is already implemented as it is used for spilling group by).</p>
+<p>Global aggregation is similar to group-by aggregation, but there is only one
+group and one accumulator. After implementing group-by aggregation, the only
+thing needed to enable global aggregation is to implement
+addSingleGroupRawInput() method (addSingleGroupIntermediateResults() method is
+already implemented as it is used for spilling group by).</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Updates the single accumulator used for global aggregation.</span>
 <span class="c1">// @param group Pointer to the start of the group row.</span>
 <span class="c1">// @param allRows A contiguous range of row numbers starting from 0.</span>
@@ -460,6 +469,16 @@ workflows.</p>
 </tr>
 </tbody>
 </table>
+<p>Global aggregation is also used by the window operator. For each row, a global
+accumulator is cleared (clear + initializeNewGroups), then all rows in a window
+frame are added (addSingleGroupRawInput), then result is extracted
+(extractValues).</p>
+<p>When computing running totals, i.e. when window frame is BETWEEN UNBOUNDED
+PRECEDING AND CURRENT ROW, window operator re-uses the accumulator for multiple
+rows without resetting. For each row, window operator adds that row to the
+accumulator, then extracts results. The aggregate function sees a repeated
+sequence of addSingleGroupRawInput + extractValues calls and needs to handle
+these correctly.</p>
 </section>
 <section id="factory-function">
 <h2>Factory function<a class="headerlink" href="#factory-function" title="Permalink to this heading">¶</a></h2>
