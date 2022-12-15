@@ -15,6 +15,7 @@
  */
 
 #include <optional>
+#include "velox/expression/Expr.h"
 #include "velox/functions/lib/SubscriptUtil.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -542,4 +543,108 @@ TEST_F(ElementAtTest, errorStatesArray) {
       {arrayVector, indicesVector},
       expectedValueAt,
       [](auto row) { return row == 40; });
+}
+
+TEST_F(ElementAtTest, emptyElementVector) {
+  auto keys = makeFlatVector<int64_t>({});
+  auto values = makeFlatVector<int64_t>({});
+
+  auto offsets = allocateOffsets(2, pool());
+  auto rawOffsets = offsets->asMutable<vector_size_t>();
+
+  auto sizes = allocateSizes(2, pool());
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+
+  SelectivityVector rows(2);
+  rows.setValid(0, false);
+  rows.updateBounds();
+
+  VectorPtr result;
+
+  // Test map vector.
+  {
+    auto map = std::make_shared<MapVector>(
+        pool(),
+        MAP(BIGINT(), BIGINT()),
+        nullptr,
+        2,
+        offsets,
+        sizes,
+        keys,
+        values);
+    auto expected = makeNullConstant(TypeKind::BIGINT, 2);
+
+    evaluate<SimpleVector<int64_t>>(
+        "element_at(c0, 1)", makeRowVector({map}), rows, result);
+    test::assertEqualVectors(expected, result);
+    evaluate<SimpleVector<int64_t>>(
+        "c0[1]", makeRowVector({map}), rows, result);
+    test::assertEqualVectors(expected, result);
+  }
+
+  // Test array vector.
+  {
+    auto array = std::make_shared<ArrayVector>(
+        pool(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, values);
+    auto expected = makeNullConstant(TypeKind::BIGINT, 2);
+
+    evaluate<SimpleVector<int64_t>>(
+        "element_at(c0, 1)", makeRowVector({array}), rows, result);
+    test::assertEqualVectors(expected, result);
+  }
+}
+
+TEST_F(ElementAtTest, emptyContainer) {
+  // Accessing an element in an empty container should always return NULL,
+  // regardless of the index value.
+  auto keys = makeFlatVector<int64_t>(std::vector<int64_t>{1});
+  auto values = makeFlatVector<int64_t>(std::vector<int64_t>{2});
+
+  auto offsets = allocateOffsets(2, pool());
+  auto rawOffsets = offsets->asMutable<vector_size_t>();
+  rawOffsets[0] = 0;
+  rawOffsets[1] = 0;
+
+  auto sizes = allocateSizes(2, pool());
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+  rawSizes[0] = 0;
+  rawSizes[1] = 1;
+
+  // Our Vectors have 2 elements but we only evaluate on the first, this way the
+  // elements aren't empty though the collection we're evaluating on is.
+  SelectivityVector rows(1);
+
+  VectorPtr result;
+
+  // Test map vector.
+  {
+    auto map = std::make_shared<MapVector>(
+        pool(),
+        MAP(BIGINT(), BIGINT()),
+        nullptr,
+        2,
+        offsets,
+        sizes,
+        keys,
+        values);
+    auto expected = makeNullConstant(TypeKind::BIGINT, 1);
+
+    evaluate<SimpleVector<int64_t>>(
+        "element_at(c0, -1)", makeRowVector({map}), rows, result);
+    test::assertEqualVectors(expected, result);
+    evaluate<SimpleVector<int64_t>>(
+        "c0[-1]", makeRowVector({map}), rows, result);
+    test::assertEqualVectors(expected, result);
+  }
+
+  // Test array vector.
+  {
+    auto array = std::make_shared<ArrayVector>(
+        pool(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, values);
+    auto expected = makeNullConstant(TypeKind::BIGINT, 1);
+
+    evaluate<SimpleVector<int64_t>>(
+        "element_at(c0, -1)", makeRowVector({array}), rows, result);
+    test::assertEqualVectors(expected, result);
+  }
 }

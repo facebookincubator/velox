@@ -132,6 +132,17 @@ class EvalCtx {
       const BufferPtr& elementToTopLevelRows,
       ErrorVectorPtr& topLevelErrors);
 
+  void deselectErrors(SelectivityVector& rows) const {
+    if (!errors_) {
+      return;
+    }
+    // A non-null in errors resets the row. AND with the errors null mask.
+    rows.deselectNonNulls(
+        errors_->rawNulls(),
+        rows.begin(),
+        std::min(errors_->size(), rows.end()));
+  }
+
   // Returns the vector of errors or nullptr if no errors. This is
   // intentionally a raw pointer to signify that the caller may not
   // retain references to this.
@@ -299,6 +310,7 @@ struct ScopedContextSaver {
   std::vector<VectorPtr> peeled;
   BufferPtr wrap;
   BufferPtr wrapNulls;
+  vector_size_t constantWrapIndex;
   VectorEncoding::Simple wrapEncoding;
   bool nullsPruned = false;
   // The selection of the context being saved.

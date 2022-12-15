@@ -421,16 +421,40 @@ ExprPtr compileExpression(
           call->name(),
           trackCpuUsage);
     } else {
-      VELOX_FAIL(
-          "Scalar function not registered: {} ({})",
-          call->name(),
-          folly::join(", ", inputTypes));
+      const auto& functionName = call->name();
+      auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);
+      auto simpleFunctionSignatures =
+          SimpleFunctions().getFunctionSignatures(functionName);
+      std::vector<std::string> signatures;
+
+      if (vectorFunctionSignatures.has_value()) {
+        for (const auto& signature : vectorFunctionSignatures.value()) {
+          signatures.push_back(fmt::format("({})", signature->toString()));
+        }
+      }
+
+      for (const auto& signature : simpleFunctionSignatures) {
+        signatures.push_back(fmt::format("({})", signature->toString()));
+      }
+
+      if (signatures.empty()) {
+        VELOX_FAIL(
+            "Scalar function name not registered: {}, called with arguments: ({}).",
+            call->name(),
+            folly::join(", ", inputTypes));
+      } else {
+        VELOX_FAIL(
+            "Scalar function {} not registered with arguments: ({}).  Found function registered with the following signatures:\n{}",
+            call->name(),
+            folly::join(", ", inputTypes),
+            folly::join("\n", signatures));
+      }
     }
   } else if (
       auto access =
           dynamic_cast<const core::FieldAccessTypedExpr*>(expr.get())) {
     auto fieldReference = std::make_shared<FieldReference>(
-        expr->type(), move(compiledInputs), access->name());
+        expr->type(), std::move(compiledInputs), access->name());
     if (access->isInputColumn()) {
       // We only want to capture references to top level fields, not struct
       // fields.
@@ -529,7 +553,7 @@ std::vector<std::shared_ptr<Expr>> compileExpressions(
     exprs.push_back(compileExpression(
         source,
         &scope,
-        execCtx->queryCtx()->config(),
+        execCtx->queryCtx()->queryConfig(),
         execCtx->pool(),
         flatteningCandidates,
         enableConstantFolding));

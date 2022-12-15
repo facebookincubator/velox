@@ -135,6 +135,25 @@ class PlanNode {
   /// The name of the plan node, used in toString.
   virtual std::string_view name() const = 0;
 
+  /// Recursively checks the node tree for a first node that satisfy a given
+  /// condition. Returns pointer to the node if found, nullptr if not.
+  static const PlanNode* visit(
+      const PlanNode* node,
+      const std::function<bool(const PlanNode* node)>& predicate) {
+    if (predicate(node)) {
+      return node;
+    }
+
+    // Recursively go further through the sources.
+    for (const auto& source : node->sources()) {
+      const auto* ret = PlanNode::visit(source.get(), predicate);
+      if (ret != nullptr) {
+        return ret;
+      }
+    }
+    return nullptr;
+  }
+
  private:
   /// The details of the plan node in textual format.
   virtual void addDetails(std::stringstream& stream) const = 0;
@@ -516,6 +535,14 @@ class AggregationNode : public PlanNode {
     return "Aggregation";
   }
 
+  bool isFinal() const {
+    return step_ == Step::kFinal;
+  }
+
+  bool isSingle() const {
+    return step_ == Step::kSingle;
+  }
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -587,24 +614,6 @@ class GroupIdNode : public PlanNode {
       std::string groupIdName,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// TODO Remove after updating Prestissimo.
-  GroupIdNode(
-      PlanNodeId id,
-      std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
-      std::map<std::string, FieldAccessTypedExprPtr> outputGroupingKeyNames,
-      std::vector<FieldAccessTypedExprPtr> aggregationInputs,
-      std::string groupIdName,
-      PlanNodePtr source)
-      : GroupIdNode(
-            std::move(id),
-            std::move(groupingSets),
-            makeGroupingKeyInfos(outputGroupingKeyNames),
-            std::move(aggregationInputs),
-            std::move(groupIdName),
-            std::move(source)) {}
-#endif
-
   const RowTypePtr& outputType() const override {
     return outputType_;
   }
@@ -639,19 +648,6 @@ class GroupIdNode : public PlanNode {
   }
 
  private:
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// TODO Remove after updating Prestissimo.
-  static std::vector<GroupIdNode::GroupingKeyInfo> makeGroupingKeyInfos(
-      const std::map<std::string, FieldAccessTypedExprPtr>&
-          outputGroupingKeyNames) {
-    std::vector<GroupIdNode::GroupingKeyInfo> infos;
-    for (const auto& [name, field] : outputGroupingKeyNames) {
-      infos.push_back({name, field});
-    }
-    return infos;
-  }
-#endif
-
   void addDetails(std::stringstream& stream) const override;
 
   const std::vector<PlanNodePtr> sources_;

@@ -55,10 +55,15 @@ void registerSimpleFunctions() {
   registerFunction<RPadFunction, Varchar, Varchar, int64_t, Varchar>({"rpad"});
 
   // Register hash functions.
+  registerFunction<CRC32Function, int64_t, Varbinary>({"crc32"});
   registerFunction<XxHash64Function, Varbinary, Varbinary>({"xxhash64"});
   registerFunction<Md5Function, Varbinary, Varbinary>({"md5"});
   registerFunction<Sha256Function, Varbinary, Varbinary>({"sha256"});
   registerFunction<Sha512Function, Varbinary, Varbinary>({"sha512"});
+  registerFunction<HmacSha256Function, Varbinary, Varbinary, Varbinary>(
+      {"hmac_sha256"});
+  registerFunction<HmacSha512Function, Varbinary, Varbinary, Varbinary>(
+      {"hmac_sha512"});
 
   registerFunction<ToHexFunction, Varchar, Varbinary>({"to_hex"});
   registerFunction<FromHexFunction, Varbinary, Varchar>({"from_hex"});

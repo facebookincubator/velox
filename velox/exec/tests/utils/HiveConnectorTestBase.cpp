@@ -40,6 +40,9 @@ void HiveConnectorTestBase::SetUp() {
 }
 
 void HiveConnectorTestBase::TearDown() {
+  // Make sure all pending loads are finished or cancelled before unregister
+  // connector.
+  ioExecutor_.reset();
   dwrf::unregisterDwrfReaderFactory();
   connector::unregisterConnector(kHiveConnectorId);
   OperatorTestBase::TearDown();
@@ -61,7 +64,7 @@ void HiveConnectorTestBase::writeToFile(
   options.config = config;
   options.schema = vectors[0]->type();
   auto sink =
-      std::make_unique<facebook::velox::dwio::common::FileSink>(filePath);
+      std::make_unique<facebook::velox::dwio::common::LocalFileSink>(filePath);
   auto childPool =
       pool_->addChild(kWriter, std::numeric_limits<int64_t>::max());
   facebook::velox::dwrf::Writer writer{options, std::move(sink), *childPool};

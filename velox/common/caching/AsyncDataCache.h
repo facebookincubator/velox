@@ -23,6 +23,7 @@
 #include <folly/futures/SharedPromise.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CoalesceIo.h"
+#include "velox/common/base/Portability.h"
 #include "velox/common/base/SelectivityInfo.h"
 #include "velox/common/caching/FileGroupStats.h"
 #include "velox/common/caching/ScanTracker.h"
@@ -59,8 +60,12 @@ struct AccessStats {
   // works well with a typical formula of time over use count going to
   // zero as uses go up and time goes down. 'now' is the current
   // accessTime(), passed from the caller since getting the time is
-  // expensive and many entries are checked one after the other.
+  // expensive and many entries are checked one after the other. lastUse == 0
+  // means explicitly evictable.
   int32_t score(AccessTime now, uint64_t /*size*/) const {
+    if (!lastUse) {
+      return std::numeric_limits<int32_t>::max();
+    }
     return (now - lastUse) / (1 + numUses);
   }
 
@@ -150,11 +155,11 @@ class AsyncDataCacheEntry {
     return data_;
   }
 
-  const char* FOLLY_NULLABLE tinyData() const {
+  const char* tinyData() const {
     return tinyData_.empty() ? nullptr : tinyData_.data();
   }
 
-  char* FOLLY_NULLABLE tinyData() {
+  char* tinyData() {
     return tinyData_.empty() ? nullptr : tinyData_.data();
   }
 
@@ -209,13 +214,13 @@ class AsyncDataCacheEntry {
 
   void setExclusiveToShared();
 
-  void setSsdFile(SsdFile* FOLLY_NULLABLE file, uint64_t offset) {
+  void setSsdFile(SsdFile* file, uint64_t offset) {
     ssdFile_ = file;
     ssdOffset_ = offset;
     ssdSaveable_ = false;
   }
 
-  SsdFile* FOLLY_NULLABLE ssdFile() const {
+  SsdFile* ssdFile() const {
     return ssdFile_;
   }
 
@@ -229,6 +234,16 @@ class AsyncDataCacheEntry {
 
   void setGroupId(uint64_t groupId) {
     groupId_ = groupId;
+  }
+
+  /// Sets access stats so that this is immediately evictable.
+  void makeEvictable();
+
+  // Moves the promise out of 'this'. Used in order to handle the
+  // promise within the lock of the cache shard, so not within private
+  // methods of 'this'.
+  std::unique_ptr<folly::SharedPromise<bool>> movePromise() {
+    return std::move(promise_);
   }
 
   std::string toString() const;
@@ -249,7 +264,7 @@ class AsyncDataCacheEntry {
   // Holds an owning reference to the file number.
   FileCacheKey key_;
 
-  CacheShard* const FOLLY_NONNULL shard_;
+  CacheShard* const shard_;
 
   // The data being cached.
   memory::MappedMemory::Allocation data_;
@@ -287,13 +302,13 @@ class AsyncDataCacheEntry {
   // SSD. The exact file and offset are needed to include uses in RAM
   // to uses on SSD. Failing this, we could have the hottest data first in
   // line for eviction from SSD.
-  SsdFile* FOLLY_NULLABLE ssdFile_{nullptr};
+  tsan_atomic<SsdFile*> ssdFile_{nullptr};
 
   // Offset in 'ssdFile_'.
-  uint64_t ssdOffset_{0};
+  tsan_atomic<uint64_t> ssdOffset_{0};
 
   // True if this should be saved to SSD.
-  bool ssdSaveable_{false};
+  std::atomic<bool> ssdSaveable_{false};
 
   friend class CacheShard;
   friend class CachePin;
@@ -335,11 +350,11 @@ class CachePin {
     release();
     entry_ = nullptr;
   }
-  AsyncDataCacheEntry* FOLLY_NULLABLE entry() const {
+  AsyncDataCacheEntry* entry() const {
     return entry_;
   }
 
-  AsyncDataCacheEntry* FOLLY_NONNULL checkedEntry() const {
+  AsyncDataCacheEntry* checkedEntry() const {
     assert(entry_);
     return entry_;
   }
@@ -366,13 +381,13 @@ class CachePin {
     entry_ = nullptr;
   }
 
-  void setEntry(AsyncDataCacheEntry* FOLLY_NONNULL entry) {
+  void setEntry(AsyncDataCacheEntry* entry) {
     release();
     VELOX_CHECK(entry->isExclusive() || entry->isShared());
     entry_ = entry;
   }
 
-  AsyncDataCacheEntry* FOLLY_NULLABLE entry_{nullptr};
+  AsyncDataCacheEntry* entry_{nullptr};
 
   friend class CacheShard;
 };
@@ -399,9 +414,10 @@ class CoalescedLoad {
   // process of doing this and 'wait' is null, returns immediately. If another
   // thread is in the process of doing this and 'wait' is not null, waits for
   // the other thread to be done.
-  bool loadOrFuture(folly::SemiFuture<bool>* FOLLY_NULLABLE wait);
+  bool loadOrFuture(folly::SemiFuture<bool>* wait);
 
   LoadState state() const {
+    tsan_lock_guard<std::mutex> l(mutex_);
     return state_;
   }
 
@@ -427,7 +443,7 @@ class CoalescedLoad {
   void setEndState(LoadState endState);
 
   // Serializes access to all members.
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
 
   LoadState state_;
 
@@ -495,12 +511,12 @@ class CacheShard {
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
-      folly::SemiFuture<bool>* FOLLY_NULLABLE readyFuture);
+      folly::SemiFuture<bool>* readyFuture);
 
   // Returns true if there is an entry for 'key'. Updates access time.
   bool exists(RawFileCacheKey key) const;
 
-  AsyncDataCache* FOLLY_NONNULL cache() {
+  AsyncDataCache* cache() {
     return cache_;
   }
   std::mutex& mutex() {
@@ -514,8 +530,11 @@ class CacheShard {
   // emergencies.
   void evict(uint64_t bytesToFree, bool evictAllUnpinned);
 
-  // Removes 'entry' from 'this'.
-  void removeEntry(AsyncDataCacheEntry* FOLLY_NONNULL entry);
+  // Removes 'entry' from 'this'. Removes a possible promise from the entry
+  // inside the shard mutex and returns it so that it can be realized outside of
+  // the mutex.
+  std::unique_ptr<folly::SharedPromise<bool>> removeEntry(
+      AsyncDataCacheEntry* entry);
 
   // Adds the stats of 'this' to 'stats'.
   void updateStats(CacheStats& stats);
@@ -536,19 +555,16 @@ class CacheShard {
 
   void calibrateThreshold();
 
-  void removeEntryLocked(AsyncDataCacheEntry* FOLLY_NONNULL entry);
+  void removeEntryLocked(AsyncDataCacheEntry* entry);
 
   // Returns an unused entry if found. 'size' is a hint for selecting an entry
   // that already has the right amount of memory associated with it.
   std::unique_ptr<AsyncDataCacheEntry> getFreeEntryWithSize(uint64_t sizeHint);
 
-  CachePin initEntry(
-      RawFileCacheKey key,
-      AsyncDataCacheEntry* FOLLY_NONNULL entry);
+  CachePin initEntry(RawFileCacheKey key, AsyncDataCacheEntry* entry);
 
   mutable std::mutex mutex_;
-  folly::F14FastMap<RawFileCacheKey, AsyncDataCacheEntry * FOLLY_NONNULL>
-      entryMap_;
+  folly::F14FastMap<RawFileCacheKey, AsyncDataCacheEntry*> entryMap_;
   // Entries associated to a key.
   std::deque<std::unique_ptr<AsyncDataCacheEntry>> entries_;
   // Unused indices in 'entries_'.
@@ -556,7 +572,7 @@ class CacheShard {
   // A reserve of entries that are not associated to a key. Keeps a
   // few around to avoid allocating one inside 'mutex_'.
   std::vector<std::unique_ptr<AsyncDataCacheEntry>> freeEntries_;
-  AsyncDataCache* const FOLLY_NONNULL cache_;
+  AsyncDataCache* const cache_;
   // Index in 'entries_' for the next eviction candidate.
   uint32_t clockHand_{};
   // Number of gets  since last stats sampling.
@@ -603,7 +619,7 @@ class AsyncDataCache : public memory::MappedMemory {
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
-      folly::SemiFuture<bool>* FOLLY_NULLABLE waitFuture = nullptr);
+      folly::SemiFuture<bool>* waitFuture = nullptr);
 
   // Returns true if there is an entry for 'key'. Updates access time.
   bool exists(RawFileCacheKey key) const;
@@ -621,7 +637,7 @@ class AsyncDataCache : public memory::MappedMemory {
 
   bool allocateContiguous(
       memory::MachinePageCount numPages,
-      Allocation* FOLLY_NULLABLE collateral,
+      Allocation* collateral,
       ContiguousAllocation& allocation,
       std::function<void(int64_t, bool)> beforeAllocCB = nullptr) override;
 
@@ -629,12 +645,11 @@ class AsyncDataCache : public memory::MappedMemory {
     mappedMemory_->freeContiguous(allocation);
   }
 
-  void* FOLLY_NULLABLE allocateBytes(
-      uint64_t bytes,
-      uint64_t maxMallocSize = kMaxMallocBytes) override;
+  void* allocateBytes(uint64_t bytes, uint64_t maxMallocSize = kMaxMallocBytes)
+      override;
 
   void freeBytes(
-      void* FOLLY_NONNULL p,
+      void* p,
       uint64_t size,
       uint64_t maxMallocSize = kMaxMallocBytes) noexcept override {
     mappedMemory_->freeBytes(p, size, maxMallocSize);
@@ -674,7 +689,7 @@ class AsyncDataCache : public memory::MappedMemory {
     return maxBytes_;
   }
 
-  SsdCache* FOLLY_NULLABLE ssdCache() const {
+  SsdCache* ssdCache() const {
     return ssdCache_.get();
   }
 
@@ -724,7 +739,7 @@ class AsyncDataCache : public memory::MappedMemory {
   // Saves all entries with 'ssdSaveable_' to 'ssdCache_'.
   void saveToSsd();
 
-  int32_t& numSkippedSaves() {
+  tsan_atomic<int32_t>& numSkippedSaves() {
     return numSkippedSaves_;
   }
 
@@ -753,7 +768,7 @@ class AsyncDataCache : public memory::MappedMemory {
   std::shared_ptr<memory::MappedMemory> mappedMemory_;
   std::unique_ptr<SsdCache> ssdCache_;
   std::vector<std::unique_ptr<CacheShard>> shards_;
-  int32_t shardCounter_{};
+  std::atomic<int32_t> shardCounter_{0};
   std::atomic<memory::MachinePageCount> cachedPages_{0};
   // Number of pages that are allocated and not yet loaded or loaded
   // but not yet hit for the first time.
@@ -768,14 +783,14 @@ class AsyncDataCache : public memory::MappedMemory {
   std::atomic<uint64_t> nextSsdScoreSize_{0};
 
   // Approximate counter tracking new entries that could be saved to SSD.
-  uint64_t ssdSaveable_{0};
+  tsan_atomic<uint64_t> ssdSaveable_{0};
 
   CacheStats stats_;
 
   std::function<void(const AsyncDataCacheEntry&)> verifyHook_;
   // Count of skipped saves to 'ssdCache_' due to 'ssdCache_' being
   // busy with write.
-  int32_t numSkippedSaves_{0};
+  tsan_atomic<int32_t> numSkippedSaves_{0};
 
   // Used for pseudorandom backoff after failed allocation
   // attempts. Serialization with a mutex is not allowed for

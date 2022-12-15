@@ -19,9 +19,12 @@
 
 namespace facebook::velox::core {
 
+/// A simple wrapper around BaseConfigManager. Defines constants for query
+/// config properties and accessor methods.
 class QueryConfig {
  public:
-  explicit QueryConfig(BaseConfigManager* config) : config_{config} {}
+  explicit QueryConfig(BaseConfigManager* configManager)
+      : configManager_{configManager} {}
 
   static constexpr const char* kCodegenEnabled = "driver.codegen.enabled";
 
@@ -282,8 +285,9 @@ class QueryConfig {
   /// composed of Task id and serial numbers. The files are automatically
   /// deleted when no longer needed. Files may be left behind after crashes but
   /// are identifiable based on the Task id in the name.
+  /// TODO(spershin): This method and kSpillPath will be removed.
   std::optional<std::string> spillPath() const {
-    return get<std::string>(kSpillPath, "/tmp");
+    return get<std::string>(kSpillPath);
   }
 
   /// Returns 'is aggregation spilling enabled' flag. Must also check the
@@ -360,14 +364,14 @@ class QueryConfig {
 
   template <typename T>
   T get(const std::string& key, const T& defaultValue) const {
-    return config_->get<T>(key, defaultValue);
+    return configManager_->get<T>(key, defaultValue);
   }
   template <typename T>
   std::optional<T> get(const std::string& key) const {
-    return std::optional<T>(config_->get<T>(key));
+    return std::optional<T>(configManager_->get<T>(key));
   }
 
  private:
-  BaseConfigManager* config_;
+  BaseConfigManager* FOLLY_NONNULL configManager_;
 };
 } // namespace facebook::velox::core

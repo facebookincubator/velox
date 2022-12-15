@@ -313,7 +313,14 @@ void Expr::evalSimplifiedImpl(
   }
 
   // Apply the actual function.
-  vectorFunction_->apply(remainingRows, inputValues_, type(), context, result);
+  try {
+    vectorFunction_->apply(
+        remainingRows, inputValues_, type(), context, result);
+  } catch (const VeloxException& ve) {
+    throw;
+  } catch (const std::exception& e) {
+    VELOX_USER_FAIL(e.what());
+  }
 
   // Make sure the returned vector has its null bitmap properly set.
   addNulls(rows, remainingRows.asRange().bits(), context, result);
@@ -1002,18 +1009,6 @@ void Expr::evalWithNulls(
   evalAll(rows, context, result);
 }
 
-namespace {
-void deselectErrors(EvalCtx& context, SelectivityVector& rows) {
-  auto errors = context.errors();
-  if (!errors) {
-    return;
-  }
-  // A non-null in errors resets the row. AND with the errors null mask.
-  rows.deselectNonNulls(
-      errors->rawNulls(), rows.begin(), std::min(errors->size(), rows.end()));
-}
-} // namespace
-
 void Expr::evalWithMemo(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -1047,7 +1042,7 @@ void Expr::evalWithMemo(
           context, &rows, uncached->countSelected() < rows.countSelected());
 
       evalWithNulls(*uncached, context, result);
-      deselectErrors(context, *uncached);
+      context.deselectErrors(*uncached);
       context.exprSet()->addToMemo(this);
       auto newCacheSize = uncached->end();
 
@@ -1088,7 +1083,7 @@ void Expr::evalWithMemo(
         context.execCtx()->getSelectivityVector(rows.end());
   }
   *cachedDictionaryIndices_ = rows;
-  deselectErrors(context, *cachedDictionaryIndices_);
+  context.deselectErrors(*cachedDictionaryIndices_);
 }
 
 void Expr::setAllNulls(
@@ -1250,7 +1245,7 @@ void Expr::evalAll(
       mutableRemainingRows = mutableRemainingRowsHolder.get(rows);
       remainingRows = mutableRemainingRows;
     }
-    deselectErrors(context, *mutableRemainingRows);
+    context.deselectErrors(*mutableRemainingRows);
 
     // All rows have at least one null output or error.
     if (!remainingRows->hasSelections()) {
@@ -1438,12 +1433,18 @@ void Expr::applyFunction(
       ? computeIsAsciiForResult(vectorFunction_.get(), inputValues_, rows)
       : std::nullopt;
 
-  vectorFunction_->apply(rows, inputValues_, type(), context, result);
+  try {
+    vectorFunction_->apply(rows, inputValues_, type(), context, result);
+  } catch (const VeloxException& ve) {
+    throw;
+  } catch (const std::exception& e) {
+    VELOX_USER_FAIL(e.what());
+  }
 
   if (!result) {
     LocalSelectivityVector mutableRemainingRowsHolder(context);
     auto mutableRemainingRows = mutableRemainingRowsHolder.get(rows);
-    deselectErrors(context, *mutableRemainingRows);
+    context.deselectErrors(*mutableRemainingRows);
 
     // If there are rows with no result and no exception this is a bug in the
     // function implementation.
@@ -1558,6 +1559,9 @@ void Expr::appendInputsSql(
       stream << inputs_[i]->toSql(complexConstants);
     }
     stream << ")";
+  } else if (vectorFunction_ != nullptr) {
+    // Function with no inputs.
+    stream << "()";
   }
 }
 
@@ -1700,7 +1704,7 @@ void ExprSetSimplified::eval(
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<core::TypedExprPtr>&& source,
     core::ExecCtx* execCtx) {
-  if (execCtx->queryCtx()->config().exprEvalSimplified() ||
+  if (execCtx->queryCtx()->queryConfig().exprEvalSimplified() ||
       FLAGS_force_eval_simplified) {
     return std::make_unique<ExprSetSimplified>(std::move(source), execCtx);
   }

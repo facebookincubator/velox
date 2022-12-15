@@ -68,8 +68,10 @@ GroupingSet::GroupingSet(
       spillConfig_(spillConfig),
       stringAllocator_(mappedMemory_),
       rows_(mappedMemory_),
-      isAdaptive_(
-          operatorCtx->task()->queryCtx()->config().hashAdaptivityEnabled()),
+      isAdaptive_(operatorCtx->task()
+                      ->queryCtx()
+                      ->queryConfig()
+                      .hashAdaptivityEnabled()),
       pool_(*operatorCtx->pool()) {
   for (auto& hasher : hashers_) {
     keyChannels_.push_back(hasher->channel());
@@ -346,7 +348,6 @@ bool GroupingSet::getGlobalAggregationOutput(
 
   auto groups = lookup_->hits.data();
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
-    aggregates_[i]->finalize(groups, 1);
     if (isPartial) {
       aggregates_[i]->extractAccumulators(groups, 1, &result->childAt(i));
     } else {
@@ -440,7 +441,6 @@ void GroupingSet::extractGroups(
     rows.extractColumn(groups.data(), groups.size(), i, keyVector);
   }
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
-    aggregates_[i]->finalize(groups.data(), groups.size());
     auto& aggregateVector = result->childAt(i + totalKeys);
     if (isPartial_) {
       aggregates_[i]->extractAccumulators(
