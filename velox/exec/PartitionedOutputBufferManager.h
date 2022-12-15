@@ -21,12 +21,29 @@
 
 namespace facebook::velox::exec {
 
-// nullptr in pages indicates that there is no more data.
-// sequence is the same as specified in BufferManager::getData call. The caller
-// is expected to advance sequence by the number of entries in groups and call
-// BufferManager::acknowledge.
-using DataAvailableCallback = std::function<
-    void(std::vector<std::unique_ptr<folly::IOBuf>> pages, int64_t sequence)>;
+enum GetDataStatus { SUCCESS, ERR_BUFFER_NOT_FOUND };
+
+class DataAvailableCallbackParam {
+ public:
+  DataAvailableCallbackParam(
+      std::vector<std::unique_ptr<folly::IOBuf>> pages,
+      int64_t sequence,
+      GetDataStatus status)
+      : pages(std::move(pages)), sequence(sequence), status(status) {}
+  std::vector<std::unique_ptr<folly::IOBuf>> pages;
+  int64_t sequence;
+  GetDataStatus status;
+};
+
+using DataAvailableCallbackParamUniqPtr =
+    std::unique_ptr<DataAvailableCallbackParam>;
+
+// A callback function a caller must pass to
+// PartitionedOutputBufferManager::getData(). This function is invoked when the
+// data is available. If the pages is empty and the status is
+// GetDataStatus::SUCCESS indicates that there was no data avaialbe.
+using DataAvailableCallback =
+    std::function<void(std::unique_ptr<DataAvailableCallbackParam> param)>;
 
 struct DataAvailable {
   DataAvailableCallback callback;
@@ -35,7 +52,9 @@ struct DataAvailable {
 
   void notify() {
     if (callback) {
-      callback(std::move(data), sequence);
+      auto param = std::make_unique<DataAvailableCallbackParam>(
+          std::move(data), sequence, GetDataStatus::SUCCESS);
+      callback(std::move(param));
     }
   }
 };
@@ -265,7 +284,8 @@ class PartitionedOutputBufferManager {
  private:
   // Retrieves the set of buffers for a query.
   std::shared_ptr<PartitionedOutputBuffer> getBuffer(const std::string& taskId);
-
+  std::shared_ptr<PartitionedOutputBuffer> getBufferIfExists(
+      const std::string& taskId);
   folly::Synchronized<
       std::unordered_map<std::string, std::shared_ptr<PartitionedOutputBuffer>>,
       std::mutex>

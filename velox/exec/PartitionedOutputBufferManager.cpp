@@ -434,7 +434,9 @@ void PartitionedOutputBuffer::getData(
   }
   releaseAfterAcknowledge(freed, promises);
   if (!data.empty()) {
-    notify(std::move(data), sequence);
+    auto param = std::make_unique<DataAvailableCallbackParam>(
+        std::move(data), sequence, ERR_BUFFER_NOT_FOUND);
+    notify(std::move(param));
   }
 }
 
@@ -480,6 +482,14 @@ PartitionedOutputBufferManager::getBuffer(const std::string& taskId) {
     VELOX_CHECK(
         it != buffers.end(), "Output buffers for task not found: {}", taskId);
     return it->second;
+  });
+}
+
+std::shared_ptr<PartitionedOutputBuffer>
+PartitionedOutputBufferManager::getBufferIfExists(const std::string& taskId) {
+  return buffers_.withLock([&](auto& buffers) {
+    auto it = buffers.find(taskId);
+    return (it == buffers.end()) ? nullptr : it->second;
   });
 }
 
@@ -544,14 +554,14 @@ void PartitionedOutputBufferManager::getData(
     uint64_t maxBytes,
     int64_t sequence,
     DataAvailableCallback notify) {
-  std::shared_ptr<PartitionedOutputBuffer> buffer;
-  try {
-    buffer = getBuffer(taskId);
-  } catch (const VeloxException& e) {
-    notify({}, sequence);
-    return;
+  auto buffer = getBufferIfExists(taskId);
+  if (buffer) {
+    buffer->getData(destination, maxBytes, sequence, notify);
   }
-  buffer->getData(destination, maxBytes, sequence, notify);
+  std::vector<std::unique_ptr<folly::IOBuf>> pages;
+  auto param = std::make_unique<DataAvailableCallbackParam>(
+      std::move(pages), sequence, ERR_BUFFER_NOT_FOUND);
+  notify(std::move(param));
 }
 
 void PartitionedOutputBufferManager::initializeTask(

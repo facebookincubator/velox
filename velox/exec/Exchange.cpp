@@ -107,20 +107,21 @@ class LocalExchangeSource : public ExchangeSource {
         // Since this lambda may outlive 'this', we need to capture a
         // shared_ptr to the current object (self).
         [self, requestedSequence, buffers, this](
-            std::vector<std::unique_ptr<folly::IOBuf>> data, int64_t sequence) {
-          if (requestedSequence > sequence) {
+            DataAvailableCallbackParamUniqPtr param) {
+          if (requestedSequence > param->sequence) {
             VLOG(2) << "Receives earlier sequence than requested: task "
                     << taskId_ << ", destination " << destination_
-                    << ", requested " << sequence << ", received "
+                    << ", requested " << param->sequence << ", received "
                     << requestedSequence;
-            int64_t nExtra = requestedSequence - sequence;
-            VELOX_CHECK(nExtra < data.size());
-            data.erase(data.begin(), data.begin() + nExtra);
-            sequence = requestedSequence;
+            int64_t nExtra = requestedSequence - param->sequence;
+            VELOX_CHECK(nExtra < param->pages.size());
+            param->pages.erase(
+                param->pages.begin(), param->pages.begin() + nExtra);
+            param->sequence = requestedSequence;
           }
           std::vector<std::unique_ptr<SerializedPage>> pages;
           bool atEnd = false;
-          for (auto& inputPage : data) {
+          for (auto& inputPage : param->pages) {
             if (!inputPage) {
               atEnd = true;
               // Keep looping, there could be extra end markers.
@@ -142,7 +143,7 @@ class LocalExchangeSource : public ExchangeSource {
               queue_->enqueue(nullptr);
               atEnd_ = true;
             }
-            ackSequence = sequence_ = sequence + pages.size();
+            ackSequence = sequence_ = param->sequence + pages.size();
           }
           // Outside of queue mutex.
           if (atEnd_) {

@@ -114,15 +114,16 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
         maxBytes,
         sequence,
         [destination, sequence, expectedGroups, &receivedData](
-            std::vector<std::unique_ptr<folly::IOBuf>> pages,
-            int64_t inSequence) {
+            DataAvailableCallbackParamUniqPtr param) {
           EXPECT_FALSE(receivedData) << "for destination " << destination;
-          EXPECT_EQ(pages.size(), expectedGroups)
+          EXPECT_EQ(param->pages.size(), expectedGroups)
               << "for destination " << destination;
-          for (const auto& page : pages) {
+          for (const auto& page : param->pages) {
             EXPECT_TRUE(page != nullptr) << "for destination " << destination;
           }
-          EXPECT_EQ(inSequence, sequence) << "for destination " << destination;
+          EXPECT_EQ(param->sequence, sequence)
+              << "for destination " << destination;
+          EXPECT_EQ(param->status, GetDataStatus::SUCCESS);
           receivedData = true;
         });
     EXPECT_TRUE(receivedData) << "for destination " << destination;
@@ -150,12 +151,12 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
   DataAvailableCallback
   receiveEndMarker(int destination, int64_t sequence, bool& receivedEndMarker) {
     return [destination, sequence, &receivedEndMarker](
-               std::vector<std::unique_ptr<folly::IOBuf>> pages,
-               int64_t inSequence) {
+               DataAvailableCallbackParamUniqPtr param) {
       EXPECT_FALSE(receivedEndMarker) << "for destination " << destination;
-      EXPECT_EQ(pages.size(), 1) << "for destination " << destination;
-      EXPECT_TRUE(pages[0] == nullptr) << "for destination " << destination;
-      EXPECT_EQ(inSequence, sequence) << "for destination " << destination;
+      EXPECT_EQ(param->pages.size(), 1) << "for destination " << destination;
+      EXPECT_TRUE(param->pages[0] == nullptr)
+          << "for destination " << destination;
+      EXPECT_EQ(param->sequence, sequence) << "for destination " << destination;
       receivedEndMarker = true;
     };
   }
@@ -199,15 +200,15 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
       bool& receivedData) {
     receivedData = false;
     return [destination, sequence, expectedGroups, &receivedData](
-               std::vector<std::unique_ptr<folly::IOBuf>> pages,
-               int64_t inSequence) {
+               DataAvailableCallbackParamUniqPtr param) {
       EXPECT_FALSE(receivedData) << "for destination " << destination;
-      EXPECT_EQ(pages.size(), expectedGroups)
+      EXPECT_EQ(param->pages.size(), expectedGroups)
           << "for destination " << destination;
       for (int i = 0; i < expectedGroups; i++) {
-        EXPECT_TRUE(pages[i] != nullptr) << "for destination " << destination;
+        EXPECT_TRUE(param->pages[i] != nullptr)
+            << "for destination " << destination;
       }
-      EXPECT_EQ(inSequence, sequence) << "for destination " << destination;
+      EXPECT_EQ(param->sequence, sequence) << "for destination " << destination;
       receivedData = true;
     };
   }
@@ -419,4 +420,22 @@ TEST_F(PartitionedOutputBufferManagerTest, serializedPage) {
     EXPECT_EQ(0, pool_->getCurrentBytes());
     EXPECT_EQ(mappedMemory->allocateBytesStats().totalSmall, 0);
   }
+}
+
+TEST_F(PartitionedOutputBufferManagerTest, getDataOnTaskWithNoBuffer) {
+  // Fetching data on a task with no entry in buffer manager shouldn't throw
+  // any exception.
+  bool notified = false;
+  bufferManager_->getData(
+      "test.0.1",
+      1,
+      100,
+      123,
+      [&notified](DataAvailableCallbackParamUniqPtr param) {
+        ASSERT_TRUE(param->pages.empty());
+        ASSERT_EQ(param->sequence, 123);
+        ASSERT_EQ(param->status, GetDataStatus::ERR_BUFFER_NOT_FOUND);
+        notified = true;
+      });
+  ASSERT_TRUE(notified);
 }
