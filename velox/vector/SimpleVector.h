@@ -59,9 +59,9 @@ class SimpleVector : public BaseVector {
  public:
   SimpleVector(
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<const Type> type,
+      const TypePtr& type,
       VectorEncoding::Simple encoding,
-      BufferPtr nulls,
+      const BufferPtr& nulls,
       size_t length,
       const SimpleVectorStats<T>& stats,
       std::optional<vector_size_t> distinctValueCount,
@@ -71,9 +71,9 @@ class SimpleVector : public BaseVector {
       std::optional<ByteCount> storageByteCount = std::nullopt)
       : BaseVector(
             pool,
-            std::move(type),
+            type,
             encoding,
-            std::move(nulls),
+            nulls,
             length,
             distinctValueCount,
             nullCount,

@@ -50,6 +50,9 @@ class FlatVector;
 
 class VectorPool;
 
+class BaseVector;
+using VectorPtr = std::shared_ptr<BaseVector>;
+
 /**
  * Base class for all columnar-based vectors of any type.
  */
@@ -59,9 +62,9 @@ class BaseVector {
 
   BaseVector(
       velox::memory::MemoryPool* pool,
-      TypePtr type,
+      const TypePtr& type,
       VectorEncoding::Simple encoding,
-      BufferPtr nulls,
+      const BufferPtr& nulls,
       size_t length,
       std::optional<vector_size_t> distinctValueCount = std::nullopt,
       std::optional<vector_size_t> nullCount = std::nullopt,
@@ -467,7 +470,7 @@ class BaseVector {
   static std::shared_ptr<BaseVector> wrapInConstant(
       vector_size_t length,
       vector_size_t index,
-      std::shared_ptr<BaseVector> vector);
+      const VectorPtr& vector);
 
   // Makes 'result' writable for 'rows'. A wrapper (e.g. dictionary, constant,
   // sequence) is flattened and a multiply referenced flat vector is copied.
@@ -534,7 +537,7 @@ class BaseVector {
   // If 'vector' is a wrapper, returns the underlying values vector. This is
   // virtual and defined here because we must be able to access this in type
   // agnostic code without a switch on all data types.
-  virtual std::shared_ptr<BaseVector> valueVector() const {
+  virtual const std::shared_ptr<BaseVector>& valueVector() const {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
@@ -839,8 +842,6 @@ template <>
 inline uint64_t BaseVector::byteSize<UnknownValue>(vector_size_t) {
   return 0;
 }
-
-using VectorPtr = std::shared_ptr<BaseVector>;
 
 // Returns true if vector is a Lazy vector, possibly wrapped, that hasn't
 // been loaded yet.

@@ -32,18 +32,18 @@ namespace velox {
 
 BaseVector::BaseVector(
     velox::memory::MemoryPool* pool,
-    std::shared_ptr<const Type> type,
+    const TypePtr& type,
     VectorEncoding::Simple encoding,
-    BufferPtr nulls,
+    const BufferPtr& nulls,
     size_t length,
     std::optional<vector_size_t> distinctValueCount,
     std::optional<vector_size_t> nullCount,
     std::optional<ByteCount> representedByteCount,
     std::optional<ByteCount> storageByteCount)
-    : type_(std::move(type)),
+    : type_(type),
       typeKind_(type_->kind()),
       encoding_(encoding),
-      nulls_(std::move(nulls)),
+      nulls_(nulls),
       rawNulls_(nulls_.get() ? nulls_->as<uint64_t>() : nullptr),
       pool_(pool),
       length_(length),
@@ -179,7 +179,7 @@ VectorPtr BaseVector::wrapInSequence(
 
 template <TypeKind kind>
 static VectorPtr
-addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
+addConstant(vector_size_t size, vector_size_t index, const VectorPtr& vector) {
   using T = typename KindToFlatVector<kind>::WrapperType;
 
   auto pool = vector->pool();
@@ -188,48 +188,52 @@ addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
     if constexpr (std::is_same_v<T, ComplexType>) {
       auto singleNull = BaseVector::create(vector->type(), 1, pool);
       singleNull->setNull(0, true);
-      return std::make_shared<ConstantVector<T>>(
-          pool, size, 0, singleNull, SimpleVectorStats<T>{});
+      return std::make_shared<ConstantVector<T>>(pool, size, 0, singleNull);
     } else {
       return std::make_shared<ConstantVector<T>>(
           pool, size, true, vector->type(), T());
     }
   }
 
+  auto* innerVector = &vector;
   for (;;) {
-    if (vector->isConstantEncoding()) {
-      auto constVector = vector->as<ConstantVector<T>>();
+    if ((*innerVector)->isConstantEncoding()) {
+      auto constVector = (*innerVector)->asUnchecked<ConstantVector<T>>();
       if constexpr (!std::is_same_v<T, ComplexType>) {
-        if (!vector->valueVector()) {
-          T value = constVector->valueAt(0);
-          return std::make_shared<ConstantVector<T>>(
-              pool, size, false, vector->type(), std::move(value));
-        }
+        VELOX_DCHECK(
+            !constVector->valueVector(),
+            "non complex type constant vectors not expected to have value vector");
+        auto value = constVector->valueAt(0);
+        return std::make_shared<ConstantVector<T>>(
+            pool, size, false, constVector->type(), value);
+      } else {
+        index = constVector->index();
+        innerVector = &(*innerVector)->valueVector();
       }
 
-      index = constVector->index();
-      vector = vector->valueVector();
-    } else if (vector->encoding() == VectorEncoding::Simple::DICTIONARY) {
-      BufferPtr indices = vector->as<DictionaryVector<T>>()->indices();
+    } else if (
+        (*innerVector)->encoding() == VectorEncoding::Simple::DICTIONARY) {
+      auto dictionaryVector =
+          (*innerVector)->asUnchecked<DictionaryVector<T>>();
+      const BufferPtr& indices = dictionaryVector->indices();
       index = indices->as<vector_size_t>()[index];
-      vector = vector->valueVector();
+      innerVector = &dictionaryVector->valueVector();
     } else {
       break;
     }
   }
 
-  return std::make_shared<ConstantVector<T>>(
-      pool, size, index, std::move(vector), SimpleVectorStats<T>{});
+  return std::make_shared<ConstantVector<T>>(pool, size, index, *innerVector);
 }
 
 // static
 VectorPtr BaseVector::wrapInConstant(
     vector_size_t length,
     vector_size_t index,
-    VectorPtr vector) {
+    const VectorPtr& vector) {
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      addConstant, kind, length, index, std::move(vector));
+      addConstant, kind, length, index, vector);
 }
 
 template <TypeKind kind>

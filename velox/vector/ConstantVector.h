@@ -62,8 +62,8 @@ class ConstantVector final : public SimpleVector<T> {
       velox::memory::MemoryPool* pool,
       size_t length,
       bool isNull,
-      std::shared_ptr<const Type> type,
-      T&& val,
+      const TypePtr& type,
+      T val,
       const SimpleVectorStats<T>& stats = {},
       std::optional<ByteCount> representedBytes = std::nullopt,
       std::optional<ByteCount> storageByteCount = std::nullopt)
@@ -112,7 +112,7 @@ class ConstantVector final : public SimpleVector<T> {
       velox::memory::MemoryPool* pool,
       vector_size_t length,
       vector_size_t index,
-      VectorPtr base,
+      const VectorPtr& base,
       const SimpleVectorStats<T>& stats = {})
       : SimpleVector<T>(
             pool,
@@ -128,9 +128,7 @@ class ConstantVector final : public SimpleVector<T> {
                 ? std::optional<ByteCount>(
                       (base->representedBytes().value() / base->size()) *
                       length)
-                : std::nullopt /* representedBytes */),
-        valueVector_(base),
-        index_(index) {
+                : std::nullopt /* representedBytes */) {
     VELOX_CHECK_NE(
         base->BaseVector::encoding(),
         VectorEncoding::Simple::CONSTANT,
@@ -139,7 +137,7 @@ class ConstantVector final : public SimpleVector<T> {
         base->BaseVector::encoding(),
         VectorEncoding::Simple::DICTIONARY,
         "Constant vector cannot wrap Dictionary vector");
-    setInternalState();
+    setInternalState(base, index);
   }
 
   virtual ~ConstantVector() override = default;
@@ -222,8 +220,7 @@ class ConstantVector final : public SimpleVector<T> {
     if (loaded == valueVector_) {
       return this;
     }
-    valueVector_ = loaded;
-    setInternalState();
+    setInternalState(valueVector_, index_);
     return this;
   }
 
@@ -259,7 +256,7 @@ class ConstantVector final : public SimpleVector<T> {
 
   // Base vector if isScalar() is false (e.g. complex type vector) or if base
   // vector is a lazy vector that hasn't been loaded yet.
-  VectorPtr valueVector() const override {
+  const VectorPtr& valueVector() const override {
     return valueVector_;
   }
 
@@ -334,8 +331,10 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
  private:
-  void setInternalState() {
-    if (isLazyNotLoaded(*valueVector_)) {
+  void setInternalState(const VectorPtr& valueVector, vector_size_t index) {
+    if (isLazyNotLoaded(*valueVector)) {
+      valueVector_ = valueVector;
+      index_ = index;
       VELOX_CHECK(
           valueVector_->markAsContainingLazyAndWrapped(),
           "An unloaded lazy vector cannot be wrapped by two different "
@@ -344,26 +343,30 @@ class ConstantVector final : public SimpleVector<T> {
       return;
     }
 
-    isNull_ = valueVector_->isNullAt(index_);
+    isNull_ = valueVector->isNullAt(index);
     BaseVector::distinctValueCount_ = isNull_ ? 0 : 1;
     BaseVector::nullCount_ = isNull_ ? BaseVector::length_ : 0;
-    if (valueVector_->isScalar()) {
-      auto simple = valueVector_->loadedVector()->as<SimpleVector<T>>();
-      isNull_ = simple->isNullAt(index_);
+    if (valueVector->isScalar()) {
+      auto simple = valueVector->loadedVector()->asUnchecked<SimpleVector<T>>();
+      isNull_ = simple->isNullAt(index);
       if (!isNull_) {
-        value_ = simple->valueAt(index_);
+        value_ = simple->valueAt(index);
         if constexpr (std::is_same_v<T, StringView>) {
           // Copy string value.
           StringView* valuePtr = reinterpret_cast<StringView*>(&value_);
           setValue(std::string(valuePtr->data(), valuePtr->size()));
 
-          auto stringVector = simple->template as<SimpleVector<StringView>>();
-          if (auto ascii = stringVector->isAscii(index_)) {
+          auto stringVector =
+              simple->template asUnchecked<SimpleVector<StringView>>();
+          if (auto ascii = stringVector->isAscii(index)) {
             SimpleVector<T>::setAllIsAscii(ascii.value());
           }
         }
       }
       valueVector_ = nullptr;
+    } else {
+      valueVector_ = valueVector;
+      index_ = index;
     }
     makeNullsBuffer();
     initialized_ = true;
