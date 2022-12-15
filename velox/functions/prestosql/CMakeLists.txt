@@ -34,6 +34,7 @@ add_library(
   InPredicate.cpp
   Map.cpp
   MapEntries.cpp
+  MapFromEntries.cpp
   MapKeysAndValues.cpp
   MapZipWith.cpp
   Not.cpp

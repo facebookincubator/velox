@@ -40,7 +40,7 @@ class MapFromEntriesTest : public FunctionBaseTest {
 };
 } // namespace
 
-TEST_F(MapFromEntriesTest, primitiveKeyAndPrimitiveValue) {
+TEST_F(MapFromEntriesTest, intKeyAndIntValue) {
   auto rowType = ROW({INTEGER(), INTEGER()});
   std::vector<std::vector<variant>> data = {
       {variant::row({1, 11}), variant::row({2, 22}), variant::row({3, 33})}};
@@ -50,7 +50,7 @@ TEST_F(MapFromEntriesTest, primitiveKeyAndPrimitiveValue) {
   testExpr(expected, "map_from_entries(C0)", {input});
 }
 
-TEST_F(MapFromEntriesTest, primitiveKeyAndVarcharValue) {
+TEST_F(MapFromEntriesTest, intKeyAndVarcharValue) {
   auto rowType = ROW({INTEGER(), VARCHAR()});
   std::vector<std::vector<variant>> data = {
       {variant::row({1, "red"}),
@@ -62,7 +62,7 @@ TEST_F(MapFromEntriesTest, primitiveKeyAndVarcharValue) {
   testExpr(expected, "map_from_entries(C0)", {input});
 }
 
-TEST_F(MapFromEntriesTest, varcharKeyAndPrimitiveValue) {
+TEST_F(MapFromEntriesTest, varcharKeyAndIntValue) {
   auto rowType = ROW({VARCHAR(), INTEGER()});
   std::vector<std::vector<variant>> data = {
       {variant::row({"red shiny car ahead", 1}),
@@ -90,7 +90,7 @@ TEST_F(MapFromEntriesTest, varcharKeyAndVarcharValue) {
   testExpr(expected, "map_from_entries(C0)", {input});
 }
 
-TEST_F(MapFromEntriesTest, valueIsNull) {
+TEST_F(MapFromEntriesTest, valueIsNullToPass) {
   auto rowType = ROW({INTEGER(), INTEGER()});
   std::vector<std::vector<variant>> data = {
       {variant::row({1, variant::null(TypeKind::INTEGER)}),
@@ -102,7 +102,7 @@ TEST_F(MapFromEntriesTest, valueIsNull) {
   testExpr(expected, "map_from_entries(C0)", {input});
 }
 
-TEST_F(MapFromEntriesTest, mapEntryIsNull) {
+TEST_F(MapFromEntriesTest, mapEntryIsNullToFail) {
   auto rowType = ROW({INTEGER(), INTEGER()});
   std::vector<std::vector<variant>> data = {
       {variant(TypeKind::ROW), variant::row({1, 11})}};
@@ -111,7 +111,7 @@ TEST_F(MapFromEntriesTest, mapEntryIsNull) {
       evaluateExprOnly("map_from_entries(C0)", {input}), VeloxUserError);
 }
 
-TEST_F(MapFromEntriesTest, keyIsNull) {
+TEST_F(MapFromEntriesTest, keyIsNullToFail) {
   auto rowType = ROW({INTEGER(), INTEGER()});
   std::vector<std::vector<variant>> data = {
       {variant::row({variant::null(TypeKind::INTEGER), 0}),
@@ -121,10 +121,21 @@ TEST_F(MapFromEntriesTest, keyIsNull) {
       evaluateExprOnly("map_from_entries(C0)", {input}), VeloxUserError);
 }
 
-TEST_F(MapFromEntriesTest, duplicateKey) {
+TEST_F(MapFromEntriesTest, duplicateIntKeyToFail) {
   auto rowType = ROW({INTEGER(), INTEGER()});
   std::vector<std::vector<variant>> data = {
       {variant::row({1, 10}), variant::row({1, 11}), variant::row({2, 22})}};
+  auto input = makeArrayOfRowVector(rowType, data);
+  EXPECT_THROW(
+      evaluateExprOnly("map_from_entries(C0)", {input}), VeloxUserError);
+}
+
+TEST_F(MapFromEntriesTest, duplicateVarcharKeyToFail) {
+  auto rowType = ROW({VARCHAR(), VARCHAR()});
+  std::vector<std::vector<variant>> data = {
+      {variant::row({"blue clear sky above", "blue"}),
+       variant::row({"red shiny car ahead", "red"}),
+       variant::row({"red shiny car ahead", "shiny"})}};
   auto input = makeArrayOfRowVector(rowType, data);
   EXPECT_THROW(
       evaluateExprOnly("map_from_entries(C0)", {input}), VeloxUserError);

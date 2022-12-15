@@ -15,46 +15,9 @@
  */
 #include <string>
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/Registerer.h"
 #include "velox/functions/lib/MapConcat.h"
-#include "velox/functions/prestosql/MapFunctions.h"
 
 namespace facebook::velox::functions {
-
-template <typename K, typename V>
-inline void registerMapFromEntriesFunctions() {
-  registerFunction<
-      ParameterBinder<MapFromEntriesFunction, K, V>,
-      Map<K, V>,
-      Array<Row<K, V>>>({"map_from_entries"});
-}
-
-template <typename V>
-void registerMapFromEntriesWithFixedKeyType() {
-  registerMapFromEntriesFunctions<int8_t, V>();
-  registerMapFromEntriesFunctions<int16_t, V>();
-  registerMapFromEntriesFunctions<int32_t, V>();
-  registerMapFromEntriesFunctions<int64_t, V>();
-  registerMapFromEntriesFunctions<float, V>();
-  registerMapFromEntriesFunctions<double, V>();
-  registerMapFromEntriesFunctions<bool, V>();
-  registerMapFromEntriesFunctions<Varchar, V>();
-  registerMapFromEntriesFunctions<Timestamp, V>();
-  registerMapFromEntriesFunctions<Date, V>();
-}
-
-void registerMapFromEntries() {
-  registerMapFromEntriesWithFixedKeyType<int8_t>();
-  registerMapFromEntriesWithFixedKeyType<int16_t>();
-  registerMapFromEntriesWithFixedKeyType<int32_t>();
-  registerMapFromEntriesWithFixedKeyType<int64_t>();
-  registerMapFromEntriesWithFixedKeyType<float>();
-  registerMapFromEntriesWithFixedKeyType<double>();
-  registerMapFromEntriesWithFixedKeyType<bool>();
-  registerMapFromEntriesWithFixedKeyType<Varchar>();
-  registerMapFromEntriesWithFixedKeyType<Timestamp>();
-  registerMapFromEntriesWithFixedKeyType<Date>();
-}
 
 void registerMapFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, "map_filter");
@@ -62,12 +25,12 @@ void registerMapFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_transform_values, "transform_values");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, "map");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_entries, "map_entries");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_from_entries, "map_from_entries");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, "map_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, "map_values");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_zip_with, "map_zip_with");
 
   registerMapConcatFunction("map_concat");
-  registerMapFromEntries();
 }
 
 void registerMapAllowingDuplicates(const std::string& name) {
