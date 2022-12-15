@@ -904,17 +904,29 @@ bool Expr::removeSureNulls(
       continue;
     }
 
-    if (values->mayHaveNulls()) {
-      LocalDecodedVector decoded(context, *values, rows);
-      if (auto* rawNulls = decoded->nulls()) {
+    auto removeNulls = [&](auto rawNulls) {
+      if (rawNulls) {
         if (!result) {
           result = nullHolder.get(rows);
         }
         auto bits = result->asMutableRange().bits();
         bits::andBits(bits, rawNulls, rows.begin(), rows.end());
       }
+    };
+
+    if (values->mayHaveNulls()) {
+      const uint64_t* rawNulls = nullptr;
+      // TODO: Check if we need to optimize this for constant encoding also.
+      if (values->isFlatEncoding()) {
+        rawNulls = values->rawNulls();
+        removeNulls(rawNulls);
+      } else {
+        LocalDecodedVector decoded(context, *values, rows);
+        removeNulls(decoded->nulls());
+      }
     }
   }
+
   if (result) {
     result->updateBounds();
     return true;
@@ -1000,8 +1012,11 @@ void Expr::evalWithNulls(
         if (nonNullHolder.get()->hasSelections()) {
           evalAll(*nonNullHolder.get(), context, result);
         }
-        auto rawNonNulls = nonNullHolder.get()->asRange().bits();
-        addNulls(rows, rawNonNulls, context, result);
+        // If allSelected it means there is no nulls to add.
+        if (!nonNullHolder->isAllSelected()) {
+          auto rawNonNulls = nonNullHolder.get()->asRange().bits();
+          addNulls(rows, rawNonNulls, context, result);
+        }
         return;
       }
     }
@@ -1036,8 +1051,8 @@ void Expr::evalWithMemo(
     }
     if (uncached->hasSelections()) {
       // Fix finalSelection at "rows" if uncached rows is a strict subset to
-      // avoid losing values not in uncached rows that were copied earlier into
-      // "result" from the cached rows.
+      // avoid losing values not in uncached rows that were copied earlier
+      // into "result" from the cached rows.
       ScopedFinalSelectionSetter scopedFinalSelectionSetter(
           context, &rows, uncached->countSelected() < rows.countSelected());
 
@@ -1197,8 +1212,8 @@ void Expr::evalAll(
   bool tryPeelArgs = deterministic_ ? true : false;
   bool defaultNulls = vectorFunction_->isDefaultNullBehavior();
 
-  // Tracks what subset of rows shall un-evaluated inputs and current expression
-  // evaluates. Initially points to rows.
+  // Tracks what subset of rows shall un-evaluated inputs and current
+  // expression evaluates. Initially points to rows.
   const SelectivityVector* remainingRows = &rows;
 
   // Points to a mutable remainingRows, allocated using
@@ -1400,8 +1415,8 @@ bool Expr::applyFunctionWithPeeling(
     setDictionaryWrapping(*decoded, rows, *firstWrapper, context);
 
     // 'newRows' comes from the set of row numbers in the base vector. These
-    // numbers may be larger than rows.end(). Hence, we need to resize constant
-    // inputs.
+    // numbers may be larger than rows.end(). Hence, we need to resize
+    // constant inputs.
     if (newRows->end() > rows.end() && numConstant) {
       for (int i = 0; i < constantArgs.size(); ++i) {
         if (!constantArgs.empty() && constantArgs[i]) {
@@ -1465,8 +1480,8 @@ void Expr::applyFunction(
       }
     }
 
-    // Since result was empty, and either the function set errors for every row
-    // or we did above, set it to be all NULL.
+    // Since result was empty, and either the function set errors for every
+    // row or we did above, set it to be all NULL.
     result = BaseVector::createNullConstant(type(), rows.end(), context.pool());
   }
 
@@ -1496,8 +1511,8 @@ void printExprTree(
     std::unordered_map<const exec::Expr*, uint32_t>& uniqueExprs) {
   auto it = uniqueExprs.find(&expr);
   if (it != uniqueExprs.end()) {
-    // Common sub-expression. Print the full expression, but skip the stats. Add
-    // ID of the expression it duplicates.
+    // Common sub-expression. Print the full expression, but skip the stats.
+    // Add ID of the expression it duplicates.
     out << indent << expr.toString(true) << " -> " << expr.type()->toString();
     out << " [CSE #" << it->second << "]" << std::endl;
     return;
