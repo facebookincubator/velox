@@ -92,6 +92,10 @@ class GroupingSet {
     return table_ ? table_->rows()->numRows() : 0;
   }
 
+  int64_t numDistincts() const {
+    return table_ ? table_->numDistinct() : 0;
+  }
+
  private:
   void addInputForActiveRows(const RowVectorPtr& input, bool mayPushdown);
 

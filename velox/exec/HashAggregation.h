@@ -88,6 +88,9 @@ class HashAggregation : public Operator {
   /// Count the number of input rows. It is reset on partial aggregation output
   /// flush.
   int64_t numInputRows_ = 0;
+  /// Count the number of input vectors. It is reset on partial aggregation output
+  /// flush.
+  int64_t numInputVectors_ = 0;
   /// Count the number of output rows. It is reset on partial aggregation output
   /// flush.
   int64_t numOutputRows_ = 0;
