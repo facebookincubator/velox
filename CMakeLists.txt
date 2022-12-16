@@ -374,7 +374,6 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   endif()
 endif()
 
-message("FOLLY: ${FOLLY_INCLUDE_DIRS}")
 include_directories(SYSTEM ${FOLLY_INCLUDE_DIRS})
 
 if(NOT ${VELOX_BUILD_MINIMAL})
