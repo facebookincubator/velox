@@ -136,7 +136,8 @@ class BaseVector {
   }
 
   virtual bool isNullAt(vector_size_t idx) const {
-    VELOX_DCHECK(isIndexInRange(idx));
+    VELOX_DCHECK_GE(idx, 0, "Row number is out of range");
+    VELOX_DCHECK_LT(idx, length_, "Row number is out of range");
     return rawNulls_ ? bits::isBitNull(rawNulls_, idx) : false;
   }
 

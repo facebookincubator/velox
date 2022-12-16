@@ -775,7 +775,7 @@ void ExpressionFuzzer::reset() {
 }
 
 void ExpressionFuzzer::go() {
-  VELOX_CHECK(!signatures_.empty(), "No function signatures available.");
+  //  VELOX_CHECK(!signatures_.empty(), "No function signatures available.");
   VELOX_CHECK(
       FLAGS_steps > 0 || FLAGS_duration_sec > 0,
       "Either --steps or --duration_sec needs to be greater than zero.")
@@ -789,9 +789,10 @@ void ExpressionFuzzer::go() {
     reset();
 
     // Pick a random signature to choose the root return type.
-    size_t idx = boost::random::uniform_int_distribution<uint32_t>(
-        0, signatures_.size() - 1)(rng_);
-    const auto& rootType = signatures_[idx].returnType;
+    //    size_t idx = boost::random::uniform_int_distribution<uint32_t>(
+    //        0, signatures_.size() - 1)(rng_);
+    //    const auto& rootType = signatures_[idx].returnType;
+    auto rootType = MAP(vectorFuzzer_.randType(0), vectorFuzzer_.randType(2));
 
     // Generate expression tree and input data vectors.
     auto plan = generateExpression(rootType);

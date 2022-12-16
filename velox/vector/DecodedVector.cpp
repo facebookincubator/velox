@@ -490,10 +490,10 @@ DecodedVector::DictionaryWrapping DecodedVector::dictionaryWrapping(
 
   VELOX_CHECK_LE(size, size_);
 
-  if (isOneLevelDictionary(wrapper)) {
-    // Re-use indices and nulls buffers.
-    return {wrapper.wrapInfo(), wrapper.nulls()};
-  } else {
+//  if (isOneLevelDictionary(wrapper)) {
+//    // Re-use indices and nulls buffers.
+//    return {wrapper.wrapInfo(), wrapper.nulls()};
+//  } else {
     // Make a copy of the indices and nulls buffers.
     BufferPtr indices = copyIndicesBuffer(indices_, size, wrapper.pool());
     // Only copy nulls if we have nulls coming from one of the wrappers, don't
@@ -502,7 +502,7 @@ DecodedVector::DictionaryWrapping DecodedVector::dictionaryWrapping(
         ? copyNullsBuffer(nulls_, size, wrapper.pool())
         : nullptr;
     return {std::move(indices), std::move(nulls)};
-  }
+//  }
 }
 
 VectorPtr DecodedVector::wrap(
