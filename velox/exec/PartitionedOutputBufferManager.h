@@ -266,10 +266,11 @@ class PartitionedOutputBufferManager {
 
  private:
   // Retrieves the set of buffers for a query.
+  // Throws an exception if buffer doesn't exist.
   std::shared_ptr<PartitionedOutputBuffer> getBuffer(const std::string& taskId);
 
-  // Retrieves the set of buffers for a query if exists. If taskId is not found,
-  // returns NULL.
+  // Retrieves the set of buffers for a query if exists.
+  // Returns NULL if task not found.
   std::shared_ptr<PartitionedOutputBuffer> getBufferIfExists(
       const std::string& taskId);
 

@@ -533,8 +533,7 @@ void PartitionedOutputBufferManager::acknowledge(
 void PartitionedOutputBufferManager::deleteResults(
     const std::string& taskId,
     int destination) {
-  auto buffer = getBufferIfExists(taskId);
-  if (buffer) {
+  if (auto buffer = getBufferIfExists(taskId)) {
     buffer->deleteResults(destination);
   }
 }
@@ -545,8 +544,7 @@ bool PartitionedOutputBufferManager::getData(
     uint64_t maxBytes,
     int64_t sequence,
     DataAvailableCallback notify) {
-  auto buffer = getBufferIfExists(taskId);
-  if (buffer) {
+  if (auto buffer = getBufferIfExists(taskId)) {
     buffer->getData(destination, maxBytes, sequence, notify);
     return true;
   }
