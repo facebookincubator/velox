@@ -35,7 +35,8 @@ constexpr std::string_view kS3Scheme{"s3://"};
 // This should not be mixed with s3 nor the s3a.
 // S3A Hadoop 3.x (previous connectors "s3" and "s3n" are deprecated).
 constexpr std::string_view kS3aScheme{"s3a://"};
-// DEPRECATED: s3n are deprecated in Hadoop 3.x but we are supporting s3n for data that hasn't been migrated yet.
+// DEPRECATED: s3n are deprecated in Hadoop 3.x but we are supporting s3n for
+// data that hasn't been migrated yet.
 constexpr std::string_view kS3nScheme{"s3n://"};
 // OSS Alibaba support S3 format, usage only with SSL.
 constexpr std::string_view kOssScheme{"oss://"};
@@ -61,7 +62,8 @@ inline bool isOssFile(const std::string_view filename) {
 
 inline bool isS3File(const std::string_view filename) {
   // TODO: Each prefix should be implemented as its own filesystem.
-  return isS3AwsFile(filename) || isS3aFile(filename) || isS3nFile(filename) || isOssFile(filename);
+  return isS3AwsFile(filename) || isS3aFile(filename) || isS3nFile(filename) ||
+      isOssFile(filename);
 }
 
 inline void bucketAndKeyFromS3Path(
