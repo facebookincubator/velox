@@ -434,9 +434,7 @@ void PartitionedOutputBuffer::getData(
   }
   releaseAfterAcknowledge(freed, promises);
   if (!data.empty()) {
-    auto param = std::make_unique<DataAvailableCallbackParam>(
-        std::move(data), sequence, ERR_BUFFER_NOT_FOUND);
-    notify(std::move(param));
+    notify(std::move(data), sequence);
   }
 }
 
@@ -489,7 +487,7 @@ std::shared_ptr<PartitionedOutputBuffer>
 PartitionedOutputBufferManager::getBufferIfExists(const std::string& taskId) {
   return buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
-    return (it == buffers.end()) ? nullptr : it->second;
+    return it == buffers.end() ? nullptr : it->second;
   });
 }
 
@@ -535,20 +533,13 @@ void PartitionedOutputBufferManager::acknowledge(
 void PartitionedOutputBufferManager::deleteResults(
     const std::string& taskId,
     int destination) {
-  auto buffer = buffers_.withLock(
-      [&](auto& buffers) -> std::shared_ptr<PartitionedOutputBuffer> {
-        auto it = buffers.find(taskId);
-        if (it == buffers.end()) {
-          return nullptr;
-        }
-        return it->second;
-      });
+  auto buffer = getBufferIfExists(taskId);
   if (buffer) {
     buffer->deleteResults(destination);
   }
 }
 
-void PartitionedOutputBufferManager::getData(
+bool PartitionedOutputBufferManager::getData(
     const std::string& taskId,
     int destination,
     uint64_t maxBytes,
@@ -557,11 +548,9 @@ void PartitionedOutputBufferManager::getData(
   auto buffer = getBufferIfExists(taskId);
   if (buffer) {
     buffer->getData(destination, maxBytes, sequence, notify);
+    return true;
   }
-  std::vector<std::unique_ptr<folly::IOBuf>> pages;
-  auto param = std::make_unique<DataAvailableCallbackParam>(
-      std::move(pages), sequence, ERR_BUFFER_NOT_FOUND);
-  notify(std::move(param));
+  return false;
 }
 
 void PartitionedOutputBufferManager::initializeTask(

@@ -21,29 +21,12 @@
 
 namespace facebook::velox::exec {
 
-enum GetDataStatus { SUCCESS, ERR_BUFFER_NOT_FOUND };
-
-class DataAvailableCallbackParam {
- public:
-  DataAvailableCallbackParam(
-      std::vector<std::unique_ptr<folly::IOBuf>> pages,
-      int64_t sequence,
-      GetDataStatus status)
-      : pages(std::move(pages)), sequence(sequence), status(status) {}
-  std::vector<std::unique_ptr<folly::IOBuf>> pages;
-  int64_t sequence;
-  GetDataStatus status;
-};
-
-using DataAvailableCallbackParamUniqPtr =
-    std::unique_ptr<DataAvailableCallbackParam>;
-
-// A callback function a caller must pass to
-// PartitionedOutputBufferManager::getData(). This function is invoked when the
-// data is available. If the pages is empty and the status is
-// GetDataStatus::SUCCESS indicates that there was no data avaialbe.
-using DataAvailableCallback =
-    std::function<void(std::unique_ptr<DataAvailableCallbackParam> param)>;
+// nullptr in pages indicates that there is no more data.
+// sequence is the same as specified in BufferManager::getData call. The caller
+// is expected to advance sequence by the number of entries in groups and call
+// BufferManager::acknowledge.
+using DataAvailableCallback = std::function<
+    void(std::vector<std::unique_ptr<folly::IOBuf>> pages, int64_t sequence)>;
 
 struct DataAvailable {
   DataAvailableCallback callback;
@@ -52,9 +35,7 @@ struct DataAvailable {
 
   void notify() {
     if (callback) {
-      auto param = std::make_unique<DataAvailableCallbackParam>(
-          std::move(data), sequence, GetDataStatus::SUCCESS);
-      callback(std::move(param));
+      callback(std::move(data), sequence);
     }
   }
 };
@@ -244,17 +225,19 @@ class PartitionedOutputBufferManager {
   void deleteResults(const std::string& taskId, int destination);
 
   // Adds up to 'maxBytes' bytes worth of data for 'destination' from
-  // 'taskId'. The sequence number of the data must be >=
-  // 'sequence'. If there is no data, 'notify' will be registered and
-  // called when there is data or the source is at end. Existing data
-  // with a sequence number < sequence is deleted. The caller is
+  // 'taskId'. The sequence number of the data must be >= 'sequence'.
+  // If there is no buffer associated with the given taskId, returns false.
+  // If there is no data, 'notify' will be registered and
+  // called when there is data or the source is at end, the function returns
+  // true.
+  // Existing data with a sequence number < sequence is deleted. The caller is
   // expected to increment the sequence number between calls by the
   // number of items received. In this way the next call implicitly
   // acknowledges receipt of the results from the previous. The
   // acknowledge method is offered for an early ack, so that the
   // producer can continue before the consumer is done processing the
   // received data.
-  void getData(
+  bool getData(
       const std::string& taskId,
       int destination,
       uint64_t maxBytes,
@@ -284,8 +267,12 @@ class PartitionedOutputBufferManager {
  private:
   // Retrieves the set of buffers for a query.
   std::shared_ptr<PartitionedOutputBuffer> getBuffer(const std::string& taskId);
+
+  // Retrieves the set of buffers for a query if exists. If taskId is not found,
+  // returns NULL.
   std::shared_ptr<PartitionedOutputBuffer> getBufferIfExists(
       const std::string& taskId);
+
   folly::Synchronized<
       std::unordered_map<std::string, std::shared_ptr<PartitionedOutputBuffer>>,
       std::mutex>
