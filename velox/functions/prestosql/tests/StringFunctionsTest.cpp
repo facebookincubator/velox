@@ -1219,6 +1219,8 @@ TEST_F(StringFunctionsTest, HmacSha1) {
   // d0569c4a4f3df995b04ec497b12872c4a2f97517
   // >>> sha1(b"12345abcde54321", b"velox")
   // 183054bdaf8c83320fee4376e76ffd7e773a650f
+  // sha1(b"velox", b"")
+  // 3ec5ea98df0f5ddb139231ecee2c8a9810a82e08
   EXPECT_EQ(
       hexToDec("d49c944625bdde6c47ad93ea63952bfcf16a630a"),
       hmacSha1("hashme", "velox"));
@@ -1230,8 +1232,12 @@ TEST_F(StringFunctionsTest, HmacSha1) {
       hmacSha1("", "velox"));
   EXPECT_EQ(std::nullopt, hmacSha1(std::nullopt, "velox"));
   EXPECT_EQ(
-      hexToDec("183054bdaf8c83320fee4376e76f1fd7e773a650f"),
+      hexToDec("183054bdaf8c83320fee4376e76ffd7e773a650f"),
       hmacSha1("12345abcde54321", "velox"));
+  EXPECT_EQ(
+      hexToDec("3ec5ea98df0f5ddb139231ecee2c8a9810a82e08"),
+      hmacSha1("velox", ""));
+  EXPECT_EQ(std::nullopt, hmacSha1("velox", std::nullopt));
 }
 
 TEST_F(StringFunctionsTest, HmacSha256) {
