@@ -581,6 +581,10 @@ jobs:
             git config --global user.email "velox@users.noreply.github.com"
             git config --global user.name "velox"
             git checkout main
+            conda init bash
+            source ~/.bashrc
+            conda create -y --name pyveloxenv-docs python=3.7
+            ./scripts/setup-docs.sh pyveloxenv-docs
             make -C velox/docs html
             git checkout gh-pages
             cp -R velox/docs/_build/html/* docs
