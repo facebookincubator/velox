@@ -50,11 +50,11 @@ TEST(S3UtilTest, isS3aFile) {
 }
 
 TEST(S3UtilTest, isS3nFile) {
-  EXPECT_FALSE(isS3aFile("s3n:"));
-  EXPECT_FALSE(isS3aFile("s3n::/bucket"));
-  EXPECT_FALSE(isS3aFile("s3n:/bucket"));
-  EXPECT_FALSE(isS3aFile("S3N://bucket-name/file.txt"));
-  EXPECT_TRUE(isS3aFile("s3n://bucket/file.txt"));
+  EXPECT_FALSE(isS3nFile("s3n:"));
+  EXPECT_FALSE(isS3nFile("s3n::/bucket"));
+  EXPECT_FALSE(isS3nFile("s3n:/bucket"));
+  EXPECT_FALSE(isS3nFile("S3N://bucket-name/file.txt"));
+  EXPECT_TRUE(isS3nFile("s3n://bucket/file.txt"));
 }
 
 TEST(S3UtilTest, isOssFile) {
