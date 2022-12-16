@@ -13,14 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <iostream>
+
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/expression/VectorReaders.h"
-#include "velox/expression/VectorWriters.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 
 namespace facebook::velox::functions {
 namespace {
-
 // See documentation at https://prestodb.io/docs/current/functions/map.html
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
@@ -32,68 +33,109 @@ class MapFromEntriesFunction : public exec::VectorFunction {
       VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 1);
     auto& arg = args[0];
-    MapVectorPtr mapVector;
 
-    auto inputArray = arg->as<ArrayVector>();
-    auto rowVector = inputArray->elements();
-    auto rowKeys = rowVector->as<RowVector>()->childAt(0);
-    auto rowValues = rowVector->as<RowVector>()->childAt(1);
+    VectorPtr localResult;
 
-    DecodedVector rowVectorDecoded;
-    rowVectorDecoded.decode(*rowVector, rows);
-    exec::VectorReader<Any> mapEntryReader(&rowVectorDecoded);
+    // Input can be constant or flat.
+    if (arg->isConstantEncoding()) {
+      auto* constantArray = arg->as<ConstantVector<ComplexType>>();
+      const auto& flatArray = constantArray->valueVector();
+      const auto flatIndex = constantArray->index();
 
-    DecodedVector rowKeyVectorDecoded;
-    rowKeyVectorDecoded.decode(*rowKeys, rows);
-    exec::VectorReader<Any> mapKeyReader(&rowKeyVectorDecoded);
+      SelectivityVector singleRow(flatIndex + 1, false);
+      singleRow.setValid(flatIndex, true);
+      singleRow.updateBounds();
 
-    auto offsets = inputArray->rawOffsets();
-    auto sizes = inputArray->rawSizes();
+      localResult = applyFlat(singleRow, flatArray.get(), outputType, context);
+      localResult =
+          BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
+    } else {
+      exec::DecodedArgs decodedArgs(rows, args, context);
+      auto decodedArg = decodedArgs.at(0);
+      VELOX_CHECK_EQ(decodedArg->base()->typeKind(), TypeKind::ARRAY);
+      auto inputArray = decodedArg->base();
+      localResult = applyFlat(rows, inputArray, outputType, context);
+    }
 
-    rows.applyToSelected([&](vector_size_t row) {
+    context.moveOrCopyResult(localResult, rows, result);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {// array(unknown) -> map(unknown, unknown)
+            exec::FunctionSignatureBuilder()
+                .returnType("map(unknown, unknown)")
+                .argumentType("array(unknown)")
+                .build(),
+            // array(row(K,V)) -> map(K,V)
+            exec::FunctionSignatureBuilder()
+                .knownTypeVariable("K")
+                .typeVariable("V")
+                .returnType("map(K,V)")
+                .argumentType("array(row(K,V))")
+                .build()};
+  }
+
+ private:
+  VectorPtr applyFlat(
+      const SelectivityVector& rows,
+      const BaseVector* inputVector,
+      const TypePtr& outputType,
+      exec::EvalCtx& context) const {
+    auto inputArray = inputVector->as<ArrayVector>();
+    VELOX_CHECK(inputArray);
+
+    VELOX_CHECK_EQ(inputArray->elements()->typeKind(), TypeKind::ROW);
+    auto rowVector = inputArray->elements()->as<RowVector>();
+    VELOX_CHECK(rowVector);
+    auto rowKeyVector = rowVector->childAt(0);
+
+    // validate all map entries and map keys are not null
+    static const char* kNullEntry = "map entry at {} cannot be null";
+    static const char* kNullKey = "map key at {} cannot be null";
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      VELOX_USER_CHECK(!rowVector->isNullAt(row), fmt::format(kNullEntry, row));
       VELOX_USER_CHECK(
-          mapEntryReader.isSet(row),
-          fmt::format("map entry at {} cannot be null", row));
-      VELOX_USER_CHECK(
-          mapKeyReader.isSet(row),
-          fmt::format("map key at {} cannot be null", row));
-
-      // check for duplicate keys
-      auto offset = offsets[row];
-      auto size = sizes[row];
-      for (vector_size_t i = 1; i < size; i++) {
-        if (rowKeys->equalValueAt(rowKeys.get(), offset + i, offset + i - 1)) {
-          auto duplicateKey = rowKeys->wrappedVector()->toString(
-              rowKeys->wrappedIndex(offset + i));
-          VELOX_USER_FAIL(
-              fmt::format("Duplicate keys ({}) are not allowed", duplicateKey));
-        }
-      }
+          !rowKeyVector->isNullAt(row), fmt::format(kNullKey, row));
     });
 
     // To avoid creating new buffers, we try to reuse the input's buffers
     // as many as possible
-    mapVector = std::make_shared<MapVector>(
+    auto rowValueVector = rowVector->childAt(1);
+    auto mapVector = std::make_shared<MapVector>(
         context.pool(),
         outputType,
         inputArray->nulls(),
         rows.size(),
         inputArray->offsets(),
         inputArray->sizes(),
-        rowKeys,
-        rowValues);
+        rowKeyVector,
+        rowValueVector);
 
-    context.moveOrCopyResult(mapVector, rows, result);
+    checkForDuplicateKeys(mapVector, rows, context);
+    return mapVector;
   }
 
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // array(row(K,V)) -> map(K,V)
-    return {exec::FunctionSignatureBuilder()
-                .knownTypeVariable("K")
-                .typeVariable("V")
-                .returnType("map(K,V)")
-                .argumentType("array(row(K,V))")
-                .build()};
+  static void checkForDuplicateKeys(
+      const MapVectorPtr& mapVector,
+      const SelectivityVector& rows,
+      exec::EvalCtx& context) {
+    MapVector::canonicalize(mapVector);
+
+    static const char* kDuplicateKey = "Duplicate keys ({}) are not allowed";
+    auto offsets = mapVector->rawOffsets();
+    auto sizes = mapVector->rawSizes();
+    auto mapKeys = mapVector->mapKeys();
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      auto offset = offsets[row];
+      auto size = sizes[row];
+      for (vector_size_t i = 1; i < size; i++) {
+        if (mapKeys->equalValueAt(mapKeys.get(), offset + i, offset + i - 1)) {
+          auto duplicateKey = mapKeys->wrappedVector()->toString(
+              mapKeys->wrappedIndex(offset + i));
+          VELOX_USER_FAIL(kDuplicateKey, duplicateKey);
+        }
+      }
+    });
   }
 };
 } // namespace
