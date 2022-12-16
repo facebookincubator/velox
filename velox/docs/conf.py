@@ -56,7 +56,11 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.imgmath",
     "sphinx.ext.todo",
+    "sphinx.ext.intersphinx",
+    "sphinx.ext.autosummary",
 ]
+
+autosummary_generate = True
 
 # Breathe configuration
 breathe_projects = {"pyvelox_c": "bindings/doxygen/xml"}

@@ -8,5 +8,5 @@ This includes language bindings supported by Velox. At the moment, Velox only su
     :maxdepth: 1
 
     bindings/python/README_generated_pyvelox
-    bindings/python/cpp
+    bindings/python/pyvelox
     

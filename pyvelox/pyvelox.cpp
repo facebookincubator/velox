@@ -28,9 +28,16 @@ std::string serializeType(const std::shared_ptr<const velox::Type>& type) {
 #ifdef CREATE_PYVELOX_MODULE
 PYBIND11_MODULE(pyvelox, m) {
   m.doc() = R"pbdoc(
-        PyVelox native code module
-        -----------------------
-       )pbdoc";
+      PyVelox native code module
+      --------------------------
+
+      .. currentmodule:: pyvelox.pyvelox
+
+      .. autosummary::
+         :toctree: _generate
+
+         __str__
+  )pbdoc";
 
   addVeloxBindings(m);
 

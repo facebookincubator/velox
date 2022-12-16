@@ -335,9 +335,13 @@ inline void addVectorBindings(
 
   py::class_<BaseVector, VectorPtr>(
       m, "BaseVector", py::module_local(asModuleLocalDefinitions))
-      .def("__str__", [](VectorPtr& v) { return v->toString(); })
+      .def("__str__", [](VectorPtr& v) { return v->toString(); }, R"pbdoc(
+         Length of the vector
+      )pbdoc")
       .def("__len__", &BaseVector::size)
-      .def("size", &BaseVector::size)
+      .def("size", &BaseVector::size, R"pbdoc(
+         Size of the vector
+      )pbdoc")
       .def(
           "__getitem__",
           [](VectorPtr& v, vector_size_t idx) {
