@@ -404,7 +404,7 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
                 "f",
                 "g",
                 "h",
-                // "i",
+                "i",
                 "j",
                 // "k",
                 "l",
@@ -430,8 +430,8 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
                 //    makeArrayVector<Timestamp>({{Timestamp(123'456,
                 //    123'000)}})),
                 makeConstantExpr(makeArrayVector<Date>({{Date(8035)}})),
-                // makeConstantExpr(makeArrayVector<IntervalDayTime>(
-                //     {{IntervalDayTime(123'456)}})),
+                makeConstantExpr(makeArrayVector<IntervalDayTime>(
+                    {{IntervalDayTime(54 * 1000)}})),
                 makeConstantExpr(makeArrayVector<int64_t>({{}})),
                 // Nested array: [[1, 2, 3], [4, 5]]
                 makeConstantExpr(makeArrayVector(
@@ -448,7 +448,7 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
       "array[6],"
       //"array['1970-01-02T10:17:36.000123000'::TIMESTAMP],"
       "array['1992-01-01'::DATE],"
-      //"array[INTERVAL 123456 MILLISECONDS], "
+      "array[INTERVAL 54 MILLISECONDS], "
       "array[], array[array[1,2,3], array[4,5]]");
 }
 

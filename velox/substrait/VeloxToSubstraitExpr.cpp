@@ -171,15 +171,12 @@ const ::substrait::Expression_Literal& toSubstraitNotNullLiteral(
       break;
     }
     case velox::TypeKind::INTERVAL_DAY_TIME: {
-      /*auto vMilliseconds =
-          variantValue.value<TypeKind::INTERVAL_DAY_TIME>().milliseconds();
-      int64_t remainMillis = vMilliseconds;*/
       ::substrait::Expression_Literal_IntervalDayToSecond*
           sIntervalDayToSeconds = google::protobuf::Arena::CreateMessage<
               ::substrait::Expression_Literal_IntervalDayToSecond>(&arena);
-      sIntervalDayToSeconds->set_days(123);
-      sIntervalDayToSeconds->set_seconds(123);
-      sIntervalDayToSeconds->set_microseconds(123);
+      sIntervalDayToSeconds->set_microseconds(
+          variantValue.value<TypeKind::INTERVAL_DAY_TIME>().milliseconds() *
+          1000);
       literalExpr->set_allocated_interval_day_to_second(sIntervalDayToSeconds);
       break;
     }
@@ -327,14 +324,7 @@ toSubstraitNotNullLiteral<TypeKind::INTERVAL_DAY_TIME>(
   ::substrait::Expression_Literal_IntervalDayToSecond* sIntervalDayToSeconds =
       google::protobuf::Arena::CreateMessage<
           ::substrait::Expression_Literal_IntervalDayToSecond>(&arena);
-  int64_t remainMillis = value.milliseconds();
-  const int64_t days = remainMillis / kMillisInDay;
-  sIntervalDayToSeconds->set_days(days);
-  remainMillis -= days * kMillisInDay;
-  const int64_t seconds = remainMillis / kMillisInSecond;
-  sIntervalDayToSeconds->set_seconds(seconds);
-  remainMillis -= seconds * kMillisInSecond;
-  sIntervalDayToSeconds->set_microseconds(remainMillis * 1000);
+  sIntervalDayToSeconds->set_microseconds(value.milliseconds() * 1000);
   literalExpr->set_allocated_interval_day_to_second(sIntervalDayToSeconds);
   return *literalExpr;
 }
