@@ -287,8 +287,9 @@ set(BOOST_INCLUDE_LIBRARIES
     regex
     system
     thread)
+
 set_source(Boost)
-resolve_dependency(Boost REQUIRED_VERSION 1.66.0)
+resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 
 # Range-v3 will be enable when the codegen code actually lands keeping it here
 # for reference. find_package(range-v3)
@@ -340,12 +341,9 @@ set_source(folly)
 resolve_dependency(folly)
 
 # If we use BUNDLED boost we need to set this manually AFTER folly is configured
-if(NOT DEFINED ${Boost_LIBRARIES})
+if(NOT DEFINED Boost_LIBRARIES)
   set(Boost_LIBRARIES ${BOOST_INCLUDE_LIBRARIES})
-  set(BoostCC_LIBRARIES ${BOOST_INCLUDE_LIBRARIES})
-  list(TRANSFORM Boost_LIBRARIES PREPEND boost_)
-  list(TRANSFORM BoostCC_LIBRARIES PREPEND Boost::)
-  list(APPEND Boost_LIBRARIES ${BoostCC_LIBRARIES})
+  list(TRANSFORM Boost_LIBRARIES PREPEND Boost::)
 endif()
 
 set(FOLLY_WITH_DEPENDENCIES

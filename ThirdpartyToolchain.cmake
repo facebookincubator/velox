@@ -80,6 +80,7 @@ macro(build_folly)
     add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR})
     # Avoid possible errors for known warnings
     target_compile_options(folly PUBLIC ${EXTRA_CXX_FLAGS})
+    add_library(Folly::folly ALIAS folly)
   endif()
   set(FOLLY_BENCHMARK_STATIC_LIB
       ${folly_BINARY_DIR}/folly/libfollybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX})
@@ -282,13 +283,20 @@ endif()
 
 macro(build_boost)
   message(STATUS "Building boost from source")
+
+  # required for Boost::thread
+  find_package(Threads)
+
+  # Make download progress visible
   set(FETCHCONTENT_QUIET OFF)
+
   FetchContent_Declare(
     Boost
     GIT_REPOSITORY https://github.com/boostorg/boost.git
     GIT_TAG boost-1.80.0
     GIT_SHALLOW TRUE)
   FetchContent_Populate(Boost)
+
   # Boost cmake uses the global option
   set(BUILD_SHARED_LIBS ON)
   add_subdirectory(${boost_SOURCE_DIR} ${boost_BINARY_DIR})
@@ -307,11 +315,10 @@ macro(build_boost)
 
   # this prevents system boost from leaking in
   set(Boost_NO_SYSTEM_PATHS ON)
-  # We have to keep the FinBoost.cmake in an subfolder to prevent it from
-  # overriding the system provided one
+  # We have to keep the FindBoost.cmake in an subfolder to prevent it from
+  # overriding the system provided one when Boost_SOURCE=SYSTEM
   list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/CMake/boost)
   set(FETCHCONTENT_QUIET ON)
-
 endmacro()
 
 # ================================ END BOOST ================================
