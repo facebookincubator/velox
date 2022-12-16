@@ -308,7 +308,9 @@ macro(build_boost)
 
   # this prevents system boost from leaking in
   set(Boost_NO_SYSTEM_PATHS ON)
-  list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/CMake)
+  # We have to keep the FinBoost.cmake in an subfolder to prevent it from
+  # overriding the system provided one
+  list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/CMake/boost)
   set(FETCHCONTENT_QUIET ON)
 
 endmacro()
