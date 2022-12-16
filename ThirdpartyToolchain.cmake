@@ -14,13 +14,12 @@
 
 # MODULE:   ThirdpartyToolchain
 #
-# PROVIDES: resolve_dependency( DEPENDENCY_NAME dependencyName [REQUIRED_VERSION
-# required version] ... )
+# PROVIDES: resolve_dependency( dependency_name dependencyName [...] )
 #
 # Provides the ability to resolve third party dependencies. If the dependency is
 # already available in the system it will be used.
 #
-# The DEPENDENCY_NAME argument is required. The dependencyName value will be
+# The dependency_name argument is required. The dependencyName value will be
 # used to search for the installed dependencies Config file and thus this name
 # should match find_package() standards.
 #
@@ -317,12 +316,12 @@ endmacro()
 
 # ================================ END BOOST ================================
 
-macro(build_dependency DEPENDENCY_NAME)
-  if("${DEPENDENCY_NAME}" STREQUAL "folly")
+macro(build_dependency dependency_name)
+  if("${dependency_name}" STREQUAL "folly")
     build_folly()
-  elseif("${DEPENDENCY_NAME}" STREQUAL "Protobuf")
+  elseif("${dependency_name}" STREQUAL "Protobuf")
     build_protobuf()
-  elseif("${DEPENDENCY_NAME}" STREQUAL "pybind11")
+  elseif("${dependency_name}" STREQUAL "pybind11")
     build_pybind11()
   elseif("${DEPENDENCY_NAME}" STREQUAL "fmt")
     build_fmt()
@@ -332,7 +331,7 @@ macro(build_dependency DEPENDENCY_NAME)
     build_boost()
   else()
     message(
-      FATAL_ERROR "Unknown thirdparty dependency to build: ${DEPENDENCY_NAME}")
+      FATAL_ERROR "Unknown thirdparty dependency to build: ${dependency_name}")
   endif()
 endmacro()
 
@@ -340,64 +339,52 @@ endmacro()
 #
 # Provides the macro resolve_dependency(). This macro will allow us to find the
 # dependency via the usage of find_package or use the custom
-# build_dependency(DEPENDENCY_NAME) macro to download and build the third party
+# build_dependency(dependency_name) macro to download and build the third party
 # dependency.
 #
-# resolve_dependency(DEPENDENCY_NAME [REQUIRED_VERSION <required_version>] )
+# resolve_dependency(dependency_name [...] )
 #
 # The resolve_dependency() macro can be used to define a thirdparty dependency.
 #
-# ${DEPENDENCY_NAME}_SOURCE is expected to be set to either AUTO, SYSTEM or
-# BUNDLED. If ${DEPENDENCY_NAME}_SOURCE is SYSTEM it will try to find the
-# corresponding package via find_package and if not found it will call the
+# [...]: the macro will pass all arguments after DELPENDENCY_NAME on to
+# find_package. ${dependency_name}_SOURCE is expected to be set to either AUTO,
+# SYSTEM or BUNDLED. If ${dependency_name}_SOURCE is SYSTEM it will try to find
+# the corresponding package via find_package and if not found it will call the
 # build_dependency macro to download and build the third party dependency. If
-# ${DEPENDENCY_NAME}_SOURCE is SYSTEM it will force to find via find_package. If
-# ${DEPENDENCY_NAME}_SOURCE is BUNDLED it will force to build from source.
+# ${dependency_name}_SOURCE is SYSTEM it will force to find via find_package. If
+# ${dependency_name}_SOURCE is BUNDLED it will force to build from source.
 #
-# If REQUIRED_VERSION is provided it will be used as the VERSION to be used on
-# the find_package(DEPENDENCY_NAME [version]) call. In the case of setting
-# ${DEPENDENCY_NAME}_SOURCE to SYSTEM if the dependency is not found the build
-# will fail and will not fall back to download and build from source.
-macro(resolve_dependency DEPENDENCY_NAME)
-  set(options)
-  set(one_value_args REQUIRED_VERSION)
-  set(multi_value_args)
-  cmake_parse_arguments(ARG "${options}" "${one_value_args}"
-                        "${multi_value_args}" ${ARGN})
-  if(ARG_UNPARSED_ARGUMENTS)
-    message(
-      SEND_ERROR "Error: unrecognized arguments: ${ARG_UNPARSED_ARGUMENTS}")
-  endif()
-  set(PACKAGE_NAME ${DEPENDENCY_NAME})
-  set(FIND_PACKAGE_ARGUMENTS ${PACKAGE_NAME})
-  if(ARG_REQUIRED_VERSION)
-    list(APPEND FIND_PACKAGE_ARGUMENTS ${ARG_REQUIRED_VERSION})
-  endif()
-  if(${DEPENDENCY_NAME}_SOURCE STREQUAL "AUTO")
-    find_package(${FIND_PACKAGE_ARGUMENTS} QUIET)
-    if(${${PACKAGE_NAME}_FOUND})
-      set(${DEPENDENCY_NAME}_SOURCE "SYSTEM")
+# In the case of setting ${dependency_name}_SOURCE to SYSTEM if the dependency
+# is not found the build will fail and will not fall back to download and build
+# from source.
+macro(resolve_dependency dependency_name)
+  set(find_package_args ${dependency_name} ${ARGN})
+  list(REMOVE_ITEM find_package_args REQUIRED QUIET)
+  if(${dependency_name}_SOURCE STREQUAL "AUTO")
+    find_package(${find_package_args} QUIET)
+    if(${${dependency_name}_FOUND})
+      set(${dependency_name}_SOURCE "SYSTEM")
     else()
-      build_dependency(${DEPENDENCY_NAME})
-      set(${DEPENDENCY_NAME}_SOURCE "BUNDLED")
+      build_dependency(${dependency_name})
+      set(${dependency_name}_SOURCE "BUNDLED")
     endif()
-  elseif(${DEPENDENCY_NAME}_SOURCE STREQUAL "SYSTEM")
-    find_package(${FIND_PACKAGE_ARGUMENTS} REQUIRED)
-  elseif(${DEPENDENCY_NAME}_SOURCE STREQUAL "BUNDLED")
-    build_dependency(${DEPENDENCY_NAME})
+  elseif(${dependency_name}_SOURCE STREQUAL "SYSTEM")
+    find_package(${find_package_args} REQUIRED)
+  elseif(${dependency_name}_SOURCE STREQUAL "BUNDLED")
+    build_dependency(${dependency_name})
   else()
     message(
       FATAL_ERROR
-        "Invalid source for ${DEPENDENCY_NAME}: ${${DEPENDENCY_NAME}_SOURCE}")
+        "Invalid source for ${dependency_name}: ${${dependency_name}_SOURCE}")
   endif()
 endmacro()
 
 # By using a macro we don't need to propagate the value into the parent scope.
-macro(set_source DEPENDENCY_NAME)
-  set_with_default(${DEPENDENCY_NAME}_SOURCE ${DEPENDENCY_NAME}_SOURCE
+macro(set_source dependency_name)
+  set_with_default(${dependency_name}_SOURCE ${dependency_name}_SOURCE
                    ${VELOX_DEPENDENCY_SOURCE})
   message(
-    STATUS "Setting ${DEPENDENCY_NAME} source to ${${DEPENDENCY_NAME}_SOURCE}")
+    STATUS "Setting ${dependency_name} source to ${${dependency_name}_SOURCE}")
 endmacro()
 
 # Set a variable to the value of $ENV{envvar_name} if defined, set to ${DEFAULT}
