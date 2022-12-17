@@ -395,20 +395,6 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
       PlanBuilder(pool_.get())
           .values({vectors})
           .addNode([&](std::string id, core::PlanNodePtr input) {
-            std::vector<std::string> names = {
-                "a",
-                "b",
-                "c",
-                "d",
-                "e",
-                "f",
-                "g",
-                "h",
-                "i",
-                "j",
-                // "k",
-                "l",
-                "m"};
             std::vector<core::TypedExprPtr> expressions = {
                 makeConstantExpr(
                     makeNullableArrayVector<bool>({{true, std::nullopt}})),
@@ -426,9 +412,8 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
                     makeNullableArrayVector<double>({{5.5, std::nullopt}})),
                 makeConstantExpr(
                     makeArrayVector<StringView>({{StringView("6")}})),
-                // makeConstantExpr(
-                //    makeArrayVector<Timestamp>({{Timestamp(123'456,
-                //    123'000)}})),
+                makeConstantExpr(makeArrayVector<Timestamp>(
+                    {{Timestamp(123'456, 123'000)}})),
                 makeConstantExpr(makeArrayVector<Date>({{Date(8035)}})),
                 makeConstantExpr(makeArrayVector<IntervalDayTime>(
                     {{IntervalDayTime(54 * 1000)}})),
@@ -437,6 +422,10 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
                 makeConstantExpr(makeArrayVector(
                     {0}, makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}}))),
             };
+            std::vector<std::string> names(expressions.size());
+            for (auto i = 0; i < names.size(); ++i) {
+              names[i] = fmt::format("e{}", i);
+            }
             return std::make_shared<core::ProjectNode>(
                 id, std::move(names), std::move(expressions), input);
           })
@@ -446,7 +435,7 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
       "SELECT array[true, null], array[0, null], array[1, null], "
       "array[2, null], array[3, null], array[4.4, null], array[5.5, null], "
       "array[6],"
-      //"array['1970-01-02T10:17:36.000123000'::TIMESTAMP],"
+      "array['1970-01-02T10:17:36.000123000'::TIMESTAMP],"
       "array['1992-01-01'::DATE],"
       "array[INTERVAL 54 MILLISECONDS], "
       "array[], array[array[1,2,3], array[4,5]]");
