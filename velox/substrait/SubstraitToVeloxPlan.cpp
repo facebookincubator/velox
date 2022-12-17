@@ -60,6 +60,17 @@ core::SortOrder toSortOrder(const ::substrait::SortField& sortField) {
   }
 }
 
+std::vector<core::TypedExprPtr> NamesToFieldAccessExpressions(
+    const std::vector<TypePtr>& types,
+    const std::vector<std::string>& names) {
+  std::vector<core::TypedExprPtr> typedExpressions;
+  for (uint32_t idx = 0; idx < types.size(); idx++) {
+    typedExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(types[idx], names[idx]));
+  }
+  return typedExpressions;
+}
+
 } // namespace
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
@@ -128,17 +139,18 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     aggOutNames.emplace_back(substraitParser_->makeNodeName(planNodeId_, idx));
   }
 
-  // Create Aggregate node.
-  return std::make_shared<core::AggregationNode>(
-      nextPlanNodeId(),
-      aggStep,
-      veloxGroupingExprs,
-      preGroupingExprs,
-      aggOutNames,
-      aggExprs,
-      aggregateMasks,
-      ignoreNullKeys,
-      childNode);
+  return ProcessEmit(
+      aggRel,
+      std::make_shared<core::AggregationNode>(
+          nextPlanNodeId(),
+          aggStep,
+          veloxGroupingExprs,
+          preGroupingExprs,
+          aggOutNames,
+          aggExprs,
+          aggregateMasks,
+          ignoreNullKeys,
+          childNode));
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
@@ -154,6 +166,20 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
   const auto& inputType = childNode->outputType();
   int colIdx = 0;
+  // Note that Substrait projection adds the project expressions on top of the
+  // input to the projection node. Thus we need to add the input columns first
+  // and then add the projection expressions.
+
+  // adding input node columns
+  for (uint32_t idx = 0; idx < inputType->size(); idx++) {
+    const auto& field_name = inputType->nameOf(idx);
+    projectNames.emplace_back(field_name);
+    expressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+        inputType->childAt(idx), field_name));
+    colIdx += 1;
+  }
+
+  // adding projection columns
   for (const auto& expr : projectExprs) {
     expressions.emplace_back(exprConverter_->toVeloxExpr(expr, inputType));
     projectNames.emplace_back(
@@ -161,11 +187,13 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     colIdx += 1;
   }
 
-  return std::make_shared<core::ProjectNode>(
-      nextPlanNodeId(),
-      std::move(projectNames),
-      std::move(expressions),
-      childNode);
+  return ProcessEmit(
+      projectRel,
+      std::make_shared<core::ProjectNode>(
+          nextPlanNodeId(),
+          std::move(projectNames),
+          std::move(expressions),
+          std::move(childNode)));
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
@@ -214,13 +242,14 @@ SubstraitVeloxPlanConverter::processSortField(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::FilterRel& filterRel) {
   auto childNode = convertSingleInput<::substrait::FilterRel>(filterRel);
-  const auto& inputType = childNode->outputType();
-  const auto& sExpr = filterRel.condition();
 
-  return std::make_shared<core::FilterNode>(
-      nextPlanNodeId(),
-      exprConverter_->toVeloxExpr(sExpr, inputType),
-      childNode);
+  return ProcessEmit(
+      filterRel,
+      std::make_shared<core::FilterNode>(
+          nextPlanNodeId(),
+          exprConverter_->toVeloxExpr(
+              filterRel.condition(), childNode->outputType()),
+          childNode));
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
@@ -355,9 +384,14 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     return toVeloxPlan(readRel, outputType);
 
   } else {
-    auto tableScanNode = std::make_shared<core::TableScanNode>(
-        nextPlanNodeId(), outputType, tableHandle, assignments);
-    return tableScanNode;
+    // handle emit
+    return ProcessEmit(
+        readRel,
+        std::make_shared<core::TableScanNode>(
+            nextPlanNodeId(),
+            std::move(outputType),
+            std::move(tableHandle),
+            std::move(assignments)));
   }
 }
 
@@ -418,7 +452,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         std::make_shared<RowVector>(pool_, type, nullptr, batchSize, children));
   }
 
-  return std::make_shared<core::ValuesNode>(nextPlanNodeId(), vectors);
+  return ProcessEmit(
+      readRel,
+      std::make_shared<core::ValuesNode>(nextPlanNodeId(), std::move(vectors)));
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
