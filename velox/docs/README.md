@@ -27,13 +27,7 @@ Generate Python bindings Get started page.
 pandoc ../../pyvelox/README.md --from markdown --to rst -s -o bindings/python/README_generated_pyvelox.rst
 ```
 
-Generate doxygen xml
-
-```bash
-pushd bindings/doxygen
-doxygen
-popd
-```
+Or you can use the `./scripts/setup-docs.sh` script.
 
 To build the documentation, e.g. generate HTML files from .rst files:
 

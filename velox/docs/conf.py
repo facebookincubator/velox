@@ -47,7 +47,6 @@ copyright = "TBD"
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    "breathe",
     "issue",
     "pr",
     "sphinx.ext.autodoc",
@@ -61,11 +60,6 @@ extensions = [
 ]
 
 autosummary_generate = True
-
-# Breathe configuration
-breathe_projects = {"pyvelox_c": "bindings/doxygen/xml"}
-breathe_default_project = "pyvelox_c"
-
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]

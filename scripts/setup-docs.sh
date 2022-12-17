@@ -16,7 +16,10 @@
 # Setup for Documentation tools installation
 
 # scripts assume there is a conda environment already 
-# created with the name pyveloxenv-docs
+# created with the name as an argument to the script
+# Example 
+#   Create Environment
+#       `conda create -y --name pyveloxenv-docs python=3.7` 
 DOCS_CONDA_ENV=$1
 ENVS=$(conda env list | grep $DOCS_CONDA_ENV)
 if [ -z "$ENVS" ]
@@ -24,14 +27,11 @@ then
         echo "conda environment for documentation not available"
 else
         echo "Installing doc generation dependencies..."
-        conda activate pyveloxenv-docs
+        conda activate ${DOCS_CONDA_ENV}
         conda install -y -c anaconda sphinx
         conda install -y -c conda-forge pandoc
         conda install -y -c conda-forge doxygen
         conda install -y -c anaconda graphviz
-        pip install breathe
         # generate the Python README
         cd velox/docs && pandoc ../../pyvelox/README.md --from markdown --to rst -s -o bindings/python/README_generated_pyvelox.rst
-        # generate C++ documentation
-        cd bindings/doxygen && doxygen
 fi
