@@ -35,8 +35,11 @@ PYBIND11_MODULE(pyvelox, m) {
 
       .. autosummary::
          :toctree: _generate
-
-         __str__
+         
+         ARRAY
+         ROW
+         BaseVector.__str__
+         BaseVector.size
   )pbdoc";
 
   addVeloxBindings(m);
