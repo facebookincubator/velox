@@ -70,7 +70,7 @@ TEST(S3UtilTest, s3Path) {
   auto path_0 = s3Path("s3://bucket/file.txt");
   auto path_1 = s3Path("oss://bucket-name/file.txt");
   auto path_2 = s3Path("S3A://bucket-NAME/sub-PATH/my-file.txt");
-  auto path_3 = s3Path("s3n://bucket-NAME/sub-PATH/my-file.txt");
+  auto path_3 = s3Path("s3N://bucket-NAME/sub-PATH/my-file.txt");
   EXPECT_EQ(path_0, "bucket/file.txt");
   EXPECT_EQ(path_1, "bucket-name/file.txt");
   EXPECT_NE(path_2, "bucket-NAME/sub-PATH/my-file.txt");
