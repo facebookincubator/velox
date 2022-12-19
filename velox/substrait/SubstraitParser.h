@@ -123,8 +123,6 @@ class SubstraitParser {
       {"strpos", "instr"},
       {"ends_with", "endswith"},
       {"starts_with", "startswith"},
-      {"BitwiseAnd", "bitwise_and"},
-      {"BitwiseOr", "bitwise_or"},
       {"modulus", "mod"} /*Presto functions.*/};
   // The map is uesd for mapping substrait type.
   // Key: type in function name.
