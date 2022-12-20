@@ -2,7 +2,7 @@
 Language Bindings
 *****************
 
-This includes language bindings supported by Velox. At the moment, Velox only supports Python.
+This includes language bindings supported by Velox. At the moment, Velox supports Python and C++.
 
 .. toctree::
     :maxdepth: 2
