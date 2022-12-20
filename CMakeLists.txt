@@ -331,7 +331,6 @@ endif()
 
 find_library(RE2 re2 REQUIRED)
 
-
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(pybind11_SOURCE AUTO)
   resolve_dependency(pybind11 REQUIRED_VERSION 2.10.0)
