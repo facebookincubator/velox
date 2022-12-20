@@ -675,12 +675,12 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
 
 template <typename T>
 bool ExpressionFuzzer::isDone(size_t i, T startTime) const {
-  if (FLAGS_duration_sec > 0) {
-    std::chrono::duration<double> elapsed =
-        std::chrono::system_clock::now() - startTime;
-    return elapsed.count() >= FLAGS_duration_sec;
-  }
-  return i >= FLAGS_steps;
+  // if (FLAGS_duration_sec > 0) {
+  //   std::chrono::duration<double> elapsed =
+  //       std::chrono::system_clock::now() - startTime;
+  //   return elapsed.count() >= FLAGS_duration_sec;
+  // }
+  return i >= 1;
 }
 
 void ExpressionFuzzer::reset() {
@@ -693,7 +693,7 @@ void ExpressionFuzzer::reset() {
 void ExpressionFuzzer::go() {
   VELOX_CHECK(!signatures_.empty(), "No function signatures available.");
   VELOX_CHECK(
-      FLAGS_steps > 0 || FLAGS_duration_sec > 0,
+      1 > 0 || FLAGS_duration_sec > 0,
       "Either --steps or --duration_sec needs to be greater than zero.")
 
   auto startTime = std::chrono::system_clock::now();

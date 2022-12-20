@@ -229,7 +229,9 @@ class VectorFuzzer {
 
   /// Returns true n% of times (`n` is a double between 0 and 1).
   bool coinToss(double n) {
-    return boost::random::uniform_01<double>()(rng_) < n;
+    double value = boost::random::uniform_01<double>()(rng_);
+    std::cout << value << " " << n << std::endl;
+    return value < n;
   }
 
   // Wraps the given vector in a LazyVector. If there are multiple dictionary

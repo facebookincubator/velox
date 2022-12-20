@@ -339,6 +339,7 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
     vector = wrapInLazyVector(vector);
   }
 
+  std::cout << type->toString() << std::endl;
   // Toss a coin and add dictionary indirections.
   while (coinToss(0.5)) {
     vectorSize = size;

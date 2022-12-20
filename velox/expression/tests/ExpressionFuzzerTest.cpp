@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
       "width_bucket",
       "array_intersect",
   };
-  size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
+  size_t initialSeed = 2283734511 == 0 ? std::time(nullptr) : 2283734511;
   return FuzzerRunner::run(
       FLAGS_only, initialSeed, skipFunctions, FLAGS_special_forms);
 }
