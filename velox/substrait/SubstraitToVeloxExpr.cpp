@@ -66,6 +66,25 @@ uint32_t getLiteralValue(const ::substrait::Expression::Literal& literal) {
   return literal.i32();
 }
 
+template <>
+Timestamp getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return Timestamp::fromMicros(literal.timestamp());
+}
+
+template <>
+Date getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return Date(literal.date());
+}
+
+template <>
+IntervalDayTime getLiteralValue(
+    const ::substrait::Expression::Literal& literal) {
+  auto interval = literal.interval_day_to_second();
+  int64_t milliseconds = interval.days() * kMillisInDay +
+      interval.seconds() * kMillisInSecond + interval.microseconds() / 1000;
+  return IntervalDayTime(milliseconds);
+}
+
 ArrayVectorPtr makeArrayVector(const VectorPtr& elements) {
   BufferPtr offsets = allocateOffsets(1, elements->pool());
   BufferPtr sizes = allocateOffsets(1, elements->pool());
@@ -87,6 +106,7 @@ ArrayVectorPtr makeEmptyArrayVector(memory::MemoryPool* pool) {
   return std::make_shared<ArrayVector>(
       pool, ARRAY(UNKNOWN()), nullptr, 1, offsets, sizes, nullptr);
 }
+
 template <typename T>
 void setLiteralValue(
     const ::substrait::Expression::Literal& literal,
@@ -103,15 +123,10 @@ void setLiteralValue(
     } else {
       VELOX_FAIL("Unexpected string literal");
     }
-  } else if constexpr (std::is_same_v<T, Timestamp>) {
-    vector->set(index, Timestamp::fromMicros(literal.timestamp()));
-  } else if constexpr (std::is_same_v<T, Date>) {
-    vector->set(index, Date(literal.date()));
-  } else if constexpr (std::is_same_v<T, IntervalDayTime>) {
-    auto interval = literal.interval_day_to_second();
-    int64_t milliseconds = interval.days() * kMillisInDay +
-        interval.seconds() * kMillisInSecond + interval.microseconds() / 1000;
-    vector->set(index, IntervalDayTime(milliseconds));
+  } else if constexpr (
+      std::is_same_v<T, Date> || std::is_same_v<T, IntervalDayTime> ||
+      std::is_same_v<T, Timestamp>) {
+    vector->set(index, getLiteralValue<T>(literal));
   } else {
     vector->set(index, getLiteralValue<T>(literal));
   }
