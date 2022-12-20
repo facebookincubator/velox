@@ -23,15 +23,9 @@ instructions [here](https://pandoc.org/installing.html).
 
 Generate Python bindings Get started page.
 
-```bash
-pandoc ../../pyvelox/README.md --from markdown --to rst -s -o bindings/python/README_generated_pyvelox.rst
-```
-
-Or you can use the `./scripts/setup-docs.sh` script.
-
 To build the documentation, e.g. generate HTML files from .rst files:
 
-`cd velox/docs && make html`
+Run the `./scripts/setup-docs.sh` script from the base directory.
 
 Navigate to
 `velox/docs/_build/html/index.html` in your browser to view the documentation.
@@ -51,8 +45,7 @@ directory to the top-level docs folder and push to gh-pages branch.
 git checkout -b update-docs main
 
 # Generate the documentation.
-cd velox/docs
-make html
+./scripts/setup-docs.sh
 
 # Copy documentation files to the top-level docs folder.
 cp -R _build/html/* ../../docs
