@@ -333,7 +333,7 @@ find_library(RE2 re2 REQUIRED)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(pybind11_SOURCE AUTO)
-  resolve_dependency(pybind11 REQUIRED_VERSION 2.10.0)
+  resolve_dependency(pybind11 2.10.0)
   add_subdirectory(pyvelox)
 endif()
 
@@ -374,7 +374,7 @@ include_directories(SYSTEM ${FOLLY_INCLUDE_DIRS})
 if(NOT ${VELOX_BUILD_MINIMAL})
   # Locate or build protobuf.
   set_source(Protobuf)
-  resolve_dependency(Protobuf REQUIRED_VERSION 3.21.4)
+  resolve_dependency(Protobuf 3.21.4)
 endif()
 
 # GCC needs to link a library to enable std::filesystem.
