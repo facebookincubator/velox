@@ -51,6 +51,7 @@ int main(int argc, char** argv) {
   // be fixed before we can enable.
   std::unordered_set<std::string> skipFunctions = {
       "stddev_pop", // https://github.com/facebookincubator/velox/issues/3493
+      "approx_percentile", // https://github.com/facebookincubator/velox/issues/3556
   };
 
   // The results of the following functions depend on the order of input
