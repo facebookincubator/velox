@@ -260,6 +260,10 @@ macro(build_icu4c)
                       --libdir=${ICU_LIBRARIES} ${ICU_CFG}
     BUILD_COMMAND ${MAKE_PROGRAM} -j ${NUM_JOBS}
     INSTALL_COMMAND ${HOST_ENV_CMAKE} ${MAKE_PROGRAM} install)
+
+  # We have to keep the FindICU.cmake in a subfolder to prevent it from
+  # overriding the system provided one when ICU_SOURCE=SYSTEM
+  list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/CMake/icu)
 endmacro()
 
 # ================================ END ICU4C ================================

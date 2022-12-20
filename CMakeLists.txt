@@ -278,6 +278,23 @@ message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set_source(Boost)
+set_source(ICU)
+
+if(CMAKE_SYSTEM_NAME MATCHES "Darwin" OR ${Boost_SOURCE} STREQUAL "BUNDLED")
+  if(${ICU_SOURCE} STREQUAL "BUNDLED")
+    resolve_dependency(ICU)
+    include_directories(${ICU_INCLUDE_DIRS})
+    link_directories(${ICU_LIBRARIES})
+  else()
+    if(ON_APPLE_M1)
+      set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/icu4c" ${CMAKE_PREFIX_PATH})
+    else()
+      set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
+    endif()
+  endif()
+endif()
+
 set(BOOST_INCLUDE_LIBRARIES
     atomic
     context
@@ -288,7 +305,6 @@ set(BOOST_INCLUDE_LIBRARIES
     system
     thread)
 
-set_source(Boost)
 resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 
 # Range-v3 will be enable when the codegen code actually lands keeping it here
@@ -315,20 +331,6 @@ endif()
 
 find_library(RE2 re2 REQUIRED)
 
-set_source(ICU)
-if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  if(${ICU_SOURCE} STREQUAL "BUNDLED")
-    resolve_dependency(ICU)
-    include_directories(${ICU_INCLUDE_DIRS})
-    link_directories(${ICU_LIBRARIES})
-  else()
-    if(ON_APPLE_M1)
-      set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/icu4c" ${CMAKE_PREFIX_PATH})
-    else()
-      set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
-    endif()
-  endif()
-endif()
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(pybind11_SOURCE AUTO)
