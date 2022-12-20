@@ -524,13 +524,14 @@ class MemoryManager final : public IMemoryManager {
  public:
   // Tries to get the process singleton manager. If not previously initialized,
   // the process singleton manager will be initialized with the given quota.
-  FOLLY_EXPORT static MemoryManager<Allocator, ALIGNMENT>&
+  FOLLY_EXPORT static MemoryManager<Allocator, ALIGNMENT>* FOLLY_NONNULL
   getProcessDefaultManager(
       int64_t quota = kMaxMemory,
       bool ensureQuota = false) {
-    static MemoryManager<Allocator, ALIGNMENT> manager{
-        Allocator::createDefaultAllocator(), quota};
-    auto actualQuota = manager.getMemoryQuota();
+    static MemoryManager<Allocator, ALIGNMENT>* manager =
+        new MemoryManager<Allocator, ALIGNMENT>{
+            Allocator::createDefaultAllocator(), quota};
+    auto actualQuota = manager->getMemoryQuota();
     VELOX_USER_CHECK(
         !ensureQuota || actualQuota == quota,
         "Process level manager manager created with input_quota: {}, current_quota: {}",

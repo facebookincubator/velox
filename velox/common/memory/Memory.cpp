@@ -209,9 +209,9 @@ size_t MemoryPool::getPreferredSize(size_t size) {
 
 IMemoryManager& getProcessDefaultMemoryManager() {
   if (FLAGS_use_mmap_allocator_for_memory_pool) {
-    return MemoryManager<MmapMemoryAllocator>::getProcessDefaultManager();
+    return *MemoryManager<MmapMemoryAllocator>::getProcessDefaultManager();
   }
-  return MemoryManager<MemoryAllocator>::getProcessDefaultManager();
+  return *MemoryManager<MemoryAllocator>::getProcessDefaultManager();
 }
 
 std::shared_ptr<MemoryPool> getDefaultMemoryPool(int64_t cap) {

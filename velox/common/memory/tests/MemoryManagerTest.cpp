@@ -53,14 +53,14 @@ TEST(MemoryManagerTest, Ctor) {
 // effects for other tests using process singleton memory manager. Might need to
 // use folly::Singleton for isolation by tag.
 TEST(MemoryManagerTest, GlobalMemoryManager) {
-  auto& manager = MemoryManager<>::getProcessDefaultManager();
-  auto& managerII = MemoryManager<>::getProcessDefaultManager();
+  auto* manager = MemoryManager<>::getProcessDefaultManager();
+  auto* managerII = MemoryManager<>::getProcessDefaultManager();
 
-  auto& root = manager.getRoot();
+  auto& root = manager->getRoot();
   auto child = root.addChild("some_child", 42);
   ASSERT_EQ(1, root.getChildCount());
 
-  auto& rootII = managerII.getRoot();
+  auto& rootII = managerII->getRoot();
   ASSERT_EQ(1, rootII.getChildCount());
   std::vector<MemoryPool*> pools{};
   rootII.visitChildren(
@@ -107,13 +107,13 @@ TEST(MemoryManagerTest, Reserve) {
 }
 
 TEST(MemoryManagerTest, GlobalMemoryManagerQuota) {
-  auto& manager = MemoryManager<>::getProcessDefaultManager();
+  auto manager = MemoryManager<>::getProcessDefaultManager();
   ASSERT_THROW(
       MemoryManager<>::getProcessDefaultManager(42, true),
       velox::VeloxUserError);
 
-  auto& coercedManager = MemoryManager<>::getProcessDefaultManager(42);
-  ASSERT_EQ(manager.getMemoryQuota(), coercedManager.getMemoryQuota());
+  auto coercedManager = MemoryManager<>::getProcessDefaultManager(42);
+  ASSERT_EQ(manager->getMemoryQuota(), coercedManager->getMemoryQuota());
 }
 } // namespace memory
 } // namespace velox
