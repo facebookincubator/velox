@@ -212,6 +212,17 @@ TEST_F(SumTest, sumTinyint) {
       "SELECT sum(c1) FROM tmp WHERE c0 % 2 = 0");
 }
 
+TEST_F(SumTest, sumBigIntOverflow) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({-9223372036854775806L, -100, 3400})});
+  createDuckDbTable({data});
+
+  testAggregations(
+      [&](auto& builder) { builder.values({data}); },
+      {},
+      {"sum(c0)"},
+      "SELECT sum(c0) FROM tmp");
+}
+
 TEST_F(SumTest, sumFloat) {
   auto data = makeRowVector({makeFlatVector<float>({2.00, 1.00})});
   createDuckDbTable({data});
@@ -479,13 +490,6 @@ TEST_F(SumTest, hookLimits) {
   // Float and Double do not throw an overflow error.
   testHookLimits<float, double>();
   testHookLimits<double, double>();
-}
-
-TEST_F(SumTest, integerAggregateOverflow) {
-  testAggregateOverflow<int8_t, int64_t>();
-  testAggregateOverflow<int16_t, int64_t>();
-  testAggregateOverflow<int32_t, int64_t>();
-  testAggregateOverflow<int64_t, int64_t>(true);
 }
 
 TEST_F(SumTest, floatAggregateOverflow) {
