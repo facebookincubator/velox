@@ -375,6 +375,8 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   # Locate or build protobuf.
   set_source(Protobuf)
   resolve_dependency(Protobuf 3.21.4)
+  message(NOTICE proto include ${Protobuf_INCLUDE_DIRS} ${Protobuf_LIBRARIES})
+  include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 
 # GCC needs to link a library to enable std::filesystem.
