@@ -38,8 +38,6 @@ core::SortOrder toSortOrder(const ::substrait::SortField& sortField) {
   }
 }
 
-} // namespace
-
 template <typename T>
 // Get the lowest value for numeric type.
 T getLowest() {
@@ -301,7 +299,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::AggregateRel& sAgg) {
-  auto childNode = convertSingleInput<::substrait::AggregateRel>(aggRel);
+  auto childNode = convertSingleInput<::substrait::AggregateRel>(sAgg);
   core::AggregationNode::Step aggStep = toAggregationStep(sAgg);
   return toVeloxAgg(sAgg, childNode, aggStep);
 }
@@ -390,7 +388,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ProjectRel& projectRel) {
   auto childNode = convertSingleInput<::substrait::ProjectRel>(projectRel);
   // Construct Velox Expressions.
-  const auto& projectExprs = sProject.expressions();
+  const auto& projectExprs = projectRel.expressions();
   std::vector<std::string> projectNames;
   std::vector<core::TypedExprPtr> expressions;
   projectNames.reserve(projectExprs.size());
@@ -684,23 +682,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   return std::make_shared<core::FilterNode>(
       nextPlanNodeId(),
       exprConverter_->toVeloxExpr(sExpr, inputType),
-      childNode);
-}
-
-core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::FetchRel& fetchRel) {
-  core::PlanNodePtr childNode;
-  if (fetchRel.has_input()) {
-    childNode = toVeloxPlan(fetchRel.input());
-  } else {
-    VELOX_FAIL("Child Rel is expected in FetchRel.");
-  }
-
-  return std::make_shared<core::LimitNode>(
-      nextPlanNodeId(),
-      (int32_t)fetchRel.offset(),
-      (int32_t)fetchRel.count(),
-      false /*isPartial*/,
       childNode);
 }
 
@@ -1005,11 +986,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   if (sRel.has_sort()) {
     return toVeloxPlan(sRel.sort());
   }
-  if (rel.has_fetch()) {
-    return toVeloxPlan(rel.fetch());
+  if (sRel.has_fetch()) {
+    return toVeloxPlan(sRel.fetch());
   }
-  if (rel.has_sort()) {
-    return toVeloxPlan(rel.sort());
+  if (sRel.has_sort()) {
+    return toVeloxPlan(sRel.sort());
   }
   if (sRel.has_expand()) {
     return toVeloxPlan(sRel.expand());
@@ -1657,8 +1638,7 @@ void SubstraitVeloxPlanConverter::setFilterMap(
       if (substraitLit) {
         val = variant(Date(substraitLit.value().date()));
       }
-      setColInfoMap<int>(
-          functionName, colIdxVal, val, reverse, colInfoMap);
+      setColInfoMap<int>(functionName, colIdxVal, val, reverse, colInfoMap);
       break;
     default:
       VELOX_NYI(

@@ -106,20 +106,20 @@ class SubstraitVeloxExprConverter {
   /// name.
   std::unordered_map<uint64_t, std::string> functionMap_;
 
-  // The map storing the Substrait extract function input field and velox function name.
+  // The map storing the Substrait extract function input field and velox
+  // function name.
   std::unordered_map<std::string, std::string> extractDatetimeFunctionMap_ = {
-    {"MILLISECOND", "millisecond"},
-    {"SECOND", "second"},
-    {"MINUTE", "minute"},
-    {"HOUR", "hour"},
-    {"DAY", "day"},
-    {"DAY_OF_WEEK", "day_of_week"},
-    {"DAY_OF_YEAR", "day_of_year"},
-    {"MONTH", "month"},
-    {"QUARTER", "quarter"},
-    {"YEAR", "year"},
-    {"YEAR_OF_WEEK", "year_of_week"}
-  };
+      {"MILLISECOND", "millisecond"},
+      {"SECOND", "second"},
+      {"MINUTE", "minute"},
+      {"HOUR", "hour"},
+      {"DAY", "day"},
+      {"DAY_OF_WEEK", "day_of_week"},
+      {"DAY_OF_YEAR", "day_of_year"},
+      {"MONTH", "month"},
+      {"QUARTER", "quarter"},
+      {"YEAR", "year"},
+      {"YEAR_OF_WEEK", "year_of_week"}};
 };
 
 } // namespace facebook::velox::substrait

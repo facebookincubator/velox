@@ -17,7 +17,6 @@
 #include "velox/substrait/SubstraitToVeloxExpr.h"
 #include "velox/substrait/TypeUtils.h"
 #include "velox/substrait/VariantToVectorConverter.h"
-#include "velox/substrait/VectorCreater.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VariantToVector.h"
 using namespace facebook::velox;
@@ -229,7 +228,7 @@ SubstraitVeloxExprConverter::toExtractExpr(
     auto iter = extractDatetimeFunctionMap_.find(from);
     if (iter != extractDatetimeFunctionMap_.end()) {
       return std::make_shared<const core::CallTypedExpr>(
-        outputType, std::move(exprParams), iter->second);
+          outputType, std::move(exprParams), iter->second);
     } else {
       VELOX_NYI("Extract from {} not supported.", from);
     }
@@ -346,15 +345,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       // parsed.
       return std::make_shared<core::ConstantTypedExpr>(
           variant(Date(substraitLit.date())));
-    case ::substrait::Expression_Literal::LiteralTypeCase::kList: {
-      // Literals in List are put in a constant vector.
-      std::vector<::substrait::Expression::Literal> literals;
-      literals.reserve(substraitLit.list().values().size());
-      for (const auto& literal : substraitLit.list().values()) {
-        literals.emplace_back(literal);
-      }
-      return literalsToConstantExpr(literals);
-    }
     case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
       return std::make_shared<core::ConstantTypedExpr>(
           variant(substraitLit.var_char().value()));
@@ -404,7 +394,7 @@ ArrayVectorPtr SubstraitVeloxExprConverter::literalsToArrayVector(
           listLiteral, childSize, VARCHAR(), pool_));
     case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
       auto veloxType =
-          toVeloxType(substraitParser_.parseType(listLiteral.null())->type);
+          toVeloxType(subParser_->parseType(listLiteral.null())->type);
       auto kind = veloxType->kind();
       return makeArrayVector(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           constructFlatVector, kind, listLiteral, childSize, veloxType, pool_));
@@ -442,16 +432,19 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     const RowTypePtr& inputType) {
   auto substraitType = subParser_->parseType(castExpr.type());
   auto type = toVeloxType(substraitType->type);
-  auto failureBehavior =  castExpr.failure_behavior();
+  auto failureBehavior = castExpr.failure_behavior();
   bool nullOnFailure;
   switch (failureBehavior) {
-    case ::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:
       nullOnFailure = false;
       break;
-    case ::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL:
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL:
       nullOnFailure = true;
       break;
-    case ::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
       nullOnFailure = false;
       break;
     default:

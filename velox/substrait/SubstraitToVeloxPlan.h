@@ -107,11 +107,6 @@ class SubstraitVeloxPlanConverter {
     return functionMap_;
   }
 
-  /// Will return the index of Partition to be scanned.
-  u_int32_t getPartitionIndex() {
-    return partitionIndex_;
-  }
-
   /// Return the splitInfo map used by this plan converter.
   const std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitInfo>>&
   splitInfos() const {
