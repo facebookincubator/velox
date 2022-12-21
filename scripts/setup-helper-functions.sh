@@ -59,7 +59,7 @@ function get_cxx_flags {
   OS=$(uname)
   local MACHINE
   MACHINE=$(uname -m)
-  ADDITIONAL_FLAGS=""
+  ADDITIONAL_FLAGS="-Wno-register -Wno-deprecated-register"
 
   if [ -z "$CPU_ARCH" ]; then
 
@@ -81,7 +81,7 @@ function get_cxx_flags {
       fi
 
     # On MacOs prevent the flood of translation visibility settings warnings.
-    ADDITIONAL_FLAGS="-fvisibility=hidden -fvisibility-inlines-hidden"
+    ADDITIONAL_FLAGS="${ADDITIONAL_FLAGS} -fvisibility=hidden -fvisibility-inlines-hidden"
     else [ "$OS" = "Linux" ];
 
       local CPU_CAPABILITIES
@@ -120,9 +120,11 @@ function get_cxx_flags {
 
 }
 
-function cmake_install {
+# cmake_compile compile a cmake project putting the binaries in the _build folder
+function cmake_compile {
   local NAME=$(basename "$(pwd)")
   local BINARY_DIR=_build
+
   if [ -d "${BINARY_DIR}" ] && prompt "Do you want to rebuild ${NAME}?"; then
     rm -rf "${BINARY_DIR}"
   fi
@@ -140,6 +142,37 @@ function cmake_install {
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DBUILD_TESTING=OFF \
     "$@"
-  ninja -C "${BINARY_DIR}" install
+
+  echo $BINARY_DIR
 }
 
+# install a prebuilt project
+function ninja_install {
+  local BINARY_DIR=_build
+  ninja-build -C "${BINARY_DIR}" install
+}
+
+# install a prebuilt project with elevated privileges
+# This is useful for systems where /usr/ is not writable
+function sudo_ninja_install {
+  local BINARY_DIR=_build
+  sudo ninja-build -C "${BINARY_DIR}" install
+}
+
+function cmake_install {
+  cmake_compile $@
+  ninja_install
+}
+
+function sudo_cmake_install {
+  cmake_compile $@
+  sudo_ninja_install
+}
+
+function clean_dir {
+  local DIRNAME=$(basename $1)
+  if [ -d "${DIRNAME}" ]; then
+    rm -rf "${DIRNAME}"
+  fi
+  mkdir ${DIRNAME}
+}
