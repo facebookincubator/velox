@@ -50,6 +50,53 @@ bool SubstraitToVeloxPlanValidator::validateInputTypes(
   return true;
 }
 
+bool SubstraitToVeloxPlanValidator::validateRound(
+  const ::substrait::Expression::ScalarFunction& scalarFunction,
+  const RowTypePtr& inputType) {
+  const auto& arguments = scalarFunction.arguments();
+  if (arguments.size() < 2) {
+    return false;
+  }
+  if (!arguments[1].value().has_literal()) {
+    VELOX_FAIL("Round scale is expected.");
+  }
+  // Velox has different result with Spark on negative scale.
+  auto typeCase = arguments[1].value().literal().literal_type_case();
+  switch (typeCase) {
+    case ::substrait::Expression_Literal::LiteralTypeCase::kI32:
+      return (arguments[1].value().literal().i32() >= 0);
+    case ::substrait::Expression_Literal::LiteralTypeCase::kI64:
+      return (arguments[1].value().literal().i64() >= 0);
+    default:
+      VELOX_NYI("Round scale validation is not supported for type case '{}'", typeCase);
+  }
+}
+
+bool SubstraitToVeloxPlanValidator::validateScalarFunction(
+    const ::substrait::Expression::ScalarFunction& scalarFunction,
+    const RowTypePtr& inputType) {
+  const auto& veloxFunction =
+      subParser_->findVeloxFunction(
+        planConverter_->getFunctionMap(), scalarFunction.function_reference());
+  if (veloxFunction == "round") {
+    return validateRound(scalarFunction, inputType);
+  }
+  return true;
+}
+
+bool SubstraitToVeloxPlanValidator::validateExpression(
+    const ::substrait::Expression& expression,
+    const RowTypePtr& inputType) {
+    std::shared_ptr<const core::ITypedExpr> veloxExpr;
+  auto typeCase = expression.rex_type_case();
+  switch (typeCase) {
+    case ::substrait::Expression::RexTypeCase::kScalarFunction:
+      return validateScalarFunction(expression.scalar_function(), inputType);
+    default:
+      return true;
+  }
+}
+
 bool SubstraitToVeloxPlanValidator::validate(
     const ::substrait::FetchRel& fetchRel) {
   const auto& extension = fetchRel.advanced_extension();
@@ -359,6 +406,9 @@ bool SubstraitToVeloxPlanValidator::validate(
   expressions.reserve(projectExprs.size());
   try {
     for (const auto& expr : projectExprs) {
+      if (!validateExpression(expr, rowType)) {
+        return false;
+      }
       expressions.emplace_back(exprConverter_->toVeloxExpr(expr, rowType));
     }
     // Try to compile the expressions. If there is any unregistered function or
