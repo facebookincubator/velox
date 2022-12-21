@@ -374,7 +374,7 @@ include_directories(SYSTEM ${FOLLY_INCLUDE_DIRS})
 if(NOT ${VELOX_BUILD_MINIMAL})
   # Locate or build protobuf.
   set_source(Protobuf)
-  resolve_dependency(Protobuf 21.4)
+  resolve_dependency(Protobuf 3.21.4)
 endif()
 
 # GCC needs to link a library to enable std::filesystem.
