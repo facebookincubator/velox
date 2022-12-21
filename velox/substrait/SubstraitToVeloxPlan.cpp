@@ -172,10 +172,10 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
   // adding input node columns
   for (uint32_t idx = 0; idx < inputType->size(); idx++) {
-    const auto& field_name = inputType->nameOf(idx);
-    projectNames.emplace_back(field_name);
+    const auto& fieldName = inputType->nameOf(idx);
+    projectNames.emplace_back(fieldName);
     expressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
-        inputType->childAt(idx), field_name));
+        inputType->childAt(idx), fieldName));
     colIdx += 1;
   }
 

@@ -125,11 +125,11 @@ class SubstraitVeloxPlanConverter {
         case ::substrait::RelCommon::EmitKindCase::kDirect:
           return noEmitNode;
         case ::substrait::RelCommon::EmitKindCase::kEmit: {
-          auto emit_info = GetEmitInfo(rel, noEmitNode);
+          auto emitInfo = GetEmitInfo(rel, noEmitNode);
           return std::make_shared<core::ProjectNode>(
               nextPlanNodeId(),
-              std::move(emit_info.projectNames),
-              std::move(emit_info.expressions),
+              std::move(emitInfo.projectNames),
+              std::move(emitInfo.expressions),
               noEmitNode);
         }
         default:
@@ -168,17 +168,17 @@ class SubstraitVeloxPlanConverter {
     int emitSize = emit.output_mapping_size();
     std::vector<core::TypedExprPtr> emitExpressions(emitSize);
     std::vector<std::string> emitProjectNames(emitSize);
-    EmitInfo emit_info;
-    auto outputType = node->outputType();
+    EmitInfo emitInfo;
+    const auto& outputType = node->outputType();
     for (int i = 0; i < emitSize; i++) {
       int32_t mapId = emit.output_mapping(i);
       emitProjectNames[i] = outputType->nameOf(mapId);
       emitExpressions[i] = std::make_shared<core::FieldAccessTypedExpr>(
           outputType->childAt(mapId), outputType->nameOf(mapId));
     }
-    emit_info.expressions = std::move(emitExpressions);
-    emit_info.projectNames = std::move(emitProjectNames);
-    return emit_info;
+    emitInfo.expressions = std::move(emitExpressions);
+    emitInfo.projectNames = std::move(emitProjectNames);
+    return emitInfo;
   }
 
   /// The Substrait parser used to convert Substrait representations into
