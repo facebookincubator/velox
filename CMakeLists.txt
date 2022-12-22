@@ -347,7 +347,6 @@ if(NOT DEFINED Boost_LIBRARIES)
   list(TRANSFORM Boost_LIBRARIES PREPEND Boost::)
 endif()
 
-add_dependencies(folly ${Boost_LIBRARIES})
 set(FOLLY_WITH_DEPENDENCIES
     ${FOLLY_LIBRARIES}
     ${Boost_LIBRARIES}
