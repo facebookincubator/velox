@@ -41,7 +41,7 @@ directory to the top-level docs folder and push to gh-pages branch.
 git checkout -b update-docs main
 
 # Generate the documentation.
-./scripts/setup-docs.sh
+./scripts/gen-docs.sh
 
 # Copy documentation files to the top-level docs folder.
 cp -R _build/html/* ../../docs

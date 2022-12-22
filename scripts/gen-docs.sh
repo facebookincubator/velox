@@ -13,8 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Setup for Documentation tools installation
-
+# Generate Documentation
+# **NOTE**
+# ********
 # scripts assume there is a conda environment already 
 # created with the name as an argument to the script
 # Example 

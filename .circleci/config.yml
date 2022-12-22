@@ -584,7 +584,7 @@ jobs:
             conda init bash
             source ~/.bashrc
             conda create -y --name pyveloxenv-docs python=3.7
-            ./scripts/setup-docs.sh pyveloxenv-docs
+            ./scripts/gen-docs.sh pyveloxenv-docs
             git checkout gh-pages
             cp -R velox/docs/_build/html/* docs
             git add docs
