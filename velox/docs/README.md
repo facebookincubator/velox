@@ -12,20 +12,16 @@ To install Sphinx: `easy_install -U sphinx`
 
 ### Building PyVelox Components
 
-Doxygen is used to generate the C++ documentation in language bindings. 
-Refer to installation instructions [here](https://www.doxygen.nl/manual/install.html).
 If you're using a conda environment, it can be easily installed by `conda install` command.
 
 Pandoc is also used to generate `.rst` files from existing markdown files. Refer to installation
 instructions [here](https://pandoc.org/installing.html).
 
-[Breathe](https://github.com/breathe-doc/breathe) is also required in generating the binding documentation.
-
 Generate Python bindings Get started page.
 
 To build the documentation, e.g. generate HTML files from .rst files:
 
-Run the `./scripts/setup-docs.sh` script from the base directory.
+Run the `./scripts/gen-docs.sh` script from the base directory.
 
 Navigate to
 `velox/docs/_build/html/index.html` in your browser to view the documentation.

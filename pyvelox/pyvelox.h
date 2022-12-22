@@ -327,26 +327,17 @@ inline void addVectorBindings(
       .value("DICTIONARY", velox::VectorEncoding::Simple::DICTIONARY)
       .value("FLAT", velox::VectorEncoding::Simple::FLAT)
       .value("SEQUENCE", velox::VectorEncoding::Simple::SEQUENCE)
-      .value("ROW", velox::VectorEncoding::Simple::ROW, R"pbdoc(
-         Row vector encoding.
-      )pbdoc")
+      .value("ROW", velox::VectorEncoding::Simple::ROW)
       .value("MAP", velox::VectorEncoding::Simple::MAP)
-      .value("ARRAY", velox::VectorEncoding::Simple::ARRAY, R"pbdoc(
-         Array vector encoding.
-      )pbdoc")
+      .value("ARRAY", velox::VectorEncoding::Simple::ARRAY)
       .value("LAZY", velox::VectorEncoding::Simple::LAZY)
       .value("FUNCTION", velox::VectorEncoding::Simple::FUNCTION);
 
   py::class_<BaseVector, VectorPtr>(
       m, "BaseVector", py::module_local(asModuleLocalDefinitions))
-      .def(
-          "__str__", [](VectorPtr& v) { return v->toString(); }, R"pbdoc(
-         Vector to string.
-      )pbdoc")
+      .def("__str__", [](VectorPtr& v) { return v->toString(); })
       .def("__len__", &BaseVector::size)
-      .def("size", &BaseVector::size, R"pbdoc(
-         Size of the vector.
-      )pbdoc")
+      .def("size", &BaseVector::size)
       .def(
           "__getitem__",
           [](VectorPtr& v, vector_size_t idx) {
