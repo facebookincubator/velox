@@ -306,7 +306,6 @@ set(BOOST_INCLUDE_LIBRARIES
     thread)
 
 resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
-include_directories(${Boost_INCLUDE_DIRS})
 
 # Range-v3 will be enable when the codegen code actually lands keeping it here
 # for reference. find_package(range-v3)
@@ -348,6 +347,7 @@ if(NOT DEFINED Boost_LIBRARIES)
   list(TRANSFORM Boost_LIBRARIES PREPEND Boost::)
 endif()
 
+add_dependencies(folly ${Boost_LIBRARIES})
 set(FOLLY_WITH_DEPENDENCIES
     ${FOLLY_LIBRARIES}
     ${Boost_LIBRARIES}
