@@ -313,8 +313,7 @@ macro(build_boost)
   # numeric contains subdirs with their own include dir
   list_subdirs(numeric_subdirs ${boost_SOURCE_DIR}/libs/numeric)
   list(TRANSFORM numeric_subdirs APPEND /include)
-
-  include_directories(${boost_INCLUDE_DIRS} ${numeric_subdirs})
+  set(Boost_INCLUDE_DIRS ${boost_INCLUDE_DIRS} ${numeric_subdirs})
 
   # this prevents system boost from leaking in
   set(Boost_NO_SYSTEM_PATHS ON)
