@@ -28,6 +28,7 @@ then
         echo "conda environment for documentation not available"
 else
         echo "Installing doc generation dependencies..."
+        source ${CONDA_PREFIX}/etc/profile.d/conda.sh
         conda activate ${DOCS_CONDA_ENV}
         conda install -y -c anaconda sphinx
         conda install -y -c conda-forge pandoc
