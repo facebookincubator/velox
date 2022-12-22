@@ -43,6 +43,50 @@ sudo yum install -y \
     tzdata \
     wget
 
+# sudo_cmake_install compile and install a dependency
+#
+# This function uses cmake and ninja-build to compile and install
+# a specified dependency. The caller is responsible for making sure
+# that the code has been checked out and the current folder contains
+# it.
+#
+# This function requires elevated privileges for the install part
+function sudo_cmake_install {
+  local NAME=$(basename "$(pwd)")
+  local BINARY_DIR=_build
+
+  if [ -d "${BINARY_DIR}" ] && prompt "Do you want to rebuild ${NAME}?"; then
+    rm -rf "${BINARY_DIR}"
+  fi
+  mkdir -p "${BINARY_DIR}"
+  CPU_TARGET="${CPU_TARGET:-avx}"
+  COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
+
+  # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
+  cmake -Wno-dev -B"${BINARY_DIR}" \
+    -GNinja \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_CXX_STANDARD=17 \
+    "${INSTALL_PREFIX+-DCMAKE_PREFIX_PATH=}${INSTALL_PREFIX-}" \
+    "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \
+    -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
+    -DBUILD_TESTING=OFF \
+    "$@"
+
+  # install a prebuilt project with elevated privileges
+  # This is useful for systems where /usr/ is not writable
+  local BINARY_DIR=_build
+  sudo ninja-build -C "${BINARY_DIR}" install
+}
+
+function clean_dir {
+  local DIRNAME=$(basename $1)
+  if [ -d "${DIRNAME}" ]; then
+    rm -rf "${DIRNAME}"
+  fi
+  mkdir ${DIRNAME}
+}
+
 function run_and_time {
   time "$@"
   { echo "+ Finished running $*"; } 2> /dev/null
@@ -214,7 +258,7 @@ function install_gcc {
 
 function install_doubleconversion {
   github_checkout google/double-conversion v3.2.0
-  sudo_cmake_install "sudo"
+  sudo_cmake_install
 }
 
 function install_glog {

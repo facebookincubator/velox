@@ -120,11 +120,9 @@ function get_cxx_flags {
 
 }
 
-# cmake_compile compile a cmake project putting the binaries in the _build folder
-function cmake_compile {
+function cmake_install {
   local NAME=$(basename "$(pwd)")
   local BINARY_DIR=_build
-
   if [ -d "${BINARY_DIR}" ] && prompt "Do you want to rebuild ${NAME}?"; then
     rm -rf "${BINARY_DIR}"
   fi
@@ -142,37 +140,6 @@ function cmake_compile {
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DBUILD_TESTING=OFF \
     "$@"
-
-  echo $BINARY_DIR
+  ninja -C "${BINARY_DIR}" install
 }
 
-# install a prebuilt project
-function ninja_install {
-  local BINARY_DIR=_build
-  ninja-build -C "${BINARY_DIR}" install
-}
-
-# install a prebuilt project with elevated privileges
-# This is useful for systems where /usr/ is not writable
-function sudo_ninja_install {
-  local BINARY_DIR=_build
-  sudo ninja-build -C "${BINARY_DIR}" install
-}
-
-function cmake_install {
-  cmake_compile $@
-  ninja_install
-}
-
-function sudo_cmake_install {
-  cmake_compile $@
-  sudo_ninja_install
-}
-
-function clean_dir {
-  local DIRNAME=$(basename $1)
-  if [ -d "${DIRNAME}" ]; then
-    rm -rf "${DIRNAME}"
-  fi
-  mkdir ${DIRNAME}
-}
