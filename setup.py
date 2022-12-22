@@ -118,14 +118,14 @@ class CMakeBuild(build_ext):
         exec_path = sys.executable
 
         cmake_args = [
-            f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",    
+            f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DCMAKE_BUILD_TYPE={cfg}",
             f"-DCMAKE_INSTALL_PREFIX={extdir}",
             "-DCMAKE_VERBOSE_MAKEFILE=ON",
             "-DVELOX_BUILD_PYTHON_PACKAGE=ON",
             f"-DPYTHON_EXECUTABLE={exec_path} ",
             "-DVELOX_CODEGEN_SUPPORT=OFF",
-            "-DVELOX_BUILD_MINIMAL=ON"
+            "-DVELOX_BUILD_MINIMAL=ON",
         ]
         build_args = []
 

@@ -320,6 +320,7 @@ find_library(EVENT event)
 
 find_library(DOUBLE_CONVERSION double-conversion)
 
+# Required for boost.
 find_package(ZLIB)
 
 if(NOT ${VELOX_BUILD_MINIMAL})

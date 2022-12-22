@@ -271,7 +271,7 @@ endmacro()
 if(DEFINED ENV{VELOX_BOOST_URL})
   set(BOOST_SOURCE_URL "$ENV{VELOX_BOOST_URL}")
 else()
-  # We need to sue boost > 1.70 to build it with CMake
+  # We need to use boost > 1.70 to build it with CMake
   set(VELOX_BOOST_BUILD_VERSION 1.80.0)
   string(REPLACE "." "_" VELOX_BOOST_UNDERSCORE_VERSION
                  ${VELOX_BOOST_BUILD_VERSION})
@@ -315,7 +315,7 @@ macro(build_boost)
   list(TRANSFORM numeric_subdirs APPEND /include)
   include_directories(${boost_INCLUDE_DIRS} ${numeric_subdirs})
 
-  # this prevents system boost from leaking in
+  # This prevents system boost from leaking in
   set(Boost_NO_SYSTEM_PATHS ON)
   # We have to keep the FindBoost.cmake in an subfolder to prevent it from
   # overriding the system provided one when Boost_SOURCE=SYSTEM
