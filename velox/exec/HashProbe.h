@@ -457,6 +457,9 @@ class HashProbe : public Operator {
   // with multiple matches.
   class LeftSemiProjectJoinTracker {
    public:
+    static const char* kPassed;
+    static const char* kNull;
+
     // Called for each row and indicates whether the filter passed or not.
     // Expects that probe side rows with multiple matches are next to each
     // other. Calls onLast just once for each probe side row.
@@ -465,7 +468,10 @@ class HashProbe : public Operator {
     advance(vector_size_t row, std::optional<bool> passed, TOnLast onLast) {
       if (currentRow != row) {
         if (currentRow != -1) {
-          onLast(currentRow, currentRowPassed);
+          onLast(
+              currentRow,
+              currentRowUnknown ? std::nullopt
+                                : std::optional(currentRowPassed));
         }
         currentRow = row;
         currentRowPassed = std::nullopt;
@@ -485,7 +491,9 @@ class HashProbe : public Operator {
     template <typename TOnLast>
     void finish(TOnLast onLast) {
       if (currentRow != -1) {
-        onLast(currentRow, currentRowPassed);
+        onLast(
+            currentRow,
+            currentRowUnknown ? std::nullopt : std::optional(currentRowPassed));
       }
 
       currentRow = -1;

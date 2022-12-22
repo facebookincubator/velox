@@ -3253,6 +3253,72 @@ TEST_F(HashJoinTest, nullAwareMultiKeyNotAllowed) {
       "Null-aware joins allow only one join key");
 }
 
+TEST_F(HashJoinTest, semiProjectWithFilter) {
+  auto probeVectors = makeBatches(3, [&](auto /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 5}),
+            makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+        });
+  });
+
+  auto buildVectors = makeBatches(3, [&](auto /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt}),
+            makeFlatVector<int64_t>({11, 22, 33, 44}),
+        });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto makePlan = [&](bool nullAware, const std::string& filter) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values(probeVectors)
+        .hashJoin(
+            {"t0"},
+            {"u0"},
+            PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+            filter,
+            {"t0", "t1", "match"},
+            core::JoinType::kLeftSemiProject,
+            nullAware)
+        .planNode();
+  };
+
+  std::vector<std::string> filters = {
+      "t1 <> u1",
+      "t1 < u1",
+      "t1 > u1",
+      "t1 is not null AND u1 is not null",
+      "t1 is null OR u1 is null",
+  };
+  for (const auto& filter : filters) {
+    auto plan = makePlan(true /*nullAware*/, filter);
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(fmt::format(
+            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t", filter))
+        .injectSpill(false)
+        .run();
+
+    plan = makePlan(false /*nullAware*/, filter);
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .referenceQuery(fmt::format(
+            "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND {}) FROM t",
+            filter))
+        .injectSpill(false)
+        .run();
+  }
+}
+
 TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
   auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
     return makeRowVector(
