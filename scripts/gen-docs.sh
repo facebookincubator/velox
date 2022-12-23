@@ -32,10 +32,11 @@ else
         conda activate ${DOCS_CONDA_ENV}
         conda install -y -c anaconda sphinx
         conda install -y -c conda-forge pandoc
-        conda install -y -c conda-forge doxygen
-        conda install -y -c anaconda graphviz
-        # install Pyvelox
-        python setup.py install
-        # generate the Python README
-        cd velox/docs && make clean && pandoc ../../pyvelox/README.md --from markdown --to rst -s -o bindings/python/README_generated_pyvelox.rst && make html
+        ## install Pyvelox
+        LD_LIBRARY_PATH=/usr/local/lib make python-test
+        ## generate the Python README
+        cd velox/docs \
+                && make clean \
+                && pandoc ../../pyvelox/README.md --from markdown --to rst -s -o bindings/python/README_generated_pyvelox.rst \
+                && LD_LIBRARY_PATH=/usr/local/lib make html
 fi
