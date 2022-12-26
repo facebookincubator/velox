@@ -245,9 +245,11 @@ bool SubstraitToVeloxPlanValidator::validate(
               windowFunction.window_type());
       }
 
-      validateBoundType(windowFunction.upper_bound());
-      validateBoundType(windowFunction.lower_bound());
-
+      bool boundTypeSupported = validateBoundType(windowFunction.upper_bound()) &&
+       validateBoundType(windowFunction.lower_bound());
+      if (!boundTypeSupported) {
+        return false;
+      }
     } catch (const VeloxException& err) {
       std::cout << "Validation failed for window function due to: "
                 << err.message() << std::endl;
