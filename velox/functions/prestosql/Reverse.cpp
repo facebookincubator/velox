@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <algorithm>
 #include "velox/expression/Expr.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/StringEncodingUtils.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions {
 
@@ -156,13 +156,14 @@ class ReverseFunction : public exec::VectorFunction {
     auto rawSizes = arrayVector->rawSizes();
     auto rawOffsets = arrayVector->rawOffsets();
 
-    rows.applyToSelected([&](auto row) {
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
       auto size = rawSizes[row];
       auto offset = rawOffsets[row];
 
-      for (auto i = 0; i < size; ++i) {
-        rawIndices[offset + i] = offset + size - i - 1;
-      }
+      vector_size_t i = offset + size - 1;
+      std::generate(rawIndices + offset, rawIndices + offset + size, [&i] {
+        return i--;
+      });
     });
 
     auto elementsDict =
