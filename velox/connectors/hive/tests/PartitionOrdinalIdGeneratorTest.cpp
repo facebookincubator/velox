@@ -1,0 +1,100 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/connectors/hive/PartitionOrdinalIdGenerator.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
+
+#include "gtest/gtest.h"
+
+namespace facebook::velox::connector::hive {
+
+class PartitionOrdinalIdGeneratorTest : public ::testing::Test,
+                                        public test::VectorTestBase {};
+
+TEST_F(PartitionOrdinalIdGeneratorTest, consecutiveIds) {
+  auto numPartitions = 100;
+
+  PartitionOrdinalIdGenerator idGenerator(
+      ROW({VARCHAR(), INTEGER()}), {0, 1}, 100, pool());
+
+  auto input = makeRowVector(
+      {makeFlatVector<StringView>(
+           numPartitions * 3,
+           [&](auto row) {
+             return StringView(Date(18000 + row % numPartitions).toString());
+           }),
+       makeFlatVector<int32_t>(
+           numPartitions * 3, [&](auto row) { return row % numPartitions; })});
+
+  raw_vector<int32_t> ids;
+  idGenerator.run(input, ids);
+
+  // distinctIds contains 100 ids in the range of [1, 100] that are consecutive.
+  std::unordered_set<uint64_t> distinctIds(ids.begin(), ids.end());
+  EXPECT_EQ(distinctIds.size(), numPartitions);
+  EXPECT_EQ(*std::min_element(distinctIds.begin(), distinctIds.end()), 0);
+  EXPECT_EQ(
+      *std::max_element(distinctIds.begin(), distinctIds.end()),
+      numPartitions - 1);
+}
+
+TEST_F(PartitionOrdinalIdGeneratorTest, stableIds) {
+  PartitionOrdinalIdGenerator idGenerator(
+      ROW({BIGINT(), TINYINT()}), {0}, 100, pool());
+
+  auto numPartitions = 40;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          numPartitions, [](auto row) { return row + 1000; }),
+      makeFlatVector<int8_t>(numPartitions, [](auto row) { return row; }),
+  });
+
+  auto otherNumPartitions = 60;
+  auto otherInput = makeRowVector({
+      makeFlatVector<int64_t>(
+          otherNumPartitions, [](auto row) { return row * 1000; }),
+      makeFlatVector<int8_t>(otherNumPartitions, [](auto row) { return row; }),
+  });
+
+  raw_vector<int32_t> firstTimeIds;
+  raw_vector<int32_t> secondTimeIds;
+  raw_vector<int32_t> otherIds;
+  idGenerator.run(input, firstTimeIds);
+  idGenerator.run(otherInput, otherIds);
+  idGenerator.run(input, secondTimeIds);
+
+  EXPECT_TRUE(std::equal(
+      firstTimeIds.begin(), firstTimeIds.end(), secondTimeIds.begin()));
+}
+
+TEST_F(PartitionOrdinalIdGeneratorTest, limitOfPartitionNumber) {
+  auto maxPartitions = 100;
+
+  PartitionOrdinalIdGenerator idGenerator(
+      ROW({INTEGER()}), {0}, maxPartitions, pool());
+
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>(maxPartitions + 1, [](auto row) { return row; }),
+  });
+
+  raw_vector<int32_t> ids;
+
+  VELOX_ASSERT_THROW(
+      idGenerator.run(input, ids), "Exceeded limit of distinct partitions.");
+}
+
+} // namespace facebook::velox::connector::hive
