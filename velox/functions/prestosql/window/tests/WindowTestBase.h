@@ -64,13 +64,55 @@ static std::vector<std::string> kFrameOverClauses = {
     "partition by c0, c1, c2",
 };
 
+/// Common set of window function over clauses for testing k preceding and k
+/// following window frames in RANGE mode.
+static std::vector<std::string> kKBoundedRangeFrameOverClauses = {
+    "partition by c0, c1 order by c2",
+    "partition by c0, c1 order by c2 asc nulls first",
+    "partition by c1, c0 order by c2",
+    "partition by c1, c0 order by c2 asc nulls first",
+    "partition by c0, c1 order by c2 desc",
+    "partition by c0, c1 order by c2 desc nulls first",
+    "partition by c1, c0 order by c2 desc",
+    "partition by c1, c0 order by c2 desc nulls first",
+};
+
 /// Common set of window function frame clauses in RANGE mode, with current row,
 /// unbounded preceding, and unbounded following frame combinations.
-static std::vector<std::string> kRangeFrameClauses = {
+static std::vector<std::string> kUnboundedRangeFrameClauses = {
     "range unbounded preceding",
     "range current row",
     "range between current row and unbounded following",
     "range between unbounded preceding and unbounded following",
+};
+
+/// Common set of window function frame clauses in RANGE mode, with current row,
+/// unbounded preceding, unbounded following, k preceding, and k following
+/// frame combinations where k is a constant integer.
+static std::vector<std::string> kConstantKBoundedRangeFrameClauses = {
+    "range between 1 preceding and current row",
+    "range between 5 preceding and current row",
+    "range between 1 preceding and unbounded following",
+    "range between 5 preceding and unbounded following",
+    "range between current row and 1 following",
+    "range between current row and 5 following",
+    "range between unbounded preceding and 1 following",
+    "range between unbounded preceding and 5 following",
+    "range between 1 preceding and 5 following",
+    "range between 5 preceding and 1 following",
+    "range between 1 preceding and 1 following",
+    "range between 5 preceding and 5 following",
+};
+
+/// Common set of window function frame clauses in RANGE mode, with current row,
+/// unbounded preceding, unbounded following, k preceding, and k following
+/// frame combinations where k is a column.
+static std::vector<std::string> kColumnarKBoundedRangeFrameClauses = {
+    "range between c2 preceding and current row",
+    "range between c2 preceding and unbounded following",
+    "range between current row and c2 following",
+    "range between unbounded preceding and c2 following",
+    "range between c2 preceding and c2 following",
 };
 
 /// Common set of window function frame clauses in ROWS mode, with current row,

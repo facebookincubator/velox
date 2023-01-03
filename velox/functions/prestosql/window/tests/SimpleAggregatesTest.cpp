@@ -32,7 +32,8 @@ class SimpleAggregatesTest : public WindowTestBase {
             size, [](auto row) -> int32_t { return row % 10; }),
         makeFlatVector<int32_t>(
             size, [](auto row) -> int32_t { return row % 7; }),
-        makeFlatVector<int32_t>(size, [](auto row) -> int32_t { return row; }),
+        makeFlatVector<int32_t>(
+            size, [](auto row) -> int32_t { return row + 1; }),
     });
   }
 
@@ -40,7 +41,8 @@ class SimpleAggregatesTest : public WindowTestBase {
     return makeRowVector({
         makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
         makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
-        makeFlatVector<int32_t>(size, [](auto row) -> int32_t { return row; }),
+        makeFlatVector<int32_t>(
+            size, [](auto row) -> int32_t { return row + 1; }),
     });
   }
 
@@ -111,17 +113,49 @@ TEST_P(MultiAggregatesTest, randomInput) {
 
 TEST_P(MultiAggregatesTest, basicRangeFrames) {
   SimpleAggregatesTest::testWindowFunction(
-      {makeBasicVectors(50)}, kFrameOverClauses, kRangeFrameClauses);
+      {makeBasicVectors(50)}, kFrameOverClauses, kUnboundedRangeFrameClauses);
 }
 
 TEST_P(MultiAggregatesTest, basicRangeFramesWithSortOrders) {
   SimpleAggregatesTest::testWindowFunction(
-      {makeBasicVectors(50)}, kSortOrderBasedOverClauses, kRangeFrameClauses);
+      {makeBasicVectors(50)},
+      kSortOrderBasedOverClauses,
+      kUnboundedRangeFrameClauses);
 }
 
 TEST_P(MultiAggregatesTest, singlePartitionRangeFrames) {
   SimpleAggregatesTest::testWindowFunction(
-      {makeSinglePartitionVector(100)}, kFrameOverClauses, kRangeFrameClauses);
+      {makeSinglePartitionVector(100)},
+      kFrameOverClauses,
+      kUnboundedRangeFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, basicConstantKBoundedRangeFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeBasicVectors(50)},
+      kKBoundedRangeFrameOverClauses,
+      kConstantKBoundedRangeFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, singlePartitionConstantKBoundedRangeFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeSinglePartitionVector(100)},
+      kKBoundedRangeFrameOverClauses,
+      kConstantKBoundedRangeFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, basicColumnarKBoundedRangeFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeBasicVectors(50)},
+      kKBoundedRangeFrameOverClauses,
+      kColumnarKBoundedRangeFrameClauses);
+}
+
+TEST_P(MultiAggregatesTest, singlePartitionColumnarKBoundedRangeFrames) {
+  SimpleAggregatesTest::testWindowFunction(
+      {makeSinglePartitionVector(100)},
+      kKBoundedRangeFrameOverClauses,
+      kColumnarKBoundedRangeFrameClauses);
 }
 
 TEST_P(MultiAggregatesTest, basicRowFrames) {

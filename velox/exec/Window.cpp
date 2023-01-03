@@ -43,6 +43,11 @@ void initKeyInfo(
 
 }; // namespace
 
+bool isKPrecedingOrFollowing(core::WindowNode::BoundType bound) {
+  return bound == core::WindowNode::BoundType::kPreceding ||
+      bound == core::WindowNode::BoundType::kFollowing;
+}
+
 Window::Window(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -73,6 +78,20 @@ Window::Window(
       allKeyInfo_.cend(), partitionKeyInfo_.begin(), partitionKeyInfo_.end());
   allKeyInfo_.insert(
       allKeyInfo_.cend(), sortKeyInfo_.begin(), sortKeyInfo_.end());
+
+  if (windowNode->windowFunctions()[0].frame.type ==
+          core::WindowNode::WindowType::kRange &&
+      (isKPrecedingOrFollowing(
+           windowNode->windowFunctions()[0].frame.startType) ||
+       isKPrecedingOrFollowing(
+           windowNode->windowFunctions()[0].frame.endType))) {
+    auto sortingKey = windowNode->sortingKeys()[0];
+    // inputType needs to be replaced by sortingKey.type()
+    sortingKeyIndex_ = exprToChannel(sortingKey.get(), inputType);
+    sortingOrder_ = windowNode->sortingOrders()[0];
+  } else {
+    sortingKeyIndex_ = kConstantChannel;
+  }
 
   std::vector<exec::RowColumn> inputColumns;
   for (int i = 0; i < inputType->children().size(); i++) {
@@ -304,6 +323,58 @@ void Window::noMoreInput() {
   createPeerAndFrameBuffers();
 }
 
+void Window::updateKRangeBoundsForPartition(
+    const vector_size_t& partitionNumber) {
+  auto totalPartitions = partitionStartRows_.size();
+  auto firstPartitionRow = partitionStartRows_[partitionNumber];
+  auto lastPartitionRow = (partitionNumber == totalPartitions - 1)
+      ? numRows_ - 1
+      : partitionStartRows_[partitionNumber + 1] - 1;
+  auto numRows = lastPartitionRow - firstPartitionRow + 1;
+  auto peerGroupCount = -1;
+  auto peerStartRow = 0;
+  auto peerEndRow = lastPartitionRow;
+
+  auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
+    return compareRowsWithKeys(lhs, rhs, sortKeyInfo_);
+  };
+
+  rowToPeerGroup_.resize(numRows);
+  rowToPeerGroupValue_.resize(numRows);
+  // Assumption: sorting column is of type BIGINT().
+  const int64_t* sortingColumn = NULL;
+
+  if (sortingKeyIndex_ != kConstantChannel) {
+    auto sortingColumnValues = BaseVector::create<FlatVector<int64_t>>(
+        BIGINT(), numRows, operatorCtx_->pool());
+    windowPartition_->extractColumn(
+        sortingKeyIndex_, 0, numRows, 0, sortingColumnValues);
+    sortingColumn = sortingColumnValues->values()->as<int64_t>();
+  }
+
+  for (auto i = firstPartitionRow, j = 0; i <= lastPartitionRow; i++, j++) {
+    if (i == firstPartitionRow || i >= peerEndRow) {
+      peerStartRow = i;
+      peerEndRow = i;
+      while (peerEndRow <= lastPartitionRow) {
+        if (peerCompare(sortedRows_[peerStartRow], sortedRows_[peerEndRow])) {
+          break;
+        }
+        peerEndRow++;
+      }
+
+      peerGroupCount++;
+      partitionToPeerGroupBounds_[peerGroupCount] = {
+          peerStartRow - firstPartitionRow, peerEndRow - 1 - firstPartitionRow};
+    }
+
+    rowToPeerGroup_[j] = peerGroupCount;
+    if (sortingKeyIndex_ != kConstantChannel) {
+      rowToPeerGroupValue_[j] = sortingColumn[j];
+    }
+  }
+}
+
 void Window::callResetPartition(vector_size_t partitionNumber) {
   auto partitionSize = partitionStartRows_[partitionNumber + 1] -
       partitionStartRows_[partitionNumber];
@@ -313,6 +384,8 @@ void Window::callResetPartition(vector_size_t partitionNumber) {
   for (int i = 0; i < windowFunctions_.size(); i++) {
     windowFunctions_[i]->resetPartition(windowPartition_.get());
   }
+
+  updateKRangeBoundsForPartition(partitionNumber);
 }
 
 void Window::callApplyForPartitionRows(
@@ -350,39 +423,153 @@ void Window::callApplyForPartitionRows(
     rawFrameEndBuffers.push_back(rawFrameEndBuffer);
   }
 
+  auto findPeerGroup = [&](const vector_size_t& row) -> vector_size_t {
+    auto peerGroups = partitionToPeerGroupBounds_;
+    auto findResult = std::find_if(
+        peerGroups.begin(),
+        peerGroups.end(),
+        [&](std::pair<const int, std::pair<int, int>> peerGroup) {
+          return peerGroup.second.first <= row &&
+              peerGroup.second.second >= row;
+        });
+    if (findResult == std::end(partitionToPeerGroupBounds_)) {
+      return -1;
+    }
+    return findResult->first;
+  };
+
   auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
     return compareRowsWithKeys(lhs, rhs, sortKeyInfo_);
   };
+
   auto firstPartitionRow = partitionStartRows_[currentPartition_];
   auto lastPartitionRow = partitionStartRows_[currentPartition_ + 1] - 1;
-  for (auto i = startRow, j = 0; i < endRow; i++, j++) {
-    // When traversing input partition rows, the peers are the rows
-    // with the same values for the ORDER BY clause. These rows
-    // are equal in some ways and affect the results of ranking functions.
-    // This logic exploits the fact that all rows between the peerStartRow_
-    // and peerEndRow_ have the same values for peerStartRow_ and peerEndRow_.
-    // So we can compute them just once and reuse across the rows in that peer
-    // interval. Note: peerStartRow_ and peerEndRow_ can be maintained across
-    // getOutput calls.
+  auto rowToPeerGroup = rowToPeerGroup_;
+  auto rowToPeerGroupValue = rowToPeerGroupValue_;
+  auto partitionPeerGroups = partitionToPeerGroupBounds_;
+  auto currentPartition = currentPartition_;
+  auto partitionRowCount = windowPartition_->numRows();
+  vector_size_t peerGroupCount = partitionPeerGroups.size();
+  auto startingPeerGroup = findPeerGroup(partitionOffset_);
+  VELOX_CHECK(startingPeerGroup != -1, "Invalid peer group");
 
-    // Compute peerStart and peerEnd rows for the first row of the partition or
-    // when past the previous peerGroup.
-    if (i == firstPartitionRow || i >= peerEndRow_) {
-      peerStartRow_ = i;
-      peerEndRow_ = i;
-      while (peerEndRow_ <= lastPartitionRow) {
-        if (peerCompare(sortedRows_[peerStartRow_], sortedRows_[peerEndRow_])) {
-          break;
-        }
-        peerEndRow_++;
+  for (auto i = startingPeerGroup, j = 0; j < numRows; i++) {
+    auto peerGroupStart = partitionPeerGroups[i].first;
+    auto peerGroupEnd = partitionPeerGroups[i].second;
+
+    for (auto k = std::max(peerGroupStart, partitionOffset_); k <= peerGroupEnd;
+         k++, j++) {
+      rawPeerStarts[j] = peerGroupStart;
+      rawPeerEnds[j] = peerGroupEnd;
+    }
+  }
+
+  auto readFrameValues = [&](const FrameChannelArg& frameArg) -> void {
+    frameArg.value->resize(numRows);
+    windowPartition_->extractColumn(
+        frameArg.index, partitionOffset_, numRows, 0, frameArg.value);
+  };
+
+  auto computeKRangeFrameBound =
+      [&](const vector_size_t& peerGroup,
+          const vector_size_t& offset,
+          const bool isStartBound,
+          const bool isKPreceding,
+          const vector_size_t& sortingColumnValue) -> vector_size_t {
+    auto resultGroup = 0;
+    std::pair<vector_size_t, vector_size_t> resultBounds;
+    auto limitValue = 0;
+    if (isKPreceding) {
+      limitValue = sortingOrder_.isAscending() ? sortingColumnValue - offset
+                                               : sortingColumnValue + offset;
+    } else {
+      limitValue = sortingOrder_.isAscending() ? sortingColumnValue + offset
+                                               : sortingColumnValue - offset;
+    }
+
+    // Finds a value greater than or equal to the limiting value.
+    auto findValue = sortingOrder_.isAscending()
+        ? std::lower_bound(
+              rowToPeerGroupValue.begin(),
+              rowToPeerGroupValue.end(),
+              limitValue)
+        : std::lower_bound(
+              rowToPeerGroupValue.begin(),
+              rowToPeerGroupValue.end(),
+              limitValue,
+              std::greater<int64_t>());
+    // Row number of findValue.
+    auto idx = std::min(
+        vector_size_t(findValue - rowToPeerGroupValue.begin()),
+        partitionRowCount - 1);
+
+    auto resultPeerGroup = rowToPeerGroup[idx];
+    // Resultant value at offset distance from current row's value.
+    auto resultValue = rowToPeerGroupValue[idx];
+
+    // resultValue > limitValue
+    if (sortingOrder_.isAscending()) {
+      if (resultValue == limitValue) {
+        resultBounds = partitionPeerGroups[resultPeerGroup];
+      } else {
+        auto previousPeerGroup = isKPreceding
+            ? resultPeerGroup
+            : std::max(resultPeerGroup - 1, peerGroup);
+        auto previousPeerGroupRow =
+            partitionPeerGroups[previousPeerGroup].first;
+        auto previousPeerGroupValue = rowToPeerGroupValue[previousPeerGroupRow];
+        resultBounds = partitionPeerGroups[previousPeerGroup];
+      }
+    } else {
+      // resultValue < limitValue
+      if (resultValue == limitValue) {
+        resultBounds = partitionPeerGroups[resultPeerGroup];
+      } else {
+        // Needs to be updated.
+        auto previousPeerGroup = isKPreceding
+            ? resultPeerGroup
+            : std::max(resultPeerGroup - 1, peerGroup);
+        auto previousPeerGroupRow =
+            partitionPeerGroups[previousPeerGroup].first;
+        auto previousPeerGroupValue = rowToPeerGroupValue[previousPeerGroupRow];
+        resultBounds = partitionPeerGroups[previousPeerGroup];
       }
     }
 
-    // Peer buffer values should be offsets from the start of the partition
-    // as WindowFunction only sees one partition at a time.
-    rawPeerStarts[j] = peerStartRow_ - firstPartitionRow;
-    rawPeerEnds[j] = peerEndRow_ - 1 - firstPartitionRow;
-  }
+    return isStartBound ? resultBounds.first : resultBounds.second;
+  };
+
+  auto updateKBoundFrameLimits =
+      [&](WindowFrame windowFrame,
+          vector_size_t* rawFrameBound,
+          const bool isStartBound,
+          const bool isKPreceding,
+          const std::optional<FrameChannelArg>& frameArg =
+              std::nullopt) -> void {
+    if (frameArg->index == kConstantChannel) {
+      auto constantOffset =
+          frameArg->value->template as<ConstantVector<int64_t>>()->valueAt(0);
+      for (auto i = 0; i < numRows; i++) {
+        rawFrameBound[i] = computeKRangeFrameBound(
+            rowToPeerGroup[i + partitionOffset_],
+            constantOffset,
+            isStartBound,
+            isKPreceding,
+            rowToPeerGroupValue[i + partitionOffset_]);
+      }
+    } else {
+      readFrameValues(frameArg.value());
+      auto offsetsVector = frameArg->value->asFlatVector<int64_t>();
+      for (auto i = 0; i < numRows; i++) {
+        rawFrameBound[i] = computeKRangeFrameBound(
+            rowToPeerGroup[i + partitionOffset_],
+            offsetsVector->valueAt(i),
+            isStartBound,
+            isKPreceding,
+            rowToPeerGroupValue[i + partitionOffset_]);
+      }
+    }
+  };
 
   auto updateFrameBounds = [&](const vector_size_t& functionIdx,
                                vector_size_t* rawFrameBound,
@@ -419,18 +606,21 @@ void Window::callApplyForPartitionRows(
       }
       case core::WindowNode::BoundType::kPreceding: {
         if (windowFrame.type == core::WindowNode::WindowType::kRange) {
-          VELOX_NYI("k preceding/following frames not supported in RANGE mode");
+          updateKBoundFrameLimits(
+              windowFrame, rawFrameBound, isStartBound, true, frameArg);
         } else {
           VELOX_NYI("k preceding/following frames not supported in ROWS mode");
         }
+        break;
       }
       case core::WindowNode::BoundType::kFollowing: {
         if (windowFrame.type == core::WindowNode::WindowType::kRange) {
-          VELOX_NYI("k preceding/following frames not supported in RANGE mode");
-          break;
+          updateKBoundFrameLimits(
+              windowFrame, rawFrameBound, isStartBound, false, frameArg);
         } else {
           VELOX_NYI("k preceding/following frames not supported in ROWS mode");
         }
+        break;
       }
       default:
         VELOX_USER_FAIL("Invalid frame bound type");

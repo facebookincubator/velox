@@ -102,7 +102,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
 
   void resetPartition(const exec::WindowPartition* partition) override {
     partition_ = partition;
-
+    partitionOffset_ = 0;
+    partitionRowCount_ = partition->numRows();
     previousFrameMetadata_.reset();
   }
 
@@ -159,6 +160,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
           result);
     }
     previousFrameMetadata_ = frameMetadata;
+    partitionOffset_ += numRows;
   }
 
  private:
@@ -199,7 +201,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     }
 
     bool usePreviousAggregate = false;
-    if (previousFrameMetadata_.has_value()) {
+    if (!partitionOffset_ && previousFrameMetadata_.has_value()) {
       auto previousFrame = previousFrameMetadata_.value();
       // Incremental aggregation continues between blocks if :
       // i) Their starting firstRow values are the same.
@@ -329,6 +331,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // Stores metadata about the previous output block of the partition
   // to optimize aggregate computation and reading argument vectors.
   std::optional<FrameMetadata> previousFrameMetadata_;
+
+  vector_size_t partitionOffset_;
+  vector_size_t partitionRowCount_;
 };
 
 } // namespace

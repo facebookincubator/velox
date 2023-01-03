@@ -132,6 +132,8 @@ class Window : public Operator {
       vector_size_t numOutputRows,
       const std::vector<VectorPtr>& windowOutputs);
 
+  void updateKRangeBoundsForPartition(const vector_size_t& partitionNumber);
+
   bool finished_ = false;
   const vector_size_t outputBatchSizeInBytes_;
   const vector_size_t numInputColumns_;
@@ -230,6 +232,23 @@ class Window : public Operator {
 
   // This offset tracks how far along the partition rows have been output.
   vector_size_t partitionOffset_ = 0;
+
+  // Index of the first ORDER BY column, kConstantChannel when window is not
+  // sorted.
+  column_index_t sortingKeyIndex_;
+
+  // Sorting order of the first ORDER BY column.
+  core::SortOrder sortingOrder_ = core::SortOrder(false, false);
+
+  // Map containing the peer group limits for each peer group in that partition.
+  std::map<vector_size_t, std::pair<vector_size_t, vector_size_t>>
+      partitionToPeerGroupBounds_;
+
+  // Vector which stores the peer group index for each row in the partition.
+  std::vector<vector_size_t> rowToPeerGroup_;
+
+  // Vector which stores the peer group value for each row in the partition.
+  std::vector<vector_size_t> rowToPeerGroupValue_;
 };
 
 } // namespace facebook::velox::exec

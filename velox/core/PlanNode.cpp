@@ -501,7 +501,8 @@ const char* windowTypeString(const WindowNode::WindowType windowType) {
 
 void addWindowFunction(
     std::stringstream& stream,
-    const WindowNode::Function& windowFunction) {
+    const WindowNode::Function& windowFunction,
+    const vector_size_t& numSortingKeys) {
   stream << windowFunction.functionCall->toString() << " ";
   auto frame = windowFunction.frame;
   if (frame.startType == WindowNode::BoundType::kUnboundedFollowing) {
@@ -509,6 +510,15 @@ void addWindowFunction(
   }
   if (frame.endType == WindowNode::BoundType::kUnboundedPreceding) {
     VELOX_USER_FAIL("Window frame end cannot be UNBOUNDED PRECEDING");
+  }
+  if (frame.type == WindowNode::WindowType::kRange &&
+      (frame.startType == WindowNode::BoundType::kPreceding ||
+       frame.startType == WindowNode::BoundType::kFollowing ||
+       frame.endType == WindowNode::BoundType::kPreceding ||
+       frame.endType == WindowNode::BoundType::kFollowing)) {
+    VELOX_CHECK(
+        numSortingKeys == 1,
+        "k bound frames in RANGE mode require a single ORDER BY key");
   }
 
   stream << windowTypeString(frame.type) << " between ";
@@ -656,7 +666,8 @@ void WindowNode::addDetails(std::stringstream& stream) const {
       stream << ", ";
     }
     stream << outputType_->names()[i] << " := ";
-    addWindowFunction(stream, windowFunctions_[i - numInputCols]);
+    addWindowFunction(
+        stream, windowFunctions_[i - numInputCols], sortingKeys_.size());
   }
 }
 
