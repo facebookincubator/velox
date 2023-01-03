@@ -86,9 +86,6 @@ HashBuild::HashBuild(
   }
 
   // Identify the non-key build side columns and make a decoder for each.
-  const auto numDependents = outputType->size() - numKeys;
-  dependentChannels_.reserve(numDependents);
-  decoders_.reserve(numDependents);
   for (auto i = 0; i < outputType->size(); ++i) {
     if (keyChannelMap.find(i) == keyChannelMap.end()) {
       dependentChannels_.emplace_back(i);
