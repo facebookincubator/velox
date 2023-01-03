@@ -61,10 +61,12 @@ std::unique_ptr<WindowFunction> WindowFunction::create(
     const std::vector<WindowFunctionArg>& args,
     const TypePtr& resultType,
     memory::MemoryPool* pool,
-    HashStringAllocator* stringAllocator) {
+    HashStringAllocator* stringAllocator,
+    const std::optional<bool> emptyFrames) {
   // Lookup the function in the new registry first.
   if (auto func = getWindowFunctionEntry(name)) {
-    return func.value()->factory(args, resultType, pool, stringAllocator);
+    return func.value()->factory(
+        args, resultType, pool, stringAllocator, emptyFrames);
   }
 
   VELOX_USER_FAIL("Window function not registered: {}", name);

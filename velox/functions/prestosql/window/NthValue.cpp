@@ -29,8 +29,9 @@ class NthValueFunction : public exec::WindowFunction {
   explicit NthValueFunction(
       const std::vector<exec::WindowFunctionArg>& args,
       const TypePtr& resultType,
-      velox::memory::MemoryPool* pool)
-      : WindowFunction(resultType, pool, nullptr) {
+      velox::memory::MemoryPool* pool,
+      const std::optional<bool> emptyFrames)
+      : WindowFunction(resultType, pool, nullptr, emptyFrames) {
     VELOX_CHECK_EQ(args.size(), 2);
     VELOX_CHECK_NULL(args[0].constantValue);
     valueIndex_ = args[0].index.value();
@@ -49,6 +50,7 @@ class NthValueFunction : public exec::WindowFunction {
     }
     offsetIndex_ = args[1].index.value();
     offsets_ = BaseVector::create<FlatVector<int64_t>>(BIGINT(), 0, pool);
+    hasEmptyFrames_ = emptyFrames ? emptyFrames.value() : false;
   }
 
   void resetPartition(const exec::WindowPartition* partition) override {
@@ -67,10 +69,11 @@ class NthValueFunction : public exec::WindowFunction {
     auto frameStartsPtr = frameStarts->as<vector_size_t>();
     auto frameEndsPtr = frameEnds->as<vector_size_t>();
 
+    rowNumbers_.resize(numRows);
     if (constantOffset_.has_value() || isConstantOffsetNull_) {
       setRowNumbersForConstantOffset(numRows, frameStartsPtr, frameEndsPtr);
     } else {
-      setRowNumbers(numRows, frameStartsPtr, frameEndsPtr);
+      setOffsetsAndRowNumbers(numRows, frameStartsPtr, frameEndsPtr);
     }
 
     auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
@@ -90,16 +93,20 @@ class NthValueFunction : public exec::WindowFunction {
       vector_size_t numRows,
       const vector_size_t* frameStarts,
       const vector_size_t* frameEnds) {
-    rowNumbers_.resize(numRows);
-
     if (isConstantOffsetNull_) {
       std::fill(rowNumbers_.begin(), rowNumbers_.end(), -1);
       return;
     }
 
     auto constantOffsetValue = constantOffset_.value();
-    for (int i = 0; i < numRows; i++) {
-      setRowNumber(i, frameStarts, frameEnds, constantOffsetValue);
+    if (hasEmptyFrames_) {
+      for (int i = 0; i < numRows; i++) {
+        setRowNumberEmptyFrames(i, frameStarts, frameEnds, constantOffsetValue);
+      }
+    } else {
+      for (int i = 0; i < numRows; i++) {
+        setRowNumber(i, frameStarts, frameEnds, constantOffsetValue);
+      }
     }
   }
 
@@ -107,10 +114,6 @@ class NthValueFunction : public exec::WindowFunction {
       vector_size_t numRows,
       const vector_size_t* frameStarts,
       const vector_size_t* frameEnds) {
-    rowNumbers_.resize(numRows);
-    offsets_->resize(numRows);
-    partition_->extractColumn(
-        offsetIndex_, partitionOffset_, numRows, 0, offsets_);
     for (int i = 0; i < numRows; i++) {
       if (offsets_->isNullAt(i)) {
         rowNumbers_[i] = -1;
@@ -119,6 +122,35 @@ class NthValueFunction : public exec::WindowFunction {
         VELOX_USER_CHECK_GE(offset, 1, "Offset must be at least 1");
         setRowNumber(i, frameStarts, frameEnds, offset);
       }
+    }
+  }
+
+  void setRowNumbersEmptyFrames(
+      vector_size_t numRows,
+      const vector_size_t* frameStarts,
+      const vector_size_t* frameEnds) {
+    for (int i = 0; i < numRows; i++) {
+      if (offsets_->isNullAt(i)) {
+        rowNumbers_[i] = -1;
+      } else {
+        vector_size_t offset = offsets_->valueAt(i);
+        VELOX_USER_CHECK_GE(offset, 1, "Offset must be at least 1");
+        setRowNumberEmptyFrames(i, frameStarts, frameEnds, offset);
+      }
+    }
+  }
+
+  void setOffsetsAndRowNumbers(
+      vector_size_t numRows,
+      const vector_size_t* frameStarts,
+      const vector_size_t* frameEnds) {
+    offsets_->resize(numRows);
+    partition_->extractColumn(
+        offsetIndex_, partitionOffset_, numRows, 0, offsets_);
+    if (hasEmptyFrames_) {
+      setRowNumbersEmptyFrames(numRows, frameStarts, frameEnds);
+    } else {
+      setRowNumbers(numRows, frameStarts, frameEnds);
     }
   }
 
@@ -131,6 +163,21 @@ class NthValueFunction : public exec::WindowFunction {
     auto frameEnd = frameEnds[i];
     auto rowNumber = frameStart + offset - 1;
     rowNumbers_[i] = rowNumber <= frameEnd ? rowNumber : -1;
+  }
+
+  inline void setRowNumberEmptyFrames(
+      column_index_t i,
+      const vector_size_t* frameStarts,
+      const vector_size_t* frameEnds,
+      vector_size_t offset) {
+    auto frameStart = frameStarts[i];
+    auto frameEnd = frameEnds[i];
+    if (frameStart == -1 && frameEnd == -1) {
+      rowNumbers_[i] = -1;
+    } else {
+      auto rowNumber = frameStart + offset - 1;
+      rowNumbers_[i] = rowNumber <= frameEnd ? rowNumber : -1;
+    }
   }
 
   // These are the argument indices of the nth_value value and offset columns
@@ -159,15 +206,20 @@ class NthValueFunction : public exec::WindowFunction {
   // to copy between the 2 vectors. This variable is used for the rowNumber
   // vector across getOutput calls.
   std::vector<vector_size_t> rowNumbers_;
+
+  // Indicates if empty frames are possible in the window function.
+  bool hasEmptyFrames_;
 };
 
 template <TypeKind kind>
 std::unique_ptr<exec::WindowFunction> createNthValueFunction(
     const std::vector<exec::WindowFunctionArg>& args,
     const TypePtr& resultType,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    const std::optional<bool> emptyFrames) {
   using T = typename TypeTraits<kind>::NativeType;
-  return std::make_unique<NthValueFunction<T>>(args, resultType, pool);
+  return std::make_unique<NthValueFunction<T>>(
+      args, resultType, pool, emptyFrames);
 }
 
 } // namespace
@@ -190,11 +242,17 @@ void registerNthValue(const std::string& name) {
           const std::vector<exec::WindowFunctionArg>& args,
           const TypePtr& resultType,
           velox::memory::MemoryPool* pool,
-          HashStringAllocator* /*stringAllocator*/)
+          HashStringAllocator* /*stringAllocator*/,
+          const std::optional<bool> emptyFrames)
           -> std::unique_ptr<exec::WindowFunction> {
         auto typeKind = args[0].type->kind();
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            createNthValueFunction, typeKind, args, resultType, pool);
+            createNthValueFunction,
+            typeKind,
+            args,
+            resultType,
+            pool,
+            emptyFrames);
       });
 }
 } // namespace facebook::velox::window::prestosql

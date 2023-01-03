@@ -36,8 +36,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
       const std::vector<exec::WindowFunctionArg>& args,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool,
-      HashStringAllocator* stringAllocator)
-      : WindowFunction(resultType, pool, stringAllocator) {
+      HashStringAllocator* stringAllocator,
+      const std::optional<bool> emptyFrames)
+      : WindowFunction(resultType, pool, stringAllocator, emptyFrames) {
     argTypes_.reserve(args.size());
     argIndices_.reserve(args.size());
     argVectors_.reserve(args.size());
@@ -89,6 +90,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // Constructing a vector of a single result value used for copying from
     // the aggregate to the final result.
     aggregateResultVector_ = BaseVector::create(resultType, 1, pool_);
+    hasEmptyFrames_ = emptyFrames ? emptyFrames.value() : false;
   }
 
   ~AggregateWindowFunction() {
@@ -102,7 +104,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
 
   void resetPartition(const exec::WindowPartition* partition) override {
     partition_ = partition;
-
+    partitionOffset_ = 0;
     previousFrameMetadata_.reset();
   }
 
@@ -120,7 +122,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
     FrameMetadata frameMetadata =
         analyzeFrameValues(rawFrameStarts, rawFrameEnds, numRows);
 
-    if (frameMetadata.incrementalAggregation) {
+    if (frameMetadata.emptyWindow) {
+      emptyFramesAggregation(numRows, resultOffset, result);
+    } else if (frameMetadata.incrementalAggregation) {
       vector_size_t startRow;
       if (frameMetadata.usePreviousAggregate) {
         // If incremental aggregation can be resumed from the previous block,
@@ -144,6 +148,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
           numRows,
           startRow,
           frameMetadata.lastRow,
+          rawFrameStarts,
           rawFrameEnds,
           resultOffset,
           result);
@@ -159,6 +164,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
           result);
     }
     previousFrameMetadata_ = frameMetadata;
+    partitionOffset_ += numRows;
   }
 
  private:
@@ -177,18 +183,41 @@ class AggregateWindowFunction : public exec::WindowFunction {
 
     // Resume incremental aggregation from the prior block.
     bool usePreviousAggregate;
+
+    // Indicates if the window frame is empty for all rows.
+    bool emptyWindow;
   };
+
+  inline bool isEmptyFrame(
+      const vector_size_t& frameStart,
+      const vector_size_t& frameEnd) {
+    return frameStart == -1 && frameEnd == -1;
+  }
 
   FrameMetadata analyzeFrameValues(
       const vector_size_t* rawFrameStarts,
       const vector_size_t* rawFrameEnds,
       vector_size_t numRows) {
-    vector_size_t firstRow = rawFrameStarts[0];
+    vector_size_t i = 0;
+    while (i < numRows && isEmptyFrame(rawFrameStarts[i], rawFrameEnds[i])) {
+      i++;
+    }
+    if (i) {
+      hasEmptyFrames_ = true;
+    }
+    if (i == numRows) {
+      return {
+          partitionOffset_, partitionOffset_ + numRows - 1, false, false, true};
+    }
+    vector_size_t firstRow = rawFrameStarts[i];
+    vector_size_t lastRow = rawFrameEnds[i];
     vector_size_t fixedFrameStartRow = firstRow;
-    vector_size_t lastRow = rawFrameEnds[0];
 
     bool incrementalAggregation = true;
-    for (int i = 1; i < numRows; i++) {
+    for (; i < numRows; i++) {
+      if (isEmptyFrame(rawFrameStarts[i], rawFrameEnds[i])) {
+        continue;
+      }
       firstRow = std::min(firstRow, rawFrameStarts[i]);
       lastRow = std::max(lastRow, rawFrameEnds[i]);
       // Incremental aggregation can be done if :
@@ -212,7 +241,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
       }
     }
 
-    return {firstRow, lastRow, incrementalAggregation, usePreviousAggregate};
+    return {
+        firstRow, lastRow, incrementalAggregation, usePreviousAggregate, false};
   }
 
   void fillArgVectors(vector_size_t firstRow, vector_size_t lastRow) {
@@ -226,6 +256,18 @@ class AggregateWindowFunction : public exec::WindowFunction {
         partition_->extractColumn(
             argIndices_[i], firstRow, numFrameRows, 0, argVectors_[i]);
       }
+    }
+  }
+
+  void emptyFramesAggregation(
+      vector_size_t numRows,
+      vector_size_t resultOffset,
+      const VectorPtr& result) {
+    // This is a simple optimization for windows that only have empty frames.
+    // The aggregate for all rows can be set to null.
+    aggregateResultVector_->setNull(0, true);
+    for (int i = 0; i < numRows; i++) {
+      result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
     }
   }
 
@@ -248,6 +290,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
       vector_size_t numRows,
       vector_size_t startFrame,
       vector_size_t endFrame,
+      const vector_size_t* rawFrameStarts,
       const vector_size_t* rawFrameEnds,
       vector_size_t resultOffset,
       const VectorPtr& result) {
@@ -259,14 +302,30 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // and increasing frameEnd values. In that case, we can
     // incrementally aggregate over the new rows seen in the frame between
     // the previous and current row.
-    for (int i = 0; i < numRows; i++) {
-      auto currentFrameEnd = rawFrameEnds[i] - startFrame + 1;
-      if (currentFrameEnd > prevFrameEnd) {
-        computeAggregate(rows, prevFrameEnd, currentFrameEnd);
-      }
+    if (hasEmptyFrames_) {
+      for (int i = 0; i < numRows; i++) {
+        if (isEmptyFrame(rawFrameStarts[i], rawFrameEnds[i])) {
+          aggregateResultVector_->setNull(0, true);
+        } else {
+          auto currentFrameEnd = rawFrameEnds[i] - startFrame + 1;
+          if (currentFrameEnd > prevFrameEnd) {
+            computeAggregate(rows, prevFrameEnd, currentFrameEnd);
+          }
+          prevFrameEnd = currentFrameEnd;
+        }
 
-      result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
-      prevFrameEnd = currentFrameEnd;
+        result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
+      }
+    } else {
+      for (int i = 0; i < numRows; i++) {
+        auto currentFrameEnd = rawFrameEnds[i] - startFrame + 1;
+        if (currentFrameEnd > prevFrameEnd) {
+          computeAggregate(rows, prevFrameEnd, currentFrameEnd);
+        }
+
+        result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
+        prevFrameEnd = currentFrameEnd;
+      }
     }
   }
 
@@ -281,21 +340,39 @@ class AggregateWindowFunction : public exec::WindowFunction {
     SelectivityVector rows;
     rows.resize(maxFrame + 1 - minFrame);
     static auto kSingleGroup = std::vector<vector_size_t>{0};
-    for (int i = 0; i < numRows; i++) {
-      // This is a very naive algorithm.
-      // It evaluates the entire aggregation for each row by iterating over
-      // input rows from frameStart to frameEnd in the SelectivityVector.
-      // TODO : Try to re-use previous computations by advancing and retracting
-      // the aggregation based on the frame changes with each row. This would
-      // require adding new APIs to the Aggregate framework.
-      aggregate_->clear();
-      aggregate_->initializeNewGroups(&rawSingleGroupRow_, kSingleGroup);
-      aggregateInitialized_ = true;
 
-      auto frameStartIndex = frameStartsVector[i] - minFrame;
-      auto frameEndIndex = frameEndsVector[i] - minFrame + 1;
-      computeAggregate(rows, frameStartIndex, frameEndIndex);
-      result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
+    // This is a very naive algorithm.
+    // It evaluates the entire aggregation for each row by iterating over
+    // input rows from frameStart to frameEnd in the SelectivityVector.
+    // TODO : Try to re-use previous computations by advancing and retracting
+    // the aggregation based on the frame changes with each row. This would
+    // require adding new APIs to the Aggregate framework.
+    if (hasEmptyFrames_) {
+      for (int i = 0; i < numRows; i++) {
+        aggregate_->clear();
+        aggregate_->initializeNewGroups(&rawSingleGroupRow_, kSingleGroup);
+        aggregateInitialized_ = true;
+
+        if (isEmptyFrame(frameStartsVector[i], frameEndsVector[i])) {
+          aggregateResultVector_->setNull(0, true);
+        } else {
+          auto frameStartIndex = frameStartsVector[i] - minFrame;
+          auto frameEndIndex = frameEndsVector[i] - minFrame + 1;
+          computeAggregate(rows, frameStartIndex, frameEndIndex);
+        }
+        result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
+      }
+    } else {
+      for (int i = 0; i < numRows; i++) {
+        aggregate_->clear();
+        aggregate_->initializeNewGroups(&rawSingleGroupRow_, kSingleGroup);
+        aggregateInitialized_ = true;
+
+        auto frameStartIndex = frameStartsVector[i] - minFrame;
+        auto frameEndIndex = frameEndsVector[i] - minFrame + 1;
+        computeAggregate(rows, frameStartIndex, frameEndIndex);
+        result->copy(aggregateResultVector_.get(), resultOffset + i, 0, 1);
+      }
     }
   }
 
@@ -329,6 +406,13 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // Stores metadata about the previous output block of the partition
   // to optimize aggregate computation and reading argument vectors.
   std::optional<FrameMetadata> previousFrameMetadata_;
+
+  // This offset tracks how far along the partition rows have been output.
+  // This can be used to optimize reading offset column values corresponding
+  // to the present row set in getOutput.
+  vector_size_t partitionOffset_;
+  // Indicates if empty frames are possible in the window function.
+  bool hasEmptyFrames_;
 };
 
 } // namespace
@@ -347,13 +431,14 @@ void registerAggregateWindowFunction(const std::string& name) {
         name,
         std::move(signatures),
         [name](
-            const std::vector<exec::WindowFunctionArg>& args,
+            const std::vector<WindowFunctionArg>& args,
             const TypePtr& resultType,
             velox::memory::MemoryPool* pool,
-            HashStringAllocator* stringAllocator)
+            HashStringAllocator* stringAllocator,
+            const std::optional<bool> emptyFrames)
             -> std::unique_ptr<exec::WindowFunction> {
           return std::make_unique<AggregateWindowFunction>(
-              name, args, resultType, pool, stringAllocator);
+              name, args, resultType, pool, stringAllocator, emptyFrames);
         });
   }
 }

@@ -130,13 +130,6 @@ void Window::createWindowFunctions(
       }
     }
 
-    windowFunctions_.push_back(WindowFunction::create(
-        windowNodeFunction.functionCall->name(),
-        functionArgs,
-        windowNodeFunction.functionCall->type(),
-        operatorCtx_->pool(),
-        &stringAllocator_));
-
     auto createFrameChannelArg =
         [&](const core::TypedExprPtr& frame) -> FrameChannelArg {
       if (auto constant = constantArg(frame)) {
@@ -180,6 +173,24 @@ void Window::createWindowFunctions(
     });
 
     windowFrames_.push_back(windowFrame);
+
+    const bool emptyFrames =
+        ((windowFrame.startType ==
+              core::WindowNode::BoundType::kUnboundedPreceding ||
+          windowFrame.startType == core::WindowNode::BoundType::kPreceding) &&
+         windowFrame.endType == core::WindowNode::BoundType::kPreceding) ||
+        (windowFrame.startType == core::WindowNode::BoundType::kFollowing &&
+         (windowFrame.endType ==
+              core::WindowNode::BoundType::kUnboundedFollowing ||
+          windowFrame.endType == core::WindowNode::BoundType::kFollowing));
+
+    windowFunctions_.push_back(WindowFunction::create(
+        windowNodeFunction.functionCall->name(),
+        functionArgs,
+        windowNodeFunction.functionCall->type(),
+        operatorCtx_->pool(),
+        &stringAllocator_,
+        emptyFrames ? std::make_optional(emptyFrames) : std::nullopt));
   }
 }
 
@@ -477,12 +488,12 @@ void Window::callApplyForPartitionRows(
                                  vector_size_t lastRow) -> void {
     for (auto i = frameStart, j = frameEnd; i < frameStart + numRows;
          i++, j++) {
-      if (*i <= *j) {
-        *i = std::max(*i, 0);
-        *j = std::min(*j, lastRow);
-      } else {
+      if (*i > *j || *j < 0 || *i > lastRow) {
         *i = -1;
         *j = -1;
+      } else {
+        *i = std::max(*i, 0);
+        *j = std::min(*j, lastRow);
       }
     }
   };

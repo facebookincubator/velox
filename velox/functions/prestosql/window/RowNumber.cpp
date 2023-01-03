@@ -25,7 +25,8 @@ namespace {
 
 class RowNumberFunction : public exec::WindowFunction {
  public:
-  explicit RowNumberFunction() : WindowFunction(BIGINT(), nullptr, nullptr) {}
+  explicit RowNumberFunction()
+      : WindowFunction(BIGINT(), nullptr, nullptr, std::nullopt) {}
 
   void resetPartition(const exec::WindowPartition* /*partition*/) override {
     rowNumber_ = 1;
@@ -64,7 +65,8 @@ void registerRowNumber(const std::string& name) {
           const std::vector<exec::WindowFunctionArg>& /*args*/,
           const TypePtr& /*resultType*/,
           velox::memory::MemoryPool* /*pool*/,
-          HashStringAllocator* /*stringAllocator*/)
+          HashStringAllocator* /*stringAllocator*/,
+          const std::optional<bool> /*emptyFrames*/)
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RowNumberFunction>();
       });

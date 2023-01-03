@@ -32,7 +32,8 @@ class SimpleAggregatesTest : public WindowTestBase {
             size, [](auto row) -> int32_t { return row % 10; }),
         makeFlatVector<int32_t>(
             size, [](auto row) -> int32_t { return row % 7; }),
-        makeFlatVector<int32_t>(size, [](auto row) -> int32_t { return row; }),
+        makeFlatVector<int32_t>(
+            size, [](auto row) -> int32_t { return row % 5 + 1; }),
     });
   }
 
@@ -41,7 +42,7 @@ class SimpleAggregatesTest : public WindowTestBase {
         makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
         makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
         makeFlatVector<int32_t>(
-            size, [](auto row) -> int32_t { return row + 1; }),
+            size, [](auto row) -> int32_t { return row % 5 + 1; }),
     });
   }
 
@@ -167,14 +168,14 @@ TEST_P(MultiAggregatesTest, singlePartitionColumnarKBoundedRowFrames) {
 
 TEST_P(MultiAggregatesTest, basicEmptyKBoundedRowFrames) {
   SimpleAggregatesTest::testWindowFunction(
-      {makeBasicVectors(50)},
+      {makeBasicVectors(200)},
       kFrameOverClauses,
       kEmptyKBoundedRowsFrameClauses);
 }
 
 TEST_P(MultiAggregatesTest, singlePartitionEmptyKBoundedRowFrames) {
   SimpleAggregatesTest::testWindowFunction(
-      {makeSinglePartitionVector(100)},
+      {makeSinglePartitionVector(400)},
       kFrameOverClauses,
       kEmptyKBoundedRowsFrameClauses);
 }

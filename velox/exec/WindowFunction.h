@@ -35,10 +35,12 @@ class WindowFunction {
   explicit WindowFunction(
       TypePtr resultType,
       memory::MemoryPool* pool,
-      HashStringAllocator* stringAllocator)
+      HashStringAllocator* stringAllocator,
+      std::optional<bool> emptyFrames)
       : resultType_(std::move(resultType)),
         pool_(pool),
-        stringAllocator_(stringAllocator) {}
+        stringAllocator_(stringAllocator),
+        emptyFrames_(emptyFrames) {}
 
   virtual ~WindowFunction() = default;
 
@@ -96,12 +98,14 @@ class WindowFunction {
       const std::vector<WindowFunctionArg>& args,
       const TypePtr& resultType,
       memory::MemoryPool* pool,
-      HashStringAllocator* stringAllocator);
+      HashStringAllocator* stringAllocator,
+      const std::optional<bool> emptyFrames);
 
  protected:
   const TypePtr resultType_;
   memory::MemoryPool* pool_;
   HashStringAllocator* const stringAllocator_;
+  const std::optional<bool> emptyFrames_;
 };
 
 /// Information from the Window operator that is useful for the function logic.
@@ -114,7 +118,8 @@ using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
     const std::vector<WindowFunctionArg>& args,
     const TypePtr& resultType,
     memory::MemoryPool* pool,
-    HashStringAllocator* stringAllocator)>;
+    HashStringAllocator* stringAllocator,
+    const std::optional<bool> emptyFrames)>;
 
 /// Register a window function with the specified name and signatures.
 /// Registering a function with the same name a second time overrides the first

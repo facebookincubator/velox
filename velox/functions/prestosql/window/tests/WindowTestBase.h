@@ -117,9 +117,13 @@ static std::vector<std::string> kColumnarKBoundedRowsFrameClauses = {
 static std::vector<std::string> kEmptyKBoundedRowsFrameClauses = {
     "rows between 1 following and unbounded following",
     "rows between 5 following and unbounded following",
+    "rows between 4 following and 1 following",
     "rows between unbounded preceding and 1 preceding",
     "rows between unbounded preceding and 5 preceding",
+    "rows between 1 preceding and 4 preceding",
+    "rows between 2 preceding and c2 preceding",
     "rows between unbounded preceding and c2 preceding",
+    "rows between c2 following and 2 following",
     "rows between c2 following and unbounded following",
 };
 
