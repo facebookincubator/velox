@@ -383,6 +383,7 @@ def upload_results(output_dir, run_id):
                 "velox_compiler_version": None,
             },
             "context": {"velox_compiler_flags": None},
+            "machine_info": {"name": "CircleCI-runner-dedicated"},
         },
     )
 
