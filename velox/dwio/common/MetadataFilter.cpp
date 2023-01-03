@@ -169,7 +169,7 @@ std::unique_ptr<MetadataFilter::Node> MetadataFilter::Node::fromExpression(
     return std::make_unique<LeafNode>(
         scanSpec, std::move(res.first), std::move(res.second));
   } catch (const VeloxException& e) {
-    VLOG(1) << e.what();
+    // VLOG(1) << e.what();
     return nullptr;
   }
 }
