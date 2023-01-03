@@ -16,22 +16,11 @@
 #include "velox/serializers/UnsafeRowSerializer.h"
 #include "velox/row/UnsafeRowDeserializer.h"
 #include "velox/row/UnsafeRowDynamicSerializer.h"
-
-namespace facebook::velox::serializer::spark {
-
-void UnsafeRowVectorSerde::estimateSerializedSize(
-    VectorPtr /* vector */,
-    const folly::Range<const IndexRange*>& /* ranges */,
-    vector_size_t** /* sizes */) {
-  VELOX_UNSUPPORTED();
-}
-
 namespace {
 class UnsafeRowVectorSerializer : public VectorSerializer {
  public:
   explicit UnsafeRowVectorSerializer(StreamArena* streamArena)
       : pool_{streamArena->pool()} {}
-
   void append(
       RowVectorPtr vector,
       const folly::Range<const IndexRange*>& ranges) override {
@@ -43,15 +32,12 @@ class UnsafeRowVectorSerializer : public VectorSerializer {
         totalSize += rowSize + sizeof(size_t);
       }
     }
-
     if (totalSize == 0) {
       return;
     }
-
     auto* buffer = (char*)pool_->allocate(totalSize);
     buffers_.push_back(
         ByteRange{(uint8_t*)buffer, (int32_t)totalSize, (int32_t)totalSize});
-
     size_t offset = 0;
     for (auto& range : ranges) {
       for (auto i = range.begin; i < range.begin + range.size; ++i) {
@@ -62,18 +48,14 @@ class UnsafeRowVectorSerializer : public VectorSerializer {
             velox::row::UnsafeRowDynamicSerializer::serialize(
                 vector->type(), vector, buffer + offset + sizeof(size_t), i)
                 .value_or(0);
-
         // Sanity check.
         VELOX_CHECK_EQ(rowSize, size);
-
         // Write raw size.
         *(size_t*)(buffer + offset) = size;
-
         offset += sizeof(size_t) + size;
       }
     }
   }
-
   void flush(OutputStream* stream) override {
     for (auto& buffer : buffers_) {
       stream->write((char*)buffer.buffer, buffer.position);
@@ -87,15 +69,6 @@ class UnsafeRowVectorSerializer : public VectorSerializer {
   std::vector<ByteRange> buffers_;
 };
 } // namespace
-
-std::unique_ptr<VectorSerializer> UnsafeRowVectorSerde::createSerializer(
-    RowTypePtr /* type */,
-    int32_t /* numRows */,
-    StreamArena* streamArena,
-    const Options* /* options */) {
-  return std::make_unique<UnsafeRowVectorSerializer>(streamArena);
-}
-
 void UnsafeRowVectorSerde::deserialize(
     ByteStream* source,
     velox::memory::MemoryPool* pool,
@@ -103,26 +76,21 @@ void UnsafeRowVectorSerde::deserialize(
     RowVectorPtr* result,
     const Options* /* options */) {
   std::vector<std::optional<std::string_view>> serializedRows;
-  while (!source->atEnd()) {
-    auto rowSize = source->read<size_t>();
-    auto row = source->nextView(rowSize);
-    VELOX_CHECK_EQ(row.size(), rowSize);
-    serializedRows.push_back(row);
-  }
-
+  auto rowSize = source->size();
+  BufferPtr buffer = AlignedBuffer::allocate<char>(rowSize, pool);
+  auto* bufferPtr = buffer->asMutable<char>();
+  source->readBytes(bufferPtr, rowSize);
+  serializedRows.emplace_back(std::string_view((char*)bufferPtr, rowSize));
   if (serializedRows.empty()) {
     *result = BaseVector::create<RowVector>(type, 0, pool);
     return;
   }
-
   *result = std::dynamic_pointer_cast<RowVector>(
       velox::row::UnsafeRowDynamicVectorDeserializer::deserializeComplex(
           serializedRows, type, pool));
 }
-
 // static
 void UnsafeRowVectorSerde::registerVectorSerde() {
   velox::registerVectorSerde(std::make_unique<UnsafeRowVectorSerde>());
 }
-
 } // namespace facebook::velox::serializer::spark

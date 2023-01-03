@@ -14,27 +14,17 @@
  * limitations under the License.
  */
 #pragma once
+#include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/VectorStream.h"
-
 namespace facebook::velox::serializer::spark {
 
-class UnsafeRowVectorSerde : public VectorSerde {
+// UnsafeRowVectorSerde has to inherit from PrestoVectorSerde since it only
+// provides the deserializer for unsafrow. When we do normal PartitionedOutput,
+// we stil need to use the presto page serializer to serialzie the output in
+// order to communicate with the java side.
+class UnsafeRowVectorSerde : public presto::PrestoVectorSerde {
  public:
-  // We do not implement this method since it is not used in production code.
-  void estimateSerializedSize(
-      VectorPtr vector,
-      const folly::Range<const IndexRange*>& ranges,
-      vector_size_t** sizes) override;
-
-  // This method is not used in production code. It is only used to
-  // support round-trip tests for deserialization.
-  std::unique_ptr<VectorSerializer> createSerializer(
-      RowTypePtr type,
-      int32_t numRows,
-      StreamArena* streamArena,
-      const Options* options) override;
-
   // This method is used when reading data from the exchange.
   void deserialize(
       ByteStream* source,
@@ -42,7 +32,6 @@ class UnsafeRowVectorSerde : public VectorSerde {
       RowTypePtr type,
       RowVectorPtr* result,
       const Options* options) override;
-
   static void registerVectorSerde();
 };
 } // namespace facebook::velox::serializer::spark
