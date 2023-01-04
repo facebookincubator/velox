@@ -27,8 +27,8 @@ class Destination {
   Destination(
       const std::string& taskId,
       int destination,
-      memory::MappedMemory* FOLLY_NONNULL memory)
-      : taskId_(taskId), destination_(destination), memory_(memory) {
+      memory::MemoryPool* FOLLY_NONNULL pool)
+      : taskId_(taskId), destination_(destination), pool_(pool) {
     setTargetSizePct();
   }
 
@@ -89,7 +89,7 @@ class Destination {
 
   const std::string taskId_;
   const int destination_;
-  memory::MappedMemory* FOLLY_NONNULL const memory_;
+  memory::MemoryPool* FOLLY_NONNULL const pool_;
   uint64_t bytesInCurrent_{0};
   std::vector<IndexRange> rows_;
 
@@ -190,7 +190,6 @@ class PartitionedOutput : public Operator {
   bool replicatedAny_{false};
   std::weak_ptr<exec::PartitionedOutputBufferManager> bufferManager_;
   const int64_t maxBufferedBytes_;
-  memory::MappedMemory* FOLLY_NONNULL mappedMemory_;
   RowVectorPtr output_;
 
   // Reusable memory.

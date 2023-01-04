@@ -18,6 +18,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/WriteProtocol.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/QueryConfig.h"
 
 namespace facebook::velox::core {
 
@@ -103,6 +104,12 @@ class PlanNode {
   /// require splits, but TableScanNode and ExchangeNode are leaf nodes that
   /// require splits.
   virtual bool requiresSplits() const {
+    return false;
+  }
+
+  /// Returns true if this plan node operator is spillable and 'queryConfig' has
+  /// enabled it.
+  virtual bool canSpill(const QueryConfig& queryConfig) const {
     return false;
   }
 
@@ -533,6 +540,15 @@ class AggregationNode : public PlanNode {
 
   std::string_view name() const override {
     return "Aggregation";
+  }
+
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    // NOTE: as for now, we don't allow spilling for distinct aggregation
+    // (https://github.com/facebookincubator/velox/issues/3263) and pre-grouped
+    // aggregation (https://github.com/facebookincubator/velox/issues/3264). We
+    // will add support later to re-enable.
+    return (isFinal() || isSingle()) && !(aggregates().empty()) &&
+        preGroupedKeys().empty() && queryConfig.aggregationSpillEnabled();
   }
 
   bool isFinal() const {
@@ -1001,6 +1017,7 @@ enum class JoinType {
   // this join type, cardinality of the output equals the cardinality of the
   // right side.
   kRightSemiProject,
+  // Deprecated. TODO Remove after Prestissimo is updated.
   // Return each row from the left side which has no match on the right side.
   // The handling of the rows with nulls in the join key follows NOT IN
   // semantic:
@@ -1010,8 +1027,16 @@ enum class JoinType {
   // the right side is empty.
   kNullAwareAnti,
   // Return each row from the left side which has no match on the right side.
-  // The handling of the rows with nulls in the join key follows NOT EXISTS
-  // semantic:
+  // The handling of the rows with nulls in the join key depends on the
+  // 'nullAware' boolean specified separately.
+  //
+  // Null-aware join follows NOT IN semantic:
+  // (1) return empty result if the right side contains a record with a null in
+  // the join key;
+  // (2) return left-side row with null in the join key only when
+  // the right side is empty.
+  //
+  // Regular anti join follows NOT EXISTS semantic:
   // (1) ignore right-side rows with nulls in the join keys;
   // (2) unconditionally return left side rows with nulls in the join keys.
   kAnti,
@@ -1075,16 +1100,14 @@ inline bool isRightSemiProjectJoin(JoinType joinType) {
   return joinType == JoinType::kRightSemiProject;
 }
 
-inline bool isNullAwareAntiJoin(JoinType joinType) {
-  return joinType == JoinType::kNullAwareAnti;
-}
-
 inline bool isAntiJoin(JoinType joinType) {
   return joinType == JoinType::kAnti;
 }
 
-inline bool isAntiJoins(JoinType joinType) {
-  return isAntiJoin(joinType) || isNullAwareAntiJoin(joinType);
+inline bool isNullAwareSupported(core::JoinType joinType) {
+  return joinType == JoinType::kAnti ||
+      joinType == JoinType::kLeftSemiProject ||
+      joinType == JoinType::kRightSemiProject;
 }
 
 /// Abstract class representing inner/outer/semi/anti joins. Used as a base
@@ -1145,10 +1168,6 @@ class AbstractJoinNode : public PlanNode {
     return joinType_ == JoinType::kRightSemiProject;
   }
 
-  bool isNullAwareAntiJoin() const {
-    return joinType_ == JoinType::kNullAwareAnti;
-  }
-
   bool isAntiJoin() const {
     return joinType_ == JoinType::kAnti;
   }
@@ -1165,7 +1184,7 @@ class AbstractJoinNode : public PlanNode {
     return filter_;
   }
 
- private:
+ protected:
   void addDetails(std::stringstream& stream) const override;
 
   const JoinType joinType_;
@@ -1183,11 +1202,16 @@ class AbstractJoinNode : public PlanNode {
 /// Represents inner/outer/semi/anti hash joins. Translates to an
 /// exec::HashBuild and exec::HashProbe. A separate pipeline is produced for the
 /// build side when generating exec::Operators.
+///
+/// 'nullAware' boolean applies to semi and anti joins. When true, the join
+/// semantic is IN / NOT IN. When false, the join semantic is EXISTS / NOT
+/// EXISTS.
 class HashJoinNode : public AbstractJoinNode {
  public:
   HashJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
+      bool nullAware,
       const std::vector<FieldAccessTypedExprPtr>& leftKeys,
       const std::vector<FieldAccessTypedExprPtr>& rightKeys,
       TypedExprPtr filter,
@@ -1202,11 +1226,58 @@ class HashJoinNode : public AbstractJoinNode {
             filter,
             left,
             right,
+            outputType),
+        nullAware_{nullAware} {
+    if (nullAware) {
+      VELOX_USER_CHECK(
+          isNullAwareSupported(joinType),
+          "Null-aware flag is supported only for semi and anti joins");
+    }
+  }
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  HashJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+      TypedExprPtr filter,
+      PlanNodePtr left,
+      PlanNodePtr right,
+      const RowTypePtr outputType)
+      : HashJoinNode(
+            id,
+            joinType == JoinType::kNullAwareAnti ? JoinType::kAnti : joinType,
+            joinType == JoinType::kNullAwareAnti ? true : false,
+            leftKeys,
+            rightKeys,
+            filter,
+            left,
+            right,
             outputType) {}
+#endif
 
   std::string_view name() const override {
     return "HashJoin";
   }
+
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    // NOTE: as for now, we don't allow spilling for null-aware anti-join with
+    // filter set. It requires to cross join the null-key probe rows with all
+    // the build-side rows for filter evaluation which is not supported under
+    // spilling.
+    return !(isAntiJoin() && nullAware_ && filter() != nullptr) &&
+        queryConfig.joinSpillEnabled();
+  }
+
+  bool isNullAware() const {
+    return nullAware_;
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const bool nullAware_;
 };
 
 /// Represents inner/outer/semi/anti merge joins. Translates to an
@@ -1295,6 +1366,10 @@ class OrderByNode : public PlanNode {
 
   const std::vector<SortOrder>& sortingOrders() const {
     return sortingOrders_;
+  }
+
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return queryConfig.orderBySpillEnabled();
   }
 
   const RowTypePtr& outputType() const override {

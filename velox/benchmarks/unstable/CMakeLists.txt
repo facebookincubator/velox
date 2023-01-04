@@ -11,5 +11,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+set(velox_benchmark_deps
+    velox_type
+    velox_vector
+    velox_vector_fuzzer
+    velox_expression
+    velox_parse_parser
+    velox_parse_utils
+    velox_parse_expression
+    velox_serialization
+    ${FOLLY}
+    ${FOLLY_BENCHMARK}
+    ${DOUBLE_CONVERSION}
+    ${gflags_LIBRARIES}
+    glog::glog)
 
-click
+add_executable(velox_memory_alloc_benchmark MemoryAllocationBenchmark.cpp)
+target_link_libraries(velox_memory_alloc_benchmark ${velox_benchmark_deps}
+                      velox_memory pthread)

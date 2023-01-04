@@ -16,9 +16,16 @@
 import argparse
 import json
 import os
+import pathlib
+import re
+import subprocess
 import sys
 import tempfile
-from veloxbench.veloxbench.cpp_micro_benchmarks import LocalCppMicroBenchmarks
+import traceback
+import uuid
+
+from collections import defaultdict
+
 
 _OUTPUT_NUM_COLS = 100
 
@@ -57,65 +64,117 @@ def fmt_runtime(time_ns):
         return "{:.2f}ms".format(time_usec / 1000)
 
 
+def get_retry_name(args, file_name):
+    """
+    Extract the subdir name between the base path and file name, and use that
+    as the retry name. Top level files will have retry name set to "."
+    """
+    path = _normalize_path(file_name)
+    try:
+        parent_path = path.relative_to(_normalize_path(args.target_path))
+    except:
+        parent_path = path.relative_to(_normalize_path(args.baseline_path))
+    return str(parent_path.parent)
+
+
 def compare_file(args, target_data, baseline_data):
-    baseline_map = {}
-    for row in baseline_data:
-        baseline_map[get_benchmark_handle(row[0], row[1])] = row[2]
+    def preprocess_data(input_map):
+        output_map = defaultdict(dict)
+        for file_name, data in input_map.items():
+            retry = get_retry_name(args, file_name)
+            for row in data:
+                # Folly benchmark exports line separators by mistake as an entry on
+                # the json file.
+                if row[1] == "-":
+                    continue
+                output_map[(row[0], row[1])][retry] = row[2]
+        return output_map
+
+    baseline_map = preprocess_data(baseline_data)
+    target_map = preprocess_data(target_data)
 
     passes = []
     faster = []
     failures = []
 
-    for row in target_data:
-        # Folly benchmark exports line separators by mistake as an entry on
-        # the json file.
-        if row[1] == "-":
+    # Iterate over each benchmark.
+    for handle, target_values in target_map.items():
+        retries = len(baseline_map[handle])
+        if retries != len(target_values):
+            print("Wrong number of retries found. Skipping '{}'".format(handle))
             continue
 
-        benchmark_handle = get_benchmark_handle(row[0], row[1])
-        baseline_result = baseline_map[benchmark_handle]
-        target_result = row[2]
+        # Iterate over each retry. The first iteration is always the full
+        # execution, then optionally a few retries.
+        for retry, target_result in sorted(target_values.items()):
+            is_last = retry == sorted(target_values.keys())[-1]
+            is_first = retry == "."
+            baseline_result = baseline_map[handle][retry]
 
-        if baseline_result == 0 or target_result == 0:
-            delta = 0
-        elif baseline_result > target_result:
-            delta = 1 - (target_result / baseline_result)
-        else:
-            delta = (1 - (baseline_result / target_result)) * -1
-
-        if abs(delta) > args.threshold:
-            if delta > 0:
-                status = color_green("🗲 Pass")
-                passes.append((row[0], row[1], delta))
-                faster.append((row[0], row[1], delta))
+            # Calculate delta between baseline and target results.
+            if baseline_result == 0 or target_result == 0:
+                delta = 0
+            elif baseline_result > target_result:
+                delta = 1 - (target_result / baseline_result)
             else:
-                status = color_red("✗ Fail")
-                failures.append((row[0], row[1], delta))
-        else:
-            status = color_green("✓ Pass")
-            passes.append((row[0], row[1], delta))
+                delta = (1 - (baseline_result / target_result)) * -1
 
-        suffix = "({} vs {}) {:+.2f}%".format(
-            fmt_runtime(baseline_result), fmt_runtime(target_result), delta * 100
-        )
+            # Set status message based on the delta and number of retries.
+            if not is_last:
+                if delta > 0:
+                    status = color_yellow("🗲 Redo")
+                else:
+                    status = color_yellow("✗ Redo")
 
-        # Prefix length is 12 bytes (considering utf8 and invisible chars).
-        spacing = " " * (_OUTPUT_NUM_COLS - (12 + len(benchmark_handle) + len(suffix)))
-        print("    {}: {}{}{}".format(status, benchmark_handle, spacing, suffix))
+            # If there are no more retries and this exceeded the threshold.
+            elif abs(delta) > args.threshold:
+                if delta > 0:
+                    status = color_green("🗲 Pass")
+                    passes.append((handle[0], handle[1], delta))
+                    faster.append((handle[0], handle[1], delta))
+                else:
+                    status = color_red("✗ Fail")
+                    failures.append((handle[0], handle[1], delta))
+            else:
+                status = color_green("✓ Pass")
+                passes.append((handle[0], handle[1], delta))
+
+            suffix = "({} vs {}) {:+.2f}%".format(
+                fmt_runtime(baseline_result), fmt_runtime(target_result), delta * 100
+            )
+            bm_handle = get_benchmark_handle(*handle)
+
+            # Add retry information.
+            if not is_first:
+                bm_handle += " ({})".format(retry)
+                status = "  " + status
+
+            spacing = " " * (
+                _OUTPUT_NUM_COLS - (len(status) + len(bm_handle) + len(suffix) - 4)
+            )
+            print("    {}: {}{}{}".format(status, bm_handle, spacing, suffix))
 
     return passes, faster, failures
 
 
-def find_json_files(path):
-    json_files = {}
-    try:
-        with os.scandir(path) as files:
-            for file_found in files:
-                if file_found.name.endswith(".json"):
-                    json_files[file_found.name] = file_found.path
-    except:
-        pass
+def find_json_files(path: pathlib.Path, recursive=False):
+    """Finds json files in a given directory. Supports recursive searchs."""
+    pattern = "*.json"
+    files = path.rglob(pattern) if recursive else path.glob(pattern)
+    json_files = defaultdict(list)
+
+    for path in files:
+        json_files[path.name] += [path.resolve()]
     return json_files
+
+
+def read_json_files(file_names):
+    """Reads a sequence of json files and returns their contents in a dict: {file_name: content}"""
+    output_map = {}
+    for file_name in file_names:
+        with open(file_name) as f:
+            output_map[file_name] = json.load(f)
+    return output_map
 
 
 def compare(args):
@@ -128,8 +187,8 @@ def compare(args):
     print("=>    (positive means speedup; negative means regression).")
 
     # Read file lists from both directories.
-    baseline_map = find_json_files(args.baseline_path)
-    target_map = find_json_files(args.target_path)
+    baseline_map = find_json_files(pathlib.Path(args.baseline_path), args.recursive)
+    target_map = find_json_files(pathlib.Path(args.target_path), args.recursive)
 
     all_passes = []
     all_faster = []
@@ -149,12 +208,8 @@ def compare(args):
             print("WARNING: baseline file for '%s' not found. Skipping." % file_name)
             continue
 
-        # Open and read each file.
-        with open(target_path) as f:
-            target_data = json.load(f)
-
-        with open(baseline_map[file_name]) as f:
-            baseline_data = json.load(f)
+        target_data = read_json_files(target_path)
+        baseline_data = read_json_files(baseline_map[file_name])
 
         passes, faster, failures = compare_file(args, target_data, baseline_data)
         all_passes += passes
@@ -173,7 +228,8 @@ def compare(args):
     # Write rerun log to output file.
     if args.rerun_json_output:
         with open(args.rerun_json_output, "w") as out_file:
-            out_file.write(json.dumps(rerun_log, indent=4))
+            if rerun_log:
+                out_file.write(json.dumps(rerun_log, indent=4))
 
     # Print a nice summary of the results:
     print("Summary ({}% threshold):".format(args.threshold * 100))
@@ -187,13 +243,156 @@ def compare(args):
     if all_failures:
         print(color_red("  Fail: %d" % len(all_failures)))
         print_list(all_failures)
-        return 1
+        if not args.do_not_fail:
+            return 1
     return 0
 
 
+def _find_binaries(binary_path: pathlib.Path):
+    print(f"Looking for binaries at '{binary_path}'")
+
+    # Must run `make benchmarks-basic-build` before this
+    binaries = [
+        path
+        for path in binary_path.glob("*")
+        if os.access(path, os.X_OK) and path.is_file()
+    ]
+    if not binaries:
+        raise ValueError(f"No binaries found at path '{binary_path.resolve()}'")
+
+    print(f"Found {len(binaries)} benchmark binaries")
+    return binaries
+
+
+def _default_binary_path():
+    repo_root = pathlib.Path(__file__).parent.parent.absolute()
+    return repo_root.joinpath("_build", "release", "velox", "benchmarks", "basic")
+
+
+def _normalize_path(binary_path: str) -> pathlib.Path:
+    path = pathlib.Path(binary_path)
+    if not path.is_absolute():
+        path = pathlib.Path.cwd().joinpath(path).resolve()
+    return path
+
+
+def run_all_benchmarks(
+    output_dir,
+    binary_path=None,
+    binary_filter=None,
+    bm_filter=None,
+    bm_max_secs=None,
+    bm_max_trials=None,
+    bm_estimate_time=False,
+):
+    if binary_path:
+        binary_path = _normalize_path(binary_path)
+    else:
+        binary_path = _default_binary_path()
+
+    binaries = _find_binaries(binary_path)
+    output_dir_path = pathlib.Path(output_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+
+    for binary_path in binaries:
+        if binary_filter and not re.search(binary_filter, binary_path.name):
+            continue
+
+        out_path = output_dir_path / f"{binary_path.name}.json"
+        print(f"Executing and dumping results for '{binary_path}' to '{out_path}':")
+        run_command = [
+            binary_path,
+            "--bm_json_verbose",
+            out_path,
+        ]
+
+        if bm_max_secs:
+            run_command.extend(["--bm_max_secs", str(bm_max_secs)])
+
+        if bm_max_trials:
+            run_command.extend(["--bm_max_trials", str(bm_max_trials)])
+
+        if bm_filter:
+            run_command.extend(["--bm_regex", bm_filter])
+
+        if bm_estimate_time:
+            run_command.append("--bm_estimate_time")
+
+        try:
+            print(run_command)
+            subprocess.run(run_command, check=True)
+        except subprocess.CalledProcessError as e:
+            print(e.stderr.decode("utf-8"))
+            raise e
+
+
+def upload_results(output_dir, run_id):
+    print(f"Uploading results from {output_dir=} to Conbench with {run_id=}")
+
+    # Check there's actually results first
+    if not list(pathlib.Path(output_dir).rglob("*.json")):
+        print("No results to upload")
+        return
+
+    # Import benchadapt inside this function so you don't need it if you're just running benchmarks
+    from benchadapt.adapters import FollyAdapter
+    from benchadapt.log import log
+
+    # Print the POSTs in the logs
+    log.setLevel("DEBUG")
+
+    # benchadapt needs these for logging in to Conbench
+    required_env_vars = {"CONBENCH_URL", "CONBENCH_EMAIL", "CONBENCH_PASSWORD"}
+    missing_env_vars = required_env_vars - set(os.environ)
+    if missing_env_vars:
+        print(
+            "Not uploading results to Conbench because these env vars are missing: "
+            f"{missing_env_vars}"
+        )
+        return
+
+    # This should work, though it would be much better to get the sha from velox
+    # directly so we know we're using the right one (see TODO below)
+    commit = os.environ["CIRCLE_SHA1"]
+
+    pr_number_env = os.getenv("CIRCLE_PR_NUMBER", "")
+    pr_number = int(pr_number_env) if pr_number_env else None
+    run_reason = "pull request" if pr_number else "commit"
+    run_name = f"{run_reason}: {commit}"
+
+    conbench_upload_callable = FollyAdapter(
+        # Since benchmarks have already run, this run command is a no-op
+        command=["ls", output_dir],
+        result_dir=output_dir,
+        result_fields_override={
+            "run_id": run_id,
+            "run_name": run_name,
+            "run_reason": run_reason,
+            "github": {
+                "repository": "https://github.com/facebookincubator/velox",
+                "pr_number": pr_number,
+                "commit": commit,
+            },
+        },
+        result_fields_append={
+            "info": {
+                # TODO: undo the hard coding with ways to get the values from velox
+                # c.f. https://github.com/ursacomputing/benchmarks/blob/033eee0951adbf41931a2de95caccbac887da6ff/benchmarks/_benchmark.py#L30-L48
+                "velox_version": "0.0.1",
+                "velox_compiler_id": None,
+                "velox_compiler_version": None,
+            },
+            "context": {"velox_compiler_flags": None},
+        },
+    )
+
+    conbench_upload_callable()
+
+
 def run(args):
+    output_dir = args.output_path or tempfile.mkdtemp()
     kwargs = {
-        "output_dir": args.output_path or tempfile.mkdtemp(),
+        "output_dir": output_dir,
         "binary_path": args.binary_path,
         "binary_filter": args.binary_filter,
         "bm_filter": args.bm_filter,
@@ -216,11 +415,18 @@ def run(args):
         for file_name, bm_list in json_input.items():
             kwargs["binary_filter"] = gen_binary_filter(file_name)
             kwargs["bm_filter"] = gen_bm_filter(bm_list)
-            LocalCppMicroBenchmarks().run(**kwargs)
+            run_all_benchmarks(**kwargs)
 
     # Otherwise, run all benchmarks we can find.
     else:
-        LocalCppMicroBenchmarks().run(**kwargs)
+        run_all_benchmarks(**kwargs)
+
+    if args.conbench_upload_run_id:
+        try:
+            upload_results(output_dir=output_dir, run_id=args.conbench_upload_run_id)
+        except Exception:
+            print("ERROR caught during uploading results:")
+            print(traceback.format_exc())
 
 
 def parse_args():
@@ -280,6 +486,14 @@ def parse_args():
         "be run. This file needs to be generated using the "
         "--rerun_json_output flag.",
     )
+    parser_run.add_argument(
+        "--conbench_upload_run_id",
+        default=None,
+        help="A Conbench run ID unique to this build. If given, the run script will "
+        "upload results to Conbench upon completion. Requires the `benchadapt` package "
+        "installed and the following env vars set: CIRCLE_SHA1, CIRCLE_PR_NUMBER, "
+        "CONBENCH_URL, CONBENCH_EMAIL, CONBENCH_PASSWORD",
+    )
     parser_run.set_defaults(func=run)
 
     # Arguments for the "compare" subparser.
@@ -312,6 +526,19 @@ def parse_args():
         help="File where the rerun output will be saved. Redo output contains "
         "information about the failed benchmarks (the ones where the variation "
         "exceeded the threshold).",
+    )
+    parser_compare.add_argument(
+        "--recursive",
+        default=False,
+        action="store_true",
+        help="Looks for json files recursively, understanding subdirs as "
+        "retries and printing the output accordingly.",
+    )
+    parser_compare.add_argument(
+        "--do_not_fail",
+        default=False,
+        action="store_true",
+        help="Do not return failure code if comparisons fail.",
     )
     return parser.parse_args()
 

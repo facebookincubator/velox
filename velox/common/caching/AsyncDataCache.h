@@ -29,7 +29,7 @@
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/caching/StringIdMap.h"
 #include "velox/common/file/File.h"
-#include "velox/common/memory/MappedMemory.h"
+#include "velox/common/memory/MemoryAllocator.h"
 
 namespace facebook::velox::cache {
 
@@ -141,17 +141,18 @@ class AsyncDataCacheEntry {
   static constexpr int32_t kTinyDataSize = 2048;
 
   explicit AsyncDataCacheEntry(CacheShard* FOLLY_NONNULL shard);
+  ~AsyncDataCacheEntry();
 
   // Sets the key and allocates the entry's memory.  Resets
   //  all other state. The entry must be held exclusively and must
   //  hold no memory when calling this.
   void initialize(FileCacheKey key);
 
-  memory::MappedMemory::Allocation& data() {
+  memory::MemoryAllocator::Allocation& data() {
     return data_;
   }
 
-  const memory::MappedMemory::Allocation& data() const {
+  const memory::MemoryAllocator::Allocation& data() const {
     return data_;
   }
 
@@ -267,10 +268,10 @@ class AsyncDataCacheEntry {
   CacheShard* const shard_;
 
   // The data being cached.
-  memory::MappedMemory::Allocation data_;
+  memory::MemoryAllocator::Allocation data_;
 
-  // Contains the cached data if this is much smaller than a MappedMemory page
-  // (kTinyDataSize).
+  // Contains the cached data if this is much smaller than a MemoryAllocator
+  // page (kTinyDataSize).
   std::string tinyData_;
 
   std::unique_ptr<folly::SharedPromise<bool>> promise_;
@@ -561,6 +562,9 @@ class CacheShard {
 
   CachePin initEntry(RawFileCacheKey key, AsyncDataCacheEntry* entry);
 
+  void freeAllocations(
+      std::vector<memory::MemoryAllocator::Allocation>& allocations);
+
   mutable std::mutex mutex_;
   folly::F14FastMap<RawFileCacheKey, AsyncDataCacheEntry*> entryMap_;
   // Entries associated to a key.
@@ -591,15 +595,15 @@ class CacheShard {
   // Sum of evict scores. This divided by 'numEvict_' correlates to
   // time data stays in cache.
   uint64_t sumEvictScore_{};
-  // Tracker of time spent in allocating/freeing MappedMemory space
+  // Tracker of time spent in allocating/freeing MemoryAllocator space
   // for backing cached data.
   std::atomic<uint64_t> allocClocks_;
 };
 
-class AsyncDataCache : public memory::MappedMemory {
+class AsyncDataCache : public memory::MemoryAllocator {
  public:
   AsyncDataCache(
-      const std::shared_ptr<memory::MappedMemory>& mappedMemory,
+      const std::shared_ptr<memory::MemoryAllocator>& allocator,
       uint64_t maxBytes,
       std::unique_ptr<SsdCache> ssdCache = nullptr);
 
@@ -625,43 +629,43 @@ class AsyncDataCache : public memory::MappedMemory {
   bool allocateNonContiguous(
       memory::MachinePageCount numPages,
       Allocation& out,
-      std::function<void(int64_t, bool)> beforeAllocCB = nullptr,
+      ReservationCallback reservationCB = nullptr,
       memory::MachinePageCount minSizeClass = 0) override;
 
   int64_t freeNonContiguous(Allocation& allocation) override {
-    return mappedMemory_->freeNonContiguous(allocation);
+    return allocator_->freeNonContiguous(allocation);
   }
 
   bool allocateContiguous(
       memory::MachinePageCount numPages,
-      Allocation* collateral,
+      Allocation* FOLLY_NULLABLE collateral,
       ContiguousAllocation& allocation,
-      std::function<void(int64_t, bool)> beforeAllocCB = nullptr) override;
+      ReservationCallback reservationCB = nullptr) override;
 
   void freeContiguous(ContiguousAllocation& allocation) override {
-    mappedMemory_->freeContiguous(allocation);
+    allocator_->freeContiguous(allocation);
   }
 
   void* allocateBytes(uint64_t bytes, uint16_t alignment) override;
 
   void freeBytes(void* p, uint64_t size) noexcept override {
-    mappedMemory_->freeBytes(p, size);
+    allocator_->freeBytes(p, size);
   }
 
   bool checkConsistency() const override {
-    return mappedMemory_->checkConsistency();
+    return allocator_->checkConsistency();
   }
 
   const std::vector<memory::MachinePageCount>& sizeClasses() const override {
-    return mappedMemory_->sizeClasses();
+    return allocator_->sizeClasses();
   }
 
   memory::MachinePageCount numAllocated() const override {
-    return mappedMemory_->numAllocated();
+    return allocator_->numAllocated();
   }
 
   memory::MachinePageCount numMapped() const override {
-    return mappedMemory_->numMapped();
+    return allocator_->numMapped();
   }
 
   CacheStats refreshStats() const;
@@ -737,7 +741,7 @@ class AsyncDataCache : public memory::MappedMemory {
   }
 
   memory::Stats stats() const override {
-    return mappedMemory_->stats();
+    return allocator_->stats();
   }
 
  private:
@@ -758,7 +762,7 @@ class AsyncDataCache : public memory::MappedMemory {
       memory::MachinePageCount numPages,
       std::function<bool()> allocate);
 
-  std::shared_ptr<memory::MappedMemory> mappedMemory_;
+  std::shared_ptr<memory::MemoryAllocator> allocator_;
   std::unique_ptr<SsdCache> ssdCache_;
   std::vector<std::unique_ptr<CacheShard>> shards_;
   std::atomic<int32_t> shardCounter_{0};

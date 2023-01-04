@@ -78,7 +78,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
             buildType->childAt(channel), channel));
       }
       auto table = HashTable<true>::createForJoin(
-          std::move(keyHashers), dependentTypes, true, false, mappedMemory_);
+          std::move(keyHashers), dependentTypes, true, false, pool_.get());
 
       makeRows(size, 1, sequence, buildType, batches);
       copyVectorsToTable(batches, startOffset, table.get());
@@ -153,7 +153,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
     }
     static std::vector<std::unique_ptr<Aggregate>> empty;
     return HashTable<false>::createForAggregation(
-        std::move(keyHashers), empty, mappedMemory_);
+        std::move(keyHashers), empty, pool_.get());
   }
 
   void insertGroups(
@@ -309,8 +309,8 @@ class HashTableTest : public testing::TestWithParam<bool> {
             nullptr);
 
       case TypeKind::VARCHAR: {
-        auto strings = std::static_pointer_cast<FlatVector<StringView>>(
-            BaseVector::create(VARCHAR(), size, pool_.get()));
+        auto strings = BaseVector::create<FlatVector<StringView>>(
+            VARCHAR(), size, pool_.get());
         for (auto row = 0; row < size; ++row) {
           auto string = fmt::format("{}", keySpacing_ * (sequence + row));
           // Make strings that overflow the inline limit for 1/10 of
@@ -436,7 +436,6 @@ class HashTableTest : public testing::TestWithParam<bool> {
   }
 
   std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
-  memory::MappedMemory* mappedMemory_{memory::MappedMemory::getInstance()};
   std::unique_ptr<test::VectorMaker> vectorMaker_{
       std::make_unique<test::VectorMaker>(pool_.get())};
   // Bitmap of positions in batches_ that end up in the table.
@@ -518,7 +517,7 @@ TEST_P(HashTableTest, clear) {
       std::vector<TypePtr>{BIGINT()},
       BIGINT()));
   auto table = HashTable<true>::createForAggregation(
-      std::move(keyHashers), aggregates, mappedMemory_);
+      std::move(keyHashers), aggregates, pool_.get());
   table->clear();
 }
 
@@ -649,6 +648,7 @@ TEST_P(HashTableTest, arrayProbeNormalizedKey) {
     rows.setValidRange(5'000, 10'000, true);
     rows.updateBounds();
     insertGroups(*data, rows, *lookup, *table);
+    EXPECT_LE(table->stats().numDistinct, table->rehashSize());
   }
 
   ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
@@ -664,7 +664,7 @@ TEST_P(HashTableTest, regularHashingTableSize) {
           std::make_unique<VectorHasher>(type->childAt(channel), channel));
     }
     auto table = HashTable<true>::createForJoin(
-        std::move(keyHashers), {}, true, false, mappedMemory_);
+        std::move(keyHashers), {}, true, false, pool_.get());
     std::vector<RowVectorPtr> batches;
     makeRows(1 << 12, 1, 0, type, batches);
     copyVectorsToTable(batches, 0, table.get());

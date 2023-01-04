@@ -44,19 +44,22 @@ enum class Type {
   kMmap = 1,
 };
 
-template <uint16_t ALIGNMENT>
 class MemoryPoolAllocationBenchMark {
  public:
-  MemoryPoolAllocationBenchMark(Type type, size_t minSize, size_t maxSize)
+  MemoryPoolAllocationBenchMark(
+      Type type,
+      uint16_t alignment,
+      size_t minSize,
+      size_t maxSize)
       : type_(type), minSize_(minSize), maxSize_(maxSize) {
     switch (type_) {
       case Type::kMmap:
-        manager_ =
-            std::make_shared<MemoryManager<MmapMemoryAllocator, ALIGNMENT>>();
+        manager_ = std::make_shared<MemoryManager>(
+            IMemoryManager::Options{.alignment = alignment});
         break;
       case Type::kStd:
-        manager_ =
-            std::make_shared<MemoryManager<MemoryAllocator, ALIGNMENT>>();
+        manager_ = std::make_shared<MemoryManager>(
+            IMemoryManager::Options{.alignment = alignment});
         break;
       default:
         VELOX_USER_FAIL("Unknown allocator type: {}", static_cast<int>(type_));
@@ -95,7 +98,7 @@ class MemoryPoolAllocationBenchMark {
 
   void allocateZeroFilled() {
     const size_t size = allocSize();
-    const size_t numEntries = 1 + folly::Random().rand32() % size;
+    const size_t numEntries = 1 + folly::Random::rand32(size, rng_);
     const size_t sizeEach = size / numEntries;
     allocations_.emplace_back(
         pool_->allocateZeroFilled(numEntries, sizeEach), numEntries * sizeEach);
@@ -129,7 +132,7 @@ class MemoryPoolAllocationBenchMark {
   }
 
   size_t allocSize() {
-    return minSize_ + folly::Random().rand32(maxSize_ - minSize_ + 1);
+    return minSize_ + folly::Random::rand32(maxSize_ - minSize_ + 1, rng_);
   }
 
   const Type type_;
@@ -143,8 +146,7 @@ class MemoryPoolAllocationBenchMark {
   std::deque<Allocation> allocations_;
 };
 
-template <uint16_t ALIGNMENT>
-size_t MemoryPoolAllocationBenchMark<ALIGNMENT>::runAllocate() {
+size_t MemoryPoolAllocationBenchMark::runAllocate() {
   folly::BenchmarkSuspender suspender;
   suspender.dismiss();
   for (auto iter = 0; iter < FLAGS_memory_allocation_count; ++iter) {
@@ -159,8 +161,7 @@ size_t MemoryPoolAllocationBenchMark<ALIGNMENT>::runAllocate() {
   return FLAGS_memory_allocation_count;
 }
 
-template <uint16_t ALIGNMENT>
-size_t MemoryPoolAllocationBenchMark<ALIGNMENT>::runAllocateZeroFilled() {
+size_t MemoryPoolAllocationBenchMark::runAllocateZeroFilled() {
   folly::BenchmarkSuspender suspender;
   suspender.dismiss();
   for (auto iter = 0; iter < FLAGS_memory_allocation_count; ++iter) {
@@ -175,8 +176,7 @@ size_t MemoryPoolAllocationBenchMark<ALIGNMENT>::runAllocateZeroFilled() {
   return FLAGS_memory_allocation_count;
 }
 
-template <uint16_t ALIGNMENT>
-size_t MemoryPoolAllocationBenchMark<ALIGNMENT>::runReallocate() {
+size_t MemoryPoolAllocationBenchMark::runReallocate() {
   folly::BenchmarkSuspender suspender;
   suspender.dismiss();
   for (auto iter = 0; iter < FLAGS_memory_allocation_count; ++iter) {
@@ -193,269 +193,243 @@ size_t MemoryPoolAllocationBenchMark<ALIGNMENT>::runReallocate() {
 
 // allocateBytes API.
 BENCHMARK_MULTI(StdAllocateSmallNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 128, 3072);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateSmallNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 128, 3072);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_MULTI(StdAllocateSmall64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 128, 3072);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateSmall64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 128, 3072);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_MULTI(StdAllocateMidNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 4 << 10, 1 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateMidNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 4 << 10, 1 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_MULTI(StdAllocateMid64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 4 << 10, 1 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateMid64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 4 << 10, 1 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_MULTI(StdAllocateLargeNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 1 << 20, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateLargeNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 1 << 20, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_MULTI(StdAllocateLarge64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 1 << 20, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateLarge64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 1 << 20, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_MULTI(StdAllocateMixNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 128, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateMixNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 128, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_MULTI(StdAllocateMix64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 128, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateMix64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 128, 32 << 20);
   return benchmark.runAllocate();
 }
 
 // allocateZeroFilled API.
 BENCHMARK_MULTI(StdAllocateZeroFilledSmallNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 128, 3072);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateZeroFilledSmallNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 128, 3072);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_MULTI(StdAllocateZeroFilledSmall64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 128, 3072);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateZeroFilledSmall64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 128, 3072);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_MULTI(StdAllocateZeroFilledMidNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 4 << 10, 1 << 20);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateZeroFilledMidNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 4 << 10, 1 << 20);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_MULTI(StdAllocateZeroFilledMid64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 4 << 10, 1 << 20);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateZeroFilledMid64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 4 << 10, 1 << 20);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_MULTI(StdAllocateZeroFilledLargeNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 1 << 20, 32 << 20);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateZeroFilledLargeNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 1 << 20, 32 << 20);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_MULTI(StdAllocateZeroFilledLarge64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 1 << 20, 32 << 20);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateZeroFilledLarge64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 1 << 20, 32 << 20);
   return benchmark.runAllocateZeroFilled();
 }
 
 BENCHMARK_MULTI(StdAllocateZeroFilledMixNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 128, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateZeroFilledMixNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 128, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_MULTI(StdAllocateZeroFilledMix64) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 128, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapAllocateZeroFilledMix64) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 128, 32 << 20);
   return benchmark.runAllocate();
 }
 
 BENCHMARK_MULTI(StdReallocateSmallNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 128, 3072);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapReallocateSmallNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 128, 3072);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_MULTI(StdReallocateSmall64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 128, 3072);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapReallocateSmall64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 128, 3072);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 128, 3072);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_MULTI(StdReallocateMidNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 4 << 10, 1 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapReallocateMidNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 4 << 10, 1 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_MULTI(StdReallocateMid64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 4 << 10, 1 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapReallocateMid64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 4 << 10, 1 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 4 << 10, 1 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_MULTI(StdReallocateLargeNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 1 << 20, 32 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapReallocateLargeNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 1 << 20, 32 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_MULTI(StdReallocateLarge64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 1 << 20, 32 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapReallocateLarge64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 1 << 20, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 1 << 20, 32 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_MULTI(StdReallocateMixNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kStd, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 16, 128, 32 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapReallocateMixNoAlignment) {
-  MemoryPoolAllocationBenchMark<MappedMemory::kMinAlignment> benchmark(
-      Type::kMmap, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 16, 128, 32 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_MULTI(StdReallocateMix64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kStd, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kStd, 64, 128, 32 << 20);
   return benchmark.runReallocate();
 }
 
 BENCHMARK_RELATIVE_MULTI(MmapReallocateMix64) {
-  MemoryPoolAllocationBenchMark<64> benchmark(Type::kMmap, 128, 32 << 20);
+  MemoryPoolAllocationBenchMark benchmark(Type::kMmap, 64, 128, 32 << 20);
   return benchmark.runReallocate();
 }
 } // namespace

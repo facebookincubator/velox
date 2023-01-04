@@ -36,12 +36,14 @@ OrderBy::OrderBy(
           operatorId,
           orderByNode->id(),
           "OrderBy"),
-      mappedMemory_(operatorCtx_->mappedMemory()),
       numSortKeys_(orderByNode->sortingKeys().size()),
       spillMemoryThreshold_(operatorCtx_->driverCtx()
                                 ->queryConfig()
                                 .orderBySpillMemoryThreshold()),
-      spillConfig_(operatorCtx_->makeSpillConfig(Spiller::Type::kOrderBy)) {
+      spillConfig_(
+          orderByNode->canSpill(driverCtx->queryConfig())
+              ? operatorCtx_->makeSpillConfig(Spiller::Type::kOrderBy)
+              : std::nullopt) {
   std::vector<TypePtr> keyTypes;
   std::vector<TypePtr> dependentTypes;
   std::vector<TypePtr> types;
@@ -81,8 +83,7 @@ OrderBy::OrderBy(
   }
 
   // Create row container.
-  data_ = std::make_unique<RowContainer>(
-      keyTypes, dependentTypes, operatorCtx_->mappedMemory());
+  data_ = std::make_unique<RowContainer>(keyTypes, dependentTypes, pool());
   internalStoreType_ = ROW(std::move(names), std::move(types));
 #ifndef NDEBUG
   for (int i = 0; i < internalStoreType_->children().size(); ++i) {
@@ -155,9 +156,9 @@ void OrderBy::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  auto tracker = mappedMemory_->tracker();
+  auto tracker = pool()->getMemoryUsageTracker();
   VELOX_CHECK_NOT_NULL(tracker);
-  const auto currentUsage = tracker->getCurrentUserBytes();
+  const auto currentUsage = tracker->currentBytes();
   if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig.spillableReservationGrowthPct / 100;
@@ -184,7 +185,7 @@ void OrderBy::ensureInputFits(const RowVectorPtr& input) {
       data_->sizeIncrement(input->size(), outOfLineBytes ? flatInputBytes : 0);
 
   // There must be at least 2x the increment in reservation.
-  if (tracker->getAvailableReservation() > 2 * incrementBytes) {
+  if (tracker->availableReservation() > 2 * incrementBytes) {
     return;
   }
 
@@ -210,7 +211,7 @@ void OrderBy::spill(int64_t targetRows, int64_t targetBytes) {
   VELOX_CHECK_GE(targetBytes, 0);
 
   if (spiller_ == nullptr) {
-    VELOX_DCHECK(mappedMemory_->tracker() != nullptr);
+    VELOX_DCHECK_NOT_NULL(pool()->getMemoryUsageTracker());
     const auto& spillConfig = spillConfig_.value();
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kOrderBy,

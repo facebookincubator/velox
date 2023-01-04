@@ -30,7 +30,7 @@ namespace {
 class UnsafeRowVectorSerializer : public VectorSerializer {
  public:
   explicit UnsafeRowVectorSerializer(StreamArena* streamArena)
-      : mappedMemory_{streamArena->mappedMemory()} {}
+      : pool_{streamArena->pool()} {}
 
   void append(
       RowVectorPtr vector,
@@ -48,7 +48,7 @@ class UnsafeRowVectorSerializer : public VectorSerializer {
       return;
     }
 
-    auto* buffer = (char*)mappedMemory_->allocateBytes(totalSize);
+    auto* buffer = (char*)pool_->allocate(totalSize);
     buffers_.push_back(
         ByteRange{(uint8_t*)buffer, (int32_t)totalSize, (int32_t)totalSize});
 
@@ -58,7 +58,6 @@ class UnsafeRowVectorSerializer : public VectorSerializer {
         // Write row data.
         auto rowSize = velox::row::UnsafeRowDynamicSerializer::getSizeRow(
             vector->type(), vector.get(), i);
-
         auto size =
             velox::row::UnsafeRowDynamicSerializer::serialize(
                 vector->type(), vector, buffer + offset + sizeof(size_t), i)
@@ -78,13 +77,13 @@ class UnsafeRowVectorSerializer : public VectorSerializer {
   void flush(OutputStream* stream) override {
     for (auto& buffer : buffers_) {
       stream->write((char*)buffer.buffer, buffer.position);
-      mappedMemory_->freeBytes(buffer.buffer, buffer.size);
+      pool_->free(buffer.buffer, buffer.size);
     }
     buffers_.clear();
   }
 
  private:
-  memory::MappedMemory* mappedMemory_;
+  memory::MemoryPool* const FOLLY_NONNULL pool_;
   std::vector<ByteRange> buffers_;
 };
 } // namespace
@@ -112,8 +111,7 @@ void UnsafeRowVectorSerde::deserialize(
   }
 
   if (serializedRows.empty()) {
-    *result =
-        std::dynamic_pointer_cast<RowVector>(BaseVector::create(type, 0, pool));
+    *result = BaseVector::create<RowVector>(type, 0, pool);
     return;
   }
 

@@ -269,7 +269,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     std::vector<TypePtr> types{input->type()};
 
     // Store the vector in the rowContainer.
-    auto rowContainer = std::make_unique<RowContainer>(types, mappedMemory_);
+    auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
     auto size = input->size();
     SelectivityVector allRows(size);
     std::vector<char*> rows(size);
@@ -548,8 +548,8 @@ TEST_F(RowContainerTest, types) {
   }
   checkSizes(rows, *data);
   data->checkConsistency();
-  auto copy = std::static_pointer_cast<RowVector>(
-      BaseVector::create(batch->type(), batch->size(), pool_.get()));
+  auto copy =
+      BaseVector::create<RowVector>(batch->type(), batch->size(), pool_.get());
   for (auto column = 0; column < batch->childrenSize(); ++column) {
     testExtractColumn(*data, rows, column, batch->childAt(column));
 
@@ -806,7 +806,7 @@ TEST_F(RowContainerTest, probedFlag) {
       true, // isJoinBuild
       true, // hasProbedFlag
       false, // hasNormalizedKey
-      mappedMemory_,
+      pool_.get(),
       ContainerRowSerde::instance());
 
   auto input = makeRowVector({
@@ -827,24 +827,31 @@ TEST_F(RowContainerTest, probedFlag) {
   // No 'probed' flags set. Verify all false, except for null key row.
   auto result = BaseVector::create<FlatVector<bool>>(BOOLEAN(), 1, pool());
   rowContainer->extractProbedFlags(
-      rows.data(), size, false /*replaceFalseWithNull*/, result);
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      false /*setNullForNonProbedRow*/,
+      result);
 
-  ASSERT_EQ(size, result->size());
-  for (auto i = 0; i < size; ++i) {
-    if (i == 4) {
-      ASSERT_TRUE(result->isNullAt(i));
-    } else {
-      ASSERT_FALSE(result->isNullAt(i));
-      ASSERT_FALSE(result->valueAt(i));
-    }
-  }
+  auto expected = makeNullableFlatVector<bool>(
+      {false, false, false, false, std::nullopt, false});
+  assertEqualVectors(expected, result);
 
   rowContainer->extractProbedFlags(
-      rows.data(), size, true /*replaceFalseWithNull*/, result);
-  ASSERT_EQ(size, result->size());
-  for (auto i = 0; i < size; ++i) {
-    ASSERT_TRUE(result->isNullAt(i));
-  }
+      rows.data(),
+      size,
+      false /*setNullForNullKeysRow*/,
+      false /*setNullForNonProbedRow*/,
+      result);
+  assertEqualVectors(makeConstant(false, size), result);
+
+  rowContainer->extractProbedFlags(
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      true /*setNullForNonProbedRow*/,
+      result);
+  assertEqualVectors(makeNullConstant(TypeKind::BOOLEAN, size), result);
 
   // Set 'probed' flags for every other row.
   for (auto i = 0; i < size; i += 2) {
@@ -852,53 +859,53 @@ TEST_F(RowContainerTest, probedFlag) {
   }
 
   rowContainer->extractProbedFlags(
-      rows.data(), size, false /*replaceFalseWithNull*/, result);
-  ASSERT_EQ(size, result->size());
-  for (auto i = 0; i < size; ++i) {
-    if (i == 4) {
-      ASSERT_TRUE(result->isNullAt(i));
-    } else {
-      ASSERT_FALSE(result->isNullAt(i));
-      ASSERT_EQ(result->valueAt(i), i % 2 == 0);
-    }
-  }
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      false /*setNullForNonProbedRow*/,
+      result);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>(
+          {true, false, true, false, std::nullopt, false}),
+      result);
 
   rowContainer->extractProbedFlags(
-      rows.data(), size, true /*replaceFalseWithNull*/, result);
-  ASSERT_EQ(size, result->size());
-  for (auto i = 0; i < size; ++i) {
-    if (i == 4 || i % 2 != 0) {
-      ASSERT_TRUE(result->isNullAt(i));
-    } else {
-      ASSERT_FALSE(result->isNullAt(i));
-      ASSERT_TRUE(result->valueAt(i));
-    }
-  }
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      true /*setNullForNonProbedRow*/,
+      result);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>(
+          {true, std::nullopt, true, std::nullopt, std::nullopt, std::nullopt}),
+      result);
 
   // Set 'probed' flags for all rows.
   rowContainer->setProbedFlag(rows.data(), size);
 
   rowContainer->extractProbedFlags(
-      rows.data(), size, false /*replaceFalseWithNull*/, result);
-  ASSERT_EQ(size, result->size());
-  for (auto i = 0; i < size; ++i) {
-    if (i == 4) {
-      ASSERT_TRUE(result->isNullAt(i));
-    } else {
-      ASSERT_FALSE(result->isNullAt(i));
-      ASSERT_TRUE(result->valueAt(i));
-    }
-  }
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      false /*setNullForNonProbedRow*/,
+      result);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>(
+          {true, true, true, true, std::nullopt, true}),
+      result);
 
   rowContainer->extractProbedFlags(
-      rows.data(), size, true /*replaceFalseWithNull*/, result);
-  ASSERT_EQ(size, result->size());
-  for (auto i = 0; i < size; ++i) {
-    if (i == 4) {
-      ASSERT_TRUE(result->isNullAt(i));
-    } else {
-      ASSERT_FALSE(result->isNullAt(i));
-      ASSERT_TRUE(result->valueAt(i));
-    }
-  }
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      true /*setNullForNonProbedRow*/,
+      result);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>(
+          {true, true, true, true, std::nullopt, true}),
+      result);
 }

@@ -1030,7 +1030,7 @@ struct LogicalType {
 	inline LogicalType& operator=(LogicalType&& other) noexcept {
 		id_ = other.id_;
 		physical_type_ = other.physical_type_;
-		type_info_ = move(other.type_info_);
+		type_info_ = std::move(other.type_info_);
 		return *this;
 	}
 
@@ -1245,7 +1245,7 @@ bool ApproxEqual(float l, float r);
 bool ApproxEqual(double l, double r);
 
 struct aggregate_state_t {
-	aggregate_state_t(string function_name_p, LogicalType return_type_p, vector<LogicalType> bound_argument_types_p) : function_name(move(function_name_p)), return_type(move(return_type_p)), bound_argument_types(move(bound_argument_types_p)) {
+	aggregate_state_t(string function_name_p, LogicalType return_type_p, vector<LogicalType> bound_argument_types_p) : function_name(std::move(function_name_p)), return_type(std::move(return_type_p)), bound_argument_types(std::move(bound_argument_types_p)) {
 	}
 
 	string function_name;
@@ -2220,7 +2220,7 @@ struct SelectionVector {
 		Initialize(sel_vector);
 	}
 	explicit SelectionVector(buffer_ptr<SelectionData> data) {
-		Initialize(move(data));
+		Initialize(std::move(data));
 	}
 
 public:
@@ -2233,7 +2233,7 @@ public:
 		sel_vector = selection_data->owned_data.get();
 	}
 	void Initialize(buffer_ptr<SelectionData> data) {
-		selection_data = move(data);
+		selection_data = std::move(data);
 		sel_vector = selection_data->owned_data.get();
 	}
 	void Initialize(const SelectionVector &other) {
@@ -3706,7 +3706,7 @@ public:
 		}
 	}
 	explicit VectorBuffer(unique_ptr<data_t[]> data_p)
-	    : buffer_type(VectorBufferType::STANDARD_BUFFER), data(move(data_p)) {
+	    : buffer_type(VectorBufferType::STANDARD_BUFFER), data(std::move(data_p)) {
 	}
 	virtual ~VectorBuffer() {
 	}
@@ -3719,7 +3719,7 @@ public:
 	}
 
 	void SetData(unique_ptr<data_t[]> new_data) {
-		data = move(new_data);
+		data = std::move(new_data);
 	}
 
 	VectorAuxiliaryData *GetAuxiliaryData() {
@@ -3727,7 +3727,7 @@ public:
 	}
 
 	void SetAuxiliaryData(unique_ptr<VectorAuxiliaryData> aux_data_p) {
-		aux_data = move(aux_data_p);
+		aux_data = std::move(aux_data_p);
 	}
 
 	static buffer_ptr<VectorBuffer> CreateStandardVector(PhysicalType type, idx_t capacity = STANDARD_VECTOR_SIZE);
@@ -3757,7 +3757,7 @@ public:
 	    : VectorBuffer(VectorBufferType::DICTIONARY_BUFFER), sel_vector(sel) {
 	}
 	explicit DictionaryBuffer(buffer_ptr<SelectionData> data)
-	    : VectorBuffer(VectorBufferType::DICTIONARY_BUFFER), sel_vector(move(data)) {
+	    : VectorBuffer(VectorBufferType::DICTIONARY_BUFFER), sel_vector(std::move(data)) {
 	}
 	explicit DictionaryBuffer(idx_t count = STANDARD_VECTOR_SIZE)
 	    : VectorBuffer(VectorBufferType::DICTIONARY_BUFFER), sel_vector(count) {
@@ -3797,7 +3797,7 @@ public:
 	}
 
 	void AddHeapReference(buffer_ptr<VectorBuffer> heap) {
-		references.push_back(move(heap));
+		references.push_back(std::move(heap));
 	}
 
 private:
@@ -4042,7 +4042,7 @@ protected:
 //! The DictionaryBuffer holds a selection vector
 class VectorChildBuffer : public VectorBuffer {
 public:
-	VectorChildBuffer(Vector vector) : VectorBuffer(VectorBufferType::VECTOR_CHILD_BUFFER), data(move(vector)) {
+	VectorChildBuffer(Vector vector) : VectorBuffer(VectorBufferType::VECTOR_CHILD_BUFFER), data(std::move(vector)) {
 	}
 
 public:
@@ -6366,7 +6366,7 @@ struct QualifiedName {
 struct QualifiedColumnName {
 	QualifiedColumnName() {
 	}
-	QualifiedColumnName(string table_p, string column_p) : table(move(table_p)), column(move(column_p)) {
+	QualifiedColumnName(string table_p, string column_p) : table(std::move(table_p)), column(std::move(column_p)) {
 	}
 
 	string schema;
@@ -7966,7 +7966,7 @@ public:
 //! Single node in ORDER BY statement
 struct OrderByNode {
 	OrderByNode(OrderType type, OrderByNullType null_order, unique_ptr<ParsedExpression> expression)
-	    : type(type), null_order(null_order), expression(move(expression)) {
+	    : type(type), null_order(null_order), expression(std::move(expression)) {
 	}
 
 	//! Sort order, ASC or DESC
@@ -9735,7 +9735,7 @@ public:
 	                                                 bind_aggregate_function_t bind = nullptr,
 	                                                 aggregate_destructor_t destructor = nullptr) {
 
-		AggregateFunction aggr_function(move(name), move(arguments), move(return_type), state_size, initialize, update,
+		AggregateFunction aggr_function(std::move(name), std::move(arguments), std::move(return_type), state_size, initialize, update,
 		                                combine, finalize, simple_update, bind, destructor);
 		return aggr_function;
 	}
@@ -10105,7 +10105,7 @@ public:
 			return nullptr;
 		}
 
-		auto res = move(chunks[0]);
+		auto res = std::move(chunks[0]);
 		chunks.erase(chunks.begin() + 0);
 		return res;
 	}
@@ -12199,7 +12199,7 @@ public:
 		result->max_value = max_value;
 		result->start_value = start_value;
 		result->cycle = cycle;
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -13578,7 +13578,7 @@ namespace duckdb {
 class BoundExpression : public ParsedExpression {
 public:
 	BoundExpression(unique_ptr<Expression> expr)
-	    : ParsedExpression(ExpressionType::INVALID, ExpressionClass::BOUND_EXPRESSION), expr(move(expr)) {
+	    : ParsedExpression(ExpressionType::INVALID, ExpressionClass::BOUND_EXPRESSION), expr(std::move(expr)) {
 	}
 
 	unique_ptr<Expression> expr;
@@ -13638,7 +13638,7 @@ struct BindResult {
 	}
 	explicit BindResult(string error) : error(error) {
 	}
-	explicit BindResult(unique_ptr<Expression> expr) : expression(move(expr)) {
+	explicit BindResult(unique_ptr<Expression> expr) : expression(std::move(expr)) {
 	}
 
 	bool HasError() {
@@ -14359,7 +14359,7 @@ struct CorrelatedColumnInfo {
 	idx_t depth;
 
 	CorrelatedColumnInfo(ColumnBinding binding, LogicalType type_p, string name_p, idx_t depth)
-	    : binding(binding), type(move(type_p)), name(move(name_p)), depth(depth) {
+	    : binding(binding), type(std::move(type_p)), name(std::move(name_p)), depth(depth) {
 	}
 	explicit CorrelatedColumnInfo(BoundColumnRefExpression &expr)
 	    : CorrelatedColumnInfo(expr.binding, expr.return_type, expr.GetName(), expr.depth) {
@@ -18437,19 +18437,19 @@ public:
 	void CreateScalarFunction(const string &name, vector<LogicalType> args, LogicalType ret_type,
 	                          TR (*udf_func)(Args...)) {
 		scalar_function_t function =
-		    UDFWrapper::CreateScalarFunction<TR, Args...>(name, args, move(ret_type), udf_func);
+		    UDFWrapper::CreateScalarFunction<TR, Args...>(name, args, std::move(ret_type), udf_func);
 		UDFWrapper::RegisterFunction(name, args, ret_type, function, *context);
 	}
 
 	template <typename TR, typename... Args>
 	void CreateVectorizedFunction(const string &name, scalar_function_t udf_func,
 	                              LogicalType varargs = LogicalType::INVALID) {
-		UDFWrapper::RegisterFunction<TR, Args...>(name, udf_func, *context, move(varargs));
+		UDFWrapper::RegisterFunction<TR, Args...>(name, udf_func, *context, std::move(varargs));
 	}
 
 	DUCKDB_API void CreateVectorizedFunction(const string &name, vector<LogicalType> args, LogicalType ret_type,
 	                                         scalar_function_t udf_func, LogicalType varargs = LogicalType::INVALID) {
-		UDFWrapper::RegisterFunction(name, move(args), move(ret_type), udf_func, *context, move(varargs));
+		UDFWrapper::RegisterFunction(name, std::move(args), std::move(ret_type), udf_func, *context, std::move(varargs));
 	}
 
 	//------------------------------------- Aggreate Functions ----------------------------------------//
@@ -18564,7 +18564,7 @@ typedef unique_ptr<TableFunctionRef> (*replacement_scan_t)(ClientContext &contex
 //! This allows you to do e.g. SELECT * FROM 'filename.csv', and automatically convert this into a CSV scan
 struct ReplacementScan {
 	explicit ReplacementScan(replacement_scan_t function, unique_ptr<ReplacementScanData> data_p = nullptr)
-	    : function(function), data(move(data_p)) {
+	    : function(function), data(std::move(data_p)) {
 	}
 
 	replacement_scan_t function;
@@ -18701,10 +18701,10 @@ struct ParserExtensionParseResult {
 	ParserExtensionParseResult() : type(ParserExtensionResultType::DISPLAY_ORIGINAL_ERROR) {
 	}
 	ParserExtensionParseResult(string error_p)
-	    : type(ParserExtensionResultType::DISPLAY_EXTENSION_ERROR), error(move(error_p)) {
+	    : type(ParserExtensionResultType::DISPLAY_EXTENSION_ERROR), error(std::move(error_p)) {
 	}
 	ParserExtensionParseResult(unique_ptr<ParserExtensionParseData> parse_data_p)
-	    : type(ParserExtensionResultType::PARSE_SUCCESSFUL), parse_data(move(parse_data_p)) {
+	    : type(ParserExtensionResultType::PARSE_SUCCESSFUL), parse_data(std::move(parse_data_p)) {
 	}
 
 	//! Whether or not parsing was successful
@@ -18789,7 +18789,7 @@ typedef void (*set_option_callback_t)(ClientContext &context, SetScope scope, Va
 
 struct ExtensionOption {
 	ExtensionOption(string description_p, LogicalType type_p, set_option_callback_t set_function_p)
-	    : description(move(description_p)), type(move(type_p)), set_function(set_function_p) {
+	    : description(std::move(description_p)), type(std::move(type_p)), set_function(set_function_p) {
 	}
 
 	string description;
@@ -19755,19 +19755,19 @@ public:
 
 class ScalarFunctionSet : public FunctionSet<ScalarFunction> {
 public:
-	explicit ScalarFunctionSet(string name) : FunctionSet(move(name)) {
+	explicit ScalarFunctionSet(string name) : FunctionSet(std::move(name)) {
 	}
 };
 
 class AggregateFunctionSet : public FunctionSet<AggregateFunction> {
 public:
-	explicit AggregateFunctionSet(string name) : FunctionSet(move(name)) {
+	explicit AggregateFunctionSet(string name) : FunctionSet(std::move(name)) {
 	}
 };
 
 class TableFunctionSet : public FunctionSet<TableFunction> {
 public:
-	explicit TableFunctionSet(string name) : FunctionSet(move(name)) {
+	explicit TableFunctionSet(string name) : FunctionSet(std::move(name)) {
 	}
 };
 
@@ -19778,12 +19778,12 @@ namespace duckdb {
 
 struct CreateTableFunctionInfo : public CreateFunctionInfo {
 	explicit CreateTableFunctionInfo(TableFunctionSet set)
-	    : CreateFunctionInfo(CatalogType::TABLE_FUNCTION_ENTRY), functions(move(set.functions)) {
+	    : CreateFunctionInfo(CatalogType::TABLE_FUNCTION_ENTRY), functions(std::move(set.functions)) {
 		this->name = set.name;
 	}
 	explicit CreateTableFunctionInfo(TableFunction function) : CreateFunctionInfo(CatalogType::TABLE_FUNCTION_ENTRY) {
 		this->name = function.name;
-		functions.push_back(move(function));
+		functions.push_back(std::move(function));
 	}
 
 	//! The table functions
@@ -19793,9 +19793,9 @@ public:
 	unique_ptr<CreateInfo> Copy() const override {
 		TableFunctionSet set(name);
 		set.functions = functions;
-		auto result = make_unique<CreateTableFunctionInfo>(move(set));
+		auto result = make_unique<CreateTableFunctionInfo>(std::move(set));
 		CopyProperties(*result);
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -19944,7 +19944,7 @@ public:
 	unique_ptr<CreateInfo> Copy() const override {
 		auto result = make_unique<CreateCopyFunctionInfo>(function);
 		CopyProperties(*result);
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -19985,7 +19985,7 @@ struct CreateScalarFunctionInfo : public CreateFunctionInfo {
 		functions.push_back(function);
 	}
 	explicit CreateScalarFunctionInfo(ScalarFunctionSet set)
-	    : CreateFunctionInfo(CatalogType::SCALAR_FUNCTION_ENTRY), functions(move(set.functions)) {
+	    : CreateFunctionInfo(CatalogType::SCALAR_FUNCTION_ENTRY), functions(std::move(set.functions)) {
 		this->name = set.name;
 		for (auto &func : functions) {
 			func.name = set.name;
@@ -19998,9 +19998,9 @@ public:
 	unique_ptr<CreateInfo> Copy() const override {
 		ScalarFunctionSet set(name);
 		set.functions = functions;
-		auto result = make_unique<CreateScalarFunctionInfo>(move(set));
+		auto result = make_unique<CreateScalarFunctionInfo>(std::move(set));
 		CopyProperties(*result);
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -20067,7 +20067,7 @@ public:
 		if (query) {
 			result->query = unique_ptr_cast<SQLStatement, SelectStatement>(query->Copy());
 		}
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -20132,7 +20132,7 @@ public:
 	virtual ~SegmentBase() {
 		// destroy the chain of segments iteratively (rather than recursively)
 		while (next && next->next) {
-			next = move(next->next);
+			next = std::move(next->next);
 		}
 	}
 
@@ -20667,7 +20667,7 @@ namespace duckdb {
 class CatalogEntry;
 
 struct BoundCreateTableInfo {
-	explicit BoundCreateTableInfo(unique_ptr<CreateInfo> base_p) : base(move(base_p)) {
+	explicit BoundCreateTableInfo(unique_ptr<CreateInfo> base_p) : base(std::move(base_p)) {
 		D_ASSERT(base);
 	}
 
@@ -21743,7 +21743,7 @@ public:
 	void AddIndex(unique_ptr<Index> index) {
 		D_ASSERT(index);
 		lock_guard<mutex> lock(indexes_lock);
-		indexes.push_back(move(index));
+		indexes.push_back(std::move(index));
 	}
 
 	void RemoveIndex(Index *index) {
@@ -21779,7 +21779,7 @@ private:
 
 struct DataTableInfo {
 	DataTableInfo(DatabaseInstance &db, string schema, string table)
-	    : db(db), cardinality(0), schema(move(schema)), table(move(table)) {
+	    : db(db), cardinality(0), schema(std::move(schema)), table(std::move(table)) {
 	}
 
 	//! The database instance of the table
@@ -22211,7 +22211,7 @@ public:
 
 	void Put(string key, shared_ptr<ObjectCacheEntry> value) {
 		lock_guard<mutex> glock(lock);
-		cache[key] = move(value);
+		cache[key] = std::move(value);
 	}
 
 	static ObjectCache &GetObjectCache(ClientContext &context);
@@ -23993,11 +23993,11 @@ struct CreateAggregateFunctionInfo : public CreateFunctionInfo {
 	explicit CreateAggregateFunctionInfo(AggregateFunction function)
 	    : CreateFunctionInfo(CatalogType::AGGREGATE_FUNCTION_ENTRY), functions(function.name) {
 		this->name = function.name;
-		functions.AddFunction(move(function));
+		functions.AddFunction(std::move(function));
 	}
 
 	explicit CreateAggregateFunctionInfo(AggregateFunctionSet set)
-	    : CreateFunctionInfo(CatalogType::AGGREGATE_FUNCTION_ENTRY), functions(move(set)) {
+	    : CreateFunctionInfo(CatalogType::AGGREGATE_FUNCTION_ENTRY), functions(std::move(set)) {
 		this->name = functions.name;
 		for (auto &func : functions.functions) {
 			func.name = functions.name;
@@ -24010,7 +24010,7 @@ public:
 	unique_ptr<CreateInfo> Copy() const override {
 		auto result = make_unique<CreateAggregateFunctionInfo>(functions);
 		CopyProperties(*result);
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -24032,9 +24032,9 @@ namespace duckdb {
 
 struct CreateCollationInfo : public CreateInfo {
 	CreateCollationInfo(string name_p, ScalarFunction function_p, bool combinable_p, bool not_required_for_equality_p)
-	    : CreateInfo(CatalogType::COLLATION_ENTRY), function(move(function_p)), combinable(combinable_p),
+	    : CreateInfo(CatalogType::COLLATION_ENTRY), function(std::move(function_p)), combinable(combinable_p),
 	      not_required_for_equality(not_required_for_equality_p) {
-		this->name = move(name_p);
+		this->name = std::move(name_p);
 	}
 
 	//! The name of the collation
@@ -24052,7 +24052,7 @@ public:
 	unique_ptr<CreateInfo> Copy() const override {
 		auto result = make_unique<CreateCollationInfo>(name, function, combinable, not_required_for_equality);
 		CopyProperties(*result);
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -24140,7 +24140,7 @@ public:
 		for (auto &expr : expressions) {
 			result->expressions.push_back(expr->Copy());
 		}
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -24224,7 +24224,7 @@ public:
 		result->function = function->Copy();
 		result->name = name;
 		CopyProperties(*result);
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -24247,11 +24247,11 @@ namespace duckdb {
 struct CreatePragmaFunctionInfo : public CreateFunctionInfo {
 	explicit CreatePragmaFunctionInfo(PragmaFunction function)
 	    : CreateFunctionInfo(CatalogType::PRAGMA_FUNCTION_ENTRY) {
-		functions.push_back(move(function));
+		functions.push_back(std::move(function));
 		this->name = function.name;
 	}
 	CreatePragmaFunctionInfo(string name, vector<PragmaFunction> functions_)
-	    : CreateFunctionInfo(CatalogType::PRAGMA_FUNCTION_ENTRY), functions(move(functions_)) {
+	    : CreateFunctionInfo(CatalogType::PRAGMA_FUNCTION_ENTRY), functions(std::move(functions_)) {
 		this->name = name;
 		for (auto &function : functions) {
 			function.name = name;
@@ -24264,7 +24264,7 @@ public:
 	unique_ptr<CreateInfo> Copy() const override {
 		auto result = make_unique<CreatePragmaFunctionInfo>(functions[0].name, functions);
 		CopyProperties(*result);
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -24291,7 +24291,7 @@ public:
 	unique_ptr<CreateInfo> Copy() const override {
 		auto result = make_unique<CreateSchemaInfo>();
 		CopyProperties(*result);
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -24329,7 +24329,7 @@ public:
 		CopyProperties(*result);
 		result->name = name;
 		result->type = type;
-		return move(result);
+		return std::move(result);
 	}
 };
 
@@ -24372,7 +24372,7 @@ public:
 		result->aliases = aliases;
 		result->types = types;
 		result->query = unique_ptr_cast<SQLStatement, SelectStatement>(query->Copy());
-		return move(result);
+		return std::move(result);
 	}
 };
 

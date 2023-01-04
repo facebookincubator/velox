@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #pragma once
-#include "velox/common/memory/MappedMemory.h"
+#include "velox/common/memory/Memory.h"
 
 namespace facebook::velox {
 
@@ -27,35 +27,38 @@ struct ByteRange;
 // complex types as serialized rows.
 class StreamArena {
  public:
-  explicit StreamArena(memory::MappedMemory* mappedMemory);
+  static constexpr int32_t kVectorStreamOwner = 1;
+
+  explicit StreamArena(memory::MemoryPool* FOLLY_NONNULL pool);
 
   virtual ~StreamArena() = default;
 
   // Sets range to refer  to at least one page of writable memory owned by
   // 'this'. Up to 'numPages' may be  allocated.
-  virtual void newRange(int32_t bytes, ByteRange* range);
+  virtual void newRange(int32_t bytes, ByteRange* FOLLY_NONNULL range);
 
   // sets 'range' to point to a small piece of memory owned by this. These alwys
   // come from the heap. The use case is for headers that may change length
   // based on data properties, not for bulk data.
-  virtual void newTinyRange(int32_t bytes, ByteRange* range);
+  virtual void newTinyRange(int32_t bytes, ByteRange* FOLLY_NONNULL range);
 
   // Returns the Total size in bytes held by all Allocations.
   virtual size_t size() const {
     return size_;
   }
 
-  memory::MappedMemory* mappedMemory() {
-    return mappedMemory_.get();
+  memory::MemoryPool* FOLLY_NONNULL pool() const {
+    return pool_;
   }
 
  private:
-  std::shared_ptr<memory::MappedMemory> mappedMemory_;
+  memory::MemoryPool* FOLLY_NONNULL pool_;
   // All allocations.
-  std::vector<std::unique_ptr<memory::MappedMemory::Allocation>> allocations_;
+  std::vector<std::unique_ptr<memory::MemoryAllocator::Allocation>>
+      allocations_;
   // The allocation from which pages are given out. Moved to 'allocations_' when
   // used up.
-  memory::MappedMemory::Allocation allocation_;
+  memory::MemoryAllocator::Allocation allocation_;
   int32_t currentRun_ = 0;
   int32_t currentPage_ = 0;
   memory::MachinePageCount allocationQuantum_ = 2;

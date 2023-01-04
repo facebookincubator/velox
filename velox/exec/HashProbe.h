@@ -119,6 +119,9 @@ class HashProbe : public Operator {
   // Populate output columns.
   void fillOutput(vector_size_t size);
 
+  // Populate 'match' output column for the left semi join project,
+  void fillLeftSemiProjectMatchColumn(vector_size_t size);
+
   // Clears the columns of 'output_' that are projected from
   // 'input_'. This should be done when preparing to produce a next
   // batch of output to drop any lingering references to row
@@ -181,14 +184,6 @@ class HashProbe : public Operator {
   // process probe inputs to spill the probe rows if the corresponding
   // partitions have been spilled at the build side.
   bool skipProbeOnEmptyBuild() const;
-
-  // Checks if the spilling is allowed for this hash join. As for now, we don't
-  // allow spilling for null-aware anti-join with filter set. It requires to
-  // cross join the null-key probe rows with all the build-side rows for filter
-  // evaluation which is not supported under spilling.
-  bool isSpillAllowed() const {
-    return !isNullAwareAntiJoinWithFilter(joinNode_);
-  }
 
   bool spillEnabled() const;
 
@@ -260,6 +255,8 @@ class HashProbe : public Operator {
   const std::shared_ptr<const core::HashJoinNode> joinNode_;
 
   const core::JoinType joinType_;
+
+  const bool nullAware_;
 
   const std::shared_ptr<HashJoinBridge> joinBridge_;
 

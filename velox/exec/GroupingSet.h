@@ -82,6 +82,11 @@ class GroupingSet {
     return spiller_ != nullptr ? spiller_->stats() : Spiller::Stats{};
   }
 
+  /// Returns the hashtable stats.
+  HashTableStats hashTableStats() const {
+    return table_ ? table_->stats() : HashTableStats{};
+  }
+
   /// Return the number of rows kept in memory.
   int64_t numRows() const {
     return table_ ? table_->rows()->numRows() : 0;
@@ -179,8 +184,6 @@ class GroupingSet {
 
   const bool ignoreNullKeys_;
 
-  memory::MappedMemory* FOLLY_NONNULL const mappedMemory_;
-
   // The maximum memory usage that a final aggregation can hold before spilling.
   // If it is zero, then there is no such limit.
   const uint64_t spillMemoryThreshold_;
@@ -248,6 +251,7 @@ class GroupingSet {
 
   // Index of first in 'nonSpilledRows_' that has not been added to output.
   size_t nonSpilledIndex_ = 0;
+
   // Pool of the OperatorCtx. Used for spilling.
   memory::MemoryPool& pool_;
 

@@ -84,7 +84,7 @@ OperatorCtx::createConnectorQueryCtx(
       pool_,
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
       expressionEvaluator_.get(),
-      driverCtx_->task->queryCtx()->mappedMemory(),
+      driverCtx_->task->queryCtx()->allocator(),
       taskId(),
       planNodeId,
       driverCtx_->driverId);
@@ -99,29 +99,6 @@ std::optional<Spiller::Config> OperatorCtx::makeSpillConfig(
   if (driverCtx_->task->spillDirectory().empty()) {
     return std::nullopt;
   }
-  switch (type) {
-    case Spiller::Type::kOrderBy:
-      if (!queryConfig.orderBySpillEnabled()) {
-        return std::nullopt;
-      }
-      break;
-    case Spiller::Type::kAggregate:
-      if (!queryConfig.aggregationSpillEnabled()) {
-        return std::nullopt;
-      }
-      break;
-    case Spiller::Type::kHashJoinBuild:
-      FOLLY_FALLTHROUGH;
-    case Spiller::Type::kHashJoinProbe:
-      if (!queryConfig.joinSpillEnabled()) {
-        return std::nullopt;
-      }
-      break;
-    default:
-      LOG(ERROR) << "Unknown spiller type: " << Spiller::typeName(type);
-      return std::nullopt;
-  }
-
   return Spiller::Config(
       makeOperatorSpillPath(
           driverCtx_->task->spillDirectory(),
@@ -165,7 +142,7 @@ Operator::Operator(
           std::stringstream out;
           out << "\nFailed Operator: " << this->operatorType() << "."
               << this->operatorId() << ": "
-              << succinctBytes(tracker.getCurrentTotalBytes());
+              << succinctBytes(tracker.currentBytes());
           return out.str();
         });
   }
@@ -230,14 +207,6 @@ std::optional<uint32_t> Operator::maxDrivers(
     }
   }
   return std::nullopt;
-}
-
-memory::MappedMemory* OperatorCtx::mappedMemory() const {
-  if (!mappedMemory_) {
-    mappedMemory_ =
-        driverCtx_->task->addOperatorMemory(pool_->getMemoryUsageTracker());
-  }
-  return mappedMemory_;
 }
 
 const std::string& OperatorCtx::taskId() const {
