@@ -38,6 +38,28 @@ std::unique_ptr<T> as(std::unique_ptr<U>&& ptr) {
   return nullptr;
 }
 
+TEST(StatisticsBuilder, size) {
+  {
+    StatisticsBuilder missingSize{options};
+    ASSERT_FALSE(missingSize.getSize().has_value());
+    StatisticsBuilder hasSize{
+        StatisticsBuilderOptions{/*stringLengthLimit=*/32, /*initialSize=*/10}};
+    ASSERT_TRUE(hasSize.getSize().has_value());
+    EXPECT_EQ(10, hasSize.getSize().value());
+
+    // Ignore size when merging by default.
+    hasSize.merge(missingSize);
+    EXPECT_FALSE(missingSize.getSize().has_value());
+    ASSERT_TRUE(hasSize.getSize().has_value());
+    EXPECT_EQ(10, hasSize.getSize().value());
+
+    // Coercing to missing/invalid size when not ignoring by default.
+    hasSize.merge(missingSize, /*ignoreSize=*/false);
+    EXPECT_FALSE(missingSize.getSize().has_value());
+    EXPECT_FALSE(hasSize.getSize().has_value());
+  }
+}
+
 TEST(StatisticsBuilder, integer) {
   IntegerStatisticsBuilder builder{options};
   // empty builder should have all defaults
