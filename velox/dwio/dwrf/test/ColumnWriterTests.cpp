@@ -4455,5 +4455,4 @@ TEST(ColumnWriterTests, mapDictionary) {
       MAP(INTEGER(), MAP(VARCHAR(), MAP(VARCHAR(), TINYINT()))),
       randomNulls(3));
 }
-
 } // namespace facebook::velox::dwrf

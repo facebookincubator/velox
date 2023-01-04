@@ -120,6 +120,18 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
     rawSize_.reset();
   }
 
+  void ensureSize() {
+    if (!size_.has_value()) {
+      size_ = 0;
+    }
+  }
+
+  void incrementSize(uint64_t size) {
+    if (LIKELY(size_.has_value())) {
+      addWithOverflowCheck(size_, size, /*count=*/1);
+    }
+  }
+
   /*
    * Merge stats of same type. This is used in writer to aggregate file level
    * stats.
@@ -413,6 +425,14 @@ class MapStatisticsBuilder : public StatisticsBuilder,
     keyStats.merge(stats);
   }
 
+  void incrementSize(const dwrf::proto::KeyInfo& keyInfo, uint64_t size) {
+    // Since incrementSize is called once per key info per stripe,
+    // it's ok to just construct the key struct per call.
+    auto& keyStats = getKeyStats(constructKey(keyInfo));
+    keyStats.ensureSize();
+    keyStats.incrementSize(size);
+  }
+
   void merge(
       const dwio::common::ColumnStatistics& other,
       bool ignoreSize = true) override;
@@ -426,6 +446,7 @@ class MapStatisticsBuilder : public StatisticsBuilder,
 
  private:
   void init() {
+    size_ = 0;
     entryStatistics_.clear();
   }
 

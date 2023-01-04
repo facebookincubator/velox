@@ -337,5 +337,4 @@ TEST(WriterBaseTest, FlushWriterSinkUponClose) {
     writer->close();
   }
 }
-
 } // namespace facebook::velox::dwrf

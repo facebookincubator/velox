@@ -59,7 +59,8 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
     : BaseColumnWriter{context, type, sequence, nullptr},
       keyType_{*type.childAt(0)},
       valueType_{*type.childAt(1)},
-      maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)} {
+      maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)},
+      collectMapStats_{context.getConfig(Config::MAP_STATISTICS)} {
   auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
   keyFileStatsBuilder_ =
       std::unique_ptr<typename TypeInfo<K>::StatisticsBuilder>(
@@ -94,7 +95,32 @@ void FlatMapColumnWriter<K>::flush(
   BaseColumnWriter::flush(encodingFactory, encodingOverride);
 
   for (auto& pair : valueWriters_) {
-    pair.second.flush(encodingFactory);
+    auto& valueWriter = pair.second;
+    valueWriter.flush(encodingFactory);
+  }
+
+  if (collectMapStats_) {
+    // Only top level value column streams have keys in their encodings. We
+    // could only identify streams from nested value column with sequence.
+    folly::F14FastMap<uint32_t, const proto::KeyInfo&> sequenceToKey{};
+    for (auto& pair : valueWriters_) {
+      auto& valueWriter = pair.second;
+      sequenceToKey.emplace(
+          valueWriter.getSequence(), valueWriter.getKeyInfo());
+    }
+
+    // Aggregate and backfill physical stream sizes per key.
+    auto& mapStatsBuilder =
+        dynamic_cast<MapStatisticsBuilder&>(*fileStatsBuilder_);
+    context_.iterateUnSuppressedStreams(
+        [&, this](std::pair<const DwrfStreamIdentifier, DataBufferHolder>& it) {
+          const auto& id = it.first;
+          if (id.encodingKey().sequence != 0 &&
+              id.column() == getType().column) {
+            mapStatsBuilder.incrementSize(
+                sequenceToKey.at(id.encodingKey().sequence), it.second.size());
+          }
+        });
   }
 
   // Reset is being called after flush, so no need to explicitly
