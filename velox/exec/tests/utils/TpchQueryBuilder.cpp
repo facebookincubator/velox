@@ -1641,11 +1641,12 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
       "l_shipdate", lineitemSelectedRowType, "'1994-01-01'", "'1994-12-31'");
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId lineitemScanNodeId;
-  core::PlanNodeId partScanNodeId;
-  core::PlanNodeId supplierScanNodeId;
-  core::PlanNodeId partsuppScanNodeId;
-  core::PlanNodeId nationScanNodeId;
+  core::PlanNodeId lineitemScanId;
+  core::PlanNodeId partScanId;
+  core::PlanNodeId partAggScanId;
+  core::PlanNodeId supplierScanId;
+  core::PlanNodeId partsuppScanId;
+  core::PlanNodeId nationScanId;
 
   auto part = PlanBuilder(planNodeIdGenerator)
                   .tableScan(
@@ -1654,8 +1655,18 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
                       partFileColumns,
                       {},
                       "p_name like 'forest%'")
-                  .capturePlanNodeId(partScanNodeId)
+                  .capturePlanNodeId(partScanId)
                   .planNode();
+
+  auto partAgg = PlanBuilder(planNodeIdGenerator)
+                     .tableScan(
+                         kPart,
+                         partSelectedRowType,
+                         partFileColumns,
+                         {},
+                         "p_name like 'forest%'")
+                     .capturePlanNodeId(partAggScanId)
+                     .planNode();
 
   auto nation = PlanBuilder(planNodeIdGenerator)
                     .tableScan(
@@ -1663,13 +1674,13 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
                         nationSelectedRowType,
                         nationFileColumns,
                         {"n_name = 'CANADA'"})
-                    .capturePlanNodeId(nationScanNodeId)
+                    .capturePlanNodeId(nationScanId)
                     .planNode();
 
   auto partsuppJoinPart =
       PlanBuilder(planNodeIdGenerator)
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
-          .capturePlanNodeId(partsuppScanNodeId)
+          .capturePlanNodeId(partsuppScanId)
           .hashJoin(
               {"ps_partkey"},
               {"p_partkey"},
@@ -1682,7 +1693,7 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
   auto supplierJoinNation =
       PlanBuilder(planNodeIdGenerator)
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
-          .capturePlanNodeId(supplierScanNodeId)
+          .capturePlanNodeId(supplierScanId)
           .hashJoin(
               {"s_nationkey"},
               {"n_nationkey"},
@@ -1698,7 +1709,13 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
               lineitemSelectedRowType,
               lineitemFileColumns,
               {shipDateFilter})
-          .capturePlanNodeId(lineitemScanNodeId)
+          .capturePlanNodeId(lineitemScanId)
+          .hashJoin(
+              {"l_partkey"},
+              {"p_partkey"},
+              partAgg,
+              "",
+              {"l_partkey", "l_suppkey", "l_quantity"})
           .partialAggregation(
               {"l_partkey", "l_suppkey"}, {"sum(l_quantity) AS sum_qty"})
           .localPartition({"l_partkey", "l_suppkey"})
@@ -1722,11 +1739,12 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
 
   TpchPlan context;
   context.plan = std::move(plan);
-  context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
-  context.dataFiles[partScanNodeId] = getTableFilePaths(kPart);
-  context.dataFiles[supplierScanNodeId] = getTableFilePaths(kSupplier);
-  context.dataFiles[partsuppScanNodeId] = getTableFilePaths(kPartsupp);
-  context.dataFiles[nationScanNodeId] = getTableFilePaths(kNation);
+  context.dataFiles[lineitemScanId] = getTableFilePaths(kLineitem);
+  context.dataFiles[partScanId] = getTableFilePaths(kPart);
+  context.dataFiles[partAggScanId] = getTableFilePaths(kPart);
+  context.dataFiles[supplierScanId] = getTableFilePaths(kSupplier);
+  context.dataFiles[partsuppScanId] = getTableFilePaths(kPartsupp);
+  context.dataFiles[nationScanId] = getTableFilePaths(kNation);
   context.dataFileFormat = format_;
   return context;
 }
