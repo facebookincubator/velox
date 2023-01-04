@@ -76,7 +76,7 @@ void ReaderBase::loadFileMetaData() {
   }
 
   auto thriftTransport = std::make_shared<thrift::ThriftBufferedTransport>(
-      copy.data() + footerOffsetInBuffer, footerLength);
+      copy.data() + footerOffsetInBuffer, footerLength, true);
   auto thriftProtocol =
       std::make_unique<apache::thrift::protocol::TCompactProtocolT<
           thrift::ThriftBufferedTransport>>(thriftTransport);

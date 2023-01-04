@@ -92,8 +92,11 @@ PageHeader PageReader::readPageHeader(int64_t remainingSize) {
   }
   if (bufferEnd_ - bufferStart_ >= sizeof(PageHeader)) {
     wasInBuffer = true;
+    // In Parquet Page V1 design, the size of the thrift page header message is
+    // unknown until the entire message is parsed. So we do NOT enforce the
+    // header size check when parsing the Thrift Page Header.
     transport = std::make_shared<thrift::ThriftBufferedTransport>(
-        bufferStart_, sizeof(PageHeader));
+        bufferStart_, 0, false);
     protocol = std::make_unique<apache::thrift::protocol::TCompactProtocolT<
         thrift::ThriftBufferedTransport>>(transport);
   } else {
@@ -104,8 +107,9 @@ PageHeader PageReader::readPageHeader(int64_t remainingSize) {
         bufferStart_,
         bufferEnd_);
 
-    transport = std::make_shared<thrift::ThriftBufferedTransport>(
-        copy, sizeof(PageHeader));
+    // We do Not enforce the Thrift Parquet Page Header size check for V1.
+    transport =
+        std::make_shared<thrift::ThriftBufferedTransport>(copy, 0, false);
     protocol = std::make_unique<apache::thrift::protocol::TCompactProtocolT<
         thrift::ThriftBufferedTransport>>(transport);
   }

@@ -25,13 +25,17 @@ class ThriftBufferedTransport
     : public apache::thrift::transport::TVirtualTransport<
           ThriftBufferedTransport> {
  public:
-  ThriftBufferedTransport(const void* inputBuf, uint64_t len)
+  ThriftBufferedTransport(
+      const void* inputBuf,
+      uint64_t len,
+      bool ensureThriftSize = true)
       : inputBuf_(reinterpret_cast<const uint8_t*>(inputBuf)),
         size_(len),
-        offset_(0) {}
+        offset_(0),
+        ensureThriftSize_(ensureThriftSize) {}
 
   uint32_t read(uint8_t* outputBuf, uint32_t len) {
-    DWIO_ENSURE(offset_ + len <= size_);
+    DWIO_ENSURE(!ensureThriftSize_ || (offset_ + len <= size_));
     memcpy(outputBuf, inputBuf_ + offset_, len);
     offset_ += len;
     return len;
@@ -41,6 +45,7 @@ class ThriftBufferedTransport
   const uint8_t* inputBuf_;
   const uint64_t size_;
   uint64_t offset_;
+  bool ensureThriftSize_;
 };
 
 } // namespace facebook::velox::parquet::thrift
