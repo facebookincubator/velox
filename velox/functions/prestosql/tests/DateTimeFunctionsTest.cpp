@@ -492,16 +492,12 @@ TEST_F(DateTimeFunctionsTest, yearTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, weekDate) {
-  const auto weekDate = [&](const StringView& date) {
-    auto week =
-        evaluateOnce<int64_t>("week(c0)", std::make_optional(parseDate(date)))
-            .value();
-    auto weekOfYear =
-        evaluateOnce<int64_t>(
-            "week_of_year(c0)", std::make_optional(parseDate(date)))
-            .value();
-    VELOX_CHECK(
-        week == weekOfYear, "week and week_of_year must return the same value");
+  const auto weekDate = [&](const char* dateString) {
+    auto date = std::make_optional(parseDate(dateString));
+    auto week = evaluateOnce<int64_t>("week(c0)", date).value();
+    auto weekOfYear = evaluateOnce<int64_t>("week_of_year(c0)", date).value();
+    VELOX_CHECK_EQ(
+        week, weekOfYear, "week and week_of_year must return the same value");
     return week;
   };
 
@@ -519,20 +515,15 @@ TEST_F(DateTimeFunctionsTest, weekDate) {
 }
 
 TEST_F(DateTimeFunctionsTest, week) {
-  const auto weekTimestamp = [&](const StringView& time) {
+  const auto weekTimestamp = [&](const char* time) {
     auto timestampInSeconds = util::fromTimeString(time) / 1'000'000;
-    auto week =
-        evaluateOnce<int64_t>(
-            "week(c0)",
-            std::make_optional(Timestamp(timestampInSeconds * 100'000'000, 0)))
-            .value();
+    auto timestamp =
+        std::make_optional(Timestamp(timestampInSeconds * 100'000'000, 0));
+    auto week = evaluateOnce<int64_t>("week(c0)", timestamp).value();
     auto weekOfYear =
-        evaluateOnce<int64_t>(
-            "week_of_year(c0)",
-            std::make_optional(Timestamp(timestampInSeconds * 100'000'000, 0)))
-            .value();
-    VELOX_CHECK(
-        week == weekOfYear, "week and week_of_year must return the same value");
+        evaluateOnce<int64_t>("week_of_year(c0)", timestamp).value();
+    VELOX_CHECK_EQ(
+        week, weekOfYear, "week and week_of_year must return the same value");
     return week;
   };
 
@@ -545,18 +536,18 @@ TEST_F(DateTimeFunctionsTest, week) {
 }
 
 TEST_F(DateTimeFunctionsTest, weekTimestampWithTimezone) {
-  const auto weekTimestampTimezone = [&](const StringView& time,
-                                         const StringView& timezone) {
+  const auto weekTimestampTimezone = [&](const char* time,
+                                         const char* timezone) {
     auto timestampInSeconds = util::fromTimeString(time) / 1'000'000;
+    auto timestamp = timestampInSeconds * 100'000'000;
     auto week = evaluateWithTimestampWithTimezone<int64_t>(
-                    "week(c0)", timestampInSeconds * 100'000'000, timezone)
+                    "week(c0)", timestamp, timezone)
                     .value();
-    auto weekOfYear =
-        evaluateWithTimestampWithTimezone<int64_t>(
-            "week_of_year(c0)", timestampInSeconds * 100'000'000, timezone)
-            .value();
-    VELOX_CHECK(
-        week == weekOfYear, "week and week_of_year must return the same value");
+    auto weekOfYear = evaluateWithTimestampWithTimezone<int64_t>(
+                          "week_of_year(c0)", timestamp, timezone)
+                          .value();
+    VELOX_CHECK_EQ(
+        week, weekOfYear, "week and week_of_year must return the same value");
     return week;
   };
 
