@@ -224,7 +224,7 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     return signatureStrings;
   }
 
-  Date parseDate(const StringView& dateStr) {
+  Date parseDate(const std::string& dateStr) {
     Date returnDate;
     parseTo(dateStr, returnDate);
     return returnDate;
@@ -1469,12 +1469,6 @@ TEST_F(DateTimeFunctionsTest, dateAddDate) {
         fmt::format("date_add('{}', c0, c1)", unit), value, date);
   };
 
-  const auto parseDate = [&](const std::string& strDate) -> Date {
-    Date result;
-    parseTo(strDate, result);
-    return result;
-  };
-
   // Check null behaviors
   EXPECT_EQ(std::nullopt, dateAdd("day", 1, std::nullopt));
   EXPECT_EQ(std::nullopt, dateAdd("month", std::nullopt, Date(0)));
@@ -1806,12 +1800,6 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
                             std::optional<Date> date2) {
     return evaluateOnce<int64_t>(
         fmt::format("date_diff('{}', c0, c1)", unit), date1, date2);
-  };
-
-  const auto parseDate = [&](const std::string& strDate) -> Date {
-    Date result;
-    parseTo(strDate, result);
-    return result;
   };
 
   // Check null behaviors
