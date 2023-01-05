@@ -149,12 +149,12 @@ struct WeekFunction : public InitSessionTimezone<T>,
         kDaysInWeek;
 
     if (week == 0) {
-      // Distance in days between the first day of current year and the monday
-      // of current week.
+      // Distance in days between the first day of the current year and the
+      // Monday of the current week.
       auto mondayOfWeek =
           time.tm_yday + 1 - (time.tm_wday + kDaysInWeek - 1) % kDaysInWeek;
-      // Distance in days between the first day and the first monday of current
-      // year.
+      // Distance in days between the first day and the first Monday of the
+      // current year.
       auto firstMondayOfYear =
           1 + (mondayOfWeek + kDaysInWeek - 1) % kDaysInWeek;
 
@@ -166,8 +166,8 @@ struct WeekFunction : public InitSessionTimezone<T>,
         week = 52;
       }
     } else if (week == 53) {
-      // Distance in days between the first day of current year and the monday
-      // of current week.
+      // Distance in days between the first day of the current year and the
+      // Monday of the current week.
       auto mondayOfWeek =
           time.tm_yday + 1 - (time.tm_wday + kDaysInWeek - 1) % kDaysInWeek;
       auto daysInYear = util::isLeapYear(time.tm_year + 1900) ? 366 : 365;
