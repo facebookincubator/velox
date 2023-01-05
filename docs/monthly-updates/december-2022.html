@@ -1,0 +1,198 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>December 2022 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="November 2022 Update" href="november-2022.html" />
+    <link rel="prev" title="Monthly Updates" href="../monthly-updates.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="november-2022.html" title="November 2022 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">December 2022 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="december-2022-update">
+<h1>December 2022 Update<a class="headerlink" href="#december-2022-update" title="Permalink to this heading">¶</a></h1>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Simplify the memory management implementation by consolidating the memory
+objects from previously 15 down to 8.</p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/array.html#array_has_duplicates" title="array_has_duplicates"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_has_duplicates()</span></code></a>, <a class="reference internal" href="../functions/binary.html#crc32" title="crc32"><code class="xref py py-func docutils literal notranslate"><span class="pre">crc32()</span></code></a>, <a class="reference internal" href="../functions/binary.html#hmac_sha1" title="hmac_sha1"><code class="xref py py-func docutils literal notranslate"><span class="pre">hmac_sha1()</span></code></a>,
+<a class="reference internal" href="../functions/binary.html#hmac_sha256" title="hmac_sha256"><code class="xref py py-func docutils literal notranslate"><span class="pre">hmac_sha256()</span></code></a>, <a class="reference internal" href="../functions/binary.html#hmac_sha512" title="hmac_sha512"><code class="xref py py-func docutils literal notranslate"><span class="pre">hmac_sha512()</span></code></a>, <a class="reference internal" href="../functions/json.html#json_size" title="json_size"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_size()</span></code></a> scalar functions.</p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add shiftleft and shiftright scalar functions.</p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for IS NULL and IS NOT NULL filter pushdown for maps and arrays
+to DWRF and Parquet readers. (Support is limited to arrays in Parquet reader.)</p></li>
+<li><p>Add support for skipping row groups based on remaining filter to DWRF and
+Parquet readers. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/3549">#3549</a></p></li>
+<li><p>Add support for structs to Parquet reader.</p></li>
+</ul>
+</section>
+<section id="substrait">
+<h2>Substrait<a class="headerlink" href="#substrait" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for OrderBy/TopN/Limit plan nodes.</p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add nightly job to run Expression Fuzzer using Spark SQL functions.</p></li>
+<li><p>Add nightly job to run Join Fuzzer.</p></li>
+<li><p>Add basic support for window queries to Aggregation Fuzzer.</p></li>
+<li><p>Add support for CAST and SWITCH special forms to Expression Fuzzer.</p></li>
+</ul>
+</section>
+<section id="build-system">
+<h2>Build System<a class="headerlink" href="#build-system" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add nightly job to build Docker image for Prestissimo using latest Velox.</p></li>
+<li><p>Add nightly job to build Docker images using Ubuntu and CentOS.</p></li>
+<li><p>Moved boost from pre-installed system dependency to automatically
+installed via CMake resolve_dependency.</p></li>
+</ul>
+</section>
+<section id="python-bindings">
+<h2>Python Bindings<a class="headerlink" href="#python-bindings" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add PyVelox Python package with bindings to convert Python lists to Velox
+vectors, construct and evaluate expressions.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<p>Abhash Jain, Aditi Pandit, Arpit Porwal, Austin Dickey, Bikramjeet Vig, Ge Gao,
+Huameng Jiang, Jacob Wujciak-Jens, Jimmy Lu, Karteek Murthy Samba Murthy,
+Kevin Wilfong, KevinyhZou, Kk Pulla, Krishna Pai, Laith Sakka, Masha Basmanova,
+Orri Erling, Pedro Eugenio Rocha Pedreira, Pramod, Pucheng Yang, Rama Malladi,
+Richard Barnes, Rui Mo, Sasha Krassovsky, Sergey Pershin, Wei He, Xiaoxuan Meng,
+ZJie1, frankzfli, lingbin, macduan, xyz, yingsu00, zhixingheyi-tian</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">December 2022 Update</a><ul>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#substrait">Substrait</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#build-system">Build System</a></li>
+<li><a class="reference internal" href="#python-bindings">Python Bindings</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../monthly-updates.html"
+                          title="previous chapter">Monthly Updates</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="november-2022.html"
+                          title="next chapter">November 2022 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/monthly-updates/december-2022.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="november-2022.html" title="November 2022 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">December 2022 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
+    </div>
+  </body>
+</html>
