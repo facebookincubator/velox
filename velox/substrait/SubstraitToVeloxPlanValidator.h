@@ -93,18 +93,23 @@ class SubstraitToVeloxPlanValidator {
 
   /// Validate the round scalar function.
   bool validateRound(
-    const ::substrait::Expression::ScalarFunction& scalarFunction,
-    const RowTypePtr& inputType);
+      const ::substrait::Expression::ScalarFunction& scalarFunction,
+      const RowTypePtr& inputType);
 
   /// Validate Substrait scarlar function.
   bool validateScalarFunction(
-    const ::substrait::Expression::ScalarFunction& scalarFunction,
-    const RowTypePtr& inputType);
+      const ::substrait::Expression::ScalarFunction& scalarFunction,
+      const RowTypePtr& inputType);
 
   /// Validate Substrait expression.
   bool validateExpression(
-    const ::substrait::Expression& expression,
-    const RowTypePtr& inputType);
+      const ::substrait::Expression& expression,
+      const RowTypePtr& inputType);
+
+  /// Validate Substrait literal.
+  bool validateLiteral(
+      const ::substrait::Expression_Literal& literal,
+      const RowTypePtr& inputType);
 };
 
 } // namespace facebook::velox::substrait

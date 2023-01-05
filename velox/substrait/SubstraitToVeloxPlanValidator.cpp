@@ -51,8 +51,8 @@ bool SubstraitToVeloxPlanValidator::validateInputTypes(
 }
 
 bool SubstraitToVeloxPlanValidator::validateRound(
-  const ::substrait::Expression::ScalarFunction& scalarFunction,
-  const RowTypePtr& inputType) {
+    const ::substrait::Expression::ScalarFunction& scalarFunction,
+    const RowTypePtr& inputType) {
   const auto& arguments = scalarFunction.arguments();
   if (arguments.size() < 2) {
     return false;
@@ -68,18 +68,28 @@ bool SubstraitToVeloxPlanValidator::validateRound(
     case ::substrait::Expression_Literal::LiteralTypeCase::kI64:
       return (arguments[1].value().literal().i64() >= 0);
     default:
-      VELOX_NYI("Round scale validation is not supported for type case '{}'", typeCase);
+      VELOX_NYI(
+          "Round scale validation is not supported for type case '{}'",
+          typeCase);
   }
 }
 
 bool SubstraitToVeloxPlanValidator::validateScalarFunction(
     const ::substrait::Expression::ScalarFunction& scalarFunction,
     const RowTypePtr& inputType) {
-  const auto& veloxFunction =
-      subParser_->findVeloxFunction(
-        planConverter_->getFunctionMap(), scalarFunction.function_reference());
+  const auto& veloxFunction = subParser_->findVeloxFunction(
+      planConverter_->getFunctionMap(), scalarFunction.function_reference());
   if (veloxFunction == "round") {
     return validateRound(scalarFunction, inputType);
+  }
+  return true;
+}
+
+bool SubstraitToVeloxPlanValidator::validateLiteral(
+    const ::substrait::Expression_Literal& literal,
+    const RowTypePtr& inputType) {
+  if (literal.has_list() && literal.list().values_size() == 0) {
+    return false;
   }
   return true;
 }
@@ -87,11 +97,13 @@ bool SubstraitToVeloxPlanValidator::validateScalarFunction(
 bool SubstraitToVeloxPlanValidator::validateExpression(
     const ::substrait::Expression& expression,
     const RowTypePtr& inputType) {
-    std::shared_ptr<const core::ITypedExpr> veloxExpr;
+  std::shared_ptr<const core::ITypedExpr> veloxExpr;
   auto typeCase = expression.rex_type_case();
   switch (typeCase) {
     case ::substrait::Expression::RexTypeCase::kScalarFunction:
       return validateScalarFunction(expression.scalar_function(), inputType);
+    case ::substrait::Expression::RexTypeCase::kLiteral:
+      return validateLiteral(expression.literal(), inputType);
     default:
       return true;
   }
@@ -245,8 +257,9 @@ bool SubstraitToVeloxPlanValidator::validate(
               windowFunction.window_type());
       }
 
-      bool boundTypeSupported = validateBoundType(windowFunction.upper_bound()) &&
-       validateBoundType(windowFunction.lower_bound());
+      bool boundTypeSupported =
+          validateBoundType(windowFunction.upper_bound()) &&
+          validateBoundType(windowFunction.lower_bound());
       if (!boundTypeSupported) {
         return false;
       }
