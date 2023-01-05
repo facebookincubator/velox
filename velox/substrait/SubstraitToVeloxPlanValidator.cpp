@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <glog/logging.h>
 #include "velox/substrait/SubstraitToVeloxPlanValidator.h"
 #include "TypeUtils.h"
 #include "velox/expression/SignatureBinder.h"
@@ -180,6 +181,11 @@ bool SubstraitToVeloxPlanValidator::validate(
           return false;
       }
     }
+  }
+  // GroupIdNode constructor check
+  if (sExpand.groupings_size() <= 2) {
+    LOG(INFO) << "GroupIdNode requires two or more grouping sets.";
+    return false;
   }
 
   return true;
