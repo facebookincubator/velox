@@ -459,6 +459,10 @@ class ColumnVisitor {
     numRows_ = newRows.size();
   }
 
+  bool isDropValues() {
+    return std::is_same_v<decltype(values_), DropValues>;
+  }
+
  protected:
   TFilter& filter_;
   SelectiveColumnReader* reader_;

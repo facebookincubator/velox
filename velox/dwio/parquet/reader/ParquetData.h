@@ -70,12 +70,6 @@ class ParquetData : public dwio::common::FormatData {
     return reader_.get();
   }
 
-  // Reads null flags for 'numValues' next top level rows. The first 'numValues'
-  // bits of 'nulls' are set and the reader is advanced by numValues'.
-  void readNullsOnly(int32_t numValues, BufferPtr& nulls) {
-    reader_->readNullsOnly(numValues, nulls);
-  }
-
   bool hasNulls() const override {
     return maxDefine_ > 0;
   }
@@ -120,23 +114,13 @@ class ParquetData : public dwio::common::FormatData {
       }
       return;
     }
-    if (nullsOnly) {
-      readNullsOnly(numValues, nulls);
-      return;
-    }
+
     // There are no column-level nulls in Parquet, only page-level ones, so this
     // is always non-null.
     nulls = nullptr;
   }
 
-  uint64_t skipNulls(uint64_t numValues, bool nullsOnly) override {
-    // If we are seeking a column where nulls and data are read, the skip is
-    // done in skip(). If we are reading nulls only, this is called with
-    // 'nullsOnly' set and is responsible for reading however many nulls or
-    // pages it takes to skip 'numValues' top level rows.
-    if (nullsOnly) {
-      reader_->skipNullsOnly(numValues);
-    }
+  uint64_t skipNulls(uint64_t numValues, bool /*nullsOnly*/) override {
     if (presetNulls_) {
       presetNullsConsumed_ += numValues;
     }

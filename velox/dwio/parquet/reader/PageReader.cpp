@@ -280,6 +280,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
 
     return;
   }
+
   pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
   pageData_ = uncompressData(
       pageData_,
@@ -748,45 +749,6 @@ int32_t PageReader::skipNulls(int32_t numValues) {
   return bits::countBits(words, 0, numValues);
 }
 
-void PageReader::skipNullsOnly(int64_t numRows) {
-  if (!numRows && firstUnvisited_ != rowOfPage_ + numRowsInPage_) {
-    // Return if no skip and position not at end of page or before first page.
-    return;
-  }
-  auto toSkip = numRows;
-  if (firstUnvisited_ + numRows >= rowOfPage_ + numRowsInPage_) {
-    seekToPage(firstUnvisited_ + numRows);
-    firstUnvisited_ += numRows;
-    toSkip = firstUnvisited_ - rowOfPage_;
-  }
-  firstUnvisited_ += numRows;
-
-  // Skip nulls
-  skipNulls(toSkip);
-}
-
-void PageReader::readNullsOnly(int64_t numValues, BufferPtr& buffer) {
-  VELOX_CHECK(!maxRepeat_);
-  auto toRead = numValues;
-  if (buffer) {
-    dwio::common::ensureCapacity<bool>(buffer, numValues, &pool_);
-  }
-  nullConcatenation_.reset(buffer);
-  while (toRead) {
-    auto availableOnPage = rowOfPage_ + numRowsInPage_ - firstUnvisited_;
-    if (!availableOnPage) {
-      seekToPage(firstUnvisited_);
-      availableOnPage = numRowsInPage_;
-    }
-    auto numRead = std::min(availableOnPage, toRead);
-    auto nulls = readNulls(numRead, nullsInReadRange_);
-    toRead -= numRead;
-    nullConcatenation_.append(nulls, 0, numRead);
-    firstUnvisited_ += numRead;
-  }
-  buffer = nullConcatenation_.buffer();
-}
-
 const uint64_t* FOLLY_NULLABLE
 PageReader::readNulls(int32_t numValues, BufferPtr& buffer) {
   if (maxDefine_ == 0) {
@@ -819,81 +781,39 @@ void PageReader::startVisit(folly::Range<const vector_size_t*> rows) {
   visitBase_ = firstUnvisited_;
 }
 
-bool PageReader::rowsForPage(
-    dwio::common::SelectiveColumnReader& reader,
-    bool hasFilter,
-    bool mayProduceNulls,
-    folly::Range<const vector_size_t*>& rows,
-    const uint64_t* FOLLY_NULLABLE& nulls) {
+folly::Range<const vector_size_t*> PageReader::rowsForPage() {
   if (currentVisitorRow_ == numVisitorRows_) {
-    return false;
+    return folly::Range(
+        visitorRows_ + numVisitorRows_, visitorRows_ + numVisitorRows_);
   }
-  int32_t numToVisit;
+
   // Check if the first row to go to is in the current page. If not, seek to the
   // page that contains the row.
   auto rowZero = visitBase_ + visitorRows_[currentVisitorRow_];
   if (rowZero >= rowOfPage_ + numRowsInPage_) {
     seekToPage(rowZero);
+
     if (hasChunkRepDefs_) {
       numLeafNullsConsumed_ = rowOfPage_;
-    }
-  }
-  auto& scanState = reader.scanState();
-  if (isDictionary()) {
-    if (scanState.dictionary.values != dictionary_.values) {
-      scanState.dictionary = dictionary_;
-      if (hasFilter) {
-        makeFilterCache(scanState);
-      }
-      scanState.updateRawState();
-    }
-  } else {
-    if (scanState.dictionary.values) {
-      // If there are previous pages in the current read, nulls read
-      // from them are in 'nullConcatenation_' Put this into the
-      // reader for the time of dedictionarizing so we don't read
-      // undefined dictionary indices.
-      if (mayProduceNulls && reader.numValues()) {
-        reader.setNulls(nullConcatenation_.buffer());
-      }
-      reader.dedictionarize();
-      // The nulls across all pages are in nullConcatenation_. Clear
-      // the nulls and let the prepareNulls below reserve nulls for
-      // the new page.
-      reader.setNulls(nullptr);
-      scanState.dictionary.clear();
     }
   }
 
   // Then check how many of the rows to visit are on the same page as the
   // current one.
   int32_t firstOnNextPage = rowOfPage_ + numRowsInPage_ - visitBase_;
-  if (firstOnNextPage > visitorRows_[numVisitorRows_ - 1]) {
-    // All the remaining rows are on this page.
-    numToVisit = numVisitorRows_ - currentVisitorRow_;
-  } else {
-    // Find the last row in the rows to visit that is on this page.
-    auto rangeLeft = folly::Range<const int32_t*>(
-        visitorRows_ + currentVisitorRow_,
-        numVisitorRows_ - currentVisitorRow_);
-    auto it =
-        std::lower_bound(rangeLeft.begin(), rangeLeft.end(), firstOnNextPage);
-    assert(it != rangeLeft.end());
-    assert(it != rangeLeft.begin());
-    numToVisit = it - (visitorRows_ + currentVisitorRow_);
-  }
-  // If the page did not change and this is the first call, we can return a view
-  // on the original visitor rows.
-  if (rowOfPage_ == initialRowOfPage_ && currentVisitorRow_ == 0) {
-    nulls =
-        readNulls(visitorRows_[numToVisit - 1] + 1, reader.nullsInReadRange());
-    rowNumberBias_ = 0;
-    rows = folly::Range<const vector_size_t*>(visitorRows_, numToVisit);
-  } else {
-    // We scale row numbers to be relative to first on this page.
+  auto begin = visitorRows_ + currentVisitorRow_;
+  auto it =
+      std::lower_bound(begin, visitorRows_ + numVisitorRows_, firstOnNextPage);
+  int32_t numToVisit = it - begin;
+  auto rowsInPage = folly::Range(begin, numToVisit);
+
+  // If it's not the first page in this batch, rescale the row numbers relative
+  // to first on this page.
+  rowNumberBias_ = 0;
+  if (rowOfPage_ != initialRowOfPage_ || currentVisitorRow_ != 0) {
     auto pageOffset = rowOfPage_ - visitBase_;
     rowNumberBias_ = visitorRows_[currentVisitorRow_];
-    skip(rowNumberBias_ - pageOffset);
+
     // The decoder is positioned at 'visitorRows_[currentVisitorRow_']'
     // We copy the rows to visit with a bias, so that the first to visit has
     // offset 0.
@@ -909,14 +829,15 @@ bool PageReader::rowsForPage(
       numbers.store_unaligned(copy);
       copy += xsimd::batch<int32_t>::size;
     }
-    nulls = readNulls(rowsCopy_->back() + 1, reader.nullsInReadRange());
-    rows = folly::Range<const vector_size_t*>(
+
+    rowsInPage = folly::Range<const vector_size_t*>(
         rowsCopy_->data(), rowsCopy_->size());
   }
-  reader.prepareNulls(rows, nulls != nullptr, currentVisitorRow_);
-  currentVisitorRow_ += numToVisit;
+
+  currentVisitorRow_ += rowsInPage.size();
   firstUnvisited_ = visitBase_ + visitorRows_[currentVisitorRow_ - 1] + 1;
-  return true;
+
+  return rowsInPage;
 }
 
 const VectorPtr& PageReader::dictionaryValues() {
