@@ -35,10 +35,11 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
       VectorPtr& result,
       const uint64_t* incomingNulls) override;
 
-  void filterRowGroups(
+  std::vector<uint32_t> filterRowGroups(
       uint64_t rowGroupSize,
-      const dwio::common::StatsContext& context,
-      FormatData::FilterRowGroupsResult&) const override;
+      const dwio::common::StatsContext& context) const override;
+
+  bool rowGroupMatches(uint32_t rowGroupId) const override;
 
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override;

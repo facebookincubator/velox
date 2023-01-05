@@ -60,11 +60,16 @@ class ParquetData : public dwio::common::FormatData {
   /// Other formats may use it.
   dwio::common::PositionProvider seekToRowGroup(uint32_t index) override;
 
-  void filterRowGroups(
+  /// True if 'filter' may have hits for the column of 'this' according to the
+  /// stats in 'rowGroup'.
+  bool rowGroupMatches(
+      uint32_t rowGroupId,
+      common::Filter* FOLLY_NULLABLE filter) override;
+
+  std::vector<uint32_t> filterRowGroups(
       const common::ScanSpec& scanSpec,
       uint64_t rowsPerRowGroup,
-      const dwio::common::StatsContext& writerContext,
-      FilterRowGroupsResult&) override;
+      const dwio::common::StatsContext& writerContext) override;
 
   PageReader* FOLLY_NONNULL reader() const {
     return reader_.get();
@@ -170,11 +175,6 @@ class ParquetData : public dwio::common::FormatData {
   bool parentNullsInLeaves() const override {
     return true;
   }
-
- private:
-  /// True if 'filter' may have hits for the column of 'this' according to the
-  /// stats in 'rowGroup'.
-  bool rowGroupMatches(uint32_t rowGroupId, common::Filter* filter);
 
  protected:
   memory::MemoryPool& pool_;

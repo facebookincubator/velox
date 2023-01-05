@@ -50,11 +50,17 @@ class DwrfData : public dwio::common::FormatData {
     return skipNulls(numValues);
   }
 
-  void filterRowGroups(
+  std::vector<uint32_t> filterRowGroups(
       const common::ScanSpec& scanSpec,
       uint64_t rowsPerRowGroup,
-      const dwio::common::StatsContext& writerContext,
-      FilterRowGroupsResult&) override;
+      const dwio::common::StatsContext& writerContext) override;
+
+  // TODO: Refactor filterRowGroups() and implement rowGroupMatches() for DWRF.
+  virtual bool rowGroupMatches(
+      uint32_t rowGroupId,
+      velox::common::Filter* FOLLY_NULLABLE filter) override {
+    VELOX_UNREACHABLE();
+  }
 
   bool hasNulls() const override {
     return notNullDecoder_ != nullptr;

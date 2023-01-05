@@ -131,51 +131,29 @@ void DwrfData::readNulls(
   }
 }
 
-void DwrfData::filterRowGroups(
+std::vector<uint32_t> DwrfData::filterRowGroups(
     const common::ScanSpec& scanSpec,
     uint64_t rowGroupSize,
-    const dwio::common::StatsContext& writerContext,
-    FilterRowGroupsResult& result) {
-  if (!index_ && !indexStream_) {
-    return;
+    const dwio::common::StatsContext& writerContext) {
+  if ((!index_ && !indexStream_) || !scanSpec.filter()) {
+    return {};
   }
+
   ensureRowGroupIndex();
   auto filter = scanSpec.filter();
+
+  std::vector<uint32_t> stridesToSkip;
   auto dwrfContext = reinterpret_cast<const StatsContext*>(&writerContext);
-  result.totalCount = std::max(result.totalCount, index_->entry_size());
-  auto nwords = bits::nwords(result.totalCount);
-  if (result.filterResult.size() < nwords) {
-    result.filterResult.resize(nwords);
-  }
-  auto metadataFiltersStartIndex = result.metadataFilterResults.size();
-  for (int i = 0; i < scanSpec.numMetadataFilters(); ++i) {
-    result.metadataFilterResults.emplace_back(
-        scanSpec.metadataFilterNodeAt(i), std::vector<uint64_t>(nwords));
-  }
   for (auto i = 0; i < index_->entry_size(); i++) {
     const auto& entry = index_->entry(i);
     auto columnStats =
         buildColumnStatisticsFromProto(entry.statistics(), *dwrfContext);
-    if (filter &&
-        !testFilter(filter, columnStats.get(), rowGroupSize, nodeType_->type)) {
+    if (!testFilter(filter, columnStats.get(), rowGroupSize, nodeType_->type)) {
       VLOG(1) << "Drop stride " << i << " on " << scanSpec.toString();
-      bits::setBit(result.filterResult.data(), i);
-      continue;
-    }
-    for (int j = 0; j < scanSpec.numMetadataFilters(); ++j) {
-      auto* metadataFilter = scanSpec.metadataFilterAt(j);
-      if (!testFilter(
-              metadataFilter,
-              columnStats.get(),
-              rowGroupSize,
-              nodeType_->type)) {
-        bits::setBit(
-            result.metadataFilterResults[metadataFiltersStartIndex + j]
-                .second.data(),
-            i);
-      }
+      stridesToSkip.push_back(i); // Skipping stride based on column stats.
     }
   }
+  return stridesToSkip;
 }
 
 } // namespace facebook::velox::dwrf

@@ -203,26 +203,30 @@ void DwrfRowReader::checkSkipStrides(
       selectiveColumnReader_ != nullptr, "selectiveColumnReader_ is null.");
 
   if (currentRowInStripe == 0 || recomputeStridesToSkip_) {
-    DwrfData::FilterRowGroupsResult res;
-    selectiveColumnReader_->filterRowGroups(strideSize, context, res);
-    if (auto& metadataFilter = options_.getMetadataFilter()) {
-      metadataFilter->eval(res.metadataFilterResults, res.filterResult);
-    }
-    stridesToSkip_ = res.filterResult.data();
-    stridesToSkipSize_ = res.totalCount;
-    stripeStridesToSkip_[currentStripe] = std::move(res.filterResult);
+    stridesToSkip_ =
+        selectiveColumnReader_->filterRowGroups(strideSize, context);
+    stripeStridesToSkip_[currentStripe] = stridesToSkip_;
     recomputeStridesToSkip_ = false;
+  }
+
+  if (stridesToSkip_.empty()) {
+    return;
   }
 
   bool foundStridesToSkip = false;
   auto currentStride = currentRowInStripe / strideSize;
-  while (currentStride < stridesToSkipSize_ &&
-         bits::isBitSet(stridesToSkip_, currentStride)) {
-    foundStridesToSkip = true;
-    currentRowInStripe =
-        std::min(currentRowInStripe + strideSize, rowsInCurrentStripe);
-    currentStride++;
-    skippedStrides_++;
+  for (auto strideToSkip : stridesToSkip_) {
+    if (currentStride < strideToSkip) {
+      break;
+    }
+
+    if (currentStride == strideToSkip) {
+      foundStridesToSkip = true;
+      currentRowInStripe =
+          std::min(currentRowInStripe + strideSize, rowsInCurrentStripe);
+      currentStride++;
+      skippedStrides_++;
+    }
   }
   if (foundStridesToSkip && currentRowInStripe < rowsInCurrentStripe) {
     selectiveColumnReader_->seekToRowGroup(currentStride);

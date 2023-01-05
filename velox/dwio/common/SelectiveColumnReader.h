@@ -359,10 +359,11 @@ class SelectiveColumnReader {
     initTimeClocks_ = 0;
   }
 
-  virtual void filterRowGroups(
+  virtual bool rowGroupMatches(uint32_t rowGroupId) const;
+
+  virtual std::vector<uint32_t> filterRowGroups(
       uint64_t rowGroupSize,
-      const dwio::common::StatsContext& context,
-      FormatData::FilterRowGroupsResult&) const;
+      const dwio::common::StatsContext& context) const;
 
   raw_vector<int32_t>& innerNonNullRows() {
     return innerNonNullRows_;
