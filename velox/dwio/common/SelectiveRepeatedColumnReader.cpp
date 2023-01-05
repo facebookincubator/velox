@@ -174,8 +174,11 @@ void SelectiveListColumnReader::read(
   // Catch up if the child is behind the length stream.
   child_->seekTo(childTargetReadOffset_, false);
   prepareRead<char>(offset, rows, incomingNulls);
-  auto activeRows = applyFilter(rows);
+  readNulls(rows, 0, incomingNulls);
+
+  RowSet activeRows = filterNulls<int32_t>(rows, false);
   makeNestedRowSet(activeRows);
+
   if (child_ && !nestedRows_.empty()) {
     child_->read(child_->readOffset(), nestedRows_, nullptr);
   }
@@ -253,8 +256,11 @@ void SelectiveMapColumnReader::read(
   }
 
   prepareRead<char>(offset, rows, incomingNulls);
-  auto activeRows = applyFilter(rows);
+  readNulls(rows, 0, incomingNulls);
+
+  auto activeRows = filterNulls<int32_t>(rows, false);
   makeNestedRowSet(activeRows);
+
   if (keyReader_ && elementReader_ && !nestedRows_.empty()) {
     keyReader_->read(keyReader_->readOffset(), nestedRows_, nullptr);
     elementReader_->read(elementReader_->readOffset(), nestedRows_, nullptr);

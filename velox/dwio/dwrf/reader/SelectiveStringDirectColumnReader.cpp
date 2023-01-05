@@ -420,8 +420,17 @@ void SelectiveStringDirectColumnReader::read(
     RowSet rows,
     const uint64_t* incomingNulls) {
   prepareRead<folly::StringPiece>(offset, rows, incomingNulls);
-  bool isDense = rows.back() == rows.size() - 1;
 
+  readNulls(rows, 0, incomingNulls);
+  if (readsNullsOnly()) {
+    filterNulls<int64_t>(
+        rows,
+        scanSpec_->filter()->kind() == velox::common::FilterKind::kIsNull,
+        scanSpec_->keepValues());
+    return;
+  }
+
+  bool isDense = rows.back() == rows.size() - 1;
   auto end = rows.back() + 1;
   auto numNulls =
       nullsInReadRange_ ? BaseVector::countNulls(nullsInReadRange_, 0, end) : 0;

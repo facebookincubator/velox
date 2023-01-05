@@ -34,6 +34,13 @@ void SelectiveIntegerDirectColumnReader::read(
       offset,
       rows,
       incomingNulls);
+  readNulls(rows, 0, incomingNulls);
+
+  if (readsNullsOnly()) {
+    filterNulls<int64_t>(rows, scanSpec_->keepValues());
+    return;
+  }
+
   readCommon<SelectiveIntegerDirectColumnReader>(rows);
 }
 

@@ -74,14 +74,21 @@ void SelectiveIntegerDictionaryColumnReader::read(
     const uint64_t* incomingNulls) {
   VELOX_WIDTH_DISPATCH(
       sizeOfIntKind(type_->kind()), prepareRead, offset, rows, incomingNulls);
-  auto end = rows.back() + 1;
-  const auto* rawNulls =
-      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+
+  readNulls(rows, 0, incomingNulls);
+  if (readsNullsOnly()) {
+    filterNulls<int64_t>(
+        rows,
+        scanSpec_->filter()->kind() == velox::common::FilterKind::kIsNull,
+        scanSpec_->keepValues());
+    return;
+  }
 
   // read the stream of booleans indicating whether a given data entry
   // is an offset or a literal value.
   if (inDictionaryReader_) {
     bool isBulk = useBulkPath();
+    auto end = rows.back() + 1;
     int32_t numFlags = (isBulk && nullsInReadRange_)
         ? bits::countNonNulls(nullsInReadRange_->as<uint64_t>(), 0, end)
         : end;
@@ -91,6 +98,8 @@ void SelectiveIntegerDictionaryColumnReader::read(
     // dictionary, the raw state will not be updated elsewhere.
     scanState_.rawState.inDictionary = scanState_.inDictionary->as<uint64_t>();
 
+    const auto* rawNulls =
+        nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
     inDictionaryReader_->next(
         scanState_.inDictionary->asMutable<char>(),
         numFlags,

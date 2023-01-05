@@ -127,6 +127,38 @@ void SelectiveColumnReader::prepareNulls(
   simd::memset(rawResultNulls_, bits::kNotNullByte, resultNulls_->capacity());
 }
 
+void SelectiveColumnReader::readNulls(
+    RowSet rows,
+    int32_t extraRows,
+    const uint64_t* incomingNulls) {
+  // Do not re-use unless singly-referenced.
+  if (nullsInReadRange_ && !nullsInReadRange_->unique()) {
+    nullsInReadRange_.reset();
+  }
+
+  vector_size_t numRows = rows.back() + 1;
+
+  formatData_->readNulls(
+      numRows, incomingNulls, nullsInReadRange_, readsNullsOnly());
+
+  // We check for all nulls and no nulls. We expect both calls to
+  // bits::isAllSet to fail early in the common case. We could do a
+  // single traversal of null bits counting the bits and then compare
+  // this to 0 and the total number of rows but this would end up
+  // reading more in the mixed case and would not be better in the all
+  // (non)-null case.
+  allNull_ = nullsInReadRange_ &&
+      bits::isAllSet(
+                 nullsInReadRange_->as<uint64_t>(), 0, numRows, bits::kNull);
+  if (nullsInReadRange_ &&
+      bits::isAllSet(
+          nullsInReadRange_->as<uint64_t>(), 0, numRows, bits::kNotNull)) {
+    nullsInReadRange_ = nullptr;
+  }
+
+  prepareNulls(rows, nullsInReadRange_ != nullptr, extraRows);
+}
+
 bool SelectiveColumnReader::shouldMoveNulls(RowSet rows) {
   if (rows.size() == numValues_) {
     // Nulls will only be moved if there is a selection on values. A cast

@@ -225,7 +225,7 @@ class SelectiveColumnReader {
   // capacity and is unique. If extending existing buffer, preserves
   // previous contents.
   uint64_t* FOLLY_NONNULL mutableNulls(int32_t size) {
-    if (!resultNulls_->unique()) {
+    if (!resultNulls_ || !resultNulls_->unique()) {
       resultNulls_ = AlignedBuffer::allocate<bool>(
           numValues_ + size, &memoryPool_, bits::kNotNull);
       rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
@@ -435,7 +435,7 @@ class SelectiveColumnReader {
   // True if we have an is null filter and optionally return column
   // values or we have an is not null filter and do not return column
   // values. This means that only null flags need be accessed.
-  bool readsNullsOnly() const;
+   bool readsNullsOnly() const;
 
   template <typename T>
   void ensureValuesCapacity(vector_size_t numRows);
@@ -444,17 +444,26 @@ class SelectiveColumnReader {
   // 'extraSpace' bits worth of space in the nulls buffer.
   void prepareNulls(RowSet rows, bool hasNulls, int32_t extraRows = 0);
 
- protected:
   // Filters 'rows' according to 'is_null'. Only applies to cases where
   // readsNullsOnly() is true.
   template <typename T>
   void filterNulls(RowSet rows, bool isNull, bool extractValues);
 
   template <typename T>
+  RowSet filterNulls(RowSet rows, bool extractValues);
+
+ protected:
+
+  template <typename T>
   void prepareRead(
       vector_size_t offset,
       RowSet rows,
       const uint64_t* FOLLY_NULLABLE incomingNulls);
+
+  virtual void readNulls(
+      RowSet rows,
+      int32_t extraRows = 0,
+      const uint64_t* FOLLY_NULLABLE incomingNulls = nullptr);
 
   void setOutputRows(RowSet rows) {
     outputRows_.resize(rows.size());

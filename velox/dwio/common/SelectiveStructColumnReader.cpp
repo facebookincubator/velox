@@ -79,6 +79,7 @@ void SelectiveStructColumnReaderBase::next(
   if (numValues > oldSize) {
     std::iota(&rows_[oldSize], &rows_[rows_.size()], oldSize);
   }
+
   read(readOffset_, rows_, nullptr);
   getValues(outputRows(), &result);
 }
@@ -87,29 +88,21 @@ void SelectiveStructColumnReaderBase::read(
     vector_size_t offset,
     RowSet rows,
     const uint64_t* incomingNulls) {
-  numReads_ = scanSpec_->newRead();
   prepareRead<char>(offset, rows, incomingNulls);
-  RowSet activeRows = rows;
-  auto& childSpecs = scanSpec_->children();
+  formatData_->readNulls(
+      rows.back() + 1, incomingNulls, nullsInReadRange_, readsNullsOnly());
+
+  numReads_ = scanSpec_->newRead();
+
   const uint64_t* structNulls =
       nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
-  bool hasFilter = false;
-  // a struct reader may have a null/non-null filter
-  if (scanSpec_->filter()) {
-    auto kind = scanSpec_->filter()->kind();
-    VELOX_CHECK(
-        kind == velox::common::FilterKind::kIsNull ||
-        kind == velox::common::FilterKind::kIsNotNull);
-    hasFilter = true;
-    filterNulls<int32_t>(
-        rows, kind == velox::common::FilterKind::kIsNull, false);
-    if (outputRows_.empty()) {
-      recordParentNullsInChildren(offset, rows);
-      return;
-    }
-    activeRows = outputRows_;
+  RowSet activeRows = filterNulls<int32_t>(rows, false);
+  if (activeRows.empty()) {
+    recordParentNullsInChildren(offset, rows);
+    return;
   }
 
+  auto& childSpecs = scanSpec_->children();
   assert(!children_.empty());
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     auto& childSpec = childSpecs[i];
@@ -125,7 +118,6 @@ void SelectiveStructColumnReaderBase::read(
     }
     advanceFieldReader(reader, offset);
     if (childSpec->hasFilter()) {
-      hasFilter = true;
       {
         SelectivityTimer timer(childSpec->selectivity(), activeRows.size());
 
@@ -148,10 +140,7 @@ void SelectiveStructColumnReaderBase::read(
   // If this adds nulls, the field readers will miss a value for each null added
   // here.
   recordParentNullsInChildren(offset, rows);
-
-  if (hasFilter) {
-    setOutputRows(activeRows);
-  }
+  setOutputRows(activeRows);
   lazyVectorReadOffset_ = offset;
   readOffset_ = offset + rows.back() + 1;
 }

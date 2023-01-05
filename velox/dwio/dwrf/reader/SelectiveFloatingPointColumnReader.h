@@ -48,7 +48,10 @@ class SelectiveFloatingPointColumnReader
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override {
     using T = SelectiveFloatingPointColumnReader<TData, TRequested>;
-    base::template readCommon<T>(offset, rows, incomingNulls);
+    dwio::common::SelectiveColumnReader::prepareRead<TRequested>(
+        offset, rows, incomingNulls);
+    dwio::common::SelectiveColumnReader::readNulls(rows, 0, incomingNulls);
+    base::template readCommon<T>(rows);
   }
 
   template <typename TVisitor>

@@ -33,6 +33,7 @@ void SelectiveByteRleColumnReader::read(
     RowSet rows,
     const uint64_t* incomingNulls) {
   prepareRead<int8_t>(offset, rows, incomingNulls);
+  readNulls(rows, 0, incomingNulls);
   bool isDense = rows.back() == rows.size() - 1;
   common::Filter* filter =
       scanSpec_->filter() ? scanSpec_->filter() : &dwio::common::alwaysTrue();

@@ -246,6 +246,7 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
       override {
     numReads_ = scanSpec_->newRead();
     prepareRead<char>(offset, rows, incomingNulls);
+    readNulls(rows, 0, incomingNulls);
     auto* mapNulls =
         nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
     for (auto* reader : children_) {
