@@ -112,6 +112,7 @@ class ByteStream {
   void resetInput(std::vector<ByteRange>&& ranges) {
     ranges_ = std::move(ranges);
     current_ = &ranges_[0];
+    lastRangeEnd_ = ranges_.back().size;
   }
 
   void setRange(ByteRange range) {
