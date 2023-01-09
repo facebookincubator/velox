@@ -542,6 +542,10 @@ class variant {
   }
 
   void checkIsKind(TypeKind kind) const {
+    // Integer is compatible for getting the value from a date variant.
+    if (kind_ == TypeKind::DATE && kind == TypeKind::INTEGER) {
+      return;
+    }
     if (kind_ != kind) {
       // Error path outlined to encourage inlining of the branch.
       throwCheckIsKindError(kind);
