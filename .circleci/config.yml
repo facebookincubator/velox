@@ -25,7 +25,7 @@ workflows:
       - format-check
       - header-check
       - linux-benchmarks-basic
-      - linux-benchmarks-basic-dedicated
+      - docker-compose-ubuntu-adapters-cpp
 
   # Daily documentation update
   nightly:
