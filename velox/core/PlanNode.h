@@ -1232,6 +1232,14 @@ class HashJoinNode : public AbstractJoinNode {
       VELOX_USER_CHECK(
           isNullAwareSupported(joinType),
           "Null-aware flag is supported only for semi and anti joins");
+      VELOX_USER_CHECK_EQ(
+          1, leftKeys_.size(), "Null-aware joins allow only one join key");
+
+      if (filter_) {
+        VELOX_USER_CHECK(
+            !isRightSemiProjectJoin(),
+            "Null-aware right semi project join doesn't support extra filter");
+      }
     }
   }
 
