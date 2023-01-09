@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <glog/logging.h>
 #include "velox/substrait/SubstraitToVeloxPlanValidator.h"
 #include "TypeUtils.h"
 #include "velox/expression/SignatureBinder.h"
@@ -661,6 +660,23 @@ bool SubstraitToVeloxPlanValidator::validate(
   funcSpecs.reserve(sAgg.measures().size());
   for (const auto& smea : sAgg.measures()) {
     try {
+      // Validate the filter expression
+      if (smea.has_filter()) {
+        ::substrait::Expression substraitAggMask = smea.filter();
+        if (substraitAggMask.ByteSizeLong() > 0) {
+          auto typeCase = substraitAggMask.rex_type_case();
+          switch (typeCase) {
+            case ::substrait::Expression::RexTypeCase::kSelection:
+              break;
+            default:
+              std::cout
+                  << "Only field is supported in aggregate filter expression."
+                  << std::endl;
+              return false;
+          }
+        }
+      }
+
       const auto& aggFunction = smea.measure();
       funcSpecs.emplace_back(
           planConverter_->findFuncSpec(aggFunction.function_reference()));

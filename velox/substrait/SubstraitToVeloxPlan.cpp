@@ -338,6 +338,9 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxAgg(
         aggregateMask =
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
                 exprConverter_->toVeloxExpr(substraitAggMask, inputType));
+        VELOX_CHECK(
+            aggregateMask != nullptr,
+            " the agg filter expression in Aggregate Operator only support field");
       }
       aggregateMasks.push_back(aggregateMask);
     }
