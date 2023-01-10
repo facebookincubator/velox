@@ -566,10 +566,10 @@ class BigintRange final : public Filter {
       : Filter(true, nullAllowed, FilterKind::kBigintRange),
         lower_(lowerExclusive ? lower + 1 : lower),
         upper_(upperExclusive ? upper - 1 : upper),
-        lower32_(std::max<int64_t>(lower, std::numeric_limits<int32_t>::min())),
-        upper32_(std::min<int64_t>(upper, std::numeric_limits<int32_t>::max())),
-        lower16_(std::max<int64_t>(lower, std::numeric_limits<int16_t>::min())),
-        upper16_(std::min<int64_t>(upper, std::numeric_limits<int16_t>::max())),
+        lower32_(std::max<int64_t>(lower_, std::numeric_limits<int32_t>::min())),
+        upper32_(std::min<int64_t>(upper_, std::numeric_limits<int32_t>::max())),
+        lower16_(std::max<int64_t>(lower_, std::numeric_limits<int16_t>::min())),
+        upper16_(std::min<int64_t>(upper_, std::numeric_limits<int16_t>::max())),
         isSingleValue_(upper_ == lower_) {}
 
   std::unique_ptr<Filter> clone(
