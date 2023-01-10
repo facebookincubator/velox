@@ -163,7 +163,6 @@ class SubstraitVeloxPlanConverter {
     int emitSize = emit.output_mapping_size();
     std::vector<core::TypedExprPtr> emitExpressions(emitSize);
     std::vector<std::string> emitProjectNames(emitSize);
-    EmitInfo emitInfo;
     const auto& outputType = node->outputType();
     for (int i = 0; i < emitSize; i++) {
       int32_t mapId = emit.output_mapping(i);
@@ -171,6 +170,7 @@ class SubstraitVeloxPlanConverter {
       emitExpressions[i] = std::make_shared<core::FieldAccessTypedExpr>(
           outputType->childAt(mapId), outputType->nameOf(mapId));
     }
+    EmitInfo emitInfo;
     emitInfo.expressions = std::move(emitExpressions);
     emitInfo.projectNames = std::move(emitProjectNames);
     return emitInfo;

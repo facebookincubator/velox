@@ -140,18 +140,18 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   }
 
   auto noEmitNode = std::make_shared<core::AggregationNode>(
-          nextPlanNodeId(),
-          aggStep,
-          veloxGroupingExprs,
-          preGroupingExprs,
-          aggOutNames,
-          aggExprs,
-          aggregateMasks,
-          ignoreNullKeys,
-          childNode);
+      nextPlanNodeId(),
+      aggStep,
+      veloxGroupingExprs,
+      preGroupingExprs,
+      aggOutNames,
+      aggExprs,
+      aggregateMasks,
+      ignoreNullKeys,
+      childNode);
 
   if (aggRel.has_common()) {
-    return ProcessEmit(aggRel.common(), std::move(noEmitNode)); 
+    return ProcessEmit(aggRel.common(), std::move(noEmitNode));
   } else {
     return noEmitNode;
   }
@@ -192,13 +192,13 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   }
 
   auto noEmitNode = std::make_shared<core::ProjectNode>(
-          nextPlanNodeId(),
-          std::move(projectNames),
-          std::move(expressions),
-          std::move(childNode));
+      nextPlanNodeId(),
+      std::move(projectNames),
+      std::move(expressions),
+      std::move(childNode));
 
   if (projectRel.has_common()) {
-    return ProcessEmit(projectRel.common(), std::move(noEmitNode)); 
+    return ProcessEmit(projectRel.common(), std::move(noEmitNode));
   } else {
     return noEmitNode;
   }
@@ -252,13 +252,13 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   auto childNode = convertSingleInput<::substrait::FilterRel>(filterRel);
 
   auto noEmitNode = std::make_shared<core::FilterNode>(
-          nextPlanNodeId(),
-          exprConverter_->toVeloxExpr(
-              filterRel.condition(), childNode->outputType()),
-          childNode);
+      nextPlanNodeId(),
+      exprConverter_->toVeloxExpr(
+          filterRel.condition(), childNode->outputType()),
+      childNode);
 
   if (filterRel.has_common()) {
-    return ProcessEmit(filterRel.common(), std::move(noEmitNode)); 
+    return ProcessEmit(filterRel.common(), std::move(noEmitNode));
   } else {
     return noEmitNode;
   }
@@ -397,12 +397,12 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   } else {
     // handle emit
     auto noEmitNode = std::make_shared<core::TableScanNode>(
-            nextPlanNodeId(),
-            std::move(outputType),
-            std::move(tableHandle),
-            std::move(assignments));
+        nextPlanNodeId(),
+        std::move(outputType),
+        std::move(tableHandle),
+        std::move(assignments));
     if (readRel.has_common()) {
-      return ProcessEmit(readRel.common(), std::move(noEmitNode)); 
+      return ProcessEmit(readRel.common(), std::move(noEmitNode));
     } else {
       return noEmitNode;
     }
@@ -465,13 +465,14 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     vectors.emplace_back(
         std::make_shared<RowVector>(pool_, type, nullptr, batchSize, children));
   }
-  
-  auto noEmitNode = std::make_shared<core::ValuesNode>(nextPlanNodeId(), std::move(vectors));
+
+  auto noEmitNode =
+      std::make_shared<core::ValuesNode>(nextPlanNodeId(), std::move(vectors));
 
   if (readRel.has_common()) {
-    return ProcessEmit(readRel.common(), std::move(noEmitNode)); 
+    return ProcessEmit(readRel.common(), std::move(noEmitNode));
   } else {
-      return noEmitNode;
+    return noEmitNode;
   }
 }
 
