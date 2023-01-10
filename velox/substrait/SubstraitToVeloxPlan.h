@@ -116,27 +116,23 @@ class SubstraitVeloxPlanConverter {
   /// and check if emit is defined for this relation. If so, the emit fields
   /// are extracted from the relation. To simulate an emit, a projection is used
   /// to pick the fields which is selected to be emitted.
-  template <typename RelMessage>
+
   core::PlanNodePtr ProcessEmit(
-      const RelMessage& rel,
+      const ::substrait::RelCommon& relCommon,
       const core::PlanNodePtr& noEmitNode) {
-    if (rel.has_common()) {
-      switch (rel.common().emit_kind_case()) {
-        case ::substrait::RelCommon::EmitKindCase::kDirect:
-          return noEmitNode;
-        case ::substrait::RelCommon::EmitKindCase::kEmit: {
-          auto emitInfo = GetEmitInfo(rel, noEmitNode);
-          return std::make_shared<core::ProjectNode>(
-              nextPlanNodeId(),
-              std::move(emitInfo.projectNames),
-              std::move(emitInfo.expressions),
-              noEmitNode);
-        }
-        default:
-          VELOX_FAIL("unrecognized emit kind");
+    switch (relCommon.emit_kind_case()) {
+      case ::substrait::RelCommon::EmitKindCase::kDirect:
+        return noEmitNode;
+      case ::substrait::RelCommon::EmitKindCase::kEmit: {
+        auto emitInfo = GetEmitInfo(relCommon, noEmitNode);
+        return std::make_shared<core::ProjectNode>(
+            nextPlanNodeId(),
+            std::move(emitInfo.projectNames),
+            std::move(emitInfo.expressions),
+            noEmitNode);
       }
-    } else {
-      return noEmitNode;
+      default:
+        VELOX_FAIL("unrecognized emit kind");
     }
   }
 
@@ -162,9 +158,8 @@ class SubstraitVeloxPlanConverter {
 
   /// Helper function to extract the attributes required to create a ProjectNode
   /// used for interpretting Substrait Emit.
-  template <typename RelMessage>
-  EmitInfo GetEmitInfo(const RelMessage& rel, const core::PlanNodePtr& node) {
-    const auto& emit = rel.common().emit();
+  EmitInfo GetEmitInfo(const ::substrait::RelCommon& relCommon, const core::PlanNodePtr& node) {
+    const auto& emit = relCommon.emit();
     int emitSize = emit.output_mapping_size();
     std::vector<core::TypedExprPtr> emitExpressions(emitSize);
     std::vector<std::string> emitProjectNames(emitSize);
