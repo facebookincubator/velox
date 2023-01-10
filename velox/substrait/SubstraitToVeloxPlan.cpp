@@ -180,16 +180,25 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     colIdx += 1;
   }
 
-  auto noEmitNode = std::make_shared<core::ProjectNode>(
-      nextPlanNodeId(),
-      std::move(projectNames),
-      std::move(expressions),
-      std::move(childNode));
-
   if (projectRel.has_common()) {
-    return ProcessEmit(projectRel.common(), std::move(noEmitNode));
+    auto relCommon = projectRel.common();
+    const auto& emit = relCommon.emit();
+    int emitSize = emit.output_mapping_size();
+    std::vector<std::string> emitProjectNames(emitSize);
+    std::vector<core::TypedExprPtr> emitExpressions(emitSize);
+    for (int i = 0; i < emitSize; i++) {
+      int32_t mapId = emit.output_mapping(i);
+      emitProjectNames[i] = projectNames[mapId];
+      emitExpressions[i] = expressions[mapId];
+    }
+    return std::make_shared<core::ProjectNode>(
+        nextPlanNodeId(),
+        std::move(emitProjectNames),
+        std::move(emitExpressions),
+        std::move(childNode));
   } else {
-    return noEmitNode;
+    return std::make_shared<core::ProjectNode>(
+        nextPlanNodeId(), projectNames, expressions, std::move(childNode));
   }
 }
 
