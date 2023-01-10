@@ -60,17 +60,6 @@ core::SortOrder toSortOrder(const ::substrait::SortField& sortField) {
   }
 }
 
-std::vector<core::TypedExprPtr> NamesToFieldAccessExpressions(
-    const std::vector<TypePtr>& types,
-    const std::vector<std::string>& names) {
-  std::vector<core::TypedExprPtr> typedExpressions;
-  for (uint32_t idx = 0; idx < types.size(); idx++) {
-    typedExpressions.emplace_back(
-        std::make_shared<core::FieldAccessTypedExpr>(types[idx], names[idx]));
-  }
-  return typedExpressions;
-}
-
 } // namespace
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(

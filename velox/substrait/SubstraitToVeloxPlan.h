@@ -158,7 +158,9 @@ class SubstraitVeloxPlanConverter {
 
   /// Helper function to extract the attributes required to create a ProjectNode
   /// used for interpretting Substrait Emit.
-  EmitInfo GetEmitInfo(const ::substrait::RelCommon& relCommon, const core::PlanNodePtr& node) {
+  EmitInfo GetEmitInfo(
+      const ::substrait::RelCommon& relCommon,
+      const core::PlanNodePtr& node) {
     const auto& emit = relCommon.emit();
     int emitSize = emit.output_mapping_size();
     std::vector<core::TypedExprPtr> emitExpressions(emitSize);
