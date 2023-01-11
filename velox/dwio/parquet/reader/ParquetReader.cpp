@@ -56,7 +56,7 @@ void ReaderBase::loadFileMetaData() {
 
   uint32_t footerLength =
       *(reinterpret_cast<const uint32_t*>(copy.data() + readSize - 8));
-  VELOX_CHECK_LT(footerLength + 12, fileLength_);
+  VELOX_CHECK_LE(footerLength + 12, fileLength_);
   int32_t footerOffsetInBuffer = readSize - 8 - footerLength;
   if (footerLength > readSize - 8) {
     footerOffsetInBuffer = 0;
@@ -195,19 +195,36 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     } else {
       if (schemaElement.repetition_type ==
           thrift::FieldRepetitionType::REPEATED) {
-        // child of LIST: "bag"
-        assert(children.size() == 1);
-        auto childrenCopy = children;
-        return std::make_shared<ParquetTypeWithId>(
-            TypeFactory<TypeKind::ARRAY>::create(children[0]->type),
-            std::move(childrenCopy),
-            curSchemaIdx,
-            maxSchemaElementIdx,
-            ParquetTypeWithId::kNonLeaf, // columnIdx,
-            schemaElement.name,
-            std::nullopt,
-            maxRepeat,
-            maxDefine);
+        VELOX_CHECK_LE(
+            children.size(), 2, "children size should not be larger than 2");
+        if (children.size() == 1) {
+          // child of LIST
+          auto childrenCopy = children;
+          return std::make_shared<ParquetTypeWithId>(
+              TypeFactory<TypeKind::ARRAY>::create(children[0]->type),
+              std::move(childrenCopy),
+              curSchemaIdx,
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf, // columnIdx,
+              schemaElement.name,
+              std::nullopt,
+              maxRepeat,
+              maxDefine);
+        } else if (children.size() == 2) {
+          // children  of MAP
+          auto childrenCopy = children;
+          return std::make_shared<const ParquetTypeWithId>(
+              TypeFactory<TypeKind::MAP>::create(
+                  children[0]->type, children[1]->type),
+              std::move(childrenCopy),
+              curSchemaIdx, // TODO: there are holes in the ids
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf, // columnIdx,
+              schemaElement.name,
+              std::nullopt,
+              maxRepeat,
+              maxDefine);
+        }
       } else {
         // Row type
         auto childrenCopy = children;
@@ -263,9 +280,11 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           maxRepeat,
           maxDefine);
     }
-
     return leafTypePtr;
   }
+
+  VELOX_FAIL("Unable to extract Parquet column info.")
+  return nullptr;
 }
 
 TypePtr ReaderBase::convertType(
