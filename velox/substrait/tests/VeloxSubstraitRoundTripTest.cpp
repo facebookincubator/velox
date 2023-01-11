@@ -441,6 +441,19 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
       "array[], array[array[1,2,3], array[4,5]]");
 }
 
+TEST_F(VeloxSubstraitRoundTripTest, extract) {
+  auto vectors = makeRowVector(ROW({}), 1);
+  auto plan = PlanBuilder()
+                  .values({vectors})
+                  .project(
+                      {"extract('year' FROM '1992-09-20'::DATE)",
+                       "extract('month' FROM '1992-09-20'::DATE)"})
+                  .planNode();
+  assertPlanConversion(
+      plan,
+      "SELECT extract('year' FROM DATE '1992-09-20'), extract('month' FROM DATE '1992-09-20')");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::init(&argc, &argv, false);

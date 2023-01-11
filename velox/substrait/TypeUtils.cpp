@@ -89,6 +89,8 @@ TypePtr toVeloxType(const std::string& typeName) {
       return VARCHAR();
     case TypeKind::VARBINARY:
       return VARBINARY();
+    case TypeKind::DATE:
+      return DATE();
     case TypeKind::ARRAY: {
       auto fieldTypes = getTypesFromCompoundName(typeName);
       VELOX_CHECK_EQ(

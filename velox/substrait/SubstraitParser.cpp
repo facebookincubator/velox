@@ -71,6 +71,11 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
       nullability = substraitType.string().nullability();
       break;
     }
+    case ::substrait::Type::KindCase::kDate: {
+      typeName = "DATE";
+      nullability = substraitType.date().nullability();
+      break;
+    }
     case ::substrait::Type::KindCase::kStruct: {
       // The type name of struct is in the format of:
       // ROW<type0,type1,ROW<type2>>...typen.
