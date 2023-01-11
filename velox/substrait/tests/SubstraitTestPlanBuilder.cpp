@@ -100,7 +100,7 @@ std::unique_ptr<SubstraitReadRel> MakeReadRel(
 void SubstraitTestPlanBuilder::ValidateReadRelWithEmit(
     const std::vector<RowVectorPtr> data,
     const std::vector<RowVectorPtr>& expected,
-    std::vector<int> emitIndices) {
+    const std::vector<int> emitIndices) {
   google::protobuf::Arena arena;
   // make PlanRel
   std::unique_ptr<SubstraitPlanRel> planRel =

@@ -66,7 +66,7 @@ class SubstraitTestPlanBuilder : public VectorTestBase {
   void ValidateReadRelWithEmit(
       const std::vector<RowVectorPtr> data,
       const std::vector<RowVectorPtr>& expected,
-      std::vector<int> emitIndices = {});
+      const std::vector<int> emitIndices = {});
 
  private:
   std::shared_ptr<SubstraitExtensionCollector> extensionCollector_;
