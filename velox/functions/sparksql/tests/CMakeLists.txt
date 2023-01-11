@@ -29,7 +29,8 @@ add_executable(
   SplitFunctionsTest.cpp
   StringTest.cpp
   SubscriptTest.cpp
-  XxHash64Test.cpp)
+  XxHash64Test.cpp
+  MightContainTest.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
 

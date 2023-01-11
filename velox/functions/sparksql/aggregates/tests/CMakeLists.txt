@@ -13,7 +13,7 @@
 # limitations under the License.
 
 add_executable(velox_functions_spark_aggregates_test LastAggregateTest.cpp
-                                                     Main.cpp)
+               BloomFilterAggAggregateTest.cpp Main.cpp)
 
 add_test(velox_functions_spark_aggregates_test
          velox_functions_spark_aggregates_test)

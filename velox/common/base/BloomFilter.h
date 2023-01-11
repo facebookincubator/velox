@@ -20,8 +20,10 @@
 #include <vector>
 
 #include <folly/Hash.h>
-
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/IOUtils.h"
+#include "velox/type/StringView.h"
 
 namespace facebook::velox {
 
@@ -31,9 +33,15 @@ namespace facebook::velox {
 // expected entry, we get ~2% false positives. 'hashInput' determines
 // if the value added or checked needs to be hashed. If this is false,
 // we assume that the input is already a 64 bit hash number.
-template <bool hashInput = true>
+// case:
+// InputType can be one of folly hasher support type when hashInput = false
+// InputType can only be uint64_t when hashInput = true
+template <class InputType = uint64_t, bool hashInput = true>
 class BloomFilter {
  public:
+  BloomFilter(){};
+  BloomFilter(std::vector<uint64_t> bits) : bits_(bits){};
+
   // Prepares 'this' for use with an expected 'capacity'
   // entries. Drops any prior content.
   void reset(int32_t capacity) {
@@ -42,18 +50,61 @@ class BloomFilter {
     bits_.resize(std::max<int32_t>(4, bits::nextPowerOfTwo(capacity) / 4));
   }
 
-  // Adds 'value'.
-  void insert(uint64_t value) {
-    set(bits_.data(),
-        bits_.size(),
-        hashInput ? folly::hasher<uint64_t>()(value) : value);
+  bool isSet() {
+    return bits_.size() > 0;
   }
 
-  bool mayContain(uint64_t value) const {
+  // Adds 'value'.
+  void insert(InputType value) {
+    set(bits_.data(),
+        bits_.size(),
+        hashInput ? folly::hasher<InputType>()(value) : value);
+  }
+
+  bool mayContain(InputType value) const {
     return test(
         bits_.data(),
         bits_.size(),
-        hashInput ? folly::hasher<uint64_t>()(value) : value);
+        hashInput ? folly::hasher<InputType>()(value) : value);
+  }
+
+  // Combines the two bloomFilter bits_ using bitwise OR.
+  void merge(BloomFilter& bloomFilter) {
+    if (bits_.size() == 0) {
+      bits_ = bloomFilter.bits_;
+      return;
+    } else if (bloomFilter.bits_.size() == 0) {
+      return;
+    }
+    VELOX_CHECK_EQ(bits_.size(), bloomFilter.bits_.size());
+    for (auto i = 0; i < bloomFilter.bits_.size(); i++) {
+      bits_[i] |= bloomFilter.bits_[i];
+    }
+  }
+
+  uint32_t serializedSize() {
+    return 4 /* number of bits */
+        + bits_.size() * 8;
+  }
+
+  void serialize(StringView& output) {
+    char* outputBuffer = const_cast<char*>(output.data());
+    common::OutputByteStream stream(outputBuffer);
+    stream.appendOne((int32_t)bits_.size());
+    for (auto bit : bits_) {
+      stream.appendOne(bit);
+    }
+  }
+
+  static void deserialize(const char* serialized, BloomFilter& output) {
+    common::InputByteStream stream(serialized);
+    auto size = stream.read<int32_t>();
+    output.bits_.resize(size);
+    auto bitsdata =
+        reinterpret_cast<const uint64_t*>(serialized + stream.offset());
+    for (auto i = 0; i < size; i++) {
+      output.bits_[i] = bitsdata[i];
+    }
   }
 
  private:

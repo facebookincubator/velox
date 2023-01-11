@@ -14,15 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/functions/sparksql/aggregates/Register.h"
+#pragma once
 
-#include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
-#include "velox/functions/sparksql/aggregates/LastAggregate.h"
+#include <string>
 
 namespace facebook::velox::functions::sparksql::aggregates {
 
-void registerAggregateFunctions(const std::string& prefix) {
-  aggregates::registerLastAggregate(prefix + "last");
-  aggregates::registerBloomFilterAggAggregate(prefix + "bloom_filter_agg");
-}
+bool registerBloomFilterAggAggregate(const std::string& name);
+
 } // namespace facebook::velox::functions::sparksql::aggregates

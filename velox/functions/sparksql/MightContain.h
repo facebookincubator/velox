@@ -13,16 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/VectorFunction.h"
 
-#include "velox/functions/sparksql/aggregates/Register.h"
+namespace facebook::velox::functions::sparksql {
 
-#include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
-#include "velox/functions/sparksql/aggregates/LastAggregate.h"
+std::vector<std::shared_ptr<exec::FunctionSignature>> mightContainSignatures();
 
-namespace facebook::velox::functions::sparksql::aggregates {
+std::shared_ptr<exec::VectorFunction> makeMightContain(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs);
 
-void registerAggregateFunctions(const std::string& prefix) {
-  aggregates::registerLastAggregate(prefix + "last");
-  aggregates::registerBloomFilterAggAggregate(prefix + "bloom_filter_agg");
-}
-} // namespace facebook::velox::functions::sparksql::aggregates
+} // namespace facebook::velox::functions::sparksql

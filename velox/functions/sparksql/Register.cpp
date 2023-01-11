@@ -28,6 +28,7 @@
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
+#include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
 #include "velox/functions/sparksql/RegisterArithmetic.h"
 #include "velox/functions/sparksql/RegisterCompare.h"
@@ -149,6 +150,10 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
 
+// Register bloom filter function
+  exec::registerStatefulVectorFunction(
+      prefix + "might_contain", mightContainSignatures(), makeMightContain);
+      
   // Register DateTime functions.
   registerFunction<MillisecondFunction, int32_t, Date>(
       {prefix + "millisecond"});
@@ -156,22 +161,16 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "millisecond"});
   registerFunction<MillisecondFunction, int32_t, TimestampWithTimezone>(
       {prefix + "millisecond"});
-  registerFunction<SecondFunction, int32_t, Date>(
-      {prefix + "second"});
-  registerFunction<SecondFunction, int32_t, Timestamp>(
-      {prefix + "second"});
+  registerFunction<SecondFunction, int32_t, Date>({prefix + "second"});
+  registerFunction<SecondFunction, int32_t, Timestamp>({prefix + "second"});
   registerFunction<SecondFunction, int32_t, TimestampWithTimezone>(
       {prefix + "second"});
-  registerFunction<MinuteFunction, int32_t, Date>(
-      {prefix + "minute"});
-  registerFunction<MinuteFunction, int32_t, Timestamp>(
-      {prefix + "minute"});
+  registerFunction<MinuteFunction, int32_t, Date>({prefix + "minute"});
+  registerFunction<MinuteFunction, int32_t, Timestamp>({prefix + "minute"});
   registerFunction<MinuteFunction, int32_t, TimestampWithTimezone>(
       {prefix + "minute"});
-  registerFunction<HourFunction, int32_t, Date>(
-      {prefix + "hour"});
-  registerFunction<HourFunction, int32_t, Timestamp>(
-      {prefix + "hour"});
+  registerFunction<HourFunction, int32_t, Date>({prefix + "hour"});
+  registerFunction<HourFunction, int32_t, Timestamp>({prefix + "hour"});
   registerFunction<HourFunction, int32_t, TimestampWithTimezone>(
       {prefix + "hour"});
   registerFunction<DayFunction, int32_t, Date>(
@@ -180,34 +179,26 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "day", prefix + "day_of_month"});
   registerFunction<DayFunction, int32_t, TimestampWithTimezone>(
       {prefix + "day", prefix + "day_of_month"});
-  registerFunction<DayOfWeekFunction, int32_t, Date>(
-      {prefix + "day_of_week"});
+  registerFunction<DayOfWeekFunction, int32_t, Date>({prefix + "day_of_week"});
   registerFunction<DayOfWeekFunction, int32_t, Timestamp>(
       {prefix + "day_of_week"});
   registerFunction<DayOfWeekFunction, int32_t, TimestampWithTimezone>(
       {prefix + "day_of_week"});
-  registerFunction<DayOfYearFunction, int32_t, Date>(
-      {prefix + "day_of_year"});
+  registerFunction<DayOfYearFunction, int32_t, Date>({prefix + "day_of_year"});
   registerFunction<DayOfYearFunction, int32_t, Timestamp>(
       {prefix + "day_of_year"});
   registerFunction<DayOfYearFunction, int32_t, TimestampWithTimezone>(
       {prefix + "day_of_year"});
-  registerFunction<MonthFunction, int32_t, Date>(
-      {prefix + "month"});
-  registerFunction<MonthFunction, int32_t, Timestamp>(
-      {prefix + "month"});
+  registerFunction<MonthFunction, int32_t, Date>({prefix + "month"});
+  registerFunction<MonthFunction, int32_t, Timestamp>({prefix + "month"});
   registerFunction<MonthFunction, int32_t, TimestampWithTimezone>(
       {prefix + "month"});
-  registerFunction<QuarterFunction, int32_t, Date>(
-      {prefix + "quarter"});
-  registerFunction<QuarterFunction, int32_t, Timestamp>(
-      {prefix + "quarter"});
+  registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
+  registerFunction<QuarterFunction, int32_t, Timestamp>({prefix + "quarter"});
   registerFunction<QuarterFunction, int32_t, TimestampWithTimezone>(
       {prefix + "quarter"});
-  registerFunction<YearFunction, int32_t, Date>(
-      {prefix + "year"});
-  registerFunction<YearFunction, int32_t, Timestamp>(
-      {prefix + "year"});
+  registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
+  registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int32_t, TimestampWithTimezone>(
       {prefix + "year"});
   registerFunction<YearOfWeekFunction, int32_t, Date>(

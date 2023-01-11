@@ -24,7 +24,7 @@ using namespace facebook::velox;
 
 TEST(BloomFilterTest, basic) {
   constexpr int32_t kSize = 1024;
-  BloomFilter bloom;
+  BloomFilter<int32_t> bloom;
   bloom.reset(kSize);
   for (auto i = 0; i < kSize; ++i) {
     bloom.insert(i);
@@ -36,4 +36,47 @@ TEST(BloomFilterTest, basic) {
     numFalsePositives += bloom.mayContain((i + kSize) * 123451);
   }
   EXPECT_GT(2, 100 * numFalsePositives / kSize);
+}
+
+TEST(BloomFilterTest, serialize) {
+  constexpr int32_t kSize = 1024;
+  BloomFilter<int32_t> bloom;
+  bloom.reset(kSize);
+  for (auto i = 0; i < kSize; ++i) {
+    bloom.insert(i);
+  }
+  std::string data;
+  data.resize(bloom.serializedSize());
+  StringView serialized(data.data(), data.size());
+  bloom.serialize(serialized);
+  BloomFilter<int32_t> deserialized;
+  BloomFilter<int32_t>::deserialize(data.data(), deserialized);
+  for (auto i = 0; i < kSize; ++i) {
+    EXPECT_TRUE(deserialized.mayContain(i));
+  }
+
+  EXPECT_EQ(bloom.serializedSize(), deserialized.serializedSize());
+}
+
+TEST(BloomFilterTest, merge) {
+  constexpr int32_t kSize = 10;
+  BloomFilter<int32_t> bloom;
+  bloom.reset(kSize);
+  for (auto i = 0; i < kSize; ++i) {
+    bloom.insert(i);
+  }
+
+  BloomFilter<int32_t> merge;
+  merge.reset(kSize);
+  for (auto i = kSize; i < kSize + kSize; i++) {
+    merge.insert(i);
+  }
+
+  bloom.merge(merge);
+
+  for (auto i = 0; i < kSize + kSize; ++i) {
+    EXPECT_TRUE(bloom.mayContain(i));
+  }
+
+  EXPECT_EQ(bloom.serializedSize(), merge.serializedSize());
 }
