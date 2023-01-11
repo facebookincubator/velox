@@ -25,6 +25,8 @@
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/type/Type.h"
 
+#include "velox/substrait/tests/SubstraitPlanBuilder.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::connector::hive;
@@ -414,4 +416,8 @@ TEST_F(Substrait2VeloxPlanConversionTest, AggRelWithEmit) {
       makeFlatVector<double_t>({1.0, 1.1, 0.2}),
   });
   exec::test::AssertQueryBuilder(planNode).assertResults(expectedResult);
+}
+
+TEST_F(Substrait2VeloxPlanConversionTest, codePlan) {
+  facebook::velox::substrait::MakeAndRunVeloxPlan();
 }

@@ -21,7 +21,8 @@ add_executable(
   VeloxSubstraitRoundTripTest.cpp
   VeloxToSubstraitTypeTest.cpp
   VeloxSubstraitSignatureTest.cpp
-  SubstraitExtensionCollectorTest.cpp)
+  SubstraitExtensionCollectorTest.cpp
+  SubstraitPlanBuilder.cpp)
 
 add_dependencies(velox_plan_conversion_test velox_substrait_plan_converter)
 
