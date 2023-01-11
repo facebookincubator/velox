@@ -23,9 +23,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/substrait/SubstraitToVeloxPlan.h"
+#include "velox/substrait/tests/SubstraitTestPlanBuilder.h"
 #include "velox/type/Type.h"
-
-#include "velox/substrait/tests/SubstraitPlanBuilder.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -365,22 +364,27 @@ TEST_F(
 }
 
 TEST_F(Substrait2VeloxPlanConversionTest, ReadRelWithEmit) {
-  std::string planPath =
-      getDataFilePath("velox/substrait/tests", "data/substrait_read_emit.json");
-  ::substrait::Plan substraitPlan;
-  JsonToProtoConverter::readFromFile(planPath, substraitPlan);
+  facebook::velox::substrait::SubstraitTestPlanBuilder builder;
+  auto c0 = makeFlatVector<int64_t>({1000, 2000, 3000});
+  auto c1 = makeFlatVector<double>({10.0, 20.0, 2.0});
+  auto c2 = makeFlatVector<double>({0.2, 0.5, 0.4});
+  auto c3 = makeFlatVector<bool>({true, false, false});
+  auto c4 = makeFlatVector<int64_t>({10, 12, 11});
 
-  facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter(
-      pool_.get());
-  auto planNode = planConverter.toVeloxPlan(substraitPlan);
-  // Note: input data to this test comes from a virtual table in the plan
+  auto data =
+      makeRowVector({"c0", "c1", "c2", "c3", "c4"}, {c0, c1, c2, c3, c4});
+
   auto expectedResult = makeRowVector({
       makeFlatVector<int64_t>({1000, 2000, 3000}),
       makeFlatVector<double_t>({0.2, 0.5, 0.4}),
       makeFlatVector<bool>({true, false, false}),
   });
-  exec::test::AssertQueryBuilder(planNode).assertResults(expectedResult);
+
+  builder.ValidateReadRelWithEmit(
+      {data}, /*expected*/ {expectedResult}, /*emitIndices*/ {0, 2, 3});
 }
+
+/// VIBHATHA WORKING
 
 TEST_F(Substrait2VeloxPlanConversionTest, FilterRelWithEmit) {
   std::string planPath = getDataFilePath(
@@ -416,8 +420,4 @@ TEST_F(Substrait2VeloxPlanConversionTest, AggRelWithEmit) {
       makeFlatVector<double_t>({1.0, 1.1, 0.2}),
   });
   exec::test::AssertQueryBuilder(planNode).assertResults(expectedResult);
-}
-
-TEST_F(Substrait2VeloxPlanConversionTest, codePlan) {
-  facebook::velox::substrait::MakeAndRunVeloxPlan();
 }
