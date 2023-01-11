@@ -312,6 +312,21 @@ void Expr::evalSimplifiedImpl(
     }
   }
 
+  // If any errors occurred evaluating the arguments, its possible that the
+  // values for those arguments were not defined which can lead to undefined
+  // behavior if we try and evaluate current function on them. The value for
+  // this subexpression should be NULL for these rows and thus can be safely
+  // skipped.
+  if (context.errors()) {
+    context.deselectErrors(remainingRows);
+    if (!remainingRows.hasSelections()) {
+      releaseInputValues(context);
+      result =
+          BaseVector::createNullConstant(type(), rows.size(), context.pool());
+      return;
+    }
+  }
+
   // Apply the actual function.
   try {
     vectorFunction_->apply(
