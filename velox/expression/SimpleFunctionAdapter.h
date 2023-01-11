@@ -580,7 +580,7 @@ class SimpleFunctionAdapter : public VectorFunction {
         // once per batch instead of once per row shows a significant
         // performance improvement when there are no nulls.
         if (applyContext.mayHaveNullsRecursive) {
-          applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
+          applyContext.applyToSelectedNoThrow([&, this](auto row) INLINE_LAMBDA {
             typename return_type_traits::NativeType out{};
             auto containsNull = (readers.containsNull(row) || ...);
             bool notNull;
@@ -594,7 +594,7 @@ class SimpleFunctionAdapter : public VectorFunction {
             writeResult(row, notNull, out);
           });
         } else {
-          applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
+          applyContext.applyToSelectedNoThrow([&, this](auto row) INLINE_LAMBDA {
             typename return_type_traits::NativeType out{};
             bool notNull = doApplyNullFree<0>(row, out, readers...);
 
@@ -602,7 +602,7 @@ class SimpleFunctionAdapter : public VectorFunction {
           });
         }
       } else if (allNotNull) {
-        applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
+        applyContext.applyToSelectedNoThrow([&, this](auto row) INLINE_LAMBDA {
           // Passing a stack variable have shown to be boost the performance
           // of functions that repeatedly update the output. The opposite
           // optimization (eliminating the temp) is easier to do by the
@@ -612,7 +612,7 @@ class SimpleFunctionAdapter : public VectorFunction {
           writeResult(row, notNull, out);
         });
       } else {
-        applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
+        applyContext.applyToSelectedNoThrow([&, this](auto row) INLINE_LAMBDA {
           typename return_type_traits::NativeType out{};
           bool notNull = doApply<0>(row, out, readers...);
           writeResult(row, notNull, out);
@@ -624,7 +624,7 @@ class SimpleFunctionAdapter : public VectorFunction {
         // once per batch instead of once per row shows a significant
         // performance improvement when there are no nulls.
         if (applyContext.mayHaveNullsRecursive) {
-          applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
+          applyUdf(applyContext, [&, this](auto& out, auto row) INLINE_LAMBDA {
             auto containsNull = (readers.containsNull(row) || ...);
             if (containsNull) {
               // Result is NULL because the input contains NULL.
@@ -634,22 +634,22 @@ class SimpleFunctionAdapter : public VectorFunction {
             return doApplyNullFree<0>(row, out, readers...);
           });
         } else {
-          applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
+          applyUdf(applyContext, [&, this](auto& out, auto row) INLINE_LAMBDA {
             return doApplyNullFree<0>(row, out, readers...);
           });
         }
       } else if (allNotNull) {
         if (applyContext.allAscii) {
-          applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
+          applyUdf(applyContext, [&, this](auto& out, auto row) INLINE_LAMBDA {
             return doApplyAsciiNotNull<0>(row, out, readers...);
           });
         } else {
-          applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
+          applyUdf(applyContext, [&, this](auto& out, auto row) INLINE_LAMBDA {
             return doApplyNotNull<0>(row, out, readers...);
           });
         }
       } else {
-        applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
+        applyUdf(applyContext, [&, this](auto& out, auto row) INLINE_LAMBDA {
           return doApply<0>(row, out, readers...);
         });
       }
