@@ -312,20 +312,6 @@ void Expr::evalSimplifiedImpl(
     }
   }
 
-  // If any errors occurred evaluating the arguments, its possible that the
-  // values for those arguments were not defined which can lead to undefined
-  // behavior if we try and evauate current function on them. The value for this
-  // subexpression should be NULL for these rows and thus can be safely skipped.
-  if (context.errors()) {
-    context.deselectErrors(remainingRows);
-    if (!remainingRows.hasSelections()) {
-      releaseInputValues(context);
-      result =
-          BaseVector::createNullConstant(type(), rows.size(), context.pool());
-      return;
-    }
-  }
-
   // Apply the actual function.
   try {
     vectorFunction_->apply(
@@ -1404,13 +1390,13 @@ bool Expr::applyFunctionWithPeeling(
     // All the fields are constant across the rows of interest.
     newRows = singleRow(newRowsHolder, rows.begin());
 
-    context.saveAndReset(saver, rows);
+    context.saveAndReset(saver, applyRows);
     context.setConstantWrap(rows.begin());
   } else {
     auto decoded = localDecoded.get();
     decoded->makeIndices(*firstWrapper, rows, numLevels);
     newRows = translateToInnerRows(applyRows, *decoded, newRowsHolder);
-    context.saveAndReset(saver, rows);
+    context.saveAndReset(saver, applyRows);
     setDictionaryWrapping(*decoded, rows, *firstWrapper, context);
 
     // 'newRows' comes from the set of row numbers in the base vector. These
