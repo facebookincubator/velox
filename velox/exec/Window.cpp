@@ -476,9 +476,12 @@ void Window::callApplyForPartitionRows(
           const bool isStartBound,
           const bool isKPreceding,
           const vector_size_t& sortingColumnValue) -> vector_size_t {
-    auto resultGroup = 0;
-    std::pair<vector_size_t, vector_size_t> resultBounds;
+    // The limiting value, after which all subsequent values belong to the
+    // window frame.
     auto limitValue = 0;
+    // When the sorting order is not ascending, the limitValue calculation
+    // follows the sorted order and the offset value added for kPreceding and
+    // kFollowing bounds are reversed.
     if (isKPreceding) {
       limitValue = sortingOrder_.isAscending() ? sortingColumnValue - offset
                                                : sortingColumnValue + offset;
@@ -487,7 +490,9 @@ void Window::callApplyForPartitionRows(
                                                : sortingColumnValue - offset;
     }
 
-    // Finds a value greater than or equal to the limiting value.
+    // Finds a value greater than or equal to the limiting value when sorting
+    // order is ascending, finds a value not greater than the limiting value
+    // otherwise.
     auto findValue = sortingOrder_.isAscending()
         ? std::lower_bound(
               rowToPeerGroupValue.begin(),
@@ -498,44 +503,45 @@ void Window::callApplyForPartitionRows(
               rowToPeerGroupValue.end(),
               limitValue,
               std::greater<int64_t>());
-    // Row number of findValue.
+
+    // Row number of lower bound.
     auto idx = std::min(
         vector_size_t(findValue - rowToPeerGroupValue.begin()),
         partitionRowCount - 1);
+    auto lowerBoundPeerGroup = rowToPeerGroup[idx];
+    auto lowerBoundValue = rowToPeerGroupValue[idx];
+    auto previousPeerGroup = peerGroup;
+    auto resultPeerGroup = 0;
 
-    auto resultPeerGroup = rowToPeerGroup[idx];
-    // Resultant value at offset distance from current row's value.
-    auto resultValue = rowToPeerGroupValue[idx];
-
-    // resultValue > limitValue
     if (sortingOrder_.isAscending()) {
-      if (resultValue == limitValue) {
-        resultBounds = partitionPeerGroups[resultPeerGroup];
+      if (lowerBoundValue == limitValue) {
+        resultPeerGroup = lowerBoundPeerGroup;
       } else {
-        auto previousPeerGroup = isKPreceding
-            ? resultPeerGroup
-            : std::max(resultPeerGroup - 1, peerGroup);
-        auto previousPeerGroupRow =
-            partitionPeerGroups[previousPeerGroup].first;
-        auto previousPeerGroupValue = rowToPeerGroupValue[previousPeerGroupRow];
-        resultBounds = partitionPeerGroups[previousPeerGroup];
+        // resultValue > limitValue.
+        resultPeerGroup = isKPreceding
+            ? lowerBoundPeerGroup
+            : std::max(lowerBoundPeerGroup - 1, peerGroup);
       }
     } else {
-      // resultValue < limitValue
-      if (resultValue == limitValue) {
-        resultBounds = partitionPeerGroups[resultPeerGroup];
+      if (lowerBoundValue == limitValue) {
+        resultPeerGroup = lowerBoundPeerGroup;
       } else {
-        // Needs to be updated.
-        auto previousPeerGroup = isKPreceding
-            ? resultPeerGroup
-            : std::max(resultPeerGroup - 1, peerGroup);
-        auto previousPeerGroupRow =
-            partitionPeerGroups[previousPeerGroup].first;
-        auto previousPeerGroupValue = rowToPeerGroupValue[previousPeerGroupRow];
-        resultBounds = partitionPeerGroups[previousPeerGroup];
+        // Because lower_bound for array sorted in descending order returns the
+        // first value not greater than the limit, the bound for kFollowing
+        // frames needs to be adjusted based on the positions of limitValue and
+        // lowerBoundValue.
+        if (isKPreceding) {
+          resultPeerGroup = lowerBoundPeerGroup;
+        } else if (lowerBoundValue > limitValue) {
+          resultPeerGroup =
+              std::min(lowerBoundPeerGroup + 1, peerGroupCount - 1);
+        } else {
+          resultPeerGroup = std::max(lowerBoundPeerGroup - 1, peerGroup);
+        }
       }
     }
 
+    auto resultBounds = partitionPeerGroups[resultPeerGroup];
     return isStartBound ? resultBounds.first : resultBounds.second;
   };
 
