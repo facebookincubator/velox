@@ -214,7 +214,7 @@ class DecodedVector {
     BufferPtr nulls;
   };
 
-  /// Returns 'indices' and 'nulls' buffers that represnt the combined
+  /// Returns 'indices' and 'nulls' buffers that represent the combined
   /// dictionary wrapping of the decoded vector. Requires
   /// isIdentityMapping() == false and isConstantMapping() == false.
   DictionaryWrapping dictionaryWrapping(

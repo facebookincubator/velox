@@ -441,16 +441,10 @@ void DecodedVector::setBaseDataForBias(
 }
 
 namespace {
-bool isWrapper(VectorEncoding::Simple encoding) {
-  return encoding == VectorEncoding::Simple::SEQUENCE ||
-      encoding == VectorEncoding::Simple::DICTIONARY;
-}
-
-/// Returns true if 'wrapper' is a dictionary vector wrapping non-dictionary
-/// vector.
-bool isOneLevelDictionary(const BaseVector& wrapper) {
+/// Returns true if 'wrapper' is a dictionary vector wrapping a flat vector.
+bool isDictionaryOverFlat(const BaseVector& wrapper) {
   return wrapper.encoding() == VectorEncoding::Simple::DICTIONARY &&
-      !isWrapper(wrapper.valueVector()->encoding());
+      wrapper.valueVector()->isFlatEncoding();
 }
 
 /// Copies 'size' entries from 'indices' into a newly allocated buffer.
@@ -490,7 +484,7 @@ DecodedVector::DictionaryWrapping DecodedVector::dictionaryWrapping(
 
   VELOX_CHECK_LE(size, size_);
 
-  if (isOneLevelDictionary(wrapper)) {
+  if (isDictionaryOverFlat(wrapper)) {
     // Re-use indices and nulls buffers.
     return {wrapper.wrapInfo(), wrapper.nulls()};
   } else {
