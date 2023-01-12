@@ -154,6 +154,36 @@ struct HmacSha512Function {
   }
 };
 
+/// spooky_hash_v2_32(varbinary) -> varbinary
+template <typename T>
+struct SpookyHashV2_32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TTo, typename TFrom>
+  FOLLY_ALWAYS_INLINE void call(TTo& result, const TFrom& input) {
+    uint32_t hash = folly::Endian::swap32(
+        folly::hash::SpookyHashV2::Hash32(input.data(), input.size(), 0));
+    static const auto hashLen = sizeof(int32_t);
+    result.resize(hashLen);
+    std::memcpy(result.data(), &hash, hashLen);
+  }
+};
+
+/// spooky_hash_v2_64(varbinary) -> varbinary
+template <typename T>
+struct SpookyHashV2_64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TTo, typename TFrom>
+  FOLLY_ALWAYS_INLINE void call(TTo& result, const TFrom& input) {
+    uint64_t hash = folly::Endian::swap64(
+        folly::hash::SpookyHashV2::Hash64(input.data(), input.size(), 0));
+    static const auto hashLen = sizeof(int64_t);
+    result.resize(hashLen);
+    std::memcpy(result.data(), &hash, hashLen);
+  }
+};
+
 template <typename T>
 struct ToHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);

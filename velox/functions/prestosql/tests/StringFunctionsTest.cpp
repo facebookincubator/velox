@@ -1289,6 +1289,36 @@ TEST_F(StringFunctionsTest, HmacSha512) {
   EXPECT_EQ(std::nullopt, hmacSha512(std::nullopt, "velox"));
 }
 
+TEST_F(StringFunctionsTest, SpookyHashV2_32) {
+  const auto spookyHashV2_32 = [&](std::optional<std::string> arg) {
+    return evaluateOnce<std::string, std::string>(
+        "spooky_hash_v2_32(c0)", {arg}, {VARBINARY()});
+  };
+  // Use the same expected value from TestVarbinaryFunctions of presto java
+  EXPECT_EQ(
+      hexToDec("6BF50919"),
+      spookyHashV2_32(""));
+  EXPECT_EQ(
+      hexToDec("D382E6CA"),
+      spookyHashV2_32("hello"));
+  EXPECT_EQ(std::nullopt, spookyHashV2_32(std::nullopt));
+}
+
+TEST_F(StringFunctionsTest, SpookyHashV2_64) {
+  const auto spookyHashV2_64 = [&](std::optional<std::string> arg) {
+    return evaluateOnce<std::string, std::string>(
+        "spooky_hash_v2_64(c0)", {arg}, {VARBINARY()});
+  };
+  // Use the same expected value from TestVarbinaryFunctions of presto java
+  EXPECT_EQ(
+      hexToDec("232706FC6BF50919"),
+      spookyHashV2_64(""));
+  EXPECT_EQ(
+      hexToDec("3768826AD382E6CA"),
+      spookyHashV2_64("hello"));
+  EXPECT_EQ(std::nullopt, spookyHashV2_64(std::nullopt));
+}
+
 void StringFunctionsTest::testReplaceInPlace(
     const std::vector<std::pair<std::string, std::string>>& tests,
     const std::string& search,
