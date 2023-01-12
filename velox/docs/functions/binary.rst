@@ -34,6 +34,14 @@ Binary Functions
 
     Computes the HMAC with sha512 of ``binary`` with the given ``key``.
 
+.. function:: spooky_hash_v2_32(binary) -> varbinary
+
+    Computes the SpookyHashV2 32-bit hash of ``binary``.
+
+.. function:: spooky_hash_v2_64(binary) -> varbinary
+
+    Computes the SpookyHashV2 64-bit hash of ``binary``.
+
 .. function:: to_base64(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation.
