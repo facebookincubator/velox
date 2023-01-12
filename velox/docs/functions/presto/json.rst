@@ -89,69 +89,69 @@ special characters unescaped and double quotes removed.
 JSON Functions
 --------------
 
-.. function:: is_json_scalar(json) -> boolean
+.. prestofunction:: is_json_scalar(json) -> boolean
 
-    Determine if ``json`` is a scalar (i.e. a JSON number, a JSON string,
-    ``true``, ``false`` or ``null``)::
+Determine if ``json`` is a scalar (i.e. a JSON number, a JSON string,
+``true``, ``false`` or ``null``)::
 
-        SELECT is_json_scalar('1'); *-- true*
-        SELECT is_json_scalar('[1, 2, 3]'); *-- false*
+    SELECT is_json_scalar('1'); *-- true*
+    SELECT is_json_scalar('[1, 2, 3]'); *-- false*
 
-.. function:: json_array_contains(json, value) -> boolean
+.. prestofunction:: json_array_contains(json, value) -> boolean
 
-    Determine if ``value`` exists in ``json`` (a string containing a JSON
-    array). ``value`` could be a boolean, bigint, double, or varchar.
-    Returns NULL if ``json`` is not an array::
+Determine if ``value`` exists in ``json`` (a string containing a JSON
+array). ``value`` could be a boolean, bigint, double, or varchar.
+Returns NULL if ``json`` is not an array::
 
-        SELECT json_array_contains('[1, 2, 3]', 2);
+    SELECT json_array_contains('[1, 2, 3]', 2);
 
-.. function:: json_array_length(json) -> bigint
+.. prestofunction:: json_array_length(json) -> bigint
 
-    Returns the array length of ``json`` (a string containing a JSON
-    array). Returns NULL if ``json`` is not an array::
+Returns the array length of ``json`` (a string containing a JSON
+array). Returns NULL if ``json`` is not an array::
 
-        SELECT json_array_length('[1, 2, 3]');
+    SELECT json_array_length('[1, 2, 3]');
 
-.. function:: json_extract_scalar(json, json_path) -> varchar
+.. prestofunction:: json_extract_scalar(json, json_path) -> varchar
 
-    Evaluates the `JSONPath`_-like expression ``json_path`` on ``json``
-    (a string containing JSON) and returns the result as a string. The
-    value referenced by ``json_path`` must be a scalar (boolean, number
-    or string)::
+Evaluates the `JSONPath`_-like expression ``json_path`` on ``json``
+(a string containing JSON) and returns the result as a string. The
+value referenced by ``json_path`` must be a scalar (boolean, number
+or string)::
 
-        SELECT json_extract_scalar('[1, 2, 3]', '$[2]');
-        SELECT json_extract_scalar(json, '$.store.book[0].author');
+    SELECT json_extract_scalar('[1, 2, 3]', '$[2]');
+    SELECT json_extract_scalar(json, '$.store.book[0].author');
 
-    .. _JSONPath: http://goessner.net/articles/JsonPath/
+.. _JSONPath: http://goessner.net/articles/JsonPath/
 
-.. function:: json_format(json) -> varchar
+.. prestofunction:: json_format(json) -> varchar
 
-    Serializes the input JSON value to JSON text conforming to `RFC 7159`_.
-    The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, ``true``, ``false`` or ``null``::
+Serializes the input JSON value to JSON text conforming to `RFC 7159`_.
+The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, ``true``, ``false`` or ``null``::
 
-        SELECT json_format(JSON '[1, 2, 3]'); -- '[1,2,3]'
-        SELECT json_format(JSON '"a"'); -- '"a"'
+    SELECT json_format(JSON '[1, 2, 3]'); -- '[1,2,3]'
+    SELECT json_format(JSON '"a"'); -- '"a"'
 
-    .. _RFC 7159: https://datatracker.ietf.org/doc/html/rfc7159.html
+.. _RFC 7159: https://datatracker.ietf.org/doc/html/rfc7159.html
 
-.. function:: json_parse(varchar) -> json
+.. prestofunction:: json_parse(varchar) -> json
 
-    expects a JSON text conforming to `RFC 7159`_, and returns the JSON value deserialized from the JSON text.
-    The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, ``true``, ``false`` or ``null``::
+expects a JSON text conforming to `RFC 7159`_, and returns the JSON value deserialized from the JSON text.
+The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, ``true``, ``false`` or ``null``::
 
-        SELECT json_parse('[1, 2, 3]'); -- JSON '[1,2,3]'
-        SELECT json_parse('"abc"'); -- JSON '"abc"'
+    SELECT json_parse('[1, 2, 3]'); -- JSON '[1,2,3]'
+    SELECT json_parse('"abc"'); -- JSON '"abc"'
 
-    .. _RFC 7159: https://datatracker.ietf.org/doc/html/rfc7159.html
+.. _RFC 7159: https://datatracker.ietf.org/doc/html/rfc7159.html
 
-.. function:: json_size(json, value) -> bigint
+.. prestofunction:: json_size(json, value) -> bigint
 
-    Returns the size of the ``value``. For ``objects`` or ``arrays``, the size
-    is the number of members, and the size of a ``scalar`` value is zero::
+Returns the size of the ``value``. For ``objects`` or ``arrays``, the size
+is the number of members, and the size of a ``scalar`` value is zero::
 
-        SELECT json_size('{"x": {"a": 1, "b": 2}}', '$.x'); -- 2
-        SELECT json_size('{"x": [1, 2, 3]}', '$.x'); -- 3
-        SELECT json_size('{"x": {"a": 1, "b": 2}}', '$.x.a'); -- 0
+    SELECT json_size('{"x": {"a": 1, "b": 2}}', '$.x'); -- 2
+    SELECT json_size('{"x": [1, 2, 3]}', '$.x'); -- 3
+    SELECT json_size('{"x": {"a": 1, "b": 2}}', '$.x.a'); -- 0
 
 ============
 JSON Vectors

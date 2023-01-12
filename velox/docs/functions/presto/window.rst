@@ -77,19 +77,19 @@ The query ranks orders for each clerk by price:
 Ranking functions
 _________________
 
-.. function:: cume_dist() -> bigint
+.. prestofunction:: cume_dist() -> bigint
 
 Returns the cumulative distribution of a value in a group of values. The result is the number of rows
 preceding or peer with the row in the window ordering of the window partition divided by the total
 number of rows in the window partition. Thus, any tie values in the ordering will evaluate to the same
 distribution value.
 
-.. function:: dense_rank() -> bigint
+.. prestofunction:: dense_rank() -> bigint
 
 Returns the rank of a value in a group of values. This is similar to rank(), except that tie values do
 not produce gaps in the sequence.
 
-.. function:: ntile(n) -> bigint
+.. prestofunction:: ntile(n) -> bigint
 
 Divides the rows for each window partition into n buckets ranging from 1 to at most ``n``. Bucket values
 will differ by at most 1. If the number of rows in the partition does not divide evenly into the number
@@ -97,18 +97,18 @@ of buckets, then the remainder values are distributed one per bucket, starting w
 
 For example, with 6 rows and 4 buckets, the bucket values would be as follows: ``1 1 2 2 3 4``
 
-.. function:: percent_rank() -> double
+.. prestofunction:: percent_rank() -> double
 
 Returns the percentage ranking of a value in a group of values. The result is ``(r - 1) / (n - 1)`` where ``r``
 is the ``rank()`` of the row and ``n`` is the total number of rows in the window partition.
 
-.. function:: rank() -> bigint
+.. prestofunction:: rank() -> bigint
 
 Returns the rank of a value in a group of values. The rank is one plus the number of rows preceding the
 row that are not peer with the row. Thus, the values in the ordering will produce gaps in the sequence.
 The ranking is performed for each window partition.
 
-.. function:: row_number() -> bigint
+.. prestofunction:: row_number() -> bigint
 
 Returns a unique, sequential number for each row, starting with one, according to the ordering of rows
 within the window partition.
@@ -116,7 +116,7 @@ within the window partition.
 Value functions
 _______________
 
-.. function:: nth_value(x, offset) -> [same as input]
+.. prestofunction:: nth_value(x, offset) -> [same as input]
 
 Returns the value at the specified offset from the beginning of the window. Offsets start at 1. The offset
 can be any scalar expression. If the offset is null or greater than the number of values in the window, null is
