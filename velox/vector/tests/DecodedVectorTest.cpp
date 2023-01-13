@@ -267,11 +267,9 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     auto dictionaryVector = BaseVector::wrapInDictionary(
         nulls, indices, dictionarySize, constantVector);
 
-    auto check = [&](auto& decoded, auto& wrappedVector) {
+    // Test dict over a complex-typed constant encoding structure.
+    auto check = [&](auto& decoded) {
       ASSERT_FALSE(decoded.isIdentityMapping());
-      // Test dict over `base` vector, which could be an array encoding, etc.
-      ASSERT_EQ(wrappedVector->encoding(), VectorEncoding::Simple::DICTIONARY);
-      ASSERT_EQ(wrappedVector->valueVector()->encoding(), base->encoding());
       if (base->isNullAt(index)) {
         // All elements are nulls.
         ASSERT_TRUE(decoded.isConstantMapping());
@@ -283,15 +281,9 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
         for (auto i = 0; i < dictionarySize; i++) {
           if (i % 2 == 0) {
             ASSERT_TRUE(decoded.isNullAt(i)) << "at " << i;
-            ASSERT_TRUE(wrappedVector->isNullAt(i)) << "at " << i;
           } else {
             ASSERT_TRUE(
                 base->equalValueAt(decoded.base(), index, decoded.index(i)))
-                << "at " << i;
-            // Ensure wrapped vector's value is the same as the original
-            // vector's value.
-            ASSERT_TRUE(
-                wrappedVector->equalValueAt(base.get(), i, decoded.index(i)))
                 << "at " << i;
           }
         }
@@ -301,24 +293,18 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     {
       SelectivityVector selection(dictionarySize);
       DecodedVector decoded(*dictionaryVector, selection, false);
-
-      // FIXME: To remove the if condition once a bug of wrapping the
-      //  null-constant base vector is fixed.
-      if (!base->isNullAt(index)) {
-        auto wrappedVector =
-            decoded.wrap(base, *dictionaryVector, selection.end());
-        check(decoded, wrappedVector);
-      }
+      check(decoded);
+      auto wrappedVector =
+          decoded.wrap(base, *dictionaryVector, selection.end());
+      assertEqualVectors(dictionaryVector, wrappedVector);
     }
 
     {
       DecodedVector decoded(*dictionaryVector, false);
-
-      if (!base->isNullAt(index)) {
-        auto wrappedVector =
-            decoded.wrap(base, *dictionaryVector, dictionaryVector->size());
-        check(decoded, wrappedVector);
-      }
+      check(decoded);
+      auto wrappedVector =
+          decoded.wrap(base, *dictionaryVector, dictionaryVector->size());
+      assertEqualVectors(dictionaryVector, wrappedVector);
     }
   }
 
@@ -336,22 +322,16 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     auto dictionaryVector = BaseVector::wrapInDictionary(
         nulls, indices, dictionarySize, constantVector);
 
-    // Test dict-over-constant encoding structure.
-    auto check = [&](auto& decoded, auto& wrappedVector) {
+    // Test dict over a scalar-typed constant encoding structure.
+    auto check = [&](auto& decoded) {
       ASSERT_FALSE(decoded.isIdentityMapping());
       ASSERT_FALSE(decoded.isConstantMapping());
       ASSERT_TRUE(decoded.nulls() != nullptr);
-      ASSERT_EQ(wrappedVector->encoding(), VectorEncoding::Simple::DICTIONARY);
-      ASSERT_TRUE(wrappedVector->valueVector()->isConstantEncoding());
       for (auto i = 0; i < dictionarySize; i++) {
         if (i % 2 == 0) {
           ASSERT_TRUE(decoded.isNullAt(i)) << "at " << i;
-          ASSERT_TRUE(wrappedVector->isNullAt(i)) << "at " << i;
         } else {
           ASSERT_EQ(value, decoded.template valueAt<T>(i)) << "at " << i;
-          ASSERT_TRUE(wrappedVector->equalValueAt(
-              constantVector.get(), i, decoded.index(i)))
-              << "at " << i;
         }
         ASSERT_EQ(decoded.isNullAt(i), dictionaryVector->isNullAt(i));
         ASSERT_EQ(
@@ -362,16 +342,18 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     {
       SelectivityVector selection(dictionarySize);
       DecodedVector decoded(*dictionaryVector, selection, false);
+      check(decoded);
       auto wrappedVector =
           decoded.wrap(constantVector, *dictionaryVector, selection.end());
-      check(decoded, wrappedVector);
+      assertEqualVectors(dictionaryVector, wrappedVector);
     }
 
     {
       DecodedVector decoded(*dictionaryVector, false);
+      check(decoded);
       auto wrappedVector = decoded.wrap(
           constantVector, *dictionaryVector, dictionaryVector->size());
-      check(decoded, wrappedVector);
+      assertEqualVectors(dictionaryVector, wrappedVector);
     }
   }
 

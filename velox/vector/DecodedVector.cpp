@@ -507,11 +507,12 @@ VectorPtr DecodedVector::wrap(
   // exactly with the selection size. Otherwise, the constant vector will need
   // to be resized to match it. The resizing will be done in the wrapping code
   // later.
-  if (data->isConstantEncoding() && size == data->size()) {
+  if (data->isConstantEncoding() && isConstantMapping_ &&
+      size == data->size()) {
     return data;
   }
 
-  if (wrapper.isConstantEncoding()) {
+  if (isConstantMapping_) {
     if (wrapper.isNullAt(0)) {
       return BaseVector::createNullConstant(data->type(), size, data->pool());
     }
