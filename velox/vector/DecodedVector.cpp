@@ -441,7 +441,7 @@ void DecodedVector::setBaseDataForBias(
 }
 
 namespace {
-/// Returns true if 'wrapper' is a dictionary vector wrapping a flat vector.
+/// Returns true if 'wrapper' is a dictionary vector over a flat vector.
 bool isDictionaryOverFlat(const BaseVector& wrapper) {
   return wrapper.encoding() == VectorEncoding::Simple::DICTIONARY &&
       wrapper.valueVector()->isFlatEncoding();

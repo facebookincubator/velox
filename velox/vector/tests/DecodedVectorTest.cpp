@@ -267,8 +267,11 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     auto dictionaryVector = BaseVector::wrapInDictionary(
         nulls, indices, dictionarySize, constantVector);
 
-    auto check = [&](auto& decoded) {
+    auto check = [&](auto& decoded, auto& wrappedVector) {
       ASSERT_FALSE(decoded.isIdentityMapping());
+      // Test dict over `base` vector, which could be an array encoding, etc.
+      ASSERT_EQ(wrappedVector->encoding(), VectorEncoding::Simple::DICTIONARY);
+      ASSERT_EQ(wrappedVector->valueVector()->encoding(), base->encoding());
       if (base->isNullAt(index)) {
         // All elements are nulls.
         ASSERT_TRUE(decoded.isConstantMapping());
@@ -280,24 +283,17 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
         for (auto i = 0; i < dictionarySize; i++) {
           if (i % 2 == 0) {
             ASSERT_TRUE(decoded.isNullAt(i)) << "at " << i;
+            ASSERT_TRUE(wrappedVector->isNullAt(i)) << "at " << i;
           } else {
             ASSERT_TRUE(
                 base->equalValueAt(decoded.base(), index, decoded.index(i)))
                 << "at " << i;
+            // Ensure wrapped vector's value is the same as the original
+            // vector's value.
+            ASSERT_TRUE(
+                wrappedVector->equalValueAt(base.get(), i, decoded.index(i)))
+                << "at " << i;
           }
-        }
-      }
-    };
-
-    // Test dict-over-constant encoding structure on a complex type.
-    auto checkDepthOne = [&](auto& decoded, auto& wrappedVector) {
-      for (auto i = 0; i < dictionarySize; i++) {
-        if (i % 2 == 0) {
-          ASSERT_TRUE(wrappedVector->isNullAt(i)) << "at " << i;
-        } else {
-          ASSERT_TRUE(
-              wrappedVector->equalValueAt(base.get(), i, decoded.index(i)))
-              << "at " << i;
         }
       }
     };
@@ -305,25 +301,23 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     {
       SelectivityVector selection(dictionarySize);
       DecodedVector decoded(*dictionaryVector, selection, false);
-      check(decoded);
 
-      // TODO: To remove the if condition once a non-topmost level is a null
-      //  constant because a mapping over a null constant should be a constant.
+      // FIXME: To remove the if condition once a bug of wrapping the
+      //  null-constant base vector is fixed.
       if (!base->isNullAt(index)) {
         auto wrappedVector =
             decoded.wrap(base, *dictionaryVector, selection.end());
-        checkDepthOne(decoded, wrappedVector);
+        check(decoded, wrappedVector);
       }
     }
 
     {
       DecodedVector decoded(*dictionaryVector, false);
-      check(decoded);
 
       if (!base->isNullAt(index)) {
         auto wrappedVector =
             decoded.wrap(base, *dictionaryVector, dictionaryVector->size());
-        checkDepthOne(decoded, wrappedVector);
+        check(decoded, wrappedVector);
       }
     }
   }
@@ -342,15 +336,22 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     auto dictionaryVector = BaseVector::wrapInDictionary(
         nulls, indices, dictionarySize, constantVector);
 
-    auto check = [&](auto& decoded) {
+    // Test dict-over-constant encoding structure.
+    auto check = [&](auto& decoded, auto& wrappedVector) {
       ASSERT_FALSE(decoded.isIdentityMapping());
       ASSERT_FALSE(decoded.isConstantMapping());
       ASSERT_TRUE(decoded.nulls() != nullptr);
+      ASSERT_EQ(wrappedVector->encoding(), VectorEncoding::Simple::DICTIONARY);
+      ASSERT_TRUE(wrappedVector->valueVector()->isConstantEncoding());
       for (auto i = 0; i < dictionarySize; i++) {
         if (i % 2 == 0) {
           ASSERT_TRUE(decoded.isNullAt(i)) << "at " << i;
+          ASSERT_TRUE(wrappedVector->isNullAt(i)) << "at " << i;
         } else {
           ASSERT_EQ(value, decoded.template valueAt<T>(i)) << "at " << i;
+          ASSERT_TRUE(wrappedVector->equalValueAt(
+              constantVector.get(), i, decoded.index(i)))
+              << "at " << i;
         }
         ASSERT_EQ(decoded.isNullAt(i), dictionaryVector->isNullAt(i));
         ASSERT_EQ(
@@ -358,34 +359,19 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
       }
     };
 
-    // Test dict-over-constant encoding structure on a scalar type.
-    auto checkDepthOne = [&](auto& decoded, auto& wrappedVector) {
-      for (auto i = 0; i < dictionarySize; i++) {
-        if (i % 2 == 0) {
-          ASSERT_TRUE(wrappedVector->isNullAt(i)) << "at " << i;
-        } else {
-          ASSERT_TRUE(wrappedVector->equalValueAt(
-              constantVector.get(), i, decoded.index(i)))
-              << "at " << i;
-        }
-      }
-    };
-
     {
       SelectivityVector selection(dictionarySize);
       DecodedVector decoded(*dictionaryVector, selection, false);
-      check(decoded);
       auto wrappedVector =
           decoded.wrap(constantVector, *dictionaryVector, selection.end());
-      checkDepthOne(decoded, wrappedVector);
+      check(decoded, wrappedVector);
     }
 
     {
       DecodedVector decoded(*dictionaryVector, false);
-      check(decoded);
       auto wrappedVector = decoded.wrap(
           constantVector, *dictionaryVector, dictionaryVector->size());
-      checkDepthOne(decoded, wrappedVector);
+      check(decoded, wrappedVector);
     }
   }
 
@@ -653,7 +639,7 @@ TEST_F(DecodedVectorTest, wrapOnDictionaryEncoding) {
   auto dictionaryVector =
       BaseVector::wrapInDictionary(nullsOne, indicesOne, kSize, rowVector);
 
-  // Test dictionary with depth one, aka. dict-over-flat encoding structure.
+  // Test dictionary with depth one, a.k.a. dict-over-flat encoding structure.
   auto checkDepthOne = [&](auto& decoded, auto& wrappedVector) {
     for (auto i = 0; i < kSize; i++) {
       if (i < 2) {
@@ -673,8 +659,8 @@ TEST_F(DecodedVectorTest, wrapOnDictionaryEncoding) {
   wrappedVector = decoded.wrap(intVector, *dictionaryVector, kSize);
   checkDepthOne(decoded, wrappedVector);
 
-  // Test dictionary with depth two, aka. dict(dict(flat)) multi-level encoding
-  // structure.
+  // Test dictionary with depth two, a.k.a. dict(dict(flat)) multi-level
+  // encoding structure.
   auto nullsTwo =
       makeNulls(kSize, [](auto row) { return row >= 2 && row < 4; });
   auto indicesTwo = makeIndices(kSize, [](vector_size_t i) { return i; });
