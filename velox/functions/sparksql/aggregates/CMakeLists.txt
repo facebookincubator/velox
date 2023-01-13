@@ -11,6 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+  add_compile_options(-Wno-stringop-overflow)
+endif()
+
 add_library(velox_functions_spark_aggregates LastAggregate.cpp BloomFilterAggAggregate.cpp Register.cpp)
 
 target_link_libraries(velox_functions_spark_aggregates ${FMT} velox_exec
