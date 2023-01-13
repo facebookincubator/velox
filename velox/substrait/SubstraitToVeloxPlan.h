@@ -129,7 +129,7 @@ class SubstraitVeloxPlanConverter {
             nextPlanNodeId(),
             std::move(emitInfo.projectNames),
             std::move(emitInfo.expressions),
-            noEmitNode);
+            std::move(noEmitNode));
       }
       default:
         VELOX_FAIL("unrecognized emit kind");
