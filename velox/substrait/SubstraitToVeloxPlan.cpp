@@ -198,7 +198,10 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         std::move(childNode));
   } else {
     return std::make_shared<core::ProjectNode>(
-        nextPlanNodeId(), projectNames, expressions, std::move(childNode));
+        nextPlanNodeId(),
+        std::move(projectNames),
+        std::move(expressions),
+        std::move(childNode));
   }
 }
 
@@ -393,17 +396,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   if (readRel.has_virtual_table()) {
     return toVeloxPlan(readRel, outputType);
   } else {
-    // handle emit
-    auto noEmitNode = std::make_shared<core::TableScanNode>(
+    return std::make_shared<core::TableScanNode>(
         nextPlanNodeId(),
         std::move(outputType),
         std::move(tableHandle),
         std::move(assignments));
-    if (readRel.has_common()) {
-      return ProcessEmit(readRel.common(), std::move(noEmitNode));
-    } else {
-      return noEmitNode;
-    }
   }
 }
 
@@ -464,14 +461,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         std::make_shared<RowVector>(pool_, type, nullptr, batchSize, children));
   }
 
-  auto noEmitNode =
-      std::make_shared<core::ValuesNode>(nextPlanNodeId(), std::move(vectors));
-
-  if (readRel.has_common()) {
-    return ProcessEmit(readRel.common(), std::move(noEmitNode));
-  } else {
-    return noEmitNode;
-  }
+  return std::make_shared<core::ValuesNode>(
+      nextPlanNodeId(), std::move(vectors));
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
