@@ -126,9 +126,7 @@ struct SpookyHashV232Function {
   FOLLY_ALWAYS_INLINE
   void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
     // Swap bytes with folly::Endian::swap32 similar to the Java implementation,
-    // Velox and SpookyHash only support little-endian platforms and so it
-    // should be fine.
-
+    // Velox and SpookyHash only support little-endian platforms.
     uint32_t hash = folly::Endian::swap32(
         folly::hash::SpookyHashV2::Hash32(input.data(), input.size(), 0));
     static const auto kHashLength = sizeof(int32_t);
@@ -145,9 +143,7 @@ struct SpookyHashV264Function {
   FOLLY_ALWAYS_INLINE
   void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
     // Swap bytes with folly::Endian::swap64 similar to the Java implementation,
-    // Velox and SpookyHash only support little-endian platforms and so it
-    // should be fine.
-
+    // Velox and SpookyHash only support little-endian platforms.
     uint64_t hash = folly::Endian::swap64(
         folly::hash::SpookyHashV2::Hash64(input.data(), input.size(), 0));
     static const auto kHashLength = sizeof(int64_t);
