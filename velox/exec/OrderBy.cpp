@@ -246,7 +246,7 @@ void OrderBy::noMoreInput() {
     returningRows_.resize(numRows_);
     RowContainerIterator iter;
     data_->listRows(&iter, numRows_, returningRows_.data());
-    std::sort(
+    std::stable_sort(
         returningRows_.begin(),
         returningRows_.end(),
         [this](const char* leftRow, const char* rightRow) {
