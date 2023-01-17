@@ -326,16 +326,14 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   bool nullOnFailure;
   switch (failureBehavior) {
     case ::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:
+    case ::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
       nullOnFailure = false;
       break;
     case ::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL:
       nullOnFailure = true;
       break;
-    case ::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
-      nullOnFailure = false;
-      break;
     default:
-      VELOX_FAIL("The given failure behavior is NOT supported!");
+      VELOX_NYI("The given failure behavior is NOT supported: '{}'", failureBehavior);
   }
 
   std::vector<core::TypedExprPtr> inputs{
