@@ -1028,7 +1028,7 @@ bool Task::isFinishedLocked() const {
   return (state_ == TaskState::kFinished);
 }
 
-void Task::updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) {
+bool Task::updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) {
   auto bufferManager = bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
       bufferManager,
@@ -1039,7 +1039,7 @@ void Task::updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) {
     std::lock_guard<std::mutex> l(mutex_);
     if (noMoreBroadcastBuffers_) {
       // Ignore messages received after no-more-buffers message.
-      return;
+      return true;
     }
 
     if (noMoreBuffers) {
@@ -1047,7 +1047,7 @@ void Task::updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) {
     }
   }
 
-  bufferManager->updateBroadcastOutputBuffers(
+  return bufferManager->updateBroadcastOutputBuffers(
       taskId_, numBuffers, noMoreBuffers);
 }
 
@@ -1511,7 +1511,7 @@ ContinueFuture Task::stateChangeFuture(uint64_t maxWaitMicros) {
   auto [promise, future] = makeVeloxContinuePromiseContract(
       fmt::format("Task::stateChangeFuture {}", taskId_));
   stateChangePromises_.emplace_back(std::move(promise));
-  if (maxWaitMicros > 0) {
+  if (maxWaitMicros) {
     return std::move(future).within(std::chrono::microseconds(maxWaitMicros));
   }
   return std::move(future);

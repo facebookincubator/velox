@@ -570,11 +570,16 @@ void PartitionedOutputBufferManager::initializeTask(
   });
 }
 
-void PartitionedOutputBufferManager::updateBroadcastOutputBuffers(
+bool PartitionedOutputBufferManager::updateBroadcastOutputBuffers(
     const std::string& taskId,
     int numBuffers,
     bool noMoreBuffers) {
-  getBuffer(taskId)->updateBroadcastOutputBuffers(numBuffers, noMoreBuffers);
+  auto buffer = getBufferIfExists(taskId);
+  if (buffer) {
+    buffer->updateBroadcastOutputBuffers(numBuffers, noMoreBuffers);
+    return true;
+  }
+  return false;
 }
 
 void PartitionedOutputBufferManager::updateNumDrivers(
