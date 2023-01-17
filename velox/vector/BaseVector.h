@@ -42,6 +42,8 @@
 namespace facebook {
 namespace velox {
 
+class DecodedVector;
+
 template <typename T>
 class SimpleVector;
 
@@ -824,6 +826,7 @@ class BaseVector {
   bool isCodegenOutput_ = false;
 
   friend class LazyVector;
+  friend class DecodedVector;
 
   /// Is true if this vector is a lazy vector or contains one and is being
   /// wrapped. Keeping track of this helps to enforce the invariant that an

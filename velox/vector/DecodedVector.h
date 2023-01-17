@@ -20,6 +20,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SelectivityVector.h"
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
 
@@ -225,6 +226,26 @@ class DecodedVector {
       const BaseVector& wrapper,
       const SelectivityVector& rows) const {
     return dictionaryWrapping(wrapper, rows.end());
+  }
+
+  template <typename T>
+  std::optional<int32_t> compare(
+      const DecodedVector& other,
+      vector_size_t index,
+      vector_size_t otherIndex,
+      CompareFlags flags) const {
+    bool otherNull = other.isNullAt(otherIndex);
+    bool thisNull = isNullAt(index);
+
+    if (otherNull || thisNull) {
+      return BaseVector::compareNulls(thisNull, otherNull, flags);
+    }
+
+    auto thisValue = valueAt<T>(index);
+    auto otherValue = other.valueAt<T>(otherIndex);
+
+    auto result = thisValue < otherValue;
+    return {flags.ascending ? result : result * -1};
   }
 
   /// Pre-allocated vector of 0, 1, 2,..
