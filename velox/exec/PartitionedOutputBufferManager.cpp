@@ -574,8 +574,7 @@ bool PartitionedOutputBufferManager::updateBroadcastOutputBuffers(
     const std::string& taskId,
     int numBuffers,
     bool noMoreBuffers) {
-  auto buffer = getBufferIfExists(taskId);
-  if (buffer) {
+  if (auto buffer = getBufferIfExists(taskId)) {
     buffer->updateBroadcastOutputBuffers(numBuffers, noMoreBuffers);
     return true;
   }

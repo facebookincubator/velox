@@ -1511,7 +1511,7 @@ ContinueFuture Task::stateChangeFuture(uint64_t maxWaitMicros) {
   auto [promise, future] = makeVeloxContinuePromiseContract(
       fmt::format("Task::stateChangeFuture {}", taskId_));
   stateChangePromises_.emplace_back(std::move(promise));
-  if (maxWaitMicros) {
+  if (maxWaitMicros > 0) {
     return std::move(future).within(std::chrono::microseconds(maxWaitMicros));
   }
   return std::move(future);

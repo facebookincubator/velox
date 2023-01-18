@@ -194,7 +194,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// of buffers. No more calls are expected after the call with noMoreBuffers
   /// == true, but occasionally the caller might resend it, so calls
   /// received after a call with noMoreBuffers == true are ignored.
-  /// @return bool Return true if the update was successful, else false.
+  /// @return bool Return true if the update was successful, else false. Also,
+  /// returns true if noMoreBroadcastBuffers_.
   bool updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers);
 
   /// Returns true if state is 'running'.
