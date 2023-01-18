@@ -681,5 +681,12 @@ TEST_F(ArithmeticTest, truncate) {
   EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
 }
 
+TEST_F(ArithmeticTest, fuzzRepro) {
+  const auto truncate = [&](std::optional<double> a,
+                            std::optional<int32_t> n = 0) {
+    return evaluateOnce<double>("truncate(c0,c1)", a, n);
+  };
+}
+
 } // namespace
 } // namespace facebook::velox
