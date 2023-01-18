@@ -71,6 +71,38 @@ struct ExprStats {
   }
 };
 
+/// Peel off common encodings across inputValues and set the encoding in saver.
+/// Orignal selected rows in applyRows are translated to the corresponding rows
+/// inside the peeled encodings in newRowsHolder.
+bool peelInputEncodings(
+    const SelectivityVector& rows,
+    const SelectivityVector& applyRows,
+    EvalCtx& context,
+    std::vector<VectorPtr>& inputValues,
+    bool isDefaultNullBehavior,
+    LocalSelectivityVector& newRowsHolder,
+    ScopedContextSaver& saver);
+
+/// Release 'inputValues_' back to vector pool in 'evalCtx' so they can be
+/// reused.
+void releaseInputValues(EvalCtx& evalCtx, std::vector<VectorPtr>& inputValues);
+
+/// Evaluate every input and deselect null rows or error rows from the
+/// selectivity vector used to evaluate the next input. The evaluation results
+/// of inputs are kept in inputValues. The output flag tryPeelArgs indicates
+/// input encodings are peelable. The output flag nullResult indicates the
+/// result of the current expression should be all nulls.
+void evaluateInputsAndUpdateRemaningRows(
+    const std::vector<std::shared_ptr<Expr>>& inputs,
+    const SelectivityVector& rows,
+    EvalCtx& context,
+    bool defaultNulls,
+    std::vector<VectorPtr>& inputValues,
+    LocalSelectivityVector& remainingRowsHolder,
+    const SelectivityVector*& remainingRows,
+    bool& tryPeelArgs,
+    bool& nullResult);
+
 // An executable expression.
 class Expr {
  public:
@@ -370,10 +402,6 @@ class Expr {
   void appendInputsSql(
       std::stringstream& stream,
       std::vector<VectorPtr>* FOLLY_NULLABLE complexConstants) const;
-
-  /// Release 'inputValues_' back to vector pool in 'evalCtx' so they can be
-  /// reused.
-  void releaseInputValues(EvalCtx& evalCtx);
 
   /// Returns an instance of CpuWallTimer if cpu usage tracking is enabled. Null
   /// otherwise.

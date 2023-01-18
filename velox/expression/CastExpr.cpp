@@ -23,6 +23,7 @@
 #include <velox/common/base/VeloxException.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/expression/Expr.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -567,6 +568,25 @@ void CastExpr::applyPeeled(
     const TypePtr& fromType,
     const TypePtr& toType,
     VectorPtr& result) {
+  const BaseVector* inputVector = &input;
+  LocalSelectivityVector applyRowsHolder{context};
+  const SelectivityVector* applyRows = &rows;
+
+  // For complex-typed constant vector, peel off the constant encoding.
+  bool complexConstant =
+      !input.type()->isPrimitiveType() && input.isConstantEncoding();
+  if (complexConstant) {
+    inputVector = input.wrappedVector();
+    applyRowsHolder.get(
+        input.as<ConstantVector<ComplexType>>()->valueVector()->size());
+    applyRowsHolder->clearAll();
+    applyRowsHolder->setValid(
+        input.as<ConstantVector<ComplexType>>()->wrappedIndex(rows.begin()),
+        true);
+    applyRowsHolder->updateBounds();
+    applyRows = applyRowsHolder.get();
+  }
+
   if (castFromOperator_ || castToOperator_) {
     VELOX_CHECK_NE(
         fromType,
@@ -576,40 +596,41 @@ void CastExpr::applyPeeled(
 
     if (castToOperator_) {
       castToOperator_->castTo(
-          input, context, rows, nullOnFailure_, toType, result);
+          *inputVector, context, *applyRows, nullOnFailure_, toType, result);
     } else {
       castFromOperator_->castFrom(
-          input, context, rows, nullOnFailure_, toType, result);
+          *inputVector, context, *applyRows, nullOnFailure_, toType, result);
     }
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:
         result = applyMap(
-            rows,
-            input.asUnchecked<MapVector>(),
+            *applyRows,
+            inputVector->asUnchecked<MapVector>(),
             context,
             fromType->asMap(),
             toType->asMap());
         break;
       case TypeKind::ARRAY:
         result = applyArray(
-            rows,
-            input.asUnchecked<ArrayVector>(),
+            *applyRows,
+            inputVector->asUnchecked<ArrayVector>(),
             context,
             fromType->asArray(),
             toType->asArray());
         break;
       case TypeKind::ROW:
         result = applyRow(
-            rows,
-            input.asUnchecked<RowVector>(),
+            *applyRows,
+            inputVector->asUnchecked<RowVector>(),
             context,
             fromType->asRow(),
             toType);
         break;
       case TypeKind::SHORT_DECIMAL:
       case TypeKind::LONG_DECIMAL:
-        result = applyDecimal(rows, input, context, fromType, toType);
+        result =
+            applyDecimal(*applyRows, *inputVector, context, fromType, toType);
         break;
       default: {
         // Handle primitive type conversions.
@@ -618,12 +639,16 @@ void CastExpr::applyPeeled(
             toType->kind(),
             fromType,
             toType,
-            rows,
+            *applyRows,
             context,
-            input,
+            *inputVector,
             result);
       }
     }
+  }
+  if (complexConstant) {
+    result =
+        BaseVector::wrapInConstant(rows.size(), applyRows->begin(), result);
   }
 }
 
@@ -634,81 +659,99 @@ void CastExpr::apply(
     const TypePtr& fromType,
     const TypePtr& toType,
     VectorPtr& result) {
-  LocalDecodedVector decoded(context, *input, rows);
-  auto* rawNulls = decoded->nulls();
+  LocalSelectivityVector newRowsHolder(context);
+  LocalSelectivityVector remainingRowsHolder(context);
+  const SelectivityVector* applyRows = nullptr;
+  const SelectivityVector* remainingRows = nullptr;
 
-  LocalSelectivityVector nonNullRows(*context.execCtx(), rows.end());
-  *nonNullRows = rows;
-  if (rawNulls) {
-    nonNullRows->deselectNulls(rawNulls, rows.begin(), rows.end());
-  }
+  ScopedContextSaver saver;
+  std::vector<VectorPtr> inputValues{input};
+  bool peeled = peelInputEncodings(
+      rows, rows, context, inputValues, true, newRowsHolder, saver);
+  applyRows = peeled ? newRowsHolder.get() : &rows;
 
-  LocalSelectivityVector nullRows(*context.execCtx(), rows.end());
-  nullRows->clearAll();
-  if (rawNulls) {
-    *nullRows = rows;
-    nullRows->deselectNonNulls(rawNulls, rows.begin(), rows.end());
+  // There may be nulls after peeling, so we deselect null rows.
+  bool deselectNulls = false;
+  if (inputValues[0]->mayHaveNulls()) {
+    LocalDecodedVector decoded(context, *inputValues[0], *applyRows);
+    if (auto* rawNulls = decoded->nulls()) {
+      remainingRowsHolder.get(*applyRows);
+      remainingRowsHolder->deselectNulls(
+          rawNulls, applyRows->begin(), applyRows->end());
+      deselectNulls = true;
+    }
   }
+  remainingRows = deselectNulls ? remainingRowsHolder.get() : applyRows;
 
   VectorPtr localResult;
-  if (!nonNullRows->hasSelections()) {
+  if (!remainingRows->hasSelections()) {
     localResult =
         BaseVector::createNullConstant(toType, rows.end(), context.pool());
-  } else if (decoded->isIdentityMapping()) {
-    applyPeeled(
-        *nonNullRows, *decoded->base(), context, fromType, toType, localResult);
-
   } else {
-    ScopedContextSaver saver;
-    LocalSelectivityVector translatedRowsHolder(*context.execCtx());
-
-    if (decoded->isConstantMapping()) {
-      auto index = decoded->index(nonNullRows->begin());
-      singleRow(translatedRowsHolder, index);
-      context.saveAndReset(saver, *nonNullRows);
-      context.setConstantWrap(index);
-    } else {
-      translateToInnerRows(*nonNullRows, *decoded, translatedRowsHolder);
-      context.saveAndReset(saver, *nonNullRows);
-      auto wrapping = decoded->dictionaryWrapping(*input, *nonNullRows);
-      context.setDictionaryWrap(
-          std::move(wrapping.indices), std::move(wrapping.nulls));
-    }
-
     applyPeeled(
-        *translatedRowsHolder,
-        *decoded->base(),
+        *remainingRows,
+        *inputValues[0],
         context,
         fromType,
         toType,
         localResult);
-
-    localResult =
-        context.applyWrapToPeeledResult(toType, localResult, *nonNullRows);
+    if (deselectNulls) {
+      addNulls(
+          *applyRows,
+          remainingRowsHolder->asRange().bits(),
+          context,
+          localResult);
+    }
+  }
+  if (peeled) {
+    localResult = context.applyWrapToPeeledResult(toType, localResult, rows);
   }
   context.moveOrCopyResult(localResult, rows, result);
   context.releaseVector(localResult);
-
-  // If we have a mix of null and non-null in input, add nulls to the result.
-  VELOX_CHECK_NOT_NULL(result);
-  if (nullRows->hasSelections() && nonNullRows->hasSelections()) {
-    Expr::addNulls(
-        rows, nonNullRows->asRange().bits(), context, toType, result);
-  }
 }
 
 void CastExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
-  VectorPtr input;
-  inputs_[0]->eval(rows, context, input);
   auto fromType = inputs_[0]->type();
   auto toType = std::const_pointer_cast<const Type>(type_);
 
-  apply(rows, input, context, fromType, toType, result);
-  // Return 'input' back to the vector pool in 'context' so it can be reused.
-  context.releaseVector(input);
+  // Tracks what subset of rows shall un-evaluated inputs and current expression
+  // evaluates. Initially points to rows.
+  const SelectivityVector* remainingRows = &rows;
+
+  // Points to a mutable remainingRows, allocated using
+  // mutableRemainingRowsHolder only if needed.
+  LocalSelectivityVector mutableRemainingRowsHolder(context);
+
+  bool tryPeelArgs = true;
+  bool defaultNulls = true;
+  bool nullResult = false;
+  evaluateInputsAndUpdateRemaningRows(
+      inputs_,
+      rows,
+      context,
+      defaultNulls,
+      inputValues_,
+      mutableRemainingRowsHolder,
+      remainingRows,
+      tryPeelArgs,
+      nullResult);
+  if (nullResult) {
+    setAllNulls(rows, context, result);
+    return;
+  }
+
+  apply(*remainingRows, inputValues_[0], context, fromType, toType, result);
+
+  // Write non-selected rows in remainingRows as nulls in the result if some
+  // rows have been skipped.
+  if (mutableRemainingRowsHolder.get() != nullptr) {
+    addNulls(
+        rows, mutableRemainingRowsHolder->asRange().bits(), context, result);
+  }
+  releaseInputValues(context, inputValues_);
 }
 
 std::string CastExpr::toString(bool recursive) const {
