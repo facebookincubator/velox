@@ -122,7 +122,7 @@ commands:
       - run:
           name: "Build Benchmarks - << parameters.benchmark_class >>"
           command: |
-            make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make benchmarks-basic-build NUM_THREADS=8 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
             mkdir -p << parameters.binary_output >>
             cp -r --verbose _build/release/velox/benchmarks/basic/* << parameters.binary_output >>
@@ -142,7 +142,7 @@ commands:
       - run:
           name: Build
           command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make debug NUM_THREADS=8 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
           no_output_timeout: 1h
       - run:
@@ -164,7 +164,7 @@ executors:
   build:
     docker:
       - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
-    resource_class: 2xlarge
+    resource_class: xlarge
     environment:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
         CXX: /opt/rh/gcc-toolset-9/root/bin/g++
@@ -244,7 +244,7 @@ jobs:
       - run:
           name: "Build"
           command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+            make debug NUM_THREADS=8 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
             ccache -s
           no_output_timeout: 1h
       - run:
@@ -314,7 +314,7 @@ jobs:
       - run:
           name: Build
           command: |
-            make release NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make release NUM_THREADS=8 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
           no_output_timeout: 1h
       - run:
@@ -332,14 +332,14 @@ jobs:
       - run:
           name: "Build Velox Minimal"
           command: |
-            make min_debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=16
+            make min_debug NUM_THREADS=8 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=16
             ccache -s
           no_output_timeout: 1h
       - run:
           name: "Build Velox Without Testing"
           command: |
             make clean
-            make debug EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_TESTING=OFF" NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=16
+            make debug EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_TESTING=OFF" NUM_THREADS=8 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=16
             ccache -s
           no_output_timeout: 1h
       - post-steps
@@ -374,7 +374,7 @@ jobs:
       - run:
           name: Build including all Benchmarks
           command: |
-            make release EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HDFS=ON -DVELOX_ENABLE_S3=ON -DVELOX_ENABLE_SUBSTRAIT=ON" AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make release EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HDFS=ON -DVELOX_ENABLE_S3=ON -DVELOX_ENABLE_SUBSTRAIT=ON" AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=8 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
           no_output_timeout: 1h
       - run:
@@ -497,7 +497,7 @@ jobs:
   docker-compose-ubuntu-cpp:
     machine: # Use machine executor type to use docker-compose
       image: ubuntu-2204:2022.10.1 # Ubuntu 22.04
-    resource_class: 2xlarge
+    resource_class: xlarge
     steps:
       - checkout
       - update-submodules
@@ -506,7 +506,7 @@ jobs:
           command: docker-compose build ubuntu-cpp
       - run:
           name: "Run ubuntu-cpp image"
-          command: docker-compose run -e NUM_THREADS=16 --rm ubuntu-cpp
+          command: docker-compose run -e NUM_THREADS=8 --rm ubuntu-cpp
 
   docker-compose-centos-cpp:
     machine: # Use machine executor type to use docker-compose
@@ -514,7 +514,7 @@ jobs:
       # the docker-compose container. There are no centos on
       # circle-ci base images
       image: ubuntu-2204:2022.10.1
-    resource_class: 2xlarge
+    resource_class: xlarge
     steps:
       - checkout
       - update-submodules
@@ -523,12 +523,12 @@ jobs:
           command: docker-compose build centos-cpp
       - run:
           name: "Run centos-cpp image"
-          command: docker-compose run -e NUM_THREADS=16 --rm centos-cpp
+          command: docker-compose run -e NUM_THREADS=8 --rm centos-cpp
 
   docker-compose-presto-native:
     machine: # Use machine executor type to use docker-compose
       image: ubuntu-2204:2022.10.1
-    resource_class: 2xlarge
+    resource_class: xlarge
     environment:
       PRESTODB_REPOSITORY: https://github.com/prestodb/presto
     steps:
