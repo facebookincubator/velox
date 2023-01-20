@@ -632,36 +632,54 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
   auto plan = PlanBuilder()
                   .tableScan(ROW({"c0"}, {BIGINT()}))
                   .project({"c0 % 10"})
-                  .partitionedOutputBroadcast(std::vector<std::string>{"p0"})
+                  .partitionedOutputBroadcast({})
                   .planFragment();
-  auto taskId = "single.execution.task.0";
-  auto task = std::make_shared<exec::Task>(
-      taskId, plan, 0, std::make_shared<core::QueryCtx>(driverExecutor_.get()));
   auto bufferManager = PartitionedOutputBufferManager::getInstance();
+  // Test for SUCCESS and NO_OP cases.
   {
-    auto bufferMgrShared = bufferManager.lock();
-    bufferMgrShared->initializeTask(task, true, 2, 2);
+    auto taskId = "single.execution.task.0";
+    auto task = std::make_shared<exec::Task>(
+        taskId,
+        plan,
+        0,
+        std::make_shared<core::QueryCtx>(driverExecutor_.get()));
+    {
+      auto bufferManagerShared = bufferManager.lock();
+      bufferManagerShared->initializeTask(task, true, 2, 2);
+    }
+    ASSERT_EQ(
+        task->updateBroadcastOutputBuffers(10, true /*noMoreBuffers*/),
+        UpdateBroadcastStatus::SUCCESS);
+    // Returns NO_OP as the previous call set noMoreBuffers to true.
+    ASSERT_EQ(
+        task->updateBroadcastOutputBuffers(11, false),
+        UpdateBroadcastStatus::NO_OP);
+    // Task needs to be cleaned up, the test cleanup waits for it.
+    // Refer VectorTestBase::~VectorTestBase().
+    task->requestAbort();
+    auto bufferManagerShared = bufferManager.lock();
+    bufferManagerShared->removeTask(taskId);
   }
-  ASSERT_EQ(
-      task->updateBroadcastOutputBuffers(10, false),
-      UpdateBroadcastStatus::SUCCESS);
 
+  // Test for BUFFERS_NOT_FOUND case.
   {
+    auto taskIdCancelled = "cancelled.execution.task.0";
+    auto taskCancelled = std::make_shared<exec::Task>(
+        taskIdCancelled,
+        plan,
+        0,
+        std::make_shared<core::QueryCtx>(driverExecutor_.get()));
+    auto bufferMgrShared = bufferManager.lock();
+    bufferMgrShared->initializeTask(taskCancelled, true, 2, 2);
     // Mock task cancellation.
-    task->requestCancel();
-    auto bufferMgrShared = bufferManager.lock();
-    bufferMgrShared->removeTask(taskId);
+    taskCancelled->requestCancel();
+    auto bufferManagerShared = bufferManager.lock();
+    bufferManagerShared->removeTask(taskIdCancelled);
+    // Try update after task was cancelled and buffer for that task was removed.
+    ASSERT_EQ(
+        taskCancelled->updateBroadcastOutputBuffers(10, true),
+        UpdateBroadcastStatus::BUFFERS_NOT_FOUND);
   }
-
-  // Try update after task was cancelled and buffer for that task was removed.
-  ASSERT_EQ(
-      task->updateBroadcastOutputBuffers(11, true),
-      UpdateBroadcastStatus::BUFFERS_NOT_FOUND);
-
-  // Returns NO_OP as the previous call set noMoreBuffers to true.
-  ASSERT_EQ(
-      task->updateBroadcastOutputBuffers(11, false),
-      UpdateBroadcastStatus::NO_OP);
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
