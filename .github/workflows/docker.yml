@@ -37,6 +37,14 @@ permissions:
   packages: write
 
 jobs:
+  test:
+    runs-on: "ubuntu-latest-8-cores"
+    steps:
+      - run: echo "Hello, world!"
+test2:
+    runs-on: "8-core"
+    steps:
+      - run: echo "Hello, world!"
   linux:
     runs-on: ubuntu-latest
     steps:
