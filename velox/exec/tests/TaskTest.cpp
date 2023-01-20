@@ -628,7 +628,7 @@ TEST_F(TaskTest, supportsSingleThreadedExecution) {
   ASSERT_FALSE(task->supportsSingleThreadedExecution());
 }
 
-TEST_F(TaskTest, updateBroadCastOutputBuffersTest) {
+TEST_F(TaskTest, updateBroadCastOutputBuffers) {
   auto plan = PlanBuilder()
                   .tableScan(ROW({"c0"}, {BIGINT()}))
                   .project({"c0 % 10"})
@@ -642,18 +642,26 @@ TEST_F(TaskTest, updateBroadCastOutputBuffersTest) {
     auto bufferMgrShared = bufferManager.lock();
     bufferMgrShared->initializeTask(task, true, 2, 2);
   }
+  ASSERT_EQ(
+      task->updateBroadcastOutputBuffers(10, false),
+      UpdateBroadcastStatus::SUCCESS);
 
-  ASSERT_TRUE(task->updateBroadcastOutputBuffers(10, false));
   {
+    // Mock task cancellation.
     task->requestCancel();
     auto bufferMgrShared = bufferManager.lock();
     bufferMgrShared->removeTask(taskId);
   }
-  ASSERT_FALSE(task->updateBroadcastOutputBuffers(11, true));
 
-  // updateBroadCast will return true. Ignores this broadcast call as previously
-  // noMoreBuffers was set to true.
-  ASSERT_TRUE(task->updateBroadcastOutputBuffers(11, false));
+  // Try update after task was cancelled and buffer for that task was removed.
+  ASSERT_EQ(
+      task->updateBroadcastOutputBuffers(11, true),
+      UpdateBroadcastStatus::BUFFERS_NOT_FOUND);
+
+  // Returns NO_OP as the previous call set noMoreBuffers to true.
+  ASSERT_EQ(
+      task->updateBroadcastOutputBuffers(11, false),
+      UpdateBroadcastStatus::NO_OP);
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {

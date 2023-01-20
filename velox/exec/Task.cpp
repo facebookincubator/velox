@@ -1028,27 +1028,29 @@ bool Task::isFinishedLocked() const {
   return (state_ == TaskState::kFinished);
 }
 
-bool Task::updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) {
+UpdateBroadcastStatus Task::updateBroadcastOutputBuffers(
+    int numBuffers,
+    bool noMoreBuffers) {
   auto bufferManager = bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
       bufferManager,
       "Unable to initialize task. "
       "PartitionedOutputBufferManager was already destructed");
-
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (noMoreBroadcastBuffers_) {
       // Ignore messages received after no-more-buffers message.
-      return true;
+      return NO_OP;
     }
-
     if (noMoreBuffers) {
       noMoreBroadcastBuffers_ = true;
     }
   }
-
-  return bufferManager->updateBroadcastOutputBuffers(
-      taskId_, numBuffers, noMoreBuffers);
+  if (bufferManager->updateBroadcastOutputBuffers(
+          taskId_, numBuffers, noMoreBuffers)) {
+    return SUCCESS;
+  }
+  return BUFFERS_NOT_FOUND;
 }
 
 int Task::getOutputPipelineId() const {
