@@ -106,8 +106,9 @@ class DataSink {
   virtual void appendData(VectorPtr input) = 0;
 
   /// Called once after all data has been added via possibly multiple calls to
-  /// appendData(). Could return data in the string form that would be included
-  /// in the output. After calling this function, only close() could be called.
+  /// appendData(). The function might return metadata in string form that would
+  /// be included in the output. After calling this function, only close() could
+  /// be called.
   virtual std::vector<std::string> finish() const = 0;
 
   virtual void close() = 0;

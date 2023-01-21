@@ -238,9 +238,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       pool_ = other.pool_;
       runs_ = std::move(other.runs_);
       numPages_ = other.numPages_;
-      other.numPages_ = 0;
-      other.runs_.clear();
-      other.pool_ = nullptr;
+      other.clear();
       sanityCheck();
     }
 
@@ -250,8 +248,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       pool_ = other.pool_;
       runs_ = std::move(other.runs_);
       numPages_ = other.numPages_;
-      other.numPages_ = 0;
-      other.pool_ = nullptr;
+      other.clear();
     }
 
     MachinePageCount numPages() const {
@@ -326,9 +323,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       pool_ = other.pool_;
       data_ = other.data_;
       size_ = other.size_;
-      other.pool_ = nullptr;
-      other.data_ = nullptr;
-      other.size_ = 0;
+      other.clear();
       sanityCheck();
       return *this;
     }
@@ -337,16 +332,14 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       pool_ = other.pool_;
       data_ = other.data_;
       size_ = other.size_;
-      other.pool_ = nullptr;
-      other.data_ = nullptr;
-      other.size_ = 0;
+      other.clear();
       sanityCheck();
     }
 
     MachinePageCount numPages() const;
 
     template <typename T = uint8_t>
-    T* FOLLY_NULLABLE data() const {
+    T* data() const {
       return reinterpret_cast<T*>(data_);
     }
 
@@ -355,12 +348,13 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       return size_;
     }
 
-    void setPool(MemoryPool* FOLLY_NONNULL pool) {
+    void setPool(MemoryPool* pool) {
       VELOX_CHECK_NOT_NULL(pool);
       VELOX_CHECK_NULL(pool_);
       pool_ = pool;
     }
-    MemoryPool* FOLLY_NULLABLE pool() const {
+
+    MemoryPool* pool() const {
       return pool_;
     }
 
@@ -369,7 +363,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       return size_ == 0;
     }
 
-    void set(void* FOLLY_NULLABLE data, uint64_t size);
+    void set(void* data, uint64_t size);
     void clear();
 
     std::string toString() const;
@@ -380,8 +374,8 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       VELOX_CHECK(size_ != 0 || pool_ == nullptr);
     }
 
-    MemoryPool* FOLLY_NULLABLE pool_{nullptr};
-    void* FOLLY_NULLABLE data_{nullptr};
+    MemoryPool* pool_{nullptr};
+    void* data_{nullptr};
     uint64_t size_{0};
   };
 

@@ -33,14 +33,9 @@ std::shared_ptr<MemoryUsageTracker> MemoryUsageTracker::create(
 }
 
 MemoryUsageTracker::~MemoryUsageTracker() {
-  VELOX_DCHECK_EQ(usedReservationBytes_, 0);
-  if (usedReservationBytes_ != 0) {
-    LOG_EVERY_N(ERROR, kLogEveryN)
-        << "used reservation is not zero " << toString();
-  }
   VELOX_CHECK(
-      (reservationBytes_ == 0) && (grantedReservationBytes_ == 0) &&
-          (minReservationBytes_ == 0),
+      (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
+          (grantedReservationBytes_ == 0) && (minReservationBytes_ == 0),
       "Bad tracker state: {}",
       toString());
 }
@@ -121,6 +116,13 @@ void MemoryUsageTracker::release(uint64_t size) {
       newQuantized = quantizedSize(usedReservationBytes_);
       minReservationBytes_ = 0;
     } else {
+      VELOX_CHECK_GE(
+          usedReservationBytes_,
+          size,
+          "usedReservation_ {} is less than release size {}: {}",
+          usedReservationBytes_,
+          size,
+          toString());
       usedReservationBytes_ -= size;
       const int64_t newUsed = usedReservationBytes_;
       const int64_t newCap = std::max(minReservationBytes_.load(), newUsed);
@@ -192,15 +194,11 @@ void MemoryUsageTracker::decrementReservation(uint64_t size) noexcept {
 
 void MemoryUsageTracker::sanityCheckLocked() const {
   VELOX_CHECK(
-      (grantedReservationBytes_ >= usedReservationBytes_) &&
+      (usedReservationBytes_ >= 0) &&
+          (grantedReservationBytes_ >= usedReservationBytes_) &&
           (grantedReservationBytes_ >= minReservationBytes_),
       "Bad tracker state: {}",
       toString());
-  VELOX_DCHECK_GE(usedReservationBytes_, 0);
-  if (usedReservationBytes_ < 0) {
-    LOG_EVERY_N(ERROR, kLogEveryN)
-        << "used reservation is negative " << toString();
-  }
 }
 
 bool MemoryUsageTracker::maybeReserve(uint64_t increment) {
@@ -228,7 +226,7 @@ void MemoryUsageTracker::checkNonNegativeSizes(const char* errmsg) const {
 
 std::string MemoryUsageTracker::toString() const {
   std::stringstream out;
-  out << "<tracker used " << succinctBytes(currentBytes()) << " available "
+  out << "<tracker " << this << " used " << succinctBytes(currentBytes()) << " available "
       << succinctBytes(availableReservation());
   if (maxMemory() != kMaxMemory) {
     out << " limit " << succinctBytes(maxMemory());

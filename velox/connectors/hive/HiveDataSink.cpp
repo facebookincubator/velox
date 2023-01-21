@@ -37,12 +37,12 @@ std::string makeUuid() {
 }
 
 std::string makePartitionDirectory(
-    const std::string& tableDirectory,
-    const std::optional<std::string>& partitionSubdirectory) {
-  if (partitionSubdirectory.has_value()) {
-    return (fs::path(tableDirectory) / partitionSubdirectory.value()).string();
+    const std::string& tableDir,
+    const std::optional<std::string>& partitionDir) {
+  if (partitionDir.has_value()) {
+    return (fs::path(tableDir) / partitionDir.value()).string();
   }
-  return tableDirectory;
+  return tableDir;
 }
 
 } // namespace
@@ -65,14 +65,14 @@ void HiveDataSink::appendData(VectorPtr input) {
     createWriter(std::nullopt);
   }
   writers_[0]->write(input);
-  writerInfo_[0]->numWrittenRows += input->size();
+  writerInfos_[0]->numWrittenRows += input->size();
 }
 
 std::vector<std::string> HiveDataSink::finish() const {
   std::vector<std::string> partitionUpdates;
-  partitionUpdates.reserve(writerInfo_.size());
+  partitionUpdates.reserve(writerInfos_.size());
 
-  for (const auto& info : writerInfo_) {
+  for (const auto& info : writerInfos_) {
     if (info) {
       // clang-format off
       auto partitionUpdateJson = folly::toJson(
@@ -119,7 +119,8 @@ void HiveDataSink::createWriter(
   // policy is used.
   auto writerParameters = getWriterParameters(partitionName);
 
-  writerInfo_.emplace_back(std::make_shared<HiveWriterInfo>(*writerParameters));
+  writerInfos_.emplace_back(
+      std::make_shared<HiveWriterInfo>(*writerParameters));
 
   auto writePath = fs::path(writerParameters->writeDirectory()) /
       writerParameters->writeFileName();
@@ -130,8 +131,6 @@ void HiveDataSink::createWriter(
 
 std::shared_ptr<const HiveWriterParameters> HiveDataSink::getWriterParameters(
     const std::optional<std::string>& partition) const {
-  auto updateMode = getUpdateMode();
-
   std::string targetFileName;
   std::string writeFileName;
   switch (commitStrategy_) {
@@ -155,11 +154,11 @@ std::shared_ptr<const HiveWriterParameters> HiveDataSink::getWriterParameters(
       break;
     }
     default:
-      VELOX_UNREACHABLE();
+      VELOX_UNREACHABLE(commitStrategyToString(commitStrategy_));
   }
 
   return std::make_shared<HiveWriterParameters>(
-      updateMode,
+      getUpdateMode(),
       partition,
       targetFileName,
       makePartitionDirectory(
@@ -181,7 +180,9 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
         case HiveConfig::InsertExistingPartitionsBehavior::kError:
           return HiveWriterParameters::UpdateMode::kNew;
         default:
-          VELOX_UNSUPPORTED("Unsupported insert existing partitions behavior.");
+          VELOX_UNSUPPORTED(
+              "Unsupported insert existing partitions behavior: {}",
+              static_cast<int>(insertBehavior));
       }
     } else {
       VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");

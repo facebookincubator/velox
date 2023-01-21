@@ -123,6 +123,7 @@ MemoryPoolImpl::MemoryPoolImpl(
 
 MemoryPoolImpl::~MemoryPoolImpl() {
   if (const auto& tracker = getMemoryUsageTracker()) {
+    LOG(ERROR) << "destroy " << name();
     // TODO: change to check reserved bytes which including the unused
     // reservation.
     auto remainingBytes = tracker->currentBytes();
@@ -145,7 +146,17 @@ int64_t MemoryPoolImpl::sizeAlign(int64_t size) {
 void* MemoryPoolImpl::allocate(int64_t size) {
   const auto alignedSize = sizeAlign(size);
   reserve(alignedSize);
-  return allocator_.allocateBytes(alignedSize, alignment_);
+  void* buffer = nullptr;
+  try {
+    buffer = allocator_.allocateBytes(alignedSize, alignment_);
+  } catch (...) {
+    assert(false);
+    exit(-1);
+  }
+  if (buffer == nullptr) {
+    release(alignedSize);
+  }
+  return buffer;
 }
 
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {

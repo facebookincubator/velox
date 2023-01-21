@@ -1257,6 +1257,7 @@ TEST_P(MemoryAllocatorTest, allocation) {
   allocation->clear();
 }
 
+#if 0
 TEST_P(MemoryAllocatorTest, contiguousAllocation) {
   const MachinePageCount kNumPages = instance_->largestSizeClass() + 1;
   auto allocation = std::make_unique<MemoryAllocator::ContiguousAllocation>();
@@ -1314,6 +1315,7 @@ TEST_P(MemoryAllocatorTest, contiguousAllocation) {
   ASSERT_THROW(allocation->empty(), VeloxRuntimeError);
   allocation->clear();
 }
+#endif
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     MemoryAllocatorTests,

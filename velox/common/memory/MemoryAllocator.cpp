@@ -91,11 +91,12 @@ std::string MemoryAllocator::Allocation::toString() const {
 }
 
 MemoryAllocator::ContiguousAllocation::~ContiguousAllocation() {
+  if (size_ != 0 && pool_ == nullptr) {
+    assert(false);
+  }
   if (pool_ != nullptr) {
     pool_->freeContiguous(*this);
-    data_ = nullptr;
     pool_ = nullptr;
-    size_ = 0;
   }
   VELOX_CHECK_NULL(data_);
   VELOX_CHECK_EQ(size_, 0);
@@ -185,7 +186,7 @@ class MemoryAllocatorImpl : public MemoryAllocator {
       Allocation* collateral,
       ContiguousAllocation& allocation,
       ReservationCallback reservationCB = nullptr) override {
-    // VELOX_CHECK_GT(numPages, 0);
+    VELOX_CHECK_GT(numPages, 0);
     bool result;
     stats_.recordAllocate(numPages * kPageSize, 1, [&]() {
       result = allocateContiguousImpl(
@@ -269,6 +270,10 @@ bool MemoryAllocatorImpl::allocateNonContiguous(
     try {
       reservationCB(bytesToAllocate, true);
     } catch (std::exception& e) {
+      LOG(ERROR) << "Failed to reserve " << bytesToAllocate
+                 << " bytes for non-contiguous allocation of " << numPages
+                 << " pages, and release " << freedBytes
+                 << " bytes of the old allocation";
       // If the new memory reservation fails, we need to release the memory
       // reservation of the freed memory of previously allocation.
       reservationCB(freedBytes, false);
@@ -316,6 +321,9 @@ bool MemoryAllocatorImpl::allocateNonContiguous(
     }
     out.clear();
     if (reservationCB != nullptr) {
+      LOG(ERROR)
+          << "Failed to allocate memory for non-contiguous allocation and release "
+          << bytesToAllocate + freedBytes << " bytes of memory reservation";
       reservationCB(bytesToAllocate + freedBytes, false);
     }
     return false;
@@ -358,6 +366,12 @@ bool MemoryAllocatorImpl::allocateContiguousImpl(
     } catch (std::exception& e) {
       // If the new memory reservation fails, we need to release the memory
       // reservation of the freed contiguous and non-contiguous memory.
+      LOG(ERROR) << "Failed to reserve " << numNeededPages * kPageSize
+                 << " bytes for contiguous allocation of " << numPages
+                 << " pages, and release "
+                 << (numCollateralPages + numContiguousCollateralPages) *
+              kPageSize
+                 << " bytes from the old allocations";
       reservationCB(
           (numCollateralPages + numContiguousCollateralPages) * kPageSize,
           false);

@@ -20,6 +20,7 @@
 
 #include "velox/common/base/Portability.h"
 #include "velox/common/testutil/TestValue.h"
+#include <folly/Random.h>
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -94,7 +95,7 @@ bool MmapAllocator::allocateNonContiguous(
           "facebook::velox::memory::MmapAllocator::allocateNonContiguous",
           &success);
     }
-    if (!success) {
+    if (!success || folly::Random::oneIn(4)) {
       // This does not normally happen since any size class can accommodate
       // all the capacity. 'allocatedPages_' must be out of sync.
       LOG(WARNING) << "Failed allocation in size class " << i << " for "
@@ -111,7 +112,7 @@ bool MmapAllocator::allocateNonContiguous(
   if (newMapsNeeded == 0) {
     return true;
   }
-  if (ensureEnoughMappedPages(newMapsNeeded)) {
+  if (ensureEnoughMappedPages(newMapsNeeded) && !folly::Random().oneIn(4)) {
     markAllMapped(out);
     return true;
   }
@@ -233,9 +234,9 @@ bool MmapAllocator::allocateContiguousImpl(
         reservationCB(
             static_cast<int64_t>(totalCollateralPages) * kPageSize, false);
       } catch (const std::exception& inner) {
-        LOG(ERROR)
-            << "Unexpected memory reservation release failure of the freed collateral pages: "
-            << e.what();
+        LOG(ERROR) << "Unexpected memory reservation release failure of "
+                   << totalCollateralPages
+                   << " freed collateral pages: " << e.what();
       };
       numMapped_ -= numCollateralUnmap;
       numExternalMapped_ -= numCollateralUnmap;
@@ -255,8 +256,8 @@ bool MmapAllocator::allocateContiguousImpl(
       } catch (const std::exception& e) {
         // Ignore exception, this is run on failure return path.
         LOG(ERROR)
-            << "Unexpected memory reservation release failure of the allocation rollback: "
-            << e.what();
+            << "Unexpected memory reservation release failure of the allocation rollback of "
+            << numPages << " pages : " << e.what();
       }
     }
     // Incremented by numPages - numLargeCollateralPages. On failure,
@@ -309,6 +310,7 @@ bool MmapAllocator::allocateContiguousImpl(
     }
   }
   if (data == nullptr) {
+    assert(false);
     // If the mmap failed, we have unmapped former 'allocation' and the extra to
     // be mapped.
     rollbackAllocation(numToMap);
@@ -341,7 +343,8 @@ void MmapAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
 void* MmapAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
   alignmentCheck(bytes, alignment);
 
-  if (bytes <= kMaxMallocBytes) {
+    if (bytes <= kMaxMallocBytes) {
+    //if (true) {
     auto* result = alignment > kMinAlignment ? ::aligned_alloc(alignment, bytes)
                                              : ::malloc(bytes);
     if (FOLLY_UNLIKELY(result == nullptr)) {
@@ -379,6 +382,7 @@ void* MmapAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
 
 void MmapAllocator::freeBytes(void* p, uint64_t bytes) noexcept {
   if (bytes <= kMaxMallocBytes) {
+  //  if (true) {
     ::free(p); // NOLINT
     return;
   }

@@ -138,7 +138,8 @@ class HiveWriterParameters {
       case UpdateMode::kOverwrite:
         return "OVERWRITE";
       default:
-        VELOX_UNSUPPORTED("Unsupported update mode.");
+        VELOX_UNSUPPORTED(
+            "Unsupported update mode: {}", static_cast<int>(updateMode));
     }
   }
 
@@ -207,7 +208,7 @@ class HiveDataSink : public DataSink {
   const CommitStrategy commitStrategy_;
   // Parameters used by writers, and thus are tracked in the same order
   // as the writers_ vector
-  std::vector<std::shared_ptr<HiveWriterInfo>> writerInfo_;
+  std::vector<std::shared_ptr<HiveWriterInfo>> writerInfos_;
   std::vector<std::unique_ptr<dwrf::Writer>> writers_;
 };
 
