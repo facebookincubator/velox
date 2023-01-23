@@ -30,7 +30,7 @@ class PartitionedOutputBufferManager;
 
 class HashJoinBridge;
 class CrossJoinBridge;
-enum UpdateBroadcastStatus { SUCCESS, NO_OP, BUFFERS_NOT_FOUND };
+enum UpdateBroadcastStatus { kSuccess, kNoOp, kBuffersNotFound };
 class Task : public std::enable_shared_from_this<Task> {
  public:
   /// Creates a task to execute a plan fragment, but doesn't start execution
@@ -194,9 +194,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// of buffers. No more calls are expected after the call with noMoreBuffers
   /// == true, but occasionally the caller might resend it, so calls
   /// received after a call with noMoreBuffers == true are ignored.
-  /// @return SUCCESS if update was successful.
-  ///         NO_OP if noMoreBuffers was previously set to true.
-  ///         BUFFERS_NOT_FOUND if buffer was not found for a given task.
+  /// @return kSuccess if update was successful.
+  ///         kNoOp if noMoreBuffers was previously set to true.
+  ///         kBuffersNotFound if buffer was not found for a given task.
   UpdateBroadcastStatus updateBroadcastOutputBuffers(
       int numBuffers,
       bool noMoreBuffers);

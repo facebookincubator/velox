@@ -1040,7 +1040,7 @@ UpdateBroadcastStatus Task::updateBroadcastOutputBuffers(
     std::lock_guard<std::mutex> l(mutex_);
     if (noMoreBroadcastBuffers_) {
       // Ignore messages received after no-more-buffers message.
-      return NO_OP;
+      return kNoOp;
     }
     if (noMoreBuffers) {
       noMoreBroadcastBuffers_ = true;
@@ -1048,9 +1048,9 @@ UpdateBroadcastStatus Task::updateBroadcastOutputBuffers(
   }
   if (bufferManager->updateBroadcastOutputBuffers(
           taskId_, numBuffers, noMoreBuffers)) {
-    return SUCCESS;
+    return kSuccess;
   }
-  return BUFFERS_NOT_FOUND;
+  return kBuffersNotFound;
 }
 
 int Task::getOutputPipelineId() const {

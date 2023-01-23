@@ -649,11 +649,11 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
     }
     ASSERT_EQ(
         task->updateBroadcastOutputBuffers(10, true /*noMoreBuffers*/),
-        UpdateBroadcastStatus::SUCCESS);
+        UpdateBroadcastStatus::kSuccess);
     // Returns NO_OP as the previous call set noMoreBuffers to true.
     ASSERT_EQ(
         task->updateBroadcastOutputBuffers(11, false),
-        UpdateBroadcastStatus::NO_OP);
+        UpdateBroadcastStatus::kNoOp);
     // Task needs to be cleaned up, the test cleanup waits for it.
     // Refer VectorTestBase::~VectorTestBase().
     task->requestAbort();
@@ -678,7 +678,7 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
     // Try update after task was cancelled and buffer for that task was removed.
     ASSERT_EQ(
         taskCancelled->updateBroadcastOutputBuffers(10, true),
-        UpdateBroadcastStatus::BUFFERS_NOT_FOUND);
+        UpdateBroadcastStatus::kBuffersNotFound);
   }
 }
 
