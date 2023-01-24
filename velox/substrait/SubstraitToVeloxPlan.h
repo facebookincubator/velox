@@ -108,12 +108,12 @@ class SubstraitVeloxPlanConverter {
   const std::string& findFunction(uint64_t id) const;
 
   /// Substrait emit feature integration. Here a given substrait::RelCommon
-  /// is passed and check if emit is defined for this relation. If so, 
+  /// is passed and check if emit is defined for this relation. If so,
   /// the emit fields are extracted from the relation. To simulate an emit,
   /// a projection is used to pick the fields which is selected to be emitted.
   core::PlanNodePtr processEmit(
-    const ::substrait::RelCommon& relCommon,
-    const core::PlanNodePtr& noEmitNode);
+      const ::substrait::RelCommon& relCommon,
+      const core::PlanNodePtr& noEmitNode);
 
  private:
   /// Returns unique ID to use for plan node. Produces sequential numbers
