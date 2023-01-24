@@ -111,8 +111,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::processEmit(
 
 /// RelCommon related validations evaluated
 void ValidateEmitExclusion(const ::substrait::RelCommon& relCommon) {
-  if(relCommon.has_emit()) {
-    VELOX_FAIL("Emit not supported for ValuesNode and TableScanNode related Substrait plans.");
+  if (relCommon.has_emit()) {
+    VELOX_FAIL(
+        "Emit not supported for ValuesNode and TableScanNode related Substrait plans.");
   }
 }
 
@@ -367,7 +368,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     std::shared_ptr<SplitInfo>& splitInfo) {
   // emit is not allowed in TableScanNode and ValuesNode related
   // outputs
-  if(readRel.has_common()) {
+  if (readRel.has_common()) {
     ValidateEmitExclusion(readRel.common());
   }
   // Get output names and types.
