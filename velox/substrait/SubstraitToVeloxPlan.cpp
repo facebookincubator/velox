@@ -90,17 +90,9 @@ EmitInfo getEmitInfo(
 
 } // namespace
 
-void ValidateEmitNode(const core::PlanNodePtr& planNode) {
-  if (std::dynamic_pointer_cast<const core::ValuesNode>(planNode) ||
-      std::dynamic_pointer_cast<const core::TableScanNode>(planNode)) {
-    VELOX_FAIL("processing Emit not allowed for ValuesNode and TableScanNode");
-  }
-}
-
 core::PlanNodePtr SubstraitVeloxPlanConverter::processEmit(
     const ::substrait::RelCommon& relCommon,
     const core::PlanNodePtr& noEmitNode) {
-  ValidateEmitNode(noEmitNode);
   switch (relCommon.emit_kind_case()) {
     case ::substrait::RelCommon::EmitKindCase::kDirect:
       return noEmitNode;
@@ -114,6 +106,13 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::processEmit(
     }
     default:
       VELOX_FAIL("unrecognized emit kind");
+  }
+}
+
+/// RelCommon related validations evaluated
+void ValidateEmitExclusion(const ::substrait::RelCommon& relCommon) {
+  if(relCommon.has_emit()) {
+    VELOX_FAIL("Emit not supported for ValuesNode and TableScanNode related Substrait plans.");
   }
 }
 
@@ -366,6 +365,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& readRel,
     std::shared_ptr<SplitInfo>& splitInfo) {
+  // emit is not allowed in TableScanNode and ValuesNode related
+  // outputs
+  if(readRel.has_common()) {
+    ValidateEmitExclusion(readRel.common());
+  }
   // Get output names and types.
   std::vector<std::string> colNameList;
   std::vector<TypePtr> veloxTypeList;
