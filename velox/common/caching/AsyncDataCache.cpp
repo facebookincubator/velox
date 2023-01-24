@@ -497,7 +497,8 @@ AsyncDataCache::AsyncDataCache(
     const std::shared_ptr<MemoryAllocator>& allocator,
     uint64_t maxBytes,
     std::unique_ptr<SsdCache> ssdCache)
-    : allocator_(allocator),
+    : memory::MemoryAllocator(memory::MemoryAllocator::Kind::kCache),
+      allocator_(allocator),
       ssdCache_(std::move(ssdCache)),
       cachedPages_(0),
       maxBytes_(maxBytes) {
@@ -612,10 +613,9 @@ bool AsyncDataCache::allocateNonContiguous(
     Allocation& out,
     ReservationCallback reservationCB,
     MachinePageCount minSizeClass) {
-  freeNonContiguous(out);
   return makeSpace(numPages, [&]() {
     return allocator_->allocateNonContiguous(
-        numPages, out, std::move(reservationCB), minSizeClass);
+        numPages, out, reservationCB, minSizeClass);
   });
 }
 
@@ -626,7 +626,7 @@ bool AsyncDataCache::allocateContiguous(
     ReservationCallback reservationCB) {
   return makeSpace(numPages, [&]() {
     return allocator_->allocateContiguous(
-        numPages, collateral, allocation, std::move(reservationCB));
+        numPages, collateral, allocation, reservationCB);
   });
 }
 
