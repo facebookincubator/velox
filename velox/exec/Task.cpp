@@ -1028,9 +1028,7 @@ bool Task::isFinishedLocked() const {
   return (state_ == TaskState::kFinished);
 }
 
-UpdateBroadcastStatus Task::updateBroadcastOutputBuffers(
-    int numBuffers,
-    bool noMoreBuffers) {
+bool Task::updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) {
   auto bufferManager = bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
       bufferManager,
@@ -1040,17 +1038,14 @@ UpdateBroadcastStatus Task::updateBroadcastOutputBuffers(
     std::lock_guard<std::mutex> l(mutex_);
     if (noMoreBroadcastBuffers_) {
       // Ignore messages received after no-more-buffers message.
-      return kNoOp;
+      return false;
     }
     if (noMoreBuffers) {
       noMoreBroadcastBuffers_ = true;
     }
   }
-  if (bufferManager->updateBroadcastOutputBuffers(
-          taskId_, numBuffers, noMoreBuffers)) {
-    return kSuccess;
-  }
-  return kBuffersNotFound;
+  return bufferManager->updateBroadcastOutputBuffers(
+      taskId_, numBuffers, noMoreBuffers);
 }
 
 int Task::getOutputPipelineId() const {
