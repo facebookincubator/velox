@@ -60,7 +60,54 @@ core::SortOrder toSortOrder(const ::substrait::SortField& sortField) {
   }
 }
 
+/// Holds the information required to create
+/// a project node to simulate the emit
+/// behavior in Substrait.
+struct EmitInfo {
+  std::vector<core::TypedExprPtr> expressions;
+  std::vector<std::string> projectNames;
+};
+
+/// Helper function to extract the attributes required to create a ProjectNode
+/// used for interpretting Substrait Emit.
+EmitInfo getEmitInfo(
+    const ::substrait::RelCommon& relCommon,
+    const core::PlanNodePtr& node) {
+  const auto& emit = relCommon.emit();
+  int emitSize = emit.output_mapping_size();
+  EmitInfo emitInfo;
+  emitInfo.projectNames.reserve(emitSize);
+  emitInfo.expressions.reserve(emitSize);
+  const auto& outputType = node->outputType();
+  for (int i = 0; i < emitSize; i++) {
+    int32_t mapId = emit.output_mapping(i);
+    emitInfo.projectNames[i] = outputType->nameOf(mapId);
+    emitInfo.expressions[i] = std::make_shared<core::FieldAccessTypedExpr>(
+        outputType->childAt(mapId), outputType->nameOf(mapId));
+  }
+  return emitInfo;
+}
+
 } // namespace
+
+core::PlanNodePtr SubstraitVeloxPlanConverter::processEmit(
+    const ::substrait::RelCommon& relCommon,
+    const core::PlanNodePtr& noEmitNode) {
+  switch (relCommon.emit_kind_case()) {
+    case ::substrait::RelCommon::EmitKindCase::kDirect:
+      return noEmitNode;
+    case ::substrait::RelCommon::EmitKindCase::kEmit: {
+      auto emitInfo = getEmitInfo(relCommon, noEmitNode);
+      return std::make_shared<core::ProjectNode>(
+          nextPlanNodeId(),
+          std::move(emitInfo.projectNames),
+          std::move(emitInfo.expressions),
+          std::move(noEmitNode));
+    }
+    default:
+      VELOX_FAIL("unrecognized emit kind");
+  }
+}
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::AggregateRel& aggRel) {
@@ -128,7 +175,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     aggOutNames.emplace_back(substraitParser_->makeNodeName(planNodeId_, idx));
   }
 
-  auto noEmitNode = std::make_shared<core::AggregationNode>(
+  auto aggregationNode = std::make_shared<core::AggregationNode>(
       nextPlanNodeId(),
       aggStep,
       veloxGroupingExprs,
@@ -140,9 +187,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       childNode);
 
   if (aggRel.has_common()) {
-    return ProcessEmit(aggRel.common(), std::move(noEmitNode));
+    return processEmit(aggRel.common(), std::move(aggregationNode));
   } else {
-    return noEmitNode;
+    return aggregationNode;
   }
 }
 
@@ -252,16 +299,16 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::FilterRel& filterRel) {
   auto childNode = convertSingleInput<::substrait::FilterRel>(filterRel);
 
-  auto noEmitNode = std::make_shared<core::FilterNode>(
+  auto filterNode = std::make_shared<core::FilterNode>(
       nextPlanNodeId(),
       exprConverter_->toVeloxExpr(
           filterRel.condition(), childNode->outputType()),
       childNode);
 
   if (filterRel.has_common()) {
-    return ProcessEmit(filterRel.common(), std::move(noEmitNode));
+    return processEmit(filterRel.common(), std::move(filterNode));
   } else {
-    return noEmitNode;
+    return filterNode;
   }
 }
 

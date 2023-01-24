@@ -22,11 +22,6 @@
 
 namespace facebook::velox::substrait {
 
-struct EmitInfo {
-  std::vector<core::TypedExprPtr> expressions;
-  std::vector<std::string> projectNames;
-};
-
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
@@ -112,29 +107,13 @@ class SubstraitVeloxPlanConverter {
   /// name>:<arg_type0>_<arg_type1>_..._<arg_typeN>
   const std::string& findFunction(uint64_t id) const;
 
-  /// Substrait emit feature integration. Here a given substrait::Rel is passed
-  /// and check if emit is defined for this relation. If so, the emit fields
-  /// are extracted from the relation. To simulate an emit, a projection is used
-  /// to pick the fields which is selected to be emitted.
-
-  core::PlanNodePtr ProcessEmit(
-      const ::substrait::RelCommon& relCommon,
-      const core::PlanNodePtr& noEmitNode) {
-    switch (relCommon.emit_kind_case()) {
-      case ::substrait::RelCommon::EmitKindCase::kDirect:
-        return noEmitNode;
-      case ::substrait::RelCommon::EmitKindCase::kEmit: {
-        auto emitInfo = GetEmitInfo(relCommon, noEmitNode);
-        return std::make_shared<core::ProjectNode>(
-            nextPlanNodeId(),
-            std::move(emitInfo.projectNames),
-            std::move(emitInfo.expressions),
-            std::move(noEmitNode));
-      }
-      default:
-        VELOX_FAIL("unrecognized emit kind");
-    }
-  }
+  /// Substrait emit feature integration. Here a given substrait::RelCommon
+  /// is passed and check if emit is defined for this relation. If so, 
+  /// the emit fields are extracted from the relation. To simulate an emit,
+  /// a projection is used to pick the fields which is selected to be emitted.
+  core::PlanNodePtr processEmit(
+    const ::substrait::RelCommon& relCommon,
+    const core::PlanNodePtr& noEmitNode);
 
  private:
   /// Returns unique ID to use for plan node. Produces sequential numbers
@@ -155,28 +134,6 @@ class SubstraitVeloxPlanConverter {
   void flattenConditions(
       const ::substrait::Expression& substraitFilter,
       std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions);
-
-  /// Helper function to extract the attributes required to create a ProjectNode
-  /// used for interpretting Substrait Emit.
-  EmitInfo GetEmitInfo(
-      const ::substrait::RelCommon& relCommon,
-      const core::PlanNodePtr& node) {
-    const auto& emit = relCommon.emit();
-    int emitSize = emit.output_mapping_size();
-    std::vector<core::TypedExprPtr> emitExpressions(emitSize);
-    std::vector<std::string> emitProjectNames(emitSize);
-    const auto& outputType = node->outputType();
-    for (int i = 0; i < emitSize; i++) {
-      int32_t mapId = emit.output_mapping(i);
-      emitProjectNames[i] = outputType->nameOf(mapId);
-      emitExpressions[i] = std::make_shared<core::FieldAccessTypedExpr>(
-          outputType->childAt(mapId), outputType->nameOf(mapId));
-    }
-    EmitInfo emitInfo;
-    emitInfo.expressions = std::move(emitExpressions);
-    emitInfo.projectNames = std::move(emitProjectNames);
-    return emitInfo;
-  }
 
   /// The Substrait parser used to convert Substrait representations into
   /// recognizable representations.
