@@ -90,9 +90,17 @@ EmitInfo getEmitInfo(
 
 } // namespace
 
+void ValidateEmitNode(const core::PlanNodePtr& planNode) {
+  if (std::dynamic_pointer_cast<const core::ValuesNode>(planNode) ||
+      std::dynamic_pointer_cast<const core::TableScanNode>(planNode)) {
+    VELOX_FAIL("processing Emit not allowed for ValuesNode and TableScanNode");
+  }
+}
+
 core::PlanNodePtr SubstraitVeloxPlanConverter::processEmit(
     const ::substrait::RelCommon& relCommon,
     const core::PlanNodePtr& noEmitNode) {
+  ValidateEmitNode(noEmitNode);
   switch (relCommon.emit_kind_case()) {
     case ::substrait::RelCommon::EmitKindCase::kDirect:
       return noEmitNode;
