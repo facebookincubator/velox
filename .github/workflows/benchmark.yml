@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Linux Benchmark
+name: "Linux Benchmark"
 
 on:
   pull_request:
@@ -141,7 +141,7 @@ jobs:
 
       - uses: actions/upload-artifact@v3
         with:
-          path: 
-            - "pr_number.txt"
-            - "sha.txt"
+          path: |
+            pr_number.txt
+            sha.txt
           name: "info"
