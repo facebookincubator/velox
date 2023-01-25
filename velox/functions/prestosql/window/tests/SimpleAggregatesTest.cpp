@@ -126,7 +126,29 @@ TEST_F(StringAggregatesTest, nonFixedWidthAggregate) {
   })};
 
   testWindowFunction(input, "min(c2)", kOverClauses);
-  testWindowFunction(input, "max(c2)", kOverClauses);
+  testWindowFunction(input, "max(c2)", kOverClauses, {""}, false);
+}
+
+class DecimalAggregatesTest : public WindowTestBase {};
+
+TEST_F(DecimalAggregatesTest, decimalWindowAggregate) {
+  auto size = 30;
+  auto testAggregate = [&](const TypePtr& type) {
+    auto input = {makeRowVector({
+        makeRandomInputVector(BIGINT(), size, 0.2),
+        makeRandomInputVector(type, size, 0.2),
+        makeFlatVector<int64_t>(size, [](auto row) { return row % 11 + 1; }),
+        makeFlatVector<int64_t>(size, [](auto row) { return row % 13 + 1; }),
+    })};
+
+    testWindowFunction(input, "min(c1)", kOverClauses);
+    testWindowFunction(input, "max(c1)", kOverClauses, {""}, false);
+    testWindowFunction(input, "sum(c1)", kOverClauses, {""}, false);
+    testWindowFunction(input, "count(c1)", kOverClauses, {""}, false);
+  };
+
+  testAggregate(DECIMAL(5, 2));
+  testAggregate(DECIMAL(20, 5));
 }
 
 }; // namespace
