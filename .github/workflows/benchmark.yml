@@ -16,7 +16,6 @@ name: "Linux Benchmark"
 
 on:
   pull_request:
-  # only running on changes to source files would be possible
   push:
     branches: [main]
 
@@ -26,13 +25,14 @@ permissions:
 defaults:
   run:
     shell: bash
-
+#TODO  concurrency groups?
 jobs:
   benchmark:
     runs-on: ubuntu-22.04
     container: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
+      CCACHE_BASEDIR: "${{ github.workspace }}"
       BINARY_DIR: "${{ github.workspace }}/benchmarks/"
       CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
       CONBENCH_HOST: "GitHub-runner"
@@ -41,69 +41,56 @@ jobs:
       BASELINE_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/baseline/"
       TARGET_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/target/"
     steps:
-      - run: |
+      - name: "Setup ccache and python"
+        run: |
             # Set up ccache configs .
             mkdir -p .ccache
             ccache -sz -M 5Gi
+            
+            # We can not use setup-python as we are running in a container
+            apt update
+            apt install -y lsb-release python3 pip
+
       - uses: actions/cache/restore@v3
         id: restore-cache
         with:
           path: ".ccache"
-          key: ccache-benchmark-${{ github.run_id }}
+          key: ccache-benchmark-${{ github.sha }}
           restore-keys: |
             ccache-benchmark-
 
       - name: "Checkout Base"
         uses: actions/checkout@v3
         with:
-          repository: "facebookincubator/velox"
-          ref: "e1fe3ce469d47a2ad1355afa952646b1f098e3a3"
-          path: 'base'
+          path: 'velox'
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           submodules: 'recursive'
 
-      - name: "Checkout Head"
-        uses: actions/checkout@v3
-        with:
-          path: 'head'
-          submodules: 'recursive'
-      
-      - run: |
-          apt update
-          apt install -y lsb-release python3 pip
-
-      # - uses: actions/setup-python@v4
-      #   with:
-      #     python-version: '3.8'
-      #     cache: 'pip'
-      #     cache-dependency-path: 'head/scripts/*'
-      
-      # - name: "Setup Ubuntu"
-      #   run: |
-      #     # install libunwind explicitly to avoid dependecy hell
-      #     # https://bugs.launchpad.net/ubuntu/+source/google-glog/+bug/1991919
-      #     sudo apt install -y libunwind-dev
-
-      #     # Run the setup script from HEAD so changes from PRs are reflected.
-      #     sudo ./head/scripts/setup-ubuntu.sh
-
-      - name: build-benchmarks
+      - name: Build Base Benchmarks
+        working-directory: velox
         run: |
-          build_benchmarks() {
-            echo "::group::Build $2 Benchmarks"
-            pushd $1
             n_cores=$(nproc)
-            # make ccache agnostic to the build directory
-            export CCACHE_BASEDIR=$(pwd)
             make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$((n_cores/2)) MAX_LINK_JOBS=$n_cores
             ccache -s
-            mkdir -p $3
-            cp -r --verbose _build/release/velox/benchmarks/basic/* $3
-            echo "::endgroup::"
-            popd
-          }
+            mkdir -p ${BINARY_DIR}/baseline/
+            cp -r --verbose _build/release/velox/benchmarks/basic/* ${BINARY_DIR}/baseline/
 
-          build_benchmarks base Baseline ${BINARY_DIR}/baseline/
-          build_benchmarks head Target ${BINARY_DIR}/target/
+      - name: "Checkout Head"
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@v3
+        with:
+          path: 'velox'
+          submodules: 'recursive'
+
+      - name: Build Target Benchmarks
+        if: ${{ github.event_name == 'pull_request' }}
+        working-directory: velox
+        run: |
+            n_cores=$(nproc)
+            make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$n_cores MAX_LINK_JOBS=$n_cores
+            ccache -s
+            mkdir -p  ${BINARY_DIR}/target/
+            cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/target/
 
       - uses: actions/cache/save@v3
         if: ${{ github.event_name == 'push' && success() }}
@@ -112,26 +99,38 @@ jobs:
           path: ".ccache"
           key: ccache-benchmark-${{ github.sha }}
 
+      - name: Remove Unchanged Benchmarks
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+            cd ${BINARY_DIR}/baseline/
+            # list all executable files in the directory
+            for file in $(find . -type f -executable); do
+              # compare the files byte bye byte and remove them if they are the same
+              if cmp -s "$file" "../target/$file"; then
+                echo "Removing unchanged benchmark: $file"
+                rm "$file"
+                rm "../target/$file"
+              fi
+            done
+
       - name: "Install benchmark dependencies"
         run: |
-          cd head
+          cd velox
           python3 -m pip install -r scripts/benchmark-requirements.txt
 
       - name: "Run Benchmarks - Full Round"
-        working-directory: 'head'
+        working-directory: 'velox'
         run: |
-            # TODO: For now we just compare the target binary with itself, until we
-            # stabilize benchmark runs. We should eventually have two different
-            # set of binaries.
             make benchmarks-basic-run \
                 EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/baseline/ --output_path ${BASELINE_OUTPUT_PATH}"
-            make benchmarks-basic-run \
-                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/target/ --output_path ${TARGET_OUTPUT_PATH}"
 
-      - name: "Save PR info"
-        run: |
-          echo "${{ github.event.pull_request.number }}" > pr_number.txt
-          echo "${{ github.sha }}" > sha.txt
+            if [ "${{ github.event_name }}" == "pull_request" ]; then
+             make benchmarks-basic-run \
+                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/target/ --output_path ${TARGET_OUTPUT_PATH}"
+            else
+              echo "Copying baseline results to target for upload."
+              cp -r ${BASELINE_OUTPUT_PATH}/* ${TARGET_OUTPUT_PATH}
+            fi 
 
       - uses: actions/upload-artifact@v3
         if: always()
@@ -139,9 +138,3 @@ jobs:
           path: "benchmark-results"
           name: "benchmark-results"
 
-      - uses: actions/upload-artifact@v3
-        with:
-          path: |
-            pr_number.txt
-            sha.txt
-          name: "info"
