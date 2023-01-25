@@ -13,6 +13,11 @@
 # limitations under the License.
 
 on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'workflow run id to use the artifacts from'
+        required: true
   workflow_run:
     workflows: ["Linux Benchmark"]
     types:
@@ -20,23 +25,55 @@ on:
 
 permissions:
   contents: read
+  actions: read
   #TODO comment results to PR
 
 jobs:
   upload:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     steps:
 
-    - uses: actions/download-artifact@v3
+    - name: 'Download artifacts'
+      id: 'download'
+      uses: actions/github-script@v5
       with:
-        path: "benchmark-results"
-        name: "benchmark-results"
+        script: |
+          const run_id = "${{ github.event.workflow_run.id || inputs.run_id }}";
+          let benchmark_run = await github.actions.getWorkflowRun({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            run_id: run_id,
+          });
+
+          let pr_number = benchmark_run.data.pull_requests[0].number || '';
+            
+          core.setOutput('target_sha', benchmark_run.data.head_sha);
+          core.setOutput('pr_number', pr_number);
+
+
+          let artifacts = await github.actions.listWorkflowRunArtifacts({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            run_id: run_id,
+          });
+
+          var matchArtifact = artifacts.data.artifacts.filter((artifact) => {
+            return artifact.name == "benchmark-results"
+          })[0];
+
+          var download = await github.actions.downloadArtifact({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            artifact_id: matchArtifact.id,
+            archive_format: 'zip',
+          });
+          
+          var fs = require('fs');
+          fs.writeFileSync('${{github.workspace}}/benchmark-results.zip', Buffer.from(download.data));
     
-    - uses: actions/download-artifact@v3
-      with:
-        path: "info"
-        name: "info"
+    - uname: Extract artifact
+      run: unzip benchmark-results.zip
 
     - uses: actions/checkout@v3
       with:
@@ -48,12 +85,6 @@ jobs:
     
     - name: "Install dependencies"
       run: python -m pip install -r velox/scripts/benchmark-requirements.txt
-
-    - name: "Extract PR info"
-      id: info
-      run: |
-        echo "::set-output name=pr_number::$(cat info/pr_number.txt)"
-        echo "::set-output name=sha::$(cat info/sha.txt)"
     
     - name: "Upload results"
       env:
@@ -64,6 +95,6 @@ jobs:
       run: |
         ./velox/scripts/benchmark-runner.py upload \
           --run_id "GHA-${{ github.run_id }}-${{ github.run_attempt }}" \
-          --pr_number "${{ steps.info.outputs.pr_number }} \
-          --sha "${{ steps.info.outputs.sha }}" \
+          --pr_number "${{ steps.download.outputs.pr_number }}" \
+          --sha "${{ steps.download.outputs.target_sha }}" \
           --results_root "${{ github.workspace }}/benchmark-results/target/"
