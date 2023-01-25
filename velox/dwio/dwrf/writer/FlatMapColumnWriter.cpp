@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/writer/FlatMapColumnWriter.h"
+#include <velox/dwio/dwrf/writer/StatisticsBuilder.h>
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
@@ -59,7 +60,8 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
     : BaseColumnWriter{context, type, sequence, nullptr},
       keyType_{*type.childAt(0)},
       valueType_{*type.childAt(1)},
-      maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)} {
+      maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)},
+      collectMapStats_{context.getConfig(Config::MAP_STATISTICS)} {
   auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
   keyFileStatsBuilder_ =
       std::unique_ptr<typename TypeInfo<K>::StatisticsBuilder>(
@@ -97,6 +99,23 @@ void FlatMapColumnWriter<K>::flush(
     pair.second.flush(encodingFactory);
   }
 
+  if (collectMapStats_) {
+    // Need to record and clear per stripe due to sequence to key instability
+    auto& physicalSizeAgg = dynamic_cast<MapPhysicalSizeAggregator&>(
+        context_.getPhysicalSizeAggregator(id_));
+    // Only top level value column streams have keys in their encodings. We
+    // could only identify streams from nested value column with sequence.
+    folly::F14FastMap<uint32_t, const proto::KeyInfo&> sequenceToKey{};
+    for (auto& pair : valueWriters_) {
+      auto& valueWriter = pair.second;
+      sequenceToKey.emplace(
+          valueWriter.getSequence(), valueWriter.getKeyInfo());
+    }
+    physicalSizeAgg.prepare(
+        sequenceToKey,
+        dynamic_cast<MapStatisticsBuilder*>(fileStatsBuilder_.get()));
+  }
+
   // Reset is being called after flush, so no need to explicitly
   // reset internal stripe state
 }
@@ -120,15 +139,14 @@ uint64_t FlatMapColumnWriter<K>::writeFileStats(
     std::function<proto::ColumnStatistics&(uint32_t)> statsFactory) const {
   auto& stats = statsFactory(id_);
   fileStatsBuilder_->toProto(stats);
-  uint64_t size = context_.getNodeSize(id_);
+  uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();
 
   auto& keyStats = statsFactory(keyType_.id);
   keyFileStatsBuilder_->toProto(keyStats);
-  auto keySize = context_.getNodeSize(keyType_.id);
+  auto keySize = context_.getPhysicalSizeAggregator(keyType_.id).getResult();
   keyStats.set_size(keySize);
 
-  size += keySize;
-  size += valueFileStatsBuilder_->writeFileStats(statsFactory);
+  valueFileStatsBuilder_->writeFileStats(statsFactory);
   stats.set_size(size);
   return size;
 }
