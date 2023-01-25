@@ -86,7 +86,7 @@ void Connector::unregisterTracker(cache::ScanTracker* tracker) {
 std::shared_ptr<cache::ScanTracker> Connector::getTracker(
     const std::string& scanId,
     int32_t loadQuantum) {
-  return trackers_.withWLock([&](auto& trackers) -> auto {
+  return trackers_.withWLock([&](auto& trackers) -> auto{
     auto it = trackers.find(scanId);
     if (it == trackers.end()) {
       auto newTracker = std::make_shared<cache::ScanTracker>(
@@ -111,7 +111,8 @@ std::string commitStrategyToString(CommitStrategy commitStrategy) {
     case CommitStrategy::kTaskCommit:
       return "TASK_COMMIT";
     default:
-      VELOX_UNREACHABLE();
+      return fmt::format(
+          "UNKNOWN COMMIT STRATEGY: {}", static_cast<int>(commitStrategy));
   }
 }
 
