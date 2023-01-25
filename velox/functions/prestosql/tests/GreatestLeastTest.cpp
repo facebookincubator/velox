@@ -63,22 +63,18 @@ TEST_F(GreatestLeastTest, leastDouble) {
 }
 
 TEST_F(GreatestLeastTest, nanInput) {
+  std::vector<double> input{0, 1.1, std::nan("1")};
   assertUserInvalidArgument(
       [&]() { runTest<double>("least(c0)", {{0.0 / 0.0}}, {0}); },
       "Invalid argument to least(): NaN");
+  runTest<double>("try(least(c0, 1.0))", {input}, {0, 1.0, std::nullopt});
 
   assertUserInvalidArgument(
       [&]() {
         runTest<double>("greatest(c0)", {1, {0.0 / 0.0}}, {1, 0});
       },
       "Invalid argument to greatest(): NaN");
-}
-
-TEST_F(GreatestLeastTest, tryWithNan) {
-    runTest<double>("try(least(c0, 1.0))", {{0, 1.1, std::nan("1")}},
-                    { 0, 1.0, std::nullopt});
-    runTest<double>("try(greatest(c0, 1.0))", {{0, 1.1, std::nan("1")}},
-                    { 1.0, 1.1, std::nullopt});
+  runTest<double>("try(greatest(c0, 1.0))", {input}, {1.0, 1.1, std::nullopt});
 }
 
 TEST_F(GreatestLeastTest, greatestDouble) {
