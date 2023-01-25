@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <exception>
 #include <functional>
 
 #include "velox/common/base/Portability.h"
@@ -87,18 +88,39 @@ class EvalCtx {
       const SelectivityVector& rows,
       const std::exception_ptr& exceptionPtr);
 
+  /// If exceptionPtr represents an std::exception, convert it to VeloxUserError
+  /// to add useful context for debugging.
+  std::exception_ptr toVeloxException(const std::exception_ptr& exceptionPtr) {
+    try {
+      std::rethrow_exception(exceptionPtr);
+    } catch (const VeloxException& e) {
+      return exceptionPtr;
+    } catch (const std::exception& e) {
+      return std::make_exception_ptr(
+          VeloxUserError(std::current_exception(), e.what(), false));
+    }
+  }
+
   /// Invokes a function on each selected row. Records per-row exceptions by
   /// calling 'setError'. The function must take a single "row" argument of type
   /// vector_size_t and return void.
   template <typename Callable>
   void applyToSelectedNoThrow(const SelectivityVector& rows, Callable func) {
-    rows.template applyToSelected([&](auto row) INLINE_LAMBDA {
+    if (throwOnError()) {
       try {
-        func(row);
-      } catch (const std::exception& e) {
-        setError(row, std::current_exception());
+        rows.applyToSelected([&](vector_size_t i) INLINE_LAMBDA { func(i); });
+      } catch (...) {
+        std::rethrow_exception(toVeloxException(std::current_exception()));
       }
-    });
+    } else {
+      rows.applyToSelected([&](vector_size_t i) {
+        try {
+          func(i);
+        } catch (...) {
+          addError(i, toVeloxException(std::current_exception()), errors_);
+        }
+      });
+    }
   }
 
   // Error vector uses an opaque flat vector to store std::exception_ptr.
