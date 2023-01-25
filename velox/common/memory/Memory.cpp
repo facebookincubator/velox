@@ -62,8 +62,7 @@ uint64_t MemoryPool::getChildCount() const {
   return children_.size();
 }
 
-void MemoryPool::visitChildren(
-    std::function<void(MemoryPool* FOLLY_NONNULL)> visitor) const {
+void MemoryPool::visitChildren(std::function<void(MemoryPool*)> visitor) const {
   folly::SharedMutex::ReadHolder guard{childrenMutex_};
   for (const auto& child : children_) {
     visitor(child);
@@ -388,6 +387,10 @@ uint16_t MemoryManager::alignment() const {
 
 MemoryPool& MemoryManager::getRoot() const {
   return *root_;
+}
+
+std::shared_ptr<MemoryPool> MemoryManager::getRootAsSharedPtr() const {
+  return root_;
 }
 
 std::shared_ptr<MemoryPool> MemoryManager::getChild(int64_t cap) {

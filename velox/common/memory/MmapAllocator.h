@@ -62,9 +62,11 @@ class MmapAllocator : public MemoryAllocator {
     int32_t mmapArenaCapacityRatio = 10;
   };
 
-  enum class Failure { kNone, kMadvise, kMmap };
-
   explicit MmapAllocator(const Options& options);
+
+  Kind kind() const override {
+    return kind_;
+  }
 
   bool allocateNonContiguous(
       MachinePageCount numPages,
@@ -118,10 +120,19 @@ class MmapAllocator : public MemoryAllocator {
     return numMapped_;
   }
 
-  /// Causes 'failure' to occur in next call. This is a test-only function for
-  /// validating otherwise unreachable error paths.
-  void testingInjectFailure(Failure failure) {
+  /// Causes 'failure' to occur in memory allocation calls. This is a test-only
+  /// function for validating otherwise unreachable error paths. If 'persistent'
+  /// is false, then we only inject failure once in the next call. Otherwise, we
+  /// keep injecting failures until next 'testingClearFailureInjection' call.
+  enum class Failure { kNone, kMadvise, kMmap, kAllocate };
+  void testingSetFailureInjection(Failure failure, bool persistent = false) {
     injectedFailure_ = failure;
+    isPersistentFailureInjection_ = persistent;
+  }
+
+  void testingClearFailureInjection() {
+    injectedFailure_ = MmapAllocator::Failure::kNone;
+    isPersistentFailureInjection_ = false;
   }
 
   MachinePageCount numExternalMapped() const {
@@ -320,6 +331,8 @@ class MmapAllocator : public MemoryAllocator {
   // advises them away. Returns the number of pages advised away.
   MachinePageCount adviseAway(MachinePageCount target);
 
+  const Kind kind_;
+
   // If set true, allocations larger than the largest size class size will be
   // delegated to ManagedMmapArena. Otherwise, a system mmap call will be
   // issued for each such allocation.
@@ -358,8 +371,13 @@ class MmapAllocator : public MemoryAllocator {
   std::mutex arenaMutex_;
   std::unique_ptr<ManagedMmapArenas> managedArenas_;
 
-  Failure injectedFailure_{Failure::kNone};
   Stats stats_;
+
+  // Indicates if the failure injection is persistent or transient only once.
+  //
+  // NOTE: this is only used for testing purpose.
+  Failure injectedFailure_{Failure::kNone};
+  bool isPersistentFailureInjection_{false};
 };
 
 } // namespace facebook::velox::memory

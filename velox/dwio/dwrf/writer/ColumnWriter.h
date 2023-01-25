@@ -79,7 +79,9 @@ class BaseColumnWriter : public ColumnWriter {
 
   void createIndexEntry() override {
     hasNull_ = hasNull_ || indexStatsBuilder_->hasNull().value();
-    fileStatsBuilder_->merge(*indexStatsBuilder_);
+    // We cannot determine the physical size of columns/nodes until flush
+    // time, yet we need to maintain and aggregate logical stats.
+    fileStatsBuilder_->merge(*indexStatsBuilder_, /*ignoreSize=*/true);
     indexBuilder_->addEntry(*indexStatsBuilder_);
     indexStatsBuilder_->reset();
     recordPosition();
@@ -121,9 +123,9 @@ class BaseColumnWriter : public ColumnWriter {
                               statsFactory) const override {
     auto& stats = statsFactory(id_);
     fileStatsBuilder_->toProto(stats);
-    uint64_t size = context_.getNodeSize(id_);
+    uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();
     for (auto& child : children_) {
-      size += child->writeFileStats(statsFactory);
+      child->writeFileStats(statsFactory);
     }
     stats.set_size(size);
     return size;

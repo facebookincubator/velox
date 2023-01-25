@@ -176,10 +176,6 @@ std::unique_ptr<ExchangeSource> createLocalExchangeSource(
 
 } // namespace
 
-void ExchangeClient::initialize(memory::MemoryPool* FOLLY_NONNULL pool) {
-  pool_ = pool;
-}
-
 void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   std::shared_ptr<ExchangeSource> toRequest;
   std::shared_ptr<ExchangeSource> toClose;
@@ -372,7 +368,7 @@ RowVectorPtr Exchange::getOutput() {
     currentPage_->prepareStreamForDeserialize(inputStream_.get());
   }
 
-  VectorStreamGroup::read(
+  getSerde()->deserialize(
       inputStream_.get(), operatorCtx_->pool(), outputType_, &result_);
 
   {
@@ -388,6 +384,10 @@ RowVectorPtr Exchange::getOutput() {
   }
 
   return result_;
+}
+
+VectorSerde* Exchange::getSerde() {
+  return getVectorSerde();
 }
 
 VELOX_REGISTER_EXCHANGE_SOURCE_METHOD_DEFINITION(

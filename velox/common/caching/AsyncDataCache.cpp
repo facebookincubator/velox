@@ -612,10 +612,9 @@ bool AsyncDataCache::allocateNonContiguous(
     Allocation& out,
     ReservationCallback reservationCB,
     MachinePageCount minSizeClass) {
-  freeNonContiguous(out);
   return makeSpace(numPages, [&]() {
     return allocator_->allocateNonContiguous(
-        numPages, out, std::move(reservationCB), minSizeClass);
+        numPages, out, reservationCB, minSizeClass);
   });
 }
 
@@ -626,7 +625,7 @@ bool AsyncDataCache::allocateContiguous(
     ReservationCallback reservationCB) {
   return makeSpace(numPages, [&]() {
     return allocator_->allocateContiguous(
-        numPages, collateral, allocation, std::move(reservationCB));
+        numPages, collateral, allocation, reservationCB);
   });
 }
 

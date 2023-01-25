@@ -44,7 +44,7 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
 velox::memory::MemoryPool* FOLLY_NONNULL DriverCtx::addOperatorPool(
     const core::PlanNodeId& planNodeId,
     const std::string& operatorType) {
-  return task->addOperatorPool(planNodeId, pipelineId, operatorType);
+  return task->addOperatorPool(planNodeId, pipelineId, driverId, operatorType);
 }
 
 std::atomic_uint64_t BlockingState::numBlockedDrivers_{0};
@@ -471,6 +471,15 @@ void Driver::run(std::shared_ptr<Driver> self) {
       nullResult,
       "The last operator (sink) must not produce any results. "
       "Results need to be consumed by either a callback or another operator. ")
+
+  // There can be a race between Task terminating and the Driver being on the
+  // thread and exiting the runInternal() in a blocked state. If this happens
+  // the Driver won't be closed, so we need to check the Task here and exit w/o
+  // going into the resume mode waiting on a promise.
+  if (reason == StopReason::kBlock &&
+      self->task()->shouldStop() == StopReason::kTerminate) {
+    return;
+  }
 
   switch (reason) {
     case StopReason::kBlock:

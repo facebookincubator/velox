@@ -108,6 +108,8 @@ class AsyncDataCacheTest : public testing::Test {
         filenames_.push_back(StringIdLease(fileIds(), name));
       }
     }
+    ASSERT_EQ(cache_->kind(), MemoryAllocator::Kind::kMmap);
+    ASSERT_EQ(MemoryAllocator::kindString(cache_->kind()), "MMAP");
   }
 
   // Finds one entry from RAM, SSD or storage. Throws if the data

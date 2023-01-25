@@ -71,6 +71,7 @@ void registerArrayFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, "zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, "zip_with");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, "array_position");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_shuffle, "shuffle");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sort, "array_sort");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sum, "array_sum");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_repeat, "repeat");
@@ -99,6 +100,9 @@ void registerArrayFunctions() {
   registerArrayJoinFunctions<Varchar>();
   registerArrayJoinFunctions<Timestamp>();
   registerArrayJoinFunctions<Date>();
+
+  registerFunction<ArrayAverageFunction, double, Array<double>>(
+      {"array_average"});
 
   registerArrayCombinationsFunctions<int8_t>();
   registerArrayCombinationsFunctions<int16_t>();

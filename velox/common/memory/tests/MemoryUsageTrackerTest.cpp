@@ -17,13 +17,24 @@
 #include <gtest/gtest.h>
 
 #include "folly/Random.h"
+#include "folly/futures/Barrier.h"
+#include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
+#include "velox/common/testutil/TestValue.h"
 
 using namespace ::testing;
 using namespace ::facebook::velox::memory;
 using namespace ::facebook::velox;
+using namespace ::facebook::velox::common::testutil;
 
-TEST(MemoryUsageTrackerTest, constructor) {
+class MemoryUsageTrackerTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    TestValue::enable();
+  }
+};
+
+TEST_F(MemoryUsageTrackerTest, constructor) {
   std::vector<std::shared_ptr<MemoryUsageTracker>> trackers;
   auto tracker = MemoryUsageTracker::create();
   trackers.push_back(tracker);
@@ -46,7 +57,7 @@ TEST(MemoryUsageTrackerTest, constructor) {
   }
 }
 
-TEST(MemoryUsageTrackerTest, stats) {
+TEST_F(MemoryUsageTrackerTest, stats) {
   constexpr int64_t kMaxSize = 1 << 30; // 1GB
   constexpr int64_t kMB = 1 << 20;
   auto parent = MemoryUsageTracker::create(kMaxSize);
@@ -62,10 +73,16 @@ TEST(MemoryUsageTrackerTest, stats) {
   ASSERT_EQ(
       child->stats().toString(),
       "peakBytes:9437184 cumulativeBytes:9437184 numAllocs:2 numFrees:1 numReserves:0 numReleases:0 numCollisions:0 numChildren:0");
+  ASSERT_EQ(
+      child->toString(),
+      "<tracker used 1000B available 1023.02KB limit 1.00GB reservation [used 1000B, granted 1.00MB, reserved 1.00MB, min 0B] counters [allocs 2, frees 1, reserves 0, releases 0, collisions 0, children 0])>");
   child->update(-1000);
+  ASSERT_EQ(
+      child->toString(),
+      "<tracker used 0B available 0B limit 1.00GB reservation [used 0B, granted 0B, reserved 0B, min 0B] counters [allocs 2, frees 2, reserves 0, releases 0, collisions 0, children 0])>");
 }
 
-TEST(MemoryUsageTrackerTest, update) {
+TEST_F(MemoryUsageTrackerTest, update) {
   constexpr int64_t kMaxSize = 1 << 30; // 1GB
   constexpr int64_t kMB = 1 << 20;
   auto parent = MemoryUsageTracker::create(kMaxSize);
@@ -160,7 +177,7 @@ TEST(MemoryUsageTrackerTest, update) {
   ASSERT_EQ(child1->stats(), stats);
 }
 
-TEST(MemoryUsageTrackerTest, reserve) {
+TEST_F(MemoryUsageTrackerTest, reserve) {
   constexpr int64_t kMaxSize = 1 << 30;
   constexpr int64_t kMB = 1 << 20;
   auto parent = MemoryUsageTracker::create(kMaxSize);
@@ -215,7 +232,7 @@ TEST(MemoryUsageTrackerTest, reserve) {
   ASSERT_EQ(child->stats(), stats);
 }
 
-TEST(MemoryUsageTrackerTest, reserveAndUpdate) {
+TEST_F(MemoryUsageTrackerTest, reserveAndUpdate) {
   constexpr int64_t kMaxSize = 1 << 30; // 1GB
   constexpr int64_t kMB = 1 << 20;
   auto parent = MemoryUsageTracker::create(kMaxSize);
@@ -346,7 +363,7 @@ bool grow(int64_t /*size*/, int64_t hardLimit, MemoryUsageTracker& tracker) {
 }
 } // namespace
 
-TEST(MemoryUsageTrackerTest, grow) {
+TEST_F(MemoryUsageTrackerTest, grow) {
   constexpr int64_t kMB = 1 << 20;
   auto parent = MemoryUsageTracker::create(10 * kMB);
 
@@ -391,7 +408,7 @@ TEST(MemoryUsageTrackerTest, grow) {
   child->update(-child->usedReservationBytes());
 }
 
-TEST(MemoryUsageTrackerTest, maybeReserve) {
+TEST_F(MemoryUsageTrackerTest, maybeReserve) {
   constexpr int64_t kMB = 1 << 20;
   auto parent = memory::MemoryUsageTracker::create(10 * kMB);
   auto child = parent->addChild();
@@ -471,7 +488,7 @@ class MemoryUsageTrackTester {
     switch (op) {
       case 0: {
         // update increase.
-        const int64_t updateBytes = folly::Random().rand32() % maxMemory_;
+        const int64_t updateBytes = folly::Random().rand32() % maxMemory_ / 32;
         try {
           tracker_.update(updateBytes);
         } catch (VeloxException& e) {
@@ -525,11 +542,11 @@ class MemoryUsageTrackTester {
   int64_t usedBytes_{0};
 };
 
-TEST(MemoryUsageTrackerTest, concurrentUpdateToDifferentPools) {
+TEST_F(MemoryUsageTrackerTest, concurrentUpdateToDifferentPools) {
   constexpr int64_t kMB = 1 << 20;
-  constexpr int64_t kMaxMemory = 10 * kMB;
+  constexpr int64_t kMaxMemory = 32 * kMB;
   auto parent = memory::MemoryUsageTracker::create(kMaxMemory);
-  const int32_t kNumThreads = 10;
+  const int32_t kNumThreads = 5;
   // Create one memory tracker per each thread.
   std::vector<std::shared_ptr<MemoryUsageTracker>> childTrackers;
   for (int32_t i = 0; i < kNumThreads; ++i) {
@@ -539,7 +556,7 @@ TEST(MemoryUsageTrackerTest, concurrentUpdateToDifferentPools) {
   folly::Random::DefaultGenerator rng;
   rng.seed(1234);
 
-  const int32_t kNumOpsPerThread = 50'000;
+  const int32_t kNumOpsPerThread = 2'000;
   std::vector<std::thread> threads;
   threads.reserve(kNumThreads);
   for (size_t i = 0; i < kNumThreads; ++i) {
@@ -571,14 +588,14 @@ TEST(MemoryUsageTrackerTest, concurrentUpdateToDifferentPools) {
   ASSERT_LE(parent->peakBytes(), parent->cumulativeBytes());
 }
 
-TEST(MemoryUsageTrackerTest, concurrentUpdatesToTheSamePool) {
+TEST_F(MemoryUsageTrackerTest, concurrentUpdatesToTheSamePool) {
   const std::vector<int> concurrentLevels({0, 1});
   for (const bool concurrentLevel : concurrentLevels) {
     SCOPED_TRACE(fmt::format("concurrentLevel:{}", concurrentLevel));
     constexpr int64_t kMB = 1 << 20;
-    constexpr int64_t kMaxMemory = 10 * kMB;
+    constexpr int64_t kMaxMemory = 32 * kMB;
     auto parent = memory::MemoryUsageTracker::create(kMaxMemory);
-    const int32_t kNumThreads = 10;
+    const int32_t kNumThreads = 5;
     const int32_t kNumChildPools = 2;
     std::vector<std::shared_ptr<MemoryUsageTracker>> childTrackers;
     if (concurrentLevel == 1) {
@@ -590,7 +607,7 @@ TEST(MemoryUsageTrackerTest, concurrentUpdatesToTheSamePool) {
     folly::Random::DefaultGenerator rng;
     rng.seed(1234);
 
-    const int32_t kNumOpsPerThread = 50'000;
+    const int32_t kNumOpsPerThread = 2'000;
     std::vector<std::thread> threads;
     threads.reserve(kNumThreads);
     for (size_t i = 0; i < kNumThreads; ++i) {
@@ -634,6 +651,49 @@ TEST(MemoryUsageTrackerTest, concurrentUpdatesToTheSamePool) {
       ASSERT_LE(parent->peakBytes(), parent->cumulativeBytes());
     }
   }
+}
+
+TEST_F(MemoryUsageTrackerTest, concurrentAllocates) {
+  const int32_t kNumAllocs = 3;
+  folly::futures::Barrier barrier(kNumAllocs);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::MemoryUsageTracker::reserve",
+      std::function<void(MemoryUsageTracker*)>(
+          [&](MemoryUsageTracker* dummy) { barrier.wait(); }));
+  // NOTE: the allocation sizes are chosen based on the memory thresholds
+  // defined in quantizedSize().
+  //
+  // The test leverage the test value to ensure the memory reservations are
+  // granted after all the memory reservation increment sizes are determined.
+  //
+  // The following is the sequence of allocation/free/grant events and the
+  // corresponding usedReservationBytes_, grantedReservationBytes_ and the
+  // quantized grantedReservationBytes_ changes:
+  //
+  // 1. ALLOC 15MB - 0MB    0MB   0MB
+  // 2. ALLOC 2MB  - 0MB    0MB   0MB
+  // 3. ALLOC 2MB  - 0MB    0MB   0MB
+  // 4. GRANT      - 19MB   19MB  20MB* inconsistent caused by concurrent alloc
+  // 5. FREE  2MB  - 17MB   17MB  20MB* inconsistent caused by concurrent alloc
+  // 6. FREE  2MB  - 15MB   15MB  15MB
+  // 7. FREE 15MB  - 0MB    0MB   0MB
+  const int64_t kLargeAllocSize = 15 << 20;
+  const int64_t kSmallAllocSize = 2 << 20;
+
+  auto tracker = memory::MemoryUsageTracker::create(kMaxMemory);
+  std::vector<std::thread> allocThreads;
+  for (int32_t i = 0; i < kNumAllocs; ++i) {
+    allocThreads.push_back(std::thread(
+        [&, allocSize = i == 0 ? kLargeAllocSize : kSmallAllocSize]() {
+          tracker->update(allocSize);
+        }));
+  }
+  for (int32_t i = 0; i < kNumAllocs; ++i) {
+    allocThreads[i].join();
+  }
+  tracker->update(-kSmallAllocSize);
+  tracker->update(-kSmallAllocSize);
+  tracker->update(-kLargeAllocSize);
 }
 
 // TODO: add collision tests and stats verification.

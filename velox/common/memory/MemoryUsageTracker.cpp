@@ -16,8 +16,15 @@
 
 #include "velox/common/memory/MemoryUsageTracker.h"
 #include "velox/common/base/SuccinctPrinter.h"
+#include "velox/common/testutil/TestValue.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
+namespace {
+constexpr int32_t kLogEveryN = 32;
+}
+
 std::shared_ptr<MemoryUsageTracker> MemoryUsageTracker::create(
     const std::shared_ptr<MemoryUsageTracker>& parent,
     int64_t maxMemory) {
@@ -26,10 +33,16 @@ std::shared_ptr<MemoryUsageTracker> MemoryUsageTracker::create(
 }
 
 MemoryUsageTracker::~MemoryUsageTracker() {
-  VELOX_CHECK_EQ(usedReservationBytes_, 0);
-  VELOX_CHECK_EQ(reservationBytes_, 0);
-  VELOX_DCHECK_EQ(grantedReservationBytes_, 0);
-  VELOX_DCHECK_EQ(minReservationBytes_, 0);
+  VELOX_DCHECK_EQ(usedReservationBytes_, 0);
+  if (usedReservationBytes_ != 0) {
+    LOG_EVERY_N(ERROR, kLogEveryN)
+        << "used reservation is not zero " << toString();
+  }
+  VELOX_CHECK(
+      (reservationBytes_ == 0) && (grantedReservationBytes_ == 0) &&
+          (minReservationBytes_ == 0),
+      "Bad tracker state: {}",
+      toString());
 }
 
 void MemoryUsageTracker::update(int64_t size) {
@@ -76,6 +89,8 @@ void MemoryUsageTracker::reserve(uint64_t size, bool reserveOnly) {
         break;
       }
     }
+    TestValue::adjust(
+        "facebook::velox::memory::MemoryUsageTracker::reserve", this);
     incrementReservation(increment);
   }
 
@@ -111,14 +126,13 @@ void MemoryUsageTracker::release(uint64_t size) {
       const int64_t newCap = std::max(minReservationBytes_.load(), newUsed);
       newQuantized = quantizedSize(newCap);
     }
-    VELOX_CHECK_GE(grantedReservationBytes_, newQuantized);
     freeable = grantedReservationBytes_ - newQuantized;
     if (freeable > 0) {
       grantedReservationBytes_ = newQuantized;
     }
     sanityCheckLocked();
   }
-  if (freeable != 0) {
+  if (freeable > 0) {
     decrementReservation(freeable);
   }
 }
@@ -177,8 +191,16 @@ void MemoryUsageTracker::decrementReservation(uint64_t size) noexcept {
 }
 
 void MemoryUsageTracker::sanityCheckLocked() const {
-  VELOX_CHECK_GE(grantedReservationBytes_, usedReservationBytes_);
-  VELOX_CHECK_GE(grantedReservationBytes_, minReservationBytes_);
+  VELOX_CHECK(
+      (grantedReservationBytes_ >= usedReservationBytes_) &&
+          (grantedReservationBytes_ >= minReservationBytes_),
+      "Bad tracker state: {}",
+      toString());
+  VELOX_DCHECK_GE(usedReservationBytes_, 0);
+  if (usedReservationBytes_ < 0) {
+    LOG_EVERY_N(ERROR, kLogEveryN)
+        << "used reservation is negative " << toString();
+  }
 }
 
 bool MemoryUsageTracker::maybeReserve(uint64_t increment) {
@@ -201,20 +223,24 @@ void MemoryUsageTracker::maybeUpdatePeakBytes(int64_t newPeak) {
 }
 
 void MemoryUsageTracker::checkNonNegativeSizes(const char* errmsg) const {
-  // TODO: make these CHECK failures after making usage tracker thread-safe.
-  if (reservationBytes_ < 0) {
-    LOG_EVERY_N(ERROR, 100) << "MEMORY: Negagtive reservation bytes " << errmsg
-                            << " " << reservationBytes_;
-  }
+  VELOX_CHECK_GE(reservationBytes_, 0, "Negative reservations: {}", toString());
 }
 
 std::string MemoryUsageTracker::toString() const {
   std::stringstream out;
-  out << "<tracker used " << (currentBytes() >> 20) << " available "
-      << (availableReservation() >> 20);
+  out << "<tracker used " << succinctBytes(currentBytes()) << " available "
+      << succinctBytes(availableReservation());
   if (maxMemory() != kMaxMemory) {
-    out << " limit " << (maxMemory() >> 20);
+    out << " limit " << succinctBytes(maxMemory());
   }
+  out << " reservation [used " << succinctBytes(usedReservationBytes_)
+      << ", granted " << succinctBytes(grantedReservationBytes_)
+      << ", reserved " << succinctBytes(reservationBytes_) << ", min "
+      << succinctBytes(minReservationBytes_);
+  out << "] counters [allocs " << numAllocs_ << ", frees " << numFrees_
+      << ", reserves " << numReserves_ << ", releases " << numReleases_
+      << ", collisions " << numCollisions_ << ", children " << numChildren_
+      << "])";
   out << ">";
   return out.str();
 }

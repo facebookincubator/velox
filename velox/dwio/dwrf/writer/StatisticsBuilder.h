@@ -120,11 +120,25 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
     rawSize_.reset();
   }
 
+  void ensureSize() {
+    if (!size_.has_value()) {
+      size_ = 0;
+    }
+  }
+
+  void incrementSize(uint64_t size) {
+    if (LIKELY(size_.has_value())) {
+      addWithOverflowCheck(size_, size, /*count=*/1);
+    }
+  }
+
   /*
    * Merge stats of same type. This is used in writer to aggregate file level
    * stats.
    */
-  virtual void merge(const dwio::common::ColumnStatistics& other);
+  virtual void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false);
 
   /*
    * Reset. Used in the place where row index entry level stats in captured.
@@ -179,7 +193,9 @@ class BooleanStatisticsBuilder : public StatisticsBuilder,
     }
   }
 
-  void merge(const dwio::common::ColumnStatistics& other) override;
+  void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false) override;
 
   void reset() override {
     StatisticsBuilder::reset();
@@ -215,7 +231,9 @@ class IntegerStatisticsBuilder : public StatisticsBuilder,
     addWithOverflowCheck(sum_, value, count);
   }
 
-  void merge(const dwio::common::ColumnStatistics& other) override;
+  void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false) override;
 
   void reset() override {
     StatisticsBuilder::reset();
@@ -272,7 +290,9 @@ class DoubleStatisticsBuilder : public StatisticsBuilder,
     }
   }
 
-  void merge(const dwio::common::ColumnStatistics& other) override;
+  void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false) override;
 
   void reset() override {
     StatisticsBuilder::reset();
@@ -326,7 +346,9 @@ class StringStatisticsBuilder : public StatisticsBuilder,
     addWithOverflowCheck<uint64_t>(length_, value.size(), count);
   }
 
-  void merge(const dwio::common::ColumnStatistics& other) override;
+  void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false) override;
 
   void reset() override {
     StatisticsBuilder::reset();
@@ -364,7 +386,9 @@ class BinaryStatisticsBuilder : public StatisticsBuilder,
     addWithOverflowCheck(length_, length, count);
   }
 
-  void merge(const dwio::common::ColumnStatistics& other) override;
+  void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false) override;
 
   void reset() override {
     StatisticsBuilder::reset();
@@ -398,10 +422,20 @@ class MapStatisticsBuilder : public StatisticsBuilder,
     // Since addValues is called once per key info per stride,
     // it's ok to just construct the key struct per call.
     auto& keyStats = getKeyStats(constructKey(keyInfo));
-    keyStats.merge(stats);
+    keyStats.merge(stats, /*ignoreSize=*/true);
   }
 
-  void merge(const dwio::common::ColumnStatistics& other) override;
+  void incrementSize(const dwrf::proto::KeyInfo& keyInfo, uint64_t size) {
+    // Since incrementSize is called once per key info per stripe,
+    // it's ok to just construct the key struct per call.
+    auto& keyStats = getKeyStats(constructKey(keyInfo));
+    keyStats.ensureSize();
+    keyStats.incrementSize(size);
+  }
+
+  void merge(
+      const dwio::common::ColumnStatistics& other,
+      bool ignoreSize = false) override;
 
   void reset() override {
     StatisticsBuilder::reset();

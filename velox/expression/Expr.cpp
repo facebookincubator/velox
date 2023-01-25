@@ -312,11 +312,9 @@ void Expr::evalSimplifiedImpl(
     }
   }
 
-  // If any errors occurred evaluating the arguments, its possible that the
-  // values for those arguments were not defined which can lead to undefined
-  // behavior if we try and evaluate current function on them. The value for
-  // this subexpression should be NULL for these rows and thus can be safely
-  // skipped.
+  // We need to deselect rows with errors since otherwise they will
+  // be cleared by Conjunct special form , as current assumption is
+  // that they are only invoked on rows that do not have exceptions.
   if (context.errors()) {
     context.deselectErrors(remainingRows);
     if (!remainingRows.hasSelections()) {
@@ -1277,7 +1275,7 @@ void Expr::evalAll(
 
   // Write non-selected rows in remainingRows as nulls in the result if some
   // rows have been skipped.
-  if (mutableRemainingRows != nullptr) {
+  if (mutableRemainingRows && !mutableRemainingRows->isAllSelected()) {
     addNulls(rows, mutableRemainingRows->asRange().bits(), context, result);
   }
   releaseInputValues(context);
@@ -1301,9 +1299,6 @@ bool Expr::applyFunctionWithPeeling(
     const SelectivityVector& applyRows,
     EvalCtx& context,
     VectorPtr& result) {
-  if (context.wrapEncoding() == VectorEncoding::Simple::CONSTANT) {
-    return false;
-  }
   int numLevels = 0;
   bool peeled;
   int32_t numConstant = 0;
@@ -1405,13 +1400,13 @@ bool Expr::applyFunctionWithPeeling(
     // All the fields are constant across the rows of interest.
     newRows = singleRow(newRowsHolder, rows.begin());
 
-    context.saveAndReset(saver, rows);
+    context.saveAndReset(saver, applyRows);
     context.setConstantWrap(rows.begin());
   } else {
     auto decoded = localDecoded.get();
     decoded->makeIndices(*firstWrapper, rows, numLevels);
     newRows = translateToInnerRows(applyRows, *decoded, newRowsHolder);
-    context.saveAndReset(saver, rows);
+    context.saveAndReset(saver, applyRows);
     setDictionaryWrapping(*decoded, rows, *firstWrapper, context);
 
     // 'newRows' comes from the set of row numbers in the base vector. These
@@ -1432,6 +1427,12 @@ bool Expr::applyFunctionWithPeeling(
   VectorPtr wrappedResult =
       context.applyWrapToPeeledResult(this->type(), peeledResult, applyRows);
   context.moveOrCopyResult(wrappedResult, rows, result);
+
+  // Recycle peeledResult if it's not owned by the result vector. Examples of
+  // when this can happen is when the result is a primitive constant vector, or
+  // when moveOrCopyResult copies wrappedResult content.
+  context.releaseVector(peeledResult);
+
   return true;
 }
 

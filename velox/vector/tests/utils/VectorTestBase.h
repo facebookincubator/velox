@@ -232,7 +232,9 @@ class VectorTestBase {
 
   // Create an ArrayVector<ROW> from nested std::vectors of variants.
   // Example:
-  //   auto arrayVector = makeArrayOfRowVector({
+  //   auto arrayVector = makeArrayOfRowVector(
+  //     ROW({INTEGER(), VARCHAR()}),
+  //     {
   //       {variant::row({1, "red"}), variant::row({1, "blue"})},
   //       {},
   //       {variant::row({3, "green"})},
@@ -647,6 +649,9 @@ class VectorTestBase {
   BufferPtr makeNulls(
       vector_size_t size,
       std::function<bool(vector_size_t /*row*/)> isNullAt);
+
+  /// Creates a null buffer from a vector of booleans.
+  BufferPtr makeNulls(const std::vector<bool>& values);
 
   static VectorPtr
   wrapInDictionary(BufferPtr indices, vector_size_t size, VectorPtr vector);
