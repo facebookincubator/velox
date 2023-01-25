@@ -369,7 +369,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   // emit is not allowed in TableScanNode and ValuesNode related
   // outputs
   if (readRel.has_common()) {
-    ValidateEmitExclusion(readRel.common());
+    VELOX_USER_CHECK(
+        !readRel.common().has_emit(),
+        "Emit not supported for ValuesNode and TableScanNode related Substrait plans.");
   }
   // Get output names and types.
   std::vector<std::string> colNameList;
