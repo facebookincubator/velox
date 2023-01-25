@@ -286,3 +286,18 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
       .splits(makeSplits(planConverter, planNode))
       .assertResults(expectedResult);
 }
+
+TEST_F(Substrait2VeloxPlanConversionTest, date) {
+  // Find and deserialize Substrait plan json file.
+  std::string planPath =
+      getDataFilePath("velox/substrait/tests", "data/datetime_plan.json");
+
+  // Read datetime_plan.json and resume the Substrait plan.
+  ::substrait::Plan substraitPlan;
+  JsonToProtoConverter::readFromFile(planPath, substraitPlan);
+
+  // Convert to Velox PlanNode.
+  facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter(
+      pool_.get());
+  auto planNode = planConverter.toVeloxPlan(substraitPlan);
+}
