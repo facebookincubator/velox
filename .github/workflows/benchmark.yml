@@ -103,6 +103,11 @@ jobs:
           path: ".ccache"
           key: ccache-benchmark-${{ github.sha }}
 
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ${{ env.BINARY_DIR }}
+          name: "benchmark-binaries"
+
       - name: Remove Unchanged Benchmarks
         id: delete
         if: false # deactivated for now ${{ github.event_name == 'pull_request' }}
@@ -145,7 +150,6 @@ jobs:
             fi 
 
       - uses: actions/upload-artifact@v3
-        if: always()
         with:
           path: "benchmark-results"
           name: "benchmark-results"
