@@ -16,6 +16,10 @@ name: "Linux Benchmark"
 
 on:
   pull_request:
+    paths:
+      - 'velox/**'
+      - 'third_party/**'
+      - '.github/workflows/benchmark.yml'
   push:
     branches: [main]
 
@@ -99,25 +103,34 @@ jobs:
           key: ccache-benchmark-${{ github.sha }}
 
       - name: Remove Unchanged Benchmarks
+        id: delete
         if: ${{ github.event_name == 'pull_request' }}
         run: |
-            cd ${BINARY_DIR}/baseline/
-            # list all executable files in the directory
-            for file in $(find . -type f -executable); do
-              # compare the files byte bye byte and remove them if they are the same
-              if cmp -s "$file" "../target/$file"; then
-                echo "Removing unchanged benchmark: $file"
-                rm "$file"
-                rm "../target/$file"
-              fi
-            done
+          pushd ${BINARY_DIR}/baseline/
+          # list all executable files in the directory
+          for file in $(find . -type f -executable); do
+            # compare the files byte bye byte and remove them if they are the same
+            if cmp -s "$file" "../target/$file"; then
+              echo "Removing unchanged benchmark: $file"
+              rm "$file"
+              rm "../target/$file"
+            fi
+          done
 
+          popd
+          
+          if [ !$(ls -A) ]; then
+            echo "set-output name=empty::true"
+            mkdir -p ${BASELINE_OUTPUT_PATH}
+            mkdir -p ${TARGET_OUTPUT_PATH}
+          fi
       - name: "Install benchmark dependencies"
         run: |
           cd velox
           python3 -m pip install -r scripts/benchmark-requirements.txt
 
       - name: "Run Benchmarks - Full Round"
+        if: ${{ steps.delete.outputs.empty != 'true' }}
         working-directory: 'velox'
         run: |
             make benchmarks-basic-run \
