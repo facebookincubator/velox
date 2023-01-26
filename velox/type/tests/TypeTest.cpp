@@ -528,6 +528,12 @@ TEST(TypeTest, cpp2Type) {
   EXPECT_EQ(*CppToType<Array<int32_t>>::create(), *ARRAY(INTEGER()));
   auto type = CppToType<Map<int32_t, Map<int64_t, float>>>::create();
   EXPECT_EQ(*type, *MAP(INTEGER(), MAP(BIGINT(), REAL())));
+  // Verify auto generated column names in the Row type in the format c1, c2,
+  // c3...
+  auto rowType = CppToType<Row<int64_t, Array<int32_t>, std::string>>::create();
+  EXPECT_EQ(
+      *rowType,
+      *ROW({{"c1", BIGINT()}, {"c2", ARRAY(INTEGER())}, {"c3", VARCHAR()}}));
 }
 
 TEST(TypeTest, equivalent) {

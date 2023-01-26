@@ -1699,7 +1699,15 @@ struct CppToType<Array<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
 template <typename... T>
 struct CppToType<Row<T...>> : public TypeTraits<TypeKind::ROW> {
   static auto create() {
-    return ROW({CppToType<T>::create()...});
+    // When creating ROW type, auto generate the individual column names like
+    // c1, c2, c3 ... instead of leaving the names empty.
+    auto n = sizeof...(T);
+    std::vector<std::string> names;
+    names.reserve(n);
+    for (auto i = 1; i <= n; ++i) {
+      names.push_back(fmt::format("c{}", i));
+    }
+    return ROW(std::move(names), {CppToType<T>::create()...});
   }
 };
 
