@@ -129,6 +129,7 @@ jobs:
                 EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/target/ --output_path ${TARGET_OUTPUT_PATH}"
             else
               echo "Copying baseline results to target for upload."
+              mkdir -p ${TARGET_OUTPUT_PATH}
               cp -r ${BASELINE_OUTPUT_PATH}/* ${TARGET_OUTPUT_PATH}
             fi 
 
