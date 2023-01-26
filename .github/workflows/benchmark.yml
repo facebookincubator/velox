@@ -120,7 +120,7 @@ jobs:
 
           popd
           
-          if [ !$(ls -A) ]; then
+          if ! find . -type f -executable | grep -q .; then
             echo "set-output name=empty::true"
             mkdir -p ${BASELINE_OUTPUT_PATH}
             mkdir -p ${TARGET_OUTPUT_PATH}
