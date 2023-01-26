@@ -62,9 +62,11 @@ class MmapAllocator : public MemoryAllocator {
     int32_t mmapArenaCapacityRatio = 10;
   };
 
-  enum class Failure { kNone, kMadvise, kMmap, kAllocate };
-
   explicit MmapAllocator(const Options& options);
+
+  Kind kind() const override {
+    return kind_;
+  }
 
   bool allocateNonContiguous(
       MachinePageCount numPages,
@@ -81,7 +83,7 @@ class MmapAllocator : public MemoryAllocator {
       ReservationCallback reservationCB = nullptr) override {
     VELOX_CHECK_GT(numPages, 0);
     bool result;
-    stats_.recordAllocate(numPages * kPageSize, 1, [&]() {
+    stats_.recordAllocate(numPages * AllocationTraits::kPageSize, 1, [&]() {
       result = allocateContiguousImpl(
           numPages, collateral, allocation, reservationCB);
     });
@@ -122,6 +124,7 @@ class MmapAllocator : public MemoryAllocator {
   /// function for validating otherwise unreachable error paths. If 'persistent'
   /// is false, then we only inject failure once in the next call. Otherwise, we
   /// keep injecting failures until next 'testingClearFailureInjection' call.
+  enum class Failure { kNone, kMadvise, kMmap, kAllocate };
   void testingSetFailureInjection(Failure failure, bool persistent = false) {
     injectedFailure_ = failure;
     isPersistentFailureInjection_ = persistent;
@@ -165,7 +168,7 @@ class MmapAllocator : public MemoryAllocator {
     bool allocate(
         ClassPageCount numPages,
         MachinePageCount& numUnmapped,
-        MemoryAllocator::Allocation& out);
+        Allocation& out);
 
     // Frees all pages of 'allocation' that fall in this size
     // class. Erases the corresponding runs from 'allocation'.
@@ -186,7 +189,7 @@ class MmapAllocator : public MemoryAllocator {
     void setAllMapped(const Allocation& allocation, bool value);
 
     // Sets the mapped flag for the class pages in 'run' to 'value'
-    void setMappedBits(const MemoryAllocator::PageRun run, bool value);
+    void setMappedBits(const Allocation::PageRun run, bool value);
 
     // True if 'ptr' is in the address range of 'this'. Checks that ptr is at a
     // size class page boundary.
@@ -211,7 +214,7 @@ class MmapAllocator : public MemoryAllocator {
     bool allocateLocked(
         ClassPageCount numPages,
         MachinePageCount* FOLLY_NULLABLE numUnmapped,
-        MemoryAllocator::Allocation& out);
+        Allocation& out);
 
     // Returns the bit offset of the first bit of a 512 bit group in
     // 'pageAllocated_'/'pageMapped_'  that contains at least one mapped free
@@ -327,6 +330,8 @@ class MmapAllocator : public MemoryAllocator {
   // Finds at least  'target' unallocated pages in different size classes and
   // advises them away. Returns the number of pages advised away.
   MachinePageCount adviseAway(MachinePageCount target);
+
+  const Kind kind_;
 
   // If set true, allocations larger than the largest size class size will be
   // delegated to ManagedMmapArena. Otherwise, a system mmap call will be
