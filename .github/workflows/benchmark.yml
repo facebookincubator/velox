@@ -93,7 +93,6 @@ jobs:
             cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/target/
 
       - uses: actions/cache/save@v3
-        if: ${{ github.event_name == 'push' && success() }}
         id: cache
         with:
           path: ".ccache"
