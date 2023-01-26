@@ -46,10 +46,12 @@ jobs:
             repo: context.repo.repo,
             run_id: run_id,
           });
-          let pr = benchmark_run.data.pull_requests[0];
-          let pr_number = pr == undefined ? '' : pr.number;
+
+          let run_data = benchmark_run.data;
+          let pr = run_data.pull_requests[0];
+          let pr_number = pr == undefined || run_data.event === 'push' ? '' : pr.number;
             
-          core.setOutput('target_sha', benchmark_run.data.head_sha);
+          core.setOutput('target_sha', run_data.head_sha);
           core.setOutput('pr_number', pr_number);
 
 
