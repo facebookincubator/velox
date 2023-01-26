@@ -124,35 +124,12 @@ special characters unescaped and double quotes removed.</p>
 <section id="id1">
 <h2>JSON Functions<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h2>
 <dl class="py function">
-<dt class="sig sig-object py" id="json_extract_scalar">
-<span class="sig-name descname"><span class="pre">json_extract_scalar</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">json_path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#json_extract_scalar" title="Permalink to this definition">¶</a></dt>
-<dd><p>Evaluates the <a class="reference external" href="http://goessner.net/articles/JsonPath/">JSONPath</a>-like expression <code class="docutils literal notranslate"><span class="pre">json_path</span></code> on <code class="docutils literal notranslate"><span class="pre">json</span></code>
-(a string containing JSON) and returns the result as a string. The
-value referenced by <code class="docutils literal notranslate"><span class="pre">json_path</span></code> must be a scalar (boolean, number
-or string):</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_extract_scalar</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">,</span> <span class="s1">&#39;$[2]&#39;</span><span class="p">);</span>
-<span class="n">SELECT</span> <span class="n">json_extract_scalar</span><span class="p">(</span><span class="n">json</span><span class="p">,</span> <span class="s1">&#39;$.store.book[0].author&#39;</span><span class="p">);</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="is_json_scalar">
 <span class="sig-name descname"><span class="pre">is_json_scalar</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#is_json_scalar" title="Permalink to this definition">¶</a></dt>
 <dd><p>Determine if <code class="docutils literal notranslate"><span class="pre">json</span></code> is a scalar (i.e. a JSON number, a JSON string,
 <code class="docutils literal notranslate"><span class="pre">true</span></code>, <code class="docutils literal notranslate"><span class="pre">false</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code>):</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">is_json_scalar</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">);</span> <span class="o">*--</span> <span class="n">true</span><span class="o">*</span>
 <span class="n">SELECT</span> <span class="n">is_json_scalar</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">);</span> <span class="o">*--</span> <span class="n">false</span><span class="o">*</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="json_array_length">
-<span class="sig-name descname"><span class="pre">json_array_length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#json_array_length" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the array length of <code class="docutils literal notranslate"><span class="pre">json</span></code> (a string containing a JSON
-array). Returns NULL if <code class="docutils literal notranslate"><span class="pre">json</span></code> is not an array:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_array_length</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -169,13 +146,48 @@ Returns NULL if <code class="docutils literal notranslate"><span class="pre">jso
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="json_array_length">
+<span class="sig-name descname"><span class="pre">json_array_length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#json_array_length" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the array length of <code class="docutils literal notranslate"><span class="pre">json</span></code> (a string containing a JSON
+array). Returns NULL if <code class="docutils literal notranslate"><span class="pre">json</span></code> is not an array:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_array_length</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="json_extract_scalar">
+<span class="sig-name descname"><span class="pre">json_extract_scalar</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">json_path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#json_extract_scalar" title="Permalink to this definition">¶</a></dt>
+<dd><p>Evaluates the <a class="reference external" href="http://goessner.net/articles/JsonPath/">JSONPath</a>-like expression <code class="docutils literal notranslate"><span class="pre">json_path</span></code> on <code class="docutils literal notranslate"><span class="pre">json</span></code>
+(a string containing JSON) and returns the result as a string. The
+value referenced by <code class="docutils literal notranslate"><span class="pre">json_path</span></code> must be a scalar (boolean, number
+or string):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_extract_scalar</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">,</span> <span class="s1">&#39;$[2]&#39;</span><span class="p">);</span>
+<span class="n">SELECT</span> <span class="n">json_extract_scalar</span><span class="p">(</span><span class="n">json</span><span class="p">,</span> <span class="s1">&#39;$.store.book[0].author&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="json_format">
 <span class="sig-name descname"><span class="pre">json_format</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#json_format" title="Permalink to this definition">¶</a></dt>
-<dd><p>Serializes the input JSON value to JSON text conforming to RFC 7159.
-The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, true, false or null.</p>
-<blockquote>
-<div><p>SELECT json_format(JSON ‘{“a”: 1, “b”: 2}’)</p>
-</div></blockquote>
+<dd><p>Serializes the input JSON value to JSON text conforming to <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc7159.html">RFC 7159</a>.
+The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, <code class="docutils literal notranslate"><span class="pre">true</span></code>, <code class="docutils literal notranslate"><span class="pre">false</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_format</span><span class="p">(</span><span class="n">JSON</span> <span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;[1,2,3]&#39;</span>
+<span class="n">SELECT</span> <span class="n">json_format</span><span class="p">(</span><span class="n">JSON</span> <span class="s1">&#39;&quot;a&quot;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;&quot;a&quot;&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="json_parse">
+<span class="sig-name descname"><span class="pre">json_parse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">json</span></span></span><a class="headerlink" href="#json_parse" title="Permalink to this definition">¶</a></dt>
+<dd><p>expects a JSON text conforming to <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc7159.html">RFC 7159</a>, and returns the JSON value deserialized from the JSON text.
+The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, <code class="docutils literal notranslate"><span class="pre">true</span></code>, <code class="docutils literal notranslate"><span class="pre">false</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_parse</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">JSON</span> <span class="s1">&#39;[1,2,3]&#39;</span>
+<span class="n">SELECT</span> <span class="n">json_parse</span><span class="p">(</span><span class="s1">&#39;&quot;abc&quot;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">JSON</span> <span class="s1">&#39;&quot;abc&quot;&#39;</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py function">
@@ -220,11 +232,12 @@ VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
 <li><a class="reference internal" href="#cast-to-json">Cast to JSON</a></li>
 <li><a class="reference internal" href="#cast-from-json">Cast from JSON</a></li>
 <li><a class="reference internal" href="#id1">JSON Functions</a><ul>
-<li><a class="reference internal" href="#json_extract_scalar"><code class="docutils literal notranslate"><span class="pre">json_extract_scalar()</span></code></a></li>
 <li><a class="reference internal" href="#is_json_scalar"><code class="docutils literal notranslate"><span class="pre">is_json_scalar()</span></code></a></li>
-<li><a class="reference internal" href="#json_array_length"><code class="docutils literal notranslate"><span class="pre">json_array_length()</span></code></a></li>
 <li><a class="reference internal" href="#json_array_contains"><code class="docutils literal notranslate"><span class="pre">json_array_contains()</span></code></a></li>
+<li><a class="reference internal" href="#json_array_length"><code class="docutils literal notranslate"><span class="pre">json_array_length()</span></code></a></li>
+<li><a class="reference internal" href="#json_extract_scalar"><code class="docutils literal notranslate"><span class="pre">json_extract_scalar()</span></code></a></li>
 <li><a class="reference internal" href="#json_format"><code class="docutils literal notranslate"><span class="pre">json_format()</span></code></a></li>
+<li><a class="reference internal" href="#json_parse"><code class="docutils literal notranslate"><span class="pre">json_parse()</span></code></a></li>
 <li><a class="reference internal" href="#json_size"><code class="docutils literal notranslate"><span class="pre">json_size()</span></code></a></li>
 </ul>
 </li>

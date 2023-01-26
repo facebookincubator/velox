@@ -111,7 +111,7 @@ using helper methods from the “bits” namespace.</p>
 <span class="kt">bool</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitSet</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span><span class="w"></span>
 
 <span class="c1">// Read-write access.</span>
-<span class="kt">uint64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawFlags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">flags</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="kt">uint64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawFlags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">flags</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
 
 <span class="c1">// Set flag 15 to true/on.</span>
 <span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">);</span><span class="w"></span>

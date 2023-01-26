@@ -52,27 +52,15 @@
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="xxhash64">
-<span class="sig-name descname"><span class="pre">xxhash64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#xxhash64" title="Permalink to this definition">¶</a></dt>
-<dd><p>Computes the xxhash64 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
+<dt class="sig sig-object py" id="from_base64">
+<span class="sig-name descname"><span class="pre">from_base64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#from_base64" title="Permalink to this definition">¶</a></dt>
+<dd><p>Decodes binary data from the base64 encoded <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="md5">
-<span class="sig-name descname"><span class="pre">md5</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#md5" title="Permalink to this definition">¶</a></dt>
-<dd><p>Computes the md5 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="sha256">
-<span class="sig-name descname"><span class="pre">sha256</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#sha256" title="Permalink to this definition">¶</a></dt>
-<dd><p>Computes the SHA-256 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="sha512">
-<span class="sig-name descname"><span class="pre">sha512</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#sha512" title="Permalink to this definition">¶</a></dt>
-<dd><p>Computes the SHA-512 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
+<dt class="sig sig-object py" id="from_hex">
+<span class="sig-name descname"><span class="pre">from_hex</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#from_hex" title="Permalink to this definition">¶</a></dt>
+<dd><p>Decodes binary data from the hex encoded <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -94,15 +82,45 @@
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="to_base64">
-<span class="sig-name descname"><span class="pre">to_base64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#to_base64" title="Permalink to this definition">¶</a></dt>
-<dd><p>Encodes <code class="docutils literal notranslate"><span class="pre">binary</span></code> into a base64 string representation.</p>
+<dt class="sig sig-object py" id="md5">
+<span class="sig-name descname"><span class="pre">md5</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#md5" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the md5 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="from_base64">
-<span class="sig-name descname"><span class="pre">from_base64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#from_base64" title="Permalink to this definition">¶</a></dt>
-<dd><p>Decodes binary data from the base64 encoded <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+<dt class="sig sig-object py" id="sha1">
+<span class="sig-name descname"><span class="pre">sha1</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#sha1" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the SHA-1 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sha256">
+<span class="sig-name descname"><span class="pre">sha256</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#sha256" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the SHA-256 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sha512">
+<span class="sig-name descname"><span class="pre">sha512</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#sha512" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the SHA-512 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="spooky_hash_v2_32">
+<span class="sig-name descname"><span class="pre">spooky_hash_v2_32</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#spooky_hash_v2_32" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the SpookyHashV2 32-bit hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="spooky_hash_v2_64">
+<span class="sig-name descname"><span class="pre">spooky_hash_v2_64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#spooky_hash_v2_64" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the 64-bit SpookyHashV2 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="to_base64">
+<span class="sig-name descname"><span class="pre">to_base64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#to_base64" title="Permalink to this definition">¶</a></dt>
+<dd><p>Encodes <code class="docutils literal notranslate"><span class="pre">binary</span></code> into a base64 string representation.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -112,9 +130,9 @@
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="from_hex">
-<span class="sig-name descname"><span class="pre">from_hex</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#from_hex" title="Permalink to this definition">¶</a></dt>
-<dd><p>Decodes binary data from the hex encoded <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+<dt class="sig sig-object py" id="xxhash64">
+<span class="sig-name descname"><span class="pre">xxhash64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#xxhash64" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the xxhash64 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
 </dd></dl>
 
 </section>
@@ -131,17 +149,20 @@
     <ul>
 <li><a class="reference internal" href="#">Binary Functions</a><ul>
 <li><a class="reference internal" href="#crc32"><code class="docutils literal notranslate"><span class="pre">crc32()</span></code></a></li>
-<li><a class="reference internal" href="#xxhash64"><code class="docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></li>
-<li><a class="reference internal" href="#md5"><code class="docutils literal notranslate"><span class="pre">md5()</span></code></a></li>
-<li><a class="reference internal" href="#sha256"><code class="docutils literal notranslate"><span class="pre">sha256()</span></code></a></li>
-<li><a class="reference internal" href="#sha512"><code class="docutils literal notranslate"><span class="pre">sha512()</span></code></a></li>
+<li><a class="reference internal" href="#from_base64"><code class="docutils literal notranslate"><span class="pre">from_base64()</span></code></a></li>
+<li><a class="reference internal" href="#from_hex"><code class="docutils literal notranslate"><span class="pre">from_hex()</span></code></a></li>
 <li><a class="reference internal" href="#hmac_sha1"><code class="docutils literal notranslate"><span class="pre">hmac_sha1()</span></code></a></li>
 <li><a class="reference internal" href="#hmac_sha256"><code class="docutils literal notranslate"><span class="pre">hmac_sha256()</span></code></a></li>
 <li><a class="reference internal" href="#hmac_sha512"><code class="docutils literal notranslate"><span class="pre">hmac_sha512()</span></code></a></li>
+<li><a class="reference internal" href="#md5"><code class="docutils literal notranslate"><span class="pre">md5()</span></code></a></li>
+<li><a class="reference internal" href="#sha1"><code class="docutils literal notranslate"><span class="pre">sha1()</span></code></a></li>
+<li><a class="reference internal" href="#sha256"><code class="docutils literal notranslate"><span class="pre">sha256()</span></code></a></li>
+<li><a class="reference internal" href="#sha512"><code class="docutils literal notranslate"><span class="pre">sha512()</span></code></a></li>
+<li><a class="reference internal" href="#spooky_hash_v2_32"><code class="docutils literal notranslate"><span class="pre">spooky_hash_v2_32()</span></code></a></li>
+<li><a class="reference internal" href="#spooky_hash_v2_64"><code class="docutils literal notranslate"><span class="pre">spooky_hash_v2_64()</span></code></a></li>
 <li><a class="reference internal" href="#to_base64"><code class="docutils literal notranslate"><span class="pre">to_base64()</span></code></a></li>
-<li><a class="reference internal" href="#from_base64"><code class="docutils literal notranslate"><span class="pre">from_base64()</span></code></a></li>
 <li><a class="reference internal" href="#to_hex"><code class="docutils literal notranslate"><span class="pre">to_hex()</span></code></a></li>
-<li><a class="reference internal" href="#from_hex"><code class="docutils literal notranslate"><span class="pre">from_hex()</span></code></a></li>
+<li><a class="reference internal" href="#xxhash64"><code class="docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></li>
 </ul>
 </li>
 </ul>

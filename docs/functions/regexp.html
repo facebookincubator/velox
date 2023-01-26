@@ -50,6 +50,23 @@ supports only a subset of PCRE syntax and in particular does not support
 backtracking and associated features (e.g. back references).
 See <a class="reference external" href="https://github.com/google/re2/wiki/Syntax">https://github.com/google/re2/wiki/Syntax</a> for more information.</p>
 <dl class="py function">
+<dt class="sig sig-object py" id="like">
+<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#like" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">escape</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span></dt>
+<dd><p>Evaluates if the <code class="docutils literal notranslate"><span class="pre">string</span></code> matches the <code class="docutils literal notranslate"><span class="pre">pattern</span></code>. Patterns can contain
+regular characters as well as wildcards. Wildcard characters can be escaped
+using the single character specified for the <code class="docutils literal notranslate"><span class="pre">escape</span></code> parameter.
+Matching is case sensitive.</p>
+<p>Note: The wildcard ‘%’ represents 0, 1 or multiple characters and the
+wildcard ‘_’ represents exactly one character.</p>
+<blockquote>
+<div><p>SELECT like(‘abc’, ‘%b%’); – true
+SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="regexp_extract">
 <span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_extract" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the first substring matched by the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>
@@ -117,23 +134,6 @@ backslash (<code class="docutils literal notranslate"><span class="pre">\$</span
 </div>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="like">
-<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#like" title="Permalink to this definition">¶</a></dt>
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">escape</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span></dt>
-<dd><p>Evaluates if the <code class="docutils literal notranslate"><span class="pre">string</span></code> matches the <code class="docutils literal notranslate"><span class="pre">pattern</span></code>. Patterns can contain
-regular characters as well as wildcards. Wildcard characters can be escaped
-using the single character specified for the <code class="docutils literal notranslate"><span class="pre">escape</span></code> parameter.
-Matching is case sensitive.</p>
-<p>Note: The wildcard ‘%’ represents 0, 1 or multiple characters and the
-wildcard ‘_’ represents exactly one character.</p>
-<blockquote>
-<div><p>SELECT like(‘abc’, ‘%b%’); – true
-SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
-</div></blockquote>
-</dd></dl>
-
 </section>
 
 
@@ -147,13 +147,13 @@ SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
     <h3><a href="../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Regular Expression Functions</a><ul>
+<li><a class="reference internal" href="#like"><code class="docutils literal notranslate"><span class="pre">like()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_extract"><code class="docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_extract_all"><code class="docutils literal notranslate"><span class="pre">regexp_extract_all()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_like"><code class="docutils literal notranslate"><span class="pre">regexp_like()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_replace"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
 <li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
-<li><a class="reference internal" href="#like"><code class="docutils literal notranslate"><span class="pre">like()</span></code></a></li>
 </ul>
 </li>
 </ul>

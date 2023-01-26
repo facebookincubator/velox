@@ -219,6 +219,19 @@ For integral types, overflow results in an error.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="sign">
+<span class="sig-name descname"><span class="pre">sign</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#sign" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the signum function of <code class="docutils literal notranslate"><span class="pre">x</span></code>. For both integer and floating point arguments, it returns:
+* 0 if the argument is 0,
+* 1 if the argument is greater than 0,
+* -1 if the argument is less than 0.</p>
+<p>For double arguments, the function additionally return:
+* NaN if the argument is NaN,
+* 1 if the argument is +Infinity,
+* -1 if the argument is -Infinity.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="sqrt">
 <span class="sig-name descname"><span class="pre">sqrt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#sqrt" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the square root of <code class="docutils literal notranslate"><span class="pre">x</span></code> . If <code class="docutils literal notranslate"><span class="pre">x</span></code> is negative, <code class="docutils literal notranslate"><span class="pre">NaN</span></code> is returned.</p>
@@ -257,19 +270,6 @@ by the array <code class="docutils literal notranslate"><span class="pre">bins</
 is assumed to be in sorted ascending order.</p>
 <p>For example, if <code class="docutils literal notranslate"><span class="pre">bins</span></code> is <code class="docutils literal notranslate"><span class="pre">ARRAY[0,</span> <span class="pre">2,</span> <span class="pre">4]</span></code>, then we have four bins:
 <code class="docutils literal notranslate"><span class="pre">(-infinity(),</span> <span class="pre">0)</span></code>, <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">2)</span></code>, <code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">4)</span></code> and <code class="docutils literal notranslate"><span class="pre">[4,</span> <span class="pre">infinity())</span></code>.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="sign">
-<span class="sig-name descname"><span class="pre">sign</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#sign" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the signum function of <code class="docutils literal notranslate"><span class="pre">x</span></code>. For both integer and floating point arguments, it returns:
-* 0 if the argument is 0,
-* 1 if the argument is greater than 0,
-* -1 if the argument is less than 0.</p>
-<p>For double arguments, the function additionally return:
-* NaN if the argument is NaN,
-* 1 if the argument is +Infinity,
-* -1 if the argument is -Infinity.</p>
 </dd></dl>
 
 </section>
@@ -402,13 +402,13 @@ is assumed to be in sorted ascending order.</p>
 <li><a class="reference internal" href="#random"><code class="docutils literal notranslate"><span class="pre">random()</span></code></a></li>
 <li><a class="reference internal" href="#round"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
+<li><a class="reference internal" href="#sign"><code class="docutils literal notranslate"><span class="pre">sign()</span></code></a></li>
 <li><a class="reference internal" href="#sqrt"><code class="docutils literal notranslate"><span class="pre">sqrt()</span></code></a></li>
 <li><a class="reference internal" href="#to_base"><code class="docutils literal notranslate"><span class="pre">to_base()</span></code></a></li>
 <li><a class="reference internal" href="#truncate"><code class="docutils literal notranslate"><span class="pre">truncate()</span></code></a></li>
 <li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">truncate()</span></code></a></li>
 <li><a class="reference internal" href="#width_bucket"><code class="docutils literal notranslate"><span class="pre">width_bucket()</span></code></a></li>
 <li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">width_bucket()</span></code></a></li>
-<li><a class="reference internal" href="#sign"><code class="docutils literal notranslate"><span class="pre">sign()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#trigonometric-functions">Trigonometric Functions</a><ul>

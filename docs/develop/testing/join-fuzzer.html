@@ -1,0 +1,178 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>Join Fuzzer &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Debugging Tools" href="../debugging.html" />
+    <link rel="prev" title="Expression and Aggregation Fuzzer" href="fuzzer.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../debugging.html" title="Debugging Tools"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="fuzzer.html" title="Expression and Aggregation Fuzzer"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../testing.html" accesskey="U">Testing Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Join Fuzzer</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="join-fuzzer">
+<h1>Join Fuzzer<a class="headerlink" href="#join-fuzzer" title="Permalink to this heading">¶</a></h1>
+<p>Join fuzzer tests all types of hash and merge joins with up to 5 join keys and
+up to 3 payload columns with and without spilling.</p>
+<p>At each iteration, fuzzer randomly picks a join type (INNER, LEFT, FULL, LEFT
+SEMI FILTER, LEFT SEMI PROJECT, ANTI), null-aware flag (if supported by the
+join type), number and types of join keys and payload columns. The fuzzer then
+generates probe-side and build-size inputs and constructs a Values -&gt; HashJoin
+query plan. When generating build-side data, the fuzzer generates either an
+empty dataset or a 10% sample (with replacement) of the probe-side keys
+combined with randomly generated payload. When generating the join plan node,
+fuzzer shuffles join keys and output columns and randomly drops some columns
+from the output.</p>
+<p>The fuzzer runs the query plan and compares the results with DuckDB.</p>
+<p>The fuzzer then generates a set of different but logically equivalent plans,
+runs them and verifies that results are the same. Each plan runs twice: with
+and without spilling.</p>
+<p>The logically equivalent plans are generated as follows:</p>
+<ul class="simple">
+<li><p>Flatten possibly encoded join inputs.</p></li>
+<li><dl class="simple">
+<dt>Flip join sides:</dt><dd><ul>
+<li><p>LEFT(a, b) =&gt; RIGHT(b, a)</p></li>
+<li><p>LEFT SEMI FILTER(a, b) =&gt; RIGHT SEMI FILTER(b, a)</p></li>
+<li><p>LEFT SEMI PROJECT(a, b) =&gt; RIGHT SEMI PROJECT(b, a)</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li><p>Introduce round-robin local exchange before the join:
+Values -&gt; LocalExchange(ROUND_ROBIN) -&gt; HashJoin</p></li>
+<li><p>Replace HashJoin with OrderBy(join keys) + MergeJoin for supported join
+types (INNER, LEFT).</p></li>
+</ul>
+<section id="how-to-run">
+<h2>How to run<a class="headerlink" href="#how-to-run" title="Permalink to this heading">¶</a></h2>
+<p>Use velox_join_fuzzer_test binary to run join fuzzer:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">velox</span><span class="o">/</span><span class="n">exec</span><span class="o">/</span><span class="n">tests</span><span class="o">/</span><span class="n">velox_join_fuzzer_test</span>
+</pre></div>
+</div>
+<p>By default, the fuzzer will go through 10 interations. Use –steps
+or –duration-sec flag to run fuzzer for longer. Use –seed to
+reproduce fuzzer failures.</p>
+<p>Here is a full list of supported command line arguments.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">–-steps</span></code>: How many iterations to run. Each iteration generates and
+evaluates one expression or aggregation. Default is 10.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-duration_sec</span></code>: For how long to run in seconds. If both <code class="docutils literal notranslate"><span class="pre">-–steps</span></code>
+and <code class="docutils literal notranslate"><span class="pre">-–duration_sec</span></code> are specified, –duration_sec takes precedence.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-seed</span></code>: The seed to generate random expressions and input vectors with.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-v=1</span></code>: Verbose logging (from <a class="reference external" href="https://github.com/google/glog#setting-flags">Google Logging Library</a>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-batch_size</span></code>: The size of input vectors to generate. Default is 100.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--num_batches</span></code>: The number of input vectors of size <cite>–batch_size</cite> to
+generate. Default is 5.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--enable_spill</span></code>: Whether to test with spilling or not. Default is true.</p></li>
+</ul>
+<p>If running from CLion IDE, add <code class="docutils literal notranslate"><span class="pre">--logtostderr=1</span></code> to see the full output.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Join Fuzzer</a><ul>
+<li><a class="reference internal" href="#how-to-run">How to run</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="fuzzer.html"
+                          title="previous chapter">Expression and Aggregation Fuzzer</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../debugging.html"
+                          title="next chapter">Debugging Tools</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/develop/testing/join-fuzzer.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../debugging.html" title="Debugging Tools"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="fuzzer.html" title="Expression and Aggregation Fuzzer"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../testing.html" >Testing Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Join Fuzzer</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
+    </div>
+  </body>
+</html>

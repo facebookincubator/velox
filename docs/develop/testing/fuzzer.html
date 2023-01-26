@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
-    <title>Fuzzer &#8212; Velox  documentation</title>
+    <title>Expression and Aggregation Fuzzer &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
@@ -17,7 +17,7 @@
     <script src="../../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Debugging Tools" href="../debugging.html" />
+    <link rel="next" title="Join Fuzzer" href="join-fuzzer.html" />
     <link rel="prev" title="Testing Tools" href="../testing.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
@@ -27,7 +27,7 @@
           <a href="../../genindex.html" title="General Index"
              accesskey="I">index</a></li>
         <li class="right" >
-          <a href="../debugging.html" title="Debugging Tools"
+          <a href="join-fuzzer.html" title="Join Fuzzer"
              accesskey="N">next</a> |</li>
         <li class="right" >
           <a href="../testing.html" title="Testing Tools"
@@ -35,7 +35,7 @@
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
           <li class="nav-item nav-item-2"><a href="../testing.html" accesskey="U">Testing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Fuzzer</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Expression and Aggregation Fuzzer</a></li> 
       </ul>
     </div>  
 
@@ -44,8 +44,8 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="fuzzer">
-<h1>Fuzzer<a class="headerlink" href="#fuzzer" title="Permalink to this heading">¶</a></h1>
+  <section id="expression-and-aggregation-fuzzer">
+<h1>Expression and Aggregation Fuzzer<a class="headerlink" href="#expression-and-aggregation-fuzzer" title="Permalink to this heading">¶</a></h1>
 <p>Velox allows users to define UDFs (user-defined functions) and UDAFs
 (user-defined aggregate functions) and provides a fuzzer tools to test the
 engine and UDFs thoroughly. These tools are being used to test builtin Presto
@@ -129,7 +129,7 @@ correctness by ensuring that results of logically equivalent plans match.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-steps</span></code>: How many iterations to run. Each iteration generates and evaluates one expression or aggregation. Default is 10.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-duration_sec</span></code>: For how long to run in seconds. If both <code class="docutils literal notranslate"><span class="pre">-–steps</span></code> and <code class="docutils literal notranslate"><span class="pre">-–duration_sec</span></code> are specified, –duration_sec takes precedence.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-seed</span></code>: The seed to generate random expressions and input vectors with.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">–-v=1</span></code>: Verbose logging (from Google Logging Library).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-v=1</span></code>: Verbose logging (from <a class="reference external" href="https://github.com/google/glog#setting-flags">Google Logging Library</a>).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-only</span></code>: A comma-separated list of functions to use in generated expressions.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-batch_size</span></code>: The size of input vectors to generate. Default is 100.</p></li>
 </ul>
@@ -255,7 +255,7 @@ Result: ROW&lt;_col0:ARRAY&lt;INTEGER&gt;,_col1:ARRAY&lt;INTEGER&gt;&gt;
   <div>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
-<li><a class="reference internal" href="#">Fuzzer</a><ul>
+<li><a class="reference internal" href="#">Expression and Aggregation Fuzzer</a><ul>
 <li><a class="reference internal" href="#how-to-integrate">How to integrate</a></li>
 <li><a class="reference internal" href="#how-to-run">How to run</a></li>
 <li><a class="reference internal" href="#how-to-reproduce-failures">How to reproduce failures</a></li>
@@ -272,8 +272,8 @@ Result: ROW&lt;_col0:ARRAY&lt;INTEGER&gt;,_col1:ARRAY&lt;INTEGER&gt;&gt;
   </div>
   <div>
     <h4>Next topic</h4>
-    <p class="topless"><a href="../debugging.html"
-                          title="next chapter">Debugging Tools</a></p>
+    <p class="topless"><a href="join-fuzzer.html"
+                          title="next chapter">Join Fuzzer</a></p>
   </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
@@ -303,7 +303,7 @@ Result: ROW&lt;_col0:ARRAY&lt;INTEGER&gt;,_col1:ARRAY&lt;INTEGER&gt;&gt;
           <a href="../../genindex.html" title="General Index"
              >index</a></li>
         <li class="right" >
-          <a href="../debugging.html" title="Debugging Tools"
+          <a href="join-fuzzer.html" title="Join Fuzzer"
              >next</a> |</li>
         <li class="right" >
           <a href="../testing.html" title="Testing Tools"
@@ -311,7 +311,7 @@ Result: ROW&lt;_col0:ARRAY&lt;INTEGER&gt;,_col1:ARRAY&lt;INTEGER&gt;&gt;
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
           <li class="nav-item nav-item-2"><a href="../testing.html" >Testing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Fuzzer</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Expression and Aggregation Fuzzer</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">

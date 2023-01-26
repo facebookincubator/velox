@@ -46,6 +46,12 @@
   <section id="array-functions">
 <h1>Array Functions<a class="headerlink" href="#array-functions" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
+<dt class="sig sig-object py" id="array_average">
+<span class="sig-name descname"><span class="pre">array_average</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#array_average" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the average of all non-null elements of the array. If there are no non-null elements, returns null.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_distinct">
 <span class="sig-name descname"><span class="pre">array_distinct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_distinct" title="Permalink to this definition">¶</a></dt>
 <dd><p>Remove duplicate values from the input array.</p>
@@ -241,9 +247,26 @@ identity function (<code class="docutils literal notranslate"><span class="pre">
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="repeat">
+<span class="sig-name descname"><span class="pre">repeat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#repeat" title="Permalink to this definition">¶</a></dt>
+<dd><p>Repeat <code class="docutils literal notranslate"><span class="pre">element</span></code> for <code class="docutils literal notranslate"><span class="pre">count</span></code> times. <code class="docutils literal notranslate"><span class="pre">count</span></code> cannot be negative and must be less than or equal to 10000.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="reverse">
 <span class="sig-name descname"><span class="pre">reverse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#reverse" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns an array which has the reversed order of the input array.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="shuffle">
+<span class="sig-name descname"><span class="pre">shuffle</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#shuffle" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generate a random permutation of the given <code class="docutils literal notranslate"><span class="pre">array</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">shuffle</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span> <span class="ow">or</span> <span class="nb">any</span> <span class="n">other</span> <span class="n">random</span> <span class="n">permutation</span>
+<span class="n">SELECT</span> <span class="n">shuffle</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">shuffle</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="ow">or</span> <span class="nb">any</span> <span class="n">other</span> <span class="n">random</span> <span class="n">permutation</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py function">
@@ -311,6 +334,7 @@ If one array is shorter, nulls are appended at the end to match the length of th
     <h3><a href="../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Array Functions</a><ul>
+<li><a class="reference internal" href="#array_average"><code class="docutils literal notranslate"><span class="pre">array_average()</span></code></a></li>
 <li><a class="reference internal" href="#array_distinct"><code class="docutils literal notranslate"><span class="pre">array_distinct()</span></code></a></li>
 <li><a class="reference internal" href="#array_duplicates"><code class="docutils literal notranslate"><span class="pre">array_duplicates()</span></code></a></li>
 <li><a class="reference internal" href="#array_except"><code class="docutils literal notranslate"><span class="pre">array_except()</span></code></a></li>
@@ -329,7 +353,9 @@ If one array is shorter, nulls are appended at the end to match the length of th
 <li><a class="reference internal" href="#element_at"><code class="docutils literal notranslate"><span class="pre">element_at()</span></code></a></li>
 <li><a class="reference internal" href="#filter"><code class="docutils literal notranslate"><span class="pre">filter()</span></code></a></li>
 <li><a class="reference internal" href="#reduce"><code class="docutils literal notranslate"><span class="pre">reduce()</span></code></a></li>
+<li><a class="reference internal" href="#repeat"><code class="docutils literal notranslate"><span class="pre">repeat()</span></code></a></li>
 <li><a class="reference internal" href="#reverse"><code class="docutils literal notranslate"><span class="pre">reverse()</span></code></a></li>
+<li><a class="reference internal" href="#shuffle"><code class="docutils literal notranslate"><span class="pre">shuffle()</span></code></a></li>
 <li><a class="reference internal" href="#slice"><code class="docutils literal notranslate"><span class="pre">slice()</span></code></a></li>
 <li><a class="reference internal" href="#subscript"><code class="docutils literal notranslate"><span class="pre">subscript()</span></code></a></li>
 <li><a class="reference internal" href="#transform"><code class="docutils literal notranslate"><span class="pre">transform()</span></code></a></li>

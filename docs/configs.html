@@ -238,6 +238,34 @@ small amount of data which might result in generating too many small spilled
 files.</p>
 </section>
 </section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<section id="max-partitions-per-writers">
+<h3><code class="docutils literal notranslate"><span class="pre">max_partitions_per_writers</span></code><a class="headerlink" href="#max-partitions-per-writers" title="Permalink to this heading">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">100</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Maximum number of partitions per writer.</p>
+</section>
+<section id="insert-existing-partitions-behavior">
+<h3><code class="docutils literal notranslate"><span class="pre">insert_existing_partitions_behavior</span></code><a class="headerlink" href="#insert-existing-partitions-behavior" title="Permalink to this heading">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">string</span></code></p></li>
+<li><p><strong>Allowed values:</strong> <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>, <code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>The behavior on insert existing partitions. This property only derives
+the update mode field of the table writer operator output. <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>
+sets the update mode to indicate overwriting a partition if exists.
+<code class="docutils literal notranslate"><span class="pre">ERROR</span></code> sets the update mode to indicate error throwing if writing
+to an existing partition.</p>
+</section>
+</section>
 </section>
 
 
@@ -270,6 +298,11 @@ files.</p>
 <li><a class="reference internal" href="#max-spill-level"><code class="docutils literal notranslate"><span class="pre">max-spill-level</span></code></a></li>
 <li><a class="reference internal" href="#max-spill-file-size"><code class="docutils literal notranslate"><span class="pre">max-spill-file-size</span></code></a></li>
 <li><a class="reference internal" href="#min-spill-run-size"><code class="docutils literal notranslate"><span class="pre">min-spill-run-size</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a><ul>
+<li><a class="reference internal" href="#max-partitions-per-writers"><code class="docutils literal notranslate"><span class="pre">max_partitions_per_writers</span></code></a></li>
+<li><a class="reference internal" href="#insert-existing-partitions-behavior"><code class="docutils literal notranslate"><span class="pre">insert_existing_partitions_behavior</span></code></a></li>
 </ul>
 </li>
 </ul>

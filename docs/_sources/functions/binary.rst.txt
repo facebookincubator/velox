@@ -6,21 +6,13 @@ Binary Functions
 
     Computes the crc32 checksum of ``binary``.
 
-.. function:: xxhash64(binary) -> varbinary
+.. function:: from_base64(string) -> varbinary
 
-    Computes the xxhash64 hash of ``binary``.
+    Decodes binary data from the base64 encoded ``string``.
 
-.. function:: md5(binary) -> varbinary
+.. function:: from_hex(string) -> varbinary
 
-    Computes the md5 hash of ``binary``.
-
-.. function:: sha256(binary) -> varbinary
-
-    Computes the SHA-256 hash of ``binary``.
-
-.. function:: sha512(binary) -> varbinary
-
-    Computes the SHA-512 hash of ``binary``.
+    Decodes binary data from the hex encoded ``string``.
 
 .. function:: hmac_sha1(binary, key) -> varbinary
 
@@ -34,18 +26,38 @@ Binary Functions
 
     Computes the HMAC with sha512 of ``binary`` with the given ``key``.
 
+.. function:: md5(binary) -> varbinary
+
+    Computes the md5 hash of ``binary``.
+
+.. function:: sha1(binary) -> varbinary
+
+    Computes the SHA-1 hash of ``binary``.
+
+.. function:: sha256(binary) -> varbinary
+
+    Computes the SHA-256 hash of ``binary``.
+
+.. function:: sha512(binary) -> varbinary
+
+    Computes the SHA-512 hash of ``binary``.
+
+.. function:: spooky_hash_v2_32(binary) -> varbinary
+
+    Computes the SpookyHashV2 32-bit hash of ``binary``.
+
+.. function:: spooky_hash_v2_64(binary) -> varbinary
+
+    Computes the 64-bit SpookyHashV2 hash of ``binary``.
+
 .. function:: to_base64(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation.
-
-.. function:: from_base64(string) -> varbinary
-
-    Decodes binary data from the base64 encoded ``string``.
 
 .. function:: to_hex(binary) -> varchar
 
     Encodes ``binary`` into a hex string representation.
 
-.. function:: from_hex(string) -> varbinary
+.. function:: xxhash64(binary) -> varbinary
 
-    Decodes binary data from the hex encoded ``string``.
+    Computes the xxhash64 hash of ``binary``.

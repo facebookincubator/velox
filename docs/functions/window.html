@@ -102,10 +102,8 @@ The query ranks orders for each clerk by price:</p>
 </pre></div>
 </div>
 </section>
-</section>
-</section>
 <section id="ranking-functions">
-<h1>Ranking functions<a class="headerlink" href="#ranking-functions" title="Permalink to this heading">¶</a></h1>
+<h3>Ranking functions<a class="headerlink" href="#ranking-functions" title="Permalink to this heading">¶</a></h3>
 <dl class="py function">
 <dt class="sig sig-object py" id="cume_dist">
 <span class="sig-name descname"><span class="pre">cume_dist</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cume_dist" title="Permalink to this definition">¶</a></dt>
@@ -155,7 +153,7 @@ The ranking is performed for each window partition.</p>
 within the window partition.</p>
 </section>
 <section id="value-functions">
-<h1>Value functions<a class="headerlink" href="#value-functions" title="Permalink to this heading">¶</a></h1>
+<h3>Value functions<a class="headerlink" href="#value-functions" title="Permalink to this heading">¶</a></h3>
 <dl class="py function">
 <dt class="sig sig-object py" id="nth_value">
 <span class="sig-name descname"><span class="pre">nth_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#nth_value" title="Permalink to this definition">¶</a></dt>
@@ -166,9 +164,11 @@ can be any scalar expression. If the offset is null or greater than the number o
 returned. It is an error for the offset to be zero or negative.</p>
 </section>
 <section id="aggregate-functions">
-<h1>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h1>
+<h3>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h3>
 <p>All aggregate functions can be used as window functions by adding the OVER clause. The aggregate function is computed
 for each row over the rows within the current row’s window frame.</p>
+</section>
+</section>
 </section>
 
 
@@ -184,10 +184,6 @@ for each row over the rows within the current row’s window frame.</p>
 <li><a class="reference internal" href="#">Window functions</a><ul>
 <li><a class="reference internal" href="#understanding-the-window-function-definition">Understanding the window function definition</a><ul>
 <li><a class="reference internal" href="#sql-example">SQL Example</a></li>
-</ul>
-</li>
-</ul>
-</li>
 <li><a class="reference internal" href="#ranking-functions">Ranking functions</a><ul>
 <li><a class="reference internal" href="#cume_dist"><code class="docutils literal notranslate"><span class="pre">cume_dist()</span></code></a></li>
 <li><a class="reference internal" href="#dense_rank"><code class="docutils literal notranslate"><span class="pre">dense_rank()</span></code></a></li>
@@ -202,6 +198,10 @@ for each row over the rows within the current row’s window frame.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#aggregate-functions">Aggregate functions</a></li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 
   </div>
