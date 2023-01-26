@@ -118,6 +118,12 @@ DEFINE_bool(
     "Enable re-use already generated expression. Currently it only re-uses "
     "expressions that do not have nested expressions.");
 
+DEFINE_bool(
+    velox_fuzzer_enable_custom_types,
+    false,
+    "Enable testing of function signatures with custom arguments or return types."
+    );
+
 namespace facebook::velox::test {
 
 namespace {
@@ -245,6 +251,17 @@ bool useTypeName(
 }
 
 bool isSupportedSignature(const exec::FunctionSignature& signature) {
+
+  if (!FLAGS_velox_fuzzer_enable_custom_types) {
+    if (useTypeName(signature, "json") ||
+        useTypeName(signature, "opaque") ||
+        useTypeName(signature, "hyperloglog") ||
+        useTypeName(signature, "custom") ||
+        useTypeName(signature, "timestamp with time zone")) {
+      return false;
+    }
+  }
+
   // Not supporting lambda functions, or functions using decimal and
   // timestamp with time zone types.
   return !(
@@ -252,7 +269,6 @@ bool isSupportedSignature(const exec::FunctionSignature& signature) {
       useTypeName(signature, "long_decimal") ||
       useTypeName(signature, "short_decimal") ||
       useTypeName(signature, "decimal") ||
-      useTypeName(signature, "timestamp with time zone") ||
       useTypeName(signature, "interval day to second") ||
       (FLAGS_velox_fuzzer_enable_complex_types &&
        useTypeName(signature, "unknown")));
