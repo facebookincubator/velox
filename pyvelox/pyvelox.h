@@ -35,6 +35,12 @@ namespace facebook::velox::py {
 namespace py = pybind11;
 
 struct PyVeloxContext {
+  PyVeloxContext() = default;
+  PyVeloxContext(const PyVeloxContext&) = delete;
+  PyVeloxContext(const PyVeloxContext&&) = delete;
+  PyVeloxContext& operator=(const PyVeloxContext&) = delete;
+  PyVeloxContext& operator=(const PyVeloxContext&&) = delete;
+
   static inline PyVeloxContext& getInstance() {
     if (!instance_) {
       instance_ = std::make_unique<PyVeloxContext>();
@@ -102,7 +108,7 @@ inline velox::variant pyToVariant(const py::handle& obj) {
 }
 
 template <TypeKind T>
-inline VectorPtr variantsToFlatVector(
+static inline VectorPtr variantsToFlatVector(
     const std::vector<velox::variant>& variants,
     facebook::velox::memory::MemoryPool* pool) {
   using NativeType = typename TypeTraits<T>::NativeType;
@@ -134,7 +140,7 @@ inline VectorPtr variantsToFlatVector(
   return result;
 }
 
-inline VectorPtr pyListToVector(
+static inline VectorPtr pyListToVector(
     const py::list& list,
     facebook::velox::memory::MemoryPool* pool) {
   std::vector<velox::variant> variants;
