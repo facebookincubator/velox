@@ -233,6 +233,7 @@ class S3FileSystem::Impl {
     if (origCount == 0) {
       Aws::SDKOptions awsOptions;
       awsOptions.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Fatal;
+      awsOptions.httpOptions.installSigPipeHandler = true;
       Aws::InitAPI(awsOptions);
     }
   }
