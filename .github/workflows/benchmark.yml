@@ -105,7 +105,7 @@ jobs:
 
       - name: Remove Unchanged Benchmarks
         id: delete
-        if: ${{ github.event_name == 'pull_request' }}
+        if: false # deactivated for now ${{ github.event_name == 'pull_request' }}
         run: |
           pushd ${BINARY_DIR}/baseline/
           # list all executable files in the directory
