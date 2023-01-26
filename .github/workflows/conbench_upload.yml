@@ -37,7 +37,7 @@ jobs:
 
     - name: 'Download artifacts'
       id: 'download'
-      uses: actions/github-script@v5
+      uses: actions/github-script@v6
       with:
         script: |
           const run_id = "${{ github.event.workflow_run.id || inputs.run_id }}";

@@ -118,10 +118,8 @@ jobs:
             fi
           done
 
-          popd
-          
           if ! find . -type f -executable | grep -q .; then
-            echo "set-output name=empty::true"
+            echo "empty=true" >> $GITHUB_OUTPUT
             mkdir -p ${BASELINE_OUTPUT_PATH}
             mkdir -p ${TARGET_OUTPUT_PATH}
           fi
