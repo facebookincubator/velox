@@ -119,14 +119,32 @@ DEFINE_bool(
     "expressions that do not have nested expressions.");
 
 DEFINE_bool(
-    velox_fuzzer_enable_custom_types,
+    enable_custom_types,
     false,
-    "Enable testing of function signatures with custom arguments or return types."
-    );
+    "Enable testing of function signatures with custom arguments or return types.");
 
 namespace facebook::velox::test {
 
 namespace {
+
+// Decimal types, interval day to second, lambdas along with
+// custom types are currently not supported.
+static const std::unordered_set<std::string> kSupportedTypeNames = {
+    "integer",
+    "boolean",
+    "tinyint",
+    "smallint",
+    "bigint",
+    "real",
+    "double",
+    "timestamp",
+    "varchar",
+    "varbinary",
+    "date",
+    "unknown",
+    "map",
+    "array",
+    "row"};
 
 using exec::SignatureBinder;
 
@@ -250,28 +268,59 @@ bool useTypeName(
   return false;
 }
 
-bool isSupportedSignature(const exec::FunctionSignature& signature) {
+// Determine whether type is non custom type.
+// variables represents Template variables of a signature.
+// Template variable names will be regarded as non custom types.
+bool hasNoCustomType(
+    const exec::TypeSignature& type,
+    const std::unordered_set<std::string>& variables) {
+  auto sanitizedTypeName = exec::sanitizeName(type.baseName());
+  if (variables.find(sanitizedTypeName) != variables.end()) {
+    return true;
+  }
+  if (kSupportedTypeNames.find(sanitizedTypeName) ==
+      kSupportedTypeNames.end()) {
+    return false;
+  }
+  for (const auto& parameter : type.parameters()) {
+    if (!hasNoCustomType(parameter, variables)) {
+      return false;
+    }
+  }
+  return true;
+}
 
-  if (!FLAGS_velox_fuzzer_enable_custom_types) {
-    if (useTypeName(signature, "json") ||
-        useTypeName(signature, "opaque") ||
-        useTypeName(signature, "hyperloglog") ||
-        useTypeName(signature, "custom") ||
-        useTypeName(signature, "timestamp with time zone")) {
+bool hasOnlyAllowedTypes(const exec::FunctionSignature& signature) {
+  std::unordered_set<std::string> variableNames;
+  variableNames.reserve(signature.variables().size());
+
+  for (auto variable : signature.variables()) {
+    variableNames.insert(exec::sanitizeName(variable.first));
+  }
+
+  if (!hasNoCustomType(signature.returnType(), variableNames)) {
+    return false;
+  }
+
+  for (const auto& argument : signature.argumentTypes()) {
+    if (!hasNoCustomType(argument, variableNames)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isSupportedSignature(const exec::FunctionSignature& signature) {
+  if (!FLAGS_enable_custom_types) {
+    // Support only predefined set of types.
+    if (!hasOnlyAllowedTypes(signature)) {
       return false;
     }
   }
 
-  // Not supporting lambda functions, or functions using decimal and
-  // timestamp with time zone types.
   return !(
-      useTypeName(signature, "function") ||
-      useTypeName(signature, "long_decimal") ||
-      useTypeName(signature, "short_decimal") ||
-      useTypeName(signature, "decimal") ||
-      useTypeName(signature, "interval day to second") ||
-      (FLAGS_velox_fuzzer_enable_complex_types &&
-       useTypeName(signature, "unknown")));
+      FLAGS_velox_fuzzer_enable_complex_types &&
+      useTypeName(signature, "unknown"));
 }
 
 // Randomly pick columns from the input row vector to wrap in lazy.
