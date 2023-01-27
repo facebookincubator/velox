@@ -19,6 +19,7 @@ on:
     paths:
       - 'velox/**'
       - 'third_party/**'
+      - 'pyvellox/**'
       - '.github/workflows/benchmark.yml'
   push:
     branches: [main]
