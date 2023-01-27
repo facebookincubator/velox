@@ -42,7 +42,7 @@ jobs:
       LINUX_DISTRO: "ubuntu"
       RESULTS_ROOT: "${{ github.workspace }}/benchmark-results"
       BASELINE_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/baseline/"
-      TARGET_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/target/"
+      CONTENDER_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/contender/"
     steps:
       - name: "Setup ccache and python"
         run: |
@@ -94,8 +94,8 @@ jobs:
             n_cores=$(nproc)
             make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$n_cores MAX_LINK_JOBS=$n_cores
             ccache -s
-            mkdir -p  ${BINARY_DIR}/target/
-            cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/target/
+            mkdir -p  ${BINARY_DIR}/contender/
+            cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/contender/
 
       - uses: actions/cache/save@v3
         id: cache
@@ -121,11 +121,11 @@ jobs:
 
             if [ "${{ github.event_name }}" == "pull_request" ]; then
              make benchmarks-basic-run \
-                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/target/ --output_path ${TARGET_OUTPUT_PATH}"
+                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
             else
-              echo "Copying baseline results to target for upload."
-              mkdir -p ${TARGET_OUTPUT_PATH}
-              cp -r ${BASELINE_OUTPUT_PATH}/* ${TARGET_OUTPUT_PATH}
+              echo "Copying baseline results to contender for upload."
+              mkdir -p ${CONTENDER_OUTPUT_PATH}
+              cp -r ${BASELINE_OUTPUT_PATH}/* ${CONTENDER_OUTPUT_PATH}
             fi 
 
       - uses: actions/upload-artifact@v3
