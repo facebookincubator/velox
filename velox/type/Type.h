@@ -473,7 +473,7 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
   virtual std::string toString() const = 0;
 
   inline bool hasSameTypeId(const Type& other) const {
-    return (std::type_index(typeid(*this)) == std::type_index(typeid(other)));
+    return typeid(*this) == typeid(other);
   }
 
   /// Types are weakly matched.
