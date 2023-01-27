@@ -68,13 +68,13 @@ VectorPtr setVectorFromVariantsByKind<TypeKind::DATE>(
     const std::vector<velox::variant>& values,
     memory::MemoryPool* pool) {
   auto flatVector =
-      BaseVector::create<FlatVector<int32_t>>(DATE(), values.size(), pool);
+      BaseVector::create<FlatVector<Date>>(DATE(), values.size(), pool);
 
   for (vector_size_t i = 0; i < values.size(); i++) {
     if (values[i].isNull()) {
       flatVector->setNull(i, true);
     } else {
-      flatVector->set(i, values[i].value<int32_t>());
+      flatVector->set(i, Date(values[i].value<int32_t>()));
     }
   }
   return flatVector;
