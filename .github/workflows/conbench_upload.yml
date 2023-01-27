@@ -93,7 +93,7 @@ jobs:
     - name: "Upload results"
       env:
         CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
-        CONBENCH_HOST: "GitHub-runner"
+        CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-8-core"
         CONBENCH_EMAIL: ${{ secrets.CONBENCH_EMAIL }}
         CONBENCH_PASSWORD: ${{ secrets.CONBENCH_PASSWORD }}
       run: |
