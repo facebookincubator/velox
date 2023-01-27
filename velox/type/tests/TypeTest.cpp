@@ -539,6 +539,7 @@ TEST(TypeTest, equivalent) {
   EXPECT_TRUE(ARRAY(BIGINT())->equivalent(*ARRAY(BIGINT())));
   EXPECT_FALSE(ARRAY(BIGINT())->equivalent(*ARRAY(INTEGER())));
   EXPECT_FALSE(ARRAY(BIGINT())->equivalent(*ROW({{"a", BIGINT()}})));
+  EXPECT_FALSE(ARRAY(BIGINT())->equivalent(*FIXED_SIZE_ARRAY(10, BIGINT())));
   EXPECT_FALSE(FIXED_SIZE_ARRAY(10, BIGINT())->equivalent(*ARRAY(BIGINT())));
   EXPECT_FALSE(FIXED_SIZE_ARRAY(10, BIGINT())
                    ->equivalent(*FIXED_SIZE_ARRAY(9, BIGINT())));

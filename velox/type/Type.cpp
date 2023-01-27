@@ -228,9 +228,11 @@ bool ArrayType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (!other.isArray()) {
+
+  if (!hasSameTypeId(other)) {
     return false;
   }
+
   auto& otherArray = other.asArray();
   return child_->equivalent(*otherArray.child_);
 }
@@ -375,7 +377,7 @@ bool RowType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (other.kind() != TypeKind::ROW) {
+  if (!hasSameTypeId(other)) {
     return false;
   }
   auto& otherTyped = other.asRow();
@@ -467,7 +469,7 @@ bool MapType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (!other.isMap()) {
+  if (!hasSameTypeId(other)) {
     return false;
   }
   auto& otherMap = other.asMap();
@@ -479,7 +481,7 @@ bool FunctionType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (other.kind() != TypeKind::FUNCTION) {
+  if (!hasSameTypeId(other)) {
     return false;
   }
   auto& otherTyped = *reinterpret_cast<const FunctionType*>(&other);
@@ -507,7 +509,7 @@ bool OpaqueType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (other.kind() != TypeKind::OPAQUE) {
+  if (!hasSameTypeId(other)) {
     return false;
   }
   return true;

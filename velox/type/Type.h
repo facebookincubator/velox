@@ -472,6 +472,10 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   virtual std::string toString() const = 0;
 
+  inline bool hasSameTypeId(const Type& other) const {
+    return (std::type_index(typeid(*this)) == std::type_index(typeid(other)));
+  }
+
   /// Types are weakly matched.
   /// Examples: Two RowTypes are equivalent if the children types are
   /// equivalent, but the children names could be different. Two OpaqueTypes are
@@ -595,7 +599,7 @@ class ScalarType : public TypeBase<KIND> {
   FOLLY_NOINLINE static const std::shared_ptr<const ScalarType<KIND>> create();
 
   bool equivalent(const Type& other) const override {
-    return KIND == other.kind();
+    return this->hasSameTypeId(other);
   }
 
   // TODO: velox implementation is in cpp
@@ -632,7 +636,7 @@ class DecimalType : public ScalarType<KIND> {
   }
 
   inline bool equivalent(const Type& otherDecimal) const override {
-    if (this->kind() != otherDecimal.kind()) {
+    if (!this->hasSameTypeId(otherDecimal)) {
       return false;
     }
     auto decimalType = static_cast<const DecimalType<KIND>&>(otherDecimal);
@@ -701,7 +705,7 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
   }
 
   bool equivalent(const Type& other) const override {
-    return TypeKind::UNKNOWN == other.kind();
+    return hasSameTypeId(other);
   }
 
   folly::dynamic serialize() const override {
