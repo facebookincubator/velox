@@ -919,8 +919,6 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
   bool equivalent(const Type& other) const override;
 
-  bool operator==(const Type& other) const override;
-
   const std::type_index& typeIndex() const {
     return typeIndex_;
   }

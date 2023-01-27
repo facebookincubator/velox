@@ -509,14 +509,7 @@ bool OpaqueType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (!hasSameTypeId(other)) {
-    return false;
-  }
-  return true;
-}
-
-bool OpaqueType::operator==(const Type& other) const {
-  if (!this->equivalent(other)) {
+  if (other.kind() != TypeKind::OPAQUE) {
     return false;
   }
   auto& otherTyped = *reinterpret_cast<const OpaqueType*>(&other);
