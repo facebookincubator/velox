@@ -23,6 +23,8 @@
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/VeloxToSubstraitPlan.h"
 
+#include "velox/substrait/VariantToVectorConverter.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec::test;
@@ -439,6 +441,21 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
       "array['1992-01-01'::DATE],"
       "array[INTERVAL 54 MILLISECONDS], "
       "array[], array[array[1,2,3], array[4,5]]");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, date1) {
+  auto a = makeFlatVector<int32_t>({0, 1});
+  auto b = makeFlatVector<double_t>({0.905791934145, 0.968867771124});
+  // auto resultVec = setVectorFromVariants(
+  //     DATE(), {variant(Date(9020)), variant(Date(8875))}, pool_.get());
+  // auto c = resultVec->asFlatVector<Date>();
+  auto c = makeFlatVector<Date>({Date(8035), Date(8036)});
+
+  auto vectors = makeRowVector({"a", "b", "c"}, {a, b, c});
+  createDuckDbTable({vectors});
+
+  auto plan = PlanBuilder().values({vectors}).planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp");
 }
 
 int main(int argc, char** argv) {
