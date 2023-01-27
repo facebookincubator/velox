@@ -20,7 +20,7 @@ on:
         description: 'workflow run id to use the artifacts from'
         required: true
   workflow_run:
-    workflows: ["Linux Benchmark"]
+    workflows: ["Ubuntu Benchmark"]
     types:
       - completed
 
