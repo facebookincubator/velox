@@ -100,17 +100,11 @@ jobs:
             cp -r --verbose _build/release/velox/benchmarks/basic/* ${BINARY_DIR}/baseline/
 
       - name: "Save ccache"
-        if: ${{ github.event_name == 'push' }}
         uses: actions/cache/save@v3
         id: cache
         with:
           path: ".ccache"
           key: ccache-benchmark-${{ github.sha }}
-
-      - uses: actions/upload-artifact@v3
-        with:
-          path: ${{ env.BINARY_DIR }}
-          name: "benchmark-binaries"
 
       - name: "Install benchmark dependencies"
         run: |
