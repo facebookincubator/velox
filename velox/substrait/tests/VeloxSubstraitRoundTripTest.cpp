@@ -446,16 +446,16 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
 TEST_F(VeloxSubstraitRoundTripTest, date1) {
   auto a = makeFlatVector<int32_t>({0, 1});
   auto b = makeFlatVector<double_t>({0.905791934145, 0.968867771124});
-  // auto resultVec = setVectorFromVariants(
-  //     DATE(), {variant(Date(9020)), variant(Date(8875))}, pool_.get());
-  // auto c = resultVec->asFlatVector<Date>();
-  auto c = makeFlatVector<Date>({Date(8035), Date(8036)});
+  auto c = makeFlatVector<Date>({Date(8036), Date(8035)});
 
   auto vectors = makeRowVector({"a", "b", "c"}, {a, b, c});
   createDuckDbTable({vectors});
 
-  auto plan = PlanBuilder().values({vectors}).planNode();
-  assertPlanConversion(plan, "SELECT * FROM tmp");
+  auto plan = PlanBuilder()
+                  .values({vectors})
+                  .orderBy({"c ASC NULLS FIRST"}, false)
+                  .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp ORDER BY c NULLS FIRST");
 }
 
 int main(int argc, char** argv) {
