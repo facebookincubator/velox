@@ -38,8 +38,6 @@ jobs:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
       BINARY_DIR: "${{ github.workspace }}/benchmarks/"
-      CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
-      CONBENCH_HOST: "GitHub-runner"
       LINUX_DISTRO: "ubuntu"
       RESULTS_ROOT: "${{ github.workspace }}/benchmark-results"
       BASELINE_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/baseline/"
