@@ -56,7 +56,8 @@ jobs:
             apt update
             apt install -y lsb-release python3 pip
 
-      - uses: actions/cache/restore@v3
+      - name: "Restore ccache"
+        uses: actions/cache/restore@v3
         id: restore-cache
         with:
           path: ".ccache"
@@ -64,32 +65,13 @@ jobs:
           restore-keys: |
             ccache-benchmark-
 
-      - name: "Checkout Base"
+      - name: "Checkout Contender"
         uses: actions/checkout@v3
         with:
           path: 'velox'
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           submodules: 'recursive'
 
-      - name: Build Base Benchmarks
-        working-directory: velox
-        run: |
-            n_cores=$(nproc)
-            make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$((n_cores/2)) MAX_LINK_JOBS=$n_cores
-            ccache -s
-            mkdir -p ${BINARY_DIR}/baseline/
-            cp -r --verbose _build/release/velox/benchmarks/basic/* ${BINARY_DIR}/baseline/
-
-      - name: "Checkout Head"
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/checkout@v3
-        with:
-          clean: false
-          path: 'velox'
-          submodules: 'recursive'
-
-      - name: Build Target Benchmarks
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Build Contender Benchmarks
         working-directory: velox
         run: |
             n_cores=$(nproc)
@@ -98,7 +80,28 @@ jobs:
             mkdir -p  ${BINARY_DIR}/contender/
             cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/contender/
 
-      - uses: actions/cache/save@v3
+      - name: "Checkout Baseline"
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@v3
+        with:
+          clean: false
+          path: 'velox'
+          ref: ${{ github.event.pull_request.base.sha }}
+          submodules: 'recursive'
+
+      - name: Build Baseline Benchmarks
+        if: ${{ github.event_name == 'pull_request' }}
+        working-directory: velox
+        run: |
+            n_cores=$(nproc)
+            make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$n_cores MAX_LINK_JOBS=$n_cores
+            ccache -s
+            mkdir -p ${BINARY_DIR}/baseline/
+            cp -r --verbose _build/release/velox/benchmarks/basic/* ${BINARY_DIR}/baseline/
+
+      - name: "Save ccache"
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/cache/save@v3
         id: cache
         with:
           path: ".ccache"
@@ -114,20 +117,18 @@ jobs:
           cd velox
           python3 -m pip install -r scripts/benchmark-requirements.txt
 
-      - name: "Run Benchmarks - Full Round"
+      - name: "Run Benchmarks - Contender"
+        working-directory: 'velox'
+        run: |
+            make benchmarks-basic-run \
+                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
+
+      - name: "Run Benchmarks - Baseline"
+        if: ${{ github.event_name == 'pull_request' }}
         working-directory: 'velox'
         run: |
             make benchmarks-basic-run \
                 EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/baseline/ --output_path ${BASELINE_OUTPUT_PATH}"
-
-            if [ "${{ github.event_name }}" == "pull_request" ]; then
-             make benchmarks-basic-run \
-                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
-            else
-              echo "Copying baseline results to contender for upload."
-              mkdir -p ${CONTENDER_OUTPUT_PATH}
-              cp -r ${BASELINE_OUTPUT_PATH}/* ${CONTENDER_OUTPUT_PATH}
-            fi 
 
       - uses: actions/upload-artifact@v3
         with:
