@@ -82,6 +82,7 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@v3
         with:
+          clean: false
           path: 'velox'
           submodules: 'recursive'
 
