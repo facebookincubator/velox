@@ -86,6 +86,19 @@ E must be bigint or varchar.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="array_frequency">
+<span class="sig-name descname"><span class="pre">array_frequency</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span> <span class="pre">x)</span> <span class="pre">-&gt;</span> <span class="pre">map(E</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_frequency" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a map: keys are the unique elements in the array, values are how many times the key appears.
+Ignores null elements. Empty array returns empty map. E must be bigint or varchar.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_frequency</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span> <span class="o">-&gt;</span> <span class="mi">4</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">array_frequency</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">array_frequency</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s2">&quot;knock&quot;</span><span class="p">,</span> <span class="s2">&quot;knock&quot;</span><span class="p">,</span> <span class="s2">&quot;who&quot;</span><span class="p">,</span> <span class="s2">&quot;?&quot;</span><span class="p">]);</span> <span class="o">--</span> <span class="p">{</span><span class="s2">&quot;knock&quot;</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;who&quot;</span> <span class="o">-&gt;</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;?&quot;</span> <span class="o">-&gt;</span> <span class="mi">1</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">array_frequency</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[]);</span> <span class="o">--</span> <span class="p">{}</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_has_duplicates">
 <span class="sig-name descname"><span class="pre">array_has_duplicates</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#array_has_duplicates" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns a boolean: whether array has any elements that occur more than once.
@@ -338,6 +351,7 @@ If one array is shorter, nulls are appended at the end to match the length of th
 <li><a class="reference internal" href="#array_distinct"><code class="docutils literal notranslate"><span class="pre">array_distinct()</span></code></a></li>
 <li><a class="reference internal" href="#array_duplicates"><code class="docutils literal notranslate"><span class="pre">array_duplicates()</span></code></a></li>
 <li><a class="reference internal" href="#array_except"><code class="docutils literal notranslate"><span class="pre">array_except()</span></code></a></li>
+<li><a class="reference internal" href="#array_frequency"><code class="docutils literal notranslate"><span class="pre">array_frequency()</span></code></a></li>
 <li><a class="reference internal" href="#array_has_duplicates"><code class="docutils literal notranslate"><span class="pre">array_has_duplicates()</span></code></a></li>
 <li><a class="reference internal" href="#array_intersect"><code class="docutils literal notranslate"><span class="pre">array_intersect()</span></code></a></li>
 <li><a class="reference internal" href="#array_join"><code class="docutils literal notranslate"><span class="pre">array_join()</span></code></a></li>
