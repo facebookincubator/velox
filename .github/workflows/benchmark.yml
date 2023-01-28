@@ -34,7 +34,7 @@ defaults:
 jobs:
   benchmark:
     runs-on: 8-core
-    container: ghcr.io/assignuser/velox-dev:ubuntu-benchmark 
+    container: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
