@@ -166,7 +166,7 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     if (!timestamp.has_value() || !timeZoneName.has_value()) {
       return evaluateOnce<T>(
           expression,
-          makeRowVector({makeRowVector(
+          makeRowVector({makeTimestampWTZVector(
               {
                   makeNullableFlatVector<int64_t>({std::nullopt}),
                   makeNullableFlatVector<int16_t>({std::nullopt}),
@@ -289,7 +289,7 @@ TEST_F(DateTimeFunctionsTest, toUnixtime) {
     const int64_t tzid = util::getTimeZoneID(tz);
     return evaluateOnce<double>(
         "to_unixtime(c0)",
-        makeRowVector({makeRowVector({
+        makeRowVector({makeTimestampWTZVector({
             makeNullableFlatVector<int64_t>({timestamp}),
             makeNullableFlatVector<int16_t>({tzid}),
         })}));
@@ -348,7 +348,7 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
         "from_unixtime(c0, '+01:00')", makeRowVector({unixtimes}));
     ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()));
 
-    auto expected = makeRowVector({
+    auto expected = makeTimestampWTZVector({
         makeFlatVector<int64_t>(
             size, [&](auto row) { return unixtimeAt(row) * 1'000; }),
         makeConstant((int16_t)900, size),
@@ -360,7 +360,7 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
         "from_unixtime(c0, '+01:00')",
         makeRowVector({makeFlatVector<double>({kNan, kNan})}));
     ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()));
-    expected = makeRowVector({
+    expected = makeTimestampWTZVector({
         makeFlatVector<int64_t>({0, 0}),
         makeFlatVector<int16_t>({900, 900}),
     });
@@ -380,7 +380,7 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
         "from_unixtime(c0, c1)", makeRowVector({unixtimes, timezones}));
     ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()));
 
-    auto expected = makeRowVector({
+    auto expected = makeTimestampWTZVector({
         makeFlatVector<int64_t>(
             size, [&](auto row) { return unixtimeAt(row) * 1'000; }),
         makeFlatVector<int16_t>(
@@ -396,7 +396,7 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
             makeNullableFlatVector<StringView>({"+01:00", "+02:00"}),
         }));
     ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()));
-    expected = makeRowVector({
+    expected = makeTimestampWTZVector({
         makeFlatVector<int64_t>({0, 0}),
         makeFlatVector<int16_t>({900, 960}),
     });

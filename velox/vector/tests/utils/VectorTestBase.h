@@ -121,6 +121,16 @@ class VectorTestBase {
     return rowVector;
   }
 
+    RowVectorPtr makeTimestampWTZVector(
+            const std::vector<VectorPtr>& children,
+            std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {
+      auto rowVector = vectorMaker_.timestampWTZVector(children);
+      if (isNullAt) {
+        setNulls(rowVector, isNullAt);
+      }
+      return rowVector;
+    }
+
   RowVectorPtr makeRowVector(
       const std::shared_ptr<const RowType>& rowType,
       vector_size_t size) {

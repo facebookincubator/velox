@@ -64,6 +64,8 @@ class VectorMaker {
       const std::shared_ptr<const RowType>& rowType,
       vector_size_t size);
 
+    RowVectorPtr timestampWTZVector(const std::vector<VectorPtr>& children);
+
   template <typename T>
   using EvalType = typename CppToType<T>::NativeType;
 
