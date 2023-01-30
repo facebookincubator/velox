@@ -46,7 +46,7 @@ yum -y install bzip2-devel \
   wget \
   zlib-devel
 
-if [ "$CONDA" = true]
+if [ "$CONDA" = true]; then
   #Install conda
   rpm --import https://repo.anaconda.com/pkgs/misc/gpgkeys/anaconda.asc
 
