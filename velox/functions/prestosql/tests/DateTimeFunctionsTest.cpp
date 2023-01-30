@@ -178,7 +178,7 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         util::getTimeZoneID(timeZoneName.value());
     return evaluateOnce<T>(
         expression,
-        makeRowVector({makeRowVector({
+        makeRowVector({makeTimestampWTZVector({
             makeNullableFlatVector<int64_t>({timestamp}),
             makeNullableFlatVector<int16_t>({tzid}),
         })}));
@@ -191,7 +191,7 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     if (!timestamp.has_value() || !timeZoneName.has_value()) {
       return evaluate(
           expression,
-          makeRowVector({makeRowVector(
+          makeRowVector({makeTimestampWTZVector(
               {
                   makeNullableFlatVector<int64_t>({std::nullopt}),
                   makeNullableFlatVector<int16_t>({std::nullopt}),
@@ -203,7 +203,7 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         util::getTimeZoneID(timeZoneName.value());
     return evaluate(
         expression,
-        makeRowVector({makeRowVector({
+        makeRowVector({makeTimestampWTZVector({
             makeNullableFlatVector<int64_t>({timestamp}),
             makeNullableFlatVector<int16_t>({tzid}),
         })}));
@@ -1397,7 +1397,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezone) {
                                      const std::string& timeZone,
                                      int64_t expectedTimestamp) {
     assertEqualVectors(
-        makeRowVector(
+        makeTimestampWTZVector(
             {makeNullableFlatVector<int64_t>({expectedTimestamp}),
              makeNullableFlatVector<int16_t>({util::getTimeZoneID(timeZone)})}),
         evaluateWithTimestampWithTimezone(

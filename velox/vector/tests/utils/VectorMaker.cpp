@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::test {
 
@@ -53,10 +53,15 @@ RowVectorPtr VectorMaker::rowVector(
       pool_, rowType, BufferPtr(nullptr), vectorSize, children);
 }
 
-RowVectorPtr VectorMaker::timestampWTZVector(const std::vector<VectorPtr>& children) {
+RowVectorPtr VectorMaker::timestampWTZVector(
+    const std::vector<VectorPtr>& children) {
   const size_t vectorSize = children.empty() ? 0 : children.front()->size();
   return std::make_shared<RowVector>(
-          pool_, TimestampWithTimeZoneType::get(), BufferPtr(nullptr), vectorSize, children);
+      pool_,
+      TIMESTAMP_WITH_TIME_ZONE(),
+      BufferPtr(nullptr),
+      vectorSize,
+      children);
 }
 
 RowVectorPtr VectorMaker::rowVector(

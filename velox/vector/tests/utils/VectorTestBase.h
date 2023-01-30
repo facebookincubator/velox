@@ -121,15 +121,15 @@ class VectorTestBase {
     return rowVector;
   }
 
-    RowVectorPtr makeTimestampWTZVector(
-            const std::vector<VectorPtr>& children,
-            std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {
-      auto rowVector = vectorMaker_.timestampWTZVector(children);
-      if (isNullAt) {
-        setNulls(rowVector, isNullAt);
-      }
-      return rowVector;
+  RowVectorPtr makeTimestampWTZVector(
+      const std::vector<VectorPtr>& children,
+      std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {
+    auto rowVector = vectorMaker_.timestampWTZVector(children);
+    if (isNullAt) {
+      setNulls(rowVector, isNullAt);
     }
+    return rowVector;
+  }
 
   RowVectorPtr makeRowVector(
       const std::shared_ptr<const RowType>& rowType,
@@ -612,12 +612,15 @@ class VectorTestBase {
   }
 
   template <typename T>
-  VectorPtr makeConstant(const std::optional<T>& value, vector_size_t size) {
+  VectorPtr makeConstant(
+      const std::optional<T>& value,
+      vector_size_t size,
+      const TypePtr& type = CppToType<T>::create()) {
     return std::make_shared<ConstantVector<EvalType<T>>>(
         pool(),
         size,
         /*isNull=*/!value.has_value(),
-        CppToType<T>::create(),
+        type,
         value ? EvalType<T>(*value) : EvalType<T>(),
         SimpleVectorStats<EvalType<T>>{},
         sizeof(EvalType<T>));

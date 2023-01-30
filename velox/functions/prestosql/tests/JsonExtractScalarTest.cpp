@@ -26,7 +26,8 @@ class JsonExtractScalarTest : public functions::test::FunctionBaseTest {
   std::optional<std::string> json_extract_scalar(
       std::optional<std::string> json,
       std::optional<std::string> path) {
-    return evaluateOnce<std::string>("json_extract_scalar(c0, c1)", json, path);
+    return evaluateOnce<std::string, std::string>(
+        "json_extract_scalar(c0, c1)", {json, path}, {JSON(), VARCHAR()});
   }
 
   void evaluateWithJsonType(

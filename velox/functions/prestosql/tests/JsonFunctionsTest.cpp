@@ -26,24 +26,30 @@ namespace {
 class JsonFunctionsTest : public functions::test::FunctionBaseTest {
  public:
   std::optional<bool> is_json_scalar(std::optional<std::string> json) {
-    return evaluateOnce<bool>("is_json_scalar(c0)", json);
+    return evaluateOnce<bool, std::string>(
+        "is_json_scalar(c0)", {json}, {JSON()});
   }
 
   std::optional<int64_t> json_array_length(std::optional<std::string> json) {
-    return evaluateOnce<int64_t>("json_array_length(c0)", json);
+    return evaluateOnce<int64_t, std::string>(
+        "json_array_length(c0)", {json}, {JSON()});
   }
 
   template <typename T>
   std::optional<bool> json_array_contains(
-      std::optional<std::string> json,
-      std::optional<T> value) {
-    return evaluateOnce<bool>("json_array_contains(c0, c1)", json, value);
+      const std::optional<std::string>& json,
+      const std::optional<T>& value) {
+    auto data = makeRowVector(
+        {makeNullableFlatVector<std::string>({json}, JSON()),
+         makeNullableFlatVector<T>({value}, CppToType<T>::create())});
+    return evaluateOnce<bool>("json_array_contains(c0, c1)", data);
   }
 
   std::optional<int64_t> json_size(
       std::optional<std::string> json,
       std::optional<std::string> path) {
-    return evaluateOnce<int64_t>("json_size(c0, c1)", json, path);
+    return evaluateOnce<int64_t, std::string>(
+        "json_size(c0, c1)", {json, path}, {JSON(), VARCHAR()});
   }
 
   static std::unordered_set<std::string> getSignatureStrings(
@@ -74,14 +80,15 @@ TEST_F(JsonFunctionsTest, jsonFormat) {
   EXPECT_EQ(jsonFormat(R"({"k1":"v1"})"), R"({"k1":"v1"})");
 
   auto data = makeRowVector({makeFlatVector<StringView>(
-      {"This is a long sentence", "This is some other sentence"})});
+      {"This is a long sentence", "This is some other sentence"}, JSON())});
 
   auto result = evaluate("json_format(c0)", data);
   auto expected = makeFlatVector<StringView>(
       {"This is a long sentence", "This is some other sentence"});
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  data = makeRowVector({makeConstant("apple", 2)});
+  const std::optional<StringView> value = "apple";
+  data = makeRowVector({makeConstant(value, 2, JSON())});
   result = evaluate("json_format(c0)", data);
   expected = makeFlatVector<StringView>({{"apple", "apple"}});
 
@@ -90,7 +97,8 @@ TEST_F(JsonFunctionsTest, jsonFormat) {
   data = makeRowVector(
       {makeFlatVector<bool>({true, false}),
        makeFlatVector<StringView>(
-           {"This is a long sentence", "This is some other sentence"})});
+           {"This is a long sentence", "This is some other sentence"},
+           JSON())});
 
   result = evaluate("if(c0, 'foo', json_format(c1))", data);
   expected = makeFlatVector<StringView>({"foo", "This is some other sentence"});
@@ -103,11 +111,13 @@ TEST_F(JsonFunctionsTest, jsonFormat) {
 
 TEST_F(JsonFunctionsTest, jsonParse) {
   const auto jsonParse = [&](std::optional<std::string> value) {
-    return evaluateOnce<StringView>("json_parse(c0)", value);
+    return evaluateOnce<std::string, std::string>(
+        "json_parse(c0)", {value}, {JSON()});
   };
 
   const auto jsonParseWithTry = [&](std::optional<std::string> value) {
-    return evaluateOnce<StringView>("try(json_parse(c0))", value);
+    return evaluateOnce<std::string, std::string>(
+        "try(json_parse(c0))", {value}, {JSON()});
   };
 
   EXPECT_EQ(jsonParse(std::nullopt), std::nullopt);
@@ -133,12 +143,12 @@ TEST_F(JsonFunctionsTest, jsonParse) {
       evaluate("try(json_parse(c0))", makeRowVector({elementVector}));
 
   auto expectedVector = makeNullableFlatVector<StringView>(
-      {R"("abc")", "42", R"({"k1":"v1"})", std::nullopt, std::nullopt});
+      {R"("abc")", "42", R"({"k1":"v1"})", std::nullopt, std::nullopt}, JSON());
   facebook::velox::test::assertEqualVectors(expectedVector, resultVector);
 
   auto data = makeRowVector({makeConstant(R"("k1":)", 2)});
   expectedVector =
-      makeNullableFlatVector<StringView>({std::nullopt, std::nullopt});
+      makeNullableFlatVector<StringView>({std::nullopt, std::nullopt}, JSON());
   facebook::velox::test::assertEqualVectors(
       expectedVector, evaluate("try(json_parse(c0))", data));
 
@@ -151,12 +161,13 @@ TEST_F(JsonFunctionsTest, jsonParse) {
 
   auto result = evaluate("json_parse(c0)", data);
   auto expected = makeFlatVector<StringView>(
-      {R"("This is a long sentence")", R"("This is some other sentence")"});
+      {R"("This is a long sentence")", R"("This is some other sentence")"},
+      JSON());
   facebook::velox::test::assertEqualVectors(expected, result);
 
   data = makeRowVector({makeConstant(R"("apple")", 2)});
   result = evaluate("json_parse(c0)", data);
-  expected = makeFlatVector<StringView>({{R"("apple")", R"("apple")"}});
+  expected = makeFlatVector<StringView>({{R"("apple")", R"("apple")"}}, JSON());
 
   facebook::velox::test::assertEqualVectors(expected, result);
 
@@ -168,7 +179,8 @@ TEST_F(JsonFunctionsTest, jsonParse) {
 
   result = evaluate("if(c0, json_parse(c1), json_parse(c1))", data);
   expected = makeFlatVector<StringView>(
-      {R"("This is a long sentence")", R"("This is some other sentence")"});
+      {R"("This is a long sentence")", R"("This is some other sentence")"},
+      JSON());
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 

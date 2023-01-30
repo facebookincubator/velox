@@ -124,6 +124,14 @@ std::shared_ptr<const Type> resolveSimpleFunction(
       exec::SimpleFunctions().resolveFunction(functionName, argTypes);
 
   if (resolvedFunction) {
+    if (auto customType = getType(
+            resolvedFunction->getMetadata()
+                .signature()
+                ->returnType()
+                .toString(),
+            {})) {
+      return customType;
+    }
     return resolvedFunction->getMetadata().returnType();
   }
 

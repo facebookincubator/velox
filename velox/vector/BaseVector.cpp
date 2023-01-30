@@ -15,6 +15,8 @@
  */
 
 #include "velox/vector/BaseVector.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
@@ -692,6 +694,17 @@ std::shared_ptr<BaseVector> BaseVector::createNullConstant(
   if (type->kind() == TypeKind::LONG_DECIMAL) {
     return std::make_shared<ConstantVector<UnscaledLongDecimal>>(
         pool, size, true, type, UnscaledLongDecimal());
+  }
+
+  if (type == HYPERLOGLOG() || type == JSON()) {
+    return std::make_shared<ConstantVector<StringView>>(
+        pool,
+        size,
+        true,
+        type,
+        StringView(),
+        SimpleVectorStats<StringView>{},
+        sizeof(StringView));
   }
 
   return BaseVector::createConstant(variant(type->kind()), size, pool);
