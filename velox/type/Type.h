@@ -1733,13 +1733,6 @@ struct CppToType<UnscaledLongDecimal>
 template <>
 struct CppToType<UnknownValue> : public CppToTypeBase<TypeKind::UNKNOWN> {};
 
-template <typename T>
-struct CppToType<CustomType<T>> : public CppToType<typename T::type> {
-  static auto create() {
-    return CppToType<typename T::type>::create();
-  }
-};
-
 // todo: remaining cpp2type
 
 template <TypeKind KIND>
@@ -1864,6 +1857,16 @@ bool unregisterType(const std::string& name);
 /// name. Returns nullptr if a type with the specified name does not exist or
 /// does not have a dedicated custom cast operator.
 exec::CastOperatorPtr getCastOperator(const std::string& name);
+
+template <typename T>
+struct CppToType<CustomType<T>> : public CppToType<typename T::type> {
+  static TypePtr create() {
+    if (auto customType = getType(T::typeName, {})) {
+      return customType;
+    }
+    return CppToType<typename T::type>::create();
+  }
+};
 
 // Allows us to transparently use folly::toAppend(), folly::join(), etc.
 template <class TString>
