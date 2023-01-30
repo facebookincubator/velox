@@ -21,7 +21,7 @@ set -efx -o pipefail
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 CPU_TARGET="${CPU_TARGET:-avx}"
-CONDA=${$1:-true}
+CONDA=${1:-true}
 export CFLAGS=$(get_cxx_flags $CPU_TARGET)
 export CXXFLAGS=$CFLAGS  # Used by boost.
 
