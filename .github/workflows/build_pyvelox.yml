@@ -13,11 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - if: matrix.os == 'macos-11'
-        run: echo "CMAKE_PREFIX_PATH=$(brew --prefix)" >> $GITHUB_ENV
+        run: |
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix)" >> $GITHUB_ENV
+          brew info openssl@1.1
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.12.0
         env:
-          CIBW_BEFORE_ALL_LINUX: "bash {package}/scripts/setup-velox-torcharrow.sh false"
+          CIBW_BEFORE_ALL_LINUX: "ls -r {package} && bash {package}/scripts/setup-velox-torcharrow.sh false"
           CIBW_BEFORE_ALL_MACOS: "bash {package}/scripts/setup-macos.sh"
           # CIBW_SOME_OPTION: value
         #    ...
