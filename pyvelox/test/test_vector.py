@@ -21,22 +21,27 @@ class TestVeloxVector(unittest.TestCase):
         v1 = pv.from_list([1, 2, 3])
         v2 = pv.from_list(["hello", "world"])
         v3 = pv.constant_vector(1000, 10)
+        v4 = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1])
 
         self.assertTrue(isinstance(v1, pv.BaseVector))
         self.assertTrue(isinstance(v2, pv.BaseVector))
         self.assertTrue(isinstance(v3, pv.BaseVector))
+        self.assertTrue(isinstance(v4, pv.BaseVector))
 
         self.assertTrue(isinstance(v1, pv.SimpleVector_BIGINT))
         self.assertTrue(isinstance(v2, pv.SimpleVector_VARBINARY))
         self.assertTrue(isinstance(v3, pv.SimpleVector_BIGINT))
+        self.assertTrue(isinstance(v4, pv.SimpleVector_BIGINT))
 
         self.assertTrue(isinstance(v1, pv.FlatVector_BIGINT))
         self.assertTrue(isinstance(v2, pv.FlatVector_VARBINARY))
         self.assertTrue(isinstance(v3, pv.ConstantVector_BIGINT))
+        self.assertTrue(isinstance(v4, pv.DictionaryVector_BIGINT))
 
         self.assertFalse(isinstance(v1, pv.ConstantVector_BIGINT))
         self.assertFalse(isinstance(v2, pv.ConstantVector_VARBINARY))
         self.assertFalse(isinstance(v3, pv.FlatVector_BIGINT))
+        self.assertFalse(isinstance(v4, pv.ConstantVector_BIGINT))
 
     def test_from_list(self):
         self.assertTrue(isinstance(pv.from_list([1, 2, 3]), pv.BaseVector))
@@ -60,6 +65,27 @@ class TestVeloxVector(unittest.TestCase):
             vec[10]
         with self.assertRaises(TypeError):
             vec[1] = -1
+
+    def test_dictionary_encoding(self):
+        expected_indices = [0, 0, 1, 0, 2]
+        vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), expected_indices)
+        self.assertTrue(isinstance(vec, pv.DictionaryVector_BIGINT))
+        expected = [1, 1, 2, 1, 3]
+        self.assertEqual(len(vec), len(expected))
+        for i in range(len(vec)):
+            self.assertEqual(vec[i], expected[i])
+
+        indices = vec.indices()
+        self.assertTrue(isinstance(indices, pv.DictionaryIndices))
+        self.assertEqual(len(indices), len(expected_indices))
+        for i in range(len(indices)):
+            self.assertEqual(indices[i], expected_indices[i])
+
+        with self.assertRaises(TypeError):
+            pv.dictionary_vector(pv.from_list([1, 2, 3]), ["a", 0, 0, "b"])
+        with self.assertRaises(IndexError):
+            pv.dictionary_vector(pv.from_list([1, 2, 3]), [1, 2, 1000000])
+            pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, -1, -2])
 
     def test_to_string(self):
         self.assertEqual(
