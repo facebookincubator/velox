@@ -18,8 +18,13 @@ jobs:
         with:
           submodules: recursive
           presist-credentials: false
+
       - if: matrix.os == 'macos-11'
-        run: echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@1.1/" >> $GITHUB_ENV
+        run: |
+          echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@1.1/" >> $GITHUB_ENV
+          # required for predv/pwritev
+          echo "MACOSX_DEPLOYMENT_TARGET=11.0"      
+        
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.12.0
         env:
