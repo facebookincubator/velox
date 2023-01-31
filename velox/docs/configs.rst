@@ -200,4 +200,4 @@ Spark-specific configuration
     * **Type:** ``bool``
     * **Default value:** ``true``
 
-If false, the function returns null for null input.
+If false, size function returns null for null input.
