@@ -22,12 +22,12 @@ jobs:
       - if: matrix.os == 'macos-11'
         run: |
           echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@1.1/" >> $GITHUB_ENV
-          # required for predv/pwritev
-          echo "MACOSX_DEPLOYMENT_TARGET=11.0"      
         
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.12.0
         env:
+          # required for predv/pwritev
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
           CIBW_BEFORE_ALL_LINUX: "bash {package}/scripts/setup-velox-torcharrow.sh false"
           CIBW_BEFORE_ALL_MACOS: "bash {package}/scripts/setup-macos.sh"
           # CIBW_SOME_OPTION: value
