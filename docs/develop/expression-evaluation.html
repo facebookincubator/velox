@@ -373,9 +373,9 @@ supportsFlatNoNullsFastPath method.</p>
 <span class="c1">/// 1; (2) returns flat or constant result when inputs are all flat, all</span>
 <span class="c1">/// constant or a mix of flat and constant; (3) guarantees that if all inputs</span>
 <span class="c1">/// are not null, the result is also not null.</span>
-<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsFlatNoNullsFastPath</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsFlatNoNullsFastPath</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>Special forms support flat-no-nulls fast path in some cases, but not all.</p>
