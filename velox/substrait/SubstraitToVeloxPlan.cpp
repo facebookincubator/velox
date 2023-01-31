@@ -109,14 +109,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::processEmit(
   }
 }
 
-/// RelCommon related validations evaluated
-void ValidateEmitExclusion(const ::substrait::RelCommon& relCommon) {
-  if (relCommon.has_emit()) {
-    VELOX_FAIL(
-        "Emit not supported for ValuesNode and TableScanNode related Substrait plans.");
-  }
-}
-
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::AggregateRel& aggRel) {
   auto childNode = convertSingleInput<::substrait::AggregateRel>(aggRel);
@@ -218,7 +210,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   // input to the projection node. Thus we need to add the input columns first
   // and then add the projection expressions.
 
-  // adding input node columns
+  // First, adding the project names and expressions from the input to
+  // the project node.
   for (uint32_t idx = 0; idx < inputType->size(); idx++) {
     const auto& fieldName = inputType->nameOf(idx);
     projectNames.emplace_back(fieldName);
@@ -227,7 +220,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     colIdx += 1;
   }
 
-  // adding projection columns
+  // Then, adding project expression related project names and expressions.
   for (const auto& expr : projectExprs) {
     expressions.emplace_back(exprConverter_->toVeloxExpr(expr, inputType));
     projectNames.emplace_back(
