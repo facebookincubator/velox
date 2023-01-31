@@ -107,6 +107,45 @@ inline velox::variant pyToVariant(const py::handle& obj) {
     throw py::type_error("Invalid type of object");
   }
 }
+template <TypeKind T>
+inline VectorPtr variantToConstantVector(
+    velox::variant variant,
+    vector_size_t length,
+    facebook::velox::memory::MemoryPool* pool) {
+  using NativeType = typename TypeTraits<T>::NativeType;
+
+  TypePtr typePtr = fromKindToScalerType(T);
+  NativeType value;
+  if constexpr (std::is_same_v<NativeType, StringView>) {
+    const std::string& str = variant.value<std::string>();
+    value = StringView(str);
+  } else {
+    value = variant.value<NativeType>();
+  }
+  auto result = std::make_shared<ConstantVector<NativeType>>(
+      pool,
+      length,
+      /*isNull=*/false,
+      typePtr,
+      std::move(value));
+  return result;
+}
+
+inline VectorPtr pyToConstantVector(
+    const py::handle& obj,
+    vector_size_t length,
+    facebook::velox::memory::MemoryPool* pool) {
+  if (obj.is_none()) {
+    throw py::type_error("Cannot infer type of constant None vector");
+  }
+  velox::variant variant = pyToVariant(obj);
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      variantToConstantVector,
+      variant.kind(),
+      std::move(variant),
+      length,
+      pool);
+}
 
 template <TypeKind T>
 static inline VectorPtr variantsToFlatVector(
@@ -179,13 +218,13 @@ template <TypeKind T>
 inline py::object getItemFromVector(VectorPtr& v, vector_size_t idx) {
   using NativeType = typename TypeTraits<T>::NativeType;
   if (std::is_same_v<NativeType, velox::StringView>) {
-    const auto* flat = v->asFlatVector<velox::StringView>();
-    const velox::StringView value = flat->valueAt(idx);
+    const auto* simple = v->as<SimpleVector<velox::StringView>>();
+    const velox::StringView value = simple->valueAt(idx);
     py::str result = std::string_view(value);
     return result;
   } else {
-    const auto* flat = v->asFlatVector<NativeType>();
-    py::object result = py::cast(flat->valueAt(idx));
+    const auto* simple = v->as<SimpleVector<NativeType>>();
+    py::object result = py::cast(simple->valueAt(idx));
     return result;
   }
 }
@@ -218,6 +257,11 @@ inline void setItemInVector(VectorPtr& v, vector_size_t idx, py::handle& obj) {
   if (var.kind() != v->typeKind()) {
     throw py::type_error("Attempted to insert value of mismatched types");
   }
+
+  if (v->isConstantEncoding()) {
+    throw py::type_error("Cannot modify constant-encoded vector");
+  }
+
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       setItemInVector, v->typeKind(), v, idx, var);
 }
@@ -421,6 +465,10 @@ inline void addVectorBindings(
       .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); });
   m.def("from_list", [](const py::list& list) mutable {
     return pyListToVector(list, PyVeloxContext::getInstance().pool());
+  });
+  m.def("constant_vector", [](const py::handle& obj, vector_size_t length) {
+    return pyToConstantVector(
+        obj, length, PyVeloxContext::getInstance().pool());
   });
 }
 

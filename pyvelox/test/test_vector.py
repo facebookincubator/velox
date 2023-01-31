@@ -28,6 +28,19 @@ class TestVeloxVector(unittest.TestCase):
         with self.assertRaises(ValueError):
             pv.from_list([])
 
+    def test_constant_encoding(self):
+        vec = pv.constant_vector(1000, 10)
+        self.assertTrue(isinstance(vec, pv.BaseVector))
+        self.assertEqual(vec.encoding(), pv.VectorEncodingSimple.CONSTANT)
+        self.assertEqual(len(vec), 10)
+        for i in range(10):
+            self.assertEqual(vec[i], 1000)
+
+        with self.assertRaises(IndexError):
+            vec[10]
+        with self.assertRaises(TypeError):
+            vec[1] = -1
+
     def test_to_string(self):
         self.assertEqual(
             str(pv.from_list([1, 2, 3])),
