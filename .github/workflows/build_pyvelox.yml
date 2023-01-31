@@ -27,9 +27,8 @@ jobs:
         env:
           # required for predv/pwritev
           MACOSX_DEPLOYMENT_TARGET: "11.0"
-          CIBW_ARCHS_LINUX: "x86_64"
-          CIBW_ARCHS_MACOS: "x86_64 arm64"
-          CIBW_BUILD: "cp310-*"
+          CIBW_ARCHS: "x86_64"
+          CIBW_BUILD: "cp39-* cp310-* cp311-*"
           CIBW_SKIP: "*musllinux*"
           CIBW_BEFORE_ALL_LINUX: "bash {package}/scripts/setup-velox-torcharrow.sh false"
           CIBW_BEFORE_ALL_MACOS: "bash {package}/scripts/setup-macos.sh"
