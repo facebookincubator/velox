@@ -27,4 +27,10 @@ ArrayVectorPtr variantArrayToVector(
     const std::vector<variant>& variantArray,
     velox::memory::MemoryPool* pool);
 
+// Converts an array of variants into the appropriate vector. Each input variant
+// is a row in the final vector.
+VectorPtr variantsToVector(
+    const std::vector<variant>& rows,
+    velox::memory::MemoryPool* pool);
+
 } // namespace facebook::velox::core
