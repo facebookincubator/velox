@@ -102,9 +102,15 @@ jobs:
       env:
         CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
         CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-8-core"
-        CONBENCH_EMAIL: ${{ secrets.CONBENCH_EMAIL }}
-        CONBENCH_PASSWORD: ${{ secrets.CONBENCH_PASSWORD }}
+        CONBENCH_EMAIL: "${{ secrets.CONBENCH_EMAIL }}"
+        CONBENCH_PASSWORD: "${{ secrets.CONBENCH_PASSWORD }}"
+        CONBENCH_PROJECT_REPOSITORY: "${{ github.repository }}"
+        CONBENCH_PROJECT_COMMIT: "${{ steps.download.outputs.contender_sha }}"
       run: |
+        if [ "${{ steps.extract.outputs.pr_number }}" -gt 0]; then
+          export CONBENCH_PROJECT_PR_NUMBER="${{ steps.extract.outputs.pr_number }}"
+        fi
+        
         ./velox/scripts/benchmark-runner.py upload \
           --run_id "GHA-${{ github.run_id }}-${{ github.run_attempt }}" \
           --pr_number "${{ steps.extract.outputs.pr_number }}" \
