@@ -34,6 +34,7 @@
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
 #include "folly/json.h"
+#include "velox/vector/VariantToVector.h"
 
 #include "context.h"
 
@@ -68,6 +69,32 @@ inline velox::variant pyToVariant(const py::handle& obj) {
     return pyToVariant<velox::TypeKind::DOUBLE>(obj);
   } else if (py::isinstance<py::str>(obj)) {
     return pyToVariant<velox::TypeKind::VARCHAR>(obj);
+  } else if (py::isinstance<py::list>(obj)) {
+    py::list objAsList = py::cast<py::list>(obj);
+    std::vector<velox::variant> result;
+    for (auto& item : objAsList) {
+      result.push_back(pyToVariant(item));
+      if (result.front().kind() != result.back().kind()) {
+        throw py::type_error("Array must consist of elements of only one kind");
+      }
+    }
+    return velox::variant::array(std::move(result));
+  } else if (py::isinstance<py::dict>(obj)) {
+    py::dict objAsDict = py::cast<py::dict>(obj);
+    std::map<velox::variant, velox::variant> map;
+    for (auto item : objAsDict) {
+      map.emplace(
+          std::make_pair(pyToVariant(item.first), pyToVariant(item.second)));
+    }
+    return velox::variant::map(std::move(map));
+  } else if (py::isinstance<py::tuple>(obj)) {
+    py::tuple objAsTuple = py::cast<py::tuple>(obj);
+    std::vector<velox::variant> elements;
+    elements.reserve(py::len(objAsTuple));
+    for (auto item : objAsTuple) {
+      elements.emplace_back(pyToVariant(item));
+    }
+    return velox::variant::row(std::move(elements));
   } else {
     throw py::type_error("Invalid type of object");
   }
@@ -150,9 +177,6 @@ static VectorPtr variantsToFlatVector(
     const std::vector<velox::variant>& variants,
     facebook::velox::memory::MemoryPool* pool);
 
-static inline VectorPtr pyListToVector(
-    const py::list& list,
-    facebook::velox::memory::MemoryPool* pool);
 
 static inline VectorPtr pyListToVector(
     const py::list& list,
@@ -175,15 +199,41 @@ static VectorPtr createDictionaryVector(
 }
 
 template <typename NativeType>
-static py::object getItemFromSimpleVector(
-    SimpleVectorPtr<NativeType>& vector,
-    vector_size_t idx);
+inline py::object getItemFromSimpleVector(
+    SimpleVectorPtr<NativeType>& v,
+    vector_size_t idx) {
+  checkBounds(v, idx);
+  if (v->isNullAt(idx)) {
+    return py::none();
+  }
+  if constexpr (std::is_same_v<NativeType, velox::StringView>) {
+    const velox::StringView value = v->valueAt(idx);
+    py::str result = std::string_view(value);
+    return result;
+  } else {
+    py::object result = py::cast(v->valueAt(idx));
+    return result;
+  }
+}
 
 template <typename NativeType>
 inline void setItemInFlatVector(
-    FlatVectorPtr<NativeType>& vector,
+    FlatVectorPtr<NativeType>& v,
     vector_size_t idx,
-    py::handle& obj);
+    py::handle& obj) {
+  checkBounds(v, idx);
+
+  velox::variant var = pyToVariant(obj);
+  if (var.kind() == velox::TypeKind::INVALID) {
+    return v->setNull(idx, true);
+  }
+
+  if (var.kind() != v->typeKind()) {
+    throw py::type_error("Attempted to insert value of mismatched types");
+  }
+
+  v->set(idx, NativeType{var.value<NativeType>()});
+}
 
 inline void appendVectors(VectorPtr& u, VectorPtr& v) {
   if (u->typeKind() != v->typeKind()) {
@@ -463,6 +513,32 @@ static void addVectorBindings(
           py::arg("start"),
           py::arg("stop"),
           py::arg("step") = 1);
+
+  py::class_<ArrayVector, ArrayVectorPtr, BaseVector>(
+      m, "ArrayVector", py::module_local(asModuleLocalDefinitions))
+      .def("elements", [](ArrayVectorPtr vec) -> VectorPtr {
+        return vec->elements();
+      });
+
+  py::class_<MapVector, MapVectorPtr, BaseVector>(
+      m, "MapVector", py::module_local(asModuleLocalDefinitions))
+      .def(
+          "mapKeys",
+          [](MapVectorPtr vec) -> VectorPtr { return vec->mapKeys(); })
+      .def("mapValues", [](MapVectorPtr vec) -> VectorPtr {
+        return vec->mapValues();
+      });
+
+  py::class_<RowVector, RowVectorPtr, BaseVector>(
+      m, "RowVector", py::module_local(asModuleLocalDefinitions))
+      .def(
+          "children",
+          [](RowVectorPtr vec) -> std::vector<VectorPtr> {
+            return vec->children();
+          })
+      .def("childAt", [](RowVectorPtr vec, column_index_t idx) -> VectorPtr {
+        return vec->childAt(idx);
+      });
 
   constexpr TypeKind supportedTypes[] = {
       TypeKind::BOOLEAN,

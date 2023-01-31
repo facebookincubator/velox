@@ -156,6 +156,71 @@ class TestVeloxVector(unittest.TestCase):
             pv.dictionary_vector(pv.from_list([1, 2, 3]), [1, 2, 1000000])
             pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, -1, -2])
 
+    def test_array_vector(self):
+        v1 = pv.from_list([[1, 2, 3], [1, 2, 3]])
+        self.assertTrue(isinstance(v1, pv.ArrayVector))
+        self.assertTrue(isinstance(v1.elements(), pv.FlatVector_BIGINT))
+        self.assertEqual(len(v1), 2)
+        expected_flat = [1, 2, 3, 1, 2, 3]
+        self.assertEqual(len(expected_flat), len(v1.elements()))
+        for i in range(len(expected_flat)):
+            self.assertEqual(expected_flat[i], v1.elements()[i])
+
+    def test_map_vector(self):
+        v = pv.from_list([{"a": 1}, {"b": 2}])
+        self.assertTrue(isinstance(v, pv.MapVector))
+        self.assertTrue(isinstance(v.mapKeys(), pv.FlatVector_VARBINARY))
+        self.assertTrue(isinstance(v.mapValues(), pv.FlatVector_BIGINT))
+        self.assertEqual(len(v), 2)
+        expected_keys = ["a", "b"]
+        expected_values = [1, 2]
+        for i in range(len(v)):
+            self.assertEqual(expected_keys[i], v.mapKeys()[i])
+            self.assertEqual(expected_values[i], v.mapValues()[i])
+
+    def test_row_vector(self):
+        expected = [(1, "hi", 3), (4, "bye", 6), None, (7, "kek", None)]
+        v = pv.from_list(expected)
+        self.assertTrue(isinstance(v, pv.RowVector))
+        self.assertEqual(len(v.children()), 3)
+        self.assertTrue(isinstance(v.childAt(0), pv.FlatVector_BIGINT))
+        self.assertTrue(isinstance(v.childAt(1), pv.FlatVector_VARBINARY))
+        self.assertTrue(isinstance(v.childAt(2), pv.FlatVector_BIGINT))
+
+        self.assertEqual(len(v), len(expected))
+        for i in range(len(expected)):
+            if expected[i] is None:
+                self.assertTrue(v.isNullAt(i))
+            else:
+                for j in range(3):
+                    self.assertEqual(v.childAt(j)[i], expected[i][j])
+
+    def test_crazy_vector(self):
+        crazy_vector = pv.from_list(
+            [
+                (1000, ["hi", "bye"], [{"a": 1, "b": 2}, {"c": 3, "d": 4}]),
+                (2000, ["good", "morning"], [{"e": 5}]),
+            ]
+        )
+        self.assertTrue(isinstance(crazy_vector, pv.RowVector))
+        self.assertTrue(isinstance(crazy_vector.childAt(0), pv.FlatVector_BIGINT))
+        self.assertTrue(isinstance(crazy_vector.childAt(1), pv.ArrayVector))
+        self.assertTrue(isinstance(crazy_vector.childAt(2), pv.ArrayVector))
+        self.assertTrue(
+            isinstance(crazy_vector.childAt(1).elements(), pv.FlatVector_VARBINARY)
+        )
+        self.assertTrue(isinstance(crazy_vector.childAt(2).elements(), pv.MapVector))
+        self.assertTrue(
+            isinstance(
+                crazy_vector.childAt(2).elements().mapKeys(), pv.FlatVector_VARBINARY
+            )
+        )
+        self.assertTrue(
+            isinstance(
+                crazy_vector.childAt(2).elements().mapValues(), pv.FlatVector_BIGINT
+            )
+        )
+
     def test_to_string(self):
         self.assertEqual(
             str(pv.from_list([1, 2, 3])),
