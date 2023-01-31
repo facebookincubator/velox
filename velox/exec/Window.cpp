@@ -458,18 +458,18 @@ RowVectorPtr Window::getOutput() {
     return nullptr;
   }
 
+  std::vector<VectorPtr> outputs;
+  outputs.reserve(outputType_->size());
   auto numRowsLeft = numRows_ - numProcessedRows_;
   auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);
-  auto result = std::dynamic_pointer_cast<RowVector>(
-      BaseVector::create(outputType_, numOutputRows, operatorCtx_->pool()));
 
   // Set all passthrough input columns.
   for (int i = 0; i < numInputColumns_; ++i) {
+    auto output = BaseVector::create(
+        outputType_->childAt(i), numOutputRows, operatorCtx_->pool());
     data_->extractColumn(
-        sortedRows_.data() + numProcessedRows_,
-        numOutputRows,
-        i,
-        result->childAt(i));
+        sortedRows_.data() + numProcessedRows_, numOutputRows, i, output);
+    outputs.emplace_back(std::move(output));
   }
 
   // Construct vectors for the window function output columns.
@@ -478,18 +478,20 @@ RowVectorPtr Window::getOutput() {
   for (int i = numInputColumns_; i < outputType_->size(); i++) {
     auto output = BaseVector::create(
         outputType_->childAt(i), numOutputRows, operatorCtx_->pool());
-    windowOutputs.emplace_back(std::move(output));
+    windowOutputs.emplace_back(output);
+    outputs.emplace_back(std::move(output));
   }
 
   // Compute the output values of window functions.
   callApplyLoop(numOutputRows, windowOutputs);
 
-  for (int j = numInputColumns_; j < outputType_->size(); j++) {
-    result->childAt(j) = windowOutputs[j - numInputColumns_];
-  }
-
   finished_ = (numProcessedRows_ == sortedRows_.size());
-  return result;
+  return std::make_shared<RowVector>(
+      operatorCtx_->pool(),
+      outputType_,
+      BufferPtr(nullptr),
+      numOutputRows,
+      std::move(outputs));
 }
 
 } // namespace facebook::velox::exec
