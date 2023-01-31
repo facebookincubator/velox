@@ -80,7 +80,8 @@ struct PyVeloxContext {
 static std::string serializeType(
     const std::shared_ptr<const velox::Type>& type);
 
-inline void checkBounds(VectorPtr& v, vector_size_t idx) {
+template <typename VecPtr>
+inline void checkBounds(VecPtr& v, vector_size_t idx) {
   if (idx < 0 || idx >= v->size()) {
     throw std::out_of_range("Index out of range");
   }
@@ -214,39 +215,29 @@ static inline VectorPtr pyListToVector(
       variantsToFlatVector, first_kind, variants, pool);
 }
 
-template <TypeKind T>
-inline py::object getItemFromVector(VectorPtr& v, vector_size_t idx) {
-  using NativeType = typename TypeTraits<T>::NativeType;
-  if (std::is_same_v<NativeType, velox::StringView>) {
-    const auto* simple = v->as<SimpleVector<velox::StringView>>();
-    const velox::StringView value = simple->valueAt(idx);
-    py::str result = std::string_view(value);
-    return result;
-  } else {
-    const auto* simple = v->as<SimpleVector<NativeType>>();
-    py::object result = py::cast(simple->valueAt(idx));
-    return result;
-  }
-}
-
-inline py::object getItemFromVector(VectorPtr& v, vector_size_t idx) {
+template <typename NativeType>
+inline py::object getItemFromSimpleVector(
+    SimpleVectorPtr<NativeType>& v,
+    vector_size_t idx) {
   checkBounds(v, idx);
   if (v->isNullAt(idx)) {
     return py::none();
   }
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      getItemFromVector, v->typeKind(), v, idx);
+  if constexpr (std::is_same_v<NativeType, velox::StringView>) {
+    const velox::StringView value = v->valueAt(idx);
+    py::str result = std::string_view(value);
+    return result;
+  } else {
+    py::object result = py::cast(v->valueAt(idx));
+    return result;
+  }
 }
 
-template <TypeKind T>
-inline void
-setItemInVector(VectorPtr& v, vector_size_t idx, velox::variant& var) {
-  using NativeType = typename TypeTraits<T>::NativeType;
-  auto* flat = v->asFlatVector<NativeType>();
-  flat->set(idx, NativeType{var.value<NativeType>()});
-}
-
-inline void setItemInVector(VectorPtr& v, vector_size_t idx, py::handle& obj) {
+template <typename NativeType>
+inline void setItemInFlatVector(
+    FlatVectorPtr<NativeType>& v,
+    vector_size_t idx,
+    py::handle& obj) {
   checkBounds(v, idx);
 
   velox::variant var = pyToVariant(obj);
@@ -258,12 +249,7 @@ inline void setItemInVector(VectorPtr& v, vector_size_t idx, py::handle& obj) {
     throw py::type_error("Attempted to insert value of mismatched types");
   }
 
-  if (v->isConstantEncoding()) {
-    throw py::type_error("Cannot modify constant-encoded vector");
-  }
-
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      setItemInVector, v->typeKind(), v, idx, var);
+  v->set(idx, NativeType{var.value<NativeType>()});
 }
 
 inline void appendVectors(VectorPtr& u, VectorPtr& v) {
@@ -412,7 +398,43 @@ inline void addDataTypeBindings(
   rowType.def("names", &RowType::names, "Return the names of the columns");
 }
 
-inline void addVectorBindings(
+template <TypeKind T>
+static void registerTypedVectors(
+    py::module& m,
+    bool asModuleLocalDefinitions = true) {
+  using NativeType = typename TypeTraits<T>::NativeType;
+  const std::string typeName = TypeTraits<T>::name;
+  py::class_<SimpleVector<NativeType>, SimpleVectorPtr<NativeType>, BaseVector>(
+      m,
+      ("SimpleVector_" + typeName).c_str(),
+      py::module_local(asModuleLocalDefinitions))
+      .def("__getitem__", [](SimpleVectorPtr<NativeType> v, vector_size_t idx) {
+        return getItemFromSimpleVector(v, idx);
+      });
+
+  py::class_<
+      FlatVector<NativeType>,
+      FlatVectorPtr<NativeType>,
+      SimpleVector<NativeType>>(
+      m,
+      ("FlatVector_" + typeName).c_str(),
+      py::module_local(asModuleLocalDefinitions))
+      .def(
+          "__setitem__",
+          [](FlatVectorPtr<NativeType> v, vector_size_t idx, py::handle& obj) {
+            setItemInFlatVector(v, idx, obj);
+          });
+
+  py::class_<
+      ConstantVector<NativeType>,
+      ConstantVectorPtr<NativeType>,
+      SimpleVector<NativeType>>(
+      m,
+      ("ConstantVector_" + typeName).c_str(),
+      py::module_local(asModuleLocalDefinitions));
+}
+
+static void addVectorBindings(
     py::module& m,
     bool asModuleLocalDefinitions = true) {
   using namespace facebook::velox;
@@ -435,16 +457,6 @@ inline void addVectorBindings(
       .def("__str__", [](VectorPtr& v) { return v->toString(); })
       .def("__len__", &BaseVector::size)
       .def("size", &BaseVector::size)
-      .def(
-          "__getitem__",
-          [](VectorPtr& v, vector_size_t idx) {
-            return getItemFromVector(v, idx);
-          })
-      .def(
-          "__setitem__",
-          [](VectorPtr& v, vector_size_t idx, py::handle& obj) {
-            setItemInVector(v, idx, obj);
-          })
       .def("dtype", &BaseVector::type)
       .def("typeKind", &BaseVector::typeKind)
       .def("mayHaveNulls", &BaseVector::mayHaveNulls)
@@ -463,6 +475,19 @@ inline void addVectorBindings(
           })
       .def("encoding", &BaseVector::encoding)
       .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); });
+
+  for (int8_t t = 0; t <= static_cast<int8_t>(TypeKind::INTERVAL_DAY_TIME);
+       t++) {
+    // VARCHAR and VARBINARY create the same C++ type, so we skip one of them.
+    if (static_cast<TypeKind>(t) != TypeKind::VARCHAR) {
+      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          registerTypedVectors,
+          static_cast<TypeKind>(t),
+          m,
+          asModuleLocalDefinitions);
+    }
+  }
+
   m.def("from_list", [](const py::list& list) mutable {
     return pyListToVector(list, PyVeloxContext::getInstance().pool());
   });

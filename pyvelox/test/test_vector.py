@@ -17,6 +17,27 @@ import unittest
 
 
 class TestVeloxVector(unittest.TestCase):
+    def test_inheritance(self):
+        v1 = pv.from_list([1, 2, 3])
+        v2 = pv.from_list(["hello", "world"])
+        v3 = pv.constant_vector(1000, 10)
+
+        self.assertTrue(isinstance(v1, pv.BaseVector))
+        self.assertTrue(isinstance(v2, pv.BaseVector))
+        self.assertTrue(isinstance(v3, pv.BaseVector))
+
+        self.assertTrue(isinstance(v1, pv.SimpleVector_BIGINT))
+        self.assertTrue(isinstance(v2, pv.SimpleVector_VARBINARY))
+        self.assertTrue(isinstance(v3, pv.SimpleVector_BIGINT))
+
+        self.assertTrue(isinstance(v1, pv.FlatVector_BIGINT))
+        self.assertTrue(isinstance(v2, pv.FlatVector_VARBINARY))
+        self.assertTrue(isinstance(v3, pv.ConstantVector_BIGINT))
+
+        self.assertFalse(isinstance(v1, pv.ConstantVector_BIGINT))
+        self.assertFalse(isinstance(v2, pv.ConstantVector_VARBINARY))
+        self.assertFalse(isinstance(v3, pv.FlatVector_BIGINT))
+
     def test_from_list(self):
         self.assertTrue(isinstance(pv.from_list([1, 2, 3]), pv.BaseVector))
         self.assertTrue(isinstance(pv.from_list([1, None, None]), pv.BaseVector))
@@ -30,7 +51,6 @@ class TestVeloxVector(unittest.TestCase):
 
     def test_constant_encoding(self):
         vec = pv.constant_vector(1000, 10)
-        self.assertTrue(isinstance(vec, pv.BaseVector))
         self.assertEqual(vec.encoding(), pv.VectorEncodingSimple.CONSTANT)
         self.assertEqual(len(vec), 10)
         for i in range(10):
