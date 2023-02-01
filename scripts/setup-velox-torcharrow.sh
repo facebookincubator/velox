@@ -39,7 +39,6 @@ yum -y install snappy-devel
 yum -y install lzo-devel
 yum -y install wget
 yum -y install python3-devel.x86_64
-yum -y install fmt-devel
 yum -y install perl-core
 yum -y install pcre-devel
 yum -y install zlib-devel
