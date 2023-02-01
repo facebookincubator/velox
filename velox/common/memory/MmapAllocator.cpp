@@ -659,7 +659,7 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
         if (index == group + kWidth ||
             isAllZero(mappedFreeBits(index + kWidth))) {
           bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
-          return;
+          break;
         }
       }
       if (!needed) {
