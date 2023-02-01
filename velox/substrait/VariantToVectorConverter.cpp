@@ -74,7 +74,7 @@ VectorPtr setVectorFromVariantsByKind<TypeKind::DATE>(
     if (values[i].isNull()) {
       flatVector->setNull(i, true);
     } else {
-      flatVector->set(i, Date(values[i].value<int32_t>()));
+      flatVector->set(i, values[i].value<Date>());
     }
   }
   return flatVector;
