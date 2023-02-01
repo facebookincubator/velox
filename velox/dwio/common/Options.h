@@ -346,10 +346,14 @@ class ReaderOptions {
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   SerDeOptions serDeOptions;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
+  uint64_t directorySizeGuess{kDirectorySizeGuess};
+  uint64_t filePreloadThreshold{kFilePreloadThreshold};
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
   static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
+  static constexpr uint64_t kDirectorySizeGuess = 1024 * 1024; // 1MB
+  static constexpr uint64_t kFilePreloadThreshold = 1024 * 1024 * 8; // 8MB
 
   ReaderOptions(velox::memory::MemoryPool* pool)
       : tailLocation(std::numeric_limits<uint64_t>::max()),
@@ -374,6 +378,8 @@ class ReaderOptions {
     prefetchMode = other.prefetchMode;
     serDeOptions = other.serDeOptions;
     decrypterFactory_ = other.decrypterFactory_;
+    directorySizeGuess = other.directorySizeGuess;
+    filePreloadThreshold = other.filePreloadThreshold;
     return *this;
   }
 
@@ -467,6 +473,16 @@ class ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setDirectorySizeGuess(uint64_t size) {
+    directorySizeGuess = size;
+    return *this;
+  }
+
+  ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
+    filePreloadThreshold = threshold;
+    return *this;
+  }
+
   /**
    * Get the desired tail location.
    * @return if not set, return the maximum long.
@@ -523,6 +539,14 @@ class ReaderOptions {
   const std::shared_ptr<encryption::DecrypterFactory> getDecrypterFactory()
       const {
     return decrypterFactory_;
+  }
+
+  uint64_t getDirectorySizeGuess() const {
+    return directorySizeGuess;
+  }
+
+  uint64_t getFilePreloadThreshold() const {
+    return filePreloadThreshold;
   }
 };
 
