@@ -14,7 +14,11 @@
 
 name: Build Pyvelox Wheels
 
-on: [push, pull_request]
+on: 
+  push:
+    branches:
+      - main
+  pull_request:
 
 permissions:
   contents: read
@@ -39,7 +43,7 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.12.0
         env:
-          # required for predv/pwritev
+          # required for preadv/pwritev
           MACOSX_DEPLOYMENT_TARGET: "11.0"
           CIBW_ARCHS: "x86_64"
           CIBW_BUILD: "cp39-* cp310-* cp311-*"
