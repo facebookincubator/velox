@@ -622,7 +622,8 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
       return;
     }
     bool anyFound = false;
-    for (auto index = group; index <= group + kWidth; index += kWidth) {
+    bool groupEmpty = false;
+    for (auto index = group; index <= group + kWidth && !groupEmpty; index += kWidth) {
       auto bits = mappedFreeBits(index);
       uint16_t mask = simd::allSetBitMask<int64_t>() ^
           simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
@@ -659,7 +660,7 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
         if (index == group + kWidth ||
             isAllZero(mappedFreeBits(index + kWidth))) {
           bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
-          break;
+          groupEmpty = true;
         }
       }
       if (!needed) {
