@@ -656,9 +656,13 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
           });
 
       if (allUsed) {
+        bool lookAheadAllZero = false;
         if (index == group + kWidth ||
-            isAllZero(mappedFreeBits(index + kWidth))) {
+            (lookAheadAllZero = isAllZero(mappedFreeBits(index + kWidth)))) {
           bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
+          if (lookAheadAllZero) {
+            return;
+          }
         }
       }
       if (!needed) {
