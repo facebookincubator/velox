@@ -50,7 +50,7 @@ the different techniques and provide examples and define the conditions for the
 application of each.</p>
 <p>Velox supports partial and final aggregations with zero, one or multiple
 grouping keys and zero, one or multiple aggregate functions.</p>
-<p><a class="reference internal" href="../functions/aggregate.html"><span class="doc">Aggregate Functions</span></a> section of the documentation
+<p><a class="reference internal" href="../functions/presto/aggregate.html"><span class="doc">Aggregate Functions</span></a> section of the documentation
 lists all available aggregate functions and <a class="reference internal" href="aggregate-functions.html"><span class="doc">How to add an aggregate
 function?</span></a> guide explains how to add more.</p>
 <p>Use AggregationNode to insert an aggregation into the query plan. Specify
@@ -149,9 +149,9 @@ enabled in the following query:</p>
 and “sum” aggregate function loads this vector using ValueHook, e.g. each value
 is read from the file and passed directly to “sum” aggregate which adds it to
 the accumulator. No intermediate vector is produced in this case.</p>
-<p>The following aggregate functions support pushdown: <a class="reference internal" href="../functions/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>,
-<a class="reference internal" href="../functions/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#bitwise_and_agg" title="bitwise_and_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">bitwise_and_agg()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#bitwise_or_agg" title="bitwise_or_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">bitwise_or_agg()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#bool_and" title="bool_and"><code class="xref py py-func docutils literal notranslate"><span class="pre">bool_and()</span></code></a>,
-<a class="reference internal" href="../functions/aggregate.html#bool_or" title="bool_or"><code class="xref py py-func docutils literal notranslate"><span class="pre">bool_or()</span></code></a>.</p>
+<p>The following aggregate functions support pushdown: <a class="reference internal" href="../functions/presto/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>,
+<a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#bitwise_and_agg" title="bitwise_and_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">bitwise_and_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#bitwise_or_agg" title="bitwise_or_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">bitwise_or_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#bool_and" title="bool_and"><code class="xref py py-func docutils literal notranslate"><span class="pre">bool_and()</span></code></a>,
+<a class="reference internal" href="../functions/presto/aggregate.html#bool_or" title="bool_or"><code class="xref py py-func docutils literal notranslate"><span class="pre">bool_or()</span></code></a>.</p>
 </section>
 <section id="adaptive-array-based-aggregation">
 <h2>Adaptive Array-Based Aggregation<a class="headerlink" href="#adaptive-array-based-aggregation" title="Permalink to this heading">¶</a></h2>

@@ -144,7 +144,7 @@ calling HashStringAllocator::newRange() method.</p>
 allocate memory.</p>
 <section id="singlevalueaccumulator">
 <h3>SingleValueAccumulator<a class="headerlink" href="#singlevalueaccumulator" title="Permalink to this heading">¶</a></h3>
-<p>SingleValueAccumulator used by <a class="reference internal" href="../functions/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> functions stores a single value of variable-width type, e.g. string, array, map or struct.</p>
+<p>SingleValueAccumulator used by <a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> functions stores a single value of variable-width type, e.g. string, array, map or struct.</p>
 <p>To write the first value, the accumulator allocates a new block using newWrite()
 and stores the position to the start of the block in a member variable. When
 re-writing the value, the accumulator calls extendWrite() and provides the
@@ -172,7 +172,7 @@ The accumulator calls finishWrite() after writing the value.</p>
 </section>
 <section id="valuelist">
 <h3>ValueList<a class="headerlink" href="#valuelist" title="Permalink to this heading">¶</a></h3>
-<p>ValueList append-only accumulator used by <a class="reference internal" href="../functions/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> accumulates a
+<p>ValueList append-only accumulator used by <a class="reference internal" href="../functions/presto/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> accumulates a
 list of values. ValueListReader allows for copying the values from the ValueList
 into a flat Vector.</p>
 <p>This accumulator starts by allocating the first block using newWrite() and
@@ -199,8 +199,8 @@ write.</p>
 <p>An StlAllocator defined in velox/exec/HashStringAllocator.h can be used to make
 STL containers (e.g. std::vector) backed by memory allocated via the
 HashStringAllocator. StlAllocator is not an accumulator itself, but can be used
-to design accumulators that use STL containers. It is used by <a class="reference internal" href="../functions/aggregate.html#id9" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a>
-and <a class="reference internal" href="../functions/aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a>.</p>
+to design accumulators that use STL containers. It is used by <a class="reference internal" href="../functions/presto/aggregate.html#id9" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a>
+and <a class="reference internal" href="../functions/presto/aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a>.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">values</span><span class="p">{</span><span class="n">exec</span><span class="o">::</span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">allocator</span><span class="p">)};</span>
 </pre></div>
 </div>

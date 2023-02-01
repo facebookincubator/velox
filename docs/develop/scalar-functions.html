@@ -50,7 +50,7 @@
 <p>This document describes the main concepts, features, and examples of the simple
 function API in Velox. For more real-world API usage examples, check
 <strong>velox/example/SimpleFunctions.cpp</strong>.</p>
-<p>A simple scalar function, e.g. a <a class="reference internal" href="../functions/math.html"><span class="doc">mathematical function</span></a>,
+<p>A simple scalar function, e.g. a <a class="reference internal" href="../functions/presto/math.html"><span class="doc">mathematical function</span></a>,
 can be added by wrapping a C++ function in a templated class. For example, a
 ceil function can be implemented as:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
@@ -266,7 +266,7 @@ scan the strings to determine whether they are ASCII or not.</p>
 </section>
 <section id="zero-copy-string-result">
 <h3>Zero-copy String Result<a class="headerlink" href="#zero-copy-string-result" title="Permalink to this heading">¶</a></h3>
-<p>Functions like <a class="reference internal" href="../functions/string.html#id4" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> and <a class="reference internal" href="../functions/string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a> can produce zero-copy results by
+<p>Functions like <a class="reference internal" href="../functions/presto/string.html#id4" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> and <a class="reference internal" href="../functions/presto/string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a> can produce zero-copy results by
 referencing input strings. To do that they must define a reuse_strings_from_arg
 member variable and initialize it to the index of the argument whose strings
 are being re-used in the result. This will allow the engine to add a reference
@@ -282,7 +282,7 @@ and rows.</p>
 <section id="access-to-session-properties-and-constant-inputs">
 <h3>Access to Session Properties and Constant Inputs<a class="headerlink" href="#access-to-session-properties-and-constant-inputs" title="Permalink to this heading">¶</a></h3>
 <p>Some functions require access to session properties such as session’s timezone.
-Some examples are the <a class="reference internal" href="../functions/datetime.html#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>, <a class="reference internal" href="../functions/datetime.html#hour" title="hour"><code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code></a>, and <a class="reference internal" href="../functions/datetime.html#minute" title="minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">minute()</span></code></a> Presto
+Some examples are the <a class="reference internal" href="../functions/presto/datetime.html#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>, <a class="reference internal" href="../functions/presto/datetime.html#hour" title="hour"><code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code></a>, and <a class="reference internal" href="../functions/presto/datetime.html#minute" title="minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">minute()</span></code></a> Presto
 functions. Other functions could benefit from pre-processing some of the
 constant inputs, e.g. compile regular expression patterns or parse date and
 time units. To get access to session properties and constant inputs the
@@ -319,7 +319,7 @@ properties and using it when processing inputs.</p>
 <span class="p">};</span>
 </pre></div>
 </div>
-<p>Here is another example of the <a class="reference internal" href="../functions/datetime.html#date_trunc" title="date_trunc"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_trunc()</span></code></a> function parsing the constant
+<p>Here is another example of the <a class="reference internal" href="../functions/presto/datetime.html#date_trunc" title="date_trunc"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_trunc()</span></code></a> function parsing the constant
 unit argument during initialize and re-using parsed value when processing
 individual rows.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span>
@@ -771,11 +771,11 @@ to simple functions. These optimizations often leverage different vector
 encodings and columnar representations of the vectors. Here are some
 examples,</p>
 <ul class="simple">
-<li><p><a class="reference internal" href="../functions/map.html#map_keys" title="map_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_keys()</span></code></a> function takes advantage of the ArrayVector representation and simply returns the inner “keys” vector without doing any computation. Similarly, <a class="reference internal" href="../functions/map.html#map_values" title="map_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_values()</span></code></a> function simply returns the inner “values” vector.</p></li>
-<li><p><a class="reference internal" href="../functions/map.html#map_entries" title="map_entries"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_entries()</span></code></a> function takes the pieces of the input vector - “nulls”, “sizes” and “offsets”  buffers and “keys” and “values” vectors - and simply repackages them in the form of a RowVector.</p></li>
-<li><p><a class="reference internal" href="../functions/array.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a> function takes advantage of the ArrayVector and MapVector representations and simply returns the “sizes” buffer of the input vector.</p></li>
-<li><p><a class="reference internal" href="../functions/comparison.html#is_null" title="is_null"><code class="xref py py-func docutils literal notranslate"><span class="pre">is_null()</span></code></a> function copies the “nulls” buffer of the input vector, flips the bits in bulk and returns the result.</p></li>
-<li><p><a class="reference internal" href="../functions/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a> function and subscript operator for arrays and maps use dictionary encoding to represent a subset of the input “elements” or “values” vector without copying.</p></li>
+<li><p><a class="reference internal" href="../functions/presto/map.html#map_keys" title="map_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_keys()</span></code></a> function takes advantage of the ArrayVector representation and simply returns the inner “keys” vector without doing any computation. Similarly, <a class="reference internal" href="../functions/presto/map.html#map_values" title="map_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_values()</span></code></a> function simply returns the inner “values” vector.</p></li>
+<li><p><a class="reference internal" href="../functions/presto/map.html#map_entries" title="map_entries"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_entries()</span></code></a> function takes the pieces of the input vector - “nulls”, “sizes” and “offsets”  buffers and “keys” and “values” vectors - and simply repackages them in the form of a RowVector.</p></li>
+<li><p><a class="reference internal" href="../functions/presto/array.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a> function takes advantage of the ArrayVector and MapVector representations and simply returns the “sizes” buffer of the input vector.</p></li>
+<li><p><a class="reference internal" href="../functions/presto/comparison.html#is_null" title="is_null"><code class="xref py py-func docutils literal notranslate"><span class="pre">is_null()</span></code></a> function copies the “nulls” buffer of the input vector, flips the bits in bulk and returns the result.</p></li>
+<li><p><a class="reference internal" href="../functions/presto/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a> function and subscript operator for arrays and maps use dictionary encoding to represent a subset of the input “elements” or “values” vector without copying.</p></li>
 </ul>
 <p>To define a vector function, make a subclass of exec::VectorFunction and
 implement the “apply” method.</p>

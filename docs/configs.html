@@ -18,7 +18,7 @@
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
     <link rel="next" title="Developer Guide" href="develop.html" />
-    <link rel="prev" title="HyperLogLog Functions" href="functions/hyperloglog.html" /> 
+    <link rel="prev" title="HyperLogLog Functions" href="functions/presto/hyperloglog.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
@@ -30,7 +30,7 @@
           <a href="develop.html" title="Developer Guide"
              accesskey="N">next</a> |</li>
         <li class="right" >
-          <a href="functions/hyperloglog.html" title="HyperLogLog Functions"
+          <a href="functions/presto/hyperloglog.html" title="HyperLogLog Functions"
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="index.html">Velox  documentation</a> &#187;</li>
         <li class="nav-item nav-item-this"><a href="">Configuration properties</a></li> 
@@ -266,6 +266,19 @@ sets the update mode to indicate overwriting a partition if exists.
 to an existing partition.</p>
 </section>
 </section>
+<section id="spark-specific-configuration">
+<h2>Spark-specific configuration<a class="headerlink" href="#spark-specific-configuration" title="Permalink to this heading">¶</a></h2>
+<section id="spark-legacy-size-of-null">
+<h3><code class="docutils literal notranslate"><span class="pre">spark.legacy-size-of-null</span></code><a class="headerlink" href="#spark-legacy-size-of-null" title="Permalink to this heading">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">bool</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">true</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>If false, size function returns null for null input.</p>
+</section>
+</section>
 </section>
 
 
@@ -305,6 +318,10 @@ to an existing partition.</p>
 <li><a class="reference internal" href="#insert-existing-partitions-behavior"><code class="docutils literal notranslate"><span class="pre">insert_existing_partitions_behavior</span></code></a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#spark-specific-configuration">Spark-specific configuration</a><ul>
+<li><a class="reference internal" href="#spark-legacy-size-of-null"><code class="docutils literal notranslate"><span class="pre">spark.legacy-size-of-null</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -312,7 +329,7 @@ to an existing partition.</p>
   </div>
   <div>
     <h4>Previous topic</h4>
-    <p class="topless"><a href="functions/hyperloglog.html"
+    <p class="topless"><a href="functions/presto/hyperloglog.html"
                           title="previous chapter">HyperLogLog Functions</a></p>
   </div>
   <div>
@@ -351,7 +368,7 @@ to an existing partition.</p>
           <a href="develop.html" title="Developer Guide"
              >next</a> |</li>
         <li class="right" >
-          <a href="functions/hyperloglog.html" title="HyperLogLog Functions"
+          <a href="functions/presto/hyperloglog.html" title="HyperLogLog Functions"
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="index.html">Velox  documentation</a> &#187;</li>
         <li class="nav-item nav-item-this"><a href="">Configuration properties</a></li> 

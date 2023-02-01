@@ -103,10 +103,10 @@ the base vector.</p>
 <li><p>Filter operator uses dictionary encoding to represent a subset of the input rows that passed the filter.</p></li>
 <li><p>Join operator uses dictionary encoding to represent cardinality change for the probe columns.</p></li>
 <li><p>Unnest operator will use dictionary encoding to “duplicate” the input rows without copying the data.</p></li>
-<li><p>Functions use dictionary encoding to represent the result as a subset of the input. E.g. <a class="reference internal" href="../functions/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a> function and subscript operator for arrays and maps use dictionary encoding to represent the result as a subset of the input array elements or map values.</p></li>
+<li><p>Functions use dictionary encoding to represent the result as a subset of the input. E.g. <a class="reference internal" href="../functions/presto/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a> function and subscript operator for arrays and maps use dictionary encoding to represent the result as a subset of the input array elements or map values.</p></li>
 </ul>
 <p>A filter applied to a dictionary column produced by the ORC reader makes a dictionary
-vector two layers deep: Dict(Dict(Flat)). A projection using a function like <a class="reference internal" href="../functions/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a>
+vector two layers deep: Dict(Dict(Flat)). A projection using a function like <a class="reference internal" href="../functions/presto/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a>
 may add another layer of dictionary on top: Dict(Dict(Dict(Flat))).</p>
 </section>
 <section id="nulls">
