@@ -346,14 +346,14 @@ class ReaderOptions {
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   SerDeOptions serDeOptions;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
-  uint64_t directorySizeGuess{kDirectorySizeGuess};
-  uint64_t filePreloadThreshold{kFilePreloadThreshold};
+  uint64_t directorySizeGuess{kDefaultDirectorySizeGuess};
+  uint64_t filePreloadThreshold{kDefaultFilePreloadThreshold};
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
   static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
-  static constexpr uint64_t kDirectorySizeGuess = 1024 * 1024; // 1MB
-  static constexpr uint64_t kFilePreloadThreshold = 1024 * 1024 * 8; // 8MB
+  static constexpr uint64_t kDefaultDirectorySizeGuess = 1024 * 1024; // 1MB
+  static constexpr uint64_t kDefaultFilePreloadThreshold = 1024 * 1024 * 8; // 8MB
 
   ReaderOptions(velox::memory::MemoryPool* pool)
       : tailLocation(std::numeric_limits<uint64_t>::max()),
