@@ -222,10 +222,26 @@ class VectorFuzzer {
   // limits the maximum level of nesting for complex types. maxDepth <= 1 means
   // no complex types are allowed.
   //
-  // There are no options to control type generation yet; these may be added in
-  // the future.
-  TypePtr randType(int maxDepth = 5);
-  RowTypePtr randRowType(int maxDepth = 5);
+  // @param maxDepth Depth of a complex type.
+  // @param scalarTypes List of scalar types to be
+  // used to generate the random scalar and complex types. If not specified
+  // uses the default list, which includes all scalar types.
+  TypePtr randType(
+      int maxDepth = 5,
+      const std::vector<TypeKind>& scalarTypes = {});
+  RowTypePtr randRowType(
+      int maxDepth = 5,
+      const std::vector<TypeKind>& scalarTypes = {});
+
+  // Generates short decimal TypePtr with random precision and scale.
+  inline TypePtr randShortDecimalType() {
+    return randType(1, {TypeKind::SHORT_DECIMAL});
+  }
+
+  // Generates long decimal TypePtr with random precision and scale.
+  inline TypePtr randLongDecimalType() {
+    return randType(1, {TypeKind::LONG_DECIMAL});
+  }
 
   void reSeed(size_t seed) {
     rng_.seed(seed);
@@ -257,6 +273,11 @@ class VectorFuzzer {
  private:
   // Generates a flat vector for primitive types.
   VectorPtr fuzzFlatPrimitive(const TypePtr& type, vector_size_t size);
+
+  /// Generates random precision in range [1, max precision for decimal
+  /// TypeKind] and scale in range [0, random precision generated].
+  /// @param kind must be a decimal type kind.
+  std::pair<int8_t, int8_t> randPrecisionScale(TypeKind kind);
 
   // Returns a complex vector with randomized data and nulls.  The children and
   // all other descendant vectors will randomly use constant, dictionary, or
