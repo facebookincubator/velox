@@ -238,6 +238,7 @@ jobs:
       - run:
           name: "Build and Test PyVelox"
           command: |
+            export PATH=~/deps/bin:~/deps/opt/bison/bin:~/deps/opt/flex/bin:${PATH}
             conda init bash
             source ~/.bashrc
             conda create -y --name pyveloxenv python=3.7
