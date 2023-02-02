@@ -149,10 +149,6 @@ jobs:
   
             if [ ! -s "${CURRENT_JSON_RERUN}" ]; then
               echo "--> Rerun iteration ${i} found empty file. Finalizing."
-              if [ $i -gt 1 ]; then
-                #copy files from previous iteration into the upload dir
-                cp -r --verbose ${CONTENDER_OUTPUT_PATH}/rerun-$((${i} - 1))/* ${CONTENDER_OUTPUT_PATH}
-              fi
               break
             fi
 
@@ -170,6 +166,13 @@ jobs:
                 --do_not_fail
 
           done
+
+          if [ $i -gt 1 ]; then
+                # if alteast 1 rerun happened
+                # copy files from last rerun into the upload dir
+                cp -r --verbose ${CONTENDER_OUTPUT_PATH}/rerun-$((${i} - 1))/* ${CONTENDER_OUTPUT_PATH}
+          fi
+
       - name: "Save PR number"
         run: echo "${{ github.event.pull_request.number }}" > pr_number.txt
 
