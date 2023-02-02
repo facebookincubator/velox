@@ -65,7 +65,7 @@ jobs:
               -DCMAKE_POSITION_INDEPENDENT_CODE=ON 
               -DCMAKE_CXX_STANDARD=17 
               -DCMAKE_PREFIX_PATH="$(brew --prefix openssl@1.1)" 
-              -DCMAKE_CXX_FLAGS="$(get_cxx_flags)"" 
+              -DCMAKE_CXX_FLAGS="$(get_cxx_flags)" 
               -DBUILD_TESTING=OFF &&
             ninja -C "${BINARY_DIR}" install
         with:
