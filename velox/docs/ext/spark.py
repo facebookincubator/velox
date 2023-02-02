@@ -467,11 +467,6 @@ class SparkObject(ObjectDescription[Tuple[str, str]]):
     def before_content(self) -> None:
         """Handle object nesting before content
 
-        :spark:class:`SparkObject` represents Python language constructs. For
-        constructs that are nestable, such as a Python classes, this method will
-        build up a stack of the nesting hierarchy so that it can be later
-        de-nested correctly, in :spark:meth:`after_content`.
-
         For constructs that aren't nestable, the stack is bypassed, and instead
         only the most recent object is tracked. This object prefix name will be
         removed with :spark:meth:`after_content`.
@@ -614,11 +609,11 @@ class SparkXRefRole(XRefRole):
 
 class SparkModuleIndex(Index):
     """
-    Index subclass to provide the Python module index.
+    Index subclass to provide the Spark module index.
     """
 
     name = "modindex"
-    localname = _("Python Module Index")
+    localname = _("Spark Module Index")
     shortname = _("modules")
 
     def generate(
@@ -799,7 +794,7 @@ class SparkDomain(Domain):
         type: str | None,
         searchmode: int = 0,
     ) -> list[tuple[str, ObjectEntry]]:
-        """Find a Python object for "name", perhaps using the given module
+        """Find a Spark object for "name", perhaps using the given module
         and/or classname.  Returns a list of (name, object entry) tuples.
         """
         # skip parens
