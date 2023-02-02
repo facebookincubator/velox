@@ -443,7 +443,7 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
       "array[], array[array[1,2,3], array[4,5]]");
 }
 
-TEST_F(VeloxSubstraitRoundTripTest, date1) {
+TEST_F(VeloxSubstraitRoundTripTest, dateType) {
   auto a = makeFlatVector<int32_t>({0, 1});
   auto b = makeFlatVector<double_t>({0.905791934145, 0.968867771124});
   auto c = makeFlatVector<Date>({Date(8036), Date(8035)});
@@ -453,9 +453,9 @@ TEST_F(VeloxSubstraitRoundTripTest, date1) {
 
   auto plan = PlanBuilder()
                   .values({vectors})
-                  .orderBy({"c ASC NULLS FIRST"}, false)
+                  .filter({"c > DATE '1992-01-01'"})
                   .planNode();
-  assertPlanConversion(plan, "SELECT * FROM tmp ORDER BY c NULLS FIRST");
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c > DATE '1992-01-01'");
 }
 
 int main(int argc, char** argv) {
