@@ -196,7 +196,7 @@ jobs:
           # to manually avoid the case where bad dependencies
           # are cached, and has no other meaning.
           # If you update it, be sure to update save_cache too.
-          key: velox-circleci-macos-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
+          key: velox-circleci-macos-deps-v2-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
       - run:
           name: "Install dependencies"
           command: |
@@ -235,6 +235,14 @@ jobs:
             ninja -C _build/debug
             ccache -s
           no_output_timeout: 1h
+      - run:
+          name: "Build and Test PyVelox"
+          command: |
+            conda init bash
+            source ~/.bashrc
+            conda create -y --name pyveloxenv python=3.7
+            conda activate pyveloxenv
+            make python-test
       - save_cache:
           name: "Save CCache cache"
           key: velox-ccache-debug-{{ arch }}-{{ checksum "merge-base-date" }}

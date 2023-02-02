@@ -80,6 +80,11 @@ function install_build_prerequisites {
   pip3 install --user cmake-format regex
 }
 
+function install_miniconda() {
+    # miniconda is a brew cask so install it separately
+    brew install --cask miniconda
+}
+
 function install_fmt {
   github_checkout fmtlib/fmt 8.0.0
   cmake_install -DFMT_TEST=OFF
@@ -108,6 +113,7 @@ function install_velox_deps {
   run_and_time install_fmt
   run_and_time install_double_conversion
   run_and_time install_re2
+  run_and_time install_miniconda
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
