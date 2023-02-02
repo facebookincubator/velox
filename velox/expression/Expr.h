@@ -558,7 +558,7 @@ class ExprSetSimplified : public ExprSet {
   ExprSetSimplified(
       const std::vector<core::TypedExprPtr>& source,
       core::ExecCtx* FOLLY_NONNULL execCtx)
-      : ExprSet(source, execCtx, /*enableConstantFolding*/ false) {}
+      : ExprSet(source, execCtx, /*enableConstantFolding*/ true) {}
 
   virtual ~ExprSetSimplified() override {}
 
