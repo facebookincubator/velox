@@ -51,7 +51,6 @@ jobs:
             ccache -sz -M 5Gi
 
             # We can not use setup-python as we are running in a container
-            # TODO remove after #3904 is merged
             apt update
             apt install -y lsb-release python3 pip
       - name: "Restore ccache"
