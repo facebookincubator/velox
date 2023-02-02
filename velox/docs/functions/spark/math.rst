@@ -14,12 +14,12 @@ Mathematical Functions
 .. spark:function:: ceil(x) -> [same as x]
 
     Returns ``x`` rounded up to the nearest integer.  
-    In Spark, Supported types are: BIGINT and DOUBLE.
+    Supported types are: BIGINT and DOUBLE.
 
 .. spark:function:: divide(x, y) -> double
 
-    Returns the results of dividing x by y. It always performs floating point division.
-    Corresponds to spark's operator ``/``. ::
+    Returns the results of dividing x by y. Performs floating point division.
+    Corresponds to Spark's operator ``/``. ::
         SELECT 3 / 2; -- 1.5
         SELECT 2L / 2L; -- 1.0
         SELECT 3 / 0; -- NULL
@@ -31,12 +31,12 @@ Mathematical Functions
 .. spark:function:: floor(x) -> [same as x]
 
     Returns ``x`` rounded down to the nearest integer.
-    In Spark, Supported types are: BIGINT and DOUBLE.
+    Supported types are: BIGINT and DOUBLE.
 
 .. spark:function:: multiply(x, y) -> [same as x]
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to spark's operator ``*``.
+    For integral types, overflow results in an error. Corresponds to Spark's operator ``*``.
 
 .. spark:function:: pmod(n, m) -> [same as n]
 
@@ -48,7 +48,7 @@ Mathematical Functions
 
 .. spark:function:: remainder(n, m) -> [same as n]
 
-    Returns the modulus (remainder) of ``n`` divided by ``m``. Corresponds to spark's operator ``%``.
+    Returns the modulus (remainder) of ``n`` divided by ``m``. Corresponds to Spark's operator ``%``.
 
 .. spark:function:: round(x, d) -> [same as x]
 
