@@ -32,6 +32,7 @@ add_test(velox_base_test velox_base_test)
 target_link_libraries(
   velox_base_test
   velox_common_base
+  velox_memory
   ${gflags_LIBRARIES}
   glog::glog
   gtest
