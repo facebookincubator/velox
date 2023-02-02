@@ -445,7 +445,7 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
 
 TEST_F(VeloxSubstraitRoundTripTest, dateType) {
   auto a = makeFlatVector<int32_t>({0, 1});
-  auto b = makeFlatVector<double_t>({0.905791934145, 0.968867771124});
+  auto b = makeFlatVector<double_t>({0.3, 0.4});
   auto c = makeFlatVector<Date>({Date(8036), Date(8035)});
 
   auto vectors = makeRowVector({"a", "b", "c"}, {a, b, c});

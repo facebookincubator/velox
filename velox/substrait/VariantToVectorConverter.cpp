@@ -63,23 +63,6 @@ VectorPtr setVectorFromVariantsByKind<TypeKind::VARCHAR>(
   return flatVector;
 }
 
-template <>
-VectorPtr setVectorFromVariantsByKind<TypeKind::DATE>(
-    const std::vector<velox::variant>& values,
-    memory::MemoryPool* pool) {
-  auto flatVector =
-      BaseVector::create<FlatVector<Date>>(DATE(), values.size(), pool);
-
-  for (vector_size_t i = 0; i < values.size(); i++) {
-    if (values[i].isNull()) {
-      flatVector->setNull(i, true);
-    } else {
-      flatVector->set(i, values[i].value<Date>());
-    }
-  }
-  return flatVector;
-}
-
 } // namespace
 
 VectorPtr setVectorFromVariants(
