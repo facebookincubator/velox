@@ -100,6 +100,10 @@ Array Functions
 
     If ``instance > 0``, returns the position of the ``instance``-th occurrence of the ``element`` in array ``x``. If ``instance < 0``, returns the position of the ``instance``-to-last occurrence of the ``element`` in array ``x``. If no matching element instance is found, 0 is returned.
 
+.. function:: array_remove(array(E), element) -> array(E)
+
+    Removes all elements that equal ``element`` from the input array.
+
 .. function:: array_sort(array(E)) -> array(E)
 
      Returns an array which has the sorted order of the input array x. The elements of x must

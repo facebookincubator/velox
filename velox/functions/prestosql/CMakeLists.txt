@@ -23,6 +23,7 @@ add_library(
   ArrayDuplicates.cpp
   ArrayIntersectExcept.cpp
   ArrayPosition.cpp
+  ArrayRemove.cpp
   ArrayShuffle.cpp
   ArraySort.cpp
   ArraySum.cpp
