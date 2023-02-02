@@ -57,7 +57,7 @@ jobs:
             bash {package}/scripts/setup-macos.sh &&
             source {package}/scripts/setup-helper-functions.sh &&
             echo "Installing folly from source..." &&
-            export COMPILER_FLAGS=$(get_cxx_flags) &&
+            export COMPILER_FLAGS=$(CPU_TARGET="" get_cxx_flags) &&
             github_checkout facebook/folly "v2022.11.14.00" &&
             cmake_install -DBUILD_TESTS=OFF -DCMAKE_PREFIX_PATH="$(brew --prefix openssl@1.1)"
         with:
