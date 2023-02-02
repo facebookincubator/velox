@@ -326,7 +326,12 @@ def run_all_benchmarks(
             raise e
 
 
-def upload_results(output_dir, run_id, sha, pr_number):
+def upload_results(args):
+    output_dir = args.output_dir
+    run_id = args.run_id
+    sha = args.sha
+    pr_number = args.pr_number
+
     print(f"Uploading results from {output_dir=} to Conbench with {run_id=}")
 
     # Check there's actually results first
@@ -382,19 +387,6 @@ def upload_results(output_dir, run_id, sha, pr_number):
     )
 
     conbench_upload_callable()
-
-
-def upload(args):
-    try:
-        upload_results(
-            output_dir=args.output_dir,
-            run_id=args.run_id,
-            sha=args.sha,
-            pr_number=args.pr_number,
-        )
-    except Exception:
-        print("ERROR caught during uploading results:")
-        print(traceback.format_exc())
 
 
 def run(args):
@@ -540,7 +532,7 @@ def parse_args():
         "installed and the following env vars set: "
         "CONBENCH_URL, CONBENCH_EMAIL, CONBENCH_PASSWORD",
     )
-    parser_upload.set_defaults(func=upload)
+    parser_upload.set_defaults(func=upload_results)
     parser_upload.add_argument(
         "--output_dir",
         default=None,
