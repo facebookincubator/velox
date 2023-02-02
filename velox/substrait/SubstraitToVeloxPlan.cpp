@@ -102,7 +102,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::processEmit(
           nextPlanNodeId(),
           std::move(emitInfo.projectNames),
           std::move(emitInfo.expressions),
-          std::move(noEmitNode));
+          noEmitNode);
     }
     default:
       VELOX_FAIL("unrecognized emit kind");
