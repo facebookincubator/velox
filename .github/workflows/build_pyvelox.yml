@@ -60,12 +60,12 @@ jobs:
             github_checkout facebook/folly "v2022.11.14.00" &&
             BINARY_DIR=_build &&
             mkdir -p "${BINARY_DIR}" &&
-            cmake -Wno-dev -B"${BINARY_DIR}" \
-              -GNinja \
-              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-              -DCMAKE_CXX_STANDARD=17 \
-              -DCMAKE_PREFIX_PATH="$(brew --prefix openssl@1.1)" \
-              -DCMAKE_CXX_FLAGS="$(get_cxx_flags)"" \
+            cmake -Wno-dev -B"${BINARY_DIR}" 
+              -GNinja 
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON 
+              -DCMAKE_CXX_STANDARD=17 
+              -DCMAKE_PREFIX_PATH="$(brew --prefix openssl@1.1)" 
+              -DCMAKE_CXX_FLAGS="$(get_cxx_flags)"" 
               -DBUILD_TESTING=OFF &&
             ninja -C "${BINARY_DIR}" install
         with:
