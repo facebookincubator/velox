@@ -14,12 +14,15 @@ Mathematical Functions
 .. spark:function:: ceil(x) -> [same as x]
 
     Returns ``x`` rounded up to the nearest integer.  
-    In spark only long, double, and decimal have ceil.
+    In Spark, Supported types are: BIGINT and DOUBLE.
 
-.. spark:function:: divide(x, y) -> [same as x]
+.. spark:function:: divide(x, y) -> double
 
-    Returns the results of dividing x by y. The types of x and y must be the same.
-    It always performs floating point division. Corresponds to spark's operator ``/``.
+    Returns the results of dividing x by y. It always performs floating point division.
+    Corresponds to spark's operator ``/``. ::
+        SELECT 3 / 2; -- 1.5
+        SELECT 2L / 2L; -- 1.0
+        SELECT 3 / 0; -- NULL
 
 .. spark:function:: exp(x) -> double
 
@@ -28,7 +31,7 @@ Mathematical Functions
 .. spark:function:: floor(x) -> [same as x]
 
     Returns ``x`` rounded down to the nearest integer.
-    In spark only long, double, and decimal have floor.
+    In Spark, Supported types are: BIGINT and DOUBLE.
 
 .. spark:function:: multiply(x, y) -> [same as x]
 
@@ -37,7 +40,7 @@ Mathematical Functions
 
 .. spark:function:: pmod(n, m) -> [same as n]
 
-    Returns the positive value of ``n`` divided by ``m``.
+    Returns the positive remainder of n divided by m.
 
 .. spark:function:: power(x, p) -> double
 
@@ -49,9 +52,10 @@ Mathematical Functions
 
 .. spark:function:: round(x, d) -> [same as x]
 
-    Returns ``x`` rounded to ``d`` decimal places using HALF_UP rounding mode.
+    Returns ``x`` rounded to ``d`` decimal places using HALF_UP rounding mode. 
+    In HALF_UP rounding, the digit 5 is rounded up.
 
 .. spark:function:: subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to scala's operator ``-``.
+    For integral types, overflow results in an error. Corresponds to Spark's operator ``-``.

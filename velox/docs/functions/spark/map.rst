@@ -20,5 +20,6 @@ Map Functions
 
 .. spark:function:: size(map(K,V)) -> bigint
 
-    Returns the size of the input map. The function returns null for null input
-    if spark.legacy-size-of-null is set to false. Otherwise, the function returns -1 for null input.
+    Returns the size of the input map. Returns null for null input
+    if :doc:`spark.legacy-size-of-null <../../configs>` is set to false. 
+    Otherwise, returns -1 for null input.

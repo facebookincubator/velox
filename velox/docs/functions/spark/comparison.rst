@@ -11,58 +11,57 @@ Comparison Functions
 .. spark:function:: equalnullsafe(x, y) -> boolean
 
     Returns true if x is equal to y. Supports all scalar types. The
-    types of x and y must be the same. this differs from EqualTo in that
-    it returns true (rather than NULL) if both inputs are NULL,
-    and false (rather than NULL) if one of the input is NULL.
-    Corresponds to scala's operator ``<=>``.
+    types of x and y must be the same. Unlike :spark:func:`equalto` returns true if both inputs
+    are NULL and false if one of the inputs is NULL.
+    Corresponds to Spark's operator ``<=>``.
 
 .. spark:function:: equalto(x, y) -> boolean
 
     Returns true if x is equal to y. Supports all scalar types. The
-    types of x and y must be the same. Corresponds to scala's operator ``=`` and ``==``.
+    types of x and y must be the same. Corresponds to Spark's operators ``=`` and ``==``.
 
 .. spark:function:: greaterthan(x, y) -> boolean
 
     Returns true if x is greater than y. Supports all scalar types. The
-    types of x and y must be the same. Corresponds to scala's operator ``>``.
+    types of x and y must be the same. Corresponds to Spark's operator ``>``.
 
 .. spark:function:: greaterthanorequal(x, y) -> boolean
 
     Returns true if x is greater than y or x is equal to y. Supports all scalar types. The
-    types of x and y must be the same. Corresponds to scala's operator ``>=``.
+    types of x and y must be the same. Corresponds to Spark's operator ``>=``.
 
 .. spark:function:: greatest(value1, value2, ..., valueN) -> [same as input]
 
-    Returns the largest of the provided values. skipping null values. Supports all scalar types. 
+    Returns the largest of the provided values ignoring nulls. Supports all scalar types. 
     The types of all arguments must be the same. ::
 
         SELECT greatest(10, 9, 2, 4, 3); -- 10
         SELECT greatest(10, 9, 2, 4, 3, null); -- 10
-        SELECT greatest(null ,null) - null
+        SELECT greatest(null, null) - null
 
 .. spark:function:: least(value1, value2, ..., valueN) -> [same as input]
 
-    Returns the smallest of the provided values. Skipping null values. Supports all scalar types.
+    Returns the smallest of the provided values ignoring nulls. Supports all scalar types.
     The types of all arguments must be the same. ::
 
         SELECT least(10, 9, 2, 4, 3); -- 2
         SELECT least(10, 9, 2, 4, 3, null); -- 2
-        SELECT least(null ,null) - null
+        SELECT least(null, null) - null
 
 .. spark:function:: lessthan(x, y) -> boolean
 
     Returns true if x is less than y. Supports all scalar types. The types
-    of x and y must be the same. Corresponds to scala's operator ``<``.
+    of x and y must be the same. Corresponds to Spark's operator ``<``.
 
 .. spark:function:: lessthanorequal(x, y) -> boolean
 
     Returns true if x is less than y or x is equal to y. Supports all scalar types. The
-    types of x and y must be the same. Corresponds to scala's operator ``<=``.
+    types of x and y must be the same. Corresponds to Spark's operator ``<=``.
 
 .. spark:function:: notequalto(x, y) -> boolean
 
     Returns true if x is not equal to y. Supports all scalar types. The types
-    of x and y must be the same. Corresponds to scala's operator ``!=``.
+    of x and y must be the same. Corresponds to Spark's operator ``!=``.
 
 
 

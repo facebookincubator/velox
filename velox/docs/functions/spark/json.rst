@@ -4,6 +4,7 @@ JSON Functions
 
 JSON Format
 -----------
+
 JSON is a language-independent data format that represents data as
 human-readable text. A JSON text can represent a number, a boolean, a
 string, an array, an object, or a null, with slightly different grammar.
@@ -19,13 +20,8 @@ such as ``[1,2,3]``. More detailed grammar can be found in
 JSON Functions
 --------------
 
-.. spark:function:: get_json_object(json, json_path) -> varchar
+.. spark:function:: get_json_object(json, path) -> varchar
 
-    Evaluates the `JSONPath`_-like expression ``json_path`` (a string containing JSON)
-    on ``json`` (a string containing JSON) and returns the result as a string. The
-    value referenced by ``json_path`` must be a scalar (boolean, number
-    or string). ::
+    Extracts a json object from path::
 
-        SELECT get_json_object('{"a":"b"}', '$.a'); - b
-
-.. _JSONPath: http://goessner.net/articles/JsonPath/
+        SELECT get_json_object('{"a":"b"}', '$.a'); -- b

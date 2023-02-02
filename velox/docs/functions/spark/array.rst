@@ -15,14 +15,14 @@ Array Functions
 
 .. spark:function:: in(value, array(E)) -> boolean
 
-    This function returns true if value matches at least one of the elements of the array.
+    Returns true if value matches at least one of the elements of the array.
     Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE input types.
 
 .. spark:function:: size(array(E)) -> bigint
 
-    Returns the size of the input array. The function returns null for null input
-    if legacySizeOfNull is set to false. Otherwise, the function returns -1 for null input.
-    With the default settings, the function returns -1 for null input.
+    Returns the size of the array. Returns null for null input
+    if :doc:`spark.legacy-size-of-null <../../configs>` is set to false. 
+    Otherwise, returns -1 for null input.
 
 .. spark:function:: sort_array(array(E)) -> array(E)
 
@@ -30,7 +30,7 @@ Array Functions
     be orderable. Null elements will be placed at the beginning of the returned array. ::
 
         SELECT sort_array(ARRAY [1, 2, 3]); -- [1, 2, 3]
-        SELECT sort_array(ARRAY [NULL, 2, 1]); -- [null, 1, 2]
+        SELECT sort_array(ARRAY [NULL, 2, 1]); -- [NULL, 1, 2]
 
 .. spark:function:: sort_array(array(E), ascendingOrder) -> array(E)
 
