@@ -58,7 +58,6 @@ jobs:
             source {package}/scripts/setup-helper-functions.sh &&
             echo "Installing folly from source..." &&
             github_checkout facebook/folly "v2022.11.14.00" &&
-            cmake_install -DBUILD_TESTS=OFF
             BINARY_DIR=_build &&
             mkdir -p "${BINARY_DIR}" &&
             cmake -Wno-dev -B"${BINARY_DIR}" \
