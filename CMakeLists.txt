@@ -318,7 +318,7 @@ find_package(gflags COMPONENTS shared)
 find_package(glog REQUIRED)
 
 set_source(fmt)
-resolve_dependency(fmt 8.0.1)
+resolve_dependency(fmt)
 
 find_library(EVENT event)
 
