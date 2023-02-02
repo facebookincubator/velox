@@ -49,7 +49,14 @@ jobs:
           CIBW_BUILD: "cp39-* cp310-*"
           CIBW_SKIP: "*musllinux*"
           CIBW_MANYLINUX_X86_64_IMAGE: "ghcr.io/facebookincubator/velox-dev:torcharrow-avx"
-          CIBW_BEFORE_ALL_MACOS: "bash {package}/scripts/setup-macos.sh"
+          CIBW_BEFORE_ALL_MACOS: >
+            bash {package}/scripts/setup-macos.sh &&
+            source {package}/scripts/setup-helper-functions.sh &&
+            CPU_TARGET="avx" &&
+            COMPILER_FLAGS=$(get_cxx_flags "$CPU_TARGET") &&
+            export COMPILER_FLAGS &&
+            github_checkout facebook/folly "v2022.11.14.00" &&
+            cmake_install -DBUILD_TESTS=OFF
         with:
           output-dir: wheelhouse
 
