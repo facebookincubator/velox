@@ -81,9 +81,7 @@ macro(build_folly)
     # Avoid possible errors for known warnings
     target_compile_options(folly PUBLIC ${EXTRA_CXX_FLAGS})
     add_library(Folly::folly ALIAS folly)
-    target_include_directories(
-      folly INTERFACE $<BUILD_INTERFACE:${folly_SOURCE_DIR}/folly>
-                      $<INSTALL_INTERFACE:include/folly>)
+    target_include_directories(folly INTERFACE ${folly_SOURCE_DIR}/folly)
   endif()
   set(FOLLY_BENCHMARK_STATIC_LIB
       ${folly_BINARY_DIR}/folly/libfollybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX})
