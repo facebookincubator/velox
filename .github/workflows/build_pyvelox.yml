@@ -56,9 +56,7 @@ jobs:
           CIBW_BEFORE_ALL_MACOS: >
             bash {package}/scripts/setup-macos.sh &&
             source {package}/scripts/setup-helper-functions.sh &&
-            CPU_TARGET="avx" &&
-            COMPILER_FLAGS=$(get_cxx_flags "$CPU_TARGET") &&
-            export COMPILER_FLAGS &&
+            export COMPILER_FLAGS=$(get_cxx_flags "SSE") &&
             github_checkout facebook/folly "v2022.11.14.00" &&
             cmake_install -DBUILD_TESTS=OFF
         with:
