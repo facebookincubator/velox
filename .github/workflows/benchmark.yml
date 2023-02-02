@@ -124,7 +124,8 @@ jobs:
             make benchmarks-basic-run \
                 EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/baseline/ --output_path ${BASELINE_OUTPUT_PATH}"
       
-      - name: "Compare and rerun"
+      - name: "Compare initial results"
+        id: compare
         if: ${{ github.event_name == 'pull_request' }}
         run: |
             ./velox/scripts/benchmark-runner.py compare \
@@ -132,7 +133,43 @@ jobs:
                 --contender_path ${CONTENDER_OUTPUT_PATH} \
                 --rerun_json_output "benchmark-results/rerun_json_output_0.json" \
                 --do_not_fail
-                
+
+            if [ ! -s "${CURRENT_JSON_RERUN}" ]; then
+                echo "rerun=false" >> $GITHUB_OUTPUT"
+            else
+                echo "rerun=true" >> $GITHUB_OUTPUT"
+            fi
+
+      - name: "Rerun Benchmarks"
+        if: ${{ github.event_name == 'pull_request' && steps.compare.outputs.rerun }}    
+        run: |
+          for i in 1 2 3 4 5; do
+            CURRENT_JSON_RERUN="${RESULTS_ROOT}/rerun_json_output_$((${i} - 1)).json"
+            NEXT_JSON_RERUN="${RESULTS_ROOT}/rerun_json_output_${i}.json"
+  
+            if [ ! -s "${CURRENT_JSON_RERUN}" ]; then
+              echo "--> Rerun iteration ${i} found empty file. Finalizing."
+              if [ $i -gt 1 ]; then
+                #copy files from previous iteration into the upload dir
+                cp -r --verbose ${CONTENDER_OUTPUT_PATH}/rerun-$((${i} - 1))/* ${CONTENDER_OUTPUT_PATH}
+              fi
+              break
+            fi
+
+            echo "--> Starting rerun iteration: ${i}"
+            make benchmarks-basic-run \
+                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/baseline/ --output_path ${BASELINE_OUTPUT_PATH}/rerun-${i}/ --rerun_json_input ${CURRENT_JSON_RERUN}"
+
+            make benchmarks-basic-run \
+                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}/rerun-${i}/ --rerun_json_input ${CURRENT_JSON_RERUN}"
+
+            ./scripts/benchmark-runner.py compare \
+                --baseline_path ${BASELINE_OUTPUT_PATH}/rerun-${i}/ \
+                --contender_path ${CONTENDER_OUTPUT_PATH}/rerun-${i}/ \
+                --rerun_json_output ${NEXT_JSON_RERUN} \
+                --do_not_fail
+
+          done
       - name: "Save PR number"
         run: echo "${{ github.event.pull_request.number }}" > pr_number.txt
 
