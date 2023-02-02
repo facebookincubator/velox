@@ -62,7 +62,6 @@ VectorPtr setVectorFromVariantsByKind<TypeKind::VARCHAR>(
   }
   return flatVector;
 }
-
 } // namespace
 
 VectorPtr setVectorFromVariants(
