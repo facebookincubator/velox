@@ -56,7 +56,8 @@ jobs:
           CIBW_BEFORE_ALL_MACOS: >
             bash {package}/scripts/setup-macos.sh &&
             source {package}/scripts/setup-helper-functions.sh &&
-            export COMPILER_FLAGS=$(get_cxx_flags "sse") &&
+            export CPU_TARGET=sse &&
+            export COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET) &&
             github_checkout facebook/folly "v2022.11.14.00" &&
             cmake_install -DBUILD_TESTS=OFF DCMAKE_PREFIX_PATH="$(brew --prefix openssl@1.1)"
         with:
