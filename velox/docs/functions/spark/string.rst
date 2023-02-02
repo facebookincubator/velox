@@ -2,8 +2,7 @@
 String Functions
 ====================================
 
-For functions contains, endsWith, startsWith, returns NULL if either left or right is NULL. 
-Both left or right must be of STRING. 
+Unless specified otherwise, all functions return NULL if at least one of the arguments is NULL.
 
 .. spark:function:: ascii(string) -> integer
 
@@ -15,7 +14,7 @@ Both left or right must be of STRING.
 
 .. spark:function:: contains(left, right) -> boolean
 
-    Returns true if 'right' is found in 'left'. Otherwise, returns False. ::
+    Returns true if 'right' is found in 'left'. Otherwise, returns false. ::
         
         SELECT contains('Spark SQL', 'Spark'); -- true
         SELECT contains('Spark SQL', 'SPARK'); -- false
@@ -24,7 +23,7 @@ Both left or right must be of STRING.
 
 .. spark:function:: endsWith(left, right) -> boolean
 
-    Returns true if 'left' ends with 'right'. Otherwise, returns False. ::
+    Returns true if 'left' ends with 'right'. Otherwise, returns false. ::
 
         SELECT endswith('js SQL', 'SQL'); -- true
         SELECT endswith('js SQL', 'js'); -- false
@@ -57,7 +56,7 @@ Both left or right must be of STRING.
 
 .. spark:function:: startsWith(left, right) -> boolean
 
-    Returns true if 'left' start with 'right'. Otherwise, returns False. ::
+    Returns true if 'left' starts with 'right'. Otherwise, returns false. ::
 
         SELECT startswith('js SQL', 'js'); -- true
         SELECT startswith('js SQL', 'SQL'); -- false
@@ -67,14 +66,14 @@ Both left or right must be of STRING.
 
     Returns the rest of ``string`` from the starting position ``start``.
     Positions start with ``1``. A negative starting position is interpreted
-    as being relative to the end of the string. Supported types for ``Start`` is INTEGER. 
+    as being relative to the end of the string. Type of 'start' must be an INTEGER. 
 
 .. spark:function:: substring(string, start, length) -> varchar
 
     Returns a substring from ``string`` of length ``length`` from the starting
     position ``start``. Positions start with ``1``. A negative starting
     position is interpreted as being relative to the end of the string.
-    Supported types for ``Start`` is INTEGER. ::
+    Type of 'start' must be an INTEGER. ::
         SELECT substring('Spark SQL', 5, 1); -- k
         SELECT substring('Spark SQL', 5, 0); -- ""
         SELECT substring('Spark SQL', 5, -1); -- ""
