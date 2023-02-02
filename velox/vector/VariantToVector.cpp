@@ -26,6 +26,9 @@ ArrayVectorPtr variantArrayToVectorImpl(
     const std::vector<variant>& variantArray,
     velox::memory::MemoryPool* pool) {
   using T = typename TypeTraits<KIND>::NativeType;
+  constexpr bool isDecimalType =
+      (KIND == facebook::velox::TypeKind::SHORT_DECIMAL ||
+       KIND == facebook::velox::TypeKind::LONG_DECIMAL);
 
   // First generate internal arrayVector elements.
   const size_t variantArraySize = variantArray.size();
@@ -40,7 +43,11 @@ ArrayVectorPtr variantArrayToVectorImpl(
     if (!value.isNull()) {
       // `getOwnedValue` copies the content to its internal buffers (in case of
       // string/StringView); no-op for other primitive types.
-      arrayElements->set(i, T(value.value<KIND>()));
+      if constexpr (isDecimalType) {
+        arrayElements->set(i, T(variantArray[i].value<KIND>().value()));
+      } else {
+        arrayElements->set(i, T(value.value<KIND>()));
+      }
     } else {
       arrayElements->setNull(i, true);
     }
@@ -56,6 +63,14 @@ ArrayVectorPtr variantArrayToVectorImpl(
   return std::make_shared<ArrayVector>(
       pool, arrayType, nullptr, 1, offsets, sizes, arrayElements);
 }
+
+template <>
+ArrayVectorPtr variantArrayToVectorImpl<TypeKind::OPAQUE>(
+    const TypePtr& arrayType,
+    const std::vector<variant>& variantArray,
+    velox::memory::MemoryPool* pool) {
+  VELOX_NYI();
+}
 } // namespace
 
 ArrayVectorPtr variantArrayToVector(
@@ -69,7 +84,7 @@ ArrayVectorPtr variantArrayToVector(
         arrayType, variantArray, pool);
   }
 
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
       variantArrayToVectorImpl,
       arrayType->childAt(0)->kind(),
       arrayType,

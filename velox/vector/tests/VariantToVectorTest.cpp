@@ -44,6 +44,9 @@ class VariantToVectorTest : public testing::Test {
     if (!inputArray.empty()) {
       ASSERT_TRUE(elements != nullptr);
     }
+    constexpr bool isDecimalType =
+        (KIND == facebook::velox::TypeKind::SHORT_DECIMAL ||
+         KIND == facebook::velox::TypeKind::LONG_DECIMAL);
 
     for (size_t i = 0; i < inputArray.size(); i++) {
       auto& var = inputArray[i];
@@ -52,6 +55,15 @@ class VariantToVectorTest : public testing::Test {
       } else if constexpr (std::is_same_v<TCpp, StringView>) {
         ASSERT_EQ(
             var.template value<KIND>(), std::string(elements->valueAt(i)));
+      } else if constexpr (isDecimalType) {
+        auto val = var.template value<KIND>();
+        VELOX_CHECK(
+            val.unscaledValue.has_value(),
+            "Decimal variant should have an unscaledValue");
+        ASSERT_EQ(val.value(), elements->valueAt(i));
+        auto [precision, scale] = getDecimalPrecisionScale(*type->childAt(0));
+        ASSERT_EQ(val.precision, precision);
+        ASSERT_EQ(val.scale, scale);
       } else {
         ASSERT_EQ(var.template value<KIND>(), elements->valueAt(i));
       }
@@ -151,4 +163,32 @@ TEST_F(VariantToVectorTest, varbinary) {
 
 TEST_F(VariantToVectorTest, empty) {
   testCreateVector<TypeKind::BIGINT>(ARRAY(BIGINT()), {});
+}
+
+TEST_F(VariantToVectorTest, shortDecimal) {
+  auto type = DECIMAL(10, 4);
+  testCreateVector<TypeKind::SHORT_DECIMAL>(
+      ARRAY(type),
+      {
+          variant::shortDecimal(10, type),
+          variant::shortDecimal(-10, type),
+          variant::shortDecimal(
+              UnscaledShortDecimal::max().unscaledValue() - 1, type),
+          variant::shortDecimal(
+              UnscaledShortDecimal::min().unscaledValue() + 1, type),
+      });
+}
+
+TEST_F(VariantToVectorTest, longDecimal) {
+  auto type = DECIMAL(38, 10);
+  testCreateVector<TypeKind::LONG_DECIMAL>(
+      ARRAY(type),
+      {
+          variant::longDecimal(buildInt128(10, 10), type),
+          variant::longDecimal(buildInt128(-10, 10), type),
+          variant::longDecimal(
+              UnscaledLongDecimal::max().unscaledValue() - 1, type),
+          variant::longDecimal(
+              UnscaledLongDecimal::min().unscaledValue() + 1, type),
+      });
 }
