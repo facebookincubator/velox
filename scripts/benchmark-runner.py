@@ -71,7 +71,7 @@ def get_retry_name(args, file_name):
     """
     path = _normalize_path(file_name)
     try:
-        parent_path = path.relative_to(_normalize_path(args.target_path))
+        parent_path = path.relative_to(_normalize_path(args.contender_path))
     except:
         parent_path = path.relative_to(_normalize_path(args.baseline_path))
     return str(parent_path.parent)
@@ -188,7 +188,7 @@ def compare(args):
 
     # Read file lists from both directories.
     baseline_map = find_json_files(pathlib.Path(args.baseline_path), args.recursive)
-    target_map = find_json_files(pathlib.Path(args.target_path), args.recursive)
+    target_map = find_json_files(pathlib.Path(args.contender_path), args.recursive)
 
     all_passes = []
     all_faster = []
@@ -199,7 +199,7 @@ def compare(args):
     rerun_log = {}
 
     # Compare json results from each file.
-    for file_name, target_path in target_map.items():
+    for file_name, contender_path in target_map.items():
         print("=" * _OUTPUT_NUM_COLS)
         print(file_name)
         print("=" * _OUTPUT_NUM_COLS)
@@ -208,7 +208,7 @@ def compare(args):
             print("WARNING: baseline file for '%s' not found. Skipping." % file_name)
             continue
 
-        target_data = read_json_files(target_path)
+        target_data = read_json_files(contender_path)
         baseline_data = read_json_files(baseline_map[file_name])
 
         passes, faster, failures = compare_file(args, target_data, baseline_data)
@@ -492,7 +492,7 @@ def parse_args():
         help="Path where containing base dump results.",
     )
     parser_compare.add_argument(
-        "--target_path",
+        "--contender_path",
         required=True,
         help="Path where containing target dump results.",
     )
