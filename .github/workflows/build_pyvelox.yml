@@ -53,7 +53,9 @@ jobs:
           CIBW_BUILD: "cp39-* cp310-*"
           CIBW_SKIP: "*musllinux*"
           CIBW_MANYLINUX_X86_64_IMAGE: "ghcr.io/facebookincubator/velox-dev:torcharrow-avx"
-          CIBW_BEFORE_ALL_MACOS: "bash {package}/scripts/setup-macos.sh"
+          CIBW_BEFORE_ALL_MACOS: >
+            bash {package}/scripts/setup-macos.sh && 
+            bash {package}/scripts/setup-macos.sh install_folly
         with:
           output-dir: wheelhouse
 
