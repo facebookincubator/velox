@@ -823,7 +823,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     testArrowImport<int16_t>("s", {5, 4, 3, 1, 2});
     testArrowImport<int32_t>("i", {5, 4, 3, 1, 2});
 
-    testArrowImport<Date>("d", {5, 4, 3, 1, 2});
+    testArrowImport<Date>("tdD", {5, 4, 3, 1, 2});
 
     testArrowImport<int64_t>("l", {});
     testArrowImport<int64_t>("l", {std::nullopt});
