@@ -123,7 +123,16 @@ jobs:
         run: |
             make benchmarks-basic-run \
                 EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/baseline/ --output_path ${BASELINE_OUTPUT_PATH}"
-
+      
+      - name: "Compare and rerun"
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+            ./velox/scripts/benchmark-runner.py compare \
+                --baseline_path ${BASELINE_OUTPUT_PATH} \
+                --contender_path ${CONTENDER_OUTPUT_PATH} \
+                --rerun_json_output "benchmark-results/rerun_json_output_0.json" \
+                --do_not_fail
+                
       - name: "Save PR number"
         run: echo "${{ github.event.pull_request.number }}" > pr_number.txt
 
