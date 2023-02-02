@@ -448,6 +448,8 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
     substraitCastExpr->mutable_input()->MergeFrom(
         toSubstraitExpr(arena, arg, inputType));
   }
+  // Set failure behaviro as FAILURE_BEHAVIOR_UNSPECIFIED.
+  substraitCastExpr->set_failure_behavior(::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED);
   return *substraitCastExpr;
 }
 

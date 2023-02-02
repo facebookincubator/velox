@@ -72,6 +72,29 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
     assertQuery(samePlan, duckDbSql);
   }
 
+  void assertCastPlanConversion(
+      const std::shared_ptr<const core::PlanNode>& plan,
+      const std::string& duckDbSql) {
+    assertQuery(plan, duckDbSql);
+
+    // Convert Velox Plan to Substrait Plan.
+    google::protobuf::Arena arena;
+    auto substraitPlan = veloxConvertor_->toSubstrait(arena, plan);
+
+    // Convert Substrait Plan to the same Velox Plan.
+    auto samePlan = substraitConverter_->toVeloxPlan(substraitPlan);
+    auto projections = std::dynamic_pointer_cast<const core::ProjectNode>(samePlan)->projections();
+    for (auto& projection: projections) {
+      auto castExpr =
+          std::dynamic_pointer_cast<const core::CastTypedExpr>(projection);
+      // For unspecified failure behavior, we are expecting nullOnFailure is false.
+      ASSERT_FALSE(castExpr->nullOnFailure());
+    }
+
+    // Assert velox again.
+    assertQuery(samePlan, duckDbSql);
+  }
+
   std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =
       std::make_shared<VeloxToSubstraitPlanConvertor>();
   std::shared_ptr<SubstraitVeloxPlanConverter> substraitConverter_ =
@@ -84,6 +107,14 @@ TEST_F(VeloxSubstraitRoundTripTest, project) {
   auto plan =
       PlanBuilder().values(vectors).project({"c0 + c1", "c1 / c2"}).planNode();
   assertPlanConversion(plan, "SELECT c0 + c1, c1 / c2 FROM tmp");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, cast) {
+  auto vectors = makeVectors(3, 4, 2);
+  createDuckDbTable(vectors);
+  auto plan =
+      PlanBuilder().values(vectors).project({"cast(c0 as bigint)"}).planNode();
+  assertCastPlanConversion(plan, "SELECT cast(c0 as bigint) FROM tmp");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, filter) {
