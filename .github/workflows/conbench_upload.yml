@@ -118,6 +118,7 @@ jobs:
           --output_dir "${{ github.workspace }}/benchmark-results/contender/"
 
     - name: "Status Check"
+      # Status functions like failure() only work in `if:`
       if: failure()
       id: status
       run: echo "failed=true" >> $GITHUB_OUTPUT
@@ -127,7 +128,7 @@ jobs:
       if: always()
       with:
         script: |
-          let url = 'https://github.com/${{github.repository}}/actions/runs/${{ github.run_id }}''
+          let url = 'https://github.com/${{github.repository}}/actions/runs/${{ github.run_id }}'
           let state = 'success'
           let description = 'Result upload succeeded!'
           
