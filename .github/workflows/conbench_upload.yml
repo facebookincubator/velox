@@ -116,3 +116,27 @@ jobs:
           --pr_number "${{ steps.extract.outputs.pr_number }}" \
           --sha "${{ steps.download.outputs.contender_sha }}" \
           --output_dir "${{ github.workspace }}/benchmark-results/contender/"
+    
+    - name: "Create commit status"
+      uses: actions/github-script@v5
+      if: always()
+      with:
+        script: |
+          let url = 'https://github.com/${{github.repository}}/actions/runs/${{ github.run_id }}''
+          let state = 'success'
+          let description = 'Result upload succeeded!'
+          
+          if(${{ failure() }}) {
+            state = 'failure'
+            description = 'Result upload failed!'
+          }
+
+          github.rest.repos.createCommitStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            sha: '${{ steps.download.outputs.contender_sha }}',
+            state: state,
+            target_url: url,
+            description: description,
+            context: 'Benchmark Result Upload'
+          })
