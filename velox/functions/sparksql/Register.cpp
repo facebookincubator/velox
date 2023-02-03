@@ -101,14 +101,13 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "rlike", re2SearchSignatures(), makeRLike);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
+
   exec::registerStatefulVectorFunction(
       prefix + "least", leastSignatures(), makeLeast);
   exec::registerStatefulVectorFunction(
       prefix + "greatest", greatestSignatures(), makeGreatest);
   exec::registerStatefulVectorFunction(
       prefix + "hash", hashSignatures(), makeHash);
-  exec::registerStatefulVectorFunction(
-      prefix + "murmur3hash", hashSignatures(), makeHash);
   exec::registerStatefulVectorFunction(
       prefix + "xxhash64", xxhash64Signatures(), makeXxHash64);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");

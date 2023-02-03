@@ -13,12 +13,26 @@ Map Functions
         SELECT map(); -- {}
 
 .. spark:function:: map(array(K), array(V)) -> map(K,V)
+    :noindex:
 
     Returns a map created using the given key/value arrays. Duplicate map key will cause exception. ::
 
         SELECT map(ARRAY[1,3], ARRAY[2,4]); -- {1 -> 2, 3 -> 4}
 
+.. spark:function:: map_filter(map(K,V), func) -> map(K,V)
+
+    Filters entries in a map using the function. ::
+
+        SELECT map_filter(map(1, 0, 2, 2, 3, -1), (k, v) -> k > v); -- {1 -> 0, 3 -> -1}
+
+.. spark:function:: map_from_arrays(array(K), array(V)) -> map(K,V)
+
+    Creates a map with a pair of the given key/value arrays. All elements in keys should not be null. ::
+
+        SELECT map_from_arrays(array(1.0, 3.0), array('2', '4')); -- {1.0 -> 2, 3.0 -> 4}
+
 .. spark:function:: size(map(K,V)) -> bigint
+    :noindex:
 
     Returns the size of the input map. Returns null for null input
     if :doc:`spark.legacy-size-of-null <../../configs>` is set to false. 
