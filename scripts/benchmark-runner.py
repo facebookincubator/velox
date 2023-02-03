@@ -33,18 +33,25 @@ _OUTPUT_NUM_COLS = 100
 # Cosmetic helper functions.
 # GitHub Actions does not provide a tty but can still display colors
 def in_gha() -> bool:
-    return os.getenv("GITHUB_ACTIONS") == 'true'
+    return os.getenv("GITHUB_ACTIONS") == "true"
+
 
 def color_red(text) -> str:
-    return "\033[91m{}\033[00m".format(text) if sys.stdout.isatty() or in_gha() else text
+    return (
+        "\033[91m{}\033[00m".format(text) if sys.stdout.isatty() or in_gha() else text
+    )
 
 
 def color_yellow(text) -> str:
-    return "\033[93m{}\033[00m".format(text) if sys.stdout.isatty() or in_gha() else text
+    return (
+        "\033[93m{}\033[00m".format(text) if sys.stdout.isatty() or in_gha() else text
+    )
 
 
 def color_green(text) -> str:
-    return "\033[92m{}\033[00m".format(text) if sys.stdout.isatty() or in_gha() else text
+    return (
+        "\033[92m{}\033[00m".format(text) if sys.stdout.isatty() or in_gha() else text
+    )
 
 
 def bold(text) -> str:
