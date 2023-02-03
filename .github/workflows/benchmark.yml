@@ -143,6 +143,7 @@ jobs:
 
       - name: "Rerun Benchmarks"
         if: ${{ github.event_name == 'pull_request'}}    
+        working-directory: 'velox'
         run: |
           for i in 1 2 3 4 5; do
             CURRENT_JSON_RERUN="${RESULTS_ROOT}/rerun_json_output_$((${i} - 1)).json"
