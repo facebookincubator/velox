@@ -27,6 +27,7 @@ on:
 permissions:
   contents: read
   actions: read
+  statuses: write
   #TODO comment results to PR
 
 jobs:
@@ -124,7 +125,7 @@ jobs:
       run: echo "failed=true" >> $GITHUB_OUTPUT
 
     - name: "Create commit status"
-      uses: actions/github-script@v5
+      uses: actions/github-script@v6
       if: always()
       with:
         script: |
