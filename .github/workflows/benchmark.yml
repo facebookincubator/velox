@@ -112,7 +112,7 @@ jobs:
         with:
           path: 'velox'
           submodules: 'recursive'
-          
+
       - name: "Install benchmark dependencies"
         run: |
           cd velox
@@ -141,14 +141,8 @@ jobs:
                 --rerun_json_output "benchmark-results/rerun_json_output_0.json" \
                 --do_not_fail
 
-            if [ ! -s "${CURRENT_JSON_RERUN}" ]; then
-                echo "rerun=false" >> $GITHUB_OUTPUT"
-            else
-                echo "rerun=true" >> $GITHUB_OUTPUT"
-            fi
-
       - name: "Rerun Benchmarks"
-        if: ${{ github.event_name == 'pull_request' && steps.compare.outputs.rerun }}    
+        if: ${{ github.event_name == 'pull_request'}}    
         run: |
           for i in 1 2 3 4 5; do
             CURRENT_JSON_RERUN="${RESULTS_ROOT}/rerun_json_output_$((${i} - 1)).json"
