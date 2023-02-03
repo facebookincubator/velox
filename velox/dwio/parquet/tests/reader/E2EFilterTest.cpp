@@ -91,6 +91,20 @@ TEST_F(E2EFilterTest, writerMagic) {
   EXPECT_EQ("PAR1", std::string(data + size - 4, 4));
 }
 
+TEST_F(E2EFilterTest, booleanDirect) {
+  writerProperties_ = ::parquet::WriterProperties::Builder()
+                          .disable_dictionary()
+                          ->data_pagesize(4 * 1024)
+                          ->build();
+  testWithTypes(
+      "boolean_val:boolean,"
+      "boolean_null:boolean",
+      [&]() { makeAllNulls("boolean_null"); },
+      true,
+      {"boolean_val"},
+      20);
+}
+
 TEST_F(E2EFilterTest, integerDirect) {
   writerProperties_ = ::parquet::WriterProperties::Builder()
                           .disable_dictionary()
