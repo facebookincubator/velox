@@ -168,6 +168,10 @@ jobs:
           done
 
           if [ $i -gt 1 ]; then
+            # Unless end of loop was reach we need to use n-1 in the dir name
+            if [ $i -eq 5]; then
+            i=6
+            fi
                 # if alteast 1 rerun happened
                 # copy files from last rerun into the upload dir
                 cp -r --verbose ${CONTENDER_OUTPUT_PATH}/rerun-$((${i} - 1))/* ${CONTENDER_OUTPUT_PATH}
