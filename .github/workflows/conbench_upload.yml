@@ -116,7 +116,12 @@ jobs:
           --pr_number "${{ steps.extract.outputs.pr_number }}" \
           --sha "${{ steps.download.outputs.contender_sha }}" \
           --output_dir "${{ github.workspace }}/benchmark-results/contender/"
-    
+
+    - name: "Status Check"
+      if: failure()
+      id: status
+      run: echo "failed=true" >> $GITHUB_OUTPUT
+
     - name: "Create commit status"
       uses: actions/github-script@v5
       if: always()
@@ -126,7 +131,7 @@ jobs:
           let state = 'success'
           let description = 'Result upload succeeded!'
           
-          if(${{ failure() }}) {
+          if(${{ steps.status.outputs.failed || false }}) {
             state = 'failure'
             description = 'Result upload failed!'
           }
