@@ -91,6 +91,19 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return evaluateMultiple({text}, input)[0];
   }
 
+  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  evaluateWithStats(const std::string& expression, const RowVectorPtr& input) {
+    auto exprSet = compileExpression(expression, asRowType(input->type()));
+
+    SelectivityVector rows(input->size());
+    std::vector<VectorPtr> results(1);
+
+    exec::EvalCtx context(execCtx_.get(), exprSet.get(), input.get());
+    exprSet->eval(rows, context, results);
+
+    return {results[0], exprSet->stats()};
+  }
+
   template <
       typename T = exec::ExprSet,
       typename = std::enable_if_t<
@@ -3207,4 +3220,46 @@ TEST_F(ExprTest, cseUnderTry) {
           std::nullopt,
       }),
       result);
+}
+
+TEST_F(ExprTest, conjunctUnderTry) {
+  auto input = makeRowVector({
+      makeFlatVector<StringView>({"a"_sv, "b"_sv}),
+      makeFlatVector<bool>({true, true}),
+      makeFlatVector<bool>({true, true}),
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_constructor(like(c0, 'test', 'escape'), c1 OR c2)", input),
+      "Escape string must be a single character");
+
+  auto result = evaluate(
+      "try(array_constructor(like(c0, 'test', 'escape'), c1 OR c2))", input);
+  auto expected =
+      BaseVector::createNullConstant(ARRAY(BOOLEAN()), input->size(), pool());
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ExprTest, flatNoNullsFastPathWithCse) {
+  // Test CSE with flat-no-nulls fast path.
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+      makeFlatVector<int64_t>({8, 9, 10, 11, 12}),
+  });
+
+  // Make sure CSE "c0 + c1" is evaluated only once for each row.
+  auto [result, stats] = evaluateWithStats(
+      "if((c0 + c1) > 100::bigint, 100::bigint, c0 + c1)", input);
+
+  auto expected = makeFlatVector<int64_t>({9, 11, 13, 15, 17});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+
+  std::tie(result, stats) = evaluateWithStats(
+      "if((c0 + c1) >= 15::bigint, 100::bigint, c0 + c1)", input);
+
+  expected = makeFlatVector<int64_t>({9, 11, 13, 100, 100});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
 }

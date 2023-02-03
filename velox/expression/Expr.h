@@ -125,6 +125,12 @@ class Expr {
       VectorPtr& result,
       bool topLevel = false);
 
+  void evalFlatNoNullsImpl(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result,
+      bool topLevel);
+
   // Simplified path for expression evaluation (flattens all vectors).
   void evalSimplified(
       const SelectivityVector& rows,
@@ -341,18 +347,14 @@ class Expr {
       EvalCtx& context,
       LocalSelectivityVector& nullHolder);
 
-  // If this is a common subexpression, checks if there is a previously
-  // calculated result and populates the 'result'.
-  bool checkGetSharedSubexprValues(
+  // Evaluate common sub-expression. Check if sharedSubexprValues_ already has
+  // values for all 'rows'. If not, compute missing values.
+  template <typename TEval>
+  void evaluateSharedSubexpr(
       const SelectivityVector& rows,
       EvalCtx& context,
-      VectorPtr& result);
-
-  // If this is a common subexpression, stores the newly calculated result.
-  void checkUpdateSharedSubexprValues(
-      const SelectivityVector& rows,
-      EvalCtx& context,
-      const VectorPtr& result);
+      VectorPtr& result,
+      TEval eval);
 
   void evalSimplifiedImpl(
       const SelectivityVector& rows,
@@ -531,6 +533,13 @@ class ExprSet {
   /// @param compact If true, uses one-line representation for each expression.
   /// Otherwise, prints a tree of expressions one node per line.
   std::string toString(bool compact = true) const;
+
+  /// Returns evaluation statistics as a map keyed on function or special form
+  /// name. If a function or a special form occurs in the expression
+  /// multiple times, the statistics will be aggregated across all calls.
+  /// Statistics will be missing for functions and special forms that didn't get
+  /// evaluated.
+  std::unordered_map<std::string, exec::ExprStats> stats() const;
 
  protected:
   void clearSharedSubexprs();

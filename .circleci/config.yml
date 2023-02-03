@@ -239,11 +239,12 @@ jobs:
           name: "Build and Test PyVelox"
           command: |
             export PATH=~/deps/bin:~/deps/opt/bison/bin:~/deps/opt/flex/bin:${PATH}
+            export OPENSSL_ROOT_DIR=~/deps/Cellar/openssl\@1.1/1.1.1s/
             conda init bash
-            source ~/.bashrc
+            source ~/.bash_profile
             conda create -y --name pyveloxenv python=3.7
             conda activate pyveloxenv
-            make python-test
+            make python-build
       - save_cache:
           name: "Save CCache cache"
           key: velox-ccache-debug-{{ arch }}-{{ checksum "merge-base-date" }}

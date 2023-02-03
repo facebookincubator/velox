@@ -86,7 +86,7 @@ function install_miniconda() {
 }
 
 function install_fmt {
-  github_checkout fmtlib/fmt 8.0.0
+  github_checkout fmtlib/fmt 8.0.1
   cmake_install -DFMT_TEST=OFF
 }
 

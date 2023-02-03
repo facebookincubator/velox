@@ -25,8 +25,6 @@ namespace facebook::velox::memory {
 MmapAllocator::MmapAllocator(const Options& options)
     : kind_(MemoryAllocator::Kind::kMmap),
       useMmapArena_(options.useMmapArena),
-      numAllocated_(0),
-      numMapped_(0),
       capacity_(bits::roundUp(
           options.capacity / AllocationTraits::kPageSize,
           64 * sizeClassSizes_.back())) {
@@ -531,7 +529,7 @@ bool MmapAllocator::SizeClass::allocateLocked(
   auto numPagesToAllocate = numPages;
   if (considerMappedOnly > 0) {
     const auto previousPages = out.numPages();
-    allocateFromMappdFree(considerMappedOnly, out);
+    allocateFromMappedFree(considerMappedOnly, out);
     const auto numAllocated = (out.numPages() - previousPages) / unitSize_;
     VELOX_CHECK_EQ(
         numAllocated,
@@ -576,7 +574,7 @@ bool isAllZero(xsimd::batch<uint64_t> bits) {
 }
 } // namespace
 
-int32_t MmapAllocator::SizeClass::findMappedFreeGroup() {
+uint32_t MmapAllocator::SizeClass::findMappedFreeGroup() {
   constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
   int32_t index = lastLookupIndex_;
   if (index == kNoLastLookup) {
@@ -610,35 +608,29 @@ xsimd::batch<uint64_t> MmapAllocator::SizeClass::mappedFreeBits(int32_t index) {
       xsimd::load_unaligned(pageMapped_.data() + index);
 }
 
-void MmapAllocator::SizeClass::allocateFromMappdFree(
+void MmapAllocator::SizeClass::allocateFromMappedFree(
     int32_t numPages,
     Allocation& allocation) {
   constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
   constexpr int32_t kWordsPerGroup = kPagesPerLookupBit / 64;
   int needed = numPages;
   for (;;) {
-    auto group = findMappedFreeGroup() * kWordsPerGroup;
-    if (group < 0) {
-      return;
-    }
+    const auto group = findMappedFreeGroup();
+    const auto startWord = group * kWordsPerGroup;
+    const auto endWord = startWord + kWordsPerGroup;
     bool anyFound = false;
-    for (auto index = group; index <= group + kWidth; index += kWidth) {
-      auto bits = mappedFreeBits(index);
-      uint16_t mask = simd::allSetBitMask<int64_t>() ^
+    for (auto word = startWord; word < endWord; word += kWidth) {
+      const auto bits = mappedFreeBits(word);
+      uint16_t wordMask = simd::allSetBitMask<int64_t>() ^
           simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
-      if (!mask) {
-        if (!(index < group + kWidth || anyFound)) {
-          LOG(ERROR) << "MMAPL: Lookup bit set but no free mapped pages class "
-                     << unitSize_;
-          bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
-          return;
-        }
+      if (wordMask == 0) {
         continue;
       }
-      auto firstWord = bits::getAndClearLastSetBit(mask);
+
       anyFound = true;
-      auto allUsed = bits::testBits(
-          reinterpret_cast<uint64_t*>(&bits),
+      const auto firstWord = bits::getAndClearLastSetBit(wordMask);
+      const auto wordAllUsed = bits::testBits(
+          reinterpret_cast<const uint64_t*>(&bits),
           firstWord * 64,
           sizeof(bits) * 8,
           true,
@@ -646,7 +638,7 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
             if (!needed) {
               return false;
             }
-            auto page = index * 64 + bit;
+            const auto page = word * 64 + bit;
             bits::setBit(pageAllocated_.data(), page);
             allocation.append(
                 address_ + AllocationTraits::pageBytes(page * unitSize_),
@@ -655,15 +647,25 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
             return true;
           });
 
-      if (allUsed) {
-        if (index == group + kWidth ||
-            isAllZero(mappedFreeBits(index + kWidth))) {
-          bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
+      if (needed == 0) {
+        if (!wordAllUsed) {
+          return;
         }
-      }
-      if (!needed) {
+        for (word += kWidth; word < endWord; word += kWidth) {
+          if (!isAllZero(mappedFreeBits(word))) {
+            return;
+          }
+        }
+        bits::setBit(mappedFreeLookup_.data(), group, false);
         return;
       }
+    }
+
+    bits::setBit(mappedFreeLookup_.data(), group, false);
+    if (!anyFound) {
+      LOG(ERROR) << "MMAPL: Lookup bit set but no free mapped pages class "
+                 << unitSize_;
+      return;
     }
   }
 }
@@ -694,7 +696,7 @@ MachinePageCount MmapAllocator::SizeClass::adviseAway(
 bool MmapAllocator::SizeClass::isInRange(uint8_t* ptr) const {
   if (ptr >= address_ && ptr < address_ + byteSize_) {
     // See that ptr falls on a page boundary.
-    if ((ptr - address_) % unitSize_ != 0) {
+    if ((ptr - address_) % AllocationTraits::pageBytes(unitSize_) != 0) {
       VELOX_FAIL("Pointer is in a SizeClass but not at page boundary");
     }
     return true;
