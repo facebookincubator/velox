@@ -106,6 +106,13 @@ jobs:
           path: ".ccache"
           key: ccache-benchmark-${{ github.sha }}
 
+      - name: "Checkout Contender again"
+       # We want to use updated version of scripts on PRs
+        uses: actions/checkout@v3
+        with:
+          path: 'velox'
+          submodules: 'recursive'
+          
       - name: "Install benchmark dependencies"
         run: |
           cd velox
