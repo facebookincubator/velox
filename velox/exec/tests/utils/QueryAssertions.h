@@ -122,6 +122,9 @@ bool waitForTaskCompletion(
 /// Similar to waitForTaskCompletion but wait for the task to fail.
 bool waitForTaskFailure(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
 
+/// Similar to waitForTaskFailure but wait for the task to abort.
+bool waitForTaskAborted(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
+
 /// Wait up to maxWaitMicros for 'task' state changes to 'state'. The function
 /// returns true if 'task' has changed to the expected 'state', otherwise false.
 bool waitForTaskStateChange(

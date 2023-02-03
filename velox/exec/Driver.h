@@ -53,6 +53,10 @@ enum class StopReason {
   kAlreadyOnThread
 };
 
+std::string stopReasonToString(StopReason reason);
+
+std::ostream& operator<<(std::ostream& os, StopReason reason);
+
 // Represents a Driver's state. This is used for cancellation, forcing
 // release of and for waiting for memory. The fields are serialized on
 // the mutex of the Driver's Task.
@@ -219,6 +223,9 @@ class Driver : public std::enable_shared_from_this<Driver> {
   Driver(
       std::unique_ptr<DriverCtx> driverCtx,
       std::vector<std::unique_ptr<Operator>> operators);
+  ~Driver() {
+    VELOX_CHECK(closed_);
+  }
 
   static void enqueue(std::shared_ptr<Driver> instance);
 

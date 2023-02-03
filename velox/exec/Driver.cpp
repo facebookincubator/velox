@@ -19,11 +19,42 @@
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <gflags/gflags.h>
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Task.h"
 
+using facebook::velox::common::testutil::TestValue;
+
 namespace facebook::velox::exec {
+
+std::string stopReasonToString(StopReason reason) {
+  switch (reason) {
+    case StopReason::kNone:
+      return "NONE";
+    case StopReason::kPause:
+      return "PAUSE";
+    case StopReason::kBlock:
+      return "BLOCK";
+    case StopReason::kTerminate:
+      return "TERMINATE";
+    case StopReason::kAlreadyTerminated:
+      return "TERMINATED";
+    case StopReason::kYield:
+      return "YIELD";
+    case StopReason::kAtEnd:
+      return "END";
+    case StopReason::kAlreadyOnThread:
+      return "ONTHREAD";
+    default:
+      return fmt::format("UNKNOWN {}", static_cast<int>(reason));
+  }
+}
+
+std::ostream& operator<<(std::ostream& os, StopReason reason) {
+  os << stopReasonToString(reason);
+  return os;
+}
 
 DriverCtx::DriverCtx(
     std::shared_ptr<Task> _task,
@@ -472,6 +503,11 @@ void Driver::run(std::shared_ptr<Driver> self) {
       "The last operator (sink) must not produce any results. "
       "Results need to be consumed by either a callback or another operator. ")
 
+  if (TestValue::enabled()) {
+    std::pair<Driver*, StopReason> testData(self.get(), reason);
+    TestValue::adjust("facebook::velox::exec::Driver::run", &testData);
+  }
+
   // There can be a race between Task terminating and the Driver being on the
   // thread and exiting the runInternal() in a blocked state. If this happens
   // the Driver won't be closed, so we need to check the Task here and exit w/o
@@ -645,7 +681,7 @@ std::string Driver::toString() {
   if (state_.isOnThread()) {
     out << "running ";
   } else {
-    out << "blocked " << static_cast<int>(blockingReason_) << " ";
+    out << "blocked " << blockingReasonToString(blockingReason_) << " ";
   }
   for (auto& op : operators_) {
     out << op->toString() << " ";

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Task.h"
+#include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -23,6 +24,8 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -792,6 +795,79 @@ DEBUG_ONLY_TEST_F(TaskTest, liveStats) {
   EXPECT_EQ(3 * numBatches, operatorStats.outputPositions);
   EXPECT_EQ(numBatches, operatorStats.outputVectors);
   EXPECT_EQ(1, operatorStats.finishTiming.count);
+}
+
+TEST_F(TaskTest, driverCloseRace) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+  // Project + Aggregation over TableScan.
+  std::vector<exec::Split> splits;
+  std::vector<std::shared_ptr<TempFilePath>> filePaths;
+  std::vector<RowVectorPtr> vectors;
+  int32_t value = 0;
+  for (int i = 0; i < 16; ++i) {
+    filePaths.push_back(TempFilePath::create());
+    vectors.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(100 * i, [&](auto row) { return ++value; }),
+         makeFlatVector<StringView>(100 * i, [&](auto row) {
+           return StringView(std::to_string(++value));
+         })}));
+    writeToFile(filePaths.back()->path, {vectors.back()});
+    splits.push_back(
+        exec::Split(makeHiveConnectorSplit(filePaths.back()->path)));
+  }
+
+  const auto spillingDir = exec::test::TempDirectoryPath::create();
+
+  core::PlanNodeId scanId;
+  auto plan =
+      PlanBuilder()
+          .tableScan(asRowType(vectors.back()->type()))
+          .capturePlanNodeId(scanId)
+          .project({"c0 % 5 as k", "c0", "c1"})
+          .singleAggregation({"k", "c1"}, {"sum(c0)", "avg(c0)", "max(c1)"})
+          .planFragment();
+
+  auto queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
+  std::unordered_map<std::string, std::string> configs;
+  configs[core::QueryConfig::kSpillEnabled] = "true";
+  configs[core::QueryConfig::kAggregationSpillEnabled] = "true";
+  queryCtx->setConfigOverridesUnsafe(std::move(configs));
+  auto task = std::make_shared<exec::Task>(
+      "driverCloseRace",
+      plan,
+      0,
+      std::move(queryCtx),
+      [&](RowVectorPtr /*vector=*/, velox::ContinueFuture* /*future=*/) {
+        return BlockingReason::kNotBlocked;
+      });
+  task->setSpillDirectory(spillingDir->path);
+  for (auto& split : splits) {
+    task->addSplit(scanId, std::move(split));
+  }
+  folly::EventCount noMoreSplitWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::run",
+      std::function<void(std::pair<Driver*, StopReason>*)>(
+          [&](std::pair<Driver*, StopReason>* testData) {
+            if (testData->second != StopReason::kBlock) {
+              return;
+            }
+            auto* task = testData->first->task().get();
+            const SplitsState* state = task->testingSplitsState(scanId);
+            ASSERT_NE(state, nullptr);
+            auto it = state->groupSplitsStores.find(0);
+            ASSERT_NE(it, state->groupSplitsStores.end());
+            if (!it->second.splits.empty()) {
+              return;
+            }
+            task->requestAbort();
+            noMoreSplitWait.notify();
+          }));
+  exec::Task::start(task, 1, 1);
+  noMoreSplitWait.wait(noMoreSplitWait.prepareWait());
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  task->noMoreSplits(scanId);
+  ASSERT_TRUE(waitForTaskAborted(task.get(), 100'000'000));
 }
 
 } // namespace facebook::velox::exec::test

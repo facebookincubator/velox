@@ -895,6 +895,14 @@ bool waitForTaskFailure(exec::Task* task, uint64_t maxWaitMicros) {
   return waitForTaskDriversToFinish(task, maxWaitMicros);
 }
 
+bool waitForTaskAborted(exec::Task* task, uint64_t maxWaitMicros) {
+  // Wait for task to transition to finished state.
+  if (!waitForTaskStateChange(task, TaskState::kAborted, maxWaitMicros)) {
+    return false;
+  }
+  return waitForTaskDriversToFinish(task, maxWaitMicros);
+}
+
 bool waitForTaskStateChange(
     exec::Task* task,
     TaskState state,

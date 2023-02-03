@@ -191,6 +191,7 @@ Task::~Task() {
   } catch (const std::exception& e) {
     LOG(WARNING) << "Caught exception in ~Task(): " << e.what();
   }
+  VELOX_CHECK_EQ(numTotalDrivers_, numFinishedDrivers_);
 }
 
 velox::memory::MemoryPool* FOLLY_NONNULL

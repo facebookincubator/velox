@@ -493,6 +493,18 @@ class Task : public std::enable_shared_from_this<Task> {
     return mutex_;
   }
 
+  /// Returns the split state of the given plan node 'id'. This function is for
+  /// test only. It returns null if the split state doesn't exist for the given
+  /// node.
+  const SplitsState* testingSplitsState(const core::PlanNodeId& id) const {
+    std::lock_guard<std::mutex> l(mutex_);
+    auto it = splitsStates_.find(id);
+    if (it == splitsStates_.end()) {
+      return nullptr;
+    }
+    return &it->second;
+  }
+
   /// Returns the number of created and deleted tasks since the velox engine
   /// starts running so far.
   static uint64_t numCreatedTasks() {
