@@ -989,7 +989,8 @@ VectorFuzzer::Options fuzzerOptions() {
       .dictionaryHasNulls = false,
       .stringVariableLength = true,
       .containerVariableLength = true,
-      .useMicrosecondPrecisionTimestamp = true};
+      .useMicrosecondPrecisionTimestamp = true,
+  };
 }
 
 TYPED_TEST(UnsafeRowComplexDeserializerTests, Fuzzer) {
@@ -999,26 +1000,10 @@ TYPED_TEST(UnsafeRowComplexDeserializerTests, Fuzzer) {
   }
   std::string buffer(100 << 20, '\0'); // Up to 100MB.
   VectorFuzzer fuzzer(fuzzerOptions(), this->pool_.get(), 0);
-  /// @TODO Add support for decimals in UnsafeRow SerDe.
-  /// Refer https://github.com/facebookincubator/velox/issues/3784
-  static std::vector<TypeKind> kSupportedScalarTypes{
-      TypeKind::BOOLEAN,
-      TypeKind::TINYINT,
-      TypeKind::SMALLINT,
-      TypeKind::INTEGER,
-      TypeKind::BIGINT,
-      TypeKind::REAL,
-      TypeKind::DOUBLE,
-      TypeKind::VARCHAR,
-      TypeKind::VARBINARY,
-      TypeKind::TIMESTAMP,
-      TypeKind::DATE,
-  };
-
-  for (int i = 0; i < 1; ++i) {
+  for (int i = 0; i < 100; ++i) {
     auto seed = i; // TODO: Switch to folly::Random::rand32().
     fuzzer.reSeed(seed);
-    const auto type = fuzzer.randRowType(5, kSupportedScalarTypes);
+    const auto type = fuzzer.randRowType();
     LOG(INFO) << "i=" << i << " seed=" << seed << " type=" << type->toString();
     const VectorPtr input = fuzzer.fuzzRow(type);
     std::vector<std::string_view> rowData;

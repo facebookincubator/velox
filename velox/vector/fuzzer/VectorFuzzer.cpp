@@ -748,35 +748,27 @@ std::pair<int8_t, int8_t> VectorFuzzer::randPrecisionScale(TypeKind kind) {
   return {precision, scale};
 }
 
-TypePtr VectorFuzzer::randType(
-    int maxDepth,
-    const std::vector<TypeKind>& supportedScalarTypes) {
-  static std::vector<TypeKind> kScalarTypes = {
-      TypeKind::BOOLEAN,
-      TypeKind::TINYINT,
-      TypeKind::SMALLINT,
-      TypeKind::INTEGER,
-      TypeKind::BIGINT,
-      TypeKind::REAL,
-      TypeKind::DOUBLE,
-      TypeKind::VARCHAR,
-      TypeKind::VARBINARY,
-      TypeKind::TIMESTAMP,
-      TypeKind::DATE,
-      TypeKind::SHORT_DECIMAL,
-      TypeKind::LONG_DECIMAL};
-  auto scalarTypes =
-      supportedScalarTypes.size() == 0 ? kScalarTypes : supportedScalarTypes;
-  auto numScalarTypes = scalarTypes.size();
+TypePtr VectorFuzzer::randType(int maxDepth) {
+  // @TODO Add decimal TypeKinds to randType.
+  // Refer https://github.com/facebookincubator/velox/issues/3942
+  static TypePtr kScalarTypes[]{
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      VARBINARY(),
+      TIMESTAMP(),
+      DATE(),
+  };
+  static constexpr int kNumScalarTypes =
+      sizeof(kScalarTypes) / sizeof(kScalarTypes[0]);
   // Should we generate a scalar type?
   if (maxDepth <= 1 || rand<bool>(rng_)) {
-    auto randTypeKind = scalarTypes[rand<uint32_t>(rng_) % numScalarTypes];
-    if (isDecimalKind(randTypeKind)) {
-      // Generate precision in range [1, Decimal type max precision]
-      const auto& [precision, scale] = randPrecisionScale(randTypeKind);
-      return DECIMAL(precision, scale);
-    }
-    return fromKindToScalerType(randTypeKind);
+    return kScalarTypes[rand<uint32_t>(rng_) % kNumScalarTypes];
   }
   switch (rand<uint32_t>(rng_) % 3) {
     case 0:
@@ -788,15 +780,13 @@ TypePtr VectorFuzzer::randType(
   }
 }
 
-RowTypePtr VectorFuzzer::randRowType(
-    int maxDepth,
-    const std::vector<TypeKind>& scalarTypes) {
+RowTypePtr VectorFuzzer::randRowType(int maxDepth) {
   int numFields = 1 + rand<uint32_t>(rng_) % 7;
   std::vector<std::string> names;
   std::vector<TypePtr> fields;
   for (int i = 0; i < numFields; ++i) {
     names.push_back(fmt::format("f{}", i));
-    fields.push_back(randType(maxDepth, scalarTypes));
+    fields.push_back(randType(maxDepth));
   }
   return ROW(std::move(names), std::move(fields));
 }
