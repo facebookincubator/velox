@@ -185,8 +185,10 @@ void RowVector::copy(
 
     auto rowSource = source->loadedVector()->as<RowVector>();
     for (auto i = 0; i < childrenSize_; ++i) {
-      children_[i]->copy(
-          rowSource->childAt(i)->loadedVector(), nonNullRows, toSourceRow);
+      if (rowSource->childAt(i)) {
+        children_[i]->copy(
+            rowSource->childAt(i)->loadedVector(), nonNullRows, toSourceRow);
+      }
     }
   } else {
     auto nulls = decodedSource.nulls();

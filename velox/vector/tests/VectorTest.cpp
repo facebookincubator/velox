@@ -164,6 +164,20 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
         size * sizeof(T));
   }
 
+  VectorPtr createRowWithEmptyChild(int32_t numRows) {
+    auto type = ROW({"bigint_col1", "bigint_col2"}, {BIGINT(), BIGINT()});
+    auto baseRow = BaseVector::create(type, numRows, pool_.get());
+    std::vector<VectorPtr> children(2, nullptr);
+    children[0] = createScalar<TypeKind::BIGINT>(BIGINT(), numRows, true);
+    return std::make_shared<RowVector>(
+        pool_.get(),
+        type,
+        BufferPtr(nullptr),
+        numRows,
+        std::move(children),
+        0 /*nullCount*/);
+  }
+
   VectorPtr createRow(int32_t numRows, bool withNulls) {
     auto childType =
         ROW({"child_bigint", "child_string"}, {BIGINT(), VARCHAR()});
@@ -1031,6 +1045,13 @@ TEST_F(VectorTest, row) {
       BaseVector::createNullConstant(baseRow->type(), 50, pool_.get());
   testCopy(allNull, numIterations_);
   testSlices(allNull);
+}
+
+TEST_F(VectorTest, testCopyRowVectorWithNullChild) {
+  auto baseRow = createRowWithEmptyChild(vectorSize_);
+  auto target =
+      BaseVector::create(baseRow->type(), baseRow->size(), pool_.get());
+  target->copy(baseRow.get(), SelectivityVector{baseRow->size()}, nullptr);
 }
 
 TEST_F(VectorTest, array) {
