@@ -1089,6 +1089,13 @@ class RowContainer {
 };
 
 template <>
+inline UnscaledLongDecimal RowContainer::valueAt<UnscaledLongDecimal>(
+    const char* FOLLY_NONNULL group,
+    int32_t offset) {
+  return UnscaledLongDecimal::deserialize(group + offset);
+}
+
+template <>
 inline void RowContainer::storeWithNulls<TypeKind::ROW>(
     const DecodedVector& decoded,
     vector_size_t index,
