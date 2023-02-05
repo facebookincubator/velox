@@ -402,37 +402,36 @@ void HashStringAllocator::checkConsistency() const {
   VELOX_CHECK_EQ(pool_.numLargeAllocations(), 0);
   for (auto i = 0; i < pool_.numSmallAllocations(); ++i) {
     auto allocation = pool_.allocationAt(i);
-    for (auto runIndex = 0; runIndex < allocation->numRuns(); ++runIndex) {
-      auto run = allocation->runAt(runIndex);
-      auto size = run.numBytes() - sizeof(Header);
-      bool previousFree = false;
-      auto end = reinterpret_cast<Header*>(run.data<char>() + size);
-      auto header = run.data<Header>();
-      while (header != end) {
-        VELOX_CHECK(header >= run.data<Header>());
-        VELOX_CHECK(header < end);
-        VELOX_CHECK(header->end() <= reinterpret_cast<char*>(end));
-        VELOX_CHECK_EQ(header->isPreviousFree(), previousFree);
+    VELOX_CHECK_EQ(allocation->numRuns(), 1);
+    auto run = allocation->runAt(0);
+    auto size = run.numBytes() - sizeof(Header);
+    bool previousFree = false;
+    auto end = reinterpret_cast<Header*>(run.data<char>() + size);
+    auto header = run.data<Header>();
+    while (header != end) {
+      VELOX_CHECK(header >= run.data<Header>());
+      VELOX_CHECK(header < end);
+      VELOX_CHECK(header->end() <= reinterpret_cast<char*>(end));
+      VELOX_CHECK_EQ(header->isPreviousFree(), previousFree);
 
-        if (header->isFree()) {
-          VELOX_CHECK(!previousFree);
-          VELOX_CHECK(!header->isContinued());
-          if (header->next()) {
-            VELOX_CHECK_EQ(
-                header->size(),
-                *(reinterpret_cast<int32_t*>(header->end()) - 1));
-          }
-          ++numFree;
-          freeBytes += sizeof(Header) + header->size();
-        } else if (header->isContinued()) {
-          // If the content of the header is continued, check the
-          // continue header is readable and not free.
-          auto continued = getNextContinued(header);
-          VELOX_CHECK(!continued->isFree());
+      if (header->isFree()) {
+        VELOX_CHECK(!previousFree);
+        VELOX_CHECK(!header->isContinued());
+        if (header->next()) {
+          VELOX_CHECK_EQ(
+              header->size(),
+              *(reinterpret_cast<int32_t*>(header->end()) - 1));
         }
-        previousFree = header->isFree();
-        header = reinterpret_cast<Header*>(header->end());
+        ++numFree;
+        freeBytes += sizeof(Header) + header->size();
+      } else if (header->isContinued()) {
+        // If the content of the header is continued, check the
+        // continue header is readable and not free.
+        auto continued = getNextContinued(header);
+        VELOX_CHECK(!continued->isFree());
       }
+      previousFree = header->isFree();
+      header = reinterpret_cast<Header*>(header->end());
     }
   }
   VELOX_CHECK(numFree == numFree_);
