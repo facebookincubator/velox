@@ -46,6 +46,7 @@ jobs:
       - name: "Setup ccache"
         run: |
             # Set up ccache configs .
+            apt update && apt install -y ccache
             mkdir -p .ccache
             ccache -sz -M 5Gi
 
