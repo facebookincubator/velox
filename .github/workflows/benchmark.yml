@@ -23,7 +23,6 @@ on:
       - 'pyvelox/**'
       - '.github/workflows/benchmark.yml'
   push:
-    branches: [main]
 
 permissions:
   contents: read
