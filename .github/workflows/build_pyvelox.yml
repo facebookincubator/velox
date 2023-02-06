@@ -40,6 +40,15 @@ jobs:
         with:
           submodules: recursive
 
+      - name: "Restore ccache"
+        uses: actions/cache/restore@v3
+        id: restore-cache
+        with:
+          path: ".ccache"
+          key: ccache-wheels-${{ github.sha }}
+          restore-keys: |
+            ccache-wheels-
+
       - if: matrix.os == 'macos-11'
         run: |
           echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@1.1/" >> $GITHUB_ENV
@@ -58,9 +67,18 @@ jobs:
             bash {package}/scripts/setup-macos.sh && 
             bash {package}/scripts/setup-macos.sh install_folly
           CIBW_TEST_COMMAND: "cd {project} && python -m unittest -v"
+          CCACHE_DIR: "${{ matrix.os == 'macos-11' && '' || '/host/' }}${{ github.workspace }}/.ccache"
         with:
           output-dir: wheelhouse
 
+      - name: "Save ccache"
+        uses: actions/cache/save@v3
+        id: cache
+        with:
+          path: ".ccache"
+          key: ccache-wheels-${{ github.sha }}
+
       - uses: actions/upload-artifact@v3
         with:
+          name: wheels
           path: ./wheelhouse/*.whl
