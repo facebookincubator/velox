@@ -419,8 +419,7 @@ void HashStringAllocator::checkConsistency() const {
         VELOX_CHECK(!header->isContinued());
         if (header->next()) {
           VELOX_CHECK_EQ(
-              header->size(),
-              *(reinterpret_cast<int32_t*>(header->end()) - 1));
+              header->size(), *(reinterpret_cast<int32_t*>(header->end()) - 1));
         }
         ++numFree;
         freeBytes += sizeof(Header) + header->size();
