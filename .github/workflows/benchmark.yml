@@ -63,7 +63,7 @@ jobs:
           sudo apt update && sudo apt install -y libunwind-dev
           # Sourcing the script installs apt deps but skips the rest
           source ./velox/scripts/setup-ubuntu.sh
-      
+      - run: echo ls /usr/include
       - name: "Setup ccache"
         run: |
             # Set up ccache configs .
