@@ -29,7 +29,7 @@ DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 export CMAKE_BUILD_TYPE=Release
 
 # Install all velox and folly dependencies.
-sudo --preserve-env apt update && apt install -y \
+sudo --preserve-env apt update && sudo apt install -y \
   g++ \
   cmake \
   ccache \
