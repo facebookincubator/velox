@@ -44,15 +44,12 @@ jobs:
       BASELINE_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/baseline/"
       CONTENDER_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/contender/"
     steps:
-      - name: "Setup ccache and python"
+      - name: "Setup ccache"
         run: |
             # Set up ccache configs .
             mkdir -p .ccache
             ccache -sz -M 5Gi
 
-            # We can not use setup-python as we are running in a container
-            apt update
-            apt install -y lsb-release python3 pip
       - name: "Restore ccache"
         uses: actions/cache/restore@v3
         id: restore-cache
@@ -61,6 +58,25 @@ jobs:
           key: ccache-benchmark-${{ github.sha }}
           restore-keys: |
             ccache-benchmark-
+
+      - name: "Checkout Contender"
+        uses: actions/checkout@v3
+        with:
+          path: 'velox'
+          submodules: 'recursive'
+
+      - name: "Install dependencies"
+        # Sourcing the script installs apt deps but skips the rest
+        run: source ./velox/scripts/setup-ubuntu.sh
+
+      - name: Build Contender Benchmarks
+        working-directory: velox
+        run: |
+            n_cores=$(nproc)
+            make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$n_cores MAX_LINK_JOBS=$n_cores
+            ccache -s
+            mkdir -p  ${BINARY_DIR}/contender/
+            cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/contender/
 
       - name: "Checkout Baseline"
         if: ${{ github.event_name == 'pull_request' }}
@@ -104,9 +120,29 @@ jobs:
           path: ".ccache"
           key: ccache-benchmark-${{ github.sha }}
 
+      - name: "Checkout Contender again"
+       # We want to use updated version of scripts on PRs
+        uses: actions/checkout@v3
+        with:
+          path: 'velox'
+          submodules: 'recursive'
+
+      - name: "Setup Python"
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+          cache-dependency-path: 'velox/scripts/*'
+
       - name: "Install benchmark dependencies"
         run: |
           python3 -m pip install -r velox/scripts/benchmark-requirements.txt
+
+      - name: "Run Benchmarks - Contender"
+        working-directory: 'velox'
+        run: |
+            make benchmarks-basic-run \
+                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
 
       - name: "Run Benchmarks - Baseline"
         if: ${{ github.event_name == 'pull_request' }}
