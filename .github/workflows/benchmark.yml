@@ -150,11 +150,11 @@ jobs:
             NEXT_JSON_RERUN="${RESULTS_ROOT}/rerun_json_output_${i}.json"
   
             if [ ! -s "${CURRENT_JSON_RERUN}" ]; then
-              echo "--> Rerun iteration ${i} found empty file. Finalizing."
+              echo "::notice::Rerun iteration ${i} found empty file. Finalizing."
               break
             fi
 
-            echo "--> Starting rerun iteration: ${i}"
+            echo "::group::Rerun iteration: ${i}"
             make benchmarks-basic-run \
                 EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/baseline/ --output_path ${BASELINE_OUTPUT_PATH}/rerun-${i}/ --rerun_json_input ${CURRENT_JSON_RERUN}"
 
@@ -166,9 +166,19 @@ jobs:
                 --contender_path ${CONTENDER_OUTPUT_PATH}/rerun-${i}/ \
                 --rerun_json_output ${NEXT_JSON_RERUN} \
                 --do_not_fail
-
+          echo "::endgroup::"
           done
+          
 
+          echo "::group::Compare final results"
+          ./scripts/benchmark-runner.py compare \
+                --baseline_path ${BASELINE_OUTPUT_PATH} \
+                --contender_path ${CONTENDER_OUTPUT_PATH} \
+                --recursive
+                --do_not_fail
+          echo "::endgroup::"
+
+          echo "::group::Copy results from last rerun into upload dir"
           if [ $i -gt 1 ]; then
             # Unless end of loop was reach we need to use n-1 in the dir name
             if [ $i -eq 5]; then
@@ -178,6 +188,7 @@ jobs:
                 # copy files from last rerun into the upload dir
                 cp -r --verbose ${CONTENDER_OUTPUT_PATH}/rerun-$((${i} - 1))/* ${CONTENDER_OUTPUT_PATH}
           fi
+          echo "::endgroup"
 
       - name: "Save PR number"
         run: echo "${{ github.event.pull_request.number }}" > pr_number.txt
