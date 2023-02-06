@@ -464,6 +464,22 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
   return std::nullopt;
 }
 
+bool DwrfRowReader::moveAdaptationFrom(RowReader& other) {
+  auto otherReader = dynamic_cast<DwrfRowReader*>(&other);
+  if (!selectiveColumnReader_) {
+    VLOG(1) << "PRESPL: Moving adaptation to reader with no reader tree. Can "
+            << "happen if split contains no stripe begin.";
+    return false;
+  }
+  if (!otherReader->selectiveColumnReader_) {
+    VLOG(1) << "PRESPL: Moving adaptation from reader with no tree. "
+            << "No adaptation moved but continuing.";
+    return true;
+  }
+  selectiveColumnReader_->moveScanSpec(*otherReader->selectiveColumnReader_);
+  return true;
+}
+
 DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
@@ -471,6 +487,8 @@ DwrfReader::DwrfReader(
           options.getMemoryPool(),
           std::move(input),
           options.getDecrypterFactory(),
+          options.getDirectorySizeGuess(),
+          options.getFilePreloadThreshold(),
           options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
                                                      : FileFormat::DWRF)),
       options_(options) {}
@@ -653,8 +671,8 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   auto footerLength = readerBase.getPostScript().footerLength();
-  if (memory < footerLength + DIRECTORY_SIZE_GUESS) {
-    memory = footerLength + DIRECTORY_SIZE_GUESS;
+  if (memory < footerLength + readerBase.getDirectorySizeGuess()) {
+    memory = footerLength + readerBase.getDirectorySizeGuess();
   }
 
   // Account for firstRowOfStripe.
@@ -681,12 +699,24 @@ uint64_t DwrfReader::getMemoryUse(
 
 std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
     const RowReaderOptions& opts) const {
-  return std::make_unique<DwrfRowReader>(readerBase_, opts);
+  auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
+  // Load the first stripe on construction so that readers created in
+  // background have a reader tree and can preload the first
+  // stripe. Also the reader tree needs to exist in order to receive
+  // adaptation from a previous reader.
+  rowReader->startNextStripe();
+  return rowReader;
 }
 
 std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(
     const RowReaderOptions& opts) const {
-  return std::make_unique<DwrfRowReader>(readerBase_, opts);
+  auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
+  // Load the first stripe on construction so that readers created in
+  // background have a reader tree and can preload the first
+  // stripe. Also the reader tree needs to exist in order to receive
+  // adaptation from a previous reader.
+  rowReader->startNextStripe();
+  return rowReader;
 }
 
 std::unique_ptr<DwrfReader> DwrfReader::create(

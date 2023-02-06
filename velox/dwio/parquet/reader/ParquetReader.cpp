@@ -27,6 +27,8 @@ ReaderBase::ReaderBase(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options)
     : pool_(options.getMemoryPool()),
+      directorySizeGuess_(options.getDirectorySizeGuess()),
+      filePreloadThreshold_(options.getFilePreloadThreshold()),
       options_(options),
       input_(std::move(input)) {
   fileLength_ = input_->getReadFile()->size();
@@ -38,9 +40,9 @@ ReaderBase::ReaderBase(
 }
 
 void ReaderBase::loadFileMetaData() {
-  bool preloadFile_ = fileLength_ <= FILE_PRELOAD_THRESHOLD;
+  bool preloadFile_ = fileLength_ <= filePreloadThreshold_;
   uint64_t readSize =
-      preloadFile_ ? fileLength_ : std::min(fileLength_, DIRECTORY_SIZE_GUESS);
+      preloadFile_ ? fileLength_ : std::min(fileLength_, directorySizeGuess_);
 
   auto stream = input_->read(
       fileLength_ - readSize, readSize, dwio::common::LogType::FOOTER);
@@ -60,7 +62,7 @@ void ReaderBase::loadFileMetaData() {
   int32_t footerOffsetInBuffer = readSize - 8 - footerLength;
   if (footerLength > readSize - 8) {
     footerOffsetInBuffer = 0;
-    auto missingLength = footerLength - readSize - 8;
+    auto missingLength = footerLength - readSize + 8;
     stream = input_->read(
         fileLength_ - footerLength - 8,
         missingLength,
@@ -515,15 +517,20 @@ ParquetRowReader::ParquetRowReader(
       *options_.getScanSpec());
 
   filterRowGroups();
+  if (!rowGroupIds_.empty()) {
+    // schedule prefetch of first row group right after reading the metadata.
+    // This is usually on a split preload thread before the split goes to table
+    // scan.
+    advanceToNextRowGroup();
+  }
 }
 
 namespace {
 struct ParquetStatsContext : dwio::common::StatsContext {};
 } // namespace
 
-//
 void ParquetRowReader::filterRowGroups() {
-  auto rowGroups = readerBase_->fileMetaData().row_groups;
+  const auto& rowGroups = readerBase_->fileMetaData().row_groups;
   rowGroupIds_.reserve(rowGroups.size());
 
   ParquetData::FilterRowGroupsResult res;

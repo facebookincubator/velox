@@ -37,17 +37,17 @@ option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
   OFF)
-# option() always creats a BOOL variable so we have to use a normal cache
+# option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
 #
-# * AUTO: Try SYSTEM first fall back to
-# * BUNDLED SYSTEM Use installed dependencies via find_package
-# * BUNDLED Build dependencies from source
+# * AUTO: Try SYSTEM first fall back to BUNDLED.
+# * SYSTEM: Use installed dependencies via find_package.
+# * BUNDLED: Build dependencies from source.
 set(VELOX_DEPENDENCY_SOURCE
     ${VELOX_DEPENDENCY_SOURCE_DEFAULT}
     CACHE
       STRING
-      "Default source for all dependencies with source builds enabled. AUTO SYSTEM BUNDLED"
+      "Default source for all dependencies with source builds enabled: AUTO SYSTEM BUNDLED."
 )
 option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." ON)
 option(VELOX_ENABLE_EXEC "Build exec." ON)
@@ -128,10 +128,10 @@ endif()
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
-  set(VELOX_ENABLE_DUCKDB OFF)
+  set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_EXPRESSION ON)
-  set(VELOX_ENABLE_PARSE OFF)
-  set(VELOX_ENABLE_EXEC OFF)
+  set(VELOX_ENABLE_PARSE ON)
+  set(VELOX_ENABLE_EXEC ON)
   set(VELOX_ENABLE_AGGREGATES OFF)
   set(VELOX_ENABLE_HIVE_CONNECTOR OFF)
   set(VELOX_ENABLE_TPCH_CONNECTOR OFF)
@@ -318,7 +318,7 @@ find_package(gflags COMPONENTS shared)
 find_package(glog REQUIRED)
 
 set_source(fmt)
-resolve_dependency(fmt)
+resolve_dependency(fmt 8.0.1)
 
 find_library(EVENT event)
 

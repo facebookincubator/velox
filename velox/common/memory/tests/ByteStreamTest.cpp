@@ -23,7 +23,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::memory;
 
-class ByteStreamTest : public testing::TestWithParam<bool> {
+class ByteStreamTest : public testing::Test {
  protected:
   void SetUp() override {
     constexpr uint64_t kMaxMappedMemory = 64 << 20;
@@ -91,4 +91,22 @@ TEST_F(ByteStreamTest, outputStream) {
   iobuf = nullptr;
   // We expect dropping the stream and the iobuf frees the backing memory.
   EXPECT_EQ(0, mmapAllocator_->numAllocated());
+}
+
+TEST_F(ByteStreamTest, resetInput) {
+  uint8_t* const kFakeBuffer = reinterpret_cast<uint8_t*>(this);
+  std::vector<ByteRange> byteRanges;
+  size_t totalBytes{0};
+  size_t lastRangeEnd;
+  for (int32_t i = 0; i < 32; ++i) {
+    byteRanges.push_back(ByteRange{kFakeBuffer, 4096 + i, 0});
+    totalBytes += 4096 + i;
+  }
+  lastRangeEnd = byteRanges.back().size;
+  ByteStream byteStream;
+  ASSERT_EQ(byteStream.size(), 0);
+  ASSERT_EQ(byteStream.lastRangeEnd(), 0);
+  byteStream.resetInput(std::move(byteRanges));
+  ASSERT_EQ(byteStream.size(), totalBytes);
+  ASSERT_EQ(byteStream.lastRangeEnd(), lastRangeEnd);
 }

@@ -26,6 +26,7 @@ export COMPILER_FLAGS
 FB_OS_VERSION=v2022.11.14.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
+export CMAKE_BUILD_TYPE=Release
 
 # Install all velox and folly dependencies.
 sudo --preserve-env apt update && apt install -y \
@@ -75,7 +76,7 @@ function prompt {
 }
 
 function install_fmt {
-  github_checkout fmtlib/fmt 8.0.0
+  github_checkout fmtlib/fmt 8.0.1
   cmake_install -DFMT_TEST=OFF
 }
 

@@ -42,6 +42,7 @@ class NtileTest : public WindowTestBase {
         makeFlatVector<int64_t>(size, [](auto row) { return row % 5 + 1; }),
         makeFlatVector<int64_t>(
             size, [](auto row) { return row % 7 + 1; }, nullEvery(15)),
+        makeFlatVector<int64_t>(size, [](auto row) { return row % 11; }),
     });
   }
 };
@@ -78,7 +79,7 @@ TEST_F(NtileTest, singlePartitionWithSortOrders) {
 
 TEST_F(NtileTest, multiInput) {
   NtileTest::testWindowFunction(
-      {makeSinglePartitionVector(75), makeSinglePartitionVector(50)},
+      {makeSinglePartitionVector(100), makeSinglePartitionVector(75)},
       kBasicOverClauses);
 }
 

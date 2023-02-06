@@ -22,10 +22,9 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/fuzzer/GeneratorSpec.h"
 
 namespace facebook::velox {
-
-using FuzzerGenerator = std::mt19937;
 
 enum UTF8CharList {
   ASCII = 0, // Ascii character set.
@@ -121,6 +120,10 @@ class VectorFuzzer {
     /// `containerLength` is treated as maximum length.
     bool containerVariableLength{false};
 
+    /// Restricts the maximum inner (elements) vector size created when
+    /// generating nested vectors (arrays, maps, and rows).
+    size_t complexElementsMaxSize{10000};
+
     /// If true, generated map keys are normalized (unique and not-null).
     bool normalizeMapKeys{true};
 
@@ -154,6 +157,10 @@ class VectorFuzzer {
   // `size` elements.
   VectorPtr fuzz(const TypePtr& type);
   VectorPtr fuzz(const TypePtr& type, vector_size_t size);
+
+  // Returns a "fuzzed" vector containing randomized data customized according
+  // to generatorSpec.
+  VectorPtr fuzz(const GeneratorSpec& generatorSpec);
 
   // Same as above, but returns a vector without nulls (regardless of the value
   // of opts.nullRatio).
@@ -280,8 +287,6 @@ class VectorFuzzer {
       size_t mapSize,
       BufferPtr& offsets,
       BufferPtr& sizes);
-
-  variant randVariant(const TypePtr& arg);
 
   VectorFuzzer::Options opts_;
 

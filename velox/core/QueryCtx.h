@@ -82,7 +82,10 @@ class QueryCtx : public Context {
   }
 
   static std::string generatePoolName(const std::string& queryId) {
-    return fmt::format("query.{}", queryId.c_str());
+    // We attach a monotonically increasing sequence number to ensure the pool
+    // name is unique.
+    static std::atomic<int64_t> seqNum{0};
+    return fmt::format("query.{}.{}", queryId.c_str(), seqNum++);
   }
 
   memory::MemoryPool* FOLLY_NONNULL pool() const {
@@ -121,6 +124,15 @@ class QueryCtx : public Context {
       std::unordered_map<std::string, std::string>&& configOverrides) {
     setConfigOverrides(
         std::make_shared<const MemConfig>(std::move(configOverrides)));
+  }
+
+  // Overrides the previous connector-specific configuration. Note that this
+  // function is NOT thread-safe and should probably only be used in tests.
+  void setConnectorConfigOverridesUnsafe(
+      const std::string& connectorId,
+      std::unordered_map<std::string, std::string>&& configOverrides) {
+    connectorConfigs_[connectorId] =
+        std::make_shared<MemConfig>(std::move(configOverrides));
   }
 
   folly::Executor* FOLLY_NULLABLE spillExecutor() const {
@@ -245,7 +257,7 @@ class ExecCtx : public Context {
   }
 
  private:
-  // Pool for all Buffers for this thread
+  // Pool for all Buffers for this thread.
   memory::MemoryPool* FOLLY_NONNULL pool_;
   QueryCtx* FOLLY_NULLABLE queryCtx_;
   // A pool of preallocated DecodedVectors for use by expressions and operators.

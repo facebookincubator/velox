@@ -25,8 +25,6 @@ namespace facebook::velox::memory {
 MmapAllocator::MmapAllocator(const Options& options)
     : kind_(MemoryAllocator::Kind::kMmap),
       useMmapArena_(options.useMmapArena),
-      numAllocated_(0),
-      numMapped_(0),
       capacity_(bits::roundUp(
           options.capacity / AllocationTraits::kPageSize,
           64 * sizeClassSizes_.back())) {
@@ -36,8 +34,7 @@ MmapAllocator::MmapAllocator(const Options& options)
 
   if (useMmapArena_) {
     const auto arenaSizeBytes = bits::roundUp(
-        capacity_ * AllocationTraits::kPageSize /
-            options.mmapArenaCapacityRatio,
+        AllocationTraits::pageBytes(capacity_) / options.mmapArenaCapacityRatio,
         AllocationTraits::kPageSize);
     managedArenas_ = std::make_unique<ManagedMmapArenas>(
         std::max<uint64_t>(arenaSizeBytes, MmapArena::kMinCapacityBytes));
@@ -51,28 +48,43 @@ bool MmapAllocator::allocateNonContiguous(
     MachinePageCount minSizeClass) {
   VELOX_CHECK_GT(numPages, 0);
 
-  const auto numFreed = freeInternal(out);
+  const SizeMix mix = allocationSize(numPages, minSizeClass);
+
+  const int64_t numFreed = freeInternal(out);
   if (numFreed != 0) {
     numAllocated_.fetch_sub(numFreed);
   }
-  auto mix = allocationSize(numPages, minSizeClass);
+
+  if (testingHasInjectedFailure(InjectedFailure::kCap)) {
+    if (reservationCB != nullptr) {
+      reservationCB(AllocationTraits::pageBytes(numFreed), false);
+    }
+    return false;
+  }
+
   if (numAllocated_ + mix.totalPages > capacity_) {
+    if (reservationCB != nullptr) {
+      reservationCB(AllocationTraits::pageBytes(numFreed), false);
+    }
     return false;
   }
   if (numAllocated_.fetch_add(mix.totalPages) + mix.totalPages > capacity_) {
     numAllocated_.fetch_sub(mix.totalPages);
+    if (reservationCB != nullptr) {
+      reservationCB(AllocationTraits::pageBytes(numFreed), false);
+    }
     return false;
   }
+
   ++numAllocations_;
   numAllocatedPages_ += mix.totalPages;
+  const int64_t numNeededPages = mix.totalPages - numFreed;
   if (reservationCB != nullptr) {
     try {
-      reservationCB(mix.totalPages * AllocationTraits::kPageSize, true);
+      reservationCB(AllocationTraits::pageBytes(numNeededPages), true);
     } catch (const std::exception& e) {
       numAllocated_.fetch_sub(mix.totalPages);
-      if (numFreed != 0) {
-        reservationCB(numFreed * AllocationTraits::kPageSize, false);
-      }
+      reservationCB(AllocationTraits::pageBytes(numFreed), false);
       std::rethrow_exception(std::current_exception());
     }
   }
@@ -80,17 +92,14 @@ bool MmapAllocator::allocateNonContiguous(
   for (int i = 0; i < mix.numSizes; ++i) {
     bool success;
     stats_.recordAllocate(
-        sizeClassSizes_[mix.sizeIndices[i]] * AllocationTraits::kPageSize,
+        AllocationTraits::pageBytes(sizeClassSizes_[mix.sizeIndices[i]]),
         mix.sizeCounts[i],
         [&]() {
           success = sizeClasses_[mix.sizeIndices[i]]->allocate(
               mix.sizeCounts[i], newMapsNeeded, out);
         });
-    if (success && injectedFailure_ == Failure::kAllocate) {
+    if (success && testingHasInjectedFailure(InjectedFailure::kAllocate)) {
       success = false;
-      if (!isPersistentFailureInjection_) {
-        injectedFailure_ = Failure::kNone;
-      }
     }
     if (!success) {
       // This does not normally happen since any size class can accommodate
@@ -101,8 +110,7 @@ bool MmapAllocator::allocateNonContiguous(
       freeNonContiguous(out);
       numAllocated_.fetch_sub(failedPages);
       if (reservationCB != nullptr) {
-        reservationCB(
-            (mix.totalPages + numFreed) * AllocationTraits::kPageSize, false);
+        reservationCB(AllocationTraits::pageBytes(mix.totalPages), false);
       }
       return false;
     }
@@ -117,19 +125,14 @@ bool MmapAllocator::allocateNonContiguous(
 
   freeNonContiguous(out);
   if (reservationCB != nullptr) {
-    reservationCB(
-        (mix.totalPages + numFreed) * AllocationTraits::kPageSize, false);
+    reservationCB(AllocationTraits::pageBytes(mix.totalPages), false);
   }
   return false;
 }
 
 bool MmapAllocator::ensureEnoughMappedPages(int32_t newMappedNeeded) {
   std::lock_guard<std::mutex> l(sizeClassBalanceMutex_);
-  if (injectedFailure_ == Failure::kMadvise) {
-    // Mimic case of not finding anything to advise away.
-    if (!isPersistentFailureInjection_) {
-      injectedFailure_ = Failure::kNone;
-    }
+  if (testingHasInjectedFailure(InjectedFailure::kMadvise)) {
     return false;
   }
   const auto totalMaps =
@@ -153,7 +156,7 @@ bool MmapAllocator::ensureEnoughMappedPages(int32_t newMappedNeeded) {
 int64_t MmapAllocator::freeNonContiguous(Allocation& allocation) {
   const auto numFreed = freeInternal(allocation);
   numAllocated_.fetch_sub(numFreed);
-  return numFreed * AllocationTraits::kPageSize;
+  return AllocationTraits::pageBytes(numFreed);
 }
 
 MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
@@ -175,7 +178,7 @@ MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
       // pages in the class. Note that size class indices in the
       // allocator are not necessarily the same as in the stats.
       const auto sizeIndex =
-          Stats::sizeIndex(sizeClassSizes_[i] * AllocationTraits::kPageSize);
+          Stats::sizeIndex(AllocationTraits::pageBytes(sizeClassSizes_[i]));
       stats_.sizes[sizeIndex].freeClocks += clocks;
     }
     numFreed += pages;
@@ -186,7 +189,7 @@ MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
 
 bool MmapAllocator::allocateContiguousImpl(
     MachinePageCount numPages,
-    Allocation* FOLLY_NULLABLE collateral,
+    Allocation* collateral,
     ContiguousAllocation& allocation,
     ReservationCallback reservationCB) {
   MachinePageCount numCollateralPages = 0;
@@ -227,23 +230,15 @@ bool MmapAllocator::allocateContiguousImpl(
   const int64_t newPages = numPages - totalCollateralPages;
   if (reservationCB != nullptr) {
     try {
-      reservationCB(newPages * AllocationTraits::kPageSize, true);
+      reservationCB(AllocationTraits::pageBytes(newPages), true);
     } catch (const std::exception& e) {
       numAllocated_ -= totalCollateralPages;
-      // We failed to grow by 'newPages. So we record the freeing off the whole
-      // collateral and the unmap of former 'allocation'.
-      try {
-        reservationCB(
-            static_cast<int64_t>(totalCollateralPages) *
-                AllocationTraits::kPageSize,
-            false);
-      } catch (const std::exception& inner) {
-        LOG(ERROR)
-            << "Unexpected memory reservation release failure of the freed collateral pages: "
-            << e.what();
-      };
       numMapped_ -= numCollateralUnmap;
       numExternalMapped_ -= numCollateralUnmap;
+
+      // We failed to grow by 'newPages. So we record the freeing off the whole
+      // collateral and the unmap of former 'allocation'.
+      reservationCB(AllocationTraits::pageBytes(totalCollateralPages), false);
       throw;
     }
   }
@@ -254,21 +249,15 @@ bool MmapAllocator::allocateContiguousImpl(
     // The previous allocation and collateral were both freed but not counted as
     // freed.
     numAllocated_ -= numPages;
-    if (reservationCB != nullptr) {
-      try {
-        reservationCB(numPages * AllocationTraits::kPageSize, false);
-      } catch (const std::exception& e) {
-        // Ignore exception, this is run on failure return path.
-        LOG(ERROR)
-            << "Unexpected memory reservation release failure of the allocation rollback: "
-            << e.what();
-      }
-    }
     // Incremented by numPages - numLargeCollateralPages. On failure,
     // numLargeCollateralPages are freed and numPages - numLargeCollateralPages
     // were never allocated.
     numExternalMapped_ -= numPages;
     numMapped_ -= numCollateralUnmap + mappedDecrement;
+
+    if (reservationCB != nullptr) {
+      reservationCB(AllocationTraits::pageBytes(numPages), false);
+    }
   };
 
   numExternalMapped_ += numPages - numCollateralUnmap;
@@ -276,7 +265,9 @@ bool MmapAllocator::allocateContiguousImpl(
   // Check if went over the limit. But a net decrease always succeeds even if
   // ending up over the limit because some other thread might be transiently
   // over the limit.
-  if (newPages > 0 && numAllocated > capacity_) {
+  if (newPages > 0 &&
+      (numAllocated > capacity_ ||
+       testingHasInjectedFailure(InjectedFailure::kCap))) {
     rollbackAllocation(0);
     return false;
   }
@@ -294,35 +285,32 @@ bool MmapAllocator::allocateContiguousImpl(
     // We exchange a large mmap for a smaller one. Add negative delta.
     numMapped_ += numToMap;
   }
+
   void* data;
-  if (injectedFailure_ == Failure::kMmap) {
-    // Mimic running out of mmaps for process.
+  if (testingHasInjectedFailure(InjectedFailure::kMmap)) {
     data = nullptr;
-    if (!isPersistentFailureInjection_) {
-      injectedFailure_ = Failure::kNone;
-    }
   } else {
     if (useMmapArena_) {
       std::lock_guard<std::mutex> l(arenaMutex_);
-      data = managedArenas_->allocate(numPages * AllocationTraits::kPageSize);
+      data = managedArenas_->allocate(AllocationTraits::pageBytes(numPages));
     } else {
       data = ::mmap(
           nullptr,
-          numPages * AllocationTraits::kPageSize,
+          AllocationTraits::pageBytes(numPages),
           PROT_READ | PROT_WRITE,
           MAP_PRIVATE | MAP_ANONYMOUS,
           -1,
           0);
     }
   }
+  // TODO: add handling of MAP_FAILED.
   if (data == nullptr) {
     // If the mmap failed, we have unmapped former 'allocation' and the extra to
     // be mapped.
     rollbackAllocation(numToMap);
     return false;
   }
-
-  allocation.set(data, numPages * AllocationTraits::kPageSize);
+  allocation.set(data, AllocationTraits::pageBytes(numPages));
   return true;
 }
 
@@ -358,7 +346,7 @@ void* MmapAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
     return result;
   }
 
-  if (bytes <= sizeClassSizes_.back() * AllocationTraits::kPageSize) {
+  if (bytes <= AllocationTraits::pageBytes(sizeClassSizes_.back())) {
     Allocation allocation;
     const auto numPages = roundUpToSizeClassSize(bytes, sizeClassSizes_);
     if (!allocateNonContiguous(numPages, allocation, nullptr, numPages)) {
@@ -391,7 +379,7 @@ void MmapAllocator::freeBytes(void* p, uint64_t bytes) noexcept {
     return;
   }
 
-  if (bytes <= sizeClassSizes_.back() * AllocationTraits::kPageSize) {
+  if (bytes <= AllocationTraits::pageBytes(sizeClassSizes_.back())) {
     Allocation allocation;
     auto numPages = roundUpToSizeClassSize(bytes, sizeClassSizes_);
     allocation.append(reinterpret_cast<uint8_t*>(p), numPages);
@@ -424,10 +412,10 @@ MachinePageCount MmapAllocator::adviseAway(MachinePageCount target) {
 MmapAllocator::SizeClass::SizeClass(size_t capacity, MachinePageCount unitSize)
     : capacity_(capacity),
       unitSize_(unitSize),
-      byteSize_(capacity_ * unitSize_ * AllocationTraits::kPageSize),
+      byteSize_(AllocationTraits::pageBytes(capacity_ * unitSize_)),
+      pageBitmapSize_(capacity_ / 64),
       // Min 8 words + 1 bit for every 512 bits in 'pageAllocated_'.
       mappedFreeLookup_((capacity_ / kPagesPerLookupBit / 64) + kSimdTail),
-      pageBitmapSize_(capacity_ / 64),
       pageAllocated_(pageBitmapSize_ + kSimdTail),
       pageMapped_(pageBitmapSize_ + kSimdTail) {
   VELOX_CHECK_EQ(
@@ -437,7 +425,7 @@ MmapAllocator::SizeClass::SizeClass(size_t capacity, MachinePageCount unitSize)
       unitSize_);
   void* ptr = mmap(
       nullptr,
-      capacity_ * unitSize_ * AllocationTraits::kPageSize,
+      AllocationTraits::pageBytes(capacity_ * unitSize_),
       PROT_READ | PROT_WRITE,
       MAP_PRIVATE | MAP_ANONYMOUS,
       -1,
@@ -511,7 +499,7 @@ std::string MmapAllocator::SizeClass::toString() const {
     mappedFreeCount +=
         __builtin_popcountll(~pageAllocated_[i] & pageMapped_[i]);
   }
-  auto mb = (count * AllocationTraits::kPageSize * unitSize_) >> 20;
+  auto mb = (AllocationTraits::pageBytes(count * unitSize_)) >> 20;
   out << "[size " << unitSize_ << ": " << count << "(" << mb << "MB) allocated "
       << mappedCount << " mapped";
   if (mappedFreeCount != numMappedFreePages_) {
@@ -534,14 +522,14 @@ bool MmapAllocator::SizeClass::allocate(
 
 bool MmapAllocator::SizeClass::allocateLocked(
     const ClassPageCount numPages,
-    MachinePageCount* FOLLY_NULLABLE numUnmapped,
+    MachinePageCount* numUnmapped,
     Allocation& out) {
   const size_t numWords = pageBitmapSize_;
   ClassPageCount considerMappedOnly = std::min(numMappedFreePages_, numPages);
   auto numPagesToAllocate = numPages;
   if (considerMappedOnly > 0) {
     const auto previousPages = out.numPages();
-    allocateFromMappdFree(considerMappedOnly, out);
+    allocateFromMappedFree(considerMappedOnly, out);
     const auto numAllocated = (out.numPages() - previousPages) / unitSize_;
     VELOX_CHECK_EQ(
         numAllocated,
@@ -586,14 +574,14 @@ bool isAllZero(xsimd::batch<uint64_t> bits) {
 }
 } // namespace
 
-int32_t MmapAllocator::SizeClass::findMappedFreeGroup() {
+uint32_t MmapAllocator::SizeClass::findMappedFreeGroup() {
   constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
   int32_t index = lastLookupIndex_;
   if (index == kNoLastLookup) {
     index = 0;
   }
   auto lookupSize = mappedFreeLookup_.size() + kSimdTail;
-  for (auto counter = 0; counter <= lookupSize; ++counter) {
+  for (auto counter = 0; counter <= lookupSize; counter += kWidth) {
     auto candidates = xsimd::load_unaligned(mappedFreeLookup_.data() + index);
     auto bits = simd::allSetBitMask<int64_t>() ^
         simd::toBitMask(candidates == xsimd::broadcast<uint64_t>(0LL));
@@ -620,35 +608,29 @@ xsimd::batch<uint64_t> MmapAllocator::SizeClass::mappedFreeBits(int32_t index) {
       xsimd::load_unaligned(pageMapped_.data() + index);
 }
 
-void MmapAllocator::SizeClass::allocateFromMappdFree(
+void MmapAllocator::SizeClass::allocateFromMappedFree(
     int32_t numPages,
     Allocation& allocation) {
   constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
   constexpr int32_t kWordsPerGroup = kPagesPerLookupBit / 64;
   int needed = numPages;
   for (;;) {
-    auto group = findMappedFreeGroup() * kWordsPerGroup;
-    if (group < 0) {
-      return;
-    }
+    const auto group = findMappedFreeGroup();
+    const auto startWord = group * kWordsPerGroup;
+    const auto endWord = startWord + kWordsPerGroup;
     bool anyFound = false;
-    for (auto index = group; index <= group + kWidth; index += kWidth) {
-      auto bits = mappedFreeBits(index);
-      uint16_t mask = simd::allSetBitMask<int64_t>() ^
+    for (auto word = startWord; word < endWord; word += kWidth) {
+      const auto bits = mappedFreeBits(word);
+      uint16_t wordMask = simd::allSetBitMask<int64_t>() ^
           simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
-      if (!mask) {
-        if (!(index < group + kWidth || anyFound)) {
-          LOG(ERROR) << "MMAPL: Lookup bit set but no free mapped pages class "
-                     << unitSize_;
-          bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
-          return;
-        }
+      if (wordMask == 0) {
         continue;
       }
-      auto firstWord = bits::getAndClearLastSetBit(mask);
+
       anyFound = true;
-      auto allUsed = bits::testBits(
-          reinterpret_cast<uint64_t*>(&bits),
+      const auto firstWord = bits::getAndClearLastSetBit(wordMask);
+      const auto wordAllUsed = bits::testBits(
+          reinterpret_cast<const uint64_t*>(&bits),
           firstWord * 64,
           sizeof(bits) * 8,
           true,
@@ -656,24 +638,34 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
             if (!needed) {
               return false;
             }
-            auto page = index * 64 + bit;
+            const auto page = word * 64 + bit;
             bits::setBit(pageAllocated_.data(), page);
             allocation.append(
-                address_ + page * unitSize_ * AllocationTraits::kPageSize,
+                address_ + AllocationTraits::pageBytes(page * unitSize_),
                 unitSize_);
             --needed;
             return true;
           });
 
-      if (allUsed) {
-        if (index == group + kWidth ||
-            isAllZero(mappedFreeBits(index + kWidth))) {
-          bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
+      if (needed == 0) {
+        if (!wordAllUsed) {
+          return;
         }
-      }
-      if (!needed) {
+        for (word += kWidth; word < endWord; word += kWidth) {
+          if (!isAllZero(mappedFreeBits(word))) {
+            return;
+          }
+        }
+        bits::setBit(mappedFreeLookup_.data(), group, false);
         return;
       }
+    }
+
+    bits::setBit(mappedFreeLookup_.data(), group, false);
+    if (!anyFound) {
+      LOG(ERROR) << "MMAPL: Lookup bit set but no free mapped pages class "
+                 << unitSize_;
+      return;
     }
   }
 }
@@ -704,7 +696,7 @@ MachinePageCount MmapAllocator::SizeClass::adviseAway(
 bool MmapAllocator::SizeClass::isInRange(uint8_t* ptr) const {
   if (ptr >= address_ && ptr < address_ + byteSize_) {
     // See that ptr falls on a page boundary.
-    if ((ptr - address_) % unitSize_ != 0) {
+    if ((ptr - address_) % AllocationTraits::pageBytes(unitSize_) != 0) {
       VELOX_FAIL("Pointer is in a SizeClass but not at page boundary");
     }
     return true;
@@ -733,7 +725,7 @@ void MmapAllocator::SizeClass::adviseAway(const Allocation& allocation) {
     }
     if (::madvise(
             run.data(),
-            run.numPages() * AllocationTraits::kPageSize,
+            AllocationTraits::pageBytes(run.numPages()),
             MADV_DONTNEED) < 0) {
       LOG(ERROR) << "madvise got errno " << folly::errnoStr(errno);
     } else {
@@ -752,7 +744,7 @@ void MmapAllocator::SizeClass::setMappedBits(
       0,
       "Unaligned allocation in setting mapped bits");
   const auto firstBit =
-      (runAddress - address_) / (unitSize_ * AllocationTraits::kPageSize);
+      (runAddress - address_) / AllocationTraits::pageBytes(unitSize_);
   const auto numPages = run.numPages() / unitSize_;
   for (int32_t page = firstBit; page < firstBit + numPages; ++page) {
     bits::setBit(pageMapped_.data(), page, value);

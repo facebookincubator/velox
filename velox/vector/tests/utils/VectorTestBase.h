@@ -230,6 +230,12 @@ class VectorTestBase {
     return vectorMaker_.arrayVector<T>(data);
   }
 
+  ArrayVectorPtr makeAllNullArrayVector(
+      vector_size_t size,
+      const TypePtr& elementType) {
+    return vectorMaker_.allNullArrayVector(size, elementType);
+  }
+
   // Create an ArrayVector<ROW> from nested std::vectors of variants.
   // Example:
   //   auto arrayVector = makeArrayOfRowVector(
@@ -587,27 +593,36 @@ class VectorTestBase {
     return vectorMaker_.mapVector(offsets, keyVector, valueVector, nulls);
   }
 
-  template <typename T>
-  VectorPtr
-  makeConstant(T value, vector_size_t size, const TypePtr& type = {}) {
-    variant v;
-    if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
-      v = variant::shortDecimal(value.unscaledValue(), type);
-    } else if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
-      v = variant::longDecimal(value.unscaledValue(), type);
-    } else {
-      v = value;
-    }
-    return BaseVector::createConstant(v, size, pool());
+  MapVectorPtr makeAllNullMapVector(
+      vector_size_t size,
+      const TypePtr& keyType,
+      const TypePtr& valueType) {
+    return vectorMaker_.allNullMapVector(size, keyType, valueType);
+  }
+
+  VectorPtr makeConstant(const variant& value, vector_size_t size) {
+    return BaseVector::createConstant(value, size, pool());
   }
 
   template <typename T>
-  VectorPtr makeConstant(const std::optional<T>& value, vector_size_t size) {
+  VectorPtr makeConstant(
+      T value,
+      vector_size_t size,
+      const TypePtr& type = CppToType<EvalType<T>>::create()) {
+    return std::make_shared<ConstantVector<EvalType<T>>>(
+        pool(), size, false, type, std::move(value));
+  }
+
+  template <typename T>
+  VectorPtr makeConstant(
+      const std::optional<T>& value,
+      vector_size_t size,
+      const TypePtr& type = CppToType<EvalType<T>>::create()) {
     return std::make_shared<ConstantVector<EvalType<T>>>(
         pool(),
         size,
         /*isNull=*/!value.has_value(),
-        CppToType<T>::create(),
+        type,
         value ? EvalType<T>(*value) : EvalType<T>(),
         SimpleVectorStats<EvalType<T>>{},
         sizeof(EvalType<T>));

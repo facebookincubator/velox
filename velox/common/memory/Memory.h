@@ -46,6 +46,15 @@ DECLARE_int32(memory_usage_aggregation_interval_millis);
 namespace facebook {
 namespace velox {
 namespace memory {
+#define VELOX_MEM_ALLOC_ERROR(errorMessage)                         \
+  _VELOX_THROW(                                                     \
+      ::facebook::velox::VeloxRuntimeError,                         \
+      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
+      ::facebook::velox::error_code::kMemAllocError.c_str(),        \
+      /* isRetriable */ true,                                       \
+      "{}",                                                         \
+      errorMessage);
+
 /// This class provides the memory allocation interfaces for a query execution.
 /// Each query execution entity creates a dedicated memory pool object. The
 /// memory pool objects from a query are organized as a tree with four levels
@@ -122,36 +131,33 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// NOTE: users are only safe to access the returned parent pool pointer while
   /// they hold the shared reference on this child memory pool. Otherwise, the
   /// parent memory pool might have been destroyed.
-  virtual MemoryPool* FOLLY_NULLABLE parent() const;
+  virtual MemoryPool* parent() const;
 
   /// Returns the number of child memory pools.
   virtual uint64_t getChildCount() const;
 
   /// Invoked to traverse the memory pool subtree rooted at this, and calls
   /// 'visitor' on each visited child memory pool.
-  virtual void visitChildren(
-      std::function<void(MemoryPool* FOLLY_NONNULL)> visitor) const;
+  virtual void visitChildren(std::function<void(MemoryPool*)> visitor) const;
 
   /// Invoked to create a named child memory pool from this with specified
   /// 'cap'.
   virtual std::shared_ptr<MemoryPool> addChild(const std::string& name);
 
   /// Allocates a buffer with specified 'size'.
-  virtual void* FOLLY_NULLABLE allocate(int64_t size) = 0;
+  virtual void* allocate(int64_t size) = 0;
 
   /// Allocates a zero-filled buffer with capacity that can store 'numEntries'
   /// entries with each size of 'sizeEach'.
-  virtual void* FOLLY_NULLABLE
-  allocateZeroFilled(int64_t numEntries, int64_t sizeEach) = 0;
+  virtual void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) = 0;
 
   /// Re-allocates from an existing buffer with 'newSize' and update memory
   /// usage counting accordingly. If 'newSize' is larger than the current buffer
   /// 'size', the function will allocate a new buffer and free the old buffer.
-  virtual void* FOLLY_NULLABLE
-  reallocate(void* FOLLY_NULLABLE p, int64_t size, int64_t newSize) = 0;
+  virtual void* reallocate(void* p, int64_t size, int64_t newSize) = 0;
 
   /// Frees an allocated buffer.
-  virtual void free(void* FOLLY_NULLABLE p, int64_t size) = 0;
+  virtual void free(void* p, int64_t size) = 0;
 
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
@@ -159,7 +165,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// and any memory formerly referenced by 'out' is freed. The function returns
   /// true if the allocation succeeded. If returning false, 'out' references no
   /// memory and any partially allocated memory is freed.
-  virtual bool allocateNonContiguous(
+  virtual void allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
       MachinePageCount minSizeClass = 0) = 0;
@@ -177,7 +183,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Makes a large contiguous mmap of 'numPages'. The new mapped pages are
   /// returned in 'out' on success. Any formly mapped pages referenced by
   /// 'out' is unmapped in all the cases even if the allocation fails.
-  virtual bool allocateContiguous(
+  virtual void allocateContiguous(
       MachinePageCount numPages,
       ContiguousAllocation& out) = 0;
 
@@ -232,6 +238,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     VELOX_NYI("release() needs to be implemented in derived memory pool.");
   }
 
+  virtual std::string toString() const = 0;
+
  protected:
   /// Invoked by addChild() to create a child memory pool object. 'parent' is
   /// a shared pointer created from this.
@@ -241,7 +249,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Invoked only on destruction to remove this memory pool from its parent's
   /// child memory pool tracking.
-  virtual void dropChild(const MemoryPool* FOLLY_NONNULL child);
+  virtual void dropChild(const MemoryPool* child);
 
   const std::string name_;
   const uint16_t alignment_;
@@ -249,7 +257,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Protects 'children_'.
   mutable folly::SharedMutex childrenMutex_;
-  std::list<MemoryPool*> children_;
+  std::unordered_map<std::string, std::weak_ptr<MemoryPool>> children_;
 };
 
 class MemoryManager;
@@ -270,18 +278,16 @@ class MemoryPoolImpl : public MemoryPool {
   // Actual memory allocation operations. Can be delegated.
   // Access global MemoryManager to check usage of current node and enforce
   // memory cap accordingly.
-  void* FOLLY_NULLABLE allocate(int64_t size) override;
+  void* allocate(int64_t size) override;
 
-  void* FOLLY_NULLABLE
-  allocateZeroFilled(int64_t numMembers, int64_t sizeEach) override;
+  void* allocateZeroFilled(int64_t numMembers, int64_t sizeEach) override;
 
   // No-op for attempts to shrink buffer.
-  void* FOLLY_NULLABLE
-  reallocate(void* FOLLY_NULLABLE p, int64_t size, int64_t newSize) override;
+  void* reallocate(void* p, int64_t size, int64_t newSize) override;
 
-  void free(void* FOLLY_NULLABLE p, int64_t size) override;
+  void free(void* p, int64_t size) override;
 
-  bool allocateNonContiguous(
+  void allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
       MachinePageCount minSizeClass = 0) override;
@@ -292,7 +298,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   const std::vector<MachinePageCount>& sizeClasses() const override;
 
-  bool allocateContiguous(
+  void allocateContiguous(
       MachinePageCount numPages,
       ContiguousAllocation& allocation) override;
 
@@ -333,6 +339,8 @@ class MemoryPoolImpl : public MemoryPool {
 
   void release(int64_t size) override;
 
+  std::string toString() const override;
+
  private:
   VELOX_FRIEND_TEST(MemoryPoolTest, Ctor);
 
@@ -366,7 +374,7 @@ class IMemoryManager {
     int64_t capacity{kMaxMemory};
 
     /// Specifies the backing memory allocator.
-    MemoryAllocator* FOLLY_NONNULL allocator{MemoryAllocator::getInstance()};
+    MemoryAllocator* allocator{MemoryAllocator::getInstance()};
   };
 
   virtual ~IMemoryManager() = default;
@@ -436,8 +444,6 @@ class MemoryManager final : public IMemoryManager {
 
   MemoryPool& getRoot() const final;
 
-  std::shared_ptr<MemoryPool> getRootAsSharedPtr() const;
-
   std::shared_ptr<MemoryPool> getChild(int64_t cap = kMaxMemory) final;
 
   int64_t getTotalBytes() const final;
@@ -477,11 +483,11 @@ class StlAllocator {
   template <typename U>
   /* implicit */ StlAllocator(const StlAllocator<U>& a) : pool{a.pool} {}
 
-  T* FOLLY_NULLABLE allocate(size_t n) {
+  T* allocate(size_t n) {
     return static_cast<T*>(pool.allocate(checkedMultiply(n, sizeof(T))));
   }
 
-  void deallocate(T* FOLLY_NULLABLE p, size_t n) {
+  void deallocate(T* p, size_t n) {
     pool.free(p, checkedMultiply(n, sizeof(T)));
   }
 

@@ -15,27 +15,13 @@
  */
 
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 namespace facebook::velox::test {
 
-class CustomTypeTest : public functions::test::FunctionBaseTest {
- protected:
-  static std::unordered_set<std::string> getSignatureStrings(
-      const std::string& functionName) {
-    auto allSignatures = getFunctionSignatures();
-    const auto& signatures = allSignatures.at(functionName);
-
-    std::unordered_set<std::string> signatureStrings;
-    for (const auto& signature : signatures) {
-      signatureStrings.insert(signature->toString());
-    }
-    return signatureStrings;
-  }
-};
+class CustomTypeTest : public functions::test::FunctionBaseTest {};
 
 namespace {
 struct FancyInt {
@@ -237,6 +223,25 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "FANCY_INT",
       }),
       names);
+
+  ASSERT_TRUE(unregisterType("fancy_int"));
+}
+
+TEST_F(CustomTypeTest, nullConstant) {
+  ASSERT_TRUE(
+      registerType("fancy_int", std::make_unique<FancyIntTypeFactories>()));
+
+  auto names = getCustomTypeNames();
+  for (const auto& name : names) {
+    auto type = getType(name, {});
+    auto null = BaseVector::createNullConstant(type, 10, pool());
+    EXPECT_TRUE(null->isConstantEncoding());
+    EXPECT_TRUE(type->equivalent(*null->type()));
+    EXPECT_EQ(type->toString(), null->type()->toString());
+    for (auto i = 0; i < 10; ++i) {
+      EXPECT_TRUE(null->isNullAt(i));
+    }
+  }
 
   ASSERT_TRUE(unregisterType("fancy_int"));
 }

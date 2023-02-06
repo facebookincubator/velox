@@ -123,12 +123,10 @@ IntervalDayTime randIntervalDayTime(FuzzerGenerator& rng) {
   return IntervalDayTime(rand<int64_t>(rng));
 }
 
-size_t genContainerLength(
+size_t getElementsVectorLength(
     const VectorFuzzer::Options& opts,
-    FuzzerGenerator& rng) {
-  return opts.containerVariableLength
-      ? rand<uint32_t>(rng) % opts.containerLength
-      : opts.containerLength;
+    vector_size_t size) {
+  return std::min(size * opts.containerLength, opts.complexElementsMaxSize);
 }
 
 /// Unicode character ranges. Ensure the vector indexes match the UTF8CharList
@@ -208,7 +206,10 @@ StringView randString(
 }
 
 template <TypeKind kind>
-variant randVariantImpl(
+VectorPtr fuzzConstantPrimitiveImpl(
+    memory::MemoryPool* pool,
+    const TypePtr& type,
+    vector_size_t size,
     FuzzerGenerator& rng,
     const VectorFuzzer::Options& opts) {
   using TCpp = typename TypeTraits<kind>::NativeType;
@@ -217,22 +218,25 @@ variant randVariantImpl(
     std::string buf;
     auto stringView = randString(rng, opts, buf, converter);
 
-    if constexpr (kind == TypeKind::VARCHAR) {
-      return variant(stringView);
-    } else if constexpr (kind == TypeKind::VARBINARY) {
-      return variant::binary(stringView);
-    } else {
-      VELOX_UNREACHABLE();
-    }
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, std::move(stringView));
   }
   if constexpr (std::is_same_v<TCpp, Timestamp>) {
-    return variant(randTimestamp(rng, opts.useMicrosecondPrecisionTimestamp));
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool,
+        size,
+        false,
+        type,
+        randTimestamp(rng, opts.useMicrosecondPrecisionTimestamp));
   } else if constexpr (std::is_same_v<TCpp, Date>) {
-    return variant(randDate(rng));
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, randDate(rng));
   } else if constexpr (std::is_same_v<TCpp, IntervalDayTime>) {
-    return variant(randIntervalDayTime(rng));
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, randIntervalDayTime(rng));
   } else {
-    return variant(rand<TCpp>(rng));
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, rand<TCpp>(rng));
   }
 }
 
@@ -355,6 +359,10 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
   return vector;
 }
 
+VectorPtr VectorFuzzer::fuzz(const GeneratorSpec& generatorSpec) {
+  return generatorSpec.generateData(rng_, pool_, opts_.vectorSize);
+}
+
 VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type) {
   return fuzzConstant(type, opts_.vectorSize);
 }
@@ -371,7 +379,14 @@ VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
     if (type->isUnKnown()) {
       return BaseVector::createNullConstant(type, size, pool_);
     } else {
-      return BaseVector::createConstant(randVariant(type), size, pool_);
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          fuzzConstantPrimitiveImpl,
+          type->kind(),
+          pool_,
+          type,
+          size,
+          rng_,
+          opts_);
     }
   }
 
@@ -413,7 +428,9 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
   // Arrays.
   else if (type->isArray()) {
     return fuzzArray(
-        fuzzFlat(type->asArray().elementType(), size * opts_.containerLength),
+        fuzzFlat(
+            type->asArray().elementType(),
+            getElementsVectorLength(opts_, size)),
         size);
   }
   // Maps.
@@ -422,10 +439,12 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
     // not specify the order they'll be called in, leading to inconsistent
     // results across platforms.
     auto keys = opts_.normalizeMapKeys
-        ? fuzzFlatNotNull(type->asMap().keyType(), size * opts_.containerLength)
-        : fuzzFlat(type->asMap().keyType(), size * opts_.containerLength);
-    auto values =
-        fuzzFlat(type->asMap().valueType(), size * opts_.containerLength);
+        ? fuzzFlatNotNull(
+              type->asMap().keyType(), getElementsVectorLength(opts_, size))
+        : fuzzFlat(
+              type->asMap().keyType(), getElementsVectorLength(opts_, size));
+    auto values = fuzzFlat(
+        type->asMap().valueType(), getElementsVectorLength(opts_, size));
     return fuzzMap(keys, values, size);
   }
   // Rows.
@@ -479,7 +498,9 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
 
     case TypeKind::ARRAY:
       return fuzzArray(
-          fuzz(type->asArray().elementType(), size * opts_.containerLength),
+          fuzz(
+              type->asArray().elementType(),
+              getElementsVectorLength(opts_, size)),
           size);
 
     case TypeKind::MAP: {
@@ -487,10 +508,11 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
       // does not specify the order they'll be called in, leading to
       // inconsistent results across platforms.
       auto keys = opts_.normalizeMapKeys
-          ? fuzzNotNull(type->asMap().keyType(), size * opts_.containerLength)
-          : fuzz(type->asMap().keyType(), size * opts_.containerLength);
+          ? fuzzNotNull(
+                type->asMap().keyType(), getElementsVectorLength(opts_, size))
+          : fuzz(type->asMap().keyType(), getElementsVectorLength(opts_, size));
       auto values =
-          fuzz(type->asMap().valueType(), size * opts_.containerLength);
+          fuzz(type->asMap().valueType(), getElementsVectorLength(opts_, size));
       return fuzzMap(keys, values, size);
     }
 
@@ -682,12 +704,6 @@ BufferPtr VectorFuzzer::fuzzNulls(vector_size_t size) {
     }
   }
   return builder.build();
-}
-
-variant VectorFuzzer::randVariant(const TypePtr& arg) {
-  VELOX_CHECK(arg->isPrimitiveType());
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      randVariantImpl, arg->kind(), rng_, opts_);
 }
 
 TypePtr VectorFuzzer::randType(int maxDepth) {

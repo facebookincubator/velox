@@ -131,6 +131,79 @@ TEST_F(TryExprTest, nestedTryParentErrors) {
       result);
 }
 
+TEST_F(TryExprTest, skipExecutionEvalSimplified) {
+  registerFunction<CountCallsFunction, int64_t, int64_t>(
+      {"count_calls"}, BIGINT());
+
+  // Test that when a subset of the inputs to a function wrapped in a TRY throw
+  // exceptions, that function is only evaluated on the inputs that did not
+  // throw exceptions.
+  auto flatVector = makeFlatVector<StringView>({"1", "a", "1", "a", "1"});
+  auto result = evaluateSimplified<FlatVector<int64_t>>(
+      "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
+
+  auto expected =
+      makeNullableFlatVector<int64_t>({0, std::nullopt, 1, std::nullopt, 2});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(TryExprTest, skipExecutionWholeBatchEvalSimplified) {
+  registerFunction<CountCallsFunction, int64_t, int64_t>(
+      {"count_calls"}, BIGINT());
+
+  // Test that when all the inputs to a function wrapped in a TRY throw
+  // exceptions, that function isn't evaluated and a NULL constant is returned
+  // directly.
+  auto flatVector = makeFlatVector<StringView>({"a", "b", "c"});
+  auto result = evaluateSimplified<ConstantVector<int64_t>>(
+      "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
+
+  auto expected = makeNullConstant(TypeKind::BIGINT, 3);
+  assertEqualVectors(expected, result);
+}
+
+/// Verify that subsequent inputs to a non-default-null-behavior function are
+/// not evaluated if previous inputs generated errors.
+TEST_F(TryExprTest, skipExecutionOnInputErrors) {
+  // Fail all rows.
+  auto input = makeRowVector({
+      makeFlatVector<StringView>({"a"_sv, "b"_sv, "c"_sv}),
+  });
+
+  auto [result, stats] = evaluateWithStats(
+      "try(array_constructor(cast(c0 as bigint), length(c0)))", input);
+  auto expected =
+      BaseVector::createNullConstant(ARRAY(BIGINT()), input->size(), pool());
+
+  assertEqualVectors(expected, result);
+
+  EXPECT_EQ(3, stats.at("cast").numProcessedRows);
+  EXPECT_EQ(3, stats.at("try").numProcessedRows);
+  EXPECT_EQ(0, stats.count("array_constructor"));
+  EXPECT_EQ(0, stats.count("length"));
+
+  // Fail some rows.
+  input = makeRowVector({
+      makeFlatVector<StringView>({"a"_sv, "100"_sv, "c"_sv, "1000"_sv}),
+  });
+
+  std::tie(result, stats) = evaluateWithStats(
+      "try(array_constructor(cast(c0 as bigint), length(c0)))", input);
+  expected = makeNullableArrayVector<int64_t>({
+      std::nullopt,
+      {{100, 3}},
+      std::nullopt,
+      {{1000, 4}},
+  });
+
+  assertEqualVectors(expected, result);
+
+  EXPECT_EQ(4, stats.at("cast").numProcessedRows);
+  EXPECT_EQ(4, stats.at("try").numProcessedRows);
+  EXPECT_EQ(2, stats.at("array_constructor").numProcessedRows);
+  EXPECT_EQ(2, stats.at("length").numProcessedRows);
+}
+
 namespace {
 // A function that sets result to be a ConstantVector and then throws an
 // exception.
