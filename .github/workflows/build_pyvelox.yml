@@ -57,6 +57,7 @@ jobs:
           CIBW_BEFORE_ALL_MACOS: >
             bash {package}/scripts/setup-macos.sh && 
             bash {package}/scripts/setup-macos.sh install_folly
+          CIBW_TEST_COMMAND: "cd {project} && python -m unittest -v"
         with:
           output-dir: wheelhouse
 
