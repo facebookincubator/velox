@@ -31,6 +31,9 @@ class AllMatchFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 2);
+    VELOX_CHECK_EQ(TypeKind::BOOLEAN, outputType->kind());
+    VELOX_CHECK_EQ(TypeKind::ARRAY, args[0]->typeKind());
+    VELOX_CHECK_EQ(TypeKind::FUNCTION, args[1]->typeKind());
 
     exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
     auto& decodedArray = *arrayDecoder.get();
@@ -52,8 +55,8 @@ class AllMatchFunction : public exec::VectorFunction {
     auto elementToTopLevelRows = getElementToTopLevelRows(
         newNumElements, rows, flatArray.get(), context.pool());
 
-    // loop over lambda functions and apply these to elements of the base array;
-    // in most cases there will be only one function and the loop will run once
+    // Loop over lambda functions and apply these to elements of the base array,
+    // in most cases there will be only one function and the loop will run once.
     context.ensureWritable(rows, BOOLEAN(), result);
     auto flatResult = result->asFlatVector<bool>();
     exec::LocalDecodedVector bitsDecoder(context);

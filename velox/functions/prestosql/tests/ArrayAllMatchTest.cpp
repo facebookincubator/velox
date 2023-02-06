@@ -20,6 +20,68 @@ using namespace facebook::velox::test;
 
 class ArrayAllMatchTest : public functions::test::FunctionBaseTest {};
 
+TEST_F(ArrayAllMatchTest, basic) {
+  auto input = makeNullableArrayVector<int64_t>({{std::nullopt, 2, 3}});
+  auto result = evaluate<SimpleVector<bool>>(
+      "all_match(c0, x -> (x > 1))", makeRowVector({input}));
+  auto expectedResult = makeNullableFlatVector<bool>({std::nullopt});
+  assertEqualVectors(expectedResult, result);
+
+  result = evaluate<SimpleVector<bool>>(
+      "all_match(c0, x -> (x is null))", makeRowVector({input}));
+  expectedResult = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expectedResult, result);
+
+  input = makeNullableArrayVector<bool>({{true, false}});
+  result = evaluate<SimpleVector<bool>>(
+      "all_match(c0, x -> x)", makeRowVector({input}));
+  expectedResult = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expectedResult, result);
+
+  auto emptyInput = makeArrayVector<int32_t>({{}});
+  result = evaluate<SimpleVector<bool>>(
+      "all_match(c0, x -> (x > 1))", makeRowVector({emptyInput}));
+  expectedResult = makeNullableFlatVector<bool>({true});
+  assertEqualVectors(expectedResult, result);
+
+  result = evaluate<SimpleVector<bool>>(
+      "all_match(c0, x -> (x < 1))", makeRowVector({emptyInput}));
+  expectedResult = makeNullableFlatVector<bool>({true});
+  assertEqualVectors(expectedResult, result);
+}
+
+TEST_F(ArrayAllMatchTest, complexTypes) {
+  auto baseVector =
+      makeArrayVector<int64_t>({{1, 2, 3}, {2, 2}, {3, 3}, {4, 4}, {5, 5}, {}});
+  // Create an array of array vector using above base vector using offsets.
+  // [
+  //  [[1, 2, 3]],
+  //  [[2, 2], [3, 3], [4, 4], [5, 5]],
+  //  [[]]
+  // ]
+  auto arrayOfArrays = makeArrayVector({0, 1, 5}, baseVector);
+  auto result = evaluate<SimpleVector<bool>>(
+      "all_match(c0, x -> (cardinality(x) > 0))",
+      makeRowVector({arrayOfArrays}));
+  auto expectedResult = makeNullableFlatVector<bool>({true, true, false});
+  assertEqualVectors(expectedResult, result);
+
+  // Create an array of array vector using above base vector using offsets.
+  // [
+  //  [[1, 2, 3]],  cardinalities is 3
+  //  [[2, 2], [3, 3], [4, 4], [5, 5]], all cardinalities is 2
+  //  [[]],
+  //  null
+  // ]
+  arrayOfArrays = makeArrayVector({0, 1, 5, 6}, baseVector, {3});
+  result = evaluate<SimpleVector<bool>>(
+      "all_match(c0, x -> (cardinality(x) > 2))",
+      makeRowVector({arrayOfArrays}));
+  expectedResult =
+      makeNullableFlatVector<bool>({true, false, false, std::nullopt});
+  assertEqualVectors(expectedResult, result);
+}
+
 TEST_F(ArrayAllMatchTest, bigints) {
   auto input = makeNullableArrayVector<int64_t>(
       {{},
@@ -42,7 +104,7 @@ TEST_F(ArrayAllMatchTest, strings) {
   auto input = makeNullableArrayVector<StringView>(
       {{}, {"abc"}, {"ab", "abc"}, {std::nullopt}});
   auto result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (x == 'abc'))", makeRowVector({input}));
+      "all_match(c0, x -> (x = 'abc'))", makeRowVector({input}));
 
   auto expectedResult =
       makeNullableFlatVector<bool>({true, true, false, std::nullopt});
