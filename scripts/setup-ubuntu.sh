@@ -30,28 +30,29 @@ export CMAKE_BUILD_TYPE=Release
 
 # Install all velox and folly dependencies.
 sudo --preserve-env apt update && sudo apt install -y \
-  g++ \
-  cmake \
+  bison \
   ccache \
-  ninja-build \
   checkinstall \
+  cmake \
+  flex \
+  g++ \
   git \
-  libssl-dev \
   libboost-all-dev \
-  libicu-dev \
-  libdouble-conversion-dev \
-  libgoogle-glog-dev \
   libbz2-dev \
+  libdouble-conversion-dev \
+  libevent-dev \
   libgflags-dev \
   libgmock-dev \
-  libevent-dev \
+  libgoogle-glog-dev \
+  libicu-dev \
   liblz4-dev \
-  libzstd-dev \
+  liblzo2-dev \
   libre2-dev \
   libsnappy-dev \
-  liblzo2-dev \
-  bison \
-  flex \
+  libssl-dev \
+  libthrift-dev \
+  libzstd-dev \
+  ninja-build \
   tzdata \
   wget
 
