@@ -181,7 +181,7 @@ jobs:
           echo "::group::Copy results from last rerun into upload dir"
           if [ $i -gt 1 ]; then
             # Unless end of loop was reach we need to use n-1 in the dir name
-            if [ $i -eq 5]; then
+            if [ $i -eq 5 ]; then
             i=6
             fi
                 # if alteast 1 rerun happened
