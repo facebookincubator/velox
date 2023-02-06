@@ -31,6 +31,7 @@ export CMAKE_BUILD_TYPE=Release
 # Install all velox and folly dependencies.
 sudo --preserve-env apt update && sudo apt install -y \
   bison \
+  build-essential \
   ccache \
   checkinstall \
   cmake \
