@@ -59,8 +59,10 @@ jobs:
           submodules: 'recursive'
 
       - name: "Install dependencies"
-        # Sourcing the script installs apt deps but skips the rest
-        run: source ./velox/scripts/setup-ubuntu.sh
+        run: |
+          sudo apt update && sudo apt install -y libgoogle-glog-dev
+          # Sourcing the script installs apt deps but skips the rest
+          source ./velox/scripts/setup-ubuntu.sh
       
       - name: "Setup ccache"
         run: |
