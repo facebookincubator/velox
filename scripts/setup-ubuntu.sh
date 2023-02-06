@@ -42,6 +42,7 @@ sudo --preserve-env apt update && sudo apt install -y \
   libbz2-dev \
   libdouble-conversion-dev \
   libevent-dev \
+  libfl-dev \
   libgflags-dev \
   libgmock-dev \
   libgoogle-glog-dev \
