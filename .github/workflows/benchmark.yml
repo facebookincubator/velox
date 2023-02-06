@@ -65,26 +65,10 @@ jobs:
           restore-keys: |
             ccache-benchmark-
 
-      - name: "Checkout Contender"
-        uses: actions/checkout@v3
-        with:
-          path: 'velox'
-          submodules: 'recursive'
-
-      - name: Build Contender Benchmarks
-        working-directory: velox
-        run: |
-            n_cores=$(nproc)
-            make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$n_cores MAX_LINK_JOBS=$n_cores
-            ccache -s
-            mkdir -p  ${BINARY_DIR}/contender/
-            cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/contender/
-
       - name: "Checkout Baseline"
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@v3
         with:
-          clean: true # make sure benchmarks are rebuilt
           path: 'velox'
           ref: ${{ github.event.pull_request.base.sha }}
           submodules: 'recursive'
@@ -99,6 +83,22 @@ jobs:
             mkdir -p ${BINARY_DIR}/baseline/
             cp -r --verbose _build/release/velox/benchmarks/basic/* ${BINARY_DIR}/baseline/
 
+      - name: "Checkout Contender"
+        uses: actions/checkout@v3
+        with:
+          clean: true # make sure benchmarks are rebuilt
+          path: 'velox'
+          submodules: 'recursive'
+
+      - name: Build Contender Benchmarks
+        working-directory: velox
+        run: |
+            n_cores=$(nproc)
+            make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$n_cores MAX_LINK_JOBS=$n_cores
+            ccache -s
+            mkdir -p  ${BINARY_DIR}/contender/
+            cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/contender/
+
       - name: "Save ccache"
         uses: actions/cache/save@v3
         id: cache
@@ -106,23 +106,9 @@ jobs:
           path: ".ccache"
           key: ccache-benchmark-${{ github.sha }}
 
-      - name: "Checkout Contender again"
-       # We want to use updated version of scripts on PRs
-        uses: actions/checkout@v3
-        with:
-          path: 'velox'
-          submodules: 'recursive'
-
       - name: "Install benchmark dependencies"
         run: |
-          cd velox
-          python3 -m pip install -r scripts/benchmark-requirements.txt
-
-      - name: "Run Benchmarks - Contender"
-        working-directory: 'velox'
-        run: |
-            make benchmarks-basic-run \
-                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
+          python3 -m pip install -r velox/scripts/benchmark-requirements.txt
 
       - name: "Run Benchmarks - Baseline"
         if: ${{ github.event_name == 'pull_request' }}
@@ -130,7 +116,13 @@ jobs:
         run: |
             make benchmarks-basic-run \
                 EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/baseline/ --output_path ${BASELINE_OUTPUT_PATH}"
-      
+
+      - name: "Run Benchmarks - Contender"
+        working-directory: 'velox'
+        run: |
+            make benchmarks-basic-run \
+                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
+                
       - name: "Compare initial results"
         id: compare
         if: ${{ github.event_name == 'pull_request' }}
@@ -177,18 +169,6 @@ jobs:
                 --recursive \
                 --do_not_fail
           echo "::endgroup::"
-
-          echo "::group::Copy results from last rerun into upload dir"
-          if [ $i -gt 1 ]; then
-            # Unless end of loop was reach we need to use n-1 in the dir name
-            if [ $i -eq 5 ]; then
-            i=6
-            fi
-                # if alteast 1 rerun happened
-                # copy files from last rerun into the upload dir
-                cp -r --verbose ${CONTENDER_OUTPUT_PATH}/rerun-$((${i} - 1))/* ${CONTENDER_OUTPUT_PATH}
-          fi
-          echo "::endgroup"
 
       - name: "Save PR number"
         run: echo "${{ github.event.pull_request.number }}" > pr_number.txt
