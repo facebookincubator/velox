@@ -34,9 +34,7 @@ defaults:
 #TODO  concurrency groups?
 jobs:
   benchmark:
-    if: github.repository == 'facebookincubator/velox'
-    runs-on: 8-core
-    container: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
+    runs-on: ubuntu-latest
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
