@@ -43,13 +43,6 @@ jobs:
       BASELINE_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/baseline/"
       CONTENDER_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/contender/"
     steps:
-      - name: "Setup ccache"
-        run: |
-            # Set up ccache configs .
-            sudo apt update && sudo apt install -y ccache
-            mkdir -p .ccache
-            ccache -sz -M 5Gi
-
       - name: "Restore ccache"
         uses: actions/cache/restore@v3
         id: restore-cache
@@ -68,6 +61,12 @@ jobs:
       - name: "Install dependencies"
         # Sourcing the script installs apt deps but skips the rest
         run: source ./velox/scripts/setup-ubuntu.sh
+      
+      - name: "Setup ccache"
+        run: |
+            # Set up ccache configs .
+            mkdir -p .ccache
+            ccache -sz -M 5Gi
 
       - name: Build Contender Benchmarks
         working-directory: velox
