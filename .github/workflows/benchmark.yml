@@ -60,7 +60,7 @@ jobs:
 
       - name: "Install dependencies"
         run: |
-          sudo apt update && sudo apt install -y libgoogle-glog-dev
+          sudo apt update && sudo apt install -y libunwind-dev
           # Sourcing the script installs apt deps but skips the rest
           source ./velox/scripts/setup-ubuntu.sh
       
