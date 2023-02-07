@@ -59,9 +59,9 @@ jobs:
           # required for preadv/pwritev
           MACOSX_DEPLOYMENT_TARGET: "11.0"
           CIBW_ARCHS: "x86_64"
-          # On PRs only build for Python 3.9
-          CIBW_BUILD: ${{ github.event_name == 'pull_request' && 'cp39-*' || 'cp39-* cp310-* cp311-*' }}
-          CIBW_SKIP: "*musllinux*"
+          # On PRs only build for Python 3.7
+          CIBW_BUILD: ${{ github.event_name == 'pull_request' && 'cp37-*' || 'cp3*' }}
+          CIBW_SKIP: "*musllinux* cp36-*"
           CIBW_MANYLINUX_X86_64_IMAGE: "ghcr.io/facebookincubator/velox-dev:torcharrow-avx"
           CIBW_BEFORE_ALL_MACOS: >
             bash {package}/scripts/setup-macos.sh && 
