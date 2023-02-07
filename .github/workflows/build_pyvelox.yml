@@ -18,7 +18,19 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'velox/**'
+      - '!velox/docs/**'
+      - 'third_party/**'
+      - 'pyvelox/**'
+      - '.github/workflows/build_pyvelox.yml'
   pull_request:
+    paths:
+      - 'velox/**'
+      - '!velox/docs/**'
+      - 'third_party/**'
+      - 'pyvelox/**'
+      - '.github/workflows/build_pyvelox.yml'
 
 permissions:
   contents: read
@@ -48,7 +60,10 @@ jobs:
           key: ccache-wheels-${{ github.sha }}
           restore-keys: |
             ccache-wheels-
-
+      - name: Debug
+        run: |
+          source ./scripts/setup-helper-functions.sh
+          get_cxx_flags
       - if: matrix.os == 'macos-11'
         run: |
           echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@1.1/" >> $GITHUB_ENV
