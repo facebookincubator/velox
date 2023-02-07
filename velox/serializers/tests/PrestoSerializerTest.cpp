@@ -137,6 +137,30 @@ class PrestoSerializerTest : public ::testing::Test {
     assertEqualVectors(rowVector, deserialized);
   }
 
+  void testRoundTripWithNullcolumns(const std::vector<VectorPtr>& children) {
+    auto rowVector = vectorMaker_->rowVector(children);
+    std::ostringstream out;
+    serialize(rowVector, &out, nullptr);
+
+    auto rowType = asRowType(rowVector->type());
+    auto deserialized = deserialize(rowType, out.str(), nullptr);
+
+    ASSERT_EQ(rowVector->size(), deserialized->size());
+    ASSERT_TRUE(rowVector->type()->equivalent(*deserialized->type()))
+        << "Expected " << rowVector->type()->toString() << ", but got "
+        << deserialized->type()->toString();
+    ASSERT_EQ(rowVector->childrenSize(), deserialized->childrenSize());
+
+    for (int i = 0; i < rowVector->childrenSize(); i++) {
+      if (rowVector->childAt(i)) {
+        assertEqualVectors(rowVector->childAt(i), deserialized->childAt(i));
+      } else {
+        // nullptr deserializes into an empty vector of same type
+        ASSERT_EQ(0, deserialized->childAt(i)->size());
+      }
+    }
+  }
+
   std::shared_ptr<memory::MemoryPool> pool_;
   std::unique_ptr<serializer::presto::PrestoVectorSerde> serde_;
   std::unique_ptr<test::VectorMaker> vectorMaker_;
@@ -365,4 +389,18 @@ TEST_F(PrestoSerializerTest, rle) {
       BaseVector::createNullConstant(ARRAY(INTEGER()), 17, pool_.get()));
   testRleRoundTrip(BaseVector::createNullConstant(
       MAP(VARCHAR(), INTEGER()), 17, pool_.get()));
+}
+
+TEST_F(PrestoSerializerTest, nullPtrColumn) {
+  const size_t vectorSize = 10;
+  auto a = vectorMaker_->flatVector<int64_t>(
+      vectorSize, [](vector_size_t row) { return row; });
+  auto b = vectorMaker_->flatVector<double>(
+      vectorSize, [](vector_size_t row) { return row * 0.1; });
+  auto c = BaseVector::wrapInConstant(
+      10, 0, vectorMaker_->arrayVector<int64_t>({{1, 2, 3}}));
+
+  testRoundTripWithNullcolumns({a, nullptr, b, nullptr});
+  testRoundTripWithNullcolumns({a, b, c, nullptr});
+  testRoundTripWithNullcolumns({b, nullptr, nullptr, nullptr, nullptr});
 }

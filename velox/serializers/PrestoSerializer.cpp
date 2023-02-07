@@ -1322,6 +1322,10 @@ void serializeColumn(
     const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream) {
+  if (!vector) {
+    return;
+  }
+
   switch (vector->encoding()) {
     case VectorEncoding::Simple::FLAT:
       VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(

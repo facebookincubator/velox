@@ -42,7 +42,12 @@ RowVectorPtr VectorMaker::rowVector(
   std::vector<std::shared_ptr<const Type>> childTypes;
   childTypes.resize(children.size());
   for (int i = 0; i < children.size(); i++) {
-    childTypes[i] = children[i]->type();
+    if (children[i]) {
+      childTypes[i] = children[i]->type();
+    } else {
+      // If child vector is nullptr, just default to any type.
+      childTypes[i] = SMALLINT();
+    }
   }
   auto rowType = ROW(std::move(childNames), std::move(childTypes));
   const size_t vectorSize = children.empty() ? 0 : children.front()->size();
