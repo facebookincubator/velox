@@ -33,7 +33,9 @@ permissions:
 jobs:
   upload:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event.workflow_run.conclusion == 'success' || 
+             github.event_name == 'workflow_dispatch') &&
+            github.repository == 'facebookincubator/velox' }}
     steps:
 
     - name: 'Download artifacts'
