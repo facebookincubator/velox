@@ -18,19 +18,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'velox/**'
-      - '!velox/docs/**'
-      - 'third_party/**'
-      - 'pyvelox/**'
-      - '.github/workflows/build_pyvelox.yml'
   pull_request:
-    paths:
-      - 'velox/**'
-      - '!velox/docs/**'
-      - 'third_party/**'
-      - 'pyvelox/**'
-      - '.github/workflows/build_pyvelox.yml'
 
 permissions:
   contents: read
