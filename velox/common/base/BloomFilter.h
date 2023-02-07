@@ -24,18 +24,6 @@
 #include "velox/common/base/IOUtils.h"
 
 namespace facebook::velox {
-namespace {
-const int8_t kBloomFilterV1 = 1;
-common::InputByteStream initializeInputStream(const char* serialized) {
-  common::InputByteStream stream(serialized);
-
-  auto version = stream.read<int8_t>();
-  VELOX_CHECK_EQ(kBloomFilterV1, version);
-
-  return stream;
-}
-} // namespace
-
 // BloomFilter filter with groups of 64 bits, of which 4 are set. The hash
 // number has 4 6 bit fields that selct the bits in the word and the
 // remaining bits select the word in the filter. With 8 bits per
@@ -74,7 +62,9 @@ class BloomFilter {
   }
 
   void merge(const char* serialized) {
-    auto stream = initializeInputStream(serialized);
+    common::InputByteStream stream(serialized);
+    auto version = stream.read<int8_t>();
+    VELOX_CHECK_EQ(kBloomFilterV1, version);
     auto size = stream.read<int32_t>();
     bits_.resize(size);
     auto bitsdata =
@@ -139,6 +129,7 @@ class BloomFilter {
     return mask == (bloom[index] & mask);
   }
 
+  const int8_t kBloomFilterV1 = 1;
   std::vector<uint64_t, Allocator> bits_;
 };
 
