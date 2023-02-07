@@ -898,8 +898,12 @@ TEST_F(ExprTest, csePartialEvaluation) {
   auto a = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto b = makeFlatVector<std::string>({"a", "b", "c", "d", "e"});
 
+  // The second expression also uses an 'if' expression to make sure a result
+  // vector exists and values need to be copied over from the vector holding
+  // shared values.
   auto results = evaluateMultiple(
-      {"if (c0 >= 3, add_suffix(c1), 'n/a')", "add_suffix(c1)"},
+      {"if (c0 >= 3, add_suffix(c1), 'n/a')",
+       "if (c0 < 2, 'n/a', add_suffix(c1))"},
       makeRowVector({a, b}));
 
   auto expected =
@@ -907,7 +911,7 @@ TEST_F(ExprTest, csePartialEvaluation) {
   assertEqualVectors(expected, results[0]);
 
   expected =
-      makeFlatVector<std::string>({"a_xx", "b_xx", "c_xx", "d_xx", "e_xx"});
+      makeFlatVector<std::string>({"n/a", "b_xx", "c_xx", "d_xx", "e_xx"});
   assertEqualVectors(expected, results[1]);
 }
 

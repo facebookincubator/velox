@@ -662,11 +662,14 @@ void Expr::evaluateSharedSubexpr(
 
   eval(*missingRows, context, sharedSubexprValues_);
 
+  // recycling missingRowsHolder.
+  auto rowsToCopy = missingRows;
+  *rowsToCopy = rows;
   // Clear the rows which failed to compute.
-  context.deselectErrors(*missingRows);
+  context.deselectErrors(*rowsToCopy);
 
-  sharedSubexprRows_->select(*missingRows);
-  context.moveOrCopyResult(sharedSubexprValues_, *missingRows, result);
+  sharedSubexprRows_->select(*rowsToCopy);
+  context.moveOrCopyResult(sharedSubexprValues_, *rowsToCopy, result);
 }
 
 namespace {
