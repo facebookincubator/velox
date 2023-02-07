@@ -82,7 +82,7 @@ jobs:
             bash {package}/scripts/setup-macos.sh && 
             bash {package}/scripts/setup-macos.sh install_folly
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
-          CCACHE_DIR: "${{ matrix.os == 'macos-11' && '' || '/host/' }}${{ github.workspace }}/.ccache"
+          CCACHE_DIR: "${{ matrix.os != 'macos-11' && '/host/' || '' }}${{ github.workspace }}/.ccache"
         with:
           output-dir: wheelhouse
 
