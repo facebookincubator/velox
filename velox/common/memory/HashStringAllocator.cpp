@@ -409,9 +409,13 @@ void HashStringAllocator::checkConsistency() const {
     auto end = reinterpret_cast<Header*>(run.data<char>() + size);
     auto header = run.data<Header>();
     while (header != end) {
-      VELOX_CHECK(header >= run.data<Header>());
-      VELOX_CHECK(header < end);
-      VELOX_CHECK(header->end() <= reinterpret_cast<char*>(end));
+      VELOX_CHECK_GE(
+          reinterpret_cast<char*>(header),
+          reinterpret_cast<char*>(run.data<Header>()));
+      VELOX_CHECK_LT(
+          reinterpret_cast<char*>(header), reinterpret_cast<char*>(end));
+      VELOX_CHECK_LE(
+          reinterpret_cast<char*>(header->end()), reinterpret_cast<char*>(end));
       VELOX_CHECK_EQ(header->isPreviousFree(), previousFree);
 
       if (header->isFree()) {
@@ -433,16 +437,16 @@ void HashStringAllocator::checkConsistency() const {
       header = reinterpret_cast<Header*>(header->end());
     }
   }
-  VELOX_CHECK(numFree == numFree_);
-  VELOX_CHECK(freeBytes == freeBytes_);
+  VELOX_CHECK_EQ(numFree, numFree_);
+  VELOX_CHECK_EQ(freeBytes, freeBytes_);
   uint64_t numInFreeList = 0;
   uint64_t bytesInFreeList = 0;
   for (auto free = free_.next(); free != &free_; free = free->next()) {
     ++numInFreeList;
     bytesInFreeList += headerOf(free)->size() + sizeof(Header);
   }
-  VELOX_CHECK(numInFreeList == numFree_);
-  VELOX_CHECK(bytesInFreeList == freeBytes_);
+  VELOX_CHECK_EQ(numInFreeList, numFree_);
+  VELOX_CHECK_EQ(bytesInFreeList, freeBytes_);
 }
 
 } // namespace facebook::velox
