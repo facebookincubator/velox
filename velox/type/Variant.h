@@ -153,6 +153,18 @@ struct DecimalCapsule {
     return lhsIntegral < rhsIntegral;
   }
 
+  bool operator<=(const DecimalCapsule& other) const {
+    return *this < other || *this == other;
+  }
+
+  bool operator>(const DecimalCapsule& other) const {
+    return other < *this;
+  }
+
+  bool operator>=(const DecimalCapsule& other) const {
+    return other < *this || other == *this;
+  }
+
   size_t hash() const {
     auto hasher = folly::Hash{};
     auto hash = folly::hash::hash_combine_generic(

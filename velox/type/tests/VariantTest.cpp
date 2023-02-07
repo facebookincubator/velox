@@ -20,6 +20,25 @@
 
 using namespace facebook::velox;
 
+namespace {
+template <TypeKind T>
+void compareDecimals(
+    const std::vector<variant>& lesserDecimals,
+    const std::vector<variant>& greaterDecimals) {
+  const auto len = lesserDecimals.size();
+  for (auto i = 0; i < len; i++) {
+    auto a = lesserDecimals[i].template value<T>();
+    auto b = greaterDecimals[i].template value<T>();
+    EXPECT_LT(a, b);
+    EXPECT_LE(a, b);
+    EXPECT_LE(a, a);
+    EXPECT_GT(b, a);
+    EXPECT_GE(b, a);
+    EXPECT_GE(b, b);
+  }
+};
+} // namespace
+
 TEST(VariantTest, arrayInferType) {
   EXPECT_EQ(*ARRAY(UNKNOWN()), *variant(TypeKind::ARRAY).inferType());
   EXPECT_EQ(*ARRAY(UNKNOWN()), *variant::array({}).inferType());
@@ -92,28 +111,36 @@ TEST(VariantTest, opaque) {
 }
 
 TEST(VariantTest, shortDecimal) {
-  auto shortDecimalType = DECIMAL(10, 3);
-  variant v = variant::shortDecimal(1234, shortDecimalType);
+  const TypePtr shortTypeA = DECIMAL(10, 3);
+  const TypePtr shortTypeB = DECIMAL(10, 4);
+  const std::vector<variant> lesserDecimals = {
+      variant::shortDecimal(1234, shortTypeA),
+      variant::shortDecimal(1234, shortTypeB),
+      variant::shortDecimal(-12345, shortTypeB),
+      variant::shortDecimal(-1234, shortTypeA),
+      variant::shortDecimal(-1234, shortTypeA),
+      variant::shortDecimal(-1234, shortTypeB)};
+  const std::vector<variant> greaterDecimals = {
+      variant::shortDecimal(12345, shortTypeB),
+      variant::shortDecimal(1234, shortTypeA),
+      variant::shortDecimal(-1234, shortTypeA),
+      variant::shortDecimal(-1234, shortTypeB),
+      variant::shortDecimal(1234, shortTypeB),
+      variant::shortDecimal(1234, shortTypeA)};
+
+  variant v = lesserDecimals[0];
   EXPECT_TRUE(v.hasValue());
   EXPECT_EQ(TypeKind::SHORT_DECIMAL, v.kind());
   EXPECT_EQ(1234, v.value<TypeKind::SHORT_DECIMAL>().value().unscaledValue());
   EXPECT_EQ(10, v.value<TypeKind::SHORT_DECIMAL>().precision);
   EXPECT_EQ(3, v.value<TypeKind::SHORT_DECIMAL>().scale);
-  EXPECT_EQ(*v.inferType(), *shortDecimalType);
+  EXPECT_EQ(*v.inferType(), *shortTypeA);
   EXPECT_EQ(v.toJson(), "1.234");
-  // 1.2345
-  auto u1 = variant::shortDecimal(12345, DECIMAL(10, 4));
-  // 1.2345 > 1.234
-  EXPECT_LT(
-      v.value<TypeKind::SHORT_DECIMAL>(), u1.value<TypeKind::SHORT_DECIMAL>());
-  // 0.1234
-  auto u2 = variant::shortDecimal(1234, DECIMAL(10, 4));
-  // 0.1234 < 1.234
-  EXPECT_LT(
-      u2.value<TypeKind::SHORT_DECIMAL>(), v.value<TypeKind::SHORT_DECIMAL>());
   EXPECT_TRUE(dispatchDynamicVariantEquality(v, v, false));
   EXPECT_TRUE(dispatchDynamicVariantEquality(v, v, true));
-  EXPECT_FALSE(dispatchDynamicVariantEquality(v, u2, true));
+  EXPECT_FALSE(dispatchDynamicVariantEquality(v, greaterDecimals[0], true));
+
+  compareDecimals<TypeKind::SHORT_DECIMAL>(lesserDecimals, greaterDecimals);
 }
 
 TEST(VariantTest, shortDecimalHash) {
@@ -166,28 +193,37 @@ TEST(VariantTest, shortDecimalNull) {
 }
 
 TEST(VariantTest, longDecimal) {
-  auto longDecimalType = DECIMAL(20, 3);
-  auto v = variant::longDecimal(12345, longDecimalType);
+  const TypePtr longTypeA = DECIMAL(20, 3);
+  const TypePtr longTypeB = DECIMAL(20, 4);
+  const std::vector<variant> lesserDecimals = {
+      variant::longDecimal(1234, longTypeA),
+      variant::longDecimal(1234, longTypeA),
+      variant::longDecimal(-12345, longTypeB),
+      variant::longDecimal(-1234, longTypeA),
+      variant::longDecimal(-1234, longTypeA),
+      variant::longDecimal(-1234, longTypeB)};
+  const std::vector<variant> greaterDecimals = {
+      variant::longDecimal(12345, longTypeA),
+      variant::longDecimal(12345, longTypeB),
+      variant::longDecimal(-1234, longTypeA),
+      variant::longDecimal(-1234, longTypeB),
+      variant::longDecimal(1234, longTypeB),
+      variant::longDecimal(1234, longTypeA)};
+
+  auto v = greaterDecimals[0];
   EXPECT_TRUE(v.hasValue());
   EXPECT_EQ(TypeKind::LONG_DECIMAL, v.kind());
   EXPECT_EQ(12345, v.value<TypeKind::LONG_DECIMAL>().value().unscaledValue());
   EXPECT_EQ(20, v.value<TypeKind::LONG_DECIMAL>().precision);
   EXPECT_EQ(3, v.value<TypeKind::LONG_DECIMAL>().scale);
-  EXPECT_EQ(*v.inferType(), *longDecimalType);
+  EXPECT_EQ(*v.inferType(), *longTypeA);
   EXPECT_EQ(v.toJson(), "12.345");
-  // 1.2345
-  auto u1 = variant::longDecimal(12345, DECIMAL(20, 4));
-  // 1.2345 < 12.345
-  EXPECT_LT(
-      u1.value<TypeKind::LONG_DECIMAL>(), v.value<TypeKind::LONG_DECIMAL>());
-  // 12.3456
-  auto u2 = variant::longDecimal(123456, DECIMAL(20, 4));
-  // 12.3456 > 12.345
-  EXPECT_LT(
-      v.value<TypeKind::LONG_DECIMAL>(), u2.value<TypeKind::LONG_DECIMAL>());
+
   EXPECT_TRUE(dispatchDynamicVariantEquality(v, v, false));
   EXPECT_TRUE(dispatchDynamicVariantEquality(v, v, true));
-  EXPECT_FALSE(dispatchDynamicVariantEquality(v, u2, true));
+  EXPECT_FALSE(dispatchDynamicVariantEquality(v, lesserDecimals[0], true));
+
+  compareDecimals<TypeKind::LONG_DECIMAL>(lesserDecimals, greaterDecimals);
 }
 
 TEST(VariantTest, longDecimalHash) {
