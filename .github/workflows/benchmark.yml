@@ -89,6 +89,7 @@ jobs:
         with:
           clean: true # make sure benchmarks are rebuilt
           path: 'velox'
+          ref: ${{ github.event.pull_request.head.sha || '' }}
           submodules: 'recursive'
 
       - name: Build Contender Benchmarks
