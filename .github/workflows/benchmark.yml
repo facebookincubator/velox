@@ -23,6 +23,7 @@ on:
       - 'pyvelox/**'
       - '.github/workflows/benchmark.yml'
   push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -33,7 +34,9 @@ defaults:
 #TODO  concurrency groups?
 jobs:
   benchmark:
-    runs-on: ubuntu-latest
+    if: github.repository == 'facebookincubator/velox'
+    runs-on: 8-core
+    container: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
@@ -43,6 +46,12 @@ jobs:
       BASELINE_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/baseline/"
       CONTENDER_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/contender/"
     steps:
+      - name: "Install dependencies"
+        run: |
+          sudo apt update && sudo apt install -y libunwind-dev
+          # Sourcing the script installs apt deps but skips the rest
+          source ./velox/scripts/setup-ubuntu.sh
+
       - name: "Restore ccache"
         uses: actions/cache/restore@v3
         id: restore-cache
@@ -51,34 +60,14 @@ jobs:
           key: ccache-benchmark-${{ github.sha }}
           restore-keys: |
             ccache-benchmark-
-
-      - name: "Checkout Contender"
-        uses: actions/checkout@v3
-        with:
-          path: 'velox'
-          submodules: 'recursive'
-
-      - name: "Install dependencies"
-        run: |
-          sudo apt update && sudo apt install -y libunwind-dev
-          # Sourcing the script installs apt deps but skips the rest
-          source ./velox/scripts/setup-ubuntu.sh
-      - name: "Setup ccache"
+      
+      - name: "Setup ccache and python"
         run: |
             # Set up ccache configs .
             mkdir -p .ccache
             ccache -sz -M 5Gi
-
-      - name: Build Contender Benchmarks
-        working-directory: velox
-        run: |
-            n_cores=$(nproc)
-            make benchmarks-basic-build NUM_THREADS=$n_cores MAX_HIGH_MEM_JOBS=$n_cores MAX_LINK_JOBS=$n_cores
-            ccache -s
-            mkdir -p  ${BINARY_DIR}/contender/
-            cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/contender/
-
-      - name: "Checkout Baseline"
+      
+      - name: "Checkout Repo"
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@v3
         with:
@@ -119,14 +108,7 @@ jobs:
         with:
           path: ".ccache"
           key: ccache-benchmark-${{ github.sha }}
-
-      - name: "Checkout Contender again"
-       # We want to use updated version of scripts on PRs
-        uses: actions/checkout@v3
-        with:
-          path: 'velox'
-          submodules: 'recursive'
-
+          
       - name: "Setup Python"
         uses: actions/setup-python@v4
         with:
@@ -137,12 +119,6 @@ jobs:
       - name: "Install benchmark dependencies"
         run: |
           python3 -m pip install -r velox/scripts/benchmark-requirements.txt
-
-      - name: "Run Benchmarks - Contender"
-        working-directory: 'velox'
-        run: |
-            make benchmarks-basic-run \
-                EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
 
       - name: "Run Benchmarks - Baseline"
         if: ${{ github.event_name == 'pull_request' }}
