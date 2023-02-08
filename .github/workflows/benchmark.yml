@@ -87,7 +87,7 @@ jobs:
       - name: "Checkout Contender"
         uses: actions/checkout@v3
         with:
-          # clean: true # make sure benchmarks are rebuilt
+          clean: false
           path: 'velox'
           ref: ${{ github.event.pull_request.head.sha || '' }}
           submodules: 'recursive'
