@@ -71,7 +71,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           path: 'velox'
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.base_ref }}
           submodules: 'recursive'
 
       - name: "Checkout Merge Base"
@@ -79,7 +79,10 @@ jobs:
         working-directory: velox
         run: |
           git fetch origin
-          git checkout $(git merge-base HEAD origin/main)
+          git status
+          merge_base=$(git merge-base 'origin/${{ github.base_ref }}' HEAD)
+          echo $merge_base
+          git checkout $merge_base
           echo $(git log -n 1)
 
       - name: Build Baseline Benchmarks
