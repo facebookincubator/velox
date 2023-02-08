@@ -73,15 +73,15 @@ jobs:
           path: 'velox'
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.head_ref }}
+          depth: 0
           submodules: 'recursive'
 
       - name: "Checkout Merge Base"
         if: ${{ github.event_name == 'pull_request' }}
         working-directory: velox
         run: |
-          git fetch origin
           git status
-          merge_base=$(git merge-base 'origin/${{ github.base_ref }}' HEAD)
+          merge_base=$(git merge-base ${{ github.base_ref }} ${{ github.head_ref }})
           echo "Merge Base: $merge_base"
           git checkout $merge_base
           echo $(git log -n 1)
