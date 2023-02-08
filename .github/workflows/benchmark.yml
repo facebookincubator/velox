@@ -73,7 +73,7 @@ jobs:
           path: 'velox'
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.head_ref }}
-          depth: 0
+          fetch-depth: 0
           submodules: 'recursive'
 
       - name: "Checkout Merge Base"
