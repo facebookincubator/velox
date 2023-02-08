@@ -79,6 +79,7 @@ jobs:
         run: |
           git fetch origin
           git checkout $(git merge-base HEAD origin/main)
+          echo $(git log -n 1)
 
       - name: Build Baseline Benchmarks
         if: ${{ github.event_name == 'pull_request' }}
