@@ -83,7 +83,9 @@ jobs:
             ccache -s
             mkdir -p ${BINARY_DIR}/baseline/
             cp -r --verbose _build/release/velox/benchmarks/basic/* ${BINARY_DIR}/baseline/
-
+      - run: |
+          ls -R velox/_build/release/velox/benchmarks/basic/
+          ls -R velox/_build/release/
       - name: "Checkout Contender"
         uses: actions/checkout@v3
         with:
@@ -91,7 +93,9 @@ jobs:
           path: 'velox'
           ref: ${{ github.event.pull_request.head.sha || '' }}
           submodules: 'recursive'
-
+      - run: |
+          ls -R velox/_build/release/velox/benchmarks/basic/
+          ls -R velox/_build/release/
       - name: Build Contender Benchmarks
         working-directory: velox
         run: |
