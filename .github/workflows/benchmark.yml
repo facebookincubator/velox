@@ -99,6 +99,7 @@ jobs:
 
       - name: "Checkout Contender PR"
         if: ${{ github.event_name == 'pull_request' }}
+        working-directory: velox
         run: |
           git checkout '${{ github.event.pull_request.head.sha }}'
 
