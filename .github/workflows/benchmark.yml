@@ -65,14 +65,18 @@ jobs:
           key: ccache-benchmark-${{ github.sha }}
           restore-keys: |
             ccache-benchmark-
-
-      - name: "Checkout Baseline"
+      
+      - name: "Checkout Repo"
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@v3
         with:
           path: 'velox'
-          ref: ${{ github.event.pull_request.base.sha }}
           submodules: 'recursive'
+
+      - name: "Checkout Merge Base"
+        if: ${{ github.event_name == 'pull_request' }}
+        working-directory: velox
+        run: git checkout $(git merge-base HEAD origin/main)
 
       - name: Build Baseline Benchmarks
         if: ${{ github.event_name == 'pull_request' }}
