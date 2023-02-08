@@ -46,11 +46,17 @@ jobs:
       BASELINE_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/baseline/"
       CONTENDER_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/contender/"
     steps:
+      - name: "Checkout Repo"
+        uses: actions/checkout@v3
+        with:
+          path: 'velox_scripts'
+          fetch-depth: 1
+
       - name: "Install dependencies"
         run: |
           sudo apt update && sudo apt install -y libunwind-dev
           # Sourcing the script installs apt deps but skips the rest
-          source ./velox/scripts/setup-ubuntu.sh
+          source ./velox_scripts/scripts/setup-ubuntu.sh
 
       - name: "Restore ccache"
         uses: actions/cache/restore@v3
