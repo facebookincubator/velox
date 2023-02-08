@@ -82,7 +82,7 @@ jobs:
         run: |
           git fetch origin
           git status
-          merge_base=$(git merge-base origin/${{ github.base_ref }} origin/${{ github.head_ref }})
+          merge_base=$(git merge-base 'origin/${{ github.base_ref }}' 'origin/${{ github.head_ref }}')
           echo "Merge Base: $merge_base"
           git checkout $merge_base
           echo $(git log -n 1)
@@ -97,12 +97,17 @@ jobs:
             mkdir -p ${BINARY_DIR}/baseline/
             cp -r --verbose _build/release/velox/benchmarks/basic/* ${BINARY_DIR}/baseline/
 
+      - name: "Checkout Contender PR"
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          git checkout '${{ github.event.pull_request.head.sha }}'
+
       - name: "Checkout Contender"
+        if: ${{ github.event_name == 'push' }}
         uses: actions/checkout@v3
         with:
-          clean: false
           path: 'velox'
-          ref: ${{ github.event.pull_request.head.sha || '' }}
+          ref: ${{ github.sha }}
           submodules: 'recursive'
 
       - name: Build Contender Benchmarks
