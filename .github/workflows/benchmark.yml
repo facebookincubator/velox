@@ -76,7 +76,9 @@ jobs:
       - name: "Checkout Merge Base"
         if: ${{ github.event_name == 'pull_request' }}
         working-directory: velox
-        run: git checkout $(git merge-base HEAD origin/main)
+        run: |
+          git fetch origin
+          git checkout $(git merge-base HEAD origin/main)
 
       - name: Build Baseline Benchmarks
         if: ${{ github.event_name == 'pull_request' }}
