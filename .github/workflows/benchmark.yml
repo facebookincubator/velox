@@ -71,7 +71,6 @@ jobs:
         uses: actions/checkout@v3
         with:
           path: 'velox'
-          ref: ${{ github.head_ref }}
           submodules: 'recursive'
 
       - name: "Checkout Merge Base"
