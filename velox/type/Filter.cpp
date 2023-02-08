@@ -239,7 +239,7 @@ xsimd::batch_bool<int64_t> BigintValuesUsingHashTable::testValues(
   constexpr int kArraySize = xsimd::batch<int64_t>::size;
   alignas(kAlign) int64_t indicesArray[kArraySize];
   alignas(kAlign) int64_t valuesArray[kArraySize];
-  (indices + 1).store_aligned(indicesArray);
+  ((indices + 1) & sizeMask_).store_aligned(indicesArray);
   x.store_aligned(valuesArray);
   while (unresolved) {
     auto lane = bits::getAndClearLastSetBit(unresolved);
