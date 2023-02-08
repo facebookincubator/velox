@@ -84,6 +84,8 @@ jobs:
           echo $merge_base
           git checkout $merge_base
           echo $(git log -n 1)
+          echo "${{ toJSON(github.event.pull_request) }}"
+          exit 1
 
       - name: Build Baseline Benchmarks
         if: ${{ github.event_name == 'pull_request' }}
