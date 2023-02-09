@@ -475,6 +475,7 @@ ExpressionFuzzer::ExpressionFuzzer(
   // Register function override (for cases where we want to restrict the types
   // or parameters we pass to functions).
   registerFuncOverride(&ExpressionFuzzer::generateLikeArgs, "like");
+  registerFuncOverride(&ExpressionFuzzer::generateSplitArgs, "split");
   registerFuncOverride(
       &ExpressionFuzzer::generateEmptyApproxSetArgs, "empty_approx_set");
   registerFuncOverride(
@@ -593,6 +594,22 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateLikeArgs(
     const CallableSignature& input) {
   std::vector<core::TypedExprPtr> inputExpressions = {
       generateArg(input.args[0]), generateArgConstant(input.args[1])};
+  if (input.args.size() == 3) {
+    inputExpressions.emplace_back(generateArgConstant(input.args[2]));
+  }
+  return inputExpressions;
+}
+
+// Specialization for the "split" function.
+// Spark implementation only takes 2 args, and requires the delimiter to
+// be a constant. So we will ensure delimiter is constant for both Spark and
+// Presto.
+std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSplitArgs(
+    const CallableSignature& input) {
+
+  std::vector<core::TypedExprPtr> inputExpressions = {
+      generateArg(input.args[0]), generateArgConstant(input.args[1])};
+
   if (input.args.size() == 3) {
     inputExpressions.emplace_back(generateArgConstant(input.args[2]));
   }
