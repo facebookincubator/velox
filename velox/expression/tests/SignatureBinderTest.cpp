@@ -314,6 +314,7 @@ TEST(SignatureBinderTest, generics) {
         signature,
         {ARRAY(FIXED_SIZE_ARRAY(20, BIGINT())),
          FIXED_SIZE_ARRAY(10, BIGINT())});
+    assertCannotResolve(signature, {FIXED_SIZE_ARRAY(10, BIGINT()), BIGINT()});
   }
 
   // array(array(T)), array(T) -> boolean
@@ -588,4 +589,31 @@ TEST(SignatureBinderTest, customType) {
           .argumentType("fancy_type")
           .build(),
       "not found : FANCY_TYPE");
+}
+
+TEST(SignatureBinderTest, fixedSizeArray) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .returnType("boolean")
+                       .argumentType("fixed_size_array(bigint)")
+                       .argumentType("bigint")
+                       .build();
+
+  testSignatureBinder(
+      signature, {FIXED_SIZE_ARRAY(10, BIGINT()), BIGINT()}, BOOLEAN());
+  testSignatureBinder(
+      signature, {FIXED_SIZE_ARRAY(20, BIGINT()), BIGINT()}, BOOLEAN());
+  assertCannotResolve(signature, {ARRAY(BIGINT()), BIGINT()});
+
+  signature = exec::FunctionSignatureBuilder()
+                  .typeVariable("T")
+                  .returnType("boolean")
+                  .argumentType("fixed_size_array(T)")
+                  .argumentType("T")
+                  .build();
+
+  testSignatureBinder(
+      signature, {FIXED_SIZE_ARRAY(10, BIGINT()), BIGINT()}, BOOLEAN());
+  testSignatureBinder(
+      signature, {FIXED_SIZE_ARRAY(20, DOUBLE()), DOUBLE()}, BOOLEAN());
+  assertCannotResolve(signature, {ARRAY(BIGINT()), BIGINT()});
 }

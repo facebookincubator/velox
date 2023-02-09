@@ -754,7 +754,9 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
 /// as Presto/Spark do not have a notion of fixed size array.
 ///
 /// Anywhere an ArrayType can be used, a FixedSizeArrayType can be
-/// used.
+/// used, except that the parameter type in the signature of a function that
+/// receives FixedSizeArray should be "fixed_size_array(T)" where T is the
+/// element type.
 class FixedSizeArrayType : public ArrayType {
  public:
   explicit FixedSizeArrayType(size_type len, std::shared_ptr<const Type> child);
