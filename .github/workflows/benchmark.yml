@@ -82,7 +82,7 @@ jobs:
           git fetch upstream
           git status
           merge_base=$(git merge-base 'upstream/${{ github.base_ref }}' 'origin/${{ github.head_ref }}') || \
-            { echo ""::error::Failed to find merge base"; exit 1; }
+            { echo "::error::Failed to find merge base"; exit 1; }
           echo "Merge Base: $merge_base"
           git checkout $merge_base
           echo $(git log -n 1)
