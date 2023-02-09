@@ -1,0 +1,140 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>Aggregate Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Configuration properties" href="../../configs.html" />
+    <link rel="prev" title="JSON Functions" href="json.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../../configs.html" title="Configuration properties"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="json.html" title="JSON Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../spark_functions.html" accesskey="U">Spark Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Aggregate Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="aggregate-functions">
+<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h1>
+<p>Aggregate functions operate on a set of values to compute a single result.</p>
+<section id="general-aggregate-functions">
+<h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Permalink to this heading">¶</a></h2>
+<dl class="spark function">
+<dt class="sig sig-object spark" id="last">
+<span class="sig-name descname"><span class="pre">last</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#last" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the last value of <cite>x</cite> for a group of rows.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id0">
+<span class="sig-name descname"><span class="pre">last</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ignoreNull</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the last value of <cite>x</cite> for a group of rows. If <cite>ignoreNull</cite> is true, returns only non-null values.</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#last"><code class="docutils literal notranslate"><span class="pre">last()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">last()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="json.html"
+                          title="previous chapter">JSON Functions</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../../configs.html"
+                          title="next chapter">Configuration properties</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/functions/spark/aggregate.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../../configs.html" title="Configuration properties"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="json.html" title="JSON Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../spark_functions.html" >Spark Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Aggregate Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
+    </div>
+  </body>
+</html>
