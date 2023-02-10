@@ -92,8 +92,6 @@ TEST_F(E2EFilterTest, writerMagic) {
 }
 
 TEST_F(E2EFilterTest, boolean) {
-  writerProperties_ =
-      ::parquet::WriterProperties::Builder().data_pagesize(4 * 1024)->build();
   testWithTypes(
       "boolean_val:boolean,"
       "boolean_null:boolean",
