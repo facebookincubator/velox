@@ -424,6 +424,21 @@ TEST_F(E2EFilterTest, stringDictionary) {
       20);
 }
 
+TEST_F(E2EFilterTest, varbinaeyDictionary) {
+  testWithTypes(
+      "varbinary_val:varbinary,"
+      "varbinary_val_2:varbinary,"
+      "varbinary_const:varbinary",
+      [&]() {
+        makeStringDistribution("varbinary_val", 100, true, false);
+        makeStringDistribution("varbinary_val_2", 170, false, true);
+        makeStringDistribution("varbinary_const", 1, true, false);
+      },
+      true,
+      {"varbinary_val", "varbinary_val_2"},
+      20);
+}
+
 TEST_F(E2EFilterTest, dedictionarize) {
   writerProperties_ = ::parquet::WriterProperties::Builder()
                           .max_row_group_length(10000000)
