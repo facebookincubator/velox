@@ -251,44 +251,44 @@ TEST_F(OrderByTest, singleKeyStableSort) {
   vector_size_t batchSize = 1000;
   std::vector<RowVectorPtr> vectors;
 
-  auto c0 = makeFlatVector<std::string>(
-      {"Accounting",
-       "Accounting",
-       "Accounting",
-       "Accounting",
-       "Accounting",
-       "Accounting",
-       "IT",
-       "IT",
-       "SCM",
-       "SCM",
-       "SCM",
-       "SCM",
-       "SCM",
-       "Sales",
-       "Sales",
-       "Sales",
-       "Sales",
-       });
-  auto c1 = makeFlatVector<std::string>(
-      {"11472",
-       "9998",
-       "8992",
-       "8870",
-       "8435",
-       "6627",
-       "8113",
-       "5186",
-       "11798",
-       "11303",
-       "10586",
-       "10449",
-       "6949",
-       "10563",
-       "9441",
-       "9181",
-       "6660",
-       });
+  auto c0 = makeFlatVector<std::string>({
+      "Accounting",
+      "Accounting",
+      "Accounting",
+      "Accounting",
+      "Accounting",
+      "Accounting",
+      "IT",
+      "IT",
+      "SCM",
+      "SCM",
+      "SCM",
+      "SCM",
+      "SCM",
+      "Sales",
+      "Sales",
+      "Sales",
+      "Sales",
+  });
+  auto c1 = makeFlatVector<std::string>({
+      "11472",
+      "9998",
+      "8992",
+      "8870",
+      "8435",
+      "6627",
+      "8113",
+      "5186",
+      "11798",
+      "11303",
+      "10586",
+      "10449",
+      "6949",
+      "10563",
+      "9441",
+      "9181",
+      "6660",
+  });
   vectors.push_back(makeRowVector({c0, c1}));
   createDuckDbTable(vectors);
 
@@ -299,7 +299,8 @@ TEST_F(OrderByTest, singleKeyStableSort) {
                   .capturePlanNodeId(orderById)
                   .planNode();
 
-  assertQueryOrdered(plan, "SELECT * FROM tmp ORDER BY c0 DESC NULLS LAST", {0});
+  assertQueryOrdered(
+      plan, "SELECT * FROM tmp ORDER BY c0 DESC NULLS LAST", {0});
 }
 
 TEST_F(OrderByTest, multipleKeys) {
