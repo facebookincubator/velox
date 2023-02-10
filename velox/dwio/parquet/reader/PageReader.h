@@ -297,7 +297,7 @@ class PageReader {
       const uint64_t* FOLLY_NULLABLE nulls,
       bool& nullsFromFastPath,
       Visitor visitor) {
-        VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded")
+    VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded")
     if (nulls) {
       nullsFromFastPath = false;
       booleanDecoder_->readWithVisitor<true>(nulls, visitor);
