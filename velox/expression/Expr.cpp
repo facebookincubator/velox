@@ -278,6 +278,7 @@ void Expr::evalSimplifiedImpl(
   }
 
   SelectivityVector remainingRows = rows;
+  inputValues_.clear();
   inputValues_.resize(inputs_.size());
   const bool defaultNulls = vectorFunction_->isDefaultNullBehavior();
 
