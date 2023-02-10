@@ -298,21 +298,12 @@ class PageReader {
       bool& nullsFromFastPath,
       Visitor visitor) {
     if (nulls) {
-      if (isDictionary()) {
-        nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor);
-        auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
-        dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
-      } else {
-        nullsFromFastPath = false;
-        booleanDecoder_->readWithVisitor<true>(nulls, visitor);
-      }
+      VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded")
+      nullsFromFastPath = false;
+      booleanDecoder_->readWithVisitor<true>(nulls, visitor);
     } else {
-      if (isDictionary()) {
-        auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
-        dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
-      } else {
-        booleanDecoder_->readWithVisitor<false>(nulls, visitor);
-      }
+      VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded")
+      booleanDecoder_->readWithVisitor<false>(nulls, visitor);
     }
   }
 

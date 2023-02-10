@@ -35,29 +35,7 @@ class SelectiveByteRleColumnReader : public SelectiveColumnReader {
     return false;
   }
 
-  void getValues(RowSet rows, VectorPtr* result) override {
-    switch (nodeType_->type->kind()) {
-      case TypeKind::BOOLEAN:
-        getFlatValues<int8_t, bool>(rows, result);
-        break;
-      case TypeKind::TINYINT:
-        getFlatValues<int8_t, int8_t>(rows, result);
-        break;
-      case TypeKind::SMALLINT:
-        getFlatValues<int8_t, int16_t>(rows, result);
-        break;
-      case TypeKind::INTEGER:
-        getFlatValues<int8_t, int32_t>(rows, result);
-        break;
-      case TypeKind::BIGINT:
-        getFlatValues<int8_t, int64_t>(rows, result);
-        break;
-      default:
-        VELOX_FAIL(
-            "Result type not supported in ByteRLE encoding: {}",
-            nodeType_->type->toString());
-    }
-  }
+  void getValues(RowSet rows, VectorPtr* result) override;
 
   template <typename Reader, bool isDense, typename ExtractValues>
   void processFilter(
