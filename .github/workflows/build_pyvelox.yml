@@ -110,7 +110,7 @@ jobs:
             bash {package}/scripts/setup-macos.sh install_folly
           CIBW_BEFORE_ALL_LINUX: >
             mkdir -p /output &&
-            cp -Rv /host${{ github.workspace }}/.ccache /output/.ccache &&
+            cp -R /host${{ github.workspace }}/.ccache /output/.ccache &&
             ccache -s
           CIBW_ENVIRONMENT_PASS_LINUX: CCACHE_DIR BUILD_VERSION
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
@@ -156,7 +156,7 @@ jobs:
           path: ./wheelhouse
       
       - run: ls wheelhouse
-      
+
       - uses: actions/setupo-python@v3
         with:
           python-version: 3.10
