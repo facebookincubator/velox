@@ -1,0 +1,6 @@
+inculde CMakeLists.txt
+include *.cmake
+graft CMake
+graft third_party
+graft velox
+prune velox/docs
