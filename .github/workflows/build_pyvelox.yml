@@ -80,12 +80,16 @@ jobs:
           CCACHE_DIR: "${{ matrix.os != 'macos-11' && '/output' || github.workspace }}/.ccache"
         with:
           output-dir: wheelhouse
-
+      - name: "Move .ccache to workspace"
+        if: matrix.os != 'macos-11'
+        run: |
+          mkdir -p .ccache
+          cp -R /output/.ccache/* .ccache
       - name: "Save ccache"
         uses: actions/cache/save@v3
         id: cache
         with:
-          path: "${{ matrix.os != 'macos-11' && 'wheelhouse/' || '' }}.ccache"
+          path: ".ccache"
           key: ccache-wheels-${{ matrix.os }}-${{ github.sha }}
 
       - uses: actions/upload-artifact@v3
