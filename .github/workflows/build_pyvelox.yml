@@ -84,7 +84,7 @@ jobs:
         if: matrix.os != 'macos-11'
         run: |
           mkdir -p .ccache
-          cp -R /output/.ccache/* .ccache
+          cp -R ./wheelhouse/.ccache/* .ccache
       - name: "Save ccache"
         uses: actions/cache/save@v3
         id: cache
