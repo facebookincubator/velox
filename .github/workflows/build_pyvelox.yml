@@ -74,6 +74,7 @@ jobs:
             bash {package}/scripts/setup-macos.sh install_folly
           CIBW_BEFORE_ALL_LINUX: >
             mkdir -p /output/.ccache &&
+            ls -l /host &&
             cp -Rv /host${{ github.workspace }}/.ccache/* /output/.ccache &&
             ls /output/.ccache &&
             ccache -s
