@@ -58,6 +58,10 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
           submodules: recursive
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+    
       - name: "Determine Version"
         if: ${{ !inputs.version && github.event_name != 'pull_request' }}
         id: version
@@ -121,6 +125,7 @@ jobs:
           output-dir: wheelhouse
 
       - name: "Create sdist"
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           python setup.py sdist --dist-dir wheelhouse
 
