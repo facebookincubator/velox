@@ -14,16 +14,10 @@
 
 name: Build Pyvelox Wheels
 
-on: 
-  push:
-    branches:
-      - main
-    paths:
-      - 'velox/**'
-      - '!velox/docs/**'
-      - 'third_party/**'
-      - 'pyvelox/**'
-      - '.github/workflows/build_pyvelox.yml'
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 0 * * *'
   pull_request:
     paths:
       - 'velox/**'
