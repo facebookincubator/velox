@@ -51,9 +51,9 @@ jobs:
         id: restore-cache
         with:
           path: ".ccache"
-          key: ccache-wheels-${{ github.sha }}
+          key: ccache-wheels-${{ matrix.os }}-${{ github.sha }}
           restore-keys: |
-            ccache-wheels-
+            ccache-wheels-${{ matrix.os }}-
 
       - if: matrix.os == 'macos-11'
         run: |
@@ -72,9 +72,11 @@ jobs:
           CIBW_BEFORE_ALL_MACOS: >
             bash {package}/scripts/setup-macos.sh && 
             bash {package}/scripts/setup-macos.sh install_folly
+          CIBW_BEFORE_ALL_LINUX: >
+            cp -R /host/${{ github.workspace }}/.ccache /output/.ccache
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
           CIBW_TEST_SKIP: "*macos*"
-          CCACHE_DIR: "${{ matrix.os != 'macos-11' && '/host/' || '' }}${{ github.workspace }}/.ccache"
+          CCACHE_DIR: "${{ matrix.os != 'macos-11' && '/output' || github.workspace }}/.ccache"
         with:
           output-dir: wheelhouse
 
@@ -82,8 +84,8 @@ jobs:
         uses: actions/cache/save@v3
         id: cache
         with:
-          path: ".ccache"
-          key: ccache-wheels-${{ github.sha }}
+          path: "${{ matrix.os != 'macos-11' && 'wheelhouse/' || '' }}.ccache"
+          key: ccache-wheels-${{ matrix.os }}-${{ github.sha }}
 
       - uses: actions/upload-artifact@v3
         with:
