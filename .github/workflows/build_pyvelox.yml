@@ -73,9 +73,9 @@ jobs:
             bash {package}/scripts/setup-macos.sh && 
             bash {package}/scripts/setup-macos.sh install_folly
           CIBW_BEFORE_ALL_LINUX: >
-            mkdir -p /output/.ccache &&
+            mkdir -p /output &&
             ls -la /host${{ github.workspace }} &&
-            cp -Rv /host${{ github.workspace }}/.ccache/* /output/.ccache &&
+            cp -Rv /host${{ github.workspace }}/.ccache /output/.ccache &&
             ls /output/.ccache &&
             ccache -s
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
