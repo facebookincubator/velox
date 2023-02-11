@@ -23,6 +23,11 @@ on:
       ref:
         description: 'git ref to build'
         required: false
+      publish:
+        description: 'publish to PyPI'
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: '15 0 * * *'
   pull_request:
@@ -114,11 +119,17 @@ jobs:
           BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
         with:
           output-dir: wheelhouse
+
+      - name: "Create sdist"
+        run: |
+          python setup.py sdist --dist-dir wheelhouse
+
       - name: "Move .ccache to workspace"
         if: matrix.os != 'macos-11'
         run: |
           mkdir -p .ccache
           cp -R ./wheelhouse/.ccache/* .ccache
+
       - name: "Save ccache"
         uses: actions/cache/save@v3
         id: cache
@@ -129,4 +140,29 @@ jobs:
       - uses: actions/upload-artifact@v3
         with:
           name: wheels
-          path: ./wheelhouse/*.whl
+          path: |
+            ./wheelhouse/*.whl
+            ./wheelhouse/*.tar.gz
+
+  publish_wheels:
+    name: Publish Wheels to PyPI
+    if: ${{ github.event_name == 'schedule' || inputs.publish }}
+    needs: build_wheels
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: wheels
+          path: ./wheelhouse
+      
+      - run: ls wheelhouse
+      
+      - uses: actions/setupo-python@v3
+        with:
+          python-version: 3.10
+
+      - name: Publish a Python distribution to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.6.4
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages_dir: wheelhouse 
