@@ -106,7 +106,6 @@ jobs:
           CIBW_BEFORE_ALL_LINUX: >
             mkdir -p /output &&
             cp -Rv /host${{ github.workspace }}/.ccache /output/.ccache &&
-            ccache -o cache_dir="/output/.ccache" &&
             ccache -s
           CIBW_ENVIRONMENT_PASS_LINUX: CCACHE_DIR BUILD_VERSION
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
