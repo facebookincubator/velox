@@ -35,6 +35,7 @@ ROOT_DIR = Path(__file__).parent.resolve()
 with open("README.md") as f:
     readme = f.read()
 
+
 # Override build directory
 class BuildCommand(distutils.command.build.build):
     def initialize_options(self):
