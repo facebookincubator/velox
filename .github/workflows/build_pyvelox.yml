@@ -78,12 +78,12 @@ jobs:
           LAST_TAG=$(git describe --tags --match "pyvelox-v[0-9]*" --abbrev=0 || echo $INITIAL_COMMIT)
           COMMITS_SINCE_TAG=$(git rev-list --count ${LAST_TAG}..HEAD)
 
-          if [ $LAST_TAG = $INITIAL_COMMIT ]; then
+          if [ "$LAST_TAG" = "$INITIAL_COMMIT" ]; then
             VERSION=$BASE_VERSION
           else
             VERSION=$(echo $LAST_TAG | sed '/pyvelox-v//')
           fi
-          NEXT_VERSION=$(echo $VERSION | awk -F. -v OFS=. '{$NF=$NF++ ; print}')
+          NEXT_VERSION=$(echo $VERSION | awk -F. -v OFS=. '{$NF++ ; print}')
           echo "build_version=${NEXT_VERSION}.dev${COMMITS_SINCE_TAG}" >> $GITHUB_OUTPUT
           
       - run: mkdir -p .ccache
@@ -102,6 +102,8 @@ jobs:
 
       - name: "Create sdist"
         if: matrix.os == 'ubuntu-22.04'
+        env:
+          BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
         run: |
           python setup.py sdist --dist-dir wheelhouse
                   
