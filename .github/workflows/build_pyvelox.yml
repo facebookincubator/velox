@@ -166,7 +166,7 @@ jobs:
       
       - run: ls wheelhouse
 
-      - uses: actions/setupo-python@v3
+      - uses: actions/setup-python@v3
         with:
           python-version: 3.10
 
