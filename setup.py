@@ -165,7 +165,7 @@ setup(
     url="https://github.com/facebookincubator/velox",
     author="Meta",
     author_email="velox@fb.com",
-    license="BSD",
+    license="Apache License 2.0",
     install_requires=[
         "cffi",
         "typing",
@@ -176,7 +176,7 @@ setup(
     classifiers=[
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: BSD License",
+        'License :: OSI Approved :: Apache Software License',
         "Operating System :: POSIX :: Linux",
         "Programming Language :: C++",
         "Programming Language :: Python :: 3.7",
