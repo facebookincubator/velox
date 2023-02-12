@@ -32,6 +32,8 @@ from setuptools.command.build_ext import build_ext
 
 ROOT_DIR = Path(__file__).parent.resolve()
 
+with open('README.md') as f:
+    readme = f.read()
 
 # Override build directory
 class BuildCommand(distutils.command.build.build):
@@ -158,6 +160,8 @@ setup(
     name="pyvelox",
     version=VERSION,
     description="Python bindings and extensions for Velox",
+    long_description=readme,
+    long_description_content_type='text/markdown',
     url="https://github.com/facebookincubator/velox",
     author="Meta",
     author_email="velox@fb.com",
