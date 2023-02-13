@@ -102,6 +102,7 @@ class RowReaderOptions {
   std::shared_ptr<folly::Executor> decodingExecutor_;
   std::shared_ptr<folly::Executor> ioExecutor_;
   bool appendRowNumberColumn_ = false;
+  bool fillRowNumberRange_ = false;
 
  public:
   RowReaderOptions(const RowReaderOptions& other) {
@@ -116,6 +117,7 @@ class RowReaderOptions {
     returnFlatVector_ = other.returnFlatVector_;
     flatmapNodeIdAsStruct_ = other.flatmapNodeIdAsStruct_;
     appendRowNumberColumn_ = other.appendRowNumberColumn_;
+    fillRowNumberRange_ = other.fillRowNumberRange_;
   }
 
   RowReaderOptions() noexcept
@@ -285,8 +287,20 @@ class RowReaderOptions {
     appendRowNumberColumn_ = value;
   }
 
+  /*
+   * Set to true, if you want to fill in the start/end rowNumber in the
+   * Batch::RowNumRange.
+   */
+  void setFillRowNumberRange(bool value) {
+    fillRowNumberRange_ = value;
+  }
+
   bool getAppendRowNumberColumn() const {
     return appendRowNumberColumn_;
+  }
+
+  bool getFillRowNumberRange() const {
+    return fillRowNumberRange_;
   }
 
   const std::shared_ptr<folly::Executor>& getDecodingExecutor() const {
