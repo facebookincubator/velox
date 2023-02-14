@@ -405,7 +405,9 @@ TEST_F(VectorFuzzerTest, row) {
 
   // Composable API.
   vector = fuzzer.fuzzRow(
-      {fuzzer.fuzzFlat(REAL(), 100), fuzzer.fuzzFlat(BIGINT(), 100)}, 100);
+      {fuzzer.fuzzFlat(REAL(), 100), fuzzer.fuzzFlat(BIGINT(), 100)},
+      std::vector<std::string>{"", ""},
+      100);
   ASSERT_TRUE(vector->type()->kindEquals(ROW({REAL(), BIGINT()})));
   ASSERT_TRUE(vector->mayHaveNulls());
 }
