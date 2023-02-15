@@ -67,7 +67,7 @@ if(VELOX_ENABLE_ARROW)
   ExternalProject_Add(
     arrow_ep
     PREFIX ${ARROW_PREFIX}
-    URL "https://dlcdn.apache.org/arrow/arrow-8.0.0/apache-arrow-8.0.0.tar.gz"
+    URL "https://github.com/apache/arrow/archive/refs/tags/apache-arrow-11.0.0.tar.gz"
     SOURCE_SUBDIR cpp
     CMAKE_ARGS ${ARROW_CMAKE_ARGS}
     BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a ${ARROW_LIBDIR}/libparquet.a
