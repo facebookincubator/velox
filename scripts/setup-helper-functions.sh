@@ -48,6 +48,7 @@ function github_checkout {
 #   aarch64: Target general 64 bit arm cpus.
 #   avx:     Target Intel CPUs with AVX.
 #   sse:     Target Intel CPUs with sse.
+#   custom:  No target CPU flags only ADDITIONAL_FLAGS flags. 
 # Echo's the appropriate compiler flags which can be captured as so
 # CXX_FLAGS=$(get_cxx_flags) or
 # CXX_FLAGS=$(get_cxx_flags "avx")
@@ -114,6 +115,10 @@ function get_cxx_flags {
     "aarch64")
       echo -n "-mcpu=neoverse-n1 -std=c++17 $ADDITIONAL_FLAGS"
     ;;
+
+    "custom")
+      echo -n "-std=c++17 $ADDITIONAL_FLAGS"
+    ;;
   *)
     echo -n "Architecture not supported!"
   esac
@@ -128,7 +133,8 @@ function cmake_install {
   fi
   mkdir -p "${BINARY_DIR}"
   CPU_TARGET="${CPU_TARGET:-avx}"
-  COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
+  CUSTOM_CXX_FLAGS="${CUSTOM_CXX_FLAGS:-''}"
+  COMPILER_FLAGS="$(get_cxx_flags $CPU_TARGET) ${CUSTOM_CXX_FLAGS}"
 
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
   cmake -Wno-dev -B"${BINARY_DIR}" \
