@@ -133,7 +133,7 @@ function cmake_install {
   fi
   mkdir -p "${BINARY_DIR}"
   CPU_TARGET="${CPU_TARGET:-avx}"
-  CUSTOM_CXX_FLAGS="${CUSTOM_CXX_FLAGS:-''}"
+  CUSTOM_CXX_FLAGS="${CUSTOM_CXX_FLAGS:-}"
   COMPILER_FLAGS="$(get_cxx_flags $CPU_TARGET) ${CUSTOM_CXX_FLAGS}"
 
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
