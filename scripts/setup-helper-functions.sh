@@ -59,7 +59,7 @@ function get_cxx_flags {
   OS=$(uname)
   local MACHINE
   MACHINE=$(uname -m)
-  ADDITIONAL_FLAGS="-Wno-register -Wno-deprecated-register"
+  ADDITIONAL_FLAGS=""
 
   if [ -z "$CPU_ARCH" ]; then
 
@@ -81,7 +81,7 @@ function get_cxx_flags {
       fi
 
     # On MacOs prevent the flood of translation visibility settings warnings.
-    ADDITIONAL_FLAGS="${ADDITIONAL_FLAGS} -fvisibility=hidden -fvisibility-inlines-hidden"
+    ADDITIONAL_FLAGS="-fvisibility=hidden -fvisibility-inlines-hidden"
     else [ "$OS" = "Linux" ];
 
       local CPU_CAPABILITIES
