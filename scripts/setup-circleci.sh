@@ -18,7 +18,7 @@ set -efx -o pipefail
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 CPU_TARGET="${CPU_TARGET:-avx}"
-CUSTOM_CXX_FLAGS="${CUSTOM_CXX_FLAGS:-''}"
+CUSTOM_CXX_FLAGS="${CUSTOM_CXX_FLAGS:-}"
 GCC_TOOLSET_PKG="${GCC_TOOLSET_PKG:-'gcc-toolset-9'}"
 NPROC="${NPROC:-$(getconf _NPROCESSORS_ONLN)}"
 
