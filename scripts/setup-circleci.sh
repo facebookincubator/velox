@@ -17,10 +17,13 @@ set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-helper-functions.sh
 CPU_TARGET="${CPU_TARGET:-avx}"
-NPROC=$(getconf _NPROCESSORS_ONLN)
-export CFLAGS=$(get_cxx_flags $CPU_TARGET)  # Used by LZO.
+CUSTOM_CXX_FLAGS="${CUSTOM_CXX_FLAGS:-''}"
+GCC_TOOLSET_PKG="${GCC_TOOLSET_PKG:-'gcc-toolset-9'}"
+NPROC="${NPROC:-$(getconf _NPROCESSORS_ONLN)}"
+
+source $SCRIPTDIR/setup-helper-functions.sh
+export CFLAGS="$(get_cxx_flags $CPU_TARGET) $CUSTOM_CXX_FLAGS"  # Used by LZO.
 export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
 
@@ -30,9 +33,9 @@ function dnf_install {
 
 dnf_install epel-release dnf-plugins-core # For ccache, ninja
 dnf config-manager --set-enabled powertools
-dnf_install ninja-build ccache gcc-toolset-9 git wget which libevent-devel \
+dnf_install ninja-build ccache git wget which libevent-devel \
   openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
-  libdwarf-devel curl-devel libicu-devel
+  libdwarf-devel curl-devel libicu-devel $GCC_TOOLSET_PKG
 
 dnf remove -y gflags
 
@@ -45,7 +48,7 @@ dnf_install conda
 pip3 install sphinx sphinx-tabs breathe sphinx_rtd_theme
 
 # Activate gcc9; enable errors on unset variables afterwards.
-source /opt/rh/gcc-toolset-9/enable || exit 1
+source /opt/rh/$GCC_TOOLSET_PKG/enable || exit 1
 set -u
 
 function cmake_install {
