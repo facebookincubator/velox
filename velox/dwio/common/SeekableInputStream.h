@@ -124,7 +124,8 @@ class SeekableFileInputStream : public SeekableInputStream {
       uint64_t offset,
       uint64_t byteCount,
       memory::MemoryPool& pool,
-      LogType logType);
+      LogType logType,
+      uint64_t blockSize = 0);
   ~SeekableFileInputStream() override = default;
 
   virtual bool Next(const void** data, int32_t* size) override;

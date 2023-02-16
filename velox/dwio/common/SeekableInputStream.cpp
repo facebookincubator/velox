@@ -180,18 +180,23 @@ size_t SeekableArrayInputStream::positionSize() {
   return 1;
 }
 
+static uint64_t computeBlock(uint64_t request, uint64_t length) {
+  return std::min(length, request == 0 ? 256 * 1024 : request);
+}
+
 SeekableFileInputStream::SeekableFileInputStream(
     std::shared_ptr<ReadFileInputStream> input,
     uint64_t offset,
     uint64_t byteCount,
     memory::MemoryPool& _pool,
-    LogType logType)
+    LogType logType,
+    uint64_t _blockSize)
     : pool(_pool),
       input(std::move(input)),
       logType(logType),
       start(offset),
       length(byteCount),
-      blockSize(input->getNaturalReadSize()),
+      blockSize(computeBlock(_blockSize, length)),
       buffer{pool} {
   position = 0;
   pushBack = 0;
