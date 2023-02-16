@@ -16,6 +16,7 @@
 
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
+#include "velox/functions/prestosql/SIMDJsonFunctions.h"
 
 namespace facebook::velox::functions {
 void registerJsonFunctions() {
@@ -39,4 +40,39 @@ void registerJsonFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, "json_parse");
 }
 
+void registerSIMDJsonFunctions() {
+  registerType("json", std::make_unique<const JsonTypeFactories>());
+
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, bool>(
+      {"simd_json_array_contains"});
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, int64_t>(
+      {"simd_json_array_contains"});
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, double>(
+      {"simd_json_array_contains"});
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, Varchar>(
+      {"simd_json_array_contains"});
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Varchar, bool>(
+      {"simd_json_array_contains"});
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Varchar, int64_t>(
+      {"simd_json_array_contains"});
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Varchar, double>(
+      {"simd_json_array_contains"});
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Varchar, Varchar>(
+      {"simd_json_array_contains"});
+
+  registerFunction<SIMDJsonParseFunction, Varchar, Varchar>({"simd_json_parse"});
+  registerFunction<SIMDJsonExtractScalarFunction, Varchar, Varchar, Varchar>(
+      {"simd_json_extract_scalar"});
+  registerFunction<SIMDJsonValidFunction, int64_t, Varchar>({"simd_json_valid"});
+  {
+    registerFunction<SIMDJsonArrayLengthFunction, int64_t, Varchar>(
+        {"simd_json_array_length"});
+    registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
+        {"simd_json_array_length"});
+  }
+  {
+    registerFunction<SIMDJsonKeysFunction, Varchar, Json>({"simd_json_keys"});
+    registerFunction<SIMDJsonKeysFunction, Varchar, Varchar>({"simd_json_keys"});
+  }
+}
 } // namespace facebook::velox::functions

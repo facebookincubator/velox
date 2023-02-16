@@ -60,6 +60,8 @@ add_executable(
   RepeatTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
+  SimdJsonFunctionsTest.cpp
+  SimdJsonExtractScalarTest.cpp
   SliceTest.cpp
   SplitTest.cpp
   StringFunctionsTest.cpp

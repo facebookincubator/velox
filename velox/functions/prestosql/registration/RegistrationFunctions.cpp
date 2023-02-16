@@ -24,6 +24,7 @@ extern void registerComparisonFunctions();
 extern void registerArrayFunctions();
 extern void registerMapFunctions();
 extern void registerJsonFunctions();
+extern void registerSIMDJsonFunctions();
 extern void registerHyperLogFunctions();
 extern void registerGeneralFunctions();
 extern void registerDateTimeFunctions();
@@ -57,6 +58,10 @@ void registerJsonFunctions() {
   functions::registerJsonFunctions();
 }
 
+void registerSIMDJsonFunctions() {
+  functions::registerSIMDJsonFunctions();
+}
+
 void registerHyperLogFunctions() {
   functions::registerHyperLogFunctions();
 }
@@ -87,6 +92,7 @@ void registerAllScalarFunctions() {
   registerComparisonFunctions();
   registerMapFunctions();
   registerArrayFunctions();
+  registerSIMDJsonFunctions();
   registerJsonFunctions();
   registerHyperLogFunctions();
   registerGeneralFunctions();

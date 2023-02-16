@@ -22,6 +22,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 endif()
 
 add_subdirectory(xsimd)
+add_subdirectory(simdjson)
 
 if(VELOX_ENABLE_ARROW)
   find_package(Thrift)

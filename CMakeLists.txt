@@ -451,5 +451,8 @@ include_directories(.)
 # generates an installable makefile.
 install(FILES velox/type/Type.h DESTINATION "include/velox")
 
+include_directories(SYSTEM
+                    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/simdjson/include)
+
 add_subdirectory(third_party)
 add_subdirectory(velox)
