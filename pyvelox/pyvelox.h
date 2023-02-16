@@ -122,17 +122,17 @@ static VectorPtr variantsToFlatVector(
 
 template <TypeKind T>
 static VectorPtr createDictionaryVector(
-    BufferPtr indices,
+    BufferPtr baseVector,
     VectorPtr values,
     facebook::velox::memory::MemoryPool* pool) {
   using NativeType = typename TypeTraits<T>::NativeType;
-  size_t length = indices->size() / sizeof(vector_size_t);
+  size_t length = baseVector->size() / sizeof(vector_size_t);
   return std::make_shared<DictionaryVector<NativeType>>(
       pool,
       /*nulls=*/nullptr,
       length,
       std::move(values),
-      std::move(indices));
+      std::move(baseVector));
 }
 
 static inline VectorPtr pyListToVector(
@@ -400,7 +400,8 @@ static void addVectorBindings(
             return v->hashValueAt(idx);
           })
       .def("encoding", &BaseVector::encoding)
-      .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); });
+      .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); })
+      .def("resize", &BaseVector::resize);
 
   for (int8_t t = 0; t <= static_cast<int8_t>(TypeKind::INTERVAL_DAY_TIME);
        t++) {
@@ -433,26 +434,26 @@ static void addVectorBindings(
     return pyToConstantVector(
         obj, length, PyVeloxContext::getInstance().pool());
   });
-  m.def("dictionary_vector", [](VectorPtr values, py::list& indices_list) {
-    BufferPtr indices_buffer = AlignedBuffer::allocate<vector_size_t>(
-        indices_list.size(), PyVeloxContext::getInstance().pool());
-    vector_size_t* indices_ptr = indices_buffer->asMutable<vector_size_t>();
-    for (size_t i = 0; i < indices_list.size(); i++) {
-      if (!py::isinstance<py::int_>(indices_list[i]))
-        throw py::type_error("Found an index that's not an integer");
-      vector_size_t idx = py::cast<vector_size_t>(indices_list[i]);
-      if (idx < 0 || idx >= values->size()) {
-        throw std::out_of_range("Index out of range");
-      }
-      indices_ptr[i] = py::cast<vector_size_t>(indices_list[i]);
-    }
-    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        createDictionaryVector,
-        values->typeKind(),
-        std::move(indices_buffer),
-        std::move(values),
-        PyVeloxContext::getInstance().pool());
-  });
+  m.def(
+      "dictionary_vector",
+      [](VectorPtr baseVector, const py::list& indices_list) {
+        BufferPtr indices_buffer = AlignedBuffer::allocate<vector_size_t>(
+            indices_list.size(), PyVeloxContext::getInstance().pool());
+        vector_size_t* indices_ptr = indices_buffer->asMutable<vector_size_t>();
+        for (size_t i = 0; i < indices_list.size(); i++) {
+          if (!py::isinstance<py::int_>(indices_list[i]))
+            throw py::type_error("Found an index that's not an integer");
+          vector_size_t idx = py::cast<vector_size_t>(indices_list[i]);
+          checkBounds(baseVector, idx);
+          indices_ptr[i] = py::cast<vector_size_t>(indices_list[i]);
+        }
+        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            createDictionaryVector,
+            baseVector->typeKind(),
+            std::move(indices_buffer),
+            std::move(baseVector),
+            PyVeloxContext::getInstance().pool());
+      });
 }
 
 static void addExpressionBindings(
