@@ -275,6 +275,10 @@ class Aggregate {
     return reinterpret_cast<T*>(group + offset_);
   }
 
+  inline char* valueStartPos(char* group) const {
+    return group + offset_;
+  }
+
   template <typename T>
   static uint64_t* getRawNulls(T* vector) {
     if (vector->mayHaveNulls()) {
