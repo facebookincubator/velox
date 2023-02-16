@@ -158,9 +158,17 @@ Operator::translators() {
 std::unique_ptr<Operator> Operator::fromPlanNode(
     DriverCtx* ctx,
     int32_t id,
-    const core::PlanNodePtr& planNode) {
+    const core::PlanNodePtr& planNode,
+    std::shared_ptr<ExchangeClient> exchangeClient) {
+  VELOX_CHECK_EQ(exchangeClient != nullptr, planNode->requiresExchangeClient());
   for (auto& translator : translators()) {
-    auto op = translator->toOperator(ctx, id, planNode);
+    std::unique_ptr<Operator> op;
+    if (planNode->requiresExchangeClient()) {
+      op = translator->toOperator(ctx, id, planNode, exchangeClient);
+    } else {
+      op = translator->toOperator(ctx, id, planNode);
+    }
+
     if (op) {
       return op;
     }
@@ -311,7 +319,8 @@ column_index_t exprToChannel(
   if (dynamic_cast<const core::ConstantTypedExpr*>(expr)) {
     return kConstantChannel;
   }
-  VELOX_CHECK(false, "Expression must be field access or constant");
+  VELOX_FAIL(
+      "Expression must be field access or constant, got: {}", expr->toString());
   return 0; // not reached.
 }
 

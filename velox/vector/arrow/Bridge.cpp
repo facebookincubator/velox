@@ -141,7 +141,7 @@ void setUniqueChild(
 // Release function for ArrowArray. Arrow standard requires it to recurse down
 // to children and dictionary arrays, and set release and private_data to null
 // to signal it has been released.
-static void bridgeRelease(ArrowArray* arrowArray) {
+static void releaseArrowArray(ArrowArray* arrowArray) {
   if (!arrowArray || !arrowArray->release) {
     return;
   }
@@ -175,7 +175,7 @@ static void bridgeRelease(ArrowArray* arrowArray) {
 // Release function for ArrowSchema. Arrow standard requires it to recurse down
 // to all children, and set release and private_data to null to signal it has
 // been released.
-static void bridgeSchemaRelease(ArrowSchema* arrowSchema) {
+static void releaseArrowSchema(ArrowSchema* arrowSchema) {
   if (!arrowSchema || !arrowSchema->release) {
     return;
   }
@@ -426,6 +426,7 @@ void exportFlat(
     case TypeKind::SMALLINT:
     case TypeKind::INTEGER:
     case TypeKind::BIGINT:
+    case TypeKind::DATE:
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
     case TypeKind::SHORT_DECIMAL:
@@ -611,7 +612,7 @@ void exportBase(
       VELOX_NYI("{} cannot be exported to Arrow yet.", vec.encoding());
   }
   out.private_data = holder.release();
-  out.release = bridgeRelease;
+  out.release = releaseArrowArray;
 }
 
 } // namespace
@@ -722,7 +723,7 @@ void exportToArrow(const VectorPtr& vec, ArrowSchema& arrowSchema) {
   }
 
   // Set release callback.
-  arrowSchema.release = bridgeSchemaRelease;
+  arrowSchema.release = releaseArrowSchema;
   arrowSchema.private_data = bridgeHolder.release();
 }
 

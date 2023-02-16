@@ -60,13 +60,24 @@ class Window : public Operator {
   }
 
  private:
+  // Used for k preceding/following frames. Index is the column index if k is a
+  // column. value is used to read column values from the column index when k
+  // is a column. The field constant stores constant k values.
+  struct FrameChannelArg {
+    column_index_t index;
+    VectorPtr value;
+    std::optional<int64_t> constant;
+  };
+
   // Structure for the window frame for each function.
   struct WindowFrame {
     const core::WindowNode::WindowType type;
     const core::WindowNode::BoundType startType;
     const core::WindowNode::BoundType endType;
-    const std::optional<column_index_t> startChannel;
-    const std::optional<column_index_t> endChannel;
+    // Set only when startType is BoundType::kPreceding or kFollowing.
+    const std::optional<FrameChannelArg> start;
+    // Set only when endType is BoundType::kPreceding or kFollowing.
+    const std::optional<FrameChannelArg> end;
   };
 
   // Helper function to create WindowFunction and frame objects
@@ -123,6 +134,29 @@ class Window : public Operator {
   void callApplyLoop(
       vector_size_t numOutputRows,
       const std::vector<VectorPtr>& windowOutputs);
+
+  // Helper function to convert WindowNode::Frame to Window::WindowFrame.
+  WindowFrame createWindowFrame(
+      core::WindowNode::Frame frame,
+      const RowTypePtr& inputType);
+
+  // Helper function to update frame bounds for kPreceding, kFollowing frames.
+  void updateKRowsFrameBounds(
+      bool isKPreceding,
+      const FrameChannelArg& frameArg,
+      vector_size_t startRow,
+      vector_size_t numRows,
+      vector_size_t* rawFrameBounds);
+
+  // Helper function to update frame bounds.
+  void updateFrameBounds(
+      const WindowFrame& windowFrame,
+      const bool isStartBound,
+      const vector_size_t startRow,
+      const vector_size_t numRows,
+      const vector_size_t* rawPeerStarts,
+      const vector_size_t* rawPeerEnds,
+      vector_size_t* rawFrameBounds);
 
   bool finished_ = false;
   const vector_size_t outputBatchSizeInBytes_;
@@ -200,6 +234,16 @@ class Window : public Operator {
   std::vector<BufferPtr> frameStartBuffers_;
   std::vector<BufferPtr> frameEndBuffers_;
 
+  // Frame types for kPreceding or kFollowing could result in empty
+  // frames if the frameStart > frameEnds, or frameEnds < firstPartitionRow
+  // or frameStarts > lastPartitionRow. Such frames usually evaluate to NULL
+  // in the window function.
+  // This SelectivityVector captures the valid (non-empty) frames in the
+  // buffer being worked on. The window function can use this to compute
+  // output values.
+  // There is one SelectivityVector per window function.
+  std::vector<SelectivityVector> validFrames_;
+
   // Number of rows output from the WindowOperator so far. The rows
   // are output in the same order of the pointers in sortedRows. This
   // value is updated as the WindowFunction::apply() function is
@@ -219,6 +263,9 @@ class Window : public Operator {
   // cross getOutput boundaries they are saved in the operator.
   vector_size_t peerStartRow_ = 0;
   vector_size_t peerEndRow_ = 0;
+
+  // Tracks how far along the partition rows have been output.
+  vector_size_t partitionOffset_ = 0;
 };
 
 } // namespace facebook::velox::exec

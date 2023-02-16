@@ -125,6 +125,12 @@ class Expr {
       VectorPtr& result,
       bool topLevel = false);
 
+  void evalFlatNoNullsImpl(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result,
+      bool topLevel);
+
   // Simplified path for expression evaluation (flattens all vectors).
   void evalSimplified(
       const SelectivityVector& rows,
@@ -314,6 +320,11 @@ class Expr {
   void
   evalAll(const SelectivityVector& rows, EvalCtx& context, VectorPtr& result);
 
+  void evalAllImpl(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result);
+
   // Checks 'inputValues_' for peelable wrappers (constants,
   // dictionaries etc) and applies the function of 'this' to distinct
   // values as opposed to all values. Wraps the return value into a
@@ -341,18 +352,27 @@ class Expr {
       EvalCtx& context,
       LocalSelectivityVector& nullHolder);
 
-  // If this is a common subexpression, checks if there is a previously
-  // calculated result and populates the 'result'.
-  bool checkGetSharedSubexprValues(
-      const SelectivityVector& rows,
-      EvalCtx& context,
-      VectorPtr& result);
+  /// Returns true if this is a deterministic shared sub-expressions with at
+  /// least one input (i.e. not a constant or field access expression).
+  /// Evaluation of such expression is optimized by memoizing and reusing
+  /// the results of prior evaluations. That logic is implemented in
+  /// 'evaluateSharedSubexpr'.
+  bool shouldEvaluateSharedSubexp() const {
+    return deterministic_ && isMultiplyReferenced_ && !inputs_.empty();
+  }
 
-  // If this is a common subexpression, stores the newly calculated result.
-  void checkUpdateSharedSubexprValues(
+  /// Evaluate common sub-expression. Check if sharedSubexprValues_ already has
+  /// values for all 'rows'. If not, compute missing values.
+  ///
+  /// The callers of this method must ensure that 'rows' are comparable between
+  /// invocations, i.e. take care when evaluating CSEs on lazy vectors or
+  /// vectors with encodings.
+  template <typename TEval>
+  void evaluateSharedSubexpr(
       const SelectivityVector& rows,
       EvalCtx& context,
-      const VectorPtr& result);
+      VectorPtr& result,
+      TEval eval);
 
   void evalSimplifiedImpl(
       const SelectivityVector& rows,
@@ -531,6 +551,13 @@ class ExprSet {
   /// @param compact If true, uses one-line representation for each expression.
   /// Otherwise, prints a tree of expressions one node per line.
   std::string toString(bool compact = true) const;
+
+  /// Returns evaluation statistics as a map keyed on function or special form
+  /// name. If a function or a special form occurs in the expression
+  /// multiple times, the statistics will be aggregated across all calls.
+  /// Statistics will be missing for functions and special forms that didn't get
+  /// evaluated.
+  std::unordered_map<std::string, exec::ExprStats> stats() const;
 
  protected:
   void clearSharedSubexprs();

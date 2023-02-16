@@ -16,49 +16,151 @@
 
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 
+#include "velox/connectors/hive/HivePartitionUtil.h"
+
 namespace facebook::velox::connector::hive {
 
 PartitionIdGenerator::PartitionIdGenerator(
     const RowTypePtr& inputType,
     std::vector<column_index_t> partitionChannels,
-    uint32_t maxPartitions)
+    uint32_t maxPartitions,
+    memory::MemoryPool* pool)
     : partitionChannels_(std::move(partitionChannels)),
       maxPartitions_(maxPartitions) {
-  VELOX_USER_CHECK_EQ(
-      partitionChannels_.size(),
-      1,
-      "Multiple partition keys are not supported yet.");
-  hasher_ = exec::VectorHasher::create(
-      inputType->childAt(partitionChannels_[0]), partitionChannels_[0]);
+  VELOX_USER_CHECK(
+      !partitionChannels_.empty(), "There must be at least one partition key.");
+  for (auto channel : partitionChannels_) {
+    hashers_.emplace_back(
+        exec::VectorHasher::create(inputType->childAt(channel), channel));
+  }
+
+  std::vector<std::string> partitionKeyNames;
+  std::vector<TypePtr> partitionKeyTypes;
+  for (auto channel : partitionChannels_) {
+    partitionKeyNames.push_back(inputType->nameOf(channel));
+    partitionKeyTypes.push_back(inputType->childAt(channel));
+  }
+
+  partitionValues_ = BaseVector::create<RowVector>(
+      ROW(std::move(partitionKeyNames), std::move(partitionKeyTypes)),
+      maxPartitions_,
+      pool);
+  for (auto& key : partitionValues_->children()) {
+    key->resize(maxPartitions_);
+  }
 }
 
 void PartitionIdGenerator::run(
     const RowVectorPtr& input,
     raw_vector<uint64_t>& result) {
-  result.resize(input->size());
+  auto numRows = input->size();
+  result.resize(numRows);
+
+  // TODO Check that there are no nulls in the partition keys.
+
+  // Compute value IDs using VectorHashers and store these in 'result'.
+  computeValueIds(input, result);
+
+  // Convert value IDs in 'result' into partition IDs using partitionIds
+  // mapping. Update 'result' in place.
+
+  // TODO Optimize common use case where all records belong to the same
+  // partition. VectorHashers keep track of the number of unique values, hence,
+  // we can find out if there is only one unique value for each partition key.
+  for (auto i = 0; i < numRows; ++i) {
+    auto valueId = result[i];
+    auto it = partitionIds_.find(valueId);
+    if (it != partitionIds_.end()) {
+      result[i] = it->second;
+    } else {
+      uint64_t nextPartitionId = partitionIds_.size();
+      VELOX_USER_CHECK_LT(
+          nextPartitionId,
+          maxPartitions_,
+          "Exceeded limit of {} distinct partitions.",
+          maxPartitions_);
+
+      partitionIds_.emplace(valueId, nextPartitionId);
+      savePartitionValues(nextPartitionId, input, i);
+
+      result[i] = nextPartitionId;
+    }
+  }
+}
+
+std::string PartitionIdGenerator::partitionName(uint64_t partitionId) const {
+  return makePartitionName(partitionValues_, partitionId);
+}
+
+void PartitionIdGenerator::computeValueIds(
+    const RowVectorPtr& input,
+    raw_vector<uint64_t>& valueIds) {
   allRows_.resize(input->size());
   allRows_.setAll();
 
-  auto partitionVector = input->childAt(hasher_->channel())->loadedVector();
-  hasher_->decode(*partitionVector, allRows_);
-
-  if (!hasher_->computeValueIds(allRows_, result)) {
-    uint64_t range = hasher_->enableValueIds(1, kHasherReservePct);
-    VELOX_CHECK_NE(
-        range,
-        exec::VectorHasher::kRangeTooLarge,
-        "Number of requested IDs is out of range.");
-
-    VELOX_CHECK(
-        hasher_->computeValueIds(allRows_, result),
-        "Cannot assign new value IDs.");
+  bool rehash = false;
+  for (auto& hasher : hashers_) {
+    auto partitionVector = input->childAt(hasher->channel())->loadedVector();
+    hasher->decode(*partitionVector, allRows_);
+    if (!hasher->computeValueIds(allRows_, valueIds)) {
+      rehash = true;
+    }
   }
 
-  recentMaxId_ = *std::max_element(result.begin(), result.end());
-  maxId_ = std::max(maxId_, recentMaxId_);
+  if (!rehash) {
+    return;
+  }
 
-  VELOX_USER_CHECK_LE(
-      maxId_, maxPartitions_, "Exceeded limit of distinct partitions.");
+  uint64_t multiplier = 1;
+  for (auto& hasher : hashers_) {
+    multiplier = hasher->enableValueIds(multiplier, 50);
+
+    VELOX_CHECK_NE(
+        multiplier,
+        exec::VectorHasher::kRangeTooLarge,
+        "Number of requested IDs is out of range.");
+  }
+
+  for (auto& hasher : hashers_) {
+    const bool ok = hasher->computeValueIds(allRows_, valueIds);
+    VELOX_CHECK(ok);
+  }
+
+  updateValueToPartitionIdMapping();
+}
+
+void PartitionIdGenerator::updateValueToPartitionIdMapping() {
+  if (partitionIds_.empty()) {
+    return;
+  }
+
+  auto numPartitions = partitionIds_.size();
+
+  partitionIds_.clear();
+
+  raw_vector<uint64_t> newValueIds(numPartitions);
+  SelectivityVector rows(numPartitions);
+  for (auto i = 0; i < hashers_.size(); ++i) {
+    auto& hasher = hashers_[i];
+    hasher->decode(*partitionValues_->childAt(i), rows);
+    const bool ok = hasher->computeValueIds(rows, newValueIds);
+    VELOX_CHECK(ok);
+  }
+
+  for (auto i = 0; i < numPartitions; ++i) {
+    partitionIds_.emplace(newValueIds[i], i);
+  }
+}
+
+void PartitionIdGenerator::savePartitionValues(
+    uint64_t partitionId,
+    const RowVectorPtr& input,
+    vector_size_t row) {
+  for (auto i = 0; i < partitionChannels_.size(); ++i) {
+    auto channel = partitionChannels_[i];
+    partitionValues_->childAt(i)->copy(
+        input->childAt(channel).get(), partitionId, row, 1);
+  }
 }
 
 } // namespace facebook::velox::connector::hive

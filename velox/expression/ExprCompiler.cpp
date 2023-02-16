@@ -328,7 +328,7 @@ ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
     // If not, in case this expression is never hit at execution time (for
     // instance, if other arguments are all null in a function with default null
     // behavior), the query won't fail.
-    catch (const std::exception&) {
+    catch (const VeloxUserError&) {
     }
   }
   return expr;
@@ -409,7 +409,7 @@ ExprPtr compileExpression(
           "Found incompatible return types for '{}' ({} vs. {}) "
           "for input types ({}).",
           call->name(),
-          metadata.returnType(),
+          simpleFunctionEntry->type(),
           resultType,
           folly::join(", ", inputTypes));
       auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
@@ -444,7 +444,8 @@ ExprPtr compileExpression(
             folly::join(", ", inputTypes));
       } else {
         VELOX_FAIL(
-            "Scalar function {} not registered with arguments: ({}).  Found function registered with the following signatures:\n{}",
+            "Scalar function {} not registered with arguments: ({}). "
+            "Found function registered with the following signatures:\n{}",
             call->name(),
             folly::join(", ", inputTypes),
             folly::join("\n", signatures));

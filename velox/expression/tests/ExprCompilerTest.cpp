@@ -190,7 +190,8 @@ TEST_F(ExprCompilerTest, functionNameNotRegistered) {
 
   VELOX_ASSERT_THROW(
       compile(expression),
-      "Scalar function name not registered: not_registered_function, called with arguments: (VARCHAR, VARCHAR).");
+      "Scalar function name not registered: not_registered_function, "
+      "called with arguments: (VARCHAR, VARCHAR).");
 }
 
 TEST_F(ExprCompilerTest, functionSignatureNotRegistered) {
@@ -199,6 +200,18 @@ TEST_F(ExprCompilerTest, functionSignatureNotRegistered) {
 
   VELOX_ASSERT_THROW(
       compile(expression),
-      "Scalar function concat not registered with arguments: (BIGINT, BIGINT).  Found function registered with the following signatures:\n((varchar,varchar...) -> varchar)");
+      "Scalar function concat not registered with arguments: (BIGINT, BIGINT). "
+      "Found function registered with the following signatures:\n"
+      "((varchar,varchar...) -> varchar)");
+}
+
+TEST_F(ExprCompilerTest, constantFromFlatVector) {
+  auto expression = std::make_shared<core::ConstantTypedExpr>(
+      makeFlatVector<int64_t>({137, 23, -10}));
+
+  ASSERT_TRUE(expression->valueVector()->isConstantEncoding());
+
+  auto exprSet = compile(expression);
+  ASSERT_EQ("137:BIGINT", compile(expression)->toString());
 }
 } // namespace facebook::velox::exec::test

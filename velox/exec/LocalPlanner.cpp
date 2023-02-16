@@ -15,6 +15,7 @@
  */
 #include "velox/exec/LocalPlanner.h"
 #include "velox/core/PlanFragment.h"
+#include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/CrossJoinBuild.h"
@@ -182,6 +183,9 @@ uint32_t maxDrivers(const DriverFactory& driverFactory) {
       if (!values->isParallelizable()) {
         return 1;
       }
+    } else if (std::dynamic_pointer_cast<const core::ArrowStreamNode>(node)) {
+      // ArrowStream node must run single-threaded.
+      return 1;
     } else if (
         auto limit = std::dynamic_pointer_cast<const core::LimitNode>(node)) {
       // final limit must run single-threaded
@@ -305,6 +309,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::ValuesNode>(planNode)) {
       operators.push_back(std::make_unique<Values>(id, ctx.get(), valuesNode));
     } else if (
+        auto arrowStreamNode =
+            std::dynamic_pointer_cast<const core::ArrowStreamNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<ArrowStream>(id, ctx.get(), arrowStreamNode));
+    } else if (
         auto tableScanNode =
             std::dynamic_pointer_cast<const core::TableScanNode>(planNode)) {
       operators.push_back(
@@ -323,8 +332,10 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     } else if (
         auto exchangeNode =
             std::dynamic_pointer_cast<const core::ExchangeNode>(planNode)) {
+      // NOTE: the exchange client can only be used by one operator in a driver.
+      VELOX_CHECK_NOT_NULL(exchangeClient);
       operators.push_back(std::make_unique<Exchange>(
-          id, ctx.get(), exchangeNode, exchangeClient));
+          id, ctx.get(), exchangeNode, std::move(exchangeClient)));
     } else if (
         auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
@@ -417,7 +428,16 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
           assignUniqueIdNode->taskUniqueId(),
           assignUniqueIdNode->uniqueIdCounter()));
     } else {
-      auto extended = Operator::fromPlanNode(ctx.get(), id, planNode);
+      std::unique_ptr<Operator> extended;
+      if (planNode->requiresExchangeClient()) {
+        // NOTE: the exchange client can only be used by one operator in a
+        // driver.
+        VELOX_CHECK_NOT_NULL(exchangeClient);
+        extended = Operator::fromPlanNode(
+            ctx.get(), id, planNode, std::move(exchangeClient));
+      } else {
+        extended = Operator::fromPlanNode(ctx.get(), id, planNode);
+      }
       VELOX_CHECK(extended, "Unsupported plan node: {}", planNode->toString());
       operators.push_back(std::move(extended));
     }

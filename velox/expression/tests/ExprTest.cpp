@@ -87,8 +87,37 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return result;
   }
 
+  std::pair<
+      std::vector<VectorPtr>,
+      std::unordered_map<std::string, exec::ExprStats>>
+  evaluateMultipleWithStats(
+      const std::vector<std::string>& texts,
+      const RowVectorPtr& input) {
+    auto exprSet = compileMultiple(texts, asRowType(input->type()));
+
+    exec::EvalCtx context(execCtx_.get(), exprSet.get(), input.get());
+
+    SelectivityVector rows(input->size());
+    std::vector<VectorPtr> result(texts.size());
+    exprSet->eval(rows, context, result);
+    return {result, exprSet->stats()};
+  }
+
   VectorPtr evaluate(const std::string& text, const RowVectorPtr& input) {
     return evaluateMultiple({text}, input)[0];
+  }
+
+  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  evaluateWithStats(const std::string& expression, const RowVectorPtr& input) {
+    auto exprSet = compileExpression(expression, asRowType(input->type()));
+
+    SelectivityVector rows(input->size());
+    std::vector<VectorPtr> results(1);
+
+    exec::EvalCtx context(execCtx_.get(), exprSet.get(), input.get());
+    exprSet->eval(rows, context, results);
+
+    return {results[0], exprSet->stats()};
   }
 
   template <
@@ -885,8 +914,11 @@ TEST_F(ExprTest, csePartialEvaluation) {
   auto a = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto b = makeFlatVector<std::string>({"a", "b", "c", "d", "e"});
 
-  auto results = evaluateMultiple(
-      {"if (c0 >= 3, add_suffix(c1), 'n/a')", "add_suffix(c1)"},
+  auto [results, stats] = evaluateMultipleWithStats(
+      {
+          "if (c0 >= 3, add_suffix(c1), 'n/a')",
+          "add_suffix(c1)",
+      },
       makeRowVector({a, b}));
 
   auto expected =
@@ -896,6 +928,23 @@ TEST_F(ExprTest, csePartialEvaluation) {
   expected =
       makeFlatVector<std::string>({"a_xx", "b_xx", "c_xx", "d_xx", "e_xx"});
   assertEqualVectors(expected, results[1]);
+  EXPECT_EQ(5, stats.at("add_suffix").numProcessedRows);
+
+  std::tie(results, stats) = evaluateMultipleWithStats(
+      {
+          "if (c0 >= 3, add_suffix(c1), 'n/a')",
+          "if (c0 < 2, 'n/a', add_suffix(c1))",
+      },
+      makeRowVector({a, b}));
+
+  expected =
+      makeFlatVector<std::string>({"n/a", "n/a", "c_xx", "d_xx", "e_xx"});
+  assertEqualVectors(expected, results[0]);
+
+  expected =
+      makeFlatVector<std::string>({"n/a", "b_xx", "c_xx", "d_xx", "e_xx"});
+  assertEqualVectors(expected, results[1]);
+  EXPECT_EQ(4, stats.at("add_suffix").numProcessedRows);
 }
 
 TEST_F(ExprTest, csePartialEvaluationWithEncodings) {
@@ -1550,6 +1599,20 @@ TEST_F(ExprTest, swithExprSanityChecks) {
       evaluate("case c0 when 7 then 1 when 11 then 2 else 'hello' end", vector),
       "Else clause of a SWITCH statement must have the same type as 'then' clauses. "
       "Expected BIGINT, but got VARCHAR.");
+
+  // Unknown is not implicitly casted.
+  VELOX_ASSERT_THROW(
+      evaluate("case c0 when 7 then 1 when 11 then null else 3 end", vector),
+      "All then clauses of a SWITCH statement must have the same type. "
+      "Expected BIGINT, but got UNKNOWN.");
+
+  // Unknown is not implicitly casted.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "case c0 when 7 then  row_constructor(null, 1) when 11 then  row_constructor(1, null) end",
+          vector),
+      "All then clauses of a SWITCH statement must have the same type. "
+      "Expected ROW<c1:UNKNOWN,c2:BIGINT>, but got ROW<c1:BIGINT,c2:UNKNOWN>.");
 }
 
 TEST_F(ExprTest, switchExprWithNull) {
@@ -1580,7 +1643,7 @@ TEST_F(ExprTest, ifWithConstant) {
   vector_size_t size = 4;
 
   auto a = makeFlatVector<int32_t>({-1, -2, -3, -4});
-  auto b = makeConstant(variant(TypeKind::INTEGER), size); // 4 nulls
+  auto b = makeNullConstant(TypeKind::INTEGER, size); // 4 nulls
   auto result = evaluate("is_null(if(c0 > 0, c0, c1))", makeRowVector({a, b}));
   EXPECT_EQ(VectorEncoding::Simple::CONSTANT, result->encoding());
   EXPECT_EQ(true, result->as<ConstantVector<bool>>()->valueAt(0));
@@ -1983,7 +2046,7 @@ TEST_F(ExprTest, peelLazyDictionaryOverConstant) {
   auto c1 = makeFlatVector<int64_t>(5, [](auto row) { return row; });
 
   auto result = evaluate(
-      "if (not(is_null(if (c0 >= 0, c1, null))), coalesce(c0, 22), null)",
+      "if (not(is_null(if (c0 >= 0, c1, cast (null as bigint)))), coalesce(c0, 22), cast (null as bigint))",
       makeRowVector(
           {BaseVector::wrapInDictionary(
                nullptr, c0Indices, 5, wrapInLazyDictionary(c0)),
@@ -2134,7 +2197,7 @@ TEST_F(ExprTest, peeledConstant) {
       {BaseVector::wrapInDictionary(nullptr, indices, kSubsetSize, numbers),
        BaseVector::createConstant("Hans Pfaal", kBaseSize, execCtx_->pool())});
   auto result = std::dynamic_pointer_cast<SimpleVector<StringView>>(
-      evaluate("if (c0 % 4 = 0, c1, null)", row));
+      evaluate("if (c0 % 4 = 0, c1, cast (null as VARCHAR))", row));
   EXPECT_EQ(kSubsetSize, result->size());
   for (auto i = 0; i < kSubsetSize; ++i) {
     if (result->isNullAt(i)) {
@@ -2719,7 +2782,8 @@ TEST_F(ExprTest, flatNoNullsFastPath) {
 
   // If statement with 'then' or 'else' branch that can return null does not
   // support fast path.
-  exprSet = compileExpression("if (a > 10::integer, 0, null)", rowType);
+  exprSet = compileExpression(
+      "if (a > 10::integer, 0, cast (null as bigint))", rowType);
   ASSERT_EQ(1, exprSet->exprs().size());
   ASSERT_FALSE(exprSet->exprs()[0]->supportsFlatNoNullsFastPath())
       << exprSet->toString();
@@ -3152,4 +3216,173 @@ TEST_F(ExprTest, stdExceptionInVectorFunction) {
       "always_throws_vector_function(c0)",
       makeFlatVector<int32_t>({1, 2, 3}),
       AlwaysThrowsVectorFunction::kStdErrorMessage);
+}
+
+TEST_F(ExprTest, cseUnderTry) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int8_t>({31, 3, 31, 31, 2, std::nullopt}),
+  });
+
+  // All rows trigger overflow.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "72::tinyint * 31::tinyint <> 4 or 72::tinyint * 31::tinyint <> 5",
+          input),
+      "integer overflow: 72 * 31");
+
+  auto result = evaluate(
+      "try(72::tinyint * 31::tinyint <> 4 or 72::tinyint * 31::tinyint <> 5)",
+      input);
+  assertEqualVectors(makeNullConstant(TypeKind::BOOLEAN, 6), result);
+
+  // Only some rows trigger overflow.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "36::tinyint * c0 <> 4 or 36::tinyint * c0 <> 5 or 36::tinyint * c0 <> 6",
+          input),
+      "integer overflow: 36 * 31");
+
+  result = evaluate(
+      "try(36::tinyint * c0 <> 4 or 36::tinyint * c0 <> 5 or 36::tinyint * c0 <> 6)",
+      input);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>({
+          std::nullopt,
+          true,
+          std::nullopt,
+          std::nullopt,
+          true,
+          std::nullopt,
+      }),
+      result);
+}
+
+TEST_F(ExprTest, conjunctUnderTry) {
+  auto input = makeRowVector({
+      makeFlatVector<StringView>({"a"_sv, "b"_sv}),
+      makeFlatVector<bool>({true, true}),
+      makeFlatVector<bool>({true, true}),
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_constructor(like(c0, 'test', 'escape'), c1 OR c2)", input),
+      "Escape string must be a single character");
+
+  auto result = evaluate(
+      "try(array_constructor(like(c0, 'test', 'escape'), c1 OR c2))", input);
+  auto expected =
+      BaseVector::createNullConstant(ARRAY(BOOLEAN()), input->size(), pool());
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ExprTest, flatNoNullsFastPathWithCse) {
+  // Test CSE with flat-no-nulls fast path.
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+      makeFlatVector<int64_t>({8, 9, 10, 11, 12}),
+  });
+
+  // Make sure CSE "c0 + c1" is evaluated only once for each row.
+  auto [result, stats] = evaluateWithStats(
+      "if((c0 + c1) > 100::bigint, 100::bigint, c0 + c1)", input);
+
+  auto expected = makeFlatVector<int64_t>({9, 11, 13, 15, 17});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+
+  std::tie(result, stats) = evaluateWithStats(
+      "if((c0 + c1) >= 15::bigint, 100::bigint, c0 + c1)", input);
+
+  expected = makeFlatVector<int64_t>({9, 11, 13, 100, 100});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+}
+
+TEST_F(ExprTest, cseOverLazyDictionary) {
+  auto input = makeRowVector({
+      makeConstant<int64_t>(10, 5),
+      std::make_shared<LazyVector>(
+          pool(),
+          BIGINT(),
+          5,
+          std::make_unique<SimpleVectorLoader>([=](RowSet /*rows*/) {
+            return wrapInDictionary(
+                makeIndicesInReverse(5),
+                makeFlatVector<int64_t>({8, 9, 10, 11, 12}));
+          })),
+      makeFlatVector<int64_t>({1, 2, 10, 11, 12}),
+  });
+
+  // if (c1 > 10, c0 + c1, c0 - c1) is a null-propagating conditional CSE.
+  auto result = evaluate(
+      "if (c2 > 10::bigint, "
+      "   if (c1 > 10, c0 + c1, c0 - c1) + c2, "
+      "   if (c1 > 10, c0 + c1, c0 - c1) - c2)",
+      input);
+
+  auto expected = makeFlatVector<int64_t>({21, 19, -10, 12, 14});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ExprTest, cseOverConstant) {
+  auto input = makeRowVector({
+      makeConstant<int64_t>(123, 5),
+      makeConstant<int64_t>(-11, 5),
+  });
+
+  // Make sure CSE "c0 + c1" is evaluated only once for each row.
+  auto [result, stats] =
+      evaluateWithStats("if((c0 + c1) < 0::bigint, 0::bigint, c0 + c1)", input);
+
+  auto expected = makeConstant<int64_t>(112, 5);
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+}
+
+TEST_F(ExprTest, cseOverDictionary) {
+  auto indices = makeIndicesInReverse(5);
+  auto input = makeRowVector({
+      wrapInDictionary(indices, makeFlatVector<int64_t>({1, 2, 3, 4, 5})),
+      wrapInDictionary(indices, makeFlatVector<int64_t>({8, 9, 10, 11, 12})),
+  });
+
+  // Make sure CSE "c0 + c1" is evaluated only once for each row.
+  auto [result, stats] = evaluateWithStats(
+      "if((c0 + c1) > 100::bigint, 100::bigint, c0 + c1)", input);
+
+  auto expected = makeFlatVector<int64_t>({17, 15, 13, 11, 9});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+
+  std::tie(result, stats) = evaluateWithStats(
+      "if((c0 + c1) >= 15::bigint, 100::bigint, c0 + c1)", input);
+
+  expected = makeFlatVector<int64_t>({100, 100, 13, 11, 9});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+}
+
+TEST_F(ExprTest, cseOverDictionaryOverConstant) {
+  auto indices = makeIndicesInReverse(5);
+  auto input = makeRowVector({
+      wrapInDictionary(indices, makeFlatVector<int64_t>({1, 2, 3, 4, 5})),
+      wrapInDictionary(indices, makeConstant<int64_t>(100, 5)),
+  });
+
+  // Make sure CSE "c0 + c1" is evaluated only once for each row.
+  auto [result, stats] =
+      evaluateWithStats("if((c0 + c1) < 0::bigint, 0::bigint, c0 + c1)", input);
+
+  auto expected = makeFlatVector<int64_t>({105, 104, 103, 102, 101});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+
+  std::tie(result, stats) = evaluateWithStats(
+      "if((c0 + c1) < 103::bigint, 0::bigint, c0 + c1)", input);
+
+  expected = makeFlatVector<int64_t>({105, 104, 103, 0, 0});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
 }

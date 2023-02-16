@@ -31,7 +31,7 @@ struct SetWithNull {
     hasNull = false;
   }
 
-  std::unordered_set<T> set;
+  folly::F14FastSet<T> set;
   bool hasNull{false};
   static constexpr vector_size_t kInitialSetSize{128};
 };
@@ -123,7 +123,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
+      const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     memory::MemoryPool* pool = context.pool();
@@ -249,13 +249,12 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
         newElementNulls, newIndices, indicesCursor, baseLeftArray->elements());
     auto resultArray = std::make_shared<ArrayVector>(
         pool,
-        ARRAY(CppToType<T>::create()),
-        BufferPtr(nullptr),
+        outputType,
+        nullptr,
         rowCount,
         newOffsets,
         newLengths,
-        newElements,
-        0);
+        newElements);
     context.moveOrCopyResult(resultArray, rows, result);
   }
 

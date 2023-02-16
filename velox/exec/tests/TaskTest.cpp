@@ -17,6 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -627,6 +628,44 @@ TEST_F(TaskTest, supportsSingleThreadedExecution) {
   ASSERT_FALSE(task->supportsSingleThreadedExecution());
 }
 
+TEST_F(TaskTest, updateBroadCastOutputBuffers) {
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .project({"c0 % 10"})
+                  .partitionedOutputBroadcast({})
+                  .planFragment();
+  auto bufferManager = PartitionedOutputBufferManager::getInstance().lock();
+  {
+    auto task = std::make_shared<exec::Task>(
+        "t0", plan, 0, std::make_shared<core::QueryCtx>(driverExecutor_.get()));
+
+    task->start(task, 1, 1);
+
+    ASSERT_TRUE(task->updateBroadcastOutputBuffers(10, true /*noMoreBuffers*/));
+
+    // Calls after no-more-buffers are ignored.
+    ASSERT_FALSE(task->updateBroadcastOutputBuffers(11, false));
+
+    task->requestCancel();
+  }
+
+  {
+    auto task = std::make_shared<exec::Task>(
+        "t1", plan, 0, std::make_shared<core::QueryCtx>(driverExecutor_.get()));
+
+    task->start(task, 1, 1);
+
+    ASSERT_TRUE(task->updateBroadcastOutputBuffers(5, false));
+    ASSERT_TRUE(task->updateBroadcastOutputBuffers(10, false));
+
+    task->requestAbort();
+
+    // Calls after task has been removed from the buffer manager (via abort) are
+    // ignored.
+    ASSERT_FALSE(task->updateBroadcastOutputBuffers(15, true));
+  }
+}
+
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
   const int32_t numBatches = 10;
   std::vector<RowVectorPtr> dataBatches;
@@ -649,8 +688,6 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
   // Set up the test value to generate the race condition that the output
   // pipeline finishes early and terminate the task while the input pipeline
   // driver is running on thread.
-  ContinuePromise mergePromise("mergePromise");
-  ContinueFuture mergeFuture = mergePromise.getSemiFuture();
   ContinuePromise valuePromise("mergePromise");
   ContinueFuture valueFuture = valuePromise.getSemiFuture();
   ContinuePromise driverPromise("driverPromise");
@@ -663,26 +700,8 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
         if (*outputIdx != 1) {
           return;
         }
-        mergePromise.setValue();
         std::move(valueFuture).wait();
         driverPromise.setValue();
-      })));
-
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::Merge::isFinished",
-      std::function<void(const bool*)>(([&](const bool* isFinished) {
-        // Only wait for the value operator running after the merge operator is
-        // finished.
-        if (!*isFinished) {
-          return;
-        }
-
-        // There will be only one merge driver thread because of the limit node
-        // on the output pipeline so there is no race to access mergeFuture.
-        ContinueFuture future = std::move(mergeFuture);
-        if (future.valid()) {
-          future.wait();
-        }
       })));
 
   CursorParameters params;
@@ -690,9 +709,21 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
   params.queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
   params.queryCtx->setConfigOverridesUnsafe(
       {{core::QueryConfig::kPreferredOutputBatchSize, "1"}});
-  auto task = assertQueryOrdered(params, "VALUES (0)", {0});
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 1'000'000));
-  task.reset();
+
+  {
+    auto cursor = std::make_unique<TaskCursor>(params);
+    std::vector<RowVectorPtr> result;
+    auto* task = cursor->task().get();
+    while (cursor->moveNext()) {
+      result.push_back(cursor->current());
+    }
+    assertResults(
+        result,
+        params.planNode->outputType(),
+        "VALUES (0)",
+        duckDbQueryRunner_);
+    ASSERT_TRUE(waitForTaskStateChange(task, TaskState::kFinished, 3'000'000));
+  }
   valuePromise.setValue();
   // Wait for Values driver to complete.
   driverFuture.wait();

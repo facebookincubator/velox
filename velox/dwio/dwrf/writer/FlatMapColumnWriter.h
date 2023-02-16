@@ -43,7 +43,7 @@ class ValueStatisticsBuilder {
   }
 
   void merge(const BaseColumnWriter& writer) const {
-    statisticsBuilder_->merge(*writer.indexStatsBuilder_);
+    statisticsBuilder_->merge(*writer.indexStatsBuilder_, /*ignoreSize=*/true);
     DWIO_ENSURE(
         children_.size() == writer.children_.size(),
         "Value statistics writer children mismatch");
@@ -56,9 +56,9 @@ class ValueStatisticsBuilder {
       std::function<proto::ColumnStatistics&(uint32_t)> statsFactory) const {
     auto& stats = statsFactory(id_);
     statisticsBuilder_->toProto(stats);
-    uint64_t size = context_.getNodeSize(id_);
+    uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();
     for (int32_t i = 0; i < children_.size(); ++i) {
-      size += children_[i]->writeFileStats(statsFactory);
+      children_[i]->writeFileStats(statsFactory);
     }
     stats.set_size(size);
     return size;
@@ -166,6 +166,10 @@ class ValueWriter {
 
   uint32_t getSequence() const {
     return sequence_;
+  }
+
+  const proto::KeyInfo& getKeyInfo() const {
+    return keyInfo_;
   }
 
   void createIndexEntry(
@@ -300,6 +304,7 @@ class FlatMapColumnWriter : public BaseColumnWriter {
 
   // Stores column keys if writing with RowVector input
   std::vector<KeyType> structKeys_;
+  const bool collectMapStats_;
 };
 
 template <>

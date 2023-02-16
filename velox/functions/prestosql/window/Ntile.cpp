@@ -45,7 +45,7 @@ class NtileFunction : public exec::WindowFunction {
     bucketFlatVector_ = bucketVector_->asFlatVector<int64_t>();
   }
 
-  void resetPartition(const exec::WindowPartition* partition) {
+  void resetPartition(const exec::WindowPartition* partition) override {
     partition_ = partition;
     partitionOffset_ = 0;
     numPartitionRows_ = partition->numRows();
@@ -67,8 +67,9 @@ class NtileFunction : public exec::WindowFunction {
       const BufferPtr& /*peerGroupEnds*/,
       const BufferPtr& /*frameStarts*/,
       const BufferPtr& /*frameEnds*/,
+      const SelectivityVector& /*validRows*/,
       vector_size_t resultOffset,
-      const VectorPtr& result) {
+      const VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
 
     if (bucketColumn_.has_value()) {
@@ -116,7 +117,10 @@ class NtileFunction : public exec::WindowFunction {
         vector_size_t resultOffset,
         int64_t* rawResultValues) {
       int64_t i = 0;
-      for (int64_t j = partitionOffset; j < extraBucketsBoundary; i++, j++) {
+      // This loop terminates if it reaches extraBucketBoundary or numRows
+      // in the result vector are filled.
+      for (int64_t j = partitionOffset; i < numRows && j < extraBucketsBoundary;
+           i++, j++) {
         rawResultValues[resultOffset + i] = j / (rowsPerBucket + 1) + 1;
       }
       for (; i < numRows; i++) {

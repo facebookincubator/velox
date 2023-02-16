@@ -539,6 +539,11 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   bool containsUnknown() const;
 
+ protected:
+  FOLLY_ALWAYS_INLINE bool hasSameTypeId(const Type& other) const {
+    return typeid(*this) == typeid(other);
+  }
+
  private:
   const TypeKind kind_;
 
@@ -595,7 +600,7 @@ class ScalarType : public TypeBase<KIND> {
   FOLLY_NOINLINE static const std::shared_ptr<const ScalarType<KIND>> create();
 
   bool equivalent(const Type& other) const override {
-    return KIND == other.kind();
+    return Type::hasSameTypeId(other);
   }
 
   // TODO: velox implementation is in cpp
@@ -627,18 +632,25 @@ class DecimalType : public ScalarType<KIND> {
 
   DecimalType(const uint8_t precision = 18, const uint8_t scale = 0)
       : precision_(precision), scale_(scale) {
-    VELOX_CHECK_LE(scale, precision);
-    VELOX_CHECK_LE(precision, kMaxPrecision);
+    VELOX_CHECK_LE(
+        scale,
+        precision,
+        "Scale of decimal type must not exceed its precision");
+    VELOX_CHECK_LE(
+        precision,
+        kMaxPrecision,
+        "Precision of decimal type must not exceed {}",
+        kMaxPrecision);
   }
 
-  inline bool equivalent(const Type& otherDecimal) const override {
-    if (this->kind() != otherDecimal.kind()) {
+  inline bool equivalent(const Type& other) const override {
+    if (!Type::hasSameTypeId(other)) {
       return false;
     }
-    auto decimalType = static_cast<const DecimalType<KIND>&>(otherDecimal);
+    const auto& otherDecimal = static_cast<const DecimalType<KIND>&>(other);
     return (
-        decimalType.precision() == this->precision_ &&
-        decimalType.scale() == this->scale_);
+        otherDecimal.precision() == this->precision_ &&
+        otherDecimal.scale() == this->scale_);
   }
 
   inline uint8_t precision() const {
@@ -701,7 +713,7 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
   }
 
   bool equivalent(const Type& other) const override {
-    return TypeKind::UNKNOWN == other.kind();
+    return Type::hasSameTypeId(other);
   }
 
   folly::dynamic serialize() const override {
@@ -1456,8 +1468,17 @@ std::shared_ptr<const Type> createType(
 }
 
 template <>
+std::shared_ptr<const Type> createType<TypeKind::SHORT_DECIMAL>(
+    std::vector<std::shared_ptr<const Type>>&& children);
+
+template <>
+std::shared_ptr<const Type> createType<TypeKind::LONG_DECIMAL>(
+    std::vector<std::shared_ptr<const Type>>&& children);
+
+template <>
 std::shared_ptr<const Type> createType<TypeKind::ROW>(
-    std::vector<std::shared_ptr<const Type>>&& /*children*/);
+    std::vector<std::shared_ptr<const Type>>&& children);
+
 template <>
 std::shared_ptr<const Type> createType<TypeKind::ARRAY>(
     std::vector<std::shared_ptr<const Type>>&& children);
@@ -1465,6 +1486,7 @@ std::shared_ptr<const Type> createType<TypeKind::ARRAY>(
 template <>
 std::shared_ptr<const Type> createType<TypeKind::MAP>(
     std::vector<std::shared_ptr<const Type>>&& children);
+
 template <>
 std::shared_ptr<const Type> createType<TypeKind::OPAQUE>(
     std::vector<std::shared_ptr<const Type>>&& children);

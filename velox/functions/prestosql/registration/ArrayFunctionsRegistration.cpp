@@ -59,6 +59,23 @@ inline void registerArrayHasDuplicatesFunctions() {
       Array<T>>({"array_has_duplicates"});
 }
 
+template <typename T>
+inline void registerArrayFrequencyFunctions() {
+  registerFunction<
+      ParameterBinder<ArrayFrequencyFunction, T>,
+      Map<T, int>,
+      Array<T>>({"array_frequency"});
+}
+
+template <typename T>
+inline void registerArrayNormalizeFunctions() {
+  registerFunction<
+      ParameterBinder<ArrayNormalizeFunction, T>,
+      Array<T>,
+      Array<T>,
+      T>({"array_normalize"});
+}
+
 void registerArrayFunctions() {
   registerArrayConstructor("array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, "array_distinct");
@@ -71,6 +88,7 @@ void registerArrayFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, "zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, "zip_with");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, "array_position");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_shuffle, "shuffle");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sort, "array_sort");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sum, "array_sum");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_repeat, "repeat");
@@ -100,6 +118,9 @@ void registerArrayFunctions() {
   registerArrayJoinFunctions<Timestamp>();
   registerArrayJoinFunctions<Date>();
 
+  registerFunction<ArrayAverageFunction, double, Array<double>>(
+      {"array_average"});
+
   registerArrayCombinationsFunctions<int8_t>();
   registerArrayCombinationsFunctions<int16_t>();
   registerArrayCombinationsFunctions<int32_t>();
@@ -116,5 +137,11 @@ void registerArrayFunctions() {
   registerArrayHasDuplicatesFunctions<int32_t>();
   registerArrayHasDuplicatesFunctions<int64_t>();
   registerArrayHasDuplicatesFunctions<Varchar>();
+
+  registerArrayFrequencyFunctions<int64_t>();
+  registerArrayFrequencyFunctions<Varchar>();
+
+  registerArrayNormalizeFunctions<float>();
+  registerArrayNormalizeFunctions<double>();
 }
 }; // namespace facebook::velox::functions

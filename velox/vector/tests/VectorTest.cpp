@@ -1542,6 +1542,7 @@ class VectorCreateConstantTest : public VectorTest {
     ASSERT_TRUE(simpleVector != nullptr);
 
     ASSERT_EQ(KIND, simpleVector->typeKind());
+    ASSERT_TRUE(type->equivalent(*simpleVector->type()));
     ASSERT_EQ(size_, simpleVector->size());
     ASSERT_EQ(simpleVector->isScalar(), TypeTraits<KIND>::isPrimitiveType);
 
@@ -1695,62 +1696,6 @@ TEST_F(VectorTest, byteSize) {
   constexpr vector_size_t count = std::numeric_limits<vector_size_t>::max();
   constexpr uint64_t expected = count * sizeof(int64_t);
   EXPECT_EQ(BaseVector::byteSize<int64_t>(count), expected);
-}
-
-TEST_F(VectorTest, constantDictionary) {
-  auto vectorMaker = std::make_unique<test::VectorMaker>(pool_.get());
-  auto flatVector = vectorMaker->flatVector<int32_t>({1, 2, 3, 4});
-
-  // Repeat each row twice: 1, 1, 2, 2, 3, 3, 4, 4.
-  auto dictionarySize = flatVector->size() * 2;
-  auto indices = allocateIndices(dictionarySize, pool_.get());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (auto i = 0; i < dictionarySize; i++) {
-    rawIndices[i] = i / 2;
-  }
-  auto dictionaryVector = BaseVector::wrapInDictionary(
-      nullptr, indices, dictionarySize, flatVector);
-
-  {
-    SelectivityVector rows(dictionarySize);
-    ASSERT_FALSE(dictionaryVector->isConstant(rows));
-  }
-
-  // First two rows are the same.
-  {
-    SelectivityVector rows(2);
-    ASSERT_TRUE(dictionaryVector->isConstant(rows));
-  }
-
-  // Single row is always constant.
-  {
-    SelectivityVector rows(dictionarySize, false);
-    rows.setValid(3, true);
-    rows.updateBounds();
-    ASSERT_TRUE(dictionaryVector->isConstant(rows));
-  }
-
-  // Test nulls added by DictionaryVector.
-  auto dictNulls = AlignedBuffer::allocate<bool>(
-      dictionarySize, pool_.get(), bits::kNotNull);
-  auto rawNulls = dictNulls->asMutable<uint64_t>();
-  bits::setNull(rawNulls, 0);
-  bits::setNull(rawNulls, 2);
-  dictionaryVector = BaseVector::wrapInDictionary(
-      dictNulls, indices, dictionarySize, flatVector);
-  // Elements 0 and 1 are not equal because the dictionary adds a null at 0.
-  {
-    SelectivityVector rows(2);
-    ASSERT_FALSE(dictionaryVector->isConstant(rows));
-  }
-  // The vector is constant for 0, 2 because both add a null.
-  {
-    SelectivityVector rows(dictionarySize, false);
-    rows.setValid(0, true);
-    rows.setValid(2, true);
-    rows.updateBounds();
-    ASSERT_TRUE(dictionaryVector->isConstant(rows));
-  }
 }
 
 TEST_F(VectorTest, clearNulls) {
@@ -2163,7 +2108,7 @@ TEST_F(VectorTest, lifetime) {
         childPool.reset();
         v.reset();
       },
-      "Memory pool should be destroyed only after all allocated memory has been freed.");
+      "Memory pool test should be destroyed only after all allocated memory has been freed.");
 }
 
 TEST_F(VectorTest, ensureNullsCapacity) {
@@ -2172,4 +2117,41 @@ TEST_F(VectorTest, ensureNullsCapacity) {
   auto vec = makeFlatVector<int64_t>(size, [](vector_size_t i) { return i; });
   auto nulls = vec->mutableNulls(2);
   ASSERT_GE(nulls->size(), bits::nbytes(size));
+}
+
+TEST_F(VectorTest, createVectorWithNullType) {
+  std::string kErrorMessage = "Vector creation requires a non-null type.";
+
+  VELOX_ASSERT_THROW(BaseVector::create(nullptr, 100, pool()), kErrorMessage);
+  VELOX_ASSERT_THROW(
+      BaseVector::createNullConstant(nullptr, 100, pool()), kErrorMessage);
+  VELOX_ASSERT_THROW(
+      BaseVector::getOrCreateEmpty(nullptr, nullptr, pool()), kErrorMessage);
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<ConstantVector<int64_t>>(pool(), 100, false, nullptr, 0),
+      kErrorMessage);
+
+  std::vector<BufferPtr> stringBuffers;
+  VELOX_ASSERT_THROW(
+      std::make_shared<FlatVector<int64_t>>(
+          pool(), nullptr, nullptr, 100, nullptr, std::move(stringBuffers)),
+      kErrorMessage);
+
+  std::vector<VectorPtr> children;
+  VELOX_ASSERT_THROW(
+      std::make_shared<RowVector>(pool(), nullptr, nullptr, 100, children),
+      kErrorMessage);
+
+  VELOX_ASSERT_THROW(RowVector::createEmpty(nullptr, pool()), kErrorMessage);
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<ArrayVector>(
+          pool(), nullptr, nullptr, 100, nullptr, nullptr, nullptr),
+      kErrorMessage);
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool(), nullptr, nullptr, 100, nullptr, nullptr, nullptr, nullptr),
+      kErrorMessage);
 }

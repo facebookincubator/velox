@@ -83,7 +83,11 @@ class ConstantTypedExpr : public ITypedExpr {
   // Creates constant expression of scalar or complex type. The value comes from
   // index zero.
   explicit ConstantTypedExpr(const VectorPtr& value)
-      : ITypedExpr{value->type()}, valueVector_{value} {}
+      : ITypedExpr{value->type()},
+        valueVector_{
+            value->isConstantEncoding()
+                ? value
+                : BaseVector::wrapInConstant(1, 0, value)} {}
 
   std::string toString() const override {
     if (hasValueVector()) {
@@ -109,8 +113,8 @@ class ConstantTypedExpr : public ITypedExpr {
     return value_;
   }
 
-  // Returns value vector if hasValueVector() is true. Vector can be of scalar
-  // or complex type. The value is at index zero.
+  /// Return constant value vector if hasValueVector() is true. Returns null
+  /// otherwise.
   const VectorPtr& valueVector() const {
     return valueVector_;
   }
@@ -136,14 +140,19 @@ class ConstantTypedExpr : public ITypedExpr {
       return false;
     }
 
-    if (this->hasValueVector()) {
-      return casted->hasValueVector() &&
-          this->valueVector_->type()->kindEquals(
-              casted->valueVector_->type()) &&
-          this->valueVector_->equalValueAt(casted->valueVector_.get(), 0, 0);
+    if (!this->type()->equivalent(*casted->type())) {
+      return false;
     }
 
-    return !casted->hasValueVector() && this->value_ == casted->value_;
+    if (this->hasValueVector() != casted->hasValueVector()) {
+      return false;
+    }
+
+    if (this->hasValueVector()) {
+      return this->valueVector_->equalValueAt(casted->valueVector_.get(), 0, 0);
+    }
+
+    return this->value_ == casted->value_;
   }
 
   VELOX_DEFINE_CLASS_NAME(ConstantTypedExpr)

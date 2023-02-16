@@ -85,15 +85,14 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     updateLocalMemoryUsage(-size);
   }
 
-  bool allocateNonContiguous(
+  void allocateNonContiguous(
       velox::memory::MachinePageCount /*unused*/,
-      velox::memory::MemoryAllocator::Allocation& /*unused*/,
+      velox::memory::Allocation& /*unused*/,
       velox::memory::MachinePageCount /*unused*/) override {
     VELOX_UNSUPPORTED("allocateNonContiguous unsupported");
   }
 
-  void freeNonContiguous(
-      velox::memory::MemoryAllocator::Allocation& /*unused*/) override {
+  void freeNonContiguous(velox::memory::Allocation& /*unused*/) override {
     VELOX_UNSUPPORTED("freeNonContiguous unsupported");
   }
 
@@ -106,14 +105,13 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_UNSUPPORTED("sizeClasses unsupported");
   }
 
-  bool allocateContiguous(
+  void allocateContiguous(
       velox::memory::MachinePageCount /*unused*/,
-      velox::memory::MemoryAllocator::ContiguousAllocation& /*unused*/)
-      override {
+      velox::memory::ContiguousAllocation& /*unused*/) override {
     VELOX_UNSUPPORTED("allocateContiguous unsupported");
   }
 
-  void freeContiguous(velox::memory::MemoryAllocator::ContiguousAllocation&
+  void freeContiguous(velox::memory::ContiguousAllocation&
                       /*unused*/) override {
     VELOX_UNSUPPORTED("freeContiguous unsupported");
   }
@@ -141,13 +139,16 @@ class MockMemoryPool : public velox::memory::MemoryPool {
   }
 
   MOCK_CONST_METHOD0(getMaxBytes, int64_t());
-  // MOCK_METHOD1(
-  //     setMemoryUsageTracker,
-  //     void(const std::shared_ptr<velox::memory::MemoryUsageTracker>&));
 
   MOCK_METHOD1(updateSubtreeMemoryUsage, int64_t(int64_t));
 
   MOCK_CONST_METHOD0(getAlignment, uint16_t());
+
+  std::string toString() const override {
+    return fmt::format(
+        "Mock Memory Pool[{}]",
+        velox::memory::MemoryAllocator::kindString(allocator_->kind()));
+  }
 
  private:
   velox::memory::MemoryAllocator* const FOLLY_NONNULL allocator_{

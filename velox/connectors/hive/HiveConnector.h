@@ -28,10 +28,6 @@
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
 
-namespace facebook::velox::connector {
-class WriteProtocol;
-} // namespace facebook::velox::connector
-
 namespace facebook::velox::connector::hive {
 
 class HiveColumnHandle : public ColumnHandle {
@@ -137,6 +133,12 @@ class HiveDataSource : public DataSource {
 
   std::unordered_map<std::string, RuntimeCounter> runtimeStats() override;
 
+  bool allPrefetchIssued() const override {
+    return rowReader_ && rowReader_->allPrefetchIssued();
+  }
+
+  void setFromDataSource(std::shared_ptr<DataSource> source) override;
+
   int64_t estimatedRowSize() override;
 
  private:
@@ -188,7 +190,7 @@ class HiveDataSource : public DataSource {
   ExpressionEvaluator* FOLLY_NONNULL expressionEvaluator_;
   uint64_t completedRows_ = 0;
 
-  // Reusable memory for remaining filter evaluation
+  // Reusable memory for remaining filter evaluation.
   VectorPtr filterResult_;
   SelectivityVector filterRows_;
   exec::FilterEvalCtx filterEvalCtx_;
@@ -196,19 +198,6 @@ class HiveDataSource : public DataSource {
   memory::MemoryAllocator* const FOLLY_NONNULL allocator_;
   const std::string& scanId_;
   folly::Executor* FOLLY_NULLABLE executor_;
-};
-
-/// Hive connector configs
-class HiveConfig {
- public:
-  /// Can new data be inserted into existing partitions or existing
-  /// unpartitioned tables
-  static constexpr const char* FOLLY_NONNULL kImmutablePartitions =
-      "hive.immutable-partitions";
-
-  static bool isImmutablePartitions(const Config* FOLLY_NONNULL baseConfig) {
-    return baseConfig->get<bool>(kImmutablePartitions, true);
-  }
 };
 
 class HiveConnector final : public Connector {
@@ -241,20 +230,24 @@ class HiveConnector final : public Connector {
         executor_);
   }
 
+  bool supportsSplitPreload() override {
+    return true;
+  }
+
   std::shared_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
-      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
-      std::shared_ptr<WriteProtocol> writeProtocol) override final {
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) override final {
     auto hiveInsertHandle = std::dynamic_pointer_cast<HiveInsertTableHandle>(
         connectorInsertTableHandle);
     VELOX_CHECK_NOT_NULL(
         hiveInsertHandle, "Hive connector expecting hive write handle!");
     return std::make_shared<HiveDataSink>(
-        inputType, hiveInsertHandle, connectorQueryCtx, writeProtocol);
+        inputType, hiveInsertHandle, connectorQueryCtx, commitStrategy);
   }
 
-  folly::Executor* FOLLY_NULLABLE executor() {
+  folly::Executor* FOLLY_NULLABLE executor() const override {
     return executor_;
   }
 

@@ -101,6 +101,7 @@ class RowReaderOptions {
   // operations.
   std::shared_ptr<folly::Executor> decodingExecutor_;
   std::shared_ptr<folly::Executor> ioExecutor_;
+  bool appendRowNumberColumn_ = false;
 
  public:
   RowReaderOptions(const RowReaderOptions& other) {
@@ -114,6 +115,7 @@ class RowReaderOptions {
     metadataFilter_ = other.metadataFilter_;
     returnFlatVector_ = other.returnFlatVector_;
     flatmapNodeIdAsStruct_ = other.flatmapNodeIdAsStruct_;
+    appendRowNumberColumn_ = other.appendRowNumberColumn_;
   }
 
   RowReaderOptions() noexcept
@@ -275,6 +277,18 @@ class RowReaderOptions {
     ioExecutor_ = executor;
   }
 
+  /*
+   * Set to true, if you want to add a new column to the results containing the
+   * row numbers.
+   */
+  void setAppendRowNumberColumn(bool value) {
+    appendRowNumberColumn_ = value;
+  }
+
+  bool getAppendRowNumberColumn() const {
+    return appendRowNumberColumn_;
+  }
+
   const std::shared_ptr<folly::Executor>& getDecodingExecutor() const {
     return decodingExecutor_;
   }
@@ -332,14 +346,17 @@ class ReaderOptions {
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   SerDeOptions serDeOptions;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
+  uint64_t directorySizeGuess{kDefaultDirectorySizeGuess};
+  uint64_t filePreloadThreshold{kDefaultFilePreloadThreshold};
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
   static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
+  static constexpr uint64_t kDefaultDirectorySizeGuess = 1024 * 1024; // 1MB
+  static constexpr uint64_t kDefaultFilePreloadThreshold =
+      1024 * 1024 * 8; // 8MB
 
-  ReaderOptions(
-      velox::memory::MemoryPool* pool =
-          &facebook::velox::memory::getProcessDefaultMemoryManager().getRoot())
+  ReaderOptions(velox::memory::MemoryPool* pool)
       : tailLocation(std::numeric_limits<uint64_t>::max()),
         memoryPool(pool),
         fileFormat(FileFormat::UNKNOWN),
@@ -362,6 +379,8 @@ class ReaderOptions {
     prefetchMode = other.prefetchMode;
     serDeOptions = other.serDeOptions;
     decrypterFactory_ = other.decrypterFactory_;
+    directorySizeGuess = other.directorySizeGuess;
+    filePreloadThreshold = other.filePreloadThreshold;
     return *this;
   }
 
@@ -455,6 +474,16 @@ class ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setDirectorySizeGuess(uint64_t size) {
+    directorySizeGuess = size;
+    return *this;
+  }
+
+  ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
+    filePreloadThreshold = threshold;
+    return *this;
+  }
+
   /**
    * Get the desired tail location.
    * @return if not set, return the maximum long.
@@ -511,6 +540,14 @@ class ReaderOptions {
   const std::shared_ptr<encryption::DecrypterFactory> getDecrypterFactory()
       const {
     return decrypterFactory_;
+  }
+
+  uint64_t getDirectorySizeGuess() const {
+    return directorySizeGuess;
+  }
+
+  uint64_t getFilePreloadThreshold() const {
+    return filePreloadThreshold;
   }
 };
 

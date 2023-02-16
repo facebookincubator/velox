@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 #ifdef __BMI2__
 #include <x86intrin.h>
@@ -34,6 +35,9 @@ inline bool isBitSet(const T* bits, int32_t idx) {
   return bits[idx / (sizeof(bits[0]) * 8)] &
       (static_cast<T>(1) << (idx & ((sizeof(bits[0]) * 8) - 1)));
 }
+
+/// Return the binary representation of bits in the range specified.
+std::string toString(const uint64_t* bits, int offset, int size);
 
 // The reason we do this is that it's slightly faster for
 // setNthBit<Value> in benchmarks compared to doing the calculation
@@ -823,8 +827,8 @@ storeBits(uint64_t* target, uint64_t offset, uint64_t word, uint8_t numBits) {
     uint8_t* lastByteAddress = reinterpret_cast<uint8_t*>(address) + sizeof(T);
     uint8_t lastByteBits = bitOffset + numBits - kBitSize;
     uint8_t lastByteMask = (1 << lastByteBits) - 1;
-    *lastByteAddress =
-        (*lastByteAddress & ~lastByteMask) | (word >> (kBitSize - bitOffset));
+    *lastByteAddress = (*lastByteAddress & ~lastByteMask) |
+        (lastByteMask & (word >> (kBitSize - bitOffset)));
   }
 }
 } // namespace detail
@@ -859,6 +863,16 @@ inline void copyBits(
     detail::storeBits<uint8_t>(target, targetOffset + i, lastWord, copyBits);
   }
 }
+
+// Copies the bits from the range starting at data + sourceOffset, to another
+// range starting at data + targetOffset, where sourceOffset < targetOffset, and
+// the ranges can overlap.  The bits are copied in reverse order (the last bit
+// is copied first), but their relative order is preserved.
+void copyBitsBackward(
+    uint64_t* bits,
+    uint64_t sourceOffset,
+    uint64_t targetOffset,
+    uint64_t numBits);
 
 // Copies consecutive bits from 'source' to positions in 'target'
 // where 'targetMask' has a 1. 'source' may be a prefix of 'target',

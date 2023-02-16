@@ -629,6 +629,8 @@ class HashJoinBuilder {
     if (testVerifier_ != nullptr) {
       testVerifier_(task, injectSpill);
     }
+
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 
   VectorFuzzer::Options fuzzerOpts_;
@@ -1964,7 +1966,7 @@ TEST_P(MultiThreadedHashJoinTest, antiJoinWithFilterAndEmptyBuild) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, leftJoin) {
-  // Left side keys are [0, 1, 2,..10].
+  // Left side keys are [0, 1, 2,..20].
   // Use 3-rd column as row number to allow for asserting the order of results.
   std::vector<RowVectorPtr> probeVectors = mergeBatches(
       makeBatches(
@@ -1974,7 +1976,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
                 {"c0", "c1", "row_number"},
                 {
                     makeFlatVector<int32_t>(
-                        77, [](auto row) { return row % 11; }, nullEvery(13)),
+                        77, [](auto row) { return row % 21; }, nullEvery(13)),
                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
                 });
@@ -1987,7 +1989,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
                 {
                     makeFlatVector<int32_t>(
                         97,
-                        [](auto row) { return (row + 3) % 11; },
+                        [](auto row) { return (row + 3) % 21; },
                         nullEvery(13)),
                     makeFlatVector<int32_t>(97, [](auto row) { return row; }),
                     makeFlatVector<int32_t>(
@@ -2323,14 +2325,14 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithNullableFilter) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, rightJoin) {
-  // Left side keys are [0, 1, 2,..10].
+  // Left side keys are [0, 1, 2,..20].
   std::vector<RowVectorPtr> probeVectors = mergeBatches(
       makeBatches(
           3,
           [&](int32_t /*unused*/) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
-                    137, [](auto row) { return row % 11; }, nullEvery(13)),
+                    137, [](auto row) { return row % 21; }, nullEvery(13)),
                 makeFlatVector<int32_t>(137, [](auto row) { return row; }),
             });
           }),
@@ -2340,7 +2342,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoin) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     234,
-                    [](auto row) { return (row + 3) % 11; },
+                    [](auto row) { return (row + 3) % 21; },
                     nullEvery(13)),
                 makeFlatVector<int32_t>(234, [](auto row) { return row; }),
             });
@@ -2424,14 +2426,14 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithEmptyBuild) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, rightJoinWithAllMatch) {
-  // Left side keys are [0, 1, 2,..10].
+  // Left side keys are [0, 1, 2,..20].
   std::vector<RowVectorPtr> probeVectors = mergeBatches(
       makeBatches(
           3,
           [&](int32_t /*unused*/) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
-                    137, [](auto row) { return row % 11; }, nullEvery(13)),
+                    137, [](auto row) { return row % 21; }, nullEvery(13)),
                 makeFlatVector<int32_t>(137, [](auto row) { return row; }),
             });
           }),
@@ -2441,7 +2443,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithAllMatch) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     234,
-                    [](auto row) { return (row + 3) % 11; },
+                    [](auto row) { return (row + 3) % 21; },
                     nullEvery(13)),
                 makeFlatVector<int32_t>(234, [](auto row) { return row; }),
             });
@@ -2475,14 +2477,14 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithAllMatch) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, rightJoinWithFilter) {
-  // Left side keys are [0, 1, 2,..10].
+  // Left side keys are [0, 1, 2,..20].
   std::vector<RowVectorPtr> probeVectors = mergeBatches(
       makeBatches(
           3,
           [&](int32_t /*unused*/) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
-                    137, [](auto row) { return row % 11; }, nullEvery(13)),
+                    137, [](auto row) { return row % 21; }, nullEvery(13)),
                 makeFlatVector<int32_t>(137, [](auto row) { return row; }),
             });
           }),
@@ -2492,7 +2494,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithFilter) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     234,
-                    [](auto row) { return (row + 3) % 11; },
+                    [](auto row) { return (row + 3) % 21; },
                     nullEvery(13)),
                 makeFlatVector<int32_t>(234, [](auto row) { return row; }),
             });
@@ -2550,14 +2552,14 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithFilter) {
 }
 
 TEST_P(MultiThreadedHashJoinTest, fullJoin) {
-  // Left side keys are [0, 1, 2,..10].
+  // Left side keys are [0, 1, 2,..20].
   std::vector<RowVectorPtr> probeVectors = mergeBatches(
       makeBatches(
           3,
           [&](int32_t /*unused*/) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
-                    213, [](auto row) { return row % 11; }, nullEvery(13)),
+                    213, [](auto row) { return row % 21; }, nullEvery(13)),
                 makeFlatVector<int32_t>(213, [](auto row) { return row; }),
             });
           }),
@@ -2567,7 +2569,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoin) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     137,
-                    [](auto row) { return (row + 3) % 11; },
+                    [](auto row) { return (row + 3) % 21; },
                     nullEvery(13)),
                 makeFlatVector<int32_t>(137, [](auto row) { return row; }),
             });
@@ -4189,5 +4191,65 @@ TEST_F(HashJoinTest, spillFileSize) {
         })
         .run();
   }
+}
+
+// The test is to verify if the hash build reservation has been released on task
+// error.
+DEBUG_ONLY_TEST_F(HashJoinTest, buildReservationReleaseCheck) {
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(1, [&](int32_t /*unused*/) {
+        return std::dynamic_pointer_cast<RowVector>(
+            BatchMaker::createBatch(probeType_, 1000, *pool_));
+      });
+  std::vector<RowVectorPtr> buildVectors = makeBatches(10, [&](int32_t index) {
+    return std::dynamic_pointer_cast<RowVector>(
+        BatchMaker::createBatch(buildType_, 5000 * (1 + index), *pool_));
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  params.planNode = PlanBuilder(planNodeIdGenerator)
+                        .values(probeVectors, true)
+                        .hashJoin(
+                            {"t_k1"},
+                            {"u_k1"},
+                            PlanBuilder(planNodeIdGenerator)
+                                .values(buildVectors, true)
+                                .planNode(),
+                            "",
+                            concat(probeType_->names(), buildType_->names()))
+                        .planNode();
+  params.queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
+  // NOTE: the spilling setup is to trigger memory reservation code path which
+  // only gets executed when spilling is enabled. We don't care about if
+  // spilling is really triggered in test or not so set the max memory limit to
+  // avoid any memory reservation related errors.
+  auto tracker = memory::MemoryUsageTracker::create();
+  params.queryCtx->pool()->setMemoryUsageTracker(tracker);
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  params.spillDirectory = spillDirectory->path;
+  params.queryCtx->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kSpillEnabled, "true"},
+       {core::QueryConfig::kMaxSpillLevel, "0"},
+       {core::QueryConfig::kJoinSpillEnabled, "true"}});
+  params.maxDrivers = 1;
+
+  auto cursor = std::make_unique<TaskCursor>(params);
+  auto* task = cursor->task().get();
+
+  // Set up a testvalue to trigger task abort when hash build tries to reserve
+  // memory.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::MemoryUsageTracker::maybeReserve",
+      std::function<void(memory::MemoryUsageTracker*)>(
+          [&](memory::MemoryUsageTracker* /*unused*/) {
+            task->requestAbort();
+          }));
+  auto runTask = [&]() {
+    while (cursor->moveNext()) {
+    }
+  };
+  VELOX_ASSERT_THROW(runTask(), "");
+  ASSERT_TRUE(waitForTaskAborted(task, 5'000'000));
 }
 } // namespace

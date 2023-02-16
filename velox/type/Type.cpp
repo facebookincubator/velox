@@ -228,7 +228,7 @@ bool ArrayType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (!other.isArray()) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   auto& otherArray = other.asArray();
@@ -259,13 +259,19 @@ std::string FixedSizeArrayType::toString() const {
 }
 
 bool FixedSizeArrayType::equivalent(const Type& other) const {
-  if (!ArrayType::equivalent(other)) {
+  if (&other == this) {
+    return true;
+  }
+
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
+
   auto otherFixedSizeArray = dynamic_cast<const FixedSizeArrayType*>(&other);
-  if (!otherFixedSizeArray) {
+  if (!child_->equivalent(*otherFixedSizeArray->child_)) {
     return false;
   }
+
   if (fixedElementsWidth() != otherFixedSizeArray->fixedElementsWidth()) {
     return false;
   }
@@ -375,7 +381,7 @@ bool RowType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (other.kind() != TypeKind::ROW) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   auto& otherTyped = other.asRow();
@@ -467,7 +473,7 @@ bool MapType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (!other.isMap()) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   auto& otherMap = other.asMap();
@@ -479,7 +485,7 @@ bool FunctionType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (other.kind() != TypeKind::FUNCTION) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   auto& otherTyped = *reinterpret_cast<const FunctionType*>(&other);
@@ -507,7 +513,7 @@ bool OpaqueType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (other.kind() != TypeKind::OPAQUE) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   return true;
@@ -704,6 +710,20 @@ std::shared_ptr<const Type> createType(
     return std::make_shared<FunctionType>(std::move(argTypes), children.back());
   }
   return VELOX_DYNAMIC_TYPE_DISPATCH(createType, kind, std::move(children));
+}
+
+template <>
+std::shared_ptr<const Type> createType<TypeKind::SHORT_DECIMAL>(
+    std::vector<std::shared_ptr<const Type>>&& /*children*/) {
+  std::string name{TypeTraits<TypeKind::SHORT_DECIMAL>::name};
+  VELOX_USER_FAIL("Not supported for kind: {}", name);
+}
+
+template <>
+std::shared_ptr<const Type> createType<TypeKind::LONG_DECIMAL>(
+    std::vector<std::shared_ptr<const Type>>&& /*children*/) {
+  std::string name{TypeTraits<TypeKind::LONG_DECIMAL>::name};
+  VELOX_USER_FAIL("Not supported for kind: {}", name);
 }
 
 template <>

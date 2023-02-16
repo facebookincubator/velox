@@ -70,13 +70,6 @@ DEFINE_bool(
     false,
     "Enable testing of function signatures with variadic arguments.");
 
-DEFINE_bool(enable_cast, false, "Enable testing with cast expression.");
-
-DEFINE_bool(
-    choose_root_type_from_signature_template,
-    false,
-    "Allow choosing the top-level root type from signature templates.");
-
 DEFINE_string(
     repro_persist_path,
     "",
@@ -274,6 +267,43 @@ std::vector<column_index_t> generateLazyColumnIds(
   return columnsToWrapInLazy;
 }
 
+/// Returns row numbers for non-null rows in 'data' or null if all rows are
+/// null.
+BufferPtr extractNonNullIndices(const VectorPtr& data) {
+  BufferPtr indices = allocateIndices(data->size(), data->pool());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  vector_size_t cnt = 0;
+  for (auto i = 0; i < data->size(); ++i) {
+    if (!data->isNullAt(i)) {
+      rawIndices[cnt++] = i;
+    }
+  }
+
+  if (cnt == 0) {
+    return nullptr;
+  }
+
+  indices->setSize(cnt * sizeof(vector_size_t));
+  return indices;
+}
+
+/// Wraps child vectors of the specified 'rowVector' in dictionary using
+/// specified 'indices'. Returns new RowVector created from the wrapped vectors.
+RowVectorPtr wrapChildren(
+    const BufferPtr& indices,
+    const RowVectorPtr& rowVector) {
+  auto size = indices->size() / sizeof(vector_size_t);
+
+  std::vector<VectorPtr> newInputs;
+  for (const auto& child : rowVector->children()) {
+    newInputs.push_back(
+        BaseVector::wrapInDictionary(nullptr, indices, size, child));
+  }
+
+  return std::make_shared<RowVector>(
+      rowVector->pool(), rowVector->type(), nullptr, size, newInputs);
+}
+
 } // namespace
 
 ExpressionFuzzer::ExpressionFuzzer(
@@ -286,13 +316,20 @@ ExpressionFuzzer::ExpressionFuzzer(
           {FLAGS_disable_constant_folding,
            FLAGS_repro_persist_path,
            FLAGS_persist_and_run_once}),
-      vectorFuzzer_(getFuzzerOptions(), execCtx_.pool()) {
+      vectorFuzzer_(getFuzzerOptions(), execCtx_.pool()),
+      expressionBank_(rng_, remainingLevelOfNesting_) {
   seed(initialSeed);
 
   size_t totalFunctions = 0;
   size_t totalFunctionSignatures = 0;
   std::vector<std::string> supportedFunctions;
   size_t supportedFunctionSignatures = 0;
+  // A local random number generator to be used just in ExpressionFuzzer
+  // constructor. We do not use rng_ in this function because code in this
+  // function may change rng_ and cause it to mismatch with the seed printed in
+  // the log.
+  FuzzerGenerator localRng{
+      static_cast<FuzzerGenerator::result_type>(initialSeed)};
   // Process each available signature for every function.
   for (const auto& function : signatureMap) {
     ++totalFunctions;
@@ -332,7 +369,7 @@ ExpressionFuzzer::ExpressionFuzzer(
           argTypes.push_back(resolvedType);
         }
       } else {
-        ArgumentTypeFuzzer typeFuzzer{*signature, rng_};
+        ArgumentTypeFuzzer typeFuzzer{*signature, localRng};
         typeFuzzer.fuzzReturnType();
         VELOX_CHECK_EQ(
             typeFuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs), true);
@@ -392,33 +429,40 @@ ExpressionFuzzer::ExpressionFuzzer(
       (double)unsupportedFunctionSignatures / totalFunctionSignatures * 100);
 
   // We sort the available signatures before inserting them into
-  // signaturesMap_. The purpose of this step is to ensure the vector of
-  // function signatures associated with each key in signaturesMap_ has a
-  // deterministic order, so that we can deterministically generate
-  // expressions across platforms. We just do this once and the vector is
-  // small, so it doesn't need to be very efficient.
+  // typeToExpressionList_ and expressionToSignature_. The purpose of this step
+  // is to ensure the vector of function signatures associated with each key in
+  // signaturesMap_ has a deterministic order, so that we can deterministically
+  // generate expressions across platforms. We just do this once and the vector
+  // is small, so it doesn't need to be very efficient.
   sortCallableSignatures(signatures_);
 
-  // Generates signaturesMap, which maps a given type to the function
-  // signature that returns it.
   for (const auto& it : signatures_) {
-    signaturesMap_[it.returnType->kind()].push_back(&it);
+    auto returnType = typeToBaseName(it.returnType);
+    if (typeToExpressionList_[returnType].empty() ||
+        typeToExpressionList_[returnType].back() != it.name) {
+      // Ensure only one entry for a function name is added. This
+      // gives all others a fair chance to be selected. Since signatures
+      // are sorted on the function name this check will always work.
+      typeToExpressionList_[returnType].push_back(it.name);
+    }
+    expressionToSignature_[it.name][returnType].push_back(&it);
   }
 
   // Similarly, sort all template signatures.
   sortSignatureTemplates(signatureTemplates_);
 
-  // Insert signature templates into signatureTemplateMap_ grouped by their
-  // return type base name. If the return type is a type variable, insert the
-  // signature template into the list of key kTypeParameterName.
   for (const auto& it : signatureTemplates_) {
     auto& returnType = it.signature->returnType().baseName();
-    if (it.typeVariables.find(returnType) == it.typeVariables.end()) {
-      signatureTemplateMap_[it.signature->returnType().baseName()].push_back(
-          &it);
-    } else {
-      signatureTemplateMap_[kTypeParameterName].push_back(&it);
+    auto* returnTypeKey = &returnType;
+    if (it.typeVariables.find(returnType) != it.typeVariables.end()) {
+      // Return type is a template variable.
+      returnTypeKey = &kTypeParameterName;
     }
+    if (typeToExpressionList_[*returnTypeKey].empty() ||
+        typeToExpressionList_[*returnTypeKey].back() != it.name) {
+      typeToExpressionList_[*returnTypeKey].push_back(it.name);
+    }
+    expressionToTemplatedSignature_[it.name][*returnTypeKey].push_back(&it);
   }
 
   // Register function override (for cases where we want to restrict the types
@@ -595,62 +639,62 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSwitchArgs(
 
 // Either generates a new expression of the required return type or if already
 // generated expressions of the same return type exist then there is a 30%
-// chance that it will re-use one of them. Only expressions with no nested
-// expressions are re-used.
+// chance that it will re-use one of them.
 core::TypedExprPtr ExpressionFuzzer::generateExpression(
     const TypePtr& returnType) {
   VELOX_CHECK_GT(remainingLevelOfNesting_, 0);
   --remainingLevelOfNesting_;
   auto guard = folly::makeGuard([&] { ++remainingLevelOfNesting_; });
 
-  auto& listOfCandidateExprs = typeToExpressions_[returnType->toString()];
-  bool reuseExpression = FLAGS_velox_fuzzer_enable_expression_reuse &&
-      !listOfCandidateExprs.empty() && vectorFuzzer_.coinToss(0.3);
-  if (!reuseExpression) {
-    core::TypedExprPtr expression;
-
-    // Generate a cast expression with 40% chance.
-    if (FLAGS_enable_cast && vectorFuzzer_.coinToss(0.4)) {
-      expression = generateCastExpression(returnType);
-      if (!expression) {
-        LOG(INFO) << "Casting to '" << returnType->toString()
-                  << "' is unsupported. Returning a constant instead.";
-        expression = generateArgConstant(returnType);
-      }
+  core::TypedExprPtr expression;
+  bool reuseExpression =
+      FLAGS_velox_fuzzer_enable_expression_reuse && vectorFuzzer_.coinToss(0.3);
+  if (reuseExpression) {
+    expression = expressionBank_.getRandomExpression(
+        returnType, remainingLevelOfNesting_ + 1);
+    if (expression) {
       return expression;
     }
-    auto firstAttempt =
-        &ExpressionFuzzer::generateExpressionFromConcreteSignatures;
-    auto secondAttempt =
-        &ExpressionFuzzer::generateExpressionFromSignatureTemplate;
-
-    size_t useSignatureTemplate =
-        boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
-    if (FLAGS_velox_fuzzer_enable_complex_types && useSignatureTemplate) {
-      std::swap(firstAttempt, secondAttempt);
-    }
-
-    expression = (this->*firstAttempt)(returnType);
-    if (!expression) {
-      if (FLAGS_velox_fuzzer_enable_complex_types) {
-        expression = (this->*secondAttempt)(returnType);
-      }
-      if (!expression) {
-        LOG(INFO) << "Couldn't find any function to return '"
-                  << returnType->toString()
-                  << "'. Returning a constant instead.";
-        expression = generateArgConstant(returnType);
-      }
-    }
-    if (remainingLevelOfNesting_ == 0) {
-      // Only add expressions that do not have nested expressions.
-      listOfCandidateExprs.emplace_back(expression);
-    }
-    return expression;
   }
-  size_t chosenExprIndex = boost::random::uniform_int_distribution<uint32_t>(
-      0, listOfCandidateExprs.size() - 1)(rng_);
-  return listOfCandidateExprs[chosenExprIndex];
+  auto baseType = typeToBaseName(returnType);
+  VELOX_CHECK_NE(
+      baseType, "T", "returnType should have all concrete types defined");
+  // Randomly pick among all functions that support this return type. Also,
+  // consider all functions that have return type "T" as they can
+  // support any concrete return type.
+  auto& baseList = typeToExpressionList_[baseType];
+  auto& templateList = typeToExpressionList_[kTypeParameterName];
+  uint32_t numEligible = baseList.size() + templateList.size();
+
+  if (numEligible > 0) {
+    size_t chosenExprIndex = boost::random::uniform_int_distribution<uint32_t>(
+        0, numEligible - 1)(rng_);
+    std::string chosenFunctionName;
+    if (chosenExprIndex < baseList.size()) {
+      chosenFunctionName = baseList[chosenExprIndex];
+    } else {
+      chosenExprIndex -= baseList.size();
+      chosenFunctionName = templateList[chosenExprIndex];
+    }
+
+    if (chosenFunctionName == "cast") {
+      expression = generateCastExpression(returnType);
+    } else {
+      expression = generateExpressionFromConcreteSignatures(
+          returnType, chosenFunctionName);
+      if (!expression && FLAGS_velox_fuzzer_enable_complex_types) {
+        expression = generateExpressionFromSignatureTemplate(
+            returnType, chosenFunctionName);
+      }
+    }
+  }
+  if (!expression) {
+    LOG(INFO) << "Couldn't find any function to return '"
+              << returnType->toString() << "'. Returning a constant instead.";
+    return generateArgConstant(returnType);
+  }
+  expressionBank_.insert(expression);
+  return expression;
 }
 
 std::vector<core::TypedExprPtr> ExpressionFuzzer::getArgsForCallable(
@@ -671,18 +715,22 @@ core::TypedExprPtr ExpressionFuzzer::getCallExprFromCallable(
 }
 
 core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
-    const TypePtr& returnType) {
-  auto it = signaturesMap_.find(returnType->kind());
-  if (it == signaturesMap_.end()) {
+    const TypePtr& returnType,
+    const std::string& functionName) {
+  if (expressionToSignature_.find(functionName) ==
+      expressionToSignature_.end()) {
     return nullptr;
   }
-
+  auto baseType = typeToBaseName(returnType);
+  auto itr = expressionToSignature_[functionName].find(baseType);
+  if (itr == expressionToSignature_[functionName].end()) {
+    return nullptr;
+  }
   // Only function signatures whose return type equals to returnType are
   // eligible. There may be ineligible signatures in signaturesMap_ because
   // the map keys only differentiate top-level type kinds.
   std::vector<const CallableSignature*> eligible;
-  const auto& signatures = it->second;
-  for (const auto* signature : signatures) {
+  for (auto signature : itr->second) {
     if (signature->returnType->equivalent(*returnType)) {
       eligible.push_back(signature);
     }
@@ -702,17 +750,22 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
 
 const SignatureTemplate* ExpressionFuzzer::chooseRandomSignatureTemplate(
     const TypePtr& returnType,
-    const std::string& typeName) {
+    const std::string& typeName,
+    const std::string& functionName) {
   std::vector<const SignatureTemplate*> eligible;
-  auto it = signatureTemplateMap_.find(typeName);
-  if (it == signatureTemplateMap_.end()) {
+  if (expressionToTemplatedSignature_.find(functionName) ==
+      expressionToTemplatedSignature_.end()) {
+    return nullptr;
+  }
+  auto it = expressionToTemplatedSignature_[functionName].find(typeName);
+  if (it == expressionToTemplatedSignature_[functionName].end()) {
     return nullptr;
   }
   // Only function signatures whose return type can match returnType are
   // eligible. There may be ineligible signatures in signaturesMap_ because
   // the map keys only differentiate the top-level type names.
   auto& signatureTemplates = it->second;
-  for (auto* signatureTemplate : signatureTemplates) {
+  for (auto signatureTemplate : signatureTemplates) {
     exec::ReverseSignatureBinder binder{
         *signatureTemplate->signature, returnType};
     if (binder.tryBind()) {
@@ -729,12 +782,15 @@ const SignatureTemplate* ExpressionFuzzer::chooseRandomSignatureTemplate(
 }
 
 core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
-    const TypePtr& returnType) {
+    const TypePtr& returnType,
+    const std::string& functionName) {
   auto typeName = typeToBaseName(returnType);
 
-  auto* chosen = chooseRandomSignatureTemplate(returnType, typeName);
+  auto* chosen =
+      chooseRandomSignatureTemplate(returnType, typeName, functionName);
   if (!chosen) {
-    chosen = chooseRandomSignatureTemplate(returnType, kTypeParameterName);
+    chosen = chooseRandomSignatureTemplate(
+        returnType, kTypeParameterName, functionName);
     if (!chosen) {
       return nullptr;
     }
@@ -804,7 +860,7 @@ void ExpressionFuzzer::reset() {
   VELOX_CHECK(inputRowTypes_.empty());
   VELOX_CHECK(inputRowNames_.empty());
   typeToColumnNames_.clear();
-  typeToExpressions_.clear();
+  expressionBank_.reset();
 }
 
 void ExpressionFuzzer::logStats() {
@@ -837,11 +893,14 @@ void ExpressionFuzzer::logStats() {
   LOG(INFO)
       << "Format: functionName numTimesSelected proportionOfTimesSelected "
          "numProcessedRows";
-  for (int i = entries.size() - 1; i >= entries.size() - maxEntriesLimit; i--) {
-    LOG(INFO) << entries[i].first << " " << entries[i].second.numTimesSelected
-              << " " << std::fixed << std::setprecision(2)
-              << (entries[i].second.numTimesSelected * 100.00) / totalSelections
-              << "% " << entries[i].second.numProcessedRows;
+  for (int i = 0; i < maxEntriesLimit; i++) {
+    int idx = entries.size() - 1 - i;
+    LOG(INFO) << entries[idx].first << " "
+              << entries[idx].second.numTimesSelected << " " << std::fixed
+              << std::setprecision(2)
+              << (entries[idx].second.numTimesSelected * 100.00) /
+            totalSelections
+              << "% " << entries[idx].second.numProcessedRows;
   }
 
   // sort by numTimesSelected
@@ -860,6 +919,46 @@ void ExpressionFuzzer::logStats() {
               << (elem.second.numTimesSelected * 100.00) / totalSelections
               << "% " << elem.second.numProcessedRows;
   }
+}
+
+void ExpressionFuzzer::ExprBank::insert(const core::TypedExprPtr& expression) {
+  auto typeString = expression->type()->toString();
+  if (typeToExprsByLevel_.find(typeString) == typeToExprsByLevel_.end()) {
+    typeToExprsByLevel_.insert(
+        {typeString, ExprsIndexedByLevel(maxLevelOfNesting_ + 1)});
+  }
+  auto& expressionsByLevel = typeToExprsByLevel_[typeString];
+  int nestingLevel = getNestedLevel(expression);
+  VELOX_CHECK_LE(nestingLevel, maxLevelOfNesting_);
+  expressionsByLevel[nestingLevel].push_back(expression);
+}
+
+core::TypedExprPtr ExpressionFuzzer::ExprBank::getRandomExpression(
+    const facebook::velox::TypePtr& returnType,
+    int uptoLevelOfNesting) {
+  VELOX_CHECK_LE(uptoLevelOfNesting, maxLevelOfNesting_);
+  auto typeString = returnType->toString();
+  if (typeToExprsByLevel_.find(typeString) == typeToExprsByLevel_.end()) {
+    return nullptr;
+  }
+  auto& expressionsByLevel = typeToExprsByLevel_[typeString];
+  int totalToConsider = 0;
+  for (int i = 0; i <= uptoLevelOfNesting; i++) {
+    totalToConsider += expressionsByLevel[i].size();
+  }
+  if (totalToConsider > 0) {
+    int choice = boost::random::uniform_int_distribution<uint32_t>(
+        0, totalToConsider - 1)(rng_);
+    for (int i = 0; i <= uptoLevelOfNesting; i++) {
+      if (choice >= expressionsByLevel[i].size()) {
+        choice -= expressionsByLevel[i].size();
+        continue;
+      }
+      return expressionsByLevel[i][choice];
+    }
+    VELOX_CHECK(false, "Should have found an expression.");
+  }
+  return nullptr;
 }
 
 void ExpressionFuzzer::go() {
@@ -881,8 +980,7 @@ void ExpressionFuzzer::go() {
         (chooseFromConcreteSignatures && !signatures_.empty()) ||
         (!chooseFromConcreteSignatures && signatureTemplates_.empty());
     TypePtr rootType;
-    if (!FLAGS_choose_root_type_from_signature_template ||
-        chooseFromConcreteSignatures) {
+    if (chooseFromConcreteSignatures) {
       // Pick a random signature to choose the root return type.
       VELOX_CHECK(!signatures_.empty(), "No function signature available.");
       size_t idx = boost::random::uniform_int_distribution<uint32_t>(
@@ -915,26 +1013,50 @@ void ExpressionFuzzer::go() {
     // If both paths threw compatible exceptions, we add a try() function to
     // the expression's root and execute it again. This time the expression
     // cannot throw.
-    if (!verifier_.verify(
-            plan,
-            rowVector,
-            resultVector ? BaseVector::copy(*resultVector) : nullptr,
-            true,
-            columnsToWrapInLazy) &&
+    if (verifier_
+            .verify(
+                plan,
+                rowVector,
+                resultVector ? BaseVector::copy(*resultVector) : nullptr,
+                true, // canThrow
+                columnsToWrapInLazy)
+            .exceptionPtr &&
         FLAGS_retry_with_try) {
       LOG(INFO)
           << "Both paths failed with compatible exceptions. Retrying expression using try().";
 
-      plan = std::make_shared<core::CallTypedExpr>(
+      auto tryPlan = std::make_shared<core::CallTypedExpr>(
           plan->type(), std::vector<core::TypedExprPtr>{plan}, "try");
 
       // At this point, the function throws if anything goes wrong.
-      verifier_.verify(
-          plan,
-          rowVector,
-          resultVector ? BaseVector::copy(*resultVector) : nullptr,
-          false,
-          columnsToWrapInLazy);
+      auto tryResult =
+          verifier_
+              .verify(
+                  tryPlan,
+                  rowVector,
+                  resultVector ? BaseVector::copy(*resultVector) : nullptr,
+                  false, // canThrow
+                  columnsToWrapInLazy)
+              .result->childAt(0);
+
+      // Re-evaluate the original expression on rows that didn't produce an
+      // error (i.e. returned non-NULL results when evaluated with TRY).
+      BufferPtr noErrorIndices = extractNonNullIndices(tryResult);
+      if (noErrorIndices != nullptr) {
+        auto noErrorRowVector = wrapChildren(noErrorIndices, rowVector);
+
+        LOG(INFO) << "Retrying original expression on "
+                  << noErrorRowVector->size() << " rows without errors";
+
+        verifier_.verify(
+            plan,
+            noErrorRowVector,
+            resultVector ? BaseVector::copy(*resultVector)
+                               ->slice(0, noErrorRowVector->size())
+                         : nullptr,
+            false, // canThrow
+            columnsToWrapInLazy);
+      }
     }
 
     LOG(INFO) << "==============================> Done with iteration " << i;
