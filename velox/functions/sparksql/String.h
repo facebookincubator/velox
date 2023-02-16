@@ -70,6 +70,23 @@ std::shared_ptr<exec::VectorFunction> makeLength(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs);
 
+void encodeDoubleLengthHexString(uint8_t *data, int size);
+
+template <typename T>
+struct Sha1HexStringFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
+    static const int SHA1_LENGTH = 20;
+    result.resize(SHA1_LENGTH * 2);
+    folly::ssl::OpenSSLHash::sha1(
+        folly::MutableByteRange((uint8_t*)result.data(), SHA1_LENGTH),
+        folly::ByteRange((const uint8_t*)input.data(), input.size()));
+    encodeDoubleLengthHexString((uint8_t*)result.data(), result.size());
+  }
+};
+
 /// contains function
 /// contains(string, string) -> bool
 /// Searches the second argument in the first one.

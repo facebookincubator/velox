@@ -146,4 +146,13 @@ std::shared_ptr<exec::VectorFunction> makeLength(
   return kLengthFunction;
 }
 
+void encodeDoubleLengthHexString(uint8_t *data, int size) {
+  static char const HEX_CODES[] = "0123456789abcdef";
+  for (int i = size - 2; i >= 0; i = i - 2) {
+    int a = data[i / 2];
+    data[i] = HEX_CODES[(a >> 4) & 0xf];
+    data[i + 1] = HEX_CODES[a & 0xf];
+  }
+}
+
 } // namespace facebook::velox::functions::sparksql
