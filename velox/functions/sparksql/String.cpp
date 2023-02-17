@@ -148,10 +148,10 @@ std::shared_ptr<exec::VectorFunction> makeLength(
 
 void encodeDigestToBase16(uint8_t* output, int digestSize) {
   static unsigned char const kHexCodes[] = "0123456789abcdef";
-  for (int i = digestSize; i >= 0; --i) {
-    int digestChar = output[digestSize];
-    output[digestSize * 2] = kHexCodes[(digestChar >> 4) & 0xf];
-    output[digestSize * 2 + 1] = kHexCodes[digestChar & 0xf];
+  for (int i = digestSize - 1; i >= 0; --i) {
+    int digestChar = output[i];
+    output[i * 2] = kHexCodes[(digestChar >> 4) & 0xf];
+    output[i * 2 + 1] = kHexCodes[digestChar & 0xf];
   }
 }
 
