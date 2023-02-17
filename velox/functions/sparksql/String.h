@@ -70,9 +70,12 @@ std::shared_ptr<exec::VectorFunction> makeLength(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs);
 
-/// Expands each char in the first half of char array to two chars,
-/// representing the hex value of each char, in order.
-void encodeDoubleLengthHexString(uint8_t* data, int size);
+/// Expands each char of the digest data to two chars,
+/// representing the hex value of each digest char, in order.
+/// Note: digestSize must be one-half of outputSize.
+void encodeDigestToBase16(
+    uint8_t* output,
+    int digestSize);
 
 /// sha1 function
 /// sha1(varbinary) -> string
@@ -89,7 +92,7 @@ struct Sha1HexStringFunction {
     folly::ssl::OpenSSLHash::sha1(
         folly::MutableByteRange((uint8_t*)result.data(), kSha1Length),
         folly::ByteRange((const uint8_t*)input.data(), input.size()));
-    encodeDoubleLengthHexString((uint8_t*)result.data(), result.size());
+    encodeDigestToBase16((uint8_t*)result.data(), kSha1Length);
   }
 };
 

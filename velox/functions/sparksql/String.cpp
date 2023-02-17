@@ -146,12 +146,14 @@ std::shared_ptr<exec::VectorFunction> makeLength(
   return kLengthFunction;
 }
 
-void encodeDoubleLengthHexString(uint8_t* data, int size) {
+void encodeDigestToBase16(
+    uint8_t* output,
+    int digestSize) {
   static unsigned char const kHexCodes[] = "0123456789abcdef";
-  for (int i = size - 2; i >= 0; i = i - 2) {
-    int a = data[i / 2];
-    data[i] = kHexCodes[(a >> 4) & 0xf];
-    data[i + 1] = kHexCodes[a & 0xf];
+  for (int i = digestSize; i >= 0; --i) {
+    int digestChar = output[digestSize];
+    output[digestSize * 2] = kHexCodes[(digestChar >> 4) & 0xf];
+    output[digestSize * 2 + 1] = kHexCodes[digestChar & 0xf];
   }
 }
 
