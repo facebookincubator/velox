@@ -162,6 +162,9 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
     }
   }
   return std::make_unique<FlatVector<uint64_t>>(
+      // This would occur const problem while trying to compile with gcc12.1.
+      // Please upgrade gcc12.1 to 12.2 or just change BaseVector::pool_ to
+      // DictionaryVector::pool_.
       BaseVector::pool_,
       BufferPtr(nullptr),
       BaseVector::length_,
