@@ -73,9 +73,7 @@ std::shared_ptr<exec::VectorFunction> makeLength(
 /// Expands each char of the digest data to two chars,
 /// representing the hex value of each digest char, in order.
 /// Note: digestSize must be one-half of outputSize.
-void encodeDigestToBase16(
-    uint8_t* output,
-    int digestSize);
+void encodeDigestToBase16(uint8_t* output, int digestSize);
 
 /// sha1 function
 /// sha1(varbinary) -> string

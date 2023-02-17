@@ -146,9 +146,7 @@ std::shared_ptr<exec::VectorFunction> makeLength(
   return kLengthFunction;
 }
 
-void encodeDigestToBase16(
-    uint8_t* output,
-    int digestSize) {
+void encodeDigestToBase16(uint8_t* output, int digestSize) {
   static unsigned char const kHexCodes[] = "0123456789abcdef";
   for (int i = digestSize; i >= 0; --i) {
     int digestChar = output[digestSize];
