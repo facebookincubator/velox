@@ -70,18 +70,24 @@ std::shared_ptr<exec::VectorFunction> makeLength(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs);
 
-void encodeDoubleLengthHexString(uint8_t *data, int size);
+/// Expands each char in the first half of char array to two chars,
+/// representing the hex value of each char, in order.
+void encodeDoubleLengthHexString(uint8_t* data, int size);
 
+/// sha1 function
+/// sha1(varbinary) -> string
+/// Calculate SHA-1 digest and convert the result to a hex string.
+/// Returns SHA-1 digest as a 40-character hex string.
 template <typename T>
 struct Sha1HexStringFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE
-  void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
-    static const int SHA1_LENGTH = 20;
-    result.resize(SHA1_LENGTH * 2);
+  void call(out_type<Varchar>& result, const arg_type<Varbinary>& input) {
+    static const int kSha1Length = 20;
+    result.resize(kSha1Length * 2);
     folly::ssl::OpenSSLHash::sha1(
-        folly::MutableByteRange((uint8_t*)result.data(), SHA1_LENGTH),
+        folly::MutableByteRange((uint8_t*)result.data(), kSha1Length),
         folly::ByteRange((const uint8_t*)input.data(), input.size()));
     encodeDoubleLengthHexString((uint8_t*)result.data(), result.size());
   }
