@@ -94,6 +94,59 @@ struct Sha1HexStringFunction {
   }
 };
 
+/// sha2 function
+/// sha2(varbinary, bitLength) -> string
+/// Calculate SHA-2 family of functions (SHA-224, SHA-256,
+/// SHA-384, and SHA-512) and convert the result to a hex string.
+/// Returns SHA-2 digest as hex string.
+/// If asking for an unsupported SHA function, the return value is NULL.
+template <typename T>
+struct Sha2HexStringFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  bool call(
+      out_type<Varchar>& result,
+      const arg_type<Varbinary>& input,
+      const int32_t& bitLength) {
+    int digestLength = bitLength >> 3;
+    switch (bitLength) {
+      case 224:
+        result.resize(digestLength * 2);
+        folly::ssl::OpenSSLHash::hash(
+            folly::MutableByteRange((uint8_t*)result.data(), digestLength),
+            EVP_sha224(),
+            folly::ByteRange((const uint8_t*)input.data(), input.size()));
+        break;
+      case 0:
+        digestLength = 256 >> 3;
+      case 256:
+        result.resize(digestLength * 2);
+        folly::ssl::OpenSSLHash::sha256(
+            folly::MutableByteRange((uint8_t*)result.data(), digestLength),
+            folly::ByteRange((const uint8_t*)input.data(), input.size()));
+        break;
+      case 384:
+        result.resize(digestLength * 2);
+        folly::ssl::OpenSSLHash::hash(
+            folly::MutableByteRange((uint8_t*)result.data(), digestLength),
+            EVP_sha384(),
+            folly::ByteRange((const uint8_t*)input.data(), input.size()));
+        break;
+      case 512:
+        result.resize(digestLength * 2);
+        folly::ssl::OpenSSLHash::sha512(
+            folly::MutableByteRange((uint8_t*)result.data(), digestLength),
+            folly::ByteRange((const uint8_t*)input.data(), input.size()));
+        break;
+      default:
+        return false;
+    }
+    encodeDigestToBase16((uint8_t*)result.data(), digestLength);
+    return true;
+  }
+};
+
 /// contains function
 /// contains(string, string) -> bool
 /// Searches the second argument in the first one.
