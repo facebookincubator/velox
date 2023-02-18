@@ -21,7 +21,7 @@ RowVectorPtr getTpchData(
     size_t offset,
     double scaleFactor,
     memory::MemoryPool* pool) {
-  // TODO: This is basically copied from TpchConnerctor.cpp, because it is is an
+  // TODO: This is basically copied from TpchConnector.cpp, because it is in an
   // anonymous namespace there. This should be made available so we can reuse
   // it.
   switch (table) {
