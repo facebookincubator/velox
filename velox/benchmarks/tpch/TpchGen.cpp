@@ -107,7 +107,7 @@ void generateOrdersAndLineitems(const std::filesystem::path& dataDirectory) {
 
   size_t expectedLineitemRows = tpch::getRowCount(
       facebook::velox::tpch::Table::TBL_LINEITEM, kScaleFactor);
-  size_t numLineitemRows = 0;
+  size_t numGeneratedLineitemRows = 0;
 
   // Make sure we include all rows and don't forget some at the end.
   const size_t endOffset = numOrderRows + kRowsPerSplit;
@@ -129,7 +129,7 @@ void generateOrdersAndLineitems(const std::filesystem::path& dataDirectory) {
     ordersWriter.write(orderData);
     ordersWriter.flush();
 
-    numLineitemRows += lineitemData->size();
+    numGeneratedLineitemRows += lineitemData->size();
 
     lineitemWriter.write(lineitemData);
     lineitemWriter.flush();
@@ -138,8 +138,7 @@ void generateOrdersAndLineitems(const std::filesystem::path& dataDirectory) {
               << std::endl;
   }
 
-  std::cout << "# lineitem generated: " << numLineitemRows
-            << " | expected: " << expectedLineitemRows << std::endl;
+  VELOX_CHECK(numGeneratedLineitemRows == expectedLineitemRows)
 
   ordersWriter.close();
   lineitemWriter.close();
@@ -148,7 +147,7 @@ void generateOrdersAndLineitems(const std::filesystem::path& dataDirectory) {
 } // namespace
 
 int main() {
-  const std::filesystem::path dataDirectory = "/tmp/tpch-data2";
+  const std::filesystem::path dataDirectory = "/tmp/tpch-data ";
   std::filesystem::create_directories(dataDirectory);
 
   // We need to create these together, as lineitems are created per order.
