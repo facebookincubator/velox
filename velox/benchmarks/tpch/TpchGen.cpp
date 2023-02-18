@@ -138,7 +138,7 @@ void generateOrdersAndLineitems(const std::filesystem::path& dataDirectory) {
               << std::endl;
   }
 
-  VELOX_CHECK(numGeneratedLineitemRows == expectedLineitemRows)
+  VELOX_CHECK_EQ(numGeneratedLineitemRows, expectedLineitemRows);
 
   ordersWriter.close();
   lineitemWriter.close();
