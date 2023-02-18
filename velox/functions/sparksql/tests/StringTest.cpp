@@ -63,7 +63,7 @@ class StringTest : public SparkFunctionBaseTest {
   std::optional<std::string> sha2(
       std::optional<std::string> str,
       std::optional<int32_t> bitLength) {
-    return evaluateOnce<std::string, std::string>(
+    return evaluateOnce<std::string, std::string, int32_t>(
         "sha2(c0, c1)", {str, bitLength}, {VARBINARY(), INTEGER()});
   }
 
