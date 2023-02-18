@@ -29,7 +29,7 @@ namespace facebook::velox::duckdb {
 struct ParseOptions {
   // Retain legacy behavior by default.
   bool parseDecimalAsDouble = true;
-  bool castIntegerToBigint = true;
+  bool parseIntegerAsBigint = true;
 };
 
 // Parses an input expression using DuckDB's internal postgresql-based parser,

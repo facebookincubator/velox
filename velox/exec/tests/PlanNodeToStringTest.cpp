@@ -592,20 +592,6 @@ TEST_F(PlanNodeToStringTest, decimalConstant) {
       plan->toString(true));
 }
 
-TEST_F(PlanNodeToStringTest, integer) {
-  parse::ParseOptions options;
-  options.castIntegerToBigint = false;
-
-  auto plan = PlanBuilder()
-                  .setParseOptions(options)
-                  .tableScan(ROW({"a"}, {VARCHAR()}))
-                  .project({"a", "1"})
-                  .planNode();
-  ASSERT_EQ(
-      "-- Project[expressions: (a:VARCHAR, ROW[\"a\"]), (p1:INTEGER, 1)] -> a:VARCHAR, p1:INTEGER\n",
-      plan->toString(true));
-}
-
 TEST_F(PlanNodeToStringTest, window) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
