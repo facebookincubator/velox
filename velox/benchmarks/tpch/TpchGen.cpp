@@ -12,8 +12,8 @@ using facebook::velox::parquet::Writer;
 
 namespace {
 
-constexpr size_t SCALE_FACTOR = 1;
-constexpr size_t ROWS_PER_SPLIT = 10'000;
+constexpr size_t kScaleFactor = 1;
+constexpr size_t kRowsPerSplit = 10'000;
 
 RowVectorPtr getTpchData(
     tpch::Table table,
@@ -21,6 +21,9 @@ RowVectorPtr getTpchData(
     size_t offset,
     double scaleFactor,
     memory::MemoryPool* pool) {
+  // TODO: This is basically copied from TpchConnerctor.cpp, because it is is an
+  // anonymous namespace there. This should be made available so we can reuse
+  // it.
   switch (table) {
     case tpch::Table::TBL_PART:
       return tpch::genTpchPart(maxRows, offset, scaleFactor, pool);
@@ -41,52 +44,122 @@ RowVectorPtr getTpchData(
   }
 }
 
-void generateTable(tpch::Table table, const std::filesystem::path& data_dir) {
+void generateTable(
+    tpch::Table table,
+    const std::filesystem::path& dataDirectory) {
   auto pool = memory::getDefaultMemoryPool();
-  const std::string table_name = std::string{tpch::toTableName(table)};
+  const std::string tableName = std::string{tpch::toTableName(table)};
 
-  const std::filesystem::path& table_dir = data_dir / table_name;
-  std::filesystem::create_directories(table_dir);
-  const std::filesystem::path& file_path = table_dir / "001.parquet";
+  const std::filesystem::path& tableDirectory = dataDirectory / tableName;
+  std::filesystem::create_directories(tableDirectory);
+  const std::filesystem::path& filePath = tableDirectory / "001.parquet";
 
-  Writer writer{
-      dwio::common::DataSink::create(file_path), *pool, ROWS_PER_SPLIT};
+  Writer writer{dwio::common::DataSink::create(filePath), *pool, kRowsPerSplit};
 
-  const size_t num_rows = tpch::getRowCount(table, SCALE_FACTOR);
+  const size_t numRows = tpch::getRowCount(table, kScaleFactor);
 
   // Make sure we include all rows and don't forget some at the end.
-  const size_t end_offset = num_rows + ROWS_PER_SPLIT;
-  for (size_t offset = 0; offset < end_offset; offset += ROWS_PER_SPLIT) {
+  const size_t endOffset = numRows + kRowsPerSplit;
+  for (size_t offset = 0; offset < endOffset; offset += kRowsPerSplit) {
     auto data =
-        getTpchData(table, ROWS_PER_SPLIT, offset, SCALE_FACTOR, pool.get());
+        getTpchData(table, kRowsPerSplit, offset, kScaleFactor, pool.get());
 
-//    if (offset == 0) {
-//      std::cout << std::endl
-//                << "> first 10 rows from TPC-H " << table_name
-//                << " table: " << data->toString() << std::endl;
-//      std::cout << data->toString(0, 10) << std::endl;
-//    }
+    if (offset == 0) {
+      std::cout << std::endl
+                << "> first 10 rows from TPC-H " << tableName
+                << " table: " << data->toString() << std::endl;
+      std::cout << data->toString(0, 10) << std::endl;
+    }
 
     writer.write(data);
     writer.flush();
-    std::cout << "written offset " << offset << " (/" << num_rows << ")" << std::endl;
+    std::cout << "written offset " << offset << " (/" << numRows << ")"
+              << std::endl;
   }
 
   writer.close();
 }
 
+void generateOrdersAndLineitems(const std::filesystem::path& dataDirectory) {
+  auto pool = memory::getDefaultMemoryPool();
+  const std::string lineitemTableName =
+      std::string{tpch::toTableName(tpch::Table::TBL_LINEITEM)};
+  const std::string ordersTableName =
+      std::string{tpch::toTableName(tpch::Table::TBL_ORDERS)};
+
+  const std::filesystem::path& lineitemDirectory =
+      dataDirectory / lineitemTableName;
+  const std::filesystem::path& ordersDirectory =
+      dataDirectory / ordersTableName;
+  std::filesystem::create_directories(lineitemDirectory);
+  std::filesystem::create_directories(ordersDirectory);
+  const std::filesystem::path& lineitemFilePath =
+      lineitemDirectory / "001.parquet";
+  const std::filesystem::path& ordersFilePath = ordersDirectory / "001.parquet";
+
+  Writer lineitemWriter{
+      dwio::common::DataSink::create(lineitemFilePath), *pool, kRowsPerSplit};
+  Writer ordersWriter{
+      dwio::common::DataSink::create(ordersFilePath), *pool, kRowsPerSplit};
+
+  const size_t numOrderRows =
+      tpch::getRowCount(facebook::velox::tpch::Table::TBL_ORDERS, kScaleFactor);
+
+  size_t expectedLineitemRows = tpch::getRowCount(
+      facebook::velox::tpch::Table::TBL_LINEITEM, kScaleFactor);
+  size_t numLineitemRows = 0;
+
+  // Make sure we include all rows and don't forget some at the end.
+  const size_t endOffset = numOrderRows + kRowsPerSplit;
+  for (size_t offset = 0; offset < endOffset; offset += kRowsPerSplit) {
+    auto orderData = getTpchData(
+        facebook::velox::tpch::Table::TBL_ORDERS,
+        kRowsPerSplit,
+        offset,
+        kScaleFactor,
+        pool.get());
+
+    auto lineitemData = getTpchData(
+        facebook::velox::tpch::Table::TBL_LINEITEM,
+        kRowsPerSplit,
+        offset,
+        kScaleFactor,
+        pool.get());
+
+    ordersWriter.write(orderData);
+    ordersWriter.flush();
+
+    numLineitemRows += lineitemData->size();
+
+    lineitemWriter.write(lineitemData);
+    lineitemWriter.flush();
+
+    std::cout << "written offset " << offset << " (/" << numOrderRows << ")"
+              << std::endl;
+  }
+
+  std::cout << "# lineitem generated: " << numLineitemRows
+            << " | expected: " << expectedLineitemRows << std::endl;
+
+  ordersWriter.close();
+  lineitemWriter.close();
+}
+
 } // namespace
 
 int main() {
-  const std::filesystem::path data_dir = "/tmp/tpch-data";
-  std::filesystem::create_directories(data_dir);
+  const std::filesystem::path dataDirectory = "/tmp/tpch-data2";
+  std::filesystem::create_directories(dataDirectory);
 
-  generateTable(tpch::Table::TBL_LINEITEM, data_dir);
-  generateTable(tpch::Table::TBL_ORDERS, data_dir);
-  generateTable(tpch::Table::TBL_PART, data_dir);
-  generateTable(tpch::Table::TBL_SUPPLIER, data_dir);
-  generateTable(tpch::Table::TBL_PARTSUPP, data_dir);
-  generateTable(tpch::Table::TBL_CUSTOMER, data_dir);
-  generateTable(tpch::Table::TBL_NATION, data_dir);
-  generateTable(tpch::Table::TBL_REGION, data_dir);
+  // We need to create these together, as lineitems are created per order.
+  // generateTable(tpch::Table::TBL_LINEITEM, dataDirectory);
+  // generateTable(tpch::Table::TBL_ORDERS, dataDirectory);
+  generateOrdersAndLineitems(dataDirectory);
+
+  generateTable(tpch::Table::TBL_PART, dataDirectory);
+  generateTable(tpch::Table::TBL_SUPPLIER, dataDirectory);
+  generateTable(tpch::Table::TBL_PARTSUPP, dataDirectory);
+  generateTable(tpch::Table::TBL_CUSTOMER, dataDirectory);
+  generateTable(tpch::Table::TBL_NATION, dataDirectory);
+  generateTable(tpch::Table::TBL_REGION, dataDirectory);
 }
