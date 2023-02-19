@@ -60,6 +60,13 @@ class StringTest : public SparkFunctionBaseTest {
         "sha1(c0)", {arg}, {VARBINARY()});
   }
 
+  std::optional<std::string> sha2(
+      std::optional<std::string> str,
+      std::optional<int32_t> bitLength) {
+    return evaluateOnce<std::string, std::string>(
+        "sha2(c0, c1)", {str, bitLength}, {VARBINARY(), INTEGER()});
+  }
+
   bool compareFunction(
       const std::string& function,
       const std::optional<std::string>& str,
@@ -153,6 +160,65 @@ TEST_F(StringTest, sha1) {
   EXPECT_EQ(
       sha1("0123456789abcdefghijklmnopqrstuvwxyz"),
       "a26704c04fc5f10db5aab58468035531cc542485");
+}
+
+TEST_F(StringTest, sha2) {
+  EXPECT_EQ(sha2(std::nullopt, 256), std::nullopt);
+  EXPECT_EQ(sha2("Spark", std::nullopt), std::nullopt);
+  EXPECT_EQ(sha2(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(sha2("Spark", -999), std::nullopt);
+  EXPECT_EQ(sha2("Spark", 999), std::nullopt);
+  EXPECT_EQ(
+      sha2("", 0),
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  EXPECT_EQ(
+      sha2("Spark", 0),
+      "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 0),
+      "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
+  EXPECT_EQ(
+      sha2("", 224),
+      "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f");
+  EXPECT_EQ(
+      sha2("Spark", 224),
+      "dbeab94971678d36af2195851c0f7485775a2a7c60073d62fc04549c");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 224),
+      "e6e4a6be069cc9bead8b6050856d2b26da6b3f7efa0951e5fb3a54dd");
+  EXPECT_EQ(
+      sha2("", 256),
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  EXPECT_EQ(
+      sha2("Spark", 256),
+      "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 256),
+      "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
+  EXPECT_EQ(
+      sha2("", 384),
+      "38b060a751ac96384cd9327eb1b1e36a21fdb71114be0743"
+      "4c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b");
+  EXPECT_EQ(
+      sha2("Spark", 384),
+      "1e40b8d06c248a1cc32428c22582b6219d072283078fa140"
+      "d9ad297ecadf2cabefc341b857ad36226aa8d6d79f2ab67d");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 384),
+      "ce6d4ea5442bc6c830bea1942d4860db9f7b96f0e9d2c307"
+      "3ffe47a0e1166d95612d840ff15e5efdd23c1f273096da32");
+  EXPECT_EQ(
+      sha2("", 512),
+      "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
+      "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
+  EXPECT_EQ(
+      sha2("Spark", 512),
+      "44844a586c54c9a212da1dbfe05c5f1705de1af5fda1f0d36297623249b279fd"
+      "8f0ccec03f888f4fb13bf7cd83fdad58591c797f81121a23cfdd5e0897795238");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 512),
+      "95cadc34aa46b9fdef432f62fe5bad8d9f475bfbecf797d5802bb5f2937a85d9"
+      "3ce4857a6262b03834c01c610d74cd1215f9a466dc6ad3dd15078e3309a03a6d");
 }
 
 TEST_F(StringTest, startsWith) {
