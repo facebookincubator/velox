@@ -176,7 +176,7 @@ TEST_F(StringTest, sha2) {
       "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
   EXPECT_EQ(
       sha2("0123456789abcdefghijklmnopqrstuvwxyz", 0),
-      "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
+      "74e7e5bb9d22d6db26bf76946d40fff3ea9f0346b884fd0694920fccfad15e33");
   EXPECT_EQ(
       sha2("", 224),
       "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f");
@@ -194,7 +194,7 @@ TEST_F(StringTest, sha2) {
       "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
   EXPECT_EQ(
       sha2("0123456789abcdefghijklmnopqrstuvwxyz", 256),
-      "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
+      "74e7e5bb9d22d6db26bf76946d40fff3ea9f0346b884fd0694920fccfad15e33");
   EXPECT_EQ(
       sha2("", 384),
       "38b060a751ac96384cd9327eb1b1e36a21fdb71114be0743"
