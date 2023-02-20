@@ -42,7 +42,7 @@ void Writer::write(const RowVectorPtr& data) {
         &arrowWriter_));
   }
 
-  PARQUET_THROW_NOT_OK(arrowWriter_->WriteTable(*table, 10000));
+  PARQUET_THROW_NOT_OK(arrowWriter_->WriteTable(*table, 10'000));
 }
 
 void Writer::flush() {

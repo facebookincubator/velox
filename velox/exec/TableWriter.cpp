@@ -140,17 +140,17 @@ RowVectorPtr TableWriter::getOutput() {
            ("lastPage", true));
   // clang-format on
 
-  auto commitContextVector = std::make_shared<ConstantVector<StringView>>(
-      pool,
-      numOutputRows,
-      false /*isNull*/,
-      VARBINARY(),
-      StringView(commitContextJson));
+     auto commitContextVector = std::make_shared<ConstantVector<StringView>>(
+         pool,
+         numOutputRows,
+         false /*isNull*/,
+         VARBINARY(),
+         StringView(commitContextJson));
 
-  std::vector<VectorPtr> columns = {
-      writtenRowsVector, fragmentsVector, commitContextVector};
+     std::vector<VectorPtr> columns = {
+         writtenRowsVector, fragmentsVector, commitContextVector};
 
-  return std::make_shared<RowVector>(
-      pool, outputType_, nullptr, numOutputRows, columns);
+     return std::make_shared<RowVector>(
+         pool, outputType_, nullptr, numOutputRows, columns);
 }
 } // namespace facebook::velox::exec
