@@ -82,8 +82,7 @@ class MapKeysFunction : public MapKeyValueFunction {
         rows.end(),
         mapVector->offsets(),
         mapVector->sizes(),
-        mapKeys,
-        mapVector->getNullCount());
+        mapKeys);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -119,8 +118,7 @@ class MapValuesFunction : public MapKeyValueFunction {
         rows.end(),
         mapVector->offsets(),
         mapVector->sizes(),
-        mapValues,
-        mapVector->getNullCount());
+        mapValues);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

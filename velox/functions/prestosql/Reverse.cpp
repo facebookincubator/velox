@@ -172,8 +172,7 @@ class ReverseFunction : public exec::VectorFunction {
         rows.end(),
         arrayVector->offsets(),
         arrayVector->sizes(),
-        elementsDict,
-        arrayVector->getNullCount());
+        elementsDict);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

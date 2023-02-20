@@ -215,8 +215,7 @@ VectorPtr ArraySort::applyFlat(
       rows.end(),
       inputArray->offsets(),
       inputArray->sizes(),
-      resultElements,
-      inputArray->getNullCount());
+      resultElements);
 }
 
 // Signature: array_sort(array(T)) -> array(T)
