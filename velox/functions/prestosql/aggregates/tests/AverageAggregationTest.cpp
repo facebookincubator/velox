@@ -343,6 +343,22 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {makeRowVector({makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1))})});
 }
 
+TEST_F(AverageAggregationTest, avgDecimalWithGroupingKeys) {
+  auto input = {
+      makeRowVector(
+          {makeFlatVector<int32_t>({1, 1}),
+           makeNullableShortDecimalFlatVector({37220, 53450}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeFlatVector<int32_t>({1, 1}),
+           makeNullableShortDecimalFlatVector({10410, 9250}, DECIMAL(5, 2))}),
+  };
+
+  auto result = {makeRowVector(
+      {makeNullableShortDecimalFlatVector({27583}, DECIMAL(5, 2))})};
+
+  testAggregations(input, {"c0"}, {"avg(c1)"}, {"a0"}, result);
+}
+
 TEST_F(AverageAggregationTest, constantVectorOverflow) {
   auto rows = makeRowVector({makeConstant<int32_t>(1073741824, 100)});
   auto plan = PlanBuilder()
