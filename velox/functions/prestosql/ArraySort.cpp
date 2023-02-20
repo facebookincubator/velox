@@ -218,22 +218,9 @@ class ArraySortFunction : public exec::VectorFunction {
         rows.end(),
         inputArray->offsets(),
         inputArray->sizes(),
-        resultElements,
-        inputArray->getNullCount());
+        resultElements);
   }
 };
-
-// Validate number of parameters and types.
-void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  VELOX_USER_CHECK_EQ(
-      inputArgs.size(), 1, "array_sort requires exactly one parameter");
-
-  auto arrayType = inputArgs.front().type;
-  VELOX_USER_CHECK_EQ(
-      arrayType->kind(),
-      TypeKind::ARRAY,
-      "array_sort requires arguments of type ARRAY");
-}
 
 // Create function template based on type.
 template <TypeKind kind>
@@ -247,7 +234,6 @@ std::shared_ptr<exec::VectorFunction> createTyped(
 std::shared_ptr<exec::VectorFunction> create(
     const std::string& /* name */,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  validateType(inputArgs);
   auto elementType = inputArgs.front().type->childAt(0);
   return VELOX_DYNAMIC_TYPE_DISPATCH(
       createTyped, elementType->kind(), inputArgs);
