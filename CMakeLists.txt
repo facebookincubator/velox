@@ -157,6 +157,7 @@ if(VELOX_ENABLE_HDFS)
     LIBHDFS3
     NAMES libhdfs3.so libhdfs3.dylib
     HINTS "${CMAKE_SOURCE_DIR}/hawq/depends/libhdfs3/_build/src/" REQUIRED)
+  include_directories(${LIBHDFS3_INCLUDE_DIR})
   add_definitions(-DVELOX_ENABLE_HDFS3)
 endif()
 
@@ -310,31 +311,43 @@ set(BOOST_INCLUDE_LIBRARIES
     thread)
 
 resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
+include_directories(${Boost_INCLUDE_DIRS})
 
 # Range-v3 will be enable when the codegen code actually lands keeping it here
 # for reference. find_package(range-v3)
 
 find_package(gflags COMPONENTS shared)
+include_directories(${LIBGFLAGS_INCLUDE_DIR})
 find_package(glog REQUIRED)
+include_directories(${GLOG_INCLUDE_DIRS})
 
 set_source(fmt)
 resolve_dependency(fmt 8.0.1)
+include_directories(${LIBFMT_INCLUDE_DIRS})
 
 find_library(EVENT event)
+include_directories(${LIBEVENT_INCLUDE_DIR})
 
 find_library(DOUBLE_CONVERSION double-conversion)
+include_directories(${DOUBLE_CONVERSION_INCLUDE_DIR})
 
 # Required for boost.
 find_package(ZLIB)
+include_directories(${ZLIB_INCLUDE_DIRS})
 
 if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(LZ4 lz4)
+  include_directories(${LZ4_INCLUDE_DIR})
   find_library(LZO lzo2)
+  include_directories(${LZO_INCLUDE_DIR})
   find_library(ZSTD zstd)
+  include_directories(${ZSTD_INCLUDE_DIR})
   find_library(SNAPPY snappy)
+  include_directories(${SNAPPY_INCLUDE_DIR})
 endif()
 
 find_library(RE2 re2 REQUIRED)
+include_directories(${RE2_INCLUDE_DIR})
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(pybind11_SOURCE AUTO)
@@ -345,6 +358,7 @@ endif()
 # Locate or build folly.
 set_source(folly)
 resolve_dependency(folly)
+include_directories(SYSTEM ${FOLLY_INCLUDE_DIR})
 
 # If we use BUNDLED boost we need to set this manually AFTER folly is configured
 if(NOT DEFINED Boost_LIBRARIES)
@@ -371,10 +385,9 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   find_package(BZip2 MODULE)
   if(BZIP2_FOUND)
     list(APPEND FOLLY_WITH_DEPENDENCIES ${BZIP2_LIBRARIES})
+    include_directories(${BZIP2_INCLUDE_DIRS})
   endif()
 endif()
-
-include_directories(SYSTEM ${FOLLY_INCLUDE_DIRS})
 
 if(NOT ${VELOX_BUILD_MINIMAL})
   # Locate or build protobuf.
@@ -437,6 +450,8 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
 endif()
 find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
+include_directories(${FLEX_INCLUDE_DIRS})
+include_directories(${LIBDWARF_INCLUDE_DIR})
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
