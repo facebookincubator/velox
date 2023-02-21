@@ -346,17 +346,18 @@ TEST_F(AverageAggregationTest, avgDecimal) {
 TEST_F(AverageAggregationTest, avgDecimalWithGroupingKeys) {
   auto input = {
       makeRowVector(
-          {makeFlatVector<int32_t>({1, 1}),
+          {makeFlatVector<StringView>({StringView{"1"}, StringView{"1"}}),
            makeNullableShortDecimalFlatVector({37220, 53450}, DECIMAL(5, 2))}),
       makeRowVector(
-          {makeFlatVector<int32_t>({1, 1}),
+          {makeFlatVector<StringView>({StringView{"1"}, StringView{"1"}}),
            makeNullableShortDecimalFlatVector({10410, 9250}, DECIMAL(5, 2))}),
   };
 
   auto result = {makeRowVector(
-      {makeNullableShortDecimalFlatVector({27583}, DECIMAL(5, 2))})};
+      {makeFlatVector<StringView>({StringView{"1"}}),
+       makeNullableShortDecimalFlatVector({27583}, DECIMAL(5, 2))})};
 
-  testAggregations(input, {"c0"}, {"avg(c1)"}, {"a0"}, result);
+  testAggregations(input, {"c0"}, {"avg(c1)"}, {}, result);
 }
 
 TEST_F(AverageAggregationTest, constantVectorOverflow) {
