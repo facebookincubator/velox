@@ -1,4 +1,3 @@
-
 #include <filesystem>
 #include <iostream>
 
@@ -12,8 +11,9 @@ using facebook::velox::parquet::Writer;
 
 namespace {
 
-constexpr size_t kScaleFactor = 1;
-constexpr size_t kRowsPerSplit = 10'000;
+constexpr double kScaleFactor = 1;
+constexpr size_t kWriteBatchSize = 10'000;
+constexpr size_t kRowsInRowgroup = 10'000;
 
 RowVectorPtr getTpchData(
     tpch::Table table,
@@ -54,15 +54,19 @@ void generateTable(
   std::filesystem::create_directories(tableDirectory);
   const std::filesystem::path& filePath = tableDirectory / "001.parquet";
 
-  Writer writer{dwio::common::DataSink::create(filePath), *pool, kRowsPerSplit};
+  auto writerProperties = ::parquet::WriterProperties::Builder()
+                              .max_row_group_length(kRowsInRowgroup)
+                              ->build();
+  Writer writer{
+      dwio::common::DataSink::create(filePath), *pool, kRowsInRowgroup};
 
-  const size_t numRows = tpch::getRowCount(table, kScaleFactor);
+  const uint64_t numRows = tpch::getRowCount(table, kScaleFactor);
 
-  // Make sure we include all rows and don't forget some at the end.
-  const size_t endOffset = numRows + kRowsPerSplit;
-  for (size_t offset = 0; offset < endOffset; offset += kRowsPerSplit) {
+  size_t offset = 0;
+  uint64_t rowCount = 0;
+  while (rowCount < numRows) {
     auto data =
-        getTpchData(table, kRowsPerSplit, offset, kScaleFactor, pool.get());
+        getTpchData(table, kWriteBatchSize, offset, kScaleFactor, pool.get());
 
     if (offset == 0) {
       std::cout << std::endl
@@ -70,95 +74,31 @@ void generateTable(
                 << " table: " << data->toString() << std::endl;
       std::cout << data->toString(0, 10) << std::endl;
     }
-
+    // Resize is for lineitems table since the rowCount can exceed the numRows.
+    data->resize(
+        std::min((numRows - rowCount), static_cast<uint64_t>(data->size())));
     writer.write(data);
-    writer.flush();
-    std::cout << "written offset " << offset << " (/" << numRows << ")"
+    offset += kWriteBatchSize;
+    rowCount += data->size();
+
+    std::cout << "written row (" << rowCount << "/"  << numRows << ")" << " (offset: " << offset << ")"
               << std::endl;
   }
-
   writer.close();
-}
-
-void generateOrdersAndLineitems(const std::filesystem::path& dataDirectory) {
-  auto pool = memory::getDefaultMemoryPool();
-  const std::string lineitemTableName =
-      std::string{tpch::toTableName(tpch::Table::TBL_LINEITEM)};
-  const std::string ordersTableName =
-      std::string{tpch::toTableName(tpch::Table::TBL_ORDERS)};
-
-  const std::filesystem::path& lineitemDirectory =
-      dataDirectory / lineitemTableName;
-  const std::filesystem::path& ordersDirectory =
-      dataDirectory / ordersTableName;
-  std::filesystem::create_directories(lineitemDirectory);
-  std::filesystem::create_directories(ordersDirectory);
-  const std::filesystem::path& lineitemFilePath =
-      lineitemDirectory / "001.parquet";
-  const std::filesystem::path& ordersFilePath = ordersDirectory / "001.parquet";
-
-  Writer lineitemWriter{
-      dwio::common::DataSink::create(lineitemFilePath), *pool, kRowsPerSplit};
-  Writer ordersWriter{
-      dwio::common::DataSink::create(ordersFilePath), *pool, kRowsPerSplit};
-
-  const size_t numOrderRows =
-      tpch::getRowCount(facebook::velox::tpch::Table::TBL_ORDERS, kScaleFactor);
-
-  size_t expectedLineitemRows = tpch::getRowCount(
-      facebook::velox::tpch::Table::TBL_LINEITEM, kScaleFactor);
-  size_t numGeneratedLineitemRows = 0;
-
-  // Make sure we include all rows and don't forget some at the end.
-  const size_t endOffset = numOrderRows + kRowsPerSplit;
-  for (size_t offset = 0; offset < endOffset; offset += kRowsPerSplit) {
-    auto orderData = getTpchData(
-        facebook::velox::tpch::Table::TBL_ORDERS,
-        kRowsPerSplit,
-        offset,
-        kScaleFactor,
-        pool.get());
-
-    auto lineitemData = getTpchData(
-        facebook::velox::tpch::Table::TBL_LINEITEM,
-        kRowsPerSplit,
-        offset,
-        kScaleFactor,
-        pool.get());
-
-    ordersWriter.write(orderData);
-    ordersWriter.flush();
-
-    numGeneratedLineitemRows += lineitemData->size();
-
-    lineitemWriter.write(lineitemData);
-    lineitemWriter.flush();
-
-    std::cout << "written offset " << offset << " (/" << numOrderRows << ")"
-              << std::endl;
-  }
-
-  VELOX_CHECK_EQ(numGeneratedLineitemRows, expectedLineitemRows);
-
-  ordersWriter.close();
-  lineitemWriter.close();
 }
 
 } // namespace
 
 int main() {
-  const std::filesystem::path dataDirectory = "/tmp/tpch-data ";
-  std::filesystem::create_directories(dataDirectory);
+    const std::filesystem::path dataDirectory = "/tmp/tpch-sf1";
+    std::filesystem::create_directories(dataDirectory);
 
-  // We need to create these together, as lineitems are created per order.
-  // generateTable(tpch::Table::TBL_LINEITEM, dataDirectory);
-  // generateTable(tpch::Table::TBL_ORDERS, dataDirectory);
-  generateOrdersAndLineitems(dataDirectory);
-
-  generateTable(tpch::Table::TBL_PART, dataDirectory);
-  generateTable(tpch::Table::TBL_SUPPLIER, dataDirectory);
-  generateTable(tpch::Table::TBL_PARTSUPP, dataDirectory);
-  generateTable(tpch::Table::TBL_CUSTOMER, dataDirectory);
-  generateTable(tpch::Table::TBL_NATION, dataDirectory);
-  generateTable(tpch::Table::TBL_REGION, dataDirectory);
+    generateTable(tpch::Table::TBL_LINEITEM, dataDirectory);
+    generateTable(tpch::Table::TBL_ORDERS, dataDirectory);
+    generateTable(tpch::Table::TBL_PART, dataDirectory);
+    generateTable(tpch::Table::TBL_SUPPLIER, dataDirectory);
+    generateTable(tpch::Table::TBL_PARTSUPP, dataDirectory);
+    generateTable(tpch::Table::TBL_CUSTOMER, dataDirectory);
+    generateTable(tpch::Table::TBL_NATION, dataDirectory);
+    generateTable(tpch::Table::TBL_REGION, dataDirectory);
 }
