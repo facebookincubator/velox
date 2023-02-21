@@ -270,6 +270,7 @@ class DecimalAggregate : public exec::Aggregate {
       if (isNull(groups[i])) {
         stringViewVector->setNull(i, true);
       } else {
+        std::cout << "extractAccumulators, group: " << i << " clearNull" << std::endl;
         clearNull(rawNulls, i);
         auto size = accumulator->serializedSize();
         Buffer* buffer = stringViewVector->getBufferWithSpace(size);
@@ -295,8 +296,10 @@ class DecimalAggregate : public exec::Aggregate {
     for (int32_t i = 0; i < numGroups; ++i) {
       char* group = groups[i];
       if (isNull(group)) {
+        std::cout << "extractValues, group: " << i << " is null" << std::endl;
         vector->setNull(i, true);
       } else {
+        std::cout << "extractValues, group: " << i << " is not null" << std::endl;
         clearNull(rawNulls, i);
         auto accumulator = decimalAccumulator(group);
         rawValues[i] = computeFinalValue(accumulator);
