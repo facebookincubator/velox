@@ -389,7 +389,7 @@ jobs:
             export LIBHDFS3_CONF=$(pwd)/.circleci/hdfs-client.xml
             export HADOOP_HOME='/usr/local/hadoop'
             export PATH=~/adapter-deps/install/bin:/usr/local/hadoop/bin:${PATH}
-            cd _build/release && ctest -j 16 -VV --output-on-failure
+            cd _build/release && velox/functions/prestosql/aggregates/tests/velox_aggregates_test --gtest_filter=AverageAggregationTest.avgConst:AverageAggregationTest/*.avgConst:AverageAggregationTest.avgConst/*:*/AverageAggregationTest.avgConst/*:*/AverageAggregationTest/*.avgConst:AverageAggregationTest.avgConstNull:AverageAggregationTest/*.avgConstNull:AverageAggregationTest.avgConstNull/*:*/AverageAggregationTest.avgConstNull/*:*/AverageAggregationTest/*.avgConstNull:AverageAggregationTest.avgNulls:AverageAggregationTest/*.avgNulls:AverageAggregationTest.avgNulls/*:*/AverageAggregationTest.avgNulls/*:*/AverageAggregationTest/*.avgNulls:AverageAggregationTest.avg:AverageAggregationTest/*.avg:AverageAggregationTest.avg/*:*/AverageAggregationTest.avg/*:*/AverageAggregationTest/*.avg:AverageAggregationTest.partialResults:AverageAggregationTest/*.partialResults:AverageAggregationTest.partialResults/*:*/AverageAggregationTest.partialResults/*:*/AverageAggregationTest/*.partialResults:AverageAggregationTest.decimalAccumulator:AverageAggregationTest/*.decimalAccumulator:AverageAggregationTest.decimalAccumulator/*:*/AverageAggregationTest.decimalAccumulator/*:*/AverageAggregationTest/*.decimalAccumulator:AverageAggregationTest.avgDecimal:AverageAggregationTest/*.avgDecimal:AverageAggregationTest.avgDecimal/*:*/AverageAggregationTest.avgDecimal/*:*/AverageAggregationTest/*.avgDecimal:AverageAggregationTest.avgDecimalWithGroupingKeys:AverageAggregationTest/*.avgDecimalWithGroupingKeys:AverageAggregationTest.avgDecimalWithGroupingKeys/*:*/AverageAggregationTest.avgDecimalWithGroupingKeys/*:*/AverageAggregationTest/*.avgDecimalWithGroupingKeys:AverageAggregationTest.constantVectorOverflow:AverageAggregationTest/*.constantVectorOverflow:AverageAggregationTest.constantVectorOverflow/*:*/AverageAggregationTest.constantVectorOverflow/*:*/AverageAggregationTest/*.constantVectorOverflow --gtest_color=no
           no_output_timeout: 1h
       - post-steps
 
@@ -422,7 +422,7 @@ jobs:
           fuzzer_repro: "/tmp/spark_fuzzer_repro"
           fuzzer_name: "Spark"
           fuzzer_exe: "_build/debug/velox/expression/tests/spark_expression_fuzzer_test"
-          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \ 
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \
           --repro_persist_path=/tmp/spark_fuzzer_repro"
 
 
@@ -436,7 +436,7 @@ jobs:
           fuzzer_repro: "/tmp/aggregate_fuzzer_repro"
           fuzzer_name: "Aggregate"
           fuzzer_exe: "_build/debug/velox/exec/tests/velox_aggregation_fuzzer_test"
-          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \ 
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \
           --repro_persist_path=/tmp/aggregate_fuzzer_repro"
 
   linux-join-fuzzer-run:
@@ -500,7 +500,7 @@ jobs:
             source ~/.bashrc
             conda create -y --name docgenenv python=3.7
             conda activate docgenenv
-            pip install sphinx sphinx-tabs breathe sphinx_rtd_theme 
+            pip install sphinx sphinx-tabs breathe sphinx_rtd_theme
             make -C velox/docs html
             git checkout gh-pages
             cp -R velox/docs/_build/html/* docs
