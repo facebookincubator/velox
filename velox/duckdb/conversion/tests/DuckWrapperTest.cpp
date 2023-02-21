@@ -58,7 +58,8 @@ class BaseDuckWrapperTest : public testing::Test {
       const std::string& query,
       const std::vector<T>& expectedOutput) {
     std::vector<bool> nulls(expectedOutput.size(), false);
-    verifyUnaryResult<T>(move(query), move(expectedOutput), move(nulls));
+    verifyUnaryResult<T>(
+        std::move(query), std::move(expectedOutput), std::move(nulls));
   }
 
   template <class T>
@@ -116,6 +117,11 @@ TEST_F(BaseDuckWrapperTest, simpleSelect) {
 
 TEST_F(BaseDuckWrapperTest, scalarTypes) {
   // test various types
+  // boolean types
+  execute("CREATE TABLE booleans(i BOOLEAN)");
+  execute("INSERT INTO booleans VALUES (true), (true), (false), (false)");
+  verifyUnaryResult<bool>("SELECT * FROM booleans", {true, true, false, false});
+
   // integer types
   verifyUnaryResult<int8_t>("SELECT 42::TINYINT", {42});
   verifyUnaryResult<int16_t>("SELECT 42::SMALLINT", {42});
@@ -141,6 +147,9 @@ TEST_F(BaseDuckWrapperTest, scalarTypes) {
   verifyUnaryResult<StringView>(
       "SELECT 'this is a long, non-inlined, example string'",
       {StringView("this is a long, non-inlined, example string")});
+
+  // blob
+  verifyUnaryResult<StringView>("SELECT '\\xFF'::BLOB", {StringView("\xFF")});
 }
 
 TEST_F(BaseDuckWrapperTest, types) {

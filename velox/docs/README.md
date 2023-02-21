@@ -17,8 +17,6 @@ If you're using a conda environment, it can be easily installed by `conda instal
 Pandoc is also used to generate `.rst` files from existing markdown files. Refer to installation
 instructions [here](https://pandoc.org/installing.html).
 
-Generate Python bindings Get started page.
-
 To build the documentation, e.g. generate HTML files from .rst files:
 
 Run the `./scripts/gen-docs.sh` script from the base directory.
@@ -32,7 +30,7 @@ GitHub pages is configured to display the contents of the top-level docs directo
 found in the gh-pages branch. The documentation is available at
 https://facebookincubator.github.io/velox.
 
-To publish updated documentation copy the contents of the _build/html
+To publish updated documentation, copy the contents of the _build/html
 directory to the top-level docs folder and push to gh-pages branch.
 
 ```

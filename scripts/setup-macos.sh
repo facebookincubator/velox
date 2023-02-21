@@ -81,8 +81,14 @@ function install_build_prerequisites {
 }
 
 function install_fmt {
-  github_checkout fmtlib/fmt 8.0.0
+  github_checkout fmtlib/fmt 8.0.1
   cmake_install -DFMT_TEST=OFF
+}
+
+function install_folly {
+  github_checkout facebook/folly "v2022.11.14.00"
+  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+    cmake_install -DBUILD_TESTS=OFF
 }
 
 function install_double_conversion {

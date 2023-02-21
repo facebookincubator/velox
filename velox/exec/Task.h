@@ -30,7 +30,6 @@ class PartitionedOutputBufferManager;
 
 class HashJoinBridge;
 class CrossJoinBridge;
-
 class Task : public std::enable_shared_from_this<Task> {
  public:
   /// Creates a task to execute a plan fragment, but doesn't start execution
@@ -194,7 +193,10 @@ class Task : public std::enable_shared_from_this<Task> {
   /// of buffers. No more calls are expected after the call with noMoreBuffers
   /// == true, but occasionally the caller might resend it, so calls
   /// received after a call with noMoreBuffers == true are ignored.
-  void updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers);
+  /// @return true if update was successful.
+  ///         false if noMoreBuffers was previously set to true.
+  ///         false if buffer was not found for a given task.
+  bool updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers);
 
   /// Returns true if state is 'running'.
   bool isRunning() const;
@@ -264,25 +266,22 @@ class Task : public std::enable_shared_from_this<Task> {
   /// library components (Driver, Operator, etc.) and should not be called by
   /// the library users.
 
-  /// Creates new instance of MemoryPool for a plan node, stores it in the task
-  /// to ensure lifetime and returns a raw pointer. Not thread safe, e.g. must
-  /// be called from the Operator's constructor via addOperatorPool().
-  memory::MemoryPool* FOLLY_NONNULL
-  getOrAddNodePool(const core::PlanNodeId& planNodeId);
-
   /// Creates new instance of MemoryPool for an operator, stores it in the task
   /// to ensure lifetime and returns a raw pointer. Not thread safe, e.g. must
   /// be called from the Operator's constructor.
   velox::memory::MemoryPool* FOLLY_NONNULL addOperatorPool(
       const core::PlanNodeId& planNodeId,
       int pipelineId,
+      uint32_t driverId,
       const std::string& operatorType);
 
-  /// Creates new instance of MemoryAllocator, stores it in the task to ensure
-  /// lifetime and returns a raw pointer. Not thread safe, e.g. must be called
-  /// from the Operator's constructor.
-  memory::MemoryAllocator* FOLLY_NONNULL
-  addOperatorMemory(const std::shared_ptr<memory::MemoryUsageTracker>& tracker);
+  /// Creates new instance of MemoryPool for a merge source in a
+  /// MergeExchangeNode, stores it in the task to ensure lifetime and returns a
+  /// raw pointer.
+  velox::memory::MemoryPool* FOLLY_NONNULL addMergeSourcePool(
+      const core::PlanNodeId& planNodeId,
+      uint32_t pipelineId,
+      uint32_t sourceId);
 
   // Removes driver from the set of drivers in 'self'. The task will be kept
   // alive by 'self'. 'self' going out of scope may cause the Task to
@@ -292,16 +291,22 @@ class Task : public std::enable_shared_from_this<Task> {
       std::shared_ptr<Task> self,
       Driver* FOLLY_NONNULL instance);
 
-  // Returns a split for the source operator corresponding to plan node with
-  // specified ID. If there are no splits and no-more-splits signal has been
-  // received, sets split to null and returns kNotBlocked. Otherwise, returns
-  // kWaitForSplit and sets a future that will complete when split becomes
-  // available or no-more-splits signal is received.
+  // Returns a split for the source operator corresponding to plan
+  // node with specified ID. If there are no splits and no-more-splits
+  // signal has been received, sets split to null and returns
+  // kNotBlocked. Otherwise, returns kWaitForSplit and sets a future
+  // that will complete when split becomes available or no-more-splits
+  // signal is received. If 'maxPreloadSplits' is given, ensures that
+  // so many of splits at the head of the queue are preloading. If
+  // they are not, calls preload on them to start preload.
   BlockingReason getSplitOrFuture(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
       exec::Split& split,
-      ContinueFuture& future);
+      ContinueFuture& future,
+      int32_t maxPreloadSplits = 0,
+      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload =
+          nullptr);
 
   void splitFinished();
 
@@ -455,6 +460,14 @@ class Task : public std::enable_shared_from_this<Task> {
   // are to yield.
   StopReason shouldStop();
 
+  // Returns true if Driver or async executor threads for 'this'
+  // should silently stop and drop any results that may be
+  // pending. This is like shouldStop() but can be called multiple
+  // times since not affect a yield counter.
+  bool isCancelled() const {
+    return terminateRequested_;
+  }
+
   // Requests the Task to stop activity.  The returned future is
   // realized when all running threads have stopped running. Activity
   // can be resumed with resume() after the future is realized.
@@ -494,6 +507,11 @@ class Task : public std::enable_shared_from_this<Task> {
     return mutex_;
   }
 
+  /// Returns the number of concurrent drivers in the pipeline of 'driver'.
+  int32_t numDrivers(Driver* driver) {
+    return driverFactories_[driver->driverCtx()->pipelineId]->numDrivers;
+  }
+
   /// Returns the number of created and deleted tasks since the velox engine
   /// starts running so far.
   static uint64_t numCreatedTasks() {
@@ -515,6 +533,26 @@ class Task : public std::enable_shared_from_this<Task> {
   static void testingWaitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
 
  private:
+  // Remove the spill directory, if the Task was creating it for potential
+  // spilling.
+  void removeSpillDirectoryIfExists();
+
+  // Creates new instance of MemoryPool for a plan node, stores it in the task
+  // to ensure lifetime and returns a raw pointer.
+  memory::MemoryPool* FOLLY_NONNULL
+  getOrAddNodePool(const core::PlanNodeId& planNodeId);
+
+  // Creates new instance of MemoryPool for the exchange client of an
+  // ExchangeNode in a pipeline, stores it in the task to ensure lifetime and
+  // returns a raw pointer.
+  velox::memory::MemoryPool* FOLLY_NONNULL addExchangeClientPool(
+      const core::PlanNodeId& planNodeId,
+      uint32_t pipelineId);
+
+  /// Returns task execution error message or empty string if not error
+  /// occurred. This should only be called inside mutex_ protection.
+  std::string errorMessageLocked() const;
+
   // Counts the number of created tasks which is incremented on each task
   // creation.
   static std::atomic<uint64_t> numCreatedTasks_;
@@ -557,11 +595,17 @@ class Task : public std::enable_shared_from_this<Task> {
   BlockingReason getSplitOrFutureLocked(
       SplitsStore& splitsStore,
       exec::Split& split,
-      ContinueFuture& future);
+      ContinueFuture& future,
+      int32_t maxPreloadSplits = 0,
+      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload =
+          nullptr);
 
   /// Returns next split from the store. The caller must ensure the store is not
   /// empty.
-  exec::Split getSplitLocked(SplitsStore& splitsStore);
+  exec::Split getSplitLocked(
+      SplitsStore& splitsStore,
+      int32_t maxPreloadSplits,
+      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload);
 
   /// Creates for the given split group and fills up the 'SplitGroupState'
   /// structure, which stores inter-operator state (local exchange, bridges).
@@ -633,6 +677,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // Returns a future that is realized when there are no more threads
   // executing for 'this'. 'comment' is used as a debugging label on
   // the promise/future pair.
+  ContinueFuture makeFinishFuture(const char* comment) {
+    std::lock_guard<std::mutex> l(mutex_);
+    return makeFinishFutureLocked(comment);
+  }
+
   ContinueFuture makeFinishFutureLocked(const char* FOLLY_NONNULL comment);
 
   bool isOutputPipeline(int pipelineId) const {
@@ -644,6 +693,30 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   int getOutputPipelineId() const;
+
+  // Create an exchange client for the specified exchange plan node at a given
+  // pipeline.
+  void createExchangeClient(
+      int32_t pipelineId,
+      const core::PlanNodeId& planNodeId);
+
+  // Get a shared reference to the exchange client with the specified exchange
+  // plan node 'planNodeId'. The function returns null if there is no client
+  // created for 'planNodeId' in 'exchangeClientByPlanNode_'.
+  std::shared_ptr<ExchangeClient> getExchangeClient(
+      const core::PlanNodeId& planNodeId) const {
+    std::lock_guard<std::mutex> l(mutex_);
+    return getExchangeClientLocked(planNodeId);
+  }
+
+  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+      const core::PlanNodeId& planNodeId) const;
+
+  // Get a shared reference to the exchange client with the specified
+  // 'pipelineId'. The function returns null if there is no client created for
+  // 'pipelineId' set in 'exchangeClients_'.
+  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+      int32_t pipelineId) const;
 
   /// Callback function added to the MemoryUsageTracker to return a descriptive
   /// message about query memory usage to be added to the error when a
@@ -736,23 +809,18 @@ class Task : public std::enable_shared_from_this<Task> {
   const std::shared_ptr<core::QueryCtx> queryCtx_;
 
   // Root MemoryPool for this Task. All member variables that hold references
-  // to pool_ must be defined after pool_, childPools_, and
-  // childAllocators_
+  // to pool_ must be defined after pool_, childPools_.
   std::shared_ptr<memory::MemoryPool> pool_;
 
   // Keep driver and operator memory pools alive for the duration of the task
   // to allow for sharing vectors across drivers without copy.
   std::vector<std::shared_ptr<memory::MemoryPool>> childPools_;
 
-  // The map from plan node it to the corresponding memory pool object's raw
+  // The map from plan node id to the corresponding memory pool object's raw
   // pointer.
   //
-  // NOTE: ''childPools_' holds the ownerships of node memory pools.
+  // NOTE: 'childPools_' holds the ownerships of node memory pools.
   std::unordered_map<core::PlanNodeId, memory::MemoryPool*> nodePools_;
-
-  // Keep operator MemoryAllocator instances alive for the duration of the task
-  // to allow for sharing data without copy.
-  std::vector<std::shared_ptr<memory::MemoryAllocator>> childAllocators_;
 
   // A set of IDs of leaf plan nodes that require splits. Used to check plan
   // node IDs specified in split management methods.
@@ -767,19 +835,24 @@ class Task : public std::enable_shared_from_this<Task> {
   // kFinished.
   bool partitionedOutputConsumed_ = false;
 
-  /// Exchange clients. One per pipeline / source.
-  /// Null for pipelines, which don't need it.
-  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;
-
-  /// Exchange clients keyed by the corresponding Exchange plan node ID. Used to
-  /// process remaining remote splits after the task has completed early.
-  std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
-      exchangeClientByPlanNode_;
-
   // Set if terminated by an error. This is the first error reported
   // by any of the instances.
   std::exception_ptr exception_ = nullptr;
   mutable std::mutex mutex_;
+
+  // Exchange clients. One per pipeline / source. Null for pipelines, which
+  // don't need it.
+  //
+  // NOTE: there can be only one exchange client for a given pipeline ID, and
+  // the exchange clients are also referenced by 'exchangeClientByPlanNode_'.
+  // Hence, exchange clients can be indexed either by pipeline ID or by plan
+  // node ID.
+  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;
+
+  // Exchange clients keyed by the corresponding Exchange plan node ID. Used to
+  // process remaining remote splits after the task has completed early.
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
+      exchangeClientByPlanNode_;
 
   ConsumerSupplier consumerSupplier_;
 
@@ -863,7 +936,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // running for 'this'.
   std::vector<ContinuePromise> threadFinishPromises_;
 
-  /// Base spill directory for this task.
+  // Base spill directory for this task.
   std::string spillDirectory_;
 };
 

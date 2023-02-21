@@ -32,6 +32,9 @@ from setuptools.command.build_ext import build_ext
 
 ROOT_DIR = Path(__file__).parent.resolve()
 
+with open("README.md") as f:
+    readme = f.read()
+
 
 # Override build directory
 class BuildCommand(distutils.command.build.build):
@@ -118,6 +121,7 @@ class CMakeBuild(build_ext):
         exec_path = sys.executable
 
         cmake_args = [
+            f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DCMAKE_BUILD_TYPE={cfg}",
             f"-DCMAKE_INSTALL_PREFIX={extdir}",
             "-DCMAKE_VERBOSE_MAKEFILE=ON",
@@ -126,7 +130,7 @@ class CMakeBuild(build_ext):
             "-DVELOX_CODEGEN_SUPPORT=OFF",
             "-DVELOX_BUILD_MINIMAL=ON",
         ]
-        build_args = ["--target", "install"]
+        build_args = []
 
         # Default to Ninja
         if "CMAKE_GENERATOR" not in os.environ:
@@ -157,10 +161,12 @@ setup(
     name="pyvelox",
     version=VERSION,
     description="Python bindings and extensions for Velox",
+    long_description=readme,
+    long_description_content_type="text/markdown",
     url="https://github.com/facebookincubator/velox",
     author="Meta",
     author_email="velox@fb.com",
-    license="BSD",
+    license="Apache License 2.0",
     install_requires=[
         "cffi",
         "typing",
@@ -171,7 +177,7 @@ setup(
     classifiers=[
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: BSD License",
+        "License :: OSI Approved :: Apache Software License",
         "Operating System :: POSIX :: Linux",
         "Programming Language :: C++",
         "Programming Language :: Python :: 3.7",

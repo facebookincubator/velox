@@ -22,7 +22,6 @@
 
 #include "velox/expression/Expr.h"
 
-#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ConjunctExpr.h"
@@ -32,7 +31,6 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/type/IntervalDayTime.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -87,8 +85,40 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return result;
   }
 
+  std::pair<
+      std::vector<VectorPtr>,
+      std::unordered_map<std::string, exec::ExprStats>>
+  evaluateMultipleWithStats(
+      const std::vector<std::string>& texts,
+      const RowVectorPtr& input,
+      std::vector<VectorPtr> result_to_reuse = {}) {
+    auto exprSet = compileMultiple(texts, asRowType(input->type()));
+
+    exec::EvalCtx context(execCtx_.get(), exprSet.get(), input.get());
+
+    SelectivityVector rows(input->size());
+    if (result_to_reuse.empty()) {
+      result_to_reuse.resize(texts.size());
+    }
+    exprSet->eval(rows, context, result_to_reuse);
+    return {result_to_reuse, exprSet->stats()};
+  }
+
   VectorPtr evaluate(const std::string& text, const RowVectorPtr& input) {
     return evaluateMultiple({text}, input)[0];
+  }
+
+  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  evaluateWithStats(const std::string& expression, const RowVectorPtr& input) {
+    auto exprSet = compileExpression(expression, asRowType(input->type()));
+
+    SelectivityVector rows(input->size());
+    std::vector<VectorPtr> results(1);
+
+    exec::EvalCtx context(execCtx_.get(), exprSet.get(), input.get());
+    exprSet->eval(rows, context, results);
+
+    return {results[0], exprSet->stats()};
   }
 
   template <
@@ -116,7 +146,8 @@ class ExprTest : public testing::Test, public VectorTestBase {
 
   /// Create constant expression from a variant of primitive type.
   std::shared_ptr<core::ConstantTypedExpr> makeConstantExpr(variant value) {
-    return std::make_shared<core::ConstantTypedExpr>(std::move(value));
+    auto type = value.inferType();
+    return std::make_shared<core::ConstantTypedExpr>(type, std::move(value));
   }
 
   // Create LazyVector that produces a flat vector and asserts that is is being
@@ -368,7 +399,7 @@ TEST_F(ExprTest, constantNull) {
   auto inputExpr =
       std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
   auto nullConstant = std::make_shared<core::ConstantTypedExpr>(
-      variant::null(TypeKind::INTEGER));
+      INTEGER(), variant::null(TypeKind::INTEGER));
 
   // Builds the following expression: "plus(c0, plus(c0, null))"
   auto expression = std::make_shared<core::CallTypedExpr>(
@@ -885,8 +916,11 @@ TEST_F(ExprTest, csePartialEvaluation) {
   auto a = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto b = makeFlatVector<std::string>({"a", "b", "c", "d", "e"});
 
-  auto results = evaluateMultiple(
-      {"if (c0 >= 3, add_suffix(c1), 'n/a')", "add_suffix(c1)"},
+  auto [results, stats] = evaluateMultipleWithStats(
+      {
+          "if (c0 >= 3, add_suffix(c1), 'n/a')",
+          "add_suffix(c1)",
+      },
       makeRowVector({a, b}));
 
   auto expected =
@@ -896,6 +930,23 @@ TEST_F(ExprTest, csePartialEvaluation) {
   expected =
       makeFlatVector<std::string>({"a_xx", "b_xx", "c_xx", "d_xx", "e_xx"});
   assertEqualVectors(expected, results[1]);
+  EXPECT_EQ(5, stats.at("add_suffix").numProcessedRows);
+
+  std::tie(results, stats) = evaluateMultipleWithStats(
+      {
+          "if (c0 >= 3, add_suffix(c1), 'n/a')",
+          "if (c0 < 2, 'n/a', add_suffix(c1))",
+      },
+      makeRowVector({a, b}));
+
+  expected =
+      makeFlatVector<std::string>({"n/a", "n/a", "c_xx", "d_xx", "e_xx"});
+  assertEqualVectors(expected, results[0]);
+
+  expected =
+      makeFlatVector<std::string>({"n/a", "b_xx", "c_xx", "d_xx", "e_xx"});
+  assertEqualVectors(expected, results[1]);
+  EXPECT_EQ(4, stats.at("add_suffix").numProcessedRows);
 }
 
 TEST_F(ExprTest, csePartialEvaluationWithEncodings) {
@@ -1238,8 +1289,8 @@ class StatefulVectorFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), numInputs_);
-    auto numInputs =
-        BaseVector::createConstant(numInputs_, rows.size(), context.pool());
+    auto numInputs = BaseVector::createConstant(
+        INTEGER(), numInputs_, rows.size(), context.pool());
     if (!result) {
       result = numInputs;
     } else {
@@ -1550,6 +1601,20 @@ TEST_F(ExprTest, swithExprSanityChecks) {
       evaluate("case c0 when 7 then 1 when 11 then 2 else 'hello' end", vector),
       "Else clause of a SWITCH statement must have the same type as 'then' clauses. "
       "Expected BIGINT, but got VARCHAR.");
+
+  // Unknown is not implicitly casted.
+  VELOX_ASSERT_THROW(
+      evaluate("case c0 when 7 then 1 when 11 then null else 3 end", vector),
+      "All then clauses of a SWITCH statement must have the same type. "
+      "Expected BIGINT, but got UNKNOWN.");
+
+  // Unknown is not implicitly casted.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "case c0 when 7 then  row_constructor(null, 1) when 11 then  row_constructor(1, null) end",
+          vector),
+      "All then clauses of a SWITCH statement must have the same type. "
+      "Expected ROW<c1:UNKNOWN,c2:BIGINT>, but got ROW<c1:BIGINT,c2:UNKNOWN>.");
 }
 
 TEST_F(ExprTest, switchExprWithNull) {
@@ -1580,7 +1645,7 @@ TEST_F(ExprTest, ifWithConstant) {
   vector_size_t size = 4;
 
   auto a = makeFlatVector<int32_t>({-1, -2, -3, -4});
-  auto b = makeConstant(variant(TypeKind::INTEGER), size); // 4 nulls
+  auto b = makeNullConstant(TypeKind::INTEGER, size); // 4 nulls
   auto result = evaluate("is_null(if(c0 > 0, c0, c1))", makeRowVector({a, b}));
   EXPECT_EQ(VectorEncoding::Simple::CONSTANT, result->encoding());
   EXPECT_EQ(true, result->as<ConstantVector<bool>>()->valueAt(0));
@@ -1924,7 +1989,7 @@ TEST_F(ExprTest, memoNulls) {
   result = evaluate(
       exprSet.get(), makeRowVector({wrapInDictionary(last5Indices, 5, base)}));
   // Expecting 5 trues.
-  expectedResult = BaseVector::createConstant(true, 5, execCtx_->pool());
+  expectedResult = makeConstant(true, 5);
   assertEqualVectors(expectedResult, result);
 }
 
@@ -1983,7 +2048,7 @@ TEST_F(ExprTest, peelLazyDictionaryOverConstant) {
   auto c1 = makeFlatVector<int64_t>(5, [](auto row) { return row; });
 
   auto result = evaluate(
-      "if (not(is_null(if (c0 >= 0, c1, null))), coalesce(c0, 22), null)",
+      "if (not(is_null(if (c0 >= 0, c1, cast (null as bigint)))), coalesce(c0, 22), cast (null as bigint))",
       makeRowVector(
           {BaseVector::wrapInDictionary(
                nullptr, c0Indices, 5, wrapInLazyDictionary(c0)),
@@ -2130,11 +2195,12 @@ TEST_F(ExprTest, peeledConstant) {
   auto indices = makeIndices(kSubsetSize, [](auto row) { return row * 2; });
   auto numbers =
       makeFlatVector<int32_t>(kBaseSize, [](auto row) { return row; });
-  auto row = makeRowVector(
-      {BaseVector::wrapInDictionary(nullptr, indices, kSubsetSize, numbers),
-       BaseVector::createConstant("Hans Pfaal", kBaseSize, execCtx_->pool())});
+  auto row = makeRowVector({
+      wrapInDictionary(indices, kSubsetSize, numbers),
+      makeConstant("Hans Pfaal", kBaseSize),
+  });
   auto result = std::dynamic_pointer_cast<SimpleVector<StringView>>(
-      evaluate("if (c0 % 4 = 0, c1, null)", row));
+      evaluate("if (c0 % 4 = 0, c1, cast (null as VARCHAR))", row));
   EXPECT_EQ(kSubsetSize, result->size());
   for (auto i = 0; i < kSubsetSize; ++i) {
     if (result->isNullAt(i)) {
@@ -2310,7 +2376,7 @@ TEST_F(ExprTest, constantToString) {
       makeNullableArrayVector<float>({{1.2, 3.4, std::nullopt, 5.6}});
 
   exec::ExprSet exprSet(
-      {std::make_shared<core::ConstantTypedExpr>(23),
+      {std::make_shared<core::ConstantTypedExpr>(INTEGER(), 23),
        std::make_shared<core::ConstantTypedExpr>(
            DOUBLE(), variant::null(TypeKind::DOUBLE)),
        makeConstantExpr(arrayVector, 0)},
@@ -2719,7 +2785,8 @@ TEST_F(ExprTest, flatNoNullsFastPath) {
 
   // If statement with 'then' or 'else' branch that can return null does not
   // support fast path.
-  exprSet = compileExpression("if (a > 10::integer, 0, null)", rowType);
+  exprSet = compileExpression(
+      "if (a > 10::integer, 0, cast (null as bigint))", rowType);
   ASSERT_EQ(1, exprSet->exprs().size());
   ASSERT_FALSE(exprSet->exprs()[0]->supportsFlatNoNullsFastPath())
       << exprSet->toString();
@@ -3152,4 +3219,244 @@ TEST_F(ExprTest, stdExceptionInVectorFunction) {
       "always_throws_vector_function(c0)",
       makeFlatVector<int32_t>({1, 2, 3}),
       AlwaysThrowsVectorFunction::kStdErrorMessage);
+}
+
+TEST_F(ExprTest, cseUnderTry) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int8_t>({31, 3, 31, 31, 2, std::nullopt}),
+  });
+
+  // All rows trigger overflow.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "72::tinyint * 31::tinyint <> 4 or 72::tinyint * 31::tinyint <> 5",
+          input),
+      "integer overflow: 72 * 31");
+
+  auto result = evaluate(
+      "try(72::tinyint * 31::tinyint <> 4 or 72::tinyint * 31::tinyint <> 5)",
+      input);
+  assertEqualVectors(makeNullConstant(TypeKind::BOOLEAN, 6), result);
+
+  // Only some rows trigger overflow.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "36::tinyint * c0 <> 4 or 36::tinyint * c0 <> 5 or 36::tinyint * c0 <> 6",
+          input),
+      "integer overflow: 36 * 31");
+
+  result = evaluate(
+      "try(36::tinyint * c0 <> 4 or 36::tinyint * c0 <> 5 or 36::tinyint * c0 <> 6)",
+      input);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>({
+          std::nullopt,
+          true,
+          std::nullopt,
+          std::nullopt,
+          true,
+          std::nullopt,
+      }),
+      result);
+}
+
+TEST_F(ExprTest, conjunctUnderTry) {
+  auto input = makeRowVector({
+      makeFlatVector<StringView>({"a"_sv, "b"_sv}),
+      makeFlatVector<bool>({true, true}),
+      makeFlatVector<bool>({true, true}),
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_constructor(like(c0, 'test', 'escape'), c1 OR c2)", input),
+      "Escape string must be a single character");
+
+  auto result = evaluate(
+      "try(array_constructor(like(c0, 'test', 'escape'), c1 OR c2))", input);
+  auto expected =
+      BaseVector::createNullConstant(ARRAY(BOOLEAN()), input->size(), pool());
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ExprTest, flatNoNullsFastPathWithCse) {
+  // Test CSE with flat-no-nulls fast path.
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+      makeFlatVector<int64_t>({8, 9, 10, 11, 12}),
+  });
+
+  // Make sure CSE "c0 + c1" is evaluated only once for each row.
+  auto [result, stats] = evaluateWithStats(
+      "if((c0 + c1) > 100::bigint, 100::bigint, c0 + c1)", input);
+
+  auto expected = makeFlatVector<int64_t>({9, 11, 13, 15, 17});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+
+  std::tie(result, stats) = evaluateWithStats(
+      "if((c0 + c1) >= 15::bigint, 100::bigint, c0 + c1)", input);
+
+  expected = makeFlatVector<int64_t>({9, 11, 13, 100, 100});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+}
+
+TEST_F(ExprTest, cseOverLazyDictionary) {
+  auto input = makeRowVector({
+      makeConstant<int64_t>(10, 5),
+      std::make_shared<LazyVector>(
+          pool(),
+          BIGINT(),
+          5,
+          std::make_unique<SimpleVectorLoader>([=](RowSet /*rows*/) {
+            return wrapInDictionary(
+                makeIndicesInReverse(5),
+                makeFlatVector<int64_t>({8, 9, 10, 11, 12}));
+          })),
+      makeFlatVector<int64_t>({1, 2, 10, 11, 12}),
+  });
+
+  // if (c1 > 10, c0 + c1, c0 - c1) is a null-propagating conditional CSE.
+  auto result = evaluate(
+      "if (c2 > 10::bigint, "
+      "   if (c1 > 10, c0 + c1, c0 - c1) + c2, "
+      "   if (c1 > 10, c0 + c1, c0 - c1) - c2)",
+      input);
+
+  auto expected = makeFlatVector<int64_t>({21, 19, -10, 12, 14});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ExprTest, cseOverConstant) {
+  auto input = makeRowVector({
+      makeConstant<int64_t>(123, 5),
+      makeConstant<int64_t>(-11, 5),
+  });
+
+  // Make sure CSE "c0 + c1" is evaluated only once for each row.
+  auto [result, stats] =
+      evaluateWithStats("if((c0 + c1) < 0::bigint, 0::bigint, c0 + c1)", input);
+
+  auto expected = makeConstant<int64_t>(112, 5);
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+}
+
+TEST_F(ExprTest, cseOverDictionary) {
+  auto indices = makeIndicesInReverse(5);
+  auto input = makeRowVector({
+      wrapInDictionary(indices, makeFlatVector<int64_t>({1, 2, 3, 4, 5})),
+      wrapInDictionary(indices, makeFlatVector<int64_t>({8, 9, 10, 11, 12})),
+  });
+
+  // Make sure CSE "c0 + c1" is evaluated only once for each row.
+  auto [result, stats] = evaluateWithStats(
+      "if((c0 + c1) > 100::bigint, 100::bigint, c0 + c1)", input);
+
+  auto expected = makeFlatVector<int64_t>({17, 15, 13, 11, 9});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+
+  std::tie(result, stats) = evaluateWithStats(
+      "if((c0 + c1) >= 15::bigint, 100::bigint, c0 + c1)", input);
+
+  expected = makeFlatVector<int64_t>({100, 100, 13, 11, 9});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+}
+
+TEST_F(ExprTest, cseOverDictionaryOverConstant) {
+  auto indices = makeIndicesInReverse(5);
+  auto input = makeRowVector({
+      wrapInDictionary(indices, makeFlatVector<int64_t>({1, 2, 3, 4, 5})),
+      wrapInDictionary(indices, makeConstant<int64_t>(100, 5)),
+  });
+
+  // Make sure CSE "c0 + c1" is evaluated only once for each row.
+  auto [result, stats] =
+      evaluateWithStats("if((c0 + c1) < 0::bigint, 0::bigint, c0 + c1)", input);
+
+  auto expected = makeFlatVector<int64_t>({105, 104, 103, 102, 101});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+
+  std::tie(result, stats) = evaluateWithStats(
+      "if((c0 + c1) < 103::bigint, 0::bigint, c0 + c1)", input);
+
+  expected = makeFlatVector<int64_t>({105, 104, 103, 0, 0});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(5, stats.at("plus").numProcessedRows);
+}
+
+TEST_F(ExprTest, cseOverDictionaryAcrossMultipleExpressions) {
+  // This test verifies that CSE across multiple expressions are evaluated
+  // correctly, that is, make sure peeling is done before attempting to re-use
+  // computed results from CSE.
+  auto input = makeRowVector({
+      wrapInDictionary(
+          makeIndices({1, 3}),
+          makeFlatVector<StringView>({"aa1"_sv, "bb2"_sv, "cc3"_sv, "dd4"_sv})),
+  });
+  // Case 1: Peeled and unpeeled set of rows have overlap. This will ensure the
+  // right pre-computed values are used.
+  // upper(c0) is the CSE here having c0 as a distinct field. Initially its
+  // distinct fields is empty as concat (its parent) will have the same
+  // fields. If during compilation distinct field is not set when it is
+  // identified as a CSE then it will be empty and peeling
+  // will not occur the second time CSE is employed. Here the peeled rows are
+  // {0,1,2,3} and unpeeled are {0,1}. If peeling is performed in the first
+  // encounter, rows to compute will be {_ , 1, _, 3} and in the second
+  // instance if peeling is not performed then rows to computed would be {0,
+  // 1} where row 0 will be computed and 1 will be re-used so row 1 would have
+  // wrong result.
+  {
+    // Use an allocated result vector to force copying of values to the result
+    // vector. Otherwise, we might end up with a result vector pointing directly
+    // to the shared values vector from CSE.
+    std::vector<VectorPtr> result_to_reuse = {
+        makeFlatVector<StringView>({"x"_sv, "y"_sv}),
+        makeFlatVector<StringView>({"x"_sv, "y"_sv})};
+    auto [result, stats] = evaluateMultipleWithStats(
+        {"concat('foo_',upper(c0))", "upper(c0)"}, input, result_to_reuse);
+    std::vector<VectorPtr> expected = {
+        makeFlatVector<StringView>({"foo_BB2"_sv, "foo_DD4"_sv}),
+        makeFlatVector<StringView>({"BB2"_sv, "DD4"_sv})};
+    assertEqualVectors(expected[0], result[0]);
+    assertEqualVectors(expected[1], result[1]);
+    EXPECT_EQ(2, stats.at("upper").numProcessedRows);
+  }
+
+  // Case 2: Here a CSE_1 "substr(upper(c0),2)" shared twice has a child
+  // expression which itself is a CSE_2 "upper(c0)" shared thrice. If expression
+  // compilation were not fixed, CSE_1 will have distinct fields set but
+  // the CSE_2 has a parent in one of the other expression trees and therefore
+  // will have its distinct fields set properly. This would result in CSE_1 not
+  // peeling but CSE_2 will. In the first expression tree peeling happens
+  // before CSE so both CSE_1 and CSE_2 are tracking peeled rows. In the second
+  // expression CSE_2 is used again will peeled rows, however in third
+  // expression CSE_1 is not peeled but its child CSE_2 attempts peeling and
+  // runs into an error while creating the peel.
+  {
+    // Use an allocated result vector to force copying of values to the result.
+    std::vector<VectorPtr> result_to_reuse = {
+        makeFlatVector<StringView>({"x"_sv, "y"_sv}),
+        makeFlatVector<StringView>({"x"_sv, "y"_sv}),
+        makeFlatVector<StringView>({"x"_sv, "y"_sv})};
+    auto [result, stats] = evaluateMultipleWithStats(
+        {"concat('foo_',substr(upper(c0),2))",
+         "substr(upper(c0),3)",
+         "substr(upper(c0),2)"},
+        input,
+        result_to_reuse);
+    std::vector<VectorPtr> expected = {
+        makeFlatVector<StringView>({"foo_B2"_sv, "foo_D4"_sv}),
+        makeFlatVector<StringView>({"2"_sv, "4"_sv}),
+        makeFlatVector<StringView>({"B2"_sv, "D4"_sv})};
+    assertEqualVectors(expected[0], result[0]);
+    assertEqualVectors(expected[1], result[1]);
+    assertEqualVectors(expected[2], result[2]);
+    EXPECT_EQ(2, stats.at("upper").numProcessedRows);
+  }
 }

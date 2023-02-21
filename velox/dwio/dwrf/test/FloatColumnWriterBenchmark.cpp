@@ -27,7 +27,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::dwrf;
 
 constexpr vector_size_t kVectorSize = 10000;
-vector_size_t kNumIterations = 100;
+vector_size_t kNumIterations = 1000;
 
 float genData(float pos) {
   return float(pos * (float)3.14);
@@ -65,6 +65,7 @@ void runBenchmark(int nullEvery) {
 
   vector = std::make_shared<FlatVector<float>>(
       pool.get(),
+      REAL(),
       nullCount == 0 ? nullptr : nulls,
       kVectorSize,
       values,

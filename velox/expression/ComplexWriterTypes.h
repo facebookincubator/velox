@@ -16,19 +16,41 @@
 
 #pragma once
 #include <folly/Likely.h>
+#include <cinttypes>
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/expression/ComplexViewTypes.h"
 #include "velox/expression/UdfTypeResolver.h"
 #include "velox/type/Type.h"
 #include "velox/vector/TypeAliases.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::exec {
+
+// VectorWriter<Generic> holds a pointer to VectorWriterBase that represent the
+// casted writer Functions in this class are those shared by the vector writers
+// and need to be called by VectorWriter<Generic> on the casted writer.
+
+class VectorWriterBase {
+ public:
+  virtual void setOffset(vector_size_t offset) {
+    offset_ = offset;
+  }
+  virtual void commit(bool isSet) = 0;
+  virtual void ensureSize(size_t size) = 0;
+  virtual void finish() {}
+  virtual void finalizeNull() {}
+  virtual ~VectorWriterBase() {}
+  vector_size_t offset_ = 0;
+};
 
 template <typename T, typename B>
 struct VectorWriter;
@@ -128,7 +150,7 @@ class ArrayWriter {
 
   // Should be called by the user (VectorWriter) when null is committed to
   // pretect against user miss-use (writing to the writer then committing null).
-  void finalizeNull() {
+  void resetLength() {
     // No need to commit last written items and innerOffset_ stays the same for
     // the next item.
     length_ = 0;
@@ -447,7 +469,7 @@ class MapWriter {
   // Should be called by the user (VectorWriter) when null is committed to
   // pretect against user miss-use (writing to the writer then committing
   // null).
-  void finalizeNull() {
+  void resetLength() {
     // No need to commit last written items and innerOffset_ stays the same
     // for the next item.
     length_ = 0;
@@ -682,12 +704,12 @@ class RowWriter {
         ...);
   }
 
-  void finalizeNull() {
-    finalizeNullImpl(std::index_sequence_for<T...>{});
+  void finalizeNullOnChildren() {
+    finalizeNullOnChildrenImpl(std::index_sequence_for<T...>{});
   }
 
   template <std::size_t... Is>
-  void finalizeNullImpl(std::index_sequence<Is...>) {
+  void finalizeNullOnChildrenImpl(std::index_sequence<Is...>) {
     using children_types = std::tuple<T...>;
     (
         [&]() {
@@ -696,7 +718,7 @@ class RowWriter {
               !provide_std_interface<current_t> &&
               !isOpaqueType<current_t>::value) {
             if (UNLIKELY(std::get<Is>(needCommit_))) {
-              std::get<Is>(childrenWriters_).current().finalizeNull();
+              std::get<Is>(childrenWriters_).finalizeNull();
               std::get<Is>(needCommit_) = false;
             }
           }
@@ -727,6 +749,9 @@ class RowWriter {
   friend auto get(const RowWriter<Types...>& writer);
 };
 
+template <typename T>
+using writer_ptr_t = std::shared_ptr<VectorWriter<T, void>>;
+
 // GenericWriter represents a writer of any type. It has to be casted to one
 // specific type first in order to write values to a vector. A GenericWriter
 // must be casted to the same type throughout its lifetime, or an exception
@@ -741,34 +766,10 @@ class GenericWriter {
 
   GenericWriter& operator=(const GenericWriter&) = delete;
 
-  template <typename T>
-  using writer_ptr_t = std::shared_ptr<VectorWriter<T, void>>;
-
-  using writer_variant_t = std::variant<
-      writer_ptr_t<bool>,
-      writer_ptr_t<int8_t>,
-      writer_ptr_t<int16_t>,
-      writer_ptr_t<int32_t>,
-      writer_ptr_t<int64_t>,
-      writer_ptr_t<float>,
-      writer_ptr_t<double>,
-      writer_ptr_t<Varchar>,
-      writer_ptr_t<Varbinary>,
-      writer_ptr_t<Array<Any>>,
-      writer_ptr_t<Map<Any, Any>>,
-      writer_ptr_t<Row<Any>>,
-      writer_ptr_t<Row<Any, Any>>,
-      writer_ptr_t<Row<Any, Any, Any>>,
-      writer_ptr_t<Row<Any, Any, Any, Any>>,
-      writer_ptr_t<Row<Any, Any, Any, Any, Any>>,
-      writer_ptr_t<Row<Any, Any, Any, Any, Any, Any>>,
-      writer_ptr_t<Row<Any, Any, Any, Any, Any, Any, Any>>,
-      writer_ptr_t<Row<Any, Any, Any, Any, Any, Any, Any, Any>>,
-      writer_ptr_t<Row<Any, Any, Any, Any, Any, Any, Any, Any, Any>>,
-      writer_ptr_t<Row<Any, Any, Any, Any, Any, Any, Any, Any, Any, Any>>,
-      writer_ptr_t<DynamicRow>>;
-
-  GenericWriter(writer_variant_t& castWriter, TypePtr& castType, size_t& index)
+  GenericWriter(
+      std::shared_ptr<VectorWriterBase>& castWriter,
+      TypePtr& castType,
+      vector_size_t& index)
       : castWriter_{castWriter}, castType_{castType}, index_{index} {}
 
   TypeKind kind() const {
@@ -788,8 +789,7 @@ class GenericWriter {
         std::is_same_v<ToType, DynamicRow>
             ? "DynamicRow"
             : CppToType<ToType>::create()->toString());
-
-    return *castToImpl<ToType, false>();
+    return castToImpl<ToType>();
   }
 
   template <typename ToType>
@@ -798,31 +798,7 @@ class GenericWriter {
       return nullptr;
     }
 
-    return castToImpl<ToType, true>();
-  }
-
-  template <typename T>
-  struct isRowWriter : public std::false_type {};
-
-  template <typename... T>
-  struct isRowWriter<writer_ptr_t<Row<T...>>> : public std::false_type {};
-
-  template <typename T>
-  void finalizeNullDispatch(T& writer) {
-    if constexpr (
-        std::is_same_v<T, writer_ptr_t<Array<Any>>> ||
-        std::is_same_v<T, writer_ptr_t<Map<Any, Any>>> ||
-        std::is_same_v<T, writer_ptr_t<DynamicRow>> || isRowWriter<T>::value) {
-      writer->current().finalizeNull();
-    }
-  }
-
-  void finalizeNull() {
-    if (castType_) {
-      std::visit(
-          [&](auto&& castedWriter) { finalizeNullDispatch(castedWriter); },
-          castWriter_);
-    }
+    return &castToImpl<ToType>();
   }
 
  private:
@@ -830,48 +806,41 @@ class GenericWriter {
     vector_ = vector;
   }
 
-  template <typename ToType, bool tryCast>
-  typename VectorWriter<ToType, void>::exec_out_t* castToImpl() {
-    writer_ptr_t<ToType>* writer = nullptr;
-
+  template <typename ToType>
+  typename VectorWriter<ToType, void>::exec_out_t& castToImpl() {
+    writer_ptr_t<ToType> writer;
     if (castType_) {
       writer = retrieveCastedWriter<ToType>();
       if (!writer) {
-        if constexpr (tryCast) {
-          return nullptr;
-        } else {
-          VELOX_USER_FAIL(
-              "Not allowed to cast to two different types {} and {} within the same batch.",
-              castType_->toString(),
-              std::is_same_v<ToType, DynamicRow>
-                  ? "DynamicRow"
-                  : CppToType<ToType>::create()->toString());
-        }
+        VELOX_USER_FAIL(
+            "Not allowed to cast to two different types {} and {} within the same batch.",
+            castType_->toString(),
+            std::is_same_v<ToType, DynamicRow>
+                ? "DynamicRow"
+                : CppToType<ToType>::create()->toString());
       }
     } else {
       writer = ensureWriter<ToType>();
     }
 
-    auto& typedWriter = *writer;
-    typedWriter->setOffset(index_);
-    return &typedWriter->current();
+    writer->setOffset(index_);
+    return writer->current();
   }
 
   // Assuming the writer has been casted before and castType_ is not null,
   // return a pointer to the casted writer if B matches with the previous
   // cast type exactly. Return nullptr otherwise.
   template <typename B>
-  writer_ptr_t<B>* retrieveCastedWriter() {
+  writer_ptr_t<B> retrieveCastedWriter() {
     DCHECK(castType_);
-
-    if (!std::holds_alternative<writer_ptr_t<B>>(castWriter_)) {
-      return nullptr;
-    }
-    return &std::get<writer_ptr_t<B>>(castWriter_);
+    // TODO: optimize this check using disjoint type of sets (see GenericView)
+    return std::dynamic_pointer_cast<VectorWriter<B, void>>(castWriter_);
   }
 
   template <typename B>
-  writer_ptr_t<B>* ensureWriter() {
+  writer_ptr_t<B> ensureWriter() {
+    DCHECK(!castType_ && !castWriter_);
+
     static_assert(
         !isGenericType<B>::value && !isVariadicType<B>::value,
         "Cannot cast to VectorWriter of Generic or Variadic");
@@ -883,16 +852,16 @@ class GenericWriter {
       castType_ = std::move(requestedType);
     }
 
-    castWriter_ = std::make_shared<VectorWriter<B, void>>();
-    auto& writer = std::get<writer_ptr_t<B>>(castWriter_);
-    writer->init(*vector_->as<typename TypeToFlatVector<B>::type>());
-    return &writer;
+    auto newWriter = std::make_shared<VectorWriter<B, void>>();
+    castWriter_ = newWriter;
+    newWriter->init(*vector_->as<typename TypeToFlatVector<B>::type>());
+    return newWriter;
   }
 
   BaseVector* vector_;
-  writer_variant_t& castWriter_;
+  std::shared_ptr<VectorWriterBase>& castWriter_;
   TypePtr& castType_;
-  size_t& index_;
+  vector_size_t& index_;
 
   template <typename A, typename B>
   friend struct VectorWriter;

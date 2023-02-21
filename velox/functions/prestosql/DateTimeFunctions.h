@@ -13,14 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <velox/type/Timestamp.h>
+#pragma once
+
 #include <string_view>
-#include "velox/core/QueryConfig.h"
-#include "velox/external/date/tz.h"
-#include "velox/functions/Macros.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -63,56 +63,6 @@ struct FromUnixtimeFunction {
 };
 
 namespace {
-inline constexpr int64_t kSecondsInDay = 86'400;
-
-FOLLY_ALWAYS_INLINE const date::time_zone* getTimeZoneFromConfig(
-    const core::QueryConfig& config) {
-  if (config.adjustTimestampToTimezone()) {
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      return date::locate_zone(sessionTzName);
-    }
-  }
-  return nullptr;
-}
-
-FOLLY_ALWAYS_INLINE int64_t
-getSeconds(Timestamp timestamp, const date::time_zone* timeZone) {
-  if (timeZone != nullptr) {
-    timestamp.toTimezone(*timeZone);
-    return timestamp.getSeconds();
-  } else {
-    return timestamp.getSeconds();
-  }
-}
-
-FOLLY_ALWAYS_INLINE
-std::tm getDateTime(Timestamp timestamp, const date::time_zone* timeZone) {
-  int64_t seconds = getSeconds(timestamp, timeZone);
-  std::tm dateTime;
-  gmtime_r((const time_t*)&seconds, &dateTime);
-  return dateTime;
-}
-
-FOLLY_ALWAYS_INLINE
-std::tm getDateTime(Date date) {
-  int64_t seconds = date.days() * kSecondsInDay;
-  std::tm dateTime;
-  gmtime_r((const time_t*)&seconds, &dateTime);
-  return dateTime;
-}
-
-template <typename T>
-struct InitSessionTimezone {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-  const date::time_zone* timeZone_{nullptr};
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const core::QueryConfig& config,
-      const arg_type<Timestamp>* /*timestamp*/) {
-    timeZone_ = getTimeZoneFromConfig(config);
-  }
-};
 
 template <typename T>
 struct TimestampWithTimezoneSupport {
@@ -132,6 +82,68 @@ struct TimestampWithTimezoneSupport {
 };
 
 } // namespace
+
+template <typename T>
+struct WeekFunction : public InitSessionTimezone<T>,
+                      public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE int64_t getWeek(const std::tm& time) {
+    // The computation of ISO week from date follows the algorithm here:
+    // https://en.wikipedia.org/wiki/ISO_week_date
+    int64_t week = floor(
+                       10 + (time.tm_yday + 1) -
+                       (time.tm_wday ? time.tm_wday : kDaysInWeek)) /
+        kDaysInWeek;
+
+    if (week == 0) {
+      // Distance in days between the first day of the current year and the
+      // Monday of the current week.
+      auto mondayOfWeek =
+          time.tm_yday + 1 - (time.tm_wday + kDaysInWeek - 1) % kDaysInWeek;
+      // Distance in days between the first day and the first Monday of the
+      // current year.
+      auto firstMondayOfYear =
+          1 + (mondayOfWeek + kDaysInWeek - 1) % kDaysInWeek;
+
+      if ((util::isLeapYear(time.tm_year + 1900 - 1) &&
+           firstMondayOfYear == 2) ||
+          firstMondayOfYear == 3 || firstMondayOfYear == 4) {
+        week = 53;
+      } else {
+        week = 52;
+      }
+    } else if (week == 53) {
+      // Distance in days between the first day of the current year and the
+      // Monday of the current week.
+      auto mondayOfWeek =
+          time.tm_yday + 1 - (time.tm_wday + kDaysInWeek - 1) % kDaysInWeek;
+      auto daysInYear = util::isLeapYear(time.tm_year + 1900) ? 366 : 365;
+      if (daysInYear - mondayOfWeek < 3) {
+        week = 1;
+      }
+    }
+
+    return week;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getWeek(getDateTime(timestamp, this->timeZone_));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+    result = getWeek(getDateTime(date));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    auto timestamp = this->toTimestamp(timestampWithTimezone);
+    result = getWeek(getDateTime(timestamp, nullptr));
+  }
+};
 
 template <typename T>
 struct YearFunction : public InitSessionTimezone<T>,

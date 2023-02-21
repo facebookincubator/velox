@@ -175,6 +175,7 @@ class ExchangeQueue {
 
   void closeLocked() {
     queue_.clear();
+    clearAllPromises();
   }
 
  private:
@@ -298,9 +299,14 @@ class ExchangeClient {
  public:
   static constexpr int32_t kDefaultMinSize = 32 << 20; // 32 MB.
 
-  explicit ExchangeClient(int destination, int64_t minSize = kDefaultMinSize)
+  ExchangeClient(
+      int destination,
+      memory::MemoryPool* FOLLY_NONNULL pool,
+      int64_t minSize = kDefaultMinSize)
       : destination_(destination),
+        pool_(pool),
         queue_(std::make_shared<ExchangeQueue>(minSize)) {
+    VELOX_CHECK_NOT_NULL(pool_);
     VELOX_CHECK(
         destination >= 0,
         "Exchange client destination must be greater than zero, got {}",
@@ -312,8 +318,6 @@ class ExchangeClient {
   memory::MemoryPool* FOLLY_NULLABLE pool() const {
     return pool_;
   }
-
-  void initialize(memory::MemoryPool* FOLLY_NONNULL pool);
 
   // Creates an exchange source and starts fetching data from the specified
   // upstream task. If 'close' has been called already, creates an exchange
@@ -338,10 +342,10 @@ class ExchangeClient {
 
  private:
   const int destination_;
+  memory::MemoryPool* const FOLLY_NONNULL pool_;
   std::shared_ptr<ExchangeQueue> queue_;
   std::unordered_set<std::string> taskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
-  memory::MemoryPool* FOLLY_NULLABLE pool_{nullptr};
   bool closed_{false};
 };
 
@@ -351,21 +355,16 @@ class Exchange : public SourceOperator {
       int32_t operatorId,
       DriverCtx* FOLLY_NONNULL ctx,
       const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
-      std::shared_ptr<ExchangeClient> exchangeClient)
+      std::shared_ptr<ExchangeClient> exchangeClient,
+      const std::string& operatorType = "Exchange")
       : SourceOperator(
             ctx,
             exchangeNode->outputType(),
             operatorId,
             exchangeNode->id(),
-            "Exchange"),
+            operatorType),
         planNodeId_(exchangeNode->id()),
-        exchangeClient_(std::move(exchangeClient)) {
-    if (operatorCtx_->driverCtx()->driverId == 0) {
-      // As all Exchange operators share the same ExchangeClient, we only
-      // need one to do client initialization.
-      exchangeClient_->initialize(operatorCtx_->pool());
-    }
-  }
+        exchangeClient_(std::move(exchangeClient)) {}
 
   ~Exchange() override {
     close();
@@ -386,6 +385,9 @@ class Exchange : public SourceOperator {
   BlockingReason isBlocked(ContinueFuture* FOLLY_NONNULL future) override;
 
   bool isFinished() override;
+
+ protected:
+  virtual VectorSerde* getSerde();
 
  private:
   /// Fetches splits from the task until there are no more splits or task

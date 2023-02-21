@@ -16,9 +16,11 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/WriteProtocol.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
+
+#include "velox/vector/arrow/Abi.h"
+#include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::core {
 
@@ -98,6 +100,14 @@ class PlanNode {
 
   virtual const std::vector<std::shared_ptr<const PlanNode>>& sources()
       const = 0;
+
+  /// Returns true if this is a leaf plan node and corresponding operator
+  /// requires an ExchangeClient to retrieve data. For instance, TableScanNode
+  /// is a leaf node that doesn't require an ExchangeClient. But ExchangeNode is
+  /// a leaf node that requires an ExchangeClient.
+  virtual bool requiresExchangeClient() const {
+    return false;
+  }
 
   /// Returns true if this is a leaf plan node and corresponding operator
   /// requires splits to make progress. ValueNode is a leaf node that doesn't
@@ -237,6 +247,39 @@ class ValuesNode : public PlanNode {
   const std::vector<RowVectorPtr> values_;
   const RowTypePtr outputType_;
   const bool parallelizable_;
+};
+
+class ArrowStreamNode : public PlanNode {
+ public:
+  ArrowStreamNode(
+      const PlanNodeId& id,
+      const RowTypePtr& outputType,
+      std::shared_ptr<ArrowArrayStream> arrowStream)
+      : PlanNode(id),
+        outputType_(outputType),
+        arrowStream_(std::move(arrowStream)) {
+    VELOX_CHECK_NOT_NULL(arrowStream_);
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override;
+
+  const std::shared_ptr<ArrowArrayStream>& arrowStream() const {
+    return arrowStream_;
+  }
+
+  std::string_view name() const override {
+    return "ArrowStream";
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const RowTypePtr outputType_;
+  std::shared_ptr<ArrowArrayStream> arrowStream_;
 };
 
 class FilterNode : public PlanNode {
@@ -397,7 +440,7 @@ class TableWriteNode : public PlanNode {
       const std::vector<std::string>& columnNames,
       const std::shared_ptr<InsertTableHandle>& insertTableHandle,
       const RowTypePtr& outputType,
-      connector::WriteProtocol::CommitStrategy commitStrategy,
+      connector::CommitStrategy commitStrategy,
       const PlanNodePtr& source)
       : PlanNode(id),
         sources_{source},
@@ -436,7 +479,7 @@ class TableWriteNode : public PlanNode {
     return insertTableHandle_;
   }
 
-  connector::WriteProtocol::CommitStrategy commitStrategy() const {
+  connector::CommitStrategy commitStrategy() const {
     return commitStrategy_;
   }
 
@@ -452,7 +495,7 @@ class TableWriteNode : public PlanNode {
   const std::vector<std::string> columnNames_;
   const std::shared_ptr<InsertTableHandle> insertTableHandle_;
   const RowTypePtr outputType_;
-  const connector::WriteProtocol::CommitStrategy commitStrategy_;
+  const connector::CommitStrategy commitStrategy_;
 };
 
 class AggregationNode : public PlanNode {
@@ -684,6 +727,10 @@ class ExchangeNode : public PlanNode {
   }
 
   const std::vector<PlanNodePtr>& sources() const override;
+
+  bool requiresExchangeClient() const override {
+    return true;
+  }
 
   bool requiresSplits() const override {
     return true;
@@ -1007,6 +1054,11 @@ enum class JoinType {
   // Return each row from the left side with a boolean flag indicating whether
   // there exists a match on the right side. For this join type, cardinality of
   // the output equals the cardinality of the left side.
+  //
+  // The handling of the rows with nulls in the join key depends on the
+  // 'nullAware' boolean specified separately.
+  //
+  // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
   kLeftSemiProject,
   // Opposite of kLeftSemiFilter. Return a subset of rows from the right side
   // which have a match on the left side. For this join type, cardinality of the
@@ -1016,16 +1068,12 @@ enum class JoinType {
   // boolean flag indicating whether there exists a match on the left side. For
   // this join type, cardinality of the output equals the cardinality of the
   // right side.
+  //
+  // The handling of the rows with nulls in the join key depends on the
+  // 'nullAware' boolean specified separately.
+  //
+  // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
   kRightSemiProject,
-  // Deprecated. TODO Remove after Prestissimo is updated.
-  // Return each row from the left side which has no match on the right side.
-  // The handling of the rows with nulls in the join key follows NOT IN
-  // semantic:
-  // (1) return empty result if the right side contains a record with a null in
-  // the join key;
-  // (2) return left-side row with null in the join key only when
-  // the right side is empty.
-  kNullAwareAnti,
   // Return each row from the left side which has no match on the right side.
   // The handling of the rows with nulls in the join key depends on the
   // 'nullAware' boolean specified separately.
@@ -1060,8 +1108,6 @@ inline const char* joinTypeName(JoinType joinType) {
       return "LEFT SEMI (PROJECT)";
     case JoinType::kRightSemiProject:
       return "RIGHT SEMI (PROJECT)";
-    case JoinType::kNullAwareAnti:
-      return "NULL-AWARE ANTI";
     case JoinType::kAnti:
       return "ANTI";
   }
@@ -1102,6 +1148,12 @@ inline bool isRightSemiProjectJoin(JoinType joinType) {
 
 inline bool isAntiJoin(JoinType joinType) {
   return joinType == JoinType::kAnti;
+}
+
+inline bool isNullAwareSupported(core::JoinType joinType) {
+  return joinType == JoinType::kAnti ||
+      joinType == JoinType::kLeftSemiProject ||
+      joinType == JoinType::kRightSemiProject;
 }
 
 /// Abstract class representing inner/outer/semi/anti joins. Used as a base
@@ -1221,29 +1273,21 @@ class HashJoinNode : public AbstractJoinNode {
             left,
             right,
             outputType),
-        nullAware_{nullAware} {}
+        nullAware_{nullAware} {
+    if (nullAware) {
+      VELOX_USER_CHECK(
+          isNullAwareSupported(joinType),
+          "Null-aware flag is supported only for semi and anti joins");
+      VELOX_USER_CHECK_EQ(
+          1, leftKeys_.size(), "Null-aware joins allow only one join key");
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  HashJoinNode(
-      const PlanNodeId& id,
-      JoinType joinType,
-      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
-      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
-      TypedExprPtr filter,
-      PlanNodePtr left,
-      PlanNodePtr right,
-      const RowTypePtr outputType)
-      : HashJoinNode(
-            id,
-            joinType == JoinType::kNullAwareAnti ? JoinType::kAnti : joinType,
-            joinType == JoinType::kNullAwareAnti ? true : false,
-            leftKeys,
-            rightKeys,
-            filter,
-            left,
-            right,
-            outputType) {}
-#endif
+      if (filter_) {
+        VELOX_USER_CHECK(
+            !isRightSemiProjectJoin(),
+            "Null-aware right semi project join doesn't support extra filter");
+      }
+    }
+  }
 
   std::string_view name() const override {
     return "HashJoin";

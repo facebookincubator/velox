@@ -170,7 +170,7 @@ class TpchBenchmark {
       }
     } catch (const std::exception& e) {
       LOG(ERROR) << "Query terminated with: " << e.what();
-      return {nullptr, {}};
+      return {nullptr, std::vector<RowVectorPtr>()};
     }
   }
 
@@ -258,6 +258,11 @@ BENCHMARK(q18) {
 
 BENCHMARK(q19) {
   const auto planContext = queryBuilder->getQueryPlan(19);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q20) {
+  const auto planContext = queryBuilder->getQueryPlan(20);
   benchmark.run(planContext);
 }
 

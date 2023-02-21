@@ -13,12 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "folly/experimental/EventCount.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/DataSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -27,6 +31,8 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::connector::hive;
+using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::memory;
 
 using facebook::velox::test::BatchMaker;
 
@@ -39,12 +45,20 @@ class MultiFragmentTest : public HiveConnectorTestBase {
   std::shared_ptr<Task> makeTask(
       const std::string& taskId,
       std::shared_ptr<const core::PlanNode> planNode,
-      int destination) {
+      int destination,
+      Consumer consumer = nullptr,
+      int64_t maxMemory = kMaxMemory) {
     auto queryCtx = std::make_shared<core::QueryCtx>(
         executor_.get(), std::make_shared<core::MemConfig>(configSettings_));
+    queryCtx->pool()->setMemoryUsageTracker(
+        MemoryUsageTracker::create(maxMemory));
     core::PlanFragment planFragment{planNode};
     return std::make_shared<Task>(
-        taskId, std::move(planFragment), destination, std::move(queryCtx));
+        taskId,
+        std::move(planFragment),
+        destination,
+        std::move(queryCtx),
+        std::move(consumer));
   }
 
   std::vector<RowVectorPtr> makeVectors(int count, int rowsPerVector) {
@@ -163,6 +177,46 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
 
   for (auto& task : tasks) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+
+  // Verify the created memory pools.
+  for (int i = 0; i < tasks.size(); ++i) {
+    SCOPED_TRACE(fmt::format("task {}", tasks[i]->taskId()));
+    int32_t numPools = 0;
+    std::unordered_map<std::string, memory::MemoryPool*> poolsByName;
+    std::vector<memory::MemoryPool*> pools;
+    pools.push_back(tasks[i]->pool());
+    poolsByName[tasks[i]->pool()->name()] = tasks[i]->pool();
+    while (!pools.empty()) {
+      numPools += pools.size();
+      std::vector<memory::MemoryPool*> childPools;
+      for (auto pool : pools) {
+        pool->visitChildren([&](memory::MemoryPool* childPool) {
+          ASSERT_EQ(poolsByName.count(childPool->name()), 0)
+              << childPool->name();
+          poolsByName[childPool->name()] = childPool;
+          if (childPool->parent() != nullptr) {
+            ASSERT_EQ(poolsByName.count(childPool->parent()->name()), 1);
+            ASSERT_EQ(
+                poolsByName[childPool->parent()->name()], childPool->parent());
+          }
+          childPools.push_back(childPool);
+        });
+      }
+      pools.swap(childPools);
+    }
+    if (i == 0) {
+      // For leaf task, it has total 21 memory pools: task pool + 4 plan node
+      // pools (TableScan, FilterProject, PartialAggregation, PartitionedOutput)
+      // and 16 operator pools (4 drivers * number of plan nodes).
+      ASSERT_EQ(numPools, 21);
+    } else {
+      // For root task, it has total 8 memory pools: task pool + 3 plan node
+      // pools (Exchange, Aggregation, PartitionedOutput) and 4 leaf pools: 3
+      // operator pools (1 driver * number of plan nodes) + 1 exchange client
+      // pool.
+      ASSERT_EQ(numPools, 8);
+    }
   }
 }
 
@@ -509,12 +563,12 @@ TEST_F(MultiFragmentTest, limit) {
   auto file = TempFilePath::create();
   writeToFile(file->path, {data});
 
-  // Make leaf task: Values -> PartialLimit(1) -> Repartitioning(0).
+  // Make leaf task: Values -> PartialLimit(10) -> Repartitioning(0).
   auto leafTaskId = makeTaskId("leaf", 0);
   auto leafPlan =
       PlanBuilder()
           .tableScan(std::dynamic_pointer_cast<const RowType>(data->type()))
-          .limit(0, 10, false)
+          .limit(0, 10, true)
           .partitionedOutput({}, 1)
           .planNode();
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
@@ -523,7 +577,7 @@ TEST_F(MultiFragmentTest, limit) {
   leafTask.get()->addSplit(
       "0", exec::Split(makeHiveConnectorSplit(file->path)));
 
-  // Make final task: Exchange -> FinalLimit(1).
+  // Make final task: Exchange -> FinalLimit(10).
   auto plan = PlanBuilder()
                   .exchange(leafPlan->outputType())
                   .localPartition({})
@@ -544,7 +598,7 @@ TEST_F(MultiFragmentTest, limit) {
         task->addSplit("0", std::move(split));
         splitAdded = true;
       },
-      "VALUES (null), (1), (2), (3), (4), (5), (6), (7), (8), (9)",
+      "VALUES (null), (1), (2), (3), (4), (5), (6), (null), (8), (9)",
       duckDbQueryRunner_);
 
   ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
@@ -934,4 +988,217 @@ TEST_F(MultiFragmentTest, exchangeDestruction) {
   // properly with no crash.
   leafTask = nullptr;
   rootTask = nullptr;
+}
+
+TEST_F(MultiFragmentTest, cancelledExchange) {
+  // Create a source fragment borrow the output type from it.
+  auto planFragment = exec::test::PlanBuilder()
+                          .tableScan(rowType_)
+                          .filter("c0 % 5 = 1")
+                          .partitionedOutput({}, 1, {"c0", "c1"})
+                          .planFragment();
+
+  // Create task with exchange.
+  auto planFragmentWithExchange =
+      exec::test::PlanBuilder()
+          .exchange(planFragment.planNode->outputType())
+          .partitionedOutput({}, 1)
+          .planFragment();
+  auto exchangeTask =
+      makeTask("output.0.0.1", planFragmentWithExchange.planNode, 0);
+  // Start the task and abort it straight away.
+  Task::start(exchangeTask, 2);
+  exchangeTask->requestAbort();
+
+  /* sleep override */
+  // Wait till all the terminations, closures and destructions are done.
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  // We expect no references left except for ours.
+  EXPECT_EQ(1, exchangeTask.use_count());
+}
+
+class TestCustomExchangeNode : public core::PlanNode {
+ public:
+  TestCustomExchangeNode(const core::PlanNodeId& id, const RowTypePtr type)
+      : PlanNode(id), outputType_(type) {}
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<core::PlanNodePtr>& sources() const override {
+    static std::vector<core::PlanNodePtr> kEmptySources;
+    return kEmptySources;
+  }
+
+  bool requiresExchangeClient() const override {
+    return true;
+  }
+
+  bool requiresSplits() const override {
+    return true;
+  }
+
+  std::string_view name() const override {
+    return "CustomExchange";
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override {
+    // Nothing to add
+  }
+
+  RowTypePtr outputType_;
+};
+
+class TestCustomExchange : public exec::Exchange {
+ public:
+  TestCustomExchange(
+      int32_t operatorId,
+      DriverCtx* FOLLY_NONNULL ctx,
+      const std::shared_ptr<const TestCustomExchangeNode>& customExchangeNode,
+      std::shared_ptr<ExchangeClient> exchangeClient)
+      : exec::Exchange(
+            operatorId,
+            ctx,
+            std::make_shared<core::ExchangeNode>(
+                customExchangeNode->id(),
+                customExchangeNode->outputType()),
+            std::move(exchangeClient)) {}
+
+  RowVectorPtr getOutput() override {
+    stats_.wlock()->addRuntimeStat("testCustomExchangeStat", RuntimeCounter(1));
+    return exec::Exchange::getOutput();
+  }
+};
+
+class TestCustomExchangeTranslator : public exec::Operator::PlanNodeTranslator {
+ public:
+  std::unique_ptr<exec::Operator> toOperator(
+      exec::DriverCtx* ctx,
+      int32_t id,
+      const core::PlanNodePtr& node,
+      std::shared_ptr<ExchangeClient> exchangeClient) override {
+    if (auto customExchangeNode =
+            std::dynamic_pointer_cast<const TestCustomExchangeNode>(node)) {
+      return std::make_unique<TestCustomExchange>(
+          id, ctx, customExchangeNode, std::move(exchangeClient));
+    }
+    return nullptr;
+  }
+};
+
+TEST_F(MultiFragmentTest, customPlanNodeWithExchangeClient) {
+  setupSources(5, 100);
+  Operator::registerOperator(std::make_unique<TestCustomExchangeTranslator>());
+  auto leafTaskId = makeTaskId("leaf", 0);
+  auto leafPlan =
+      PlanBuilder().values(vectors_).partitionedOutput({}, 1).planNode();
+  auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+  Task::start(leafTask, 1);
+
+  CursorParameters params;
+  core::PlanNodeId testNodeId;
+  params.maxDrivers = 1;
+  params.planNode =
+      PlanBuilder()
+          .addNode([&leafPlan](std::string id, core::PlanNodePtr /* input */) {
+            return std::make_shared<TestCustomExchangeNode>(
+                id, leafPlan->outputType());
+          })
+          .capturePlanNodeId(testNodeId)
+          .planNode();
+
+  auto cursor = std::make_unique<TaskCursor>(params);
+  auto task = cursor->task();
+  addRemoteSplits(task, {leafTaskId});
+  while (cursor->moveNext()) {
+  }
+  EXPECT_NE(
+      toPlanStats(task->taskStats())
+          .at(testNodeId)
+          .customStats.count("testCustomExchangeStat"),
+      0);
+  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
+      << leafTask->taskId();
+  ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
+}
+
+// This test is to reproduce the race condition between task terminate and no
+// more split call:
+// T1: task terminate triggered by task error.
+// T2: task terminate collects all the pending remote splits under the task
+// lock.
+// T3: task terminate release the lock to handle the pending remote splits.
+// T4: no more split call get invoked and erase the exchange client since the
+//     task is not running.
+// T5: task terminate processes the pending remote splits by accessing the
+//     associated exchange client and run into segment fault.
+DEBUG_ONLY_TEST_F(
+    MultiFragmentTest,
+    raceBetweenTaskTerminateAndTaskNoMoreSplits) {
+  setupSources(10, 1000);
+  auto leafTaskId = makeTaskId("leaf", 0);
+  core::PlanNodePtr leafPlan = PlanBuilder()
+                                   .tableScan(rowType_)
+                                   .project({"c0 % 10 AS c0", "c1"})
+                                   .partitionedOutput({}, 1)
+                                   .planNode();
+  auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+  Task::start(leafTask, 1);
+  addHiveSplits(leafTask, filePaths_);
+
+  const std::string kRootTaskId("root-task");
+  folly::EventCount blockTerminate;
+  folly::EventCount blockNoMoreSplits;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::setError",
+      std::function<void(Task*)>(([&](Task* task) {
+        if (task->taskId() != kRootTaskId) {
+          return;
+        }
+        // Trigger to add more split after the task has run into error.
+        auto split =
+            exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
+        task->addSplit("0", std::move(split));
+      })));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::terminate",
+      std::function<void(Task*)>(([&](Task* task) {
+        if (task->taskId() != kRootTaskId) {
+          return;
+        }
+        // Unblock no more split call in the middle of task terminate execution.
+        blockNoMoreSplits.notify();
+        auto waitKey = blockTerminate.prepareWait();
+        // Block to wait for the no more split call to finish.
+        blockTerminate.wait(waitKey);
+      })));
+  auto rootPlan = PlanBuilder()
+                      .exchange(leafPlan->outputType())
+                      .finalAggregation({"c0"}, {"count(c1)"}, {BIGINT()})
+                      .planNode();
+
+  const int64_t kRootMemoryLimit = 1 << 20;
+  auto rootTask = makeTask(
+      kRootTaskId,
+      rootPlan,
+      0,
+      [](RowVectorPtr /*unused*/, ContinueFuture* /*unused*/)
+          -> BlockingReason { return BlockingReason::kNotBlocked; },
+      kRootMemoryLimit);
+  Task::start(rootTask, 1);
+  {
+    auto split =
+        exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
+    rootTask->addSplit("0", std::move(split));
+  }
+  auto waitKey = blockNoMoreSplits.prepareWait();
+  // Block to wait for task terminate execution.
+  blockNoMoreSplits.wait(waitKey);
+  rootTask->noMoreSplits("0");
+  // Unblock task terminate execution after no more split call finishes.
+  blockTerminate.notify();
+  ASSERT_TRUE(waitForTaskFailure(rootTask.get(), 1'000'000'000));
 }

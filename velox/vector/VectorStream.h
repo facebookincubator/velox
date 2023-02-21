@@ -71,14 +71,16 @@ class VectorSerde {
       const Options* options = nullptr) = 0;
 };
 
-bool registerVectorSerde(std::unique_ptr<VectorSerde> serde);
+void registerVectorSerde(std::unique_ptr<VectorSerde> serdeToRegister);
 
 bool isRegisteredVectorSerde();
 
+VectorSerde* getVectorSerde();
+
 class VectorStreamGroup : public StreamArena {
  public:
-  explicit VectorStreamGroup(memory::MemoryAllocator* MemoryAllocator)
-      : StreamArena(MemoryAllocator) {}
+  explicit VectorStreamGroup(memory::MemoryPool* FOLLY_NONNULL pool)
+      : StreamArena(pool) {}
 
   void createStreamTree(
       RowTypePtr type,

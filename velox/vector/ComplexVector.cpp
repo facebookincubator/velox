@@ -63,6 +63,7 @@ std::string stringifyTruncatedElementList(
 std::shared_ptr<RowVector> RowVector::createEmpty(
     std::shared_ptr<const Type> type,
     velox::memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(type, "Vector creation requires a non-null type.");
   VELOX_CHECK(type->isRow());
   return std::static_pointer_cast<RowVector>(BaseVector::create(type, 0, pool));
 }
@@ -323,6 +324,7 @@ std::unique_ptr<SimpleVector<uint64_t>> RowVector::hashAll() const {
 }
 
 std::string RowVector::toString(vector_size_t index) const {
+  VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   if (isNullAt(index)) {
     return "null";
   }
@@ -682,6 +684,7 @@ std::unique_ptr<SimpleVector<uint64_t>> ArrayVector::hashAll() const {
 }
 
 std::string ArrayVector::toString(vector_size_t index) const {
+  VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   if (isNullAt(index)) {
     return "null";
   }
@@ -944,6 +947,7 @@ BufferPtr MapVector::elementIndices() const {
 }
 
 std::string MapVector::toString(vector_size_t index) const {
+  VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   if (isNullAt(index)) {
     return "null";
   }

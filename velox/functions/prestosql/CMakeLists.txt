@@ -23,6 +23,7 @@ add_library(
   ArrayDuplicates.cpp
   ArrayIntersectExcept.cpp
   ArrayPosition.cpp
+  ArrayShuffle.cpp
   ArraySort.cpp
   ArraySum.cpp
   Comparisons.cpp
@@ -32,12 +33,14 @@ add_library(
   FromUnixTime.cpp
   GreatestLeast.cpp
   InPredicate.cpp
+  JsonFunctions.cpp
   Map.cpp
   MapEntries.cpp
   MapKeysAndValues.cpp
   MapZipWith.cpp
   Not.cpp
   Reduce.cpp
+  Repeat.cpp
   Reverse.cpp
   RowFunction.cpp
   Slice.cpp

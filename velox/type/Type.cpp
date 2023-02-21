@@ -228,7 +228,7 @@ bool ArrayType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (!other.isArray()) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   auto& otherArray = other.asArray();
@@ -259,13 +259,19 @@ std::string FixedSizeArrayType::toString() const {
 }
 
 bool FixedSizeArrayType::equivalent(const Type& other) const {
-  if (!ArrayType::equivalent(other)) {
+  if (&other == this) {
+    return true;
+  }
+
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
+
   auto otherFixedSizeArray = dynamic_cast<const FixedSizeArrayType*>(&other);
-  if (!otherFixedSizeArray) {
+  if (!child_->equivalent(*otherFixedSizeArray->child_)) {
     return false;
   }
+
   if (fixedElementsWidth() != otherFixedSizeArray->fixedElementsWidth()) {
     return false;
   }
@@ -375,7 +381,7 @@ bool RowType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (other.kind() != TypeKind::ROW) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   auto& otherTyped = other.asRow();
@@ -467,7 +473,7 @@ bool MapType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (!other.isMap()) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   auto& otherMap = other.asMap();
@@ -479,7 +485,7 @@ bool FunctionType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (other.kind() != TypeKind::FUNCTION) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   auto& otherTyped = *reinterpret_cast<const FunctionType*>(&other);
@@ -507,7 +513,7 @@ bool OpaqueType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
-  if (other.kind() != TypeKind::OPAQUE) {
+  if (!Type::hasSameTypeId(other)) {
     return false;
   }
   return true;
@@ -707,6 +713,20 @@ std::shared_ptr<const Type> createType(
 }
 
 template <>
+std::shared_ptr<const Type> createType<TypeKind::SHORT_DECIMAL>(
+    std::vector<std::shared_ptr<const Type>>&& /*children*/) {
+  std::string name{TypeTraits<TypeKind::SHORT_DECIMAL>::name};
+  VELOX_USER_FAIL("Not supported for kind: {}", name);
+}
+
+template <>
+std::shared_ptr<const Type> createType<TypeKind::LONG_DECIMAL>(
+    std::vector<std::shared_ptr<const Type>>&& /*children*/) {
+  std::string name{TypeTraits<TypeKind::LONG_DECIMAL>::name};
+  VELOX_USER_FAIL("Not supported for kind: {}", name);
+}
+
+template <>
 std::shared_ptr<const Type> createType<TypeKind::ROW>(
     std::vector<std::shared_ptr<const Type>>&& /*children*/) {
   std::string name{TypeTraits<TypeKind::ROW>::name};
@@ -758,16 +778,29 @@ typeFactories() {
 
 } // namespace
 
-void registerType(
+bool registerType(
     const std::string& name,
     std::unique_ptr<const CustomTypeFactories> factories) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  typeFactories().emplace(uppercaseName, std::move(factories));
+  return typeFactories().emplace(uppercaseName, std::move(factories)).second;
 }
 
 bool typeExists(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   return typeFactories().count(uppercaseName) > 0;
+}
+
+std::unordered_set<std::string> getCustomTypeNames() {
+  std::unordered_set<std::string> typeNames;
+  for (const auto& [name, unused] : typeFactories()) {
+    typeNames.insert(name);
+  }
+  return typeNames;
+}
+
+bool unregisterType(const std::string& name) {
+  auto uppercaseName = boost::algorithm::to_upper_copy(name);
+  return typeFactories().erase(uppercaseName) == 1;
 }
 
 const CustomTypeFactories* FOLLY_NULLABLE

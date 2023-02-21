@@ -27,8 +27,7 @@
 #include "velox/vector/VectorPool.h"
 #include "velox/vector/VectorTypeUtils.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 BaseVector::BaseVector(
     velox::memory::MemoryPool* pool,
@@ -41,7 +40,7 @@ BaseVector::BaseVector(
     std::optional<ByteCount> representedByteCount,
     std::optional<ByteCount> storageByteCount)
     : type_(std::move(type)),
-      typeKind_(type_->kind()),
+      typeKind_(type_ ? type_->kind() : TypeKind::INVALID),
       encoding_(encoding),
       nulls_(std::move(nulls)),
       rawNulls_(nulls_.get() ? nulls_->as<uint64_t>() : nullptr),
@@ -51,6 +50,8 @@ BaseVector::BaseVector(
       distinctValueCount_(distinctValueCount),
       representedByteCount_(representedByteCount),
       storageByteCount_(storageByteCount) {
+  VELOX_CHECK_NOT_NULL(type_, "Vector creation requires a non-null type.");
+
   if (nulls_) {
     int32_t bytes = byteSize<bool>(length_);
     VELOX_CHECK(nulls_->capacity() >= bytes);
@@ -261,6 +262,7 @@ VectorPtr BaseVector::createInternal(
     const TypePtr& type,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(type, "Vector creation requires a non-null type.");
   auto kind = type->kind();
   switch (kind) {
     case TypeKind::ROW: {
@@ -343,6 +345,7 @@ VectorPtr BaseVector::createInternal(
       BufferPtr nulls = AlignedBuffer::allocate<bool>(size, pool, bits::kNull);
       return std::make_shared<FlatVector<UnknownValue>>(
           pool,
+          UNKNOWN(),
           nulls,
           size,
           BufferPtr(nullptr),
@@ -352,12 +355,6 @@ VectorPtr BaseVector::createInternal(
           size /*nullCount*/,
           true /*isSorted*/,
           0 /*representedBytes*/);
-    }
-    case TypeKind::SHORT_DECIMAL: {
-      return createEmpty<TypeKind::SHORT_DECIMAL>(size, pool, type);
-    }
-    case TypeKind::LONG_DECIMAL: {
-      return createEmpty<TypeKind::LONG_DECIMAL>(size, pool, type);
     }
     default:
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
@@ -502,6 +499,7 @@ std::string BaseVector::toString(bool recursive) const {
 }
 
 std::string BaseVector::toString(vector_size_t index) const {
+  VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   std::stringstream out;
   if (!nulls_) {
     out << "no nulls";
@@ -607,89 +605,73 @@ void BaseVector::ensureWritable(
 
 template <TypeKind kind>
 VectorPtr newConstant(
+    const TypePtr& type,
     variant& value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
   using T = typename KindToFlatVector<kind>::WrapperType;
-  T copy = T();
-  TypePtr type;
+
+  if (value.isNull()) {
+    return std::make_shared<ConstantVector<T>>(pool, size, true, type, T());
+  }
+
+  T copy;
   if constexpr (std::is_same_v<T, StringView>) {
-    type = Type::create<kind>();
-    if (!value.isNull()) {
-      copy = StringView(value.value<kind>());
-    }
+    copy = StringView(value.value<kind>());
   } else if constexpr (
       std::is_same_v<T, UnscaledShortDecimal> ||
       std::is_same_v<T, UnscaledLongDecimal>) {
-    const auto& decimal = value.value<kind>();
-    type = DECIMAL(decimal.precision, decimal.scale);
-    if (!value.isNull()) {
-      copy = decimal.value();
-    }
+    copy = value.value<kind>().value();
   } else {
-    type = Type::create<kind>();
-    if (!value.isNull()) {
-      copy = value.value<T>();
-    }
+    copy = value.value<T>();
   }
 
   return std::make_shared<ConstantVector<T>>(
-      pool,
-      size,
-      value.isNull(),
-      type,
-      std::move(copy),
-      SimpleVectorStats<T>{},
-      sizeof(T) /*representedByteCount*/);
+      pool, size, false, type, std::move(copy));
 }
 
 template <>
 VectorPtr newConstant<TypeKind::OPAQUE>(
+    const TypePtr& type,
     variant& value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
-  VELOX_CHECK(!value.isNull(), "Can't infer type from null opaque object");
   const auto& capsule = value.value<TypeKind::OPAQUE>();
 
   return std::make_shared<ConstantVector<std::shared_ptr<void>>>(
-      pool,
-      size,
-      value.isNull(),
-      capsule.type,
-      std::shared_ptr<void>(capsule.obj),
-      SimpleVectorStats<std::shared_ptr<void>>{},
-      sizeof(std::shared_ptr<void>) /*representedByteCount*/);
+      pool, size, value.isNull(), type, std::shared_ptr<void>(capsule.obj));
 }
 
 // static
 VectorPtr BaseVector::createConstant(
+    const TypePtr& type,
     variant value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
+  VELOX_CHECK_EQ(type->kind(), value.kind());
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-      newConstant, value.kind(), value, size, pool);
+      newConstant, value.kind(), type, value, size, pool);
 }
+
+namespace {
+
+template <TypeKind kind>
+VectorPtr newNullConstant(
+    const TypePtr& type,
+    vector_size_t size,
+    velox::memory::MemoryPool* pool) {
+  using T = typename KindToFlatVector<kind>::WrapperType;
+  return std::make_shared<ConstantVector<T>>(pool, size, true, type, T());
+}
+} // namespace
 
 std::shared_ptr<BaseVector> BaseVector::createNullConstant(
     const TypePtr& type,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
-  if (!type->isPrimitiveType()) {
-    return std::make_shared<ConstantVector<ComplexType>>(
-        pool, size, true, type, ComplexType());
-  }
-
-  if (type->kind() == TypeKind::SHORT_DECIMAL) {
-    return std::make_shared<ConstantVector<UnscaledShortDecimal>>(
-        pool, size, true, type, UnscaledShortDecimal());
-  }
-
-  if (type->kind() == TypeKind::LONG_DECIMAL) {
-    return std::make_shared<ConstantVector<UnscaledLongDecimal>>(
-        pool, size, true, type, UnscaledLongDecimal());
-  }
-
-  return BaseVector::createConstant(variant(type->kind()), size, pool);
+  VELOX_CHECK_NOT_NULL(type, "Vector creation requires a non-null type.");
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+      newNullConstant, type->kind(), type, size, pool);
 }
 
 // static
@@ -899,5 +881,4 @@ std::string printIndices(
   return out.str();
 }
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox

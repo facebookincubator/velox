@@ -44,25 +44,7 @@ class ConstantVector final : public SimpleVector<T> {
       velox::memory::MemoryPool* pool,
       size_t length,
       bool isNull,
-      T&& val,
-      const SimpleVectorStats<T>& stats = {},
-      std::optional<ByteCount> representedBytes = std::nullopt,
-      std::optional<ByteCount> storageByteCount = std::nullopt)
-      : ConstantVector(
-            pool,
-            length,
-            isNull,
-            CppToType<T>::create(),
-            std::move(val),
-            stats,
-            representedBytes,
-            storageByteCount) {}
-
-  ConstantVector(
-      velox::memory::MemoryPool* pool,
-      size_t length,
-      bool isNull,
-      std::shared_ptr<const Type> type,
+      TypePtr type,
       T&& val,
       const SimpleVectorStats<T>& stats = {},
       std::optional<ByteCount> representedBytes = std::nullopt,
@@ -229,11 +211,6 @@ class ConstantVector final : public SimpleVector<T> {
 
   const BaseVector* loadedVector() const override {
     return const_cast<ConstantVector<T>*>(this)->loadedVector();
-  }
-
-  // Fast Check to optimize for constant vectors
-  bool isConstant(const SelectivityVector& rows) const override {
-    return true;
   }
 
   bool isScalar() const override {

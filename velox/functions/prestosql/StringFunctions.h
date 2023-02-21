@@ -76,7 +76,7 @@ struct XxHash64Function {
   FOLLY_ALWAYS_INLINE
   void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
     // Seed is set to 0.
-    int64_t hash = XXH64(input.data(), input.size(), 0);
+    int64_t hash = folly::Endian::swap64(XXH64(input.data(), input.size(), 0));
     static const auto kLen = sizeof(int64_t);
 
     // Resizing output and copy
@@ -93,6 +93,20 @@ struct Md5Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void call(TTo& result, const TFrom& input) {
     stringImpl::md5(result, input);
+  }
+};
+
+/// sha1(varbinary) -> varbinary
+template <typename T>
+struct Sha1Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
+    result.resize(20);
+    folly::ssl::OpenSSLHash::sha1(
+        folly::MutableByteRange((uint8_t*)result.data(), result.size()),
+        folly::ByteRange((const uint8_t*)input.data(), input.size()));
   }
 };
 
@@ -118,6 +132,52 @@ struct Sha512Function {
   }
 };
 
+/// spooky_hash_v2_32(varbinary) -> varbinary
+template <typename T>
+struct SpookyHashV232Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
+    // Swap bytes with folly::Endian::swap32 similar to the Java implementation,
+    // Velox and SpookyHash only support little-endian platforms.
+    uint32_t hash = folly::Endian::swap32(
+        folly::hash::SpookyHashV2::Hash32(input.data(), input.size(), 0));
+    static const auto kHashLength = sizeof(int32_t);
+    result.resize(kHashLength);
+    std::memcpy(result.data(), &hash, kHashLength);
+  }
+};
+
+/// spooky_hash_v2_64(varbinary) -> varbinary
+template <typename T>
+struct SpookyHashV264Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
+    // Swap bytes with folly::Endian::swap64 similar to the Java implementation,
+    // Velox and SpookyHash only support little-endian platforms.
+    uint64_t hash = folly::Endian::swap64(
+        folly::hash::SpookyHashV2::Hash64(input.data(), input.size(), 0));
+    static const auto kHashLength = sizeof(int64_t);
+    result.resize(kHashLength);
+    std::memcpy(result.data(), &hash, kHashLength);
+  }
+};
+
+/// hmac_sha1(varbinary) -> varbinary
+template <typename T>
+struct HmacSha1Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TOuput, typename TInput>
+  FOLLY_ALWAYS_INLINE void
+  call(TOuput& result, const TInput& data, const TInput& key) {
+    stringImpl::hmacSha1(result, key, data);
+  }
+};
+
 /// hmac_sha256(varbinary) -> varbinary
 template <typename T>
 struct HmacSha256Function {
@@ -126,7 +186,7 @@ struct HmacSha256Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void
   call(TTo& result, const TFrom& data, const TFrom& key) {
-    stringImpl::HmacSha256(result, key, data);
+    stringImpl::hmacSha256(result, key, data);
   }
 };
 
@@ -138,7 +198,7 @@ struct HmacSha512Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void
   call(TTo& result, const TFrom& data, const TFrom& key) {
-    stringImpl::HmacSha512(result, key, data);
+    stringImpl::hmacSha512(result, key, data);
   }
 };
 

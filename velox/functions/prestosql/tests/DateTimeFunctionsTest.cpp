@@ -16,13 +16,9 @@
 
 #include <optional>
 #include <string>
-#include <string_view>
-#include "velox/functions/FunctionRegistry.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/type/Date.h"
-#include "velox/type/Timestamp.h"
-#include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox;
@@ -169,22 +165,14 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     if (!timestamp.has_value() || !timeZoneName.has_value()) {
       return evaluateOnce<T>(
           expression,
-          makeRowVector({makeRowVector(
-              {
-                  makeNullableFlatVector<int64_t>({std::nullopt}),
-                  makeNullableFlatVector<int16_t>({std::nullopt}),
-              },
-              [](vector_size_t /*row*/) { return true; })}));
+          makeRowVector({BaseVector::createNullConstant(
+              TIMESTAMP_WITH_TIME_ZONE(), 1, pool())}));
     }
 
-    const std::optional<int64_t> tzid =
-        util::getTimeZoneID(timeZoneName.value());
     return evaluateOnce<T>(
         expression,
-        makeRowVector({makeRowVector({
-            makeNullableFlatVector<int64_t>({timestamp}),
-            makeNullableFlatVector<int16_t>({tzid}),
-        })}));
+        makeRowVector({makeTimestampWithTimeZoneVector(
+            timestamp.value(), timeZoneName.value().c_str())}));
   }
 
   VectorPtr evaluateWithTimestampWithTimezone(
@@ -194,34 +182,47 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     if (!timestamp.has_value() || !timeZoneName.has_value()) {
       return evaluate(
           expression,
-          makeRowVector({makeRowVector(
-              {
-                  makeNullableFlatVector<int64_t>({std::nullopt}),
-                  makeNullableFlatVector<int16_t>({std::nullopt}),
-              },
-              [](vector_size_t /*row*/) { return true; })}));
+          makeRowVector({BaseVector::createNullConstant(
+              TIMESTAMP_WITH_TIME_ZONE(), 1, pool())}));
     }
 
-    const std::optional<int64_t> tzid =
-        util::getTimeZoneID(timeZoneName.value());
     return evaluate(
         expression,
-        makeRowVector({makeRowVector({
-            makeNullableFlatVector<int64_t>({timestamp}),
-            makeNullableFlatVector<int16_t>({tzid}),
-        })}));
+        makeRowVector({makeTimestampWithTimeZoneVector(
+            timestamp.value(), timeZoneName.value().c_str())}));
   }
 
-  static std::unordered_set<std::string> getSignatureStrings(
-      const std::string& functionName) {
-    auto allSignatures = getFunctionSignatures();
-    const auto& signatures = allSignatures.at(functionName);
+  Date parseDate(const std::string& dateStr) {
+    Date returnDate;
+    parseTo(dateStr, returnDate);
+    return returnDate;
+  }
 
-    std::unordered_set<std::string> signatureStrings;
-    for (const auto& signature : signatures) {
-      signatureStrings.insert(signature->toString());
-    }
-    return signatureStrings;
+  RowVectorPtr makeTimestampWithTimeZoneVector(
+      int64_t timestamp,
+      const char* tz) {
+    const int64_t tzid = util::getTimeZoneID(tz);
+
+    return std::make_shared<RowVector>(
+        pool(),
+        TIMESTAMP_WITH_TIME_ZONE(),
+        nullptr,
+        1,
+        std::vector<VectorPtr>(
+            {makeNullableFlatVector<int64_t>({timestamp}),
+             makeNullableFlatVector<int16_t>({tzid})}));
+  }
+
+  RowVectorPtr makeTimestampWithTimeZoneVector(
+      const VectorPtr& timestamps,
+      const VectorPtr& timezones) {
+    VELOX_CHECK_EQ(timestamps->size(), timezones->size());
+    return std::make_shared<RowVector>(
+        pool(),
+        TIMESTAMP_WITH_TIME_ZONE(),
+        nullptr,
+        timestamps->size(),
+        std::vector<VectorPtr>({timestamps, timezones}));
   }
 };
 
@@ -283,13 +284,9 @@ TEST_F(DateTimeFunctionsTest, toUnixtime) {
   EXPECT_EQ(998423705.321, toUnixtime(Timestamp(998423705, 321000000)));
 
   const auto toUnixtimeWTZ = [&](int64_t timestamp, const char* tz) {
-    const int64_t tzid = util::getTimeZoneID(tz);
-    return evaluateOnce<double>(
-        "to_unixtime(c0)",
-        makeRowVector({makeRowVector({
-            makeNullableFlatVector<int64_t>({timestamp}),
-            makeNullableFlatVector<int16_t>({tzid}),
-        })}));
+    auto input = makeTimestampWithTimeZoneVector(timestamp, tz);
+
+    return evaluateOnce<double>("to_unixtime(c0)", makeRowVector({input}));
   };
 
   // 1639426440000 is milliseconds (from PrestoDb '2021-12-13+20:14+00:00').
@@ -341,26 +338,21 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
 
   // Constant timezone parameter.
   {
-    auto result = evaluate<RowVector>(
-        "from_unixtime(c0, '+01:00')", makeRowVector({unixtimes}));
-    ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()));
+    auto result =
+        evaluate("from_unixtime(c0, '+01:00')", makeRowVector({unixtimes}));
 
-    auto expected = makeRowVector({
+    auto expected = makeTimestampWithTimeZoneVector(
         makeFlatVector<int64_t>(
             size, [&](auto row) { return unixtimeAt(row) * 1'000; }),
-        makeConstant((int16_t)900, size),
-    });
+        makeConstant((int16_t)900, size));
     assertEqualVectors(expected, result);
 
     // NaN timestamp.
-    result = evaluate<RowVector>(
+    result = evaluate(
         "from_unixtime(c0, '+01:00')",
         makeRowVector({makeFlatVector<double>({kNan, kNan})}));
-    ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()));
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({0, 0}),
-        makeFlatVector<int16_t>({900, 900}),
-    });
+    expected = makeTimestampWithTimeZoneVector(
+        makeFlatVector<int64_t>({0, 0}), makeFlatVector<int16_t>({900, 900}));
     assertEqualVectors(expected, result);
   }
 
@@ -373,30 +365,24 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
     auto timezones = makeFlatVector<StringView>(
         size, [&](auto row) { return StringView(timezoneNames[row % 5]); });
 
-    auto result = evaluate<RowVector>(
+    auto result = evaluate(
         "from_unixtime(c0, c1)", makeRowVector({unixtimes, timezones}));
-    ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()));
-
-    auto expected = makeRowVector({
+    auto expected = makeTimestampWithTimeZoneVector(
         makeFlatVector<int64_t>(
             size, [&](auto row) { return unixtimeAt(row) * 1'000; }),
         makeFlatVector<int16_t>(
-            size, [&](auto row) { return timezoneIds[row % 5]; }),
-    });
+            size, [&](auto row) { return timezoneIds[row % 5]; }));
     assertEqualVectors(expected, result);
 
     // NaN timestamp.
-    result = evaluate<RowVector>(
+    result = evaluate(
         "from_unixtime(c0, c1)",
         makeRowVector({
             makeFlatVector<double>({kNan, kNan}),
             makeNullableFlatVector<StringView>({"+01:00", "+02:00"}),
         }));
-    ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()));
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({0, 0}),
-        makeFlatVector<int16_t>({900, 960}),
-    });
+    expected = makeTimestampWithTimeZoneVector(
+        makeFlatVector<int64_t>({0, 0}), makeFlatVector<int16_t>({900, 960}));
     assertEqualVectors(expected, result);
   }
 }
@@ -483,6 +469,104 @@ TEST_F(DateTimeFunctionsTest, yearTimestampWithTimezone) {
       std::nullopt,
       evaluateWithTimestampWithTimezone<int64_t>(
           "year(c0)", std::nullopt, std::nullopt));
+}
+
+TEST_F(DateTimeFunctionsTest, timestampTooLarge) {
+  std::vector<std::string> functions = {
+      "year",
+      "quarter",
+      "month",
+      "week",
+      "day",
+      "dow",
+      "doy",
+      "yow",
+      "hour",
+      "minute",
+      "second",
+  };
+
+  Timestamp ts(100'000'000'000'000'000, 0);
+  for (const auto& function : functions) {
+    VELOX_ASSERT_THROW(
+        evaluateOnce<int64_t>(
+            fmt::format("{}(c0)", function), std::make_optional(ts)),
+        "Timestamp is too large: 100000000000000000 seconds since epoch");
+  }
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>("date_trunc('hour', c0)", std::make_optional(ts)),
+      "Timestamp is too large: 100000000000000000 seconds since epoch");
+}
+
+TEST_F(DateTimeFunctionsTest, weekDate) {
+  const auto weekDate = [&](const char* dateString) {
+    auto date = std::make_optional(parseDate(dateString));
+    auto week = evaluateOnce<int64_t>("week(c0)", date).value();
+    auto weekOfYear = evaluateOnce<int64_t>("week_of_year(c0)", date).value();
+    VELOX_CHECK_EQ(
+        week, weekOfYear, "week and week_of_year must return the same value");
+    return week;
+  };
+
+  EXPECT_EQ(1, weekDate("1919-12-31"));
+  EXPECT_EQ(1, weekDate("1920-01-01"));
+  EXPECT_EQ(1, weekDate("1920-01-04"));
+  EXPECT_EQ(2, weekDate("1920-01-05"));
+  EXPECT_EQ(53, weekDate("1960-01-01"));
+  EXPECT_EQ(53, weekDate("1960-01-03"));
+  EXPECT_EQ(1, weekDate("1960-01-04"));
+  EXPECT_EQ(1, weekDate("1969-12-31"));
+  EXPECT_EQ(1, weekDate("1970-01-01"));
+  EXPECT_EQ(1, weekDate("0001-01-01"));
+  EXPECT_EQ(52, weekDate("9999-12-31"));
+}
+
+TEST_F(DateTimeFunctionsTest, week) {
+  const auto weekTimestamp = [&](const char* time) {
+    auto timestampInSeconds = util::fromTimeString(time) / 1'000'000;
+    auto timestamp =
+        std::make_optional(Timestamp(timestampInSeconds * 100'000'000, 0));
+    auto week = evaluateOnce<int64_t>("week(c0)", timestamp).value();
+    auto weekOfYear =
+        evaluateOnce<int64_t>("week_of_year(c0)", timestamp).value();
+    VELOX_CHECK_EQ(
+        week, weekOfYear, "week and week_of_year must return the same value");
+    return week;
+  };
+
+  EXPECT_EQ(1, weekTimestamp("00:00:00"));
+  EXPECT_EQ(10, weekTimestamp("11:59:59"));
+  EXPECT_EQ(51, weekTimestamp("06:01:01"));
+  EXPECT_EQ(24, weekTimestamp("06:59:59"));
+  EXPECT_EQ(27, weekTimestamp("12:00:01"));
+  EXPECT_EQ(7, weekTimestamp("12:59:59"));
+}
+
+TEST_F(DateTimeFunctionsTest, weekTimestampWithTimezone) {
+  const auto weekTimestampTimezone = [&](const char* time,
+                                         const char* timezone) {
+    auto timestampInSeconds = util::fromTimeString(time) / 1'000'000;
+    auto timestamp = timestampInSeconds * 100'000'000;
+    auto week = evaluateWithTimestampWithTimezone<int64_t>(
+                    "week(c0)", timestamp, timezone)
+                    .value();
+    auto weekOfYear = evaluateWithTimestampWithTimezone<int64_t>(
+                          "week_of_year(c0)", timestamp, timezone)
+                          .value();
+    VELOX_CHECK_EQ(
+        week, weekOfYear, "week and week_of_year must return the same value");
+    return week;
+  };
+
+  EXPECT_EQ(1, weekTimestampTimezone("00:00:00", "-12:00"));
+  EXPECT_EQ(1, weekTimestampTimezone("00:00:00", "+12:00"));
+  EXPECT_EQ(47, weekTimestampTimezone("11:59:59", "-12:00"));
+  EXPECT_EQ(47, weekTimestampTimezone("11:59:59", "+12:00"));
+  EXPECT_EQ(33, weekTimestampTimezone("06:01:01", "-12:00"));
+  EXPECT_EQ(34, weekTimestampTimezone("06:01:01", "+12:00"));
+  EXPECT_EQ(47, weekTimestampTimezone("12:00:01", "-12:00"));
+  EXPECT_EQ(47, weekTimestampTimezone("12:00:01", "+12:00"));
 }
 
 TEST_F(DateTimeFunctionsTest, quarter) {
@@ -1296,9 +1380,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezone) {
                                      const std::string& timeZone,
                                      int64_t expectedTimestamp) {
     assertEqualVectors(
-        makeRowVector(
-            {makeNullableFlatVector<int64_t>({expectedTimestamp}),
-             makeNullableFlatVector<int16_t>({util::getTimeZoneID(timeZone)})}),
+        makeTimestampWithTimeZoneVector(expectedTimestamp, timeZone.c_str()),
         evaluateWithTimestampWithTimezone(
             fmt::format("date_trunc('{}', c0)", truncUnit),
             inputTimestamp,
@@ -1391,12 +1473,6 @@ TEST_F(DateTimeFunctionsTest, dateAddDate) {
                            std::optional<Date> date) {
     return evaluateOnce<Date>(
         fmt::format("date_add('{}', c0, c1)", unit), value, date);
-  };
-
-  const auto parseDate = [&](const std::string& strDate) -> Date {
-    Date result;
-    parseTo(strDate, result);
-    return result;
   };
 
   // Check null behaviors
@@ -1730,12 +1806,6 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
                             std::optional<Date> date2) {
     return evaluateOnce<int64_t>(
         fmt::format("date_diff('{}', c0, c1)", unit), date1, date2);
-  };
-
-  const auto parseDate = [&](const std::string& strDate) -> Date {
-    Date result;
-    parseTo(strDate, result);
-    return result;
   };
 
   // Check null behaviors
@@ -2729,4 +2799,14 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
   // 05:30:00.000 UTC.
   EXPECT_EQ(
       Timestamp(-66600, 0), dateParse("1969-12-31+11:00", "%Y-%m-%d+%H:%i"));
+
+  assertUserInvalidArgument(
+      [&] { dateParse("", "%y+"); },
+      "Invalid format: \"\" is malformed at \"\"");
+  assertUserInvalidArgument(
+      [&] { dateParse("1", "%y+"); },
+      "Invalid format: \"1\" is malformed at \"1\"");
+  assertUserInvalidArgument(
+      [&] { dateParse("116", "%y+"); },
+      "Invalid format: \"116\" is malformed at \"6\"");
 }

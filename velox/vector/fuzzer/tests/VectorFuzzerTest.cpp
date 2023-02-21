@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
@@ -74,6 +75,8 @@ class VectorFuzzerTest : public testing::Test {
     }
   }
 
+  void validateMaxSizes(VectorPtr vector, size_t maxSize);
+
  private:
   std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
 };
@@ -97,7 +100,8 @@ TEST_F(VectorFuzzerTest, flatPrimitive) {
       TIMESTAMP(),
       INTERVAL_DAY_TIME(),
       UNKNOWN(),
-  };
+      fuzzer.randShortDecimalType(),
+      fuzzer.randLongDecimalType()};
 
   for (const auto& type : types) {
     vector = fuzzer.fuzzFlat(type);
@@ -221,6 +225,18 @@ TEST_F(VectorFuzzerTest, constants) {
 
   vector = fuzzer.fuzzConstant(VARCHAR());
   ASSERT_TRUE(vector->type()->kindEquals(VARCHAR()));
+  ASSERT_EQ(VectorEncoding::Simple::CONSTANT, vector->encoding());
+  ASSERT_FALSE(vector->mayHaveNulls());
+
+  auto shortDecimalType = fuzzer.randShortDecimalType();
+  vector = fuzzer.fuzzConstant(shortDecimalType);
+  ASSERT_TRUE(vector->type()->kindEquals(shortDecimalType));
+  ASSERT_EQ(VectorEncoding::Simple::CONSTANT, vector->encoding());
+  ASSERT_FALSE(vector->mayHaveNulls());
+
+  auto longDecimalType = fuzzer.randLongDecimalType();
+  vector = fuzzer.fuzzConstant(longDecimalType);
+  ASSERT_TRUE(vector->type()->kindEquals(longDecimalType));
   ASSERT_EQ(VectorEncoding::Simple::CONSTANT, vector->encoding());
   ASSERT_FALSE(vector->mayHaveNulls());
 
@@ -390,9 +406,13 @@ TEST_F(VectorFuzzerTest, row) {
 
   // Composable API.
   vector = fuzzer.fuzzRow(
-      {fuzzer.fuzzFlat(REAL(), 100), fuzzer.fuzzFlat(BIGINT(), 100)}, 100);
+      {fuzzer.fuzzFlat(REAL(), 100), fuzzer.fuzzFlat(BIGINT(), 100)},
+      {"c0", "c1"},
+      100);
   ASSERT_TRUE(vector->type()->kindEquals(ROW({REAL(), BIGINT()})));
   ASSERT_TRUE(vector->mayHaveNulls());
+  EXPECT_THAT(
+      vector->type()->asRow().names(), ::testing::ElementsAre("c0", "c1"));
 }
 
 TEST_F(VectorFuzzerTest, assorted) {
@@ -573,6 +593,52 @@ TEST_F(VectorFuzzerTest, lazyOverDictionary) {
       ASSERT_EQ(dict->wrappedIndex(row), lazy->wrappedIndex(row));
     }
   });
+}
+
+void VectorFuzzerTest::validateMaxSizes(VectorPtr vector, size_t maxSize) {
+  if (vector->typeKind() == TypeKind::ARRAY) {
+    validateMaxSizes(vector->template as<ArrayVector>()->elements(), maxSize);
+  } else if (vector->typeKind() == TypeKind::MAP) {
+    auto mapVector = vector->as<MapVector>();
+    validateMaxSizes(mapVector->mapKeys(), maxSize);
+    validateMaxSizes(mapVector->mapValues(), maxSize);
+  } else if (vector->typeKind() == TypeKind::ROW) {
+    auto rowVector = vector->as<RowVector>();
+    for (const auto& child : rowVector->children()) {
+      validateMaxSizes(child, maxSize);
+    }
+  }
+  EXPECT_LE(vector->size(), maxSize);
+}
+
+// Ensures we don't generate inner vectors exceeding `complexElementsMaxSize`.
+TEST_F(VectorFuzzerTest, complexTooLarge) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+  VectorPtr vector;
+
+  vector = fuzzer.fuzzFlat(ARRAY(ARRAY(ARRAY(ARRAY(ARRAY(SMALLINT()))))));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
+
+  vector = fuzzer.fuzzFlat(MAP(
+      BIGINT(), MAP(SMALLINT(), MAP(INTEGER(), MAP(SMALLINT(), DOUBLE())))));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
+
+  vector = fuzzer.fuzzFlat(
+      ROW({BIGINT(), ROW({SMALLINT(), ROW({INTEGER()})}), DOUBLE()}));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
+
+  // Mix and match.
+  vector = fuzzer.fuzzFlat(
+      ROW({ARRAY(ROW({SMALLINT(), ROW({MAP(INTEGER(), DOUBLE())})}))}));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
+
+  // Try a more restrictive max size.
+  opts.complexElementsMaxSize = 100;
+  fuzzer.setOptions(opts);
+
+  vector = fuzzer.fuzzFlat(ARRAY(ARRAY(ARRAY(ARRAY(ARRAY(SMALLINT()))))));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
 }
 
 } // namespace

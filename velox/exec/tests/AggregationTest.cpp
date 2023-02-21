@@ -111,7 +111,6 @@ class AggregationTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
-    allocator_ = memory::MemoryAllocator::getInstance();
     registerSumNonPODAggregate("sumnonpod");
   }
 
@@ -341,7 +340,7 @@ class AggregationTest : public OperatorTestBase {
         false,
         true,
         true,
-        allocator_,
+        pool_.get(),
         ContainerRowSerde::instance());
   }
 
@@ -355,7 +354,6 @@ class AggregationTest : public OperatorTestBase {
            DOUBLE(),
            VARCHAR()})};
   folly::Random::DefaultGenerator rng_;
-  memory::MemoryAllocator* allocator_;
 };
 
 template <>
@@ -461,17 +459,12 @@ TEST_F(AggregationTest, multiKeyDistinct) {
 }
 
 TEST_F(AggregationTest, aggregateOfNulls) {
-  auto rowType = ROW({"c0", "c1"}, {BIGINT(), SMALLINT()});
-
-  auto children = {
+  auto rowVector = makeRowVector({
       BatchMaker::createVector<TypeKind::BIGINT>(
           rowType_->childAt(0), 100, *pool_),
-      BaseVector::createConstant(
-          facebook::velox::variant(TypeKind::SMALLINT), 100, pool_.get()),
-  };
+      makeNullConstant(TypeKind::SMALLINT, 100),
+  });
 
-  auto rowVector = std::make_shared<RowVector>(
-      pool_.get(), rowType, BufferPtr(nullptr), 100, children);
   auto vectors = {rowVector};
   createDuckDbTable(vectors);
 
@@ -880,6 +873,7 @@ TEST_F(AggregationTest, spillWithMemoryLimit) {
 
     auto stats = task->taskStats().pipelineStats;
     ASSERT_EQ(testData.expectSpill, stats[0].operatorStats[1].spilledBytes > 0);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
 
@@ -994,6 +988,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, spillWithEmptyPartition) {
     // Check spilled bytes.
     EXPECT_LT(0, stats[0].operatorStats[1].spilledBytes);
     EXPECT_GE(kNumPartitions - 1, stats[0].operatorStats[1].spilledPartitions);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
 
@@ -1103,6 +1098,7 @@ TEST_F(AggregationTest, spillWithNonSpillingPartition) {
   // Check spilled bytes.
   EXPECT_LT(0, stats[0].operatorStats[1].spilledBytes);
   EXPECT_EQ(1, stats[0].operatorStats[1].spilledPartitions);
+  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
 /// Verify number of memory allocations in the HashAggregation operator.
@@ -1343,6 +1339,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
     ASSERT_EQ(
         folly::divCeil(opStats.outputPositions, outputBufferSize),
         opStats.outputVectors);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
 
@@ -1364,6 +1361,7 @@ TEST_F(AggregationTest, distinctWithSpilling) {
                   .assertResults("SELECT distinct c0 FROM tmp");
   // Verify that spilling is not triggered.
   ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
+  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
 TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
@@ -1401,6 +1399,7 @@ TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
   auto stats = task->taskStats().pipelineStats;
   // Verify that spilling is not triggered.
   ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
+  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
 } // namespace

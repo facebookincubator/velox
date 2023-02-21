@@ -23,6 +23,10 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwio::parquet;
 using namespace facebook::velox::parquet;
 
+namespace {
+auto defaultPool = memory::getDefaultMemoryPool();
+}
+
 class ParquetReaderTest : public ParquetReaderTestBase {};
 
 ParquetReader createReader(const std::string& path, const ReaderOptions& opts) {
@@ -40,9 +44,28 @@ TEST_F(ParquetReaderTest, parseSample) {
   //   b: [1.0..20.0]
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  ReaderOptions readerOptions;
+  ReaderOptions readerOptions{defaultPool.get()};
   ParquetReader reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader.numberOfRows(), 20ULL);
+
+  auto type = reader.typeWithId();
+  EXPECT_EQ(type->size(), 2ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type->kind(), TypeKind::BIGINT);
+  auto col1 = type->childAt(1);
+  EXPECT_EQ(col1->type->kind(), TypeKind::DOUBLE);
+  EXPECT_EQ(type->childByName("a"), col0);
+  EXPECT_EQ(type->childByName("b"), col1);
+}
+
+TEST_F(ParquetReaderTest, parseEmpty) {
+  // empty.parquet holds two columns (a: BIGINT, b: DOUBLE) and
+  // 0 rows.
+  const std::string empty(getExampleFilePath("empty.parquet"));
+
+  ReaderOptions readerOptions{defaultPool.get()};
+  ParquetReader reader = createReader(empty, readerOptions);
+  EXPECT_EQ(reader.numberOfRows(), 0ULL);
 
   auto type = reader.typeWithId();
   EXPECT_EQ(type->size(), 2ULL);
@@ -61,7 +84,7 @@ TEST_F(ParquetReaderTest, parseDate) {
   //   date: [1969-12-27 .. 1970-01-20]
   const std::string sample(getExampleFilePath("date.parquet"));
 
-  ReaderOptions readerOptions;
+  ReaderOptions readerOptions{defaultPool.get()};
   ParquetReader reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader.numberOfRows(), 25ULL);
@@ -78,7 +101,7 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
   // ARRAY(INTEGER)) c1) c)
   const std::string sample(getExampleFilePath("row_map_array.parquet"));
 
-  ReaderOptions readerOptions;
+  ReaderOptions readerOptions{defaultPool.get()};
   ParquetReader reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader.numberOfRows(), 1ULL);
@@ -106,4 +129,22 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
 
   auto col0_1_1_0 = col0_1_1->childAt(0);
   EXPECT_EQ(col0_1_1_0->type->kind(), TypeKind::INTEGER);
+}
+
+TEST_F(ParquetReaderTest, projectNoColumns) {
+  // This is the case for count(*).
+  auto rowType = ROW({}, {});
+  ReaderOptions readerOpts{defaultPool.get()};
+  ParquetReader reader =
+      createReader(getExampleFilePath("sample.parquet"), readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto result = BaseVector::create(rowType, 1, pool_.get());
+  constexpr int kBatchSize = 100;
+  ASSERT_TRUE(rowReader->next(kBatchSize, result));
+  EXPECT_EQ(result->size(), 10);
+  ASSERT_TRUE(rowReader->next(kBatchSize, result));
+  EXPECT_EQ(result->size(), 10);
+  ASSERT_FALSE(rowReader->next(kBatchSize, result));
 }

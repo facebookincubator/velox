@@ -24,7 +24,6 @@ workflows:
       - macos-build
       - format-check
       - header-check
-      - linux-benchmarks-basic
 
   # Daily documentation update
   nightly:
@@ -130,6 +129,8 @@ commands:
 
   fuzzer-run:
     parameters:
+      fuzzer_repro:
+        type: string
       fuzzer_output:
         type: string
       fuzzer_name:
@@ -159,6 +160,8 @@ commands:
           no_output_timeout: 120m
       - store_artifacts:
           path: << parameters.fuzzer_output >>
+      - store_artifacts:
+          path: << parameters.fuzzer_repro >>
       - post-steps
 
 executors:
@@ -325,102 +328,6 @@ jobs:
           no_output_timeout: 1h
       - post-steps
 
-  linux-benchmarks-basic:
-    machine:
-      image: ubuntu-2004:current
-    resource_class: 2xlarge
-    environment:
-      CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
-      CONBENCH_HOST: "CircleCI-runner-dedicated"
-      LINUX_DISTRO: "ubuntu"
-      VELOX_DEPENDENCY_SOURCE: BUNDLED
-      BASELINE_OUTPUT_PATH: "benchmark-results/baseline/"
-      TARGET_OUTPUT_PATH: "benchmark-results/target/"
-    steps:
-      - checkout
-      - update-submodules
-      - run:
-          name: "Setup Ubuntu"
-          command: |
-            sudo ./scripts/setup-ubuntu.sh
-      - setup-environment
-
-      # First we checkout main to build the baseline version of the benchmarks. 
-      - run:
-          name: "Checkout Main"
-          command: |
-            git checkout $(git merge-base origin/main HEAD)
-      - build-benchmarks:
-          benchmark_class: "Baseline"
-          binary_output: "_build/benchmarks/baseline/"
-
-      # Then we checkout the current PR branch to build the target (contender).
-      - run:
-          name: "Checkout Target"
-          command: |
-            git checkout -
-      - build-benchmarks:
-          benchmark_class: "Target"
-          binary_output: "_build/benchmarks/target/"
-
-      # Now we go ahead and run.
-      - run:
-          name: "Install benchmark dependencies"
-          command: |
-            pip3 install -r scripts/benchmark-requirements.txt
-      - run:
-          name: "Run Benchmarks - Full Round"
-          command: |
-            # TODO: For now we just compare the target binary with itself, until we
-            # stabilize benchmark runs. We should eventually have two different
-            # set of binaries.
-            make benchmarks-basic-run \
-                EXTRA_BENCHMARK_FLAGS="--binary_path _build/benchmarks/baseline/ --output_path ${BASELINE_OUTPUT_PATH}"
-            make benchmarks-basic-run \
-                EXTRA_BENCHMARK_FLAGS="--binary_path _build/benchmarks/target/ --output_path ${TARGET_OUTPUT_PATH} --conbench_upload_run_id CircleCI-${CIRCLE_BUILD_NUM}-dedicated"
-
-            ./scripts/benchmark-runner.py compare \
-                --baseline_path ${BASELINE_OUTPUT_PATH} \
-                --target_path ${TARGET_OUTPUT_PATH} \
-                --rerun_json_output "benchmark-results/rerun_json_output_0.json" \
-                --do_not_fail
-      - run:
-          name: "Run Benchmarks - Reruns"
-          command: |
-
-            for i in 1 2 3 4 5; do
-              CURRENT_JSON_RERUN="benchmark-results/rerun_json_output_$((${i} - 1)).json"
-              NEXT_JSON_RERUN="benchmark-results/rerun_json_output_${i}.json"
-
-              if [ ! -s "${CURRENT_JSON_RERUN}" ]; then
-                echo "--> Rerun iteration ${i} found empty file. Finalizing."
-                break
-              fi
-              echo "--> Starting rerun iteration: ${i}"
-
-              make benchmarks-basic-run \
-                  EXTRA_BENCHMARK_FLAGS="--binary_path _build/benchmarks/baseline/ --output_path ${BASELINE_OUTPUT_PATH}/rerun-${i}/ --rerun_json_input ${CURRENT_JSON_RERUN}"
-              make benchmarks-basic-run \
-                  EXTRA_BENCHMARK_FLAGS="--binary_path _build/benchmarks/target/ --output_path ${TARGET_OUTPUT_PATH}/rerun-${i}/ --rerun_json_input ${CURRENT_JSON_RERUN} --conbench_upload_run_id CircleCI-${CIRCLE_BUILD_NUM}-dedicated"
-
-              ./scripts/benchmark-runner.py compare \
-                  --baseline_path ${BASELINE_OUTPUT_PATH}/rerun-${i}/ \
-                  --target_path ${TARGET_OUTPUT_PATH}/rerun-${i}/ \
-                  --rerun_json_output ${NEXT_JSON_RERUN} \
-                  --do_not_fail
-            done
-      - run:
-          name: "Run Benchmarks - Summary"
-          command: |
-            ./scripts/benchmark-runner.py compare \
-                --baseline_path ${BASELINE_OUTPUT_PATH} \
-                --target_path ${TARGET_OUTPUT_PATH} \
-                --recursive \
-                --do_not_fail
-      - store_artifacts:
-          path: "benchmark-results"
-      - post-steps
-
   # Build with different options
   linux-build-options:
     executor: build
@@ -493,6 +400,7 @@ jobs:
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/fuzzer.log"
+          fuzzer_repro: "/tmp/fuzzer_repro"
           fuzzer_name: "Expression"
           fuzzer_exe: "_build/debug/velox/expression/tests/velox_expression_fuzzer_test"
           fuzzer_args: " --seed ${RANDOM} --lazy_vector_generation_ratio 0.2 \
@@ -500,7 +408,9 @@ jobs:
           --velox_fuzzer_enable_complex_types \
           --velox_fuzzer_enable_column_reuse \
           --velox_fuzzer_enable_expression_reuse \
-          --logtostderr=1 --minloglevel=0 "
+          --retry_with_try \
+          --logtostderr=1 --minloglevel=0 \
+          --repro_persist_path=/tmp/fuzzer_repro"
 
   linux-spark-fuzzer-run:
     executor: build
@@ -509,9 +419,11 @@ jobs:
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/spark_fuzzer.log"
+          fuzzer_repro: "/tmp/spark_fuzzer_repro"
           fuzzer_name: "Spark"
           fuzzer_exe: "_build/debug/velox/expression/tests/spark_expression_fuzzer_test"
-          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 "
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \ 
+          --repro_persist_path=/tmp/spark_fuzzer_repro"
 
 
   linux-aggregate-fuzzer-run:
@@ -521,9 +433,11 @@ jobs:
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/aggregate_fuzzer.log"
+          fuzzer_repro: "/tmp/aggregate_fuzzer_repro"
           fuzzer_name: "Aggregate"
           fuzzer_exe: "_build/debug/velox/exec/tests/velox_aggregation_fuzzer_test"
-          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 "
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \ 
+          --repro_persist_path=/tmp/aggregate_fuzzer_repro"
 
   linux-join-fuzzer-run:
     executor: build
@@ -532,9 +446,10 @@ jobs:
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/join_fuzzer.log"
+          fuzzer_repro: "/tmp/join_fuzzer_repro"
           fuzzer_name: "Join"
           fuzzer_exe: "_build/debug/velox/exec/tests/velox_join_fuzzer_test"
-          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 "
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0"
 
   format-check:
     executor: check
@@ -574,7 +489,7 @@ jobs:
       - checkout
       - add_ssh_keys:
           fingerprints:
-            - "ed:40:13:bc:d0:3d:28:26:98:cb:90:31:cc:d3:f1:6b"
+            - "7b:24:f3:1a:b1:15:97:c6:fe:06:46:27:3e:b7:6b:96"
       - run:
           name: "Build docs and update gh-pages"
           command: |
@@ -583,7 +498,9 @@ jobs:
             git checkout main
             conda init bash
             source ~/.bashrc
-            conda create -y --name pyveloxenv-docs python=3.7
+            conda create -y --name docgenenv python=3.7
+            conda activate docgenenv
+            pip install sphinx sphinx-tabs breathe sphinx_rtd_theme 
             ./scripts/gen-docs.sh pyveloxenv-docs
             git checkout gh-pages
             cp -R velox/docs/_build/html/* docs

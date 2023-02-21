@@ -45,10 +45,12 @@ add_library(
   ReaderFactory.cpp
   ScanSpec.cpp
   ColumnLoader.cpp
+  SelectiveByteRleColumnReader.cpp
   SelectiveColumnReader.cpp
   SelectiveRepeatedColumnReader.cpp
   SelectiveStructColumnReader.cpp
   SeekableInputStream.cpp
+  TypeUtils.cpp
   TypeWithId.cpp)
 
 target_link_libraries(

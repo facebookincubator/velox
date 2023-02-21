@@ -13,7 +13,7 @@
 # limitations under the License.
 add_executable(
   velox_hive_connector_test
-  HivePartitionFunctionTest.cpp FileHandleTest.cpp HiveWriteProtocolTest.cpp
+  HivePartitionFunctionTest.cpp FileHandleTest.cpp HivePartitionUtilTest.cpp
   PartitionIdGeneratorTest.cpp)
 add_test(velox_hive_connector_test velox_hive_connector_test)
 

@@ -14,6 +14,7 @@
 include(GoogleTest)
 add_executable(
   velox_memory_test
+  AllocationTest.cpp
   ByteStreamTest.cpp
   CompactDoubleListTest.cpp
   HashStringAllocatorTest.cpp
@@ -27,11 +28,13 @@ add_executable(
 target_link_libraries(
   velox_memory_test
   velox_memory
+  velox_caching
   velox_exception
   velox_test_util
   gtest
   gtest_main
   ${gflags_LIBRARIES}
+  ${FOLLY_WITH_DEPENDENCIES}
   gmock
   glog::glog)
 
@@ -46,4 +49,19 @@ target_link_libraries(
   gtest
   gtest_main
   ${gflags_LIBRARIES}
+  ${FOLLY_WITH_DEPENDENCIES}
+  pthread)
+
+add_executable(velox_concurrent_allocation_benchmark
+               ConcurrentAllocationBenchmark.cpp)
+
+target_link_libraries(
+  velox_concurrent_allocation_benchmark
+  velox_memory
+  glog::glog
+  gtest
+  gtest_main
+  ${gflags_LIBRARIES}
+  ${FOLLY_WITH_DEPENDENCIES}
+  fmt::fmt
   pthread)

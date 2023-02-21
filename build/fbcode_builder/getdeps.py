@@ -31,7 +31,6 @@ from getdeps.platform import HostType
 from getdeps.runcmd import run_cmd
 from getdeps.subcmd import add_subcommands, cmd, SubCmd
 
-
 try:
     import getdeps.facebook  # noqa: F401
 except ImportError:
@@ -622,12 +621,19 @@ class BuildCmd(ProjectCmdBase):
                         loader,
                         final_install_prefix=loader.get_project_install_prefix(m),
                         extra_cmake_defines=extra_cmake_defines,
+                        cmake_target=args.cmake_target if m == manifest else "install",
                         extra_b2_args=extra_b2_args,
                     )
                     builder.build(install_dirs, reconfigure=reconfigure)
 
-                    with open(built_marker, "w") as f:
-                        f.write(project_hash)
+                    # If we are building the project (not depdendency) and a specific
+                    # cmake_target (not 'install') has been requested, then we don't
+                    # set the built_marker. This allows subsequent runs of getdeps.py
+                    # for the project to run with different cmake_targets to trigger
+                    # cmake
+                    if not (m == manifest and args.cmake_target != "install"):
+                        with open(built_marker, "w") as f:
+                            f.write(project_hash)
 
                     # Only populate the cache from continuous build runs
                     if args.schedule_type == "continuous":
@@ -681,7 +687,10 @@ class BuildCmd(ProjectCmdBase):
     ):
         reconfigure = False
         sources_changed = False
-        if not cached_project.download():
+        if cached_project.download():
+            if not os.path.exists(built_marker):
+                fetcher.update()
+        else:
             check_fetcher = True
             if os.path.exists(built_marker):
                 check_fetcher = False
@@ -762,6 +771,11 @@ class BuildCmd(ProjectCmdBase):
                 "when compiling the current project and all its deps. "
                 'e.g: \'{"CMAKE_CXX_FLAGS": "--bla"}\''
             ),
+        )
+        parser.add_argument(
+            "--cmake-target",
+            help=("Target for cmake build."),
+            default="install",
         )
         parser.add_argument(
             "--extra-b2-args",

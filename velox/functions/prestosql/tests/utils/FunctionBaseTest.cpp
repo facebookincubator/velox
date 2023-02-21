@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "FunctionBaseTest.h"
+#include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -22,6 +23,35 @@ namespace facebook::velox::functions::test {
 void FunctionBaseTest::SetUpTestCase() {
   parse::registerTypeResolver();
   functions::prestosql::registerAllScalarFunctions();
+}
+
+// static
+std::unordered_set<std::string> FunctionBaseTest::getSignatureStrings(
+    const std::string& functionName) {
+  auto allSignatures = getFunctionSignatures();
+  const auto& signatures = allSignatures.at(functionName);
+
+  std::unordered_set<std::string> signatureStrings;
+  for (const auto& signature : signatures) {
+    signatureStrings.insert(signature->toString());
+  }
+  return signatureStrings;
+}
+
+std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+FunctionBaseTest::evaluateWithStats(
+    const std::string& expression,
+    const RowVectorPtr& data) {
+  auto typedExpr = makeTypedExpr(expression, asRowType(data->type()));
+
+  SelectivityVector rows(data->size());
+  std::vector<VectorPtr> results(1);
+
+  exec::ExprSet exprSet({typedExpr}, &execCtx_);
+  exec::EvalCtx evalCtx(&execCtx_, &exprSet, data.get());
+  exprSet.eval(rows, evalCtx, results);
+
+  return {results[0], exprSet.stats()};
 }
 
 } // namespace facebook::velox::functions::test

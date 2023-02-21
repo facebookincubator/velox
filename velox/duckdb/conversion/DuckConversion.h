@@ -42,11 +42,9 @@ static Timestamp duckdbTimestampToVelox(
   return Timestamp(micros / 1000000, (micros % 1000000) * 1000);
 }
 
-// Converts a duckDB Value (class that holds an arbitraty data type) into a
-// VELOX's variant.
-variant duckValueToVariant(
-    const ::duckdb::Value& val,
-    bool parseDecimalAsDouble);
+// Converts a duckDB Value (class that holds an arbitrary data type) into
+// Velox variant.
+variant duckValueToVariant(const ::duckdb::Value& val);
 
 // value conversion routines
 template <class T>
@@ -84,6 +82,21 @@ struct DuckStringConversion {
       const StringView& input,
       ::duckdb::Vector& result) {
     return ::duckdb::StringVector::AddString(
+        result, input.data(), input.size());
+  }
+  static StringView toVelox(const ::duckdb::string_t& input) {
+    return StringView(input.GetDataUnsafe(), input.GetSize());
+  }
+};
+
+struct DuckBlobConversion {
+  typedef ::duckdb::string_t DUCK_TYPE;
+  typedef StringView VELOX_TYPE;
+
+  static ::duckdb::string_t toDuck(
+      const StringView& input,
+      ::duckdb::Vector& result) {
+    return ::duckdb::StringVector::AddStringOrBlob(
         result, input.data(), input.size());
   }
   static StringView toVelox(const ::duckdb::string_t& input) {

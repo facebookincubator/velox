@@ -65,30 +65,30 @@ class SubscriptImpl : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {
-        // array(T), integer -> T
-        exec::FunctionSignatureBuilder()
-            .typeVariable("T")
-            .returnType("T")
-            .argumentType("array(T)")
-            .argumentType("integer")
-            .build(),
-        // array(T), bigint -> T
-        exec::FunctionSignatureBuilder()
-            .typeVariable("T")
-            .returnType("T")
-            .argumentType("array(T)")
-            .argumentType("bigint")
-            .build(),
-        // map(K,V), K -> V
-        exec::FunctionSignatureBuilder()
-            .knownTypeVariable("K")
-            .typeVariable("V")
-            .returnType("V")
-            .argumentType("map(K,V)")
-            .argumentType("K")
-            .build(),
-    };
+    std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+
+    // array(T), integer|bigint -> T
+    for (const auto& indexType : {"integer", "bigint"}) {
+      signatures.push_back(exec::FunctionSignatureBuilder()
+                               .typeVariable("T")
+                               .returnType("T")
+                               .argumentType("array(T)")
+                               .argumentType(indexType)
+                               .build());
+    }
+
+    // map(K,V), K -> V
+    for (const auto& keyType :
+         {"tinyint", "smallint", "integer", "bigint", "varchar"}) {
+      signatures.push_back(exec::FunctionSignatureBuilder()
+                               .typeVariable("V")
+                               .returnType("V")
+                               .argumentType(fmt::format("map({},V)", keyType))
+                               .argumentType(keyType)
+                               .build());
+    }
+
+    return signatures;
   }
 
  private:
@@ -167,12 +167,6 @@ class SubscriptImpl : public exec::VectorFunction {
     auto baseArray = decodedArray->base()->as<ArrayVector>();
     auto arrayIndices = decodedArray->indices();
 
-    // Subscript into empty arrays always returns NULLs.
-    if (baseArray->elements()->size() == 0) {
-      return BaseVector::createNullConstant(
-          baseArray->elements()->type(), rows.size(), context.pool());
-    }
-
     exec::LocalDecodedVector indexHolder(context, *indexArg, rows);
     auto decodedIndices = indexHolder.get();
 
@@ -212,6 +206,14 @@ class SubscriptImpl : public exec::VectorFunction {
         }
       });
     }
+
+    // Subscript into empty arrays always returns NULLs. Check added at the end
+    // to ensure user error checks for indices are not skipped.
+    if (baseArray->elements()->size() == 0) {
+      return BaseVector::createNullConstant(
+          baseArray->elements()->type(), rows.size(), context.pool());
+    }
+
     return BaseVector::wrapInDictionary(
         nullsBuilder.build(), indices, rows.size(), baseArray->elements());
   }
@@ -246,11 +248,6 @@ class SubscriptImpl : public exec::VectorFunction {
       const vector_size_t* rawOffsets,
       const vector_size_t* indices) const {
     auto arraySize = rawSizes[indices[row]];
-
-    // Subscript into empty arrays always returns NULLs.
-    if (arraySize == 0) {
-      return -1;
-    }
 
     if (index < 0) {
       // Check if we allow negative indices. If so, adjust.
@@ -305,12 +302,6 @@ class SubscriptImpl : public exec::VectorFunction {
     auto decodedMap = mapHolder.get();
     auto baseMap = decodedMap->base()->as<MapVector>();
     auto mapIndices = decodedMap->indices();
-
-    // Subscript into empty maps always returns NULLs.
-    if (baseMap->mapValues()->size() == 0) {
-      return BaseVector::createNullConstant(
-          baseMap->mapValues()->type(), rows.size(), context.pool());
-    }
 
     // Get map keys.
     auto mapKeys = baseMap->mapKeys();
@@ -368,6 +359,14 @@ class SubscriptImpl : public exec::VectorFunction {
         processRow(row, searchKey);
       });
     }
+
+    // Subscript into empty maps always returns NULLs. Check added at the end to
+    // ensure user error checks for indices are not skipped.
+    if (baseMap->mapValues()->size() == 0) {
+      return BaseVector::createNullConstant(
+          baseMap->mapValues()->type(), rows.size(), context.pool());
+    }
+
     return BaseVector::wrapInDictionary(
         nullsBuilder.build(), indices, rows.size(), baseMap->mapValues());
   }

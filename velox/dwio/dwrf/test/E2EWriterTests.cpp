@@ -17,6 +17,8 @@
 #include <folly/Random.h>
 #include <random>
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/Statistics.h"
+#include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/common/tests/utils/MapBuilder.h"
@@ -42,6 +44,10 @@ using facebook::velox::memory::MemoryPool;
 using folly::Random;
 
 constexpr uint64_t kSizeMB = 1024UL * 1024UL;
+
+namespace {
+auto defaultPool = memory::getDefaultMemoryPool();
+}
 
 // This test can be run to generate test files. Run it with following command
 // buck test velox/dwio/dwrf/test:velox_dwrf_e2e_writer_tests --
@@ -250,7 +256,7 @@ TEST(E2EWriterTests, PresentStreamIsSuppressedOnFlatMap) {
       config,
       E2EWriterTestUtil::simpleFlushPolicyFactory(true));
 
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -495,7 +501,7 @@ void testFlatMapConfig(
 
   writer.close();
 
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -503,7 +509,7 @@ void testFlatMapConfig(
   bool preload = true;
   std::unordered_set<uint32_t> actualNodeIds;
   for (int32_t i = 0; i < reader->getNumberOfStripes(); ++i) {
-    dwrfRowReader->loadStripe(0, preload);
+    dwrfRowReader->loadStripe(i, preload);
     auto& footer = dwrfRowReader->getStripeFooter();
     for (int32_t j = 0; j < footer.encoding_size(); ++j) {
       auto encoding = footer.encoding(j);
@@ -577,9 +583,157 @@ TEST(E2EWriterTests, FlatMapConfigNotMapColumn) {
       { testFlatMapConfig(type, {0}, {}); }, exception::LoggedException);
 }
 
-TEST(E2EWriterTests, PartialStride) {
+void testFlatMapFileStats(
+    std::shared_ptr<const Type> type,
+    const std::vector<uint32_t>& mapColumnIds,
+    const uint32_t strideSize = 10000,
+    const uint32_t rowCount = 2000) {
+  auto pool = memory::getDefaultMemoryPool();
+  size_t stripes = 3;
+
+  // write file to memory
+  auto config = std::make_shared<Config>();
+  // Ensure we cross stride boundary
+  config->set(Config::ROW_INDEX_STRIDE, strideSize);
+  config->set(Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(Config::MAP_FLAT_COLS, mapColumnIds);
+  config->set(Config::MAP_STATISTICS, true);
+
+  auto sink = std::make_unique<MemorySink>(*pool, 400 * 1024 * 1024);
+  auto sinkPtr = sink.get();
+
+  WriterOptions options;
+  options.config = config;
+  options.schema = type;
+  Writer writer{options, std::move(sink), *pool};
+
+  const size_t seed = std::time(nullptr);
+  LOG(INFO) << "seed: " << seed;
+  std::mt19937 gen{};
+  gen.seed(seed);
+  for (size_t i = 0; i < stripes; ++i) {
+    // The logic really does not depend on data shape. Hence, we can
+    // ignore the nulls.
+    writer.write(BatchMaker::createBatch(type, rowCount, *pool, gen, nullptr));
+    writer.flush();
+  }
+
+  writer.close();
+
+  ReaderOptions readerOpts{pool.get()};
+  RowReaderOptions rowReaderOpts;
+  auto reader = createReader(*sinkPtr, readerOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto dwrfRowReader = dynamic_cast<DwrfRowReader*>(rowReader.get());
+  bool preload = true;
+
+  auto typeWithId = TypeWithId::create(type);
+  for (auto mapColumn : mapColumnIds) {
+    folly::F14FastMap<KeyInfo, uint64_t, folly::transparent<KeyInfoHash>>
+        featureStreamSizes;
+    auto mapTypeId = typeWithId->childAt(mapColumn)->id;
+    auto valueTypeId = mapTypeId + 2;
+    for (int32_t i = 0; i < reader->getNumberOfStripes(); ++i) {
+      auto currentStripeInfo = dwrfRowReader->loadStripe(i, preload);
+      StripeStreamsImpl stripeStreams(
+          *dwrfRowReader,
+          dwrfRowReader->getColumnSelector(),
+          rowReaderOpts,
+          currentStripeInfo.offset(),
+          *dwrfRowReader,
+          i);
+
+      folly::F14FastMap<int64_t, dwio::common::KeyInfo> sequenceToKey;
+
+      stripeStreams.visitStreamsOfNode(
+          valueTypeId, [&](const StreamInformation& stream) {
+            auto sequence = stream.getSequence();
+            // No need to load shared dictionary stream here.
+            if (sequence == 0) {
+              return;
+            }
+
+            EncodingKey seqEk(valueTypeId, sequence);
+            const auto& keyInfo = stripeStreams.getEncoding(seqEk).key();
+            auto key = constructKey(keyInfo);
+            sequenceToKey.emplace(sequence, key);
+          });
+
+      auto allStreams = stripeStreams.getStreamIdentifiers();
+      for (const auto& streamIdPerNode : allStreams) {
+        for (const auto& streamId : streamIdPerNode.second) {
+          if (streamId.encodingKey().sequence != 0 &&
+              streamId.column() == mapColumn) {
+            // Update the aggregate.
+            const auto& keyInfo =
+                sequenceToKey.at(streamId.encodingKey().sequence);
+            auto streamLength = stripeStreams.getStreamLength(streamId);
+            auto it = featureStreamSizes.find(keyInfo);
+            if (it == featureStreamSizes.end()) {
+              featureStreamSizes.emplace(keyInfo, streamLength);
+            } else {
+              it->second += streamLength;
+            }
+          }
+        }
+      }
+    }
+    auto stats = reader->getFooter().statistics(mapTypeId);
+    ASSERT_TRUE(stats.has_mapstatistics());
+    ASSERT_EQ(featureStreamSizes.size(), stats.mapstatistics().stats_size());
+    for (size_t i = 0; i != stats.mapstatistics().stats_size(); ++i) {
+      const auto& entry = stats.mapstatistics().stats(i);
+      ASSERT_TRUE(entry.stats().has_size());
+      EXPECT_EQ(
+          featureStreamSizes.at(constructKey(entry.key())),
+          entry.stats().size());
+    }
+  }
+}
+
+TEST(E2EWriterTests, mapStatsSingleStride) {
   HiveTypeParser parser;
-  auto type = parser.parse("struct<bool_val:int>");
+  auto type = parser.parse(
+      "struct<"
+      "map_val:map<bigint,int>,"
+      "map_val:map<bigint,double>,"
+      "map_val:map<bigint,map<bigint,bigint>>,"
+      "map_val:map<bigint,map<bigint,double>>,"
+      "map_val:map<bigint,array<bigint>>,"
+      "map_val:map<bigint,map<string,float>>,"
+      ">");
+
+  // Single column
+  testFlatMapFileStats(type, {0});
+  // All non-nested columns
+  testFlatMapFileStats(type, {0, 1});
+  // All columns
+  testFlatMapFileStats(type, {0, 1, 2, 3, 4, 5});
+}
+
+TEST(E2EWriterTests, mapStatsMultiStrides) {
+  HiveTypeParser parser;
+  auto type = parser.parse(
+      "struct<"
+      "map_val:map<bigint,int>,"
+      "map_val:map<bigint,double>,"
+      "map_val:map<bigint,map<bigint,bigint>>,"
+      "map_val:map<bigint,map<bigint,double>>,"
+      "map_val:map<bigint,array<bigint>>,"
+      "map_val:map<bigint,map<string,float>>,"
+      ">");
+
+  // Single column
+  testFlatMapFileStats(type, {0}, /*strideSize=*/1000);
+  // All non-nested columns
+  testFlatMapFileStats(type, {0, 1}, /*strideSize=*/1000);
+  // All columns
+  testFlatMapFileStats(type, {0, 1, 2, 3, 4, 5}, /*strideSize=*/1000);
+}
+
+TEST(E2EWriterTests, PartialStride) {
+  auto type = ROW({"bool_val"}, {INTEGER()});
 
   auto pool = memory::getDefaultMemoryPool();
   size_t size = 1'000;
@@ -593,7 +747,7 @@ TEST(E2EWriterTests, PartialStride) {
   options.schema = type;
   Writer writer{options, std::move(sink), *pool};
 
-  auto nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), pool.get());
+  auto nulls = allocateNulls(size, pool.get());
   auto* nullsPtr = nulls->asMutable<uint64_t>();
   size_t nullCount = 0;
 
@@ -615,12 +769,17 @@ TEST(E2EWriterTests, PartialStride) {
       type,
       size,
       std::make_shared<FlatVector<int32_t>>(
-          pool.get(), nulls, size, values, std::vector<BufferPtr>()));
+          pool.get(),
+          type->childAt(0),
+          nulls,
+          size,
+          values,
+          std::vector<BufferPtr>()));
 
   writer.write(batch);
   writer.close();
 
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   ASSERT_EQ(size - nullCount, reader->columnStatistics(1)->getNumberOfValues())
@@ -782,8 +941,7 @@ class E2EEncryptionTest : public Test {
       const std::shared_ptr<EncryptionSpecification>& spec,
       std::shared_ptr<DecrypterFactory> decrypterFactory =
           std::make_shared<TestDecrypterFactory>()) {
-    auto pool = memory::getProcessDefaultMemoryManager().getRoot().addChild(
-        "encryption_test");
+    auto pool = memory::getDefaultMemoryPool();
     HiveTypeParser parser;
     auto type = parser.parse(schema);
 
@@ -799,7 +957,7 @@ class E2EEncryptionTest : public Test {
     options.schema = type;
     options.encryptionSpec = spec;
     options.encrypterFactory = std::make_shared<TestEncrypterFactory>();
-    writer_ = std::make_unique<Writer>(options, std::move(sink), *pool);
+    writer_ = std::make_unique<Writer>(options, std::move(sink), pool);
 
     for (size_t i = 0; i < batchCount_; ++i) {
       auto batch = BatchMaker::createBatch(type, batchSize_, *pool, nullptr, i);
@@ -812,7 +970,7 @@ class E2EEncryptionTest : public Test {
     writer_->close();
 
     // read it back for compare
-    ReaderOptions readerOpts;
+    ReaderOptions readerOpts{defaultPool.get()};
     readerOpts.setDecrypterFactory(decrypterFactory);
     return createReader(*sink_, readerOpts);
   }
@@ -1040,9 +1198,8 @@ TEST_F(E2EEncryptionTest, ReadWithoutKey) {
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{1}));
-    auto rowReader = reader->createRowReader(rowReaderOpts);
-    VectorPtr batch;
-    ASSERT_THROW(rowReader->next(1, batch), exception::LoggedException);
+    ASSERT_THROW(
+        reader->createRowReader(rowReaderOpts), exception::LoggedException);
   }
 }
 
@@ -1071,6 +1228,7 @@ VectorPtr createKeysImpl(
 
   auto vector = std::make_shared<FlatVector<TCpp>>(
       &pool,
+      CppToType<TCpp>::create(),
       nullptr,
       size,
       AlignedBuffer::allocate<TCpp>(size, &pool),

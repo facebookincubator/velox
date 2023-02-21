@@ -33,7 +33,7 @@ else
         conda install -y -c anaconda sphinx
         conda install -y -c conda-forge pandoc
         ## install Pyvelox
-        LD_LIBRARY_PATH=/usr/local/lib make python-test
+        LD_LIBRARY_PATH=/usr/local/lib make python-build
         ## generate the Python README
         cd velox/docs \
                 && make clean \

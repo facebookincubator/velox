@@ -25,6 +25,7 @@
 #include "velox/expression/tests/FuzzerToolkit.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and execute.");
 
@@ -73,11 +74,6 @@ using facebook::velox::test::SignatureTemplate;
 
 namespace facebook::velox::exec::test {
 namespace {
-
-struct ResultOrError {
-  RowVectorPtr result;
-  std::exception_ptr exceptionPtr;
-};
 
 class AggregationFuzzer {
  public:
@@ -152,6 +148,14 @@ class AggregationFuzzer {
       std::vector<std::string> names,
       std::vector<TypePtr> types);
 
+  // Generate a RowVector of the given types of children with an additional
+  // child named "row_number" of BIGINT row numbers that differentiates every
+  // row. Row numbers start from 0. This additional input vector is needed for
+  // result verification of window aggregations.
+  std::vector<RowVectorPtr> generateInputDataWithRowNumber(
+      std::vector<std::string> names,
+      std::vector<TypePtr> types);
+
   void verifyWindow(
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& sortingKeys,
@@ -182,12 +186,14 @@ class AggregationFuzzer {
       const std::vector<RowVectorPtr>& input,
       const core::PlanNodePtr& plan);
 
-  ResultOrError execute(const core::PlanNodePtr& plan, bool injectSpill);
+  velox::test::ResultOrError execute(
+      const core::PlanNodePtr& plan,
+      bool injectSpill);
 
   void testPlans(
       const std::vector<core::PlanNodePtr>& plans,
       bool verifyResults,
-      const ResultOrError& expected) {
+      const velox::test::ResultOrError& expected) {
     for (auto i = 0; i < plans.size(); ++i) {
       LOG(INFO) << "Testing plan #" << i;
       testPlan(plans[i], false /*injectSpill*/, verifyResults, expected);
@@ -201,7 +207,7 @@ class AggregationFuzzer {
       const core::PlanNodePtr& plan,
       bool injectSpill,
       bool verifyResults,
-      const ResultOrError& expected);
+      const velox::test::ResultOrError& expected);
 
   const std::unordered_map<std::string, std::string> orderDependentFunctions_;
   const bool persistAndRunOnce_;
@@ -474,7 +480,7 @@ std::vector<std::string> AggregationFuzzer::generateKeys(
     keys.push_back(fmt::format("{}{}", prefix, i));
 
     // Pick random scalar type.
-    types.push_back(vectorFuzzer_.randType(0 /*maxDepth*/));
+    types.push_back(vectorFuzzer_.randScalarNonFloatingPointType());
     names.push_back(keys.back());
   }
   return keys;
@@ -487,6 +493,28 @@ std::vector<RowVectorPtr> AggregationFuzzer::generateInputData(
   std::vector<RowVectorPtr> input;
   for (auto i = 0; i < FLAGS_num_batches; ++i) {
     input.push_back(vectorFuzzer_.fuzzInputRow(inputType));
+  }
+  return input;
+}
+
+std::vector<RowVectorPtr> AggregationFuzzer::generateInputDataWithRowNumber(
+    std::vector<std::string> names,
+    std::vector<TypePtr> types) {
+  names.push_back("row_number");
+  types.push_back(BIGINT());
+
+  std::vector<RowVectorPtr> input;
+  auto size = vectorFuzzer_.getOptions().vectorSize;
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  int64_t rowNumber = 0;
+  for (auto j = 0; j < FLAGS_num_batches; ++j) {
+    std::vector<VectorPtr> children;
+    for (auto i = 0; i < types.size() - 1; ++i) {
+      children.push_back(vectorFuzzer_.fuzz(types[i], size));
+    }
+    children.push_back(vectorMaker.flatVector<int64_t>(
+        size, [&](auto /*row*/) { return rowNumber++; }));
+    input.push_back(vectorMaker.rowVector(names, children));
   }
   return input;
 }
@@ -532,7 +560,7 @@ void AggregationFuzzer::go() {
 
         auto partitionKeys = generateKeys("p", argNames, argTypes);
         auto sortingKeys = generateKeys("s", argNames, argTypes);
-        auto input = generateInputData(argNames, argTypes);
+        auto input = generateInputDataWithRowNumber(argNames, argTypes);
 
         verifyWindow(partitionKeys, sortingKeys, {call}, input, orderDependent);
       } else {
@@ -589,13 +617,13 @@ void AggregationFuzzer::go() {
   stats_.print(iteration);
 }
 
-ResultOrError AggregationFuzzer::execute(
+velox::test::ResultOrError AggregationFuzzer::execute(
     const core::PlanNodePtr& plan,
     bool injectSpill) {
   LOG(INFO) << "Executing query plan: " << std::endl
             << plan->toString(true, true);
 
-  ResultOrError resultOrError;
+  velox::test::ResultOrError resultOrError;
   try {
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     AssertQueryBuilder builder(plan);
@@ -825,7 +853,7 @@ void AggregationFuzzer::testPlan(
     const core::PlanNodePtr& plan,
     bool injectSpill,
     bool verifyResults,
-    const ResultOrError& expected) {
+    const velox::test::ResultOrError& expected) {
   auto actual = execute(plan, injectSpill);
 
   // Compare results or exceptions (if any). Fail is anything is different.
@@ -915,19 +943,29 @@ void AggregationFuzzer::verifyWindow(
           .values(input)
           .window({fmt::format("{} over ({})", aggregates[0], frame.str())})
           .planNode();
-  auto resultOrError = execute(plan, false /*injectSpill*/);
-  if (resultOrError.exceptionPtr) {
-    ++stats_.numFailed;
+  if (persistAndRunOnce_) {
+    persistReproInfo(input, plan, reproPersistPath_);
   }
-
-  if (!orderDependent && resultOrError.result) {
-    if (auto expectedResult = computeDuckWindow(
-            partitionKeys, sortingKeys, aggregates, input, plan)) {
-      ++stats_.numDuckVerified;
-      VELOX_CHECK(
-          assertEqualResults(expectedResult.value(), {resultOrError.result}),
-          "Velox and DuckDB results don't match");
+  try {
+    auto resultOrError = execute(plan, false /*injectSpill*/);
+    if (resultOrError.exceptionPtr) {
+      ++stats_.numFailed;
     }
+
+    if (!orderDependent && resultOrError.result) {
+      if (auto expectedResult = computeDuckWindow(
+              partitionKeys, sortingKeys, aggregates, input, plan)) {
+        ++stats_.numDuckVerified;
+        VELOX_CHECK(
+            assertEqualResults(expectedResult.value(), {resultOrError.result}),
+            "Velox and DuckDB results don't match");
+      }
+    }
+  } catch (...) {
+    if (!reproPersistPath_.empty()) {
+      persistReproInfo(input, plan, reproPersistPath_);
+    }
+    throw;
   }
 }
 

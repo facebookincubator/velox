@@ -131,13 +131,18 @@ std::shared_ptr<const core::IExpr> parseConstantExpr(
   // This is a hack to make DuckDB more compatible with the old Koski-based
   // parser. By default literal integer constants in DuckDB parser are INTEGER,
   // while in Koski parser they were BIGINT.
-  if (value.type().id() == LogicalTypeId::INTEGER) {
+  if (value.type().id() == LogicalTypeId::INTEGER &&
+      options.parseIntegerAsBigint) {
     value = Value::BIGINT(value.GetValue<int32_t>());
   }
 
+  if (options.parseDecimalAsDouble &&
+      value.type().id() == duckdb::LogicalTypeId::DECIMAL) {
+    value = Value::DOUBLE(value.GetValue<double>());
+  }
+
   return std::make_shared<const core::ConstantExpr>(
-      duckValueToVariant(constantExpr.value, options.parseDecimalAsDouble),
-      getAlias(expr));
+      toVeloxType(value.type()), duckValueToVariant(value), getAlias(expr));
 }
 
 // Parse a column reference (col1, "col2", tbl.col, etc).
@@ -184,6 +189,7 @@ std::shared_ptr<const core::ConstantExpr> tryParseInterval(
 
   if (functionName == "to_hours") {
     return std::make_shared<core::ConstantExpr>(
+        INTERVAL_DAY_TIME(),
         variant::intervalDayTime(
             IntervalDayTime(value.value() * 60 * 60 * 1'000)),
         alias);
@@ -191,19 +197,23 @@ std::shared_ptr<const core::ConstantExpr> tryParseInterval(
 
   if (functionName == "to_minutes") {
     return std::make_shared<core::ConstantExpr>(
+        INTERVAL_DAY_TIME(),
         variant::intervalDayTime(IntervalDayTime(value.value() * 60 * 1'000)),
         alias);
   }
 
   if (functionName == "to_seconds") {
     return std::make_shared<core::ConstantExpr>(
+        INTERVAL_DAY_TIME(),
         variant::intervalDayTime(IntervalDayTime(value.value() * 1'000)),
         alias);
   }
 
   if (functionName == "to_milliseconds") {
     return std::make_shared<core::ConstantExpr>(
-        variant::intervalDayTime(IntervalDayTime(value.value())), alias);
+        INTERVAL_DAY_TIME(),
+        variant::intervalDayTime(IntervalDayTime(value.value())),
+        alias);
   }
 
   return nullptr;
@@ -323,17 +333,25 @@ std::shared_ptr<const core::IExpr> parseOperatorExpr(
       std::vector<variant> arrayElements;
       arrayElements.reserve(operExpr.children.size());
 
+      TypePtr valueType = UNKNOWN();
       for (const auto& child : operExpr.children) {
         if (auto constantExpr =
                 dynamic_cast<ConstantExpression*>(child.get())) {
-          arrayElements.emplace_back(duckValueToVariant(
-              constantExpr->value, options.parseDecimalAsDouble));
+          auto& value = constantExpr->value;
+          if (options.parseDecimalAsDouble &&
+              value.type().id() == duckdb::LogicalTypeId::DECIMAL) {
+            value = Value::DOUBLE(value.GetValue<double>());
+          }
+          arrayElements.emplace_back(duckValueToVariant(value));
+          if (!value.IsNull()) {
+            valueType = toVeloxType(value.type());
+          }
         } else {
           VELOX_UNREACHABLE();
         }
       }
       return std::make_shared<const core::ConstantExpr>(
-          variant::array(arrayElements), getAlias(expr));
+          ARRAY(valueType), variant::array(arrayElements), getAlias(expr));
     } else {
       std::vector<std::shared_ptr<const core::IExpr>> params;
       params.reserve(operExpr.children.size());
@@ -352,11 +370,20 @@ std::shared_ptr<const core::IExpr> parseOperatorExpr(
 
     std::vector<variant> values;
     values.reserve(numValues);
+
+    TypePtr valueType = UNKNOWN();
     for (auto i = 0; i < numValues; i++) {
       if (auto constantExpr = dynamic_cast<ConstantExpression*>(
               operExpr.children[i + 1].get())) {
-        values.emplace_back(duckValueToVariant(
-            constantExpr->value, options.parseDecimalAsDouble));
+        auto& value = constantExpr->value;
+        if (options.parseDecimalAsDouble &&
+            value.type().id() == duckdb::LogicalTypeId::DECIMAL) {
+          value = Value::DOUBLE(value.GetValue<double>());
+        }
+        values.emplace_back(duckValueToVariant(value));
+        if (!value.IsNull()) {
+          valueType = toVeloxType(value.type());
+        }
       } else {
         VELOX_UNSUPPORTED("IN list values need to be constant");
       }
@@ -365,7 +392,7 @@ std::shared_ptr<const core::IExpr> parseOperatorExpr(
     std::vector<std::shared_ptr<const core::IExpr>> params;
     params.emplace_back(parseExpr(*operExpr.children[0], options));
     params.emplace_back(std::make_shared<const core::ConstantExpr>(
-        variant::array(values), std::nullopt));
+        ARRAY(valueType), variant::array(values), std::nullopt));
     auto inExpr = callExpr("in", std::move(params), getAlias(expr));
     // Translate COMPARE_NOT_IN into NOT(IN()).
     return (expr.GetExpressionType() == ExpressionType::COMPARE_IN)
@@ -464,8 +491,33 @@ std::shared_ptr<const core::IExpr> parseCastExpr(
   // We may need to expand toVeloxType in the future to support
   // Map and Array and Struct properly.
   auto targetType = toVeloxType(castExpr.cast_type);
-  const bool nullOnFailure = castExpr.try_cast;
   VELOX_CHECK(!params.empty());
+  if (targetType->isBoolean()) {
+    // DuckDB parses BOOLEAN literal as cast expression.  Try to restore it back
+    // to constant expression here.
+    if (auto* constant =
+            dynamic_cast<const core::ConstantExpr*>(params[0].get())) {
+      if (constant->type()->isVarchar()) {
+        auto& value = constant->value();
+        if (!value.isNull() && value.kind() == TypeKind::VARCHAR) {
+          auto& s = value.value<TypeKind::VARCHAR>();
+          if (s == "t") {
+            return std::make_shared<const core::ConstantExpr>(
+                BOOLEAN(),
+                variant::create<TypeKind::BOOLEAN>(true),
+                getAlias(expr));
+          }
+          if (s == "f") {
+            return std::make_shared<const core::ConstantExpr>(
+                BOOLEAN(),
+                variant::create<TypeKind::BOOLEAN>(false),
+                getAlias(expr));
+          }
+        }
+      }
+    }
+  }
+  const bool nullOnFailure = castExpr.try_cast;
   return std::make_shared<const core::CastExpr>(
       targetType, params[0], nullOnFailure, getAlias(expr));
 }

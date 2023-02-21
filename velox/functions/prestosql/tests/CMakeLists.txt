@@ -17,6 +17,7 @@ add_subdirectory(utils)
 add_executable(
   velox_functions_test
   ArithmeticTest.cpp
+  ArrayAverageTest.cpp
   ArrayCombinationsTest.cpp
   ArrayConstructorTest.cpp
   ArrayContainsTest.cpp
@@ -29,8 +30,10 @@ add_executable(
   ArrayIntersectTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
   ArraySortTest.cpp
+  ArrayShuffleTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
   BitwiseTest.cpp
@@ -54,6 +57,7 @@ add_executable(
   NotTest.cpp
   ReduceTest.cpp
   RegexpReplaceTest.cpp
+  RepeatTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
   SliceTest.cpp

@@ -117,6 +117,16 @@ enum IntermediateTypeChildIndex {
   kLevels = 8,
 };
 
+void checkWeight(int64_t weight) {
+  constexpr int64_t kMaxWeight = (1ll << 60) - 1;
+  VELOX_USER_CHECK(
+      1 <= weight && weight <= kMaxWeight,
+      "{}: weight must be in range [1, {}], got {}",
+      kApproxPercentile,
+      kMaxWeight,
+      weight);
+}
+
 template <typename T>
 class ApproxPercentileAggregate : public exec::Aggregate {
  public:
@@ -226,26 +236,19 @@ class ApproxPercentileAggregate : public exec::Aggregate {
           BaseVector::wrapInConstant(numGroups, 0, std::move(array));
       rowResult->childAt(kPercentilesIsArray) =
           std::make_shared<ConstantVector<bool>>(
-              pool, numGroups, false, bool(percentiles_->isArray));
+              pool, numGroups, false, BOOLEAN(), bool(percentiles_->isArray));
     } else {
-      rowResult->childAt(kPercentiles) = BaseVector::wrapInConstant(
-          numGroups,
-          0,
-          std::make_shared<ArrayVector>(
-              pool,
-              ARRAY(DOUBLE()),
-              AlignedBuffer::allocate<bool>(1, pool, bits::kNull),
-              1,
-              AlignedBuffer::allocate<vector_size_t>(1, pool, 0),
-              AlignedBuffer::allocate<vector_size_t>(1, pool, 0),
-              nullptr));
+      rowResult->childAt(kPercentiles) =
+          BaseVector::createNullConstant(ARRAY(DOUBLE()), numGroups, pool);
       rowResult->childAt(kPercentilesIsArray) =
-          std::make_shared<ConstantVector<bool>>(pool, numGroups, true, false);
+          std::make_shared<ConstantVector<bool>>(
+              pool, numGroups, true, BOOLEAN(), false);
     }
     rowResult->childAt(kAccuracy) = std::make_shared<ConstantVector<double>>(
         pool,
         numGroups,
         accuracy_ == kMissingNormalizedValue,
+        DOUBLE(),
         double(accuracy_));
     auto k = rowResult->childAt(kK)->asFlatVector<int32_t>();
     auto n = rowResult->childAt(kN)->asFlatVector<int64_t>();
@@ -320,10 +323,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         auto accumulator = initRawAccumulator(groups[row]);
         auto value = decodedValue_.valueAt<T>(row);
         auto weight = decodedWeight_.valueAt<int64_t>(row);
-        VELOX_USER_CHECK_GE(
-            weight,
-            1,
-            "The value of the weight parameter must be greater than or equal to 1.");
+        checkWeight(weight);
         accumulator->append(value, weight);
       });
     } else {
@@ -371,11 +371,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
 
         auto value = decodedValue_.valueAt<T>(row);
         auto weight = decodedWeight_.valueAt<int64_t>(row);
-        VELOX_USER_CHECK(
-            1 <= weight && weight < (1ll << 60),
-            "{}: value of weight must be in range [1, 2^60), got {}",
-            kApproxPercentile,
-            weight);
+        checkWeight(weight);
         accumulator->append(value, weight);
       });
     } else {

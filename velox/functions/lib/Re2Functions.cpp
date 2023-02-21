@@ -19,11 +19,7 @@
 #include <optional>
 #include <string>
 
-#include "velox/expression/EvalCtx.h"
-#include "velox/expression/Expr.h"
-#include "velox/functions/lib/ArrayBuilder.h"
-#include "velox/type/StringView.h"
-#include "velox/vector/FlatVector.h"
+#include "velox/expression/VectorWriters.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -196,8 +192,14 @@ class Re2MatchConstantPattern final : public VectorFunction {
     VELOX_CHECK_EQ(args.size(), 2);
     FlatVector<bool>& result = ensureWritableBool(rows, context, resultRef);
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
-    checkForBadPattern(re_);
-    rows.applyToSelected([&](vector_size_t i) {
+    try {
+      checkForBadPattern(re_);
+    } catch (const std::exception& e) {
+      context.setErrors(rows, std::current_exception());
+      return;
+    }
+
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t i) {
       result.set(i, Fn(toSearch->valueAt<StringView>(i), re_));
     });
   }
@@ -225,7 +227,7 @@ class Re2Match final : public VectorFunction {
     FlatVector<bool>& result = ensureWritableBool(rows, context, resultRef);
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
     exec::LocalDecodedVector pattern(context, *args[1], rows);
-    rows.applyToSelected([&](vector_size_t row) {
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
       RE2 re(toStringPiece(pattern->valueAt<StringView>(row)), RE2::Quiet);
       checkForBadPattern(re);
       result.set(row, Fn(toSearch->valueAt<StringView>(row), re));
@@ -259,7 +261,12 @@ class Re2SearchAndExtractConstantPattern final : public VectorFunction {
         ensureWritableStringView(rows, context, resultRef);
 
     // apply() will not be invoked if the selection is empty.
-    checkForBadPattern(re_);
+    try {
+      checkForBadPattern(re_);
+    } catch (const std::exception& e) {
+      context.setErrors(rows, std::current_exception());
+      return;
+    }
 
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
     bool mustRefSourceStrings = false;
@@ -267,7 +274,7 @@ class Re2SearchAndExtractConstantPattern final : public VectorFunction {
     // Common case: constant group id.
     if (args.size() == 2) {
       groups.resize(1);
-      rows.applyToSelected([&](vector_size_t i) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t i) {
         mustRefSourceStrings |=
             re2Extract(result, i, re_, toSearch, groups, 0, emptyNoMatch_);
       });
@@ -278,9 +285,15 @@ class Re2SearchAndExtractConstantPattern final : public VectorFunction {
     }
 
     if (const auto groupId = getIfConstant<T>(*args[2])) {
-      checkForBadGroupId(*groupId, re_);
+      try {
+        checkForBadGroupId(*groupId, re_);
+      } catch (const std::exception& e) {
+        context.setErrors(rows, std::current_exception());
+        return;
+      }
+
       groups.resize(*groupId + 1);
-      rows.applyToSelected([&](vector_size_t i) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t i) {
         mustRefSourceStrings |= re2Extract(
             result, i, re_, toSearch, groups, *groupId, emptyNoMatch_);
       });
@@ -291,18 +304,13 @@ class Re2SearchAndExtractConstantPattern final : public VectorFunction {
     }
 
     // Less common case: variable group id. Resize the groups vector to
-    // accommodate the largest group id referenced.
+    // number of capturing groups + 1.
     exec::LocalDecodedVector groupIds(context, *args[2], rows);
-    T maxGroupId = 0, minGroupId = 0;
-    rows.applyToSelected([&](vector_size_t i) {
-      maxGroupId = std::max(groupIds->valueAt<T>(i), maxGroupId);
-      minGroupId = std::min(groupIds->valueAt<T>(i), minGroupId);
-    });
-    checkForBadGroupId(maxGroupId, re_);
-    checkForBadGroupId(minGroupId, re_);
-    groups.resize(maxGroupId + 1);
-    rows.applyToSelected([&](vector_size_t i) {
+
+    groups.resize(re_.NumberOfCapturingGroups() + 1);
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t i) {
       T group = groupIds->valueAt<T>(i);
+      checkForBadGroupId(group, re_);
       mustRefSourceStrings |=
           re2Extract(result, i, re_, toSearch, groups, group, emptyNoMatch_);
     });
@@ -347,7 +355,7 @@ class Re2SearchAndExtract final : public VectorFunction {
     FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
     if (args.size() == 2) {
       groups.resize(1);
-      rows.applyToSelected([&](vector_size_t i) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t i) {
         RE2 re(toStringPiece(pattern->valueAt<StringView>(i)), RE2::Quiet);
         checkForBadPattern(re);
         mustRefSourceStrings |=
@@ -355,7 +363,7 @@ class Re2SearchAndExtract final : public VectorFunction {
       });
     } else {
       exec::LocalDecodedVector groupIds(context, *args[2], rows);
-      rows.applyToSelected([&](vector_size_t i) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t i) {
         const auto groupId = groupIds->valueAt<T>(i);
         RE2 re(toStringPiece(pattern->valueAt<StringView>(i)), RE2::Quiet);
         checkForBadPattern(re);
@@ -440,15 +448,15 @@ class OptimizedLikeWithMemcmp final : public VectorFunction {
 
     if (toSearch->isIdentityMapping()) {
       auto input = toSearch->data<StringView>();
-      rows.applyToSelected(
-          [&](vector_size_t i) { result.set(i, match(input[i])); });
+      context.applyToSelectedNoThrow(
+          rows, [&](vector_size_t i) { result.set(i, match(input[i])); });
       return;
     }
     if (toSearch->isConstantMapping()) {
       auto input = toSearch->valueAt<StringView>(0);
       bool matchResult = match(input);
-      rows.applyToSelected(
-          [&](vector_size_t i) { result.set(i, matchResult); });
+      context.applyToSelectedNoThrow(
+          rows, [&](vector_size_t i) { result.set(i, matchResult); });
       return;
     }
 
@@ -483,20 +491,26 @@ class LikeWithRe2 final : public VectorFunction {
 
     if (!validPattern_) {
       auto error = std::make_exception_ptr(std::invalid_argument(
-          "Escape character must be followed by '%%', '_' or the escape character itself\""));
+          "Escape character must be followed by '%', '_' or the escape character itself"));
       context.setErrors(rows, error);
       return;
     }
 
     // apply() will not be invoked if the selection is empty.
-    checkForBadPattern(*re_);
+    try {
+      checkForBadPattern(*re_);
+    } catch (const std::exception& e) {
+      context.setErrors(rows, std::current_exception());
+      return;
+    }
+
     FlatVector<bool>& result = ensureWritableBool(rows, context, resultRef);
 
     exec::DecodedArgs decodedArgs(rows, args, context);
     auto toSearch = decodedArgs.at(0);
     if (toSearch->isIdentityMapping()) {
       auto rawStrings = toSearch->data<StringView>();
-      rows.applyToSelected([&](vector_size_t i) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t i) {
         result.set(i, re2FullMatch(rawStrings[i], *re_));
       });
       return;
@@ -504,7 +518,8 @@ class LikeWithRe2 final : public VectorFunction {
 
     if (toSearch->isConstantMapping()) {
       bool match = re2FullMatch(toSearch->valueAt<StringView>(0), *re_);
-      rows.applyToSelected([&](vector_size_t i) { result.set(i, match); });
+      context.applyToSelectedNoThrow(
+          rows, [&](vector_size_t i) { result.set(i, match); });
       return;
     }
 
@@ -520,13 +535,16 @@ class LikeWithRe2 final : public VectorFunction {
 };
 
 void re2ExtractAll(
-    ArrayBuilder<Varchar>& builder,
+    exec::VectorWriter<Array<Varchar>>& resultWriter,
     const RE2& re,
     const exec::LocalDecodedVector& inputStrs,
     const int row,
     std::vector<re2::StringPiece>& groups,
     int32_t groupId) {
-  ArrayBuilder<Varchar>::Ref array = builder.startArray(row);
+  resultWriter.setOffset(row);
+
+  auto& arrayWriter = resultWriter.current();
+
   const StringView str = inputStrs->valueAt<StringView>(row);
   const re2::StringPiece input = toStringPiece(str);
   size_t pos = 0;
@@ -538,12 +556,15 @@ void re2ExtractAll(
     const re2::StringPiece fullMatch = groups[0];
     const re2::StringPiece subMatch = groups[groupId];
 
-    array.emplace_back(subMatch.data(), subMatch.size());
+    arrayWriter.add_item().setNoCopy(
+        StringView(subMatch.data(), subMatch.size()));
     pos = fullMatch.data() + fullMatch.size() - input.data();
     if (UNLIKELY(fullMatch.size() == 0)) {
       ++pos;
     }
   }
+
+  resultWriter.commit();
 }
 
 template <typename T>
@@ -559,10 +580,18 @@ class Re2ExtractAllConstantPattern final : public VectorFunction {
       EvalCtx& context,
       VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
-    checkForBadPattern(re_);
+    try {
+      checkForBadPattern(re_);
+    } catch (const std::exception& e) {
+      context.setErrors(rows, std::current_exception());
+      return;
+    }
 
-    ArrayBuilder<Varchar> builder(
-        rows.size(), rows.countSelected() * 3, context.pool());
+    BaseVector::ensureWritable(
+        rows, ARRAY(VARCHAR()), context.pool(), resultRef);
+    exec::VectorWriter<Array<Varchar>> resultWriter;
+    resultWriter.init(*resultRef->as<ArrayVector>());
+
     exec::LocalDecodedVector inputStrs(context, *args[0], rows);
     FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
 
@@ -571,42 +600,41 @@ class Re2ExtractAllConstantPattern final : public VectorFunction {
       //
       groups.resize(1);
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-        re2ExtractAll(builder, re_, inputStrs, row, groups, 0);
+        re2ExtractAll(resultWriter, re_, inputStrs, row, groups, 0);
       });
     } else if (const auto _groupId = getIfConstant<T>(*args[2])) {
       // Case 2: Constant groupId
       //
-      checkForBadGroupId(*_groupId, re_);
+      try {
+        checkForBadGroupId(*_groupId, re_);
+      } catch (const std::exception& e) {
+        context.setErrors(rows, std::current_exception());
+        return;
+      }
+
       groups.resize(*_groupId + 1);
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-        re2ExtractAll(builder, re_, inputStrs, row, groups, *_groupId);
+        re2ExtractAll(resultWriter, re_, inputStrs, row, groups, *_groupId);
       });
     } else {
       // Case 3: Variable groupId, so resize the groups vector to accommodate
-      // the largest group id referenced.
-      //
+      // number of capturing groups + 1.
       exec::LocalDecodedVector groupIds(context, *args[2], rows);
-      T maxGroupId = 0, minGroupId = 0;
-      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-        maxGroupId = std::max(groupIds->valueAt<T>(row), maxGroupId);
-        minGroupId = std::min(groupIds->valueAt<T>(row), minGroupId);
-      });
-      checkForBadGroupId(maxGroupId, re_);
-      checkForBadGroupId(minGroupId, re_);
-      groups.resize(maxGroupId + 1);
+
+      groups.resize(re_.NumberOfCapturingGroups() + 1);
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         const T groupId = groupIds->valueAt<T>(row);
         checkForBadGroupId(groupId, re_);
-        re2ExtractAll(builder, re_, inputStrs, row, groups, groupId);
+        re2ExtractAll(resultWriter, re_, inputStrs, row, groups, groupId);
       });
     }
 
-    if (const auto fv = inputStrs->base()->asFlatVector<StringView>()) {
-      builder.setStringBuffers(fv->stringBuffers());
-    }
-    std::shared_ptr<ArrayVector> arrayVector =
-        std::move(builder).finish(context.pool());
-    context.moveOrCopyResult(arrayVector, rows, resultRef);
+    resultWriter.finish();
+
+    resultRef->as<ArrayVector>()
+        ->elements()
+        ->asFlatVector<StringView>()
+        ->acquireSharedStringBuffers(inputStrs->base());
   }
 
  private:
@@ -631,8 +659,11 @@ class Re2ExtractAll final : public VectorFunction {
       return;
     }
 
-    ArrayBuilder<Varchar> builder(
-        rows.size(), rows.countSelected() * 3, context.pool());
+    BaseVector::ensureWritable(
+        rows, ARRAY(VARCHAR()), context.pool(), resultRef);
+    exec::VectorWriter<Array<Varchar>> resultWriter;
+    resultWriter.init(*resultRef->as<ArrayVector>());
+
     exec::LocalDecodedVector inputStrs(context, *args[0], rows);
     exec::LocalDecodedVector pattern(context, *args[1], rows);
     FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
@@ -644,7 +675,7 @@ class Re2ExtractAll final : public VectorFunction {
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         RE2 re(toStringPiece(pattern->valueAt<StringView>(row)), RE2::Quiet);
         checkForBadPattern(re);
-        re2ExtractAll(builder, re, inputStrs, row, groups, 0);
+        re2ExtractAll(resultWriter, re, inputStrs, row, groups, 0);
       });
     } else {
       // Case 2: Has groupId
@@ -656,16 +687,15 @@ class Re2ExtractAll final : public VectorFunction {
         checkForBadPattern(re);
         checkForBadGroupId(groupId, re);
         groups.resize(groupId + 1);
-        re2ExtractAll(builder, re, inputStrs, row, groups, groupId);
+        re2ExtractAll(resultWriter, re, inputStrs, row, groups, groupId);
       });
     }
 
-    if (const auto fv = inputStrs->base()->asFlatVector<StringView>()) {
-      builder.setStringBuffers(fv->stringBuffers());
-    }
-    std::shared_ptr<ArrayVector> arrayVector =
-        std::move(builder).finish(context.pool());
-    context.moveOrCopyResult(arrayVector, rows, resultRef);
+    resultWriter.finish();
+    resultRef->as<ArrayVector>()
+        ->elements()
+        ->asFlatVector<StringView>()
+        ->acquireSharedStringBuffers(inputStrs->base());
   }
 };
 
@@ -915,8 +945,15 @@ std::shared_ptr<exec::VectorFunction> makeLike(
 
     auto constantEscape = escape->as<ConstantVector<StringView>>();
 
-    // Escape char should be a single char value
-    VELOX_USER_CHECK_EQ(constantEscape->valueAt(0).size(), 1);
+    try {
+      VELOX_USER_CHECK_EQ(
+          constantEscape->valueAt(0).size(),
+          1,
+          "Escape string must be a single character");
+    } catch (...) {
+      return std::make_shared<exec::AlwaysFailingVectorFunction>(
+          std::current_exception());
+    }
     escapeChar = constantEscape->valueAt(0).data()[0];
   }
 

@@ -23,6 +23,8 @@
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/VeloxToSubstraitPlan.h"
 
+#include "velox/substrait/VariantToVectorConverter.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec::test;
@@ -355,6 +357,17 @@ TEST_F(VeloxSubstraitRoundTripTest, topNTwoKeys) {
       "SELECT * FROM tmp WHERE c0 > 15 ORDER BY c0 NULLS FIRST, c1 DESC NULLS LAST LIMIT 10");
 }
 
+namespace {
+core::TypedExprPtr makeConstantExpr(const TypePtr& type, const variant& value) {
+  return std::make_shared<const core::ConstantTypedExpr>(type, value);
+}
+
+core::TypedExprPtr makeConstantExpr(const VectorPtr& vector) {
+  return std::make_shared<const core::ConstantTypedExpr>(
+      BaseVector::wrapInConstant(1, 0, vector));
+}
+} // namespace
+
 TEST_F(VeloxSubstraitRoundTripTest, notNullLiteral) {
   auto vectors = makeRowVector(ROW({}, {}), 1);
   auto plan = PlanBuilder(pool_.get())
@@ -363,14 +376,14 @@ TEST_F(VeloxSubstraitRoundTripTest, notNullLiteral) {
                     std::vector<std::string> projectNames = {
                         "a", "b", "c", "d", "e", "f", "g", "h"};
                     std::vector<core::TypedExprPtr> projectExpressions = {
-                        std::make_shared<core::ConstantTypedExpr>((bool)1),
-                        std::make_shared<core::ConstantTypedExpr>((int8_t)23),
-                        std::make_shared<core::ConstantTypedExpr>((int16_t)45),
-                        std::make_shared<core::ConstantTypedExpr>((int32_t)678),
-                        std::make_shared<core::ConstantTypedExpr>((int64_t)910),
-                        std::make_shared<core::ConstantTypedExpr>((float)1.23),
-                        std::make_shared<core::ConstantTypedExpr>((double)4.56),
-                        std::make_shared<core::ConstantTypedExpr>("789")};
+                        makeConstantExpr(BOOLEAN(), (bool)1),
+                        makeConstantExpr(TINYINT(), (int8_t)23),
+                        makeConstantExpr(SMALLINT(), (int16_t)45),
+                        makeConstantExpr(INTEGER(), (int32_t)678),
+                        makeConstantExpr(BIGINT(), (int64_t)910),
+                        makeConstantExpr(REAL(), (float)1.23),
+                        makeConstantExpr(DOUBLE(), (double)4.56),
+                        makeConstantExpr(VARCHAR(), "789")};
                     return std::make_shared<core::ProjectNode>(
                         id,
                         std::move(projectNames),
@@ -381,13 +394,6 @@ TEST_F(VeloxSubstraitRoundTripTest, notNullLiteral) {
   assertPlanConversion(
       plan, "SELECT true, 23, 45, 678, 910, 1.23, 4.56, '789'");
 }
-
-namespace {
-core::TypedExprPtr makeConstantExpr(const VectorPtr& vector) {
-  return std::make_shared<const core::ConstantTypedExpr>(
-      BaseVector::wrapInConstant(1, 0, vector));
-}
-} // namespace
 
 TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
   auto vectors = makeRowVector(ROW({}), 1);
@@ -439,6 +445,21 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
       "array['1992-01-01'::DATE],"
       "array[INTERVAL 54 MILLISECONDS], "
       "array[], array[array[1,2,3], array[4,5]]");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, dateType) {
+  auto a = makeFlatVector<int32_t>({0, 1});
+  auto b = makeFlatVector<double_t>({0.3, 0.4});
+  auto c = makeFlatVector<Date>({Date(8036), Date(8035)});
+
+  auto vectors = makeRowVector({"a", "b", "c"}, {a, b, c});
+  createDuckDbTable({vectors});
+
+  auto plan = PlanBuilder()
+                  .values({vectors})
+                  .filter({"c > DATE '1992-01-01'"})
+                  .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c > DATE '1992-01-01'");
 }
 
 int main(int argc, char** argv) {

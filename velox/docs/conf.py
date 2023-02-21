@@ -49,6 +49,7 @@ copyright = "TBD"
 extensions = [
     "issue",
     "pr",
+    "spark",
     "sphinx.ext.autodoc",
     "sphinx.ext.doctest",
     "sphinx.ext.mathjax",

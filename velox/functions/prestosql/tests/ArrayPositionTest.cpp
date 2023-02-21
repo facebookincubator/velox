@@ -15,6 +15,7 @@
  */
 
 #include <optional>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -121,6 +122,20 @@ class ArrayPositionTest : public FunctionBaseTest {
       const std::vector<std::optional<int64_t>>& expected) {
     evalExpr(
         {makeNullableArrayVector<T>(array),
+         makeConstant(search, array.size()),
+         makeConstant(instance, array.size())},
+        "array_position(c0, c1, c2)",
+        makeNullableFlatVector<int64_t>(expected));
+  }
+
+  template <typename T>
+  void testPositionWithInstanceNoNulls(
+      const std::vector<std::vector<T>>& array,
+      const std::optional<T>& search,
+      const int64_t instance,
+      const std::vector<std::optional<int64_t>>& expected) {
+    evalExpr(
+        {makeArrayVector<T>(array),
          makeConstant(search, array.size()),
          makeConstant(instance, array.size())},
         "array_position(c0, c1, c2)",
@@ -607,6 +622,29 @@ TEST_F(ArrayPositionTest, booleanWithInstance) {
        std::nullopt});
 }
 
+TEST_F(ArrayPositionTest, primitiveWithInstanceFastPath) {
+  std::vector<std::vector<int64_t>> int64s = {
+      {1, 2, 3, 4},
+      {3, 4, 4},
+      {},
+      {6},
+      {5, 2, 4, 2, 9},
+      {7},
+      {10, 4, 8, 4},
+  };
+  testPositionWithInstanceNoNulls<int64_t>(int64s, 4, 2, {0, 3, 0, 0, 0, 0, 4});
+  std::vector<std::vector<bool>> bools = {
+      {true, false},
+      {true},
+      {false},
+      {},
+      {false},
+      {true, false, true},
+      {false, false, false},
+  };
+  testPositionWithInstanceNoNulls<bool>(bools, true, 2, {0, 0, 0, 0, 0, 3, 0});
+}
+
 TEST_F(ArrayPositionTest, rowWithInstance) {
   std::vector<std::vector<variant>> data{
       {variant::row({1, "red"}),
@@ -770,5 +808,30 @@ TEST_F(ArrayPositionTest, mapWithInstance) {
   testPositionOfMapDictionaryEncoding({a, a, a}, 2, {0, 0, 0});
   testPositionOfMapDictionaryEncoding({b, b, c}, -1, {3, 1, 3});
   testPositionOfMapDictionaryEncoding({d, d, d}, 1, {0, 0, 0});
+}
+
+TEST_F(ArrayPositionTest, invalidInstance) {
+  auto input = makeRowVector({
+      makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}}),
+      makeFlatVector<int64_t>({1, 4}),
+      makeFlatVector<int32_t>({0, 1}),
+  });
+
+  // Flat element and instance vectors.
+  VELOX_ASSERT_THROW(
+      evaluate("array_position(c0, c1, c2)", input),
+      "array_position cannot take a 0-valued instance argument");
+
+  auto result = evaluate("try(array_position(c0, c1, c2))", input);
+  assertEqualVectors(
+      makeNullableFlatVector<int64_t>({std::nullopt, 1}), result);
+
+  // Constant element and instance vectors.
+  VELOX_ASSERT_THROW(
+      evaluate("array_position(c0, 1, 0)", input),
+      "array_position cannot take a 0-valued instance argument");
+
+  result = evaluate("try(array_position(c0, 1, 0))", input);
+  assertEqualVectors(makeNullConstant(TypeKind::BIGINT, 2), result);
 }
 } // namespace

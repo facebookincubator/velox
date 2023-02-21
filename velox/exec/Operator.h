@@ -197,8 +197,6 @@ class OperatorCtx {
     return operatorType_;
   }
 
-  memory::MemoryAllocator* FOLLY_NONNULL allocator() const;
-
   core::ExecCtx* FOLLY_NONNULL execCtx() const;
 
   /// Makes an extract of QueryCtx for use in a connector. 'planNodeId'
@@ -220,7 +218,6 @@ class OperatorCtx {
   velox::memory::MemoryPool* const FOLLY_NONNULL pool_;
 
   // These members are created on demand.
-  mutable memory::MemoryAllocator* FOLLY_NULLABLE allocator_{nullptr};
   mutable std::unique_ptr<core::ExecCtx> execCtx_;
   mutable std::unique_ptr<connector::ExpressionEvaluator> expressionEvaluator_;
 };
@@ -239,7 +236,19 @@ class Operator : public BaseRuntimeStatWriter {
     virtual std::unique_ptr<Operator> toOperator(
         DriverCtx* FOLLY_NONNULL ctx,
         int32_t id,
-        const core::PlanNodePtr& node) = 0;
+        const core::PlanNodePtr& node) {
+      return nullptr;
+    }
+
+    // An overloaded method that should be called when the operator needs an
+    // ExchangeClient.
+    virtual std::unique_ptr<Operator> toOperator(
+        DriverCtx* FOLLY_NONNULL ctx,
+        int32_t id,
+        const core::PlanNodePtr& node,
+        std::shared_ptr<ExchangeClient> exchangeClient) {
+      return nullptr;
+    }
 
     // Translates plan node to join bridge. Returns nullptr if the plan node
     // cannot be handled by this factory.
@@ -359,8 +368,10 @@ class Operator : public BaseRuntimeStatWriter {
   virtual void close() {
     input_ = nullptr;
     results_.clear();
-    // Release the unused memory reservation on close.
-    operatorCtx_->pool()->getMemoryUsageTracker()->release();
+    if (operatorCtx_->pool()->getMemoryUsageTracker() != nullptr) {
+      // Release the unused memory reservation on close.
+      operatorCtx_->pool()->getMemoryUsageTracker()->release();
+    }
   }
 
   // Returns true if 'this' never has more output rows than input rows.
@@ -415,11 +426,13 @@ class Operator : public BaseRuntimeStatWriter {
 
   // Calls all the registered PlanNodeTranslators on 'planNode' and
   // returns the result of the first one that returns non-nullptr
-  // or nullptr if all return nullptr.
+  // or nullptr if all return nullptr. exchangeClient is not-null only when
+  // planNode->requiresExchangeClient() is true.
   static std::unique_ptr<Operator> fromPlanNode(
       DriverCtx* FOLLY_NONNULL ctx,
       int32_t id,
-      const core::PlanNodePtr& planNode);
+      const core::PlanNodePtr& planNode,
+      std::shared_ptr<ExchangeClient> exchangeClient = nullptr);
 
   // Calls all the registered PlanNodeTranslators on 'planNode' and
   // returns the result of the first one that returns non-nullptr

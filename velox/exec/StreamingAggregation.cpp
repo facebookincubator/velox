@@ -64,7 +64,7 @@ StreamingAggregation::StreamingAggregation(
       if (channels.back() == kConstantChannel) {
         auto constant = static_cast<const core::ConstantTypedExpr*>(arg.get());
         constants.push_back(BaseVector::createConstant(
-            constant->value(), 1, operatorCtx_->pool()));
+            constant->type(), constant->value(), 1, operatorCtx_->pool()));
       } else {
         constants.push_back(nullptr);
       }
@@ -99,7 +99,7 @@ StreamingAggregation::StreamingAggregation(
       false,
       false,
       false,
-      operatorCtx_->allocator(),
+      pool(),
       ContainerRowSerde::instance());
 }
 

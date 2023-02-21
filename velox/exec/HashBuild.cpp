@@ -50,7 +50,7 @@ HashBuild::HashBuild(
     : Operator(driverCtx, nullptr, operatorId, joinNode->id(), "HashBuild"),
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
-      allocator_(operatorCtx_->allocator()),
+      nullAware_{joinNode_->isNullAware()},
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
@@ -132,7 +132,7 @@ void HashBuild::setupTable() {
         dependentTypes,
         true, // allowDuplicates
         true, // hasProbedFlag
-        allocator_);
+        pool());
   } else {
     // (Left) semi and anti join with no extra filter only needs to know whether
     // there is a match. Hence, no need to store entries with duplicate keys.
@@ -141,15 +141,15 @@ void HashBuild::setupTable() {
          joinNode_->isLeftSemiProjectJoin() || isAntiJoin(joinType_));
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
-    if (isNullAwareAntiJoinWithFilter(joinNode_)) {
+    if (isLeftNullAwareJoinWithFilter(joinNode_)) {
       // We need to check null key rows in build side in case of null-aware anti
-      // join with filter set.
+      // or left semi project join with filter set.
       table_ = HashTable<false>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
-          allocator_);
+          pool());
     } else {
       // Ignore null keys
       table_ = HashTable<true>::createForJoin(
@@ -157,7 +157,7 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
-          allocator_);
+          pool());
     }
   }
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
@@ -296,7 +296,7 @@ void HashBuild::addInput(RowVectorPtr input) {
 
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
       !isRightSemiProjectJoin(joinType_) &&
-      !isNullAwareAntiJoinWithFilter(joinNode_)) {
+      !isLeftNullAwareJoinWithFilter(joinNode_)) {
     deselectRowsWithNulls(hashers, activeRows_);
   }
 
@@ -309,12 +309,9 @@ void HashBuild::addInput(RowVectorPtr input) {
     if (filterPropagatesNulls_) {
       removeInputRowsForAntiJoinFilter();
     }
-  } else if (
-      ((isAntiJoin(joinType_) && joinNode_->isNullAware()) ||
-       isLeftSemiProjectJoin(joinType_)) &&
-      activeRows_.countSelected() < input->size()) {
+  } else if (nullAware_ && activeRows_.countSelected() < input->size()) {
     joinHasNullKeys_ = true;
-    if (isAntiJoin(joinType_) && joinNode_->isNullAware()) {
+    if (isAntiJoin(joinType_)) {
       // Null-aware anti join with no extra filter returns no rows if build side
       // has nulls in join keys. Hence, we can stop processing on first null.
       noMoreInput();
@@ -428,7 +425,7 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
   const auto increment =
       rows->sizeIncrement(input->size(), outOfLineBytes ? flatBytes : 0);
 
-  auto tracker = CHECK_NOTNULL(allocator_->tracker());
+  auto tracker = pool()->getMemoryUsageTracker();
   // There must be at least 2x the increments in reservation.
   if (tracker->availableReservation() > 2 * increment) {
     return true;
@@ -692,7 +689,7 @@ bool HashBuild::finishHashBuild() {
   otherTables.reserve(peers.size());
   SpillPartitionSet spillPartitions;
   Spiller::Stats spillStats;
-  if (joinHasNullKeys_ && (isAntiJoin(joinType_) && joinNode_->isNullAware())) {
+  if (joinHasNullKeys_ && (isAntiJoin(joinType_) && nullAware_)) {
     joinBridge_->setAntiJoinHasNullKeys();
   } else {
     for (auto& peer : peers) {
@@ -701,7 +698,7 @@ bool HashBuild::finishHashBuild() {
       VELOX_CHECK(build);
       if (build->joinHasNullKeys_) {
         joinHasNullKeys_ = true;
-        if (isAntiJoin(joinType_) && joinNode_->isNullAware()) {
+        if (isAntiJoin(joinType_) && nullAware_) {
           break;
         }
       }
@@ -712,8 +709,7 @@ bool HashBuild::finishHashBuild() {
       }
     }
 
-    if (joinHasNullKeys_ &&
-        (isAntiJoin(joinType_) && joinNode_->isNullAware())) {
+    if (joinHasNullKeys_ && (isAntiJoin(joinType_) && nullAware_)) {
       joinBridge_->setAntiJoinHasNullKeys();
     } else {
       if (spiller_ != nullptr) {
@@ -736,10 +732,14 @@ bool HashBuild::finishHashBuild() {
         }
       }
 
-      const bool hasOthers = !otherTables.empty();
+      // TODO: re-enable parallel join build with spilling triggered after
+      // https://github.com/facebookincubator/velox/issues/3567 is fixed.
+      const bool allowPrallelJoinBuild =
+          !otherTables.empty() && spillPartitions.empty();
       table_->prepareJoinTable(
           std::move(otherTables),
-          hasOthers ? operatorCtx_->task()->queryCtx()->executor() : nullptr);
+          allowPrallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
+                                : nullptr);
 
       addRuntimeStats();
       if (joinBridge_->setHashTable(
@@ -765,7 +765,7 @@ void HashBuild::postHashBuildProcess() {
 
   // Release the unused memory reservation since we have finished the table
   // build.
-  operatorCtx_->allocator()->tracker()->release();
+  pool()->getMemoryUsageTracker()->release();
 
   if (!spillEnabled()) {
     setState(State::kFinish);

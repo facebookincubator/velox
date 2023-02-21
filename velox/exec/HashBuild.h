@@ -77,8 +77,6 @@ class HashBuild final : public Operator {
 
   bool isFinished() override;
 
-  void close() override {}
-
  private:
   void setState(State state);
   void checkStateTransition(State state);
@@ -231,8 +229,7 @@ class HashBuild final : public Operator {
 
   const core::JoinType joinType_;
 
-  // Holds the areas in RowContainer of 'table_'
-  memory::MemoryAllocator* const FOLLY_NONNULL allocator_;
+  const bool nullAware_;
 
   const std::shared_ptr<HashJoinBridge> joinBridge_;
 

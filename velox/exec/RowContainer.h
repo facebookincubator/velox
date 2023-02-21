@@ -22,6 +22,7 @@
 #include "velox/exec/Spill.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
+
 namespace facebook::velox::exec {
 
 using normalized_key_t = uint64_t;
@@ -65,7 +66,7 @@ struct RowContainerIterator {
 class RowPartitions {
  public:
   /// Initializes this to hold up to 'numRows'.
-  RowPartitions(int32_t numRows, memory::MemoryAllocator& MemoryAllocator);
+  RowPartitions(int32_t numRows, memory::MemoryPool& pool);
 
   /// Appends 'partitions' to the end of 'this'. Throws if adding more than the
   /// capacity given at construction.
@@ -86,7 +87,7 @@ class RowPartitions {
   int32_t size_{0};
 
   // Partition numbers. 1 byte each.
-  memory::MemoryAllocator::Allocation allocation_;
+  memory::Allocation allocation_;
 };
 
 // Packed representation of offset, null byte offset and null mask for
@@ -131,17 +132,17 @@ class RowContainer {
   static constexpr uint64_t kUnlimited = std::numeric_limits<uint64_t>::max();
   using Eraser = std::function<void(folly::Range<char**> rows)>;
 
-  // 'keyTypes' gives the type of row and use 'MemoryAllocator' for bulk
+  // 'keyTypes' gives the type of row and use 'allocator' for bulk
   // allocation.
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
-      memory::MemoryAllocator* FOLLY_NONNULL MemoryAllocator)
-      : RowContainer(keyTypes, std::vector<TypePtr>{}, MemoryAllocator) {}
+      memory::MemoryPool* FOLLY_NONNULL pool)
+      : RowContainer(keyTypes, std::vector<TypePtr>{}, pool) {}
 
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
       const std::vector<TypePtr>& dependentTypes,
-      memory::MemoryAllocator* FOLLY_NONNULL MemoryAllocator)
+      memory::MemoryPool* FOLLY_NONNULL pool)
       : RowContainer(
             keyTypes,
             true, // nullableKeys
@@ -151,7 +152,7 @@ class RowContainer {
             false, // isJoinBuild
             false, // hasProbedFlag
             false, // hasNormalizedKey
-            MemoryAllocator,
+            pool,
             ContainerRowSerde::instance()) {}
 
   // 'keyTypes' gives the type of the key of each row. For a group by,
@@ -168,7 +169,7 @@ class RowContainer {
   // join. 'hasNormalizedKey' specifies that an extra word is left
   // below each row for a normalized key that collapses all parts
   // into one word for faster comparison. The bulk allocation is done
-  // from 'MemoryAllocator'.  'serde_' is used for serializing complex
+  // from 'allocator'.  'serde_' is used for serializing complex
   // type values into the container.
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
@@ -179,7 +180,7 @@ class RowContainer {
       bool isJoinBuild,
       bool hasProbedFlag,
       bool hasNormalizedKey,
-      memory::MemoryAllocator* FOLLY_NONNULL MemoryAllocator,
+      memory::MemoryPool* FOLLY_NONNULL pool,
       const RowSerde& serde);
 
   // Allocates a new row and initializes possible aggregates to null.
@@ -306,14 +307,15 @@ class RowContainer {
 
   /// Copies the 'probed' flags for the specified rows into 'result'.
   /// The 'result' is expected to be flat vector of type boolean.
-  /// Sets null in 'result' for rows with null keys.
-  /// If 'replaceFalseWithNull' is true, replaces the false probed
-  /// flag with null in 'result' for rows with no null keys. This is used for
-  /// right semi project join type when probe side has nulls in the join keys.
+  /// For rows with null keys, sets null in 'result' if 'setNullForNullKeysRow'
+  /// is true and false otherwise. For rows with 'false' probed flag, sets null
+  /// in 'result' if 'setNullForNonProbedRow' is true and false otherwise. This
+  /// is used for null aware and regular right semi project join types.
   void extractProbedFlags(
       const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
       int32_t numRows,
-      bool replaceFalseWithNull,
+      bool setNullForNullKeysRow,
+      bool setNullForNonProbedRow,
       const VectorPtr& result);
 
   static inline int32_t nullByte(int32_t nullOffset) {
@@ -354,13 +356,13 @@ class RowContainer {
       auto allocation = rows_.allocationAt(i);
       auto numRuns = allocation->numRuns();
       for (auto runIndex = iter->runIndex; runIndex < numRuns; ++runIndex) {
-        memory::MemoryAllocator::PageRun run = allocation->runAt(runIndex);
+        memory::Allocation::PageRun run = allocation->runAt(runIndex);
         auto data = run.data<char>();
         int64_t limit;
         if (i == numAllocations - 1 && runIndex == rows_.currentRunIndex()) {
           limit = rows_.currentOffset();
         } else {
-          limit = run.numPages() * memory::MemoryAllocator::kPageSize;
+          limit = run.numPages() * memory::AllocationTraits::kPageSize;
         }
         auto row = iter->rowOffset;
         while (row + rowSize <= limit) {
@@ -569,8 +571,8 @@ class RowContainer {
     }
   }
 
-  memory::MemoryAllocator* FOLLY_NONNULL allocator() const {
-    return stringAllocator_.allocator();
+  memory::MemoryPool* FOLLY_NONNULL pool() const {
+    return stringAllocator_.pool();
   }
 
   // Returns the types of all non-aggregate columns of 'this', keys first.

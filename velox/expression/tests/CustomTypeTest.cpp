@@ -15,27 +15,13 @@
  */
 
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 namespace facebook::velox::test {
 
-class CustomTypeTest : public functions::test::FunctionBaseTest {
- protected:
-  static std::unordered_set<std::string> getSignatureStrings(
-      const std::string& functionName) {
-    auto allSignatures = getFunctionSignatures();
-    const auto& signatures = allSignatures.at(functionName);
-
-    std::unordered_set<std::string> signatureStrings;
-    for (const auto& signature : signatures) {
-      signatureStrings.insert(signature->toString());
-    }
-    return signatureStrings;
-  }
-};
+class CustomTypeTest : public functions::test::FunctionBaseTest {};
 
 namespace {
 struct FancyInt {
@@ -144,6 +130,17 @@ struct FancyPlusFunction {
     result = std::make_shared<FancyInt>(a->n + b->n);
   }
 };
+
+class AlwaysFailingTypeFactories : public CustomTypeFactories {
+ public:
+  TypePtr getType(std::vector<TypePtr> /* childTypes */) const override {
+    VELOX_UNSUPPORTED();
+  }
+
+  exec::CastOperatorPtr getCastOperator() const override {
+    VELOX_UNSUPPORTED();
+  }
+};
 } // namespace
 
 /// Register custom type based on OpaqueType. Register a vector function that
@@ -151,7 +148,11 @@ struct FancyPlusFunction {
 /// simple function that takes and returns this type. Verify function signatures
 /// and evaluate some expressions.
 TEST_F(CustomTypeTest, customType) {
-  registerType("fancy_int", std::make_unique<FancyIntTypeFactories>());
+  ASSERT_TRUE(
+      registerType("fancy_int", std::make_unique<FancyIntTypeFactories>()));
+
+  ASSERT_FALSE(registerType(
+      "fancy_int", std::make_unique<AlwaysFailingTypeFactories>()));
 
   registerFunction<FancyPlusFunction, TheFancyInt, TheFancyInt, TheFancyInt>(
       {"fancy_plus"});
@@ -194,5 +195,54 @@ TEST_F(CustomTypeTest, customType) {
       makeRowVector({data}));
   auto expected = makeFlatVector<int64_t>({11, 12, 13, 14, 15});
   assertEqualVectors(expected, result);
+
+  // Cleanup.
+  ASSERT_TRUE(unregisterType("fancy_int"));
+  ASSERT_FALSE(unregisterType("fancy_int"));
+}
+
+TEST_F(CustomTypeTest, getCustomTypeNames) {
+  auto names = getCustomTypeNames();
+  ASSERT_EQ(
+      (std::unordered_set<std::string>{
+          "JSON",
+          "HYPERLOGLOG",
+          "TIMESTAMP WITH TIME ZONE",
+      }),
+      names);
+
+  ASSERT_TRUE(
+      registerType("fancy_int", std::make_unique<FancyIntTypeFactories>()));
+
+  names = getCustomTypeNames();
+  ASSERT_EQ(
+      (std::unordered_set<std::string>{
+          "JSON",
+          "HYPERLOGLOG",
+          "TIMESTAMP WITH TIME ZONE",
+          "FANCY_INT",
+      }),
+      names);
+
+  ASSERT_TRUE(unregisterType("fancy_int"));
+}
+
+TEST_F(CustomTypeTest, nullConstant) {
+  ASSERT_TRUE(
+      registerType("fancy_int", std::make_unique<FancyIntTypeFactories>()));
+
+  auto names = getCustomTypeNames();
+  for (const auto& name : names) {
+    auto type = getType(name, {});
+    auto null = BaseVector::createNullConstant(type, 10, pool());
+    EXPECT_TRUE(null->isConstantEncoding());
+    EXPECT_TRUE(type->equivalent(*null->type()));
+    EXPECT_EQ(type->toString(), null->type()->toString());
+    for (auto i = 0; i < 10; ++i) {
+      EXPECT_TRUE(null->isNullAt(i));
+    }
+  }
+
+  ASSERT_TRUE(unregisterType("fancy_int"));
 }
 } // namespace facebook::velox::test

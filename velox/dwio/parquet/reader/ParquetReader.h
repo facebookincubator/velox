@@ -25,9 +25,6 @@
 
 namespace facebook::velox::parquet {
 
-constexpr uint64_t DIRECTORY_SIZE_GUESS = 1024 * 1024;
-constexpr uint64_t FILE_PRELOAD_THRESHOLD = 1024 * 1024 * 8;
-
 enum class ParquetMetricsType { HEADER, FILE_METADATA, FILE, BLOCK, TEST };
 
 class StructColumnReader;
@@ -103,6 +100,8 @@ class ReaderBase {
           children);
 
   memory::MemoryPool& pool_;
+  const uint64_t directorySizeGuess_;
+  const uint64_t filePreloadThreshold_;
   const dwio::common::ReaderOptions& options_;
   std::unique_ptr<velox::dwio::common::BufferedInput> input_;
   uint64_t fileLength_;
@@ -136,6 +135,20 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   const dwio::common::RowReaderOptions& getOptions() {
     return options_;
+  }
+
+  bool moveAdaptationFrom(RowReader& other) override {
+    auto otherReader = dynamic_cast<ParquetRowReader*>(&other);
+    if (!columnReader_ || !otherReader->columnReader_) {
+      return false;
+    }
+    columnReader_->moveScanSpec(*otherReader->columnReader_);
+    return true;
+  }
+
+  bool allPrefetchIssued() const override {
+    //  Allow opening the next split while this is reading.
+    return true;
   }
 
  private:

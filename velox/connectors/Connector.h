@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/future/VeloxPromise.h"
@@ -33,17 +34,15 @@ namespace facebook::velox::exec {
 class ExprSet;
 }
 namespace facebook::velox::connector {
-class ConnectorCommitInfo;
-class WriteProtocol;
+
+class DataSource;
 
 // A split represents a chunk of data that a connector should load and return
 // as a RowVectorPtr, potentially after processing pushdowns.
 struct ConnectorSplit {
   const std::string connectorId;
 
-  // true if the Task processing this has aborted. Allows aborting
-  // async prefetch for the split.
-  bool cancelled{false};
+  std::shared_ptr<AsyncSource<std::shared_ptr<DataSource>>> dataSource;
 
   explicit ConnectorSplit(const std::string& _connectorId)
       : connectorId(_connectorId) {}
@@ -91,17 +90,27 @@ class ConnectorInsertTableHandle {
   }
 };
 
+/// Represents the commit strategy for writing to connector.
+enum class CommitStrategy {
+  kNoCommit, // No more commit actions are needed.
+  kTaskCommit // Task level commit is needed.
+};
+
+/// Return a string encoding of the given commit strategy.
+std::string commitStrategyToString(CommitStrategy commitStrategy);
+
 class DataSink {
  public:
   virtual ~DataSink() = default;
 
-  // Get commit info of the connector.
-  virtual std::shared_ptr<ConnectorCommitInfo> getConnectorCommitInfo()
-      const = 0;
+  /// Add the next data (vector) to be written. This call is blocking.
+  // TODO maybe at some point we want to make it async.
+  virtual void appendData(RowVectorPtr input) = 0;
 
-  // Add the next data (vector) to be written. This call is blocking
-  // TODO maybe at some point we want to make it async
-  virtual void appendData(VectorPtr input) = 0;
+  /// Called once after all data has been added via possibly multiple calls to
+  /// appendData(). Could return data in the string form that would be included
+  /// in the output. After calling this function, only close() could be called.
+  virtual std::vector<std::string> finish() const = 0;
 
   virtual void close() = 0;
 };
@@ -141,6 +150,22 @@ class DataSource {
   virtual uint64_t getCompletedRows() = 0;
 
   virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
+
+  // Returns true if 'this' has initiated all the prefetch this will
+  // initiate. This means that the caller should schedule next splits
+  // to prefetch in the background. false if the source does not
+  // prefetch.
+  virtual bool allPrefetchIssued() const {
+    return false;
+  }
+
+  // Initializes this from 'source'. 'source' is effectively moved
+  // into 'this' Adaptation like dynamic filters stay in effect but
+  // the parts dealing with open files, prefetched data etc. are moved. 'source'
+  // is freed after the move.
+  virtual void setFromDataSource(std::shared_ptr<DataSource> /*source*/) {
+    VELOX_UNSUPPORTED("setFromDataSource");
+  }
 
   // Returns a connector dependent row size if available. This can be
   // called after addSplit().  This estimates uncompressed data
@@ -266,11 +291,19 @@ class Connector {
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) = 0;
 
+  // Returns true if addSplit of DataSource can use 'dataSource' from
+  // ConnectorSplit in addSplit(). If so, TableScan can preload splits
+  // so that file opening and metadata operations are off the Driver'
+  // thread.
+  virtual bool supportsSplitPreload() {
+    return false;
+  }
+
   virtual std::shared_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
-      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
-      std::shared_ptr<WriteProtocol> writeProtocol) = 0;
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) = 0;
 
   // Returns a ScanTracker for 'id'. 'id' uniquely identifies the
   // tracker and different threads will share the same
@@ -279,6 +312,10 @@ class Connector {
   static std::shared_ptr<cache::ScanTracker> getTracker(
       const std::string& scanId,
       int32_t loadQuantum);
+
+  virtual folly::Executor* FOLLY_NULLABLE executor() const {
+    return nullptr;
+  }
 
  private:
   static void unregisterTracker(cache::ScanTracker* FOLLY_NONNULL tracker);

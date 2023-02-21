@@ -54,9 +54,7 @@ class QueryCtx : public Context {
         queryId_(queryId),
         spillExecutor_(std::move(spillExecutor)) {
     setConfigOverrides(config);
-    if (!pool_) {
-      initPool(queryId);
-    }
+    initPool(queryId);
   }
 
   // Constructor to block the destruction of executor while this
@@ -80,13 +78,14 @@ class QueryCtx : public Context {
         queryConfig_{this},
         queryId_(queryId) {
     setConfigOverrides(config);
-    if (!pool_) {
-      initPool(queryId);
-    }
+    initPool(queryId);
   }
 
   static std::string generatePoolName(const std::string& queryId) {
-    return fmt::format("query.{}", queryId.c_str());
+    // We attach a monotonically increasing sequence number to ensure the pool
+    // name is unique.
+    static std::atomic<int64_t> seqNum{0};
+    return fmt::format("query.{}.{}", queryId.c_str(), seqNum++);
   }
 
   memory::MemoryPool* FOLLY_NONNULL pool() const {
@@ -127,6 +126,15 @@ class QueryCtx : public Context {
         std::make_shared<const MemConfig>(std::move(configOverrides)));
   }
 
+  // Overrides the previous connector-specific configuration. Note that this
+  // function is NOT thread-safe and should probably only be used in tests.
+  void setConnectorConfigOverridesUnsafe(
+      const std::string& connectorId,
+      std::unordered_map<std::string, std::string>&& configOverrides) {
+    connectorConfigs_[connectorId] =
+        std::make_shared<MemConfig>(std::move(configOverrides));
+  }
+
   folly::Executor* FOLLY_NULLABLE spillExecutor() const {
     return spillExecutor_.get();
   }
@@ -143,9 +151,13 @@ class QueryCtx : public Context {
   }
 
   void initPool(const std::string& queryId) {
-    pool_ = memory::getProcessDefaultMemoryManager().getRoot().addChild(
-        QueryCtx::generatePoolName(queryId));
-    pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
+    if (pool_ == nullptr) {
+      pool_ = memory::getProcessDefaultMemoryManager().getRoot().addChild(
+          QueryCtx::generatePoolName(queryId));
+    }
+    if (pool_->getMemoryUsageTracker() == nullptr) {
+      pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
+    }
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -245,7 +257,7 @@ class ExecCtx : public Context {
   }
 
  private:
-  // Pool for all Buffers for this thread
+  // Pool for all Buffers for this thread.
   memory::MemoryPool* FOLLY_NONNULL pool_;
   QueryCtx* FOLLY_NULLABLE queryCtx_;
   // A pool of preallocated DecodedVectors for use by expressions and operators.

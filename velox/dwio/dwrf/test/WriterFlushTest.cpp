@@ -17,6 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/memory/Memory.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/type/fbhive/HiveTypeParser.h"
 
@@ -37,7 +38,8 @@ class MockMemoryPool : public velox::memory::MemoryPool {
       const std::string& name,
       std::shared_ptr<MemoryPool> parent,
       int64_t cap = std::numeric_limits<int64_t>::max())
-      : MemoryPool{name, parent}, cap_{cap} {}
+      : MemoryPool{name, parent, {.alignment = velox::memory::MemoryAllocator::kMinAlignment}},
+        memoryUsageTracker_{velox::memory::MemoryUsageTracker::create(cap)} {}
 
   // Methods not usually exposed by MemoryPool interface to
   // allow for manipulation.
@@ -51,7 +53,6 @@ class MockMemoryPool : public velox::memory::MemoryPool {
 
   void zeroOutMemoryUsage() {
     localMemoryUsage_ = 0;
-    subtreeMemoryUsage_ = 0;
   }
 
   static std::shared_ptr<MockMemoryPool> create() {
@@ -62,9 +63,10 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     updateLocalMemoryUsage(size);
     return allocator_->allocateBytes(size);
   }
-  void* allocateZeroFilled(int64_t numMembers, int64_t sizeEach) override {
-    updateLocalMemoryUsage(numMembers * sizeEach);
-    return allocator_->allocateZeroFilled(numMembers * sizeEach);
+
+  void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override {
+    updateLocalMemoryUsage(numEntries * sizeEach);
+    return allocator_->allocateZeroFilled(numEntries * sizeEach);
   }
 
   // No-op for attempts to shrink buffer.
@@ -83,34 +85,52 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     updateLocalMemoryUsage(-size);
   }
 
+  void allocateNonContiguous(
+      velox::memory::MachinePageCount /*unused*/,
+      velox::memory::Allocation& /*unused*/,
+      velox::memory::MachinePageCount /*unused*/) override {
+    VELOX_UNSUPPORTED("allocateNonContiguous unsupported");
+  }
+
+  void freeNonContiguous(velox::memory::Allocation& /*unused*/) override {
+    VELOX_UNSUPPORTED("freeNonContiguous unsupported");
+  }
+
+  velox::memory::MachinePageCount largestSizeClass() const override {
+    VELOX_UNSUPPORTED("largestSizeClass unsupported");
+  }
+
+  const std::vector<velox::memory::MachinePageCount>& sizeClasses()
+      const override {
+    VELOX_UNSUPPORTED("sizeClasses unsupported");
+  }
+
+  void allocateContiguous(
+      velox::memory::MachinePageCount /*unused*/,
+      velox::memory::ContiguousAllocation& /*unused*/) override {
+    VELOX_UNSUPPORTED("allocateContiguous unsupported");
+  }
+
+  void freeContiguous(velox::memory::ContiguousAllocation&
+                      /*unused*/) override {
+    VELOX_UNSUPPORTED("freeContiguous unsupported");
+  }
+
   int64_t getCurrentBytes() const override {
-    return localMemoryUsage_ + subtreeMemoryUsage_;
-  }
-
-  void setSubtreeMemoryUsage(int64_t size) override {
-    subtreeMemoryUsage_ = size;
-  }
-
-  int64_t updateSubtreeMemoryUsage(int64_t size) override {
-    return subtreeMemoryUsage_ += size;
-  }
-
-  // Get the cap for the memory node and its subtree.
-  int64_t cap() const override {
-    return cap_;
-  }
-
-  void capMemoryAllocation() override {}
-  void uncapMemoryAllocation() override {}
-  bool isMemoryCapped() const override {
-    return false;
+    return localMemoryUsage_;
   }
 
   std::shared_ptr<MemoryPool> genChild(
       std::shared_ptr<MemoryPool> parent,
-      const std::string& name,
-      int64_t cap) override {
-    return std::make_shared<MockMemoryPool>(name, parent, cap);
+      const std::string& name) override {
+    return std::make_shared<MockMemoryPool>(
+        name, parent, memoryUsageTracker_->maxMemory());
+  }
+
+  void setMemoryUsageTracker(
+      const std::shared_ptr<velox::memory::MemoryUsageTracker>& tracker)
+      override {
+    memoryUsageTracker_ = tracker;
   }
 
   const std::shared_ptr<velox::memory::MemoryUsageTracker>&
@@ -119,18 +139,21 @@ class MockMemoryPool : public velox::memory::MemoryPool {
   }
 
   MOCK_CONST_METHOD0(getMaxBytes, int64_t());
-  MOCK_METHOD1(
-      setMemoryUsageTracker,
-      void(const std::shared_ptr<velox::memory::MemoryUsageTracker>&));
+
+  MOCK_METHOD1(updateSubtreeMemoryUsage, int64_t(int64_t));
 
   MOCK_CONST_METHOD0(getAlignment, uint16_t());
+
+  std::string toString() const override {
+    return fmt::format(
+        "Mock Memory Pool[{}]",
+        velox::memory::MemoryAllocator::kindString(allocator_->kind()));
+  }
 
  private:
   velox::memory::MemoryAllocator* const FOLLY_NONNULL allocator_{
       velox::memory::MemoryAllocator::getInstance()};
   int64_t localMemoryUsage_{0};
-  int64_t subtreeMemoryUsage_{0};
-  int64_t cap_;
   std::shared_ptr<velox::memory::MemoryUsageTracker> memoryUsageTracker_;
 };
 
@@ -142,7 +165,7 @@ class DummyWriter : public velox::dwrf::Writer {
       WriterOptions& options,
       std::unique_ptr<dwio::common::DataSink> sink,
       std::shared_ptr<memory::MemoryPool> pool)
-      : Writer{options, std::move(sink), *pool}, pool_(std::move(pool)) {}
+      : Writer{options, std::move(sink), std::move(pool)} {}
 
   MOCK_METHOD1(
       flushImpl,
@@ -156,9 +179,6 @@ class DummyWriter : public velox::dwrf::Writer {
 
   friend class WriterFlushTestHelper;
   VELOX_FRIEND_TEST(TestWriterFlush, CheckAgainstMemoryBudget);
-
- private:
-  std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 // Big idea is to directly manipulate context states (num rows) + memory pool
@@ -254,7 +274,7 @@ struct SimulatedFlush {
 class WriterFlushTestHelper {
  public:
   static std::unique_ptr<DummyWriter> prepWriter(
-      MockMemoryPool& pool,
+      const std::shared_ptr<MockMemoryPool>& sinkPool,
       int64_t writerMemoryBudget) {
     WriterOptions options;
     options.config = std::make_shared<Config>();
@@ -267,8 +287,9 @@ class WriterFlushTestHelper {
     auto writer = std::make_unique<DummyWriter>(
         options,
         // Unused sink.
-        std::make_unique<dwio::common::MemorySink>(pool, kSizeKB),
-        pool.addChild("writer_pool", writerMemoryBudget));
+        std::make_unique<dwio::common::MemorySink>(*sinkPool, kSizeKB),
+        std::make_shared<MockMemoryPool>(
+            "writer_root_pool", nullptr, writerMemoryBudget));
     auto& context = writer->getContext();
     zeroOutMemoryUsage(context);
     return writer;
@@ -376,7 +397,7 @@ class WriterFlushTestHelper {
 TEST(TestWriterFlush, CheckAgainstMemoryBudget) {
   auto pool = MockMemoryPool::create();
   {
-    auto writer = WriterFlushTestHelper::prepWriter(*pool, 1024);
+    auto writer = WriterFlushTestHelper::prepWriter(pool, 1024);
     auto& context = writer->getContext();
 
     SimulatedWrite simWrite{10, 500, 300};
@@ -389,7 +410,7 @@ TEST(TestWriterFlush, CheckAgainstMemoryBudget) {
     EXPECT_FALSE(writer->shouldFlush(context, 200));
   }
   {
-    auto writer = WriterFlushTestHelper::prepWriter(*pool, 1024);
+    auto writer = WriterFlushTestHelper::prepWriter(pool, 1024);
     auto& context = writer->getContext();
 
     SimulatedWrite simWrite{10, 500, 300};
@@ -413,7 +434,7 @@ TEST(TestWriterFlush, CheckAgainstMemoryBudget) {
     EXPECT_TRUE(writer->shouldFlush(context, 200));
   }
   {
-    auto writer = WriterFlushTestHelper::prepWriter(*pool, 1024);
+    auto writer = WriterFlushTestHelper::prepWriter(pool, 1024);
     auto& context = writer->getContext();
 
     SimulatedWrite{10, 500, 300}.apply(context);
@@ -435,7 +456,7 @@ TEST(TestWriterFlush, CheckAgainstMemoryBudget) {
     EXPECT_TRUE(writer->shouldFlush(context, 200));
   }
   {
-    auto writer = WriterFlushTestHelper::prepWriter(*pool, 1024);
+    auto writer = WriterFlushTestHelper::prepWriter(pool, 1024);
     auto& context = writer->getContext();
 
     // 0 overhead flush but with raw size per row variance.
@@ -466,7 +487,7 @@ TEST(TestWriterFlush, CheckAgainstMemoryBudget) {
     EXPECT_TRUE(writer->shouldFlush(context, 200));
   }
   {
-    auto writer = WriterFlushTestHelper::prepWriter(*pool, 1024);
+    auto writer = WriterFlushTestHelper::prepWriter(pool, 1024);
     auto& context = writer->getContext();
 
     // 0 overhead flush but with raw size per row variance.
@@ -489,7 +510,7 @@ TEST(TestWriterFlush, CheckAgainstMemoryBudget) {
     EXPECT_TRUE(writer->shouldFlush(context, 200));
   }
   {
-    auto writer = WriterFlushTestHelper::prepWriter(*pool, 1024);
+    auto writer = WriterFlushTestHelper::prepWriter(pool, 1024);
     auto& context = writer->getContext();
 
     // 0 overhead flush but with flush overhead variance.
@@ -550,7 +571,7 @@ TEST(TestWriterFlush, MemoryBasedFlushRandom) {
 
   for (auto& testCase : testCases) {
     WriterFlushTestHelper::testRandomSequence(
-        WriterFlushTestHelper::prepWriter(*pool, 512 * kSizeMB),
+        WriterFlushTestHelper::prepWriter(pool, 512 * kSizeMB),
         testCase.numStripes,
         testCase.seed,
         testCase.averageOutputStreamMemoryUsage,

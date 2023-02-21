@@ -60,8 +60,7 @@ class PrestoSerializerTest : public ::testing::Test {
     sanityCheckEstimateSerializedSize(
         rowVector, folly::Range(rows.data(), numRows));
 
-    auto arena =
-        std::make_unique<StreamArena>(memory::MemoryAllocator::getInstance());
+    auto arena = std::make_unique<StreamArena>(pool_.get());
     auto rowType = asRowType(rowVector->type());
     auto serializer =
         serde_->createSerializer(rowType, numRows, arena.get(), serdeOptions);
@@ -78,8 +77,7 @@ class PrestoSerializerTest : public ::testing::Test {
       const VectorSerde::Options* serdeOptions) {
     facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
     OStreamOutputStream out(output, &listener);
-    auto arena =
-        std::make_unique<StreamArena>(memory::MemoryAllocator::getInstance());
+    auto arena = std::make_unique<StreamArena>(pool_.get());
     serde_->serializeConstants(rowVector, arena.get(), serdeOptions, &out);
   }
 
@@ -245,7 +243,7 @@ TEST_F(PrestoSerializerTest, intervalDayTime) {
 TEST_F(PrestoSerializerTest, unknown) {
   const vector_size_t size = 123;
   auto constantVector =
-      BaseVector::createConstant(variant(TypeKind::UNKNOWN), 123, pool_.get());
+      BaseVector::createNullConstant(UNKNOWN(), 123, pool_.get());
   testRoundTrip(constantVector);
 
   auto flatVector = BaseVector::create(UNKNOWN(), size, pool_.get());
@@ -343,11 +341,12 @@ TEST_F(PrestoSerializerTest, unscaledLongDecimal) {
 
 TEST_F(PrestoSerializerTest, rle) {
   // Test RLE vectors with non-null value.
-  testRleRoundTrip(BaseVector::createConstant(true, 12, pool_.get()));
-  testRleRoundTrip(BaseVector::createConstant(779, 12, pool_.get()));
-  testRleRoundTrip(BaseVector::createConstant(1.23, 12, pool_.get()));
   testRleRoundTrip(
-      BaseVector::createConstant("Hello, world!", 12, pool_.get()));
+      BaseVector::createConstant(BOOLEAN(), true, 12, pool_.get()));
+  testRleRoundTrip(BaseVector::createConstant(INTEGER(), 779, 12, pool_.get()));
+  testRleRoundTrip(BaseVector::createConstant(DOUBLE(), 1.23, 12, pool_.get()));
+  testRleRoundTrip(
+      BaseVector::createConstant(VARCHAR(), "Hello, world!", 12, pool_.get()));
   testRleRoundTrip(BaseVector::wrapInConstant(
       12, 0, vectorMaker_->arrayVector<int64_t>({{1, 2, 3}})));
   testRleRoundTrip(BaseVector::wrapInConstant(

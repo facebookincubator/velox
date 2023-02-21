@@ -54,15 +54,15 @@ RowContainer::RowContainer(
     bool isJoinBuild,
     bool hasProbedFlag,
     bool hasNormalizedKeys,
-    memory::MemoryAllocator* allocator,
+    memory::MemoryPool* pool,
     const RowSerde& serde)
     : keyTypes_(keyTypes),
       nullableKeys_(nullableKeys),
       aggregates_(aggregates),
       isJoinBuild_(isJoinBuild),
       hasNormalizedKeys_(hasNormalizedKeys),
-      rows_(allocator),
-      stringAllocator_(allocator),
+      rows_(pool),
+      stringAllocator_(pool),
       serde_(serde) {
   // Compute the layout of the payload row.  The row has keys, null
   // flags, accumulators, dependent fields. All fields are fixed
@@ -528,7 +528,8 @@ void RowContainer::setProbedFlag(char** rows, int32_t numRows) {
 void RowContainer::extractProbedFlags(
     const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
     int32_t numRows,
-    bool replaceFalseWithNull,
+    bool setNullForNullKeysRow,
+    bool setNullForNonProbedRow,
     const VectorPtr& result) {
   result->resize(numRows);
   result->clearAllNulls();
@@ -536,23 +537,23 @@ void RowContainer::extractProbedFlags(
   auto* rawValues = flatResult->mutableRawValues<uint64_t>();
   for (auto i = 0; i < numRows; ++i) {
     // Check if this row has null keys.
-    bool hasNullKey = false;
-    if (nullableKeys_) {
+    bool nullResult = false;
+    if (setNullForNullKeysRow && nullableKeys_) {
       for (auto c = 0; c < keyTypes_.size(); ++c) {
         bool isNull =
             isNullAt(rows[i], columnAt(c).nullByte(), columnAt(c).nullMask());
         if (isNull) {
-          hasNullKey = true;
+          nullResult = true;
           break;
         }
       }
     }
 
-    if (hasNullKey) {
+    if (nullResult) {
       flatResult->setNull(i, true);
     } else {
       bool probed = bits::isBitSet(rows[i], probedFlagOffset_);
-      if (replaceFalseWithNull && !probed) {
+      if (setNullForNonProbedRow && !probed) {
         flatResult->setNull(i, true);
       } else {
         bits::setBit(rawValues, i, probed);
@@ -565,7 +566,7 @@ int64_t RowContainer::sizeIncrement(
     vector_size_t numRows,
     int64_t variableLengthBytes) const {
   constexpr int32_t kAllocUnit =
-      AllocationPool::kMinPages * memory::MemoryAllocator::kPageSize;
+      AllocationPool::kMinPages * memory::AllocationTraits::kPageSize;
   int32_t needRows = std::max<int64_t>(0, numRows - numFreeRows_);
   int64_t needBytes =
       std::min<int64_t>(0, variableLengthBytes - stringAllocator_.freeSpace());
@@ -630,7 +631,7 @@ void RowContainer::skip(RowContainerIterator& iter, int32_t numRows) {
 
 RowPartitions& RowContainer::partitions() {
   if (!partitions_) {
-    partitions_ = std::make_unique<RowPartitions>(numRows_, *rows_.allocator());
+    partitions_ = std::make_unique<RowPartitions>(numRows_, *rows_.pool());
   }
   return *partitions_;
 }
@@ -705,16 +706,12 @@ int32_t RowContainer::listPartitionRows(
   return numResults;
 }
 
-RowPartitions::RowPartitions(
-    int32_t numRows,
-    memory::MemoryAllocator& allocator)
-    : capacity_(numRows), allocation_(&allocator) {
-  auto numPages = bits::roundUp(capacity_, memory::MemoryAllocator::kPageSize) /
-      memory::MemoryAllocator::kPageSize;
-  if (!allocator.allocateNonContiguous(numPages, allocation_)) {
-    VELOX_FAIL(
-        "Failed to allocate RowContainer partitions: {} pages", numPages);
-  }
+RowPartitions::RowPartitions(int32_t numRows, memory::MemoryPool& pool)
+    : capacity_(numRows) {
+  auto numPages =
+      bits::roundUp(capacity_, memory::AllocationTraits::kPageSize) /
+      memory::AllocationTraits::kPageSize;
+  pool.allocateNonContiguous(numPages, allocation_);
 }
 
 void RowPartitions::appendPartitions(folly::Range<const uint8_t*> partitions) {

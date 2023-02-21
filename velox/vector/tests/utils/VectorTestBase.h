@@ -148,8 +148,9 @@ class VectorTestBase {
   FlatVectorPtr<T> makeFlatVector(
       vector_size_t size,
       std::function<T(vector_size_t /*row*/)> valueAt,
-      std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {
-    return vectorMaker_.flatVector<T>(size, valueAt, isNullAt);
+      std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr,
+      const TypePtr& type = CppToType<T>::create()) {
+    return vectorMaker_.flatVector<T>(size, valueAt, isNullAt, type);
   }
 
   /// Decimal Vector type cannot be inferred from the cpp type alone as the cpp
@@ -230,9 +231,17 @@ class VectorTestBase {
     return vectorMaker_.arrayVector<T>(data);
   }
 
+  ArrayVectorPtr makeAllNullArrayVector(
+      vector_size_t size,
+      const TypePtr& elementType) {
+    return vectorMaker_.allNullArrayVector(size, elementType);
+  }
+
   // Create an ArrayVector<ROW> from nested std::vectors of variants.
   // Example:
-  //   auto arrayVector = makeArrayOfRowVector({
+  //   auto arrayVector = makeArrayOfRowVector(
+  //     ROW({INTEGER(), VARCHAR()}),
+  //     {
   //       {variant::row({1, "red"}), variant::row({1, "blue"})},
   //       {},
   //       {variant::row({3, "green"})},
@@ -585,27 +594,36 @@ class VectorTestBase {
     return vectorMaker_.mapVector(offsets, keyVector, valueVector, nulls);
   }
 
-  template <typename T>
-  VectorPtr
-  makeConstant(T value, vector_size_t size, const TypePtr& type = {}) {
-    variant v;
-    if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
-      v = variant::shortDecimal(value.unscaledValue(), type);
-    } else if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
-      v = variant::longDecimal(value.unscaledValue(), type);
-    } else {
-      v = value;
-    }
-    return BaseVector::createConstant(v, size, pool());
+  MapVectorPtr makeAllNullMapVector(
+      vector_size_t size,
+      const TypePtr& keyType,
+      const TypePtr& valueType) {
+    return vectorMaker_.allNullMapVector(size, keyType, valueType);
+  }
+
+  VectorPtr makeConstant(const variant& value, vector_size_t size) {
+    return BaseVector::createConstant(value.inferType(), value, size, pool());
   }
 
   template <typename T>
-  VectorPtr makeConstant(const std::optional<T>& value, vector_size_t size) {
+  VectorPtr makeConstant(
+      T value,
+      vector_size_t size,
+      const TypePtr& type = CppToType<EvalType<T>>::create()) {
+    return std::make_shared<ConstantVector<EvalType<T>>>(
+        pool(), size, false, type, std::move(value));
+  }
+
+  template <typename T>
+  VectorPtr makeConstant(
+      const std::optional<T>& value,
+      vector_size_t size,
+      const TypePtr& type = CppToType<EvalType<T>>::create()) {
     return std::make_shared<ConstantVector<EvalType<T>>>(
         pool(),
         size,
         /*isNull=*/!value.has_value(),
-        CppToType<T>::create(),
+        type,
         value ? EvalType<T>(*value) : EvalType<T>(),
         SimpleVectorStats<EvalType<T>>{},
         sizeof(EvalType<T>));
@@ -627,7 +645,8 @@ class VectorTestBase {
   }
 
   VectorPtr makeNullConstant(TypeKind typeKind, vector_size_t size) {
-    return BaseVector::createConstant(variant(typeKind), size, pool());
+    return BaseVector::createNullConstant(
+        createType(typeKind, {}), size, pool());
   }
 
   BufferPtr makeIndices(
@@ -647,6 +666,9 @@ class VectorTestBase {
   BufferPtr makeNulls(
       vector_size_t size,
       std::function<bool(vector_size_t /*row*/)> isNullAt);
+
+  /// Creates a null buffer from a vector of booleans.
+  BufferPtr makeNulls(const std::vector<bool>& values);
 
   static VectorPtr
   wrapInDictionary(BufferPtr indices, vector_size_t size, VectorPtr vector);

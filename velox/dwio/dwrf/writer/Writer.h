@@ -142,8 +142,9 @@ class Writer : public WriterBase {
                                       options.encrypterFactory.get())
                                 : nullptr);
     initContext(options.config, std::move(pool), std::move(handler));
+    auto& context = getContext();
+    context.buildPhysicalSizeAggregators(*schema_);
     if (!options.flushPolicyFactory) {
-      auto& context = getContext();
       flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
           context.stripeSizeFlushThreshold,
           context.dictionarySizeFlushThreshold);
@@ -172,11 +173,9 @@ class Writer : public WriterBase {
       : Writer{
             options,
             std::move(sink),
-            parentPool.addChild(
-                fmt::format(
-                    "writer_node_{}",
-                    folly::to<std::string>(folly::Random::rand64())),
-                std::min(options.memoryBudget, parentPool.cap()))} {}
+            parentPool.addChild(fmt::format(
+                "writer_node_{}",
+                folly::to<std::string>(folly::Random::rand64())))} {}
 
   ~Writer() override = default;
 

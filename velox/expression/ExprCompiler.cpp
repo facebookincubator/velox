@@ -328,7 +328,7 @@ ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
     // If not, in case this expression is never hit at execution time (for
     // instance, if other arguments are all null in a function with default null
     // behavior), the query won't fail.
-    catch (const std::exception&) {
+    catch (const VeloxUserError&) {
     }
   }
   return expr;
@@ -361,8 +361,11 @@ ExprPtr compileExpression(
   if (alreadyCompiled) {
     if (!alreadyCompiled->isMultiplyReferenced()) {
       scope->exprSet->addToReset(alreadyCompiled);
+      alreadyCompiled->setMultiplyReferenced();
+      // A property of this expression changed, namely isMultiplyReferenced_,
+      // that affects metadata, so we re-compute it.
+      alreadyCompiled->computeMetadata();
     }
-    alreadyCompiled->setMultiplyReferenced();
     return alreadyCompiled;
   }
 
@@ -409,7 +412,7 @@ ExprPtr compileExpression(
           "Found incompatible return types for '{}' ({} vs. {}) "
           "for input types ({}).",
           call->name(),
-          metadata.returnType(),
+          simpleFunctionEntry->type(),
           resultType,
           folly::join(", ", inputTypes));
       auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
@@ -444,7 +447,8 @@ ExprPtr compileExpression(
             folly::join(", ", inputTypes));
       } else {
         VELOX_FAIL(
-            "Scalar function {} not registered with arguments: ({}).  Found function registered with the following signatures:\n{}",
+            "Scalar function {} not registered with arguments: ({}). "
+            "Found function registered with the following signatures:\n{}",
             call->name(),
             folly::join(", ", inputTypes),
             folly::join("\n", signatures));
@@ -466,17 +470,7 @@ ExprPtr compileExpression(
   } else if (
       auto constant =
           dynamic_cast<const core::ConstantTypedExpr*>(expr.get())) {
-    if (constant->hasValueVector()) {
-      result = std::make_shared<ConstantExpr>(constant->valueVector());
-    } else {
-      if (constant->value().isNull()) {
-        result = std::make_shared<ConstantExpr>(
-            BaseVector::createNullConstant(constant->type(), 1, pool));
-      } else {
-        result = std::make_shared<ConstantExpr>(
-            BaseVector::createConstant(constant->value(), 1, pool));
-      }
-    }
+    result = std::make_shared<ConstantExpr>(constant->toConstantVector(pool));
   } else if (
       auto lambda = dynamic_cast<const core::LambdaTypedExpr*>(expr.get())) {
     result = compileLambda(
