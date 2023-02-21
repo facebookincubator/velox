@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <iostream>
 #include "velox/common/base/IOUtils.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/vector/FlatVector.h"
@@ -208,7 +209,7 @@ class DecimalAggregate : public exec::Aggregate {
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
-//        clearNull(groups[i]);
+        clearNull(groups[i]);
         auto decodedIndex = decodedPartial_.index(i);
         auto serializedAccumulator =
             intermediateFlatVector->valueAt(decodedIndex);
@@ -241,6 +242,7 @@ class DecimalAggregate : public exec::Aggregate {
         if (decodedPartial_.isNullAt(i)) {
           return;
         }
+        clearNull(group);
         auto decodedIndex = decodedPartial_.index(i);
         auto serializedAccumulator =
             intermediateFlatVector->valueAt(decodedIndex);
@@ -248,6 +250,7 @@ class DecimalAggregate : public exec::Aggregate {
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
+        clearNull(group);
         auto decodedIndex = decodedPartial_.index(i);
         auto serializedAccumulator =
             intermediateFlatVector->valueAt(decodedIndex);
