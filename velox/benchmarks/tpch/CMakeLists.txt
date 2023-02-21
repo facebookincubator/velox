@@ -37,10 +37,10 @@ target_link_libraries(
   ${FOLLY_BENCHMARK}
   ${FMT})
 
-add_executable(velopx_tpch_gen_data TpchGen.cpp)
+add_executable(velox_tpch_gen_data TpchGen.cpp)
 
 target_link_libraries(
-    velopx_tpch_gen_data
+    velox_tpch_gen_data
     velox_aggregates
     velox_exec
     velox_exec_test_lib
