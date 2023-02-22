@@ -172,14 +172,19 @@ void AggregationTestBase::testAggregations(
         assertResults) {
   {
     SCOPED_TRACE("Run partial + final");
+    std::cout << "Run partial + final" << std::endl;
     PlanBuilder builder(pool());
+    std::cout << "makeSource" << std::endl;
     makeSource(builder);
+    std::cout << "builder.partialAggregation" << std::endl;
     builder.partialAggregation(groupingKeys, aggregates).finalAggregation();
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
     }
 
+    std::cout << "AssertQueryBuilder queryBuilder" << std::endl;
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    std::cout << "assertResults" << std::endl;
     assertResults(queryBuilder);
   }
 
