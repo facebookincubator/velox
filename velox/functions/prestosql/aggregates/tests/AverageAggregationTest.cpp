@@ -346,14 +346,16 @@ TEST_F(AverageAggregationTest, avgDecimal) {
 TEST_F(AverageAggregationTest, avgDecimalWithGroupingKeys) {
   std::cout << "Step 1 begin" << std::endl;
 
-  auto input = {
-      makeRowVector(
-          {makeFlatVector<StringView>({StringView{"1"}, StringView{"1"}}),
-           makeShortDecimalFlatVector({37220, 53450}, DECIMAL(5, 2))}),
-      makeRowVector(
-          {makeFlatVector<StringView>({StringView{"1"}, StringView{"1"}}),
-           makeShortDecimalFlatVector({10410, 9250}, DECIMAL(5, 2))}),
-  };
+//  auto input = {
+//      makeRowVector(
+//          {makeFlatVector<StringView>({StringView{"1"}, StringView{"1"}}),
+//           makeShortDecimalFlatVector({37220, 53450}, DECIMAL(5, 2))}),
+//      makeRowVector(
+//          {makeFlatVector<StringView>({StringView{"1"}, StringView{"1"}}),
+//           makeShortDecimalFlatVector({10410, 9250}, DECIMAL(5, 2))}),
+//  };
+
+  auto input = {makeRowVector({makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1))})};
 
   std::cout << "Step 1 end" << std::endl;
 
