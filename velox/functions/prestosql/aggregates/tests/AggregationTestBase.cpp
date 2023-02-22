@@ -90,7 +90,12 @@ void AggregationTestBase::testAggregations(
       groupingKeys,
       aggregates,
       postAggregationProjections,
-      [&](auto& builder) { return builder.assertResults(expectedResult); });
+      [&](auto& builder) {
+        std::cout << "testAggregation.builder.assertResults begin" << std::endl;
+        auto res = builder.assertResults(expectedResult);
+        std::cout << "testAggregation.builder.assertResults end" << std::endl;
+        return res;
+      });
 }
 
 void AggregationTestBase::testAggregations(
