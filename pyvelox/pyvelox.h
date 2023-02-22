@@ -30,6 +30,7 @@
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
 #include "folly/json.h"
+#include "velox/vector/VariantToVector.h"
 
 namespace facebook::velox::py {
 
@@ -105,6 +106,33 @@ inline velox::variant pyToVariant(const py::handle& obj) {
     return pyToVariant<velox::TypeKind::DOUBLE>(obj);
   } else if (py::isinstance<py::str>(obj)) {
     return pyToVariant<velox::TypeKind::VARCHAR>(obj);
+  } else if (py::isinstance<py::list>(obj)) {
+    py::list obj_as_list = py::cast<py::list>(obj);
+    std::vector<velox::variant> result;
+    for (auto& item : obj_as_list) {
+      result.push_back(pyToVariant(item));
+      if (result.front().kind() != result.back().kind()) {
+        throw py::type_error("Array must consist of elements of only one kind");
+      }
+    }
+    return velox::variant::array(std::move(result));
+  } else if (py::isinstance<py::dict>(obj)) {
+    py::dict obj_as_dict = py::cast<py::dict>(obj);
+    std::map<velox::variant, velox::variant> map;
+    for (auto item : obj_as_dict) {
+      velox::variant key = pyToVariant(item.first);
+      velox::variant value = pyToVariant(item.second);
+      map.emplace(std::make_pair(std::move(key), std::move(value)));
+    }
+    return velox::variant::map(std::move(map));
+  } else if (py::isinstance<py::tuple>(obj)) {
+    py::tuple obj_as_tuple = py::cast<py::tuple>(obj);
+    std::vector<velox::variant> elements;
+    elements.reserve(py::len(obj_as_tuple));
+    for (auto item : obj_as_tuple) {
+      elements.emplace_back(pyToVariant(item));
+    }
+    return velox::variant::row(std::move(elements));
   } else {
     throw py::type_error("Invalid type of object");
   }
@@ -226,9 +254,7 @@ static inline VectorPtr pyListToVector(
     throw py::value_error(
         "Can't create a Velox vector consisting of only None");
   }
-
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      variantsToFlatVector, first_kind, variants, pool);
+  return velox::core::variantsToVector(variants, pool);
 }
 
 template <typename NativeType>
@@ -516,6 +542,32 @@ static void addVectorBindings(
           })
       .def("encoding", &BaseVector::encoding)
       .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); });
+
+  py::class_<ArrayVector, ArrayVectorPtr, BaseVector>(
+      m, "ArrayVector", py::module_local(asModuleLocalDefinitions))
+      .def("elements", [](ArrayVectorPtr vec) -> VectorPtr {
+        return vec->elements();
+      });
+
+  py::class_<MapVector, MapVectorPtr, BaseVector>(
+      m, "MapVector", py::module_local(asModuleLocalDefinitions))
+      .def(
+          "mapKeys",
+          [](MapVectorPtr vec) -> VectorPtr { return vec->mapKeys(); })
+      .def("mapValues", [](MapVectorPtr vec) -> VectorPtr {
+        return vec->mapValues();
+      });
+
+  py::class_<RowVector, RowVectorPtr, BaseVector>(
+      m, "RowVector", py::module_local(asModuleLocalDefinitions))
+      .def(
+          "children",
+          [](RowVectorPtr vec) -> std::vector<VectorPtr> {
+            return vec->children();
+          })
+      .def("childAt", [](RowVectorPtr vec, column_index_t idx) -> VectorPtr {
+        return vec->childAt(idx);
+      });
 
   for (int8_t t = 0; t <= static_cast<int8_t>(TypeKind::INTERVAL_DAY_TIME);
        t++) {
