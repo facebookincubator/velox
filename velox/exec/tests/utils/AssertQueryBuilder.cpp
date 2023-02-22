@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <iostream>
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 namespace facebook::velox::exec::test {
@@ -158,9 +159,12 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
 
 std::shared_ptr<Task> AssertQueryBuilder::assertResults(
     const std::vector<RowVectorPtr>& expected) {
+  std::cout << "assertResults begin" << std::endl;
   auto [cursor, results] = readCursor();
+  std::cout << "assertResults finished reading cursor" << std::endl;
 
   assertEqualResults(expected, results);
+  std::cout << "assertEqualResults finished" << std::endl;
   return cursor->task();
 }
 

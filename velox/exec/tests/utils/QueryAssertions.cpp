@@ -973,13 +973,17 @@ bool assertEqualResults(
     const std::vector<RowVectorPtr>& actual) {
   MaterializedRowMultiset expectedRows;
   for (auto vector : expected) {
+    std::cout << "assertEqualResults Expected " << vector->toString(true) << std::endl;
     auto rows = materialize(vector);
+    std::cout << "assertEqualResults materialize " << std::endl;
     std::copy(
         rows.begin(),
         rows.end(),
         std::inserter(expectedRows, expectedRows.end()));
+    std::cout << "assertEqualResults finished copy " << std::endl;
   }
 
+  std::cout << "assertEqualResults comparison" << std::endl;
   return assertEqualResults(expectedRows, actual);
 }
 
@@ -1020,9 +1024,12 @@ bool assertEqualResults(
     const MaterializedRowMultiset& expectedRows,
     const MaterializedRowMultiset& actualRows,
     const std::string& message) {
+  std::cout << "assertEqualResults start comparison 2" << std::endl;
   if (expectedRows.empty() != actualRows.empty()) {
+    std::cout << "assertEqualResults start comparison 2 compare" << std::endl;
     EXPECT_TRUE(false) << generateUserFriendlyDiff(expectedRows, actualRows)
                        << message;
+    std::cout << "assertEqualResults start comparison 2 friendly message" << std::endl;
     return false;
   }
 
@@ -1031,6 +1038,7 @@ bool assertEqualResults(
   }
 
   if (!equalTypeKinds(*expectedRows.begin(), *actualRows.begin())) {
+    std::cout << "assertEqualResults start comparison 2 type does not match" << std::endl;
     EXPECT_TRUE(false) << "Types of expected and actual results do not match";
     return false;
   }
@@ -1038,6 +1046,7 @@ bool assertEqualResults(
   auto [numFloatingPointColumns, columns] =
       findFloatingPointColumns(*expectedRows.begin());
   if (numFloatingPointColumns) {
+    std::cout << "assertEqualResults start comparison 2 numFloatingPointColumns" << std::endl;
     MaterializedRowEpsilonComparator comparator{
         numFloatingPointColumns, columns};
     if (auto result = comparator.areEqual(expectedRows, actualRows)) {
@@ -1066,6 +1075,7 @@ bool assertEqualResults(
 bool assertEqualResults(
     const MaterializedRowMultiset& expectedRows,
     const std::vector<RowVectorPtr>& actual) {
+  std::cout << "assertEqualResults start comparison" << std::endl;
   MaterializedRowMultiset actualRows;
   for (auto vector : actual) {
     auto rows = materialize(vector);
