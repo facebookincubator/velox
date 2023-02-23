@@ -414,7 +414,8 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       if (type_->type->isShortDecimal() && parquetType == thrift::Type::INT32) {
         auto veloxTypeLength = type_->type->cppSizeInBytes();
         auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
-        dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
+        dictionary_.values =
+            AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
       } else {
         dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
       }
