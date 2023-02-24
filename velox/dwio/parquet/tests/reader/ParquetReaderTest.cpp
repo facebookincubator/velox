@@ -151,7 +151,7 @@ TEST_F(ParquetReaderTest, projectNoColumns) {
 
 TEST_F(ParquetReaderTest, parseIntDecimal) {
   // decimal_dict.parquet two columns (a: DECIMAL(7,2), b: DECIMAL(14,2)) and
-  // 3 rows.
+  // 6 rows.
   // Data is in dictionary encoding:
   //   a: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
   //   b: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
