@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include "iostream"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregationHook.h"
 #include "velox/vector/DecodedVector.h"
@@ -127,23 +126,6 @@ class SimpleNumericAggregate : public exec::Aggregate {
         updateNonNullValue<tableHasNulls, TData>(
             groups[i], TData(decoded.valueAt<TValue>(i)), updateSingleValue);
       });
-    } else if (decoded.isIdentityMapping() && !std::is_same_v<TValue, bool>) {
-      if constexpr (std::is_same_v<UnscaledLongDecimal, TData>) {
-        auto dataAsChar = decoded.data<char>();
-        rows.template applyToSelected([&](vector_size_t i) {
-          auto valueStartPos = dataAsChar + i * sizeof(UnscaledLongDecimal);
-          updateNonNullValue<tableHasNulls, TData>(
-              groups[i],
-              TData(UnscaledLongDecimal::deserialize(valueStartPos)),
-              updateSingleValue);
-        });
-      } else {
-        auto data = decoded.data<TValue>();
-        rows.applyToSelected([&](vector_size_t i) {
-          updateNonNullValue<tableHasNulls, TData>(
-              groups[i], TData(data[i]), updateSingleValue);
-        });
-      }
     } else {
       rows.applyToSelected([&](vector_size_t i) {
         updateNonNullValue<tableHasNulls, TData>(
@@ -189,23 +171,6 @@ class SimpleNumericAggregate : public exec::Aggregate {
         updateNonNullValue<true, TData>(
             group, TData(decoded.valueAt<TValue>(i)), updateSingleValue);
       });
-    } else if (decoded.isIdentityMapping() && !std::is_same_v<TValue, bool>) {
-      if constexpr (std::is_same_v<UnscaledLongDecimal, TData>) {
-        auto dataAsChar = decoded.data<char>();
-        rows.template applyToSelected([&](vector_size_t i) {
-          auto valueStartPos = dataAsChar + i * sizeof(UnscaledLongDecimal);
-          updateNonNullValue<true, TData>(
-              group,
-              TData(UnscaledLongDecimal::deserialize(valueStartPos)),
-              updateSingleValue);
-        });
-      } else {
-        auto data = decoded.data<TValue>();
-        rows.applyToSelected([&](vector_size_t i) {
-          updateNonNullValue<true, TData>(
-              group, TData(data[i]), updateSingleValue);
-        });
-      }
     } else {
       rows.applyToSelected([&](vector_size_t i) {
         updateNonNullValue<true, TData>(
@@ -259,18 +224,9 @@ class SimpleNumericAggregate : public exec::Aggregate {
     if constexpr (tableHasNulls) {
       exec::Aggregate::clearNull(group);
     }
-
-    if constexpr (std::is_same_v<UnscaledLongDecimal, TDataType>) {
-      // UnscaledLongDecimals are 128-bit long and need to copied in parts
-      // to avoid segmentation fault on some systems.
-      char* valueStart = exec::Aggregate::valueStartPos(group);
-      auto longDecimal = UnscaledLongDecimal::deserialize(valueStart);
-      updateValue(longDecimal, value);
-      UnscaledLongDecimal::serialize(longDecimal, valueStart);
-    } else {
-      updateValue(*exec::Aggregate::value<TDataType>(group), value);
-    }
+    auto deserializedValue = exec::Aggregate::deserialize<TDataType>(group);
+    updateValue(deserializedValue, value);
+    exec::Aggregate::serialize<TDataType>(deserializedValue, group);
   }
 };
-
 } // namespace facebook::velox::aggregate

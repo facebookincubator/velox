@@ -80,35 +80,18 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    if constexpr (std::is_same_v<UnscaledLongDecimal, T>) {
-      BaseAggregate::template doExtractValues<UnscaledLongDecimal>(
-          groups, numGroups, result, [&](char* group) {
-            return UnscaledLongDecimal::deserialize(
-                exec::Aggregate::valueStartPos(group));
-          });
-    } else {
-      BaseAggregate::template doExtractValues<T>(
-          groups, numGroups, result, [&](char* group) {
-            return *BaseAggregate::Aggregate::template value<T>(group);
-          });
-    }
+    BaseAggregate::template doExtractValues<T>(
+        groups, numGroups, result, [&](char* group) {
+          return BaseAggregate::Aggregate::template deserialize<T>(group);
+        });
   }
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    if constexpr (std::is_same_v<UnscaledLongDecimal, T>) {
-      BaseAggregate::template doExtractValues<T>(
-          groups, numGroups, result, [&](char* group) {
-            return UnscaledLongDecimal::deserialize(
-                exec::Aggregate::valueStartPos(group));
-          });
-
-    } else {
-      BaseAggregate::template doExtractValues<T>(
-          groups, numGroups, result, [&](char* group) {
-            return *BaseAggregate::Aggregate::template value<T>(group);
-          });
-    }
+    BaseAggregate::template doExtractValues<T>(
+        groups, numGroups, result, [&](char* group) {
+          return BaseAggregate::Aggregate::template deserialize<T>(group);
+        });
   }
 };
 
@@ -146,14 +129,7 @@ class MaxAggregate : public MinMaxAggregate<T> {
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
-      if constexpr (std::is_same_v<UnscaledLongDecimal, T>) {
-        // UnscaledLongDecimals are 128-bit long and need to copied in parts
-        // to avoid segmentation fault on some systems.
-        UnscaledLongDecimal::serialize(
-            kInitialValue_, exec::Aggregate::valueStartPos(groups[i]));
-      } else {
-        *exec::Aggregate::value<T>(groups[i]) = kInitialValue_;
-      }
+      exec::Aggregate::template serialize<T>(kInitialValue_, groups[i]);
     }
   }
 
@@ -233,14 +209,7 @@ class MinAggregate : public MinMaxAggregate<T> {
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
-      if constexpr (std::is_same_v<UnscaledLongDecimal, T>) {
-        // UnscaledLongDecimals are 128-bit long and need to copied in parts
-        // to avoid segmentation fault on some systems.
-        UnscaledLongDecimal::serialize(
-            kInitialValue_, exec::Aggregate::valueStartPos(groups[i]));
-      } else {
-        *exec::Aggregate::value<T>(groups[i]) = kInitialValue_;
-      }
+      exec::Aggregate::template serialize<T>(kInitialValue_, groups[i]);
     }
   }
 
