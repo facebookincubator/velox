@@ -264,5 +264,46 @@ TEST_F(VarianceAggregationTest, varianceWithGroupByAndFilter) {
   }
 }
 
+TEST_F(VarianceAggregationTest, variancePrecision) {
+  auto vectors = {
+      makeRowVector(
+          {"c0", "c1"},
+          {
+              makeNullableFlatVector<int64_t>({-7, 8, -6, std::nullopt, -5}),
+              makeNullableFlatVector<int64_t>(
+                  {-5, -8, -3, 2, -3833098290310622212}),
+          }),
+      makeRowVector(
+          {"c0", "c1"},
+          {
+              makeNullableFlatVector<int64_t>({-7, 8, -6, std::nullopt, -5}),
+              makeNullableFlatVector<int64_t>(
+                  {-5, -8, -3, 2, -3833098290310622212}),
+          }),
+      makeRowVector(
+          {"c0", "c1"},
+          {
+              makeNullableFlatVector<int64_t>({-7, 8, -6, std::nullopt, -5}),
+              makeNullableFlatVector<int64_t>(
+                  {-5, -8, -3, 2, -3833098290310622212}),
+          }),
+      makeRowVector(
+          {"c0", "c1"},
+          {
+              makeNullableFlatVector<int64_t>({-7, 8, -6, std::nullopt, -5}),
+              makeNullableFlatVector<int64_t>(
+                  {-5, -8, -3, 2, -3833098290310622212}),
+          }),
+  };
+
+  createDuckDbTable(vectors);
+
+  testAggregations(
+      vectors,
+      {"c0"},
+      {"stddev(c1)"},
+      "SELECT c0, stddev(c1) FROM tmp GROUP BY 1");
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test
