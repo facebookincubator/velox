@@ -11,7 +11,7 @@ using facebook::velox::parquet::Writer;
 
 namespace {
 
-constexpr double kScaleFactor = 1;
+constexpr double kScaleFactor = 10;
 constexpr size_t kWriteBatchSize = 10'000;
 constexpr size_t kRowsInRowgroup = 10'000;
 
@@ -90,15 +90,15 @@ void generateTable(
 } // namespace
 
 int main() {
-    const std::filesystem::path dataDirectory = "/tmp/tpch-sf1";
-    std::filesystem::create_directories(dataDirectory);
+  const std::filesystem::path dataDirectory = "/tmp/tpch-sf10-new";
+  std::filesystem::create_directories(dataDirectory);
 
-    generateTable(tpch::Table::TBL_LINEITEM, dataDirectory);
-    generateTable(tpch::Table::TBL_ORDERS, dataDirectory);
-    generateTable(tpch::Table::TBL_PART, dataDirectory);
-    generateTable(tpch::Table::TBL_SUPPLIER, dataDirectory);
-    generateTable(tpch::Table::TBL_PARTSUPP, dataDirectory);
-    generateTable(tpch::Table::TBL_CUSTOMER, dataDirectory);
-    generateTable(tpch::Table::TBL_NATION, dataDirectory);
-    generateTable(tpch::Table::TBL_REGION, dataDirectory);
+  generateTable(tpch::Table::TBL_LINEITEM, dataDirectory);
+  generateTable(tpch::Table::TBL_ORDERS, dataDirectory);
+  generateTable(tpch::Table::TBL_PART, dataDirectory);
+  generateTable(tpch::Table::TBL_SUPPLIER, dataDirectory);
+  generateTable(tpch::Table::TBL_PARTSUPP, dataDirectory);
+  generateTable(tpch::Table::TBL_CUSTOMER, dataDirectory);
+  generateTable(tpch::Table::TBL_NATION, dataDirectory);
+  generateTable(tpch::Table::TBL_REGION, dataDirectory);
 }
