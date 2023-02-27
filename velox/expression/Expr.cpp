@@ -193,7 +193,11 @@ void Expr::computeMetadata() {
   }
 
   for (auto& input : inputs_) {
-    input->computeMetadata();
+    // Skip computing for inputs already marked as multiply referenced as they
+    // would have it computed already.
+    if (!input->isMultiplyReferenced_) {
+      input->computeMetadata();
+    }
     deterministic_ &= input->deterministic_;
     if (!input->distinctFields_.empty()) {
       propagatesNulls_ &= input->propagatesNulls_;
@@ -1493,7 +1497,7 @@ bool Expr::applyFunctionWithPeeling(
   applyFunction(*newRows, context, peeledResult);
   VectorPtr wrappedResult =
       context.applyWrapToPeeledResult(this->type(), peeledResult, applyRows);
-  context.moveOrCopyResult(wrappedResult, rows, result);
+  context.moveOrCopyResult(wrappedResult, applyRows, result);
 
   // Recycle peeledResult if it's not owned by the result vector. Examples of
   // when this can happen is when the result is a primitive constant vector, or

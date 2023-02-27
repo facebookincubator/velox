@@ -411,7 +411,14 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           ? sizeof(float)
           : sizeof(double);
       auto numBytes = dictionary_.numValues * typeSize;
-      dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
+      if (type_->type->isShortDecimal() && parquetType == thrift::Type::INT32) {
+        auto veloxTypeLength = type_->type->cppSizeInBytes();
+        auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
+        dictionary_.values =
+            AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
+      } else {
+        dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
+      }
       if (pageData_) {
         memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
       } else {
@@ -421,6 +428,15 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             dictionary_.values->asMutable<char>(),
             bufferStart_,
             bufferEnd_);
+      }
+      if (type_->type->isShortDecimal() && parquetType == thrift::Type::INT32) {
+        auto values = dictionary_.values->asMutable<int64_t>();
+        auto parquetValues = dictionary_.values->asMutable<int32_t>();
+        for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
+          // Expand the Parquet type length values to Velox type length.
+          // We start from the end to allow in-place expansion.
+          values[i] = parquetValues[i];
+        }
       }
       break;
     }
@@ -670,6 +686,10 @@ void PageReader::makeDecoder() {
       break;
     case Encoding::PLAIN:
       switch (parquetType) {
+        case thrift::Type::BOOLEAN:
+          booleanDecoder_ = std::make_unique<BooleanDecoder>(
+              pageData_, pageData_ + encodedDataSize_);
+          break;
         case thrift::Type::BYTE_ARRAY:
           stringDecoder_ = std::make_unique<StringDecoder>(
               pageData_, pageData_ + encodedDataSize_);
@@ -722,6 +742,8 @@ void PageReader::skip(int64_t numRows) {
     directDecoder_->skip(toSkip);
   } else if (stringDecoder_) {
     stringDecoder_->skip(toSkip);
+  } else if (booleanDecoder_) {
+    booleanDecoder_->skip(toSkip);
   } else {
     VELOX_FAIL("No decoder to skip");
   }
@@ -758,8 +780,9 @@ void PageReader::skipNullsOnly(int64_t numRows) {
     seekToPage(firstUnvisited_ + numRows);
     firstUnvisited_ += numRows;
     toSkip = firstUnvisited_ - rowOfPage_;
+  } else {
+    firstUnvisited_ += numRows;
   }
-  firstUnvisited_ += numRows;
 
   // Skip nulls
   skipNulls(toSkip);
@@ -919,11 +942,11 @@ bool PageReader::rowsForPage(
   return true;
 }
 
-const VectorPtr& PageReader::dictionaryValues() {
+const VectorPtr& PageReader::dictionaryValues(const TypePtr& type) {
   if (!dictionaryValues_) {
     dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
         &pool_,
-        VARCHAR(),
+        type,
         nullptr,
         dictionary_.numValues,
         dictionary_.values,

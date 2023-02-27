@@ -63,12 +63,30 @@ uint64_t MemoryPool::getChildCount() const {
 }
 
 void MemoryPool::visitChildren(std::function<void(MemoryPool*)> visitor) const {
-  folly::SharedMutex::ReadHolder guard{childrenMutex_};
-  for (const auto& entry : children_) {
-    auto childPtr = entry.second.lock();
-    if (childPtr != nullptr) {
-      visitor(childPtr.get());
+  std::vector<std::shared_ptr<MemoryPool>> children;
+  {
+    folly::SharedMutex::ReadHolder guard{childrenMutex_};
+    children.reserve(children_.size());
+    for (const auto& entry : children_) {
+      auto child = entry.second.lock();
+      if (child != nullptr) {
+        children.push_back(std::move(child));
+      }
     }
+  }
+
+  // NOTE: we should call 'visitor' on child pool object out of
+  // 'childrenMutex_' to avoid potential recursive locking issues. Firstly, the
+  // user provided 'visitor' might try to acquire this memory pool lock again.
+  // Secondly, the shared child pool reference created from the weak pointer
+  // might be the last reference if some other threads drop all the external
+  // references during this time window. Then drop of this last shared reference
+  // after 'visitor' call will trigger child memory pool destruction in that
+  // case. The child memory pool destructor will remove its weak pointer
+  // reference from the parent pool which needs to acquire this memory pool lock
+  // again.
+  for (const auto& child : children) {
+    visitor(child.get());
   }
 }
 
@@ -135,7 +153,8 @@ MemoryPoolImpl::~MemoryPoolImpl() {
     VELOX_CHECK_EQ(
         0,
         remainingBytes,
-        "Memory pool should be destroyed only after all allocated memory has been freed. Remaining bytes allocated: {}, cumulative bytes allocated: {}, number of allocations: {}",
+        "Memory pool {} should be destroyed only after all allocated memory has been freed. Remaining bytes allocated: {}, cumulative bytes allocated: {}, number of allocations: {}",
+        name(),
         remainingBytes,
         tracker->cumulativeBytes(),
         tracker->numAllocs());
@@ -183,12 +202,6 @@ void* MemoryPoolImpl::reallocate(
   auto alignedSize = sizeAlign(size);
   auto alignedNewSize = sizeAlign(newSize);
   const int64_t difference = alignedNewSize - alignedSize;
-  if (FOLLY_UNLIKELY(difference <= 0)) {
-    // Track and pretend the shrink took place for accounting purposes.
-    release(-difference);
-    return p;
-  }
-
   reserve(difference);
   void* newP =
       allocator_.reallocateBytes(p, alignedSize, alignedNewSize, alignment_);
@@ -405,7 +418,8 @@ MemoryManager::MemoryManager(const Options& options)
 MemoryManager::~MemoryManager() {
   auto currentBytes = getTotalBytes();
   if (currentBytes > 0) {
-    LOG(WARNING) << "Leaked total memory of " << currentBytes << " bytes.";
+    VELOX_MEM_LOG(WARNING) << "Leaked total memory of " << currentBytes
+                           << " bytes.";
   }
 }
 

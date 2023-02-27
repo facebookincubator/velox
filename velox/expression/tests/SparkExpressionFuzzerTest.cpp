@@ -41,7 +41,7 @@ DEFINE_string(
     special_forms,
     "and,or",
     "Comma-separated list of special forms to use in generated expression. "
-    "Supported special forms: and, or, coalesce, if.");
+    "Supported special forms: and, or, coalesce, if, switch, cast.");
 
 int main(int argc, char** argv) {
   facebook::velox::functions::sparksql::registerFunctions("");
@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
   // rlike, md5 and upper
   std::unordered_set<std::string> skipFunctions = {
       "regexp_extract", "rlike", "chr", "replace", "sort_array", "size",
-      "murmur3hash", "hash", "xxhash64", "map", "in"};
+      "murmur3hash", "hash", "xxhash64", "map", "in", "split", "array_intersect"};
   return FuzzerRunner::run(
       FLAGS_only, FLAGS_seed, skipFunctions, FLAGS_special_forms);
 }

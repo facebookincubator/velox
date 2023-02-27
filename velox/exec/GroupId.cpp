@@ -105,7 +105,8 @@ RowVectorPtr GroupId::getOutput() {
 
   // Add groupId column.
   outputColumns[outputType_->size() - 1] =
-      BaseVector::createConstant((int64_t)groupingSetIndex_, numInput, pool());
+      std::make_shared<ConstantVector<int64_t>>(
+          pool(), numInput, false, BIGINT(), groupingSetIndex_);
 
   ++groupingSetIndex_;
   if (groupingSetIndex_ == groupingKeyMappings_.size()) {

@@ -102,6 +102,10 @@ class MallocAllocator : public MemoryAllocator {
  public:
   MallocAllocator();
 
+  ~MallocAllocator() {
+    VELOX_CHECK((numAllocated_ == 0) && (numMapped_ == 0), "{}", toString());
+  }
+
   Kind kind() const override {
     return kind_;
   }
@@ -159,6 +163,8 @@ class MallocAllocator : public MemoryAllocator {
 
   bool checkConsistency() const override;
 
+  std::string toString() const override;
+
  private:
   bool allocateContiguousImpl(
       MachinePageCount numPages,
@@ -201,10 +207,10 @@ bool MallocAllocator::allocateNonContiguous(
     try {
       reservationCB(bytesToAllocate, true);
     } catch (std::exception& e) {
-      LOG(WARNING) << "Failed to reserve " << bytesToAllocate
-                   << " bytes for non-contiguous allocation of " << numPages
-                   << " pages, then release " << freedBytes
-                   << " bytes from the old allocation";
+      VELOX_MEM_LOG(WARNING) << "Failed to reserve " << bytesToAllocate
+                             << " bytes for non-contiguous allocation of "
+                             << numPages << " pages, then release "
+                             << freedBytes << " bytes from the old allocation";
       // If the new memory reservation fails, we need to release the memory
       // reservation of the freed memory of previously allocation.
       reservationCB(freedBytes, false);
@@ -244,7 +250,7 @@ bool MallocAllocator::allocateNonContiguous(
     }
     out.clear();
     if (reservationCB != nullptr) {
-      LOG(WARNING)
+      VELOX_MEM_LOG(WARNING)
           << "Failed to allocate memory for non-contiguous allocation of "
           << numPages << " pages, then release " << bytesToAllocate + freedBytes
           << " bytes of memory reservation including the old gallocation";
@@ -276,8 +282,8 @@ bool MallocAllocator::allocateContiguousImpl(
   auto numContiguousCollateralPages = allocation.numPages();
   if (numContiguousCollateralPages > 0) {
     if (::munmap(allocation.data(), allocation.size()) < 0) {
-      LOG(ERROR) << "munmap got " << folly::errnoStr(errno) << "for "
-                 << allocation.data() << ", " << allocation.size();
+      VELOX_MEM_LOG(ERROR) << "munmap got " << folly::errnoStr(errno) << "for "
+                           << allocation.data() << ", " << allocation.size();
     }
     numMapped_.fetch_sub(numContiguousCollateralPages);
     numAllocated_.fetch_sub(numContiguousCollateralPages);
@@ -291,13 +297,13 @@ bool MallocAllocator::allocateContiguousImpl(
     } catch (std::exception& e) {
       // If the new memory reservation fails, we need to release the memory
       // reservation of the freed contiguous and non-contiguous memory.
-      LOG(WARNING) << "Failed to reserve "
-                   << AllocationTraits::pageBytes(numNeededPages)
-                   << " bytes for contiguous allocation of " << numPages
-                   << " pages, then release "
-                   << (numCollateralPages + numContiguousCollateralPages) *
+      VELOX_MEM_LOG(WARNING)
+          << "Failed to reserve " << AllocationTraits::pageBytes(numNeededPages)
+          << " bytes for contiguous allocation of " << numPages
+          << " pages, then release "
+          << (numCollateralPages + numContiguousCollateralPages) *
               AllocationTraits::kPageSize
-                   << " bytes from the old allocations";
+          << " bytes from the old allocations";
       reservationCB(
           (numCollateralPages + numContiguousCollateralPages) *
               AllocationTraits::kPageSize,
@@ -353,8 +359,9 @@ void MallocAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
   }
 
   if (::munmap(allocation.data(), allocation.size()) < 0) {
-    LOG(ERROR) << "munmap returned " << folly::errnoStr(errno) << " for "
-               << allocation.data() << ", " << allocation.size();
+    VELOX_MEM_LOG(ERROR) << "munmap returned " << folly::errnoStr(errno)
+                         << " for " << allocation.data() << ", "
+                         << allocation.size();
   }
   numMapped_.fetch_sub(allocation.numPages());
   numAllocated_.fetch_sub(allocation.numPages());
@@ -366,8 +373,8 @@ void* MallocAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
   void* result = (alignment > kMinAlignment) ? ::aligned_alloc(alignment, bytes)
                                              : ::malloc(bytes);
   if (FOLLY_UNLIKELY(result == nullptr)) {
-    LOG(ERROR) << "Failed to allocateBytes " << bytes << " bytes with "
-               << alignment << " alignment";
+    VELOX_MEM_LOG(ERROR) << "Failed to allocateBytes " << bytes
+                         << " bytes with " << alignment << " alignment";
   }
   return result;
 }
@@ -375,7 +382,8 @@ void* MallocAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
 void* MallocAllocator::allocateZeroFilled(uint64_t bytes) {
   void* result = std::calloc(1, bytes);
   if (FOLLY_UNLIKELY(result == nullptr)) {
-    LOG(ERROR) << "Failed to allocateZeroFilled " << bytes << " bytes";
+    VELOX_MEM_LOG(ERROR) << "Failed to allocateZeroFilled " << bytes
+                         << " bytes";
   }
   return result;
 }
@@ -399,8 +407,8 @@ void* MallocAllocator::reallocateBytes(
     }
   }
   if (FOLLY_UNLIKELY(newPtr == nullptr)) {
-    LOG(ERROR) << "Failed to reallocateBytes " << newSize << " bytes "
-               << " with " << size << " old bytes";
+    VELOX_MEM_LOG(ERROR) << "Failed to reallocateBytes " << newSize << " bytes "
+                         << " with " << size << " old bytes";
   }
   return newPtr;
 }
@@ -411,6 +419,11 @@ void MallocAllocator::freeBytes(void* p, uint64_t bytes) noexcept {
 
 bool MallocAllocator::checkConsistency() const {
   return true;
+}
+
+std::string MallocAllocator::toString() const {
+  return fmt::format(
+      "[allocated pages {}, mapped pages {}]", numAllocated_, numMapped_);
 }
 
 // static
@@ -471,7 +484,8 @@ void* MemoryAllocator::allocateZeroFilled(uint64_t bytes) {
   if (result != nullptr) {
     ::memset(result, 0, bytes);
   } else {
-    LOG(ERROR) << "Failed to allocateZeroFilled " << bytes << " bytes";
+    VELOX_MEM_LOG(ERROR) << "Failed to allocateZeroFilled " << bytes
+                         << " bytes";
   }
   return result;
 }
@@ -482,16 +496,12 @@ void* MemoryAllocator::reallocateBytes(
     int64_t newSize,
     uint16_t alignment) {
   auto* newPtr = allocateBytes(newSize, alignment);
-  if (p == nullptr || newPtr == nullptr) {
+  if (p == nullptr) {
     return newPtr;
   }
   ::memcpy(newPtr, p, std::min(size, newSize));
   freeBytes(p, size);
   return newPtr;
-}
-
-std::string MemoryAllocator::toString() const {
-  return fmt::format("MemoryAllocator: Allocated pages {}", numAllocated());
 }
 
 Stats Stats::operator-(const Stats& other) const {

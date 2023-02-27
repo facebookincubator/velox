@@ -91,6 +91,16 @@ TEST_F(E2EFilterTest, writerMagic) {
   EXPECT_EQ("PAR1", std::string(data + size - 4, 4));
 }
 
+TEST_F(E2EFilterTest, boolean) {
+  testWithTypes(
+      "boolean_val:boolean,"
+      "boolean_null:boolean",
+      [&]() { makeAllNulls("boolean_null"); },
+      true,
+      {"boolean_val"},
+      20);
+}
+
 TEST_F(E2EFilterTest, integerDirect) {
   writerProperties_ = ::parquet::WriterProperties::Builder()
                           .disable_dictionary()
@@ -495,6 +505,39 @@ TEST_F(E2EFilterTest, map) {
       false,
       {"long_val", "map_val"},
       10);
+}
+
+TEST_F(E2EFilterTest, varbinaryDirect) {
+  writerProperties_ = ::parquet::WriterProperties::Builder()
+                          .disable_dictionary()
+                          ->data_pagesize(4 * 1024)
+                          ->build();
+
+  testWithTypes(
+      "varbinary_val:varbinary,"
+      "varbinary_val_2:varbinary",
+      [&]() {
+        makeStringUnique("varbinary_val");
+        makeStringUnique("varbinary_val_2");
+      },
+      true,
+      {"varbinary_val", "varbinary_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, varbinaryDictionary) {
+  testWithTypes(
+      "varbinary_val:varbinary,"
+      "varbinary_val_2:varbinary,"
+      "varbinary_const:varbinary",
+      [&]() {
+        makeStringDistribution("varbinary_val", 100, true, false);
+        makeStringDistribution("varbinary_val_2", 170, false, true);
+        makeStringDistribution("varbinary_const", 1, true, false);
+      },
+      true,
+      {"varbinary_val", "varbinary_val_2"},
+      20);
 }
 
 TEST_F(E2EFilterTest, largeMetadata) {
