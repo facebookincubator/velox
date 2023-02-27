@@ -15,6 +15,7 @@
  */
 
 #include "pyvelox.h" // @manual
+#include "fuzzer.h" // @manual
 
 namespace facebook::velox::py {
 using namespace velox;
@@ -133,7 +134,7 @@ PYBIND11_MODULE(pyvelox, m) {
   )pbdoc";
 
   addVeloxBindings(m);
-
+  addSignatureBindings(m);
   m.attr("__version__") = "dev";
 }
 #endif
