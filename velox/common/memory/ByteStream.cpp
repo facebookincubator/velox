@@ -117,20 +117,23 @@ void freeFunc(void* /*data*/, void* userData) {
 
 std::unique_ptr<folly::IOBuf> IOBufOutputStream::getIOBuf(
     const std::function<void()>& releaseFn) {
-  // Make an IOBuf for each range. The IOBufs keep shared ownership of
+  // Makes an IOBuf for each range. The head IOBuf keeps a shared reference on
   // 'arena_'.
   std::unique_ptr<folly::IOBuf> iobuf;
   auto& ranges = out_->ranges();
   for (auto& range : ranges) {
-    auto numValues =
+    std::unique_ptr<folly::IOBuf> newBuf;
+    const auto numValues =
         &range == &ranges.back() ? out_->lastRangeEnd() : range.size;
-    auto userData = newFreeData(arena_, releaseFn);
-    auto newBuf = folly::IOBuf::takeOwnership(
-        reinterpret_cast<char*>(range.buffer), numValues, freeFunc, userData);
-    if (iobuf) {
-      iobuf->prev()->appendChain(std::move(newBuf));
-    } else {
+    if (iobuf == nullptr) {
+      auto* userData = newFreeData(arena_, releaseFn);
+      newBuf = folly::IOBuf::takeOwnership(
+          reinterpret_cast<char*>(range.buffer), numValues, freeFunc, userData);
       iobuf = std::move(newBuf);
+    } else {
+      newBuf = folly::IOBuf::takeOwnership(
+          reinterpret_cast<char*>(range.buffer), numValues);
+      iobuf->prev()->appendChain(std::move(newBuf));
     }
   }
   return iobuf;
