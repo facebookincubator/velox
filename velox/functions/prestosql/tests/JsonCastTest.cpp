@@ -238,6 +238,21 @@ class JsonCastTest : public functions::test::CastBaseTest {
 
     return vector;
   }
+
+  void testUnsupportedCast(
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      const VectorPtr& input) {
+    EXPECT_THROW(
+        evaluateCast<JsonNativeType>(fromType, toType, makeRowVector({input})),
+        VeloxException);
+
+    auto tryCastResult = evaluateCast<JsonNativeType>(
+        fromType, toType, makeRowVector({input}), true);
+    test::assertEqualVectors(
+        BaseVector::createNullConstant(toType, input->size(), pool()),
+        tryCastResult);
+  }
 };
 
 TEST_F(JsonCastTest, fromInteger) {
@@ -659,19 +674,12 @@ TEST_F(JsonCastTest, fromNested) {
 TEST_F(JsonCastTest, unsupportedTypes) {
   // Map keys cannot be timestamp.
   auto timestampKeyMap = makeMapVector<Timestamp, int64_t>({{}});
-  EXPECT_THROW(
-      evaluateCast<JsonNativeType>(
-          MAP(TIMESTAMP(), BIGINT()), JSON(), makeRowVector({timestampKeyMap})),
-      VeloxException);
+  testUnsupportedCast(MAP(TIMESTAMP(), BIGINT()), JSON(), timestampKeyMap);
 
   // All children of row must be of supported types.
   auto invalidTypeRow = makeRowVector({timestampKeyMap});
-  EXPECT_THROW(
-      evaluateCast<JsonNativeType>(
-          ROW({MAP(TIMESTAMP(), BIGINT())}),
-          JSON(),
-          makeRowVector({invalidTypeRow})),
-      VeloxException);
+  testUnsupportedCast(
+      ROW({MAP(TIMESTAMP(), BIGINT())}), JSON(), invalidTypeRow);
 
   // Map keys cannot be null.
   auto nullKeyVector =
@@ -692,10 +700,7 @@ TEST_F(JsonCastTest, unsupportedTypes) {
       nullKeyVector,
       valueVector,
       0);
-  EXPECT_THROW(
-      evaluateCast<JsonNativeType>(
-          MAP(VARCHAR(), BIGINT()), JSON(), makeRowVector({nullKeyMap})),
-      VeloxException);
+  testUnsupportedCast(MAP(VARCHAR(), BIGINT()), JSON(), nullKeyMap);
 
   // Map keys cannot be complex type.
   auto arrayKeyVector = makeNullableArrayVector<int64_t>({{1}, {2}});
@@ -709,10 +714,7 @@ TEST_F(JsonCastTest, unsupportedTypes) {
       arrayKeyVector,
       valueVector,
       0);
-  EXPECT_THROW(
-      evaluateCast<JsonNativeType>(
-          MAP(ARRAY(BIGINT()), BIGINT()), JSON(), makeRowVector({arrayKeyMap})),
-      VeloxException);
+  testUnsupportedCast(MAP(ARRAY(BIGINT()), BIGINT()), JSON(), arrayKeyMap);
 
   // Map keys of json type must not be null.
   auto jsonKeyVector =
@@ -727,19 +729,14 @@ TEST_F(JsonCastTest, unsupportedTypes) {
       jsonKeyVector,
       valueVector,
       0);
-  EXPECT_THROW(
-      evaluateCast<JsonNativeType>(
-          MAP(JSON(), BIGINT()), JSON(), makeRowVector({invalidJsonKeyMap})),
-      VeloxException);
+  testUnsupportedCast(MAP(JSON(), BIGINT()), JSON(), invalidJsonKeyMap);
 
   // Not allowing to cast from json to itself.
-  EXPECT_THROW(
-      evaluateCast<JsonNativeType>(
-          JSON(),
-          JSON(),
-          makeRowVector({makeNullableFlatVector<JsonNativeType>(
-              {"123"_sv, R"("abc")"_sv, ""_sv, std::nullopt}, JSON())})),
-      VeloxException);
+  testUnsupportedCast(
+      JSON(),
+      JSON(),
+      makeNullableFlatVector<JsonNativeType>(
+          {"123"_sv, R"("abc")"_sv, ""_sv, std::nullopt}, JSON()));
 }
 
 TEST_F(JsonCastTest, toVarchar) {

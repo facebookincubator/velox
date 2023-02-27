@@ -568,11 +568,27 @@ void CastExpr::applyPeeled(
     const TypePtr& toType,
     VectorPtr& result) {
   if (castFromOperator_ || castToOperator_) {
-    VELOX_CHECK_NE(
-        fromType,
-        toType,
-        "Attempting to cast from {} to itself.",
-        fromType->toString());
+    // For unsupported casting operations, populate the error vector and make a
+    // null-constant result.
+    if (fromType->equivalent(*toType)) {
+      context.applyToSelectedNoThrow(rows, [&](auto /*row*/) {
+        VELOX_USER_FAIL(
+            "Attempting to cast from {} to itself.", fromType->toString());
+      });
+      result =
+          BaseVector::createNullConstant(toType, rows.size(), context.pool());
+      return;
+    }
+
+    if (!isSupportedCustomCast_) {
+      context.applyToSelectedNoThrow(rows, [&](auto /*row*/) {
+        VELOX_USER_FAIL(
+            "Cannot cast {} to {}.", fromType->toString(), toType->toString());
+      });
+      result =
+          BaseVector::createNullConstant(toType, rows.size(), context.pool());
+      return;
+    }
 
     if (castToOperator_) {
       castToOperator_->castTo(

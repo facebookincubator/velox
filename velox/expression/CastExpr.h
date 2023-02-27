@@ -84,15 +84,14 @@ class CastExpr : public SpecialForm {
         nullOnFailure_(nullOnFailure) {
     auto fromType = inputs_[0]->type();
     castFromOperator_ = getCastOperator(fromType->toString());
-    if (castFromOperator_ && !castFromOperator_->isSupportedToType(type)) {
-      VELOX_FAIL(
-          "Cannot cast {} to {}.", fromType->toString(), type->toString());
+    if (castFromOperator_) {
+      isSupportedCustomCast_ = castFromOperator_->isSupportedToType(type);
     }
 
     castToOperator_ = getCastOperator(type->toString());
-    if (castToOperator_ && !castToOperator_->isSupportedFromType(fromType)) {
-      VELOX_FAIL(
-          "Cannot cast {} to {}.", fromType->toString(), type->toString());
+    if (castToOperator_) {
+      isSupportedCustomCast_ = isSupportedCustomCast_ &&
+          castToOperator_->isSupportedFromType(fromType);
     }
   }
 
@@ -202,6 +201,10 @@ class CastExpr : public SpecialForm {
   // Custom cast operator for the to-type. Nullptr if the type is native or
   // doesn't support cast-to.
   CastOperatorPtr castToOperator_;
+
+  // Custom cast operators support casting from from-type to to-type. This flag
+  // is meaningful only when custom cast operators are used.
+  bool isSupportedCustomCast_ = true;
 };
 
 class CastCallToSpecialForm : public FunctionCallToSpecialForm {
