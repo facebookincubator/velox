@@ -112,7 +112,8 @@ inline velox::variant pyToVariant(const py::handle& obj) {
 static VectorPtr pyToConstantVector(
     const py::handle& obj,
     vector_size_t length,
-    facebook::velox::memory::MemoryPool* pool);
+    facebook::velox::memory::MemoryPool* pool,
+    TypePtr type = nullptr);
 
 template <TypeKind T>
 static VectorPtr variantsToFlatVector(
@@ -125,12 +126,12 @@ static VectorPtr pyListToVector(
 
 template <typename NativeType>
 static py::object getItemFromSimpleVector(
-    SimpleVectorPtr<NativeType>& v,
+    SimpleVectorPtr<NativeType>& vector,
     vector_size_t idx);
 
 template <typename NativeType>
 inline void setItemInFlatVector(
-    FlatVectorPtr<NativeType>& v,
+    FlatVectorPtr<NativeType>& vector,
     vector_size_t idx,
     py::handle& obj);
 
@@ -361,25 +362,37 @@ static void addVectorBindings(
       .def("encoding", &BaseVector::encoding)
       .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); });
 
-  for (int8_t t = 0; t <= static_cast<int8_t>(TypeKind::INTERVAL_DAY_TIME);
-       t++) {
-    // VARCHAR and VARBINARY create the same C++ type, so we skip one of them.
-    if (static_cast<TypeKind>(t) != TypeKind::VARCHAR) {
-      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          registerTypedVectors,
-          static_cast<TypeKind>(t),
-          m,
-          asModuleLocalDefinitions);
-    }
+  constexpr TypeKind supportedTypes[] = {
+      TypeKind::BOOLEAN,
+      TypeKind::TINYINT,
+      TypeKind::SMALLINT,
+      TypeKind::INTEGER,
+      TypeKind::BIGINT,
+      TypeKind::REAL,
+      TypeKind::DOUBLE,
+      TypeKind::VARBINARY,
+      TypeKind::TIMESTAMP,
+      TypeKind::DATE,
+      TypeKind::INTERVAL_DAY_TIME,
+  };
+
+  for (int i = 0; i < sizeof(supportedTypes) / sizeof(supportedTypes[0]); i++) {
+    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        registerTypedVectors, supportedTypes[i], m, asModuleLocalDefinitions);
   }
 
   m.def("from_list", [](const py::list& list) mutable {
     return pyListToVector(list, PyVeloxContext::getInstance().pool());
   });
-  m.def("constant_vector", [](const py::handle& obj, vector_size_t length) {
-    return pyToConstantVector(
-        obj, length, PyVeloxContext::getInstance().pool());
-  });
+  m.def(
+      "constant_vector",
+      [](const py::handle& obj, vector_size_t length, TypePtr type) {
+        return pyToConstantVector(
+            obj, length, PyVeloxContext::getInstance().pool(), type);
+      },
+      py::arg("value"),
+      py::arg("length"),
+      py::arg("type") = nullptr);
 }
 
 static void addExpressionBindings(
