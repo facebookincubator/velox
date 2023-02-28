@@ -57,19 +57,19 @@ TEST_F(SubscriptTest, allFlavors2) {
       makeMapVector<int64_t, int64_t>(1, sizeAt, keyAt, mapValueAt);
 
   // #1
-  EXPECT_EQ(subscriptSimple("element_at(C0, 0)", {arrayVector}), 10);
-  EXPECT_EQ(subscriptSimple("element_at(C0, 1)", {arrayVector}), 11);
-  EXPECT_EQ(subscriptSimple("element_at(C0, 2)", {arrayVector}), 12);
+  EXPECT_EQ(subscriptSimple("element_at(C0, 1)", {arrayVector}), 10);
+  EXPECT_EQ(subscriptSimple("element_at(C0, 2)", {arrayVector}), 11);
+  EXPECT_EQ(subscriptSimple("element_at(C0, 3)", {arrayVector}), 12);
 
   // #2
-  EXPECT_EQ(subscriptSimple("element_at(C0, 3)", {arrayVector}), std::nullopt);
   EXPECT_EQ(subscriptSimple("element_at(C0, 4)", {arrayVector}), std::nullopt);
+  EXPECT_EQ(subscriptSimple("element_at(C0, 5)", {arrayVector}), std::nullopt);
   EXPECT_EQ(subscriptSimple("element_at(C0, 1001)", {mapVector}), std::nullopt);
 
   // #3
-  EXPECT_EQ(subscriptSimple("element_at(C0, -1)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(subscriptSimple("element_at(C0, -2)", {arrayVector}), std::nullopt);
-  EXPECT_EQ(subscriptSimple("element_at(C0, -3)", {arrayVector}), std::nullopt);
+  EXPECT_EQ(subscriptSimple("element_at(C0, -1)", {arrayVector}), 12);
+  EXPECT_EQ(subscriptSimple("element_at(C0, -2)", {arrayVector}), 11);
+  EXPECT_EQ(subscriptSimple("element_at(C0, -3)", {arrayVector}), 10);
   EXPECT_EQ(subscriptSimple("element_at(C0, -4)", {arrayVector}), std::nullopt);
 }
 } // namespace facebook::velox::functions::sparksql::test
