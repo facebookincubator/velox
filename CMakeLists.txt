@@ -333,8 +333,15 @@ resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 set_source(gflags)
 resolve_dependency(gflags COMPONENTS shared)
 if(NOT TARGET gflags::gflags)
+  get_target_property(gflags_global gflags IMPORTED_GLOBAL)
+  if(NOT gflags_global)
+    # Some configurations don't import the gflags target globally which will
+    # block the creation of an alias
+    set_target_properties(gflags PROPERTIES IMPORTED_GLOBAL TRUE)
+  endif()
   add_library(gflags::gflags ALIAS gflags)
 endif()
+
 find_package(glog REQUIRED)
 
 set_source(fmt)
