@@ -16,6 +16,7 @@
 
 #include <optional>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -61,8 +62,8 @@ TEST_F(ElementAtTest, allFlavors2) {
   EXPECT_EQ(elementAtSimple("element_at(C0, 1)", {arrayVector}), 10);
   EXPECT_EQ(elementAtSimple("element_at(C0, 2)", {arrayVector}), 11);
   EXPECT_EQ(elementAtSimple("element_at(C0, 3)", {arrayVector}), 12);
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("element_at(C0, 0)", {arrayVector}); },
+  VELOX_ASSERT_THROW(
+      elementAtSimple("element_at(C0, 0)", {arrayVector}),
       "SQL array indices start at 1");
   // #2
   EXPECT_EQ(elementAtSimple("element_at(C0, 4)", {arrayVector}), std::nullopt);
