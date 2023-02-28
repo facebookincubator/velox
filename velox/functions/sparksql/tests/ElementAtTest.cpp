@@ -21,7 +21,7 @@
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
-class SubscriptTest : public SparkFunctionBaseTest {
+class ElementAtTest : public SparkFunctionBaseTest {
  protected:
   template <typename T = int64_t>
   std::optional<T> subscriptSimple(
@@ -43,10 +43,10 @@ class SubscriptTest : public SparkFunctionBaseTest {
 } // namespace
 
 // Spark's subscript ("a[1]") behavior:
-// #1 - start indices at 0.
+// #1 - start indices at 1. If Index is 0 will throw an error.
 // #2 - allow out of bounds access for arrays (return null).
-// #3 - do not allow negative indices (return null).
-TEST_F(SubscriptTest, allFlavors2) {
+// #3 - allow negative indices (return elements from the last to the first).
+TEST_F(ElementAtTest, allFlavors2) {
   auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
 
   // Create a simple vector containing a single map ([10=>10, 11=>11, 12=>12]).
