@@ -52,8 +52,6 @@ endmacro()
 #
 # resolve_dependency(dependency_name [...] )
 #
-# The resolve_dependency() macro can be used to define a thirdparty dependency.
-#
 # [...]: the macro will pass all arguments after DELPENDENCY_NAME on to
 # find_package. ${dependency_name}_SOURCE is expected to be set to either AUTO,
 # SYSTEM or BUNDLED. If ${dependency_name}_SOURCE is SYSTEM it will try to find
@@ -69,7 +67,7 @@ macro(resolve_dependency dependency_name)
   set(find_package_args ${dependency_name} ${ARGN})
   list(REMOVE_ITEM find_package_args REQUIRED QUIET)
   if(${dependency_name}_SOURCE STREQUAL "AUTO")
-    find_package(${find_package_args} QUIET)
+    find_package(${find_package_args})
     if(${${dependency_name}_FOUND})
       set(${dependency_name}_SOURCE "SYSTEM")
     else()
