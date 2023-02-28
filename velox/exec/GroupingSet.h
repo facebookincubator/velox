@@ -44,6 +44,11 @@ class GroupingSet {
 
   ~GroupingSet();
 
+  // Used by MarkDistinct operator to identify rows with unique values.
+  static std::unique_ptr<GroupingSet> createForMarkDistinct(
+      std::vector<std::unique_ptr<VectorHasher>>&& hashers,
+      OperatorCtx* operatorCtx);
+
   void addInput(const RowVectorPtr& input, bool mayPushdown);
 
   void noMoreInput();
