@@ -1,1 +1,1 @@
-set(Boost_FOUND TRUE)
+set(STATUS Boost_FOUND TRUE)
