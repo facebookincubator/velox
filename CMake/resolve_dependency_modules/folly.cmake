@@ -44,10 +44,18 @@ if(COMPILER_HAS_W_UNDEF_PREFIX)
 endif()
 set(FOLLY_CXX_FLAGS -Wno-unused -Wno-unused-parameter -Wno-overloaded-virtual
                     ${EXTRA_CXX_FLAGS})
+
+if(gflags_SOURCE STREQUAL "BUNDLED")
+  set(gflags_patch
+      "&& git apply ${CMAKE_CURRENT_LIST_DIR}/folly/folly_gflags.patch")
+endif()
+
 FetchContent_Declare(
   folly
   URL ${FOLLY_SOURCE_URL}
-  URL_HASH SHA256=${VELOX_FOLLY_BUILD_SHA256_CHECKSUM})
+  URL_HASH SHA256=${VELOX_FOLLY_BUILD_SHA256_CHECKSUM}
+  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly/folly_no_export.patch
+                ${gfalgs_patch})
 
 if(ON_APPLE_M1)
   # folly will wrongly assume x86_64 if this is not set

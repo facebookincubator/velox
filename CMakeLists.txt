@@ -330,7 +330,11 @@ resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 # Range-v3 will be enable when the codegen code actually lands keeping it here
 # for reference. find_package(range-v3)
 
-find_package(gflags COMPONENTS shared)
+set_source(gflags)
+resolve_dependency(gflags COMPONENTS shared)
+if(NOT TARGET gflags::gflags)
+  add_library(gflags::gflags ALIAS gflags)
+endif()
 find_package(glog REQUIRED)
 
 set_source(fmt)
