@@ -98,7 +98,6 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "rlike", re2SearchSignatures(), makeRLike);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_subscript, prefix + "element_at");
   exec::registerStatefulVectorFunction(
       prefix + "least", leastSignatures(), makeLeast);
   exec::registerStatefulVectorFunction(
