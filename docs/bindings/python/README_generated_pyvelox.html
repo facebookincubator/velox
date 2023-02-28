@@ -1,0 +1,171 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>PyVelox: Python bindings and extensions for Velox &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="PyVelox API Documentation" href="pyvelox.html" />
+    <link rel="prev" title="Language Bindings" href="../../bindings.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="pyvelox.html" title="PyVelox API Documentation"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../../bindings.html" title="Language Bindings"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../bindings.html" accesskey="U">Language Bindings</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">PyVelox: Python bindings and extensions for Velox</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="pyvelox-python-bindings-and-extensions-for-velox">
+<h1>PyVelox: Python bindings and extensions for Velox<a class="headerlink" href="#pyvelox-python-bindings-and-extensions-for-velox" title="Permalink to this heading">¶</a></h1>
+<p><strong>This library is currently in Alpha stage and does not have a stable
+release. The API and implementation may change based on user feedback or
+performance. Future changes may not be backward compatible. If you have
+suggestions on the API or use cases you’d like to be covered, please
+open a GitHub issue. We’d love to hear thoughts and feedback.</strong></p>
+<section id="prerequisites">
+<h2>Prerequisites<a class="headerlink" href="#prerequisites" title="Permalink to this heading">¶</a></h2>
+<p>You will need Python 3.7 or later. Also, we highly recommend installing
+an
+<a class="reference external" href="https://docs.conda.io/en/latest/miniconda.html#latest-miniconda-installer-links">Miniconda</a>
+environment.</p>
+<p>First, set up an environment. If you are using conda, create a conda
+environment:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">create</span> <span class="o">--</span><span class="n">name</span> <span class="n">pyveloxenv</span> <span class="n">python</span><span class="o">=</span><span class="mf">3.7</span>
+<span class="n">conda</span> <span class="n">activate</span> <span class="n">pyveloxenv</span>
+</pre></div>
+</div>
+<section id="from-source">
+<h3>From Source<a class="headerlink" href="#from-source" title="Permalink to this heading">¶</a></h3>
+<p>Currently PyVelox can only be built from source. You will need Python
+3.7 or later and a C++17 compiler.</p>
+<section id="install-dependencies">
+<h4>Install Dependencies<a class="headerlink" href="#install-dependencies" title="Permalink to this heading">¶</a></h4>
+<p>On macOS</p>
+<p><a class="reference external" href="https://brew.sh/">HomeBrew</a> is required to install development tools
+on macOS. Run the script referenced
+<a class="reference external" href="https://github.com/facebookincubator/velox#setting-up-on-macos">here</a>
+to install all the mac specific dependencies.</p>
+<p>On Linux Run the script referenced
+<a class="reference external" href="https://github.com/facebookincubator/velox#setting-up-on-linux-ubuntu-2004-or-later">here</a>
+to install on linux.</p>
+</section>
+<section id="install-pyvelox">
+<h4>Install PyVelox<a class="headerlink" href="#install-pyvelox" title="Permalink to this heading">¶</a></h4>
+<p>For local development, you can build with debug mode:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">DEBUG</span><span class="o">=</span><span class="mi">1</span> <span class="n">python</span> <span class="n">setup</span><span class="o">.</span><span class="n">py</span> <span class="n">develop</span>
+</pre></div>
+</div>
+<p>And run unit tests with</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="o">-</span><span class="n">m</span> <span class="n">unittest</span> <span class="o">-</span><span class="n">v</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">PyVelox: Python bindings and extensions for Velox</a><ul>
+<li><a class="reference internal" href="#prerequisites">Prerequisites</a><ul>
+<li><a class="reference internal" href="#from-source">From Source</a><ul>
+<li><a class="reference internal" href="#install-dependencies">Install Dependencies</a></li>
+<li><a class="reference internal" href="#install-pyvelox">Install PyVelox</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../../bindings.html"
+                          title="previous chapter">Language Bindings</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="pyvelox.html"
+                          title="next chapter">PyVelox API Documentation</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/bindings/python/README_generated_pyvelox.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="pyvelox.html" title="PyVelox API Documentation"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../../bindings.html" title="Language Bindings"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../bindings.html" >Language Bindings</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">PyVelox: Python bindings and extensions for Velox</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>

@@ -14,7 +14,6 @@
     <script src="../../_static/underscore.js"></script>
     <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Array Functions" href="array.html" />
@@ -268,7 +267,6 @@ The following table, based on the MySQL manual, describes the format specifiers:
 </tr>
 </tbody>
 </table>
-<aside class="footnote-list brackets">
 <aside class="footnote brackets" id="id8" role="note">
 <span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id4">1</a><span class="fn-bracket">]</span></span>
 <p>Timestamp is truncated to milliseconds.</p>
@@ -285,7 +283,6 @@ The following table, based on the MySQL manual, describes the format specifiers:
 <span class="label"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></span>
 <span class="backrefs">(<a role="doc-backlink" href="#id1">1</a>,<a role="doc-backlink" href="#id2">2</a>,<a role="doc-backlink" href="#id3">3</a>,<a role="doc-backlink" href="#id5">4</a>)</span>
 <p>This specifier does not support <code class="docutils literal notranslate"><span class="pre">0</span></code> as a month or day.</p>
-</aside>
 </aside>
 <p><strong>Warning</strong>: The following specifiers are not currently supported: <code class="docutils literal notranslate"><span class="pre">%D</span></code>, <code class="docutils literal notranslate"><span class="pre">%U</span></code>, <code class="docutils literal notranslate"><span class="pre">%u</span></code>, <code class="docutils literal notranslate"><span class="pre">%V</span></code>, <code class="docutils literal notranslate"><span class="pre">%w</span></code>, <code class="docutils literal notranslate"><span class="pre">%X</span></code>.</p>
 <dl class="py function">
@@ -433,45 +430,11 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Date and Time Functions</a><ul>
-<li><a class="reference internal" href="#from_unixtime"><code class="docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a></li>
-<li><a class="reference internal" href="#to_unixtime"><code class="docutils literal notranslate"><span class="pre">to_unixtime()</span></code></a></li>
-<li><a class="reference internal" href="#truncation-function">Truncation Function</a><ul>
-<li><a class="reference internal" href="#date_trunc"><code class="docutils literal notranslate"><span class="pre">date_trunc()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#interval-functions">Interval Functions</a><ul>
-<li><a class="reference internal" href="#date_add"><code class="docutils literal notranslate"><span class="pre">date_add()</span></code></a></li>
-<li><a class="reference internal" href="#date_diff"><code class="docutils literal notranslate"><span class="pre">date_diff()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#mysql-date-functions">MySQL Date Functions</a><ul>
-<li><a class="reference internal" href="#date_format"><code class="docutils literal notranslate"><span class="pre">date_format()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#java-date-functions">Java Date Functions</a><ul>
-<li><a class="reference internal" href="#parse_datetime"><code class="docutils literal notranslate"><span class="pre">parse_datetime()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#convenience-extraction-functions">Convenience Extraction Functions</a><ul>
-<li><a class="reference internal" href="#day"><code class="docutils literal notranslate"><span class="pre">day()</span></code></a></li>
-<li><a class="reference internal" href="#day_of_month"><code class="docutils literal notranslate"><span class="pre">day_of_month()</span></code></a></li>
-<li><a class="reference internal" href="#day_of_week"><code class="docutils literal notranslate"><span class="pre">day_of_week()</span></code></a></li>
-<li><a class="reference internal" href="#day_of_year"><code class="docutils literal notranslate"><span class="pre">day_of_year()</span></code></a></li>
-<li><a class="reference internal" href="#dow"><code class="docutils literal notranslate"><span class="pre">dow()</span></code></a></li>
-<li><a class="reference internal" href="#doy"><code class="docutils literal notranslate"><span class="pre">doy()</span></code></a></li>
-<li><a class="reference internal" href="#hour"><code class="docutils literal notranslate"><span class="pre">hour()</span></code></a></li>
-<li><a class="reference internal" href="#millisecond"><code class="docutils literal notranslate"><span class="pre">millisecond()</span></code></a></li>
-<li><a class="reference internal" href="#minute"><code class="docutils literal notranslate"><span class="pre">minute()</span></code></a></li>
-<li><a class="reference internal" href="#month"><code class="docutils literal notranslate"><span class="pre">month()</span></code></a></li>
-<li><a class="reference internal" href="#quarter"><code class="docutils literal notranslate"><span class="pre">quarter()</span></code></a></li>
-<li><a class="reference internal" href="#second"><code class="docutils literal notranslate"><span class="pre">second()</span></code></a></li>
-<li><a class="reference internal" href="#week"><code class="docutils literal notranslate"><span class="pre">week()</span></code></a></li>
-<li><a class="reference internal" href="#week_of_year"><code class="docutils literal notranslate"><span class="pre">week_of_year()</span></code></a></li>
-<li><a class="reference internal" href="#year"><code class="docutils literal notranslate"><span class="pre">year()</span></code></a></li>
-<li><a class="reference internal" href="#year_of_week"><code class="docutils literal notranslate"><span class="pre">year_of_week()</span></code></a></li>
-<li><a class="reference internal" href="#yow"><code class="docutils literal notranslate"><span class="pre">yow()</span></code></a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#truncation-function">Truncation Function</a></li>
+<li><a class="reference internal" href="#interval-functions">Interval Functions</a></li>
+<li><a class="reference internal" href="#mysql-date-functions">MySQL Date Functions</a></li>
+<li><a class="reference internal" href="#java-date-functions">Java Date Functions</a></li>
+<li><a class="reference internal" href="#convenience-extraction-functions">Convenience Extraction Functions</a></li>
 </ul>
 </li>
 </ul>
@@ -527,7 +490,7 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
     </div>
   </body>
 </html>

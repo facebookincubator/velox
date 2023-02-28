@@ -14,8 +14,6 @@
     <script src="../_static/underscore.js"></script>
     <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
-    <script src="../_static/sphinx_highlight.js"></script>
-    <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Vectors" href="vectors.html" />
@@ -126,8 +124,8 @@ digits in a number. <cite>Scale</cite> is the number of digits to the right of t
 point in a number. For example, the number <cite>123.45</cite> has a precision of <cite>5</cite> and a
 scale of <cite>2</cite>. Velox supports two types of decimals, SHORT_DECIMAL and LONG_DECIMAL.
 SHORT_DECIMAL has a maximum precision of 18, with a range of
-[<span class="math notranslate nohighlight">\(-10^{18} + 1, +10^{18} - 1\)</span>]. LONG_DECIMAL has a maximum precision of 38,
-with a range of [<span class="math notranslate nohighlight">\(-10^{38} + 1, +10^{38} - 1\)</span>].
+[<span class="math">-10^{18} + 1, +10^{18} - 1</span>]. LONG_DECIMAL has a maximum precision of 38,
+with a range of [<span class="math">-10^{38} + 1, +10^{38} - 1</span>].
 Their corresponding C++ types, UnscaledShortDecimal and UnscaledLongDecimal carry
 the unscaled value. For example, the unscaled value of decimal <cite>123.45</cite> is <cite>12345</cite>.
 All the three values, precision, scale, unscaled value are required to represent a
@@ -210,7 +208,7 @@ it simplifies the implementation.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
     </div>
   </body>
 </html>

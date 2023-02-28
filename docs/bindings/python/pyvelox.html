@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
-    <title>Aggregate Functions &#8212; Velox  documentation</title>
+    <title>PyVelox API Documentation &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
@@ -16,8 +16,8 @@
     <script src="../../_static/doctools.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Configuration properties" href="../../configs.html" />
-    <link rel="prev" title="JSON Functions" href="json.html" /> 
+    <link rel="next" title="Developer Guide" href="../../develop.html" />
+    <link rel="prev" title="PyVelox: Python bindings and extensions for Velox" href="README_generated_pyvelox.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
@@ -26,14 +26,14 @@
           <a href="../../genindex.html" title="General Index"
              accesskey="I">index</a></li>
         <li class="right" >
-          <a href="../../configs.html" title="Configuration properties"
+          <a href="../../develop.html" title="Developer Guide"
              accesskey="N">next</a> |</li>
         <li class="right" >
-          <a href="json.html" title="JSON Functions"
+          <a href="README_generated_pyvelox.html" title="PyVelox: Python bindings and extensions for Velox"
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
-          <li class="nav-item nav-item-1"><a href="../../spark_functions.html" accesskey="U">Spark Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Aggregate Functions</a></li> 
+          <li class="nav-item nav-item-1"><a href="../../bindings.html" accesskey="U">Language Bindings</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">PyVelox API Documentation</a></li> 
       </ul>
     </div>  
 
@@ -42,24 +42,8 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="aggregate-functions">
-<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h1>
-<p>Aggregate functions operate on a set of values to compute a single result.</p>
-<section id="general-aggregate-functions">
-<h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Permalink to this heading">¶</a></h2>
-<dl class="spark function">
-<dt class="sig sig-object spark" id="last">
-<span class="sig-name descname"><span class="pre">last</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#last" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the last value of <cite>x</cite> for a group of rows.</p>
-</dd></dl>
-
-<dl class="spark function">
-<dt class="sig sig-object spark" id="id0">
-<span class="sig-name descname"><span class="pre">last</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ignoreNull</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the last value of <cite>x</cite> for a group of rows. If <cite>ignoreNull</cite> is true, returns only non-null values.</p>
-</dd></dl>
-
-</section>
+  <section id="pyvelox-api-documentation">
+<h1>PyVelox API Documentation<a class="headerlink" href="#pyvelox-api-documentation" title="Permalink to this heading">¶</a></h1>
 </section>
 
 
@@ -70,29 +54,19 @@
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
   <div>
-    <h3><a href="../../index.html">Table of Contents</a></h3>
-    <ul>
-<li><a class="reference internal" href="#">Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a></li>
-</ul>
-</li>
-</ul>
-
-  </div>
-  <div>
     <h4>Previous topic</h4>
-    <p class="topless"><a href="json.html"
-                          title="previous chapter">JSON Functions</a></p>
+    <p class="topless"><a href="README_generated_pyvelox.html"
+                          title="previous chapter">PyVelox: Python bindings and extensions for Velox</a></p>
   </div>
   <div>
     <h4>Next topic</h4>
-    <p class="topless"><a href="../../configs.html"
-                          title="next chapter">Configuration properties</a></p>
+    <p class="topless"><a href="../../develop.html"
+                          title="next chapter">Developer Guide</a></p>
   </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
-      <li><a href="../../_sources/functions/spark/aggregate.rst.txt"
+      <li><a href="../../_sources/bindings/python/pyvelox.rst.txt"
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
@@ -117,14 +91,14 @@
           <a href="../../genindex.html" title="General Index"
              >index</a></li>
         <li class="right" >
-          <a href="../../configs.html" title="Configuration properties"
+          <a href="../../develop.html" title="Developer Guide"
              >next</a> |</li>
         <li class="right" >
-          <a href="json.html" title="JSON Functions"
+          <a href="README_generated_pyvelox.html" title="PyVelox: Python bindings and extensions for Velox"
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
-          <li class="nav-item nav-item-1"><a href="../../spark_functions.html" >Spark Functions</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Aggregate Functions</a></li> 
+          <li class="nav-item nav-item-1"><a href="../../bindings.html" >Language Bindings</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">PyVelox API Documentation</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
