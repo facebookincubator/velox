@@ -16,6 +16,5 @@ add_library(velox_codegen Codegen.cpp)
 if(${VELOX_CODEGEN_SUPPORT})
   target_link_libraries(velox_codegen velox_experimental_codegen)
 else()
-  target_link_libraries(velox_codegen velox_core velox_exec velox_expression
-                        ${FOLLY_WITH_DEPENDENCIES})
+  target_link_libraries(velox_codegen velox_core velox_exec velox_expression glog::glog)
 endif()
