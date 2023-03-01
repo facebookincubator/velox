@@ -126,6 +126,13 @@ class SimpleNumericAggregate : public exec::Aggregate {
         updateNonNullValue<tableHasNulls, TData>(
             groups[i], TData(decoded.valueAt<TValue>(i)), updateSingleValue);
       });
+    } else if (decoded.isIdentityMapping() && !std::is_same_v<TValue, bool>) {
+      rows.applyToSelected([&](vector_size_t i) {
+        updateNonNullValue<tableHasNulls, TData>(
+            groups[i],
+            TData(decoded.template deserialize<TValue>(i)),
+            updateSingleValue);
+      });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
         updateNonNullValue<tableHasNulls, TData>(
@@ -170,6 +177,13 @@ class SimpleNumericAggregate : public exec::Aggregate {
         }
         updateNonNullValue<true, TData>(
             group, TData(decoded.valueAt<TValue>(i)), updateSingleValue);
+      });
+    } else if (decoded.isIdentityMapping() && !std::is_same_v<TValue, bool>) {
+      rows.applyToSelected([&](vector_size_t i) {
+        updateNonNullValue<true, TData>(
+            group,
+            TData(decoded.template deserialize<TValue>(i)),
+            updateSingleValue);
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
