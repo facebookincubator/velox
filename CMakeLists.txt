@@ -346,7 +346,7 @@ endif()
 
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
   set(glog_SOURCE BUNDLED)
-  else()
+else()
   set(glog_SOURCE SYSTEM)
 endif()
 resolve_dependency(glog)

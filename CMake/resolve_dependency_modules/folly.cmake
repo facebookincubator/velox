@@ -46,7 +46,8 @@ set(FOLLY_CXX_FLAGS -Wno-unused -Wno-unused-parameter -Wno-overloaded-virtual
                     ${EXTRA_CXX_FLAGS})
 
 if(gflags_SOURCE STREQUAL "BUNDLED")
-  set(glog_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly/folly-gflags-glog.patch)
+  set(glog_patch && git apply
+                 ${CMAKE_CURRENT_LIST_DIR}/folly/folly-gflags-glog.patch)
 endif()
 
 FetchContent_Declare(
