@@ -245,3 +245,20 @@ TEST_F(TopNTest, empty) {
 
   testSingleKey(vectors, "c0", "c0 < 0");
 }
+
+TEST_F(TopNTest, lowCardinity) {
+  vector_size_t batchSize = 1000;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t i = 0; i < 5; ++i) {
+    auto c0 = makeFlatVector<int64_t>(
+        batchSize, [](vector_size_t row) { return 0; }, nullptr);
+    auto c1 = makeFlatVector<int32_t>(
+        batchSize, [](vector_size_t row) { return 0; }, nullptr);
+    auto c2 = makeFlatVector<double>(
+        batchSize, [](vector_size_t row) { return 0; }, nullptr);
+    vectors.push_back(makeRowVector({c0, c1, c2}));
+  }
+  createDuckDbTable(vectors);
+
+  testTwoKeys(vectors, "c0", "c1", 200);
+}
