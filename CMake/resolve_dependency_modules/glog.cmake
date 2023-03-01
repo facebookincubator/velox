@@ -32,9 +32,9 @@ FetchContent_Declare(
 set(BUILD_SHARED_LIBS OFF)
 set(WITH_UNWIND OFF)
 set(gflags_NAMESPACE google)
-
+set(BUILD_TESTING OFF)
 FetchContent_MakeAvailable(glog)
-
+unset(BUILD_TESTING)
 unset(BUILD_SHARED_LIBS)
 add_dependencies(glog gflags)
 
