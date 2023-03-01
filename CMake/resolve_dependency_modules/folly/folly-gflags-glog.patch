@@ -45,18 +45,3 @@
  
  find_package(LibEvent MODULE REQUIRED)
  list(APPEND FOLLY_LINK_LIBRARIES ${LIBEVENT_LIB})
-@@ -306,6 +307,8 @@ if (NOT DEFINED fmt_CONFIG)
- endif()
- target_link_libraries(folly_deps INTERFACE fmt::fmt)
- 
-+message(STATUS "libs ${FOLLY_LINK_LIBRARIES}")
-+
- list(REMOVE_DUPLICATES FOLLY_INCLUDE_DIRECTORIES)
- target_include_directories(folly_deps INTERFACE ${FOLLY_INCLUDE_DIRECTORIES})
- target_link_libraries(folly_deps INTERFACE
-@@ -313,3 +316,5 @@ target_link_libraries(folly_deps INTERFACE
-   ${FOLLY_SHINY_DEPENDENCIES}
-   ${FOLLY_ASAN_FLAGS}
- )
-+get_target_property(folly_libs folly_deps INTERFACE_LINK_LIBRARIES)
-+message(STATUS "libs ${folly_libs}")
