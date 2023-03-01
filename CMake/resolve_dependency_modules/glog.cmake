@@ -43,7 +43,7 @@ add_dependencies(glog gflags)
 
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/glog)
 set(glog_INCLUDE_DIR ${glog_BINARY_DIR})
-set(glog_LIBRARY  ${glog_BINARY_DIR}/libglog$<$<CONFIG:Debug>:d>.a)
+set(glog_LIBRARY ${glog_BINARY_DIR}/libglog$<$<CONFIG:Debug>:d>.a)
 
 # platform.h is missing from the include dir but adding the src dir causes
 # issues with folly so we just copy it to the include dir
