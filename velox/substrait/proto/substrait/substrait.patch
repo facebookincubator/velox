@@ -1,0 +1,92 @@
+diff --git a/proto/substrait/algebra.proto b/proto/substrait/algebra.proto
+index bb51965..3913871 100644
+--- a/proto/substrait/algebra.proto
++++ b/proto/substrait/algebra.proto
+@@ -4,8 +4,8 @@ syntax = "proto3";
+ package substrait;
+ 
+ import "google/protobuf/any.proto";
+-import "substrait/extensions/extensions.proto";
+-import "substrait/type.proto";
++import "velox/substrait/proto/substrait/extensions/extensions.proto";
++import "velox/substrait/proto/substrait/type.proto";
+ 
+ option csharp_namespace = "Substrait.Protobuf";
+ option go_package = "github.com/substrait-io/substrait-go/proto";
+diff --git a/proto/substrait/extended_expression.proto b/proto/substrait/extended_expression.proto
+index 5d11520..1c88b38 100644
+--- a/proto/substrait/extended_expression.proto
++++ b/proto/substrait/extended_expression.proto
+@@ -3,10 +3,10 @@ syntax = "proto3";
+ 
+ package substrait;
+ 
+-import "substrait/algebra.proto";
+-import "substrait/extensions/extensions.proto";
+-import "substrait/plan.proto";
+-import "substrait/type.proto";
++import "velox/substrait/proto/substrait/algebra.proto";
++import "velox/substrait/proto/substrait/extensions/extensions.proto";
++import "velox/substrait/proto/substrait/plan.proto";
++import "velox/substrait/proto/substrait/type.proto";
+ 
+ option csharp_namespace = "Substrait.Protobuf";
+ option go_package = "github.com/substrait-io/substrait-go/proto";
+diff --git a/proto/substrait/function.proto b/proto/substrait/function.proto
+index 123f4a1..1fc0376 100644
+--- a/proto/substrait/function.proto
++++ b/proto/substrait/function.proto
+@@ -3,9 +3,9 @@ syntax = "proto3";
+ 
+ package substrait;
+ 
+-import "substrait/parameterized_types.proto";
+-import "substrait/type.proto";
+-import "substrait/type_expressions.proto";
++import "velox/substrait/proto/substrait/parameterized_types.proto";
++import "velox/substrait/proto/substrait/type.proto";
++import "velox/substrait/proto/substrait/type_expressions.proto";
+ 
+ option csharp_namespace = "Substrait.Protobuf";
+ option go_package = "github.com/substrait-io/substrait-go/proto";
+diff --git a/proto/substrait/parameterized_types.proto b/proto/substrait/parameterized_types.proto
+index db06693..9408101 100644
+--- a/proto/substrait/parameterized_types.proto
++++ b/proto/substrait/parameterized_types.proto
+@@ -3,7 +3,7 @@ syntax = "proto3";
+ 
+ package substrait;
+ 
+-import "substrait/type.proto";
++import "velox/substrait/proto/substrait/type.proto";
+ 
+ option csharp_namespace = "Substrait.Protobuf";
+ option go_package = "github.com/substrait-io/substrait-go/proto";
+diff --git a/proto/substrait/plan.proto b/proto/substrait/plan.proto
+index e5657fb..71590a6 100644
+--- a/proto/substrait/plan.proto
++++ b/proto/substrait/plan.proto
+@@ -3,8 +3,8 @@ syntax = "proto3";
+ 
+ package substrait;
+ 
+-import "substrait/algebra.proto";
+-import "substrait/extensions/extensions.proto";
++import "velox/substrait/proto/substrait/algebra.proto";
++import "velox/substrait/proto/substrait/extensions/extensions.proto";
+ 
+ option csharp_namespace = "Substrait.Protobuf";
+ option go_package = "github.com/substrait-io/substrait-go/proto";
+diff --git a/proto/substrait/type_expressions.proto b/proto/substrait/type_expressions.proto
+index 4be4aab..59782d5 100644
+--- a/proto/substrait/type_expressions.proto
++++ b/proto/substrait/type_expressions.proto
+@@ -3,7 +3,7 @@ syntax = "proto3";
+ 
+ package substrait;
+ 
+-import "substrait/type.proto";
++import "velox/substrait/proto/substrait/type.proto";
+ 
+ option csharp_namespace = "Substrait.Protobuf";
+ option go_package = "github.com/substrait-io/substrait-go/proto";

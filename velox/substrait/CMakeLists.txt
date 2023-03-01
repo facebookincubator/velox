@@ -12,25 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Set up Proto
-set(proto_directory ${CMAKE_CURRENT_SOURCE_DIR}/proto)
-set(substrait_proto_directory ${CMAKE_CURRENT_SOURCE_DIR}/proto/substrait)
-set(PROTO_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/proto/")
-file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/proto/substrait)
-file(GLOB PROTO_FILES ${substrait_proto_directory}/*.proto
-     ${substrait_proto_directory}/extensions/*.proto)
+# Download and update substrait proto files
+FetchContent_Declare(
+  substrait
+  GIT_REPOSITORY https://github.com/substrait-io/substrait.git
+  GIT_TAG 6a74f40f0d835a447a7175b20dd430c7c39c5d11
+  PATCH_COMMAND git apply
+                ${CMAKE_CURRENT_SOURCE_DIR}/proto/substrait/substrait.patch)
+FetchContent_MakeAvailable(substrait)
+
+file(COPY ${substrait_SOURCE_DIR}/proto/substrait
+     DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/proto/)
+
+# Set up build vars
+set(PROTO_INPUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/proto/substrait)
+set(PROTO_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/proto/substrait")
+file(GLOB PROTO_FILES ${PROTO_INPUT_DIR}/*.proto
+     ${PROTO_INPUT_DIR}/extensions/*.proto)
+
 foreach(PROTO ${PROTO_FILES})
-  file(RELATIVE_PATH REL_PROTO ${substrait_proto_directory} ${PROTO})
+  file(RELATIVE_PATH REL_PROTO ${PROTO_INPUT_DIR} ${PROTO})
   string(REGEX REPLACE "\\.proto" "" PROTO_NAME ${REL_PROTO})
-  list(APPEND PROTO_SRCS "${PROTO_OUTPUT_DIR}/substrait/${PROTO_NAME}.pb.cc")
-  list(APPEND PROTO_HDRS "${PROTO_OUTPUT_DIR}/substrait/${PROTO_NAME}.pb.h")
+  list(APPEND PROTO_SRCS "${PROTO_OUTPUT_DIR}/${PROTO_NAME}.pb.cc")
+  list(APPEND PROTO_HDRS "${PROTO_OUTPUT_DIR}/${PROTO_NAME}.pb.h")
 endforeach()
 set(PROTO_OUTPUT_FILES ${PROTO_HDRS} ${PROTO_SRCS})
 set_source_files_properties(${PROTO_OUTPUT_FILES} PROPERTIES GENERATED TRUE)
+get_filename_component(PROTO_DIR ${PROTO_INPUT_DIR}/, DIRECTORY)
 
-get_filename_component(PROTO_DIR ${substrait_proto_directory}/, DIRECTORY)
-
-# Generate Substrait hearders
+# Generate substrait cpp headers
 add_custom_command(
   OUTPUT ${PROTO_OUTPUT_FILES}
   COMMAND

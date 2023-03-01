@@ -150,6 +150,8 @@ scripts/PelotonTest/lib
 *.pb.cc
 *.pb.h
 *.pb.go
+velox/substrait/proto/substrait/*.proto
+velox/substrait/proto/substrait/extensions
 
 #==============================================================================#
 # Third party
