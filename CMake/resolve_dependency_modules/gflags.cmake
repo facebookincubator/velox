@@ -49,3 +49,5 @@ target_compile_options(gflags_shared PRIVATE -Wno-cast-function-type)
 # this causes find_package(gflags) to search in the build directory and prevents
 # the system gflags from being found
 set(gflags_DIR ${gflags_BINARY_DIR})
+set(gflags_LIBRARY gflags_static)
+set(gflags_INCLUDE_DIR ${gflags_BINARY_DIR}/include)

@@ -13,7 +13,7 @@
 # limitations under the License.
 --- a/CMake/folly-deps.cmake
 +++ b/CMake/folly-deps.cmake
-@@ -52,13 +52,13 @@ find_package(DoubleConversion MODULE REQUIRED)
+@@ -52,19 +52,20 @@ find_package(DoubleConversion MODULE REQUIRED)
  list(APPEND FOLLY_LINK_LIBRARIES ${DOUBLE_CONVERSION_LIBRARY})
  list(APPEND FOLLY_INCLUDE_DIRECTORIES ${DOUBLE_CONVERSION_INCLUDE_DIR})
  
@@ -24,13 +24,39 @@
 -  list(APPEND FOLLY_INCLUDE_DIRECTORIES ${LIBGFLAGS_INCLUDE_DIR})
 -  set(FOLLY_LIBGFLAGS_LIBRARY ${LIBGFLAGS_LIBRARY})
 -  set(FOLLY_LIBGFLAGS_INCLUDE ${LIBGFLAGS_INCLUDE_DIR})
-+find_package(gflags MODULE)
++find_package(gflags)
 +set(FOLLY_HAVE_LIBGFLAGS ${gflags_FOUND})
 +if(gflags_FOUND)
 +  list(APPEND FOLLY_LINK_LIBRARIES ${gflags_LIBRARY})
 +  list(APPEND FOLLY_INCLUDE_DIRECTORIES ${gflags_INCLUDE_DIR})
-+  set(FOLLY_LIBGFLAGS_LIBRARY ${gflags_LIBRARY})
++  set(FOLLY_LIBGFLAGS_LIBRARY ${ggflags_LIBRARY})
 +  set(FOLLY_LIBGFLAGS_INCLUDE ${gflags_INCLUDE_DIR})
  endif()
  
- find_package(Glog MODULE)
+-find_package(Glog MODULE)
+-set(FOLLY_HAVE_LIBGLOG ${GLOG_FOUND})
+-list(APPEND FOLLY_LINK_LIBRARIES ${GLOG_LIBRARY})
+-list(APPEND FOLLY_INCLUDE_DIRECTORIES ${GLOG_INCLUDE_DIR})
++find_package(glog)
++set(FOLLY_HAVE_LIBGLOG ${glog_FOUND})
++list(APPEND FOLLY_LINK_LIBRARIES ${glog_LIBRARY})
++list(APPEND FOLLY_INCLUDE_DIRECTORIES ${glog_INCLUDE_DIR})
++message(STATUS "glog_INCLUDE_DIR: ${gflags_LINRARY}")
+ 
+ find_package(LibEvent MODULE REQUIRED)
+ list(APPEND FOLLY_LINK_LIBRARIES ${LIBEVENT_LIB})
+@@ -306,6 +307,8 @@ if (NOT DEFINED fmt_CONFIG)
+ endif()
+ target_link_libraries(folly_deps INTERFACE fmt::fmt)
+ 
++message(STATUS "libs ${FOLLY_LINK_LIBRARIES}")
++
+ list(REMOVE_DUPLICATES FOLLY_INCLUDE_DIRECTORIES)
+ target_include_directories(folly_deps INTERFACE ${FOLLY_INCLUDE_DIRECTORIES})
+ target_link_libraries(folly_deps INTERFACE
+@@ -313,3 +316,5 @@ target_link_libraries(folly_deps INTERFACE
+   ${FOLLY_SHINY_DEPENDENCIES}
+   ${FOLLY_ASAN_FLAGS}
+ )
++get_target_property(folly_libs folly_deps INTERFACE_LINK_LIBRARIES)
++message(STATUS "libs ${folly_libs}")

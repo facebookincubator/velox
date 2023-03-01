@@ -342,7 +342,14 @@ if(NOT TARGET gflags::gflags)
   add_library(gflags::gflags ALIAS gflags)
 endif()
 
-find_package(glog REQUIRED)
+# set_source(Unwind) resolve_dependency(Unwind)`
+
+if(${gflags_SOURCE} STREQUAL "BUNDLED")
+  set(glog_SOURCE BUNDLED)
+  else()
+  set(glog_SOURCE SYSTEM)
+endif()
+resolve_dependency(glog)
 
 set_source(fmt)
 resolve_dependency(fmt)
