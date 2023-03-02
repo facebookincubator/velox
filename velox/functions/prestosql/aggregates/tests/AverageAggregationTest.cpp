@@ -220,7 +220,8 @@ TEST_F(AverageAggregationTest, partialResults) {
 
 TEST_F(AverageAggregationTest, decimalAccumulator) {
   LongDecimalWithOverflowState accumulator;
-  accumulator.sum = -1000;
+  int128_t inputSum = -1000;
+  accumulator.setSum(inputSum);
   accumulator.count = 10;
   accumulator.overflow = -1;
 
@@ -230,7 +231,9 @@ TEST_F(AverageAggregationTest, decimalAccumulator) {
   LongDecimalWithOverflowState mergedAccumulator;
   mergedAccumulator.mergeWith(serialized);
 
-  ASSERT_EQ(mergedAccumulator.sum, accumulator.sum);
+  ASSERT_EQ(mergedAccumulator.upperSum, accumulator.upperSum);
+  ASSERT_EQ(mergedAccumulator.lowerSum, accumulator.lowerSum);
+  ASSERT_EQ(mergedAccumulator.sum(), inputSum);
   ASSERT_EQ(mergedAccumulator.count, accumulator.count);
   ASSERT_EQ(mergedAccumulator.overflow, accumulator.overflow);
 
@@ -238,7 +241,7 @@ TEST_F(AverageAggregationTest, decimalAccumulator) {
   memset(buffer, 0, accumulator.serializedSize());
   mergedAccumulator.serialize(serialized);
   mergedAccumulator.mergeWith(serialized);
-  ASSERT_EQ(mergedAccumulator.sum, accumulator.sum * 2);
+  ASSERT_EQ(mergedAccumulator.sum(), accumulator.sum() * 2);
   ASSERT_EQ(mergedAccumulator.count, accumulator.count * 2);
   ASSERT_EQ(mergedAccumulator.overflow, accumulator.overflow * 2);
   delete[] buffer;
@@ -341,6 +344,48 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {"avg(c0)"},
       {},
       {makeRowVector({makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1))})});
+
+  // Decimal average aggregation with multiple groups.
+  auto inputRows = {
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, 1}),
+           makeShortDecimalFlatVector({37220, 53450}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({2, 2}),
+           makeShortDecimalFlatVector({10410, 9250}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({3, 3}),
+           makeShortDecimalFlatVector({-12783, 0}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, 2}),
+           makeShortDecimalFlatVector({23178, 41093}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({2, 3}),
+           makeShortDecimalFlatVector({-10023, 5290}, DECIMAL(5, 2))}),
+  };
+
+  auto expectedResult = {
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1}),
+           makeShortDecimalFlatVector({37949}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({2}),
+           makeShortDecimalFlatVector({12683}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({3}),
+           makeShortDecimalFlatVector({-2498}, DECIMAL(5, 2))})};
+
+  testAggregations(inputRows, {"c0"}, {"avg(c1)"}, expectedResult);
+}
+
+TEST_F(AverageAggregationTest, avgDecimalWithMultipleRowVectors) {
+  auto inputRows = {
+      makeRowVector({makeShortDecimalFlatVector({100, 200}, DECIMAL(5, 2))}),
+      makeRowVector({makeShortDecimalFlatVector({300, 400}, DECIMAL(5, 2))}),
+      makeRowVector({makeShortDecimalFlatVector({500, 600}, DECIMAL(5, 2))}),
+  };
+
+  testAggregations(inputRows, {}, {"avg(c0)"}, "SELECT 350::DECIMAL(5,2)");
 }
 
 TEST_F(AverageAggregationTest, constantVectorOverflow) {

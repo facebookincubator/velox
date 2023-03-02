@@ -316,7 +316,7 @@ class DecimalAverageAggregate : public DecimalAggregate<TUnscaledType> {
     // Handles round-up of fraction results.
     int128_t average{0};
     DecimalUtil::computeAverage(
-        average, accumulator->sum, accumulator->count, accumulator->overflow);
+        average, accumulator->sum(), accumulator->count, accumulator->overflow);
     return TUnscaledType(average);
   }
 };

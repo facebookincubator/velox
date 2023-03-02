@@ -178,12 +178,12 @@ class DecimalSumAggregate
   virtual UnscaledLongDecimal computeFinalValue(
       LongDecimalWithOverflowState* accumulator) final {
     // Value is valid if the conditions below are true.
-    int128_t sum = accumulator->sum;
-    if ((accumulator->overflow == 1 && accumulator->sum < 0) ||
-        (accumulator->overflow == -1 && accumulator->sum > 0)) {
+    int128_t sum = accumulator->sum();
+    if ((accumulator->overflow == 1 && sum < 0) ||
+        (accumulator->overflow == -1 && sum > 0)) {
       sum = static_cast<int128_t>(
-          DecimalUtil::kOverflowMultiplier * accumulator->overflow +
-          accumulator->sum);
+          DecimalUtil::kOverflowMultiplier * accumulator->overflow + sum);
+      accumulator->setSum(sum);
     } else {
       VELOX_CHECK(accumulator->overflow == 0, "Decimal overflow");
     }

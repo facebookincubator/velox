@@ -38,8 +38,10 @@ struct LongDecimalWithOverflowState {
     overflow += stream.read<int64_t>();
     uint64_t lowerSum = stream.read<uint64_t>();
     int64_t upperSum = stream.read<int64_t>();
+    int128_t result = 0;
     overflow += DecimalUtil::addWithOverflow(
-        this->sum, buildInt128(upperSum, lowerSum), this->sum);
+        result, buildInt128(upperSum, lowerSum), this->sum());
+    this->setSum(result);
   }
 
   void serialize(StringView& serialized) {
@@ -48,21 +50,36 @@ struct LongDecimalWithOverflowState {
     common::OutputByteStream outStream(outputBuffer);
     outStream.append((char*)&count, sizeof(int64_t));
     outStream.append((char*)&overflow, sizeof(int64_t));
-    uint64_t lower = LOWER(sum);
-    int64_t upper = UPPER(sum);
-    outStream.append((char*)&lower, sizeof(int64_t));
-    outStream.append((char*)&upper, sizeof(int64_t));
+    outStream.append((char*)&lowerSum, sizeof(int64_t));
+    outStream.append((char*)&upperSum, sizeof(int64_t));
   }
 
   /*
-   * Total size = sizeOf(count) + sizeOf(overflow) + sizeOf(sum)
-   *            = 8 + 8 + 16 = 32.
+   * Total size = sizeOf(count) + sizeOf(overflow) +
+   *              sizeOf(upperSum) + sizeOf(lowerSum)
+   *            = 8 + 8 + 8 + 8 = 32.
    */
   inline static size_t serializedSize() {
     return sizeof(int64_t) * 4;
   }
 
-  int128_t sum{0};
+  inline int128_t sum() {
+    return buildInt128(upperSum, lowerSum);
+  }
+
+  inline void setSum(int128_t& sum) {
+    upperSum = UPPER(sum);
+    lowerSum = LOWER(sum);
+  }
+
+  // The accumulator's sum is int128_t; however, it is maintained as two int64_t
+  // values because int128_t causes the issue with alignment resulting in
+  // segfault.
+  // Certain operations such as placement new and reinterpret_cast used in the
+  // aggregation framework require int128_t to be aligned. It is not trivial to
+  // achieve this alignment given the layout of the aggregates in RowContainer.
+  int64_t upperSum{0};
+  int64_t lowerSum{0};
   int64_t count{0};
   int64_t overflow{0};
 };
@@ -74,10 +91,6 @@ class DecimalAggregate : public exec::Aggregate {
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(DecimalAggregate);
-  }
-
-  int32_t accumulatorAlignmentSize() const override {
-    return static_cast<int32_t>(sizeof(int128_t));
   }
 
   void initializeNewGroups(
@@ -150,8 +163,10 @@ class DecimalAggregate : public exec::Aggregate {
       const TInputType* data = decodedRaw_.data<TInputType>();
       LongDecimalWithOverflowState accumulator;
       rows.applyToSelected([&](vector_size_t i) {
+        int128_t result = 0;
         accumulator.overflow += DecimalUtil::addWithOverflow(
-            accumulator.sum, data[i].unscaledValue(), accumulator.sum);
+            result, data[i].unscaledValue(), accumulator.sum());
+        accumulator.setSum(result);
       });
       accumulator.count = rows.countSelected();
       char rawData[LongDecimalWithOverflowState::serializedSize()];
@@ -162,10 +177,12 @@ class DecimalAggregate : public exec::Aggregate {
     } else {
       LongDecimalWithOverflowState accumulator;
       rows.applyToSelected([&](vector_size_t i) {
+        int128_t result = 0;
         accumulator.overflow += DecimalUtil::addWithOverflow(
-            accumulator.sum,
+            result,
             decodedRaw_.valueAt<TInputType>(i).unscaledValue(),
-            accumulator.sum);
+            accumulator.sum());
+        accumulator.setSum(result);
       });
       accumulator.count = rows.countSelected();
       char rawData[LongDecimalWithOverflowState::serializedSize()];
@@ -208,6 +225,7 @@ class DecimalAggregate : public exec::Aggregate {
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
+        clearNull(groups[i]);
         auto decodedIndex = decodedPartial_.index(i);
         auto serializedAccumulator =
             intermediateFlatVector->valueAt(decodedIndex);
@@ -240,6 +258,7 @@ class DecimalAggregate : public exec::Aggregate {
         if (decodedPartial_.isNullAt(i)) {
           return;
         }
+        clearNull(group);
         auto decodedIndex = decodedPartial_.index(i);
         auto serializedAccumulator =
             intermediateFlatVector->valueAt(decodedIndex);
@@ -247,6 +266,7 @@ class DecimalAggregate : public exec::Aggregate {
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
+        clearNull(group);
         auto decodedIndex = decodedPartial_.index(i);
         auto serializedAccumulator =
             intermediateFlatVector->valueAt(decodedIndex);
@@ -315,8 +335,10 @@ class DecimalAggregate : public exec::Aggregate {
       exec::Aggregate::clearNull(group);
     }
     auto accumulator = decimalAccumulator(group);
+    int128_t result = 0;
     accumulator->overflow += DecimalUtil::addWithOverflow(
-        accumulator->sum, value.unscaledValue(), accumulator->sum);
+        result, value.unscaledValue(), accumulator->sum());
+    accumulator->setSum(result);
     accumulator->count += 1;
   }
 
