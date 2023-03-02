@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 message(STATUS "Found glog - Bundled")
-set(glog_FOUND)
+set(glog_FOUND TRUE)
 set(GLOG_LIBRARY ${glog_LIBRARY})
 message(STATUS "Found glog - ${GLOG_LIBRARY}")
