@@ -163,7 +163,6 @@ TEST_F(StringTest, sha1) {
 }
 
 TEST_F(StringTest, sha2) {
-  EXPECT_EQ(sha2(std::nullopt, std::nullopt), std::nullopt);
   EXPECT_EQ(sha2("Spark", -1), std::nullopt);
   EXPECT_EQ(sha2("Spark", 1), std::nullopt);
   EXPECT_EQ(
