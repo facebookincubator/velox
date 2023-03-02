@@ -477,6 +477,9 @@ include_directories(SYSTEM velox/external)
 include_directories(SYSTEM velox/external/duckdb)
 include_directories(SYSTEM velox/external/duckdb/tpch/dbgen/include)
 
+set(gtest_SOURCE BUNDLED)
+resolve_dependency(gtest)
+
 include(CTest) # include after project() but before add_subdirectory()
 
 include_directories(.)
