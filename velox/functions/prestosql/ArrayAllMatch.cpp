@@ -31,30 +31,25 @@ class AllMatchFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
-    VELOX_CHECK_EQ(TypeKind::BOOLEAN, outputType->kind());
-    VELOX_CHECK_EQ(TypeKind::ARRAY, args[0]->typeKind());
-    VELOX_CHECK_EQ(TypeKind::FUNCTION, args[1]->typeKind());
-
     exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
     auto& decodedArray = *arrayDecoder.get();
 
     auto flatArray = flattenArray(rows, args[0], decodedArray);
-    auto inputOffsets = flatArray->rawOffsets();
-    auto inputSizes = flatArray->rawSizes();
+    auto offsets = flatArray->rawOffsets();
+    auto sizes = flatArray->rawSizes();
 
     std::vector<VectorPtr> lambdaArgs = {flatArray->elements()};
-    auto newNumElements = flatArray->elements()->size();
+    auto numElements = flatArray->elements()->size();
 
     SelectivityVector finalSelection;
     if (!context.isFinalSelection()) {
       finalSelection = toElementRows<ArrayVector>(
-          newNumElements, *context.finalSelection(), flatArray.get());
+          numElements, *context.finalSelection(), flatArray.get());
     }
 
     VectorPtr matchBits;
     auto elementToTopLevelRows = getElementToTopLevelRows(
-        newNumElements, rows, flatArray.get(), context.pool());
+        numElements, rows, flatArray.get(), context.pool());
 
     // Loop over lambda functions and apply these to elements of the base array,
     // in most cases there will be only one function and the loop will run once.
@@ -63,11 +58,11 @@ class AllMatchFunction : public exec::VectorFunction {
     exec::LocalDecodedVector bitsDecoder(context);
     auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
     while (auto entry = it.next()) {
-      auto elementRows = toElementRows<ArrayVector>(
-          newNumElements, *entry.rows, flatArray.get());
+      auto elementRows =
+          toElementRows<ArrayVector>(numElements, *entry.rows, flatArray.get());
       auto wrapCapture = toWrapCapture<ArrayVector>(
-          newNumElements, entry.callable, *entry.rows, flatArray);
-
+          numElements, entry.callable, *entry.rows, flatArray);
+      bool hasVeloxUserError = false;
       entry.callable->apply(
           elementRows,
           finalSelection,
@@ -79,8 +74,8 @@ class AllMatchFunction : public exec::VectorFunction {
 
       bitsDecoder.get()->decode(*matchBits, elementRows);
       entry.rows->applyToSelected([&](vector_size_t row) {
-        auto size = inputSizes[row];
-        auto offset = inputOffsets[row];
+        auto size = sizes[row];
+        auto offset = offsets[row];
         auto allMatch = true;
         auto hasNull = false;
         for (auto i = 0; i < size; ++i) {
