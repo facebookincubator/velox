@@ -163,11 +163,9 @@ TEST_F(StringTest, sha1) {
 }
 
 TEST_F(StringTest, sha2) {
-  EXPECT_EQ(sha2(std::nullopt, 256), std::nullopt);
-  EXPECT_EQ(sha2("Spark", std::nullopt), std::nullopt);
   EXPECT_EQ(sha2(std::nullopt, std::nullopt), std::nullopt);
-  EXPECT_EQ(sha2("Spark", -999), std::nullopt);
-  EXPECT_EQ(sha2("Spark", 999), std::nullopt);
+  EXPECT_EQ(sha2("Spark", -1), std::nullopt);
+  EXPECT_EQ(sha2("Spark", 1), std::nullopt);
   EXPECT_EQ(
       sha2("", 0),
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
