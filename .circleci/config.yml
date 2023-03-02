@@ -21,7 +21,8 @@ workflows:
       - linux-build
       - linux-build-options
       - linux-adapters
-      - macos-build
+      - macos-intel-build
+      - macos-arm64-build
       - format-check
       - header-check
 
@@ -59,7 +60,8 @@ workflows:
       - linux-build-release
       - linux-build-options
       - linux-adapters
-      - macos-build
+      - macos-intel-build
+      - macos-arm64-build
 
 commands:
   update-submodules:
