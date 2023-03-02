@@ -287,6 +287,7 @@ jobs:
       - run:
           name: "Build on MacOS"
           command: |
+            export CPU_TARGET="arm64" 
             export PATH=~/deps/bin:~/deps/opt/bison/bin:~/deps/opt/flex/bin:${PATH}
             mkdir -p .ccache
             export CCACHE_DIR=$(pwd)/.ccache
