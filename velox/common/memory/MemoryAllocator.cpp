@@ -104,6 +104,7 @@ class MallocAllocator : public MemoryAllocator {
 
   ~MallocAllocator() {
     VELOX_CHECK((numAllocated_ == 0) && (numMapped_ == 0), "{}", toString());
+    //assert(false);
   }
 
   Kind kind() const override {
@@ -422,6 +423,8 @@ bool MallocAllocator::checkConsistency() const {
 }
 
 std::string MallocAllocator::toString() const {
+  assert(false);
+  LOG(ERROR) << "bad";
   return fmt::format(
       "[allocated pages {}, mapped pages {}]", numAllocated_, numMapped_);
 }

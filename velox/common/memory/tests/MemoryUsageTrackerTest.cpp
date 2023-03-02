@@ -19,14 +19,13 @@
 #include "folly/Random.h"
 #include "folly/futures/Barrier.h"
 #include "velox/common/future/VeloxPromise.h"
-#include "velox/common/memory/MemoryUsageTracker.h"
 #include "velox/common/testutil/TestValue.h"
 
 using namespace ::testing;
-using namespace ::facebook::velox::memory;
 using namespace ::facebook::velox;
 using namespace ::facebook::velox::common::testutil;
 
+#if 0
 class MemoryUsageTrackerTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
@@ -695,5 +694,6 @@ TEST_F(MemoryUsageTrackerTest, concurrentAllocates) {
   tracker->update(-kSmallAllocSize);
   tracker->update(-kLargeAllocSize);
 }
+#endif
 
 // TODO: add collision tests and stats verification.

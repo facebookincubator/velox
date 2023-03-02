@@ -48,9 +48,7 @@ void assertCopyableVector(const VectorPtr& vector);
 
 class VectorTestBase {
  protected:
-  VectorTestBase() {
-    pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
-  }
+  VectorTestBase() = default;
 
   ~VectorTestBase();
 

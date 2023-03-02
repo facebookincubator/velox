@@ -57,12 +57,16 @@ OperatorCtx::OperatorCtx(
     DriverCtx* driverCtx,
     const core::PlanNodeId& planNodeId,
     int32_t operatorId,
-    const std::string& operatorType)
+    const std::string& operatorType,
+    std::shared_ptr<memory::MemoryReclaimer> reclaimer)
     : driverCtx_(driverCtx),
       planNodeId_(planNodeId),
       operatorId_(operatorId),
       operatorType_(operatorType),
-      pool_(driverCtx_->addOperatorPool(planNodeId, operatorType)) {}
+      pool_(driverCtx_->addOperatorPool(
+          planNodeId,
+          operatorType,
+          std::move(reclaimer))) {}
 
 core::ExecCtx* OperatorCtx::execCtx() const {
   if (!execCtx_) {
@@ -127,26 +131,14 @@ Operator::Operator(
           driverCtx,
           planNodeId,
           operatorId,
-          operatorType)),
+          operatorType,
+          Operator::MemoryReclaimer::create(this))),
       stats_(OperatorStats{
           operatorId,
           driverCtx->pipelineId,
           std::move(planNodeId),
           std::move(operatorType)}),
-      outputType_(std::move(outputType)) {
-  auto memoryUsageTracker = pool()->getMemoryUsageTracker();
-  if (memoryUsageTracker) {
-    memoryUsageTracker->setMakeMemoryCapExceededMessage(
-        [&](memory::MemoryUsageTracker& tracker) {
-          VELOX_DCHECK(pool()->getMemoryUsageTracker().get() == &tracker);
-          std::stringstream out;
-          out << "\nFailed Operator: " << this->operatorType() << "."
-              << this->operatorId() << ": "
-              << succinctBytes(tracker.currentBytes());
-          return out.str();
-        });
-  }
-}
+      outputType_(std::move(outputType)) {}
 
 std::vector<std::unique_ptr<Operator::PlanNodeTranslator>>&
 Operator::translators() {
@@ -419,4 +411,72 @@ void OperatorStats::clear() {
   runtimeStats.clear();
 }
 
+bool Operator::canReclaim() const {
+  return reclaimable_ && canSpill() &&
+      !operatorCtx_->driver()->state().isSuspended;
+}
+
+uint64_t Operator::reclaimableBytes() const {
+  return canReclaim() ? pool()->currentBytes() : 0;
+}
+
+uint64_t Operator::reclaim(uint64_t targetBytes) {
+  const auto& driverState = operatorCtx_->driver()->state();
+  VELOX_CHECK(!driverState.isOnThread() || driverState.isSuspended);
+
+  if (!canReclaim()) {
+    return 0;
+  }
+
+  // TODO: spill all the in-memory state before we have memory compaction
+  // support.
+  const int64_t oldUsage = pool()->currentBytes();
+  spill(0);
+  const int64_t usageAfterSpill = pool()->currentBytes();
+  VELOX_CHECK_GE(oldUsage, usageAfterSpill);
+  return oldUsage - usageAfterSpill;
+}
+
+std::shared_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
+    Operator* op) {
+  auto* reclaimer = new Operator::MemoryReclaimer(op);
+  return std::shared_ptr<memory::MemoryReclaimer>(reclaimer);
+}
+
+void Operator::MemoryReclaimer::enterArbitration() {
+  Driver* driver = op_->operatorCtx_->driver();
+  VELOX_CHECK_EQ(std::this_thread::get_id(), driver->state().thread);
+  if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
+    // There is no need for arbitration if the associated task has already
+    // terminated.
+    VELOX_FAIL("Terminate detected when entering suspension");
+  }
+}
+
+void Operator::MemoryReclaimer::leaveArbitration() noexcept {
+  Driver* driver = op_->operatorCtx_->driver();
+  VELOX_CHECK_EQ(std::this_thread::get_id(), driver->state().thread);
+  driver->task()->leaveSuspended(driver->state());
+}
+
+bool Operator::MemoryReclaimer::canReclaim(
+    const memory::MemoryPool& pool) const {
+  VELOX_CHECK_EQ(pool.name(), op_->pool()->name());
+  return op_->canReclaim();
+}
+
+uint64_t Operator::MemoryReclaimer::reclaimableBytes(
+    const memory::MemoryPool& pool,
+    bool& reclaimable) const {
+  VELOX_CHECK_EQ(pool.name(), op_->pool()->name());
+  reclaimable = op_->canReclaim();
+  return reclaimable ? op_->reclaimableBytes() : 0;
+}
+
+uint64_t Operator::MemoryReclaimer::reclaim(
+    memory::MemoryPool* pool,
+    uint64_t targetBytes) {
+  VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
+  return op_->reclaim(targetBytes);
+}
 } // namespace facebook::velox::exec

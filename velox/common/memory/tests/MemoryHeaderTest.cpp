@@ -23,36 +23,39 @@ using namespace facebook::velox::memory;
 
 TEST(MemoryHeaderTest, GetProcessDefaultMemoryManager) {
   auto& managerA = getProcessDefaultMemoryManager();
+  ASSERT_EQ(managerA.numPools(), 0);
   auto& managerB = getProcessDefaultMemoryManager();
-  ASSERT_EQ(0, managerA.getRoot().getChildCount());
-  ASSERT_EQ(0, managerB.getRoot().getChildCount());
+  ASSERT_EQ(managerB.numPools(), 0);
 
-  auto child1 = managerA.getRoot().addChild("child_1");
-  auto child2 = managerB.getRoot().addChild("child_2");
-  EXPECT_EQ(2, managerA.getRoot().getChildCount());
-  EXPECT_EQ(2, managerB.getRoot().getChildCount());
-  child1.reset();
-  child2.reset();
-  EXPECT_EQ(0, managerB.getRoot().getChildCount());
+  auto poolFromA = managerA.getPool("child_1");
+  auto poolFromB = managerB.getPool("child_2");
+  ASSERT_EQ(2, managerA.numPools());
+  ASSERT_EQ(2, managerB.numPools());
+  poolFromA.reset();
+  ASSERT_EQ(managerA.numPools(), 1);
+  ASSERT_EQ(managerB.numPools(), 1);
+  poolFromA.reset();
+  ASSERT_EQ(managerA.numPools(), 0);
+  ASSERT_EQ(managerB.numPools(), 0);
 }
 
 TEST(MemoryHeaderTest, getDefaultMemoryPool) {
   auto& manager = getProcessDefaultMemoryManager();
-  ASSERT_EQ(0, manager.getRoot().getChildCount());
+  ASSERT_EQ(manager.numPools(), 0);
   {
     auto poolA = getDefaultMemoryPool();
     auto poolB = getDefaultMemoryPool();
-    EXPECT_EQ(2, manager.getRoot().getChildCount());
+    ASSERT_EQ(manager.numPools(), 2);
     {
       auto poolC = getDefaultMemoryPool();
-      EXPECT_EQ(3, manager.getRoot().getChildCount());
+      ASSERT_EQ(manager.numPools(), 3);
       {
         auto poolD = getDefaultMemoryPool();
-        EXPECT_EQ(4, manager.getRoot().getChildCount());
+        ASSERT_EQ(manager.numPools(), 4);
       }
-      EXPECT_EQ(3, manager.getRoot().getChildCount());
+      ASSERT_EQ(manager.numPools(), 3);
     }
-    EXPECT_EQ(2, manager.getRoot().getChildCount());
+    ASSERT_EQ(manager.numPools(), 2);
   }
-  EXPECT_EQ(0, manager.getRoot().getChildCount());
+  ASSERT_EQ(manager.numPools(), 0);
 }

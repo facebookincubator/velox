@@ -46,16 +46,13 @@ struct MemoryStats {
   uint64_t peakTotalMemoryReservation{0};
   uint64_t numMemoryAllocations{0};
 
-  void update(const std::shared_ptr<memory::MemoryUsageTracker>& tracker) {
-    if (tracker == nullptr) {
-      return;
-    }
-    userMemoryReservation = tracker->currentBytes();
+  void update(const memory::MemoryPool& pool) {
+    userMemoryReservation = pool.currentBytes();
     systemMemoryReservation = 0;
-    peakUserMemoryReservation = tracker->peakBytes();
+    peakUserMemoryReservation = pool.stats().peakBytes;
     peakSystemMemoryReservation = 0;
-    peakTotalMemoryReservation = tracker->peakBytes();
-    numMemoryAllocations = tracker->numAllocs();
+    peakTotalMemoryReservation = pool.stats().peakBytes;
+    numMemoryAllocations = pool.stats().numAllocs;
   }
 
   void add(const MemoryStats& other) {
@@ -165,7 +162,8 @@ class OperatorCtx {
       DriverCtx* FOLLY_NONNULL driverCtx,
       const core::PlanNodeId& planNodeId,
       int32_t operatorId,
-      const std::string& operatorType = "");
+      const std::string& operatorType,
+      std::shared_ptr<memory::MemoryReclaimer> reclaimer);
 
   const std::shared_ptr<Task>& task() const {
     return driverCtx_->task;
@@ -368,10 +366,8 @@ class Operator : public BaseRuntimeStatWriter {
   virtual void close() {
     input_ = nullptr;
     results_.clear();
-    if (operatorCtx_->pool()->getMemoryUsageTracker() != nullptr) {
-      // Release the unused memory reservation on close.
-      operatorCtx_->pool()->getMemoryUsageTracker()->release();
-    }
+    // Release the unused memory reservation on close.
+    operatorCtx_->pool()->release();
   }
 
   // Returns true if 'this' never has more output rows than input rows.
@@ -404,7 +400,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   virtual std::string toString() const;
 
-  velox::memory::MemoryPool* FOLLY_NONNULL pool() {
+  velox::memory::MemoryPool* FOLLY_NONNULL pool() const {
     return operatorCtx_->pool();
   }
 
@@ -419,6 +415,12 @@ class Operator : public BaseRuntimeStatWriter {
   const std::string& operatorType() const {
     return operatorCtx_->operatorType();
   }
+
+  virtual bool canReclaim() const;
+
+  virtual uint64_t reclaimableBytes() const;
+
+  virtual uint64_t reclaim(uint64_t targetBytes);
 
   // Registers 'translator' for mapping user defined PlanNode subclass instances
   // to user-defined Operators.
@@ -451,15 +453,50 @@ class Operator : public BaseRuntimeStatWriter {
   static std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& planNode);
 
  protected:
+  class MemoryReclaimer : public memory::MemoryReclaimer {
+   public:
+    static std::shared_ptr<memory::MemoryReclaimer> create(Operator* op);
+
+    void enterArbitration() override;
+    void leaveArbitration() noexcept override;
+
+    bool canReclaim(const memory::MemoryPool& pool) const override;
+    uint64_t reclaimableBytes(const memory::MemoryPool& pool, bool& reclaimable)
+        const override;
+    uint64_t reclaim(memory::MemoryPool* pool, uint64_t targetBytes) override;
+
+   private:
+    explicit MemoryReclaimer(Operator* op) : op_(op) {
+      VELOX_CHECK_NOT_NULL(op_);
+    };
+
+    Operator* op_;
+  };
+
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
 
   // Creates output vector from 'input_' and 'results_' according to
   // 'identityProjections_' and 'resultProjections_'.
   RowVectorPtr fillOutput(vector_size_t size, BufferPtr mapping);
 
-  std::unique_ptr<OperatorCtx> operatorCtx_;
-  folly::Synchronized<OperatorStats> stats_;
+  FOLLY_ALWAYS_INLINE bool canSpill() const {
+    return spillConfig_.has_value();
+  }
+
+  virtual void spill(int64_t targetBytes) {
+    VELOX_UNSUPPORTED("spill on {} operator is not supported", operatorType());
+  }
+
+  const std::unique_ptr<OperatorCtx> operatorCtx_;
   const RowTypePtr outputType_;
+  const std::shared_ptr<memory::MemoryReclaimer> memoryReclaimer_;
+
+  // Filesystem path for spill files, empty if spilling is disabled.
+  // The disk spilling related configs if spilling is enabled, otherwise null.
+  std::optional<Spiller::Config> spillConfig_;
+
+  std::atomic<bool> reclaimable_{false};
+  folly::Synchronized<OperatorStats> stats_;
 
   // Holds the last data from addInput until it is processed. Reset after the
   // input is processed.

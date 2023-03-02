@@ -48,8 +48,9 @@ void veloxPoolFree(
 }
 
 VeloxPoolAllocator& getDefaultAllocator() {
-  static VeloxPoolAllocator allocator{
-      memory::getProcessDefaultMemoryManager().getRoot()};
+  static std::shared_ptr<memory::MemoryPool> pool =
+      memory::getProcessDefaultMemoryManager().getPool();
+  static VeloxPoolAllocator allocator{*pool};
   return allocator;
 }
 

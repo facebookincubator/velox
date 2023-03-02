@@ -215,7 +215,8 @@ struct DriverCtx {
 
   velox::memory::MemoryPool* FOLLY_NONNULL addOperatorPool(
       const core::PlanNodeId& planNodeId,
-      const std::string& operatorType);
+      const std::string& operatorType,
+      std::shared_ptr<memory::MemoryReclaimer> reclaimer);
 };
 
 class Driver : public std::enable_shared_from_this<Driver> {
@@ -270,6 +271,8 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // found. For example, hash join probe accesses the corresponding
   // build by id.
   Operator* FOLLY_NULLABLE findOperator(std::string_view planNodeId) const;
+
+  Operator* findOperator(int32_t operatorId) const;
 
   // Returns a list of all operators.
   std::vector<Operator*> operators() const;

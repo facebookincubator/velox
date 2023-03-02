@@ -2066,7 +2066,8 @@ TEST_F(VectorTest, mapSliceMutability) {
 TEST_F(VectorTest, lifetime) {
   ASSERT_DEATH(
       {
-        auto childPool = pool_->addChild("test");
+        auto childPool =
+            pool_->addChild("test", memory::MemoryPool::Kind::kLeaf);
         auto v = BaseVector::create(INTEGER(), 10, childPool.get());
 
         // BUG: Memory pool needs to stay alive until all memory allocated from

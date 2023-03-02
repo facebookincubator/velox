@@ -228,7 +228,9 @@ class ProtoWriter : public WriterBase {
  public:
   ProtoWriter(memory::MemoryPool& pool)
       : WriterBase{std::make_unique<dwio::common::MemorySink>(pool, 1024)} {
-    initContext(std::make_shared<Config>(), pool.addChild("proto_writer"));
+    initContext(
+        std::make_shared<Config>(),
+        pool.addChild("proto_writer", memory::MemoryPool::Kind::kLeaf));
   }
 
   template <typename T>

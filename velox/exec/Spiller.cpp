@@ -411,21 +411,32 @@ void Spiller::spill(uint64_t targetRows, uint64_t targetBytes) {
 void Spiller::spill(const SpillPartitionNumSet& partitions) {
   VELOX_CHECK(!spillFinalized_);
 
-  if (FOLLY_UNLIKELY(type_ == Type::kHashJoinProbe)) {
+  if (type_ == Type::kHashJoinProbe) {
     VELOX_FAIL("There is no row container for {}", typeName(type_));
   }
-  if (FOLLY_UNLIKELY(!pendingSpillPartitions_.empty())) {
+  if (!pendingSpillPartitions_.empty()) {
     VELOX_FAIL(
         "There are pending spilling operations on partitions: {}",
         folly::join(",", pendingSpillPartitions_));
   }
 
-  for (auto partition : partitions) {
-    if (FOLLY_LIKELY(!state_.isPartitionSpilled(partition))) {
-      state_.setPartitionSpilled(partition);
+  if (partitions.empty()) {
+    for (auto partition = 0; partition < state_.maxPartitions(); ++partition) {
+      if (!state_.isPartitionSpilled(partition)) {
+        state_.setPartitionSpilled(partition);
+      }
+      if (!spillRuns_[partition].rows.empty()) {
+        pendingSpillPartitions_.insert(partition);
+      }
     }
-    if (FOLLY_LIKELY(!spillRuns_[partition].rows.empty())) {
-      pendingSpillPartitions_.insert(partition);
+  } else {
+    for (auto partition : partitions) {
+      if (!state_.isPartitionSpilled(partition)) {
+        state_.setPartitionSpilled(partition);
+      }
+      if (!spillRuns_[partition].rows.empty()) {
+        pendingSpillPartitions_.insert(partition);
+      }
     }
   }
 
@@ -651,7 +662,7 @@ void Spiller::fillSpillRuns(std::vector<SpillableStats>& statsList) {
 
 // static
 memory::MemoryPool& Spiller::spillPool() {
-  static auto pool = memory::getDefaultMemoryPool();
+  static auto pool = memory::getDefaultMemoryPool("spilling");
   return *pool;
 }
 

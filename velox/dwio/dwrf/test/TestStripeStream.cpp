@@ -499,10 +499,10 @@ namespace {
 // needed methods implemented.
 class TestStripeStreams : public StripeStreamsBase {
  public:
-  explicit TestStripeStreams()
-      : StripeStreamsBase{
-            &facebook::velox::memory::getProcessDefaultMemoryManager()
-                 .getRoot()} {}
+  explicit TestStripeStreams(
+      std::shared_ptr<MemoryPool> pool =
+          facebook::velox::memory::getDefaultMemoryPool())
+      : StripeStreamsBase{pool.get()}, pool_(std::move(pool)) {}
 
   const proto::ColumnEncoding& getEncoding(
       const EncodingKey& ek) const override {
@@ -550,6 +550,9 @@ class TestStripeStreams : public StripeStreamsBase {
   MOCK_CONST_METHOD4(
       getStreamProxy,
       SeekableInputStream*(uint32_t, uint32_t, proto::Stream_Kind, bool));
+
+ private:
+  std::shared_ptr<MemoryPool> pool_;
 };
 
 proto::ColumnEncoding genColumnEncoding(

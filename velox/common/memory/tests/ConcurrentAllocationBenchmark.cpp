@@ -53,7 +53,7 @@ class MemoryOperator {
       : maxMemory_(maxMemory),
         allocationBytes_(allocationSize),
         maxOps_(maxOps),
-        pool_(memoryManager->getChild()) {
+        pool_(memoryManager->getPool(maxMemory)) {
     rng_.seed(1234);
   }
 

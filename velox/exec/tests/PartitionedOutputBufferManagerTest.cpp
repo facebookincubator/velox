@@ -388,7 +388,7 @@ TEST_F(PartitionedOutputBufferManagerTest, setQueueErrorWithPendingPages) {
 
   auto pool = memory::getDefaultMemoryPool();
   auto page = std::make_unique<SerializedPage>(std::move(iobuf), pool.get());
-  ASSERT_EQ(payloadSize, pool->getCurrentBytes());
+  ASSERT_EQ(payloadSize, pool->currentBytes());
 
   auto queue = std::make_shared<ExchangeQueue>(1 << 20);
   std::vector<ContinuePromise> promises;
@@ -418,13 +418,13 @@ TEST_F(PartitionedOutputBufferManagerTest, serializedPage) {
     std::memcpy(iobuf->writableData(), payload.data(), payloadSize);
     iobuf->append(payloadSize);
 
-    EXPECT_EQ(0, pool_->getCurrentBytes());
+    EXPECT_EQ(0, pool_->currentBytes());
     {
       auto serializedPage =
           std::make_shared<SerializedPage>(std::move(iobuf), pool_.get());
-      EXPECT_EQ(payloadSize, pool_->getCurrentBytes());
+      EXPECT_EQ(payloadSize, pool_->currentBytes());
     }
-    EXPECT_EQ(0, pool_->getCurrentBytes());
+    EXPECT_EQ(0, pool_->currentBytes());
   }
 
   // External managed memory case
@@ -435,15 +435,15 @@ TEST_F(PartitionedOutputBufferManagerTest, serializedPage) {
     std::string payload = "abcdefghijklmnopq";
     std::memcpy(iobuf->writableData(), payload.data(), payload.size());
 
-    EXPECT_EQ(0, pool_->getCurrentBytes());
+    EXPECT_EQ(0, pool_->currentBytes());
     {
       auto serializedPage = std::make_shared<SerializedPage>(
           std::move(iobuf), pool_.get(), [allocator, kBufferSize](auto& iobuf) {
             allocator->freeBytes(iobuf.writableData(), kBufferSize);
           });
-      EXPECT_EQ(kBufferSize, pool_->getCurrentBytes());
+      EXPECT_EQ(kBufferSize, pool_->currentBytes());
     }
-    EXPECT_EQ(0, pool_->getCurrentBytes());
+    EXPECT_EQ(0, pool_->currentBytes());
   }
 }
 

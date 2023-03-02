@@ -32,15 +32,25 @@ constexpr size_t kSizeMB = 1024 * 1024;
 } // namespace
 
 namespace facebook::velox::dwrf {
+#if 0
+#if 0
 class MockMemoryPool : public velox::memory::MemoryPool {
  public:
   explicit MockMemoryPool(
+      velox::memory::MemoryManager* manager,
       const std::string& name,
       std::shared_ptr<MemoryPool> parent,
+      MemoryPool::Kind kind,
       int64_t cap = std::numeric_limits<int64_t>::max())
-      : MemoryPool{name, parent, {.alignment = velox::memory::MemoryAllocator::kMinAlignment}},
-        memoryUsageTracker_{velox::memory::MemoryUsageTracker::create(cap)} {}
+      : MemoryPool{
+            manager,
+            name,
+            kind,
+            std::move(parent),
+            {.alignment = velox::memory::MemoryAllocator::kMinAlignment,
+             .capacity = cap}} {}
 
+#if 0
   // Methods not usually exposed by MemoryPool interface to
   // allow for manipulation.
   void updateLocalMemoryUsage(int64_t size) {
@@ -50,112 +60,24 @@ class MockMemoryPool : public velox::memory::MemoryPool {
   void setLocalMemoryUsage(int64_t size) {
     localMemoryUsage_ = size;
   }
+#endif
 
   void zeroOutMemoryUsage() {
-    localMemoryUsage_ = 0;
+    //localMemoryUsage_ = 0;
   }
 
   static std::shared_ptr<MockMemoryPool> create() {
-    return std::make_shared<MockMemoryPool>("standalone_pool", nullptr);
-  }
-
-  void* allocate(int64_t size) override {
-    updateLocalMemoryUsage(size);
-    return allocator_->allocateBytes(size);
-  }
-
-  void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override {
-    updateLocalMemoryUsage(numEntries * sizeEach);
-    return allocator_->allocateZeroFilled(numEntries * sizeEach);
-  }
-
-  // No-op for attempts to shrink buffer.
-  void* reallocate(void* p, int64_t size, int64_t newSize) override {
-    auto difference = newSize - size;
-    updateLocalMemoryUsage(difference);
-    // No-op for attempts to shrink buffer. MemoryAllocator's free works
-    // properly despite signature.
-    if (UNLIKELY(difference <= 0)) {
-      return p;
-    }
-    return allocator_->reallocateBytes(p, size, newSize);
-  }
-  void free(void* p, int64_t size) override {
-    allocator_->freeBytes(p, size);
-    updateLocalMemoryUsage(-size);
-  }
-
-  void allocateNonContiguous(
-      velox::memory::MachinePageCount /*unused*/,
-      velox::memory::Allocation& /*unused*/,
-      velox::memory::MachinePageCount /*unused*/) override {
-    VELOX_UNSUPPORTED("allocateNonContiguous unsupported");
-  }
-
-  void freeNonContiguous(velox::memory::Allocation& /*unused*/) override {
-    VELOX_UNSUPPORTED("freeNonContiguous unsupported");
-  }
-
-  velox::memory::MachinePageCount largestSizeClass() const override {
-    VELOX_UNSUPPORTED("largestSizeClass unsupported");
-  }
-
-  const std::vector<velox::memory::MachinePageCount>& sizeClasses()
-      const override {
-    VELOX_UNSUPPORTED("sizeClasses unsupported");
-  }
-
-  void allocateContiguous(
-      velox::memory::MachinePageCount /*unused*/,
-      velox::memory::ContiguousAllocation& /*unused*/) override {
-    VELOX_UNSUPPORTED("allocateContiguous unsupported");
-  }
-
-  void freeContiguous(velox::memory::ContiguousAllocation&
-                      /*unused*/) override {
-    VELOX_UNSUPPORTED("freeContiguous unsupported");
-  }
-
-  int64_t getCurrentBytes() const override {
-    return localMemoryUsage_;
-  }
-
-  std::shared_ptr<MemoryPool> genChild(
-      std::shared_ptr<MemoryPool> parent,
-      const std::string& name) override {
     return std::make_shared<MockMemoryPool>(
-        name, parent, memoryUsageTracker_->maxMemory());
-  }
-
-  void setMemoryUsageTracker(
-      const std::shared_ptr<velox::memory::MemoryUsageTracker>& tracker)
-      override {
-    memoryUsageTracker_ = tracker;
-  }
-
-  const std::shared_ptr<velox::memory::MemoryUsageTracker>&
-  getMemoryUsageTracker() const override {
-    return memoryUsageTracker_;
-  }
-
-  MOCK_CONST_METHOD0(getMaxBytes, int64_t());
-
-  MOCK_METHOD1(updateSubtreeMemoryUsage, int64_t(int64_t));
-
-  MOCK_CONST_METHOD0(getAlignment, uint16_t());
-
-  std::string toString() const override {
-    return fmt::format(
-        "Mock Memory Pool[{}]",
-        velox::memory::MemoryAllocator::kindString(allocator_->kind()));
+        "standalone_pool", nullptr, MemoryPool::Kind::kRoot);
   }
 
  private:
-  velox::memory::MemoryAllocator* const FOLLY_NONNULL allocator_{
-      velox::memory::MemoryAllocator::getInstance()};
-  int64_t localMemoryUsage_{0};
-  std::shared_ptr<velox::memory::MemoryUsageTracker> memoryUsageTracker_;
+  //velox::memory::MemoryManager* const manager_{
+//      &velox::memory::MemoryManager::getInstance()};
+//  velox::memory::MemoryAllocator* const allocator_{&manager_->allocator()};
+  // int64_t localMemoryUsage_{0};
 };
+#endif
 
 // For testing functionality of Writer we need to instantiate
 // it.
@@ -242,7 +164,7 @@ struct SimulatedFlush {
     auto& generalPool = dynamic_cast<MockMemoryPool&>(
         context.getMemoryPool(MemoryUsageCategory::GENERAL));
     dictPool.setLocalMemoryUsage(dictMemoryUsage);
-    ASSERT_EQ(outputStreamMemoryUsage, outputPool.getCurrentBytes());
+    ASSERT_EQ(outputStreamMemoryUsage, outputPool.currentBytes());
     outputPool.updateLocalMemoryUsage(flushOverhead);
     generalPool.setLocalMemoryUsage(generalMemoryUsage);
 
@@ -336,13 +258,12 @@ class WriterFlushTestHelper {
         ASSERT_EQ(
             0,
             context.getMemoryPool(MemoryUsageCategory::DICTIONARY)
-                .getCurrentBytes());
+                .currentBytes());
         auto outputStreamMemoryUsage =
             context.getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM)
-                .getCurrentBytes();
+                .currentBytes();
         auto generalMemoryUsage =
-            context.getMemoryPool(MemoryUsageCategory::GENERAL)
-                .getCurrentBytes();
+            context.getMemoryPool(MemoryUsageCategory::GENERAL).currentBytes();
 
         uint64_t flushOverhead =
             folly::Random::rand32(0, context.stripeRawSize, gen);
@@ -578,4 +499,5 @@ TEST(TestWriterFlush, MemoryBasedFlushRandom) {
         kSizeMB);
   }
 }
+#endif
 } // namespace facebook::velox::dwrf

@@ -51,8 +51,8 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       int64_t maxMemory = kMaxMemory) {
     auto queryCtx = std::make_shared<core::QueryCtx>(
         executor_.get(), std::make_shared<core::MemConfig>(configSettings_));
-    queryCtx->pool()->setMemoryUsageTracker(
-        MemoryUsageTracker::create(maxMemory));
+    memory::MemoryPoolImpl::fromPool(queryCtx->pool())
+        ->testingSetCapacity(maxMemory);
     core::PlanFragment planFragment{planNode};
     return std::make_shared<Task>(
         taskId,
@@ -192,16 +192,17 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
       numPools += pools.size();
       std::vector<memory::MemoryPool*> childPools;
       for (auto pool : pools) {
-        pool->visitChildren([&](memory::MemoryPool* childPool) {
-          ASSERT_EQ(poolsByName.count(childPool->name()), 0)
+        pool->visitChildren([&](memory::MemoryPool* childPool) -> bool {
+          EXPECT_EQ(poolsByName.count(childPool->name()), 0)
               << childPool->name();
           poolsByName[childPool->name()] = childPool;
           if (childPool->parent() != nullptr) {
-            ASSERT_EQ(poolsByName.count(childPool->parent()->name()), 1);
-            ASSERT_EQ(
+            EXPECT_EQ(poolsByName.count(childPool->parent()->name()), 1);
+            EXPECT_EQ(
                 poolsByName[childPool->parent()->name()], childPool->parent());
           }
           childPools.push_back(childPool);
+          return true;
         });
       }
       pools.swap(childPools);

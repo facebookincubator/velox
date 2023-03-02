@@ -21,36 +21,33 @@ using namespace facebook::velox;
 class VectorPrepareForReuseTest : public testing::Test,
                                   public test::VectorTestBase {
  protected:
-  VectorPrepareForReuseTest() {
-    pool()->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
-  }
+  VectorPrepareForReuseTest() = default;
 };
 
 class MemoryAllocationChecker {
  public:
   explicit MemoryAllocationChecker(memory::MemoryPool* pool)
-      : tracker_{pool->getMemoryUsageTracker().get()},
-        numAllocations_{tracker_->numAllocs()} {}
+      : pool_(pool), numAllocations_{pool_->stats().numAllocs} {}
 
   bool assertOne() {
-    bool ok = numAllocations_ + 1 == tracker_->numAllocs();
-    numAllocations_ = tracker_->numAllocs();
+    bool ok = numAllocations_ + 1 == pool_->stats().numAllocs;
+    numAllocations_ = pool_->stats().numAllocs;
     return ok;
   }
 
   bool assertAtLeastOne() {
-    bool ok = numAllocations_ < tracker_->numAllocs();
-    numAllocations_ = tracker_->numAllocs();
+    bool ok = numAllocations_ < pool_->stats().numAllocs;
+    numAllocations_ = pool_->stats().numAllocs;
     return ok;
   }
 
   ~MemoryAllocationChecker() {
-    EXPECT_EQ(numAllocations_, tracker_->numAllocs());
+    VELOX_CHECK_EQ(numAllocations_, pool_->stats().numAllocs);
   }
 
  private:
-  memory::MemoryUsageTracker* tracker_;
-  int64_t numAllocations_;
+  memory::MemoryPool* pool_;
+  uint64_t numAllocations_;
 };
 
 TEST_F(VectorPrepareForReuseTest, strings) {

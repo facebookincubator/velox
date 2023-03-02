@@ -792,10 +792,8 @@ TEST_F(AggregationTest, partialAggregationMaybeReservationReleaseCheck) {
       {QueryConfig::kMaxExtendedPartialAggregationMemory,
        std::to_string(kMaxPartialMemoryUsage)},
   });
-  {
-    params.queryCtx->pool()->getMemoryUsageTracker()->testingUpdateMaxMemory(
-        kMaxUserMemoryUsage);
-  }
+  memory::MemoryPoolImpl::fromPool(params.queryCtx->pool())
+      ->testingSetCapacity(kMaxUserMemoryUsage);
   core::PlanNodeId aggNodeId;
   params.planNode = PlanBuilder()
                         .values(vectors)
@@ -810,10 +808,8 @@ TEST_F(AggregationTest, partialAggregationMaybeReservationReleaseCheck) {
   EXPECT_EQ(0, runtimeStats.count("maxExtendedPartialAggregationMemoryUsage"));
   EXPECT_EQ(0, runtimeStats.count("partialAggregationPct"));
   // Check all the reserved memory have been released.
-  EXPECT_EQ(0, task->pool()->getMemoryUsageTracker()->availableReservation());
-  EXPECT_GT(
-      kMaxPartialMemoryUsage,
-      task->pool()->getMemoryUsageTracker()->currentBytes());
+  EXPECT_EQ(0, task->pool()->availableReservation());
+  EXPECT_GT(kMaxPartialMemoryUsage, task->pool()->currentBytes());
 }
 
 TEST_F(AggregationTest, spillWithMemoryLimit) {
@@ -848,8 +844,8 @@ TEST_F(AggregationTest, spillWithMemoryLimit) {
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->pool()->setMemoryUsageTracker(
-        velox::memory::MemoryUsageTracker::create(kMaxBytes));
+    memory::MemoryPoolImpl::fromPool(queryCtx->pool())
+        ->testingSetCapacity(kMaxBytes);
     auto results = AssertQueryBuilder(
                        PlanBuilder()
                            .values(batches)
@@ -954,8 +950,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, spillWithEmptyPartition) {
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->pool()->setMemoryUsageTracker(
-        velox::memory::MemoryUsageTracker::create(kMaxBytes));
+    memory::MemoryPoolImpl::fromPool(queryCtx->pool())
+        ->testingSetCapacity(kMaxBytes);
 
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Spiller",
@@ -1075,8 +1071,8 @@ TEST_F(AggregationTest, spillWithNonSpillingPartition) {
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  queryCtx->pool()->setMemoryUsageTracker(
-      velox::memory::MemoryUsageTracker::create(kMaxBytes));
+  memory::MemoryPoolImpl::fromPool(queryCtx->pool())
+      ->testingSetCapacity(kMaxBytes);
 
   auto task =
       AssertQueryBuilder(PlanBuilder()

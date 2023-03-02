@@ -42,9 +42,12 @@ class WriterContext : public CompressionBufferPool {
       std::unique_ptr<encryption::EncryptionHandler> handler = nullptr)
       : config_{config},
         pool_{std::move(pool)},
-        dictionaryPool_{pool_->addChild(".dictionary")},
-        outputStreamPool_{pool_->addChild(".compression")},
-        generalPool_{pool_->addChild(".general")},
+        dictionaryPool_{
+            pool_->addChild(".dictionary", memory::MemoryPool::Kind::kLeaf)},
+        outputStreamPool_{
+            pool_->addChild(".compression", memory::MemoryPool::Kind::kLeaf)},
+        generalPool_{
+            pool_->addChild(".general", memory::MemoryPool::Kind::kLeaf)},
         handler_{std::move(handler)},
         compression{getConfig(Config::COMPRESSION)},
         compressionBlockSize{getConfig(Config::COMPRESSION_BLOCK_SIZE)},
@@ -72,11 +75,6 @@ class WriterContext : public CompressionBufferPool {
     }
     validateConfigs();
     VLOG(1) << fmt::format("Compression config: {}", compression);
-    if (auto tracker = pool_->getMemoryUsageTracker()) {
-      dictionaryPool_->setMemoryUsageTracker(tracker->addChild());
-      outputStreamPool_->setMemoryUsageTracker(tracker->addChild());
-      generalPool_->setMemoryUsageTracker(tracker->addChild());
-    }
     compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
         *generalPool_, compressionBlockSize + PAGE_HEADER_SIZE);
   }
@@ -244,14 +242,12 @@ class WriterContext : public CompressionBufferPool {
         getMemoryUsage(MemoryUsageCategory::DICTIONARY);
     const auto& generalPool = getMemoryUsage(MemoryUsageCategory::GENERAL);
 
-    return outputStreamPool.getCurrentBytes() +
-        dictionaryPool.getCurrentBytes() + generalPool.getCurrentBytes();
+    return outputStreamPool.currentBytes() + dictionaryPool.currentBytes() +
+        generalPool.currentBytes();
   }
 
   int64_t getMemoryBudget() const {
-    auto memoryUsageTracker = pool_->getMemoryUsageTracker();
-    return memoryUsageTracker ? memoryUsageTracker->maxMemory()
-                              : std::numeric_limits<int64_t>::max();
+    return pool_->capacity();
   }
 
   const encryption::EncryptionHandler& getEncryptionHandler() const {
@@ -336,7 +332,7 @@ class WriterContext : public CompressionBufferPool {
   void recordFlushOverhead(uint64_t flushOverhead) {
     flushOverheadRatioTracker_.takeSample(
         stripeRawSize +
-            getMemoryUsage(MemoryUsageCategory::DICTIONARY).getCurrentBytes(),
+            getMemoryUsage(MemoryUsageCategory::DICTIONARY).currentBytes(),
         flushOverhead);
   }
 
@@ -369,8 +365,8 @@ class WriterContext : public CompressionBufferPool {
 
   int64_t getEstimatedOutputStreamSize() const {
     return (int64_t)std::ceil(
-        (getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM).getCurrentBytes() +
-         getMemoryUsage(MemoryUsageCategory::DICTIONARY).getCurrentBytes()) /
+        (getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM).currentBytes() +
+         getMemoryUsage(MemoryUsageCategory::DICTIONARY).currentBytes()) /
         getConfig(Config::COMPRESSION_BLOCK_SIZE_EXTEND_RATIO));
   }
 

@@ -63,7 +63,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
     instance_ = MemoryAllocator::getInstance();
     memoryManager_ = std::make_unique<MemoryManager>(IMemoryManager::Options{
         .capacity = kMaxMemory, .allocator = instance_});
-    pool_ = memoryManager_->getChild();
+    pool_ = memoryManager_->getPool();
     if (useMmap_) {
       ASSERT_EQ(instance_->kind(), MemoryAllocator::Kind::kMmap);
     } else {

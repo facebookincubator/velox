@@ -47,22 +47,21 @@ HashBuild::HashBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
-    : Operator(driverCtx, nullptr, operatorId, joinNode->id(), "HashBuild"),
+    : Operator(driverCtx, nullptr, operatorId, joinNode->id(), operatorType()),
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
-          planNodeId())),
-      spillConfig_(
-          joinNode_->canSpill(driverCtx->queryConfig())
-              ? operatorCtx_->makeSpillConfig(Spiller::Type::kHashJoinBuild)
-              : std::nullopt),
-      spillGroup_(
-          spillEnabled() ? operatorCtx_->task()->getSpillOperatorGroupLocked(
-                               operatorCtx_->driverCtx()->splitGroupId,
-                               planNodeId())
-                         : nullptr) {
+          planNodeId())) {
+  spillConfig_ = joinNode_->canSpill(driverCtx->queryConfig())
+      ? operatorCtx_->makeSpillConfig(Spiller::Type::kHashJoinBuild)
+      : std::nullopt;
+  spillGroup_ = spillEnabled()
+      ? operatorCtx_->task()->getSpillOperatorGroupLocked(
+            operatorCtx_->driverCtx()->splitGroupId, planNodeId())
+      : nullptr;
+
   VELOX_CHECK_NOT_NULL(joinBridge_);
   joinBridge_->addBuilder();
 
@@ -170,6 +169,9 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
   if (!spillEnabled()) {
     return;
   }
+
+  reclaimable_ = true;
+
   const auto& spillConfig = spillConfig_.value();
   HashBitRange hashBits = spillConfig.hashBitRange;
 
@@ -425,9 +427,8 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
   const auto increment =
       rows->sizeIncrement(input->size(), outOfLineBytes ? flatBytes : 0);
 
-  auto tracker = pool()->getMemoryUsageTracker();
   // There must be at least 2x the increments in reservation.
-  if (tracker->availableReservation() > 2 * increment) {
+  if (pool()->availableReservation() > 2 * increment) {
     return true;
   }
 
@@ -436,9 +437,9 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
   // 'spillableReservationGrowthPct_' of the current reservation.
   auto targetIncrement = std::max<int64_t>(
       increment * 2,
-      tracker->currentBytes() * spillConfig()->spillableReservationGrowthPct /
+      pool()->currentBytes() * spillConfig()->spillableReservationGrowthPct /
           100);
-  if (tracker->maybeReserve(targetIncrement)) {
+  if (pool()->maybeReserve(targetIncrement)) {
     return true;
   }
   numSpillRows_ = std::max<int64_t>(
@@ -672,6 +673,8 @@ void HashBuild::noMoreInputInternal() {
 bool HashBuild::finishHashBuild() {
   checkRunning();
 
+  reclaimable_ = false;
+
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
   // The last Driver to hit HashBuild::finish gathers the data from
@@ -765,7 +768,7 @@ void HashBuild::postHashBuildProcess() {
 
   // Release the unused memory reservation since we have finished the table
   // build.
-  pool()->getMemoryUsageTracker()->release();
+  pool()->release();
 
   if (!spillEnabled()) {
     setState(State::kFinish);
@@ -965,6 +968,66 @@ bool HashBuild::testingTriggerSpill() {
   }
   return folly::hasher<uint64_t>()(++spillTestCounter_) % 100 <=
       spillConfig()->testSpillPct;
+}
+
+bool HashBuild::canReclaim() const {
+  if (!Operator::canReclaim()) {
+    return false;
+  }
+  return !operatorCtx_->driver()->state().hasBlockingFuture;
+}
+
+void HashBuild::spill(int64_t targetBytes) {
+  VELOX_CHECK_GE(targetBytes, 0);
+  VELOX_CHECK(canReclaim());
+  auto* driverCtx = operatorCtx_->driverCtx();
+  VELOX_CHECK(!driverCtx->driver->state().isOnThread());
+  const auto& task = operatorCtx_->task();
+  VELOX_CHECK(task->pauseRequested());
+  const std::vector<Operator*> operators =
+      task->findPeerOperators(driverCtx->pipelineId, this);
+  for (auto* op : operators) {
+    if (op->canReclaim()) {
+      return;
+    }
+  }
+  for (auto* op : operators) {
+    HashBuild* build = dynamic_cast<HashBuild*>(op);
+    VELOX_CHECK_NOT_NULL(build);
+    build->spiller_->spill();
+    if (build->table_->numDistinct() == 0) {
+      build->table_->clear();
+    }
+  }
+}
+
+bool HashBuildNodeMemoryReclaimer::canReclaim(
+    const memory::MemoryPool& pool) const {
+  bool reclaimable{true};
+  pool.visitChildren([&](memory::MemoryPool* pool) {
+    if (!pool->canReclaim()) {
+      reclaimable = false;
+    }
+    return reclaimable;
+  });
+  return reclaimable;
+}
+
+uint64_t HashBuildNodeMemoryReclaimer::reclaimableBytes(
+    const memory::MemoryPool& pool,
+    bool& reclaimable) const {
+  uint64_t reclaimableBytes{0};
+  pool.visitChildren([&](memory::MemoryPool* pool) {
+    VELOX_CHECK_EQ(pool->kind(), memory::MemoryPool::Kind::kLeaf);
+    bool poolReclaimable;
+    reclaimableBytes += pool->reclaimableBytes(poolReclaimable);
+    if (!poolReclaimable) {
+      reclaimable = false;
+      reclaimableBytes = 0;
+    }
+    return reclaimable;
+  });
+  return reclaimableBytes;
 }
 
 } // namespace facebook::velox::exec

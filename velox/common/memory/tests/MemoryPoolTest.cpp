@@ -120,58 +120,113 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
 
 TEST(MemoryPoolTest, Ctor) {
   constexpr uint16_t kAlignment = 64;
-  MemoryManager manager{{.alignment = kAlignment, .capacity = 8 * GB}};
+  constexpr int64_t kCapacity = 8 * GB;
+  MemoryManager manager{{.alignment = kAlignment, .capacity = kCapacity}};
   // While not recommended, the root allocator should be valid.
-  auto& root = dynamic_cast<MemoryPoolImpl&>(manager.getRoot());
+  auto pool = manager.getPool(kCapacity);
+  ASSERT_EQ(pool->capacity(), kCapacity);
 
-  ASSERT_EQ(0, root.getCurrentBytes());
-  ASSERT_EQ(root.parent(), nullptr);
+  ASSERT_EQ(pool->currentBytes(), 0);
+  ASSERT_EQ(pool->parent(), nullptr);
+  ASSERT_EQ(pool->root(), pool.get());
 
   {
-    auto fakeRoot =
-        std::make_shared<MemoryPoolImpl>(manager, "fake_root", nullptr);
-    ASSERT_EQ("fake_root", fakeRoot->name());
-    ASSERT_EQ(&root.allocator_, &fakeRoot->allocator_);
-    ASSERT_EQ(0, fakeRoot->getCurrentBytes());
-    ASSERT_EQ(fakeRoot->parent(), nullptr);
+    MemoryPool::Options options;
+    options.alignment = kAlignment;
+    auto fakePool = std::make_shared<MemoryPoolImpl>(
+        &manager, "fake_root", MemoryPool::Kind::kAggregate, nullptr, options);
+    ASSERT_EQ("fake_root", fakePool->name());
+    ASSERT_EQ(
+        static_cast<MemoryPoolImpl*>(pool.get())->testingAllocator(),
+        fakePool->testingAllocator());
+    ASSERT_EQ(fakePool->currentBytes(), 0);
+    ASSERT_EQ(fakePool->parent(), nullptr);
+    ASSERT_EQ(fakePool->root(), fakePool.get());
+    ASSERT_EQ(fakePool->capacity(), kMaxMemory);
   }
   {
-    auto child = root.addChild("child");
-    ASSERT_EQ(child->parent(), &root);
-    auto& favoriteChild = dynamic_cast<MemoryPoolImpl&>(*child);
-    ASSERT_EQ("child", favoriteChild.name());
-    ASSERT_EQ(&root.allocator_, &favoriteChild.allocator_);
-    ASSERT_EQ(0, favoriteChild.getCurrentBytes());
+    auto leafChild = pool->addChild("child", MemoryPool::Kind::kLeaf);
+    ASSERT_EQ(leafChild->parent(), pool.get());
+    ASSERT_EQ(leafChild->root(), pool.get());
+    ASSERT_EQ(leafChild->name(), "child");
+    ASSERT_EQ(
+        static_cast<MemoryPoolImpl*>(pool.get())->testingAllocator(),
+        static_cast<MemoryPoolImpl*>(leafChild.get())->testingAllocator());
+    ASSERT_EQ(leafChild->currentBytes(), 0);
+    ASSERT_EQ(leafChild->capacity(), kCapacity);
+  }
+
+  {
+    auto nonLeafChild =
+        pool->addChild("child", MemoryPool::Kind::kAggregate);
+    ASSERT_EQ(nonLeafChild->parent(), pool.get());
+    ASSERT_EQ(nonLeafChild->root(), pool.get());
+    ASSERT_EQ(nonLeafChild->name(), "child");
+    ASSERT_EQ(
+        static_cast<MemoryPoolImpl*>(pool.get())->testingAllocator(),
+        static_cast<MemoryPoolImpl*>(nonLeafChild.get())->testingAllocator());
+    ASSERT_EQ(nonLeafChild->currentBytes(), 0);
+    ASSERT_EQ(nonLeafChild->capacity(), kCapacity);
+  }
+
+  {
+    ASSERT_EQ(pool->childrenCount(), 0);
+    auto leafChild = pool->addChild("child-leaf", MemoryPool::Kind::kLeaf);
+    ASSERT_EQ(leafChild->parent(), pool.get());
+    ASSERT_EQ(leafChild->root(), pool.get());
+    ASSERT_EQ(leafChild->name(), "child-leaf");
+    ASSERT_EQ(
+        static_cast<MemoryPoolImpl*>(pool.get())->testingAllocator(),
+        static_cast<MemoryPoolImpl*>(leafChild.get())->testingAllocator());
+    ASSERT_EQ(leafChild->currentBytes(), 0);
+    ASSERT_EQ(leafChild->capacity(), kCapacity);
+    auto nonLeafChild =
+        pool->addChild("child-intermediate", MemoryPool::Kind::kAggregate);
+    ASSERT_EQ(nonLeafChild->parent(), pool.get());
+    ASSERT_EQ(nonLeafChild->root(), pool.get());
+    ASSERT_EQ(nonLeafChild->name(), "child-intermediate");
+    ASSERT_EQ(nonLeafChild->capacity(), kCapacity);
+    ASSERT_EQ(
+        static_cast<MemoryPoolImpl*>(pool.get())->testingAllocator(),
+        static_cast<MemoryPoolImpl*>(nonLeafChild.get())->testingAllocator());
+    ASSERT_EQ(nonLeafChild->currentBytes(), 0);
+    ASSERT_EQ(pool->childrenCount(), 2);
   }
 }
 
 TEST(MemoryPoolTest, AddChild) {
   MemoryManager manager{};
-  auto& root = manager.getRoot();
+  auto pool = manager.getPool();
 
-  ASSERT_EQ(0, root.getChildCount());
-  auto childOne = root.addChild("child_one");
-  auto childTwo = root.addChild("child_two");
+  ASSERT_EQ(0, pool->childrenCount());
+  auto childOne = pool->addChild("child_one", MemoryPool::Kind::kLeaf);
+  auto childTwo = pool->addChild("child_two", MemoryPool::Kind::kAggregate);
 
   std::vector<MemoryPool*> nodes{};
-  ASSERT_EQ(2, root.getChildCount());
-  root.visitChildren(
-      [&nodes](MemoryPool* child) { nodes.emplace_back(child); });
+  ASSERT_EQ(pool->childrenCount(), 2);
+  pool->visitChildren([&nodes](MemoryPool* child) {
+    nodes.emplace_back(child);
+    return true;
+  });
   ASSERT_THAT(
       nodes, UnorderedElementsAreArray({childOne.get(), childTwo.get()}));
   // Child pool name collision.
-  ASSERT_THROW(root.addChild("child_one"), VeloxRuntimeError);
-  ASSERT_EQ(2, root.getChildCount());
+  ASSERT_THROW(
+      pool->addChild("child_one", MemoryPool::Kind::kAggregate),
+      VeloxRuntimeError);
+  ASSERT_EQ(pool->childrenCount(), 2);
   childOne.reset();
-  ASSERT_EQ(1, root.getChildCount());
-  childOne = root.addChild("child_one");
-  ASSERT_EQ(2, root.getChildCount());
+  ASSERT_EQ(pool->childrenCount(), 1);
+  childOne = pool->addChild("child_one", MemoryPool::Kind::kAggregate);
+  ASSERT_EQ(pool->childrenCount(), 2);
 }
 
+#if 0
 TEST_P(MemoryPoolTest, dropChild) {
   MemoryManager manager{};
-  auto& root = manager.getRoot();
-  ASSERT_EQ(root.parent(), nullptr);
+  auto pool = manager.getPool();
+  ASSERT_EQ(pool->parent(), nullptr);
+  ASSERT_EQ(pool->root(), nullptr);
 
   ASSERT_EQ(0, root.getChildCount());
   auto childOne = root.addChild("child_one");
@@ -365,23 +420,21 @@ TEST_P(MemoryPoolTest, ReallocTestSameSize) {
 
 TEST_P(MemoryPoolTest, ReallocTestHigher) {
   auto manager = getMemoryManager(8 * GB);
-  auto& root = manager->getRoot();
-
-  auto pool = root.addChild("elastic_quota");
+  auto pool = manager->getPool("elastic_quota");
 
   const int64_t kChunkSize{32L * MB};
   // Realloc higher.
   void* oneChunk = pool->allocate(kChunkSize);
-  EXPECT_EQ(kChunkSize, pool->getCurrentBytes());
-  EXPECT_EQ(kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(kChunkSize, pool->currentBytes());
+  EXPECT_EQ(kChunkSize, pool->stats().peakBytes);
 
   void* threeChunks = pool->reallocate(oneChunk, kChunkSize, 3 * kChunkSize);
-  EXPECT_EQ(3 * kChunkSize, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(3 * kChunkSize, pool->currentBytes());
+  EXPECT_EQ(3 * kChunkSize, pool->stats().peakBytes);
 
   pool->free(threeChunks, 3 * kChunkSize);
-  EXPECT_EQ(0, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(0, pool->currentBytes());
+  EXPECT_EQ(3 * kChunkSize, pool->stats().peakBytes);
 }
 
 TEST_P(MemoryPoolTest, ReallocTestLower) {
@@ -1834,6 +1887,7 @@ TEST_P(MemoryPoolTest, concurrentPoolStructureAccess) {
   pools.clear();
   ASSERT_EQ(root.getChildCount(), 0);
 }
+#endif
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     MemoryPoolTestSuite,

@@ -273,7 +273,8 @@ class Task : public std::enable_shared_from_this<Task> {
       const core::PlanNodeId& planNodeId,
       int pipelineId,
       uint32_t driverId,
-      const std::string& operatorType);
+      const std::string& operatorType,
+      std::shared_ptr<memory::MemoryReclaimer> reclaimer);
 
   /// Creates new instance of MemoryPool for a merge source in a
   /// MergeExchangeNode, stores it in the task to ensure lifetime and returns a
@@ -372,6 +373,8 @@ class Task : public std::enable_shared_from_this<Task> {
       ContinueFuture* FOLLY_NONNULL future,
       std::vector<ContinuePromise>& promises,
       std::vector<std::shared_ptr<Driver>>& peers);
+
+  std::vector<Operator*> findPeerOperators(int pipelineId, Operator* caller);
 
   /// Adds HashJoinBridge's for all the specified plan node IDs.
   void addHashJoinBridgesLocked(
@@ -544,8 +547,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Creates new instance of MemoryPool for a plan node, stores it in the task
   // to ensure lifetime and returns a raw pointer.
-  memory::MemoryPool* FOLLY_NONNULL
-  getOrAddNodePool(const core::PlanNodeId& planNodeId);
+  memory::MemoryPool* FOLLY_NONNULL getOrAddNodePool(
+      const core::PlanNodeId& planNodeId,
+      std::shared_ptr<memory::MemoryReclaimer> reclaimer = nullptr);
 
   // Creates new instance of MemoryPool for the exchange client of an
   // ExchangeNode in a pipeline, stores it in the task to ensure lifetime and
@@ -557,6 +561,20 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns task execution error message or empty string if not error
   /// occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
+
+  class MemoryReclaimer : public memory::MemoryReclaimer {
+   public:
+    static std::shared_ptr<memory::MemoryReclaimer> create(Task* task);
+
+    uint64_t reclaim(memory::MemoryPool* pool, uint64_t targetBytes) override;
+
+   private:
+    explicit MemoryReclaimer(Task* task) : task_(task) {
+      VELOX_CHECK_NOT_NULL(task_);
+    };
+
+    Task* task_;
+  };
 
   // Counts the number of created tasks which is incremented on each task
   // creation.
@@ -720,35 +738,6 @@ class Task : public std::enable_shared_from_this<Task> {
   // 'pipelineId' set in 'exchangeClients_'.
   std::shared_ptr<ExchangeClient> getExchangeClientLocked(
       int32_t pipelineId) const;
-
-  /// Callback function added to the MemoryUsageTracker to return a descriptive
-  /// message about query memory usage to be added to the error when a
-  /// MEM_CAP_EXCEEDED error is encountered.
-  /// Example Error Message generated:
-  /// Query 20220923_033248_00003_xney3 failed:
-  ///   Exceeded memory cap of 7.00GB when requesting 4.00MB.
-  /// query.20220923_033248_00003_xney3: total: 7.00GB
-  ///     task.20220923_033248_00003_xney3.1.0.25: : 5.88GB in 30 drivers,
-  ///       min 2.00MB, max 400.00MB
-  ///         pipe.0: : 5.74GB in 60 operators, min 0B, max 393.81MB
-  ///             op.PartitionedOutput: : 0B in 15 instances, min 0B, max 0B
-  ///             op.FilterProject: : 0B in 15 instances, min 0B, max 0B
-  ///             op.Aggregation: : 5GB in 15 instances, min 384MB, max 393MB
-  ///             op.LocalExchange: : 0B in 15 instances, min 0B, max 0B
-  ///         pipe.1: : 32.75MB in 30 operators, min 4.00KB, max 14.65MB
-  ///             op.LocalPartition: : 508KB in 15 instances, min 4KB, max 63KB
-  ///             op.Exchange: : 32.25MB in 15 instances, min 107KB, max 14MB
-  ///     task.20220923_033248_00003_xney3.2.0.19: : 1.12GB in 15 drivers,
-  ///       min 61.00MB, max 91.00MB
-  ///         pipe.0: : 1.03GB in 75 operators, min 149.00KB, max 39.38MB
-  ///             op.PartitionedOutput: : 446.71MB in 15 instances,
-  ///               min 12.02MB, max 39.38MB
-  ///             op.PartialAggregation: : 300.03MB in 15 instances,
-  ///               min 1.48MB, max 25.59MB
-  ///             op.FilterProject: : 32MB in 30 instances, min 149KB, max 2MB
-  ///             op.TableScan: : 278MB in 15 instances, min 9.05MB, max 27MB.
-  /// Failed Operator: PartialAggregation.3: 11.98MB
-  std::string getErrorMsgOnMemCapExceeded(memory::MemoryUsageTracker& tracker);
 
   // RAII helper class to satisfy 'stateChangePromises_' and notify listeners
   // that task is complete outside of the mutex. Inactive on creation. Must be

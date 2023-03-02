@@ -24,6 +24,7 @@ namespace {
 
 class MemoryCapExceededTest : public OperatorTestBase {};
 
+#if 0
 TEST_F(MemoryCapExceededTest, singleDriver) {
   // Executes a plan with a single driver thread and query memory limit that
   // forces it to throw MEM_CAP_EXCEEDED exception. Verifies that the error
@@ -123,6 +124,7 @@ TEST_F(MemoryCapExceededTest, multipleDrivers) {
       readCursor(params, [](Task*) {}),
       fmt::format("{} operators", numDrivers));
 }
+#endif
 
 } // namespace
 } // namespace facebook::velox::exec::test

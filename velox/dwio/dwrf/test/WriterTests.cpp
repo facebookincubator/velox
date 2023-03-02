@@ -41,7 +41,9 @@ class WriterTest : public Test {
       sink = std::move(memSink);
     }
     writer_ = std::make_unique<WriterBase>(std::move(sink));
-    writer_->initContext(config, pool_->addChild("test_writer_pool"));
+    writer_->initContext(
+        config,
+        pool_->addChild("test_writer_pool", memory::MemoryPool::Kind::kLeaf));
     return *writer_;
   }
 
@@ -333,7 +335,9 @@ TEST(WriterBaseTest, FlushWriterSinkUponClose) {
   EXPECT_CALL(*sinkPtr, isBuffered()).WillOnce(Return(false));
   {
     auto writer = std::make_unique<WriterBase>(std::move(sink));
-    writer->initContext(config, pool->addChild("test_writer_pool"));
+    writer->initContext(
+        config,
+        pool->addChild("test_writer_pool", memory::MemoryPool::Kind::kLeaf));
     writer->close();
   }
 }

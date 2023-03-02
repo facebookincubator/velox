@@ -88,3 +88,5 @@ DEFINE_string(
     "expression evaluation. Specifies the directory to use for storing the "
     "vectors and expression SQL strings. This flag is ignored if "
     "velox_save_input_on_expression_any_failure_path is set.");
+
+DEFINE_uint64(velox_memory_shared_arbitrator_min_reserve_bytes, 8 << 20, "");

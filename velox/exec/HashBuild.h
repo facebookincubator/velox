@@ -27,6 +27,21 @@
 
 namespace facebook::velox::exec {
 
+class HashBuildNodeMemoryReclaimer final : public memory::MemoryReclaimer {
+ public:
+  static std::shared_ptr<memory::MemoryReclaimer> create() {
+    auto* reclaimer = new HashBuildNodeMemoryReclaimer();
+    return std::shared_ptr<memory::MemoryReclaimer>(reclaimer);
+  }
+
+  bool canReclaim(const memory::MemoryPool& pool) const final;
+  uint64_t reclaimableBytes(const memory::MemoryPool& pool, bool& reclaimable)
+      const final;
+
+ private:
+  HashBuildNodeMemoryReclaimer() : MemoryReclaimer() {}
+};
+
 // Builds a hash table for use in HashProbe. This is the final
 // Operator in a build side Driver. The build side pipeline has
 // multiple Drivers, each with its own HashBuild. The build finishes
@@ -56,6 +71,10 @@ class HashBuild final : public Operator {
   };
   static std::string stateName(State state);
 
+  static std::string operatorType() {
+    return "HashBuild";
+  }
+
   HashBuild(
       int32_t operatorId,
       DriverCtx* FOLLY_NONNULL driverCtx,
@@ -76,6 +95,11 @@ class HashBuild final : public Operator {
   BlockingReason isBlocked(ContinueFuture* FOLLY_NONNULL future) override;
 
   bool isFinished() override;
+
+ protected:
+  bool canReclaim() const override;
+
+  void spill(int64_t targetBytes) override;
 
  private:
   void setState(State state);
@@ -233,9 +257,7 @@ class HashBuild final : public Operator {
 
   const std::shared_ptr<HashJoinBridge> joinBridge_;
 
-  const std::optional<Spiller::Config> spillConfig_;
-
-  const std::shared_ptr<SpillOperatorGroup> spillGroup_;
+  std::shared_ptr<SpillOperatorGroup> spillGroup_;
 
   State state_{State::kRunning};
 

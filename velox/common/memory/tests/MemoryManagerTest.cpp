@@ -28,34 +28,22 @@ namespace memory {
 TEST(MemoryManagerTest, Ctor) {
   {
     MemoryManager manager{};
-    const auto& root = manager.getRoot();
-
-    ASSERT_EQ(0, root.getChildCount());
-    ASSERT_EQ(0, root.getCurrentBytes());
-    ASSERT_EQ(std::numeric_limits<int64_t>::max(), manager.getMemoryQuota());
-    ASSERT_EQ(0, manager.getTotalBytes());
+    ASSERT_EQ(manager.numPools(), 0);
+    ASSERT_EQ(manager.memoryQuota(), std::numeric_limits<int64_t>::max());
     ASSERT_EQ(manager.alignment(), MemoryAllocator::kMaxAlignment);
   }
   {
     MemoryManager manager{{.capacity = 8L * 1024 * 1024}};
-    const auto& root = manager.getRoot();
 
-    ASSERT_EQ(0, root.getChildCount());
-    ASSERT_EQ(0, root.getCurrentBytes());
-    ASSERT_EQ(8L * 1024 * 1024, manager.getMemoryQuota());
-    ASSERT_EQ(0, manager.getTotalBytes());
+    ASSERT_EQ(manager.numPools(), 0);
+    ASSERT_EQ(manager.memoryQuota(), 8L * 1024 * 1024);
   }
   {
     MemoryManager manager{{.alignment = 0, .capacity = 8L * 1024 * 1024}};
-    const auto& root = manager.getRoot();
 
     ASSERT_EQ(manager.alignment(), MemoryAllocator::kMinAlignment);
-    // TODO: replace with root pool memory tracker quota check.
-    // ASSERT_EQ(8L * 1024 * 1024, root.cap());
-    ASSERT_EQ(0, root.getChildCount());
-    ASSERT_EQ(0, root.getCurrentBytes());
-    ASSERT_EQ(8L * 1024 * 1024, manager.getMemoryQuota());
-    ASSERT_EQ(0, manager.getTotalBytes());
+    ASSERT_EQ(manager.numPools(), 0);
+    ASSERT_EQ(manager.memoryQuota(), 8L * 1024 * 1024);
   }
   { ASSERT_ANY_THROW(MemoryManager manager{{.capacity = -1}}); }
 }
@@ -64,55 +52,30 @@ TEST(MemoryManagerTest, Ctor) {
 // effects for other tests using process singleton memory manager. Might need to
 // use folly::Singleton for isolation by tag.
 TEST(MemoryManagerTest, GlobalMemoryManager) {
-  auto& manager = MemoryManager::getInstance();
+  auto& managerI = MemoryManager::getInstance();
   auto& managerII = MemoryManager::getInstance();
 
-  auto& root = manager.getRoot();
-  auto child = root.addChild("some_child");
-  ASSERT_EQ(1, root.getChildCount());
+  const std::string poolName("GlobalMemoryManager");
+  auto pool = managerI.getPool(poolName);
+  ASSERT_EQ(managerI.numPools(), 1);
 
-  auto& rootII = managerII.getRoot();
-  ASSERT_EQ(1, rootII.getChildCount());
-  std::vector<MemoryPool*> pools{};
-  rootII.visitChildren(
-      [&pools](MemoryPool* child) { pools.emplace_back(child); });
-  ASSERT_EQ(1, pools.size());
-  auto& pool = *pools.back();
-  ASSERT_EQ("some_child", pool.name());
-}
-
-TEST(MemoryManagerTest, Reserve) {
+  ASSERT_EQ(managerII.numPools(), 1);
   {
-    MemoryManager manager{};
-    ASSERT_TRUE(manager.reserve(0));
-    ASSERT_EQ(0, manager.getTotalBytes());
-    manager.release(0);
-    ASSERT_TRUE(manager.reserve(42));
-    ASSERT_EQ(42, manager.getTotalBytes());
-    manager.release(42);
-    ASSERT_TRUE(manager.reserve(std::numeric_limits<int64_t>::max()));
-    ASSERT_EQ(std::numeric_limits<int64_t>::max(), manager.getTotalBytes());
-    manager.release(std::numeric_limits<int64_t>::max());
-    ASSERT_EQ(0, manager.getTotalBytes());
+    std::vector<MemoryPool*> pools;
+    managerII.testingVisitPools(
+        [&](MemoryPool* pool) { pools.emplace_back(pool); });
+    ASSERT_EQ(pools.size(), 1);
+    auto& pool = *pools.back();
+    ASSERT_EQ(pools.back()->name(), poolName);
   }
+
   {
-    MemoryManager manager{{.capacity = 42}};
-    ASSERT_TRUE(manager.reserve(1));
-    ASSERT_TRUE(manager.reserve(1));
-    ASSERT_TRUE(manager.reserve(2));
-    ASSERT_TRUE(manager.reserve(3));
-    ASSERT_TRUE(manager.reserve(5));
-    ASSERT_TRUE(manager.reserve(8));
-    ASSERT_TRUE(manager.reserve(13));
-    ASSERT_FALSE(manager.reserve(21));
-    ASSERT_FALSE(manager.reserve(1));
-    ASSERT_FALSE(manager.reserve(2));
-    ASSERT_FALSE(manager.reserve(3));
-    manager.release(20);
-    ASSERT_TRUE(manager.reserve(1));
-    ASSERT_FALSE(manager.reserve(2));
-    manager.release(manager.getTotalBytes());
-    ASSERT_EQ(manager.getTotalBytes(), 0);
+    std::vector<MemoryPool*> pools;
+    managerI.testingVisitPools(
+        [&](MemoryPool* pool) { pools.emplace_back(pool); });
+    ASSERT_EQ(pools.size(), 1);
+    auto& pool = *pools.back();
+    ASSERT_EQ(pools.back()->name(), poolName);
   }
 }
 
@@ -123,7 +86,7 @@ TEST(MemoryManagerTest, GlobalMemoryManagerQuota) {
       velox::VeloxUserError);
 
   auto& coercedManager = MemoryManager::getInstance({.capacity = 42});
-  ASSERT_EQ(manager.getMemoryQuota(), coercedManager.getMemoryQuota());
+  ASSERT_EQ(manager.memoryQuota(), coercedManager.memoryQuota());
 }
 
 TEST(MemoryManagerTest, alignmentOptionCheck) {
@@ -158,7 +121,7 @@ TEST(MemoryManagerTest, alignmentOptionCheck) {
         manager.alignment(),
         std::max(testData.alignment, MemoryAllocator::kMinAlignment));
     ASSERT_EQ(
-        manager.getRoot().getAlignment(),
+        manager.getPool()->alignment(),
         std::max(testData.alignment, MemoryAllocator::kMinAlignment));
   }
 }

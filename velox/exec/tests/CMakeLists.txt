@@ -49,6 +49,7 @@ add_executable(
   RowContainerTest.cpp
   MemoryCapExceededTest.cpp
   QueryAssertionsTest.cpp
+  SharedMemoryArbitrationTest.cpp
   SpillTest.cpp
   SpillOperatorGroupTest.cpp
   SpillerTest.cpp

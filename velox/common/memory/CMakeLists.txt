@@ -23,10 +23,11 @@ add_library(
   HashStringAllocator.cpp
   Memory.cpp
   MemoryAllocator.cpp
-  MemoryUsage.cpp
+  MemoryArbitrator.cpp
+  MemoryPool.cpp
   MmapAllocator.cpp
   MmapArena.cpp
-  MemoryUsageTracker.cpp
+  SharedMemoryArbitrator.cpp
   StreamArena.cpp)
 
 target_link_libraries(

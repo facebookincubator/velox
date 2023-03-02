@@ -40,6 +40,7 @@ void HiveConnectorTestBase::SetUp() {
 }
 
 void HiveConnectorTestBase::TearDown() {
+  LOG(ERROR) << "teardown";
   // Make sure all pending loads are finished or cancelled before unregister
   // connector.
   ioExecutor_.reset();
@@ -65,7 +66,8 @@ void HiveConnectorTestBase::writeToFile(
   options.schema = vectors[0]->type();
   auto sink =
       std::make_unique<facebook::velox::dwio::common::LocalFileSink>(filePath);
-  auto childPool = pool_->addChild(kWriter);
+  auto childPool =
+      pool_->addChild(kWriter, velox::memory::MemoryPool::Kind::kLeaf);
   facebook::velox::dwrf::Writer writer{options, std::move(sink), *childPool};
   for (size_t i = 0; i < vectors.size(); ++i) {
     writer.write(vectors[i]);

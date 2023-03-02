@@ -80,10 +80,11 @@ class TestStripeStreams : public StripeStreamsBase {
       WriterContext& context,
       const proto::StripeFooter& footer,
       const std::shared_ptr<const RowType>& rowType,
+      MemoryPool* pool,
       bool returnFlatVector = false,
       std::unordered_map<uint32_t, std::vector<std::string>>
           structReaderContext = {})
-      : StripeStreamsBase{&memory::getProcessDefaultMemoryManager().getRoot()},
+      : StripeStreamsBase{pool},
         context_{context},
         footer_{footer},
         selector_{rowType} {
@@ -332,7 +333,7 @@ void testDataTypeWriter(
       return *sf.add_encoding();
     });
 
-    TestStripeStreams streams(context, sf, rowType);
+    TestStripeStreams streams(context, sf, rowType, pool.get());
     auto typeWithId = TypeWithId::create(rowType);
     auto reqType = typeWithId->childAt(0);
     auto reader = ColumnReader::build(
@@ -924,7 +925,7 @@ void testMapWriter(
 
     auto validate = [&](bool returnFlatVector = false) {
       TestStripeStreams streams(
-          context, sf, rowType, returnFlatVector, structReaderContext);
+          context, sf, rowType, &pool, returnFlatVector, structReaderContext);
       const auto reader =
           ColumnReader::build(dataTypeWithId, dataTypeWithId, streams);
       VectorPtr out;
@@ -1056,7 +1057,7 @@ void testMapWriterRow(
 
     auto validate = [&](bool returnFlatVector = false) {
       TestStripeStreams streams(
-          context, sf, rowType, returnFlatVector, structReaderContext);
+          context, sf, rowType, &pool, returnFlatVector, structReaderContext);
       const auto reader =
           ColumnReader::build(dataTypeWithId, dataTypeWithId, streams);
       VectorPtr out;
@@ -1999,7 +2000,7 @@ struct IntegerColumnWriterTypedTestCase {
       // Read and verify.
       const size_t nodeId = 1;
       auto rowType = ROW({{"integral_column", type}});
-      TestStripeStreams streams(context, stripeFooter, rowType);
+      TestStripeStreams streams(context, stripeFooter, rowType, pool.get());
       EncodingKey key{nodeId};
       const auto& encoding = streams.getEncoding(key);
       if (writeDirect) {
@@ -3230,7 +3231,7 @@ struct StringColumnWriterTestCase {
       // Read and verify.
       const size_t nodeId = 1;
       auto rowType = ROW({{"string_column", type}});
-      TestStripeStreams streams(context, stripeFooter, rowType);
+      TestStripeStreams streams(context, stripeFooter, rowType, pool.get());
       EncodingKey key{nodeId};
       const auto& encoding = streams.getEncoding(key);
       if (writeDirect) {
@@ -4055,7 +4056,7 @@ TEST(ColumnWriterTests, IntDictWriterDirectValueOverflow) {
   ASSERT_EQ(enc.kind(), proto::ColumnEncoding_Kind_DICTIONARY);
 
   // get data stream
-  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
+  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}), pool.get());
   DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
   auto stream = streams.getStream(si, true);
 
@@ -4100,7 +4101,7 @@ TEST(ColumnWriterTests, ShortDictWriterDictValueOverflow) {
   ASSERT_EQ(enc.kind(), proto::ColumnEncoding_Kind_DICTIONARY);
 
   // get data stream
-  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
+  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}), pool.get());
   DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
   auto stream = streams.getStream(si, true);
 
@@ -4139,7 +4140,7 @@ TEST(ColumnWriterTests, RemovePresentStream) {
   });
 
   // get data stream
-  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
+  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}), pool.get());
   DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_PRESENT};
   ASSERT_EQ(streams.getStream(si, false), nullptr);
 }
@@ -4176,7 +4177,7 @@ TEST(ColumnWriterTests, ColumnIdInStream) {
   });
 
   // get data stream
-  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
+  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}), pool.get());
   DwrfStreamIdentifier si{
       kNodeId, /* sequence */ 0, kColumnId, proto::Stream_Kind_DATA};
   ASSERT_NE(streams.getStream(si, false), nullptr);
@@ -4304,8 +4305,9 @@ struct DictColumnWriterTestCase {
       return *sf.add_encoding();
     });
 
+    auto pool = getDefaultMemoryPool();
     // Reading the vector out
-    TestStripeStreams streams(context, sf, rowType);
+    TestStripeStreams streams(context, sf, rowType, pool.get());
     EXPECT_CALL(streams.getMockStrideIndexProvider(), getStrideIndex())
         .WillRepeatedly(Return(0));
     auto rowTypeWithId = TypeWithId::create(rowType);

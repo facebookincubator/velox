@@ -36,6 +36,7 @@ class HashAggregation : public Operator {
   }
 
   void noMoreInput() override {
+    reclaimable_ = false;
     groupingSet_->noMoreInput();
     Operator::noMoreInput();
   }
@@ -43,6 +44,8 @@ class HashAggregation : public Operator {
   BlockingReason isBlocked(ContinueFuture* /* unused */) override {
     return BlockingReason::kNotBlocked;
   }
+
+  void spill(int64_t targetBytes) override;
 
   bool isFinished() override;
 
@@ -70,10 +73,8 @@ class HashAggregation : public Operator {
   const bool isPartialOutput_;
   const bool isDistinct_;
   const bool isGlobal_;
-  const std::shared_ptr<memory::MemoryUsageTracker> memoryTracker_;
   const double partialAggregationGoodPct_;
   const int64_t maxExtendedPartialAggregationMemoryUsage_;
-  const std::optional<Spiller::Config> spillConfig_;
 
   int64_t maxPartialAggregationMemoryUsage_;
   std::unique_ptr<GroupingSet> groupingSet_;

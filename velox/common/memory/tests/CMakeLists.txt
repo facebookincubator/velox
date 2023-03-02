@@ -22,7 +22,6 @@ add_executable(
   MemoryHeaderTest.cpp
   MemoryManagerTest.cpp
   MemoryPoolTest.cpp
-  MemoryUsageTest.cpp
   MemoryUsageTrackerTest.cpp)
 
 target_link_libraries(

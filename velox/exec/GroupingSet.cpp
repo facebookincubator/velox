@@ -501,8 +501,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  auto tracker = pool_.getMemoryUsageTracker();
-  const auto currentUsage = tracker->currentBytes();
+  const auto currentUsage = pool_.currentBytes();
   if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig_->spillableReservationGrowthPct / 100;
@@ -528,7 +527,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
       rows->sizeIncrement(input->size(), outOfLineBytes ? flatBytes : 0) +
       tableIncrement;
   // There must be at least 2x the increment in reservation.
-  if (tracker->availableReservation() > 2 * increment) {
+  if (pool_.availableReservation() > 2 * increment) {
     return;
   }
   // Check if can increase reservation. The increment is the larger of
@@ -537,7 +536,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   auto targetIncrement = std::max<int64_t>(
       increment * 2,
       currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
-  if (tracker->maybeReserve(targetIncrement)) {
+  if (pool_.maybeReserve(targetIncrement)) {
     return;
   }
   auto rowsToSpill = std::max<int64_t>(
@@ -558,7 +557,6 @@ void GroupingSet::spill(int64_t targetRows, int64_t targetBytes) {
     for (auto i = 0; i < types.size(); ++i) {
       names.push_back(fmt::format("s{}", i));
     }
-    VELOX_DCHECK(pool_.getMemoryUsageTracker() != nullptr);
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kAggregate,
         rows,

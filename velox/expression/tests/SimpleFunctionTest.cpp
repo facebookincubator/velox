@@ -901,12 +901,10 @@ TEST_F(SimpleFunctionTest, reuseArgVector) {
   auto exprSet =
       compileExpressions({"(c0 - 0.5::REAL) * 2.0::REAL + 0.3::REAL"}, rowType);
 
-  pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
-
-  auto prevAllocations = pool_->getMemoryUsageTracker()->numAllocs();
+  auto prevAllocations = pool_->stats().numAllocs;
 
   evaluate(*exprSet, data);
-  auto currAllocations = pool_->getMemoryUsageTracker()->numAllocs();
+  auto currAllocations = pool_->stats().numAllocs;
 
   // Expect a single allocation for the result. Intermediate results should
   // reuse memory.

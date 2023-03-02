@@ -43,8 +43,10 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
 
 velox::memory::MemoryPool* FOLLY_NONNULL DriverCtx::addOperatorPool(
     const core::PlanNodeId& planNodeId,
-    const std::string& operatorType) {
-  return task->addOperatorPool(planNodeId, pipelineId, driverId, operatorType);
+    const std::string& operatorType,
+    std::shared_ptr<memory::MemoryReclaimer> reclaimer) {
+  return task->addOperatorPool(
+      planNodeId, pipelineId, driverId, operatorType, std::move(reclaimer));
 }
 
 std::atomic_uint64_t BlockingState::numBlockedDrivers_{0};
@@ -521,7 +523,7 @@ void Driver::initializeOperatorStats(std::vector<OperatorStats>& stats) {
 void Driver::addStatsToTask() {
   for (auto& op : operators_) {
     auto stats = op->stats(true);
-    stats.memoryStats.update(op->pool()->getMemoryUsageTracker());
+    stats.memoryStats.update(*op->pool());
     stats.numDrivers = 1;
     task()->addOperatorStats(stats);
   }
@@ -626,6 +628,11 @@ Driver::findOperator(std::string_view planNodeId) const {
   return nullptr;
 }
 
+Operator* Driver::findOperator(int32_t operatorId) const {
+  VELOX_CHECK_LT(operatorId, operators_.size());
+  return operators_[operatorId].get();
+}
+
 std::vector<Operator*> Driver::operators() const {
   std::vector<Operator*> operators;
   operators.reserve(operators_.size());
@@ -653,6 +660,7 @@ std::string Driver::toString() {
   out << "}";
   return out.str();
 }
+
 SuspendedSection::SuspendedSection(Driver* FOLLY_NONNULL driver)
     : driver_(driver) {
   if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
