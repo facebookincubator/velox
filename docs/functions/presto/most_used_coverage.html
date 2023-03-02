@@ -40,16 +40,20 @@
 div.body {max-width: 1300px;}
 table.coverage th {background-color: lightblue; text-align: center;}
 table.coverage td:nth-child(6) {background-color: lightblue;}
+table.coverage td:nth-child(8) {background-color: lightblue;}
 table.coverage tr:nth-child(1) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(1) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(1) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(1) td:nth-child(4) {background-color: #6BA81E;}
 table.coverage tr:nth-child(1) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(1) td:nth-child(7) {background-color: #6BA81E;}
+table.coverage tr:nth-child(1) td:nth-child(9) {background-color: #6BA81E;}
 table.coverage tr:nth-child(2) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(2) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(2) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(2) td:nth-child(7) {background-color: #6BA81E;}
+table.coverage tr:nth-child(2) td:nth-child(9) {background-color: #6BA81E;}
+table.coverage tr:nth-child(3) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(3) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(3) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(3) td:nth-child(4) {background-color: #6BA81E;}
@@ -58,6 +62,7 @@ table.coverage tr:nth-child(3) td:nth-child(7) {background-color: #6BA81E;}
 table.coverage tr:nth-child(4) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(4) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(4) td:nth-child(3) {background-color: #6BA81E;}
+table.coverage tr:nth-child(4) td:nth-child(4) {background-color: #6BA81E;}
 table.coverage tr:nth-child(4) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(4) td:nth-child(7) {background-color: #6BA81E;}
 table.coverage tr:nth-child(5) td:nth-child(1) {background-color: #6BA81E;}
@@ -85,6 +90,7 @@ table.coverage tr:nth-child(9) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(9) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(9) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(9) td:nth-child(4) {background-color: #6BA81E;}
+table.coverage tr:nth-child(9) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(9) td:nth-child(7) {background-color: #6BA81E;}
 table.coverage tr:nth-child(10) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(10) td:nth-child(3) {background-color: #6BA81E;}
@@ -101,6 +107,7 @@ table.coverage tr:nth-child(12) td:nth-child(7) {background-color: #6BA81E;}
 table.coverage tr:nth-child(13) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(13) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(13) td:nth-child(4) {background-color: #6BA81E;}
+table.coverage tr:nth-child(13) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(13) td:nth-child(7) {background-color: #6BA81E;}
 table.coverage tr:nth-child(14) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(14) td:nth-child(2) {background-color: #6BA81E;}
@@ -109,7 +116,9 @@ table.coverage tr:nth-child(14) td:nth-child(7) {background-color: #6BA81E;}
 table.coverage tr:nth-child(15) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(15) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(15) td:nth-child(3) {background-color: #6BA81E;}
+table.coverage tr:nth-child(15) td:nth-child(4) {background-color: #6BA81E;}
 table.coverage tr:nth-child(16) td:nth-child(1) {background-color: #6BA81E;}
+table.coverage tr:nth-child(16) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(16) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(16) td:nth-child(7) {background-color: #6BA81E;}
 table.coverage tr:nth-child(17) td:nth-child(1) {background-color: #6BA81E;}
@@ -125,6 +134,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <tr class="row-odd"><th class="head" colspan="5"><p>Scalar Functions</p></th>
 <th class="head"></th>
 <th class="head"><p>Aggregate Functions</p></th>
+<th class="head"></th>
+<th class="head"><p>Window Functions</p></th>
 </tr>
 </thead>
 <tbody>
@@ -135,6 +146,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p><a class="reference internal" href="array.html#arrays_overlap" title="arrays_overlap"><code class="xref py py-func docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#id0" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a></p></td>
+<td></td>
+<td><p><a class="reference internal" href="window.html#row_number" title="row_number"><code class="xref py py-func docutils literal notranslate"><span class="pre">row_number()</span></code></a></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="string.html#lower" title="lower"><code class="xref py py-func docutils literal notranslate"><span class="pre">lower()</span></code></a></p></td>
 <td><p><a class="reference internal" href="json.html#json_extract_scalar" title="json_extract_scalar"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_extract_scalar()</span></code></a></p></td>
@@ -143,22 +156,28 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p>from_big_endian_64</p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a></p></td>
+<td></td>
+<td><p><a class="reference internal" href="window.html#rank" title="rank"><code class="xref py py-func docutils literal notranslate"><span class="pre">rank()</span></code></a></p></td>
 </tr>
-<tr class="row-even"><td><p>json_format</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="json.html#json_format" title="json_format"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_format()</span></code></a></p></td>
 <td><p><a class="reference internal" href="array.html#array_sort" title="array_sort"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sort()</span></code></a></p></td>
 <td><p><a class="reference internal" href="math.html#id0" title="round"><code class="xref py py-func docutils literal notranslate"><span class="pre">round()</span></code></a></p></td>
 <td><p><a class="reference internal" href="string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a></p></td>
 <td><p><a class="reference internal" href="binary.html#md5" title="md5"><code class="xref py py-func docutils literal notranslate"><span class="pre">md5()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a></p></td>
+<td></td>
+<td><p>lag</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="string.html#upper" title="upper"><code class="xref py py-func docutils literal notranslate"><span class="pre">upper()</span></code></a></p></td>
 <td><p><a class="reference internal" href="map.html#transform_values" title="transform_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform_values()</span></code></a></p></td>
 <td><p><a class="reference internal" href="map.html#map_filter" title="map_filter"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_filter()</span></code></a></p></td>
-<td><p>map_zip_with</p></td>
+<td><p><a class="reference internal" href="map.html#map_zip_with" title="map_zip_with"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_zip_with()</span></code></a></p></td>
 <td><p><a class="reference internal" href="binary.html#xxhash64" title="xxhash64"><code class="xref py py-func docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="string.html#id1" title="split"><code class="xref py py-func docutils literal notranslate"><span class="pre">split()</span></code></a></p></td>
 <td><p><a class="reference internal" href="map.html#map_entries" title="map_entries"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_entries()</span></code></a></p></td>
@@ -167,6 +186,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p><a class="reference internal" href="binary.html#to_hex" title="to_hex"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_hex()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="math.html#random" title="random"><code class="xref py py-func docutils literal notranslate"><span class="pre">random()</span></code></a></p></td>
 <td><p><a class="reference internal" href="string.html#concat" title="concat"><code class="xref py py-func docutils literal notranslate"><span class="pre">concat()</span></code></a></p></td>
@@ -175,6 +196,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p><a class="reference internal" href="map.html#transform_keys" title="transform_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform_keys()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="math.html#floor" title="floor"><code class="xref py py-func docutils literal notranslate"><span class="pre">floor()</span></code></a></p></td>
 <td><p><a class="reference internal" href="array.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a></p></td>
@@ -183,6 +206,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p>bing_tile_quadkey</p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#max_by" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="array.html#contains" title="contains"><code class="xref py py-func docutils literal notranslate"><span class="pre">contains()</span></code></a></p></td>
 <td><p>sequence</p></td>
@@ -191,14 +216,18 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p><a class="reference internal" href="string.html#to_utf8" title="to_utf8"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_utf8()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="map.html#map_concat" title="map_concat"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_concat()</span></code></a></p></td>
 <td><p><a class="reference internal" href="string.html#id4" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a></p></td>
 <td><p><a class="reference internal" href="comparison.html#greatest" title="greatest"><code class="xref py py-func docutils literal notranslate"><span class="pre">greatest()</span></code></a></p></td>
 <td><p><a class="reference internal" href="bitwise.html#bitwise_and" title="bitwise_and"><code class="xref py py-func docutils literal notranslate"><span class="pre">bitwise_and()</span></code></a></p></td>
-<td><p>crc32</p></td>
+<td><p><a class="reference internal" href="binary.html#crc32" title="crc32"><code class="xref py py-func docutils literal notranslate"><span class="pre">crc32()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#count_if" title="count_if"><code class="xref py py-func docutils literal notranslate"><span class="pre">count_if()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="string.html#length" title="length"><code class="xref py py-func docutils literal notranslate"><span class="pre">length()</span></code></a></p></td>
 <td><p>date</p></td>
@@ -207,6 +236,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p>st_y</p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#id9" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="datetime.html#from_unixtime" title="from_unixtime"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a></p></td>
 <td><p><a class="reference internal" href="math.html#is_nan" title="is_nan"><code class="xref py py-func docutils literal notranslate"><span class="pre">is_nan()</span></code></a></p></td>
@@ -215,6 +246,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p>st_x</p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#avg" title="avg"><code class="xref py py-func docutils literal notranslate"><span class="pre">avg()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="array.html#transform" title="transform"><code class="xref py py-func docutils literal notranslate"><span class="pre">transform()</span></code></a></p></td>
 <td><p><a class="reference internal" href="math.html#rand" title="rand"><code class="xref py py-func docutils literal notranslate"><span class="pre">rand()</span></code></a></p></td>
@@ -223,14 +256,18 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td><p>now</p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="datetime.html#to_unixtime" title="to_unixtime"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_unixtime()</span></code></a></p></td>
 <td><p><a class="reference internal" href="array.html#filter" title="filter"><code class="xref py py-func docutils literal notranslate"><span class="pre">filter()</span></code></a></p></td>
 <td><p>from_iso8601_date</p></td>
 <td><p><a class="reference internal" href="string.html#reverse" title="reverse"><code class="xref py py-func docutils literal notranslate"><span class="pre">reverse()</span></code></a></p></td>
-<td><p>truncate</p></td>
+<td><p><a class="reference internal" href="math.html#id1" title="truncate"><code class="xref py py-func docutils literal notranslate"><span class="pre">truncate()</span></code></a></p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#min_by" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="regexp.html#regexp_like" title="regexp_like"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_like()</span></code></a></p></td>
 <td><p><a class="reference internal" href="math.html#sqrt" title="sqrt"><code class="xref py py-func docutils literal notranslate"><span class="pre">sqrt()</span></code></a></p></td>
@@ -239,22 +276,28 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#stddev" title="stddev"><code class="xref py py-func docutils literal notranslate"><span class="pre">stddev()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="array.html#array_join" title="array_join"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_join()</span></code></a></p></td>
 <td><p><a class="reference internal" href="comparison.html#least" title="least"><code class="xref py py-func docutils literal notranslate"><span class="pre">least()</span></code></a></p></td>
 <td><p><a class="reference internal" href="math.html#mod" title="mod"><code class="xref py py-func docutils literal notranslate"><span class="pre">mod()</span></code></a></p></td>
-<td><p>repeat</p></td>
+<td><p><a class="reference internal" href="array.html#repeat" title="repeat"><code class="xref py py-func docutils literal notranslate"><span class="pre">repeat()</span></code></a></p></td>
 <td></td>
 <td></td>
 <td><p>set_agg</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="string.html#id0" title="replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">replace()</span></code></a></p></td>
-<td><p>json_parse</p></td>
+<td><p><a class="reference internal" href="json.html#json_parse" title="json_parse"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_parse()</span></code></a></p></td>
 <td><p><a class="reference internal" href="array.html#array_distinct" title="array_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_distinct()</span></code></a></p></td>
 <td><p>st_geometryfromtext</p></td>
 <td></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#histogram" title="histogram"><code class="xref py py-func docutils literal notranslate"><span class="pre">histogram()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="regexp.html#id1" title="regexp_replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></p></td>
 <td><p>map_from_entries</p></td>
@@ -263,6 +306,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td></td>
 <td></td>
 <td><p>set_union</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="datetime.html#parse_datetime" title="parse_datetime"><code class="xref py py-func docutils literal notranslate"><span class="pre">parse_datetime()</span></code></a></p></td>
 <td><p><a class="reference internal" href="datetime.html#date_add" title="date_add"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_add()</span></code></a></p></td>
@@ -271,6 +316,8 @@ table.coverage tr:nth-child(18) td:nth-child(7) {background-color: #6BA81E;}
 <td></td>
 <td></td>
 <td><p><a class="reference internal" href="hyperloglog.html#merge" title="merge"><code class="xref py py-func docutils literal notranslate"><span class="pre">merge()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 </tbody>
 </table>
