@@ -111,8 +111,8 @@ struct Sha2HexStringFunction {
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input,
       const int32_t& bitLength) {
-    int32_t nonzeroBitLength = (bitLength == 0) ? 256 : bitLength;
-    int32_t digestLength = nonzeroBitLength >> 3;
+    const int32_t nonzeroBitLength = (bitLength == 0) ? 256 : bitLength;
+    const int32_t digestLength = nonzeroBitLength >> 3;
     result.resize(digestLength * 2);
     auto resultBuffer =
         folly::MutableByteRange((uint8_t*)result.data(), digestLength);
