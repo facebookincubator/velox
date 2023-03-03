@@ -112,29 +112,31 @@ struct Sha2HexStringFunction {
       const arg_type<Varbinary>& input,
       const int32_t& bitLength) {
     const int32_t nonzeroBitLength = (bitLength == 0) ? 256 : bitLength;
+    const EVP_MD* hashAlgorithm;
+    switch (nonzeroBitLength) {
+      case 224:
+        hashAlgorithm = EVP_sha224();
+        break;
+      case 256:
+        hashAlgorithm = EVP_sha256();
+        break;
+      case 384:
+        hashAlgorithm = EVP_sha384();
+        break;
+      case 512:
+        hashAlgorithm = EVP_sha512();
+        break;
+      default:
+        // For an unsupported bitLength, the return value is NULL.
+        return false;
+    }
     const int32_t digestLength = nonzeroBitLength >> 3;
     result.resize(digestLength * 2);
     auto resultBuffer =
         folly::MutableByteRange((uint8_t*)result.data(), digestLength);
     auto inputBuffer =
         folly::ByteRange((const uint8_t*)input.data(), input.size());
-    switch (nonzeroBitLength) {
-      case 224:
-        folly::ssl::OpenSSLHash::hash(resultBuffer, EVP_sha224(), inputBuffer);
-        break;
-      case 256:
-        folly::ssl::OpenSSLHash::sha256(resultBuffer, inputBuffer);
-        break;
-      case 384:
-        folly::ssl::OpenSSLHash::hash(resultBuffer, EVP_sha384(), inputBuffer);
-        break;
-      case 512:
-        folly::ssl::OpenSSLHash::sha512(resultBuffer, inputBuffer);
-        break;
-      default:
-        // For an unsupported bitLength, the return value is NULL.
-        return false;
-    }
+    folly::ssl::OpenSSLHash::hash(resultBuffer, hashAlgorithm, inputBuffer);
     encodeDigestToBase16((uint8_t*)result.data(), digestLength);
     return true;
   }
