@@ -158,18 +158,6 @@ class DecodedVector {
     return reinterpret_cast<const T*>(data_);
   }
 
-  /// Returns the value at the specified index in the values buffer.
-  /// Note: This method doesn't use the mapping in indices() to resolve the
-  /// index. Use this method if DecodedVector::isIdentityMapping() returns true.
-  template <typename T>
-  const T deserialize(const vector_size_t idx) const {
-    if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
-      return UnscaledLongDecimal::deserialize(
-          data<char>() + idx * sizeof(UnscaledLongDecimal));
-    }
-    return data<T>()[idx];
-  }
-
   /// Returns the raw nulls buffer for the base vector combined with nulls found
   /// in dictionary wrappings. May return nullptr if there are no nulls. Use
   /// top-level row numbers to access individual null flags, e.g.

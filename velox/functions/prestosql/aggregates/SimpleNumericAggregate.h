@@ -126,12 +126,13 @@ class SimpleNumericAggregate : public exec::Aggregate {
         updateNonNullValue<tableHasNulls, TData>(
             groups[i], TData(decoded.valueAt<TValue>(i)), updateSingleValue);
       });
-    } else if (decoded.isIdentityMapping() && !std::is_same_v<TValue, bool>) {
+    } else if (
+        decoded.isIdentityMapping() && !std::is_same_v<TValue, bool> &&
+        !std::is_same_v<TValue, UnscaledLongDecimal>) {
+      auto data = decoded.data<TValue>();
       rows.applyToSelected([&](vector_size_t i) {
-        updateNonNullValue<tableHasNulls, TData>(
-            groups[i],
-            TData(decoded.template deserialize<TValue>(i)),
-            updateSingleValue);
+        updateNonNullValue<true, TData>(
+            groups[i], TData(data[i]), updateSingleValue);
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
@@ -178,12 +179,13 @@ class SimpleNumericAggregate : public exec::Aggregate {
         updateNonNullValue<true, TData>(
             group, TData(decoded.valueAt<TValue>(i)), updateSingleValue);
       });
-    } else if (decoded.isIdentityMapping() && !std::is_same_v<TValue, bool>) {
+    } else if (
+        decoded.isIdentityMapping() && !std::is_same_v<TValue, bool> &&
+        !std::is_same_v<TValue, UnscaledLongDecimal>) {
+      auto data = decoded.data<TValue>();
       rows.applyToSelected([&](vector_size_t i) {
         updateNonNullValue<true, TData>(
-            group,
-            TData(decoded.template deserialize<TValue>(i)),
-            updateSingleValue);
+            group, TData(data[i]), updateSingleValue);
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
