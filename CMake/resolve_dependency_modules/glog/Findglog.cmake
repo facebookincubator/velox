@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-message(STATUS "Found glog - Bundled")
+message(STATUS "Using glog - Bundled")
 set(glog_FOUND TRUE)
 set(GLOG_LIBRARY ${glog_LIBRARY})
-message(STATUS "Found glog - ${GLOG_LIBRARY}")
