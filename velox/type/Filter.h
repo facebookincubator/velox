@@ -29,6 +29,7 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/type/StringView.h"
 #include "velox/type/UnscaledShortDecimal.h"
+#include "velox/type/UnscaledLongDecimal.h"
 
 namespace facebook::velox::common {
 
@@ -52,6 +53,7 @@ enum class FilterKind {
   kNegatedBytesValues,
   kBigintMultiRange,
   kMultiRange,
+  kInt128Range,
 };
 
 /**
@@ -702,6 +704,57 @@ class NegatedBigintRange final : public Filter {
 
  private:
   std::unique_ptr<BigintRange> nonNegated_;
+};
+
+class Int128Range final : public Filter {
+ public:
+  /// @param lower Lowest value in the rejected range, inclusive.
+  /// @param upper Highest value in the range, inclusive.
+  /// @param nullAllowed Null values are passing the filter if true.
+  Int128Range(int128_t lower, int128_t upper, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kInt128Range),
+        lower_(lower),
+        upper_(upper),
+        isSingleValue_(upper_ == lower_) {}
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<Int128Range>(
+          this->lower_, this->upper_, nullAllowed.value());
+    } else {
+      return std::make_unique<Int128Range>(*this);
+    }
+  }
+
+  bool testInt128(int128_t value) const final {
+    return value >= lower_ && value <= upper_;
+  }
+
+  int128_t lower() const {
+    return lower_;
+  }
+
+  int128_t upper() const {
+    return upper_;
+  }
+
+  bool isSingleValue() const {
+    return isSingleValue_;
+  }
+
+  std::string toString() const final {
+    return fmt::format(
+        "Int128Range: [{}, {}] {}",
+        lower_,
+        upper_,
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+ private:
+  const int128_t lower_;
+  const int128_t upper_;
+  const bool isSingleValue_;
 };
 
 /// IN-list filter for integral data types. Implemented as a hash table. Good

@@ -86,6 +86,9 @@ std::string Filter::toString() const {
     case FilterKind::kMultiRange:
       strKind = "MultiRange";
       break;
+    case FilterKind::kInt128Range:
+      strKind = "Int128Range";
+      break;
   };
 
   return fmt::format(

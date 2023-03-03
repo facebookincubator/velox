@@ -331,6 +331,45 @@ std::unique_ptr<common::MultiRange> orFilter(
       std::move(filters), nullAllowed, nanAllowed);
 }
 
+inline std::unique_ptr<common::Int128Range> lessThanLongDecimal(
+    int128_t max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::Int128Range>(
+      std::numeric_limits<int128_t>::min(), max - 1, nullAllowed);
+}
+
+inline std::unique_ptr<common::Int128Range> lessThanOrEqualLongDecimal(
+    int128_t max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::Int128Range>(
+      std::numeric_limits<int128_t>::min(), max, nullAllowed);
+}
+
+inline std::unique_ptr<common::Int128Range> greaterThanLongDecimal(
+    int128_t min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::Int128Range>(
+      min + 1, std::numeric_limits<int128_t>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::Int128Range> greaterThanOrEqualLongDecimal(
+    int128_t min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::Int128Range>(
+      min, std::numeric_limits<int128_t>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::Int128Range> equalLongDecimal(
+    int128_t value,
+    bool nullAllowed = false) {
+  return std::make_unique<common::Int128Range>(value, value, nullAllowed);
+}
+
+inline std::unique_ptr<common::Int128Range>
+betweenLongDecimal(int128_t min, int128_t max, bool nullAllowed = false) {
+  return std::make_unique<common::Int128Range>(min, max, nullAllowed);
+}
+
 std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
     const core::TypedExprPtr& expr);
 

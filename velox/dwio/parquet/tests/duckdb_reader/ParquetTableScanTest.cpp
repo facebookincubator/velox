@@ -16,6 +16,7 @@
 
 #include <folly/init/Init.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
@@ -30,12 +31,18 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::parquet;
 
 class ParquetTableScanTest : public HiveConnectorTestBase {
+ public:
+  ParquetTableScanTest(ParquetReaderType parquetReaderType)
+      : parquetReaderType_(parquetReaderType) {}
+
+  ParquetTableScanTest() : parquetReaderType_(ParquetReaderType::DUCKDB) {}
+
  protected:
   using OperatorTestBase::assertQuery;
 
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
-    registerParquetReaderFactory();
+    registerParquetReaderFactory(parquetReaderType_);
   }
 
   void TearDown() override {
@@ -48,6 +55,23 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
       const std::string& sql) {
     auto plan = PlanBuilder()
                     .tableScan(getRowType(std::move(outputColumnNames)))
+                    .planNode();
+
+    assertQuery(plan, splits_, sql);
+  }
+
+  void assertSelectWithFilter(
+      std::vector<std::string>&& outputColumnNames,
+      const std::vector<std::string>& subfieldFilters,
+      const std::string& remainingFilter,
+      const std::string& sql) {
+    auto rowType = getRowType(std::move(outputColumnNames));
+    parse::ParseOptions options;
+    options.parseDecimalAsDouble = false;
+
+    auto plan = PlanBuilder()
+                    .setParseOptions(options)
+                    .tableScan(rowType, subfieldFilters, remainingFilter)
                     .planNode();
 
     assertQuery(plan, splits_, sql);
@@ -131,6 +155,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
 
   RowTypePtr rowType_;
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits_;
+  const ParquetReaderType parquetReaderType_;
 };
 
 TEST_F(ParquetTableScanTest, basic) {
@@ -226,6 +251,104 @@ TEST_F(ParquetTableScanTest, countStar) {
 
   assertQuery(plan, {split}, "SELECT 20");
 }
+
+class NativeParquetTableScanTest
+    : public ParquetTableScanTest,
+      public testing::WithParamInterface<ParquetReaderType> {
+ public:
+  NativeParquetTableScanTest() : ParquetTableScanTest(GetParam()) {}
+};
+
+TEST_P(NativeParquetTableScanTest, decimalSubfieldFilter) {
+  std::vector<int64_t> unscaledShortValues(20);
+  std::iota(unscaledShortValues.begin(), unscaledShortValues.end(), 10001);
+  std::vector<int128_t> unscaledLongValues(20);
+  std::iota(
+      unscaledLongValues.begin(),
+      unscaledLongValues.end(),
+      10000000000000000001);
+  loadData(
+      getExampleFilePath("decimal.parquet"),
+      ROW({"a", "b"}, {DECIMAL(5, 2), DECIMAL(20, 5)}),
+      makeRowVector(
+          {"a", "b"},
+          {
+              makeShortDecimalFlatVector(unscaledShortValues, DECIMAL(5, 2)),
+              makeLongDecimalFlatVector(unscaledLongValues, DECIMAL(20, 5)),
+          }));
+
+  assertSelectWithFilter(
+      {"a"}, {"a < 100.07"}, "", "SELECT a FROM tmp WHERE a < 100.07");
+  assertSelectWithFilter(
+      {"a"}, {"a <= 100.07"}, "", "SELECT a FROM tmp WHERE a <= 100.07");
+  assertSelectWithFilter(
+      {"a"}, {"a > 100.07"}, "", "SELECT a FROM tmp WHERE a > 100.07");
+  assertSelectWithFilter(
+      {"a"}, {"a >= 100.07"}, "", "SELECT a FROM tmp WHERE a >= 100.07");
+  assertSelectWithFilter(
+      {"a"}, {"a = 100.07"}, "", "SELECT a FROM tmp WHERE a = 100.07");
+  assertSelectWithFilter(
+      {"a"},
+      {"a BETWEEN 100.07 AND 100.12"},
+      "",
+      "SELECT a FROM tmp WHERE a BETWEEN 100.07 AND 100.12");
+  assertSelectWithFilter(
+      {"a", "b"},
+      {"a <= 100.07"},
+      "",
+      "SELECT a, b FROM tmp WHERE a <= 100.07");
+  assertSelectWithFilter(
+      {"a", "b"},
+      {"a >= 100.07"},
+      "",
+      "SELECT a, b FROM tmp WHERE a >= 100.07");
+
+  assertSelectWithFilter(
+      {"b"},
+      {"b < 100000000000000.00007"},
+      "",
+      "SELECT b FROM tmp WHERE b < 100000000000000.00007");
+  assertSelectWithFilter(
+      {"b"},
+      {"b <= 100000000000000.00007"},
+      "",
+      "SELECT b FROM tmp WHERE b <= 100000000000000.00007");
+  assertSelectWithFilter(
+      {"b"},
+      {"b > 100000000000000.00007"},
+      "",
+      "SELECT b FROM tmp WHERE b > 100000000000000.00007");
+  assertSelectWithFilter(
+      {"b"},
+      {"b >= 100000000000000.00007"},
+      "",
+      "SELECT b FROM tmp WHERE b >= 100000000000000.00007");
+  assertSelectWithFilter(
+      {"b"},
+      {"b = 100000000000000.00007"},
+      "",
+      "SELECT b FROM tmp WHERE b = 100000000000000.00007");
+  assertSelectWithFilter(
+      {"b"},
+      {"b BETWEEN 100000000000000.00007 AND 100000000000000.00012"},
+      "",
+      "SELECT b FROM tmp WHERE b BETWEEN 100000000000000.00007 AND 100000000000000.00012");
+  assertSelectWithFilter(
+      {"a", "b"},
+      {"b <= 100000000000000.00007"},
+      "",
+      "SELECT a, b FROM tmp WHERE b <= 100000000000000.00007");
+  assertSelectWithFilter(
+      {"a", "b"},
+      {"b >= 100000000000000.00007"},
+      "",
+      "SELECT a, b FROM tmp WHERE b >= 100000000000000.00007");
+}
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    ParquetTableScanTest,
+    NativeParquetTableScanTest,
+    testing::ValuesIn({ParquetReaderType::NATIVE}));
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
