@@ -17,8 +17,6 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
 
 include(ExternalProject)
 
-add_subdirectory(xsimd)
-
 if(VELOX_ENABLE_ARROW)
   find_package(Thrift)
   if(Thrift_FOUND)
