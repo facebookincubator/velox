@@ -343,6 +343,7 @@ if(NOT TARGET gflags::gflags)
 endif()
 
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
+  # we force glog from source to avoid issues with a system version built against another gflags version (which is likely)
   set(glog_SOURCE BUNDLED)
 else()
   set(glog_SOURCE SYSTEM)
