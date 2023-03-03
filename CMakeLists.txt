@@ -342,8 +342,6 @@ if(NOT TARGET gflags::gflags)
   add_library(gflags::gflags ALIAS gflags)
 endif()
 
-# set_source(Unwind) resolve_dependency(Unwind)`
-
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
   set(glog_SOURCE BUNDLED)
 else()
@@ -371,7 +369,7 @@ endif()
 find_library(RE2 re2 REQUIRED)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
-  set(pybind11_SOURCE AUTO)
+  set_source(pybind11)
   resolve_dependency(pybind11 2.10.0)
   add_subdirectory(pyvelox)
 endif()

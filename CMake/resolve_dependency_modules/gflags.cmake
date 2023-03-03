@@ -41,7 +41,7 @@ set(GFLAGS_NAMESPACE "google;gflags")
 
 FetchContent_MakeAvailable(gflags)
 
-# the flag has to be added to each target we build so adjus to settings choosen
+# the flag has to be added to each target we build so adjust to settings choosen
 # above
 target_compile_options(gflags_static PRIVATE -Wno-cast-function-type)
 target_compile_options(gflags_shared PRIVATE -Wno-cast-function-type)
