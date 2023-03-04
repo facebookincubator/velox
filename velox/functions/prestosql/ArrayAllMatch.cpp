@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/ScopedVarSetter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -57,12 +59,17 @@ class AllMatchFunction : public exec::VectorFunction {
     auto flatResult = result->asFlatVector<bool>();
     exec::LocalDecodedVector bitsDecoder(context);
     auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
+
+    // Turns off the ThrowOnError flag and temporarily resets errors in the
+    // context to nullptr, so we only handle errors in this function itself.
+    ScopedVarSetter throwOnError(context.mutableThrowOnError(), false);
+    ScopedVarSetter<exec::EvalCtx::ErrorVectorPtr> errorsSetter(
+        context.errorsPtr(), nullptr);
     while (auto entry = it.next()) {
       auto elementRows =
           toElementRows<ArrayVector>(numElements, *entry.rows, flatArray.get());
       auto wrapCapture = toWrapCapture<ArrayVector>(
           numElements, entry.callable, *entry.rows, flatArray);
-      bool hasVeloxUserError = false;
       entry.callable->apply(
           elementRows,
           finalSelection,
@@ -74,6 +81,12 @@ class AllMatchFunction : public exec::VectorFunction {
 
       bitsDecoder.get()->decode(*matchBits, elementRows);
       entry.rows->applyToSelected([&](vector_size_t row) {
+        auto errors = context.errors();
+        if (errors && row < errors->size() && !errors->isNullAt(row)) {
+          flatResult->set(row, false);
+          return;
+        }
+
         auto size = sizes[row];
         auto offset = offsets[row];
         auto allMatch = true;

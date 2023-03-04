@@ -122,3 +122,14 @@ TEST_F(ArrayAllMatchTest, doubles) {
       makeNullableFlatVector<bool>({true, true, false, std::nullopt});
   assertEqualVectors(expectedResult, result);
 }
+
+TEST_F(ArrayAllMatchTest, errorOutputs) {
+  auto input =
+      makeNullableArrayVector<int8_t>({{2, 1}, {3, 0}, {std::nullopt}});
+  auto result = evaluate<SimpleVector<bool>>(
+      "all_match(c0, x -> ((10 / x) > 2))", makeRowVector({input}));
+
+  auto expectedResult =
+      makeNullableFlatVector<bool>({true, false, std::nullopt});
+  assertEqualVectors(expectedResult, result);
+}
