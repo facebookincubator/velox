@@ -16,6 +16,8 @@
 
 #include "velox/common/file/benchmark/ReadBenchmark.h"
 
+#include <folly/init/Init.h>
+
 using namespace facebook::velox;
 
 // This benchmark measures the throughput of a Linux compatible FileSystem for
@@ -24,6 +26,9 @@ using namespace facebook::velox;
 // and the IO throughput is 100 MBps, then it takes 10 seconds to just read the
 // data.
 int main(int argc, char** argv) {
+  std::string kUsage(
+      "Run 'velox_read_benchmark -helpon=ReadBenchmark' for available options.");
+  gflags::SetUsageMessage(kUsage);
   folly::init(&argc, &argv, false);
   ReadBenchmark bm;
   bm.initialize();
