@@ -571,6 +571,39 @@ template <
     bool rightTrim,
     typename TOutString,
     typename TInString>
+FOLLY_ALWAYS_INLINE void trimAsciiSpace(
+    TOutString& output,
+    const TInString& input) {
+  if (input.empty()) {
+    output.setEmpty();
+    return;
+  }
+
+  auto curPos = input.begin();
+  if constexpr (leftTrim) {
+    while (curPos < input.end() && 0x20 == *curPos) {
+      curPos++;
+    }
+  }
+  if (curPos >= input.end()) {
+    output.setEmpty();
+    return;
+  }
+  auto start = curPos;
+  curPos = input.end() - 1;
+  if constexpr (rightTrim) {
+    while (curPos >= start && 0x20 == *curPos) {
+      curPos--;
+    }
+  }
+  output.setNoCopy(StringView(start, curPos - start + 1));
+}
+
+template <
+    bool leftTrim,
+    bool rightTrim,
+    typename TOutString,
+    typename TInString>
 FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
     TOutString& output,
     const TInString& input) {

@@ -211,4 +211,147 @@ struct EndsWithFunction {
   }
 };
 
+/// trim functions
+/// ltrim(srcStr) -> varchar
+///     Removes leading 0x20(space) characters from srcStr.
+/// ltrim(trimStr, srcStr) -> varchar
+///     Remove leading specified characters from srcStr. The specified character
+///     is any character contained in trimStr.
+/// rtrim(srcStr) -> varchar
+///     Removes trailing 0x20(space) characters from srcStr.
+/// rtrim(trimStr, srcStr) -> varchar
+///     Remove trailing specified characters from srcStr. The specified
+///     character is any character contained in trimStr.
+/// trim(srcStr) -> varchar
+///     Remove leading and trailing 0x20(space) characters from srcStr.
+/// trim(trimStr, srcStr) -> varchar
+///     Remove leading and trailing specified characters from srcStr. The
+///     specified character is any character contained in trimStr.
+template <typename T, bool leftTrim, bool rightTrim>
+struct TrimFunctionBase {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& trimStr,
+      const arg_type<Varchar>& srcStr) {
+    if (srcStr.empty()) {
+      result.setEmpty();
+      return;
+    }
+    if (trimStr.empty()) {
+      result.setNoCopy(StringView(srcStr.data(), srcStr.size()));
+      return;
+    }
+
+    auto trimStrView = std::string_view(trimStr);
+    size_t resultStartIndex = 0;
+    if constexpr (leftTrim) {
+      resultStartIndex =
+          std::string_view(srcStr).find_first_not_of(trimStrView);
+      if (resultStartIndex == std::string_view::npos) {
+        result.setEmpty();
+        return;
+      }
+    }
+
+    size_t resultSize = srcStr.size() - resultStartIndex;
+    if constexpr (rightTrim) {
+      size_t lastIndex =
+          std::string_view(srcStr.data() + resultStartIndex, resultSize)
+              .find_last_not_of(trimStrView);
+      if (lastIndex == std::string_view::npos) {
+        result.setEmpty();
+        return;
+      }
+      resultSize = lastIndex + 1;
+    }
+
+    result.setNoCopy(StringView(srcStr.data() + resultStartIndex, resultSize));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& trimStr,
+      const arg_type<Varchar>& srcStr) {
+    if (srcStr.empty()) {
+      result.setEmpty();
+      return;
+    }
+    if (trimStr.empty()) {
+      result.setNoCopy(StringView(srcStr.data(), srcStr.size()));
+      return;
+    }
+
+    size_t numUtf8Char = 0;
+    int utf8CharLen[srcStr.size()];
+    size_t utf8CharPos[srcStr.size()];
+    for (size_t pos = 0; pos < srcStr.size();) {
+      utf8CharPos[numUtf8Char] = pos;
+      utf8CharLen[numUtf8Char] = utf8proc_char_length(srcStr.data() + pos);
+      pos += utf8CharLen[numUtf8Char];
+      ++numUtf8Char;
+    }
+
+    auto trimStrView = std::string_view(trimStr);
+    size_t resultStartIndex = 0;
+    size_t resultSize = srcStr.size();
+    if constexpr (leftTrim) {
+      for (size_t i = 0; i < numUtf8Char; ++i) {
+        if (trimStrView.find(std::string_view(
+                srcStr.data() + utf8CharPos[i], utf8CharLen[i])) ==
+            std::string_view::npos) {
+          break;
+        }
+        resultStartIndex += utf8CharLen[i];
+        resultSize -= utf8CharLen[i];
+      }
+    }
+
+    if constexpr (rightTrim) {
+      for (size_t i = numUtf8Char - 1; resultSize > 0 && i >= 0; --i) {
+        if (trimStrView.find(std::string_view(
+                srcStr.data() + utf8CharPos[i], utf8CharLen[i])) ==
+            std::string_view::npos) {
+          break;
+        }
+        resultSize -= utf8CharLen[i];
+      }
+    }
+
+    if (resultSize <= 0) {
+      result.setEmpty();
+      return;
+    }
+    result.setNoCopy(StringView(srcStr.data() + resultStartIndex, resultSize));
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& srcStr) {
+    stringImpl::trimAsciiSpace<leftTrim, rightTrim>(result, srcStr);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& srcStr) {
+    stringImpl::trimAsciiSpace<leftTrim, rightTrim>(result, srcStr);
+  }
+};
+
+template <typename T>
+struct TrimFunction : public TrimFunctionBase<T, true, true> {};
+
+template <typename T>
+struct LTrimFunction : public TrimFunctionBase<T, true, false> {};
+
+template <typename T>
+struct RTrimFunction : public TrimFunctionBase<T, false, true> {};
+
 } // namespace facebook::velox::functions::sparksql
