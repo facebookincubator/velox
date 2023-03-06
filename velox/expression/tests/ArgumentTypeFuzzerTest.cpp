@@ -73,11 +73,17 @@ TEST_F(ArgumentTypeFuzzerTest, concreteSignature) {
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("bigint")
                          .argumentType("varchar")
+                         .constantArgumentType("boolean")
                          .argumentType("array(boolean)")
                          .build();
 
-    testFuzzingSuccess(signature, BIGINT(), {VARCHAR(), ARRAY(BOOLEAN())});
+    testFuzzingSuccess(
+        signature, BIGINT(), {VARCHAR(), BOOLEAN(), ARRAY(BOOLEAN())});
     testFuzzingFailure(signature, SMALLINT());
+
+    ASSERT_FALSE(signature->argumentTypes()[0].isConstant());
+    ASSERT_TRUE(signature->argumentTypes()[1].isConstant());
+    ASSERT_FALSE(signature->argumentTypes()[2].isConstant());
   }
 
   {
@@ -85,10 +91,13 @@ TEST_F(ArgumentTypeFuzzerTest, concreteSignature) {
                          .returnType("array(array(double))")
                          .argumentType("array(bigint)")
                          .argumentType("double")
+                         .constantArgumentType("array(double)")
                          .build();
 
     testFuzzingSuccess(
-        signature, ARRAY(ARRAY(DOUBLE())), {ARRAY(BIGINT()), DOUBLE()});
+        signature,
+        ARRAY(ARRAY(DOUBLE())),
+        {ARRAY(BIGINT()), DOUBLE(), ARRAY(DOUBLE())});
     testFuzzingFailure(signature, ARRAY(ARRAY(REAL())));
     testFuzzingFailure(signature, ARRAY(DOUBLE()));
   }
@@ -100,14 +109,20 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
                          .typeVariable("T")
                          .returnType("T")
                          .argumentType("T")
+                         .constantArgumentType("T")
                          .argumentType("array(T)")
                          .build();
 
-    testFuzzingSuccess(signature, BIGINT(), {BIGINT(), ARRAY(BIGINT())});
     testFuzzingSuccess(
-        signature, ARRAY(DOUBLE()), {ARRAY(DOUBLE()), ARRAY(ARRAY(DOUBLE()))});
+        signature, BIGINT(), {BIGINT(), BIGINT(), ARRAY(BIGINT())});
     testFuzzingSuccess(
-        signature, ROW({DOUBLE()}), {ROW({DOUBLE()}), ARRAY(ROW({DOUBLE()}))});
+        signature,
+        ARRAY(DOUBLE()),
+        {ARRAY(DOUBLE()), ARRAY(DOUBLE()), ARRAY(ARRAY(DOUBLE()))});
+    testFuzzingSuccess(
+        signature,
+        ROW({DOUBLE()}),
+        {ROW({DOUBLE()}), ROW({DOUBLE()}), ARRAY(ROW({DOUBLE()}))});
   }
 
   {
@@ -116,11 +131,15 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
                          .returnType("array(T)")
                          .argumentType("T")
                          .argumentType("bigint")
+                         .constantArgumentType("array(T)")
                          .build();
 
     testFuzzingSuccess(
-        signature, ARRAY(ARRAY(DOUBLE())), {ARRAY(DOUBLE()), BIGINT()});
-    testFuzzingSuccess(signature, ARRAY(VARCHAR()), {VARCHAR(), BIGINT()});
+        signature,
+        ARRAY(ARRAY(DOUBLE())),
+        {ARRAY(DOUBLE()), BIGINT(), ARRAY(ARRAY(DOUBLE()))});
+    testFuzzingSuccess(
+        signature, ARRAY(VARCHAR()), {VARCHAR(), BIGINT(), ARRAY(VARCHAR())});
     testFuzzingFailure(signature, BIGINT());
     testFuzzingFailure(signature, MAP(VARCHAR(), BIGINT()));
   }
@@ -158,6 +177,7 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
                          .returnType("bigint")
                          .argumentType("array(K)")
                          .argumentType("array(V)")
+                         .constantArgumentType("boolean")
                          .build();
 
     {
@@ -170,6 +190,10 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
       // generated.
       ASSERT_TRUE(argumentTypes[0]->isArray());
       ASSERT_TRUE(argumentTypes[1]->isArray());
+
+      ASSERT_FALSE(signature->argumentTypes()[0].isConstant());
+      ASSERT_FALSE(signature->argumentTypes()[1].isConstant());
+      ASSERT_TRUE(signature->argumentTypes()[2].isConstant());
     }
 
     testFuzzingFailure(signature, DOUBLE());
@@ -324,6 +348,24 @@ TEST_F(ArgumentTypeFuzzerTest, unconstrainedSignatureTemplate) {
   ASSERT_EQ(argumentTypes[0]->kind(), TypeKind::MAP);
 
   ASSERT_EQ(argumentTypes[0]->childAt(0), argumentTypes[1]);
+}
+
+TEST_F(ArgumentTypeFuzzerTest, aggregateFunctionConcreteSignature) {
+  auto signature = exec::AggregateFunctionSignatureBuilder()
+                       .returnType("bigint")
+                       .intermediateType("bigint")
+                       .argumentType("varchar")
+                       .constantArgumentType("boolean")
+                       .argumentType("array(boolean)")
+                       .build();
+
+  testFuzzingSuccess(
+      signature, BIGINT(), {VARCHAR(), BOOLEAN(), ARRAY(BOOLEAN())});
+  testFuzzingFailure(signature, SMALLINT());
+
+  ASSERT_FALSE(signature->argumentTypes()[0].isConstant());
+  ASSERT_TRUE(signature->argumentTypes()[1].isConstant());
+  ASSERT_FALSE(signature->argumentTypes()[2].isConstant());
 }
 
 } // namespace facebook::velox::test

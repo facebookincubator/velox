@@ -104,9 +104,18 @@ class TypeSignature {
     return baseName_ == rhs.baseName_ && parameters_ == rhs.parameters_;
   }
 
+  bool isConstant() const {
+    return isConstant_;
+  }
+
+  void setIsConstant(bool isConstant) {
+    isConstant_ = isConstant;
+  }
+
  private:
   const std::string baseName_;
   const std::vector<TypeSignature> parameters_;
+  bool isConstant_{false};
 };
 
 class FunctionSignature {
@@ -267,6 +276,13 @@ class FunctionSignatureBuilder {
     return *this;
   }
 
+  FunctionSignatureBuilder& constantArgumentType(const std::string& type) {
+    auto argType = parseTypeSignature(type);
+    argType.setIsConstant(true);
+    argumentTypes_.emplace_back(std::move(argType));
+    return *this;
+  }
+
   FunctionSignatureBuilder& variableArity() {
     variableArity_ = true;
     return *this;
@@ -325,6 +341,14 @@ class AggregateFunctionSignatureBuilder {
 
   AggregateFunctionSignatureBuilder& argumentType(const std::string& type) {
     argumentTypes_.emplace_back(parseTypeSignature(type));
+    return *this;
+  }
+
+  AggregateFunctionSignatureBuilder& constantArgumentType(
+      const std::string& type) {
+    auto argType = parseTypeSignature(type);
+    argType.setIsConstant(true);
+    argumentTypes_.emplace_back(std::move(argType));
     return *this;
   }
 
