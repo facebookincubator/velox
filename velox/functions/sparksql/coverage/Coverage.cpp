@@ -15,7 +15,6 @@
  */
 
 #include <gflags/gflags.h>
-#include <iostream>
 #include "velox/exec/Aggregate.h"
 #include "velox/functions/CoverageUtil.h"
 #include "velox/functions/sparksql/Register.h"

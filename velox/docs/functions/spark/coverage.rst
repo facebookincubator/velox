@@ -1,9 +1,3 @@
-=================
-Function Coverage
-=================
-
-Here is a list of all scalar and aggregate Spark functions with functions that are available in Velox highlighted.
-
 .. raw:: html
 
     <style>
@@ -42,6 +36,8 @@ Here is a list of all scalar and aggregate Spark functions with functions that a
     table.coverage tr:nth-child(44) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(45) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(49) td:nth-child(2) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(50) td:nth-child(4) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(51) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(52) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(52) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(53) td:nth-child(1) {background-color: #6BA81E;}
@@ -117,8 +113,8 @@ Here is a list of all scalar and aggregate Spark functions with functions that a
     bround                                     flatten                                    map_keys                                   sequence                                   var_samp                                       try_sum
     btrim                                      float                                      map_values                                 session_window                             variance                                       var_pop
     cardinality                                :spark:func:`floor`                        map_zip_with                               sha                                        version                                        var_samp
-    case                                       forall                                     max                                        sha1                                       weekday                                        variance
-    cast                                       format_number                              max_by                                     sha2                                       weekofyear
+    case                                       forall                                     max                                        :spark:func:`sha1`                         weekday                                        variance
+    cast                                       format_number                              max_by                                     :spark:func:`sha2`                         weekofyear
     cbrt                                       format_string                              :spark:func:`md5`                          :spark:func:`shiftleft`                    when
     :spark:func:`ceil`                         from_csv                                   mean                                       :spark:func:`shiftright`                   width_bucket
     ceiling                                    from_json                                  min                                        shiftrightunsigned                         window
