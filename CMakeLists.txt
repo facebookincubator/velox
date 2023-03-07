@@ -17,13 +17,13 @@ cmake_minimum_required(VERSION 3.14)
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
-set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
-
 # set the project name
 project(velox)
 
+list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake")
+
 # Include our ThirdPartyToolchain dependencies macros
-include(ThirdpartyToolchain.cmake)
+include(ResolveDependency)
 
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -330,8 +330,26 @@ resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 # Range-v3 will be enable when the codegen code actually lands keeping it here
 # for reference. find_package(range-v3)
 
-find_package(gflags COMPONENTS shared)
-find_package(glog REQUIRED)
+set_source(gflags)
+resolve_dependency(gflags COMPONENTS shared)
+if(NOT TARGET gflags::gflags)
+  get_target_property(gflags_global gflags IMPORTED_GLOBAL)
+  if(NOT gflags_global)
+    # Some configurations don't import the gflags target globally which will
+    # block the creation of an alias
+    set_target_properties(gflags PROPERTIES IMPORTED_GLOBAL TRUE)
+  endif()
+  add_library(gflags::gflags ALIAS gflags)
+endif()
+
+if(${gflags_SOURCE} STREQUAL "BUNDLED")
+  # we force glog from source to avoid issues with a system version built
+  # against another gflags version (which is likely)
+  set(glog_SOURCE BUNDLED)
+else()
+  set(glog_SOURCE SYSTEM)
+endif()
+resolve_dependency(glog)
 
 set_source(fmt)
 resolve_dependency(fmt)
@@ -353,7 +371,7 @@ endif()
 find_library(RE2 re2 REQUIRED)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
-  set(pybind11_SOURCE AUTO)
+  set_source(pybind11)
   resolve_dependency(pybind11 2.10.0)
   add_subdirectory(pyvelox)
 endif()

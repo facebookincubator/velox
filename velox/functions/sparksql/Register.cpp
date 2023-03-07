@@ -51,6 +51,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_intersect, prefix + "array_intersect");
+  // This is the semantics of spark.sql.ansi.enabled = false.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_element_at, prefix + "element_at");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, prefix + "named_struct");
   VELOX_REGISTER_VECTOR_FUNCTION(
@@ -92,17 +93,14 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<Md5Function, Varchar, Varbinary>({prefix + "md5"});
   registerFunction<Sha1HexStringFunction, Varchar, Varbinary>(
       {prefix + "sha1"});
+  registerFunction<Sha2HexStringFunction, Varchar, Varbinary, int32_t>(
+      {prefix + "sha2"});
 
   exec::registerStatefulVectorFunction(
       prefix + "regexp_extract", re2ExtractSignatures(), makeRegexExtract);
   exec::registerStatefulVectorFunction(
       prefix + "rlike", re2SearchSignatures(), makeRLike);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
-
-  // Subscript operators. See ExtractValue in complexTypeExtractors.scala.
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_subscript, prefix + "getarrayitem");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_subscript, prefix + "getmapvalue");
-
   exec::registerStatefulVectorFunction(
       prefix + "least", leastSignatures(), makeLeast);
   exec::registerStatefulVectorFunction(

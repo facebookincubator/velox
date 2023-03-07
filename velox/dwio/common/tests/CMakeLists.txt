@@ -38,7 +38,7 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   ${FOLLY_WITH_DEPENDENCIES}
   ${TEST_LINK_LIBS}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   gtest
   gtest_main
   gmock
@@ -62,6 +62,7 @@ target_link_libraries(
   velox_e2e_filter_test_base
   velox_functions_prestosql
   velox_parse_parser
+  velox_vector_test_lib
   ${VELOX_LINK_LIBS}
   ${FOLLY_WITH_DEPENDENCIES}
   ${FMT}

@@ -539,13 +539,13 @@ FOLLY_ALWAYS_INLINE T castJsonToInt(const folly::dynamic& object) {
     double value = object.asDouble();
     if (value <= kIntMaxAsDouble && value >= kIntMinAsDouble) {
       return static_cast<T>(value);
-    } else {
-      throw std::invalid_argument(fmt::format(
-          "value is outside the range of {}: [{}, {}].",
-          CppToType<T>::create()->toString(),
-          kIntMinAsDouble,
-          kIntMaxAsDouble));
     }
+
+    VELOX_USER_FAIL(
+        "value is out of range [{}, {}]: {}",
+        kIntMinAsDouble,
+        kIntMaxAsDouble,
+        value);
   } else {
     return folly::to<T>(object.asInt());
   }
@@ -621,8 +621,6 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::MAP>(
   auto& writerTyped = writer.castTo<Map<Any, Any>>();
 
   for (const auto& pair : object.items()) {
-    VELOX_USER_CHECK(!pair.first.isNull(), "Map keys cannot be NULL.");
-
     // If casting to map of JSON values, nulls in map values should become the
     // JSON text "null".
     if (!isJsonType(writer.type()->childAt(1)) && pair.second.isNull()) {
@@ -835,7 +833,6 @@ void JsonCastOperator::castTo(
     const BaseVector& input,
     exec::EvalCtx& context,
     const SelectivityVector& rows,
-    bool /*nullOnFailure*/,
     const TypePtr& resultType,
     VectorPtr& result) const {
   context.ensureWritable(rows, resultType, result);
@@ -852,7 +849,6 @@ void JsonCastOperator::castFrom(
     const BaseVector& input,
     exec::EvalCtx& context,
     const SelectivityVector& rows,
-    bool /*nullOnFailure*/,
     const TypePtr& resultType,
     VectorPtr& result) const {
   context.ensureWritable(rows, resultType, result);

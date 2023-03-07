@@ -139,6 +139,15 @@ using exec::SignatureBinder;
 bool isDeterministic(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
+  // We know that the 'cast', 'and', and 'or' special forms are deterministic.
+  // Hard-code them here because they are not real functions and hence cannot be
+  // resolved by the code below.
+  if (functionName == "and" || functionName == "or" ||
+      functionName == "coalesce" || functionName == "if" ||
+      functionName == "switch" || functionName == "cast") {
+    return true;
+  }
+
   // Check if this is a simple function.
   if (auto simpleFunctionEntry =
           exec::SimpleFunctions().resolveFunction(functionName, argTypes)) {
@@ -542,7 +551,6 @@ ExpressionFuzzer::ExpressionFuzzer(
   // Register function override (for cases where we want to restrict the types
   // or parameters we pass to functions).
   registerFuncOverride(&ExpressionFuzzer::generateLikeArgs, "like");
-  registerFuncOverride(&ExpressionFuzzer::generateSplitArgs, "split");
   registerFuncOverride(
       &ExpressionFuzzer::generateEmptyApproxSetArgs, "empty_approx_set");
   registerFuncOverride(
@@ -661,22 +669,6 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateLikeArgs(
     const CallableSignature& input) {
   std::vector<core::TypedExprPtr> inputExpressions = {
       generateArg(input.args[0]), generateArgConstant(input.args[1])};
-  if (input.args.size() == 3) {
-    inputExpressions.emplace_back(generateArgConstant(input.args[2]));
-  }
-  return inputExpressions;
-}
-
-// Specialization for the "split" function.
-// Spark implementation only takes 2 args, and requires the delimiter to
-// be a constant. So we will ensure delimiter is constant for both Spark and
-// Presto.
-std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSplitArgs(
-    const CallableSignature& input) {
-
-  std::vector<core::TypedExprPtr> inputExpressions = {
-      generateArg(input.args[0]), generateArgConstant(input.args[1])};
-
   if (input.args.size() == 3) {
     inputExpressions.emplace_back(generateArgConstant(input.args[2]));
   }
@@ -805,7 +797,7 @@ core::TypedExprPtr ExpressionFuzzer::getCallExprFromCallable(
       callable.returnType, args, callable.name);
 }
 
-core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
+const CallableSignature* ExpressionFuzzer::chooseRandomConcreteSignature(
     const TypePtr& returnType,
     const std::string& functionName) {
   if (expressionToSignature_.find(functionName) ==
@@ -833,7 +825,16 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
   // Randomly pick a function that can return `returnType`.
   size_t idx = boost::random::uniform_int_distribution<uint32_t>(
       0, eligible.size() - 1)(rng_);
-  const auto& chosen = eligible[idx];
+  return eligible[idx];
+}
+
+core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
+    const TypePtr& returnType,
+    const std::string& functionName) {
+  const auto* chosen = chooseRandomConcreteSignature(returnType, functionName);
+  if (!chosen) {
+    return nullptr;
+  }
 
   markSelected(chosen->name);
   return getCallExprFromCallable(*chosen);
@@ -897,44 +898,21 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
   return getCallExprFromCallable(callable);
 }
 
-TypePtr ExpressionFuzzer::chooseCastFromType(const TypePtr& to) {
-  if (to->isPrimitiveType()) {
-    return vectorFuzzer_.randType(0);
-  }
-  if (to->isArray()) {
-    return ARRAY(chooseCastFromType(to->childAt(0)));
-  }
-  if (to->isMap()) {
-    return MAP(
-        chooseCastFromType(to->childAt(0)), chooseCastFromType(to->childAt(1)));
-  }
-  if (to->isRow()) {
-    std::vector<TypePtr> children;
-    for (auto& child : to->asRow().children()) {
-      children.push_back(chooseCastFromType(child));
-    }
-    return ROW(std::move(children));
-  }
-  // Placeholder for unsupported types.
-  return nullptr;
-}
-
 core::TypedExprPtr ExpressionFuzzer::generateCastExpression(
     const TypePtr& returnType) {
-  // Choose a random from type.
-  auto fromType = chooseCastFromType(returnType);
-  if (!fromType) {
+  const auto* callable = chooseRandomConcreteSignature(returnType, "cast");
+  if (!callable) {
     return nullptr;
   }
 
-  CallableSignature callable{"cast", {fromType}, false, returnType};
-  auto args = getArgsForCallable(callable);
+  auto args = getArgsForCallable(*callable);
+  markSelected("cast");
 
   // Generate try_cast expression with 50% chance.
   bool nullOnFailure =
       boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
   return std::make_shared<core::CastTypedExpr>(
-      callable.returnType, args, nullOnFailure);
+      callable->returnType, args, nullOnFailure);
 }
 
 template <typename T>

@@ -2058,95 +2058,63 @@ TEST_F(ExprTest, peelLazyDictionaryOverConstant) {
 }
 
 TEST_F(ExprTest, accessNested) {
-  // Construct Row(Row(Row(int))) vector
+  // Construct row(row(row(integer))) vector.
   auto base = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto level1 = makeRowVector({base});
   auto level2 = makeRowVector({level1});
   auto level3 = makeRowVector({level2});
 
-  auto level1Type = ROW({"c0"}, {base->type()});
-  auto level2Type = ROW({"c0"}, {level1Type});
-  auto level3Type = ROW({"c0"}, {level2Type});
-
-  // Access level3->level2->level1->base
+  // Access level3->level2->level1->base.
   // TODO: Expression "c0.c0.c0" currently not supported by DuckDB
   // So we wrap with parentheses to force parsing as struct extract
   // Track https://github.com/duckdb/duckdb/issues/2568
-  auto exprSet = compileExpression("(c0).c0.c0", level3Type);
-
-  auto result = evaluate(exprSet.get(), level3);
+  auto result = evaluate("(c0).c0.c0.c0", makeRowVector({level3}));
 
   assertEqualVectors(base, result);
 }
 
 TEST_F(ExprTest, accessNestedNull) {
-  // Construct Row(Row(Row(int))) vector
+  // Construct row(row(row(integer))) vector.
   auto base = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto level1 = makeRowVector({base});
 
-  auto level1Type = ROW({"c0"}, {base->type()});
-  auto level2Type = ROW({"c0"}, {level1Type});
-  auto level3Type = ROW({"c0"}, {level2Type});
-
-  BufferPtr nulls =
-      AlignedBuffer::allocate<bool>(5, execCtx_->pool(), bits::kNull);
-  // Construct level 2 row with nulls
-  auto level2 = std::make_shared<RowVector>(
-      execCtx_->pool(),
-      level2Type,
-      nulls,
-      level1->size(),
-      std::vector<VectorPtr>{level1});
+  // Construct level 2 row with nulls.
+  auto level2 = makeRowVector({level1}, nullEvery(2));
   auto level3 = makeRowVector({level2});
 
-  auto exprSet = compileExpression("(c0).c0.c0", level3Type);
-
-  auto result = evaluate(exprSet.get(), level3);
-
-  auto nullVector = makeAllNullFlatVector<int32_t>(5);
-
-  assertEqualVectors(nullVector, result);
+  auto result = evaluate("(c0).c0.c0.c0", makeRowVector({level3}));
+  auto expected = makeNullableFlatVector<int32_t>(
+      {std::nullopt, 2, std::nullopt, 4, std::nullopt});
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(ExprTest, accessNestedDictionaryEncoding) {
-  // Construct Row(Row(Row(int))) vector
+  // Construct row(row(row(integer))) vector.
   auto base = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
 
-  // Reverse order in dictionary encoding
-  auto indices = makeIndices(5, [](auto row) { return 4 - row; });
+  // Reverse order in dictionary encoding.
+  auto indices = makeIndicesInReverse(5);
 
   auto level1 = makeRowVector({base});
   auto level2 = makeRowVector({wrapInDictionary(indices, 5, level1)});
   auto level3 = makeRowVector({level2});
 
-  auto level1Type = ROW({"c0"}, {base->type()});
-  auto level2Type = ROW({"c0"}, {level1Type});
-  auto level3Type = ROW({"c0"}, {level2Type});
-
-  auto exprSet = compileExpression("(c0).c0.c0", level3Type);
-
-  auto result = evaluate(exprSet.get(), level3);
+  auto result = evaluate("(c0).c0.c0.c0", makeRowVector({level3}));
 
   assertEqualVectors(makeFlatVector<int32_t>({5, 4, 3, 2, 1}), result);
 }
 
 TEST_F(ExprTest, accessNestedConstantEncoding) {
-  // Construct Row(Row(Row(int))) vector
+  // Construct row(row(row(integer))) vector.
   VectorPtr base = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
-  // Wrap base in constant
+  // Wrap base in constant.
   base = BaseVector::wrapInConstant(5, 2, base);
 
   auto level1 = makeRowVector({base});
   auto level2 = makeRowVector({level1});
   auto level3 = makeRowVector({level2});
 
-  auto level1Type = ROW({"c0"}, {base->type()});
-  auto level2Type = ROW({"c0"}, {level1Type});
-  auto level3Type = ROW({"c0"}, {level2Type});
-
-  auto exprSet = compileExpression("(c0).c0.c0", level3Type);
-
-  auto result = evaluate(exprSet.get(), level3);
+  auto result = evaluate("(c0).c0.c0.c0", makeRowVector({level3}));
 
   assertEqualVectors(makeConstant(3, 5), result);
 }
@@ -2674,7 +2642,7 @@ TEST_F(ExprTest, castExceptionContext) {
       makeFlatVector(std::vector<int8_t>{1}),
       "cast((c0) as TIMESTAMP)",
       "Same as context.",
-      "Failed to cast from TINYINT to TIMESTAMP: 1. Conversion of TINYINT to Timestamp is not supported");
+      "Failed to cast from TINYINT to TIMESTAMP: 1. Conversion to Timestamp is not supported");
 }
 
 TEST_F(ExprTest, switchExceptionContext) {
@@ -3145,7 +3113,7 @@ TEST_F(ExprTest, applyFunctionNoResult) {
       "always_throws_vector_function(c0) AND true",
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
-      "and(always_throws_vector_function(c0), 1:BOOLEAN)",
+      "and(always_throws_vector_function(c0), true:BOOLEAN)",
       AlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
@@ -3157,7 +3125,7 @@ TEST_F(ExprTest, applyFunctionNoResult) {
       "no_op(c0) AND true",
       makeFlatVector<int32_t>({1, 2, 3}),
       "no_op(c0)",
-      "and(no_op(c0), 1:BOOLEAN)",
+      "and(no_op(c0), true:BOOLEAN)",
       "Function neither returned results nor threw exception.");
 }
 

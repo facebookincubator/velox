@@ -137,19 +137,27 @@ std::shared_ptr<exec::VectorFunction> makeLeast(
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> leastSignatures() {
-
   std::vector<std::string> types = {
-      "boolean", "tinyint", "smallint", "integer", "bigint", "real", "double", "varchar", "varbinary",
-      "timestamp", "date"};
+      "boolean",
+      "tinyint",
+      "smallint",
+      "integer",
+      "bigint",
+      "real",
+      "double",
+      "varchar",
+      "varbinary",
+      "timestamp",
+      "date"};
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
 
-  for (const auto& type: types) {
+  for (const auto& type : types) {
     signatures.emplace_back(exec::FunctionSignatureBuilder()
-    .returnType(type)
-    .argumentType(type)
-    .argumentType(type)
-    .variableArity()
-    .build());
+                                .returnType(type)
+                                .argumentType(type)
+                                .argumentType(type)
+                                .variableArity()
+                                .build());
   }
   return signatures;
 }

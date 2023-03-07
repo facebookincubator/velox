@@ -57,8 +57,7 @@ int main(int argc, char** argv) {
   // For rlike you need the following combo in the only list:
   // rlike, md5 and upper
   std::unordered_set<std::string> skipFunctions = {
-      "regexp_extract", "rlike", "chr", "replace", "sort_array", "size",
-      "murmur3hash", "hash", "xxhash64", "map", "in", "split", "array_intersect"};
+      "regexp_extract", "rlike", "chr", "replace"};
   return FuzzerRunner::run(
       FLAGS_only, FLAGS_seed, skipFunctions, FLAGS_special_forms);
 }
