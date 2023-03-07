@@ -177,3 +177,30 @@ TEST_F(FunctionSignatureBuilderTest, anyInReturn) {
       },
       "Type 'Any' cannot appear in return type");
 }
+
+TEST_F(FunctionSignatureBuilderTest, constFalgs) {
+  auto signature = FunctionSignatureBuilder()
+                       .returnType("bigint")
+                       .argumentType("double")
+                       .constantArgumentType("boolean")
+                       .argumentType("bigint")
+                       .build();
+  EXPECT_FALSE(signature->constantArguments().at(0));
+  EXPECT_TRUE(signature->constantArguments().at(1));
+  EXPECT_FALSE(signature->constantArguments().at(2));
+  EXPECT_EQ(
+      "(double,constant boolean,bigint) -> bigint", signature->toString());
+
+  auto aggSignature = AggregateFunctionSignatureBuilder()
+                          .typeVariable("T")
+                          .returnType("T")
+                          .intermediateType("array(T)")
+                          .argumentType("T")
+                          .constantArgumentType("bigint")
+                          .argumentType("T")
+                          .build();
+  EXPECT_FALSE(aggSignature->constantArguments().at(0));
+  EXPECT_TRUE(aggSignature->constantArguments().at(1));
+  EXPECT_FALSE(aggSignature->constantArguments().at(2));
+  EXPECT_EQ("(T,constant bigint,T) -> T", aggSignature->toString());
+}

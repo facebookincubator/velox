@@ -67,8 +67,19 @@ std::string TypeSignature::toString() const {
 }
 
 std::string FunctionSignature::toString() const {
+  std::vector<std::string> arguments;
+  auto size = argumentTypes_.size();
+  arguments.reserve(size);
+  for (auto i = 0; i < size; ++i) {
+    auto arg = argumentTypes_.at(i).toString();
+    if (constantArguments_.at(i)) {
+      arguments.emplace_back("constant " + arg);
+    } else {
+      arguments.emplace_back(arg);
+    }
+  }
   std::ostringstream out;
-  out << "(" << folly::join(",", argumentTypes_);
+  out << "(" << folly::join(",", arguments);
   if (variableArity_) {
     out << "...";
   }
