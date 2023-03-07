@@ -104,18 +104,9 @@ class TypeSignature {
     return baseName_ == rhs.baseName_ && parameters_ == rhs.parameters_;
   }
 
-  bool isConstant() const {
-    return isConstant_;
-  }
-
-  void setIsConstant(bool isConstant) {
-    isConstant_ = isConstant;
-  }
-
  private:
   const std::string baseName_;
   const std::vector<TypeSignature> parameters_;
-  bool isConstant_{false};
 };
 
 class FunctionSignature {
@@ -137,6 +128,7 @@ class FunctionSignature {
       std::unordered_map<std::string, SignatureVariable> variables,
       TypeSignature returnType,
       std::vector<TypeSignature> argumentTypes,
+      std::vector<bool> constantArguments,
       bool variableArity);
 
   const TypeSignature& returnType() const {
@@ -145,6 +137,10 @@ class FunctionSignature {
 
   const std::vector<TypeSignature>& argumentTypes() const {
     return argumentTypes_;
+  }
+
+  const std::vector<bool>& constantArguments() const {
+    return constantArguments_;
   }
 
   bool variableArity() const {
@@ -170,6 +166,7 @@ class FunctionSignature {
   const std::unordered_map<std::string, SignatureVariable> variables_;
   const TypeSignature returnType_;
   const std::vector<TypeSignature> argumentTypes_;
+  const std::vector<bool> constantArguments_;
   const bool variableArity_;
 };
 
@@ -182,11 +179,13 @@ class AggregateFunctionSignature : public FunctionSignature {
       TypeSignature returnType,
       TypeSignature intermediateType,
       std::vector<TypeSignature> argumentTypes,
+      std::vector<bool> constantArguments,
       bool variableArity)
       : FunctionSignature(
             std::move(variables),
             std::move(returnType),
             std::move(argumentTypes),
+            std::move(constantArguments),
             variableArity),
         intermediateType_{std::move(intermediateType)} {}
 
@@ -273,13 +272,13 @@ class FunctionSignatureBuilder {
 
   FunctionSignatureBuilder& argumentType(const std::string& type) {
     argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(false);
     return *this;
   }
 
   FunctionSignatureBuilder& constantArgumentType(const std::string& type) {
-    auto argType = parseTypeSignature(type);
-    argType.setIsConstant(true);
-    argumentTypes_.emplace_back(std::move(argType));
+    argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(true);
     return *this;
   }
 
@@ -294,6 +293,7 @@ class FunctionSignatureBuilder {
   std::unordered_map<std::string, SignatureVariable> variables_;
   std::optional<TypeSignature> returnType_;
   std::vector<TypeSignature> argumentTypes_;
+  std::vector<bool> constantArguments_;
   bool variableArity_{false};
 };
 
@@ -341,14 +341,14 @@ class AggregateFunctionSignatureBuilder {
 
   AggregateFunctionSignatureBuilder& argumentType(const std::string& type) {
     argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(false);
     return *this;
   }
 
   AggregateFunctionSignatureBuilder& constantArgumentType(
       const std::string& type) {
-    auto argType = parseTypeSignature(type);
-    argType.setIsConstant(true);
-    argumentTypes_.emplace_back(std::move(argType));
+    argumentTypes_.emplace_back(parseTypeSignature(type));
+    constantArguments_.push_back(true);
     return *this;
   }
 
@@ -369,6 +369,7 @@ class AggregateFunctionSignatureBuilder {
   std::optional<TypeSignature> returnType_;
   std::optional<TypeSignature> intermediateType_;
   std::vector<TypeSignature> argumentTypes_;
+  std::vector<bool> constantArguments_;
   bool variableArity_{false};
 };
 

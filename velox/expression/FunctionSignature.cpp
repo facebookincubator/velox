@@ -175,7 +175,8 @@ void validateBaseTypeAndCollectTypeParams(
 void validate(
     const std::unordered_map<std::string, SignatureVariable>& variables,
     const TypeSignature& returnType,
-    const std::vector<TypeSignature>& argumentTypes) {
+    const std::vector<TypeSignature>& argumentTypes,
+    const std::vector<bool>& constantArguments) {
   std::unordered_set<std::string> usedVariables;
   // Validate the argument types.
   for (const auto& arg : argumentTypes) {
@@ -199,6 +200,11 @@ void validate(
       usedVariables.size(),
       variables.size(),
       "Some integer variables are not used");
+
+  VELOX_USER_CHECK_EQ(
+      argumentTypes.size(),
+      constantArguments.size(),
+      "Argument types size is not equal to constant flags");
 }
 
 } // namespace
@@ -225,12 +231,14 @@ FunctionSignature::FunctionSignature(
     std::unordered_map<std::string, SignatureVariable> variables,
     TypeSignature returnType,
     std::vector<TypeSignature> argumentTypes,
+    std::vector<bool> constantArguments,
     bool variableArity)
     : variables_{std::move(variables)},
       returnType_{std::move(returnType)},
       argumentTypes_{std::move(argumentTypes)},
+      constantArguments_{std::move(constantArguments)},
       variableArity_{variableArity} {
-  validate(variables_, returnType_, argumentTypes_);
+  validate(variables_, returnType_, argumentTypes_, constantArguments_);
 }
 
 FunctionSignaturePtr FunctionSignatureBuilder::build() {
@@ -239,6 +247,7 @@ FunctionSignaturePtr FunctionSignatureBuilder::build() {
       std::move(variables_),
       returnType_.value(),
       std::move(argumentTypes_),
+      std::move(constantArguments_),
       variableArity_);
 }
 
@@ -251,6 +260,7 @@ AggregateFunctionSignatureBuilder::build() {
       returnType_.value(),
       intermediateType_.value(),
       std::move(argumentTypes_),
+      std::move(constantArguments_),
       variableArity_);
 }
 } // namespace facebook::velox::exec

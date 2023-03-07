@@ -81,9 +81,9 @@ TEST_F(ArgumentTypeFuzzerTest, concreteSignature) {
         signature, BIGINT(), {VARCHAR(), BOOLEAN(), ARRAY(BOOLEAN())});
     testFuzzingFailure(signature, SMALLINT());
 
-    ASSERT_FALSE(signature->argumentTypes()[0].isConstant());
-    ASSERT_TRUE(signature->argumentTypes()[1].isConstant());
-    ASSERT_FALSE(signature->argumentTypes()[2].isConstant());
+    ASSERT_FALSE(signature->constantArguments()[0]);
+    ASSERT_TRUE(signature->constantArguments()[1]);
+    ASSERT_FALSE(signature->constantArguments()[2]);
   }
 
   {
@@ -191,9 +191,9 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
       ASSERT_TRUE(argumentTypes[0]->isArray());
       ASSERT_TRUE(argumentTypes[1]->isArray());
 
-      ASSERT_FALSE(signature->argumentTypes()[0].isConstant());
-      ASSERT_FALSE(signature->argumentTypes()[1].isConstant());
-      ASSERT_TRUE(signature->argumentTypes()[2].isConstant());
+      ASSERT_FALSE(signature->constantArguments()[0]);
+      ASSERT_FALSE(signature->constantArguments()[1]);
+      ASSERT_TRUE(signature->constantArguments()[2]);
     }
 
     testFuzzingFailure(signature, DOUBLE());
@@ -363,9 +363,9 @@ TEST_F(ArgumentTypeFuzzerTest, aggregateFunctionConcreteSignature) {
       signature, BIGINT(), {VARCHAR(), BOOLEAN(), ARRAY(BOOLEAN())});
   testFuzzingFailure(signature, SMALLINT());
 
-  ASSERT_FALSE(signature->argumentTypes()[0].isConstant());
-  ASSERT_TRUE(signature->argumentTypes()[1].isConstant());
-  ASSERT_FALSE(signature->argumentTypes()[2].isConstant());
+  ASSERT_FALSE(signature->constantArguments()[0]);
+  ASSERT_TRUE(signature->constantArguments()[1]);
+  ASSERT_FALSE(signature->constantArguments()[2]);
 }
 
 } // namespace facebook::velox::test
