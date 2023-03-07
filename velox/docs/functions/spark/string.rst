@@ -59,7 +59,6 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT split('one', '1'); -- ["one"]
 
 .. spark:function:: split(string, delimiter, limit) -> array(string)
-    :noindex:
 
     Splits ``string`` on ``delimiter`` and returns an array of size at most ``limit``. ::
 
@@ -82,7 +81,6 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     as being relative to the end of the string. Type of 'start' must be an INTEGER. 
 
 .. spark:function:: substring(string, start, length) -> varchar
-    :noindex:
 
     Returns a substring from ``string`` of length ``length`` from the starting
     position ``start``. Positions start with ``1``. A negative starting

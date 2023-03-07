@@ -13,7 +13,6 @@ Map Functions
         SELECT map(); -- {}
 
 .. spark:function:: map(array(K), array(V)) -> map(K,V)
-    :noindex:
 
     Returns a map created using the given key/value arrays. Duplicate map key will cause exception. ::
 
