@@ -73,6 +73,8 @@ struct TaskStats {
   /// and results have been consumed.
   uint64_t endTimeMs{0};
 
+  uint64_t maxUninterruptedDriverCpuTimeInNanos{0};
+
   /// Total number of drivers.
   uint64_t numTotalDrivers{0};
   /// The number of completed drivers (which slots are null in Task 'drivers_'

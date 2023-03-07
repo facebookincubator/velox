@@ -309,6 +309,11 @@ StopReason Driver::runInternal(
         RuntimeCounter(queuedTime, RuntimeCounter::Unit::kNanos));
   }
 
+  auto execTimer =
+      createDeltaCpuWallTimer([this](const CpuWallTiming& deltaTiming) {
+        maxUninterruptedTiming_.max(deltaTiming);
+      });
+
   CancelGuard guard(task().get(), &state_, [&](StopReason reason) {
     // This is run on error or cancel exit.
     if (reason == StopReason::kTerminate) {
@@ -552,6 +557,10 @@ void Driver::addStatsToTask() {
     stats.numDrivers = 1;
     task()->addOperatorStats(stats);
   }
+}
+
+const CpuWallTiming& Driver::maxUninterruptedTiming() const {
+  return maxUninterruptedTiming_;
 }
 
 void Driver::close() {

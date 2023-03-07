@@ -260,6 +260,8 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   void addStatsToTask();
 
+  const CpuWallTiming& maxUninterruptedTiming() const;
+
   // Returns true if all operators between the source and 'aggregation' are
   // order-preserving and do not increase cardinality.
   bool mayPushdownAggregation(Operator* FOLLY_NONNULL aggregation) const;
@@ -336,6 +338,8 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // Index of the current operator to run (or the 1st one if we haven't started
   // yet). Used to determine which operator's queueTime we should update.
   size_t curOpIndex_{0};
+
+  CpuWallTiming maxUninterruptedTiming_;
 
   std::vector<std::unique_ptr<Operator>> operators_;
 

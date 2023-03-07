@@ -1504,6 +1504,10 @@ TaskStats Task::taskStats() const {
     } else {
       ++taskStats.numBlockedDrivers[driver->blockingReason()];
     }
+
+    taskStats.maxUninterruptedDriverCpuTimeInNanos = std::max(
+        taskStats.maxUninterruptedDriverCpuTimeInNanos,
+        driver->maxUninterruptedTiming().cpuNanos);
   }
 
   return taskStats;

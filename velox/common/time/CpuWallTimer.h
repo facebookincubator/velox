@@ -33,6 +33,12 @@ struct CpuWallTiming {
     wallNanos += other.wallNanos;
   }
 
+  void max(const CpuWallTiming& other) {
+    count += other.count;
+    cpuNanos = std::max(cpuNanos, other.cpuNanos);
+    wallNanos = std::max(wallNanos, other.wallNanos);
+  }
+
   void clear() {
     count = 0;
     wallNanos = 0;
