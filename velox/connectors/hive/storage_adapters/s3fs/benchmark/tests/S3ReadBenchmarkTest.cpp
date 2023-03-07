@@ -18,13 +18,10 @@
 #include "connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "connectors/hive/storage_adapters/s3fs/util/MinioServer.h"
 #include "velox/common/file/File.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
-
-constexpr int kOneMB = 1 << 20;
 
 class S3ReadBenchmarkTest : public testing::Test {
  protected:
@@ -45,8 +42,8 @@ class S3ReadBenchmarkTest : public testing::Test {
     // Write random data.
     {
       const std::string dataFile =
-          minioServer_->path() + "/" + bucketName_ + "/" + fileName_;
-      minioServer_->addBucket(bucketName_.c_str());
+          minioServer_->path() + "/" + kBucketName_ + "/" + kFileName_;
+      minioServer_->addBucket(kBucketName_.c_str());
       LocalWriteFile stream(dataFile);
       for (int i = 0; i < 100; i++) {
         stream.append("velox");
@@ -62,22 +59,22 @@ class S3ReadBenchmarkTest : public testing::Test {
     }
   }
 
+  static const std::string kBucketName_;
+  static const std::string kFileName_;
   static std::shared_ptr<exec::test::TempDirectoryPath> config_;
-  static const std::string bucketName_;
-  static const std::string fileName_;
   static std::shared_ptr<MinioServer> minioServer_;
 };
 
 std::shared_ptr<exec::test::TempDirectoryPath> S3ReadBenchmarkTest::config_ =
     exec::test::TempDirectoryPath::create();
-const std::string S3ReadBenchmarkTest::bucketName_ = "bucket";
-const std::string S3ReadBenchmarkTest::fileName_ = "file";
+const std::string S3ReadBenchmarkTest::kBucketName_ = "bucket";
+const std::string S3ReadBenchmarkTest::kFileName_ = "file";
 std::shared_ptr<MinioServer> S3ReadBenchmarkTest::minioServer_ = nullptr;
 
 TEST_F(S3ReadBenchmarkTest, output) {
   FLAGS_config = config_->path + "/hive.properties";
   FLAGS_request_bytes = 100;
-  const std::string s3File = s3URI(bucketName_, fileName_);
+  const std::string s3File = s3URI(kBucketName_, kFileName_);
   FLAGS_path = s3File;
   FLAGS_num_in_run = 4;
   FLAGS_gap = 10;
