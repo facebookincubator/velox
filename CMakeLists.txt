@@ -478,8 +478,11 @@ include_directories(SYSTEM velox/external/duckdb)
 include_directories(SYSTEM velox/external/duckdb/tpch/dbgen/include)
 
 # these were previously vendored in third-party/
-set(gtest_SOURCE BUNDLED)
-resolve_dependency(gtest)
+if(NOT VELOX_DISABLE_GOOGLETEST)
+  set(gtest_SOURCE BUNDLED)
+  resolve_dependency(gtest)
+endif()
+
 set(xsimd_SOURCE BUNDLED)
 resolve_dependency(xsimd)
 
