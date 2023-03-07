@@ -808,4 +808,23 @@ std::vector<T> restoreStdVectorFromFile(const char* filePath) {
 template std::vector<column_index_t> restoreStdVectorFromFile<column_index_t>(
     const char* filePath);
 
+void saveSelectivityVector(const SelectivityVector& rows, std::ostream& out) {
+  auto range = rows.asRange();
+
+  write<int32_t>(rows.size(), out);
+  out.write(
+      reinterpret_cast<const char*>(range.bits()), bits::nbytes(rows.size()));
+}
+
+SelectivityVector restoreSelectivityVector(std::istream& in) {
+  auto size = read<int32_t>(in);
+
+  std::vector<char> bits(bits::nbytes(size));
+  in.read(bits.data(), bits.size());
+
+  SelectivityVector rows(size);
+  rows.setFromBits(reinterpret_cast<uint64_t*>(bits.data()), size);
+  return rows;
+}
+
 } // namespace facebook::velox
