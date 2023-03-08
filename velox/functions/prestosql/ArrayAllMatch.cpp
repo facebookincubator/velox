@@ -82,15 +82,12 @@ class AllMatchFunction : public exec::VectorFunction {
       bitsDecoder.get()->decode(*matchBits, elementRows);
       entry.rows->applyToSelected([&](vector_size_t row) {
         auto errors = context.errors();
-        if (errors && row < errors->size() && !errors->isNullAt(row)) {
-          flatResult->set(row, false);
-          return;
-        }
-
         auto size = sizes[row];
         auto offset = offsets[row];
         auto allMatch = true;
         auto hasNull = false;
+        auto hasError =
+            errors && row < errors->size() && !errors->isNullAt(row);
         for (auto i = 0; i < size; ++i) {
           auto idx = offset + i;
           if (bitsDecoder->isNullAt(idx)) {
@@ -101,10 +98,23 @@ class AllMatchFunction : public exec::VectorFunction {
           }
         }
 
-        if (hasNull && allMatch) {
-          flatResult->setNull(row, true);
+        // Errors for individual array elements should be suppressed only if the
+        // outcome can be decided by some other array element, e.g. if there is
+        // another element that returns 'false' for the predicate.
+        if (allMatch) {
+          if (hasError) {
+            auto err = std::static_pointer_cast<std::exception_ptr>(
+                context.errors()->valueAt(row));
+            std::rethrow_exception(*err);
+          }
+
+          if (hasNull) {
+            flatResult->setNull(row, true);
+          } else {
+            flatResult->set(row, true);
+          }
         } else {
-          flatResult->set(row, allMatch);
+          flatResult->set(row, false);
         }
       });
     }

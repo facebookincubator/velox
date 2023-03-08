@@ -9,6 +9,7 @@ Array Functions
         Returns true if all the elements match the predicate (a special case is when the array is empty);
         Returns false if one or more elements don’t match;
         Returns NULL if the predicate function returns NULL for one or more elements and true for all other elements.
+        Throw exceptions if the predicate function has errors on some elements and returns true or NULL on others.
 
 .. function:: array_average(array(double)) -> double
 

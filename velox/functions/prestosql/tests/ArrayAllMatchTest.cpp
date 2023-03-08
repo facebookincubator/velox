@@ -123,13 +123,36 @@ TEST_F(ArrayAllMatchTest, doubles) {
   assertEqualVectors(expectedResult, result);
 }
 
-TEST_F(ArrayAllMatchTest, errorOutputs) {
+TEST_F(ArrayAllMatchTest, errorSuppress) {
   auto input =
-      makeNullableArrayVector<int8_t>({{2, 1}, {3, 0}, {std::nullopt}});
+      makeNullableArrayVector<int8_t>({{2, 5, 0}, {5, std::nullopt, 0}});
   auto result = evaluate<SimpleVector<bool>>(
       "all_match(c0, x -> ((10 / x) > 2))", makeRowVector({input}));
 
-  auto expectedResult =
-      makeNullableFlatVector<bool>({true, false, std::nullopt});
+  auto expectedResult = makeNullableFlatVector<bool>({false, false});
   assertEqualVectors(expectedResult, result);
+}
+
+TEST_F(ArrayAllMatchTest, errorReThrow) {
+  static constexpr std::string_view errorMessage{"division by zero"};
+  static constexpr std::string_view errorCode{"ARITHMETIC_ERROR"};
+
+  try {
+    evaluate<SimpleVector<bool>>(
+        "all_match(c0, x -> ((10 / x) > 2))",
+        makeRowVector({makeNullableArrayVector<int8_t>({{1, 0}})}));
+  } catch (const VeloxUserError& ve) {
+    EXPECT_EQ(errorMessage, ve.message());
+    EXPECT_EQ(errorCode, ve.errorCode());
+  }
+
+  try {
+    evaluate<SimpleVector<bool>>(
+        "all_match(c0, x -> ((10 / x) > 2))",
+        makeRowVector(
+            {makeNullableArrayVector<int8_t>({{1, 0, std::nullopt}})}));
+  } catch (const VeloxUserError& ve) {
+    EXPECT_EQ(errorMessage, ve.message());
+    EXPECT_EQ(errorCode, ve.errorCode());
+  }
 }
