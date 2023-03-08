@@ -472,7 +472,7 @@ class BaseVector {
   // overwritten.
   //
   // After invoking this function, the 'result' is guaranteed to be a flat
-  // uniquely-referenced vector.
+  // uniquely-referenced vector with all data-dependent flags cleared.
   //
   // Use SelectivityVector::empty() to make the 'result' writable and preserve
   // all current values.
@@ -640,14 +640,16 @@ class BaseVector {
   /// To safely reuse a vector one needs to (1) ensure that the vector as well
   /// as all its buffers and child vectors are singly-referenced and mutable
   /// (for buffers); (2) clear append-only string buffers and child vectors
-  /// (elements of arrays, keys and values of maps, fields of structs).
+  /// (elements of arrays, keys and values of maps, fields of structs); (3)
+  /// clear all data-dependent flags.
   ///
   /// This method takes a non-const reference to a 'vector' and updates it to
   /// possibly a new flat vector of the specified size that is safe to reuse.
   /// If input 'vector' is not singly-referenced or not flat, replaces 'vector'
   /// with a new vector of the same type and specified size. If some of the
   /// buffers cannot be reused, these buffers are reset. Child vectors are
-  /// updated by calling this method recursively with size zero.
+  /// updated by calling this method recursively with size zero. Data-dependent
+  /// flags are cleared after this call.
   static void prepareForReuse(
       std::shared_ptr<BaseVector>& vector,
       vector_size_t size);
@@ -788,6 +790,18 @@ class BaseVector {
 
   BufferPtr sliceNulls(vector_size_t offset, vector_size_t length) const {
     return sliceBuffer(*BOOLEAN(), nulls_, offset, length, pool_);
+  }
+
+  // Reset data-dependent flags to the "unknown" status. This is needed whenever
+  // a vector is mutated because the modification may invalidate these flags.
+  // Currently, we call this function in BaseVector::ensureWritable() and
+  // BaseVector::prepareForReuse() that are expected to be called before any
+  // vector mutation.
+  virtual void clearDataDependentFlags() {
+    nullCount_ = std::nullopt;
+    distinctValueCount_ = std::nullopt;
+    representedByteCount_ = std::nullopt;
+    storageByteCount_ = std::nullopt;
   }
 
   const TypePtr type_;

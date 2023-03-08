@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <gtest/gtest.h>
 #include "velox/vector/tests/VectorValueGenerator.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorMakerStats.h"
@@ -275,6 +276,96 @@ SimpleVectorPtr<T> createAndAssert(
   auto vector = maker.encodedVector(encoding, expected);
   assertVectorAndProperties(expected, vector);
   return vector;
+}
+
+// Check that data-dependent flags of `vector` are set or cleared.
+void checkBaseVectorFlagsSet(const BaseVector& vector);
+
+void checkBaseVectorFlagsCleared(const BaseVector& vector);
+
+void checkVectorFlagsSet(const MapVector& vector);
+
+void checkVectorFlagsCleared(const MapVector& vector);
+
+template <typename T>
+void checkVectorFlagsSet(const SimpleVector<T>& vector) {
+  checkBaseVectorFlagsSet(vector);
+  EXPECT_TRUE(vector.getStats().min.has_value());
+  EXPECT_TRUE(vector.getStats().max.has_value());
+  EXPECT_TRUE(vector.isSorted().has_value());
+  EXPECT_TRUE(vector.isAscii(0).has_value());
+};
+
+template <typename T>
+void checkVectorFlagsCleared(const SimpleVector<T>& vector) {
+  checkBaseVectorFlagsCleared(vector);
+  EXPECT_FALSE(vector.getStats().min.has_value());
+  EXPECT_FALSE(vector.getStats().max.has_value());
+  EXPECT_FALSE(vector.isSorted().has_value());
+  EXPECT_FALSE(vector.isAscii(0).has_value());
+}
+
+// Create a flat vector of StringView with data-dependent flags being set.
+FlatVectorPtr<StringView> makeFlatVectorWithFlags(
+    vector_size_t kSize,
+    const BufferPtr& nulls,
+    memory::MemoryPool* pool);
+
+// Create a constant vector of StringView with data-dependent flags being set.
+ConstantVectorPtr<StringView> makeConstantVectorWithFlags(
+    vector_size_t kSize,
+    memory::MemoryPool* pool);
+
+// Create a dictionary vector of StringView with data-dependent flags being set.
+DictionaryVectorPtr<StringView> makeDictionaryVectorWithFlags(
+    vector_size_t kSize,
+    const BufferPtr& nulls,
+    memory::MemoryPool* pool);
+
+// Create a flat map(varchar, varchar) vector with data-dependent flags being
+// set.
+MapVectorPtr makeMapVectorWithFlags(
+    vector_size_t kSize,
+    const BufferPtr& nulls,
+    memory::MemoryPool* pool);
+
+// Create a vector through createVector and verify that data-dependent flags
+// are set. Then call ensureWritable() or prepareForReuse through makeMutable
+// and verify that data-dependent flags are cleared after the call.
+template <typename T>
+void checkVectorFlagsReset(
+    memory::MemoryPool* pool,
+    const std::function<std::shared_ptr<
+        T>(vector_size_t, const BufferPtr&, memory::MemoryPool* pool)>&
+        createVector,
+    const std::function<BaseVector*(std::shared_ptr<T>&, VectorPtr&)>&
+        makeMutable) {
+  using V = std::conditional_t<
+      std::is_same_v<T, MapVector>,
+      MapVector,
+      FlatVector<StringView>>;
+  auto kSize = 10;
+  auto nulls = allocateNulls(kSize, pool);
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  bits::setNull(rawNulls, kSize - 1, true);
+
+  VectorPtr resultHolder;
+
+  auto vector = createVector(kSize, nulls, pool);
+  auto another = vector;
+  auto* result = makeMutable(vector, resultHolder);
+  checkVectorFlagsCleared(*result->template as<V>());
+
+  if constexpr (std::is_same_v<T, FlatVector<StringView>>) {
+    vector = createVector(kSize, nulls, pool);
+    auto values = vector->values();
+    result = makeMutable(vector, resultHolder);
+    checkVectorFlagsCleared(*result->template as<V>());
+  }
+
+  vector = createVector(kSize, nulls, pool);
+  result = makeMutable(vector, resultHolder);
+  checkVectorFlagsCleared(*result->template as<V>());
 }
 
 } // namespace facebook::velox::test

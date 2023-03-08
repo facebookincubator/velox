@@ -544,6 +544,7 @@ void BaseVector::ensureWritable(const SelectivityVector& rows) {
   }
 
   this->resize(newSize);
+  this->clearDataDependentFlags();
 }
 
 void BaseVector::ensureWritable(
@@ -769,6 +770,7 @@ void BaseVector::prepareForReuse() {
       rawNulls_ = nullptr;
     }
   }
+  this->clearDataDependentFlags();
 }
 
 namespace {

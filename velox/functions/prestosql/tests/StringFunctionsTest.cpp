@@ -1872,7 +1872,7 @@ TEST_F(StringFunctionsTest, switchCaseCheck) {
                                         std::vector<std::string> secondColumn,
                                         SelectivityVector rows,
                                         std::string query,
-                                        bool isAscii) {
+                                        std::optional<bool> isAscii) {
     auto conditionVector = makeFlatVector<bool>(conditionColumn);
     auto argASCII = makeFlatVector<std::string>(firstColumn);
     auto asciiVector = argASCII->as<SimpleVector<StringView>>();
@@ -1885,7 +1885,11 @@ TEST_F(StringFunctionsTest, switchCaseCheck) {
     auto result = evaluate<FlatVector<StringView>>(
         query, makeRowVector({conditionVector, argASCII, argUTF8}));
     auto ascii = result->isAscii(rows);
-    ASSERT_EQ(ascii && ascii.value(), isAscii);
+    if (isAscii.has_value()) {
+      ASSERT_EQ(ascii && ascii.value(), isAscii);
+    } else {
+      ASSERT_FALSE(ascii.has_value());
+    }
   };
 
   auto condition = std::vector<bool>{false, true, false};
@@ -1893,7 +1897,7 @@ TEST_F(StringFunctionsTest, switchCaseCheck) {
   auto c2 = std::vector<std::string>{"àáâãäåæçè", "àáâãäåæçè", "àáâãäå"};
   SelectivityVector rows(condition.size());
   testConditionalPropagation(
-      condition, c1, c2, rows, "if(C0, upper(C1), lower(C1))", true);
+      condition, c1, c2, rows, "if(C0, upper(C1), lower(C1))", std::nullopt);
   testConditionalPropagation(
       condition, c1, c2, rows, "lower(if(C0, C2, C2))", false);
   testConditionalPropagation(

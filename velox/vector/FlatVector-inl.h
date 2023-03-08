@@ -321,11 +321,14 @@ void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
   }
 
   if constexpr (std::is_same_v<T, StringView>) {
+    // Before calling resize(), data-dependent flags isAllAscii_ and
+    // asciiSetRows_ should have already been cleared in
+    // BaseVector::ensureWritable or BaseVector::prepareFroReuse.
+    VELOX_DCHECK_EQ(this->isAllAscii_, false);
+    VELOX_DCHECK_EQ(this->asciiSetRows_.hasSelections(), false);
+
     resizeValues(newSize, StringView());
-    if (newSize < previousSize) {
-      auto vector = this->template asUnchecked<SimpleVector<StringView>>();
-      vector->invalidateIsAscii();
-    } else {
+    if (newSize > previousSize) {
       // Properly init stringView objects. This is useful when vectors are
       // re-used where the size changes but not the capacity.
       // TODO: remove this when resizeValues() checks against size() instead of

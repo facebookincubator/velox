@@ -563,6 +563,12 @@ class MapVector : public ArrayVectorBase {
 
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
 
+ protected:
+  virtual void clearDataDependentFlags() override {
+    BaseVector::clearDataDependentFlags();
+    sortedKeys_ = false;
+  }
+
  private:
   // Returns true if the keys for map at 'index' are sorted from first
   // to last in the type's collation order.

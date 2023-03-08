@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
+#include "velox/vector/tests/VectorTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -224,4 +225,99 @@ TEST_F(VectorPrepareForReuseTest, arrays) {
 
   vector->copy(otherVector.get(), 0, 0, 1'000);
   ASSERT_EQ(originalSize, vector->retainedSize());
+}
+
+TEST_F(VectorPrepareForReuseTest, dataDependentFlags) {
+  auto kSize = 10;
+  auto nulls = allocateNulls(kSize, pool());
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  bits::setNull(rawNulls, kSize - 1, true);
+
+  // Primitive flat vector.
+  {
+    test::checkVectorFlagsReset<FlatVector<StringView>>(
+        pool(),
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeFlatVectorWithFlags(size, nulls, pool);
+        },
+        [](FlatVectorPtr<StringView>& vector, VectorPtr& /*resultHolder*/) {
+          vector->prepareForReuse();
+          return vector.get();
+        });
+
+    test::checkVectorFlagsReset<FlatVector<StringView>>(
+        pool(),
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeFlatVectorWithFlags(size, nulls, pool);
+        },
+        [](FlatVectorPtr<StringView>& vector, VectorPtr& resultHolder) {
+          resultHolder = vector;
+          BaseVector::prepareForReuse(resultHolder, resultHolder->size());
+          return resultHolder->asFlatVector<StringView>();
+        });
+  }
+
+  // Constant vector.
+  {
+    test::checkVectorFlagsReset<ConstantVector<StringView>>(
+        pool(),
+        [](vector_size_t size,
+           const BufferPtr& /*nulls*/,
+           memory::MemoryPool* pool) {
+          return test::makeConstantVectorWithFlags(size, pool);
+        },
+        [](ConstantVectorPtr<StringView>& vector, VectorPtr& resultHolder) {
+          resultHolder = vector;
+          BaseVector::prepareForReuse(resultHolder, resultHolder->size());
+          return resultHolder->asFlatVector<StringView>();
+        });
+  }
+
+  // Dictionary vector.
+  {
+    test::checkVectorFlagsReset<DictionaryVector<StringView>>(
+        pool(),
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeDictionaryVectorWithFlags(size, nulls, pool);
+        },
+        [](DictionaryVectorPtr<StringView>& vector, VectorPtr& resultHolder) {
+          resultHolder = vector;
+          BaseVector::prepareForReuse(resultHolder, resultHolder->size());
+          return resultHolder->asFlatVector<StringView>();
+        });
+  }
+
+  // Map vector.
+  {
+    test::checkVectorFlagsReset<MapVector>(
+        pool(),
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeMapVectorWithFlags(size, nulls, pool);
+        },
+        [](MapVectorPtr& vector, VectorPtr& /*resultHolder*/) {
+          vector->prepareForReuse();
+          return vector.get();
+        });
+
+    test::checkVectorFlagsReset<MapVector>(
+        pool(),
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeMapVectorWithFlags(size, nulls, pool);
+        },
+        [](MapVectorPtr& vector, VectorPtr& resultHolder) {
+          resultHolder = vector;
+          BaseVector::prepareForReuse(resultHolder, resultHolder->size());
+          return resultHolder->as<MapVector>();
+        });
+  }
 }

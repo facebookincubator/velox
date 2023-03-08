@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/tests/VectorTestUtils.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
@@ -836,4 +837,104 @@ TEST_F(EnsureWritableVectorTest, booleanFlatVector) {
       BaseVector::ensureWritable(rows, BOOLEAN(), pool_.get(), vector));
   ASSERT_EQ(vectorPtr, vector.get());
   ASSERT_NE(another->as<void>(), vector->valuesAsVoid());
+}
+
+TEST_F(EnsureWritableVectorTest, dataDependentFlags) {
+  auto kSize = 10;
+  auto pool = pool_.get();
+  auto nulls = allocateNulls(kSize, pool);
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  bits::setNull(rawNulls, kSize - 1, true);
+
+  // Primitive flat vector.
+  {
+    test::checkVectorFlagsReset<FlatVector<StringView>>(
+        pool,
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeFlatVectorWithFlags(size, nulls, pool);
+        },
+        [](FlatVectorPtr<StringView>& vector, VectorPtr& /*resultHolder*/) {
+          vector->ensureWritable(SelectivityVector(1));
+          return vector.get();
+        });
+
+    test::checkVectorFlagsReset<FlatVector<StringView>>(
+        pool,
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeFlatVectorWithFlags(size, nulls, pool);
+        },
+        [](FlatVectorPtr<StringView>& vector, VectorPtr& resultHolder) {
+          resultHolder = vector;
+          BaseVector::ensureWritable(
+              SelectivityVector(1), VARCHAR(), vector->pool(), resultHolder);
+          return resultHolder->asFlatVector<StringView>();
+        });
+  }
+
+  // Constant vector.
+  {
+    test::checkVectorFlagsReset<ConstantVector<StringView>>(
+        pool,
+        [](vector_size_t size,
+           const BufferPtr& /*nulls*/,
+           memory::MemoryPool* pool) {
+          return test::makeConstantVectorWithFlags(size, pool);
+        },
+        [](ConstantVectorPtr<StringView>& vector, VectorPtr& resultHolder) {
+          resultHolder = vector;
+          BaseVector::ensureWritable(
+              SelectivityVector(1), VARCHAR(), vector->pool(), resultHolder);
+          return resultHolder->asFlatVector<StringView>();
+        });
+  }
+
+  // Dictionary vector.
+  {
+    test::checkVectorFlagsReset<DictionaryVector<StringView>>(
+        pool,
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeDictionaryVectorWithFlags(size, nulls, pool);
+        },
+        [](DictionaryVectorPtr<StringView>& vector, VectorPtr& resultHolder) {
+          resultHolder = vector;
+          BaseVector::ensureWritable(
+              SelectivityVector(1), VARCHAR(), vector->pool(), resultHolder);
+          return resultHolder->asFlatVector<StringView>();
+        });
+  }
+
+  // Map vector.
+  {
+    test::checkVectorFlagsReset<MapVector>(
+        pool,
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeMapVectorWithFlags(size, nulls, pool);
+        },
+        [](MapVectorPtr& vector, VectorPtr& /*resultHolder*/) {
+          vector->ensureWritable(SelectivityVector(1));
+          return vector.get();
+        });
+
+    test::checkVectorFlagsReset<MapVector>(
+        pool,
+        [](vector_size_t size,
+           const BufferPtr& nulls,
+           memory::MemoryPool* pool) {
+          return test::makeMapVectorWithFlags(size, nulls, pool);
+        },
+        [](MapVectorPtr& vector, VectorPtr& resultHolder) {
+          resultHolder = vector;
+          BaseVector::ensureWritable(
+              SelectivityVector(1), VARCHAR(), vector->pool(), resultHolder);
+          return resultHolder->as<MapVector>();
+        });
+  }
 }

@@ -1319,8 +1319,9 @@ TEST_F(VectorTest, resizeStringAsciiness) {
   SelectivityVector rows(stringInput.size());
   stringVector->computeAndSetIsAscii(rows);
   ASSERT_TRUE(stringVector->isAscii(rows).value());
+  stringVector->ensureWritable(rows);
   stringVector->resize(2);
-  ASSERT_FALSE(stringVector->isAscii(rows));
+  ASSERT_FALSE(stringVector->isAscii(rows).has_value());
 }
 
 TEST_F(VectorTest, copyNoRows) {
@@ -1346,13 +1347,14 @@ TEST_F(VectorTest, copyAscii) {
   source->setAllIsAscii(true);
 
   auto other = makeFlatVector(stringData);
+  other->ensureWritable(all);
   other->copy(source.get(), all, nullptr);
   auto ascii = other->isAscii(all);
-  ASSERT_TRUE(ascii.has_value());
-  ASSERT_TRUE(ascii.value());
+  ASSERT_FALSE(ascii.has_value());
 
   // Copy over asciness from a vector without asciiness set.
   source->invalidateIsAscii();
+  other->ensureWritable(all);
   other->copy(source.get(), all, nullptr);
   // Ensure isAscii returns nullopt
   ascii = other->isAscii(all);
@@ -1363,6 +1365,7 @@ TEST_F(VectorTest, copyAscii) {
   SelectivityVector some(all.size(), false);
   some.setValid(1, true);
   some.updateBounds();
+  other->ensureWritable(some);
   other->copy(source.get(), some, nullptr);
   // We will have invalidated all.
   ascii = other->isAscii(all);
@@ -1376,10 +1379,10 @@ TEST_F(VectorTest, copyAscii) {
 
   other->setAllIsAscii(false);
   largerSource->setAllIsAscii(true);
+  other->ensureWritable(some);
   other->copy(largerSource.get(), some, sourceMappings);
   ascii = other->isAscii(all);
-  ASSERT_TRUE(ascii.has_value());
-  ASSERT_FALSE(ascii.value());
+  ASSERT_FALSE(ascii.has_value());
 }
 
 TEST_F(VectorTest, compareNan) {

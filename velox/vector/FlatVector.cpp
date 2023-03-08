@@ -245,9 +245,6 @@ void FlatVector<StringView>::prepareForReuse() {
       rawValues_[i] = StringView();
     }
   }
-
-  // Clear ASCII-ness.
-  SimpleVector<StringView>::invalidateIsAscii();
 }
 
 template <>
@@ -322,6 +319,12 @@ void FlatVector<StringView>::copy(
     const BaseVector* source,
     const SelectivityVector& rows,
     const vector_size_t* toSourceRow) {
+  // Before calling copy(), data-dependent flags isAllAscii_ and
+  // asciiSetRows_ should have already been cleared in
+  // BaseVector::ensureWritable or BaseVector::prepareFroReuse.
+  VELOX_DCHECK_EQ(this->isAllAscii_, false);
+  VELOX_DCHECK_EQ(this->asciiSetRows_.hasSelections(), false);
+
   if (!rows.hasSelections()) {
     return;
   }
@@ -356,22 +359,6 @@ void FlatVector<StringView>::copy(
         set(row, leaf->valueAt(source->wrappedIndex(sourceRow)));
       }
     });
-  }
-
-  if (auto stringVector = source->as<SimpleVector<StringView>>()) {
-    if (auto ascii = stringVector->isAscii(rows, toSourceRow)) {
-      setIsAscii(ascii.value(), rows);
-    } else {
-      // ASCII-ness for the 'rows' is not known.
-      ensureIsAsciiCapacity(rows.end());
-      // If we arent All ascii, then invalidate
-      // because the remaining selected rows might be ascii
-      if (!isAllAscii_) {
-        invalidateIsAscii();
-      } else {
-        asciiSetRows_.deselect(rows);
-      }
-    }
   }
 }
 
