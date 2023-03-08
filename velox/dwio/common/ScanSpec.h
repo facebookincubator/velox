@@ -299,6 +299,14 @@ class ScanSpec {
     enableFilterReorder_ = enableFilterReorder;
   }
 
+  void setIsPartitionKey(bool isPartitionKey) {
+    isPartitionKey_ = isPartitionKey;
+  }
+
+  bool isPartitionKey() const {
+    return isPartitionKey_;
+  }
+
   // Returns the child which produces values for 'channel'. Throws if not found.
   ScanSpec& getChildByChannel(column_index_t channel);
 
@@ -419,6 +427,8 @@ class ScanSpec {
   // Only take the first maxArrayElementsCount_ elements from each array.
   vector_size_t maxArrayElementsCount_ =
       std::numeric_limits<vector_size_t>::max();
+
+  bool isPartitionKey_ = false;
 };
 
 // Returns false if no value from a range defined by stats can pass the
