@@ -238,14 +238,6 @@ class SimpleVector : public BaseVector {
     return isAllAscii_;
   }
 
-  /// Clears asciiness state.
-  template <typename U = T>
-  typename std::enable_if_t<std::is_same_v<U, StringView>, void>
-  invalidateIsAscii() {
-    asciiSetRows_.clearAll();
-    isAllAscii_ = false;
-  }
-
   /// Explicitly set asciness.
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, void> setIsAscii(

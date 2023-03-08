@@ -220,7 +220,7 @@ TEST_F(SimpleVectorNonParameterizedTest, computeAscii) {
     asciiSubset.setValid(0, false);
     asciiSubset.updateBounds();
 
-    vector->invalidateIsAscii();
+    vector = maker_.encodedVector(encoding, stringData_);
     vector->computeAndSetIsAscii(asciiSubset);
 
     ASSERT_TRUE(vector->isAscii(asciiSubset).has_value());
@@ -239,9 +239,9 @@ TEST_F(SimpleVectorNonParameterizedTest, isAscii) {
     bool ascii = vector->isAscii(all).value();
     ASSERT_FALSE(ascii);
 
-    // Clear asciiness and compute asciiness only for 2nd row
-    // Then ask for asciiness for some other row.
-    vector->invalidateIsAscii();
+    // Compute asciiness only for 2nd row Then ask for asciiness for some other
+    // row.
+    vector = maker_.encodedVector(encoding, stringData_);
     SelectivityVector first(stringData_.size(), false);
     first.setValid(1, true);
     first.updateBounds();
@@ -255,7 +255,7 @@ TEST_F(SimpleVectorNonParameterizedTest, isAscii) {
     ASSERT_TRUE(vector->isAscii(first).value());
 
     // Give it a selectivity vector with larger bounds than supported.
-    vector->invalidateIsAscii();
+    vector = maker_.encodedVector(encoding, stringData_);
     vector->computeAndSetIsAscii(all);
 
     SelectivityVector larger(stringData_.size() + 1, false);
@@ -310,25 +310,10 @@ TEST_F(SimpleVectorNonParameterizedTest, isAsciiSourceRows) {
     SelectivityVector some(all.size(), false);
     some.setValid(0, true);
     some.updateBounds();
-    vector->invalidateIsAscii();
+    vector = maker_.encodedVector(encoding, stringData_);
     vector->setIsAscii(true, some);
     ascii = vector->isAscii(all, sourceMappings);
     ASSERT_FALSE(ascii.has_value());
-  }
-}
-
-TEST_F(SimpleVectorNonParameterizedTest, invalidateIsAscii) {
-  for (auto encoding : kAsciiEncodings) {
-    LOG(INFO) << "Running:" << encoding;
-
-    auto vector = maker_.encodedVector(encoding, stringData_);
-    SelectivityVector all(stringData_.size());
-    vector->computeAndSetIsAscii(all);
-
-    assertIsAscii(vector, all, false);
-
-    vector->invalidateIsAscii();
-    ASSERT_FALSE(vector->isAscii(all).has_value());
   }
 }
 
@@ -341,7 +326,7 @@ TEST_F(SimpleVectorNonParameterizedTest, setAscii) {
     vector->computeAndSetIsAscii(all);
     assertIsAscii(vector, all, false);
 
-    vector->invalidateIsAscii();
+    vector = maker_.encodedVector(encoding, stringData_);
     vector->setIsAscii(true, all);
     assertIsAscii(vector, all, true);
 

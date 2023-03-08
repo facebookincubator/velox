@@ -1353,7 +1353,7 @@ TEST_F(VectorTest, copyAscii) {
   ASSERT_FALSE(ascii.has_value());
 
   // Copy over asciness from a vector without asciiness set.
-  source->invalidateIsAscii();
+  source = makeFlatVector(stringData);
   other->ensureWritable(all);
   other->copy(source.get(), all, nullptr);
   // Ensure isAscii returns nullopt

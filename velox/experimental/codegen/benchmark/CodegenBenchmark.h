@@ -67,7 +67,8 @@ class CodegenBenchmark : public CodegenTestCore {
       for (auto& rowVector : inputVector) {
         for (auto& columns : rowVector->children()) {
           if (auto stringVector = columns->asFlatVector<StringView>()) {
-            stringVector->invalidateIsAscii();
+            // Clear asciiness flags via ensureWritable.
+            stringVector->ensureWritable(SelectivityVector(1));
           }
         }
       }

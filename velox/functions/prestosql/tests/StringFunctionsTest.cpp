@@ -1946,10 +1946,10 @@ class InputModifyingFunction : public MultiStringFunction {
       VectorPtr& result) const override {
     MultiStringFunction::apply(rows, args, outputType, context, result);
 
-    // Modify args and remove its asciness
+    // Clear data-dependent flags of args including their asciiness.
     for (auto& arg : args) {
       auto input = arg->as<SimpleVector<StringView>>();
-      input->invalidateIsAscii();
+      input->ensureWritable(rows);
     }
   }
 };
