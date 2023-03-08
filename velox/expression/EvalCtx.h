@@ -270,6 +270,12 @@ class EvalCtx {
   /// new elements to null.
   void ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size) const;
 
+  bool hasError(vector_size_t row) const {
+    return errors_ && row < errors_->size() && !errors_->isNullAt(row);
+  }
+
+  void throwIfHasError(vector_size_t row);
+
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
   ExprSet* FOLLY_NULLABLE const exprSet_;

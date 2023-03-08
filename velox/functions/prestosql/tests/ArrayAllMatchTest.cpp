@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -129,30 +130,36 @@ TEST_F(ArrayAllMatchTest, errorSuppress) {
   auto result = evaluate<SimpleVector<bool>>(
       "all_match(c0, x -> ((10 / x) > 2))", makeRowVector({input}));
 
-  auto expectedResult = makeNullableFlatVector<bool>({false, false});
+  auto expectedResult = makeFlatVector<bool>({false, false});
   assertEqualVectors(expectedResult, result);
 }
 
 TEST_F(ArrayAllMatchTest, errorReThrow) {
-  static constexpr std::string_view errorMessage{"division by zero"};
-  static constexpr std::string_view errorCode{"ARITHMETIC_ERROR"};
+  static constexpr std::string_view kErrorMessage{"division by zero"};
 
-  try {
-    evaluate<SimpleVector<bool>>(
-        "all_match(c0, x -> ((10 / x) > 2))",
-        makeRowVector({makeNullableArrayVector<int8_t>({{1, 0}})}));
-  } catch (const VeloxUserError& ve) {
-    EXPECT_EQ(errorMessage, ve.message());
-    EXPECT_EQ(errorCode, ve.errorCode());
-  }
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "all_match(c0, x -> ((10 / x) > 2))",
+          makeRowVector({makeArrayVector<int8_t>({{1, 0}})})),
+      kErrorMessage);
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "all_match(c0, x -> ((10 / x) > 2))",
+          makeRowVector(
+              {makeNullableArrayVector<int8_t>({{1, 0, std::nullopt}})})),
+      kErrorMessage);
+}
 
-  try {
-    evaluate<SimpleVector<bool>>(
-        "all_match(c0, x -> ((10 / x) > 2))",
-        makeRowVector(
-            {makeNullableArrayVector<int8_t>({{1, 0, std::nullopt}})}));
-  } catch (const VeloxUserError& ve) {
-    EXPECT_EQ(errorMessage, ve.message());
-    EXPECT_EQ(errorCode, ve.errorCode());
-  }
+TEST_F(ArrayAllMatchTest, withTrys) {
+  auto result = evaluate<SimpleVector<bool>>(
+      "TRY(all_match(c0, x -> ((10 / x) > 2)))",
+      makeRowVector({makeNullableArrayVector<int8_t>({{1, 0}})}));
+  auto expectedResult = makeNullableFlatVector<bool>({std::nullopt});
+  assertEqualVectors(expectedResult, result);
+
+  result = evaluate<SimpleVector<bool>>(
+      "all_match(c0, x -> (TRY((10 / x) > 2)))",
+      makeRowVector({makeArrayVector<int8_t>({{1, 0}})}));
+  expectedResult = makeNullableFlatVector<bool>({std::nullopt});
+  assertEqualVectors(expectedResult, result);
 }

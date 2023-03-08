@@ -60,11 +60,10 @@ class AllMatchFunction : public exec::VectorFunction {
     exec::LocalDecodedVector bitsDecoder(context);
     auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
 
-    // Turns off the ThrowOnError flag and temporarily resets errors in the
+    // Turn off the ThrowOnError flag and reset errors in the
     // context to nullptr, so we only handle errors in this function itself.
+    auto topLevelThrowOnError = context.throwOnError();
     ScopedVarSetter throwOnError(context.mutableThrowOnError(), false);
-    ScopedVarSetter<exec::EvalCtx::ErrorVectorPtr> errorsSetter(
-        context.errorsPtr(), nullptr);
     while (auto entry = it.next()) {
       auto elementRows =
           toElementRows<ArrayVector>(numElements, *entry.rows, flatArray.get());
@@ -86,8 +85,7 @@ class AllMatchFunction : public exec::VectorFunction {
         auto offset = offsets[row];
         auto allMatch = true;
         auto hasNull = false;
-        auto hasError =
-            errors && row < errors->size() && !errors->isNullAt(row);
+
         for (auto i = 0; i < size; ++i) {
           auto idx = offset + i;
           if (bitsDecoder->isNullAt(idx)) {
@@ -102,10 +100,8 @@ class AllMatchFunction : public exec::VectorFunction {
         // outcome can be decided by some other array element, e.g. if there is
         // another element that returns 'false' for the predicate.
         if (allMatch) {
-          if (hasError) {
-            auto err = std::static_pointer_cast<std::exception_ptr>(
-                context.errors()->valueAt(row));
-            std::rethrow_exception(*err);
+          if (topLevelThrowOnError) {
+            context.throwIfHasError(row);
           }
 
           if (hasNull) {
