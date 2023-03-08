@@ -80,7 +80,6 @@ class AllMatchFunction : public exec::VectorFunction {
 
       bitsDecoder.get()->decode(*matchBits, elementRows);
       entry.rows->applyToSelected([&](vector_size_t row) {
-        auto errors = context.errors();
         auto size = sizes[row];
         auto offset = offsets[row];
         auto allMatch = true;
@@ -99,18 +98,18 @@ class AllMatchFunction : public exec::VectorFunction {
         // Errors for individual array elements should be suppressed only if the
         // outcome can be decided by some other array element, e.g. if there is
         // another element that returns 'false' for the predicate.
-        if (allMatch) {
-          if (topLevelThrowOnError) {
-            context.throwIfHasError(row);
-          }
-
-          if (hasNull) {
-            flatResult->setNull(row, true);
-          } else {
-            flatResult->set(row, true);
-          }
-        } else {
+        if (!allMatch) {
           flatResult->set(row, false);
+        } else if (context.hasError(row)) {
+          if (topLevelThrowOnError) {
+            context.throwOnError(row);
+          } else {
+            context.setError(row, context.getError(row));
+          }
+        } else if (hasNull) {
+          flatResult->setNull(row, true);
+        } else {
+          flatResult->set(row, true);
         }
       });
     }

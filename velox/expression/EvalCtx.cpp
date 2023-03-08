@@ -273,12 +273,9 @@ void EvalCtx::addElementErrorsToTopLevel(
   });
 }
 
-void EvalCtx::throwIfHasError(vector_size_t row) {
-  if (hasError(row)) {
-    auto err =
-        std::static_pointer_cast<std::exception_ptr>(errors_->valueAt(row));
-    throwError(*err);
-  }
+void EvalCtx::throwOnError(vector_size_t row) {
+  auto err = getError(row);
+  throwError(err);
 }
 
 const VectorPtr& EvalCtx::getField(int32_t index) const {

@@ -270,11 +270,20 @@ class EvalCtx {
   /// new elements to null.
   void ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size) const;
 
+  /// Whether there is an error at this row
   bool hasError(vector_size_t row) const {
     return errors_ && row < errors_->size() && !errors_->isNullAt(row);
   }
 
-  void throwIfHasError(vector_size_t row);
+  /// Extract the actual exception of the row
+  std::exception_ptr getError(vector_size_t row) {
+    auto err =
+        std::static_pointer_cast<std::exception_ptr>(errors_->valueAt(row));
+    return *err;
+  }
+
+  /// Throw a velox user exception on the error row
+  void throwOnError(vector_size_t row);
 
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
