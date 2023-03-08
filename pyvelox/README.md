@@ -34,6 +34,12 @@ Run the script referenced [here](https://github.com/facebookincubator/velox#sett
 
 
 #### Install PyVelox
+
+You can install PyVelox from pypi without the need to build it from source as we provide wheels for Linux and macOS (x86_64):
+```
+pip install pyvelox
+```
+
 For local development, you can build with debug mode:
 ```
 make python-build
