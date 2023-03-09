@@ -368,7 +368,8 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(SNAPPY snappy)
 endif()
 
-find_library(RE2 re2 REQUIRED)
+set_source(re2)
+resolve_dependency(re2)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   set_source(pybind11)
