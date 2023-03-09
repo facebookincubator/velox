@@ -164,6 +164,11 @@ class ExpressionFuzzer {
   std::vector<core::TypedExprPtr> generateLikeArgs(
       const CallableSignature& input);
 
+  /// Specialization for the "split" function: second
+  /// parameter always need to be constant for Spark.
+  std::vector<core::TypedExprPtr> generateSplitArgs(
+      const CallableSignature& input);
+
   /// Specialization for the "empty_approx_set" function: first optional
   /// parameter needs to be constant.
   std::vector<core::TypedExprPtr> generateEmptyApproxSetArgs(
