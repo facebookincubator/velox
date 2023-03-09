@@ -494,6 +494,8 @@ include_directories(.)
 # generates an installable makefile.
 install(FILES velox/type/Type.h DESTINATION "include/velox")
 
+# Adding this down here prevents warnings in dependencies from stopping the
+# build
 if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()

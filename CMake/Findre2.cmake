@@ -15,8 +15,7 @@ find_library(re2_lib re2)
 find_path(re2_include re2/re2.h)
 
 include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(re2 
-REQUIRED_VARS re2_lib re2_include)
+find_package_handle_standard_args(re2 REQUIRED_VARS re2_lib re2_include)
 
 if(re2_FOUND)
   set(re2_LIBRARIES ${re2_lib})
@@ -25,7 +24,6 @@ if(re2_FOUND)
   add_library(re2 STATIC IMPORTED)
   target_include_directories(re2 INTERFACE ${re2_INCLUDE_DIRS})
   target_link_libraries(re2 INTERFACE ${re2_LIBRARIES})
-  set_target_properties(re2 PROPERTIES
-    IMPORTED_LOCATION "${re2_LIBRARIES}")
+  set_target_properties(re2 PROPERTIES IMPORTED_LOCATION "${re2_LIBRARIES}")
   add_library(re2::re2 ALIAS re2)
 endif()

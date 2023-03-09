@@ -17,8 +17,11 @@ if(DEFINED ENV{VELOX_RE2_URL})
   set(VELOX_RE2_SOURCE_URL "$ENV{VELOX_RE2_URL}")
 else()
   set(VELOX_RE2_VERSION 2023-03-01)
-  set(VELOX_RE2_SOURCE_URL "https://github.com/google/re2/archive/refs/tags/${VELOX_RE2_VERSION}.tar.gz") 
-  set(VELOX_RE2_BUILD_SHA256_CHECKSUM 7a9a4824958586980926a300b4717202485c4b4115ac031822e29aa4ef207e48)
+  set(VELOX_RE2_SOURCE_URL
+      "https://github.com/google/re2/archive/refs/tags/${VELOX_RE2_VERSION}.tar.gz"
+  )
+  set(VELOX_RE2_BUILD_SHA256_CHECKSUM
+      7a9a4824958586980926a300b4717202485c4b4115ac031822e29aa4ef207e48)
 endif()
 
 message(STATUS "Building re2 from source")
