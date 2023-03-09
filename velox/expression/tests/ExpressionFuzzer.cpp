@@ -201,6 +201,7 @@ VectorFuzzer::Options getFuzzerOptions() {
 std::optional<CallableSignature> processConcreteSignature(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
+    const std::vector<bool>& constantArgs,
     const exec::FunctionSignature& signature) {
   VELOX_CHECK(
       signature.variables().empty(),
@@ -211,7 +212,8 @@ std::optional<CallableSignature> processConcreteSignature(
       .args = argTypes,
       .variableArity = signature.variableArity(),
       .returnType =
-          SignatureBinder::tryResolveType(signature.returnType(), {}, {})};
+          SignatureBinder::tryResolveType(signature.returnType(), {}, {}),
+      .constantArgs = constantArgs};
   VELOX_CHECK_NOT_NULL(callable.returnType);
 
   bool onlyPrimitiveTypes = callable.returnType->isPrimitiveType();
@@ -458,8 +460,11 @@ ExpressionFuzzer::ExpressionFuzzer(
         signatureTemplates_.emplace_back(SignatureTemplate{
             function.first, signature, std::move(typeVariables)});
       } else if (
-          auto callableFunction =
-              processConcreteSignature(function.first, argTypes, *signature)) {
+          auto callableFunction = processConcreteSignature(
+              function.first,
+              argTypes,
+              signature->constantArguments(),
+              *signature)) {
         atLeastOneSupported = true;
         ++supportedFunctionSignatures;
         signatures_.emplace_back(*callableFunction);
@@ -904,10 +909,14 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
   ArgumentTypeFuzzer fuzzer{*chosen->signature, returnType, rng_};
   VELOX_CHECK_EQ(fuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs), true);
   auto& argumentTypes = fuzzer.argumentTypes();
-  auto& constantArguments = fuzzer.constantArguments();
+  auto& constantArgs = fuzzer.constantArguments();
 
   CallableSignature callable{
-      chosen->name, argumentTypes, false, returnType, constantArguments};
+      .name = chosen->name,
+      .args = argumentTypes,
+      .variableArity = false,
+      .returnType = returnType,
+      .constantArgs = constantArgs};
 
   markSelected(chosen->name);
   return getCallExprFromCallable(callable);
