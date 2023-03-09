@@ -50,10 +50,10 @@ For local development, you can build with debug mode:
 
 ::
 
-   DEBUG=1 python setup.py develop
+   make python-build
 
 And run unit tests with
 
 ::
 
-   python -m unittest -v
+   make python-test
