@@ -46,7 +46,6 @@
     table.coverage tr:nth-child(58) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(59) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(60) td:nth-child(4) {background-color: #6BA81E;}
-    table.coverage tr:nth-child(61) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(62) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(62) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(64) td:nth-child(5) {background-color: #6BA81E;}
@@ -124,7 +123,7 @@
     :spark:func:`chr`                          getbit                                     monotonically_increasing_id                sin                                        xpath_float
     coalesce                                   :spark:func:`greatest`                     month                                      sinh                                       xpath_int
     collect_list                               grouping                                   months_between                             :spark:func:`size`                         xpath_long
-    collect_set                                grouping_id                                :spark:func:`named_struct`                 skewness                                   xpath_number
+    collect_set                                grouping_id                                named_struct                               skewness                                   xpath_number
     :spark:func:`concat`                       :spark:func:`hash`                         nanvl                                      slice                                      xpath_short
     concat_ws                                  hex                                        negative                                   smallint                                   xpath_string
     conv                                       hour                                       next_day                                   some                                       :spark:func:`xxhash64`
