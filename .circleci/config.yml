@@ -27,7 +27,6 @@ workflows:
               os: [macos-intel, macos-m1]
       - format-check
       - header-check
-      - doc-gen-job
 
   # Daily documentation update
   nightly:
@@ -183,9 +182,6 @@ executors:
   check:
     docker:
       - image : ghcr.io/facebookincubator/velox-dev:check-avx
-  doc-gen:
-    docker:
-      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
   macos-intel:
     macos:
       xcode: "12.5.1"
@@ -296,6 +292,7 @@ jobs:
                 --lazy_vector_generation_ratio 0.2 \
                 --velox_fuzzer_enable_column_reuse \
                 --velox_fuzzer_enable_expression_reuse \
+                --retry_with_try \
                 --duration_sec 60 \
                 --logtostderr=1 \
                 --minloglevel=0 \
@@ -500,7 +497,7 @@ jobs:
             fi
 
   doc-gen-job:
-    executor: doc-gen
+    executor: build
     steps:
       - checkout
       - update-submodules
