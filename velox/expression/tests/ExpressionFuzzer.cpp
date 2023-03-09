@@ -653,14 +653,27 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateArgs(
             0, FLAGS_max_num_varargs)(rng_);
   inputExpressions.reserve(input.args.size() + numVarArgs);
 
-  for (const auto& arg : input.args) {
-    inputExpressions.emplace_back(generateArg(arg));
+  for (auto i = 0; i < input.args.size(); ++i) {
+    inputExpressions.emplace_back(
+        generateArgs(input.args.at(i), input.constantArgs.at(i)));
   }
+
   // Append varargs to the argument list.
   for (int i = 0; i < numVarArgs; i++) {
-    inputExpressions.emplace_back(generateArg(input.args.back()));
+    inputExpressions.emplace_back(
+        generateArgs(input.args.back(), input.constantArgs.back()));
   }
   return inputExpressions;
+}
+
+core::TypedExprPtr ExpressionFuzzer::generateArgs(
+    const TypePtr& arg,
+    bool isConstant) {
+  if (isConstant) {
+    return generateArgConstant(arg);
+  } else {
+    return generateArg(arg);
+  }
 }
 
 // Specialization for the "like" function: second and third (optional)
@@ -891,8 +904,10 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
   ArgumentTypeFuzzer fuzzer{*chosen->signature, returnType, rng_};
   VELOX_CHECK_EQ(fuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs), true);
   auto& argumentTypes = fuzzer.argumentTypes();
+  auto& constantArguments = fuzzer.constantArguments();
 
-  CallableSignature callable{chosen->name, argumentTypes, false, returnType};
+  CallableSignature callable{
+      chosen->name, argumentTypes, false, returnType, constantArguments};
 
   markSelected(chosen->name);
   return getCallExprFromCallable(callable);

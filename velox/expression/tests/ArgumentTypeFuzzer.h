@@ -54,10 +54,22 @@ class ArgumentTypeFuzzer {
     return argumentTypes_;
   }
 
+  /// Return the generated list of argument constant flags. This function should
+  /// be called after fuzzArgumentTypes() is called and returns true.
+  const std::vector<bool>& constantArguments() const {
+    return constantArguments_;
+  }
+
   /// Return a random type that can bind to the function signature's return
   /// type and set returnType_ to this type. This function can only be called
   /// when returnType_ is uninitialized.
   TypePtr fuzzReturnType();
+
+  /// Append an argument type and its constant flag
+  void addArgumentType(const TypePtr& typePtr, bool isConstant) {
+    argumentTypes_.push_back(typePtr);
+    constantArguments_.push_back(isConstant);
+  }
 
  private:
   /// Return the variables in the signature.
@@ -73,6 +85,7 @@ class ArgumentTypeFuzzer {
   TypePtr returnType_;
 
   std::vector<TypePtr> argumentTypes_;
+  std::vector<bool> constantArguments_;
 
   /// Bindings between type variables and their actual types.
   std::unordered_map<std::string, TypePtr> bindings_;
