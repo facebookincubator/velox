@@ -1277,6 +1277,72 @@ TEST_F(DateTimeFunctionsTest, millisecondTimestampWithTimezone) {
           "millisecond(c0)", -980, "+05:30"));
 }
 
+TEST_F(DateTimeFunctionsTest, lastDayOfMonth) {
+  const auto lastDayOfMonth = [&](std::optional<Timestamp> timestamp) {
+    return evaluateOnce<Date>("last_day_of_month(c0)", timestamp);
+  };
+  EXPECT_EQ(std::nullopt, lastDayOfMonth(std::nullopt));
+  EXPECT_EQ(Date(30), lastDayOfMonth(Timestamp(0, 0)));
+  EXPECT_EQ(Date(15370), lastDayOfMonth(Timestamp(1325376000, 0)));
+  EXPECT_EQ(Date(15370), lastDayOfMonth(Timestamp(1328054399, 0)));
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, lastDayOfMonth(std::nullopt));
+  EXPECT_EQ(Date(-1), lastDayOfMonth(Timestamp(0, 0)));
+  EXPECT_EQ(Date(15370), lastDayOfMonth(Timestamp(1325376000, 0)));
+  EXPECT_EQ(Date(15399), lastDayOfMonth(Timestamp(1328054399, 0)));
+}
+
+TEST_F(DateTimeFunctionsTest, lastDayOfMonthDate) {
+  const auto lastDayOfMonth = [&](std::optional<Date> date) {
+    return evaluateOnce<Date>("last_day_of_month(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, lastDayOfMonth(std::nullopt));
+  EXPECT_EQ(Date(19388), lastDayOfMonth(Date(19358))); // 2022-01-01
+  EXPECT_EQ(Date(19416), lastDayOfMonth(Date(19389))); // 2022-02-01
+  EXPECT_EQ(Date(19447), lastDayOfMonth(Date(19417))); // 2022-03-01
+  EXPECT_EQ(Date(19477), lastDayOfMonth(Date(19448))); // 2022-04-01
+  EXPECT_EQ(Date(19508), lastDayOfMonth(Date(19478))); // 2022-05-01
+  EXPECT_EQ(Date(19538), lastDayOfMonth(Date(19509))); // 2022-06-01
+  EXPECT_EQ(Date(19569), lastDayOfMonth(Date(19539))); // 2022-07-01
+  EXPECT_EQ(Date(19600), lastDayOfMonth(Date(19570))); // 2022-08-01
+  EXPECT_EQ(Date(19630), lastDayOfMonth(Date(19601))); // 2022-09-01
+  EXPECT_EQ(Date(19661), lastDayOfMonth(Date(19631))); // 2022-10-01
+  EXPECT_EQ(Date(19691), lastDayOfMonth(Date(19662))); // 2022-11-01
+  EXPECT_EQ(Date(19722), lastDayOfMonth(Date(19692))); // 2022-12-01
+  EXPECT_EQ(Date(11016), lastDayOfMonth(Date(10988))); // 2000-02-01
+  EXPECT_EQ(Date(18321), lastDayOfMonth(Date(18293))); // 2020-02-01
+  EXPECT_EQ(Date(47540), lastDayOfMonth(Date(47513))); // 2100-02-01
+}
+
+TEST_F(DateTimeFunctionsTest, lastDayOfMonthTimestampWithTimezone) {
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateWithTimestampWithTimezone<Date>(
+          "last_day_of_month(c0)", std::nullopt, std::nullopt));
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateWithTimestampWithTimezone<Date>(
+          "last_day_of_month(c0)", std::nullopt, "+05:30"));
+  EXPECT_EQ(
+      Date(30),
+      evaluateWithTimestampWithTimezone<Date>(
+          "last_day_of_month(c0)", 0, "+00:00"));
+  EXPECT_EQ(
+      Date(-1),
+      evaluateWithTimestampWithTimezone<Date>(
+          "last_day_of_month(c0)", 0, "-05:30"));
+  EXPECT_EQ(
+      Date(30),
+      evaluateWithTimestampWithTimezone<Date>(
+          "last_day_of_month(c0)", 2678399999, "+00:00"));
+  EXPECT_EQ(
+      Date(58),
+      evaluateWithTimestampWithTimezone<Date>(
+          "last_day_of_month(c0)", 2678399999, "+05:30"));
+}
+
 TEST_F(DateTimeFunctionsTest, dateTrunc) {
   const auto dateTrunc = [&](const std::string& unit,
                              std::optional<Timestamp> timestamp) {

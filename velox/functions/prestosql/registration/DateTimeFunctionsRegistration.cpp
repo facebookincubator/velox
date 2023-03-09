@@ -77,6 +77,11 @@ void registerSimpleFunctions() {
   registerFunction<MillisecondFunction, int64_t, Date>({"millisecond"});
   registerFunction<MillisecondFunction, int64_t, TimestampWithTimezone>(
       {"millisecond"});
+  registerFunction<LastDayOfMonthFunction, Date, Timestamp>(
+      {"last_day_of_month"});
+  registerFunction<LastDayOfMonthFunction, Date, Date>({"last_day_of_month"});
+  registerFunction<LastDayOfMonthFunction, Date, TimestampWithTimezone>(
+      {"last_day_of_month"});
   registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
       {"date_trunc"});
   registerFunction<DateTruncFunction, Date, Varchar, Date>({"date_trunc"});

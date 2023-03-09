@@ -472,6 +472,37 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
   }
 };
 
+template <typename T>
+struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
+                                public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Date getLastDayOfMonth(const std::tm& time) {
+    return util::daysSinceEpochFromDate(
+        1900 + time.tm_year,
+        time.tm_mon + 1,
+        util::kLastDayOfMonth[time.tm_mon] +
+            (time.tm_mon == 1 && util::isLeapYear(1900 + time.tm_year)));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      Date& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getLastDayOfMonth(getDateTime(timestamp, this->timeZone_));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(Date& result, const arg_type<Date>& date) {
+    result = getLastDayOfMonth(getDateTime(date));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      Date& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    auto timestamp = this->toTimestamp(timestampWithTimezone);
+    result = getLastDayOfMonth(getDateTime(timestamp, nullptr));
+  }
+};
+
 namespace {
 inline std::optional<DateTimeUnit> fromDateTimeUnitString(
     const StringView& unitString,

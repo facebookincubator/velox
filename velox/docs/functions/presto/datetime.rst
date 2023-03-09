@@ -219,3 +219,7 @@ This behavior is different from Presto Java that allows arbitrary large timestam
 .. function:: yow(x) -> bigint
 
     This is an alias for :func:`year_of_week`.
+
+.. function:: last_day_of_month(x) -> date
+
+    Returns the last day of the month from ``x``.
