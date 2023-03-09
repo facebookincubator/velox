@@ -20,6 +20,21 @@
 using namespace facebook;
 using namespace facebook::velox;
 
+namespace {
+void testTypeSerde(const TypePtr& type) {
+  velox::DeserializationRegistryForSharedPtr().Register(
+      Type::getClassName(),
+      static_cast<std::shared_ptr<const Type> (*)(const folly::dynamic&)>(
+          Type::create));
+
+  auto copy = velox::ISerializable::deserialize<Type>(
+      velox::ISerializable::serialize(type));
+
+  ASSERT_EQ(*type, *copy);
+  ASSERT_EQ(type->toString(), copy->toString());
+}
+} // namespace
+
 TEST(TypeTest, array) {
   auto arr0 = ARRAY(ARRAY(ARRAY(INTEGER())));
   EXPECT_EQ("ARRAY<ARRAY<ARRAY<INTEGER>>>", arr0->toString());
@@ -29,17 +44,8 @@ TEST(TypeTest, array) {
   EXPECT_STREQ(arr0->elementType()->kindName(), "ARRAY");
   EXPECT_EQ(arr0->childAt(0)->toString(), "ARRAY<ARRAY<INTEGER>>");
   EXPECT_THROW(arr0->childAt(1), VeloxUserError);
-}
 
-TEST(TypeTest, fixedLenArray) {
-  auto arr0 = FIXED_SIZE_ARRAY(3, INTEGER());
-  EXPECT_EQ("FIXED_SIZE_ARRAY(3)<INTEGER>", arr0->toString());
-  EXPECT_EQ(arr0->size(), 1);
-  EXPECT_STREQ(arr0->kindName(), "FIXED_SIZE_ARRAY");
-  EXPECT_EQ(arr0->isPrimitiveType(), false);
-  EXPECT_STREQ(arr0->elementType()->kindName(), "INTEGER");
-  EXPECT_EQ(arr0->childAt(0)->toString(), "INTEGER");
-  EXPECT_THROW(arr0->childAt(1), VeloxUserError);
+  testTypeSerde(arr0);
 }
 
 TEST(TypeTest, integer) {
@@ -50,6 +56,8 @@ TEST(TypeTest, integer) {
   EXPECT_EQ(int0->kind(), TypeKind::INTEGER);
   EXPECT_STREQ(int0->kindName(), "INTEGER");
   EXPECT_EQ(int0->begin(), int0->end());
+
+  testTypeSerde(int0);
 }
 
 TEST(TypeTest, timestamp) {
@@ -60,6 +68,8 @@ TEST(TypeTest, timestamp) {
   EXPECT_EQ(t0->kind(), TypeKind::TIMESTAMP);
   EXPECT_STREQ(t0->kindName(), "TIMESTAMP");
   EXPECT_EQ(t0->begin(), t0->end());
+
+  testTypeSerde(t0);
 }
 
 TEST(TypeTest, timestampToString) {
@@ -115,6 +125,8 @@ TEST(TypeTest, date) {
   EXPECT_EQ(date->kind(), TypeKind::DATE);
   EXPECT_STREQ(date->kindName(), "DATE");
   EXPECT_EQ(date->begin(), date->end());
+
+  testTypeSerde(date);
 }
 
 TEST(TypeTest, intervalDayTime) {
@@ -130,6 +142,8 @@ TEST(TypeTest, intervalDayTime) {
       kMillisInDay * 5 + kMillisInHour * 4 + kMillisInMinute * 6 +
       kMillisInSecond * 7 + 98);
   EXPECT_EQ("5 04:06:07.098", dt.toString());
+
+  testTypeSerde(interval);
 }
 
 TEST(TypeTest, shortDecimal) {
@@ -153,6 +167,8 @@ TEST(TypeTest, shortDecimal) {
   VELOX_ASSERT_THROW(
       createType(TypeKind::SHORT_DECIMAL, {}),
       "Not supported for kind: SHORT_DECIMAL");
+
+  testTypeSerde(shortDecimal);
 }
 
 TEST(TypeTest, longDecimal) {
@@ -176,6 +192,8 @@ TEST(TypeTest, longDecimal) {
   VELOX_ASSERT_THROW(
       createType(TypeKind::LONG_DECIMAL, {}),
       "Not supported for kind: LONG_DECIMAL");
+
+  testTypeSerde(longDecimal);
 }
 
 TEST(TypeTest, dateToString) {
@@ -295,6 +313,8 @@ TEST(TypeTest, map) {
     ++num;
   }
   CHECK_EQ(num, 2);
+
+  testTypeSerde(map0);
 }
 
 TEST(TypeTest, row) {
@@ -351,6 +371,11 @@ TEST(TypeTest, row) {
   VELOX_ASSERT_THROW(createScalarType(TypeKind::ROW), "not a scalar type");
   VELOX_ASSERT_THROW(
       createType(TypeKind::ROW, {}), "Not supported for kind: ROW");
+
+  testTypeSerde(row0);
+  testTypeSerde(row1);
+  testTypeSerde(row2);
+  testTypeSerde(rowInner);
 }
 
 class Foo {};
@@ -492,11 +517,6 @@ TEST(TypeTest, equality) {
   EXPECT_TRUE(*ARRAY(INTEGER()) == *ARRAY(INTEGER()));
   EXPECT_FALSE(*ARRAY(INTEGER()) == *ARRAY(REAL()));
   EXPECT_FALSE(*ARRAY(INTEGER()) == *ARRAY(ARRAY(INTEGER())));
-  EXPECT_TRUE(
-      *FIXED_SIZE_ARRAY(10, INTEGER()) == *FIXED_SIZE_ARRAY(10, INTEGER()));
-  EXPECT_FALSE(*FIXED_SIZE_ARRAY(10, INTEGER()) == *ARRAY(INTEGER()));
-  EXPECT_FALSE(
-      *FIXED_SIZE_ARRAY(10, INTEGER()) == *FIXED_SIZE_ARRAY(9, INTEGER()));
 
   // struct
   EXPECT_TRUE(
@@ -551,11 +571,6 @@ TEST(TypeTest, equivalent) {
   EXPECT_TRUE(ARRAY(BIGINT())->equivalent(*ARRAY(BIGINT())));
   EXPECT_FALSE(ARRAY(BIGINT())->equivalent(*ARRAY(INTEGER())));
   EXPECT_FALSE(ARRAY(BIGINT())->equivalent(*ROW({{"a", BIGINT()}})));
-  EXPECT_FALSE(FIXED_SIZE_ARRAY(10, BIGINT())->equivalent(*ARRAY(BIGINT())));
-  EXPECT_FALSE(FIXED_SIZE_ARRAY(10, BIGINT())
-                   ->equivalent(*FIXED_SIZE_ARRAY(9, BIGINT())));
-  EXPECT_TRUE(FIXED_SIZE_ARRAY(10, BIGINT())
-                  ->equivalent(*FIXED_SIZE_ARRAY(10, BIGINT())));
   EXPECT_TRUE(SHORT_DECIMAL(10, 5)->equivalent(*SHORT_DECIMAL(10, 5)));
   EXPECT_FALSE(SHORT_DECIMAL(10, 6)->equivalent(*SHORT_DECIMAL(10, 5)));
   EXPECT_FALSE(SHORT_DECIMAL(11, 5)->equivalent(*SHORT_DECIMAL(10, 5)));
@@ -590,11 +605,6 @@ TEST(TypeTest, kindEquals) {
   EXPECT_TRUE(ARRAY(BIGINT())->kindEquals(ARRAY(BIGINT())));
   EXPECT_FALSE(ARRAY(BIGINT())->kindEquals(ARRAY(INTEGER())));
   EXPECT_FALSE(ARRAY(BIGINT())->kindEquals(ROW({{"a", BIGINT()}})));
-  EXPECT_TRUE(FIXED_SIZE_ARRAY(10, BIGINT())->kindEquals(ARRAY(BIGINT())));
-  EXPECT_TRUE(FIXED_SIZE_ARRAY(10, BIGINT())
-                  ->kindEquals(FIXED_SIZE_ARRAY(9, BIGINT())));
-  EXPECT_TRUE(FIXED_SIZE_ARRAY(10, BIGINT())
-                  ->kindEquals(FIXED_SIZE_ARRAY(10, BIGINT())));
   EXPECT_TRUE(SHORT_DECIMAL(10, 5)->kindEquals(SHORT_DECIMAL(10, 5)));
   EXPECT_TRUE(SHORT_DECIMAL(10, 6)->kindEquals(SHORT_DECIMAL(10, 5)));
   EXPECT_TRUE(SHORT_DECIMAL(11, 5)->kindEquals(SHORT_DECIMAL(10, 5)));
@@ -682,6 +692,8 @@ TEST(TypeTest, follySformat) {
 TEST(TypeTest, unknown) {
   auto unknownArray = ARRAY(UNKNOWN());
   EXPECT_TRUE(unknownArray->containsUnknown());
+
+  testTypeSerde(unknownArray);
 }
 
 TEST(TypeTest, isVariadicType) {

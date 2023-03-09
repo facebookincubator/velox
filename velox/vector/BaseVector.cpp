@@ -274,58 +274,25 @@ VectorPtr BaseVector::createInternal(
         children.back()->resize(0);
       }
       return std::make_shared<RowVector>(
-          pool,
-          type,
-          BufferPtr(nullptr),
-          size,
-          std::move(children),
-          0 /*nullCount*/);
+          pool, type, nullptr, size, std::move(children));
     }
     case TypeKind::ARRAY: {
-      BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool, 0);
-      BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool, 0);
-      // When constructing FixedSizeArray types we validate the
-      // provided lengths are of the expected size. But
-      // BaseVector::create constructs the array with the
-      // sizes/offsets all set to zero -- presumably because the
-      // caller will fill them in later by directly manipulating
-      // rawSizes/rawOffsets. This makes the sanity check in the
-      // FixedSizeArray constructor less powerful than it would be if
-      // we knew the sizes / offsets were going to populate them with
-      // in advance and they were immutable after constructing the
-      // array.
-      //
-      // For now to support the current code structure of "create then
-      // populate" for BaseVector::create(), in the case of
-      // FixedSizeArrays we pre-initialize the sizes / offsets here
-      // with what we expect them to be so the constructor validation
-      // passes. The code that subsequently manipulates the
-      // sizes/offsets directly should also validate they are
-      // continuing to upload the fixedSize constraint.
-      if (type->isFixedWidth()) {
-        auto rawOffsets = offsets->asMutable<vector_size_t>();
-        auto rawSizes = sizes->asMutable<vector_size_t>();
-        const auto width = type->fixedElementsWidth();
-        for (vector_size_t i = 0; i < size; ++i) {
-          *rawSizes++ = width;
-          *rawOffsets++ = width * i;
-        }
-      }
+      BufferPtr sizes = allocateSizes(size, pool);
+      BufferPtr offsets = allocateOffsets(size, pool);
       auto elementType = type->as<TypeKind::ARRAY>().elementType();
       auto elements = create(elementType, 0, pool);
       return std::make_shared<ArrayVector>(
           pool,
           type,
-          BufferPtr(nullptr),
+          nullptr,
           size,
           std::move(offsets),
           std::move(sizes),
-          std::move(elements),
-          0 /*nullCount*/);
+          std::move(elements));
     }
     case TypeKind::MAP: {
-      BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool, 0);
-      BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool, 0);
+      BufferPtr sizes = allocateSizes(size, pool);
+      BufferPtr offsets = allocateOffsets(size, pool);
       auto keyType = type->as<TypeKind::MAP>().keyType();
       auto valueType = type->as<TypeKind::MAP>().valueType();
       auto keys = create(keyType, 0, pool);
@@ -333,33 +300,17 @@ VectorPtr BaseVector::createInternal(
       return std::make_shared<MapVector>(
           pool,
           type,
-          BufferPtr(nullptr),
+          nullptr,
           size,
           std::move(offsets),
           std::move(sizes),
           std::move(keys),
-          std::move(values),
-          0 /*nullCount*/);
+          std::move(values));
     }
     case TypeKind::UNKNOWN: {
-      BufferPtr nulls = AlignedBuffer::allocate<bool>(size, pool, bits::kNull);
+      BufferPtr nulls = allocateNulls(size, pool, bits::kNull);
       return std::make_shared<FlatVector<UnknownValue>>(
-          pool,
-          nulls,
-          size,
-          BufferPtr(nullptr),
-          std::vector<BufferPtr>(),
-          SimpleVectorStats<UnknownValue>{},
-          1 /*distinctValueCount*/,
-          size /*nullCount*/,
-          true /*isSorted*/,
-          0 /*representedBytes*/);
-    }
-    case TypeKind::SHORT_DECIMAL: {
-      return createEmpty<TypeKind::SHORT_DECIMAL>(size, pool, type);
-    }
-    case TypeKind::LONG_DECIMAL: {
-      return createEmpty<TypeKind::LONG_DECIMAL>(size, pool, type);
+          pool, UNKNOWN(), nulls, size, nullptr, std::vector<BufferPtr>());
     }
     default:
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
@@ -610,67 +561,52 @@ void BaseVector::ensureWritable(
 
 template <TypeKind kind>
 VectorPtr newConstant(
+    const TypePtr& type,
     variant& value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
   using T = typename KindToFlatVector<kind>::WrapperType;
-  T copy = T();
-  TypePtr type;
+
+  if (value.isNull()) {
+    return std::make_shared<ConstantVector<T>>(pool, size, true, type, T());
+  }
+
+  T copy;
   if constexpr (std::is_same_v<T, StringView>) {
-    type = Type::create<kind>();
-    if (!value.isNull()) {
-      copy = StringView(value.value<kind>());
-    }
+    copy = StringView(value.value<kind>());
   } else if constexpr (
       std::is_same_v<T, UnscaledShortDecimal> ||
       std::is_same_v<T, UnscaledLongDecimal>) {
-    const auto& decimal = value.value<kind>();
-    type = DECIMAL(decimal.precision, decimal.scale);
-    if (!value.isNull()) {
-      copy = decimal.value();
-    }
+    copy = value.value<kind>().value();
   } else {
-    type = Type::create<kind>();
-    if (!value.isNull()) {
-      copy = value.value<T>();
-    }
+    copy = value.value<T>();
   }
 
   return std::make_shared<ConstantVector<T>>(
-      pool,
-      size,
-      value.isNull(),
-      type,
-      std::move(copy),
-      SimpleVectorStats<T>{},
-      sizeof(T) /*representedByteCount*/);
+      pool, size, false, type, std::move(copy));
 }
 
 template <>
 VectorPtr newConstant<TypeKind::OPAQUE>(
+    const TypePtr& type,
     variant& value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
-  VELOX_CHECK(!value.isNull(), "Can't infer type from null opaque object");
   const auto& capsule = value.value<TypeKind::OPAQUE>();
 
   return std::make_shared<ConstantVector<std::shared_ptr<void>>>(
-      pool,
-      size,
-      value.isNull(),
-      capsule.type,
-      std::shared_ptr<void>(capsule.obj),
-      SimpleVectorStats<std::shared_ptr<void>>{},
-      sizeof(std::shared_ptr<void>) /*representedByteCount*/);
+      pool, size, value.isNull(), type, std::shared_ptr<void>(capsule.obj));
 }
 
 // static
 VectorPtr BaseVector::createConstant(
+    const TypePtr& type,
     variant value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
+  VELOX_CHECK_EQ(type->kind(), value.kind());
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-      newConstant, value.kind(), value, size, pool);
+      newConstant, value.kind(), type, value, size, pool);
 }
 
 namespace {

@@ -16,7 +16,6 @@
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
-#include "velox/external/duckdb/duckdb.hpp"
 #include "velox/parse/Expressions.h"
 
 using namespace facebook::velox;
@@ -47,6 +46,10 @@ TEST(DuckParserTest, constants) {
 
   // Nulls
   EXPECT_EQ("null", parseExpr("NULL")->toString());
+
+  // Booleans
+  EXPECT_EQ("true", parseExpr("TRUE")->toString());
+  EXPECT_EQ("false", parseExpr("FALSE")->toString());
 }
 
 TEST(DuckParserTest, arrays) {
@@ -521,6 +524,18 @@ TEST(DuckParserTest, parseDecimalConstant) {
   if (auto constant =
           std::dynamic_pointer_cast<const core::ConstantExpr>(expr)) {
     ASSERT_EQ(*constant->type(), *DECIMAL(4, 3));
+  } else {
+    FAIL() << expr->toString() << " is not a constant";
+  }
+}
+
+TEST(DuckParserTest, parseInteger) {
+  ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  auto expr = parseExpr("1234", options);
+  if (auto constant =
+          std::dynamic_pointer_cast<const core::ConstantExpr>(expr)) {
+    ASSERT_EQ(*constant->type(), *INTEGER());
   } else {
     FAIL() << expr->toString() << " is not a constant";
   }

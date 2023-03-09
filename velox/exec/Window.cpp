@@ -40,19 +40,6 @@ void initKeyInfo(
     }
   }
 }
-
-VectorPtr const toConstantVector(
-    const std::shared_ptr<const core::ConstantTypedExpr>& constantExpr,
-    velox::memory::MemoryPool* pool) {
-  if (constantExpr->hasValueVector()) {
-    return BaseVector::wrapInConstant(1, 0, constantExpr->valueVector());
-  }
-  if (constantExpr->value().isNull()) {
-    return BaseVector::createNullConstant(constantExpr->type(), 1, pool);
-  }
-  return BaseVector::createConstant(constantExpr->value(), 1, pool);
-}
-
 }; // namespace
 
 Window::Window(
@@ -142,12 +129,10 @@ void Window::createWindowFunctions(
     for (auto& arg : windowNodeFunction.functionCall->inputs()) {
       auto channel = exprToChannel(arg.get(), inputType);
       if (channel == kConstantChannel) {
+        auto constantArg =
+            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(arg);
         functionArgs.push_back(
-            {arg->type(),
-             toConstantVector(
-                 std::dynamic_pointer_cast<const core::ConstantTypedExpr>(arg),
-                 pool()),
-             std::nullopt});
+            {arg->type(), constantArg->toConstantVector(pool()), std::nullopt});
       } else {
         functionArgs.push_back({arg->type(), nullptr, channel});
       }
@@ -215,6 +200,7 @@ void Window::createPeerAndFrameBuffers() {
   auto numFuncs = windowFunctions_.size();
   frameStartBuffers_.reserve(numFuncs);
   frameEndBuffers_.reserve(numFuncs);
+  validFrames_.reserve(numFuncs);
 
   for (auto i = 0; i < numFuncs; i++) {
     BufferPtr frameStartBuffer = AlignedBuffer::allocate<vector_size_t>(
@@ -223,6 +209,7 @@ void Window::createPeerAndFrameBuffers() {
         numRowsPerOutput_, operatorCtx_->pool());
     frameStartBuffers_.push_back(frameStartBuffer);
     frameEndBuffers_.push_back(frameEndBuffer);
+    validFrames_.push_back(SelectivityVector(numRowsPerOutput_));
   }
 }
 
@@ -400,26 +387,36 @@ void Window::updateFrameBounds(
 }
 
 namespace {
-void adjustKRowsFrameBounds(
+// Frame end points are always expected to go from frameStart to frameEnd
+// rows in increasing row numbers in the partition. k rows/range frames could
+// potentially violate this.
+// This function identifies the rows that violate the framing requirements
+// and sets bits in the validFrames SelectivityVector for usage in the
+// WindowFunction subsequently.
+void computeValidFrames(
     vector_size_t lastRow,
     vector_size_t numRows,
     vector_size_t* rawFrameStarts,
-    vector_size_t* rawFrameEnds) {
+    vector_size_t* rawFrameEnds,
+    SelectivityVector& validFrames) {
   auto frameStart = 0;
   auto frameEnd = 0;
 
   for (auto i = 0; i < numRows; i++) {
     frameStart = rawFrameStarts[i];
     frameEnd = rawFrameEnds[i];
-    // Clamp frameStart and frameEnd to the first and last row of the partition
-    // if required.
-    if (frameStart <= frameEnd) {
+    // All valid frames require frameStart <= frameEnd to define the frame rows.
+    // Also, frameEnd >= 0, so that the frameEnd doesn't fall before the
+    // partition. And frameStart <= lastRow so that the frameStart doesn't fall
+    // after the partition rows.
+    if (frameStart <= frameEnd && frameEnd >= 0 && frameStart <= lastRow) {
       rawFrameStarts[i] = std::max(frameStart, 0);
       rawFrameEnds[i] = std::min(frameEnd, lastRow);
     } else {
-      VELOX_NYI("Empty frames are currently not supported");
+      validFrames.setValid(i, false);
     }
   }
+  validFrames.updateBounds();
 }
 
 }; // namespace
@@ -493,7 +490,9 @@ void Window::callApplyForPartitionRows(
 
   for (auto i = 0; i < numFuncs; i++) {
     const auto& windowFrame = windowFrames_[i];
-
+    // Default all rows to have validFrames. The invalidity of frames is only
+    // computed for k rows/range frames at a later point.
+    validFrames_[i].resizeFill(numRows, true);
     updateFrameBounds(
         windowFrame,
         true,
@@ -511,14 +510,18 @@ void Window::callApplyForPartitionRows(
         rawPeerEnds,
         rawFrameEnds[i]);
     if (windowFrames_[i].start || windowFrames_[i].end) {
-      // k preceding and k following bounds in ROWS mode can go over the
-      // partition limits. Hence, they are bound to the first and last partition
-      // rows.
-      adjustKRowsFrameBounds(
+      // k preceding and k following bounds can be problematic. They can
+      // go over the partition limits or result in empty frames. Fix the
+      // frame boundaries and compute the validFrames SelectivityVector
+      // for these cases. Not all functions care about validFrames viz.
+      // Ranking functions do not care about frames. So the function decides
+      // further what to do with empty frames.
+      computeValidFrames(
           lastPartitionRow - firstPartitionRow,
           numRows,
           rawFrameStarts[i],
-          rawFrameEnds[i]);
+          rawFrameEnds[i],
+          validFrames_[i]);
     }
   }
 
@@ -529,6 +532,7 @@ void Window::callApplyForPartitionRows(
         peerEndBuffer_,
         frameStartBuffers_[w],
         frameEndBuffers_[w],
+        validFrames_[w],
         resultOffset,
         result[w]);
   }

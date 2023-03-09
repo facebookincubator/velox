@@ -38,7 +38,6 @@ class JsonCastOperator : public exec::CastOperator {
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
-      bool nullOnFailure,
       const TypePtr& resultType,
       VectorPtr& result) const override;
 
@@ -46,7 +45,6 @@ class JsonCastOperator : public exec::CastOperator {
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
-      bool nullOnFailure,
       const TypePtr& resultType,
       VectorPtr& result) const override;
 
@@ -76,6 +74,13 @@ class JsonType : public VarcharType {
 
   std::string toString() const override {
     return "JSON";
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = "JSON";
+    return obj;
   }
 };
 
@@ -108,5 +113,7 @@ class JsonTypeFactories : public CustomTypeFactories {
     return JsonCastOperator::get();
   }
 };
+
+void registerJsonType();
 
 } // namespace facebook::velox

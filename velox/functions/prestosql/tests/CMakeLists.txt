@@ -30,6 +30,7 @@ add_executable(
   ArrayIntersectTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
@@ -85,6 +86,6 @@ target_link_libraries(
   velox_vector_fuzzer
   gtest
   gtest_main
-  ${gflags_LIBRARIES}
+  gflags::gflags
   gmock
   gmock_main)

@@ -14,7 +14,6 @@
 add_executable(
   velox_functions_lib_test
   ApproxMostFrequentStreamSummaryTest.cpp
-  ArrayBuilderTest.cpp
   DateTimeFormatterTest.cpp
   IsNullTest.cpp
   IsNotNullTest.cpp
@@ -40,4 +39,4 @@ target_link_libraries(
   gtest
   gtest_main
   gmock
-  ${gflags_LIBRARIES})
+  gflags::gflags)

@@ -9,6 +9,6 @@ Velox Documentation
     functions
     spark_functions
     configs
+    bindings/python/README_generated_pyvelox
     develop
     monthly-updates
-

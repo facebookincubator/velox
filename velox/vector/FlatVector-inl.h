@@ -57,7 +57,7 @@ const T* FlatVector<T>::rawValues() const {
 }
 
 template <typename T>
-const T FlatVector<T>::valueAtFast(vector_size_t idx) const {
+T FlatVector<T>::valueAtFast(vector_size_t idx) const {
   return rawValues_[idx];
 }
 
@@ -109,6 +109,7 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
   }
   return std::make_unique<FlatVector<uint64_t>>(
       BaseVector::pool_,
+      BIGINT(),
       BufferPtr(nullptr),
       BaseVector::length_,
       std::move(hashBuffer),

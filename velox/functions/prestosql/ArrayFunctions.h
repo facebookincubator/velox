@@ -102,9 +102,8 @@ struct ArrayJoinFunction {
   template <typename C>
   void writeValue(out_type<velox::Varchar>& result, const C& value) {
     bool nullOutput = false;
-    result +=
-        util::Converter<CppToType<velox::Varchar>::typeKind, void, false>::cast(
-            value, nullOutput);
+    result += util::Converter<TypeKind::VARCHAR, void, false>::cast(
+        value, nullOutput);
   }
 
   template <typename C>
@@ -415,6 +414,53 @@ struct ArrayFrequencyFunction {
     }
 
     out.copy_from(frequencyCount);
+  }
+};
+
+template <typename TExecParams, typename T>
+struct ArrayNormalizeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
+
+  FOLLY_ALWAYS_INLINE void callNullFree(
+      out_type<velox::Array<T>>& result,
+      const null_free_arg_type<velox::Array<T>>& inputArray,
+      const null_free_arg_type<T>& p) {
+    VELOX_USER_CHECK_GE(
+        p, 0, "array_normalize only supports non-negative p: {}", p);
+
+    // If the input array is empty, then the empty result should be returned,
+    // same as Presto.
+    if (inputArray.size() == 0) {
+      return;
+    }
+
+    result.reserve(inputArray.size());
+
+    // If p = 0, then it is L0 norm. Presto version returns the input array.
+    if (p == 0) {
+      result.add_items(inputArray);
+      return;
+    }
+
+    // Calculate p-norm.
+    T sum = 0;
+    for (const auto& item : inputArray) {
+      sum += pow(abs(item), p);
+    }
+
+    T pNorm = pow(sum, 1.0 / p);
+
+    // If the input array is a zero vector then pNorm = 0.
+    // Return the input array for this case, same as Presto.
+    if (pNorm == 0) {
+      result.add_items(inputArray);
+      return;
+    }
+
+    // Construct result array from the input array and pNorm.
+    for (const auto& item : inputArray) {
+      result.add_item() = item / pNorm;
+    }
   }
 };
 

@@ -15,11 +15,12 @@ add_subdirectory(utils)
 
 add_executable(
   velox_exec_test
-  AssertQueryBuilderTest.cpp
-  AsyncConnectorTest.cpp
   AggregationTest.cpp
   AggregateFunctionRegistryTest.cpp
+  ArrowStreamTest.cpp
+  AssertQueryBuilderTest.cpp
   AssignUniqueIdTest.cpp
+  AsyncConnectorTest.cpp
   CrossJoinTest.cpp
   CustomJoinTest.cpp
   DriverTest.cpp
@@ -47,6 +48,7 @@ add_executable(
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
   MemoryCapExceededTest.cpp
+  QueryAssertionsTest.cpp
   SpillTest.cpp
   SpillOperatorGroupTest.cpp
   SpillerTest.cpp
@@ -101,7 +103,7 @@ target_link_libraries(
   gmock
   ${FOLLY_WITH_DEPENDENCIES}
   ${DOUBLE_CONVERSION}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT}
   ${FILESYSTEM})
@@ -128,8 +130,14 @@ target_link_libraries(velox_aggregation_fuzzer velox_type velox_vector_fuzzer
 
 add_executable(velox_aggregation_fuzzer_test AggregationFuzzerTest.cpp)
 
-target_link_libraries(velox_aggregation_fuzzer_test velox_aggregation_fuzzer
-                      velox_aggregates velox_window gtest gtest_main)
+target_link_libraries(
+  velox_aggregation_fuzzer_test
+  velox_aggregation_fuzzer
+  velox_aggregates
+  velox_window
+  velox_vector_test_lib
+  gtest
+  gtest_main)
 
 # Join Fuzzer.
 

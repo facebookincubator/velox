@@ -131,6 +131,15 @@ class VectorSaverTest : public testing::Test, public VectorTestBase {
         << "Expected: " << type->toString() << ". Got: " << copy->toString();
   }
 
+  void testSelectivityVectorRoundTrip(const SelectivityVector& rows) {
+    std::ostringstream out;
+    saveSelectivityVector(rows, out);
+
+    std::istringstream in(out.str());
+    auto copy = restoreSelectivityVector(in);
+    ASSERT_EQ(rows, copy);
+  }
+
   template <typename T>
   void testFlatIntegers() {
     // No nulls.
@@ -230,6 +239,63 @@ TEST_F(VectorSaverTest, types) {
   testTypeRoundTrip(UNKNOWN());
 
   ASSERT_THROW(testTypeRoundTrip(OPAQUE<std::string>()), VeloxUserError);
+}
+
+TEST_F(VectorSaverTest, selectivityVector) {
+  // Short vector. All selected.
+  {
+    SelectivityVector rows(10);
+    testSelectivityVectorRoundTrip(rows);
+  }
+
+  // Longer vector. All selected.
+  {
+    SelectivityVector rows(1024);
+    testSelectivityVectorRoundTrip(rows);
+  }
+
+  // Longer vector. No rows selected.
+  {
+    SelectivityVector rows(1024, false);
+    testSelectivityVectorRoundTrip(rows);
+  }
+
+  // Even rows selected.
+  {
+    SelectivityVector rows(1024);
+    for (auto i = 0; i < rows.size(); ++i) {
+      rows.setValid(i, i % 2 == 0);
+    }
+    rows.updateBounds();
+    testSelectivityVectorRoundTrip(rows);
+  }
+
+  // Odd rows selected.
+  {
+    SelectivityVector rows(1024);
+    for (auto i = 0; i < rows.size(); ++i) {
+      rows.setValid(i, i % 2 != 0);
+    }
+    rows.updateBounds();
+    testSelectivityVectorRoundTrip(rows);
+  }
+
+  // Rows in the middle selected.
+  {
+    SelectivityVector rows(1024, false);
+    rows.setValidRange(123, 955, true);
+    rows.updateBounds();
+    testSelectivityVectorRoundTrip(rows);
+  }
+
+  // Rows at ends selected.
+  {
+    SelectivityVector rows(1024, false);
+    rows.setValidRange(0, 123, true);
+    rows.setValidRange(887, rows.size(), true);
+    rows.updateBounds();
+    testSelectivityVectorRoundTrip(rows);
+  }
 }
 
 TEST_F(VectorSaverTest, flatBigint) {
@@ -585,5 +651,35 @@ TEST_F(VectorSaverTest, exceptionContext) {
       assertEqualEncodings(data, copy);
     }
   }
+}
+
+TEST_F(VectorSaverTest, multipleVectors) {
+  // Save and restore multiple vectors to/from a single binary.
+
+  std::vector<VectorPtr> vectors = {
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+      makeFlatVector<int64_t>({10, 11, 12, 13, 15, 16, 17}),
+      makeConstant<double>(1.5, 100),
+  };
+
+  std::vector<SelectivityVector> rows;
+  for (const auto& vector : vectors) {
+    rows.emplace_back(vector->size());
+  }
+
+  std::ostringstream out;
+
+  for (auto i = 0; i < vectors.size(); ++i) {
+    saveVector(*vectors[i], out);
+    saveSelectivityVector(rows[i], out);
+  }
+
+  std::istringstream in(out.str());
+  for (auto i = 0; i < vectors.size(); ++i) {
+    assertEqualVectors(vectors[i], restoreVector(in, pool()));
+    ASSERT_EQ(rows[i], restoreSelectivityVector(in));
+  }
+
+  ASSERT_EQ(out.str().size(), in.tellg());
 }
 } // namespace facebook::velox::test

@@ -21,7 +21,10 @@ workflows:
       - linux-build
       - linux-build-options
       - linux-adapters
-      - macos-build
+      - macos-build:
+          matrix:
+            parameters:
+              os: [macos-intel, macos-m1]
       - format-check
       - header-check
 
@@ -59,7 +62,10 @@ workflows:
       - linux-build-release
       - linux-build-options
       - linux-adapters
-      - macos-build
+      - macos-build:
+          matrix:
+            parameters:
+              os: [macos-intel, macos-m1]
 
 commands:
   update-submodules:
@@ -176,15 +182,21 @@ executors:
   check:
     docker:
       - image : ghcr.io/facebookincubator/velox-dev:check-avx
-  doc-gen:
-    docker:
-      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
-
-jobs:
-  macos-build:
+  macos-intel:
     macos:
       xcode: "12.5.1"
     resource_class: large
+  macos-m1:
+    macos:
+      xcode: "14.2.0"
+    resource_class: macos.m1.large.gen1
+
+jobs:
+  macos-build:
+    parameters:
+      os:
+        type: executor
+    executor: << parameters.os >>
     environment:
       ICU_SOURCE: BUNDLED
     steps:
@@ -196,7 +208,7 @@ jobs:
           # to manually avoid the case where bad dependencies
           # are cached, and has no other meaning.
           # If you update it, be sure to update save_cache too.
-          key: velox-circleci-macos-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
+          key: velox-circleci-macos-{{ arch }}-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
       - run:
           name: "Install dependencies"
           command: |
@@ -213,7 +225,7 @@ jobs:
           # to manually avoid the case where bad dependencies
           # are cached, and has no other meaning.
           # If you update it, be sure to update restore_cache too.
-          key: velox-circleci-macos-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
+          key: velox-circleci-macos-{{ arch }}-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
           paths:
             - ~/deps
       - run:
@@ -280,6 +292,7 @@ jobs:
                 --lazy_vector_generation_ratio 0.2 \
                 --velox_fuzzer_enable_column_reuse \
                 --velox_fuzzer_enable_expression_reuse \
+                --retry_with_try \
                 --duration_sec 60 \
                 --logtostderr=1 \
                 --minloglevel=0 \
@@ -484,9 +497,10 @@ jobs:
             fi
 
   doc-gen-job:
-    executor: doc-gen
+    executor: build
     steps:
       - checkout
+      - update-submodules
       - add_ssh_keys:
           fingerprints:
             - "7b:24:f3:1a:b1:15:97:c6:fe:06:46:27:3e:b7:6b:96"
@@ -500,8 +514,9 @@ jobs:
             source ~/.bashrc
             conda create -y --name docgenenv python=3.7
             conda activate docgenenv
-            pip install sphinx sphinx-tabs breathe sphinx_rtd_theme 
-            make -C velox/docs html
+            pip install sphinx sphinx-tabs breathe sphinx_rtd_theme chardet
+            source /opt/rh/gcc-toolset-9/enable
+            ./scripts/gen-docs.sh docgenenv
             git checkout gh-pages
             cp -R velox/docs/_build/html/* docs
             git add docs
