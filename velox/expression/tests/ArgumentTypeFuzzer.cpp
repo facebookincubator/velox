@@ -92,7 +92,6 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
     }
   }
 
-  const auto& constantArguments = signature_.constantArguments();
   determineUnboundedTypeVariables();
   for (auto i = 0; i < formalArgsCnt; i++) {
     TypePtr actualArg;
@@ -103,7 +102,7 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
           formalArgs[i], variables(), bindings_);
       VELOX_CHECK(actualArg != nullptr);
     }
-    addArgumentType(actualArg, constantArguments.at(i));
+    argumentTypes_.push_back(actualArg);
   }
 
   // Generate random repeats of the last argument type if the signature is
@@ -112,9 +111,8 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
     auto repeat = boost::random::uniform_int_distribution<uint32_t>(
         0, maxVariadicArgs)(rng_);
     auto last = argumentTypes_[formalArgsCnt - 1];
-    auto lastConstant = constantArguments_[formalArgsCnt - 1];
     for (int i = 0; i < repeat; ++i) {
-      addArgumentType(last, lastConstant);
+      argumentTypes_.push_back(last);
     }
   }
 

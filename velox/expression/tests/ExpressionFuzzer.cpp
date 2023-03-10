@@ -201,7 +201,6 @@ VectorFuzzer::Options getFuzzerOptions() {
 std::optional<CallableSignature> processConcreteSignature(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    const std::vector<bool>& constantArgs,
     const exec::FunctionSignature& signature) {
   VELOX_CHECK(
       signature.variables().empty(),
@@ -213,7 +212,7 @@ std::optional<CallableSignature> processConcreteSignature(
       .variableArity = signature.variableArity(),
       .returnType =
           SignatureBinder::tryResolveType(signature.returnType(), {}, {}),
-      .constantArgs = constantArgs};
+      .constantArgs = signature.constantArguments()};
   VELOX_CHECK_NOT_NULL(callable.returnType);
 
   bool onlyPrimitiveTypes = callable.returnType->isPrimitiveType();
@@ -460,11 +459,8 @@ ExpressionFuzzer::ExpressionFuzzer(
         signatureTemplates_.emplace_back(SignatureTemplate{
             function.first, signature, std::move(typeVariables)});
       } else if (
-          auto callableFunction = processConcreteSignature(
-              function.first,
-              argTypes,
-              signature->constantArguments(),
-              *signature)) {
+          auto callableFunction =
+              processConcreteSignature(function.first, argTypes, *signature)) {
         atLeastOneSupported = true;
         ++supportedFunctionSignatures;
         signatures_.emplace_back(*callableFunction);
@@ -660,18 +656,18 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateArgs(
 
   for (auto i = 0; i < input.args.size(); ++i) {
     inputExpressions.emplace_back(
-        generateArgs(input.args.at(i), input.constantArgs.at(i)));
+        generateArg(input.args.at(i), input.constantArgs.at(i)));
   }
 
   // Append varargs to the argument list.
   for (int i = 0; i < numVarArgs; i++) {
     inputExpressions.emplace_back(
-        generateArgs(input.args.back(), input.constantArgs.back()));
+        generateArg(input.args.back(), input.constantArgs.back()));
   }
   return inputExpressions;
 }
 
-core::TypedExprPtr ExpressionFuzzer::generateArgs(
+core::TypedExprPtr ExpressionFuzzer::generateArg(
     const TypePtr& arg,
     bool isConstant) {
   if (isConstant) {
@@ -906,17 +902,17 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
     }
   }
 
-  ArgumentTypeFuzzer fuzzer{*chosen->signature, returnType, rng_};
+  auto chosenSignature = *chosen->signature;
+  ArgumentTypeFuzzer fuzzer{chosenSignature, returnType, rng_};
   VELOX_CHECK_EQ(fuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs), true);
   auto& argumentTypes = fuzzer.argumentTypes();
-  auto& constantArgs = fuzzer.constantArguments();
 
   CallableSignature callable{
       .name = chosen->name,
       .args = argumentTypes,
       .variableArity = false,
       .returnType = returnType,
-      .constantArgs = constantArgs};
+      .constantArgs = chosenSignature.constantArguments()};
 
   markSelected(chosen->name);
   return getCallExprFromCallable(callable);
