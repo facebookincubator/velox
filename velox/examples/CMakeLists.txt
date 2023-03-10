@@ -15,7 +15,7 @@
 add_executable(velox_example_simple_functions SimpleFunctions.cpp)
 
 target_link_libraries(velox_example_simple_functions velox_functions_lib
-                      velox_core velox_expression re2)
+                      velox_core velox_expression re2::re2)
 
 add_executable(velox_example_expression_eval ExpressionEval.cpp)
 
