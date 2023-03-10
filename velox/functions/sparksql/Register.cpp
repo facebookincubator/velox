@@ -137,11 +137,11 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<ContainsFunction, bool, Varchar, Varchar>(
       {prefix + "contains"});
 
-  registerFunction<TrimFunction, Varchar, Varchar>({"trim"});
+  registerFunction<TrimSpaceFunction, Varchar, Varchar>({"trim"});
   registerFunction<TrimFunction, Varchar, Varchar, Varchar>({"trim"});
-  registerFunction<LTrimFunction, Varchar, Varchar>({"ltrim"});
+  registerFunction<LTrimSpaceFunction, Varchar, Varchar>({"ltrim"});
   registerFunction<LTrimFunction, Varchar, Varchar, Varchar>({"ltrim"});
-  registerFunction<RTrimFunction, Varchar, Varchar>({"rtrim"});
+  registerFunction<RTrimSpaceFunction, Varchar, Varchar>({"rtrim"});
   registerFunction<RTrimFunction, Varchar, Varchar, Varchar>({"rtrim"});
 
   // Register array sort functions.

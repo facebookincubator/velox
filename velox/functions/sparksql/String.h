@@ -211,19 +211,12 @@ struct EndsWithFunction {
   }
 };
 
-/// trim functions
-/// ltrim(srcStr) -> varchar
-///     Removes leading 0x20(space) characters from srcStr.
 /// ltrim(trimStr, srcStr) -> varchar
 ///     Remove leading specified characters from srcStr. The specified character
 ///     is any character contained in trimStr.
-/// rtrim(srcStr) -> varchar
-///     Removes trailing 0x20(space) characters from srcStr.
 /// rtrim(trimStr, srcStr) -> varchar
 ///     Remove trailing specified characters from srcStr. The specified
 ///     character is any character contained in trimStr.
-/// trim(srcStr) -> varchar
-///     Remove leading and trailing 0x20(space) characters from srcStr.
 /// trim(trimStr, srcStr) -> varchar
 ///     Remove leading and trailing specified characters from srcStr. The
 ///     specified character is any character contained in trimStr.
@@ -232,7 +225,7 @@ struct TrimFunctionBase {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // Results refer to strings in the first argument.
-  static constexpr int32_t reuse_strings_from_arg = 0;
+  static constexpr int32_t reuse_strings_from_arg = 1;
 
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
@@ -331,6 +324,23 @@ struct TrimFunctionBase {
     }
     result.setNoCopy(StringView(srcStr.data() + resultStartIndex, resultSize));
   }
+};
+
+/// ltrim(srcStr) -> varchar
+///     Removes leading 0x20(space) characters from srcStr.
+/// rtrim(srcStr) -> varchar
+///     Removes trailing 0x20(space) characters from srcStr.
+/// trim(srcStr) -> varchar
+///     Remove leading and trailing 0x20(space) characters from srcStr.
+template <typename T, bool leftTrim, bool rightTrim>
+struct TrimFunctionSpaceBase {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
 
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
@@ -353,5 +363,14 @@ struct LTrimFunction : public TrimFunctionBase<T, true, false> {};
 
 template <typename T>
 struct RTrimFunction : public TrimFunctionBase<T, false, true> {};
+
+template <typename T>
+struct TrimSpaceFunction : public TrimSpaceFunctionBase<T, true, true> {};
+
+template <typename T>
+struct LTrimSpaceFunction : public TrimSpaceFunctionBase<T, true, false> {};
+
+template <typename T>
+struct RTrimSpaceFunction : public TrimSpaceFunctionBase<T, false, true> {};
 
 } // namespace facebook::velox::functions::sparksql
