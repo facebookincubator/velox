@@ -73,7 +73,7 @@ class StringTest : public SparkFunctionBaseTest {
   std::optional<std::string> rtrim(std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("rtrim(c0)", srcStr);
   }
-  
+
   std::optional<std::string> rtrim(
       std::optional<std::string> trimStr,
       std::optional<std::string> srcStr) {
