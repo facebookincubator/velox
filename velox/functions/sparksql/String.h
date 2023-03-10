@@ -239,7 +239,7 @@ struct TrimFunctionBase {
       return;
     }
     if (trimStr.empty()) {
-      result.setNoCopy(StringView(srcStr.data(), srcStr.size()));
+      result.setNoCopy(srcStr);
       return;
     }
 
@@ -278,7 +278,7 @@ struct TrimFunctionBase {
       return;
     }
     if (trimStr.empty()) {
-      result.setNoCopy(StringView(srcStr.data(), srcStr.size()));
+      result.setNoCopy(srcStr);
       return;
     }
 
@@ -329,14 +329,6 @@ struct TrimSpaceFunctionBase {
 
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
-
-  FOLLY_ALWAYS_INLINE void callAscii(
-      out_type<Varchar>& result,
-      const arg_type<Varchar>& srcStr) {
-    stringImpl::
-        trimAsciiWhiteSpace<leftTrim, rightTrim, stringImpl::isAsciiSpace>(
-            result, srcStr);
-  }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,

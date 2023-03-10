@@ -53,22 +53,27 @@ class StringTest : public SparkFunctionBaseTest {
   std::optional<std::string> trim(std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("trim(c0)", srcStr);
   }
+
   std::optional<std::string> trim(
       std::optional<std::string> trimStr,
       std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("trim(c0, c1)", trimStr, srcStr);
   }
+
   std::optional<std::string> ltrim(std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("ltrim(c0)", srcStr);
   }
+
   std::optional<std::string> ltrim(
       std::optional<std::string> trimStr,
       std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("ltrim(c0, c1)", trimStr, srcStr);
   }
+
   std::optional<std::string> rtrim(std::optional<std::string> srcStr) {
     return evaluateOnce<std::string>("rtrim(c0)", srcStr);
   }
+  
   std::optional<std::string> rtrim(
       std::optional<std::string> trimStr,
       std::optional<std::string> srcStr) {
