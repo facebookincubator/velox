@@ -1278,69 +1278,76 @@ TEST_F(DateTimeFunctionsTest, millisecondTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, lastDayOfMonth) {
-  const auto lastDayOfMonth = [&](std::optional<Timestamp> timestamp) {
-    return evaluateOnce<Date>("last_day_of_month(c0)", timestamp);
+  const auto lastDayOfMonth = [&](std::optional<StringView> timestamp) {
+    auto result = evaluateOnce<Date>(
+        "last_day_of_month(c0)",
+        timestamp.has_value()
+            ? std::optional(util::fromTimestampString(timestamp.value()))
+            : std::nullopt);
+    return result.has_value() ? std::optional<std::string>(result)
+                              : std::nullopt;
   };
   EXPECT_EQ(std::nullopt, lastDayOfMonth(std::nullopt));
-  EXPECT_EQ(Date(30), lastDayOfMonth(Timestamp(0, 0)));
-  EXPECT_EQ(Date(15370), lastDayOfMonth(Timestamp(1325376000, 0)));
-  EXPECT_EQ(Date(15370), lastDayOfMonth(Timestamp(1328054399, 0)));
+  EXPECT_EQ("1970-01-31", lastDayOfMonth("1970-01-01 00:00:00"));
+  EXPECT_EQ("2012-01-31", lastDayOfMonth("2012-01-01 00:00:00"));
+  EXPECT_EQ("2012-01-31", lastDayOfMonth("2012-01-31 12:00:00"));
 
   setQueryTimeZone("Pacific/Apia");
 
   EXPECT_EQ(std::nullopt, lastDayOfMonth(std::nullopt));
-  EXPECT_EQ(Date(-1), lastDayOfMonth(Timestamp(0, 0)));
-  EXPECT_EQ(Date(15370), lastDayOfMonth(Timestamp(1325376000, 0)));
-  EXPECT_EQ(Date(15399), lastDayOfMonth(Timestamp(1328054399, 0)));
+  EXPECT_EQ("1969-12-31", lastDayOfMonth("1970-01-01 00:00:00"));
+  EXPECT_EQ("2012-01-31", lastDayOfMonth("2012-01-01 00:00:00"));
+  EXPECT_EQ("2012-02-29", lastDayOfMonth("2012-01-31 12:00:00"));
 }
 
 TEST_F(DateTimeFunctionsTest, lastDayOfMonthDate) {
-  const auto lastDayOfMonth = [&](std::optional<Date> date) {
-    return evaluateOnce<Date>("last_day_of_month(c0)", date);
+  const auto lastDayOfMonth = [&](std::optional<StringView> date) {
+    auto result = evaluateOnce<Date>(
+        "last_day_of_month(c0)",
+        date.has_value()
+            ? std::optional<Date>(util::fromDateString(date.value()))
+            : std::nullopt);
+    return result.has_value() ? std::optional<std::string>(result)
+                              : std::nullopt;
   };
   EXPECT_EQ(std::nullopt, lastDayOfMonth(std::nullopt));
-  EXPECT_EQ(Date(19388), lastDayOfMonth(Date(19358))); // 2022-01-01
-  EXPECT_EQ(Date(19416), lastDayOfMonth(Date(19389))); // 2022-02-01
-  EXPECT_EQ(Date(19447), lastDayOfMonth(Date(19417))); // 2022-03-01
-  EXPECT_EQ(Date(19477), lastDayOfMonth(Date(19448))); // 2022-04-01
-  EXPECT_EQ(Date(19508), lastDayOfMonth(Date(19478))); // 2022-05-01
-  EXPECT_EQ(Date(19538), lastDayOfMonth(Date(19509))); // 2022-06-01
-  EXPECT_EQ(Date(19569), lastDayOfMonth(Date(19539))); // 2022-07-01
-  EXPECT_EQ(Date(19600), lastDayOfMonth(Date(19570))); // 2022-08-01
-  EXPECT_EQ(Date(19630), lastDayOfMonth(Date(19601))); // 2022-09-01
-  EXPECT_EQ(Date(19661), lastDayOfMonth(Date(19631))); // 2022-10-01
-  EXPECT_EQ(Date(19691), lastDayOfMonth(Date(19662))); // 2022-11-01
-  EXPECT_EQ(Date(19722), lastDayOfMonth(Date(19692))); // 2022-12-01
-  EXPECT_EQ(Date(11016), lastDayOfMonth(Date(10988))); // 2000-02-01
-  EXPECT_EQ(Date(18321), lastDayOfMonth(Date(18293))); // 2020-02-01
-  EXPECT_EQ(Date(47540), lastDayOfMonth(Date(47513))); // 2100-02-01
+  EXPECT_EQ("2022-01-31", lastDayOfMonth("2022-01-01"));
+  EXPECT_EQ("2022-02-28", lastDayOfMonth("2022-02-01"));
+  EXPECT_EQ("2022-03-31", lastDayOfMonth("2022-03-01"));
+  EXPECT_EQ("2022-04-30", lastDayOfMonth("2022-04-01"));
+  EXPECT_EQ("2022-05-31", lastDayOfMonth("2022-05-01"));
+  EXPECT_EQ("2022-06-30", lastDayOfMonth("2022-06-01"));
+  EXPECT_EQ("2022-07-31", lastDayOfMonth("2022-07-01"));
+  EXPECT_EQ("2022-08-31", lastDayOfMonth("2022-08-01"));
+  EXPECT_EQ("2022-09-30", lastDayOfMonth("2022-09-01"));
+  EXPECT_EQ("2022-10-31", lastDayOfMonth("2022-10-01"));
+  EXPECT_EQ("2022-11-30", lastDayOfMonth("2022-11-01"));
+  EXPECT_EQ("2022-12-31", lastDayOfMonth("2022-12-01"));
+  EXPECT_EQ("2000-02-29", lastDayOfMonth("2000-02-01"));
+  EXPECT_EQ("2020-02-29", lastDayOfMonth("2020-02-01"));
+  EXPECT_EQ("2100-02-28", lastDayOfMonth("2100-02-01"));
 }
 
 TEST_F(DateTimeFunctionsTest, lastDayOfMonthTimestampWithTimezone) {
-  EXPECT_EQ(
-      std::nullopt,
-      evaluateWithTimestampWithTimezone<Date>(
-          "last_day_of_month(c0)", std::nullopt, std::nullopt));
-  EXPECT_EQ(
-      std::nullopt,
-      evaluateWithTimestampWithTimezone<Date>(
-          "last_day_of_month(c0)", std::nullopt, "+05:30"));
-  EXPECT_EQ(
-      Date(30),
-      evaluateWithTimestampWithTimezone<Date>(
-          "last_day_of_month(c0)", 0, "+00:00"));
-  EXPECT_EQ(
-      Date(-1),
-      evaluateWithTimestampWithTimezone<Date>(
-          "last_day_of_month(c0)", 0, "-05:30"));
-  EXPECT_EQ(
-      Date(30),
-      evaluateWithTimestampWithTimezone<Date>(
-          "last_day_of_month(c0)", 2678399999, "+00:00"));
-  EXPECT_EQ(
-      Date(58),
-      evaluateWithTimestampWithTimezone<Date>(
-          "last_day_of_month(c0)", 2678399999, "+05:30"));
+  const auto lastDayOfMonth =
+      [&](std::optional<StringView> timestamp,
+          const std::optional<std::string>& timeZoneName) {
+        auto result = evaluateWithTimestampWithTimezone<Date>(
+            "last_day_of_month(c0)",
+            timestamp.has_value()
+                ? std::optional(
+                      util::fromTimestampString(timestamp.value()).toMillis())
+                : std::nullopt,
+            timeZoneName);
+        return result.has_value() ? std::optional<std::string>(result)
+                                  : std::nullopt;
+      };
+  EXPECT_EQ(std::nullopt, lastDayOfMonth(std::nullopt, std::nullopt));
+  EXPECT_EQ(std::nullopt, lastDayOfMonth(std::nullopt, "+05:30"));
+  EXPECT_EQ("1970-01-31", lastDayOfMonth("1970-01-01 00:00:00", "+00:00"));
+  EXPECT_EQ("1969-12-31", lastDayOfMonth("1970-01-01 00:00:00", "-05:30"));
+  EXPECT_EQ("1970-01-31", lastDayOfMonth("1970-01-31 00:00:00", "+00:00"));
+  EXPECT_EQ("1970-02-28", lastDayOfMonth("1970-01-31 20:00:00", "+05:30"));
 }
 
 TEST_F(DateTimeFunctionsTest, dateTrunc) {

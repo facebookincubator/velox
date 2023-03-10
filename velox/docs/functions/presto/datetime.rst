@@ -178,6 +178,11 @@ This behavior is different from Presto Java that allows arbitrary large timestam
 
     Returns the hour of the day from ``x``. The value ranges from 0 to 23.
 
+.. function:: last_day_of_month(x) -> date
+
+    Returns the last day of the month from ``x``.
+    Supported types for ``x`` are: DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE.
+
 .. function:: millisecond(x) -> int64
 
     Returns the millisecond of the second from ``x``.
@@ -219,7 +224,3 @@ This behavior is different from Presto Java that allows arbitrary large timestam
 .. function:: yow(x) -> bigint
 
     This is an alias for :func:`year_of_week`.
-
-.. function:: last_day_of_month(x) -> date
-
-    Returns the last day of the month from ``x``.

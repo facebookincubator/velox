@@ -482,6 +482,7 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
         1900 + time.tm_year,
         time.tm_mon + 1,
         util::kLastDayOfMonth[time.tm_mon] +
+            // Add one more day in February of the leap year.
             (time.tm_mon == 1 && util::isLeapYear(1900 + time.tm_year)));
   }
 

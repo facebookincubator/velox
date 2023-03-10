@@ -43,8 +43,8 @@ constexpr const int32_t kMaxYear{292278994};
 constexpr const int32_t kYearInterval{400};
 constexpr const int32_t kDaysPerYearInterval{146097};
 
-constexpr int kLastDayOfMonth[12] =
-    {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+constexpr const std::array<int32_t, 12>
+    kLastDayOfMonth{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
 // Returns true if leap year, false otherwise
 bool isLeapYear(int32_t year);
