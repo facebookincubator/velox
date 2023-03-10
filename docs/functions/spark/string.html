@@ -70,8 +70,8 @@
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="endsWith">
-<span class="sig-name descname"><span class="pre">endsWith</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#endsWith" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object spark" id="endswith">
+<span class="sig-name descname"><span class="pre">endswith</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#endswith" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns true if ‘left’ ends with ‘right’. Otherwise, returns false.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">endswith</span><span class="p">(</span><span class="s1">&#39;js SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;SQL&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 <span class="n">SELECT</span> <span class="n">endswith</span><span class="p">(</span><span class="s1">&#39;js SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;js&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
@@ -91,6 +91,24 @@
 <dt class="sig sig-object spark" id="length">
 <span class="sig-name descname"><span class="pre">length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#length" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the length of <code class="docutils literal notranslate"><span class="pre">string</span></code> in characters.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="lower">
+<span class="sig-name descname"><span class="pre">lower</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#lower" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns string with all characters changed to lowercase.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">lower</span><span class="p">(</span><span class="s1">&#39;SparkSql&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">sparksql</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="replace">
+<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#replace" title="Permalink to this definition">¶</a></dt>
+<dd><p>Replaces all occurrences of <cite>search</cite> with <cite>replace</cite>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;abc&#39;</span><span class="p">,</span> <span class="s1">&#39;DEF&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABCDEF</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="spark function">
@@ -116,8 +134,8 @@
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="startsWith">
-<span class="sig-name descname"><span class="pre">startsWith</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#startsWith" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object spark" id="startswith">
+<span class="sig-name descname"><span class="pre">startswith</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#startswith" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns true if ‘left’ starts with ‘right’. Otherwise, returns false.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;js SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;js&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 <span class="n">SELECT</span> <span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;js SQL&#39;</span><span class="p">,</span> <span class="s1">&#39;SQL&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
@@ -145,6 +163,15 @@ Type of ‘start’ must be an INTEGER.</p>
 <span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;&quot;</span>
 <span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;&quot;</span>
 <span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">10000</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;k SQL&quot;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="upper">
+<span class="sig-name descname"><span class="pre">upper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#upper" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns string with all characters changed to uppercase.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">upper</span><span class="p">(</span><span class="s1">&#39;SparkSql&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">SPARKSQL</span>
 </pre></div>
 </div>
 </dd></dl>

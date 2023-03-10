@@ -60,10 +60,18 @@ environment:</p>
 <span class="n">conda</span> <span class="n">activate</span> <span class="n">pyveloxenv</span>
 </pre></div>
 </div>
+<section id="install-pyvelox">
+<h3>Install PyVelox<a class="headerlink" href="#install-pyvelox" title="Permalink to this heading">¶</a></h3>
+<p>You can install PyVelox from pypi without the need to build it from
+source as we provide wheels for Linux and macOS (x86_64):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">pyvelox</span>
+</pre></div>
+</div>
+</section>
 <section id="from-source">
 <h3>From Source<a class="headerlink" href="#from-source" title="Permalink to this heading">¶</a></h3>
-<p>Currently PyVelox can only be built from source. You will need Python
-3.7 or later and a C++17 compiler.</p>
+<p>You will need Python 3.7 or later and a C++17 compiler to build PyVelox
+from source.</p>
 <section id="install-dependencies">
 <h4>Install Dependencies<a class="headerlink" href="#install-dependencies" title="Permalink to this heading">¶</a></h4>
 <p>On macOS</p>
@@ -75,8 +83,8 @@ to install all the mac specific dependencies.</p>
 <a class="reference external" href="https://github.com/facebookincubator/velox#setting-up-on-linux-ubuntu-2004-or-later">here</a>
 to install on linux.</p>
 </section>
-<section id="install-pyvelox">
-<h4>Install PyVelox<a class="headerlink" href="#install-pyvelox" title="Permalink to this heading">¶</a></h4>
+<section id="build-pyvelox">
+<h4>Build PyVelox<a class="headerlink" href="#build-pyvelox" title="Permalink to this heading">¶</a></h4>
 <p>For local development, you can build with debug mode:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">make</span> <span class="n">python</span><span class="o">-</span><span class="n">build</span>
 </pre></div>
@@ -102,9 +110,10 @@ to install on linux.</p>
     <ul>
 <li><a class="reference internal" href="#">PyVelox: Python bindings and extensions for Velox</a><ul>
 <li><a class="reference internal" href="#prerequisites">Prerequisites</a><ul>
+<li><a class="reference internal" href="#install-pyvelox">Install PyVelox</a></li>
 <li><a class="reference internal" href="#from-source">From Source</a><ul>
 <li><a class="reference internal" href="#install-dependencies">Install Dependencies</a></li>
-<li><a class="reference internal" href="#install-pyvelox">Install PyVelox</a></li>
+<li><a class="reference internal" href="#build-pyvelox">Build PyVelox</a></li>
 </ul>
 </li>
 </ul>
