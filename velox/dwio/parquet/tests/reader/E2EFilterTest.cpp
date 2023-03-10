@@ -490,6 +490,10 @@ TEST_F(E2EFilterTest, metadataFilter) {
   testMetadataFilter();
 }
 
+TEST_F(E2EFilterTest, subfieldsPruning) {
+  testSubfieldsPruning();
+}
+
 TEST_F(E2EFilterTest, map) {
   // Break up the leaf data in small pages to cover coalescing repdefs.
   writerProperties_ =
@@ -505,6 +509,39 @@ TEST_F(E2EFilterTest, map) {
       false,
       {"long_val", "map_val"},
       10);
+}
+
+TEST_F(E2EFilterTest, varbinaryDirect) {
+  writerProperties_ = ::parquet::WriterProperties::Builder()
+                          .disable_dictionary()
+                          ->data_pagesize(4 * 1024)
+                          ->build();
+
+  testWithTypes(
+      "varbinary_val:varbinary,"
+      "varbinary_val_2:varbinary",
+      [&]() {
+        makeStringUnique("varbinary_val");
+        makeStringUnique("varbinary_val_2");
+      },
+      true,
+      {"varbinary_val", "varbinary_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, varbinaryDictionary) {
+  testWithTypes(
+      "varbinary_val:varbinary,"
+      "varbinary_val_2:varbinary,"
+      "varbinary_const:varbinary",
+      [&]() {
+        makeStringDistribution("varbinary_val", 100, true, false);
+        makeStringDistribution("varbinary_val_2", 170, false, true);
+        makeStringDistribution("varbinary_const", 1, true, false);
+      },
+      true,
+      {"varbinary_val", "varbinary_val_2"},
+      20);
 }
 
 TEST_F(E2EFilterTest, largeMetadata) {

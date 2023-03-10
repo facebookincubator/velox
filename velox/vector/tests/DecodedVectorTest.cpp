@@ -78,9 +78,17 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
           ASSERT_EQ(actualValue, decodedValue);
         }
         const bool isNull = (expected[index] == std::nullopt);
+        std::string value;
+        if constexpr (
+            std::is_same_v<T, UnscaledLongDecimal> ||
+            std::is_same_v<T, UnscaledShortDecimal>) {
+          value = std::to_string(actualValue.unscaledValue());
+
+        } else {
+          value = folly::to<std::string>(actualValue);
+        }
         if (dbgPrintVec) {
-          LOG(INFO) << "[" << index << "]:"
-                    << (isNull ? "NULL" : folly::to<std::string>(actualValue));
+          LOG(INFO) << "[" << index << "]:" << (isNull ? "NULL" : value);
         }
         ASSERT_EQ(isNull, actualIsNull);
         if (!isNull) {
@@ -113,18 +121,29 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
   }
 
   template <typename T>
-  void testFlat(vector_size_t cardinality = 10010) {
-    auto cardData = genTestData<T>(cardinality, /* includeNulls */ true);
+  void testFlat(
+      vector_size_t cardinality = 10010,
+      const TypePtr& type = CppToType<T>::create()) {
+    auto cardData = genTestData<T>(cardinality, type, true /* includeNulls */);
     const auto& data = cardData.data();
     EXPECT_EQ(cardinality, data.size());
-
-    auto flatVector = makeNullableFlatVector(data);
+    auto flatVector = makeNullableFlatVector(data, type);
     assertDecodedVector(data, flatVector.get(), false);
   }
 
   template <typename T>
   void testConstant(const T& value) {
-    auto constantVector = BaseVector::createConstant(value, 100, pool_.get());
+    variant var;
+    if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
+      var = variant::shortDecimal(value.unscaledValue(), SHORT_DECIMAL(10, 3));
+    } else if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
+      var = variant::longDecimal(value.unscaledValue(), LONG_DECIMAL(20, 3));
+    } else {
+      var = variant(value);
+    }
+
+    auto constantVector =
+        BaseVector::createConstant(var.inferType(), var, 100, pool_.get());
     auto check = [&](auto& decoded) {
       EXPECT_TRUE(decoded.isConstantMapping());
       EXPECT_TRUE(!decoded.isIdentityMapping());
@@ -190,8 +209,8 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
   template <typename T>
   void testConstantOpaque(const std::shared_ptr<T>& value) {
     int uses = value.use_count();
-    auto constantVector =
-        BaseVector::createConstant(variant::opaque(value), 100, pool_.get());
+    auto constantVector = BaseVector::createConstant(
+        OpaqueType::create<T>(), variant::opaque(value), 100, pool_.get());
 
     auto check = [&](auto& decoded) {
       EXPECT_TRUE(decoded.isConstantMapping());
@@ -304,7 +323,8 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
   template <typename T>
   void testDictionaryOverConstant(const T& value) {
     constexpr vector_size_t size = 1000;
-    auto constantVector = BaseVector::createConstant(value, size, pool_.get());
+    auto constantVector = BaseVector::createConstant(
+        variant(value).inferType(), value, size, pool_.get());
 
     // Add nulls via dictionary. Make every 2-nd element a null.
     BufferPtr nulls = evenNulls(size);
@@ -346,7 +366,7 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
   void testDictionaryOverNullConstant() {
     constexpr vector_size_t size = 1000;
     auto constantNullVector = BaseVector::createConstant(
-        variant(TypeKind::BIGINT), size, pool_.get());
+        BIGINT(), variant(TypeKind::BIGINT), size, pool_.get());
 
     // Add more nulls via dictionary. Make every 2-nd element a null.
     BufferPtr nulls = evenNulls(size);
@@ -383,11 +403,11 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
   template <typename T>
   void testDictionary(
       vector_size_t size,
-      std::function<T(vector_size_t /*index*/)> valueAt) {
-    auto flatVector = makeFlatVector<T>(size, valueAt);
+      std::function<T(vector_size_t /*index*/)> valueAt,
+      const TypePtr& type = CppToType<T>::create()) {
     BufferPtr indices = makeEvenIndices(size);
-
     auto dictionarySize = size / 2;
+    auto flatVector = makeFlatVector<T>(size, valueAt, nullptr, type);
 
     auto dictionaryVector = std::dynamic_pointer_cast<DictionaryVector<T>>(
         BaseVector::wrapInDictionary(
@@ -421,8 +441,8 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
 template <>
 void DecodedVectorTest::testConstant<StringView>(const StringView& value) {
   auto val = value.getString();
-  auto constantVector =
-      BaseVector::createConstant(folly::StringPiece{val}, 100, pool_.get());
+  auto constantVector = BaseVector::createConstant(
+      VARCHAR(), folly::StringPiece{val}, 100, pool_.get());
 
   auto check = [&](auto& decoded) {
     EXPECT_TRUE(decoded.isConstantMapping());
@@ -450,7 +470,8 @@ TEST_F(DecodedVectorTest, flat) {
   testFlat<int32_t>();
   testFlat<int64_t>();
   testFlat<bool>();
-
+  testFlat<UnscaledShortDecimal>(10010, SHORT_DECIMAL(10, 4));
+  testFlat<UnscaledLongDecimal>(10010, LONG_DECIMAL(25, 19));
   // TODO: ValueGenerator doesn't support floats.
   // testFlat<float>();
   testFlat<double>();
@@ -493,6 +514,8 @@ TEST_F(DecodedVectorTest, constant) {
   NonPOD::alive = 0;
   testConstantOpaque(std::make_shared<NonPOD>());
   EXPECT_EQ(NonPOD::alive, 0);
+  testConstant<UnscaledShortDecimal>(UnscaledShortDecimal(100));
+  testConstant<UnscaledLongDecimal>(UnscaledLongDecimal::min());
 }
 
 TEST_F(DecodedVectorTest, constantNull) {
@@ -507,6 +530,8 @@ TEST_F(DecodedVectorTest, constantNull) {
   testConstantNull(VARBINARY());
   testConstantNull(TIMESTAMP());
   testConstantNull(DATE());
+  testConstantNull(SHORT_DECIMAL(10, 3));
+  testConstantNull(LONG_DECIMAL(30, 3));
   testConstantNull(INTERVAL_DAY_TIME());
   testConstantNull(ARRAY(INTEGER()));
   testConstantNull(MAP(INTEGER(), INTEGER()));
@@ -534,7 +559,7 @@ TEST_F(DecodedVectorTest, constantComplexType) {
   testConstant(mapVector, 5); // null
 }
 
-TEST_F(DecodedVectorTest, boolDictionary) {
+TEST_F(DecodedVectorTest, dictionary) {
   testDictionary<bool>(1000, [](vector_size_t i) { return i % 3 == 0; });
   testDictionary<int8_t>(1000, [](vector_size_t i) { return i % 5; });
   testDictionary<int16_t>(1000, [](vector_size_t i) { return i % 5; });
@@ -542,6 +567,16 @@ TEST_F(DecodedVectorTest, boolDictionary) {
   testDictionary<int64_t>(1000, [](vector_size_t i) { return i % 5; });
   testDictionary<float>(1000, [](vector_size_t i) { return i * 0.1; });
   testDictionary<double>(1000, [](vector_size_t i) { return i * 0.1; });
+  testDictionary<UnscaledShortDecimal>(
+      1000,
+      [](vector_size_t i) { return UnscaledShortDecimal(i % 5); },
+      SHORT_DECIMAL(10, 3));
+  testDictionary<UnscaledLongDecimal>(
+      1000,
+      [](vector_size_t i) {
+        return UnscaledLongDecimal(buildInt128(i, i) % 5);
+      },
+      LONG_DECIMAL(25, 20));
   testDictionary<std::shared_ptr<void>>(
       1000, [](vector_size_t i) { return std::make_shared<int>(i % 5); });
 }
@@ -760,7 +795,7 @@ TEST_F(DecodedVectorTest, dictionaryWrapOnConstantVector) {
   // vector.
   constexpr vector_size_t size = 100;
   auto constantVector =
-      BaseVector::createConstant(variant("abc"), size, pool_.get());
+      BaseVector::createConstant(VARCHAR(), variant("abc"), size, pool_.get());
   // int Vector
   auto intVector = makeFlatVector<int32_t>(size, [](auto row) { return row; });
   // Row (int, const)
@@ -1024,11 +1059,11 @@ TEST_F(DecodedVectorTest, noValues) {
   // Tests decoding a flat vector that consists of all nulls and has
   // no values() buffer.
   constexpr vector_size_t kSize = 100;
-  auto nulls = AlignedBuffer::allocate<uint64_t>(
-      bits::nwords(kSize), pool_.get(), bits::kNull64);
+
   auto vector = std::make_shared<FlatVector<int32_t>>(
       pool_.get(),
-      std::move(nulls),
+      INTEGER(),
+      allocateNulls(kSize, pool(), bits::kNull),
       kSize,
       BufferPtr(nullptr),
       std::vector<BufferPtr>{});
@@ -1057,7 +1092,7 @@ TEST_F(DecodedVectorTest, emptyRowsDictOverConstWithNulls) {
   auto nulls = makeNulls(3, [](auto /* row */) { return true; });
   auto indices = makeIndices(3, [](auto /* row */) { return 2; });
   auto dict = BaseVector::wrapInDictionary(
-      nulls, indices, 3, BaseVector::createConstant(1, 3, pool()));
+      nulls, indices, 3, BaseVector::createConstant(INTEGER(), 1, 3, pool()));
 
   {
     SelectivityVector rows(3, false);

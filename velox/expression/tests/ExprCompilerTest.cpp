@@ -17,6 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -61,11 +62,11 @@ class ExprCompilerTest : public testing::Test,
   }
 
   core::TypedExprPtr bigint(int64_t value) {
-    return std::make_shared<core::ConstantTypedExpr>(value);
+    return std::make_shared<core::ConstantTypedExpr>(BIGINT(), value);
   }
 
   core::TypedExprPtr varchar(const std::string& value) {
-    return std::make_shared<core::ConstantTypedExpr>(variant(value));
+    return std::make_shared<core::ConstantTypedExpr>(VARCHAR(), variant(value));
   }
 
   std::function<core::TypedExprPtr(const std::string& name)> makeField(
@@ -214,4 +215,13 @@ TEST_F(ExprCompilerTest, constantFromFlatVector) {
   auto exprSet = compile(expression);
   ASSERT_EQ("137:BIGINT", compile(expression)->toString());
 }
+
+TEST_F(ExprCompilerTest, customTypeConstant) {
+  auto expression =
+      std::make_shared<core::ConstantTypedExpr>(JSON(), "[1, 2, 3]");
+
+  auto exprSet = compile(expression);
+  ASSERT_EQ("[1, 2, 3]:JSON", compile(expression)->toString());
+}
+
 } // namespace facebook::velox::exec::test

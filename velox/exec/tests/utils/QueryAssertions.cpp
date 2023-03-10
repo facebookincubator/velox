@@ -479,6 +479,12 @@ velox::variant rowVariantAt(const VectorPtr& vector, vector_size_t row) {
 variant variantAt(const VectorPtr& vector, vector_size_t row) {
   auto typeKind = vector->typeKind();
   if (vector->isNullAt(row)) {
+    if (typeKind == TypeKind::SHORT_DECIMAL) {
+      return variant::shortDecimal(std::nullopt, vector->type());
+    }
+    if (typeKind == TypeKind::LONG_DECIMAL) {
+      return variant::longDecimal(std::nullopt, vector->type());
+    }
     return variant(typeKind);
   }
 
@@ -975,6 +981,18 @@ bool assertEqualResults(
   }
 
   return assertEqualResults(expectedRows, actual);
+}
+
+void assertEqualTypeAndNumRows(
+    const TypePtr& expectedType,
+    vector_size_t expectedNumRows,
+    const std::vector<RowVectorPtr>& actual) {
+  size_t actualNumRows = 0;
+  for (const auto& result : actual) {
+    EXPECT_EQ(*expectedType, *result->type());
+    actualNumRows += result->size();
+  }
+  EXPECT_EQ(expectedNumRows, actualNumRows);
 }
 
 /// Returns the number of floating-point columns and a list of columns indices

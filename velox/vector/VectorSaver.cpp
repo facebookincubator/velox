@@ -333,7 +333,7 @@ void writeConstantVector(const BaseVector& vector, std::ostream& out) {
 
 template <TypeKind kind>
 VectorPtr readConstant(
-    const TypePtr& /* type */,
+    const TypePtr& type,
     vector_size_t size,
     velox::memory::MemoryPool* pool,
     std::istream& in) {
@@ -348,12 +348,16 @@ VectorPtr readConstant(
       in.read(stringBuffer->template asMutable<char>(), stringSize);
 
       return std::make_shared<ConstantVector<T>>(
-          pool, size, false, StringView(stringBuffer->as<char>(), stringSize));
+          pool,
+          size,
+          false,
+          type,
+          StringView(stringBuffer->as<char>(), stringSize));
     }
   }
 
   return std::make_shared<ConstantVector<T>>(
-      pool, size, false, std::move(value));
+      pool, size, false, type, std::move(value));
 }
 
 VectorPtr readConstantVector(
@@ -803,5 +807,29 @@ std::vector<T> restoreStdVectorFromFile(const char* filePath) {
 
 template std::vector<column_index_t> restoreStdVectorFromFile<column_index_t>(
     const char* filePath);
+
+void saveSelectivityVector(const SelectivityVector& rows, std::ostream& out) {
+  auto range = rows.asRange();
+
+  write<int32_t>(rows.size(), out);
+  out.write(
+      reinterpret_cast<const char*>(range.bits()), bits::nbytes(rows.size()));
+}
+
+SelectivityVector restoreSelectivityVector(std::istream& in) {
+  auto size = read<int32_t>(in);
+
+  const auto numBytes = bits::nbytes(size);
+
+  // SelectivityVector::setFromBits reads whole words (8 bytes). Make sure it is
+  // safe to access the "last" partially-populated word.
+  std::vector<char> bits(bits::roundUp(numBytes, 8));
+
+  in.read(bits.data(), numBytes);
+
+  SelectivityVector rows(size);
+  rows.setFromBits(reinterpret_cast<uint64_t*>(bits.data()), size);
+  return rows;
+}
 
 } // namespace facebook::velox

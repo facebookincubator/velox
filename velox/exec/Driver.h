@@ -53,6 +53,10 @@ enum class StopReason {
   kAlreadyOnThread
 };
 
+std::string stopReasonString(StopReason reason);
+
+std::ostream& operator<<(std::ostream& out, const StopReason& reason);
+
 // Represents a Driver's state. This is used for cancellation, forcing
 // release of and for waiting for memory. The fields are serialized on
 // the mutex of the Driver's Task.
@@ -186,11 +190,15 @@ class BlockingState {
   static std::atomic_uint64_t numBlockedDrivers_;
 };
 
+/// Special group id to reflect the ungrouped execution.
+/// TODO(spershin): We will soon change it to uint32_t::max().
+constexpr uint32_t kUngroupedGroupId{0};
+
 struct DriverCtx {
   const int driverId;
   const int pipelineId;
   /// Id of the split group this driver should process in case of grouped
-  /// execution, zero otherwise.
+  /// execution, kUngroupedGroupId otherwise.
   const uint32_t splitGroupId;
   /// Id of the partition to use by this driver. For local exchange, for
   /// instance.
@@ -363,11 +371,11 @@ struct DriverFactory {
   /// Can be null. We use that to determine the max drivers.
   std::shared_ptr<const core::PlanNode> consumerNode;
 
-  // True if 'planNodes' contains a source node for the task, e.g. TableScan or
-  // Exchange.
+  /// True if 'planNodes' contains a source node for the task, e.g. TableScan or
+  /// Exchange.
   bool inputDriver{false};
-  // True if 'planNodes' contains a sync node for the task, e.g.
-  // PartitionedOutput.
+  /// True if 'planNodes' contains a sync node for the task, e.g.
+  /// PartitionedOutput.
   bool outputDriver{false};
 
   std::shared_ptr<Driver> createDriver(

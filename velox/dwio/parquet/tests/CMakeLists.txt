@@ -18,12 +18,13 @@ set(TEST_LINK_LIBS
     gtest
     gtest_main
     gmock
-    ${gflags_LIBRARIES}
+    gflags::gflags
     ${GLOG}
     ${FILESYSTEM})
 
 add_subdirectory(duckdb_reader)
 add_subdirectory(reader)
+add_subdirectory(thrift)
 
 add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp)
 add_test(

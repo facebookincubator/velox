@@ -19,8 +19,7 @@
 namespace facebook::velox::functions {
 
 void registerHyperLogFunctions() {
-  registerType(
-      "hyperloglog", std::make_unique<const HyperLogLogTypeFactories>());
+  registerHyperLogLogType();
 
   registerFunction<CardinalityFunction, int64_t, HyperLogLog>({"cardinality"});
 
