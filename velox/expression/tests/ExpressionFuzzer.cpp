@@ -906,13 +906,24 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
   ArgumentTypeFuzzer fuzzer{chosenSignature, returnType, rng_};
   VELOX_CHECK_EQ(fuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs), true);
   auto& argumentTypes = fuzzer.argumentTypes();
+  auto constantArguments = chosenSignature.constantArguments();
+
+  // ArgumentFuzzer may generate duplicate arguments if the signature's
+  // variableArity is true, so we need to pad duplicate constant flags.
+  if (!constantArguments.empty()) {
+    auto repeat = argumentTypes.size() - constantArguments.size();
+    auto lastConstant = constantArguments.back();
+    for (int i = 0; i < repeat; ++i) {
+      constantArguments.push_back(lastConstant);
+    }
+  }
 
   CallableSignature callable{
       .name = chosen->name,
       .args = argumentTypes,
       .variableArity = false,
       .returnType = returnType,
-      .constantArgs = chosenSignature.constantArguments()};
+      .constantArgs = constantArguments};
 
   markSelected(chosen->name);
   return getCallExprFromCallable(callable);
