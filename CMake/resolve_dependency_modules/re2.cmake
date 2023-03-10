@@ -33,9 +33,15 @@ FetchContent_Declare(
 if(TARGET ICU)
   set(RE2_USE_ICU ON)
 endif()
+
 set(RE2_BUILD_TESTING OFF)
 
 FetchContent_MakeAvailable(re2)
+
+if(TARGET ICU-build)
+  # build re2 after icu so the files are available
+  add_dependencies(re2 ICU-build ICU::ICU)
+endif()
 
 set(re2_LIBRARIES ${re2_BINARY_DIR}/libre2.a)
 set(re2_INCLUDE_DIRS ${re2_SOURCE_DIR})
