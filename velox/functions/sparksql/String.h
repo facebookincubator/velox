@@ -345,13 +345,17 @@ struct TrimFunctionSpaceBase {
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& srcStr) {
-    stringImpl::trimAsciiSpace<leftTrim, rightTrim>(result, srcStr);
+    stringImpl::trimAsciiWhiteSpace<leftTrim, rightTrim, stringImpl::isAsciiSpace>(
+        result, srcStr);
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& srcStr) {
-    stringImpl::trimAsciiSpace<leftTrim, rightTrim>(result, srcStr);
+    // Because utf-8 and Ascii have the same space character code, both are
+    // char=32. So trimAsciiSpace can be reused here.
+    stringImpl::trimAsciiWhiteSpace<leftTrim, rightTrim, stringImpl::isAsciiSpace>(
+        result, srcStr);
   }
 };
 
