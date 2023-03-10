@@ -321,7 +321,7 @@ struct TrimFunctionBase {
 /// trim(srcStr) -> varchar
 ///     Remove leading and trailing 0x20(space) characters from srcStr.
 template <typename T, bool leftTrim, bool rightTrim>
-struct TrimFunctionSpaceBase {
+struct TrimSpaceFunctionBase {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // Results refer to strings in the first argument.

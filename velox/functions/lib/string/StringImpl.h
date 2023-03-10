@@ -597,7 +597,7 @@ FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
   auto start = curPos;
   curPos = input.end() - 1;
   if constexpr (rightTrim) {
-    while (curPos >= start && isAsciiWhiteSpace(*curPos)) {
+    while (curPos >= start && shouldTrim(*curPos)) {
       curPos--;
     }
   }
