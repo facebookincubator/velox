@@ -120,15 +120,6 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT substring('Spark SQL', 5, -1); -- ""
         SELECT substring('Spark SQL', 5, 10000); -- "k SQL"
 
-.. spark:function:: upper(string) -> string
-
-    Returns string with all characters changed to uppercase. ::
-
-        SELECT upper('SparkSql'); -- SPARKSQL
-
-
-
-
 .. spark:function:: trim(string) -> varchar
 
     Removes leading and trailing 0x20(space) characters from ``string``. ::
@@ -142,3 +133,9 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     ``trimCharacters`` can be empty and may contain duplicate characters. ::
 
     SELECT trim('sprk', 'spark'); -- "a"
+
+.. spark:function:: upper(string) -> string
+
+    Returns string with all characters changed to uppercase. ::
+
+        SELECT upper('SparkSql'); -- SPARKSQL
