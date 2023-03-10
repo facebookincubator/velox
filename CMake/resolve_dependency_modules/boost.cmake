@@ -64,6 +64,9 @@ list_subdirs(numeric_subdirs ${boost_SOURCE_DIR}/libs/numeric)
 list(TRANSFORM numeric_subdirs APPEND /include)
 include_directories(${boost_INCLUDE_DIRS} ${numeric_subdirs})
 
+if(${ICU_SOURCE} STREQUAL "BUNDLED")
+  add_dependencies(boost_regex ICU ICU::i18n)
+endif()
 # This prevents system boost from leaking in
 set(Boost_NO_SYSTEM_PATHS ON)
 # We have to keep the FindBoost.cmake in an subfolder to prevent it from

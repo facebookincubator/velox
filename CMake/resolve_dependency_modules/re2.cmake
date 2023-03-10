@@ -30,17 +30,14 @@ FetchContent_Declare(
   URL ${VELOX_RE2_SOURCE_URL}
   URL_HASH SHA256=${VELOX_RE2_BUILD_SHA256_CHECKSUM})
 
-if(TARGET ICU)
-  set(RE2_USE_ICU ON)
-endif()
-
+set(RE2_USE_ICU ON)
 set(RE2_BUILD_TESTING OFF)
 
 FetchContent_MakeAvailable(re2)
 
-if(TARGET ICU-build)
+if(${ICU_SOURCE} STREQUAL "BUNDLED")
   # build re2 after icu so the files are available
-  add_dependencies(re2 ICU-build ICU::ICU)
+  add_dependencies(re2 ICU ICU::uc)
 endif()
 
 set(re2_LIBRARIES ${re2_BINARY_DIR}/libre2.a)
