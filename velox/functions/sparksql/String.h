@@ -282,47 +282,35 @@ struct TrimFunctionBase {
       return;
     }
 
-    size_t numUtf8Char = 0;
-    int utf8CharLen[srcStr.size()];
-    size_t utf8CharPos[srcStr.size()];
-    for (size_t pos = 0; pos < srcStr.size();) {
-      utf8CharPos[numUtf8Char] = pos;
-      utf8CharLen[numUtf8Char] = utf8proc_char_length(srcStr.data() + pos);
-      pos += utf8CharLen[numUtf8Char];
-      ++numUtf8Char;
-    }
-
     auto trimStrView = std::string_view(trimStr);
-    size_t resultStartIndex = 0;
-    size_t resultSize = srcStr.size();
+    auto resultBegin = srcStr.begin();
     if constexpr (leftTrim) {
-      for (size_t i = 0; i < numUtf8Char; ++i) {
-        if (trimStrView.find(std::string_view(
-                srcStr.data() + utf8CharPos[i], utf8CharLen[i])) ==
-            std::string_view::npos) {
+      while (resultBegin < srcStr.end()) {
+        int charLen = utf8proc_char_length(resultBegin);
+        auto c = std::string_view(resultBegin, charLen);
+        if (trimStrView.find(c) == std::string_view::npos) {
           break;
         }
-        resultStartIndex += utf8CharLen[i];
-        resultSize -= utf8CharLen[i];
+        resultBegin += charLen;
       }
     }
 
+    auto resultEnd = srcStr.end();
     if constexpr (rightTrim) {
-      for (size_t i = numUtf8Char - 1; resultSize > 0 && i >= 0; --i) {
-        if (trimStrView.find(std::string_view(
-                srcStr.data() + utf8CharPos[i], utf8CharLen[i])) ==
-            std::string_view::npos) {
-          break;
+      auto curPos = resultEnd - 1;
+      while (curPos >= resultBegin) {
+        if (utf8proc_char_first_byte(curPos)) {
+          auto c = std::string_view(curPos, resultEnd - curPos);
+          if (trimStrView.find(c) == std::string_view::npos) {
+            break;
+          }
+          resultEnd = curPos;
         }
-        resultSize -= utf8CharLen[i];
+        --curPos;
       }
     }
 
-    if (resultSize <= 0) {
-      result.setEmpty();
-      return;
-    }
-    result.setNoCopy(StringView(srcStr.data() + resultStartIndex, resultSize));
+    result.setNoCopy(StringView(resultBegin, resultEnd - resultBegin));
   }
 };
 
