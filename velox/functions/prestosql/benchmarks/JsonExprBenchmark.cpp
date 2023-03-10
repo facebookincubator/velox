@@ -70,7 +70,7 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
 
     auto jsonVector = makeJsonData(json, vectorSize);
     auto jsonPathVector = velox::BaseVector::createConstant(
-        jsonPath.data(), vectorSize, execCtx_.pool());
+        VARCHAR(), jsonPath.data(), vectorSize, execCtx_.pool());
 
     auto rowVector = vectorMaker_.rowVector({jsonVector, jsonPathVector});
     auto exprSet =

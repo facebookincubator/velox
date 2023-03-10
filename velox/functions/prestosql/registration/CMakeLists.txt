@@ -32,7 +32,7 @@ set(SIMDJSON_LINK_LIBS ${SIMDJSON_LINK_LIBS})
 list(APPEND SIMDJSON_LINK_LIBS simdjson::simdjson)
 
 target_link_libraries(velox_functions_prestosql velox_functions_prestosql_impl
-                      velox_is_null_functions ${SIMDJSON_LINK_LIBS})
+                      velox_is_null_functions simdjson)
 
 set_property(TARGET velox_functions_prestosql PROPERTY JOB_POOL_COMPILE
                                                        high_memory_pool)

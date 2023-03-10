@@ -83,8 +83,8 @@ elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
 endif()
 
-#if(${VELOX_ENABLE_BENCHMARKS})
+if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(benchmarks)
-#endif()
+endif()
 
 add_subdirectory(registration)
