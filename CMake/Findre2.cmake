@@ -24,5 +24,6 @@ if(re2_FOUND)
   add_library(re2::re2 UNKNOWN IMPORTED)
   target_include_directories(re2::re2 INTERFACE ${re2_INCLUDE_DIRS})
   target_link_libraries(re2::re2 INTERFACE ${re2_LIBRARIES})
-  set_target_properties(re2::re2 PROPERTIES IMPORTED_LOCATION "${re2_LIBRARIES}")
+  set_target_properties(re2::re2 PROPERTIES IMPORTED_LOCATION
+                                            "${re2_LIBRARIES}")
 endif()
