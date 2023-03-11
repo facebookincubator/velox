@@ -137,12 +137,14 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<ContainsFunction, bool, Varchar, Varchar>(
       {prefix + "contains"});
 
-  registerFunction<TrimSpaceFunction, Varchar, Varchar>({"trim"});
-  registerFunction<TrimFunction, Varchar, Varchar, Varchar>({"trim"});
-  registerFunction<LTrimSpaceFunction, Varchar, Varchar>({"ltrim"});
-  registerFunction<LTrimFunction, Varchar, Varchar, Varchar>({"ltrim"});
-  registerFunction<RTrimSpaceFunction, Varchar, Varchar>({"rtrim"});
-  registerFunction<RTrimFunction, Varchar, Varchar, Varchar>({"rtrim"});
+  registerFunction<TrimSpaceFunction, Varchar, Varchar>({prefix + "trim"});
+  registerFunction<TrimFunction, Varchar, Varchar, Varchar>({prefix + "trim"});
+  registerFunction<LTrimSpaceFunction, Varchar, Varchar>({prefix + "ltrim"});
+  registerFunction<LTrimFunction, Varchar, Varchar, Varchar>(
+      {prefix + "ltrim"});
+  registerFunction<RTrimSpaceFunction, Varchar, Varchar>({prefix + "rtrim"});
+  registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
+      {prefix + "rtrim"});
 
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
