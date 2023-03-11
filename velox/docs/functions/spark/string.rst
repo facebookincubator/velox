@@ -62,7 +62,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     is any character contained in ``trimCharacters``.
     ``trimCharacters`` can be empty and may contain duplicate characters. ::
 
-    SELECT ltrim('ps', 'spark'); -- "ark"
+        SELECT ltrim('ps', 'spark'); -- "ark"
 
 .. spark:function:: rtrim(string) -> varchar
 
@@ -76,7 +76,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     is any character contained in ``trimCharacters``.
     ``trimCharacters`` can be empty and may contain duplicate characters. ::
 
-    SELECT rtrim('kr', 'spark'); -- "spa"
+        SELECT rtrim('kr', 'spark'); -- "spa"
 
 .. spark:function:: split(string, delimiter) -> array(string)
 
@@ -132,7 +132,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     The specified character is any character contained in ``trimCharacters``.
     ``trimCharacters`` can be empty and may contain duplicate characters. ::
 
-    SELECT trim('sprk', 'spark'); -- "a"
+        SELECT trim('sprk', 'spark'); -- "a"
 
 .. spark:function:: upper(string) -> string
 
