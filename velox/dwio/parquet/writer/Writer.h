@@ -28,7 +28,9 @@ namespace facebook::velox::parquet {
 // Utility for capturing Arrow output into a DataBuffer.
 class DataBufferSink : public arrow::io::OutputStream {
  public:
-  explicit DataBufferSink(memory::MemoryPool& pool) : buffer_(pool) {}
+  explicit DataBufferSink(memory::MemoryPool& pool, uint64_t initialCapacity = 0) : buffer_(pool) {
+    buffer_.reserve(initialCapacity);
+  }
 
   arrow::Status Write(const std::shared_ptr<arrow::Buffer>& data) override {
     buffer_.append(

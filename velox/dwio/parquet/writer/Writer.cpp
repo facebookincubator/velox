@@ -31,7 +31,8 @@ void Writer::write(const RowVectorPtr& data) {
   auto table = arrow::Table::Make(
       recordBatch->schema(), recordBatch->columns(), data->size());
   if (!arrowWriter_) {
-    stream_ = std::make_shared<DataBufferSink>(pool_);
+    uint64_t kOneGB = 1 * (1024ul * 1024ul * 1024ul);
+    stream_ = std::make_shared<DataBufferSink>(pool_, 10 * kOneGB);
     auto arrowProperties = ::parquet::ArrowWriterProperties::Builder().build();
     PARQUET_THROW_NOT_OK(::parquet::arrow::FileWriter::Open(
         *recordBatch->schema(),

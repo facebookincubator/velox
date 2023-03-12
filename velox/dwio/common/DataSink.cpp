@@ -43,11 +43,15 @@ LocalFileSink::LocalFileSink(
 
 void LocalFileSink::write(std::vector<DataBuffer<char>>& buffers) {
   writeImpl(buffers, [&](auto& buffer) {
+    size_t oneGB = 1024ul * 1024ul * 1024ul;
     size_t size = buffer.size();
     size_t offset = 0;
+
     while (offset < size) {
       // Write system call can write fewer bytes than requested.
-      auto bytesWritten = ::write(file_, buffer.data() + offset, size - offset);
+      size_t maxBytesPerWrite = std::min(oneGB, size - offset);
+      auto bytesWritten =
+          ::write(file_, buffer.data() + offset, maxBytesPerWrite);
 
       // errno should only be accessed when the return value is -1.
       DWIO_ENSURE_NE(

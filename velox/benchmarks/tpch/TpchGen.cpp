@@ -111,7 +111,8 @@ void generateTable(tpch::Table table, const TpchGenerationParameters& params) {
 
     rowsInChunkToFlush += data->size();
     if (rowsInChunkToFlush >= params.rowsPerFlush) {
-      writer.flush();
+      // TODO: Figure out why flushing produces wrong data.
+      // writer.flush();
       rowsInChunkToFlush = 0;
       std::cout << "\rWritten rows " << rowCount << "/" << numRows
                 << " (offset: " << offset << ")" << std::flush;
@@ -134,12 +135,12 @@ int main(int argc, char** argv) {
       FLAGS_rows_per_row_group,
       FLAGS_rows_per_flush};
 
-  generateTable(tpch::Table::TBL_NATION, params);
   generateTable(tpch::Table::TBL_LINEITEM, params);
   generateTable(tpch::Table::TBL_ORDERS, params);
+  generateTable(tpch::Table::TBL_CUSTOMER, params);
+  generateTable(tpch::Table::TBL_NATION, params);
   generateTable(tpch::Table::TBL_PART, params);
   generateTable(tpch::Table::TBL_SUPPLIER, params);
   generateTable(tpch::Table::TBL_PARTSUPP, params);
-  generateTable(tpch::Table::TBL_CUSTOMER, params);
   generateTable(tpch::Table::TBL_REGION, params);
 }
