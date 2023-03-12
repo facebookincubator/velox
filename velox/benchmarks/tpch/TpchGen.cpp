@@ -10,10 +10,32 @@ using namespace facebook::velox;
 using facebook::velox::parquet::Writer;
 
 namespace {
+static bool notEmpty(const char* /*flagName*/, const std::string& value) {
+  return !value.empty();
+}
+} // namespace
 
-constexpr double kScaleFactor = 10;
-constexpr size_t kWriteBatchSize = 10'000;
-constexpr size_t kRowsInRowgroup = 10'000;
+DEFINE_int32(scale_factor, 1, "TPC-H scale factor to use.");
+DEFINE_int32(
+    rows_per_row_group,
+    10'000,
+    "Number of rows per row group in Parquet file.");
+DEFINE_int32(
+    rows_per_flush,
+    100'000,
+    "Minimum number of rows to buffer in memory before writing to disk.");
+DEFINE_string(data_dir, "", "Output directory to write data to.");
+
+DEFINE_validator(data_dir, &notEmpty);
+
+namespace {
+
+struct TpchGenerationParameters {
+  std::filesystem::path dataDirectory;
+  int32_t scaleFactor;
+  int32_t rowsPerGroup;
+  int32_t rowsPerFlush;
+};
 
 RowVectorPtr getTpchData(
     tpch::Table table,
@@ -44,29 +66,34 @@ RowVectorPtr getTpchData(
   }
 }
 
-void generateTable(
-    tpch::Table table,
-    const std::filesystem::path& dataDirectory) {
+void generateTable(tpch::Table table, const TpchGenerationParameters& params) {
   auto pool = memory::getDefaultMemoryPool();
   const std::string tableName = std::string{tpch::toTableName(table)};
 
-  const std::filesystem::path& tableDirectory = dataDirectory / tableName;
+  const std::filesystem::path& tableDirectory =
+      params.dataDirectory / tableName;
   std::filesystem::create_directories(tableDirectory);
   const std::filesystem::path& filePath = tableDirectory / "001.parquet";
 
   auto writerProperties = ::parquet::WriterProperties::Builder()
-                              .max_row_group_length(kRowsInRowgroup)
+                              .max_row_group_length(params.rowsPerGroup)
                               ->build();
   Writer writer{
-      dwio::common::DataSink::create(filePath), *pool, kRowsInRowgroup};
+      dwio::common::DataSink::create(filePath),
+      *pool,
+      params.rowsPerGroup,
+      writerProperties};
 
-  const uint64_t numRows = tpch::getRowCount(table, kScaleFactor);
+  const uint64_t numRows = tpch::getRowCount(table, params.scaleFactor);
 
   size_t offset = 0;
   uint64_t rowCount = 0;
+
+  uint64_t rowsInChunkToFlush = 0;
+
   while (rowCount < numRows) {
-    auto data =
-        getTpchData(table, kWriteBatchSize, offset, kScaleFactor, pool.get());
+    auto data = getTpchData(
+        table, params.rowsPerGroup, offset, params.scaleFactor, pool.get());
 
     if (offset == 0) {
       std::cout << std::endl
@@ -78,27 +105,41 @@ void generateTable(
     data->resize(
         std::min((numRows - rowCount), static_cast<uint64_t>(data->size())));
     writer.write(data);
-    offset += kWriteBatchSize;
+
+    offset += params.rowsPerGroup;
     rowCount += data->size();
 
-    std::cout << "written row (" << rowCount << "/"  << numRows << ")" << " (offset: " << offset << ")"
-              << std::endl;
+    rowsInChunkToFlush += data->size();
+    if (rowsInChunkToFlush >= params.rowsPerFlush) {
+      writer.flush();
+      rowsInChunkToFlush = 0;
+      std::cout << "\rWritten rows " << rowCount << "/" << numRows
+                << " (offset: " << offset << ")" << std::flush;
+    }
   }
   writer.close();
 }
 
 } // namespace
 
-int main() {
-  const std::filesystem::path dataDirectory = "/tmp/tpch-sf10-new";
+int main(int argc, char** argv) {
+  folly::init(&argc, &argv, false);
+
+  const std::filesystem::path dataDirectory = FLAGS_data_dir;
   std::filesystem::create_directories(dataDirectory);
 
-  generateTable(tpch::Table::TBL_LINEITEM, dataDirectory);
-  generateTable(tpch::Table::TBL_ORDERS, dataDirectory);
-  generateTable(tpch::Table::TBL_PART, dataDirectory);
-  generateTable(tpch::Table::TBL_SUPPLIER, dataDirectory);
-  generateTable(tpch::Table::TBL_PARTSUPP, dataDirectory);
-  generateTable(tpch::Table::TBL_CUSTOMER, dataDirectory);
-  generateTable(tpch::Table::TBL_NATION, dataDirectory);
-  generateTable(tpch::Table::TBL_REGION, dataDirectory);
+  TpchGenerationParameters params{
+      dataDirectory,
+      FLAGS_scale_factor,
+      FLAGS_rows_per_row_group,
+      FLAGS_rows_per_flush};
+
+  generateTable(tpch::Table::TBL_NATION, params);
+  generateTable(tpch::Table::TBL_LINEITEM, params);
+  generateTable(tpch::Table::TBL_ORDERS, params);
+  generateTable(tpch::Table::TBL_PART, params);
+  generateTable(tpch::Table::TBL_SUPPLIER, params);
+  generateTable(tpch::Table::TBL_PARTSUPP, params);
+  generateTable(tpch::Table::TBL_CUSTOMER, params);
+  generateTable(tpch::Table::TBL_REGION, params);
 }

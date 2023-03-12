@@ -88,6 +88,7 @@ class Writer {
   // Appends 'data' into the writer.
   void write(const RowVectorPtr& data);
 
+  // Flushes the in-memory buffer to the final 'sink'.
   void flush();
 
   // Forces a row group boundary before the data added by next write().

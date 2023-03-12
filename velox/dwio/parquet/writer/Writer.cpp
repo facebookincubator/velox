@@ -46,11 +46,7 @@ void Writer::write(const RowVectorPtr& data) {
 }
 
 void Writer::flush() {
-  if (arrowWriter_) {
-    PARQUET_THROW_NOT_OK(arrowWriter_->Close());
-    arrowWriter_.reset();
-    finalSink_->write(std::move(stream_->dataBuffer()));
-  }
+  finalSink_->write(std::move(stream_->dataBuffer()));
 }
 
 void Writer::newRowGroup(int32_t numRows) {
@@ -58,6 +54,10 @@ void Writer::newRowGroup(int32_t numRows) {
 }
 
 void Writer::close() {
+  if (arrowWriter_) {
+    PARQUET_THROW_NOT_OK(arrowWriter_->Close());
+    arrowWriter_.reset();
+  }
   flush();
   finalSink_->close();
 }
