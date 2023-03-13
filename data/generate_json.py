@@ -24,7 +24,7 @@ class JsonGen:
 
     def save(self, json_path):
         with open(json_path, "w") as f:
-            json.dump(self.__dict__, f, indent=4, ensure_ascii = False)
+            json.dump(self.__dict__, f, indent=4, ensure_ascii=False)
 
     def repeat(self, num):
         json_arr = []
@@ -41,10 +41,7 @@ class JsonGen:
 
 if __name__ == "__main__":
     data = {
-        "metadata": {
-            "result_type": "recent", 
-            "iso_language_code": "ja"
-        },
+        "metadata": {"result_type": "recent", "iso_language_code": "ja"},
         "created_at": "Sun Aug 31 00:29:15 +0000 2014",
         "id": 10000000000,
         "text": "@aym0566x \n\n名前:第一:なんか怖っ！\n今の印象:噛み合い\nところ:ぶすでキモいとこ😋✨✨\n思い出:んーーー、ありすぎ😊❤️\n",
@@ -56,19 +53,15 @@ if __name__ == "__main__":
             "name": "AYUMI",
             "screen_name": "ayuu0123",
             "location": "",
-            "entities": {
-              "description": {
-                "urls": []
-              }
-            }
+            "entities": {"description": {"urls": []}},
         },
         "followers_count": 262,
         "friends_count": 252,
         "listed_count": 0,
-        "created_at": "Sat Feb 16 13:40:25 +0000 2013"
+        "created_at": "Sat Feb 16 13:40:25 +0000 2013",
     }
 
-    repeat_num = [1,10,100,1000,10000]
+    repeat_num = [1, 10, 100, 1000, 10000]
     for i in repeat_num:
         OriJson = JsonGen(data)
         OriJson.repeat(i)
