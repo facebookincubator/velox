@@ -132,15 +132,6 @@ void SIMDJsonExtract(
 }
 
 BENCHMARK_DRAW_LINE();
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
-    expr,
-    VeloxJsonExtract,
-    SIMDJsonExtract,
-    100,
-    100B,
-    "$.statuses[0].metadata.result_type",
-    "$.statuses[0].metadata.result_type",
-    "$.statuses[0].metadata.result_type")
 
 JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
@@ -148,9 +139,9 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     SIMDJsonExtract,
     100,
     1K,
-    "$.statuses[0].metadata.result_type",
-    "$.statuses[0].truncated",
-    "$.statuses[0].in_reply_to_screen_name")
+    "$.statuses[0].friends_count",
+    "$.statuses[0].user.entities.description.urls",
+    "$.statuses[0].metadata.result_type")
 
 JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
@@ -159,8 +150,8 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     100,
     10K,
     "$.statuses[0].metadata.result_type",
-    "$.statuses[1].metadata.result_type",
-    "$.statuses[1].retweeted_status.user.profile_sidebar_border_color")
+    "$.statuses[5].metadata.result_type",
+    "$.statuses[9].metadata.result_type")
 
 JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
@@ -177,20 +168,20 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     VeloxJsonExtract,
     SIMDJsonExtract,
     100,
-    1M,
+    1000K,
     "$.statuses[0].metadata.result_type",
-    "$.statuses[141].metadata.result_type",
-    "$.search_metadata.since_id_str")
+    "$.statuses[500].metadata.result_type",
+    "$.statuses[999].metadata.result_type")
 
 JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SIMDJsonExtract,
     100,
-    10M,
+    10000K,
     "$.statuses[0].metadata.result_type",
-    "$.statuses[1442].metadata.result_type",
-    "$.search_metadata.since_id_str")
+    "$.statuses[5000].metadata.result_type",
+    "$.statuses[9999].metadata.result_type")
 
 BENCHMARK_DRAW_LINE();
 

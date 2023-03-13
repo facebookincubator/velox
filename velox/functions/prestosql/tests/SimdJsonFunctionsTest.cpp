@@ -74,23 +74,12 @@ class SIMDJsonFunctionsTest : public functions::test::FunctionBaseTest {
     return evaluateOnce<int64_t>("simd_json_array_length(c0)", json);
   }
 
-  std::optional<std::string> json_array_get(
-      std::optional<std::string> json,
-      std::optional<int64_t> index) {
-    return evaluateOnce<std::string>(
-        "simd_json_array_get(c0, c1)", json, index);
-  }
-
   std::optional<std::string> json_format(std::optional<std::string> json) {
     return evaluateOnce<std::string>("simd_json_format(c0)", json);
   }
 
   std::optional<std::string> json_keys(std::optional<std::string> json) {
     return evaluateOnce<std::string>("simd_json_keys(c0)", json);
-  }
-
-  std::optional<std::string> json_unquote(std::optional<std::string> json) {
-    return evaluateOnce<std::string>("simd_json_unquote(c0)", json);
   }
 };
 
