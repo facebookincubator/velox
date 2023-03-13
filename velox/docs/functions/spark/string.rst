@@ -44,12 +44,6 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT lower('SparkSql'); -- sparksql
 
-.. spark:function:: replace(string, search, replace) -> string
-
-    Replaces all occurrences of `search` with `replace`. ::
-
-        SELECT replace('ABCabc', 'abc', 'DEF'); -- ABCDEF
-
 .. spark:function:: ltrim(string) -> varchar
 
     Removes leading 0x20(space) characters from ``string``. ::
@@ -63,6 +57,12 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     ``trimCharacters`` can be empty and may contain duplicate characters. ::
 
         SELECT ltrim('ps', 'spark'); -- "ark"
+
+.. spark:function:: replace(string, search, replace) -> string
+
+    Replaces all occurrences of `search` with `replace`. ::
+
+        SELECT replace('ABCabc', 'abc', 'DEF'); -- ABCDEF
 
 .. spark:function:: rtrim(string) -> varchar
 
