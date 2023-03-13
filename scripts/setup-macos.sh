@@ -57,7 +57,13 @@ function prompt {
 }
 
 function update_brew {
-  /usr/local/bin/brew update --force --quiet
+  BREW_PATH=/usr/local/bin/brew
+  if [ `arch` == "arm64" ] ;
+     then
+       BREW_PATH=/opt/homebrew/bin/brew ;
+ fi
+  $BREW_PATH update --auto-update
+  $BREW_PATH developer off
 }
 
 function install_build_prerequisites {

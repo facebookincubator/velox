@@ -219,6 +219,7 @@ jobs:
               PATH=~/deps/bin:${PATH} DEPENDENCY_DIR=~/deps-src INSTALL_PREFIX=~/deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-macos.sh
               rm -rf ~/deps/.git ~/deps/Library/Taps/  # Reduce cache size by 70%.
             fi
+          no_output_timeout: 20m
       - save_cache:
           name: "Save Dependency Cache"
           # The version number in the key can be incremented
