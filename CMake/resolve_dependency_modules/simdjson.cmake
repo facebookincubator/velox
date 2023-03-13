@@ -32,4 +32,3 @@ FetchContent_Declare(
   URL_HASH SHA256=${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM})
 
 FetchContent_MakeAvailable(simdjson)
-

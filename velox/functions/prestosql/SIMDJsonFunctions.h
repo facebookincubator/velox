@@ -25,9 +25,8 @@ template <typename T>
 struct SIMDJsonArrayContainsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void 
+  FOLLY_ALWAYS_INLINE void
   call(bool& result, const arg_type<Json>& json, const TInput& value) {
-
     std::string jsonData(json);
     ParserContext ctx(jsonData.data(), jsonData.length());
     std::string jsonpath = "";
@@ -101,19 +100,17 @@ struct SIMDJsonParseFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& json) {
-
     std::string jsonData(json);
     ParserContext ctx(jsonData.data(), jsonData.length());
     bool retVal = false;
 
-    try{
+    try {
       ctx.parseElement();
       std::string_view rlt_tmp = simdjson::to_string(ctx.jsonEle);
       std::string rlt(rlt_tmp);
       UDFOutputString::assign(result, rlt);
       retVal = true;
-    } catch(simdjson::simdjson_error& e)
-    {
+    } catch (simdjson::simdjson_error& e) {
       VELOX_USER_FAIL("Cannot convert '{}' to JSON", jsonData);
     }
     return retVal;
@@ -128,7 +125,6 @@ struct SIMDJsonExtractScalarFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& json,
       const arg_type<Varchar>& jsonPath) {
-
     std::string jsonData(json);
     std::string jsonPathStr = jsonPath;
     bool retVal = false;
@@ -153,13 +149,14 @@ struct SIMDJsonValidFunction {
     std::string jsonData(json);
     ParserContext ctx(jsonData.data(), jsonData.length());
     std::string jsonpath = "";
-    
+
     try {
       ctx.parseElement();
       result = 1;
-    } catch(simdjson::simdjson_error& e)
-    {
-      printf("error: Failed to parse json as document. error :%s\n",simdjson::error_message(e.error()));
+    } catch (simdjson::simdjson_error& e) {
+      printf(
+          "error: Failed to parse json as document. error :%s\n",
+          simdjson::error_message(e.error()));
       result = 0;
     }
   }
@@ -171,16 +168,17 @@ struct SIMDJsonArrayLengthFunction {
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Json>& json) {
     std::string jsonData(json);
-    
+
     ParserContext ctx(jsonData.data(), jsonData.length());
     std::string jsonpath = "";
     bool retVal = false;
     do {
       try {
         ctx.parseDocument();
-      }
-      catch(simdjson::simdjson_error& e) {
-        printf("error: Failed to parse json as document. error :%s\n",simdjson::error_message(e.error()));
+      } catch (simdjson::simdjson_error& e) {
+        printf(
+            "error: Failed to parse json as document. error :%s\n",
+            simdjson::error_message(e.error()));
         break;
       }
 
@@ -189,17 +187,18 @@ struct SIMDJsonArrayLengthFunction {
       }
 
       result = 0;
-      try{
-        for (auto &&v : ctx.jsonDoc) {
+      try {
+        for (auto&& v : ctx.jsonDoc) {
           result++;
         }
         retVal = true;
         break;
+      } catch (simdjson::simdjson_error& e) {
+        printf(
+            "error: Failed to count array length. error :%s\n",
+            simdjson::error_message(e.error()));
       }
-      catch (simdjson::simdjson_error& e) {
-        printf("error: Failed to count array length. error :%s\n",simdjson::error_message(e.error()));
-      }
-    } while(0);
+    } while (0);
     return retVal;
   }
 };
@@ -218,9 +217,10 @@ struct SIMDJsonKeysFunction {
     do {
       try {
         ctx.parseDocument();
-      }
-      catch(simdjson::simdjson_error& e) {
-        printf("error: Failed to parse json as document. error :%s\n",simdjson::error_message(e.error()));
+      } catch (simdjson::simdjson_error& e) {
+        printf(
+            "error: Failed to parse json as document. error :%s\n",
+            simdjson::error_message(e.error()));
         break;
       }
 
@@ -231,22 +231,23 @@ struct SIMDJsonKeysFunction {
       std::string rlt = "[";
       int count = 0;
       int objCnt = ctx.jsonDoc.count_fields();
-      try{
-        for (auto &&field : ctx.jsonDoc.get_object()) {
+      try {
+        for (auto&& field : ctx.jsonDoc.get_object()) {
           std::string_view tmp = field.unescaped_key();
-          rlt += "\""+std::string(tmp)+"\"";
-          if(++count != objCnt) {
+          rlt += "\"" + std::string(tmp) + "\"";
+          if (++count != objCnt) {
             rlt += ",";
           }
         }
         rlt += "]";
         UDFOutputString::assign(result, rlt);
         retVal = true;
+      } catch (simdjson::simdjson_error& e) {
+        printf(
+            "error: Failed to find json key. error :%s\n",
+            simdjson::error_message(e.error()));
       }
-      catch (simdjson::simdjson_error& e) {
-        printf("error: Failed to find json key. error :%s\n",simdjson::error_message(e.error()));
-      }
-    } while(0);
+    } while (0);
     return retVal;
   }
 };

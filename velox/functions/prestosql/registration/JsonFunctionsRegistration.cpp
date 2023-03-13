@@ -60,10 +60,12 @@ void registerSIMDJsonFunctions() {
   registerFunction<SIMDJsonArrayContainsFunction, bool, Varchar, Varchar>(
       {"simd_json_array_contains"});
 
-  registerFunction<SIMDJsonParseFunction, Varchar, Varchar>({"simd_json_parse"});
+  registerFunction<SIMDJsonParseFunction, Varchar, Varchar>(
+      {"simd_json_parse"});
   registerFunction<SIMDJsonExtractScalarFunction, Varchar, Varchar, Varchar>(
       {"simd_json_extract_scalar"});
-  registerFunction<SIMDJsonValidFunction, int64_t, Varchar>({"simd_json_valid"});
+  registerFunction<SIMDJsonValidFunction, int64_t, Varchar>(
+      {"simd_json_valid"});
   {
     registerFunction<SIMDJsonArrayLengthFunction, int64_t, Varchar>(
         {"simd_json_array_length"});
@@ -72,7 +74,8 @@ void registerSIMDJsonFunctions() {
   }
   {
     registerFunction<SIMDJsonKeysFunction, Varchar, Json>({"simd_json_keys"});
-    registerFunction<SIMDJsonKeysFunction, Varchar, Varchar>({"simd_json_keys"});
+    registerFunction<SIMDJsonKeysFunction, Varchar, Varchar>(
+        {"simd_json_keys"});
   }
 }
 } // namespace facebook::velox::functions

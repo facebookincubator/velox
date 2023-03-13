@@ -1,3 +1,18 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
@@ -5,43 +20,29 @@
 namespace facebook::velox::functions::prestosql {
 namespace {
 
-const std::string kTestJson = std::string("{\n") +
-"    \"store\": {\n" +
-"        \"book\": [\n" +
-"            {\n" +
-"                \"category\": \"reference\",\n" +
-"                \"author\": \"Nigel Rees\",\n" +
-"                \"title\": \"Sayings of the Century\",\n" +
-"                \"price\": 8.95\n" +
-"            },\n" +
-"            {\n" +
-"                \"category\": \"fiction\",\n" +
-"                \"author\": \"Evelyn Waugh\",\n" +
-"                \"title\": \"Sword of Honour\",\n" +
-"                \"price\": 12.99\n" +
-"            },\n" +
-"            {\n" +
-"                \"category\": \"fiction\",\n" +
-"                \"author\": \"Herman Melville\",\n" +
-"                \"title\": \"Moby Dick\",\n" +
-"                \"isbn\": \"0-553-21311-3\",\n" +
-"                \"price\": 8.99\n" +
-"            },\n" +
-"            {\n" +
-"                \"category\": \"fiction\",\n" +
-"                \"author\": \"J. R. R. Tolkien\",\n" +
-"                \"title\": \"The Lord of the Rings\",\n" +
-"                \"isbn\": \"0-395-19395-8\",\n" +
-"                \"price\": 22.99\n" +
-"            }\n" +
-"        ],\n" +
-"        \"bicycle\": {\n" +
-"            \"color\": \"red\",\n" +
-"            \"price\": 19.95\n" +
-"        }\n" +
-"    },\n" +
-"    \"expensive\": 10\n" +
-"}";
+const std::string kTestJson = std::string("{\n") + "    \"store\": {\n" +
+    "        \"book\": [\n" + "            {\n" +
+    "                \"category\": \"reference\",\n" +
+    "                \"author\": \"Nigel Rees\",\n" +
+    "                \"title\": \"Sayings of the Century\",\n" +
+    "                \"price\": 8.95\n" + "            },\n" +
+    "            {\n" + "                \"category\": \"fiction\",\n" +
+    "                \"author\": \"Evelyn Waugh\",\n" +
+    "                \"title\": \"Sword of Honour\",\n" +
+    "                \"price\": 12.99\n" + "            },\n" +
+    "            {\n" + "                \"category\": \"fiction\",\n" +
+    "                \"author\": \"Herman Melville\",\n" +
+    "                \"title\": \"Moby Dick\",\n" +
+    "                \"isbn\": \"0-553-21311-3\",\n" +
+    "                \"price\": 8.99\n" + "            },\n" +
+    "            {\n" + "                \"category\": \"fiction\",\n" +
+    "                \"author\": \"J. R. R. Tolkien\",\n" +
+    "                \"title\": \"The Lord of the Rings\",\n" +
+    "                \"isbn\": \"0-395-19395-8\",\n" +
+    "                \"price\": 22.99\n" + "            }\n" + "        ],\n" +
+    "        \"bicycle\": {\n" + "            \"color\": \"red\",\n" +
+    "            \"price\": 19.95\n" + "        }\n" + "    },\n" +
+    "    \"expensive\": 10\n" + "}";
 
 }
 
@@ -76,7 +77,8 @@ class SIMDJsonFunctionsTest : public functions::test::FunctionBaseTest {
   std::optional<std::string> json_array_get(
       std::optional<std::string> json,
       std::optional<int64_t> index) {
-    return evaluateOnce<std::string>("simd_json_array_get(c0, c1)", json, index);
+    return evaluateOnce<std::string>(
+        "simd_json_array_get(c0, c1)", json, index);
   }
 
   std::optional<std::string> json_format(std::optional<std::string> json) {
@@ -102,13 +104,11 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsBool) {
       false);
   EXPECT_EQ(json_array_contains<bool>(R"(1)", true), false);
   EXPECT_EQ(
-      json_array_contains<bool>(R"("thefoxjumpedoverthefence")", false),
-      false);
+      json_array_contains<bool>(R"("thefoxjumpedoverthefence")", false), false);
   EXPECT_EQ(json_array_contains<bool>(R"("")", false), false);
   EXPECT_EQ(json_array_contains<bool>(R"(true)", true), false);
   EXPECT_EQ(
-      json_array_contains<bool>(R"({"k1":[0,1,2], "k2":"v1"})", true),
-      false);
+      json_array_contains<bool>(R"({"k1":[0,1,2], "k2":"v1"})", true), false);
 
   EXPECT_EQ(json_array_contains<bool>(R"([true, false])", true), true);
   EXPECT_EQ(json_array_contains<bool>(R"([true, true])", false), false);
@@ -162,13 +162,11 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsLong) {
       json_array_contains<int64_t>(R"([false, false, false])", 17), false);
   EXPECT_EQ(json_array_contains<int64_t>(R"(1)", 1), false);
   EXPECT_EQ(
-      json_array_contains<int64_t>(R"("thefoxjumpedoverthefence")", 1),
-      false);
+      json_array_contains<int64_t>(R"("thefoxjumpedoverthefence")", 1), false);
   EXPECT_EQ(json_array_contains<int64_t>(R"("")", 1), false);
   EXPECT_EQ(json_array_contains<int64_t>(R"(true)", 1), false);
   EXPECT_EQ(
-      json_array_contains<int64_t>(R"({"k1":[0,1,2], "k2":"v1"})", 1),
-      false);
+      json_array_contains<int64_t>(R"({"k1":[0,1,2], "k2":"v1"})", 1), false);
 
   EXPECT_EQ(json_array_contains<int64_t>(R"([1, 2, 3])", 1), true);
   EXPECT_EQ(json_array_contains<int64_t>(R"([1, 2, 3])", 4), false);
@@ -220,13 +218,11 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsDouble) {
       json_array_contains<double>(R"([false, false, false])", 2.3), false);
   EXPECT_EQ(json_array_contains<double>(R"(1)", 2.3), false);
   EXPECT_EQ(
-      json_array_contains<double>(R"("thefoxjumpedoverthefence")", 2.3),
-      false);
+      json_array_contains<double>(R"("thefoxjumpedoverthefence")", 2.3), false);
   EXPECT_EQ(json_array_contains<double>(R"("")", 2.3), false);
   EXPECT_EQ(json_array_contains<double>(R"(true)", 2.3), false);
   EXPECT_EQ(
-      json_array_contains<double>(R"({"k1":[0,1,2], "k2":"v1"})", 2.3),
-      false);
+      json_array_contains<double>(R"({"k1":[0,1,2], "k2":"v1"})", 2.3), false);
 
   EXPECT_EQ(json_array_contains<double>(R"([1.2, 2.3, 3.4])", 2.3), true);
   EXPECT_EQ(json_array_contains<double>(R"([1.2, 2.3, 3.4])", 2.4), false);
@@ -350,10 +346,8 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsString) {
   EXPECT_EQ(json_array_contains<std::string>("", "x"), false);
   EXPECT_EQ(json_array_contains<std::string>(R"(123)", "2.5"), false);
   EXPECT_EQ(json_array_contains<std::string>(R"([)", "8"), false);
-  EXPECT_EQ(
-      json_array_contains<std::string>(R"([1,0,])", "true"), false);
-  EXPECT_EQ(
-      json_array_contains<std::string>(R"([1,,0])", "true"), false);
+  EXPECT_EQ(json_array_contains<std::string>(R"([1,0,])", "true"), false);
+  EXPECT_EQ(json_array_contains<std::string>(R"([1,,0])", "true"), false);
 }
 
 TEST_F(SIMDJsonFunctionsTest, jsonParse) {
@@ -416,7 +410,8 @@ TEST_F(SIMDJsonFunctionsTest, jsonExtractScalar) {
 
   // invalid JsonPath
   EXPECT_THROW(json_extract_scalar(R"({"":""})", ""), VeloxUserError);
-  EXPECT_THROW(json_extract_scalar(R"([1,2,3])", "$...invalid"), VeloxUserError);
+  EXPECT_THROW(
+      json_extract_scalar(R"([1,2,3])", "$...invalid"), VeloxUserError);
 }
 
 TEST_F(SIMDJsonFunctionsTest, jsonValid) {

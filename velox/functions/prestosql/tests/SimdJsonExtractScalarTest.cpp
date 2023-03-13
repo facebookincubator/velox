@@ -141,8 +141,7 @@ TEST_F(SIMDJsonExtractScalarTest, utf8) {
 
 TEST_F(SIMDJsonExtractScalarTest, invalidPath) {
   assertUserError(
-      [&]() { json_extract_scalar(R"([0,1,2])", ""); },
-      "Invalid JSON path: ");
+      [&]() { json_extract_scalar(R"([0,1,2])", ""); }, "Invalid JSON path: ");
   assertUserError(
       [&]() { json_extract_scalar(R"([0,1,2])", "$[]"); },
       "Invalid JSON path: $[]");

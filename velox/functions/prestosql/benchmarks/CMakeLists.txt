@@ -163,11 +163,11 @@ target_link_libraries(velox_functions_prestosql_benchmarks_cardinality
                       ${BENCHMARK_DEPENDENCIES})
 
 add_executable(simd_functions_benchmarks_json_function
-  JsonFunctionBenchmark.cpp)
+               JsonFunctionBenchmark.cpp)
 target_link_libraries(simd_functions_benchmarks_json_function
-  ${BENCHMARK_DEPENDENCIES})
+                      ${BENCHMARK_DEPENDENCIES})
 
 add_executable(simd_functions_benchmarks_json_function_with_expr
-  JsonExprBenchmark.cpp)
+               JsonExprBenchmark.cpp)
 target_link_libraries(simd_functions_benchmarks_json_function_with_expr
-  ${BENCHMARK_DEPENDENCIES})
+                      ${BENCHMARK_DEPENDENCIES})

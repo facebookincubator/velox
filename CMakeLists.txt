@@ -488,6 +488,5 @@ include_directories(.)
 # generates an installable makefile.
 install(FILES velox/type/Type.h DESTINATION "include/velox")
 
-
 add_subdirectory(third_party)
 add_subdirectory(velox)
