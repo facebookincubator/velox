@@ -681,7 +681,8 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
             ioStats_->ramHit().bytes(), RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
         RuntimeCounter(
-            ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)}});
+            ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       {"queryThreadIoLatency", RuntimeCounter(ioStats_->queryThreadIoLatency().count())}});
   return res;
 }
 
