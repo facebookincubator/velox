@@ -27,8 +27,7 @@ struct SIMDJsonArrayContainsFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void
   call(bool& result, const arg_type<Json>& json, const TInput& value) {
-    std::string jsonData(json);
-    ParserContext ctx(jsonData.data(), jsonData.length());
+    ParserContext ctx(json.data(), json.size());
     std::string jsonpath = "";
     result = false;
 
@@ -100,8 +99,7 @@ struct SIMDJsonParseFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& json) {
-    std::string jsonData(json);
-    ParserContext ctx(jsonData.data(), jsonData.length());
+    ParserContext ctx(json.data(), json.size());
     bool retVal = false;
 
     try {
@@ -111,7 +109,7 @@ struct SIMDJsonParseFunction {
       UDFOutputString::assign(result, rlt);
       retVal = true;
     } catch (simdjson::simdjson_error& e) {
-      VELOX_USER_FAIL("Cannot convert '{}' to JSON", jsonData);
+      VELOX_USER_FAIL("Cannot convert '{}' to JSON", json);
     }
     return retVal;
   }
@@ -125,11 +123,10 @@ struct SIMDJsonExtractScalarFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& json,
       const arg_type<Varchar>& jsonPath) {
-    std::string jsonData(json);
     std::string jsonPathStr = jsonPath;
     bool retVal = false;
 
-    auto extractResult = SimdJsonExtractScalar(jsonData, jsonPathStr);
+    auto extractResult = SimdJsonExtractScalar(json, jsonPathStr);
 
     if (extractResult.has_value()) {
       UDFOutputString::assign(result, extractResult.value());
@@ -146,8 +143,7 @@ struct SIMDJsonValidFunction {
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Varchar>& json) {
-    std::string jsonData(json);
-    ParserContext ctx(jsonData.data(), jsonData.length());
+    ParserContext ctx(json.data(), json.size());
     std::string jsonpath = "";
 
     try {
@@ -167,9 +163,7 @@ struct SIMDJsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Json>& json) {
-    std::string jsonData(json);
-
-    ParserContext ctx(jsonData.data(), jsonData.length());
+    ParserContext ctx(json.data(), json.size());
     std::string jsonpath = "";
     bool retVal = false;
     do {
@@ -210,8 +204,7 @@ struct SIMDJsonKeysFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Json>& json) {
-    std::string jsonData(json);
-    ParserContext ctx(jsonData.data(), jsonData.length());
+    ParserContext ctx(json.data(), json.size());
     bool retVal = false;
 
     do {
