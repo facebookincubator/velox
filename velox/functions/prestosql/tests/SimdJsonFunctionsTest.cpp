@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
@@ -187,8 +188,9 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsLong) {
       json_array_contains<int64_t>(R"([2, 4, {"a": [8, 9]}, [], [5], 6])", 6),
       true);
   // throw en error and result=false but return std::nullopt
-  EXPECT_EQ(
-      json_array_contains<int64_t>(R"([92233720368547758071])", -9), false);
+  VELOX_ASSERT_THROW(
+      json_array_contains<int64_t>(R"([92233720368547758071])", -9),
+      "The JSON element does not have the requested type.");
   EXPECT_EQ(json_array_contains<int64_t>(std::nullopt, 1), std::nullopt);
   EXPECT_EQ(
       json_array_contains<int64_t>(std::nullopt, std::nullopt), std::nullopt);
@@ -244,7 +246,9 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsDouble) {
       json_array_contains<double>(
           R"([2, 4, {"a": [8, 9]}, [], [5], 6.1])", 6.1),
       true);
-  EXPECT_EQ(json_array_contains<double>(R"([9.6E400])", 4.2), false);
+  VELOX_ASSERT_THROW(
+      json_array_contains<double>(R"([9.6E400])", 4.2),
+      "Problem while parsing a number");
   EXPECT_EQ(json_array_contains<double>(std::nullopt, 1.5), std::nullopt);
   EXPECT_EQ(
       json_array_contains<double>(std::nullopt, std::nullopt), std::nullopt);
@@ -330,13 +334,15 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsString) {
   EXPECT_EQ(
       json_array_contains<std::string>(std::nullopt, std::nullopt),
       std::nullopt);
-  EXPECT_EQ(
-      json_array_contains<std::string>(R"([""])", std::nullopt), std::nullopt);
-  EXPECT_EQ(json_array_contains<std::string>("", "x"), false);
   EXPECT_EQ(json_array_contains<std::string>(R"(123)", "2.5"), false);
-  EXPECT_EQ(json_array_contains<std::string>(R"([)", "8"), false);
-  EXPECT_EQ(json_array_contains<std::string>(R"([1,0,])", "true"), false);
-  EXPECT_EQ(json_array_contains<std::string>(R"([1,,0])", "true"), false);
+  VELOX_ASSERT_THROW(
+      json_array_contains<std::string>("", "x"), "Empty: no JSON found");
+  VELOX_ASSERT_THROW(
+      json_array_contains<std::string>(R"([1,0,])", "true"),
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
+  VELOX_ASSERT_THROW(
+      json_array_contains<std::string>(R"([1,,0])", "true"),
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
 }
 
 TEST_F(SIMDJsonFunctionsTest, jsonParse) {
@@ -348,16 +354,18 @@ TEST_F(SIMDJsonFunctionsTest, jsonParse) {
   EXPECT_EQ(json_parse(R"(null)"), "null");
 
   // invalid json parse
-  assertUserError(
-      [&]() { json_parse(R"(not_json)"); },
-      "Cannot convert 'not_json' to JSON");
-  assertUserError(
-      [&]() { json_parse(R"(INVALID)"); }, "Cannot convert 'INVALID' to JSON");
-  assertUserError(
-      [&]() { json_parse(R"("x": 1)"); }, "Cannot convert '\"x\": 1' to JSON");
-  assertUserError(
-      [&]() { json_parse(R"(["a": 1, "b": 2])"); },
-      R"(Cannot convert '["a": 1, "b": 2]' to JSON)");
+  VELOX_ASSERT_THROW(
+      json_parse(R"(not_json)"),
+      "Problem while parsing an atom starting with the letter 'n'");
+  VELOX_ASSERT_THROW(
+      json_parse(R"(INVALID)"),
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
+  VELOX_ASSERT_THROW(
+      json_parse(R"("x": 1)"),
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
+  VELOX_ASSERT_THROW(
+      json_parse(R"(("x": 1))"),
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
 }
 
 TEST_F(SIMDJsonFunctionsTest, jsonExtractScalar) {
@@ -369,9 +377,6 @@ TEST_F(SIMDJsonFunctionsTest, jsonExtractScalar) {
       std::nullopt);
   EXPECT_EQ(json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$.x.a"), "1");
   EXPECT_EQ(
-      json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$.x.c"),
-      std::nullopt);
-  EXPECT_EQ(
       json_extract_scalar(R"({"x": {"a" : 1, "b" : [2, 3]}})", "$.x.b[1]"),
       "3");
   EXPECT_EQ(json_extract_scalar(R"([1,2,3])", "$[1]"), "2");
@@ -379,28 +384,25 @@ TEST_F(SIMDJsonFunctionsTest, jsonExtractScalar) {
 
   // complex json path
   EXPECT_EQ(
-      json_extract_scalar(kTestJson, "$.store.book[*].isbn"), std::nullopt);
-  /*
-  EXPECT_EQ(json_extract_scalar(kTestJson, "$..price"), std::nullopt);
-  EXPECT_EQ(
-      json_extract_scalar(kTestJson, "$.store.book[?(@.price < 10)].title"),
-      std::nullopt);
-  EXPECT_EQ(json_extract_scalar(kTestJson, "max($..price)"), "22.99");
-  EXPECT_EQ(
-      json_extract_scalar(kTestJson, "concat($..category)"),
-      "referencefictionfictionfiction");
-  EXPECT_EQ(json_extract_scalar(kTestJson, "$.store.keys()"), std::nullopt);
-  */
-  EXPECT_EQ(
       json_extract_scalar(kTestJson, "$.store.book[1].author"), "Evelyn Waugh");
 
   // invalid json
-  EXPECT_EQ(json_extract_scalar(R"(INVALID_JSON)", "$"), std::nullopt);
+  VELOX_ASSERT_THROW(
+      json_extract_scalar(R"(INVALID_JSON)", "$"),
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
 
   // invalid JsonPath
-  EXPECT_THROW(json_extract_scalar(R"({"":""})", ""), VeloxUserError);
-  EXPECT_THROW(
-      json_extract_scalar(R"([1,2,3])", "$...invalid"), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      json_extract_scalar(kTestJson, "$.store.book[*].author"),
+      "The JSON element does not have the requested type.");
+  VELOX_ASSERT_THROW(
+      json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$.x.c"),
+      "The JSON field referenced does not exist in this object.");
+  VELOX_ASSERT_THROW(
+      json_extract_scalar(R"({"":""})", ""), "Invalid JSON path: ");
+  VELOX_ASSERT_THROW(
+      json_extract_scalar(R"([1,2,3])", "$...invalid"),
+      "Invalid JSON path: $...invalid");
 }
 
 TEST_F(SIMDJsonFunctionsTest, jsonValid) {

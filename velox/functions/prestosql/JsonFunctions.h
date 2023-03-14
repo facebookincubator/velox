@@ -51,7 +51,6 @@ struct JsonExtractScalarFunction {
     if (extractResult.hasValue()) {
       UDFOutputString::assign(result, *extractResult);
       return true;
-
     } else {
       return false;
     }

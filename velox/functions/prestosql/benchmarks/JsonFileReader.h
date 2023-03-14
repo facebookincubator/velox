@@ -36,7 +36,8 @@ std::string getDataPath(const std::string& fileSize) {
   boost::algorithm::replace_all(currentPath, "cmake-build-release/", "");
   boost::algorithm::replace_all(currentPath, "cmake-build-debug/", "");
 
-  return currentPath + "/data/twitter_" + fileSize + ".json";
+  return currentPath + "/velox/functions/prestosql/json/tests/data/twitter_" +
+      fileSize + ".json";
 }
 
 } // namespace

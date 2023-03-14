@@ -136,10 +136,7 @@ std::optional<std::string> SimdJsonExtractor::extractScalar(
   try {
     ctx.parseDocument();
   } catch (simdjson::simdjson_error& e) {
-    printf(
-        "error: Failed to parse json as document. error :%s\n",
-        simdjson::error_message(e.error()));
-    return std::nullopt;
+    throw e;
   }
 
   for (auto& token : tokens_) {
@@ -167,10 +164,7 @@ std::optional<std::string> SimdJsonExtractor::extractScalar(
         return std::nullopt;
       }
     } catch (simdjson::simdjson_error& e) {
-      printf(
-          "error: Failed to find jsonpath at json object. error :%s\n",
-          simdjson::error_message(e.error()));
-      return std::nullopt;
+      throw e;
     }
   }
   std::string rlt_s{rlt_tmp};
@@ -183,10 +177,7 @@ std::optional<std::string> SimdJsonExtractor::extract(const std::string& json) {
   try {
     ctx.parseElement();
   } catch (simdjson::simdjson_error& e) {
-    printf(
-        "error: Failed to parse json as document. error :%s\n",
-        simdjson::error_message(e.error()));
-    return std::nullopt;
+    throw e;
   }
 
   std::optional<std::string> rlt;
@@ -229,10 +220,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromObject(
       rlt_string = std::optional<std::string>(std::string(tmp));
     }
   } catch (simdjson::simdjson_error& e) {
-    printf(
-        "extractFromObject json failed, error: %s",
-        simdjson::error_message(e.error()));
-    return std::nullopt;
+    throw e;
   }
   return rlt_string;
 }
@@ -300,7 +288,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromArray(
         return std::string(tmp);
       }
     } catch (simdjson::simdjson_error& e) {
-      return std::nullopt;
+      throw e;
     }
     return rlt_string;
   }
@@ -313,10 +301,7 @@ std::optional<std::string> SimdJsonExtractor::extractOndemand(
   try {
     ctx.parseDocument();
   } catch (simdjson::simdjson_error& e) {
-    printf(
-        "error: Failed to parse json as document. error :%s\n",
-        simdjson::error_message(e.error()));
-    return std::nullopt;
+    throw e;
   }
 
   std::optional<std::string> rlt;
@@ -341,10 +326,7 @@ std::optional<std::string> SimdJsonExtractor::extractKeysOndemand(
   try {
     ctx.parseDocument();
   } catch (simdjson::simdjson_error& e) {
-    printf(
-        "error: Failed to parse json as document. error :%s\n",
-        simdjson::error_message(e.error()));
-    return std::nullopt;
+    throw e;
   }
   for (auto& token : tokens_) {
     jsonpath = jsonpath + "/" + token;
@@ -371,10 +353,7 @@ std::optional<std::string> SimdJsonExtractor::extractKeysOndemand(
     rlt += "]";
     return rlt;
   } catch (simdjson::simdjson_error& e) {
-    printf(
-        "error: Failed to find json key. error :%s\n",
-        simdjson::error_message(e.error()));
-    return std::nullopt;
+    throw e;
   }
   return std::nullopt;
 }
@@ -408,7 +387,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromObjectOndemand(
       rlt_string = std::optional<std::string>(std::string(tmp));
     }
   } catch (simdjson::simdjson_error& e) {
-    return std::nullopt;
+    throw e;
   }
   return rlt_string;
 }
@@ -481,7 +460,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromArrayOndemand(
         return std::string(tmp);
       }
     } catch (simdjson::simdjson_error& e) {
-      return std::nullopt;
+      throw e;
     }
     return rlt_string;
   }
@@ -500,8 +479,7 @@ std::optional<std::string> SimdJsonExtract(
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extract(json);
   } catch (const simdjson::simdjson_error& e) {
-    printf(
-        "extract json failed, error: %s", simdjson::error_message(e.error()));
+    throw e;
   }
   return std::nullopt;
 }
@@ -517,9 +495,7 @@ std::optional<std::string> SimdJsonExtractOndemand(
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extractOndemand(json);
   } catch (const simdjson::simdjson_error& e) {
-    printf(
-        "extractOndemand json failed, error: %s",
-        simdjson::error_message(e.error()));
+    throw e;
   }
   return std::nullopt;
 }
@@ -535,9 +511,7 @@ std::optional<std::string> SimdJsonExtractScalar(
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extractScalar(json);
   } catch (const simdjson::simdjson_error& e) {
-    printf(
-        "extractScalar json failed, error: %s",
-        simdjson::error_message(e.error()));
+    throw e;
   }
   return std::nullopt;
 }
@@ -553,9 +527,7 @@ std::optional<std::string> SimdJsonKeysWithJsonPathOndemand(
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extractKeysOndemand(json);
   } catch (const simdjson::simdjson_error& e) {
-    printf(
-        "extractKeysOndemand json failed, error: %s",
-        simdjson::error_message(e.error()));
+    throw e;
   }
   return std::nullopt;
 }

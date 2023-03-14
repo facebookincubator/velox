@@ -58,7 +58,7 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
   JsonBenchmark() : FunctionBenchmarkBase() {
     velox::functions::prestosql::registerJsonFunctions();
     velox::functions::prestosql::registerSIMDJsonFunctions();
-    registerFunction<JsonExtractFunction, Varchar, Json, Varchar>(
+    registerFunction<JsonExtractFunction, Varchar, Varchar, Varchar>(
         {"json_extract"});
   }
 

@@ -162,12 +162,12 @@ add_executable(velox_functions_prestosql_benchmarks_cardinality
 target_link_libraries(velox_functions_prestosql_benchmarks_cardinality
                       ${BENCHMARK_DEPENDENCIES})
 
-add_executable(simd_functions_benchmarks_json_function
+add_executable(velox_functions_benchmarks_simdjson_function
                JsonFunctionBenchmark.cpp)
-target_link_libraries(simd_functions_benchmarks_json_function
+target_link_libraries(velox_functions_benchmarks_simdjson_function
                       ${BENCHMARK_DEPENDENCIES})
 
-add_executable(simd_functions_benchmarks_json_function_with_expr
+add_executable(velox_functions_benchmarks_simdjson_function_with_expr
                JsonExprBenchmark.cpp)
-target_link_libraries(simd_functions_benchmarks_json_function_with_expr
+target_link_libraries(velox_functions_benchmarks_simdjson_function_with_expr
                       ${BENCHMARK_DEPENDENCIES})

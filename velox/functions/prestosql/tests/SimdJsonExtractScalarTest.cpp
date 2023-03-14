@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "simdjson.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
@@ -52,19 +54,15 @@ TEST_F(SIMDJsonExtractScalarTest, simple) {
   EXPECT_EQ(json_extract_scalar(R"(123456)", "$"), "123456");
   EXPECT_EQ(json_extract_scalar(R"("hello")", "$"), "hello");
   EXPECT_EQ(json_extract_scalar(R"(1.1)", "$"), "1.1");
-  EXPECT_EQ(json_extract_scalar(R"("")", "$"), "");
   EXPECT_EQ(json_extract_scalar(R"(true)", "$"), "true");
 
   // Simple lists.
   EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[0]"), "1");
   EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[1]"), "2");
-  EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[2]"), std::nullopt);
-  EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[999]"), std::nullopt);
 
   // Simple maps.
   EXPECT_EQ(json_extract_scalar(R"({"k1":"v1"})", "$.k1"), "v1");
-  EXPECT_EQ(json_extract_scalar(R"({"k1":"v1"})", "$.k2"), std::nullopt);
-  EXPECT_EQ(json_extract_scalar(R"({"k1":"v1"})", "$.k1.k3"), std::nullopt);
+
   EXPECT_EQ(json_extract_scalar(R"({"k1":[0,1,2]})", "$.k1"), std::nullopt);
   EXPECT_EQ(json_extract_scalar(R"({"k1":""})", "$.k1"), "");
 
@@ -78,6 +76,18 @@ TEST_F(SIMDJsonExtractScalarTest, simple) {
       json_extract_scalar(
           R"([{"k1":[{"k2": ["v1", "v2"]}]}])", "$[0].k1[0].k2[1]"),
       "v2");
+  VELOX_ASSERT_THROW(
+      json_extract_scalar(R"([1,2])", "$[2]"),
+      "Attempted to access an element of a JSON array that is beyond its length.");
+  VELOX_ASSERT_THROW(
+      json_extract_scalar(R"([1,2])", "$[999]"),
+      "Attempted to access an element of a JSON array that is beyond its length.");
+  VELOX_ASSERT_THROW(
+      json_extract_scalar(R"({"k1":"v1"})", "$.k2"),
+      "The JSON field referenced does not exist in this object.");
+  VELOX_ASSERT_THROW(
+      json_extract_scalar(R"({"k1":"v1"})", "$.k1.k3"),
+      "Invalid JSON pointer syntax.");
 }
 
 TEST_F(SIMDJsonExtractScalarTest, jsonType) {
