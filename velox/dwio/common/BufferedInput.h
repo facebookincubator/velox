@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/DataBuffer.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamIdentifier.h"
 
@@ -24,23 +25,25 @@ namespace facebook::velox::dwio::common {
 
 class BufferedInput {
  public:
-  constexpr static uint64_t kMaxMergeDistance = 1024 * 1024 * 1.25;
-
   BufferedInput(
       std::shared_ptr<ReadFile> readFile,
       memory::MemoryPool& pool,
+      folly::Executor* FOLLY_NULLABLE executor = nullptr,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* FOLLY_NULLABLE stats = nullptr)
       : input_{std::make_shared<ReadFileInputStream>(
             std::move(readFile),
             metricsLog,
+            executor,
             stats)},
-        pool_{pool} {}
+        pool_{pool},
+        executor_(executor) {}
 
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
-      memory::MemoryPool& pool)
-      : input_(std::move(input)), pool_(pool) {}
+      memory::MemoryPool& pool,
+      folly::Executor* FOLLY_NULLABLE executor = nullptr)
+      : input_(std::move(input)), pool_(pool), executor_(executor) {}
 
   BufferedInput(BufferedInput&&) = default;
   virtual ~BufferedInput() = default;
@@ -104,7 +107,7 @@ class BufferedInput {
   // Create a new (clean) instance of BufferedInput sharing the same underlying
   // file and memory pool.  The enqueued regions are NOT copied.
   virtual std::unique_ptr<BufferedInput> clone() const {
-    return std::make_unique<BufferedInput>(input_, pool_);
+    return std::make_unique<BufferedInput>(input_, pool_, executor_);
   }
 
   const std::shared_ptr<ReadFile>& getReadFile() const {
@@ -117,12 +120,13 @@ class BufferedInput {
   }
 
   virtual folly::Executor* FOLLY_NULLABLE executor() const {
-    return nullptr;
+    return executor_;
   }
 
  protected:
   std::shared_ptr<ReadFileInputStream> input_;
   memory::MemoryPool& pool_;
+  folly::Executor* const FOLLY_NULLABLE executor_;
 
  private:
   std::vector<uint64_t> offsets_;

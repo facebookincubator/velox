@@ -189,6 +189,7 @@ class ReadFileInputStream final : public InputStream {
   explicit ReadFileInputStream(
       std::shared_ptr<velox::ReadFile>,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
+      folly::Executor* FOLLY_NULLABLE executor = nullptr,
       IoStatistics* FOLLY_NULLABLE stats = nullptr);
 
   virtual ~ReadFileInputStream() {}
@@ -215,12 +216,23 @@ class ReadFileInputStream final : public InputStream {
 
   bool hasReadAsync() const override;
 
+  void vread(
+      const std::vector<void*>& buffers,
+      const std::vector<Region>& regions,
+      const LogType purpose) override;
+
   const std::shared_ptr<velox::ReadFile>& getReadFile() const {
     return readFile_;
   }
 
  private:
   std::shared_ptr<velox::ReadFile> readFile_;
+  folly::Executor* const FOLLY_NULLABLE executor_;
+
+  void splitRange(
+      const uint64_t length,
+      const int32_t loadQuantum,
+      std::vector<std::tuple<uint64_t, uint64_t>>& range);
 };
 
 class ReferenceableInputStream : public InputStream {

@@ -17,12 +17,8 @@
 #include "velox/connectors/hive/HiveConnector.h"
 
 #include "velox/common/base/Fs.h"
-#include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/FieldReference.h"
-#include "velox/type/Conversions.h"
-#include "velox/type/Type.h"
-#include "velox/type/Variant.h"
 
 #include <boost/lexical_cast.hpp>
 
@@ -420,6 +416,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     input = std::make_unique<dwio::common::BufferedInput>(
         fileHandle_->file,
         readerOpts_.getMemoryPool(),
+        executor_,
         dwio::common::MetricsLog::voidLog(),
         ioStats_.get());
   }
