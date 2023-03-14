@@ -60,16 +60,12 @@ class AllMatchFunction : public exec::VectorFunction {
     exec::LocalDecodedVector bitsDecoder(context);
     auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
 
-    // Turn off the ThrowOnError flag and reset errors in the
-    // context to nullptr, so we only handle errors in this function itself.
-    auto topLevelThrowOnError = context.throwOnError();
-    ScopedVarSetter throwOnError(context.mutableThrowOnError(), false);
     while (auto entry = it.next()) {
       auto elementRows =
           toElementRows<ArrayVector>(numElements, *entry.rows, flatArray.get());
       auto wrapCapture = toWrapCapture<ArrayVector>(
           numElements, entry.callable, *entry.rows, flatArray);
-      entry.callable->apply(
+      entry.callable->applyNoThrowError(
           elementRows,
           finalSelection,
           wrapCapture,
@@ -101,11 +97,7 @@ class AllMatchFunction : public exec::VectorFunction {
         if (!allMatch) {
           flatResult->set(row, false);
         } else if (context.hasError(row)) {
-          if (topLevelThrowOnError) {
-            context.throwOnError(row);
-          } else {
-            context.setError(row, context.getError(row));
-          }
+          context.setError(row, context.getError(row));
         } else if (hasNull) {
           flatResult->setNull(row, true);
         } else {

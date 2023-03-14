@@ -153,13 +153,14 @@ TEST_F(ArrayAllMatchTest, errorReThrow) {
 TEST_F(ArrayAllMatchTest, withTrys) {
   auto result = evaluate<SimpleVector<bool>>(
       "TRY(all_match(c0, x -> ((10 / x) > 2)))",
-      makeRowVector({makeNullableArrayVector<int8_t>({{1, 0}})}));
-  auto expectedResult = makeNullableFlatVector<bool>({std::nullopt});
+      makeRowVector({makeNullableArrayVector<int8_t>({{1, 0}, {2}, {6}})}));
+  auto expectedResult =
+      makeNullableFlatVector<bool>({std::nullopt, true, false});
   assertEqualVectors(expectedResult, result);
 
   result = evaluate<SimpleVector<bool>>(
       "all_match(c0, x -> (TRY((10 / x) > 2)))",
-      makeRowVector({makeArrayVector<int8_t>({{1, 0}})}));
-  expectedResult = makeNullableFlatVector<bool>({std::nullopt});
+      makeRowVector({makeArrayVector<int8_t>({{1, 0}, {1}, {6}})}));
+  expectedResult = makeNullableFlatVector<bool>({std::nullopt, true, false});
   assertEqualVectors(expectedResult, result);
 }
