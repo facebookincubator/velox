@@ -184,7 +184,7 @@ executors:
       - image : ghcr.io/facebookincubator/velox-dev:check-avx
   macos-intel:
     macos:
-      xcode: "12.5.1"
+      xcode: "14.2.0"
     resource_class: large
   macos-m1:
     macos:
@@ -210,7 +210,7 @@ jobs:
           # If you update it, be sure to update save_cache too.
           key: velox-circleci-macos-{{ arch }}-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
       - run:
-          name: "Install dependencies"
+          name: "Install dependencies "
           command: |
             set -xu
             if [[ ! -e ~/deps ]]; then
