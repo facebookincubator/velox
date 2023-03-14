@@ -68,11 +68,7 @@ class CachedBufferedInput : public BufferedInput {
       folly::Executor* FOLLY_NULLABLE executor,
       int32_t loadQuantum,
       int32_t maxCoalesceDistance)
-      : BufferedInput(
-            std::move(readFile),
-            pool,
-            executor,
-            metricsLog),
+      : BufferedInput(std::move(readFile), pool, executor, metricsLog),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
