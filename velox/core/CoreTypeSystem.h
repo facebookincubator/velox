@@ -34,15 +34,15 @@ struct StringWriter : public UDFOutputString {
     setData(storage_.data());
   }
 
-  /* implicit */ StringWriter(StringView /*value*/) {
+  /* implicit */ [[noreturn]] StringWriter(StringView /*value*/) {
     VELOX_NYI();
   }
 
-  void setEmpty() {
+  [[noreturn]] void setEmpty() {
     VELOX_FAIL("setEmpty is not implemented");
   }
 
-  void setNoCopy(StringView /*value*/) {
+  [[noreturn]] void setNoCopy(StringView /*value*/) {
     VELOX_FAIL("setNoCopy is not implemented");
   }
 
