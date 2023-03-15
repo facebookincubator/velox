@@ -21,7 +21,7 @@ else()
       "https://github.com/google/re2/archive/refs/tags/${VELOX_RE2_VERSION}.tar.gz"
   )
   set(VELOX_RE2_BUILD_SHA256_CHECKSUM
-  9c1e6acfd0fed71f40b025a7a1dabaf3ee2ebb74d64ced1f9ee1b0b01d22fd27)
+      9c1e6acfd0fed71f40b025a7a1dabaf3ee2ebb74d64ced1f9ee1b0b01d22fd27)
 endif()
 
 message(STATUS "Building re2 from source")

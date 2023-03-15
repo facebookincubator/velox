@@ -16,7 +16,9 @@ include_guard(GLOBAL)
 if(DEFINED ENV{VELOX_BOOST_URL})
   set(BOOST_SOURCE_URL "$ENV{VELOX_BOOST_URL}")
 else()
-  # We need to use boost > 1.70 to build it with CMake
+  # We need to use boost > 1.70 to build it with CMake 1.81 was the first to be
+  # released as a github release INCLUDING the cmake files (which are not in the
+  # officale releases for some reason)
   set(VELOX_BOOST_BUILD_VERSION 1.81.0)
   string(
     CONCAT BOOST_SOURCE_URL
@@ -24,7 +26,7 @@ else()
            "boost-${VELOX_BOOST_BUILD_VERSION}/"
            "boost-${VELOX_BOOST_BUILD_VERSION}.tar.gz")
   set(VELOX_BOOST_BUILD_SHA256_CHECKSUM
-  121da556b718fd7bd700b5f2e734f8004f1cfa78b7d30145471c526ba75a151c)
+      121da556b718fd7bd700b5f2e734f8004f1cfa78b7d30145471c526ba75a151c)
 endif()
 
 message(STATUS "Building boost from source")
@@ -35,21 +37,14 @@ if(NOT TARGET Threads::Threads)
   find_package(Threads REQUIRED)
 endif()
 
-# Make download progress visible
-# set(fc_quiet_state ${FETCHCONTENT_QUIET})
-# set(FETCHCONTENT_QUIET OFF)
-
 FetchContent_Declare(
   Boost
   URL ${BOOST_SOURCE_URL}
   URL_HASH SHA256=${VELOX_BOOST_BUILD_SHA256_CHECKSUM})
-# FetchContent_Populate(Boost)
 
-# Boost cmake uses the global option
 set(shared_libs ${BUILD_SHARED_LIBS})
 set(BUILD_SHARED_LIBS ON)
 FetchContent_MakeAvailable(Boost)
-# add_subdirectory(${boost_SOURCE_DIR} ${boost_BINARY_DIR})
 set(BUILD_SHARED_LIBS ${shared_libs})
 
 # Manually construct include dirs. This is only necessary until we switch to
@@ -70,4 +65,3 @@ set(Boost_NO_SYSTEM_PATHS ON)
 # We have to keep the FindBoost.cmake in an subfolder to prevent it from
 # overriding the system provided one when Boost_SOURCE=SYSTEM
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/boost)
-# set(FETCHCONTENT_QUIET ${fc_quiet_state})
