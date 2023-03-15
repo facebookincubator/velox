@@ -18,8 +18,6 @@
 #include <gtest/gtest.h>
 #include "velox/dwio/common/BufferedInput.h"
 
-DECLARE_bool(load_parallel);
-
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
 
@@ -36,14 +34,12 @@ TEST(TestBufferedInput, ZeroLengthStream) {
   EXPECT_EQ(size, 0);
 }
 
-TEST(TestBufferedInput, ParallelLoad) {
+TEST(TestBufferedInput, parallelLoad) {
   const int32_t kOneKB = 1 * 1024;
   const int32_t threads = 4;
-  FLAGS_load_parallel = true;
 
-  std::shared_ptr<IoStatistics> ioStats = std::make_shared<IoStatistics>();
-  std::unique_ptr<folly::Executor> executor =
-      std::make_unique<folly::IOThreadPoolExecutor>(threads);
+  auto ioStats = std::make_shared<IoStatistics>();
+  auto executor = std::make_unique<folly::IOThreadPoolExecutor>(threads);
   int32_t loadQuantum = kOneKB;
 
   std::string fileData;
@@ -54,8 +50,8 @@ TEST(TestBufferedInput, ParallelLoad) {
     writeFile.append(std::string(kOneKB, 'c'));
     writeFile.append(std::string(5, 'd'));
   }
-  auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(fileData);
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto readFile = std::make_shared<InMemoryReadFile>(fileData);
+  auto pool = memory::getDefaultMemoryPool();
   BufferedInput input(
       readFile,
       *pool,
@@ -63,7 +59,8 @@ TEST(TestBufferedInput, ParallelLoad) {
       ioStats,
       executor.get(),
       loadQuantum,
-      1);
+      1,
+      true);
 
   std::vector<Region> regions = {
       {0, kOneKB},
@@ -84,7 +81,7 @@ TEST(TestBufferedInput, ParallelLoad) {
         std::make_shared<dwio::common::DataBuffer<char>>(*pool, region.length);
     stream->readFully(buffer->data(), region.length);
 
-    // verify data correctness.
+    // Verify data correctness.
     auto expect = readFile->pread(region.offset, region.length);
     ASSERT_EQ(buffer->size(), expect.size());
     ASSERT_EQ(buffer->data(), expect);
@@ -96,6 +93,6 @@ TEST(TestBufferedInput, ParallelLoad) {
   }
   ASSERT_EQ(totalLength, ioStats->rawBytesRead());
 
-  // merge distance is 1, should not have overread bytes.
+  // Merge distance is 1, should not have overread bytes.
   ASSERT_EQ(0, ioStats->rawOverreadBytes());
 }
