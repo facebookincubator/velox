@@ -185,7 +185,7 @@ executors:
   macos-intel:
     macos:
       xcode: "14.2.0"
-    resource_class: large
+    resource_class: macos.x86.medium.gen2
   macos-m1:
     macos:
       xcode: "14.2.0"
@@ -210,7 +210,7 @@ jobs:
           # If you update it, be sure to update save_cache too.
           key: velox-circleci-macos-{{ arch }}-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
       - run:
-          name: "Install dependencies "
+          name: "Install dependencies"
           command: |
             set -xu
             if [[ ! -e ~/deps ]]; then
