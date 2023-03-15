@@ -219,7 +219,6 @@ class OperatorCtx {
 
   // These members are created on demand.
   mutable std::unique_ptr<core::ExecCtx> execCtx_;
-  mutable std::unique_ptr<connector::ExpressionEvaluator> expressionEvaluator_;
 };
 
 // Query operator
@@ -400,7 +399,7 @@ class Operator : public BaseRuntimeStatWriter {
     return stats_;
   }
 
-  void recordBlockingTime(uint64_t start);
+  void recordBlockingTime(uint64_t start, BlockingReason reason);
 
   virtual std::string toString() const;
 
