@@ -57,7 +57,7 @@ class InputStream {
   explicit InputStream(
       const std::string& path,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog())
-      : path_{path}, metricsLog_{metricsLog}{}
+      : path_{path}, metricsLog_{metricsLog} {}
 
   virtual ~InputStream() = default;
 
@@ -133,9 +133,8 @@ class InputStream {
 
   virtual void logRead(uint64_t offset, uint64_t length, LogType purpose);
 
-  using Factory = std::function<std::unique_ptr<InputStream>(
-      const std::string&,
-      const MetricsLogPtr&)>;
+  using Factory = std::function<
+      std::unique_ptr<InputStream>(const std::string&, const MetricsLogPtr&)>;
 
   static std::unique_ptr<InputStream> create(
       const std::string&,
