@@ -32,26 +32,30 @@ class BufferedInput {
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       std::shared_ptr<IoStatistics> ioStats = nullptr,
       folly::Executor* executor = nullptr,
-      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum)
+      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
       : input_{std::make_shared<ReadFileInputStream>(
             std::move(readFile),
             metricsLog)},
         pool_{pool},
         ioStats_(std::move(ioStats)),
         executor_(executor),
-        loadQuantum_(loadQuantum) {}
+        loadQuantum_(loadQuantum),
+        mergeDistance_(mergeDistance) {}
 
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       memory::MemoryPool& pool,
       std::shared_ptr<IoStatistics> ioStats = nullptr,
       folly::Executor* executor = nullptr,
-      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum)
+      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
       : input_(std::move(input)),
         pool_(pool),
         ioStats_(std::move(ioStats)),
         executor_(executor),
-        loadQuantum_(loadQuantum) {}
+        loadQuantum_(loadQuantum),
+        mergeDistance_(mergeDistance) {}
 
   BufferedInput(BufferedInput&&) = default;
   virtual ~BufferedInput() = default;
@@ -138,6 +142,7 @@ class BufferedInput {
   std::shared_ptr<IoStatistics> ioStats_;
   folly::Executor* const executor_;
   const int32_t loadQuantum_;
+  const int32_t mergeDistance_;
 
  private:
   std::vector<uint64_t> offsets_;
