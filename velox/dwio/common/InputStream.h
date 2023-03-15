@@ -31,7 +31,6 @@
 #include <vector>
 
 #include "velox/common/file/File.h"
-#include "velox/dwio/common/IoStatistics.h"
 #include "velox/dwio/common/MetricsLog.h"
 
 namespace facebook::velox::dwio::common {
@@ -57,18 +56,10 @@ class InputStream {
  public:
   explicit InputStream(
       const std::string& path,
-      const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr)
-      : path_{path}, metricsLog_{metricsLog}, stats_(stats) {}
+      const MetricsLogPtr& metricsLog = MetricsLog::voidLog())
+      : path_{path}, metricsLog_{metricsLog}{}
 
   virtual ~InputStream() = default;
-
-  /**
-   * Get the stats object
-   */
-  IoStatistics* FOLLY_NULLABLE getStats() const {
-    return stats_;
-  }
 
   /**
    * Get the total length of the file in bytes.
@@ -144,20 +135,17 @@ class InputStream {
 
   using Factory = std::function<std::unique_ptr<InputStream>(
       const std::string&,
-      const MetricsLogPtr&,
-      IoStatistics* FOLLY_NULLABLE stats)>;
+      const MetricsLogPtr&)>;
 
   static std::unique_ptr<InputStream> create(
       const std::string&,
-      const MetricsLogPtr& = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr);
+      const MetricsLogPtr& = MetricsLog::voidLog());
 
   static bool registerFactory(Factory factory);
 
  protected:
   std::string path_;
   MetricsLogPtr metricsLog_;
-  IoStatistics* FOLLY_NULLABLE stats_;
 };
 
 class FileInputStream : public InputStream {
@@ -168,8 +156,7 @@ class FileInputStream : public InputStream {
  public:
   explicit FileInputStream(
       const std::string& filename,
-      const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr);
+      const MetricsLogPtr& metricsLog = MetricsLog::voidLog());
 
   ~FileInputStream() override;
 
@@ -188,8 +175,7 @@ class ReadFileInputStream final : public InputStream {
   // Take shared ownership of |readFile|.
   explicit ReadFileInputStream(
       std::shared_ptr<velox::ReadFile>,
-      const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr);
+      const MetricsLogPtr& metricsLog = MetricsLog::voidLog());
 
   virtual ~ReadFileInputStream() {}
 
@@ -241,9 +227,8 @@ class ReferenceableInputStream : public InputStream {
  public:
   explicit ReferenceableInputStream(
       const std::string& /* UNUSED*/,
-      const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr)
-      : InputStream("ReferenceablelnputStream", metricsLog, stats),
+      const MetricsLogPtr& metricsLog = MetricsLog::voidLog())
+      : InputStream("ReferenceablelnputStream", metricsLog),
         autoPreloadLength_(0),
         prefetching_(false) {}
   virtual ~ReferenceableInputStream() = default;

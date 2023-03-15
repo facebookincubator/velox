@@ -417,7 +417,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         fileHandle_->file,
         readerOpts_.getMemoryPool(),
         dwio::common::MetricsLog::voidLog(),
-        ioStats_.get(),
+        ioStats_,
         executor_);
   }
 

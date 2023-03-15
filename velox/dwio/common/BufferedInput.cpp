@@ -116,8 +116,8 @@ bool BufferedInput::tryMerge(Region& first, const Region& second) {
     // the second region is inside first one if extension is negative
     if (extension > 0) {
       first.length += extension;
-      if ((input_->getStats() != nullptr) && gap > 0) {
-        input_->getStats()->incRawOverreadBytes(gap);
+      if (ioStats_ && gap > 0) {
+        ioStats_->incRawOverreadBytes(gap);
       }
     }
 
