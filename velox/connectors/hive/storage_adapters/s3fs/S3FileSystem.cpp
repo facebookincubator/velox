@@ -148,15 +148,14 @@ class S3ReadFile final : public ReadFile {
   // bytes.
   void preadInternal(uint64_t offset, uint64_t length, char* position) const {
     // Read the desired range of bytes.
-    Aws::Transfer::TransferManagerConfiguration transfer_config(
-        executor_.get());
-    transfer_config.s3Client = client_;
-    auto transfer_manager =
-        Aws::Transfer::TransferManager::Create(transfer_config);
+    Aws::Transfer::TransferManagerConfiguration transferConfig(executor_.get());
+    transferConfig.s3Client = client_;
+    auto transferManager =
+        Aws::Transfer::TransferManager::Create(transferConfig);
     Aws::Utils::Stream::PreallocatedStreamBuf streamBuffer(
         (unsigned char*)position, length);
     auto downloadHandle =
-        transfer_manager->DownloadFile(bucket_, key_, offset, length, [&]() {
+        transferManager->DownloadFile(bucket_, key_, offset, length, [&]() {
           return Aws::New<UnderlyingStreamWrapper>("TestTag", &streamBuffer);
         });
     downloadHandle->WaitUntilFinished();
@@ -180,6 +179,10 @@ class S3ReadFile final : public ReadFile {
 namespace filesystems {
 
 class S3Config {
+ public: // Constants
+  static const char* kS3TransferManagerMaxThreadsConfig =
+      "hive.s3.transfer-manager-max-threads";
+
  public:
   S3Config(const Config* config) : config_(config) {}
 
@@ -228,7 +231,7 @@ class S3Config {
   }
 
   int getTranferManagerMaxThreads() const {
-    return config_->get<int>("hive.s3.transfer-manager-max-threads", 25);
+    return config_->get<int>(kS3TransferManagerMaxThreadsConfig, 25);
   }
 
   Aws::Utils::Logging::LogLevel getLogLevel() const {
