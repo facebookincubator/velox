@@ -88,3 +88,10 @@ DEFINE_string(
     "expression evaluation. Specifies the directory to use for storing the "
     "vectors and expression SQL strings. This flag is ignored if "
     "velox_save_input_on_expression_any_failure_path is set.");
+
+// Used in dwio/common/BufferedInput.cpp
+
+DEFINE_bool(
+    velox_parallel_load_in_buffered_input,
+    false,
+    "Enable parallel load regions by executor in BufferedInput.");

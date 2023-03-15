@@ -18,6 +18,8 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
+DECLARE_bool(velox_parallel_load_in_buffered_input);
+
 namespace facebook::velox::dwio::common {
 
 void BufferedInput::load(const LogType logType) {
@@ -34,7 +36,7 @@ void BufferedInput::load(const LogType logType) {
   // sorting the regions from low to high
   std::sort(regions_.begin(), regions_.end());
 
-  if (parallelLoad_) {
+  if (FLAGS_velox_parallel_load_in_buffered_input) {
     std::vector<void*> buffers;
     std::vector<Region> regions;
     uint64_t sizeToRead = 0;

@@ -33,8 +33,7 @@ class BufferedInput {
       std::shared_ptr<IoStatistics> ioStats = nullptr,
       folly::Executor* executor = nullptr,
       int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
-      bool parallelLoad = false)
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
       : input_{std::make_shared<ReadFileInputStream>(
             std::move(readFile),
             metricsLog)},
@@ -42,8 +41,7 @@ class BufferedInput {
         ioStats_(std::move(ioStats)),
         executor_(executor),
         loadQuantum_(loadQuantum),
-        mergeDistance_(mergeDistance),
-        parallelLoad_(parallelLoad) {}
+        mergeDistance_(mergeDistance) {}
 
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
@@ -51,15 +49,13 @@ class BufferedInput {
       std::shared_ptr<IoStatistics> ioStats = nullptr,
       folly::Executor* executor = nullptr,
       int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
-      bool parallelLoad = false)
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
       : input_(std::move(input)),
         pool_(pool),
         ioStats_(std::move(ioStats)),
         executor_(executor),
         loadQuantum_(loadQuantum),
-        mergeDistance_(mergeDistance),
-        parallelLoad_(parallelLoad) {}
+        mergeDistance_(mergeDistance) {}
 
   BufferedInput(BufferedInput&&) = default;
   virtual ~BufferedInput() = default;
@@ -152,9 +148,6 @@ class BufferedInput {
   std::vector<uint64_t> offsets_;
   std::vector<DataBuffer<char>> buffers_;
   std::vector<Region> regions_;
-
-  // Enable parallel load regions by executor.
-  const bool parallelLoad_;
 
   std::unique_ptr<SeekableInputStream> readBuffer(
       uint64_t offset,

@@ -18,6 +18,8 @@
 #include <gtest/gtest.h>
 #include "velox/dwio/common/BufferedInput.h"
 
+DECLARE_bool(velox_parallel_load_in_buffered_input);
+
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
 
@@ -35,6 +37,7 @@ TEST(TestBufferedInput, ZeroLengthStream) {
 }
 
 TEST(TestBufferedInput, parallelLoad) {
+  FLAGS_velox_parallel_load_in_buffered_input = true;
   const int32_t kOneKB = 1 * 1024;
   const int32_t threads = 4;
 
@@ -59,8 +62,7 @@ TEST(TestBufferedInput, parallelLoad) {
       ioStats,
       executor.get(),
       loadQuantum,
-      1,
-      true);
+      1);
 
   std::vector<Region> regions = {
       {0, kOneKB},
