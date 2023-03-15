@@ -83,6 +83,9 @@ class AllMatchFunction : public exec::VectorFunction {
 
         for (auto i = 0; i < size; ++i) {
           auto idx = offset + i;
+          if (bits::isBitSet(context.mutableErrorMask(), idx)) {
+            continue;
+          }
           if (bitsDecoder->isNullAt(idx)) {
             hasNull = true;
           } else if (!bitsDecoder->valueAt<bool>(idx)) {

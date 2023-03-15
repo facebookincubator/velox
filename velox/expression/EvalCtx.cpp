@@ -273,11 +273,6 @@ void EvalCtx::addElementErrorsToTopLevel(
   });
 }
 
-void EvalCtx::throwOnError(vector_size_t row) {
-  auto err = getError(row);
-  throwError(err);
-}
-
 const VectorPtr& EvalCtx::getField(int32_t index) const {
   const VectorPtr* field;
   if (!peeledFields_.empty()) {

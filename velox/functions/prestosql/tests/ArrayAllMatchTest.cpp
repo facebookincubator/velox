@@ -126,7 +126,7 @@ TEST_F(ArrayAllMatchTest, doubles) {
 
 TEST_F(ArrayAllMatchTest, errorSuppress) {
   auto input =
-      makeNullableArrayVector<int8_t>({{2, 5, 0}, {5, std::nullopt, 0}});
+      makeNullableArrayVector<int8_t>({{0, 2, 0, 5, 0}, {5, std::nullopt, 0}});
   auto result = evaluate<SimpleVector<bool>>(
       "all_match(c0, x -> ((10 / x) > 2))", makeRowVector({input}));
 
