@@ -147,9 +147,25 @@ computing running total that uses <a class="reference internal" href="../functio
 <p>Fixed-width part of the accumulator is stored in the row. Variable-width
 part (if exists) is allocated using <a class="reference internal" href="arena.html"><span class="doc">HashStringAllocator</span></a> and a pointer is
 stored in the fixed-width part.</p>
-<p>A row is a contiguous byte buffer. Given N aggregates, first N / 8 bytes
-store the null flags, one bit per aggregate, followed by fixed-width
-accumulators.</p>
+<p>A row is a contiguous byte buffer.  If any of the accumulators has alignment
+requirement, the row beginning and accumulator address will be aligned
+accordingly.  Data is stored in the following order:</p>
+<ol class="arabic simple">
+<li><dl class="simple">
+<dt>Null flags (1 bit per item) for</dt><dd><ol class="arabic simple">
+<li><p>Keys (only if nullable)</p></li>
+<li><p>Accumulators</p></li>
+</ol>
+</dd>
+</dl>
+</li>
+<li><p>Free flag (1 bit)</p></li>
+<li><p>Keys</p></li>
+<li><p>Padding for alignment</p></li>
+<li><p>Accumulators, fixed-width part only</p></li>
+<li><p>Variable size (32 bit)</p></li>
+<li><p>Padding for alignment</p></li>
+</ol>
 <a class="reference internal image-reference" href="../_images/aggregation-layout.png"><img alt="../_images/aggregation-layout.png" src="../_images/aggregation-layout.png" style="width: 600px;" /></a>
 </section>
 <section id="aggregate-class">
