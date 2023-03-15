@@ -174,6 +174,18 @@ class BufferedInput {
 
   // tries and merges WS read regions into one
   bool tryMerge(Region& first, const Region& second);
+
+  // try split large region into several small regions by load quantum
+  void splitRegion(
+      const uint64_t length,
+      const int32_t loadQuantum,
+      std::vector<std::tuple<uint64_t, uint64_t>>& range);
+
+  // load all regions parallelly
+  void loadParallel(
+      const std::vector<void*>& buffers,
+      const std::vector<Region>& regions,
+      const LogType purpose);
 };
 
 } // namespace facebook::velox::dwio::common

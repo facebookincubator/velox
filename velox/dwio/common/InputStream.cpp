@@ -32,7 +32,6 @@
 #include <type_traits>
 
 #include "velox/common/time/Timer.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwio::common {
@@ -81,7 +80,6 @@ void FileInputStream::read(
 
   // log the metric
   logRead(offset, length, purpose);
-  auto readStartMicros = getCurrentTimeMicro();
 
   auto dest = static_cast<char*>(buf);
   uint64_t totalBytesRead = 0;
@@ -133,12 +131,6 @@ void FileInputStream::read(
       length,
       ", read: ",
       totalBytesRead);
-
-  // TODO
-//  if (stats_) {
-//    stats_->incRawBytesRead(length);
-//    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
-//  }
 }
 
 ReadFileInputStream::ReadFileInputStream(
@@ -156,12 +148,8 @@ void ReadFileInputStream::read(
     throw std::invalid_argument("Buffer is null");
   }
   logRead(offset, length, purpose);
-  auto readStartMicros = getCurrentTimeMicro();
+
   std::string_view data_read = readFile_->pread(offset, length, buf);
-//  if (stats_) {
-//    stats_->incRawBytesRead(length);
-//    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
-//  }
 
   DWIO_ENSURE_EQ(
       data_read.size(),
@@ -213,70 +201,6 @@ folly::SemiFuture<uint64_t> ReadFileInputStream::readAsync(
 
 bool ReadFileInputStream::hasReadAsync() const {
   return readFile_->hasPreadvAsync();
-}
-
-void ReadFileInputStream::splitRange(
-    const uint64_t length,
-    const int32_t loadQuantum,
-    std::vector<std::tuple<uint64_t, uint64_t>>& range) {
-  uint64_t cursor = 0;
-  while (cursor + loadQuantum < length) {
-    range.emplace_back(cursor, loadQuantum);
-    cursor += loadQuantum;
-  }
-
-  if ((length - cursor) > (loadQuantum / 2)) {
-    range.emplace_back(cursor, (length - cursor));
-  } else {
-    auto last = range.back();
-    range.pop_back();
-    range.emplace_back(
-        std::get<0>(last), std::get<1>(last) + (length - cursor));
-  }
-}
-
-void ReadFileInputStream::vread(
-    const std::vector<void*>& buffers,
-    const std::vector<Region>& regions,
-    const LogType purpose) {
-//  DWIO_ENSURE_NOT_NULL(executor_, "vread file need executor");
-//  const auto size = buffers.size();
-//  DWIO_ENSURE_GT(size, 0, "invalid vread parameters");
-//  DWIO_ENSURE_EQ(regions.size(), size, "mismatched region->buffer");
-//
-//  if (size == 1) {
-//    const auto& r = regions[0];
-//    read(buffers[0], r.length, r.offset, purpose);
-//  } else {
-//    std::vector<folly::Future<folly::Unit>> futs;
-//    for (size_t i = 0; i < size; ++i) {
-//      const auto& r = regions[i];
-//      const auto& buf = buffers[i];
-//      if (r.length > ReaderOptions::kDefaultLoadQuantum) {
-//        std::vector<std::tuple<uint64_t, uint64_t>> range;
-//        splitRange(r.length, ReaderOptions::kDefaultLoadQuantum, range);
-//        for (size_t idx = 0; idx < range.size(); idx++) {
-//          auto cursor = std::get<0>(range[idx]);
-//          auto length = std::get<1>(range[idx]);
-//          auto f =
-//              folly::via(executor_, [this, buf, r, cursor, length, &purpose]() {
-//                char* b = reinterpret_cast<char*>(buf);
-//                read(b + cursor, length, r.offset + cursor, purpose);
-//              });
-//          futs.push_back(std::move(f));
-//        }
-//      } else {
-//        auto f = folly::via(executor_, [this, buf, r, &purpose]() {
-//          read(buf, r.length, r.offset, purpose);
-//        });
-//        futs.push_back(std::move(f));
-//      }
-//    }
-//
-//    for (int64_t i = futs.size() - 1; i >= 0; --i) {
-//      futs[i].wait();
-//    }
-//  }
 }
 
 bool Region::operator<(const Region& other) const {
@@ -366,8 +290,7 @@ static std::unique_ptr<InputStream> fileInputStreamFactory(
     const std::string& filename,
     const MetricsLogPtr& metricsLog) {
   if (strncmp(filename.c_str(), "file:", 5) == 0) {
-    return std::make_unique<FileInputStream>(
-        filename.substr(5), metricsLog);
+    return std::make_unique<FileInputStream>(filename.substr(5), metricsLog);
   }
   return nullptr;
 }
