@@ -18,7 +18,7 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
-DEFINE_bool(wsVRLoad, false, "Use WS VRead API to load");
+DEFINE_bool(load_parallel, false, "Use parallel load");
 
 namespace facebook::velox::dwio::common {
 
@@ -36,7 +36,7 @@ void BufferedInput::load(const LogType logType) {
   // sorting the regions from low to high
   std::sort(regions_.begin(), regions_.end());
 
-  if (UNLIKELY(FLAGS_wsVRLoad)) {
+  if (FLAGS_load_parallel) {
     std::vector<void*> buffers;
     std::vector<Region> regions;
     uint64_t sizeToRead = 0;
