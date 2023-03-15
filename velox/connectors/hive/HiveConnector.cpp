@@ -418,7 +418,8 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         readerOpts_.getMemoryPool(),
         dwio::common::MetricsLog::voidLog(),
         ioStats_,
-        executor_);
+        executor_,
+        readerOpts_.loadQuantum());
   }
 
   if (readerOpts_.getFileFormat() != dwio::common::FileFormat::UNKNOWN) {

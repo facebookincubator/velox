@@ -73,13 +73,13 @@ class CachedBufferedInput : public BufferedInput {
             pool,
             metricsLog,
             ioStats,
-            executor),
+            executor,
+            loadQuantum),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
         groupId_(groupId),
         fileSize_(input_->getLength()),
-        loadQuantum_(loadQuantum),
         maxCoalesceDistance_(maxCoalesceDistance) {}
 
   CachedBufferedInput(
@@ -93,13 +93,12 @@ class CachedBufferedInput : public BufferedInput {
       folly::Executor* executor,
       int32_t loadQuantum,
       int32_t maxCoalesceDistance)
-      : BufferedInput(std::move(input), pool, ioStats, executor),
+      : BufferedInput(std::move(input), pool, ioStats, executor, loadQuantum),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
         groupId_(groupId),
         fileSize_(input_->getLength()),
-        loadQuantum_(loadQuantum),
         maxCoalesceDistance_(maxCoalesceDistance) {}
 
   ~CachedBufferedInput() override {
@@ -191,7 +190,6 @@ class CachedBufferedInput : public BufferedInput {
   std::vector<std::shared_ptr<cache::CoalescedLoad>> allCoalescedLoads_;
 
   const uint64_t fileSize_;
-  const int32_t loadQuantum_;
   const int32_t maxCoalesceDistance_;
 };
 

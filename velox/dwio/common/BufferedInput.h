@@ -31,23 +31,27 @@ class BufferedInput {
       memory::MemoryPool& pool,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       std::shared_ptr<IoStatistics> ioStats = nullptr,
-      folly::Executor* executor = nullptr)
+      folly::Executor* executor = nullptr,
+      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum)
       : input_{std::make_shared<ReadFileInputStream>(
             std::move(readFile),
             metricsLog)},
         pool_{pool},
         ioStats_(std::move(ioStats)),
-        executor_(executor) {}
+        executor_(executor),
+        loadQuantum_(loadQuantum) {}
 
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       memory::MemoryPool& pool,
       std::shared_ptr<IoStatistics> ioStats = nullptr,
-      folly::Executor* executor = nullptr)
+      folly::Executor* executor = nullptr,
+      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum)
       : input_(std::move(input)),
         pool_(pool),
         ioStats_(std::move(ioStats)),
-        executor_(executor) {}
+        executor_(executor),
+        loadQuantum_(loadQuantum) {}
 
   BufferedInput(BufferedInput&&) = default;
   virtual ~BufferedInput() = default;
@@ -111,7 +115,8 @@ class BufferedInput {
   // Create a new (clean) instance of BufferedInput sharing the same underlying
   // file and memory pool.  The enqueued regions are NOT copied.
   virtual std::unique_ptr<BufferedInput> clone() const {
-    return std::make_unique<BufferedInput>(input_, pool_, ioStats_, executor_);
+    return std::make_unique<BufferedInput>(
+        input_, pool_, ioStats_, executor_, loadQuantum_);
   }
 
   const std::shared_ptr<ReadFile>& getReadFile() const {
@@ -132,6 +137,7 @@ class BufferedInput {
   memory::MemoryPool& pool_;
   std::shared_ptr<IoStatistics> ioStats_;
   folly::Executor* const executor_;
+  const int32_t loadQuantum_;
 
  private:
   std::vector<uint64_t> offsets_;
