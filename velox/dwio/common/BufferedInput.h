@@ -28,13 +28,12 @@ class BufferedInput {
   BufferedInput(
       std::shared_ptr<ReadFile> readFile,
       memory::MemoryPool& pool,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr)
+      IoStatistics* stats = nullptr,
+      folly::Executor* executor = nullptr)
       : input_{std::make_shared<ReadFileInputStream>(
             std::move(readFile),
             metricsLog,
-            executor,
             stats)},
         pool_{pool},
         executor_(executor) {}
@@ -42,7 +41,7 @@ class BufferedInput {
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       memory::MemoryPool& pool,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr)
+      folly::Executor* executor = nullptr)
       : input_(std::move(input)), pool_(pool), executor_(executor) {}
 
   BufferedInput(BufferedInput&&) = default;
@@ -119,14 +118,14 @@ class BufferedInput {
     return input_;
   }
 
-  virtual folly::Executor* FOLLY_NULLABLE executor() const {
+  virtual folly::Executor* executor() const {
     return executor_;
   }
 
  protected:
   std::shared_ptr<ReadFileInputStream> input_;
   memory::MemoryPool& pool_;
-  folly::Executor* const FOLLY_NULLABLE executor_;
+  folly::Executor* const executor_;
 
  private:
   std::vector<uint64_t> offsets_;

@@ -189,7 +189,6 @@ class ReadFileInputStream final : public InputStream {
   explicit ReadFileInputStream(
       std::shared_ptr<velox::ReadFile>,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      folly::Executor* FOLLY_NULLABLE executor = nullptr,
       IoStatistics* FOLLY_NULLABLE stats = nullptr);
 
   virtual ~ReadFileInputStream() {}
@@ -227,7 +226,6 @@ class ReadFileInputStream final : public InputStream {
 
  private:
   std::shared_ptr<velox::ReadFile> readFile_;
-  folly::Executor* const FOLLY_NULLABLE executor_;
 
   void splitRange(
       const uint64_t length,

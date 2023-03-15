@@ -231,7 +231,7 @@ class HiveDataSource : public DataSource {
 
   memory::MemoryAllocator* const FOLLY_NONNULL allocator_;
   const std::string& scanId_;
-  folly::Executor* FOLLY_NULLABLE executor_;
+  folly::Executor* executor_ = nullptr;
 };
 
 class HiveConnector final : public Connector {
@@ -281,13 +281,13 @@ class HiveConnector final : public Connector {
         inputType, hiveInsertHandle, connectorQueryCtx, commitStrategy);
   }
 
-  folly::Executor* FOLLY_NULLABLE executor() const override {
+  folly::Executor* executor() const override {
     return executor_;
   }
 
  private:
   FileHandleFactory fileHandleFactory_;
-  folly::Executor* FOLLY_NULLABLE executor_;
+  folly::Executor* executor_;
 };
 
 class HiveConnectorFactory : public ConnectorFactory {

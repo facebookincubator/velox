@@ -65,10 +65,15 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<cache::ScanTracker> tracker,
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
-      folly::Executor* FOLLY_NULLABLE executor,
+      folly::Executor* executor,
       int32_t loadQuantum,
       int32_t maxCoalesceDistance)
-      : BufferedInput(std::move(readFile), pool, executor, metricsLog),
+      : BufferedInput(
+            std::move(readFile),
+            pool,
+            metricsLog,
+            ioStats.get(),
+            executor),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
@@ -86,7 +91,7 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<cache::ScanTracker> tracker,
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
-      folly::Executor* FOLLY_NULLABLE executor,
+      folly::Executor* executor,
       int32_t loadQuantum,
       int32_t maxCoalesceDistance)
       : BufferedInput(std::move(input), pool, executor),

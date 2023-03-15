@@ -416,9 +416,9 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     input = std::make_unique<dwio::common::BufferedInput>(
         fileHandle_->file,
         readerOpts_.getMemoryPool(),
-        executor_,
         dwio::common::MetricsLog::voidLog(),
-        ioStats_.get());
+        ioStats_.get(),
+        executor_);
   }
 
   if (readerOpts_.getFileFormat() != dwio::common::FileFormat::UNKNOWN) {
@@ -698,7 +698,7 @@ int64_t HiveDataSource::estimatedRowSize() {
 HiveConnector::HiveConnector(
     const std::string& id,
     std::shared_ptr<const Config> properties,
-    folly::Executor* FOLLY_NULLABLE executor)
+    folly::Executor* executor)
     : Connector(id, properties),
       fileHandleFactory_(
           std::make_unique<SimpleLRUCache<std::string, FileHandle>>(
