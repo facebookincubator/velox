@@ -82,7 +82,7 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
       override {
     BaseAggregate::template doExtractValues<T>(
         groups, numGroups, result, [&](char* group) {
-          return BaseAggregate::Aggregate::template deserialize<T>(group);
+          return *BaseAggregate::Aggregate::template value<T>(group);
         });
   }
 
@@ -90,7 +90,7 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
       override {
     BaseAggregate::template doExtractValues<T>(
         groups, numGroups, result, [&](char* group) {
-          return BaseAggregate::Aggregate::template deserialize<T>(group);
+          return *BaseAggregate::Aggregate::template value<T>(group);
         });
   }
 };
@@ -129,7 +129,7 @@ class MaxAggregate : public MinMaxAggregate<T> {
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
-      exec::Aggregate::template serialize<T>(kInitialValue_, groups[i]);
+      *exec::Aggregate::value<T>(groups[i]) = kInitialValue_;
     }
   }
 
@@ -209,7 +209,7 @@ class MinAggregate : public MinMaxAggregate<T> {
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
-      exec::Aggregate::template serialize<T>(kInitialValue_, groups[i]);
+      *exec::Aggregate::value<T>(groups[i]) = kInitialValue_;
     }
   }
 

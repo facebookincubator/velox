@@ -126,12 +126,10 @@ class SimpleNumericAggregate : public exec::Aggregate {
         updateNonNullValue<tableHasNulls, TData>(
             groups[i], TData(decoded.valueAt<TValue>(i)), updateSingleValue);
       });
-    } else if (
-        decoded.isIdentityMapping() && !std::is_same_v<TValue, bool> &&
-        !std::is_same_v<TValue, UnscaledLongDecimal>) {
+    } else if (decoded.isIdentityMapping() && !std::is_same_v<TValue, bool>) {
       auto data = decoded.data<TValue>();
       rows.applyToSelected([&](vector_size_t i) {
-        updateNonNullValue<true, TData>(
+        updateNonNullValue<tableHasNulls, TData>(
             groups[i], TData(data[i]), updateSingleValue);
       });
     } else {
@@ -179,9 +177,7 @@ class SimpleNumericAggregate : public exec::Aggregate {
         updateNonNullValue<true, TData>(
             group, TData(decoded.valueAt<TValue>(i)), updateSingleValue);
       });
-    } else if (
-        decoded.isIdentityMapping() && !std::is_same_v<TValue, bool> &&
-        !std::is_same_v<TValue, UnscaledLongDecimal>) {
+    } else if (decoded.isIdentityMapping() && !std::is_same_v<TValue, bool>) {
       auto data = decoded.data<TValue>();
       rows.applyToSelected([&](vector_size_t i) {
         updateNonNullValue<true, TData>(
@@ -240,9 +236,8 @@ class SimpleNumericAggregate : public exec::Aggregate {
     if constexpr (tableHasNulls) {
       exec::Aggregate::clearNull(group);
     }
-    auto deserializedValue = exec::Aggregate::deserialize<TDataType>(group);
-    updateValue(deserializedValue, value);
-    exec::Aggregate::serialize<TDataType>(deserializedValue, group);
+    updateValue(*exec::Aggregate::value<TDataType>(group), value);
   }
 };
+
 } // namespace facebook::velox::aggregate

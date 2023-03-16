@@ -276,32 +276,6 @@ class Aggregate {
   }
 
   template <typename T>
-  const T* value(const char* group) const {
-    return reinterpret_cast<const T*>(group + offset_);
-  }
-
-  template <typename T>
-  void serialize(T data, char* group) const {
-    if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
-      // UnscaledLongDecimals are 128-bit long and need to be copied in parts
-      // to avoid segmentation fault on some systems.
-      UnscaledLongDecimal::serialize(data, group + offset_);
-    } else {
-      *reinterpret_cast<T*>(group + offset_) = data;
-    }
-  }
-
-  template <typename T>
-  T deserialize(const char* group) const {
-    if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
-      // UnscaledLongDecimals are 128-bit long and need to be copied in parts
-      // to avoid segmentation fault on some systems.
-      return UnscaledLongDecimal::deserialize(group + offset_);
-    }
-    return *value<T>(group);
-  }
-
-  template <typename T>
   static uint64_t* getRawNulls(T* vector) {
     if (vector->mayHaveNulls()) {
       BufferPtr nulls = vector->mutableNulls(vector->size());
