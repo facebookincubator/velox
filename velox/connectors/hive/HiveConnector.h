@@ -292,7 +292,7 @@ class HiveConnector final : public Connector {
 
  private:
   FileHandleFactory fileHandleFactory_;
-  folly::Executor* executor_;
+  folly::Executor* FOLLY_NULLABLE executor_;
 };
 
 class HiveConnectorFactory : public ConnectorFactory {

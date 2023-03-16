@@ -65,7 +65,7 @@ class BufferedInput {
       Region region,
       const StreamIdentifier* FOLLY_NULLABLE si = nullptr);
 
-  // load all regions to be read in an optimized way (IO efficiency)
+  // Load all regions to be read in an optimized way (IO efficiency)
   virtual void load(const LogType);
 
   virtual bool isBuffered(uint64_t offset, uint64_t length) const {
@@ -133,7 +133,7 @@ class BufferedInput {
   std::vector<DataBuffer<char>> buffers_;
   std::vector<Region> regions_;
 
-  // we either load data parallelly or sequentially according to flag
+  // We either load data parallelly or sequentially according to flag
   void loadWithAction(
       const LogType logType,
       std::function<void(void* FOLLY_NONNULL, uint64_t, uint64_t, LogType)>
@@ -155,14 +155,14 @@ class BufferedInput {
     offsets_.push_back(region.offset);
     DataBuffer<char> buffer(pool_, region.length);
 
-    // action is required
+    // Action is required
     DWIO_ENSURE_NOT_NULL(action);
     action(buffer.data(), region.length, region.offset, logType);
 
     buffers_.push_back(std::move(buffer));
   }
 
-  // tries and merges WS read regions into one
+  // Tries and merges WS read regions into one
   bool tryMerge(Region& first, const Region& second);
 };
 

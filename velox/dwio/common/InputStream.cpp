@@ -157,9 +157,7 @@ void ReadFileInputStream::read(
   }
   logRead(offset, length, purpose);
   auto readStartMicros = getCurrentTimeMicro();
-
   std::string_view data_read = readFile_->pread(offset, length, buf);
-
   if (stats_) {
     stats_->incRawBytesRead(length);
     stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);

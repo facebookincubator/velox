@@ -14,11 +14,9 @@
  * limitations under the License.
  */
 
-#include <folly/executors/IOThreadPoolExecutor.h>
 #include <gtest/gtest.h>
 #include "velox/dwio/common/BufferedInput.h"
 
-using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
 
 TEST(TestBufferedInput, ZeroLengthStream) {
@@ -32,4 +30,5 @@ TEST(TestBufferedInput, ZeroLengthStream) {
   int32_t size = 1;
   EXPECT_FALSE(ret->Next(&buf, &size));
   EXPECT_EQ(size, 0);
+
 }
