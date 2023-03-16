@@ -18,15 +18,26 @@ We choose hermetic builds as a solution to the aforementioned problems, as they 
 
 [^1]: [Hermeticity](https://bazel.build/basics/hermeticity) - why hermetic builds are recommended
 
-The first major step in moving towards hermetic builds was the integration of a new dependency management system that is able to download, configure and build the necessary dependencies within the Velox build process. This new system also gives users the option to use already installed system dependencies. We hope this work will increase adoption of Velox in downstream projects and make troubleshooting of build issues easier, as well as improve overall reliability and stability.
+The first major step in moving towards hermetic builds was the integration of a new [dependency management system](https://github.com/facebookincubator/velox/tree/main/CMake/resolve_dependency_modules) that is able to download, configure and build the necessary dependencies within the Velox build process. This new system also gives users the option to use already installed system dependencies. We hope this work will increase adoption of Velox in downstream projects and make troubleshooting of build issues easier, as well as improve overall reliability and stability.
 
-We also wanted to lower the barrier to entry for contributions to Velox. Therefore, we created Docker Development images for both Ubuntu and CentOS, and we now publish them automatically when changes are merged. We hope this work will help speed up the development process by allowing developers to stand up a development environment quickly, without the requirement of installing third-party dependencies locally. We also use these images in the Velox CI to lower build times and speed up the feedback loop for proposing a PR.
+We also wanted to lower the barrier to entry for contributions to Velox. Therefore, we created Docker [Development images](https://github.com/facebookincubator/velox/pkgs/container/velox-dev) for both Ubuntu and CentOS, and we now publish them automatically when changes are merged. We hope this work will help speed up the development process by allowing developers to stand up a development environment quickly, without the requirement of installing third-party dependencies locally. We also use these images in the Velox CI to lower build times and speed up the feedback loop for proposing a PR.
+
+```bash
+# Run the development image from the root of the Velox repository
+# to build and test Velox
+docker compose run --rm ubuntu-cpp
+```
 
 An important non-technical improvement is the introduction of new issue templates and utility scripts. These will help guide troubleshooting and getting support from the relevant Velox developers via Github. This helps to improve the experience for the community and make it easier for users and contributors to get help and support when they need it.
 
-Lastly, we implemented new nightly builds to increase the overall reliability and stability of Velox, as well as test the integration with downstream community projects.
+Lastly, we implemented new [nightly builds](https://app.circleci.com/pipelines/github/facebookincubator/velox?branch=main) to increase the overall reliability and stability of Velox, as well as test the integration with downstream community projects.
 
 To enable easy access to Velox from Python, we built CI infrastructure to generate and publish pre-built binary wheels for [PyVelox](https://pypi.org/project/pyvelox/) (the Velox Python Bindings). We also improved Conda support by contributing to upstream feedstocks.
+
+```bash
+# Try PyVelox today!
+pip install pyvelox
+```
 
 ## Future Goals
 
