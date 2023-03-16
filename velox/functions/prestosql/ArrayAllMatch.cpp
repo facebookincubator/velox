@@ -61,6 +61,7 @@ class AllMatchFunction : public exec::VectorFunction {
     auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
 
     while (auto entry = it.next()) {
+      exec::EvalCtx::ErrorVectorPtr elementErrors;
       auto elementRows =
           toElementRows<ArrayVector>(numElements, *entry.rows, flatArray.get());
       auto wrapCapture = toWrapCapture<ArrayVector>(
@@ -71,7 +72,7 @@ class AllMatchFunction : public exec::VectorFunction {
           wrapCapture,
           &context,
           lambdaArgs,
-          elementToTopLevelRows,
+          reinterpret_cast<VectorPtr&>(elementErrors),
           &matchBits);
 
       bitsDecoder.get()->decode(*matchBits, elementRows);
@@ -80,12 +81,18 @@ class AllMatchFunction : public exec::VectorFunction {
         auto offset = offsets[row];
         auto allMatch = true;
         auto hasNull = false;
-
+        std::exception_ptr errorPtr = nullptr;
+        auto hasError = false;
         for (auto i = 0; i < size; ++i) {
           auto idx = offset + i;
-          if (bits::isBitSet(context.mutableErrorMask(), idx)) {
+          if (elementErrors && idx < elementErrors->size() &&
+              !elementErrors->isNullAt(idx)) {
+            hasError = true;
+            errorPtr = *std::static_pointer_cast<std::exception_ptr>(
+                elementErrors->valueAt(idx));
             continue;
           }
+
           if (bitsDecoder->isNullAt(idx)) {
             hasNull = true;
           } else if (!bitsDecoder->valueAt<bool>(idx)) {
@@ -99,8 +106,8 @@ class AllMatchFunction : public exec::VectorFunction {
         // another element that returns 'false' for the predicate.
         if (!allMatch) {
           flatResult->set(row, false);
-        } else if (context.hasError(row)) {
-          context.setError(row, context.getError(row));
+        } else if (hasError) {
+          context.setError(row, errorPtr);
         } else if (hasNull) {
           flatResult->setNull(row, true);
         } else {

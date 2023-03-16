@@ -79,7 +79,7 @@ class Callable {
       const BufferPtr& wrapCapture,
       exec::EvalCtx* context,
       const std::vector<VectorPtr>& args,
-      const BufferPtr& elementToTopLevelRows,
+      VectorPtr& errors,
       VectorPtr* result) = 0;
 };
 

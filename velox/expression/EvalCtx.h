@@ -96,7 +96,6 @@ class EvalCtx {
       try {
         func(row);
       } catch (const std::exception& e) {
-        bits::setBit(mutableErrorMask(), row);
         setError(row, std::current_exception());
       }
     });
@@ -283,11 +282,6 @@ class EvalCtx {
     return *err;
   }
 
-  /// Error mask of each elements' result
-  uint32_t* FOLLY_NONNULL mutableErrorMask() {
-    return &errorMask_;
-  }
-
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
   ExprSet* FOLLY_NULLABLE const exprSet_;
@@ -319,8 +313,6 @@ class EvalCtx {
   // in a opaque flat vector, which will translate to a
   // std::shared_ptr<std::exception_ptr>.
   ErrorVectorPtr errors_;
-
-  uint32_t errorMask_{0};
 };
 
 /// Utility wrapper struct that is used to temporarily reset the value of the an
