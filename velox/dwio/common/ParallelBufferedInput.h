@@ -68,11 +68,7 @@ class ParallelBufferedInput : public BufferedInput {
 
   std::unique_ptr<BufferedInput> clone() const override {
     return std::make_unique<ParallelBufferedInput>(
-        input_,
-        pool_,
-        ioStats_,
-        executor_,
-        loadQuantum_);
+        input_, pool_, ioStats_, executor_, loadQuantum_);
   }
 
  private:

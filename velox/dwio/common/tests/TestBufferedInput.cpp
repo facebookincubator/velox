@@ -30,5 +30,4 @@ TEST(TestBufferedInput, ZeroLengthStream) {
   int32_t size = 1;
   EXPECT_FALSE(ret->Next(&buf, &size));
   EXPECT_EQ(size, 0);
-
 }
