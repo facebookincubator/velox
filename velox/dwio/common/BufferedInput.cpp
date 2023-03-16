@@ -18,6 +18,8 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
+DEFINE_bool(wsVRLoad, false, "Use WS VRead API to load");
+
 namespace facebook::velox::dwio::common {
 
 void BufferedInput::load(const LogType logType) {

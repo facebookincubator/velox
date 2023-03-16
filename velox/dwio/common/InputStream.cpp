@@ -54,8 +54,9 @@ folly::SemiFuture<uint64_t> InputStream::readAsync(
 
 FileInputStream::FileInputStream(
     const std::string& path,
-    const MetricsLogPtr& metricsLog)
-    : InputStream(path, metricsLog) {
+    const MetricsLogPtr& metricsLog,
+    IoStatistics* stats)
+    : InputStream(path, metricsLog, stats) {
   file = open(path.c_str(), O_RDONLY);
   if (file == -1) {
     throw std::runtime_error(
@@ -80,6 +81,7 @@ void FileInputStream::read(
 
   // log the metric
   logRead(offset, length, purpose);
+  auto readStartMicros = getCurrentTimeMicro();
 
   auto dest = static_cast<char*>(buf);
   uint64_t totalBytesRead = 0;
@@ -131,12 +133,18 @@ void FileInputStream::read(
       length,
       ", read: ",
       totalBytesRead);
+
+  if (stats_) {
+    stats_->incRawBytesRead(length);
+    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
+  }
 }
 
 ReadFileInputStream::ReadFileInputStream(
     std::shared_ptr<velox::ReadFile> readFile,
-    const MetricsLogPtr& metricsLog)
-    : InputStream(readFile->getName(), metricsLog),
+    const MetricsLogPtr& metricsLog,
+    IoStatistics* stats)
+    : InputStream(readFile->getName(), metricsLog, stats),
       readFile_(std::move(readFile)) {}
 
 void ReadFileInputStream::read(
@@ -148,8 +156,14 @@ void ReadFileInputStream::read(
     throw std::invalid_argument("Buffer is null");
   }
   logRead(offset, length, purpose);
+  auto readStartMicros = getCurrentTimeMicro();
 
   std::string_view data_read = readFile_->pread(offset, length, buf);
+
+  if (stats_) {
+    stats_->incRawBytesRead(length);
+    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
+  }
 
   DWIO_ENSURE_EQ(
       data_read.size(),
@@ -275,22 +289,25 @@ bool InputStream::registerFactory(InputStream::Factory factory) {
 
 std::unique_ptr<InputStream> InputStream::create(
     const std::string& path,
-    const MetricsLogPtr& metricsLog) {
+    const MetricsLogPtr& metricsLog,
+    IoStatistics* stats) {
   DWIO_ENSURE_NOT_NULL(metricsLog.get());
   for (auto& factory : factories()) {
-    auto result = factory(path, metricsLog);
+    auto result = factory(path, metricsLog, stats);
     if (result) {
       return result;
     }
   }
-  return std::make_unique<FileInputStream>(path, metricsLog);
+  return std::make_unique<FileInputStream>(path, metricsLog, stats);
 }
 
 static std::unique_ptr<InputStream> fileInputStreamFactory(
     const std::string& filename,
-    const MetricsLogPtr& metricsLog) {
+    const MetricsLogPtr& metricsLog,
+    IoStatistics* stats = nullptr) {
   if (strncmp(filename.c_str(), "file:", 5) == 0) {
-    return std::make_unique<FileInputStream>(filename.substr(5), metricsLog);
+    return std::make_unique<FileInputStream>(
+        filename.substr(5), metricsLog, stats);
   }
   return nullptr;
 }
