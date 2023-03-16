@@ -34,6 +34,11 @@ void ParallelBufferedInput::load(const LogType logType) {
   // Sorting the regions from low to high
   std::sort(regions_.begin(), regions_.end());
 
+  uint64_t sizeBeforeMerge = 0;
+  for (const auto& region : regions_) {
+    sizeBeforeMerge += region.length;
+  }
+
   std::vector<void*> buffers;
   std::vector<Region> regions;
   uint64_t sizeToRead = 0;
@@ -46,8 +51,17 @@ void ParallelBufferedInput::load(const LogType logType) {
         sizeToRead += length;
       });
 
+  auto readStartMicros = getCurrentTimeMicro();
+
   // Now we have all buffers and regions, load it in parallel
   loadParallel(buffers, regions, logType);
+
+  if (ioStats_) {
+    ioStats_->incRawBytesRead(sizeToRead);
+    ioStats_->incRawOverreadBytes(sizeToRead - sizeBeforeMerge);
+    ioStats_->incTotalScanTime(
+        (getCurrentTimeMicro() - readStartMicros) * 1000);
+  }
 
   // Clear the loaded regions
   regions_.clear();
@@ -82,12 +96,6 @@ void ParallelBufferedInput::loadParallel(
   DWIO_ENSURE_EQ(
       regions.size(), size, "mismatched size of regions and buffers");
 
-  int64_t totalReadLength = 0;
-  for (const auto& region : regions) {
-    totalReadLength += region.length;
-  }
-  auto readStartMicros = getCurrentTimeMicro();
-
   if (size == 1) {
     const auto& region = regions[0];
     input_->read(buffers[0], region.length, region.offset, purpose);
@@ -121,12 +129,6 @@ void ParallelBufferedInput::loadParallel(
     for (int64_t i = futures.size() - 1; i >= 0; --i) {
       futures[i].wait();
     }
-  }
-
-  if (ioStats_) {
-    ioStats_->incRawBytesRead(totalReadLength);
-    ioStats_->incTotalScanTime(
-        (getCurrentTimeMicro() - readStartMicros) * 1000);
   }
 }
 } // namespace facebook::velox::dwio::common

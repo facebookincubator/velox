@@ -126,6 +126,8 @@ class BufferedInput {
  protected:
   std::shared_ptr<ReadFileInputStream> input_;
   memory::MemoryPool& pool_;
+
+  // Regions will be merged if their gap less than it.
   const int32_t mergeDistance_;
   std::vector<uint64_t> offsets_;
   std::vector<DataBuffer<char>> buffers_;

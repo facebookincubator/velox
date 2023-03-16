@@ -69,6 +69,8 @@ class ParallelBufferedInput : public BufferedInput {
  private:
   std::shared_ptr<IoStatistics> ioStats_;
   folly::Executor* const executor_;
+
+  // Used to split large region.
   const int32_t loadQuantum_;
 
   // Try split large region into several small regions by load quantum.
