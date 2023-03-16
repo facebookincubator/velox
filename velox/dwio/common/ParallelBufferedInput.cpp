@@ -21,7 +21,6 @@
 namespace facebook::velox::dwio::common {
 
 void ParallelBufferedInput::load(const LogType logType) {
-  // no regions to load
   if (regions_.size() == 0) {
     return;
   }
@@ -31,39 +30,25 @@ void ParallelBufferedInput::load(const LogType logType) {
   buffers_.clear();
   buffers_.reserve(regions_.size());
 
-  // sorting the regions from low to high
+  // Sorting the regions from low to high
   std::sort(regions_.begin(), regions_.end());
 
-  if (parallelLoad_) {
-    std::vector<void*> buffers;
-    std::vector<Region> regions;
-    uint64_t sizeToRead = 0;
-    loadWithAction(
-        logType,
-        [&buffers, &regions, &sizeToRead](
-            void* buf, uint64_t length, uint64_t offset, LogType) {
-          buffers.push_back(buf);
-          regions.emplace_back(offset, length);
-          sizeToRead += length;
-        });
+  std::vector<void*> buffers;
+  std::vector<Region> regions;
+  uint64_t sizeToRead = 0;
+  loadWithAction(
+      logType,
+      [&buffers, &regions, &sizeToRead](
+          void* buf, uint64_t length, uint64_t offset, LogType) {
+        buffers.push_back(buf);
+        regions.emplace_back(offset, length);
+        sizeToRead += length;
+      });
 
-    // Now we have all buffers and regions, load it in parallel
-    loadParallel(buffers, regions, logType);
-  } else {
-    loadWithAction(
-        logType,
-        [this](void* buf, uint64_t length, uint64_t offset, LogType type) {
-          auto readStartMicros = getCurrentTimeMicro();
-          input_->read(buf, length, offset, type);
-          if (ioStats_) {
-            ioStats_->incRawBytesRead(length);
-            ioStats_->incTotalScanTime(
-                (getCurrentTimeMicro() - readStartMicros) * 1000);
-          }
-        });
-  }
+  // Now we have all buffers and regions, load it in parallel
+  loadParallel(buffers, regions, logType);
 
-  // clear the loaded regions
+  // Clear the loaded regions
   regions_.clear();
 }
 

@@ -29,8 +29,7 @@ class ParallelBufferedInput : public BufferedInput {
       std::shared_ptr<IoStatistics> ioStats = nullptr,
       folly::Executor* executor = nullptr,
       int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
-      bool parallelLoad = false)
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
       : BufferedInput(
             std::move(readFile),
             pool,
@@ -39,8 +38,7 @@ class ParallelBufferedInput : public BufferedInput {
             mergeDistance),
         ioStats_(std::move(ioStats)),
         executor_(executor),
-        loadQuantum_(loadQuantum),
-        parallelLoad_(parallelLoad) {}
+        loadQuantum_(loadQuantum) {}
 
   ParallelBufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
@@ -48,13 +46,11 @@ class ParallelBufferedInput : public BufferedInput {
       std::shared_ptr<IoStatistics> ioStats = nullptr,
       folly::Executor* executor = nullptr,
       int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
-      bool parallelLoad = false)
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
       : BufferedInput(std::move(input), pool, mergeDistance),
         ioStats_(std::move(ioStats)),
         executor_(executor),
-        loadQuantum_(loadQuantum),
-        parallelLoad_(parallelLoad) {}
+        loadQuantum_(loadQuantum) {}
 
   ParallelBufferedInput(ParallelBufferedInput&&) = default;
   virtual ~ParallelBufferedInput() = default;
@@ -74,9 +70,6 @@ class ParallelBufferedInput : public BufferedInput {
   std::shared_ptr<IoStatistics> ioStats_;
   folly::Executor* const executor_;
   const int32_t loadQuantum_;
-
-  // Enable parallel load regions by executor.
-  const bool parallelLoad_;
 
   // try split large region into several small regions by load quantum
   void splitRegion(
