@@ -14,6 +14,7 @@
     <script src="../_static/underscore.js"></script>
     <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Testing Tools" href="testing.html" />
@@ -136,11 +137,11 @@ meet the target. Spilling runs internally and returns after the spilling is
 complete. The spilling process is not controlled by the operator but it can
 check which partitions have been spilled and how much data has been spilled
 through spill stats API.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::spill</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetRows</span><span class="p">,</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::spill</span><span class="p">(</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetRows</span><span class="p">,</span><span class="w"> </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">targetBytes</span><span class="p">);</span>
 
-<span class="n">SpillPartitionNumSet</span><span class="w"> </span><span class="nf">Spiller::spilledPartitionSet</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
+<span class="n">SpillPartitionNumSet</span><span class="w"> </span><span class="nf">Spiller::spilledPartitionSet</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 
-<span class="n">Stats</span><span class="w"> </span><span class="nf">Spiller::stats</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
+<span class="n">Stats</span><span class="w"> </span><span class="nf">Spiller::stats</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 </pre></div>
 </div>
 <p><strong>spill partitions</strong>: the operator specifies the partitions to spill and the
@@ -151,9 +152,9 @@ spilling gets triggered, one of the operators is selected to run the spill on
 all the operators (also called a group spill in discussion below). It first
 collects spillable stats from all the operators through Spiller::fillSpillRuns()
 and then selects a number of partitions to spill.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::spill</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">SpillPartitionNumSet</span><span class="o">&amp;</span><span class="w"> </span><span class="n">partitions</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::spill</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">SpillPartitionNumSet</span><span class="o">&amp;</span><span class="w"> </span><span class="n">partitions</span><span class="p">);</span>
 
-<span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::fillSpillRuns</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">SpillableStats</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">statsList</span><span class="p">);</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::fillSpillRuns</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">SpillableStats</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">statsList</span><span class="p">);</span>
 </pre></div>
 </div>
 <p><strong>spill vector</strong>: the operator spills a row vector to a specified partition. The
@@ -167,7 +168,7 @@ subset of rows from that partition to join. For the hash probe operator, it
 itself is not spillable but it needs to spill the input rows if the associated
 partition has been spilled by the hash build. We discuss this further in the
 hash join spilling section.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::spill</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">partition</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">RowVectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">spillVector</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::spill</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">partition</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">RowVectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">spillVector</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
@@ -180,10 +181,10 @@ to the operator. The operator processes the unspilled partitions, emits the
 results and frees up space in the RowContainer. Then, it loads spilled
 partitions one at a time. It calls Spiller::startMerge() for each spilled
 partition to create a sorted reader to restore the spilled partition state.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">SpillRows</span><span class="w"> </span><span class="nf">finishSpill</span><span class="p">();</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">SpillRows</span><span class="w"> </span><span class="nf">finishSpill</span><span class="p">();</span>
 
-<span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">TreeOfLosers</span><span class="o">&lt;</span><span class="n">SpillMergeStream</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">Spiller</span><span class="o">::</span><span class="n">startMerge</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">partition</span><span class="p">);</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">TreeOfLosers</span><span class="o">&lt;</span><span class="n">SpillMergeStream</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">Spiller</span><span class="o">::</span><span class="n">startMerge</span><span class="p">(</span>
+<span class="w">    </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">partition</span><span class="p">);</span>
 </pre></div>
 </div>
 <p><strong>unsorted spill restore</strong>: Used by order by hash build and hash probe
@@ -194,10 +195,10 @@ unspilled partitions, and emits the results and frees up space in the
 RowContainer. Then, it loads spilled partitions one at a time. It calls
 SpillPartition::createReader() for each spilled partition to create unsorted
 reader to restore the spilled partition state.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::finishSpill</span><span class="p">(</span><span class="n">SpillPartitionSet</span><span class="o">&amp;</span><span class="w"> </span><span class="n">partitionSet</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::finishSpill</span><span class="p">(</span><span class="n">SpillPartitionSet</span><span class="o">&amp;</span><span class="w"> </span><span class="n">partitionSet</span><span class="p">);</span>
 
-<span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">UnorderedStreamReader</span><span class="o">&lt;</span><span class="n">BatchStream</span><span class="o">&gt;&gt;</span><span class="w"></span>
-<span class="n">SpillPartition</span><span class="o">::</span><span class="n">createReader</span><span class="p">();</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">UnorderedStreamReader</span><span class="o">&lt;</span><span class="n">BatchStream</span><span class="o">&gt;&gt;</span>
+<span class="n">SpillPartition</span><span class="o">::</span><span class="n">createReader</span><span class="p">();</span>
 </pre></div>
 </div>
 </section>
@@ -229,11 +230,11 @@ of its memory state to disk. The integration of spilling with the memory
 management system is under development.</p>
 <p>Velox can be configured to trigger spilling if the spillable operator’s memory
 usage exceeds a configurable limit:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">QueryConfig::aggregationSpillMemoryThreshold</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">QueryConfig::aggregationSpillMemoryThreshold</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 
-<span class="kt">uint64_t</span><span class="w"> </span><span class="nf">QueryConfig::orderBySpillMemoryThreshold</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
+<span class="kt">uint64_t</span><span class="w"> </span><span class="nf">QueryConfig::orderBySpillMemoryThreshold</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 
-<span class="kt">uint64_t</span><span class="w"> </span><span class="nf">QueryConfig::joinSpillMemoryThreshold</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
+<span class="kt">uint64_t</span><span class="w"> </span><span class="nf">QueryConfig::joinSpillMemoryThreshold</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>This allows us to run queries using limited amount of memory without the memory
@@ -294,11 +295,11 @@ to build a lightweight garbage collection (GC) service running out of band.</p>
 can be a directory path on the underlying storage system to store all the
 generated spill files. The spill file name is built by concatenating query task
 id, driver id, and the operator id together which is unique within a query.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="nf">makeOperatorSpillPath</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">spillPath</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">taskId</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">driverId</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">operatorId</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="nf">makeOperatorSpillPath</span><span class="p">(</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">spillPath</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">taskId</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">driverId</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">operatorId</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
@@ -696,7 +697,7 @@ ahead.</p></li>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
     </div>
   </body>
 </html>
