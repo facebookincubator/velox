@@ -14,13 +14,37 @@
 
 add_subdirectory(utils)
 
+if(VELOX_ENABLE_AVX512)
+  set_source_files_properties(
+    BitPackDecoderBenchmarknew.cpp BitPackDecoderTest.cpp
+    PROPERTIES COMPILE_FLAGS "${VELOX_AVX512_FLAG}")
+  add_executable(velox_dwio_common_bitpack_decoder_benchmarks
+                 BitPackDecoderBenchmarknew.cpp)
+  target_link_libraries(velox_dwio_common_bitpack_decoder_benchmarks
+                        velox_dwio_common ${FOLLY} ${FOLLY_BENCHMARK})
+
+  add_executable(velox_dwio_common_bitpack_decoder_tests BitPackDecoderTest.cpp)
+  target_link_libraries(
+    velox_dwio_common_bitpack_decoder_tests
+    velox_dwio_common
+    velox_dwio_common_test_utils
+    ${TEST_LINK_LIBS}
+    ${gflags_LIBRARIES}
+    gtest
+    gtest_main
+    gmock
+    glog::glog
+    ${FOLLY}
+    ${FOLLY_BENCHMARK})
+endif()
+
 add_executable(
   velox_dwio_common_test
   BitConcatenationTest.cpp
-  BitUnpackingTest.cpp
   ChainedBufferTests.cpp
   DataBufferTests.cpp
   DecoderUtilTest.cpp
+  LocalFileSinkTest.cpp
   LoggedExceptionTest.cpp
   RangeTests.cpp
   RetryTests.cpp
@@ -67,7 +91,10 @@ target_link_libraries(
   ${ZLIB_LIBRARIES}
   ${TEST_LINK_LIBS})
 
-add_executable(velox_dwio_common_bitpack_decoder_benchmark
-               BitPackDecoderBenchmark.cpp)
-target_link_libraries(velox_dwio_common_bitpack_decoder_benchmark
-                      velox_dwio_common ${FOLLY} ${FOLLY_BENCHMARK})
+if(VELOX_ENABLE_ARROW)
+  add_executable(velox_dwio_common_bitpack_decoder_benchmark
+                 BitPackDecoderBenchmark.cpp)
+  target_link_libraries(
+    velox_dwio_common_bitpack_decoder_benchmark velox_dwio_common arrow duckdb
+    ${FOLLY} ${FOLLY_BENCHMARK})
+endif()
