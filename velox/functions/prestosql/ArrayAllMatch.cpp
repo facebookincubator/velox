@@ -16,7 +16,6 @@
 
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
-#include "velox/expression/ScopedVarSetter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -72,7 +71,7 @@ class AllMatchFunction : public exec::VectorFunction {
           wrapCapture,
           &context,
           lambdaArgs,
-          reinterpret_cast<VectorPtr&>(elementErrors),
+          elementErrors,
           &matchBits);
 
       bitsDecoder.get()->decode(*matchBits, elementRows);

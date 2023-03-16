@@ -63,13 +63,13 @@ class ExprCallable : public Callable {
       const BufferPtr& wrapCapture,
       EvalCtx* context,
       const std::vector<VectorPtr>& args,
-      VectorPtr& errors,
+      EvalCtx::ErrorVectorPtr& elementErrors,
       VectorPtr* result) override {
     auto row = createRowVector(context, wrapCapture, args, rows.end());
     EvalCtx lambdaCtx = createLambdaCtx(context, row, finalSelection);
     ScopedVarSetter throwOnError(lambdaCtx.mutableThrowOnError(), false);
     body_->eval(rows, lambdaCtx, *result);
-    lambdaCtx.swapErrors(reinterpret_cast<EvalCtx::ErrorVectorPtr&>(errors));
+    lambdaCtx.swapErrors(elementErrors);
   }
 
  private:

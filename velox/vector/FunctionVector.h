@@ -15,13 +15,10 @@
  */
 #pragma once
 
+#include "velox/expression/EvalCtx.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox {
-
-namespace exec {
-class EvalCtx;
-} // namespace exec
 
 // Represents a function with possible captures.
 class Callable {
@@ -69,17 +66,14 @@ class Callable {
   /// nullptr, the captures are passed as is.
   /// @param finalSelection It can be empty when context->isFinalSelection() is
   /// true and must be a valid selectivity vector otherwise.
-  /// @param elementToTopLevelRows A mapping from element rows (i.e., the rows
-  /// argument) to top-level rows of the complex-typed input of the lambda
-  /// function. elementToTopLevelRows could be a nullptr, meaning the element
-  /// rows are identical to top-level rows.
+  /// @param elementErrors element rows errors.
   virtual void applyNoThrowError(
       const SelectivityVector& rows,
       const SelectivityVector& finalSelection,
       const BufferPtr& wrapCapture,
       exec::EvalCtx* context,
       const std::vector<VectorPtr>& args,
-      VectorPtr& errors,
+      exec::EvalCtx::ErrorVectorPtr& elementErrors,
       VectorPtr* result) = 0;
 };
 
