@@ -62,8 +62,17 @@ class ParallelBufferedInput : public BufferedInput {
   // Load all regions to be read in an optimized way (IO efficiency).
   void load(const LogType) override;
 
-  virtual folly::Executor* executor() const {
+  folly::Executor* executor() const override {
     return executor_;
+  }
+
+  std::unique_ptr<BufferedInput> clone() const override {
+    return std::make_unique<ParallelBufferedInput>(
+        input_,
+        pool_,
+        ioStats_,
+        executor_,
+        loadQuantum_);
   }
 
  private:
