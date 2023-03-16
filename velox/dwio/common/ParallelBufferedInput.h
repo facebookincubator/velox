@@ -1,0 +1,110 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include "velox/dwio/common/BufferedInput.h"
+
+namespace facebook::velox::dwio::common {
+
+class ParallelBufferedInput : public BufferedInput {
+ public:
+  ParallelBufferedInput(
+      std::shared_ptr<ReadFile> readFile,
+      memory::MemoryPool& pool,
+      const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
+      std::shared_ptr<IoStatistics> ioStats = nullptr,
+      folly::Executor* executor = nullptr,
+      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
+      bool parallelLoad = false)
+      : BufferedInput(),
+        input_{std::make_shared<ReadFileInputStream>(
+            std::move(readFile),
+            metricsLog)},
+        pool_{pool},
+        ioStats_(std::move(ioStats)),
+        executor_(executor),
+        loadQuantum_(loadQuantum),
+        mergeDistance_(mergeDistance),
+        parallelLoad_(parallelLoad) {}
+
+  ParallelBufferedInput(
+      std::shared_ptr<ReadFileInputStream> input,
+      memory::MemoryPool& pool,
+      std::shared_ptr<IoStatistics> ioStats = nullptr,
+      folly::Executor* executor = nullptr,
+      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
+      bool parallelLoad = false)
+      : BufferedInput(),
+        input_(std::move(input)),
+        pool_(pool),
+        ioStats_(std::move(ioStats)),
+        executor_(executor),
+        loadQuantum_(loadQuantum),
+        mergeDistance_(mergeDistance),
+        parallelLoad_(parallelLoad) {}
+
+  ParallelBufferedInput(ParallelBufferedInput&&) = default;
+  virtual ~ParallelBufferedInput() = default;
+
+  ParallelBufferedInput(const ParallelBufferedInput&) = delete;
+  ParallelBufferedInput& operator=(const ParallelBufferedInput&) = delete;
+  ParallelBufferedInput& operator=(ParallelBufferedInput&&) = delete;
+
+  // load all regions to be read in an optimized way (IO efficiency)
+  void load(const LogType) override;
+
+  virtual folly::Executor* executor() const {
+    return executor_;
+  }
+
+ protected:
+  std::shared_ptr<ReadFileInputStream> input_;
+  memory::MemoryPool& pool_;
+  std::shared_ptr<IoStatistics> ioStats_;
+  folly::Executor* const executor_;
+  const int32_t loadQuantum_;
+  const int32_t mergeDistance_;
+
+ private:
+  // Enable parallel load regions by executor.
+  const bool parallelLoad_;
+
+  // we either load data parallelly or sequentially according to flag
+  void loadWithAction(
+      const LogType logType,
+      std::function<void(void* FOLLY_NONNULL, uint64_t, uint64_t, LogType)>
+          action);
+
+  // tries and merges WS read regions into one
+  bool tryMerge(Region& first, const Region& second);
+
+  // try split large region into several small regions by load quantum
+  void splitRegion(
+      const uint64_t length,
+      const int32_t loadQuantum,
+      std::vector<std::tuple<uint64_t, uint64_t>>& range);
+
+  // load all regions parallelly
+  void loadParallel(
+      const std::vector<void*>& buffers,
+      const std::vector<Region>& regions,
+      const LogType purpose);
+};
+
+} // namespace facebook::velox::dwio::common
