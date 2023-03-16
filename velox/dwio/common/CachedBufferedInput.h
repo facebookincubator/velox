@@ -65,21 +65,18 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<cache::ScanTracker> tracker,
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
-      folly::Executor* executor,
+      folly::Executor* FOLLY_NULLABLE executor,
       int32_t loadQuantum,
       int32_t maxCoalesceDistance)
-      : BufferedInput(
-            std::move(readFile),
-            pool,
-            metricsLog,
-            ioStats,
-            executor,
-            loadQuantum),
+      : BufferedInput(std::move(readFile), pool, metricsLog),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
         groupId_(groupId),
+        ioStats_(std::move(ioStats)),
+        executor_(executor),
         fileSize_(input_->getLength()),
+        loadQuantum_(loadQuantum),
         maxCoalesceDistance_(maxCoalesceDistance) {}
 
   CachedBufferedInput(
@@ -90,15 +87,18 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<cache::ScanTracker> tracker,
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
-      folly::Executor* executor,
+      folly::Executor* FOLLY_NULLABLE executor,
       int32_t loadQuantum,
       int32_t maxCoalesceDistance)
-      : BufferedInput(std::move(input), pool, ioStats, executor, loadQuantum),
+      : BufferedInput(std::move(input), pool),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
         groupId_(groupId),
+        ioStats_(std::move(ioStats)),
+        executor_(executor),
         fileSize_(input_->getLength()),
+        loadQuantum_(loadQuantum),
         maxCoalesceDistance_(maxCoalesceDistance) {}
 
   ~CachedBufferedInput() override {
@@ -160,6 +160,10 @@ class CachedBufferedInput : public BufferedInput {
   std::shared_ptr<cache::CoalescedLoad> coalescedLoad(
       const SeekableInputStream* FOLLY_NONNULL stream);
 
+  folly::Executor* FOLLY_NULLABLE executor() const override {
+    return executor_;
+  }
+
  private:
   // Sorts requests and makes CoalescedLoads for nearby requests. If 'prefetch'
   // is true, starts background loading.
@@ -176,6 +180,8 @@ class CachedBufferedInput : public BufferedInput {
   const uint64_t fileNum_;
   std::shared_ptr<cache::ScanTracker> tracker_;
   const uint64_t groupId_;
+  std::shared_ptr<IoStatistics> ioStats_;
+  folly::Executor* const FOLLY_NULLABLE executor_;
 
   // Regions that are candidates for loading.
   std::vector<CacheRequest> requests_;
@@ -190,6 +196,7 @@ class CachedBufferedInput : public BufferedInput {
   std::vector<std::shared_ptr<cache::CoalescedLoad>> allCoalescedLoads_;
 
   const uint64_t fileSize_;
+  const int32_t loadQuantum_;
   const int32_t maxCoalesceDistance_;
 };
 

@@ -36,7 +36,7 @@ void BufferedInput::load(const LogType logType) {
   // sorting the regions from low to high
   std::sort(regions_.begin(), regions_.end());
 
-  if (parallelLoad_) {
+  if (UNLIKELY(FLAGS_wsVRLoad)) {
     std::vector<void*> buffers;
     std::vector<Region> regions;
     uint64_t sizeToRead = 0;
@@ -50,18 +50,12 @@ void BufferedInput::load(const LogType logType) {
         });
 
     // Now we have all buffers and regions, load it in parallel
-    loadParallel(buffers, regions, logType);
+    input_->vread(buffers, regions, logType);
   } else {
     loadWithAction(
         logType,
         [this](void* buf, uint64_t length, uint64_t offset, LogType type) {
-          auto readStartMicros = getCurrentTimeMicro();
           input_->read(buf, length, offset, type);
-          if (ioStats_) {
-            ioStats_->incRawBytesRead(length);
-            ioStats_->incTotalScanTime(
-                (getCurrentTimeMicro() - readStartMicros) * 1000);
-          }
         });
   }
 
@@ -122,8 +116,8 @@ bool BufferedInput::tryMerge(Region& first, const Region& second) {
     // the second region is inside first one if extension is negative
     if (extension > 0) {
       first.length += extension;
-      if (ioStats_ && gap > 0) {
-        ioStats_->incRawOverreadBytes(gap);
+      if ((input_->getStats() != nullptr) && gap > 0) {
+        input_->getStats()->incRawOverreadBytes(gap);
       }
     }
 
@@ -131,84 +125,6 @@ bool BufferedInput::tryMerge(Region& first, const Region& second) {
   }
 
   return false;
-}
-
-void BufferedInput::splitRegion(
-    const uint64_t length,
-    const int32_t loadQuantum,
-    std::vector<std::tuple<uint64_t, uint64_t>>& range) {
-  uint64_t cursor = 0;
-  while (cursor + loadQuantum < length) {
-    range.emplace_back(cursor, loadQuantum);
-    cursor += loadQuantum;
-  }
-
-  if ((length - cursor) > (loadQuantum / 2)) {
-    range.emplace_back(cursor, (length - cursor));
-  } else {
-    auto last = range.back();
-    range.pop_back();
-    range.emplace_back(
-        std::get<0>(last), std::get<1>(last) + (length - cursor));
-  }
-}
-
-void BufferedInput::loadParallel(
-    const std::vector<void*>& buffers,
-    const std::vector<Region>& regions,
-    const LogType purpose) {
-  DWIO_ENSURE_NOT_NULL(executor_, "parallel load need executor");
-  const auto size = buffers.size();
-  DWIO_ENSURE_GT(size, 0, "invalid parameters");
-  DWIO_ENSURE_EQ(
-      regions.size(), size, "mismatched size of regions and buffers");
-
-  int64_t totalReadLength = 0;
-  for (const auto& region : regions) {
-    totalReadLength += region.length;
-  }
-  auto readStartMicros = getCurrentTimeMicro();
-
-  if (size == 1) {
-    const auto& region = regions[0];
-    input_->read(buffers[0], region.length, region.offset, purpose);
-  } else {
-    std::vector<folly::Future<folly::Unit>> futures;
-    for (size_t i = 0; i < size; ++i) {
-      const auto& region = regions[i];
-      const auto& buffer = buffers[i];
-      if (region.length > loadQuantum_) {
-        std::vector<std::tuple<uint64_t, uint64_t>> ranges;
-        splitRegion(region.length, loadQuantum_, ranges);
-        for (size_t idx = 0; idx < ranges.size(); idx++) {
-          auto cursor = std::get<0>(ranges[idx]);
-          auto length = std::get<1>(ranges[idx]);
-          auto future = folly::via(
-              executor_, [this, buffer, region, cursor, length, &purpose]() {
-                char* b = reinterpret_cast<char*>(buffer);
-                input_->read(
-                    b + cursor, length, region.offset + cursor, purpose);
-              });
-          futures.push_back(std::move(future));
-        }
-      } else {
-        auto future = folly::via(executor_, [this, buffer, region, &purpose]() {
-          input_->read(buffer, region.length, region.offset, purpose);
-        });
-        futures.push_back(std::move(future));
-      }
-    }
-
-    for (int64_t i = futures.size() - 1; i >= 0; --i) {
-      futures[i].wait();
-    }
-  }
-
-  if (ioStats_) {
-    ioStats_->incRawBytesRead(totalReadLength);
-    ioStats_->incTotalScanTime(
-        (getCurrentTimeMicro() - readStartMicros) * 1000);
-  }
 }
 
 std::unique_ptr<SeekableInputStream> BufferedInput::readBuffer(

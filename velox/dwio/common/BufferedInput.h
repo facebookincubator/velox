@@ -30,36 +30,20 @@ class BufferedInput {
       std::shared_ptr<ReadFile> readFile,
       memory::MemoryPool& pool,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      std::shared_ptr<IoStatistics> ioStats = nullptr,
-      folly::Executor* executor = nullptr,
-      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
-      bool parallelLoad = false)
+      IoStatistics* FOLLY_NULLABLE stats = nullptr,
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
       : input_{std::make_shared<ReadFileInputStream>(
             std::move(readFile),
-            metricsLog)},
+            metricsLog,
+            stats)},
         pool_{pool},
-        ioStats_(std::move(ioStats)),
-        executor_(executor),
-        loadQuantum_(loadQuantum),
-        mergeDistance_(mergeDistance),
-        parallelLoad_(parallelLoad) {}
+        mergeDistance_(mergeDistance) {}
 
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       memory::MemoryPool& pool,
-      std::shared_ptr<IoStatistics> ioStats = nullptr,
-      folly::Executor* executor = nullptr,
-      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
-      bool parallelLoad = false)
-      : input_(std::move(input)),
-        pool_(pool),
-        ioStats_(std::move(ioStats)),
-        executor_(executor),
-        loadQuantum_(loadQuantum),
-        mergeDistance_(mergeDistance),
-        parallelLoad_(parallelLoad) {}
+      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
+      : input_(std::move(input)), pool_(pool), mergeDistance_(mergeDistance) {}
 
   BufferedInput(BufferedInput&&) = default;
   virtual ~BufferedInput() = default;
@@ -123,8 +107,7 @@ class BufferedInput {
   // Create a new (clean) instance of BufferedInput sharing the same underlying
   // file and memory pool.  The enqueued regions are NOT copied.
   virtual std::unique_ptr<BufferedInput> clone() const {
-    return std::make_unique<BufferedInput>(
-        input_, pool_, ioStats_, executor_, loadQuantum_);
+    return std::make_unique<BufferedInput>(input_, pool_, mergeDistance_);
   }
 
   const std::shared_ptr<ReadFile>& getReadFile() const {
@@ -136,25 +119,19 @@ class BufferedInput {
     return input_;
   }
 
-  virtual folly::Executor* executor() const {
-    return executor_;
+  virtual folly::Executor* FOLLY_NULLABLE executor() const {
+    return nullptr;
   }
 
  protected:
   std::shared_ptr<ReadFileInputStream> input_;
   memory::MemoryPool& pool_;
-  std::shared_ptr<IoStatistics> ioStats_;
-  folly::Executor* const executor_;
-  const int32_t loadQuantum_;
   const int32_t mergeDistance_;
 
  private:
   std::vector<uint64_t> offsets_;
   std::vector<DataBuffer<char>> buffers_;
   std::vector<Region> regions_;
-
-  // Enable parallel load regions by executor.
-  const bool parallelLoad_;
 
   std::unique_ptr<SeekableInputStream> readBuffer(
       uint64_t offset,
@@ -186,18 +163,6 @@ class BufferedInput {
 
   // tries and merges WS read regions into one
   bool tryMerge(Region& first, const Region& second);
-
-  // try split large region into several small regions by load quantum
-  void splitRegion(
-      const uint64_t length,
-      const int32_t loadQuantum,
-      std::vector<std::tuple<uint64_t, uint64_t>>& range);
-
-  // load all regions parallelly
-  void loadParallel(
-      const std::vector<void*>& buffers,
-      const std::vector<Region>& regions,
-      const LogType purpose);
 };
 
 } // namespace facebook::velox::dwio::common
