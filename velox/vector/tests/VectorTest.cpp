@@ -260,24 +260,6 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
         BaseVector::countNulls(nulls, numRows));
   }
 
-  VectorPtr createFixedSizeArray(int32_t numRows, bool withNulls, int width) {
-    BufferPtr nulls;
-    BufferPtr offsets;
-    BufferPtr sizes;
-    int32_t numElements =
-        createRepeated(numRows, withNulls, &nulls, &offsets, &sizes, width);
-    VectorPtr elements = createRow(numElements, withNulls);
-    return std::make_shared<ArrayVector>(
-        pool_.get(),
-        FIXED_SIZE_ARRAY(width, elements->type()),
-        nulls,
-        numRows,
-        offsets,
-        sizes,
-        elements,
-        BaseVector::countNulls(nulls, numRows));
-  }
-
   VectorPtr createMap(int32_t numRows, bool withNulls);
 
   template <TypeKind KIND>
@@ -1045,20 +1027,6 @@ TEST_F(VectorTest, array) {
   testSlices(allNull);
 }
 
-TEST_F(VectorTest, fixedSizeArray) {
-  const int width = 7;
-  auto baseArray = createFixedSizeArray(vectorSize_, false, width);
-  testCopy(baseArray, numIterations_);
-  testSlices(baseArray);
-  baseArray = createFixedSizeArray(vectorSize_, true, width);
-  testCopy(baseArray, numIterations_);
-  testSlices(baseArray);
-  auto allNull =
-      BaseVector::createNullConstant(baseArray->type(), 50, pool_.get());
-  testCopy(allNull, numIterations_);
-  testSlices(allNull);
-}
-
 TEST_F(VectorTest, map) {
   auto baseMap = createMap(vectorSize_, false);
   testCopy(baseMap, numIterations_);
@@ -1107,7 +1075,6 @@ TEST_F(VectorTest, unknown) {
   auto unknownVector = BaseVector::create(UNKNOWN(), 10, pool_.get());
   ASSERT_EQ(VectorEncoding::Simple::FLAT, unknownVector->encoding());
   ASSERT_FALSE(unknownVector->isScalar());
-  ASSERT_EQ(unknownVector->getNullCount().value(), 10);
   for (int i = 0; i < unknownVector->size(); ++i) {
     ASSERT_TRUE(unknownVector->isNullAt(i)) << i;
   }
@@ -1127,7 +1094,6 @@ TEST_F(VectorTest, unknown) {
 
   // It is okay to copy to a non-constant UNKNOWN vector.
   unknownVector->copy(constUnknownVector.get(), rows, nullptr);
-  ASSERT_EQ(unknownVector->getNullCount().value(), 10);
   for (int i = 0; i < unknownVector->size(); ++i) {
     ASSERT_TRUE(unknownVector->isNullAt(i)) << i;
   }

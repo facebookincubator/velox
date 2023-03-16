@@ -18,6 +18,7 @@ target_link_libraries(velox_aggregates_test_lib velox_exec_test_lib)
 
 add_executable(
   velox_aggregates_test
+  AggregationFunctionRegTest.cpp
   ApproxDistinctTest.cpp
   ApproxMostFrequentTest.cpp
   ApproxPercentileTest.cpp
@@ -62,6 +63,6 @@ target_link_libraries(
   velox_hive_connector
   velox_type
   velox_vector_fuzzer
-  ${gflags_LIBRARIES}
+  gflags::gflags
   gtest
   gtest_main)

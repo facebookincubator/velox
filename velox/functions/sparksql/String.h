@@ -94,6 +94,54 @@ struct Sha1HexStringFunction {
   }
 };
 
+/// sha2 function
+/// sha2(varbinary, bitLength) -> string
+/// Calculate SHA-2 family of functions (SHA-224, SHA-256,
+/// SHA-384, and SHA-512) and convert the result to a hex string.
+/// The second argument indicates the desired bit length of the result, which
+/// must have a value of 224, 256, 384, 512, or 0 (which is equivalent to 256).
+/// If asking for an unsupported bitLength, the return value is NULL.
+/// Returns SHA-2 digest as hex string.
+template <typename T>
+struct Sha2HexStringFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  bool call(
+      out_type<Varchar>& result,
+      const arg_type<Varbinary>& input,
+      const int32_t& bitLength) {
+    const int32_t nonzeroBitLength = (bitLength == 0) ? 256 : bitLength;
+    const EVP_MD* hashAlgorithm;
+    switch (nonzeroBitLength) {
+      case 224:
+        hashAlgorithm = EVP_sha224();
+        break;
+      case 256:
+        hashAlgorithm = EVP_sha256();
+        break;
+      case 384:
+        hashAlgorithm = EVP_sha384();
+        break;
+      case 512:
+        hashAlgorithm = EVP_sha512();
+        break;
+      default:
+        // For an unsupported bitLength, the return value is NULL.
+        return false;
+    }
+    const int32_t digestLength = nonzeroBitLength >> 3;
+    result.resize(digestLength * 2);
+    auto resultBuffer =
+        folly::MutableByteRange((uint8_t*)result.data(), digestLength);
+    auto inputBuffer =
+        folly::ByteRange((const uint8_t*)input.data(), input.size());
+    folly::ssl::OpenSSLHash::hash(resultBuffer, hashAlgorithm, inputBuffer);
+    encodeDigestToBase16((uint8_t*)result.data(), digestLength);
+    return true;
+  }
+};
+
 /// contains function
 /// contains(string, string) -> bool
 /// Searches the second argument in the first one.
@@ -162,5 +210,153 @@ struct EndsWithFunction {
     return true;
   }
 };
+
+/// ltrim(trimStr, srcStr) -> varchar
+///     Remove leading specified characters from srcStr. The specified character
+///     is any character contained in trimStr.
+/// rtrim(trimStr, srcStr) -> varchar
+///     Remove trailing specified characters from srcStr. The specified
+///     character is any character contained in trimStr.
+/// trim(trimStr, srcStr) -> varchar
+///     Remove leading and trailing specified characters from srcStr. The
+///     specified character is any character contained in trimStr.
+template <typename T, bool leftTrim, bool rightTrim>
+struct TrimFunctionBase {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 1;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& trimStr,
+      const arg_type<Varchar>& srcStr) {
+    if (srcStr.empty()) {
+      result.setEmpty();
+      return;
+    }
+    if (trimStr.empty()) {
+      result.setNoCopy(srcStr);
+      return;
+    }
+
+    auto trimStrView = std::string_view(trimStr);
+    size_t resultStartIndex = 0;
+    if constexpr (leftTrim) {
+      resultStartIndex =
+          std::string_view(srcStr).find_first_not_of(trimStrView);
+      if (resultStartIndex == std::string_view::npos) {
+        result.setEmpty();
+        return;
+      }
+    }
+
+    size_t resultSize = srcStr.size() - resultStartIndex;
+    if constexpr (rightTrim) {
+      size_t lastIndex =
+          std::string_view(srcStr.data() + resultStartIndex, resultSize)
+              .find_last_not_of(trimStrView);
+      if (lastIndex == std::string_view::npos) {
+        result.setEmpty();
+        return;
+      }
+      resultSize = lastIndex + 1;
+    }
+
+    result.setNoCopy(StringView(srcStr.data() + resultStartIndex, resultSize));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& trimStr,
+      const arg_type<Varchar>& srcStr) {
+    if (srcStr.empty()) {
+      result.setEmpty();
+      return;
+    }
+    if (trimStr.empty()) {
+      result.setNoCopy(srcStr);
+      return;
+    }
+
+    auto trimStrView = std::string_view(trimStr);
+    auto resultBegin = srcStr.begin();
+    if constexpr (leftTrim) {
+      while (resultBegin < srcStr.end()) {
+        int charLen = utf8proc_char_length(resultBegin);
+        auto c = std::string_view(resultBegin, charLen);
+        if (trimStrView.find(c) == std::string_view::npos) {
+          break;
+        }
+        resultBegin += charLen;
+      }
+    }
+
+    auto resultEnd = srcStr.end();
+    if constexpr (rightTrim) {
+      auto curPos = resultEnd - 1;
+      while (curPos >= resultBegin) {
+        if (utf8proc_char_first_byte(curPos)) {
+          auto c = std::string_view(curPos, resultEnd - curPos);
+          if (trimStrView.find(c) == std::string_view::npos) {
+            break;
+          }
+          resultEnd = curPos;
+        }
+        --curPos;
+      }
+    }
+
+    result.setNoCopy(StringView(resultBegin, resultEnd - resultBegin));
+  }
+};
+
+/// ltrim(srcStr) -> varchar
+///     Removes leading 0x20(space) characters from srcStr.
+/// rtrim(srcStr) -> varchar
+///     Removes trailing 0x20(space) characters from srcStr.
+/// trim(srcStr) -> varchar
+///     Remove leading and trailing 0x20(space) characters from srcStr.
+template <typename T, bool leftTrim, bool rightTrim>
+struct TrimSpaceFunctionBase {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& srcStr) {
+    // Because utf-8 and Ascii have the same space character code, both are
+    // char=32. So trimAsciiSpace can be reused here.
+    stringImpl::
+        trimAsciiWhiteSpace<leftTrim, rightTrim, stringImpl::isAsciiSpace>(
+            result, srcStr);
+  }
+};
+
+template <typename T>
+struct TrimFunction : public TrimFunctionBase<T, true, true> {};
+
+template <typename T>
+struct LTrimFunction : public TrimFunctionBase<T, true, false> {};
+
+template <typename T>
+struct RTrimFunction : public TrimFunctionBase<T, false, true> {};
+
+template <typename T>
+struct TrimSpaceFunction : public TrimSpaceFunctionBase<T, true, true> {};
+
+template <typename T>
+struct LTrimSpaceFunction : public TrimSpaceFunctionBase<T, true, false> {};
+
+template <typename T>
+struct RTrimSpaceFunction : public TrimSpaceFunctionBase<T, false, true> {};
 
 } // namespace facebook::velox::functions::sparksql

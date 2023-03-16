@@ -868,6 +868,9 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
     if (!values) {
       continue;
     }
+    if (values->isConstantEncoding() && values->size() < newRows->end()) {
+      values = BaseVector::wrapInConstant(newRows->end(), 0, values);
+    }
     context.setPeeled(i, values);
     if (constantFields.empty() || !constantFields[i]) {
       ++numPeeled;
@@ -1648,6 +1651,18 @@ void Expr::appendInputsSql(
     // Function with no inputs.
     stream << "()";
   }
+}
+
+bool Expr::isConstant() const {
+  if (!isDeterministic()) {
+    return false;
+  }
+  for (auto& input : inputs_) {
+    if (!dynamic_cast<ConstantExpr*>(input.get())) {
+      return false;
+    }
+  }
+  return true;
 }
 
 ExprSet::ExprSet(

@@ -498,12 +498,9 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   virtual bool isFixedWidth() const = 0;
 
-  /// Used in FixedSizeArrayType to return the width constraint of the type.
-  virtual size_type fixedElementsWidth() const {
-    throw std::invalid_argument{"unimplemented"};
-  }
-
   static std::shared_ptr<const Type> create(const folly::dynamic& obj);
+
+  static void registerSerDe();
 
   /// Recursive kind hashing (uses only TypeKind).
   size_t hashKind() const;
@@ -666,9 +663,9 @@ class DecimalType : public ScalarType<KIND> {
   }
 
   folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "Type";
-    obj["type"] = toString();
+    auto obj = ScalarType<KIND>::serialize();
+    obj["precision"] = precision_;
+    obj["scale"] = scale_;
     return obj;
   }
 
@@ -748,37 +745,6 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
   std::shared_ptr<const Type> child_;
 };
 
-/// FixedSizeArrayType implements an Array that is constrained to
-/// always be a fixed size (width). When passing this type on the wire,
-/// a FixedSizeArrayType may change into a general variable width array
-/// as Presto/Spark do not have a notion of fixed size array.
-///
-/// Anywhere an ArrayType can be used, a FixedSizeArrayType can be
-/// used.
-class FixedSizeArrayType : public ArrayType {
- public:
-  explicit FixedSizeArrayType(size_type len, std::shared_ptr<const Type> child);
-
-  bool isFixedWidth() const override {
-    return true;
-  }
-
-  size_type fixedElementsWidth() const override {
-    return len_;
-  }
-
-  const char* kindName() const override {
-    return "FIXED_SIZE_ARRAY";
-  }
-
-  bool equivalent(const Type& other) const override;
-
-  std::string toString() const override;
-
- private:
-  size_type len_;
-};
-
 class MapType : public TypeBase<TypeKind::MAP> {
  public:
   MapType(
@@ -839,7 +805,9 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
   bool equivalent(const Type& other) const override;
 
+  bool equals(const Type& other) const;
   bool operator==(const Type& other) const override;
+  bool operator==(const RowType& other) const;
 
   std::string toString() const override;
 
@@ -1081,9 +1049,6 @@ struct TypeFactory<TypeKind::ROW> {
 };
 
 std::shared_ptr<const ArrayType> ARRAY(std::shared_ptr<const Type> elementType);
-std::shared_ptr<const FixedSizeArrayType> FIXED_SIZE_ARRAY(
-    FixedSizeArrayType::size_type size,
-    std::shared_ptr<const Type> elementType);
 
 std::shared_ptr<const RowType> ROW(
     std::vector<std::string>&& names,
@@ -1848,9 +1813,8 @@ class CustomTypeFactories {
  public:
   virtual ~CustomTypeFactories() = default;
 
-  /// Returns a shared pointer to the custom type with the specified child
-  /// types.
-  virtual TypePtr getType(std::vector<TypePtr> childTypes) const = 0;
+  /// Returns a shared pointer to the custom type.
+  virtual TypePtr getType() const = 0;
 
   /// Returns a shared pointer to the custom cast operator. If a custom type
   /// should be treated as its underlying native type during type castings,
@@ -1862,28 +1826,28 @@ class CustomTypeFactories {
 /// Adds custom type to the registry if it doesn't exist already. No-op if type
 /// with specified name already exists. Returns true if type was added, false if
 /// type with the specified name already exists.
-bool registerType(
+bool registerCustomType(
     const std::string& name,
     std::unique_ptr<const CustomTypeFactories> factories);
 
-/// Return true if customer type with specified name exists.
-bool typeExists(const std::string& name);
+/// Return true if a custom type with the specified name exists.
+bool customTypeExists(const std::string& name);
 
 /// Returns a set of all registered custom type names.
 std::unordered_set<std::string> getCustomTypeNames();
 
 /// Returns an instance of a custom type with the specified name and specified
 /// child types.
-TypePtr getType(const std::string& name, std::vector<TypePtr> childTypes);
+TypePtr getCustomType(const std::string& name);
 
 /// Removes custom type from the registry if exists. Returns true if type was
 /// removed, false if type didn't exist.
-bool unregisterType(const std::string& name);
+bool unregisterCustomType(const std::string& name);
 
 /// Returns the custom cast operator for the custom type with the specified
 /// name. Returns nullptr if a type with the specified name does not exist or
 /// does not have a dedicated custom cast operator.
-exec::CastOperatorPtr getCastOperator(const std::string& name);
+exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name);
 
 // Allows us to transparently use folly::toAppend(), folly::join(), etc.
 template <class TString>

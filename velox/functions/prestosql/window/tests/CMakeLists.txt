@@ -20,6 +20,7 @@ add_executable(
   RankTest.cpp
   RowNumberTest.cpp
   SimpleAggregatesTest.cpp
+  WindowFunctionRegTest.cpp
   WindowTestBase.cpp)
 
 add_test(
@@ -35,6 +36,6 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_vector_test_lib
   velox_window
-  ${gflags_LIBRARIES}
+  gflags::gflags
   gtest
   gtest_main)

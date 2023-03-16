@@ -80,6 +80,8 @@ with HiveConnector, table scan reads data from ORC or Parquet files.
    * - assignments
      - Connector-specific mapping from the table schema to output columns.
 
+.. _ArrowStream operator:
+
 ArrowStreamNode
 ~~~~~~~~~~~~~~~
 
@@ -394,6 +396,10 @@ The values operation returns specified data.
      - Description
    * - values
      - Set of rows to return.
+   * - parallelizable
+     - If the same input should be produced by each thread (one per driver).
+   * - repeatTimes
+     - How many times each vector should be produced as input.
 
 ExchangeNode
 ~~~~~~~~~~~~

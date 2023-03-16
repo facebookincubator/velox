@@ -198,7 +198,9 @@ TEST_F(TopNTest, varchar) {
         batchSize, [](vector_size_t row) { return row * 0.1; }, nullEvery(11));
     auto c2 = makeFlatVector<StringView>(
         batchSize,
-        [](vector_size_t row) { return StringView(std::to_string(row)); },
+        [](vector_size_t row) {
+          return StringView::makeInline(std::to_string(row));
+        },
         nullEvery(31));
     vectors.push_back(makeRowVector({c0, c1, c2}));
   }
@@ -218,7 +220,7 @@ TEST_F(TopNTest, multiBatch) {
     auto c1 = makeFlatVector<double>(
         batchSize, [](vector_size_t row) { return row * 0.1; });
     auto c2 = makeFlatVector<StringView>(batchSize, [](vector_size_t row) {
-      return StringView(std::to_string(row));
+      return StringView::makeInline(std::to_string(row));
     });
     vectors.push_back(makeRowVector({c0, c1, c2}));
   }
@@ -237,11 +239,25 @@ TEST_F(TopNTest, empty) {
     auto c1 = makeFlatVector<double>(
         batchSize, [](vector_size_t row) { return row * 0.1; });
     auto c2 = makeFlatVector<StringView>(batchSize, [](vector_size_t row) {
-      return StringView(std::to_string(row));
+      return StringView::makeInline(std::to_string(row));
     });
     vectors.push_back(makeRowVector({c0, c1, c2}));
   }
   createDuckDbTable(vectors);
 
   testSingleKey(vectors, "c0", "c0 < 0");
+}
+
+TEST_F(TopNTest, lowCardinality) {
+  vector_size_t size = 1'000;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t i = 0; i < 5; ++i) {
+    auto c0 = makeFlatVector<int64_t>(size, [](auto /*row*/) { return 0; });
+    auto c1 = makeFlatVector<int32_t>(size, [](auto /*row*/) { return 10; });
+    auto c2 = makeFlatVector<double>(size, [](auto /*row*/) { return 12.5; });
+    vectors.push_back(makeRowVector({c0, c1, c2}));
+  }
+  createDuckDbTable(vectors);
+
+  testTwoKeys(vectors, "c0", "c1", 200);
 }

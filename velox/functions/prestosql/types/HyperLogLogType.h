@@ -39,6 +39,13 @@ class HyperLogLogType : public VarbinaryType {
   std::string toString() const override {
     return "HYPERLOGLOG";
   }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = "HYPERLOGLOG";
+    return obj;
+  }
 };
 
 inline bool isHyperLogLogType(const TypePtr& type) {
@@ -61,7 +68,7 @@ using HyperLogLog = CustomType<HyperLogLogT>;
 
 class HyperLogLogTypeFactories : public CustomTypeFactories {
  public:
-  TypePtr getType(std::vector<TypePtr> /*childTypes*/) const override {
+  TypePtr getType() const override {
     return HYPERLOGLOG();
   }
 
@@ -70,4 +77,7 @@ class HyperLogLogTypeFactories : public CustomTypeFactories {
     return nullptr;
   }
 };
+
+void registerHyperLogLogType();
+
 } // namespace facebook::velox

@@ -17,13 +17,13 @@ cmake_minimum_required(VERSION 3.14)
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
-set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
-
 # set the project name
 project(velox)
 
+list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake")
+
 # Include our ThirdPartyToolchain dependencies macros
-include(ThirdpartyToolchain.cmake)
+include(ResolveDependency)
 
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -330,8 +330,26 @@ resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 # Range-v3 will be enable when the codegen code actually lands keeping it here
 # for reference. find_package(range-v3)
 
-find_package(gflags COMPONENTS shared)
-find_package(glog REQUIRED)
+set_source(gflags)
+resolve_dependency(gflags COMPONENTS shared)
+if(NOT TARGET gflags::gflags)
+  # This is a bit convoluted, but we want to be able to use gflags::gflags as a
+  # target even when velox is built as a subproject which uses
+  # `find_package(gflags)` which does not create a globally imported target that
+  # we can ALIAS.
+  add_library(gflags_gflags INTERFACE)
+  target_link_libraries(gflags_gflags INTERFACE gflags)
+  add_library(gflags::gflags ALIAS gflags_gflags)
+endif()
+
+if(${gflags_SOURCE} STREQUAL "BUNDLED")
+  # we force glog from source to avoid issues with a system version built
+  # against another gflags version (which is likely)
+  set(glog_SOURCE BUNDLED)
+else()
+  set(glog_SOURCE SYSTEM)
+endif()
+resolve_dependency(glog)
 
 set_source(fmt)
 resolve_dependency(fmt)
@@ -353,7 +371,7 @@ endif()
 find_library(RE2 re2 REQUIRED)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
-  set(pybind11_SOURCE AUTO)
+  set_source(pybind11)
   resolve_dependency(pybind11 2.10.0)
   add_subdirectory(pyvelox)
 endif()
@@ -458,6 +476,18 @@ include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
 include_directories(SYSTEM velox/external/duckdb)
 include_directories(SYSTEM velox/external/duckdb/tpch/dbgen/include)
+
+# these were previously vendored in third-party/
+if(NOT VELOX_DISABLE_GOOGLETEST)
+  set(gtest_SOURCE BUNDLED)
+  resolve_dependency(gtest)
+  set(VELOX_GTEST_INCUDE_DIR
+      "${gtest_SOURCE_DIR}/googletest/include"
+      PARENT_SCOPE)
+endif()
+
+set(xsimd_SOURCE BUNDLED)
+resolve_dependency(xsimd)
 
 include(CTest) # include after project() but before add_subdirectory()
 
