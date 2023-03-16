@@ -31,15 +31,15 @@ class ParallelBufferedInput : public BufferedInput {
       int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
       int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
       bool parallelLoad = false)
-      : BufferedInput(),
-        input_{std::make_shared<ReadFileInputStream>(
+      : BufferedInput(
             std::move(readFile),
-            metricsLog)},
-        pool_{pool},
+            pool,
+            metricsLog,
+            nullptr,
+            mergeDistance),
         ioStats_(std::move(ioStats)),
         executor_(executor),
         loadQuantum_(loadQuantum),
-        mergeDistance_(mergeDistance),
         parallelLoad_(parallelLoad) {}
 
   ParallelBufferedInput(
@@ -50,13 +50,10 @@ class ParallelBufferedInput : public BufferedInput {
       int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
       int32_t mergeDistance = ReaderOptions::kMaxMergeDistance,
       bool parallelLoad = false)
-      : BufferedInput(),
-        input_(std::move(input)),
-        pool_(pool),
+      : BufferedInput(std::move(input), pool, mergeDistance),
         ioStats_(std::move(ioStats)),
         executor_(executor),
         loadQuantum_(loadQuantum),
-        mergeDistance_(mergeDistance),
         parallelLoad_(parallelLoad) {}
 
   ParallelBufferedInput(ParallelBufferedInput&&) = default;
@@ -73,26 +70,13 @@ class ParallelBufferedInput : public BufferedInput {
     return executor_;
   }
 
- protected:
-  std::shared_ptr<ReadFileInputStream> input_;
-  memory::MemoryPool& pool_;
+ private:
   std::shared_ptr<IoStatistics> ioStats_;
   folly::Executor* const executor_;
   const int32_t loadQuantum_;
-  const int32_t mergeDistance_;
 
- private:
   // Enable parallel load regions by executor.
   const bool parallelLoad_;
-
-  // we either load data parallelly or sequentially according to flag
-  void loadWithAction(
-      const LogType logType,
-      std::function<void(void* FOLLY_NONNULL, uint64_t, uint64_t, LogType)>
-          action);
-
-  // tries and merges WS read regions into one
-  bool tryMerge(Region& first, const Region& second);
 
   // try split large region into several small regions by load quantum
   void splitRegion(

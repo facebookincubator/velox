@@ -325,7 +325,7 @@ class Connector {
       const std::string& scanId,
       int32_t loadQuantum);
 
-  virtual folly::Executor* executor() const {
+  virtual folly::Executor* FOLLY_NULLABLE executor() const {
     return nullptr;
   }
 
