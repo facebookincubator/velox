@@ -59,7 +59,7 @@ class ParallelBufferedInput : public BufferedInput {
   ParallelBufferedInput& operator=(const ParallelBufferedInput&) = delete;
   ParallelBufferedInput& operator=(ParallelBufferedInput&&) = delete;
 
-  // load all regions to be read in an optimized way (IO efficiency)
+  // Load all regions to be read in an optimized way (IO efficiency).
   void load(const LogType) override;
 
   virtual folly::Executor* executor() const {
@@ -71,13 +71,13 @@ class ParallelBufferedInput : public BufferedInput {
   folly::Executor* const executor_;
   const int32_t loadQuantum_;
 
-  // try split large region into several small regions by load quantum
+  // Try split large region into several small regions by load quantum.
   void splitRegion(
       const uint64_t length,
       const int32_t loadQuantum,
       std::vector<std::tuple<uint64_t, uint64_t>>& range);
 
-  // load all regions parallelly
+  // Load all regions parallelly.
   void loadParallel(
       const std::vector<void*>& buffers,
       const std::vector<Region>& regions,

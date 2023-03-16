@@ -24,6 +24,7 @@ void ParallelBufferedInput::load(const LogType logType) {
   if (regions_.size() == 0) {
     return;
   }
+  DWIO_ENSURE_NOT_NULL(executor_, "parallel load need executor");
 
   offsets_.clear();
   offsets_.reserve(regions_.size());
@@ -76,7 +77,6 @@ void ParallelBufferedInput::loadParallel(
     const std::vector<void*>& buffers,
     const std::vector<Region>& regions,
     const LogType purpose) {
-  DWIO_ENSURE_NOT_NULL(executor_, "parallel load need executor");
   const auto size = buffers.size();
   DWIO_ENSURE_GT(size, 0, "invalid parameters");
   DWIO_ENSURE_EQ(
