@@ -21,6 +21,7 @@
 
 #include <fmt/format.h>
 #include <glog/logging.h>
+#include <chrono>
 #include <fstream>
 #include <memory>
 #include <stdexcept>
@@ -56,7 +57,7 @@ class S3ReadFile final : public ReadFile {
  public:
   S3ReadFile(
       const std::string& path,
-      const std::shared_ptr<Aws::S3::S3Client>& client,
+      std::shared_ptr<Aws::S3::S3Client> client,
       const std::shared_ptr<Aws::Utils::Threading::PooledThreadExecutor>&
           executor)
       : client_(client), executor_(executor) {
@@ -80,6 +81,9 @@ class S3ReadFile final : public ReadFile {
         outcome, "Failed to get metadata for S3 object", bucket_, key_);
     length_ = outcome.GetResult().GetContentLength();
     VELOX_CHECK_GE(length_, 0);
+    Aws::Transfer::TransferManagerConfiguration transferConfig(executor_.get());
+    transferConfig.s3Client = client_;
+    transferManager_ = Aws::Transfer::TransferManager::Create(transferConfig);
   }
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buffer)
@@ -148,17 +152,32 @@ class S3ReadFile final : public ReadFile {
   // bytes.
   void preadInternal(uint64_t offset, uint64_t length, char* position) const {
     // Read the desired range of bytes.
-    Aws::Transfer::TransferManagerConfiguration transferConfig(executor_.get());
-    transferConfig.s3Client = client_;
-    auto transferManager =
-        Aws::Transfer::TransferManager::Create(transferConfig);
     Aws::Utils::Stream::PreallocatedStreamBuf streamBuffer(
         (unsigned char*)position, length);
     auto downloadHandle =
-        transferManager->DownloadFile(bucket_, key_, offset, length, [&]() {
+        transferManager_->DownloadFile(bucket_, key_, offset, length, [&]() {
           return Aws::New<UnderlyingStreamWrapper>("TestTag", &streamBuffer);
         });
-    downloadHandle->WaitUntilFinished();
+    int count = 1;
+    using namespace std::chrono;
+    uint64_t startTime =
+        duration_cast<milliseconds>(system_clock::now().time_since_epoch())
+            .count();
+    uint64_t now = startTime;
+    uint64_t logAt = startTime + 5000; // wait 5 seconds; then warn and backoff
+    auto status = downloadHandle->GetStatus();
+    while (status == Aws::Transfer::TransferStatus::NOT_STARTED ||
+           status == Aws::Transfer::TransferStatus::IN_PROGRESS) {
+      if (now > logAt) {
+        std::cout << "WARNING: request is taking a long time: "
+                  << (now - startTime) / 1000 << "s!\n";
+        count++;
+        logAt += count * 5000; // backoff for next warning
+      }
+      status = downloadHandle->GetStatus();
+      now = duration_cast<milliseconds>(system_clock::now().time_since_epoch())
+                .count();
+    }
     if (downloadHandle->GetStatus() != Aws::Transfer::TransferStatus::COMPLETED)
       VELOX_FAIL(
           "{} from location: {}:{}",
@@ -168,10 +187,11 @@ class S3ReadFile final : public ReadFile {
   }
 
   std::shared_ptr<Aws::S3::S3Client> client_;
+  std::shared_ptr<Aws::Transfer::TransferManager> transferManager_;
   std::string bucket_;
   std::string key_;
   int64_t length_ = -1;
-  const std::shared_ptr<Aws::Utils::Threading::PooledThreadExecutor>& executor_;
+  std::shared_ptr<Aws::Utils::Threading::PooledThreadExecutor> executor_;
 };
 
 } // namespace
@@ -180,8 +200,7 @@ namespace filesystems {
 
 class S3Config {
  public: // Constants
-  static const char* kS3TransferManagerMaxThreadsConfig =
-      "hive.s3.transfer-manager-max-threads";
+  static const char* kS3TransferManagerMaxThreadsConfig;
 
  public:
   S3Config(const Config* config) : config_(config) {}
@@ -262,6 +281,9 @@ class S3Config {
  private:
   const Config* FOLLY_NONNULL config_;
 };
+
+const char* S3Config::kS3TransferManagerMaxThreadsConfig =
+    "hive.s3.transfer-manager-max-threads";
 
 class S3FileSystem::Impl {
  public:
