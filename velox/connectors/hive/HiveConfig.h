@@ -35,10 +35,15 @@ class HiveConfig {
   static constexpr const char* kMaxPartitionsPerWriters =
       "max_partitions_per_writers";
 
+  /// Use ParallelLoadBufferedInput to load split data.
+  static constexpr const char* kParallelLoadEnabled = "enable_parallel_load";
+
   static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* config);
 
   static uint32_t maxPartitionsPerWriters(const Config* config);
+
+  static bool parallelLoadEnabled(const Config* config);
 };
 
 } // namespace facebook::velox::connector::hive

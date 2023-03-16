@@ -234,7 +234,8 @@ HiveDataSource::HiveDataSource(
     ExpressionEvaluator* expressionEvaluator,
     memory::MemoryAllocator* allocator,
     const std::string& scanId,
-    folly::Executor* executor)
+    folly::Executor* executor,
+    const bool parallelLoadEnable)
     : outputType_(outputType),
       fileHandleFactory_(fileHandleFactory),
       pool_(pool),
@@ -242,7 +243,8 @@ HiveDataSource::HiveDataSource(
       expressionEvaluator_(expressionEvaluator),
       allocator_(allocator),
       scanId_(scanId),
-      executor_(executor) {
+      executor_(executor),
+      parallelLoadEnable_(parallelLoadEnable) {
   // Column handled keyed on the column alias, the name used in the query.
   for (const auto& [canonicalizedName, columnHandle] : columnHandles) {
     auto handle = std::dynamic_pointer_cast<HiveColumnHandle>(columnHandle);
@@ -412,6 +414,14 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         executor_,
         readerOpts_.loadQuantum(),
         readerOpts_.maxCoalesceDistance());
+  } else if (parallelLoadEnable_) {
+    input = std::make_unique<dwio::common::ParallelBufferedInput>(
+        fileHandle_->file,
+        readerOpts_.getMemoryPool(),
+        dwio::common::MetricsLog::voidLog(),
+        ioStats_,
+        executor_,
+        readerOpts_.loadQuantum());
   } else {
     input = std::make_unique<dwio::common::BufferedInput>(
         fileHandle_->file,

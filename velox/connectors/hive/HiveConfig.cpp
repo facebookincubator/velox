@@ -52,4 +52,9 @@ uint32_t HiveConfig::maxPartitionsPerWriters(const Config* config) {
   return config->get<uint32_t>(kMaxPartitionsPerWriters, 100);
 }
 
+// static
+bool HiveConfig::parallelLoadEnabled(const Config* config) {
+  return config->get<bool>(kParallelLoadEnabled, false);
+}
+
 } // namespace facebook::velox::connector::hive
