@@ -57,7 +57,7 @@ class ExprCallable : public Callable {
     transformErrorVector(lambdaCtx, context, rows, elementToTopLevelRows);
   }
 
-  void applyNoThrowError(
+  void applyNoThrow(
       const SelectivityVector& rows,
       const SelectivityVector& finalSelection,
       const BufferPtr& wrapCapture,

@@ -53,21 +53,8 @@ class Callable {
       const BufferPtr& elementToTopLevelRows,
       VectorPtr* result) = 0;
 
-  /// Applies 'this' to 'args' for 'rows' and returns the result in
-  /// '*result' suppressing the eval error.
-  /// @param rows The rows that this callable applies to. It is the element rows
-  /// of the complex-typed input of the lambda function.
-  /// @param wrapCapture A mapping that translates row numbers in 'rows' to the
-  /// corresponding numbers for captured variables, i.e. is an indices vector
-  /// that is used for wrapping captured variables in a dictionary before
-  /// passing these to the function. The typical use case of lambdas applies a
-  /// function to elements of repeated types, so that the values of the
-  /// arguments and captures are not aligned. This serves to align these. If
-  /// nullptr, the captures are passed as is.
-  /// @param finalSelection It can be empty when context->isFinalSelection() is
-  /// true and must be a valid selectivity vector otherwise.
-  /// @param elementErrors element rows errors.
-  virtual void applyNoThrowError(
+  /// Same as 'apply', but suppress the eval error.
+  virtual void applyNoThrow(
       const SelectivityVector& rows,
       const SelectivityVector& finalSelection,
       const BufferPtr& wrapCapture,

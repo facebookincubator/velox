@@ -65,7 +65,7 @@ class AllMatchFunction : public exec::VectorFunction {
           toElementRows<ArrayVector>(numElements, *entry.rows, flatArray.get());
       auto wrapCapture = toWrapCapture<ArrayVector>(
           numElements, entry.callable, *entry.rows, flatArray);
-      entry.callable->applyNoThrowError(
+      entry.callable->applyNoThrow(
           elementRows,
           finalSelection,
           wrapCapture,
@@ -80,13 +80,10 @@ class AllMatchFunction : public exec::VectorFunction {
         auto offset = offsets[row];
         auto allMatch = true;
         auto hasNull = false;
-        std::exception_ptr errorPtr = nullptr;
-        auto hasError = false;
+        std::exception_ptr errorPtr{nullptr};
         for (auto i = 0; i < size; ++i) {
           auto idx = offset + i;
-          if (elementErrors && idx < elementErrors->size() &&
-              !elementErrors->isNullAt(idx)) {
-            hasError = true;
+          if (hasError(elementErrors, idx)) {
             errorPtr = *std::static_pointer_cast<std::exception_ptr>(
                 elementErrors->valueAt(idx));
             continue;
@@ -105,7 +102,7 @@ class AllMatchFunction : public exec::VectorFunction {
         // another element that returns 'false' for the predicate.
         if (!allMatch) {
           flatResult->set(row, false);
-        } else if (hasError) {
+        } else if (errorPtr) {
           context.setError(row, errorPtr);
         } else if (hasNull) {
           flatResult->setNull(row, true);
@@ -124,6 +121,14 @@ class AllMatchFunction : public exec::VectorFunction {
                 .argumentType("array(T)")
                 .argumentType("function(T, boolean)")
                 .build()};
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE bool hasError(
+      const exec::EvalCtx::ErrorVectorPtr& elementErrors,
+      int idx) const {
+    return elementErrors && idx < elementErrors->size() &&
+        !elementErrors->isNullAt(idx);
   }
 };
 } // namespace
