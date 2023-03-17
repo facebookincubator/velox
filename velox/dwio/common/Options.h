@@ -348,6 +348,7 @@ class ReaderOptions {
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
   uint64_t directorySizeGuess{kDefaultDirectorySizeGuess};
   uint64_t filePreloadThreshold{kDefaultFilePreloadThreshold};
+  int32_t maxMergeDistance{kMaxMergeDistance};
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
@@ -485,6 +486,11 @@ class ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setMaxMergeDistance(int32_t mergeDistance) {
+    maxMergeDistance = mergeDistance;
+    return *this;
+  }
+
   /**
    * Get the desired tail location.
    * @return if not set, return the maximum long.
@@ -549,6 +555,10 @@ class ReaderOptions {
 
   uint64_t getFilePreloadThreshold() const {
     return filePreloadThreshold;
+  }
+
+  int32_t getMaxMergeDistance() const {
+    return maxMergeDistance;
   }
 };
 
