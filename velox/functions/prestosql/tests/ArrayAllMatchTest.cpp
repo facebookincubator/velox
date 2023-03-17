@@ -23,42 +23,39 @@ using namespace facebook::velox::test;
 class ArrayAllMatchTest : public functions::test::FunctionBaseTest {};
 
 TEST_F(ArrayAllMatchTest, basic) {
-  auto input = makeNullableArrayVector<int64_t>(
+  auto arrayVector = makeNullableArrayVector<int64_t>(
       {{std::nullopt, 2, 3},
        {-1, 3},
        {2, 3},
        {},
        {std::nullopt, std::nullopt}});
-  auto result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (x > 1))", makeRowVector({input}));
+  auto input = makeRowVector({arrayVector});
+  auto result = evaluate("all_match(c0, x -> (x > 1))", input);
   auto expectedResult = makeNullableFlatVector<bool>(
       {std::nullopt, false, true, true, std::nullopt});
   assertEqualVectors(expectedResult, result);
 
-  result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (x is null))", makeRowVector({input}));
+  result = evaluate("all_match(c0, x -> (x is null))", input);
   expectedResult = makeFlatVector<bool>({false, false, false, true, true});
   assertEqualVectors(expectedResult, result);
 
-  input = makeNullableArrayVector<bool>(
+  arrayVector = makeNullableArrayVector<bool>(
       {{false, true},
        {true, true},
        {std::nullopt, true},
        {std::nullopt, false}});
-  result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> x)", makeRowVector({input}));
+  input = makeRowVector({arrayVector});
+  result = evaluate("all_match(c0, x -> x)", input);
   expectedResult =
       makeNullableFlatVector<bool>({false, true, std::nullopt, false});
   assertEqualVectors(expectedResult, result);
 
-  auto emptyInput = makeArrayVector<int32_t>({{}});
-  result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (x > 1))", makeRowVector({emptyInput}));
+  auto emptyInput = makeRowVector({makeArrayVector<int32_t>({{}})});
+  result = evaluate("all_match(c0, x -> (x > 1))", emptyInput);
   expectedResult = makeFlatVector<bool>(std::vector<bool>{true});
   assertEqualVectors(expectedResult, result);
 
-  result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (x < 1))", makeRowVector({emptyInput}));
+  result = evaluate("all_match(c0, x -> (x < 1))", emptyInput);
   expectedResult = makeFlatVector<bool>(std::vector<bool>{true});
   assertEqualVectors(expectedResult, result);
 }
@@ -73,9 +70,8 @@ TEST_F(ArrayAllMatchTest, complexTypes) {
   //  [[]]
   // ]
   auto arrayOfArrays = makeArrayVector({0, 1, 5}, baseVector);
-  auto result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (cardinality(x) > 0))",
-      makeRowVector({arrayOfArrays}));
+  auto input = makeRowVector({arrayOfArrays});
+  auto result = evaluate("all_match(c0, x -> (cardinality(x) > 0))", input);
   auto expectedResult = makeNullableFlatVector<bool>({true, true, false});
   assertEqualVectors(expectedResult, result);
 
@@ -87,16 +83,15 @@ TEST_F(ArrayAllMatchTest, complexTypes) {
   //  null
   // ]
   arrayOfArrays = makeArrayVector({0, 1, 5, 6}, baseVector, {3});
-  result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (cardinality(x) > 2))",
-      makeRowVector({arrayOfArrays}));
+  input = makeRowVector({arrayOfArrays});
+  result = evaluate("all_match(c0, x -> (cardinality(x) > 2))", input);
   expectedResult =
       makeNullableFlatVector<bool>({true, false, false, std::nullopt});
   assertEqualVectors(expectedResult, result);
 }
 
 TEST_F(ArrayAllMatchTest, bigints) {
-  auto input = makeNullableArrayVector<int64_t>(
+  auto arrayVector = makeNullableArrayVector<int64_t>(
       {{},
        {2},
        {std::numeric_limits<int64_t>::max()},
@@ -105,8 +100,8 @@ TEST_F(ArrayAllMatchTest, bigints) {
        {2,
         std::nullopt}, // return null if one or more is null and others matched
        {1, std::nullopt, 2}}); // return false if one is not matched
-  auto result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (x % 2 = 0))", makeRowVector({input}));
+  auto input = makeRowVector({arrayVector});
+  auto result = evaluate("all_match(c0, x -> (x % 2 = 0))", input);
 
   auto expectedResult = makeNullableFlatVector<bool>(
       {true, true, false, true, std::nullopt, std::nullopt, false});
@@ -114,10 +109,9 @@ TEST_F(ArrayAllMatchTest, bigints) {
 }
 
 TEST_F(ArrayAllMatchTest, strings) {
-  auto input = makeNullableArrayVector<StringView>(
-      {{}, {"abc"}, {"ab", "abc"}, {std::nullopt}});
-  auto result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (x = 'abc'))", makeRowVector({input}));
+  auto input = makeRowVector({makeNullableArrayVector<StringView>(
+      {{}, {"abc"}, {"ab", "abc"}, {std::nullopt}})});
+  auto result = evaluate("all_match(c0, x -> (x = 'abc'))", input);
 
   auto expectedResult =
       makeNullableFlatVector<bool>({true, true, false, std::nullopt});
@@ -125,10 +119,9 @@ TEST_F(ArrayAllMatchTest, strings) {
 }
 
 TEST_F(ArrayAllMatchTest, doubles) {
-  auto input =
-      makeNullableArrayVector<double>({{}, {1.2}, {3.0, 0}, {std::nullopt}});
-  auto result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (x > 1.1))", makeRowVector({input}));
+  auto input = makeRowVector(
+      {makeNullableArrayVector<double>({{}, {1.2}, {3.0, 0}, {std::nullopt}})});
+  auto result = evaluate("all_match(c0, x -> (x > 1.1))", input);
 
   auto expectedResult =
       makeNullableFlatVector<bool>({true, true, false, std::nullopt});
@@ -137,34 +130,29 @@ TEST_F(ArrayAllMatchTest, doubles) {
 
 TEST_F(ArrayAllMatchTest, errors) {
   // No throw and return false if there are unmatched elements except nulls
-  auto input =
-      makeNullableArrayVector<int8_t>({{0, 2, 0, 5, 0}, {5, std::nullopt, 0}});
-  auto result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> ((10 / x) > 2))", makeRowVector({input}));
+  auto input = makeRowVector({makeNullableArrayVector<int8_t>(
+      {{0, 2, 0, 5, 0}, {5, std::nullopt, 0}})});
+  auto result = evaluate("all_match(c0, x -> ((10 / x) > 2))", input);
   auto expectedResult = makeFlatVector<bool>({false, false});
   assertEqualVectors(expectedResult, result);
 
   // Throw error if others are matched or null
   static constexpr std::string_view kErrorMessage{"division by zero"};
-  auto errorInput = makeNullableArrayVector<int8_t>(
-      {{1, 0}, {2}, {6}, {1, 0, std::nullopt}, {10, std::nullopt}});
+  auto errorInput = makeRowVector({makeNullableArrayVector<int8_t>(
+      {{1, 0}, {2}, {6}, {1, 0, std::nullopt}, {10, std::nullopt}})});
   VELOX_ASSERT_THROW(
-      evaluate<SimpleVector<bool>>(
-          "all_match(c0, x -> ((10 / x) > 2))", makeRowVector({errorInput})),
+      evaluate("all_match(c0, x -> ((10 / x) > 2))", errorInput),
       kErrorMessage);
   VELOX_ASSERT_THROW(
-      evaluate<SimpleVector<bool>>(
-          "all_match(c0, x -> ((10 / x) > 2))", makeRowVector({errorInput})),
+      evaluate("all_match(c0, x -> ((10 / x) > 2))", errorInput),
       kErrorMessage);
   // Rerun using TRY to get right results
   expectedResult = makeNullableFlatVector<bool>(
       {std::nullopt, true, false, std::nullopt, false});
-  result = evaluate<SimpleVector<bool>>(
-      "TRY(all_match(c0, x -> ((10 / x) > 2)))", makeRowVector({errorInput}));
+  result = evaluate("TRY(all_match(c0, x -> ((10 / x) > 2)))", errorInput);
   assertEqualVectors(expectedResult, result);
 
-  result = evaluate<SimpleVector<bool>>(
-      "all_match(c0, x -> (TRY((10 / x) > 2)))", makeRowVector({errorInput}));
+  result = evaluate("all_match(c0, x -> (TRY((10 / x) > 2)))", errorInput);
   assertEqualVectors(expectedResult, result);
 }
 
@@ -177,7 +165,7 @@ TEST_F(ArrayAllMatchTest, conditional) {
        {std::nullopt},
        {5, std::nullopt, 0},
        {3, 1}});
-  auto result = evaluate<SimpleVector<bool>>(
+  auto result = evaluate(
       "all_match(c1, if (c0 <= 2, x -> (x > 100), x -> (10 / x > 2)))",
       makeRowVector({c0, c1}));
   auto expectedResult =

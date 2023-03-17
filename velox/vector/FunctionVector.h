@@ -53,7 +53,8 @@ class Callable {
       const BufferPtr& elementToTopLevelRows,
       VectorPtr* result) = 0;
 
-  /// Same as 'apply', but suppress the eval error.
+  /// Same as 'apply', but errors are suppressed and returned in
+  /// 'elementErrors', and errors in 'context' are not updated.
   virtual void applyNoThrow(
       const SelectivityVector& rows,
       const SelectivityVector& finalSelection,
