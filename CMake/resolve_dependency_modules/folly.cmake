@@ -20,9 +20,9 @@ else()
   set(FOLLY_SOURCE_URL
       "https://github.com/facebook/folly/archive/${VELOX_FOLLY_BUILD_VERSION}.tar.gz"
   )
-  set(VELOX_FOLLY_BUILD_SHA256_CHECKSUM
-      b249436cb61b6dfd5288093565438d8da642b07ae021191a4042b221bc1bdc0e)
 endif()
+set(VELOX_FOLLY_BUILD_SHA256_CHECKSUM
+        b249436cb61b6dfd5288093565438d8da642b07ae021191a4042b221bc1bdc0e)
 
 message(STATUS "Building Folly from source")
 # FOLLY_CXX_FLAGS is used internally on folly to define some extra

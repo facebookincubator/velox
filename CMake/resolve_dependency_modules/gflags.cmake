@@ -20,9 +20,9 @@ else()
   string(CONCAT VELOX_GFLAGS_SOURCE_URL
                 "https://github.com/gflags/gflags/archive/refs/tags/"
                 "v${VELOX_GFLAGS_VERSION}.tar.gz")
-  set(VELOX_GFLAGS_BUILD_SHA256_CHECKSUM
-      34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf)
 endif()
+set(VELOX_GFLAGS_BUILD_SHA256_CHECKSUM
+        34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf)
 
 message(STATUS "Building gflags from source")
 FetchContent_Declare(

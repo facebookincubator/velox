@@ -22,10 +22,9 @@ else()
            "https://github.com/unicode-org/icu/releases/download/"
            "release-${VELOX_ICU4C_BUILD_VERSION}-1/"
            "icu4c-${VELOX_ICU4C_BUILD_VERSION}_1-src.tgz")
-
-  set(VELOX_ICU4C_BUILD_SHA256_CHECKSUM
-      a2d2d38217092a7ed56635e34467f92f976b370e20182ad325edea6681a71d68)
 endif()
+set(VELOX_ICU4C_BUILD_SHA256_CHECKSUM
+        a2d2d38217092a7ed56635e34467f92f976b370e20182ad325edea6681a71d68)
 
 message(STATUS "Building ICU4C from source")
 

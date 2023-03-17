@@ -23,9 +23,9 @@ else()
       "https://github.com/protocolbuffers/protobuf/releases/download/"
       "v${VELOX_PROTOBUF_BUILD_VERSION}/protobuf-all-${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz"
   )
-  set(VELOX_PROTOBUF_BUILD_SHA256_CHECKSUM
-      6c5e1b0788afba4569aeebb2cfe205cb154aa01deacaba0cd26442f3b761a836)
 endif()
+set(VELOX_PROTOBUF_BUILD_SHA256_CHECKSUM
+        6c5e1b0788afba4569aeebb2cfe205cb154aa01deacaba0cd26442f3b761a836)
 
 message(STATUS "Building Protobuf from source")
 

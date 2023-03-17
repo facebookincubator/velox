@@ -19,9 +19,9 @@ else()
   set(VELOX_<PACKAGE>_VERSION x.y.z)
   set(VELOX_<PACKAGE>_SOURCE_URL "") # ideally don't use github archive links as
                                      # they are not guranteed to be hash stable
-  # release artifacts are tough (except the auto generated ones)
-  set(VELOX_<PACKAGE>_BUILD_SHA256_CHECKSUM 123)
 endif()
+# release artifacts are tough (except the auto generated ones)
+set(VELOX_<PACKAGE>_BUILD_SHA256_CHECKSUM 123)
 
 message(STATUS "Building <PACKAGE> from source")
 FetchContent_Declare(
