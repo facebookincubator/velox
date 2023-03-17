@@ -366,7 +366,7 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(LZO lzo2)
   find_library(ZSTD zstd)
   find_library(SNAPPY snappy)
-  if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR} 
+  if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR}
                                                  MATCHES "x86_64"))
     find_library(QPL qpl)
   endif()

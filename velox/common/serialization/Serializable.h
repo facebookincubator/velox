@@ -246,8 +246,8 @@ class ISerializable {
       return folly::none;
     }
     auto val = deserialize<typename T::value_type>(obj);
-    return folly::Optional<
-        decltype(ISerializable::deserialize<typename T::value_type>(
+    return folly::Optional<decltype(
+        ISerializable::deserialize<typename T::value_type>(
             std::declval<folly::dynamic>()))>(move(val));
   }
 

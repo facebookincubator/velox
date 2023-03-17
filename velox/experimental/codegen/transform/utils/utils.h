@@ -50,7 +50,8 @@ namespace utils {
 template <typename T>
 concept Tree = requires(const T& tree) {
   // typename T::nodeType;
-  { children(tree) } -> std::ranges::range; // might need to be const here
+  { children(tree) }
+  ->std::ranges::range; // might need to be const here
   std::is_same_v<
       std::ranges::range_value_t<std::remove_cvref_t<decltype(children(tree))>>,
       T>;
@@ -60,9 +61,8 @@ template <typename NodeType, typename NodeTransformer>
 concept isTansformer = requires(NodeType& node, NodeTransformer& tr) {
   requires Tree<NodeType>;
   // TODO: relax this constraint to allow more pointer type
-  {
-    tr(node, std::declval<std::vector<std::shared_ptr<NodeType>>>())
-    } -> same_as<std::shared_ptr<NodeType>>;
+  { tr(node, std::declval<std::vector<std::shared_ptr<NodeType>>>()) }
+  ->same_as<std::shared_ptr<NodeType>>;
 };
 #endif
 
@@ -134,9 +134,9 @@ template <typename TreeType, typename NodeTransformer>
 #if ENABLE_CONCEPTS
 requires isTansformer<TreeType, NodeTransformer>
 #endif
-auto isomorphicTreeTransform(
-    const TreeType& tree,
-    const NodeTransformer& transformer) {
+    auto isomorphicTreeTransform(
+        const TreeType& tree,
+        const NodeTransformer& transformer) {
   // Note: Ideally we would rather use here std::reference_wrapper instead of
   // const TreeType *; However the compare function on ref_wrapper are not
   // appropriate

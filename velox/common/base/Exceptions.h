@@ -153,24 +153,24 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
 
 } // namespace detail
 
-#define _VELOX_THROW_IMPL(                                               \
-    exception, expr_str, errorSource, errorCode, isRetriable, ...)       \
-  {                                                                      \
-    /* GCC 9.2.1 doesn't accept this code with constexpr. */             \
-    static const ::facebook::velox::detail::VeloxCheckFailArgs           \
-        veloxCheckFailArgs = {                                           \
-            __FILE__,                                                    \
-            __LINE__,                                                    \
-            __FUNCTION__,                                                \
-            expr_str,                                                    \
-            errorSource,                                                 \
-            errorCode,                                                   \
-            isRetriable};                                                \
-    auto message = ::facebook::velox::detail::errorMessage(__VA_ARGS__); \
-    ::facebook::velox::detail::veloxCheckFail<                           \
-        exception,                                                       \
-        typename ::facebook::velox::detail::VeloxCheckFailStringType<    \
-            decltype(message)>::type>(veloxCheckFailArgs, message);      \
+#define _VELOX_THROW_IMPL(                                                     \
+    exception, expr_str, errorSource, errorCode, isRetriable, ...)             \
+  {                                                                            \
+    /* GCC 9.2.1 doesn't accept this code with constexpr. */                   \
+    static const ::facebook::velox::detail::VeloxCheckFailArgs                 \
+        veloxCheckFailArgs = {                                                 \
+            __FILE__,                                                          \
+            __LINE__,                                                          \
+            __FUNCTION__,                                                      \
+            expr_str,                                                          \
+            errorSource,                                                       \
+            errorCode,                                                         \
+            isRetriable};                                                      \
+    auto message = ::facebook::velox::detail::errorMessage(__VA_ARGS__);       \
+    ::facebook::velox::detail::veloxCheckFail<                                 \
+        exception,                                                             \
+        typename ::facebook::velox::detail::VeloxCheckFailStringType<decltype( \
+            message)>::type>(veloxCheckFailArgs, message);                     \
   }
 
 #define _VELOX_CHECK_AND_THROW_IMPL(                                     \

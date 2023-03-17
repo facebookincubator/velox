@@ -86,9 +86,9 @@ class TestingStream final : public MergeStream {
 
   int32_t compare(const MergeStream& other) const final {
     auto otherValue = static_cast<const TestingStream&>(other).current_.value();
-    return current_.value() < otherValue ? -1
-        : current_.value() == otherValue ? 0
-                                         : 1;
+    return current_.value() < otherValue
+        ? -1
+        : current_.value() == otherValue ? 0 : 1;
   }
 
  private:

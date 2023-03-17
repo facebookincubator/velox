@@ -35,13 +35,13 @@ __attribute__((weak)) bool Codegen::initializeFromFile(
   throw CodegenStubsException("Codegen::initializeFromFile()");
 }
 
-__attribute__((weak)) std::shared_ptr<const core::PlanNode> Codegen::compile(
-    [[maybe_unused]] const core::PlanNode& planNode) {
+__attribute__((weak)) std::shared_ptr<const core::PlanNode> Codegen::compile([
+    [maybe_unused]] const core::PlanNode& planNode) {
   throw CodegenStubsException("Codegen::compile()");
 }
 
-bool Codegen::initializeCodeManager(
-    [[maybe_unused]] const proto::CompilerOptionsProto& compilerOptionsProto) {
+bool Codegen::initializeCodeManager([
+    [maybe_unused]] const proto::CompilerOptionsProto& compilerOptionsProto) {
   throw CodegenStubsException("Codegen::initializeCodeManager()");
 }
 

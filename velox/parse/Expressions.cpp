@@ -84,7 +84,7 @@ std::vector<TypePtr> implicitCastTargets(const TypePtr& type) {
       break;
     }
     default: // make compilers happy
-        ;
+             ;
   }
   return targetTypes;
 }

@@ -183,7 +183,7 @@ bool registerCountIf(const std::string& name) {
       [name](
           core::AggregationNode::Step step,
           std::vector<TypePtr> argTypes,
-          const TypePtr&
+          const TypePtr &
           /*resultType*/) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes one argument", name);
 
