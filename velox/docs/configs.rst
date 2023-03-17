@@ -191,6 +191,14 @@ sets the update mode to indicate overwriting a partition if exists.
 ``ERROR`` sets the update mode to indicate error throwing if writing
 to an existing partition.
 
+``enable_parallel_load``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``bool``
+    * **Default value:** ``false``
+
+Use ParallelBufferedInput to split large data region and load these parallelly.
+
 Spark-specific configuration
 ----------------------------
 

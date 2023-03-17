@@ -35,7 +35,7 @@ class HiveConfig {
   static constexpr const char* kMaxPartitionsPerWriters =
       "max_partitions_per_writers";
 
-  /// Use ParallelLoadBufferedInput to load split data.
+  /// Use ParallelBufferedInput to load split data.
   static constexpr const char* kParallelLoadEnabled = "enable_parallel_load";
 
   static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
