@@ -296,7 +296,7 @@ Here is a list of all scalar and aggregate Presto functions with functions that 
     current_date                              ip_prefix                                 :func:`regexp_extract_all`                st_numgeometries                          :func:`yow`
     current_time                              ip_subnet_max                             :func:`regexp_like`                       st_numinteriorring                        :func:`zip`
     current_timestamp                         ip_subnet_min                             :func:`regexp_replace`                    st_numpoints                              :func:`zip_with`
-    current_timezone                          ip_subnet_range                           regexp_split                              st_overlaps
+    current_timezone                          ip_subnet_range                           :func:`regexp_split`                      st_overlaps
     date                                      :func:`is_finite`                         regress                                   st_point
     :func:`date_add`                          :func:`is_infinite`                       reidentification_potential                st_pointn
     ========================================  ========================================  ========================================  ========================================  ========================================  ==  ========================================  ==  ========================================

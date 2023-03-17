@@ -56,7 +56,7 @@ add_executable(
   MapZipWithTest.cpp
   NotTest.cpp
   ReduceTest.cpp
-  RegexpReplaceTest.cpp
+  RegexpFunctionsTest.cpp
   RepeatTest.cpp
   ReverseTest.cpp
   RoundTest.cpp

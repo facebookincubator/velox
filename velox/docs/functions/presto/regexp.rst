@@ -71,3 +71,10 @@ See https://github.com/google/re2/wiki/Syntax for more information.
     backslash (``\$``)::
 
         SELECT regexp_replace('1a 2b 14m', '(\d+)([ab]) ', '3c$2 '); -- '3ca 3cb 14m'
+
+.. function:: regexp_split(string, pattern) -> array(varchar)
+
+    Splits ``string`` using the regular expression ``pattern`` to find the split points.
+    Returns an array with all the pieces, preserving empty strings::
+
+        SELECT regexp_split('1a 2b 14m', '(\d+)'); -- ['', 'a ', 'b ', 'm']

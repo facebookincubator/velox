@@ -15,7 +15,7 @@
  */
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/Re2Functions.h"
-#include "velox/functions/prestosql/RegexpReplace.h"
+#include "velox/functions/prestosql/RegexpFunctions.h"
 #include "velox/functions/prestosql/SplitPart.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/types/JsonType.h"
@@ -84,6 +84,8 @@ void registerSimpleFunctions() {
       {"regexp_replace"});
   registerFunction<Re2RegexpReplacePresto, Varchar, Varchar, Varchar, Varchar>(
       {"regexp_replace"});
+  registerFunction<Re2RegexpSplitPresto, Array<Varchar>, Varchar, Varchar>(
+      {"regexp_split"});
 }
 } // namespace
 

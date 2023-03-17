@@ -38,6 +38,14 @@ class RegexFunctionsTest : public functions::test::FunctionBaseTest {
         fmt::format("regexp_replace(c0, '{}', '{}')", pattern, replacement),
         string);
   }
+
+  auto regexp_split(
+      const std::optional<StringView>& string,
+      const std::string& pattern) {
+    return evaluate(
+        fmt::format("regexp_split(c0, '{}')", pattern),
+        makeRowVector({makeNullableFlatVector<StringView>({string})}));
+  }
 };
 
 TEST_F(RegexFunctionsTest, RegexpReplaceNoReplacement) {
@@ -81,6 +89,77 @@ TEST_F(RegexFunctionsTest, RegexpReplaceWithReplacement) {
   EXPECT_THROW(
       regexp_replace("123", "(?P<digit>\\d)", "${dd}"), VeloxUserError);
   EXPECT_THROW(regexp_replace("123", "(?P<digit>\\d)", "${}"), VeloxUserError);
+}
+
+TEST_F(RegexFunctionsTest, RegexpSplit) {
+  // Basic cases
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"ab"}}), regexp_split("ab", "c"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"ab", "d"}}),
+      regexp_split("abcd", "c"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "ab", "d", ""}}),
+      regexp_split("cabcdc", "c"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "", "", ""}}),
+      regexp_split("ccc", "c"));
+
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"a", "b", "c", "d"}}),
+      regexp_split("a.b:c;d", "[\\.:;]"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"a", "b:c;d"}}),
+      regexp_split("a.b:c;d", "\\."));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"a.b", "c;d"}}),
+      regexp_split("a.b:c;d", ":"));
+
+  // Character classes
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "", "", ""}}),
+      regexp_split("abc", "\\w"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"a", "", "b", "", "c", ""}}),
+      regexp_split("a12b34c5", "\\d"));
+
+  // Empty input / pattern / null
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{""}}), regexp_split("", "\\d"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "a", "b", "c", ""}}),
+      regexp_split("abc", ""));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "a", "b", "c", "", ""}}),
+      regexp_split("abcd", "(d|)"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "a", "b", "c", "d", ""}}),
+      regexp_split("abcd", "(|d)"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({std::nullopt}),
+      regexp_split(std::nullopt, "abc"));
+
+  // Capture groups
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "", "14m"}}),
+      regexp_split("1a 2b 14m", "(\\d+)([ab]) "));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", " ", " 14m"}}),
+      regexp_split("1a 2b 14m", "(\\d+)([ab])"));
+
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "", "", ""}}),
+      regexp_split("abc", "(?P<alpha>\\w)"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "", "", ""}}),
+      regexp_split("1a2b3c", "(?<digit>\\d)(?<alpha>\\w)"));
+  test::assertEqualVectors(
+      makeNullableArrayVector<StringView>({{"", "", "", ""}}),
+      regexp_split("123", "(?<digit>(?<nest>\\d))"));
+
+  EXPECT_THROW(regexp_split("123", "(?<d"), VeloxUserError);
+  EXPECT_THROW(regexp_split("123", R"((?''digit''\d))"), VeloxUserError);
+  EXPECT_THROW(regexp_split("123", "(?P<>\\d)"), VeloxUserError);
 }
 
 } // namespace

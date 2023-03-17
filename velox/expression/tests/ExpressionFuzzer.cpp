@@ -556,6 +556,8 @@ ExpressionFuzzer::ExpressionFuzzer(
       &ExpressionFuzzer::generateEmptyApproxSetArgs, "empty_approx_set");
   registerFuncOverride(
       &ExpressionFuzzer::generateRegexpReplaceArgs, "regexp_replace");
+  registerFuncOverride(
+      &ExpressionFuzzer::generateRegexpSplitArgs, "regexp_split");
   registerFuncOverride(&ExpressionFuzzer::generateSwitchArgs, "switch");
 
   // Init stats and register listener.
@@ -709,6 +711,13 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateRegexpReplaceArgs(
     inputExpressions.emplace_back(generateArgConstant(input.args[2]));
   }
   return inputExpressions;
+}
+
+// Specialization for the "regexp_split" function: second parameter always
+// needs to be constant.
+std::vector<core::TypedExprPtr> ExpressionFuzzer::generateRegexpSplitArgs(
+    const CallableSignature& input) {
+  return {generateArg(input.args[0]), generateArgConstant(input.args[1])};
 }
 
 std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSwitchArgs(

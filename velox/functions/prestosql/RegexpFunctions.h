@@ -27,10 +27,11 @@
 namespace facebook::velox::functions {
 
 /// This function preprocesses an input pattern string to follow RE2 syntax for
-/// Re2RegexpReplacePresto. Specifically, Presto using RE2J supports named
-/// capturing groups as (?<name>regex) or (?P<name>regex), but RE2 only supports
-/// (?P<name>regex), so we convert the former format to the latter.
-FOLLY_ALWAYS_INLINE std::string preparePrestoRegexpReplacePattern(
+/// Re2RegexpReplacePresto and Re2RegexpSplitPresto. Specifically, Presto using
+/// RE2J supports named capturing groups as (?<name>regex) or (?P<name>regex),
+/// but RE2 only supports (?P<name>regex), so we convert the former format to
+/// the latter.
+FOLLY_ALWAYS_INLINE std::string preparePrestoRegexpPattern(
     const StringView& pattern) {
   static const RE2 kRegex("[(][?]<([^>]*)>");
 
@@ -111,7 +112,10 @@ FOLLY_ALWAYS_INLINE std::string preparePrestoRegexpReplaceReplacement(
 template <typename T>
 using Re2RegexpReplacePresto = Re2RegexpReplace<
     T,
-    preparePrestoRegexpReplacePattern,
+    preparePrestoRegexpPattern,
     preparePrestoRegexpReplaceReplacement>;
+
+template <typename T>
+using Re2RegexpSplitPresto = Re2RegexpSplit<T, preparePrestoRegexpPattern>;
 
 } // namespace facebook::velox::functions

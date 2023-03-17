@@ -19,6 +19,7 @@
 #include <vector>
 
 #include <re2/re2.h>
+#include <re2/stringpiece.h>
 
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Udf.h"
@@ -193,6 +194,50 @@ struct Re2RegexpReplace {
 
     UDFOutputString::assign(out, result_);
 
+    return true;
+  }
+};
+
+template <typename T, std::string (*prepareRegexpPattern)(const StringView&)>
+struct Re2RegexpSplit {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  std::optional<RE2> re_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* /*string*/,
+      const arg_type<Varchar>* pattern) {
+    VELOX_USER_CHECK(
+        pattern != nullptr, "Pattern of regexp_split must be constant.");
+
+    auto processedPattern = prepareRegexpPattern(*pattern);
+
+    re_.emplace(processedPattern, RE2::Quiet);
+    if (UNLIKELY(!re_->ok())) {
+      VELOX_USER_FAIL(
+          "Invalid regular expression {}: {}.", processedPattern, re_->error());
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<velox::Array<Varchar>>& out,
+      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& /*pattern*/) {
+    re2::StringPiece input(string.data(), string.size());
+    re2::StringPiece match;
+    size_t lastEnd = 0, offset = 0;
+    while (re_->Match(
+        input, offset, input.length(), RE2::Anchor::UNANCHORED, &match, 1)) {
+      size_t length = match.data() - input.data() - lastEnd;
+      out.add_item().copy_from(StringView(input.data() + lastEnd, length));
+      lastEnd = match.data() - input.data() + match.length();
+      offset = offset == lastEnd ? offset + 1 : lastEnd;
+    }
+    out.add_item().copy_from(
+        StringView(input.data() + lastEnd, input.length() - lastEnd));
     return true;
   }
 };
