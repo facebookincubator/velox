@@ -133,8 +133,9 @@ void StringColumnReader::getValues(RowSet rows, VectorPtr* result) {
 
     *result = std::make_shared<DictionaryVector<StringView>>(
         &memoryPool_,
-        !anyNulls_ ? nullptr
-                   : returnReaderNulls_ ? nullsInReadRange_ : resultNulls_,
+        !anyNulls_               ? nullptr
+            : returnReaderNulls_ ? nullsInReadRange_
+                                 : resultNulls_,
         numValues_,
         dictionaryValues,
         values_);

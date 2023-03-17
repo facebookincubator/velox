@@ -265,8 +265,9 @@ void SelectiveStringDictionaryColumnReader::getValues(
 
   *result = std::make_shared<DictionaryVector<StringView>>(
       &memoryPool_,
-      !anyNulls_ ? nullptr
-                 : returnReaderNulls_ ? nullsInReadRange_ : resultNulls_,
+      !anyNulls_               ? nullptr
+          : returnReaderNulls_ ? nullsInReadRange_
+                               : resultNulls_,
       numValues_,
       dictionaryValues_,
       values_);
