@@ -57,7 +57,7 @@ const T* FlatVector<T>::rawValues() const {
 }
 
 template <typename T>
-const T FlatVector<T>::valueAtFast(vector_size_t idx) const {
+T FlatVector<T>::valueAtFast(vector_size_t idx) const {
   return rawValues_[idx];
 }
 
@@ -175,8 +175,10 @@ void FlatVector<T>::copyValuesAndNulls(
         }
       });
     } else {
-      VELOX_CHECK_GE(source->size(), rows.end());
       rows.applyToSelected([&](vector_size_t row) {
+        if (row >= source->size()) {
+          return;
+        }
         if (sourceValues) {
           rawValues_[row] = sourceValues[row];
         }

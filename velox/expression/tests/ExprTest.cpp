@@ -315,6 +315,11 @@ class ExprTest : public testing::Test, public VectorTestBase {
         << sql;
   }
 
+  bool propagatesNulls(const core::TypedExprPtr& typedExpr) {
+    exec::ExprSet exprSet({typedExpr}, execCtx_.get(), true);
+    return exprSet.exprs().front()->propagatesNulls();
+  }
+
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
@@ -2058,95 +2063,63 @@ TEST_F(ExprTest, peelLazyDictionaryOverConstant) {
 }
 
 TEST_F(ExprTest, accessNested) {
-  // Construct Row(Row(Row(int))) vector
+  // Construct row(row(row(integer))) vector.
   auto base = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto level1 = makeRowVector({base});
   auto level2 = makeRowVector({level1});
   auto level3 = makeRowVector({level2});
 
-  auto level1Type = ROW({"c0"}, {base->type()});
-  auto level2Type = ROW({"c0"}, {level1Type});
-  auto level3Type = ROW({"c0"}, {level2Type});
-
-  // Access level3->level2->level1->base
+  // Access level3->level2->level1->base.
   // TODO: Expression "c0.c0.c0" currently not supported by DuckDB
   // So we wrap with parentheses to force parsing as struct extract
   // Track https://github.com/duckdb/duckdb/issues/2568
-  auto exprSet = compileExpression("(c0).c0.c0", level3Type);
-
-  auto result = evaluate(exprSet.get(), level3);
+  auto result = evaluate("(c0).c0.c0.c0", makeRowVector({level3}));
 
   assertEqualVectors(base, result);
 }
 
 TEST_F(ExprTest, accessNestedNull) {
-  // Construct Row(Row(Row(int))) vector
+  // Construct row(row(row(integer))) vector.
   auto base = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
   auto level1 = makeRowVector({base});
 
-  auto level1Type = ROW({"c0"}, {base->type()});
-  auto level2Type = ROW({"c0"}, {level1Type});
-  auto level3Type = ROW({"c0"}, {level2Type});
-
-  BufferPtr nulls =
-      AlignedBuffer::allocate<bool>(5, execCtx_->pool(), bits::kNull);
-  // Construct level 2 row with nulls
-  auto level2 = std::make_shared<RowVector>(
-      execCtx_->pool(),
-      level2Type,
-      nulls,
-      level1->size(),
-      std::vector<VectorPtr>{level1});
+  // Construct level 2 row with nulls.
+  auto level2 = makeRowVector({level1}, nullEvery(2));
   auto level3 = makeRowVector({level2});
 
-  auto exprSet = compileExpression("(c0).c0.c0", level3Type);
-
-  auto result = evaluate(exprSet.get(), level3);
-
-  auto nullVector = makeAllNullFlatVector<int32_t>(5);
-
-  assertEqualVectors(nullVector, result);
+  auto result = evaluate("(c0).c0.c0.c0", makeRowVector({level3}));
+  auto expected = makeNullableFlatVector<int32_t>(
+      {std::nullopt, 2, std::nullopt, 4, std::nullopt});
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(ExprTest, accessNestedDictionaryEncoding) {
-  // Construct Row(Row(Row(int))) vector
+  // Construct row(row(row(integer))) vector.
   auto base = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
 
-  // Reverse order in dictionary encoding
-  auto indices = makeIndices(5, [](auto row) { return 4 - row; });
+  // Reverse order in dictionary encoding.
+  auto indices = makeIndicesInReverse(5);
 
   auto level1 = makeRowVector({base});
   auto level2 = makeRowVector({wrapInDictionary(indices, 5, level1)});
   auto level3 = makeRowVector({level2});
 
-  auto level1Type = ROW({"c0"}, {base->type()});
-  auto level2Type = ROW({"c0"}, {level1Type});
-  auto level3Type = ROW({"c0"}, {level2Type});
-
-  auto exprSet = compileExpression("(c0).c0.c0", level3Type);
-
-  auto result = evaluate(exprSet.get(), level3);
+  auto result = evaluate("(c0).c0.c0.c0", makeRowVector({level3}));
 
   assertEqualVectors(makeFlatVector<int32_t>({5, 4, 3, 2, 1}), result);
 }
 
 TEST_F(ExprTest, accessNestedConstantEncoding) {
-  // Construct Row(Row(Row(int))) vector
+  // Construct row(row(row(integer))) vector.
   VectorPtr base = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
-  // Wrap base in constant
+  // Wrap base in constant.
   base = BaseVector::wrapInConstant(5, 2, base);
 
   auto level1 = makeRowVector({base});
   auto level2 = makeRowVector({level1});
   auto level3 = makeRowVector({level2});
 
-  auto level1Type = ROW({"c0"}, {base->type()});
-  auto level2Type = ROW({"c0"}, {level1Type});
-  auto level3Type = ROW({"c0"}, {level2Type});
-
-  auto exprSet = compileExpression("(c0).c0.c0", level3Type);
-
-  auto result = evaluate(exprSet.get(), level3);
+  auto result = evaluate("(c0).c0.c0.c0", makeRowVector({level3}));
 
   assertEqualVectors(makeConstant(3, 5), result);
 }
@@ -2674,7 +2647,7 @@ TEST_F(ExprTest, castExceptionContext) {
       makeFlatVector(std::vector<int8_t>{1}),
       "cast((c0) as TIMESTAMP)",
       "Same as context.",
-      "Failed to cast from TINYINT to TIMESTAMP: 1. Conversion of TINYINT to Timestamp is not supported");
+      "Failed to cast from TINYINT to TIMESTAMP: 1. Conversion to Timestamp is not supported");
 }
 
 TEST_F(ExprTest, switchExceptionContext) {
@@ -3070,6 +3043,31 @@ TEST_F(ExprTest, addNulls) {
 
     checkResult(slicedVector);
   }
+
+  // Lazy reading sometimes generates row vector that has child with length
+  // shorter than the parent.  The extra rows in parent are all marked as nulls
+  // so it is valid.  We need to handle this situation when propagating nulls
+  // from parent to child.
+  {
+    auto a = makeFlatVector<int64_t>(kSize - 1, folly::identity);
+    auto b = makeArrayVector<int64_t>(
+        kSize - 1, [](auto) { return 1; }, [](auto i) { return i; });
+    auto row = std::make_shared<RowVector>(
+        pool_.get(),
+        ROW({{"a", a->type()}, {"b", b->type()}}),
+        nullptr,
+        kSize,
+        std::vector<VectorPtr>({a, b}));
+    VectorPtr result = row;
+    exec::Expr::addNulls(rows, rawNulls, context, row->type(), result);
+    ASSERT_NE(result.get(), row.get());
+    ASSERT_EQ(result->size(), kSize);
+    for (int i = 0; i < kSize - 1; ++i) {
+      ASSERT_FALSE(result->isNullAt(i));
+      ASSERT_TRUE(result->equalValueAt(row.get(), i, i));
+    }
+    ASSERT_TRUE(result->isNullAt(kSize - 1));
+  }
 }
 
 namespace {
@@ -3145,7 +3143,7 @@ TEST_F(ExprTest, applyFunctionNoResult) {
       "always_throws_vector_function(c0) AND true",
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
-      "and(always_throws_vector_function(c0), 1:BOOLEAN)",
+      "and(always_throws_vector_function(c0), true:BOOLEAN)",
       AlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
@@ -3157,7 +3155,7 @@ TEST_F(ExprTest, applyFunctionNoResult) {
       "no_op(c0) AND true",
       makeFlatVector<int32_t>({1, 2, 3}),
       "no_op(c0)",
-      "and(no_op(c0), 1:BOOLEAN)",
+      "and(no_op(c0), true:BOOLEAN)",
       "Function neither returned results nor threw exception.");
 }
 
@@ -3459,4 +3457,89 @@ TEST_F(ExprTest, cseOverDictionaryAcrossMultipleExpressions) {
     assertEqualVectors(expected[2], result[2]);
     EXPECT_EQ(2, stats.at("upper").numProcessedRows);
   }
+}
+
+TEST_F(ExprTest, smallerWrappedBaseVector) {
+  // This test verifies that in the case that wrapping the
+  // result of a peeledResult (i.e result which is computed after
+  // peeling input) results in a smaller result than baseVector,
+  // then we don't fault if the rows to be copied are more than the
+  // size of the wrapped result.
+  // Typically, this happens when the results have a lot of trailing nulls.
+
+  auto baseMap = createMapOfArraysVector<int64_t, int64_t>(
+      {{{1, std::nullopt}},
+       {{2, {{4, 5, std::nullopt}}}},
+       {{2, {{7, 8, 9}}}},
+       {{2, std::nullopt}},
+       {{2, std::nullopt}},
+       {{2, std::nullopt}}});
+  auto indices = makeIndices(10, [](auto row) { return row % 6; });
+  auto nulls = makeNulls(10, [](auto row) { return row > 5; });
+  auto wrappedMap = BaseVector::wrapInDictionary(nulls, indices, 10, baseMap);
+  auto input = makeRowVector({wrappedMap});
+
+  auto exprSet = compileMultiple(
+      {"element_at(element_at(c0, 2::bigint), 1::bigint)"},
+      asRowType(input->type()));
+
+  exec::EvalCtx context(execCtx_.get(), exprSet.get(), input.get());
+
+  // We set finalSelection to false so that
+  // we force copy of results into the flatvector.
+  *context.mutableIsFinalSelection() = false;
+  auto finalRows = SelectivityVector(10);
+  *context.mutableFinalSelection() = &finalRows;
+
+  // We need a different SelectivityVector for rows
+  // otherwise the copy will not kick in.
+  SelectivityVector rows(input->size());
+  std::vector<VectorPtr> result(1);
+  auto flatResult = makeFlatVector<int64_t>(input->size(), BIGINT());
+  result[0] = flatResult;
+  exprSet->eval(rows, context, result);
+
+  assertEqualVectors(
+      makeNullableFlatVector<int64_t>(
+          {std::nullopt,
+           4,
+           7,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt}),
+      result[0]);
+}
+
+TEST_F(ExprTest, nullPropagation) {
+  auto singleString = parseExpression(
+      "substr(c0, 1, if (length(c0) > 2, length(c0) - 1, 0))",
+      ROW({"c0"}, {VARCHAR()}));
+  auto twoStrings = parseExpression(
+      "substr(c0, 1, if (length(c1) > 2, length(c0) - 1, 0))",
+      ROW({"c0", "c1"}, {VARCHAR(), VARCHAR()}));
+  EXPECT_TRUE(propagatesNulls(singleString));
+  EXPECT_FALSE(propagatesNulls(twoStrings));
+}
+
+TEST_F(ExprTest, peelingWithSmallerConstantInput) {
+  // This test ensures that when a dictionary-encoded vector is peeled together
+  // with a constant vector whose size is smaller than the corresponding
+  // selected rows of the dictionary base vector, the subsequent evaluation on
+  // the constant vector doesn't access values beyond its size.
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto c0 = makeRowVector(
+      {makeFlatVector<int64_t>({1, 3, 5, 7, 9})}, nullEvery(1, 2));
+  auto indices = makeIndices({2, 3, 4});
+  auto d0 = wrapInDictionary(indices, c0);
+  auto c1 = BaseVector::wrapInConstant(3, 1, data);
+
+  // After evaluating d0, Coalesce copies values from c1 to an existing result
+  // vector. c1 should be large enough so that this copy step does not access
+  // values out of bound.
+  auto result = evaluate("coalesce(c0, c1)", makeRowVector({d0, c1}));
+  assertEqualVectors(c1, result);
 }

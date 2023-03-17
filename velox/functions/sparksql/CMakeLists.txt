@@ -26,8 +26,7 @@ add_library(
   RegisterCompare.cpp
   Size.cpp
   SplitFunctions.cpp
-  String.cpp
-  Subscript.cpp)
+  String.cpp)
 
 target_link_libraries(
   velox_functions_spark velox_functions_lib velox_functions_prestosql_impl
@@ -39,6 +38,7 @@ set_property(TARGET velox_functions_spark PROPERTY JOB_POOL_COMPILE
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
   add_subdirectory(aggregates)
+  add_subdirectory(coverage)
 endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})

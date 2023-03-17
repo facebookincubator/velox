@@ -229,6 +229,16 @@ FOLLY_ALWAYS_INLINE void replaceInPlace(
   string.resize(outputSize);
 }
 
+template <typename TString>
+FOLLY_ALWAYS_INLINE folly::ByteRange range(const TString& value) {
+  return folly::ByteRange((const uint8_t*)value.data(), value.size());
+}
+
+template <typename TString>
+FOLLY_ALWAYS_INLINE folly::MutableByteRange mutableRange(TString& value) {
+  return folly::MutableByteRange((uint8_t*)value.data(), value.size());
+}
+
 /// Compute the MD5 Hash.
 template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE void md5(TOutString& output, const TInString& input) {
@@ -272,18 +282,14 @@ FOLLY_ALWAYS_INLINE bool md5_radix(
 template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE void sha256(TOutString& output, const TInString& input) {
   output.resize(32);
-  folly::ssl::OpenSSLHash::sha256(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)input.data(), input.size()));
+  folly::ssl::OpenSSLHash::sha256(mutableRange(output), range(input));
 }
 
 /// Compute the SHA512 Hash.
 template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE void sha512(TOutString& output, const TInString& input) {
   output.resize(64);
-  folly::ssl::OpenSSLHash::sha512(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)input.data(), input.size()));
+  folly::ssl::OpenSSLHash::sha512(mutableRange(output), range(input));
 }
 
 // Compute the HMAC-SHA1 Hash.
@@ -292,9 +298,7 @@ FOLLY_ALWAYS_INLINE void
 hmacSha1(TOutString& output, const TInString& key, const TInString& data) {
   output.resize(20);
   folly::ssl::OpenSSLHash::hmac_sha1(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)key.data(), key.size()),
-      folly::ByteRange((const uint8_t*)data.data(), data.size()));
+      mutableRange(output), range(key), range(data));
 }
 
 // Compute the HMAC-SHA256 Hash.
@@ -303,9 +307,7 @@ FOLLY_ALWAYS_INLINE void
 hmacSha256(TOutString& output, const TInString& key, const TInString& data) {
   output.resize(32);
   folly::ssl::OpenSSLHash::hmac_sha256(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)key.data(), key.size()),
-      folly::ByteRange((const uint8_t*)data.data(), data.size()));
+      mutableRange(output), range(key), range(data));
 }
 
 // Compute the HMAC-SHA512 Hash.
@@ -314,9 +316,16 @@ FOLLY_ALWAYS_INLINE void
 hmacSha512(TOutString& output, const TInString& key, const TInString& data) {
   output.resize(64);
   folly::ssl::OpenSSLHash::hmac_sha512(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)key.data(), key.size()),
-      folly::ByteRange((const uint8_t*)data.data(), data.size()));
+      mutableRange(output), range(key), range(data));
+}
+
+// Compute the HMAC-MD5 Hash.
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE void
+hmacMd5(TOutString& output, const TInString& key, const TInString& data) {
+  output.resize(16);
+  folly::ssl::OpenSSLHash::hmac(
+      mutableRange(output), EVP_md5(), range(key), range(data));
 }
 
 template <typename TOutString, typename TInString>
@@ -502,6 +511,10 @@ FOLLY_ALWAYS_INLINE bool isAsciiWhiteSpace(char ch) {
   return ch == '\t' || ch == '\n' || ch == '\r' || ch == ' ';
 }
 
+FOLLY_ALWAYS_INLINE bool isAsciiSpace(char ch) {
+  return ch == ' ';
+}
+
 // Returns -1 if 'data' does not end with a white space, otherwise returns the
 // size of the white space character at the end of 'data'. 'size' is the size of
 // 'data' in bytes.
@@ -569,6 +582,7 @@ FOLLY_ALWAYS_INLINE bool splitPart(
 template <
     bool leftTrim,
     bool rightTrim,
+    bool(shouldTrim)(char) = isAsciiWhiteSpace,
     typename TOutString,
     typename TInString>
 FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
@@ -581,7 +595,7 @@ FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
 
   auto curPos = input.begin();
   if constexpr (leftTrim) {
-    while (curPos < input.end() && isAsciiWhiteSpace(*curPos)) {
+    while (curPos < input.end() && shouldTrim(*curPos)) {
       curPos++;
     }
   }
@@ -592,7 +606,7 @@ FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
   auto start = curPos;
   curPos = input.end() - 1;
   if constexpr (rightTrim) {
-    while (curPos >= start && isAsciiWhiteSpace(*curPos)) {
+    while (curPos >= start && shouldTrim(*curPos)) {
       curPos--;
     }
   }

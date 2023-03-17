@@ -478,7 +478,7 @@ TEST_F(CastExprTest, mapCast) {
   // Cast map<bigint, bigint> -> map<bigint, varchar>.
   {
     auto valueAtString = [valueAt](vector_size_t row) {
-      return StringView(folly::to<std::string>(valueAt(row)));
+      return StringView::makeInline(folly::to<std::string>(valueAt(row)));
     };
 
     auto expectedMap = makeMapVector<int64_t, StringView>(
@@ -490,7 +490,7 @@ TEST_F(CastExprTest, mapCast) {
   // Cast map<bigint, bigint> -> map<varchar, bigint>.
   {
     auto keyAtString = [&](vector_size_t row) {
-      return StringView(folly::to<std::string>(keyAt(row)));
+      return StringView::makeInline(folly::to<std::string>(keyAt(row)));
     };
 
     auto expectedMap = makeMapVector<StringView, int64_t>(
@@ -524,7 +524,7 @@ TEST_F(CastExprTest, mapCast) {
                 nullEvery(3),
                 nullEvery(7)),
             false),
-        "Failed to cast from BIGINT to TIMESTAMP: 0. Conversion of BIGINT to Timestamp is not supported");
+        "Failed to cast from BIGINT to TIMESTAMP: 0. Conversion to Timestamp is not supported");
 
     testComplexCast(
         "c0",
@@ -557,7 +557,7 @@ TEST_F(CastExprTest, arrayCast) {
   // Cast array<double> -> array<varchar>.
   {
     auto valueAtString = [valueAt](vector_size_t row, vector_size_t idx) {
-      return StringView(folly::to<std::string>(valueAt(row, idx)));
+      return StringView::makeInline(folly::to<std::string>(valueAt(row, idx)));
     };
     auto expected = makeArrayVector<StringView>(
         kVectorSize, sizeAt, valueAtString, nullEvery(3));

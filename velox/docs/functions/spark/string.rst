@@ -21,7 +21,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT contains('Spark SQL', null); -- NULL
         SELECT contains(x'537061726b2053514c', x'537061726b'); -- true
 
-.. spark:function:: endsWith(left, right) -> boolean
+.. spark:function:: endswith(left, right) -> boolean
 
     Returns true if 'left' ends with 'right'. Otherwise, returns false. ::
 
@@ -37,6 +37,46 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 .. spark:function:: length(string) -> integer
 
     Returns the length of ``string`` in characters.
+
+.. spark:function:: lower(string) -> string
+
+    Returns string with all characters changed to lowercase. ::
+
+        SELECT lower('SparkSql'); -- sparksql
+
+.. spark:function:: ltrim(string) -> varchar
+
+    Removes leading 0x20(space) characters from ``string``. ::
+
+        SELECT ltrim('  data  '); -- "data  "
+
+.. spark:function:: ltrim(trimCharacters, string) -> varchar
+
+    Removes specified leading characters from ``string``. The specified character
+    is any character contained in ``trimCharacters``.
+    ``trimCharacters`` can be empty and may contain duplicate characters. ::
+
+        SELECT ltrim('ps', 'spark'); -- "ark"
+
+.. spark:function:: replace(string, search, replace) -> string
+
+    Replaces all occurrences of `search` with `replace`. ::
+
+        SELECT replace('ABCabc', 'abc', 'DEF'); -- ABCDEF
+
+.. spark:function:: rtrim(string) -> varchar
+
+    Removes trailing 0x20(space) characters from ``string``. ::
+
+        SELECT rtrim('  data  '); -- "  data"
+
+.. spark:function:: rtrim(trimCharacters, string) -> varchar
+
+    Removes specified trailing characters from ``string``. The specified character
+    is any character contained in ``trimCharacters``.
+    ``trimCharacters`` can be empty and may contain duplicate characters. ::
+
+        SELECT rtrim('kr', 'spark'); -- "spa"
 
 .. spark:function:: split(string, delimiter) -> array(string)
 
@@ -54,7 +94,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT split('oneAtwoBthreeC', '[ABC]', 0); -- ["one", "two", "three", ""]
         SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
 
-.. spark:function:: startsWith(left, right) -> boolean
+.. spark:function:: startswith(left, right) -> boolean
 
     Returns true if 'left' starts with 'right'. Otherwise, returns false. ::
 
@@ -74,7 +114,28 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     position ``start``. Positions start with ``1``. A negative starting
     position is interpreted as being relative to the end of the string.
     Type of 'start' must be an INTEGER. ::
+
         SELECT substring('Spark SQL', 5, 1); -- k
         SELECT substring('Spark SQL', 5, 0); -- ""
         SELECT substring('Spark SQL', 5, -1); -- ""
         SELECT substring('Spark SQL', 5, 10000); -- "k SQL"
+
+.. spark:function:: trim(string) -> varchar
+
+    Removes leading and trailing 0x20(space) characters from ``string``. ::
+
+        SELECT trim('  data  '); -- "data"
+
+.. spark:function:: trim(trimCharacters, string) -> varchar
+
+    Removes specified leading and trailing characters from ``string``.
+    The specified character is any character contained in ``trimCharacters``.
+    ``trimCharacters`` can be empty and may contain duplicate characters. ::
+
+        SELECT trim('sprk', 'spark'); -- "a"
+
+.. spark:function:: upper(string) -> string
+
+    Returns string with all characters changed to uppercase. ::
+
+        SELECT upper('SparkSql'); -- SPARKSQL

@@ -39,26 +39,22 @@ namespace {
 /// @tparam From The expression type
 /// @param row The index of the current row
 /// @param input The input vector (of type From)
-/// @param resultFlatVector The output vector (of type To)
+/// @param result The output vector (of type To)
 /// @return False if the result is null
 template <typename To, typename From, bool Truncate>
 void applyCastKernel(
     vector_size_t row,
-    const BaseVector& input,
-    FlatVector<To>* resultFlatVector,
+    const SimpleVector<From>* input,
+    FlatVector<To>* result,
     bool& nullOutput) {
-  auto* inputVector = input.asUnchecked<SimpleVector<From>>();
-
   // Special handling for string target type
   if constexpr (CppToType<To>::typeKind == TypeKind::VARCHAR) {
-    if (nullOutput) {
-      resultFlatVector->setNull(row, true);
-    } else {
-      auto output =
-          util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-              inputVector->valueAt(row), nullOutput);
+    auto output =
+        util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
+            input->valueAt(row), nullOutput);
+    if (!nullOutput) {
       // Write the result output to the output vector
-      auto writer = exec::StringWriter<>(resultFlatVector, row);
+      auto writer = exec::StringWriter<>(result, row);
       writer.resize(output.size());
       if (output.size()) {
         std::memcpy(writer.data(), output.data(), output.size());
@@ -66,13 +62,11 @@ void applyCastKernel(
       writer.finalize();
     }
   } else {
-    auto result =
+    auto output =
         util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-            inputVector->valueAt(row), nullOutput);
-    if (nullOutput) {
-      resultFlatVector->setNull(row, true);
-    } else {
-      resultFlatVector->set(row, result);
+            input->valueAt(row), nullOutput);
+    if (!nullOutput) {
+      result->set(row, output);
     }
   }
 }
@@ -95,8 +89,7 @@ void applyDecimalCastKernel(
     exec::EvalCtx& context,
     const TypePtr& fromType,
     const TypePtr& toType,
-    VectorPtr castResult,
-    const bool nullOnFailure) {
+    VectorPtr castResult) {
   auto sourceVector = input.as<SimpleVector<TInput>>();
   auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
@@ -108,8 +101,7 @@ void applyDecimalCastKernel(
         fromPrecisionScale.first,
         fromPrecisionScale.second,
         toPrecisionScale.first,
-        toPrecisionScale.second,
-        nullOnFailure);
+        toPrecisionScale.second);
     if (rescaledValue.has_value()) {
       castResultRawBuffer[row] = rescaledValue.value();
     } else {
@@ -124,8 +116,7 @@ void applyBigintToDecimalCastKernel(
     const BaseVector& input,
     exec::EvalCtx& context,
     const TypePtr& toType,
-    VectorPtr castResult,
-    const bool nullOnFailure) {
+    VectorPtr castResult) {
   auto sourceVector = input.as<SimpleVector<int64_t>>();
   auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
@@ -134,8 +125,7 @@ void applyBigintToDecimalCastKernel(
     auto rescaledValue = DecimalUtil::rescaleBigint<TOutput>(
         sourceVector->valueAt(row),
         toPrecisionScale.first,
-        toPrecisionScale.second,
-        nullOnFailure);
+        toPrecisionScale.second);
     if (rescaledValue.has_value()) {
       castResultRawBuffer[row] = rescaledValue.value();
     } else {
@@ -154,86 +144,58 @@ void CastExpr::applyCastWithTry(
   const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
   auto isCastIntByTruncate = queryConfig.isCastIntByTruncate();
 
-  if (!nullOnFailure_) {
-    if (!isCastIntByTruncate) {
-      context.applyToSelectedNoThrow(rows, [&](int row) {
-        try {
-          // Passing a false truncate flag
-          bool nullOutput = false;
-          applyCastKernel<To, From, false>(
-              row, input, resultFlatVector, nullOutput);
-          if (nullOutput) {
-            throw std::invalid_argument("");
-          }
-        } catch (const VeloxRuntimeError& re) {
-          VELOX_FAIL(
-              makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-              re.message());
-        } catch (const VeloxUserError& ue) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-              ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-              e.what());
-        }
-      });
-    } else {
-      context.applyToSelectedNoThrow(rows, [&](int row) {
-        try {
-          // Passing a true truncate flag
-          bool nullOutput = false;
-          applyCastKernel<To, From, true>(
-              row, input, resultFlatVector, nullOutput);
-          if (nullOutput) {
-            throw std::invalid_argument("");
-          }
-        } catch (const VeloxRuntimeError& re) {
-          VELOX_FAIL(
-              makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-              re.message());
-        } catch (const VeloxUserError& ue) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-              ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-              e.what());
-        }
-      });
-    }
+  auto* inputSimpleVector = input.as<SimpleVector<From>>();
+
+  if (!isCastIntByTruncate) {
+    context.applyToSelectedNoThrow(rows, [&](int row) {
+      bool nullOutput = false;
+      try {
+        // Passing a false truncate flag
+        applyCastKernel<To, From, false>(
+            row, inputSimpleVector, resultFlatVector, nullOutput);
+      } catch (const VeloxRuntimeError& re) {
+        VELOX_FAIL(
+            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
+            re.message());
+      } catch (const VeloxUserError& ue) {
+        VELOX_USER_FAIL(
+            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
+            ue.message());
+      } catch (const std::exception& e) {
+        VELOX_USER_FAIL(
+            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
+            e.what());
+      }
+
+      if (nullOutput) {
+        VELOX_USER_FAIL(makeErrorMessage(input, row, resultFlatVector->type()));
+      }
+    });
   } else {
-    if (!isCastIntByTruncate) {
-      rows.applyToSelected([&](int row) {
-        // TRY_CAST implementation
-        try {
-          bool nullOutput = false;
-          applyCastKernel<To, From, false>(
-              row, input, resultFlatVector, nullOutput);
-          if (nullOutput) {
-            resultFlatVector->setNull(row, true);
-          }
-        } catch (...) {
-          resultFlatVector->setNull(row, true);
-        }
-      });
-    } else {
-      rows.applyToSelected([&](int row) {
-        // TRY_CAST implementation
-        try {
-          bool nullOutput = false;
-          applyCastKernel<To, From, true>(
-              row, input, resultFlatVector, nullOutput);
-          if (nullOutput) {
-            resultFlatVector->setNull(row, true);
-          }
-        } catch (...) {
-          resultFlatVector->setNull(row, true);
-        }
-      });
-    }
+    context.applyToSelectedNoThrow(rows, [&](int row) {
+      bool nullOutput = false;
+      try {
+        // Passing a true truncate flag
+        applyCastKernel<To, From, true>(
+            row, inputSimpleVector, resultFlatVector, nullOutput);
+      } catch (const VeloxRuntimeError& re) {
+        VELOX_FAIL(
+            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
+            re.message());
+      } catch (const VeloxUserError& ue) {
+        VELOX_USER_FAIL(
+            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
+            ue.message());
+      } catch (const std::exception& e) {
+        VELOX_USER_FAIL(
+            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
+            e.what());
+      }
+
+      if (nullOutput) {
+        VELOX_USER_FAIL(makeErrorMessage(input, row, resultFlatVector->type()));
+      }
+    });
   }
 
   // If we're converting to a TIMESTAMP, check if we need to adjust the current
@@ -476,11 +438,6 @@ VectorPtr CastExpr::applyRow(
     const auto& toChildType = toRowType.childAt(toChildrenIndex);
 
     if (matchNotFound) {
-      if (nullOnFailure_) {
-        VELOX_USER_FAIL(
-            "Invalid complex cast the match is not found for the field {}",
-            toFieldName)
-      }
       // Create a vector for null for this child
       context.ensureWritable(rows, toChildType, outputChild);
       outputChild->addNulls(nullptr, rows);
@@ -524,30 +481,30 @@ VectorPtr CastExpr::applyDecimal(
     case TypeKind::SHORT_DECIMAL: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
         applyDecimalCastKernel<UnscaledShortDecimal, UnscaledShortDecimal>(
-            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+            rows, input, context, fromType, toType, castResult);
       } else {
         applyDecimalCastKernel<UnscaledShortDecimal, UnscaledLongDecimal>(
-            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+            rows, input, context, fromType, toType, castResult);
       }
       break;
     }
     case TypeKind::LONG_DECIMAL: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
         applyDecimalCastKernel<UnscaledLongDecimal, UnscaledShortDecimal>(
-            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+            rows, input, context, fromType, toType, castResult);
       } else {
         applyDecimalCastKernel<UnscaledLongDecimal, UnscaledLongDecimal>(
-            rows, input, context, fromType, toType, castResult, nullOnFailure_);
+            rows, input, context, fromType, toType, castResult);
       }
       break;
     }
     case TypeKind::BIGINT: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
         applyBigintToDecimalCastKernel<UnscaledShortDecimal>(
-            rows, input, context, toType, castResult, nullOnFailure_);
+            rows, input, context, toType, castResult);
       } else {
         applyBigintToDecimalCastKernel<UnscaledLongDecimal>(
-            rows, input, context, toType, castResult, nullOnFailure_);
+            rows, input, context, toType, castResult);
       }
       break;
     }
@@ -575,11 +532,9 @@ void CastExpr::applyPeeled(
         fromType->toString());
 
     if (castToOperator_) {
-      castToOperator_->castTo(
-          input, context, rows, nullOnFailure_, toType, result);
+      castToOperator_->castTo(input, context, rows, toType, result);
     } else {
-      castFromOperator_->castFrom(
-          input, context, rows, nullOnFailure_, toType, result);
+      castFromOperator_->castFrom(input, context, rows, toType, result);
     }
   } else {
     switch (toType->kind()) {
@@ -748,9 +703,6 @@ ExprPtr CastCallToSpecialForm::constructSpecialForm(
       "CAST statements expect exactly 1 argument, received {}",
       compiledChildren.size());
   return std::make_shared<CastExpr>(
-      type,
-      std::move(compiledChildren[0]),
-      trackCpuUsage,
-      false /* nullOnFailure */);
+      type, std::move(compiledChildren[0]), trackCpuUsage);
 }
 } // namespace facebook::velox::exec

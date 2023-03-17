@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "pyvelox.h" // @manual
-#include "fuzzer.h" // @manual
+#include "pyvelox.h"
+#include "signatures.h"
 
 namespace facebook::velox::py {
 using namespace velox;

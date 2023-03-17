@@ -63,6 +63,7 @@ add_executable(
   UnorderedStreamReaderTest.cpp
   UnnestTest.cpp
   VectorHasherTest.cpp
+  ValuesTest.cpp
   WindowFunctionRegistryTest.cpp)
 
 add_test(
@@ -103,7 +104,7 @@ target_link_libraries(
   gmock
   ${FOLLY_WITH_DEPENDENCIES}
   ${DOUBLE_CONVERSION}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT}
   ${FILESYSTEM})

@@ -18,17 +18,42 @@ import pyvelox.pyvelox as pv
 
 
 class TestFunctionSignatures(unittest.TestCase):
+    def test_clear_signatures(self):
+        pv.clear_signatures()
+        signatures = pv.get_function_signatures()
+        self.assertEqual(len(signatures), 0)
+
     def test_get_signatures(self):
-        presto_signatures = pv.presto_signatures()
+        pv.register_presto_signatures()
+        presto_signatures = pv.get_function_signatures()
         self.assertTrue(len(presto_signatures) > 0)
 
-        spark_signatures = pv.spark_signatures()
-        self.assertTrue(len(presto_signatures) > 0)
+        pv.clear_signatures()
+        pv.register_spark_signatures()
+        spark_signatures = pv.get_function_signatures()
+        self.assertTrue(len(spark_signatures) > 0)
 
-    def test_functino_signature(self):
-        presto_signatures = pv.presto_signatures()
+    def test_function_signature(self):
+        pv.clear_signatures()
+        pv.register_presto_signatures()
+        presto_signatures = pv.get_function_signatures()
 
         concat_signatures = presto_signatures["concat"]
         self.assertTrue(len(concat_signatures) > 0)
         self.assertEqual(str(concat_signatures[0].return_type()), "varchar")
         self.assertEqual(str(concat_signatures[0]), "(varchar,varchar...) -> varchar")
+
+    def test_function_prefix(self):
+        pv.clear_signatures()
+        pv.register_presto_signatures("foo")
+        presto_signatures = pv.get_function_signatures()
+
+        concat_signatures = presto_signatures["fooconcat"]
+        self.assertTrue(len(concat_signatures) > 0)
+
+        pv.clear_signatures()
+        pv.register_spark_signatures("bar")
+        spark_signatures = pv.get_function_signatures()
+
+        concat_signatures = spark_signatures["barconcat"]
+        self.assertTrue(len(concat_signatures) > 0)
