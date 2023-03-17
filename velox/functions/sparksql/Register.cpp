@@ -137,14 +137,23 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<ContainsFunction, bool, Varchar, Varchar>(
       {prefix + "contains"});
 
+  registerFunction<TrimSpaceFunction, Varchar, Varchar>({prefix + "trim"});
+  registerFunction<TrimFunction, Varchar, Varchar, Varchar>({prefix + "trim"});
+  registerFunction<LTrimSpaceFunction, Varchar, Varchar>({prefix + "ltrim"});
+  registerFunction<LTrimFunction, Varchar, Varchar, Varchar>(
+      {prefix + "ltrim"});
+  registerFunction<RTrimSpaceFunction, Varchar, Varchar>({prefix + "rtrim"});
+  registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
+      {prefix + "rtrim"});
+
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
       prefix + "array_sort", arraySortSignatures(), makeArraySort);
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
 
-  registerFunction<YearFunction, int32_t, Timestamp>({"year"});
-  registerFunction<YearFunction, int32_t, Date>({"year"});
+  registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
+  registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
 }
 
 } // namespace sparksql

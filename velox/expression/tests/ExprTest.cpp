@@ -315,6 +315,11 @@ class ExprTest : public testing::Test, public VectorTestBase {
         << sql;
   }
 
+  bool propagatesNulls(const core::TypedExprPtr& typedExpr) {
+    exec::ExprSet exprSet({typedExpr}, execCtx_.get(), true);
+    return exprSet.exprs().front()->propagatesNulls();
+  }
+
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
@@ -3482,4 +3487,34 @@ TEST_F(ExprTest, smallerWrappedBaseVector) {
            std::nullopt,
            std::nullopt}),
       result[0]);
+}
+
+TEST_F(ExprTest, nullPropagation) {
+  auto singleString = parseExpression(
+      "substr(c0, 1, if (length(c0) > 2, length(c0) - 1, 0))",
+      ROW({"c0"}, {VARCHAR()}));
+  auto twoStrings = parseExpression(
+      "substr(c0, 1, if (length(c1) > 2, length(c0) - 1, 0))",
+      ROW({"c0", "c1"}, {VARCHAR(), VARCHAR()}));
+  EXPECT_TRUE(propagatesNulls(singleString));
+  EXPECT_FALSE(propagatesNulls(twoStrings));
+}
+
+TEST_F(ExprTest, peelingWithSmallerConstantInput) {
+  // This test ensures that when a dictionary-encoded vector is peeled together
+  // with a constant vector whose size is smaller than the corresponding
+  // selected rows of the dictionary base vector, the subsequent evaluation on
+  // the constant vector doesn't access values beyond its size.
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto c0 = makeRowVector(
+      {makeFlatVector<int64_t>({1, 3, 5, 7, 9})}, nullEvery(1, 2));
+  auto indices = makeIndices({2, 3, 4});
+  auto d0 = wrapInDictionary(indices, c0);
+  auto c1 = BaseVector::wrapInConstant(3, 1, data);
+
+  // After evaluating d0, Coalesce copies values from c1 to an existing result
+  // vector. c1 should be large enough so that this copy step does not access
+  // values out of bound.
+  auto result = evaluate("coalesce(c0, c1)", makeRowVector({d0, c1}));
+  assertEqualVectors(c1, result);
 }

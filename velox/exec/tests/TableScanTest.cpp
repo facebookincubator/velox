@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/TableScan.h"
 #include <velox/type/Timestamp.h>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -211,6 +212,7 @@ TEST_F(TableScanTest, allColumns) {
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
   ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+  EXPECT_LT(0, exec::TableScan::ioWaitNanos());
 }
 
 TEST_F(TableScanTest, columnAliases) {
@@ -1933,7 +1935,9 @@ TEST_F(TableScanTest, remainingFilterConstantResult) {
           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
           makeFlatVector<StringView>(
               size,
-              [](auto row) { return StringView(fmt::format("{}", row % 23)); }),
+              [](auto row) {
+                return StringView::makeInline(fmt::format("{}", row % 23));
+              }),
       }),
       makeRowVector({
           makeFlatVector<int64_t>(
@@ -2443,4 +2447,27 @@ TEST_F(TableScanTest, errorInLoadLazy) {
     EXPECT_TRUE(ex.context().find(filePath->path, 0) != std::string::npos)
         << ex.context();
   }
+}
+
+TEST_F(TableScanTest, parallelPrepare) {
+  constexpr int32_t kNumParallel = 100;
+  const char* kLargeRemainingFilter =
+      "c0 + 1::BIGINT > 0::BIGINT or 1111 in (1, 2, 3, 4, 5) or array_sort(array_distinct(array[1, 1, 3, 4, 5, 6,7]))[1] = -5";
+  FLAGS_split_preload_per_driver = kNumParallel;
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(10, [](auto row) { return row % 5; })});
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {data});
+  auto plan =
+      exec::test::PlanBuilder(pool_.get())
+          .tableScan(ROW({"c0"}, {INTEGER()}), {}, kLargeRemainingFilter)
+          .project({"c0"})
+          .planNode();
+
+  std::vector<exec::Split> splits;
+  for (auto i = 0; i < kNumParallel; ++i) {
+    splits.push_back(makeHiveSplit(filePath->path));
+  }
+  AssertQueryBuilder(plan).splits(splits).copyResults(pool_.get());
 }
