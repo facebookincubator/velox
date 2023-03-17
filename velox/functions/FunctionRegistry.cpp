@@ -77,6 +77,11 @@ FunctionSignatureMap getFunctionSignatures() {
   return result;
 }
 
+void clearFunctionRegistry() {
+    exec::SimpleFunctions().clearRegistry();
+    exec::vectorFunctionFactories()->clear();
+}
+
 std::shared_ptr<const Type> resolveFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {

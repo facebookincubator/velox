@@ -20,10 +20,16 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
   pybind11_add_module(pyvelox MODULE pyvelox.cpp fuzzer.cpp)
   # Link with Velox:
   target_link_libraries(
-    pyvelox PRIVATE velox_type velox_vector velox_core velox_exec
-                    velox_functions_prestosql velox_parse_parser
-          velox_expression_fuzzer velox_functions_prestosql
-          velox_functions_spark )
+    pyvelox
+    PRIVATE velox_type
+            velox_vector
+            velox_core
+            velox_exec
+            velox_functions_prestosql
+            velox_parse_parser
+            velox_expression_fuzzer
+            velox_functions_prestosql
+            velox_functions_spark)
 
   install(TARGETS pyvelox LIBRARY DESTINATION .)
 else()

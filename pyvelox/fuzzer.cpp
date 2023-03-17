@@ -24,18 +24,19 @@ using namespace velox;
 namespace py = pybind11;
 
 FunctionSignatureMap getPrestoSignatures() {
+  clearFunctionRegistry();
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
   return getFunctionSignatures();
 }
 
 FunctionSignatureMap getSparkSignatures() {
+  clearFunctionRegistry();
   facebook::velox::functions::sparksql::registerFunctions("");
   return getFunctionSignatures();
 }
 
 void addSignatureBindings(py::module& m,
                           bool asModuleLocalDefinitions) {
-
   //TypeSignature
   py::class_<exec::TypeSignature>  typeSignature(m, "TypeSignature",
                                                 py::module_local(asModuleLocalDefinitions));
@@ -53,8 +54,10 @@ void addSignatureBindings(py::module& m,
   functionSignature.def("variable_arity", &exec::FunctionSignature::variableArity);
   functionSignature.def("variables", &exec::FunctionSignature::variables);
 
-  m.def("spark_signatures", &getSparkSignatures);
-  m.def("presto_signatures", &getPrestoSignatures);
+  m.def("spark_signatures", &getSparkSignatures, py::return_value_policy::reference,
+        "Returns a dictionary of spark function signatures.");
+  m.def("presto_signatures", &getPrestoSignatures, py::return_value_policy::reference,
+        "Returns a dictionary of presto function signatures.");
 }
 }
 
