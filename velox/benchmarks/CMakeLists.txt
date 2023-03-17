@@ -15,5 +15,4 @@ add_subdirectory(basic)
 
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(tpch)
-  add_subdirectory(ssb)
 endif()

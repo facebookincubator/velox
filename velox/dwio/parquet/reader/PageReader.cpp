@@ -191,7 +191,8 @@ const char* FOLLY_NONNULL PageReader::uncompressData(
           stream.msg ? stream.msg : "");
       return uncompressedData_->as<char>();
     }
-#ifdef __linux__
+/* TODO x86 support */
+#if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
     case thrift::CompressionCodec::QPL:{
       dwio::common::ensureCapacity<char>(
         uncompressedData_, uncompressedSize, &pool_);

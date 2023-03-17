@@ -50,10 +50,6 @@ sudo --preserve-env apt update && apt install -y \
   libre2-dev \
   libsnappy-dev \
   liblzo2-dev \
-  uuid-dev \
-  libjson-c-dev \
-  libkeyutils-dev \
-  libz-dev \
   bison \
   flex \
   tzdata \
@@ -83,15 +79,6 @@ function install_qpl {
   cmake_install -DCMAKE_BUILD_TYPE=Release -DEFFICIENT_WAIT=ON
 }
 
-function install_accel-config {
-  github_checkout intel/idxd-config accel-config-v4.0
-  ./autogen.sh
-  ./configure CFLAGS='-g -O2' --prefix=/usr --sysconfdir=/etc --libdir=/usr/lib64
-  make
-  make check
-  sudo make install
-}
-
 function install_fmt {
   github_checkout fmtlib/fmt 8.0.1
   cmake_install -DFMT_TEST=OFF
@@ -114,7 +101,6 @@ function install_velox_deps {
   run_and_time install_folly
   run_and_time install_conda
   run_and_time install_qpl
-  run_and_time install_accel-config
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

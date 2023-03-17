@@ -34,8 +34,7 @@ dnf_install epel-release dnf-plugins-core # For ccache, ninja
 dnf config-manager --set-enabled powertools
 dnf_install ninja-build ccache gcc-toolset-9 git wget which libevent-devel \
   openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
-  libdwarf-devel curl-devel cmake libicu-devel \
-  asciidoc xmlto libuuid-devel json-c-devel zlib-devel 
+  libdwarf-devel curl-devel cmake libicu-devel 
 
 dnf remove -y gflags
 
@@ -70,19 +69,10 @@ wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.72.0/source/
 wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy &
 wget_and_untar https://github.com/fmtlib/fmt/archive/8.0.1.tar.gz fmt &
 wget_and_untar https://github.com/facebook/folly/archive/v2022.11.14.00.tar.gz folly &
-wget_and_untar https://github.com/intel/idxd-config/archive/refs/tags/accel-config-v4.0.tar.gz accel-config &
 git clone -b v1.1.0 --recursive https://github.com/intel/qpl.git &
 wait  # For cmake and source downloads to complete.
 
 # Build & install.
-(
-  cd accel-config
-  ./autogen.sh
-  ./configure CFLAGS='-g -O2' --prefix=/usr --sysconfdir=/etc --libdir=/usr/lib64
-  make
-  make check
-  sudo make install
-)
 (
   cd qpl
   if [ -d "./qpl-build/" ]; then
