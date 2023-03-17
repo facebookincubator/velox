@@ -1,24 +1,32 @@
-#include "CompressionQpl.h"
-
 #include <mutex>
 #include <atomic>
 #include <sys/time.h>
 
+#include "CompressionQpl.h"
 #include "velox/common/base/Exceptions.h"
 
-#define job_size 100
+#define JOB_SIZE 100
 #define MAX_COMPRESS_CHUNK_SIZE  262144
 #define MAX_DECOMPRESS_CHUNK_SIZE  262144
 #define QPL_MAX_TRANS_SIZE 2097152
 
 
-static qpl_job *job_pool[job_size];
-std::atomic<bool> job_status[job_size];
+static qpl_job *job_pool[JOB_SIZE];
+std::atomic<bool> job_status[JOB_SIZE];
 static bool initialized_job =false;
 static int start=0;
 std::mutex mtx;
 
 
+/*
+* QPL compression/decompression need init a job buffer, 
+* the job buffer will be initialized only once.
+* We set a lock to initialize job buffer, the default QPL execute path will be hardware. 
+* If hardware path init failed, call back to software path init.
+* If software path init failed, return error and exit.
+
+* But now, I don't know where to free the job buffers. If the reviewer know, can you tell me? Thanks.
+*/
 bool Initjobs(qpl_path_t execution_path){
 
   mtx.lock();
@@ -32,7 +40,7 @@ bool Initjobs(qpl_path_t execution_path){
     if (status != QPL_STS_OK) {
         VELOX_FAIL("QPL::An error acquired during job size getting.");
     }
-    for(int i=0;i<job_size;i++){
+    for(int i=0;i<JOB_SIZE;i++){
 
       job_status[i]=false;
       uint8_t *job_buffer=new uint8_t[size];
@@ -68,7 +76,7 @@ static inline size_t Getindex()
     unsigned lo, hi;
     __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi) : :);
     tsc = ((((uint64_t)hi) << 32) | (uint64_t)lo);
-    return ((size_t)((tsc * 44485709377909ULL) >> 4)) % job_size;
+    return ((size_t)((tsc * 44485709377909ULL) >> 4)) % JOB_SIZE;
 }
 
 int Qplcodec::Getjob(){
@@ -86,6 +94,11 @@ int Qplcodec::Getjob(){
   return index;
 }
 
+/*
+* The QPL can't compress/decompress the block over QPL_MAX_TRANS_SIZE,
+* We partition the input to several 256KB blocks. 
+* So that QPL can compress/decompress with a high throughput.
+*/
 bool Qplcodec::Compress(int64_t input_length, const uint8_t* input,
                              int64_t output_buffer_length, uint8_t* output){
     int job_id=Getjob();

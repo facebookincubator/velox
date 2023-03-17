@@ -1,10 +1,8 @@
-#pragma once
 
+#pragma once
 #include <qpl/qpl.h>
 #include <iostream>
 #include <memory>
-
-#include "velox/dwio/common/exception/Exceptions.h"
 
 
 bool Initjobs(qpl_path_t execute_path);
