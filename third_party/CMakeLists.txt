@@ -63,8 +63,8 @@ if(VELOX_ENABLE_ARROW)
   else()
     set(VELOX_ARROW_BUILD_VERSION 8.0.0)
     set(ARROW_SOURCE_URL
-            "https://dlcdn.apache.org/arrow/arrow-${VELOX_ARROW_BUILD_VERSION}/apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
-            )
+        "https://dlcdn.apache.org/arrow/arrow-${VELOX_ARROW_BUILD_VERSION}/apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
+    )
   endif()
   set(VELOX_ARROW_BUILD_SHA256_CHECKSUM
       ad9a05705117c989c116bae9ac70492fe015050e1b80fb0e38fde4b5d863aaa3)
