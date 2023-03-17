@@ -34,8 +34,8 @@ compiler_utils::CompilerOptions testCompilerOptions() {
       .withFormatterPath("/usr/local/bin/clang-format");
 }
 
-}; // namespace codegen
+};
+} // namespace codegen
 } // namespace velox
-} // namespace facebook
 }
 ; // namespace facebook

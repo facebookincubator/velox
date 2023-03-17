@@ -1154,10 +1154,9 @@ TpchPlan TpchQueryBuilder::getQ12Plan() const {
               {"l_shipmode", "o_orderpriority"})
           .project(
               {"l_shipmode",
-               "(CASE WHEN o_orderpriority = '1-URGENT' OR o_orderpriority =
-  '2-HIGH' THEN 1 ELSE 0 END) AS high_line_count_partial",
-               "(CASE WHEN o_orderpriority <> '1-URGENT' AND o_orderpriority <>
-  '2-HIGH' THEN 1 ELSE 0 END) AS low_line_count_partial"}) .partialAggregation(
+               "(CASE WHEN o_orderpriority = '1-URGENT' OR o_orderpriority = '2-HIGH' THEN 1 ELSE 0 END) AS high_line_count_partial",
+               "(CASE WHEN o_orderpriority <> '1-URGENT' AND o_orderpriority <> '2-HIGH' THEN 1 ELSE 0 END) AS low_line_count_partial"})
+          .partialAggregation(
               {"l_shipmode"},
               {"sum(high_line_count_partial) as high_line_count",
                "sum(low_line_count_partial) as low_line_count"})

@@ -60,8 +60,7 @@ concept compiledExpression =
   requires(
       typename GeneratedExpression::inputTupleType & input,
       typename GeneratedExpression::outputTupleType & output) {
-    { generatedExpression(input, output) }
-    ->std::same_as<void>;
+    { generatedExpression(input, output) } -> std::same_as<void>;
   };
 };
 #endif // concept

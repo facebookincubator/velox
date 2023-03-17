@@ -550,9 +550,9 @@ TEST_P(ExprEncodingsTest, conditional) {
   run<int64_t>(
       "if(bigint1 % 2 = 0, 2 * bigint1 + 10, 3 * bigint2) + 11",
       [&](int32_t row) {
-        auto temp = (IS_BIGINT1 && BIGINT1 % 2 == 0)
-            ? INT64V(2 * BIGINT1 + 10)
-            : IS_BIGINT2 ? INT64V(3 * BIGINT2) : INT64N;
+        auto temp = (IS_BIGINT1 && BIGINT1 % 2 == 0) ? INT64V(2 * BIGINT1 + 10)
+            : IS_BIGINT2                             ? INT64V(3 * BIGINT2)
+                                                     : INT64N;
         return temp.has_value() ? INT64V(temp.value() + 11) : temp;
       });
 }

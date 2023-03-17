@@ -309,8 +309,8 @@ class GeneratedVectorFunction : public GeneratedVectorFunctionBase {
           // Input tuples
           auto inputs = applyToTuple(
               [rowIndex](auto&& reader) -> auto {
-                return (const typename std::remove_reference_t<decltype(
-                            reader)>::InputType)reader[rowIndex];
+                return (const typename std::remove_reference_t<
+                        decltype(reader)>::InputType)reader[rowIndex];
               },
               inReaders,
               std::make_integer_sequence<

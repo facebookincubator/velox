@@ -13,7 +13,6 @@
 # limitations under the License.
 
 add_executable(velox_tpch_benchmark TpchBenchmark.cpp)
-
 target_link_libraries(
   velox_tpch_benchmark
   velox_aggregates

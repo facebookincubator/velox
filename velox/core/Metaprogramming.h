@@ -89,8 +89,8 @@ struct is_mappish_impl<
     void_t<
         typename T::key_type,
         typename T::mapped_type,
-        decltype(
-            std::declval<T&>()[std::declval<const typename T::key_type&>()])>>
+        decltype(std::declval<
+                 T&>()[std::declval<const typename T::key_type&>()])>>
     : std::true_type {};
 } // namespace detail
 

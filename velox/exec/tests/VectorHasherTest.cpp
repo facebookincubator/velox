@@ -743,9 +743,9 @@ void append(FlatVectorPtr<T>& vector, Value id) {
   } else {
     vector->set(
         size,
-        id == Value::kMin
-            ? std::numeric_limits<T>::min()
-            : id == Value::kMax ? std::numeric_limits<T>::max() : 0);
+        id == Value::kMin       ? std::numeric_limits<T>::min()
+            : id == Value::kMax ? std::numeric_limits<T>::max()
+                                : 0);
   }
 }
 } // namespace

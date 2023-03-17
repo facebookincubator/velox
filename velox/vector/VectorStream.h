@@ -36,7 +36,7 @@ class VectorSerializer {
   virtual ~VectorSerializer() = default;
 
   virtual void append(
-      const RowVectorPtr& vector,
+      RowVectorPtr vector,
       const folly::Range<const IndexRange*>& ranges) = 0;
 
   // Writes the contents to 'stream' in wire format

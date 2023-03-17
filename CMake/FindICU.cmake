@@ -222,7 +222,7 @@ if(${ICU_PUBLIC_VAR_NS}_INCLUDE_DIRS)
       "${${ICU_PUBLIC_VAR_NS}_MAJOR_VERSION}.${${ICU_PUBLIC_VAR_NS}_MINOR_VERSION}.${${ICU_PUBLIC_VAR_NS}_PATCH_VERSION}"
   )
   # ######### </part to keep synced with tests/version/CMakeLists.txt>
-  # ##########
+  # ############################################################################
 
   # Check dependencies (implies pkg-config)
   if(PKG_CONFIG_FOUND)

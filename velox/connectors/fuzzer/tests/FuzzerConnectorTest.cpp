@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/fuzzer/FuzzerConnector.h"
 #include <folly/init/Init.h>
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
