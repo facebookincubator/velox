@@ -12,8 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64"))
+  set(CompressionQpl "CompressionQpl.cpp")
+  set(CompressionQplDependency "${QPL}" "$ACCEL_CONFIG")
+else()
+  set(CompressionQpl "")
+  set(CompressionQplDependency "")
+endif()
+
+
 add_library(
   velox_dwio_native_parquet_reader
+  ${CompressionQpl}
   NestedStructureDecoder.cpp
   ParquetReader.cpp
   ParquetTypeWithId.cpp
@@ -34,4 +44,5 @@ target_link_libraries(
   arrow
   parquet
   thrift
+  ${CompressionQplDependency}
   ${FMT})

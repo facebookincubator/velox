@@ -1104,6 +1104,73 @@ TpchPlan TpchQueryBuilder::getQ12Plan() const {
   context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
   context.dataFileFormat = format_;
   return context;
+  /* std::vector<std::string> ordersColumns = {"o_orderkey", "o_orderpriority"};
+  std::vector<std::string> lineitemColumns = {
+      "l_receiptdate",
+      "l_orderkey",
+      "l_commitdate",
+      "l_shipmode",
+      "l_shipdate"};
+
+  auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
+  const auto& ordersFileColumns = getFileColumnNames(kOrders);
+  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId ordersScanNodeId;
+  core::PlanNodeId lineitemScanNodeId;
+
+  const std::string receiptDateFilter = formatDateFilter(
+      "l_receiptdate", lineitemSelectedRowType, "'1994-01-01'", "'1994-12-31'");
+  const std::string shipDateFilter = formatDateFilter(
+      "l_shipdate", lineitemSelectedRowType, "", "'1995-01-01'");
+  const std::string commitDateFilter = formatDateFilter(
+      "l_commitdate", lineitemSelectedRowType, "", "'1995-01-01'");
+
+  auto lineitem = PlanBuilder(planNodeIdGenerator, pool_.get())
+                      .tableScan(
+                          kLineitem,
+                          lineitemSelectedRowType,
+                          lineitemFileColumns,
+                          {receiptDateFilter,
+                           "l_shipmode IN ('MAIL', 'SHIP')",
+                           shipDateFilter,
+                           commitDateFilter},
+                          "l_commitdate < l_receiptdate")
+                      .capturePlanNodeId(lineitemScanNodeId)
+                      .filter("l_shipdate < l_commitdate")
+                      .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns, {})
+          .capturePlanNodeId(ordersScanNodeId)
+          .hashJoin(
+              {"o_orderkey"},
+              {"l_orderkey"},
+              lineitem,
+              "",
+              {"l_shipmode", "o_orderpriority"})
+          .project(
+              {"l_shipmode",
+               "(CASE WHEN o_orderpriority = '1-URGENT' OR o_orderpriority = '2-HIGH' THEN 1 ELSE 0 END) AS high_line_count_partial",
+               "(CASE WHEN o_orderpriority <> '1-URGENT' AND o_orderpriority <> '2-HIGH' THEN 1 ELSE 0 END) AS low_line_count_partial"})
+          .partialAggregation(
+              {"l_shipmode"},
+              {"sum(high_line_count_partial) as high_line_count",
+               "sum(low_line_count_partial) as low_line_count"})
+          .localPartition({})
+          .finalAggregation()
+          .orderBy({"l_shipmode"}, false)
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
+  context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFileFormat = format_;
+  return context; */
 }
 
 TpchPlan TpchQueryBuilder::getQ13Plan() const {
