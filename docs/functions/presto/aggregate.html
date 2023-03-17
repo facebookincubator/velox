@@ -14,7 +14,6 @@
     <script src="../../_static/underscore.js"></script>
     <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Window functions" href="window.html" />
@@ -386,65 +385,12 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#arbitrary"><code class="docutils literal notranslate"><span class="pre">arbitrary()</span></code></a></li>
-<li><a class="reference internal" href="#array_agg"><code class="docutils literal notranslate"><span class="pre">array_agg()</span></code></a></li>
-<li><a class="reference internal" href="#avg"><code class="docutils literal notranslate"><span class="pre">avg()</span></code></a></li>
-<li><a class="reference internal" href="#bool_and"><code class="docutils literal notranslate"><span class="pre">bool_and()</span></code></a></li>
-<li><a class="reference internal" href="#bool_or"><code class="docutils literal notranslate"><span class="pre">bool_or()</span></code></a></li>
-<li><a class="reference internal" href="#checksum"><code class="docutils literal notranslate"><span class="pre">checksum()</span></code></a></li>
-<li><a class="reference internal" href="#count"><code class="docutils literal notranslate"><span class="pre">count()</span></code></a></li>
-<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">count()</span></code></a></li>
-<li><a class="reference internal" href="#count_if"><code class="docutils literal notranslate"><span class="pre">count_if()</span></code></a></li>
-<li><a class="reference internal" href="#every"><code class="docutils literal notranslate"><span class="pre">every()</span></code></a></li>
-<li><a class="reference internal" href="#histogram"><code class="docutils literal notranslate"><span class="pre">histogram()</span></code></a></li>
-<li><a class="reference internal" href="#max_by"><code class="docutils literal notranslate"><span class="pre">max_by()</span></code></a></li>
-<li><a class="reference internal" href="#min_by"><code class="docutils literal notranslate"><span class="pre">min_by()</span></code></a></li>
-<li><a class="reference internal" href="#max"><code class="docutils literal notranslate"><span class="pre">max()</span></code></a></li>
-<li><a class="reference internal" href="#min"><code class="docutils literal notranslate"><span class="pre">min()</span></code></a></li>
-<li><a class="reference internal" href="#sum"><code class="docutils literal notranslate"><span class="pre">sum()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#bitwise-aggregate-functions">Bitwise Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#bitwise_and_agg"><code class="docutils literal notranslate"><span class="pre">bitwise_and_agg()</span></code></a></li>
-<li><a class="reference internal" href="#bitwise_or_agg"><code class="docutils literal notranslate"><span class="pre">bitwise_or_agg()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#map-aggregate-functions">Map Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#map_agg"><code class="docutils literal notranslate"><span class="pre">map_agg()</span></code></a></li>
-<li><a class="reference internal" href="#map_union"><code class="docutils literal notranslate"><span class="pre">map_union()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#approximate-aggregate-functions">Approximate Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#approx_distinct"><code class="docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a></li>
-<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a></li>
-<li><a class="reference internal" href="#approx_most_frequent"><code class="docutils literal notranslate"><span class="pre">approx_most_frequent()</span></code></a></li>
-<li><a class="reference internal" href="#approx_percentile"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
-<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
-<li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
-<li><a class="reference internal" href="#id5"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
-<li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
-<li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
-<li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
-<li><a class="reference internal" href="#id9"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#statistical-aggregate-functions">Statistical Aggregate Functions</a><ul>
-<li><a class="reference internal" href="#corr"><code class="docutils literal notranslate"><span class="pre">corr()</span></code></a></li>
-<li><a class="reference internal" href="#covar_pop"><code class="docutils literal notranslate"><span class="pre">covar_pop()</span></code></a></li>
-<li><a class="reference internal" href="#covar_samp"><code class="docutils literal notranslate"><span class="pre">covar_samp()</span></code></a></li>
-<li><a class="reference internal" href="#stddev"><code class="docutils literal notranslate"><span class="pre">stddev()</span></code></a></li>
-<li><a class="reference internal" href="#stddev_pop"><code class="docutils literal notranslate"><span class="pre">stddev_pop()</span></code></a></li>
-<li><a class="reference internal" href="#stddev_samp"><code class="docutils literal notranslate"><span class="pre">stddev_samp()</span></code></a></li>
-<li><a class="reference internal" href="#variance"><code class="docutils literal notranslate"><span class="pre">variance()</span></code></a></li>
-<li><a class="reference internal" href="#var_pop"><code class="docutils literal notranslate"><span class="pre">var_pop()</span></code></a></li>
-<li><a class="reference internal" href="#var_samp"><code class="docutils literal notranslate"><span class="pre">var_samp()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#miscellaneous">Miscellaneous</a><ul>
-<li><a class="reference internal" href="#max_data_size_for_stats"><code class="docutils literal notranslate"><span class="pre">max_data_size_for_stats()</span></code></a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a></li>
+<li><a class="reference internal" href="#bitwise-aggregate-functions">Bitwise Aggregate Functions</a></li>
+<li><a class="reference internal" href="#map-aggregate-functions">Map Aggregate Functions</a></li>
+<li><a class="reference internal" href="#approximate-aggregate-functions">Approximate Aggregate Functions</a></li>
+<li><a class="reference internal" href="#statistical-aggregate-functions">Statistical Aggregate Functions</a></li>
+<li><a class="reference internal" href="#miscellaneous">Miscellaneous</a></li>
 </ul>
 </li>
 </ul>
@@ -500,7 +446,7 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
     </div>
   </body>
 </html>

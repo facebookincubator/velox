@@ -14,7 +14,6 @@
     <script src="../../_static/underscore.js"></script>
     <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
-    <script src="../../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="HyperLogLog Functions" href="hyperloglog.html" />
@@ -96,9 +95,9 @@ If no ORDER BY is specified, all rows are considered peers of the current row.</
 <h3>SQL Example<a class="headerlink" href="#sql-example" title="Permalink to this heading">¶</a></h3>
 <p>Window functions can be used to evaluate the following SQL query.
 The query ranks orders for each clerk by price:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">orderkey</span><span class="p">,</span><span class="w"> </span><span class="n">clerk</span><span class="p">,</span><span class="w"> </span><span class="n">totalprice</span><span class="p">,</span>
-<span class="w">       </span><span class="n">rank</span><span class="p">()</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">clerk</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">totalprice</span><span class="w"> </span><span class="k">DESC</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">rnk</span>
-<span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">clerk</span><span class="p">,</span><span class="w"> </span><span class="n">rnk</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">orderkey</span><span class="p">,</span><span class="w"> </span><span class="n">clerk</span><span class="p">,</span><span class="w"> </span><span class="n">totalprice</span><span class="p">,</span><span class="w"></span>
+<span class="w">       </span><span class="n">rank</span><span class="p">()</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">clerk</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">totalprice</span><span class="w"> </span><span class="k">DESC</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">rnk</span><span class="w"></span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">clerk</span><span class="p">,</span><span class="w"> </span><span class="n">rnk</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
@@ -184,19 +183,8 @@ for each row over the rows within the current row’s window frame.</p>
 <li><a class="reference internal" href="#">Window functions</a><ul>
 <li><a class="reference internal" href="#understanding-the-window-function-definition">Understanding the window function definition</a><ul>
 <li><a class="reference internal" href="#sql-example">SQL Example</a></li>
-<li><a class="reference internal" href="#ranking-functions">Ranking functions</a><ul>
-<li><a class="reference internal" href="#cume_dist"><code class="docutils literal notranslate"><span class="pre">cume_dist()</span></code></a></li>
-<li><a class="reference internal" href="#dense_rank"><code class="docutils literal notranslate"><span class="pre">dense_rank()</span></code></a></li>
-<li><a class="reference internal" href="#ntile"><code class="docutils literal notranslate"><span class="pre">ntile()</span></code></a></li>
-<li><a class="reference internal" href="#percent_rank"><code class="docutils literal notranslate"><span class="pre">percent_rank()</span></code></a></li>
-<li><a class="reference internal" href="#rank"><code class="docutils literal notranslate"><span class="pre">rank()</span></code></a></li>
-<li><a class="reference internal" href="#row_number"><code class="docutils literal notranslate"><span class="pre">row_number()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#value-functions">Value functions</a><ul>
-<li><a class="reference internal" href="#nth_value"><code class="docutils literal notranslate"><span class="pre">nth_value()</span></code></a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#ranking-functions">Ranking functions</a></li>
+<li><a class="reference internal" href="#value-functions">Value functions</a></li>
 <li><a class="reference internal" href="#aggregate-functions">Aggregate functions</a></li>
 </ul>
 </li>
@@ -255,7 +243,7 @@ for each row over the rows within the current row’s window frame.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.3.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
     </div>
   </body>
 </html>
