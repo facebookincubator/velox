@@ -25,7 +25,7 @@ else()
   )
 endif()
 set(VELOX_PROTOBUF_BUILD_SHA256_CHECKSUM
-        6c5e1b0788afba4569aeebb2cfe205cb154aa01deacaba0cd26442f3b761a836)
+    6c5e1b0788afba4569aeebb2cfe205cb154aa01deacaba0cd26442f3b761a836)
 
 message(STATUS "Building Protobuf from source")
 

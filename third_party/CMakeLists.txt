@@ -67,7 +67,7 @@ if(VELOX_ENABLE_ARROW)
             )
   endif()
   set(VELOX_ARROW_BUILD_SHA256_CHECKSUM
-          ad9a05705117c989c116bae9ac70492fe015050e1b80fb0e38fde4b5d863aaa3)
+      ad9a05705117c989c116bae9ac70492fe015050e1b80fb0e38fde4b5d863aaa3)
 
   ExternalProject_Add(
     arrow_ep

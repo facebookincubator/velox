@@ -21,7 +21,7 @@ else()
       "https://github.com/fmtlib/fmt/archive/${VELOX_FMT_VERSION}.tar.gz")
 endif()
 set(VELOX_FMT_BUILD_SHA256_CHECKSUM
-        b06ca3130158c625848f3fb7418f235155a4d389b2abc3a6245fb01cb0eb1e01)
+    b06ca3130158c625848f3fb7418f235155a4d389b2abc3a6245fb01cb0eb1e01)
 
 message(STATUS "Building fmt from source")
 FetchContent_Declare(

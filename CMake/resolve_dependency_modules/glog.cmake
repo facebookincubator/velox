@@ -22,7 +22,7 @@ else()
   )
 endif()
 set(VELOX_GLOG_BUILD_SHA256_CHECKSUM
-        8a83bf982f37bb70825df71a9709fa90ea9f4447fb3c099e1d720a439d88bad6)
+    8a83bf982f37bb70825df71a9709fa90ea9f4447fb3c099e1d720a439d88bad6)
 
 message(STATUS "Building glog from source")
 FetchContent_Declare(

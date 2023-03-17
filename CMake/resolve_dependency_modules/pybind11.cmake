@@ -22,7 +22,7 @@ else()
                 "v${VELOX_PYBIND11_BUILD_VERSION}.tar.gz")
 endif()
 set(VELOX_PYBIND11_BUILD_SHA256_CHECKSUM
-        eacf582fa8f696227988d08cfc46121770823839fe9e301a20fbce67e7cd70ec)
+    eacf582fa8f696227988d08cfc46121770823839fe9e301a20fbce67e7cd70ec)
 
 message(STATUS "Building Pybind11 from source")
 
