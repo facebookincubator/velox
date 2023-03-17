@@ -15,10 +15,14 @@
  */
 #pragma once
 
-#include "velox/expression/EvalCtx.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox {
+
+namespace exec {
+class EvalCtx;
+} // namespace exec
 
 // Represents a function with possible captures.
 class Callable {
@@ -61,7 +65,7 @@ class Callable {
       const BufferPtr& wrapCapture,
       exec::EvalCtx* context,
       const std::vector<VectorPtr>& args,
-      exec::EvalCtx::ErrorVectorPtr& elementErrors,
+      ErrorVectorPtr& elementErrors,
       VectorPtr* result) = 0;
 };
 

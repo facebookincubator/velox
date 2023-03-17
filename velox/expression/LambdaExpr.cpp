@@ -63,7 +63,7 @@ class ExprCallable : public Callable {
       const BufferPtr& wrapCapture,
       EvalCtx* context,
       const std::vector<VectorPtr>& args,
-      EvalCtx::ErrorVectorPtr& elementErrors,
+      ErrorVectorPtr& elementErrors,
       VectorPtr* result) override {
     auto row = createRowVector(context, wrapCapture, args, rows.end());
     EvalCtx lambdaCtx = createLambdaCtx(context, row, finalSelection);

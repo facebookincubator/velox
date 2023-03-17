@@ -60,7 +60,7 @@ class AllMatchFunction : public exec::VectorFunction {
     auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
 
     while (auto entry = it.next()) {
-      exec::EvalCtx::ErrorVectorPtr elementErrors;
+      ErrorVectorPtr elementErrors;
       auto elementRows =
           toElementRows<ArrayVector>(numElements, *entry.rows, flatArray.get());
       auto wrapCapture = toWrapCapture<ArrayVector>(
@@ -125,7 +125,7 @@ class AllMatchFunction : public exec::VectorFunction {
 
  private:
   FOLLY_ALWAYS_INLINE bool hasError(
-      const exec::EvalCtx::ErrorVectorPtr& elementErrors,
+      const ErrorVectorPtr& elementErrors,
       int idx) const {
     return elementErrors && idx < elementErrors->size() &&
         !elementErrors->isNullAt(idx);
