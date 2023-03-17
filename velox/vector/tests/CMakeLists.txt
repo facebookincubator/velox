@@ -19,6 +19,7 @@ add_executable(
   VectorSaverTest.cpp
   VectorMakerTest.cpp
   VectorPoolTest.cpp
+  VectorPrinterTest.cpp
   VectorTest.cpp
   VectorToStringTest.cpp
   VectorEstimateFlatSizeTest.cpp
@@ -55,7 +56,7 @@ target_link_libraries(
   gtest_main
   ${FOLLY_WITH_DEPENDENCIES}
   ${DOUBLE_CONVERSION}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT}
   dl)
@@ -73,7 +74,7 @@ target_link_libraries(
   gtest
   gtest_main
   ${FOLLY_WITH_DEPENDENCIES}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT})
 
@@ -88,6 +89,6 @@ target_link_libraries(
   gtest
   gtest_main
   ${FOLLY_WITH_DEPENDENCIES}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT})

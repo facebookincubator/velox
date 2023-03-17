@@ -553,8 +553,7 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     velox::ContinueFuture& /*future*/) {
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
   if (emptySplit_) {
-    split_.reset();
-    // Keep readers around to hold adaptation.
+    resetSplit();
     return nullptr;
   }
 
@@ -667,21 +666,24 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
       {{"numPrefetch", RuntimeCounter(ioStats_->prefetch().count())},
        {"prefetchBytes",
         RuntimeCounter(
-            ioStats_->prefetch().bytes(), RuntimeCounter::Unit::kBytes)},
+            ioStats_->prefetch().sum(), RuntimeCounter::Unit::kBytes)},
        {"numStorageRead", RuntimeCounter(ioStats_->read().count())},
        {"storageReadBytes",
-        RuntimeCounter(ioStats_->read().bytes(), RuntimeCounter::Unit::kBytes)},
+        RuntimeCounter(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)},
        {"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())},
        {"localReadBytes",
         RuntimeCounter(
-            ioStats_->ssdRead().bytes(), RuntimeCounter::Unit::kBytes)},
+            ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)},
        {"numRamRead", RuntimeCounter(ioStats_->ramHit().count())},
        {"ramReadBytes",
-        RuntimeCounter(
-            ioStats_->ramHit().bytes(), RuntimeCounter::Unit::kBytes)},
+        RuntimeCounter(ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
         RuntimeCounter(
             ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       {"ioWaitNanos",
+        RuntimeCounter(
+            ioStats_->queryThreadIoLatency().sum() * 1000,
+            RuntimeCounter::Unit::kNanos)},
        {"queryThreadIoLatency",
         RuntimeCounter(ioStats_->queryThreadIoLatency().count())}});
   return res;

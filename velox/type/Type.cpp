@@ -178,12 +178,28 @@ std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {
 } // namespace
 
 TypePtr Type::create(const folly::dynamic& obj) {
-  TypeKind type = mapNameToTypeKind(obj["type"].asString());
-  switch (type) {
+  std::vector<TypePtr> childTypes;
+  if (obj.find("cTypes") != obj.items().end()) {
+    childTypes = deserializeChildTypes(obj);
+  }
+
+  // Checks if 'typeName' specifies a custom type.
+  auto typeName = obj["type"].asString();
+  if (customTypeExists(typeName)) {
+    return getCustomType(typeName);
+  }
+
+  // 'typeName' must be a built-in type.
+  TypeKind typeKind = mapNameToTypeKind(typeName);
+  switch (typeKind) {
     case TypeKind::SHORT_DECIMAL: {
+      VELOX_USER_CHECK(
+          childTypes.empty(), "Short decimal type should not have child types");
       return SHORT_DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
     }
     case TypeKind::LONG_DECIMAL: {
+      VELOX_USER_CHECK(
+          childTypes.empty(), "Long decimal type should not have child types");
       return LONG_DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
     }
     case TypeKind::ROW: {
@@ -194,7 +210,7 @@ TypePtr Type::create(const folly::dynamic& obj) {
       }
 
       return std::make_shared<const RowType>(
-          std::move(names), deserializeChildTypes(obj));
+          std::move(names), std::move(childTypes));
     }
 
     case TypeKind::OPAQUE: {
@@ -211,13 +227,17 @@ TypePtr Type::create(const folly::dynamic& obj) {
       return it->second;
     }
     default: {
-      std::vector<TypePtr> childTypes;
-      if (obj.find("cTypes") != obj.items().end()) {
-        childTypes = deserializeChildTypes(obj);
-      }
-      return createType(type, std::move(childTypes));
+      return createType(typeKind, std::move(childTypes));
     }
   }
+}
+
+// static
+void Type::registerSerDe() {
+  velox::DeserializationRegistryForSharedPtr().Register(
+      Type::getClassName(),
+      static_cast<std::shared_ptr<const Type> (*)(const folly::dynamic&)>(
+          Type::create));
 }
 
 std::string ArrayType::toString() const {
@@ -367,7 +387,7 @@ bool RowType::equivalent(const Type& other) const {
   return true;
 }
 
-bool RowType::operator==(const Type& other) const {
+bool RowType::equals(const Type& other) const {
   if (!this->equivalent(other)) {
     return false;
   }
@@ -379,6 +399,14 @@ bool RowType::operator==(const Type& other) const {
     }
   }
   return true;
+}
+
+bool RowType::operator==(const Type& other) const {
+  return this->equals(other);
+}
+
+bool RowType::operator==(const RowType& other) const {
+  return this->equals(other);
 }
 
 void RowType::printChildren(std::stringstream& ss, std::string_view delimiter)
@@ -474,7 +502,11 @@ std::string FunctionType::toString() const {
 }
 
 folly::dynamic FunctionType::serialize() const {
-  throw std::logic_error("FUNCTION type is not serializable");
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "Type";
+  obj["type"] = TypeTraits<TypeKind::FUNCTION>::name;
+  obj["cTypes"] = velox::ISerializable::serialize(children_);
+  return obj;
 }
 
 OpaqueType::OpaqueType(const std::type_index& typeIndex)
@@ -737,14 +769,14 @@ typeFactories() {
 
 } // namespace
 
-bool registerType(
+bool registerCustomType(
     const std::string& name,
     std::unique_ptr<const CustomTypeFactories> factories) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   return typeFactories().emplace(uppercaseName, std::move(factories)).second;
 }
 
-bool typeExists(const std::string& name) {
+bool customTypeExists(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   return typeFactories().count(uppercaseName) > 0;
 }
@@ -757,7 +789,7 @@ std::unordered_set<std::string> getCustomTypeNames() {
   return typeNames;
 }
 
-bool unregisterType(const std::string& name) {
+bool unregisterCustomType(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   return typeFactories().erase(uppercaseName) == 1;
 }
@@ -774,16 +806,16 @@ getTypeFactories(const std::string& name) {
   return nullptr;
 }
 
-TypePtr getType(const std::string& name, std::vector<TypePtr> childTypes) {
+TypePtr getCustomType(const std::string& name) {
   auto factories = getTypeFactories(name);
   if (factories) {
-    return factories->getType(std::move(childTypes));
+    return factories->getType();
   }
 
   return nullptr;
 }
 
-exec::CastOperatorPtr getCastOperator(const std::string& name) {
+exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
   auto factories = getTypeFactories(name);
   if (factories) {
     return factories->getCastOperator();

@@ -40,9 +40,16 @@ class Values : public SourceOperator {
 
   void close() override;
 
+  /// Returns the current processing vector index in 'values_'. This method is
+  /// only used for test.
+  int32_t testingCurrent() const {
+    return current_;
+  }
+
  private:
   std::vector<RowVectorPtr> values_;
   int32_t current_ = 0;
+  size_t roundsLeft_ = 1;
 };
 
 } // namespace facebook::velox::exec

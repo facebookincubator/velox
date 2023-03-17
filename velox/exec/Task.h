@@ -139,11 +139,20 @@ class Task : public std::enable_shared_from_this<Task> {
   /// This API is available for query plans that do not use
   /// PartitionedOutputNode and LocalPartitionNode plan nodes.
   ///
-  /// The caller is required to add all the necessary splits and signal
-  /// no-more-splits before calling 'next' for the first time. The operators in
-  /// the pipeline are not allowed to block for external events, but can block
-  /// waiting for data to be produced by a different pipeline of the same task.
-  RowVectorPtr next();
+  /// The caller is required to add all the necessary splits, and signal
+  /// no-more-splits before calling 'next' for the first time.
+  ///
+  /// If no `future` is provided, the operators in the pipeline are not allowed
+  /// to block for external events, but can block waiting for data to be
+  /// produced by a different pipeline of the same task.
+  ///
+  /// If `future` is provided, the operators in the pipeline can block
+  /// externally. When any operators are blocked externally, the function lets
+  /// all non-blocked operators to run until completion, returns nullptr and
+  /// updates `future`. `future` is realized when the operators are no longer
+  /// blocked. Caller thread is responsible to wait for future before calling
+  /// `next` again.
+  RowVectorPtr next(ContinueFuture* FOLLY_NULLABLE future = nullptr);
 
   /// Resumes execution of 'self' after a successful pause. All 'drivers_' must
   /// be off-thread and there must be no 'exception_'
@@ -471,12 +480,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Requests the Task to stop activity.  The returned future is
   /// realized when all running threads have stopped running. Activity
   /// can be resumed with resume() after the future is realized.
-  ContinueFuture requestPause(bool pause) {
-    std::lock_guard<std::mutex> l(mutex_);
-    return requestPauseLocked(pause);
-  }
-
-  ContinueFuture requestPauseLocked(bool pause);
+  ContinueFuture requestPause();
 
   /// Requests activity of 'this' to stop. The returned future will be
   /// realized when the last thread stops running for 'this'. This is used to
@@ -536,6 +540,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// NOTE: it is assumed that there is no more task to be created after or
   /// during this wait call. This is for testing purpose for now.
   static void testingWaitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
+
+  /// Invoked to run provided 'callback' on each alive driver of the task.
+  void testingVisitDrivers(const std::function<void(Driver*)>& callback);
 
  private:
   // Returns reference to the SplitsState structure for the specified plan node

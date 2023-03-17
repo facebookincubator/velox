@@ -139,6 +139,15 @@ using exec::SignatureBinder;
 bool isDeterministic(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
+  // We know that the 'cast', 'and', and 'or' special forms are deterministic.
+  // Hard-code them here because they are not real functions and hence cannot be
+  // resolved by the code below.
+  if (functionName == "and" || functionName == "or" ||
+      functionName == "coalesce" || functionName == "if" ||
+      functionName == "switch" || functionName == "cast") {
+    return true;
+  }
+
   // Check if this is a simple function.
   if (auto simpleFunctionEntry =
           exec::SimpleFunctions().resolveFunction(functionName, argTypes)) {
@@ -202,7 +211,8 @@ std::optional<CallableSignature> processConcreteSignature(
       .args = argTypes,
       .variableArity = signature.variableArity(),
       .returnType =
-          SignatureBinder::tryResolveType(signature.returnType(), {}, {})};
+          SignatureBinder::tryResolveType(signature.returnType(), {}, {}),
+      .constantArgs = signature.constantArguments()};
   VELOX_CHECK_NOT_NULL(callable.returnType);
 
   bool onlyPrimitiveTypes = callable.returnType->isPrimitiveType();
@@ -417,14 +427,20 @@ ExpressionFuzzer::ExpressionFuzzer(
       // get their determinism.
       std::vector<TypePtr> argTypes;
       if (signature->variables().empty()) {
+        bool supportedSignature = true;
         for (const auto& arg : signature->argumentTypes()) {
           auto resolvedType = SignatureBinder::tryResolveType(arg, {}, {});
           if (!resolvedType) {
-            LOG(WARNING) << "Skipping unsupported signature with generic: "
-                         << function.first << signature->toString();
+            supportedSignature = false;
             continue;
           }
           argTypes.push_back(resolvedType);
+        }
+
+        if (!supportedSignature) {
+          LOG(WARNING) << "Skipping unsupported signature with generic: "
+                       << function.first << signature->toString();
+          continue;
         }
       } else {
         ArgumentTypeFuzzer typeFuzzer{*signature, localRng};
@@ -541,7 +557,6 @@ ExpressionFuzzer::ExpressionFuzzer(
 
   // Register function override (for cases where we want to restrict the types
   // or parameters we pass to functions).
-  registerFuncOverride(&ExpressionFuzzer::generateLikeArgs, "like");
   registerFuncOverride(
       &ExpressionFuzzer::generateEmptyApproxSetArgs, "empty_approx_set");
   registerFuncOverride(
@@ -644,26 +659,27 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateArgs(
             0, FLAGS_max_num_varargs)(rng_);
   inputExpressions.reserve(input.args.size() + numVarArgs);
 
-  for (const auto& arg : input.args) {
-    inputExpressions.emplace_back(generateArg(arg));
+  for (auto i = 0; i < input.args.size(); ++i) {
+    inputExpressions.emplace_back(
+        generateArg(input.args.at(i), input.constantArgs.at(i)));
   }
+
   // Append varargs to the argument list.
   for (int i = 0; i < numVarArgs; i++) {
-    inputExpressions.emplace_back(generateArg(input.args.back()));
+    inputExpressions.emplace_back(
+        generateArg(input.args.back(), input.constantArgs.back()));
   }
   return inputExpressions;
 }
 
-// Specialization for the "like" function: second and third (optional)
-// parameters always need to be constant.
-std::vector<core::TypedExprPtr> ExpressionFuzzer::generateLikeArgs(
-    const CallableSignature& input) {
-  std::vector<core::TypedExprPtr> inputExpressions = {
-      generateArg(input.args[0]), generateArgConstant(input.args[1])};
-  if (input.args.size() == 3) {
-    inputExpressions.emplace_back(generateArgConstant(input.args[2]));
+core::TypedExprPtr ExpressionFuzzer::generateArg(
+    const TypePtr& arg,
+    bool isConstant) {
+  if (isConstant) {
+    return generateArgConstant(arg);
+  } else {
+    return generateArg(arg);
   }
-  return inputExpressions;
 }
 
 // Specialization for the "empty_approx_set" function: first optional
@@ -788,7 +804,7 @@ core::TypedExprPtr ExpressionFuzzer::getCallExprFromCallable(
       callable.returnType, args, callable.name);
 }
 
-core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
+const CallableSignature* ExpressionFuzzer::chooseRandomConcreteSignature(
     const TypePtr& returnType,
     const std::string& functionName) {
   if (expressionToSignature_.find(functionName) ==
@@ -816,7 +832,16 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
   // Randomly pick a function that can return `returnType`.
   size_t idx = boost::random::uniform_int_distribution<uint32_t>(
       0, eligible.size() - 1)(rng_);
-  const auto& chosen = eligible[idx];
+  return eligible[idx];
+}
+
+core::TypedExprPtr ExpressionFuzzer::generateExpressionFromConcreteSignatures(
+    const TypePtr& returnType,
+    const std::string& functionName) {
+  const auto* chosen = chooseRandomConcreteSignature(returnType, functionName);
+  if (!chosen) {
+    return nullptr;
+  }
 
   markSelected(chosen->name);
   return getCallExprFromCallable(*chosen);
@@ -870,54 +895,48 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
     }
   }
 
-  ArgumentTypeFuzzer fuzzer{*chosen->signature, returnType, rng_};
+  auto chosenSignature = *chosen->signature;
+  ArgumentTypeFuzzer fuzzer{chosenSignature, returnType, rng_};
   VELOX_CHECK_EQ(fuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs), true);
   auto& argumentTypes = fuzzer.argumentTypes();
+  auto constantArguments = chosenSignature.constantArguments();
 
-  CallableSignature callable{chosen->name, argumentTypes, false, returnType};
+  // ArgumentFuzzer may generate duplicate arguments if the signature's
+  // variableArity is true, so we need to pad duplicate constant flags.
+  if (!constantArguments.empty()) {
+    auto repeat = argumentTypes.size() - constantArguments.size();
+    auto lastConstant = constantArguments.back();
+    for (int i = 0; i < repeat; ++i) {
+      constantArguments.push_back(lastConstant);
+    }
+  }
+
+  CallableSignature callable{
+      .name = chosen->name,
+      .args = argumentTypes,
+      .variableArity = false,
+      .returnType = returnType,
+      .constantArgs = constantArguments};
 
   markSelected(chosen->name);
   return getCallExprFromCallable(callable);
 }
 
-TypePtr ExpressionFuzzer::chooseCastFromType(const TypePtr& to) {
-  if (to->isPrimitiveType()) {
-    return vectorFuzzer_.randType(0);
-  }
-  if (to->isArray()) {
-    return ARRAY(chooseCastFromType(to->childAt(0)));
-  }
-  if (to->isMap()) {
-    return MAP(
-        chooseCastFromType(to->childAt(0)), chooseCastFromType(to->childAt(1)));
-  }
-  if (to->isRow()) {
-    std::vector<TypePtr> children;
-    for (auto& child : to->asRow().children()) {
-      children.push_back(chooseCastFromType(child));
-    }
-    return ROW(std::move(children));
-  }
-  // Placeholder for unsupported types.
-  return nullptr;
-}
-
 core::TypedExprPtr ExpressionFuzzer::generateCastExpression(
     const TypePtr& returnType) {
-  // Choose a random from type.
-  auto fromType = chooseCastFromType(returnType);
-  if (!fromType) {
+  const auto* callable = chooseRandomConcreteSignature(returnType, "cast");
+  if (!callable) {
     return nullptr;
   }
 
-  CallableSignature callable{"cast", {fromType}, false, returnType};
-  auto args = getArgsForCallable(callable);
+  auto args = getArgsForCallable(*callable);
+  markSelected("cast");
 
   // Generate try_cast expression with 50% chance.
   bool nullOnFailure =
       boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
   return std::make_shared<core::CastTypedExpr>(
-      callable.returnType, args, nullOnFailure);
+      callable->returnType, args, nullOnFailure);
 }
 
 template <typename T>

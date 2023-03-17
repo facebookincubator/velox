@@ -297,7 +297,7 @@ bool Task::supportsSingleThreadedExecution() const {
   return true;
 }
 
-RowVectorPtr Task::next() {
+RowVectorPtr Task::next(ContinueFuture* future) {
   // NOTE: Task::next() is single-threaded execution so locking is not required
   // to access Task object.
   VELOX_CHECK_EQ(
@@ -386,10 +386,22 @@ RowVectorPtr Task::next() {
     }
 
     if (runnableDrivers == 0) {
-      VELOX_CHECK_EQ(
-          0,
-          blockedDrivers,
-          "Cannot make progress as all remaining drivers are blocked");
+      if (blockedDrivers > 0) {
+        if (!future) {
+          VELOX_CHECK_EQ(
+              0,
+              blockedDrivers,
+              "Cannot make progress as all remaining drivers are blocked and user are not expected to wait.");
+        } else {
+          std::vector<ContinueFuture> notReadyFutures;
+          for (auto& continueFuture : futures) {
+            if (!continueFuture.isReady()) {
+              notReadyFutures.emplace_back(std::move(continueFuture));
+            }
+          }
+          *future = folly::collectAll(std::move(notReadyFutures)).unit();
+        }
+      }
       return nullptr;
     }
   }
@@ -542,7 +554,7 @@ void Task::resume(std::shared_ptr<Task> self) {
   std::lock_guard<std::mutex> l(self->mutex_);
   // Setting pause requested must be atomic with the resuming so that
   // suspended sections do not go back on thread during resume.
-  self->requestPauseLocked(false);
+  self->pauseRequested_ = false;
   for (auto& driver : self->drivers_) {
     if (driver) {
       if (driver->state().isSuspended) {
@@ -1781,31 +1793,30 @@ StopReason Task::leave(ThreadState& state) {
 StopReason Task::enterSuspended(ThreadState& state) {
   VELOX_CHECK(!state.hasBlockingFuture);
   VELOX_CHECK(state.isOnThread());
+
   std::lock_guard<std::mutex> l(mutex_);
   if (state.isTerminated) {
     return StopReason::kAlreadyTerminated;
   }
-  if (!state.isOnThread()) {
-    return StopReason::kAlreadyTerminated;
-  }
-  auto reason = shouldStopLocked();
+  const auto reason = shouldStopLocked();
   if (reason == StopReason::kTerminate) {
     state.isTerminated = true;
+    return StopReason::kTerminate;
   }
-  // A pause will not stop entering the suspended section. It will
-  // just ack that the thread is no longer in inside the
-  // CancelPool. The pause can wait at the exit of the suspended
-  // section.
-  if (reason == StopReason::kNone || reason == StopReason::kPause) {
-    state.isSuspended = true;
-    if (--numThreads_ == 0) {
-      finishedLocked();
-    }
+  // A pause will not stop entering the suspended section. It will just ack that
+  // the thread is no longer inside the driver executor pool.
+  VELOX_CHECK(reason == StopReason::kNone || reason == StopReason::kPause);
+  state.isSuspended = true;
+  if (--numThreads_ == 0) {
+    finishedLocked();
   }
   return StopReason::kNone;
 }
 
 StopReason Task::leaveSuspended(ThreadState& state) {
+  VELOX_CHECK(!state.hasBlockingFuture);
+  VELOX_CHECK(state.isOnThread());
+
   for (;;) {
     {
       std::lock_guard<std::mutex> l(mutex_);
@@ -1819,17 +1830,16 @@ StopReason Task::leaveSuspended(ThreadState& state) {
         return StopReason::kTerminate;
       }
       if (!pauseRequested_) {
-        // For yield or anything but pause  we return here.
+        // For yield or anything but pause we return here.
         return StopReason::kNone;
       }
       --numThreads_;
       state.isSuspended = true;
     }
-    // If the pause flag is on when trying to reenter, sleep a while
-    // outside of the mutex and recheck. This is rare and not time
-    // critical. Can happen if memory interrupt sets pause while
-    // already inside a suspended section for other reason, like
-    // IO.
+    // If the pause flag is on when trying to reenter, sleep a while outside of
+    // the mutex and recheck. This is rare and not time critical. Can happen if
+    // memory interrupt sets pause while already inside a suspended section for
+    // other reason, like IO.
     std::this_thread::sleep_for(std::chrono::milliseconds(10)); // NOLINT
   }
 }
@@ -1869,8 +1879,9 @@ StopReason Task::shouldStopLocked() {
   return StopReason::kNone;
 }
 
-ContinueFuture Task::requestPauseLocked(bool pause) {
-  pauseRequested_ = pause;
+ContinueFuture Task::requestPause() {
+  std::lock_guard<std::mutex> l(mutex_);
+  pauseRequested_ = true;
   return makeFinishFutureLocked("Task::requestPause");
 }
 
@@ -2125,6 +2136,15 @@ void Task::testingWaitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
       numCreatedTasks,
       numDeletedTasks,
       waitUs);
+}
+
+void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {
+  std::lock_guard<std::mutex> l(mutex_);
+  for (int i = 0; i < drivers_.size(); ++i) {
+    if (drivers_[i] != nullptr) {
+      callback(drivers_[i].get());
+    }
+  }
 }
 
 } // namespace facebook::velox::exec
