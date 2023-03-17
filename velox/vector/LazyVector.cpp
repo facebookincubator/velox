@@ -27,7 +27,8 @@ static void writeIOWallTimeStat(size_t ioTimeStartMicros) {
       "dataSourceLazyWallNanos",
       RuntimeCounter(
           (getCurrentTimeMicro() - ioTimeStartMicros) * 1'000,
-          RuntimeCounter::Unit::kNanos));
+          RuntimeCounter::Unit::kNanos),
+      true);
 }
 
 void VectorLoader::load(RowSet rows, ValueHook* hook, VectorPtr* result) {

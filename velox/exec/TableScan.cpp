@@ -160,7 +160,8 @@ RowVectorPtr TableScan::getOutput() {
           "dataSourceWallNanos",
           RuntimeCounter(
               (getCurrentTimeMicro() - ioTimeStartMicros) * 1'000,
-              RuntimeCounter::Unit::kNanos));
+              RuntimeCounter::Unit::kNanos),
+          true);
       lockedStats->rawInputPositions = dataSource_->getCompletedRows();
       lockedStats->rawInputBytes = dataSource_->getCompletedBytes();
       auto data = dataOptional.value();

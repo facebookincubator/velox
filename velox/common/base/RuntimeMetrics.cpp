@@ -22,9 +22,13 @@
 
 namespace facebook::velox {
 
-void RuntimeMetric::addValue(int64_t value) {
+void RuntimeMetric::addValue(int64_t value, bool keepCountAtOne) {
   sum += value;
-  count++;
+  if (not keepCountAtOne) {
+    count++;
+  } else {
+    count = 1;
+  }
   min = std::min(min, value);
   max = std::max(max, value);
 }
@@ -69,9 +73,10 @@ BaseRuntimeStatWriter* getThreadLocalRunTimeStatWriter() {
 
 void addThreadLocalRuntimeStat(
     const std::string& name,
-    const RuntimeCounter& value) {
+    const RuntimeCounter& value,
+    bool keepCountAtOne) {
   if (localRuntimeStatWriter) {
-    localRuntimeStatWriter->addRuntimeStat(name, value);
+    localRuntimeStatWriter->addRuntimeStat(name, value, keepCountAtOne);
   }
 }
 

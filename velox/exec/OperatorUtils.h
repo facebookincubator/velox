@@ -117,8 +117,11 @@ std::string makeOperatorSpillPath(
     int32_t operatorId);
 
 /// Add a named runtime metric to operator 'stats'.
+/// When 'keepCountAtOne' is true we keep the metric's 'count' always at 1,
+/// regardless of how many times we've added values to it.
 void addOperatorRuntimeStats(
     const std::string& name,
     const RuntimeCounter& value,
-    std::unordered_map<std::string, RuntimeMetric>& stats);
+    std::unordered_map<std::string, RuntimeMetric>& stats,
+    bool keepCountAtOne = false);
 } // namespace facebook::velox::exec

@@ -347,13 +347,14 @@ std::string makeOperatorSpillPath(
 void addOperatorRuntimeStats(
     const std::string& name,
     const RuntimeCounter& value,
-    std::unordered_map<std::string, RuntimeMetric>& stats) {
+    std::unordered_map<std::string, RuntimeMetric>& stats,
+    bool keepCountAtOne) {
   if (UNLIKELY(stats.count(name) == 0)) {
     stats.insert(std::pair(name, RuntimeMetric(value.unit)));
   } else {
     VELOX_CHECK_EQ(stats.at(name).unit, value.unit);
   }
-  stats.at(name).addValue(value.value);
+  stats.at(name).addValue(value.value, keepCountAtOne);
 }
 
 } // namespace facebook::velox::exec

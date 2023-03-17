@@ -154,7 +154,10 @@ struct OperatorStats {
         planNodeId(std::move(_planNodeId)),
         operatorType(std::move(_operatorType)) {}
 
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value);
+  void addRuntimeStat(
+      const std::string& name,
+      const RuntimeCounter& value,
+      bool keepCountAtOne = false);
   void add(const OperatorStats& other);
   void clear();
 };
@@ -388,9 +391,13 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// Add a single runtime stat to the operator stats under the write lock.
   /// This member overrides BaseRuntimeStatWriter's member.
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
-      override {
-    stats_.wlock()->addRuntimeStat(name, value);
+  /// When 'keepCountAtOne' is true we keep the metric's 'count' always at 1,
+  /// regardless of how many times we've added values to it.
+  void addRuntimeStat(
+      const std::string& name,
+      const RuntimeCounter& value,
+      bool keepCountAtOne = false) override {
+    stats_.wlock()->addRuntimeStat(name, value, keepCountAtOne);
   }
 
   /// Returns reference to the operator stats synchronized object to gain bulck

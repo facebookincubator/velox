@@ -49,7 +49,9 @@ struct RuntimeMetric {
       RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
       : unit(_unit), sum{value}, count{1}, min{value}, max{value} {}
 
-  void addValue(int64_t value);
+  /// When 'keepCountAtOne' is true we keep 'count' always at 1, regardless of
+  /// how many times we've added values to the metric.
+  void addValue(int64_t value, bool keepCountAtOne = false);
 
   void printMetric(std::stringstream& stream) const;
 
@@ -70,7 +72,8 @@ class BaseRuntimeStatWriter {
 
   virtual void addRuntimeStat(
       const std::string& /* name */,
-      const RuntimeCounter& /* value */) {}
+      const RuntimeCounter& /* value */,
+      bool /*keepCountAtOne*/ = false) {}
 };
 
 /// Setting a concrete runtime stats writer on the thread will ensure that any
@@ -87,7 +90,8 @@ BaseRuntimeStatWriter* FOLLY_NULLABLE getThreadLocalRunTimeStatWriter();
 /// Writes runtime counter to the current Operator running on that thread.
 void addThreadLocalRuntimeStat(
     const std::string& name,
-    const RuntimeCounter& value);
+    const RuntimeCounter& value,
+    bool keepCountAtOne = false);
 
 /// Scope guard to conveniently set and revert back the current stat writer.
 class RuntimeStatWriterScopeGuard {

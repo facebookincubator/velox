@@ -39,9 +39,11 @@ class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
       std::unordered_map<std::string, RuntimeMetric>& stats)
       : stats_{stats} {}
 
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
-      override {
-    addOperatorRuntimeStats(name, value, stats_);
+  void addRuntimeStat(
+      const std::string& name,
+      const RuntimeCounter& value,
+      bool keepCountAtOne = false) override {
+    addOperatorRuntimeStats(name, value, stats_, keepCountAtOne);
   }
 
  private:
