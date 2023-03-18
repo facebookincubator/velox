@@ -21,7 +21,7 @@ string(
          "https://github.com/unicode-org/icu/releases/download/"
          "release-${VELOX_ICU4C_BUILD_VERSION}-1/"
          "icu4c-${VELOX_ICU4C_BUILD_VERSION}_1-src.tgz")
-set_with_default(ICU4C_SOURCE_URL VELOX_ICU4C_URL ICU4C_SOURCE_URL)
+set_with_default(ICU4C_SOURCE_URL VELOX_ICU4C_URL ${ICU4C_SOURCE_URL})
 set_with_default(VELOX_ICU4C_BUILD_SHA256_CHECKSUM VELOX_ICU4C_SHA256
                  "SHA256=${VELOX_ICU4C_BUILD_SHA256_CHECKSUM}")
 

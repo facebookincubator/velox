@@ -20,7 +20,7 @@ string(CONCAT VELOX_GFLAGS_SOURCE_URL
               "https://github.com/gflags/gflags/archive/refs/tags/"
               "v${VELOX_GFLAGS_VERSION}.tar.gz")
 set_with_default(VELOX_GFLAGS_SOURCE_URL VELOX_GFLAGS_URL
-                 VELOX_GFLAGS_SOURCE_URL)
+                 ${VELOX_GFLAGS_SOURCE_URL})
 set_with_default(VELOX_GFLAGS_BUILD_SHA256_CHECKSUM VELOX_GFLAGS_SHA256
                  "SHA256=${VELOX_GFLAGS_BUILD_SHA256_CHECKSUM}")
 

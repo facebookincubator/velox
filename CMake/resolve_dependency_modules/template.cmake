@@ -19,7 +19,7 @@ set(VELOX_<PACKAGE>_BUILD_SHA256_CHECKSUM 123)
 set(VELOX_<PACKAGE>_SOURCE_URL "") # ideally don't use github archive links as
                                    # they are not guranteed to be hash stable
 set_with_default(VELOX_<PACKAGE>_SOURCE_URL VELOX_<PACKAGE>_URL
-                 VELOX_<PACKAGE>_SOURCE_URL)
+                 ${VELOX_<PACKAGE>_SOURCE_URL})
 set_with_default(VELOX_<PACKAGE>_BUILD_SHA256_CHECKSUM VELOX_<PACKAGE>_SHA256
                  "SHA256=${VELOX_<PACKAGE>_BUILD_SHA256_CHECKSUM}")
 

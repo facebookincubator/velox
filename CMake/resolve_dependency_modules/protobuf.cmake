@@ -22,7 +22,7 @@ string(
     "https://github.com/protocolbuffers/protobuf/releases/download/"
     "v${VELOX_PROTOBUF_BUILD_VERSION}/protobuf-all-${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz"
 )
-set_with_default(PROTOBUF_SOURCE_URL VELOX_PROTOBUF_URL PROTOBUF_SOURCE_URL)
+set_with_default(PROTOBUF_SOURCE_URL VELOX_PROTOBUF_URL ${PROTOBUF_SOURCE_URL})
 set_with_default(VELOX_PROTOBUF_BUILD_SHA256_CHECKSUM VELOX_PROTOBUF_SHA256
                  "SHA256=${VELOX_PROTOBUF_BUILD_SHA256_CHECKSUM}")
 
