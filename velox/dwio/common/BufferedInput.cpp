@@ -109,7 +109,7 @@ bool BufferedInput::tryMerge(Region& first, const Region& second) {
   int64_t gap = second.offset - first.offset - first.length;
 
   // compare with 0 since it's comparison in different types
-  if (gap < 0 || gap <= mergeDistance_) {
+  if (gap < 0 || gap <= kMaxMergeDistance) {
     // ensure try merge will handle duplicate regions (extension==0)
     int64_t extension = gap + second.length;
 

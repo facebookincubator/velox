@@ -17,8 +17,6 @@
 #pragma once
 
 #include "velox/dwio/common/DataBuffer.h"
-#include "velox/dwio/common/IoStatistics.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamIdentifier.h"
 
@@ -26,24 +24,23 @@ namespace facebook::velox::dwio::common {
 
 class BufferedInput {
  public:
+  constexpr static uint64_t kMaxMergeDistance = 1024 * 1024 * 1.25;
+
   BufferedInput(
       std::shared_ptr<ReadFile> readFile,
       memory::MemoryPool& pool,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
-      IoStatistics* FOLLY_NULLABLE stats = nullptr,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
+      IoStatistics* FOLLY_NULLABLE stats = nullptr)
       : input_{std::make_shared<ReadFileInputStream>(
             std::move(readFile),
             metricsLog,
             stats)},
-        pool_{pool},
-        mergeDistance_(mergeDistance) {}
+        pool_{pool} {}
 
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
-      memory::MemoryPool& pool,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
-      : input_(std::move(input)), pool_(pool), mergeDistance_(mergeDistance) {}
+      memory::MemoryPool& pool)
+      : input_(std::move(input)), pool_(pool) {}
 
   BufferedInput(BufferedInput&&) = default;
   virtual ~BufferedInput() = default;
@@ -107,7 +104,7 @@ class BufferedInput {
   // Create a new (clean) instance of BufferedInput sharing the same underlying
   // file and memory pool.  The enqueued regions are NOT copied.
   virtual std::unique_ptr<BufferedInput> clone() const {
-    return std::make_unique<BufferedInput>(input_, pool_, mergeDistance_);
+    return std::make_unique<BufferedInput>(input_, pool_);
   }
 
   const std::shared_ptr<ReadFile>& getReadFile() const {
@@ -126,9 +123,6 @@ class BufferedInput {
  protected:
   std::shared_ptr<ReadFileInputStream> input_;
   memory::MemoryPool& pool_;
-
-  // Regions will be merged if their gap less than it.
-  const int32_t mergeDistance_;
   std::vector<uint64_t> offsets_;
   std::vector<DataBuffer<char>> buffers_;
   std::vector<Region> regions_;

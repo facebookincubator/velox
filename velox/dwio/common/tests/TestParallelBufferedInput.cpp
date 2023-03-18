@@ -24,6 +24,7 @@ using namespace facebook::velox::dwio::common;
 
 TEST(TestParallelBufferedInput, parallelLoad) {
   const int32_t kOneKB = 1 * 1024;
+  const int32_t kOneMB = 1 * 1024 * 1024;
   const int32_t threads = 4;
 
   auto ioStats = std::make_shared<IoStatistics>();
@@ -33,10 +34,10 @@ TEST(TestParallelBufferedInput, parallelLoad) {
   std::string fileData;
   {
     InMemoryWriteFile writeFile(&fileData);
-    writeFile.append(std::string(5, 'a'));
-    writeFile.append(std::string(kOneKB, 'b'));
-    writeFile.append(std::string(kOneKB, 'c'));
-    writeFile.append(std::string(5, 'd'));
+    writeFile.append(std::string(kOneMB, 'a'));
+    writeFile.append(std::string(2 * kOneMB, 'b'));
+    writeFile.append(std::string(2 * kOneMB, 'c'));
+    writeFile.append(std::string(kOneMB, 'd'));
   }
   auto readFile = std::make_shared<InMemoryReadFile>(fileData);
   auto pool = memory::getDefaultMemoryPool();
@@ -46,13 +47,13 @@ TEST(TestParallelBufferedInput, parallelLoad) {
       MetricsLog::voidLog(),
       ioStats,
       executor.get(),
-      loadQuantum,
-      1);
+      loadQuantum);
 
+  // Avoid coalescing.
   std::vector<Region> regions = {
       {0, kOneKB},
-      {kOneKB, 10},
-      {kOneKB + 20, readFile->size() - (kOneKB + 20)}};
+      {2 * kOneMB, 10},
+      {4 * kOneMB, readFile->size() - (4 * kOneMB)}};
   std::vector<std::unique_ptr<SeekableInputStream>> streams;
   for (auto& region : regions) {
     streams.push_back(input.enqueue(region));
@@ -80,7 +81,6 @@ TEST(TestParallelBufferedInput, parallelLoad) {
   }
   ASSERT_EQ(totalLength, ioStats->rawBytesRead());
 
-  // Merge distance is 1, should not have overread bytes.
   ASSERT_EQ(0, ioStats->rawOverreadBytes());
 }
 
@@ -125,13 +125,13 @@ TEST(TestParallelBufferedInput, simpleBenchmark) {
 
   std::vector<Region> regions;
 
-  // 10 regions, each has 2MB length and 1MB distance, eg [0, 2MB], [3MB,
+  // 10 regions, each has 2MB length and 2MB distance, eg [0, 2MB], [4MB,
   // 2MB]...
   for (uint64_t iter = 0, cursor = 0, length = 2 * kOneMB; iter < 10;
        ++iter, cursor += 3 * kOneMB) {
     regions.emplace_back(cursor, length);
   }
-  // 20 regions, each has 14MB length and 1MB distance, eg [0, 14MB], [15MB,
+  // 20 regions, each has 14MB length and 2MB distance, eg [0, 14MB], [16MB,
   // 14MB]...
   for (uint64_t iter = 0, cursor = 0, length = 14 * kOneMB; iter < 20;
        ++iter, cursor += 15 * kOneMB) {
@@ -147,15 +147,14 @@ TEST(TestParallelBufferedInput, simpleBenchmark) {
         MetricsLog::voidLog(),
         parallelStats,
         executor.get(),
-        loadQuantum,
-        1);
+        loadQuantum);
     for (const auto& region : regions) {
       parallelInput.enqueue({region.offset, region.length});
     }
     parallelInput.load(LogType::TEST);
   };
   auto normalFunc = [&]() {
-    BufferedInput input(readFile, *pool, MetricsLog::voidLog(), stats.get(), 1);
+    BufferedInput input(readFile, *pool, MetricsLog::voidLog(), stats.get());
     for (const auto& region : regions) {
       input.enqueue({region.offset, region.length});
     }

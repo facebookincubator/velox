@@ -421,8 +421,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         dwio::common::MetricsLog::voidLog(),
         ioStats_,
         executor_,
-        readerOpts_.loadQuantum(),
-        readerOpts_.getMaxMergeDistance());
+        readerOpts_.loadQuantum());
   } else {
     input = std::make_unique<dwio::common::BufferedInput>(
         fileHandle_->file,

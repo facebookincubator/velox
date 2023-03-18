@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -28,14 +29,8 @@ class ParallelBufferedInput : public BufferedInput {
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       std::shared_ptr<IoStatistics> ioStats = nullptr,
       folly::Executor* executor = nullptr,
-      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
-      : BufferedInput(
-            std::move(readFile),
-            pool,
-            metricsLog,
-            nullptr,
-            mergeDistance),
+      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum)
+      : BufferedInput(std::move(readFile), pool, metricsLog, nullptr),
         ioStats_(std::move(ioStats)),
         executor_(executor),
         loadQuantum_(loadQuantum) {}
@@ -45,9 +40,8 @@ class ParallelBufferedInput : public BufferedInput {
       memory::MemoryPool& pool,
       std::shared_ptr<IoStatistics> ioStats = nullptr,
       folly::Executor* executor = nullptr,
-      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum,
-      int32_t mergeDistance = ReaderOptions::kMaxMergeDistance)
-      : BufferedInput(std::move(input), pool, mergeDistance),
+      int32_t loadQuantum = ReaderOptions::kDefaultLoadQuantum)
+      : BufferedInput(std::move(input), pool),
         ioStats_(std::move(ioStats)),
         executor_(executor),
         loadQuantum_(loadQuantum) {}
