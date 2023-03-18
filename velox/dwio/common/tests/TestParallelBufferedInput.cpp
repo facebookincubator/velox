@@ -128,13 +128,13 @@ TEST(TestParallelBufferedInput, simpleBenchmark) {
   // 10 regions, each has 2MB length and 2MB distance, eg [0, 2MB], [4MB,
   // 2MB]...
   for (uint64_t iter = 0, cursor = 0, length = 2 * kOneMB; iter < 10;
-       ++iter, cursor += 3 * kOneMB) {
+       ++iter, cursor += 4 * kOneMB) {
     regions.emplace_back(cursor, length);
   }
   // 20 regions, each has 14MB length and 2MB distance, eg [0, 14MB], [16MB,
   // 14MB]...
   for (uint64_t iter = 0, cursor = 0, length = 14 * kOneMB; iter < 20;
-       ++iter, cursor += 15 * kOneMB) {
+       ++iter, cursor += 16 * kOneMB) {
     regions.emplace_back(cursor, length);
   }
 
