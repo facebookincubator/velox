@@ -19,7 +19,8 @@ set(VELOX_FMT_BUILD_SHA256_CHECKSUM
 set(VELOX_FMT_SOURCE_URL
     "https://github.com/fmtlib/fmt/archive/${VELOX_FMT_VERSION}.tar.gz")
 set_with_default(VELOX_FMT_SOURCE_URL VELOX_FMT_URL VELOX_FMT_SOURCE_URL)
-set_with_default(VELOX_FMT_BUILD_SHA256_CHECKSUM VELOX_FMT_SHA256 "SHA256=${VELOX_FMT_BUILD_SHA256_CHECKSUM}")
+set_with_default(VELOX_FMT_BUILD_SHA256_CHECKSUM VELOX_FMT_SHA256
+                 "SHA256=${VELOX_FMT_BUILD_SHA256_CHECKSUM}")
 
 message(STATUS "Building fmt from source")
 FetchContent_Declare(
