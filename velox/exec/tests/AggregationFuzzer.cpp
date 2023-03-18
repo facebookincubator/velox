@@ -156,6 +156,11 @@ class AggregationFuzzer {
       std::vector<std::string> names,
       std::vector<TypePtr> types);
 
+  RowVectorPtr generateInputDataWithRowNumberOne(
+      std::vector<std::string> names,
+      const std::vector<TypePtr>& types,
+      const std::function<int64_t(int64_t)>& rowNumberGenerator);
+
   void verifyWindow(
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& sortingKeys,
@@ -501,23 +506,51 @@ std::vector<RowVectorPtr> AggregationFuzzer::generateInputData(
 std::vector<RowVectorPtr> AggregationFuzzer::generateInputDataWithRowNumber(
     std::vector<std::string> names,
     std::vector<TypePtr> types) {
-  names.push_back("row_number");
-  types.push_back(BIGINT());
+  VELOX_CHECK_EQ(names.size(), types.size(), "# of names and types must match");
+  std::vector<RowVectorPtr> input(FLAGS_num_batches);
 
-  std::vector<RowVectorPtr> input;
-  auto size = vectorFuzzer_.getOptions().vectorSize;
-  velox::test::VectorMaker vectorMaker{pool_.get()};
   int64_t rowNumber = 0;
-  for (auto j = 0; j < FLAGS_num_batches; ++j) {
-    std::vector<VectorPtr> children;
-    for (auto i = 0; i < types.size() - 1; ++i) {
-      children.push_back(vectorFuzzer_.fuzz(types[i], size));
-    }
-    children.push_back(vectorMaker.flatVector<int64_t>(
-        size, [&](auto /*row*/) { return rowNumber++; }));
-    input.push_back(vectorMaker.rowVector(names, children));
-  }
+  const auto rowNumberGenerator = [&rowNumber](int64_t) { return rowNumber++; };
+
+  std::generate(
+      input.begin(),
+      input.end(),
+      [&names, &types, &rowNumberGenerator, this]() {
+        return generateInputDataWithRowNumberOne(
+            names, types, rowNumberGenerator);
+      });
   return input;
+}
+
+std::vector<VectorPtr> generateVectors(
+    VectorFuzzer& vectorFuzzer,
+    const std::vector<TypePtr>& types,
+    size_t size) {
+  std::vector<VectorPtr> children(types.size());
+  std::transform(
+      types.begin(),
+      types.end(),
+      children.begin(),
+      [&vectorFuzzer, size](const TypePtr& type) {
+        return vectorFuzzer.fuzz(type, size);
+      });
+  return children;
+}
+
+RowVectorPtr AggregationFuzzer::generateInputDataWithRowNumberOne(
+    std::vector<std::string> names,
+    const std::vector<TypePtr>& types,
+    const std::function<int64_t(int64_t)>& rowNumberGenerator) {
+  const auto size = vectorFuzzer_.getOptions().vectorSize;
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+
+  constexpr auto kFieldNameForRowNumber = "row_number";
+  names.push_back(kFieldNameForRowNumber);
+
+  std::vector<VectorPtr> children = generateVectors(vectorFuzzer_, types, size);
+  children.push_back(vectorMaker.flatVector<int64_t>(size, rowNumberGenerator));
+
+  return vectorMaker.rowVector(std::move(names), std::move(children));
 }
 
 void AggregationFuzzer::go() {
