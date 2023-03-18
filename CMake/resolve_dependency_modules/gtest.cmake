@@ -16,18 +16,23 @@ include_guard(GLOBAL)
 if(DEFINED ENV{VELOX_GTEST_URL})
   set(VELOX_GTEST_SOURCE_URL "$ENV{VELOX_GTEST_URL}")
 else()
-  set(VELOX_GTEST_VERSION 1.13.0)
-  set(VELOX_GTEST_SOURCE_URL
-      "https://github.com/google/googletest/archive/refs/tags/v${VELOX_GTEST_VERSION}.tar.gz"
-  )
-  set(VELOX_GTEST_BUILD_SHA256_CHECKSUM
-      ad7fdba11ea011c1d925b3289cf4af2c66a352e18d4c7264392fead75e919363)
+
+
+
 endif()
+
+set(VELOX_GTEST_VERSION 1.13.0)
+set(VELOX_GTEST_BUILD_SHA256_CHECKSUM
+    ad7fdba11ea011c1d925b3289cf4af2c66a352e18d4c7264392fead75e919363)
+set(VELOX_GTEST_SOURCE_URL
+    "https://github.com/google/googletest/archive/refs/tags/v${VELOX_GTEST_VERSION}.tar.gz")
+set_with_default(VELOX_GTEST_SOURCE_URL VELOX_GTEST_URL VELOX_GTEST_SOURCE_URL)
+set_with_default(VELOX_GTEST_BUILD_SHA256_CHECKSUM VELOX_GTEST_SHA256 "SHA256=${VELOX_GTEST_BUILD_SHA256_CHECKSUM}")
 
 message(STATUS "Building gtest from source")
 FetchContent_Declare(
   gtest
   URL ${VELOX_GTEST_SOURCE_URL}
-  URL_HASH SHA256=${VELOX_GTEST_BUILD_SHA256_CHECKSUM})
+  URL_HASH ${VELOX_GTEST_BUILD_SHA256_CHECKSUM})
 
 FetchContent_MakeAvailable(gtest)

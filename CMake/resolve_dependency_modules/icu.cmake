@@ -13,18 +13,16 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-if(DEFINED ENV{VELOX_ICU4C_URL})
-  set(ICU4C_SOURCE_URL "$ENV{VELOX_ICU4C_URL}")
-else()
-  set(VELOX_ICU4C_BUILD_VERSION 72)
-  string(
-    CONCAT ICU4C_SOURCE_URL
-           "https://github.com/unicode-org/icu/releases/download/"
-           "release-${VELOX_ICU4C_BUILD_VERSION}-1/"
-           "icu4c-${VELOX_ICU4C_BUILD_VERSION}_1-src.tgz")
-endif()
+set(VELOX_ICU4C_BUILD_VERSION 72)
 set(VELOX_ICU4C_BUILD_SHA256_CHECKSUM
     a2d2d38217092a7ed56635e34467f92f976b370e20182ad325edea6681a71d68)
+string(
+  CONCAT ICU4C_SOURCE_URL
+         "https://github.com/unicode-org/icu/releases/download/"
+         "release-${VELOX_ICU4C_BUILD_VERSION}-1/"
+         "icu4c-${VELOX_ICU4C_BUILD_VERSION}_1-src.tgz")
+set_with_default(ICU4C_SOURCE_URL VELOX_ICU4C_URL ICU4C_SOURCE_URL)
+set_with_default(VELOX_ICU4C_BUILD_SHA256_CHECKSUM VELOX_ICU4C_SHA256 "SHA256=${VELOX_ICU4C_BUILD_SHA256_CHECKSUM}")
 
 message(STATUS "Building ICU4C from source")
 
@@ -50,7 +48,7 @@ set(ICU_LIBRARIES ${ICU_DIR}/lib)
 ExternalProject_Add(
   ICU
   URL ${ICU4C_SOURCE_URL}
-  URL_HASH SHA256=${VELOX_ICU4C_BUILD_SHA256_CHECKSUM}
+  URL_HASH ${VELOX_ICU4C_BUILD_SHA256_CHECKSUM}
   SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu-src
   BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu-bld
   CONFIGURE_COMMAND <SOURCE_DIR>/source/configure --prefix=${ICU_DIR}
