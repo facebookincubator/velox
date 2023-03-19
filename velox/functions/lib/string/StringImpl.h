@@ -419,6 +419,13 @@ FOLLY_ALWAYS_INLINE bool fromBase64(
   return true;
 }
 
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool toBase64Url(TOutString& output, const TInString& input) {
+  output.resize(encoding::Base64::calculateEncodedSize(input.size()));
+  encoding::Base64::encode_url(input.data(), input.size(), output.data());
+  return true;
+}
+
 FOLLY_ALWAYS_INLINE void charEscape(unsigned char c, char* output) {
   output[0] = '%';
   output[1] = toHex(c / 16);
