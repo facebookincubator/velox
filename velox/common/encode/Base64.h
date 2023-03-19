@@ -75,7 +75,7 @@ class Base64 {
   /// result to the 'output'. The output must have enough space, e.g. as
   /// returned by the calculateEncodedSize().
   static void encode_url(const char* data, size_t size, char* output);
-  
+
   // compatible with www's Base64URL::encode/decode
   static std::string encode_url(const char* data, size_t len);
   static std::string encode_url(const folly::IOBuf* data);

@@ -1680,7 +1680,8 @@ TEST_F(StringFunctionsTest, toBase64) {
 
 TEST_F(StringFunctionsTest, toBase64Url) {
   const auto toBase64Url = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("to_base64url(cast(c0 as varbinary))", value);
+    return evaluateOnce<std::string>(
+        "to_base64url(cast(c0 as varbinary))", value);
   };
   const auto fromHex = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("from_hex(c0)", value);
@@ -1692,7 +1693,8 @@ TEST_F(StringFunctionsTest, toBase64Url) {
   EXPECT_EQ("YWJj", toBase64Url("abc"));
   EXPECT_EQ("aGVsbG8gd29ybGQ=", toBase64Url("hello world"));
   EXPECT_EQ(
-      "SGVsbG8gV29ybGQgZnJvbSBWZWxveCE=", toBase64Url("Hello World from Velox!"));
+      "SGVsbG8gV29ybGQgZnJvbSBWZWxveCE=",
+      toBase64Url("Hello World from Velox!"));
   EXPECT_EQ("_0-_UA==", toBase64Url(fromHex("FF4FBF50")));
 }
 
