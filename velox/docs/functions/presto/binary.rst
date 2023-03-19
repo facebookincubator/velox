@@ -58,7 +58,7 @@ Binary Functions
 
     Encodes ``binary`` into a base64 string representation.
 
-.. function:: to_base64(binary) -> varchar
+.. function:: to_base64url(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation using the URL safe alphabet.
 
