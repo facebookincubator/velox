@@ -38,6 +38,22 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
+std::string taskStateString(TaskState state) {
+  switch (state) {
+    case TaskState::kRunning:
+      return "Running";
+    case TaskState::kFinished:
+      return "Finished";
+    case TaskState::kCanceled:
+      return "Canceled";
+    case TaskState::kAborted:
+      return "Aborted";
+    case TaskState::kFailed:
+      return "Failed";
+  }
+  return "<Unknown>";
+}
+
 namespace {
 
 folly::Synchronized<std::vector<std::shared_ptr<TaskListener>>>& listeners() {
@@ -167,8 +183,9 @@ Task::Task(
       planFragment_(std::move(planFragment)),
       destination_(destination),
       queryCtx_(std::move(queryCtx)),
-      pool_(
-          queryCtx_->pool()->addChild(fmt::format("task.{}", taskId_.c_str()))),
+      pool_(queryCtx_->pool()->addChild(
+          fmt::format("task.{}", taskId_.c_str()),
+          memory::MemoryPool::Kind::kAggregate)),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
       splitsStates_(initializeSplitStates(planFragment_.planNode)),
@@ -196,6 +213,13 @@ Task::~Task() {
   }
 
   removeSpillDirectoryIfExists();
+}
+
+uint64_t Task::timeSinceStartMsLocked() const {
+  if (taskStats_.executionStartTimeMs == 0UL) {
+    return 0UL;
+  }
+  return getCurrentTimeMs() - taskStats_.executionStartTimeMs;
 }
 
 SplitsState& Task::getPlanNodeSplitsStateLocked(
@@ -238,12 +262,10 @@ Task::getOrAddNodePool(const core::PlanNodeId& planNodeId) {
     return nodePools_[planNodeId];
   }
 
-  childPools_.push_back(pool_->addChild(fmt::format("node.{}", planNodeId)));
+  childPools_.push_back(pool_->addChild(
+      fmt::format("node.{}", planNodeId),
+      memory::MemoryPool::Kind::kAggregate));
   auto* nodePool = childPools_.back().get();
-  auto parentTracker = pool_->getMemoryUsageTracker();
-  if (parentTracker != nullptr) {
-    nodePool->setMemoryUsageTracker(parentTracker->addChild());
-  }
   nodePools_[planNodeId] = nodePool;
   return nodePool;
 }
@@ -256,6 +278,25 @@ velox::memory::MemoryPool* Task::addOperatorPool(
   auto* nodePool = getOrAddNodePool(planNodeId);
   childPools_.push_back(nodePool->addChild(fmt::format(
       "op.{}.{}.{}.{}", planNodeId, pipelineId, driverId, operatorType)));
+  return childPools_.back().get();
+}
+
+velox::memory::MemoryPool* Task::addConnectorWriterPoolLocked(
+    const core::PlanNodeId& planNodeId,
+    int pipelineId,
+    uint32_t driverId,
+    const std::string& operatorType,
+    const std::string& connectorId) {
+  auto* nodePool = getOrAddNodePool(planNodeId);
+  childPools_.push_back(nodePool->addChild(
+      fmt::format(
+          "op.{}.{}.{}.{}.{}",
+          planNodeId,
+          pipelineId,
+          driverId,
+          operatorType,
+          connectorId),
+      memory::MemoryPool::Kind::kAggregate));
   return childPools_.back().get();
 }
 
@@ -692,6 +733,13 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
       }
       foundDriver = true;
       break;
+    }
+
+    if (self->numFinishedDrivers_ == self->numTotalDrivers_) {
+      LOG(INFO) << "All drivers (" << self->numFinishedDrivers_
+                << ") finished for task " << self->taskId()
+                << " after running for " << self->timeSinceStartMsLocked()
+                << " ms.";
     }
   }
 
@@ -1340,6 +1388,10 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
 
+    LOG(INFO) << "Terminating task " << taskId() << " with state "
+              << taskStateString(state_) << " after running for "
+              << timeSinceStartMsLocked() << " ms.";
+
     activateTaskCompletionNotifier(completionNotifier);
 
     // Update the total number of drivers in case of grouped execution, if we
@@ -1523,10 +1575,7 @@ TaskStats Task::taskStats() const {
 
 uint64_t Task::timeSinceStartMs() const {
   std::lock_guard<std::mutex> l(mutex_);
-  if (taskStats_.executionStartTimeMs == 0UL) {
-    return 0UL;
-  }
-  return getCurrentTimeMs() - taskStats_.executionStartTimeMs;
+  return timeSinceStartMsLocked();
 }
 
 uint64_t Task::timeSinceEndMs() const {
