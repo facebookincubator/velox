@@ -76,6 +76,11 @@ wget_and_untar https://github.com/facebook/folly/archive/v2022.11.14.00.tar.gz f
 wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz hadoop
 wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protobuf-all-21.4.tar.gz protobuf &
 
+MACHINE=$(uname -m)
+if [ "$MACHINE" = "x86_64" ]; then
+  wget_and_untar https://github.com/intel/qpl/archive/refs/tags/v1.1.0.tar.gz qpl &
+fi
+
 wait  # For cmake and source downloads to complete.
 
 cp -a hadoop /usr/local/
@@ -107,6 +112,10 @@ cmake_install glog -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX:PATH=/usr
 cmake_install snappy -DSNAPPY_BUILD_TESTS=OFF
 cmake_install fmt -DFMT_TEST=OFF
 cmake_install folly
+
+if [ "$MACHINE" = "x86_64" ]; then
+  cmake_install qpl -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS='-O2' -DQPL_BUILD_TESTS=OFF
+fi
 # cmake_install ranges-v3
 
 dnf clean all

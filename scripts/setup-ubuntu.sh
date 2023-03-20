@@ -55,6 +55,8 @@ sudo --preserve-env apt update && apt install -y \
   tzdata \
   wget
 
+MACHINE=$(uname -m)
+
 function run_and_time {
   time "$@"
   { echo "+ Finished running $*"; } 2> /dev/null
@@ -76,7 +78,7 @@ function prompt {
 }
 function install_qpl {
   github_checkout intel/qpl v1.1.0 --recursive
-  cmake_install -DCMAKE_BUILD_TYPE=Release -DEFFICIENT_WAIT=ON
+  cmake_install -DCMAKE_BUILD_TYPE=Release -DQPL_BUILD_TESTS=OFF
 }
 
 function install_fmt {
@@ -100,7 +102,9 @@ function install_velox_deps {
   run_and_time install_fmt
   run_and_time install_folly
   run_and_time install_conda
-  run_and_time install_qpl
+  if [ "$MACHINE" = "x86_64" ]; then
+    run_and_time install_qpl
+  fi
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

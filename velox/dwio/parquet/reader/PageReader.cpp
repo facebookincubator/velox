@@ -25,7 +25,10 @@
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 #include <zlib.h>
 #include <zstd.h>
+
+#if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
 #include "CompressionQpl.h"
+#endif
 
 namespace facebook::velox::parquet {
 

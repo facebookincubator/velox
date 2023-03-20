@@ -21,7 +21,6 @@ source $SCRIPTDIR/setup-helper-functions.sh
 CPU_TARGET="${CPU_TARGET:-avx}"
 NPROC=$(getconf _NPROCESSORS_ONLN)
 export CFLAGS=$(get_cxx_flags $CPU_TARGET)  # Used by LZO.
-
 export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
 
@@ -69,19 +68,15 @@ wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.72.0/source/
 wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy &
 wget_and_untar https://github.com/fmtlib/fmt/archive/8.0.1.tar.gz fmt &
 wget_and_untar https://github.com/facebook/folly/archive/v2022.11.14.00.tar.gz folly &
-git clone -b v1.1.0 --recursive https://github.com/intel/qpl.git &
+
+MACHINE=$(uname -m)
+if [ "$MACHINE" = "x86_64" ]; then
+  wget_and_untar https://github.com/intel/qpl/archive/refs/tags/v1.1.0.tar.gz qpl &
+fi
+
 wait  # For cmake and source downloads to complete.
 
 # Build & install.
-(
-  cd qpl
-  if [ -d "./qpl-build/" ]; then
-    rm -rf qpl-build
-  fi
-  mkdir qpl-build && cd qpl-build
-  cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS='-O2' ../
-  sudo cmake --build . --target install -j$(nproc)
-)
 (
   cd lzo
   ./configure --prefix=/usr --enable-shared --disable-static --docdir=/usr/share/doc/lzo-2.10
@@ -100,6 +95,10 @@ cmake_install_deps glog -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX:PATH=/usr
 cmake_install_deps snappy -DSNAPPY_BUILD_TESTS=OFF
 cmake_install_deps fmt -DFMT_TEST=OFF
 cmake_install_deps folly
+
+if [ "$MACHINE" = "x86_64" ]; then
+  cmake_install_deps qpl -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS='-O2' -DQPL_BUILD_TESTS=OFF
+fi
 
 
 dnf clean all
