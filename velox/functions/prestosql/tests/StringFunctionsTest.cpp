@@ -238,8 +238,7 @@ class StringFunctionsTest : public FunctionBaseTest {
     };
 
     for (int i = 0; i < inputTable.size(); ++i) {
-      EXPECT_EQ(result->valueAt(i), StringView(concatStd(inputTable[i])))
-          << "at " << i;
+      EXPECT_EQ(result->valueAt(i), concatStd(inputTable[i])) << "at " << i;
     }
   }
 
@@ -795,7 +794,7 @@ TEST_F(StringFunctionsTest, concat) {
     auto result = evaluate<SimpleVector<StringView>>(
         fmt::format("concat('{}', '{}')", c0, c1), rows);
     for (int i = 0; i < 10; ++i) {
-      EXPECT_EQ(result->valueAt(i), StringView(c0 + c1));
+      EXPECT_EQ(result->valueAt(i), c0 + c1);
     }
   }
 
@@ -1359,6 +1358,22 @@ TEST_F(StringFunctionsTest, HmacSha512) {
           "FEFA712B67DED871E1ED987F8B20D6A69EB9FCC87974218B9A1A6D5202B54C18ECDA4839A979DED22F07E0881CF40B762691992D120408F49D6212E112509D72"),
       hmacSha512("hashme", "key"));
   EXPECT_EQ(std::nullopt, hmacSha512(std::nullopt, "velox"));
+}
+
+TEST_F(StringFunctionsTest, HmacMd5) {
+  const auto hmacMd5 = [&](std::optional<std::string> arg,
+                           std::optional<std::string> key) {
+    return evaluateOnce<std::string, std::string>(
+        "hmac_md5(c0, c1)", {arg, key}, {VARBINARY(), VARBINARY()});
+  };
+  // The result values were obtained from Presto Java hmac_md5 function.
+  EXPECT_EQ(
+      hexToDec("ff66d72875f01e26fcbe71d973eaf524"), hmacMd5("hashme", "velox"));
+  EXPECT_EQ(
+      hexToDec("ed706a89f46773b7a478ee5d8f83db86"),
+      hmacMd5("Infinity", "velox"));
+  EXPECT_EQ(hexToDec("f05e7a0086c6633b496ee411646da51c"), hmacMd5("", "velox"));
+  EXPECT_EQ(std::nullopt, hmacMd5(std::nullopt, "velox"));
 }
 
 void StringFunctionsTest::testReplaceInPlace(

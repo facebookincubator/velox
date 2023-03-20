@@ -39,6 +39,9 @@ class SimpleFunctionTest : public functions::test::FunctionBaseTest {
       return std::accumulate(data[row].begin(), data[row].end(), 0);
     });
   }
+
+  std::shared_ptr<memory::MemoryUsageTracker> tracker_{
+      memory::MemoryUsageTracker::create()};
 };
 
 template <typename T>
@@ -829,10 +832,8 @@ TEST_F(SimpleFunctionTest, mapStringOut) {
   for (auto i = 0; i < 4; i++) {
     auto mapView = reader[i];
     for (const auto& [key, value] : mapView) {
-      ASSERT_EQ(std::string(key.data(), key.size()), std::to_string(i + 1));
-      ASSERT_EQ(
-          std::string(value.value().data(), value.value().size()),
-          std::to_string(i + 1));
+      ASSERT_EQ(key, std::to_string(i + 1));
+      ASSERT_EQ(value.value(), std::to_string(i + 1));
     }
   }
 }
@@ -890,6 +891,7 @@ TEST_F(SimpleFunctionTest, cseDisabledFuncWithInput) {
 
 TEST_F(SimpleFunctionTest, reuseArgVector) {
   std::mt19937 rng;
+  pool_->setMemoryUsageTracker(tracker_->addChild());
 
   vector_size_t size = 256;
   auto data = makeRowVector({
@@ -900,8 +902,6 @@ TEST_F(SimpleFunctionTest, reuseArgVector) {
   auto rowType = asRowType(data->type());
   auto exprSet =
       compileExpressions({"(c0 - 0.5::REAL) * 2.0::REAL + 0.3::REAL"}, rowType);
-
-  pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
 
   auto prevAllocations = pool_->getMemoryUsageTracker()->numAllocs();
 

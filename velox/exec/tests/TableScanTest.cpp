@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/TableScan.h"
 #include <velox/type/Timestamp.h>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -211,6 +212,7 @@ TEST_F(TableScanTest, allColumns) {
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
   ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+  EXPECT_LT(0, exec::TableScan::ioWaitNanos());
 }
 
 TEST_F(TableScanTest, columnAliases) {
@@ -1933,7 +1935,9 @@ TEST_F(TableScanTest, remainingFilterConstantResult) {
           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
           makeFlatVector<StringView>(
               size,
-              [](auto row) { return StringView(fmt::format("{}", row % 23)); }),
+              [](auto row) {
+                return StringView::makeInline(fmt::format("{}", row % 23));
+              }),
       }),
       makeRowVector({
           makeFlatVector<int64_t>(
@@ -2137,6 +2141,46 @@ TEST_F(TableScanTest, structLazy) {
                 .planNode();
 
   assertQuery(op, {filePath}, "select c0 % 3 from tmp");
+}
+
+TEST_F(TableScanTest, interleaveLazyEager) {
+  constexpr int kSize = 1000;
+  auto column = makeRowVector(
+      {makeFlatVector<int64_t>(kSize, folly::identity),
+       makeRowVector({makeFlatVector<int64_t>(kSize, folly::identity)})});
+  auto rows = makeRowVector({column});
+  auto rowType = asRowType(rows->type());
+  auto lazyFile = TempFilePath::create();
+  writeToFile(lazyFile->path, {rows});
+  auto rowsWithNulls = makeVectors(1, kSize, rowType);
+  int numNonNull = 0;
+  for (int i = 0; i < kSize; ++i) {
+    auto* c0 = rowsWithNulls[0]->childAt(0)->asUnchecked<RowVector>();
+    if (c0->isNullAt(i)) {
+      continue;
+    }
+    auto& c0c0 = c0->asUnchecked<RowVector>()->childAt(0);
+    numNonNull += !c0c0->isNullAt(i);
+  }
+  auto eagerFile = TempFilePath::create();
+  writeToFile(eagerFile->path, rowsWithNulls);
+  auto tableHandle = makeTableHandle(
+      SubfieldFiltersBuilder().add("c0.c0", isNotNull()).build());
+  ColumnHandleMap assignments = {{"c0", regularColumn("c0", column->type())}};
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode();
+  TaskCursor cursor(params);
+  cursor.task()->addSplit("0", makeHiveSplit(lazyFile->path));
+  cursor.task()->addSplit("0", makeHiveSplit(eagerFile->path));
+  cursor.task()->addSplit("0", makeHiveSplit(lazyFile->path));
+  cursor.task()->noMoreSplits("0");
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(cursor.moveNext());
+    auto result = cursor.current();
+    ASSERT_EQ(result->size(), i % 2 == 0 ? kSize : numNonNull);
+  }
+  ASSERT_FALSE(cursor.moveNext());
 }
 
 TEST_F(TableScanTest, lazyVectorAccessTwiceWithDifferentRows) {
@@ -2443,4 +2487,27 @@ TEST_F(TableScanTest, errorInLoadLazy) {
     EXPECT_TRUE(ex.context().find(filePath->path, 0) != std::string::npos)
         << ex.context();
   }
+}
+
+TEST_F(TableScanTest, parallelPrepare) {
+  constexpr int32_t kNumParallel = 100;
+  const char* kLargeRemainingFilter =
+      "c0 + 1::BIGINT > 0::BIGINT or 1111 in (1, 2, 3, 4, 5) or array_sort(array_distinct(array[1, 1, 3, 4, 5, 6,7]))[1] = -5";
+  FLAGS_split_preload_per_driver = kNumParallel;
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(10, [](auto row) { return row % 5; })});
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {data});
+  auto plan =
+      exec::test::PlanBuilder(pool_.get())
+          .tableScan(ROW({"c0"}, {INTEGER()}), {}, kLargeRemainingFilter)
+          .project({"c0"})
+          .planNode();
+
+  std::vector<exec::Split> splits;
+  for (auto i = 0; i < kNumParallel; ++i) {
+    splits.push_back(makeHiveSplit(filePath->path));
+  }
+  AssertQueryBuilder(plan).splits(splits).copyResults(pool_.get());
 }

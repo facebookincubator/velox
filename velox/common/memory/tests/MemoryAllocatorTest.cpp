@@ -49,6 +49,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
   }
 
   void setupAllocator() {
+    pool_.reset();
     MemoryAllocator::testingDestroyInstance();
     useMmap_ = GetParam();
     if (useMmap_) {
@@ -63,7 +64,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
     instance_ = MemoryAllocator::getInstance();
     memoryManager_ = std::make_unique<MemoryManager>(IMemoryManager::Options{
         .capacity = kMaxMemory, .allocator = instance_});
-    pool_ = memoryManager_->getChild();
+    pool_ = memoryManager_->getPool("allocatorTest", MemoryPool::Kind::kLeaf);
     if (useMmap_) {
       ASSERT_EQ(instance_->kind(), MemoryAllocator::Kind::kMmap);
     } else {
@@ -351,7 +352,6 @@ TEST_P(MemoryAllocatorTest, allocationPoolTest) {
   EXPECT_EQ(pool.numTotalAllocations(), 1);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), 10);
-  return;
 
   pool.allocateFixed(kNumLargeAllocPages * AllocationTraits::kPageSize);
   EXPECT_EQ(pool.numTotalAllocations(), 2);
@@ -378,6 +378,31 @@ TEST_P(MemoryAllocatorTest, allocationPoolTest) {
   EXPECT_EQ(pool.numTotalAllocations(), 4);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), 100);
+
+  {
+    auto old = pool.numLargeAllocations();
+    auto bytes = AllocationTraits::kPageSize * instance_->largestSizeClass();
+    pool.allocateFixed(bytes);
+    ASSERT_EQ(pool.numLargeAllocations(), old);
+    auto buf = pool.allocateFixed(bytes, 64);
+    ASSERT_EQ(pool.numLargeAllocations(), old + 1);
+    ASSERT_EQ(reinterpret_cast<uintptr_t>(buf) % 64, 0);
+  }
+
+  for (int bytes = 1; bytes < 64; ++bytes) {
+    auto buf = pool.allocateFixed(bytes, 64);
+    ASSERT_EQ(reinterpret_cast<uintptr_t>(buf) % 64, 0);
+  }
+
+  {
+    // Leaving 10 bytes room
+    pool.allocateFixed(128 * 4096 - 10);
+    auto old = pool.numSmallAllocations();
+    auto buf = pool.allocateFixed(1, 64);
+    ASSERT_EQ(reinterpret_cast<uintptr_t>(buf) % 64, 0);
+    ASSERT_EQ(pool.numSmallAllocations(), old + 1);
+  }
+
   pool.clear();
 }
 

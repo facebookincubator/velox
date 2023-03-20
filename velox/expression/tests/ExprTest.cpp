@@ -315,6 +315,11 @@ class ExprTest : public testing::Test, public VectorTestBase {
         << sql;
   }
 
+  bool propagatesNulls(const core::TypedExprPtr& typedExpr) {
+    exec::ExprSet exprSet({typedExpr}, execCtx_.get(), true);
+    return exprSet.exprs().front()->propagatesNulls();
+  }
+
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
@@ -3038,6 +3043,31 @@ TEST_F(ExprTest, addNulls) {
 
     checkResult(slicedVector);
   }
+
+  // Lazy reading sometimes generates row vector that has child with length
+  // shorter than the parent.  The extra rows in parent are all marked as nulls
+  // so it is valid.  We need to handle this situation when propagating nulls
+  // from parent to child.
+  {
+    auto a = makeFlatVector<int64_t>(kSize - 1, folly::identity);
+    auto b = makeArrayVector<int64_t>(
+        kSize - 1, [](auto) { return 1; }, [](auto i) { return i; });
+    auto row = std::make_shared<RowVector>(
+        pool_.get(),
+        ROW({{"a", a->type()}, {"b", b->type()}}),
+        nullptr,
+        kSize,
+        std::vector<VectorPtr>({a, b}));
+    VectorPtr result = row;
+    exec::Expr::addNulls(rows, rawNulls, context, row->type(), result);
+    ASSERT_NE(result.get(), row.get());
+    ASSERT_EQ(result->size(), kSize);
+    for (int i = 0; i < kSize - 1; ++i) {
+      ASSERT_FALSE(result->isNullAt(i));
+      ASSERT_TRUE(result->equalValueAt(row.get(), i, i));
+    }
+    ASSERT_TRUE(result->isNullAt(kSize - 1));
+  }
 }
 
 namespace {
@@ -3482,4 +3512,34 @@ TEST_F(ExprTest, smallerWrappedBaseVector) {
            std::nullopt,
            std::nullopt}),
       result[0]);
+}
+
+TEST_F(ExprTest, nullPropagation) {
+  auto singleString = parseExpression(
+      "substr(c0, 1, if (length(c0) > 2, length(c0) - 1, 0))",
+      ROW({"c0"}, {VARCHAR()}));
+  auto twoStrings = parseExpression(
+      "substr(c0, 1, if (length(c1) > 2, length(c0) - 1, 0))",
+      ROW({"c0", "c1"}, {VARCHAR(), VARCHAR()}));
+  EXPECT_TRUE(propagatesNulls(singleString));
+  EXPECT_FALSE(propagatesNulls(twoStrings));
+}
+
+TEST_F(ExprTest, peelingWithSmallerConstantInput) {
+  // This test ensures that when a dictionary-encoded vector is peeled together
+  // with a constant vector whose size is smaller than the corresponding
+  // selected rows of the dictionary base vector, the subsequent evaluation on
+  // the constant vector doesn't access values beyond its size.
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto c0 = makeRowVector(
+      {makeFlatVector<int64_t>({1, 3, 5, 7, 9})}, nullEvery(1, 2));
+  auto indices = makeIndices({2, 3, 4});
+  auto d0 = wrapInDictionary(indices, c0);
+  auto c1 = BaseVector::wrapInConstant(3, 1, data);
+
+  // After evaluating d0, Coalesce copies values from c1 to an existing result
+  // vector. c1 should be large enough so that this copy step does not access
+  // values out of bound.
+  auto result = evaluate("coalesce(c0, c1)", makeRowVector({d0, c1}));
+  assertEqualVectors(c1, result);
 }

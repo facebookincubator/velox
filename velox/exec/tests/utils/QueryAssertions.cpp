@@ -267,19 +267,6 @@ velox::variant variantAt<TypeKind::INTERVAL_DAY_TIME>(
       ::duckdb::Interval::GetMicro(value.GetValue<::duckdb::interval_t>())));
 }
 
-velox::variant decimalVariantAt(const ::duckdb::Value& value) {
-  uint8_t precision;
-  uint8_t scale;
-  value.type().GetDecimalProperties(precision, scale);
-  auto type = DECIMAL(precision, scale);
-  if (type->isShortDecimal()) {
-    return velox::variant::shortDecimal(value.GetValue<int64_t>(), type);
-  } else {
-    auto val = value.GetValueUnsafe<::duckdb::hugeint_t>();
-    return velox::variant::longDecimal(buildInt128(val.upper, val.lower), type);
-  }
-}
-
 velox::variant rowVariantAt(
     const ::duckdb::Value& vector,
     const TypePtr& rowType) {
@@ -389,7 +376,7 @@ std::vector<MaterializedRow> materialize(
         row.push_back(
             rowVariantAt(dataChunk->GetValue(j, i), rowType->childAt(j)));
       } else if (isDecimalKind(typeKind)) {
-        row.push_back(decimalVariantAt(dataChunk->GetValue(j, i)));
+        row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i)));
       } else {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             variantAt, typeKind, dataChunk, i, j);
@@ -930,16 +917,18 @@ std::shared_ptr<Task> assertQueryReturnsEmptyResult(
     const std::shared_ptr<const core::PlanNode>& plan) {
   CursorParameters params;
   params.planNode = plan;
-  auto result = readCursor(params, [](Task*) {});
+  auto [cursor, results] = readCursor(params, [](Task*) {});
+  assertEmptyResults(results);
+  return cursor->task();
+}
 
-  auto totalCount = 0;
-  for (const auto& vector : result.second) {
+void assertEmptyResults(const std::vector<RowVectorPtr>& results) {
+  size_t totalCount = 0;
+  for (const auto& vector : results) {
     totalCount += vector->size();
   }
-
   EXPECT_EQ(0, totalCount) << "Expected empty result but received "
                            << totalCount << " rows";
-  return result.first->task();
 }
 
 // Compare left and right without epsilon and returns true if they are equal.
@@ -1033,8 +1022,8 @@ bool assertEqualResults(
     const MaterializedRowMultiset& actualRows,
     const std::string& message) {
   if (expectedRows.empty() != actualRows.empty()) {
-    EXPECT_TRUE(false) << generateUserFriendlyDiff(expectedRows, actualRows)
-                       << message;
+    ADD_FAILURE() << generateUserFriendlyDiff(expectedRows, actualRows)
+                  << message;
     return false;
   }
 
@@ -1043,7 +1032,7 @@ bool assertEqualResults(
   }
 
   if (!equalTypeKinds(*expectedRows.begin(), *actualRows.begin())) {
-    EXPECT_TRUE(false) << "Types of expected and actual results do not match";
+    ADD_FAILURE() << "Types of expected and actual results do not match";
     return false;
   }
 
@@ -1054,7 +1043,7 @@ bool assertEqualResults(
         numFloatingPointColumns, columns};
     if (auto result = comparator.areEqual(expectedRows, actualRows)) {
       if (!result.value()) {
-        EXPECT_TRUE(false) << comparator.getUserFriendlyDiff() << message;
+        ADD_FAILURE() << comparator.getUserFriendlyDiff() << message;
         return false;
       }
       return true;
@@ -1068,8 +1057,8 @@ bool assertEqualResults(
     std::string note = numFloatingPointColumns > 0
         ? "\nNote: results are compared without epsilon because values at non-floating-point columns do not form unique keys."
         : "";
-    EXPECT_TRUE(false) << generateUserFriendlyDiff(expectedRows, actualRows)
-                       << message << note;
+    ADD_FAILURE() << generateUserFriendlyDiff(expectedRows, actualRows)
+                  << message << note;
     return false;
   }
   return true;
@@ -1133,7 +1122,7 @@ static bool compareOrderedPartitions(
   }
 
   if (!equalTypeKinds(*expected.second.begin(), *actual.second.begin())) {
-    EXPECT_TRUE(false) << "Types of expected and actual results do not match";
+    ADD_FAILURE() << "Types of expected and actual results do not match";
     return false;
   }
 
@@ -1228,8 +1217,8 @@ void assertResultsOrdered(
         oss << generateUserFriendlyDiff(
             expectedPartIter->second, actualPartIter->second);
       }
-      EXPECT_TRUE(false) << oss.str() << kDuckDbTimestampWarning
-                         << "\nDuckDB query: " << duckDbSql;
+      ADD_FAILURE() << oss.str() << kDuckDbTimestampWarning
+                    << "\nDuckDB query: " << duckDbSql;
     }
   }
 }
@@ -1338,7 +1327,6 @@ std::shared_ptr<Task> assertQuery(
   auto task = cursor->task();
 
   EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
-
   return task;
 }
 

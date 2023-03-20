@@ -22,6 +22,8 @@ DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
 
 namespace facebook::velox::exec {
 
+std::atomic<uint64_t> TableScan::ioWaitNanos_;
+
 TableScan::TableScan(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -63,6 +65,10 @@ RowVectorPtr TableScan::getOutput() {
           auto connectorStats = dataSource_->runtimeStats();
           auto lockedStats = stats_.wlock();
           for (const auto& [name, counter] : connectorStats) {
+            if (name == "ioWaitNanos") {
+              ioWaitNanos_ += counter.value - lastIoWaitNanos_;
+              lastIoWaitNanos_ = counter.value;
+            }
             if (UNLIKELY(lockedStats->runtimeStats.count(name) == 0)) {
               lockedStats->runtimeStats.insert(
                   std::make_pair(name, RuntimeMetric(counter.unit)));
@@ -86,7 +92,7 @@ RowVectorPtr TableScan::getOutput() {
 
       if (!dataSource_) {
         connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
-            connectorSplit->connectorId, planNodeId());
+            connectorSplit->connectorId, planNodeId(), true);
         dataSource_ = connector_->createDataSource(
             outputType_,
             tableHandle_,
@@ -198,7 +204,8 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
        table = tableHandle_,
        columns = columnHandles_,
        connector = connector_,
-       ctx = connectorQueryCtx_,
+       ctx = operatorCtx_->createConnectorQueryCtx(
+           split->connectorId, planNodeId(), true),
        task = operatorCtx_->task(),
        split]() -> std::unique_ptr<DataSourcePtr> {
         if (task->isCancelled()) {

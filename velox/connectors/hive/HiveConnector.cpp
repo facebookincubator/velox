@@ -526,22 +526,12 @@ void HiveDataSource::setFromDataSource(
   emptySplit_ = source->emptySplit_;
   split_ = std::move(source->split_);
   if (emptySplit_) {
-    // Leave old readers in place so tat their adaptation can be moved to a new
-    // reader.
     return;
   }
-  if (rowReader_) {
-    if (!source->rowReader_->moveAdaptationFrom(*rowReader_)) {
-      // The source had a reader that did not have state that could be
-      // advanced. Keep the old readers so that you can transfer the
-      // adaptation to the next non-empty one.
-      emptySplit_ = true;
-      return;
-    }
-  }
+  source->scanSpec_->moveAdaptationFrom(*scanSpec_);
+  scanSpec_ = std::move(source->scanSpec_);
   reader_ = std::move(source->reader_);
   rowReader_ = std::move(source->rowReader_);
-  scanSpec_ = std::move(source->scanSpec_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
   source->ioStats_->merge(*ioStats_);
@@ -553,8 +543,7 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     velox::ContinueFuture& /*future*/) {
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
   if (emptySplit_) {
-    split_.reset();
-    // Keep readers around to hold adaptation.
+    resetSplit();
     return nullptr;
   }
 
@@ -667,21 +656,24 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
       {{"numPrefetch", RuntimeCounter(ioStats_->prefetch().count())},
        {"prefetchBytes",
         RuntimeCounter(
-            ioStats_->prefetch().bytes(), RuntimeCounter::Unit::kBytes)},
+            ioStats_->prefetch().sum(), RuntimeCounter::Unit::kBytes)},
        {"numStorageRead", RuntimeCounter(ioStats_->read().count())},
        {"storageReadBytes",
-        RuntimeCounter(ioStats_->read().bytes(), RuntimeCounter::Unit::kBytes)},
+        RuntimeCounter(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)},
        {"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())},
        {"localReadBytes",
         RuntimeCounter(
-            ioStats_->ssdRead().bytes(), RuntimeCounter::Unit::kBytes)},
+            ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)},
        {"numRamRead", RuntimeCounter(ioStats_->ramHit().count())},
        {"ramReadBytes",
-        RuntimeCounter(
-            ioStats_->ramHit().bytes(), RuntimeCounter::Unit::kBytes)},
+        RuntimeCounter(ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
         RuntimeCounter(
-            ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)}});
+            ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       {"ioWaitNanos",
+        RuntimeCounter(
+            ioStats_->queryThreadIoLatency().sum() * 1000,
+            RuntimeCounter::Unit::kNanos)}});
   return res;
 }
 

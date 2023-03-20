@@ -185,8 +185,8 @@ TypePtr Type::create(const folly::dynamic& obj) {
 
   // Checks if 'typeName' specifies a custom type.
   auto typeName = obj["type"].asString();
-  if (typeExists(typeName)) {
-    return getType(typeName, std::move(childTypes));
+  if (customTypeExists(typeName)) {
+    return getCustomType(typeName);
   }
 
   // 'typeName' must be a built-in type.
@@ -209,7 +209,6 @@ TypePtr Type::create(const folly::dynamic& obj) {
         names.push_back(name.asString());
       }
 
-      VELOX_USER_CHECK(!childTypes.empty(), "Row type must have child types");
       return std::make_shared<const RowType>(
           std::move(names), std::move(childTypes));
     }
@@ -231,6 +230,14 @@ TypePtr Type::create(const folly::dynamic& obj) {
       return createType(typeKind, std::move(childTypes));
     }
   }
+}
+
+// static
+void Type::registerSerDe() {
+  velox::DeserializationRegistryForSharedPtr().Register(
+      Type::getClassName(),
+      static_cast<std::shared_ptr<const Type> (*)(const folly::dynamic&)>(
+          Type::create));
 }
 
 std::string ArrayType::toString() const {
@@ -495,7 +502,11 @@ std::string FunctionType::toString() const {
 }
 
 folly::dynamic FunctionType::serialize() const {
-  throw std::logic_error("FUNCTION type is not serializable");
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "Type";
+  obj["type"] = TypeTraits<TypeKind::FUNCTION>::name;
+  obj["cTypes"] = velox::ISerializable::serialize(children_);
+  return obj;
 }
 
 OpaqueType::OpaqueType(const std::type_index& typeIndex)
@@ -758,14 +769,14 @@ typeFactories() {
 
 } // namespace
 
-bool registerType(
+bool registerCustomType(
     const std::string& name,
     std::unique_ptr<const CustomTypeFactories> factories) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   return typeFactories().emplace(uppercaseName, std::move(factories)).second;
 }
 
-bool typeExists(const std::string& name) {
+bool customTypeExists(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   return typeFactories().count(uppercaseName) > 0;
 }
@@ -778,7 +789,7 @@ std::unordered_set<std::string> getCustomTypeNames() {
   return typeNames;
 }
 
-bool unregisterType(const std::string& name) {
+bool unregisterCustomType(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
   return typeFactories().erase(uppercaseName) == 1;
 }
@@ -795,16 +806,16 @@ getTypeFactories(const std::string& name) {
   return nullptr;
 }
 
-TypePtr getType(const std::string& name, std::vector<TypePtr> childTypes) {
+TypePtr getCustomType(const std::string& name) {
   auto factories = getTypeFactories(name);
   if (factories) {
-    return factories->getType(std::move(childTypes));
+    return factories->getType();
   }
 
   return nullptr;
 }
 
-exec::CastOperatorPtr getCastOperator(const std::string& name) {
+exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
   auto factories = getTypeFactories(name);
   if (factories) {
     return factories->getCastOperator();

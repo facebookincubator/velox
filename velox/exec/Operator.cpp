@@ -26,13 +26,16 @@ namespace {
 // Basic implementation of the connector::ExpressionEvaluator interface.
 class SimpleExpressionEvaluator : public connector::ExpressionEvaluator {
  public:
-  explicit SimpleExpressionEvaluator(core::ExecCtx* execCtx)
-      : execCtx_(execCtx) {}
+  explicit SimpleExpressionEvaluator(
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool)
+      : queryCtx_(queryCtx), pool_(pool) {}
 
   std::unique_ptr<exec::ExprSet> compile(
       const core::TypedExprPtr& expression) const override {
     auto expressions = {expression};
-    return std::make_unique<exec::ExprSet>(std::move(expressions), execCtx_);
+    return std::make_unique<exec::ExprSet>(
+        std::move(expressions), ensureExecCtx());
   }
 
   void evaluate(
@@ -40,7 +43,7 @@ class SimpleExpressionEvaluator : public connector::ExpressionEvaluator {
       const SelectivityVector& rows,
       RowVectorPtr& input,
       VectorPtr* result) const override {
-    exec::EvalCtx context(execCtx_, exprSet, input.get());
+    exec::EvalCtx context(ensureExecCtx(), exprSet, input.get());
 
     std::vector<VectorPtr> results = {*result};
     exprSet->eval(0, 1, true, rows, context, results);
@@ -49,7 +52,16 @@ class SimpleExpressionEvaluator : public connector::ExpressionEvaluator {
   }
 
  private:
-  core::ExecCtx* execCtx_;
+  core::ExecCtx* ensureExecCtx() const {
+    if (!execCtx_) {
+      execCtx_ = std::make_unique<core::ExecCtx>(pool_, queryCtx_);
+    }
+    return execCtx_.get();
+  }
+
+  core::QueryCtx* const queryCtx_;
+  memory::MemoryPool* const pool_;
+  mutable std::unique_ptr<core::ExecCtx> execCtx_;
 };
 } // namespace
 
@@ -75,15 +87,20 @@ core::ExecCtx* OperatorCtx::execCtx() const {
 std::shared_ptr<connector::ConnectorQueryCtx>
 OperatorCtx::createConnectorQueryCtx(
     const std::string& connectorId,
-    const std::string& planNodeId) const {
-  if (!expressionEvaluator_) {
-    expressionEvaluator_ =
-        std::make_unique<SimpleExpressionEvaluator>(execCtx());
-  }
-  return std::make_unique<connector::ConnectorQueryCtx>(
+    const std::string& planNodeId,
+    bool forScan) const {
+  return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
+      forScan ? nullptr
+              : driverCtx_->task->addConnectorWriterPoolLocked(
+                    planNodeId_,
+                    driverCtx_->pipelineId,
+                    driverCtx_->driverId,
+                    operatorType_,
+                    connectorId),
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
-      expressionEvaluator_.get(),
+      std::make_unique<SimpleExpressionEvaluator>(
+          execCtx()->queryCtx(), execCtx()->pool()),
       driverCtx_->task->queryCtx()->allocator(),
       taskId(),
       planNodeId,
@@ -277,12 +294,17 @@ OperatorStats Operator::stats(bool clear) {
   return ret;
 }
 
-void Operator::recordBlockingTime(uint64_t start) {
+void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
   uint64_t now =
       std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::high_resolution_clock::now().time_since_epoch())
           .count();
-  stats_.wlock()->blockedWallNanos += (now - start) * 1000;
+  auto wallNanos = (now - start) * 1000;
+  stats_.wlock()->blockedWallNanos += wallNanos;
+  auto statName = fmt::format(
+      "blocked{}WallNanos", blockingReasonToString(reason).substr(1));
+  addRuntimeStat(
+      statName, RuntimeCounter(wallNanos, RuntimeCounter::Unit::kNanos));
 }
 
 std::string Operator::toString() const {

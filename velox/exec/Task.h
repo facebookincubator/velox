@@ -284,6 +284,17 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t driverId,
       const std::string& operatorType);
 
+  /// Creates new instance of MemoryPool for the connector writer used by a
+  /// table write operator, stores it in the task to ensure lifetime and returns
+  /// a raw pointer. Not thread safe, e.g. must be called from the Operator's
+  /// constructor.
+  velox::memory::MemoryPool* addConnectorWriterPoolLocked(
+      const core::PlanNodeId& planNodeId,
+      int pipelineId,
+      uint32_t driverId,
+      const std::string& operatorType,
+      const std::string& connectorId);
+
   /// Creates new instance of MemoryPool for a merge source in a
   /// MergeExchangeNode, stores it in the task to ensure lifetime and returns a
   /// raw pointer.
@@ -545,6 +556,9 @@ class Task : public std::enable_shared_from_this<Task> {
   void testingVisitDrivers(const std::function<void(Driver*)>& callback);
 
  private:
+  // Returns time (ms) since the task execution started or zero, if not started.
+  uint64_t timeSinceStartMsLocked() const;
+
   // Returns reference to the SplitsState structure for the specified plan node
   // id. Throws if not found, meaning that plan node does not expect splits.
   SplitsState& getPlanNodeSplitsStateLocked(const core::PlanNodeId& planNodeId);
