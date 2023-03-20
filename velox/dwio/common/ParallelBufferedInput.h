@@ -72,7 +72,8 @@ class ParallelBufferedInput : public BufferedInput {
   // Used to split large region.
   const int32_t loadQuantum_;
 
-  // Try split large region into several small regions by load quantum.
+  // Try split large region which size greater than load quantum into several
+  // small regions by load quantum.
   void splitRegion(
       const uint64_t length,
       const int32_t loadQuantum,

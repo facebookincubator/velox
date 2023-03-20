@@ -127,7 +127,7 @@ class BufferedInput {
   std::vector<DataBuffer<char>> buffers_;
   std::vector<Region> regions_;
 
-  // We either load data parallelly or sequentially according to flag
+  // We either load data parallelly or sequentially according to flag.
   void loadWithAction(
       const LogType logType,
       std::function<void(void* FOLLY_NONNULL, uint64_t, uint64_t, LogType)>

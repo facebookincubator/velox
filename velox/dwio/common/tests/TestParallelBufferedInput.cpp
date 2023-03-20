@@ -22,13 +22,22 @@
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
 
-TEST(TestParallelBufferedInput, parallelLoad) {
+class TestParallelBufferedInput : public testing::Test {
+ protected:
+  void SetUp() {
+    executor_ = std::make_unique<folly::IOThreadPoolExecutor>(kThreads);
+    pool_ = memory::getDefaultMemoryPool();
+  }
   const int32_t kOneKB = 1 * 1024;
   const int32_t kOneMB = 1 * 1024 * 1024;
-  const int32_t threads = 4;
+  const int32_t kThreads = 4;
 
+  std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
+  std::shared_ptr<memory::MemoryPool> pool_;
+};
+
+TEST_F(TestParallelBufferedInput, parallelLoad) {
   auto ioStats = std::make_shared<IoStatistics>();
-  auto executor = std::make_unique<folly::IOThreadPoolExecutor>(threads);
   int32_t loadQuantum = kOneKB;
 
   std::string fileData;
@@ -40,13 +49,13 @@ TEST(TestParallelBufferedInput, parallelLoad) {
     writeFile.append(std::string(kOneMB, 'd'));
   }
   auto readFile = std::make_shared<InMemoryReadFile>(fileData);
-  auto pool = memory::getDefaultMemoryPool();
+
   ParallelBufferedInput input(
       readFile,
-      *pool,
+      *pool_,
       MetricsLog::voidLog(),
       ioStats,
-      executor.get(),
+      executor_.get(),
       loadQuantum);
 
   // Avoid coalescing.
@@ -66,7 +75,7 @@ TEST(TestParallelBufferedInput, parallelLoad) {
     const auto& stream = streams[i];
 
     auto buffer =
-        std::make_shared<dwio::common::DataBuffer<char>>(*pool, region.length);
+        std::make_shared<dwio::common::DataBuffer<char>>(*pool_, region.length);
     stream->readFully(buffer->data(), region.length);
 
     // Verify data correctness.
@@ -84,9 +93,64 @@ TEST(TestParallelBufferedInput, parallelLoad) {
   ASSERT_EQ(0, ioStats->rawOverreadBytes());
 }
 
-class TestReadFile : public ReadFile {
+TEST_F(TestParallelBufferedInput, mergeRegions) {
+  auto ioStats = std::make_shared<IoStatistics>();
+  int32_t loadQuantum = kOneMB;
+
+  std::string fileData;
+  {
+    InMemoryWriteFile writeFile(&fileData);
+    writeFile.append(std::string(kOneMB, 'a'));
+    writeFile.append(std::string(2 * kOneMB, 'b'));
+    writeFile.append(std::string(2 * kOneMB, 'c'));
+    writeFile.append(std::string(kOneMB, 'd'));
+  }
+  auto readFile = std::make_shared<InMemoryReadFile>(fileData);
+
+  ParallelBufferedInput input(
+      readFile,
+      *pool_,
+      MetricsLog::voidLog(),
+      ioStats,
+      executor_.get(),
+      loadQuantum);
+
+  // First two regions will be merged by default kMergeDistance(1.5MB).
+  std::vector<Region> regions = {
+      {0, kOneKB}, {kOneMB, 10}, {4 * kOneMB, readFile->size() - (4 * kOneMB)}};
+  std::vector<std::unique_ptr<SeekableInputStream>> streams;
+  for (auto& region : regions) {
+    streams.push_back(input.enqueue(region));
+  }
+  int64_t sizeBeforeMerge = 0;
+  for (const auto& region : regions) {
+    sizeBeforeMerge += region.length;
+  }
+
+  input.load(LogType::TEST);
+
+  for (size_t i = 0; i < regions.size(); i++) {
+    const auto& region = regions[i];
+    const auto& stream = streams[i];
+
+    auto buffer =
+        std::make_shared<dwio::common::DataBuffer<char>>(*pool_, region.length);
+    stream->readFully(buffer->data(), region.length);
+
+    // Verify data correctness.
+    auto expect = readFile->pread(region.offset, region.length);
+    ASSERT_EQ(buffer->size(), expect.size());
+    ASSERT_EQ(buffer->data(), expect);
+  }
+
+  auto overreadBytes = ioStats->rawOverreadBytes();
+  ASSERT_EQ(sizeBeforeMerge + overreadBytes, ioStats->rawBytesRead());
+  ASSERT_EQ(overreadBytes, kOneMB - kOneKB);
+}
+
+class TestReadFile : public InMemoryReadFile {
  public:
-  explicit TestReadFile(std::string_view file) : file_(file) {}
+  explicit TestReadFile(std::string_view file) : InMemoryReadFile(file) {}
   std::string_view pread(uint64_t offset, uint64_t length, void* buf)
       const override {
     // Assume read latency is 1 millisecond per MB.
@@ -94,33 +158,11 @@ class TestReadFile : public ReadFile {
     std::this_thread::sleep_for(std::chrono::milliseconds(latency));
     return {static_cast<char*>(buf), length};
   }
-  bool shouldCoalesce() const override {
-    return false;
-  }
-  uint64_t size() const override {
-    return 1 << 30;
-  }
-  uint64_t memoryUsage() const override {
-    return 0;
-  }
-  std::string getName() const override {
-    return "dummy";
-  }
-  uint64_t getNaturalReadSize() const override {
-    return 1 << 20;
-  }
-
- private:
-  std::string_view file_;
 };
 
-TEST(TestParallelBufferedInput, simpleBenchmark) {
+TEST_F(TestParallelBufferedInput, simpleBenchmark) {
   std::string filename = "test-file";
-  const int32_t kOneMB = 1 * 1024 * 1024;
-  const int32_t threads = 4;
   int32_t loadQuantum = 8 * kOneMB;
-  auto executor = std::make_unique<folly::IOThreadPoolExecutor>(threads);
-  auto pool = memory::getDefaultMemoryPool();
   auto readFile = std::make_shared<TestReadFile>(filename);
 
   std::vector<Region> regions;
@@ -143,10 +185,10 @@ TEST(TestParallelBufferedInput, simpleBenchmark) {
   auto parallelFunc = [&]() {
     ParallelBufferedInput parallelInput(
         readFile,
-        *pool,
+        *pool_,
         MetricsLog::voidLog(),
         parallelStats,
-        executor.get(),
+        executor_.get(),
         loadQuantum);
     for (const auto& region : regions) {
       parallelInput.enqueue({region.offset, region.length});
@@ -154,7 +196,7 @@ TEST(TestParallelBufferedInput, simpleBenchmark) {
     parallelInput.load(LogType::TEST);
   };
   auto normalFunc = [&]() {
-    BufferedInput input(readFile, *pool, MetricsLog::voidLog(), stats.get());
+    BufferedInput input(readFile, *pool_, MetricsLog::voidLog(), stats.get());
     for (const auto& region : regions) {
       input.enqueue({region.offset, region.length});
     }
@@ -162,14 +204,14 @@ TEST(TestParallelBufferedInput, simpleBenchmark) {
   };
 
   // Execute 4 times test in alternating order, compare ioStats.
-  bool parallelFist = false;
+  bool parallelFirst = false;
   for (int32_t iter = 0; iter < 4; iter++) {
     if (iter % 2 == 0) {
-      parallelFist = true;
+      parallelFirst = true;
     } else {
-      parallelFist = false;
+      parallelFirst = false;
     }
-    if (parallelFist) {
+    if (parallelFirst) {
       parallelFunc();
       normalFunc();
     } else {
@@ -182,9 +224,5 @@ TEST(TestParallelBufferedInput, simpleBenchmark) {
     // Reset stats.
     stats = std::make_shared<IoStatistics>();
     parallelStats = std::make_shared<IoStatistics>();
-    ASSERT_EQ(stats->rawBytesRead(), 0);
-    ASSERT_EQ(stats->totalScanTime(), 0);
-    ASSERT_EQ(parallelStats->rawBytesRead(), 0);
-    ASSERT_EQ(parallelStats->totalScanTime(), 0);
   }
 }

@@ -27,8 +27,8 @@ add_executable(
   ReadFileInputStreamTests.cpp
   RetryTests.cpp
   TestBufferedInput.cpp
-  TestParallelBufferedInput.cpp
   TestColumnSelector.cpp
+  TestParallelBufferedInput.cpp
   TypeTests.cpp)
 add_test(velox_dwio_common_test velox_dwio_common_test)
 target_link_libraries(
