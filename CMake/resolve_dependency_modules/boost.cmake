@@ -24,9 +24,10 @@ string(
          "https://boostorg.jfrog.io/artifactory/main/release/"
          "${VELOX_BOOST_BUILD_VERSION}/source/boost_"
          "${VELOX_BOOST_UNDERSCORE_VERSION}.tar.gz")
-set_with_default(VELOX_BOOST_SOURCE_URL VELOX_BOOST_URL ${VELOX_BOOST_SOURCE_URL})
+set_with_default(VELOX_BOOST_SOURCE_URL VELOX_BOOST_URL
+                 ${VELOX_BOOST_SOURCE_URL})
 set_with_default(VELOX_BOOST_BUILD_SHA256_CHECKSUM VELOX_BOOST_SHA256
-    "SHA256=${VELOX_BOOST_BUILD_SHA256_CHECKSUM}")
+                 "SHA256=${VELOX_BOOST_BUILD_SHA256_CHECKSUM}")
 
 message(STATUS "Building boost from source")
 

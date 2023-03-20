@@ -19,9 +19,10 @@ set(VELOX_XSIMD_BUILD_SHA256_CHECKSUM
 set(VELOX_XSIMD_SOURCE_URL
     "https://github.com/xtensor-stack/xsimd/archive/refs/tags/${VELOX_XSIMD_VERSION}.tar.gz"
 )
-set_with_default(VELOX_XSIMD_SOURCE_URL VELOX_XSIMD_URL ${VELOX_XSIMD_SOURCE_URL})
+set_with_default(VELOX_XSIMD_SOURCE_URL VELOX_XSIMD_URL
+                 ${VELOX_XSIMD_SOURCE_URL})
 set_with_default(VELOX_XSIMD_BUILD_SHA256_CHECKSUM VELOX_XSIMD_SHA256
-    "SHA256=${VELOX_XSIMD_BUILD_SHA256_CHECKSUM}")
+                 "SHA256=${VELOX_XSIMD_BUILD_SHA256_CHECKSUM}")
 
 message(STATUS "Building xsimd from source")
 FetchContent_Declare(
