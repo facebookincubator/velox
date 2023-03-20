@@ -169,8 +169,8 @@ class S3ReadFile final : public ReadFile {
     while (status == Aws::Transfer::TransferStatus::NOT_STARTED ||
            status == Aws::Transfer::TransferStatus::IN_PROGRESS) {
       if (now > logAt) {
-        std::cout << "WARNING: request is taking a long time: "
-                  << (now - startTime) / 1000 << "s!\n";
+        VLOG(1) << "S3 Request is taking a long time: "
+                << (now - startTime) / 1000 << "s!\n";
         count++;
         logAt += count * 5000; // backoff for next warning
       }
