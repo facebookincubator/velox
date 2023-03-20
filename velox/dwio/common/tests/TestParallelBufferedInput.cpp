@@ -24,7 +24,7 @@ using namespace facebook::velox::dwio::common;
 
 class TestParallelBufferedInput : public testing::Test {
  protected:
-  void SetUp() {
+  void SetUp() override {
     executor_ = std::make_unique<folly::IOThreadPoolExecutor>(kThreads);
     pool_ = memory::getDefaultMemoryPool();
   }
@@ -60,9 +60,9 @@ TEST_F(TestParallelBufferedInput, parallelLoad) {
 
   // Avoid coalescing.
   std::vector<Region> regions = {
-      {0, kOneKB},
-      {2 * kOneMB, 10},
-      {4 * kOneMB, readFile->size() - (4 * kOneMB)}};
+      {0, static_cast<uint64_t>(kOneKB)},
+      {static_cast<uint64_t>(2 * kOneMB), 10},
+      {static_cast<uint64_t>(4 * kOneMB), readFile->size() - (4 * kOneMB)}};
   std::vector<std::unique_ptr<SeekableInputStream>> streams;
   for (auto& region : regions) {
     streams.push_back(input.enqueue(region));
@@ -117,7 +117,9 @@ TEST_F(TestParallelBufferedInput, mergeRegions) {
 
   // First two regions will be merged by default kMergeDistance(1.5MB).
   std::vector<Region> regions = {
-      {0, kOneKB}, {kOneMB, 10}, {4 * kOneMB, readFile->size() - (4 * kOneMB)}};
+      {0, static_cast<uint64_t>(kOneKB)},
+      {static_cast<uint64_t>(kOneMB), 10},
+      {static_cast<uint64_t>(4 * kOneMB), readFile->size() - (4 * kOneMB)}};
   std::vector<std::unique_ptr<SeekableInputStream>> streams;
   for (auto& region : regions) {
     streams.push_back(input.enqueue(region));
