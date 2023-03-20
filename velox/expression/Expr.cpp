@@ -1373,7 +1373,7 @@ void Expr::evalAllImpl(
   }
 
   if (!tryPeelArgs ||
-      !applyFunctionWithPeeling(rows, remainingRows.rows(), context, result)) {
+      !applyFunctionWithPeeling(remainingRows.rows(), context, result)) {
     applyFunction(remainingRows.rows(), context, result);
   }
 
@@ -1399,7 +1399,6 @@ void setPeeledArg(
 } // namespace
 
 bool Expr::applyFunctionWithPeeling(
-    const SelectivityVector& rows,
     const SelectivityVector& applyRows,
     EvalCtx& context,
     VectorPtr& result) {
@@ -1493,21 +1492,21 @@ bool Expr::applyFunctionWithPeeling(
   LocalDecodedVector localDecoded(context);
   if (numConstant == numArgs) {
     // All the fields are constant across the rows of interest.
-    newRows = singleRow(newRowsHolder, rows.begin());
+    newRows = singleRow(newRowsHolder, applyRows.begin());
 
     context.saveAndReset(saver, applyRows);
-    context.setConstantWrap(rows.begin());
+    context.setConstantWrap(applyRows.begin());
   } else {
     auto decoded = localDecoded.get();
-    decoded->makeIndices(*firstWrapper, rows, numLevels);
+    decoded->makeIndices(*firstWrapper, applyRows, numLevels);
     newRows = translateToInnerRows(applyRows, *decoded, newRowsHolder);
     context.saveAndReset(saver, applyRows);
-    setDictionaryWrapping(*decoded, rows, *firstWrapper, context);
+    setDictionaryWrapping(*decoded, applyRows, *firstWrapper, context);
 
     // 'newRows' comes from the set of row numbers in the base vector. These
     // numbers may be larger than rows.end(). Hence, we need to resize constant
     // inputs.
-    if (newRows->end() > rows.end() && numConstant) {
+    if (newRows->end() > applyRows.end() && numConstant) {
       for (int i = 0; i < constantArgs.size(); ++i) {
         if (!constantArgs.empty() && constantArgs[i]) {
           inputValues_[i] =

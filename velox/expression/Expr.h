@@ -334,7 +334,6 @@ class Expr {
   // cardinality. Returns true if the function was called. Returns
   // false if no encodings could be peeled off.
   bool applyFunctionWithPeeling(
-      const SelectivityVector& rows,
       const SelectivityVector& applyRows,
       EvalCtx& context,
       VectorPtr& result);
