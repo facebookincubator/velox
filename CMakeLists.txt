@@ -354,6 +354,12 @@ resolve_dependency(glog)
 set_source(fmt)
 resolve_dependency(fmt)
 
+if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR}
+                                              MATCHES "x86_64"))
+  set_source(qpl)
+  resolve_dependency(qpl 1.1.0 COMPONENTS shared)
+endif()
+
 find_library(EVENT event)
 
 find_library(DOUBLE_CONVERSION double-conversion)
@@ -366,10 +372,6 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(LZO lzo2)
   find_library(ZSTD zstd)
   find_library(SNAPPY snappy)
-  if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR}
-                                                 MATCHES "x86_64"))
-    find_library(QPL qpl)
-  endif()
 endif()
 
 find_library(RE2 re2 REQUIRED)

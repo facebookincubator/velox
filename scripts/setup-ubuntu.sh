@@ -76,10 +76,6 @@ function prompt {
     done
   ) 2> /dev/null
 }
-function install_qpl {
-  github_checkout intel/qpl v1.1.0 --recursive
-  cmake_install -DCMAKE_BUILD_TYPE=Release -DQPL_BUILD_TESTS=OFF
-}
 
 function install_fmt {
   github_checkout fmtlib/fmt 8.0.1
@@ -102,9 +98,6 @@ function install_velox_deps {
   run_and_time install_fmt
   run_and_time install_folly
   run_and_time install_conda
-  if [ "$MACHINE" = "x86_64" ]; then
-    run_and_time install_qpl
-  fi
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

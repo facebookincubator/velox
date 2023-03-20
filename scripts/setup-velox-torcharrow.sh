@@ -82,11 +82,6 @@ wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.69.0/source/
 wget_and_untar https://github.com/facebook/folly/archive/v2022.11.14.00.tar.gz folly &
 wget_and_untar https://github.com/fmtlib/fmt/archive/refs/tags/8.0.1.tar.gz fmt &
 
-MACHINE=$(uname -m)
-if [ "$MACHINE" = "x86_64" ]; then
-  wget_and_untar https://github.com/intel/qpl/archive/refs/tags/v1.1.0.tar.gz qpl &
-fi
-
 wait
 
 (
@@ -105,6 +100,3 @@ wait
 cmake_install gflags -DBUILD_SHARED_LIBS=ON
 cmake_install fmt -DFMT_TEST=OFF
 cmake_install folly
-if [ "$MACHINE" = "x86_64" ]; then
-  cmake_install qpl -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS='-O2' -DQPL_BUILD_TESTS=OFF
-fi

@@ -69,11 +69,6 @@ wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy &
 wget_and_untar https://github.com/fmtlib/fmt/archive/8.0.1.tar.gz fmt &
 wget_and_untar https://github.com/facebook/folly/archive/v2022.11.14.00.tar.gz folly &
 
-MACHINE=$(uname -m)
-if [ "$MACHINE" = "x86_64" ]; then
-  wget_and_untar https://github.com/intel/qpl/archive/refs/tags/v1.1.0.tar.gz qpl &
-fi
-
 wait  # For cmake and source downloads to complete.
 
 # Build & install.
@@ -95,11 +90,6 @@ cmake_install_deps glog -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX:PATH=/usr
 cmake_install_deps snappy -DSNAPPY_BUILD_TESTS=OFF
 cmake_install_deps fmt -DFMT_TEST=OFF
 cmake_install_deps folly
-
-if [ "$MACHINE" = "x86_64" ]; then
-  cmake_install_deps qpl -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS='-O2' -DQPL_BUILD_TESTS=OFF
-fi
-
 
 dnf clean all
 

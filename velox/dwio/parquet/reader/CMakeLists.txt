@@ -15,7 +15,7 @@
 if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES
                                                "x86_64"))
   set(CompressionQpl "CompressionQpl.cpp")
-  set(CompressionQplDependency "${QPL}")
+  set(CompressionQplDependency "qpl")
 else()
   set(CompressionQpl "")
   set(CompressionQplDependency "")
