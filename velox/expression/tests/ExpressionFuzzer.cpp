@@ -954,6 +954,7 @@ void ExpressionFuzzer::reset() {
   VELOX_CHECK(inputRowNames_.empty());
   typeToColumnNames_.clear();
   expressionBank_.reset();
+  hasCoalesce = false;
 }
 
 void ExpressionFuzzer::logStats() {
@@ -1133,9 +1134,11 @@ void ExpressionFuzzer::go() {
               .result->childAt(0);
 
       // Re-evaluate the original expression on rows that didn't produce an
-      // error (i.e. returned non-NULL results when evaluated with TRY).
+      // error (i.e. returned non-NULL results when evaluated with TRY). Do not
+      // re-evaluate if the expression has Coalesce because its result may have
+      // no null even if there are exceptions from Coalesce's arguments.
       BufferPtr noErrorIndices = extractNonNullIndices(tryResult);
-      if (noErrorIndices != nullptr) {
+      if (!hasCoalesce && noErrorIndices != nullptr) {
         auto noErrorRowVector = wrapChildren(noErrorIndices, rowVector);
 
         LOG(INFO) << "Retrying original expression on "

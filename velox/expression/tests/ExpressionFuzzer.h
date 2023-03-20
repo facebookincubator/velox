@@ -237,6 +237,9 @@ class ExpressionFuzzer {
   /// Should be called whenever a function is selected by the fuzzer.
   void markSelected(const std::string& funcName) {
     exprNameToStats_[funcName].numTimesSelected++;
+    if (funcName == "coalesce") {
+      hasCoalesce = true;
+    }
   }
 
   /// Called at the end of a successful fuzzer run. It logs the top and bottom
@@ -313,6 +316,10 @@ class ExpressionFuzzer {
 
   std::shared_ptr<ExprStatsListener> statListener_;
   std::unordered_map<std::string, ExprUsageStats> exprNameToStats_;
+
+  /// The randomly-generated expression of the current iteration has Colesce in
+  /// it.
+  bool hasCoalesce{false};
 };
 
 } // namespace facebook::velox::test
