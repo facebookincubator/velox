@@ -354,8 +354,8 @@ resolve_dependency(glog)
 set_source(fmt)
 resolve_dependency(fmt)
 
-if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR}
-                                              MATCHES "x86_64"))
+if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES
+                                               "x86_64"))
   set_source(qpl)
   resolve_dependency(qpl 1.1.0 COMPONENTS shared)
 endif()
