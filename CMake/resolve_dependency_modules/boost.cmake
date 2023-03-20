@@ -13,21 +13,20 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-if(DEFINED ENV{VELOX_BOOST_URL})
-  set(BOOST_SOURCE_URL "$ENV{VELOX_BOOST_URL}")
-else()
-  # We need to use boost > 1.70 to build it with CMake
-  set(VELOX_BOOST_BUILD_VERSION 1.80.0)
-  string(REPLACE "." "_" VELOX_BOOST_UNDERSCORE_VERSION
-                 ${VELOX_BOOST_BUILD_VERSION})
-  string(
-    CONCAT BOOST_SOURCE_URL
-           "https://boostorg.jfrog.io/artifactory/main/release/"
-           "${VELOX_BOOST_BUILD_VERSION}/source/boost_"
-           "${VELOX_BOOST_UNDERSCORE_VERSION}.tar.gz")
-  set(VELOX_BOOST_BUILD_SHA256_CHECKSUM
-      4b2136f98bdd1f5857f1c3dea9ac2018effe65286cf251534b6ae20cc45e1847)
-endif()
+# We need to use boost > 1.70 to build it with CMake
+set(VELOX_BOOST_BUILD_VERSION 1.80.0)
+string(REPLACE "." "_" VELOX_BOOST_UNDERSCORE_VERSION
+               ${VELOX_BOOST_BUILD_VERSION})
+set(VELOX_BOOST_BUILD_SHA256_CHECKSUM
+    4b2136f98bdd1f5857f1c3dea9ac2018effe65286cf251534b6ae20cc45e1847)
+string(
+  CONCAT VELOX_BOOST_SOURCE_URL
+         "https://boostorg.jfrog.io/artifactory/main/release/"
+         "${VELOX_BOOST_BUILD_VERSION}/source/boost_"
+         "${VELOX_BOOST_UNDERSCORE_VERSION}.tar.gz")
+set_with_default(VELOX_BOOST_SOURCE_URL VELOX_BOOST_URL ${VELOX_BOOST_SOURCE_URL})
+set_with_default(VELOX_BOOST_BUILD_SHA256_CHECKSUM VELOX_BOOST_SHA256
+    "SHA256=${VELOX_BOOST_BUILD_SHA256_CHECKSUM}")
 
 message(STATUS "Building boost from source")
 
@@ -43,9 +42,8 @@ set(FETCHCONTENT_QUIET OFF)
 
 FetchContent_Declare(
   Boost
-  GIT_REPOSITORY https://github.com/boostorg/boost.git
-  GIT_TAG boost-1.80.0
-  GIT_SHALLOW TRUE)
+  URL ${VELOX_BOOST_SOURCE_URL}
+  URL_HASH ${VELOX_BOOST_BUILD_SHA256_CHECKSUM})
 FetchContent_Populate(Boost)
 
 # Boost cmake uses the global option
