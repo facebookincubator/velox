@@ -25,7 +25,7 @@ template <typename T>
 struct SIMDJsonArrayContainsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
+  FOLLY_ALWAYS_INLINE bool
   call(bool& result, const arg_type<Json>& json, const TInput& value) {
     ParserContext ctx(json.data(), json.size());
     std::string jsonpath = "";
@@ -34,11 +34,11 @@ struct SIMDJsonArrayContainsFunction {
     try {
       ctx.parseDocument();
     } catch (simdjson::simdjson_error& e) {
-      throw e;
+      return false;
     }
 
     if (ctx.jsonDoc.type() != simdjson::ondemand::json_type::array) {
-      return;
+      return false;
     }
 
     try {
@@ -80,8 +80,9 @@ struct SIMDJsonArrayContainsFunction {
         }
       }
     } catch (simdjson::simdjson_error& e) {
-      throw e;
+      return false;
     }
+    return true;
   }
 };
 

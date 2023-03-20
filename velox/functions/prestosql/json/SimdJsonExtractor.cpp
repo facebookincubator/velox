@@ -136,7 +136,9 @@ std::optional<std::string> SimdJsonExtractor::extractScalar(
   try {
     ctx.parseDocument();
   } catch (simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+    return std::nullopt;
   }
 
   for (auto& token : tokens_) {
@@ -164,7 +166,9 @@ std::optional<std::string> SimdJsonExtractor::extractScalar(
         return std::nullopt;
       }
     } catch (simdjson::simdjson_error& e) {
-      throw e;
+      // simdjson might throw a conversion error while parsing the input json.
+      // In this case, let it return null. follow original version
+      return std::nullopt;
     }
   }
   std::string rlt_s{rlt_tmp};
@@ -177,7 +181,9 @@ std::optional<std::string> SimdJsonExtractor::extract(const std::string& json) {
   try {
     ctx.parseElement();
   } catch (simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+    return std::nullopt;
   }
 
   std::optional<std::string> rlt;
@@ -220,7 +226,9 @@ std::optional<std::string> SimdJsonExtractor::extractFromObject(
       rlt_string = std::optional<std::string>(std::string(tmp));
     }
   } catch (simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+    return std::nullopt;
   }
   return rlt_string;
 }
@@ -288,7 +296,9 @@ std::optional<std::string> SimdJsonExtractor::extractFromArray(
         return std::string(tmp);
       }
     } catch (simdjson::simdjson_error& e) {
-      throw e;
+      // simdjson might throw a conversion error while parsing the input json.
+      // In this case, let it return null. follow original version
+      return std::nullopt;
     }
     return rlt_string;
   }
@@ -301,7 +311,9 @@ std::optional<std::string> SimdJsonExtractor::extractOndemand(
   try {
     ctx.parseDocument();
   } catch (simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+    return std::nullopt;
   }
 
   std::optional<std::string> rlt;
@@ -326,7 +338,9 @@ std::optional<std::string> SimdJsonExtractor::extractKeysOndemand(
   try {
     ctx.parseDocument();
   } catch (simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+    return std::nullopt;
   }
   for (auto& token : tokens_) {
     jsonpath = jsonpath + "/" + token;
@@ -353,7 +367,9 @@ std::optional<std::string> SimdJsonExtractor::extractKeysOndemand(
     rlt += "]";
     return rlt;
   } catch (simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+    return std::nullopt;
   }
   return std::nullopt;
 }
@@ -387,7 +403,9 @@ std::optional<std::string> SimdJsonExtractor::extractFromObjectOndemand(
       rlt_string = std::optional<std::string>(std::string(tmp));
     }
   } catch (simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+    return std::nullopt;
   }
   return rlt_string;
 }
@@ -460,7 +478,9 @@ std::optional<std::string> SimdJsonExtractor::extractFromArrayOndemand(
         return std::string(tmp);
       }
     } catch (simdjson::simdjson_error& e) {
-      throw e;
+      // simdjson might throw a conversion error while parsing the input json.
+      // In this case, let it return null. follow original version
+      return std::nullopt;
     }
     return rlt_string;
   }
@@ -479,7 +499,8 @@ std::optional<std::string> SimdJsonExtract(
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extract(json);
   } catch (const simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
   }
   return std::nullopt;
 }
@@ -495,7 +516,8 @@ std::optional<std::string> SimdJsonExtractOndemand(
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extractOndemand(json);
   } catch (const simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
   }
   return std::nullopt;
 }
@@ -511,7 +533,8 @@ std::optional<std::string> SimdJsonExtractScalar(
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extractScalar(json);
   } catch (const simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
   }
   return std::nullopt;
 }
@@ -527,7 +550,8 @@ std::optional<std::string> SimdJsonKeysWithJsonPathOndemand(
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extractKeysOndemand(json);
   } catch (const simdjson::simdjson_error& e) {
-    throw e;
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
   }
   return std::nullopt;
 }

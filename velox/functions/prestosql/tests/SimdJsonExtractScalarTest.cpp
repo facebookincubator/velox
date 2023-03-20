@@ -23,6 +23,30 @@ namespace facebook::velox::functions::prestosql {
 
 namespace {
 
+const std::string kTestJson = std::string("{\n") + "    \"store\": {\n" +
+    "        \"book\": [\n" + "            {\n" +
+    "                \"category\": \"reference\",\n" +
+    "                \"author\": \"Nigel Rees\",\n" +
+    "                \"title\": \"Sayings of the Century\",\n" +
+    "                \"price\": 8.95\n" + "            },\n" +
+    "            {\n" + "                \"category\": \"fiction\",\n" +
+    "                \"author\": \"Evelyn Waugh\",\n" +
+    "                \"title\": \"Sword of Honour\",\n" +
+    "                \"price\": 12.99\n" + "            },\n" +
+    "            {\n" + "                \"category\": \"fiction\",\n" +
+    "                \"author\": \"Herman Melville\",\n" +
+    "                \"title\": \"Moby Dick\",\n" +
+    "                \"isbn\": \"0-553-21311-3\",\n" +
+    "                \"price\": 8.99\n" + "            },\n" +
+    "            {\n" + "                \"category\": \"fiction\",\n" +
+    "                \"author\": \"J. R. R. Tolkien\",\n" +
+    "                \"title\": \"The Lord of the Rings\",\n" +
+    "                \"isbn\": \"0-395-19395-8\",\n" +
+    "                \"price\": 22.99\n" + "            }\n" + "        ],\n" +
+    "        \"bicycle\": {\n" + "            \"color\": \"red\",\n" +
+    "            \"price\": 19.95\n" + "        }\n" + "    },\n" +
+    "    \"expensive\": 10\n" + "}";
+
 class SIMDJsonExtractScalarTest : public functions::test::FunctionBaseTest {
  public:
   std::optional<std::string> json_extract_scalar(
@@ -54,15 +78,19 @@ TEST_F(SIMDJsonExtractScalarTest, simple) {
   EXPECT_EQ(json_extract_scalar(R"(123456)", "$"), "123456");
   EXPECT_EQ(json_extract_scalar(R"("hello")", "$"), "hello");
   EXPECT_EQ(json_extract_scalar(R"(1.1)", "$"), "1.1");
+  EXPECT_EQ(json_extract_scalar(R"("")", "$"), "");
   EXPECT_EQ(json_extract_scalar(R"(true)", "$"), "true");
 
   // Simple lists.
   EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[0]"), "1");
   EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[1]"), "2");
+  EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[2]"), std::nullopt);
+  EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[999]"), std::nullopt);
 
   // Simple maps.
   EXPECT_EQ(json_extract_scalar(R"({"k1":"v1"})", "$.k1"), "v1");
-
+  EXPECT_EQ(json_extract_scalar(R"({"k1":"v1"})", "$.k2"), std::nullopt);
+  EXPECT_EQ(json_extract_scalar(R"({"k1":"v1"})", "$.k1.k3"), std::nullopt);
   EXPECT_EQ(json_extract_scalar(R"({"k1":[0,1,2]})", "$.k1"), std::nullopt);
   EXPECT_EQ(json_extract_scalar(R"({"k1":""})", "$.k1"), "");
 
@@ -76,18 +104,6 @@ TEST_F(SIMDJsonExtractScalarTest, simple) {
       json_extract_scalar(
           R"([{"k1":[{"k2": ["v1", "v2"]}]}])", "$[0].k1[0].k2[1]"),
       "v2");
-  VELOX_ASSERT_THROW(
-      json_extract_scalar(R"([1,2])", "$[2]"),
-      "Attempted to access an element of a JSON array that is beyond its length.");
-  VELOX_ASSERT_THROW(
-      json_extract_scalar(R"([1,2])", "$[999]"),
-      "Attempted to access an element of a JSON array that is beyond its length.");
-  VELOX_ASSERT_THROW(
-      json_extract_scalar(R"({"k1":"v1"})", "$.k2"),
-      "The JSON field referenced does not exist in this object.");
-  VELOX_ASSERT_THROW(
-      json_extract_scalar(R"({"k1":"v1"})", "$.k1.k3"),
-      "Invalid JSON pointer syntax.");
 }
 
 TEST_F(SIMDJsonExtractScalarTest, jsonType) {
@@ -150,34 +166,55 @@ TEST_F(SIMDJsonExtractScalarTest, utf8) {
 }
 
 TEST_F(SIMDJsonExtractScalarTest, invalidPath) {
-  assertUserError(
-      [&]() { json_extract_scalar(R"([0,1,2])", ""); }, "Invalid JSON path: ");
-  assertUserError(
-      [&]() { json_extract_scalar(R"([0,1,2])", "$[]"); },
-      "Invalid JSON path: $[]");
-  assertUserError(
-      [&]() { json_extract_scalar(R"([0,1,2])", "$[-1]"); },
-      "Invalid JSON path: $[-1]");
-  assertUserError(
-      [&]() { json_extract_scalar(R"({"k1":"v1"})", "$k1"); },
-      "Invalid JSON path: $k1");
-  assertUserError(
-      [&]() { json_extract_scalar(R"({"k1":"v1"})", "$.k1."); },
-      "Invalid JSON path: $.k1.");
-  assertUserError(
-      [&]() { json_extract_scalar(R"({"k1":"v1"})", "$.k1]"); },
-      "Invalid JSON path: $.k1]");
-  assertUserError(
-      [&]() { json_extract_scalar(R"({"k1":"v1")", "$.k1]"); },
-      "Invalid JSON path: $.k1]");
+  EXPECT_THROW(json_extract_scalar(R"([0,1,2])", ""), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"([0,1,2])", "$[]"), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"([0,1,2])", "$[-1]"), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"({"k1":"v1"})", "$k1"), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"({"k1":"v1"})", "$.k1."), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"({"k1":"v1"})", "$.k1]"), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"({"k1":"v1)", "$.k1]"), VeloxUserError);
 }
 
 TEST_F(SIMDJsonExtractScalarTest, overflow) {
+  // simdjson process the input as a string
   EXPECT_EQ(
       json_extract_scalar(
           R"(184467440737095516151844674407370955161518446744073709551615)",
           "$"),
       "184467440737095516151844674407370955161518446744073709551615");
+}
+
+TEST_F(SIMDJsonExtractScalarTest, jsonExtractScalar) {
+  // simple json path
+  EXPECT_EQ(
+      json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$"), std::nullopt);
+  EXPECT_EQ(
+      json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$.x"),
+      std::nullopt);
+  EXPECT_EQ(json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$.x.a"), "1");
+  EXPECT_EQ(
+      json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$.x.c"),
+      std::nullopt);
+  EXPECT_EQ(
+      json_extract_scalar(R"({"x": {"a" : 1, "b" : [2, 3]}})", "$.x.b[1]"),
+      "3");
+  EXPECT_EQ(json_extract_scalar(R"([1,2,3])", "$[1]"), "2");
+  EXPECT_EQ(json_extract_scalar(R"([1,null,3])", "$[1]"), "null");
+
+  // complex json path
+  EXPECT_EQ(
+      json_extract_scalar(kTestJson, "$.store.book[*].isbn"), std::nullopt);
+  EXPECT_EQ(
+      json_extract_scalar(kTestJson, "$.store.book[1].author"), "Evelyn Waugh");
+
+  // invalid json
+  EXPECT_EQ(json_extract_scalar(R"(INVALID_JSON)", "$"), std::nullopt);
+  // invalid JsonPath
+  assertUserError(
+      [&]() { json_extract_scalar(R"({"":""})", ""); }, "Invalid JSON path: ");
+  assertUserError(
+      [&]() { json_extract_scalar(R"([1,2,3])", "$...invalid"); },
+      "Invalid JSON path: $...invalid");
 }
 
 } // namespace

@@ -21,32 +21,6 @@
 namespace facebook::velox::functions::prestosql {
 namespace {
 
-const std::string kTestJson = std::string("{\n") + "    \"store\": {\n" +
-    "        \"book\": [\n" + "            {\n" +
-    "                \"category\": \"reference\",\n" +
-    "                \"author\": \"Nigel Rees\",\n" +
-    "                \"title\": \"Sayings of the Century\",\n" +
-    "                \"price\": 8.95\n" + "            },\n" +
-    "            {\n" + "                \"category\": \"fiction\",\n" +
-    "                \"author\": \"Evelyn Waugh\",\n" +
-    "                \"title\": \"Sword of Honour\",\n" +
-    "                \"price\": 12.99\n" + "            },\n" +
-    "            {\n" + "                \"category\": \"fiction\",\n" +
-    "                \"author\": \"Herman Melville\",\n" +
-    "                \"title\": \"Moby Dick\",\n" +
-    "                \"isbn\": \"0-553-21311-3\",\n" +
-    "                \"price\": 8.99\n" + "            },\n" +
-    "            {\n" + "                \"category\": \"fiction\",\n" +
-    "                \"author\": \"J. R. R. Tolkien\",\n" +
-    "                \"title\": \"The Lord of the Rings\",\n" +
-    "                \"isbn\": \"0-395-19395-8\",\n" +
-    "                \"price\": 22.99\n" + "            }\n" + "        ],\n" +
-    "        \"bicycle\": {\n" + "            \"color\": \"red\",\n" +
-    "            \"price\": 19.95\n" + "        }\n" + "    },\n" +
-    "    \"expensive\": 10\n" + "}";
-
-}
-
 class SIMDJsonFunctionsTest : public functions::test::FunctionBaseTest {
  public:
   template <typename T>
@@ -58,13 +32,6 @@ class SIMDJsonFunctionsTest : public functions::test::FunctionBaseTest {
 
   std::optional<std::string> json_parse(std::optional<std::string> json) {
     return evaluateOnce<std::string>("simd_json_parse(c0)", json);
-  }
-
-  std::optional<std::string> json_extract_scalar(
-      std::optional<std::string> json,
-      std::optional<std::string> path) {
-    return evaluateOnce<std::string>(
-        "simd_json_extract_scalar(c0, c1)", json, path);
   }
 
   std::optional<int64_t> json_valid(std::optional<std::string> json) {
@@ -92,13 +59,15 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsBool) {
   EXPECT_EQ(
       json_array_contains<bool>(R"(["hello", "presto", "world"])", false),
       false);
-  EXPECT_EQ(json_array_contains<bool>(R"(1)", true), false);
+  EXPECT_EQ(json_array_contains<bool>(R"(1)", true), std::nullopt);
   EXPECT_EQ(
-      json_array_contains<bool>(R"("thefoxjumpedoverthefence")", false), false);
-  EXPECT_EQ(json_array_contains<bool>(R"("")", false), false);
-  EXPECT_EQ(json_array_contains<bool>(R"(true)", true), false);
+      json_array_contains<bool>(R"("thefoxjumpedoverthefence")", false),
+      std::nullopt);
+  EXPECT_EQ(json_array_contains<bool>(R"("")", false), std::nullopt);
+  EXPECT_EQ(json_array_contains<bool>(R"(true)", true), std::nullopt);
   EXPECT_EQ(
-      json_array_contains<bool>(R"({"k1":[0,1,2], "k2":"v1"})", true), false);
+      json_array_contains<bool>(R"({"k1":[0,1,2], "k2":"v1"})", true),
+      std::nullopt);
 
   EXPECT_EQ(json_array_contains<bool>(R"([true, false])", true), true);
   EXPECT_EQ(json_array_contains<bool>(R"([true, true])", false), false);
@@ -150,13 +119,15 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsLong) {
       false);
   EXPECT_EQ(
       json_array_contains<int64_t>(R"([false, false, false])", 17), false);
-  EXPECT_EQ(json_array_contains<int64_t>(R"(1)", 1), false);
+  EXPECT_EQ(json_array_contains<int64_t>(R"(1)", 1), std::nullopt);
   EXPECT_EQ(
-      json_array_contains<int64_t>(R"("thefoxjumpedoverthefence")", 1), false);
-  EXPECT_EQ(json_array_contains<int64_t>(R"("")", 1), false);
-  EXPECT_EQ(json_array_contains<int64_t>(R"(true)", 1), false);
+      json_array_contains<int64_t>(R"("thefoxjumpedoverthefence")", 1),
+      std::nullopt);
+  EXPECT_EQ(json_array_contains<int64_t>(R"("")", 1), std::nullopt);
+  EXPECT_EQ(json_array_contains<int64_t>(R"(true)", 1), std::nullopt);
   EXPECT_EQ(
-      json_array_contains<int64_t>(R"({"k1":[0,1,2], "k2":"v1"})", 1), false);
+      json_array_contains<int64_t>(R"({"k1":[0,1,2], "k2":"v1"})", 1),
+      std::nullopt);
 
   EXPECT_EQ(json_array_contains<int64_t>(R"([1, 2, 3])", 1), true);
   EXPECT_EQ(json_array_contains<int64_t>(R"([1, 2, 3])", 4), false);
@@ -187,10 +158,13 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsLong) {
   EXPECT_EQ(
       json_array_contains<int64_t>(R"([2, 4, {"a": [8, 9]}, [], [5], 6])", 6),
       true);
-  // throw en error and result=false but return std::nullopt
-  VELOX_ASSERT_THROW(
+
+  // Presto return false in this case, but simdjson throw an error because
+  // "92233720368547758071" exceeds the range of long type, so return
+  // std::nullopt
+  EXPECT_EQ(
       json_array_contains<int64_t>(R"([92233720368547758071])", -9),
-      "The JSON element does not have the requested type.");
+      std::nullopt);
   EXPECT_EQ(json_array_contains<int64_t>(std::nullopt, 1), std::nullopt);
   EXPECT_EQ(
       json_array_contains<int64_t>(std::nullopt, std::nullopt), std::nullopt);
@@ -207,13 +181,15 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsDouble) {
       false);
   EXPECT_EQ(
       json_array_contains<double>(R"([false, false, false])", 2.3), false);
-  EXPECT_EQ(json_array_contains<double>(R"(1)", 2.3), false);
+  EXPECT_EQ(json_array_contains<double>(R"(1)", 2.3), std::nullopt);
   EXPECT_EQ(
-      json_array_contains<double>(R"("thefoxjumpedoverthefence")", 2.3), false);
-  EXPECT_EQ(json_array_contains<double>(R"("")", 2.3), false);
-  EXPECT_EQ(json_array_contains<double>(R"(true)", 2.3), false);
+      json_array_contains<double>(R"("thefoxjumpedoverthefence")", 2.3),
+      std::nullopt);
+  EXPECT_EQ(json_array_contains<double>(R"("")", 2.3), std::nullopt);
+  EXPECT_EQ(json_array_contains<double>(R"(true)", 2.3), std::nullopt);
   EXPECT_EQ(
-      json_array_contains<double>(R"({"k1":[0,1,2], "k2":"v1"})", 2.3), false);
+      json_array_contains<double>(R"({"k1":[0,1,2], "k2":"v1"})", 2.3),
+      std::nullopt);
 
   EXPECT_EQ(json_array_contains<double>(R"([1.2, 2.3, 3.4])", 2.3), true);
   EXPECT_EQ(json_array_contains<double>(R"([1.2, 2.3, 3.4])", 2.4), false);
@@ -246,9 +222,9 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsDouble) {
       json_array_contains<double>(
           R"([2, 4, {"a": [8, 9]}, [], [5], 6.1])", 6.1),
       true);
-  VELOX_ASSERT_THROW(
-      json_array_contains<double>(R"([9.6E400])", 4.2),
-      "Problem while parsing a number");
+  // Presto return false in this case, but simdjson throw an error because
+  // "9.6E400" can't be parsed, so return std::nullopt
+  EXPECT_EQ(json_array_contains<double>(R"([9.6E400])", 4.2), std::nullopt);
   EXPECT_EQ(json_array_contains<double>(std::nullopt, 1.5), std::nullopt);
   EXPECT_EQ(
       json_array_contains<double>(std::nullopt, std::nullopt), std::nullopt);
@@ -264,15 +240,15 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsString) {
       json_array_contains<std::string>(R"([1.2, 2.3, 3.4])", "2.3"), false);
   EXPECT_EQ(
       json_array_contains<std::string>(R"([true, false])", R"("true")"), false);
-  EXPECT_EQ(json_array_contains<std::string>(R"(1)", "1"), false);
+  EXPECT_EQ(json_array_contains<std::string>(R"(1)", "1"), std::nullopt);
   EXPECT_EQ(
       json_array_contains<std::string>(R"("thefoxjumpedoverthefence")", "1"),
-      false);
-  EXPECT_EQ(json_array_contains<std::string>(R"("")", "1"), false);
-  EXPECT_EQ(json_array_contains<std::string>(R"(true)", "1"), false);
+      std::nullopt);
+  EXPECT_EQ(json_array_contains<std::string>(R"("")", "1"), std::nullopt);
+  EXPECT_EQ(json_array_contains<std::string>(R"(true)", "1"), std::nullopt);
   EXPECT_EQ(
       json_array_contains<std::string>(R"({"k1":[0,1,2], "k2":"v1"})", "1"),
-      false);
+      std::nullopt);
 
   EXPECT_EQ(
       json_array_contains<std::string>(
@@ -334,75 +310,51 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsString) {
   EXPECT_EQ(
       json_array_contains<std::string>(std::nullopt, std::nullopt),
       std::nullopt);
-  EXPECT_EQ(json_array_contains<std::string>(R"(123)", "2.5"), false);
-  VELOX_ASSERT_THROW(
-      json_array_contains<std::string>("", "x"), "Empty: no JSON found");
-  VELOX_ASSERT_THROW(
-      json_array_contains<std::string>(R"([1,0,])", "true"),
-      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
-  VELOX_ASSERT_THROW(
-      json_array_contains<std::string>(R"([1,,0])", "true"),
-      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
+  EXPECT_EQ(
+      json_array_contains<std::string>(R"([""])", std::nullopt), std::nullopt);
+  EXPECT_EQ(json_array_contains<std::string>("", "x"), std::nullopt);
+  EXPECT_EQ(json_array_contains<std::string>(R"(123)", "2.5"), std::nullopt);
+  EXPECT_EQ(json_array_contains<std::string>(R"([)", "8"), std::nullopt);
+  EXPECT_EQ(
+      json_array_contains<std::string>(R"([1,0,])", "true"), std::nullopt);
+  EXPECT_EQ(
+      json_array_contains<std::string>(R"([1,,0])", "true"), std::nullopt);
 }
 
 TEST_F(SIMDJsonFunctionsTest, jsonParse) {
-  // Presto test case
-  EXPECT_EQ(json_parse(R"([1, 2, 3])"), "[1,2,3]");
-  EXPECT_EQ(json_parse(R"("abc")"), "\"abc\"");
-  EXPECT_EQ(json_parse(R"(42)"), "42");
+  // JsonFunctionsTest->jsonParse test case
+  EXPECT_EQ(json_parse(std::nullopt), std::nullopt);
   EXPECT_EQ(json_parse(R"(true)"), "true");
   EXPECT_EQ(json_parse(R"(null)"), "null");
-
-  // invalid json parse
-  VELOX_ASSERT_THROW(
-      json_parse(R"(not_json)"),
+  EXPECT_EQ(json_parse(R"(42)"), "42");
+  EXPECT_EQ(json_parse(R"("abc")"), R"("abc")");
+  // simdjson will remove the spaces between every element. "[1, 2, 3]" ->
+  // "[1,2,3]"
+  EXPECT_EQ(json_parse(R"([1, 2, 3])"), "[1,2,3]");
+  EXPECT_EQ(json_parse(R"({"k1":"v1"})"), R"({"k1":"v1"})");
+  // simdjson will remove the spaces between every element. "["k1", "v1"]" ->
+  // "["k1","v1"]"
+  EXPECT_EQ(json_parse(R"(["k1", "v1"])"), R"(["k1","v1"])");
+  assertUserError(
+      [&]() { json_parse(R"({"k1":})"); },
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
+  assertUserError(
+      [&]() { json_parse(R"({:"k1"})"); },
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
+  assertUserError(
+      [&]() { json_parse(R"(not_json)"); },
       "Problem while parsing an atom starting with the letter 'n'");
-  VELOX_ASSERT_THROW(
-      json_parse(R"(INVALID)"),
-      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
-  VELOX_ASSERT_THROW(
-      json_parse(R"("x": 1)"),
-      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
-  VELOX_ASSERT_THROW(
-      json_parse(R"(("x": 1))"),
-      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
-}
 
-TEST_F(SIMDJsonFunctionsTest, jsonExtractScalar) {
-  // simple json path
-  EXPECT_EQ(
-      json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$"), std::nullopt);
-  EXPECT_EQ(
-      json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$.x"),
-      std::nullopt);
-  EXPECT_EQ(json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$.x.a"), "1");
-  EXPECT_EQ(
-      json_extract_scalar(R"({"x": {"a" : 1, "b" : [2, 3]}})", "$.x.b[1]"),
-      "3");
-  EXPECT_EQ(json_extract_scalar(R"([1,2,3])", "$[1]"), "2");
-  EXPECT_EQ(json_extract_scalar(R"([1,null,3])", "$[1]"), "null");
-
-  // complex json path
-  EXPECT_EQ(
-      json_extract_scalar(kTestJson, "$.store.book[1].author"), "Evelyn Waugh");
-
-  // invalid json
-  VELOX_ASSERT_THROW(
-      json_extract_scalar(R"(INVALID_JSON)", "$"),
+  // Presto test case
+  assertUserError(
+      [&]() { json_parse(R"(INVALID)"); },
       "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
-
-  // invalid JsonPath
-  VELOX_ASSERT_THROW(
-      json_extract_scalar(kTestJson, "$.store.book[*].author"),
-      "The JSON element does not have the requested type.");
-  VELOX_ASSERT_THROW(
-      json_extract_scalar(R"({"x": {"a" : 1, "b" : 2} })", "$.x.c"),
-      "The JSON field referenced does not exist in this object.");
-  VELOX_ASSERT_THROW(
-      json_extract_scalar(R"({"":""})", ""), "Invalid JSON path: ");
-  VELOX_ASSERT_THROW(
-      json_extract_scalar(R"([1,2,3])", "$...invalid"),
-      "Invalid JSON path: $...invalid");
+  assertUserError(
+      [&]() { json_parse(R"("x": 1)"); },
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
+  assertUserError(
+      [&]() { json_parse(R"(["a": 1, "b": 2])"); },
+      "The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
 }
 
 TEST_F(SIMDJsonFunctionsTest, jsonValid) {
@@ -453,5 +405,7 @@ TEST_F(SIMDJsonFunctionsTest, jsonKeys) {
   EXPECT_EQ(json_keys(R"({})"), "[]");
   EXPECT_EQ(json_keys(std::nullopt), std::nullopt);
 }
+
+} // namespace
 
 } // namespace facebook::velox::functions::prestosql
