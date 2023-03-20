@@ -34,7 +34,8 @@ struct Converter {
   // If in the future we change nullOutput in many functions we can revisit that
   // contract.
   static typename TypeTraits<KIND>::NativeType cast(T val, bool& nullOutput) {
-    VELOX_NYI();
+    VELOX_UNSUPPORTED(
+        "Conversion to {} is not supported", TypeTraits<KIND>::name);
   }
 };
 
@@ -81,7 +82,8 @@ struct Converter<
 
   template <typename From>
   static T cast(const From& v, bool& nullOutput) {
-    VELOX_NYI();
+    VELOX_UNSUPPORTED(
+        "Conversion to {} is not supported", TypeTraits<KIND>::name);
   }
 
   static T convertStringToInt(const folly::StringPiece& v, bool& nullOutput) {
@@ -386,7 +388,8 @@ struct Converter<TypeKind::TIMESTAMP> {
 
   template <typename From>
   static T cast(const From& /* v */, bool& nullOutput) {
-    VELOX_NYI();
+    VELOX_UNSUPPORTED("Conversion to Timestamp is not supported");
+    return T();
   }
 
   static T cast(folly::StringPiece v, bool& nullOutput) {
@@ -413,7 +416,8 @@ struct Converter<TypeKind::DATE, void, TRUNCATE> {
   using T = typename TypeTraits<TypeKind::DATE>::NativeType;
   template <typename From>
   static T cast(const From& /* v */, bool& nullOutput) {
-    VELOX_NYI();
+    VELOX_UNSUPPORTED("Conversion to Date is not supported");
+    return T();
   }
 
   static T cast(folly::StringPiece v, bool& nullOutput) {

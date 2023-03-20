@@ -19,6 +19,7 @@ add_executable(
   VectorSaverTest.cpp
   VectorMakerTest.cpp
   VectorPoolTest.cpp
+  VectorPrinterTest.cpp
   VectorTest.cpp
   VectorToStringTest.cpp
   VectorEstimateFlatSizeTest.cpp
@@ -29,7 +30,8 @@ add_executable(
   IsWritableVectorTest.cpp
   LazyVectorTest.cpp
   MayHaveNullsRecursiveTest.cpp
-  VariantToVectorTest.cpp)
+  VariantToVectorTest.cpp
+  VectorTestUtils.cpp)
 
 add_test(velox_vector_test velox_vector_test)
 
@@ -41,6 +43,7 @@ target_link_libraries(
   velox_serialization
   velox_memory
   velox_presto_serializer
+  velox_presto_types
   velox_temp_path
   velox_vector_fuzzer
   ${Boost_ATOMIC_LIBRARIES}
@@ -55,7 +58,7 @@ target_link_libraries(
   gtest_main
   ${FOLLY_WITH_DEPENDENCIES}
   ${DOUBLE_CONVERSION}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT}
   dl)
@@ -73,7 +76,7 @@ target_link_libraries(
   gtest
   gtest_main
   ${FOLLY_WITH_DEPENDENCIES}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT})
 
@@ -88,6 +91,6 @@ target_link_libraries(
   gtest
   gtest_main
   ${FOLLY_WITH_DEPENDENCIES}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT})

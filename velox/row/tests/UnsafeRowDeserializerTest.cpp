@@ -765,7 +765,6 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedMap) {
       ROW({"f0"}, {MAP(SMALLINT(), MAP(SMALLINT(), SMALLINT()))}),
       this->pool_.get());
   VectorPtr val0 = val->as<RowVector>()->childAt(0);
-  /* DO NOT SUBMIT */ LOG(ERROR) << __FUNCTION__ << ": val=" << val->toString();
 
   /*
    * Map<Short, Map<Short, Short>>
@@ -909,7 +908,7 @@ class UnsafeRowComplexDeserializerTests : public exec::test::OperatorTestBase {
         makeFlatVector<int64_t>(batchSize, [](vector_size_t i) { return i; });
     auto stringVector =
         makeFlatVector<StringView>(batchSize, [](vector_size_t i) {
-          return StringView("string" + std::to_string(i));
+          return StringView::makeInline("string" + std::to_string(i));
         });
     auto intArrayVector = makeArrayVector<int64_t>(
         batchSize,
@@ -919,7 +918,7 @@ class UnsafeRowComplexDeserializerTests : public exec::test::OperatorTestBase {
         batchSize,
         [](vector_size_t row) { return row % 5; },
         [](vector_size_t row, vector_size_t index) {
-          return StringView("str" + std::to_string(row + index));
+          return StringView::makeInline("string" + std::to_string(row + index));
         });
     return makeRowVector(
         {intVector, stringVector, intArrayVector, stringArrayVector});

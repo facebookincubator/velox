@@ -111,7 +111,7 @@ class AggregationTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
-    registerSumNonPODAggregate("sumnonpod");
+    registerSumNonPODAggregate("sumnonpod", 64);
   }
 
   std::vector<RowVectorPtr>
@@ -459,17 +459,12 @@ TEST_F(AggregationTest, multiKeyDistinct) {
 }
 
 TEST_F(AggregationTest, aggregateOfNulls) {
-  auto rowType = ROW({"c0", "c1"}, {BIGINT(), SMALLINT()});
-
-  auto children = {
+  auto rowVector = makeRowVector({
       BatchMaker::createVector<TypeKind::BIGINT>(
           rowType_->childAt(0), 100, *pool_),
-      BaseVector::createConstant(
-          facebook::velox::variant(TypeKind::SMALLINT), 100, pool_.get()),
-  };
+      makeNullConstant(TypeKind::SMALLINT, 100),
+  });
 
-  auto rowVector = std::make_shared<RowVector>(
-      pool_.get(), rowType, BufferPtr(nullptr), 100, children);
   auto vectors = {rowVector};
   createDuckDbTable(vectors);
 
@@ -1167,7 +1162,10 @@ TEST_F(AggregationTest, groupingSets) {
           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
           makeFlatVector<StringView>(
               size,
-              [](auto row) { return StringView(std::string(row % 12, 'x')); }),
+              [](auto row) {
+                auto str = std::string(row % 12, 'x');
+                return StringView(str);
+              }),
       });
 
   createDuckDbTable({data});
@@ -1251,7 +1249,10 @@ TEST_F(AggregationTest, groupingSetsOutput) {
           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
           makeFlatVector<StringView>(
               size,
-              [](auto row) { return StringView(std::string(row % 12, 'x')); }),
+              [](auto row) {
+                auto str = std::string(row % 12, 'x');
+                return StringView(str);
+              }),
       });
 
   createDuckDbTable({data});

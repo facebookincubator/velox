@@ -216,15 +216,10 @@ TEST(SelectivityVectorTest, setValidRange) {
 
   ASSERT_NO_FATAL_FAILURE(setRangeAndAssert(0, vectorSize, false))
       << "all to false";
-}
 
-TEST(SelectivityVectorTest, setStartEndIdx) {
-  SelectivityVector vector(1000 /*vectorSize*/);
-
-  vector.setActiveRange(55, 100);
-
-  EXPECT_EQ(55, vector.begin());
-  EXPECT_EQ(100, vector.end());
+  // Test empty ranges.
+  ASSERT_NO_FATAL_FAILURE(setRangeAndAssert(50000, 50000, false));
+  ASSERT_NO_FATAL_FAILURE(setRangeAndAssert(0, 0, false));
 }
 
 TEST(SelectivityVectorTest, clearAll) {
@@ -285,18 +280,6 @@ TEST(SelectivityVectorTest, operatorEquals_dataNotEqual) {
       false /*expectEqual*/, [](auto& vector) { vector.setValid(10, false); });
 }
 
-TEST(SelectivityVectorTest, operatorEquals_startIdxNotEqual) {
-  testEquals(false /*expectEqual*/, [](auto& vector) {
-    vector.setActiveRange(10, vector.end());
-  });
-}
-
-TEST(SelectivityVectorTest, operatorEquals_endIdxNotEqual) {
-  testEquals(false /*expectEqual*/, [](auto& vector) {
-    vector.setActiveRange(vector.begin(), 10);
-  });
-}
-
 TEST(SelectivityVectorTest, emptyIterator) {
   SelectivityVector vector(2011);
   vector.clearAll();
@@ -349,7 +332,7 @@ TEST(SelectivityVectorTest, iterator) {
   bits::fillBits(&contiguous[0], 240, 540, true);
   SelectivityVector fromBits;
   fromBits.setFromBits(&contiguous[0], 64 * contiguous.size());
-  fromBits.setActiveRange(fromBits.begin(), 227);
+  fromBits.resize(227);
   EXPECT_EQ(fromBits.begin(), 67);
   EXPECT_EQ(fromBits.end(), 227);
   EXPECT_FALSE(fromBits.isAllSelected());
@@ -360,7 +343,6 @@ TEST(SelectivityVectorTest, iterator) {
     return true;
   });
   EXPECT_EQ(count, bits::countBits(&contiguous[0], 0, 240));
-  fromBits.setActiveRange(64, 227);
   EXPECT_FALSE(fromBits.isAllSelected());
   count = 0;
   fromBits.applyToSelected([&count](int32_t row) {

@@ -177,6 +177,7 @@ CachePin CacheShard::findOrCreate(
           found->setPrefetch(false);
         } else {
           ++numHit_;
+          hitBytes_ += found->size();
         }
         ++found->numPins_;
         CachePin pin;
@@ -461,6 +462,7 @@ void CacheShard::updateStats(CacheStats& stats) {
     stats.largePadding += entry->data_.byteSize() - entry->size_;
   }
   stats.numHit += numHit_;
+  stats.hitBytes += hitBytes_;
   stats.numNew += numNew_;
   stats.numEvict += numEvict_;
   stats.numEvictChecks += numEvictChecks_;
@@ -685,6 +687,9 @@ CacheStats AsyncDataCache::refreshStats() const {
   CacheStats stats;
   for (auto& shard : shards_) {
     shard->updateStats(stats);
+  }
+  if (ssdCache_) {
+    stats.ssdStats = std::make_shared<SsdCacheStats>(ssdCache_->stats());
   }
   return stats;
 }

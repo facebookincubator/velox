@@ -60,6 +60,7 @@ add_executable(
   RepeatTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
+  ScalarFunctionRegTest.cpp
   SliceTest.cpp
   SplitTest.cpp
   StringFunctionsTest.cpp
@@ -86,6 +87,6 @@ target_link_libraries(
   velox_vector_fuzzer
   gtest
   gtest_main
-  ${gflags_LIBRARIES}
+  gflags::gflags
   gmock
   gmock_main)

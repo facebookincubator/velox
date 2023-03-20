@@ -32,8 +32,8 @@ using ::duckdb::dtime_t;
 using ::duckdb::string_t;
 using ::duckdb::timestamp_t;
 
-namespace {
 variant decimalVariant(const Value& val) {
+  VELOX_DCHECK(val.type().id() == LogicalTypeId::DECIMAL)
   uint8_t precision;
   uint8_t scale;
   val.type().GetDecimalProperties(precision, scale);
@@ -57,7 +57,6 @@ variant decimalVariant(const Value& val) {
       VELOX_UNSUPPORTED();
   }
 }
-} // namespace
 
 //! Type mapping for velox -> DuckDB conversions
 LogicalType fromVeloxType(const TypePtr& type) {
@@ -104,6 +103,8 @@ LogicalType fromVeloxType(const TypePtr& type) {
 //! Type mapping for DuckDB -> velox conversions, we support more types here
 TypePtr toVeloxType(LogicalType type) {
   switch (type.id()) {
+    case LogicalTypeId::SQLNULL:
+      return UNKNOWN();
     case LogicalTypeId::BOOLEAN:
       return BOOLEAN();
     case LogicalTypeId::TINYINT:
@@ -165,7 +166,7 @@ TypePtr toVeloxType(LogicalType type) {
   }
 }
 
-variant duckValueToVariant(const Value& val, bool parseDecimalAsDouble) {
+variant duckValueToVariant(const Value& val) {
   switch (val.type().id()) {
     case LogicalTypeId::SQLNULL:
       return variant(TypeKind::UNKNOWN);
@@ -184,11 +185,7 @@ variant duckValueToVariant(const Value& val, bool parseDecimalAsDouble) {
     case LogicalTypeId::DOUBLE:
       return variant(val.GetValue<double>());
     case LogicalTypeId::DECIMAL:
-      if (parseDecimalAsDouble) {
-        return variant(val.GetValue<double>());
-      } else {
-        return decimalVariant(val);
-      }
+      return decimalVariant(val);
     case LogicalTypeId::VARCHAR:
       return variant(val.GetValue<std::string>());
     case LogicalTypeId::BLOB:

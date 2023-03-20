@@ -150,6 +150,8 @@ std::shared_ptr<Task> assertQuery(
 std::shared_ptr<Task> assertQueryReturnsEmptyResult(
     const std::shared_ptr<const core::PlanNode>& plan);
 
+void assertEmptyResults(const std::vector<RowVectorPtr>& results);
+
 void assertResults(
     const std::vector<RowVectorPtr>& results,
     const std::shared_ptr<const RowType>& resultType,
@@ -200,6 +202,12 @@ bool assertEqualResults(
 
 bool assertEqualResults(
     const MaterializedRowMultiset& expected,
+    const std::vector<RowVectorPtr>& actual);
+
+/// Ensure both datasets have the same type and number of rows.
+void assertEqualTypeAndNumRows(
+    const TypePtr& expectedType,
+    vector_size_t expectedNumRows,
     const std::vector<RowVectorPtr>& actual);
 
 void printResults(const RowVectorPtr& result, std::ostream& out);

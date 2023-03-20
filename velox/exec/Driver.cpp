@@ -79,7 +79,8 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
 
         std::lock_guard<std::mutex> l(task->mutex());
         if (!driver->state().isTerminated) {
-          state->operator_->recordBlockingTime(state->sinceMicros_);
+          state->operator_->recordBlockingTime(
+              state->sinceMicros_, state->reason_);
         }
         VELOX_CHECK(!driver->state().isSuspended);
         VELOX_CHECK(driver->state().hasBlockingFuture);
@@ -141,6 +142,33 @@ class CancelGuard {
   bool isThrow_ = true;
 };
 } // namespace
+
+std::string stopReasonString(StopReason reason) {
+  switch (reason) {
+    case StopReason::kNone:
+      return "NONE";
+    case StopReason::kBlock:
+      return "BLOCK";
+    case StopReason::kTerminate:
+      return "TERMINATE";
+    case StopReason::kAlreadyTerminated:
+      return "ALREADY_TERMINATED";
+    case StopReason::kYield:
+      return "YIELD";
+    case StopReason::kPause:
+      return "PAUSE";
+    case StopReason::kAlreadyOnThread:
+      return "ALREADY_ON_THREAD";
+    case StopReason::kAtEnd:
+      return "AT_END";
+    default:
+      return fmt::format("UNKNOWN_REASON {}", static_cast<int>(reason));
+  }
+}
+
+std::ostream& operator<<(std::ostream& out, const StopReason& reason) {
+  return out << stopReasonString(reason);
+}
 
 // static
 void Driver::enqueue(std::shared_ptr<Driver> driver) {

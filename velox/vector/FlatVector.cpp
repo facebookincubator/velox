@@ -27,7 +27,7 @@ const bool* FlatVector<bool>::rawValues() const {
 }
 
 template <>
-const bool FlatVector<bool>::valueAtFast(vector_size_t idx) const {
+bool FlatVector<bool>::valueAtFast(vector_size_t idx) const {
   return bits::isBitSet(reinterpret_cast<const uint64_t*>(rawValues_), idx);
 }
 
@@ -245,9 +245,6 @@ void FlatVector<StringView>::prepareForReuse() {
       rawValues_[i] = StringView();
     }
   }
-
-  // Clear ASCII-ness.
-  SimpleVector<StringView>::invalidateIsAscii();
 }
 
 template <>

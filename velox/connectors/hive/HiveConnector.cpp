@@ -83,11 +83,132 @@ std::string HiveTableHandle::toString() const {
 }
 
 namespace {
-std::shared_ptr<common::ScanSpec> makeScanSpec(
+
+void addSubfields(
+    const RowType& rowType,
+    const std::vector<common::Subfield>& subfields,
+    memory::MemoryPool* pool,
+    common::ScanSpec& rowSpec) {
+  folly::F14FastSet<std::string> required;
+  for (auto& subfield : subfields) {
+    VELOX_CHECK_EQ(
+        subfield.path().size(),
+        1,
+        "Only one level of subfield pruning is supported, got {}",
+        subfield.toString());
+    auto* element = subfield.path()[0].get();
+    if (auto* field =
+            dynamic_cast<const common::Subfield::NestedField*>(element)) {
+      required.insert(field->name());
+    } else {
+      VELOX_UNSUPPORTED(
+          "Unsupported for row subfields pruning: {}", element->toString());
+    }
+  }
+  for (int i = 0; i < rowType.size(); ++i) {
+    auto& name = rowType.nameOf(i);
+    auto& type = rowType.childAt(i);
+    if (required.count(name) == 0) {
+      auto* child = rowSpec.getOrCreateChild(common::Subfield(name));
+      child->setChannel(i);
+      child->setProjectOut(true);
+      child->setConstantValue(BaseVector::createNullConstant(type, 1, pool));
+    } else {
+      rowSpec.addField(name, *type, i);
+    }
+  }
+}
+
+std::unique_ptr<common::Filter> toFilter(
+    const std::vector<common::Subfield>& subfields) {
+  std::vector<int64_t> longSubscripts;
+  std::vector<std::string> stringSubscripts;
+  for (auto& subfield : subfields) {
+    VELOX_CHECK_EQ(
+        subfield.path().size(),
+        1,
+        "Only one level of subfield pruning is supported, got {}",
+        subfield.toString());
+    auto* element = subfield.path()[0].get();
+    if (auto* longKey =
+            dynamic_cast<const common::Subfield::LongSubscript*>(element)) {
+      longSubscripts.push_back(longKey->index());
+    } else if (
+        auto* stringKey =
+            dynamic_cast<const common::Subfield::StringSubscript*>(element)) {
+      stringSubscripts.push_back(stringKey->index());
+    } else {
+      VELOX_UNSUPPORTED(
+          "Unsupported for map subfields pruning: {}", element->toString());
+    }
+  }
+  VELOX_CHECK(longSubscripts.empty() || stringSubscripts.empty());
+  std::unique_ptr<common::Filter> filter;
+  if (!longSubscripts.empty()) {
+    filter = common::createBigintValues(longSubscripts, false);
+  } else {
+    filter = std::make_unique<common::BytesValues>(stringSubscripts, false);
+  }
+  return filter;
+}
+
+vector_size_t maxRequiredIndex(const std::vector<common::Subfield>& subfields) {
+  constexpr auto kMaxIndex = std::numeric_limits<vector_size_t>::max() - 1;
+  vector_size_t maxIndex = -1;
+  for (auto& subfield : subfields) {
+    VELOX_CHECK_EQ(
+        subfield.path().size(),
+        1,
+        "Only one level of subfield pruning is supported, got {}",
+        subfield.toString());
+    auto* element = subfield.path()[0].get();
+    if (auto* longKey =
+            dynamic_cast<const common::Subfield::LongSubscript*>(element)) {
+      maxIndex = std::max(
+          maxIndex, std::min<vector_size_t>(kMaxIndex, longKey->index()));
+    } else {
+      VELOX_UNSUPPORTED(
+          "Unsupported for array subfields pruning: {}", element->toString());
+    }
+  }
+  return maxIndex;
+}
+
+} // namespace
+
+std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     const SubfieldFilters& filters,
-    const RowTypePtr& rowType) {
+    const RowTypePtr& rowType,
+    const std::vector<const HiveColumnHandle*>& columnHandles,
+    memory::MemoryPool* pool) {
   auto spec = std::make_shared<common::ScanSpec>("root");
-  spec->addFields(*rowType);
+  for (int i = 0; i < columnHandles.size(); ++i) {
+    auto& name = rowType->nameOf(i);
+    auto& type = rowType->childAt(i);
+    auto& subfields = columnHandles[i]->requiredSubfields();
+    if (subfields.empty()) {
+      spec->addField(name, *type, i);
+      continue;
+    }
+    auto* child = spec->getOrCreateChild(common::Subfield(name));
+    child->setProjectOut(true);
+    child->setChannel(i);
+    switch (type->kind()) {
+      case TypeKind::ROW:
+        addSubfields(type->asRow(), subfields, pool, *child);
+        break;
+      case TypeKind::MAP:
+        child->addMapKeys(*type->childAt(0))->setFilter(toFilter(subfields));
+        child->addMapValues(*type->childAt(1));
+        break;
+      case TypeKind::ARRAY:
+        child->addArrayElements(*type->childAt(0));
+        child->setMaxArrayElementsCount(maxRequiredIndex(subfields) + 1);
+        break;
+      default:
+        VELOX_FAIL("Required subfields should be empty for field {}", name);
+    }
+  }
 
   for (auto& pair : filters) {
     // SelectiveColumnReader doesn't support constant columns with filters,
@@ -101,11 +222,10 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       continue;
     }
     auto fieldSpec = spec->getOrCreateChild(pair.first);
-    fieldSpec->setFilter(pair.second->clone());
+    fieldSpec->addFilter(*pair.second);
   }
   return spec;
 }
-} // namespace
 
 HiveDataSource::HiveDataSource(
     const RowTypePtr& outputType,
@@ -142,6 +262,8 @@ HiveDataSource::HiveDataSource(
 
   std::vector<std::string> columnNames;
   columnNames.reserve(outputType->size());
+  std::vector<const HiveColumnHandle*> hiveColumnHandles;
+  hiveColumnHandles.reserve(outputType->size());
   for (auto& outputName : outputType->names()) {
     auto it = columnHandles.find(outputName);
     VELOX_CHECK(
@@ -149,8 +271,9 @@ HiveDataSource::HiveDataSource(
         "ColumnHandle is missing for output column: {}",
         outputName);
 
-    const auto& handle = static_cast<HiveColumnHandle&>(*it->second);
-    columnNames.emplace_back(handle.name());
+    auto* handle = static_cast<const HiveColumnHandle*>(it->second.get());
+    columnNames.push_back(handle->name());
+    hiveColumnHandles.push_back(handle);
   }
 
   auto hiveTableHandle =
@@ -164,8 +287,11 @@ HiveDataSource::HiveDataSource(
 
   auto outputTypes = outputType_->children();
   readerOutputType_ = ROW(std::move(columnNames), std::move(outputTypes));
-  scanSpec_ =
-      makeScanSpec(hiveTableHandle->subfieldFilters(), readerOutputType_);
+  scanSpec_ = makeScanSpec(
+      hiveTableHandle->subfieldFilters(),
+      readerOutputType_,
+      hiveColumnHandles,
+      pool_);
 
   const auto& remainingFilter = hiveTableHandle->remainingFilter();
   if (remainingFilter) {
@@ -262,11 +388,7 @@ void HiveDataSource::addDynamicFilter(
     column_index_t outputChannel,
     const std::shared_ptr<common::Filter>& filter) {
   auto& fieldSpec = scanSpec_->getChildByChannel(outputChannel);
-  if (fieldSpec.filter()) {
-    fieldSpec.setFilter(fieldSpec.filter()->mergeWith(filter.get()));
-  } else {
-    fieldSpec.setFilter(filter->clone());
-  }
+  fieldSpec.addFilter(*filter);
   scanSpec_->resetCachedValues();
 }
 
@@ -339,11 +461,14 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     if (keyIt != split_->partitionKeys.end()) {
       setPartitionValue(scanChildSpec, fieldName, keyIt->second);
     } else if (fieldName == kPath) {
-      setConstantValue(scanChildSpec, velox::variant(split_->filePath));
+      setConstantValue(
+          scanChildSpec, VARCHAR(), velox::variant(split_->filePath));
     } else if (fieldName == kBucket) {
       if (split_->tableBucketNumber.has_value()) {
         setConstantValue(
-            scanChildSpec, velox::variant(split_->tableBucketNumber.value()));
+            scanChildSpec,
+            INTEGER(),
+            velox::variant(split_->tableBucketNumber.value()));
       }
     } else if (!fileType->containsChild(fieldName)) {
       // Column is missing. Most likely due to schema evolution.
@@ -364,13 +489,15 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   auto pathSpec = scanSpec_->childByName(kPath);
   if (pathSpec) {
-    setConstantValue(pathSpec, velox::variant(split_->filePath));
+    setConstantValue(pathSpec, VARCHAR(), velox::variant(split_->filePath));
   }
 
   auto bucketSpec = scanSpec_->childByName(kBucket);
   if (bucketSpec && split_->tableBucketNumber.has_value()) {
     setConstantValue(
-        bucketSpec, velox::variant(split_->tableBucketNumber.value()));
+        bucketSpec,
+        INTEGER(),
+        velox::variant(split_->tableBucketNumber.value()));
   }
 
   std::vector<std::string> columnNames;
@@ -399,22 +526,12 @@ void HiveDataSource::setFromDataSource(
   emptySplit_ = source->emptySplit_;
   split_ = std::move(source->split_);
   if (emptySplit_) {
-    // Leave old readers in place so tat their adaptation can be moved to a new
-    // reader.
     return;
   }
-  if (rowReader_) {
-    if (!source->rowReader_->moveAdaptationFrom(*rowReader_)) {
-      // The source had a reader that did not have state that could be
-      // advanced. Keep the old readers so that you can transfer the
-      // adaptation to the next non-empty one.
-      emptySplit_ = true;
-      return;
-    }
-  }
+  source->scanSpec_->moveAdaptationFrom(*scanSpec_);
+  scanSpec_ = std::move(source->scanSpec_);
   reader_ = std::move(source->reader_);
   rowReader_ = std::move(source->rowReader_);
-  scanSpec_ = std::move(source->scanSpec_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
   source->ioStats_->merge(*ioStats_);
@@ -426,8 +543,7 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     velox::ContinueFuture& /*future*/) {
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
   if (emptySplit_) {
-    split_.reset();
-    // Keep readers around to hold adaptation.
+    resetSplit();
     return nullptr;
   }
 
@@ -509,8 +625,9 @@ vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
 
 void HiveDataSource::setConstantValue(
     common::ScanSpec* spec,
+    const TypePtr& type,
     const velox::variant& value) const {
-  spec->setConstantValue(BaseVector::createConstant(value, 1, pool_));
+  spec->setConstantValue(BaseVector::createConstant(type, value, 1, pool_));
 }
 
 void HiveDataSource::setNullConstantValue(
@@ -530,7 +647,7 @@ void HiveDataSource::setPartitionValue(
       partitionKey);
   auto constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       convertFromString, it->second->dataType()->kind(), value);
-  setConstantValue(spec, constValue);
+  setConstantValue(spec, it->second->dataType(), constValue);
 }
 
 std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
@@ -539,18 +656,24 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
       {{"numPrefetch", RuntimeCounter(ioStats_->prefetch().count())},
        {"prefetchBytes",
         RuntimeCounter(
-            ioStats_->prefetch().bytes(), RuntimeCounter::Unit::kBytes)},
+            ioStats_->prefetch().sum(), RuntimeCounter::Unit::kBytes)},
        {"numStorageRead", RuntimeCounter(ioStats_->read().count())},
        {"storageReadBytes",
-        RuntimeCounter(ioStats_->read().bytes(), RuntimeCounter::Unit::kBytes)},
+        RuntimeCounter(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)},
        {"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())},
        {"localReadBytes",
         RuntimeCounter(
-            ioStats_->ssdRead().bytes(), RuntimeCounter::Unit::kBytes)},
+            ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)},
        {"numRamRead", RuntimeCounter(ioStats_->ramHit().count())},
        {"ramReadBytes",
+        RuntimeCounter(ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)},
+       {"totalScanTime",
         RuntimeCounter(
-            ioStats_->ramHit().bytes(), RuntimeCounter::Unit::kBytes)}});
+            ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+       {"ioWaitNanos",
+        RuntimeCounter(
+            ioStats_->queryThreadIoLatency().sum() * 1000,
+            RuntimeCounter::Unit::kNanos)}});
   return res;
 }
 

@@ -33,8 +33,8 @@ void mockSchemaRelease(ArrowSchema*) {}
 void mockArrayRelease(ArrowArray*) {}
 
 void exportToArrow(const TypePtr& type, ArrowSchema& out) {
-  auto pool =
-      &facebook::velox::memory::getProcessDefaultMemoryManager().getRoot();
+  auto pool = &facebook::velox::memory::getProcessDefaultMemoryManager()
+                   .deprecatedGetPool();
   exportToArrow(BaseVector::create(type, 0, pool), out);
 }
 
@@ -661,7 +661,7 @@ TEST_F(ArrowBridgeArrayExportTest, unsupported) {
   EXPECT_THROW(exportToArrow(vector, arrowArray, pool_.get()), VeloxException);
 
   // Constant encoding.
-  vector = BaseVector::createConstant(variant(10), 10, pool_.get());
+  vector = BaseVector::createConstant(INTEGER(), variant(10), 10, pool_.get());
   EXPECT_THROW(exportToArrow(vector, arrowArray, pool_.get()), VeloxException);
 }
 

@@ -342,7 +342,8 @@ AggregationFuzzer::AggregationFuzzer(
             .name = name,
             .args = {},
             .returnType = SignatureBinder::tryResolveType(
-                signature->returnType(), {}, {})};
+                signature->returnType(), {}, {}),
+            .constantArgs = {}};
         VELOX_CHECK_NOT_NULL(callable.returnType);
 
         // Process each argument and figure out its type.
@@ -943,19 +944,29 @@ void AggregationFuzzer::verifyWindow(
           .values(input)
           .window({fmt::format("{} over ({})", aggregates[0], frame.str())})
           .planNode();
-  auto resultOrError = execute(plan, false /*injectSpill*/);
-  if (resultOrError.exceptionPtr) {
-    ++stats_.numFailed;
+  if (persistAndRunOnce_) {
+    persistReproInfo(input, plan, reproPersistPath_);
   }
-
-  if (!orderDependent && resultOrError.result) {
-    if (auto expectedResult = computeDuckWindow(
-            partitionKeys, sortingKeys, aggregates, input, plan)) {
-      ++stats_.numDuckVerified;
-      VELOX_CHECK(
-          assertEqualResults(expectedResult.value(), {resultOrError.result}),
-          "Velox and DuckDB results don't match");
+  try {
+    auto resultOrError = execute(plan, false /*injectSpill*/);
+    if (resultOrError.exceptionPtr) {
+      ++stats_.numFailed;
     }
+
+    if (!orderDependent && resultOrError.result) {
+      if (auto expectedResult = computeDuckWindow(
+              partitionKeys, sortingKeys, aggregates, input, plan)) {
+        ++stats_.numDuckVerified;
+        VELOX_CHECK(
+            assertEqualResults(expectedResult.value(), {resultOrError.result}),
+            "Velox and DuckDB results don't match");
+      }
+    }
+  } catch (...) {
+    if (!reproPersistPath_.empty()) {
+      persistReproInfo(input, plan, reproPersistPath_);
+    }
+    throw;
   }
 }
 

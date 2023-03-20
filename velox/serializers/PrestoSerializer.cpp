@@ -488,7 +488,6 @@ void readArrayVector(
   }
   arrayVector->setElements(children[0]);
 
-  auto wantSize = type->isFixedWidth() ? type->fixedElementsWidth() : 0;
   BufferPtr offsets = arrayVector->mutableOffsets(size);
   auto rawOffsets = offsets->asMutable<vector_size_t>();
   BufferPtr sizes = arrayVector->mutableSizes(size);
@@ -499,21 +498,6 @@ void readArrayVector(
     rawOffsets[i] = base;
     rawSizes[i] = offset - base;
     base = offset;
-    // If we are populating a FixedSizeArray, we validate here that
-    // the entries we are populating are the correct sizes. See longer
-    // comment in BaseVector::create() for why we need to validate
-    // here when doing this direct manipulation on the size/offsets,
-    // rather than relying on the ArrayVector constructor time
-    // validation.
-    //
-    // ARROW COMPATIBILITY:
-    // See longer comment in ArrayVector constructor. Today nullable
-    // entries are encoded in a sparse format with a size of zero,
-    // which is incompatible with Arrow's fixed size list layout.
-    if (wantSize != 0 && rawSizes[i] != 0) {
-      VELOX_CHECK_EQ(
-          wantSize, rawSizes[i], "Invalid length element at index {}", i);
-    }
   }
 
   readNulls(source, size, arrayVector);
@@ -1355,6 +1339,9 @@ void serializeColumn(
     case VectorEncoding::Simple::MAP:
       serializeMapVector(vector, ranges, stream);
       break;
+    case VectorEncoding::Simple::LAZY:
+      serializeColumn(vector->loadedVector(), ranges, stream);
+      break;
     default:
       serializeWrapped(vector, ranges, stream);
   }
@@ -1616,6 +1603,9 @@ void estimateSerializedSizeInt(
           arrayVector->elements().get(), childRanges, childSizes.data());
       break;
     }
+    case VectorEncoding::Simple::LAZY:
+      estimateSerializedSizeInt(vector->loadedVector(), ranges, sizes);
+      break;
     default:
       VELOX_CHECK(false, "Unsupported vector encoding {}", vector->encoding());
   }
@@ -1638,7 +1628,7 @@ class PrestoVectorSerializer : public VectorSerializer {
   }
 
   void append(
-      RowVectorPtr vector,
+      const RowVectorPtr& vector,
       const folly::Range<const IndexRange*>& ranges) override {
     auto newRows = rangesTotalSize(ranges);
     if (newRows > 0) {

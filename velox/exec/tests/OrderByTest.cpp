@@ -318,7 +318,9 @@ TEST_F(OrderByTest, varfields) {
         batchSize, [](vector_size_t row) { return row * 0.1; }, nullEvery(11));
     auto c2 = makeFlatVector<StringView>(
         batchSize,
-        [](vector_size_t row) { return StringView(std::to_string(row)); },
+        [](vector_size_t row) {
+          return StringView::makeInline(std::to_string(row));
+        },
         nullEvery(17));
     // TODO: Add support for array/map in createDuckDbTable and verify
     // that we can sort by array/map as well.
@@ -331,10 +333,10 @@ TEST_F(OrderByTest, varfields) {
 
 TEST_F(OrderByTest, unknown) {
   vector_size_t size = 1'000;
-  auto vector = makeRowVector(
-      {makeFlatVector<int64_t>(size, [](auto row) { return row % 7; }),
-       BaseVector::createConstant(
-           variant(TypeKind::UNKNOWN), size, pool_.get())});
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 7; }),
+      BaseVector::createNullConstant(UNKNOWN(), size, pool()),
+  });
 
   // Exclude "UNKNOWN" column as DuckDB doesn't understand UNKNOWN type
   createDuckDbTable(
@@ -416,7 +418,7 @@ TEST_F(OrderByTest, spill) {
     batches.push_back(makeRowVector(
         {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row * 3; }),
          makeFlatVector<StringView>(kNumRows, [](auto row) {
-           return StringView(std::to_string(row * 3));
+           return StringView::makeInline(std::to_string(row * 3));
          })}));
   }
   createDuckDbTable(batches);
