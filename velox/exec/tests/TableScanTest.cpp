@@ -15,8 +15,10 @@
  */
 #include "velox/exec/TableScan.h"
 #include <velox/type/Timestamp.h>
+#include "folly/experimental/EventCount.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
@@ -37,6 +39,7 @@ using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::common::test;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
 
 class TableScanTest : public virtual HiveConnectorTestBase {
  protected:
@@ -45,6 +48,7 @@ class TableScanTest : public virtual HiveConnectorTestBase {
   }
 
   static void SetUpTestCase() {
+    TestValue::enable();
     HiveConnectorTestBase::SetUpTestCase();
   }
 
@@ -2510,4 +2514,88 @@ TEST_F(TableScanTest, parallelPrepare) {
     splits.push_back(makeHiveSplit(filePath->path));
   }
   AssertQueryBuilder(plan).splits(splits).copyResults(pool_.get());
+}
+
+TEST_F(TableScanTest, taskTerminateEarlyWithPendingPrefetch) {
+  FLAGS_split_preload_per_driver = 4;
+  // Create source file - we will read from it in 6 splits.
+  const size_t numSplits{6};
+  const auto vectors = makeVectors(10, 1'000);
+  std::vector<std::shared_ptr<TempFilePath>> splitFiles;
+  for (int i = 0; i < numSplits; ++i) {
+    splitFiles.push_back(TempFilePath::create());
+    writeToFile(splitFiles.back()->path, vectors);
+  }
+
+  folly::EventCount waitForSplitPrefetch;
+  auto waitSplitKey = waitForSplitPrefetch.prepareWait();
+  folly::EventCount blockSplitPrefetch;
+  auto blockSplitKey = blockSplitPrefetch.prepareWait();
+  std::atomic<bool> blockSplitPrefetchOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::connector::hive::HiveDataSource::addSplit",
+      std::function<void(const HiveConnectorSplit*)>(
+          ([&](const HiveConnectorSplit* split) {
+            if (split->dataSource == nullptr) {
+              // Skip non-prefetch split.
+              return;
+            }
+            if (!blockSplitPrefetchOnce.exchange(false)) {
+              return;
+            }
+            LOG(ERROR) << "wait";
+            waitForSplitPrefetch.notify();
+            LOG(ERROR) << "done wait";
+            blockSplitPrefetch.wait(blockSplitKey);
+            LOG(ERROR) << "here";
+          })));
+
+  auto planFragment =
+      PlanBuilder()
+          .tableScan(rowType_)
+          .partitionedOutput({}, 1, {"c0", "c1", "c2", "c3", "c4", "c5"})
+          .planFragment();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  auto task = std::make_shared<exec::Task>(
+      "0", std::move(planFragment), 0, std::move(queryCtx));
+  LOG(ERROR) << "XXX";
+  task->start(task, 1, 1);
+  LOG(ERROR) << "!!!";
+  // Add all the splits and expect the prefetch to be triggered.
+  for (int i = 0; i < numSplits; ++i) {
+    task->addSplit("0", makeHiveSplit(splitFiles[i]->path));
+  }
+  // Indicates no more splits.
+  task->noMoreSplits("0");
+
+  // Wait for split prefetch to trigger.
+  LOG(ERROR) << "wait here";
+  waitForSplitPrefetch.wait(waitSplitKey);
+  LOG(ERROR) << "wait there";
+
+  // Can task execution.
+  task->requestCancel();
+
+  // 'Delete results' from output buffer triggers 'set all output consumed',
+  // which should finish the task.
+  auto outputBufferManager =
+      PartitionedOutputBufferManager::getInstance().lock();
+  outputBufferManager->deleteResults(task->taskId(), 0);
+
+#if 0
+  LOG(ERROR) << "1";
+  for (int i = 0; i < 10; ++i) {
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(1000)); // NOLINT
+  }
+#endif
+  LOG(ERROR) << "wait for to be cancelled";
+  ASSERT_TRUE(waitForTaskCancelled(task.get(), 5'000'000));
+  LOG(ERROR) << "done wait for to be cancelled";
+  task.reset();
+  // We expect the blocked split prefetch holds a reference on the task.
+  ASSERT_GT(task.use_count(), 0);
+  LOG(ERROR) << "2";
+  blockSplitPrefetch.notify();
+  Task::testingWaitForAllTasksToBeDeleted();
 }

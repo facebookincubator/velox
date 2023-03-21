@@ -522,9 +522,9 @@ class Task : public std::enable_shared_from_this<Task> {
     return mutex_;
   }
 
-  /// Returns the number of concurrent drivers in the pipeline of 'driver'.
-  int32_t numDrivers(Driver* driver) {
-    return driverFactories_[driver->driverCtx()->pipelineId]->numDrivers;
+  /// Returns the number of concurrent drivers in given pipeline.
+  int32_t numDrivers(uint32_t pipelineId) const {
+    return driverFactories_[pipelineId]->numDrivers;
   }
 
   /// Returns the number of created and deleted tasks since the velox engine
@@ -630,7 +630,7 @@ class Task : public std::enable_shared_from_this<Task> {
       SplitsStore& splitsStore,
       exec::Split& split,
       ContinueFuture& future,
-      int32_t maxPreloadSplits = 0,
+      uint32_t maxPreloadSplits = 0,
       std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload =
           nullptr);
 
@@ -638,7 +638,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// empty.
   exec::Split getSplitLocked(
       SplitsStore& splitsStore,
-      int32_t maxPreloadSplits,
+      uint32_t maxPreloadSplits,
       std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload);
 
   /// Creates for the given split group and fills up the 'SplitGroupState'
@@ -714,10 +714,6 @@ class Task : public std::enable_shared_from_this<Task> {
 
   bool isOutputPipeline(int pipelineId) const {
     return driverFactories_[pipelineId]->outputDriver;
-  }
-
-  uint32_t numDrivers(int pipelineId) const {
-    return driverFactories_[pipelineId]->numDrivers;
   }
 
   int getOutputPipelineId() const;

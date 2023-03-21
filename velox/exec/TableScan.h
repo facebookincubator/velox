@@ -65,11 +65,11 @@ class TableScan : public SourceOperator {
   // when getting splits.
   void checkPreload();
 
-  // Sets 'split->dataSource' to be a Asyncsource that makes a
+  // Sets 'split->dataSource' to be an Asyncsource that makes a
   // DataSource to read 'split'. This source will be prepared in the
   // background on the executor of the connector. If the DataSource is
   // needed before prepare is done, it will be made when needed.
-  void preload(std::shared_ptr<connector::ConnectorSplit> split);
+  void preload(std::shared_ptr<connector::ConnectorSplit>& split);
 
   // Adjust batch size according to split information.
   void setBatchSize();

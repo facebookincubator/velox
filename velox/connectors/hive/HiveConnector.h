@@ -291,7 +291,8 @@ class HiveConnector final : public Connector {
 
   // NOTE: this is to clear file handle cache which might affect performance,
   // and is only used for operational purposes.
-  SimpleLRUCacheStats clearFileHandleCache() {
+  SimpleLRUCacheStats
+  clearFileHandleCache() {
     return fileHandleFactory_.clearCache();
   }
 

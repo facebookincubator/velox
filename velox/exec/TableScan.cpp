@@ -90,7 +90,7 @@ RowVectorPtr TableScan::getOutput() {
           connectorSplit->connectorId,
           "Got splits with different connector IDs");
 
-      if (!dataSource_) {
+      if (dataSource_ == nullptr) {
         connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
             connectorSplit->connectorId, planNodeId(), true);
         dataSource_ = connector_->createDataSource(
@@ -121,7 +121,7 @@ RowVectorPtr TableScan::getOutput() {
         // unique_ptr will be nullptr if there was a cancellation.
         numReadyPreloadedSplits_ += connectorSplit->dataSource->hasValue();
         auto preparedPtr = connectorSplit->dataSource->move();
-        if (!preparedPtr) {
+        if (preparedPtr == nullptr) {
           // There must be a cancellation.
           VELOX_CHECK(operatorCtx_->task()->isCancelled());
           return nullptr;
@@ -136,7 +136,7 @@ RowVectorPtr TableScan::getOutput() {
     }
 
     const auto ioTimeStartMicros = getCurrentTimeMicro();
-    // Check for  cancellation since scans that filter everything out will not
+    // Check for cancellation since scans that filter everything out will not
     // hit the check in Driver.
     if (operatorCtx_->task()->isCancelled()) {
       return nullptr;
@@ -192,7 +192,7 @@ RowVectorPtr TableScan::getOutput() {
   }
 }
 
-void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
+void TableScan::preload(std::shared_ptr<connector::ConnectorSplit>& split) {
   // The AsyncSource returns a unique_ptr to the shared_ptr of the
   // DataSource. The callback may outlive the Task, hence it captures
   // a shared_ptr to it. This is required to keep memory pools live
@@ -236,9 +236,9 @@ void TableScan::checkPreload() {
     return;
   }
   if (dataSource_->allPrefetchIssued()) {
-    maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->driver) *
+    maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->pipelineId) *
         FLAGS_split_preload_per_driver;
-    if (!splitPreloader_) {
+    if (splitPreloader_ == nullptr) {
       splitPreloader_ =
           [executor, this](std::shared_ptr<connector::ConnectorSplit> split) {
             preload(split);

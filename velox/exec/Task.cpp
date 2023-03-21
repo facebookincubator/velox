@@ -876,12 +876,15 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
   ++taskStats_.numQueuedSplits;
 
   if (split.connectorSplit) {
-    // Tests may use the same splits list many times. Make sure there
+    // NOTE: tests may use the same splits list many times. Make sure there
     // is no async load pending on any, if, for example, a test did
     // not process all its splits.
     split.connectorSplit->dataSource.reset();
   }
   if (isUngroupedExecution()) {
+    if (split.hasGroup()) {
+      LOG(ERROR) << "bad";
+    }
     VELOX_USER_DCHECK(
         not split.hasGroup(),
         "Got split group for ungrouped execution of task {}!",
@@ -1037,7 +1040,7 @@ BlockingReason Task::getSplitOrFutureLocked(
     SplitsStore& splitsStore,
     exec::Split& split,
     ContinueFuture& future,
-    int32_t maxPreloadSplits,
+    uint32_t maxPreloadSplits,
     std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload) {
   if (splitsStore.splits.empty()) {
     if (splitsStore.noMoreSplits) {
@@ -1056,15 +1059,17 @@ BlockingReason Task::getSplitOrFutureLocked(
 
 exec::Split Task::getSplitLocked(
     SplitsStore& splitsStore,
-    int32_t maxPreloadSplits,
+    uint32_t maxPreloadSplits,
     std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload) {
+  VELOX_CHECK(!splitsStore.splits.empty());
+
   int32_t readySplitIndex = -1;
-  if (maxPreloadSplits) {
+  if (maxPreloadSplits > 0) {
     for (auto i = 0; i < splitsStore.splits.size() && i < maxPreloadSplits;
          ++i) {
       auto& split = splitsStore.splits[i].connectorSplit;
-      if (!split->dataSource) {
-        // Initializes split->dataSource
+      if (split->dataSource == nullptr) {
+        // Initializes split->dataSource.
         preload(split);
       } else if (readySplitIndex == -1 && split->dataSource->hasValue()) {
         readySplitIndex = i;
@@ -1074,7 +1079,6 @@ exec::Split Task::getSplitLocked(
   if (readySplitIndex == -1) {
     readySplitIndex = 0;
   }
-  assert(!splitsStore.splits.empty());
   auto split = std::move(splitsStore.splits[readySplitIndex]);
   splitsStore.splits.erase(splitsStore.splits.begin() + readySplitIndex);
 

@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 
 #include "velox/common/base/Fs.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/FieldReference.h"
@@ -35,6 +36,8 @@ DEFINE_int32(
     file_handle_cache_mb,
     1024,
     "Amount of space for the file handle cache in mb.");
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -515,6 +518,9 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     cs = std::make_shared<dwio::common::ColumnSelector>(fileType, columnNames);
   }
 
+  TestValue::adjust(
+      "facebook::velox::connector::hive::HiveDataSource::addSplit", split_.get());
+
   rowReader_ = reader_->createRowReader(
       rowReaderOpts_.select(cs).range(split_->start, split_->length));
 }
@@ -522,7 +528,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 void HiveDataSource::setFromDataSource(
     std::shared_ptr<DataSource> sourceShared) {
   auto source = dynamic_cast<HiveDataSource*>(sourceShared.get());
-  VELOX_CHECK(source, "Bad DataSource type");
+  VELOX_CHECK_NOT_NULL(source, "Bad DataSource type");
   emptySplit_ = source->emptySplit_;
   split_ = std::move(source->split_);
   if (emptySplit_) {
@@ -555,58 +561,56 @@ std::optional<RowVectorPtr> HiveDataSource::next(
   // column, e.g. rand() < 0.1. Evaluate that conjunct first, then scan only
   // rows that passed.
 
-  auto rowsScanned = rowReader_->next(size, output_);
+  const auto rowsScanned = rowReader_->next(size, output_);
   completedRows_ += rowsScanned;
+  if (rowsScanned == 0) {
+    rowReader_->updateRuntimeStats(runtimeStats_);
+    resetSplit();
+    return nullptr;
+  }
 
-  if (rowsScanned) {
-    VELOX_CHECK(
-        !output_->mayHaveNulls(), "Top-level row vector cannot have nulls");
-    auto rowsRemaining = output_->size();
+  VELOX_CHECK(
+      !output_->mayHaveNulls(), "Top-level row vector cannot have nulls");
+  auto rowsRemaining = output_->size();
+  if (rowsRemaining == 0) {
+    // no rows passed the pushed down filters.
+    return RowVector::createEmpty(outputType_, pool_);
+  }
+
+  auto rowVector = std::dynamic_pointer_cast<RowVector>(output_);
+
+  // In case there is a remaining filter that excludes some but not all rows,
+  // collect the indices of the passing rows. If there is no filter, or it
+  // passes on all rows, leave this as null and let exec::wrap skip wrapping
+  // the results.
+  BufferPtr remainingIndices;
+  if (remainingFilterExprSet_) {
+    rowsRemaining = evaluateRemainingFilter(rowVector);
+    VELOX_CHECK_LE(rowsRemaining, rowsScanned);
     if (rowsRemaining == 0) {
-      // no rows passed the pushed down filters.
+      // No rows passed the remaining filter.
       return RowVector::createEmpty(outputType_, pool_);
     }
 
-    auto rowVector = std::dynamic_pointer_cast<RowVector>(output_);
-
-    // In case there is a remaining filter that excludes some but not all rows,
-    // collect the indices of the passing rows. If there is no filter, or it
-    // passes on all rows, leave this as null and let exec::wrap skip wrapping
-    // the results.
-    BufferPtr remainingIndices;
-    if (remainingFilterExprSet_) {
-      rowsRemaining = evaluateRemainingFilter(rowVector);
-      VELOX_CHECK_LE(rowsRemaining, rowsScanned);
-      if (rowsRemaining == 0) {
-        // No rows passed the remaining filter.
-        return RowVector::createEmpty(outputType_, pool_);
-      }
-
-      if (rowsRemaining < rowVector->size()) {
-        // Some, but not all rows passed the remaining filter.
-        remainingIndices = filterEvalCtx_.selectedIndices;
-      }
+    if (rowsRemaining < rowVector->size()) {
+      // Some, but not all rows passed the remaining filter.
+      remainingIndices = filterEvalCtx_.selectedIndices;
     }
-
-    if (outputType_->size() == 0) {
-      return exec::wrap(rowsRemaining, remainingIndices, rowVector);
-    }
-
-    std::vector<VectorPtr> outputColumns;
-    outputColumns.reserve(outputType_->size());
-    for (int i = 0; i < outputType_->size(); i++) {
-      outputColumns.emplace_back(exec::wrapChild(
-          rowsRemaining, remainingIndices, rowVector->childAt(i)));
-    }
-
-    return std::make_shared<RowVector>(
-        pool_, outputType_, BufferPtr(nullptr), rowsRemaining, outputColumns);
   }
 
-  rowReader_->updateRuntimeStats(runtimeStats_);
+  if (outputType_->size() == 0) {
+    return exec::wrap(rowsRemaining, remainingIndices, rowVector);
+  }
 
-  resetSplit();
-  return nullptr;
+  std::vector<VectorPtr> outputColumns;
+  outputColumns.reserve(outputType_->size());
+  for (int i = 0; i < outputType_->size(); ++i) {
+    outputColumns.emplace_back(exec::wrapChild(
+        rowsRemaining, remainingIndices, rowVector->childAt(i)));
+  }
+
+  return std::make_shared<RowVector>(
+      pool_, outputType_, BufferPtr(nullptr), rowsRemaining, outputColumns);
 }
 
 void HiveDataSource::resetSplit() {

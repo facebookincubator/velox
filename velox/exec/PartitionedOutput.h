@@ -160,6 +160,7 @@ class PartitionedOutput : public Operator {
 
   void close() override {
     destinations_.clear();
+
   }
 
  private:
