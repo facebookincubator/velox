@@ -68,6 +68,7 @@ struct ParserContext {
   simdjson::ondemand::parser ondemandParser;
 };
 
+// simdjson-difference: simdjson don't support the output folly::dynamic
 std::optional<std::string> SimdJsonExtractString(
     const std::string& json,
     const std::string& path);

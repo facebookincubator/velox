@@ -159,6 +159,7 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsLong) {
       json_array_contains<int64_t>(R"([2, 4, {"a": [8, 9]}, [], [5], 6])", 6),
       true);
 
+  // simdjson-difference:
   // Presto return false in this case, but simdjson throw an error because
   // "92233720368547758071" exceeds the range of long type, so return
   // std::nullopt
@@ -222,6 +223,7 @@ TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsDouble) {
       json_array_contains<double>(
           R"([2, 4, {"a": [8, 9]}, [], [5], 6.1])", 6.1),
       true);
+  // simdjson-difference:
   // Presto return false in this case, but simdjson throw an error because
   // "9.6E400" can't be parsed, so return std::nullopt
   EXPECT_EQ(json_array_contains<double>(R"([9.6E400])", 4.2), std::nullopt);
@@ -328,10 +330,12 @@ TEST_F(SIMDJsonFunctionsTest, jsonParse) {
   EXPECT_EQ(json_parse(R"(null)"), "null");
   EXPECT_EQ(json_parse(R"(42)"), "42");
   EXPECT_EQ(json_parse(R"("abc")"), R"("abc")");
+  // simdjson-difference:
   // simdjson will remove the spaces between every element. "[1, 2, 3]" ->
   // "[1,2,3]"
   EXPECT_EQ(json_parse(R"([1, 2, 3])"), "[1,2,3]");
   EXPECT_EQ(json_parse(R"({"k1":"v1"})"), R"({"k1":"v1"})");
+  // simdjson-difference:
   // simdjson will remove the spaces between every element. "["k1", "v1"]" ->
   // "["k1","v1"]"
   EXPECT_EQ(json_parse(R"(["k1", "v1"])"), R"(["k1","v1"])");

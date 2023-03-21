@@ -176,7 +176,7 @@ TEST_F(SIMDJsonExtractScalarTest, invalidPath) {
 }
 
 TEST_F(SIMDJsonExtractScalarTest, overflow) {
-  // simdjson process the input as a string
+  // simdjson-difference: simdjson process the input as a string
   EXPECT_EQ(
       json_extract_scalar(
           R"(184467440737095516151844674407370955161518446744073709551615)",
