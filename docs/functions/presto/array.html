@@ -45,6 +45,18 @@
   <section id="array-functions">
 <h1>Array Functions<a class="headerlink" href="#array-functions" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">all_match(array(T),</span> <span class="pre">function(T,</span> <span class="pre">boolean))</span> <span class="pre">→</span> <span class="pre">boolean</span></span></dt>
+<dd><p>Returns whether all elements of an array match the given predicate.</p>
+<blockquote>
+<div><p>Returns true if all the elements match the predicate (a special case is when the array is empty);
+Returns false if one or more elements don’t match;
+Returns NULL if the predicate function returns NULL for one or more elements and true for all other elements.
+Throws an exception if the predicate fails for one or more elements and returns true or NULL for the rest.</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_average">
 <span class="sig-name descname"><span class="pre">array_average</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(double)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#array_average" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the average of all non-null elements of the array. If there are no non-null elements, returns null.</p>
