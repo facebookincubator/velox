@@ -132,10 +132,11 @@ endfunction()
 
 # Set custom source url with a optional sha256 checksum.
 macro(resolve_dependency_url dependency_name)
-  set_with_default(VELOX_${dependency_name}_SOURCE_URL VELOX_${dependency_name}_URL
-                   ${VELOX_${dependency_name}_SOURCE_URL})
+  set_with_default(
+    VELOX_${dependency_name}_SOURCE_URL VELOX_${dependency_name}_URL
+    ${VELOX_${dependency_name}_SOURCE_URL})
   if(DEFINED ENV{VELOX_${dependency_name}_URL})
-    set_with_default(VELOX_${dependency_name}_BUILD_SHA256_CHECKSUM VELOX_${dependency_name}_SHA256
-                     "")
+    set_with_default(VELOX_${dependency_name}_BUILD_SHA256_CHECKSUM
+                     VELOX_${dependency_name}_SHA256 "")
   endif()
 endmacro()
