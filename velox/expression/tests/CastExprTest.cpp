@@ -224,6 +224,27 @@ TEST_F(CastExprTest, timestamp) {
       });
 }
 
+TEST_F(CastExprTest, timestampToString) {
+  testCast<Timestamp, std::string>(
+      "string",
+      {
+          Timestamp(0, 0),
+          Timestamp(946684800, 0),
+          Timestamp(0, 0),
+          Timestamp(946729316, 0),
+          Timestamp(7266, 0),
+          std::nullopt,
+      },
+      {
+          "1970-01-01T00:00:00.000000000",
+          "2000-01-01T00:00:00.000000000",
+          "1970-01-01T00:00:00.000000000",
+          "2000-01-01T12:21:56.000000000",
+          "1970-01-01T02:01:06.000000000",
+          std::nullopt,
+      });
+}
+
 TEST_F(CastExprTest, dateToTimestamp) {
   testCast<Date, Timestamp>(
       "timestamp",

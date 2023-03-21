@@ -186,7 +186,7 @@ void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out);
 
 template <typename T>
 void toAppend(const ::facebook::velox::Timestamp& value, T* result) {
-  // TODO Implement
+  result->append(value.toString());
 }
 
 } // namespace facebook::velox
