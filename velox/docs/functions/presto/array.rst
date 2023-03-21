@@ -13,7 +13,7 @@ Array Functions
 
 .. function:: any_match(array(T), function(T, boolean)) → boolean
 
-    Returns whether at least one element of an array match the given predicate.
+    Returns whether at least one element of an array matchs the given predicate.
 
         Returns true if one or more elements match the predicate;
         Returns false if none of the elements matches (a special case is when the array is empty);

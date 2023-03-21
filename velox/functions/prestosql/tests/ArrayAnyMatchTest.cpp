@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/Format.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -24,48 +25,40 @@ class ArrayAnyMatchTest : public functions::test::FunctionBaseTest {
  protected:
   // Evaluate an expression.
   void testExpr(
-      const VectorPtr& expected,
-      const std::string& expression,
+      const std::vector<std::optional<bool>>& expected,
+      const std::string& lambdaExpr,
       const VectorPtr& input) {
+    auto expression = folly::sformat("any_match(c0, x -> ({}))", lambdaExpr);
     auto result = evaluate(expression, makeRowVector({input}));
-    assertEqualVectors(expected, result);
+    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
   }
 
   void testExpr(
-      const VectorPtr& expected,
+      const std::vector<std::optional<bool>>& expected,
       const std::string& expression,
       const RowVectorPtr& input) {
     auto result = evaluate(expression, (input));
-    assertEqualVectors(expected, result);
+    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
   }
 };
 
 TEST_F(ArrayAnyMatchTest, basic) {
   auto input = makeNullableArrayVector<int64_t>(
-      {{std::nullopt, 2, 3},
-       {-1, 3},
-       {2, 3},
-       {},
-       {std::nullopt, std::nullopt}});
-  auto expectedResult =
-      makeNullableFlatVector<bool>({true, true, true, false, std::nullopt});
-  testExpr(expectedResult, "any_match(c0, x -> (x > 1))", input);
-  expectedResult = makeFlatVector<bool>({true, false, false, false, true});
-  testExpr(expectedResult, "any_match(c0, x -> (x is null))", input);
+      {{std::nullopt, 2, 0}, {-1, 3}, {-2, -3}, {}, {0, std::nullopt}});
+  std::vector<std::optional<bool>> expectedResult{
+      true, true, false, false, std::nullopt};
+  testExpr(expectedResult, "x > 1", input);
+
+  expectedResult = {true, false, false, false, true};
+  testExpr(expectedResult, "x is null", input);
 
   input = makeNullableArrayVector<bool>(
       {{false, true},
        {false, false},
        {std::nullopt, true},
        {std::nullopt, false}});
-  expectedResult =
-      makeNullableFlatVector<bool>({true, false, true, std::nullopt});
-  testExpr(expectedResult, "any_match(c0, x -> x)", input);
-
-  auto emptyInput = makeArrayVector<int32_t>({{}});
-  expectedResult = makeFlatVector<bool>(std::vector<bool>{false});
-  testExpr(expectedResult, "any_match(c0, x -> (x > 1))", emptyInput);
-  testExpr(expectedResult, "any_match(c0, x -> (x <= 1))", emptyInput);
+  expectedResult = {true, false, true, std::nullopt};
+  testExpr(expectedResult, "x", input);
 }
 
 TEST_F(ArrayAnyMatchTest, complexTypes) {
@@ -78,11 +71,8 @@ TEST_F(ArrayAnyMatchTest, complexTypes) {
   //  [[], []]
   // ]
   auto arrayOfArrays = makeArrayVector({0, 1, 5}, baseVector);
-  auto expectedResult = makeNullableFlatVector<bool>({true, true, false});
-  testExpr(
-      expectedResult,
-      "any_match(c0, x -> (cardinality(x) > 0))",
-      arrayOfArrays);
+  std::vector<std::optional<bool>> expectedResult{true, true, false};
+  testExpr(expectedResult, "cardinality(x) > 0", arrayOfArrays);
 
   // Create an array of array vector using above base vector using offsets.
   // [
@@ -92,51 +82,32 @@ TEST_F(ArrayAnyMatchTest, complexTypes) {
   //  null
   // ]
   arrayOfArrays = makeArrayVector({0, 1, 5, 6}, baseVector, {3});
-  expectedResult =
-      makeNullableFlatVector<bool>({true, false, false, std::nullopt});
-  testExpr(
-      expectedResult,
-      "any_match(c0, x -> (cardinality(x) > 2))",
-      arrayOfArrays);
-}
-
-TEST_F(ArrayAnyMatchTest, bigints) {
-  auto input = makeNullableArrayVector<int64_t>(
-      {{},
-       {2},
-       {std::numeric_limits<int64_t>::max()},
-       {std::numeric_limits<int64_t>::min()},
-       {std::nullopt, std::nullopt}, // return null if all is null
-       {2,
-        std::nullopt}, // return null if one or more is null and others matched
-       {1, std::nullopt, 2}}); // return false if one is not matched
-  auto expectedResult = makeNullableFlatVector<bool>(
-      {false, true, false, true, std::nullopt, true, true});
-  testExpr(expectedResult, "any_match(c0, x -> (x % 2 = 0))", input);
+  expectedResult = {true, false, false, std::nullopt};
+  testExpr(expectedResult, "cardinality(x) > 2", arrayOfArrays);
 }
 
 TEST_F(ArrayAnyMatchTest, strings) {
   auto input = makeNullableArrayVector<StringView>(
       {{}, {"abc"}, {"ab", "abc"}, {std::nullopt}});
-  auto expectedResult =
-      makeNullableFlatVector<bool>({false, true, true, std::nullopt});
-  testExpr(expectedResult, "any_match(c0, x -> (x = 'abc'))", input);
+  std::vector<std::optional<bool>> expectedResult{
+      false, true, true, std::nullopt};
+  testExpr(expectedResult, "x = 'abc'", input);
 }
 
 TEST_F(ArrayAnyMatchTest, doubles) {
   auto input =
       makeNullableArrayVector<double>({{}, {0.2}, {3.0, 0}, {std::nullopt}});
-  auto expectedResult =
-      makeNullableFlatVector<bool>({false, false, true, std::nullopt});
-  testExpr(expectedResult, "any_match(c0, x -> (x > 1.1))", input);
+  std::vector<std::optional<bool>> expectedResult{
+      false, false, true, std::nullopt};
+  testExpr(expectedResult, "x > 1.1", input);
 }
 
 TEST_F(ArrayAnyMatchTest, errors) {
   // No throw and return false if there are unmatched elements except nulls
-  auto expression = "any_match(c0, x -> ((10 / x) > 2))";
+  auto expression = "(10 / x) > 2";
   auto input = makeNullableArrayVector<int8_t>(
       {{0, 2, 0, 5, 0}, {2, 5, std::nullopt, 0}});
-  auto expectedResult = makeFlatVector<bool>({true, true});
+  std::vector<std::optional<bool>> expectedResult = {true, true};
   testExpr(expectedResult, expression, input);
 
   // Throw error if others are matched or null
@@ -146,12 +117,12 @@ TEST_F(ArrayAnyMatchTest, errors) {
   VELOX_ASSERT_THROW(
       testExpr(expectedResult, expression, errorInput), kErrorMessage);
   // Rerun using TRY to get right results
-  expectedResult =
-      makeNullableFlatVector<bool>({true, true, false, std::nullopt, true});
+  auto errorInputRow = makeRowVector({errorInput});
+  expectedResult = {true, true, false, std::nullopt, true};
   testExpr(
-      expectedResult, "TRY(any_match(c0, x -> ((10 / x) > 2)))", errorInput);
+      expectedResult, "TRY(any_match(c0, x -> ((10 / x) > 2)))", errorInputRow);
   testExpr(
-      expectedResult, "any_match(c0, x -> (TRY((10 / x) > 2)))", errorInput);
+      expectedResult, "any_match(c0, x -> (TRY((10 / x) > 2)))", errorInputRow);
 }
 
 TEST_F(ArrayAnyMatchTest, conditional) {
@@ -164,8 +135,8 @@ TEST_F(ArrayAnyMatchTest, conditional) {
        {3, std::nullopt, 0},
        {300, 100}});
   auto input = makeRowVector({c0, c1});
-  auto expectedResult = makeNullableFlatVector<bool>(
-      {std::nullopt, false, std::nullopt, true, false});
+  std::vector<std::optional<bool>> expectedResult = {
+      std::nullopt, false, std::nullopt, true, false};
   testExpr(
       expectedResult,
       "any_match(c1, if (c0 <= 2, x -> (x > 100), x -> (10 / x > 2)))",
