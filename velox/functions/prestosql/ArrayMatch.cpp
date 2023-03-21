@@ -24,6 +24,7 @@
 namespace facebook::velox::functions {
 namespace {
 
+template <bool match>
 class MatchFunction : public exec::VectorFunction {
  private:
   void apply(
@@ -90,24 +91,12 @@ class MatchFunction : public exec::VectorFunction {
 
  protected:
   static FOLLY_ALWAYS_INLINE bool hasError(
-      const ErrorVectorPtr& elementErrors,
+      const ErrorVectorPtr& errors,
       int idx) {
-    return elementErrors && idx < elementErrors->size() &&
-        !elementErrors->isNullAt(idx);
+    return errors && idx < errors->size() &&
+        !errors->isNullAt(idx);
   }
 
- private:
-  virtual void applyInternal(
-      FlatVector<bool>* flatResult,
-      exec::EvalCtx& context,
-      vector_size_t row,
-      const vector_size_t* offsets,
-      const vector_size_t* sizes,
-      const ErrorVectorPtr& elementErrors,
-      const exec::LocalDecodedVector& bitsDecoder) const = 0;
-};
-
-class AllMatchFunction : public MatchFunction {
  private:
   void applyInternal(
       FlatVector<bool>* flatResult,
@@ -116,10 +105,14 @@ class AllMatchFunction : public MatchFunction {
       const vector_size_t* offsets,
       const vector_size_t* sizes,
       const ErrorVectorPtr& elementErrors,
-      const exec::LocalDecodedVector& bitsDecoder) const override {
+      const exec::LocalDecodedVector& bitsDecoder) const {
     auto size = sizes[row];
     auto offset = offsets[row];
-    auto allMatch = true;
+
+    // All or any match.
+    // All: early exit on non-match. Initial value = true.
+    // Any: early exit on match. Initial value = false.
+    bool result = match;
     auto hasNull = false;
     std::exception_ptr errorPtr{nullptr};
     for (auto i = 0; i < size; ++i) {
@@ -132,65 +125,8 @@ class AllMatchFunction : public MatchFunction {
 
       if (bitsDecoder->isNullAt(idx)) {
         hasNull = true;
-      } else if (!bitsDecoder->valueAt<bool>(idx)) {
-        allMatch = false;
-        break;
-      }
-    }
-
-    // Errors for individual array elements should be suppressed only if the
-    // outcome can be decided by some other array element, e.g. if there is
-    // another element that returns 'false' for the predicate.
-    if (!allMatch) {
-      flatResult->set(row, false);
-    } else if (errorPtr) {
-      context.setError(row, errorPtr);
-    } else if (hasNull) {
-      flatResult->setNull(row, true);
-    } else {
-      flatResult->set(row, true);
-    }
-  }
-
- public:
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // array(T), function(T) -> boolean
-    return {exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("boolean")
-                .argumentType("array(T)")
-                .argumentType("function(T, boolean)")
-                .build()};
-  }
-};
-
-class AnyMatchFunction : public MatchFunction {
- private:
-  void applyInternal(
-      FlatVector<bool>* flatResult,
-      exec::EvalCtx& context,
-      vector_size_t row,
-      const vector_size_t* offsets,
-      const vector_size_t* sizes,
-      const ErrorVectorPtr& elementErrors,
-      const exec::LocalDecodedVector& bitsDecoder) const override {
-    auto size = sizes[row];
-    auto offset = offsets[row];
-    auto nonMatch = true;
-    auto hasNull = false;
-    std::exception_ptr errorPtr{nullptr};
-    for (auto i = 0; i < size; ++i) {
-      auto idx = offset + i;
-      if (hasError(elementErrors, idx)) {
-        errorPtr = *std::static_pointer_cast<std::exception_ptr>(
-            elementErrors->valueAt(idx));
-        continue;
-      }
-
-      if (bitsDecoder->isNullAt(idx)) {
-        hasNull = true;
-      } else if (bitsDecoder->valueAt<bool>(idx)) {
-        nonMatch = false;
+      } else if (bitsDecoder->valueAt<bool>(idx) == !match) {
+        result = !result;
         break;
       }
     }
@@ -198,39 +134,42 @@ class AnyMatchFunction : public MatchFunction {
     // Errors for individual array elements should be suppressed only if the
     // outcome can be decided by some other array element, e.g. if there is
     // another element that returns 'true' for the predicate.
-    if (!nonMatch) {
-      flatResult->set(row, true);
+    if (result != match) {
+      flatResult->set(row, !match);
     } else if (errorPtr) {
       context.setError(row, errorPtr);
     } else if (hasNull) {
       flatResult->setNull(row, true);
     } else {
-      flatResult->set(row, false);
+      flatResult->set(row, match);
     }
   }
-
- public:
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // array(T), function(T) -> boolean
-    return {exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("boolean")
-                .argumentType("array(T)")
-                .argumentType("function(T, boolean)")
-                .build()};
-  }
 };
+
+class AllMatchFunction : public MatchFunction<true> {};
+
+class AnyMatchFunction : public MatchFunction<false> {};
+
+std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+  // array(T), function(T) -> boolean
+  return {exec::FunctionSignatureBuilder()
+              .typeVariable("T")
+              .returnType("boolean")
+              .argumentType("array(T)")
+              .argumentType("function(T, boolean)")
+              .build()};
+}
 
 } // namespace
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_all_match,
-    AllMatchFunction::signatures(),
+    signatures(),
     std::make_unique<AllMatchFunction>());
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_any_match,
-    AnyMatchFunction::signatures(),
+    signatures(),
     std::make_unique<AnyMatchFunction>());
 
 } // namespace facebook::velox::functions

@@ -13,11 +13,11 @@ Array Functions
 
 .. function:: any_match(array(T), function(T, boolean)) → boolean
 
-    Returns whether any elements of an array match the given predicate.
+    Returns whether at least one element of an array match the given predicate.
 
         Returns true if one or more elements match the predicate;
         Returns false if none of the elements matches (a special case is when the array is empty);
-        Returns NULL NULL if the predicate function returns NULL for one or more elements and false for all other elements.
+        Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
         Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.
 
 .. function:: array_average(array(double)) -> double
