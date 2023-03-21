@@ -75,6 +75,9 @@ class Base64 {
   static std::string encode_url(const char* data, size_t len);
   static std::string encode_url(const folly::IOBuf* data);
   static std::string encode_url(folly::StringPiece text);
+
+  static void decode_url(const char* data, size_t size, char* output);
+
   static void decode_url(
       const std::pair<const char*, int32_t>& payload,
       std::string& output);
@@ -94,6 +97,10 @@ class Base64 {
 
   static size_t
   decode(const char* src, size_t src_len, char* dst, size_t dst_len);
+
+  static size_t
+  decode_url(const char* src, size_t src_len, char* dst, size_t dst_len);
+
 
  private:
   constexpr static char kBase64Pad = '=';

@@ -305,6 +305,16 @@ void Base64::decode(const char* data, size_t size, char* output) {
   Base64::decode(data, size, output, out_len);
 }
 
+void Base64::decode_url(const char* data, size_t size, char* output) {
+  size_t out_len = size / 4 * 3;
+  Base64::decode_url(data, size, output, out_len);
+}
+
+size_t
+Base64::decode_url(const char* src, size_t src_len, char* dst, size_t dst_len) {
+  return decodeImpl(src, src_len, dst, dst_len, kBase64UrlReverseIndexTable, true);
+}
+
 uint8_t Base64::Base64ReverseLookup(
     char p,
     const Base64::ReverseIndex& reverse_lookup) {
@@ -426,6 +436,10 @@ std::string Base64::encode_url(const char* data, size_t len) {
 
 std::string Base64::encode_url(const folly::IOBuf* data) {
   return encodeImpl(IOBufWrapper(data), kBase64UrlCharset, false);
+}
+
+static void decode(const char* data, size_t size, char* output) {
+
 }
 
 std::string Base64::decode_url(folly::StringPiece encoded) {

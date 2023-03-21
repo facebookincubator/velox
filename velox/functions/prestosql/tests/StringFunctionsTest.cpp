@@ -1724,6 +1724,33 @@ TEST_F(StringFunctionsTest, fromBase64) {
   EXPECT_THROW(fromBase64("YQ==="), VeloxUserError);
 }
 
+TEST_F(StringFunctionsTest, fromBase64Url) {
+  const auto toHex = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("to_hex(cast(c0 as varbinary))", value);
+  };
+  const auto fromBase64Url = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("from_base64url(c0)", value);
+  };
+
+  EXPECT_EQ(std::nullopt, fromBase64Url(std::nullopt));
+  EXPECT_EQ("", fromBase64Url(""));
+  EXPECT_EQ("a", fromBase64Url("YQ=="));
+  EXPECT_EQ("a", fromBase64Url("YQ"));
+  EXPECT_EQ("abc", fromBase64Url("YWJj"));
+  
+  EXPECT_EQ("abc", fromBase64Url("YWJj"));
+  EXPECT_EQ("hello world", fromBase64Url("aGVsbG8gd29ybGQ="));
+  EXPECT_EQ(
+      "Hello World from Velox!",
+      fromBase64Url("SGVsbG8gV29ybGQgZnJvbSBWZWxveCE="));
+
+  EXPECT_EQ(toHex("FF4FBF50"), fromBase64Url("_0-_UA=="));
+  EXPECT_THROW(fromBase64Url("YQ="), VeloxUserError);
+  EXPECT_THROW(fromBase64Url("YQ==="), VeloxUserError);
+  EXPECT_THROW(fromBase64Url("YQ=+"), VeloxUserError);
+  EXPECT_THROW(fromBase64Url("YQ/"), VeloxUserError);
+}
+
 TEST_F(StringFunctionsTest, urlEncode) {
   const auto urlEncode = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("url_encode(c0)", value);
