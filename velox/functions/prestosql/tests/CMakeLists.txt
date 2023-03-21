@@ -18,6 +18,7 @@ add_executable(
   velox_functions_test
   ArithmeticTest.cpp
   ArrayAllMatchTest.cpp
+  ArrayAnyMatchTest.cpp
   ArrayAverageTest.cpp
   ArrayCombinationsTest.cpp
   ArrayConstructorTest.cpp
