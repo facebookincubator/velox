@@ -94,6 +94,22 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
     doRun(iter, exprSet, rowVector);
   }
 
+  void runWithJson(
+      int iter,
+      int vectorSize,
+      const std::string& fnName,
+      const std::string& json) {
+    folly::BenchmarkSuspender suspender;
+
+    auto jsonVector = makeJsonData(json, vectorSize);
+
+    auto rowVector = vectorMaker_.rowVector({jsonVector});
+    auto exprSet =
+        compileExpression(fmt::format("{}(c0)", fnName), rowVector->type());
+    suspender.dismiss();
+    doRun(iter, exprSet, rowVector);
+  }
+
   void doRun(
       const int iter,
       velox::exec::ExprSet& exprSet,
@@ -131,9 +147,25 @@ void SIMDJsonExtract(
       iter, vectorSize, "simd_json_extract_scalar", json, jsonPath);
 }
 
+void VeloxJsonParse(int iter, int vectorSize, const std::string& fileSize) {
+  folly::BenchmarkSuspender suspender;
+  JsonBenchmark benchmark;
+  auto json = benchmark.prepareData(fileSize);
+  suspender.dismiss();
+  benchmark.runWithJson(iter, vectorSize, "json_parse", json);
+}
+
+void SIMDJsonParse(int iter, int vectorSize, const std::string& fileSize) {
+  folly::BenchmarkSuspender suspender;
+  JsonBenchmark benchmark;
+  auto json = benchmark.prepareData(fileSize);
+  suspender.dismiss();
+  benchmark.runWithJson(iter, vectorSize, "simd_json_parse", json);
+}
+
 BENCHMARK_DRAW_LINE();
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SIMDJsonExtract,
@@ -143,7 +175,7 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     "$.statuses[0].user.entities.description.urls",
     "$.statuses[0].metadata.result_type")
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SIMDJsonExtract,
@@ -153,7 +185,7 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     "$.statuses[5].metadata.result_type",
     "$.statuses[9].metadata.result_type")
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SIMDJsonExtract,
@@ -163,7 +195,7 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     "$.statuses[8].metadata.result_type",
     "$.statuses[15].metadata.result_type")
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SIMDJsonExtract,
@@ -173,7 +205,7 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     "$.statuses[500].metadata.result_type",
     "$.statuses[999].metadata.result_type")
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SIMDJsonExtract,
@@ -182,6 +214,41 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     "$.statuses[0].metadata.result_type",
     "$.statuses[5000].metadata.result_type",
     "$.statuses[9999].metadata.result_type")
+
+JSONPARSE_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+    func,
+    VeloxJsonParse,
+    SIMDJsonParse,
+    100,
+    1K)
+
+JSONPARSE_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+    func,
+    VeloxJsonParse,
+    SIMDJsonParse,
+    100,
+    10K)
+
+JSONPARSE_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+    func,
+    VeloxJsonParse,
+    SIMDJsonParse,
+    100,
+    100K)
+
+JSONPARSE_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+    func,
+    VeloxJsonParse,
+    SIMDJsonParse,
+    100,
+    1000K)
+
+JSONPARSE_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+    func,
+    VeloxJsonParse,
+    SIMDJsonParse,
+    100,
+    10000K)
 
 BENCHMARK_DRAW_LINE();
 

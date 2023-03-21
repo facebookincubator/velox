@@ -65,7 +65,7 @@ void SimdJsonExtract(
 
 BENCHMARK_DRAW_LINE();
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SimdJsonExtract,
@@ -75,7 +75,7 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     "$.statuses[0].user.entities.description.urls",
     "$.statuses[0].metadata.result_type")
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SimdJsonExtract,
@@ -85,7 +85,7 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     "$.statuses[5].metadata.result_type",
     "$.statuses[9].metadata.result_type")
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SimdJsonExtract,
@@ -95,7 +95,7 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     "$.statuses[8].metadata.result_type",
     "$.statuses[15].metadata.result_type")
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SimdJsonExtract,
@@ -105,7 +105,7 @@ JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     "$.statuses[500].metadata.result_type",
     "$.statuses[999].metadata.result_type")
 
-JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
+JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
     func,
     VeloxJsonExtract,
     SimdJsonExtract,

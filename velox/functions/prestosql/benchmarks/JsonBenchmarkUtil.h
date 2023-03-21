@@ -19,7 +19,7 @@
 
 namespace facebook::velox::functions::prestosql {
 
-#define JSON_BENCHMARK_NAMED_PARAM(                             \
+#define JSONEXTRACT_BENCHMARK_NAMED_PARAM(                      \
     type, name, iter, jsonSize, frontPath, medianPath, endPath) \
   BENCHMARK_NAMED_PARAM(                                        \
       name,                                                     \
@@ -40,20 +40,29 @@ namespace facebook::velox::functions::prestosql {
       #jsonSize,                                                \
       endPath)
 
-#define JSON_BENCHMARK_NAMED_PARAM_TWO_FUNCS(                           \
+#define JSONPARSE_BENCHMARK_NAMED_PARAM(type, name, iter, jsonSize) \
+  BENCHMARK_NAMED_PARAM(                                            \
+      name, type##_i_##iter##_jSize_##jsonSize, iter, #jsonSize)
+
+#define JSONEXTRACT_BENCHMARK_NAMED_PARAM_TWO_FUNCS(                    \
     type, func1, func2, iter, jsonSize, frontPath, medianPath, endPath) \
-  JSON_BENCHMARK_NAMED_PARAM(                                           \
+  JSONEXTRACT_BENCHMARK_NAMED_PARAM(                                    \
       type, func1, iter, jsonSize, frontPath, medianPath, endPath)      \
-  JSON_BENCHMARK_NAMED_PARAM(                                           \
+  JSONEXTRACT_BENCHMARK_NAMED_PARAM(                                    \
       type, func2, iter, jsonSize, frontPath, medianPath, endPath)
 
-#define JSON_BENCHMARK_NAMED_PARAM_MULTI_FUNCS(                                \
+#define JSONPARSE_BENCHMARK_NAMED_PARAM_TWO_FUNCS(             \
+    type, func1, func2, iter, jsonSize)                        \
+  JSONPARSE_BENCHMARK_NAMED_PARAM(type, func1, iter, jsonSize) \
+  JSONPARSE_BENCHMARK_NAMED_PARAM(type, func2, iter, jsonSize)
+
+#define JSONEXTRACT_BENCHMARK_NAMED_PARAM_MULTI_FUNCS(                         \
     type, func1, func2, func3, iter, jsonSize, frontPath, medianPath, endPath) \
-  JSON_BENCHMARK_NAMED_PARAM(                                                  \
+  JSONEXTRACT_BENCHMARK_NAMED_PARAM(                                           \
       type, func1, iter, jsonSize, frontPath, medianPath, endPath)             \
-  JSON_BENCHMARK_NAMED_PARAM(                                                  \
+  JSONEXTRACT_BENCHMARK_NAMED_PARAM(                                           \
       type, func2, iter, jsonSize, frontPath, medianPath, endPath)             \
-  JSON_BENCHMARK_NAMED_PARAM(                                                  \
+  JSONEXTRACT_BENCHMARK_NAMED_PARAM(                                           \
       type, func3, iter, jsonSize, frontPath, medianPath, endPath)
 
 } // namespace facebook::velox::functions::prestosql
