@@ -15,14 +15,12 @@ include_guard(GLOBAL)
 
 set(VELOX_GTEST_VERSION 1.13.0)
 set(VELOX_GTEST_BUILD_SHA256_CHECKSUM
-    ad7fdba11ea011c1d925b3289cf4af2c66a352e18d4c7264392fead75e919363)
+    SHA256=ad7fdba11ea011c1d925b3289cf4af2c66a352e18d4c7264392fead75e919363)
 set(VELOX_GTEST_SOURCE_URL
     "https://github.com/google/googletest/archive/refs/tags/v${VELOX_GTEST_VERSION}.tar.gz"
 )
-set_with_default(VELOX_GTEST_SOURCE_URL VELOX_GTEST_URL
-                 ${VELOX_GTEST_SOURCE_URL})
-set_with_default(VELOX_GTEST_BUILD_SHA256_CHECKSUM VELOX_GTEST_SHA256
-                 "SHA256=${VELOX_GTEST_BUILD_SHA256_CHECKSUM}")
+
+resolve_dependency_url(GTEST)
 
 message(STATUS "Building gtest from source")
 FetchContent_Declare(

@@ -15,13 +15,12 @@ include_guard(GLOBAL)
 
 set(VELOX_GLOG_VERSION 0.6.0)
 set(VELOX_GLOG_BUILD_SHA256_CHECKSUM
-    8a83bf982f37bb70825df71a9709fa90ea9f4447fb3c099e1d720a439d88bad6)
+    SHA256=8a83bf982f37bb70825df71a9709fa90ea9f4447fb3c099e1d720a439d88bad6)
 set(VELOX_GLOG_SOURCE_URL
     "https://github.com/google/glog/archive/refs/tags/v${VELOX_GLOG_VERSION}.tar.gz"
 )
-set_with_default(VELOX_GLOG_SOURCE_URL VELOX_GLOG_URL ${VELOX_GLOG_SOURCE_URL})
-set_with_default(VELOX_GLOG_BUILD_SHA256_CHECKSUM VELOX_GLOG_SHA256
-                 "SHA256=${VELOX_GLOG_BUILD_SHA256_CHECKSUM}")
+
+resolve_dependency_url(GLOG)
 
 message(STATUS "Building glog from source")
 FetchContent_Declare(
