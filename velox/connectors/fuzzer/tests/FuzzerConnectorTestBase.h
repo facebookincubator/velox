@@ -61,7 +61,7 @@ class FuzzerConnectorTestBase : public exec::test::OperatorTestBase {
         kFuzzerConnectorId, fuzzerOptions_, fuzzerSeed);
   }
 
- private:
+ protected:
   VectorFuzzer::Options fuzzerOptions_;
 };
 

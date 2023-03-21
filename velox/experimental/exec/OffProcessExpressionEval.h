@@ -18,6 +18,7 @@
 #include <folly/io/IOBuf.h>
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/exec/OffProcessExpressionEvalClient.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
@@ -34,15 +35,11 @@ class OffProcessExpressionEvalNode : public core::PlanNode {
   OffProcessExpressionEvalNode(
       core::PlanNodeId id,
       std::vector<core::TypedExprPtr> expressions,
-      core::PlanNodePtr source)
-      : PlanNode(std::move(id)),
-        expressions_{std::move(expressions)},
-        sources_{std::move(source)} {
-    VELOX_USER_CHECK_EQ(1, sources_.size());
-  }
+      const std::shared_ptr<OffProcessExpressionEvalClient>& client,
+      core::PlanNodePtr source);
 
   const RowTypePtr& outputType() const override {
-    return sources_.front()->outputType();
+    return outputType_;
   }
 
   const std::vector<core::TypedExprPtr>& expressions() const {
@@ -51,6 +48,10 @@ class OffProcessExpressionEvalNode : public core::PlanNode {
 
   const std::vector<core::PlanNodePtr>& sources() const override {
     return sources_;
+  }
+
+  const std::shared_ptr<OffProcessExpressionEvalClient>& client() const {
+    return client_;
   }
 
   std::string_view name() const override {
@@ -62,6 +63,8 @@ class OffProcessExpressionEvalNode : public core::PlanNode {
 
   const std::vector<core::TypedExprPtr> expressions_;
   const std::vector<core::PlanNodePtr> sources_;
+  std::shared_ptr<OffProcessExpressionEvalClient> client_;
+  RowTypePtr outputType_;
 };
 
 class OffProcessExpressionEvalOperator : public exec::Operator {
@@ -90,14 +93,6 @@ class OffProcessExpressionEvalOperator : public exec::Operator {
   }
 
  private:
-  // Sends the current IOBuf off-process, returning the result IOBuf received
-  // from the remote process.
-  //
-  // TODO: this function will need to return a future.
-  std::unique_ptr<folly::IOBuf> sendOffProcess(
-      const std::vector<core::TypedExprPtr>& expressions,
-      std::unique_ptr<folly::IOBuf>&& ioBuf);
-
   // Flushes the current stream group contents.
   void flushStreamGroup();
 
@@ -106,10 +101,11 @@ class OffProcessExpressionEvalOperator : public exec::Operator {
   std::unique_ptr<VectorStreamGroup> streamGroup_;
   ByteStream byteStream_;
 
-  std::unique_ptr<folly::IOBuf> ioBuf_;
+  std::unique_ptr<folly::IOBuf> receivedIOBuf_;
 
   RowTypePtr inputType_;
   std::vector<core::TypedExprPtr> expressions_;
+  std::shared_ptr<OffProcessExpressionEvalClient> client_;
 };
 
 class OffProcessExpressionEvalTranslator

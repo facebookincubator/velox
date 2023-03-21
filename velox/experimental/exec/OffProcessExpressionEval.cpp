@@ -22,6 +22,27 @@ namespace facebook::velox::exec {
 // flushed.
 constexpr int32_t kMaxStreamGroupSizeBytes{50000};
 
+OffProcessExpressionEvalNode::OffProcessExpressionEvalNode(
+    core::PlanNodeId id,
+    std::vector<core::TypedExprPtr> expressions,
+    const std::shared_ptr<OffProcessExpressionEvalClient>& client,
+    core::PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      expressions_{std::move(expressions)},
+      sources_{std::move(source)},
+      client_(client) {
+  VELOX_USER_CHECK_EQ(1, sources_.size());
+
+  // Populate output type.
+  std::vector<TypePtr> childrenTypes;
+  childrenTypes.reserve(expressions_.size());
+
+  for (const auto& expr : expressions_) {
+    childrenTypes.push_back(expr->type());
+  }
+  outputType_ = ROW(std::move(childrenTypes));
+}
+
 void OffProcessExpressionEvalNode::addDetails(std::stringstream& stream) const {
   stream << "expressions: ";
   for (auto i = 0; i < expressions_.size(); i++) {
@@ -45,7 +66,10 @@ OffProcessExpressionEvalOperator::OffProcessExpressionEvalOperator(
           planNode->id(),
           "OffProcessExpressionEval"),
       inputType_(planNode->sources().front()->outputType()),
-      expressions_{planNode->expressions()} {}
+      expressions_{planNode->expressions()},
+      client_(planNode->client()) {
+  client_->setup(expressions_, inputType_);
+}
 
 void OffProcessExpressionEvalOperator::addInput(RowVectorPtr input) {
   if (!streamGroup_) {
@@ -72,29 +96,23 @@ void OffProcessExpressionEvalOperator::flushStreamGroup() {
     auto ioBuf = stream.getIOBuf();
     streamGroup_.reset();
 
-    ioBuf_ = sendOffProcess(expressions_, std::move(ioBuf));
+    receivedIOBuf_ = client_->execute(std::move(ioBuf));
   }
-}
-
-std::unique_ptr<folly::IOBuf> OffProcessExpressionEvalOperator::sendOffProcess(
-    const std::vector<core::TypedExprPtr>& /* expressions */,
-    std::unique_ptr<folly::IOBuf>&& ioBuf) {
-  // TODO: Implement a pluggable logic to send data off-process.
-  return std::move(ioBuf);
 }
 
 void OffProcessExpressionEvalOperator::noMoreInput() {
   flushStreamGroup();
+  client_->close();
   Operator::noMoreInput();
 }
 
 RowVectorPtr OffProcessExpressionEvalOperator::getOutput() {
-  if (!ioBuf_) {
+  if (!receivedIOBuf_) {
     return nullptr;
   }
 
-  auto outputVector = deserializeIOBuf(*ioBuf_);
-  ioBuf_.reset();
+  auto outputVector = deserializeIOBuf(*receivedIOBuf_);
+  receivedIOBuf_.reset();
   return outputVector;
 }
 
