@@ -76,8 +76,6 @@ class Base64 {
   static std::string encode_url(const folly::IOBuf* data);
   static std::string encode_url(folly::StringPiece text);
 
-  static void decode_url(const char* data, size_t size, char* output);
-
   static void decode_url(
       const std::pair<const char*, int32_t>& payload,
       std::string& output);
@@ -98,12 +96,12 @@ class Base64 {
   static size_t
   decode(const char* src, size_t src_len, char* dst, size_t dst_len);
 
-  static size_t
-  decode_url(const char* src, size_t src_len, char* dst, size_t dst_len);
+  static void decode_url(const char* src, size_t src_len, char* dst, size_t dst_len);
+  static void decode_url(const char* src, size_t src_len, char* dst, size_t dst_len, bool pad);
 
+  constexpr static char kBase64Pad = '=';
 
  private:
-  constexpr static char kBase64Pad = '=';
   static inline size_t countPadding(const char* src, size_t len) {
     DCHECK_GE(len, 2);
     return src[len - 1] != kBase64Pad ? 0 : src[len - 2] != kBase64Pad ? 1 : 2;
