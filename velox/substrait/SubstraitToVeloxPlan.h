@@ -22,6 +22,47 @@
 
 namespace facebook::velox::substrait {
 
+class ConnectorHandler {
+    public:
+        virtual ~ConnectorHandler() = default;
+    
+        virtual std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(
+            const std::string& connectorId,
+            const std::string& tableName,
+            const bool filterPushDownEnabled) = 0;
+        
+        virtual std::shared_ptr<connector::ColumnHandle> createColumnHandle(
+            const std::string& name,
+            const TypePtr& dataType) = 0;
+};
+
+class HiveConnectorHandler : public ConnectorHandler {
+    public:
+        
+        HiveConnectorHandler(const connector::hive::HiveColumnHandle::ColumnType& columnType, connector::hive::SubfieldFilters filters = {}) : columnType_(columnType), filters_(std::move(filters)) {}
+
+        std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(
+            const std::string& connectorId,
+            const std::string& tableName,
+            const bool filterPushDownEnabled) override {
+            return std::make_shared<connector::hive::HiveTableHandle>(
+                connectorId,
+                tableName,
+                filterPushDownEnabled,
+                std::move(filters_),
+                nullptr);
+        }
+
+        std::shared_ptr<connector::ColumnHandle> createColumnHandle(
+            const std::string& name,
+            const TypePtr& dataType) override {
+            return std::make_shared<connector::hive::HiveColumnHandle>(name, columnType_, dataType);
+        }
+    private:
+        connector::hive::HiveColumnHandle::ColumnType columnType_;
+        connector::hive::SubfieldFilters filters_;
+};
+
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
