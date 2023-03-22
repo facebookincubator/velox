@@ -425,10 +425,12 @@ FOLLY_ALWAYS_INLINE bool fromBase64Url(
     const TInString& input) {
   try {
     auto inputSize = input.size();
-    const bool hasPad = (*(input.end()) == encoding::Base64::kBase64Pad) ? true:false;
-    output.resize(
-        encoding::Base64::calculateDecodedSize(input.data(), inputSize, hasPad));
-    encoding::Base64::decode_url(input.data(), inputSize, output.data(), output.size(), hasPad);
+    const bool hasPad =
+        (*(input.end()) == encoding::Base64::kBase64Pad) ? true : false;
+    output.resize(encoding::Base64::calculateDecodedSize(
+        input.data(), inputSize, hasPad));
+    encoding::Base64::decode_url(
+        input.data(), inputSize, output.data(), output.size(), hasPad);
   } catch (const encoding::Base64Exception& e) {
     VELOX_USER_FAIL(e.what());
   }

@@ -428,7 +428,12 @@ std::string Base64::encode_url(const folly::IOBuf* data) {
   return encodeImpl(IOBufWrapper(data), kBase64UrlCharset, false);
 }
 
-void Base64::decode_url(const char* src, size_t src_len, char* dst, size_t dst_len, bool hasPad) {
+void Base64::decode_url(
+    const char* src,
+    size_t src_len,
+    char* dst,
+    size_t dst_len,
+    bool hasPad) {
   decodeImpl(src, src_len, dst, dst_len, kBase64UrlReverseIndexTable, hasPad);
 }
 

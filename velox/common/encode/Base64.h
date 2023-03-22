@@ -96,8 +96,14 @@ class Base64 {
   static size_t
   decode(const char* src, size_t src_len, char* dst, size_t dst_len);
 
-  static void decode_url(const char* src, size_t src_len, char* dst, size_t dst_len);
-  static void decode_url(const char* src, size_t src_len, char* dst, size_t dst_len, bool pad);
+  static void
+  decode_url(const char* src, size_t src_len, char* dst, size_t dst_len);
+  static void decode_url(
+      const char* src,
+      size_t src_len,
+      char* dst,
+      size_t dst_len,
+      bool pad);
 
   constexpr static char kBase64Pad = '=';
 
