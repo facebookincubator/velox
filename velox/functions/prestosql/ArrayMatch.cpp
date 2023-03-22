@@ -95,7 +95,6 @@ class MatchFunction : public exec::VectorFunction {
     return errors && idx < errors->size() && !errors->isNullAt(idx);
   }
 
- private:
   void applyInternal(
       FlatVector<bool>* flatResult,
       exec::EvalCtx& context,
@@ -107,24 +106,69 @@ class MatchFunction : public exec::VectorFunction {
     auto size = sizes[row];
     auto offset = offsets[row];
 
-    // All, none, and any match have different and similar logic intertwined in
-    // terms of the initial value, flip condition, and the result finalization:
+    // all_match, none_match and any_match need to loop over predicate results
+    // for element arrays and check for results, nulls and errors.
+    // These loops can be generalized using two booleans.
     //
-    // Initial value:
-    //  All is true
-    //  Any is false
-    //  None is true
+    // Here is what the individual loops look like.
     //
-    // Flip logic:
-    //  All flips once encounter an unmatched element
-    //  Any flips once encounter a matched element
-    //  None flips once encounter a matched element
+    //---- kAll ----
+    // bool allMatch = true
     //
-    // Result finalization:
-    //  All: ignore the error and null if one or more elements are unmatched and
-    //  return false Any: ignore the error and null if one or more elements
-    //  matched and return true None: ignore the error and null if one or more
-    //  elements matched and return false
+    // loop:
+    //   if not match:
+    //    allMatch = false;
+    //    break;
+    //
+    // if (!allMatch) -> false
+    // else if hasError -> error
+    // else if hasNull -> null
+    // else -> true
+    //
+    //---- kAny ----
+    //
+    // bool anyMatch = false
+    //
+    // loop:
+    //   if match:
+    //    anyMatch = true;
+    //    break;
+    //
+    // if (anyMatch) -> true
+    // else if hasError -> error
+    // else if hasNull -> null
+    // else -> false
+    //
+    //---- kNone ----
+    //
+    // bool noneMatch = true;
+    //
+    // loop:
+    //   if match:
+    //    noneMatch = false;
+    //    break;
+    //
+    // if (!noneMatch) -> false
+    // else if hasError -> error
+    // else if hasNull -> null
+    // else -> true
+    //
+    // To generalize these loops, we use initialValue and earlyReturn booleans
+    // like so:
+    //
+    //--- generic loop ---
+    //
+    // bool result = initialValue
+    //
+    // loop:
+    //   if match == earlyReturn:
+    //    result = false;
+    //    break;
+    //
+    // if (result != initialValue) -> result
+    // else if hasError -> error
+    // else if hasNull -> null
+    // else -> result
     bool result = initialValue;
     auto hasNull = false;
     std::exception_ptr errorPtr{nullptr};
@@ -145,13 +189,13 @@ class MatchFunction : public exec::VectorFunction {
     }
 
     if (result != initialValue) {
-      flatResult->set(row, !initialValue);
+      flatResult->set(row, result);
     } else if (errorPtr) {
       context.setError(row, errorPtr);
     } else if (hasNull) {
       flatResult->setNull(row, true);
     } else {
-      flatResult->set(row, initialValue);
+      flatResult->set(row, result);
     }
   }
 };
