@@ -108,6 +108,9 @@ template <typename T>
 struct SIMDJsonParseFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  // Results refer to the first input strings parameter buffer.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Json>& json) {
@@ -116,8 +119,8 @@ struct SIMDJsonParseFunction {
 
     try {
       ctx.parseElement();
-      std::string rlt = simdjson::to_string(ctx.jsonEle);
-      UDFOutputString::assign(result, rlt);
+      std::string_view rlt = simdjson::to_string(ctx.jsonEle);
+      result.setNoCopy(facebook::velox::StringView(rlt));
       retVal = true;
     } catch (simdjson::simdjson_error& e) {
       throw e;

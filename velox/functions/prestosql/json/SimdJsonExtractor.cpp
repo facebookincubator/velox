@@ -133,8 +133,7 @@ std::optional<std::string> SimdJsonExtractor::extract(const std::string& json) {
   try {
     ctx.parseElement();
   } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
+    // Return 'null' if JSON input is not valid.
     return std::nullopt;
   }
 
@@ -156,12 +155,10 @@ std::optional<std::string> SimdJsonExtractor::extractScalar(
     const std::string& json) {
   ParserContext ctx(json.data(), json.length());
   std::string jsonpath = "";
-
   try {
     ctx.parseDocument();
   } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
+    // Return 'null' if JSON input is not valid.
     return std::nullopt;
   }
 
@@ -170,16 +167,16 @@ std::optional<std::string> SimdJsonExtractor::extractScalar(
   }
 
   std::string_view rlt_tmp;
-  if (jsonpath == "") {
-    if (isDocBasicType(ctx.jsonDoc)) {
-      rlt_tmp = simdjson::to_json_string(ctx.jsonDoc);
-    } else if (ctx.jsonDoc.type() == simdjson::ondemand::json_type::string) {
-      rlt_tmp = ctx.jsonDoc.get_string();
+  try {
+    if (jsonpath == "") {
+      if (isDocBasicType(ctx.jsonDoc)) {
+        rlt_tmp = simdjson::to_json_string(ctx.jsonDoc);
+      } else if (ctx.jsonDoc.type() == simdjson::ondemand::json_type::string) {
+        rlt_tmp = ctx.jsonDoc.get_string();
+      } else {
+        return std::nullopt;
+      }
     } else {
-      return std::nullopt;
-    }
-  } else {
-    try {
       simdjson::simdjson_result<simdjson::ondemand::value> rlt_value =
           ctx.jsonDoc.at_pointer(jsonpath);
       if (isValueBasicType(rlt_value)) {
@@ -189,11 +186,10 @@ std::optional<std::string> SimdJsonExtractor::extractScalar(
       } else {
         return std::nullopt;
       }
-    } catch (simdjson::simdjson_error& e) {
-      // simdjson might throw a conversion error while parsing the input json.
-      // In this case, let it return null. follow original version
-      return std::nullopt;
     }
+  } catch (simdjson::simdjson_error& e) {
+    // Return 'null' if jsonpath is not valid.
+    return std::nullopt;
   }
   std::string rlt_s{rlt_tmp};
   return rlt_s;
@@ -226,8 +222,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromObject(
       rlt_string = std::optional<std::string>(std::string(tmp));
     }
   } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
+    // Return 'null' if jsonpath is not valid.
     return std::nullopt;
   }
   return rlt_string;
@@ -296,8 +291,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromArray(
         return std::string(tmp);
       }
     } catch (simdjson::simdjson_error& e) {
-      // simdjson might throw a conversion error while parsing the input json.
-      // In this case, let it return null. follow original version
+      // Return 'null' if jsonpath is not valid.
       return std::nullopt;
     }
     return rlt_string;
@@ -311,8 +305,7 @@ std::optional<std::string> SimdJsonExtractor::extractOndemand(
   try {
     ctx.parseDocument();
   } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
+    // Return 'null' if JSON input is not valid.
     return std::nullopt;
   }
 
@@ -359,8 +352,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromObjectOndemand(
       rlt_string = std::optional<std::string>(std::string(tmp));
     }
   } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
+    // Return 'null' if jsonpath is not valid.
     return std::nullopt;
   }
   return rlt_string;
@@ -434,8 +426,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromArrayOndemand(
         return std::string(tmp);
       }
     } catch (simdjson::simdjson_error& e) {
-      // simdjson might throw a conversion error while parsing the input json.
-      // In this case, let it return null. follow original version
+      // Return 'null' if jsonpath is not valid.
       return std::nullopt;
     }
     return rlt_string;
@@ -450,8 +441,7 @@ std::optional<int64_t> SimdJsonExtractor::getJsonSize(const std::string& json) {
   try {
     ctx.parseDocument();
   } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
+    // Return 'null' if JSON input is not valid.
     return std::nullopt;
   }
 
@@ -473,8 +463,7 @@ std::optional<int64_t> SimdJsonExtractor::getJsonSize(const std::string& json) {
       len = rlt.count_fields();
     }
   } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
+    // Return 'null' if jsonpath is not valid.
     return std::nullopt;
   }
   return len;
@@ -495,69 +484,29 @@ void ParserContext::parseDocument() {
 std::optional<std::string> simdJsonExtractString(
     const std::string& json,
     const std::string& path) {
-  try {
-    // If extractor fails to parse the path, this will throw a VeloxUserError,
-    // and we want to let this exception bubble up to the client. We only catch
-    // json parsing failures (in which cases we return folly::none instead of
-    // throw).
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extractOndemand(json);
-  } catch (const simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
-  }
-  return std::nullopt;
 }
 
 std::optional<std::string> simdJsonExtractObject(
     const std::string& json,
     const std::string& path) {
-  try {
-    // If extractor fails to parse the path, this will throw a VeloxUserError,
-    // and we want to let this exception bubble up to the client. We only catch
-    // json parsing failures (in which cases we return folly::none instead of
-    // throw).
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extract(json);
-  } catch (const simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
-  }
-  return std::nullopt;
 }
 
 std::optional<std::string> simdJsonExtractScalar(
     const std::string& json,
     const std::string& path) {
-  try {
-    // If extractor fails to parse the path, this will throw a VeloxUserError,
-    // and we want to let this exception bubble up to the client. We only catch
-    // json parsing failures (in which cases we return folly::none instead of
-    // throw).
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.extractScalar(json);
-  } catch (const simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
-  }
-  return std::nullopt;
 }
 
 std::optional<int64_t> simdJsonSize(
     const std::string& json,
     const std::string& path) {
-  try {
-    // If extractor fails to parse the path, this will throw a VeloxUserError,
-    // and we want to let this exception bubble up to the client. We only catch
-    // json parsing failures (in which cases we return folly::none instead of
-    // throw).
     auto& extractor = SimdJsonExtractor::getInstance(path);
     return extractor.getJsonSize(json);
-  } catch (const simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
-  }
-  return std::nullopt;
 }
 
 } // namespace facebook::velox::functions
