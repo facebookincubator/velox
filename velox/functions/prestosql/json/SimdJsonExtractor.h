@@ -19,8 +19,6 @@
 #include <optional>
 #include <string>
 
-#include "folly/Range.h"
-#include "folly/dynamic.h"
 #include "simdjson.h"
 
 namespace facebook::velox::functions {
@@ -69,18 +67,20 @@ struct ParserContext {
 };
 
 // simdjson-difference: simdjson don't support the output folly::dynamic
-std::optional<std::string> SimdJsonExtractString(
+std::optional<std::string> simdJsonExtractString(
     const std::string& json,
     const std::string& path);
 
-std::optional<std::string> SimdJsonExtractObject(
+std::optional<std::string> simdJsonExtractObject(
     const std::string& json,
     const std::string& path);
 
-std::optional<std::string> SimdJsonExtractScalar(
+std::optional<std::string> simdJsonExtractScalar(
     const std::string& json,
     const std::string& path);
-std::optional<std::string> SimdJsonKeysWithJsonPath(
+
+std::optional<int64_t> simdJsonSize(
     const std::string& json,
     const std::string& path);
+
 } // namespace facebook::velox::functions

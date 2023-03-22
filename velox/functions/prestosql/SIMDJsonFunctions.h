@@ -21,6 +21,25 @@
 #include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions {
+
+template <typename T>
+struct SIMDIsJsonScalarFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(bool& result, const arg_type<Json>& json) {
+    ParserContext ctx(json.data(), json.size());
+    result = false;
+
+    ctx.parseDocument();
+    if (ctx.jsonDoc.type() == simdjson::ondemand::json_type::number ||
+        ctx.jsonDoc.type() == simdjson::ondemand::json_type::string ||
+        ctx.jsonDoc.type() == simdjson::ondemand::json_type::boolean ||
+        ctx.jsonDoc.type() == simdjson::ondemand::json_type::null) {
+      result = true;
+    }
+  }
+};
+
 template <typename T>
 struct SIMDJsonArrayContainsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -28,7 +47,6 @@ struct SIMDJsonArrayContainsFunction {
   FOLLY_ALWAYS_INLINE bool
   call(bool& result, const arg_type<Json>& json, const TInput& value) {
     ParserContext ctx(json.data(), json.size());
-    std::string jsonpath = "";
     result = false;
 
     try {
@@ -92,7 +110,7 @@ struct SIMDJsonParseFunction {
 
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
-      const arg_type<Varchar>& json) {
+      const arg_type<Json>& json) {
     ParserContext ctx(json.data(), json.size());
     bool retVal = false;
 
@@ -119,7 +137,7 @@ struct SIMDJsonExtractScalarFunction {
     std::string jsonPathStr = jsonPath;
     bool retVal = false;
 
-    auto extractResult = SimdJsonExtractScalar(json, jsonPathStr);
+    auto extractResult = simdJsonExtractScalar(json, jsonPathStr);
 
     if (extractResult.has_value()) {
       UDFOutputString::assign(result, extractResult.value());
@@ -130,31 +148,11 @@ struct SIMDJsonExtractScalarFunction {
 };
 
 template <typename T>
-struct SIMDJsonValidFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE void call(
-      int64_t& result,
-      const arg_type<Varchar>& json) {
-    ParserContext ctx(json.data(), json.size());
-    std::string jsonpath = "";
-
-    try {
-      ctx.parseElement();
-      result = 1;
-    } catch (simdjson::simdjson_error& e) {
-      result = 0;
-    }
-  }
-};
-
-template <typename T>
 struct SIMDJsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& len, const arg_type<Json>& json) {
     ParserContext ctx(json.data(), json.size());
-    std::string jsonpath = "";
     bool result = false;
 
     try {
@@ -181,43 +179,31 @@ struct SIMDJsonArrayLengthFunction {
 };
 
 template <typename T>
-struct SIMDJsonKeysFunction {
+struct SIMDJsonSizeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(
-      out_type<Varchar>& keys,
-      const arg_type<Json>& json) {
+      int64_t& result,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
     ParserContext ctx(json.data(), json.size());
-    bool result = false;
+    std::string jsonPathStr = jsonPath;
+    result = 0;
 
     try {
       ctx.parseDocument();
-    } catch (simdjson::simdjson_error& e) {
-      throw e;
-    }
-
-    if (ctx.jsonDoc.type() != simdjson::ondemand::json_type::object) {
-      return result;
-    }
-
-    std::string rlt = "[";
-    int count = 0;
-    int objCnt = ctx.jsonDoc.count_fields();
-    try {
-      for (auto&& field : ctx.jsonDoc.get_object()) {
-        std::string_view tmp = field.unescaped_key();
-        rlt += "\"" + std::string(tmp) + "\"";
-        if (++count != objCnt) {
-          rlt += ",";
-        }
+      auto rlt = simdJsonSize(json, jsonPathStr);
+      if (rlt.has_value()) {
+        result = rlt.value();
+      } else {
+        return false;
       }
-      rlt += "]";
-      UDFOutputString::assign(keys, rlt);
-      result = true;
     } catch (simdjson::simdjson_error& e) {
-      throw e;
+      return false;
     }
-    return result;
+
+    return true;
   }
 };
+
 } // namespace facebook::velox::functions

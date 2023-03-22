@@ -29,8 +29,6 @@ void registerMapFunctions();
 
 void registerJsonFunctions();
 
-void registerSIMDJsonFunctions();
-
 void registerHyperLogFunctions();
 
 void registerGeneralFunctions();

@@ -22,7 +22,6 @@
 
 #include "boost/algorithm/string/trim.hpp"
 #include "folly/String.h"
-#include "folly/json.h"
 #include "simdjson.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/prestosql/json/JsonPathTokenizer.h"
@@ -55,19 +54,19 @@ class SimdJsonExtractor {
   std::optional<std::string> extract(const std::string& json);
   std::optional<std::string> extractScalar(const std::string& json);
   std::optional<std::string> extractFromObject(
-      int path_index,
+      int pathIndex,
       simdjson::dom::object obj);
   std::optional<std::string> extractFromArray(
-      int path_index,
+      int pathIndex,
       simdjson::dom::array arr);
   std::optional<std::string> extractOndemand(const std::string& json);
-  std::optional<std::string> extractKeysOndemand(const std::string& json);
   std::optional<std::string> extractFromObjectOndemand(
-      int path_index,
+      int pathIndex,
       simdjson::ondemand::object obj);
   std::optional<std::string> extractFromArrayOndemand(
-      int path_index,
+      int pathIndex,
       simdjson::ondemand::array arr);
+  std::optional<int64_t> getJsonSize(const std::string& json);
   bool isDocBasicType(simdjson::ondemand::document& doc);
   bool isValueBasicType(
       simdjson::simdjson_result<simdjson::ondemand::value> rlt);
@@ -128,6 +127,31 @@ bool SimdJsonExtractor::isValueBasicType(
       (rlt.type() == simdjson::ondemand::json_type::null);
 }
 
+std::optional<std::string> SimdJsonExtractor::extract(const std::string& json) {
+  ParserContext ctx(json.data(), json.length());
+
+  try {
+    ctx.parseElement();
+  } catch (simdjson::simdjson_error& e) {
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+    return std::nullopt;
+  }
+
+  std::optional<std::string> rlt;
+  if (ctx.jsonEle.type() ==
+      simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::ARRAY) {
+    rlt = extractFromArray(0, ctx.jsonEle);
+  } else if (
+      ctx.jsonEle.type() ==
+      simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::OBJECT) {
+    rlt = extractFromObject(0, ctx.jsonEle);
+  } else {
+    return std::nullopt;
+  }
+  return rlt;
+}
+
 std::optional<std::string> SimdJsonExtractor::extractScalar(
     const std::string& json) {
   ParserContext ctx(json.data(), json.length());
@@ -175,52 +199,28 @@ std::optional<std::string> SimdJsonExtractor::extractScalar(
   return rlt_s;
 }
 
-std::optional<std::string> SimdJsonExtractor::extract(const std::string& json) {
-  ParserContext ctx(json.data(), json.length());
-
-  try {
-    ctx.parseElement();
-  } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
-    return std::nullopt;
-  }
-
-  std::optional<std::string> rlt;
-  if (ctx.jsonEle.type() ==
-      simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::ARRAY) {
-    rlt = extractFromArray(0, ctx.jsonEle);
-  } else if (
-      ctx.jsonEle.type() ==
-      simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::OBJECT) {
-    rlt = extractFromObject(0, ctx.jsonEle);
-  } else {
-    return std::nullopt;
-  }
-  return rlt;
-}
 std::optional<std::string> SimdJsonExtractor::extractFromObject(
-    int path_index,
+    int pathIndex,
     simdjson::dom::object obj) {
-  if (path_index == tokens_.size()) {
+  if (pathIndex == tokens_.size()) {
     std::string tmp = simdjson::to_string(obj);
     return std::string(tmp);
   }
-  if (tokens_[path_index] == "*") {
+  if (tokens_[pathIndex] == "*") {
     printf("error: extractFromObject can't include *\n");
     return std::nullopt;
   }
-  auto path = "/" + tokens_[path_index];
+  auto path = "/" + tokens_[pathIndex];
   std::optional<std::string> rlt_string;
   try {
     auto rlt = obj.at_pointer(path);
     if (rlt.type() ==
         simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::OBJECT) {
-      rlt_string = extractFromObject(path_index + 1, rlt);
+      rlt_string = extractFromObject(pathIndex + 1, rlt);
     } else if (
         rlt.type() ==
         simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::ARRAY) {
-      rlt_string = extractFromArray(path_index + 1, rlt);
+      rlt_string = extractFromArray(pathIndex + 1, rlt);
     } else {
       std::string tmp = simdjson::to_string(rlt);
       rlt_string = std::optional<std::string>(std::string(tmp));
@@ -234,13 +234,13 @@ std::optional<std::string> SimdJsonExtractor::extractFromObject(
 }
 
 std::optional<std::string> SimdJsonExtractor::extractFromArray(
-    int path_index,
+    int pathIndex,
     simdjson::dom::array arr) {
-  if (path_index == tokens_.size()) {
+  if (pathIndex == tokens_.size()) {
     std::string tmp = simdjson::to_string(arr);
     return std::string(tmp);
   }
-  if (tokens_[path_index] == "*") {
+  if (tokens_[pathIndex] == "*") {
     std::optional<std::string> rlt_tmp;
     std::string rlt = "[";
     int ii = 0;
@@ -249,7 +249,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromArray(
       if (a.type() ==
           simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::
               OBJECT) {
-        rlt_tmp = extractFromObject(path_index + 1, a);
+        rlt_tmp = extractFromObject(pathIndex + 1, a);
         if (rlt_tmp.has_value()) {
           rlt += rlt_tmp.value();
           if (ii != arr.size()) {
@@ -259,7 +259,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromArray(
       } else if (
           a.type() ==
           simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::ARRAY) {
-        rlt_tmp = extractFromArray(path_index + 1, a);
+        rlt_tmp = extractFromArray(pathIndex + 1, a);
         if (rlt_tmp.has_value()) {
           rlt += rlt_tmp.value();
           if (ii != arr.size()) {
@@ -279,18 +279,18 @@ std::optional<std::string> SimdJsonExtractor::extractFromArray(
     }
     return rlt;
   } else {
-    auto path = "/" + tokens_[path_index];
+    auto path = "/" + tokens_[pathIndex];
     std::optional<std::string> rlt_string;
     try {
       auto rlt = arr.at_pointer(path);
       if (rlt.type() ==
           simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::
               OBJECT) {
-        rlt_string = extractFromObject(path_index + 1, rlt);
+        rlt_string = extractFromObject(pathIndex + 1, rlt);
       } else if (
           rlt.type() ==
           simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::dom::element_type::ARRAY) {
-        rlt_string = extractFromArray(path_index + 1, rlt);
+        rlt_string = extractFromArray(pathIndex + 1, rlt);
       } else {
         std::string tmp = simdjson::to_string(rlt);
         return std::string(tmp);
@@ -330,74 +330,30 @@ std::optional<std::string> SimdJsonExtractor::extractOndemand(
   return rlt;
 }
 
-std::optional<std::string> SimdJsonExtractor::extractKeysOndemand(
-    const std::string& json) {
-  ParserContext ctx(json.data(), json.length());
-  std::string jsonpath = "";
-
-  try {
-    ctx.parseDocument();
-  } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
-    return std::nullopt;
-  }
-  for (auto& token : tokens_) {
-    jsonpath = jsonpath + "/" + token;
-  }
-
-  try {
-    simdjson::simdjson_result<simdjson::ondemand::value> rlt_value =
-        ctx.jsonDoc.at_pointer(jsonpath);
-    if (rlt_value.type() != simdjson::ondemand::json_type::object) {
-      std::string_view tmp = simdjson::to_json_string(rlt_value);
-      return std::nullopt;
-    }
-
-    int objCnt = rlt_value.count_fields();
-    std::string rlt = "[";
-    int count = 0;
-    for (auto&& field : rlt_value.get_object()) {
-      std::string_view tmp = field.unescaped_key();
-      rlt += "\"" + std::string(tmp) + "\"";
-      if (++count != objCnt) {
-        rlt += ",";
-      }
-    }
-    rlt += "]";
-    return rlt;
-  } catch (simdjson::simdjson_error& e) {
-    // simdjson might throw a conversion error while parsing the input json. In
-    // this case, let it return null. follow original version
-    return std::nullopt;
-  }
-  return std::nullopt;
-}
-
 std::optional<std::string> SimdJsonExtractor::extractFromObjectOndemand(
-    int path_index,
+    int pathIndex,
     simdjson::ondemand::object obj) {
-  if (path_index == tokens_.size()) {
+  if (pathIndex == tokens_.size()) {
     std::string_view tmp = simdjson::to_json_string(obj);
     return std::string(tmp);
   }
-  if (tokens_[path_index] == "*") {
+  if (tokens_[pathIndex] == "*") {
     printf("error: extractFromObjectOndemand can't include *\n");
     return std::nullopt;
   }
   obj.reset();
-  auto path = "/" + tokens_[path_index];
+  auto path = "/" + tokens_[pathIndex];
   std::optional<std::string> rlt_string;
   try {
     auto rlt = obj.at_pointer(path);
     if (rlt.type() ==
         simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::ondemand::json_type::
             object) {
-      rlt_string = extractFromObjectOndemand(path_index + 1, rlt);
+      rlt_string = extractFromObjectOndemand(pathIndex + 1, rlt);
     } else if (
         rlt.type() ==
         simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::ondemand::json_type::array) {
-      rlt_string = extractFromArrayOndemand(path_index + 1, rlt);
+      rlt_string = extractFromArrayOndemand(pathIndex + 1, rlt);
     } else {
       std::string_view tmp = simdjson::to_json_string(rlt);
       rlt_string = std::optional<std::string>(std::string(tmp));
@@ -411,21 +367,21 @@ std::optional<std::string> SimdJsonExtractor::extractFromObjectOndemand(
 }
 
 std::optional<std::string> SimdJsonExtractor::extractFromArrayOndemand(
-    int path_index,
+    int pathIndex,
     simdjson::ondemand::array arr) {
-  if (path_index == tokens_.size()) {
+  if (pathIndex == tokens_.size()) {
     std::string_view tmp = simdjson::to_json_string(arr);
     return std::string(tmp);
   }
   arr.reset();
-  if (tokens_[path_index] == "*") {
+  if (tokens_[pathIndex] == "*") {
     std::optional<std::string> rlt_tmp;
     std::string rlt = "[";
     for (simdjson::ondemand::array_iterator a = arr.begin(); a != arr.end();) {
       if ((*a).type() ==
           simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::ondemand::json_type::
               object) {
-        rlt_tmp = extractFromObjectOndemand(path_index + 1, *a);
+        rlt_tmp = extractFromObjectOndemand(pathIndex + 1, *a);
         if (rlt_tmp.has_value()) {
           rlt += rlt_tmp.value();
           if (++a != arr.end()) {
@@ -438,7 +394,7 @@ std::optional<std::string> SimdJsonExtractor::extractFromArrayOndemand(
           (*a).type() ==
           simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::ondemand::json_type::
               array) {
-        rlt_tmp = extractFromArrayOndemand(path_index + 1, *a);
+        rlt_tmp = extractFromArrayOndemand(pathIndex + 1, *a);
         if (rlt_tmp.has_value()) {
           rlt += rlt_tmp.value();
           if (++a != arr.end()) {
@@ -460,19 +416,19 @@ std::optional<std::string> SimdJsonExtractor::extractFromArrayOndemand(
     }
     return rlt;
   } else {
-    auto path = "/" + tokens_[path_index];
+    auto path = "/" + tokens_[pathIndex];
     std::optional<std::string> rlt_string;
     try {
       auto rlt = arr.at_pointer(path);
       if (rlt.type() ==
           simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::ondemand::json_type::
               object) {
-        rlt_string = extractFromObjectOndemand(path_index + 1, rlt);
+        rlt_string = extractFromObjectOndemand(pathIndex + 1, rlt);
       } else if (
           rlt.type() ==
           simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::ondemand::json_type::
               array) {
-        rlt_string = extractFromArrayOndemand(path_index + 1, rlt);
+        rlt_string = extractFromArrayOndemand(pathIndex + 1, rlt);
       } else {
         std::string_view tmp = simdjson::to_json_string(rlt);
         return std::string(tmp);
@@ -486,26 +442,57 @@ std::optional<std::string> SimdJsonExtractor::extractFromArrayOndemand(
   }
 }
 
-} // namespace
+std::optional<int64_t> SimdJsonExtractor::getJsonSize(const std::string& json) {
+  ParserContext ctx(json.data(), json.length());
+  std::string jsonpath = "";
+  int64_t len = 0;
 
-std::optional<std::string> SimdJsonExtract(
-    const std::string& json,
-    const std::string& path) {
   try {
-    // If extractor fails to parse the path, this will throw a VeloxUserError,
-    // and we want to let this exception bubble up to the client. We only catch
-    // json parsing failures (in which cases we return folly::none instead of
-    // throw).
-    auto& extractor = SimdJsonExtractor::getInstance(path);
-    return extractor.extract(json);
-  } catch (const simdjson::simdjson_error& e) {
+    ctx.parseDocument();
+  } catch (simdjson::simdjson_error& e) {
     // simdjson might throw a conversion error while parsing the input json. In
     // this case, let it return null. follow original version
+    return std::nullopt;
   }
-  return std::nullopt;
+
+  for (auto& token : tokens_) {
+    jsonpath = jsonpath + "/" + token;
+  }
+
+  try {
+    auto rlt = ctx.jsonDoc.at_pointer(jsonpath);
+    if (rlt.type() ==
+        simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::ondemand::json_type::array) {
+      for (auto&& v : rlt) {
+        len++;
+      }
+    } else if (
+        rlt.type() ==
+        simdjson::SIMDJSON_BUILTIN_IMPLEMENTATION::ondemand::json_type::
+            object) {
+      len = rlt.count_fields();
+    }
+  } catch (simdjson::simdjson_error& e) {
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+    return std::nullopt;
+  }
+  return len;
 }
 
-std::optional<std::string> SimdJsonExtractOndemand(
+} // namespace
+
+ParserContext::ParserContext() noexcept = default;
+ParserContext::ParserContext(const char* data, size_t length) noexcept
+    : padded_json(data, length) {}
+void ParserContext::parseElement() {
+  jsonEle = domParser.parse(padded_json);
+}
+void ParserContext::parseDocument() {
+  jsonDoc = ondemandParser.iterate(padded_json);
+}
+
+std::optional<std::string> simdJsonExtractString(
     const std::string& json,
     const std::string& path) {
   try {
@@ -522,7 +509,24 @@ std::optional<std::string> SimdJsonExtractOndemand(
   return std::nullopt;
 }
 
-std::optional<std::string> SimdJsonExtractScalar(
+std::optional<std::string> simdJsonExtractObject(
+    const std::string& json,
+    const std::string& path) {
+  try {
+    // If extractor fails to parse the path, this will throw a VeloxUserError,
+    // and we want to let this exception bubble up to the client. We only catch
+    // json parsing failures (in which cases we return folly::none instead of
+    // throw).
+    auto& extractor = SimdJsonExtractor::getInstance(path);
+    return extractor.extract(json);
+  } catch (const simdjson::simdjson_error& e) {
+    // simdjson might throw a conversion error while parsing the input json. In
+    // this case, let it return null. follow original version
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> simdJsonExtractScalar(
     const std::string& json,
     const std::string& path) {
   try {
@@ -539,7 +543,7 @@ std::optional<std::string> SimdJsonExtractScalar(
   return std::nullopt;
 }
 
-std::optional<std::string> SimdJsonKeysWithJsonPathOndemand(
+std::optional<int64_t> simdJsonSize(
     const std::string& json,
     const std::string& path) {
   try {
@@ -548,43 +552,12 @@ std::optional<std::string> SimdJsonKeysWithJsonPathOndemand(
     // json parsing failures (in which cases we return folly::none instead of
     // throw).
     auto& extractor = SimdJsonExtractor::getInstance(path);
-    return extractor.extractKeysOndemand(json);
+    return extractor.getJsonSize(json);
   } catch (const simdjson::simdjson_error& e) {
     // simdjson might throw a conversion error while parsing the input json. In
     // this case, let it return null. follow original version
   }
   return std::nullopt;
-}
-
-ParserContext::ParserContext() noexcept = default;
-ParserContext::ParserContext(const char* data, size_t length) noexcept
-    : padded_json(data, length) {}
-void ParserContext::parseElement() {
-  jsonEle = domParser.parse(padded_json);
-}
-void ParserContext::parseDocument() {
-  jsonDoc = ondemandParser.iterate(padded_json);
-}
-
-std::optional<std::string> SimdJsonExtractString(
-    const std::string& json,
-    const std::string& path) {
-  auto res = SimdJsonExtractOndemand(json, path);
-  return res;
-}
-
-std::optional<std::string> SimdJsonExtractObject(
-    const std::string& json,
-    const std::string& path) {
-  auto res = SimdJsonExtract(json, path);
-  return res;
-}
-
-std::optional<std::string> SimdJsonKeysWithJsonPath(
-    const std::string& json,
-    const std::string& path) {
-  auto res = SimdJsonKeysWithJsonPathOndemand(json, path);
-  return res;
 }
 
 } // namespace facebook::velox::functions

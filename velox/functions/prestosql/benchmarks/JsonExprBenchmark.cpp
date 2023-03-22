@@ -57,9 +57,10 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
  public:
   JsonBenchmark() : FunctionBenchmarkBase() {
     velox::functions::prestosql::registerJsonFunctions();
-    velox::functions::prestosql::registerSIMDJsonFunctions();
     registerFunction<JsonExtractFunction, Varchar, Varchar, Varchar>(
         {"json_extract"});
+    registerFunction<SIMDJsonExtractScalarFunction, Varchar, Varchar, Varchar>(
+        {"simd_json_extract_scalar"});
   }
 
   std::string prepareData(const std::string& fileSize) {

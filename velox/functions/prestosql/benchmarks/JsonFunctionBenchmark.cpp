@@ -55,10 +55,10 @@ void SimdJsonExtract(
     const std::string& jsonPath) {
   folly::BenchmarkSuspender suspender;
   auto json = prepareData(fileSize);
-  auto result = velox::functions::SimdJsonExtractString(json, jsonPath);
+  auto result = velox::functions::simdJsonExtractString(json, jsonPath);
   suspender.dismiss();
   for (auto i = 0; i < iter; i++) {
-    result = velox::functions::SimdJsonExtractString(json, jsonPath);
+    result = velox::functions::simdJsonExtractString(json, jsonPath);
   }
   folly::doNotOptimizeAway(result);
 }
