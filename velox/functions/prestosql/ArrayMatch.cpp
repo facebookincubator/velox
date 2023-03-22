@@ -24,9 +24,7 @@
 namespace facebook::velox::functions {
 namespace {
 
-enum class MatchMethod { kAll = 0, kAny = 1, kNone = 2 };
-
-template <MatchMethod matchMethod>
+template <bool initialValue, bool earlyReturn>
 class MatchFunction : public exec::VectorFunction {
  private:
   void apply(
@@ -127,7 +125,7 @@ class MatchFunction : public exec::VectorFunction {
     //  return false Any: ignore the error and null if one or more elements
     //  matched and return true None: ignore the error and null if one or more
     //  elements matched and return false
-    auto match = (matchMethod != MatchMethod::kAny);
+    bool result = initialValue;
     auto hasNull = false;
     std::exception_ptr errorPtr{nullptr};
     for (auto i = 0; i < size; ++i) {
@@ -140,34 +138,27 @@ class MatchFunction : public exec::VectorFunction {
 
       if (bitsDecoder->isNullAt(idx)) {
         hasNull = true;
-      } else if (matchMethod == MatchMethod::kAll) {
-        if (!bitsDecoder->valueAt<bool>(idx)) {
-          match = !match;
-          break;
-        }
-      } else {
-        if (bitsDecoder->valueAt<bool>(idx)) {
-          match = !match;
-          break;
-        }
+      } else if (bitsDecoder->valueAt<bool>(idx) == earlyReturn) {
+        result = !result;
+        break;
       }
     }
 
-    if ((matchMethod == MatchMethod::kAny) == match) {
-      flatResult->set(row, match);
+    if (result != initialValue) {
+      flatResult->set(row, !initialValue);
     } else if (errorPtr) {
       context.setError(row, errorPtr);
     } else if (hasNull) {
       flatResult->setNull(row, true);
     } else {
-      flatResult->set(row, match);
+      flatResult->set(row, initialValue);
     }
   }
 };
 
-class AllMatchFunction : public MatchFunction<MatchMethod::kAll> {};
-class AnyMatchFunction : public MatchFunction<MatchMethod::kAny> {};
-class NoneMatchFunction : public MatchFunction<MatchMethod::kNone> {};
+class AllMatchFunction : public MatchFunction<true, false> {};
+class AnyMatchFunction : public MatchFunction<false, true> {};
+class NoneMatchFunction : public MatchFunction<true, true> {};
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   // array(T), function(T) -> boolean
