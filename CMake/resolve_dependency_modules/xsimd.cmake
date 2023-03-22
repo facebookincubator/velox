@@ -15,7 +15,7 @@ include_guard(GLOBAL)
 
 set(VELOX_XSIMD_VERSION 10.0.0)
 set(VELOX_XSIMD_BUILD_SHA256_CHECKSUM
-    SHA256=73f818368b3a4dad92fab1b2933d93694241bd2365a6181747b2df1768f6afdd)
+    73f818368b3a4dad92fab1b2933d93694241bd2365a6181747b2df1768f6afdd)
 set(VELOX_XSIMD_SOURCE_URL
     "https://github.com/xtensor-stack/xsimd/archive/refs/tags/${VELOX_XSIMD_VERSION}.tar.gz"
 )

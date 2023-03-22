@@ -15,7 +15,7 @@ include_guard(GLOBAL)
 
 set(VELOX_GFLAGS_VERSION 2.2.2)
 set(VELOX_GFLAGS_BUILD_SHA256_CHECKSUM
-    SHA256=34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf)
+    34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf)
 string(CONCAT VELOX_GFLAGS_SOURCE_URL
               "https://github.com/gflags/gflags/archive/refs/tags/"
               "v${VELOX_GFLAGS_VERSION}.tar.gz")

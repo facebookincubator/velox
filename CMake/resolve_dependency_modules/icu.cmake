@@ -15,7 +15,7 @@ include_guard(GLOBAL)
 
 set(VELOX_ICU4C_BUILD_VERSION 72)
 set(VELOX_ICU4C_BUILD_SHA256_CHECKSUM
-    SHA256=a2d2d38217092a7ed56635e34467f92f976b370e20182ad325edea6681a71d68)
+    a2d2d38217092a7ed56635e34467f92f976b370e20182ad325edea6681a71d68)
 string(
   CONCAT VELOX_ICU4C_SOURCE_URL
          "https://github.com/unicode-org/icu/releases/download/"
