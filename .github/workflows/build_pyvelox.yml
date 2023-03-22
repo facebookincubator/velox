@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04]
+        os: [ubuntu-22.04, macos-11]
     steps:
       - uses: actions/checkout@v3
         with:
@@ -101,6 +101,9 @@ jobs:
       - if: matrix.os == 'macos-11'
         run: |
           echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@1.1/" >> $GITHUB_ENV
+          # this avoids a conflict that is caused by pipx being upgraded during
+          # the cibuildwheel step
+          brew install pipx
 
       - name: "Create sdist"
         if: matrix.os == 'ubuntu-22.04'
