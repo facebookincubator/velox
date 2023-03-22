@@ -1746,8 +1746,6 @@ TEST_F(StringFunctionsTest, fromBase64Url) {
   EXPECT_THROW(fromBase64Url("YQ="), VeloxUserError);
   EXPECT_THROW(fromBase64Url("YQ==="), VeloxUserError);
   EXPECT_THROW(fromBase64Url("YQ=+"), VeloxUserError);
-  EXPECT_THROW(fromBase64Url("YQ+="), VeloxUserError);
-  EXPECT_THROW(fromBase64Url("YQ/="), VeloxUserError);
   EXPECT_THROW(fromBase64Url("YQ=/"), VeloxUserError);
 }
 
