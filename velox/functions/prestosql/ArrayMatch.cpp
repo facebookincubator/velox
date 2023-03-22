@@ -24,9 +24,9 @@
 namespace facebook::velox::functions {
 namespace {
 
-enum class MatchMethod { ALL = 0, ANY = 1, NONE = 2 };
+enum class MatchMethod { kAll = 0, kAny = 1, kNone = 2 };
 
-template <MatchMethod mathMethod>
+template <MatchMethod matchMethod>
 class MatchFunction : public exec::VectorFunction {
  private:
   void apply(
@@ -94,8 +94,7 @@ class MatchFunction : public exec::VectorFunction {
   static FOLLY_ALWAYS_INLINE bool hasError(
       const ErrorVectorPtr& errors,
       int idx) {
-    return errors && idx < errors->size() &&
-        !errors->isNullAt(idx);
+    return errors && idx < errors->size() && !errors->isNullAt(idx);
   }
 
  private:
@@ -109,49 +108,66 @@ class MatchFunction : public exec::VectorFunction {
       const exec::LocalDecodedVector& bitsDecoder) const {
     auto size = sizes[row];
     auto offset = offsets[row];
-    if (mathMethod == MatchMethod::NONE) {
-      // TODO: Add none_match
-    } else {
-      // All or any match.
-      // All: early exit on non-match. Initial value = true.
-      // Any: early exit on match. Initial value = false.
-      auto match = mathMethod == MatchMethod::ALL;
-      bool result = match;
-      auto hasNull = false;
-      std::exception_ptr errorPtr{nullptr};
-      for (auto i = 0; i < size; ++i) {
-        auto idx = offset + i;
-        if (hasError(elementErrors, idx)) {
-          errorPtr = *std::static_pointer_cast<std::exception_ptr>(
-              elementErrors->valueAt(idx));
-          continue;
-        }
 
-        if (bitsDecoder->isNullAt(idx)) {
-          hasNull = true;
-        } else if (bitsDecoder->valueAt<bool>(idx) == !match) {
-          result = !result;
+    // All, none, and any match have different and similar logic intertwined in
+    // terms of the initial value, flip condition, and the result finalization:
+    //
+    // Initial value:
+    //  All is true
+    //  Any is false
+    //  None is true
+    //
+    // Flip logic:
+    //  All flips once encounter an unmatched element
+    //  Any flips once encounter a matched element
+    //  None flips once encounter a matched element
+    //
+    // Result finalization:
+    //  All: ignore the error and null if one or more elements are unmatched and
+    //  return false Any: ignore the error and null if one or more elements
+    //  matched and return true None: ignore the error and null if one or more
+    //  elements matched and return false
+    auto match = (matchMethod != MatchMethod::kAny);
+    auto hasNull = false;
+    std::exception_ptr errorPtr{nullptr};
+    for (auto i = 0; i < size; ++i) {
+      auto idx = offset + i;
+      if (hasError(elementErrors, idx)) {
+        errorPtr = *std::static_pointer_cast<std::exception_ptr>(
+            elementErrors->valueAt(idx));
+        continue;
+      }
+
+      if (bitsDecoder->isNullAt(idx)) {
+        hasNull = true;
+      } else if (matchMethod == MatchMethod::kAll) {
+        if (!bitsDecoder->valueAt<bool>(idx)) {
+          match = !match;
+          break;
+        }
+      } else {
+        if (bitsDecoder->valueAt<bool>(idx)) {
+          match = !match;
           break;
         }
       }
+    }
 
-      if (result != match) {
-        flatResult->set(row, !match);
-      } else if (errorPtr) {
-        context.setError(row, errorPtr);
-      } else if (hasNull) {
-        flatResult->setNull(row, true);
-      } else {
-        flatResult->set(row, match);
-      }
+    if ((matchMethod == MatchMethod::kAny) == match) {
+      flatResult->set(row, match);
+    } else if (errorPtr) {
+      context.setError(row, errorPtr);
+    } else if (hasNull) {
+      flatResult->setNull(row, true);
+    } else {
+      flatResult->set(row, match);
     }
   }
 };
 
-class AllMatchFunction : public MatchFunction<MatchMethod::ALL> {};
-class AnyMatchFunction : public MatchFunction<MatchMethod::ANY> {};
-
-// TODO: add class NoneMatchFunction
+class AllMatchFunction : public MatchFunction<MatchMethod::kAll> {};
+class AnyMatchFunction : public MatchFunction<MatchMethod::kAny> {};
+class NoneMatchFunction : public MatchFunction<MatchMethod::kNone> {};
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   // array(T), function(T) -> boolean
@@ -174,5 +190,10 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     udf_any_match,
     signatures(),
     std::make_unique<AnyMatchFunction>());
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_none_match,
+    signatures(),
+    std::make_unique<NoneMatchFunction>());
 
 } // namespace facebook::velox::functions
