@@ -103,6 +103,7 @@ jobs:
           echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@1.1/" >> $GITHUB_ENV
           # this avoids a conflict that is caused by pipx being upgraded during
           # the cibuildwheel step
+          brew update --auto-update
           brew install pipx
 
       - name: "Create sdist"
