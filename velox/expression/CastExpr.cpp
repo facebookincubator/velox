@@ -110,19 +110,20 @@ void applyDecimalCastKernel(
   });
 }
 
-template <typename TOutput>
-void applyBigintToDecimalCastKernel(
+template <TypeKind InputKind, typename TOutput>
+void applyIntToDecimalCastKernel(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
     const TypePtr& toType,
     VectorPtr castResult) {
-  auto sourceVector = input.as<SimpleVector<int64_t>>();
+  using TInput = typename TypeTraits<InputKind>::NativeType;
+  auto sourceVector = input.as<SimpleVector<TInput>>();
   auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
   context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-    auto rescaledValue = DecimalUtil::rescaleBigint<TOutput>(
+    auto rescaledValue = DecimalUtil::rescaleInt<InputKind, TOutput>(
         sourceVector->valueAt(row),
         toPrecisionScale.first,
         toPrecisionScale.second);
@@ -498,12 +499,22 @@ VectorPtr CastExpr::applyDecimal(
       }
       break;
     }
-    case TypeKind::BIGINT: {
+    case TypeKind::INTEGER: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyBigintToDecimalCastKernel<UnscaledShortDecimal>(
+        applyIntToDecimalCastKernel<TypeKind::INTEGER, UnscaledShortDecimal>(
             rows, input, context, toType, castResult);
       } else {
-        applyBigintToDecimalCastKernel<UnscaledLongDecimal>(
+        applyIntToDecimalCastKernel<TypeKind::INTEGER, UnscaledLongDecimal>(
+            rows, input, context, toType, castResult);
+      }
+      break;
+    }
+    case TypeKind::BIGINT: {
+      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
+        applyIntToDecimalCastKernel<TypeKind::BIGINT, UnscaledShortDecimal>(
+            rows, input, context, toType, castResult);
+      } else {
+        applyIntToDecimalCastKernel<TypeKind::BIGINT, UnscaledLongDecimal>(
             rows, input, context, toType, castResult);
       }
       break;

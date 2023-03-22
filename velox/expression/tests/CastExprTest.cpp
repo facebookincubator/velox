@@ -826,6 +826,54 @@ TEST_F(CastExprTest, bigintToDecimal) {
       "Cannot cast BIGINT '100' to DECIMAL(17,16)");
 }
 
+TEST_F(CastExprTest, intToDecimal) {
+  // INTEGER to short decimal
+  auto input = makeFlatVector<int32_t>({-3, -2, -1, 0, 55, 69, 72});
+  testComplexCast(
+      "c0",
+      input,
+      makeShortDecimalFlatVector(
+          {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(6, 2)));
+
+  // INTEGER to long decimal
+  auto input2 = makeFlatVector<int32_t>({-3, -2, -1, 0, 55, 69, 72});
+  testComplexCast(
+      "c0",
+      input2,
+      makeLongDecimalFlatVector(
+          {-30'000'000'000,
+           -20'000'000'000,
+           -10'000'000'000,
+           0,
+           550'000'000'000,
+           690'000'000'000,
+           720'000'000'000},
+          DECIMAL(20, 10)));
+
+  // Test after rescaling input integer, the final value doesn't fit in DECIMAL
+  // type.
+  VELOX_ASSERT_THROW(
+      testComplexCast(
+          "c0",
+          makeFlatVector<int32_t>(std::vector<int32_t>{-2147483647}),
+          makeShortDecimalFlatVector({0}, DECIMAL(9, 1))),
+      "Cannot cast INTEGER '-2147483647' to DECIMAL(9,1)");
+
+  VELOX_ASSERT_THROW(
+      testComplexCast(
+          "c0",
+          makeFlatVector<int32_t>(std::vector<int32_t>{-100}),
+          makeShortDecimalFlatVector({0}, DECIMAL(17, 16))),
+      "Cannot cast INTEGER '-100' to DECIMAL(17,16)");
+
+  VELOX_ASSERT_THROW(
+      testComplexCast(
+          "c0",
+          makeFlatVector<int32_t>(std::vector<int32_t>{100}),
+          makeShortDecimalFlatVector({0}, DECIMAL(17, 16))),
+      "Cannot cast INTEGER '100' to DECIMAL(17,16)");
+}
+
 TEST_F(CastExprTest, castInTry) {
   // Test try(cast(array(varchar) as array(bigint))) whose input vector is
   // wrapped in dictinary encoding. The row of ["2a"] should trigger an error
