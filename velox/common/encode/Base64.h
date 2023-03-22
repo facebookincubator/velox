@@ -74,9 +74,10 @@ class Base64 {
   /// Encodes the specified number of characters from the 'data' and writes the
   /// result to the 'output'. The output must have enough space, e.g. as
   /// returned by the calculateEncodedSize().
-  static void encode_url(const char* data, size_t size, char* output);
+  static void encodeUrl(const char* data, size_t size, char* output);
 
   // compatible with www's Base64URL::encode/decode
+  // TODO rename encode_url/decode_url to encodeUrl/encodeUrl.
   static std::string encode_url(const char* data, size_t len);
   static std::string encode_url(const folly::IOBuf* data);
   static std::string encode_url(folly::StringPiece text);

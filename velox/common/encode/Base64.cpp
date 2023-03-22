@@ -169,7 +169,7 @@ void Base64::encode(const char* data, size_t len, char* output) {
 }
 
 // static
-void Base64::encode_url(const char* data, size_t len, char* output) {
+void Base64::encodeUrl(const char* data, size_t len, char* output) {
   encodeImpl(folly::StringPiece(data, len), kBase64UrlCharset, true, output);
 }
 
