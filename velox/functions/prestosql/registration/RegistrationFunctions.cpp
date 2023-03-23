@@ -23,7 +23,7 @@ extern void registerCheckedArithmeticFunctions();
 extern void registerComparisonFunctions();
 extern void registerArrayFunctions();
 extern void registerMapFunctions();
-extern void registerJsonFunctions();
+extern void registerJsonFunctions(bool useSimd);
 extern void registerHyperLogFunctions();
 extern void registerGeneralFunctions();
 extern void registerDateTimeFunctions();
@@ -53,8 +53,8 @@ void registerMapFunctions() {
   functions::registerMapFunctions();
 }
 
-void registerJsonFunctions() {
-  functions::registerJsonFunctions();
+void registerJsonFunctions(bool useSimd) {
+  functions::registerJsonFunctions(useSimd);
 }
 
 void registerHyperLogFunctions() {
@@ -87,7 +87,7 @@ void registerAllScalarFunctions() {
   registerComparisonFunctions();
   registerMapFunctions();
   registerArrayFunctions();
-  registerJsonFunctions();
+  registerJsonFunctions(true);
   registerHyperLogFunctions();
   registerGeneralFunctions();
   registerDateTimeFunctions();

@@ -23,43 +23,44 @@
 #endif
 
 namespace facebook::velox::functions {
-void registerJsonFunctions() {
+void registerJsonFunctions(bool useSimd) {
   registerJsonType();
-#if USD_SIMDJSON
-  registerFunction<SIMDIsJsonScalarFunction, bool, Json>({"is_json_scalar"});
-  registerFunction<SIMDJsonExtractScalarFunction, Varchar, Json, Varchar>(
-      {"json_extract_scalar"});
-  registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
-      {"json_array_length"});
-  {
-    registerFunction<SIMDJsonArrayContainsFunction, bool, Json, bool>(
+  if (useSimd == 1) {
+    registerFunction<SIMDIsJsonScalarFunction, bool, Json>({"is_json_scalar"});
+    registerFunction<SIMDJsonExtractScalarFunction, Varchar, Json, Varchar>(
+        {"json_extract_scalar"});
+    registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
+        {"json_array_length"});
+    {
+      registerFunction<SIMDJsonArrayContainsFunction, bool, Json, bool>(
+          {"json_array_contains"});
+      registerFunction<SIMDJsonArrayContainsFunction, bool, Json, int64_t>(
+          {"json_array_contains"});
+      registerFunction<SIMDJsonArrayContainsFunction, bool, Json, double>(
+          {"json_array_contains"});
+      registerFunction<SIMDJsonArrayContainsFunction, bool, Json, Varchar>(
+          {"json_array_contains"});
+    }
+    registerFunction<SIMDJsonSizeFunction, int64_t, Json, Varchar>(
+        {"json_size"});
+    registerFunction<SIMDJsonParseFunction, Varchar, Json>({"json_parse"});
+  } else {
+    registerFunction<IsJsonScalarFunction, bool, Json>({"is_json_scalar"});
+    registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
+        {"json_extract_scalar"});
+    registerFunction<JsonArrayLengthFunction, int64_t, Json>(
+        {"json_array_length"});
+    registerFunction<JsonArrayContainsFunction, bool, Json, bool>(
         {"json_array_contains"});
-    registerFunction<SIMDJsonArrayContainsFunction, bool, Json, int64_t>(
+    registerFunction<JsonArrayContainsFunction, bool, Json, int64_t>(
         {"json_array_contains"});
-    registerFunction<SIMDJsonArrayContainsFunction, bool, Json, double>(
+    registerFunction<JsonArrayContainsFunction, bool, Json, double>(
         {"json_array_contains"});
-    registerFunction<SIMDJsonArrayContainsFunction, bool, Json, Varchar>(
+    registerFunction<JsonArrayContainsFunction, bool, Json, Varchar>(
         {"json_array_contains"});
+    registerFunction<JsonSizeFunction, int64_t, Json, Varchar>({"json_size"});
+    VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, "json_parse");
   }
-  registerFunction<SIMDJsonSizeFunction, int64_t, Json, Varchar>({"json_size"});
-  registerFunction<SIMDJsonParseFunction, Varchar, Varchar>({"json_parse"});
-#else
-  registerFunction<IsJsonScalarFunction, bool, Json>({"is_json_scalar"});
-  registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
-      {"json_extract_scalar"});
-  registerFunction<JsonArrayLengthFunction, int64_t, Json>(
-      {"json_array_length"});
-  registerFunction<JsonArrayContainsFunction, bool, Json, bool>(
-      {"json_array_contains"});
-  registerFunction<JsonArrayContainsFunction, bool, Json, int64_t>(
-      {"json_array_contains"});
-  registerFunction<JsonArrayContainsFunction, bool, Json, double>(
-      {"json_array_contains"});
-  registerFunction<JsonArrayContainsFunction, bool, Json, Varchar>(
-      {"json_array_contains"});
-  registerFunction<JsonSizeFunction, int64_t, Json, Varchar>({"json_size"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, "json_parse");
-#endif
   VELOX_REGISTER_VECTOR_FUNCTION(udf_json_format, "json_format");
 }
 

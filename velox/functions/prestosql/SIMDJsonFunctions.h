@@ -135,7 +135,7 @@ struct SIMDJsonExtractScalarFunction {
 
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
-      const arg_type<Varchar>& json,
+      const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
     std::string jsonPathStr = jsonPath;
     bool retVal = false;

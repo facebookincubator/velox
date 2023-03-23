@@ -53,14 +53,76 @@ struct JsonExtractFunction {
   }
 };
 
+class JsonParseFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    VectorPtr localResult;
+
+    // Input can be constant or flat.
+    // TODO(arpitporwal2293) Replace folly::parseJson with a lightweight
+    // validation of JSON syntax that doesn't allocate memory or copy data.
+    assert(args.size() > 0);
+    const auto& arg = args[0];
+    if (arg->isConstantEncoding()) {
+      auto value = arg->as<ConstantVector<StringView>>()->valueAt(0);
+      try {
+        folly::parseJson(value);
+      } catch (const std::exception& e) {
+        context.setErrors(rows, std::current_exception());
+        return;
+      }
+      localResult = std::make_shared<ConstantVector<StringView>>(
+          context.pool(), rows.end(), false, JSON(), std::move(value));
+    } else {
+      auto flatInput = arg->asFlatVector<StringView>();
+
+      auto stringBuffers = flatInput->stringBuffers();
+      VELOX_CHECK_LE(rows.end(), flatInput->size());
+
+      context.applyToSelectedNoThrow(
+          rows, [&](auto row) { folly::parseJson(flatInput->valueAt(row)); });
+      localResult = std::make_shared<FlatVector<StringView>>(
+          context.pool(),
+          JSON(),
+          nullptr,
+          rows.end(),
+          flatInput->values(),
+          std::move(stringBuffers));
+    }
+
+    context.moveOrCopyResult(localResult, rows, result);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    // varchar -> json
+    return {exec::FunctionSignatureBuilder()
+                .returnType("json")
+                .argumentType("varchar")
+                .build()};
+  }
+};
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_json_parse,
+    JsonParseFunction::signatures(),
+    std::make_unique<JsonParseFunction>());
+
 class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
  public:
   JsonBenchmark() : FunctionBenchmarkBase() {
-    velox::functions::prestosql::registerJsonFunctions();
+    velox::functions::prestosql::registerJsonFunctions(true);
+    VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, "folly_json_parse");
     registerFunction<JsonExtractFunction, Varchar, Varchar, Varchar>(
-        {"json_extract"});
+        {"folly_json_extract"});
     registerFunction<SIMDJsonExtractScalarFunction, Varchar, Varchar, Varchar>(
         {"simd_json_extract_scalar"});
+    registerFunction<SIMDJsonParseFunction, Varchar, Varchar>(
+        {"simd_json_parse"});
   }
 
   std::string prepareData(const std::string& fileSize) {
@@ -132,7 +194,8 @@ void VeloxJsonExtract(
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(fileSize);
   suspender.dismiss();
-  benchmark.runWithJsonPath(iter, vectorSize, "json_extract", json, jsonPath);
+  benchmark.runWithJsonPath(
+      iter, vectorSize, "folly_json_extract", json, jsonPath);
 }
 
 void SIMDJsonExtract(
@@ -153,7 +216,7 @@ void VeloxJsonParse(int iter, int vectorSize, const std::string& fileSize) {
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(fileSize);
   suspender.dismiss();
-  benchmark.runWithJson(iter, vectorSize, "json_parse", json);
+  benchmark.runWithJson(iter, vectorSize, "folly_json_parse", json);
 }
 
 void SIMDJsonParse(int iter, int vectorSize, const std::string& fileSize) {

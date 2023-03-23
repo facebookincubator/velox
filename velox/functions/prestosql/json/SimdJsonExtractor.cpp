@@ -484,29 +484,29 @@ void ParserContext::parseDocument() {
 std::optional<std::string> simdJsonExtractString(
     const std::string& json,
     const std::string& path) {
-    auto& extractor = SimdJsonExtractor::getInstance(path);
-    return extractor.extractOndemand(json);
+  auto& extractor = SimdJsonExtractor::getInstance(path);
+  return extractor.extractOndemand(json);
 }
 
 std::optional<std::string> simdJsonExtractObject(
     const std::string& json,
     const std::string& path) {
-    auto& extractor = SimdJsonExtractor::getInstance(path);
-    return extractor.extract(json);
+  auto& extractor = SimdJsonExtractor::getInstance(path);
+  return extractor.extract(json);
 }
 
 std::optional<std::string> simdJsonExtractScalar(
     const std::string& json,
     const std::string& path) {
-    auto& extractor = SimdJsonExtractor::getInstance(path);
-    return extractor.extractScalar(json);
+  auto& extractor = SimdJsonExtractor::getInstance(path);
+  return extractor.extractScalar(json);
 }
 
 std::optional<int64_t> simdJsonSize(
     const std::string& json,
     const std::string& path) {
-    auto& extractor = SimdJsonExtractor::getInstance(path);
-    return extractor.getJsonSize(json);
+  auto& extractor = SimdJsonExtractor::getInstance(path);
+  return extractor.getJsonSize(json);
 }
 
 } // namespace facebook::velox::functions

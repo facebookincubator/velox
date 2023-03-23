@@ -27,7 +27,7 @@ void registerArrayFunctions();
 
 void registerMapFunctions();
 
-void registerJsonFunctions();
+void registerJsonFunctions(bool useSimd);
 
 void registerHyperLogFunctions();
 
