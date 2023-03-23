@@ -43,7 +43,7 @@ void registerJsonFunctions(bool useSimd) {
     }
     registerFunction<SIMDJsonSizeFunction, int64_t, Json, Varchar>(
         {"json_size"});
-    registerFunction<SIMDJsonParseFunction, Varchar, Json>({"json_parse"});
+    registerFunction<SIMDJsonParseFunction, Varchar, Varchar>({"json_parse"});
   } else {
     registerFunction<IsJsonScalarFunction, bool, Json>({"is_json_scalar"});
     registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(

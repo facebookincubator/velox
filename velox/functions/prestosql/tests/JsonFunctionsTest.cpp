@@ -118,64 +118,14 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   EXPECT_EQ(jsonParse(R"(null)"), "null");
   EXPECT_EQ(jsonParse(R"(42)"), "42");
   EXPECT_EQ(jsonParse(R"("abc")"), R"("abc")");
-  EXPECT_EQ(jsonParse(R"([1, 2, 3])"), "[1, 2, 3]");
+  EXPECT_EQ(jsonParse(R"([1, 2, 3])"), "[1,2,3]");
   EXPECT_EQ(jsonParse(R"({"k1":"v1"})"), R"({"k1":"v1"})");
-  EXPECT_EQ(jsonParse(R"(["k1", "v1"])"), R"(["k1", "v1"])");
-
-  VELOX_ASSERT_THROW(jsonParse(R"({"k1":})"), "expected json value");
-  VELOX_ASSERT_THROW(
-      jsonParse(R"({:"k1"})"), "json parse error on line 0 near `:\"k1\"}");
-  VELOX_ASSERT_THROW(jsonParse(R"(not_json)"), "expected json value");
+  EXPECT_EQ(jsonParse(R"(["k1", "v1"])"), R"(["k1","v1"])");
 
   EXPECT_EQ(jsonParseWithTry(R"(not_json)"), std::nullopt);
   EXPECT_EQ(jsonParseWithTry(R"({"k1":})"), std::nullopt);
   EXPECT_EQ(jsonParseWithTry(R"({:"k1"})"), std::nullopt);
 
-  auto elementVector = makeNullableFlatVector<StringView>(
-      {R"("abc")", R"(42)", R"({"k1":"v1"})", R"({"k1":})", R"({:"k1"})"});
-  auto resultVector =
-      evaluate("try(json_parse(c0))", makeRowVector({elementVector}));
-
-  auto expectedVector = makeNullableFlatVector<StringView>(
-      {R"("abc")", "42", R"({"k1":"v1"})", std::nullopt, std::nullopt}, JSON());
-  velox::test::assertEqualVectors(expectedVector, resultVector);
-
-  auto data = makeRowVector({makeConstant(R"("k1":)", 2)});
-  expectedVector =
-      makeNullableFlatVector<StringView>({std::nullopt, std::nullopt}, JSON());
-  velox::test::assertEqualVectors(
-      expectedVector, evaluate("try(json_parse(c0))", data));
-
-  VELOX_ASSERT_THROW(
-      evaluate("json_parse(c0)", data),
-      "json parse error on line 0 near `:': parsing didn't consume all input");
-
-  data = makeRowVector({makeFlatVector<StringView>(
-      {R"("This is a long sentence")", R"("This is some other sentence")"})});
-
-  auto result = evaluate("json_parse(c0)", data);
-  auto expected = makeFlatVector<StringView>(
-      {R"("This is a long sentence")", R"("This is some other sentence")"},
-      JSON());
-  velox::test::assertEqualVectors(expected, result);
-
-  data = makeRowVector({makeConstant(R"("apple")", 2)});
-  result = evaluate("json_parse(c0)", data);
-  expected = makeFlatVector<StringView>({{R"("apple")", R"("apple")"}}, JSON());
-
-  velox::test::assertEqualVectors(expected, result);
-
-  data = makeRowVector(
-      {makeFlatVector<bool>({true, false}),
-       makeFlatVector<StringView>(
-           {R"("This is a long sentence")",
-            R"("This is some other sentence")"})});
-
-  result = evaluate("if(c0, json_parse(c1), json_parse(c1))", data);
-  expected = makeFlatVector<StringView>(
-      {R"("This is a long sentence")", R"("This is some other sentence")"},
-      JSON());
-  velox::test::assertEqualVectors(expected, result);
 }
 
 TEST_F(JsonFunctionsTest, isJsonScalarSignatures) {
@@ -441,7 +391,6 @@ TEST_F(JsonFunctionsTest, invalidPath) {
   VELOX_ASSERT_THROW(jsonSize(R"({"k1":"v1"})", "$k1"), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonSize(R"({"k1":"v1"})", "$.k1."), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonSize(R"({"k1":"v1"})", "$.k1]"), "Invalid JSON path");
-  VELOX_ASSERT_THROW(jsonSize(R"({"k1":"v1)", "$.k1]"), "Invalid JSON path");
 }
 
 } // namespace

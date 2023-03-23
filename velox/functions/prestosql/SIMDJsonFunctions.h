@@ -113,7 +113,7 @@ struct SIMDJsonParseFunction {
 
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
-      const arg_type<Json>& json) {
+      const arg_type<Varchar>& json) {
     ParserContext ctx(json.data(), json.size());
     bool retVal = false;
 
