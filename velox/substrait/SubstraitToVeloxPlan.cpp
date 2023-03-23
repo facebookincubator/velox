@@ -20,6 +20,36 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
+
+HiveConnectorHandler::HiveConnectorHandler(
+    const std::string& connectorId,
+    const std::string& tableName,
+    const bool filterPushDownEnabled,
+    const connector::hive::HiveColumnHandle::ColumnType& columnType)
+    : connectorId_(connectorId),
+      tableName_(tableName),
+      filterPushDownEnabled_(filterPushDownEnabled),
+      columnType_(columnType) {}
+
+std::shared_ptr<connector::ConnectorTableHandle>
+HiveConnectorHandler::createTableHandle(
+    connector::hive::SubfieldFilters filters) {
+  return std::make_shared<connector::hive::HiveTableHandle>(
+      connectorId_,
+      tableName_,
+      filterPushDownEnabled_,
+      std::move(filters),
+      nullptr);
+}
+
+std::shared_ptr<connector::ColumnHandle>
+HiveConnectorHandler::createColumnHandle(
+    const std::string& columnHandleName,
+    const TypePtr& columnHandleDataType) {
+  return std::make_shared<connector::hive::HiveColumnHandle>(
+      columnHandleName, columnType_, columnHandleDataType);
+}
+
 namespace {
 core::AggregationNode::Step toAggregationStep(
     const ::substrait::AggregateRel& sAgg) {
@@ -409,30 +439,14 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     }
   }
 
-  // Do not hard-code connector ID and allow for connectors other than Hive.
-  static const std::string kHiveConnectorId = "test-hive";
-
   // Velox requires Filter Pushdown must being enabled.
   bool filterPushdownEnabled = true;
   std::shared_ptr<connector::ConnectorTableHandle> tableHandle;
-  //std::shared_ptr<connector::hive::HiveTableHandle> tableHandle;
   if (!readRel.has_filter()) {
-    // tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
-    //     kHiveConnectorId,
-    //     "hive_table",
-    //     filterPushdownEnabled,
-    //     connector::hive::SubfieldFilters{},
-    //     nullptr);
     tableHandle = connector_->createTableHandle();
   } else {
     connector::hive::SubfieldFilters filters =
         toVeloxFilter(colNameList, veloxTypeList, readRel.filter());
-    // tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
-    //     kHiveConnectorId,
-    //     "hive_table",
-    //     filterPushdownEnabled,
-    //     std::move(filters),
-    //     nullptr);
     tableHandle = connector_->createTableHandle(std::move(filters));
   }
 
@@ -443,11 +457,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       assignments;
   for (int idx = 0; idx < colNameList.size(); idx++) {
     auto outName = substraitParser_->makeNodeName(planNodeId_, idx);
-    // assignments[outName] = std::make_shared<connector::hive::HiveColumnHandle>(
-    //     colNameList[idx],
-    //     connector::hive::HiveColumnHandle::ColumnType::kRegular,
-    //     veloxTypeList[idx]);
-    assignments[outName] = connector_->createColumnHandle(colNameList[idx], veloxTypeList[idx]);
+    assignments[outName] =
+        connector_->createColumnHandle(colNameList[idx], veloxTypeList[idx]);
     outNames.emplace_back(outName);
   }
   auto outputType = ROW(std::move(outNames), std::move(veloxTypeList));
