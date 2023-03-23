@@ -29,6 +29,7 @@
 #include <velox/type/Variant.h>
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
+#include <velox/vector/VectorSaver.h>
 #include "folly/json.h"
 
 namespace facebook::velox::py {
@@ -464,6 +465,10 @@ static void addExpressionBindings(
     py::module& m,
     bool asModuleLocalDefinitions = true);
 
+static void addVectorSerdeBindings(
+    py::module& m,
+    bool asModuleLocalDefinitions = true);
+
 ///  Adds Velox Python Bindings to the module m.
 ///
 /// This function adds the following bindings:
@@ -484,9 +489,14 @@ inline void addVeloxBindings(
   addDataTypeBindings(m, asModuleLocalDefinitions);
   addVectorBindings(m, asModuleLocalDefinitions);
   addExpressionBindings(m, asModuleLocalDefinitions);
+  addVectorSerdeBindings(m, asModuleLocalDefinitions);
   auto atexit = py::module_::import("atexit");
   atexit.attr("register")(
       py::cpp_function([]() { PyVeloxContext::cleanup(); }));
 }
+
+/// Vector Serialization and Deserialization
+
+
 
 } // namespace facebook::velox::py

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import shutil, tempfile
+from os import path
 import unittest
 
 import pyvelox.pyvelox as pv
@@ -254,3 +256,23 @@ class TestVeloxVector(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             ints2.append(strs2)
+
+
+class TestVeloxVectorSaver(unittest.TestCase):
+    
+    def setUp(self):
+        # create a temporary directory
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        # remove the temporary directory
+        shutil.rmtree(self.test_dir)
+    
+    def test_serde_vector(self):
+        vec = pv.from_list([1, 2, 3])
+        fpath = path.join(self.test_dir, "a.pyvelox")
+        pv.save_vector(vec, fpath)
+        loaded_vec = pv.load_vector(fpath)
+        self.assertEqual(len(vec), len(loaded_vec))
+        for i in range(len(vec)):
+            self.assertEqual(vec[i], loaded_vec[i])
