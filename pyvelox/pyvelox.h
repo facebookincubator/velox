@@ -497,6 +497,4 @@ inline void addVeloxBindings(
 
 /// Vector Serialization and Deserialization
 
-
-
 } // namespace facebook::velox::py
