@@ -285,6 +285,16 @@ class HiveConnector final : public Connector {
     return executor_;
   }
 
+  FileHandleCacheStats fileHandleCacheStats() {
+    return fileHandleFactory_.cacheStats();
+  }
+
+  // NOTE: this is to clear file handle cache which might affect performance,
+  // and is only used for operational purposes.
+  FileHandleCacheStats clearFileHandleCache() {
+    return fileHandleFactory_.clearCache();
+  }
+
  private:
   FileHandleFactory fileHandleFactory_;
   folly::Executor* FOLLY_NULLABLE executor_;
