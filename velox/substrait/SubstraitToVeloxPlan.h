@@ -34,43 +34,6 @@ class ConnectorHandler {
       const TypePtr& columnHandleDataType) = 0;
 };
 
-// class HiveConnectorHandler : public ConnectorHandler {
-//     public:
-
-//         HiveConnectorHandler(const std::string& connectorId,
-//             const std::string& tableName,
-//             const bool filterPushDownEnabled,
-//             const connector::hive::HiveColumnHandle::ColumnType& columnType)
-//             : connectorId_(connectorId),
-//          tableName_(tableName),
-//          filterPushDownEnabled_(filterPushDownEnabled),
-//          columnType_(columnType) {}
-
-//         std::shared_ptr<connector::ConnectorTableHandle>
-//         createTableHandle(connector::hive::SubfieldFilters filters = {})
-//         override {
-//             return std::make_shared<connector::hive::HiveTableHandle>(
-//                 connectorId_,
-//                 tableName_,
-//                 filterPushDownEnabled_,
-//                 std::move(filters),
-//                 nullptr);
-//         }
-
-//         std::shared_ptr<connector::ColumnHandle> createColumnHandle(const
-//         std::string& columnHandleName,
-//             const TypePtr& columnHandleDataType) override {
-//             return
-//             std::make_shared<connector::hive::HiveColumnHandle>(columnHandleName,
-//             columnType_, columnHandleDataType);
-//         }
-//     private:
-//         std::string connectorId_;
-//         std::string tableName_;
-//         bool filterPushDownEnabled_;
-//         connector::hive::HiveColumnHandle::ColumnType columnType_;
-// };
-
 class HiveConnectorHandler : public ConnectorHandler {
  public:
   HiveConnectorHandler(
