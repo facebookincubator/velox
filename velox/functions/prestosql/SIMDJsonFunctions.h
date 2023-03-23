@@ -119,7 +119,7 @@ struct SIMDJsonParseFunction {
 
     try {
       ctx.parseElement();
-      std::string_view rlt = simdjson::to_string(ctx.jsonEle);
+      std::string rlt = simdjson::to_string(ctx.jsonEle);
       result.setNoCopy(facebook::velox::StringView(rlt));
       retVal = true;
     } catch (simdjson::simdjson_error& e) {
