@@ -115,17 +115,10 @@ struct SIMDJsonParseFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& json) {
     ParserContext ctx(json.data(), json.size());
-    bool retVal = false;
-
-    try {
-      ctx.parseElement();
-      std::string rlt = simdjson::to_string(ctx.jsonEle);
-      result.setNoCopy(facebook::velox::StringView(rlt));
-      retVal = true;
-    } catch (simdjson::simdjson_error& e) {
-      throw e;
-    }
-    return retVal;
+    ctx.parseElement();
+    std::string rlt = simdjson::to_string(ctx.jsonEle);
+    result.setNoCopy(facebook::velox::StringView(rlt));
+    return true;
   }
 };
 
