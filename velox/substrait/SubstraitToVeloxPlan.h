@@ -26,48 +26,47 @@ class ConnectorHandler {
     public:
         virtual ~ConnectorHandler() = default;
     
-        virtual std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(
-            const std::string& connectorId,
-            const std::string& tableName,
-            const bool filterPushDownEnabled) = 0;
+        virtual std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(connector::hive::SubfieldFilters filters = {}) = 0;
         
-        virtual std::shared_ptr<connector::ColumnHandle> createColumnHandle(
-            const std::string& name,
-            const TypePtr& dataType) = 0;
+        virtual std::shared_ptr<connector::ColumnHandle> createColumnHandle(const std::string& columnHandleName,
+            const TypePtr& columnHandleDataType) = 0;
 };
 
 class HiveConnectorHandler : public ConnectorHandler {
     public:
         
-        HiveConnectorHandler(const connector::hive::HiveColumnHandle::ColumnType& columnType, connector::hive::SubfieldFilters filters = {}) : columnType_(columnType), filters_(std::move(filters)) {}
-
-        std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(
-            const std::string& connectorId,
+        HiveConnectorHandler(const std::string& connectorId, 
             const std::string& tableName,
-            const bool filterPushDownEnabled) override {
+            const bool filterPushDownEnabled,
+            const connector::hive::HiveColumnHandle::ColumnType& columnType) : connectorId_(connectorId), 
+         tableName_(tableName), filterPushDownEnabled_(filterPushDownEnabled),
+         columnType_(columnType) {}
+
+        std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(connector::hive::SubfieldFilters filters = {}) override {
             return std::make_shared<connector::hive::HiveTableHandle>(
-                connectorId,
-                tableName,
-                filterPushDownEnabled,
-                std::move(filters_),
+                connectorId_,
+                tableName_,
+                filterPushDownEnabled_,
+                std::move(filters),
                 nullptr);
         }
 
-        std::shared_ptr<connector::ColumnHandle> createColumnHandle(
-            const std::string& name,
-            const TypePtr& dataType) override {
-            return std::make_shared<connector::hive::HiveColumnHandle>(name, columnType_, dataType);
+        std::shared_ptr<connector::ColumnHandle> createColumnHandle(const std::string& columnHandleName,
+            const TypePtr& columnHandleDataType) override {
+            return std::make_shared<connector::hive::HiveColumnHandle>(columnHandleName, columnType_, columnHandleDataType);
         }
     private:
+        std::string connectorId_;
+        std::string tableName_;
+        bool filterPushDownEnabled_;
         connector::hive::HiveColumnHandle::ColumnType columnType_;
-        connector::hive::SubfieldFilters filters_;
 };
 
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
-  explicit SubstraitVeloxPlanConverter(memory::MemoryPool* pool)
-      : pool_(pool) {}
+  explicit SubstraitVeloxPlanConverter(memory::MemoryPool* pool, std::shared_ptr<ConnectorHandler> connector)
+      : pool_(pool), connector_(connector) {}
   struct SplitInfo {
     /// The Partition index.
     u_int32_t partitionIndex;
@@ -209,6 +208,9 @@ class SubstraitVeloxPlanConverter {
 
   /// Memory pool.
   memory::MemoryPool* pool_;
+
+  /// Connector handler
+  std::shared_ptr<ConnectorHandler> connector_;
 
   /// Helper function to convert the input of Substrait Rel to Velox Node.
   template <typename T>

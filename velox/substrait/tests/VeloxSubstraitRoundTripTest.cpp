@@ -72,10 +72,18 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
     assertQuery(samePlan, duckDbSql);
   }
 
+  std::shared_ptr<ConnectorHandler> getConnector() {
+    return std::make_shared<HiveConnectorHandler>("roundtrip-test-hive", 
+            "roundtrip-hive-table",
+            /*filterPushDownEnabled*/true,
+            connector::hive::HiveColumnHandle::ColumnType::kRegular);
+  }
+
   std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =
       std::make_shared<VeloxToSubstraitPlanConvertor>();
+  
   std::shared_ptr<SubstraitVeloxPlanConverter> substraitConverter_ =
-      std::make_shared<SubstraitVeloxPlanConverter>(pool_.get());
+      std::make_shared<SubstraitVeloxPlanConverter>(pool_.get(), getConnector());
 };
 
 TEST_F(VeloxSubstraitRoundTripTest, project) {

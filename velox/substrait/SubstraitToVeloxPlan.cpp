@@ -414,23 +414,26 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
   // Velox requires Filter Pushdown must being enabled.
   bool filterPushdownEnabled = true;
-  std::shared_ptr<connector::hive::HiveTableHandle> tableHandle;
+  std::shared_ptr<connector::ConnectorTableHandle> tableHandle;
+  //std::shared_ptr<connector::hive::HiveTableHandle> tableHandle;
   if (!readRel.has_filter()) {
-    tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
-        kHiveConnectorId,
-        "hive_table",
-        filterPushdownEnabled,
-        connector::hive::SubfieldFilters{},
-        nullptr);
+    // tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
+    //     kHiveConnectorId,
+    //     "hive_table",
+    //     filterPushdownEnabled,
+    //     connector::hive::SubfieldFilters{},
+    //     nullptr);
+    tableHandle = connector_->createTableHandle();
   } else {
     connector::hive::SubfieldFilters filters =
         toVeloxFilter(colNameList, veloxTypeList, readRel.filter());
-    tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
-        kHiveConnectorId,
-        "hive_table",
-        filterPushdownEnabled,
-        std::move(filters),
-        nullptr);
+    // tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
+    //     kHiveConnectorId,
+    //     "hive_table",
+    //     filterPushdownEnabled,
+    //     std::move(filters),
+    //     nullptr);
+    tableHandle = connector_->createTableHandle(std::move(filters));
   }
 
   // Get assignments and out names.
@@ -440,10 +443,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       assignments;
   for (int idx = 0; idx < colNameList.size(); idx++) {
     auto outName = substraitParser_->makeNodeName(planNodeId_, idx);
-    assignments[outName] = std::make_shared<connector::hive::HiveColumnHandle>(
-        colNameList[idx],
-        connector::hive::HiveColumnHandle::ColumnType::kRegular,
-        veloxTypeList[idx]);
+    // assignments[outName] = std::make_shared<connector::hive::HiveColumnHandle>(
+    //     colNameList[idx],
+    //     connector::hive::HiveColumnHandle::ColumnType::kRegular,
+    //     veloxTypeList[idx]);
+    assignments[outName] = connector_->createColumnHandle(colNameList[idx], veloxTypeList[idx]);
     outNames.emplace_back(outName);
   }
   auto outputType = ROW(std::move(outNames), std::move(veloxTypeList));
