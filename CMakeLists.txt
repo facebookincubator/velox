@@ -36,7 +36,7 @@ option(
 option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
-  OFF)
+  ON)
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
 #
@@ -62,11 +62,11 @@ option(VELOX_ENABLE_EXAMPLES
        "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
        OFF)
 option(VELOX_ENABLE_SUBSTRAIT "Buid Substrait-to-Velox converter." OFF)
-option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." ON)
+option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
-option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
+option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 
@@ -366,12 +366,12 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(LZO lzo2)
   find_library(ZSTD zstd)
   find_library(SNAPPY snappy)
-  if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR}
-                                                 MATCHES "x86_64"))
-    execute_process(COMMAND apt -y install uuid-dev nasm)
-    execute_process(COMMAND dnf -y install libuuid-devel nasm)
-    set_source(qpl)
-    resolve_dependency(qpl 1.1.0 COMPONENTS shared)
+  if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES
+                                               "x86_64"))
+#    execute_process(COMMAND apt -y install uuid-dev nasm)
+#    execute_process(COMMAND dnf -y install libuuid-devel nasm)
+#    set_source(qpl)
+#    resolve_dependency(qpl 1.1.0 COMPONENTS shared)
   endif()
 endif()
 
