@@ -318,7 +318,10 @@ struct CompressionCodec {
     BROTLI = 4,
     LZ4 = 5,
     ZSTD = 6,
-    LZ4_RAW = 7
+    LZ4_RAW = 7,
+#if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
+    QPL = 8
+#endif
   };
 };
 
