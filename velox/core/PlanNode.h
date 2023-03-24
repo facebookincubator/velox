@@ -76,6 +76,10 @@ class SortOrder {
         (nullsFirst_ ? "FIRST" : "LAST"));
   }
 
+  folly::dynamic serialize() const;
+
+  static SortOrder deserialize(const folly::dynamic& obj);
+
  private:
   bool ascending_;
   bool nullsFirst_;
@@ -86,7 +90,7 @@ extern const SortOrder kAscNullsLast;
 extern const SortOrder kDescNullsFirst;
 extern const SortOrder kDescNullsLast;
 
-class PlanNode {
+class PlanNode : public ISerializable {
  public:
   explicit PlanNode(const PlanNodeId& id) : id_{id} {}
 
@@ -95,6 +99,10 @@ class PlanNode {
   const PlanNodeId& id() const {
     return id_;
   }
+
+  folly::dynamic serialize() const override;
+
+  static void registerSerDe();
 
   virtual const RowTypePtr& outputType() const = 0;
 
@@ -239,6 +247,10 @@ class ValuesNode : public PlanNode {
     return "Values";
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -274,6 +286,10 @@ class ArrowStreamNode : public PlanNode {
     return "ArrowStream";
   }
 
+  folly::dynamic serialize() const override {
+    VELOX_UNSUPPORTED("ArrowStream plan node is not serializable");
+  }
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -306,6 +322,10 @@ class FilterNode : public PlanNode {
   std::string_view name() const override {
     return "Filter";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override {
@@ -361,6 +381,10 @@ class ProjectNode : public PlanNode {
   virtual std::string_view name() const override {
     return "Project";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override;
@@ -420,6 +444,10 @@ class TableScanNode : public PlanNode {
   std::string_view name() const override {
     return "TableScan";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override;
@@ -486,6 +514,10 @@ class TableWriteNode : public PlanNode {
     return "TableWrite";
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -510,19 +542,9 @@ class AggregationNode : public PlanNode {
     kSingle
   };
 
-  static const char* stepName(Step step) {
-    switch (step) {
-      case Step::kPartial:
-        return "PARTIAL";
-      case Step::kFinal:
-        return "FINAL";
-      case Step::kIntermediate:
-        return "INTERMEDIATE";
-      case Step::kSingle:
-        return "SINGLE";
-    }
-    VELOX_UNREACHABLE();
-  }
+  static const char* stepName(Step step);
+
+  static Step stepFromName(const std::string& name);
 
   /**
    * @param preGroupedKeys A subset of the 'groupingKeys' on which the input is
@@ -601,6 +623,10 @@ class AggregationNode : public PlanNode {
     return step_ == Step::kSingle;
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -652,6 +678,8 @@ class GroupIdNode : public PlanNode {
     std::string output;
     // The input field.
     FieldAccessTypedExprPtr input;
+
+    folly::dynamic serialize() const;
   };
 
   /// @param id Plan node ID.
@@ -705,6 +733,10 @@ class GroupIdNode : public PlanNode {
     return "GroupId";
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -739,6 +771,10 @@ class ExchangeNode : public PlanNode {
     return "Exchange";
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -767,6 +803,10 @@ class MergeExchangeNode : public ExchangeNode {
   std::string_view name() const override {
     return "MergeExchange";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override;
@@ -807,6 +847,10 @@ class LocalMergeNode : public PlanNode {
     return "LocalMerge";
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -842,6 +886,10 @@ class LocalPartitionNode : public PlanNode {
     // N-to-M shuffle.
     kRepartition,
   };
+
+  static const char* typeName(Type type);
+
+  static Type typeFromName(const std::string& name);
 
   LocalPartitionNode(
       const PlanNodeId& id,
@@ -897,6 +945,10 @@ class LocalPartitionNode : public PlanNode {
   std::string_view name() const override {
     return "LocalPartition";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override;
@@ -1013,6 +1065,10 @@ class PartitionedOutputNode : public PlanNode {
     return "PartitionedOutput";
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -1089,29 +1145,9 @@ enum class JoinType {
   kAnti,
 };
 
-inline const char* joinTypeName(JoinType joinType) {
-  switch (joinType) {
-    case JoinType::kInner:
-      return "INNER";
-    case JoinType::kLeft:
-      return "LEFT";
-    case JoinType::kRight:
-      return "RIGHT";
-    case JoinType::kFull:
-      return "FULL";
-    case JoinType::kLeftSemiFilter:
-      return "LEFT SEMI (FILTER)";
-    case JoinType::kRightSemiFilter:
-      return "RIGHT SEMI (FILTER)";
-    case JoinType::kLeftSemiProject:
-      return "LEFT SEMI (PROJECT)";
-    case JoinType::kRightSemiProject:
-      return "RIGHT SEMI (PROJECT)";
-    case JoinType::kAnti:
-      return "ANTI";
-  }
-  VELOX_UNREACHABLE();
-}
+const char* joinTypeName(JoinType joinType);
+
+JoinType joinTypeFromName(const std::string& name);
 
 inline bool isInnerJoin(JoinType joinType) {
   return joinType == JoinType::kInner;
@@ -1232,6 +1268,8 @@ class AbstractJoinNode : public PlanNode {
  protected:
   void addDetails(std::stringstream& stream) const override;
 
+  folly::dynamic serializeBase() const;
+
   const JoinType joinType_;
   const std::vector<FieldAccessTypedExprPtr> leftKeys_;
   const std::vector<FieldAccessTypedExprPtr> rightKeys_;
@@ -1305,6 +1343,10 @@ class HashJoinNode : public AbstractJoinNode {
     return nullAware_;
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -1340,6 +1382,10 @@ class MergeJoinNode : public AbstractJoinNode {
   std::string_view name() const override {
     return "MergeJoin";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 };
 
 // Cross join.
@@ -1362,6 +1408,10 @@ class CrossJoinNode : public PlanNode {
   std::string_view name() const override {
     return "CrossJoin";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override;
@@ -1421,6 +1471,10 @@ class OrderByNode : public PlanNode {
   std::string_view name() const override {
     return "OrderBy";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override;
@@ -1483,6 +1537,10 @@ class TopNNode : public PlanNode {
     return "TopN";
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -1537,6 +1595,10 @@ class LimitNode : public PlanNode {
   std::string_view name() const override {
     return "Limit";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override;
@@ -1598,6 +1660,10 @@ class UnnestNode : public PlanNode {
     return "Unnest";
   }
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -1629,6 +1695,10 @@ class EnforceSingleRowNode : public PlanNode {
   std::string_view name() const override {
     return "EnforceSingleRow";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override;
@@ -1674,6 +1744,10 @@ class AssignUniqueIdNode : public PlanNode {
     return uniqueIdCounter_;
   };
 
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -1702,6 +1776,10 @@ class WindowNode : public PlanNode {
  public:
   enum class WindowType { kRange, kRows };
 
+  static const char* windowTypeName(WindowType type);
+
+  static WindowType windowTypeFromName(const std::string& name);
+
   enum class BoundType {
     kUnboundedPreceding,
     kPreceding,
@@ -1710,18 +1788,30 @@ class WindowNode : public PlanNode {
     kUnboundedFollowing
   };
 
+  static const char* boundTypeName(BoundType type);
+
+  static BoundType boundTypeFromName(const std::string& name);
+
   struct Frame {
     WindowType type;
     BoundType startType;
     TypedExprPtr startValue;
     BoundType endType;
     TypedExprPtr endValue;
+
+    folly::dynamic serialize() const;
+
+    static Frame deserialize(const folly::dynamic& obj);
   };
 
   struct Function {
     CallTypedExprPtr functionCall;
     Frame frame;
     bool ignoreNulls;
+
+    folly::dynamic serialize() const;
+
+    static Function deserialize(const folly::dynamic& obj);
   };
 
   /// @param windowColumnNames specifies the output column
@@ -1765,6 +1855,10 @@ class WindowNode : public PlanNode {
   std::string_view name() const override {
     return "Window";
   }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
   void addDetails(std::stringstream& stream) const override;
