@@ -80,7 +80,6 @@ def get_action_output(token, url):
 
 
 def output(args):
-
     github_upstream = util.run("git remote get-url --push upstream")[1].extract(
         r".*:(.*)[.]git"
     )

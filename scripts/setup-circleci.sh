@@ -107,6 +107,7 @@ cmake_install glog -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX:PATH=/usr
 cmake_install snappy -DSNAPPY_BUILD_TESTS=OFF
 cmake_install fmt -DFMT_TEST=OFF
 cmake_install folly
+
 # cmake_install ranges-v3
 
 dnf clean all

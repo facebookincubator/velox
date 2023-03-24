@@ -62,11 +62,11 @@ option(VELOX_ENABLE_EXAMPLES
        "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
        OFF)
 option(VELOX_ENABLE_SUBSTRAIT "Buid Substrait-to-Velox converter." OFF)
-option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
+option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." ON)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
-option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
+option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 
@@ -353,6 +353,16 @@ resolve_dependency(glog)
 
 set_source(fmt)
 resolve_dependency(fmt)
+
+if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES
+                                               "x86_64"))
+
+  execute_process(COMMAND apt -y install uuid-dev nasm)
+  execute_process(COMMAND dnf -y install libuuid-devel nasm)
+  # set_source(nasm) resolve_dependency(nasm)
+  set_source(qpl)
+  resolve_dependency(qpl 1.1.0 COMPONENTS shared)
+endif()
 
 find_library(EVENT event)
 

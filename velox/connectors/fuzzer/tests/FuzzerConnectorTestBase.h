@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/fuzzer/FuzzerConnector.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 

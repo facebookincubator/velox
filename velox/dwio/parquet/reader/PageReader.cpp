@@ -26,6 +26,10 @@
 #include <zlib.h>
 #include <zstd.h>
 
+#if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
+#include "CompressionQpl.h"
+#endif
+
 namespace facebook::velox::parquet {
 
 using thrift::Encoding;
@@ -190,6 +194,26 @@ const char* FOLLY_NONNULL PageReader::uncompressData(
           stream.msg ? stream.msg : "");
       return uncompressedData_->as<char>();
     }
+/* TODO x86 support */
+#if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
+    case thrift::CompressionCodec::QPL: {
+      dwio::common::ensureCapacity<char>(
+          uncompressedData_, uncompressedSize, &pool_);
+
+      Qplcodec* qpl_dec =
+          new Qplcodec(qpl_path_hardware, (qpl_compression_levels)1);
+
+      auto ret = qpl_dec->Decompress(
+          compressedSize,
+          (const uint8_t*)pageData,
+          uncompressedSize,
+          (uint8_t*)uncompressedData_->asMutable<char>());
+      if (ret) {
+        delete qpl_dec;
+        return uncompressedData_->as<char>();
+      }
+    }
+#endif
     default:
       VELOX_FAIL("Unsupported Parquet compression type '{}'", codec_);
   }

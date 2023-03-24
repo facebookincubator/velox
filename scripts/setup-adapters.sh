@@ -46,6 +46,7 @@ function install_libhdfs3 {
   cmake_install
 }
 
+
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 cd "${DEPENDENCY_DIR}" || exit
 # aws-sdk-cpp missing dependencies
@@ -55,9 +56,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
    # information and is available everywhere
    LINUX_DISTRIBUTION=$(. /etc/os-release && echo ${ID})
    if [[ "$LINUX_DISTRIBUTION" == "ubuntu" ]]; then
-      apt install -y --no-install-recommends libxml2-dev libgsasl-dev uuid-dev
+      apt install -y --no-install-recommends libxml2-dev libgsasl-dev uuid-dev nasm
    else # Assume Fedora/CentOS
-      yum -y install libxml2-devel libgsasl-devel libuuid-devel
+      yum -y install libxml2-devel libgsasl-devel libuuid-devel nasm
    fi
 fi
 

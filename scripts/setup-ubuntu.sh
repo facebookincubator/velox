@@ -55,6 +55,8 @@ sudo --preserve-env apt update && apt install -y \
   tzdata \
   wget
 
+MACHINE=$(uname -m)
+
 function run_and_time {
   time "$@"
   { echo "+ Finished running $*"; } 2> /dev/null
