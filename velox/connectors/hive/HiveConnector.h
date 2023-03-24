@@ -111,6 +111,10 @@ class HiveTableHandle : public ConnectorTableHandle {
     return remainingFilter_;
   }
 
+  const std::string& getTableName() {
+    return tableName_;
+  }
+
   std::string toString() const override;
 
  private:
@@ -196,6 +200,8 @@ class HiveDataSource : public DataSource {
   /// Clear split_, reader_ and rowReader_ after split has been fully processed.
   void resetSplit();
 
+  void validateMetadataFileSchema();
+
   const RowTypePtr outputType_;
   // Column handles for the partition key columns keyed on partition key column
   // name.
@@ -214,6 +220,8 @@ class HiveDataSource : public DataSource {
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowTypePtr readerOutputType_;
   bool emptySplit_;
+  bool isMetadataSchemaChecked_;
+  std::string tableName_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
 

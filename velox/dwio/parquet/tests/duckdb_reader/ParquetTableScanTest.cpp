@@ -133,6 +133,32 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits_;
 };
 
+TEST_F(ParquetTableScanTest, testColumnTypeMismatch) {
+  loadData(
+      getExampleFilePath("sample.parquet"),
+      ROW({"a", "b"}, {VARBINARY(), DOUBLE()}),
+      makeRowVector(
+          {"a", "b"},
+          {
+              makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<double>(20, [](auto row) { return row + 1; }),
+          }));
+
+  EXPECT_THROW(
+      assertSelect({"a"}, "SELECT a FROM tmp"),
+      ::facebook::velox::VeloxUserError);
+
+  assertSelect({"b"}, "SELECT b FROM tmp");
+
+  EXPECT_THROW(
+      assertSelect({"a", "b"}, "SELECT a, b FROM tmp"),
+      ::facebook::velox::VeloxUserError);
+
+  EXPECT_THROW(
+      assertSelect({"x"}, "SELECT x FROM tmp"),
+      ::facebook::velox::VeloxUserError);
+}
+
 TEST_F(ParquetTableScanTest, basic) {
   loadData(
       getExampleFilePath("sample.parquet"),

@@ -302,7 +302,7 @@ HiveDataSource::HiveDataSource(
   VELOX_CHECK(
       hiveTableHandle->isFilterPushdownEnabled(),
       "Filter pushdown must be enabled");
-
+  tableName_ = hiveTableHandle->getTableName();
   auto outputTypes = outputType_->children();
   readerOutputType_ = ROW(std::move(columnNames), std::move(outputTypes));
   scanSpec_ = makeScanSpec(
@@ -460,6 +460,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     emptySplit_ = true;
     return;
   }
+  validateMetadataFileSchema();
 
   // Check filters and see if the whole split can be skipped.
   if (!testFilters(scanSpec_.get(), reader_.get(), split_->filePath)) {
@@ -554,6 +555,33 @@ void HiveDataSource::setFromDataSource(
   // balance to that.
   source->ioStats_->merge(*ioStats_);
   ioStats_ = std::move(source->ioStats_);
+}
+
+void HiveDataSource::validateMetadataFileSchema() {
+  if (!isMetadataSchemaChecked_) {
+    for (auto i = 0; i < readerOutputType_->names().size(); ++i) {
+      auto readerOutputTypeName = readerOutputType_->names()[i];
+      auto columnIndex =
+          reader_->rowType()->getChildIdxIfExists(readerOutputTypeName);
+      if (!columnIndex.has_value()) {
+        continue;
+      }
+      auto readerRowTypeChild =
+          reader_->rowType()->childAt(columnIndex.value());
+      auto readerOutputTypeChild = readerOutputType_->childAt(i);
+      if (readerRowTypeChild->kind() != readerOutputTypeChild->kind()) {
+        VELOX_SCHEMA_MISMATCH_ERROR(fmt::format(
+            "The column {} of table {} is declared as type {}, but the {} file ({}) is declared as type {}\n",
+            readerOutputTypeName,
+            tableName_,
+            readerRowTypeChild->kind(),
+            facebook::velox::dwio::common::toString(split_->fileFormat),
+            split_->filePath,
+            readerOutputTypeChild->kind()));
+      }
+    }
+    isMetadataSchemaChecked_ = true;
+  }
 }
 
 std::optional<RowVectorPtr> HiveDataSource::next(

@@ -2624,9 +2624,10 @@ TEST_F(TableScanTest, errorInLoadLazy) {
   try {
     assertQuery(planNode, {filePath}, "");
     FAIL() << "Excepted exception";
-  } catch (VeloxException& ex) {
-    EXPECT_TRUE(ex.context().find(filePath->path, 0) != std::string::npos)
-        << ex.context();
+  } catch (VeloxUserError& ex) {
+    EXPECT_TRUE(ex.exceptionName().find("VeloxUserError") != std::string::npos);
+  } catch (VeloxRuntimeError& ex) {
+    EXPECT_TRUE(ex.context().find(filePath->path, 0) != std::string::npos);
   }
 }
 
