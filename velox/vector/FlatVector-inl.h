@@ -100,7 +100,7 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
 
   // overwrite the null hash values
   if (!BaseVector::nullCount_.has_value() ||
-      BaseVector::nullCount_.value() > 0) {
+      BaseVector::getNullCount().value() > 0) {
     for (size_t i = 0; i < BaseVector::length_; ++i) {
       if (bits::isBitNull(BaseVector::rawNulls_, i)) {
         hashData[i] = BaseVector::kNullHash;
