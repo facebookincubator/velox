@@ -433,7 +433,7 @@ std::string Base64::encode_url(const folly::IOBuf* data) {
   return encodeImpl(IOBufWrapper(data), kBase64UrlCharset, false);
 }
 
-void Base64::decode_url(
+void Base64::decodeUrl(
     const char* src,
     size_t src_len,
     char* dst,

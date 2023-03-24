@@ -268,7 +268,11 @@ struct FromBase64UrlFunction {
       const arg_type<Varchar>& input) {
     stringImpl::fromBase64Url(result, input);
   }
+<<<<<<< HEAD
 }
+=======
+};
+>>>>>>> a9056447 (updated function name and other Masha's comment)
 
 template <typename T>
 struct ToBase64UrlFunction {
