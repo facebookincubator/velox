@@ -357,8 +357,8 @@ resolve_dependency(fmt)
 if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES
                                                "x86_64"))
 
-  execute_process(COMMAND apt install nasm)
-  execute_process(COMMAND dnf install nasm)
+  execute_process(COMMAND apt -y install nasm)
+  execute_process(COMMAND dnf -y install nasm)
   # set_source(nasm) resolve_dependency(nasm)
   set_source(qpl)
   resolve_dependency(qpl 1.1.0 COMPONENTS shared)
