@@ -23,12 +23,13 @@ else()
   set(VELOX_QPL_BUILD_SHA256_CHECKSUM
       00306000035621dfbc21007481395c46ba9723fc8add8ca5142847b94dc564c5)
 endif()
-
 message(STATUS "Building qpl from source")
 FetchContent_Declare(
   qpl
   URL ${VELOX_QPL_SOURCE_URL}
   URL_HASH SHA256=${VELOX_QPL_BUILD_SHA256_CHECKSUM})
+
+message(STATUS ${CMAKE_CURRENT_SOURCE_DIR})
 set(QPL_INSTALL ON)
 set(QPL_BUILD_TESTS OFF)
 FetchContent_MakeAvailable(qpl)
