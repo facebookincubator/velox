@@ -366,12 +366,12 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(LZO lzo2)
   find_library(ZSTD zstd)
   find_library(SNAPPY snappy)
-  if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES
-                                               "x86_64"))
-#    execute_process(COMMAND apt -y install uuid-dev nasm)
-#    execute_process(COMMAND dnf -y install libuuid-devel nasm)
-#    set_source(qpl)
-#    resolve_dependency(qpl 1.1.0 COMPONENTS shared)
+  if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR}
+                                                 MATCHES "x86_64"))
+    execute_process(COMMAND apt -y install uuid-dev nasm)
+    execute_process(COMMAND dnf -y install libuuid-devel nasm)
+    set_source(qpl)
+    resolve_dependency(qpl)
   endif()
 endif()
 

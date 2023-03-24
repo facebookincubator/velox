@@ -52,7 +52,7 @@ bool Initjobs(qpl_path_t execution_path) {
     uint32_t size;
     status = qpl_get_job_size(execution_path, &size);
     if (status != QPL_STS_OK) {
-      //VELOX_FAIL("QPL::An error acquired during job size getting.");
+      // VELOX_FAIL("QPL::An error acquired during job size getting.");
     }
     for (int i = 0; i < JOB_SIZE; i++) {
       job_status[i] = false;
@@ -62,16 +62,16 @@ bool Initjobs(qpl_path_t execution_path) {
 
       if (status != QPL_STS_OK) {
         if (execution_path == qpl_path_software) {
-          //VELOX_FAIL(
+          // VELOX_FAIL(
               "QPL::An error acquired during compression job initializing.");
-          return false;
+              return false;
         }
 
         execution_path = qpl_path_software;
         status = qpl_get_job_size(execution_path, &size);
 
         if (status != QPL_STS_OK) {
-          //VELOX_FAIL("QPL::An error acquired during job size getting.");
+          // VELOX_FAIL("QPL::An error acquired during job size getting.");
         }
         i--;
         delete[] job_buffer;
@@ -147,7 +147,7 @@ bool Qplcodec::Compress(
 
     if (status != QPL_STS_OK) {
       std::atomic_store(&job_status[job_id], false);
-      //VELOX_FAIL("QPL::Error while QPL compression occurred.");
+      // VELOX_FAIL("QPL::Error while QPL compression occurred.");
       return false;
     }
 
@@ -195,7 +195,7 @@ bool Qplcodec::Decompress(
     qpl_status status = qpl_execute_job(job_);
     if (status != QPL_STS_OK) {
       std::atomic_store(&job_status[job_id], false);
-      //VELOX_FAIL("QPL::Error while decompression occurred.");
+      // VELOX_FAIL("QPL::Error while decompression occurred.");
       return false;
     }
     source_bytes_left = input_length - job_->total_in;
