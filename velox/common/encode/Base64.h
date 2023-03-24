@@ -103,7 +103,8 @@ class Base64 {
   decode(const char* src, size_t src_len, char* dst, size_t dst_len);
 
   static void
-  decode_url(const char* src, size_t src_len, char* dst, size_t dst_len);
+  decodeUrl(const char* src, size_t src_len, char* dst, size_t dst_len);
+
   static void decode_url(
       const char* src,
       size_t src_len,

@@ -429,7 +429,7 @@ FOLLY_ALWAYS_INLINE void fromBase64Url(
         (*(input.end()) == encoding::Base64::kBase64Pad) ? true : false;
     output.resize(encoding::Base64::calculateDecodedSize(
         input.data(), inputSize, hasPad));
-    encoding::Base64::decode_url(
+    encoding::Base64::decodeUrl(
         input.data(), inputSize, output.data(), output.size(), hasPad);
   } catch (const encoding::Base64Exception& e) {
     VELOX_USER_FAIL(e.what());
