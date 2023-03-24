@@ -111,14 +111,13 @@ struct SIMDJsonParseFunction {
   // Results refer to the first input strings parameter buffer.
   static constexpr int32_t reuse_strings_from_arg = 0;
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& json) {
     ParserContext ctx(json.data(), json.size());
     ctx.parseElement();
     std::string rlt = simdjson::to_string(ctx.jsonEle);
     result.setNoCopy(facebook::velox::StringView(rlt));
-    return true;
   }
 };
 
