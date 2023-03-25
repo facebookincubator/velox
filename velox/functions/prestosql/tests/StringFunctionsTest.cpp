@@ -238,8 +238,7 @@ class StringFunctionsTest : public FunctionBaseTest {
     };
 
     for (int i = 0; i < inputTable.size(); ++i) {
-      EXPECT_EQ(result->valueAt(i), StringView(concatStd(inputTable[i])))
-          << "at " << i;
+      EXPECT_EQ(result->valueAt(i), concatStd(inputTable[i])) << "at " << i;
     }
   }
 
@@ -795,7 +794,7 @@ TEST_F(StringFunctionsTest, concat) {
     auto result = evaluate<SimpleVector<StringView>>(
         fmt::format("concat('{}', '{}')", c0, c1), rows);
     for (int i = 0; i < 10; ++i) {
-      EXPECT_EQ(result->valueAt(i), StringView(c0 + c1));
+      EXPECT_EQ(result->valueAt(i), c0 + c1);
     }
   }
 
@@ -1361,6 +1360,22 @@ TEST_F(StringFunctionsTest, HmacSha512) {
   EXPECT_EQ(std::nullopt, hmacSha512(std::nullopt, "velox"));
 }
 
+TEST_F(StringFunctionsTest, HmacMd5) {
+  const auto hmacMd5 = [&](std::optional<std::string> arg,
+                           std::optional<std::string> key) {
+    return evaluateOnce<std::string, std::string>(
+        "hmac_md5(c0, c1)", {arg, key}, {VARBINARY(), VARBINARY()});
+  };
+  // The result values were obtained from Presto Java hmac_md5 function.
+  EXPECT_EQ(
+      hexToDec("ff66d72875f01e26fcbe71d973eaf524"), hmacMd5("hashme", "velox"));
+  EXPECT_EQ(
+      hexToDec("ed706a89f46773b7a478ee5d8f83db86"),
+      hmacMd5("Infinity", "velox"));
+  EXPECT_EQ(hexToDec("f05e7a0086c6633b496ee411646da51c"), hmacMd5("", "velox"));
+  EXPECT_EQ(std::nullopt, hmacMd5(std::nullopt, "velox"));
+}
+
 void StringFunctionsTest::testReplaceInPlace(
     const std::vector<std::pair<std::string, std::string>>& tests,
     const std::string& search,
@@ -1649,6 +1664,9 @@ TEST_F(StringFunctionsTest, toBase64) {
   const auto toBase64 = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("to_base64(cast(c0 as varbinary))", value);
   };
+  const auto fromHex = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("from_hex(c0)", value);
+  };
 
   EXPECT_EQ(std::nullopt, toBase64(std::nullopt));
   EXPECT_EQ("", toBase64(""));
@@ -1657,6 +1675,27 @@ TEST_F(StringFunctionsTest, toBase64) {
   EXPECT_EQ("aGVsbG8gd29ybGQ=", toBase64("hello world"));
   EXPECT_EQ(
       "SGVsbG8gV29ybGQgZnJvbSBWZWxveCE=", toBase64("Hello World from Velox!"));
+  EXPECT_EQ("/0+/UA==", toBase64(fromHex("FF4FBF50")));
+}
+
+TEST_F(StringFunctionsTest, toBase64Url) {
+  const auto toBase64Url = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>(
+        "to_base64url(cast(c0 as varbinary))", value);
+  };
+  const auto fromHex = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("from_hex(c0)", value);
+  };
+
+  EXPECT_EQ(std::nullopt, toBase64Url(std::nullopt));
+  EXPECT_EQ("", toBase64Url(""));
+  EXPECT_EQ("YQ==", toBase64Url("a"));
+  EXPECT_EQ("YWJj", toBase64Url("abc"));
+  EXPECT_EQ("aGVsbG8gd29ybGQ=", toBase64Url("hello world"));
+  EXPECT_EQ(
+      "SGVsbG8gV29ybGQgZnJvbSBWZWxveCE=",
+      toBase64Url("Hello World from Velox!"));
+  EXPECT_EQ("_0-_UA==", toBase64Url(fromHex("FF4FBF50")));
 }
 
 TEST_F(StringFunctionsTest, reverse) {

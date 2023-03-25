@@ -70,8 +70,6 @@ class HiveColumnHandle : public ColumnHandle {
   //
   // Pruning arrays means dropping values with indices larger than maximum
   // required index.
-  //
-  // Only one level of subfield is supported for pruning.
   const std::vector<common::Subfield>& requiredSubfields() const {
     return requiredSubfields_;
   }
@@ -283,6 +281,16 @@ class HiveConnector final : public Connector {
 
   folly::Executor* FOLLY_NULLABLE executor() const override {
     return executor_;
+  }
+
+  FileHandleCacheStats fileHandleCacheStats() {
+    return fileHandleFactory_.cacheStats();
+  }
+
+  // NOTE: this is to clear file handle cache which might affect performance,
+  // and is only used for operational purposes.
+  FileHandleCacheStats clearFileHandleCache() {
+    return fileHandleFactory_.clearCache();
   }
 
  private:

@@ -14,6 +14,10 @@ Binary Functions
 
     Decodes binary data from the hex encoded ``string``.
 
+.. function:: hmac_md5(binary, key) -> varbinary
+
+    Computes the HMAC with md5 of ``binary`` with the given ``key``.
+
 .. function:: hmac_sha1(binary, key) -> varbinary
 
     Computes the HMAC with sha1 of ``binary`` with the given ``key``.
@@ -53,6 +57,10 @@ Binary Functions
 .. function:: to_base64(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation.
+
+.. function:: to_base64url(binary) -> varchar
+
+    Encodes ``binary`` into a base64 string representation using the `URL safe alphabet <https://www.rfc-editor.org/rfc/rfc4648#section-5>`_.
 
 .. function:: to_hex(binary) -> varchar
 

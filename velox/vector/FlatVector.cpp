@@ -135,6 +135,9 @@ void FlatVector<bool>::copyValuesAndNulls(
     vector_size_t targetIndex,
     vector_size_t sourceIndex,
     vector_size_t count) {
+  if (count == 0) {
+    return;
+  }
   source = source->loadedVector();
   VELOX_CHECK(
       BaseVector::compatibleKind(BaseVector::typeKind(), source->typeKind()));
@@ -245,9 +248,6 @@ void FlatVector<StringView>::prepareForReuse() {
       rawValues_[i] = StringView();
     }
   }
-
-  // Clear ASCII-ness.
-  SimpleVector<StringView>::invalidateIsAscii();
 }
 
 template <>
@@ -381,6 +381,9 @@ void FlatVector<StringView>::copy(
     vector_size_t targetIndex,
     vector_size_t sourceIndex,
     vector_size_t count) {
+  if (count == 0) {
+    return;
+  }
   BaseVector::copy(source, targetIndex, sourceIndex, count);
 }
 

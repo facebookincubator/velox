@@ -87,9 +87,17 @@ core::ExecCtx* OperatorCtx::execCtx() const {
 std::shared_ptr<connector::ConnectorQueryCtx>
 OperatorCtx::createConnectorQueryCtx(
     const std::string& connectorId,
-    const std::string& planNodeId) const {
+    const std::string& planNodeId,
+    bool forScan) const {
   return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
+      forScan ? nullptr
+              : driverCtx_->task->addConnectorWriterPoolLocked(
+                    planNodeId_,
+                    driverCtx_->pipelineId,
+                    driverCtx_->driverId,
+                    operatorType_,
+                    connectorId),
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
       std::make_unique<SimpleExpressionEvaluator>(
           execCtx()->queryCtx(), execCtx()->pool()),
@@ -286,12 +294,17 @@ OperatorStats Operator::stats(bool clear) {
   return ret;
 }
 
-void Operator::recordBlockingTime(uint64_t start) {
+void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
   uint64_t now =
       std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::high_resolution_clock::now().time_since_epoch())
           .count();
-  stats_.wlock()->blockedWallNanos += (now - start) * 1000;
+  auto wallNanos = (now - start) * 1000;
+  stats_.wlock()->blockedWallNanos += wallNanos;
+  auto statName = fmt::format(
+      "blocked{}WallNanos", blockingReasonToString(reason).substr(1));
+  addRuntimeStat(
+      statName, RuntimeCounter(wallNanos, RuntimeCounter::Unit::kNanos));
 }
 
 std::string Operator::toString() const {

@@ -318,7 +318,9 @@ TEST_F(OrderByTest, varfields) {
         batchSize, [](vector_size_t row) { return row * 0.1; }, nullEvery(11));
     auto c2 = makeFlatVector<StringView>(
         batchSize,
-        [](vector_size_t row) { return StringView(std::to_string(row)); },
+        [](vector_size_t row) {
+          return StringView::makeInline(std::to_string(row));
+        },
         nullEvery(17));
     // TODO: Add support for array/map in createDuckDbTable and verify
     // that we can sort by array/map as well.
@@ -416,7 +418,7 @@ TEST_F(OrderByTest, spill) {
     batches.push_back(makeRowVector(
         {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row * 3; }),
          makeFlatVector<StringView>(kNumRows, [](auto row) {
-           return StringView(std::to_string(row * 3));
+           return StringView::makeInline(std::to_string(row * 3));
          })}));
   }
   createDuckDbTable(batches);
@@ -428,8 +430,11 @@ TEST_F(OrderByTest, spill) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   constexpr int64_t kMaxBytes = 20LL << 20; // 20 MB
-  queryCtx->pool()->setMemoryUsageTracker(
-      memory::MemoryUsageTracker::create(kMaxBytes));
+  queryCtx->testingOverrideMemoryPool(
+      memory::getProcessDefaultMemoryManager().getPool(
+          queryCtx->queryId(),
+          memory::MemoryPool::Kind::kAggregate,
+          kMaxBytes));
   // Set 'kSpillableReservationGrowthPct' to an extreme large value to trigger
   // disk spilling by failed memory growth reservation.
   queryCtx->setConfigOverridesUnsafe({
@@ -478,11 +483,13 @@ TEST_F(OrderByTest, spillWithMemoryLimit) {
                       {1'000'000'000, false}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->pool()->setMemoryUsageTracker(
-        memory::MemoryUsageTracker::create(kMaxBytes));
+    queryCtx->testingOverrideMemoryPool(
+        memory::getProcessDefaultMemoryManager().getPool(
+            queryCtx->queryId(),
+            memory::MemoryPool::Kind::kAggregate,
+            kMaxBytes));
     auto results =
         AssertQueryBuilder(
             PlanBuilder()

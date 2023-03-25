@@ -43,6 +43,7 @@ add_executable(
   ParseTypeSignatureTest.cpp
   PartitionedOutputBufferManagerTest.cpp
   PlanBuilderTest.cpp
+  PlanNodeSerdeTest.cpp
   PlanNodeToStringTest.cpp
   PrintPlanWithStatsTest.cpp
   RoundRobinPartitionFunctionTest.cpp
@@ -63,6 +64,7 @@ add_executable(
   UnorderedStreamReaderTest.cpp
   UnnestTest.cpp
   VectorHasherTest.cpp
+  ValuesTest.cpp
   WindowFunctionRegistryTest.cpp)
 
 add_test(

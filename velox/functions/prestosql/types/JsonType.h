@@ -95,7 +95,7 @@ FOLLY_ALWAYS_INLINE std::shared_ptr<const JsonType> JSON() {
 
 // Type used for function registration.
 struct JsonT {
-  using type = StringView;
+  using type = Varchar;
   static constexpr const char* typeName = "json";
 };
 
@@ -105,7 +105,7 @@ class JsonTypeFactories : public CustomTypeFactories {
  public:
   JsonTypeFactories() = default;
 
-  TypePtr getType(std::vector<TypePtr> /*childTypes*/) const override {
+  TypePtr getType() const override {
     return JSON();
   }
 
