@@ -182,7 +182,7 @@ std::string strToLowerCopy(const std::string& str);
 } // namespace detail
 
 // A set of structs used to perform analysis on a static type to
-// collect information needed for signatrue construction.
+// collect information needed for signature construction.
 template <typename T>
 struct TypeAnalysis {
   void run(TypeAnalysisResults& results) {
@@ -281,7 +281,7 @@ template <typename T>
 struct TypeAnalysis<CustomType<T>> {
   void run(TypeAnalysisResults& results) {
     results.stats.concreteCount++;
-    results.out << T::typeName;
+    results.out << detail::strToLowerCopy(T::typeName);
   }
 };
 
@@ -427,6 +427,11 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
         std::move(outputType),
         std::move(results.variables),
         std::move(results.stats)};
+  }
+
+  FOLLY_ALWAYS_INLINE bool isDecimalTypeSignature(const std::string& arg) {
+    auto upper = boost::algorithm::to_upper_copy(arg);
+    return (upper.find("DECIMAL") != std::string::npos);
   }
 
   void buildSignature(const SignatureTypesAnalysisResults& analysis) {

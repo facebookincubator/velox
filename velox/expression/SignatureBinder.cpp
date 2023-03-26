@@ -174,26 +174,23 @@ bool SignatureBinderBase::tryBind(
   auto actualTypeName =
       boost::algorithm::to_upper_copy(std::string(actualType->name()));
 
-  if (typeName != actualTypeName) {
-    // Should match except if it was "DECIMAL", then it can be LongDecimal or
-    // ShortDecimal.
-    if (!isCommonDecimalName(typeName)) {
-      return false;
-    }
-
-    // If typeName is "DECIMAL" actualType should be LongDecimal or
-    // ShortDecimal.
-    if (!actualType->isLongDecimal() && !actualType->isShortDecimal()) {
-      return false;
-    }
+  if (auto customType = getCustomType(baseName)) {
+    VELOX_CHECK_EQ(
+        typeSignature.parameters().size(),
+        0,
+        "Custom types with parameters are not supported yet");
+    return customType->equivalent(*actualType);
   }
-  const auto& params = typeSignature.parameters();
 
+  if (typeName != actualTypeName) {
+    return false;
+  }
+
+  const auto& params = typeSignature.parameters();
   // Type Parameters can recurse.
   if (params.size() != actualType->parameters().size()) {
     return false;
   }
-
   for (auto i = 0; i < params.size(); i++) {
     const auto& actualParameter = actualType->parameters()[i];
     switch (actualParameter.kind) {
