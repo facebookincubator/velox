@@ -117,7 +117,7 @@ PartitionedOutput::PartitionedOutput(
       partitionFunction_(
           numDestinations_ == 1
               ? nullptr
-              : planNode->partitionFunctionFactory()(numDestinations_)),
+              : planNode->partitionFunctionSpec().create(numDestinations_)),
       outputChannels_(calculateOutputChannels(
           planNode->inputType(),
           planNode->outputType(),
@@ -199,8 +199,7 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
   // TODO Report outputBytes as bytes after serialization
   {
     auto lockedStats = stats_.wlock();
-    lockedStats->outputBytes += input->retainedSize();
-    lockedStats->outputPositions += input->size();
+    lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
   }
 
   initializeInput(std::move(input));
