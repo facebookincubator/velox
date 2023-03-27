@@ -69,18 +69,18 @@ struct ParserContext {
 // simdjson-difference: simdjson don't support the output folly::dynamic
 std::optional<std::string> simdJsonExtractString(
     const std::string& json,
-    const std::string& path);
+    const std::vector<std::string>& token);
 
 std::optional<std::string> simdJsonExtractObject(
     const std::string& json,
-    const std::string& path);
+    const std::vector<std::string>& token);
 
 std::optional<std::string> simdJsonExtractScalar(
     const std::string& json,
-    const std::string& path);
+    const std::vector<std::string>& token);
 
 std::optional<int64_t> simdJsonSize(
     const std::string& json,
-    const std::string& path);
+    const std::vector<std::string>& token);
 
 } // namespace facebook::velox::functions

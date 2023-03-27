@@ -17,10 +17,31 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/UDFOutputString.h"
 #include "velox/functions/prestosql/json/JsonExtractor.h"
+#include "velox/functions/prestosql/json/JsonPathTokenizer.h"
 #include "velox/functions/prestosql/json/SimdJsonExtractor.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions {
+
+static const uint32_t kMaxCacheNum{32};
+bool tokenize(const std::string& path, std::vector<std::string>& token) {
+  static JsonPathTokenizer kTokenizer;
+  if (path.empty()) {
+    return false;
+  }
+  if (!kTokenizer.reset(path)) {
+    return false;
+  }
+  while (kTokenizer.hasNext()) {
+    if (auto curr = kTokenizer.getNext()) {
+      token.push_back(curr.value());
+    } else {
+      token.clear();
+      return false;
+    }
+  }
+  return true;
+}
 
 template <typename T>
 struct SIMDIsJsonScalarFunction {
@@ -89,7 +110,7 @@ struct SIMDJsonArrayContainsFunction {
         } else {
           if (v.type() == simdjson::ondemand::json_type::string) {
             std::string_view rlt = v.get_string();
-            std::string str_value = value.getString();
+            std::string str_value{value.getString()};
             if (rlt.compare(str_value) == 0) {
               result = true;
               break;
@@ -125,14 +146,43 @@ template <typename T>
 struct SIMDJsonExtractScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  std::unordered_map<std::string, std::vector<std::string>> tokens_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig&,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    std::vector<std::string> token;
+    if (!tokenize(jsonPath, token)) {
+      VELOX_USER_FAIL("Invalid JSON path: {}", jsonPath);
+    }
+    if (tokens_.size() == kMaxCacheNum) {
+      tokens_.erase(tokens_.begin());
+    }
+    tokens_[jsonPath] = token;
+  }
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
-    std::string jsonPathStr = jsonPath;
+    std::string jsonPathStr{jsonPath};
+    std::vector<std::string> token;
     bool retVal = false;
 
-    auto extractResult = simdJsonExtractScalar(json, jsonPathStr);
+    if (tokens_.count(jsonPathStr)) {
+      token = tokens_.at(jsonPath);
+    } else {
+      if (!tokenize(jsonPath, token)) {
+        VELOX_USER_FAIL("Invalid JSON path: {}", jsonPathStr);
+      }
+      if (tokens_.size() == kMaxCacheNum) {
+        tokens_.erase(tokens_.cbegin());
+      }
+      tokens_[jsonPath] = token;
+    }
+
+    auto extractResult = simdJsonExtractScalar(json, token);
 
     if (extractResult.has_value()) {
       UDFOutputString::assign(result, extractResult.value());
@@ -177,17 +227,46 @@ template <typename T>
 struct SIMDJsonSizeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  std::unordered_map<std::string, std::vector<std::string>> tokens_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig&,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    std::vector<std::string> token;
+    if (!tokenize(jsonPath, token)) {
+      VELOX_USER_FAIL("Invalid JSON path: {}", jsonPath);
+    }
+    if (tokens_.size() == kMaxCacheNum) {
+      tokens_.erase(tokens_.begin());
+    }
+    tokens_[jsonPath] = token;
+  }
+
   FOLLY_ALWAYS_INLINE bool call(
       int64_t& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
     ParserContext ctx(json.data(), json.size());
-    std::string jsonPathStr = jsonPath;
+    std::string jsonPathStr{jsonPath};
+    std::vector<std::string> token;
     result = 0;
+
+    if (tokens_.count(jsonPathStr)) {
+      token = tokens_.at(jsonPath);
+    } else {
+      if (!tokenize(jsonPath, token)) {
+        VELOX_USER_FAIL("Invalid JSON path: {}", jsonPathStr);
+      }
+      if (tokens_.size() == kMaxCacheNum) {
+        tokens_.erase(tokens_.cbegin());
+      }
+      tokens_[jsonPath] = token;
+    }
 
     try {
       ctx.parseDocument();
-      auto rlt = simdJsonSize(json, jsonPathStr);
+      auto rlt = simdJsonSize(json, token);
       if (rlt.has_value()) {
         result = rlt.value();
       } else {

@@ -125,7 +125,6 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   EXPECT_EQ(jsonParseWithTry(R"(not_json)"), std::nullopt);
   EXPECT_EQ(jsonParseWithTry(R"({"k1":})"), std::nullopt);
   EXPECT_EQ(jsonParseWithTry(R"({:"k1"})"), std::nullopt);
-
 }
 
 TEST_F(JsonFunctionsTest, isJsonScalarSignatures) {
