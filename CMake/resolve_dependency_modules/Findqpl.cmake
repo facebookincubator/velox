@@ -17,19 +17,15 @@ if(DEFINED ENV{VELOX_QPL_URL})
   set(VELOX_QPL_SOURCE_URL "$ENV{VELOX_QPL_URL}")
 else()
   set(VELOX_QPL_VERSION 1.1.0)
-  string(CONCAT VELOX_QPL_SOURCE_URL
-                "https://github.com/intel/qpl/archive/refs/tags/"
-                "v${VELOX_QPL_VERSION}.tar.gz")
-  set(VELOX_QPL_BUILD_SHA256_CHECKSUM
-      00306000035621dfbc21007481395c46ba9723fc8add8ca5142847b94dc564c5)
+  string(CONCAT VELOX_QPL_SOURCE_GIT "https://github.com/intel/qpl.git")
+  set(GIT_QPL_TAG "develop")
 endif()
+
 message(STATUS "Building qpl from source")
 FetchContent_Declare(
   qpl
-  URL ${VELOX_QPL_SOURCE_URL}
-  URL_HASH SHA256=${VELOX_QPL_BUILD_SHA256_CHECKSUM})
-
-message(STATUS ${CMAKE_CURRENT_SOURCE_DIR})
+  GIT_REPOSITORY ${VELOX_QPL_SOURCE_GIT}
+  GIT_TAG ${GIT_QPL_TAG})
 set(QPL_INSTALL ON)
 set(QPL_BUILD_TESTS OFF)
 FetchContent_MakeAvailable(qpl)
