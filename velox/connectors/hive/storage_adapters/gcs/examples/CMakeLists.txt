@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# for generated headers
-
-add_library(velox_gcs GCSFileSystem.cpp GCSUtil.cpp)
-target_include_directories(velox_gcs PUBLIC)
-target_link_libraries(velox_gcs ${FOLLY_WITH_DEPENDENCIES}
-                      google-cloud-cpp::storage)
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-  add_subdirectory(examples)
-endif()
+add_executable(velox_gcsfile_example GCSFileSystemExample.cpp)
+target_link_libraries(
+  velox_gcsfile_example
+  velox_file
+  velox_gcs
+  velox_core
+  velox_hive_connector
+  velox_dwio_common_exception
+  velox_exec)
