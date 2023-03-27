@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_gcsfile_test GCSUtilTest.cpp)
+add_executable(velox_gcsfile_test GCSUtilTest.cpp GCSFileSystemTest.cpp)
 add_test(velox_gcsfile_test velox_gcsfile_test)
 target_link_libraries(
   velox_gcsfile_test
