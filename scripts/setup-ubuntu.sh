@@ -36,6 +36,8 @@ sudo --preserve-env apt update && apt install -y \
   ninja-build \
   checkinstall \
   git \
+  libc-ares-dev \
+  libcurl4-openssl-dev \
   libssl-dev \
   libboost-all-dev \
   libicu-dev \

@@ -36,6 +36,17 @@ function github_checkout {
   cd "${DIRNAME}"
 }
 
+# github_wget_and_untar $URL $DIRNAME downloads the specified url from github and then untars it
+function github_wget_and_untar {
+  local URL=$1
+  local DIRNAME=$2
+  cd "${DEPENDENCY_DIR}"
+  if [ ! -d "${DIRNAME}" ]; then
+    mkdir -p "${DIRNAME}"
+    wget -q --max-redirect 3 -O - "https://github.com/${URL}" | tar -xz -C "${DIRNAME}" --strip-components=1
+    cd "${DIRNAME}"
+  fi
+}
 
 # get_cxx_flags [$CPU_ARCH]
 # Sets and exports the variable VELOX_CXX_FLAGS with appropriate compiler flags.
@@ -142,4 +153,3 @@ function cmake_install {
     "$@"
   ninja -C "${BINARY_DIR}" install
 }
-
