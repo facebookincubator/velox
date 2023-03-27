@@ -20,6 +20,7 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include "velox/functions/prestosql/SIMDJsonFunctions.h"
 #include "velox/functions/prestosql/benchmarks/JsonBenchmarkUtil.h"
 #include "velox/functions/prestosql/benchmarks/JsonFileReader.h"
 #include "velox/functions/prestosql/json/JsonExtractor.h"
@@ -54,11 +55,15 @@ void SimdJsonExtract(
     const std::string& fileSize,
     const std::string& jsonPath) {
   folly::BenchmarkSuspender suspender;
+  std::vector<std::string> token;
   auto json = prepareData(fileSize);
-  auto result = velox::functions::simdJsonExtractString(json, jsonPath);
+  if (!tokenize(jsonPath, token)) {
+    VELOX_USER_FAIL("Invalid JSON path: {}", jsonPath);
+  }
+  auto result = velox::functions::simdJsonExtractString(json, token);
   suspender.dismiss();
   for (auto i = 0; i < iter; i++) {
-    result = velox::functions::simdJsonExtractString(json, jsonPath);
+    result = velox::functions::simdJsonExtractString(json, token);
   }
   folly::doNotOptimizeAway(result);
 }

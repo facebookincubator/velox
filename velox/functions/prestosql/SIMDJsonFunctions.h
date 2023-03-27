@@ -16,7 +16,6 @@
 #include "simdjson.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/UDFOutputString.h"
-#include "velox/functions/prestosql/json/JsonExtractor.h"
 #include "velox/functions/prestosql/json/JsonPathTokenizer.h"
 #include "velox/functions/prestosql/json/SimdJsonExtractor.h"
 #include "velox/functions/prestosql/types/JsonType.h"
@@ -24,7 +23,7 @@
 namespace facebook::velox::functions {
 
 static const uint32_t kMaxCacheNum{32};
-bool tokenize(const std::string& path, std::vector<std::string>& token) {
+static bool tokenize(const std::string& path, std::vector<std::string>& token) {
   static JsonPathTokenizer kTokenizer;
   if (path.empty()) {
     return false;
