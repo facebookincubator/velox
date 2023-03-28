@@ -102,6 +102,7 @@ BIGINT, REAL, DOUBLE or VARCHAR is supported. Casting to ARRAY and MAP is
 supported when the element type of the array is one of the supported types, or
 when the key type of the map is BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
 REAL, DOUBLE, or VARCHAR and value type of the map is one of the supported types.
+When casting from JSON to ROW, both JSON array and JSON object are supported.
 Behaviors of the casts are shown with the examples below:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="n">JSON</span> <span class="s1">&#39;null&#39;</span> <span class="n">AS</span> <span class="n">VARCHAR</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
 <span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="n">JSON</span> <span class="s1">&#39;1&#39;</span> <span class="n">AS</span> <span class="n">INTEGER</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
@@ -113,6 +114,8 @@ Behaviors of the casts are shown with the examples below:</p>
 <span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="n">JSON</span> <span class="s1">&#39;[1,null,456]&#39;</span> <span class="n">AS</span> <span class="n">ARRAY</span><span class="p">(</span><span class="n">INTEGER</span><span class="p">));</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">456</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="n">JSON</span> <span class="s1">&#39;[[1,23],[456]]&#39;</span> <span class="n">AS</span> <span class="n">ARRAY</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">(</span><span class="n">INTEGER</span><span class="p">)));</span> <span class="o">--</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">23</span><span class="p">],</span> <span class="p">[</span><span class="mi">456</span><span class="p">]]</span>
 <span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="n">JSON</span> <span class="s1">&#39;{&quot;k1&quot;:1,&quot;k2&quot;:23,&quot;k3&quot;:456}&#39;</span> <span class="n">AS</span> <span class="n">MAP</span><span class="p">(</span><span class="n">VARCHAR</span><span class="p">,</span> <span class="n">INTEGER</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="n">k1</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">k2</span><span class="o">=</span><span class="mi">23</span><span class="p">,</span> <span class="n">k3</span><span class="o">=</span><span class="mi">456</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="n">JSON</span> <span class="s1">&#39;{&quot;v1&quot;:123,&quot;v2&quot;:&quot;abc&quot;,&quot;v3&quot;:true}&#39;</span> <span class="n">AS</span> <span class="n">ROW</span><span class="p">(</span><span class="n">v1</span> <span class="n">BIGINT</span><span class="p">,</span> <span class="n">v2</span> <span class="n">VARCHAR</span><span class="p">,</span> <span class="n">v3</span> <span class="n">BOOLEAN</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="n">v1</span><span class="o">=</span><span class="mi">123</span><span class="p">,</span> <span class="n">v2</span><span class="o">=</span><span class="n">abc</span><span class="p">,</span> <span class="n">v3</span><span class="o">=</span><span class="n">true</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">CAST</span><span class="p">(</span><span class="n">JSON</span> <span class="s1">&#39;[123,&quot;abc&quot;,true]&#39;</span> <span class="n">AS</span> <span class="n">ROW</span><span class="p">(</span><span class="n">v1</span> <span class="n">BIGINT</span><span class="p">,</span> <span class="n">v2</span> <span class="n">VARCHAR</span><span class="p">,</span> <span class="n">v3</span> <span class="n">BOOLEAN</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="n">v1</span><span class="o">=</span><span class="mi">123</span><span class="p">,</span> <span class="n">v2</span><span class="o">=</span><span class="n">abc</span><span class="p">,</span> <span class="n">v3</span><span class="o">=</span><span class="n">true</span><span class="p">}</span>
 </pre></div>
 </div>
 <p>Notice that casting a JSON text to VARCHAR does not turn the JSON text into
@@ -202,9 +205,8 @@ is the number of members, and the size of a <code class="docutils literal notran
 </dd></dl>
 
 </section>
-</section>
 <section id="json-vectors">
-<h1>JSON Vectors<a class="headerlink" href="#json-vectors" title="Permalink to this heading">¶</a></h1>
+<h2>JSON Vectors<a class="headerlink" href="#json-vectors" title="Permalink to this heading">¶</a></h2>
 <p>There are a number of Presto JSON functions expecting JSON-typed inputs or
 returning JSON-typed outputs. Hence, developers who use the Velox library may
 need to work with JSON-typed vectors. In the Velox internal implementation,
@@ -214,6 +216,7 @@ are similar. To create a JSON-typed vector, one can use
 StringViews, i.e. FlatVector&lt;StringView&gt;. Reading and writing to a JSON-typed
 vector are the same as those for VARCHAR vectors, e.g., via
 VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
+</section>
 </section>
 
 
@@ -231,9 +234,9 @@ VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
 <li><a class="reference internal" href="#cast-to-json">Cast to JSON</a></li>
 <li><a class="reference internal" href="#cast-from-json">Cast from JSON</a></li>
 <li><a class="reference internal" href="#id1">JSON Functions</a></li>
+<li><a class="reference internal" href="#json-vectors">JSON Vectors</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#json-vectors">JSON Vectors</a></li>
 </ul>
 
   </div>
