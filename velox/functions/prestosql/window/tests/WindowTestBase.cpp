@@ -98,7 +98,7 @@ VectorPtr WindowTestBase::makeRandomInputVector(
 RowVectorPtr WindowTestBase::makeRandomInputVector(vector_size_t size) {
   boost::random::mt19937 gen;
   // Frame index values require integer values > 0.
-  auto genRandomFrameValue = [&](vector_size_t row) {
+  auto genRandomFrameValue = [&](vector_size_t /*row*/) {
     return boost::random::uniform_int_distribution<int>(1)(gen);
   };
   return makeRowVector(

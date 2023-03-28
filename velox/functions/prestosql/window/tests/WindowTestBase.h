@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
@@ -28,7 +29,7 @@ namespace facebook::velox::window::test {
 /// of the input rows making all function evaluation and result comparison
 /// deterministic.
 /// The individual functions might add new columns to these clauses if required.
-static std::vector<std::string> kOverClauses = {
+inline const std::vector<std::string> kOverClauses = {
     "partition by c0 order by c1 desc, c2, c3",
     "partition by c1 order by c0, c2 desc, c3",
     "partition by c0 order by c2, c1, c3",
@@ -59,7 +60,7 @@ static std::vector<std::string> kOverClauses = {
 };
 
 /// Exhaustive set of window function frame combinations.
-static std::vector<std::string> kFrameClauses = {
+inline const std::vector<std::string> kFrameClauses = {
     // Frame clauses in RANGE mode, with current row, unbounded preceding, and
     // unbounded following frame combinations.
     "range unbounded preceding",

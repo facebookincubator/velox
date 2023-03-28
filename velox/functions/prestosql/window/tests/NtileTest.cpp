@@ -23,7 +23,7 @@ namespace {
 
 class NtileTest : public WindowTestBase {
  protected:
-  void testNtile(const std::vector<RowVectorPtr> vectors) {
+  void testNtile(const std::vector<RowVectorPtr>& vectors) {
     // Tests ntile with constant value arguments.
     testNtileWithConstants(vectors, kOverClauses);
     // Tests ntile with a column.

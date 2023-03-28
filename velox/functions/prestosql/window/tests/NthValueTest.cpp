@@ -30,7 +30,8 @@ class NthValueTest : public WindowTestBase {
  protected:
   NthValueTest() : overClause_("") {}
 
-  NthValueTest(const std::string& overClause) : overClause_(overClause) {}
+  explicit NthValueTest(const std::string& overClause)
+      : overClause_(overClause) {}
 
   // This test has all important variations of the nth_value function
   // invocation to be tested per (dataset, partition, frame) clause combination.
