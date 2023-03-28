@@ -33,7 +33,7 @@ HiveConnectorHandler::HiveConnectorHandler(
 
 std::shared_ptr<connector::ConnectorTableHandle>
 HiveConnectorHandler::createTableHandle(
-    connector::hive::SubfieldFilters filters) {
+    connector::hive::SubfieldFilters&& filters) {
   return std::make_shared<connector::hive::HiveTableHandle>(
       connectorId_,
       tableName_,
@@ -442,12 +442,14 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   // Velox requires Filter Pushdown must being enabled.
   bool filterPushdownEnabled = true;
   std::shared_ptr<connector::ConnectorTableHandle> tableHandle;
+  std::shared_ptr<SubstraitToVeloxHiveFilter> veloxFilter;
   if (!readRel.has_filter()) {
-    tableHandle = connector_->createTableHandle();
+    connector::hive::SubfieldFilters empty_filters = {};
+    tableHandle = connector_->createTableHandle(std::move(empty_filters));
   } else {
-    connector::hive::SubfieldFilters filters =
-        toVeloxFilter(colNameList, veloxTypeList, readRel.filter());
-    tableHandle = connector_->createTableHandle(std::move(filters));
+    veloxFilter = std::static_pointer_cast<SubstraitToVeloxHiveFilter>(
+        toVeloxFilter1(colNameList, veloxTypeList, readRel.filter()));
+    tableHandle = connector_->createTableHandle(veloxFilter->filters());
   }
 
   // Get assignments and out names.
@@ -747,6 +749,104 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toVeloxFilter(
     }
   }
   return filters;
+}
+
+std::shared_ptr<SubstraitToVeloxFilter>
+SubstraitVeloxPlanConverter::toVeloxFilter1(
+    const std::vector<std::string>& inputNameList,
+    const std::vector<TypePtr>& inputTypeList,
+    const ::substrait::Expression& substraitFilter) {
+  // connector::hive::SubfieldFilters filters;
+  auto substraitToVeloxFilter = std::make_shared<SubstraitToVeloxHiveFilter>();
+  // A map between the column index and the FilterInfo for that column.
+  std::unordered_map<int, std::shared_ptr<FilterInfo>> colInfoMap;
+  for (int idx = 0; idx < inputNameList.size(); idx++) {
+    colInfoMap[idx] = std::make_shared<FilterInfo>();
+  }
+
+  std::vector<::substrait::Expression_ScalarFunction> scalarFunctions;
+  flattenConditions(substraitFilter, scalarFunctions);
+  // Construct the FilterInfo for the related column.
+  for (const auto& scalarFunction : scalarFunctions) {
+    auto filterNameSpec = substraitParser_->findFunctionSpec(
+        functionMap_, scalarFunction.function_reference());
+    auto filterName = getNameBeforeDelimiter(filterNameSpec, ":");
+    int32_t colIdx;
+    // TODO: Add different types' support here.
+    double val;
+    for (auto& arg : scalarFunction.arguments()) {
+      auto argExpr = arg.value();
+      auto typeCase = argExpr.rex_type_case();
+      switch (typeCase) {
+        case ::substrait::Expression::RexTypeCase::kSelection: {
+          auto sel = argExpr.selection();
+          // TODO: Only direct reference is considered here.
+          auto dRef = sel.direct_reference();
+          colIdx = substraitParser_->parseReferenceSegment(dRef);
+          break;
+        }
+        case ::substrait::Expression::RexTypeCase::kLiteral: {
+          auto sLit = argExpr.literal();
+          // TODO: Only double is considered here.
+          val = sLit.fp64();
+          break;
+        }
+        default:
+          VELOX_NYI(
+              "Substrait conversion not supported for arg type '{}'", typeCase);
+      }
+    }
+    if (filterName == "is_not_null") {
+      colInfoMap[colIdx]->forbidsNull();
+    } else if (filterName == "gte") {
+      colInfoMap[colIdx]->setLeft(val, false);
+    } else if (filterName == "gt") {
+      colInfoMap[colIdx]->setLeft(val, true);
+    } else if (filterName == "lte") {
+      colInfoMap[colIdx]->setRight(val, false);
+    } else if (filterName == "lt") {
+      colInfoMap[colIdx]->setRight(val, true);
+    } else {
+      VELOX_NYI(
+          "Substrait conversion not supported for filter name '{}'",
+          filterName);
+    }
+  }
+
+  // Construct the Filters.
+  for (int idx = 0; idx < inputNameList.size(); idx++) {
+    auto filterInfo = colInfoMap[idx];
+    double leftBound;
+    double rightBound;
+    bool leftUnbounded = true;
+    bool rightUnbounded = true;
+    bool leftExclusive = false;
+    bool rightExclusive = false;
+    if (filterInfo->isInitialized()) {
+      if (filterInfo->left_) {
+        leftUnbounded = false;
+        leftBound = filterInfo->left_.value();
+        leftExclusive = filterInfo->leftExclusive_;
+      }
+      if (filterInfo->right_) {
+        rightUnbounded = false;
+        rightBound = filterInfo->right_.value();
+        rightExclusive = filterInfo->rightExclusive_;
+      }
+      bool nullAllowed = filterInfo->nullAllowed_;
+      substraitToVeloxFilter->addFilter(
+          inputNameList[idx],
+          std::make_unique<common::DoubleRange>(
+              leftBound,
+              leftUnbounded,
+              leftExclusive,
+              rightBound,
+              rightUnbounded,
+              rightExclusive,
+              nullAllowed));
+    }
+  }
+  return substraitToVeloxFilter;
 }
 
 void SubstraitVeloxPlanConverter::flattenConditions(

@@ -27,11 +27,38 @@ class ConnectorHandler {
   virtual ~ConnectorHandler() = default;
 
   virtual std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(
-      connector::hive::SubfieldFilters filters = {}) = 0;
+      connector::hive::SubfieldFilters&& filters) = 0;
 
   virtual std::shared_ptr<connector::ColumnHandle> createColumnHandle(
       const std::string& columnHandleName,
       const TypePtr& columnHandleDataType) = 0;
+
+  //   virtual std::shared_ptr<core::TableScanNode> createTableScanNode() {
+
+  //   }
+};
+
+class SubstraitToVeloxFilter {
+ public:
+  virtual void addFilter(
+      const std::string& filterName,
+      std::unique_ptr<common::DoubleRange>&& range) = 0;
+};
+
+class SubstraitToVeloxHiveFilter : public SubstraitToVeloxFilter {
+ public:
+  void addFilter(
+      const std::string& filterName,
+      std::unique_ptr<common::DoubleRange>&& range) override {
+    filters_[common::Subfield(filterName)] = std::move(range);
+  }
+
+  connector::hive::SubfieldFilters&& filters() {
+    return std::move(filters_);
+  }
+
+ private:
+  connector::hive::SubfieldFilters filters_;
 };
 
 class HiveConnectorHandler : public ConnectorHandler {
@@ -43,7 +70,7 @@ class HiveConnectorHandler : public ConnectorHandler {
       const connector::hive::HiveColumnHandle::ColumnType& columnType);
 
   std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(
-      connector::hive::SubfieldFilters filters = {}) override;
+      connector::hive::SubfieldFilters&& filters) override;
   std::shared_ptr<connector::ColumnHandle> createColumnHandle(
       const std::string& columnHandleName,
       const TypePtr& columnHandleDataType) override;
@@ -159,6 +186,11 @@ class SubstraitVeloxPlanConverter {
   /// Used to convert Substrait Filter into Velox SubfieldFilters which will
   /// be used in TableScan.
   connector::hive::SubfieldFilters toVeloxFilter(
+      const std::vector<std::string>& inputNameList,
+      const std::vector<TypePtr>& inputTypeList,
+      const ::substrait::Expression& substraitFilter);
+
+  std::shared_ptr<SubstraitToVeloxFilter> toVeloxFilter1(
       const std::vector<std::string>& inputNameList,
       const std::vector<TypePtr>& inputTypeList,
       const ::substrait::Expression& substraitFilter);
