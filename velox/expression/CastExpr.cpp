@@ -468,6 +468,7 @@ VectorPtr CastExpr::applyRow(
       std::move(newChildren));
 }
 
+template <typename DecimalType>
 VectorPtr CastExpr::applyDecimal(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -478,46 +479,30 @@ VectorPtr CastExpr::applyDecimal(
   context.ensureWritable(rows, toType, castResult);
   (*castResult).clearNulls(rows);
   switch (fromType->kind()) {
-    case TypeKind::SHORT_DECIMAL: {
-      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyDecimalCastKernel<UnscaledShortDecimal, UnscaledShortDecimal>(
-            rows, input, context, fromType, toType, castResult);
-      } else {
-        applyDecimalCastKernel<UnscaledShortDecimal, UnscaledLongDecimal>(
-            rows, input, context, fromType, toType, castResult);
-      }
+    case TypeKind::SHORT_DECIMAL:
+      applyDecimalCastKernel<UnscaledShortDecimal, DecimalType>(
+          rows, input, context, fromType, toType, castResult);
       break;
-    }
-    case TypeKind::LONG_DECIMAL: {
-      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyDecimalCastKernel<UnscaledLongDecimal, UnscaledShortDecimal>(
-            rows, input, context, fromType, toType, castResult);
-      } else {
-        applyDecimalCastKernel<UnscaledLongDecimal, UnscaledLongDecimal>(
-            rows, input, context, fromType, toType, castResult);
-      }
+    case TypeKind::LONG_DECIMAL:
+      applyDecimalCastKernel<UnscaledLongDecimal, DecimalType>(
+          rows, input, context, fromType, toType, castResult);
       break;
-    }
-    case TypeKind::INTEGER: {
-      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyIntToDecimalCastKernel<int32_t, UnscaledShortDecimal>(
-            rows, input, context, toType, castResult);
-      } else {
-        applyIntToDecimalCastKernel<int32_t, UnscaledLongDecimal>(
-            rows, input, context, toType, castResult);
-      }
+    case TypeKind::TINYINT:
+      applyIntToDecimalCastKernel<int8_t, DecimalType>(
+          rows, input, context, toType, castResult);
       break;
-    }
-    case TypeKind::BIGINT: {
-      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyIntToDecimalCastKernel<int64_t, UnscaledShortDecimal>(
-            rows, input, context, toType, castResult);
-      } else {
-        applyIntToDecimalCastKernel<int64_t, UnscaledLongDecimal>(
-            rows, input, context, toType, castResult);
-      }
+    case TypeKind::SMALLINT:
+      applyIntToDecimalCastKernel<int16_t, DecimalType>(
+          rows, input, context, toType, castResult);
       break;
-    }
+    case TypeKind::INTEGER:
+      applyIntToDecimalCastKernel<int32_t, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
+    case TypeKind::BIGINT:
+      applyIntToDecimalCastKernel<int64_t, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
     default:
       VELOX_UNSUPPORTED(
           "Cast from {} to {} is not supported",
@@ -573,8 +558,12 @@ void CastExpr::applyPeeled(
             toType);
         break;
       case TypeKind::SHORT_DECIMAL:
+        result = applyDecimal<UnscaledShortDecimal>(
+            rows, input, context, fromType, toType);
+        break;
       case TypeKind::LONG_DECIMAL:
-        result = applyDecimal(rows, input, context, fromType, toType);
+        result = applyDecimal<UnscaledLongDecimal>(
+            rows, input, context, fromType, toType);
         break;
       default: {
         // Handle primitive type conversions.

@@ -82,14 +82,12 @@ class DecimalUtil {
 
   template <typename TInput, typename TOutput>
   inline static std::optional<TOutput> rescaleInt(
-      const int128_t inputValue,
+      const TInput inputValue,
       const int toPrecision,
       const int toScale) {
     static_assert(
         std::is_same_v<TOutput, UnscaledShortDecimal> ||
         std::is_same_v<TOutput, UnscaledLongDecimal>);
-    static_assert(
-        std::is_same_v<TInput, int32_t> || std::is_same_v<TInput, int64_t>);
     int128_t rescaledValue = static_cast<int128_t>(inputValue);
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
