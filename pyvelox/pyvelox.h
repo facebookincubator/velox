@@ -28,6 +28,7 @@
 #include <velox/type/Type.h>
 #include <velox/type/Variant.h>
 #include <velox/vector/DictionaryVector.h>
+#include <velox/vector/arrow/Bridge.h>
 #include <velox/vector/FlatVector.h>
 #include "folly/json.h"
 
@@ -451,6 +452,20 @@ static void addVectorBindings(
             std::move(baseVector),
             PyVeloxContext::getSingletonInstance().pool());
       });
+
+  m.def("export_to_arrow", [](VectorPtr& inputVector){
+    auto arrowArray = new ArrowArray();
+    facebook::velox::exportToArrow(inputVector, *arrowArray);
+    inputVector.reset();
+    return reinterpret_cast<uintptr_t>(arrowArray);
+  });
+
+  m.def("import_from_arrow", [](uintptr_t arrowArrayPtr, uintptr_t arrowSchemaPtr){
+    auto arrowArray = reinterpret_cast<ArrowArray*>(arrowArrayPtr);
+    auto arrowSchema = reinterpret_cast<ArrowSchema*>(arrowSchemaPtr);
+    return importFromArrowAsOwner(*arrowSchema, *arrowArray);
+  });
+
 }
 
 static void addExpressionBindings(

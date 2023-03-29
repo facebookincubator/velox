@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pyarrow as pa
+from pyarrow.cffi import ffi
 import unittest
 
 import pyvelox.pyvelox as pv
@@ -273,3 +275,32 @@ class TestVeloxVector(unittest.TestCase):
 
         with self.assertRaises(NotImplementedError):
             e = a[3:8:3]
+            
+    def test_export_to_arrow(self):
+        vector = pv.from_list([1, 2, 3])
+        vector_ptr = pv.export_to_arrow(vector)
+
+        self.assertTrue(isinstance(vector_ptr, int))
+
+        arrow_arr = pa.Array._import_from_c(vector_ptr, pa.int64())
+
+        self.assertEqual(arrow_arr.type, pa.int64())
+        self.assertEqual(len(arrow_arr), 3)
+        self.assertListEqual(arrow_arr.tolist(), [1,2,3])
+
+    def test_import_from_arrow(self):
+        c_schema = ffi.new("struct ArrowSchema*")
+        schema_ptr = int(ffi.cast("uintptr_t",c_schema))
+
+        c_array = ffi.new("struct ArrowArray*")
+        array_ptr = int(ffi.cast("uintptr_t", c_array))
+
+        arr = pa.array([1, 2, 3], type=pa.int32())
+        arr._export_to_c(array_ptr, schema_ptr)
+
+        velox_vector = pv.import_from_arrow(array_ptr, schema_ptr)
+
+        self.assertEqual(velox_vector.size(), 3)
+        self.assertTrue(velox_vector.dtype(), pv.IntegerType())
+        for i in range(0, 3):
+            self.assertEqual(velox_vector[i], i+1)
