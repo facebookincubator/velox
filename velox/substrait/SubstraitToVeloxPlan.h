@@ -22,22 +22,6 @@
 
 namespace facebook::velox::substrait {
 
-class ConnectorHandler {
- public:
-  virtual ~ConnectorHandler() = default;
-
-  virtual std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(
-      connector::hive::SubfieldFilters&& filters) = 0;
-
-  virtual std::shared_ptr<connector::ColumnHandle> createColumnHandle(
-      const std::string& columnHandleName,
-      const TypePtr& columnHandleDataType) = 0;
-
-  //   virtual std::shared_ptr<core::TableScanNode> createTableScanNode() {
-
-  //   }
-};
-
 class SubstraitToVeloxFilter {
  public:
   virtual void addFilter(
@@ -61,6 +45,21 @@ class SubstraitToVeloxHiveFilter : public SubstraitToVeloxFilter {
   connector::hive::SubfieldFilters filters_;
 };
 
+class ConnectorHandler {
+ public:
+  virtual ~ConnectorHandler() = default;
+
+  virtual std::shared_ptr<core::TableScanNode> createTableScanNode(
+      const ::substrait::ReadRel& readRel,
+      const std::shared_ptr<SubstraitParser>& substraitParser,
+      const std::shared_ptr<SubstraitToVeloxFilter>& substraitToVeloxFilter,
+      const int planNodeId,
+      const std::string& nextPlanNodeId,
+      const std::vector<std::string>& colNameList,
+      std::vector<TypePtr>&& veloxTypeList,
+      const core::TypedExprPtr& remainingFilter = nullptr) = 0;
+};
+
 class HiveConnectorHandler : public ConnectorHandler {
  public:
   HiveConnectorHandler(
@@ -69,11 +68,15 @@ class HiveConnectorHandler : public ConnectorHandler {
       const bool filterPushDownEnabled,
       const connector::hive::HiveColumnHandle::ColumnType& columnType);
 
-  std::shared_ptr<connector::ConnectorTableHandle> createTableHandle(
-      connector::hive::SubfieldFilters&& filters) override;
-  std::shared_ptr<connector::ColumnHandle> createColumnHandle(
-      const std::string& columnHandleName,
-      const TypePtr& columnHandleDataType) override;
+  std::shared_ptr<core::TableScanNode> createTableScanNode(
+      const ::substrait::ReadRel& readRel,
+      const std::shared_ptr<SubstraitParser>& substraitParser,
+      const std::shared_ptr<SubstraitToVeloxFilter>& substraitToVeloxFilter,
+      const int planNodeId,
+      const std::string& nextPlanNodeId,
+      const std::vector<std::string>& colNameList,
+      std::vector<TypePtr>&& veloxTypeList,
+      const core::TypedExprPtr& remainingFilter = nullptr) override;
 
  private:
   std::string connectorId_;
@@ -185,12 +188,12 @@ class SubstraitVeloxPlanConverter {
 
   /// Used to convert Substrait Filter into Velox SubfieldFilters which will
   /// be used in TableScan.
-  connector::hive::SubfieldFilters toVeloxFilter(
-      const std::vector<std::string>& inputNameList,
-      const std::vector<TypePtr>& inputTypeList,
-      const ::substrait::Expression& substraitFilter);
+  //   connector::hive::SubfieldFilters toVeloxFilter(
+  //       const std::vector<std::string>& inputNameList,
+  //       const std::vector<TypePtr>& inputTypeList,
+  //       const ::substrait::Expression& substraitFilter);
 
-  std::shared_ptr<SubstraitToVeloxFilter> toVeloxFilter1(
+  std::shared_ptr<SubstraitToVeloxFilter> toVeloxFilter(
       const std::vector<std::string>& inputNameList,
       const std::vector<TypePtr>& inputTypeList,
       const ::substrait::Expression& substraitFilter);
