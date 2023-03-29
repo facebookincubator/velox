@@ -110,20 +110,19 @@ void applyDecimalCastKernel(
   });
 }
 
-template <TypeKind InputKind, typename TOutput>
+template <typename TInput, typename TOutput>
 void applyIntToDecimalCastKernel(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
     const TypePtr& toType,
     VectorPtr castResult) {
-  using TInput = typename TypeTraits<InputKind>::NativeType;
   auto sourceVector = input.as<SimpleVector<TInput>>();
   auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
   context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-    auto rescaledValue = DecimalUtil::rescaleInt<InputKind, TOutput>(
+    auto rescaledValue = DecimalUtil::rescaleInt<TInput, TOutput>(
         sourceVector->valueAt(row),
         toPrecisionScale.first,
         toPrecisionScale.second);
@@ -501,20 +500,20 @@ VectorPtr CastExpr::applyDecimal(
     }
     case TypeKind::INTEGER: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyIntToDecimalCastKernel<TypeKind::INTEGER, UnscaledShortDecimal>(
+        applyIntToDecimalCastKernel<int32_t, UnscaledShortDecimal>(
             rows, input, context, toType, castResult);
       } else {
-        applyIntToDecimalCastKernel<TypeKind::INTEGER, UnscaledLongDecimal>(
+        applyIntToDecimalCastKernel<int32_t, UnscaledLongDecimal>(
             rows, input, context, toType, castResult);
       }
       break;
     }
     case TypeKind::BIGINT: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyIntToDecimalCastKernel<TypeKind::BIGINT, UnscaledShortDecimal>(
+        applyIntToDecimalCastKernel<int64_t, UnscaledShortDecimal>(
             rows, input, context, toType, castResult);
       } else {
-        applyIntToDecimalCastKernel<TypeKind::BIGINT, UnscaledLongDecimal>(
+        applyIntToDecimalCastKernel<int64_t, UnscaledLongDecimal>(
             rows, input, context, toType, castResult);
       }
       break;

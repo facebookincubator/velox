@@ -80,7 +80,7 @@ class DecimalUtil {
     }
   }
 
-  template <TypeKind InputKind, typename TOutput>
+  template <typename TInput, typename TOutput>
   inline static std::optional<TOutput> rescaleInt(
       const int128_t inputValue,
       const int toPrecision,
@@ -89,7 +89,7 @@ class DecimalUtil {
         std::is_same_v<TOutput, UnscaledShortDecimal> ||
         std::is_same_v<TOutput, UnscaledLongDecimal>);
     static_assert(
-        InputKind == TypeKind::BIGINT || InputKind == TypeKind::INTEGER);
+        std::is_same_v<TInput, int32_t> || std::is_same_v<TInput, int64_t>);
     int128_t rescaledValue = static_cast<int128_t>(inputValue);
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
@@ -98,7 +98,7 @@ class DecimalUtil {
         rescaledValue > DecimalUtil::kPowersOfTen[toPrecision] || isOverflow) {
       VELOX_USER_FAIL(
           "Cannot cast {} '{}' to DECIMAL({},{})",
-          TypeTraits<InputKind>::name,
+          CppToType<TInput>::name,
           inputValue,
           toPrecision,
           toScale);
