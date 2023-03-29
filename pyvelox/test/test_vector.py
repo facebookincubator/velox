@@ -286,11 +286,11 @@ class TestVeloxVector(unittest.TestCase):
 
         self.assertEqual(arrow_arr.type, pa.int64())
         self.assertEqual(len(arrow_arr), 3)
-        self.assertListEqual(arrow_arr.tolist(), [1,2,3])
+        self.assertListEqual(arrow_arr.tolist(), [1, 2, 3])
 
     def test_import_from_arrow(self):
         c_schema = ffi.new("struct ArrowSchema*")
-        schema_ptr = int(ffi.cast("uintptr_t",c_schema))
+        schema_ptr = int(ffi.cast("uintptr_t", c_schema))
 
         c_array = ffi.new("struct ArrowArray*")
         array_ptr = int(ffi.cast("uintptr_t", c_array))
@@ -303,4 +303,4 @@ class TestVeloxVector(unittest.TestCase):
         self.assertEqual(velox_vector.size(), 3)
         self.assertTrue(velox_vector.dtype(), pv.IntegerType())
         for i in range(0, 3):
-            self.assertEqual(velox_vector[i], i+1)
+            self.assertEqual(velox_vector[i], i + 1)

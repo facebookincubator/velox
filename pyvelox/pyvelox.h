@@ -28,8 +28,8 @@
 #include <velox/type/Type.h>
 #include <velox/type/Variant.h>
 #include <velox/vector/DictionaryVector.h>
-#include <velox/vector/arrow/Bridge.h>
 #include <velox/vector/FlatVector.h>
+#include <velox/vector/arrow/Bridge.h>
 #include "folly/json.h"
 
 #include "context.h"
@@ -453,18 +453,22 @@ static void addVectorBindings(
             PyVeloxContext::getSingletonInstance().pool());
       });
 
-  m.def("export_to_arrow", [](VectorPtr& inputVector){
+  m.def("export_to_arrow", [](VectorPtr& inputVector) {
     auto arrowArray = new ArrowArray();
-    facebook::velox::exportToArrow(inputVector, *arrowArray);
+    std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{facebook::velox::memory::getDefaultMemoryPool()};
+    facebook::velox::exportToArrow(inputVector, *arrowArray, pool_.get());
     inputVector.reset();
     return reinterpret_cast<uintptr_t>(arrowArray);
   });
 
-  m.def("import_from_arrow", [](uintptr_t arrowArrayPtr, uintptr_t arrowSchemaPtr){
-    auto arrowArray = reinterpret_cast<ArrowArray*>(arrowArrayPtr);
-    auto arrowSchema = reinterpret_cast<ArrowSchema*>(arrowSchemaPtr);
-    return importFromArrowAsOwner(*arrowSchema, *arrowArray);
-  });
+  m.def(
+      "import_from_arrow",
+      [](uintptr_t arrowArrayPtr, uintptr_t arrowSchemaPtr) {
+        auto arrowArray = reinterpret_cast<ArrowArray*>(arrowArrayPtr);
+        auto arrowSchema = reinterpret_cast<ArrowSchema*>(arrowSchemaPtr);
+        std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{facebook::velox::memory::getDefaultMemoryPool()};
+        return importFromArrowAsOwner(*arrowSchema, *arrowArray, pool_.get());
+      });
 
 }
 
