@@ -64,9 +64,9 @@ class HiveConnectorHandler : public ConnectorHandler {
  public:
   HiveConnectorHandler(
       const std::string& connectorId,
-      const std::string& tableName,
-      const bool filterPushDownEnabled,
-      const connector::hive::HiveColumnHandle::ColumnType& columnType);
+      const std::string& tableName, // TODO: probably this should also go to the createTableScanNode
+      const bool filterPushDownEnabled, // TODO: probably this should also go to the createTableScanNode
+      const connector::hive::HiveColumnHandle::ColumnType& columnType); // TODO: probably move this to the function createTableScanNode
 
   std::shared_ptr<core::TableScanNode> createTableScanNode(
       const ::substrait::ReadRel& readRel,
