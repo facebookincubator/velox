@@ -1048,23 +1048,23 @@ struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-    // Convert timestampWithTimezone to a timestamp representing the moment at the
-    // zone in timestampWithTimezone.
-    Timestamp timeStamp = this->toTimestamp(timestampWithTimezone); 
+    // Convert timestampWithTimezone to a timestamp representing the moment at
+    // the zone in timestampWithTimezone.
+    Timestamp timeStamp = this->toTimestamp(timestampWithTimezone);
 
     // Get timestamp in seconds
-    time_t epoch        = timeStamp.getSeconds();
+    time_t epoch = timeStamp.getSeconds();
 
-    // Get the given timezone name 
-    auto timezone = util::getTimeZoneName(*timestampWithTimezone.template at<1>());
-
+    // Get the given timezone name
+    auto timezone =
+        util::getTimeZoneName(*timestampWithTimezone.template at<1>());
     // Create tm struct with given timezone
     setenv("TZ", timezone.c_str(), 1);
     tzset();
-    struct tm *tmPtr   = localtime(&epoch);
+    struct tm* tmPtr = localtime(&epoch);
 
     // Get offset in seconds with UTC and convert to hour
-    int timezoneHour = tmPtr->tm_gmtoff/3600;
+    int timezoneHour = tmPtr->tm_gmtoff / 3600;
     result = timezoneHour;
     unsetenv("TZ");
   }
