@@ -80,22 +80,6 @@ SQL-standard concatenation operator (<code class="docutils literal notranslate">
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="from_utf8">
-<span class="sig-name descname"><span class="pre">from_utf8</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#from_utf8" title="Permalink to this definition">¶</a></dt>
-<dd><p>Decodes a UTF-8 encoded string from <code class="docutils literal notranslate"><span class="pre">binary</span></code>. Invalid UTF-8 sequences
-are replaced with the Unicode replacement character <code class="docutils literal notranslate"><span class="pre">U+FFFD</span></code>.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">from_utf8</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
-<dd><p>Decodes a UTF-8 encoded string from <code class="docutils literal notranslate"><span class="pre">binary</span></code>. Invalid UTF-8 sequences are
-replaced with <cite>replace</cite>. The <cite>replace</cite> argument can be either Unicode code
-point (bigint), a single character or empty string. When <cite>replace</cite> is an
-empty string invalid characters are removed.</p>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="length">
 <span class="sig-name descname"><span class="pre">length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#length" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the length of <code class="docutils literal notranslate"><span class="pre">string</span></code> in characters.</p>
@@ -129,8 +113,8 @@ must be non-empty.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id1">
-<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
 <dd><p>Replaces all instances of <code class="docutils literal notranslate"><span class="pre">search</span></code> with <code class="docutils literal notranslate"><span class="pre">replace</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <p>If <code class="docutils literal notranslate"><span class="pre">search</span></code> is an empty string, inserts <code class="docutils literal notranslate"><span class="pre">replace</span></code> in front of every
 character and at the end of the <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
@@ -164,8 +148,8 @@ must be non-empty.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id2">
-<span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">limit</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">limit</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
 <dd><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> on <code class="docutils literal notranslate"><span class="pre">delimiter</span></code> and returns an array of size at most <code class="docutils literal notranslate"><span class="pre">limit</span></code>.</p>
 <p>The last element in the array always contains everything left in the string.
 <code class="docutils literal notranslate"><span class="pre">limit</span></code> must be a positive number.</p>
@@ -187,8 +171,8 @@ then null is returned.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id3">
-<span class="sig-name descname"><span class="pre">strpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id3" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">strpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the position of the N-th <code class="docutils literal notranslate"><span class="pre">instance</span></code> of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code>.
 <code class="docutils literal notranslate"><span class="pre">instance</span></code> must be a positive number.
 Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. If not found, <code class="docutils literal notranslate"><span class="pre">0</span></code> is returned.</p>
@@ -202,8 +186,8 @@ Positions start with <code class="docutils literal notranslate"><span class="pre
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id4">
-<span class="sig-name descname"><span class="pre">strrpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id4" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id3">
+<span class="sig-name descname"><span class="pre">strrpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id3" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the position of the N-th <code class="docutils literal notranslate"><span class="pre">instance</span></code> of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code> starting from the end of the string.
 <code class="docutils literal notranslate"><span class="pre">instance</span></code> must be a positive number.
 Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. If not found, <code class="docutils literal notranslate"><span class="pre">0</span></code> is returned.</p>
@@ -218,8 +202,8 @@ as being relative to the end of the string.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id5">
-<span class="sig-name descname"><span class="pre">substr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id5" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id4">
+<span class="sig-name descname"><span class="pre">substr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id4" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns a substring from <code class="docutils literal notranslate"><span class="pre">string</span></code> of length <code class="docutils literal notranslate"><span class="pre">length</span></code> from the starting
 position <code class="docutils literal notranslate"><span class="pre">start</span></code>. Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting
 position is interpreted as being relative to the end of the string.</p>
