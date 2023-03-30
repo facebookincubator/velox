@@ -19,6 +19,8 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 
+DECLARE_bool(velox_memory_leak_check_enabled);
+
 namespace facebook::velox::memory {
 namespace {
 #define VELOX_MEM_MANAGER_CAP_EXCEEDED(cap)                         \
@@ -124,9 +126,6 @@ std::shared_ptr<MemoryPool> MemoryPool::addChild(
       name,
       toString());
   auto child = genChild(shared_from_this(), name, kind);
-  if (auto tracker = getMemoryUsageTracker()) {
-    child->setMemoryUsageTracker(tracker->addChild(kind == Kind::kLeaf));
-  }
   children_.emplace(name, child);
   return child;
 }
@@ -170,24 +169,26 @@ MemoryPoolImpl::MemoryPoolImpl(
     DestructionCallback destructionCb,
     const Options& options)
     : MemoryPool{name, kind, parent, options},
+      memoryUsageTracker_(
+          parent_ == nullptr ? MemoryUsageTracker::create(options.capacity)
+                             : parent->getMemoryUsageTracker()->addChild(
+                                   kind == MemoryPool::Kind::kLeaf)),
       memoryManager_{memoryManager},
       allocator_{&memoryManager_->getAllocator()},
       destructionCb_(std::move(destructionCb)),
       localMemoryUsage_{} {}
 
 MemoryPoolImpl::~MemoryPoolImpl() {
-  if (const auto& tracker = getMemoryUsageTracker()) {
-    // TODO: change to check reserved bytes which including the unused
-    // reservation.
-    auto remainingBytes = tracker->currentBytes();
+  if (FLAGS_velox_memory_leak_check_enabled) {
+    const auto remainingBytes = memoryUsageTracker_->currentBytes();
     VELOX_CHECK_EQ(
         0,
         remainingBytes,
         "Memory pool {} should be destroyed only after all allocated memory has been freed. Remaining bytes allocated: {}, cumulative bytes allocated: {}, number of allocations: {}",
         name(),
         remainingBytes,
-        tracker->cumulativeBytes(),
-        tracker->numAllocs());
+        memoryUsageTracker_->cumulativeBytes(),
+        memoryUsageTracker_->numAllocs());
   }
   if (destructionCb_ != nullptr) {
     destructionCb_(this);
@@ -238,12 +239,10 @@ void* MemoryPoolImpl::reallocate(
     int64_t newSize) {
   checkMemoryAllocation();
 
-  auto alignedSize = sizeAlign(size);
-  auto alignedNewSize = sizeAlign(newSize);
-  const int64_t difference = alignedNewSize - alignedSize;
-  reserve(difference);
-  void* newP =
-      allocator_->reallocateBytes(p, alignedSize, alignedNewSize, alignment_);
+  const auto alignedSize = sizeAlign(size);
+  const auto alignedNewSize = sizeAlign(newSize);
+  reserve(alignedNewSize);
+  void* newP = allocator_->allocateBytes(alignedNewSize, alignment_);
   if (FOLLY_UNLIKELY(newP == nullptr)) {
     free(p, alignedSize);
     release(alignedNewSize);
@@ -254,6 +253,12 @@ void* MemoryPoolImpl::reallocate(
         size,
         toString()));
   }
+  VELOX_CHECK_NOT_NULL(newP);
+  if (p == nullptr) {
+    return newP;
+  }
+  ::memcpy(newP, p, std::min(size, newSize));
+  free(p, alignedSize);
   return newP;
 }
 
@@ -275,10 +280,11 @@ void MemoryPoolImpl::allocateNonContiguous(
   if (!allocator_->allocateNonContiguous(
           numPages,
           out,
-          [this](int64_t allocBytes, bool preAllocate) {
-            if (memoryUsageTracker_ != nullptr) {
-              memoryUsageTracker_->update(
-                  preAllocate ? allocBytes : -allocBytes);
+          [this](int64_t allocBytes, bool preAlloc) {
+            if (preAlloc) {
+              reserve(allocBytes);
+            } else {
+              release(allocBytes);
             }
           },
           minSizeClass)) {
@@ -296,9 +302,7 @@ void MemoryPoolImpl::freeNonContiguous(Allocation& allocation) {
 
   const int64_t freedBytes = allocator_->freeNonContiguous(allocation);
   VELOX_CHECK(allocation.empty());
-  if (memoryUsageTracker_ != nullptr) {
-    memoryUsageTracker_->update(-freedBytes);
-  }
+  release(freedBytes);
 }
 
 MachinePageCount MemoryPoolImpl::largestSizeClass() const {
@@ -317,8 +321,10 @@ void MemoryPoolImpl::allocateContiguous(
 
   if (!allocator_->allocateContiguous(
           numPages, nullptr, out, [this](int64_t allocBytes, bool preAlloc) {
-            if (memoryUsageTracker_) {
-              memoryUsageTracker_->update(preAlloc ? allocBytes : -allocBytes);
+            if (preAlloc) {
+              reserve(allocBytes);
+            } else {
+              release(allocBytes);
             }
           })) {
     VELOX_CHECK(out.empty());
@@ -336,9 +342,7 @@ void MemoryPoolImpl::freeContiguous(ContiguousAllocation& allocation) {
   const int64_t bytesToFree = allocation.size();
   allocator_->freeContiguous(allocation);
   VELOX_CHECK(allocation.empty());
-  if (memoryUsageTracker_ != nullptr) {
-    memoryUsageTracker_->update(-bytesToFree);
-  }
+  release(bytesToFree);
 }
 
 int64_t MemoryPoolImpl::getCurrentBytes() const {
@@ -355,20 +359,6 @@ std::string MemoryPoolImpl::toString() const {
       name_,
       kindString(kind_),
       MemoryAllocator::kindString(allocator_->kind()));
-}
-
-void MemoryPoolImpl::setMemoryUsageTracker(
-    const std::shared_ptr<MemoryUsageTracker>& tracker) {
-  const auto currentBytes = getCurrentBytes();
-  if (memoryUsageTracker_) {
-    if (currentBytes != 0) {
-      memoryUsageTracker_->update(-currentBytes);
-    }
-  }
-  memoryUsageTracker_ = tracker;
-  if (currentBytes != 0) {
-    memoryUsageTracker_->update(currentBytes);
-  }
 }
 
 const std::shared_ptr<MemoryUsageTracker>&
@@ -437,9 +427,7 @@ void MemoryPoolImpl::updateSubtreeMemoryUsage(
 void MemoryPoolImpl::reserve(int64_t size) {
   checkMemoryAllocation();
 
-  if (memoryUsageTracker_) {
-    memoryUsageTracker_->update(size);
-  }
+  memoryUsageTracker_->update(size);
   localMemoryUsage_.incrementCurrentBytes(size);
 
   bool success = memoryManager_->reserve(size);
@@ -458,8 +446,6 @@ void MemoryPoolImpl::release(int64_t size) {
 
   memoryManager_->release(size);
   localMemoryUsage_.incrementCurrentBytes(-size);
-  if (memoryUsageTracker_) {
-    memoryUsageTracker_->update(-size);
-  }
+  memoryUsageTracker_->update(-size);
 }
 } // namespace facebook::velox::memory
