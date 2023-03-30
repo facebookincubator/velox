@@ -2837,3 +2837,32 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
   VELOX_ASSERT_THROW(
       dateParse("116", "%y+"), "Invalid format: \"116\" is malformed at \"6\"");
 }
+
+TEST_F(DateTimeFunctionsTest, timeZoneHourTest) {
+
+  const auto timezone_hour = [&](const char* time,
+                                 const char* timezone) {
+    Timestamp ts = util::fromTimestampString(time);
+    auto timestamp = ts.toMillis();
+    auto hour = evaluateWithTimestampWithTimezone<int64_t>(
+                    "timezone_hour(c0)", timestamp, timezone)
+                    .value();
+    return hour;
+  };
+
+  // Asia/Kolkata - should return 5 throughout the year
+  EXPECT_EQ(5, timezone_hour("2023-01-01 03:20:00", "Asia/Kolkata"));
+  EXPECT_EQ(5, timezone_hour("2023-06-01 03:20:00", "Asia/Kolkata"));
+  
+  //America/Los_Angeles - Day light savings starts from March 12
+  EXPECT_EQ(-8, timezone_hour("2023-03-11 12:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(-7, timezone_hour("2023-03-13 12:00:00", "America/Los_Angeles"));
+  
+  //Different time with same date
+  EXPECT_EQ(-4, timezone_hour("2023-01-01 03:20:00", "Canada/Atlantic"));
+  EXPECT_EQ(-4, timezone_hour("2023-01-01 10:00:00", "Canada/Atlantic"));
+
+  EXPECT_EQ(5, timezone_hour("2023-01-01 03:20:00", "Asia/Katmandu"));
+  EXPECT_EQ(12, timezone_hour("2023-01-01 03:20:00", "Pacific/Chatham"));
+  
+}

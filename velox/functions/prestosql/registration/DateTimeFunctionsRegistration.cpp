@@ -28,7 +28,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "to_unixtime"});
   registerFunction<FromUnixtimeFunction, Timestamp, double>(
       {prefix + "from_unixtime"});
-
+  registerFunction<TimeZoneHourFunction, int64_t, TimestampWithTimezone>(
+      {prefix + "timezone_hour"});
   registerFunction<YearFunction, int64_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int64_t, Date>({prefix + "year"});
   registerFunction<YearFunction, int64_t, TimestampWithTimezone>(

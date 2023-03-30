@@ -219,3 +219,7 @@ This behavior is different from Presto Java that allows arbitrary large timestam
 .. function:: yow(x) -> bigint
 
     This is an alias for :func:`year_of_week`.
+
+.. function:: timezone_hour(timestamp) -> bigint
+
+    Returns the hour of the time zone offset from ``timestamp``.
