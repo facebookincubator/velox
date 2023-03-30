@@ -1040,7 +1040,7 @@ struct ParseDateTimeFunction {
     return true;
   }
 };
- 
+
 template <typename T>
 struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
