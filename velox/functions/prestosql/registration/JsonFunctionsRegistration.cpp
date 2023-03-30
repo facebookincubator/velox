@@ -18,14 +18,10 @@
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/SIMDJsonFunctions.h"
 
-#ifndef USD_SIMDJSON
-#define USD_SIMDJSON 1
-#endif
-
 namespace facebook::velox::functions {
 void registerJsonFunctions(bool useSimd) {
   registerJsonType();
-  if (useSimd == 1) {
+  if (useSimd) {
     registerFunction<SIMDIsJsonScalarFunction, bool, Json>({"is_json_scalar"});
     registerFunction<SIMDJsonExtractScalarFunction, Varchar, Json, Varchar>(
         {"json_extract_scalar"});
