@@ -19,6 +19,7 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/expression/TryExpr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -62,25 +63,35 @@ class CastExprTest : public functions::test::CastBaseTest {
         createType(kind, {}), variant(kind));
   }
 
-  std::shared_ptr<core::CastTypedExpr> makeCastExpr(
+  core::TypedExprPtr makeCastExpr(
       const core::TypedExprPtr& input,
       const TypePtr& toType,
-      bool nullOnFailure) {
+      bool nullOnFailure,
+      bool wrapInTry = false) {
     std::vector<core::TypedExprPtr> inputs = {input};
-    return std::make_shared<core::CastTypedExpr>(toType, inputs, nullOnFailure);
+    core::TypedExprPtr result =
+        std::make_shared<core::CastTypedExpr>(toType, inputs, nullOnFailure);
+    if (wrapInTry) {
+      std::vector<core::TypedExprPtr> inputs = {result};
+      result =
+          std::make_shared<core::CallTypedExpr>(result->type(), inputs, "try");
+    }
+    return result;
   }
 
   void testComplexCast(
       const std::string& fromExpression,
       const VectorPtr& data,
       const VectorPtr& expected,
-      bool nullOnFailure = false) {
+      bool nullOnFailure = false,
+      bool wrapInTry = false) {
     auto rowVector = makeRowVector({data});
     auto rowType = asRowType(rowVector->type());
     auto castExpr = makeCastExpr(
         makeTypedExpr(fromExpression, rowType),
         expected->type(),
-        nullOnFailure);
+        nullOnFailure,
+        wrapInTry);
     exec::ExprSet exprSet({castExpr}, &execCtx_);
 
     const auto size = data->size();
@@ -536,6 +547,26 @@ TEST_F(CastExprTest, mapCast) {
             valueAt,
             [](auto row) { return row % 3 == 0 || row % 5 != 0; }),
         true);
+  }
+}
+
+TEST_F(CastExprTest, mapCastError) {
+  auto sizeAt = [](vector_size_t row) { return row % 5; };
+  auto keyAt = [](vector_size_t row) { return row % 11; };
+  auto valueAt = [](vector_size_t row) { return 1000 + row % 13; };
+
+  auto inputMap = makeMapVector<int64_t, int64_t>(
+      kVectorSize, sizeAt, keyAt, valueAt, nullEvery(3));
+
+  // Cast map<bigint, bigint> -> map<integer, tinyint>. All values will fil to
+  // cast.
+  {
+    auto expectedMap = makeMapVector<int32_t, int8_t>(
+        kVectorSize, sizeAt, keyAt, valueAt, nullEvery(3));
+    for (auto i = 0; i < expectedMap->mapValues()->size(); ++i) {
+      expectedMap->mapValues()->setNull(i, true);
+    }
+    testComplexCast("c0", inputMap, expectedMap, true, true);
   }
 }
 

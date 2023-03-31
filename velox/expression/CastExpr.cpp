@@ -608,7 +608,7 @@ void CastExpr::apply(
   VectorPtr localResult;
   if (!nonNullRows->hasSelections()) {
     localResult =
-        BaseVector::createNullConstant(toType, rows.end(), context.pool());
+        BaseVector::createNullConstant(toType, rows.size(), context.pool());
   } else if (decoded->isIdentityMapping()) {
     applyPeeled(
         *nonNullRows, *decoded->base(), context, fromType, toType, localResult);
