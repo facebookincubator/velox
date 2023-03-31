@@ -607,6 +607,8 @@
 </li>
         <li><a href="functions/presto/datetime.html#from_unixtime">from_unixtime()</a>
 </li>
+        <li><a href="functions/presto/string.html#from_utf8">from_utf8()</a>, <a href="functions/presto/string.html#id0">[1]</a>
+</li>
         <li><a href="functions/spark/json.html#get_json_object">get_json_object()</a>
 </li>
         <li><a href="functions/spark/comparison.html#greaterthan">greaterthan()</a>
@@ -791,7 +793,7 @@
 </li>
         <li><a href="functions/presto/array.html#repeat">repeat()</a>
 </li>
-        <li><a href="functions/presto/string.html#id0">replace()</a>, <a href="functions/presto/string.html#replace">[1]</a>, <a href="functions/spark/string.html#replace">[2]</a>
+        <li><a href="functions/presto/string.html#id1">replace()</a>, <a href="functions/presto/string.html#replace">[1]</a>, <a href="functions/spark/string.html#replace">[2]</a>
 </li>
         <li><a href="functions/presto/array.html#reverse">reverse()</a>, <a href="functions/presto/string.html#reverse">[1]</a>
 </li>
@@ -831,7 +833,7 @@
 </li>
         <li><a href="functions/spark/array.html#id0">sort_array()</a>, <a href="functions/spark/array.html#sort_array">[1]</a>
 </li>
-        <li><a href="functions/presto/string.html#id1">split()</a>, <a href="functions/presto/string.html#split">[1]</a>, <a href="functions/spark/string.html#id2">[2]</a>, <a href="functions/spark/string.html#split">[3]</a>
+        <li><a href="functions/presto/string.html#id2">split()</a>, <a href="functions/presto/string.html#split">[1]</a>, <a href="functions/spark/string.html#id2">[2]</a>, <a href="functions/spark/string.html#split">[3]</a>
 </li>
         <li><a href="functions/presto/string.html#split_part">split_part()</a>
 </li>
@@ -849,13 +851,13 @@
 </li>
         <li><a href="functions/presto/aggregate.html#stddev_samp">stddev_samp()</a>
 </li>
-        <li><a href="functions/presto/string.html#id2">strpos()</a>, <a href="functions/presto/string.html#strpos">[1]</a>
+        <li><a href="functions/presto/string.html#id3">strpos()</a>, <a href="functions/presto/string.html#strpos">[1]</a>
 </li>
-        <li><a href="functions/presto/string.html#id3">strrpos()</a>, <a href="functions/presto/string.html#strrpos">[1]</a>
+        <li><a href="functions/presto/string.html#id4">strrpos()</a>, <a href="functions/presto/string.html#strrpos">[1]</a>
 </li>
         <li><a href="functions/presto/array.html#subscript">subscript()</a>, <a href="functions/presto/map.html#subscript">[1]</a>
 </li>
-        <li><a href="functions/presto/string.html#id4">substr()</a>, <a href="functions/presto/string.html#substr">[1]</a>
+        <li><a href="functions/presto/string.html#id5">substr()</a>, <a href="functions/presto/string.html#substr">[1]</a>
 </li>
         <li><a href="functions/spark/string.html#id3">substring()</a>, <a href="functions/spark/string.html#substring">[1]</a>
 </li>
@@ -1288,8 +1290,6 @@
         <li><a href="functions/presto/math.html#from_base">built-in function</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     from_base64()
 
@@ -1297,6 +1297,8 @@
         <li><a href="functions/presto/binary.html#from_base64">built-in function</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     from_hex()
 
@@ -1309,6 +1311,13 @@
 
       <ul>
         <li><a href="functions/presto/datetime.html#from_unixtime">built-in function</a>
+</li>
+      </ul></li>
+      <li>
+    from_utf8()
+
+      <ul>
+        <li><a href="functions/presto/string.html#from_utf8">built-in function</a>, <a href="functions/presto/string.html#id0">[1]</a>
 </li>
       </ul></li>
   </ul></td>
@@ -2037,7 +2046,7 @@
     replace()
 
       <ul>
-        <li><a href="functions/presto/string.html#id0">built-in function</a>, <a href="functions/presto/string.html#replace">[1]</a>, <a href="functions/spark/string.html#replace">[2]</a>
+        <li><a href="functions/presto/string.html#id1">built-in function</a>, <a href="functions/presto/string.html#replace">[1]</a>, <a href="functions/spark/string.html#replace">[2]</a>
 </li>
       </ul></li>
       <li>
@@ -2183,7 +2192,7 @@
     split()
 
       <ul>
-        <li><a href="functions/presto/string.html#id1">built-in function</a>, <a href="functions/presto/string.html#split">[1]</a>, <a href="functions/spark/string.html#id2">[2]</a>, <a href="functions/spark/string.html#split">[3]</a>
+        <li><a href="functions/presto/string.html#id2">built-in function</a>, <a href="functions/presto/string.html#split">[1]</a>, <a href="functions/spark/string.html#id2">[2]</a>, <a href="functions/spark/string.html#split">[3]</a>
 </li>
       </ul></li>
       <li>
@@ -2248,14 +2257,14 @@
     strpos()
 
       <ul>
-        <li><a href="functions/presto/string.html#id2">built-in function</a>, <a href="functions/presto/string.html#strpos">[1]</a>
+        <li><a href="functions/presto/string.html#id3">built-in function</a>, <a href="functions/presto/string.html#strpos">[1]</a>
 </li>
       </ul></li>
       <li>
     strrpos()
 
       <ul>
-        <li><a href="functions/presto/string.html#id3">built-in function</a>, <a href="functions/presto/string.html#strrpos">[1]</a>
+        <li><a href="functions/presto/string.html#id4">built-in function</a>, <a href="functions/presto/string.html#strrpos">[1]</a>
 </li>
       </ul></li>
       <li>
@@ -2269,7 +2278,7 @@
     substr()
 
       <ul>
-        <li><a href="functions/presto/string.html#id4">built-in function</a>, <a href="functions/presto/string.html#substr">[1]</a>
+        <li><a href="functions/presto/string.html#id5">built-in function</a>, <a href="functions/presto/string.html#substr">[1]</a>
 </li>
       </ul></li>
       <li>
