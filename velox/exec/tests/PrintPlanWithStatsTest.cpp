@@ -176,7 +176,6 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"          dataSourceWallNanos [ ]* sum: .+, count: 40, min: .+, max: .+"},
        {"          dynamicFiltersAccepted[ ]* sum: 1, count: 1, min: 1, max: 1"},
        {"          ioWaitNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
-       {"          queryThreadIoLatency[ ]* sum: .+, count: .+ min: .+, max: .+"},
        {"          localReadBytes      [ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
        {"          numLocalRead        [ ]* sum: 0, count: 1, min: 0, max: 0"},
        {"          numPrefetch         [ ]* sum: .+, count: 1, min: .+, max: .+"},
@@ -193,6 +192,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"          skippedStrides      [ ]* sum: 0, count: 1, min: 0, max: 0"},
        {"          storageReadBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
        {"          totalScanTime       [ ]* sum: .+, count: .+, min: .+, max: .+"},
+       {"          queryThreadIoLatency[ ]* sum: .+, count: .+ min: .+, max: .+"},
        {"    -- Project\\[expressions: \\(u_c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(u_c1:BIGINT, ROW\\[\"c1\"\\]\\)\\] -> u_c0:INTEGER, u_c1:BIGINT"},
        {"       Output: 100 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 0B, Memory allocations: .+, Threads: 1"},
        {"      -- Values\\[100 rows in 1 vectors\\] -> c0:INTEGER, c1:BIGINT"},
@@ -249,7 +249,6 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
          {"     Input: 10000 rows \\(.+\\), Output: 10000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: 1\\.00MB, Memory allocations: .+, Threads: 1, Splits: 1"},
          {"        dataSourceWallNanos[ ]* sum: .+, count: 2, min: .+, max: .+"},
          {"        ioWaitNanos      [ ]* sum: .+, count: .+ min: .+, max: .+"},
-         {"        queryThreadIoLatency[ ]* sum: .+, count: .+ min: .+, max: .+"},
          {"        localReadBytes   [ ]* sum: 0B, count: 1, min: 0B, max: 0B"},
          {"        numLocalRead     [ ]* sum: 0, count: 1, min: 0, max: 0"},
          {"        numPrefetch      [ ]* sum: .+, count: .+, min: .+, max: .+"},
@@ -265,6 +264,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
          {"        skippedSplits    [ ]* sum: 0, count: 1, min: 0, max: 0"},
          {"        skippedStrides   [ ]* sum: 0, count: 1, min: 0, max: 0"},
          {"        storageReadBytes [ ]* sum: .+, count: 1, min: .+, max: .+"},
-         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"}});
+         {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"},
+         {"        queryThreadIoLatency[ ]* sum: .+, count: .+ min: .+, max: .+"}});
   }
 }
