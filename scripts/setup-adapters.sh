@@ -29,6 +29,7 @@ function install_aws-sdk-cpp {
 
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
   cmake_install -DCMAKE_BUILD_TYPE=Debug -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management;transfer" -DCMAKE_INSTALL_PREFIX="${DEPENDENCY_DIR}/install"
+  mkdir -p /root/adapter-deps/install/bin
 }
 
 function install_libhdfs3 {
