@@ -17,6 +17,7 @@ Core Library
  * Add preliminary support for OffProcessExpressionEval operator.
  * Add quota enforcement checks when allocating large chunks of memory.
  * Deprecate `reallocate` Api from memory allocator.
+ * Fix aggregate function accumulator's memory alignment.
  * Optimize null aware anit-join when used with filter.
  * Remove usage of CppToType.
 
@@ -41,7 +42,6 @@ Hive Connector
 
  * Add support for multi-level sub field pruning.
  * Add support for estimating parquet page headers using `ThriftStreamingTransport`.
- * Fix crash when reading lazy vectors.
 
 
 Performance and Correctness
