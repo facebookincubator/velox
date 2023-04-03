@@ -119,8 +119,8 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
     VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, "folly_json_parse");
     registerFunction<JsonExtractFunction, Varchar, Varchar, Varchar>(
         {"folly_json_extract"});
-    registerFunction<SIMDJsonExtractScalarFunction, Varchar, Varchar, Varchar>(
-        {"simd_json_extract_scalar"});
+    registerFunction<SIMDJsonExtractFunction, Varchar, Varchar, Varchar>(
+        {"simd_json_extract"});
     registerFunction<SIMDJsonParseFunction, Varchar, Varchar>(
         {"simd_json_parse"});
   }

@@ -25,6 +25,8 @@ void registerJsonFunctions(bool useSimd) {
     registerFunction<SIMDIsJsonScalarFunction, bool, Json>({"is_json_scalar"});
     registerFunction<SIMDJsonExtractScalarFunction, Varchar, Json, Varchar>(
         {"json_extract_scalar"});
+    registerFunction<SIMDJsonExtractFunction, Varchar, Json, Varchar>(
+        {"json_extract"});
     registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
         {"json_array_length"});
     {

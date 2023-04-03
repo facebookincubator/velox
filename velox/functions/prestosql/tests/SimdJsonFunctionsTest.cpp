@@ -21,6 +21,30 @@
 namespace facebook::velox::functions::prestosql {
 namespace {
 
+const std::string kTestJson = std::string("{\n") + "    \"store\": {\n" +
+    "        \"book\": [\n" + "            {\n" +
+    "                \"category\": \"reference\",\n" +
+    "                \"author\": \"Nigel Rees\",\n" +
+    "                \"title\": \"Sayings of the Century\",\n" +
+    "                \"price\": 8.95\n" + "            },\n" +
+    "            {\n" + "                \"category\": \"fiction\",\n" +
+    "                \"author\": \"Evelyn Waugh\",\n" +
+    "                \"title\": \"Sword of Honour\",\n" +
+    "                \"price\": 12.99\n" + "            },\n" +
+    "            {\n" + "                \"category\": \"fiction\",\n" +
+    "                \"author\": \"Herman Melville\",\n" +
+    "                \"title\": \"Moby Dick\",\n" +
+    "                \"isbn\": \"0-553-21311-3\",\n" +
+    "                \"price\": 8.99\n" + "            },\n" +
+    "            {\n" + "                \"category\": \"fiction\",\n" +
+    "                \"author\": \"J. R. R. Tolkien\",\n" +
+    "                \"title\": \"The Lord of the Rings\",\n" +
+    "                \"isbn\": \"0-395-19395-8\",\n" +
+    "                \"price\": 22.99\n" + "            }\n" + "        ],\n" +
+    "        \"bicycle\": {\n" + "            \"color\": \"red\",\n" +
+    "            \"price\": 19.95\n" + "        }\n" + "    },\n" +
+    "    \"expensive\": 10\n" + "}";
+
 class SIMDJsonFunctionsTest : public functions::test::FunctionBaseTest {
  protected:
   VectorPtr makeJsonVector(std::optional<std::string> json) {
@@ -28,6 +52,15 @@ class SIMDJsonFunctionsTest : public functions::test::FunctionBaseTest {
         ? std::make_optional(StringView(json.value()))
         : std::nullopt;
     return makeNullableFlatVector<StringView>({s}, JSON());
+  }
+
+  std::optional<std::string> json_extract(
+      std::optional<std::string> json,
+      std::optional<std::string> path) {
+    auto jsonVector = makeJsonVector(json);
+    auto pathVector = makeNullableFlatVector<std::string>({path});
+    return evaluateOnce<std::string>(
+        "json_extract(c0, c1)", makeRowVector({jsonVector, pathVector}));
   }
 
   std::optional<bool> isJsonScalar(std::optional<std::string> json) {
@@ -62,6 +95,39 @@ class SIMDJsonFunctionsTest : public functions::test::FunctionBaseTest {
             {makeJsonVector(json), makeFlatVector<std::string>({path})}));
   }
 };
+
+TEST_F(SIMDJsonFunctionsTest, jsonExtract) {
+  // simple json path
+  EXPECT_EQ(
+      json_extract(R"({"x": {"a" : 1, "b" : 2} })", "$"),
+      "{\"x\":{\"a\":1,\"b\":2}}");
+  EXPECT_EQ(
+      json_extract(R"({"x": {"a" : 1, "b" : 2} })", "$.x"),
+      "{\"a\":1,\"b\":2}");
+  EXPECT_EQ(json_extract(R"({"x": {"a" : 1, "b" : 2} })", "$.x.a"), "1");
+  EXPECT_EQ(
+      json_extract(R"({"x": {"a" : 1, "b" : 2} })", "$.x.c"), std::nullopt);
+  EXPECT_EQ(json_extract(R"({"x": {"a" : 1, "b" : [2, 3]}})", "$.x.b[1]"), "3");
+  EXPECT_EQ(json_extract(R"([1,2,3])", "$[1]"), "2");
+  EXPECT_EQ(json_extract(R"([1,null,3])", "$[1]"), "null");
+
+  // complex json path
+  EXPECT_EQ(
+      json_extract(kTestJson, "$.store.book[*].isbn"),
+      "[\"0-553-21311-3\",\"0-395-19395-8\"]");
+  EXPECT_EQ(
+      json_extract(kTestJson, "$.store.book[1].author"), "\"Evelyn Waugh\"");
+
+  // invalid json
+  EXPECT_EQ(json_extract(R"(INVALID_JSON)", "$"), std::nullopt);
+
+  // invalid JsonPath
+  assertUserError(
+      [&]() { json_extract(R"({"":""})", ""); }, "Invalid JSON path: ");
+  assertUserError(
+      [&]() { json_extract(R"([1,2,3])", "$...invalid"); },
+      "Invalid JSON path: $...invalid");
+}
 
 TEST_F(SIMDJsonFunctionsTest, jsonArrayContainsBool) {
   // Velox test case

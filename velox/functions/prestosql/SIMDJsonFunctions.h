@@ -142,6 +142,56 @@ struct SIMDJsonParseFunction {
 };
 
 template <typename T>
+struct SIMDJsonExtractFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::unordered_map<std::string, std::vector<std::string>> tokens_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig&,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    std::vector<std::string> token;
+    if (!tokenize(jsonPath, token)) {
+      VELOX_USER_FAIL("Invalid JSON path: {}", jsonPath);
+    }
+    if (tokens_.size() == kMaxCacheNum) {
+      tokens_.erase(tokens_.begin());
+    }
+    tokens_[jsonPath] = token;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    std::string jsonPathStr{jsonPath};
+    std::vector<std::string> token;
+    bool retVal = false;
+
+    if (tokens_.count(jsonPathStr)) {
+      token = tokens_.at(jsonPath);
+    } else {
+      if (!tokenize(jsonPath, token)) {
+        VELOX_USER_FAIL("Invalid JSON path: {}", jsonPathStr);
+      }
+      if (tokens_.size() == kMaxCacheNum) {
+        tokens_.erase(tokens_.cbegin());
+      }
+      tokens_[jsonPath] = token;
+    }
+
+    auto extractResult = simdJsonExtractObject(json, token);
+
+    if (extractResult.has_value()) {
+      UDFOutputString::assign(result, extractResult.value());
+      retVal = true;
+    }
+    return retVal;
+  }
+};
+
+template <typename T>
 struct SIMDJsonExtractScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
