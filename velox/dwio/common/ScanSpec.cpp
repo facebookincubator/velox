@@ -38,6 +38,7 @@ ScanSpec& ScanSpec::operator=(const ScanSpec& other) {
     valueHook_ = other.valueHook_;
     isArrayElementOrMapEntry_ = other.isArrayElementOrMapEntry_;
     maxArrayElementsCount_ = other.maxArrayElementsCount_;
+    isPartitionKey_ = other.isPartitionKey_;
   }
   return *this;
 }
