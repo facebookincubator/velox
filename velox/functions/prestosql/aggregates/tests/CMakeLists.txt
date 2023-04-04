@@ -18,6 +18,7 @@ target_link_libraries(velox_aggregates_test_lib velox_exec_test_lib)
 
 add_executable(
   velox_aggregates_test
+  AggregateFunctionAdapterTest.cpp
   AggregationFunctionRegTest.cpp
   ApproxDistinctTest.cpp
   ApproxMostFrequentTest.cpp
@@ -57,6 +58,7 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_exec
   velox_exec_test_lib
+  velox_expression_functions
   velox_file
   velox_functions_test_lib
   velox_functions_prestosql

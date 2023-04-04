@@ -14,6 +14,7 @@
 add_library(
   velox_exec
   Aggregate.cpp
+  AggregateFunctionAdapterUtil.cpp
   AggregateFunctionRegistry.cpp
   AggregationMasks.cpp
   AggregateWindow.cpp

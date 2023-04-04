@@ -750,4 +750,8 @@ struct VariantConverter {
   }
 };
 
+// Return true if value is of a floating-point type or a complex type that
+// contains a floating-point-typed child.
+std::optional<bool> isFloatingPointType(const variant& value);
+
 } // namespace facebook::velox

@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <chrono>
 
+#include "QueryAssertions.h"
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -1003,27 +1004,43 @@ void assertEqualTypeAndNumRows(
 /// Returns the number of floating-point columns and a list of columns indices
 /// with floating-point columns placed at the end.
 std::tuple<uint32_t, std::vector<velox::column_index_t>>
-findFloatingPointColumns(const MaterializedRow& row) {
-  auto isFloatingPointColumn = [&](size_t i) {
-    return row[i].kind() == TypeKind::REAL || row[i].kind() == TypeKind::DOUBLE;
-  };
+findFloatingPointColumns(const MaterializedRowMultiset& rows) {
+  std::unordered_set<velox::column_index_t> floatingPointColumns;
+  std::unordered_set<velox::column_index_t> nonFloatingPointColumns;
+  for (const auto& row : rows) {
+    if (floatingPointColumns.size() + nonFloatingPointColumns.size() ==
+        row.size()) {
+      break;
+    }
+    for (auto i = 0; i < row.size(); ++i) {
+      if (floatingPointColumns.count(i) > 0 ||
+          nonFloatingPointColumns.count(i) > 0) {
+        continue;
+      }
 
-  uint32_t numFloatingPointColumns = 0;
-  std::vector<velox::column_index_t> indices;
-  for (auto i = 0; i < row.size(); ++i) {
-    if (isFloatingPointColumn(i)) {
-      ++numFloatingPointColumns;
-    } else {
-      indices.push_back(i);
+      auto result = isFloatingPointType(row[i]);
+      if (!result.has_value()) {
+        continue;
+      }
+      if (*result) {
+        floatingPointColumns.insert(i);
+      } else {
+        nonFloatingPointColumns.insert(i);
+      }
+    }
+  }
+  for (auto i = 0; i < rows.begin()->size(); ++i) {
+    if (floatingPointColumns.count(i) == 0 &&
+        nonFloatingPointColumns.count(i) == 0) {
+      nonFloatingPointColumns.insert(i);
     }
   }
 
-  for (auto i = 0; i < row.size(); ++i) {
-    if (isFloatingPointColumn(i)) {
-      indices.push_back(i);
-    }
-  }
-  return std::make_tuple(numFloatingPointColumns, indices);
+  std::vector<velox::column_index_t> indices{
+      nonFloatingPointColumns.begin(), nonFloatingPointColumns.end()};
+  indices.insert(
+      indices.end(), floatingPointColumns.begin(), floatingPointColumns.end());
+  return std::make_tuple(floatingPointColumns.size(), indices);
 }
 
 // Compare actualRows with expectedRows and return whether they match. Compare
@@ -1053,7 +1070,7 @@ bool assertEqualResults(
   }
 
   auto [numFloatingPointColumns, columns] =
-      findFloatingPointColumns(*expectedRows.begin());
+      findFloatingPointColumns(expectedRows);
   if (numFloatingPointColumns) {
     MaterializedRowEpsilonComparator comparator{
         numFloatingPointColumns, columns};
@@ -1143,7 +1160,7 @@ static bool compareOrderedPartitions(
   }
 
   auto [numFloatingPointColumns, columns] =
-      findFloatingPointColumns(*expected.second.begin());
+      findFloatingPointColumns(expected.second);
   if (numFloatingPointColumns) {
     MaterializedRowEpsilonComparator comparator{
         numFloatingPointColumns, columns};

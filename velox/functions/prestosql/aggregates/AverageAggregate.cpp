@@ -199,6 +199,49 @@ class AverageAggregate : public exec::Aggregate {
     }
   }
 
+  void retractIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /* mayPushdown */) override {
+    decodedPartial_.decode(*args[0], rows);
+    auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
+    auto baseSumVector =
+        baseRowVector->childAt(0)->as<SimpleVector<TAccumulator>>();
+    auto baseCountVector =
+        baseRowVector->childAt(1)->as<SimpleVector<int64_t>>();
+
+    if (decodedPartial_.isConstantMapping()) {
+      if (!decodedPartial_.isNullAt(0)) {
+        auto decodedIndex = decodedPartial_.index(0);
+        auto count = baseCountVector->valueAt(decodedIndex);
+        auto sum = baseSumVector->valueAt(decodedIndex);
+        rows.applyToSelected([&](vector_size_t i) {
+          updateNonNullValue(groups[i], -count, -sum);
+        });
+      }
+    } else if (decodedPartial_.mayHaveNulls()) {
+      rows.applyToSelected([&](vector_size_t i) {
+        if (decodedPartial_.isNullAt(i)) {
+          return;
+        }
+        auto decodedIndex = decodedPartial_.index(i);
+        updateNonNullValue(
+            groups[i],
+            -baseCountVector->valueAt(decodedIndex),
+            -baseSumVector->valueAt(decodedIndex));
+      });
+    } else {
+      rows.applyToSelected([&](vector_size_t i) {
+        auto decodedIndex = decodedPartial_.index(i);
+        updateNonNullValue(
+            groups[i],
+            -baseCountVector->valueAt(decodedIndex),
+            -baseSumVector->valueAt(decodedIndex));
+      });
+    }
+  }
+
   void addSingleGroupIntermediateResults(
       char* group,
       const SelectivityVector& rows,
@@ -342,7 +385,7 @@ bool registerAverage(const std::string& name) {
                            .integerVariable("a_precision")
                            .integerVariable("a_scale")
                            .argumentType("DECIMAL(a_precision, a_scale)")
-                           .intermediateType("VARBINARY")
+                           .intermediateType("varbinary")
                            .returnType("DECIMAL(a_precision, a_scale)")
                            .build());
 
@@ -422,7 +465,9 @@ bool registerAverage(const std::string& name) {
                   resultType->kindName());
           }
         }
-      });
+      },
+      {/*supportsRetract*/ true, /*isOrderSensitive*/ false},
+      true);
   return true;
 }
 
