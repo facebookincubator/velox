@@ -389,14 +389,13 @@ bool testFilters(
     if (child->filter()) {
       const auto& name = child->fieldName();
       if (!rowType->containsChild(name)) {
-        if (child->isPartitionKey()) {
-          auto iter = partitionKey.find(name);
-          if (iter != partitionKey.end() && iter->second.has_value()) {
-            return applyPartitionFilter(
-                partitionKeysHandle[name]->dataType()->kind(),
-                iter->second.value(),
-                child->filter());
-          }
+        // If missing column is partition key.
+        auto iter = partitionKey.find(name);
+        if (iter != partitionKey.end() && iter->second.has_value()) {
+          return applyPartitionFilter(
+              partitionKeysHandle[name]->dataType()->kind(),
+              iter->second.value(),
+              child->filter());
         }
         // Column is missing. Most likely due to schema evolution.
         if (child->filter()->isDeterministic() &&
@@ -447,9 +446,6 @@ void HiveDataSource::addDynamicFilter(
     const std::shared_ptr<common::Filter>& filter) {
   auto& fieldSpec = scanSpec_->getChildByChannel(outputChannel);
   fieldSpec.addFilter(*filter);
-  if (partitionKeys_.find(fieldSpec.fieldName()) != partitionKeys_.end()) {
-    fieldSpec.setIsPartitionKey(true);
-  }
   scanSpec_->resetCachedValues();
 }
 
