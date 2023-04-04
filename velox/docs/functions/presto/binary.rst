@@ -86,6 +86,10 @@ Binary Functions
 
     Encodes ``binary`` into a hex string representation.
 
+.. function:: to_ieee754_32(real) -> varbinary
+
+    Computes the 32 bits of IEEE 754 single-precision floating-point format of ``real``.
+
 .. function:: xxhash64(binary) -> varbinary
 
     Computes the xxhash64 hash of ``binary``.

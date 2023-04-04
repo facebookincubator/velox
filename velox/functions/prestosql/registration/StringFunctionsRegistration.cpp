@@ -89,6 +89,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "to_base64url"});
   registerFunction<FromBase64UrlFunction, Varbinary, Varchar>(
       {prefix + "from_base64url"});
+  registerFunction<ToIEEE754_32Function, Varbinary, float>(
+      {prefix + "to_ieee754_32"});
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
 

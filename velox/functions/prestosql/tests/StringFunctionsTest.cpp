@@ -1698,6 +1698,37 @@ TEST_F(StringFunctionsTest, toBase64Url) {
   EXPECT_EQ("_0-_UA==", toBase64Url(fromHex("FF4FBF50")));
 }
 
+TEST_F(StringFunctionsTest, toIEEE754_32) {
+  const auto toIEEE754_32 = [&](std::optional<float> value) {
+    return evaluateOnce<std::string, float>("to_ieee754_32(c0)", value);
+  };
+
+  EXPECT_EQ(std::nullopt, toIEEE754_32(std::nullopt));
+  EXPECT_EQ("01000001001001001100110011001101", toIEEE754_32(10.3));
+  EXPECT_EQ("01000000010010010000111111010000", toIEEE754_32(3.14159));
+  EXPECT_EQ("00111101110011001100110011001101", toIEEE754_32(0.1));
+  EXPECT_EQ("10111101110011001100110011001101", toIEEE754_32(-0.1));
+  // smallest normal possible positive float number
+  EXPECT_EQ(
+      "00000000100000000000000000000000",
+      toIEEE754_32(1.175494350822287508e-38));
+  // largest normal possible positive float number
+  EXPECT_EQ(
+      "01111111011111111111111111111111",
+      toIEEE754_32(3.4028234663852885981E+38));
+  // smallest subnormal possible positive float number
+  EXPECT_EQ(
+      "00000000000000000000000000000001",
+      toIEEE754_32(1.401298464324817071e-45));
+  // largest subnormal possible positive float number
+  EXPECT_EQ(
+      "00000000011111111111111111111111",
+      toIEEE754_32(1.175494210692441075e-38));
+  EXPECT_EQ(toIEEE754_32(100.0), toIEEE754_32(100));
+  EXPECT_EQ(
+      toIEEE754_32(10.3333333333333333), toIEEE754_32(10.3333334333333333));
+}
+
 TEST_F(StringFunctionsTest, reverse) {
   const auto reverse = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("reverse(c0)", value);

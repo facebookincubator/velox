@@ -280,6 +280,17 @@ struct ToBase64UrlFunction {
 };
 
 template <typename T>
+struct ToIEEE754_32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<float>& input) {
+    stringImpl::toIEEE754_32(result, input);
+  }
+};
+
+template <typename T>
 struct UrlEncodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

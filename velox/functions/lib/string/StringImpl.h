@@ -19,11 +19,14 @@
 #include <fmt/format.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <bitset>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <typeinfo>
 #include <vector>
 #include "folly/CPortability.h"
 #include "folly/Likely.h"
@@ -433,6 +436,27 @@ FOLLY_ALWAYS_INLINE void fromBase64Url(
       encoding::Base64::calculateDecodedSize(inputData, inputSize, hasPad));
   encoding::Base64::decodeUrl(
       inputData, inputSize, output.data(), output.size(), hasPad);
+}
+
+template <typename TOutString>
+FOLLY_ALWAYS_INLINE void toIEEE754_32(TOutString& output, const float& input) {
+  static constexpr auto outLength = 32;
+  output.resize(32);
+  // Cast the float to an unsigned integer pointer
+  unsigned int* ui =
+      const_cast<unsigned int*>(reinterpret_cast<const unsigned int*>(&input));
+  // Convert the unsigned integer to a bitset
+  std::bitset<32> bits = std::bitset<32>(*ui);
+  // Get the sign bit
+  bool sign = bits[31];
+  // Get the exponent bits
+  std::bitset<8> exponent(bits.to_string().substr(1, 8));
+  // Get the mantissa bits
+  std::bitset<23> mantissa(bits.to_string().substr(9, 23));
+  // Bias the exponent
+  exponent = exponent.to_ulong() - 127;
+  std::string buffer = bits.to_string();
+  std::memcpy(output.data(), buffer.data(), outLength);
 }
 
 FOLLY_ALWAYS_INLINE void charEscape(unsigned char c, char* output) {
