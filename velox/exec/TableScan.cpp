@@ -92,7 +92,7 @@ RowVectorPtr TableScan::getOutput() {
 
       if (!dataSource_) {
         connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
-            connectorSplit->connectorId, planNodeId());
+            connectorSplit->connectorId, planNodeId(), true);
         dataSource_ = connector_->createDataSource(
             outputType_,
             tableHandle_,
@@ -166,8 +166,7 @@ RowVectorPtr TableScan::getOutput() {
       auto data = dataOptional.value();
       if (data) {
         if (data->size() > 0) {
-          lockedStats->inputPositions += data->size();
-          lockedStats->inputBytes += data->retainedSize();
+          lockedStats->addInputVector(data->estimateFlatSize(), data->size());
           return data;
         }
         continue;
@@ -205,7 +204,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
        columns = columnHandles_,
        connector = connector_,
        ctx = operatorCtx_->createConnectorQueryCtx(
-           split->connectorId, planNodeId()),
+           split->connectorId, planNodeId(), true),
        task = operatorCtx_->task(),
        split]() -> std::unique_ptr<DataSourcePtr> {
         if (task->isCancelled()) {

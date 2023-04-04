@@ -2032,7 +2032,7 @@ TEST_F(VectorTest, mapSliceMutability) {
 TEST_F(VectorTest, lifetime) {
   ASSERT_DEATH(
       {
-        auto childPool = pool_->addChild("test");
+        auto childPool = memory::getDefaultMemoryPool();
         auto v = BaseVector::create(INTEGER(), 10, childPool.get());
 
         // BUG: Memory pool needs to stay alive until all memory allocated from
@@ -2040,7 +2040,7 @@ TEST_F(VectorTest, lifetime) {
         childPool.reset();
         v.reset();
       },
-      "Memory pool test should be destroyed only after all allocated memory has been freed.");
+      "");
 }
 
 TEST_F(VectorTest, ensureNullsCapacity) {
@@ -2086,4 +2086,37 @@ TEST_F(VectorTest, createVectorWithNullType) {
       std::make_shared<MapVector>(
           pool(), nullptr, nullptr, 100, nullptr, nullptr, nullptr, nullptr),
       kErrorMessage);
+}
+
+TEST_F(VectorTest, testCopyWithZeroCount) {
+  auto runTest = [&](const VectorPtr& vector) {
+    // We pass invalid targetIndex and sourceIndex and expect the
+    // function not to throw since count is 0.
+    ASSERT_NO_THROW(
+        vector->copy(vector.get(), vector->size() + 1, vector->size() + 1, 0));
+
+    BaseVector::CopyRange range{vector->size() + 1, vector->size() + 1, 0};
+    ASSERT_NO_THROW(vector->copyRanges(vector.get(), folly::Range(&range, 1)));
+
+    ASSERT_NO_THROW(vector->copyRanges(
+        vector.get(), std::vector<BaseVector::CopyRange>{range, range, range}));
+  };
+
+  // Flat.
+  runTest(makeFlatVector<bool>({1, 0, 1, 1}));
+  runTest(makeFlatVector<StringView>({"s"_sv}));
+  runTest(makeFlatVector<int32_t>({1, 2}));
+
+  // Complex types.
+  runTest(makeArrayVector<int32_t>(
+      1, [](auto) { return 10; }, [](auto i) { return i; }));
+
+  runTest(makeMapVector<int32_t, float>(
+      1,
+      [](auto) { return 10; },
+      [](auto i) { return i; },
+      [](auto i) { return i; }));
+
+  runTest(
+      makeRowVector({makeFlatVector<int32_t>(1, [](auto i) { return i; })}));
 }

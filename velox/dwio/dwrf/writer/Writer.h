@@ -173,9 +173,11 @@ class Writer : public WriterBase {
       : Writer{
             options,
             std::move(sink),
-            parentPool.addChild(fmt::format(
-                "writer_node_{}",
-                folly::to<std::string>(folly::Random::rand64())))} {}
+            parentPool.addChild(
+                fmt::format(
+                    "writer_node_{}",
+                    folly::to<std::string>(folly::Random::rand64())),
+                memory::MemoryPool::Kind::kAggregate)} {}
 
   ~Writer() override = default;
 
@@ -191,20 +193,6 @@ class Writer : public WriterBase {
   uint64_t flushTimeMemoryUsageEstimate(
       const WriterContext& context,
       size_t nextWriteSize) const;
-
-  // TODO: Remove this api next.
-  void setMemoryUsageTracker(
-      const std::shared_ptr<velox::memory::MemoryUsageTracker>& tracker) {
-    getContext()
-        .getMemoryPool(velox::dwrf::MemoryUsageCategory::DICTIONARY)
-        .setMemoryUsageTracker(tracker->addChild());
-    getContext()
-        .getMemoryPool(velox::dwrf::MemoryUsageCategory::GENERAL)
-        .setMemoryUsageTracker(tracker->addChild());
-    getContext()
-        .getMemoryPool(velox::dwrf::MemoryUsageCategory::OUTPUT_STREAM)
-        .setMemoryUsageTracker(tracker->addChild());
-  }
 
   // protected:
   bool overMemoryBudget(const WriterContext& context, size_t writeLength) const;

@@ -30,7 +30,8 @@ add_executable(
   IsWritableVectorTest.cpp
   LazyVectorTest.cpp
   MayHaveNullsRecursiveTest.cpp
-  VariantToVectorTest.cpp)
+  VariantToVectorTest.cpp
+  VectorTestUtils.cpp)
 
 add_test(velox_vector_test velox_vector_test)
 
@@ -42,6 +43,7 @@ target_link_libraries(
   velox_serialization
   velox_memory
   velox_presto_serializer
+  velox_presto_types
   velox_temp_path
   velox_vector_fuzzer
   ${Boost_ATOMIC_LIBRARIES}

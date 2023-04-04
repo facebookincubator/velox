@@ -116,7 +116,7 @@ class VectorFuzzer {
 
     /// If true, the length of array/map are randomly generated and
     /// `containerLength` is treated as maximum length.
-    bool containerVariableLength{false};
+    bool containerVariableLength{true};
 
     /// Restricts the maximum inner (elements) vector size created when
     /// generating nested vectors (arrays, maps, and rows).
@@ -125,8 +125,18 @@ class VectorFuzzer {
     /// If true, generated map keys are normalized (unique and not-null).
     bool normalizeMapKeys{true};
 
-    /// If true, the random generated timestamp value will only be in
-    /// microsecond precision (default is nanosecond).
+    /// Control the precision of timestamps generated. By default generate using
+    /// nanoseconds precision.
+    enum class TimestampPrecision : int8_t {
+      kNanoSeconds = 0,
+      kMicroSeconds = 1,
+      kMilliSeconds = 2,
+      kSeconds = 3,
+    };
+    TimestampPrecision timestampPrecision{TimestampPrecision::kNanoSeconds};
+
+    /// TODO: keeping the deprecated option for backwards compatibility. Will be
+    /// removed soon. For new code the option above.
     bool useMicrosecondPrecisionTimestamp{false};
 
     /// If true, fuzz() will randomly generate lazy vectors and fuzzInputRow()
@@ -279,6 +289,13 @@ class VectorFuzzer {
       RowVectorPtr rowVector,
       const std::vector<column_index_t>& columnsToWrapInLazy);
 
+  // Generate a random null buffer.
+  BufferPtr fuzzNulls(vector_size_t size);
+
+  // Generate a random indices buffer of 'size' with maximum possible index
+  // pointing to (baseVectorSize-1).
+  BufferPtr fuzzIndices(vector_size_t size, vector_size_t baseVectorSize);
+
  private:
   // Generates a flat vector for primitive types.
   VectorPtr fuzzFlatPrimitive(const TypePtr& type, vector_size_t size);
@@ -293,9 +310,6 @@ class VectorFuzzer {
   // flat encodings if flatEncoding is set to false, otherwise they will all be
   // flat.
   VectorPtr fuzzComplex(const TypePtr& type, vector_size_t size);
-
-  // Generate a random null buffer.
-  BufferPtr fuzzNulls(vector_size_t size);
 
   void fuzzOffsetsAndSizes(
       BufferPtr& offsets,

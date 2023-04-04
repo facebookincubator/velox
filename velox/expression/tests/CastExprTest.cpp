@@ -170,6 +170,57 @@ class CastExprTest : public functions::test::CastBaseTest {
     auto expected = makeNullableFlatVector<TTo>(expectedResult);
     assertEqualVectors(expected, result);
   }
+
+  template <typename T>
+  void testIntToDecimalCasts() {
+    // integer to short decimal
+    auto input = makeFlatVector<T>({-3, -2, -1, 0, 55, 69, 72});
+    testComplexCast(
+        "c0",
+        input,
+        makeShortDecimalFlatVector(
+            {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(6, 2)));
+
+    // integer to long decimal
+    testComplexCast(
+        "c0",
+        input,
+        makeLongDecimalFlatVector(
+            {-30'000'000'000,
+             -20'000'000'000,
+             -10'000'000'000,
+             0,
+             550'000'000'000,
+             690'000'000'000,
+             720'000'000'000},
+            DECIMAL(20, 10)));
+
+    // Expected failures: allowed # of integers (precision - scale) in the
+    // target
+    VELOX_ASSERT_THROW(
+        testComplexCast(
+            "c0",
+            makeFlatVector<T>(std::vector<T>{std::numeric_limits<T>::min()}),
+            makeShortDecimalFlatVector({0}, DECIMAL(3, 1))),
+        fmt::format(
+            "Cannot cast {} '{}' to DECIMAL(3,1)",
+            CppToType<T>::name,
+            std::to_string(std::numeric_limits<T>::min())));
+    VELOX_ASSERT_THROW(
+        testComplexCast(
+            "c0",
+            makeFlatVector<T>(std::vector<T>{-100}),
+            makeShortDecimalFlatVector({0}, DECIMAL(17, 16))),
+        fmt::format(
+            "Cannot cast {} '-100' to DECIMAL(17,16)", CppToType<T>::name));
+    VELOX_ASSERT_THROW(
+        testComplexCast(
+            "c0",
+            makeFlatVector<T>(std::vector<T>{100}),
+            makeShortDecimalFlatVector({0}, DECIMAL(17, 16))),
+        fmt::format(
+            "Cannot cast {} '100' to DECIMAL(17,16)", CppToType<T>::name));
+  }
 };
 
 TEST_F(CastExprTest, basics) {
@@ -203,7 +254,7 @@ TEST_F(CastExprTest, basics) {
   testCast<bool, std::string>("string", {true, false}, {"true", "false"});
 }
 
-TEST_F(CastExprTest, timestamp) {
+TEST_F(CastExprTest, stringToTimestamp) {
   testCast<std::string, Timestamp>(
       "timestamp",
       {
@@ -220,6 +271,37 @@ TEST_F(CastExprTest, timestamp) {
           Timestamp(0, 0),
           Timestamp(946729316, 0),
           Timestamp(7200, 0),
+          std::nullopt,
+      });
+}
+
+TEST_F(CastExprTest, timestampToString) {
+  testCast<Timestamp, std::string>(
+      "string",
+      {
+          Timestamp(-946684800, 0),
+          Timestamp(-7266, 0),
+          Timestamp(0, 0),
+          Timestamp(946684800, 0),
+          Timestamp(9466848000, 0),
+          Timestamp(94668480000, 0),
+          Timestamp(946729316, 0),
+          Timestamp(946729316, 123),
+          Timestamp(946729316, 129900000),
+          Timestamp(7266, 0),
+          std::nullopt,
+      },
+      {
+          "1940-01-02T00:00:00.000",
+          "1969-12-31T21:58:54.000",
+          "1970-01-01T00:00:00.000",
+          "2000-01-01T00:00:00.000",
+          "2269-12-29T00:00:00.000",
+          "4969-12-04T00:00:00.000",
+          "2000-01-01T12:21:56.000",
+          "2000-01-01T12:21:56.000",
+          "2000-01-01T12:21:56.129",
+          "1970-01-01T02:01:06.000",
           std::nullopt,
       });
 }
@@ -537,6 +619,44 @@ TEST_F(CastExprTest, mapCast) {
             [](auto row) { return row % 3 == 0 || row % 5 != 0; }),
         true);
   }
+
+  // Make sure that the output of map cast has valid(copyable) data even for
+  // non selected rows.
+  {
+    auto mapVector = vectorMaker_.mapVector<int32_t, int32_t>(
+        kVectorSize,
+        sizeAt,
+        keyAt,
+        /*valueAt*/ nullptr,
+        /*isNullAt*/ nullptr,
+        /*valueIsNullAt*/ nullEvery(1));
+
+    SelectivityVector rows(5);
+    rows.setValid(2, false);
+    mapVector->setOffsetAndSize(2, 100, 100);
+    std::vector<VectorPtr> results(1);
+
+    auto rowVector = makeRowVector({mapVector});
+    auto castExpr =
+        makeTypedExpr("c0::map(bigint, bigint)", asRowType(rowVector->type()));
+    exec::ExprSet exprSet({castExpr}, &execCtx_);
+
+    exec::EvalCtx evalCtx(&execCtx_, &exprSet, rowVector.get());
+    exprSet.eval(rows, evalCtx, results);
+    auto mapResults = results[0]->as<MapVector>();
+    auto keysSize = mapResults->mapKeys()->size();
+    auto valuesSize = mapResults->mapValues()->size();
+
+    for (int i = 0; i < mapResults->size(); i++) {
+      auto start = mapResults->offsetAt(i);
+      auto size = mapResults->sizeAt(i);
+      if (size == 0) {
+        continue;
+      }
+      VELOX_CHECK(start + size - 1 < keysSize);
+      VELOX_CHECK(start + size - 1 < valuesSize);
+    }
+  }
 }
 
 TEST_F(CastExprTest, arrayCast) {
@@ -562,6 +682,38 @@ TEST_F(CastExprTest, arrayCast) {
     auto expected = makeArrayVector<StringView>(
         kVectorSize, sizeAt, valueAtString, nullEvery(3));
     testComplexCast("c0", arrayVector, expected);
+  }
+
+  // Make sure that the output of array cast has valid(copyable) data even for
+  // non selected rows.
+  {
+    // Array with all inner elements null.
+    auto sizeAtLocal = [](vector_size_t /* row */) { return 5; };
+    auto arrayVector = vectorMaker_.arrayVector<int32_t>(
+        kVectorSize, sizeAtLocal, nullptr, nullptr, nullEvery(1));
+
+    SelectivityVector rows(5);
+    rows.setValid(2, false);
+    arrayVector->setOffsetAndSize(2, 100, 10);
+    std::vector<VectorPtr> results(1);
+
+    auto rowVector = makeRowVector({arrayVector});
+    auto castExpr =
+        makeTypedExpr("cast (c0 as bigint[])", asRowType(rowVector->type()));
+    exec::ExprSet exprSet({castExpr}, &execCtx_);
+
+    exec::EvalCtx evalCtx(&execCtx_, &exprSet, rowVector.get());
+    exprSet.eval(rows, evalCtx, results);
+    auto arrayResults = results[0]->as<ArrayVector>();
+    auto elementsSize = arrayResults->elements()->size();
+    for (int i = 0; i < arrayResults->size(); i++) {
+      auto start = arrayResults->offsetAt(i);
+      auto size = arrayResults->sizeAt(i);
+      if (size == 0) {
+        continue;
+      }
+      VELOX_CHECK(start + size - 1 < elementsSize);
+    }
   }
 }
 
@@ -771,59 +923,11 @@ TEST_F(CastExprTest, decimalToDecimal) {
       "Cannot cast DECIMAL '-99999999999999999999999999999999999999' to DECIMAL(38,1)");
 }
 
-TEST_F(CastExprTest, bigintToDecimal) {
-  // bigint to short decimal
-  auto input = makeFlatVector<int64_t>({-3, -2, -1, 0, 55, 69, 72});
-  testComplexCast(
-      "c0",
-      input,
-      makeShortDecimalFlatVector(
-          {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(6, 2)));
-
-  // bigint to long decimal
-  auto input2 = makeFlatVector<int64_t>({-3, -2, -1, 0, 55, 69, 72});
-  testComplexCast(
-      "c0",
-      input2,
-      makeLongDecimalFlatVector(
-          {-30'000'000'000,
-           -20'000'000'000,
-           -10'000'000'000,
-           0,
-           550'000'000'000,
-           690'000'000'000,
-           720'000'000'000},
-          DECIMAL(20, 10)));
-
-  // Expected failures: allowed # of integers (precision - scale) in the target
-  // value is lower than # of digits of the BIGINT value in the source value.
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeFlatVector<int64_t>(std::vector<int64_t>{-123456789012345678}),
-          makeShortDecimalFlatVector({0}, DECIMAL(17, 1))),
-      "Cannot cast BIGINT '-123456789012345678' to DECIMAL(17,1)");
-
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeFlatVector<int64_t>(std::vector<int64_t>{123456789012345678}),
-          makeShortDecimalFlatVector({0}, DECIMAL(17, 1))),
-      "Cannot cast BIGINT '123456789012345678' to DECIMAL(17,1)");
-
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeFlatVector<int64_t>(std::vector<int64_t>{-100}),
-          makeShortDecimalFlatVector({0}, DECIMAL(17, 16))),
-      "Cannot cast BIGINT '-100' to DECIMAL(17,16)");
-
-  VELOX_ASSERT_THROW(
-      testComplexCast(
-          "c0",
-          makeFlatVector<int64_t>(std::vector<int64_t>{100}),
-          makeShortDecimalFlatVector({0}, DECIMAL(17, 16))),
-      "Cannot cast BIGINT '100' to DECIMAL(17,16)");
+TEST_F(CastExprTest, integerToDecimal) {
+  testIntToDecimalCasts<int8_t>();
+  testIntToDecimalCasts<int16_t>();
+  testIntToDecimalCasts<int32_t>();
+  testIntToDecimalCasts<int64_t>();
 }
 
 TEST_F(CastExprTest, castInTry) {

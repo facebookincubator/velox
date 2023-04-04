@@ -32,6 +32,7 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorSaver.h"
+#include "velox/vector/tests/TestingAlwaysThrowsFunction.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -2185,23 +2186,14 @@ TEST_F(ExprTest, peeledConstant) {
   }
 }
 
-namespace {
-template <typename T>
-struct AlwaysThrowsFunction {
-  template <typename TResult, typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TResult&, const TInput&) {
-    VELOX_FAIL();
-  }
-};
-} // namespace
-
 TEST_F(ExprTest, exceptionContext) {
   auto data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 3}),
       makeFlatVector<int32_t>({1, 2, 3}),
   });
 
-  registerFunction<AlwaysThrowsFunction, int32_t, int32_t>({"always_throws"});
+  registerFunction<TestingAlwaysThrowsFunction, int32_t, int32_t>(
+      {"always_throws"});
 
   // Disable saving vector and expression SQL on error.
   FLAGS_velox_save_input_on_expression_any_failure_path = "";
@@ -2619,7 +2611,8 @@ TEST_F(ExprTest, tryWithConstantFailure) {
   // and the StringView isn't initialized, without special handling logic in
   // EvalCtx this results in reading uninitialized memory triggering ASAN
   // errors.
-  registerFunction<AlwaysThrowsFunction, Varchar, Varchar>({"always_throws"});
+  registerFunction<TestingAlwaysThrowsFunction, Varchar, Varchar>(
+      {"always_throws"});
   auto c0 = makeConstant("test", 5);
   auto c1 = makeFlatVector<int64_t>(5, [](vector_size_t row) { return row; });
   auto rowVector = makeRowVector({c0, c1});
@@ -2811,6 +2804,15 @@ TEST_F(ExprTest, flatNoNullsFastPath) {
   ASSERT_EQ(1, exprSet->exprs().size());
   ASSERT_FALSE(exprSet->exprs()[0]->supportsFlatNoNullsFastPath())
       << exprSet->toString();
+
+  // Field dereference.
+  exprSet = compileExpression("a", rowType);
+  ASSERT_EQ(1, exprSet->exprs().size());
+  ASSERT_TRUE(exprSet->exprs()[0]->supportsFlatNoNullsFastPath());
+
+  exprSet = compileExpression("a.c0", ROW({"a"}, {ROW({"c0"}, {INTEGER()})}));
+  ASSERT_EQ(1, exprSet->exprs().size());
+  ASSERT_FALSE(exprSet->exprs()[0]->supportsFlatNoNullsFastPath());
 }
 
 TEST_F(ExprTest, commonSubExpressionWithEncodedInput) {
@@ -3071,43 +3073,6 @@ TEST_F(ExprTest, addNulls) {
 }
 
 namespace {
-
-// Throw a VeloxException if veloxException_ is true. Throw an std exception
-// otherwise.
-class AlwaysThrowsVectorFunction : public exec::VectorFunction {
- public:
-  static constexpr const char* kVeloxErrorMessage = "Velox Exception: Expected";
-  static constexpr const char* kStdErrorMessage = "Std Exception: Expected";
-
-  explicit AlwaysThrowsVectorFunction(bool veloxException)
-      : veloxException_{veloxException} {}
-
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& /* args */,
-      const TypePtr& /* outputType */,
-      exec::EvalCtx& context,
-      VectorPtr& /* result */) const override {
-    if (veloxException_) {
-      auto error =
-          std::make_exception_ptr(std::invalid_argument(kVeloxErrorMessage));
-      context.setErrors(rows, error);
-      return;
-    }
-    throw std::invalid_argument(kStdErrorMessage);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {exec::FunctionSignatureBuilder()
-                .returnType("boolean")
-                .argumentType("integer")
-                .build()};
-  }
-
- private:
-  const bool veloxException_;
-};
-
 class NoOpVectorFunction : public exec::VectorFunction {
  public:
   void apply(
@@ -3133,8 +3098,8 @@ TEST_F(ExprTest, applyFunctionNoResult) {
 
   exec::registerVectorFunction(
       "always_throws_vector_function",
-      AlwaysThrowsVectorFunction::signatures(),
-      std::make_unique<AlwaysThrowsVectorFunction>(true));
+      TestingAlwaysThrowsVectorFunction::signatures(),
+      std::make_unique<TestingAlwaysThrowsVectorFunction>(true));
 
   // At various places in the code, we don't check if result has been set or
   // not.  Conjuncts have the nice property that they set throwOnError to
@@ -3144,7 +3109,7 @@ TEST_F(ExprTest, applyFunctionNoResult) {
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
       "and(always_throws_vector_function(c0), true:BOOLEAN)",
-      AlwaysThrowsVectorFunction::kVeloxErrorMessage);
+      TestingAlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
       "no_op",
@@ -3203,20 +3168,20 @@ TEST_F(ExprTest, constantWrap) {
 TEST_F(ExprTest, stdExceptionInVectorFunction) {
   exec::registerVectorFunction(
       "always_throws_vector_function",
-      AlwaysThrowsVectorFunction::signatures(),
-      std::make_unique<AlwaysThrowsVectorFunction>(false));
+      TestingAlwaysThrowsVectorFunction::signatures(),
+      std::make_unique<TestingAlwaysThrowsVectorFunction>(false));
 
   assertError(
       "always_throws_vector_function(c0)",
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
       "Same as context.",
-      AlwaysThrowsVectorFunction::kStdErrorMessage);
+      TestingAlwaysThrowsVectorFunction::kStdErrorMessage);
 
   assertErrorSimplified(
       "always_throws_vector_function(c0)",
       makeFlatVector<int32_t>({1, 2, 3}),
-      AlwaysThrowsVectorFunction::kStdErrorMessage);
+      TestingAlwaysThrowsVectorFunction::kStdErrorMessage);
 }
 
 TEST_F(ExprTest, cseUnderTry) {
@@ -3542,4 +3507,22 @@ TEST_F(ExprTest, peelingWithSmallerConstantInput) {
   // values out of bound.
   auto result = evaluate("coalesce(c0, c1)", makeRowVector({d0, c1}));
   assertEqualVectors(c1, result);
+}
+
+TEST_F(ExprTest, ifWithLazyNulls) {
+  // Makes a null-propagating switch. Evaluates it so that null propagation
+  // masks out errors.
+  constexpr int32_t kSize = 100;
+  const char* kExpr =
+      "CASE WHEN 10 % (c0 - 2) < 0 then c0 + c1 when 10 % (c0 - 4) = 3 then c0 + c1 * 2 else c0 + c1 end";
+  auto c0 = makeFlatVector<int64_t>(kSize, [](auto row) { return row % 10; });
+  auto c1 = makeFlatVector<int64_t>(
+      kSize,
+      [](auto row) { return row; },
+      [](auto row) { return row % 10 == 2 || row % 10 == 4; });
+
+  auto result = evaluate(kExpr, makeRowVector({c0, c1}));
+  auto resultFromLazy =
+      evaluate(kExpr, makeRowVector({c0, wrapInLazyDictionary(c1)}));
+  assertEqualVectors(result, resultFromLazy);
 }
