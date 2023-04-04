@@ -312,6 +312,7 @@ class S3FileSystem::Impl {
     if (newCount == 0) {
       Aws::SDKOptions awsOptions;
       awsOptions.loggingOptions.logLevel = s3Config_.getLogLevel();
+      client_.reset();
       Aws::ShutdownAPI(awsOptions);
     }
   }
