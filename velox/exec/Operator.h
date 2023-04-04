@@ -154,6 +154,18 @@ struct OperatorStats {
         planNodeId(std::move(_planNodeId)),
         operatorType(std::move(_operatorType)) {}
 
+  void addInputVector(uint64_t bytes, uint64_t positions) {
+    inputBytes += bytes;
+    inputPositions += positions;
+    inputVectors += 1;
+  }
+
+  void addOutputVector(uint64_t bytes, uint64_t positions) {
+    outputBytes += bytes;
+    outputPositions += positions;
+    outputVectors += 1;
+  }
+
   void addRuntimeStat(const std::string& name, const RuntimeCounter& value);
   void add(const OperatorStats& other);
   void clear();
@@ -200,11 +212,13 @@ class OperatorCtx {
   core::ExecCtx* FOLLY_NONNULL execCtx() const;
 
   /// Makes an extract of QueryCtx for use in a connector. 'planNodeId'
-  /// is the id of the calling TableScan. This and the task id identify
-  /// the scan for column access tracking.
+  /// is the id of the calling TableScan. This and the task id identify the scan
+  /// for column access tracking. If 'forScan' is true, it is created for a
+  /// TableScan, otherwise for a TableWriter operator.
   std::shared_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
       const std::string& connectorId,
-      const std::string& planNodeId) const;
+      const std::string& planNodeId,
+      bool forScan) const;
 
   /// Generates the spiller config for a given spiller 'type' if the disk
   /// spilling is enabled, otherwise returns null.

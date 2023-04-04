@@ -85,6 +85,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "to_base64"});
   registerFunction<FromBase64Function, Varbinary, Varchar>(
       {prefix + "from_base64"});
+  registerFunction<ToBase64UrlFunction, Varchar, Varbinary>(
+      {prefix + "to_base64url"});
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
 
@@ -107,6 +109,7 @@ void registerStringFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reverse, prefix + "reverse");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_to_utf8, prefix + "to_utf8");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_from_utf8, prefix + "from_utf8");
 
   // Regex functions
   exec::registerStatefulVectorFunction(

@@ -284,6 +284,17 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t driverId,
       const std::string& operatorType);
 
+  /// Creates new instance of MemoryPool for the connector writer used by a
+  /// table write operator, stores it in the task to ensure lifetime and returns
+  /// a raw pointer. Not thread safe, e.g. must be called from the Operator's
+  /// constructor.
+  velox::memory::MemoryPool* addConnectorWriterPoolLocked(
+      const core::PlanNodeId& planNodeId,
+      int pipelineId,
+      uint32_t driverId,
+      const std::string& operatorType,
+      const std::string& connectorId);
+
   /// Creates new instance of MemoryPool for a merge source in a
   /// MergeExchangeNode, stores it in the task to ensure lifetime and returns a
   /// raw pointer.
@@ -428,8 +439,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// will transition the state.
   void setAllOutputConsumed();
 
-  /// Adds 'stats' to the cumulative total stats for the operator in
-  /// the Task stats. Clears 'stats'.
+  /// Adds 'stats' to the cumulative total stats for the operator in the Task
+  /// stats. Called from Drivers upon their closure.
   void addOperatorStats(OperatorStats& stats);
 
   /// Returns kNone if no pause or terminate is requested. The thread count is
@@ -545,9 +556,15 @@ class Task : public std::enable_shared_from_this<Task> {
   void testingVisitDrivers(const std::function<void(Driver*)>& callback);
 
  private:
+  // Returns time (ms) since the task execution started or zero, if not started.
+  uint64_t timeSinceStartMsLocked() const;
+
   // Returns reference to the SplitsState structure for the specified plan node
   // id. Throws if not found, meaning that plan node does not expect splits.
   SplitsState& getPlanNodeSplitsStateLocked(const core::PlanNodeId& planNodeId);
+
+  // Validate that the supplied grouped execution leaf nodes make sense.
+  void validateGroupedExecutionLeafNodes();
 
   // Returns true if all nodes expecting splits have received 'no more splits'
   // message.
@@ -874,30 +891,43 @@ class Task : public std::enable_shared_from_this<Task> {
   /// This number changes over time as drivers finish their work and maybe new
   /// get created.
   uint32_t numRunningDrivers_{0};
-  /// The total number of drivers we need to run in all pipelines. In normal
-  /// execution it is the sum of number of drivers for all pipelines. In grouped
-  /// execution we multiply that by the number of split groups, but in practice
-  /// this number will be much less (roughly divided by the number of workers),
-  /// so this will be adjusted in the end of task's work.
+  /// The total number of drivers we need to run in all pipelines. It is sum of
+  /// the Ungrouped Execution drivers plus the number of Grouped Execution
+  /// drivers per split group times the number of split groups. In practice for
+  /// tasks with Grouped Execution the final number would be much less (roughly
+  /// divided by the number of workers), so this will be adjusted in the end of
+  /// task's work.
   uint32_t numTotalDrivers_{0};
   /// The number of completed drivers so far.
   /// This number increases over time as drivers finish their work.
   /// We use this number to detect when the Task is completed.
   uint32_t numFinishedDrivers_{0};
   /// Reflects number of drivers required to process single split group during
-  /// grouped execution or the whole plan fragment during normal execution.
+  /// grouped execution. Zero for a completely ungrouped execution.
   uint32_t numDriversPerSplitGroup_{0};
-  /// Number of drivers running in the pipeine hosting the Partitioned Output.
-  /// We use it to recalculate the number of producing drivers at the end during
-  /// the Grouped Execution mode.
+  /// Reflects number of drivers required to run ungrouped execution in the
+  /// fragment. Zero for a completely grouped execution.
+  uint32_t numDriversUngrouped_{0};
+  /// Number of drivers running in the pipeline hosting the Partitioned Output
+  /// (in a single split group). We use it to recalculate the number of
+  /// producing drivers at the end during the Grouped Execution mode.
   uint32_t numDriversInPartitionedOutput_{0};
+  /// True if the pipeline hosting the Partitioned Output runs in the Grouped
+  /// Execution mode. In this case we will need to update the number of output
+  /// drivers in the end. False otherwise.
+  bool groupedPartitionedOutput_{false};
   /// The number of splits groups we run concurrently.
   uint32_t concurrentSplitGroups_{1};
 
-  /// Have we initialized operators' stats already?
-  bool initializedOpStats_{false};
+  /// Have we already initialized stats of operators in the drivers for Grouped
+  /// Execution?
+  bool initializedGroupedOpStats_{false};
+  /// Have we already initialized stats of operators in the drivers for
+  /// Ungrouped Execution?
+  bool initializedUngroupedOpStats_{false};
+
   /// How many splits groups we are processing at the moment. Used to control
-  /// split group concurrency.
+  /// split group concurrency. Ungrouped Split Group is not included here.
   uint32_t numRunningSplitGroups_{0};
   /// Split groups for which we have received at least one split - meaning our
   /// task is to process these. This set only grows. Used to deduplicate split

@@ -200,7 +200,7 @@ class Expr {
     return deterministic_;
   }
 
-  bool isConstant() const;
+  virtual bool isConstant() const;
 
   bool supportsFlatNoNullsFastPath() const {
     return supportsFlatNoNullsFastPath_;
@@ -334,7 +334,6 @@ class Expr {
   // cardinality. Returns true if the function was called. Returns
   // false if no encodings could be peeled off.
   bool applyFunctionWithPeeling(
-      const SelectivityVector& rows,
       const SelectivityVector& applyRows,
       EvalCtx& context,
       VectorPtr& result);
@@ -466,13 +465,6 @@ class Expr {
   /// Runtime statistics. CPU time, wall time and number of processed rows.
   ExprStats stats_;
 };
-
-/// Translates row number of the outer vector into row number of the inner
-/// vector using DecodedVector.
-SelectivityVector* FOLLY_NONNULL translateToInnerRows(
-    const SelectivityVector& rows,
-    DecodedVector& decoded,
-    LocalSelectivityVector& newRowsHolder);
 
 /// Generate a selectivity vector of a single row.
 SelectivityVector* FOLLY_NONNULL
@@ -649,7 +641,7 @@ class ExprSetListener {
   /// @param errors Error vector produced inside the try expression.
   virtual void onError(
       const SelectivityVector& rows,
-      const EvalCtx::ErrorVector& errors) = 0;
+      const ErrorVector& errors) = 0;
 };
 
 /// Return the ExprSetListeners having been registered.

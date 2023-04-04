@@ -148,6 +148,36 @@ TEST_F(PlanNodeToStringTest, withMultiLineContext) {
       plan_->toString(true, false, addContext));
 }
 
+TEST_F(PlanNodeToStringTest, values) {
+  auto plan = PlanBuilder().values({data_}).planNode();
+
+  ASSERT_EQ("-- Values\n", plan->toString());
+  ASSERT_EQ(
+      "-- Values[5 rows in 1 vectors] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder().values({data_}, true).planNode();
+
+  ASSERT_EQ("-- Values\n", plan->toString());
+  ASSERT_EQ(
+      "-- Values[5 rows in 1 vectors] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder().values({data_}, false, 10).planNode();
+
+  ASSERT_EQ("-- Values\n", plan->toString());
+  ASSERT_EQ(
+      "-- Values[5 rows in 1 vectors, repeat 10 times] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder().values({data_}, true, 10).planNode();
+
+  ASSERT_EQ("-- Values\n", plan->toString());
+  ASSERT_EQ(
+      "-- Values[5 rows in 1 vectors, repeat 10 times] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      plan->toString(true, false));
+}
+
 TEST_F(PlanNodeToStringTest, aggregation) {
   // Global aggregation.
   auto plan = PlanBuilder()
@@ -462,7 +492,7 @@ TEST_F(PlanNodeToStringTest, localPartition) {
 
   ASSERT_EQ("-- LocalPartition\n", plan->toString());
   ASSERT_EQ(
-      "-- LocalPartition[REPARTITION] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      "-- LocalPartition[REPARTITION HASH(0)] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
       plan->toString(true, false));
 
   plan = PlanBuilder().values({data_}).localPartition({}).planNode();
@@ -470,6 +500,13 @@ TEST_F(PlanNodeToStringTest, localPartition) {
   ASSERT_EQ("-- LocalPartition\n", plan->toString());
   ASSERT_EQ(
       "-- LocalPartition[GATHER] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder().values({data_}).localPartitionRoundRobin().planNode();
+
+  ASSERT_EQ("-- LocalPartition\n", plan->toString());
+  ASSERT_EQ(
+      "-- LocalPartition[REPARTITION ROUND ROBIN] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
       plan->toString(true, false));
 }
 

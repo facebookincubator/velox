@@ -62,19 +62,10 @@ struct udf_reuse_strings_from_arg<
     util::detail::void_t<decltype(T::reuse_strings_from_arg)>>
     : std::integral_constant<int32_t, T::reuse_strings_from_arg> {};
 
-struct GenericOutputTypeTrait {
-  static constexpr TypeKind typeKind = TypeKind::INVALID;
-  static constexpr bool isPrimitiveType = false;
-  static constexpr bool isFixedWidth = false;
-};
-
 template <typename FUNC>
 class SimpleFunctionAdapter : public VectorFunction {
   using T = typename FUNC::exec_return_type;
-  using return_type_traits = std::conditional_t<
-      isGenericType<typename FUNC::return_type>::value,
-      GenericOutputTypeTrait,
-      CppToType<typename FUNC::return_type>>;
+  using return_type_traits = SimpleTypeTrait<typename FUNC::return_type>;
 
   template <int32_t POSITION>
   using exec_arg_at = typename std::
@@ -94,9 +85,8 @@ class SimpleFunctionAdapter : public VectorFunction {
   // boolean.
   template <int32_t POSITION>
   static constexpr bool isArgFlatConstantFastPathEligible =
-      !isGenericType<arg_at<POSITION>>::value &&
-      CppToType<arg_at<POSITION>>::isPrimitiveType &&
-      CppToType<arg_at<POSITION>>::typeKind != TypeKind::BOOLEAN;
+      SimpleTypeTrait<arg_at<POSITION>>::isPrimitiveType&&
+          SimpleTypeTrait<arg_at<POSITION>>::typeKind != TypeKind::BOOLEAN;
 
   constexpr int32_t reuseStringsFromArgValue() const {
     return udf_reuse_strings_from_arg<typename FUNC::udf_struct_t>();
@@ -224,9 +214,8 @@ class SimpleFunctionAdapter : public VectorFunction {
  public:
   explicit SimpleFunctionAdapter(
       const core::QueryConfig& config,
-      const std::vector<VectorPtr>& constantInputs,
-      std::shared_ptr<const Type> returnType)
-      : fn_{std::make_unique<FUNC>(std::move(returnType))} {
+      const std::vector<VectorPtr>& constantInputs)
+      : fn_{std::make_unique<FUNC>()} {
     if constexpr (FUNC::udf_has_initialize) {
       try {
         unpackInitialize<0>(config, constantInputs);
@@ -242,7 +231,8 @@ class SimpleFunctionAdapter : public VectorFunction {
           VectorPtr* findReusableArg(std::vector<VectorPtr>& args) const {
     if constexpr (isVariadicType<arg_at<POSITION>>::value) {
       if constexpr (
-          CppToType<typename arg_at<POSITION>::underlying_type>::typeKind ==
+          SimpleTypeTrait<
+              typename arg_at<POSITION>::underlying_type>::typeKind ==
           return_type_traits::typeKind) {
         for (auto i = POSITION; i < args.size(); i++) {
           if (BaseVector::isVectorWritable(args[i])) {
@@ -254,7 +244,8 @@ class SimpleFunctionAdapter : public VectorFunction {
       // yet, we know for sure that we won't.
       return nullptr;
     } else if constexpr (
-        CppToType<arg_at<POSITION>>::typeKind == return_type_traits::typeKind) {
+        SimpleTypeTrait<arg_at<POSITION>>::typeKind ==
+        return_type_traits::typeKind) {
       using type =
           typename VectorExec::template resolver<arg_at<POSITION>>::in_type;
       if (args[POSITION]->isFlatEncoding() && args[POSITION].unique() &&
@@ -272,7 +263,7 @@ class SimpleFunctionAdapter : public VectorFunction {
   template <
       int32_t POSITION,
       typename std::enable_if_t<POSITION == FUNC::num_args, int32_t> = 0>
-  VectorPtr* findReusableArg(std::vector<VectorPtr>& args) const {
+  VectorPtr* findReusableArg(std::vector<VectorPtr>&) const {
     // Base case: we didn't find an input vector to reuse.
     return nullptr;
   }
@@ -865,19 +856,14 @@ class SimpleFunctionAdapterFactoryImpl : public SimpleFunctionAdapterFactory {
   // Exposed for use in FunctionRegistry
   using Metadata = typename UDFHolder::Metadata;
 
-  explicit SimpleFunctionAdapterFactoryImpl(
-      std::shared_ptr<const Type> returnType)
-      : returnType_(std::move(returnType)) {}
+  explicit SimpleFunctionAdapterFactoryImpl() {}
 
   std::unique_ptr<VectorFunction> createVectorFunction(
       const core::QueryConfig& config,
       const std::vector<VectorPtr>& constantInputs) const override {
     return std::make_unique<SimpleFunctionAdapter<UDFHolder>>(
-        config, constantInputs, returnType_);
+        config, constantInputs);
   }
-
- private:
-  const std::shared_ptr<const Type> returnType_;
 };
 
 } // namespace facebook::velox::exec

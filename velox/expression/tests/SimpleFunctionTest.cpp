@@ -39,6 +39,9 @@ class SimpleFunctionTest : public functions::test::FunctionBaseTest {
       return std::accumulate(data[row].begin(), data[row].end(), 0);
     });
   }
+
+  std::shared_ptr<memory::MemoryUsageTracker> tracker_{
+      memory::MemoryUsageTracker::create()};
 };
 
 template <typename T>
@@ -104,7 +107,7 @@ struct ArrayWriterFunction {
 
 TEST_F(SimpleFunctionTest, arrayWriter) {
   registerFunction<ArrayWriterFunction, Array<int64_t>, int64_t>(
-      {"array_writer_func"}, ARRAY(BIGINT()));
+      {"array_writer_func"});
 
   const size_t rows = arrayData.size();
   auto flatVector = makeFlatVector<int64_t>(rows, [](auto row) { return row; });
@@ -141,7 +144,7 @@ struct ArrayOfStringsWriterFunction {
 
 TEST_F(SimpleFunctionTest, arrayOfStringsWriter) {
   registerFunction<ArrayOfStringsWriterFunction, Array<Varchar>, int64_t>(
-      {"array_of_strings_writer_func"}, ARRAY(VARCHAR()));
+      {"array_of_strings_writer_func"});
 
   const size_t rows = stringArrayData.size();
   auto flatVector = makeFlatVector<int64_t>(rows, [](auto row) { return row; });
@@ -247,7 +250,7 @@ struct RowWriterFunction {
 
 TEST_F(SimpleFunctionTest, rowWriter) {
   registerFunction<RowWriterFunction, Row<int64_t, double>, int64_t>(
-      {"row_writer_func"}, ROW({BIGINT(), DOUBLE()}));
+      {"row_writer_func"});
 
   const size_t rows = rowVectorCol1.size();
   auto flatVector = makeFlatVector<int64_t>(rows, [](auto row) { return row; });
@@ -349,7 +352,7 @@ TEST_F(SimpleFunctionTest, arrayRowWriter) {
   registerFunction<
       ArrayRowWriterFunction,
       Array<Row<int64_t, double>>,
-      int32_t>({"array_row_writer_func"}, ARRAY(ROW({BIGINT(), DOUBLE()})));
+      int32_t>({"array_row_writer_func"});
 
   const size_t rows = rowVectorCol1.size();
   auto flatVector = makeFlatVector<int32_t>(rows, [](auto row) { return row; });
@@ -899,8 +902,6 @@ TEST_F(SimpleFunctionTest, reuseArgVector) {
   auto exprSet =
       compileExpressions({"(c0 - 0.5::REAL) * 2.0::REAL + 0.3::REAL"}, rowType);
 
-  pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
-
   auto prevAllocations = pool_->getMemoryUsageTracker()->numAllocs();
 
   evaluate(*exprSet, data);
@@ -1063,4 +1064,25 @@ TEST_F(SimpleFunctionTest, isAsciiArgs) {
   input->as<SimpleVector<StringView>>()->computeAndSetIsAscii(rows);
   ASSERT_TRUE(function_t::isAsciiArgs(rows, {input}));
 }
+
+// Return false always.
+template <typename T>
+struct GenericOutputFunc {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  // If input is Array<x> out is x.
+  bool call(out_type<Generic<T1>>&, const arg_type<Array<Generic<T1>>>&) {
+    return false;
+  }
+};
+
+TEST_F(SimpleFunctionTest, evalGenericOutput) {
+  registerFunction<GenericOutputFunc, Generic<T1>, Array<Generic<T1>>>(
+      {"test_generic_out"});
+
+  auto input = makeArrayVector<int32_t>({{1, 2}, {1, 3}});
+  auto result = evaluate("test_generic_out(c0)", makeRowVector({input}));
+  auto expected = makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt});
+  assertEqualVectors(expected, result);
+}
+
 } // namespace
