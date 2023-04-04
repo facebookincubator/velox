@@ -455,7 +455,8 @@ static void addVectorBindings(
 
   m.def("export_to_arrow", [](VectorPtr& inputVector) {
     auto arrowArray = new ArrowArray();
-    std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{facebook::velox::memory::getDefaultMemoryPool()};
+    std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{
+        facebook::velox::memory::getDefaultMemoryPool()};
     facebook::velox::exportToArrow(inputVector, *arrowArray, pool_.get());
     inputVector.reset();
     return reinterpret_cast<uintptr_t>(arrowArray);
@@ -466,10 +467,10 @@ static void addVectorBindings(
       [](uintptr_t arrowArrayPtr, uintptr_t arrowSchemaPtr) {
         auto arrowArray = reinterpret_cast<ArrowArray*>(arrowArrayPtr);
         auto arrowSchema = reinterpret_cast<ArrowSchema*>(arrowSchemaPtr);
-        std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{facebook::velox::memory::getDefaultMemoryPool()};
+        std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{
+            facebook::velox::memory::getDefaultMemoryPool()};
         return importFromArrowAsOwner(*arrowSchema, *arrowArray, pool_.get());
       });
-
 }
 
 static void addExpressionBindings(
