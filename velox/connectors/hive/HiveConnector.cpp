@@ -26,7 +26,6 @@
 
 #include <boost/lexical_cast.hpp>
 
-#include <algorithm>
 #include <memory>
 
 using namespace facebook::velox::exec;
