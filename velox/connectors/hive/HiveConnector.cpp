@@ -369,7 +369,7 @@ bool applyPartitionFilter(
       return applyFilter(*filter, partitionValue);
     }
     default:
-      VELOX_CHECK(false, "Bad partitionKey type to filter");
+      VELOX_FAIL("Bad type {} for partition value: {}", kind, partitionValue);
       break;
   }
 }
