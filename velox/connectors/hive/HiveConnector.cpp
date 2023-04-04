@@ -349,7 +349,7 @@ HiveDataSource::HiveDataSource(
 namespace {
 bool applyPartitionFilter(
     TypeKind kind,
-    std::string partitionValue,
+    const std::string& partitionValue,
     common::Filter* filter) {
   switch (kind) {
     case TypeKind::BIGINT:
