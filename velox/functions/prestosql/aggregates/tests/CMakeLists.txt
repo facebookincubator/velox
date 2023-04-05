@@ -16,6 +16,23 @@ add_library(velox_aggregates_test_lib AggregationTestBase.cpp)
 
 target_link_libraries(velox_aggregates_test_lib velox_exec_test_lib)
 
+add_executable(aggregate_fuzzer_failed_test AggregateFuzzerFailedTest.cpp)
+
+add_test(
+  NAME aggregate_fuzzer_failed_test
+  COMMAND aggregate_fuzzer_failed_test
+  WORKING_DIRECTORY .)
+
+target_link_libraries(
+  aggregate_fuzzer_failed_test
+  velox_aggregates_test_lib
+  velox_file
+  velox_exec_test_lib
+  velox_aggregates
+  velox_vector
+  gtest
+  gtest_main)
+
 add_executable(
   velox_aggregates_test
   AggregationFunctionRegTest.cpp

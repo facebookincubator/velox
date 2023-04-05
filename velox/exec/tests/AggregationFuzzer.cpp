@@ -452,6 +452,53 @@ void persistReproInfo(
   LOG(INFO) << "Persisted input: " << inputPath << " and plan: " << planPath;
 }
 
+void persistMultiBatchReproInfo(
+    const std::vector<RowVectorPtr>& input,
+    const core::PlanNodePtr& plan,
+    const std::string& basePath) {
+  std::string inputPath;
+
+  if (!common::generateFileDirectory(basePath.c_str())) {
+    return;
+  }
+
+  for (auto i = 0; i < input.size(); ++i) {
+    // Save input vector.
+    auto inputPathOpt =
+        common::generateTempFilePath(basePath.c_str(), "vector");
+    if (!inputPathOpt.has_value()) {
+      inputPath = "Failed to create file for saving input vector.";
+    } else {
+      inputPath = inputPathOpt.value();
+      try {
+        // TODO Save all input vectors.
+        saveVectorToFile(input[i].get(), inputPath.c_str());
+      } catch (std::exception& e) {
+        inputPath = e.what();
+      }
+    }
+  }
+
+  // Save plan.
+  std::string planPath;
+  auto planPathOpt = common::generateTempFilePath(basePath.c_str(), "plan");
+  if (!planPathOpt.has_value()) {
+    planPath = "Failed to create file for saving SQL.";
+  } else {
+    planPath = planPathOpt.value();
+    try {
+      saveStringToFile(
+          plan->toString(true /*detailed*/, true /*recursive*/),
+          planPath.c_str());
+    } catch (std::exception& e) {
+      planPath = e.what();
+    }
+  }
+
+  LOG(INFO) << "Persisted inputs under: " << basePath
+            << " and plan: " << planPath;
+}
+
 CallableSignature AggregationFuzzer::pickSignature() {
   size_t idx = boost::random::uniform_int_distribution<uint32_t>(
       0, signatures_.size() + signatureTemplates_.size() - 1)(rng_);
@@ -964,7 +1011,7 @@ void AggregationFuzzer::verifyWindow(
     }
   } catch (...) {
     if (!reproPersistPath_.empty()) {
-      persistReproInfo(input, plan, reproPersistPath_);
+      persistMultiBatchReproInfo(input, plan, reproPersistPath_);
     }
     throw;
   }
