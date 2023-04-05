@@ -1105,4 +1105,32 @@ struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   }
 };
 
+template <typename T>
+struct TimeZoneMinuteFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    // Convert timestampWithTimezone to a timestamp representing the moment at
+    // the zone in timestampWithTimezone.
+    Timestamp inputTimeStamp = this->toTimestamp(timestampWithTimezone);
+
+    // Get the given timezone name
+    auto timezone =
+        util::getTimeZoneName(*timestampWithTimezone.template at<1>());
+
+    auto* timezonePtr = date::locate_zone(timezone);
+
+    // Create a copy of inputTimeStamp and convert it to GMT
+    auto gmtTimeStamp = inputTimeStamp;
+    gmtTimeStamp.toGMT(*timezonePtr);
+
+    // Get offset in seconds with GMT and convert to hour
+    result =
+        ((inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds()) / 60) % 60;
+    auto temp = (inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds());
+  }
+};
+
 } // namespace facebook::velox::functions
