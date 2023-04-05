@@ -14,7 +14,7 @@
 
 # for generated headers
 
-add_library(velox_gcs GCSUtil.cpp)
+add_library(velox_gcs GCSFileSystem.cpp GCSUtil.cpp)
 target_include_directories(velox_gcs PUBLIC)
 target_link_libraries(velox_gcs ${FOLLY_WITH_DEPENDENCIES}
                       google-cloud-cpp::storage)
