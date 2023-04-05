@@ -419,23 +419,34 @@ void persistReproInfo(
     return;
   }
 
-  // Save input vector.
-  auto inputPathOpt = common::generateTempFilePath(basePath.c_str(), "vector");
-  if (!inputPathOpt.has_value()) {
-    inputPath = "Failed to create file for saving input vector.";
-  } else {
-    inputPath = inputPathOpt.value();
-    try {
-      // TODO Save all input vectors.
-      saveVectorToFile(input.front().get(), inputPath.c_str());
-    } catch (std::exception& e) {
-      inputPath = e.what();
+  // Create a new directory
+  auto dirPath =
+      common::generateTempFolderPath(basePath.c_str(), "expressionVerifier");
+  if (!dirPath.has_value()) {
+    LOG(INFO) << "Failed to create directory for persisting repro info.";
+    return;
+  }
+
+  for (auto i = 0; i < input.size(); ++i) {
+    // Save input vector.
+    auto inputPathOpt =
+        common::generateTempFilePath(dirPath->c_str(), "vector");
+    if (!inputPathOpt.has_value()) {
+      inputPath = "Failed to create file for saving input vector.";
+    } else {
+      inputPath = inputPathOpt.value();
+      try {
+        // TODO Save all input vectors.
+        saveVectorToFile(input[i].get(), inputPath.c_str());
+      } catch (std::exception& e) {
+        inputPath = e.what();
+      }
     }
   }
 
   // Save plan.
   std::string planPath;
-  auto planPathOpt = common::generateTempFilePath(basePath.c_str(), "plan");
+  auto planPathOpt = common::generateTempFilePath(dirPath->c_str(), "plan");
   if (!planPathOpt.has_value()) {
     planPath = "Failed to create file for saving SQL.";
   } else {
@@ -449,7 +460,8 @@ void persistReproInfo(
     }
   }
 
-  LOG(INFO) << "Persisted input: " << inputPath << " and plan: " << planPath;
+  LOG(INFO) << "Persisted inputs under: " << *dirPath
+            << " and plan: " << planPath;
 }
 
 CallableSignature AggregationFuzzer::pickSignature() {
