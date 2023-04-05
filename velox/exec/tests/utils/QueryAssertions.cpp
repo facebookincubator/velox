@@ -33,6 +33,11 @@ static const std::string kDuckDbTimestampWarning =
     "test involves timestamp inputs, please make sure you use the right"
     " precision.";
 
+// When true, allows DuckDB result type conversion from DOUBLE to DECIMAL
+// to match Velox output type.
+// Precision and scale will be taken from Velox output type.
+static const bool kConvertDoubleToDecimalInOutput = false;
+
 template <TypeKind kind>
 ::duckdb::Value duckValueAt(const VectorPtr& vector, vector_size_t index) {
   using T = typename KindToFlatVector<kind>::WrapperType;
@@ -367,7 +372,8 @@ velox::variant arrayVariantAt(
 
 std::vector<MaterializedRow> materialize(
     ::duckdb::DataChunk* dataChunk,
-    const std::shared_ptr<const RowType>& rowType) {
+    const std::shared_ptr<const RowType>& rowType,
+    const std::optional<bool> convertDoubleToDecimalInOutput) {
   VELOX_CHECK_EQ(
       rowType->size(), dataChunk->GetTypes().size(), "Wrong number of columns");
 
@@ -398,7 +404,29 @@ std::vector<MaterializedRow> materialize(
         row.push_back(
             rowVariantAt(dataChunk->GetValue(j, i), rowType->childAt(j)));
       } else if (isDecimalKind(typeKind)) {
-        row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i)));
+        auto val = dataChunk->GetValue(j, i);
+        if (val.type().id() == ::duckdb::LogicalTypeId::DOUBLE &&
+            convertDoubleToDecimalInOutput.value_or(
+                kConvertDoubleToDecimalInOutput)) {
+          // When decimal support is enabled in Velox, there could be a mismatch
+          // between DuckDB output type and Velox output type.
+          //
+          // One of those cases is AVG(decimal_value) which returns DOUBLE in
+          // DuckDB and DECIMAL in Velox. In such cases we need to cast DOUBLE
+          // to the Velox DECIMAL type to match the results.
+          auto decimalType = rowType->childAt(j);
+          uint8_t precision;
+          uint8_t scale;
+          if (decimalType->isShortDecimal()) {
+            precision = decimalType->asShortDecimal().precision();
+            scale = decimalType->asShortDecimal().scale();
+          } else {
+            precision = decimalType->asLongDecimal().precision();
+            scale = decimalType->asLongDecimal().scale();
+          }
+          val = val.CastAs(::duckdb::LogicalType::DECIMAL(precision, scale));
+        }
+        row.push_back(duckdb::decimalVariant(val));
       } else {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             variantAt, typeKind, dataChunk, i, j);
@@ -906,7 +934,8 @@ DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
 void DuckDbQueryRunner::execute(
     const std::string& sql,
     const std::shared_ptr<const RowType>& resultRowType,
-    std::function<void(std::vector<MaterializedRow>&)> resultCallback) {
+    std::function<void(std::vector<MaterializedRow>&)> resultCallback,
+    const std::optional<bool> convertDoubleToDecimalInOutput) {
   auto duckDbResult = execute(sql);
 
   for (;;) {
@@ -915,7 +944,8 @@ void DuckDbQueryRunner::execute(
     if (!dataChunk || (dataChunk->size() == 0)) {
       break;
     }
-    auto rows = materialize(dataChunk.get(), resultRowType);
+    auto rows = materialize(
+        dataChunk.get(), resultRowType, convertDoubleToDecimalInOutput);
     resultCallback(rows);
   }
 }
@@ -924,9 +954,15 @@ std::shared_ptr<Task> assertQuery(
     const std::shared_ptr<const core::PlanNode>& plan,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
+    std::optional<std::vector<uint32_t>> sortingKeys,
+    std::optional<bool> convertDoubleToDecimalInOutput) {
   return assertQuery(
-      plan, [](Task*) {}, duckDbSql, duckDbQueryRunner, sortingKeys);
+      plan,
+      [](Task*) {},
+      duckDbSql,
+      duckDbQueryRunner,
+      sortingKeys,
+      convertDoubleToDecimalInOutput);
 }
 
 std::shared_ptr<Task> assertQueryReturnsEmptyResult(
@@ -1096,7 +1132,8 @@ void assertResults(
     const std::vector<RowVectorPtr>& results,
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner) {
+    DuckDbQueryRunner& duckDbQueryRunner,
+    const std::optional<bool> convertDoubleToDecimalInOutput) {
   MaterializedRowMultiset actualRows;
   for (const auto& vector : results) {
     auto rows = materialize(vector);
@@ -1104,7 +1141,8 @@ void assertResults(
         rows.begin(), rows.end(), std::inserter(actualRows, actualRows.end()));
   }
 
-  auto expectedRows = duckDbQueryRunner.execute(duckDbSql, resultType);
+  auto expectedRows = duckDbQueryRunner.execute(
+      duckDbSql, resultType, convertDoubleToDecimalInOutput);
   assertEqualResults(
       expectedRows,
       actualRows,
@@ -1181,7 +1219,8 @@ void assertResultsOrdered(
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    const std::vector<uint32_t>& sortingKeys) {
+    const std::vector<uint32_t>& sortingKeys,
+    const std::optional<bool> convertDoubleToDecimalInOutput) {
   std::vector<OrderedPartition> actualPartitions;
   std::vector<OrderedPartition> expectedPartitions;
 
@@ -1196,7 +1235,8 @@ void assertResultsOrdered(
     }
   }
 
-  auto expectedRows = duckDbQueryRunner.executeOrdered(duckDbSql, resultType);
+  auto expectedRows = duckDbQueryRunner.executeOrdered(
+      duckDbSql, resultType, convertDoubleToDecimalInOutput);
   for (const auto& row : expectedRows) {
     auto keys = getColumns(row, sortingKeys);
     if (expectedPartitions.empty() || expectedPartitions.back().first != keys) {
@@ -1311,11 +1351,17 @@ std::shared_ptr<Task> assertQuery(
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
+    std::optional<std::vector<uint32_t>> sortingKeys,
+    std::optional<bool> convertDoubleToDecimalInOutput) {
   CursorParameters params;
   params.planNode = plan;
   return assertQuery(
-      params, addSplits, duckDbSql, duckDbQueryRunner, sortingKeys);
+      params,
+      addSplits,
+      duckDbSql,
+      duckDbQueryRunner,
+      sortingKeys,
+      convertDoubleToDecimalInOutput);
 }
 
 std::shared_ptr<Task> assertQuery(
@@ -1323,7 +1369,8 @@ std::shared_ptr<Task> assertQuery(
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
+    std::optional<std::vector<uint32_t>> sortingKeys,
+    std::optional<bool> convertDoubleToDecimalInOutput) {
   auto [cursor, actualResults] = readCursor(params, addSplits);
 
   if (sortingKeys) {
@@ -1332,13 +1379,15 @@ std::shared_ptr<Task> assertQuery(
         params.planNode->outputType(),
         duckDbSql,
         duckDbQueryRunner,
-        sortingKeys.value());
+        sortingKeys.value(),
+        convertDoubleToDecimalInOutput);
   } else {
     assertResults(
         actualResults,
         params.planNode->outputType(),
         duckDbSql,
-        duckDbQueryRunner);
+        duckDbQueryRunner,
+        convertDoubleToDecimalInOutput);
   }
   auto task = cursor->task();
 

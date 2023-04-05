@@ -394,4 +394,42 @@ TEST_F(QueryAssertionsTest, nullVariant) {
   assertQuery(plan, "SELECT * FROM tmp");
 }
 
+TEST_F(QueryAssertionsTest, doubleToShortDecimalConversion) {
+  auto rowType = ROW({"c0"}, {DECIMAL(5, 2)});
+  auto input = {
+      makeRowVector({makeShortDecimalFlatVector({12345}, DECIMAL(5, 2))})};
+  auto plan = PlanBuilder().tableScan(rowType).values(input).planNode();
+
+  // DuckDB returns DOUBLE for AVG(DECIMAL), we need to explicitly enable the
+  // flag to convert it back to DECIMAL.
+  assertQuery(plan, "select avg(123.45::DECIMAL(5,2))", true);
+
+  // The same query fails with the flag disabled.
+  EXPECT_ANY_THROW(
+      assertQuery(plan, "select avg(123.45::DECIMAL(5,2))", false));
+
+  // Explicit cast does not require the flag, so the test should pass with the
+  // flag disabled.
+  assertQuery(plan, "select avg(123.45)::DECIMAL(5,2)", false);
+}
+
+TEST_F(QueryAssertionsTest, doubleToLongDecimalConversion) {
+  auto rowType = ROW({"c0"}, {DECIMAL(38, 2)});
+  auto input = {
+      makeRowVector({makeLongDecimalFlatVector({12345}, DECIMAL(38, 2))})};
+  auto plan = PlanBuilder().tableScan(rowType).values(input).planNode();
+
+  // DuckDB returns DOUBLE for AVG(DECIMAL), we need to explicitly enable the
+  // flag to convert it back to DECIMAL.
+  assertQuery(plan, "select avg(123.45::DECIMAL(38,2))", true);
+
+  // The same query fails with the flag disabled.
+  EXPECT_ANY_THROW(
+      assertQuery(plan, "select avg(123.45::DECIMAL(38,2))", false));
+
+  // Explicit cast does not require the flag, so the test should pass with the
+  // flag disabled.
+  assertQuery(plan, "select avg(123.45)::DECIMAL(38,2)", false);
+}
+
 } // namespace facebook::velox::test

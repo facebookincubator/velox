@@ -41,7 +41,8 @@ class DuckDbQueryRunner {
 
   MaterializedRowMultiset execute(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const std::shared_ptr<const RowType>& resultRowType,
+      const std::optional<bool> convertDoubleToDecimalInOutput = std::nullopt) {
     MaterializedRowMultiset allRows;
     execute(
         sql,
@@ -49,20 +50,23 @@ class DuckDbQueryRunner {
         [&allRows](std::vector<MaterializedRow>& rows) mutable {
           std::copy(
               rows.begin(), rows.end(), std::inserter(allRows, allRows.end()));
-        });
+        },
+        convertDoubleToDecimalInOutput);
     return allRows;
   }
 
   std::vector<MaterializedRow> executeOrdered(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const std::shared_ptr<const RowType>& resultRowType,
+      const std::optional<bool> convertDoubleToDecimalInOutput = std::nullopt) {
     std::vector<MaterializedRow> allRows;
     execute(
         sql,
         resultRowType,
         [&allRows](std::vector<MaterializedRow>& rows) mutable {
           std::copy(rows.begin(), rows.end(), std::back_inserter(allRows));
-        });
+        },
+        convertDoubleToDecimalInOutput);
     return allRows;
   }
 
@@ -85,7 +89,8 @@ class DuckDbQueryRunner {
   void execute(
       const std::string& sql,
       const std::shared_ptr<const RowType>& resultRowType,
-      std::function<void(std::vector<MaterializedRow>&)> resultCallback);
+      std::function<void(std::vector<MaterializedRow>&)> resultCallback,
+      std::optional<bool> convertDoubleToDecimalInOutput = std::nullopt);
 };
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
@@ -131,21 +136,24 @@ std::shared_ptr<Task> assertQuery(
     const std::shared_ptr<const core::PlanNode>& plan,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
+    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt,
+    std::optional<bool> convertDoubleToDecimalInOutput = std::nullopt);
 
 std::shared_ptr<Task> assertQuery(
     const std::shared_ptr<const core::PlanNode>& plan,
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
+    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt,
+    std::optional<bool> convertDoubleToDecimalInOutput = std::nullopt);
 
 std::shared_ptr<Task> assertQuery(
     const CursorParameters& params,
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
+    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt,
+    std::optional<bool> convertDoubleToDecimalInOutput = std::nullopt);
 
 std::shared_ptr<Task> assertQueryReturnsEmptyResult(
     const std::shared_ptr<const core::PlanNode>& plan);
@@ -156,14 +164,16 @@ void assertResults(
     const std::vector<RowVectorPtr>& results,
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner);
+    DuckDbQueryRunner& duckDbQueryRunner,
+    const std::optional<bool> convertDoubleToDecimalInOutput = std::nullopt);
 
 void assertResultsOrdered(
     const std::vector<RowVectorPtr>& results,
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    const std::vector<uint32_t>& sortingKeys);
+    const std::vector<uint32_t>& sortingKeys,
+    const std::optional<bool> convertDoubleToDecimalInOutput = std::nullopt);
 
 std::shared_ptr<Task> assertQuery(
     const std::shared_ptr<const core::PlanNode>& plan,
