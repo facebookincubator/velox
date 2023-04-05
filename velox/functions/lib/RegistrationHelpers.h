@@ -79,6 +79,12 @@ void registerUnaryFloatingPoint(const std::vector<std::string>& aliases) {
 }
 
 template <template <class> class T>
+void registerUnaryDecimals(const std::vector<std::string>& aliases) {
+  registerFunction<T, UnscaledShortDecimal, UnscaledShortDecimal>(aliases);
+  registerFunction<T, UnscaledLongDecimal, UnscaledLongDecimal>(aliases);
+}
+
+template <template <class> class T>
 void registerUnaryNumeric(const std::vector<std::string>& aliases) {
   registerUnaryIntegral<T>(aliases);
   registerUnaryFloatingPoint<T>(aliases);

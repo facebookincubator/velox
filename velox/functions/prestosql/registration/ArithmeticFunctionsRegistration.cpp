@@ -31,6 +31,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerUnaryNumeric<CeilFunction>({prefix + "ceil", prefix + "ceiling"});
   registerUnaryNumeric<FloorFunction>({prefix + "floor"});
   registerUnaryNumeric<AbsFunction>({prefix + "abs"});
+  registerUnaryDecimals<AbsFunction>({prefix + "abs"});
+  registerUnaryDecimals<NegateFunction>({prefix + "negate"});
   registerUnaryFloatingPoint<NegateFunction>({prefix + "negate"});
   registerFunction<RadiansFunction, double, double>({prefix + "radians"});
   registerFunction<DegreesFunction, double, double>({prefix + "degrees"});

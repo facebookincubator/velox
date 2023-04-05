@@ -699,5 +699,72 @@ TEST_F(ArithmeticTest, truncate) {
   EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
 }
 
+TEST_F(ArithmeticTest, absDecimals) {
+  const auto absShort = [&](std::optional<int64_t> shortValue) {
+    return evaluateOnce<UnscaledShortDecimal>(
+        "abs(c0)",
+        makeRowVector({makeNullableShortDecimalFlatVector(
+            {shortValue}, DECIMAL(18, 1))}));
+  };
+  EXPECT_EQ(absShort(10), 10);
+  EXPECT_EQ(absShort(-10), 10);
+  EXPECT_EQ(
+      absShort(
+          std::numeric_limits<UnscaledShortDecimal>::min().unscaledValue()),
+      std::numeric_limits<UnscaledShortDecimal>::max());
+  EXPECT_EQ(absShort(0), 0);
+  const auto absLong = [&](int128_t longValue) {
+    return evaluateOnce<UnscaledLongDecimal>(
+        "abs(c0)",
+        makeRowVector(
+            {makeNullableLongDecimalFlatVector({longValue}, DECIMAL(38, 1))}));
+  };
+  EXPECT_EQ(absLong(buildInt128(0xFFF, 0)), buildInt128(0xFFF, 0));
+  EXPECT_EQ(absLong(-buildInt128(0xFFF, 0)), buildInt128(0xFFF, 0));
+  EXPECT_EQ(
+      absLong(std::numeric_limits<UnscaledLongDecimal>::min().unscaledValue()),
+      std::numeric_limits<UnscaledLongDecimal>::max());
+  EXPECT_EQ(
+      absLong(std::numeric_limits<UnscaledLongDecimal>::max().unscaledValue()),
+      std::numeric_limits<UnscaledLongDecimal>::max());
+  EXPECT_EQ(absLong(0), 0);
+}
+
+TEST_F(ArithmeticTest, negateDecimals) {
+  const auto negateShort = [&](std::optional<int64_t> shortValue) {
+    return evaluateOnce<UnscaledShortDecimal>(
+        "negate(c0)",
+        makeRowVector({makeNullableShortDecimalFlatVector(
+            {shortValue}, DECIMAL(18, 1))}));
+  };
+  EXPECT_EQ(negateShort(10), -10);
+  EXPECT_EQ(negateShort(-10), 10);
+  EXPECT_EQ(
+      negateShort(
+          std::numeric_limits<UnscaledShortDecimal>::min().unscaledValue()),
+      std::numeric_limits<UnscaledShortDecimal>::max());
+  EXPECT_EQ(
+      negateShort(
+          std::numeric_limits<UnscaledShortDecimal>::max().unscaledValue()),
+      std::numeric_limits<UnscaledShortDecimal>::min());
+  EXPECT_EQ(negateShort(0), 0);
+  const auto negateLong = [&](std::optional<int128_t> longValue) {
+    return evaluateOnce<UnscaledLongDecimal>(
+        "negate(c0)",
+        makeRowVector(
+            {makeNullableLongDecimalFlatVector({longValue}, DECIMAL(38, 1))}));
+  };
+  EXPECT_EQ(negateLong(buildInt128(0xFFF, 0)), -buildInt128(0xFFF, 0));
+  EXPECT_EQ(negateLong(-buildInt128(0xFFF, 0)), buildInt128(0xFFF, 0));
+  EXPECT_EQ(
+      negateLong(
+          std::numeric_limits<UnscaledLongDecimal>::min().unscaledValue()),
+      std::numeric_limits<UnscaledLongDecimal>::max());
+  EXPECT_EQ(
+      negateLong(
+          std::numeric_limits<UnscaledLongDecimal>::max().unscaledValue()),
+      std::numeric_limits<UnscaledLongDecimal>::min());
+  EXPECT_EQ(negateLong(0), 0);
+}
 } // namespace
 } // namespace facebook::velox

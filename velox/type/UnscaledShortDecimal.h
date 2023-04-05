@@ -55,6 +55,10 @@ struct UnscaledShortDecimal {
     return unscaledValue_ == other.unscaledValue_;
   }
 
+  bool operator==(const int64_t& other) const {
+    return unscaledValue_ == other;
+  }
+
   bool operator!=(const UnscaledShortDecimal& other) const {
     return unscaledValue_ != other.unscaledValue_;
   }

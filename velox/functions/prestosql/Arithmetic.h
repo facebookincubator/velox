@@ -120,7 +120,13 @@ template <typename T>
 struct AbsFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(TInput& result, const TInput& a) {
-    result = abs(a);
+    if constexpr (
+        std::is_same_v<UnscaledShortDecimal, TInput> ||
+        std::is_same_v<UnscaledLongDecimal, TInput>) {
+      result = a < 0 ? TInput(-a.unscaledValue()) : a;
+    } else {
+      result = abs(a);
+    }
   }
 };
 
@@ -128,7 +134,13 @@ template <typename T>
 struct NegateFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(TInput& result, const TInput& a) {
-    result = negate(a);
+    if constexpr (
+        std::is_same_v<UnscaledShortDecimal, TInput> ||
+        std::is_same_v<UnscaledLongDecimal, TInput>) {
+      result = TInput(-a.unscaledValue());
+    } else {
+      result = negate(a);
+    }
   }
 };
 
