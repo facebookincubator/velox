@@ -178,9 +178,11 @@ class S3ReadFile final : public ReadFile {
         logAt += count * 5000; // backoff for next warning
       }
     }
-    VELOX_CHECK(downloadHandle->GetStatus() == Aws::Transfer::TransferStatus::COMPLETED,
-                "Failed to get S3 object using the transfer manager from location: {}:{}",
-                bucket_, key_);
+    VELOX_CHECK(
+        downloadHandle->GetStatus() == Aws::Transfer::TransferStatus::COMPLETED,
+        "Failed to get S3 object using the transfer manager from location: {}:{}",
+        bucket_,
+        key_);
   }
 
   std::shared_ptr<Aws::S3::S3Client> client_;
