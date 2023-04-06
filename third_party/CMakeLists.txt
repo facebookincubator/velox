@@ -15,6 +15,14 @@
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
                       "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/")
 
+# Ensure that a default make is set
+if("${MAKE}" STREQUAL "")
+  if(NOT MSVC)
+    find_program(MAKE make)
+  endif()
+endif()
+
+
 include(ExternalProject)
 
 if(VELOX_ENABLE_ARROW)
@@ -38,6 +46,7 @@ if(VELOX_ENABLE_ARROW)
       -DCMAKE_INSTALL_PREFIX=${ARROW_PREFIX}/install
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DARROW_BUILD_STATIC=ON
+      -DSnappy_SOURCE=AUTO
       -DThrift_SOURCE=${THRIFT_SOURCE})
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
@@ -90,4 +99,39 @@ if(VELOX_ENABLE_ARROW)
   set_target_properties(parquet PROPERTIES IMPORTED_LOCATION
                                            ${ARROW_LIBDIR}/libparquet.a)
 
+endif()
+
+if(VELOX_ENABLE_ISAL)
+  message(STATUS "Building isal from source")
+  set(ISAL_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/isal_ep-install")
+  set(ISAL_INCLUDE_DIR "${ISAL_PREFIX}/include")
+  set(ISAL_STATIC_LIB "${ISAL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libisal.a")
+
+  set(ISAL_CONFIGURE_ARGS
+      "--prefix=/"
+      "AR=${CMAKE_AR}"
+      "RANLIB=${CMAKE_RANLIB}"
+      "CC=${CMAKE_C_COMPILER}"
+      "CXX=${CMAKE_CXX_COMPILER}"
+      "CFLAGS=-fPIC -O3"
+      "CXXFLAGS=-fPIC -O3")
+  set(ISAL_BUILD_COMMAND ${MAKE} ${MAKE_BUILD_ARGS})
+  ExternalProject_Add(isal_ep
+                      PREFIX isal_ep
+                      UPDATE_COMMAND "./autogen.sh"
+                      CONFIGURE_COMMAND "./configure" ${ISAL_CONFIGURE_ARGS}
+                      BUILD_COMMAND ${ISAL_BUILD_COMMAND}
+                      INSTALL_COMMAND ${MAKE} install DESTDIR=${ISAL_PREFIX}
+                      BUILD_BYPRODUCTS ${ISAL_STATIC_LIB}
+                      BUILD_IN_SOURCE 1
+                      URL "https://github.com/intel/isa-l/archive/refs/tags/v2.30.0.tar.gz"
+  )
+  file(MAKE_DIRECTORY "${ISAL_INCLUDE_DIR}")
+  add_library(ISAL::isal STATIC IMPORTED GLOBAL)
+  set_target_properties(
+    ISAL::isal
+    PROPERTIES IMPORTED_LOCATION "${ISAL_STATIC_LIB}" INTERFACE_INCLUDE_DIRECTORIES
+               "${ISAL_INCLUDE_DIR}")
+  add_dependencies(ISAL::isal isal_ep)
+  include_directories(SYSTEM ${ISAL_INCLUDE_DIR})
 endif()

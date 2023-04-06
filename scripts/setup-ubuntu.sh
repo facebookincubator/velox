@@ -53,7 +53,8 @@ sudo --preserve-env apt update && apt install -y \
   bison \
   flex \
   tzdata \
-  wget
+  wget \
+  nasm
 
 function run_and_time {
   time "$@"

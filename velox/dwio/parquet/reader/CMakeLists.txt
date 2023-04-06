@@ -35,3 +35,10 @@ target_link_libraries(
   parquet
   thrift
   ${FMT})
+
+if(VELOX_ENABLE_ISAL)
+target_link_libraries(
+  velox_dwio_native_parquet_reader
+  ISAL::isal
+)
+endif()

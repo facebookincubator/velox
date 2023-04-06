@@ -25,6 +25,9 @@
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 #include <zlib.h>
 #include <zstd.h>
+#ifdef VELOX_ENABLE_ISAL
+#include <isa-l/igzip_lib.h>
+#endif
 
 namespace facebook::velox::parquet {
 
@@ -160,6 +163,20 @@ const char* FOLLY_NONNULL PageReader::uncompressData(
     case thrift::CompressionCodec::GZIP: {
       dwio::common::ensureCapacity<char>(
           uncompressedData_, uncompressedSize, &pool_);
+#ifdef VELOX_ENABLE_ISAL
+      inflate_state stream;
+      memset(&stream, 0, sizeof(stream));
+      stream.crc_flag = ISAL_GZIP;
+      // Decompress.
+      stream.next_in =
+          const_cast<Bytef*>(reinterpret_cast<const Bytef*>(pageData));
+      stream.avail_in = static_cast<uInt>(compressedSize);
+      stream.next_out =
+          reinterpret_cast<Bytef*>(uncompressedData_->asMutable<char>());
+      stream.avail_out = static_cast<uInt>(uncompressedSize);
+      auto ret = isal_inflate_stateless(&stream);
+      return uncompressedData_->as<char>();
+#else
       z_stream stream;
       memset(&stream, 0, sizeof(stream));
       constexpr int WINDOW_BITS = 15;
@@ -189,6 +206,7 @@ const char* FOLLY_NONNULL PageReader::uncompressData(
           "GZipCodec failed: {}",
           stream.msg ? stream.msg : "");
       return uncompressedData_->as<char>();
+#endif
     }
     default:
       VELOX_FAIL("Unsupported Parquet compression type '{}'", codec_);
