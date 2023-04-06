@@ -52,10 +52,20 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
     pool_.reset();
     MemoryAllocator::testingDestroyInstance();
     useMmap_ = GetParam();
+    maxMallocBytes_ = 3072;
     if (useMmap_) {
       MmapAllocator::Options options;
       options.capacity = kMaxMemoryAllocator;
+      options.smallAllocationReservePct = 4;
+      options.maxMallocBytes = maxMallocBytes_;
       allocator_ = std::make_shared<MmapAllocator>(options);
+      auto mmapAllocator = std::dynamic_pointer_cast<MmapAllocator>(allocator_);
+      ASSERT_EQ(
+          mmapAllocator->capacity(),
+          bits::roundUp(
+              kMaxMemoryAllocator * (100 - options.smallAllocationReservePct) /
+                  100 / AllocationTraits::kPageSize,
+              64 * mmapAllocator->sizeClasses().back()));
       MemoryAllocator::setDefaultInstance(allocator_.get());
     } else {
       allocator_ = MemoryAllocator::createDefaultInstance();
@@ -337,12 +347,65 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
   }
 
   bool useMmap_;
+  int32_t maxMallocBytes_;
   std::shared_ptr<MemoryAllocator> allocator_;
   MemoryAllocator* instance_;
   std::unique_ptr<MemoryManager> memoryManager_;
   std::shared_ptr<MemoryPool> pool_;
   std::atomic<int32_t> sequence_ = {};
 };
+
+TEST_P(MemoryAllocatorTest, mmapAllocatorInitTest) {
+  if (!useMmap_) {
+    return;
+  }
+  {
+    MmapAllocator::Options options;
+    options.capacity = kMaxMemoryAllocator;
+    options.smallAllocationReservePct = 39;
+    options.maxMallocBytes = 2999;
+    auto mmapAllocator = std::make_shared<MmapAllocator>(options);
+    auto smallAllocationBytes =
+        options.capacity * options.smallAllocationReservePct / 100;
+    EXPECT_EQ(
+        bits::roundUp(
+            AllocationTraits::numPages(options.capacity - smallAllocationBytes),
+            64 * mmapAllocator->sizeClasses().back()),
+        mmapAllocator->capacity());
+    EXPECT_EQ(options.maxMallocBytes, mmapAllocator->maxMallocBytes());
+    EXPECT_EQ(smallAllocationBytes, mmapAllocator->mallocReservedBytes());
+  }
+  {
+    MmapAllocator::Options options;
+    options.capacity = kMaxMemoryAllocator;
+    options.smallAllocationReservePct = 39;
+    options.maxMallocBytes = 0;
+    auto mmapAllocator = std::make_shared<MmapAllocator>(options);
+    EXPECT_EQ(
+        bits::roundUp(
+            AllocationTraits::numPages(kMaxMemoryAllocator),
+            64 * mmapAllocator->sizeClasses().back()),
+        mmapAllocator->capacity());
+    EXPECT_EQ(options.maxMallocBytes, mmapAllocator->maxMallocBytes());
+    EXPECT_EQ(0, mmapAllocator->mallocReservedBytes());
+  }
+  {
+    MmapAllocator::Options options;
+    options.capacity = 64 * 256 * AllocationTraits::kPageSize - 100;
+    options.smallAllocationReservePct = 10;
+    options.maxMallocBytes = 3072;
+    auto mmapAllocator = std::make_shared<MmapAllocator>(options);
+    auto smallAllocationBytes =
+        options.capacity * options.smallAllocationReservePct / 100;
+    EXPECT_EQ(
+        bits::roundUp(
+            AllocationTraits::numPages(options.capacity),
+            64 * mmapAllocator->sizeClasses().back()),
+        mmapAllocator->capacity());
+    EXPECT_EQ(options.maxMallocBytes, mmapAllocator->maxMallocBytes());
+    EXPECT_EQ(smallAllocationBytes, mmapAllocator->mallocReservedBytes());
+  }
+}
 
 TEST_P(MemoryAllocatorTest, allocationPoolTest) {
   const size_t kNumLargeAllocPages = instance_->largestSizeClass() * 2;
@@ -848,7 +911,7 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
   constexpr int32_t kNumAllocs = 50;
   // Different sizes, including below minimum and above largest size class.
   std::vector<MachinePageCount> sizes = {
-      MemoryAllocator::kMaxMallocBytes / 2,
+      (size_t)(maxMallocBytes_ / 2),
       100000,
       1000000,
       instance_->sizeClasses().back() * AllocationTraits::kPageSize + 100000};
@@ -858,6 +921,7 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
   // We fill 'data' with random size allocations. Each is filled with its index
   // in 'data' cast to char.
   std::vector<folly::Range<char*>> data(kNumAllocs);
+  uint64_t expectedNumMallocBytes = 0;
   for (auto counter = 0; counter < data.size() * 4; ++counter) {
     int32_t index = folly::Random::rand32(rng) % kNumAllocs;
     int32_t bytes = sizes[folly::Random::rand32() % sizes.size()];
@@ -868,10 +932,23 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
       for (auto byte : data[index]) {
         ASSERT_EQ(expected, byte);
       }
-      instance_->freeBytes(data[index].data(), data[index].size());
+      int32_t freeSize = data[index].size();
+      instance_->freeBytes(data[index].data(), freeSize);
+      if (useMmap_ && freeSize == sizes[0]) {
+        expectedNumMallocBytes -= freeSize;
+        ASSERT_EQ(
+            expectedNumMallocBytes,
+            ((MmapAllocator*)instance_)->numMallocBytes());
+      }
     }
     data[index] = folly::Range<char*>(
         reinterpret_cast<char*>(instance_->allocateBytes(bytes)), bytes);
+    if (useMmap_ && bytes == sizes[0]) {
+      expectedNumMallocBytes += bytes;
+      ASSERT_EQ(
+          expectedNumMallocBytes,
+          ((MmapAllocator*)instance_)->numMallocBytes());
+    }
     for (auto& byte : data[index]) {
       byte = expected;
     }
@@ -879,7 +956,14 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
   ASSERT_TRUE(instance_->checkConsistency());
   for (auto& range : data) {
     if (range.data()) {
-      instance_->freeBytes(range.data(), range.size());
+      int32_t bytes = range.size();
+      instance_->freeBytes(range.data(), bytes);
+      if (useMmap_ && bytes == sizes[0]) {
+        expectedNumMallocBytes -= bytes;
+        ASSERT_EQ(
+            expectedNumMallocBytes,
+            ((MmapAllocator*)instance_)->numMallocBytes());
+      }
     }
   }
 
@@ -956,7 +1040,7 @@ TEST_P(MemoryAllocatorTest, allocateZeroFilled) {
   constexpr int32_t kNumAllocs = 50;
   // Different sizes, including below minimum and above largest size class.
   const std::vector<MachinePageCount> sizes = {
-      MemoryAllocator::kMaxMallocBytes / 2,
+      (size_t)(maxMallocBytes_ / 2),
       100000,
       1000000,
       instance_->sizeClasses().back() * AllocationTraits::kPageSize + 100000};
