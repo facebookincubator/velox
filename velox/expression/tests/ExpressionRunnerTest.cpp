@@ -20,11 +20,17 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/Fs.h"
 #include "velox/expression/tests/ExpressionVerifier.h"
+#include "velox/functions/facebook/sparksql/Register.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/vector/VectorSaver.h"
 
 using namespace facebook::velox;
+
+DEFINE_bool(
+    spark_functions,
+    false,
+    "If true, spark functions are registered, otherwise presto functions are registered");
 
 DEFINE_string(
     input_path,
@@ -177,8 +183,13 @@ int main(int argc, char** argv) {
     VELOX_CHECK(!sql.empty());
   }
 
-  functions::prestosql::registerAllScalarFunctions();
-  aggregate::prestosql::registerAllAggregateFunctions();
+  if (FLAGS_spark_functions) {
+    functions::sparksql::registerFunctionsIncludingFacebookOnly("");
+  } else {
+    functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
+  }
+
   test::ExpressionRunner::run(
       FLAGS_input_path,
       sql,
