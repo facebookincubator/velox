@@ -1,0 +1,119 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>&lt;no title&gt; &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Programming Guide" href="../../programming-guide.html" />
+    <link rel="prev" title="VectorSaver: Encoding-Preserving Serialization" href="vector-saver.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../../programming-guide.html" title="Programming Guide"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="vector-saver.html" title="VectorSaver: Encoding-Preserving Serialization"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" accesskey="U">Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">&lt;no title&gt;</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <p>Velox emits several metrics during query execution which are useful to analyze the details of the underlying system and query processing. Some of these include:</p>
+<p>queryThreadIoLatency: Time spent by a query processing thread waiting for synchronously issued IO or for an in-progress read-ahead to finish.</p>
+<p>numRamRead: Number of hits from RAM cache. Does not include first use of prefetched data.</p>
+<p>numPrefetch: Number of planned read from storage or SSD.</p>
+<p>prefetchBytes: Planned read from storage or SSD in bytes.</p>
+<p>numStorageRead: Number of reads from storage, for sparsely accessed columns.</p>
+<p>storageReadBytes: Bytes read from storage, for sparsely accessed columns.</p>
+<p>numLocalRead: Number of reads from SSD cache instead of storage. Includes both random and planned reads.</p>
+<p>localReadBytes: Bytes read from SSD cache instead of storage. Includes both random and planned reads.</p>
+<p>numRamRead: Number of hits from RAM cache. Does not include first use of prefetched data.</p>
+<p>ramReadBytes: Hits from RAM cache in bytes. Does not include first use of prefetched data.</p>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="vector-saver.html"
+                          title="previous chapter">VectorSaver: Encoding-Preserving Serialization</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../../programming-guide.html"
+                          title="next chapter">Programming Guide</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/develop/debugging/metrics.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../../programming-guide.html" title="Programming Guide"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="vector-saver.html" title="VectorSaver: Encoding-Preserving Serialization"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" >Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">&lt;no title&gt;</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>
