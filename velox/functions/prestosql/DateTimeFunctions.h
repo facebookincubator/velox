@@ -1126,10 +1126,9 @@ struct TimeZoneMinuteFunction : public TimestampWithTimezoneSupport<T> {
     auto gmtTimeStamp = inputTimeStamp;
     gmtTimeStamp.toGMT(*timezonePtr);
 
-    // Get offset in seconds with GMT and convert to hour
+    // Get offset in seconds with GMT and convert to minute
     result =
         ((inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds()) / 60) % 60;
-    auto temp = (inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds());
   }
 };
 
