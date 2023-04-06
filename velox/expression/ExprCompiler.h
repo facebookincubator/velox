@@ -31,4 +31,12 @@ std::vector<std::shared_ptr<Expr>> compileExpressions(
     ExprSet* exprSet,
     bool enableConstantFolding = true);
 
+struct ITypedExprComparer {
+  bool operator()(const core::ITypedExpr* lhs, const core::ITypedExpr* rhs)
+      const {
+    // Add check for type as == operator only checks for type kind equivalence
+    return (*lhs == *rhs) && (lhs->type() == rhs->type());
+  }
+};
+
 } // namespace facebook::velox::exec

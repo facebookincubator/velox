@@ -44,12 +44,6 @@ struct ITypedExprHasher {
   }
 };
 
-struct ITypedExprComparer {
-  bool operator()(const ITypedExpr* lhs, const ITypedExpr* rhs) const {
-    return *lhs == *rhs;
-  }
-};
-
 // Map for deduplicating ITypedExpr trees.
 using ExprDedupMap = folly::F14FastMap<
     const ITypedExpr*,

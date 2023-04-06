@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/ExprCompiler.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
@@ -85,7 +86,26 @@ class ExprCompilerTest : public testing::Test,
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
+
+  // Create constant expression from a variant with custom type.
+  std::shared_ptr<core::ConstantTypedExpr> makeConstantExprWithType(
+      std::shared_ptr<const Type> type,
+      variant value) {
+    return std::make_shared<core::ConstantTypedExpr>(
+        std::move(type), std::move(value));
+  }
 };
+
+TEST_F(ExprCompilerTest, constExprDecimalTypeCheck) {
+  std::shared_ptr<const core::ITypedExpr> expr1 =
+      makeConstantExprWithType(DECIMAL(24, 2), 0);
+  std::shared_ptr<const core::ITypedExpr> expr2 =
+      makeConstantExprWithType(DECIMAL(34, 2), 0);
+  facebook::velox::exec::ITypedExprComparer compare;
+  ASSERT_FALSE(compare(
+      (const core::ITypedExpr*)(expr1.get()),
+      (const core::ITypedExpr*)(expr2.get())));
+}
 
 TEST_F(ExprCompilerTest, constantFolding) {
   auto rowType = ROW({"a"}, {BIGINT()});
