@@ -43,8 +43,8 @@
 namespace facebook::velox {
 namespace {
 
-// By default, the AWS SDK reads object data into an auto-growing StringStream.
-// To avoid copies, read directly into a pre-allocated buffer instead.
+// By default, the AWS SDK reads object data into a backed Stream.
+// To avoid copies, it read directly into a pre-allocated buffer instead.
 // See https://github.com/aws/aws-sdk-cpp/issues/64 for an alternative but
 // functionally similar recipe.
 class UnderlyingStreamWrapper : public Aws::IOStream {
@@ -168,22 +168,19 @@ class S3ReadFile final : public ReadFile {
     auto status = downloadHandle->GetStatus();
     while (status == Aws::Transfer::TransferStatus::NOT_STARTED ||
            status == Aws::Transfer::TransferStatus::IN_PROGRESS) {
+      status = downloadHandle->GetStatus();
+      now = duration_cast<milliseconds>(system_clock::now().time_since_epoch())
+                .count();
       if (now > logAt) {
         VLOG(1) << "S3 Request is taking a long time: "
                 << (now - startTime) / 1000 << "s!\n";
         count++;
         logAt += count * 5000; // backoff for next warning
       }
-      status = downloadHandle->GetStatus();
-      now = duration_cast<milliseconds>(system_clock::now().time_since_epoch())
-                .count();
     }
-    if (downloadHandle->GetStatus() != Aws::Transfer::TransferStatus::COMPLETED)
-      VELOX_FAIL(
-          "{} from location: {}:{}",
-          "Failed to get S3 object using the transfer manager",
-          bucket_,
-          key_);
+    VELOX_CHECK(downloadHandle->GetStatus() == Aws::Transfer::TransferStatus::COMPLETED,
+                "Failed to get S3 object using the transfer manager from location: {}:{}",
+                bucket_, key_);
   }
 
   std::shared_ptr<Aws::S3::S3Client> client_;
