@@ -37,7 +37,7 @@ DEFINE_string(
 
 int main(int argc, char** argv) {
   facebook::velox::functions::sparksql::aggregate::registerAggregateFunctions(
-      "");
+      "spark_");
 
   ::testing::InitGoogleTest(&argc, argv);
 
