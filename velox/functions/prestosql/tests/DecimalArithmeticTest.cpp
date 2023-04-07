@@ -350,3 +350,32 @@ TEST_F(DecimalArithmeticTest, decimalDivTest) {
               {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0))}),
       "Decimal overflow: 99999999999999999999999999999999999999 * 100");
 }
+
+TEST_F(DecimalArithmeticTest, round) {
+  // Round short decimals.
+  testDecimalExpr<TypeKind::SHORT_DECIMAL>(
+      {makeShortDecimalFlatVector({0, 1, -1, 0}, DECIMAL(1, 0))},
+      "round(c0)",
+      {makeShortDecimalFlatVector({123, 542, -999, 0}, DECIMAL(3, 3))});
+  testDecimalExpr<TypeKind::SHORT_DECIMAL>(
+      {makeShortDecimalFlatVector({1111, 1112, -9999, 10000}, DECIMAL(5, 0))},
+      "round(c0)",
+      {makeShortDecimalFlatVector(
+          {11112, 11115, -99989, 99999}, DECIMAL(5, 1))});
+  // Round long decimals.
+  testDecimalExpr<TypeKind::SHORT_DECIMAL>(
+      {makeShortDecimalFlatVector({0, 1, -1, 0}, DECIMAL(1, 0))},
+      "round(c0)",
+      {makeLongDecimalFlatVector(
+          {1234567890123456789, 5000000000000000000, -9000000000000000000, 0},
+          DECIMAL(19, 19))});
+  testDecimalExpr<TypeKind::LONG_DECIMAL>(
+      {makeLongDecimalFlatVector(
+          {DecimalUtil::kPowersOfTen[37], -DecimalUtil::kPowersOfTen[37]},
+          DECIMAL(38, 0))},
+      "round(c0)",
+      {makeLongDecimalFlatVector(
+          {UnscaledLongDecimal::max().unscaledValue(),
+           UnscaledLongDecimal::min().unscaledValue()},
+          DECIMAL(38, 1))});
+}

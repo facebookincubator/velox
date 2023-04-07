@@ -110,6 +110,7 @@ void registerArithmeticFunctions(const std::string& prefix = "") {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_sub, prefix + "minus");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_mul, prefix + "multiply");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_round, prefix + "round");
 }
 
 } // namespace facebook::velox::functions
