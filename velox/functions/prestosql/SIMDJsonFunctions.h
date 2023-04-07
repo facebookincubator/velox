@@ -252,7 +252,7 @@ struct SIMDJsonArrayLengthFunction {
     try {
       ctx.parseDocument();
     } catch (simdjson::simdjson_error& e) {
-      throw e;
+      return result;
     }
 
     if (ctx.jsonDoc.type() != simdjson::ondemand::json_type::array) {
@@ -266,7 +266,7 @@ struct SIMDJsonArrayLengthFunction {
       }
       result = true;
     } catch (simdjson::simdjson_error& e) {
-      throw e;
+      return result;
     }
     return result;
   }
