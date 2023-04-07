@@ -36,7 +36,7 @@ DEFINE_string(
     "(e.g: --only \"min\" or --only \"sum,avg\").");
 
 int main(int argc, char** argv) {
-  facebook::velox::functions::sparksql::aggregates::registerAggregateFunctions(
+  facebook::velox::functions::sparksql::aggregate::registerAggregateFunctions(
       "");
 
   ::testing::InitGoogleTest(&argc, argv);

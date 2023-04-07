@@ -18,15 +18,17 @@
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
-namespace facebook::velox::functions::sparksql::aggregates::test {
+using namespace facebook::velox::aggregate::test;
+
+namespace facebook::velox::functions::sparksql::aggregate::test {
 
 namespace {
 
-class LastAggregateTest : public aggregate::test::AggregationTestBase {
+class LastAggregateTest : public AggregationTestBase {
  public:
   LastAggregateTest() {
-    aggregate::test::AggregationTestBase::SetUp();
-    aggregates::registerAggregateFunctions("");
+    AggregationTestBase::SetUp();
+    aggregate::registerAggregateFunctions("");
   }
 
   template <typename T>
@@ -145,7 +147,7 @@ TEST_F(LastAggregateTest, doubleGlobal) {
   testGlobalAggregation<double>();
 }
 
-// Vefify aggregation with group by keys for VARCHAR.
+// Verify aggregation with group by keys for VARCHAR.
 TEST_F(LastAggregateTest, varcharGroupBy) {
   std::vector<std::string> data(98);
   auto vectors = {makeRowVector({
@@ -331,4 +333,4 @@ TEST_F(LastAggregateTest, mapGlobal) {
 }
 
 } // namespace
-} // namespace facebook::velox::functions::sparksql::aggregates::test
+} // namespace facebook::velox::functions::sparksql::aggregate::test

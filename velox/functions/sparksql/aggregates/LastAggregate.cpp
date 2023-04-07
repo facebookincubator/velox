@@ -24,7 +24,9 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::functions::sparksql::aggregates {
+using namespace facebook::velox::aggregate;
+
+namespace facebook::velox::functions::sparksql::aggregate {
 
 namespace {
 
@@ -290,7 +292,7 @@ class LastAggregateNonNumeric : public exec::Aggregate {
   /// We use singleValueAccumulator to save the results for each group. This
   /// struct will allow us to save variable-width value.
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(aggregate::SingleValueAccumulator);
+    return sizeof(SingleValueAccumulator);
   }
 
   /// Initialize each group.
@@ -299,7 +301,7 @@ class LastAggregateNonNumeric : public exec::Aggregate {
       folly::Range<const vector_size_t*> indices) override {
     setAllNulls(groups, indices);
     for (auto i : indices) {
-      new (groups[i] + offset_) aggregate::SingleValueAccumulator();
+      new (groups[i] + offset_) SingleValueAccumulator();
     }
   }
 
@@ -434,7 +436,7 @@ class LastAggregateNonNumeric : public exec::Aggregate {
         (*result)->setNull(i, true);
       } else {
         clearNull(rawNulls, i);
-        auto accumulator = value<aggregate::SingleValueAccumulator>(group);
+        auto accumulator = value<SingleValueAccumulator>(group);
         accumulator->read(*result, i);
       }
     }
@@ -471,7 +473,7 @@ class LastAggregateNonNumeric : public exec::Aggregate {
         (*result)->setNull(i, true);
       } else {
         (*result)->setNull(i, false);
-        auto accumulator = value<aggregate::SingleValueAccumulator>(group);
+        auto accumulator = value<SingleValueAccumulator>(group);
         accumulator->read(baseVector, i);
       }
     }
@@ -479,7 +481,7 @@ class LastAggregateNonNumeric : public exec::Aggregate {
 
   void destroy(folly::Range<char**> groups) override {
     for (auto group : groups) {
-      value<aggregate::SingleValueAccumulator>(group)->destroy(allocator_);
+      value<SingleValueAccumulator>(group)->destroy(allocator_);
     }
   }
 
@@ -522,7 +524,7 @@ class LastAggregateNonNumeric : public exec::Aggregate {
   inline void
   updateValue(char* group, const BaseVector* baseVector, vector_size_t index) {
     clearNull(group);
-    auto* accumulator = value<aggregate::SingleValueAccumulator>(group);
+    auto* accumulator = value<SingleValueAccumulator>(group);
     accumulator->write(baseVector, index, allocator_);
   }
 
@@ -587,4 +589,4 @@ bool registerLastAggregate(const std::string& name) {
       });
 }
 
-} // namespace facebook::velox::functions::sparksql::aggregates
+} // namespace facebook::velox::functions::sparksql::aggregate

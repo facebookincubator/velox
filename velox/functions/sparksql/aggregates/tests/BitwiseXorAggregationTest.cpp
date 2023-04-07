@@ -20,7 +20,7 @@
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::aggregate::test;
 
-namespace facebook::velox::functions::sparksql::aggregates::test {
+namespace facebook::velox::functions::sparksql::aggregate::test {
 
 namespace {
 
@@ -65,4 +65,4 @@ TEST_F(BitwiseXorAggregationTest, bitwiseXor) {
 }
 
 } // namespace
-} // namespace facebook::velox::functions::sparksql::aggregates::test
+} // namespace facebook::velox::functions::sparksql::aggregate::test

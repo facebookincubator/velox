@@ -19,10 +19,10 @@
 #include "velox/functions/sparksql/aggregates/BitwiseXorAggregate.h"
 #include "velox/functions/sparksql/aggregates/LastAggregate.h"
 
-namespace facebook::velox::functions::sparksql::aggregates {
+namespace facebook::velox::functions::sparksql::aggregate {
 
 void registerAggregateFunctions(const std::string& prefix) {
-  aggregates::registerLastAggregate(prefix + "last");
-  aggregates::registerBitwiseXorAggregate(prefix + "bit_xor");
+  aggregate::registerLastAggregate(prefix + "last");
+  aggregate::registerBitwiseXorAggregate(prefix + "bit_xor");
 }
-} // namespace facebook::velox::functions::sparksql::aggregates
+} // namespace facebook::velox::functions::sparksql::aggregate
