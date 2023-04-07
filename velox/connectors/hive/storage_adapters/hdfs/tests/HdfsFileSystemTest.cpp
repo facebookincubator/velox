@@ -184,6 +184,23 @@ TEST_F(HdfsFileSystemTest, viaFileSystem) {
   readData(readFile.get());
 }
 
+TEST_F(HdfsFileSystemTest, initializeFsWithEndpointInfoInFilePath) {
+  facebook::velox::filesystems::registerHdfsFileSystem();
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath, nullptr);
+  auto readFile = hdfsFileSystem->openFileForRead(fullDestinationPath);
+  readData(readFile.get());
+}
+
+TEST_F(HdfsFileSystemTest, oneFsInstanceForOneEndpoint) {
+  facebook::velox::filesystems::registerHdfsFileSystem();
+  auto hdfsFileSystem1 =
+      filesystems::getFileSystem(fullDestinationPath, nullptr);
+  auto hdfsFileSystem2 =
+      filesystems::getFileSystem(fullDestinationPath, nullptr);
+  ASSERT_TRUE(hdfsFileSystem1 == hdfsFileSystem2);
+}
+
 TEST_F(HdfsFileSystemTest, missingFileViaFileSystem) {
   try {
     facebook::velox::filesystems::registerHdfsFileSystem();
@@ -262,7 +279,7 @@ TEST_F(HdfsFileSystemTest, schemeMatching) {
     EXPECT_THAT(
         error.message(),
         testing::HasSubstr(
-            "No registered file system matched with filename '/'"));
+            "No registered file system matched with file path '/'"));
   }
   auto fs =
       std::dynamic_pointer_cast<facebook::velox::filesystems::HdfsFileSystem>(

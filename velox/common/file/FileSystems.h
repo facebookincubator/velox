@@ -97,7 +97,7 @@ std::shared_ptr<FileSystem> getFileSystem(
 /// generates the actual file system.
 void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
-    std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
+    std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>, std::string_view)>
         fileSystemGenerator);
 
 /// Register the local filesystem.
