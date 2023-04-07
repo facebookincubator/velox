@@ -36,8 +36,9 @@ DEFINE_string(
     "(e.g: --only \"min\" or --only \"sum,avg\").");
 
 int main(int argc, char** argv) {
+  std::string prefix = "spark_";
   facebook::velox::functions::sparksql::aggregate::registerAggregateFunctions(
-      "spark_");
+      prefix);
 
   ::testing::InitGoogleTest(&argc, argv);
 
@@ -49,7 +50,7 @@ int main(int argc, char** argv) {
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable.
   std::unordered_set<std::string> skipFunctions = {
-      "last" // https://github.com/facebookincubator/velox/issues/4482
+      prefix + "last" // https://github.com/facebookincubator/velox/issues/4482
   };
 
   std::unordered_map<std::string, std::string> orderDependentFunctions = {};
