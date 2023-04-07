@@ -64,7 +64,8 @@ class SubstraitVeloxExprConverter {
       const RowTypePtr& inputType);
 
   /// Whether null will be returned on cast failure.
-  bool isNullOnFailure(::substrait::Expression::Cast::FailureBehavior failureBehavior);
+  bool isNullOnFailure(
+      ::substrait::Expression::Cast::FailureBehavior failureBehavior);
 
  private:
   /// Convert list literal to ArrayVector.

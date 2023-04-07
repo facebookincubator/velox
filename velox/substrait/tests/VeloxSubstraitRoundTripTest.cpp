@@ -83,14 +83,20 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
 
     // Convert Substrait Plan to the same Velox Plan.
     auto samePlan = substraitConverter_->toVeloxPlan(substraitPlan);
-    auto projections = std::dynamic_pointer_cast<const core::ProjectNode>(samePlan)->projections();
-    auto projectionsOriginal = std::dynamic_pointer_cast<const core::ProjectNode>(plan)->projections();
+    auto projections =
+        std::dynamic_pointer_cast<const core::ProjectNode>(samePlan)
+            ->projections();
+    auto projectionsOriginal =
+        std::dynamic_pointer_cast<const core::ProjectNode>(plan)->projections();
     ASSERT_EQ(projections.size(), projectionsOriginal.size());
     for (int i = 0; i < projections.size(); i++) {
       auto castExpr =
           std::dynamic_pointer_cast<const core::CastTypedExpr>(projections[i]);
-      auto castExprOriginal = std::dynamic_pointer_cast<const core::CastTypedExpr>(projectionsOriginal[i]);
-      // The cast failure behavior should keep consistent after the round trip conversion.
+      auto castExprOriginal =
+          std::dynamic_pointer_cast<const core::CastTypedExpr>(
+              projectionsOriginal[i]);
+      // The cast failure behavior should keep consistent after the round trip
+      // conversion.
       ASSERT_EQ(castExpr->nullOnFailure(), castExprOriginal->nullOnFailure());
     }
 

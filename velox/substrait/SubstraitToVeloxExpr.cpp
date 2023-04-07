@@ -331,7 +331,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 }
 
 bool SubstraitVeloxExprConverter::isNullOnFailure(
-  ::substrait::Expression::Cast::FailureBehavior failureBehavior) {
+    ::substrait::Expression::Cast::FailureBehavior failureBehavior) {
   switch (failureBehavior) {
     case ::substrait::
         Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:

@@ -450,10 +450,15 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
   }
   // Set failure behaviro as FAILURE_BEHAVIOR_UNSPECIFIED.
   if (castExpr->nullOnFailure()) {
-    substraitCastExpr->set_failure_behavior(::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL);
+    substraitCastExpr->set_failure_behavior(
+        ::substrait::
+            Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL);
   } else {
-    // It is equivalent to the setting with Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION.
-    substraitCastExpr->set_failure_behavior(::substrait::Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED);
+    // It is equivalent to the setting with
+    // Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION.
+    substraitCastExpr->set_failure_behavior(
+        ::substrait::
+            Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED);
   }
   return *substraitCastExpr;
 }
