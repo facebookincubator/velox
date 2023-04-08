@@ -113,6 +113,7 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
     return std::make_shared<MemoryManager>(options);
   }
 
+  const int32_t maxMallocBytes_ = 3072;
   const bool useMmap_;
   const bool useCache_;
   folly::Random::DefaultGenerator rng_;
@@ -380,11 +381,11 @@ TEST_P(MemoryPoolTest, ReallocTestSameSize) {
 
   void* anotherChunk = pool->reallocate(oneChunk, kChunkSize, kChunkSize);
   ASSERT_EQ(kChunkSize, pool->getCurrentBytes());
-  ASSERT_EQ(kChunkSize, pool->getMaxBytes());
+  ASSERT_EQ(2 * kChunkSize, pool->getMaxBytes());
 
   pool->free(anotherChunk, kChunkSize);
   ASSERT_EQ(0, pool->getCurrentBytes());
-  ASSERT_EQ(kChunkSize, pool->getMaxBytes());
+  ASSERT_EQ(2 * kChunkSize, pool->getMaxBytes());
 }
 
 TEST_P(MemoryPoolTest, ReallocTestHigher) {
@@ -401,11 +402,11 @@ TEST_P(MemoryPoolTest, ReallocTestHigher) {
 
   void* threeChunks = pool->reallocate(oneChunk, kChunkSize, 3 * kChunkSize);
   EXPECT_EQ(3 * kChunkSize, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(4 * kChunkSize, pool->getMaxBytes());
 
   pool->free(threeChunks, 3 * kChunkSize);
   EXPECT_EQ(0, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(4 * kChunkSize, pool->getMaxBytes());
 }
 
 TEST_P(MemoryPoolTest, ReallocTestLower) {
@@ -421,11 +422,11 @@ TEST_P(MemoryPoolTest, ReallocTestLower) {
 
   void* oneChunk = pool->reallocate(threeChunks, 3 * kChunkSize, kChunkSize);
   EXPECT_EQ(kChunkSize, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(4 * kChunkSize, pool->getMaxBytes());
 
   pool->free(oneChunk, kChunkSize);
   EXPECT_EQ(0, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(4 * kChunkSize, pool->getMaxBytes());
 }
 
 TEST_P(MemoryPoolTest, allocateZeroFilled) {
@@ -1480,12 +1481,12 @@ TEST_P(MemoryPoolTest, mmapAllocatorCapAllocationError) {
     }
   } testSettings[] = {// NOTE: the failure injection only applies for
                       // allocations that are not delegated to malloc.
-                      {MemoryAllocator::kMaxMallocBytes - 1, false, false},
-                      {MemoryAllocator::kMaxMallocBytes, false, false},
-                      {MemoryAllocator::kMaxMallocBytes + 1, true, false},
-                      {MemoryAllocator::kMaxMallocBytes - 1, false, true},
-                      {MemoryAllocator::kMaxMallocBytes, false, true},
-                      {MemoryAllocator::kMaxMallocBytes + 1, true, true}};
+                      {maxMallocBytes_ - 1, false, false},
+                      {maxMallocBytes_, false, false},
+                      {maxMallocBytes_ + 1, true, false},
+                      {maxMallocBytes_ - 1, false, true},
+                      {maxMallocBytes_, false, true},
+                      {maxMallocBytes_ + 1, true, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto manager = getMemoryManager(8 * GB);
@@ -1527,12 +1528,12 @@ TEST_P(MemoryPoolTest, mmapAllocatorCapAllocationZeroFilledError) {
     }
   } testSettings[] = {// NOTE: the failure injection only applies for
                       // allocations that are not delegated to malloc.
-                      {MemoryAllocator::kMaxMallocBytes - 1, 1, false, false},
-                      {MemoryAllocator::kMaxMallocBytes, 1, false, false},
-                      {MemoryAllocator::kMaxMallocBytes + 1, 1, true, false},
-                      {MemoryAllocator::kMaxMallocBytes - 1, 1, false, true},
-                      {MemoryAllocator::kMaxMallocBytes, 1, false, true},
-                      {MemoryAllocator::kMaxMallocBytes + 1, 1, true, true}};
+                      {maxMallocBytes_ - 1, 1, false, false},
+                      {maxMallocBytes_, 1, false, false},
+                      {maxMallocBytes_ + 1, 1, true, false},
+                      {maxMallocBytes_ - 1, 1, false, true},
+                      {maxMallocBytes_, 1, false, true},
+                      {maxMallocBytes_ + 1, 1, true, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto manager = getMemoryManager(8 * GB);
@@ -1574,12 +1575,12 @@ TEST_P(MemoryPoolTest, mmapAllocatorCapReallocateError) {
     }
   } testSettings[] = {// NOTE: the failure injection only applies for
                       // allocations that are not delegated to malloc.
-                      {MemoryAllocator::kMaxMallocBytes - 1, false, false},
-                      {MemoryAllocator::kMaxMallocBytes, false, false},
-                      {MemoryAllocator::kMaxMallocBytes + 1, true, false},
-                      {MemoryAllocator::kMaxMallocBytes - 1, false, true},
-                      {MemoryAllocator::kMaxMallocBytes, false, true},
-                      {MemoryAllocator::kMaxMallocBytes + 1, true, true}};
+                      {maxMallocBytes_ - 1, false, false},
+                      {maxMallocBytes_, false, false},
+                      {maxMallocBytes_ + 1, true, false},
+                      {maxMallocBytes_ - 1, false, true},
+                      {maxMallocBytes_, false, true},
+                      {maxMallocBytes_ + 1, true, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto manager = getMemoryManager(8 * GB);
@@ -1871,6 +1872,21 @@ TEST_P(MemoryPoolTest, concurrentPoolStructureAccess) {
   }
   pools.clear();
   ASSERT_EQ(root->getChildCount(), 0);
+}
+
+TEST_P(MemoryPoolTest, usageTrackerOptionTest) {
+  auto manager = getMemoryManager(8 * GB);
+  std::vector<bool> trackUsages = {false, true};
+  for (const auto trackUsage : trackUsages) {
+    auto root = manager->getPool(
+        "usageTrackerOptionTest",
+        MemoryPool::Kind::kAggregate,
+        kMaxMemory,
+        trackUsage);
+    ASSERT_EQ(trackUsage, root->getMemoryUsageTracker() != nullptr);
+    auto child = root->addChild("usageTrackerOptionTest");
+    ASSERT_EQ(trackUsage, child->getMemoryUsageTracker() != nullptr);
+  }
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

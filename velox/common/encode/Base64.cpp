@@ -421,25 +421,34 @@ size_t Base64::decodeImpl(
   return needed;
 }
 
-std::string Base64::encode_url(folly::StringPiece text) {
+std::string Base64::encodeUrl(folly::StringPiece text) {
   return encodeImpl(text, kBase64UrlCharset, false);
 }
 
-std::string Base64::encode_url(const char* data, size_t len) {
-  return encode_url(folly::StringPiece(data, len));
+std::string Base64::encodeUrl(const char* data, size_t len) {
+  return encodeUrl(folly::StringPiece(data, len));
 }
 
-std::string Base64::encode_url(const folly::IOBuf* data) {
+std::string Base64::encodeUrl(const folly::IOBuf* data) {
   return encodeImpl(IOBufWrapper(data), kBase64UrlCharset, false);
 }
 
-std::string Base64::decode_url(folly::StringPiece encoded) {
+void Base64::decodeUrl(
+    const char* src,
+    size_t src_len,
+    char* dst,
+    size_t dst_len,
+    bool hasPad) {
+  decodeImpl(src, src_len, dst, dst_len, kBase64UrlReverseIndexTable, hasPad);
+}
+
+std::string Base64::decodeUrl(folly::StringPiece encoded) {
   std::string output;
-  Base64::decode_url(std::make_pair(encoded.data(), encoded.size()), output);
+  Base64::decodeUrl(std::make_pair(encoded.data(), encoded.size()), output);
   return output;
 }
 
-void Base64::decode_url(
+void Base64::decodeUrl(
     const std::pair<const char*, int32_t>& payload,
     std::string& output) {
   size_t out_len = (payload.second + 3) / 4 * 3;
@@ -453,39 +462,4 @@ void Base64::decode_url(
       false);
   output.resize(out_len);
 }
-
-// // uint32_t Base64::base64_encode_string(
-// //     const std::string& str,
-// //     std::string& out) {
-// //   uint8_t b[4];
-// //   uint32_t result = 0;
-
-// //   out.clear();
-// //   const uint8_t* bytes = (const uint8_t*)str.data();
-// //   uint32_t len = str.length();
-// //   out.reserve((len + 2) / 3 * 4);
-// //   while (len >= 3) {
-// //     apache::thrift::protocol::base64_encode(bytes, 3, b);
-// //     out.append(1, b[0]);
-// //     out.append(1, b[1]);
-// //     out.append(1, b[2]);
-// //     out.append(1, b[3]);
-// //     result += 4;
-// //     bytes += 3;
-// //     len -= 3;
-// //   }
-// //   if (len > 0) {
-// //     apache::thrift::protocol::base64_encode((const uint8_t*)bytes, len,
-// b);
-// //     for (int32_t j = 0; j < len + 1; j++) {
-// //       out.append(1, b[j]);
-// //     }
-// //     for (int32_t j = 0; j < 3 - len; j++) {
-// //       out.append(1, '=');
-// //     }
-// //     result += len + 1;
-// //   }
-// //   return result;
-// // }
-
 } // namespace facebook::velox::encoding

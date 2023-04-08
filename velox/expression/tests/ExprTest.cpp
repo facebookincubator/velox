@@ -32,6 +32,7 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorSaver.h"
+#include "velox/vector/tests/TestingAlwaysThrowsFunction.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -2185,23 +2186,14 @@ TEST_F(ExprTest, peeledConstant) {
   }
 }
 
-namespace {
-template <typename T>
-struct AlwaysThrowsFunction {
-  template <typename TResult, typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TResult&, const TInput&) {
-    VELOX_FAIL();
-  }
-};
-} // namespace
-
 TEST_F(ExprTest, exceptionContext) {
   auto data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 3}),
       makeFlatVector<int32_t>({1, 2, 3}),
   });
 
-  registerFunction<AlwaysThrowsFunction, int32_t, int32_t>({"always_throws"});
+  registerFunction<TestingAlwaysThrowsFunction, int32_t, int32_t>(
+      {"always_throws"});
 
   // Disable saving vector and expression SQL on error.
   FLAGS_velox_save_input_on_expression_any_failure_path = "";
@@ -2619,7 +2611,8 @@ TEST_F(ExprTest, tryWithConstantFailure) {
   // and the StringView isn't initialized, without special handling logic in
   // EvalCtx this results in reading uninitialized memory triggering ASAN
   // errors.
-  registerFunction<AlwaysThrowsFunction, Varchar, Varchar>({"always_throws"});
+  registerFunction<TestingAlwaysThrowsFunction, Varchar, Varchar>(
+      {"always_throws"});
   auto c0 = makeConstant("test", 5);
   auto c1 = makeFlatVector<int64_t>(5, [](vector_size_t row) { return row; });
   auto rowVector = makeRowVector({c0, c1});
@@ -3080,43 +3073,6 @@ TEST_F(ExprTest, addNulls) {
 }
 
 namespace {
-
-// Throw a VeloxException if veloxException_ is true. Throw an std exception
-// otherwise.
-class AlwaysThrowsVectorFunction : public exec::VectorFunction {
- public:
-  static constexpr const char* kVeloxErrorMessage = "Velox Exception: Expected";
-  static constexpr const char* kStdErrorMessage = "Std Exception: Expected";
-
-  explicit AlwaysThrowsVectorFunction(bool veloxException)
-      : veloxException_{veloxException} {}
-
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& /* args */,
-      const TypePtr& /* outputType */,
-      exec::EvalCtx& context,
-      VectorPtr& /* result */) const override {
-    if (veloxException_) {
-      auto error =
-          std::make_exception_ptr(std::invalid_argument(kVeloxErrorMessage));
-      context.setErrors(rows, error);
-      return;
-    }
-    throw std::invalid_argument(kStdErrorMessage);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {exec::FunctionSignatureBuilder()
-                .returnType("boolean")
-                .argumentType("integer")
-                .build()};
-  }
-
- private:
-  const bool veloxException_;
-};
-
 class NoOpVectorFunction : public exec::VectorFunction {
  public:
   void apply(
@@ -3142,8 +3098,8 @@ TEST_F(ExprTest, applyFunctionNoResult) {
 
   exec::registerVectorFunction(
       "always_throws_vector_function",
-      AlwaysThrowsVectorFunction::signatures(),
-      std::make_unique<AlwaysThrowsVectorFunction>(true));
+      TestingAlwaysThrowsVectorFunction::signatures(),
+      std::make_unique<TestingAlwaysThrowsVectorFunction>(true));
 
   // At various places in the code, we don't check if result has been set or
   // not.  Conjuncts have the nice property that they set throwOnError to
@@ -3153,7 +3109,7 @@ TEST_F(ExprTest, applyFunctionNoResult) {
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
       "and(always_throws_vector_function(c0), true:BOOLEAN)",
-      AlwaysThrowsVectorFunction::kVeloxErrorMessage);
+      TestingAlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
       "no_op",
@@ -3212,20 +3168,20 @@ TEST_F(ExprTest, constantWrap) {
 TEST_F(ExprTest, stdExceptionInVectorFunction) {
   exec::registerVectorFunction(
       "always_throws_vector_function",
-      AlwaysThrowsVectorFunction::signatures(),
-      std::make_unique<AlwaysThrowsVectorFunction>(false));
+      TestingAlwaysThrowsVectorFunction::signatures(),
+      std::make_unique<TestingAlwaysThrowsVectorFunction>(false));
 
   assertError(
       "always_throws_vector_function(c0)",
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
       "Same as context.",
-      AlwaysThrowsVectorFunction::kStdErrorMessage);
+      TestingAlwaysThrowsVectorFunction::kStdErrorMessage);
 
   assertErrorSimplified(
       "always_throws_vector_function(c0)",
       makeFlatVector<int32_t>({1, 2, 3}),
-      AlwaysThrowsVectorFunction::kStdErrorMessage);
+      TestingAlwaysThrowsVectorFunction::kStdErrorMessage);
 }
 
 TEST_F(ExprTest, cseUnderTry) {
@@ -3551,4 +3507,157 @@ TEST_F(ExprTest, peelingWithSmallerConstantInput) {
   // values out of bound.
   auto result = evaluate("coalesce(c0, c1)", makeRowVector({d0, c1}));
   assertEqualVectors(c1, result);
+}
+
+TEST_F(ExprTest, ifWithLazyNulls) {
+  // Makes a null-propagating switch. Evaluates it so that null propagation
+  // masks out errors.
+  constexpr int32_t kSize = 100;
+  const char* kExpr =
+      "CASE WHEN 10 % (c0 - 2) < 0 then c0 + c1 when 10 % (c0 - 4) = 3 then c0 + c1 * 2 else c0 + c1 end";
+  auto c0 = makeFlatVector<int64_t>(kSize, [](auto row) { return row % 10; });
+  auto c1 = makeFlatVector<int64_t>(
+      kSize,
+      [](auto row) { return row; },
+      [](auto row) { return row % 10 == 2 || row % 10 == 4; });
+
+  auto result = evaluate(kExpr, makeRowVector({c0, c1}));
+  auto resultFromLazy =
+      evaluate(kExpr, makeRowVector({c0, wrapInLazyDictionary(c1)}));
+  assertEqualVectors(result, resultFromLazy);
+}
+
+int totalDefaultNullFunc = 0;
+template <typename T>
+struct DefaultNullFunc {
+  void call(int64_t& output, int64_t input1, int64_t input2) {
+    output = input1 + input2;
+    totalDefaultNullFunc++;
+  }
+};
+
+int totalNotDefaultNullFunc = 0;
+template <typename T>
+struct NotDefaultNullFunc {
+  bool callNullable(int64_t& output, const int64_t* input) {
+    output = totalNotDefaultNullFunc++;
+    return input;
+  }
+};
+
+TEST_F(ExprTest, commonSubExpressionWithPeeling) {
+  registerFunction<DefaultNullFunc, int64_t, int64_t, int64_t>(
+      {"default_null"});
+  registerFunction<NotDefaultNullFunc, int64_t, int64_t>({"not_default_null"});
+
+  // func1(func2(c0), c0) propagates nulls of c0. since func1 is default null.
+  std::string expr1 = "default_null(not_default_null(c0), c0)";
+  EXPECT_TRUE(propagatesNulls(parseExpression(expr1, ROW({"c0"}, {BIGINT()}))));
+
+  // func2(c0) does not propagate nulls.
+  std::string expr2 = "not_default_null(c0)";
+  EXPECT_FALSE(
+      propagatesNulls(parseExpression(expr2, ROW({"c0"}, {BIGINT()}))));
+
+  auto clearResults = [&]() {
+    totalDefaultNullFunc = 0;
+    totalNotDefaultNullFunc = 0;
+  };
+
+  // When the input does not have additional nulls, peeling happens for both
+  // expr1, and expr2 identically, hence each of them will be evaluated only
+  // once per peeled row.
+  {
+    auto data = makeRowVector({wrapInDictionary(
+        makeIndices({0, 0, 0, 1}), 4, makeFlatVector<int64_t>({1, 2, 3, 4}))});
+    auto check = [&](const std::vector<std::string>& expressions) {
+      auto result = makeRowVector(evaluateMultiple(expressions, data));
+      ASSERT_EQ(totalDefaultNullFunc, 2);
+      ASSERT_EQ(totalNotDefaultNullFunc, 2);
+      clearResults();
+    };
+    check({expr1, expr2});
+    check({expr1});
+    check({expr1, expr1, expr2});
+    check({expr2, expr1, expr2});
+  }
+
+  // When the dictionary input have additional nulls, peeling won't happen for
+  // expressions that do not propagate nulls. Hence when expr2 is reached it
+  // shall be evaluated again for all rows.
+  {
+    auto data = makeRowVector({BaseVector::wrapInDictionary(
+        makeNulls(4, nullEvery(2)),
+        makeIndices({0, 0, 0, 1}),
+        4,
+        makeFlatVector<int64_t>({1, 2, 3, 4}))});
+    {
+      auto results = makeRowVector(evaluateMultiple({expr1, expr2}, data));
+
+      ASSERT_EQ(totalDefaultNullFunc, 2);
+      // It is evaluated twice during expr1 and 4 times during expr2.
+      ASSERT_EQ(totalNotDefaultNullFunc, 6);
+      clearResults();
+    }
+    {
+      // if expr2 appears again it shall be not be re-evaluated.
+      auto results =
+          makeRowVector(evaluateMultiple({expr1, expr2, expr1, expr2}, data));
+      ASSERT_EQ(totalDefaultNullFunc, 2);
+      // It is evaluated twice during expr1 and 4 times during expr2.
+      ASSERT_EQ(totalNotDefaultNullFunc, 6);
+    }
+  }
+}
+
+TEST_F(ExprTest, dictionaryOverLoadedLazy) {
+  // This test verifies a corner case where peeling does not go past a loaded
+  // lazy layer which caused wrong set of inputs being passed to shared
+  // sub-expressions evaluation.
+  // Inputs are of the form c0: Dict1(Lazy(Dict2(Flat1))) and c1: Dict1(Flat
+  constexpr int32_t kSize = 100;
+
+  // Generate inputs of the form c0: Dict1(Lazy(Dict2(Flat1))) and c1:
+  // Dict1(Flat2). Note c0 and c1 have the same top encoding layer.
+
+  // Generate indices that randomly point to different rows of the base flat
+  // layer. This makes sure that wrong values are copied over if there is a bug
+  // in shared sub-expressions evaluation.
+  std::vector<int> indicesUnderLazy = {2, 5, 4, 1, 2, 4, 5, 6, 4, 9};
+  auto smallFlat =
+      makeFlatVector<int64_t>(kSize / 10, [](auto row) { return row * 2; });
+  auto indices = makeIndices(kSize, [&indicesUnderLazy](vector_size_t row) {
+    return indicesUnderLazy[row % 10];
+  });
+  auto lazyDict = std::make_shared<LazyVector>(
+      execCtx_->pool(),
+      smallFlat->type(),
+      kSize,
+      std::make_unique<SimpleVectorLoader>([=](RowSet /*rows*/) {
+        return wrapInDictionary(indices, kSize, smallFlat);
+      }));
+  // Make sure it is loaded, otherwise during evaluation ensureLoaded() would
+  // transform the input vector from Dict1(Lazy(Dict2(Flat1))) to
+  // Dict1((Dict2(Flat1))) which recreates the buffers for the top layers and
+  // disables any peeling that can happen between c0 and c1.
+  lazyDict->loadedVector();
+
+  auto sharedIndices = makeIndices(kSize / 2, [](auto row) { return row * 2; });
+  auto c0 = wrapInDictionary(sharedIndices, kSize / 2, lazyDict);
+  auto c1 = wrapInDictionary(
+      sharedIndices,
+      makeFlatVector<int64_t>(kSize, [](auto row) { return row; }));
+
+  // "(c0 < 5 and c1 < 90)" would peel Dict1 layer in the top level conjunct
+  // expression then when peeled c0 is passed to the inner "c0 < 5" expression,
+  // a call to EvalCtx::getField() removes the lazy layer which ensures the last
+  // dictionary layer is peeled. This means that shared sub-expression
+  // evaluation is done on the lowest flat layer. In the second expression "c0 <
+  // 5" the input is Dict1(Lazy(Dict2(Flat1))) and if peeling only removed till
+  // the lazy layer, the shared sub-expression evaluation gets called on
+  // Lazy(Dict2(Flat1)) which then results in wrong results.
+  auto result = evaluateMultiple(
+      {"(c0 < 5 and c1 < 90)", "c0 < 5"}, makeRowVector({c0, c1}));
+  auto resultFromLazy = evaluate("c0 < 5", makeRowVector({c0, c1}));
+  assertEqualVectors(result[1], resultFromLazy);
 }

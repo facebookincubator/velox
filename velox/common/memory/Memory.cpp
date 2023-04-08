@@ -46,7 +46,10 @@ MemoryManager::MemoryManager(const Options& options)
           nullptr,
           // NOTE: the default root memory pool has no quota limit, and it is
           // used for system usage in production such as disk spilling.
-          MemoryPool::Options{alignment_, kMaxMemory})},
+          MemoryPool::Options{
+              .alignment = alignment_,
+              .capacity = kMaxMemory,
+              .trackUsage = false})},
       deprecatedDefaultLeafPool_(defaultRoot_->addChild(
           kDefaultLeafName.str(),
           MemoryPool::Kind::kLeaf)) {
@@ -56,14 +59,14 @@ MemoryManager::MemoryManager(const Options& options)
 }
 
 MemoryManager::~MemoryManager() {
-  VELOX_CHECK_EQ(
-      numPools(),
-      0,
-      "There are {} unexpected alive memory pools allocated by user on memory manager destruction:\n{}",
-      numPools(),
-      toString());
-
   if (FLAGS_velox_memory_leak_check_enabled) {
+    VELOX_CHECK_EQ(
+        numPools(),
+        0,
+        "There are {} unexpected alive memory pools allocated by user on memory manager destruction:\n{}",
+        numPools(),
+        toString());
+
     const auto currentBytes = getTotalBytes();
     VELOX_CHECK_EQ(
         currentBytes,
@@ -84,7 +87,8 @@ uint16_t MemoryManager::alignment() const {
 std::shared_ptr<MemoryPool> MemoryManager::getPool(
     const std::string& name,
     MemoryPool::Kind kind,
-    int64_t maxBytes) {
+    int64_t maxBytes,
+    bool trackUsage) {
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
@@ -98,6 +102,7 @@ std::shared_ptr<MemoryPool> MemoryManager::getPool(
   MemoryPool::Options options;
   options.alignment = alignment_;
   options.capacity = maxBytes;
+  options.trackUsage = trackUsage;
   auto pool = std::make_shared<MemoryPoolImpl>(
       this,
       poolName,

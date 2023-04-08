@@ -87,6 +87,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "from_base64"});
   registerFunction<ToBase64UrlFunction, Varchar, Varbinary>(
       {prefix + "to_base64url"});
+  registerFunction<FromBase64UrlFunction, Varbinary, Varchar>(
+      {prefix + "from_base64url"});
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
 
@@ -98,6 +100,15 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "regexp_replace"});
   registerFunction<Re2RegexpSplitPresto, Array<Varchar>, Varchar, Varchar>(
       {prefix + "regexp_split"});
+
+  registerFunction<FromBigEndian32, int32_t, Varbinary>(
+      {prefix + "from_big_endian_32"});
+  registerFunction<ToBigEndian32, Varbinary, int32_t>(
+      {prefix + "to_big_endian_32"});
+  registerFunction<FromBigEndian64, int64_t, Varbinary>(
+      {prefix + "from_big_endian_64"});
+  registerFunction<ToBigEndian64, Varbinary, int64_t>(
+      {prefix + "to_big_endian_64"});
 }
 } // namespace
 
@@ -111,6 +122,7 @@ void registerStringFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reverse, prefix + "reverse");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_to_utf8, prefix + "to_utf8");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_from_utf8, prefix + "from_utf8");
 
   // Regex functions
   exec::registerStatefulVectorFunction(

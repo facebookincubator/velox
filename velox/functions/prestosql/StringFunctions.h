@@ -32,11 +32,10 @@ template <typename T>
 struct ChrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const int64_t& codePoint) {
     stringImpl::codePointToString(result, codePoint);
-    return true;
   }
 };
 
@@ -46,11 +45,10 @@ template <typename T>
 struct CodePointFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       int32_t& result,
       const arg_type<Varchar>& inputChar) {
     result = stringImpl::charToCodePoint(inputChar);
-    return true;
   }
 };
 
@@ -219,10 +217,10 @@ template <typename T>
 struct ToHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varbinary>& result,
       const arg_type<Varchar>& input) {
-    return stringImpl::toHex(result, input);
+    stringImpl::toHex(result, input);
   }
 };
 
@@ -230,10 +228,10 @@ template <typename T>
 struct FromHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    return stringImpl::fromHex(result, input);
+    stringImpl::fromHex(result, input);
   }
 };
 
@@ -241,10 +239,10 @@ template <typename T>
 struct ToBase64Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    return stringImpl::toBase64(result, input);
+    stringImpl::toBase64(result, input);
   }
 };
 
@@ -252,10 +250,21 @@ template <typename T>
 struct FromBase64Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varbinary>& result,
       const arg_type<Varchar>& input) {
-    return stringImpl::fromBase64(result, input);
+    stringImpl::fromBase64(result, input);
+  }
+};
+
+template <typename T>
+struct FromBase64UrlFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varchar>& input) {
+    stringImpl::fromBase64Url(result, input);
   }
 };
 
@@ -274,10 +283,10 @@ template <typename T>
 struct UrlEncodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    return stringImpl::urlEscape(result, input);
+    stringImpl::urlEscape(result, input);
   }
 };
 
@@ -285,10 +294,10 @@ template <typename T>
 struct UrlDecodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
-    return stringImpl::urlUnescape(result, input);
+    stringImpl::urlUnescape(result, input);
   }
 };
 
@@ -314,25 +323,25 @@ struct SubstrFunction {
   static constexpr bool is_default_ascii_behavior = true;
 
   template <typename I>
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
       I start,
       I length = std::numeric_limits<I>::max()) {
-    return doCall<false>(result, input, start, length);
+    doCall<false>(result, input, start, length);
   }
 
   template <typename I>
-  FOLLY_ALWAYS_INLINE bool callAscii(
+  FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
       I start,
       I length = std::numeric_limits<I>::max()) {
-    return doCall<true>(result, input, start, length);
+    doCall<true>(result, input, start, length);
   }
 
   template <bool isAscii, typename I>
-  FOLLY_ALWAYS_INLINE bool doCall(
+  FOLLY_ALWAYS_INLINE void doCall(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
       I start,
@@ -340,7 +349,7 @@ struct SubstrFunction {
     // Following Presto semantics
     if (start == 0) {
       result.setEmpty();
-      return true;
+      return;
     }
 
     I numCharacters = stringImpl::length<isAscii>(input);
@@ -353,7 +362,7 @@ struct SubstrFunction {
     // Following Presto semantics
     if (start <= 0 || start > numCharacters || length <= 0) {
       result.setEmpty();
-      return true;
+      return;
     }
 
     // Adjusting length
@@ -369,7 +378,6 @@ struct SubstrFunction {
     // Generating output string
     result.setNoCopy(StringView(
         input.data() + byteRange.first, byteRange.second - byteRange.first));
-    return true;
   }
 };
 
@@ -390,18 +398,16 @@ struct TrimFunctionBase {
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
     stringImpl::trimUnicodeWhiteSpace<leftTrim, rightTrim>(result, input);
-    return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool callAscii(
+  FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
     stringImpl::trimAsciiWhiteSpace<leftTrim, rightTrim>(result, input);
-    return true;
   }
 };
 
@@ -419,14 +425,12 @@ template <typename T>
 struct LengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const StringView& input) {
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const StringView& input) {
     result = stringImpl::length<false>(input);
-    return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool callAscii(int64_t& result, const StringView& input) {
+  FOLLY_ALWAYS_INLINE void callAscii(int64_t& result, const StringView& input) {
     result = stringImpl::length<true>(input);
-    return true;
   }
 };
 
@@ -446,22 +450,20 @@ struct PadFunctionBase {
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size,
       const arg_type<Varchar>& padString) {
     stringImpl::pad<lpad, false /*isAscii*/>(result, string, size, padString);
-    return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool callAscii(
+  FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size,
       const arg_type<Varchar>& padString) {
     stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, padString);
-    return true;
   }
 };
 
@@ -491,24 +493,22 @@ template <typename T, bool lpos>
 struct StrPosFunctionBase {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<int64_t>& result,
       const arg_type<Varchar>& string,
       const arg_type<Varchar>& subString,
       const arg_type<int64_t>& instance = 1) {
     result = stringImpl::stringPosition<false /*isAscii*/, lpos>(
         string, subString, instance);
-    return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool callAscii(
+  FOLLY_ALWAYS_INLINE void callAscii(
       out_type<int64_t>& result,
       const arg_type<Varchar>& string,
       const arg_type<Varchar>& subString,
       const arg_type<int64_t>& instance = 1) {
     result = stringImpl::stringPosition<true /*isAscii*/, lpos>(
         string, subString, instance);
-    return true;
   }
 };
 
@@ -517,5 +517,57 @@ struct StrLPosFunction : public StrPosFunctionBase<T, true> {};
 
 template <typename T>
 struct StrRPosFunction : public StrPosFunctionBase<T, false> {};
+
+template <typename T>
+struct FromBigEndian32 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int32_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr auto kTypeLength = sizeof(int32_t);
+    VELOX_USER_CHECK_EQ(input.size(), kTypeLength, "Expected 4-byte input");
+    memcpy(&result, input.data(), kTypeLength);
+    result = folly::Endian::big(result);
+  }
+};
+
+template <typename T>
+struct ToBigEndian32 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varbinary>& result, const arg_type<int32_t>& input) {
+    static constexpr auto kTypeLength = sizeof(int32_t);
+    auto value = folly::Endian::big(input);
+    result.setNoCopy(
+        StringView(reinterpret_cast<const char*>(&value), kTypeLength));
+  }
+};
+
+template <typename T>
+struct FromBigEndian64 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    static constexpr auto kTypeLength = sizeof(int64_t);
+    VELOX_USER_CHECK_EQ(input.size(), kTypeLength, "Expected 8-byte input");
+    memcpy(&result, input.data(), kTypeLength);
+    result = folly::Endian::big(result);
+  }
+};
+
+template <typename T>
+struct ToBigEndian64 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varbinary>& result, const arg_type<int64_t>& input) {
+    static constexpr auto kTypeLength = sizeof(int64_t);
+    auto value = folly::Endian::big(input);
+    result.setNoCopy(
+        StringView(reinterpret_cast<const char*>(&value), kTypeLength));
+  }
+};
 
 } // namespace facebook::velox::functions
