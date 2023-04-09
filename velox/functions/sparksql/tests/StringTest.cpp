@@ -130,7 +130,8 @@ class StringTest : public SparkFunctionBaseTest {
       std::optional<std::string> str,
       std::optional<int32_t> start,
       std::optional<int32_t> length) {
-    return evaluateOnce<std::string>("substring(c0, c1, c2)", str, start, length);
+    return evaluateOnce<std::string>(
+        "substring(c0, c1, c2)", str, start, length);
   }
 };
 

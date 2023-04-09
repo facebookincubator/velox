@@ -363,8 +363,8 @@ struct RTrimSpaceFunction : public TrimSpaceFunctionBase<T, false, true> {};
 ///
 ///     Returns the rest of string from the starting position start.
 ///     Positions start with 1. A negative starting position is interpreted as
-///     being relative to the end of the string. When the starting position is 0,
-///     the meaning is to refer to the first character.
+///     being relative to the end of the string. When the starting position is
+///     0, the meaning is to refer to the first character.
 
 ///
 /// substr(string, start, length) -> varchar
@@ -417,7 +417,7 @@ struct SubstrFunction {
 
     int32_t numCharacters = stringImpl::length<isAscii>(input);
 
-    // negative starting position 
+    // negative starting position
     if (start < 0) {
       start = numCharacters + start + 1;
     }
