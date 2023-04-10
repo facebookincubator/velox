@@ -21,17 +21,11 @@
 
 namespace facebook::velox::substrait {
 
-HiveConnectorHandler::HiveConnectorHandler(
-    const std::string& connectorId,
-    const std::string& tableName,
-    const bool filterPushDownEnabled,
-    const connector::hive::HiveColumnHandle::ColumnType& columnType)
-    : connectorId_(connectorId),
-      tableName_(tableName),
-      filterPushDownEnabled_(filterPushDownEnabled),
-      columnType_(columnType) {}
+HiveConnectorHandler::HiveConnectorHandler(const std::string& connectorId)
+    : connectorId_(connectorId) {}
 
 std::shared_ptr<core::TableScanNode> HiveConnectorHandler::createTableScanNode(
+    const std::string& tableName,
     const ::substrait::ReadRel& readRel,
     const std::shared_ptr<SubstraitParser>& substraitParser,
     const std::shared_ptr<SubstraitToVeloxFilter>& substraitToVeloxFilter,
@@ -39,31 +33,38 @@ std::shared_ptr<core::TableScanNode> HiveConnectorHandler::createTableScanNode(
     const std::string& nextPlanNodeId,
     const std::vector<std::string>& colNameList,
     std::vector<TypePtr>&& veloxTypeList,
+    const bool filterPushDownEnabled,
     const core::TypedExprPtr& remainingFilter) {
   // Velox requires Filter Pushdown must being enabled.
   auto hiveFilter = std::static_pointer_cast<SubstraitToVeloxHiveFilter>(
       substraitToVeloxFilter);
-  bool filterPushdownEnabled = true;
   std::shared_ptr<connector::ConnectorTableHandle> tableHandle;
 
   if (!readRel.has_filter()) {
     connector::hive::SubfieldFilters empty_filters = {};
     tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
         connectorId_,
-        tableName_,
-        filterPushDownEnabled_,
+        tableName,
+        filterPushDownEnabled,
         std::move(empty_filters),
         remainingFilter);
   } else {
     tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
         connectorId_,
-        tableName_,
-        filterPushDownEnabled_,
+        tableName,
+        filterPushDownEnabled,
         std::move(hiveFilter->filters()),
         remainingFilter);
   }
 
   // Get assignments and out names.
+
+  /// In Substrait PR: https://github.com/substrait-io/substrait/pull/298
+  /// Column Type will be included in the ReadRel, so once this PR is merged,
+  /// we can extract that value directly. For the moment we hardcode the
+  /// original value used in the main branch for `columnType`.
+  const auto& columnType =
+      connector::hive::HiveColumnHandle::ColumnType::kRegular;
   std::vector<std::string> outNames;
   outNames.reserve(colNameList.size());
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
@@ -71,7 +72,7 @@ std::shared_ptr<core::TableScanNode> HiveConnectorHandler::createTableScanNode(
   for (int idx = 0; idx < colNameList.size(); idx++) {
     auto outName = substraitParser->makeNodeName(planNodeId, idx);
     assignments[outName] = std::make_shared<connector::hive::HiveColumnHandle>(
-        colNameList[idx], columnType_, veloxTypeList[idx]);
+        colNameList[idx], columnType, veloxTypeList[idx]);
     outNames.emplace_back(outName);
   }
   auto outputType = ROW(std::move(outNames), std::move(veloxTypeList));
@@ -483,7 +484,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   } else {
     std::shared_ptr<SubstraitToVeloxFilter> veloxFilter =
         toVeloxFilter(colNameList, veloxTypeList, readRel.filter());
+    /// [TODO::Substrait::1] In PR:
+    /// https://github.com/substrait-io/substrait/pull/298 ColumnType will be
+    /// added to ReadRel, then we don't have to hardcode that value anymore
     return connector_->createTableScanNode(
+        "hive_table", // table names from the ReadRel can be used here
         readRel,
         substraitParser_,
         veloxFilter,

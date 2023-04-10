@@ -277,10 +277,7 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
   // Convert to Velox PlanNode.
   auto hiveConnectorHandler =
       std::make_shared<facebook::velox::substrait::HiveConnectorHandler>(
-          "test-hive",
-          "test-hive-table",
-          /*filterPushDownEnabled*/ true,
-          connector::hive::HiveColumnHandle::ColumnType::kRegular);
+          "test-hive");
   facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter(
       pool_.get(), hiveConnectorHandler);
   auto planNode = planConverter.toVeloxPlan(substraitPlan);

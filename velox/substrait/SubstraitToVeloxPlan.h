@@ -50,6 +50,7 @@ class ConnectorHandler {
   virtual ~ConnectorHandler() = default;
 
   virtual std::shared_ptr<core::TableScanNode> createTableScanNode(
+      const std::string& tableName,
       const ::substrait::ReadRel& readRel,
       const std::shared_ptr<SubstraitParser>& substraitParser,
       const std::shared_ptr<SubstraitToVeloxFilter>& substraitToVeloxFilter,
@@ -57,18 +58,16 @@ class ConnectorHandler {
       const std::string& nextPlanNodeId,
       const std::vector<std::string>& colNameList,
       std::vector<TypePtr>&& veloxTypeList,
+      const bool filterPushDownEnabled = true,
       const core::TypedExprPtr& remainingFilter = nullptr) = 0;
 };
 
 class HiveConnectorHandler : public ConnectorHandler {
  public:
-  HiveConnectorHandler(
-      const std::string& connectorId,
-      const std::string& tableName, // TODO: probably this should also go to the createTableScanNode
-      const bool filterPushDownEnabled, // TODO: probably this should also go to the createTableScanNode
-      const connector::hive::HiveColumnHandle::ColumnType& columnType); // TODO: probably move this to the function createTableScanNode
+  HiveConnectorHandler(const std::string& connectorId);
 
   std::shared_ptr<core::TableScanNode> createTableScanNode(
+      const std::string& tableName,
       const ::substrait::ReadRel& readRel,
       const std::shared_ptr<SubstraitParser>& substraitParser,
       const std::shared_ptr<SubstraitToVeloxFilter>& substraitToVeloxFilter,
@@ -76,13 +75,11 @@ class HiveConnectorHandler : public ConnectorHandler {
       const std::string& nextPlanNodeId,
       const std::vector<std::string>& colNameList,
       std::vector<TypePtr>&& veloxTypeList,
+      const bool filterPushDownEnabled = true,
       const core::TypedExprPtr& remainingFilter = nullptr) override;
 
  private:
   std::string connectorId_;
-  std::string tableName_;
-  bool filterPushDownEnabled_;
-  connector::hive::HiveColumnHandle::ColumnType columnType_;
 };
 
 /// This class is used to convert the Substrait plan into Velox plan.

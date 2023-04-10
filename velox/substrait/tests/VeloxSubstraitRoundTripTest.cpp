@@ -73,11 +73,7 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
   }
 
   std::shared_ptr<ConnectorHandler> getConnector() {
-    return std::make_shared<HiveConnectorHandler>(
-        "roundtrip-test-hive",
-        "roundtrip-hive-table",
-        /*filterPushDownEnabled*/ true,
-        connector::hive::HiveColumnHandle::ColumnType::kRegular);
+    return std::make_shared<HiveConnectorHandler>("roundtrip-test-hive");
   }
 
   std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =

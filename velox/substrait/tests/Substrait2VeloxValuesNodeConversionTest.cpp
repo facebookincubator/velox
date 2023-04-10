@@ -33,11 +33,7 @@ using namespace facebook::velox::substrait;
 class Substrait2VeloxValuesNodeConversionTest : public OperatorTestBase {
  protected:
   std::shared_ptr<HiveConnectorHandler> getConnector() {
-    return std::make_shared<HiveConnectorHandler>(
-        "values-node-test-hive",
-        "values-node-hive-table",
-        /*filterPushDownEnabled*/ true,
-        connector::hive::HiveColumnHandle::ColumnType::kRegular);
+    return std::make_shared<HiveConnectorHandler>("values-node-test-hive");
   }
 
   std::shared_ptr<SubstraitVeloxPlanConverter> planConverter_ =

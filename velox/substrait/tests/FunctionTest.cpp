@@ -41,11 +41,7 @@ class FunctionTest : public ::testing::Test {
       std::make_shared<vestrait::SubstraitParser>();
 
   std::shared_ptr<ConnectorHandler> getConnector() {
-    return std::make_shared<HiveConnectorHandler>(
-        "function-test-hive",
-        "function-hive-table",
-        /*filterPushDownEnabled*/ true,
-        connector::hive::HiveColumnHandle::ColumnType::kRegular);
+    return std::make_shared<HiveConnectorHandler>("function-test-hive");
   }
 
   std::shared_ptr<vestrait::SubstraitVeloxPlanConverter> planConverter_ =
