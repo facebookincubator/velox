@@ -18,7 +18,7 @@ Core Library
  * Add quota enforcement checks when allocating large chunks of memory.
  * Deprecate `reallocate` Api from memory allocator.
  * Fix aggregate function accumulator's memory alignment.
- * Optimize null aware anit-join when used with filter.
+ * Optimize null aware anti-join when used with filter.
  * Remove usage of CppToType.
 
 
