@@ -50,13 +50,6 @@ void VectorLoader::load(
   const auto ioTimeStartMicros = getCurrentTimeMicro();
   loadInternal(rows, hook, result);
   writeIOWallTimeStat(ioTimeStartMicros);
-
-  if (hook) {
-    // Record number of rows loaded directly into ValueHook bypassing
-    // materialization into vector. This counter can be used to understand
-    // whether aggregation pushdown is happening or not.
-    addThreadLocalRuntimeStat("loadedToValueHook", RuntimeCounter(rows.size()));
-  }
 }
 
 void VectorLoader::loadInternal(
