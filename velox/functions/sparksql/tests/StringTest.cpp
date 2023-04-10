@@ -396,6 +396,8 @@ TEST_F(StringTest, substring) {
   EXPECT_EQ(substring("example", -7, 2), "ex");
   EXPECT_EQ(substring("example", -8, 2), "e");
   EXPECT_EQ(substring("example", -9, 2), "");
+  EXPECT_EQ(substring("example", -7, 7), "example");
+  EXPECT_EQ(substring("example", -9, 9), "example");
   EXPECT_EQ(substring("example", 4, 2147483645), "mple");
   EXPECT_EQ(substring("example", 2147483645, 4), "");
   EXPECT_EQ(substring("example", -2147483648, 1), "");
