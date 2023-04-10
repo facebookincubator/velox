@@ -167,12 +167,12 @@ class QueryConfig {
       "spillable-reservation-growth-pct";
 
   uint64_t maxPartialAggregationMemoryUsage() const {
-    static constexpr uint64_t kDefault = 1L << 24;
+    static constexpr uint64_t kDefault = 20UL * 1024 * 1024;
     return get<uint64_t>(kMaxPartialAggregationMemory, kDefault);
   }
 
   uint64_t maxExtendedPartialAggregationMemoryUsage() const {
-    static constexpr uint64_t kDefault = 1L << 26;
+    static constexpr uint64_t kDefault = 80UL * 1024 * 1024;
     return get<uint64_t>(kMaxExtendedPartialAggregationMemory, kDefault);
   }
 
