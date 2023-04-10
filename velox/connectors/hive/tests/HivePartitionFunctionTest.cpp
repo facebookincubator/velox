@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include <connectors/hive/HiveConnector.h>
 #include "gtest/gtest.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -276,4 +277,18 @@ TEST_F(HivePartitionFunctionTest, date) {
   assertPartitionsWithConstChannel(values, 2);
   assertPartitionsWithConstChannel(values, 500);
   assertPartitionsWithConstChannel(values, 997);
+}
+
+TEST_F(HivePartitionFunctionTest, HivePartitionFunctionSpecTest) {
+  int bucketCount = 10;
+  std::vector<int> bucketToPartition(bucketCount);
+  std::iota(bucketToPartition.begin(), bucketToPartition.end(), 0);
+  std::vector<column_index_t> channels{1};
+  std::vector<VectorPtr> constValues{nullptr};
+  auto hivePartitionFunctionSpec =
+      std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+          bucketCount, bucketToPartition, channels, constValues);
+  ASSERT_EQ(
+      hivePartitionFunctionSpec->toString(),
+      "HIVE({NUM_BUCKETS:10, KEYS channels:1, KEYS constValues:})");
 }

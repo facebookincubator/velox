@@ -58,4 +58,31 @@ class HashPartitionFunction : public core::PartitionFunction {
   SelectivityVector rows_;
   raw_vector<uint64_t> hashes_;
 };
+
+class HashPartitionFunctionSpec : public core::PartitionFunctionSpec {
+ public:
+  HashPartitionFunctionSpec(
+      RowTypePtr inputType,
+      const std::vector<column_index_t>& keys,
+      const std::vector<VectorPtr>& constValues = {})
+      : inputType_{inputType}, keys_{keys}, constValues_{constValues} {}
+
+  std::unique_ptr<core::PartitionFunction> create(
+      int numPartitions) const override;
+
+  std::string toString() const override {
+    return fmt::format("HASH({})", folly::join(", ", keys_));
+  }
+
+  folly::dynamic serialize() const override;
+
+  static core::PartitionFunctionSpecPtr deserialize(
+      const folly::dynamic& obj,
+      void* context);
+
+ private:
+  const RowTypePtr inputType_;
+  const std::vector<column_index_t> keys_;
+  const std::vector<VectorPtr> constValues_;
+};
 } // namespace facebook::velox::exec

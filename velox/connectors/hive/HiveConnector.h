@@ -327,4 +327,46 @@ class HiveHadoop2ConnectorFactory : public HiveConnectorFactory {
       : HiveConnectorFactory(kHiveHadoop2ConnectorName) {}
 };
 
+class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
+ public:
+  HivePartitionFunctionSpec(
+      int numBuckets,
+      const std::vector<int>& bucketToPartition,
+      const std::vector<column_index_t> channels,
+      const std::vector<VectorPtr> constValues)
+      : numBuckets_(numBuckets),
+        bucketToPartition_(bucketToPartition),
+        channels_(channels),
+        constValues_(constValues) {}
+
+  std::unique_ptr<core::PartitionFunction> create(
+      int numPartitions) const override;
+
+  std::string toString() const override {
+    std::string constValuesString;
+    for (auto element : constValues_) {
+      constValuesString.append(element ? element->toString() + "," : "");
+    }
+    if (constValuesString.size() > 0) {
+      constValuesString.pop_back();
+    }
+
+    return "HIVE({NUM_BUCKETS:" + std::to_string(numBuckets_) +
+        ", KEYS channels:" + folly::join(", ", channels_) +
+        ", KEYS constValues:" + constValuesString + "})";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static core::PartitionFunctionSpecPtr deserialize(
+      const folly::dynamic& obj,
+      void* context);
+
+ private:
+  const int numBuckets_;
+  const std::vector<int> bucketToPartition_;
+  const std::vector<column_index_t> channels_;
+  const std::vector<VectorPtr> constValues_;
+};
+
 } // namespace facebook::velox::connector::hive

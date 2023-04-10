@@ -114,3 +114,17 @@ TEST_F(HashPartitionFunctionTest, HashPartitionFunction) {
     EXPECT_EQ(4, functionWithBits2.numPartitions());
   }
 }
+
+TEST_F(HashPartitionFunctionTest, HashPartitionFunctionSpec) {
+  Type::registerSerDe();
+  RowTypePtr outputType(
+      ROW({"c0", "c1", "c2", "c3", "c4"},
+          {BIGINT(), SMALLINT(), INTEGER(), BIGINT(), VARCHAR()}));
+  core::PartitionFunctionSpecPtr hashPartitionFunctionSpec =
+      std::make_unique<exec::HashPartitionFunctionSpec>(
+          outputType, std::vector<column_index_t>{0, 1, 2, 3, 4});
+
+  auto serialized = hashPartitionFunctionSpec->serialize();
+  auto copy = HashPartitionFunctionSpec::deserialize(serialized, pool());
+  ASSERT_EQ(hashPartitionFunctionSpec->toString(), copy->toString());
+}
