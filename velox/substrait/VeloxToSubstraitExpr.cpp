@@ -453,11 +453,9 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
         ::substrait::
             Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL);
   } else {
-    // It is equivalent to the setting with
-    // Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION.
     substraitCastExpr->set_failure_behavior(
         ::substrait::
-            Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED);
+            Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION);
   }
   return *substraitCastExpr;
 }

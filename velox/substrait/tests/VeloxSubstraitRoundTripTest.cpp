@@ -68,36 +68,30 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
     // Convert Substrait Plan to the same Velox Plan.
     auto samePlan = substraitConverter_->toVeloxPlan(substraitPlan);
 
-    // Assert velox again.
-    assertQuery(samePlan, duckDbSql);
-  }
+    // Test projection.
+    if (auto projectNodeOriginal =
+            std::dynamic_pointer_cast<const core::ProjectNode>(samePlan)) {
+      auto projectionsOriginal = projectNodeOriginal->projections();
 
-  void assertCastPlanConversion(
-      const std::shared_ptr<const core::PlanNode>& plan,
-      const std::string& duckDbSql) {
-    assertQuery(plan, duckDbSql);
-
-    // Convert Velox Plan to Substrait Plan.
-    google::protobuf::Arena arena;
-    auto substraitPlan = veloxConvertor_->toSubstrait(arena, plan);
-
-    // Convert Substrait Plan to the same Velox Plan.
-    auto samePlan = substraitConverter_->toVeloxPlan(substraitPlan);
-    auto projections =
-        std::dynamic_pointer_cast<const core::ProjectNode>(samePlan)
-            ->projections();
-    auto projectionsOriginal =
-        std::dynamic_pointer_cast<const core::ProjectNode>(plan)->projections();
-    ASSERT_EQ(projections.size(), projectionsOriginal.size());
-    for (int i = 0; i < projections.size(); i++) {
-      auto castExpr =
-          std::dynamic_pointer_cast<const core::CastTypedExpr>(projections[i]);
-      auto castExprOriginal =
-          std::dynamic_pointer_cast<const core::CastTypedExpr>(
-              projectionsOriginal[i]);
-      // The cast failure behavior should keep consistent after the round trip
-      // conversion.
-      ASSERT_EQ(castExpr->nullOnFailure(), castExprOriginal->nullOnFailure());
+      auto projectNode =
+          std::dynamic_pointer_cast<const core::ProjectNode>(samePlan);
+      ASSERT_TRUE(projectNode != nullptr);
+      auto projections = projectNode->projections();
+      ASSERT_EQ(projections.size(), projectionsOriginal.size());
+      for (int i = 0; i < projections.size(); i++) {
+        // Test cast.
+        if (auto castExprOriginal =
+                std::dynamic_pointer_cast<const core::CastTypedExpr>(
+                    projectionsOriginal[i])) {
+          auto castExpr = std::dynamic_pointer_cast<const core::CastTypedExpr>(
+              projections[i]);
+          ASSERT_TRUE(castExpr != nullptr);
+          // The cast failure behavior should keep consistent after the round
+          // trip conversion.
+          ASSERT_EQ(
+              castExpr->nullOnFailure(), castExprOriginal->nullOnFailure());
+        }
+      }
     }
 
     // Assert velox again.
@@ -123,7 +117,7 @@ TEST_F(VeloxSubstraitRoundTripTest, cast) {
   createDuckDbTable(vectors);
   auto plan =
       PlanBuilder().values(vectors).project({"cast(c0 as bigint)"}).planNode();
-  assertCastPlanConversion(plan, "SELECT cast(c0 as bigint) FROM tmp");
+  assertPlanConversion(plan, "SELECT cast(c0 as bigint) FROM tmp");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, filter) {

@@ -145,6 +145,24 @@ VectorPtr constructFlatVector(
   return vector;
 }
 
+/// Whether null will be returned on cast failure.
+bool isNullOnFailure(
+    ::substrait::Expression::Cast::FailureBehavior failureBehavior) {
+  switch (failureBehavior) {
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
+      return false;
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL:
+      return true;
+    default:
+      VELOX_NYI(
+          "The given failure behavior is NOT supported: '{}'", failureBehavior);
+  }
+}
+
 } // namespace
 
 namespace facebook::velox::substrait {
@@ -328,23 +346,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       toVeloxExpr(castExpr.input(), inputType)};
 
   return std::make_shared<core::CastTypedExpr>(type, inputs, nullOnFailure);
-}
-
-bool SubstraitVeloxExprConverter::isNullOnFailure(
-    ::substrait::Expression::Cast::FailureBehavior failureBehavior) {
-  switch (failureBehavior) {
-    case ::substrait::
-        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:
-    case ::substrait::
-        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
-      return false;
-    case ::substrait::
-        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL:
-      return true;
-    default:
-      VELOX_NYI(
-          "The given failure behavior is NOT supported: '{}'", failureBehavior);
-  }
 }
 
 std::shared_ptr<const core::ITypedExpr>

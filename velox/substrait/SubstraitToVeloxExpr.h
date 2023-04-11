@@ -63,10 +63,6 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression::IfThen& substraitIfThen,
       const RowTypePtr& inputType);
 
-  /// Whether null will be returned on cast failure.
-  bool isNullOnFailure(
-      ::substrait::Expression::Cast::FailureBehavior failureBehavior);
-
  private:
   /// Convert list literal to ArrayVector.
   ArrayVectorPtr literalsToArrayVector(
