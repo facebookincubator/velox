@@ -3027,4 +3027,8 @@ TEST_F(DateTimeFunctionsTest, timeZoneHourTest) {
   // Different time with same date
   EXPECT_EQ(-4, timezone_hour("2023-01-01 03:20:00", "Canada/Atlantic"));
   EXPECT_EQ(-4, timezone_hour("2023-01-01 10:00:00", "Canada/Atlantic"));
+  // Invalid inputs
+  EXPECT_THROW(
+      timezone_hour("invalid_date", "Canada/Atlantic"), VeloxUserError);
+  EXPECT_THROW(timezone_hour("invalid_date", "Pacific/Ch"), VeloxUserError);
 }
