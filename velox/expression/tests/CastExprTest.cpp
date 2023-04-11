@@ -805,6 +805,16 @@ TEST_F(CastExprTest, toString) {
   ASSERT_EQ("cast((a) as ARRAY<VARCHAR>)", exprSet.exprs()[1]->toString());
 }
 
+TEST_F(CastExprTest, decimalToDouble) {
+  // short to short, scale up.
+  auto shortFlat =
+      makeShortDecimalFlatVector({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(2, 2));
+  testComplexCast(
+      "c0",
+      shortFlat,
+      makeFlatVector<double>({-0.30, -0.2, -0.1, 0, 0.55, 0.69, 0.72}));
+}
+
 TEST_F(CastExprTest, decimalToDecimal) {
   // short to short, scale up.
   auto shortFlat =
