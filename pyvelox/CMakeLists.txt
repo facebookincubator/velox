@@ -13,10 +13,6 @@
 # limitations under the License.
 if(VELOX_BUILD_PYTHON_PACKAGE)
   message("Creating pyvelox module")
-  
-  message("INCLUDE DIR>>>>>>>>>> : "${Protobuf_INCLUDE_DIRS})
-  message("Libraries>>>>>>>>> :" ${Protobuf_LIBRARIES})
-  message("CMAKE_SOURCE_DIR >>>>>>>>>>>>>>> : ", ${CMAKE_SOURCE_DIR})
   include_directories(SYSTEM ${CMAKE_SOURCE_DIR} ${Protobuf_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/velox/external/xxhash)
   add_definitions(-DCREATE_PYVELOX_MODULE -DVELOX_DISABLE_GOOGLETEST)
   # Define our Python module:
@@ -44,7 +40,6 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
 else()
   # Torcharrow will not use pyvelox as an extension module for compatibility
   # reasons.
-  message(">>>>>>>>>>>>>>> NOT VELOX_BUILD_PYTHON_PACKAGE")
   message("Creating pyvelox library")
   add_library(pyvelox pyvelox.cpp pyvelox.h)
   target_link_libraries(pyvelox velox_type pybind11::module)

@@ -19,6 +19,7 @@
 #include <fstream>
 #include <sstream>
 #include "velox/common/base/Exceptions.h"
+#include <velox/substrait/SubstraitExecutor.h>
 #include <iostream>
 
 namespace facebook::velox::py {
@@ -43,38 +44,31 @@ static void readFromFile(
       status.message());
 }
 
-void runSubstraitQuery(const std::string& plan) {
+RowVectorPtr runSubstraitQuery(const std::string& planPath) {
   std::shared_ptr<memory::MemoryPool> pool = memory::getDefaultMemoryPool();
   std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter> planConverter =
       std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool.get());
-  auto planPath = "/home/asus/github/fork/velox/velox/substrait/tests/data/substrait_virtualTable.json";
 
   ::substrait::Plan substraitPlan;
   readFromFile(planPath, substraitPlan);
 
-  auto veloxPlan = planConverter->toVeloxPlan(substraitPlan);
-  auto fragment = std::make_shared<facebook::velox::core::PlanFragment>(veloxPlan);
-  facebook::velox::exec::Consumer consumer =
-      [&](facebook::velox::RowVectorPtr output,
-          facebook::velox::ContinueFuture*) -> facebook::velox::exec::BlockingReason {
-    if (output) {
-      std::cout << output->toString() << std::endl;
-      std::cout << output->toString(0, 10) << std::endl;
+    auto veloxPlan = planConverter->toVeloxPlan(substraitPlan);
+    auto fragment = std::make_shared<facebook::velox::core::PlanFragment>(veloxPlan);
+    std::shared_ptr<folly::Executor> executor(std::make_shared<folly::CPUThreadPoolExecutor>(1));
+    auto substrait_task = std::make_shared<facebook::velox::exec::Task>(
+            "substrait_task", *fragment, 0,
+            std::make_shared<facebook::velox::core::QueryCtx>(executor.get()));
+    
+    auto result = substrait_task->next();
+
+    while (auto tmp = substrait_task->next()) {
     }
-    return facebook::velox::exec::BlockingReason::kNotBlocked;
-  };
-  std::shared_ptr<folly::Executor> executor(
-      std::make_shared<folly::CPUThreadPoolExecutor>(1));
+    return result;
+}
 
-  auto substrait_task = std::make_shared<facebook::velox::exec::Task>(
-      "substrait_task", *fragment, 0,
-      std::make_shared<facebook::velox::core::QueryCtx>(executor.get()), consumer);
-
-  facebook::velox::exec::Task::start(substrait_task, 1);
-
-  while (substrait_task->isRunning()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
+void runSubstraitQueryByFile(const std::string& planPath) {
+    facebook::velox::substrait::RunQueryByFile(planPath);
+    //std::cout << "Executed >> " << val->toString(0, 10) << std::endl;
 }
 
 
@@ -84,7 +78,7 @@ void addSubstraitBindings(py::module& m, bool asModuleLocalDefinitions) {
       "run_substrait_query",
       &runSubstraitQuery,
       "Runs a Substrait query and return output.",
-      py::arg("plan") = "");
+      py::arg("plan_path") = "");
 
 }
 } // namespace facebook::velox::py
