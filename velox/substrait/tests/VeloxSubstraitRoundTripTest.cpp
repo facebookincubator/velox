@@ -58,8 +58,21 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
 
   void assertPlanConversion(
       const std::shared_ptr<const core::PlanNode>& plan,
-      const std::string& duckDbSql) {
-    assertQuery(plan, duckDbSql);
+      const std::string& duckDbSql,
+      bool expectFailure = false,
+      const std::string& errorMsg = "") {
+    if (expectFailure) {
+      bool hasError = false;
+      try {
+        assertQuery(plan, duckDbSql);
+      } catch (const VeloxUserError& e) {
+        hasError = true;
+        ASSERT_TRUE(e.message().find(errorMsg) != std::string::npos);
+      }
+      ASSERT_TRUE(hasError);
+    } else {
+      assertQuery(plan, duckDbSql);
+    }
 
     // Convert Velox Plan to Substrait Plan.
     google::protobuf::Arena arena;
@@ -68,34 +81,19 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
     // Convert Substrait Plan to the same Velox Plan.
     auto samePlan = substraitConverter_->toVeloxPlan(substraitPlan);
 
-    // Test projection.
-    if (auto projectNodeOriginal =
-            std::dynamic_pointer_cast<const core::ProjectNode>(samePlan)) {
-      auto projectionsOriginal = projectNodeOriginal->projections();
-
-      auto projectNode =
-          std::dynamic_pointer_cast<const core::ProjectNode>(samePlan);
-      ASSERT_TRUE(projectNode != nullptr);
-      auto projections = projectNode->projections();
-      ASSERT_EQ(projections.size(), projectionsOriginal.size());
-      for (int i = 0; i < projections.size(); i++) {
-        // Test cast.
-        if (auto castExprOriginal =
-                std::dynamic_pointer_cast<const core::CastTypedExpr>(
-                    projectionsOriginal[i])) {
-          auto castExpr = std::dynamic_pointer_cast<const core::CastTypedExpr>(
-              projections[i]);
-          ASSERT_TRUE(castExpr != nullptr);
-          // The cast failure behavior should keep consistent after the round
-          // trip conversion.
-          ASSERT_EQ(
-              castExpr->nullOnFailure(), castExprOriginal->nullOnFailure());
-        }
-      }
-    }
-
     // Assert velox again.
-    assertQuery(samePlan, duckDbSql);
+    if (expectFailure) {
+      bool hasError = false;
+      try {
+        assertQuery(samePlan, duckDbSql);
+      } catch (const VeloxUserError& e) {
+        hasError = true;
+        ASSERT_TRUE(e.message().find(errorMsg) != std::string::npos);
+      }
+      ASSERT_TRUE(hasError);
+    } else {
+      assertQuery(samePlan, duckDbSql);
+    }
   }
 
   std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =
@@ -115,9 +113,28 @@ TEST_F(VeloxSubstraitRoundTripTest, project) {
 TEST_F(VeloxSubstraitRoundTripTest, cast) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
-  auto plan =
+  // Cast int32 to int64.
+  auto plan1 =
       PlanBuilder().values(vectors).project({"cast(c0 as bigint)"}).planNode();
-  assertPlanConversion(plan, "SELECT cast(c0 as bigint) FROM tmp");
+  assertPlanConversion(plan1, "SELECT cast(c0 as bigint) FROM tmp");
+
+  // Cast literal "abc" to int64 and allow cast failure, expecting no exception.
+  auto plan2 = PlanBuilder()
+                   .values(vectors)
+                   .project({"try_cast('abc' as bigint)"})
+                   .planNode();
+  assertPlanConversion(plan2, "SELECT try_cast('abc' as bigint) FROM tmp");
+
+  // Cast literal "abc" to int64, expecting an exception to be thrown.
+  auto plan3 = PlanBuilder()
+                   .values(vectors)
+                   .project({"cast('abc' as bigint)"})
+                   .planNode();
+  assertPlanConversion(
+      plan3,
+      "SELECT cast('abc' as bigint) FROM tmp",
+      true,
+      "Failed to cast from VARCHAR to BIGINT");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, filter) {
