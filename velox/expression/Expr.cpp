@@ -629,41 +629,31 @@ void Expr::evaluateSharedSubexpr(
     EvalCtx& context,
     VectorPtr& result,
     TEval eval) {
-  // Captures the inputs referenced by distinctFields_.
-  std::vector<const BaseVector*> expressionInputFields;
-  for (const auto& field : distinctFields_) {
-    expressionInputFields.push_back(
-        context.getField(field->index(context)).get());
-  }
-
-  auto& [sharedSubexprRows, sharedSubexprValues] =
-      sharedSubexprResults_[expressionInputFields];
-
-  if (sharedSubexprValues == nullptr) {
+  if (sharedSubexprValues_ == nullptr) {
     eval(rows, context, result);
 
-    if (!sharedSubexprRows) {
-      sharedSubexprRows = context.execCtx()->getSelectivityVector(rows.size());
+    if (!sharedSubexprRows_) {
+      sharedSubexprRows_ = context.execCtx()->getSelectivityVector(rows.size());
     }
 
-    *sharedSubexprRows = rows;
+    *sharedSubexprRows_ = rows;
     if (context.errors()) {
       // Clear the rows which failed to compute.
-      context.deselectErrors(*sharedSubexprRows);
-      if (!sharedSubexprRows->hasSelections()) {
+      context.deselectErrors(*sharedSubexprRows_);
+      if (!sharedSubexprRows_->hasSelections()) {
         // Do not store a reference to 'result' if we cannot use any rows from
         // it.
         return;
       }
     }
 
-    sharedSubexprValues = result;
+    sharedSubexprValues_ = result;
     return;
   }
 
-  if (rows.isSubset(*sharedSubexprRows)) {
+  if (rows.isSubset(*sharedSubexprRows_)) {
     // We have results for all requested rows. No need to compute anything.
-    context.moveOrCopyResult(sharedSubexprValues, rows, result);
+    context.moveOrCopyResult(sharedSubexprValues_, rows, result);
     return;
   }
 
@@ -674,13 +664,13 @@ void Expr::evaluateSharedSubexpr(
   // sharedSubexprRows_.
   LocalSelectivityVector missingRowsHolder(context, rows);
   auto missingRows = missingRowsHolder.get();
-  missingRows->deselect(*sharedSubexprRows);
+  missingRows->deselect(*sharedSubexprRows_);
   VELOX_DCHECK(missingRows->hasSelections());
 
   // Fix finalSelection to avoid losing values outside missingRows.
   // Final selection of rows need to include sharedSubexprRows_, missingRows and
   // current final selection of rows if set.
-  LocalSelectivityVector newFinalSelectionHolder(context, *sharedSubexprRows);
+  LocalSelectivityVector newFinalSelectionHolder(context, *sharedSubexprRows_);
   auto newFinalSelection = newFinalSelectionHolder.get();
   newFinalSelection->select(*missingRows);
   if (!context.isFinalSelection()) {
@@ -690,13 +680,13 @@ void Expr::evaluateSharedSubexpr(
   ScopedFinalSelectionSetter setter(
       context, newFinalSelection, true /*checkCondition*/, true /*override*/);
 
-  eval(*missingRows, context, sharedSubexprValues);
+  eval(*missingRows, context, sharedSubexprValues_);
 
   // Clear the rows which failed to compute.
   context.deselectErrors(*missingRows);
 
-  sharedSubexprRows->select(*missingRows);
-  context.moveOrCopyResult(sharedSubexprValues, rows, result);
+  sharedSubexprRows_->select(*missingRows);
+  context.moveOrCopyResult(sharedSubexprValues_, rows, result);
 }
 
 SelectivityVector* singleRow(

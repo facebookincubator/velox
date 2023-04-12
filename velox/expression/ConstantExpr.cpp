@@ -23,23 +23,23 @@ void ConstantExpr::evalSpecialForm(
     VectorPtr& result) {
   if (needToSetIsAscii_) {
     auto* vector =
-        sharedConstantValue_->asUnchecked<SimpleVector<StringView>>();
+        sharedSubexprValues_->asUnchecked<SimpleVector<StringView>>();
     LocalSingleRow singleRow(context, 0);
     bool isAscii = vector->computeAndSetIsAscii(*singleRow);
     vector->setAllIsAscii(isAscii);
     needToSetIsAscii_ = false;
   }
 
-  if (sharedConstantValue_.unique()) {
-    sharedConstantValue_->resize(rows.end());
+  if (sharedSubexprValues_.unique()) {
+    sharedSubexprValues_->resize(rows.end());
   } else {
-    // By reassigning sharedConstantValue_ we increase the chances that it will
+    // By reassigning sharedSubexprValues_ we increase the chances that it will
     // be unique the next time this expression is evaluated.
-    sharedConstantValue_ =
-        BaseVector::wrapInConstant(rows.end(), 0, sharedConstantValue_);
+    sharedSubexprValues_ =
+        BaseVector::wrapInConstant(rows.end(), 0, sharedSubexprValues_);
   }
 
-  context.moveOrCopyResult(sharedConstantValue_, rows, result);
+  context.moveOrCopyResult(sharedSubexprValues_, rows, result);
 }
 
 void ConstantExpr::evalSpecialFormSimplified(
@@ -56,12 +56,12 @@ void ConstantExpr::evalSpecialFormSimplified(
   // pre-allocated.
   VELOX_CHECK_NULL(result);
 
-  result = BaseVector::wrapInConstant(rows.end(), 0, sharedConstantValue_);
+  result = BaseVector::wrapInConstant(rows.end(), 0, sharedSubexprValues_);
 }
 
 std::string ConstantExpr::toString(bool /*recursive*/) const {
   return fmt::format(
-      "{}:{}", sharedConstantValue_->toString(0), type()->toString());
+      "{}:{}", sharedSubexprValues_->toString(0), type()->toString());
 }
 
 namespace {
@@ -205,14 +205,14 @@ void appendSqlLiteral(
 
 std::string ConstantExpr::toSql(
     std::vector<VectorPtr>* complexConstants) const {
-  VELOX_CHECK_NOT_NULL(sharedConstantValue_);
+  VELOX_CHECK_NOT_NULL(sharedSubexprValues_);
   std::ostringstream out;
-  if (complexConstants && !sharedConstantValue_->type()->isPrimitiveType()) {
+  if (complexConstants && !sharedSubexprValues_->type()->isPrimitiveType()) {
     int idx = complexConstants->size();
     out << "__complex_constant(c" << idx << ")";
-    complexConstants->push_back(sharedConstantValue_);
+    complexConstants->push_back(sharedSubexprValues_);
   } else {
-    appendSqlLiteral(*sharedConstantValue_, 0, out);
+    appendSqlLiteral(*sharedSubexprValues_, 0, out);
   }
   return out.str();
 }

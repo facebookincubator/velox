@@ -72,10 +72,6 @@ class EvalCtx {
     peeledFields_[index] = vector;
   }
 
-  const std::vector<VectorPtr>& peeledFields() {
-    return peeledFields_;
-  }
-
   /// Used by peelEncodings.
   void saveAndReset(ScopedContextSaver& saver, const SelectivityVector& rows);
 
