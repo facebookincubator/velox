@@ -26,6 +26,12 @@ add_subdirectory(external/date)
 add_subdirectory(external/md5)
 #
 
+#pyvelox
+if(${VELOX_BUILD_PYTHON_PACKAGE})
+message(">>>>> velox/velox CMake ")
+
+endif()
+
 # examples depend on expression
 if(${VELOX_ENABLE_EXAMPLES} AND ${VELOX_ENABLE_EXPRESSION})
   add_subdirectory(examples)

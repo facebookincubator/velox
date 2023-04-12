@@ -11,30 +11,40 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 if(VELOX_BUILD_PYTHON_PACKAGE)
   message("Creating pyvelox module")
-  include_directories(SYSTEM ${CMAKE_SOURCE_DIR})
+  
+  message("INCLUDE DIR>>>>>>>>>> : "${Protobuf_INCLUDE_DIRS})
+  message("Libraries>>>>>>>>> :" ${Protobuf_LIBRARIES})
+  message("CMAKE_SOURCE_DIR >>>>>>>>>>>>>>> : ", ${CMAKE_SOURCE_DIR})
+  include_directories(SYSTEM ${CMAKE_SOURCE_DIR} ${Protobuf_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/velox/external/xxhash)
   add_definitions(-DCREATE_PYVELOX_MODULE -DVELOX_DISABLE_GOOGLETEST)
   # Define our Python module:
   pybind11_add_module(pyvelox MODULE pyvelox.cpp serde.cpp signatures.cpp
-                      conversion.cpp)
+                      conversion.cpp substrait.cpp)
   # Link with Velox:
   target_link_libraries(
     pyvelox
     PRIVATE velox_type
             velox_vector
             velox_core
+            velox_dwio_dwrf_proto
+            velox_dwio_dwrf_common
+            velox_hive_connector
             velox_exec
             velox_functions_prestosql
             velox_parse_parser
             velox_functions_prestosql
-            velox_functions_spark)
+            velox_functions_spark
+            ${Protobuf_LIBRARIES}
+            velox_substrait_plan_converter
+            )
 
   install(TARGETS pyvelox LIBRARY DESTINATION .)
 else()
   # Torcharrow will not use pyvelox as an extension module for compatibility
   # reasons.
+  message(">>>>>>>>>>>>>>> NOT VELOX_BUILD_PYTHON_PACKAGE")
   message("Creating pyvelox library")
   add_library(pyvelox pyvelox.cpp pyvelox.h)
   target_link_libraries(pyvelox velox_type pybind11::module)
