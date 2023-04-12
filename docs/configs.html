@@ -77,20 +77,6 @@ the value of <cite>max_extended_partial_aggregation_memory</cite> equals the val
 <cite>max_partial_aggregation_memory</cite>. Specify higher value for <cite>max_extended_partial_aggregation_memory</cite>
 to enable.</p>
 </section>
-<section id="partial-aggregation-reduction-ratio-threshold">
-<h3><code class="docutils literal notranslate"><span class="pre">partial_aggregation_reduction_ratio_threshold</span></code><a class="headerlink" href="#partial-aggregation-reduction-ratio-threshold" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">double</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">0.5</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Cardinality reduction threshold for partial aggregation to enable adaptive memory limit increase
-up to <cite>max_extended_partial_aggregation_memory</cite>. Valid values are between 0 and 1. If
-partial aggregation results reach <cite>max_partial_aggregation_memory</cite> limit and
-<cite>number of result rows / number of input rows &gt; partial_aggregation_reduction_ratio_threshold</cite>
-the limit is automatically doubled up to <cite>max_extended_partial_aggregation_memory</cite>.</p>
-</section>
 </section>
 <section id="spilling">
 <h2>Spilling<a class="headerlink" href="#spilling" title="Permalink to this heading">¶</a></h2>
@@ -264,6 +250,17 @@ sets the update mode to indicate overwriting a partition if exists.
 <code class="docutils literal notranslate"><span class="pre">ERROR</span></code> sets the update mode to indicate error throwing if writing
 to an existing partition.</p>
 </section>
+<section id="immutable-partitions">
+<h3><code class="docutils literal notranslate"><span class="pre">immutable_partitions</span></code><a class="headerlink" href="#immutable-partitions" title="Permalink to this heading">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">bool</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>True if appending data to an existing unpartitioned table is allowed.
+Currently this configuration does not support appending to existing partitions.</p>
+</section>
 </section>
 <section id="spark-specific-configuration">
 <h2>Spark-specific configuration<a class="headerlink" href="#spark-specific-configuration" title="Permalink to this heading">¶</a></h2>
@@ -294,7 +291,6 @@ to an existing partition.</p>
 <li><a class="reference internal" href="#memory-management">Memory Management</a><ul>
 <li><a class="reference internal" href="#max-partial-aggregation-memory"><code class="docutils literal notranslate"><span class="pre">max_partial_aggregation_memory</span></code></a></li>
 <li><a class="reference internal" href="#max-extended-partial-aggregation-memory"><code class="docutils literal notranslate"><span class="pre">max_extended_partial_aggregation_memory</span></code></a></li>
-<li><a class="reference internal" href="#partial-aggregation-reduction-ratio-threshold"><code class="docutils literal notranslate"><span class="pre">partial_aggregation_reduction_ratio_threshold</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#spilling">Spilling</a><ul>
@@ -315,6 +311,7 @@ to an existing partition.</p>
 <li><a class="reference internal" href="#hive-connector">Hive Connector</a><ul>
 <li><a class="reference internal" href="#max-partitions-per-writers"><code class="docutils literal notranslate"><span class="pre">max_partitions_per_writers</span></code></a></li>
 <li><a class="reference internal" href="#insert-existing-partitions-behavior"><code class="docutils literal notranslate"><span class="pre">insert_existing_partitions_behavior</span></code></a></li>
+<li><a class="reference internal" href="#immutable-partitions"><code class="docutils literal notranslate"><span class="pre">immutable_partitions</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#spark-specific-configuration">Spark-specific configuration</a><ul>
