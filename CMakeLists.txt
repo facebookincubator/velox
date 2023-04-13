@@ -66,15 +66,14 @@ option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
-option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
+option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_ENABLE_QPL "Enable Qpl support" OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
-option(VELOX_BUILD_BENCHMARKS "Builds Velox benchmarks" ON)
-
+option(VELOX_BUILD_BENCHMARKS "Builds Velox benchmarks" OFF)
 
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
@@ -181,7 +180,8 @@ endif()
 
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
-  if(${CMAKE_SYSTEM_NAME} MATCHES "Linux" AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64"))
+  if(${CMAKE_SYSTEM_NAME} MATCHES "Linux" AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES
+                                               "x86_64"))
     set(VELOX_ENABLE_QPL ON)
   endif()
   # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
