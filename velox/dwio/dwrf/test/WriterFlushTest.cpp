@@ -73,15 +73,13 @@ class MockMemoryPool : public velox::memory::MemoryPool {
 
   // No-op for attempts to shrink buffer.
   void* reallocate(void* p, int64_t size, int64_t newSize) override {
-    auto difference = newSize - size;
-    updateLocalMemoryUsage(difference);
-    // No-op for attempts to shrink buffer. MemoryAllocator's free works
-    // properly despite signature.
-    if (UNLIKELY(difference <= 0)) {
-      return p;
-    }
-    return allocator_->reallocateBytes(p, size, newSize);
+    void* newP = allocate(newSize);
+    VELOX_CHECK_NOT_NULL(newP);
+    ::memcpy(newP, p, std::min(size, newSize));
+    free(p, size);
+    return newP;
   }
+
   void free(void* p, int64_t size) override {
     allocator_->freeBytes(p, size);
     updateLocalMemoryUsage(-size);
@@ -128,12 +126,6 @@ class MockMemoryPool : public velox::memory::MemoryPool {
       MemoryPool::Kind kind) override {
     return std::make_shared<MockMemoryPool>(
         name, kind, parent, memoryUsageTracker_->maxMemory());
-  }
-
-  void setMemoryUsageTracker(
-      const std::shared_ptr<velox::memory::MemoryUsageTracker>& tracker)
-      override {
-    memoryUsageTracker_ = tracker;
   }
 
   const std::shared_ptr<velox::memory::MemoryUsageTracker>&

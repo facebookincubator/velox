@@ -23,6 +23,7 @@
 #include <velox/common/base/VeloxException.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -110,19 +111,19 @@ void applyDecimalCastKernel(
   });
 }
 
-template <typename TOutput>
-void applyBigintToDecimalCastKernel(
+template <typename TInput, typename TOutput>
+void applyIntToDecimalCastKernel(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
     const TypePtr& toType,
     VectorPtr castResult) {
-  auto sourceVector = input.as<SimpleVector<int64_t>>();
+  auto sourceVector = input.as<SimpleVector<TInput>>();
   auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
   context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-    auto rescaledValue = DecimalUtil::rescaleBigint<TOutput>(
+    auto rescaledValue = DecimalUtil::rescaleInt<TInput, TOutput>(
         sourceVector->valueAt(row),
         toPrecisionScale.first,
         toPrecisionScale.second);
@@ -335,6 +336,25 @@ VectorPtr CastExpr::applyMap(
       nestedRows, elementToTopLevelRows, oldErrors);
   context.swapErrors(oldErrors);
 
+  // Returned map vector should be addressable for every element, even those
+  // that are not selected.
+  BufferPtr sizes = input->sizes();
+  if (newMapKeys->isConstantEncoding() && newMapValues->isConstantEncoding()) {
+    // We extends size since that is cheap.
+    newMapKeys->resize(input->mapKeys()->size());
+    newMapValues->resize(input->mapValues()->size());
+
+  } else if (
+      newMapKeys->size() < input->mapKeys()->size() ||
+      newMapValues->size() < input->mapValues()->size()) {
+    sizes =
+        AlignedBuffer::allocate<vector_size_t>(rows.end(), context.pool(), 0);
+    auto* inputSizes = input->rawSizes();
+    auto* rawSizes = sizes->asMutable<vector_size_t>();
+    rows.applyToSelected(
+        [&](vector_size_t row) { rawSizes[row] = inputSizes[row]; });
+  }
+
   // Assemble the output map
   return std::make_shared<MapVector>(
       context.pool(),
@@ -342,7 +362,7 @@ VectorPtr CastExpr::applyMap(
       input->nulls(),
       rows.end(),
       input->offsets(),
-      input->sizes(),
+      sizes,
       newMapKeys,
       newMapValues);
 }
@@ -380,14 +400,28 @@ VectorPtr CastExpr::applyArray(
   }
   context.swapErrors(oldErrors);
 
-  // Assemble the output array
+  // Returned array vector should be addressable for every element, even those
+  // that are not selected.
+  BufferPtr sizes = input->sizes();
+  if (newElements->isConstantEncoding()) {
+    // If the newElements we extends its size since that is cheap.
+    newElements->resize(input->elements()->size());
+  } else if (newElements->size() < input->elements()->size()) {
+    sizes =
+        AlignedBuffer::allocate<vector_size_t>(rows.end(), context.pool(), 0);
+    auto* inputSizes = input->rawSizes();
+    auto* rawSizes = sizes->asMutable<vector_size_t>();
+    rows.applyToSelected(
+        [&](vector_size_t row) { rawSizes[row] = inputSizes[row]; });
+  }
+
   return std::make_shared<ArrayVector>(
       context.pool(),
       ARRAY(toType.elementType()),
       input->nulls(),
       rows.end(),
       input->offsets(),
-      input->sizes(),
+      sizes,
       newElements);
 }
 
@@ -468,6 +502,7 @@ VectorPtr CastExpr::applyRow(
       std::move(newChildren));
 }
 
+template <typename DecimalType>
 VectorPtr CastExpr::applyDecimal(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -478,36 +513,30 @@ VectorPtr CastExpr::applyDecimal(
   context.ensureWritable(rows, toType, castResult);
   (*castResult).clearNulls(rows);
   switch (fromType->kind()) {
-    case TypeKind::SHORT_DECIMAL: {
-      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyDecimalCastKernel<UnscaledShortDecimal, UnscaledShortDecimal>(
-            rows, input, context, fromType, toType, castResult);
-      } else {
-        applyDecimalCastKernel<UnscaledShortDecimal, UnscaledLongDecimal>(
-            rows, input, context, fromType, toType, castResult);
-      }
+    case TypeKind::SHORT_DECIMAL:
+      applyDecimalCastKernel<UnscaledShortDecimal, DecimalType>(
+          rows, input, context, fromType, toType, castResult);
       break;
-    }
-    case TypeKind::LONG_DECIMAL: {
-      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyDecimalCastKernel<UnscaledLongDecimal, UnscaledShortDecimal>(
-            rows, input, context, fromType, toType, castResult);
-      } else {
-        applyDecimalCastKernel<UnscaledLongDecimal, UnscaledLongDecimal>(
-            rows, input, context, fromType, toType, castResult);
-      }
+    case TypeKind::LONG_DECIMAL:
+      applyDecimalCastKernel<UnscaledLongDecimal, DecimalType>(
+          rows, input, context, fromType, toType, castResult);
       break;
-    }
-    case TypeKind::BIGINT: {
-      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyBigintToDecimalCastKernel<UnscaledShortDecimal>(
-            rows, input, context, toType, castResult);
-      } else {
-        applyBigintToDecimalCastKernel<UnscaledLongDecimal>(
-            rows, input, context, toType, castResult);
-      }
+    case TypeKind::TINYINT:
+      applyIntToDecimalCastKernel<int8_t, DecimalType>(
+          rows, input, context, toType, castResult);
       break;
-    }
+    case TypeKind::SMALLINT:
+      applyIntToDecimalCastKernel<int16_t, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
+    case TypeKind::INTEGER:
+      applyIntToDecimalCastKernel<int32_t, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
+    case TypeKind::BIGINT:
+      applyIntToDecimalCastKernel<int64_t, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
     default:
       VELOX_UNSUPPORTED(
           "Cast from {} to {} is not supported",
@@ -563,8 +592,12 @@ void CastExpr::applyPeeled(
             toType);
         break;
       case TypeKind::SHORT_DECIMAL:
+        result = applyDecimal<UnscaledShortDecimal>(
+            rows, input, context, fromType, toType);
+        break;
       case TypeKind::LONG_DECIMAL:
-        result = applyDecimal(rows, input, context, fromType, toType);
+        result = applyDecimal<UnscaledLongDecimal>(
+            rows, input, context, fromType, toType);
         break;
       default: {
         // Handle primitive type conversions.
@@ -598,13 +631,6 @@ void CastExpr::apply(
     nonNullRows->deselectNulls(rawNulls, rows.begin(), rows.end());
   }
 
-  LocalSelectivityVector nullRows(*context.execCtx(), rows.end());
-  nullRows->clearAll();
-  if (rawNulls) {
-    *nullRows = rows;
-    nullRows->deselectNonNulls(rawNulls, rows.begin(), rows.end());
-  }
-
   VectorPtr localResult;
   if (!nonNullRows->hasSelections()) {
     localResult =
@@ -612,41 +638,32 @@ void CastExpr::apply(
   } else if (decoded->isIdentityMapping()) {
     applyPeeled(
         *nonNullRows, *decoded->base(), context, fromType, toType, localResult);
-
   } else {
     ScopedContextSaver saver;
-    LocalSelectivityVector translatedRowsHolder(*context.execCtx());
+    LocalSelectivityVector newRowsHolder(*context.execCtx());
 
-    if (decoded->isConstantMapping()) {
-      auto index = decoded->index(nonNullRows->begin());
-      singleRow(translatedRowsHolder, index);
-      context.saveAndReset(saver, *nonNullRows);
-      context.setConstantWrap(index);
-    } else {
-      translateToInnerRows(*nonNullRows, *decoded, translatedRowsHolder);
-      context.saveAndReset(saver, *nonNullRows);
-      auto wrapping = decoded->dictionaryWrapping(*input, *nonNullRows);
-      context.setDictionaryWrap(
-          std::move(wrapping.indices), std::move(wrapping.nulls));
-    }
-
+    LocalDecodedVector localDecoded(context);
+    std::vector<VectorPtr> peeledVectors;
+    auto peeledEncoding = PeeledEncoding::Peel(
+        {input}, *nonNullRows, localDecoded, true, peeledVectors);
+    VELOX_CHECK_EQ(peeledVectors.size(), 1);
+    auto newRows =
+        peeledEncoding->translateToInnerRows(*nonNullRows, newRowsHolder);
+    // Save context and set the peel.
+    context.saveAndReset(saver, *nonNullRows);
+    context.setPeeledEncoding(peeledEncoding);
     applyPeeled(
-        *translatedRowsHolder,
-        *decoded->base(),
-        context,
-        fromType,
-        toType,
-        localResult);
+        *newRows, *peeledVectors[0], context, fromType, toType, localResult);
 
-    localResult =
-        context.applyWrapToPeeledResult(toType, localResult, *nonNullRows);
+    localResult = context.getPeeledEncoding()->wrap(
+        toType, context.pool(), localResult, *nonNullRows);
   }
-  context.moveOrCopyResult(localResult, rows, result);
+  context.moveOrCopyResult(localResult, *nonNullRows, result);
   context.releaseVector(localResult);
 
-  // If we have a mix of null and non-null in input, add nulls to the result.
+  // If there are nulls in input, add nulls to the result at the same rows.
   VELOX_CHECK_NOT_NULL(result);
-  if (nullRows->hasSelections() && nonNullRows->hasSelections()) {
+  if (rawNulls) {
     Expr::addNulls(
         rows, nonNullRows->asRange().bits(), context, toType, result);
   }

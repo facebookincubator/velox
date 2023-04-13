@@ -41,6 +41,7 @@ workflows:
       - doc-gen-job
       - linux-presto-fuzzer-run
       - linux-spark-fuzzer-run
+      - linux-spark-aggregate-fuzzer-run
       - linux-aggregate-fuzzer-run
       - linux-join-fuzzer-run
       - docker-compose-ubuntu-cpp
@@ -261,17 +262,9 @@ jobs:
       - run:
           name: "Build"
           command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
             ccache -s
           no_output_timeout: 1h
-      - run:
-          name: "Build and Test PyVelox"
-          command: |
-            conda init bash
-            source ~/.bashrc
-            conda create -y --name pyveloxenv python=3.7
-            conda activate pyveloxenv
-            LD_LIBRARY_PATH=/usr/local/lib make python-test
       - run:
           name: "Run Unit Tests"
           command: |
@@ -318,6 +311,21 @@ jobs:
       - store_artifacts:
           path: '/tmp/spark_fuzzer_repro'
       - run:
+          name: "Run Spark Aggregate Fuzzer Tests"
+          command: |
+            mkdir -p /tmp/spark_aggregate_fuzzer_repro/
+            chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
+            _build/debug/velox/exec/tests/spark_aggregation_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 60 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro \
+            && echo -e "\n\nSpark Aggregation Fuzzer run finished successfully."
+          no_output_timeout: 5m
+      - store_artifacts:
+          path: '/tmp/spark_aggregate_fuzzer_repro'
+      - run:
           name: "Run Aggregate Fuzzer Tests"
           # Run aggregation fuzzer using the built executable.
           command: |
@@ -338,6 +346,28 @@ jobs:
          name: "Run Example Binaries"
          command: |
            find _build/debug/velox/examples/ -maxdepth 1 -type f -executable -exec "{}" \;
+      - run:
+          name: "Build and Test PyVelox"
+          command: |
+            conda init bash
+            source ~/.bashrc
+            conda create -y --name pyveloxenv python=3.7
+            conda activate pyveloxenv
+            LD_LIBRARY_PATH=/usr/local/lib make python-test
+      - run:
+          name: "Check function signatures"
+          command: |
+            source ~/.bashrc
+            conda activate pyveloxenv
+            pip install deepdiff
+            python ./scripts/signature.py export --spark --presto /tmp/pr_signatures.json
+            cp ./scripts/signature.py /tmp/signature.py
+            git checkout main
+            LD_LIBRARY_PATH=/usr/local/lib make python-clean
+            LD_LIBRARY_PATH=/usr/local/lib make python-build
+            cp /tmp/signature.py ./scripts/signature.py
+            python ./scripts/signature.py export --spark --presto /tmp/main_signatures.json
+            python ./scripts/signature.py diff /tmp/main_signatures.json /tmp/pr_signatures.json
       - post-steps
 
   linux-build-release:
@@ -454,6 +484,19 @@ jobs:
           fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \ 
           --repro_persist_path=/tmp/spark_fuzzer_repro"
 
+  linux-spark-aggregate-fuzzer-run:
+    executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - fuzzer-run:
+          fuzzer_output: "/tmp/spark_aggregate_fuzzer.log"
+          fuzzer_repro: "/tmp/spark_aggregate_fuzzer_repro"
+          fuzzer_name: "SparkAggregate"
+          fuzzer_exe: "_build/debug/velox/exec/tests/spark_aggregation_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \
+          --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro"
+
 
   linux-aggregate-fuzzer-run:
     executor: build
@@ -536,7 +579,7 @@ jobs:
             git checkout gh-pages
             cp -R velox/docs/_build/html/* docs
             git add docs
-            if [ -n "$(git status --porcelain)" ]
+            if [ -n "$(git status --porcelain --untracked-files=no)" ]
             then
               git commit -m "Update documentation"
               git push

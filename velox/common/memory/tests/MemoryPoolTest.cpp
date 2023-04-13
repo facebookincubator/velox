@@ -23,6 +23,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 
+DECLARE_bool(velox_memory_leak_check_enabled);
+
 using namespace ::testing;
 using namespace facebook::velox::cache;
 
@@ -111,6 +113,7 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
     return std::make_shared<MemoryManager>(options);
   }
 
+  const int32_t maxMallocBytes_ = 3072;
   const bool useMmap_;
   const bool useCache_;
   folly::Random::DefaultGenerator rng_;
@@ -349,6 +352,19 @@ TEST_P(MemoryPoolTest, AllocTest) {
   ASSERT_EQ(4 * kChunkSize, child->getMaxBytes());
 }
 
+TEST_P(MemoryPoolTest, DISABLED_memoryLeakCheck) {
+  gflags::FlagSaver flagSaver;
+  auto manager = getMemoryManager(8 * GB);
+  auto root = manager->getPool();
+
+  auto child = root->addChild("elastic_quota");
+  const int64_t kChunkSize{32L * MB};
+  void* oneChunk = child->allocate(kChunkSize);
+  FLAGS_velox_memory_leak_check_enabled = true;
+  ASSERT_DEATH(child.reset(), "");
+  child->free(oneChunk, kChunkSize);
+}
+
 TEST_P(MemoryPoolTest, ReallocTestSameSize) {
   auto manager = getMemoryManager(8 * GB);
   auto root = manager->getPool();
@@ -365,11 +381,11 @@ TEST_P(MemoryPoolTest, ReallocTestSameSize) {
 
   void* anotherChunk = pool->reallocate(oneChunk, kChunkSize, kChunkSize);
   ASSERT_EQ(kChunkSize, pool->getCurrentBytes());
-  ASSERT_EQ(kChunkSize, pool->getMaxBytes());
+  ASSERT_EQ(2 * kChunkSize, pool->getMaxBytes());
 
   pool->free(anotherChunk, kChunkSize);
   ASSERT_EQ(0, pool->getCurrentBytes());
-  ASSERT_EQ(kChunkSize, pool->getMaxBytes());
+  ASSERT_EQ(2 * kChunkSize, pool->getMaxBytes());
 }
 
 TEST_P(MemoryPoolTest, ReallocTestHigher) {
@@ -386,11 +402,11 @@ TEST_P(MemoryPoolTest, ReallocTestHigher) {
 
   void* threeChunks = pool->reallocate(oneChunk, kChunkSize, 3 * kChunkSize);
   EXPECT_EQ(3 * kChunkSize, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(4 * kChunkSize, pool->getMaxBytes());
 
   pool->free(threeChunks, 3 * kChunkSize);
   EXPECT_EQ(0, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(4 * kChunkSize, pool->getMaxBytes());
 }
 
 TEST_P(MemoryPoolTest, ReallocTestLower) {
@@ -406,11 +422,11 @@ TEST_P(MemoryPoolTest, ReallocTestLower) {
 
   void* oneChunk = pool->reallocate(threeChunks, 3 * kChunkSize, kChunkSize);
   EXPECT_EQ(kChunkSize, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(4 * kChunkSize, pool->getMaxBytes());
 
   pool->free(oneChunk, kChunkSize);
   EXPECT_EQ(0, pool->getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool->getMaxBytes());
+  EXPECT_EQ(4 * kChunkSize, pool->getMaxBytes());
 }
 
 TEST_P(MemoryPoolTest, allocateZeroFilled) {
@@ -474,9 +490,10 @@ TEST_P(MemoryPoolTest, alignmentCheck) {
 
 TEST_P(MemoryPoolTest, MemoryCapExceptions) {
   MemoryManager manager{{.capacity = 127L * MB}};
-  auto root = manager.getPool();
-  root->setMemoryUsageTracker(
-      MemoryUsageTracker::create(manager.getMemoryQuota()));
+  auto root = manager.getPool(
+      "MemoryCapExceptions",
+      MemoryPool::Kind::kAggregate,
+      manager.getMemoryQuota());
   auto pool = root->addChild("static_quota");
 
   // Capping memory manager.
@@ -529,8 +546,6 @@ TEST_P(MemoryPoolTest, MemoryManagerGlobalCap) {
 TEST_P(MemoryPoolTest, childUsageTest) {
   MemoryManager manager{{.capacity = 8 * GB}};
   auto root = manager.getPool();
-  root->setMemoryUsageTracker(MemoryUsageTracker::create());
-
   auto pool = root->addChild("main_pool", MemoryPool::Kind::kAggregate);
 
   auto verifyUsage = [](std::vector<std::shared_ptr<MemoryPool>>& tree,
@@ -754,9 +769,10 @@ TEST_P(MemoryPoolTest, contiguousAllocateExceedLimit) {
   const MachinePageCount kMaxNumPages = 1 << 10;
   const auto kMemoryCapBytes = kMaxNumPages * AllocationTraits::kPageSize;
   auto manager = getMemoryManager(kMemoryCapBytes);
-  auto root = manager->getPool();
-  auto tracker = MemoryUsageTracker::create(kMemoryCapBytes);
-  root->setMemoryUsageTracker(tracker);
+  auto root = manager->getPool(
+      "contiguousAllocateExceedLimit",
+      MemoryPool::Kind::kAggregate,
+      kMemoryCapBytes);
   auto pool = root->addChild("child");
   ContiguousAllocation allocation;
   pool->allocateContiguous(kMaxNumPages, allocation);
@@ -868,10 +884,9 @@ TEST_P(MemoryPoolTest, nonContiguousAllocate) {
 
 TEST_P(MemoryPoolTest, nonContiguousAllocateWithOldAllocation) {
   auto manager = getMemoryManager(8 * GB);
-  auto root = manager->getPool();
-  root->setMemoryUsageTracker(MemoryUsageTracker::create());
-  auto pool = root->addChild(
-      "nonContiguousAllocateWithOldAllocation", MemoryPool::Kind::kLeaf);
+  auto root = manager->getPool(
+      "nonContiguousAllocateWithOldAllocation", MemoryPool::Kind::kAggregate);
+  auto pool = root->addChild("nonContiguousAllocateWithOldAllocation");
   struct {
     MachinePageCount numOldPages;
     MachinePageCount numNewPages;
@@ -991,12 +1006,10 @@ TEST_P(MemoryPoolTest, persistentNonContiguousAllocateFailure) {
       continue;
     }
     reset();
+
     auto manager = getMemoryManager(8 * GB);
     auto root = manager->getPool();
-    root->setMemoryUsageTracker(MemoryUsageTracker::create());
-    auto pool = root->addChild(
-        "persistentNonContiguousAllocateFailure", MemoryPool::Kind::kLeaf);
-
+    auto pool = root->addChild("persistentNonContiguousAllocateFailure");
     Allocation allocation;
     if (testData.numOldPages > 0) {
       pool->allocateNonContiguous(testData.numOldPages, allocation);
@@ -1096,9 +1109,7 @@ TEST_P(MemoryPoolTest, transientNonContiguousAllocateFailure) {
     reset();
     auto manager = getMemoryManager(8 * GB);
     auto root = manager->getPool();
-    root->setMemoryUsageTracker(MemoryUsageTracker::create());
-    auto pool = root->addChild(
-        "transientNonContiguousAllocateFailure", MemoryPool::Kind::kLeaf);
+    auto pool = root->addChild("transientNonContiguousAllocateFailure");
     Allocation allocation;
     if (testData.numOldPages > 0) {
       pool->allocateNonContiguous(testData.numOldPages, allocation);
@@ -1120,9 +1131,7 @@ TEST_P(MemoryPoolTest, transientNonContiguousAllocateFailure) {
 TEST_P(MemoryPoolTest, contiguousAllocateWithOldAllocation) {
   auto manager = getMemoryManager(8 * GB);
   auto root = manager->getPool();
-  root->setMemoryUsageTracker(MemoryUsageTracker::create());
-  auto pool = root->addChild(
-      "contiguousAllocateWithOldAllocation", MemoryPool::Kind::kLeaf);
+  auto pool = root->addChild("contiguousAllocateWithOldAllocation");
   struct {
     MachinePageCount numOldPages;
     MachinePageCount numNewPages;
@@ -1256,10 +1265,7 @@ TEST_P(MemoryPoolTest, persistentContiguousAllocateFailure) {
     }
     auto manager = getMemoryManager(8 * GB);
     auto root = manager->getPool();
-    root->setMemoryUsageTracker(MemoryUsageTracker::create());
-    auto pool = root->addChild(
-        "persistentContiguousAllocateFailure", MemoryPool::Kind::kLeaf);
-
+    auto pool = root->addChild("persistentContiguousAllocateFailure");
     ContiguousAllocation allocation;
     if (testData.numOldPages > 0) {
       pool->allocateContiguous(testData.numOldPages, allocation);
@@ -1379,9 +1385,7 @@ TEST_P(MemoryPoolTest, transientContiguousAllocateFailure) {
     }
     auto manager = getMemoryManager(8 * GB);
     auto root = manager->getPool();
-    root->setMemoryUsageTracker(MemoryUsageTracker::create());
-    auto pool = root->addChild(
-        "transientContiguousAllocateFailure", MemoryPool::Kind::kLeaf);
+    auto pool = root->addChild("transientContiguousAllocateFailure");
     ContiguousAllocation allocation;
     if (testData.numOldPages > 0) {
       pool->allocateContiguous(testData.numOldPages, allocation);
@@ -1426,11 +1430,11 @@ TEST_P(MemoryPoolTest, nonContiguousAllocateExceedLimit) {
   const MachinePageCount kMaxNumPages = 1 << 10;
   const auto kMemoryCapBytes = kMaxNumPages * AllocationTraits::kPageSize;
   auto manager = getMemoryManager(kMemoryCapBytes);
-  auto root = manager->getPool();
-  root->setMemoryUsageTracker(MemoryUsageTracker::create(kMemoryCapBytes));
-  auto pool = root->addChild(
-      "nonContiguousAllocateExceedLimit", MemoryPool::Kind::kLeaf);
-
+  auto root = manager->getPool(
+      "nonContiguousAllocateExceedLimit",
+      MemoryPool::Kind::kAggregate,
+      kMemoryCapBytes);
+  auto pool = root->addChild("nonContiguousAllocateExceedLimit");
   Allocation allocation;
   pool->allocateNonContiguous(kMaxNumPages, allocation);
   ASSERT_THROW(
@@ -1477,19 +1481,17 @@ TEST_P(MemoryPoolTest, mmapAllocatorCapAllocationError) {
     }
   } testSettings[] = {// NOTE: the failure injection only applies for
                       // allocations that are not delegated to malloc.
-                      {MemoryAllocator::kMaxMallocBytes - 1, false, false},
-                      {MemoryAllocator::kMaxMallocBytes, false, false},
-                      {MemoryAllocator::kMaxMallocBytes + 1, true, false},
-                      {MemoryAllocator::kMaxMallocBytes - 1, false, true},
-                      {MemoryAllocator::kMaxMallocBytes, false, true},
-                      {MemoryAllocator::kMaxMallocBytes + 1, true, true}};
+                      {maxMallocBytes_ - 1, false, false},
+                      {maxMallocBytes_, false, false},
+                      {maxMallocBytes_ + 1, true, false},
+                      {maxMallocBytes_ - 1, false, true},
+                      {maxMallocBytes_, false, true},
+                      {maxMallocBytes_ + 1, true, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto manager = getMemoryManager(8 * GB);
     auto root = manager->getPool();
-    root->setMemoryUsageTracker(MemoryUsageTracker::create());
-    auto pool = root->addChild(
-        "mmapAllocatorCapAllocationError", MemoryPool::Kind::kLeaf);
+    auto pool = root->addChild("mmapAllocatorCapAllocationError");
 
     allocator_->testingSetFailureInjection(
         MemoryAllocator::InjectedFailure::kCap,
@@ -1526,19 +1528,17 @@ TEST_P(MemoryPoolTest, mmapAllocatorCapAllocationZeroFilledError) {
     }
   } testSettings[] = {// NOTE: the failure injection only applies for
                       // allocations that are not delegated to malloc.
-                      {MemoryAllocator::kMaxMallocBytes - 1, 1, false, false},
-                      {MemoryAllocator::kMaxMallocBytes, 1, false, false},
-                      {MemoryAllocator::kMaxMallocBytes + 1, 1, true, false},
-                      {MemoryAllocator::kMaxMallocBytes - 1, 1, false, true},
-                      {MemoryAllocator::kMaxMallocBytes, 1, false, true},
-                      {MemoryAllocator::kMaxMallocBytes + 1, 1, true, true}};
+                      {maxMallocBytes_ - 1, 1, false, false},
+                      {maxMallocBytes_, 1, false, false},
+                      {maxMallocBytes_ + 1, 1, true, false},
+                      {maxMallocBytes_ - 1, 1, false, true},
+                      {maxMallocBytes_, 1, false, true},
+                      {maxMallocBytes_ + 1, 1, true, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto manager = getMemoryManager(8 * GB);
     auto root = manager->getPool();
-    root->setMemoryUsageTracker(MemoryUsageTracker::create());
-    auto pool = root->addChild(
-        "mmapAllocatorCapAllocationZeroFilledError", MemoryPool::Kind::kLeaf);
+    auto pool = root->addChild("mmapAllocatorCapAllocationZeroFilledError");
 
     allocator_->testingSetFailureInjection(
         MemoryAllocator::InjectedFailure::kCap,
@@ -1575,19 +1575,17 @@ TEST_P(MemoryPoolTest, mmapAllocatorCapReallocateError) {
     }
   } testSettings[] = {// NOTE: the failure injection only applies for
                       // allocations that are not delegated to malloc.
-                      {MemoryAllocator::kMaxMallocBytes - 1, false, false},
-                      {MemoryAllocator::kMaxMallocBytes, false, false},
-                      {MemoryAllocator::kMaxMallocBytes + 1, true, false},
-                      {MemoryAllocator::kMaxMallocBytes - 1, false, true},
-                      {MemoryAllocator::kMaxMallocBytes, false, true},
-                      {MemoryAllocator::kMaxMallocBytes + 1, true, true}};
+                      {maxMallocBytes_ - 1, false, false},
+                      {maxMallocBytes_, false, false},
+                      {maxMallocBytes_ + 1, true, false},
+                      {maxMallocBytes_ - 1, false, true},
+                      {maxMallocBytes_, false, true},
+                      {maxMallocBytes_ + 1, true, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto manager = getMemoryManager(8 * GB);
     auto root = manager->getPool();
-    root->setMemoryUsageTracker(MemoryUsageTracker::create());
-    auto pool = root->addChild(
-        "mmapAllocatorCapReallocateError", MemoryPool::Kind::kLeaf);
+    auto pool = root->addChild("mmapAllocatorCapReallocateError");
 
     allocator_->testingSetFailureInjection(
         MemoryAllocator::InjectedFailure::kCap,
@@ -1750,8 +1748,10 @@ class MemoryPoolTester {
 TEST_P(MemoryPoolTest, concurrentUpdateToDifferentPools) {
   constexpr int64_t kMaxMemory = 10 * GB;
   MemoryManager manager{{.capacity = kMaxMemory}};
-  auto root = manager.getPool("concurrentUpdateToDifferentPools");
-  root->setMemoryUsageTracker(memory::MemoryUsageTracker::create(kMaxMemory));
+  auto root = manager.getPool(
+      "concurrentUpdateToDifferentPools",
+      MemoryPool::Kind::kAggregate,
+      kMaxMemory);
   const int32_t kNumThreads = 5;
   // Create one memory tracker per each thread.
   std::vector<std::shared_ptr<MemoryPool>> childPools;
@@ -1783,7 +1783,6 @@ TEST_P(MemoryPoolTest, concurrentUpdatesToTheSamePool) {
   constexpr int64_t kMaxMemory = 8 * GB;
   MemoryManager manager{{.capacity = kMaxMemory}};
   auto root = manager.getPool();
-  root->setMemoryUsageTracker(memory::MemoryUsageTracker::create(kMaxMemory));
 
   const int32_t kNumThreads = 5;
   const int32_t kNumChildPools = 2;
@@ -1873,6 +1872,21 @@ TEST_P(MemoryPoolTest, concurrentPoolStructureAccess) {
   }
   pools.clear();
   ASSERT_EQ(root->getChildCount(), 0);
+}
+
+TEST_P(MemoryPoolTest, usageTrackerOptionTest) {
+  auto manager = getMemoryManager(8 * GB);
+  std::vector<bool> trackUsages = {false, true};
+  for (const auto trackUsage : trackUsages) {
+    auto root = manager->getPool(
+        "usageTrackerOptionTest",
+        MemoryPool::Kind::kAggregate,
+        kMaxMemory,
+        trackUsage);
+    ASSERT_EQ(trackUsage, root->getMemoryUsageTracker() != nullptr);
+    auto child = root->addChild("usageTrackerOptionTest");
+    ASSERT_EQ(trackUsage, child->getMemoryUsageTracker() != nullptr);
+  }
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

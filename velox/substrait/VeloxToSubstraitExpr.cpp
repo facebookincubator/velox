@@ -170,16 +170,6 @@ const ::substrait::Expression_Literal& toSubstraitNotNullLiteral(
       literalExpr->set_date(variantValue.value<TypeKind::DATE>().days());
       break;
     }
-    case velox::TypeKind::INTERVAL_DAY_TIME: {
-      ::substrait::Expression_Literal_IntervalDayToSecond*
-          sIntervalDayToSeconds = google::protobuf::Arena::CreateMessage<
-              ::substrait::Expression_Literal_IntervalDayToSecond>(&arena);
-      sIntervalDayToSeconds->set_microseconds(
-          variantValue.value<TypeKind::INTERVAL_DAY_TIME>().milliseconds() *
-          1000);
-      literalExpr->set_allocated_interval_day_to_second(sIntervalDayToSeconds);
-      break;
-    }
     case velox::TypeKind::VARCHAR: {
       auto vCharValue = variantValue.value<StringView>();
       ::substrait::Expression_Literal::VarChar* sVarChar =
@@ -317,22 +307,6 @@ toSubstraitNotNullLiteral<TypeKind::TIMESTAMP>(
 
 template <>
 const ::substrait::Expression_Literal&
-toSubstraitNotNullLiteral<TypeKind::INTERVAL_DAY_TIME>(
-    google::protobuf::Arena& arena,
-    const IntervalDayTime& value) {
-  ::substrait::Expression_Literal* literalExpr =
-      google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
-          &arena);
-  ::substrait::Expression_Literal_IntervalDayToSecond* sIntervalDayToSeconds =
-      google::protobuf::Arena::CreateMessage<
-          ::substrait::Expression_Literal_IntervalDayToSecond>(&arena);
-  sIntervalDayToSeconds->set_microseconds(value.milliseconds() * 1000);
-  literalExpr->set_allocated_interval_day_to_second(sIntervalDayToSeconds);
-  return *literalExpr;
-}
-
-template <>
-const ::substrait::Expression_Literal&
 toSubstraitNotNullLiteral<TypeKind::VARCHAR>(
     google::protobuf::Arena& arena,
     const velox::StringView& value) {
@@ -447,6 +421,15 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
   for (auto& arg : castExprInputs) {
     substraitCastExpr->mutable_input()->MergeFrom(
         toSubstraitExpr(arena, arg, inputType));
+  }
+  if (castExpr->nullOnFailure()) {
+    substraitCastExpr->set_failure_behavior(
+        ::substrait::
+            Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL);
+  } else {
+    substraitCastExpr->set_failure_behavior(
+        ::substrait::
+            Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION);
   }
   return *substraitCastExpr;
 }

@@ -16,8 +16,8 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/lib/SimpleNumericAggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/prestosql/aggregates/SingleValueAccumulator.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -291,9 +291,6 @@ bool registerArbitrary(const std::string& name) {
             return std::make_unique<ArbitraryAggregate<Timestamp>>(inputType);
           case TypeKind::DATE:
             return std::make_unique<ArbitraryAggregate<Date>>(inputType);
-          case TypeKind::INTERVAL_DAY_TIME:
-            return std::make_unique<ArbitraryAggregate<IntervalDayTime>>(
-                inputType);
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:
           case TypeKind::MAP:

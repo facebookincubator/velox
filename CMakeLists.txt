@@ -61,8 +61,8 @@ option(VELOX_ENABLE_PARSE "Build parser used for unit tests." ON)
 option(VELOX_ENABLE_EXAMPLES
        "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
        OFF)
-option(VELOX_ENABLE_SUBSTRAIT "Buid Substrait-to-Velox converter." OFF)
-option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." ON)
+option(VELOX_ENABLE_SUBSTRAIT "Build Substrait-to-Velox converter." OFF)
+option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
@@ -139,7 +139,7 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(VELOX_ENABLE_AGGREGATES OFF)
   set(VELOX_ENABLE_HIVE_CONNECTOR OFF)
   set(VELOX_ENABLE_TPCH_CONNECTOR OFF)
-  set(VELOX_ENABLE_SPARK_FUNCTIONS OFF)
+  set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
   set(VELOX_ENABLE_EXAMPLES OFF)
   set(VELOX_ENABLE_S3 OFF)
   set(VELOX_ENABLE_SUBSTRAIT OFF)
@@ -263,10 +263,6 @@ if("${MAX_LINK_JOBS}")
   set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
-if("${TREAT_WARNINGS_AS_ERRORS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
-endif()
-
 if("${ENABLE_ALL_WARNINGS}")
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
@@ -379,7 +375,8 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   endif()
 endif()
 
-find_library(RE2 re2 REQUIRED)
+set_source(re2)
+resolve_dependency(re2)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   set_source(pybind11)
@@ -507,6 +504,12 @@ include_directories(.)
 # TODO: Include all other installation files. For now just making sure this
 # generates an installable makefile.
 install(FILES velox/type/Type.h DESTINATION "include/velox")
+
+# Adding this down here prevents warnings in dependencies from stopping the
+# build
+if("${TREAT_WARNINGS_AS_ERRORS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+endif()
 
 add_subdirectory(third_party)
 add_subdirectory(velox)

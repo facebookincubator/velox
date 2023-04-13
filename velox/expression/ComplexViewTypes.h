@@ -491,10 +491,13 @@ template <typename VeloxType, typename T>
 auto materializeElement(const T& element) {
   if constexpr (MaterializeType<VeloxType>::requiresMaterialization) {
     return element.materialize();
-  } else if constexpr (util::is_shared_ptr<VeloxType>::value) {
-    return *element;
   } else {
-    return element;
+    using unwrapped_type = typename UnwrapCustomType<VeloxType>::type;
+    if constexpr (util::is_shared_ptr<unwrapped_type>::value) {
+      return *element;
+    } else {
+      return element;
+    }
   }
 }
 
@@ -1026,11 +1029,11 @@ class GenericView {
   GenericView(
       const DecodedVector& decoded,
       std::array<std::shared_ptr<void>, 3>& castReaders,
-      TypePtr& castType,
+      std::optional<const std::type_info*>& castTypeInfo,
       vector_size_t index)
       : decoded_(decoded),
         castReaders_(castReaders),
-        castType_(castType),
+        castTypeInfo_(castTypeInfo),
         index_(index) {}
 
   uint64_t hash() const {
@@ -1053,7 +1056,7 @@ class GenericView {
     return decoded_.base()->typeKind();
   }
 
-  const TypePtr type() const {
+  const TypePtr& type() const {
     return decoded_.base()->type();
   }
 
@@ -1064,9 +1067,8 @@ class GenericView {
     VELOX_DCHECK(
         CastTypeChecker<ToType>::check(type()),
         fmt::format(
-            "castTo type is not compatible with type of vector, vector type is {}, casted to type is {}",
-            type()->toString(),
-            CppToType<ToType>::create()->toString()));
+            "castTo type is not compatible with type of vector, vector type is {}",
+            type()->toString()));
 
     // TODO: We can distinguish if this is a null-free or not null-free
     // generic. And based on that determine if we want to call operator[] or
@@ -1103,17 +1105,18 @@ class GenericView {
         // This is basically Array<Any>, Map<Any,Any>, Row<Any....>.
         return ensureReaderImpl<B, 1>();
       } else {
-        auto requestedType = CppToType<B>::create();
-        if (castType_) {
+        auto* requestedTypeId = &typeid(B);
+        if (castTypeInfo_.has_value()) {
           VELOX_USER_CHECK(
-              castType_->operator==(*requestedType),
+              std::type_index(**castTypeInfo_) ==
+                  std::type_index(*requestedTypeId),
               fmt::format(
                   "Not allowed to cast to the two types {} and {} within the same batch."
                   "Consider creating a new type set to allow it.",
-                  castType_->toString(),
-                  requestedType->toString()));
+                  typeid(B).name(),
+                  castTypeInfo_.value()->name()));
         } else {
-          castType_ = std::move(requestedType);
+          castTypeInfo_ = {requestedTypeId};
         }
         return ensureReaderImpl<B, 2>();
       }
@@ -1133,7 +1136,7 @@ class GenericView {
 
   const DecodedVector& decoded_;
   std::array<std::shared_ptr<void>, 3>& castReaders_;
-  TypePtr& castType_;
+  std::optional<const std::type_info*>& castTypeInfo_;
   vector_size_t index_;
 };
 

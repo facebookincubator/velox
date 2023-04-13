@@ -33,18 +33,6 @@ the value of `max_extended_partial_aggregation_memory` equals the value of
 `max_partial_aggregation_memory`. Specify higher value for `max_extended_partial_aggregation_memory`
 to enable.
 
-``partial_aggregation_reduction_ratio_threshold``
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-    * **Type:** ``double``
-    * **Default value:** ``0.5``
-
-Cardinality reduction threshold for partial aggregation to enable adaptive memory limit increase
-up to `max_extended_partial_aggregation_memory`. Valid values are between 0 and 1. If
-partial aggregation results reach `max_partial_aggregation_memory` limit and
-`number of result rows / number of input rows > partial_aggregation_reduction_ratio_threshold`
-the limit is automatically doubled up to `max_extended_partial_aggregation_memory`.
-
 Spilling
 --------
 
@@ -190,6 +178,16 @@ the update mode field of the table writer operator output. ``OVERWRITE``
 sets the update mode to indicate overwriting a partition if exists.
 ``ERROR`` sets the update mode to indicate error throwing if writing
 to an existing partition.
+
+``immutable_partitions``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``bool``
+    * **Default value:** ``false``
+
+True if appending data to an existing unpartitioned table is allowed.
+Currently this configuration does not support appending to existing partitions.
+
 
 Spark-specific configuration
 ----------------------------

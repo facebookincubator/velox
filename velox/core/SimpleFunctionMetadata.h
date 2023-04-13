@@ -191,14 +191,16 @@ struct TypeAnalysis {
   void run(TypeAnalysisResults& results) {
     // This should only handle primitives and OPAQUE.
     static_assert(
-        CppToType<T>::isPrimitiveType ||
-        CppToType<T>::typeKind == TypeKind::OPAQUE);
+        SimpleTypeTrait<T>::isPrimitiveType ||
+        SimpleTypeTrait<T>::typeKind == TypeKind::OPAQUE);
     results.stats.concreteCount++;
-    if (isDecimalKind(CppToType<T>::typeKind)) {
-      results.out << detail::strToLowerCopy(std::string(CppToType<T>::name))
+    if (isDecimalKind(SimpleTypeTrait<T>::typeKind)) {
+      results.out << detail::strToLowerCopy(
+                         std::string(SimpleTypeTrait<T>::name))
                   << "(" << kPrecisionVariable << "," << kScaleVariable << ")";
     } else {
-      results.out << detail::strToLowerCopy(std::string(CppToType<T>::name));
+      results.out << detail::strToLowerCopy(
+          std::string(SimpleTypeTrait<T>::name));
     }
   }
 };
@@ -612,7 +614,9 @@ class UDFHolder final
 
   static_assert(
       udf_has_call || udf_has_callNullable || udf_has_callNullFree,
-      "UDF must implement at least one of `call`, `callNullable`, or `callNullFree`");
+      "UDF must implement at least one of `call`, `callNullable`, or `callNullFree` functions.\n"
+      "This error happens also if the output and input types of the functions do not match the\n"
+      "ones used in registration.");
 
   static_assert(
       ValidateVariadicArgs<TArgs...>::value,

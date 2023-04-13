@@ -143,7 +143,7 @@ BlockingReason LocalExchangeQueue::next(
       consumerPromises_.emplace_back("LocalExchangeQueue::next");
       *future = consumerPromises_.back().getSemiFuture();
 
-      return BlockingReason::kWaitForExchange;
+      return BlockingReason::kWaitForProducer;
     }
 
     *data = queue.front();
@@ -279,7 +279,8 @@ LocalPartition::LocalPartition(
       partitionFunction_(
           numPartitions_ == 1
               ? nullptr
-              : planNode->partitionFunctionFactory()(numPartitions_)) {
+              : planNode->partitionFunctionSpec().create(numPartitions_)),
+      blockingReasons_{numPartitions_} {
   VELOX_CHECK(numPartitions_ == 1 || partitionFunction_ != nullptr);
 
   for (auto& queue : queues_) {

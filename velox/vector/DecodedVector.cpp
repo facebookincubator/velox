@@ -52,7 +52,9 @@ void DecodedVector::decode(
     bool loadLazy) {
   reset(end(vector.size(), rows));
   loadLazy_ = loadLazy;
-  if (loadLazy_ && (isLazyNotLoaded(vector) || vector.isLazy())) {
+  bool isTopLevelLazyAndLoaded =
+      vector.isLazy() && vector.asUnchecked<LazyVector>()->isLoaded();
+  if (isTopLevelLazyAndLoaded || (loadLazy_ && isLazyNotLoaded(vector))) {
     decode(*vector.loadedVector(), rows);
     return;
   }
@@ -169,7 +171,8 @@ void DecodedVector::combineWrappers(
     }
 
     auto encoding = values->encoding();
-    if (loadLazy_ && encoding == VectorEncoding::Simple::LAZY) {
+    if (isLazy(encoding) &&
+        (loadLazy_ || values->asUnchecked<LazyVector>()->isLoaded())) {
       values = values->loadedVector();
       encoding = values->encoding();
     }
@@ -413,7 +416,18 @@ void DecodedVector::setBaseDataForConstant(
     });
     setFlatNulls(vector, rows);
   }
-  data_ = vector.valuesAsVoid();
+  if (vector.typeKind() == TypeKind::BOOLEAN) {
+    // When the type of the vector is bool we access the data using
+    // bits::isBitSet(reinterpret_cast<const uint64_t*>(data_), index(idx)).
+    // But vector.valuesAsVoid() returns an address to a bool variable.
+
+    constantBoolDataHolder_ =
+        vector.asUnchecked<ConstantVector<bool>>()->valueAt(0);
+
+    data_ = &constantBoolDataHolder_;
+  } else {
+    data_ = vector.valuesAsVoid();
+  }
   if (!nulls_) {
     nulls_ = vector.isNullAt(0) ? &constantNullMask_ : nullptr;
   }

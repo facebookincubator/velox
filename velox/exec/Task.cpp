@@ -27,6 +27,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/Merge.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/Task.h"
 #if CODEGEN_ENABLED == 1
@@ -571,6 +572,12 @@ void Task::start(
     drivers.reserve(self->numDriversUngrouped_);
     self->createSplitGroupStateLocked(kUngroupedGroupId);
     self->createDriversLocked(self, kUngroupedGroupId, drivers);
+
+    // Prevent the connecting structures from being cleaned up before all split
+    // groups are finished during the grouped exeution mode.
+    if (self->isGroupedExecution()) {
+      self->splitGroupStates_[kUngroupedGroupId].mixedExecutionMode = true;
+    }
 
     // We might have first slots taken for grouped execution drivers, so need to
     // append the ungrouped execution drivers afterwards in that case.
@@ -1408,6 +1415,14 @@ std::shared_ptr<TBridgeType> Task::getJoinBridgeInternalLocked(
   const auto& splitGroupState = splitGroupStates_[splitGroupId];
 
   auto it = splitGroupState.bridges.find(planNodeId);
+  if (it == splitGroupState.bridges.end()) {
+    // We might be looking for a bridge between grouped and ungrouped execution.
+    // It will belong to the 'ungrouped' state.
+    if (isGroupedExecution() && splitGroupId != kUngroupedGroupId) {
+      return getJoinBridgeInternalLocked<TBridgeType>(
+          kUngroupedGroupId, planNodeId);
+    }
+  }
   VELOX_CHECK(
       it != splitGroupState.bridges.end(),
       "Join bridge for plan node ID {} not found for group {}, task {}",
@@ -1613,6 +1628,7 @@ void Task::addOperatorStats(OperatorStats& stats) {
       stats.operatorId >= 0 &&
       stats.operatorId <
           taskStats_.pipelineStats[stats.pipelineId].operatorStats.size());
+  aggregateOperatorRuntimeStats(stats.runtimeStats);
   taskStats_.pipelineStats[stats.pipelineId]
       .operatorStats[stats.operatorId]
       .add(stats);
@@ -1637,6 +1653,7 @@ TaskStats Task::taskStats() const {
 
     for (auto& op : driver->operators()) {
       auto statsCopy = op->stats(false);
+      aggregateOperatorRuntimeStats(statsCopy.runtimeStats);
       taskStats.pipelineStats[statsCopy.pipelineId]
           .operatorStats[statsCopy.operatorId]
           .add(statsCopy);

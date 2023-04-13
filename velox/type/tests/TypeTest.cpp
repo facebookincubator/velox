@@ -27,22 +27,30 @@ void testTypeSerde(const TypePtr& type) {
   auto copy = velox::ISerializable::deserialize<Type>(
       velox::ISerializable::serialize(type));
 
-  ASSERT_EQ(*type, *copy);
   ASSERT_EQ(type->toString(), copy->toString());
+  ASSERT_EQ(*type, *copy);
 }
 } // namespace
 
 TEST(TypeTest, array) {
-  auto arr0 = ARRAY(ARRAY(ARRAY(INTEGER())));
-  EXPECT_EQ("ARRAY<ARRAY<ARRAY<INTEGER>>>", arr0->toString());
-  EXPECT_EQ(arr0->size(), 1);
-  EXPECT_STREQ(arr0->kindName(), "ARRAY");
-  EXPECT_EQ(arr0->isPrimitiveType(), false);
-  EXPECT_STREQ(arr0->elementType()->kindName(), "ARRAY");
-  EXPECT_EQ(arr0->childAt(0)->toString(), "ARRAY<ARRAY<INTEGER>>");
-  EXPECT_THROW(arr0->childAt(1), VeloxUserError);
+  auto arrayType = ARRAY(ARRAY(ARRAY(INTEGER())));
+  EXPECT_EQ("ARRAY<ARRAY<ARRAY<INTEGER>>>", arrayType->toString());
+  EXPECT_EQ(arrayType->size(), 1);
+  EXPECT_STREQ(arrayType->kindName(), "ARRAY");
+  EXPECT_EQ(arrayType->isPrimitiveType(), false);
+  EXPECT_STREQ(arrayType->elementType()->kindName(), "ARRAY");
+  EXPECT_EQ(arrayType->childAt(0)->toString(), "ARRAY<ARRAY<INTEGER>>");
+  EXPECT_THROW(arrayType->childAt(1), VeloxUserError);
 
-  testTypeSerde(arr0);
+  EXPECT_STREQ(arrayType->name(), "ARRAY");
+  EXPECT_EQ(arrayType->parameters().size(), 1);
+  EXPECT_TRUE(arrayType->parameters()[0].kind == TypeParameterKind::kType);
+  EXPECT_EQ(*arrayType->parameters()[0].type, *arrayType->childAt(0));
+
+  EXPECT_EQ(
+      *arrayType, *getType("ARRAY", {TypeParameter(ARRAY(ARRAY(INTEGER())))}));
+
+  testTypeSerde(arrayType);
 }
 
 TEST(TypeTest, integer) {
@@ -131,14 +139,18 @@ TEST(TypeTest, intervalDayTime) {
   EXPECT_EQ(interval->toString(), "INTERVAL DAY TO SECOND");
   EXPECT_EQ(interval->size(), 0);
   EXPECT_THROW(interval->childAt(0), std::invalid_argument);
-  EXPECT_EQ(interval->kind(), TypeKind::INTERVAL_DAY_TIME);
-  EXPECT_STREQ(interval->kindName(), "INTERVAL DAY TO SECOND");
+  EXPECT_EQ(interval->kind(), TypeKind::BIGINT);
+  EXPECT_STREQ(interval->kindName(), "BIGINT");
   EXPECT_EQ(interval->begin(), interval->end());
 
-  IntervalDayTime dt(
-      kMillisInDay * 5 + kMillisInHour * 4 + kMillisInMinute * 6 +
-      kMillisInSecond * 7 + 98);
-  EXPECT_EQ("5 04:06:07.098", dt.toString());
+  EXPECT_TRUE(interval->kindEquals(BIGINT()));
+  EXPECT_NE(*interval, *BIGINT());
+  EXPECT_FALSE(interval->equivalent(*BIGINT()));
+  EXPECT_FALSE(BIGINT()->equivalent(*interval));
+
+  int64_t millis = kMillisInDay * 5 + kMillisInHour * 4 + kMillisInMinute * 6 +
+      kMillisInSecond * 7 + 98;
+  EXPECT_EQ("5 04:06:07.098", INTERVAL_DAY_TIME()->valueToString(millis));
 
   testTypeSerde(interval);
 }
@@ -165,6 +177,24 @@ TEST(TypeTest, shortDecimal) {
       createType(TypeKind::SHORT_DECIMAL, {}),
       "Not supported for kind: SHORT_DECIMAL");
 
+  EXPECT_STREQ(shortDecimal->name(), "SHORT_DECIMAL");
+  EXPECT_EQ(shortDecimal->parameters().size(), 2);
+  EXPECT_TRUE(
+      shortDecimal->parameters()[0].kind == TypeParameterKind::kLongLiteral);
+  EXPECT_EQ(shortDecimal->parameters()[0].longLiteral.value(), 10);
+  EXPECT_TRUE(
+      shortDecimal->parameters()[1].kind == TypeParameterKind::kLongLiteral);
+  EXPECT_EQ(shortDecimal->parameters()[1].longLiteral.value(), 5);
+
+  EXPECT_EQ(
+      *shortDecimal,
+      *getType(
+          "DECIMAL",
+          {
+              TypeParameter(10),
+              TypeParameter(5),
+          }));
+
   testTypeSerde(shortDecimal);
 }
 
@@ -189,6 +219,24 @@ TEST(TypeTest, longDecimal) {
   VELOX_ASSERT_THROW(
       createType(TypeKind::LONG_DECIMAL, {}),
       "Not supported for kind: LONG_DECIMAL");
+
+  EXPECT_STREQ(longDecimal->name(), "LONG_DECIMAL");
+  EXPECT_EQ(longDecimal->parameters().size(), 2);
+  EXPECT_TRUE(
+      longDecimal->parameters()[0].kind == TypeParameterKind::kLongLiteral);
+  EXPECT_EQ(longDecimal->parameters()[0].longLiteral.value(), 30);
+  EXPECT_TRUE(
+      longDecimal->parameters()[1].kind == TypeParameterKind::kLongLiteral);
+  EXPECT_EQ(longDecimal->parameters()[1].longLiteral.value(), 5);
+
+  EXPECT_EQ(
+      *longDecimal,
+      *getType(
+          "DECIMAL",
+          {
+              TypeParameter(30),
+              TypeParameter(5),
+          }));
 
   testTypeSerde(longDecimal);
 }
@@ -290,16 +338,16 @@ TEST(TypeTest, dateFormat) {
 }
 
 TEST(TypeTest, map) {
-  auto map0 = MAP(INTEGER(), ARRAY(BIGINT()));
-  EXPECT_EQ(map0->toString(), "MAP<INTEGER,ARRAY<BIGINT>>");
-  EXPECT_EQ(map0->size(), 2);
-  EXPECT_EQ(map0->childAt(0)->toString(), "INTEGER");
-  EXPECT_EQ(map0->childAt(1)->toString(), "ARRAY<BIGINT>");
-  EXPECT_THROW(map0->childAt(2), VeloxUserError);
-  EXPECT_EQ(map0->kind(), TypeKind::MAP);
-  EXPECT_STREQ(map0->kindName(), "MAP");
+  auto mapType = MAP(INTEGER(), ARRAY(BIGINT()));
+  EXPECT_EQ(mapType->toString(), "MAP<INTEGER,ARRAY<BIGINT>>");
+  EXPECT_EQ(mapType->size(), 2);
+  EXPECT_EQ(mapType->childAt(0)->toString(), "INTEGER");
+  EXPECT_EQ(mapType->childAt(1)->toString(), "ARRAY<BIGINT>");
+  EXPECT_THROW(mapType->childAt(2), VeloxUserError);
+  EXPECT_EQ(mapType->kind(), TypeKind::MAP);
+  EXPECT_STREQ(mapType->kindName(), "MAP");
   int32_t num = 0;
-  for (auto& i : *map0) {
+  for (auto& i : *mapType) {
     if (num == 0) {
       EXPECT_EQ(i->toString(), "INTEGER");
     } else if (num == 1) {
@@ -311,7 +359,23 @@ TEST(TypeTest, map) {
   }
   CHECK_EQ(num, 2);
 
-  testTypeSerde(map0);
+  EXPECT_STREQ(mapType->name(), "MAP");
+  EXPECT_EQ(mapType->parameters().size(), 2);
+  for (auto i = 0; i < 2; ++i) {
+    EXPECT_TRUE(mapType->parameters()[i].kind == TypeParameterKind::kType);
+    EXPECT_EQ(*mapType->parameters()[i].type, *mapType->childAt(i));
+  }
+
+  EXPECT_EQ(
+      *mapType,
+      *getType(
+          "MAP",
+          {
+              TypeParameter(INTEGER()),
+              TypeParameter(ARRAY(BIGINT())),
+          }));
+
+  testTypeSerde(mapType);
 }
 
 TEST(TypeTest, row) {
@@ -351,6 +415,13 @@ TEST(TypeTest, row) {
     seen++;
   }
   CHECK_EQ(seen, 2);
+
+  EXPECT_STREQ(row0->name(), "ROW");
+  EXPECT_EQ(row0->parameters().size(), 2);
+  for (auto i = 0; i < 2; ++i) {
+    EXPECT_TRUE(row0->parameters()[i].kind == TypeParameterKind::kType);
+    EXPECT_EQ(*row0->parameters()[i].type, *row0->childAt(i));
+  }
 
   auto row1 =
       ROW({{"a,b", INTEGER()}, {"my \"column\"", ROW({{"#1", BIGINT()}})}});
@@ -558,7 +629,6 @@ TEST(TypeTest, cpp2Type) {
   EXPECT_EQ(*CppToType<bool>::create(), *BOOLEAN());
   EXPECT_EQ(*CppToType<Timestamp>::create(), *TIMESTAMP());
   EXPECT_EQ(*CppToType<Date>::create(), *DATE());
-  EXPECT_EQ(*CppToType<IntervalDayTime>::create(), *INTERVAL_DAY_TIME());
   EXPECT_EQ(*CppToType<Array<int32_t>>::create(), *ARRAY(INTEGER()));
   auto type = CppToType<Map<int32_t, Map<int64_t, float>>>::create();
   EXPECT_EQ(*type, *MAP(INTEGER(), MAP(BIGINT(), REAL())));
@@ -619,7 +689,6 @@ TEST(TypeTest, kindHash) {
   EXPECT_EQ(BIGINT()->hashKind(), BIGINT()->hashKind());
   EXPECT_EQ(TIMESTAMP()->hashKind(), TIMESTAMP()->hashKind());
   EXPECT_EQ(DATE()->hashKind(), DATE()->hashKind());
-  EXPECT_EQ(INTERVAL_DAY_TIME()->hashKind(), INTERVAL_DAY_TIME()->hashKind());
   EXPECT_NE(BIGINT()->hashKind(), INTEGER()->hashKind());
   EXPECT_EQ(
       ROW({{"a", BIGINT()}})->hashKind(), ROW({{"b", BIGINT()}})->hashKind());
@@ -658,10 +727,27 @@ TEST(TypeTest, kindStreamOp) {
 TEST(TypeTest, function) {
   auto type = std::make_shared<FunctionType>(
       std::vector<TypePtr>{BIGINT(), VARCHAR()}, BOOLEAN());
-  ASSERT_EQ(3, type->size());
-  ASSERT_EQ(BIGINT(), type->childAt(0));
-  ASSERT_EQ(VARCHAR(), type->childAt(1));
-  ASSERT_EQ(BOOLEAN(), type->childAt(2));
+  EXPECT_EQ(3, type->size());
+  EXPECT_EQ(BIGINT(), type->childAt(0));
+  EXPECT_EQ(VARCHAR(), type->childAt(1));
+  EXPECT_EQ(BOOLEAN(), type->childAt(2));
+
+  EXPECT_STREQ(type->name(), "FUNCTION");
+  EXPECT_EQ(type->parameters().size(), 3);
+  for (auto i = 0; i < 3; ++i) {
+    EXPECT_TRUE(type->parameters()[i].kind == TypeParameterKind::kType);
+    EXPECT_EQ(*type->parameters()[i].type, *type->childAt(i));
+  }
+
+  EXPECT_EQ(
+      *type,
+      *getType(
+          "FUNCTION",
+          {
+              TypeParameter(BIGINT()),
+              TypeParameter(VARCHAR()),
+              TypeParameter(BOOLEAN()),
+          }));
 
   testTypeSerde(type);
 }
@@ -678,8 +764,6 @@ TEST(TypeTest, follySformat) {
   EXPECT_EQ("VARBINARY", folly::sformat("{}", VARBINARY()));
   EXPECT_EQ("TIMESTAMP", folly::sformat("{}", TIMESTAMP()));
   EXPECT_EQ("DATE", folly::sformat("{}", DATE()));
-  EXPECT_EQ(
-      "INTERVAL DAY TO SECOND", folly::sformat("{}", INTERVAL_DAY_TIME()));
 
   EXPECT_EQ("ARRAY<VARCHAR>", folly::sformat("{}", ARRAY(VARCHAR())));
   EXPECT_EQ(
@@ -721,7 +805,6 @@ TEST(TypeTest, fromKindToScalerType) {
         TypeKind::VARBINARY,
         TypeKind::TIMESTAMP,
         TypeKind::DATE,
-        TypeKind::INTERVAL_DAY_TIME,
         TypeKind::UNKNOWN}) {
     SCOPED_TRACE(mapTypeKindToName(kind));
     auto type = fromKindToScalerType(kind);

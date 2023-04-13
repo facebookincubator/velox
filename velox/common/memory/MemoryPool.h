@@ -34,6 +34,8 @@
 #include "velox/common/memory/MemoryUsage.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
 
+DECLARE_bool(velox_memory_leak_check_enabled);
+
 namespace facebook::velox::memory {
 
 class MemoryManager;
@@ -105,6 +107,18 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     uint16_t alignment{MemoryAllocator::kMaxAlignment};
     /// Specifies the memory capacity of this memory pool.
     int64_t capacity{kMaxMemory};
+    /// If true, creates the memory usage tracker on constructor to track usage.
+    /// Otherwise not.
+    ///
+    /// NOTE: there are some use cases which doesn't need memory usage tracking
+    /// but sensitive to its cpu cost so we provide an options for user to turn
+    /// it off.
+    bool trackUsage{true};
+    /// If true, check the memory usage leak on destruction.
+    ///
+    /// TODO: deprecate this flag after all the existing memory leak use cases
+    /// have been fixed.
+    bool checkUsageLeak{FLAGS_velox_memory_leak_check_enabled};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -216,14 +230,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Returns the peak memory usage of this memory pool.
   virtual int64_t getMaxBytes() const = 0;
 
-  /// Tracks memory usage from leaf nodes to root and updates immediately
-  /// with atomic operations.
-  /// Unlike pool's getCurrentBytes(), getMaxBytes(), trace's API's returns
-  /// the aggregated usage of subtree. See 'ScopedChildUsageTest' for
-  /// difference in their behavior.
-  virtual void setMemoryUsageTracker(
-      const std::shared_ptr<MemoryUsageTracker>& tracker) = 0;
-
   /// Returns the memory usage tracker associated with this memory pool.
   virtual const std::shared_ptr<MemoryUsageTracker>& getMemoryUsageTracker()
       const = 0;
@@ -277,6 +283,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const Kind kind_;
   const uint16_t alignment_;
   const std::shared_ptr<MemoryPool> parent_;
+  const bool checkUsageLeak_;
 
   /// Protects 'children_'.
   mutable folly::SharedMutex childrenMutex_;
@@ -340,9 +347,6 @@ class MemoryPoolImpl : public MemoryPool {
 
   int64_t getMaxBytes() const override;
 
-  void setMemoryUsageTracker(
-      const std::shared_ptr<MemoryUsageTracker>& tracker) override;
-
   const std::shared_ptr<MemoryUsageTracker>& getMemoryUsageTracker()
       const override;
   int64_t updateSubtreeMemoryUsage(int64_t size) override;
@@ -382,13 +386,13 @@ class MemoryPoolImpl : public MemoryPool {
       std::function<void(const MemoryUsage&)> visitor) const;
   void updateSubtreeMemoryUsage(std::function<void(MemoryUsage&)> visitor);
 
+  const std::shared_ptr<MemoryUsageTracker> memoryUsageTracker_;
   MemoryManager* const memoryManager_;
   MemoryAllocator* const allocator_;
   const DestructionCallback destructionCb_;
 
   // Memory allocated attributed to the memory node.
   MemoryUsage localMemoryUsage_;
-  std::shared_ptr<MemoryUsageTracker> memoryUsageTracker_;
   mutable folly::SharedMutex subtreeUsageMutex_;
   MemoryUsage subtreeMemoryUsage_;
 };

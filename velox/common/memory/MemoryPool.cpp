@@ -29,6 +29,22 @@ namespace {
       /* isRetriable */ true,                                       \
       "Exceeded memory manager cap of {} MB",                       \
       (cap) / 1024 / 1024);
+
+std::shared_ptr<MemoryUsageTracker> createMemoryUsageTracker(
+    MemoryPool* parent,
+    MemoryPool::Kind kind,
+    const MemoryPool::Options& options) {
+  if (parent == nullptr) {
+    return options.trackUsage
+        ? MemoryUsageTracker::create(options.capacity, options.checkUsageLeak)
+        : nullptr;
+  }
+  if (parent->getMemoryUsageTracker() == nullptr) {
+    return nullptr;
+  }
+  return parent->getMemoryUsageTracker()->addChild(
+      kind == MemoryPool::Kind::kLeaf);
+}
 } // namespace
 
 MemoryPool::MemoryPool(
@@ -39,7 +55,8 @@ MemoryPool::MemoryPool(
     : name_(name),
       kind_(kind),
       alignment_{options.alignment},
-      parent_(std::move(parent)) {
+      parent_(std::move(parent)),
+      checkUsageLeak_(options.checkUsageLeak) {
   MemoryAllocator::alignmentCheck(0, alignment_);
   VELOX_CHECK(parent_ != nullptr || kind_ == Kind::kAggregate);
 }
@@ -124,9 +141,6 @@ std::shared_ptr<MemoryPool> MemoryPool::addChild(
       name,
       toString());
   auto child = genChild(shared_from_this(), name, kind);
-  if (auto tracker = getMemoryUsageTracker()) {
-    child->setMemoryUsageTracker(tracker->addChild(kind == Kind::kLeaf));
-  }
   children_.emplace(name, child);
   return child;
 }
@@ -170,24 +184,24 @@ MemoryPoolImpl::MemoryPoolImpl(
     DestructionCallback destructionCb,
     const Options& options)
     : MemoryPool{name, kind, parent, options},
+      memoryUsageTracker_(
+          createMemoryUsageTracker(parent_.get(), kind, options)),
       memoryManager_{memoryManager},
       allocator_{&memoryManager_->getAllocator()},
       destructionCb_(std::move(destructionCb)),
       localMemoryUsage_{} {}
 
 MemoryPoolImpl::~MemoryPoolImpl() {
-  if (const auto& tracker = getMemoryUsageTracker()) {
-    // TODO: change to check reserved bytes which including the unused
-    // reservation.
-    auto remainingBytes = tracker->currentBytes();
+  if (checkUsageLeak_ && (memoryUsageTracker_ != nullptr)) {
+    const auto remainingBytes = memoryUsageTracker_->currentBytes();
     VELOX_CHECK_EQ(
         0,
         remainingBytes,
         "Memory pool {} should be destroyed only after all allocated memory has been freed. Remaining bytes allocated: {}, cumulative bytes allocated: {}, number of allocations: {}",
         name(),
         remainingBytes,
-        tracker->cumulativeBytes(),
-        tracker->numAllocs());
+        memoryUsageTracker_->cumulativeBytes(),
+        memoryUsageTracker_->numAllocs());
   }
   if (destructionCb_ != nullptr) {
     destructionCb_(this);
@@ -238,12 +252,10 @@ void* MemoryPoolImpl::reallocate(
     int64_t newSize) {
   checkMemoryAllocation();
 
-  auto alignedSize = sizeAlign(size);
-  auto alignedNewSize = sizeAlign(newSize);
-  const int64_t difference = alignedNewSize - alignedSize;
-  reserve(difference);
-  void* newP =
-      allocator_->reallocateBytes(p, alignedSize, alignedNewSize, alignment_);
+  const auto alignedSize = sizeAlign(size);
+  const auto alignedNewSize = sizeAlign(newSize);
+  reserve(alignedNewSize);
+  void* newP = allocator_->allocateBytes(alignedNewSize, alignment_);
   if (FOLLY_UNLIKELY(newP == nullptr)) {
     free(p, alignedSize);
     release(alignedNewSize);
@@ -254,6 +266,12 @@ void* MemoryPoolImpl::reallocate(
         size,
         toString()));
   }
+  VELOX_CHECK_NOT_NULL(newP);
+  if (p == nullptr) {
+    return newP;
+  }
+  ::memcpy(newP, p, std::min(size, newSize));
+  free(p, alignedSize);
   return newP;
 }
 
@@ -356,20 +374,6 @@ std::string MemoryPoolImpl::toString() const {
       MemoryAllocator::kindString(allocator_->kind()));
 }
 
-void MemoryPoolImpl::setMemoryUsageTracker(
-    const std::shared_ptr<MemoryUsageTracker>& tracker) {
-  const auto currentBytes = getCurrentBytes();
-  if (memoryUsageTracker_) {
-    if (currentBytes != 0) {
-      memoryUsageTracker_->update(-currentBytes);
-    }
-  }
-  memoryUsageTracker_ = tracker;
-  if (currentBytes != 0) {
-    memoryUsageTracker_->update(currentBytes);
-  }
-}
-
 const std::shared_ptr<MemoryUsageTracker>&
 MemoryPoolImpl::getMemoryUsageTracker() const {
   return memoryUsageTracker_;
@@ -436,7 +440,7 @@ void MemoryPoolImpl::updateSubtreeMemoryUsage(
 void MemoryPoolImpl::reserve(int64_t size) {
   checkMemoryAllocation();
 
-  if (memoryUsageTracker_) {
+  if (memoryUsageTracker_ != nullptr) {
     memoryUsageTracker_->update(size);
   }
   localMemoryUsage_.incrementCurrentBytes(size);
@@ -457,7 +461,7 @@ void MemoryPoolImpl::release(int64_t size) {
 
   memoryManager_->release(size);
   localMemoryUsage_.incrementCurrentBytes(-size);
-  if (memoryUsageTracker_) {
+  if (memoryUsageTracker_ != nullptr) {
     memoryUsageTracker_->update(-size);
   }
 }

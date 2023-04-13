@@ -72,11 +72,6 @@ class WriterContext : public CompressionBufferPool {
     }
     validateConfigs();
     VLOG(1) << fmt::format("Compression config: {}", compression);
-    if (auto tracker = pool_->getMemoryUsageTracker()) {
-      dictionaryPool_->setMemoryUsageTracker(tracker->addChild());
-      outputStreamPool_->setMemoryUsageTracker(tracker->addChild());
-      generalPool_->setMemoryUsageTracker(tracker->addChild());
-    }
     compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
         *generalPool_, compressionBlockSize + PAGE_HEADER_SIZE);
   }
@@ -445,7 +440,6 @@ class WriterContext : public CompressionBufferPool {
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
       case TypeKind::DATE:
-      case TypeKind::INTERVAL_DAY_TIME:
       case TypeKind::SHORT_DECIMAL:
       case TypeKind::LONG_DECIMAL:
         physicalSizeAggregators_.emplace(

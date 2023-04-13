@@ -140,10 +140,6 @@ Date randDate(FuzzerGenerator& rng) {
   return Date(rand<int32_t>(rng));
 }
 
-IntervalDayTime randIntervalDayTime(FuzzerGenerator& rng) {
-  return IntervalDayTime(rand<int64_t>(rng));
-}
-
 size_t getElementsVectorLength(
     const VectorFuzzer::Options& opts,
     vector_size_t size) {
@@ -269,9 +265,6 @@ VectorPtr fuzzConstantPrimitiveImpl(
   } else if constexpr (std::is_same_v<TCpp, Date>) {
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, randDate(rng));
-  } else if constexpr (std::is_same_v<TCpp, IntervalDayTime>) {
-    return std::make_shared<ConstantVector<TCpp>>(
-        pool, size, false, type, randIntervalDayTime(rng));
   } else if constexpr (std::is_same_v<TCpp, UnscaledShortDecimal>) {
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, randShortDecimal(type, rng));
@@ -303,8 +296,6 @@ void fuzzFlatPrimitiveImpl(
       flatVector->set(i, randTimestamp(rng, opts));
     } else if constexpr (std::is_same_v<TCpp, Date>) {
       flatVector->set(i, randDate(rng));
-    } else if constexpr (std::is_same_v<TCpp, IntervalDayTime>) {
-      flatVector->set(i, randIntervalDayTime(rng));
     } else if constexpr (std::is_same_v<TCpp, UnscaledShortDecimal>) {
       flatVector->set(i, randShortDecimal(vector->type(), rng));
     } else if constexpr (std::is_same_v<TCpp, UnscaledLongDecimal>) {
@@ -581,12 +572,7 @@ VectorPtr VectorFuzzer::fuzzDictionary(
   VELOX_CHECK(
       vectorSize > 0 || size == 0,
       "Cannot build a non-empty dictionary on an empty underlying vector");
-  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool_);
-  auto rawIndices = indices->asMutable<vector_size_t>();
-
-  for (size_t i = 0; i < size; ++i) {
-    rawIndices[i] = rand<vector_size_t>(rng_) % vectorSize;
-  }
+  BufferPtr indices = fuzzIndices(size, vectorSize);
 
   auto nulls = opts_.dictionaryHasNulls ? fuzzNulls(size) : nullptr;
   return BaseVector::wrapInDictionary(nulls, indices, size, vector);
@@ -771,6 +757,19 @@ BufferPtr VectorFuzzer::fuzzNulls(vector_size_t size) {
     }
   }
   return builder.build();
+}
+
+BufferPtr VectorFuzzer::fuzzIndices(
+    vector_size_t size,
+    vector_size_t baseVectorSize) {
+  VELOX_CHECK_GE(size, 0);
+  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool_);
+  auto rawIndices = indices->asMutable<vector_size_t>();
+
+  for (size_t i = 0; i < size; ++i) {
+    rawIndices[i] = rand<vector_size_t>(rng_) % baseVectorSize;
+  }
+  return indices;
 }
 
 std::pair<int8_t, int8_t> VectorFuzzer::randPrecisionScale(TypeKind kind) {

@@ -18,7 +18,6 @@
 #include "velox/functions/prestosql/RegexpReplace.h"
 #include "velox/functions/prestosql/SplitPart.h"
 #include "velox/functions/prestosql/StringFunctions.h"
-#include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions {
 
@@ -58,35 +57,6 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<RPadFunction, Varchar, Varchar, int64_t, Varchar>(
       {prefix + "rpad"});
 
-  // Register hash functions.
-  registerFunction<CRC32Function, int64_t, Varbinary>({prefix + "crc32"});
-  registerFunction<XxHash64Function, Varbinary, Varbinary>(
-      {prefix + "xxhash64"});
-  registerFunction<Md5Function, Varbinary, Varbinary>({prefix + "md5"});
-  registerFunction<Sha1Function, Varbinary, Varbinary>({prefix + "sha1"});
-  registerFunction<Sha256Function, Varbinary, Varbinary>({prefix + "sha256"});
-  registerFunction<Sha512Function, Varbinary, Varbinary>({prefix + "sha512"});
-  registerFunction<HmacSha1Function, Varbinary, Varbinary, Varbinary>(
-      {prefix + "hmac_sha1"});
-  registerFunction<HmacSha256Function, Varbinary, Varbinary, Varbinary>(
-      {prefix + "hmac_sha256"});
-  registerFunction<HmacSha512Function, Varbinary, Varbinary, Varbinary>(
-      {prefix + "hmac_sha512"});
-  registerFunction<HmacMd5Function, Varbinary, Varbinary, Varbinary>(
-      {prefix + "hmac_md5"});
-  registerFunction<SpookyHashV232Function, Varbinary, Varbinary>(
-      {prefix + "spooky_hash_v2_32"});
-  registerFunction<SpookyHashV264Function, Varbinary, Varbinary>(
-      {prefix + "spooky_hash_v2_64"});
-
-  registerFunction<ToHexFunction, Varchar, Varbinary>({prefix + "to_hex"});
-  registerFunction<FromHexFunction, Varbinary, Varchar>({prefix + "from_hex"});
-  registerFunction<ToBase64Function, Varchar, Varbinary>(
-      {prefix + "to_base64"});
-  registerFunction<FromBase64Function, Varbinary, Varchar>(
-      {prefix + "from_base64"});
-  registerFunction<ToBase64UrlFunction, Varchar, Varbinary>(
-      {prefix + "to_base64url"});
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
 
@@ -109,6 +79,7 @@ void registerStringFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reverse, prefix + "reverse");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_to_utf8, prefix + "to_utf8");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_from_utf8, prefix + "from_utf8");
 
   // Regex functions
   exec::registerStatefulVectorFunction(

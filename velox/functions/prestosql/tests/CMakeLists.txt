@@ -39,6 +39,7 @@ add_executable(
   ArrayShuffleTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
+  BinaryFunctionsTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
   CeilFloorTest.cpp
@@ -46,6 +47,7 @@ add_executable(
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
   ElementAtTest.cpp
+  FromUtf8Test.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
   InPredicateTest.cpp
@@ -71,6 +73,7 @@ add_executable(
   TransformKeysTest.cpp
   TransformValuesTest.cpp
   URLFunctionsTest.cpp
+  Utf8Test.cpp
   WidthBucketArrayTest.cpp
   GreatestLeastTest.cpp
   ZipTest.cpp

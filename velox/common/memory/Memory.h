@@ -43,6 +43,7 @@
 #include "velox/common/memory/MemoryUsage.h"
 
 DECLARE_int32(memory_usage_aggregation_interval_millis);
+DECLARE_bool(velox_memory_leak_check_enabled);
 
 namespace facebook::velox::memory {
 #define VELOX_MEM_LOG_PREFIX "[MEM] "
@@ -71,6 +72,12 @@ class IMemoryManager {
     /// Specifies the max memory capacity in bytes.
     int64_t capacity{kMaxMemory};
 
+    /// If true, check the memory pool and usage leaks on destruction.
+    ///
+    /// TODO: deprecate this flag after all the existing memory leak use cases
+    /// have been fixed.
+    bool checkUsageLeak{FLAGS_velox_memory_leak_check_enabled};
+
     /// Specifies the backing memory allocator.
     MemoryAllocator* allocator{MemoryAllocator::getInstance()};
   };
@@ -89,11 +96,14 @@ class IMemoryManager {
   /// 'name' is missing, the memory manager generates a default name internally
   /// to ensure uniqueness. If 'kind' is kAggregate, a root memory pool is
   /// created. Otherwise, a leaf memory pool is created as the child of the
-  /// memory manager's default root memory pool.
+  /// memory manager's default root memory pool. If 'kind' is kAggregate and
+  /// 'trackUsage' is true, then set the memory usage tracker in the created
+  /// memory pool.
   virtual std::shared_ptr<MemoryPool> getPool(
       const std::string& name = "",
       MemoryPool::Kind kind = MemoryPool::Kind::kAggregate,
-      int64_t maxBytes = kMaxMemory) = 0;
+      int64_t maxBytes = kMaxMemory,
+      bool trackUsage = true) = 0;
 
   /// Returns the number of alive memory pools allocated from getPool().
   ///
@@ -160,7 +170,8 @@ class MemoryManager final : public IMemoryManager {
   std::shared_ptr<MemoryPool> getPool(
       const std::string& name = "",
       MemoryPool::Kind kind = MemoryPool::Kind::kAggregate,
-      int64_t maxBytes = kMaxMemory) final;
+      int64_t maxBytes = kMaxMemory,
+      bool trackUsage = true) final;
 
   MemoryPool& deprecatedGetPool() final;
 
@@ -187,6 +198,7 @@ class MemoryManager final : public IMemoryManager {
   const std::shared_ptr<MemoryAllocator> allocator_;
   const int64_t memoryQuota_;
   const uint16_t alignment_;
+  const bool checkUsageLeak_;
   // The destruction callback set for the root memory pools created by getPool()
   // which are tracked by 'pools_'. It is invoked on the root pool destruction
   // and removes the pool from 'pools_'.
