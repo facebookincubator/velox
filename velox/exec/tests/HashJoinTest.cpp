@@ -17,6 +17,9 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -4516,7 +4519,8 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKeyParquet) {
                    .partitionKey("k", "0")
                    .build();
   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
-  std::shared_ptr<connector::hive::HiveTableHandle> tableHandle = makeTableHandle();
+  std::shared_ptr<connector::hive::HiveTableHandle> tableHandle =
+      makeTableHandle();
   ColumnHandleMap assignments = {
       {"n1_0", regularColumn("id", BIGINT())},
       {"n1_1", partitionKey("k", BIGINT())}};
