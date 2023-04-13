@@ -36,7 +36,7 @@ option(
 option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
-  ON)
+  OFF)
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
 #
@@ -62,17 +62,19 @@ option(VELOX_ENABLE_EXAMPLES
        "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
        OFF)
 option(VELOX_ENABLE_SUBSTRAIT "Buid Substrait-to-Velox converter." OFF)
-option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
+option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." ON)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
-option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
+option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
+option(VELOX_ENABLE_QPL "Enable Qpl support" OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
-option(VELOX_BUILD_BENCHMARKS "Builds Velox benchmarks" OFF)
+option(VELOX_BUILD_BENCHMARKS "Builds Velox benchmarks" ON)
+
 
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
@@ -90,6 +92,7 @@ if(${VELOX_BUILD_MINIMAL})
   set(VELOX_ENABLE_S3 OFF)
   set(VELOX_ENABLE_SUBSTRAIT OFF)
   set(VELOX_CODEGEN_SUPPORT OFF)
+  set(VELOX_ENABLE_QPL OFF)
 endif()
 
 if(${VELOX_BUILD_TESTING})
@@ -178,6 +181,9 @@ endif()
 
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
+  if(${CMAKE_SYSTEM_NAME} MATCHES "Linux" AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64"))
+    set(VELOX_ENABLE_QPL ON)
+  endif()
   # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
   # are included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
@@ -366,10 +372,8 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(LZO lzo2)
   find_library(ZSTD zstd)
   find_library(SNAPPY snappy)
-  if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR}
-                                                 MATCHES "x86_64"))
-    execute_process(COMMAND apt -y install uuid-dev nasm)
-    execute_process(COMMAND dnf -y install libuuid-devel nasm)
+  if(${VELOX_ENABLE_QPL})
+    add_definitions(-DVELOX_ENABLE_QPL)
     set_source(qpl)
     resolve_dependency(qpl)
   endif()

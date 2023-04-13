@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if((${CMAKE_SYSTEM_NAME} MATCHES "Linux") AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES
-                                               "x86_64"))
+if(${VELOX_ENABLE_QPL})
   set(CompressionQpl "CompressionQpl.cpp")
   set(CompressionQplDependency "qpl")
 else()
