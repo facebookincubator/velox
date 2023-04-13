@@ -89,4 +89,5 @@ if(VELOX_ENABLE_ARROW)
   set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
   set_target_properties(parquet PROPERTIES IMPORTED_LOCATION
                                            ${ARROW_LIBDIR}/libparquet.a)
+
 endif()
