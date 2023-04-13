@@ -373,6 +373,9 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   add_subdirectory(pyvelox)
 endif()
 
+set_source(simdjson)
+resolve_dependency(simdjson 3.1.5)
+
 # Locate or build folly.
 set_source(folly)
 resolve_dependency(folly)

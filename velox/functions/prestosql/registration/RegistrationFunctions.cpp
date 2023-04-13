@@ -25,7 +25,9 @@ extern void registerComparisonFunctions(const std::string& prefix);
 extern void registerDateTimeFunctions(const std::string& prefix);
 extern void registerGeneralFunctions(const std::string& prefix);
 extern void registerHyperLogFunctions(const std::string& prefix);
-extern void registerJsonFunctions(const std::string& prefix);
+extern void registerJsonFunctions(
+    const std::string& prefix,
+    const bool useSimd);
 extern void registerMapFunctions(const std::string& prefix);
 extern void registerStringFunctions(const std::string& prefix);
 extern void registerBinaryFunctions(const std::string& prefix);
@@ -55,8 +57,8 @@ void registerMapFunctions(const std::string& prefix) {
   functions::registerMapFunctions(prefix);
 }
 
-void registerJsonFunctions(const std::string& prefix) {
-  functions::registerJsonFunctions(prefix);
+void registerJsonFunctions(const std::string& prefix, const bool useSimd) {
+  functions::registerJsonFunctions(prefix, useSimd);
 }
 
 void registerHyperLogFunctions(const std::string& prefix) {
@@ -93,7 +95,7 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerComparisonFunctions(prefix);
   registerMapFunctions(prefix);
   registerArrayFunctions(prefix);
-  registerJsonFunctions(prefix);
+  registerJsonFunctions(prefix, false);
   registerHyperLogFunctions(prefix);
   registerGeneralFunctions(prefix);
   registerDateTimeFunctions(prefix);
