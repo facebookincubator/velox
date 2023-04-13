@@ -4503,4 +4503,49 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
       .run();
 }
 
+TEST_F(HashJoinTest, dynamicFilterOnPartitionKeyParquet) {
+  dwio::common::registerReaderFactory(
+      std::make_shared<facebook::velox::parquet::ParquetReaderFactory>());
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "",
+      "part-00000-b83460e1-9315-4ffb-ae66-8c19a11bb2dc.c000.snappy.parquet");
+  auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(filePath)
+                   .fileFormat(dwio::common::FileFormat::PARQUET)
+                   .start(0)
+                   .length(472)
+                   .partitionKey("k", "0")
+                   .build();
+  auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
+  std::shared_ptr<connector::hive::HiveTableHandle> tableHandle = makeTableHandle();
+  ColumnHandleMap assignments = {
+      {"n1_0", regularColumn("id", BIGINT())},
+      {"n1_1", partitionKey("k", BIGINT())}};
+  std::vector<RowVectorPtr> buildVectors{
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, 1, 2})})};
+  createDuckDbTable("t", buildVectors);
+  core::PlanNodeId probeScanId;
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(outputType, tableHandle, assignments)
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"n1_1"},
+              {"c0"},
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              "",
+              {"c0"},
+              core::JoinType::kInner)
+          .project({"c0"})
+          .planNode();
+  SplitInput splits = {{probeScanId, {exec::Split(split)}}};
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .planNode(std::move(op))
+      .inputSplits(splits)
+      .referenceQuery("select t.c0 from t where t.c0 = 0")
+      .checkSpillStats(false)
+      .run();
+}
+
 } // namespace
