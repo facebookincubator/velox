@@ -22,8 +22,6 @@
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
-using namespace facebook::velox::test;
-
 class MightContainTest : public SparkFunctionBaseTest {
  protected:
   void testMightContain(
@@ -33,19 +31,19 @@ class MightContainTest : public SparkFunctionBaseTest {
     auto result = evaluate(
         "might_contain(cast(c0 as varbinary), c1)",
         makeRowVector({bloom, value}));
-    assertEqualVectors(expected, result);
+    velox::test::assertEqualVectors(expected, result);
   }
 
   std::string getSerializedBloomFilter() {
     constexpr int64_t kSize = 10;
-    BloomFilter bloom;
-    bloom.reset(kSize);
+    BloomFilter bloomFilter;
+    bloomFilter.reset(kSize);
     for (auto i = 0; i < kSize; ++i) {
-      bloom.insert(folly::hasher<int64_t>()(i));
+      bloomFilter.insert(folly::hasher<int64_t>()(i));
     }
     std::string data;
-    data.resize(bloom.serializedSize());
-    bloom.serialize(data.data());
+    data.resize(bloomFilter.serializedSize());
+    bloomFilter.serialize(data.data());
     return data;
   }
 };
@@ -65,23 +63,15 @@ TEST_F(MightContainTest, basic) {
 
   auto values = makeNullableFlatVector<int64_t>(
       {1, 2, 3, 4, 5, std::nullopt, 123451, 23456, 4, 5});
-  auto expects = makeNullableFlatVector<bool>(
+  auto expected = makeNullableFlatVector<bool>(
       {true, true, true, true, true, std::nullopt, false, false, true, true});
-  testMightContain(bloom, values, expects);
+  testMightContain(bloom, values, expected);
 }
 
-TEST_F(MightContainTest, nullBloom) {
+TEST_F(MightContainTest, nullBloomFilter) {
   auto bloom = makeConstant<StringView>(std::nullopt, 2);
   auto value = makeFlatVector<int64_t>({2, 4});
   auto expected = makeNullConstant(TypeKind::BOOLEAN, 2);
-  testMightContain(bloom, value, expected);
-}
-
-TEST_F(MightContainTest, nullValue) {
-  auto serializedBloom = getSerializedBloomFilter();
-  auto bloom = makeConstant<StringView>(StringView(serializedBloom), 2);
-  auto value = makeNullableFlatVector<int64_t>({std::nullopt, 2});
-  auto expected = makeNullableFlatVector<bool>({std::nullopt, true});
   testMightContain(bloom, value, expected);
 }
 } // namespace

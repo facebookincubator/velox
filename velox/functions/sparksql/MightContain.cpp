@@ -42,8 +42,7 @@ class BloomFilterMightContainFunction final : public exec::VectorFunction {
     try {
       output.merge(serialized->valueAt<StringView>(0).str().c_str());
     } catch (const std::exception& e) {
-      rows.applyToSelected(
-          [&](int row) { context.setError(row, std::current_exception()); });
+      context.setErrors(rows, std::current_exception());
       return;
     }
 
