@@ -166,7 +166,7 @@ void registerFunctions(const std::string& prefix) {
       int64_t,
       Varchar,
       Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
-      
+
   // Register bloom filter function
   exec::registerVectorFunction(
       prefix + "might_contain", mightContainSignatures(), makeMightContain());

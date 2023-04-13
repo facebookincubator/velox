@@ -50,29 +50,29 @@ class MightContainTest : public SparkFunctionBaseTest {
 
 TEST_F(MightContainTest, basic) {
   auto serialized = getSerializedBloomFilter();
-  auto bloom = makeConstant<StringView>(StringView(serialized), 10);
+  auto bloomFilter = makeConstant<StringView>(StringView(serialized), 10);
   auto value =
       makeFlatVector<int64_t>(10, [](vector_size_t row) { return row; });
-  auto expected = makeConstant(true, 10);
-  testMightContain(bloom, value, expected);
+  auto expectedContain = makeConstant(true, 10);
+  testMightContain(bloomFilter, value, expectedContain);
 
   auto valueNotContain = makeFlatVector<int64_t>(
       10, [](vector_size_t row) { return row + 123451; });
   auto expectedNotContain = makeConstant(false, 10);
-  testMightContain(bloom, valueNotContain, expectedNotContain);
+  testMightContain(bloomFilter, valueNotContain, expectedNotContain);
 
   auto values = makeNullableFlatVector<int64_t>(
       {1, 2, 3, 4, 5, std::nullopt, 123451, 23456, 4, 5});
   auto expected = makeNullableFlatVector<bool>(
       {true, true, true, true, true, std::nullopt, false, false, true, true});
-  testMightContain(bloom, values, expected);
+  testMightContain(bloomFilter, values, expected);
 }
 
 TEST_F(MightContainTest, nullBloomFilter) {
-  auto bloom = makeConstant<StringView>(std::nullopt, 2);
+  auto bloomFilter = makeConstant<StringView>(std::nullopt, 2);
   auto value = makeFlatVector<int64_t>({2, 4});
   auto expected = makeNullConstant(TypeKind::BOOLEAN, 2);
-  testMightContain(bloom, value, expected);
+  testMightContain(bloomFilter, value, expected);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
