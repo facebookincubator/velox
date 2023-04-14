@@ -561,7 +561,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         INTEGER(),
         velox::variant(split_->tableBucketNumber.value()));
   }
-  scanSpec_->resetCachedValues();
+  scanSpec_->clearHasFilter();
   std::vector<std::string> columnNames;
   for (auto& spec : scanSpec_->children()) {
     if (!spec->isConstant()) {

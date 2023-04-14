@@ -119,9 +119,7 @@ target_link_libraries(
   gflags::gflags
   glog::glog
   ${FMT}
-  ${FILESYSTEM}
-  velox_dwio_duckdb_parquet_reader
-  velox_dwio_native_parquet_reader)
+  ${FILESYSTEM})
 
 target_link_libraries(
   velox_exec_infra_test

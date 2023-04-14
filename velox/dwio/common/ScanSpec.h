@@ -295,6 +295,13 @@ class ScanSpec {
     reorder();
   }
 
+  void clearHasFilter() {
+    hasFilter_.reset();
+    for (auto& child : children_) {
+      child->clearHasFilter();
+    }
+  }
+
   void setEnableFilterReorder(bool enableFilterReorder) {
     enableFilterReorder_ = enableFilterReorder;
   }
