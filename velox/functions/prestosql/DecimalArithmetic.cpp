@@ -16,6 +16,7 @@
 
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/prestosql/ArithmeticImpl.h"
 #include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions {
@@ -305,6 +306,48 @@ class Round {
   }
 };
 
+class Abs {
+ public:
+  template <typename R, typename A>
+  inline static void apply(R& r, const A& a, uint8_t aRescale) {
+    if constexpr (std::is_same_v<R, A>) {
+      r = a.unscaledValue() < 0 ? R(-a.unscaledValue()) : a;
+    }
+  }
+
+  inline static uint8_t
+  computeRescaleFactor(uint8_t fromScale, uint8_t toScale, uint8_t rScale) {
+    return fromScale;
+  }
+
+  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+      const uint8_t aPrecision,
+      const uint8_t aScale) {
+    return {aPrecision, aScale};
+  }
+};
+
+class Negate {
+ public:
+  template <typename R, typename A>
+  inline static void apply(R& r, const A& a, uint8_t aRescale) {
+    if constexpr (std::is_same_v<R, A>) {
+      r = R(-a.unscaledValue());
+    }
+  }
+
+  inline static uint8_t
+  computeRescaleFactor(uint8_t fromScale, uint8_t toScale, uint8_t rScale) {
+    return fromScale;
+  }
+
+  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+      const uint8_t aPrecision,
+      const uint8_t aScale) {
+    return {aPrecision, aScale};
+  }
+};
+
 std::vector<std::shared_ptr<exec::FunctionSignature>>
 decimalMultiplySignature() {
   return {
@@ -366,6 +409,16 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> decimalRoundSignature() {
           .returnType("DECIMAL(r_precision, r_scale)")
           .argumentType("DECIMAL(a_precision, a_scale)")
           .build()};
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+decimalAbsNegateSignature() {
+  return {exec::FunctionSignatureBuilder()
+              .integerVariable("a_precision")
+              .integerVariable("a_scale")
+              .returnType("DECIMAL(a_precision, a_scale)")
+              .argumentType("DECIMAL(a_precision, a_scale)")
+              .build()};
 }
 
 template <typename Operation>
@@ -479,4 +532,14 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_round,
     decimalRoundSignature(),
     createDecimalUnary<Round>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_abs,
+    decimalAbsNegateSignature(),
+    createDecimalUnary<Abs>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_negate,
+    decimalAbsNegateSignature(),
+    createDecimalUnary<Negate>);
 }; // namespace facebook::velox::functions

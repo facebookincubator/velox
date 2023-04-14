@@ -379,3 +379,39 @@ TEST_F(DecimalArithmeticTest, round) {
            UnscaledLongDecimal::min().unscaledValue()},
           DECIMAL(38, 1))});
 }
+
+TEST_F(DecimalArithmeticTest, abs) {
+  testDecimalExpr<TypeKind::SHORT_DECIMAL>(
+      {makeShortDecimalFlatVector({1111, 1112, 9999, 0}, DECIMAL(5, 1))},
+      "abs(c0)",
+      {makeShortDecimalFlatVector({-1111, 1112, -9999, 0}, DECIMAL(5, 1))});
+  testDecimalExpr<TypeKind::LONG_DECIMAL>(
+      {makeLongDecimalFlatVector(
+          {11111111, 11112112, 99999999, 0}, DECIMAL(19, 19))},
+      "abs(c0)",
+      {makeLongDecimalFlatVector(
+          {-11111111, 11112112, -99999999, 0}, DECIMAL(19, 19))});
+}
+
+TEST_F(DecimalArithmeticTest, negate) {
+  testDecimalExpr<TypeKind::SHORT_DECIMAL>(
+      {makeShortDecimalFlatVector({1111, -1112, 9999, 0}, DECIMAL(5, 1))},
+      "negate(c0)",
+      {makeShortDecimalFlatVector({-1111, 1112, -9999, 0}, DECIMAL(5, 1))});
+  testDecimalExpr<TypeKind::LONG_DECIMAL>(
+      {makeLongDecimalFlatVector(
+          {11111111,
+           -11112112,
+           99999999,
+           -UnscaledLongDecimal::max().unscaledValue(),
+           -UnscaledLongDecimal::min().unscaledValue()},
+          DECIMAL(38, 19))},
+      "negate(c0)",
+      {makeLongDecimalFlatVector(
+          {-11111111,
+           11112112,
+           -99999999,
+           UnscaledLongDecimal::max().unscaledValue(),
+           UnscaledLongDecimal::min().unscaledValue()},
+          DECIMAL(38, 19))});
+}
