@@ -370,6 +370,35 @@ class FlatVector final : public SimpleVector<T> {
     for (const auto& bufferPtr : stringBuffers_) {
       stringBufferSet_.insert(bufferPtr.get());
     }
+
+    if constexpr (std::is_same_v<T, StringView>) {
+      for (auto i = 0; i < BaseVector::length_; ++i) {
+        if (!BaseVector::isNullAt(i)) {
+          computeStringOffset(rawValues_[i], stringBuffers_);
+        }
+      }
+    }
+  }
+
+  int32_t computeStringOffset(
+      StringView value,
+      const std::vector<BufferPtr>& stringBuffers) {
+    if (value.isInline()) {
+      return 0;
+    }
+
+    int32_t offset = 0;
+    for (const auto& buffer : stringBuffers) {
+      auto start = buffer->as<char>();
+
+      if (value.data() >= start && value.data() < start + buffer->size()) {
+        return (value.data() - start) + offset;
+      }
+
+      offset += buffer->size();
+    }
+
+    VELOX_FAIL("String view points outside of the string buffers");
   }
 
   /// Used for vectors of type VARCHAR and VARBINARY to release the data buffers

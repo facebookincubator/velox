@@ -255,7 +255,8 @@ FlatVectorPtr<VectorMaker::EvalType<T>> VectorMaker::flatVector(
     const std::vector<T>& data,
     const TypePtr& type) {
   using TEvalType = EvalType<T>;
-  BufferPtr dataBuffer = AlignedBuffer::allocate<TEvalType>(data.size(), pool_);
+  BufferPtr dataBuffer =
+      AlignedBuffer::allocate<TEvalType>(data.size(), pool_, TEvalType());
 
   auto stats = genVectorMakerStats(data);
   auto flatVector = std::make_shared<FlatVector<TEvalType>>(
