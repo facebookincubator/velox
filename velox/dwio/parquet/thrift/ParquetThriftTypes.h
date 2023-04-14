@@ -319,7 +319,7 @@ struct CompressionCodec {
     LZ4 = 5,
     ZSTD = 6,
     LZ4_RAW = 7,
-    QPL = 8
+    QPL = 8,
   };
 };
 
