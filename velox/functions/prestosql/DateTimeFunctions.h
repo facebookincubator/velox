@@ -1053,4 +1053,28 @@ struct ParseDateTimeFunction {
   }
 };
 
+template <typename T>
+struct DateFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Timestamp>& input) {
+    result = Date(input.getSeconds() / facebook::velox::util::kSecsPerDay);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<TimestampWithTimezone>& input) {
+    auto timestamp = this->toTimestamp(input);
+    result = Date(timestamp.getSeconds() / facebook::velox::util::kSecsPerDay);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Varchar>& input) {
+    result = facebook::velox::util::fromDateString(input.data(), input.size());
+  }
+};
+
 } // namespace facebook::velox::functions

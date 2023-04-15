@@ -224,6 +224,17 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         timestamps->size(),
         std::vector<VectorPtr>({timestamps, timezones}));
   }
+
+  template <typename T>
+  std::optional<Date> evaluateDateFromTypedInput(std::optional<T> inputValue) {
+    return evaluateOnce<Date>("date(c0)", inputValue);
+  }
+
+  template <typename T>
+  std::optional<Date> evaluateCastDateFromTypedInput(
+      std::optional<T> inputValue) {
+    return evaluateOnce<Date>("cast(c0 as date)", inputValue);
+  }
 };
 
 bool operator==(
@@ -2846,4 +2857,84 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
       dateParse("1", "%y+"), "Invalid format: \"1\" is malformed at \"1\"");
   VELOX_ASSERT_THROW(
       dateParse("116", "%y+"), "Invalid format: \"116\" is malformed at \"6\"");
+}
+
+TEST_F(DateTimeFunctionsTest, dateFunctionErrors) {
+  // Error strings
+  EXPECT_THROW(
+      evaluateDateFromTypedInput<std::string>(
+          std::string("2012-08-09 06:00:00.000")),
+      VeloxUserError);
+  EXPECT_THROW(
+      evaluateDateFromTypedInput<std::string>(std::string("foobar")),
+      VeloxUserError);
+
+  EXPECT_THROW(
+      evaluateDateFromTypedInput<std::string>(std::string("123456789")),
+      VeloxUserError);
+
+  // Error when using unsupported type input.
+  EXPECT_THROW(evaluateDateFromTypedInput<int64_t>(100000), VeloxUserError);
+}
+
+TEST_F(DateTimeFunctionsTest, dateFunctionTimestamp) {
+  const auto runTestComparison = [&](const std::optional<Timestamp>& value) {
+    EXPECT_EQ(
+        evaluateCastDateFromTypedInput<Timestamp>(value),
+        evaluateDateFromTypedInput<Timestamp>(value));
+  };
+
+  // TIMESTAMP input
+  runTestComparison(std::nullopt);
+  runTestComparison(Timestamp(0, 0));
+  runTestComparison(Timestamp(946684800, 0));
+  runTestComparison(Timestamp(1257724800, 0));
+  runTestComparison(Timestamp(-20220915, 0));
+}
+
+TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {
+  const auto runTestComparison = [&](const std::optional<std::string>& value) {
+    EXPECT_EQ(
+        evaluateCastDateFromTypedInput<std::string>(value),
+        evaluateDateFromTypedInput<std::string>(value));
+  };
+
+  // STRING/VARCHAR input
+  runTestComparison(std::nullopt);
+  runTestComparison(std::string("1970-01-01"));
+  runTestComparison(std::string("2023-12-15"));
+  runTestComparison(std::string("1812-04-15"));
+}
+
+TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
+  const auto runTestComparison = [&](const std::optional<Date>& result,
+                                     const std::optional<int64_t>& ts_millis,
+                                     const std::optional<std::string>& tz) {
+    EXPECT_EQ(
+        result,
+        evaluateWithTimestampWithTimezone<Date>(
+            fmt::format("date(c0)"), ts_millis, tz));
+  };
+  // TIMESTAMP WITH TIMEZONE input.
+  // When cast from timestamp with timezone is supported for the cast expression
+  // then replace the hard coded Date(days) with the cast expression. The
+  // timezone accounts for fractions of the day. The timestamp in milliseconds
+  // used for the timestamp with timezone.
+
+  runTestComparison(std::nullopt, std::nullopt, std::nullopt);
+  runTestComparison(Date(0), 0, "+00:00");
+  runTestComparison(Date(0), 0, "+01:00");
+  runTestComparison(Date(0), 0, "-01:00");
+
+  // 946684800 (millis) == Jan 1 2000 12:00AM/00:00
+  // TSWTZ == Jan 1 2000 12:00AM/00:00
+  runTestComparison(Date(10957), 946684800000, "+00:00");
+
+  // 946684800000 (millis) == Jan 1 2000 12:00AM/00:00
+  // TSWTZ == Dec 31 1999 10:00PM/22:00
+  runTestComparison(Date(10956), 946684800000, "-02:00");
+
+  // 946684800000 (millis) == Jan 1 2000 12:00AM/00:00
+  // TSWTZ == Jan 1 2000 2:00AM/02:00
+  runTestComparison(Date(10957), 946684800000, "+02:00");
 }

@@ -16,6 +16,10 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: date(x) -> date
+
+    Returns the same result as ``CAST(x AS DATE)``. The supported types for ``x`` are VARCHAR, TIMESTAMP, and TIMESTAMP WITH TIME ZONE.
+
 Truncation Function
 -------------------
 

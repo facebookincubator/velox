@@ -123,6 +123,10 @@ void registerSimpleFunctions(const std::string& prefix) {
       Varchar>({prefix + "parse_datetime"});
   registerFunction<DateParseFunction, Timestamp, Varchar, Varchar>(
       {prefix + "date_parse"});
+  registerFunction<DateFunction, Date, Timestamp>({prefix + "date"});
+  registerFunction<DateFunction, Date, TimestampWithTimezone>(
+      {prefix + "date"});
+  registerFunction<DateFunction, Date, Varchar>({prefix + "date"});
 }
 } // namespace
 
