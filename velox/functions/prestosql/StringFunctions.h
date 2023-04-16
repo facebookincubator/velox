@@ -93,7 +93,7 @@ struct SubstrFunction {
       I start,
       I length = std::numeric_limits<I>::max()) {
     // Following Presto semantics
-    if (start == 0) {
+    if (start == 0 || length <= 0) {
       result.setEmpty();
       return;
     }
@@ -106,14 +106,15 @@ struct SubstrFunction {
     }
 
     // Following Presto semantics
-    if (start <= 0 || start > numCharacters || length <= 0) {
+    if (start <= 0 || start > numCharacters) {
       result.setEmpty();
       return;
     }
 
     // Adjusting length
-    if (length == std::numeric_limits<I>::max() ||
-        length + start - 1 > numCharacters) {
+    I last;
+    bool lastOverflow = __builtin_add_overflow(start, length - 1, &last);
+    if (lastOverflow || last > numCharacters) {
       // set length to the max valid length
       length = numCharacters - start + 1;
     }
