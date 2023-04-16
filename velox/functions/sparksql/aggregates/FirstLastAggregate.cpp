@@ -329,7 +329,7 @@ bool registerFirstLast(const std::string& name) {
       });
 }
 
-void registerFirstLastAggregate(const std::string& prefix) {
+void registerFirstLastAggregates(const std::string& prefix) {
   registerFirstLast<FirstAggregate, false>(prefix + "first");
   registerFirstLast<FirstAggregate, true>(prefix + "first_ignore_null");
   registerFirstLast<LastAggregate, false>(prefix + "last");

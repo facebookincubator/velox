@@ -11,14 +11,18 @@ General Aggregate Functions
 
     Returns the bitwise XOR of all non-null input values, or null if none.
 
-.. spark:function:: first(x, ignoreNull) -> x
+.. spark:function:: first(x) -> x
 
-    Returns the first value of `x` for a group of rows.
-    If `ignoreNull` is true, returns only non-null values, default is false.
-    Velox provide first() and first_ignore_null() for `ignoreNull` behavior.
+    Returns the first value of `x` for a group of rows, not ignore null value.
 
-.. spark:function:: last(x, ignoreNull) -> x
+.. spark:function:: first_ignore_null(x) -> x
 
-    Returns the last value of `x` for a group of rows.
-    If `ignoreNull` is true, returns only non-null values, default is false.
-    Velox provide last() and last_ignore_null() for `ignoreNull` behavior.
+    Returns the first value of `x` for a group of rows, returns the first non-null value.
+
+.. spark:function:: last(x) -> x
+
+    Returns the last value of `x` for a group of rows, not ignore null value.
+
+.. spark:function:: last_ignore_null(x) -> x
+
+    Returns the last value of `x` for a group of rows, returns the last non-null value.

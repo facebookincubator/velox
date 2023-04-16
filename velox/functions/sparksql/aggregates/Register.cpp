@@ -20,10 +20,10 @@
 
 namespace facebook::velox::functions::sparksql::aggregates {
 
-extern void registerFirstLastAggregate(const std::string& prefix);
+extern void registerFirstLastAggregates(const std::string& prefix);
 
 void registerAggregateFunctions(const std::string& prefix) {
-  registerFirstLastAggregate(prefix);
+  registerFirstLastAggregates(prefix);
   aggregates::registerBitwiseXorAggregate(prefix + "bit_xor");
 }
 } // namespace facebook::velox::functions::sparksql::aggregates
