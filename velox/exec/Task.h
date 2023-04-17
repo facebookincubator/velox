@@ -284,11 +284,10 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t driverId,
       const std::string& operatorType);
 
-  /// Creates new instance of MemoryPool for the connector writer used by a
-  /// table write operator, stores it in the task to ensure lifetime and returns
-  /// a raw pointer. Not thread safe, e.g. must be called from the Operator's
-  /// constructor.
-  velox::memory::MemoryPool* addConnectorWriterPoolLocked(
+  /// Creates new instance of MemoryPool with aggregate kind for the connector
+  /// use, stores it in the task to ensure lifetime and returns a raw pointer.
+  /// Not thread safe, e.g. must be called from the Operator's constructor.
+  velox::memory::MemoryPool* addConnectorPoolLocked(
       const core::PlanNodeId& planNodeId,
       int pipelineId,
       uint32_t driverId,
@@ -445,8 +444,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns kNone if no pause or terminate is requested. The thread count is
   /// incremented if kNone is returned. If something else is returned the
-  /// calling thread should unwind and return itself to its pool.
-  StopReason enter(ThreadState& state);
+  /// calling thread should unwind and return itself to its pool. If 'this' goes
+  /// from no threads running to one thread running, sets 'onThreadSince_' to
+  /// 'nowMicros'.
+  StopReason enter(ThreadState& state, uint64_t nowMicros = 0);
 
   /// Sets the state to terminated. Returns kAlreadyOnThread if the
   /// Driver is running. In this case, the Driver will free resources
@@ -510,6 +511,11 @@ class Task : public std::enable_shared_from_this<Task> {
     std::lock_guard<std::mutex> l(mutex_);
     toYield_ = numThreads_;
   }
+
+  /// Requests yield if 'this' is running and has had at least one Driver on
+  /// thread since before 'startTimeMicros'. Returns the number of threads in
+  /// 'this' at the time of requesting yield. Returns 0 if yield not requested.
+  int32_t yieldIfDue(uint64_t startTimeMicros);
 
   /// Once 'pauseRequested_' is set, it will not be cleared until
   /// task::resume(). It is therefore OK to read it without a mutex
@@ -972,6 +978,10 @@ class Task : public std::enable_shared_from_this<Task> {
   std::atomic<bool> terminateRequested_{false};
   std::atomic<int32_t> toYield_ = 0;
   int32_t numThreads_ = 0;
+  // Microsecond real time when 'this' last went from no threads to
+  // one thread running. Used to decide if continuous run should be
+  // interrupted by yieldIfDue().
+  tsan_atomic<uint64_t> onThreadSince_{0};
   // Promises for the futures returned to callers of requestPause() or
   // terminate(). They are fulfilled when the last thread stops
   // running for 'this'.

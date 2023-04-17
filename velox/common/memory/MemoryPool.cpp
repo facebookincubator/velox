@@ -42,8 +42,9 @@ std::shared_ptr<MemoryUsageTracker> createMemoryUsageTracker(
   if (parent->getMemoryUsageTracker() == nullptr) {
     return nullptr;
   }
-  return parent->getMemoryUsageTracker()->addChild(
-      kind == MemoryPool::Kind::kLeaf);
+  const bool isLeaf = kind == MemoryPool::Kind::kLeaf;
+  VELOX_CHECK(isLeaf || options.threadSafe);
+  return parent->getMemoryUsageTracker()->addChild(isLeaf, options.threadSafe);
 }
 } // namespace
 
@@ -111,9 +112,31 @@ void MemoryPool::visitChildren(
   }
 }
 
-std::shared_ptr<MemoryPool> MemoryPool::addChild(
+std::shared_ptr<MemoryPool> MemoryPool::addLeafChild(
     const std::string& name,
-    Kind kind,
+    bool threadSafe,
+    std::shared_ptr<MemoryReclaimer> reclaimer) {
+  checkPoolManagement();
+
+  folly::SharedMutex::WriteHolder guard{childrenMutex_};
+  VELOX_CHECK_EQ(
+      children_.count(name),
+      0,
+      "Leaf child memory pool {} already exists in {}",
+      name,
+      toString());
+  auto child = genChild(
+      shared_from_this(),
+      name,
+      MemoryPool::Kind::kLeaf,
+      threadSafe,
+      std::move(reclaimer));
+  children_.emplace(name, child.get());
+  return child;
+}
+
+std::shared_ptr<MemoryPool> MemoryPool::addAggregateChild(
+    const std::string& name,
     std::shared_ptr<MemoryReclaimer> reclaimer) {
   checkPoolManagement();
 
@@ -124,7 +147,12 @@ std::shared_ptr<MemoryPool> MemoryPool::addChild(
       "Child memory pool {} already exists in {}",
       name,
       toString());
-  auto child = genChild(shared_from_this(), name, kind, std::move(reclaimer));
+  auto child = genChild(
+      shared_from_this(),
+      name,
+      MemoryPool::Kind::kAggregate,
+      true,
+      std::move(reclaimer));
   children_.emplace(name, child.get());
   return child;
 }
@@ -210,7 +238,9 @@ MemoryPoolImpl::MemoryPoolImpl(
       memoryManager_{memoryManager},
       allocator_{&memoryManager_->getAllocator()},
       destructionCb_(std::move(destructionCb)),
-      localMemoryUsage_{} {}
+      localMemoryUsage_{} {
+  VELOX_CHECK(options.threadSafe || kind_ == MemoryPool::Kind::kLeaf);
+}
 
 MemoryPoolImpl::~MemoryPoolImpl() {
   if (checkUsageLeak_ && (memoryUsageTracker_ != nullptr)) {
@@ -417,6 +447,7 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
     std::shared_ptr<MemoryPool> parent,
     const std::string& name,
     Kind kind,
+    bool threadSafe,
     std::shared_ptr<MemoryReclaimer> reclaimer) {
   return std::make_shared<MemoryPoolImpl>(
       memoryManager_,
@@ -424,7 +455,10 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
       kind,
       parent,
       nullptr,
-      Options{.alignment = alignment_, .reclaimer = std::move(reclaimer)});
+      Options{
+          .alignment = alignment_,
+          .reclaimer = std::move(reclaimer),
+          .threadSafe = threadSafe});
 }
 
 const MemoryUsage& MemoryPoolImpl::getLocalMemoryUsage() const {

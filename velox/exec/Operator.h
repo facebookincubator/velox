@@ -213,12 +213,12 @@ class OperatorCtx {
 
   /// Makes an extract of QueryCtx for use in a connector. 'planNodeId'
   /// is the id of the calling TableScan. This and the task id identify the scan
-  /// for column access tracking. If 'forScan' is true, it is created for a
-  /// TableScan, otherwise for a TableWriter operator.
+  /// for column access tracking. 'connectorPool' is an aggregate memory pool
+  /// for connector use.
   std::shared_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
       const std::string& connectorId,
       const std::string& planNodeId,
-      bool forScan) const;
+      memory::MemoryPool* connectorPool) const;
 
   /// Generates the spiller config for a given spiller 'type' if the disk
   /// spilling is enabled, otherwise returns null.
@@ -475,6 +475,15 @@ class Operator : public BaseRuntimeStatWriter {
   // Creates output vector from 'input_' and 'results_' according to
   // 'identityProjections_' and 'resultProjections_'.
   RowVectorPtr fillOutput(vector_size_t size, BufferPtr mapping);
+
+  // Returns the number of rows for the output batch. This uses averageRowSize
+  // to calculate how many rows fit in preferredOutputBatchBytes. It caps the
+  // number of rows at 10K and returns at least one row. The averageRowSize must
+  // not be negative. If the averageRowSize is 0 which is not advised, returns
+  // maxOutputBatchRows. If the averageRowSize is not given, returns
+  // preferredOutputBatchRows.
+  uint32_t outputBatchRows(
+      std::optional<uint64_t> averageRowSize = std::nullopt) const;
 
   std::unique_ptr<OperatorCtx> operatorCtx_;
   folly::Synchronized<OperatorStats> stats_;

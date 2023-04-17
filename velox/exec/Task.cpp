@@ -184,9 +184,8 @@ Task::Task(
       planFragment_(std::move(planFragment)),
       destination_(destination),
       queryCtx_(std::move(queryCtx)),
-      pool_(queryCtx_->pool()->addChild(
-          fmt::format("task.{}", taskId_.c_str()),
-          memory::MemoryPool::Kind::kAggregate)),
+      pool_(queryCtx_->pool()->addAggregateChild(
+          fmt::format("task.{}", taskId_.c_str()))),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
@@ -263,9 +262,8 @@ Task::getOrAddNodePool(const core::PlanNodeId& planNodeId) {
     return nodePools_[planNodeId];
   }
 
-  childPools_.push_back(pool_->addChild(
-      fmt::format("node.{}", planNodeId),
-      memory::MemoryPool::Kind::kAggregate));
+  childPools_.push_back(
+      pool_->addAggregateChild(fmt::format("node.{}", planNodeId)));
   auto* nodePool = childPools_.back().get();
   nodePools_[planNodeId] = nodePool;
   return nodePool;
@@ -277,27 +275,25 @@ velox::memory::MemoryPool* Task::addOperatorPool(
     uint32_t driverId,
     const std::string& operatorType) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addChild(fmt::format(
+  childPools_.push_back(nodePool->addLeafChild(fmt::format(
       "op.{}.{}.{}.{}", planNodeId, pipelineId, driverId, operatorType)));
   return childPools_.back().get();
 }
 
-velox::memory::MemoryPool* Task::addConnectorWriterPoolLocked(
+velox::memory::MemoryPool* Task::addConnectorPoolLocked(
     const core::PlanNodeId& planNodeId,
     int pipelineId,
     uint32_t driverId,
     const std::string& operatorType,
     const std::string& connectorId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addChild(
-      fmt::format(
-          "op.{}.{}.{}.{}.{}",
-          planNodeId,
-          pipelineId,
-          driverId,
-          operatorType,
-          connectorId),
-      memory::MemoryPool::Kind::kAggregate));
+  childPools_.push_back(nodePool->addAggregateChild(fmt::format(
+      "op.{}.{}.{}.{}.{}",
+      planNodeId,
+      pipelineId,
+      driverId,
+      operatorType,
+      connectorId)));
   return childPools_.back().get();
 }
 
@@ -307,7 +303,7 @@ velox::memory::MemoryPool* Task::addMergeSourcePool(
     uint32_t sourceId) {
   std::lock_guard<std::mutex> l(mutex_);
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addChild(fmt::format(
+  childPools_.push_back(nodePool->addLeafChild(fmt::format(
       "mergeExchangeClient.{}.{}.{}", planNodeId, pipelineId, sourceId)));
   return childPools_.back().get();
 }
@@ -316,7 +312,7 @@ velox::memory::MemoryPool* Task::addExchangeClientPool(
     const core::PlanNodeId& planNodeId,
     uint32_t pipelineId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addChild(
+  childPools_.push_back(nodePool->addLeafChild(
       fmt::format("exchangeClient.{}.{}", planNodeId, pipelineId)));
   return childPools_.back().get();
 }
@@ -1890,7 +1886,7 @@ std::string Task::errorMessage() const {
   return errorMessageLocked();
 }
 
-StopReason Task::enter(ThreadState& state) {
+StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(state.isEnqueued);
   state.isEnqueued = false;
@@ -1906,6 +1902,9 @@ StopReason Task::enter(ThreadState& state) {
   }
   if (reason == StopReason::kNone) {
     ++numThreads_;
+    if (numThreads_ == 1) {
+      onThreadSince_ = nowMicros;
+    }
     state.setThread();
     state.hasBlockingFuture = false;
   }
@@ -2004,6 +2003,19 @@ StopReason Task::shouldStop() {
     return shouldStopLocked();
   }
   return StopReason::kNone;
+}
+
+int32_t Task::yieldIfDue(uint64_t startTimeMicros) {
+  if (onThreadSince_ < startTimeMicros) {
+    std::lock_guard<std::mutex> l(mutex_);
+    // Reread inside the mutex
+    if (onThreadSince_ < startTimeMicros && numThreads_ && !toYield_ &&
+        !terminateRequested_ && !pauseRequested_) {
+      toYield_ = numThreads_;
+      return numThreads_;
+    }
+  }
+  return 0;
 }
 
 void Task::finishedLocked() {

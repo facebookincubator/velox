@@ -120,6 +120,11 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// but sensitive to its cpu cost so we provide an options for user to turn
     /// it off.
     bool trackUsage{true};
+    /// If true, track the leaf memory pool usage in a thread-safe mode
+    /// otherwise not. This only applies for leaf memory pool with memory usage
+    /// tracking enabled. We use non-thread safe tracking mode for single
+    /// threaded use case.
+    bool threadSafe{true};
     /// If true, check the memory usage leak on destruction.
     ///
     /// TODO: deprecate this flag after all the existing memory leak use cases
@@ -167,10 +172,21 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual void visitChildren(
       const std::function<bool(MemoryPool*)>& visitor) const;
 
-  /// Creates named child memory pool from this with specified 'kind'.
-  virtual std::shared_ptr<MemoryPool> addChild(
+  /// Invoked to create a named leaf child memory pool.
+  ///
+  /// NOTE: 'threadSafe' and 'reclaimer' only applies if the leaf memory pool
+  /// has enabled memory usage tracking which inherits from its parent.
+  virtual std::shared_ptr<MemoryPool> addLeafChild(
       const std::string& name,
-      Kind kind = MemoryPool::Kind::kLeaf,
+      bool threadSafe = true,
+      std::shared_ptr<MemoryReclaimer> reclaimer = nullptr);
+
+  /// Invoked to create a named aggregate child memory pool.
+  ///
+  /// NOTE: 'reclaimer' only applies if the aggregate memory pool has enabled
+  /// memory usage tracking which inherits from its parent.
+  virtual std::shared_ptr<MemoryPool> addAggregateChild(
+      const std::string& name,
       std::shared_ptr<MemoryReclaimer> reclaimer = nullptr);
 
   /// Allocates a buffer with specified 'size'.
@@ -191,9 +207,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
   /// <= the size of the largest size class. The new memory is returned in 'out'
-  /// and any memory formerly referenced by 'out' is freed. The function returns
-  /// true if the allocation succeeded. If returning false, 'out' references no
-  /// memory and any partially allocated memory is freed.
+  /// on success and any memory formerly referenced by 'out' is freed. The
+  /// function throws if allocation fails and 'out' references no memory and any
+  /// partially allocated memory is freed.
   virtual void allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
@@ -315,6 +331,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       std::shared_ptr<MemoryPool> parent,
       const std::string& name,
       Kind kind,
+      bool threadSafe,
       std::shared_ptr<MemoryReclaimer>) = 0;
 
   /// Invoked only on destruction to remove this memory pool from its parent's
@@ -418,6 +435,7 @@ class MemoryPoolImpl : public MemoryPool {
       std::shared_ptr<MemoryPool> parent,
       const std::string& name,
       Kind kind,
+      bool threadSafe,
       std::shared_ptr<MemoryReclaimer> reclaimer) override;
 
   // Gets the memory allocation stats of the MemoryPoolImpl attached to the
