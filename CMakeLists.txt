@@ -359,10 +359,6 @@ resolve_dependency(glog)
 set_source(fmt)
 resolve_dependency(fmt)
 
-find_library(EVENT event)
-
-find_library(DOUBLE_CONVERSION double-conversion)
-
 # Required for boost.
 find_package(ZLIB)
 
@@ -396,7 +392,6 @@ set(FOLLY_WITH_DEPENDENCIES
     ${FOLLY_LIBRARIES}
     ${Boost_LIBRARIES}
     ${DOUBLE_CONVERSION}
-    ${EVENT}
     ${SNAPPY}
     ${CMAKE_DL_LIBS}
     ${FMT})
