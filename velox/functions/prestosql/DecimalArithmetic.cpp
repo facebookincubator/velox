@@ -131,6 +131,10 @@ class DecimalUnaryBaseFunction : public exec::VectorFunction {
     }
   }
 
+  bool supportsFlatNoNullsFastPath() const override {
+    return true;
+  }
+
  private:
   R* prepareResults(
       const SelectivityVector& rows,
