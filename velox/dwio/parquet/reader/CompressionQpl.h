@@ -19,7 +19,7 @@
 #include <iostream>
 #include <memory>
 
-bool Initjobs(qpl_path_t execute_path);
+void Initjobs(qpl_path_t execute_path);
 class Qplcodec {
  public:
   Qplcodec(qpl_path_t execute_path, qpl_compression_levels compression_level)
@@ -32,12 +32,12 @@ class Qplcodec {
   }
   int Getjob();
   // bool Freejob();
-  bool Decompress(
+  void Decompress(
       int64_t input_length,
       const uint8_t* input,
       int64_t output_buffer_length,
       uint8_t* output);
-  bool Compress(
+  void Compress(
       int64_t input_length,
       const uint8_t* input,
       int64_t output_buffer_length,

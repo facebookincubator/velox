@@ -199,14 +199,12 @@ const char* FOLLY_NONNULL PageReader::uncompressData(
       dwio::common::ensureCapacity<char>(
           uncompressedData_, uncompressedSize, &pool_);
       Qplcodec qpl_dec(qpl_path_hardware, (qpl_compression_levels)1);
-      auto ret = qpl_dec.Decompress(
+      qpl_dec.Decompress(
           compressedSize,
           (const uint8_t*)pageData,
           uncompressedSize,
           (uint8_t*)uncompressedData_->asMutable<char>());
-      if (ret) {
-        return uncompressedData_->as<char>();
-      }
+      return uncompressedData_->as<char>();
     }
 #endif
     default:

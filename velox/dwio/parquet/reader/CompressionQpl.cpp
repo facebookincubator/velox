@@ -42,11 +42,10 @@ hardware.
 * But now, I don't know where to free the job buffers. If the reviewer know, can
 you tell me? Thanks.
 */
-bool Initjobs(qpl_path_t execution_path) {
+void Initjobs(qpl_path_t execution_path) {
   mtx.lock();
   if (initialized_job) {
     mtx.unlock();
-    return true;
   } else {
     qpl_status status;
     uint32_t size;
@@ -57,6 +56,9 @@ bool Initjobs(qpl_path_t execution_path) {
     for (int i = 0; i < JOB_SIZE; i++) {
       job_status[i] = false;
       uint8_t* job_buffer = new uint8_t[size];
+      if (!job_buffer) {
+        VELOX_FAIL("QPL::An error acquired during compression job malloc.");
+      }
       job_pool[i] = reinterpret_cast<qpl_job*>(job_buffer);
       status = qpl_init_job(execution_path, job_pool[i]);
 
@@ -64,7 +66,6 @@ bool Initjobs(qpl_path_t execution_path) {
         if (execution_path == qpl_path_software) {
           VELOX_FAIL(
               "QPL::An error acquired during compression job initializing.");
-          return false;
         }
 
         execution_path = qpl_path_software;
@@ -79,7 +80,6 @@ bool Initjobs(qpl_path_t execution_path) {
     }
     mtx.unlock();
     initialized_job = true;
-    return true;
   }
 }
 
@@ -111,7 +111,7 @@ int Qplcodec::Getjob() {
  * We partition the input to several 256KB blocks.
  * So that QPL can compress/decompress with a high throughput.
  */
-bool Qplcodec::Compress(
+void Qplcodec::Compress(
     int64_t input_length,
     const uint8_t* input,
     int64_t output_buffer_length,
@@ -148,7 +148,6 @@ bool Qplcodec::Compress(
     if (status != QPL_STS_OK) {
       std::atomic_store(&job_status[job_id], false);
       VELOX_FAIL("QPL::Error while QPL compression occurred.");
-      return false;
     }
 
     source_bytes_left = input_length - job_->total_in;
@@ -156,16 +155,15 @@ bool Qplcodec::Compress(
     iteration_count++;
   }
   std::atomic_store(&job_status[job_id], false);
-  return true;
 }
 
-bool Qplcodec::Decompress(
+void Qplcodec::Decompress(
     int64_t input_length,
     const uint8_t* input,
     int64_t output_buffer_length,
     uint8_t* output) {
   if (output_buffer_length == 0) {
-    return false;
+    VELOX_FAIL("QPL::Error, the Decompression size is 0.");
   }
 
   int64_t out_size = output_buffer_length;
@@ -196,12 +194,10 @@ bool Qplcodec::Decompress(
     if (status != QPL_STS_OK) {
       std::atomic_store(&job_status[job_id], false);
       VELOX_FAIL("QPL::Error while decompression occurred.");
-      return false;
     }
     source_bytes_left = input_length - job_->total_in;
     job_->flags &= ~QPL_FLAG_FIRST;
     iteration_count++;
   }
   std::atomic_store(&job_status[job_id], false);
-  return true;
 }
