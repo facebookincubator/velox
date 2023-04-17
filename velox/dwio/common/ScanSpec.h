@@ -286,12 +286,12 @@ class ScanSpec {
 
   // Resets cached values after this or children were updated, e.g. a new filter
   // was added or existing filter was modified.
-  void resetCachedValues(bool reorder) {
+  void resetCachedValues(bool isReorder) {
     hasFilter_.reset();
     for (auto& child : children_) {
-      child->resetCachedValues(reorder);
+      child->resetCachedValues(isReorder);
     }
-    if (reorder) {
+    if (isReorder) {
       reorder();
     }
   }
