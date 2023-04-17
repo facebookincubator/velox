@@ -43,6 +43,44 @@
             
   <section id="configuration-properties">
 <h1>Configuration properties<a class="headerlink" href="#configuration-properties" title="Permalink to this heading">¶</a></h1>
+<section id="generic-configuration">
+<h2>Generic Configuration<a class="headerlink" href="#generic-configuration" title="Permalink to this heading">¶</a></h2>
+<section id="preferred-output-batch-bytes">
+<h3><code class="docutils literal notranslate"><span class="pre">preferred_output_batch_bytes</span></code><a class="headerlink" href="#preferred-output-batch-bytes" title="Permalink to this heading">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">10MB</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Preferred size of batches in bytes to be returned by operators from Operator::getOutput.
+It is used when an estimate of average row size is known. Otherwise preferred_output_batch_rows is used.</p>
+</section>
+<section id="preferred-output-batch-rows">
+<h3><code class="docutils literal notranslate"><span class="pre">preferred_output_batch_rows</span></code><a class="headerlink" href="#preferred-output-batch-rows" title="Permalink to this heading">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">1024</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Preferred number of rows to be returned by operators from Operator::getOutput. It is used
+when an estimate of average row size is not known. When the estimate of average row size is known,
+preferred_output_batch_bytes is used.</p>
+</section>
+<section id="max-output-batch-rows">
+<h3><code class="docutils literal notranslate"><span class="pre">max_output_batch_rows</span></code><a class="headerlink" href="#max-output-batch-rows" title="Permalink to this heading">¶</a></h3>
+<blockquote>
+<div><ul class="simple">
+<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
+<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">10000</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>Max number of rows that could be return by operators from Operator::getOutput. It is used
+when an estimate of average row size is known and preferred_output_batch_bytes is used to compute
+the number of output rows.</p>
+</section>
+</section>
 <section id="memory-management">
 <h2>Memory Management<a class="headerlink" href="#memory-management" title="Permalink to this heading">¶</a></h2>
 <section id="max-partial-aggregation-memory">
@@ -263,7 +301,7 @@ Currently this configuration does not support appending to existing partitions.<
 </section>
 </section>
 <section id="spark-specific-configuration">
-<h2>Spark-specific configuration<a class="headerlink" href="#spark-specific-configuration" title="Permalink to this heading">¶</a></h2>
+<h2>Spark-specific Configuration<a class="headerlink" href="#spark-specific-configuration" title="Permalink to this heading">¶</a></h2>
 <section id="spark-legacy-size-of-null">
 <h3><code class="docutils literal notranslate"><span class="pre">spark.legacy-size-of-null</span></code><a class="headerlink" href="#spark-legacy-size-of-null" title="Permalink to this heading">¶</a></h3>
 <blockquote>
@@ -288,6 +326,12 @@ Currently this configuration does not support appending to existing partitions.<
     <h3><a href="index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Configuration properties</a><ul>
+<li><a class="reference internal" href="#generic-configuration">Generic Configuration</a><ul>
+<li><a class="reference internal" href="#preferred-output-batch-bytes"><code class="docutils literal notranslate"><span class="pre">preferred_output_batch_bytes</span></code></a></li>
+<li><a class="reference internal" href="#preferred-output-batch-rows"><code class="docutils literal notranslate"><span class="pre">preferred_output_batch_rows</span></code></a></li>
+<li><a class="reference internal" href="#max-output-batch-rows"><code class="docutils literal notranslate"><span class="pre">max_output_batch_rows</span></code></a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#memory-management">Memory Management</a><ul>
 <li><a class="reference internal" href="#max-partial-aggregation-memory"><code class="docutils literal notranslate"><span class="pre">max_partial_aggregation_memory</span></code></a></li>
 <li><a class="reference internal" href="#max-extended-partial-aggregation-memory"><code class="docutils literal notranslate"><span class="pre">max_extended_partial_aggregation_memory</span></code></a></li>
@@ -314,7 +358,7 @@ Currently this configuration does not support appending to existing partitions.<
 <li><a class="reference internal" href="#immutable-partitions"><code class="docutils literal notranslate"><span class="pre">immutable_partitions</span></code></a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#spark-specific-configuration">Spark-specific configuration</a><ul>
+<li><a class="reference internal" href="#spark-specific-configuration">Spark-specific Configuration</a><ul>
 <li><a class="reference internal" href="#spark-legacy-size-of-null"><code class="docutils literal notranslate"><span class="pre">spark.legacy-size-of-null</span></code></a></li>
 </ul>
 </li>
