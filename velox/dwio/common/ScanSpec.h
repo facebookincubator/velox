@@ -289,7 +289,7 @@ class ScanSpec {
   void resetCachedValues(bool reorder) {
     hasFilter_.reset();
     for (auto& child : children_) {
-      child->resetCachedValues();
+      child->resetCachedValues(reorder);
     }
     if (reorder) {
       reorder();
