@@ -82,6 +82,15 @@ void testRoundTrip(const Subfield& path) {
                           << actual.toString();
 }
 
+TEST(SubfieldTest, serde) {
+  Subfield::registerSerDe();
+  auto elements = createElements();
+  auto subfield = Subfield(std::move(elements));
+  auto serialized = subfield.serialize();
+  auto copy = facebook::velox::ISerializable::deserialize<Subfield>(serialized);
+  ASSERT_EQ(subfield.toString(), copy->toString());
+}
+
 TEST(SubfieldTest, basic) {
   auto elements = createElements();
   for (auto& element : elements) {

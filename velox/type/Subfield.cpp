@@ -39,4 +39,23 @@ Subfield::Subfield(std::vector<std::unique_ptr<Subfield::PathElement>>&& path)
     : path_(std::move(path)) {
   VELOX_CHECK_GE(path_.size(), 1);
 };
+
+folly::dynamic Subfield::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "Subfield";
+  obj["path"] = folly::dynamic::array;
+  for (const auto& p : path_) {
+    obj["path"].push_back(p->serialize());
+  }
+  return obj;
+}
+
+void Subfield::registerSerDe() {
+  auto& registry = DeserializationRegistryForSharedPtr();
+  registry.Register(
+      "Subfield",
+      static_cast<std::unique_ptr<const Subfield> (*)(const folly::dynamic&)>(
+          Subfield::create));
+}
+
 } // namespace facebook::velox::common

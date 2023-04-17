@@ -16,7 +16,9 @@
 #pragma once
 
 #include <boost/algorithm/string/replace.hpp>
+#include <folly/json.h>
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/serialization/Serializable.h"
 
 namespace facebook::velox::common {
 
@@ -27,9 +29,40 @@ enum SubfieldKind {
   kLongSubscript
 };
 
-class Subfield {
+namespace {
+std::unordered_map<SubfieldKind, std::string> subfieldKinds() {
+  return {
+      {kAllSubscripts, "kAllSubscripts"},
+      {kNestedField, "kNestedField"},
+      {kStringSubscript, "kStringSubscript"},
+      {kLongSubscript, "kLongSubscript"},
+  };
+}
+
+template <typename K, typename V>
+std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
+  std::unordered_map<V, K> inverted;
+  for (const auto& [key, value] : mapping) {
+    inverted.emplace(value, key);
+  }
+  return inverted;
+}
+
+const char* subfieldKind(SubfieldKind kind) {
+  static const auto kinds = subfieldKinds();
+  return kinds.at(kind).c_str();
+}
+
+SubfieldKind subfieldKindFromName(const std::string& name) {
+  static const auto kinds = invertMap(subfieldKinds());
+  return kinds.at(name);
+}
+
+} // namespace
+
+class Subfield : public velox::ISerializable {
  public:
-  class PathElement {
+  class PathElement : public velox::ISerializable {
    public:
     virtual ~PathElement() = default;
     virtual SubfieldKind kind() const = 0;
@@ -38,6 +71,29 @@ class Subfield {
     virtual size_t hash() const = 0;
     virtual bool operator==(const PathElement& other) const = 0;
     virtual std::unique_ptr<PathElement> clone() = 0;
+
+    static std::unique_ptr<PathElement> create(const folly::dynamic& obj) {
+      auto kindName = obj["kind"].asString();
+      auto kind = subfieldKindFromName(kindName);
+      switch (kind) {
+        case SubfieldKind::kAllSubscripts: {
+          return std::make_unique<AllSubscripts>();
+        }
+        case SubfieldKind::kNestedField: {
+          auto name = obj["name"].asString();
+          return std::make_unique<NestedField>(name);
+        }
+        case SubfieldKind::kStringSubscript: {
+          auto index = obj["index"].asString();
+          return std::make_unique<StringSubscript>(index);
+        }
+        case SubfieldKind::kLongSubscript: {
+          auto index = obj["index"].asInt();
+          return std::make_unique<LongSubscript>(index);
+        }
+      }
+      VELOX_UNREACHABLE();
+    }
   };
 
   class AllSubscripts final : public PathElement {
@@ -60,6 +116,12 @@ class Subfield {
 
     bool operator==(const PathElement& other) const override {
       return other.kind() == kAllSubscripts;
+    }
+
+    folly::dynamic serialize() const override {
+      folly::dynamic obj = folly::dynamic::object;
+      obj["kind"] = subfieldKind(kAllSubscripts);
+      return obj;
     }
 
     std::unique_ptr<PathElement> clone() override {
@@ -98,6 +160,13 @@ class Subfield {
 
     bool isSubscript() const override {
       return false;
+    }
+
+    folly::dynamic serialize() const override {
+      folly::dynamic obj = folly::dynamic::object;
+      obj["kind"] = subfieldKind(kNestedField);
+      obj["name"] = name_;
+      return obj;
     }
 
     std::unique_ptr<PathElement> clone() override {
@@ -141,6 +210,13 @@ class Subfield {
       return true;
     }
 
+    folly::dynamic serialize() const override {
+      folly::dynamic obj = folly::dynamic::object;
+      obj["kind"] = subfieldKind(kLongSubscript);
+      obj["index"] = index_;
+      return obj;
+    }
+
     std::unique_ptr<PathElement> clone() override {
       return std::make_unique<LongSubscript>(index_);
     }
@@ -182,6 +258,13 @@ class Subfield {
       return true;
     }
 
+    folly::dynamic serialize() const override {
+      folly::dynamic obj = folly::dynamic::object;
+      obj["kind"] = subfieldKind(kStringSubscript);
+      obj["index"] = index_;
+      return obj;
+    }
+
     std::unique_ptr<PathElement> clone() override {
       return std::make_unique<StringSubscript>(index_);
     }
@@ -201,6 +284,18 @@ class Subfield {
     std::vector<std::unique_ptr<PathElement>> path;
     path.push_back(std::make_unique<NestedField>(field));
     return std::make_unique<Subfield>(std::move(path));
+  }
+
+  folly::dynamic serialize() const override;
+  static void registerSerDe();
+
+  static std::unique_ptr<const Subfield> create(const folly::dynamic& obj) {
+    std::vector<std::unique_ptr<PathElement>> path;
+    auto paths = obj["path"];
+    for (const auto& p : paths) {
+      path.emplace_back(PathElement::create(p));
+    }
+    return std::make_unique<const Subfield>(std::move(path));
   }
 
   const std::vector<std::unique_ptr<PathElement>>& path() const {
