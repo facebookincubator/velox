@@ -23,7 +23,6 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
-#include "velox/external/date/date.h"
 #include <iomanip>
 
 namespace facebook::velox::functions {

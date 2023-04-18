@@ -19,7 +19,6 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/functions/prestosql/types/TimeWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox;
