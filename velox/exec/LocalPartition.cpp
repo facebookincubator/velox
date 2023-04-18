@@ -85,7 +85,7 @@ void LocalExchangeQueue::noMoreProducers() {
 BlockingReason LocalExchangeQueue::enqueue(
     RowVectorPtr input,
     ContinueFuture* future) {
-  auto inputBytes = input->retainedSize();
+  auto inputBytes = input->estimateFlatSize();
 
   std::vector<ContinuePromise> consumerPromises;
   bool isClosed = queue_.withWLock([&](auto& queue) {
@@ -150,7 +150,7 @@ BlockingReason LocalExchangeQueue::next(
     queue.pop();
 
     memoryPromises =
-        memoryManager_->decreaseMemoryUsage((*data)->retainedSize());
+        memoryManager_->decreaseMemoryUsage((*data)->estimateFlatSize());
 
     if (noMoreProducers_ && pendingProducers_ == 0 && queue.empty()) {
       producerPromises = std::move(producerPromises_);
@@ -200,7 +200,7 @@ void LocalExchangeQueue::close() {
   queue_.withWLock([&](auto& queue) {
     uint64_t freedBytes = 0;
     while (!queue.empty()) {
-      freedBytes += queue.front()->retainedSize();
+      freedBytes += queue.front()->estimateFlatSize();
       queue.pop();
     }
 

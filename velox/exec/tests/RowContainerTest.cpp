@@ -751,6 +751,19 @@ TEST_F(RowContainerTest, estimateRowSize) {
     rowContainer->store(decodedKey, i, row, 0);
     rowContainer->store(decodedDependent, i, row, 1);
   }
+<<<<<<< HEAD
+
+  RowContainerIterator iter;
+  char* result[numRows];
+  auto resultRows = rowContainer->listRows(
+      &iter,
+      numRows * 10, // More rows than the container has so that the list is
+                    // not bounded by this argument.
+      rowContainer->estimateRowSize().value() * numRows,
+      result);
+  EXPECT_EQ(resultRows, numRows);
+=======
+>>>>>>> bypass-agg-dev
 }
 
 class AggregateWithAlignment : public Aggregate {
