@@ -408,6 +408,19 @@ struct ToBigEndian64 {
 };
 
 template <typename T>
+struct ToIEEE754Bits32 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<float>& input) {
+    result.resize(32);
+    bits::toString((const uint64_t*)&input, 0, 32, result.data());
+    std::reverse(result.data(), result.data() + 32);
+  }
+};
+
+template <typename T>
 struct ToIEEE754Bits64 {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

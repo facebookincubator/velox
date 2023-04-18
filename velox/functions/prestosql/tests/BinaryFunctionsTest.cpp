@@ -584,6 +584,56 @@ TEST_F(BinaryFunctionsTest, toBigEndian64) {
       toBigEndian64((int64_t)-9223372036854775807 - 1));
 }
 
+TEST_F(BinaryFunctionsTest, toIEEE754Bits32) {
+  const auto toIEEE754Bits32 = [&](std::optional<float> value) {
+    return evaluateOnce<std::string, float>("to_ieee754_32(c0)", value);
+  };
+
+  EXPECT_EQ(std::nullopt, toIEEE754Bits32(std::nullopt));
+  EXPECT_EQ("01000001001001001100110011001101", toIEEE754Bits32(10.3));
+  EXPECT_EQ("01000000010010010000111111010000", toIEEE754Bits32(3.14159));
+  EXPECT_EQ("00111101110011001100110011001101", toIEEE754Bits32(0.1));
+  EXPECT_EQ("10111101110011001100110011001101", toIEEE754Bits32(-0.1));
+  // smallest normal possible positive float number.
+  EXPECT_EQ(
+      "00000000100000000000000000000000",
+      toIEEE754Bits32(1.175494350822287508e-38));
+  // largest normal possible positive float number.
+  EXPECT_EQ(
+      "01111111011111111111111111111111",
+      toIEEE754Bits32(3.4028234663852885981E+38));
+  // smallest subnormal possible positive float number.
+  EXPECT_EQ(
+      "00000000000000000000000000000001",
+      toIEEE754Bits32(1.401298464324817071e-45));
+  // largest subnormal possible positive float number.
+  EXPECT_EQ(
+      "00000000011111111111111111111111",
+      toIEEE754Bits32(1.175494210692441075e-38));
+  EXPECT_EQ(toIEEE754Bits32(100.0), toIEEE754Bits32(100));
+  EXPECT_EQ(
+      toIEEE754Bits32(10.3333333333333333),
+      toIEEE754Bits32(10.3333334333333333));
+  EXPECT_EQ(
+      "01111111101000000000000000000000",
+      toIEEE754Bits32(std::numeric_limits<float>::signaling_NaN()));
+  EXPECT_EQ(
+      "01111111110000000000000000000000",
+      toIEEE754Bits32(std::numeric_limits<float>::quiet_NaN()));
+  EXPECT_EQ(
+      "01111111100000000000000000000000",
+      toIEEE754Bits32(std::numeric_limits<float>::infinity()));
+  EXPECT_EQ(
+      "00000000100000000000000000000000",
+      toIEEE754Bits32(std::numeric_limits<float>::min()));
+  EXPECT_EQ(
+      "01111111011111111111111111111111",
+      toIEEE754Bits32(std::numeric_limits<float>::max()));
+  EXPECT_EQ(
+      "11111111011111111111111111111111",
+      toIEEE754Bits32(std::numeric_limits<float>::lowest()));
+}
+
 TEST_F(BinaryFunctionsTest, toIEEE754Bits64) {
   const auto toIEEE754Bits64 = [&](std::optional<double> value) {
     return evaluateOnce<std::string, double>("to_ieee754_64(c0)", value);
