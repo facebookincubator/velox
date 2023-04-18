@@ -116,9 +116,7 @@ struct SubstrFunction {
     }
 
     // Adjusting length
-    I last;
-    bool lastOverflow = __builtin_add_overflow(start, length - 1, &last);
-    if (lastOverflow || last > numCharacters) {
+    if (numCharacters - start < length - 1) {
       // set length to the max valid length
       length = numCharacters - start + 1;
     }
