@@ -19,6 +19,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/TimeWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox;
@@ -2797,7 +2798,7 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
   EXPECT_EQ(std::nullopt, dateParse(std::nullopt, std::nullopt));
 
   // Simple tests. More exhaustive tests are provided in DateTimeFormatterTest.
-  EXPECT_EQ(Timestamp(86400, 0), dateParse("1970-01-02", "%Y-%m-%d"));
+  EXPECT_EQ(Timestamp(86402, 0), dateParse("1970-01-02", "%Y-%m-%d"));
   EXPECT_EQ(Timestamp(0, 0), dateParse("1970-01-01", "%Y-%m-%d"));
   EXPECT_EQ(Timestamp(86400, 0), dateParse("19700102", "%Y%m%d"));
 
@@ -2836,4 +2837,12 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
       dateParse("1", "%y+"), "Invalid format: \"1\" is malformed at \"1\"");
   VELOX_ASSERT_THROW(
       dateParse("116", "%y+"), "Invalid format: \"116\" is malformed at \"6\"");
+}
+
+TEST_F(DateTimeFunctionsTest, currentTimeTest) {
+  const auto current_time = [&]() {   
+    return evaluateOnce<std::string>("current_time()", makeRowVector(ROW({}), 1));
+  };
+
+  EXPECT_EQ("19:51:34.241 UTC", current_time());
 }

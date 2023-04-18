@@ -17,6 +17,7 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -28,7 +29,7 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "to_unixtime"});
   registerFunction<FromUnixtimeFunction, Timestamp, double>(
       {prefix + "from_unixtime"});
-
+  registerFunction<CurrentTimeFunction, Varchar>({prefix + "current_time"});
   registerFunction<YearFunction, int64_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int64_t, Date>({prefix + "year"});
   registerFunction<YearFunction, int64_t, TimestampWithTimezone>(

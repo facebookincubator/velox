@@ -20,9 +20,13 @@
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+// #include "velox/functions/prestosql/types/TimeWithTimeZoneType.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/external/date/date.h"
+#include <iomanip>
+// #include "velox/external/duckdb/duckdb.hpp"
 
 namespace facebook::velox::functions {
 
@@ -1037,6 +1041,35 @@ struct ParseDateTimeFunction {
         : sessionTzID_.value_or(0);
     dateTimeResult.timestamp.toGMT(timezoneId);
     result = std::make_tuple(dateTimeResult.timestamp.toMillis(), timezoneId);
+    return true;
+  }
+};
+
+template <typename T>
+struct CurrentTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result) {
+
+    using namespace std::chrono;
+
+    auto now = system_clock::now();
+
+    auto ms = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+
+    auto timer = system_clock::to_time_t(now);
+
+    std::tm bt = *std::localtime(&timer);
+
+    std::ostringstream oss;
+
+    oss << std::put_time(&bt, "%H:%M:%S"); // HH:MM:SS
+    oss << '.' << std::setfill('0') << std::setw(3) << ms.count(); // HH:MM:SS.ZZZ
+    oss << " " << std::put_time(&bt, "%Z"); // HH:MM:SS.ZZZ UTC
+    
+    std::memcpy(result.data(), oss.str().data(), oss.str().size());
+
     return true;
   }
 };
