@@ -116,7 +116,7 @@ struct SubstrFunction {
     }
 
     // Adjusting length
-    if (numCharacters - start < length - 1) {
+    if (numCharacters - start + 1 < length) {
       // set length to the max valid length
       length = numCharacters - start + 1;
     }
