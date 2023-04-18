@@ -14,22 +14,18 @@
  * limitations under the License.
  */
 #include <sys/time.h>
-#include <atomic>
-#include <mutex>
 
 #include "CompressionQpl.h"
 #include "velox/dwio/common/BufferUtil.h"
 
-#define JOB_SIZE 100
 #define MAX_COMPRESS_CHUNK_SIZE 262144
 #define MAX_DECOMPRESS_CHUNK_SIZE 262144
 #define QPL_MAX_TRANS_SIZE 2097152
+#define JOB_BUFFER_SIZE 820 * 1024
 
-static qpl_job* job_pool[JOB_SIZE];
-std::atomic<bool> job_status[JOB_SIZE];
-static bool initialized_job = false;
-static int start = 0;
-std::mutex mtx;
+thread_local bool initialize_job = false;
+thread_local uint8_t job_buffer[JOB_BUFFER_SIZE];
+thread_local qpl_job* job;
 
 /*
 * QPL compression/decompression need init a job buffer,
@@ -42,70 +38,24 @@ hardware.
 * But now, I don't know where to free the job buffers. If the reviewer know, can
 you tell me? Thanks.
 */
-void Initjobs(qpl_path_t execution_path) {
-  mtx.lock();
-  if (initialized_job) {
-    mtx.unlock();
-  } else {
-    qpl_status status;
-    uint32_t size;
-    status = qpl_get_job_size(execution_path, &size);
+qpl_job* Initjob(qpl_path_t execution_path) {
+  if (initialize_job) {
+    return job;
+  }
+  qpl_status status;
+
+  job = reinterpret_cast<qpl_job*>(job_buffer);
+  status = qpl_init_job(execution_path, job);
+  if (status != QPL_STS_OK) {
+    execution_path = qpl_path_software;
+    status = qpl_init_job(execution_path, job);
     if (status != QPL_STS_OK) {
-      VELOX_FAIL("QPL::An error acquired during job size getting.");
+      VELOX_FAIL("QPL::An error acquired during compression job initializing.");
     }
-    for (int i = 0; i < JOB_SIZE; i++) {
-      job_status[i] = false;
-      uint8_t* job_buffer = new uint8_t[size];
-      if (!job_buffer) {
-        VELOX_FAIL("QPL::An error acquired during compression job malloc.");
-      }
-      job_pool[i] = reinterpret_cast<qpl_job*>(job_buffer);
-      status = qpl_init_job(execution_path, job_pool[i]);
-
-      if (status != QPL_STS_OK) {
-        if (execution_path == qpl_path_software) {
-          VELOX_FAIL(
-              "QPL::An error acquired during compression job initializing.");
-        }
-
-        execution_path = qpl_path_software;
-        status = qpl_get_job_size(execution_path, &size);
-
-        if (status != QPL_STS_OK) {
-          VELOX_FAIL("QPL::An error acquired during job size getting.");
-        }
-        i--;
-        delete[] job_buffer;
-      }
-    }
-    mtx.unlock();
-    initialized_job = true;
   }
+  initialize_job = true;
+  return job;
 }
-
-static inline size_t Getindex() {
-  size_t tsc = 0;
-  unsigned lo, hi;
-  __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi) : :);
-  tsc = ((((uint64_t)hi) << 32) | (uint64_t)lo);
-  return ((size_t)((tsc * 44485709377909ULL) >> 4)) % JOB_SIZE;
-}
-
-int Qplcodec::Getjob() {
-  if (!initialized_job) {
-    Initjobs(execute_path_);
-  }
-  size_t index = Getindex();
-  bool expected = false;
-  while (job_status[index].compare_exchange_strong(expected, true) == false) {
-    expected = false;
-    index = Getindex();
-  }
-
-  job_ = job_pool[index];
-  return index;
-}
-
 /*
  * The QPL can't compress/decompress the block over QPL_MAX_TRANS_SIZE,
  * We partition the input to several 256KB blocks.
@@ -116,7 +66,8 @@ void Qplcodec::Compress(
     const uint8_t* input,
     int64_t output_buffer_length,
     uint8_t* output) {
-  int job_id = Getjob();
+  job_ = Initjob(execute_path_);
+
   int64_t out_size = output_buffer_length;
   job_->total_out = 0;
   job_->total_in = 0;
@@ -146,7 +97,6 @@ void Qplcodec::Compress(
     qpl_status status = qpl_execute_job(job_);
 
     if (status != QPL_STS_OK) {
-      std::atomic_store(&job_status[job_id], false);
       VELOX_FAIL("QPL::Error while QPL compression occurred.");
     }
 
@@ -154,7 +104,6 @@ void Qplcodec::Compress(
     job_->flags &= ~QPL_FLAG_FIRST;
     iteration_count++;
   }
-  std::atomic_store(&job_status[job_id], false);
 }
 
 void Qplcodec::Decompress(
@@ -166,8 +115,9 @@ void Qplcodec::Decompress(
     VELOX_FAIL("QPL::Error, the Decompression size is 0.");
   }
 
+  job_ = Initjob(execute_path_);
+
   int64_t out_size = output_buffer_length;
-  int job_id = Getjob();
   job_->total_out = 0;
   job_->total_in = 0;
   job_->op = qpl_op_decompress;
@@ -192,12 +142,10 @@ void Qplcodec::Decompress(
 
     qpl_status status = qpl_execute_job(job_);
     if (status != QPL_STS_OK) {
-      std::atomic_store(&job_status[job_id], false);
       VELOX_FAIL("QPL::Error while decompression occurred.");
     }
     source_bytes_left = input_length - job_->total_in;
     job_->flags &= ~QPL_FLAG_FIRST;
     iteration_count++;
   }
-  std::atomic_store(&job_status[job_id], false);
 }
