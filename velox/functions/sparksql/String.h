@@ -423,7 +423,9 @@ struct SubstrFunction {
     }
 
     // Adjusting last
-    if (numCharacters - length < start - 1) {
+    int32_t last;
+    bool lastOverflow = __builtin_add_overflow(start, length - 1, &last);
+    if (lastOverflow || last > numCharacters) {
       last = numCharacters;
     }
 
