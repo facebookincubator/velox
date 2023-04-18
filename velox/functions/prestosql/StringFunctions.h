@@ -51,17 +51,13 @@ struct CodePointFunction {
 ///
 ///     Returns the rest of string from the starting position start.
 ///     Positions start with 1. A negative starting position is interpreted as
-///     being relative to the end of the string. Return empty When the negative
-///     starting position is left of the first character.
-
+///     being relative to the end of the string.
 ///
 /// substr(string, start, length) -> varchar
 ///
 ///     Returns a substring from string of length length from the
 ///     starting position start. Positions start with 1. A negative starting
 ///     position is interpreted as being relative to the end of the string.
-///     Return empty When the negative starting position is left of
-///     the first character.
 template <typename T>
 struct SubstrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
