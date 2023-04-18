@@ -27,6 +27,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/common/serialization/Serializable.h"
 #include "velox/type/Date.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
@@ -56,11 +57,60 @@ enum class FilterKind {
   kHugeintRange,
 };
 
+namespace {
+std::unordered_map<FilterKind, std::string> filterKinds() {
+  return {
+      {FilterKind::kAlwaysFalse, "kAlwaysFalse"},
+      {FilterKind::kAlwaysTrue, "kAlwaysTrue"},
+      {FilterKind::kIsNull, "kIsNull"},
+      {FilterKind::kIsNotNull, "kIsNotNull"},
+      {FilterKind::kBoolValue, "kBoolValue"},
+      {FilterKind::kBigintRange, "kBigintRange"},
+      {FilterKind::kBigintValuesUsingHashTable, "kBigintValuesUsingHashTable"},
+      {FilterKind::kBigintValuesUsingBitmask, "kBigintValuesUsingBitmask"},
+      {FilterKind::kNegatedBigintRange, "kNegatedBigintRange"},
+      {FilterKind::kNegatedBigintValuesUsingHashTable,
+       "kNegatedBigintValuesUsingHashTable"},
+      {FilterKind::kNegatedBigintValuesUsingBitmask,
+       "kNegatedBigintValuesUsingBitmask"},
+      {FilterKind::kDoubleRange, "kDoubleRange"},
+      {FilterKind::kFloatRange, "kFloatRange"},
+      {FilterKind::kBytesRange, "kBytesRange"},
+      {FilterKind::kNegatedBytesRange, "kNegatedBytesRange"},
+      {FilterKind::kBytesValues, "kBytesValues"},
+      {FilterKind::kNegatedBytesValues, "kNegatedBytesValues"},
+      {FilterKind::kBigintMultiRange, "kBigintMultiRange"},
+      {FilterKind::kMultiRange, "kMultiRange"},
+      {FilterKind::kHugeintRange, "kHugeintRange"},
+  };
+}
+
+template <typename K, typename V>
+std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
+  std::unordered_map<V, K> inverted;
+  for (const auto& [key, value] : mapping) {
+    inverted.emplace(value, key);
+  }
+  return inverted;
+}
+
+const char* filterKinds(FilterKind kind) {
+  static const auto kinds = filterKinds();
+  return kinds.at(kind).c_str();
+}
+
+FilterKind filterKindFromName(const std::string& name) {
+  static const auto kinds = invertMap(filterKinds());
+  return kinds.at(name);
+}
+
+} // namespace
+
 /**
  * A simple filter (e.g. comparison with literal) that can be applied
  * efficiently while extracting values from an ORC stream.
  */
-class Filter {
+class Filter : public velox::ISerializable {
  protected:
   Filter(bool deterministic, bool nullAllowed, FilterKind kind)
       : nullAllowed_(nullAllowed), deterministic_(deterministic), kind_(kind) {}
@@ -235,6 +285,9 @@ class Filter {
   virtual std::string toString() const;
 
  protected:
+  folly::dynamic serializeBase(std::string_view name) const;
+
+ protected:
   const bool nullAllowed_;
 
  private:
@@ -260,6 +313,8 @@ class Filter {
 class AlwaysFalse final : public Filter {
  public:
   AlwaysFalse() : Filter(true, false, FilterKind::kAlwaysFalse) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -321,6 +376,8 @@ class AlwaysTrue final : public Filter {
       std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<AlwaysTrue>();
   }
+
+  folly::dynamic serialize() const override;
 
   bool testNull() const final {
     return true;
@@ -386,6 +443,8 @@ class IsNull final : public Filter {
  public:
   IsNull() : Filter(true, true, FilterKind::kIsNull) {}
 
+  folly::dynamic serialize() const override;
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<IsNull>();
@@ -443,6 +502,8 @@ class IsNull final : public Filter {
 class IsNotNull final : public Filter {
  public:
   IsNotNull() : Filter(true, false, FilterKind::kIsNotNull) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -507,6 +568,8 @@ class BoolValue final : public Filter {
   BoolValue(bool value, bool nullAllowed)
       : Filter(true, nullAllowed, FilterKind::kBoolValue), value_(value) {}
 
+  folly::dynamic serialize() const override;
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     if (nullAllowed) {
@@ -560,6 +623,8 @@ class BigintRange final : public Filter {
         lower16_(std::max<int64_t>(lower, std::numeric_limits<int16_t>::min())),
         upper16_(std::min<int64_t>(upper, std::numeric_limits<int16_t>::max())),
         isSingleValue_(upper_ == lower_) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -658,6 +723,8 @@ class NegatedBigintRange final : public Filter {
         nonNegated_(std::make_unique<BigintRange>(lower, upper, !nullAllowed)) {
   }
 
+  folly::dynamic serialize() const override;
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<NegatedBigintRange>(
@@ -720,6 +787,8 @@ class HugeintRange final : public Filter {
       : Filter(true, nullAllowed, FilterKind::kHugeintRange),
         lower_(lower),
         upper_(upper) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -789,6 +858,8 @@ class BigintValuesUsingHashTable final : public Filter {
         containsEmptyMarker_(other.containsEmptyMarker_),
         values_(other.values_),
         sizeMask_(other.sizeMask_) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -862,12 +933,20 @@ class BigintValuesUsingBitmask final : public Filter {
       bool nullAllowed);
 
   BigintValuesUsingBitmask(
+      int64_t min,
+      int64_t max,
+      std::vector<bool>&& bitmask,
+      bool nullAllowed);
+
+  BigintValuesUsingBitmask(
       const BigintValuesUsingBitmask& other,
       bool nullAllowed)
       : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBitmask),
         bitmask_(other.bitmask_),
         min_(other.min_),
         max_(other.max_) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -908,6 +987,12 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
   NegatedBigintValuesUsingHashTable(
       int64_t min,
       int64_t max,
+      const BigintValuesUsingHashTable& nonNegated,
+      bool nullAllowed);
+
+  NegatedBigintValuesUsingHashTable(
+      int64_t min,
+      int64_t max,
       const std::vector<int64_t>& values,
       bool nullAllowed);
 
@@ -917,6 +1002,8 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
       : Filter(true, nullAllowed, other.kind()),
         nonNegated_(
             std::make_unique<BigintValuesUsingHashTable>(*other.nonNegated_)) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -987,6 +1074,12 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
       bool nullAllowed);
 
   NegatedBigintValuesUsingBitmask(
+      int64_t min,
+      int64_t max,
+      const BigintValuesUsingBitmask& nonNegated,
+      bool nullAllowed);
+
+  NegatedBigintValuesUsingBitmask(
       const NegatedBigintValuesUsingBitmask& other,
       bool nullAllowed)
       : Filter(true, nullAllowed, other.kind()),
@@ -994,6 +1087,8 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
         max_(other.max_),
         nonNegated_(
             std::make_unique<BigintValuesUsingBitmask>(*other.nonNegated_)) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1059,6 +1154,15 @@ class AbstractRange : public Filter {
         "A range filter must have  a lower or upper  bound");
   }
 
+  folly::dynamic serializeBase(std::string_view name) const {
+    auto obj = Filter::serializeBase(name);
+    obj["lowerUnbounded"] = lowerUnbounded_;
+    obj["lowerExclusive"] = lowerExclusive_;
+    obj["upperUnbounded"] = upperUnbounded_;
+    obj["upperExclusive"] = upperExclusive_;
+    return obj;
+  }
+
  protected:
   const bool lowerUnbounded_;
   const bool lowerExclusive_;
@@ -1120,6 +1224,8 @@ class FloatingPointRange final : public AbstractRange {
     VELOX_CHECK(lowerUnbounded_ || !std::isnan(lower_));
     VELOX_CHECK(upperUnbounded_ || !std::isnan(upper_));
   }
+
+  folly::dynamic serialize() const override;
 
   double lower() const {
     return lower_;
@@ -1370,6 +1476,8 @@ class BytesRange final : public AbstractRange {
         upper_(other.upper_),
         singleValue_(other.singleValue_) {}
 
+  folly::dynamic serialize() const override;
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     if (nullAllowed) {
@@ -1475,6 +1583,8 @@ class NegatedBytesRange final : public Filter {
       : Filter(true, nullAllowed, other.kind()),
         nonNegated_(std::make_unique<BytesRange>(*other.nonNegated_)) {}
 
+  folly::dynamic serialize() const override;
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<NegatedBytesRange>(
@@ -1554,6 +1664,8 @@ class BytesValues final : public Filter {
         values_(other.values_),
         lengths_(other.lengths_) {}
 
+  folly::dynamic serialize() const override;
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     if (nullAllowed) {
@@ -1604,6 +1716,8 @@ class BigintMultiRange final : public Filter {
 
   BigintMultiRange(const BigintMultiRange& other, bool nullAllowed);
 
+  folly::dynamic serialize() const override;
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
 
@@ -1644,9 +1758,16 @@ class NegatedBytesValues final : public Filter {
     nonNegated_ = std::make_unique<BytesValues>(values, !nullAllowed);
   }
 
+  NegatedBytesValues(const BytesValues& nonNegated, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kNegatedBytesValues) {
+    nonNegated_ = std::make_unique<BytesValues>(nonNegated, !nullAllowed);
+  }
+
   NegatedBytesValues(const NegatedBytesValues& other, bool nullAllowed)
       : Filter(true, nullAllowed, other.kind()),
         nonNegated_(std::make_unique<BytesValues>(*other.nonNegated_)) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1698,6 +1819,8 @@ class MultiRange final : public Filter {
       : Filter(true, nullAllowed, FilterKind::kMultiRange),
         filters_(std::move(filters)),
         nanAllowed_(nanAllowed) {}
+
+  folly::dynamic serialize() const override;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;

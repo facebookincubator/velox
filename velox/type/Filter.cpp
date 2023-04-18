@@ -98,6 +98,208 @@ std::string Filter::toString() const {
       nullAllowed_ ? "null allowed" : "null not allowed");
 }
 
+folly::dynamic Filter::serializeBase(std::string_view name) const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = name;
+  obj["nullAllowed"] = nullAllowed_;
+  obj["deterministic"] = deterministic_;
+  obj["kind"] = filterKinds(kind_);
+  return obj;
+}
+
+folly::dynamic AlwaysFalse::serialize() const {
+  return Filter::serializeBase("AlwaysFalse");
+}
+
+folly::dynamic AlwaysTrue::serialize() const {
+  return Filter::serializeBase("AlwaysTrue");
+}
+
+folly::dynamic IsNull::serialize() const {
+  return Filter::serializeBase("IsNull");
+}
+
+folly::dynamic IsNotNull::serialize() const {
+  return Filter::serializeBase("IsNotNull");
+}
+
+folly::dynamic BoolValue::serialize() const {
+  auto obj = Filter::serializeBase("BoolValue");
+  obj["value"] = value_;
+  return obj;
+}
+
+folly::dynamic BigintRange::serialize() const {
+  auto obj = Filter::serializeBase("BigintRange");
+  obj["lower"] = lower_;
+  obj["upper"] = upper_;
+  return obj;
+}
+
+folly::dynamic NegatedBigintRange::serialize() const {
+  auto obj = Filter::serializeBase("NegatedBigintRange");
+  obj["nonNegated"] = nonNegated_->serialize();
+  return obj;
+}
+
+folly::dynamic HugeintRange::serialize() const {
+  auto obj = Filter::serializeBase("HugeintRange");
+  obj["lower"] = lower_;
+  obj["upper"] = upper_;
+  return obj;
+}
+
+folly::dynamic BigintValuesUsingHashTable::serialize() const {
+  auto obj = Filter::serializeBase("BigintValuesUsingHashTable");
+  obj["min"] = min_;
+  obj["max"] = max_;
+  folly::dynamic arr = folly::dynamic::array;
+  for (auto v : values_) {
+    arr.push_back(v);
+  }
+  obj["values"] = arr;
+  return obj;
+}
+
+BigintValuesUsingBitmask::BigintValuesUsingBitmask(
+    int64_t min,
+    int64_t max,
+    std::vector<bool>&& bitmask,
+    bool nullAllowed)
+    : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBitmask),
+      min_(min),
+      max_(max) {
+  VELOX_CHECK(min < max, "min must be less than max");
+  bitmask_ = std::move(bitmask);
+}
+
+folly::dynamic BigintValuesUsingBitmask::serialize() const {
+  auto obj = Filter::serializeBase("BigintValuesUsingBitmask");
+  obj["min"] = min_;
+  obj["max"] = max_;
+  folly::dynamic arr = folly::dynamic::array;
+  for (auto v : bitmask_) {
+    arr.push_back(v);
+  }
+  obj["values"] = arr;
+  return obj;
+}
+
+NegatedBigintValuesUsingBitmask::NegatedBigintValuesUsingBitmask(
+    int64_t min,
+    int64_t max,
+    const BigintValuesUsingBitmask& nonNegated,
+    bool nullAllowed)
+    : Filter(true, nullAllowed, FilterKind::kNegatedBigintValuesUsingBitmask),
+      min_(min),
+      max_(max) {
+  nonNegated_ =
+      std::make_unique<BigintValuesUsingBitmask>(nonNegated, !nullAllowed);
+}
+
+NegatedBigintValuesUsingHashTable::NegatedBigintValuesUsingHashTable(
+    int64_t min,
+    int64_t max,
+    const BigintValuesUsingHashTable& nonNegated,
+    bool nullAllowed)
+    : Filter(
+          true,
+          nullAllowed,
+          FilterKind::kNegatedBigintValuesUsingHashTable) {
+  nonNegated_ =
+      std::make_unique<BigintValuesUsingHashTable>(nonNegated, !nullAllowed);
+}
+
+folly::dynamic NegatedBigintValuesUsingHashTable::serialize() const {
+  auto obj = Filter::serializeBase("NegatedBigintValuesUsingHashTable");
+  obj["nonNegated"] = nonNegated_->serialize();
+  return obj;
+}
+
+folly::dynamic NegatedBigintValuesUsingBitmask::serialize() const {
+  auto obj = Filter::serializeBase("NegatedBigintValuesUsingBitmask");
+  obj["min"] = min_;
+  obj["max"] = max_;
+  obj["nonNegated"] = nonNegated_->serialize();
+  return obj;
+}
+template <>
+folly::dynamic FloatingPointRange<float>::serialize() const {
+  auto obj = AbstractRange::serializeBase("FloatingPointRange");
+  obj["lower"] = lower_;
+  obj["upper"] = upper_;
+  return obj;
+}
+
+template <>
+folly::dynamic FloatingPointRange<double>::serialize() const {
+  auto obj = AbstractRange::serializeBase("FloatingPointRange");
+  obj["lower"] = lower_;
+  obj["upper"] = upper_;
+  return obj;
+}
+
+folly::dynamic BytesRange::serialize() const {
+  auto obj = AbstractRange::serializeBase("BytesRange");
+  obj["lower"] = lower_;
+  obj["upper"] = upper_;
+  obj["singleValue"] = singleValue_;
+  return obj;
+}
+
+folly::dynamic NegatedBytesRange::serialize() const {
+  auto obj = Filter::serializeBase("NegatedBytesRange");
+  obj["nonNegated"] = nonNegated_->serialize();
+  return obj;
+}
+
+folly::dynamic BytesValues::serialize() const {
+  auto obj = Filter::serializeBase("BytesValues");
+  obj["lower"] = lower_;
+  obj["upper"] = upper_;
+  folly::dynamic values = folly::dynamic::array;
+  folly::dynamic lengths = folly::dynamic::array;
+
+  for (auto v : values_) {
+    values.push_back(v);
+  }
+
+  for (auto l : lengths_) {
+    lengths.push_back(l);
+  }
+
+  obj["values"] = values;
+  obj["lengths"] = lengths;
+  return obj;
+}
+
+folly::dynamic BigintMultiRange::serialize() const {
+  auto obj = Filter::serializeBase("BigintMultiRange");
+  folly::dynamic arr = folly::dynamic::array;
+  for (const auto& r : ranges_) {
+    arr.push_back(r->serialize());
+  }
+  obj["ranges"] = arr;
+  return obj;
+}
+
+folly::dynamic NegatedBytesValues::serialize() const {
+  auto obj = Filter::serializeBase("NegatedBytesValues");
+  obj["nonNegated"] = nonNegated_->serialize();
+  return obj;
+}
+
+folly::dynamic MultiRange::serialize() const {
+  auto obj = Filter::serializeBase("MultiRange");
+  obj["nanAllowed"] = nanAllowed_;
+  folly::dynamic arr = folly::dynamic::array;
+  for (const auto& f : filters_) {
+    arr.push_back(f->serialize());
+  }
+  obj["filters"] = arr;
+  return obj;
+}
+
 BigintValuesUsingBitmask::BigintValuesUsingBitmask(
     int64_t min,
     int64_t max,
