@@ -20,13 +20,11 @@
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-// #include "velox/functions/prestosql/types/TimeWithTimeZoneType.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 #include "velox/external/date/date.h"
 #include <iomanip>
-// #include "velox/external/duckdb/duckdb.hpp"
 
 namespace facebook::velox::functions {
 

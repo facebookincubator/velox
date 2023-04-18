@@ -17,7 +17,6 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::functions {
 namespace {

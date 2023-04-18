@@ -2798,7 +2798,7 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
   EXPECT_EQ(std::nullopt, dateParse(std::nullopt, std::nullopt));
 
   // Simple tests. More exhaustive tests are provided in DateTimeFormatterTest.
-  EXPECT_EQ(Timestamp(86402, 0), dateParse("1970-01-02", "%Y-%m-%d"));
+  EXPECT_EQ(Timestamp(86400, 0), dateParse("1970-01-02", "%Y-%m-%d"));
   EXPECT_EQ(Timestamp(0, 0), dateParse("1970-01-01", "%Y-%m-%d"));
   EXPECT_EQ(Timestamp(86400, 0), dateParse("19700102", "%Y%m%d"));
 
