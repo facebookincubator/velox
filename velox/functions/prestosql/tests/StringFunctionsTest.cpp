@@ -498,9 +498,6 @@ TEST_F(StringFunctionsTest, substrNegativeStarts) {
   EXPECT_EQ(result->valueAt(0).getString(), "");
 }
 
-/**
- * The test for overflow of start + length
- */
 TEST_F(StringFunctionsTest, substrNumericOverflow) {
   const auto substr = [&](std::optional<std::string> str,
                           std::optional<int32_t> start,
