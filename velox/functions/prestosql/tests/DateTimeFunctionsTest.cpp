@@ -3055,7 +3055,10 @@ TEST_F(DateTimeFunctionsTest, timeZoneMinuteTest) {
   EXPECT_EQ(0, timezone_minute("1970-01-01 03:20:00", "Canada/Atlantic"));
   EXPECT_EQ(30, timezone_minute("1970-01-01 03:20:00", "Asia/Katmandu"));
   EXPECT_EQ(45, timezone_minute("1970-01-01 03:20:00", "Pacific/Chatham"));
-  EXPECT_THROW(timezone_minute("abc", "Pacific/Ch"), VeloxUserError);
-  EXPECT_THROW(
-      timezone_minute("1970-01-01 03:20:00", "Pacific/Ch"), std::runtime_error);
+  VELOX_ASSERT_THROW(
+      timezone_minute("abc", "Pacific/Chatham"),
+      "Unable to parse timestamp value: \"abc\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
+  VELOX_ASSERT_THROW(
+      timezone_minute("2023-", "Pacific/Chatham"),
+      "Unable to parse timestamp value: \"2023-\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
 }
