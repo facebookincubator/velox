@@ -127,8 +127,8 @@ class LocalExchangeSource : public ExchangeSource {
               continue;
             }
             inputPage->unshare();
-            pages.push_back(
-                std::make_unique<SerializedPage>(std::move(inputPage), pool_));
+            pages.push_back(std::make_unique<SerializedPage>(
+                std::move(inputPage), pool_.get()));
             inputPage = nullptr;
           }
           int64_t ackSequence;

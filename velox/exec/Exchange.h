@@ -267,7 +267,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
       : taskId_(taskId),
         destination_(destination),
         queue_(std::move(queue)),
-        pool_(pool) {}
+        pool_(pool->shared_from_this()) {}
 
   virtual ~ExchangeSource() = default;
 
@@ -323,7 +323,12 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   bool atEnd_ = false;
 
  protected:
-  memory::MemoryPool* pool_;
+
+  // Shared ownership for 'MemoryPool' as the pool might still be used after the
+  // task owning the pool gets destroyed. This scenario can happen when a super
+  // slow remote response gets back. And at the time it gets back its task is
+  // already destroyed.
+  const std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 struct RemoteConnectorSplit : public connector::ConnectorSplit {
