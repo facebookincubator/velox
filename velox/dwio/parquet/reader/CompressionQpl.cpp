@@ -21,11 +21,6 @@
 #define MAX_COMPRESS_CHUNK_SIZE 262144
 #define MAX_DECOMPRESS_CHUNK_SIZE 262144
 #define QPL_MAX_TRANS_SIZE 2097152
-#define JOB_BUFFER_SIZE 820 * 1024
-
-thread_local bool initialize_job = false;
-thread_local uint8_t job_buffer[JOB_BUFFER_SIZE];
-thread_local qpl_job* job;
 
 /*
 * QPL compression/decompression need init a job buffer,
@@ -38,23 +33,49 @@ hardware.
 * But now, I don't know where to free the job buffers. If the reviewer know, can
 you tell me? Thanks.
 */
-qpl_job* Initjob(qpl_path_t execution_path) {
+void Qplcodec::Initjob() {
   if (initialize_job) {
-    return job;
+    return;
   }
-  qpl_status status;
 
-  job = reinterpret_cast<qpl_job*>(job_buffer);
-  status = qpl_init_job(execution_path, job);
+  qpl_status status;
+  uint32_t size;
+
+  status = qpl_get_job_size(execute_path_, &size);
   if (status != QPL_STS_OK) {
-    execution_path = qpl_path_software;
-    status = qpl_init_job(execution_path, job);
+    VELOX_FAIL("QPL::An error acquired during job size getting.");
+  }
+
+  job_buffer = new uint8_t[size];
+  job_ = reinterpret_cast<qpl_job*>(job_buffer);
+  status = qpl_init_job(execute_path_, job_);
+
+  if (status != QPL_STS_OK) {
+    execute_path_ = qpl_path_software;
+    status = qpl_get_job_size(execute_path_, &size);
+    if (status != QPL_STS_OK) {
+      VELOX_FAIL("QPL::An error acquired during job size getting.");
+    }
+
+    delete[] job_buffer;
+    job_buffer = new uint8_t[size];
+    job_ = reinterpret_cast<qpl_job*>(job_buffer);
+    status = qpl_init_job(execute_path_, job_);
     if (status != QPL_STS_OK) {
       VELOX_FAIL("QPL::An error acquired during compression job initializing.");
     }
   }
   initialize_job = true;
-  return job;
+  return;
+}
+
+Qplcodec::~Qplcodec() {
+  qpl_status status = qpl_fini_job(job_);
+  if (status != QPL_STS_OK) {
+    VELOX_FAIL(
+        "QPL::An error acquired during compression job initializing finalization.");
+  }
+  delete[] job_buffer;
 }
 /*
  * The QPL can't compress/decompress the block over QPL_MAX_TRANS_SIZE,
@@ -66,7 +87,7 @@ void Qplcodec::Compress(
     const uint8_t* input,
     int64_t output_buffer_length,
     uint8_t* output) {
-  job_ = Initjob(execute_path_);
+  Initjob();
 
   int64_t out_size = output_buffer_length;
   job_->total_out = 0;
@@ -115,7 +136,7 @@ void Qplcodec::Decompress(
     VELOX_FAIL("QPL::Error, the Decompression size is 0.");
   }
 
-  job_ = Initjob(execute_path_);
+  Initjob();
 
   int64_t out_size = output_buffer_length;
   job_->total_out = 0;

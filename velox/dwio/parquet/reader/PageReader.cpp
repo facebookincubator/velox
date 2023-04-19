@@ -198,7 +198,8 @@ const char* FOLLY_NONNULL PageReader::uncompressData(
     case thrift::CompressionCodec::QPL: {
       dwio::common::ensureCapacity<char>(
           uncompressedData_, uncompressedSize, &pool_);
-      Qplcodec qpl_dec(qpl_path_hardware, (qpl_compression_levels)1);
+      thread_local Qplcodec qpl_dec(
+          qpl_path_hardware, (qpl_compression_levels)1);
       qpl_dec.Decompress(
           compressedSize,
           (const uint8_t*)pageData,
