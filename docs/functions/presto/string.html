@@ -214,7 +214,8 @@ Positions start with <code class="docutils literal notranslate"><span class="pre
 <span class="sig-name descname"><span class="pre">substr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#substr" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the rest of <code class="docutils literal notranslate"><span class="pre">string</span></code> from the starting position <code class="docutils literal notranslate"><span class="pre">start</span></code>.
 Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting position is interpreted
-as being relative to the end of the string.</p>
+as being relative to the end of the string. Returns empty string if absolute
+value of <code class="docutils literal notranslate"><span class="pre">start</span></code> is greater then length of the <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -222,7 +223,9 @@ as being relative to the end of the string.</p>
 <span class="sig-name descname"><span class="pre">substr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id5" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns a substring from <code class="docutils literal notranslate"><span class="pre">string</span></code> of length <code class="docutils literal notranslate"><span class="pre">length</span></code> from the starting
 position <code class="docutils literal notranslate"><span class="pre">start</span></code>. Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting
-position is interpreted as being relative to the end of the string.</p>
+position is interpreted as being relative to the end of the string.
+Returns empty string if absolute value of <code class="docutils literal notranslate"><span class="pre">'start</span></code> is greater then
+length of the <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
