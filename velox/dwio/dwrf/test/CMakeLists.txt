@@ -52,7 +52,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_decompression_test TestDecompression.cpp)
@@ -68,7 +68,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_stripe_stream_test TestStripeStream.cpp)
@@ -83,7 +83,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_stripe_dictionary_cache_test
@@ -100,7 +100,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_dictionary_encoder_test
@@ -149,7 +149,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_writer_context_test TestWriterContext.cpp)
@@ -164,7 +164,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_writer_encoding_manager_test
@@ -180,7 +180,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_writer_sink_test WriterSinkTests.cpp)
@@ -210,7 +210,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_decryption_test DecryptionTests.cpp)
@@ -238,7 +238,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_reader_base_test ReaderBaseTests.cpp)
@@ -252,7 +252,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_config_test ConfigTests.cpp)
@@ -334,7 +334,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwrf_e2e_filter_test E2EFilterTest.cpp)
@@ -349,7 +349,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwrf_statistics_builder_utils_test
@@ -373,7 +373,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwrf_column_writer_index_test ColumnWriterIndexTests.cpp)
@@ -389,7 +389,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwrf_writer_flush_test WriterFlushTest.cpp)
@@ -404,7 +404,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwrf_e2e_writer_test E2EWriterTests.cpp)
@@ -421,7 +421,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwrf_writer_extended_test WriterExtendedTests.cpp)
@@ -435,7 +435,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwrf_column_writer_stats_test ColumnWriterStatsTests.cpp)
@@ -451,7 +451,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(physical_size_aggregator_test PhysicalSizeAggregatorTest.cpp)
@@ -466,7 +466,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwrf_int_encoder_benchmark IntEncoderBenchmark.cpp)
@@ -499,5 +499,5 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})

@@ -38,4 +38,4 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES})
+  ZLIB::ZLIB)

@@ -40,7 +40,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_parquet_reader_benchmark ParquetReaderBenchmark.cpp)

@@ -69,7 +69,7 @@ target_link_libraries(
   ${LZ4}
   ${LZO}
   ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 if(VELOX_ENABLE_ARROW)
