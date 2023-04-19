@@ -20,6 +20,10 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: current_date() -> date
+
+    Returns the current date as of the start of the query.
+
 Truncation Function
 -------------------
 

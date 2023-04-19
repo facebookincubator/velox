@@ -3008,6 +3008,18 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
           (-18297 * kSecondsInDay + 6 * 3'600) * 1'000, "America/Los_Angeles"));
 }
 
+TEST_F(DateTimeFunctionsTest, currentDate) {
+  auto mockRowVector =
+      makeRowVector({BaseVector::createNullConstant(UNKNOWN(), 1, pool())});
+  auto result = evaluateOnce<Date>("current_date()",mockRowVector);
+
+  // use another stl methods to get current date for test
+  auto time = std::time(nullptr);
+  std::stringstream str;
+  str << std::put_time(std::localtime(&time), "%Y-%m-%d");
+  EXPECT_EQ(std::to_string(result.value()), str.str());
+}
+
 TEST_F(DateTimeFunctionsTest, timeZoneHour) {
   const auto timezone_hour = [&](const char* time, const char* timezone) {
     Timestamp ts = util::fromTimestampString(time);
