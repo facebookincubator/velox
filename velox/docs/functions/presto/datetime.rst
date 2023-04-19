@@ -2,6 +2,18 @@
 Date and Time Functions
 =====================================
 
+.. function:: current_date() -> date
+
+    Returns the current date.
+
+.. function:: current_timestamp() -> timestamp with time zone
+
+    Returns the current timestamp as of the start of the query.
+
+.. function:: date(x) -> date
+
+    This is an alias for ``CAST(x AS date)``.
+
 .. function:: from_unixtime(unixtime) -> timestamp
 
     Returns the UNIX timestamp ``unixtime`` as a timestamp.
@@ -11,6 +23,10 @@ Date and Time Functions
 
     Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
     using ``string`` for the time zone.
+
+.. function:: now() -> timestamp with time zone
+
+    This is an alias for :func:`current_timestamp`.
 
 .. function:: to_unixtime(timestamp) -> double
 

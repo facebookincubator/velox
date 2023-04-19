@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -2846,4 +2847,61 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
       dateParse("1", "%y+"), "Invalid format: \"1\" is malformed at \"1\"");
   VELOX_ASSERT_THROW(
       dateParse("116", "%y+"), "Invalid format: \"116\" is malformed at \"6\"");
+}
+
+// The test for the alias now() is integrated into this test.
+TEST_F(DateTimeFunctionsTest, currentTimestamp) {
+  const auto evaluateCurrentTimestamp =
+      [&](const std::string& functionName,
+          int64_t expectedTimestamp,
+          const std::string& expectedTimeZone) {
+        auto emptyRowVector = makeRowVector(ROW({}), 1);
+
+        auto callExpr = std::make_shared<const core::CallTypedExpr>(
+            TIMESTAMP_WITH_TIME_ZONE(),
+            std::vector<core::TypedExprPtr>{},
+            functionName);
+
+        auto actual = evaluate(callExpr, emptyRowVector);
+        auto actualRow = actual->wrappedVector()->as<RowVector>();
+
+        auto expected = makeTimestampWithTimeZoneVector(
+            expectedTimestamp, expectedTimeZone.c_str());
+
+        ASSERT_EQ(expected->size(), actual->size());
+        ASSERT_TRUE(expected->type()->equivalent(*actual->type()))
+            << "Expected " << expected->type()->toString() << ", but got "
+            << actual->type()->toString();
+        // Compare the timestamp and timezone. The difference between the actual
+        // and expected timestamp should be less than 5 milliseconds maximum
+        // acceptable lag since some machines are slow. The timezone should be
+        // identical.
+        ASSERT_TRUE(
+            actualRow->childAt(0)->compare(expected->childAt(0).get(), 0, 0) <=
+            5)
+            << "Expected " << expected->childAt(0)->toString(0) << ", but got "
+            << actualRow->childAt(0)->toString(0)
+            << ", which is larger than the acceptable lag of 5 milliseconds.";
+
+        ASSERT_TRUE(
+            actualRow->childAt(1)->compare(expected->childAt(1).get(), 0, 0) ==
+            0)
+            << "Expected " << expected->childAt(1)->toString(0) << ", but got "
+            << actualRow->childAt(1)->toString(0)
+            << ", which is not the exact same timezone.";
+      };
+
+  evaluateCurrentTimestamp(
+      "current_timestamp", Timestamp::now().toMillis(), "+00:00");
+  evaluateCurrentTimestamp("now", Timestamp::now().toMillis(), "+00:00");
+
+  setQueryTimeZone("-07:00");
+  evaluateCurrentTimestamp(
+      "current_timestamp", Timestamp::now().toMillis(), "-07:00");
+  evaluateCurrentTimestamp("now", Timestamp::now().toMillis(), "-07:00");
+
+  setQueryTimeZone("+08:00");
+  evaluateCurrentTimestamp(
+      "current_timestamp", Timestamp::now().toMillis(), "+08:00");
+  evaluateCurrentTimestamp("now", Timestamp::now().toMillis(), "+08:00");
 }

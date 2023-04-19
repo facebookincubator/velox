@@ -1053,4 +1053,26 @@ struct ParseDateTimeFunction {
   }
 };
 
+template <typename T>
+struct CurrentTimeStampFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  int16_t timezoneId;
+
+  FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
+    auto sessionTzName = config.sessionTimezone();
+    std::optional<int64_t> sessionTzID;
+    // Set the timezone to the session timezone. If there's
+    // no session timezone, fallback to 0 (GMT).
+    if (!sessionTzName.empty()) {
+      sessionTzID = util::getTimeZoneID(sessionTzName);
+    }
+    timezoneId = sessionTzID.value_or(0);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
+    result = std::make_tuple(Timestamp::now().toMillis(), timezoneId);
+  }
+};
+
 } // namespace facebook::velox::functions
