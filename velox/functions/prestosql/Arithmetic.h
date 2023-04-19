@@ -23,10 +23,13 @@
 #include <functional>
 #include <system_error>
 
+#include "boost/math/distributions/beta.hpp"
 #include "folly/CPortability.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/ArithmeticImpl.h"
+
+using boost::math::beta_distribution;
 
 namespace facebook::velox::functions {
 
@@ -492,6 +495,17 @@ struct TruncateFunction {
 
   FOLLY_ALWAYS_INLINE void call(double& result, double a, int32_t n) {
     result = truncate(a, n);
+  }
+};
+
+template <typename T>
+struct BetaCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double a, double b, double value) {
+    beta_distribution<> dist(a, b);
+    result = boost::math::cdf(dist, value);
   }
 };
 

@@ -699,5 +699,32 @@ TEST_F(ArithmeticTest, truncate) {
   EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
 }
 
+TEST_F(ArithmeticTest, testBetaCdf) {
+  const auto beta_cdf = [&](std::optional<double> a,
+                            std::optional<double> b,
+                            std::optional<double> value) {
+    return evaluateOnce<double>("beta_cdf(c0, c1, c2)", a, b, value);
+  };
+
+  EXPECT_EQ(0.09888000000000001, beta_cdf(3, 4, 0.2));
+  EXPECT_EQ(0.0, beta_cdf(3, 3.6, 0.0));
+  EXPECT_EQ(1.0, beta_cdf(3, 3.6, 1.0));
+  EXPECT_EQ(0.21764809997679951, beta_cdf(3, 3.6, 0.3));
+  EXPECT_EQ(0.9972502881611551, beta_cdf(3, 3.6, 0.9));
+
+  VELOX_ASSERT_THROW(
+      beta_cdf(0, 3, 0.5),
+      "Error in function boost::math::beta_distribution<double>::beta_distribution: Alpha argument is 0, but must be > 0 !");
+  VELOX_ASSERT_THROW(
+      beta_cdf(3, 0, 0.5),
+      "Error in function boost::math::beta_distribution<double>::beta_distribution: Beta argument is 0, but must be > 0 !");
+  VELOX_ASSERT_THROW(
+      beta_cdf(3, 5, -0.1),
+      "Error in function boost::math::cdf(beta_distribution<double> const&, double): x argument is -0.10000000000000001, but must be >= 0 and <= 1 !");
+  VELOX_ASSERT_THROW(
+      beta_cdf(3, 5, 1.1),
+      "Error in function boost::math::cdf(beta_distribution<double> const&, double): x argument is 1.1000000000000001, but must be >= 0 and <= 1 !");
+}
+
 } // namespace
 } // namespace facebook::velox
