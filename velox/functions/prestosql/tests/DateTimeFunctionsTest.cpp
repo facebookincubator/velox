@@ -3011,7 +3011,7 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
 TEST_F(DateTimeFunctionsTest, currentDate) {
   auto mockRowVector =
       makeRowVector({BaseVector::createNullConstant(UNKNOWN(), 1, pool())});
-  auto result = evaluateOnce<Date>("current_date()",mockRowVector);
+  auto result = evaluateOnce<Date>("current_date()", mockRowVector);
 
   // use another stl methods to get current date for test
   auto time = std::time(nullptr);

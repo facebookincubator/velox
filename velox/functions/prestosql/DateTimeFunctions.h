@@ -1084,15 +1084,15 @@ struct ParseDateTimeFunction {
 
 template <typename T>
 struct CurrentDateFunction {
-    typedef std::chrono::duration<int, std::ratio<60 * 60 * 24>> days_type;
-    // return the current local date
-    FOLLY_ALWAYS_INLINE bool call(Date& result) {
-      auto now = std::chrono::system_clock::now();
-      auto local = make_zoned(date::current_zone(), now);
-      auto daysSinceEpoch = std::chrono::time_point_cast<days_type>(local.get_local_time());
-      result = Date(daysSinceEpoch.time_since_epoch().count());
-      return true;
-    }
+  typedef std::chrono::duration<int, std::ratio<60 * 60 * 24>> days_type;
+  // return the current local date
+  FOLLY_ALWAYS_INLINE bool call(Date& result) {
+    auto now = std::chrono::system_clock::now();
+    auto localTime = make_zoned(date::current_zone(), now).get_local_time();
+    auto daysSinceEpoch = std::chrono::time_point_cast<days_type>(localTime);
+    result = Date(daysSinceEpoch.time_since_epoch().count());
+    return true;
+  }
 };
 
 template <typename T>
