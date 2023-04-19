@@ -49,8 +49,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   glog::glog
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -65,8 +65,8 @@ target_link_libraries(
   velox_dwio_dwrf_decompression_test
   ${VELOX_LINK_LIBS}
   Folly::folly
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -80,8 +80,8 @@ target_link_libraries(
   ${DOUBLE_CONVERSION}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -97,8 +97,8 @@ target_link_libraries(
   ${DOUBLE_CONVERSION}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -146,8 +146,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   ${DOUBLE_CONVERSION}
   Folly::folly
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -161,8 +161,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   ${DOUBLE_CONVERSION}
   Folly::folly
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -177,8 +177,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   ${DOUBLE_CONVERSION}
   Folly::folly
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -207,8 +207,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   ${DOUBLE_CONVERSION}
   Folly::folly
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -235,8 +235,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   ${DOUBLE_CONVERSION}
   Folly::folly
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -249,8 +249,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   glog::glog
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -331,8 +331,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -346,8 +346,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -370,8 +370,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -386,8 +386,8 @@ target_link_libraries(
   velox_dwrf_test_utils
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -401,8 +401,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -418,8 +418,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -432,8 +432,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -448,8 +448,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -463,8 +463,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
@@ -496,8 +496,8 @@ target_link_libraries(
   ${DOUBLE_CONVERSION}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})

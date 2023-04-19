@@ -66,8 +66,8 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   Folly::folly
   ${FMT}
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})

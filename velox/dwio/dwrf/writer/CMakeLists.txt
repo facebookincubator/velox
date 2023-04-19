@@ -35,7 +35,7 @@ target_link_libraries(
   velox_time
   velox_vector
   Boost::crc
-  ${LZ4}
-  ${LZO}
+  lz4::lz4
+  lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB)
