@@ -23,6 +23,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Filter.h"
+#include "velox/type/UnscaledLongDecimal.h"
 
 namespace facebook::velox::common {
 
@@ -111,22 +112,44 @@ folly::dynamic AlwaysFalse::serialize() const {
   return Filter::serializeBase("AlwaysFalse");
 }
 
+FilterPtr AlwaysFalse::create(const folly::dynamic& /*obj*/) {
+  return std::make_shared<AlwaysFalse>();
+}
+
 folly::dynamic AlwaysTrue::serialize() const {
   return Filter::serializeBase("AlwaysTrue");
+}
+
+FilterPtr AlwaysTrue::create(const folly::dynamic& /*obj*/) {
+  return std::make_shared<AlwaysTrue>();
 }
 
 folly::dynamic IsNull::serialize() const {
   return Filter::serializeBase("IsNull");
 }
 
+FilterPtr IsNull::create(const folly::dynamic& /*obj*/) {
+  return std::make_shared<IsNull>();
+}
+
 folly::dynamic IsNotNull::serialize() const {
   return Filter::serializeBase("IsNotNull");
+}
+
+FilterPtr IsNotNull::create(const folly::dynamic& /*obj*/) {
+  return std::make_shared<IsNotNull>();
 }
 
 folly::dynamic BoolValue::serialize() const {
   auto obj = Filter::serializeBase("BoolValue");
   obj["value"] = value_;
   return obj;
+}
+
+FilterPtr BoolValue::create(const folly::dynamic& obj) {
+  auto value = obj["value"].asBool();
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  return std::make_shared<BoolValue>(value, nullAllowed);
 }
 
 folly::dynamic BigintRange::serialize() const {
@@ -136,17 +159,43 @@ folly::dynamic BigintRange::serialize() const {
   return obj;
 }
 
+FilterPtr BigintRange::create(const folly::dynamic& obj) {
+  auto lower = obj["lower"].asInt();
+  auto upper = obj["upper"].asInt();
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  return std::make_shared<BigintRange>(lower, upper, nullAllowed);
+}
+
 folly::dynamic NegatedBigintRange::serialize() const {
   auto obj = Filter::serializeBase("NegatedBigintRange");
-  obj["nonNegated"] = nonNegated_->serialize();
+  obj["lower"] = nonNegated_->lower();
+  obj["upper"] = nonNegated_->upper();
   return obj;
+}
+
+FilterPtr NegatedBigintRange::create(const folly::dynamic& obj) {
+  auto lower = obj["lower"].asInt();
+  auto upper = obj["upper"].asInt();
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  return std::make_shared<NegatedBigintRange>(lower, upper, nullAllowed);
 }
 
 folly::dynamic HugeintRange::serialize() const {
   auto obj = Filter::serializeBase("HugeintRange");
-  obj["lower"] = lower_;
-  obj["upper"] = upper_;
+  auto lower = splitInt128<int64_t>(lower_);
+  auto upper = splitInt128<int64_t>(upper_);
+  obj["lowerHi"] = lower.first;
+  obj["lowerLo"] = lower.second;
+  obj["upperHi"] = upper.first;
+  obj["upperLo"] = upper.second;
   return obj;
+}
+
+FilterPtr HugeintRange::create(const folly::dynamic& obj) {
+  auto lower = buildInt128(obj["lowerHi"].asInt(), obj["lowerLo"].asInt());
+  auto upper = buildInt128(obj["upperHi"].asInt(), obj["upperLo"].asInt());
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  return std::make_shared<HugeintRange>(lower, upper, nullAllowed);
 }
 
 folly::dynamic BigintValuesUsingHashTable::serialize() const {
@@ -161,59 +210,65 @@ folly::dynamic BigintValuesUsingHashTable::serialize() const {
   return obj;
 }
 
-BigintValuesUsingBitmask::BigintValuesUsingBitmask(
-    int64_t min,
-    int64_t max,
-    std::vector<bool>&& bitmask,
-    bool nullAllowed)
-    : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBitmask),
-      min_(min),
-      max_(max) {
-  VELOX_CHECK(min < max, "min must be less than max");
-  bitmask_ = std::move(bitmask);
+FilterPtr BigintValuesUsingHashTable::create(const folly::dynamic& obj) {
+  auto min = obj["min"].asInt();
+  auto max = obj["max"].asInt();
+  auto nullAllowed = obj["nullAllowed"].asBool();
+
+  std::vector<int64_t> values;
+  auto arr = obj["values"];
+  values.reserve(arr.size());
+  for (const auto& v : arr) {
+    values.push_back(v.asInt());
+  }
+  return std::make_shared<BigintValuesUsingHashTable>(
+      min, max, values, nullAllowed);
 }
 
 folly::dynamic BigintValuesUsingBitmask::serialize() const {
   auto obj = Filter::serializeBase("BigintValuesUsingBitmask");
   obj["min"] = min_;
   obj["max"] = max_;
+
   folly::dynamic arr = folly::dynamic::array;
   for (auto v : bitmask_) {
     arr.push_back(v);
   }
-  obj["values"] = arr;
+  obj["bitmask"] = arr;
+
   return obj;
 }
 
-NegatedBigintValuesUsingBitmask::NegatedBigintValuesUsingBitmask(
-    int64_t min,
-    int64_t max,
-    const BigintValuesUsingBitmask& nonNegated,
-    bool nullAllowed)
-    : Filter(true, nullAllowed, FilterKind::kNegatedBigintValuesUsingBitmask),
-      min_(min),
-      max_(max) {
-  nonNegated_ =
-      std::make_unique<BigintValuesUsingBitmask>(nonNegated, !nullAllowed);
-}
+FilterPtr BigintValuesUsingBitmask::create(const folly::dynamic& obj) {
+  auto min = obj["min"].asInt();
+  auto max = obj["max"].asInt();
+  auto nullAllowed = obj["nullAllowed"].asBool();
 
-NegatedBigintValuesUsingHashTable::NegatedBigintValuesUsingHashTable(
-    int64_t min,
-    int64_t max,
-    const BigintValuesUsingHashTable& nonNegated,
-    bool nullAllowed)
-    : Filter(
-          true,
-          nullAllowed,
-          FilterKind::kNegatedBigintValuesUsingHashTable) {
-  nonNegated_ =
-      std::make_unique<BigintValuesUsingHashTable>(nonNegated, !nullAllowed);
+  std::vector<bool> bitmask;
+  auto arr = obj["bitmask"];
+  bitmask.reserve(arr.size());
+  for (const auto& v : arr) {
+    bitmask.push_back(v.asBool());
+  }
+
+  return std::make_shared<BigintValuesUsingBitmask>(
+      min, max, std::move(bitmask), nullAllowed);
 }
 
 folly::dynamic NegatedBigintValuesUsingHashTable::serialize() const {
   auto obj = Filter::serializeBase("NegatedBigintValuesUsingHashTable");
   obj["nonNegated"] = nonNegated_->serialize();
   return obj;
+}
+
+FilterPtr NegatedBigintValuesUsingHashTable::create(const folly::dynamic& obj) {
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto deterministic = obj["deterministic"].asBool();
+  // auto kind = filterKindFromName(obj["kind"].asString());
+  auto nonNegated =
+      ISerializable::deserialize<BigintValuesUsingHashTable>(obj["nonNegated"]);
+  return std::make_shared<NegatedBigintValuesUsingHashTable>(
+      deterministic, nullAllowed, std::move(*nonNegated));
 }
 
 folly::dynamic NegatedBigintValuesUsingBitmask::serialize() const {
@@ -223,11 +278,24 @@ folly::dynamic NegatedBigintValuesUsingBitmask::serialize() const {
   obj["nonNegated"] = nonNegated_->serialize();
   return obj;
 }
+
+FilterPtr NegatedBigintValuesUsingBitmask::create(const folly::dynamic& obj) {
+  auto min = obj["min"].asInt();
+  auto max = obj["max"].asInt();
+  auto deterministic = obj["deterministic"].asBool();
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto nonNegated =
+      ISerializable::deserialize<BigintValuesUsingBitmask>(obj["nonNegated"]);
+  return std::make_shared<NegatedBigintValuesUsingBitmask>(
+      min, max, *nonNegated, deterministic, nullAllowed);
+}
+
 template <>
 folly::dynamic FloatingPointRange<float>::serialize() const {
   auto obj = AbstractRange::serializeBase("FloatingPointRange");
   obj["lower"] = lower_;
   obj["upper"] = upper_;
+  obj["isDouble"] = false;
   return obj;
 }
 
@@ -236,7 +304,39 @@ folly::dynamic FloatingPointRange<double>::serialize() const {
   auto obj = AbstractRange::serializeBase("FloatingPointRange");
   obj["lower"] = lower_;
   obj["upper"] = upper_;
+  obj["isDouble"] = true;
   return obj;
+}
+
+FilterPtr AbstractRange::create(const folly::dynamic& obj) {
+  auto lowerUnbounded = obj["lowerUnbounded"].asBool();
+  auto lowerExclusive = obj["lowerExclusive"].asBool();
+  auto upperUnbounded = obj["upperUnbounded"].asBool();
+  auto upperExclusive = obj["upperExclusive"].asBool();
+  auto lower = obj["lower"].asDouble();
+  auto upper = obj["upper"].asDouble();
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto isDouble = obj["isDouble"].asBool();
+
+  if (isDouble) {
+    return std::make_shared<FloatingPointRange<double>>(
+        lower,
+        lowerUnbounded,
+        lowerExclusive,
+        upper,
+        upperUnbounded,
+        upperExclusive,
+        nullAllowed);
+  } else {
+    return std::make_shared<FloatingPointRange<float>>(
+        static_cast<float>(lower),
+        lowerUnbounded,
+        lowerExclusive,
+        static_cast<float>(upper),
+        upperUnbounded,
+        upperExclusive,
+        nullAllowed);
+  }
 }
 
 folly::dynamic BytesRange::serialize() const {
@@ -247,30 +347,67 @@ folly::dynamic BytesRange::serialize() const {
   return obj;
 }
 
+FilterPtr BytesRange::create(const folly::dynamic& obj) {
+  auto lowerUnbounded = obj["lowerUnbounded"].asBool();
+  auto lowerExclusive = obj["lowerExclusive"].asBool();
+  auto upperUnbounded = obj["upperUnbounded"].asBool();
+  auto upperExclusive = obj["upperExclusive"].asBool();
+  auto lower = obj["lower"].asString();
+  auto upper = obj["upper"].asString();
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  return std::make_shared<BytesRange>(
+      lower,
+      lowerUnbounded,
+      lowerExclusive,
+      upper,
+      upperUnbounded,
+      upperExclusive,
+      nullAllowed);
+}
+
 folly::dynamic NegatedBytesRange::serialize() const {
-  auto obj = Filter::serializeBase("NegatedBytesRange");
-  obj["nonNegated"] = nonNegated_->serialize();
-  return obj;
+  return Filter::serializeBase("NegatedBytesRange");
+}
+
+FilterPtr NegatedBytesRange::create(const folly::dynamic& obj) {
+  auto lowerUnbounded = obj["lowerUnbounded"].asBool();
+  auto lowerExclusive = obj["lowerExclusive"].asBool();
+  auto upperUnbounded = obj["upperUnbounded"].asBool();
+  auto upperExclusive = obj["upperExclusive"].asBool();
+  auto lower = obj["lower"].asString();
+  auto upper = obj["upper"].asString();
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  return std::make_shared<NegatedBytesRange>(
+      lower,
+      lowerUnbounded,
+      lowerExclusive,
+      upper,
+      upperUnbounded,
+      upperExclusive,
+      nullAllowed);
 }
 
 folly::dynamic BytesValues::serialize() const {
   auto obj = Filter::serializeBase("BytesValues");
-  obj["lower"] = lower_;
-  obj["upper"] = upper_;
   folly::dynamic values = folly::dynamic::array;
-  folly::dynamic lengths = folly::dynamic::array;
-
   for (auto v : values_) {
     values.push_back(v);
   }
+  obj["values"] = values;
+  return obj;
+}
 
-  for (auto l : lengths_) {
-    lengths.push_back(l);
+FilterPtr BytesValues::create(const folly::dynamic& obj) {
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto arr = obj["values"];
+  std::vector<std::string> values;
+  values.reserve(arr.size());
+
+  for (const auto& v : arr) {
+    values.emplace_back(v.asString());
   }
 
-  obj["values"] = values;
-  obj["lengths"] = lengths;
-  return obj;
+  return std::make_shared<BytesValues>(values, nullAllowed);
 }
 
 folly::dynamic BigintMultiRange::serialize() const {
@@ -283,10 +420,30 @@ folly::dynamic BigintMultiRange::serialize() const {
   return obj;
 }
 
+FilterPtr BigintMultiRange::create(const folly::dynamic& obj) {
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto arr = obj["ranges"];
+  std::vector<std::unique_ptr<BigintRange>> ranges;
+  ranges.reserve(arr.size());
+  for (const auto& r : arr) {
+    ranges.push_back(std::make_unique<BigintRange>(
+        *ISerializable::deserialize<BigintRange>(r)));
+  }
+  return std::make_shared<BigintMultiRange>(std::move(ranges), nullAllowed);
+}
+
 folly::dynamic NegatedBytesValues::serialize() const {
   auto obj = Filter::serializeBase("NegatedBytesValues");
   obj["nonNegated"] = nonNegated_->serialize();
   return obj;
+}
+
+FilterPtr NegatedBytesValues::create(const folly::dynamic& obj) {
+  auto deterministic = obj["deterministic"].asBool();
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto nonNegated = ISerializable::deserialize<BytesValues>(obj["nonNegated"]);
+  return std::make_unique<NegatedBytesValues>(
+      *nonNegated, deterministic, nullAllowed);
 }
 
 folly::dynamic MultiRange::serialize() const {
@@ -298,6 +455,22 @@ folly::dynamic MultiRange::serialize() const {
   }
   obj["filters"] = arr;
   return obj;
+}
+
+FilterPtr MultiRange::create(const folly::dynamic& obj) {
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto nanAllowed = obj["nanAllowed"].asBool();
+  folly::dynamic arr = obj["filters"];
+  auto tmpFilters = ISerializable::deserialize<std::vector<Filter>>(arr);
+
+  std::vector<std::unique_ptr<Filter>> filters;
+  filters.reserve(tmpFilters.size());
+  for (const auto& f : tmpFilters) {
+    filters.emplace_back(f->clone());
+  }
+
+  return std::make_shared<MultiRange>(
+      std::move(filters), nullAllowed, nanAllowed);
 }
 
 BigintValuesUsingBitmask::BigintValuesUsingBitmask(

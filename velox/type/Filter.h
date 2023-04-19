@@ -309,12 +309,16 @@ class Filter : public velox::ISerializable {
   }
 };
 
+using FilterPtr = std::shared_ptr<const Filter>;
+
 /// TODO Check if this filter is needed. This should not be passed down.
 class AlwaysFalse final : public Filter {
  public:
   AlwaysFalse() : Filter(true, false, FilterKind::kAlwaysFalse) {}
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& /*obj*/);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -378,6 +382,8 @@ class AlwaysTrue final : public Filter {
   }
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& /*obj*/);
 
   bool testNull() const final {
     return true;
@@ -445,6 +451,8 @@ class IsNull final : public Filter {
 
   folly::dynamic serialize() const override;
 
+  static FilterPtr create(const folly::dynamic& /*obj*/);
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<IsNull>();
@@ -504,6 +512,8 @@ class IsNotNull final : public Filter {
   IsNotNull() : Filter(true, false, FilterKind::kIsNotNull) {}
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& /*obj*/);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -570,6 +580,8 @@ class BoolValue final : public Filter {
 
   folly::dynamic serialize() const override;
 
+  static FilterPtr create(const folly::dynamic& obj);
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     if (nullAllowed) {
@@ -625,6 +637,8 @@ class BigintRange final : public Filter {
         isSingleValue_(upper_ == lower_) {}
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -725,6 +739,8 @@ class NegatedBigintRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
+  static FilterPtr create(const folly::dynamic& obj);
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<NegatedBigintRange>(
@@ -789,6 +805,8 @@ class HugeintRange final : public Filter {
         upper_(upper) {}
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -859,7 +877,21 @@ class BigintValuesUsingHashTable final : public Filter {
         values_(other.values_),
         sizeMask_(other.sizeMask_) {}
 
+  BigintValuesUsingHashTable(const BigintValuesUsingHashTable& other)
+      : BigintValuesUsingHashTable(other, other.nullAllowed_) {}
+
+  BigintValuesUsingHashTable(const BigintValuesUsingHashTable&& other)
+      : Filter(true, other.nullAllowed_, other.kind()),
+        min_(other.min_),
+        max_(other.max_),
+        hashTable_(std::move(other.hashTable_)),
+        containsEmptyMarker_(other.containsEmptyMarker_),
+        values_(std::move(other.values_)),
+        sizeMask_(other.sizeMask_) {}
+
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -936,7 +968,29 @@ class BigintValuesUsingBitmask final : public Filter {
       int64_t min,
       int64_t max,
       std::vector<bool>&& bitmask,
-      bool nullAllowed);
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBitmask),
+        bitmask_(bitmask),
+        min_(min),
+        max_(max) {}
+
+  BigintValuesUsingBitmask(const BigintValuesUsingBitmask& other)
+      : Filter(
+            other.deterministic,
+            other.nullAllowed_,
+            FilterKind::kBigintValuesUsingBitmask),
+        bitmask_(other.bitmask_),
+        min_(other.min_),
+        max_(other.max_) {}
+
+  BigintValuesUsingBitmask(const BigintValuesUsingBitmask&& other)
+      : Filter(
+            other.deterministic,
+            other.nullAllowed_,
+            FilterKind::kBigintValuesUsingBitmask),
+        bitmask_(std::move(other.bitmask_)),
+        min_(other.min_),
+        max_(other.max_) {}
 
   BigintValuesUsingBitmask(
       const BigintValuesUsingBitmask& other,
@@ -947,6 +1001,8 @@ class BigintValuesUsingBitmask final : public Filter {
         max_(other.max_) {}
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -987,14 +1043,18 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
   NegatedBigintValuesUsingHashTable(
       int64_t min,
       int64_t max,
-      const BigintValuesUsingHashTable& nonNegated,
+      const std::vector<int64_t>& values,
       bool nullAllowed);
 
   NegatedBigintValuesUsingHashTable(
-      int64_t min,
-      int64_t max,
-      const std::vector<int64_t>& values,
-      bool nullAllowed);
+      bool deterministic,
+      bool nullAllowed,
+      const BigintValuesUsingHashTable&& nonNegated)
+      : Filter(
+            deterministic,
+            nullAllowed,
+            FilterKind::kNegatedBigintValuesUsingHashTable),
+        nonNegated_(std::make_unique<BigintValuesUsingHashTable>(nonNegated)) {}
 
   NegatedBigintValuesUsingHashTable(
       const NegatedBigintValuesUsingHashTable& other,
@@ -1004,6 +1064,8 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
             std::make_unique<BigintValuesUsingHashTable>(*other.nonNegated_)) {}
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1077,7 +1139,17 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
       int64_t min,
       int64_t max,
       const BigintValuesUsingBitmask& nonNegated,
-      bool nullAllowed);
+      bool deterministic,
+      bool nullAllowed)
+      : Filter(
+            deterministic,
+            nullAllowed,
+            FilterKind::kNegatedBigintValuesUsingBitmask),
+        min_(min),
+        max_(max),
+        nonNegated_(
+            std::make_unique<BigintValuesUsingBitmask>(std::move(nonNegated))) {
+  }
 
   NegatedBigintValuesUsingBitmask(
       const NegatedBigintValuesUsingBitmask& other,
@@ -1089,6 +1161,8 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
             std::make_unique<BigintValuesUsingBitmask>(*other.nonNegated_)) {}
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1162,6 +1236,8 @@ class AbstractRange : public Filter {
     obj["upperExclusive"] = upperExclusive_;
     return obj;
   }
+
+  static FilterPtr create(const folly::dynamic& obj);
 
  protected:
   const bool lowerUnbounded_;
@@ -1478,6 +1554,8 @@ class BytesRange final : public AbstractRange {
 
   folly::dynamic serialize() const override;
 
+  static FilterPtr create(const folly::dynamic& obj);
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     if (nullAllowed) {
@@ -1585,6 +1663,8 @@ class NegatedBytesRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
+  static FilterPtr create(const folly::dynamic& obj);
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<NegatedBytesRange>(
@@ -1664,7 +1744,19 @@ class BytesValues final : public Filter {
         values_(other.values_),
         lengths_(other.lengths_) {}
 
+  BytesValues(const BytesValues& other)
+      : Filter(
+            other.isDeterministic(),
+            other.nullAllowed_,
+            FilterKind::kBytesValues),
+        lower_(other.lower_),
+        upper_(other.upper_),
+        values_(other.values_),
+        lengths_(other.lengths_) {}
+
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1718,6 +1810,8 @@ class BigintMultiRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
+  static FilterPtr create(const folly::dynamic& obj);
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
 
@@ -1758,16 +1852,20 @@ class NegatedBytesValues final : public Filter {
     nonNegated_ = std::make_unique<BytesValues>(values, !nullAllowed);
   }
 
-  NegatedBytesValues(const BytesValues& nonNegated, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kNegatedBytesValues) {
-    nonNegated_ = std::make_unique<BytesValues>(nonNegated, !nullAllowed);
-  }
+  NegatedBytesValues(
+      const BytesValues& nonNegated,
+      bool deterministic,
+      bool nullAllowed)
+      : Filter(deterministic, nullAllowed, FilterKind::kNegatedBytesValues),
+        nonNegated_(std::make_unique<BytesValues>(std::move(nonNegated))) {}
 
   NegatedBytesValues(const NegatedBytesValues& other, bool nullAllowed)
       : Filter(true, nullAllowed, other.kind()),
         nonNegated_(std::make_unique<BytesValues>(*other.nonNegated_)) {}
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1821,6 +1919,8 @@ class MultiRange final : public Filter {
         nanAllowed_(nanAllowed) {}
 
   folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
