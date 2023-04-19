@@ -699,7 +699,7 @@ TEST_F(ArithmeticTest, truncate) {
   EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
 }
 
-TEST_F(ArithmeticTest, testBetaCdf) {
+TEST_F(ArithmeticTest, BetaCDF) {
   const auto beta_cdf = [&](std::optional<double> a,
                             std::optional<double> b,
                             std::optional<double> value) {
