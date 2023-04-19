@@ -39,7 +39,7 @@ target_link_libraries(
   velox_dwio_native_parquet_reader
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 

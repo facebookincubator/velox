@@ -51,7 +51,7 @@ target_link_libraries(
   glog::glog
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -67,7 +67,7 @@ target_link_libraries(
   Folly::folly
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -82,7 +82,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -99,7 +99,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -148,7 +148,7 @@ target_link_libraries(
   Folly::folly
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -163,7 +163,7 @@ target_link_libraries(
   Folly::folly
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -179,7 +179,7 @@ target_link_libraries(
   Folly::folly
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -209,7 +209,7 @@ target_link_libraries(
   Folly::folly
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -237,7 +237,7 @@ target_link_libraries(
   Folly::folly
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -251,7 +251,7 @@ target_link_libraries(
   glog::glog
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -333,7 +333,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -348,7 +348,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -372,7 +372,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -388,7 +388,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -403,7 +403,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -420,7 +420,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -434,7 +434,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -450,7 +450,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -465,7 +465,7 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
@@ -498,6 +498,6 @@ target_link_libraries(
   ${FMT}
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})

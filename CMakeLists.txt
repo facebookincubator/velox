@@ -351,14 +351,18 @@ resolve_dependency(glog)
 set_source(fmt)
 resolve_dependency(fmt)
 
-# Required for boost.
-find_package(ZLIB)
-
 if(NOT ${VELOX_BUILD_MINIMAL})
+  find_package(ZLIB REQUIRED)
   find_library(LZ4 lz4)
   find_library(LZO lzo2)
-  find_library(ZSTD zstd)
-  find_library(SNAPPY snappy)
+  find_package(zstd REQUIRED)
+  if(TARGET zstd::libzstd_static)
+    set(ZSTD_TYPE static)
+  else()
+    set(ZSTD_TYPE shared)
+  endif()
+  add_library(zstd::zstd ALIAS zstd::libzstd_${ZSTD_TYPE})
+  find_package(Snappy REQUIRED)
 endif()
 
 set_source(re2)

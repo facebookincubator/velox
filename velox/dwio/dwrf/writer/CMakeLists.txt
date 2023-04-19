@@ -37,5 +37,5 @@ target_link_libraries(
   Boost::crc
   ${LZ4}
   ${LZO}
-  ${ZSTD}
+  zstd::zstd
   ZLIB::ZLIB)
