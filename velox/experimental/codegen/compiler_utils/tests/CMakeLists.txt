@@ -32,7 +32,7 @@ target_link_libraries(
   ${Boost_FILESYSTEM_LIBRARIES}
   gtest
   gtest_main
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${DOUBLE_CONVERSION}
   gflags::gflags
   glog::glog

@@ -36,7 +36,7 @@ target_link_libraries(
   velox_temp_path
   Boost::regex
   ${VELOX_LINK_LIBS}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${TEST_LINK_LIBS}
   gflags::gflags
   gtest
@@ -64,7 +64,7 @@ target_link_libraries(
   velox_parse_parser
   velox_vector_test_lib
   ${VELOX_LINK_LIBS}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${FMT}
   ${LZ4}
   ${LZO}

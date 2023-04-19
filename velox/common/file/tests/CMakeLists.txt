@@ -20,6 +20,6 @@ target_link_libraries(
   velox_exception
   velox_exec_test_lib
   ${FMT}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   gtest
   gtest_main)

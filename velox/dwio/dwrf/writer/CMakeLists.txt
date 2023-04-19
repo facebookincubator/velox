@@ -34,6 +34,7 @@ target_link_libraries(
   velox_process
   velox_time
   velox_vector
+  Boost::crc
   ${LZ4}
   ${LZO}
   ${ZSTD}

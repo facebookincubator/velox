@@ -51,7 +51,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_exec
   velox_hive_connector
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${FOLLY_BENCHMARK})
 
 add_executable(velox_dwio_parquet_structure_decoder_test
@@ -68,8 +68,7 @@ add_executable(velox_dwio_parquet_structure_decoder_benchmark
                NestedStructureDecoderBenchmark.cpp)
 target_link_libraries(
   velox_dwio_parquet_structure_decoder_benchmark
-  velox_dwio_native_parquet_reader ${FOLLY_WITH_DEPENDENCIES}
-  ${FOLLY_BENCHMARK})
+  velox_dwio_native_parquet_reader Folly::folly ${FOLLY_BENCHMARK})
 
 add_executable(velox_dwio_parquet_table_scan_test ParquetTableScanTest.cpp)
 target_link_libraries(

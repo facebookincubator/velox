@@ -23,7 +23,7 @@ set(VELOX_LINK_LIBS
     velox_serialization
     velox_type
     velox_vector
-    ${FOLLY_WITH_DEPENDENCIES}
+    Folly::folly
     ${FMT})
 
 add_subdirectory(common)

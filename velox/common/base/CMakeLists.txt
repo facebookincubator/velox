@@ -18,7 +18,7 @@ target_link_libraries(
   velox_flag_definitions
   velox_process
   glog::glog
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${FMT}
   gflags::gflags)
 

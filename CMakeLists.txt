@@ -314,6 +314,7 @@ endif()
 set(BOOST_INCLUDE_LIBRARIES
     atomic
     context
+    crc # dwio/dwrf/common /common/base/tests
     date_time
     filesystem
     program_options

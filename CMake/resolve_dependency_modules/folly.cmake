@@ -71,6 +71,8 @@ if(${gflags_SOURCE} STREQUAL "BUNDLED")
   add_dependencies(folly glog gflags)
 endif()
 
+target_link_libraries(folly PUBLIC Boost::context)
+
 set(FOLLY_BENCHMARK_STATIC_LIB
     ${folly_BINARY_DIR}/folly/libfollybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX})
 set(FOLLY_LIBRARIES folly)
