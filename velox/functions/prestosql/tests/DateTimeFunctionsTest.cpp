@@ -3008,7 +3008,7 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
           (-18297 * kSecondsInDay + 6 * 3'600) * 1'000, "America/Los_Angeles"));
 }
 
-TEST_F(DateTimeFunctionsTest, timeZoneHourTest) {
+TEST_F(DateTimeFunctionsTest, timeZoneHour) {
   const auto timezone_hour = [&](const char* time, const char* timezone) {
     Timestamp ts = util::fromTimestampString(time);
     auto timestamp = ts.toMillis();
@@ -3028,7 +3028,10 @@ TEST_F(DateTimeFunctionsTest, timeZoneHourTest) {
   EXPECT_EQ(-4, timezone_hour("2023-01-01 03:20:00", "Canada/Atlantic"));
   EXPECT_EQ(-4, timezone_hour("2023-01-01 10:00:00", "Canada/Atlantic"));
   // Invalid inputs
-  EXPECT_THROW(
-      timezone_hour("invalid_date", "Canada/Atlantic"), VeloxUserError);
-  EXPECT_THROW(timezone_hour("invalid_date", "Pacific/Ch"), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      timezone_hour("invalid_date", "Canada/Atlantic"),
+      "Unable to parse timestamp value: \"invalid_date\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
+  VELOX_ASSERT_THROW(
+      timezone_hour("123456", "Canada/Atlantic"),
+      "Unable to parse timestamp value: \"123456\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
 }
