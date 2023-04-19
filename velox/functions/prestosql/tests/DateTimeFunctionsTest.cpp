@@ -3039,7 +3039,7 @@ TEST_F(DateTimeFunctionsTest, timeZoneHour) {
       "Unable to parse timestamp value: \"123456\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
 }
 
-TEST_F(DateTimeFunctionsTest, timeZoneMinuteTest) {
+TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
   const auto timezone_minute = [&](const char* time, const char* timezone) {
     Timestamp ts = util::fromTimestampString(time);
     auto timestamp = ts.toMillis();
