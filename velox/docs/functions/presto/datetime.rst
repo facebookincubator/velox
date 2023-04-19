@@ -16,6 +16,10 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: current_time() -> string
+
+    Returns the current time with timezone in the format HH:MM:SS.ZZZ UTC
+
 Truncation Function
 -------------------
 
