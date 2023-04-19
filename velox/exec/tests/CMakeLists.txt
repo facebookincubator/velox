@@ -118,7 +118,7 @@ target_link_libraries(
   ${DOUBLE_CONVERSION}
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})
 
 target_link_libraries(
@@ -153,7 +153,7 @@ target_link_libraries(
   ${DOUBLE_CONVERSION}
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})
 
 add_executable(velox_in_10_min_demo VeloxIn10MinDemo.cpp)

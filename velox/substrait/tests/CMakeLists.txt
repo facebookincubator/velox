@@ -62,5 +62,5 @@ target_link_libraries(
   ${DOUBLE_CONVERSION}
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})

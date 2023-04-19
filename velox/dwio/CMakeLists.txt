@@ -24,7 +24,7 @@ set(VELOX_LINK_LIBS
     velox_type
     velox_vector
     Folly::folly
-    ${FMT})
+    fmt::fmt)
 
 add_subdirectory(common)
 add_subdirectory(dwrf)

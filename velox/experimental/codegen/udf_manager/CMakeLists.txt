@@ -14,7 +14,7 @@
 
 add_library(velox_codegen_udf_manager UDFManager.cpp)
 
-# For some mysterious reason, adding ${FMT} or fmt is not working.  We need to
+# For some mysterious reason, adding fmt::fmt or fmt is not working.  We need to
 # add velox_exception as a dependency to make fmt visible in this compilation
 # unit.
 target_link_libraries(velox_codegen_udf_manager velox_exception)
