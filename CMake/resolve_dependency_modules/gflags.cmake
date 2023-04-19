@@ -29,7 +29,7 @@ FetchContent_Declare(
   URL_HASH ${VELOX_GFLAGS_BUILD_SHA256_CHECKSUM}
   PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/gflags/gflags-config.patch)
 
-#set(GFLAGS_BUILD_SHARED_LIBS ON)
+# set(GFLAGS_BUILD_SHARED_LIBS ON)
 set(GFLAGS_BUILD_STATIC_LIBS ON)
 set(GFLAGS_BUILD_gflags_LIB ON)
 set(GFLAGS_BUILD_gflags_nothreads_LIB ON)
@@ -41,7 +41,6 @@ FetchContent_MakeAvailable(gflags)
 
 # the flag has to be added to each target we build so adjust to settings choosen
 # above
-#target_compile_options(gflags_shared PRIVATE -Wno-cast-function-type)
 target_compile_options(gflags_static PRIVATE -Wno-cast-function-type)
 target_compile_options(gflags_nothreads_static PRIVATE -Wno-cast-function-type)
 
