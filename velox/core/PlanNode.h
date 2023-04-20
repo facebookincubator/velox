@@ -264,10 +264,10 @@ class ArrowStreamNode : public PlanNode {
  public:
   ArrowStreamNode(
       const PlanNodeId& id,
-      const RowTypePtr& outputType,
+      RowTypePtr outputType,
       std::shared_ptr<ArrowArrayStream> arrowStream)
       : PlanNode(id),
-        outputType_(outputType),
+        outputType_(std::move(outputType)),
         arrowStream_(std::move(arrowStream)) {
     VELOX_CHECK_NOT_NULL(arrowStream_);
   }
@@ -411,13 +411,13 @@ class TableScanNode : public PlanNode {
  public:
   TableScanNode(
       const PlanNodeId& id,
-      const RowTypePtr& outputType,
+      RowTypePtr outputType,
       const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& assignments)
       : PlanNode(id),
-        outputType_(outputType),
+        outputType_(std::move(outputType)),
         tableHandle_(tableHandle),
         assignments_(assignments) {}
 
@@ -466,7 +466,7 @@ class TableWriteNode : public PlanNode {
       const RowTypePtr& columns,
       const std::vector<std::string>& columnNames,
       const std::shared_ptr<InsertTableHandle>& insertTableHandle,
-      const RowTypePtr& outputType,
+      RowTypePtr outputType,
       connector::CommitStrategy commitStrategy,
       const PlanNodePtr& source)
       : PlanNode(id),
@@ -474,7 +474,7 @@ class TableWriteNode : public PlanNode {
         columns_{columns},
         columnNames_{columnNames},
         insertTableHandle_(insertTableHandle),
-        outputType_(outputType),
+        outputType_(std::move(outputType)),
         commitStrategy_(commitStrategy) {
     VELOX_CHECK_EQ(columns->size(), columnNames.size());
     for (const auto& column : columns->names()) {
@@ -1237,7 +1237,7 @@ class AbstractJoinNode : public PlanNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      const RowTypePtr outputType);
+      RowTypePtr outputType);
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
@@ -1334,7 +1334,7 @@ class HashJoinNode : public AbstractJoinNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      const RowTypePtr outputType)
+      RowTypePtr outputType)
       : AbstractJoinNode(
             id,
             joinType,
@@ -1402,7 +1402,7 @@ class MergeJoinNode : public AbstractJoinNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      const RowTypePtr outputType)
+      RowTypePtr outputType)
       : AbstractJoinNode(
             id,
             joinType,
