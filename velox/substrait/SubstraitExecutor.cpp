@@ -40,8 +40,8 @@ namespace facebook::velox::substrait {
         status.message());
     }
 
-    RowVectorPtr RunQueryByFile(const std::string& planPath) {
-        std::shared_ptr<memory::MemoryPool> pool = memory::getDefaultMemoryPool();
+    VectorPtr RunQueryByFile(const std::string& planPath) {
+        std::shared_ptr<memory::MemoryPool> pool = memory::addDefaultLeafMemoryPool();
         std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter> planConverter =
         std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool.get());
 
@@ -61,12 +61,12 @@ namespace facebook::velox::substrait {
 
         while (auto tmp = substrait_task->next()) {
         }
-        return result;
+        return result->childAt(0);
     }
 
-    void RunQueryByFileV2(const std::string& planPath) {
-        std::cout << planPath << std::endl;
-    }
+    // VectorPtr RunQueryByFileV2(const std::string& planPath) {
+    //     return 
+    // }
 
     // RowVectorPtr RunQueryByFileV1(const std::string& planPath) {
     //     std::shared_ptr<memory::MemoryPool> pool = memory::getDefaultMemoryPool();

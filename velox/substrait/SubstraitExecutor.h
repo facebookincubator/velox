@@ -39,7 +39,7 @@ namespace facebook::velox::substrait {
     void readFromFile(const std::string& msgPath, google::protobuf::Message& msg);
 
     
-    RowVectorPtr RunQueryByFile(const std::string& planPath);
+    VectorPtr RunQueryByFile(const std::string& planPath);
     //RowVectorPtr RunQueryByFileV1(const std::string& planPath);
     void RunQueryByFileV2(const std::string& planPath);
 }

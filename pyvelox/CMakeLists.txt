@@ -23,11 +23,13 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
     pyvelox
     PRIVATE velox_type
             velox_vector
+            velox_vector_test_lib
             velox_core
             velox_dwio_dwrf_proto
             velox_dwio_dwrf_common
             velox_hive_connector
             velox_exec
+            velox_exec_test_lib
             velox_functions_prestosql
             velox_parse_parser
             velox_functions_prestosql

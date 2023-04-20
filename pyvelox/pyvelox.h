@@ -33,6 +33,7 @@
 #include <velox/vector/ComplexVector.h>
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
+#include <velox/vector/ComplexVector.h>
 #include "folly/json.h"
 
 #include "context.h"
@@ -491,19 +492,15 @@ static void addVectorBindings(
         checkBounds(indices, idx);
         return indices.indices->as<vector_size_t>()[idx];
       });
-  m.def(
-      "from_list",
-      [](const py::list& list, const Type* dtype = nullptr) mutable {
-        if (!dtype || py::isinstance<py::none>(py::cast(*dtype))) {
-          return pyListToVector(
-              list, PyVeloxContext::getSingletonInstance().pool());
-        } else {
-          return pyListToVector(
-              list, *dtype, PyVeloxContext::getSingletonInstance().pool());
-        }
-      },
-      py::arg("list"),
-      py::arg("dtype") = nullptr);
+
+  m.def("from_list", [](const py::list& list) mutable {
+    return pyListToVector(list, PyVeloxContext::getSingletonInstance().pool());
+  });
+
+  /// TODO: I think I may have to implement a PyRowVector interface and not override the destructor here
+  /// Need to check that, not sure what is the pure virtual method being called
+   py::class_<RowVector, BaseVector, RowVectorPtr>(m, "RowVector", py::module_local(asModuleLocalDefinitions))
+    .def("__len__", &RowVector::childrenSize);
   m.def(
       "constant_vector",
       [](const py::handle& obj, vector_size_t length, TypePtr type) {
