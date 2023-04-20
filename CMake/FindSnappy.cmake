@@ -32,8 +32,8 @@ endif()
 if(NOT TARGET Snappy::snappy)
   add_library(Snappy::snappy ${libsnappy_type} IMPORTED)
   set_target_properties(Snappy::snappy PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
-                                              "${SNAPPY_INCLUDE_DIR}")
+                                                  "${SNAPPY_INCLUDE_DIR}")
   set_target_properties(
     Snappy::snappy PROPERTIES IMPORTED_LINK_INTERFACE_LANGUAGES "C"
-                          IMPORTED_LOCATION "${SNAPPY_LIBRARIES}")
+                              IMPORTED_LOCATION "${SNAPPY_LIBRARIES}")
 endif()
