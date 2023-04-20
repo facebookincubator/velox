@@ -2,6 +2,10 @@
 Date and Time Functions
 =====================================
 
+.. function:: current_date() -> date
+
+    Returns the current date as of the start of the query.
+
 .. function:: date(x) -> date
 
     This is an alias for ``CAST(x AS date)``.
@@ -19,10 +23,6 @@ Date and Time Functions
 .. function:: to_unixtime(timestamp) -> double
 
     Returns ``timestamp`` as a UNIX timestamp.
-
-.. function:: current_date() -> date
-
-    Returns the current date as of the start of the query.
 
 Truncation Function
 -------------------

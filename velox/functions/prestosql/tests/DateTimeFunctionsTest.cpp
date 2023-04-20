@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -3009,15 +3010,22 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, currentDate) {
+  auto tz = "America/Los_Angeles";
   auto mockRowVector =
       makeRowVector({BaseVector::createNullConstant(UNKNOWN(), 1, pool())});
+  setQueryTimeZone(tz);
+  auto zonedTime0 = date::make_zoned(tz, std::chrono::system_clock::now());
+  auto d0 = parseDate(date::format("%Y-%m-%d", zonedTime0));
+
   auto result = evaluateOnce<Date>("current_date()", mockRowVector);
 
-  // use another stl methods to get current date for test
-  auto time = std::time(nullptr);
-  std::stringstream str;
-  str << std::put_time(std::localtime(&time), "%Y-%m-%d");
-  EXPECT_EQ(std::to_string(result.value()), str.str());
+  auto zonedTime1 = date::make_zoned(tz, std::chrono::system_clock::now());
+  auto d1 = parseDate(date::format("%Y-%m-%d", zonedTime1));
+
+  EXPECT_TRUE(d0 <= result && result <= d1);
+  auto diff = std::chrono::duration_cast<date::days>(
+      zonedTime1.get_local_time() - zonedTime0.get_local_time());
+  EXPECT_LE(diff.count(), 1);
 }
 
 TEST_F(DateTimeFunctionsTest, timeZoneHour) {
