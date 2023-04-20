@@ -712,18 +712,12 @@ TEST_F(ArithmeticTest, BetaCDF) {
   EXPECT_EQ(0.21764809997679951, beta_cdf(3, 3.6, 0.3));
   EXPECT_EQ(0.9972502881611551, beta_cdf(3, 3.6, 0.9));
 
+  VELOX_ASSERT_THROW(beta_cdf(0, 3, 0.5), "a must be > 0");
+  VELOX_ASSERT_THROW(beta_cdf(3, 0, 0.5), "b must be > 0");
   VELOX_ASSERT_THROW(
-      beta_cdf(0, 3, 0.5),
-      "Error in function boost::math::beta_distribution<double>::beta_distribution: Alpha argument is 0, but must be > 0 !");
+      beta_cdf(3, 5, -0.1), "value must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
-      beta_cdf(3, 0, 0.5),
-      "Error in function boost::math::beta_distribution<double>::beta_distribution: Beta argument is 0, but must be > 0 !");
-  VELOX_ASSERT_THROW(
-      beta_cdf(3, 5, -0.1),
-      "Error in function boost::math::cdf(beta_distribution<double> const&, double): x argument is -0.10000000000000001, but must be >= 0 and <= 1 !");
-  VELOX_ASSERT_THROW(
-      beta_cdf(3, 5, 1.1),
-      "Error in function boost::math::cdf(beta_distribution<double> const&, double): x argument is 1.1000000000000001, but must be >= 0 and <= 1 !");
+      beta_cdf(3, 5, 1.1), "value must be in the interval [0, 1]");
 }
 
 } // namespace

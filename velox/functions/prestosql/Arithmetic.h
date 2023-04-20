@@ -504,6 +504,11 @@ struct BetaCDFFunction {
 
   FOLLY_ALWAYS_INLINE void
   call(double& result, double a, double b, double value) {
+    VELOX_USER_CHECK_GT(a, 0, "a must be > 0");
+    VELOX_USER_CHECK_GT(b, 0, "b must be > 0");
+    VELOX_USER_CHECK_GE(value, 0, "value must be in the interval [0, 1]");
+    VELOX_USER_CHECK_LE(value, 1, "value must be in the interval [0, 1]");
+
     beta_distribution<> dist(a, b);
     result = boost::math::cdf(dist, value);
   }
