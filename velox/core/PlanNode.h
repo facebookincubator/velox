@@ -1423,12 +1423,13 @@ class MergeJoinNode : public AbstractJoinNode {
 };
 
 /// Represents inner/outer nested loop joins. Translates to an
-/// exec::CrossJoinProbe and exec::CrossJoinBuild(which will later be renamed to
-/// NestedLoopJoin{Probe, Build}). A separate pipeline is produced for the build
-/// side when generating exec::Operators.
+/// exec::NestedLoopJoinProbe and exec::NestedLoopJoinBuild. A separate pipeline
+/// is produced for the build side when generating exec::Operators.
+///
 /// Nested loop join supports both equal and non-equal joins. Expressions
 /// specified in joinCondition are evaluated on every combination of left/right
 /// tuple, to emit result.
+///
 /// This also replaces CrossJoinNode, as cross join is equivalent to inner join
 /// on TRUE. To create a plan node for cross join, use the constructor without
 /// `joinType` and `joinCondition` parameter.
