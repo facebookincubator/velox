@@ -40,5 +40,5 @@ target_link_libraries(
   velox_serialization
   velox_external_date
   Boost::regex
-  Boost::algorithm
+  Boost::headers
   Folly::folly)

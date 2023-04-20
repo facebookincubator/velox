@@ -136,7 +136,7 @@ add_executable(velox_dwio_dwrf_checksum_test ChecksumTests.cpp)
 add_test(velox_dwio_dwrf_checksum_test velox_dwio_dwrf_checksum_test)
 
 target_link_libraries(velox_dwio_dwrf_checksum_test ${VELOX_LINK_LIBS}
-                      Folly::folly Boost::crc ${TEST_LINK_LIBS})
+                      Folly::folly Boost::headers ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_writer_test WriterTests.cpp)
 add_test(velox_dwio_dwrf_writer_test velox_dwio_dwrf_writer_test)
