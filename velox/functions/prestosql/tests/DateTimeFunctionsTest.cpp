@@ -2839,9 +2839,14 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
 }
 
 TEST_F(DateTimeFunctionsTest, currentTimeTest) {
+//     std::optional<std::string> current_time() {
+//     return evaluateOnce<std::string>("get_current_time");
+//   }
   const auto current_time = [&]() {   
-    return evaluateOnce<std::string>("current_time()", makeRowVector(ROW({}), 1));
+    return evaluateOnce<std::string>("current_time");
   };
 
-  EXPECT_EQ("19:51:34.241 UTC", current_time());
+  std::optional<std::string> currentTimeStr = current_time();
+
+  EXPECT_EQ("19:51:34.241 UTC", currentTimeStr);
 }
