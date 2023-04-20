@@ -16,8 +16,6 @@
 #pragma once
 
 #include <string_view>
-#include "velox/external/date/date.h"
-#include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -1084,7 +1082,7 @@ struct ParseDateTimeFunction {
 
 template <typename T>
 struct CurrentDateFunction {
-    const date::time_zone* timeZone_ = nullptr;
+  const date::time_zone* timeZone_ = nullptr;
 
   FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
     timeZone_ = getTimeZoneFromConfig(config);
