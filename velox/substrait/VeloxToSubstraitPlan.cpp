@@ -69,8 +69,8 @@ namespace {
   // Construct the extension colllector.
   extensionCollector_ = std::make_shared<SubstraitExtensionCollector>();
   // Construct the expression converter.
-  exprConvertor_ =
-      std::make_shared<VeloxToSubstraitExprConvertor>(extensionCollector_);
+  exprConvertor_ = std::make_shared<VeloxToSubstraitExprConvertor>(
+      extensionCollector_, prefix_);
 
   auto substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);

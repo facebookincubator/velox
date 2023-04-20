@@ -143,7 +143,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
     const auto& aggFunction = measure.measure();
     auto funcName = substraitParser_->findVeloxFunction(
-        functionMap_, aggFunction.function_reference());
+        functionMap_,
+        aggFunction.function_reference(),
+        exprConverter_->getFuncPrefix());
     std::vector<core::TypedExprPtr> aggParams;
     aggParams.reserve(aggFunction.arguments().size());
     for (const auto& arg : aggFunction.arguments()) {
@@ -561,8 +563,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   constructFunctionMap(substraitPlan);
 
   // Construct the expression converter.
-  exprConverter_ =
-      std::make_shared<SubstraitVeloxExprConverter>(pool_, functionMap_);
+  exprConverter_ = std::make_shared<SubstraitVeloxExprConverter>(
+      pool_, functionMap_, prefix_);
 
   // In fact, only one RelRoot or Rel is expected here.
   VELOX_CHECK_EQ(substraitPlan.relations_size(), 1);

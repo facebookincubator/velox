@@ -26,13 +26,14 @@ namespace facebook::velox::substrait {
 /// expressions.
 class SubstraitVeloxExprConverter {
  public:
-  /// subParser: A Substrait parser used to convert Substrait representations
-  /// into recognizable representations. functionMap: A pre-constructed map
-  /// storing the relations between the function id and the function name.
+  /// @param functionMap: A pre-constructed map storing the relations
+  /// between the function id and the function name.
+  /// @param functionPrefix: the prefix of registered SQL functions.
   explicit SubstraitVeloxExprConverter(
       memory::MemoryPool* pool,
-      const std::unordered_map<uint64_t, std::string>& functionMap)
-      : pool_(pool), functionMap_(functionMap) {}
+      const std::unordered_map<uint64_t, std::string>& functionMap,
+      const std::string& funcPrefix)
+      : pool_(pool), functionMap_(functionMap), funcPrefix_(funcPrefix) {}
 
   /// Convert Substrait Field into Velox Field Expression.
   std::shared_ptr<const core::FieldAccessTypedExpr> toVeloxExpr(
@@ -63,6 +64,22 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression::IfThen& substraitIfThen,
       const RowTypePtr& inputType);
 
+  /// Convert Substrait SingularOrList into Velox Expression.
+  core::TypedExprPtr toVeloxExpr(
+      const ::substrait::Expression::SingularOrList& singularOrList,
+      const RowTypePtr& inputType);
+
+  /// Create a constant expression from constant expressions by wrapping into
+  /// array.
+  std::shared_ptr<const core::ConstantTypedExpr> toConstantExpr(
+      const std::vector<std::shared_ptr<const core::ConstantTypedExpr>>&
+          constantExprs);
+
+  /// Return the function prefix.
+  const std::string& getFuncPrefix() const {
+    return funcPrefix_;
+  }
+
  private:
   /// Convert list literal to ArrayVector.
   ArrayVectorPtr literalsToArrayVector(
@@ -78,6 +95,12 @@ class SubstraitVeloxExprConverter {
   /// The map storing the relations between the function id and the function
   /// name.
   std::unordered_map<uint64_t, std::string> functionMap_;
+
+  /// SQL functions could be registered with different prefixes by the user.
+  /// This parameter is the registered prefix of presto or spark functions,
+  /// which helps generate the correct Velox expression during
+  /// Substrait-to-Velox conversion.
+  const std::string funcPrefix_;
 };
 
 } // namespace facebook::velox::substrait

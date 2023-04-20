@@ -221,10 +221,11 @@ const std::string& SubstraitParser::findFunctionSpec(
 
 std::string SubstraitParser::findVeloxFunction(
     const std::unordered_map<uint64_t, std::string>& functionMap,
-    uint64_t id) const {
+    uint64_t id,
+    const std::string& prefix) const {
   std::string funcSpec = findFunctionSpec(functionMap, id);
   std::string_view funcName = getNameBeforeDelimiter(funcSpec, ":");
-  return mapToVeloxFunction({funcName.begin(), funcName.end()});
+  return prefix + mapToVeloxFunction({funcName.begin(), funcName.end()});
 }
 
 std::string SubstraitParser::mapToVeloxFunction(

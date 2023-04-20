@@ -26,6 +26,12 @@
 
 #include "velox/substrait/VariantToVectorConverter.h"
 
+#include "velox/common/testutil/TestValue.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+
+#include "velox/functions/sparksql/Register.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec::test;
@@ -33,6 +39,13 @@ using namespace facebook::velox::substrait;
 
 class VeloxSubstraitRoundTripTest : public OperatorTestBase {
  protected:
+  static void SetUpTestCase() {
+    functions::prestosql::registerAllScalarFunctions("");
+    aggregate::prestosql::registerAllAggregateFunctions("");
+    functions::sparksql::registerFunctions("spark");
+    common::testutil::TestValue::enable();
+  }
+
   /// Makes a vector of INTEGER type with 'size' RowVectorPtr.
   /// @param size The number of RowVectorPtr.
   /// @param childSize The number of columns for each row.
@@ -400,6 +413,90 @@ TEST_F(VeloxSubstraitRoundTripTest, topNTwoKeys) {
   assertPlanConversion(
       plan,
       "SELECT * FROM tmp WHERE c0 > 15 ORDER BY c0 NULLS FIRST, c1 DESC NULLS LAST LIMIT 10");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, in) {
+  auto vectors = {makeRowVector(
+      {makeFlatVector<bool>({true, false, false}),
+       makeFlatVector<int8_t>({3, 6, 9}),
+       makeFlatVector<int16_t>({1, 3, 5}),
+       makeFlatVector<int32_t>({2, 4, 6}),
+       makeFlatVector<int64_t>({9, 10, 11}),
+       makeFlatVector<float>({1.0, 3.0, 5.0}),
+       makeFlatVector<double>({7.0, 8.0, 9.0}),
+       makeFlatVector<std::string>({"a", "b", "c"}),
+       makeFlatVector<Date>({Date(1991), Date(1992), Date(1993)})})};
+  createDuckDbTable(vectors);
+
+  // Test IN of presto sql function.
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .filter("c1 in (1, 2, 3)")
+                  .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c1 in (1, 2, 3)");
+  plan = PlanBuilder(pool_.get())
+             .values(vectors)
+             .filter("c2 in (1, 2, 3)")
+             .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c2 in (1, 2, 3)");
+  plan = PlanBuilder(pool_.get())
+             .values(vectors)
+             .filter("c3 in (1, 2, 3)")
+             .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c3 in (1, 2, 3)");
+  plan = PlanBuilder(pool_.get())
+             .values(vectors)
+             .filter("c7 in ('a', 'b', 'c')")
+             .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c7 in ('a', 'b', 'c')");
+
+  // Test IN of spark sql function.
+  const std::string sparkFuncPrefix = "spark";
+  veloxConvertor_ =
+      std::make_shared<VeloxToSubstraitPlanConvertor>(sparkFuncPrefix);
+  substraitConverter_ = std::make_shared<SubstraitVeloxPlanConverter>(
+      pool_.get(), sparkFuncPrefix);
+
+  parse::ParseOptions options;
+  options.functionPrefix = sparkFuncPrefix;
+  plan = PlanBuilder(pool_.get())
+             .setParseOptions(options)
+             .values(vectors)
+             .filter("c1 in (1, 2, 3)")
+             .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c1 in (1, 2, 3)");
+  plan = PlanBuilder(pool_.get())
+             .setParseOptions(options)
+             .values(vectors)
+             .filter("c2 in (1, 2, 3)")
+             .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c2 in (1, 2, 3)");
+  plan = PlanBuilder(pool_.get())
+             .setParseOptions(options)
+             .values(vectors)
+             .filter("c3 in (1, 2, 3)")
+             .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c3 in (1, 2, 3)");
+  plan = PlanBuilder(pool_.get())
+             .setParseOptions(options)
+             .values(vectors)
+             .filter("c6 in (1.0, 2.0, 3.0)")
+             .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c6 in (1.0, 2.0, 3.0)");
+  plan = PlanBuilder(pool_.get())
+             .setParseOptions(options)
+             .values(vectors)
+             .filter("c7 in ('a', 'b', 'c')")
+             .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c7 in ('a', 'b', 'c')");
+  // TODO: add tests for BIGINT/REAL/DATE after DuckDBParser can generate
+  // ConstantExpression from their IN list. TIMESTAMP in Substrait parser is
+  // also not supported.
+
+  // Recover the Velox and Substrait converters to default state.
+  veloxConvertor_ = std::make_shared<VeloxToSubstraitPlanConvertor>();
+  substraitConverter_ =
+      std::make_shared<SubstraitVeloxPlanConverter>(pool_.get());
 }
 
 namespace {

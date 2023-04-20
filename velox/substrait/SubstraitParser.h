@@ -72,9 +72,11 @@ class SubstraitParser {
 
   /// Find the Velox function name according to the function id
   /// from a pre-constructed function map.
+  /// @param prefix: the prefix of registered SQL functions.
   std::string findVeloxFunction(
       const std::unordered_map<uint64_t, std::string>& functionMap,
-      uint64_t id) const;
+      uint64_t id,
+      const std::string& prefix) const;
 
   /// Map the Substrait function keyword into Velox function keyword.
   std::string mapToVeloxFunction(const std::string& substraitFunction) const;

@@ -28,8 +28,9 @@ namespace facebook::velox::substrait {
 class VeloxToSubstraitExprConvertor {
  public:
   explicit VeloxToSubstraitExprConvertor(
-      const SubstraitExtensionCollectorPtr& extensionCollector)
-      : extensionCollector_(extensionCollector) {}
+      const SubstraitExtensionCollectorPtr& extensionCollector,
+      const std::string& funcPrefix)
+      : extensionCollector_(extensionCollector), funcPrefix_(funcPrefix) {}
 
   /// Convert Velox Expression to Substrait Expression.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -96,9 +97,22 @@ class VeloxToSubstraitExprConvertor {
       google::protobuf::Arena& arena,
       const std::shared_ptr<ConstantVector<ComplexType>>& constantVector);
 
+  /// Convert Velox IN expression to Substrait SingularOrList.
+  const ::substrait::Expression& toSubstraitSingularOrList(
+      google::protobuf::Arena& arena,
+      const std::vector<core::TypedExprPtr>& inputs,
+      const RowTypePtr& inputType,
+      ::substrait::Expression* substraitExpr);
+
   VeloxToSubstraitTypeConvertorPtr typeConvertor_;
 
   SubstraitExtensionCollectorPtr extensionCollector_;
+
+  /// SQL functions could be registered with different prefixes by the user.
+  /// This parameter is the registered prefix of presto or spark functions,
+  /// which helps generate the correct Substrait plan during Velox-to-Substrait
+  /// conversion.
+  const std::string funcPrefix_;
 };
 
 using VeloxToSubstraitExprConvertorPtr =

@@ -33,6 +33,9 @@ namespace facebook::velox::substrait {
 /// Convert the Velox plan into Substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
+  VeloxToSubstraitPlanConvertor(const std::string& prefix = "")
+      : prefix_(prefix) {}
+
   /// Convert Velox PlanNode into Substrait Plan.
   /// @param vPlan Velox query plan to convert.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -113,6 +116,12 @@ class VeloxToSubstraitPlanConvertor {
   /// The Extension collector storing the relations between the function
   /// signature and the function reference number.
   SubstraitExtensionCollectorPtr extensionCollector_;
+
+  /// SQL functions could be registered with different prefixes by the user.
+  /// This parameter is the registered prefix of presto or spark functions,
+  /// which helps generate the correct Substrait plan during Velox-to-Substrait
+  /// conversion.
+  std::string prefix_;
 };
 
 } // namespace facebook::velox::substrait

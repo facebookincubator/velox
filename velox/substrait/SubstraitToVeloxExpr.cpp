@@ -17,6 +17,7 @@
 #include "velox/substrait/SubstraitToVeloxExpr.h"
 #include "velox/substrait/TypeUtils.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/VariantToVector.h"
 
 using namespace facebook::velox;
 namespace {
@@ -196,7 +197,7 @@ core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
     params.emplace_back(toVeloxExpr(sArg.value(), inputType));
   }
   const auto& veloxFunction = substraitParser_.findVeloxFunction(
-      functionMap_, substraitFunc.function_reference());
+      functionMap_, substraitFunc.function_reference(), funcPrefix_);
   std::string typeName =
       substraitParser_.parseType(substraitFunc.output_type())->type;
   return std::make_shared<const core::CallTypedExpr>(
@@ -337,12 +338,47 @@ core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
   return std::make_shared<core::CastTypedExpr>(type, inputs, nullOnFailure);
 }
 
+std::shared_ptr<const core::ConstantTypedExpr>
+SubstraitVeloxExprConverter::toConstantExpr(
+    const std::vector<std::shared_ptr<const core::ConstantTypedExpr>>&
+        constantExprs) {
+  VELOX_CHECK_GE(constantExprs.size(), 0);
+  std::vector<variant> variants;
+  variants.reserve(constantExprs.size());
+  for (const auto& constantExpr : constantExprs) {
+    variants.emplace_back(constantExpr->value());
+  }
+  ArrayVectorPtr arrayVector = core::variantArrayToVector(
+      ARRAY(constantExprs[0]->type()), variant::array(variants).array(), pool_);
+  // Wrap the array vector into constant expression.
+  return std::make_shared<const core::ConstantTypedExpr>(
+      BaseVector::wrapInConstant(1 /*length*/, 0 /*index*/, arrayVector));
+}
+
+core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
+    const ::substrait::Expression::SingularOrList& singularOrList,
+    const RowTypePtr& inputType) {
+  VELOX_CHECK_GT(singularOrList.options_size(), 0);
+  std::vector<std::shared_ptr<const core::ConstantTypedExpr>> constantExprs;
+  constantExprs.reserve(singularOrList.options().size());
+  for (const auto& option : singularOrList.options()) {
+    VELOX_CHECK(option.has_literal(), "Literal is expected as option.");
+    constantExprs.emplace_back(toVeloxExpr(option.literal()));
+  }
+
+  std::vector<core::TypedExprPtr> params;
+  params.reserve(2);
+  // The first param is the value, and the second is the list.
+  params.emplace_back(toVeloxExpr(singularOrList.value(), inputType));
+  params.emplace_back(toConstantExpr(constantExprs));
+  return std::make_shared<const core::CallTypedExpr>(
+      BOOLEAN(), std::move(params), funcPrefix_ + "in");
+}
+
 core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression& substraitExpr,
     const RowTypePtr& inputType) {
-  core::TypedExprPtr veloxExpr;
-  auto typeCase = substraitExpr.rex_type_case();
-  switch (typeCase) {
+  switch (substraitExpr.rex_type_case()) {
     case ::substrait::Expression::RexTypeCase::kLiteral:
       return toVeloxExpr(substraitExpr.literal());
     case ::substrait::Expression::RexTypeCase::kScalarFunction:
@@ -353,9 +389,12 @@ core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
       return toVeloxExpr(substraitExpr.cast(), inputType);
     case ::substrait::Expression::RexTypeCase::kIfThen:
       return toVeloxExpr(substraitExpr.if_then(), inputType);
+    case ::substrait::Expression::RexTypeCase::kSingularOrList:
+      return toVeloxExpr(substraitExpr.singular_or_list(), inputType);
     default:
       VELOX_NYI(
-          "Substrait conversion not supported for Expression '{}'", typeCase);
+          "Substrait conversion not supported for Expression '{}'",
+          substraitExpr.rex_type_case());
   }
 }
 

@@ -452,6 +452,39 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
   return *substraitFieldExpr;
 }
 
+const ::substrait::Expression&
+VeloxToSubstraitExprConvertor::toSubstraitSingularOrList(
+    google::protobuf::Arena& arena,
+    const std::vector<core::TypedExprPtr>& inputs,
+    const RowTypePtr& inputType,
+    ::substrait::Expression* substraitExpr) {
+  ::substrait::Expression_SingularOrList* singularOrList =
+      substraitExpr->mutable_singular_or_list();
+  VELOX_CHECK_EQ(inputs.size(), 2);
+  singularOrList->mutable_value()->MergeFrom(
+      toSubstraitExpr(arena, inputs.at(0), inputType));
+  auto constantExpr =
+      std::dynamic_pointer_cast<const core::ConstantTypedExpr>(inputs.at(1));
+  VELOX_CHECK_NOT_NULL(constantExpr);
+  VELOX_CHECK(constantExpr->type()->kind() == TypeKind::ARRAY);
+  VELOX_CHECK(
+      constantExpr->hasValueVector(),
+      "Value vector is expected for constant expression.");
+  auto constantVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
+      constantExpr->valueVector());
+  VELOX_CHECK_NOT_NULL(constantVector);
+  const ::substrait::Expression_Literal& listLiteral =
+      toSubstraitLiteralComplex(arena, constantVector);
+  VELOX_CHECK(listLiteral.has_list());
+  for (const auto& literal : listLiteral.list().values()) {
+    ::substrait::Expression* expression =
+        google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
+    expression->mutable_literal()->MergeFrom(literal);
+    singularOrList->add_options()->MergeFrom(*expression);
+  }
+  return *substraitExpr;
+}
+
 const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::CallTypedExpr>& callTypeExpr,
@@ -461,6 +494,10 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
 
   auto inputs = callTypeExpr->inputs();
   auto& functionName = callTypeExpr->name();
+
+  if (functionName == funcPrefix_ + "in") {
+    return toSubstraitSingularOrList(arena, inputs, inputType, substraitExpr);
+  }
 
   if (functionName != "if" && functionName != "switch") {
     ::substrait::Expression_ScalarFunction* scalarExpr =

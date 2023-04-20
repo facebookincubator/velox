@@ -378,7 +378,8 @@ std::shared_ptr<const core::IExpr> parseOperatorExpr(
     params.emplace_back(parseExpr(*operExpr.children[0], options));
     params.emplace_back(std::make_shared<const core::ConstantExpr>(
         ARRAY(valueType), variant::array(values), std::nullopt));
-    auto inExpr = callExpr("in", std::move(params), getAlias(expr));
+    auto inExpr = callExpr(
+        options.functionPrefix + "in", std::move(params), getAlias(expr));
     // Translate COMPARE_NOT_IN into NOT(IN()).
     return (expr.GetExpressionType() == ExpressionType::COMPARE_IN)
         ? inExpr

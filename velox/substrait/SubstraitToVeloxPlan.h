@@ -25,8 +25,10 @@ namespace facebook::velox::substrait {
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
-  explicit SubstraitVeloxPlanConverter(memory::MemoryPool* pool)
-      : pool_(pool) {}
+  explicit SubstraitVeloxPlanConverter(
+      memory::MemoryPool* pool,
+      const std::string& prefix = "")
+      : pool_(pool), prefix_(prefix) {}
   struct SplitInfo {
     /// The Partition index.
     u_int32_t partitionIndex;
@@ -151,6 +153,13 @@ class SubstraitVeloxPlanConverter {
           sortField,
       const RowTypePtr& inputType);
 
+  /// Helper function to convert the input of Substrait Rel to Velox Node.
+  template <typename T>
+  core::PlanNodePtr convertSingleInput(T rel) {
+    VELOX_CHECK(rel.has_input(), "Child Rel is expected here.");
+    return toVeloxPlan(rel.input());
+  }
+
   /// The Expression converter used to convert Substrait representations into
   /// Velox expressions.
   std::shared_ptr<SubstraitVeloxExprConverter> exprConverter_;
@@ -169,12 +178,11 @@ class SubstraitVeloxPlanConverter {
   /// Memory pool.
   memory::MemoryPool* pool_;
 
-  /// Helper function to convert the input of Substrait Rel to Velox Node.
-  template <typename T>
-  core::PlanNodePtr convertSingleInput(T rel) {
-    VELOX_CHECK(rel.has_input(), "Child Rel is expected here.");
-    return toVeloxPlan(rel.input());
-  }
+  /// SQL functions could be registered with different prefixes by the user.
+  /// This parameter is the registered prefix of presto or spark functions,
+  /// which helps generate the correct Velox expression during
+  /// Substrait-to-Velox conversion.
+  std::string prefix_;
 };
 
 } // namespace facebook::velox::substrait
