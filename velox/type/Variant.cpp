@@ -69,19 +69,6 @@ struct VariantEquality<TypeKind::TIMESTAMP> {
   }
 };
 
-// date
-template <>
-struct VariantEquality<TypeKind::DATE> {
-  template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
-    if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
-    } else {
-      return a.value<TypeKind::DATE>() == b.value<TypeKind::DATE>();
-    }
-  }
-};
-
 // array
 template <>
 struct VariantEquality<TypeKind::ARRAY> {
@@ -298,10 +285,6 @@ std::string variant::toJson(const TypePtr& type) const {
       auto& timestamp = value<TypeKind::TIMESTAMP>();
       return '"' + timestamp.toString() + '"';
     }
-    case TypeKind::DATE: {
-      auto& date = value<TypeKind::DATE>();
-      return '"' + date.toString() + '"';
-    }
     case TypeKind::OPAQUE: {
       // Return expression that we can't parse back - we use toJson for
       // debugging only. Variant::serialize should actually serialize the data.
@@ -406,10 +389,6 @@ folly::dynamic variant::serialize() const {
     }
     case TypeKind::VARCHAR: {
       objValue = value<TypeKind::VARCHAR>();
-      break;
-    }
-    case TypeKind::DATE: {
-      objValue = value<TypeKind::DATE>();
       break;
     }
     case TypeKind::OPAQUE: {
@@ -520,9 +499,6 @@ variant variant::create(const folly::dynamic& variantobj) {
     case TypeKind::OPAQUE: {
       return deserializeOpaque(variantobj);
     }
-    case TypeKind::DATE: {
-      return variant::create<TypeKind::DATE>(obj.asInt());
-    }
     case TypeKind::TIMESTAMP: {
       return variant::create<TypeKind::TIMESTAMP>(Timestamp(
           variantobj["seconds"].asInt(), variantobj["nanos"].asInt()));
@@ -581,10 +557,6 @@ uint64_t variant::hash() const {
             hasher, hash, rowVariant[i].hash());
       }
       return hash;
-    }
-    case TypeKind::DATE: {
-      auto dateValue = value<TypeKind::DATE>();
-      return folly::Hash{}(dateValue.days());
     }
     case TypeKind::TIMESTAMP: {
       auto timestampValue = value<TypeKind::TIMESTAMP>();

@@ -318,17 +318,6 @@ struct TemplatedReadHelper<IntDecoderT, int32_t> {
 };
 
 template <class IntDecoderT>
-struct TemplatedReadHelper<IntDecoderT, Date> {
-  static void nextValues(
-      IntDecoderT& decoder,
-      Date* data,
-      uint64_t numValues,
-      const uint64_t* nulls) {
-    decoder.nextInts(reinterpret_cast<int32_t*>(data), numValues, nulls);
-  }
-};
-
-template <class IntDecoderT>
 struct TemplatedReadHelper<IntDecoderT, int64_t> {
   static void nextValues(
       IntDecoderT& decoder,
@@ -2227,13 +2216,6 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
     case TypeKind::TIMESTAMP:
       return std::make_unique<TimestampColumnReader>(
           dataType, stripe, std::move(flatMapContext));
-    case TypeKind::DATE:
-      return std::make_unique<IntegerDirectColumnReader<Date>>(
-          dataType,
-          requestedType->type,
-          stripe,
-          dwio::common::INT_BYTE_SIZE,
-          std::move(flatMapContext));
     default:
       DWIO_RAISE("buildReader unhandled type");
   }

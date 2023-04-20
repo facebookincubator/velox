@@ -27,7 +27,6 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
-#include "velox/type/Date.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
 

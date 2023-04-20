@@ -34,8 +34,9 @@ class ChecksumAggregateTest : public AggregationTestBase {
   template <typename T>
   void assertSingleGroupChecksum(
       const std::vector<std::optional<T>>& data,
-      const std::string& checksum) {
-    auto inputVector = makeNullableFlatVector<T>(data);
+      const std::string& checksum,
+      const TypePtr& type = CppToType<T>::create()) {
+    auto inputVector = makeNullableFlatVector(data, type);
     assertChecksum(inputVector, checksum);
   }
 
@@ -135,12 +136,6 @@ TEST_F(ChecksumAggregateTest, reals) {
 
   assertGroupingChecksum<int8_t, float>(
       {'a', 'b', 'a', 'a'}, {1, 2, 3, {}}, {"3ZYbfHiy+rQ=", "GSzMTb/0k9E="});
-}
-
-TEST_F(ChecksumAggregateTest, dates) {
-  assertSingleGroupChecksum<Date>({Date(0)}, "AAAAAAAAAAA=");
-  assertSingleGroupChecksum<Date>({Date(1)}, "vmaSXOnPGBc=");
-  assertSingleGroupChecksum<Date>({{}}, "h8rrhbF5N54=");
 }
 
 TEST_F(ChecksumAggregateTest, timestamps) {

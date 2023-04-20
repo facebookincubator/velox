@@ -73,7 +73,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
          makeFlatVector<int32_t>(std::vector<int32_t>{1000}),
          makeFlatVector<int64_t>(std::vector<int64_t>{10000}),
          makeDictionary<StringView>(std::vector<StringView>{"str1000"}),
-         makeConstant<Date>(Date(10000), 1)});
+         makeConstant<int32_t>(10000, 1, DATE())});
 
     std::vector<std::string> expectedPartitionKeyValues{
         "flat_bool_col=false",
@@ -82,7 +82,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
         "flat_int_col=1000",
         "flat_bigint_col=10000",
         "dict_string_col=str1000",
-        "const_date_col=1997-05-19"};
+        "const_date_col=10000"};
 
     std::vector<column_index_t> partitionChannels;
     for (auto i = 1; i <= expectedPartitionKeyValues.size(); i++) {

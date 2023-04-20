@@ -129,7 +129,6 @@ void registerIn(const std::string& prefix) {
   registerInFn<bool>(prefix);
   registerInFn<Varchar>(prefix);
   registerInFn<Timestamp>(prefix);
-  registerInFn<Date>(prefix);
 }
 
 } // namespace facebook::velox::functions::sparksql

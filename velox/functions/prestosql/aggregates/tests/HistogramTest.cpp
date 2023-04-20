@@ -161,25 +161,6 @@ TEST_F(HistogramTest, groupByTimestamp) {
   testHistogram("histogram(c1)", {"c0"}, vector1, vector2, expected);
 }
 
-TEST_F(HistogramTest, groupByDate) {
-  vector_size_t num = 10;
-
-  auto vector1 = makeFlatVector<int32_t>(
-      num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
-  auto vector2 = makeFlatVector<Date>(
-      num, [](vector_size_t row) { return Date{row % 2}; }, nullEvery(5));
-
-  auto expected = makeRowVector(
-      {makeNullableFlatVector<int32_t>({std::nullopt, 0, 1, 2}),
-       makeMapVector<Date, int64_t>(
-           {{{Date{0}, 2}},
-            {{Date{0}, 1}, {Date{1}, 2}},
-            {{Date{1}, 2}},
-            {{Date{0}, 1}}})});
-
-  testHistogram("histogram(c1)", {"c0"}, vector1, vector2, expected);
-}
-
 TEST_F(HistogramTest, groupByInterval) {
   vector_size_t num = 37;
 
@@ -228,17 +209,6 @@ TEST_F(HistogramTest, globalGroupByTimestamp) {
         {Timestamp{1, 100}, 3},
         {Timestamp{2, 100}, 2},
         {Timestamp{3, 100}, 1}}})});
-
-  testHistogram("histogram(c1)", {}, vector, vector, expected);
-}
-
-TEST_F(HistogramTest, globalGroupByDate) {
-  vector_size_t num = 10;
-  auto vector = makeFlatVector<Date>(
-      num, [](vector_size_t row) { return Date{row % 4}; }, nullEvery(7));
-
-  auto expected = makeRowVector({makeMapVector<Date, int64_t>(
-      {{{Date{0}, 2}, {Date{1}, 3}, {Date{2}, 2}, {Date{3}, 1}}})});
 
   testHistogram("histogram(c1)", {}, vector, vector, expected);
 }

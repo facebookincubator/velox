@@ -104,25 +104,34 @@ struct DateFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<Date>& result,
-      const arg_type<Varchar>& date) {
-    bool nullOutput;
-    result = util::Converter<TypeKind::DATE>::cast(date, nullOutput);
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& dateString) {
+    auto date = DATE();
+    result = date->toDays(dateString);
+  }
+
+  int32_t castTimestampToDays(const Timestamp& t) {
+    static const int32_t kSecsPerDay{86'400};
+    auto seconds = t.getSeconds();
+    if (seconds >= 0 || seconds % kSecsPerDay == 0) {
+      return int32_t(seconds / kSecsPerDay);
+    }
+    // For division with negatives, minus 1 to compensate the discarded
+    // fractional part. e.g. -1/86'400 yields 0, yet it should be considered as
+    // -1 day.
+    return int32_t(seconds / kSecsPerDay - 1);
   }
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<Date>& result,
+      out_type<int32_t>& result,
       const arg_type<Timestamp>& timestamp) {
-    bool nullOutput;
-    result = util::Converter<TypeKind::DATE>::cast(timestamp, nullOutput);
+    result = castTimestampToDays(timestamp);
   }
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<Date>& result,
+      out_type<int32_t>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-    bool nullOutput;
-    result = util::Converter<TypeKind::DATE>::cast(
-        this->toTimestamp(timestampWithTimezone), nullOutput);
+    result = castTimestampToDays(this->toTimestamp(timestampWithTimezone));
   }
 };
 
@@ -176,8 +185,10 @@ struct WeekFunction : public InitSessionTimezone<T>,
     result = getWeek(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getWeek(getDateTime(date));
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getWeek(getDateTime(days));
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -203,8 +214,10 @@ struct YearFunction : public InitSessionTimezone<T>,
     result = getYear(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getYear(getDateTime(date));
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getYear(getDateTime(days));
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -230,8 +243,10 @@ struct QuarterFunction : public InitSessionTimezone<T>,
     result = getQuarter(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getQuarter(getDateTime(date));
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getQuarter(getDateTime(days));
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -257,8 +272,10 @@ struct MonthFunction : public InitSessionTimezone<T>,
     result = getMonth(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getMonth(getDateTime(date));
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getMonth(getDateTime(days));
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -280,8 +297,10 @@ struct DayFunction : public InitSessionTimezone<T>,
     result = getDateTime(timestamp, this->timeZone_).tm_mday;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTime(date).tm_mday;
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getDateTime(days).tm_mday;
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -309,14 +328,14 @@ struct DateMinusIntervalDayTime {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
-      Date& result,
-      const arg_type<Date>& date,
+      int32_t& result,
+      const arg_type<int32_t>& date,
       const arg_type<IntervalDayTime>& interval) {
     VELOX_USER_CHECK(
         isIntervalWholeDays(interval),
         "Cannot subtract hours, minutes, seconds or milliseconds from a date");
     result = date;
-    result.addDays(-intervalDays(interval));
+    result -= intervalDays(interval);
   }
 };
 
@@ -325,14 +344,14 @@ struct DatePlusIntervalDayTime {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
-      Date& result,
-      const arg_type<Date>& date,
+      int32_t& result,
+      const arg_type<int32_t>& date,
       const arg_type<IntervalDayTime>& interval) {
     VELOX_USER_CHECK(
         isIntervalWholeDays(interval),
         "Cannot add hours, minutes, seconds or milliseconds to a date");
     result = date;
-    result.addDays(intervalDays(interval));
+    result += intervalDays(interval);
   }
 };
 
@@ -351,8 +370,10 @@ struct DayOfWeekFunction : public InitSessionTimezone<T>,
     result = getDayOfWeek(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getDayOfWeek(getDateTime(date));
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getDayOfWeek(getDateTime(days));
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -378,8 +399,10 @@ struct DayOfYearFunction : public InitSessionTimezone<T>,
     result = getDayOfYear(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getDayOfYear(getDateTime(date));
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getDayOfYear(getDateTime(days));
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -422,8 +445,10 @@ struct YearOfWeekFunction : public InitSessionTimezone<T>,
     result = computeYearOfWeek(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = computeYearOfWeek(getDateTime(date));
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = computeYearOfWeek(getDateTime(days));
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -445,8 +470,10 @@ struct HourFunction : public InitSessionTimezone<T>,
     result = getDateTime(timestamp, this->timeZone_).tm_hour;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTime(date).tm_hour;
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getDateTime(days).tm_hour;
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -468,8 +495,10 @@ struct MinuteFunction : public InitSessionTimezone<T>,
     result = getDateTime(timestamp, this->timeZone_).tm_min;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTime(date).tm_min;
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getDateTime(days).tm_min;
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -490,8 +519,10 @@ struct SecondFunction : public TimestampWithTimezoneSupport<T> {
     result = getDateTime(timestamp, nullptr).tm_sec;
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTime(date).tm_sec;
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<int32_t>& days) {
+    result = getDateTime(days).tm_sec;
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -514,7 +545,7 @@ struct MillisecondFunction : public TimestampWithTimezoneSupport<T> {
 
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
-      const arg_type<Date>& /*date*/) {
+      const arg_type<int32_t>& /*date*/) {
     // Dates do not have millisecond granularity.
     result = 0;
   }
@@ -630,7 +661,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* unitString,
-      const arg_type<Date>* /*date*/) {
+      const arg_type<int32_t>* /*days*/) {
     if (unitString != nullptr) {
       unit_ = getDateUnit(*unitString, false);
     }
@@ -699,22 +730,22 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
   }
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<Date>& result,
+      out_type<int32_t>& result,
       const arg_type<Varchar>& unitString,
-      const arg_type<Date>& date) {
+      const arg_type<int32_t>& days) {
     DateTimeUnit unit = unit_.has_value()
         ? unit_.value()
         : getDateUnit(unitString, true).value();
 
     if (unit == DateTimeUnit::kDay) {
-      result = Date(date.days());
+      result = days;
       return;
     }
 
-    auto dateTime = getDateTime(date);
+    auto dateTime = getDateTime(days);
     adjustDateTime(dateTime, unit);
 
-    result = Date(timegm(&dateTime) / kSecondsInDay);
+    result = int64_t(timegm(&dateTime) / kSecondsInDay);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -771,7 +802,7 @@ struct DateAddFunction {
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* unitString,
       const int64_t* /*value*/,
-      const arg_type<Date>* /*date*/) {
+      const arg_type<int32_t>* /*days*/) {
     if (unitString != nullptr) {
       unit_ = getDateUnit(*unitString, false);
     }
@@ -816,10 +847,10 @@ struct DateAddFunction {
   }
 
   FOLLY_ALWAYS_INLINE bool call(
-      out_type<Date>& result,
+      out_type<int32_t>& result,
       const arg_type<Varchar>& unitString,
       const int64_t value,
-      const arg_type<Date>& date) {
+      const arg_type<int32_t>& days) {
     DateTimeUnit unit = unit_.has_value()
         ? unit_.value()
         : getDateUnit(unitString, true).value();
@@ -828,7 +859,7 @@ struct DateAddFunction {
       VELOX_UNSUPPORTED("integer overflow");
     }
 
-    result = addToDate(date, unit, (int32_t)value);
+    result = addToDate(days, unit, (int32_t)value);
     return true;
   }
 };
@@ -855,8 +886,8 @@ struct DateDiffFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* unitString,
-      const arg_type<Date>* /*date1*/,
-      const arg_type<Date>* /*date2*/) {
+      const arg_type<int32_t>* /*days1*/,
+      const arg_type<int32_t>* /*days2*/) {
     if (unitString != nullptr) {
       unit_ = getDateUnit(*unitString, false);
     }
@@ -897,13 +928,13 @@ struct DateDiffFunction {
   FOLLY_ALWAYS_INLINE bool call(
       int64_t& result,
       const arg_type<Varchar>& unitString,
-      const arg_type<Date>& date1,
-      const arg_type<Date>& date2) {
+      const arg_type<int32_t>& days1,
+      const arg_type<int32_t>& days2) {
     DateTimeUnit unit = unit_.has_value()
         ? unit_.value()
         : getDateUnit(unitString, true).value();
 
-    result = diffDate(unit, date1, date2);
+    result = diffDate(unit, days1, days2);
     return true;
   }
 };
@@ -1104,7 +1135,7 @@ struct CurrentDateFunction {
     timeZone_ = getTimeZoneFromConfig(config);
   }
 
-  FOLLY_ALWAYS_INLINE void call(Date& result) {
+  FOLLY_ALWAYS_INLINE void call(int32_t& result) {
     auto now = Timestamp::now();
     if (timeZone_ != nullptr) {
       now.toTimezone(*timeZone_);
@@ -1113,7 +1144,7 @@ struct CurrentDateFunction {
         time_point<std::chrono::system_clock, std::chrono::milliseconds>
             localTimepoint(std::chrono::milliseconds(now.toMillis()));
     auto daysSinceEpoch = std::chrono::floor<date::days>(localTimepoint);
-    result = Date(daysSinceEpoch.time_since_epoch().count());
+    result = daysSinceEpoch.time_since_epoch().count();
   }
 };
 

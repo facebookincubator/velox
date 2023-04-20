@@ -494,7 +494,7 @@ int64_t daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear) {
   return startOfYear + (dayOfYear - 1);
 }
 
-int64_t fromDateString(const char* str, size_t len) {
+int32_t fromDateString(const char* str, size_t len) {
   int64_t daysSinceEpoch;
   size_t pos = 0;
 
@@ -503,7 +503,7 @@ int64_t fromDateString(const char* str, size_t len) {
         "Unable to parse date value: \"{}\", expected format is (YYYY-MM-DD)",
         std::string(str, len));
   }
-  return daysSinceEpoch;
+  return static_cast<int32_t>(daysSinceEpoch);
 }
 
 int32_t extractISODayOfTheWeek(int32_t daysSinceEpoch) {

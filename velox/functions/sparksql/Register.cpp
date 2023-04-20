@@ -159,7 +159,7 @@ void registerFunctions(const std::string& prefix) {
 
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
-  registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
+  registerFunction<YearFunction, int32_t, int32_t>({prefix + "year"});
 
   registerFunction<UnixTimestampFunction, int64_t>({prefix + "unix_timestamp"});
 

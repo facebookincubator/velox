@@ -113,6 +113,8 @@ class CastExpr : public SpecialForm {
       const SelectivityVector& rows,
       exec::EvalCtx& context,
       const BaseVector& input,
+      const TypePtr& fromType,
+      const TypePtr& toType,
       FlatVector<To>* resultFlatVector);
 
   /// @tparam To The target template

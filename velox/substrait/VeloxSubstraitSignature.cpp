@@ -42,8 +42,6 @@ std::string VeloxSubstraitSignature::toSubstraitSignature(
       return "vbin";
     case TypeKind::TIMESTAMP:
       return "ts";
-    case TypeKind::DATE:
-      return "date";
     case TypeKind::ARRAY:
       return "list";
     case TypeKind::MAP:

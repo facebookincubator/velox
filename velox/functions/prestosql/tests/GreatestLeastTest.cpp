@@ -27,12 +27,13 @@ class GreatestLeastTest : public functions::test::FunctionBaseTest {
       const std::string& query,
       const std::vector<std::vector<T>>& inputs,
       const std::vector<std::optional<T>>& output,
+      const TypePtr& type = CppToType<T>::create(),
       std::optional<size_t> stringBuffersExpectedCount = std::nullopt) {
     // Create input vectors
     auto vectorSize = inputs[0].size();
     std::vector<VectorPtr> inputColumns(inputs.size());
     for (auto i = 0; i < inputColumns.size(); ++i) {
-      inputColumns[i] = makeFlatVector<T>(inputs[i]);
+      inputColumns[i] = makeFlatVector(inputs[i], type);
       for (auto j = 0; j < vectorSize; ++j) {
         inputColumns[i]->asFlatVector<T>()->set(j, inputs[i][j]);
       }
@@ -142,21 +143,19 @@ TEST_F(GreatestLeastTest, leastTimeStamp) {
 }
 
 TEST_F(GreatestLeastTest, greatestDate) {
-  runTest<Date>(
+  runTest<int32_t>(
       "greatest(c0, c1, c2)",
-      {{Date(0), Date(5), Date(0)},
-       {Date(1), Date(0), Date(-5)},
-       {Date(5), Date(-5), Date(-10)}},
-      {Date(5), Date(5), Date(0)});
+      {{0, 5, 0}, {1, 0, -5}, {5, -5, -10}},
+      {5, 5, 0},
+      DATE());
 }
 
 TEST_F(GreatestLeastTest, leastDate) {
-  runTest<Date>(
+  runTest<int32_t>(
       "least(c0, c1, c2)",
-      {{Date(0), Date(0), Date(5)},
-       {Date(1), Date(-1), Date(-1)},
-       {Date(5), Date(5), Date(-5)}},
-      {Date(0), Date(-1), Date(-5)});
+      {{0, 0, 5}, {1, -1, -1}, {5, 5, -5}},
+      {0, -1, -5},
+      DATE());
 }
 
 TEST_F(GreatestLeastTest, stringBuffersMoved) {
@@ -165,6 +164,7 @@ TEST_F(GreatestLeastTest, stringBuffersMoved) {
       {{"aaaaaaaaaaaaaa"_sv, "bbbbbbbbbbbbbb"_sv},
        {"cccccccccccccc"_sv, "dddddddddddddd"_sv}},
       {"aaaaaaaaaaaaaa"_sv, "bbbbbbbbbbbbbb"_sv},
+      CppToType<StringView>::create(),
       1);
 
   runTest<StringView>(
@@ -172,6 +172,7 @@ TEST_F(GreatestLeastTest, stringBuffersMoved) {
       {{"aaaaaaaaaaaaaa"_sv, "bbbbbbbbbbbbbb"_sv},
        {"cccccccccccccc"_sv, "dddddddddddddd"_sv}},
       {""_sv, ""_sv},
+      CppToType<StringView>::create(),
       0);
 }
 

@@ -42,8 +42,7 @@ const std::unordered_set<TypeKind> kSupportedTypes = {
     TypeKind::BIGINT,
     TypeKind::REAL,
     TypeKind::DOUBLE,
-    TypeKind::VARCHAR,
-    TypeKind::DATE};
+    TypeKind::VARCHAR};
 
 std::vector<TestParam> getTestParams() {
   std::vector<TestParam> params;
@@ -79,9 +78,6 @@ std::vector<TestParam> getTestParams() {
       case TypeKind::VARCHAR:                                        \
         testFunc<valueType, StringView>();                           \
         break;                                                       \
-      case TypeKind::DATE:                                           \
-        testFunc<valueType, Date>();                                 \
-        break;                                                       \
       default:                                                       \
         LOG(FATAL) << "Unsupported comparison type of minmax_by(): " \
                    << mapTypeKindToName(GetParam().comparisonType);  \
@@ -111,9 +107,6 @@ std::vector<TestParam> getTestParams() {
         break;                                                  \
       case TypeKind::VARCHAR:                                   \
         EXECUTE_TEST_BY_VALUE_TYPE(testFunc, StringView);       \
-        break;                                                  \
-      case TypeKind::DATE:                                      \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, Date);             \
         break;                                                  \
       default:                                                  \
         LOG(FATAL) << "Unsupported value type of minmax_by(): " \
@@ -232,8 +225,6 @@ VectorPtr MinMaxByAggregationTestBase::buildDataVector(
       return buildDataVector<double>(size, values);
     case TypeKind::VARCHAR:
       return buildDataVector<StringView>(size, values);
-    case TypeKind::DATE:
-      return buildDataVector<Date>(size, values);
     default:
       LOG(FATAL) << "Unsupported value/comparison type of minmax_by(): "
                  << mapTypeKindToName(kind);
@@ -263,9 +254,6 @@ void MinMaxByAggregationTestBase::SetUp() {
         break;
       case TypeKind::DOUBLE:
         dataVectorsByType_.emplace(type, buildDataVector<double>(numValues_));
-        break;
-      case TypeKind::DATE:
-        dataVectorsByType_.emplace(type, buildDataVector<Date>(numValues_));
         break;
       case TypeKind::VARCHAR:
         dataVectorsByType_.emplace(

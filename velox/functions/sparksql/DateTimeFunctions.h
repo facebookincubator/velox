@@ -34,8 +34,10 @@ struct YearFunction : public InitSessionTimezone<T> {
     result = getYear(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
-    result = getYear(getDateTime(date));
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<int32_t>& days) {
+    result = getYear(getDateTime(days));
   }
 };
 

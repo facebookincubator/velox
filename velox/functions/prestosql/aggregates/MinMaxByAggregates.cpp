@@ -111,17 +111,6 @@ struct AccumulatorTypeTraits<T, std::enable_if_t<!isNumericOrDate<T>(), void>> {
 template <typename T>
 struct MinMaxTrait : public std::numeric_limits<T> {};
 
-template <>
-struct MinMaxTrait<Date> {
-  static constexpr Date lowest() {
-    return Date(std::numeric_limits<int32_t>::min());
-  }
-
-  static constexpr Date max() {
-    return Date(std::numeric_limits<int32_t>::max());
-  }
-};
-
 /// MinMaxByAggregate is the base class for min_by and max_by functions
 /// with numeric value and comparison types. These functions return the value of
 /// X associated with the minimum/maximum value of Y over all input values.
@@ -637,8 +626,6 @@ std::unique_ptr<exec::Aggregate> create(
       return std::make_unique<Aggregate<W, double>>(resultType);
     case TypeKind::VARCHAR:
       return std::make_unique<Aggregate<W, StringView>>(resultType);
-    case TypeKind::DATE:
-      return std::make_unique<Aggregate<W, Date>>(resultType);
     default:
       VELOX_FAIL("{}", errorMessage);
       return nullptr;
@@ -734,9 +721,6 @@ bool registerMinMaxBy(const std::string& name) {
                 resultType, compareType, errorMessage);
           case TypeKind::VARCHAR:
             return create<Aggregate, StringView>(
-                resultType, compareType, errorMessage);
-          case TypeKind::DATE:
-            return create<Aggregate, Date>(
                 resultType, compareType, errorMessage);
           default:
             VELOX_FAIL(errorMessage);

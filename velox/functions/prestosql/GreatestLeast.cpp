@@ -112,6 +112,10 @@ class ExtremeValueFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     switch (outputType.get()->kind()) {
+      case TypeKind::INTEGER:
+        applyTyped<TypeTraits<TypeKind::INTEGER>::NativeType>(
+            rows, args, outputType, context, result);
+        return;
       case TypeKind::BIGINT:
         applyTyped<TypeTraits<TypeKind::BIGINT>::NativeType>(
             rows, args, outputType, context, result);
@@ -130,10 +134,6 @@ class ExtremeValueFunction : public exec::VectorFunction {
         return;
       case TypeKind::TIMESTAMP:
         applyTyped<TypeTraits<TypeKind::TIMESTAMP>::NativeType>(
-            rows, args, outputType, context, result);
-        return;
-      case TypeKind::DATE:
-        applyTyped<TypeTraits<TypeKind::DATE>::NativeType>(
             rows, args, outputType, context, result);
         return;
       default:

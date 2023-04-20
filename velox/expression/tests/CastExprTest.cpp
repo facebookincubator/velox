@@ -140,16 +140,18 @@ class CastExprTest : public functions::test::CastBaseTest {
       std::vector<std::optional<TFrom>> input,
       std::vector<std::optional<TTo>> expectedResult,
       bool expectFailure = false,
-      bool tryCast = false) {
+      bool tryCast = false,
+      const TypePtr& fromType = CppToType<TFrom>::create(),
+      const TypePtr& toType = CppToType<TTo>::create()) {
     std::vector<TFrom> rawInput(input.size());
+
     for (auto index = 0; index < input.size(); index++) {
       if (input[index].has_value()) {
         rawInput[index] = input[index].value();
       }
     }
     // Create input vector using values and nulls
-    auto inputVector = makeFlatVector(rawInput);
-
+    auto inputVector = makeFlatVector(rawInput, fromType);
     for (auto index = 0; index < input.size(); index++) {
       if (!input[index].has_value()) {
         inputVector->setNull(index, true);
@@ -167,7 +169,7 @@ class CastExprTest : public functions::test::CastBaseTest {
     // run try cast and get the result vector
     auto result =
         evaluate(castFunction + "(c0 as " + typeString + ")", rowVector);
-    auto expected = makeNullableFlatVector<TTo>(expectedResult);
+    auto expected = makeNullableFlatVector<TTo>(expectedResult, toType);
     assertEqualVectors(expected, result);
   }
 
@@ -307,12 +309,12 @@ TEST_F(CastExprTest, timestampToString) {
 }
 
 TEST_F(CastExprTest, dateToTimestamp) {
-  testCast<Date, Timestamp>(
+  testCast<int32_t, Timestamp>(
       "timestamp",
       {
-          Date(0),
-          Date(10957),
-          Date(14557),
+          0,
+          10957,
+          14557,
           std::nullopt,
       },
       {
@@ -320,11 +322,14 @@ TEST_F(CastExprTest, dateToTimestamp) {
           Timestamp(946684800, 0),
           Timestamp(1257724800, 0),
           std::nullopt,
-      });
+      },
+      false,
+      false,
+      DATE());
 }
 
 TEST_F(CastExprTest, timestampToDate) {
-  testCast<Timestamp, Date>(
+  testCast<Timestamp, int32_t>(
       "date",
       {
           Timestamp(0, 0),
@@ -333,21 +338,30 @@ TEST_F(CastExprTest, timestampToDate) {
           std::nullopt,
       },
       {
-          Date(0),
-          Date(10957),
-          Date(14557),
+          0,
+          10957,
+          14557,
           std::nullopt,
-      });
+      },
+      false,
+      false,
+      CppToType<Timestamp>::create(),
+      DATE());
 }
 
 TEST_F(CastExprTest, timestampInvalid) {
-  testCast<int8_t, Timestamp>("timestamp", {12}, {Timestamp(0, 0)}, true);
-  testCast<int16_t, Timestamp>("timestamp", {1234}, {Timestamp(0, 0)}, true);
+  testCast<int8_t, Timestamp>(
+      "timestamp", {12}, {Timestamp(0, 0)}, true, false);
+  testCast<int16_t, Timestamp>(
+      "timestamp", {1234}, {Timestamp(0, 0)}, true, false);
   testCast<int32_t, Timestamp>("timestamp", {1234}, {Timestamp(0, 0)}, true);
-  testCast<int64_t, Timestamp>("timestamp", {1234}, {Timestamp(0, 0)}, true);
+  testCast<int64_t, Timestamp>(
+      "timestamp", {1234}, {Timestamp(0, 0)}, true, false);
 
-  testCast<float, Timestamp>("timestamp", {12.99}, {Timestamp(0, 0)}, true);
-  testCast<double, Timestamp>("timestamp", {12.99}, {Timestamp(0, 0)}, true);
+  testCast<float, Timestamp>(
+      "timestamp", {12.99}, {Timestamp(0, 0)}, true, false);
+  testCast<double, Timestamp>(
+      "timestamp", {12.99}, {Timestamp(0, 0)}, true, false);
 }
 
 TEST_F(CastExprTest, timestampAdjustToTimezone) {
@@ -401,33 +415,53 @@ TEST_F(CastExprTest, date) {
       "1920-01-02",
       std::nullopt,
   };
-  std::vector<std::optional<Date>> result{
-      Date(0),
-      Date(18262),
-      Date(60577),
-      Date(-5),
-      Date(-57604),
-      Date(-18262),
+  std::vector<std::optional<int32_t>> result{
+      0,
+      18262,
+      60577,
+      -5,
+      -57604,
+      -18262,
       std::nullopt,
   };
 
-  testCast<std::string, Date>("date", input, result);
+  testCast<std::string, int32_t>(
+      "date",
+      input,
+      result,
+      false,
+      false,
+      CppToType<StringView>::create(),
+      DATE());
 
   setCastIntByTruncate(true);
-  testCast<std::string, Date>("date", input, result);
+  testCast<std::string, int32_t>(
+      "date",
+      input,
+      result,
+      false,
+      false,
+      CppToType<StringView>::create(),
+      DATE());
 }
 
 TEST_F(CastExprTest, invalidDate) {
-  testCast<int8_t, Date>("date", {12}, {Date(0)}, true);
-  testCast<int16_t, Date>("date", {1234}, {Date(0)}, true);
-  testCast<int32_t, Date>("date", {1234}, {Date(0)}, true);
-  testCast<int64_t, Date>("date", {1234}, {Date(0)}, true);
+  testCast<int8_t, int32_t>(
+      "date", {12}, {0}, true, false, CppToType<int8_t>::create(), DATE());
+  testCast<int16_t, int32_t>(
+      "date", {1234}, {0}, true, false, CppToType<int16_t>::create(), DATE());
+  testCast<int32_t, int32_t>(
+      "date", {1234}, {0}, true, false, CppToType<int32_t>::create(), DATE());
+  testCast<int64_t, int32_t>(
+      "date", {1234}, {0}, true, false, CppToType<int64_t>::create(), DATE());
 
-  testCast<float, Date>("date", {12.99}, {Date(0)}, true);
-  testCast<double, Date>("date", {12.99}, {Date(0)}, true);
+  testCast<float, int32_t>(
+      "date", {12.99}, {0}, true, false, CppToType<float>::create(), DATE());
+  testCast<double, int32_t>(
+      "date", {12.99}, {0}, true, false, CppToType<double>::create(), DATE());
 
   // Parsing an ill-formated date.
-  testCast<std::string, Date>("date", {"2012-Oct-23"}, {Date(0)}, true);
+  testCast<std::string, int32_t>("date", {"2012-Oct-23"}, {0}, true);
 }
 
 TEST_F(CastExprTest, truncateVsRound) {

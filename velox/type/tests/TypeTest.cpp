@@ -127,8 +127,9 @@ TEST(TypeTest, date) {
   EXPECT_EQ(date->toString(), "DATE");
   EXPECT_EQ(date->size(), 0);
   EXPECT_THROW(date->childAt(0), std::invalid_argument);
-  EXPECT_EQ(date->kind(), TypeKind::DATE);
-  EXPECT_STREQ(date->kindName(), "DATE");
+  EXPECT_EQ(date->kind(), TypeKind::INTEGER);
+  EXPECT_STREQ(date->kindName(), "INTEGER");
+  EXPECT_STREQ(date->name(), "DATE");
   EXPECT_EQ(date->begin(), date->end());
 
   testTypeSerde(date);
@@ -225,19 +226,17 @@ TEST(TypeTest, longDecimal) {
 }
 
 TEST(TypeTest, dateToString) {
-  Date epoch(0);
-  EXPECT_EQ(epoch.toString(), "1970-01-01");
+  auto date = DATE();
+  EXPECT_EQ(date->toString(0), "1970-01-01");
 
-  // 50 years after epoch
-  Date jan2020(18262);
-  EXPECT_EQ(jan2020.toString(), "2020-01-01");
+  // 50 years after epoch.
+  EXPECT_EQ(date->toString(18262), "2020-01-01");
 
-  Date beforeEpoch(-5);
-  EXPECT_EQ(beforeEpoch.toString(), "1969-12-27");
+  // 5 days before epoch.
+  EXPECT_EQ(date->toString(-5), "1969-12-27");
 
-  // 50 years before epoch
-  Date wayBeforeEpoch(-18262);
-  EXPECT_EQ(wayBeforeEpoch.toString(), "1920-01-02");
+  // 50 years before epoch.
+  EXPECT_EQ(date->toString(-18262), "1920-01-02");
 
   // Trying a very large -integer for boundary checks. Such values are tested in
   // ExpressionFuzzer.
@@ -246,78 +245,31 @@ TEST(TypeTest, dateToString) {
   // for the number of years, so the eventual results might look like garbage.
   // However, they are consistent with presto java so keeping the same
   // implementation.
-  Date dateOverflow(-1855961014);
-  EXPECT_EQ(dateOverflow.toString(), "-5079479-05-03");
-}
-
-TEST(TypeTest, dateComparison) {
-  Date epoch(0);
-  Date beforeEpoch(-5);
-  Date jan2020(18262);
-  Date jan2020Copy(18262);
-  Date dec2019(18261);
-
-  EXPECT_EQ(jan2020, jan2020Copy);
-  EXPECT_EQ(jan2020Copy, jan2020);
-
-  EXPECT_NE(jan2020, dec2019);
-  EXPECT_NE(dec2019, jan2020);
-  EXPECT_NE(epoch, beforeEpoch);
-
-  EXPECT_LT(dec2019, jan2020);
-  EXPECT_LT(beforeEpoch, epoch);
-
-  EXPECT_LE(jan2020, jan2020Copy);
-  EXPECT_LE(dec2019, jan2020);
-  EXPECT_LE(beforeEpoch, epoch);
-
-  EXPECT_GT(jan2020, dec2019);
-  EXPECT_GT(epoch, beforeEpoch);
-
-  EXPECT_GE(jan2020, jan2020Copy);
-  EXPECT_GE(jan2020, dec2019);
-  EXPECT_GE(epoch, beforeEpoch);
+  EXPECT_EQ(date->toString(-1855961014), "-5079479-05-03");
 }
 
 TEST(TypeTest, parseStringToDate) {
   auto parseDate = [](const std::string& dateStr) {
-    Date returnDate;
-    parseTo(dateStr, returnDate);
-    return returnDate;
+    return DATE()->toDays(dateStr);
   };
 
   // Epoch.
-  EXPECT_EQ(parseDate("1970-01-01").days(), 0);
+  EXPECT_EQ(parseDate("1970-01-01"), 0);
 
   // 50 years after epoch.
-  EXPECT_EQ(parseDate("2020-01-01").days(), 18262);
+  EXPECT_EQ(parseDate("2020-01-01"), 18262);
 
   // Before epoch.
-  EXPECT_EQ(parseDate("1969-12-27").days(), -5);
+  EXPECT_EQ(parseDate("1969-12-27"), -5);
 
   // 50 years before epoch.
-  EXPECT_EQ(parseDate("1920-01-02").days(), -18262);
+  EXPECT_EQ(parseDate("1920-01-02"), -18262);
 
   // Century before epoch.
-  EXPECT_EQ(parseDate("1812-04-15").days(), -57604);
+  EXPECT_EQ(parseDate("1812-04-15"), -57604);
 
   // Century after epoch.
-  EXPECT_EQ(parseDate("2135-11-09").days(), 60577);
-}
-
-TEST(TypeTest, dateFormat) {
-  auto parseDate = [](const std::string& dateStr) {
-    Date returnDate;
-    parseTo(dateStr, returnDate);
-    return returnDate;
-  };
-
-  EXPECT_EQ(fmt::format("{}", parseDate("2015-12-24")), "2015-12-24");
-  EXPECT_EQ(fmt::format("{}", parseDate("1970-01-01")), "1970-01-01");
-  EXPECT_EQ(fmt::format("{}", parseDate("2000-03-10")), "2000-03-10");
-  EXPECT_EQ(fmt::format("{}", parseDate("1945-05-20")), "1945-05-20");
-  EXPECT_EQ(fmt::format("{}", parseDate("2135-11-09")), "2135-11-09");
-  EXPECT_EQ(fmt::format("{}", parseDate("1812-04-15")), "1812-04-15");
+  EXPECT_EQ(parseDate("2135-11-09"), 60577);
 }
 
 TEST(TypeTest, map) {
@@ -611,7 +563,6 @@ TEST(TypeTest, cpp2Type) {
   EXPECT_EQ(*CppToType<double>::create(), *DOUBLE());
   EXPECT_EQ(*CppToType<bool>::create(), *BOOLEAN());
   EXPECT_EQ(*CppToType<Timestamp>::create(), *TIMESTAMP());
-  EXPECT_EQ(*CppToType<Date>::create(), *DATE());
   EXPECT_EQ(*CppToType<Array<int32_t>>::create(), *ARRAY(INTEGER()));
   auto type = CppToType<Map<int32_t, Map<int64_t, float>>>::create();
   EXPECT_EQ(*type, *MAP(INTEGER(), MAP(BIGINT(), REAL())));
@@ -787,7 +738,6 @@ TEST(TypeTest, fromKindToScalerType) {
         TypeKind::VARCHAR,
         TypeKind::VARBINARY,
         TypeKind::TIMESTAMP,
-        TypeKind::DATE,
         TypeKind::UNKNOWN}) {
     SCOPED_TRACE(mapTypeKindToName(kind));
     auto type = fromKindToScalerType(kind);

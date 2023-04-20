@@ -72,8 +72,8 @@ class InTest : public SparkFunctionBaseTest {
     // parser.
 
     auto getExpr = [&](bool asDictionary) {
-      std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
       const auto argType = CppToType<T>::create();
+      std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
       args.push_back(
           std::make_shared<core::FieldAccessTypedExpr>(argType, "c0"));
       VectorPtr rhsArrayVector =
@@ -176,11 +176,6 @@ TEST_F(InTest, Timestamp) {
       std::nullopt);
   EXPECT_EQ(
       in<Timestamp>(Timestamp(0, 0), {Timestamp(0, 0), Timestamp()}), true);
-}
-
-TEST_F(InTest, Date) {
-  EXPECT_EQ(in<Date>(Date(0), {Date(1), std::nullopt}), std::nullopt);
-  EXPECT_EQ(in<Date>(Date(0), {Date(0), Date()}), true);
 }
 
 TEST_F(InTest, Bool) {

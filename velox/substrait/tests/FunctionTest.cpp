@@ -186,12 +186,15 @@ TEST_F(FunctionTest, setVectorFromVariants) {
       "1970-01-01T02:27:55.000000000",
       resultVec->asFlatVector<Timestamp>()->valueAt(1).toString());
 
+  auto date = DATE();
   resultVec = setVectorFromVariants(
-      DATE(), {variant(Date(9020)), variant(Date(8875))}, pool_.get());
+      DATE(), {variant(9020), variant(8875)}, pool_.get());
   ASSERT_EQ(
-      "1994-09-12", resultVec->asFlatVector<Date>()->valueAt(0).toString());
+      "1994-09-12",
+      date->toString(resultVec->asFlatVector<int64_t>()->valueAt(0)));
   ASSERT_EQ(
-      "1994-04-20", resultVec->asFlatVector<Date>()->valueAt(1).toString());
+      "1994-04-20",
+      date->toString(resultVec->asFlatVector<int64_t>()->valueAt(1)));
 
   resultVec = setVectorFromVariants(
       INTERVAL_DAY_TIME(), {variant(9020LL), variant(8875LL)}, pool_.get());

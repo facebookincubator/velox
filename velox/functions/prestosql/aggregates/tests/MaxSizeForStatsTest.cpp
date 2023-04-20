@@ -40,7 +40,6 @@ TEST_F(MaxSizeForStatsTest, nullValues) {
       makeNullableFlatVector<float>({std::nullopt, std::nullopt}),
       makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
       makeNullableFlatVector<bool>({std::nullopt, std::nullopt}),
-      makeNullableFlatVector<Date>({std::nullopt, std::nullopt}),
       makeNullableFlatVector<Timestamp>({std::nullopt, std::nullopt}),
       makeNullableFlatVector<StringView>({std::nullopt, std::nullopt}),
   })};
@@ -56,9 +55,8 @@ TEST_F(MaxSizeForStatsTest, nullValues) {
        "max_data_size_for_stats(c5)",
        "max_data_size_for_stats(c6)",
        "max_data_size_for_stats(c7)",
-       "max_data_size_for_stats(c8)",
-       "max_data_size_for_stats(c9)"},
-      "SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL");
+       "max_data_size_for_stats(c8)"},
+      "SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL");
 }
 
 TEST_F(MaxSizeForStatsTest, nullAndNonNullValues) {
@@ -70,7 +68,6 @@ TEST_F(MaxSizeForStatsTest, nullAndNonNullValues) {
       makeNullableFlatVector<float>({std::nullopt, 0}),
       makeNullableFlatVector<double>({std::nullopt, 0}),
       makeNullableFlatVector<bool>({std::nullopt, 0}),
-      makeNullableFlatVector<Date>({std::nullopt, 0}),
       makeNullableFlatVector<Timestamp>({std::nullopt, Timestamp(0, 0)}),
       makeNullableFlatVector<StringView>({std::nullopt, "std::nullopt"}),
   })};
@@ -86,9 +83,8 @@ TEST_F(MaxSizeForStatsTest, nullAndNonNullValues) {
        "max_data_size_for_stats(c5)",
        "max_data_size_for_stats(c6)",
        "max_data_size_for_stats(c7)",
-       "max_data_size_for_stats(c8)",
-       "max_data_size_for_stats(c9)"},
-      "SELECT 1, 2, 4, 8, 4, 8, 1, 4, 16, 16");
+       "max_data_size_for_stats(c8)"},
+      "SELECT 1, 2, 4, 8, 4, 8, 1, 16, 16");
 }
 
 template <class T>
@@ -109,7 +105,6 @@ TEST_F(MaxSizeForStatsTest, allScalarTypes) {
        makeFlatVector<float>(4, generator<float>),
        makeFlatVector<double>(4, generator<double>),
        makeFlatVector<bool>(4, generator<bool>),
-       makeFlatVector<Date>(4, generator<Date>),
        makeFlatVector<Timestamp>(4, generator<Timestamp>)})};
 
   // With grouping keys.
@@ -123,9 +118,8 @@ TEST_F(MaxSizeForStatsTest, allScalarTypes) {
        "max_data_size_for_stats(c5)",
        "max_data_size_for_stats(c6)",
        "max_data_size_for_stats(c7)",
-       "max_data_size_for_stats(c8)",
-       "max_data_size_for_stats(c9)"},
-      "VALUES (1,1,2,4,8,4,8,1,4,16),(2,1,2,4,8,4,8,1,4,16)");
+       "max_data_size_for_stats(c8)"},
+      "VALUES (1,1,2,4,8,4,8,1,16),(2,1,2,4,8,4,8,1,16)");
 
   // Without grouping keys.
   testAggregations(
@@ -138,9 +132,8 @@ TEST_F(MaxSizeForStatsTest, allScalarTypes) {
        "max_data_size_for_stats(c5)",
        "max_data_size_for_stats(c6)",
        "max_data_size_for_stats(c7)",
-       "max_data_size_for_stats(c8)",
-       "max_data_size_for_stats(c9)"},
-      "VALUES (1,2,4,8,4,8,1,4,16)");
+       "max_data_size_for_stats(c8)"},
+      "VALUES (1,2,4,8,4,8,1,16)");
 }
 
 TEST_F(MaxSizeForStatsTest, arrayGlobalAggregate) {

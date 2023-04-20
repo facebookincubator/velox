@@ -91,7 +91,7 @@ TypeKind TypeWrapper::kind() const {
     case proto::orc::Type_Kind_VARCHAR:
       return TypeKind::VARCHAR;
     case proto::orc::Type_Kind_DATE:
-      return TypeKind::DATE;
+      return TypeKind::INTEGER;
     case proto::orc::Type_Kind_DECIMAL:
     case proto::orc::Type_Kind_CHAR:
     case proto::orc::Type_Kind_TIMESTAMP_INSTANT:

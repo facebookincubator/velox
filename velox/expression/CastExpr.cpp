@@ -46,13 +46,17 @@ template <typename To, typename From, bool Truncate>
 void applyCastKernel(
     vector_size_t row,
     const SimpleVector<From>* input,
+    const TypePtr& fromType,
+    const TypePtr& toType,
     FlatVector<To>* result,
     bool& nullOutput) {
   // Special handling for string target type
   if constexpr (CppToType<To>::typeKind == TypeKind::VARCHAR) {
+    auto x = isDateType(toType);
+    auto y = fromType->isInteger();
     auto output =
         util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-            input->valueAt(row), nullOutput);
+            input->valueAt(row), nullOutput, fromType, toType);
     if (!nullOutput) {
       // Write the result output to the output vector
       auto writer = exec::StringWriter<>(result, row);
@@ -63,9 +67,11 @@ void applyCastKernel(
       writer.finalize();
     }
   } else {
+    auto x = isDateType(toType);
+    auto y = fromType->isInteger();
     auto output =
         util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-            input->valueAt(row), nullOutput);
+            input->valueAt(row), nullOutput, fromType, toType);
     if (!nullOutput) {
       result->set(row, output);
     }
@@ -141,6 +147,8 @@ void CastExpr::applyCastWithTry(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
     const BaseVector& input,
+    const TypePtr& fromType,
+    const TypePtr& toType,
     FlatVector<To>* resultFlatVector) {
   const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
   auto isCastIntByTruncate = queryConfig.isCastIntByTruncate();
@@ -153,7 +161,12 @@ void CastExpr::applyCastWithTry(
       try {
         // Passing a false truncate flag
         applyCastKernel<To, From, false>(
-            row, inputSimpleVector, resultFlatVector, nullOutput);
+            row,
+            inputSimpleVector,
+            fromType,
+            toType,
+            resultFlatVector,
+            nullOutput);
       } catch (const VeloxRuntimeError& re) {
         VELOX_FAIL(
             makeErrorMessage(input, row, resultFlatVector->type()) + " " +
@@ -178,7 +191,12 @@ void CastExpr::applyCastWithTry(
       try {
         // Passing a true truncate flag
         applyCastKernel<To, From, true>(
-            row, inputSimpleVector, resultFlatVector, nullOutput);
+            row,
+            inputSimpleVector,
+            fromType,
+            toType,
+            resultFlatVector,
+            nullOutput);
       } catch (const VeloxRuntimeError& re) {
         VELOX_FAIL(
             makeErrorMessage(input, row, resultFlatVector->type()) + " " +
@@ -236,42 +254,40 @@ void CastExpr::applyCast(
   switch (fromType->kind()) {
     case TypeKind::TINYINT: {
       return applyCastWithTry<To, int8_t>(
-          rows, context, input, resultFlatVector);
+          rows, context, input, fromType, toType, resultFlatVector);
     }
     case TypeKind::SMALLINT: {
       return applyCastWithTry<To, int16_t>(
-          rows, context, input, resultFlatVector);
+          rows, context, input, fromType, toType, resultFlatVector);
     }
     case TypeKind::INTEGER: {
       return applyCastWithTry<To, int32_t>(
-          rows, context, input, resultFlatVector);
+          rows, context, input, fromType, toType, resultFlatVector);
     }
     case TypeKind::BIGINT: {
       return applyCastWithTry<To, int64_t>(
-          rows, context, input, resultFlatVector);
+          rows, context, input, fromType, toType, resultFlatVector);
     }
     case TypeKind::BOOLEAN: {
-      return applyCastWithTry<To, bool>(rows, context, input, resultFlatVector);
+      return applyCastWithTry<To, bool>(
+          rows, context, input, fromType, toType, resultFlatVector);
     }
     case TypeKind::REAL: {
       return applyCastWithTry<To, float>(
-          rows, context, input, resultFlatVector);
+          rows, context, input, fromType, toType, resultFlatVector);
     }
     case TypeKind::DOUBLE: {
       return applyCastWithTry<To, double>(
-          rows, context, input, resultFlatVector);
+          rows, context, input, fromType, toType, resultFlatVector);
     }
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY: {
       return applyCastWithTry<To, StringView>(
-          rows, context, input, resultFlatVector);
-    }
-    case TypeKind::DATE: {
-      return applyCastWithTry<To, Date>(rows, context, input, resultFlatVector);
+          rows, context, input, fromType, toType, resultFlatVector);
     }
     case TypeKind::TIMESTAMP: {
       return applyCastWithTry<To, Timestamp>(
-          rows, context, input, resultFlatVector);
+          rows, context, input, fromType, toType, resultFlatVector);
     }
     default: {
       VELOX_UNSUPPORTED("Invalid from type in casting: {}", fromType);

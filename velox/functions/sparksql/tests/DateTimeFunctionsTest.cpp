@@ -55,14 +55,14 @@ TEST_F(DateTimeFunctionsTest, year) {
 }
 
 TEST_F(DateTimeFunctionsTest, yearDate) {
-  const auto year = [&](std::optional<Date> date) {
-    return evaluateOnce<int32_t>("year(c0)", date);
+  const auto year = [&](std::optional<int32_t> days) {
+    return evaluateOnce<int32_t>("year(c0)", days);
   };
   EXPECT_EQ(std::nullopt, year(std::nullopt));
-  EXPECT_EQ(1970, year(Date(0)));
-  EXPECT_EQ(1969, year(Date(-1)));
-  EXPECT_EQ(2020, year(Date(18262)));
-  EXPECT_EQ(1920, year(Date(-18262)));
+  EXPECT_EQ(1970, year(0));
+  EXPECT_EQ(1969, year(-1));
+  EXPECT_EQ(2020, year(18262));
+  EXPECT_EQ(1920, year(-18262));
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestamp) {

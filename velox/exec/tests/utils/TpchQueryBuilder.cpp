@@ -25,12 +25,6 @@
 namespace facebook::velox::exec::test {
 
 namespace {
-int64_t toDate(std::string_view stringDate) {
-  Date date;
-  parseTo(stringDate, date);
-  return date.days();
-}
-
 /// DWRF does not support Date type and Varchar is used.
 /// Return the Date filter expression as per data format.
 std::string formatDateFilter(

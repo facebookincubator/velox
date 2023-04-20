@@ -98,11 +98,6 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
       FOLLY_FALLTHROUGH;
     case TypeKind::DOUBLE:
       FOLLY_FALLTHROUGH;
-    case TypeKind::DATE:
-      valueBytes_ = type->cppSizeInBytes();
-      fixedWidthTypeKind_ = true;
-      supportsBulkCopy_ = decoded_.isIdentityMapping();
-      break;
     case TypeKind::TIMESTAMP:
       valueBytes_ = sizeof(int64_t);
       fixedWidthTypeKind_ = true;

@@ -170,8 +170,7 @@ class TableWriteTest : public HiveConnectorTestBase {
     VELOX_CHECK_EQ(partitionKeyValues.size(), partitionTypes.size());
 
     for (auto i = 0; i < partitionKeyValues.size(); i++) {
-      if (partitionTypes[i]->isVarchar() || partitionTypes[i]->isVarbinary() ||
-          partitionTypes[i]->isDate()) {
+      if (partitionTypes[i]->isVarchar() || partitionTypes[i]->isVarbinary()) {
         conjuncts.push_back(
             partitionKeyValues[i]
                 .replace(partitionKeyValues[i].find("="), 1, "='")

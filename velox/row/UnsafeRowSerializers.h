@@ -19,7 +19,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/row/UnsafeRow.h"
 #include "velox/row/UnsafeRowParser.h"
-#include "velox/type/Date.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
@@ -659,7 +658,6 @@ struct UnsafeRowSerializer {
       FIXED_WIDTH(REAL);
       FIXED_WIDTH(DOUBLE);
       FIXED_WIDTH(TIMESTAMP);
-      FIXED_WIDTH(DATE);
 #undef FIXED_WIDTH
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:

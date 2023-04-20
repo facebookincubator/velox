@@ -36,7 +36,6 @@
 #include "folly/CPortability.h"
 #include "velox/common/base/ClassName.h"
 #include "velox/common/serialization/Serializable.h"
-#include "velox/type/Date.h"
 #include "velox/type/HugeInt.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
@@ -47,8 +46,8 @@ namespace facebook::velox {
 using int128_t = __int128_t;
 
 /// Velox type system supports a small set of SQL-compatible composeable types:
-/// BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, HUGEINT, REAL, DOUBLE, VARCHAR,
-/// VARBINARY, TIMESTAMP, DATE, ARRAY, MAP, ROW
+/// BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
+/// VARBINARY, TIMESTAMP, ARRAY, MAP, ROW
 ///
 /// This file has multiple C++ type definitions for each of these logical types.
 /// These logical definitions each serve slightly different purposes.
@@ -71,8 +70,7 @@ enum class TypeKind : int8_t {
   VARCHAR = 7,
   VARBINARY = 8,
   TIMESTAMP = 9,
-  DATE = 10,
-  HUGEINT = 11,
+  HUGEINT = 10,
   // Enum values for ComplexTypes start after 30 to leave
   // some values space to accommodate adding new scalar/native
   // types above.
@@ -261,20 +259,6 @@ struct TypeTraits<TypeKind::TIMESTAMP> {
   static constexpr bool isPrimitiveType = true;
   static constexpr bool isFixedWidth = true;
   static constexpr const char* name = "TIMESTAMP";
-};
-
-// Date is internally an int32_t that represents the days since the epoch
-template <>
-struct TypeTraits<TypeKind::DATE> {
-  using ImplType = ScalarType<TypeKind::DATE>;
-  using NativeType = Date;
-  using DeepCopiedType = Date;
-  static constexpr uint32_t minSubTypes = 0;
-  static constexpr uint32_t maxSubTypes = 0;
-  static constexpr TypeKind typeKind = TypeKind::DATE;
-  static constexpr bool isPrimitiveType = true;
-  static constexpr bool isFixedWidth = true;
-  static constexpr const char* name = "DATE";
 };
 
 template <>
@@ -539,7 +523,6 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
   VELOX_FLUENT_CAST(Varchar, VARCHAR)
   VELOX_FLUENT_CAST(Varbinary, VARBINARY)
   VELOX_FLUENT_CAST(Timestamp, TIMESTAMP)
-  VELOX_FLUENT_CAST(Date, DATE)
   VELOX_FLUENT_CAST(Array, ARRAY)
   VELOX_FLUENT_CAST(Map, MAP)
   VELOX_FLUENT_CAST(Row, ROW)
@@ -1051,7 +1034,6 @@ using DoubleType = ScalarType<TypeKind::DOUBLE>;
 using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
 using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
-using DateType = ScalarType<TypeKind::DATE>;
 
 constexpr long kMillisInSecond = 1000;
 constexpr long kMillisInMinute = 60 * kMillisInSecond;
@@ -1109,6 +1091,55 @@ FOLLY_ALWAYS_INLINE bool isIntervalDayTimeType(const TypePtr& type) {
 FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalDayTimeType>
 INTERVAL_DAY_TIME() {
   return IntervalDayTimeType::get();
+}
+
+/// Date is represented as the number of days since epoch start using int32_t.
+class DateType : public IntegerType {
+ private:
+  DateType() = default;
+
+ public:
+  static const std::shared_ptr<const DateType>& get() {
+    static const std::shared_ptr<const DateType> kType{new DateType()};
+    return kType;
+  }
+
+  const char* name() const override {
+    return "DATE";
+  }
+
+  bool equivalent(const Type& other) const override {
+    return this == &other;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  std::string toString(const int32_t days) const;
+
+  int32_t toDays(folly::StringPiece in) const;
+
+  int32_t toDays(const char* in) const;
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "DateType";
+    obj["type"] = name();
+    return obj;
+  }
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return DateType::get();
+  }
+};
+
+FOLLY_ALWAYS_INLINE bool isDateType(const TypePtr& type) {
+  return DateType::get() == type;
+}
+
+FOLLY_ALWAYS_INLINE std::shared_ptr<const DateType> DATE() {
+  return DateType::get();
 }
 
 /// Used as T for SimpleVector subclasses that wrap another vector when
@@ -1234,9 +1265,6 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
         return TEMPLATE_FUNC<::facebook::velox::TypeKind::TIMESTAMP>(         \
             __VA_ARGS__);                                                     \
       }                                                                       \
-      case ::facebook::velox::TypeKind::DATE: {                               \
-        return TEMPLATE_FUNC<::facebook::velox::TypeKind::DATE>(__VA_ARGS__); \
-      }                                                                       \
       default:                                                                \
         VELOX_FAIL(                                                           \
             "not a scalar type! kind: {}", mapTypeKindToName(typeKind));      \
@@ -1285,10 +1313,6 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       }                                                                  \
       case ::facebook::velox::TypeKind::TIMESTAMP: {                     \
         return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::TIMESTAMP>( \
-            __VA_ARGS__);                                                \
-      }                                                                  \
-      case ::facebook::velox::TypeKind::DATE: {                          \
-        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::DATE>(      \
             __VA_ARGS__);                                                \
       }                                                                  \
       default:                                                           \
@@ -1352,9 +1376,6 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       case ::facebook::velox::TypeKind::TIMESTAMP: {                           \
         return PREFIX<::facebook::velox::TypeKind::TIMESTAMP> SUFFIX(          \
             __VA_ARGS__);                                                      \
-      }                                                                        \
-      case ::facebook::velox::TypeKind::DATE: {                                \
-        return PREFIX<::facebook::velox::TypeKind::DATE> SUFFIX(__VA_ARGS__);  \
       }                                                                        \
       case ::facebook::velox::TypeKind::ARRAY: {                               \
         return PREFIX<::facebook::velox::TypeKind::ARRAY> SUFFIX(__VA_ARGS__); \
@@ -1445,9 +1466,6 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       case ::facebook::velox::TypeKind::TIMESTAMP: {                          \
         return CLASS<::facebook::velox::TypeKind::TIMESTAMP>::FIELD;          \
       }                                                                       \
-      case ::facebook::velox::TypeKind::DATE: {                               \
-        return CLASS<::facebook::velox::TypeKind::DATE>::FIELD;               \
-      }                                                                       \
       case ::facebook::velox::TypeKind::ARRAY: {                              \
         return CLASS<::facebook::velox::TypeKind::ARRAY>::FIELD;              \
       }                                                                       \
@@ -1488,7 +1506,6 @@ VELOX_SCALAR_ACCESSOR(DOUBLE);
 VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
-VELOX_SCALAR_ACCESSOR(DATE);
 VELOX_SCALAR_ACCESSOR(UNKNOWN);
 
 template <TypeKind KIND>
@@ -1665,6 +1682,11 @@ struct IntervalDayTime {
   IntervalDayTime() {}
 };
 
+struct Date {
+ private:
+  Date() {}
+};
+
 struct Varbinary {
  private:
   Varbinary() {}
@@ -1712,7 +1734,9 @@ template <>
 struct SimpleTypeTrait<Timestamp> : public TypeTraits<TypeKind::TIMESTAMP> {};
 
 template <>
-struct SimpleTypeTrait<Date> : public TypeTraits<TypeKind::DATE> {};
+struct SimpleTypeTrait<Date> : public SimpleTypeTrait<int32_t> {
+  static constexpr const char* name = "DATE";
+};
 
 template <>
 struct SimpleTypeTrait<IntervalDayTime> : public SimpleTypeTrait<int64_t> {
@@ -1834,9 +1858,6 @@ struct CppToType<double> : public CppToTypeBase<TypeKind::DOUBLE> {};
 
 template <>
 struct CppToType<Timestamp> : public CppToTypeBase<TypeKind::TIMESTAMP> {};
-
-template <>
-struct CppToType<Date> : public CppToTypeBase<TypeKind::DATE> {};
 
 template <typename T>
 struct CppToType<Generic<T>> : public CppToTypeBase<TypeKind::UNKNOWN> {};

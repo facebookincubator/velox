@@ -471,9 +471,6 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     case TypeKind::DOUBLE: {
       return valueCount * sizeof(double);
     }
-    case TypeKind::DATE: {
-      return valueCount * sizeof(uint32_t);
-    }
     case TypeKind::VARCHAR: {
       auto stringStats =
           dynamic_cast<const dwio::common::StringColumnStatistics*>(&s);
@@ -615,7 +612,6 @@ uint64_t maxStreamsForType(const TypeWrapper& type) {
       case TypeKind::REAL:
       case TypeKind::DOUBLE:
       case TypeKind::BOOLEAN:
-      case TypeKind::DATE:
       case TypeKind::ARRAY:
       case TypeKind::MAP:
         return 2;

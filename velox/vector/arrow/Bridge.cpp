@@ -243,8 +243,6 @@ const char* exportArrowFormatStr(
       // TODO: need to figure out how we'll map this since in Velox we currently
       // store timestamps as two int64s (epoch in sec and nanos).
       return "ttn"; // time64 [nanoseconds]
-    case TypeKind::DATE:
-      return "tdD"; // date32[days]
     // Complex/nested types.
     case TypeKind::ARRAY:
       static_assert(sizeof(vector_size_t) == 4);
@@ -425,7 +423,6 @@ void exportFlat(
     case TypeKind::INTEGER:
     case TypeKind::BIGINT:
     case TypeKind::HUGEINT:
-    case TypeKind::DATE:
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
       exportValues(vec, rows, out, pool, holder);

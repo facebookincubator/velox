@@ -27,13 +27,14 @@ class PartitionIdGeneratorTest : public ::testing::Test,
 
 TEST_F(PartitionIdGeneratorTest, consecutiveIdsSingleKey) {
   auto numPartitions = 100;
+  auto date = DATE();
 
   PartitionIdGenerator idGenerator(ROW({VARCHAR()}), {0}, 100, pool());
 
   auto input = makeRowVector(
       {makeFlatVector<StringView>(numPartitions * 3, [&](auto row) {
         return StringView::makeInline(
-            Date(18000 + row % numPartitions).toString());
+            date->toString(18000 + row % numPartitions));
       })});
 
   raw_vector<uint64_t> ids;
@@ -52,11 +53,12 @@ TEST_F(PartitionIdGeneratorTest, consecutiveIdsMultipleKeys) {
   PartitionIdGenerator idGenerator(
       ROW({VARCHAR(), INTEGER()}), {0, 1}, 100, pool());
 
+  auto date = DATE();
   auto input = makeRowVector({
       makeFlatVector<StringView>(
           1'000,
           [&](auto row) {
-            return StringView::makeInline(Date(18000 + row % 5).toString());
+            return StringView::makeInline(date->toString(18000 + row % 5));
           }),
       makeFlatVector<int32_t>(1'000, [&](auto row) { return row % 17; }),
   });
@@ -106,12 +108,13 @@ TEST_F(PartitionIdGeneratorTest, stableIdsMultipleKeys) {
       ROW({BIGINT(), VARCHAR(), INTEGER()}), {1, 2}, 100, pool());
 
   const vector_size_t size = 1'000;
+  auto date = DATE();
   auto input = makeRowVector({
       makeFlatVector<int64_t>(size, [](auto row) { return row; }),
       makeFlatVector<StringView>(
           size,
-          [](auto row) {
-            return StringView::makeInline(Date(18000 + row % 3).toString());
+          [&](auto row) {
+            return StringView::makeInline(date->toString(18000 + row % 3));
           }),
       makeFlatVector<int32_t>(size, [](auto row) { return row % 7; }),
   });
@@ -123,8 +126,8 @@ TEST_F(PartitionIdGeneratorTest, stableIdsMultipleKeys) {
       makeFlatVector<int64_t>(size, [](auto row) { return row; }),
       makeFlatVector<StringView>(
           size,
-          [](auto row) {
-            return StringView::makeInline(Date(18000 + row % 5).toString());
+          [&](auto row) {
+            return StringView::makeInline(date->toString(18000 + row % 5));
           }),
       makeFlatVector<int32_t>(size, [](auto row) { return row % 17; }),
   });

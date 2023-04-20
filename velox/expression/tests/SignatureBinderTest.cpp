@@ -510,8 +510,13 @@ TEST(SignatureBinderTest, logicalType) {
                          .returnType("bigint")
                          .argumentType("interval day to second")
                          .build();
-
     testSignatureBinder(signature, {INTERVAL_DAY_TIME()}, BIGINT());
+
+    signature = exec::FunctionSignatureBuilder()
+                    .returnType("integer")
+                    .argumentType("date")
+                    .build();
+    testSignatureBinder(signature, {DATE()}, INTEGER());
   }
 
   // Logical type as an return type.
@@ -520,8 +525,13 @@ TEST(SignatureBinderTest, logicalType) {
                          .returnType("interval day to second")
                          .argumentType("bigint")
                          .build();
-
     testSignatureBinder(signature, {BIGINT()}, INTERVAL_DAY_TIME());
+
+    signature = exec::FunctionSignatureBuilder()
+                    .returnType("date")
+                    .argumentType("integer")
+                    .build();
+    testSignatureBinder(signature, {INTEGER()}, DATE());
   }
 }
 

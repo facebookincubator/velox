@@ -67,6 +67,9 @@ LogicalType fromVeloxType(const TypePtr& type) {
     case TypeKind::SMALLINT:
       return LogicalType::SMALLINT;
     case TypeKind::INTEGER:
+      if (isDateType(type)) {
+        return LogicalType::DATE;
+      }
       return LogicalType::INTEGER;
     case TypeKind::BIGINT:
       if (isIntervalDayTimeType(type)) {
@@ -81,8 +84,6 @@ LogicalType fromVeloxType(const TypePtr& type) {
       return LogicalType::VARCHAR;
     case TypeKind::TIMESTAMP:
       return LogicalType::TIMESTAMP;
-    case TypeKind::DATE:
-      return LogicalType::DATE;
     case TypeKind::ARRAY:
       return LogicalType::LIST(fromVeloxType(type->childAt(0)));
     case TypeKind::MAP:

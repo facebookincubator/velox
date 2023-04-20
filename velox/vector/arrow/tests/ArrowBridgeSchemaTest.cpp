@@ -121,7 +121,6 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARBINARY(), "z");
 
   testScalarType(TIMESTAMP(), "ttn");
-  testScalarType(DATE(), "tdD");
 
   testScalarType(DECIMAL(10, 4), "d:10,4");
   testScalarType(DECIMAL(20, 15), "d:20,15");
@@ -236,7 +235,6 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
 
   // Temporal.
   EXPECT_EQ(*TIMESTAMP(), *testSchemaImport("ttn"));
-  EXPECT_EQ(*DATE(), *testSchemaImport("tdD"));
 
   EXPECT_EQ(*DECIMAL(10, 4), *testSchemaImport("d:10,4"));
   EXPECT_EQ(*DECIMAL(20, 15), *testSchemaImport("d:20,15"));
@@ -249,7 +247,6 @@ TEST_F(ArrowBridgeSchemaImportTest, complexTypes) {
   // Array.
   EXPECT_EQ(*ARRAY(BIGINT()), *testSchemaImportComplex("+l", {"l"}));
   EXPECT_EQ(*ARRAY(TIMESTAMP()), *testSchemaImportComplex("+l", {"ttn"}));
-  EXPECT_EQ(*ARRAY(DATE()), *testSchemaImportComplex("+l", {"tdD"}));
   EXPECT_EQ(*ARRAY(VARCHAR()), *testSchemaImportComplex("+l", {"U"}));
 
   EXPECT_EQ(*ARRAY(DECIMAL(10, 4)), *testSchemaImportComplex("+l", {"d:10,4"}));

@@ -27,8 +27,7 @@ namespace facebook::velox::connector::hive {
       case TypeKind::INTEGER:                                               \
       case TypeKind::BIGINT:                                                \
       case TypeKind::VARCHAR:                                               \
-      case TypeKind::VARBINARY:                                             \
-      case TypeKind::DATE: {                                                \
+      case TypeKind::VARBINARY: {                                           \
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                          \
             TEMPLATE_FUNC, typeKind, __VA_ARGS__);                          \
       }                                                                     \
@@ -49,11 +48,6 @@ inline std::string makePartitionValueString(T value) {
 template <>
 inline std::string makePartitionValueString(bool value) {
   return value ? "true" : "false";
-}
-
-template <>
-inline std::string makePartitionValueString(Date value) {
-  return value.toString();
 }
 
 template <TypeKind Kind>

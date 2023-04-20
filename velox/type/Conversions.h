@@ -33,7 +33,11 @@ struct Converter {
   // false as default to avoid having to reset it in each cast function for now
   // If in the future we change nullOutput in many functions we can revisit that
   // contract.
-  static typename TypeTraits<KIND>::NativeType cast(T val, bool& nullOutput) {
+  static typename TypeTraits<KIND>::NativeType cast(
+      T val,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     VELOX_UNSUPPORTED(
         "Conversion to {} is not supported", TypeTraits<KIND>::name);
   }
@@ -44,27 +48,51 @@ struct Converter<TypeKind::BOOLEAN> {
   using T = bool;
 
   template <typename From>
-  static T cast(const From& v, bool& nullOutput) {
+  static T cast(
+      const From& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::BOOLEAN)) {
     return folly::to<T>(v);
   }
 
-  static T cast(const folly::StringPiece& v, bool& nullOutput) {
+  static T cast(
+      const folly::StringPiece& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::BOOLEAN)) {
     return folly::to<T>(v);
   }
 
-  static T cast(const StringView& v, bool& nullOutput) {
+  static T cast(
+      const StringView& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::BOOLEAN)) {
     return folly::to<T>(folly::StringPiece(v));
   }
 
-  static T cast(const std::string& v, bool& nullOutput) {
+  static T cast(
+      const std::string& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::BOOLEAN)) {
     return folly::to<T>(v);
   }
 
-  static T cast(const Date& d, bool& nullOutput) {
+  static T cast(
+      const Date& d,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::BOOLEAN)) {
     VELOX_UNSUPPORTED("Conversion of Date to Boolean is not supported");
   }
 
-  static T cast(const Timestamp& d, bool& nullOutput) {
+  static T cast(
+      const Timestamp& d,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::BOOLEAN)) {
     VELOX_UNSUPPORTED("Conversion of Timestamp to Boolean is not supported");
   }
 };
@@ -81,12 +109,20 @@ struct Converter<
   using T = typename TypeTraits<KIND>::NativeType;
 
   template <typename From>
-  static T cast(const From& v, bool& nullOutput) {
+  static T cast(
+      const From& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     VELOX_UNSUPPORTED(
         "Conversion to {} is not supported", TypeTraits<KIND>::name);
   }
 
-  static T convertStringToInt(const folly::StringPiece& v, bool& nullOutput) {
+  static T convertStringToInt(
+      const folly::StringPiece& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     // Handling boolean target case fist because it is in this scope
     if constexpr (std::is_same_v<T, bool>) {
       return folly::to<T>(v);
@@ -137,8 +173,15 @@ struct Converter<
     }
   }
 
-  static T cast(const folly::StringPiece& v, bool& nullOutput) {
+  static T cast(
+      const folly::StringPiece& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     try {
+      if (isDateType(toType)) {
+        return fromDateString(v.data(), v.size());
+      }
       if constexpr (TRUNCATE) {
         return convertStringToInt(v, nullOutput);
       } else {
@@ -149,8 +192,15 @@ struct Converter<
     }
   }
 
-  static T cast(const StringView& v, bool& nullOutput) {
+  static T cast(
+      const StringView& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     try {
+      if (isDateType(toType)) {
+        return fromDateString(v.data(), v.size());
+      }
       if constexpr (TRUNCATE) {
         return convertStringToInt(folly::StringPiece(v), nullOutput);
       } else {
@@ -161,8 +211,15 @@ struct Converter<
     }
   }
 
-  static T cast(const std::string& v, bool& nullOutput) {
+  static T cast(
+      const std::string& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     try {
+      if (isDateType(toType)) {
+        return fromDateString(v.data(), v.size());
+      }
       if constexpr (TRUNCATE) {
         return convertStringToInt(v, nullOutput);
       } else {
@@ -173,8 +230,35 @@ struct Converter<
     }
   }
 
-  static T cast(const bool& v, bool& nullOutput) {
+  static T cast(
+      const bool& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
+    if (isDateType(toType)) {
+      VELOX_USER_FAIL(
+          fmt::format("Unsupported cast from {} to {}.", fromType, toType));
+    }
     return folly::to<T>(v);
+  }
+
+  static T cast(
+      const Timestamp& t,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
+    if (isDateType(toType)) {
+      static const int32_t kSecsPerDay{86'400};
+      auto seconds = t.getSeconds();
+      if (seconds >= 0 || seconds % kSecsPerDay == 0) {
+        return static_cast<int32_t>(seconds / kSecsPerDay);
+      }
+      // For division with negatives, minus 1 to compensate the discarded
+      // fractional part. e.g. -1/86'400 yields 0, yet it should be considered
+      // as -1 day.
+      return static_cast<int32_t>(seconds / kSecsPerDay - 1);
+    }
+    return static_cast<int32_t>(-1);
   }
 
   struct LimitType {
@@ -213,7 +297,16 @@ struct Converter<
     }
   };
 
-  static T cast(const float& v, bool& nullOutput) {
+  static T cast(
+      const float& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
+    if (isDateType(toType)) {
+      VELOX_USER_FAIL(
+          fmt::format("Unsupported cast from {} to {}.", fromType, toType));
+    }
+
     if constexpr (TRUNCATE) {
       if (std::isnan(v)) {
         return 0;
@@ -233,7 +326,16 @@ struct Converter<
     }
   }
 
-  static T cast(const double& v, bool& nullOutput) {
+  static T cast(
+      const double& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
+    if (isDateType(toType)) {
+      VELOX_USER_FAIL(
+          fmt::format("Unsupported cast from {} to {}.", fromType, toType));
+    }
+
     if constexpr (TRUNCATE) {
       if (std::isnan(v)) {
         return 0;
@@ -253,7 +355,16 @@ struct Converter<
     }
   }
 
-  static T cast(const int8_t& v, bool& nullOutput) {
+  static T cast(
+      const int8_t& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
+    if (isDateType(toType)) {
+      VELOX_USER_FAIL(
+          fmt::format("Unsupported cast from {} to {}.", fromType, toType));
+    }
+
     if constexpr (TRUNCATE) {
       return T(v);
     } else {
@@ -261,7 +372,16 @@ struct Converter<
     }
   }
 
-  static T cast(const int16_t& v, bool& nullOutput) {
+  static T cast(
+      const int16_t& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
+    if (isDateType(toType)) {
+      VELOX_USER_FAIL(
+          fmt::format("Unsupported cast from {} to {}.", fromType, toType));
+    }
+
     if constexpr (TRUNCATE) {
       return T(v);
     } else {
@@ -269,7 +389,16 @@ struct Converter<
     }
   }
 
-  static T cast(const int32_t& v, bool& nullOutput) {
+  static T cast(
+      const int32_t& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
+    if (isDateType(toType)) {
+      VELOX_USER_FAIL(
+          fmt::format("Unsupported cast from {} to {}.", fromType, toType));
+    }
+
     if constexpr (TRUNCATE) {
       return T(v);
     } else {
@@ -277,7 +406,16 @@ struct Converter<
     }
   }
 
-  static T cast(const int64_t& v, bool& nullOutput) {
+  static T cast(
+      const int64_t& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
+    if (isDateType(toType)) {
+      VELOX_USER_FAIL(
+          fmt::format("Unsupported cast from {} to {}.", fromType, toType));
+    }
+
     if constexpr (TRUNCATE) {
       return T(v);
     } else {
@@ -294,7 +432,11 @@ struct Converter<
   using T = typename TypeTraits<KIND>::NativeType;
 
   template <typename From>
-  static T cast(const From& v, bool& nullOutput) {
+  static T cast(
+      const From& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     try {
       return folly::to<T>(v);
     } catch (const std::exception& e) {
@@ -302,27 +444,51 @@ struct Converter<
     }
   }
 
-  static T cast(const folly::StringPiece& v, bool& nullOutput) {
+  static T cast(
+      const folly::StringPiece& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     return cast<folly::StringPiece>(v, nullOutput);
   }
 
-  static T cast(const StringView& v, bool& nullOutput) {
+  static T cast(
+      const StringView& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     return cast<folly::StringPiece>(folly::StringPiece(v), nullOutput);
   }
 
-  static T cast(const std::string& v, bool& nullOutput) {
+  static T cast(
+      const std::string& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     return cast<std::string>(v, nullOutput);
   }
 
-  static T cast(const bool& v, bool& nullOutput) {
+  static T cast(
+      const bool& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     return cast<bool>(v, nullOutput);
   }
 
-  static T cast(const float& v, bool& nullOutput) {
+  static T cast(
+      const float& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     return cast<float>(v, nullOutput);
   }
 
-  static T cast(const double& v, bool& nullOutput) {
+  static T cast(
+      const double& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     if constexpr (TRUNCATE) {
       return T(v);
     } else {
@@ -330,31 +496,47 @@ struct Converter<
     }
   }
 
-  static T cast(const int8_t& v, bool& nullOutput) {
+  static T cast(
+      const int8_t& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     return cast<int8_t>(v, nullOutput);
   }
 
-  static T cast(const int16_t& v, bool& nullOutput) {
+  static T cast(
+      const int16_t& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     return cast<int16_t>(v, nullOutput);
   }
 
   // Convert integer to double or float directly, not using folly, as it
   // might throw 'loss of precision' error.
-  static T cast(const int32_t& v, bool& nullOutput) {
+  static T cast(
+      const int32_t& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     return static_cast<T>(v);
   }
 
   // Convert large integer to double or float directly, not using folly, as it
   // might throw 'loss of precision' error.
-  static T cast(const int64_t& v, bool& nullOutput) {
+  static T cast(
+      const int64_t& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     return static_cast<T>(v);
   }
 
-  static T cast(const Date& d, bool& nullOutput) {
-    VELOX_UNSUPPORTED("Conversion of Date to Real or Double is not supported");
-  }
-
-  static T cast(const Timestamp& d, bool& nullOutput) {
+  static T cast(
+      const Timestamp& d,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(KIND)) {
     VELOX_UNSUPPORTED(
         "Conversion of Timestamp to Real or Double is not supported");
   }
@@ -362,8 +544,14 @@ struct Converter<
 
 template <bool TRUNCATE>
 struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
+  using T = typename TypeTraits<TypeKind::VARCHAR>::NativeType;
+
   template <typename T>
-  static std::string cast(const T& val, bool& nullOutput) {
+  static std::string cast(
+      const T& val,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::VARCHAR)) {
     if constexpr (
         TRUNCATE && (std::is_same_v<T, double> || std::is_same_v<T, double>)) {
       auto stringValue = folly::to<std::string>(val);
@@ -376,11 +564,19 @@ struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
     return folly::to<std::string>(val);
   }
 
-  static std::string cast(const Timestamp& val, bool& nullOutput) {
+  static std::string cast(
+      const Timestamp& val,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::VARCHAR)) {
     return val.toString(Timestamp::Precision::kMilliseconds);
   }
 
-  static std::string cast(const bool& val, bool& nullOutput) {
+  static std::string cast(
+      const bool& val,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::VARCHAR)) {
     return val ? "true" : "false";
   }
 };
@@ -391,61 +587,52 @@ struct Converter<TypeKind::TIMESTAMP> {
   using T = typename TypeTraits<TypeKind::TIMESTAMP>::NativeType;
 
   template <typename From>
-  static T cast(const From& /* v */, bool& nullOutput) {
+  static T cast(
+      const From& /* v */,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::TIMESTAMP)) {
     VELOX_UNSUPPORTED("Conversion to Timestamp is not supported");
     return T();
   }
 
-  static T cast(folly::StringPiece v, bool& nullOutput) {
+  static T cast(
+      folly::StringPiece v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::TIMESTAMP)) {
     return fromTimestampString(v.data(), v.size());
   }
 
-  static T cast(const StringView& v, bool& nullOutput) {
+  static T cast(
+      const StringView& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::TIMESTAMP)) {
     return fromTimestampString(v.data(), v.size());
   }
 
-  static T cast(const std::string& v, bool& nullOutput) {
+  static T cast(
+      const std::string& v,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<T>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::TIMESTAMP)) {
     return fromTimestampString(v.data(), v.size());
   }
 
-  static T cast(const Date& d, bool& nullOutput) {
-    static const int64_t kMillisPerDay{86'400'000};
-    return Timestamp::fromMillis(d.days() * kMillisPerDay);
-  }
-};
-
-// Allow conversions from string to DATE type.
-template <bool TRUNCATE>
-struct Converter<TypeKind::DATE, void, TRUNCATE> {
-  using T = typename TypeTraits<TypeKind::DATE>::NativeType;
-  template <typename From>
-  static T cast(const From& /* v */, bool& nullOutput) {
-    VELOX_UNSUPPORTED("Conversion to Date is not supported");
-    return T();
-  }
-
-  static T cast(folly::StringPiece v, bool& nullOutput) {
-    return fromDateString(v.data(), v.size());
-  }
-
-  static T cast(const StringView& v, bool& nullOutput) {
-    return fromDateString(v.data(), v.size());
-  }
-
-  static T cast(const std::string& v, bool& nullOutput) {
-    return fromDateString(v.data(), v.size());
-  }
-
-  static T cast(const Timestamp& t, bool& nullOutput) {
-    static const int32_t kSecsPerDay{86'400};
-    auto seconds = t.getSeconds();
-    if (seconds >= 0 || seconds % kSecsPerDay == 0) {
-      return Date(seconds / kSecsPerDay);
+  // Converts DATE in number of days to TIMESTAMP.
+  static T cast(
+      const int32_t& days,
+      bool& nullOutput,
+      const TypePtr& fromType = CppToType<int32_t>::create(),
+      const TypePtr& toType = fromKindToScalerType(TypeKind::TIMESTAMP)) {
+    if (isDateType(fromType)) {
+      static const int64_t kMillisPerDay{86'400'000};
+      return Timestamp::fromMillis(days * kMillisPerDay);
+    } else {
+      VELOX_USER_FAIL(
+          fmt::format("Unsupported cast from {} to {}.", fromType, toType));
     }
-    // For division with negatives, minus 1 to compensate the discarded
-    // fractional part. e.g. -1/86'400 yields 0, yet it should be considered as
-    // -1 day.
-    return Date(seconds / kSecsPerDay - 1);
   }
 };
 

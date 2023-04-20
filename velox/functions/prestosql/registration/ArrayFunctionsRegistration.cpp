@@ -113,7 +113,6 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<bool>(prefix);
   registerArrayMinMaxFunctions<Varchar>(prefix);
   registerArrayMinMaxFunctions<Timestamp>(prefix);
-  registerArrayMinMaxFunctions<Date>(prefix);
 
   registerArrayJoinFunctions<int8_t>(prefix);
   registerArrayJoinFunctions<int16_t>(prefix);
@@ -124,7 +123,6 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayJoinFunctions<bool>(prefix);
   registerArrayJoinFunctions<Varchar>(prefix);
   registerArrayJoinFunctions<Timestamp>(prefix);
-  registerArrayJoinFunctions<Date>(prefix);
 
   registerFunction<ArrayAverageFunction, double, Array<double>>(
       {prefix + "array_average"});
@@ -138,7 +136,6 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayCombinationsFunctions<bool>(prefix);
   registerArrayCombinationsFunctions<Varchar>(prefix);
   registerArrayCombinationsFunctions<Timestamp>(prefix);
-  registerArrayCombinationsFunctions<Date>(prefix);
 
   registerArrayHasDuplicatesFunctions<int8_t>(prefix);
   registerArrayHasDuplicatesFunctions<int16_t>(prefix);

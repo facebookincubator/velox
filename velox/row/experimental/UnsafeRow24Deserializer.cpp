@@ -168,7 +168,6 @@ RowVectorPtr DeserializeRow(
       FIXED_WIDTH(REAL);
       FIXED_WIDTH(DOUBLE);
       FIXED_WIDTH(TIMESTAMP);
-      FIXED_WIDTH(DATE);
 #undef FIXED_WIDTH
       default: {
         std::vector<const char*> fieldPointers(rows.size());
@@ -261,7 +260,6 @@ ArrayVectorPtr DeserializeArray(
     FIXED_WIDTH(REAL, 4);
     FIXED_WIDTH(DOUBLE, 8);
     FIXED_WIDTH(TIMESTAMP, 8);
-    FIXED_WIDTH(DATE, 4);
 #undef FIXED_WIDTH
     default: {
       std::vector<const char*> elementBases(offsets[numArrays]);

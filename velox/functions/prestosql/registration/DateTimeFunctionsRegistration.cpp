@@ -28,9 +28,9 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "to_unixtime"});
   registerFunction<FromUnixtimeFunction, Timestamp, double>(
       {prefix + "from_unixtime"});
-  registerFunction<DateFunction, Date, Varchar>({prefix + "date"});
-  registerFunction<DateFunction, Date, Timestamp>({prefix + "date"});
-  registerFunction<DateFunction, Date, TimestampWithTimezone>(
+  registerFunction<DateFunction, int32_t, Varchar>({prefix + "date"});
+  registerFunction<DateFunction, int32_t, Timestamp>({prefix + "date"});
+  registerFunction<DateFunction, int32_t, TimestampWithTimezone>(
       {prefix + "date"});
   registerFunction<TimeZoneHourFunction, int64_t, TimestampWithTimezone>(
       {prefix + "timezone_hour"});
@@ -38,83 +38,83 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<TimeZoneMinuteFunction, int64_t, TimestampWithTimezone>(
       {prefix + "timezone_minute"});
   registerFunction<YearFunction, int64_t, Timestamp>({prefix + "year"});
-  registerFunction<YearFunction, int64_t, Date>({prefix + "year"});
+  registerFunction<YearFunction, int64_t, int32_t>({prefix + "year"});
   registerFunction<YearFunction, int64_t, TimestampWithTimezone>(
       {prefix + "year"});
   registerFunction<WeekFunction, int64_t, Timestamp>(
       {prefix + "week", prefix + "week_of_year"});
-  registerFunction<WeekFunction, int64_t, Date>(
+  registerFunction<WeekFunction, int64_t, int32_t>(
       {prefix + "week", prefix + "week_of_year"});
   registerFunction<WeekFunction, int64_t, TimestampWithTimezone>(
       {prefix + "week", prefix + "week_of_year"});
   registerFunction<QuarterFunction, int64_t, Timestamp>({prefix + "quarter"});
-  registerFunction<QuarterFunction, int64_t, Date>({prefix + "quarter"});
+  registerFunction<QuarterFunction, int64_t, int32_t>({prefix + "quarter"});
   registerFunction<QuarterFunction, int64_t, TimestampWithTimezone>(
       {prefix + "quarter"});
   registerFunction<MonthFunction, int64_t, Timestamp>({prefix + "month"});
-  registerFunction<MonthFunction, int64_t, Date>({prefix + "month"});
+  registerFunction<MonthFunction, int64_t, int32_t>({prefix + "month"});
   registerFunction<MonthFunction, int64_t, TimestampWithTimezone>(
       {prefix + "month"});
   registerFunction<DayFunction, int64_t, Timestamp>(
       {prefix + "day", prefix + "day_of_month"});
-  registerFunction<DayFunction, int64_t, Date>(
+  registerFunction<DayFunction, int64_t, int32_t>(
       {prefix + "day", prefix + "day_of_month"});
-  registerFunction<DateMinusIntervalDayTime, Date, Date, IntervalDayTime>(
+  registerFunction<DateMinusIntervalDayTime, int32_t, int32_t, IntervalDayTime>(
       {prefix + "minus"});
-  registerFunction<DatePlusIntervalDayTime, Date, Date, IntervalDayTime>(
+  registerFunction<DatePlusIntervalDayTime, int32_t, int32_t, IntervalDayTime>(
       {prefix + "plus"});
   registerFunction<DayFunction, int64_t, TimestampWithTimezone>(
       {prefix + "day", prefix + "day_of_month"});
   registerFunction<DayOfWeekFunction, int64_t, Timestamp>(
       {prefix + "dow", prefix + "day_of_week"});
-  registerFunction<DayOfWeekFunction, int64_t, Date>(
+  registerFunction<DayOfWeekFunction, int64_t, int32_t>(
       {prefix + "dow", prefix + "day_of_week"});
   registerFunction<DayOfWeekFunction, int64_t, TimestampWithTimezone>(
       {prefix + "dow", prefix + "day_of_week"});
   registerFunction<DayOfYearFunction, int64_t, Timestamp>(
       {prefix + "doy", prefix + "day_of_year"});
-  registerFunction<DayOfYearFunction, int64_t, Date>(
+  registerFunction<DayOfYearFunction, int64_t, int32_t>(
       {prefix + "doy", prefix + "day_of_year"});
   registerFunction<DayOfYearFunction, int64_t, TimestampWithTimezone>(
       {prefix + "doy", prefix + "day_of_year"});
   registerFunction<YearOfWeekFunction, int64_t, Timestamp>(
       {prefix + "yow", prefix + "year_of_week"});
-  registerFunction<YearOfWeekFunction, int64_t, Date>(
+  registerFunction<YearOfWeekFunction, int64_t, int32_t>(
       {prefix + "yow", prefix + "year_of_week"});
   registerFunction<YearOfWeekFunction, int64_t, TimestampWithTimezone>(
       {prefix + "yow", prefix + "year_of_week"});
   registerFunction<HourFunction, int64_t, Timestamp>({prefix + "hour"});
-  registerFunction<HourFunction, int64_t, Date>({prefix + "hour"});
+  registerFunction<HourFunction, int64_t, int32_t>({prefix + "hour"});
   registerFunction<HourFunction, int64_t, TimestampWithTimezone>(
       {prefix + "hour"});
   registerFunction<MinuteFunction, int64_t, Timestamp>({prefix + "minute"});
-  registerFunction<MinuteFunction, int64_t, Date>({prefix + "minute"});
+  registerFunction<MinuteFunction, int64_t, int32_t>({prefix + "minute"});
   registerFunction<MinuteFunction, int64_t, TimestampWithTimezone>(
       {prefix + "minute"});
   registerFunction<SecondFunction, int64_t, Timestamp>({prefix + "second"});
-  registerFunction<SecondFunction, int64_t, Date>({prefix + "second"});
+  registerFunction<SecondFunction, int64_t, int32_t>({prefix + "second"});
   registerFunction<SecondFunction, int64_t, TimestampWithTimezone>(
       {prefix + "second"});
   registerFunction<MillisecondFunction, int64_t, Timestamp>(
       {prefix + "millisecond"});
-  registerFunction<MillisecondFunction, int64_t, Date>(
+  registerFunction<MillisecondFunction, int64_t, int32_t>(
       {prefix + "millisecond"});
   registerFunction<MillisecondFunction, int64_t, TimestampWithTimezone>(
       {prefix + "millisecond"});
   registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
       {prefix + "date_trunc"});
-  registerFunction<DateTruncFunction, Date, Varchar, Date>(
+  registerFunction<DateTruncFunction, int32_t, Varchar, int32_t>(
       {prefix + "date_trunc"});
   registerFunction<
       DateTruncFunction,
       TimestampWithTimezone,
       Varchar,
       TimestampWithTimezone>({prefix + "date_trunc"});
-  registerFunction<DateAddFunction, Date, Varchar, int64_t, Date>(
+  registerFunction<DateAddFunction, int32_t, Varchar, int64_t, int32_t>(
       {prefix + "date_add"});
   registerFunction<DateAddFunction, Timestamp, Varchar, int64_t, Timestamp>(
       {prefix + "date_add"});
-  registerFunction<DateDiffFunction, int64_t, Varchar, Date, Date>(
+  registerFunction<DateDiffFunction, int64_t, Varchar, int32_t, int32_t>(
       {prefix + "date_diff"});
   registerFunction<DateDiffFunction, int64_t, Varchar, Timestamp, Timestamp>(
       {prefix + "date_diff"});
@@ -131,7 +131,7 @@ void registerSimpleFunctions(const std::string& prefix) {
       Varchar>({prefix + "parse_datetime"});
   registerFunction<DateParseFunction, Timestamp, Varchar, Varchar>(
       {prefix + "date_parse"});
-  registerFunction<CurrentDateFunction, Date>({prefix + "current_date"});
+  registerFunction<CurrentDateFunction, int32_t>({prefix + "current_date"});
 }
 } // namespace
 

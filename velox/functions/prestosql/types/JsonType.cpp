@@ -757,7 +757,6 @@ bool JsonCastOperator::isSupportedFromType(const TypePtr& other) const {
 
   switch (other->kind()) {
     case TypeKind::UNKNOWN:
-    case TypeKind::DATE:
     case TypeKind::TIMESTAMP:
       return true;
     case TypeKind::ARRAY:

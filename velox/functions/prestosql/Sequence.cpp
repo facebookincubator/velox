@@ -31,8 +31,8 @@ int64_t toInt64(int64_t value) {
 }
 
 template <>
-int64_t toInt64(Date value) {
-  return value.days();
+int64_t toInt64(int32_t value) {
+  return value;
 }
 
 template <>
@@ -49,8 +49,8 @@ int64_t add(int64_t value, int64_t steps) {
 }
 
 template <>
-Date add(Date value, int64_t steps) {
-  return Date(value.days() + steps);
+int32_t add(int32_t value, int64_t steps) {
+  return static_cast<int32_t>(value + steps);
 }
 
 template <>
@@ -87,7 +87,7 @@ class SequenceFunction : public exec::VectorFunction {
     auto rawSizes = sizes->asMutable<vector_size_t>();
     auto rawOffsets = offsets->asMutable<vector_size_t>();
 
-    const bool isDate = args[0]->type()->isDate();
+    const bool isDate = isDateType(args[0]->type());
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       auto start = toInt64(startVector->valueAt<T>(row));
       auto stop = toInt64(stopVector->valueAt<T>(row));
@@ -96,8 +96,13 @@ class SequenceFunction : public exec::VectorFunction {
       numElements += rawSizes[row];
     });
 
-    VectorPtr elements =
-        BaseVector::create(outputType->childAt(0), numElements, pool);
+    VectorPtr elements = nullptr;
+    if (isDateType(outputType->childAt(0))) {
+      elements = BaseVector::create(INTEGER(), numElements, pool);
+    } else {
+      elements = BaseVector::create(outputType->childAt(0), numElements, pool);
+    }
+
     auto rawElements = elements->asFlatVector<T>()->mutableRawValues();
 
     vector_size_t elementsOffset = 0;
@@ -217,10 +222,14 @@ std::shared_ptr<exec::VectorFunction> create(
   switch (inputArgs[0].type->kind()) {
     case TypeKind::BIGINT:
       return std::make_shared<SequenceFunction<int64_t>>();
-    case TypeKind::DATE:
-      return std::make_shared<SequenceFunction<Date>>();
     case TypeKind::TIMESTAMP:
       return std::make_shared<SequenceFunction<Timestamp>>();
+    case TypeKind::INTEGER:
+      if (isDateType(inputArgs[0].type)) {
+        return std::make_shared<SequenceFunction<int32_t>>();
+      } else {
+        VELOX_FAIL("Invalid input type");
+      }
     default:
       VELOX_UNREACHABLE();
   }

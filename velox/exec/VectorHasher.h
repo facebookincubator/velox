@@ -45,13 +45,6 @@ class UniqueValue {
     }
   }
 
-  explicit UniqueValue(Date value) {
-    // The number of valid bytes of Date stored in data_ is
-    // (int64_t)value.days().
-    size_ = sizeof(int64_t);
-    data_ = value.days();
-  }
-
   uint32_t size() const {
     return size_;
   }
@@ -296,7 +289,6 @@ class VectorHasher {
       case TypeKind::BIGINT:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
-      case TypeKind::DATE:
         return true;
       default:
         return false;
@@ -571,11 +563,6 @@ class VectorHasher {
   std::vector<std::string> uniqueValuesStorage_;
   uint64_t distinctStringsBytes_ = 0;
 };
-
-template <>
-inline int64_t VectorHasher::toInt64(Date value) const {
-  return value.days();
-}
 
 template <>
 bool VectorHasher::makeValueIdsForRows<TypeKind::VARCHAR>(

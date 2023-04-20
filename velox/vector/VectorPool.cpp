@@ -24,7 +24,7 @@ namespace {
 /// type is not supported, i.e. not a built-in singleton type.
 FOLLY_ALWAYS_INLINE int32_t toCacheIndex(const TypePtr& type) {
   static constexpr int32_t kNumCachedVectorTypes =
-      static_cast<int32_t>(TypeKind::DATE) + 1;
+      static_cast<int32_t>(TypeKind::TIMESTAMP) + 1;
 
   static std::array<const Type*, kNumCachedVectorTypes> kSupportedTypes = {
       BOOLEAN().get(),
@@ -37,7 +37,6 @@ FOLLY_ALWAYS_INLINE int32_t toCacheIndex(const TypePtr& type) {
       VARCHAR().get(),
       VARBINARY().get(),
       TIMESTAMP().get(),
-      DATE().get(),
   };
 
   auto index = static_cast<int32_t>(type->kind());
