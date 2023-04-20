@@ -265,6 +265,14 @@ TEST_F(DateTimeFunctionsTest, dayOfXxxSignatures) {
   }
 }
 
+TEST_F(DateTimeFunctionsTest, currentTimezoneTest) {
+  const auto current_timezone = [&]() {
+    return evaluateOnce<std::string>("current_timezone()");
+  };
+
+  EXPECT_EQ("America/Los_Angeles", current_timezone());
+}
+
 // Test cases from PrestoDB [1] are covered here as well:
 // Timestamp(998474645, 321000000) from "TIMESTAMP '2001-08-22 03:04:05.321'"
 // Timestamp(998423705, 321000000) from "TIMESTAMP '2001-08-22 03:04:05.321

@@ -27,6 +27,28 @@
 namespace facebook::velox::functions {
 
 template <typename T>
+struct CurrentTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  const date::time_zone* sessionTimeZone = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config){
+    sessionTimeZone = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result){
+    auto timeZone_str = sessionTimeZone->name();
+    auto timeZone_size = timeZone_str.size();
+    result.resize(timeZone_size);
+    result = timeZone_str;
+
+    //std::memcpy(result.data(), (void*)timeZone_str, timeZone_size);
+  }
+};
+
+template <typename T>
 struct ToUnixtimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
