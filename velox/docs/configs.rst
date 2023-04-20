@@ -131,9 +131,6 @@ Spilling
 
 Hive Connector
 --------------
-``Generic Configuration``
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
 .. list-table::
    :widths: 20 10 10 70
    :header-rows: 1
