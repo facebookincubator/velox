@@ -14,9 +14,6 @@
 project(Folly)
 cmake_minimum_required(VERSION 3.14)
 
-# Supress all warnings (in this subdir)
-add_compile_options(-w -Wno-deprecated-declarations)
-
 set(VELOX_FOLLY_BUILD_VERSION v2022.11.14.00)
 set(VELOX_FOLLY_BUILD_SHA256_CHECKSUM
     b249436cb61b6dfd5288093565438d8da642b07ae021191a4042b221bc1bdc0e)
@@ -43,10 +40,15 @@ if(ON_APPLE_M1)
   # folly will wrongly assume x86_64 if this is not set
   set(CMAKE_LIBRARY_ARCHITECTURE aarch64)
 endif()
+# Suppress all warnings
+set(FOLLY_CXX_FLAGS -w)
 FetchContent_MakeAvailable(folly)
 
 # Folly::folly is not valid for FC but we want to match FindFolly
 add_library(Folly::folly ALIAS folly)
+
+get_target_property(_inc folly INTERFACE_INCLUDE_DIRECTORIES)
+target_include_directories(folly SYSTEM INTERFACE ${_inc})
 
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
   add_dependencies(folly glog gflags)

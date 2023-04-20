@@ -19,7 +19,10 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include "folly/ssl/OpenSSLHash.h"
+#pragma GCC diagnostic pop
 #include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/Udf.h"
