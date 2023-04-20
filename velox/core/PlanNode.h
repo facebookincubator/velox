@@ -1340,10 +1340,10 @@ class HashJoinNode : public AbstractJoinNode {
             joinType,
             leftKeys,
             rightKeys,
-            filter,
-            left,
-            right,
-            outputType),
+            std::move(filter),
+            std::move(left),
+            std::move(right),
+            std::move(outputType)),
         nullAware_{nullAware} {
     if (nullAware) {
       VELOX_USER_CHECK(
@@ -1408,10 +1408,10 @@ class MergeJoinNode : public AbstractJoinNode {
             joinType,
             leftKeys,
             rightKeys,
-            filter,
-            left,
-            right,
-            outputType) {}
+            std::move(filter),
+            std::move(left),
+            std::move(right),
+            std::move(outputType)) {}
 
   std::string_view name() const override {
     return "MergeJoin";
