@@ -325,6 +325,7 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin" OR ${Boost_SOURCE} STREQUAL "BUNDLED")
 endif()
 
 set(BOOST_INCLUDE_LIBRARIES
+    headers
     atomic
     context
     date_time
@@ -397,8 +398,6 @@ if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
 else()
   set(FOLLY_BENCHMARK Folly::follybenchmark)
 endif()
-
-include_directories(SYSTEM ${FOLLY_INCLUDE_DIRS})
 
 if(NOT ${VELOX_BUILD_MINIMAL})
   # Locate or build protobuf.
