@@ -22,7 +22,7 @@ target_link_libraries(
   gtest
   gtest_main
   Folly::folly
-  ${Boost_FILESYSTEM_LIBRARIES}
+  Boost::filesystem
   ${DOUBLE_CONVERSION}
   gflags::gflags
   glog::glog
