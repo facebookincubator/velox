@@ -1430,9 +1430,8 @@ class MergeJoinNode : public AbstractJoinNode {
 /// specified in joinCondition are evaluated on every combination of left/right
 /// tuple, to emit result.
 ///
-/// This also replaces CrossJoinNode, as cross join is equivalent to inner join
-/// on TRUE. To create a plan node for cross join, use the constructor without
-/// `joinType` and `joinCondition` parameter.
+/// To create Cartesian product of the left/right's output, use the constructor
+/// without `joinType` and `joinCondition` parameter.
 class NestedLoopJoinNode : public PlanNode {
  public:
   NestedLoopJoinNode(
