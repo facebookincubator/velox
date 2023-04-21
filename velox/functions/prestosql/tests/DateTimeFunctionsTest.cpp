@@ -3021,9 +3021,11 @@ TEST_F(DateTimeFunctionsTest, timeZoneHour) {
   // Asia/Kolkata - should return 5 throughout the year
   EXPECT_EQ(5, timezone_hour("2023-01-01 03:20:00", "Asia/Kolkata"));
   EXPECT_EQ(5, timezone_hour("2023-06-01 03:20:00", "Asia/Kolkata"));
-  // America/Los_Angeles - Day light savings starts from March 12
+  // America/Los_Angeles - Day light savings is from March 12 to Nov 5
   EXPECT_EQ(-8, timezone_hour("2023-03-11 12:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(-8, timezone_hour("2023-03-12 02:30:00", "America/Los_Angeles"));
   EXPECT_EQ(-7, timezone_hour("2023-03-13 12:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(-8, timezone_hour("2023-11-15 01:30:00", "America/Los_Angeles"));
   // Different time with same date
   EXPECT_EQ(-4, timezone_hour("2023-01-01 03:20:00", "Canada/Atlantic"));
   EXPECT_EQ(-4, timezone_hour("2023-01-01 10:00:00", "Canada/Atlantic"));
