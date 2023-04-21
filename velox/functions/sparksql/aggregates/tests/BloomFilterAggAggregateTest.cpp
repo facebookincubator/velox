@@ -84,6 +84,6 @@ TEST_F(BloomFilterAggAggregateTest, nullBloomFilter) {
   VELOX_ASSERT_THROW(
       testAggregations(
           vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expectedFake),
-      "First argument value should not be null");
+      "First argument of bloom_filter_agg cannot be null");
 }
 } // namespace facebook::velox::functions::aggregate::sparksql::test

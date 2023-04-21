@@ -41,7 +41,7 @@ struct BloomFilterAccumulator {
     bloomFilter.merge(serialized.data());
   }
 
-  bool initialized() {
+  bool initialized() const {
     return bloomFilter.isSet();
   }
 
@@ -86,9 +86,11 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
-    VELOX_USER_CHECK(
-        !decodedRaw_.mayHaveNulls(), "First argument value should not be null");
+
     rows.applyToSelected([&](vector_size_t row) {
+      VELOX_USER_CHECK(
+          !decodedRaw_.isNullAt(row),
+          "First argument of bloom_filter_agg cannot be null");
       auto group = groups[row];
       auto tracker = trackRowSize(group);
       auto accumulator = value<BloomFilterAccumulator>(group);
@@ -124,15 +126,19 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     decodeArguments(rows, args);
     auto tracker = trackRowSize(group);
     auto accumulator = value<BloomFilterAccumulator>(group);
-    VELOX_USER_CHECK(
-        !decodedRaw_.mayHaveNulls(), "First argument value should not be null");
     accumulator->init(capacity_);
     if (decodedRaw_.isConstantMapping()) {
+      VELOX_USER_CHECK(
+          !decodedRaw_.isNullAt(0),
+          "First argument of bloom_filter_agg cannot be null");
       // All values are same, just do for the first.
       accumulator->insert(decodedRaw_.valueAt<int64_t>(0));
       return;
     }
     rows.applyToSelected([&](vector_size_t row) {
+      VELOX_USER_CHECK(
+          !decodedRaw_.isNullAt(row),
+          "First argument of bloom_filter_agg cannot be null");
       accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
     });
   }
@@ -160,8 +166,11 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     VELOX_CHECK(result);
     auto flatResult = (*result)->asUnchecked<FlatVector<StringView>>();
     flatResult->resize(numGroups);
+
     int32_t totalSize = getTotalSize(groups, numGroups);
     Buffer* buffer = flatResult->getBufferWithSpace(totalSize);
+    char* bufferPtr = buffer->asMutable<char>() + buffer->size();
+    buffer->setSize(buffer->size() + totalSize);
     for (vector_size_t i = 0; i < numGroups; ++i) {
       auto group = groups[i];
       auto accumulator = value<BloomFilterAccumulator>(group);
@@ -171,17 +180,10 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       }
 
       auto size = accumulator->serializedSize();
-      StringView serialized;
-      if (StringView::isInline(size)) {
-        std::string buffer(size, '\0');
-        accumulator->serialize(buffer.data());
-        serialized = StringView::makeInline(buffer);
-      } else {
-        char* ptr = buffer->asMutable<char>() + buffer->size();
-        accumulator->serialize(ptr);
-        buffer->setSize(buffer->size() + size);
-        serialized = StringView(ptr, size);
-      }
+      VELOX_DCHECK_GT(size, StringView::kInlineSize);
+      accumulator->serialize(bufferPtr);
+      StringView serialized = StringView(bufferPtr, size);
+      bufferPtr += size;
       flatResult->setNoCopy(i, serialized);
     }
   }
@@ -229,6 +231,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 
   int32_t getTotalSize(char** groups, int32_t numGroups) const {
     int32_t totalSize = 0;
+    int32_t inlineSize = 0;
     for (vector_size_t i = 0; i < numGroups; ++i) {
       auto group = groups[i];
       auto accumulator = value<BloomFilterAccumulator>(group);
@@ -237,9 +240,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       }
 
       auto size = accumulator->serializedSize();
-      if (StringView::isInline(size)) {
-        continue;
-      }
+      VELOX_DCHECK_GT(size, StringView::kInlineSize);
       totalSize += size;
     }
     return totalSize;
