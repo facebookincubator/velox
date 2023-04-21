@@ -3010,22 +3010,48 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, currentDate) {
+  // Since the execution of the code is slightly delayed, it is difficult for us
+  // to get the correct value of current_date. If you compare directly based on
+  // the current time, you may get wrong result at the last second of the day,
+  // and current_date may be the next day of the comparison value. In order to
+  // avoid this situation, we compute a new comparison value after the execution
+  // of current_date, so that the result of current_date is either consistent
+  // with the first comparison value or the second comparison value, and the
+  // difference between the two comparison values is at most one day.
+
+  auto emptyRowVector = makeRowVector(ROW({}), 1);
+
+  // First, Do not set the timezone, so the timezone obtained from QueryConfig
+  // will be nullptr.
+  auto tp0 = std::chrono::system_clock::now();
+  auto d0 = parseDate(date::format("%Y-%m-%d", tp0));
+
+  auto result0 = evaluateOnce<Date>("current_date()", emptyRowVector);
+
+  auto tp1 = std::chrono::system_clock::now();
+  auto d1 = parseDate(date::format("%Y-%m-%d", tp0));
+
+  EXPECT_LE(d0, result0);
+  EXPECT_LE(result0, d1);
+  auto diff0 = std::chrono::duration_cast<date::days>(
+      tp1.time_since_epoch() - tp0.time_since_epoch());
+  EXPECT_LE(diff0.count(), 1);
+
   auto tz = "America/Los_Angeles";
-  auto mockRowVector =
-      makeRowVector({BaseVector::createNullConstant(UNKNOWN(), 1, pool())});
   setQueryTimeZone(tz);
   auto zonedTime0 = date::make_zoned(tz, std::chrono::system_clock::now());
-  auto d0 = parseDate(date::format("%Y-%m-%d", zonedTime0));
+  auto d2 = parseDate(date::format("%Y-%m-%d", zonedTime0));
 
-  auto result = evaluateOnce<Date>("current_date()", mockRowVector);
+  auto result1 = evaluateOnce<Date>("current_date()", emptyRowVector);
 
   auto zonedTime1 = date::make_zoned(tz, std::chrono::system_clock::now());
-  auto d1 = parseDate(date::format("%Y-%m-%d", zonedTime1));
+  auto d3 = parseDate(date::format("%Y-%m-%d", zonedTime1));
 
-  EXPECT_TRUE(d0 <= result && result <= d1);
-  auto diff = std::chrono::duration_cast<date::days>(
+  EXPECT_LE(d2, result1);
+  EXPECT_LE(result1, d3);
+  auto diff1 = std::chrono::duration_cast<date::days>(
       zonedTime1.get_local_time() - zonedTime0.get_local_time());
-  EXPECT_LE(diff.count(), 1);
+  EXPECT_LE(diff1.count(), 1);
 }
 
 TEST_F(DateTimeFunctionsTest, timeZoneHour) {
