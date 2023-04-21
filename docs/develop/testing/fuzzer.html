@@ -132,11 +132,35 @@ correctness by ensuring that results of logically equivalent plans match.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-only</span></code>: A comma-separated list of functions to use in generated expressions.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-batch_size</span></code>: The size of input vectors to generate. Default is 100.</p></li>
 </ul>
-<p>In addition, Aggregation Fuzzer supports:</p>
+<p>There are also arguments that toggle certain fuzzer features:</p>
 <ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--retry_with_try</span></code>: Retry failed expressions by wrapping it using a try() statement. Default is false.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--enable_variadic_signatures</span></code>: Enable testing of function signatures with variadic arguments. Default is false.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--velox_fuzzer_enable_complex_types</span></code>: Enable testing of function signatures with complex argument or return types. Default is false.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--lazy_vector_generation_ratio</span></code>: Specifies the probability with which columns in the input row vector will be selected to be wrapped in lazy encoding (expressed as double from 0 to 1). Default is 0.0.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--velox_fuzzer_enable_column_reuse</span></code>: Enable generation of expressions where one input column can be used by multiple subexpressions. Default is false.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--velox_fuzzer_enable_expression_reuse</span></code>: Enable generation of expressions that re-uses already generated subexpressions. Default is false.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--assign_function_tickets</span></code>: Comma separated list of function names and their tickets in the format &lt;function_name&gt;=&lt;tickets&gt;. Every ticket represents an opportunity for a function to be chosen from a pool of candidates. By default, every function has one ticket, and the likelihood of a function being picked can be increased by allotting it more tickets. Note that in practice, increasing the number of tickets does not proportionally increase the likelihood of selection, as the selection process involves filtering the pool of candidates by a required return type so not all functions may compete against the same number of functions at every instance. Number of tickets must be a positive integer. Example: eq=3,floor=5.</p></li>
+</ul>
+<p>In addition, Aggregation Fuzzer also supports tuning parameters:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--num_batches</span></code>: The number of input vectors of size <cite>–batch_size</cite> to generate. Default is 10.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--max_num_varargs</span></code>: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--null_ratio</span></code>: Chance of adding a null constant to the plan, or null value in a vector (expressed as double from 0 to 1). Default is 0.1.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--velox_fuzzer_max_level_of_nesting</span></code>: Max levels of expression nesting. Default is 10 and minimum is 1.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--num_batches</span></code>: The number of input vectors of size <cite>–batch_size</cite> to generate. Default is 10.</p></li>
 </ul>
 <p>If running from CLion IDE, add <code class="docutils literal notranslate"><span class="pre">--logtostderr=1</span></code> to see the full output.</p>
+<p>An example set of arguments to run the fuzzer with all features enabled is as follows:
+<code class="docutils literal notranslate"><span class="pre">--duration_sec</span> <span class="pre">60</span>
+<span class="pre">--enable_variadic_signatures</span>
+<span class="pre">--lazy_vector_generation_ratio</span> <span class="pre">0.2</span>
+<span class="pre">--velox_fuzzer_enable_complex_types</span>
+<span class="pre">--velox_fuzzer_enable_expression_reuse</span>
+<span class="pre">--velox_fuzzer_enable_column_reuse</span>
+<span class="pre">--retry_with_try</span>
+<span class="pre">--repro_persist_path=&lt;a_valid_local_path&gt;</span>
+<span class="pre">--logtostderr=1</span></code></p>
 </section>
 <section id="how-to-reproduce-failures">
 <h2>How to reproduce failures<a class="headerlink" href="#how-to-reproduce-failures" title="Permalink to this heading">¶</a></h2>
@@ -179,6 +203,11 @@ input vector and expression to files and replay these later.</p>
 input vector, initial result vector, expression SQL, and other relevant data to files in a new directory saved within
 the specified directory. It also prints out the exact paths for these. Fuzzer uses <a class="reference internal" href="../debugging/vector-saver.html"><span class="doc">VectorSaver</span></a>
 for storing vectors on disk while preserving encodings.</p>
+<p>If an iteration crashes the process before data can be persisted, run the fuzzer
+with the seed used for that iteration and use the following flag:</p>
+<p><code class="docutils literal notranslate"><span class="pre">--persist_and_run_once</span></code> Persist repro info before evaluation and only run one iteration.
+This is to rerun with the seed number and persist repro info upon a crash failure.
+Only effective if repro_persist_path is set.</p>
 <p>ExpressionRunner needs at the very least a path to input vector and path to expression SQL to run.
 However, you might need more files to reproduce the issue. All of which will be present in the directory
 that the fuzzer test generated. You can directly point the ExpressionRunner to that directory using –fuzzer_repro_path

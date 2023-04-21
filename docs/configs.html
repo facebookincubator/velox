@@ -45,273 +45,305 @@
 <h1>Configuration properties<a class="headerlink" href="#configuration-properties" title="Permalink to this heading">¶</a></h1>
 <section id="generic-configuration">
 <h2>Generic Configuration<a class="headerlink" href="#generic-configuration" title="Permalink to this heading">¶</a></h2>
-<section id="preferred-output-batch-bytes">
-<h3><code class="docutils literal notranslate"><span class="pre">preferred_output_batch_bytes</span></code><a class="headerlink" href="#preferred-output-batch-bytes" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">10MB</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Preferred size of batches in bytes to be returned by operators from Operator::getOutput.
-It is used when an estimate of average row size is known. Otherwise preferred_output_batch_rows is used.</p>
-</section>
-<section id="preferred-output-batch-rows">
-<h3><code class="docutils literal notranslate"><span class="pre">preferred_output_batch_rows</span></code><a class="headerlink" href="#preferred-output-batch-rows" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">1024</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Preferred number of rows to be returned by operators from Operator::getOutput. It is used
-when an estimate of average row size is not known. When the estimate of average row size is known,
-preferred_output_batch_bytes is used.</p>
-</section>
-<section id="max-output-batch-rows">
-<h3><code class="docutils literal notranslate"><span class="pre">max_output_batch_rows</span></code><a class="headerlink" href="#max-output-batch-rows" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">10000</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Max number of rows that could be return by operators from Operator::getOutput. It is used
-when an estimate of average row size is known and preferred_output_batch_bytes is used to compute
-the number of output rows.</p>
-</section>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 9%" />
+<col style="width: 9%" />
+<col style="width: 64%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>preferred_output_batch_bytes</p></td>
+<td><p>integer</p></td>
+<td><p>10MB</p></td>
+<td><p>Preferred size of batches in bytes to be returned by operators from Operator::getOutput. It is used when an
+estimate of average row size is known. Otherwise preferred_output_batch_rows is used.</p></td>
+</tr>
+<tr class="row-odd"><td><p>preferred_output_batch_rows</p></td>
+<td><p>integer</p></td>
+<td><p>1024</p></td>
+<td><p>Preferred number of rows to be returned by operators from Operator::getOutput. It is used when an estimate of
+average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.</p></td>
+</tr>
+<tr class="row-even"><td><p>max_output_batch_rows</p></td>
+<td><p>integer</p></td>
+<td><p>10000</p></td>
+<td><p>Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
+average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="memory-management">
 <h2>Memory Management<a class="headerlink" href="#memory-management" title="Permalink to this heading">¶</a></h2>
-<section id="max-partial-aggregation-memory">
-<h3><code class="docutils literal notranslate"><span class="pre">max_partial_aggregation_memory</span></code><a class="headerlink" href="#max-partial-aggregation-memory" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">16MB</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Maximum amount of memory in bytes for partial aggregation results. Increasing
-this value can result in less network transfer and lower CPU utilization by
-allowing more groups to be kept locally before being flushed, at the cost of
-additional memory usage.</p>
-</section>
-<section id="max-extended-partial-aggregation-memory">
-<h3><code class="docutils literal notranslate"><span class="pre">max_extended_partial_aggregation_memory</span></code><a class="headerlink" href="#max-extended-partial-aggregation-memory" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">16MB</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Maximum amount of memory in bytes for partial aggregation results if cardinality
-reduction is below <cite>partial_aggregation_reduction_ratio_threshold</cite>. Every time partial
-aggregate results size reaches <cite>max_partial_aggregation_memory</cite> bytes, the results
-are flushed. If cardinality reduction is below <cite>partial_aggregation_reduction_ratio_threshold</cite>,
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 9%" />
+<col style="width: 9%" />
+<col style="width: 64%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>max_partial_aggregation_memory</p></td>
+<td><p>integer</p></td>
+<td><p>16MB</p></td>
+<td><p>Maximum amount of memory in bytes for partial aggregation results. Increasing this value can result in less
+network transfer and lower CPU utilization by allowing more groups to be kept locally before being flushed,
+at the cost of additional memory usage.</p></td>
+</tr>
+<tr class="row-odd"><td><p>max_extended_partial_aggregation_memory</p></td>
+<td><p>integer</p></td>
+<td><p>16MB</p></td>
+<td><p>Maximum amount of memory in bytes for partial aggregation results if cardinality reduction is below
+<cite>partial_aggregation_reduction_ratio_threshold</cite>. Every time partial aggregate results size reaches
+<cite>max_partial_aggregation_memory</cite> bytes, the results are flushed. If cardinality reduction is below
+<cite>partial_aggregation_reduction_ratio_threshold</cite>,
 i.e. <cite>number of result rows / number of input rows &gt; partial_aggregation_reduction_ratio_threshold</cite>,
-memory limit for partial aggregation is automatically doubled up to
-<cite>max_extended_partial_aggregation_memory</cite>. This adaptation is disabled by default, since
-the value of <cite>max_extended_partial_aggregation_memory</cite> equals the value of
-<cite>max_partial_aggregation_memory</cite>. Specify higher value for <cite>max_extended_partial_aggregation_memory</cite>
-to enable.</p>
-</section>
+memory limit for partial aggregation is automatically doubled up to <cite>max_extended_partial_aggregation_memory</cite>.
+This adaptation is disabled by default, since the value of <cite>max_extended_partial_aggregation_memory</cite> equals the
+value of <cite>max_partial_aggregation_memory</cite>. Specify higher value for <cite>max_extended_partial_aggregation_memory</cite> to enable.</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="spilling">
 <h2>Spilling<a class="headerlink" href="#spilling" title="Permalink to this heading">¶</a></h2>
-<section id="spill-enabled">
-<h3><code class="docutils literal notranslate"><span class="pre">spill_enabled</span></code><a class="headerlink" href="#spill-enabled" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Spill memory to disk to avoid exceeding memory limits for the query.</p>
-</section>
-<section id="spiller-spill-path">
-<h3><code class="docutils literal notranslate"><span class="pre">spiller-spill-path</span></code><a class="headerlink" href="#spiller-spill-path" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">string</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">/tmp</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Directory where spilled content is written.</p>
-</section>
-<section id="aggregation-spill-enabled">
-<h3><code class="docutils literal notranslate"><span class="pre">aggregation_spill_enabled</span></code><a class="headerlink" href="#aggregation-spill-enabled" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk
-for aggregations to avoid exceeding memory limits for the query.</p>
-</section>
-<section id="join-spill-enabled">
-<h3><code class="docutils literal notranslate"><span class="pre">join_spill_enabled</span></code><a class="headerlink" href="#join-spill-enabled" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk
-for hash joins to avoid exceeding memory limits for the query.</p>
-</section>
-<section id="order-by-spill-enabled">
-<h3><code class="docutils literal notranslate"><span class="pre">order_by_spill_enabled</span></code><a class="headerlink" href="#order-by-spill-enabled" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">boolean</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk
-for order by to avoid exceeding memory limits for the query.</p>
-</section>
-<section id="aggregation-spill-memory-threshold">
-<h3><code class="docutils literal notranslate"><span class="pre">aggregation_spill_memory_threshold</span></code><a class="headerlink" href="#aggregation-spill-memory-threshold" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">0</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Maximum amount of memory in bytes that a final aggregation can use before spilling.
-0 means unlimited.</p>
-</section>
-<section id="join-spill-memory-threshold">
-<h3><code class="docutils literal notranslate"><span class="pre">join_spill_memory_threshold</span></code><a class="headerlink" href="#join-spill-memory-threshold" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">0</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Maximum amount of memory in bytes that a hash join build side can use before spilling.
-0 means unlimited.</p>
-</section>
-<section id="order-by-spill-memory-threshold">
-<h3><code class="docutils literal notranslate"><span class="pre">order_by_spill_memory_threshold</span></code><a class="headerlink" href="#order-by-spill-memory-threshold" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">0</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Maximum amount of memory in bytes that an order by can use before spilling.
-0 means unlimited.</p>
-</section>
-<section id="spillable-reservation-growth-pct">
-<h3><code class="docutils literal notranslate"><span class="pre">spillable-reservation-growth-pct</span></code><a class="headerlink" href="#spillable-reservation-growth-pct" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">25</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>The spillable memory reservation growth percentage of the current memory
-reservation size. Suppose a growth percentage of N and the current memory
-reservation size of M, the next memory reservation size will be
-M * (1 + N / 100). After growing the memory reservation K times, the memory
-reservation size will be M * (1 + N / 100) ^ K. Hence the memory reservation
-grows along a series of powers of (1 + N / 100). If the memory reservation
-fails, it starts spilling.</p>
-</section>
-<section id="max-spill-level">
-<h3><code class="docutils literal notranslate"><span class="pre">max-spill-level</span></code><a class="headerlink" href="#max-spill-level" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">4</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>The maximum allowed spilling level with zero being the initial spilling level.
-Applies to hash join build spilling which might use recursive spilling when
-the build table is very large. -1 means unlimited. In this case an extremely
-large query might run out of spilling partition bits. The max spill level
-can be used to prevent a query from using too much io and cpu resources.</p>
-</section>
-<section id="max-spill-file-size">
-<h3><code class="docutils literal notranslate"><span class="pre">max-spill-file-size</span></code><a class="headerlink" href="#max-spill-file-size" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">0</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>The maximum allowed spill file size. Zero means unlimited.</p>
-</section>
-<section id="min-spill-run-size">
-<h3><code class="docutils literal notranslate"><span class="pre">min-spill-run-size</span></code><a class="headerlink" href="#min-spill-run-size" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">256MB</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>The minimum spill run size (bytes) limit used to select partitions for
-spilling. The spiller tries to spill a previously spilled partitions if its
-data size exceeds this limit, otherwise it spills the partition with most data.
-If the limit is zero, then the spiller always spills a previously spilled
-partition if it has any data. This is to avoid spill from a partition with a
-small amount of data which might result in generating too many small spilled
-files.</p>
-</section>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 9%" />
+<col style="width: 9%" />
+<col style="width: 64%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>false</p></td>
+<td><p>Spill memory to disk to avoid exceeding memory limits for the query.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spiller-spill-path</p></td>
+<td><p>string</p></td>
+<td><p>/tmp</p></td>
+<td><p>Directory where spilled content is written.</p></td>
+</tr>
+<tr class="row-even"><td><p>aggregation_spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>false</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk for aggregations to avoid exceeding
+memory limits for the query.</p></td>
+</tr>
+<tr class="row-odd"><td><p>join_spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>false</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk for hash joins to avoid exceeding memory
+limits for the query.</p></td>
+</tr>
+<tr class="row-even"><td><p>order_by_spill_enabled</p></td>
+<td><p>boolean</p></td>
+<td><p>false</p></td>
+<td><p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk for order by to avoid exceeding memory
+limits for the query.</p></td>
+</tr>
+<tr class="row-odd"><td><p>aggregation_spill_memory_threshold</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Maximum amount of memory in bytes that a final aggregation can use before spilling. 0 means unlimited.</p></td>
+</tr>
+<tr class="row-even"><td><p>join_spill_memory_threshold</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Maximum amount of memory in bytes that a hash join build side can use before spilling. 0 means unlimited.</p></td>
+</tr>
+<tr class="row-odd"><td><p>order_by_spill_memory_threshold</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Maximum amount of memory in bytes that an order by can use before spilling. 0 means unlimited.</p></td>
+</tr>
+<tr class="row-even"><td><p>spillable-reservation-growth-pct</p></td>
+<td><p>integer</p></td>
+<td><p>25</p></td>
+<td><p>The spillable memory reservation growth percentage of the current memory reservation size. Suppose a growth
+percentage of N and the current memory reservation size of M, the next memory reservation size will be
+M * (1 + N / 100). After growing the memory reservation K times, the memory reservation size will be
+M * (1 + N / 100) ^ K. Hence the memory reservation grows along a series of powers of (1 + N / 100).
+If the memory reservation fails, it starts spilling.</p></td>
+</tr>
+<tr class="row-odd"><td><p>max-spill-level</p></td>
+<td><p>integer</p></td>
+<td><p>4</p></td>
+<td><p>The maximum allowed spilling level with zero being the initial spilling level. Applies to hash join build
+spilling which might use recursive spilling when the build table is very large. -1 means unlimited.
+In this case an extremely large query might run out of spilling partition bits. The max spill level
+can be used to prevent a query from using too much io and cpu resources.</p></td>
+</tr>
+<tr class="row-even"><td><p>max-spill-file-size</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>The maximum allowed spill file size. Zero means unlimited.</p></td>
+</tr>
+<tr class="row-odd"><td><p>min-spill-run-size</p></td>
+<td><p>integer</p></td>
+<td><p>256MB</p></td>
+<td><p>The minimum spill run size (bytes) limit used to select partitions for spilling. The spiller tries to spill a
+previously spilled partitions if its data size exceeds this limit, otherwise it spills the partition with most data.
+If the limit is zero, then the spiller always spills a previously spilled partition if it has any data. This is
+to avoid spill from a partition with a small amount of data which might result in generating too many small
+spilled files.</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="hive-connector">
 <h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
-<section id="max-partitions-per-writers">
-<h3><code class="docutils literal notranslate"><span class="pre">max_partitions_per_writers</span></code><a class="headerlink" href="#max-partitions-per-writers" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">integer</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">100</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>Maximum number of partitions per a single table writer instance.</p>
-</section>
-<section id="insert-existing-partitions-behavior">
-<h3><code class="docutils literal notranslate"><span class="pre">insert_existing_partitions_behavior</span></code><a class="headerlink" href="#insert-existing-partitions-behavior" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">string</span></code></p></li>
-<li><p><strong>Allowed values:</strong> <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>, <code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">ERROR</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>The behavior on insert existing partitions. This property only derives
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 9%" />
+<col style="width: 9%" />
+<col style="width: 64%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>max_partitions_per_writers</p></td>
+<td><p>integer</p></td>
+<td><p>100</p></td>
+<td><p>Maximum number of partitions per a single table writer instance.</p></td>
+</tr>
+<tr class="row-odd"><td><p>insert_existing_partitions_behavior</p></td>
+<td><p>string</p></td>
+<td><p>ERROR</p></td>
+<td><p><strong>Allowed values:</strong> <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>, <code class="docutils literal notranslate"><span class="pre">ERROR</span></code>. The behavior on insert existing partitions. This property only derives
 the update mode field of the table writer operator output. <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>
-sets the update mode to indicate overwriting a partition if exists.
-<code class="docutils literal notranslate"><span class="pre">ERROR</span></code> sets the update mode to indicate error throwing if writing
-to an existing partition.</p>
-</section>
-<section id="immutable-partitions">
-<h3><code class="docutils literal notranslate"><span class="pre">immutable_partitions</span></code><a class="headerlink" href="#immutable-partitions" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">bool</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">false</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>True if appending data to an existing unpartitioned table is allowed.
-Currently this configuration does not support appending to existing partitions.</p>
+sets the update mode to indicate overwriting a partition if exists. <code class="docutils literal notranslate"><span class="pre">ERROR</span></code> sets the update mode to indicate
+error throwing if writing to an existing partition.</p></td>
+</tr>
+<tr class="row-even"><td><p>immutable_partitions</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not
+support appending to existing partitions.</p></td>
+</tr>
+</tbody>
+</table>
+<section id="amazon-s3-configuration">
+<h3><code class="docutils literal notranslate"><span class="pre">Amazon</span> <span class="pre">S3</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#amazon-s3-configuration" title="Permalink to this heading">¶</a></h3>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 58%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>hive.s3.use-instance-credentials</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Use the EC2 metadata service to retrieve API credentials. This works with IAM roles in EC2.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.s3.aws-access-key</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>Default AWS access key to use.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.s3.aws-secret-key</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>Default AWS secret key to use.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.s3.endpoint</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>The S3 storage endpoint server. This can be used to connect to an S3-compatible storage system instead of AWS.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.s3.path-style-access</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Use path-style access for all requests to the S3-compatible storage. This is for S3-compatible storage that
+doesn’t support virtual-hosted-style access.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.s3.ssl.enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Use HTTPS to communicate with the S3 API.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.s3.log-level</p></td>
+<td><p>string</p></td>
+<td><p>FATAL</p></td>
+<td><p><strong>Allowed values:</strong> “OFF”, “FATAL”, “ERROR”, “WARN”, “INFO”, “DEBUG”, “TRACE”
+Granularity of logging generated by the AWS C++ SDK library.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.s3.iam-role</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>IAM role to assume.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.s3.iam-role-session-name</p></td>
+<td><p>string</p></td>
+<td><p>velox-session</p></td>
+<td><p>Session name associated with the IAM role.</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 </section>
 <section id="spark-specific-configuration">
 <h2>Spark-specific Configuration<a class="headerlink" href="#spark-specific-configuration" title="Permalink to this heading">¶</a></h2>
-<section id="spark-legacy-size-of-null">
-<h3><code class="docutils literal notranslate"><span class="pre">spark.legacy-size-of-null</span></code><a class="headerlink" href="#spark-legacy-size-of-null" title="Permalink to this heading">¶</a></h3>
-<blockquote>
-<div><ul class="simple">
-<li><p><strong>Type:</strong> <code class="docutils literal notranslate"><span class="pre">bool</span></code></p></li>
-<li><p><strong>Default value:</strong> <code class="docutils literal notranslate"><span class="pre">true</span></code></p></li>
-</ul>
-</div></blockquote>
-<p>If false, size function returns null for null input.</p>
-</section>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 9%" />
+<col style="width: 9%" />
+<col style="width: 64%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>spark.legacy-size-of-null</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If false, <code class="docutils literal notranslate"><span class="pre">size</span></code> function returns null for null input.</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 </section>
 
@@ -326,42 +358,14 @@ Currently this configuration does not support appending to existing partitions.<
     <h3><a href="index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Configuration properties</a><ul>
-<li><a class="reference internal" href="#generic-configuration">Generic Configuration</a><ul>
-<li><a class="reference internal" href="#preferred-output-batch-bytes"><code class="docutils literal notranslate"><span class="pre">preferred_output_batch_bytes</span></code></a></li>
-<li><a class="reference internal" href="#preferred-output-batch-rows"><code class="docutils literal notranslate"><span class="pre">preferred_output_batch_rows</span></code></a></li>
-<li><a class="reference internal" href="#max-output-batch-rows"><code class="docutils literal notranslate"><span class="pre">max_output_batch_rows</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#memory-management">Memory Management</a><ul>
-<li><a class="reference internal" href="#max-partial-aggregation-memory"><code class="docutils literal notranslate"><span class="pre">max_partial_aggregation_memory</span></code></a></li>
-<li><a class="reference internal" href="#max-extended-partial-aggregation-memory"><code class="docutils literal notranslate"><span class="pre">max_extended_partial_aggregation_memory</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#spilling">Spilling</a><ul>
-<li><a class="reference internal" href="#spill-enabled"><code class="docutils literal notranslate"><span class="pre">spill_enabled</span></code></a></li>
-<li><a class="reference internal" href="#spiller-spill-path"><code class="docutils literal notranslate"><span class="pre">spiller-spill-path</span></code></a></li>
-<li><a class="reference internal" href="#aggregation-spill-enabled"><code class="docutils literal notranslate"><span class="pre">aggregation_spill_enabled</span></code></a></li>
-<li><a class="reference internal" href="#join-spill-enabled"><code class="docutils literal notranslate"><span class="pre">join_spill_enabled</span></code></a></li>
-<li><a class="reference internal" href="#order-by-spill-enabled"><code class="docutils literal notranslate"><span class="pre">order_by_spill_enabled</span></code></a></li>
-<li><a class="reference internal" href="#aggregation-spill-memory-threshold"><code class="docutils literal notranslate"><span class="pre">aggregation_spill_memory_threshold</span></code></a></li>
-<li><a class="reference internal" href="#join-spill-memory-threshold"><code class="docutils literal notranslate"><span class="pre">join_spill_memory_threshold</span></code></a></li>
-<li><a class="reference internal" href="#order-by-spill-memory-threshold"><code class="docutils literal notranslate"><span class="pre">order_by_spill_memory_threshold</span></code></a></li>
-<li><a class="reference internal" href="#spillable-reservation-growth-pct"><code class="docutils literal notranslate"><span class="pre">spillable-reservation-growth-pct</span></code></a></li>
-<li><a class="reference internal" href="#max-spill-level"><code class="docutils literal notranslate"><span class="pre">max-spill-level</span></code></a></li>
-<li><a class="reference internal" href="#max-spill-file-size"><code class="docutils literal notranslate"><span class="pre">max-spill-file-size</span></code></a></li>
-<li><a class="reference internal" href="#min-spill-run-size"><code class="docutils literal notranslate"><span class="pre">min-spill-run-size</span></code></a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#generic-configuration">Generic Configuration</a></li>
+<li><a class="reference internal" href="#memory-management">Memory Management</a></li>
+<li><a class="reference internal" href="#spilling">Spilling</a></li>
 <li><a class="reference internal" href="#hive-connector">Hive Connector</a><ul>
-<li><a class="reference internal" href="#max-partitions-per-writers"><code class="docutils literal notranslate"><span class="pre">max_partitions_per_writers</span></code></a></li>
-<li><a class="reference internal" href="#insert-existing-partitions-behavior"><code class="docutils literal notranslate"><span class="pre">insert_existing_partitions_behavior</span></code></a></li>
-<li><a class="reference internal" href="#immutable-partitions"><code class="docutils literal notranslate"><span class="pre">immutable_partitions</span></code></a></li>
+<li><a class="reference internal" href="#amazon-s3-configuration"><code class="docutils literal notranslate"><span class="pre">Amazon</span> <span class="pre">S3</span> <span class="pre">Configuration</span></code></a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#spark-specific-configuration">Spark-specific Configuration</a><ul>
-<li><a class="reference internal" href="#spark-legacy-size-of-null"><code class="docutils literal notranslate"><span class="pre">spark.legacy-size-of-null</span></code></a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#spark-specific-configuration">Spark-specific Configuration</a></li>
 </ul>
 </li>
 </ul>
