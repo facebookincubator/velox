@@ -24,7 +24,7 @@ workflows:
       - macos-build:
           matrix:
             parameters:
-              os: [macos-intel, macos-m1]
+              os: [macos-intel]
       - format-check
       - header-check
 
@@ -66,7 +66,7 @@ workflows:
       - macos-build:
           matrix:
             parameters:
-              os: [macos-intel, macos-m1]
+              os: [macos-intel]
 
 commands:
   update-submodules:
