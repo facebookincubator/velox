@@ -43,9 +43,9 @@ struct CurrentTimezoneFunction {
     // auto timeZone_size = timeZone_str.size();
     // result.resize(timeZone_size);
     // result = timeZone_str;
-    // result = "America/Los Angeles";
+    result = "America/Los Angeles";
 
-    std::memcpy(result.data(), "America/Los Angeles", 20);
+    // std::memcpy(result.data(), "America/Los Angeles", 20);
   }
 };
 
