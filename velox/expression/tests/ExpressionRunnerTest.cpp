@@ -22,6 +22,8 @@
 #include "velox/expression/tests/ExpressionVerifier.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/sparksql/Register.h"
+#include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/vector/VectorSaver.h"
 
 using namespace facebook::velox;
@@ -78,6 +80,15 @@ DEFINE_string(
     "Path for the file stored on-disk which contains a vector of column "
     "indices that specify which columns of the input row vector should "
     "be wrapped in lazy.");
+
+DEFINE_string(
+    function_mode,
+    "presto",
+    "A toggle to switch to register spark function or presto function.\n"
+    "presto: register presto functions so that we can run repros generated "
+    "from running the presto expression fuzzer.\n"
+    "spark: register spark functions so that we can run repros generated "
+    "from running the spark expression fuzzer.\n");
 
 static bool validateMode(const char* flagName, const std::string& value) {
   static const std::unordered_set<std::string> kModes = {
@@ -177,8 +188,16 @@ int main(int argc, char** argv) {
     VELOX_CHECK(!sql.empty());
   }
 
-  functions::prestosql::registerAllScalarFunctions();
-  aggregate::prestosql::registerAllAggregateFunctions();
+  auto functionMode = FLAGS_function_mode;
+  if (functionMode.empty() || functionMode == "presto") {
+    functions::prestosql::registerAllScalarFunctions();
+    aggregate::prestosql::registerAllAggregateFunctions();
+  } else {
+    VELOX_CHECK_EQ(functionMode, "spark");
+    functions::sparksql::registerFunctions("");
+    functions::sparksql::aggregates::registerAggregateFunctions("");
+  }
+
   test::ExpressionRunner::run(
       FLAGS_input_path,
       sql,
