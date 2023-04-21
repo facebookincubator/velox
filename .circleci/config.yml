@@ -47,6 +47,10 @@ workflows:
       - docker-compose-ubuntu-cpp
       - docker-compose-centos-cpp
       - docker-compose-presto-native
+      - macos-build:
+          matrix:
+            parameters:
+              os: [ macos-m1 ]
 
 
   # Hourly build on weekdays
