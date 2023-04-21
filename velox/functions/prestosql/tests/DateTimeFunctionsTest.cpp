@@ -3031,6 +3031,7 @@ TEST_F(DateTimeFunctionsTest, currentDate) {
   auto tp1 = std::chrono::system_clock::now();
   auto d1 = parseDate(date::format("%Y-%m-%d", tp0));
 
+  EXPECT_TRUE(result0.has_value());
   EXPECT_LE(d0, result0);
   EXPECT_LE(result0, d1);
   auto diff0 = std::chrono::duration_cast<date::days>(
@@ -3047,6 +3048,7 @@ TEST_F(DateTimeFunctionsTest, currentDate) {
   auto zonedTime1 = date::make_zoned(tz, std::chrono::system_clock::now());
   auto d3 = parseDate(date::format("%Y-%m-%d", zonedTime1));
 
+  EXPECT_TRUE(result1.has_value());
   EXPECT_LE(d2, result1);
   EXPECT_LE(result1, d3);
   auto diff1 = std::chrono::duration_cast<date::days>(
