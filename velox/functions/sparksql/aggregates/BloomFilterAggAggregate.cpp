@@ -86,7 +86,6 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
-
     rows.applyToSelected([&](vector_size_t row) {
       VELOX_USER_CHECK(
           !decodedRaw_.isNullAt(row),
@@ -180,7 +179,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       }
 
       auto size = accumulator->serializedSize();
-      VELOX_DCHECK_GT(size, StringView::kInlineSize);
+      VELOX_DCHECK(!StringView::isInline(size));
       accumulator->serialize(bufferPtr);
       StringView serialized = StringView(bufferPtr, size);
       bufferPtr += size;
@@ -240,7 +239,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       }
 
       auto size = accumulator->serializedSize();
-      VELOX_DCHECK_GT(size, StringView::kInlineSize);
+      VELOX_DCHECK(!StringView::isInline(size));
       totalSize += size;
     }
     return totalSize;
