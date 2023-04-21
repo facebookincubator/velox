@@ -266,11 +266,11 @@ TEST_F(DateTimeFunctionsTest, dayOfXxxSignatures) {
 }
 
 TEST_F(DateTimeFunctionsTest, currentTimezoneTest) {
-  const auto current_timezone = [&]() {
+  const auto currentTimezone = [&]() {
     return evaluateOnce<std::string>("current_timezone()");
   };
 
-  EXPECT_EQ("America/Los_Angeles", current_timezone());
+  EXPECT_EQ("America/Los_Angeles", currentTimezone());
 }
 
 // Test cases from PrestoDB [1] are covered here as well:

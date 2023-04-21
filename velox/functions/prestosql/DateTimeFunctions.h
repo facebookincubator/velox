@@ -30,7 +30,7 @@ template <typename T>
 struct CurrentTimezoneFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  const date::time_zone* sessionTimeZone = nullptr;
+  // const date::time_zone* sessionTimeZone = nullptr;
 
   // FOLLY_ALWAYS_INLINE void initialize(
   //     const core::QueryConfig& config){
@@ -43,9 +43,9 @@ struct CurrentTimezoneFunction {
     // auto timeZone_size = timeZone_str.size();
     // result.resize(timeZone_size);
     // result = timeZone_str;
-    result = "America/Los Angeles";
+    // result = "America/Los Angeles";
 
-    //std::memcpy(result.data(), (void*)timeZone_str, timeZone_size);
+    std::memcpy(result.data(), "America/Los Angeles", 20);
   }
 };
 
