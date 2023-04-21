@@ -143,7 +143,7 @@ class GCSReadFile final : public ReadFile {
   gcs::Client* client_;
   std::string bucket_;
   std::string key_;
-  int64_t length_ = -1;
+  std::atomic<int64_t> length_ = -1;
 };
 
 class GCSWriteFile final : public WriteFile {
@@ -291,7 +291,8 @@ void GCSFileSystem::initializeClient() {
 }
 
 std::unique_ptr<ReadFile> GCSFileSystem::openFileForRead(
-    std::string_view path) {
+    std::string_view path,
+    const FileOptions& /*unused*/) {
   const std::string gcspath = gcsPath(path);
   auto gcsfile = std::make_unique<GCSReadFile>(gcspath, impl_->gcsClient());
   gcsfile->initialize();
@@ -299,7 +300,8 @@ std::unique_ptr<ReadFile> GCSFileSystem::openFileForRead(
 }
 
 std::unique_ptr<WriteFile> GCSFileSystem::openFileForWrite(
-    std::string_view path) {
+    std::string_view path,
+    const FileOptions& /*unused*/) {
   const std::string gcspath = gcsPath(path);
   auto gcsfile = std::make_unique<GCSWriteFile>(gcspath, impl_->gcsClient());
   gcsfile->initialize();
@@ -376,15 +378,15 @@ std::string GCSFileSystem::name() const {
 }
 
 void GCSFileSystem::rename(std::string_view, std::string_view, bool) {
-  VELOX_UNSUPPORTED();
+  VELOX_UNSUPPORTED("rename for GCS not implemented");
 }
 
 void GCSFileSystem::mkdir(std::string_view path) {
-  VELOX_UNSUPPORTED();
+  VELOX_UNSUPPORTED("mkdir for GCS not implemented");
 }
 
 void GCSFileSystem::rmdir(std::string_view path) {
-  VELOX_UNSUPPORTED();
+  VELOX_UNSUPPORTED("rmdir for GCS not implemented");
 }
 
 folly::once_flag GCSInstantiationFlag;

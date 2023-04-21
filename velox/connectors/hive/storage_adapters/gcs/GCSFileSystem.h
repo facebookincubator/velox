@@ -30,9 +30,13 @@ class GCSFileSystem : public FileSystem {
 
   void initializeClient();
 
-  std::unique_ptr<ReadFile> openFileForRead(std::string_view path) override;
+  std::unique_ptr<ReadFile> openFileForRead(
+      std::string_view path,
+      const FileOptions& options = {}) override;
 
-  std::unique_ptr<WriteFile> openFileForWrite(std::string_view path) override;
+  std::unique_ptr<WriteFile> openFileForWrite(
+      std::string_view path,
+      const FileOptions& options = {}) override;
 
   std::string name() const override;
 
