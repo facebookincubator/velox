@@ -189,7 +189,8 @@ is any character contained in <code class="docutils literal notranslate"><span c
 <span class="sig-name descname"><span class="pre">substring</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#substring" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the rest of <code class="docutils literal notranslate"><span class="pre">string</span></code> from the starting position <code class="docutils literal notranslate"><span class="pre">start</span></code>.
 Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting position is interpreted
-as being relative to the end of the string. Type of ‘start’ must be an INTEGER.</p>
+as being relative to the end of the string. When the starting position is 0,
+the meaning is to refer to the first character.Type of ‘start’ must be an INTEGER.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -198,11 +199,16 @@ as being relative to the end of the string. Type of ‘start’ must be an INTEG
 <dd><p>Returns a substring from <code class="docutils literal notranslate"><span class="pre">string</span></code> of length <code class="docutils literal notranslate"><span class="pre">length</span></code> from the starting
 position <code class="docutils literal notranslate"><span class="pre">start</span></code>. Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting
 position is interpreted as being relative to the end of the string.
+When the starting position is 0, the meaning is to refer to the first character.
 Type of ‘start’ must be an INTEGER.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">k</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="n">Sp</span>
+<span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="n">Sp</span>
 <span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;&quot;</span>
 <span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;&quot;</span>
 <span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">10000</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;k SQL&quot;</span>
+<span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;Spa&quot;</span>
+<span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">10</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;Sp&quot;</span>
+<span class="n">SELECT</span> <span class="n">substring</span><span class="p">(</span><span class="s1">&#39;Spark SQL&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;&quot;</span>
 </pre></div>
 </div>
 </dd></dl>
