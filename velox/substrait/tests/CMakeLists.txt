@@ -61,5 +61,5 @@ target_link_libraries(
   ${FOLLY_WITH_DEPENDENCIES}
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})

@@ -31,4 +31,4 @@ target_link_libraries(
   velox_memory
   ${FOLLY_WITH_DEPENDENCIES}
   ${FOLLY_BENCHMARK}
-  ${FMT})
+  fmt::fmt)

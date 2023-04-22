@@ -27,7 +27,7 @@ target_link_libraries(
   gtest_main
   gflags::gflags
   glog::glog
-  ${FMT})
+  fmt::fmt)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
