@@ -25,4 +25,4 @@ target_link_libraries(
   ${Boost_FILESYSTEM_LIBRARIES}
   gflags::gflags
   glog::glog
-  ${FMT})
+  fmt::fmt)

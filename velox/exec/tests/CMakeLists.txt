@@ -127,7 +127,7 @@ target_link_libraries(
   ${FOLLY_WITH_DEPENDENCIES}
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})
 
 target_link_libraries(
@@ -161,7 +161,7 @@ target_link_libraries(
   ${FOLLY_WITH_DEPENDENCIES}
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})
 
 add_executable(velox_in_10_min_demo VeloxIn10MinDemo.cpp)

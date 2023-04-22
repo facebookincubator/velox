@@ -35,4 +35,4 @@ target_link_libraries(
   velox_vector_test_lib
   ${FOLLY_WITH_DEPENDENCIES}
   ${FOLLY_BENCHMARK}
-  ${FMT})
+  fmt::fmt)

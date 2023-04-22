@@ -59,7 +59,7 @@ target_link_libraries(
   ${FOLLY_WITH_DEPENDENCIES}
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   dl)
 
 add_executable(simple_vector_test SimpleVectorTest.cpp ToStringUtilityTest.cpp)
@@ -77,7 +77,7 @@ target_link_libraries(
   ${FOLLY_WITH_DEPENDENCIES}
   gflags::gflags
   glog::glog
-  ${FMT})
+  fmt::fmt)
 
 add_executable(bias_vector_test BiasVectorTest.cpp)
 
@@ -92,4 +92,4 @@ target_link_libraries(
   ${FOLLY_WITH_DEPENDENCIES}
   gflags::gflags
   glog::glog
-  ${FMT})
+  fmt::fmt)

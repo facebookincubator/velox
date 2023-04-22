@@ -21,5 +21,5 @@ target_link_libraries(
   velox_s3fs
   velox_exception
   velox_exec_test_lib
-  ${FMT}
+  fmt::fmt
   ${FOLLY_WITH_DEPENDENCIES})
