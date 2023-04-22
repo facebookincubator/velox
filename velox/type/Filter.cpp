@@ -230,27 +230,56 @@ folly::dynamic BigintValuesUsingHashTable::serialize() const {
   auto obj = Filter::serializeBase("BigintValuesUsingHashTable");
   obj["min"] = min_;
   obj["max"] = max_;
-  folly::dynamic arr = folly::dynamic::array;
+  obj["containsEmptyMarker"] = containsEmptyMarker_;
+  obj["sizeMask"] = sizeMask_;
+
+  folly::dynamic values = folly::dynamic::array;
   for (auto v : values_) {
-    arr.push_back(v);
+    values.push_back(v);
   }
-  obj["values"] = arr;
+  obj["values"] = values;
+
+  folly::dynamic hashTable = folly::dynamic::array;
+  for (auto h : hashTable_) {
+    hashTable.push_back(h);
+  }
+  obj["hashTable"] = hashTable;
+
   return obj;
 }
 
 FilterPtr BigintValuesUsingHashTable::create(const folly::dynamic& obj) {
+  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto deterministic = obj["deterministic"].asBool();
+
   auto min = obj["min"].asInt();
   auto max = obj["max"].asInt();
-  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto containsEmptyMarker = obj["containsEmptyMarker"].asBool();
+  auto sizeMask = static_cast<int32_t>(obj["sizeMask"].asBool());
 
   std::vector<int64_t> values;
-  auto arr = obj["values"];
-  values.reserve(arr.size());
-  for (const auto& v : arr) {
+  auto valArr = obj["values"];
+  values.reserve(valArr.size());
+  for (const auto& v : valArr) {
     values.push_back(v.asInt());
   }
+
+  std::vector<int64_t> hashTable;
+  auto hashArr = obj["hashTable"];
+  hashTable.reserve(hashArr.size());
+  for (const auto& h : hashArr) {
+    hashTable.push_back(h.asInt());
+  }
+
   return std::make_shared<BigintValuesUsingHashTable>(
-      min, max, values, nullAllowed);
+      deterministic,
+      nullAllowed,
+      min,
+      max,
+      std::move(hashTable),
+      containsEmptyMarker,
+      std::move(values),
+      sizeMask);
 }
 
 folly::dynamic BigintValuesUsingBitmask::serialize() const {

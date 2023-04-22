@@ -36,7 +36,7 @@ class FilterSerDeTest : public testing::Test {
     auto obj = filter.serialize();
     auto copy = ISerializable::deserialize<Filter>(obj);
     EXPECT_EQ(filter.toString(), copy->toString());
-    ASSERT_TRUE(filter.equals(std::forward<FilterPtr>(copy)));
+    ASSERT_TRUE(filter.testEquals(std::forward<FilterPtr>(copy)));
   }
 };
 
@@ -66,28 +66,30 @@ TEST_F(FilterSerDeTest, bigintFilters) {
 }
 
 TEST_F(FilterSerDeTest, valuesFilters) {
-  int64_t lower = 13;
-  int64_t upper = 9527;
-  size_t sz =
-      3 + folly::Random::rand32() % 7; // values size must greater than 1
-  std::vector<int64_t> values;
-  values.reserve(sz);
-  std::vector<std::string> strValues;
-  for (size_t i = 0; i < sz; ++i) {
-    auto num = lower + folly::Random::rand32() % (upper - lower);
-    values.push_back(num);
-    strValues.emplace_back(std::to_string(num));
-  }
+  for (int r = 0; r < 7; ++r) {
+    int64_t lower = 13;
+    int64_t upper = 9527;
+    size_t sz =
+        3 + folly::Random::rand32() % 7; // values size must greater than 1
+    std::vector<int64_t> values;
+    values.reserve(sz);
+    std::vector<std::string> strValues;
+    for (size_t i = 0; i < sz; ++i) {
+      auto num = lower + folly::Random::rand32() % (upper - lower);
+      values.push_back(num);
+      strValues.emplace_back(std::to_string(num));
+    }
 
-  for (auto nullAllowed : {false, true}) {
-    testSerde(BigintValuesUsingHashTable(lower, upper, values, nullAllowed));
-    testSerde(BigintValuesUsingBitmask(lower, upper, values, nullAllowed));
-    testSerde(
-        NegatedBigintValuesUsingHashTable(lower, upper, values, nullAllowed));
-    testSerde(
-        NegatedBigintValuesUsingBitmask(lower, upper, values, nullAllowed));
-    testSerde(BytesValues(strValues, nullAllowed));
-    testSerde(NegatedBytesValues(strValues, nullAllowed));
+    for (auto nullAllowed : {false, true}) {
+      testSerde(BigintValuesUsingHashTable(lower, upper, values, nullAllowed));
+      testSerde(BigintValuesUsingBitmask(lower, upper, values, nullAllowed));
+      testSerde(
+          NegatedBigintValuesUsingHashTable(lower, upper, values, nullAllowed));
+      testSerde(
+          NegatedBigintValuesUsingBitmask(lower, upper, values, nullAllowed));
+      testSerde(BytesValues(strValues, nullAllowed));
+      testSerde(NegatedBytesValues(strValues, nullAllowed));
+    }
   }
 }
 

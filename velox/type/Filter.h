@@ -88,23 +88,9 @@ std::unordered_map<FilterKind, std::string> filterKinds() {
   };
 }
 
-template <typename K, typename V>
-std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
-  std::unordered_map<V, K> inverted;
-  for (const auto& [key, value] : mapping) {
-    inverted.emplace(value, key);
-  }
-  return inverted;
-}
-
 const char* filterKinds(FilterKind kind) {
   static const auto kinds = filterKinds();
   return kinds.at(kind).c_str();
-}
-
-FilterKind filterKindFromName(const std::string& name) {
-  static const auto kinds = invertMap(filterKinds());
-  return kinds.at(name);
 }
 
 } // namespace
@@ -159,11 +145,9 @@ class Filter : public velox::ISerializable {
     return 0;
   }
 
-  virtual bool equals(FilterPtr&& other) const {
-    return other != nullptr
-        && deterministic_ == other->isDeterministic()
-        && nullAllowed_ == other->nullAllowed_
-        && kind_ == other->kind();
+  virtual bool testEquals(FilterPtr&& other) const {
+    return other != nullptr && deterministic_ == other->isDeterministic() &&
+        nullAllowed_ == other->nullAllowed_ && kind_ == other->kind();
   }
 
   /**
@@ -592,13 +576,13 @@ class BoolValue final : public Filter {
 
   static FilterPtr create(const folly::dynamic& obj);
 
-  bool equals(FilterPtr&& other) const final {
+  bool testEquals(FilterPtr&& other) const final {
     auto ptr = std::dynamic_pointer_cast<const BoolValue>(other);
-    return Filter::equals(std::forward<FilterPtr>(other))
-        && ptr != nullptr && (value_ == ptr->value_);
+    return Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr && (value_ == ptr->value_);
   }
 
-      std::unique_ptr<Filter> clone(
+  std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     if (nullAllowed) {
       return std::make_unique<BoolValue>(this->value_, nullAllowed.value());
@@ -746,11 +730,13 @@ class BigintRange final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool equals(FilterPtr&& other) const final {
+  bool testEquals(FilterPtr&& other) const final {
     auto ptr = std::dynamic_pointer_cast<const BigintRange>(other);
-    return Filter::equals(std::forward<FilterPtr>(other)) && ptr != nullptr && (lower_ == ptr->lower_) && (upper_ == ptr->upper_) && (lower32_ == ptr->lower32_)
-      && (upper32_ == ptr->upper32_) && (lower16_ == ptr->lower16_) && (upper16_ == ptr->upper16_)
-      && (isSingleValue_ == ptr->isSingleValue_);
+    return Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr && (lower_ == ptr->lower_) && (upper_ == ptr->upper_) &&
+        (lower32_ == ptr->lower32_) && (upper32_ == ptr->upper32_) &&
+        (lower16_ == ptr->lower16_) && (upper16_ == ptr->upper16_) &&
+        (isSingleValue_ == ptr->isSingleValue_);
   }
 
  private:
@@ -826,11 +812,12 @@ class NegatedBigintRange final : public Filter {
     return "Negated" + nonNegated_->toString();
   }
 
-  bool equals(FilterPtr&& other) const {
+  bool testEquals(FilterPtr&& other) const final {
     auto ptr = std::dynamic_pointer_cast<const NegatedBigintRange>(other);
-    return Filter::equals(std::forward<FilterPtr>(other))
-        && ptr != nullptr
-        && nonNegated_->equals(std::make_shared<const BigintRange>(*(ptr->nonNegated_)));
+    return Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr &&
+        nonNegated_->testEquals(
+            std::make_shared<const BigintRange>(*(ptr->nonNegated_)));
   }
 
  private:
@@ -889,12 +876,12 @@ class HugeintRange final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool equals(FilterPtr&& other) const {
+  bool testEquals(FilterPtr&& other) const final {
     auto ptr = std::dynamic_pointer_cast<const HugeintRange>(other);
-    return Filter::equals(std::forward<FilterPtr>(other))
-        && ptr != nullptr
-        && (std::to_string(lower_) == std::to_string(ptr->lower_))
-        && (std::to_string(upper_) == std::to_string(ptr->upper_));
+    return Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr &&
+        (std::to_string(lower_) == std::to_string(ptr->lower_)) &&
+        (std::to_string(upper_) == std::to_string(ptr->upper_));
   }
 
  private:
@@ -927,6 +914,26 @@ class BigintValuesUsingHashTable final : public Filter {
         containsEmptyMarker_(other.containsEmptyMarker_),
         values_(other.values_),
         sizeMask_(other.sizeMask_) {}
+
+  BigintValuesUsingHashTable(
+      bool deterministic,
+      bool nullAllowed,
+      int64_t min,
+      int64_t max,
+      std::vector<int64_t> hashTable,
+      bool containsEmptyMarker,
+      std::vector<int64_t> values,
+      int32_t sizeMask)
+      : Filter(
+            deterministic,
+            nullAllowed,
+            FilterKind::kNegatedBigintValuesUsingHashTable),
+        min_(min),
+        max_(max),
+        hashTable_(std::move(hashTable)),
+        containsEmptyMarker_(containsEmptyMarker),
+        values_(std::move(values)),
+        sizeMask_(sizeMask) {}
 
   BigintValuesUsingHashTable(const BigintValuesUsingHashTable& other)
       : BigintValuesUsingHashTable(other, other.nullAllowed_) {}
@@ -984,16 +991,15 @@ class BigintValuesUsingHashTable final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool equals(FilterPtr&& other) const {
-    auto ptr = std::dynamic_pointer_cast<const BigintValuesUsingHashTable>(other);
-    bool res = Filter::equals(std::forward<FilterPtr>(other))
-        && ptr != nullptr
-        && min_ == ptr->min_
-        && max_ == ptr->max_
-        && containsEmptyMarker_ == ptr->containsEmptyMarker_
-        && sizeMask_ == ptr->sizeMask_
-        && hashTable_.size() == ptr->hashTable_.size()
-        && values_.size() == ptr->values_.size();
+  bool testEquals(FilterPtr&& other) const final {
+    auto ptr =
+        std::dynamic_pointer_cast<const BigintValuesUsingHashTable>(other);
+    bool res = Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr && min_ == ptr->min_ && max_ == ptr->max_ &&
+        containsEmptyMarker_ == ptr->containsEmptyMarker_ &&
+        sizeMask_ == ptr->sizeMask_ &&
+        hashTable_.size() == ptr->hashTable_.size() &&
+        values_.size() == ptr->values_.size();
 
     for (size_t i = 0; i < hashTable_.size(); ++i) {
       if (hashTable_.at(i) != ptr->hashTable_.at(i)) {
@@ -1099,13 +1105,11 @@ class BigintValuesUsingBitmask final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
-  bool equals(FilterPtr&& other) const {
+  bool testEquals(FilterPtr&& other) const final {
     auto ptr = std::dynamic_pointer_cast<const BigintValuesUsingBitmask>(other);
-    bool res = Filter::equals(std::forward<FilterPtr>(other))
-        && ptr != nullptr
-        && min_ == ptr->min_
-        && max_ == ptr->max_
-        && bitmask_.size() == ptr->bitmask_.size();
+    bool res = Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr && min_ == ptr->min_ && max_ == ptr->max_ &&
+        bitmask_.size() == ptr->bitmask_.size();
 
     for (size_t i = 0; i < bitmask_.size(); ++i) {
       if (bitmask_.at(i) != ptr->bitmask_.at(i)) {
@@ -1207,11 +1211,14 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool equals(FilterPtr&& other) const {
-    auto ptr = std::dynamic_pointer_cast<const NegatedBigintValuesUsingHashTable>(other);
-    return Filter::equals(std::forward<FilterPtr>(other))
-        && ptr != nullptr
-        && nonNegated_->equals(std::make_shared<BigintValuesUsingHashTable>(*(ptr->nonNegated_)));
+  bool testEquals(FilterPtr&& other) const final {
+    auto ptr =
+        std::dynamic_pointer_cast<const NegatedBigintValuesUsingHashTable>(
+            other);
+    return Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr &&
+        nonNegated_->testEquals(
+            std::make_shared<BigintValuesUsingHashTable>(*(ptr->nonNegated_)));
   }
 
  private:
@@ -1283,11 +1290,13 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
-  bool equals(FilterPtr&& other) const final {
-    auto ptr = std::dynamic_pointer_cast<const NegatedBigintValuesUsingBitmask>(other);
-    return Filter::equals(std::forward<FilterPtr>(other))
-        && ptr != nullptr
-        && nonNegated_->equals(std::make_shared<BigintValuesUsingBitmask>(*(ptr->nonNegated_)));
+  bool testEquals(FilterPtr&& other) const final {
+    auto ptr =
+        std::dynamic_pointer_cast<const NegatedBigintValuesUsingBitmask>(other);
+    return Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr &&
+        nonNegated_->testEquals(
+            std::make_shared<BigintValuesUsingBitmask>(*(ptr->nonNegated_)));
   }
 
  private:
@@ -1505,7 +1514,7 @@ class FloatingPointRange final : public AbstractRange {
 
   std::string toString() const final;
 
-  bool equals(FilterPtr&& other) const final;
+  bool testEquals(FilterPtr&& other) const final;
 
  private:
   std::string toString(const std::string& name) const {
@@ -1584,17 +1593,16 @@ inline std::string FloatingPointRange<float>::toString() const {
   return toString("FloatRange");
 }
 
-
-template<>
-inline bool FloatingPointRange<float>::equals(FilterPtr&& other) const {
+template <>
+inline bool FloatingPointRange<float>::testEquals(FilterPtr&& other) const {
   if (other == nullptr) {
     return false;
   }
   return toString() == other->toString();
 }
 
-template<>
-inline bool FloatingPointRange<double>::equals(FilterPtr&& other) const {
+template <>
+inline bool FloatingPointRange<double>::testEquals(FilterPtr&& other) const {
   if (other == nullptr) {
     return false;
   }
@@ -1745,6 +1753,13 @@ class BytesRange final : public AbstractRange {
     return upper_;
   }
 
+  bool testEquals(FilterPtr&& other) const final {
+    auto ptr = std::dynamic_pointer_cast<const BytesRange>(other);
+    return Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr && lower_ == ptr->lower_ && upper_ == ptr->upper_ &&
+        singleValue_ == ptr->singleValue_;
+  }
+
  private:
   const std::string lower_;
   const std::string upper_;
@@ -1839,6 +1854,14 @@ class NegatedBytesRange final : public Filter {
     return nonNegated_->upper();
   }
 
+  bool testEquals(FilterPtr&& other) const final {
+    auto ptr = std::dynamic_pointer_cast<const NegatedBytesRange>(other);
+    return Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr &&
+        nonNegated_->testEquals(
+            std::make_shared<BytesRange>(*(ptr->nonNegated_)));
+  }
+
  private:
   std::unique_ptr<Filter> toMultiRange() const;
 
@@ -1914,6 +1937,31 @@ class BytesValues final : public Filter {
     return values_;
   }
 
+  bool testEquals(FilterPtr&& other) const final {
+    auto ptr = std::dynamic_pointer_cast<const BytesValues>(other);
+    auto res = Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr && lower_ == ptr->lower_ && upper_ == ptr->upper_ &&
+        values_.size() == ptr->values_.size() &&
+        lengths_.size() == ptr->lengths_.size();
+    if (!res) {
+      return false;
+    }
+
+    for (const auto& v : values_) {
+      if (!ptr->values_.contains(v)) {
+        return false;
+      }
+    }
+
+    for (auto l : lengths_) {
+      if (!ptr->lengths_.contains(l)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
  private:
   std::string lower_;
   std::string upper_;
@@ -1960,6 +2008,21 @@ class BigintMultiRange final : public Filter {
     }
     out << " ]" << (nullAllowed_ ? "with nulls" : "no nulls");
     return out.str();
+  }
+
+  bool testEquals(FilterPtr&& other) const final {
+    auto ptr = std::dynamic_pointer_cast<const BigintMultiRange>(other);
+    auto res = Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr && ranges_.size() == ptr->ranges_.size();
+
+    for (size_t i = 0; i < ranges_.size(); ++i) {
+      if (!(ranges_.at(i)->testEquals(
+              std::make_shared<BigintRange>(*(ptr->ranges_.at(i)))))) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
  private:
@@ -2021,6 +2084,14 @@ class NegatedBytesValues final : public Filter {
     return nonNegated_->values();
   }
 
+  bool testEquals(FilterPtr&& other) const final {
+    auto ptr = std::dynamic_pointer_cast<const NegatedBytesValues>(other);
+    return Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr &&
+        nonNegated_->testEquals(
+            std::make_shared<BytesValues>(*(ptr->nonNegated_)));
+  }
+
  private:
   std::unique_ptr<BytesValues> nonNegated_;
 };
@@ -2075,6 +2146,21 @@ class MultiRange final : public Filter {
 
   bool nanAllowed() const {
     return nanAllowed_;
+  }
+
+  bool testEquals(FilterPtr&& other) const final {
+    auto ptr = std::dynamic_pointer_cast<const MultiRange>(other);
+    auto res = Filter::testEquals(std::forward<FilterPtr>(other)) &&
+        ptr != nullptr && nanAllowed_ == ptr->nanAllowed_ &&
+        filters_.size() == ptr->filters_.size();
+
+    for (size_t i = 0; i < filters_.size(); ++i) {
+      if (!filters_.at(i)->testEquals(ptr->filters_.at(i)->clone())) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
  private:
