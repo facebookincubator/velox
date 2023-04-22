@@ -13,23 +13,20 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-if(DEFINED ENV{VELOX_SIMDJSON_URL})
-  set(SIMDJSON_SOURCE_URL "$ENV{VELOX_SIMDJSON_URL}")
-else()
-  set(VELOX_SIMDJSON_BUILD_VERSION 3.1.5)
-  string(CONCAT SIMDJSON_SOURCE_URL
-                "https://github.com/simdjson/simdjson/archive/refs/tags/"
-                "v${VELOX_SIMDJSON_BUILD_VERSION}.tar.gz")
-  set(VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM
-      5b916be17343324426fc467a4041a30151e481700d60790acfd89716ecc37076)
-endif()
+set(VELOX_SIMDJSON_VERSION 3.1.5)
+set(VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM
+    5b916be17343324426fc467a4041a30151e481700d60790acfd89716ecc37076)
+set(VELOX_SIMDJSON_SOURCE_URL
+    "https://github.com/simdjson/simdjson/archive/refs/tags/v${VELOX_SIMDJSON_VERSION}.tar.gz"
+)
+
+resolve_dependency_url(SIMDJSON)
 
 message(STATUS "Building simdjson from source")
 
 FetchContent_Declare(
   simdjson
-  URL ${SIMDJSON_SOURCE_URL}
-  URL_HASH SHA256=${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM})
+  URL ${VELOX_SIMDJSON_SOURCE_URL}
+  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM})
 
 FetchContent_MakeAvailable(simdjson)
-include_directories(${simdjson_SOURCE_DIR}/include)
