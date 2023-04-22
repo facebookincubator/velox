@@ -16,7 +16,7 @@ if(${VELOX_BUILD_TESTING})
 endif()
 
 add_library(velox_config Context.cpp)
-target_link_libraries(velox_config Folly::folly)
+target_link_libraries(velox_config velox_exception Folly::folly)
 
 add_library(velox_core Expressions.cpp PlanFragment.cpp PlanNode.cpp
                        SimpleFunctionMetadata.cpp)
