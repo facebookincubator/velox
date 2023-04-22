@@ -392,27 +392,10 @@ endif()
 set_source(folly)
 resolve_dependency(folly)
 
-# If we use BUNDLED boost we need to set this manually AFTER folly is configured
-if(NOT DEFINED Boost_LIBRARIES)
-  set(Boost_LIBRARIES ${BOOST_INCLUDE_LIBRARIES})
-  list(TRANSFORM Boost_LIBRARIES PREPEND Boost::)
-endif()
-
-set(FOLLY_WITH_DEPENDENCIES
-    ${FOLLY_LIBRARIES} ${Boost_LIBRARIES} ${DOUBLE_CONVERSION} ${SNAPPY}
-    ${CMAKE_DL_LIBS} ${FMT})
-
 if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
   set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
 else()
   set(FOLLY_BENCHMARK Folly::follybenchmark)
-endif()
-
-if(NOT ${VELOX_BUILD_MINIMAL})
-  find_package(BZip2 MODULE)
-  if(BZIP2_FOUND)
-    list(APPEND FOLLY_WITH_DEPENDENCIES ${BZIP2_LIBRARIES})
-  endif()
 endif()
 
 include_directories(SYSTEM ${FOLLY_INCLUDE_DIRS})
