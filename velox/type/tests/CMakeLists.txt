@@ -17,6 +17,7 @@ add_executable(
   TypeTest.cpp
   DecimalTest.cpp
   FilterTest.cpp
+  FilterSerDeTest.cpp
   SubfieldTest.cpp
   TimestampConversionTest.cpp
   VariantTest.cpp

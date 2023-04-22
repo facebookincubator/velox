@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -23,7 +22,6 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Filter.h"
-#include "velox/type/UnscaledLongDecimal.h"
 
 namespace facebook::velox::common {
 
@@ -97,6 +95,36 @@ std::string Filter::toString() const {
       strKind,
       deterministic_ ? "deterministic" : "nondeterministic",
       nullAllowed_ ? "null allowed" : "null not allowed");
+}
+
+void Filter::registerSerDe() {
+  auto& registry = DeserializationRegistryForSharedPtr();
+
+  registry.Register("AlwaysFalse", AlwaysFalse::create);
+  registry.Register("AlwaysTrue", AlwaysTrue::create);
+  registry.Register("IsNull", IsNull::create);
+  registry.Register("IsNotNull", IsNotNull::create);
+  registry.Register("BoolValue", BoolValue::create);
+  registry.Register("BigintRange", BigintRange::create);
+  registry.Register("NegatedBigintRange", NegatedBigintRange::create);
+  registry.Register("HugeintRange", HugeintRange::create);
+  registry.Register(
+      "BigintValuesUsingHashTable", BigintValuesUsingHashTable::create);
+  registry.Register(
+      "BigintValuesUsingBitmask", BigintValuesUsingBitmask::create);
+  registry.Register(
+      "NegatedBigintValuesUsingHashTable",
+      NegatedBigintValuesUsingHashTable::create);
+  registry.Register(
+      "NegatedBigintValuesUsingBitmask",
+      NegatedBigintValuesUsingBitmask::create);
+  registry.Register("FloatingPointRange", AbstractRange::create);
+  registry.Register("BytesRange", BytesRange::create);
+  registry.Register("NegatedBytesRange", NegatedBytesRange::create);
+  registry.Register("BytesValues", BytesValues::create);
+  registry.Register("BigintMultiRange", BigintMultiRange::create);
+  registry.Register("NegatedBytesValues", NegatedBytesValues::create);
+  registry.Register("MultiRange", MultiRange::create);
 }
 
 folly::dynamic Filter::serializeBase(std::string_view name) const {
@@ -366,25 +394,22 @@ FilterPtr BytesRange::create(const folly::dynamic& obj) {
 }
 
 folly::dynamic NegatedBytesRange::serialize() const {
-  return Filter::serializeBase("NegatedBytesRange");
+  auto obj = Filter::serializeBase("NegatedBytesRange");
+  obj["nonNegated"] = nonNegated_->serialize();
+  return obj;
 }
 
 FilterPtr NegatedBytesRange::create(const folly::dynamic& obj) {
-  auto lowerUnbounded = obj["lowerUnbounded"].asBool();
-  auto lowerExclusive = obj["lowerExclusive"].asBool();
-  auto upperUnbounded = obj["upperUnbounded"].asBool();
-  auto upperExclusive = obj["upperExclusive"].asBool();
-  auto lower = obj["lower"].asString();
-  auto upper = obj["upper"].asString();
-  auto nullAllowed = obj["nullAllowed"].asBool();
+  auto nonNegated = ISerializable::deserialize<BytesRange>(obj["nonNegated"]);
+
   return std::make_shared<NegatedBytesRange>(
-      lower,
-      lowerUnbounded,
-      lowerExclusive,
-      upper,
-      upperUnbounded,
-      upperExclusive,
-      nullAllowed);
+      nonNegated->lower(),
+      nonNegated->lowerUnbounded(),
+      nonNegated->lowerExclusive(),
+      nonNegated->upper(),
+      nonNegated->upperUnbounded(),
+      nonNegated->upperExclusive(),
+      nonNegated->testNull());
 }
 
 folly::dynamic BytesValues::serialize() const {

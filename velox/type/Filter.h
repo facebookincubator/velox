@@ -118,6 +118,8 @@ class Filter : public velox::ISerializable {
  public:
   virtual ~Filter() = default;
 
+  static void registerSerDe();
+
   // Templates parametrized on filter need to know determinism at compile
   // time. If this is false, deterministic() will be consulted at
   // runtime.
@@ -152,6 +154,11 @@ class Filter : public velox::ISerializable {
    */
   virtual int getPrecedingPositionsToFail() const {
     return 0;
+  }
+
+  bool isSameBase(const Filter& other) const {
+    return deterministic_ == other.deterministic_ &&
+        nullAllowed_ == other.nullAllowed_ && kind_ == other.kind_;
   }
 
   /**
@@ -635,6 +642,19 @@ class BigintRange final : public Filter {
         lower16_(std::max<int64_t>(lower, std::numeric_limits<int16_t>::min())),
         upper16_(std::min<int64_t>(upper, std::numeric_limits<int16_t>::max())),
         isSingleValue_(upper_ == lower_) {}
+
+  BigintRange(const BigintRange& other)
+      : Filter(
+            other.isDeterministic(),
+            other.nullAllowed_,
+            FilterKind::kBigintRange),
+        lower_(other.lower_),
+        upper_(other.upper_),
+        lower32_(other.lower32_),
+        upper32_(other.upper32_),
+        lower16_(other.lower16_),
+        upper16_(other.upper16_),
+        isSingleValue_(other.isSingleValue_) {}
 
   folly::dynamic serialize() const override;
 
@@ -1210,6 +1230,8 @@ class AbstractRange : public Filter {
     return upperExclusive_;
   }
 
+  static FilterPtr create(const folly::dynamic& obj);
+
  protected:
   AbstractRange(
       bool lowerUnbounded,
@@ -1236,8 +1258,6 @@ class AbstractRange : public Filter {
     obj["upperExclusive"] = upperExclusive_;
     return obj;
   }
-
-  static FilterPtr create(const folly::dynamic& obj);
 
  protected:
   const bool lowerUnbounded_;
