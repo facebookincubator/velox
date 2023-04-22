@@ -36,7 +36,7 @@ target_link_libraries(
   velox_temp_path
   Boost::regex
   ${VELOX_LINK_LIBS}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${TEST_LINK_LIBS}
   gflags::gflags
   gtest
@@ -49,12 +49,12 @@ add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
 
 target_link_libraries(
   velox_dwio_common_data_buffer_benchmark velox_dwio_common velox_memory
-  velox_dwio_common_exception ${FOLLY} ${FOLLY_BENCHMARK})
+  velox_dwio_common_exception Folly::folly ${FOLLY_BENCHMARK})
 
 add_executable(velox_dwio_common_int_decoder_benchmark IntDecoderBenchmark.cpp)
 target_link_libraries(
   velox_dwio_common_int_decoder_benchmark velox_dwio_common_exception
-  velox_exception velox_dwio_dwrf_common ${FOLLY} ${FOLLY_BENCHMARK})
+  velox_exception velox_dwio_dwrf_common Folly::folly ${FOLLY_BENCHMARK})
 
 add_library(velox_e2e_filter_test_base E2EFilterTestBase.cpp)
 
@@ -64,7 +64,7 @@ target_link_libraries(
   velox_parse_parser
   velox_vector_test_lib
   ${VELOX_LINK_LIBS}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   fmt::fmt
   lz4::lz4
   lzo2::lzo2
@@ -77,5 +77,5 @@ if(VELOX_ENABLE_ARROW)
                  BitPackDecoderBenchmark.cpp)
   target_link_libraries(
     velox_dwio_common_bitpack_decoder_benchmark velox_dwio_common arrow duckdb
-    ${FOLLY} ${FOLLY_BENCHMARK})
+    Folly::folly ${FOLLY_BENCHMARK})
 endif()

@@ -53,7 +53,7 @@ target_link_libraries(
   gflags::gflags
   gtest
   gtest_main
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   gflags::gflags
   glog::glog
   fmt::fmt

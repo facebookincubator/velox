@@ -33,7 +33,7 @@ target_link_libraries(
   velox_type
   velox_caching
   velox_vector_test_lib
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${FOLLY_BENCHMARK}
   ${FMT})
 
