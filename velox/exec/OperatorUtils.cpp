@@ -101,7 +101,7 @@ void gatherCopy(
     const std::vector<vector_size_t>& sourceIndices,
     column_index_t sourceChannel) {
   if (target->isScalar()) {
-    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         scalarGatherCopy,
         target->type()->kind(),
         target,
