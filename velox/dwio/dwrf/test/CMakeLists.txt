@@ -78,7 +78,6 @@ add_test(velox_dwio_dwrf_stripe_stream_test velox_dwio_dwrf_stripe_stream_test)
 target_link_libraries(
   velox_dwio_dwrf_stripe_stream_test
   ${VELOX_LINK_LIBS}
-  ${DOUBLE_CONVERSION}
   ${FOLLY_WITH_DEPENDENCIES}
   ${FMT}
   lz4::lz4
@@ -95,7 +94,6 @@ add_test(velox_dwio_dwrf_stripe_dictionary_cache_test
 target_link_libraries(
   velox_dwio_dwrf_stripe_dictionary_cache_test
   ${VELOX_LINK_LIBS}
-  ${DOUBLE_CONVERSION}
   ${FOLLY_WITH_DEPENDENCIES}
   ${FMT}
   lz4::lz4
@@ -117,9 +115,8 @@ add_executable(velox_dwio_dwrf_encoding_selector_test TestEncodingSelector.cpp)
 add_test(velox_dwio_dwrf_encoding_selector_test
          velox_dwio_dwrf_encoding_selector_test)
 
-target_link_libraries(
-  velox_dwio_dwrf_encoding_selector_test ${VELOX_LINK_LIBS}
-  ${DOUBLE_CONVERSION} ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
+target_link_libraries(velox_dwio_dwrf_encoding_selector_test ${VELOX_LINK_LIBS}
+                      ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_index_builder_test IndexBuilderTests.cpp)
 add_test(velox_dwio_dwrf_index_builder_test velox_dwio_dwrf_index_builder_test)
@@ -148,7 +145,6 @@ add_test(velox_dwio_dwrf_writer_test velox_dwio_dwrf_writer_test)
 target_link_libraries(
   velox_dwio_dwrf_writer_test
   ${VELOX_LINK_LIBS}
-  ${DOUBLE_CONVERSION}
   ${FOLLY_WITH_DEPENDENCIES}
   lz4::lz4
   lzo2::lzo2
@@ -163,7 +159,6 @@ add_test(velox_dwio_dwrf_writer_context_test
 target_link_libraries(
   velox_dwio_dwrf_writer_context_test
   ${VELOX_LINK_LIBS}
-  ${DOUBLE_CONVERSION}
   ${FOLLY_WITH_DEPENDENCIES}
   lz4::lz4
   lzo2::lzo2
@@ -179,7 +174,6 @@ add_test(velox_dwio_dwrf_writer_encoding_manager_test
 target_link_libraries(
   velox_dwio_dwrf_writer_encoding_manager_test
   ${VELOX_LINK_LIBS}
-  ${DOUBLE_CONVERSION}
   ${FOLLY_WITH_DEPENDENCIES}
   lz4::lz4
   lzo2::lzo2
@@ -190,9 +184,8 @@ target_link_libraries(
 add_executable(velox_dwio_dwrf_writer_sink_test WriterSinkTests.cpp)
 add_test(velox_dwio_dwrf_writer_sink_test velox_dwio_dwrf_writer_sink_test)
 
-target_link_libraries(
-  velox_dwio_dwrf_writer_sink_test ${VELOX_LINK_LIBS} ${DOUBLE_CONVERSION}
-  ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
+target_link_libraries(velox_dwio_dwrf_writer_sink_test ${VELOX_LINK_LIBS}
+                      ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_data_buffer_holder_test
                DataBufferHolderTests.cpp)
@@ -201,7 +194,7 @@ add_test(velox_dwio_dwrf_data_buffer_holder_test
 
 target_link_libraries(
   velox_dwio_dwrf_data_buffer_holder_test ${VELOX_LINK_LIBS}
-  ${DOUBLE_CONVERSION} ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
+  ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_layout_planner_test LayoutPlannerTests.cpp)
 add_test(velox_dwio_dwrf_layout_planner_test
@@ -210,7 +203,6 @@ add_test(velox_dwio_dwrf_layout_planner_test
 target_link_libraries(
   velox_dwio_dwrf_layout_planner_test
   ${VELOX_LINK_LIBS}
-  ${DOUBLE_CONVERSION}
   ${FOLLY_WITH_DEPENDENCIES}
   lz4::lz4
   lzo2::lzo2
@@ -238,7 +230,6 @@ add_test(velox_dwio_dwrf_stripe_reader_base_test
 target_link_libraries(
   velox_dwio_dwrf_stripe_reader_base_test
   ${VELOX_LINK_LIBS}
-  ${DOUBLE_CONVERSION}
   ${FOLLY_WITH_DEPENDENCIES}
   lz4::lz4
   lzo2::lzo2
@@ -281,17 +272,15 @@ target_link_libraries(velox_dwio_dwrf_flush_policy_test ${VELOX_LINK_LIBS}
 add_executable(velox_dwio_dwrf_byte_rle_test TestByteRle.cpp)
 add_test(velox_dwio_dwrf_byte_rle_test velox_dwio_dwrf_byte_rle_test)
 
-target_link_libraries(
-  velox_dwio_dwrf_byte_rle_test ${VELOX_LINK_LIBS} ${DOUBLE_CONVERSION} ${FMT}
-  ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
+target_link_libraries(velox_dwio_dwrf_byte_rle_test ${VELOX_LINK_LIBS} ${FMT}
+                      ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_byte_rle_encoder_test TestByteRLEEncoder.cpp)
 add_test(velox_dwio_dwrf_byte_rle_encoder_test
          velox_dwio_dwrf_byte_rle_encoder_test)
 
-target_link_libraries(
-  velox_dwio_dwrf_byte_rle_encoder_test ${VELOX_LINK_LIBS} ${DOUBLE_CONVERSION}
-  ${FMT} ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
+target_link_libraries(velox_dwio_dwrf_byte_rle_encoder_test ${VELOX_LINK_LIBS}
+                      ${FMT} ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_int_encoder_test TestIntEncoder.cpp)
 add_test(velox_dwio_dwrf_int_encoder_test velox_dwio_dwrf_int_encoder_test)
@@ -308,16 +297,14 @@ target_link_libraries(velox_dwio_dwrf_rle_test ${VELOX_LINK_LIBS}
 add_executable(velox_dwio_dwrf_int_direct_test TestIntDirect.cpp)
 add_test(velox_dwio_dwrf_int_direct_test velox_dwio_dwrf_int_direct_test)
 
-target_link_libraries(
-  velox_dwio_dwrf_int_direct_test ${VELOX_LINK_LIBS} ${DOUBLE_CONVERSION}
-  ${FMT} ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
+target_link_libraries(velox_dwio_dwrf_int_direct_test ${VELOX_LINK_LIBS} ${FMT}
+                      ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_rlev1_encoder_test TestRLEv1Encoder.cpp)
 add_test(velox_dwio_dwrf_rlev1_encoder_test velox_dwio_dwrf_rlev1_encoder_test)
 
-target_link_libraries(
-  velox_dwio_dwrf_rlev1_encoder_test ${VELOX_LINK_LIBS} ${DOUBLE_CONVERSION}
-  ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
+target_link_libraries(velox_dwio_dwrf_rlev1_encoder_test ${VELOX_LINK_LIBS}
+                      ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_column_reader_test TestColumnReader.cpp)
 add_test(velox_dwio_dwrf_column_reader_test velox_dwio_dwrf_column_reader_test)
@@ -501,7 +488,6 @@ target_link_libraries(
   velox_dwio_cache_test
   ${VELOX_LINK_LIBS}
   velox_temp_path
-  ${DOUBLE_CONVERSION}
   ${FOLLY_WITH_DEPENDENCIES}
   ${FMT}
   lz4::lz4
