@@ -20,6 +20,7 @@ add_test(velox_presto_types_test velox_presto_types_test)
 target_link_libraries(
   velox_presto_types_test
   velox_presto_types
+  velox_gtest_utils
   Folly::folly
   gtest
   gtest_main

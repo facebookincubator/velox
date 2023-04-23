@@ -31,9 +31,14 @@ add_executable(
 
 add_test(velox_base_test velox_base_test)
 
+add_library(velox_gtest_utils INTERFACE)
+target_include_directories(velox_gtest_utils INTERFACE include)
+target_link_libraries(velox_gtest_utils INTERFACE gtest)
+
 target_link_libraries(
   velox_base_test
   velox_common_base
+  velox_gtest_utils
   Boost::headers
   Boost::filesystem
   gflags::gflags
@@ -44,3 +49,4 @@ target_link_libraries(
 
 add_executable(velox_memcpy_meter Memcpy.cpp)
 target_link_libraries(velox_memcpy_meter velox_common_base pthread)
+

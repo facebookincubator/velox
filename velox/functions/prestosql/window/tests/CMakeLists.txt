@@ -19,6 +19,7 @@ set(CMAKE_WINDOW_TEST_LINK_LIBRARIES
     velox_vector_fuzzer
     velox_vector_test_lib
     velox_window
+    velox_gtest_utils
     gflags::gflags
     gtest
     gtest_main)

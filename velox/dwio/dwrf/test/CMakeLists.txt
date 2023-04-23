@@ -19,6 +19,7 @@ set(TEST_LINK_LIBS
     velox_dwio_dwrf_proto
     velox_dwio_dwrf_reader
     velox_dwio_dwrf_writer
+    velox_gtest_utils
     gflags::gflags
     gtest
     gtest_main

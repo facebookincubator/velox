@@ -29,6 +29,7 @@ target_link_libraries(
   velox_caching
   velox_exception
   velox_test_util
+  velox_gtest_utils
   gtest
   gtest_main
   gflags::gflags

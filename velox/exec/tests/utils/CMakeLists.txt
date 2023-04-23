@@ -46,4 +46,5 @@ target_link_libraries(
   velox_presto_serializer
   velox_functions_prestosql
   velox_aggregates
+  velox_gtest_utils
   velox_subfieldfilters_builder)

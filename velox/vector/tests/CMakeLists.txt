@@ -46,6 +46,7 @@ target_link_libraries(
   velox_presto_types
   velox_temp_path
   velox_vector_fuzzer
+  velox_gtest_utils
   Boost::atomic
   Boost::context
   Boost::date_time
@@ -72,6 +73,7 @@ target_link_libraries(
   velox_buffer
   velox_type
   velox_vector_test_lib
+  velox_gtest_utils
   gtest
   gtest_main
   Folly::folly
@@ -86,6 +88,7 @@ add_test(bias_vector_test bias_vector_test)
 target_link_libraries(
   bias_vector_test
   velox_vector
+  velox_gtest_utils
   Boost::filesystem
   gtest
   gtest_main

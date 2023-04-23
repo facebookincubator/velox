@@ -16,5 +16,5 @@ add_executable(velox_parse_test QueryPlannerTest.cpp)
 
 add_test(velox_parse_test velox_parse_test)
 
-target_link_libraries(velox_parse_test velox_parse_parser gtest gtest_main
+target_link_libraries(velox_parse_test velox_parse_parser velox_gtest_utils gtest gtest_main
                       gflags::gflags)

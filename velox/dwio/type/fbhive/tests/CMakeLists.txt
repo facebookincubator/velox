@@ -20,4 +20,4 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(velox_dwio_type_fbhive_test velox_dwio_type_fbhive
-                      velox_type gtest gtest_main gmock)
+                      velox_type velox_gtest_utils gtest gtest_main gmock)

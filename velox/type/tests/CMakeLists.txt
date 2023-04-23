@@ -29,6 +29,7 @@ target_link_libraries(
   velox_type
   velox_serialization
   velox_external_date
+  velox_gtest_utils
   Folly::folly
   gtest
   gtest_main
@@ -42,6 +43,7 @@ target_link_libraries(
   velox_filter_benchmark
   velox_type
   velox_serialization
+  velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
   gtest
@@ -56,6 +58,7 @@ target_link_libraries(
   velox_negated_values_filter_benchmark
   velox_type
   velox_serialization
+  velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
   gtest
@@ -70,6 +73,7 @@ target_link_libraries(
   velox_negated_bytes_values_benchmark
   velox_type
   velox_serialization
+  velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
   gtest
@@ -84,6 +88,7 @@ target_link_libraries(
   velox_negated_bigint_range_benchmark
   velox_type
   velox_serialization
+  velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
   gtest
@@ -98,6 +103,7 @@ target_link_libraries(
   velox_negated_bytes_range_benchmark
   velox_type
   velox_serialization
+  velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
   gtest
@@ -110,6 +116,7 @@ add_executable(velox_string_view_benchmark StringViewBenchmark.cpp)
 target_link_libraries(
   velox_string_view_benchmark
   velox_type
+  velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
   gtest
