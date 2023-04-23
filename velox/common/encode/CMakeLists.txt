@@ -14,3 +14,4 @@
 
 add_library(velox_encode Base64.cpp)
 target_link_libraries(velox_encode Folly::folly)
+target_include_directories(velox_encode PUBLIC include)
