@@ -11,14 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(base)
-add_subdirectory(caching)
-add_subdirectory(config)
-add_subdirectory(encode)
-add_subdirectory(file)
-add_subdirectory(hyperloglog)
-add_subdirectory(memory)
-add_subdirectory(process)
-add_subdirectory(serialization)
-add_subdirectory(time)
-add_subdirectory(testutil)
+
+add_library(velox_common_config INTERFACE)
+target_link_libraries(velox_common_config INTERFACE velox_exception Folly::folly)
+target_include_directories(velox_common_config INTERFACE include)
