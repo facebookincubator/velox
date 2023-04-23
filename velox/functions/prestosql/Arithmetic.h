@@ -23,13 +23,10 @@
 #include <functional>
 #include <system_error>
 
-#include "boost/math/distributions/normal.hpp"
 #include "folly/CPortability.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/ArithmeticImpl.h"
-
-using boost::math::normal_distribution;
 
 namespace facebook::velox::functions {
 
@@ -506,8 +503,7 @@ struct NormalCDFFunction {
   call(double& result, double m, double sd, double value) {
     VELOX_USER_CHECK_GT(sd, 0, "standard deviation must be > 0");
 
-    normal_distribution<> distribution(m, sd);
-    result = boost::math::cdf(distribution, value);
+    result = 0.5 * (1 + erf((value - m) / (sd * sqrt(2))));
   }
 };
 

@@ -168,6 +168,11 @@ Mathematical Functions
     For example, if ``bins`` is ``ARRAY[0, 2, 4]``, then we have four bins:
     ``(-infinity(), 0)``, ``[0, 2)``, ``[2, 4)`` and ``[4, infinity())``.
 
+.. function:: normal_cdf(mean, sd, value) -> double
+
+    Compute the Normal cdf with given mean and standard deviation (sd): P(N < value; mean, sd).
+    The mean and value must be real values and the standard deviation must be a real and
+    positive value (all of type DOUBLE).
 
 ====================================
 Trigonometric Functions
