@@ -81,7 +81,7 @@ void AllocationPool::newRunImpl(memory::MachinePageCount numPages) {
           std::make_unique<memory::Allocation>(std::move(allocation_)));
     }
     pool_->allocateNonContiguous(
-        std::max<int32_t>(kMinPages, numPages), allocation_, numPages);
+        std::max<int32_t>(kMinPages, numPages), allocation_);
     currentRun_ = 0;
   }
   currentOffset_ = 0;

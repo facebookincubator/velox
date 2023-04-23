@@ -1194,6 +1194,14 @@ TEST_P(MemoryAllocatorTest, allocation) {
   allocation->clear();
 }
 
+TEST_P(MemoryAllocatorTest, exceedLargestSizeClass) {
+  const size_t kExceedLargestSizeClass = instance_->largestSizeClass() + 1;
+  AllocationPool pool(pool_.get());
+  ASSERT_NO_THROW(
+      pool.newRun(kExceedLargestSizeClass * AllocationTraits::kPageSize));
+  pool.clear();
+}
+
 TEST_P(MemoryAllocatorTest, contiguousAllocation) {
   const MachinePageCount kNumPages = instance_->largestSizeClass() + 1;
   auto allocation = std::make_unique<ContiguousAllocation>();
