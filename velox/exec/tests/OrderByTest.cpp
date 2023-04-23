@@ -526,6 +526,49 @@ TEST_F(OrderByTest, spillWithMemoryLimit) {
   }
 }
 
+TEST_F(OrderByTest, spillWithDecimal) {
+  constexpr int32_t kNumRows = 2000;
+  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
+  auto rowType =
+      ROW({"c0", "c1", "c2"},
+          {INTEGER(), SHORT_DECIMAL(10, 5), LONG_DECIMAL(30, 5)});
+  VectorFuzzer fuzzer({}, pool());
+  const int32_t numBatches = 5;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(fuzzer.fuzzRow(rowType));
+  }
+  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  queryCtx->testingOverrideMemoryPool(
+      memory::defaultMemoryManager().addRootPool(
+          queryCtx->queryId(), kMaxBytes));
+  auto results =
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values(batches)
+              .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+              .planNode())
+          .queryCtx(queryCtx)
+          .copyResults(pool_.get());
+  auto task =
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values(batches)
+              .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+              .planNode())
+          .queryCtx(queryCtx)
+          .spillDirectory(tempDirectory->path)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+          .config(QueryConfig::kOrderBySpillMemoryThreshold, std::to_string(1))
+          .assertResults(results);
+
+  auto stats = task->taskStats().pipelineStats;
+  ASSERT_LT(0, stats[0].operatorStats[1].spilledBytes);
+  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+}
+
 DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
