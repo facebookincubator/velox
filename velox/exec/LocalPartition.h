@@ -31,10 +31,13 @@ class LocalExchangeMemoryManager {
   /// will be complete when memory usage is update to be below the limit.
   bool increaseMemoryUsage(ContinueFuture* future, int64_t added);
 
-  /// Decreases the memory usage by 'removed' bytes. If the memory usage goes
-  /// below the limit after the decrease, the function returns 'promises_' to
-  /// caller to fulfill.
-  std::vector<ContinuePromise> decreaseMemoryUsage(int64_t removed);
+  /// Decreases the memory usage by 'removed' bytes. If the memory
+  /// usage goes below the limit after the decrease, the function
+  /// returns 'promises_' to caller to fulfill. If 'unblockOne' is
+  /// true, at least one promise is returned if there are promises.
+  std::vector<ContinuePromise> decreaseMemoryUsage(
+      int64_t removed,
+      bool unblockOne);
 
  private:
   const int64_t maxBufferSize_;
@@ -64,10 +67,13 @@ class LocalExchangeQueue {
 
   void noMoreProducers();
 
-  /// Used by a producer to add data. Returning kNotBlocked if can accept more
-  /// data. Otherwise returns kWaitForConsumer and sets future that will be
-  /// completed when ready to accept more data.
-  BlockingReason enqueue(RowVectorPtr input, ContinueFuture* future);
+  /// Used by a producer to add data. Returning kNotBlocked if can
+  /// accept more data. If 'future' is non-null, updates memory
+  /// footprint and returns kWaitForConsumer if memory at capacity. If
+  /// so, sets 'future' to a future that will be realized when more
+  /// data can be added. If 'future' is not supplied the caller is
+  /// responsible for tracking queue memory usage.
+  BlockingReason enqueue(RowVectorPtr input, ContinueFuture* future = nullptr);
 
   /// Called by a producer to indicate that no more data will be added.
   void noMoreData();
@@ -95,6 +101,10 @@ class LocalExchangeQueue {
   /// Drop remaining data from the queue and notify consumers and producers if
   /// called before all the data has been processed. No-op otherwise.
   void close();
+
+  LocalExchangeMemoryManager* memoryManager() const {
+    return memoryManager_.get();
+  }
 
  private:
   bool isFinishedLocked(const std::queue<RowVectorPtr>& queue) const;
@@ -188,8 +198,8 @@ class LocalPartition : public Operator {
   const size_t numPartitions_;
   std::unique_ptr<core::PartitionFunction> partitionFunction_;
 
-  std::vector<BlockingReason> blockingReasons_;
-  std::vector<ContinueFuture> futures_;
+  BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+  ContinueFuture blockingFuture_;
 
   /// Reusable memory for hash calculation.
   std::vector<uint32_t> partitions_;

@@ -17,6 +17,13 @@
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/Task.h"
 
+#include <iostream>
+
+DEFINE_bool(
+    local_partition_unblock_early,
+    true,
+    "Unblock a producer when one consumer queue is empty.");
+
 namespace facebook::velox::exec {
 namespace {
 void notify(std::vector<ContinuePromise>& promises) {
@@ -42,14 +49,20 @@ bool LocalExchangeMemoryManager::increaseMemoryUsage(
 }
 
 std::vector<ContinuePromise> LocalExchangeMemoryManager::decreaseMemoryUsage(
-    int64_t removed) {
+    int64_t removed,
+    bool unblockOne) {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
     bufferedBytes_ -= removed;
 
-    if (bufferedBytes_ < maxBufferSize_) {
+    if (bufferedBytes_ < maxBufferSize_ && !promises_.empty()) {
       promises = std::move(promises_);
+    } else if (
+        unblockOne && !promises_.empty() &&
+        FLAGS_local_partition_unblock_early) {
+      promises.push_back(std::move(promises_.front()));
+      promises_.erase(promises_.begin());
     }
   }
   return promises;
@@ -103,7 +116,7 @@ BlockingReason LocalExchangeQueue::enqueue(
 
   notify(consumerPromises);
 
-  if (memoryManager_->increaseMemoryUsage(future, inputBytes)) {
+  if (future && memoryManager_->increaseMemoryUsage(future, inputBytes)) {
     return BlockingReason::kWaitForConsumer;
   }
 
@@ -149,8 +162,10 @@ BlockingReason LocalExchangeQueue::next(
     *data = queue.front();
     queue.pop();
 
-    memoryPromises =
-        memoryManager_->decreaseMemoryUsage((*data)->estimateFlatSize());
+    // If the queue went empty, unblock at least one producer even if the total
+    // size of queues is over the limit.
+    memoryPromises = memoryManager_->decreaseMemoryUsage(
+        (*data)->estimateFlatSize(), queue.empty());
 
     if (noMoreProducers_ && pendingProducers_ == 0 && queue.empty()) {
       producerPromises = std::move(producerPromises_);
@@ -205,7 +220,7 @@ void LocalExchangeQueue::close() {
     }
 
     if (freedBytes) {
-      memoryPromises = memoryManager_->decreaseMemoryUsage(freedBytes);
+      memoryPromises = memoryManager_->decreaseMemoryUsage(freedBytes, true);
     }
 
     producerPromises = std::move(producerPromises_);
@@ -338,12 +353,7 @@ void LocalPartition::addInput(RowVectorPtr input) {
   input_ = std::move(input);
 
   if (numPartitions_ == 1) {
-    ContinueFuture future;
-    auto blockingReason = queues_[0]->enqueue(input_, &future);
-    if (blockingReason != BlockingReason::kNotBlocked) {
-      blockingReasons_.push_back(blockingReason);
-      futures_.push_back(std::move(future));
-    }
+    blockingReason_ = queues_[0]->enqueue(input_, &blockingFuture_);
   } else {
     partitionFunction_->partition(*input_, partitions_);
 
@@ -358,6 +368,7 @@ void LocalPartition::addInput(RowVectorPtr input) {
       ++maxIndex[partition];
     }
 
+    int64_t dataSize = 0;
     for (auto i = 0; i < numPartitions_; i++) {
       auto partitionSize = maxIndex[i];
       if (partitionSize == 0) {
@@ -368,25 +379,23 @@ void LocalPartition::addInput(RowVectorPtr input) {
       auto partitionData =
           wrapChildren(input_, partitionSize, std::move(indexBuffers[i]));
 
-      ContinueFuture future;
-      auto reason = queues_[i]->enqueue(partitionData, &future);
-      if (reason != BlockingReason::kNotBlocked) {
-        blockingReasons_.push_back(reason);
-        futures_.push_back(std::move(future));
-      }
+      queues_[i]->enqueue(partitionData);
+      dataSize += partitionData->estimateFlatSize();
     }
+    blockingReason_ = queues_[0]->memoryManager()->increaseMemoryUsage(
+                          &blockingFuture_, dataSize)
+        ? BlockingReason::kWaitForConsumer
+        : BlockingReason::kNotBlocked;
   }
 }
 
 BlockingReason LocalPartition::isBlocked(ContinueFuture* future) {
-  if (!futures_.empty()) {
-    auto blockingReason = blockingReasons_.front();
-    *future = folly::collectAll(futures_.begin(), futures_.end()).unit();
-    futures_.clear();
-    blockingReasons_.clear();
-    return blockingReason;
+  if (blockingReason_ != BlockingReason::kNotBlocked) {
+    auto reason = blockingReason_;
+    *future = std::move(blockingFuture_);
+    blockingReason_ = BlockingReason::kNotBlocked;
+    return reason;
   }
-
   return BlockingReason::kNotBlocked;
 }
 
@@ -398,7 +407,7 @@ void LocalPartition::noMoreInput() {
 }
 
 bool LocalPartition::isFinished() {
-  if (!futures_.empty() || !noMoreInput_) {
+  if (blockingReason_ != BlockingReason::kNotBlocked || !noMoreInput_) {
     return false;
   }
 
