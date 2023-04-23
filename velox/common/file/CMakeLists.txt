@@ -14,8 +14,9 @@
 
 # for generated headers
 include_directories(.)
-add_library(velox_file File.cpp FileSystems.cpp FileSystems.h)
+add_library(velox_file File.cpp FileSystems.cpp)
 target_link_libraries(velox_file velox_exception Folly::folly)
+target_include_directories(velox_file PUBLIC include)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
