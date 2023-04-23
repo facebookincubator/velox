@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/Rand.h"
 #include "velox/functions/prestosql/StringFunctions.h"
+#include "velox/functions/prestosql/Uuid.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/CompareFunctionsNullSafe.h"
@@ -71,6 +72,7 @@ namespace sparksql {
 
 void registerFunctions(const std::string& prefix) {
   registerFunction<RandFunction, double>({"rand"});
+  registerFunction<UuidFunction, Uuid>({"uuid"});
 
   // Register size functions
   registerSize(prefix + "size");

@@ -73,6 +73,7 @@ const std::unordered_map<std::string, TypeKind>& getTypeStringMap() {
       {"DATE", TypeKind::DATE},
       {"SHORT_DECIMAL", TypeKind::SHORT_DECIMAL},
       {"LONG_DECIMAL", TypeKind::LONG_DECIMAL},
+      {"UUID", TypeKind::UUID},
       {"ARRAY", TypeKind::ARRAY},
       {"MAP", TypeKind::MAP},
       {"ROW", TypeKind::ROW},
@@ -118,6 +119,7 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
       {TypeKind::DATE, "DATE"},
       {TypeKind::SHORT_DECIMAL, "SHORT_DECIMAL"},
       {TypeKind::LONG_DECIMAL, "LONG_DECIMAL"},
+      {TypeKind::UUID, "UUID"},
       {TypeKind::ARRAY, "ARRAY"},
       {TypeKind::MAP, "MAP"},
       {TypeKind::ROW, "ROW"},
@@ -687,6 +689,7 @@ KOSKI_DEFINE_SCALAR_ACCESSOR(TIMESTAMP);
 KOSKI_DEFINE_SCALAR_ACCESSOR(VARCHAR);
 KOSKI_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 KOSKI_DEFINE_SCALAR_ACCESSOR(DATE);
+KOSKI_DEFINE_SCALAR_ACCESSOR(UUID);
 KOSKI_DEFINE_SCALAR_ACCESSOR(UNKNOWN);
 
 #undef KOSKI_DEFINE_SCALAR_ACCESSOR
@@ -874,6 +877,8 @@ TypePtr fromKindToScalerType(TypeKind kind) {
       return DOUBLE();
     case TypeKind::DATE:
       return DATE();
+    case TypeKind::UUID:
+      return UUID();
     case TypeKind::UNKNOWN:
       return UNKNOWN();
     default:
@@ -976,6 +981,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"VARBINARY", VARBINARY()},
       {"TIMESTAMP", TIMESTAMP()},
       {"DATE", DATE()},
+      {"UUID", UUID()},
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
       {"UNKNOWN", UNKNOWN()},
   };

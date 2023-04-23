@@ -79,7 +79,8 @@ add_executable(
   WidthBucketArrayTest.cpp
   GreatestLeastTest.cpp
   ZipTest.cpp
-  ZipWithTest.cpp)
+  ZipWithTest.cpp
+  UuidTest.cpp)
 
 add_test(velox_functions_test velox_functions_test)
 

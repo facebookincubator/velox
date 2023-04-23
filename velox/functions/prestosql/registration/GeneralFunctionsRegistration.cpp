@@ -16,6 +16,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/prestosql/Cardinality.h"
+#include "velox/functions/prestosql/Uuid.h"
 
 namespace facebook::velox::functions {
 
@@ -35,6 +36,8 @@ void registerGeneralFunctions(const std::string& prefix) {
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_least, prefix + "least");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_greatest, prefix + "greatest");
+
+  registerFunction<UuidFunction, Uuid>({prefix + "uuid"});
 
   registerFunction<CardinalityFunction, int64_t, Array<Any>>(
       {prefix + "cardinality"});

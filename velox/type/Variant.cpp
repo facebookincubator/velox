@@ -118,6 +118,19 @@ struct VariantEquality<TypeKind::LONG_DECIMAL> {
   }
 };
 
+// uuid
+template <>
+struct VariantEquality<TypeKind::UUID> {
+  template <bool NullEqualsNull>
+  static bool equals(const variant& a, const variant& b) {
+    if (a.isNull() || b.isNull()) {
+      return evaluateNullEquality<NullEqualsNull>(a, b);
+    } else {
+      return a.value<TypeKind::UUID>() == b.value<TypeKind::UUID>();
+    }
+  }
+};
+
 // array
 template <>
 struct VariantEquality<TypeKind::ARRAY> {
@@ -341,6 +354,10 @@ std::string variant::toJson() const {
     case TypeKind::LONG_DECIMAL: {
       return DecimalUtil::toString(
           value<TypeKind::LONG_DECIMAL>().value(), inferType());
+    }
+    case TypeKind::UUID: {
+      auto& uuid = value<TypeKind::UUID>();
+      return '"' + uuid.toString() + '"';
     }
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:
@@ -629,6 +646,9 @@ uint64_t variant::hash() const {
     }
     case TypeKind::LONG_DECIMAL: {
       return value<TypeKind::LONG_DECIMAL>().hash();
+    }
+    case TypeKind::UUID: {
+      return folly::Hash{}(value<TypeKind::UUID>());
     }
     case TypeKind::MAP: {
       auto hasher = folly::Hash{};

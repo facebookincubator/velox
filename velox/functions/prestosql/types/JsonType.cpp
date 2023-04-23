@@ -31,6 +31,7 @@
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/type/Type.h"
+#include "velox/type/Uuid.h"
 
 namespace facebook::velox {
 namespace {
@@ -55,7 +56,8 @@ void generateJsonTyped(
     if constexpr (std::is_same_v<T, bool>) {
       result.append(value ? "true" : "false");
     } else if constexpr (
-        std::is_same_v<T, Date> || std::is_same_v<T, Timestamp>) {
+        std::is_same_v<T, Date> || std::is_same_v<T, Timestamp> ||
+        std::is_same_v<T, Uuid>) {
       result.append(std::to_string(value));
     } else if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
       // UnscaledShortDecimal doesn't include precision and scale information
@@ -767,6 +769,7 @@ bool JsonCastOperator::isSupportedFromType(const TypePtr& other) const {
     case TypeKind::UNKNOWN:
     case TypeKind::DATE:
     case TypeKind::TIMESTAMP:
+    case TypeKind::UUID:
       return true;
     case TypeKind::ARRAY:
       return isSupportedFromType(other->childAt(0));

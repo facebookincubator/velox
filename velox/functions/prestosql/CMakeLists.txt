@@ -59,7 +59,8 @@ add_library(
   VectorArithmetic.cpp
   WidthBucketArray.cpp
   Zip.cpp
-  ZipWith.cpp)
+  ZipWith.cpp
+  Uuid.h)
 
 target_link_libraries(
   velox_functions_prestosql_impl

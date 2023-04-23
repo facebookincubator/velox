@@ -45,6 +45,13 @@ struct KindToFlatVector<TypeKind::DATE> {
 };
 
 template <>
+struct KindToFlatVector<TypeKind::UUID> {
+  using type = FlatVector<Uuid>;
+  using WrapperType = Uuid;
+  using HashRowType = Uuid;
+};
+
+template <>
 struct KindToFlatVector<TypeKind::SHORT_DECIMAL> {
   using type = FlatVector<UnscaledShortDecimal>;
   using WrapperType = UnscaledShortDecimal;

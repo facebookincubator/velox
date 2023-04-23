@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include <boost/uuid/uuid_generators.hpp>
 #include <limits>
+
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -428,6 +430,21 @@ TEST_F(CastExprTest, invalidDate) {
 
   // Parsing an ill-formated date.
   testCast<std::string, Date>("date", {"2012-Oct-23"}, {Date(0)}, true);
+}
+
+TEST_F(CastExprTest, uuidCasts) {
+  uint128_t maxValue = std::numeric_limits<uint128_t>::max();
+  testCast<std::string, Uuid>(
+      "uuid",
+      {"00000000-0000-0000-0000-000000000000",
+       "ffffffff-ffff-ffff-ffff-ffffffffffff"},
+      {Uuid(0), Uuid(maxValue)});
+
+  testCast<Uuid, std::string>(
+      "string",
+      {Uuid(0), Uuid(maxValue)},
+      {"00000000-0000-0000-0000-000000000000",
+       "ffffffff-ffff-ffff-ffff-ffffffffffff"});
 }
 
 TEST_F(CastExprTest, truncateVsRound) {

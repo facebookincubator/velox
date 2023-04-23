@@ -190,6 +190,9 @@ void SelectiveColumnReader::getIntValues(
         getFlatValues<UnscaledLongDecimal, UnscaledLongDecimal>(
             rows, result, requestedType);
         break;
+      case TypeKind::UUID:
+        getFlatValues<Uuid, Uuid>(rows, result, requestedType);
+        break;
       case TypeKind::BIGINT:
         switch (valueSize_) {
           case 8:

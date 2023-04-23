@@ -20,6 +20,7 @@
 
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/Uuid.h"
 
 namespace facebook::velox::aggregate {
 
@@ -105,6 +106,15 @@ FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::DATE>(
     BufferPtr& hashes) {
   applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
     return hashInteger(vector_->valueAt<Date>(row).days());
+  });
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::UUID>(
+    const SelectivityVector& rows,
+    BufferPtr& hashes) {
+  applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
+    return hashInteger(vector_->valueAt<Uuid>(row).id());
   });
 }
 

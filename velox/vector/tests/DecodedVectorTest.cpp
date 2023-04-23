@@ -533,6 +533,7 @@ TEST_F(DecodedVectorTest, constantNull) {
   testConstantNull(SHORT_DECIMAL(10, 3));
   testConstantNull(LONG_DECIMAL(30, 3));
   testConstantNull(INTERVAL_DAY_TIME());
+  testConstantNull(UUID());
   testConstantNull(ARRAY(INTEGER()));
   testConstantNull(MAP(INTEGER(), INTEGER()));
   testConstantNull(ROW({INTEGER()}));

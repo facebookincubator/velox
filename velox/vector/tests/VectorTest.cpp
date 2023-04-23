@@ -968,6 +968,7 @@ TEST_F(VectorTest, createOther) {
   testFlat<TypeKind::TIMESTAMP>(TIMESTAMP(), vectorSize_);
   testFlat<TypeKind::DATE>(DATE(), vectorSize_);
   testFlat<TypeKind::BIGINT>(INTERVAL_DAY_TIME(), vectorSize_);
+  testFlat<TypeKind::UUID>(UUID(), vectorSize_);
 }
 
 TEST_F(VectorTest, createDecimal) {

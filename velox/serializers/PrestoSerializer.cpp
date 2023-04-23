@@ -113,6 +113,8 @@ std::string typeToEncodingName(const TypePtr& type) {
       return "LONG_ARRAY";
     case TypeKind::LONG_DECIMAL:
       return "INT128_ARRAY";
+    case TypeKind::UUID:
+      return "INT128_ARRAY";
     case TypeKind::ARRAY:
       return "ARRAY";
     case TypeKind::MAP:
@@ -259,6 +261,37 @@ void readValues<Date>(
   } else {
     for (int32_t row = 0; row < size; ++row) {
       rawValues[row] = readDate(source);
+    }
+  }
+}
+
+Uuid readUuid(ByteStream* source) {
+  uint128_t low = source->read<uint64_t>();
+  uint128_t high = source->read<uint64_t>();
+  return Uuid((high << 64) | low);
+}
+
+template <>
+void readValues<Uuid>(
+    ByteStream* source,
+    vector_size_t size,
+    BufferPtr nulls,
+    vector_size_t nullCount,
+    BufferPtr values) {
+  auto rawValues = values->asMutable<Uuid>();
+  if (nullCount) {
+    int32_t toClear = 0;
+    bits::forEachSetBit(nulls->as<uint64_t>(), 0, size, [&](int32_t row) {
+      // Set the values between the last non-null and this to type default.
+      for (; toClear < row; ++toClear) {
+        rawValues[toClear] = Uuid();
+      }
+      rawValues[row] = readUuid(source);
+      toClear = row + 1;
+    });
+  } else {
+    for (int32_t row = 0; row < size; ++row) {
+      rawValues[row] = readUuid(source);
     }
   }
 }
@@ -693,6 +726,7 @@ void readColumns(
           {TypeKind::DATE, &read<Date>},
           {TypeKind::SHORT_DECIMAL, &read<UnscaledShortDecimal>},
           {TypeKind::LONG_DECIMAL, &read<UnscaledLongDecimal>},
+          {TypeKind::UUID, &read<Uuid>},
           {TypeKind::VARCHAR, &read<StringView>},
           {TypeKind::VARBINARY, &read<StringView>},
           {TypeKind::ARRAY, &readArrayVector},
@@ -950,6 +984,13 @@ template <>
 void VectorStream::append(folly::Range<const Date*> values) {
   for (auto& value : values) {
     appendOne(value.days());
+  }
+}
+
+template <>
+void VectorStream::append(folly::Range<const Uuid*> values) {
+  for (auto& value : values) {
+    appendOne(value.id());
   }
 }
 

@@ -16,10 +16,14 @@
 
 #pragma once
 
+#include <boost/lexical_cast.hpp>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <folly/Conv.h>
 #include <cctype>
 #include <string>
 #include <type_traits>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
@@ -66,6 +70,10 @@ struct Converter<TypeKind::BOOLEAN> {
 
   static T cast(const Timestamp& d, bool& nullOutput) {
     VELOX_UNSUPPORTED("Conversion of Timestamp to Boolean is not supported");
+  }
+
+  static T cast(const Uuid& uuid, bool& nullOutput) {
+    VELOX_UNSUPPORTED("Conversion of Uuid to Boolean is not supported");
   }
 };
 
@@ -358,6 +366,10 @@ struct Converter<
     VELOX_UNSUPPORTED(
         "Conversion of Timestamp to Real or Double is not supported");
   }
+
+  static T cast(const Uuid& uuid, bool& nullOutput) {
+    VELOX_UNSUPPORTED("Conversion of Uuid to Real or Double is not supported");
+  }
 };
 
 template <bool TRUNCATE>
@@ -446,6 +458,36 @@ struct Converter<TypeKind::DATE, void, TRUNCATE> {
     // fractional part. e.g. -1/86'400 yields 0, yet it should be considered as
     // -1 day.
     return Date(seconds / kSecsPerDay - 1);
+  }
+};
+
+// Allow conversions from string to UUID type.
+template <bool TRUNCATE>
+struct Converter<TypeKind::UUID, void, TRUNCATE> {
+  using T = typename TypeTraits<TypeKind::UUID>::NativeType;
+  template <typename From>
+  static T cast(const From& /* v */, bool& nullOutput) {
+    VELOX_UNSUPPORTED("Conversion to Uuid is not supported");
+  }
+
+  static T cast(folly::StringPiece v, bool& nullOutput) {
+    return convert(v.data(), v.size());
+  }
+
+  static T cast(const StringView& v, bool& nullOutput) {
+    return convert(v.data(), v.size());
+  }
+
+  static T cast(const std::string& v, bool& nullOutput) {
+    return convert(v.data(), v.size());
+  }
+
+  static T convert(const char* data, size_t size) {
+    std::string s(data, size);
+    auto uuid = boost::lexical_cast<boost::uuids::uuid>(data, size);
+    uint128_t id;
+    std::memcpy(&id, &uuid, 16);
+    return T(id);
   }
 };
 

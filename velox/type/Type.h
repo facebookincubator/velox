@@ -42,6 +42,7 @@
 #include "velox/type/Tree.h"
 #include "velox/type/UnscaledLongDecimal.h"
 #include "velox/type/UnscaledShortDecimal.h"
+#include "velox/type/Uuid.h"
 
 namespace facebook::velox {
 
@@ -49,7 +50,7 @@ using int128_t = __int128_t;
 
 /// Velox type system supports a small set of SQL-compatible composeable types:
 /// BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
-/// VARBINARY, TIMESTAMP, DATE, ARRAY, MAP, ROW
+/// VARBINARY, TIMESTAMP, DATE, UUID, ARRAY, MAP, ROW
 ///
 /// This file has multiple C++ type definitions for each of these logical types.
 /// These logical definitions each serve slightly different purposes.
@@ -75,6 +76,7 @@ enum class TypeKind : int8_t {
   DATE = 10,
   SHORT_DECIMAL = 12,
   LONG_DECIMAL = 13,
+  UUID = 14,
   // Enum values for ComplexTypes start after 30 to leave
   // some values space to accommodate adding new scalar/native
   // types above.
@@ -303,6 +305,19 @@ struct TypeTraits<TypeKind::LONG_DECIMAL> {
   static constexpr bool isPrimitiveType = true;
   static constexpr bool isFixedWidth = true;
   static constexpr const char* name = "LONG_DECIMAL";
+};
+
+template <>
+struct TypeTraits<TypeKind::UUID> {
+  using ImplType = ScalarType<TypeKind::UUID>;
+  using NativeType = Uuid;
+  using DeepCopiedType = NativeType;
+  static constexpr uint32_t minSubTypes = 0;
+  static constexpr uint32_t maxSubTypes = 0;
+  static constexpr TypeKind typeKind = TypeKind::UUID;
+  static constexpr bool isPrimitiveType = true;
+  static constexpr bool isFixedWidth = true;
+  static constexpr const char* name = "UUID";
 };
 
 template <>
@@ -556,6 +571,7 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
   VELOX_FLUENT_CAST(Date, DATE)
   VELOX_FLUENT_CAST(ShortDecimal, SHORT_DECIMAL)
   VELOX_FLUENT_CAST(LongDecimal, LONG_DECIMAL)
+  VELOX_FLUENT_CAST(Uuid, UUID)
   VELOX_FLUENT_CAST(Array, ARRAY)
   VELOX_FLUENT_CAST(Map, MAP)
   VELOX_FLUENT_CAST(Row, ROW)
@@ -1243,6 +1259,9 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       case ::facebook::velox::TypeKind::DATE: {                               \
         return TEMPLATE_FUNC<::facebook::velox::TypeKind::DATE>(__VA_ARGS__); \
       }                                                                       \
+      case ::facebook::velox::TypeKind::UUID: {                               \
+        return TEMPLATE_FUNC<::facebook::velox::TypeKind::UUID>(__VA_ARGS__); \
+      }                                                                       \
       default:                                                                \
         VELOX_FAIL(                                                           \
             "not a scalar type! kind: {}", mapTypeKindToName(typeKind));      \
@@ -1295,6 +1314,10 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       }                                                                  \
       case ::facebook::velox::TypeKind::DATE: {                          \
         return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::DATE>(      \
+            __VA_ARGS__);                                                \
+      }                                                                  \
+      case ::facebook::velox::TypeKind::UUID: {                          \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::UUID>(      \
             __VA_ARGS__);                                                \
       }                                                                  \
       default:                                                           \
@@ -1365,6 +1388,9 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       }                                                                        \
       case ::facebook::velox::TypeKind::DATE: {                                \
         return PREFIX<::facebook::velox::TypeKind::DATE> SUFFIX(__VA_ARGS__);  \
+      }                                                                        \
+      case ::facebook::velox::TypeKind::UUID: {                                \
+        return PREFIX<::facebook::velox::TypeKind::UUID> SUFFIX(__VA_ARGS__);  \
       }                                                                        \
       case ::facebook::velox::TypeKind::ARRAY: {                               \
         return PREFIX<::facebook::velox::TypeKind::ARRAY> SUFFIX(__VA_ARGS__); \
@@ -1504,6 +1530,7 @@ VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
 VELOX_SCALAR_ACCESSOR(DATE);
+VELOX_SCALAR_ACCESSOR(UUID);
 VELOX_SCALAR_ACCESSOR(UNKNOWN);
 
 template <TypeKind KIND>
@@ -1735,6 +1762,9 @@ template <>
 struct SimpleTypeTrait<Date> : public TypeTraits<TypeKind::DATE> {};
 
 template <>
+struct SimpleTypeTrait<Uuid> : public TypeTraits<TypeKind::UUID> {};
+
+template <>
 struct SimpleTypeTrait<IntervalDayTime> : public SimpleTypeTrait<int64_t> {
   static constexpr const char* name = "INTERVAL DAY TO SECOND";
 };
@@ -1859,6 +1889,9 @@ struct CppToType<Timestamp> : public CppToTypeBase<TypeKind::TIMESTAMP> {};
 
 template <>
 struct CppToType<Date> : public CppToTypeBase<TypeKind::DATE> {};
+
+template <>
+struct CppToType<Uuid> : public CppToTypeBase<TypeKind::UUID> {};
 
 template <typename T>
 struct CppToType<Generic<T>> : public CppToTypeBase<TypeKind::UNKNOWN> {};

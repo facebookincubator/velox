@@ -337,6 +337,37 @@ TEST(TypeTest, dateFormat) {
   EXPECT_EQ(fmt::format("{}", parseDate("1812-04-15")), "1812-04-15");
 }
 
+TEST(TypeTest, uuid) {
+  auto uuid = UUID();
+  EXPECT_EQ(uuid->toString(), "UUID");
+  EXPECT_EQ(uuid->size(), 0);
+  EXPECT_THROW(uuid->childAt(0), std::invalid_argument);
+  EXPECT_EQ(uuid->kind(), TypeKind::UUID);
+  EXPECT_STREQ(uuid->kindName(), "UUID");
+  EXPECT_EQ(uuid->begin(), uuid->end());
+
+  testTypeSerde(uuid);
+}
+
+TEST(TypeTest, uuidComparison) {
+  Uuid uuidMin(0);
+  Uuid uuidMinCopy(0);
+  Uuid uuidMax(std::numeric_limits<uint128_t>::max());
+
+  EXPECT_EQ(uuidMin, uuidMinCopy);
+  EXPECT_EQ(uuidMinCopy, uuidMin);
+
+  EXPECT_NE(uuidMin, uuidMax);
+
+  EXPECT_LT(uuidMin, uuidMax);
+  EXPECT_LE(uuidMin, uuidMinCopy);
+  EXPECT_LE(uuidMin, uuidMax);
+
+  EXPECT_GT(uuidMax, uuidMin);
+  EXPECT_GE(uuidMinCopy, uuidMin);
+  EXPECT_GE(uuidMax, uuidMin);
+}
+
 TEST(TypeTest, map) {
   auto mapType = MAP(INTEGER(), ARRAY(BIGINT()));
   EXPECT_EQ(mapType->toString(), "MAP<INTEGER,ARRAY<BIGINT>>");

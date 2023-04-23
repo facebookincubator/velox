@@ -341,6 +341,24 @@ TEST_F(PrestoSerializerTest, unscaledLongDecimal) {
   testRoundTrip(vector);
 }
 
+TEST_F(PrestoSerializerTest, uuid) {
+  auto vector = vectorMaker_->flatVector<int128_t>(
+      100,
+      [](auto row) {
+        return buildInt128(folly::Random::rand64(), folly::Random::rand64());
+      },
+      nullptr, // nullAt
+      UUID());
+
+  testRoundTrip(vector);
+
+  // Add some nulls.
+  for (auto i = 0; i < 100; i += 7) {
+    vector->setNull(i, true);
+  }
+  testRoundTrip(vector);
+}
+
 TEST_F(PrestoSerializerTest, rle) {
   // Test RLE vectors with non-null value.
   testRleRoundTrip(

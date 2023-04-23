@@ -273,6 +273,9 @@ void CastExpr::applyCast(
       return applyCastWithTry<To, Timestamp>(
           rows, context, input, resultFlatVector);
     }
+    case TypeKind::UUID: {
+      return applyCastWithTry<To, Uuid>(rows, context, input, resultFlatVector);
+    }
     default: {
       VELOX_UNSUPPORTED("Invalid from type in casting: {}", fromType);
     }
