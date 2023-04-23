@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "BiasCorrection.h"
+#include "velox/common/hyperloglog/BiasCorrection.h"
 #include <vector>
 
 namespace facebook::velox::common::hll {

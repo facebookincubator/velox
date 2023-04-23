@@ -19,3 +19,4 @@ add_library(velox_common_hyperloglog BiasCorrection.cpp DenseHll.cpp
                                      SparseHll.cpp)
 
 target_link_libraries(velox_common_hyperloglog velox_memory velox_core)
+target_include_directories(velox_common_hyperloglog PUBLIC include)
