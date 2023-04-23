@@ -24,5 +24,5 @@ add_executable(
 
 add_test(velox_core_test velox_core_test)
 
-target_link_libraries(velox_core_test velox_core velox_vector_test_lib gtest
+target_link_libraries(velox_core_test velox_core velox_parse_parser velox_vector_test_lib gtest
                       gtest_main)

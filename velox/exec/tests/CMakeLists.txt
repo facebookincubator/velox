@@ -211,7 +211,7 @@ target_link_libraries(
 add_library(velox_join_fuzzer JoinFuzzer.cpp)
 
 target_link_libraries(
-  velox_join_fuzzer velox_core velox_type velox_vector_fuzzer
+  velox_join_fuzzer velox_core velox_parse_parser velox_type velox_vector_fuzzer
   velox_exec_test_lib velox_expression_test_utility)
 
 add_executable(velox_join_fuzzer_test JoinFuzzerTest.cpp)
