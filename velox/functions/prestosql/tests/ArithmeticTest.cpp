@@ -699,5 +699,15 @@ TEST_F(ArithmeticTest, truncate) {
   EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
 }
 
+TEST_F(ArithmeticTest, normalCDF) {
+  const auto normal_cdf = [&](std::optional<double> mean,
+                              std::optional<double> sd,
+                              std::optional<double> value) {
+    return evaluateOnce<double>("normal_cdf(c0, c1, c2)", mean, sd, value);
+  };
+
+  EXPECT_EQ(0.97500210485177952, normal_cdf(0, 1, 1.96));
+  EXPECT_EQ(0.5,normal_cdf(10, 9, 10));
+}
 } // namespace
 } // namespace facebook::velox

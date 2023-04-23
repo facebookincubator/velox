@@ -23,10 +23,13 @@
 #include <functional>
 #include <system_error>
 
+#include "boost/math/distributions/normal.hpp"
 #include "folly/CPortability.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/ArithmeticImpl.h"
+
+using boost::math::normal_distribution;
 
 namespace facebook::velox::functions {
 
@@ -492,6 +495,19 @@ struct TruncateFunction {
 
   FOLLY_ALWAYS_INLINE void call(double& result, double a, int32_t n) {
     result = truncate(a, n);
+  }
+};
+
+template <typename T>
+struct NormalCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double m, double sd, double value) {
+    VELOX_USER_CHECK_GT(sd, 0, "standard deviation must be > 0");
+
+    normal_distribution<> distribution(m, sd);
+    result = boost::math::cdf(distribution, value);
   }
 };
 
