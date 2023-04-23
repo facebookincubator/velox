@@ -25,6 +25,7 @@ target_link_libraries(
   velox_functions_prestosql
   velox_aggregates
   velox_presto_serializer
+  velox_parse_parser
   velox_type
   velox_vector
   velox_vector_fuzzer

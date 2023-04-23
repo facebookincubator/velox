@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_library(velox_row INTERFACE)
+target_include_directories(velox_row INTERFACE include)
+target_link_libraries(velox_row INTERFACE velox_exception velox_vector velox_type)
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

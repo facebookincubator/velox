@@ -18,4 +18,4 @@ endif()
 
 add_library(velox_row24 UnsafeRow24Deserializer.cpp)
 
-target_link_libraries(velox_row24 velox_memory velox_type velox_vector)
+target_link_libraries(velox_row24 velox_row velox_memory velox_type velox_vector)
