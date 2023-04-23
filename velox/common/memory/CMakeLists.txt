@@ -38,6 +38,8 @@ target_link_libraries(
   velox_test_util
   Folly::folly)
 
+target_include_directories(velox_memory PUBLIC include)
+
 if(NOT VELOX_DISABLE_GOOGLETEST)
   target_link_libraries(velox_memory gtest)
 endif()
