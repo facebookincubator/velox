@@ -21,6 +21,7 @@ add_library(
   SsdCache.cpp
   SsdFile.cpp
   SsdFileTracker.cpp)
+
 target_link_libraries(
   velox_caching
   velox_memory
@@ -29,6 +30,8 @@ target_link_libraries(
   velox_time
   glog::glog
   Folly::folly)
+
+target_include_directories(velox_caching PUBLIC include)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

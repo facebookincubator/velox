@@ -14,7 +14,7 @@
 
 add_executable(simple_lru_cache_test SimpleLRUCacheTest.cpp)
 add_test(simple_lru_cache_test simple_lru_cache_test)
-target_link_libraries(simple_lru_cache_test gtest gtest_main glog::glog
+target_link_libraries(simple_lru_cache_test velox_caching  gtest gtest_main glog::glog
                       gflags::gflags Folly::folly)
 
 add_executable(velox_cache_test StringIdMapTest.cpp AsyncDataCacheTest.cpp

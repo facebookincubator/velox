@@ -63,6 +63,7 @@ add_test(
 target_link_libraries(
   velox_expression_test
   velox_aggregates
+  velox_caching
   velox_hive_connector
   velox_dwio_common
   velox_dwio_common_exception
