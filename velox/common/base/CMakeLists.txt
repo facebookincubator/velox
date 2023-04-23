@@ -14,6 +14,7 @@
 
 add_library(velox_common_base_headers INTERFACE)
 target_include_directories(velox_common_base_headers INTERFACE include)
+target_link_libraries(velox_common_base_headers INTERFACE velox_common_future)
 
 add_library(velox_exception Exceptions.cpp VeloxException.cpp)
 target_link_libraries(

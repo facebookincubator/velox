@@ -102,6 +102,7 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_exec
   velox_exec_test_lib
+  velox_common_future
   velox_functions_json
   velox_functions_lib
   velox_functions_prestosql

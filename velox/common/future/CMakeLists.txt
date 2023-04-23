@@ -11,20 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_connector Connector.cpp)
 
-target_link_libraries(velox_connector velox_config velox_vector velox_common_future)
-
-add_subdirectory(fuzzer)
-
-if(${VELOX_ENABLE_HIVE_CONNECTOR})
-  add_subdirectory(hive)
-endif()
-
-if(${VELOX_ENABLE_TPCH_CONNECTOR})
-  add_subdirectory(tpch)
-endif()
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+add_library(velox_common_future INTERFACE)
+target_link_libraries(velox_common_future INTERFACE Folly::folly)
+target_include_directories(velox_common_future INTERFACE include)
