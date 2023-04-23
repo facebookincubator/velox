@@ -116,3 +116,7 @@ target_link_libraries(
   gtest_main
   gflags::gflags
   glog::glog)
+
+add_library(velox_subfieldfilters_builder INTERFACE)
+target_include_directories(velox_subfieldfilters_builder INTERFACE include)
+target_link_libraries(velox_subfieldfilters_builder INTERFACE velox_type)

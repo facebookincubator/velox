@@ -23,13 +23,14 @@ add_library(
   DoubleUtil.cpp
   Filter.cpp
   UnscaledLongDecimal.cpp
-  StringView.h
   Subfield.cpp
   Timestamp.cpp
   TimestampConversion.cpp
   Tokenizer.cpp
   Type.cpp
   Variant.cpp)
+
+target_include_directories(velox_type PUBLIC include)
 
 target_link_libraries(
   velox_type

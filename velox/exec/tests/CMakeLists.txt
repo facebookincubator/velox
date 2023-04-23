@@ -109,6 +109,7 @@ target_link_libraries(
   velox_hive_connector
   velox_memory
   velox_serialization
+  velox_subfieldfilters_builder
   velox_test_util
   velox_type
   velox_vector

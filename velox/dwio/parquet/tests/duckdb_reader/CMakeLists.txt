@@ -37,4 +37,5 @@ target_link_libraries(
   velox_hive_connector
   velox_aggregates
   velox_link_libs
+  velox_subfieldfilters_builder
   ${TEST_LINK_LIBS})
