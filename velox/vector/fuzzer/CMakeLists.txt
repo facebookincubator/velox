@@ -15,6 +15,7 @@
 add_library(velox_vector_fuzzer VectorFuzzer.cpp GeneratorSpec.cpp Utils.cpp)
 
 target_link_libraries(velox_vector_fuzzer velox_type velox_vector)
+target_include_directories(velox_vector_fuzzer PUBLIC include)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

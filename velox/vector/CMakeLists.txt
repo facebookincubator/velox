@@ -30,6 +30,7 @@ add_library(
 
 target_link_libraries(velox_vector velox_encode velox_memory velox_time
                       velox_type velox_buffer)
+target_include_directories(velox_vector PUBLIC include)
 
 add_subdirectory(arrow)
 add_subdirectory(fuzzer)
