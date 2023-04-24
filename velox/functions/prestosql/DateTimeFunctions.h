@@ -103,16 +103,8 @@ template <typename T>
 struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
-      const arg_type<Date>& date) {
-
-    auto year = 1970;
-    auto month = 1;
-    auto day = 1;
-
+  std::string dateToISOstringHelper(Date date) {
     auto z = date.days();
-
     z += 719468;
     const int era = (z >= 0 ?  z : z - 146096) / 146097;
     const unsigned doe = static_cast<unsigned>(z - era * 146097);          // [0, 146096]
@@ -128,8 +120,14 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
     auto yStr = std::to_string(y);
     auto mStr = (m < 10 ) ? "0" + std::to_string(m) : std::to_string(m);
     auto dStr = (m < 10 ) ? "0" + std::to_string(d) : std::to_string(d);
-    auto isoStr = yStr + "-" + mStr + "-" + dStr + "T" + "00:00:00.000";
+    return (yStr + "-" + mStr + "-" + dStr + "T" + "00:00:00.000");
+  }
 
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+
+    auto isoStr = dateToISOstringHelper(date);
     result.resize(isoStr.size());
     result = isoStr;
   }
