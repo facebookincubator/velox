@@ -476,7 +476,7 @@ void CacheShard::appendSsdSaveable(std::vector<CachePin>& pins) {
   // Do not add more than 70% of entries to a write batch.If SSD save
   // is slower than storage read, we must not have a situation where
   // SSD save pins everything and stops reading.
-  int32_t limit = (entries_.size() * 100) / 70;
+  int32_t limit = (entries_.size() * 70) / 100;
   VELOX_CHECK(cache_->ssdCache()->writeInProgress());
   for (auto& entry : entries_) {
     if (entry && !entry->ssdFile_ && !entry->isExclusive() &&
