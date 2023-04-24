@@ -2858,6 +2858,19 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
       dateParse("116", "%y+"), "Invalid format: \"116\" is malformed at \"6\"");
 }
 
+TEST_F(DateTimeFunctionsTest, toISO8601Varchar) {
+  const auto toISO8601 = [&](std::optional<Date> dateObj) {
+    return evaluateOnce<std::string, Date>("to_iso8601(c0)", dateObj);
+  };
+
+  // Date(0) is 1970-01-01.
+  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(Date()));
+  // Date(18297) is 2020-02-05.
+  EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(Date(18297)));
+  // Date(-18297) is 1919-11-28.
+  EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(Date(-18297)));
+}
+
 TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {
   const auto dateFunction = [&](const std::optional<std::string>& dateString) {
     return evaluateOnce<Date>("date(c0)", dateString);
