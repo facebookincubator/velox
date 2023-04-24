@@ -13,6 +13,8 @@
 # limitations under the License.
 
 add_library(velox_codegen Codegen.cpp)
+target_include_directories(velox_codegen PUBLIC include)
+
 if(${VELOX_CODEGEN_SUPPORT})
   target_link_libraries(velox_codegen velox_experimental_codegen)
 else()
