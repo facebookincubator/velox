@@ -2863,10 +2863,14 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestVarchar) {
     return evaluateOnce<std::string, Date>("to_iso8601(c0)", dateObj);
   };
 
+  // Date() input: days since epoch
+
   // Date(0) is 1970-01-01.
   EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(Date()));
+
   // Date(18297) is 2020-02-05.
   EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(Date(18297)));
+
   // Date(-18297) is 1919-11-28.
   EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(Date(-18297)));
 }
@@ -2879,15 +2883,20 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
     return evaluateOnce<std::string>("to_iso8601(c0)", timestamp);
   };
 
+  // Timestamp() input: seconds, nanoseconds since epoch
+
   // Date(0) is 1970-01-01.
   EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(Timestamp()));
+
   // Date(18297) is 2020-02-05.
   EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(Timestamp(18297 * kSecondsInDay, 0)));
+
   // Date(-18297) is 1919-11-28.
   EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(Timestamp(-18297 * kSecondsInDay, 0)));
 }
 
 TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
+  static const int64_t kSecondsInHour = 3'600;
   static const int64_t kSecondsInDay = 86'400;
   static const uint64_t kNanosInSecond = 1'000'000'000;
 
@@ -2896,23 +2905,18 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
     return evaluateWithTimestampWithTimezone<std::string>("to_iso8601(c0)", timestamp, timeZoneName);
   };
 
-  // 1970-01-01 00:00:00.000 +00:00
-  // EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601((18297 * kSecondsInDay, 0), "+00:00"));
+  // 0 ms = 1970-01-01 00:00:00.000 +0:00
+  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(0, "+00:00"));
 
-  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(18297 * kSecondsInDay, "+00:00"));
-  // FIX - getting converted to 1970-01-19T07:07:40.800, should be 2020
+  // 0 ms = 1969-12-31 19:00:00.000 -05:00
+  EXPECT_EQ("1969-12-31T19:00:00.000", toISO8601(0, "-05:00"));
 
-  // 1970-01-01 00:00:00.000 +08:00
-  // EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(0, "+08:00"));
+  // 1580882400 ms = 2020-02-04 22:00:00.000 -08:00
+  EXPECT_EQ("2020-02-04T22:00:00.000", toISO8601((18297 * kSecondsInDay + 6 * kSecondsInHour) * 1'000, "-08:00"));
 
-  // 1970-01-01 00:00:00.000 +08:00
-  // EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(0, "-08:00"));
+  // 1580882400 ms = 2020-02-05 09:00:00.000 +03:00
+  EXPECT_EQ("2020-02-05T09:00:00.000", toISO8601((18297 * kSecondsInDay + 6 * kSecondsInHour) * 1'000, "+03:00"));
 
-
-  // Date(18297) is 2020-02-05.
-  // EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(Timestamp(18297 * kSecondsInDay, 0)));
-  // Date(-18297) is 1919-11-28.
-  //EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(Timestamp(-18297 * kSecondsInDay, 0)));
 }
 
 TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {
