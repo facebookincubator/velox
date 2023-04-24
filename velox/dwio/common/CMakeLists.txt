@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_subdirectory(wrap)
 add_subdirectory(compression)
 add_subdirectory(encryption)
 add_subdirectory(exception)
@@ -59,6 +60,7 @@ target_link_libraries(
   velox_dwio_common_compression
   velox_dwio_common_encryption
   velox_dwio_common_exception
+  velox_dwio_common_wrap
   velox_common_strings
   velox_exception
   velox_expression
@@ -66,3 +68,4 @@ target_link_libraries(
   Boost::regex
   Folly::folly
   glog::glog)
+target_include_directories(velox_dwio_common PUBLIC include)

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_dwio_common_compression LzoDecompressor.cpp)
-target_link_libraries(velox_dwio_common_compression velox_dwio_common_exception Folly::folly)
-target_include_directories(velox_dwio_common_compression PUBLIC include)
+add_library(velox_dwio_common_wrap INTERFACE)
+
+target_link_libraries(velox_dwio_common_wrap INTERFACE velox_dwio_common)
+target_include_directories(velox_dwio_common_wrap INTERFACE include)

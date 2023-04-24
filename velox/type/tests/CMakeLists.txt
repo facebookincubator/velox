@@ -43,6 +43,7 @@ target_link_libraries(
   velox_filter_benchmark
   velox_type
   velox_serialization
+  velox_dwio_common_exception
   velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
@@ -58,6 +59,7 @@ target_link_libraries(
   velox_negated_values_filter_benchmark
   velox_type
   velox_serialization
+  velox_dwio_common_exception
   velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
@@ -73,6 +75,7 @@ target_link_libraries(
   velox_negated_bytes_values_benchmark
   velox_type
   velox_serialization
+  velox_dwio_common_exception
   velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
@@ -88,6 +91,7 @@ target_link_libraries(
   velox_negated_bigint_range_benchmark
   velox_type
   velox_serialization
+  velox_dwio_common_exception
   velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}
@@ -103,6 +107,7 @@ target_link_libraries(
   velox_negated_bytes_range_benchmark
   velox_type
   velox_serialization
+  velox_dwio_common_exception
   velox_gtest_utils
   Folly::folly
   ${FOLLY_BENCHMARK}

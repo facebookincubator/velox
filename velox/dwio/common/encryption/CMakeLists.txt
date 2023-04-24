@@ -14,4 +14,5 @@
 
 add_library(velox_dwio_common_encryption Encryption.cpp)
 
-target_link_libraries(velox_dwio_common_encryption velox_exception Folly::folly)
+target_link_libraries(velox_dwio_common_encryption velox_dwio_common_exception Folly::folly)
+target_include_directories(velox_dwio_common_encryption PUBLIC include)
