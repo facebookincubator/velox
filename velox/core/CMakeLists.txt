@@ -17,7 +17,7 @@ endif()
 
 add_library(velox_config Context.cpp)
 target_link_libraries(velox_config velox_exception Folly::folly)
-target_sources(velox_config PRIVATE Context.h)
+target_include_directories(velox_config PUBLIC include)
 
 add_library(velox_core Expressions.cpp PlanFragment.cpp PlanNode.cpp
                        SimpleFunctionMetadata.cpp)

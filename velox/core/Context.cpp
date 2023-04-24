@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Context.h"
+#include "velox/core/Context.h"
 
 namespace facebook {
 namespace velox {
