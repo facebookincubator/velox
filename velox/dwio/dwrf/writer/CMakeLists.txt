@@ -26,6 +26,7 @@ add_library(
   WriterContext.cpp
   WriterSink.cpp)
 
+target_include_directories(velox_dwio_dwrf_writer PUBLIC include)
 target_link_libraries(
   velox_dwio_dwrf_writer
   velox_dwio_common

@@ -35,6 +35,7 @@ add_library(
 
 add_dependencies(velox_dwio_dwrf_common velox_dwio_dwrf_proto)
 
+target_include_directories(velox_dwio_dwrf_common PUBLIC include wrap/include)
 target_link_libraries(
   velox_dwio_dwrf_common
   velox_common_base

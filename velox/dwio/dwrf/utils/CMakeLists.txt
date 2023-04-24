@@ -16,9 +16,10 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(test)
 endif()
 
-add_library(velox_dwio_dwrf_utils ProtoUtils.cpp BitIterator.h)
+add_library(velox_dwio_dwrf_utils ProtoUtils.cpp)
 
 add_dependencies(velox_dwio_dwrf_utils velox_dwio_dwrf_proto)
 
-target_link_libraries(velox_dwio_dwrf_utils velox_dwio_dwrf_proto velox_type
+target_include_directories(velox_dwio_dwrf_utils PUBLIC include)
+target_link_libraries(velox_dwio_dwrf_utils velox_dwio_dwrf_common velox_dwio_common velox_dwio_common_wrap velox_dwio_dwrf_proto velox_type
                       velox_memory)
