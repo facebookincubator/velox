@@ -14,6 +14,7 @@
 
 add_library(velox_serialization DeserializationRegistry.cpp)
 
+target_include_directories(velox_serialization PUBLIC include)
 target_link_libraries(velox_serialization velox_core velox_exception
                       Folly::folly)
 
