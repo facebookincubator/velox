@@ -13,10 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
+using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::test;
 
 class InPredicateTest : public FunctionBaseTest {
@@ -316,4 +319,26 @@ TEST_F(InPredicateTest, varbinary) {
       "c0 IN (CAST('apple' as VARBINARY), CAST('banana' as VARBINARY))";
   auto result = evaluate<SimpleVector<bool>>(predicate, input);
   assertEqualVectors(makeConstant(true, input->size()), result);
+}
+
+TEST_F(InPredicateTest, reusableResult) {
+  auto a1 = makeNullableFlatVector<int32_t>({0, 1, std::nullopt, 3, 4, 5, 6});
+  auto b1 = makeFlatVector<int64_t>({0, 5, 10, 15, 20, 25, 30});
+  auto data1 = makeRowVector({"a", "b"}, {a1, b1});
+
+  auto a2 = makeNullableFlatVector<int32_t>({0, 1, 2, 3, 4, 5});
+  auto b2 = makeFlatVector<int64_t>({100, 105, 110, 115, 120, 125});
+  auto data2 = makeRowVector({"a", "b"}, {a2, b2});
+
+  // Queries.
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  auto plan = PlanBuilder(pool_.get())
+                  .values({data1, data2})
+                  .filter("a in (1,2) ")
+                  .project({"b"})
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  auto expected =makeRowVector({"b"}, {makeFlatVector<int64_t>({5, 105, 110})});
+  assertEqualVectors(expected, result);
 }
