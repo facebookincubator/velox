@@ -174,6 +174,24 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
     result.resize(isoStr.size());
     result = isoStr;
   }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+
+    // timestamp.toString() returns in format
+    // "1919-11-28T00:00:00.000000000"
+    // truncate nanosecond precision for ISO 8601 string
+
+    auto timestamp = this->toTimestamp(timestampWithTimezone);
+    auto timestamp2 = timestampWithTimezone.template at<0>();
+    auto timezone = *timestampWithTimezone.template at<1>();
+    
+    timestamp.toGMT(*timestampWithTimezone.template at<1>());
+    auto isoStr = timestamp.toString().substr(0, 23);
+    result.resize(isoStr.size());
+    result = isoStr;
+  }
 };
 
 template <typename T>

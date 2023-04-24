@@ -2887,6 +2887,34 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
   EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(Timestamp(-18297 * kSecondsInDay, 0)));
 }
 
+TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
+  static const int64_t kSecondsInDay = 86'400;
+  static const uint64_t kNanosInSecond = 1'000'000'000;
+
+  const auto toISO8601 = [&](std::optional<int64_t> timestamp,
+          const std::optional<std::string>& timeZoneName) {
+    return evaluateWithTimestampWithTimezone<std::string>("to_iso8601(c0)", timestamp, timeZoneName);
+  };
+
+  // 1970-01-01 00:00:00.000 +00:00
+  // EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601((18297 * kSecondsInDay, 0), "+00:00"));
+
+  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(18297 * kSecondsInDay, "+00:00"));
+  // FIX - getting converted to 1970-01-19T07:07:40.800, should be 2020
+
+  // 1970-01-01 00:00:00.000 +08:00
+  // EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(0, "+08:00"));
+
+  // 1970-01-01 00:00:00.000 +08:00
+  // EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(0, "-08:00"));
+
+
+  // Date(18297) is 2020-02-05.
+  // EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(Timestamp(18297 * kSecondsInDay, 0)));
+  // Date(-18297) is 1919-11-28.
+  //EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(Timestamp(-18297 * kSecondsInDay, 0)));
+}
+
 TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {
   const auto dateFunction = [&](const std::optional<std::string>& dateString) {
     return evaluateOnce<Date>("date(c0)", dateString);

@@ -30,6 +30,7 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "from_unixtime"});
   registerFunction<ToISO8601Function, Varchar, Date>({prefix + "to_iso8601"});
   registerFunction<ToISO8601Function, Varchar, Timestamp>({prefix + "to_iso8601"});
+  registerFunction<ToISO8601Function, Varchar, TimestampWithTimezone>({prefix + "to_iso8601"});
   registerFunction<DateFunction, Date, Varchar>({prefix + "date"});
   registerFunction<DateFunction, Date, Timestamp>({prefix + "date"});
   registerFunction<DateFunction, Date, TimestampWithTimezone>(
