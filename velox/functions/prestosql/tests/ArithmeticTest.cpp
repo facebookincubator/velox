@@ -699,25 +699,31 @@ TEST_F(ArithmeticTest, truncate) {
   EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
 }
 
-TEST_F(ArithmeticTest, BetaCDF) {
-  const auto beta_cdf = [&](std::optional<double> a,
-                            std::optional<double> b,
-                            std::optional<double> value) {
+TEST_F(ArithmeticTest, betaCDF) {
+  const auto betaCDF = [&](std::optional<double> a,
+                           std::optional<double> b,
+                           std::optional<double> value) {
     return evaluateOnce<double>("beta_cdf(c0, c1, c2)", a, b, value);
   };
 
-  EXPECT_EQ(0.09888000000000001, beta_cdf(3, 4, 0.2));
-  EXPECT_EQ(0.0, beta_cdf(3, 3.6, 0.0));
-  EXPECT_EQ(1.0, beta_cdf(3, 3.6, 1.0));
-  EXPECT_EQ(0.21764809997679951, beta_cdf(3, 3.6, 0.3));
-  EXPECT_EQ(0.9972502881611551, beta_cdf(3, 3.6, 0.9));
+  EXPECT_EQ(0.09888000000000001, betaCDF(3, 4, 0.2));
+  EXPECT_EQ(0.0, betaCDF(3, 3.6, 0.0));
+  EXPECT_EQ(1.0, betaCDF(3, 3.6, 1.0));
+  EXPECT_EQ(0.21764809997679951, betaCDF(3, 3.6, 0.3));
+  EXPECT_EQ(0.9972502881611551, betaCDF(3, 3.6, 0.9));
 
-  VELOX_ASSERT_THROW(beta_cdf(0, 3, 0.5), "a must be > 0");
-  VELOX_ASSERT_THROW(beta_cdf(3, 0, 0.5), "b must be > 0");
+  VELOX_ASSERT_THROW(betaCDF(0, 3, 0.5), "alpha and beta must be > 0");
+  VELOX_ASSERT_THROW(betaCDF(3, 0, 0.5), "alpha and beta must be > 0");
+  VELOX_ASSERT_THROW(betaCDF(kNan, 3, 0.5), "alpha and beta must be > 0");
+  VELOX_ASSERT_THROW(betaCDF(3, kNan, 0.5), "alpha and beta must be > 0");
   VELOX_ASSERT_THROW(
-      beta_cdf(3, 5, -0.1), "value must be in the interval [0, 1]");
+      betaCDF(3, 3, kNan), "value must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
-      beta_cdf(3, 5, 1.1), "value must be in the interval [0, 1]");
+      betaCDF(3, 5, -0.1), "value must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      betaCDF(3, 5, 1.1), "value must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      betaCDF(kInf, 3, 0.2), "alpha, beta values can't accept infinity value");
 }
 
 } // namespace
