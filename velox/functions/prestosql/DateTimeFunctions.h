@@ -104,6 +104,9 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   std::string dateToISOstringHelper(Date date) {
+    // conversion of days from epoch to civil date follows 
+    // algorithm here: http://howardhinnant.github.io/date_algorithms.html
+    
     auto z = date.days();
     z += 719468;
     const int era = (z >= 0 ?  z : z - 146096) / 146097;
