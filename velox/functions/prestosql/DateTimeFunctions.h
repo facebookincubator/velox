@@ -27,74 +27,6 @@
 namespace facebook::velox::functions {
 
 template <typename T>
-struct CurrentTimezoneFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  const date::time_zone* timeZone_ = nullptr;
-
-  // FOLLY_ALWAYS_INLINE void initialize(
-  //     const core::QueryConfig& config,
-  //     const arg_type<float>& /* input */){
-  //   timeZone_ = getTimeZoneFromConfig(config);
-
-  //   if(timeZone_ == nullptr)
-  //   {
-  //     VELOX_UNSUPPORTED("null timezone");
-  //   }
-  // }
-
-  std::optional<int64_t> timeZone_ID;
-  std::optional<int64_t> timeZone_str;
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const core::QueryConfig& config,
-      const arg_type<float>& /* input */) {
-
-    timeZone_str = config.sessionTimezone();
-    if (!timeZone_str.empty()) {
-      timeZone_ID = util::getTimeZoneID(timeZone_str);
-    }
-  }
-
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result, 
-      const arg_type<float>& input){
-    // auto timeZone_str = timeZone_->name();
-
-    if(timeZone_str != nullptr) {
-      auto timeZone_size = (timeZone_str).size();
-      result.resize(timeZone_size);
-      result = timeZone_str; 
-    } else {
-      result.resize(21);
-      result = "America/Los Angeles";
-
-      // auto testStr = "America/Los Angeles";
-      // std::memcpy(result.data(), testStr, 21);
-    }
-
-    // result.resize(21);
-    // result = "America/Los Angeles";
-
-    // auto testStr = "America/Los Angeles";
-    // result.resize(testStr.size());
-    // std::memcpy(result.data(), testStr, testStr.size());
-  }
-};
-
-// template <typename T>
-// struct FromIso8601TimestampFunction : public TimestampWithTimezoneSupport<T>{
-//   VELOX_DEFINE_FUNCTION_TYPES(T);
-
-//   FOLLY_ALWAYS_INLINE bool call(
-//       out_type<TimestampWithTimezone>& result,
-//       const arg_type<Varchar>& iso8601_input) {
-//     result = toUnixtime(timestamp);
-//     return true;
-//   }
-// };
-
-template <typename T>
 struct ToUnixtimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -150,6 +82,100 @@ struct TimestampWithTimezoneSupport {
 };
 
 } // namespace
+
+template <typename T>
+struct CurrentTimezoneFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::optional<int64_t> sessionTzID_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<float>& /* input */) {
+
+    auto sessionTzName = config.sessionTimezone();
+    if (!sessionTzName.empty()) {
+      sessionTzID_ = util::getTimeZoneID(sessionTzName);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<float>& input) {
+
+    int64_t current_timestamp = Timestamp::now().toMillis();
+
+    std::optional<int64_t> sessionTzID_;
+    // Set the timezone to the session timezone. If there's
+    // no session timezone, fallback to 0 (GMT).
+    int16_t timezoneId = sessionTzID_.value_or(0);
+
+    result.resize(3);
+    result = "SFO";
+  }
+};
+
+// template <typename T>
+// struct CurrentTimezoneFunction {
+//   VELOX_DEFINE_FUNCTION_TYPES(T);
+
+//   const date::time_zone* timeZone_ = nullptr;
+
+//   // FOLLY_ALWAYS_INLINE void initialize(
+//   //     const core::QueryConfig& config,
+//   //     const arg_type<float>& /* input */){
+//   //   timeZone_ = getTimeZoneFromConfig(config);
+
+//   //   if(timeZone_ == nullptr)
+//   //   {
+//   //     VELOX_UNSUPPORTED("null timezone");
+//   //   }
+//   // }
+
+//   std::optional<int64_t> sessionTzID_;
+//   std::string timeZone_str = "LA";
+
+//   FOLLY_ALWAYS_INLINE void initialize(
+//       const core::QueryConfig& config,
+//       const arg_type<float>& /* input */) {
+
+//     auto sessionTzName = config.sessionTimezone();
+//     if (!sessionTzName.empty()) {
+//       sessionTzID_ = util::getTimeZoneID(sessionTzName);
+//     }
+//   }
+
+//   FOLLY_ALWAYS_INLINE void call(
+//       out_type<Varchar>& result, 
+//       const arg_type<float>& input){
+//     // auto timeZone_str = timeZone_->name();
+
+//     // Since MySql format has no timezone specifier, simply check if session
+//     // timezone was provided. If not, fallback to 0 (GMT).
+//     int16_t timezoneId = sessionTzID_.value_or(0);
+//     result.resize(3);
+//     result = "SFO";
+
+//     // if(!timeZone_str.empty()) {
+//     //   auto timeZone_size = (timeZone_str).size();
+//     //   result.resize(timeZone_size);
+//     //   result = timeZone_str;
+//     // } else {
+//     //   result.resize(21);
+//     //   result = "America/Los Angeles";
+
+//     //   // auto testStr = "America/Los Angeles";
+//     //   // std::memcpy(result.data(), testStr, 21);
+//     // }
+
+//     // result.resize(21);
+//     // result = "America/Los Angeles";
+
+//     // auto testStr = "America/Los Angeles";
+//     // result.resize(testStr.size());
+//     // std::memcpy(result.data(), testStr, testStr.size());
+//   }
+// };
 
 template <typename T>
 struct DateFunction : public TimestampWithTimezoneSupport<T> {
