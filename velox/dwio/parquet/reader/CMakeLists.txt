@@ -26,6 +26,7 @@ add_library(
   StructColumnReader.cpp
   StringColumnReader.cpp)
 
+target_include_directories(velox_dwio_native_parquet_reader PUBLIC include)
 target_link_libraries(
   velox_dwio_native_parquet_reader
   velox_dwio_parquet_thrift

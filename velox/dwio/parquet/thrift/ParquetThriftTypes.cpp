@@ -20,7 +20,7 @@
  * DO NOT EDIT UNLESS YOU ARE SURE THAT YOU KNOW WHAT YOU ARE DOING
  *  @generated
  */
-#include "ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
 #include <algorithm>
 #include <ostream>

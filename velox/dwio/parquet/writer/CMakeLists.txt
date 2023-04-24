@@ -14,5 +14,6 @@
 
 add_library(velox_dwio_parquet_writer Writer.cpp)
 
+target_include_directories(velox_dwio_parquet_writer PUBLIC include)
 target_link_libraries(velox_dwio_parquet_writer velox_dwio_common
                       velox_arrow_bridge parquet arrow fmt::fmt)

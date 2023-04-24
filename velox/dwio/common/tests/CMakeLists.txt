@@ -29,9 +29,9 @@ add_executable(
   TestBufferedInput.cpp
   TestColumnSelector.cpp
   TypeTests.cpp)
-add_test(velox_dwio_common_test velox_dwio_common_test)
 target_link_libraries(
   velox_dwio_common_test
+  velox_dwio_common
   velox_dwio_common_test_utils
   velox_temp_path
   Boost::regex
@@ -44,7 +44,10 @@ target_link_libraries(
   gmock
   glog::glog
   fmt::fmt)
+# this is necessary as the header is needed even if parquet support is disabled
+target_include_directories(velox_dwio_common_test PRIVATE ../../parquet/reader/include)
 
+add_test(velox_dwio_common_test velox_dwio_common_test)
 add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
 
 target_link_libraries(
