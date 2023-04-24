@@ -29,6 +29,11 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<FromUnixtimeFunction, Timestamp, double>(
       {prefix + "from_unixtime"});
   registerFunction<CurrentTimezoneFunction, Varchar, float>({prefix + "current_timezone"});
+  registerFunction<DateFunction, Date, Varchar>({prefix + "date"});
+  registerFunction<DateFunction, Date, Timestamp>({prefix + "date"});
+  registerFunction<DateFunction, Date, TimestampWithTimezone>(
+      {prefix + "date"});
+
   registerFunction<YearFunction, int64_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int64_t, Date>({prefix + "year"});
   registerFunction<YearFunction, int64_t, TimestampWithTimezone>(

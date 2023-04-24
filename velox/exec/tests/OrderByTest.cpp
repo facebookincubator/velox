@@ -356,22 +356,24 @@ TEST_F(OrderByTest, unknown) {
       {0});
 }
 
-/// Verifies that Order By output batch sizes correspond to
-/// preferredOutputBatchSize.
-TEST_F(OrderByTest, outputBatchSize) {
+/// Verifies output batch rows of OrderBy
+TEST_F(OrderByTest, outputBatchRows) {
   struct {
     int numRowsPerBatch;
-    int preferredOutBatchSize;
+    int preferredOutBatchBytes;
     int expectedOutputVectors;
 
     std::string debugString() const {
       return fmt::format(
           "numRowsPerBatch:{}, preferredOutBatchSize:{}, expectedOutputVectors:{}",
           numRowsPerBatch,
-          preferredOutBatchSize,
+          preferredOutBatchBytes,
           expectedOutputVectors);
     }
-  } testSettings[] = {{1024, 1024 * 1024 * 10, 1}, {1024, 1, 2}};
+    // Output kPreferredOutputBatchRows by default and thus include all rows in
+    // a single vector.
+    // TODO(gaoge): change after determining output batch rows adaptively.
+  } testSettings[] = {{1024, 1, 1}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -397,8 +399,8 @@ TEST_F(OrderByTest, outputBatchSize) {
                     .planNode();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->setConfigOverridesUnsafe(
-        {{core::QueryConfig::kPreferredOutputBatchSize,
-          std::to_string(testData.preferredOutBatchSize)}});
+        {{core::QueryConfig::kPreferredOutputBatchBytes,
+          std::to_string(testData.preferredOutBatchBytes)}});
     CursorParameters params;
     params.planNode = plan;
     params.queryCtx = queryCtx;
@@ -431,10 +433,8 @@ TEST_F(OrderByTest, spill) {
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   constexpr int64_t kMaxBytes = 20LL << 20; // 20 MB
   queryCtx->testingOverrideMemoryPool(
-      memory::getProcessDefaultMemoryManager().getPool(
-          queryCtx->queryId(),
-          memory::MemoryPool::Kind::kAggregate,
-          kMaxBytes));
+      memory::defaultMemoryManager().addRootPool(
+          queryCtx->queryId(), kMaxBytes));
   // Set 'kSpillableReservationGrowthPct' to an extreme large value to trigger
   // disk spilling by failed memory growth reservation.
   queryCtx->setConfigOverridesUnsafe({
@@ -486,10 +486,8 @@ TEST_F(OrderByTest, spillWithMemoryLimit) {
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
-        memory::getProcessDefaultMemoryManager().getPool(
-            queryCtx->queryId(),
-            memory::MemoryPool::Kind::kAggregate,
-            kMaxBytes));
+        memory::defaultMemoryManager().addRootPool(
+            queryCtx->queryId(), kMaxBytes));
     auto results =
         AssertQueryBuilder(
             PlanBuilder()

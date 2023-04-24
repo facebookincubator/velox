@@ -72,6 +72,7 @@ GroupingSet::GroupingSet(
                       ->queryConfig()
                       .hashAdaptivityEnabled()),
       pool_(*operatorCtx->pool()) {
+  VELOX_CHECK(pool_.trackUsage());
   for (auto& hasher : hashers_) {
     keyChannels_.push_back(hasher->channel());
   }
@@ -525,8 +526,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  auto tracker = pool_.getMemoryUsageTracker();
-  const auto currentUsage = tracker->currentBytes();
+  const auto currentUsage = pool_.getCurrentBytes();
   if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig_->spillableReservationGrowthPct / 100;
@@ -552,7 +552,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
       rows->sizeIncrement(input->size(), outOfLineBytes ? flatBytes : 0) +
       tableIncrement;
   // There must be at least 2x the increment in reservation.
-  if (tracker->availableReservation() > 2 * increment) {
+  if (pool_.availableReservation() > 2 * increment) {
     return;
   }
   // Check if can increase reservation. The increment is the larger of
@@ -561,7 +561,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   auto targetIncrement = std::max<int64_t>(
       increment * 2,
       currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
-  if (tracker->maybeReserve(targetIncrement)) {
+  if (pool_.maybeReserve(targetIncrement)) {
     return;
   }
   auto rowsToSpill = std::max<int64_t>(
@@ -582,7 +582,7 @@ void GroupingSet::spill(int64_t targetRows, int64_t targetBytes) {
     for (auto i = 0; i < types.size(); ++i) {
       names.push_back(fmt::format("s{}", i));
     }
-    VELOX_DCHECK(pool_.getMemoryUsageTracker() != nullptr);
+    VELOX_DCHECK(pool_.trackUsage());
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kAggregate,
         rows,
@@ -714,5 +714,13 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* FOLLY_NONNULL row) {
   }
   mergeSelection_.setValid(input.currentIndex(), false);
 }
+
+std::optional<int64_t> GroupingSet::estimateRowSize() const {
+  const RowContainer* rows =
+      table_ ? table_->rows() : rowsWhileReadingSpill_.get();
+  return rows && rows->estimateRowSize() >= 0
+      ? std::optional<int64_t>(rows->estimateRowSize())
+      : std::nullopt;
+};
 
 } // namespace facebook::velox::exec

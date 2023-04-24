@@ -29,7 +29,7 @@ namespace facebook::velox::exec {
 class PartitionedOutputBufferManager;
 
 class HashJoinBridge;
-class CrossJoinBridge;
+class NestedLoopJoinBridge;
 class Task : public std::enable_shared_from_this<Task> {
  public:
   /// Creates a task to execute a plan fragment, but doesn't start execution
@@ -284,11 +284,10 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t driverId,
       const std::string& operatorType);
 
-  /// Creates new instance of MemoryPool for the connector writer used by a
-  /// table write operator, stores it in the task to ensure lifetime and returns
-  /// a raw pointer. Not thread safe, e.g. must be called from the Operator's
-  /// constructor.
-  velox::memory::MemoryPool* addConnectorWriterPoolLocked(
+  /// Creates new instance of MemoryPool with aggregate kind for the connector
+  /// use, stores it in the task to ensure lifetime and returns a raw pointer.
+  /// Not thread safe, e.g. must be called from the Operator's constructor.
+  velox::memory::MemoryPool* addConnectorPoolLocked(
       const core::PlanNodeId& planNodeId,
       int pipelineId,
       uint32_t driverId,
@@ -398,8 +397,8 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
-  /// Adds CrossJoinBridge's for all the specified plan node IDs.
-  void addCrossJoinBridgesLocked(
+  /// Adds NestedLoopJoinBridge's for all the specified plan node IDs.
+  void addNestedLoopJoinBridgesLocked(
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
@@ -420,8 +419,8 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  /// Returns a CrossJoinBridge for 'planNodeId'.
-  std::shared_ptr<CrossJoinBridge> getCrossJoinBridge(
+  /// Returns a NestedLoopJoinBridge for 'planNodeId'.
+  std::shared_ptr<NestedLoopJoinBridge> getNestedLoopJoinBridge(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
@@ -445,8 +444,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns kNone if no pause or terminate is requested. The thread count is
   /// incremented if kNone is returned. If something else is returned the
-  /// calling thread should unwind and return itself to its pool.
-  StopReason enter(ThreadState& state);
+  /// calling thread should unwind and return itself to its pool. If 'this' goes
+  /// from no threads running to one thread running, sets 'onThreadSince_' to
+  /// 'nowMicros'.
+  StopReason enter(ThreadState& state, uint64_t nowMicros = 0);
 
   /// Sets the state to terminated. Returns kAlreadyOnThread if the
   /// Driver is running. In this case, the Driver will free resources
@@ -510,6 +511,11 @@ class Task : public std::enable_shared_from_this<Task> {
     std::lock_guard<std::mutex> l(mutex_);
     toYield_ = numThreads_;
   }
+
+  /// Requests yield if 'this' is running and has had at least one Driver on
+  /// thread since before 'startTimeMicros'. Returns the number of threads in
+  /// 'this' at the time of requesting yield. Returns 0 if yield not requested.
+  int32_t yieldIfDue(uint64_t startTimeMicros);
 
   /// Once 'pauseRequested_' is set, it will not be cleared until
   /// task::resume(). It is therefore OK to read it without a mutex
@@ -749,35 +755,6 @@ class Task : public std::enable_shared_from_this<Task> {
   std::shared_ptr<ExchangeClient> getExchangeClientLocked(
       int32_t pipelineId) const;
 
-  /// Callback function added to the MemoryUsageTracker to return a descriptive
-  /// message about query memory usage to be added to the error when a
-  /// MEM_CAP_EXCEEDED error is encountered.
-  /// Example Error Message generated:
-  /// Query 20220923_033248_00003_xney3 failed:
-  ///   Exceeded memory cap of 7.00GB when requesting 4.00MB.
-  /// query.20220923_033248_00003_xney3: total: 7.00GB
-  ///     task.20220923_033248_00003_xney3.1.0.25: : 5.88GB in 30 drivers,
-  ///       min 2.00MB, max 400.00MB
-  ///         pipe.0: : 5.74GB in 60 operators, min 0B, max 393.81MB
-  ///             op.PartitionedOutput: : 0B in 15 instances, min 0B, max 0B
-  ///             op.FilterProject: : 0B in 15 instances, min 0B, max 0B
-  ///             op.Aggregation: : 5GB in 15 instances, min 384MB, max 393MB
-  ///             op.LocalExchange: : 0B in 15 instances, min 0B, max 0B
-  ///         pipe.1: : 32.75MB in 30 operators, min 4.00KB, max 14.65MB
-  ///             op.LocalPartition: : 508KB in 15 instances, min 4KB, max 63KB
-  ///             op.Exchange: : 32.25MB in 15 instances, min 107KB, max 14MB
-  ///     task.20220923_033248_00003_xney3.2.0.19: : 1.12GB in 15 drivers,
-  ///       min 61.00MB, max 91.00MB
-  ///         pipe.0: : 1.03GB in 75 operators, min 149.00KB, max 39.38MB
-  ///             op.PartitionedOutput: : 446.71MB in 15 instances,
-  ///               min 12.02MB, max 39.38MB
-  ///             op.PartialAggregation: : 300.03MB in 15 instances,
-  ///               min 1.48MB, max 25.59MB
-  ///             op.FilterProject: : 32MB in 30 instances, min 149KB, max 2MB
-  ///             op.TableScan: : 278MB in 15 instances, min 9.05MB, max 27MB.
-  /// Failed Operator: PartialAggregation.3: 11.98MB
-  std::string getErrorMsgOnMemCapExceeded(memory::MemoryUsageTracker& tracker);
-
   // RAII helper class to satisfy 'stateChangePromises_' and notify listeners
   // that task is complete outside of the mutex. Inactive on creation. Must be
   // activated explicitly by calling 'activate'.
@@ -972,6 +949,10 @@ class Task : public std::enable_shared_from_this<Task> {
   std::atomic<bool> terminateRequested_{false};
   std::atomic<int32_t> toYield_ = 0;
   int32_t numThreads_ = 0;
+  // Microsecond real time when 'this' last went from no threads to
+  // one thread running. Used to decide if continuous run should be
+  // interrupted by yieldIfDue().
+  tsan_atomic<uint64_t> onThreadSince_{0};
   // Promises for the futures returned to callers of requestPause() or
   // terminate(). They are fulfilled when the last thread stops
   // running for 'this'.

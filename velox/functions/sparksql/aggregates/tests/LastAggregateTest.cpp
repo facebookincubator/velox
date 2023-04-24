@@ -15,137 +15,278 @@
  */
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
-namespace facebook::velox::functions::sparksql::aggregates::test {
+namespace facebook::velox::functions::aggregate::sparksql::test {
 
 namespace {
 
 class LastAggregateTest : public aggregate::test::AggregationTestBase {
- public:
-  LastAggregateTest() {
+ protected:
+  void SetUp() override {
     aggregate::test::AggregationTestBase::SetUp();
-    aggregates::registerAggregateFunctions("");
+    registerAggregateFunctions("spark_");
   }
 
   template <typename T>
-  void testGroupBy() {
-    auto vectors = {makeRowVector({
-        makeFlatVector<int32_t>(98, [](auto row) { return row % 7; }),
-        makeFlatVector<T>(
-            98, // size
-            [](auto row) { return row; }, // valueAt
-            [](auto row) { return row % 3 == 0; }), // nullAt
-        makeConstant<bool>(true, 98),
-        makeConstant<bool>(false, 98),
-    })};
+  void testAggregate() {
+    {
+      auto vectors = {makeRowVector({
+          makeFlatVector<int32_t>(98, [](auto row) { return row % 7; }),
+          makeFlatVector<T>(
+              98, // size
+              [](auto row) { return row; }, // valueAt
+              [](auto row) { return row % 3 == 0; }), // nullAt
+      })};
 
-    createDuckDbTable(vectors);
+      createDuckDbTable(vectors);
 
-    // Verify when ignoreNull is true.
-    testAggregations(
-        vectors,
-        {"c0"},
-        {"last(c1, c2)"},
-        "SELECT c0, last(c1 ORDER BY c1 NULLS FIRST) FROM tmp GROUP BY c0");
+      {
+        SCOPED_TRACE("ignore null + group by");
+        testAggregations(
+            vectors,
+            {"c0"},
+            {"spark_last_ignore_null(c1)"},
+            "SELECT c0, last(c1 ORDER BY c1 NULLS FIRST) FROM tmp GROUP BY c0");
+      }
+      {
+        // Expected result should have first 7 rows including nulls.
+        SCOPED_TRACE("not ignore null + group by");
+        auto expected = {makeRowVector({
+            makeFlatVector<int32_t>(7, [](auto row) { return row; }),
+            makeFlatVector<T>(
+                7, // size
+                [](auto row) { return 91 + row; }, // valueAt
+                [](auto row) { return (91 + row) % 3 == 0; }), // nullAt
+        })};
+        testAggregations(vectors, {"c0"}, {"spark_last(c1)"}, expected);
+      }
+    }
 
-    // Verify when ignoreNull is false.
-    // Expected result should have last 7 rows [91..98) including nulls.
-    auto expected = {makeRowVector({
-        makeFlatVector<int32_t>(7, [](auto row) { return row; }),
-        makeFlatVector<T>(
-            7, // size
-            [](auto row) { return 91 + row; }, // valueAt
-            [](auto row) { return (91 + row) % 3 == 0; }), // nullAt
-    })};
-    testAggregations(vectors, {"c0"}, {"last(c1, c3)"}, expected);
+    {
+      auto vectors = {makeRowVector({
+          makeNullableFlatVector<T>({std::nullopt, 1, 2, std::nullopt}),
+      })};
 
-    // Verify when ignoreNull is not provided. Defaults to false.
-    testAggregations(vectors, {"c0"}, {"last(c1)"}, expected);
+      {
+        SCOPED_TRACE("ignore null + global");
+        auto expectedTrue = {makeRowVector({makeNullableFlatVector<T>({2})})};
+        testAggregations(
+            vectors, {}, {"spark_last_ignore_null(c0)"}, expectedTrue);
+      }
+      {
+        SCOPED_TRACE("not ignore null + global");
+        auto expectedFalse = {
+            makeRowVector({makeNullableFlatVector<T>({std::nullopt})})};
+        testAggregations(vectors, {}, {"spark_last(c0)"}, expectedFalse);
+      }
+    }
   }
 
-  template <typename T>
-  void testGlobalAggregation() {
-    auto vectors = {makeRowVector({
-        makeNullableFlatVector<T>({std::nullopt, 1, 2, std::nullopt}),
-    })};
+  void testGroupBy(
+      std::vector<RowVectorPtr> data,
+      std::vector<RowVectorPtr> ignoreNullData,
+      std::vector<RowVectorPtr> hasNullData) {
+    {
+      SCOPED_TRACE("ignore null + group by");
+      testAggregations(
+          data, {"c0"}, {"spark_last_ignore_null(c1)"}, ignoreNullData);
+    }
 
-    // Verify when ignoreNull is true.
-    auto expectedTrue = {makeRowVector({makeNullableFlatVector<T>({2})})};
-    testAggregations(vectors, {}, {"last(c0, TRUE)"}, expectedTrue);
+    {
+      SCOPED_TRACE("not ignore null + group by");
+      testAggregations(data, {"c0"}, {"spark_last(c1)"}, hasNullData);
+    }
+  }
 
-    // Verify when ignoreNull is false.
-    auto expectedFalse = {
-        makeRowVector({makeNullableFlatVector<T>({std::nullopt})})};
-    testAggregations(vectors, {}, {"last(c0, FALSE)"}, expectedFalse);
+  void testGlobalAggregate(
+      std::vector<RowVectorPtr> data,
+      std::vector<RowVectorPtr> ignoreNullData,
+      std::vector<RowVectorPtr> hasNullData) {
+    {
+      SCOPED_TRACE("ignore null + global");
+      testAggregations(
+          data, {}, {"spark_last_ignore_null(c0)"}, ignoreNullData);
+    }
 
-    // Verify when ignoreNull is not provided. Defaults to false.
-    testAggregations(vectors, {}, {"last(c0)"}, expectedFalse);
+    {
+      SCOPED_TRACE("not ignore null + global");
+      testAggregations(data, {}, {"spark_last(c0)"}, hasNullData);
+    }
   }
 };
 
-// Verify aggregation with group by keys for TINYINT.
-TEST_F(LastAggregateTest, tinyIntGroupBy) {
-  testGroupBy<int8_t>();
+TEST_F(LastAggregateTest, boolean) {
+  testAggregate<bool>();
 }
 
-// Verify global aggregation for TINYINT.
-TEST_F(LastAggregateTest, tinyIntGlobal) {
-  testGlobalAggregation<int8_t>();
+TEST_F(LastAggregateTest, tinyInt) {
+  testAggregate<int8_t>();
 }
 
-// Verify aggregation with group by keys for SMALLINT.
-TEST_F(LastAggregateTest, smallIntGroupBy) {
-  testGroupBy<int16_t>();
+TEST_F(LastAggregateTest, smallInt) {
+  testAggregate<int16_t>();
 }
 
-// Verify global aggregation for SMALLINT.
-TEST_F(LastAggregateTest, smallIntGlobal) {
-  testGlobalAggregation<int16_t>();
+TEST_F(LastAggregateTest, integer) {
+  testAggregate<int32_t>();
 }
 
-// Verify aggregation with group by keys for INTEGER.
-TEST_F(LastAggregateTest, integerGroupBy) {
-  testGroupBy<int32_t>();
+TEST_F(LastAggregateTest, bigint) {
+  testAggregate<int64_t>();
 }
 
-// Verify global aggregation for INTEGER.
-TEST_F(LastAggregateTest, integerGlobal) {
-  testGlobalAggregation<int32_t>();
+TEST_F(LastAggregateTest, real) {
+  testAggregate<float>();
 }
 
-// Verify aggregation with group by keys for BIGINT.
-TEST_F(LastAggregateTest, bigintGroupBy) {
-  testGroupBy<int64_t>();
+TEST_F(LastAggregateTest, double) {
+  testAggregate<double>();
 }
 
-// Verify global aggregation for BIGINT.
-TEST_F(LastAggregateTest, bigintGlobal) {
-  testGlobalAggregation<int64_t>();
+TEST_F(LastAggregateTest, timestampGroupBy) {
+  auto vectors = {makeRowVector({
+      makeFlatVector<int32_t>(98, [](auto row) { return row % 7; }),
+      makeFlatVector<Timestamp>(
+          98, // size
+          [](auto row) { return Timestamp(row, row); }, // valueAt
+          [](auto row) { return row % 3 == 0; }), // nullAt
+  })};
+
+  auto ignoreNullData = {makeRowVector({
+      makeFlatVector<int32_t>(7, [](auto row) { return row; }),
+      makeFlatVector<Timestamp>(
+          7, // size
+          [](auto row) {
+            return (row + 91) % 3 == 0 ? Timestamp(row + 91 - 7, row + 91 - 7)
+                                       : Timestamp(row + 91, row + 91);
+          } // valueAt
+          ),
+  })};
+
+  // Expected result should have first 7 rows including nulls.
+  auto hasNullData = {makeRowVector({
+      makeFlatVector<int32_t>(7, [](auto row) { return row; }),
+      makeFlatVector<Timestamp>(
+          7, // size
+          [](auto row) { return Timestamp(91 + row, 91 + row); }, // valueAt
+          [](auto row) { return (row + 91) % 3 == 0; }), // nullAt
+  })};
+
+  testGroupBy(vectors, ignoreNullData, hasNullData);
 }
 
-// Verify aggregation with group by keys for REAL.
-TEST_F(LastAggregateTest, realGroupBy) {
-  testGroupBy<float>();
+TEST_F(LastAggregateTest, timestampGlobal) {
+  auto vectors = {makeRowVector({
+      makeNullableFlatVector<Timestamp>(
+          {std::nullopt, Timestamp(1, 1), Timestamp(2, 2), std::nullopt}),
+  })};
+
+  auto ignoreNullData = {
+      makeRowVector({makeNullableFlatVector<Timestamp>({Timestamp(2, 2)})})};
+
+  auto hasNullData = {
+      makeRowVector({makeNullableFlatVector<Timestamp>({std::nullopt})})};
+
+  testGlobalAggregate(vectors, ignoreNullData, hasNullData);
 }
 
-// Verify global aggregation for REAL.
-TEST_F(LastAggregateTest, realGlobal) {
-  testGlobalAggregation<float>();
+TEST_F(LastAggregateTest, dateGroupBy) {
+  auto vectors = {makeRowVector({
+      makeFlatVector<int32_t>(98, [](auto row) { return row % 7; }),
+      makeFlatVector<Date>(
+          98, // size
+          [](auto row) { return Date(row); }, // valueAt
+          [](auto row) { return row % 3 == 0; }), // nullAt
+  })};
+
+  auto ignoreNullData = {makeRowVector({
+      makeFlatVector<int32_t>(7, [](auto row) { return row; }),
+      makeFlatVector<Date>(
+          7, // size
+          [](auto row) {
+            return (row + 91) % 3 == 0 ? Date(row + 91 - 7) : Date(row + 91);
+          } // valueAt
+          ),
+  })};
+
+  // Expected result should have first 7 rows including nulls.
+  auto hasNullData = {makeRowVector({
+      makeFlatVector<int32_t>(7, [](auto row) { return row; }),
+      makeFlatVector<Date>(
+          7, // size
+          [](auto row) { return Date(row + 91); }, // valueAt
+          [](auto row) { return (row + 91) % 3 == 0; }), // nullAt
+  })};
+
+  testGroupBy(vectors, ignoreNullData, hasNullData);
 }
 
-// Verify aggregation with group by keys for DOUBLE.
-TEST_F(LastAggregateTest, doubleGroupBy) {
-  testGroupBy<double>();
+TEST_F(LastAggregateTest, dateGlobal) {
+  auto vectors = {makeRowVector({
+      makeNullableFlatVector<Date>(
+          {std::nullopt, Date(1), Date(2), std::nullopt}),
+  })};
+
+  auto ignoreNullData = {
+      makeRowVector({makeNullableFlatVector<Date>({Date(2)})})};
+
+  auto hasNullData = {
+      makeRowVector({makeNullableFlatVector<Date>({std::nullopt})})};
+
+  testGlobalAggregate(vectors, ignoreNullData, hasNullData);
 }
 
-// Verify global aggregation for DOUBLE.
-TEST_F(LastAggregateTest, doubleGlobal) {
-  testGlobalAggregation<double>();
+TEST_F(LastAggregateTest, intervalGroupBy) {
+  auto vectors = {makeRowVector({
+      makeFlatVector<int32_t>(98, [](auto row) { return row % 7; }),
+      makeFlatVector<int64_t>(
+          98, // size
+          [](auto row) { return row; }, // valueAt
+          [](auto row) { return row % 3 == 0; }, // nullAt
+          INTERVAL_DAY_TIME()),
+  })};
+
+  auto ignoreNullData = {makeRowVector({
+      makeFlatVector<int32_t>(7, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(
+          7, // size
+          [](auto row) {
+            return (row + 91) % 3 == 0 ? row + 91 - 7 : row + 91;
+          }, // valueAt
+          nullptr, // nullAt
+          INTERVAL_DAY_TIME()),
+  })};
+
+  // Expected result should have first 7 rows including nulls.
+  auto hasNullData = {makeRowVector({
+      makeFlatVector<int32_t>(7, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(
+          7, // size
+          [](auto row) { return row + 91; }, // valueAt
+          [](auto row) { return (row + 91) % 3 == 0; }, // nullAt
+          INTERVAL_DAY_TIME()),
+  })};
+
+  testGroupBy(vectors, ignoreNullData, hasNullData);
 }
 
-// Vefify aggregation with group by keys for VARCHAR.
+TEST_F(LastAggregateTest, intervalGlobal) {
+  auto vectors = {makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {std::nullopt, 1, 2, std::nullopt}, INTERVAL_DAY_TIME()),
+  })};
+
+  auto ignoreNullData = {makeRowVector(
+      {makeNullableFlatVector<int64_t>({2}, INTERVAL_DAY_TIME())})};
+
+  auto hasNullData = {makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt}, INTERVAL_DAY_TIME())})};
+
+  testGlobalAggregate(vectors, ignoreNullData, hasNullData);
+}
+
 TEST_F(LastAggregateTest, varcharGroupBy) {
   std::vector<std::string> data(98);
   auto vectors = {makeRowVector({
@@ -157,8 +298,6 @@ TEST_F(LastAggregateTest, varcharGroupBy) {
             return StringView(data[row]);
           }, // valueAt
           [](auto row) { return row % 3 == 0; }), // nullAt
-      makeConstant<bool>(true, 98),
-      makeConstant<bool>(false, 98),
   })};
 
   createDuckDbTable(vectors);
@@ -167,8 +306,8 @@ TEST_F(LastAggregateTest, varcharGroupBy) {
   testAggregations(
       vectors,
       {"c0"},
-      {"last(c1, c2)"},
-      "SELECT c0, last(c1 ORDER BY c1 NULLS FIRST) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0");
+      {"spark_last_ignore_null(c1)"},
+      "SELECT c0, last(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0");
 
   // Verify when ignoreNull is false.
   // Expected result should have last 7 rows [91..98) including nulls.
@@ -179,34 +318,24 @@ TEST_F(LastAggregateTest, varcharGroupBy) {
           [&data](auto row) { return StringView(data[91 + row]); }, // valueAt
           [](auto row) { return (91 + row) % 3 == 0; }), // nullAt
   })};
-  testAggregations(vectors, {"c0"}, {"last(c1, c3)"}, expected);
-
-  // Verify when ignoreNull is not provided. Defaults to false.
-  testAggregations(vectors, {"c0"}, {"last(c1)"}, expected);
+  testAggregations(vectors, {"c0"}, {"spark_last(c1)"}, expected);
 }
 
-// Verify global aggregation for VARCHAR.
 TEST_F(LastAggregateTest, varcharGlobal) {
   auto vectors = {makeRowVector({
-      makeNullableFlatVector<std::string>(
+      makeNullableFlatVector<StringView>(
           {std::nullopt, "a", "b", std::nullopt}),
   })};
 
-  // Verify when ignoreNull is true.
-  auto expectedTrue = {
-      makeRowVector({makeNullableFlatVector<std::string>({"b"})})};
-  testAggregations(vectors, {}, {"last(c0, TRUE)"}, expectedTrue);
+  auto ignoreNullData = {
+      makeRowVector({makeNullableFlatVector<StringView>({"b"})})};
 
-  // Verify when ignoreNull is false.
-  auto expectedFalse = {
-      makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})})};
-  testAggregations(vectors, {}, {"last(c0, FALSE)"}, expectedFalse);
+  auto hasNullData = {
+      makeRowVector({makeNullableFlatVector<StringView>({std::nullopt})})};
 
-  // Verify when ignoreNull is not provided. Defaults to false.
-  testAggregations(vectors, {}, {"last(c0)"}, expectedFalse);
+  testGlobalAggregate(vectors, ignoreNullData, hasNullData);
 }
 
-// Verify aggregation with group by keys for ARRAY.
 TEST_F(LastAggregateTest, arrayGroupBy) {
   auto vectors = {makeRowVector({
       makeFlatVector<int32_t>(98, [](auto row) { return row % 7; }),
@@ -216,11 +345,9 @@ TEST_F(LastAggregateTest, arrayGroupBy) {
           [](auto row, auto idx) { return row * 100 + idx; }, // valueAt
           // Even rows are null.
           [](auto row) { return row % 2 == 0; }), // nullAt
-      makeConstant<bool>(true, 98),
-      makeConstant<bool>(false, 98),
   })};
 
-  auto expectedTrue = {makeRowVector({
+  auto hasNullData = {makeRowVector({
       makeFlatVector<int32_t>(7, [](auto row) { return row; }),
       makeArrayVector<int64_t>(
           7,
@@ -235,12 +362,7 @@ TEST_F(LastAggregateTest, arrayGroupBy) {
           }),
   })};
 
-  // Verify when ignoreNull is true.
-  testAggregations(vectors, {"c0"}, {"last(c1, c2)"}, expectedTrue);
-
-  // Verify when ignoreNull is false.
-  // Expected result should have last 7 rows [91..98) of input |vectors|
-  auto expectedFalse = {makeRowVector({
+  auto ignoreNullData = {makeRowVector({
       makeFlatVector<int32_t>(7, [](auto row) { return row; }),
       makeArrayVector<int64_t>(
           7, // size
@@ -249,37 +371,26 @@ TEST_F(LastAggregateTest, arrayGroupBy) {
           [](auto row) { return (91 + row) % 2 == 0; }), // nullAt
   })};
 
-  testAggregations(vectors, {"c0"}, {"last(c1, c3)"}, expectedFalse);
-
-  // Verify when ignoreNull is not provided. Defaults to false.
-  testAggregations(vectors, {"c0"}, {"last(c1)"}, expectedFalse);
+  testGroupBy(vectors, hasNullData, ignoreNullData);
 }
 
-// Verify global aggregation for ARRAY.
 TEST_F(LastAggregateTest, arrayGlobal) {
   auto vectors = {makeRowVector({
       makeNullableArrayVector<int64_t>(
           {std::nullopt, {{1, 2}}, {{3, 4}}, std::nullopt}),
   })};
 
-  auto expectedTrue = {makeRowVector({
+  auto ignoreNullData = {makeRowVector({
       makeArrayVector<int64_t>({{3, 4}}),
   })};
 
-  // Verify when ignoreNull is true.
-  testAggregations(vectors, {}, {"last(c0, TRUE)"}, expectedTrue);
-
-  // Verify when ignoreNull is false.
-  auto expectedFalse = {makeRowVector({
+  auto hasNullData = {makeRowVector({
       makeNullableArrayVector<int64_t>({std::nullopt}),
   })};
-  testAggregations(vectors, {}, {"last(c0, FALSE)"}, expectedFalse);
 
-  // Verify when ignoreNull is not provided. Defaults to false.
-  testAggregations(vectors, {}, {"last(c0)"}, expectedFalse);
+  testGlobalAggregate(vectors, ignoreNullData, hasNullData);
 }
 
-// Verify aggregation with group by keys for MAP column.
 TEST_F(LastAggregateTest, mapGroupBy) {
   auto vectors = {makeRowVector({
       makeFlatVector<int32_t>(98, [](auto row) { return row % 7; }),
@@ -300,10 +411,9 @@ TEST_F(LastAggregateTest, mapGroupBy) {
           [](auto idx) { return (92 + idx) * 0.1; }), // valueAt
   })};
 
-  testAggregations(vectors, {"c0"}, {"last(c1)"}, expected);
+  testAggregations(vectors, {"c0"}, {"spark_last(c1)"}, expected);
 }
 
-// Verify global aggregation for MAP column.
 TEST_F(LastAggregateTest, mapGlobal) {
   auto O = [](const std::vector<std::pair<int64_t, std::optional<float>>>& m) {
     return std::make_optional(m);
@@ -313,22 +423,16 @@ TEST_F(LastAggregateTest, mapGlobal) {
           {std::nullopt, O({{1, 2.0}}), O({{2, 4.0}}), std::nullopt}),
   })};
 
-  auto expectedTrue = {makeRowVector({
+  auto ignoreNullData = {makeRowVector({
       makeNullableMapVector<int64_t, float>({O({{2, 4.0}})}),
   })};
 
-  // Verify when ignoreNull is true.
-  testAggregations(vectors, {}, {"last(c0, TRUE)"}, expectedTrue);
-
-  // Verify when ignoreNull is false.
-  auto expectedFalse = {makeRowVector({
+  auto hasNullData = {makeRowVector({
       makeNullableMapVector<int64_t, float>({std::nullopt}),
   })};
-  testAggregations(vectors, {}, {"last(c0, FALSE)"}, expectedFalse);
 
-  // Verify when ignoreFalse is not provided. Defaults to false.
-  testAggregations(vectors, {}, {"last(c0)"}, expectedFalse);
+  testGlobalAggregate(vectors, ignoreNullData, hasNullData);
 }
 
 } // namespace
-} // namespace facebook::velox::functions::sparksql::aggregates::test
+} // namespace facebook::velox::functions::aggregate::sparksql::test

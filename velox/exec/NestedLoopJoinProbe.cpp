@@ -13,33 +13,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/CrossJoinProbe.h"
+#include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
 
-CrossJoinProbe::CrossJoinProbe(
+NestedLoopJoinProbe::NestedLoopJoinProbe(
     int32_t operatorId,
     DriverCtx* driverCtx,
-    const std::shared_ptr<const core::CrossJoinNode>& joinNode)
+    const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode)
     : Operator(
           driverCtx,
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "CrossJoinProbe"),
-      outputBatchSize_{driverCtx->queryConfig().preferredOutputBatchSize()} {
-  bool isIdentityProjection = true;
-
+          "NestedLoopJoinProbe"),
+      outputBatchSize_{outputBatchRows()} {
   auto probeType = joinNode->sources()[0]->outputType();
   for (auto i = 0; i < probeType->size(); ++i) {
     auto name = probeType->nameOf(i);
     auto outIndex = outputType_->getChildIdxIfExists(name);
     if (outIndex.has_value()) {
       identityProjections_.emplace_back(i, outIndex.value());
-      if (outIndex != i) {
-        isIdentityProjection = false;
-      }
     }
   }
 
@@ -50,20 +45,16 @@ CrossJoinProbe::CrossJoinProbe(
       buildProjections_.emplace_back(tableChannel.value(), i);
     }
   }
-
-  if (isIdentityProjection && buildProjections_.empty()) {
-    isIdentityProjection_ = true;
-  }
 }
 
-BlockingReason CrossJoinProbe::isBlocked(ContinueFuture* future) {
+BlockingReason NestedLoopJoinProbe::isBlocked(ContinueFuture* future) {
   if (buildData_.has_value()) {
     return BlockingReason::kNotBlocked;
   }
 
   auto buildData =
       operatorCtx_->task()
-          ->getCrossJoinBridge(
+          ->getNestedLoopJoinBridge(
               operatorCtx_->driverCtx()->splitGroupId, planNodeId())
           ->dataOrFuture(future);
   if (!buildData.has_value()) {
@@ -81,7 +72,7 @@ BlockingReason CrossJoinProbe::isBlocked(ContinueFuture* future) {
   return BlockingReason::kNotBlocked;
 }
 
-void CrossJoinProbe::addInput(RowVectorPtr input) {
+void NestedLoopJoinProbe::addInput(RowVectorPtr input) {
   // In getOutput(), we are going to wrap input in dictionaries a few rows at a
   // time. Since lazy vectors cannot be wrapped in different dictionaries, we
   // are going to load them here.
@@ -91,7 +82,7 @@ void CrossJoinProbe::addInput(RowVectorPtr input) {
   input_ = std::move(input);
 }
 
-RowVectorPtr CrossJoinProbe::getOutput() {
+RowVectorPtr NestedLoopJoinProbe::getOutput() {
   if (!input_) {
     return nullptr;
   }
@@ -154,11 +145,11 @@ RowVectorPtr CrossJoinProbe::getOutput() {
   return output;
 }
 
-bool CrossJoinProbe::isFinished() {
+bool NestedLoopJoinProbe::isFinished() {
   return buildSideEmpty_ || (noMoreInput_ && input_ == nullptr);
 }
 
-void CrossJoinProbe::close() {
+void NestedLoopJoinProbe::close() {
   buildData_.reset();
   Operator::close();
 }

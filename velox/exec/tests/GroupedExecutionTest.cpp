@@ -277,7 +277,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
 
 // Here we test various aspects of grouped/bucketed execution involving
 // output buffer and 3 pipelines.
-TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndCrossJoin) {
+TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
   // Create source file - we will read from it in 6 splits.
   auto vectors = makeVectors(4, 20);
   auto filePath = TempFilePath::create();
@@ -291,7 +291,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndCrossJoin) {
     core::PlanNodePtr pipe0Node;
     core::PlanNodePtr pipe1Node;
 
-    // Hash or Cross join.
+    // Hash or Nested Loop join.
     if (i == 0) {
       pipe0Node =
           PlanBuilder(planNodeIdGenerator)
@@ -320,7 +320,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndCrossJoin) {
               .tableScan(rowType_)
               .capturePlanNodeId(probeScanNodeId)
               .project({"c3 as x", "c2 as y", "c1 as z", "c0 as w", "c4", "c5"})
-              .crossJoin(
+              .nestedLoopJoin(
                   PlanBuilder(planNodeIdGenerator)
                       .tableScan(rowType_, {"c0 > 0"})
                       .capturePlanNodeId(buildScanNodeId)

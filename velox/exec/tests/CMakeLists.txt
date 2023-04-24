@@ -13,6 +13,17 @@
 # limitations under the License.
 add_subdirectory(utils)
 
+add_executable(aggregate_companion_adapter_test
+               AggregateCompanionAdapterTest.cpp)
+
+add_test(
+  NAME aggregate_companion_adapter_test
+  COMMAND aggregate_companion_adapter_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(aggregate_companion_adapter_test velox_exec
+                      velox_function_registry gtest gtest_main)
+
 add_executable(
   velox_exec_test
   AggregationTest.cpp
@@ -20,7 +31,6 @@ add_executable(
   ArrowStreamTest.cpp
   AssignUniqueIdTest.cpp
   AsyncConnectorTest.cpp
-  CrossJoinTest.cpp
   CustomJoinTest.cpp
   EnforceSingleRowTest.cpp
   FilterProjectTest.cpp
@@ -36,6 +46,7 @@ add_executable(
   MergeJoinTest.cpp
   MergeTest.cpp
   MultiFragmentTest.cpp
+  NestedLoopJoinTest.cpp
   OrderByTest.cpp
   PartitionedOutputBufferManagerTest.cpp
   PlanNodeSerdeTest.cpp
@@ -86,7 +97,6 @@ add_test(
 target_link_libraries(
   velox_exec_test
   velox_aggregates
-  velox_aggregates_test_lib
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils

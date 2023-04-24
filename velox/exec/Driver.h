@@ -387,8 +387,8 @@ struct DriverFactory {
   /// and grouped execution and must be created in ungrouped execution pipeline
   /// and skipped in grouped execution pipeline.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeHashJoinNodeIds;
-  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Cross Joins.
-  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeCrossJoinNodeIds;
+  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Nested Loop Joins.
+  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeNestedLoopJoinNodeIds;
 
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
@@ -448,9 +448,9 @@ struct DriverFactory {
   /// this pipeline.
   std::vector<core::PlanNodeId> needsHashJoinBridges() const;
 
-  /// Returns plan node IDs for which Cross Join Bridges must be created based
-  /// on this pipeline.
-  std::vector<core::PlanNodeId> needsCrossJoinBridges() const;
+  /// Returns plan node IDs for which Nested Loop Join Bridges must be created
+  /// based on this pipeline.
+  std::vector<core::PlanNodeId> needsNestedLoopJoinBridges() const;
 };
 
 // Begins and ends a section where a thread is running but not

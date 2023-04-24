@@ -14,13 +14,13 @@
 add_library(
   velox_exec
   Aggregate.cpp
+  AggregateCompanionAdapter.cpp
+  AggregateCompanionSignatures.cpp
   AggregateFunctionRegistry.cpp
   AggregationMasks.cpp
   AggregateWindow.cpp
   ArrowStream.cpp
   ContainerRowSerde.cpp
-  CrossJoinBuild.cpp
-  CrossJoinProbe.cpp
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
@@ -40,6 +40,8 @@ add_library(
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
+  NestedLoopJoinBuild.cpp
+  NestedLoopJoinProbe.cpp
   Operator.cpp
   OperatorUtils.cpp
   OrderBy.cpp

@@ -60,6 +60,7 @@ add_executable(
   MapTest.cpp
   MapZipWithTest.cpp
   NotTest.cpp
+  RandTest.cpp
   ReduceTest.cpp
   RegexpReplaceTest.cpp
   RepeatTest.cpp
@@ -67,6 +68,7 @@ add_executable(
   RoundTest.cpp
   ScalarFunctionRegTest.cpp
   SliceTest.cpp
+  SequenceTest.cpp
   SplitTest.cpp
   StringFunctionsTest.cpp
   TransformTest.cpp

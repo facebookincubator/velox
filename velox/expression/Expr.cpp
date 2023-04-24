@@ -316,7 +316,7 @@ void Expr::evalSimplifiedImpl(
     if (!remainingRows.hasSelections()) {
       releaseInputValues(context);
       result =
-          BaseVector::createNullConstant(type(), rows.size(), context.pool());
+          BaseVector::createNullConstant(type(), rows.end(), context.pool());
       return;
     }
 
@@ -338,7 +338,7 @@ void Expr::evalSimplifiedImpl(
         if (!remainingRows.hasSelections()) {
           releaseInputValues(context);
           result = BaseVector::createNullConstant(
-              type(), rows.size(), context.pool());
+              type(), rows.end(), context.pool());
           return;
         }
       }
@@ -535,7 +535,7 @@ void Expr::evalFlatNoNullsImpl(
       // No need to re-evaluate constant expression. Simply move constant values
       // from constantInputs_.
       inputValues_[i] = std::move(constantInputs_[i]);
-      inputValues_[i]->resize(rows.size());
+      inputValues_[i]->resize(rows.end());
     } else {
       inputs_[i]->evalFlatNoNulls(rows, context, inputValues_[i]);
     }
@@ -643,7 +643,7 @@ void Expr::evaluateSharedSubexpr(
     eval(rows, context, result);
 
     if (!sharedSubexprRows) {
-      sharedSubexprRows = context.execCtx()->getSelectivityVector(rows.size());
+      sharedSubexprRows = context.execCtx()->getSelectivityVector(rows.end());
     }
 
     *sharedSubexprRows = rows;
@@ -739,7 +739,7 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
   // Attempt peeling.
   VELOX_CHECK(!vectorsToPeel.empty());
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       vectorsToPeel, rowsToPeel, localDecoded, propagatesNulls_, peeledVectors);
 
   if (!peeledEncoding) {
@@ -1035,7 +1035,7 @@ void Expr::setAllNulls(
     result->addNulls(notNulls.get()->asRange().bits(), rows);
     return;
   }
-  result = BaseVector::createNullConstant(type(), rows.size(), context.pool());
+  result = BaseVector::createNullConstant(type(), rows.end(), context.pool());
 }
 
 namespace {
@@ -1269,7 +1269,7 @@ bool Expr::applyFunctionWithPeeling(
   ScopedContextSaver saver;
   // Attempt peeling.
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       inputValues_,
       applyRows,
       localDecoded,
