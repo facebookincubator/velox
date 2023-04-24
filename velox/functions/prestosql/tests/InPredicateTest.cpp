@@ -330,7 +330,6 @@ TEST_F(InPredicateTest, reusableResult) {
   auto b2 = makeFlatVector<int64_t>({100, 105, 110, 115, 120, 125});
   auto data2 = makeRowVector({"a", "b"}, {a2, b2});
 
-  // Queries.
   std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   auto plan = PlanBuilder(pool_.get())
                   .values({data1, data2})
@@ -339,6 +338,7 @@ TEST_F(InPredicateTest, reusableResult) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan).copyResults(pool());
-  auto expected =makeRowVector({"b"}, {makeFlatVector<int64_t>({5, 105, 110})});
+  auto expected =
+      makeRowVector({"b"}, {makeFlatVector<int64_t>({5, 105, 110})});
   assertEqualVectors(expected, result);
 }
