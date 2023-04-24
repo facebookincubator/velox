@@ -343,6 +343,7 @@ bool HiveInsertTableHandle::isInsertTable() const {
 
 folly::dynamic HiveInsertTableHandle::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "HiveInsertTableHandle";
   folly::dynamic arr = folly::dynamic::array;
   for (const auto& ic : inputColumns_) {
     arr.push_back(ic->serialize());
@@ -350,7 +351,7 @@ folly::dynamic HiveInsertTableHandle::serialize() const {
 
   obj["inputColumns"] = arr;
   obj["locationHandle"] = locationHandle_->serialize();
-  return arr;
+  return obj;
 }
 
 HiveInsertTableHandlePtr HiveInsertTableHandle::create(
@@ -360,6 +361,50 @@ HiveInsertTableHandlePtr HiveInsertTableHandle::create(
   auto locationHandle =
       ISerializable::deserialize<LocationHandle>(obj["locationHandle"]);
   return std::make_shared<HiveInsertTableHandle>(inputColumns, locationHandle);
+}
+
+void HiveInsertTableHandle::registerSerDe() {
+  auto& registry = DeserializationRegistryForSharedPtr();
+  registry.Register("HiveInsertTableHandle", HiveInsertTableHandle::create);
+}
+
+std::string HiveInsertTableHandle::toString() const {
+  std::ostringstream out;
+  out << "HiveInsertTableHandle [inputColumns: [";
+  for (const auto& i : inputColumns_) {
+    out << " " << i->toString();
+  }
+  out << " ], locationHandle: " << locationHandle_->toString() << "]";
+  return out.str();
+}
+
+std::string LocationHandle::toString() const {
+  return fmt::format(
+      "LocationHandle [targetPath: {}, writePath: {}, tableType: {},",
+      targetPath_,
+      writePath_,
+      tableTypeName(tableType_));
+}
+
+void LocationHandle::registerSerDe() {
+  auto& registry = DeserializationRegistryForSharedPtr();
+  registry.Register("LocationHandle", LocationHandle::create);
+}
+
+folly::dynamic LocationHandle::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "LocationHandle";
+  obj["targetPath"] = targetPath_;
+  obj["writePath"] = writePath_;
+  obj["tableType"] = tableTypeName(tableType_);
+  return obj;
+}
+
+LocationHandlePtr LocationHandle::create(const folly::dynamic& obj) {
+  auto targetPath = obj["targetPath"].asString();
+  auto writePath = obj["writePath"].asString();
+  auto tableType = tableTypeFromName(obj["tableType"].asString());
+  return std::make_shared<LocationHandle>(targetPath, writePath, tableType);
 }
 
 } // namespace facebook::velox::connector::hive

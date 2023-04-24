@@ -16,29 +16,19 @@
 
 #include "velox/connectors/hive/HiveConnector.h"
 #include <gtest/gtest.h>
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
 
 using namespace facebook::velox::common;
+using namespace facebook::velox::exec::test;
 
 class HiveConnectorTest : public testing::Test {
  protected:
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::addDefaultLeafMemoryPool();
 };
-
-HiveColumnHandle makeColumnHandle(
-    const std::string& name,
-    const TypePtr& type,
-    const std::vector<std::string>& requiredSubfields) {
-  std::vector<Subfield> subfields;
-  for (auto& path : requiredSubfields) {
-    subfields.emplace_back(path);
-  }
-  return HiveColumnHandle(
-      name, HiveColumnHandle::ColumnType::kRegular, type, std::move(subfields));
-}
 
 void validateNullConstant(const ScanSpec& spec, const Type& type) {
   ASSERT_TRUE(spec.isConstant());

@@ -33,17 +33,6 @@ class TpchColumnHandle : public ColumnHandle {
     return name_;
   }
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = name_;
-    return obj;
-  }
-
-  static ColumnHandlePtr create(const folly::dynamic& obj) {
-    auto name = obj["name"].asString();
-    return std::make_shared<TpchColumnHandle>(name);
-  }
-
  private:
   const std::string name_;
 };

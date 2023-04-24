@@ -56,20 +56,13 @@ class LocationHandle : public ISerializable {
     return tableType_;
   }
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["targetPath"] = targetPath_;
-    obj["writePath"] = writePath_;
-    obj["tableType"] = tableTypeName(tableType_);
-    return obj;
-  }
+  std::string toString() const;
 
-  static LocationHandlePtr create(const folly::dynamic& obj) {
-    auto targetPath = obj["targetPath"].asString();
-    auto writePath = obj["writePath"].asString();
-    auto tableType = tableTypeFromName(obj["tableType"].asString());
-    return std::make_shared<LocationHandle>(targetPath, writePath, tableType);
-  }
+  static void registerSerDe();
+
+  folly::dynamic serialize() const override;
+
+  static LocationHandlePtr create(const folly::dynamic& obj);
 
   static const std::string tableTypeName(LocationHandle::TableType type);
 
@@ -116,6 +109,10 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   folly::dynamic serialize() const override;
 
   static HiveInsertTableHandlePtr create(const folly::dynamic& obj);
+
+  static void registerSerDe();
+
+  std::string toString() const;
 
  private:
   const std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns_;

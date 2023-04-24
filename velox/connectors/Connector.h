@@ -56,6 +56,11 @@ struct ConnectorSplit {
 class ColumnHandle : public ISerializable {
  public:
   virtual ~ColumnHandle() = default;
+
+  folly::dynamic serialize() const override;
+
+ protected:
+  static folly::dynamic serializeBase(std::string_view name);
 };
 
 using ColumnHandlePtr = std::shared_ptr<const ColumnHandle>;
@@ -73,11 +78,10 @@ class ConnectorTableHandle : public ISerializable {
     return connectorId_;
   }
 
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["connectorId"] = connectorId_;
-    return obj;
-  }
+  virtual folly::dynamic serialize() const override;
+
+ protected:
+  folly::dynamic serializeBase(std::string_view name) const;
 
  private:
   const std::string connectorId_;
