@@ -52,9 +52,11 @@ sudo --preserve-env apt update && sudo apt install -y libunwind-dev && \
   libzstd-dev \
   libre2-dev \
   libsnappy-dev \
+  libthrift-dev \
   liblzo2-dev \
   bison \
   flex \
+  libfl-dev \
   tzdata \
   wget
 
