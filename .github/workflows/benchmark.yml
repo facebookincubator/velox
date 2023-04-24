@@ -67,7 +67,7 @@ jobs:
 
       - name: "Install dependencies"
         if: ${{ github.event_name == 'pull_request' }}
-        run: source(velox/scripts/setup-ubuntu.sh)
+        run: source velox/scripts/setup-ubuntu.sh
 
       - name: "Checkout Merge Base"
         if: ${{ github.event_name == 'pull_request' }}
@@ -111,7 +111,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "Install dependencies"
-        run: source(velox/scripts/setup-ubuntu.sh)
+        run: source velox/scripts/setup-ubuntu.sh
 
       - name: Build Contender Benchmarks
         working-directory: velox
