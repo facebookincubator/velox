@@ -172,8 +172,8 @@ void registerFunctions(const std::string& prefix) {
       Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
 
   // Register bloom filter function
-  exec::registerVectorFunction(
-      prefix + "might_contain", mightContainSignatures(), makeMightContain());
+  exec::registerStatefulVectorFunction(
+      prefix + "might_contain", mightContainSignatures(), makeMightContain);
 }
 
 } // namespace sparksql
