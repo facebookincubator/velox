@@ -23,3 +23,5 @@ target_link_libraries(
   velox_exec_test_lib
   fmt::fmt
   Folly::folly)
+
+target_include_directories(velox_s3read_benchmark PRIVATE include)

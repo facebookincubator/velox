@@ -16,6 +16,7 @@
 
 add_library(velox_hdfs HdfsFileSystem.cpp HdfsReadFile.cpp HdfsWriteFile.cpp)
 target_link_libraries(velox_hdfs Folly::folly ${LIBHDFS3})
+target_include_directories(velox_hdfs PUBLIC include)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

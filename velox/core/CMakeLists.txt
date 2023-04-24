@@ -26,6 +26,7 @@ target_include_directories(velox_core PUBLIC include)
 target_link_libraries(
   velox_core
   velox_arrow_bridge
+  velox_connector
   velox_caching
   velox_config
   velox_expression_functions

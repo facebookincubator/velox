@@ -15,6 +15,7 @@ add_executable(velox_fuzzer_connector_test FuzzerConnectorTest.cpp)
 
 add_test(velox_fuzzer_connector_test velox_fuzzer_connector_test)
 
+target_include_directories(velox_fuzzer_connector_test PRIVATE include)
 target_link_libraries(
   velox_fuzzer_connector_test
   velox_fuzzer_connector

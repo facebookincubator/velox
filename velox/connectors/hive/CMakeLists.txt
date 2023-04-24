@@ -12,17 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_library(velox_hive_headers INTERFACE)
+target_include_directories(velox_hive_headers INTERFACE include)
+
 add_library(
   velox_hive_connector OBJECT
   HiveConfig.cpp HiveConnector.cpp HiveDataSink.cpp HivePartitionUtil.cpp
   FileHandle.cpp PartitionIdGenerator.cpp)
 
-target_link_libraries(velox_hive_connector velox_connector
+target_link_libraries(velox_hive_connector velox_hive_headers velox_connector
                       velox_dwio_dwrf_reader velox_dwio_dwrf_writer velox_file)
 
 add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 
-target_link_libraries(velox_hive_partition_function velox_core)
+target_link_libraries(velox_hive_partition_function velox_hive_headers velox_core velox_vector)
 
 add_subdirectory(storage_adapters)
 

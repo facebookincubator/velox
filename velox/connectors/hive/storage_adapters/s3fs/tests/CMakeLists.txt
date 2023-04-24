@@ -23,5 +23,7 @@ target_link_libraries(
   velox_hive_connector
   velox_dwio_common_exception
   velox_exec
+  Boost::headers
   gtest
   gtest_main)
+target_include_directories(velox_s3file_test PRIVATE include)

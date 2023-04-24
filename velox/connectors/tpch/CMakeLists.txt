@@ -15,6 +15,7 @@
 add_library(velox_tpch_connector OBJECT TpchConnector.cpp)
 
 target_link_libraries(velox_tpch_connector velox_connector velox_tpch_gen)
+target_include_directories(velox_tpch_connector PUBLIC include)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

@@ -14,6 +14,7 @@
 
 add_library(velox_fuzzer_connector OBJECT FuzzerConnector.cpp)
 
+target_include_directories(velox_fuzzer_connector PUBLIC include tests/include)
 target_link_libraries(velox_fuzzer_connector velox_connector
                       velox_vector_fuzzer)
 
