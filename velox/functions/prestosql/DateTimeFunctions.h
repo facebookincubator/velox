@@ -184,6 +184,9 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
     // truncate nanosecond precision for ISO 8601 string
 
     auto timestamp = this->toTimestamp(timestampWithTimezone);
+    auto timezone = *timestampWithTimezone.template at<1>();
+    auto timezoneName = util::getTimeZoneName(timezone);
+
     auto isoStr = timestamp.toString().substr(0, 23);
     result.resize(isoStr.size());
     result = isoStr;
