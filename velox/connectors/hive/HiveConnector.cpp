@@ -41,7 +41,66 @@ namespace facebook::velox::connector::hive {
 namespace {
 static const char* kPath = "$path";
 static const char* kBucket = "$bucket";
+
+std::unordered_map<HiveColumnHandle::ColumnType, std::string>
+columnTypeNames() {
+  return {
+      {HiveColumnHandle::ColumnType::kPartitionKey, "kPartitionKey"},
+      {HiveColumnHandle::ColumnType::kRegular, "kRegular"},
+      {HiveColumnHandle::ColumnType::kSynthesized, "kSynthesized"},
+  };
+}
+
+template <typename K, typename V>
+std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
+  std::unordered_map<V, K> inverted;
+  for (const auto& [key, value] : mapping) {
+    inverted.emplace(value, key);
+  }
+  return inverted;
+}
 } // namespace
+
+const std::string HiveColumnHandle::columnTypeName(
+    HiveColumnHandle::ColumnType type) {
+  static const auto ctNames = columnTypeNames();
+  return ctNames.at(type);
+}
+
+HiveColumnHandle::ColumnType HiveColumnHandle::columnTypeFromName(
+    const std::string& name) {
+  static const auto nameColumnTypes = invertMap(columnTypeNames());
+  return nameColumnTypes.at(name);
+}
+
+folly::dynamic HiveColumnHandle::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = name_;
+  obj["columnType"] = columnTypeName(columnType_);
+  obj["dataType"] = dataType_->serialize();
+  folly::dynamic requiredSubfields = folly::dynamic::array;
+  for (const auto& subfield : requiredSubfields_) {
+    requiredSubfields.push_back(subfield.toString());
+  }
+  obj["requiredSubfields"] = requiredSubfields;
+  return obj;
+}
+
+ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {
+  auto name = obj["name"].asString();
+  auto columnType = columnTypeFromName(obj["columnType"].asString());
+  auto dataType = ISerializable::deserialize<Type>(obj["dataType"]);
+
+  const auto& arr = obj["requiredSubfields"];
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.reserve(arr.size());
+  for (auto& s : arr) {
+    requiredSubfields.emplace_back(s.asString());
+  }
+
+  return std::make_shared<HiveColumnHandle>(
+      name, columnType, dataType, std::move(requiredSubfields));
+}
 
 HiveTableHandle::HiveTableHandle(
     std::string connectorId,
@@ -81,6 +140,55 @@ std::string HiveTableHandle::toString() const {
     out << ", remaining filter: (" << remainingFilter_->toString() << ")";
   }
   return out.str();
+}
+
+folly::dynamic HiveTableHandle::serialize() const {
+  folly::dynamic obj = ConnectorTableHandle::serialize();
+  obj["tableName"] = tableName_;
+  obj["filterPushdownEnabled"] = filterPushdownEnabled_;
+
+  // SubfiledFilters: common::Subfield -> common::Filter
+  folly::dynamic subfieldFilters = folly::dynamic::array;
+  for (const auto& [subfield, filter] : subfieldFilters_) {
+    folly::dynamic pair = folly::dynamic::object;
+    pair["subfield"] = subfield.toString();
+    // TODO: FIX IT after #4648 being merged
+    // pair["filter"] = filter->seialize();
+    subfieldFilters.push_back(pair);
+  }
+
+  obj["subfieldFilters"] = subfieldFilters;
+  obj["remainingFilter"] = remainingFilter_->serialize();
+  return obj;
+}
+
+ConnectorTableHandlePtr HiveTableHandle::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto connectorId = obj["connectorId"].asString();
+  auto tableName = obj["tableName"].asString();
+  auto filterPushdownEnabled = obj["filterPushdownEnabled"].asBool();
+  // TODO: ConstantTypedExpr::create need MemoryPool* the second parameter of
+  // deserialize
+  auto remainingFilter =
+      ISerializable::deserialize<core::ITypedExpr>(obj["remainingFilter"]);
+
+  SubfieldFilters subfieldFilters;
+  folly::dynamic subfieldFiltersObj = obj["subfieldFilters"];
+  for (const auto& subfieldFilter : subfieldFiltersObj) {
+    common::Subfield subfield(subfieldFilter["subfield"].asString());
+    // TODO: FIX IT after #4648 being merged
+    // common::Filter filter =
+    // ISerializable::deserialize<Filter>(subfieldFilter["filter"]);
+    // subfieldFilters[common::Subfield(std::move(subfield.path()))] =
+    // filter->clone();
+  }
+  return std::make_shared<HiveTableHandle>(
+      connectorId,
+      tableName,
+      filterPushdownEnabled,
+      std::move(subfieldFilters),
+      remainingFilter);
 }
 
 namespace {

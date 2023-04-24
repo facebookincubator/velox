@@ -25,8 +25,11 @@ class Writer;
 namespace facebook::velox::connector::hive {
 class HiveColumnHandle;
 
+class LocationHandle;
+using LocationHandlePtr = std::shared_ptr<const LocationHandle>;
+
 /// Location related properties of the Hive table to be written.
-class LocationHandle {
+class LocationHandle : public ISerializable {
  public:
   enum class TableType {
     kNew, // Write to a new table to be created.
@@ -53,6 +56,25 @@ class LocationHandle {
     return tableType_;
   }
 
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["targetPath"] = targetPath_;
+    obj["writePath"] = writePath_;
+    obj["tableType"] = tableTypeName(tableType_);
+    return obj;
+  }
+
+  static LocationHandlePtr create(const folly::dynamic& obj) {
+    auto targetPath = obj["targetPath"].asString();
+    auto writePath = obj["writePath"].asString();
+    auto tableType = tableTypeFromName(obj["tableType"].asString());
+    return std::make_shared<LocationHandle>(targetPath, writePath, tableType);
+  }
+
+  static const std::string tableTypeName(LocationHandle::TableType type);
+
+  static LocationHandle::TableType tableTypeFromName(const std::string& name);
+
  private:
   // Target directory path.
   const std::string targetPath_;
@@ -61,6 +83,9 @@ class LocationHandle {
   // Whether the table to be written is new, already existing or temporary.
   const TableType tableType_;
 };
+
+class HiveInsertTableHandle;
+using HiveInsertTableHandlePtr = std::shared_ptr<HiveInsertTableHandle>;
 
 /**
  * Represents a request for Hive write.
@@ -87,6 +112,10 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   bool isPartitioned() const;
 
   bool isInsertTable() const;
+
+  folly::dynamic serialize() const override;
+
+  static HiveInsertTableHandlePtr create(const folly::dynamic& obj);
 
  private:
   const std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns_;

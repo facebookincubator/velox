@@ -53,12 +53,14 @@ struct ConnectorSplit {
   }
 };
 
-class ColumnHandle {
+class ColumnHandle : public ISerializable {
  public:
   virtual ~ColumnHandle() = default;
 };
 
-class ConnectorTableHandle {
+using ColumnHandlePtr = std::shared_ptr<const ColumnHandle>;
+
+class ConnectorTableHandle : public ISerializable {
  public:
   explicit ConnectorTableHandle(std::string connectorId)
       : connectorId_(std::move(connectorId)) {}
@@ -71,14 +73,22 @@ class ConnectorTableHandle {
     return connectorId_;
   }
 
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["connectorId"] = connectorId_;
+    return obj;
+  }
+
  private:
   const std::string connectorId_;
 };
 
+using ConnectorTableHandlePtr = std::shared_ptr<const ConnectorTableHandle>;
+
 /**
  * Represents a request for writing to connector
  */
-class ConnectorInsertTableHandle {
+class ConnectorInsertTableHandle : public ISerializable {
  public:
   virtual ~ConnectorInsertTableHandle() {}
 

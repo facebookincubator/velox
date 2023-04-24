@@ -78,6 +78,16 @@ class HiveColumnHandle : public ColumnHandle {
     return columnType_ == ColumnType::kPartitionKey;
   }
 
+  folly::dynamic serialize() const override;
+
+  static ColumnHandlePtr create(const folly::dynamic& obj);
+
+  static const std::string columnTypeName(
+      HiveColumnHandle::ColumnType columnType);
+
+  static HiveColumnHandle::ColumnType columnTypeFromName(
+      const std::string& name);
+
  private:
   const std::string name_;
   const ColumnType columnType_;
@@ -112,6 +122,12 @@ class HiveTableHandle : public ConnectorTableHandle {
   }
 
   std::string toString() const override;
+
+  folly::dynamic serialize() const override;
+
+  static ConnectorTableHandlePtr create(
+      const folly::dynamic& obj,
+      void* context);
 
  private:
   const std::string tableName_;

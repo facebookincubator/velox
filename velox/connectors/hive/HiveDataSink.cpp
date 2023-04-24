@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/HiveConnector.h"
 
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConfig.h"
@@ -61,7 +62,35 @@ std::string makeUuid() {
   return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
 }
 
+std::unordered_map<LocationHandle::TableType, std::string> tableTypeNames() {
+  return {
+      {LocationHandle::TableType::kNew, "kNew"},
+      {LocationHandle::TableType::kExisting, "kExisting"},
+  };
+}
+
+template <typename K, typename V>
+std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
+  std::unordered_map<V, K> inverted;
+  for (const auto& [key, value] : mapping) {
+    inverted.emplace(value, key);
+  }
+  return inverted;
+}
+
 } // namespace
+
+const std::string LocationHandle::tableTypeName(
+    LocationHandle::TableType type) {
+  static const auto tableTypes = tableTypeNames();
+  return tableTypes.at(type);
+}
+
+LocationHandle::TableType LocationHandle::tableTypeFromName(
+    const std::string& name) {
+  static const auto nameTableTypes = invertMap(tableTypeNames());
+  return nameTableTypes.at(name);
+}
 
 HiveDataSink::HiveDataSink(
     RowTypePtr inputType,
@@ -310,6 +339,27 @@ bool HiveInsertTableHandle::isPartitioned() const {
 
 bool HiveInsertTableHandle::isInsertTable() const {
   return locationHandle_->tableType() == LocationHandle::TableType::kExisting;
+}
+
+folly::dynamic HiveInsertTableHandle::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  folly::dynamic arr = folly::dynamic::array;
+  for (const auto& ic : inputColumns_) {
+    arr.push_back(ic->serialize());
+  }
+
+  obj["inputColumns"] = arr;
+  obj["locationHandle"] = locationHandle_->serialize();
+  return arr;
+}
+
+HiveInsertTableHandlePtr HiveInsertTableHandle::create(
+    const folly::dynamic& obj) {
+  auto inputColumns = ISerializable::deserialize<std::vector<HiveColumnHandle>>(
+      obj["inputColumns"]);
+  auto locationHandle =
+      ISerializable::deserialize<LocationHandle>(obj["locationHandle"]);
+  return std::make_shared<HiveInsertTableHandle>(inputColumns, locationHandle);
 }
 
 } // namespace facebook::velox::connector::hive
