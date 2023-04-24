@@ -716,10 +716,11 @@ TEST_F(ArithmeticTest, normalCDF) {
   EXPECT_EQ(0.5, normal_cdf(0, kInf, 0));
   EXPECT_THAT(normal_cdf(kNan, 1, 0), IsNan());
   EXPECT_THAT(normal_cdf(0, 1, kNan), IsNan());
-  
-  VELOX_ASSERT_THROW (normal_cdf(0, 0, 0.1985),"standard deviation must be > 0");
-  VELOX_ASSERT_THROW (normal_cdf(0, kNan, 0.1985),"standard deviation must be > 0");
 
+  VELOX_ASSERT_THROW(
+      normal_cdf(0, 0, 0.1985), "standard deviation must be > 0");
+  VELOX_ASSERT_THROW(
+      normal_cdf(0, kNan, 0.1985), "standard deviation must be > 0");
 }
 } // namespace
 } // namespace facebook::velox
