@@ -1194,27 +1194,20 @@ TEST_P(MemoryAllocatorTest, allocation) {
   allocation->clear();
 }
 
-TEST_P(MemoryAllocatorTest, exceedLargestSizeClass) {
-  const size_t kExceedLargestSizeClass = instance_->largestSizeClass() + 1;
+TEST_P(MemoryAllocatorTest, exceedSizeClass) {
   AllocationPool pool(pool_.get());
-  const auto* allocation = pool.allocationAt(0);
-  pool.newRun(1 * AllocationTraits::kPageSize);
+  pool.newRun(AllocationTraits::pageBytes(1));
+  auto* allocation = pool.allocationAt(0);
   ASSERT_EQ(allocation->numRuns(), 1);
   std::for_each(
       instance_->sizeClasses().begin(),
-      instance_->sizeClasses().end() - 1,
+      instance_->sizeClasses().end(),
       [&](const auto& sizeClass) {
         ASSERT_NO_THROW(
-            pool.newRun((sizeClass + 1) * AllocationTraits::kPageSize));
+            pool.newRun(AllocationTraits::pageBytes(sizeClass + 1)));
+        allocation = pool.allocationAt(pool.currentRunIndex());
         ASSERT_EQ(allocation->numRuns(), 1);
       });
-  ASSERT_NO_THROW(
-      pool.newRun(kExceedLargestSizeClass * AllocationTraits::kPageSize));
-  if (useMmap_) {
-    ASSERT_EQ(allocation->numRuns(), 2);
-  } else {
-    ASSERT_EQ(allocation->numRuns(), 1);
-  }
   pool.clear();
 }
 
