@@ -11,8 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 add_library(velox_duckdb_conversion DuckConversion.cpp DuckWrapper.cpp)
 
+target_include_directories(velox_duckdb_conversion PUBLIC include)
 target_link_libraries(velox_duckdb_conversion velox_core velox_vector duckdb
                       tpch_extension)
 
