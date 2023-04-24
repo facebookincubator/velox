@@ -30,24 +30,69 @@ template <typename T>
 struct CurrentTimezoneFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  // const date::time_zone* sessionTimeZone = nullptr;
+  const date::time_zone* timeZone_ = nullptr;
 
   // FOLLY_ALWAYS_INLINE void initialize(
-  //     const core::QueryConfig& config){
-  //   sessionTimeZone = getTimeZoneFromConfig(config);
+  //     const core::QueryConfig& config,
+  //     const arg_type<float>& /* input */){
+  //   timeZone_ = getTimeZoneFromConfig(config);
+
+  //   if(timeZone_ == nullptr)
+  //   {
+  //     VELOX_UNSUPPORTED("null timezone");
+  //   }
   // }
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result){
-    // auto timeZone_str = sessionTimeZone->name();
-    // auto timeZone_size = timeZone_str.size();
-    // result.resize(timeZone_size);
-    // result = timeZone_str;
-    result = "America/Los Angeles";
+  std::optional<int64_t> timeZone_ID;
+  std::optional<int64_t> timeZone_str;
 
-    // std::memcpy(result.data(), "America/Los Angeles", 20);
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<float>& /* input */) {
+
+    timeZone_str = config.sessionTimezone();
+    if (!timeZone_str.empty()) {
+      timeZone_ID = util::getTimeZoneID(timeZone_str);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result, 
+      const arg_type<float>& input){
+    // auto timeZone_str = timeZone_->name();
+
+    if(timeZone_str != nullptr) {
+      auto timeZone_size = (timeZone_str).size();
+      result.resize(timeZone_size);
+      result = timeZone_str; 
+    } else {
+      result.resize(21);
+      result = "America/Los Angeles";
+
+      // auto testStr = "America/Los Angeles";
+      // std::memcpy(result.data(), testStr, 21);
+    }
+
+    // result.resize(21);
+    // result = "America/Los Angeles";
+
+    // auto testStr = "America/Los Angeles";
+    // result.resize(testStr.size());
+    // std::memcpy(result.data(), testStr, testStr.size());
   }
 };
+
+// template <typename T>
+// struct FromIso8601TimestampFunction : public TimestampWithTimezoneSupport<T>{
+//   VELOX_DEFINE_FUNCTION_TYPES(T);
+
+//   FOLLY_ALWAYS_INLINE bool call(
+//       out_type<TimestampWithTimezone>& result,
+//       const arg_type<Varchar>& iso8601_input) {
+//     result = toUnixtime(timestamp);
+//     return true;
+//   }
+// };
 
 template <typename T>
 struct ToUnixtimeFunction {

@@ -266,11 +266,11 @@ TEST_F(DateTimeFunctionsTest, dayOfXxxSignatures) {
 }
 
 TEST_F(DateTimeFunctionsTest, currentTimezoneTest) {
-  const auto currentTimezone = [&]() {
-    return evaluateOnce<std::string>("current_timezone");
+  const auto currentTimezone = [&](std::optional<float> value) {
+    return evaluateOnce<std::string, float>("current_timezone(c0)", value);
   };
 
-  std::optional<std::string> currentTimezoneStr = currentTimezone();
+  std::optional<std::string> currentTimezoneStr = currentTimezone(10.5);
 
   EXPECT_EQ("America/Los_Angeles", currentTimezoneStr);
 }
