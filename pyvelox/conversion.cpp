@@ -33,9 +33,10 @@ void addConversionBindings(py::module& m, bool asModuleLocalDefinitions) {
 
   m.def(
       "import_from_arrow",
-      [](uintptr_t arrowArrayPtr, uintptr_t arrowSchemaPtr) {
-        auto arrowArray = reinterpret_cast<ArrowArray*>(arrowArrayPtr);
-        auto arrowSchema = reinterpret_cast<ArrowSchema*>(arrowSchemaPtr);
+      [](py::object inputArrowArray) {
+        auto arrowArray = new ArrowArray();
+        auto arrowSchema = new ArrowSchema();
+        inputArrowArray.attr("_export_to_c")(reinterpret_cast<uintptr_t>(arrowArray), reinterpret_cast<uintptr_t>(arrowSchema));
         std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{
             facebook::velox::memory::addDefaultLeafMemoryPool()};
         return importFromArrowAsOwner(*arrowSchema, *arrowArray, pool_.get());
