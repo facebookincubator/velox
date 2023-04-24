@@ -12,31 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_dwio_dwrf_writer
-  ColumnWriter.cpp
-  FlatMapColumnWriter.cpp
-  FlushPolicy.cpp
-  LayoutPlanner.cpp
-  RatioTracker.cpp
-  StatisticsBuilder.cpp
-  StatisticsBuilderUtils.cpp
-  Writer.cpp
-  WriterBase.cpp
-  WriterContext.cpp
-  WriterSink.cpp)
-
-target_link_libraries(
-  velox_dwio_dwrf_writer
-  velox_dwio_common
-  velox_dwio_dwrf_common
-  velox_dwio_dwrf_utils
-  velox_process
-  velox_time
-  velox_vector
-  velox_common_strings
-  Boost::headers
-  lz4::lz4
-  lzo2::lzo2
-  zstd::zstd
-  ZLIB::ZLIB)
+add_library(velox_common_strings INTERFACE)
+target_include_directories(velox_common_strings INTERFACE include)
+target_link_libraries(velox_common_strings INTERFACE Folly::folly glog::glog)

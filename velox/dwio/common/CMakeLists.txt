@@ -59,6 +59,7 @@ target_link_libraries(
   velox_dwio_common_compression
   velox_dwio_common_encryption
   velox_dwio_common_exception
+  velox_common_strings
   velox_exception
   velox_expression
   velox_memory
