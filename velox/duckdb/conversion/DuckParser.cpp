@@ -242,10 +242,15 @@ std::shared_ptr<const core::IExpr> parseComparisonExpr(
   const auto& compExpr = dynamic_cast<ComparisonExpression&>(expr);
   std::vector<std::shared_ptr<const core::IExpr>> params{
       parseExpr(*compExpr.left, options), parseExpr(*compExpr.right, options)};
-  return callExpr(
-      normalizeFuncName(ExpressionTypeToOperator(expr.GetExpressionType())),
-      std::move(params),
-      getAlias(expr));
+  auto name =
+      normalizeFuncName(ExpressionTypeToOperator(expr.GetExpressionType()));
+  if (name == "neq") {
+    auto eqParams = params;
+    params.clear();
+    params.emplace_back(callExpr("eq", std::move(eqParams), {}));
+    name = "not";
+  }
+  return callExpr(name, std::move(params), getAlias(expr));
 }
 
 // Parse x between lower and upper

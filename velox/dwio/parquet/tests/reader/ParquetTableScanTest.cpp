@@ -135,6 +135,38 @@ TEST_F(ParquetTableScanTest, decimalSubfieldFilter) {
       "Scalar function signature is not supported: eq(DECIMAL(5,2), DECIMAL(5,1))");
 }
 
+TEST_F(ParquetTableScanTest, metadataFilter) {
+  // filter-0.parquet holds two columns (a: INTEGER, b: VARCHAR) and
+  // 4 rows in one row group. Data is in SNAPPY compressed format.
+  // The values are:
+  // +-----+-----+
+  // |   a |   b |
+  // |-----+-----|
+  // |   1 |   1 |
+  // |   2 |   0 |
+  // |   3 |   1 |
+  // |   4 |   0 |
+  // +-----+-----+
+  auto data = makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4}),
+       makeFlatVector<StringView>(
+           {StringView("1"),
+            StringView("0"),
+            StringView("1"),
+            StringView("0")})});
+  loadData(
+      getExampleFilePath("filter-0.parquet"),
+      ROW({"a", "b"}, {INTEGER(), VARCHAR()}),
+      data);
+
+  assertSelectWithFilter(
+      {"a", "b"},
+      {},
+      "not (a = 2::integer) or not (b = 1::varchar)",
+      "SELECT a, b FROM tmp");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::init(&argc, &argv, false);
