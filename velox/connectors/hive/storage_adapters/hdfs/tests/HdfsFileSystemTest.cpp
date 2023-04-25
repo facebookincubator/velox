@@ -190,6 +190,13 @@ TEST_F(HdfsFileSystemTest, initializeFsWithEndpointInfoInFilePath) {
       filesystems::getFileSystem(fullDestinationPath, nullptr);
   auto readFile = hdfsFileSystem->openFileForRead(fullDestinationPath);
   readData(readFile.get());
+
+  // Wrong endpoint info specified in hdfs file path.
+  const std::string wrongFullDestinationPath =
+      "hdfs://not_exist_host:" + hdfsPort + destinationPath;
+  VELOX_ASSERT_THROW(
+      filesystems::getFileSystem(wrongFullDestinationPath, nullptr),
+      "Unable to connect to HDFS");
 }
 
 TEST_F(HdfsFileSystemTest, oneFsInstanceForOneEndpoint) {
