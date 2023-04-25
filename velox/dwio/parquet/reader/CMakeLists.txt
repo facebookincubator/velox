@@ -12,17 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(${VELOX_ENABLE_QPL})
-  set(CompressionQpl "CompressionQpl.cpp")
-  set(CompressionQplDependency "qpl")
-else()
-  set(CompressionQpl "")
-  set(CompressionQplDependency "")
-endif()
-
 add_library(
   velox_dwio_native_parquet_reader
-  ${CompressionQpl}
   NestedStructureDecoder.cpp
   ParquetReader.cpp
   ParquetTypeWithId.cpp
@@ -43,5 +34,9 @@ target_link_libraries(
   arrow
   parquet
   thrift
-  ${CompressionQplDependency}
   ${FMT})
+
+if(${VELOX_ENABLE_QPL})
+  target_sources(velox_dwio_native_parquet_reader PUBLIC CompressionQpl.cpp)
+  target_link_libraries(velox_dwio_native_parquet_reader qpl)
+endif()

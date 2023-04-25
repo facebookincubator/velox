@@ -28,4 +28,5 @@ FetchContent_Declare(
   GIT_TAG ${GIT_QPL_TAG})
 set(QPL_INSTALL ON)
 set(QPL_BUILD_TESTS OFF)
+set(QPL_BUILD_EXAMPLES OFF)
 FetchContent_MakeAvailable(qpl)
