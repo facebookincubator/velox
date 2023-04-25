@@ -2848,24 +2848,6 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
       dateParse("116", "%y+"), "Invalid format: \"116\" is malformed at \"6\"");
 }
 
-TEST_F(DateTimeFunctionsTest, fromISO8601FunctionDate) {
-  const auto fromISODate = [&](const std::optional<std::string>& isoDateString) {
-    return evaluateOnce<Date>("from_iso8601_date(c0)", isoDateString);
-  };
-
-  // Date(0) is 1970-01-01.
-  EXPECT_EQ(Date(), fromISODate("1970-01-01T03:19:58.000"));
-  // Date(18297) is 2020-02-05.
-  EXPECT_EQ(Date(18297), fromISODate("2020-02-05T14:27:39.000"));
-  // Date(-18297) is 1919-11-28.
-  EXPECT_EQ(Date(-18297), fromISODate("1919-11-28T23:59:59.999"));
-
-  // Illegal date format.
-//   VELOX_ASSERT_THROW(
-//       fromISODate("2020-02-05 11:00"),
-//       "Unable to parse date value: \"2020-02-05 11:00\", expected format is (YYYY-MM-DDTHH:MM:SS.NNN)");
-}
-
 TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {
   const auto dateFunction = [&](const std::optional<std::string>& dateString) {
     return evaluateOnce<Date>("date(c0)", dateString);
@@ -3079,4 +3061,21 @@ TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
   VELOX_ASSERT_THROW(
       timezone_minute("2023-", "Pacific/Chatham"),
       "Unable to parse timestamp value: \"2023-\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
+}
+TEST_F(DateTimeFunctionsTest, fromISO8601FunctionDate) {
+  const auto fromISODate = [&](const std::optional<std::string>& isoDateString) {
+    return evaluateOnce<Date>("from_iso8601_date(c0)", isoDateString);
+  };
+
+  // Date(0) is 1970-01-01.
+  EXPECT_EQ(Date(), fromISODate("1970-01-01T03:19:58.000"));
+  // Date(18297) is 2020-02-05.
+  EXPECT_EQ(Date(18297), fromISODate("2020-02-05T14:27:39.000"));
+  // Date(-18297) is 1919-11-28.
+  EXPECT_EQ(Date(-18297), fromISODate("1919-11-28T23:59:59.999"));
+
+  // Illegal date format.
+//   VELOX_ASSERT_THROW(
+//       fromISODate("2020-02-05 11:00"),
+//       "Unable to parse date value: \"2020-02-05 11:00\", expected format is (YYYY-MM-DDTHH:MM:SS.NNN)");
 }
