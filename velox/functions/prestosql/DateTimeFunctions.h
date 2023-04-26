@@ -1086,14 +1086,13 @@ struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
 
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
-      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-    // Convert timestampWithTimezone to a timestamp representing the moment at
-    // the zone in timestampWithTimezone.
-    Timestamp inputTimeStamp = this->toTimestamp(timestampWithTimezone);
+      const arg_type<TimestampWithTimezone>& input) {
+    // Convert timestampWithTimezone input to a timestamp representing the
+    // moment at the zone in timestampWithTimezone.
+    Timestamp inputTimeStamp = this->toTimestamp(input);
 
     // Get the given timezone name
-    auto timezone =
-        util::getTimeZoneName(*timestampWithTimezone.template at<1>());
+    auto timezone = util::getTimeZoneName(*input.template at<1>());
 
     auto* timezonePtr = date::locate_zone(timezone);
 
