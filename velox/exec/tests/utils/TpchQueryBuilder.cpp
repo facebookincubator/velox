@@ -66,6 +66,12 @@ std::vector<std::string> mergeColumnNames(
       secondColumnVector.end());
   return mergedColumnVector;
 };
+
+const parse::ParseOptions getTpcHParseOptions() {
+  parse::ParseOptions parseOptions;
+  parseOptions.parseDecimalAsDouble = false;
+  return parseOptions;
+}
 } // namespace
 
 void TpchQueryBuilder::initialize(const std::string& dataPath) {
@@ -183,6 +189,7 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
 
   auto plan =
       PlanBuilder()
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(kLineitem, selectedRowType, fileColumnNames, {filter})
           .capturePlanNodeId(lineitemPlanNodeId)
           .project(
@@ -269,6 +276,7 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(
               kLineitem,
               lineitemSelectedRowType,
@@ -390,6 +398,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .project(
@@ -445,20 +454,22 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
       shipDate, selectedRowType, "'1994-01-01'", "'1994-12-31'");
 
   core::PlanNodeId lineitemPlanNodeId;
-  auto plan = PlanBuilder()
-                  .tableScan(
-                      kLineitem,
-                      selectedRowType,
-                      fileColumnNames,
-                      {shipDateFilter,
-                       "l_discount between 0.05 and 0.07",
-                       "l_quantity < 24.0"})
-                  .capturePlanNodeId(lineitemPlanNodeId)
-                  .project({"l_extendedprice * l_discount"})
-                  .partialAggregation({}, {"sum(p0)"})
-                  .localPartition({})
-                  .finalAggregation()
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .setParseOptions(getTpcHParseOptions())
+          .tableScan(
+              kLineitem,
+              selectedRowType,
+              fileColumnNames,
+              {shipDateFilter,
+               "l_discount between 0.05::DECIMAL(15,2) and 0.07::DECIMAL(15,2)",
+               "l_quantity < 24::INT"})
+          .capturePlanNodeId(lineitemPlanNodeId)
+          .project({"l_extendedprice * l_discount"})
+          .partialAggregation({}, {"sum(p0)"})
+          .localPartition({})
+          .finalAggregation()
+          .planNode();
   TpchPlan context;
   context.plan = std::move(plan);
   context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
@@ -551,6 +562,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(
               kLineitem,
               lineitemSelectedRowType,
@@ -722,6 +734,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .hashJoin(
@@ -756,7 +769,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
                "o_orderdate"})
           .project(
               {"volume",
-               "(CASE WHEN n_name = 'BRAZIL' THEN volume ELSE 0.0 END) as brazil_volume",
+               "(CASE WHEN n_name = 'BRAZIL' THEN volume ELSE 0.0::DECIMAL(31,4) END) as brazil_volume",
                "year(o_orderdate) AS o_year"})
           .partialAggregation(
               {"o_year"},
@@ -872,6 +885,7 @@ TpchPlan TpchQueryBuilder::getQ9Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
           .capturePlanNodeId(ordersScanNodeId)
           .hashJoin(
@@ -893,7 +907,7 @@ TpchPlan TpchQueryBuilder::getQ9Plan() const {
           .project(
               {"n_name AS nation",
                "year(o_orderdate) AS o_year",
-               "l_extendedprice * (1.0 - l_discount) - ps_supplycost * l_quantity AS amount"})
+               "l_extendedprice * (1.0 - l_discount) - ps_supplycost * l_quantity::DECIMAL(15,2) AS amount"})
           .partialAggregation(
               {"nation", "o_year"}, {"sum(amount) AS sum_profit"})
           .localPartition({})
@@ -986,6 +1000,7 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
           .planNode();
 
   auto plan = PlanBuilder(planNodeIdGenerator)
+                  .setParseOptions(getTpcHParseOptions())
                   .tableScan(
                       kLineitem,
                       lineitemSelectedRowType,
@@ -1184,6 +1199,7 @@ TpchPlan TpchQueryBuilder::getQ14Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(
               kLineitem,
               lineitemSelectedRowType,
@@ -1202,7 +1218,7 @@ TpchPlan TpchQueryBuilder::getQ14Plan() const {
               "",
               {"part_revenue", "p_type"})
           .project(
-              {"(CASE WHEN (p_type LIKE 'PROMO%') THEN part_revenue ELSE 0.0 END) as filter_revenue",
+              {"(CASE WHEN (p_type LIKE 'PROMO%') THEN part_revenue ELSE 0.0::DECIMAL(31,4) END) as filter_revenue",
                "part_revenue"})
           .partialAggregation(
               {},
@@ -1243,6 +1259,7 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
 
   auto maxRevenue =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(
               kLineitem,
               lineitemSelectedRowType,
@@ -1261,6 +1278,7 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
 
   auto supplierWithMaxRevenue =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(
               kLineitem,
               lineitemSelectedRowType,
@@ -1433,6 +1451,7 @@ TpchPlan TpchQueryBuilder::getQ17Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(kLineitem, lineitemRowType, lineitemFileColumns)
           .capturePlanNodeId(lineitemAggScanId)
           .hashJoin(
@@ -1448,7 +1467,7 @@ TpchPlan TpchQueryBuilder::getQ17Plan() const {
               {"l_partkey"},
               {"p_partkey"},
               lineitemJoinPart,
-              "l_quantity < 0.2 * avg_",
+              "l_quantity::DECIMAL(38,3) < 0.2 * avg_::DECIMAL(38,2)",
               {"l_extendedprice"})
           .partialAggregation({}, {"sum(l_extendedprice) as partial_sum"})
           .localPartition({})
@@ -1488,14 +1507,15 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
 
   auto bigOrders =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .partialAggregation(
               {"l_orderkey"}, {"sum(l_quantity) AS partial_sum"})
           .localPartition({"l_orderkey"})
           .finalAggregation(
-              {"l_orderkey"}, {"sum(partial_sum) AS quantity"}, {DOUBLE()})
-          .filter("quantity > 300.0")
+              {"l_orderkey"}, {"sum(partial_sum) AS quantity"}, {BIGINT()})
+          .filter("quantity::DECIMAL(38,2) > 300.0::DECIMAL(38,2)")
           .planNode();
 
   auto plan =
@@ -1567,16 +1587,16 @@ TpchPlan TpchQueryBuilder::getQ19Plan() const {
       "(l_shipinstruct = 'DELIVER IN PERSON')";
   const std::string joinFilterExpr =
       "     ((p_brand = 'Brand#12')"
-      "     AND (l_quantity between 1.0 and 11.0)"
+      "     AND (l_quantity between 1 and 11)"
       "     AND (p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG'))"
       "     AND (p_size BETWEEN 1 AND 5))"
       " OR  ((p_brand ='Brand#23')"
       "     AND (p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK'))"
-      "     AND (l_quantity between 10.0 and 20.0)"
+      "     AND (l_quantity between 10 and 20)"
       "     AND (p_size BETWEEN 1 AND 10))"
       " OR  ((p_brand = 'Brand#34')"
       "     AND (p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG'))"
-      "     AND (l_quantity between 20.0 and 30.0)"
+      "     AND (l_quantity between 20 and 30)"
       "     AND (p_size BETWEEN 1 AND 15))";
 
   auto part = PlanBuilder(planNodeIdGenerator)
@@ -1585,6 +1605,7 @@ TpchPlan TpchQueryBuilder::getQ19Plan() const {
                   .planNode();
 
   auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .setParseOptions(getTpcHParseOptions())
                   .tableScan(
                       kLineitem,
                       lineitemSelectedRowType,
@@ -1704,6 +1725,7 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(
               kLineitem,
               lineitemSelectedRowType,
@@ -1720,12 +1742,15 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
               {"l_partkey", "l_suppkey"}, {"sum(l_quantity) AS sum_qty"})
           .localPartition({"l_partkey", "l_suppkey"})
           .finalAggregation()
-          .project({"l_partkey", "l_suppkey", "0.5 * sum_qty AS filter_qty"})
+          .project(
+              {"l_partkey",
+               "l_suppkey",
+               "0.5 * sum_qty::DECIMAL(38,2) AS filter_qty"})
           .hashJoin(
               {"l_partkey", "l_suppkey"},
               {"ps_partkey", "ps_suppkey"},
               partsuppJoinPart,
-              "ps_availqty > filter_qty",
+              "ps_availqty::DECIMAL(38,2) > filter_qty::DECIMAL(38,2)",
               {"ps_suppkey"})
           .hashJoin(
               {"ps_suppkey"},
@@ -1916,11 +1941,12 @@ TpchPlan TpchQueryBuilder::getQ22Plan() const {
 
   auto customerAvgAccountBalance =
       PlanBuilder(planNodeIdGenerator, pool_.get())
+          .setParseOptions(getTpcHParseOptions())
           .tableScan(
               kCustomer,
               customerSelectedRowType,
               customerFileColumns,
-              {"c_acctbal > 0.0"},
+              {"c_acctbal > 0.0::DECIMAL(15,2)"},
               phoneFilter)
           .capturePlanNodeId(customerScanNodeId)
           .partialAggregation({}, {"avg(c_acctbal) as avg_acctbal"})

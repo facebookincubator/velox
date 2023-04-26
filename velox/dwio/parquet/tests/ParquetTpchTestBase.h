@@ -44,8 +44,8 @@ class ParquetTpchTestBase : public testing::Test {
   ParquetTpchTestBase(ParquetReaderType parquetReaderType)
       : parquetReaderType_(parquetReaderType) {}
 
-  // Setup a DuckDB instance for the entire suite and load TPC-H data with scale
-  // factor 0.01.
+  // Set up a DuckDB instance for the entire suite and load TPC-H data with
+  // scale factor 0.01.
   void SetUp() {
     if (duckDb_ == nullptr) {
       duckDb_ = std::make_shared<DuckDbQueryRunner>();
@@ -130,6 +130,7 @@ class ParquetTpchTestBase : public testing::Test {
     CursorParameters params;
     params.maxDrivers = kNumDrivers;
     params.planNode = tpchPlan.plan;
+
     return exec::test::assertQuery(
         params, addSplits, duckQuery, *duckDb_, sortingKeys);
   }
@@ -142,21 +143,15 @@ class ParquetTpchTestBase : public testing::Test {
   const std::unordered_map<std::string, std::string> kDuckDbParquetWriteSQL_ = {
       std::make_pair(
           "lineitem",
-          R"(COPY (SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber,
-         l_quantity::DOUBLE as quantity, l_extendedprice::DOUBLE as extendedprice, l_discount::DOUBLE as discount,
-         l_tax::DOUBLE as tax, l_returnflag, l_linestatus, l_shipdate AS shipdate, l_commitdate, l_receiptdate,
-         l_shipinstruct, l_shipmode, l_comment FROM {})
+          R"(COPY (SELECT * FROM {})
          TO '{}'(FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
       std::make_pair(
           "orders",
-          R"(COPY (SELECT o_orderkey, o_custkey, o_orderstatus,
-         o_totalprice::DOUBLE as o_totalprice,
-         o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment FROM {})
+          R"(COPY (SELECT * FROM {})
          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
       std::make_pair(
           "customer",
-          R"(COPY (SELECT c_custkey, c_name, c_address, c_nationkey, c_phone,
-         c_acctbal::DOUBLE as c_acctbal, c_mktsegment, c_comment FROM {})
+          R"(COPY (SELECT * FROM {})
          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
       std::make_pair(
           "nation",
@@ -168,18 +163,15 @@ class ParquetTpchTestBase : public testing::Test {
          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
       std::make_pair(
           "part",
-          R"(COPY (SELECT p_partkey, p_name, p_mfgr, p_brand, p_type, p_size,
-         p_container, p_retailprice::DOUBLE, p_comment FROM {})
+          R"(COPY (SELECT * FROM {})
          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
       std::make_pair(
           "supplier",
-          R"(COPY (SELECT s_suppkey, s_name, s_address, s_nationkey, s_phone,
-         s_acctbal::DOUBLE, s_comment FROM {})
+          R"(COPY (SELECT * FROM {})
          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
       std::make_pair(
           "partsupp",
-          R"(COPY (SELECT ps_partkey, ps_suppkey, ps_availqty,
-         ps_supplycost::DOUBLE as supplycost, ps_comment FROM {})
+          R"(COPY (SELECT * FROM {})
          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))")};
 };
 

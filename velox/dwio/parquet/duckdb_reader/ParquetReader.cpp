@@ -31,6 +31,11 @@ namespace {
       return ::duckdb::Value::BIGINT(val);
     case ::duckdb::LogicalTypeId::DATE:
       return ::duckdb::Value::DATE(::duckdb::date_t(val));
+    case ::duckdb::LogicalTypeId::DECIMAL:
+      return ::duckdb::Value::DECIMAL(
+          val,
+          ::duckdb::DecimalType::GetWidth(type),
+          ::duckdb::DecimalType::GetScale(type));
     default:
       VELOX_UNSUPPORTED(
           "Unsupported column type for integer filter: {}", type.ToString());

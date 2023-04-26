@@ -20,9 +20,10 @@
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::duckdb::duckdbTimestampToVelox;
+using facebook::velox::duckdb::fromVeloxType;
+using facebook::velox::duckdb::toVeloxType;
 using facebook::velox::duckdb::veloxTimestampToDuckDB;
 
 namespace facebook::velox::exec::test {
@@ -345,9 +346,27 @@ velox::variant arrayVariantAt(
 
 std::vector<MaterializedRow> materialize(
     ::duckdb::DataChunk* dataChunk,
-    const std::shared_ptr<const RowType>& rowType) {
+    const std::shared_ptr<const RowType>& rowType,
+    const bool enableTypeMismatchHandling = true) {
   VELOX_CHECK_EQ(
       rowType->size(), dataChunk->GetTypes().size(), "Wrong number of columns");
+
+  // Check if Velox types match DuckDB types.
+  //
+  // There are cases when they differ and would result in an assertion error
+  // when trying to extract the variant for the wrong DuckDB value, e.g.
+  // AVG(DECIMAL) would return result as DECIMAL in Velox but DOUBLE in DuckDB,
+  // the same could be observed with decimal division.
+  //
+  // If "enableTypeMismatchHandling" is set to true, then we allow type upcast
+  // for either DuckDB or Velox to match the results, otherwise an error is
+  // thrown.
+  std::vector<bool> typesMatch;
+  for (size_t j = 0; j < rowType->size(); ++j) {
+    auto type = rowType->childAt(j);
+    auto duckDbType = toVeloxType(dataChunk->GetTypes()[j]);
+    typesMatch.push_back(duckDbType->equivalent(*type));
+  }
 
   auto size = dataChunk->size();
   std::vector<MaterializedRow> rows;
@@ -367,22 +386,54 @@ std::vector<MaterializedRow> materialize(
       auto typeKind = type->kind();
       if (dataChunk->GetValue(j, i).IsNull()) {
         row.push_back(nulls[j]);
-      } else if (typeKind == TypeKind::ARRAY) {
+      } else if (typeKind == TypeKind::ARRAY && typesMatch[j]) {
         row.push_back(arrayVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (typeKind == TypeKind::MAP) {
+      } else if (typeKind == TypeKind::MAP && typesMatch[j]) {
         row.push_back(mapVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (typeKind == TypeKind::ROW) {
+      } else if (typeKind == TypeKind::ROW && typesMatch[j]) {
         row.push_back(rowVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (isDecimalKind(typeKind)) {
+      } else if (isDecimalKind(typeKind) && typesMatch[j]) {
         row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i)));
-      } else if (isIntervalDayTimeType(type)) {
+      } else if (isIntervalDayTimeType(type) && typesMatch[j]) {
         auto value = variant(::duckdb::Interval::GetMicro(
             dataChunk->GetValue(j, i).GetValue<::duckdb::interval_t>()));
         row.push_back(value);
-      } else {
+      } else if (typesMatch[j]) {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             variantAt, typeKind, dataChunk, i, j);
         row.push_back(value);
+      } else {
+        // Handle type mismatch between Velox and DuckDB, this typically means
+        // upcasting the DuckDB type to produce a Velox variant.
+        auto duckDbType = dataChunk->GetTypes()[j].id();
+        VELOX_CHECK(
+            enableTypeMismatchHandling,
+            "Cannot compare values for different types. Velox value has {} type "
+            "but DuckDB returns {} type. Please check the query, if this type mismatch "
+            "is expected, you can enable 'enableTypeMismatchHandling'",
+            type,
+            LogicalTypeIdToString(duckDbType));
+
+        if (isDecimalKind(typeKind) && duckDbType == ::duckdb::LogicalTypeId::DOUBLE) {
+          // This case happens when the query has "AVG(DECIMAL)" or "DECIMAL / DECIMAL".
+          // Both expressions produce DOUBLE in DuckDB but the values match.
+          //
+          // In this case we cast everything to Velox DECIMAL as this would round
+          // DuckDB value. This allows us to compare values as is without any
+          // floating-point precision issues - we cannot increase floating-point
+          // precision for DECIMAL. For example, for DECIMAL(36,2):
+          // Velox: 15.49
+          // DuckDB: 15.48654581228407
+          // It is fine to cast DuckDB to 15.49.
+          auto decimalDuckDbType = fromVeloxType(type);
+          auto value = dataChunk->GetValue(j, i).CastAs(decimalDuckDbType);
+          row.push_back(duckdb::decimalVariant(value));
+        } else {
+          VELOX_UNSUPPORTED(
+              "Conversion between Velox {} type and DuckDB {} type is not supported",
+              type,
+              LogicalTypeIdToString(duckDbType));
+        }
       }
     }
     rows.push_back(row);

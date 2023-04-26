@@ -394,4 +394,24 @@ TEST_F(QueryAssertionsTest, nullVariant) {
   assertQuery(plan, "SELECT * FROM tmp");
 }
 
+TEST_F(QueryAssertionsTest, doubleToShortDecimalConversion) {
+  auto input = {
+      makeRowVector({makeShortDecimalFlatVector({12345}, DECIMAL(5, 2))})};
+  auto plan = PlanBuilder().values(input).planNode();
+
+  // DuckDB returns DOUBLE for AVG(DECIMAL), we have added AVG_DECIMAL()
+  // function to work around this issue.
+  assertQuery(plan, "select avg_decimal(123.45::DECIMAL(5,2))");
+}
+
+TEST_F(QueryAssertionsTest, doubleToLongDecimalConversion) {
+  auto input = {makeRowVector(
+      {makeLongDecimalFlatVector({123456789000000}, DECIMAL(38, 6))})};
+  auto plan = PlanBuilder().values(input).planNode();
+
+  // DuckDB returns DOUBLE for AVG(DECIMAL), we have added AVG_DECIMAL()
+  // function to work around this issue.
+  assertQuery(plan, "select avg_decimal(123456789.000000::DECIMAL(38,6))");
+}
+
 } // namespace facebook::velox::test
