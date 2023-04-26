@@ -225,6 +225,15 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         timestamps->size(),
         std::vector<VectorPtr>({timestamps, timezones}));
   }
+
+  Date getCurrentDate(const std::optional<std::string>& timeZone) {
+    return parseDate(date::format(
+        "%Y-%m-%d",
+        timeZone.has_value()
+            ? date::make_zoned(
+                  timeZone.value(), std::chrono::system_clock::now())
+            : std::chrono::system_clock::now()));
+  }
 };
 
 bool operator==(
@@ -3009,7 +3018,7 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
           (-18297 * kSecondsInDay + 6 * 3'600) * 1'000, "America/Los_Angeles"));
 }
 
-TEST_F(DateTimeFunctionsTest, currentDate) {
+TEST_F(DateTimeFunctionsTest, currentDateWithTimezone) {
   // Since the execution of the code is slightly delayed, it is difficult for us
   // to get the correct value of current_date. If you compare directly based on
   // the current time, you may get wrong result at the last second of the day,
@@ -3018,42 +3027,32 @@ TEST_F(DateTimeFunctionsTest, currentDate) {
   // of current_date, so that the result of current_date is either consistent
   // with the first comparison value or the second comparison value, and the
   // difference between the two comparison values is at most one day.
-
   auto emptyRowVector = makeRowVector(ROW({}), 1);
-
-  // First, Do not set the timezone, so the timezone obtained from QueryConfig
-  // will be nullptr.
-  auto tp0 = std::chrono::system_clock::now();
-  auto d0 = parseDate(date::format("%Y-%m-%d", tp0));
-
-  auto result0 = evaluateOnce<Date>("current_date()", emptyRowVector);
-
-  auto tp1 = std::chrono::system_clock::now();
-  auto d1 = parseDate(date::format("%Y-%m-%d", tp0));
-
-  EXPECT_TRUE(result0.has_value());
-  EXPECT_LE(d0, result0);
-  EXPECT_LE(result0, d1);
-  auto diff0 = std::chrono::duration_cast<date::days>(
-      tp1.time_since_epoch() - tp0.time_since_epoch());
-  EXPECT_LE(diff0.count(), 1);
-
   auto tz = "America/Los_Angeles";
   setQueryTimeZone(tz);
-  auto zonedTime0 = date::make_zoned(tz, std::chrono::system_clock::now());
-  auto d2 = parseDate(date::format("%Y-%m-%d", zonedTime0));
+  auto dateBefore = getCurrentDate(tz);
+  auto result = evaluateOnce<Date>("current_date()", emptyRowVector);
+  auto dateAfter = getCurrentDate(tz);
 
-  auto result1 = evaluateOnce<Date>("current_date()", emptyRowVector);
+  EXPECT_TRUE(result.has_value());
+  EXPECT_LE(dateBefore, result);
+  EXPECT_LE(result, dateAfter);
+  EXPECT_LE(dateAfter.days() - dateBefore.days(), 1);
+}
 
-  auto zonedTime1 = date::make_zoned(tz, std::chrono::system_clock::now());
-  auto d3 = parseDate(date::format("%Y-%m-%d", zonedTime1));
+TEST_F(DateTimeFunctionsTest, currentDateWithoutTimezone) {
+  auto emptyRowVector = makeRowVector(ROW({}), 1);
 
-  EXPECT_TRUE(result1.has_value());
-  EXPECT_LE(d2, result1);
-  EXPECT_LE(result1, d3);
-  auto diff1 = std::chrono::duration_cast<date::days>(
-      zonedTime1.get_local_time() - zonedTime0.get_local_time());
-  EXPECT_LE(diff1.count(), 1);
+  // Do not set the timezone, so the timezone obtained from QueryConfig
+  // will be nullptr.
+  auto dateBefore = getCurrentDate(std::nullopt);
+  auto result = evaluateOnce<Date>("current_date()", emptyRowVector);
+  auto dateAfter = getCurrentDate(std::nullopt);
+
+  EXPECT_TRUE(result.has_value());
+  EXPECT_LE(dateBefore, result);
+  EXPECT_LE(result, dateAfter);
+  EXPECT_LE(dateAfter.days() - dateBefore.days(), 1);
 }
 
 TEST_F(DateTimeFunctionsTest, timeZoneHour) {
