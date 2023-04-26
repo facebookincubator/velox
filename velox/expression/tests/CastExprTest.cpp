@@ -807,12 +807,31 @@ TEST_F(CastExprTest, toString) {
 
 TEST_F(CastExprTest, decimalToDouble) {
   // short to short, scale up.
-  auto shortFlat =
-      makeShortDecimalFlatVector({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(2, 2));
+  auto shortFlat = makeNullableShortDecimalFlatVector(
+      {-999999999999999999, -3, 0, 55, 999999999999999999, std::nullopt},
+      DECIMAL(18, 18));
   testComplexCast(
       "c0",
       shortFlat,
-      makeFlatVector<double>({-0.30, -0.2, -0.1, 0, 0.55, 0.69, 0.72}));
+      makeNullableFlatVector<double>(
+          {-0.999999999999999999,
+           -0.000000000000000003,
+           0,
+           0.000000000000000055,
+           0.999999999999999999,
+           std::nullopt}));
+  auto longFlat = makeNullableLongDecimalFlatVector(
+      {DecimalUtil::kLongDecimalMin,
+       0,
+       DecimalUtil::kLongDecimalMax,
+       HugeInt::build(0xffff, 0xffffffffffffffff),
+       std::nullopt},
+      DECIMAL(38, 5));
+  testComplexCast(
+      "c0",
+      longFlat,
+      makeNullableFlatVector<double>(
+          {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
 }
 
 TEST_F(CastExprTest, decimalToDecimal) {
