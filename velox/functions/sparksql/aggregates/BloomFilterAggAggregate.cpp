@@ -167,9 +167,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     flatResult->resize(numGroups);
 
     int32_t totalSize = getTotalSize(groups, numGroups);
-    Buffer* buffer = flatResult->getBufferWithSpace(totalSize);
-    char* bufferPtr = buffer->asMutable<char>() + buffer->size();
-    buffer->setSize(buffer->size() + totalSize);
+    char* rawBuffer = flatResult->getRawStringBufferWithSpace(totalSize);
     for (vector_size_t i = 0; i < numGroups; ++i) {
       auto group = groups[i];
       auto accumulator = value<BloomFilterAccumulator>(group);
@@ -180,9 +178,9 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 
       auto size = accumulator->serializedSize();
       VELOX_DCHECK(!StringView::isInline(size));
-      accumulator->serialize(bufferPtr);
-      StringView serialized = StringView(bufferPtr, size);
-      bufferPtr += size;
+      accumulator->serialize(rawBuffer);
+      StringView serialized = StringView(rawBuffer, size);
+      rawBuffer += size;
       flatResult->setNoCopy(i, serialized);
     }
   }
@@ -194,10 +192,11 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 
  private:
   const int64_t kDefaultExpectedNumItems = 1'000'000;
+  const int64_t kDefaultNumBits = 8'388'608;
   const int64_t kMaxNumItems = 4'000'000;
   // Spark kMaxNumBits is 67108864, but velox has memory limit sizeClassSizes
   // 256, so decrease it to not over memory limit.
-  const int64_t kMaxNumBits = 700 * 1024;
+  const int64_t kMaxNumBits = 4'096 * 1024;
 
   void decodeArguments(
       const SelectivityVector& rows,
@@ -220,7 +219,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       }
     } else {
       originalEstimatedNumItems_ = kDefaultExpectedNumItems;
-      originalNumBits_ = originalEstimatedNumItems_ * 8;
+      originalNumBits_ = kDefaultNumBits;
     }
 
     estimatedNumItems_ = std::min(originalEstimatedNumItems_, kMaxNumItems);
@@ -248,12 +247,12 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   static void setConstantArgument(
       const char* name,
       int64_t& currentValue,
-      const DecodedVector& vec) {
+      const DecodedVector& vector) {
     VELOX_CHECK(
-        vec.isConstantMapping(),
+        vector.isConstantMapping(),
         "{} argument must be constant for all input rows",
         name);
-    int64_t newValue = vec.valueAt<int64_t>(0);
+    int64_t newValue = vector.valueAt<int64_t>(0);
     VELOX_USER_CHECK_GT(newValue, 0, "{} must be positive", name);
     if (currentValue == kMissingArgument) {
       currentValue = newValue;

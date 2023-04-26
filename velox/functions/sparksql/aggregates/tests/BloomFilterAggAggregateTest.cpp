@@ -63,8 +63,8 @@ TEST_F(BloomFilterAggAggregateTest, bloomFilterAggArgument) {
   auto expected1 = {
       makeRowVector({makeConstant<StringView>(StringView(bloomFilter1), 1)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 6)"}, expected1);
-
-  auto bloomFilter2 = getSerializedBloomFilter(44800);
+  // This capacity is kMaxNumBits / 16.
+  auto bloomFilter2 = getSerializedBloomFilter(262144);
   auto expected2 = {
       makeRowVector({makeConstant<StringView>(StringView(bloomFilter2), 1)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0)"}, expected2);
