@@ -394,6 +394,17 @@ TEST_F(QueryAssertionsTest, nullVariant) {
   assertQuery(plan, "SELECT * FROM tmp");
 }
 
+TEST_F(QueryAssertionsTest, duckDbHugeint) {
+  std::vector<int64_t> values = {1};
+  auto input = {
+      makeRowVector({
+          makeFlatVector<int64_t>(values)
+      })
+  };
+  auto plan = PlanBuilder().values(input).planNode();
+  assertQuery(plan, "select sum(1::BIGINT)");
+}
+
 TEST_F(QueryAssertionsTest, doubleToShortDecimalConversion) {
   auto input = {
       makeRowVector({makeShortDecimalFlatVector({12345}, DECIMAL(5, 2))})};
@@ -401,7 +412,7 @@ TEST_F(QueryAssertionsTest, doubleToShortDecimalConversion) {
 
   // DuckDB returns DOUBLE for AVG(DECIMAL), we have added AVG_DECIMAL()
   // function to work around this issue.
-  assertQuery(plan, "select avg_decimal(123.45::DECIMAL(5,2))");
+  assertQuery(plan, "select avg(123.45::DECIMAL(5,2))", true);
 }
 
 TEST_F(QueryAssertionsTest, doubleToLongDecimalConversion) {
@@ -411,7 +422,7 @@ TEST_F(QueryAssertionsTest, doubleToLongDecimalConversion) {
 
   // DuckDB returns DOUBLE for AVG(DECIMAL), we have added AVG_DECIMAL()
   // function to work around this issue.
-  assertQuery(plan, "select avg_decimal(123456789.000000::DECIMAL(38,6))");
+  assertQuery(plan, "select avg(123456789.000000::DECIMAL(38,6))", true);
 }
 
 } // namespace facebook::velox::test

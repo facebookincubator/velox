@@ -132,7 +132,7 @@ class ParquetTpchTestBase : public testing::Test {
     params.planNode = tpchPlan.plan;
 
     return exec::test::assertQuery(
-        params, addSplits, duckQuery, *duckDb_, sortingKeys);
+        params, addSplits, duckQuery, *duckDb_, sortingKeys, true);
   }
 
   const ParquetReaderType parquetReaderType_;

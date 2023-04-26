@@ -41,11 +41,13 @@ class DuckDbQueryRunner {
 
   MaterializedRowMultiset execute(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const std::shared_ptr<const RowType>& resultRowType,
+      const bool enableResultTypeMismatch) {
     MaterializedRowMultiset allRows;
     execute(
         sql,
         resultRowType,
+        enableResultTypeMismatch,
         [&allRows](std::vector<MaterializedRow>& rows) mutable {
           std::copy(
               rows.begin(), rows.end(), std::inserter(allRows, allRows.end()));
@@ -55,11 +57,13 @@ class DuckDbQueryRunner {
 
   std::vector<MaterializedRow> executeOrdered(
       const std::string& sql,
-      const std::shared_ptr<const RowType>& resultRowType) {
+      const std::shared_ptr<const RowType>& resultRowType,
+      const bool enableResultTypeMismatch) {
     std::vector<MaterializedRow> allRows;
     execute(
         sql,
         resultRowType,
+        enableResultTypeMismatch,
         [&allRows](std::vector<MaterializedRow>& rows) mutable {
           std::copy(rows.begin(), rows.end(), std::back_inserter(allRows));
         });
@@ -85,6 +89,7 @@ class DuckDbQueryRunner {
   void execute(
       const std::string& sql,
       const std::shared_ptr<const RowType>& resultRowType,
+      const bool enableResultTypeMismatch,
       std::function<void(std::vector<MaterializedRow>&)> resultCallback);
 };
 
@@ -131,21 +136,24 @@ std::shared_ptr<Task> assertQuery(
     const core::PlanNodePtr& plan,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
+    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt,
+    const std::optional<bool> enableResultTypeMismatch = std::nullopt);
 
 std::shared_ptr<Task> assertQuery(
     const core::PlanNodePtr& plan,
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
+    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt,
+    const std::optional<bool> enableResultTypeMismatch = std::nullopt);
 
 std::shared_ptr<Task> assertQuery(
     const CursorParameters& params,
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
+    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt,
+    const std::optional<bool> enableResultTypeMismatch = std::nullopt);
 
 std::shared_ptr<Task> assertQueryReturnsEmptyResult(
     const core::PlanNodePtr& plan);
@@ -156,14 +164,16 @@ void assertResults(
     const std::vector<RowVectorPtr>& results,
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner);
+    DuckDbQueryRunner& duckDbQueryRunner,
+    const std::optional<bool> enableResultTypeMismatch = std::nullopt);
 
 void assertResultsOrdered(
     const std::vector<RowVectorPtr>& results,
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    const std::vector<uint32_t>& sortingKeys);
+    const std::vector<uint32_t>& sortingKeys,
+    const std::optional<bool> enableResultTypeMismatch = std::nullopt);
 
 std::shared_ptr<Task> assertQuery(
     const core::PlanNodePtr& plan,

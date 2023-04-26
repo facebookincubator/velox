@@ -34,6 +34,11 @@ static const std::string kDuckDbTimestampWarning =
     "test involves timestamp inputs, please make sure you use the right"
     " precision.";
 
+// When true, allows DuckDB result type conversion from DOUBLE to DECIMAL
+// to match Velox output type.
+// Precision and scale will be taken from Velox output type.
+static const bool kEnableResultTypeMismatch = false;
+
 template <TypeKind kind>
 ::duckdb::Value duckValueAt(const VectorPtr& vector, vector_size_t index) {
   using T = typename KindToFlatVector<kind>::WrapperType;
@@ -347,7 +352,7 @@ velox::variant arrayVariantAt(
 std::vector<MaterializedRow> materialize(
     ::duckdb::DataChunk* dataChunk,
     const std::shared_ptr<const RowType>& rowType,
-    const bool enableTypeMismatchHandling = true) {
+    const bool enableResultTypeMismatch) {
   VELOX_CHECK_EQ(
       rowType->size(), dataChunk->GetTypes().size(), "Wrong number of columns");
 
@@ -358,7 +363,7 @@ std::vector<MaterializedRow> materialize(
   // AVG(DECIMAL) would return result as DECIMAL in Velox but DOUBLE in DuckDB,
   // the same could be observed with decimal division.
   //
-  // If "enableTypeMismatchHandling" is set to true, then we allow type upcast
+  // If "enableResultTypeMismatch" is set to true, then we allow type upcast
   // for either DuckDB or Velox to match the results, otherwise an error is
   // thrown.
   std::vector<bool> typesMatch;
@@ -407,10 +412,10 @@ std::vector<MaterializedRow> materialize(
         // upcasting the DuckDB type to produce a Velox variant.
         auto duckDbType = dataChunk->GetTypes()[j].id();
         VELOX_CHECK(
-            enableTypeMismatchHandling,
+            enableResultTypeMismatch,
             "Cannot compare values for different types. Velox value has {} type "
             "but DuckDB returns {} type. Please check the query, if this type mismatch "
-            "is expected, you can enable 'enableTypeMismatchHandling'",
+            "is expected, you can enable 'enableResultTypeMismatch'",
             type,
             LogicalTypeIdToString(duckDbType));
 
@@ -942,6 +947,7 @@ DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
 void DuckDbQueryRunner::execute(
     const std::string& sql,
     const std::shared_ptr<const RowType>& resultRowType,
+    const bool enableResultTypeMismatch,
     std::function<void(std::vector<MaterializedRow>&)> resultCallback) {
   auto duckDbResult = execute(sql);
 
@@ -951,7 +957,7 @@ void DuckDbQueryRunner::execute(
     if (!dataChunk || (dataChunk->size() == 0)) {
       break;
     }
-    auto rows = materialize(dataChunk.get(), resultRowType);
+    auto rows = materialize(dataChunk.get(), resultRowType, enableResultTypeMismatch);
     resultCallback(rows);
   }
 }
@@ -960,9 +966,10 @@ std::shared_ptr<Task> assertQuery(
     const core::PlanNodePtr& plan,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
+    std::optional<std::vector<uint32_t>> sortingKeys,
+    const std::optional<bool> enableResultTypeMismatch) {
   return assertQuery(
-      plan, [](Task*) {}, duckDbSql, duckDbQueryRunner, sortingKeys);
+      plan, [](Task*) {}, duckDbSql, duckDbQueryRunner, sortingKeys, enableResultTypeMismatch);
 }
 
 std::shared_ptr<Task> assertQueryReturnsEmptyResult(
@@ -1132,7 +1139,8 @@ void assertResults(
     const std::vector<RowVectorPtr>& results,
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner) {
+    DuckDbQueryRunner& duckDbQueryRunner,
+    const std::optional<bool> enableResultTypeMismatch) {
   MaterializedRowMultiset actualRows;
   for (const auto& vector : results) {
     auto rows = materialize(vector);
@@ -1140,7 +1148,7 @@ void assertResults(
         rows.begin(), rows.end(), std::inserter(actualRows, actualRows.end()));
   }
 
-  auto expectedRows = duckDbQueryRunner.execute(duckDbSql, resultType);
+  auto expectedRows = duckDbQueryRunner.execute(duckDbSql, resultType, enableResultTypeMismatch.value_or(kEnableResultTypeMismatch));
   assertEqualResults(
       expectedRows,
       actualRows,
@@ -1217,7 +1225,8 @@ void assertResultsOrdered(
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    const std::vector<uint32_t>& sortingKeys) {
+    const std::vector<uint32_t>& sortingKeys,
+    const std::optional<bool> enableResultTypeMismatch) {
   std::vector<OrderedPartition> actualPartitions;
   std::vector<OrderedPartition> expectedPartitions;
 
@@ -1232,7 +1241,7 @@ void assertResultsOrdered(
     }
   }
 
-  auto expectedRows = duckDbQueryRunner.executeOrdered(duckDbSql, resultType);
+  auto expectedRows = duckDbQueryRunner.executeOrdered(duckDbSql, resultType, enableResultTypeMismatch.value_or(kEnableResultTypeMismatch));
   for (const auto& row : expectedRows) {
     auto keys = getColumns(row, sortingKeys);
     if (expectedPartitions.empty() || expectedPartitions.back().first != keys) {
@@ -1347,11 +1356,12 @@ std::shared_ptr<Task> assertQuery(
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
+    std::optional<std::vector<uint32_t>> sortingKeys,
+    const std::optional<bool> enableResultTypeMismatch) {
   CursorParameters params;
   params.planNode = plan;
   return assertQuery(
-      params, addSplits, duckDbSql, duckDbQueryRunner, sortingKeys);
+      params, addSplits, duckDbSql, duckDbQueryRunner, sortingKeys, enableResultTypeMismatch);
 }
 
 std::shared_ptr<Task> assertQuery(
@@ -1359,7 +1369,8 @@ std::shared_ptr<Task> assertQuery(
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
+    std::optional<std::vector<uint32_t>> sortingKeys,
+    const std::optional<bool> enableResultTypeMismatch) {
   auto [cursor, actualResults] = readCursor(params, addSplits);
 
   if (sortingKeys) {
@@ -1368,13 +1379,15 @@ std::shared_ptr<Task> assertQuery(
         params.planNode->outputType(),
         duckDbSql,
         duckDbQueryRunner,
-        sortingKeys.value());
+        sortingKeys.value(),
+        enableResultTypeMismatch);
   } else {
     assertResults(
         actualResults,
         params.planNode->outputType(),
         duckDbSql,
-        duckDbQueryRunner);
+        duckDbQueryRunner,
+        enableResultTypeMismatch);
   }
   auto task = cursor->task();
 
