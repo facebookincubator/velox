@@ -36,7 +36,8 @@ std::string ReadFile::pread(uint64_t offset, uint64_t length) const {
 
 uint64_t ReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers) const {
+    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::string_view>& /* labels */) const {
   auto fileSize = size();
   uint64_t numRead = 0;
   if (offset >= fileSize) {
@@ -123,7 +124,8 @@ LocalReadFile::pread(uint64_t offset, uint64_t length, void* buf) const {
 
 uint64_t LocalReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers) const {
+    const std::vector<folly::Range<char*>>& buffers,
+    const std::vector<std::string_view>& /* labels */) const {
   // Dropped bytes sized so that a typical dropped range of 50K is not
   // too many iovecs.
   static thread_local std::vector<char> droppedBytes(16 * 1024);

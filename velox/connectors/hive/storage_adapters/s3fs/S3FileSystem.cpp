@@ -101,7 +101,8 @@ class S3ReadFile final : public ReadFile {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const override {
+      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::string_view>& /* labels */ = {}) const override {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
     // between. This call must populate the ranges (except gap ranges)
     // sequentially starting from 'offset'. AWS S3 GetObject does not support

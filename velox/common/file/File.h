@@ -56,9 +56,11 @@ class ReadFile {
   // Reads starting at 'offset' into the memory referenced by the
   // Ranges in 'buffers'. The buffers are filled left to right. A
   // buffer with nullptr data will cause its size worth of bytes to be skipped.
+  // Labels is optional and may be used for caching purposes by implementations.
   virtual uint64_t preadv(
       uint64_t /*offset*/,
-      const std::vector<folly::Range<char*>>& /*buffers*/) const;
+      const std::vector<folly::Range<char*>>& /*buffers*/,
+      const std::vector<std::string_view>& /* labels */ = {}) const;
 
   // Like preadv but may execute asynchronously and returns the read
   // size or exception via SemiFuture. Use hasPreadvAsync() to check
@@ -216,7 +218,8 @@ class LocalReadFile final : public ReadFile {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const final;
+      const std::vector<folly::Range<char*>>& buffers,
+      const std::vector<std::string_view>& labels) const final;
 
   uint64_t memoryUsage() const final;
 
