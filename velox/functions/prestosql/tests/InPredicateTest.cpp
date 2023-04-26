@@ -322,23 +322,12 @@ TEST_F(InPredicateTest, varbinary) {
 }
 
 TEST_F(InPredicateTest, reusableResult) {
-  auto a1 = makeNullableFlatVector<int32_t>({0, 1, std::nullopt, 3, 4, 5, 6});
-  auto b1 = makeFlatVector<int64_t>({0, 5, 10, 15, 20, 25, 30});
-  auto data1 = makeRowVector({"a", "b"}, {a1, b1});
-
-  auto a2 = makeNullableFlatVector<int32_t>({0, 1, 2, 3, 4, 5});
-  auto b2 = makeFlatVector<int64_t>({100, 105, 110, 115, 120, 125});
-  auto data2 = makeRowVector({"a", "b"}, {a2, b2});
-
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
-  auto plan = PlanBuilder(pool_.get())
-                  .values({data1, data2})
-                  .filter("a in (1,2) ")
-                  .project({"b"})
-                  .planNode();
-
-  auto result = AssertQueryBuilder(plan).copyResults(pool());
-  auto expected =
-      makeRowVector({"b"}, {makeFlatVector<int64_t>({5, 105, 110})});
-  assertEqualVectors(expected, result);
+  std::string predicate = "c0 IN (1, 2)";
+  auto input = makeRowVector({makeNullableFlatVector<int32_t>({0, 1, 2, 3})});
+  SelectivityVector rows(input->size());
+  VectorPtr result =
+      makeNullableFlatVector<bool>({false, true, std::nullopt, false});
+  auto actual = evaluate<SimpleVector<bool>>(predicate, input, rows, result);
+  auto expected = makeFlatVector<bool>({false, true, true, false});
+  assertEqualVectors(expected, actual);
 }
