@@ -17,6 +17,8 @@
 
 #include "boost/math/distributions/beta.hpp"
 
+using boost::math::beta_distribution;
+
 namespace facebook::velox::functions {
 
 constexpr double kInf = std::numeric_limits<double>::infinity();
@@ -29,9 +31,10 @@ struct BetaCDFFunction {
 
   FOLLY_ALWAYS_INLINE void
   call(double& result, double a, double b, double value) {
-    VELOX_USER_CHECK((a > 0) && (b > 0), "alpha and beta must be > 0");
-    VELOX_USER_CHECK(
-        (value >= 0) && (value <= 1), "value must be in the interval [0, 1]");
+    VELOX_USER_CHECK_GT(a, 0, "a must be > 0");
+    VELOX_USER_CHECK_GT(b, 0, "b must be > 0");
+    VELOX_USER_CHECK_GE(value, 0, "value must be in the interval [0, 1]");
+    VELOX_USER_CHECK_LE(value, 1, "value must be in the interval [0, 1]");
     VELOX_USER_CHECK(
         (a != kInf) && (b != kInf),
         "alpha, beta values can't accept infinity value");
