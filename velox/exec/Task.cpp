@@ -124,6 +124,7 @@ bool unregisterTaskListener(const std::shared_ptr<TaskListener>& listener) {
 namespace {
 void buildSplitStates(
     const core::PlanNode* planNode,
+    const core::PlanFragment& planFragment,
     std::unordered_set<core::PlanNodeId>& allIds,
     std::unordered_map<core::PlanNodeId, SplitsState>& splitStateMap) {
   bool ok = allIds.insert(planNode->id()).second;
@@ -138,13 +139,14 @@ void buildSplitStates(
     // Not all leaf nodes require splits. ValuesNode doesn't. Check if this plan
     // node requires splits.
     if (planNode->requiresSplits()) {
-      splitStateMap[planNode->id()];
+      splitStateMap[planNode->id()].isGroupedExecution =
+          planFragment.leafNodeRunsGroupedExecution(planNode->id());
     }
     return;
   }
 
   for (const auto& child : planNode->sources()) {
-    buildSplitStates(child.get(), allIds, splitStateMap);
+    buildSplitStates(child.get(), planFragment, allIds, splitStateMap);
   }
 }
 
@@ -152,10 +154,11 @@ void buildSplitStates(
 /// SplitsState structures are initialized to blank states. Also, checks that
 /// plan node IDs are unique and throws if encounters duplicates.
 std::unordered_map<core::PlanNodeId, SplitsState> buildSplitStates(
-    const std::shared_ptr<const core::PlanNode>& planNode) {
+    const core::PlanFragment& planFragment) {
   std::unordered_set<core::PlanNodeId> allIds;
   std::unordered_map<core::PlanNodeId, SplitsState> splitStateMap;
-  buildSplitStates(planNode.get(), allIds, splitStateMap);
+  buildSplitStates(
+      planFragment.planNode.get(), planFragment, allIds, splitStateMap);
   return splitStateMap;
 }
 
@@ -199,7 +202,7 @@ Task::Task(
           fmt::format("task.{}", taskId_.c_str()))),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
-      splitsStates_(buildSplitStates(planFragment_.planNode)),
+      splitsStates_(buildSplitStates(planFragment_)),
       bufferManager_(PartitionedOutputBufferManager::getInstance()) {}
 
 Task::~Task() {
@@ -815,7 +818,6 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
       if (splitGroupState.numRunningDrivers == 0) {
         if (splitGroupId != kUngroupedGroupId) {
           --self->numRunningSplitGroups_;
-          self->taskStats_.completedSplitGroups.emplace(splitGroupId);
           splitGroupState.clear();
           self->ensureSplitGroupsAreBeingProcessedLocked(self);
         } else {
@@ -1017,10 +1019,18 @@ void Task::noMoreSplitsForGroup(
     splitsStore.noMoreSplits = true;
     promises = std::move(splitsStore.splitPromises);
 
-    // There were no splits in this group, hence, no active drivers. Mark the
-    // group complete.
-    if (seenSplitGroups_.count(splitGroupId) == 0) {
-      taskStats_.completedSplitGroups.insert(splitGroupId);
+    // If there were no splits in this group (seenSplitGroups_ does not have
+    // this group), and hence, no active drivers then mark the group complete.
+    // Also mark split group complete if all leaf nodes expecting splits in
+    // grouped execution mode have received 'no more splits for split group'
+    // message for this split group. This is to prefetch new split groups before
+    // drivers finished and we are forced to wait for more split groups while
+    // doing nothing.
+    if ((seenSplitGroups_.count(splitGroupId) == 0) ||
+        isNoMoreSplitsForSplitGroupLocked(splitGroupId)) {
+      LOG(INFO) << "Marking split group " << splitGroupId
+                << " as completed for " << taskId();
+      taskStats_.completedSplitGroups.emplace(splitGroupId);
     }
   }
   for (auto& promise : promises) {
@@ -1095,6 +1105,17 @@ bool Task::checkNoMoreSplitGroupsLocked() {
   }
 
   return false;
+}
+
+bool Task::isNoMoreSplitsForSplitGroupLocked(int32_t splitGroupId) {
+  for (auto& pair : splitsStates_) {
+    if (pair.second.isGroupedExecution) {
+      if (!pair.second.groupSplitsStores[splitGroupId].noMoreSplits) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 bool Task::isAllSplitsFinishedLocked() {

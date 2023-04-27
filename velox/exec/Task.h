@@ -682,6 +682,10 @@ class Task : public std::enable_shared_from_this<Task> {
   /// returns true if task should transition to kFinished state.
   bool checkNoMoreSplitGroupsLocked();
 
+  /// Returns true when we had 'no more splits for split group' message for all
+  /// leaf nodes expecting splits in grouped execution mode.
+  bool isNoMoreSplitsForSplitGroupLocked(int32_t splitGroupId);
+
   /// Notifies listeners that the task is now complete.
   void onTaskCompletion();
 

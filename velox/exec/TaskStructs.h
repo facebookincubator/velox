@@ -57,6 +57,9 @@ struct SplitsState {
   /// Plan node-wide 'no more splits'.
   bool noMoreSplits{false};
 
+  /// Does this plan node run in grouped execution mode.
+  bool isGroupedExecution{false};
+
   /// Keep the max added split's sequence id to deduplicate incoming splits.
   long maxSequenceId{std::numeric_limits<long>::min()};
 
