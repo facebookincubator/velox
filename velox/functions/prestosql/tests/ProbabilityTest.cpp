@@ -24,8 +24,6 @@ namespace {
 
 constexpr double kInf = std::numeric_limits<double>::infinity();
 constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
-constexpr float kInfF = std::numeric_limits<float>::infinity();
-constexpr float kNanF = std::numeric_limits<float>::quiet_NaN();
 
 MATCHER(IsNan, "is NaN") {
   return arg && std::isnan(*arg);
