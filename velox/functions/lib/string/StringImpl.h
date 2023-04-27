@@ -29,7 +29,6 @@
 #include "folly/Likely.h"
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/StringView.h"
@@ -144,7 +143,8 @@ FOLLY_ALWAYS_INLINE int32_t charToCodePoint(const T& inputString) {
       length);
 
   int size;
-  auto codePoint = utf8proc_codepoint(inputString.data(), size);
+  auto codePoint = utf8proc_codepoint(
+      inputString.data(), inputString.data() + inputString.size(), size);
   return codePoint;
 }
 
@@ -231,16 +231,6 @@ FOLLY_ALWAYS_INLINE void replaceInPlace(
 
 /// Compute the MD5 Hash.
 template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE void md5(TOutString& output, const TInString& input) {
-  static const auto kByteLength = 16;
-  output.resize(kByteLength);
-  crypto::MD5Context md5Context;
-  md5Context.Add((const uint8_t*)input.data(), input.size());
-  md5Context.Finish((uint8_t*)output.data());
-}
-
-/// Compute the MD5 Hash.
-template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool md5_radix(
     TOutString& output,
     const TInString& input,
@@ -268,229 +258,6 @@ FOLLY_ALWAYS_INLINE bool md5_radix(
   return true;
 }
 
-/// Compute the SHA256 Hash.
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE void sha256(TOutString& output, const TInString& input) {
-  output.resize(32);
-  folly::ssl::OpenSSLHash::sha256(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)input.data(), input.size()));
-}
-
-/// Compute the SHA512 Hash.
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE void sha512(TOutString& output, const TInString& input) {
-  output.resize(64);
-  folly::ssl::OpenSSLHash::sha512(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)input.data(), input.size()));
-}
-
-// Compute the HMAC-SHA1 Hash.
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE void
-hmacSha1(TOutString& output, const TInString& key, const TInString& data) {
-  output.resize(20);
-  folly::ssl::OpenSSLHash::hmac_sha1(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)key.data(), key.size()),
-      folly::ByteRange((const uint8_t*)data.data(), data.size()));
-}
-
-// Compute the HMAC-SHA256 Hash.
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE void
-hmacSha256(TOutString& output, const TInString& key, const TInString& data) {
-  output.resize(32);
-  folly::ssl::OpenSSLHash::hmac_sha256(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)key.data(), key.size()),
-      folly::ByteRange((const uint8_t*)data.data(), data.size()));
-}
-
-// Compute the HMAC-SHA512 Hash.
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE void
-hmacSha512(TOutString& output, const TInString& key, const TInString& data) {
-  output.resize(64);
-  folly::ssl::OpenSSLHash::hmac_sha512(
-      folly::MutableByteRange((uint8_t*)output.data(), output.size()),
-      folly::ByteRange((const uint8_t*)key.data(), key.size()),
-      folly::ByteRange((const uint8_t*)data.data(), data.size()));
-}
-
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE bool toHex(TOutString& output, const TInString& input) {
-  static const char* const kHexTable =
-      "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-      "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-      "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-      "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-      "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-      "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-      "C0C1C2C3C4C5C6C7C8C9CACBCCCDCECFD0D1D2D3D4D5D6D7D8D9DADBDCDDDEDF"
-      "E0E1E2E3E4E5E6E7E8E9EAEBECEDEEEFF0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF";
-
-  const auto inputSize = input.size();
-  output.resize(inputSize * 2);
-
-  const unsigned char* inputBuffer =
-      reinterpret_cast<const unsigned char*>(input.data());
-  char* resultBuffer = output.data();
-
-  for (auto i = 0; i < inputSize; ++i) {
-    resultBuffer[i * 2] = kHexTable[inputBuffer[i] * 2];
-    resultBuffer[i * 2 + 1] = kHexTable[inputBuffer[i] * 2 + 1];
-  }
-
-  return true;
-}
-
-FOLLY_ALWAYS_INLINE static uint8_t fromHex(char c) {
-  if (c >= '0' && c <= '9') {
-    return c - '0';
-  }
-
-  if (c >= 'A' && c <= 'F') {
-    return 10 + c - 'A';
-  }
-
-  if (c >= 'a' && c <= 'f') {
-    return 10 + c - 'a';
-  }
-
-  VELOX_USER_FAIL("Invalid hex character: {}", c);
-}
-
-FOLLY_ALWAYS_INLINE unsigned char toHex(unsigned char c) {
-  return c < 10 ? (c + '0') : (c + 'A' - 10);
-}
-
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE bool fromHex(TOutString& output, const TInString& input) {
-  VELOX_USER_CHECK_EQ(
-      input.size() % 2,
-      0,
-      "Invalid input length for from_hex(): {}",
-      input.size());
-
-  const auto resultSize = input.size() / 2;
-  output.resize(resultSize);
-
-  const char* inputBuffer = input.data();
-  char* resultBuffer = output.data();
-
-  for (auto i = 0; i < resultSize; ++i) {
-    resultBuffer[i] =
-        (fromHex(inputBuffer[i * 2]) << 4) | fromHex(inputBuffer[i * 2 + 1]);
-  }
-
-  return true;
-}
-
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE bool toBase64(TOutString& output, const TInString& input) {
-  output.resize(encoding::Base64::calculateEncodedSize(input.size()));
-  encoding::Base64::encode(input.data(), input.size(), output.data());
-  return true;
-}
-
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE bool fromBase64(
-    TOutString& output,
-    const TInString& input) {
-  try {
-    auto inputSize = input.size();
-    output.resize(
-        encoding::Base64::calculateDecodedSize(input.data(), inputSize));
-    encoding::Base64::decode(input.data(), input.size(), output.data());
-  } catch (const encoding::Base64Exception& e) {
-    VELOX_USER_FAIL(e.what());
-  }
-  return true;
-}
-
-FOLLY_ALWAYS_INLINE void charEscape(unsigned char c, char* output) {
-  output[0] = '%';
-  output[1] = toHex(c / 16);
-  output[2] = toHex(c % 16);
-}
-
-/// Escapes ``input`` by encoding it so that it can be safely included in
-/// URL query parameter names and values:
-///
-///  * Alphanumeric characters are not encoded.
-///  * The characters ``.``, ``-``, ``*`` and ``_`` are not encoded.
-///  * The ASCII space character is encoded as ``+``.
-///  * All other characters are converted to UTF-8 and the bytes are encoded
-///    as the string ``%XX`` where ``XX`` is the uppercase hexadecimal
-///    value of the UTF-8 byte.
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE bool urlEscape(TOutString& output, const TInString& input) {
-  auto inputSize = input.size();
-  output.reserve(inputSize * 3);
-
-  auto inputBuffer = input.data();
-  auto outputBuffer = output.data();
-
-  size_t outIndex = 0;
-  for (auto i = 0; i < inputSize; ++i) {
-    unsigned char p = inputBuffer[i];
-
-    if ((p >= 'a' && p <= 'z') || (p >= 'A' && p <= 'Z') ||
-        (p >= '0' && p <= '9') || p == '-' || p == '_' || p == '.' ||
-        p == '*') {
-      outputBuffer[outIndex++] = p;
-    } else if (p == ' ') {
-      outputBuffer[outIndex++] = '+';
-    } else {
-      charEscape(p, outputBuffer + outIndex);
-      outIndex += 3;
-    }
-  }
-  output.resize(outIndex);
-  return true;
-}
-
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE bool urlUnescape(
-    TOutString& output,
-    const TInString& input) {
-  auto inputSize = input.size();
-  output.reserve(inputSize);
-
-  auto outputBuffer = output.data();
-  const char* p = input.data();
-  const char* end = p + inputSize;
-  char buf[3];
-  buf[2] = '\0';
-  char* endptr;
-  for (; p < end; ++p) {
-    if (*p == '+') {
-      *outputBuffer++ = ' ';
-    } else if (*p == '%') {
-      if (p + 2 < end) {
-        buf[0] = p[1];
-        buf[1] = p[2];
-        int val = strtol(buf, &endptr, 16);
-        if (endptr == buf + 2) {
-          *outputBuffer++ = (char)val;
-          p += 2;
-        } else {
-          VELOX_USER_FAIL(
-              "Illegal hex characters in escape (%) pattern: {}", buf);
-        }
-      } else {
-        VELOX_USER_FAIL("Incomplete trailing escape (%) pattern");
-      }
-    } else {
-      *outputBuffer++ = *p;
-    }
-  }
-  output.resize(outputBuffer - output.data());
-  return true;
-}
-
 // Presto supports both ascii whitespace and unicode line separator \u2028.
 FOLLY_ALWAYS_INLINE bool isUnicodeWhiteSpace(utf8proc_int32_t codePoint) {
   // 9 -> \t, 10 -> \n, 13 -> \r, 32 -> ' ', 8232 -> \u2028
@@ -500,6 +267,10 @@ FOLLY_ALWAYS_INLINE bool isUnicodeWhiteSpace(utf8proc_int32_t codePoint) {
 
 FOLLY_ALWAYS_INLINE bool isAsciiWhiteSpace(char ch) {
   return ch == '\t' || ch == '\n' || ch == '\r' || ch == ' ';
+}
+
+FOLLY_ALWAYS_INLINE bool isAsciiSpace(char ch) {
+  return ch == ' ';
 }
 
 // Returns -1 if 'data' does not end with a white space, otherwise returns the
@@ -569,6 +340,7 @@ FOLLY_ALWAYS_INLINE bool splitPart(
 template <
     bool leftTrim,
     bool rightTrim,
+    bool(shouldTrim)(char) = isAsciiWhiteSpace,
     typename TOutString,
     typename TInString>
 FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
@@ -581,7 +353,7 @@ FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
 
   auto curPos = input.begin();
   if constexpr (leftTrim) {
-    while (curPos < input.end() && isAsciiWhiteSpace(*curPos)) {
+    while (curPos < input.end() && shouldTrim(*curPos)) {
       curPos++;
     }
   }
@@ -592,7 +364,7 @@ FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
   auto start = curPos;
   curPos = input.end() - 1;
   if constexpr (rightTrim) {
-    while (curPos >= start && isAsciiWhiteSpace(*curPos)) {
+    while (curPos >= start && shouldTrim(*curPos)) {
       curPos--;
     }
   }
@@ -616,8 +388,10 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
   if constexpr (leftTrim) {
     int codePointSize = 0;
     while (curStartPos < input.size()) {
-      auto codePoint =
-          utf8proc_codepoint(input.data() + curStartPos, codePointSize);
+      auto codePoint = utf8proc_codepoint(
+          input.data() + curStartPos,
+          input.data() + input.size(),
+          codePointSize);
       if (!isUnicodeWhiteSpace(codePoint)) {
         break;
       }

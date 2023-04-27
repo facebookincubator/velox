@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox {
 
@@ -54,6 +55,17 @@ class Callable {
       exec::EvalCtx* context,
       const std::vector<VectorPtr>& args,
       const BufferPtr& elementToTopLevelRows,
+      VectorPtr* result) = 0;
+
+  /// Same as 'apply', but errors are suppressed and returned in
+  /// 'elementErrors', and errors in 'context' are not updated.
+  virtual void applyNoThrow(
+      const SelectivityVector& rows,
+      const SelectivityVector& finalSelection,
+      const BufferPtr& wrapCapture,
+      exec::EvalCtx* context,
+      const std::vector<VectorPtr>& args,
+      ErrorVectorPtr& elementErrors,
       VectorPtr* result) = 0;
 };
 
@@ -165,14 +177,6 @@ class FunctionVector : public BaseVector {
 
   vector_size_t wrappedIndex(vector_size_t index) const override {
     return index;
-  }
-
-  // Fast shortcut for determining constancy. The vector will nearly
-  // always have a single function. If the non-function argument of a
-  // lambda-accepting function is wrapped in a dictionary, the
-  // dictionary can be peeled off if the function is constant.
-  bool isConstant(const SelectivityVector& /*rows*/) const override {
-    return functions_.size() == 1;
   }
 
   Iterator iterator(const SelectivityVector* rows) const {

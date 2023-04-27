@@ -15,6 +15,7 @@
  */
 
 #include <optional>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -53,6 +54,14 @@ class GreatestLeastTest : public functions::test::FunctionBaseTest {
           result->template asFlatVector<StringView>()->stringBuffers().size());
     }
   }
+
+  void runDecimalTest(
+      const std::string& query,
+      const std::vector<VectorPtr>& input,
+      const VectorPtr& output) {
+    auto result = evaluate(query, makeRowVector(input));
+    test::assertEqualVectors(output, result);
+  }
 };
 
 TEST_F(GreatestLeastTest, leastDouble) {
@@ -64,15 +73,13 @@ TEST_F(GreatestLeastTest, leastDouble) {
 
 TEST_F(GreatestLeastTest, nanInput) {
   std::vector<double> input{0, 1.1, std::nan("1")};
-  assertUserInvalidArgument(
-      [&]() { runTest<double>("least(c0)", {{0.0 / 0.0}}, {0}); },
+  VELOX_ASSERT_THROW(
+      runTest<double>("least(c0)", {{0.0 / 0.0}}, {0}),
       "Invalid argument to least(): NaN");
   runTest<double>("try(least(c0, 1.0))", {input}, {0, 1.0, std::nullopt});
 
-  assertUserInvalidArgument(
-      [&]() {
-        runTest<double>("greatest(c0)", {1, {0.0 / 0.0}}, {1, 0});
-      },
+  VELOX_ASSERT_THROW(
+      runTest<double>("greatest(c0)", {1, {0.0 / 0.0}}, {1, 0}),
       "Invalid argument to greatest(): NaN");
   runTest<double>("try(greatest(c0, 1.0))", {input}, {1.0, 1.1, std::nullopt});
 }
@@ -180,4 +187,70 @@ TEST_F(GreatestLeastTest, clearNulls) {
       ASSERT_EQ(result->valueAt(i), i);
     }
   }
+}
+
+TEST_F(GreatestLeastTest, shortDecimal) {
+  const auto type = DECIMAL(10, 4);
+  static const auto kMin = UnscaledShortDecimal::min().unscaledValue() + 1;
+  static const auto kMax = UnscaledShortDecimal::max().unscaledValue() - 1;
+
+  const auto a = makeNullableShortDecimalFlatVector(
+      {10000, -10000, 20000, kMax, kMin, std::nullopt}, type);
+  const auto b = makeNullableShortDecimalFlatVector(
+      {-10000, 10000, -20000, kMin, kMax, 1}, type);
+  runDecimalTest("least(c0)", {a}, a);
+  runDecimalTest("greatest(c0)", {a}, a);
+
+  auto expected = makeNullableShortDecimalFlatVector(
+      {-10000, -10000, -20000, kMin, kMin, std::nullopt}, type);
+  runDecimalTest("least(c0, c1)", {a, b}, expected);
+
+  expected = makeNullableShortDecimalFlatVector(
+      {10000, 10000, 20000, kMax, kMax, std::nullopt}, type);
+  runDecimalTest("greatest(c0, c1)", {a, b}, expected);
+}
+
+TEST_F(GreatestLeastTest, longDecimal) {
+  const auto type = DECIMAL(38, 10);
+  static const auto kMin = UnscaledLongDecimal::min().unscaledValue() + 1;
+  static const auto kMax = UnscaledLongDecimal::max().unscaledValue() - 1;
+
+  const auto a = makeNullableLongDecimalFlatVector(
+      {buildInt128(10, 300),
+       buildInt128(-10, 300),
+       buildInt128(200, 300),
+       kMax,
+       kMin,
+       std::nullopt},
+      type);
+  const auto b = makeNullableLongDecimalFlatVector(
+      {buildInt128(-10, 300),
+       buildInt128(10, 300),
+       buildInt128(-200, 300),
+       kMin,
+       kMax,
+       buildInt128(1, 1)},
+      type);
+  runDecimalTest("least(c0)", {a}, a);
+  runDecimalTest("greatest(c0)", {a}, a);
+
+  auto expected = makeNullableLongDecimalFlatVector(
+      {buildInt128(-10, 300),
+       buildInt128(-10, 300),
+       buildInt128(-200, 300),
+       kMin,
+       kMin,
+       std::nullopt},
+      type);
+  runDecimalTest("least(c0, c1)", {a, b}, expected);
+
+  expected = makeNullableLongDecimalFlatVector(
+      {buildInt128(10, 300),
+       buildInt128(10, 300),
+       buildInt128(200, 300),
+       kMax,
+       kMax,
+       std::nullopt},
+      type);
+  runDecimalTest("greatest(c0, c1)", {a, b}, expected);
 }

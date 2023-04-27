@@ -72,6 +72,7 @@ GroupingSet::GroupingSet(
                       ->queryConfig()
                       .hashAdaptivityEnabled()),
       pool_(*operatorCtx->pool()) {
+  VELOX_CHECK(pool_.trackUsage());
   for (auto& hasher : hashers_) {
     keyChannels_.push_back(hasher->channel());
   }
@@ -272,11 +273,13 @@ void GroupingSet::initializeGlobalAggregation() {
   //  - uint32_t row size,
   //  - fixed-width accumulators - one per aggregate
   //
-  // Here we always make space for a row size since we only have one
-  // row and no RowContainer.
+  // Here we always make space for a row size since we only have one row and no
+  // RowContainer.  The whole row is allocated to guarantee that alignment
+  // requirements of all aggregate functions are satisfied.
   int32_t rowSizeOffset = bits::nbytes(aggregates_.size());
   int32_t offset = rowSizeOffset + sizeof(int32_t);
   int32_t nullOffset = 0;
+  int32_t alignment = 1;
 
   for (auto& aggregate : aggregates_) {
     aggregate->setAllocator(&stringAllocator_);
@@ -289,9 +292,10 @@ void GroupingSet::initializeGlobalAggregation() {
         rowSizeOffset);
     offset += aggregate->accumulatorFixedWidthSize();
     ++nullOffset;
+    alignment = aggregate->combineAlignment(alignment);
   }
 
-  lookup_->hits[0] = rows_.allocateFixed(offset);
+  lookup_->hits[0] = rows_.allocateFixed(offset, alignment);
   const auto singleGroup = std::vector<vector_size_t>{0};
   for (auto& aggregate : aggregates_) {
     aggregate->initializeNewGroups(lookup_->hits.data(), singleGroup);
@@ -455,6 +459,27 @@ void GroupingSet::resetPartial() {
   }
 }
 
+bool GroupingSet::isPartialFull(int64_t maxBytes) {
+  VELOX_CHECK(isPartial_);
+  if (!table_ || allocatedBytes() <= maxBytes) {
+    return false;
+  }
+  if (table_->hashMode() != BaseHashTable::HashMode::kArray) {
+    // Not a kArray table, no rehashing will shrink this.
+    return true;
+  }
+  auto stats = table_->stats();
+  // If we have a large array with sparse data, we rehash this in a
+  // mode that turns off value ranges for kArray mode. Large means
+  // over 1/16 of the space budget and sparse means under 1 entry
+  // per 32 buckets.
+  if (stats.capacity * sizeof(void*) > maxBytes / 16 &&
+      stats.numDistinct < stats.capacity / 32) {
+    table_->decideHashMode(0, true);
+  }
+  return allocatedBytes() > maxBytes;
+}
+
 uint64_t GroupingSet::allocatedBytes() const {
   if (table_) {
     return table_->allocatedBytes();
@@ -501,8 +526,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  auto tracker = pool_.getMemoryUsageTracker();
-  const auto currentUsage = tracker->currentBytes();
+  const auto currentUsage = pool_.getCurrentBytes();
   if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig_->spillableReservationGrowthPct / 100;
@@ -528,7 +552,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
       rows->sizeIncrement(input->size(), outOfLineBytes ? flatBytes : 0) +
       tableIncrement;
   // There must be at least 2x the increment in reservation.
-  if (tracker->availableReservation() > 2 * increment) {
+  if (pool_.availableReservation() > 2 * increment) {
     return;
   }
   // Check if can increase reservation. The increment is the larger of
@@ -537,7 +561,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   auto targetIncrement = std::max<int64_t>(
       increment * 2,
       currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
-  if (tracker->maybeReserve(targetIncrement)) {
+  if (pool_.maybeReserve(targetIncrement)) {
     return;
   }
   auto rowsToSpill = std::max<int64_t>(
@@ -558,7 +582,7 @@ void GroupingSet::spill(int64_t targetRows, int64_t targetBytes) {
     for (auto i = 0; i < types.size(); ++i) {
       names.push_back(fmt::format("s{}", i));
     }
-    VELOX_DCHECK(pool_.getMemoryUsageTracker() != nullptr);
+    VELOX_DCHECK(pool_.trackUsage());
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kAggregate,
         rows,
@@ -690,5 +714,13 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* FOLLY_NONNULL row) {
   }
   mergeSelection_.setValid(input.currentIndex(), false);
 }
+
+std::optional<int64_t> GroupingSet::estimateRowSize() const {
+  const RowContainer* rows =
+      table_ ? table_->rows() : rowsWhileReadingSpill_.get();
+  return rows && rows->estimateRowSize() >= 0
+      ? std::optional<int64_t>(rows->estimateRowSize())
+      : std::nullopt;
+};
 
 } // namespace facebook::velox::exec

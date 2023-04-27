@@ -22,6 +22,7 @@
 #include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
@@ -41,10 +42,10 @@ class ParquetReaderBenchmark {
  public:
   explicit ParquetReaderBenchmark(bool disableDictionary)
       : disableDictionary_(disableDictionary) {
-    pool_ = memory::getDefaultMemoryPool();
+    pool_ = memory::addDefaultLeafMemoryPool();
     dataSetBuilder_ = std::make_unique<DataSetBuilder>(*pool_.get(), 0);
-
-    auto sink = std::make_unique<LocalFileSink>("test.parquet");
+    auto sink =
+        std::make_unique<LocalFileSink>(fileFolder_->path + "/" + fileName_);
     std::shared_ptr<::parquet::WriterProperties> writerProperties;
     if (disableDictionary_) {
       // The parquet file is in plain encoding format.
@@ -121,7 +122,7 @@ class ParquetReaderBenchmark {
       const RowTypePtr& rowType) {
     dwio::common::ReaderOptions readerOpts{pool_.get()};
     auto input = std::make_unique<BufferedInput>(
-        std::make_shared<LocalReadFile>("test.parquet"),
+        std::make_shared<LocalReadFile>(fileFolder_->path + "/" + fileName_),
         readerOpts.getMemoryPool());
 
     std::unique_ptr<Reader> reader;
@@ -242,12 +243,16 @@ class ParquetReaderBenchmark {
   }
 
  private:
+  const std::string fileName_ = "test.parquet";
+  const std::shared_ptr<facebook::velox::exec::test::TempDirectoryPath>
+      fileFolder_ = facebook::velox::exec::test::TempDirectoryPath::create();
+  const bool disableDictionary_;
+
   std::unique_ptr<test::DataSetBuilder> dataSetBuilder_;
   std::shared_ptr<memory::MemoryPool> pool_;
   dwio::common::DataSink* sinkPtr_;
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
   RuntimeStatistics runtimeStats_;
-  bool disableDictionary_;
 };
 
 void run(

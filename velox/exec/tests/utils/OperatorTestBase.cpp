@@ -16,6 +16,7 @@
 
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/DataSink.h"
 #include "velox/exec/Exchange.h"
@@ -159,6 +160,24 @@ core::TypedExprPtr OperatorTestBase::parseExpr(
     const parse::ParseOptions& options) {
   auto untyped = parse::parseExpr(text, options);
   return core::Expressions::inferTypes(untyped, rowType, pool_.get());
+}
+
+/*static*/ void OperatorTestBase::deleteTaskAndCheckSpillDirectory(
+    std::shared_ptr<Task>& task) {
+  const auto spillDirectoryStr = task->spillDirectory();
+  // Nothing to do if there is no spilling directory was set.
+  if (spillDirectoryStr.empty()) {
+    return;
+  }
+
+  // Wait for the task to go.
+  task.reset();
+  Task::testingWaitForAllTasksToBeDeleted();
+
+  // If a spilling directory was set, ensure it was removed after the task is
+  // gone.
+  auto fs = filesystems::getFileSystem(spillDirectoryStr, nullptr);
+  EXPECT_FALSE(fs->exists(spillDirectoryStr));
 }
 
 } // namespace facebook::velox::exec::test

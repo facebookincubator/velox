@@ -33,13 +33,9 @@ HashAggregation::HashAggregation(
           aggregationNode->step() == core::AggregationNode::Step::kPartial
               ? "PartialAggregation"
               : "Aggregation"),
-      outputBatchSize_{driverCtx->queryConfig().preferredOutputBatchSize()},
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
       isDistinct_(aggregationNode->aggregates().empty()),
       isGlobal_(aggregationNode->groupingKeys().empty()),
-      memoryTracker_(operatorCtx_->pool()->getMemoryUsageTracker()),
-      partialAggregationGoodPct_(
-          driverCtx->queryConfig().partialAggregationGoodPct()),
       maxExtendedPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxExtendedPartialAggregationMemoryUsage()),
       spillConfig_(
@@ -48,7 +44,7 @@ HashAggregation::HashAggregation(
               : std::nullopt),
       maxPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {
-  VELOX_CHECK_NOT_NULL(memoryTracker_, "Memory usage tracker is not set");
+  VELOX_CHECK(pool()->trackUsage());
   auto inputType = aggregationNode->sources()[0]->outputType();
 
   auto numHashers = aggregationNode->groupingKeys().size();
@@ -90,13 +86,7 @@ HashAggregation::HashAggregation(
       channels.push_back(exprToChannel(arg.get(), inputType));
       if (channels.back() == kConstantChannel) {
         auto constant = dynamic_cast<const core::ConstantTypedExpr*>(arg.get());
-        if (constant->hasValueVector()) {
-          constants.push_back(
-              BaseVector::wrapInConstant(1, 0, constant->valueVector()));
-        } else {
-          constants.push_back(BaseVector::createConstant(
-              constant->value(), 1, operatorCtx_->pool()));
-        }
+        constants.push_back(constant->toConstantVector(pool()));
       } else {
         constants.push_back(nullptr);
       }
@@ -188,17 +178,15 @@ void HashAggregation::addInput(RowVectorPtr input) {
         RuntimeMetric(hashTableStats.numRehashes);
     lockedStats->runtimeStats["hashtable.numDistinct"] =
         RuntimeMetric(hashTableStats.numDistinct);
-    if (hashTableStats.numTombstones != 0) {
-      lockedStats->runtimeStats["hashtable.numTombstones"] =
-          RuntimeMetric(hashTableStats.numTombstones);
-    }
+    lockedStats->runtimeStats["hashtable.numTombstones"] =
+        RuntimeMetric(hashTableStats.numTombstones);
   }
 
   // NOTE: we should not trigger partial output flush in case of global
   // aggregation as the final aggregator will handle it the same way as the
   // partial aggregator. Hence, we have to use more memory anyway.
   if (isPartialOutput_ && !isGlobal_ &&
-      groupingSet_->allocatedBytes() > maxPartialAggregationMemoryUsage_) {
+      groupingSet_->isPartialFull(maxPartialAggregationMemoryUsage_)) {
     partialFull_ = true;
   }
 
@@ -234,6 +222,7 @@ void HashAggregation::resetPartialOutputIfNeed() {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
         "flushRowCount", RuntimeCounter(numOutputRows_));
+    lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
     lockedStats->addRuntimeStat(
         "partialAggregationPct", RuntimeCounter(aggregationPct));
   }
@@ -251,9 +240,8 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
   VELOX_DCHECK(isPartialOutput_);
   // Do not increase the aggregation memory usage further if we have already
   // achieved good aggregation ratio with the current size.
-  if (aggregationPct < partialAggregationGoodPct_ ||
-      maxPartialAggregationMemoryUsage_ >=
-          maxExtendedPartialAggregationMemoryUsage_) {
+  if (maxPartialAggregationMemoryUsage_ >=
+      maxExtendedPartialAggregationMemoryUsage_) {
     return;
   }
   const int64_t extendedPartialAggregationMemoryUsage = std::min(
@@ -265,7 +253,7 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
   const int64_t memoryToReserve = std::max<int64_t>(
       0,
       extendedPartialAggregationMemoryUsage - groupingSet_->allocatedBytes());
-  if (!memoryTracker_->maybeReserve(memoryToReserve)) {
+  if (!pool()->maybeReserve(memoryToReserve)) {
     return;
   }
   // Update the aggregation memory usage size limit on memory reservation
@@ -319,7 +307,8 @@ RowVectorPtr HashAggregation::getOutput() {
     return output;
   }
 
-  const auto batchSize = isGlobal_ ? 1 : outputBatchSize_;
+  const auto batchSize =
+      isGlobal_ ? 1 : outputBatchRows(groupingSet_->estimateRowSize());
 
   // Reuse output vectors if possible.
   prepareOutput(batchSize);

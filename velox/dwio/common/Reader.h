@@ -69,6 +69,12 @@ class RowReader {
    * @return Estimate of the row size or std::nullopt if cannot estimate.
    */
   virtual std::optional<size_t> estimatedRowSize() const = 0;
+
+  // Returns true if the expected IO for 'this' is scheduled. If this
+  // is true it makes sense to prefetch the next split.
+  virtual bool allPrefetchIssued() const {
+    return false;
+  }
 };
 
 /**

@@ -66,6 +66,14 @@ class GroupingSet {
 
   void resetPartial();
 
+  /// Returns true if 'this' should start producing partial
+  /// aggregation results. Checks the memory consumption against
+  /// 'maxBytes'. If exceeding 'maxBytes', sees if changing hash mode
+  /// can free up space and rehashes and returns false if significant
+  /// space was recovered. In specific, changing from an array hash
+  /// based on value ranges to one based on value ids can save a lot.
+  bool isPartialFull(int64_t maxBytes);
+
   const HashLookup& hashLookup() const;
 
   /// Spills content until under 'targetRows' and under 'targetBytes'
@@ -91,6 +99,9 @@ class GroupingSet {
   int64_t numRows() const {
     return table_ ? table_->rows()->numRows() : 0;
   }
+
+  /// Returns an estimate of the average row size.
+  std::optional<int64_t> estimateRowSize() const;
 
  private:
   void addInputForActiveRows(const RowVectorPtr& input, bool mayPushdown);

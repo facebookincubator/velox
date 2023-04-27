@@ -25,7 +25,7 @@ uint64_t* rowsWithError(
     const SelectivityVector& rows,
     const SelectivityVector& activeRows,
     EvalCtx& context,
-    EvalCtx::ErrorVectorPtr& previousErrors,
+    ErrorVectorPtr& previousErrors,
     LocalSelectivityVector& errorRowsHolder) {
   auto errors = context.errors();
   if (!errors) {
@@ -73,11 +73,12 @@ void finalizeErrors(
   if (!errors) {
     return;
   }
-  // null flag of error |= initial active & ~final active.
+  // Pre-existing errors outside of initial active rows are preserved. Errors in
+  // the initial active rows but not in the final active rows are cleared.
   int32_t numWords = bits::nwords(errors->size());
   auto errorNulls = errors->mutableNulls(errors->size())->asMutable<uint64_t>();
   for (int32_t i = 0; i < numWords; ++i) {
-    errorNulls[i] &= rows.asRange().bits()[i] & activeRows.asRange().bits()[i];
+    errorNulls[i] &= ~rows.asRange().bits()[i] | activeRows.asRange().bits()[i];
     if (throwOnError && errorNulls[i]) {
       int32_t errorIndex = i * 64 + __builtin_ctzll(errorNulls[i]);
       if (errorIndex < errors->size() && errorIndex < rows.end()) {
@@ -126,7 +127,7 @@ void ConjunctExpr::evalSpecialForm(
   for (int32_t i = 0; i < inputs_.size(); ++i) {
     VectorPtr inputResult;
     VectorRecycler inputResultRecycler(inputResult, context.vectorPool());
-    EvalCtx::ErrorVectorPtr errors;
+    ErrorVectorPtr errors;
     if (handleErrors) {
       context.swapErrors(errors);
     }

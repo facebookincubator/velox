@@ -23,7 +23,7 @@ using namespace facebook::velox;
 class UnsafeRowSerializerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getDefaultMemoryPool();
+    pool_ = memory::addDefaultLeafMemoryPool();
     serde_ = std::make_unique<serializer::spark::UnsafeRowVectorSerde>();
   }
 
@@ -100,8 +100,11 @@ TEST_F(UnsafeRowSerializerTest, types) {
   opts.dictionaryHasNulls = false;
   opts.stringVariableLength = true;
   opts.stringLength = 20;
+  opts.containerVariableLength = false;
+
   // Spark uses microseconds to store timestamp
-  opts.useMicrosecondPrecisionTimestamp = true;
+  opts.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;
   opts.containerLength = 10;
 
   auto seed = folly::Random::rand32();

@@ -66,7 +66,7 @@ struct PyVeloxContext {
 
  private:
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_ =
-      facebook::velox::memory::getDefaultMemoryPool();
+      facebook::velox::memory::addDefaultLeafMemoryPool();
   std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx_ =
       std::make_shared<facebook::velox::core::QueryCtx>();
   std::unique_ptr<facebook::velox::core::ExecCtx> execCtx_ =
@@ -204,9 +204,6 @@ inline void addDataTypeBindings(
       m, "MapType", py::module_local(asModuleLocalDefinitions));
   py::class_<RowType, Type, std::shared_ptr<RowType>> rowType(
       m, "RowType", py::module_local(asModuleLocalDefinitions));
-  py::class_<FixedSizeArrayType, Type, std::shared_ptr<FixedSizeArrayType>>
-      fixedArrayType(
-          m, "FixedSizeArrayType", py::module_local(asModuleLocalDefinitions));
 
   // Basic operations on Type.
   type.def("__str__", &Type::toString);
@@ -245,9 +242,6 @@ inline void addDataTypeBindings(
   arrayType.def(py::init<std::shared_ptr<Type>>());
   arrayType.def(
       "element_type", &ArrayType::elementType, "Return the element type");
-  fixedArrayType.def(py::init<int, velox::TypePtr>())
-      .def("element_type", &velox::FixedSizeArrayType::elementType)
-      .def("fixed_width", &velox::FixedSizeArrayType::fixedElementsWidth);
   mapType.def(py::init<std::shared_ptr<Type>, std::shared_ptr<Type>>());
   mapType.def("key_type", &MapType::keyType, "Return the key type");
   mapType.def("value_type", &MapType::valueType, "Return the value type");
@@ -281,9 +275,7 @@ inline void addDataTypeBindings(
   rowType.def("names", &RowType::names, "Return the names of the columns");
 }
 
-// Many Velox vectors are templated on TypeKind, so we must register each
-// type of vector for each TypeKind with pybind11. This function gets called
-// for each TypeKind.
+// Currently PyVelox will only register vectors for primitive types.
 template <TypeKind T>
 static void registerTypedVectors(
     py::module& m,
@@ -372,9 +364,7 @@ static void addVectorBindings(
       TypeKind::DOUBLE,
       TypeKind::VARBINARY,
       TypeKind::TIMESTAMP,
-      TypeKind::DATE,
-      TypeKind::INTERVAL_DAY_TIME,
-  };
+      TypeKind::DATE};
 
   for (int i = 0; i < sizeof(supportedTypes) / sizeof(supportedTypes[0]); i++) {
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(

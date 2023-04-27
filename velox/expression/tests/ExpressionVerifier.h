@@ -18,6 +18,7 @@
 
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/expression/tests/FuzzerToolkit.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -51,14 +52,16 @@ class ExpressionVerifier {
 
   // Executes an expression both using common path (all evaluation
   // optimizations) and simplified path. Additionally, a sorted list of column
-  // indices can be passed via 'columnsToWarpInLazy' which specify the
+  // indices can be passed via 'columnsToWrapInLazy' which specify the
   // columns/children in the input row vector that should be wrapped in a lazy
   // layer before running it through the common evaluation path.
   // Returns:
-  //  - true if both paths succeeded and returned the exact same results.
-  //  - false if both failed with compatible exceptions.
+  //  - result of evaluating the expression if both paths succeeded and returned
+  //  the exact same vectors.
+  //  - exception thrown by the common path if both paths failed with compatible
+  //  exceptions.
   //  - throws otherwise (incompatible exceptions or different results).
-  bool verify(
+  ResultOrError verify(
       const core::TypedExprPtr& plan,
       const RowVectorPtr& rowVector,
       VectorPtr&& resultVector,
@@ -71,6 +74,16 @@ class ExpressionVerifier {
   void persistReproInfo(
       const VectorPtr& inputVector,
       std::vector<column_index_t> columnsToWarpInLazy,
+      const VectorPtr& resultVector,
+      const std::string& sql,
+      const std::vector<VectorPtr>& complexConstants);
+
+  // Utility method that calls persistReproInfo to save data and sql if
+  // options_.reproPersistPath is set and is not persistAndRunOnce. Do nothing
+  // otherwise.
+  void persistReproInfoIfNeeded(
+      const VectorPtr& inputVector,
+      const std::vector<column_index_t>& columnsToWarpInLazy,
       const VectorPtr& resultVector,
       const std::string& sql,
       const std::vector<VectorPtr>& complexConstants);

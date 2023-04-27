@@ -36,6 +36,7 @@ namespace facebook::velox::cache {
 class AsyncDataCache;
 class CacheShard;
 class SsdCache;
+class SsdCacheStats;
 class SsdFile;
 
 // Type for tracking last access. This is based on CPU clock and
@@ -426,6 +427,9 @@ class CoalescedLoad {
     setEndState(LoadState::kCancelled);
   }
 
+  /// Returns the cache space 'this' will occupy after loaded.
+  virtual int64_t size() const = 0;
+
   virtual std::string toString() const {
     return "<CoalescedLoad>";
   }
@@ -482,6 +486,8 @@ struct CacheStats {
   // Number of hits (saved IO). The first hit to a prefetched entry does not
   // count.
   int64_t numHit{};
+  // Sum of sizes of entries counted in 'numHit'.
+  int64_t hitBytes{};
   // Number of new entries created.
   int64_t numNew{};
   // Number of times a valid entry was removed in order to make space.
@@ -497,6 +503,8 @@ struct CacheStats {
   // Sum of scores of evicted entries. This serves to infer an average
   // lifetime for entries in cache.
   int64_t sumEvictScore{};
+
+  std::shared_ptr<SsdCacheStats> ssdStats = nullptr;
 };
 // Collection of cache entries whose key hashes to the same shard of
 // the hash number space.  The cache population is divided into shards
@@ -582,6 +590,8 @@ class CacheShard {
   int32_t evictionThreshold_{kNoThreshold};
   // Cumulative count of cache hits.
   uint64_t numHit_{};
+  // Sum of bytes in cache hits.
+  uint64_t hitBytes_{};
   // Cumulative count of hits on entries held in exclusive mode.
   uint64_t numWaitExclusive_{};
   // Cumulative count of new entry creation.

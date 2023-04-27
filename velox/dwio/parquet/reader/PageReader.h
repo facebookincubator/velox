@@ -20,6 +20,7 @@
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
+#include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
@@ -49,6 +50,21 @@ class PageReader {
         nullConcatenation_(pool_) {
     type_->makeLevelInfo(leafInfo_);
   }
+
+  // This PageReader constructor is for unit test only.
+  PageReader(
+      std::unique_ptr<dwio::common::SeekableInputStream> stream,
+      memory::MemoryPool& pool,
+      thrift::CompressionCodec::type codec,
+      int64_t chunkSize)
+      : pool_(pool),
+        inputStream_(std::move(stream)),
+        maxRepeat_(0),
+        maxDefine_(1),
+        isTopLevel_(maxRepeat_ == 0 && maxDefine_ <= 1),
+        codec_(codec),
+        chunkSize_(chunkSize),
+        nullConcatenation_(pool_) {}
 
   /// Advances 'numRows' top level rows.
   void skip(int64_t numRows);
@@ -91,7 +107,7 @@ class PageReader {
   void readNullsOnly(int64_t numValues, BufferPtr& buffer);
 
   // Returns the current string dictionary as a FlatVector<StringView>.
-  const VectorPtr& dictionaryValues();
+  const VectorPtr& dictionaryValues(const TypePtr& type);
 
   // True if the current page holds dictionary indices.
   bool isDictionary() const {
@@ -109,6 +125,10 @@ class PageReader {
   std::pair<int32_t, int32_t> repDefRange() const {
     return {repDefBegin_, repDefEnd_};
   }
+
+  // Parses the PageHeader at 'inputStream_', and move the bufferStart_ and
+  // bufferEnd_ to the corresponding positions.
+  thrift::PageHeader readPageHeader();
 
  private:
   // Indicates that we only want the repdefs for the next page. Used when
@@ -161,10 +181,6 @@ class PageReader {
   // next page.
   void updateRowInfoAfterPageSkipped();
 
-  // Parses the PageHeader at 'inputStream_'. Will not read more than
-  // 'remainingBytes' since there could be less data left in the
-  // ColumnChunk than the full header size.
-  thrift::PageHeader readPageHeader(int64_t remainingSize);
   void prepareDataPageV1(const thrift::PageHeader& pageHeader, int64_t row);
   void prepareDataPageV2(const thrift::PageHeader& pageHeader, int64_t row);
   void prepareDictionary(const thrift::PageHeader& pageHeader);
@@ -229,7 +245,8 @@ class PageReader {
   template <
       typename Visitor,
       typename std::enable_if<
-          !std::is_same_v<typename Visitor::DataType, folly::StringPiece>,
+          !std::is_same_v<typename Visitor::DataType, folly::StringPiece> &&
+              !std::is_same_v<typename Visitor::DataType, int8_t>,
           int>::type = 0>
   void callDecoder(
       const uint64_t* FOLLY_NULLABLE nulls,
@@ -283,6 +300,24 @@ class PageReader {
       } else {
         stringDecoder_->readWithVisitor<false>(nulls, visitor);
       }
+    }
+  }
+
+  template <
+      typename Visitor,
+      typename std::enable_if<
+          std::is_same_v<typename Visitor::DataType, int8_t>,
+          int>::type = 0>
+  void callDecoder(
+      const uint64_t* FOLLY_NULLABLE nulls,
+      bool& nullsFromFastPath,
+      Visitor visitor) {
+    VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded")
+    if (nulls) {
+      nullsFromFastPath = false;
+      booleanDecoder_->readWithVisitor<true>(nulls, visitor);
+    } else {
+      booleanDecoder_->readWithVisitor<false>(nulls, visitor);
     }
   }
 
@@ -436,6 +471,7 @@ class PageReader {
   std::unique_ptr<dwio::common::DirectDecoder<true>> directDecoder_;
   std::unique_ptr<RleBpDataDecoder> dictionaryIdDecoder_;
   std::unique_ptr<StringDecoder> stringDecoder_;
+  std::unique_ptr<BooleanDecoder> booleanDecoder_;
   // Add decoders for other encodings here.
 };
 

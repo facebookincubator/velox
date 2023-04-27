@@ -35,7 +35,8 @@ class FunctionTest : public ::testing::Test {
   std::shared_ptr<core::QueryCtx> queryCtx_ =
       std::make_shared<core::QueryCtx>();
 
-  std::shared_ptr<memory::MemoryPool> pool_ = memory::getDefaultMemoryPool();
+  std::shared_ptr<memory::MemoryPool> pool_ =
+      memory::addDefaultLeafMemoryPool();
 
   std::shared_ptr<vestrait::SubstraitParser> substraitParser_ =
       std::make_shared<vestrait::SubstraitParser>();
@@ -193,13 +194,8 @@ TEST_F(FunctionTest, setVectorFromVariants) {
       "1994-04-20", resultVec->asFlatVector<Date>()->valueAt(1).toString());
 
   resultVec = setVectorFromVariants(
-      INTERVAL_DAY_TIME(),
-      {variant(IntervalDayTime(9020)), variant(IntervalDayTime(8875))},
-      pool_.get());
-  ASSERT_EQ(
-      "0 00:00:09.020",
-      resultVec->asFlatVector<IntervalDayTime>()->valueAt(0).toString());
-  ASSERT_EQ(
-      "0 00:00:08.875",
-      resultVec->asFlatVector<IntervalDayTime>()->valueAt(1).toString());
+      INTERVAL_DAY_TIME(), {variant(9020LL), variant(8875LL)}, pool_.get());
+  ASSERT_TRUE(isIntervalDayTimeType(resultVec->type()));
+  ASSERT_EQ(9020, resultVec->asFlatVector<int64_t>()->valueAt(0));
+  ASSERT_EQ(8875, resultVec->asFlatVector<int64_t>()->valueAt(1));
 }

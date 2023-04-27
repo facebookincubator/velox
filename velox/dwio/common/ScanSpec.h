@@ -40,6 +40,9 @@ namespace common {
 class ScanSpec {
  public:
   static constexpr column_index_t kNoChannel = ~0;
+  static constexpr const char* kMapKeysFieldName = "keys";
+  static constexpr const char* kMapValuesFieldName = "values";
+  static constexpr const char* kArrayElementsFieldName = "elements";
 
   explicit ScanSpec(const Subfield::PathElement& element) {
     if (element.kind() == kNestedField) {
@@ -53,6 +56,12 @@ class ScanSpec {
 
   explicit ScanSpec(const std::string& name) : fieldName_(name) {}
 
+  ScanSpec(const ScanSpec& other) {
+    *this = other;
+  }
+
+  ScanSpec& operator=(const ScanSpec&);
+
   // Filter to apply. If 'this' corresponds to a struct/list/map, this
   // can only be isNull or isNotNull, other filtering is given by
   // 'children'.
@@ -64,6 +73,16 @@ class ScanSpec {
   // pushed down filter, e.g. top k cutoff.
   void setFilter(std::unique_ptr<Filter> filter) {
     filter_ = std::move(filter);
+  }
+
+  void addFilter(const Filter&);
+
+  void setMaxArrayElementsCount(vector_size_t count) {
+    maxArrayElementsCount_ = count;
+  }
+
+  vector_size_t maxArrayElementsCount() const {
+    return maxArrayElementsCount_;
   }
 
   void addMetadataFilter(
@@ -155,7 +174,6 @@ class ScanSpec {
   // Position in the RowVector returned by the top level scan. Applies
   // only to children of the root struct where projectOut_ is true.
   column_index_t channel() const {
-    VELOX_CHECK(channel_ != kNoChannel);
     return channel_;
   }
 
@@ -166,6 +184,13 @@ class ScanSpec {
   const std::vector<std::shared_ptr<ScanSpec>>& children() const {
     return children_;
   }
+
+  // Returns 'children in a stable order. May be used for parallel
+  // construction and read-ahead of reader trees while the main user
+  // of 'this' is running. 'children_' may be reordered while running
+  // but the tree being constructed must see a single, unchanging
+  // order.
+  const std::vector<ScanSpec*>& stableChildren();
 
   // Returns a read sequence number. This can b used for tagging
   // lazy vectors with a generation number so that we can check that
@@ -252,19 +277,23 @@ class ScanSpec {
     makeFlat_ = makeFlat;
   }
 
-  // True if this or a descendant has a filter. This may change as a
-  // result of runtime adaptation.
+  // True if this or a descendant has a filter that will affect the number of
+  // output rows.  Note that filter on map keys and array indices is not
+  // counted, as they do not change the number of container output rows.
+  //
+  // This may change as a result of runtime adaptation.
   bool hasFilter() const;
 
   // Resets cached values after this or children were updated, e.g. a new filter
   // was added or existing filter was modified.
-  void resetCachedValues() {
+  void resetCachedValues(bool doReorder) {
     hasFilter_.reset();
     for (auto& child : children_) {
-      child->resetCachedValues();
+      child->resetCachedValues(doReorder);
     }
-
-    reorder();
+    if (doReorder) {
+      reorder();
+    }
   }
 
   void setEnableFilterReorder(bool enableFilterReorder) {
@@ -274,14 +303,53 @@ class ScanSpec {
   // Returns the child which produces values for 'channel'. Throws if not found.
   ScanSpec& getChildByChannel(column_index_t channel);
 
+  // sets filter order and filters of 'this' from 'other'. Used when
+  // initializing a ScanSpec for a new split or stripe. This transfers
+  // dynamically acquired filters and adaptive filter order. 'other'
+  // should not be used after this. Different splits or stripes may
+  // have their own ScanSpec trees, so we only move the content, not
+  // the ScanSpec tree itself.
+  void moveAdaptationFrom(ScanSpec& other);
+
   std::string toString() const;
 
-  // Add all fields from RowType to this ScanSpec.  All fields added will be
+  // Add a field to this ScanSpec, with content projected out.
+  ScanSpec* addField(const std::string& name, column_index_t channel);
+
+  // Add a field and its children recursively to this ScanSpec, all projected
+  // out.
+  ScanSpec* addFieldRecursively(
+      const std::string& name,
+      const Type&,
+      column_index_t channel);
+
+  // Add a field for map key.
+  ScanSpec* addMapKeyField();
+
+  // Add a field for map key, along with its child recursively.
+  ScanSpec* addMapKeyFieldRecursively(const Type&);
+
+  // Add a field for map value.
+  ScanSpec* addMapValueField();
+
+  // Add a field for map value, along with its child recursively.
+  ScanSpec* addMapValueFieldRecursively(const Type&);
+
+  // Add a field for array element.
+  ScanSpec* addArrayElementField();
+
+  // Add a field for array element, along with its child recursively.
+  ScanSpec* addArrayElementFieldRecursively(const Type&);
+
+  // Add all child fields on the type recursively to this ScanSpec, all
   // projected out.
-  void addFields(const RowType&);
+  void addAllChildFields(const Type&);
 
  private:
   void reorder();
+
+  // Serializes stableChildren().
+  std::mutex mutex_;
 
   // Number of times read is called on the corresponding reader. This
   // is used for setup on first use and to produce a read sequence
@@ -337,8 +405,21 @@ class ScanSpec {
   // true differentiates pruning from the case of extracting all children.
 
   std::vector<std::shared_ptr<ScanSpec>> children_;
+  // Read-only copy of children, not subject to reordering. Used when
+  // asynchronously constructing reader trees for read-ahead, while
+  // 'children_' is reorderable by a running scan.
+  std::vector<ScanSpec*> stableChildren_;
+
   mutable std::optional<bool> hasFilter_;
   ValueHook* valueHook_ = nullptr;
+
+  // If this node is map key/value or array element, filter will not be
+  // propagated to parent.
+  bool isArrayElementOrMapEntry_ = false;
+
+  // Only take the first maxArrayElementsCount_ elements from each array.
+  vector_size_t maxArrayElementsCount_ =
+      std::numeric_limits<vector_size_t>::max();
 };
 
 // Returns false if no value from a range defined by stats can pass the

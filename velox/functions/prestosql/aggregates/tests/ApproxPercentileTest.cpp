@@ -17,10 +17,11 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -338,10 +339,9 @@ TEST_F(ApproxPercentileTest, invalidWeight) {
   constexpr int64_t kMaxWeight = (1ll << 60) - 1;
   auto makePlan = [&](int64_t weight, bool grouped) {
     auto rows = makeRowVector({
-        std::make_shared<ConstantVector<int32_t>>(pool(), 1, false, 0),
-        std::make_shared<ConstantVector<int64_t>>(
-            pool(), 1, false, int64_t(weight)),
-        std::make_shared<ConstantVector<int32_t>>(pool(), 1, false, 1),
+        makeConstant<int32_t>(0, 1),
+        makeConstant<int64_t>(weight, 1),
+        makeConstant<int32_t>(1, 1),
     });
     std::vector<std::string> groupingKeys;
     if (grouped) {

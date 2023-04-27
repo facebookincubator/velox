@@ -93,14 +93,12 @@ void SelectiveStructColumnReaderBase::read(
   auto& childSpecs = scanSpec_->children();
   const uint64_t* structNulls =
       nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
-  bool hasFilter = false;
   // a struct reader may have a null/non-null filter
   if (scanSpec_->filter()) {
     auto kind = scanSpec_->filter()->kind();
     VELOX_CHECK(
         kind == velox::common::FilterKind::kIsNull ||
         kind == velox::common::FilterKind::kIsNotNull);
-    hasFilter = true;
     filterNulls<int32_t>(
         rows, kind == velox::common::FilterKind::kIsNull, false);
     if (outputRows_.empty()) {
@@ -125,7 +123,6 @@ void SelectiveStructColumnReaderBase::read(
     }
     advanceFieldReader(reader, offset);
     if (childSpec->hasFilter()) {
-      hasFilter = true;
       {
         SelectivityTimer timer(childSpec->selectivity(), activeRows.size());
 
@@ -149,7 +146,7 @@ void SelectiveStructColumnReaderBase::read(
   // here.
   recordParentNullsInChildren(offset, rows);
 
-  if (hasFilter) {
+  if (scanSpec_->hasFilter()) {
     setOutputRows(activeRows);
   }
   lazyVectorReadOffset_ = offset;
@@ -210,20 +207,18 @@ void SelectiveStructColumnReaderBase::getValues(
   VELOX_CHECK(
       result->get()->type()->isRow(),
       "Struct reader expects a result of type ROW.");
-
-  auto resultRow = static_cast<RowVector*>(result->get());
-  if (!result->unique()) {
-    std::vector<VectorPtr> children(resultRow->children().size());
-    fillRowVectorChildren(
-        *resultRow->pool(), resultRow->type()->asRow(), children);
+  auto& rowType = result->get()->type()->asRow();
+  if (!result->unique() || result->get()->isLazy()) {
+    std::vector<VectorPtr> children(rowType.size());
+    fillRowVectorChildren(*result->get()->pool(), rowType, children);
     *result = std::make_unique<RowVector>(
-        resultRow->pool(),
-        resultRow->type(),
-        BufferPtr(nullptr),
+        result->get()->pool(),
+        result->get()->type(),
+        nullptr,
         0,
         std::move(children));
-    resultRow = static_cast<RowVector*>(result->get());
   }
+  auto* resultRow = static_cast<RowVector*>(result->get());
   resultRow->resize(rows.size());
   if (!rows.size()) {
     return;

@@ -42,9 +42,9 @@ class WriterContext : public CompressionBufferPool {
       std::unique_ptr<encryption::EncryptionHandler> handler = nullptr)
       : config_{config},
         pool_{std::move(pool)},
-        dictionaryPool_{pool_->addChild(".dictionary")},
-        outputStreamPool_{pool_->addChild(".compression")},
-        generalPool_{pool_->addChild(".general")},
+        dictionaryPool_{pool_->addLeafChild(".dictionary")},
+        outputStreamPool_{pool_->addLeafChild(".compression")},
+        generalPool_{pool_->addLeafChild(".general")},
         handler_{std::move(handler)},
         compression{getConfig(Config::COMPRESSION)},
         compressionBlockSize{getConfig(Config::COMPRESSION_BLOCK_SIZE)},
@@ -72,11 +72,6 @@ class WriterContext : public CompressionBufferPool {
     }
     validateConfigs();
     VLOG(1) << fmt::format("Compression config: {}", compression);
-    if (auto tracker = pool_->getMemoryUsageTracker()) {
-      dictionaryPool_->setMemoryUsageTracker(tracker->addChild());
-      outputStreamPool_->setMemoryUsageTracker(tracker->addChild());
-      generalPool_->setMemoryUsageTracker(tracker->addChild());
-    }
     compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
         *generalPool_, compressionBlockSize + PAGE_HEADER_SIZE);
   }
@@ -189,6 +184,7 @@ class WriterContext : public CompressionBufferPool {
 
   void nextStripe() {
     fileRowCount += stripeRowCount;
+    rowsPerStripe.push_back(stripeRowCount);
     stripeRowCount = 0;
     indexRowCount = 0;
     fileRawSize += stripeRawSize;
@@ -248,9 +244,7 @@ class WriterContext : public CompressionBufferPool {
   }
 
   int64_t getMemoryBudget() const {
-    auto memoryUsageTracker = pool_->getMemoryUsageTracker();
-    return memoryUsageTracker ? memoryUsageTracker->maxMemory()
-                              : std::numeric_limits<int64_t>::max();
+    return pool_->capacity();
   }
 
   const encryption::EncryptionHandler& getEncryptionHandler() const {
@@ -444,7 +438,6 @@ class WriterContext : public CompressionBufferPool {
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
       case TypeKind::DATE:
-      case TypeKind::INTERVAL_DAY_TIME:
       case TypeKind::SHORT_DECIMAL:
       case TypeKind::LONG_DECIMAL:
         physicalSizeAggregators_.emplace(
@@ -561,6 +554,7 @@ class WriterContext : public CompressionBufferPool {
   uint64_t fileRowCount = 0;
   uint64_t stripeRowCount = 0;
   uint32_t indexRowCount = 0;
+  std::vector<uint64_t> rowsPerStripe{};
 
   uint64_t fileRawSize = 0;
   uint64_t stripeRawSize = 0;

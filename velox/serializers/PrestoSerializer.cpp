@@ -18,7 +18,6 @@
 #include "velox/common/memory/ByteStream.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Date.h"
-#include "velox/type/IntervalDayTime.h"
 #include "velox/vector/BiasVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
@@ -110,8 +109,6 @@ std::string typeToEncodingName(const TypePtr& type) {
       return "LONG_ARRAY";
     case TypeKind::DATE:
       return "INT_ARRAY";
-    case TypeKind::INTERVAL_DAY_TIME:
-      return "LONG_ARRAY";
     case TypeKind::SHORT_DECIMAL:
       return "LONG_ARRAY";
     case TypeKind::LONG_DECIMAL:
@@ -262,35 +259,6 @@ void readValues<Date>(
   } else {
     for (int32_t row = 0; row < size; ++row) {
       rawValues[row] = readDate(source);
-    }
-  }
-}
-
-IntervalDayTime readIntervalDayTime(ByteStream* source) {
-  return IntervalDayTime(source->read<int64_t>());
-}
-
-template <>
-void readValues<IntervalDayTime>(
-    ByteStream* source,
-    vector_size_t size,
-    BufferPtr nulls,
-    vector_size_t nullCount,
-    BufferPtr values) {
-  auto rawValues = values->asMutable<IntervalDayTime>();
-  if (nullCount) {
-    int32_t toClear = 0;
-    bits::forEachSetBit(nulls->as<uint64_t>(), 0, size, [&](int32_t row) {
-      // Set the values between the last non-null and this to type default.
-      for (; toClear < row; ++toClear) {
-        rawValues[toClear] = IntervalDayTime();
-      }
-      rawValues[row] = readIntervalDayTime(source);
-      toClear = row + 1;
-    });
-  } else {
-    for (int32_t row = 0; row < size; ++row) {
-      rawValues[row] = readIntervalDayTime(source);
     }
   }
 }
@@ -488,7 +456,6 @@ void readArrayVector(
   }
   arrayVector->setElements(children[0]);
 
-  auto wantSize = type->isFixedWidth() ? type->fixedElementsWidth() : 0;
   BufferPtr offsets = arrayVector->mutableOffsets(size);
   auto rawOffsets = offsets->asMutable<vector_size_t>();
   BufferPtr sizes = arrayVector->mutableSizes(size);
@@ -499,21 +466,6 @@ void readArrayVector(
     rawOffsets[i] = base;
     rawSizes[i] = offset - base;
     base = offset;
-    // If we are populating a FixedSizeArray, we validate here that
-    // the entries we are populating are the correct sizes. See longer
-    // comment in BaseVector::create() for why we need to validate
-    // here when doing this direct manipulation on the size/offsets,
-    // rather than relying on the ArrayVector constructor time
-    // validation.
-    //
-    // ARROW COMPATIBILITY:
-    // See longer comment in ArrayVector constructor. Today nullable
-    // entries are encoded in a sparse format with a size of zero,
-    // which is incompatible with Arrow's fixed size list layout.
-    if (wantSize != 0 && rawSizes[i] != 0) {
-      VELOX_CHECK_EQ(
-          wantSize, rawSizes[i], "Invalid length element at index {}", i);
-    }
   }
 
   readNulls(source, size, arrayVector);
@@ -739,7 +691,6 @@ void readColumns(
           {TypeKind::DOUBLE, &read<double>},
           {TypeKind::TIMESTAMP, &read<Timestamp>},
           {TypeKind::DATE, &read<Date>},
-          {TypeKind::INTERVAL_DAY_TIME, &read<IntervalDayTime>},
           {TypeKind::SHORT_DECIMAL, &read<UnscaledShortDecimal>},
           {TypeKind::LONG_DECIMAL, &read<UnscaledLongDecimal>},
           {TypeKind::VARCHAR, &read<StringView>},
@@ -999,13 +950,6 @@ template <>
 void VectorStream::append(folly::Range<const Date*> values) {
   for (auto& value : values) {
     appendOne(value.days());
-  }
-}
-
-template <>
-void VectorStream::append(folly::Range<const IntervalDayTime*> values) {
-  for (auto& value : values) {
-    appendOne(value.milliseconds());
   }
 }
 
@@ -1355,6 +1299,9 @@ void serializeColumn(
     case VectorEncoding::Simple::MAP:
       serializeMapVector(vector, ranges, stream);
       break;
+    case VectorEncoding::Simple::LAZY:
+      serializeColumn(vector->loadedVector(), ranges, stream);
+      break;
     default:
       serializeWrapped(vector, ranges, stream);
   }
@@ -1616,6 +1563,9 @@ void estimateSerializedSizeInt(
           arrayVector->elements().get(), childRanges, childSizes.data());
       break;
     }
+    case VectorEncoding::Simple::LAZY:
+      estimateSerializedSizeInt(vector->loadedVector(), ranges, sizes);
+      break;
     default:
       VELOX_CHECK(false, "Unsupported vector encoding {}", vector->encoding());
   }
@@ -1638,7 +1588,7 @@ class PrestoVectorSerializer : public VectorSerializer {
   }
 
   void append(
-      RowVectorPtr vector,
+      const RowVectorPtr& vector,
       const folly::Range<const IndexRange*>& ranges) override {
     auto newRows = rangesTotalSize(ranges);
     if (newRows > 0) {

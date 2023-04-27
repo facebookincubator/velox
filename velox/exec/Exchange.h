@@ -29,14 +29,20 @@ class SerializedPage {
  public:
   static constexpr int kSerializedPageOwner = -11;
 
-  // Construct from IOBuf chain. The external memory usage of 'iobuf' will be
-  // tracked if 'pool' is not null.
-  //
-  // TODO: consider to enforce setting memory pool if possible.
+  // Construct from IOBuf chain.
   explicit SerializedPage(
       std::unique_ptr<folly::IOBuf> iobuf,
-      memory::MemoryPool* FOLLY_NULLABLE pool = nullptr,
       std::function<void(folly::IOBuf&)> onDestructionCb = nullptr);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  explicit SerializedPage(
+      std::unique_ptr<folly::IOBuf> iobuf,
+      memory::MemoryPool* pool = nullptr,
+      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr)
+      : SerializedPage(std::move(iobuf), std::move(onDestructionCb)) {
+    VELOX_CHECK_NULL(pool);
+  }
+#endif
 
   ~SerializedPage();
 
@@ -47,7 +53,7 @@ class SerializedPage {
 
   // Makes 'input' ready for deserializing 'this' with
   // VectorStreamGroup::read().
-  void prepareStreamForDeserialize(ByteStream* FOLLY_NONNULL input);
+  void prepareStreamForDeserialize(ByteStream* input);
 
   std::unique_ptr<folly::IOBuf> getIOBuf() const {
     return iobuf_->clone();
@@ -70,7 +76,6 @@ class SerializedPage {
 
   // Number of payload bytes in 'iobuf_'.
   const int64_t iobufBytes_;
-  memory::MemoryPool* FOLLY_NULLABLE pool_;
 
   // Callback that will be called on destruction of the SerializedPage,
   // primarily used to free externally allocated memory backing folly::IOBuf
@@ -87,7 +92,6 @@ class ExchangeQueue {
   explicit ExchangeQueue(int64_t minBytes) : minBytes_(minBytes) {}
 
   ~ExchangeQueue() {
-    std::lock_guard<std::mutex> l(mutex_);
     clearAllPromises();
   }
 
@@ -99,36 +103,50 @@ class ExchangeQueue {
     return queue_.empty();
   }
 
-  void enqueue(std::unique_ptr<SerializedPage>&& page) {
-    if (!page) {
+  void enqueueLocked(
+      std::unique_ptr<SerializedPage>&& page,
+      std::vector<ContinuePromise>& promises) {
+    if (page == nullptr) {
       ++numCompleted_;
-      checkComplete();
+      auto completedPromises = checkCompleteLocked();
+      promises.reserve(promises.size() + completedPromises.size());
+      for (auto& promise : completedPromises) {
+        promises.push_back(std::move(promise));
+      }
       return;
     }
     totalBytes_ += page->size();
     queue_.push_back(std::move(page));
     if (!promises_.empty()) {
       // Resume one of the waiting drivers.
-      promises_.back().setValue();
+      promises.push_back(std::move(promises_.back()));
       promises_.pop_back();
     }
   }
 
   // If data is permanently not available, e.g. the source cannot be
   // contacted, this registers an error message and causes the reading
-  // Exchanges to throw with the message
-  void setErrorLocked(const std::string& error) {
-    if (!error_.empty()) {
-      return;
+  // Exchanges to throw with the message.
+  void setError(const std::string& error) {
+    std::vector<ContinuePromise> promises;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      if (!error_.empty()) {
+        return;
+      }
+      error_ = error;
+      atEnd_ = true;
+      // NOTE: clear the serialized page queue as we won't consume from an
+      // errored queue.
+      queue_.clear();
+      promises = clearAllPromisesLocked();
     }
-    error_ = error;
-    atEnd_ = true;
-    clearAllPromises();
+    clearPromises(promises);
   }
 
-  std::unique_ptr<SerializedPage> dequeue(
-      bool* FOLLY_NONNULL atEnd,
-      ContinueFuture* FOLLY_NONNULL future) {
+  std::unique_ptr<SerializedPage> dequeueLocked(
+      bool* atEnd,
+      ContinueFuture* future) {
     VELOX_CHECK(future);
     if (!error_.empty()) {
       *atEnd = true;
@@ -163,34 +181,61 @@ class ExchangeQueue {
     return minBytes_;
   }
 
-  void addSource() {
+  void addSourceLocked() {
     VELOX_CHECK(!noMoreSources_, "addSource called after noMoreSources");
     numSources_++;
   }
 
   void noMoreSources() {
-    noMoreSources_ = true;
-    checkComplete();
+    std::vector<ContinuePromise> promises;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      noMoreSources_ = true;
+      promises = checkCompleteLocked();
+    }
+    clearPromises(promises);
   }
 
-  void closeLocked() {
-    queue_.clear();
-    clearAllPromises();
+  void close() {
+    std::vector<ContinuePromise> promises;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      promises = closeLocked();
+    }
+    clearPromises(promises);
   }
 
  private:
-  void checkComplete() {
+  std::vector<ContinuePromise> closeLocked() {
+    queue_.clear();
+    return clearAllPromisesLocked();
+  }
+
+  std::vector<ContinuePromise> checkCompleteLocked() {
     if (noMoreSources_ && numCompleted_ == numSources_) {
       atEnd_ = true;
-      clearAllPromises();
+      return clearAllPromisesLocked();
     }
+    return {};
   }
 
   void clearAllPromises() {
-    for (auto& promise : promises_) {
+    std::vector<ContinuePromise> promises;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      promises = clearAllPromisesLocked();
+    }
+    clearPromises(promises);
+  }
+
+  std::vector<ContinuePromise> clearAllPromisesLocked() {
+    return std::move(promises_);
+  }
+
+  static void clearPromises(std::vector<ContinuePromise>& promises) {
+    for (auto& promise : promises) {
       promise.setValue();
     }
-    promises_.clear();
   }
 
   int numCompleted_ = 0;
@@ -217,17 +262,17 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
       const std::string& taskId,
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
-      memory::MemoryPool* FOLLY_NONNULL pool)>;
+      memory::MemoryPool* pool)>;
 
   ExchangeSource(
       const std::string& taskId,
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
-      memory::MemoryPool* FOLLY_NONNULL pool)
+      memory::MemoryPool* pool)
       : taskId_(taskId),
         destination_(destination),
         queue_(std::move(queue)),
-        pool_(pool) {}
+        pool_(pool->shared_from_this()) {}
 
   virtual ~ExchangeSource() = default;
 
@@ -235,7 +280,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
       const std::string& taskId,
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
-      memory::MemoryPool* FOLLY_NONNULL pool);
+      memory::MemoryPool* pool);
 
   // Returns true if there is no request to the source pending or if
   // this should be retried. If true, the caller is expected to call
@@ -256,6 +301,16 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   // of an error or an operator like Limit aborting the query
   // once it received enough data.
   virtual void close() = 0;
+
+// TODO Remove after updating Prestissimo.
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  virtual folly::F14FastMap<std::string, int64_t> stats() const {
+    return {};
+  }
+#else
+  // Returns runtime statistics.
+  virtual folly::F14FastMap<std::string, int64_t> stats() const = 0;
+#endif
 
   virtual std::string toString() {
     std::stringstream out;
@@ -283,7 +338,14 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   bool atEnd_ = false;
 
  protected:
-  memory::MemoryPool* FOLLY_NONNULL pool_;
+  // Holds a shared reference on the memory pool as it might be still possible
+  // to be accessed by external components after the query task is destroyed.
+  // For instance, in Prestissimo, there might be a pending http request issued
+  // by PrestoExchangeSource to fetch data from the remote task. When the http
+  // response returns back, the task might have already terminated and deleted
+  // so we need to hold an additional shared reference on the memory pool to
+  // keeps it alive.
+  const std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 struct RemoteConnectorSplit : public connector::ConnectorSplit {
@@ -301,7 +363,7 @@ class ExchangeClient {
 
   ExchangeClient(
       int destination,
-      memory::MemoryPool* FOLLY_NONNULL pool,
+      memory::MemoryPool* pool,
       int64_t minSize = kDefaultMinSize)
       : destination_(destination),
         pool_(pool),
@@ -315,7 +377,7 @@ class ExchangeClient {
 
   ~ExchangeClient();
 
-  memory::MemoryPool* FOLLY_NULLABLE pool() const {
+  memory::MemoryPool* pool() const {
     return pool_;
   }
 
@@ -330,19 +392,20 @@ class ExchangeClient {
   // Closes exchange sources.
   void close();
 
+  // Returns runtime statistics aggregates across all of the exchange sources.
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const;
+
   std::shared_ptr<ExchangeQueue> queue() const {
     return queue_;
   }
 
-  std::unique_ptr<SerializedPage> next(
-      bool* FOLLY_NONNULL atEnd,
-      ContinueFuture* FOLLY_NONNULL future);
+  std::unique_ptr<SerializedPage> next(bool* atEnd, ContinueFuture* future);
 
   std::string toString();
 
  private:
   const int destination_;
-  memory::MemoryPool* const FOLLY_NONNULL pool_;
+  memory::MemoryPool* const pool_;
   std::shared_ptr<ExchangeQueue> queue_;
   std::unordered_set<std::string> taskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
@@ -353,7 +416,7 @@ class Exchange : public SourceOperator {
  public:
   Exchange(
       int32_t operatorId,
-      DriverCtx* FOLLY_NONNULL ctx,
+      DriverCtx* ctx,
       const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
       std::shared_ptr<ExchangeClient> exchangeClient,
       const std::string& operatorType = "Exchange")
@@ -382,7 +445,7 @@ class Exchange : public SourceOperator {
     exchangeClient_ = nullptr;
   }
 
-  BlockingReason isBlocked(ContinueFuture* FOLLY_NONNULL future) override;
+  BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
 
@@ -397,7 +460,9 @@ class Exchange : public SourceOperator {
   /// this operator is not the first operator in the pipeline and therefore is
   /// not responsible for fetching splits and adding them to the
   /// exchangeClient_.
-  bool getSplits(ContinueFuture* FOLLY_NONNULL future);
+  bool getSplits(ContinueFuture* future);
+
+  void recordStats();
 
   const core::PlanNodeId planNodeId_;
   bool noMoreSplits_ = false;

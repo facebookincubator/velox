@@ -193,8 +193,7 @@ TypedExprPtr toVeloxExpression(
           dynamic_cast<::duckdb::BoundConstantExpression*>(&expression);
       return std::make_shared<ConstantTypedExpr>(
           duckdb::toVeloxType(constant->return_type),
-          duckdb::duckValueToVariant(
-              constant->value, true /*parseDecimalAsDouble*/));
+          duckdb::duckValueToVariant(constant->value));
     }
     case ::duckdb::ExpressionType::COMPARE_EQUAL:
       return toVeloxComparisonExpression("eq", expression, inputType);
@@ -387,7 +386,7 @@ PlanNodePtr toVeloxPlan(
     types.push_back(rightInputType.childAt(i));
   }
 
-  return std::make_shared<CrossJoinNode>(
+  return std::make_shared<NestedLoopJoinNode>(
       queryContext.nextNodeId(),
       std::move(sources[0]),
       std::move(sources[1]),

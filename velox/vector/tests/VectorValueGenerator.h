@@ -23,7 +23,9 @@
 
 #include "velox/buffer/StringViewBufferHolder.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/StringView.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::test {
 
@@ -66,7 +68,8 @@ class VectorValueGenerator {
       bool useFullTypeRange,
       std::optional<folly::Random::DefaultGenerator>& rng,
       StringViewBufferHolder& stringViewBufferHolder,
-      std::optional<uint32_t> fixedWidthStringSize = std::nullopt) {
+      std::optional<uint32_t> fixedWidthStringSize = std::nullopt,
+      const TypePtr& type = CppToType<T>::create()) {
     if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, uint64_t>) {
       return useFullTypeRange ? getRand64(rng) : getRand32(rng);
     } else if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
@@ -94,6 +97,15 @@ class VectorValueGenerator {
       return stringViewBufferHolder.getOwnedValue(StringView(str));
     } else if constexpr (std::is_same_v<T, bool>) {
       return getRand32(rng) % 2 == 0;
+    } else if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
+      return UnscaledShortDecimal(
+          useFullTypeRange ? getRand64(rng) : getRand32(rng));
+    } else if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
+      auto upper = useFullTypeRange ? getRand64(rng) : getRand32(rng);
+      auto lower = useFullTypeRange ? getRand64(rng) : getRand32(rng);
+      const auto& [precision, _] = getDecimalPrecisionScale(*type);
+      return UnscaledLongDecimal(
+          buildInt128(upper, lower) % DecimalUtil::kPowersOfTen[precision]);
     } else {
       VELOX_UNSUPPORTED("Invalid type");
     }

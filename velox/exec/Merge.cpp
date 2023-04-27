@@ -37,7 +37,7 @@ Merge::Merge(
           operatorId,
           planNodeId,
           operatorType),
-      outputBatchSize_{driverCtx->queryConfig().preferredOutputBatchSize()} {
+      outputBatchSize_{outputBatchRows()} {
   auto numKeys = sortingKeys.size();
   sortingKeys_.reserve(numKeys);
   for (int i = 0; i < numKeys; ++i) {
@@ -93,7 +93,7 @@ BlockingReason Merge::isBlocked(ContinueFuture* future) {
   if (!sourceBlockingFutures_.empty()) {
     *future = std::move(sourceBlockingFutures_.back());
     sourceBlockingFutures_.pop_back();
-    return BlockingReason::kWaitForExchange;
+    return BlockingReason::kWaitForProducer;
   }
 
   return BlockingReason::kNotBlocked;

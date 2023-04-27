@@ -57,7 +57,7 @@ const T* FlatVector<T>::rawValues() const {
 }
 
 template <typename T>
-const T FlatVector<T>::valueAtFast(vector_size_t idx) const {
+T FlatVector<T>::valueAtFast(vector_size_t idx) const {
   return rawValues_[idx];
 }
 
@@ -99,8 +99,7 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
   }
 
   // overwrite the null hash values
-  if (!BaseVector::nullCount_.has_value() ||
-      BaseVector::nullCount_.value() > 0) {
+  if (BaseVector::getNullCount().value_or(1) > 0) {
     for (size_t i = 0; i < BaseVector::length_; ++i) {
       if (bits::isBitNull(BaseVector::rawNulls_, i)) {
         hashData[i] = BaseVector::kNullHash;
@@ -109,6 +108,7 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
   }
   return std::make_unique<FlatVector<uint64_t>>(
       BaseVector::pool_,
+      BIGINT(),
       BufferPtr(nullptr),
       BaseVector::length_,
       std::move(hashBuffer),
@@ -174,8 +174,10 @@ void FlatVector<T>::copyValuesAndNulls(
         }
       });
     } else {
-      VELOX_CHECK_GE(source->size(), rows.end());
       rows.applyToSelected([&](vector_size_t row) {
+        if (row >= source->size()) {
+          return;
+        }
         if (sourceValues) {
           rawValues_[row] = sourceValues[row];
         }
@@ -220,6 +222,9 @@ void FlatVector<T>::copyValuesAndNulls(
     vector_size_t targetIndex,
     vector_size_t sourceIndex,
     vector_size_t count) {
+  if (count == 0) {
+    return;
+  }
   source = source->loadedVector();
   VELOX_CHECK(
       BaseVector::compatibleKind(BaseVector::typeKind(), source->typeKind()));
@@ -344,7 +349,7 @@ void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
 
 template <typename T>
 void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
-  auto newSize = std::max<vector_size_t>(rows.size(), BaseVector::length_);
+  auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
   if (values_ && !(values_->unique() && values_->isMutable())) {
     BufferPtr newValues;
     if constexpr (std::is_same_v<T, StringView>) {

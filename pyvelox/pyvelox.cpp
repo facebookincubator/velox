@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#include "pyvelox.h" // @manual
+#include "pyvelox.h"
+#include "signatures.h"
 
 namespace facebook::velox::py {
 using namespace velox;
@@ -247,18 +248,6 @@ static void addExpressionBindings(
           },
           "Returns a list of expressions that the inputs to this expression")
       .def(
-          "withInputs",
-          [](IExprWrapper& e, std::vector<IExprWrapper>& i) {
-            std::vector<std::shared_ptr<const core::IExpr>> inputs;
-            inputs.reserve(i.size());
-            for (IExprWrapper& w : i) {
-              inputs.push_back(w.expr);
-            }
-            IExprWrapper result = {e.expr->withInputs(inputs)};
-            return result;
-          },
-          "Sets the inputs to the given list of expressions")
-      .def(
           "evaluate",
           [](IExprWrapper& e,
              std::vector<std::string> names,
@@ -291,12 +280,18 @@ static void addExpressionBindings(
 #ifdef CREATE_PYVELOX_MODULE
 PYBIND11_MODULE(pyvelox, m) {
   m.doc() = R"pbdoc(
-        PyVelox native code module
-        -----------------------
-       )pbdoc";
+      PyVelox native code module
+      --------------------------
+
+      .. currentmodule:: pyvelox.pyvelox
+
+      .. autosummary::
+         :toctree: _generate
+
+  )pbdoc";
 
   addVeloxBindings(m);
-
+  addSignatureBindings(m);
   m.attr("__version__") = "dev";
 }
 #endif

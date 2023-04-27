@@ -28,6 +28,11 @@ namespace facebook::velox::test {
 /// Returns indices buffer with sequential values going from size - 1 to 0.
 BufferPtr makeIndicesInReverse(vector_size_t size, memory::MemoryPool* pool);
 
+BufferPtr makeIndices(
+    vector_size_t size,
+    std::function<vector_size_t(vector_size_t)> indexAt,
+    memory::MemoryPool* pool);
+
 // TODO: enable ASSERT_EQ for vectors.
 void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual);
 
@@ -43,9 +48,7 @@ void assertCopyableVector(const VectorPtr& vector);
 
 class VectorTestBase {
  protected:
-  VectorTestBase() {
-    pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
-  }
+  VectorTestBase() = default;
 
   ~VectorTestBase();
 
@@ -148,8 +151,9 @@ class VectorTestBase {
   FlatVectorPtr<T> makeFlatVector(
       vector_size_t size,
       std::function<T(vector_size_t /*row*/)> valueAt,
-      std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {
-    return vectorMaker_.flatVector<T>(size, valueAt, isNullAt);
+      std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr,
+      const TypePtr& type = CppToType<T>::create()) {
+    return vectorMaker_.flatVector<T>(size, valueAt, isNullAt, type);
   }
 
   /// Decimal Vector type cannot be inferred from the cpp type alone as the cpp
@@ -226,8 +230,16 @@ class VectorTestBase {
   //   });
   //   EXPECT_EQ(3, arrayVector->size());
   template <typename T>
-  ArrayVectorPtr makeArrayVector(const std::vector<std::vector<T>>& data) {
-    return vectorMaker_.arrayVector<T>(data);
+  ArrayVectorPtr makeArrayVector(
+      const std::vector<std::vector<T>>& data,
+      const TypePtr& elementType = CppToType<T>::create()) {
+    return vectorMaker_.arrayVector<T>(data, elementType);
+  }
+
+  ArrayVectorPtr makeAllNullArrayVector(
+      vector_size_t size,
+      const TypePtr& elementType) {
+    return vectorMaker_.allNullArrayVector(size, elementType);
   }
 
   // Create an ArrayVector<ROW> from nested std::vectors of variants.
@@ -587,8 +599,15 @@ class VectorTestBase {
     return vectorMaker_.mapVector(offsets, keyVector, valueVector, nulls);
   }
 
+  MapVectorPtr makeAllNullMapVector(
+      vector_size_t size,
+      const TypePtr& keyType,
+      const TypePtr& valueType) {
+    return vectorMaker_.allNullMapVector(size, keyType, valueType);
+  }
+
   VectorPtr makeConstant(const variant& value, vector_size_t size) {
-    return BaseVector::createConstant(value, size, pool());
+    return BaseVector::createConstant(value.inferType(), value, size, pool());
   }
 
   template <typename T>
@@ -609,7 +628,7 @@ class VectorTestBase {
         pool(),
         size,
         /*isNull=*/!value.has_value(),
-        CppToType<T>::create(),
+        type,
         value ? EvalType<T>(*value) : EvalType<T>(),
         SimpleVectorStats<EvalType<T>>{},
         sizeof(EvalType<T>));
@@ -631,7 +650,8 @@ class VectorTestBase {
   }
 
   VectorPtr makeNullConstant(TypeKind typeKind, vector_size_t size) {
-    return BaseVector::createConstant(variant(typeKind), size, pool());
+    return BaseVector::createNullConstant(
+        createType(typeKind, {}), size, pool());
   }
 
   BufferPtr makeIndices(
@@ -718,7 +738,9 @@ class VectorTestBase {
     return pool_.get();
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> rootPool_{
+      memory::defaultMemoryManager().addRootPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
   velox::test::VectorMaker vectorMaker_{pool_.get()};
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(

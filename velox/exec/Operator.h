@@ -46,16 +46,14 @@ struct MemoryStats {
   uint64_t peakTotalMemoryReservation{0};
   uint64_t numMemoryAllocations{0};
 
-  void update(const std::shared_ptr<memory::MemoryUsageTracker>& tracker) {
-    if (tracker == nullptr) {
-      return;
-    }
-    userMemoryReservation = tracker->currentBytes();
+  void update(memory::MemoryPool* pool) {
+    const memory::MemoryPool::Stats stats = pool->stats();
+    userMemoryReservation = stats.currentBytes;
     systemMemoryReservation = 0;
-    peakUserMemoryReservation = tracker->peakBytes();
+    peakUserMemoryReservation = stats.peakBytes;
     peakSystemMemoryReservation = 0;
-    peakTotalMemoryReservation = tracker->peakBytes();
-    numMemoryAllocations = tracker->numAllocs();
+    peakTotalMemoryReservation = stats.peakBytes;
+    numMemoryAllocations = stats.numAllocs;
   }
 
   void add(const MemoryStats& other) {
@@ -154,6 +152,18 @@ struct OperatorStats {
         planNodeId(std::move(_planNodeId)),
         operatorType(std::move(_operatorType)) {}
 
+  void addInputVector(uint64_t bytes, uint64_t positions) {
+    inputBytes += bytes;
+    inputPositions += positions;
+    inputVectors += 1;
+  }
+
+  void addOutputVector(uint64_t bytes, uint64_t positions) {
+    outputBytes += bytes;
+    outputPositions += positions;
+    outputVectors += 1;
+  }
+
   void addRuntimeStat(const std::string& name, const RuntimeCounter& value);
   void add(const OperatorStats& other);
   void clear();
@@ -200,11 +210,13 @@ class OperatorCtx {
   core::ExecCtx* FOLLY_NONNULL execCtx() const;
 
   /// Makes an extract of QueryCtx for use in a connector. 'planNodeId'
-  /// is the id of the calling TableScan. This and the task id identify
-  /// the scan for column access tracking.
+  /// is the id of the calling TableScan. This and the task id identify the scan
+  /// for column access tracking. 'connectorPool' is an aggregate memory pool
+  /// for connector use.
   std::shared_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
       const std::string& connectorId,
-      const std::string& planNodeId) const;
+      const std::string& planNodeId,
+      memory::MemoryPool* connectorPool) const;
 
   /// Generates the spiller config for a given spiller 'type' if the disk
   /// spilling is enabled, otherwise returns null.
@@ -219,7 +231,6 @@ class OperatorCtx {
 
   // These members are created on demand.
   mutable std::unique_ptr<core::ExecCtx> execCtx_;
-  mutable std::unique_ptr<connector::ExpressionEvaluator> expressionEvaluator_;
 };
 
 // Query operator
@@ -368,10 +379,8 @@ class Operator : public BaseRuntimeStatWriter {
   virtual void close() {
     input_ = nullptr;
     results_.clear();
-    if (operatorCtx_->pool()->getMemoryUsageTracker() != nullptr) {
-      // Release the unused memory reservation on close.
-      operatorCtx_->pool()->getMemoryUsageTracker()->release();
-    }
+    // Release the unused memory reservation on close.
+    operatorCtx_->pool()->release();
   }
 
   // Returns true if 'this' never has more output rows than input rows.
@@ -400,7 +409,7 @@ class Operator : public BaseRuntimeStatWriter {
     return stats_;
   }
 
-  void recordBlockingTime(uint64_t start);
+  void recordBlockingTime(uint64_t start, BlockingReason reason);
 
   virtual std::string toString() const;
 
@@ -450,12 +459,27 @@ class Operator : public BaseRuntimeStatWriter {
   // the first one that is not std::nullopt or std::nullopt otherwise.
   static std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& planNode);
 
+  /// Returns the operator context of this operator. This method is only used
+  /// for test.
+  const OperatorCtx* testingOperatorCtx() const {
+    return operatorCtx_.get();
+  }
+
  protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
 
   // Creates output vector from 'input_' and 'results_' according to
   // 'identityProjections_' and 'resultProjections_'.
   RowVectorPtr fillOutput(vector_size_t size, BufferPtr mapping);
+
+  // Returns the number of rows for the output batch. This uses averageRowSize
+  // to calculate how many rows fit in preferredOutputBatchBytes. It caps the
+  // number of rows at 10K and returns at least one row. The averageRowSize must
+  // not be negative. If the averageRowSize is 0 which is not advised, returns
+  // maxOutputBatchRows. If the averageRowSize is not given, returns
+  // preferredOutputBatchRows.
+  uint32_t outputBatchRows(
+      std::optional<uint64_t> averageRowSize = std::nullopt) const;
 
   std::unique_ptr<OperatorCtx> operatorCtx_;
   folly::Synchronized<OperatorStats> stats_;

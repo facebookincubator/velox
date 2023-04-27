@@ -44,7 +44,7 @@ void PageReader::seekToPage(int64_t row) {
       numRowsInPage_ = 0;
       break;
     }
-    PageHeader pageHeader = readPageHeader(chunkSize_ - pageStart_);
+    PageHeader pageHeader = readPageHeader();
     pageStart_ = pageDataStart_ + pageHeader.compressed_page_size;
 
     switch (pageHeader.type) {
@@ -75,14 +75,7 @@ void PageReader::seekToPage(int64_t row) {
   }
 }
 
-PageHeader PageReader::readPageHeader(int64_t remainingSize) {
-  // Note that sizeof(PageHeader) may be longer than actually read
-  std::shared_ptr<thrift::ThriftBufferedTransport> transport;
-  std::unique_ptr<apache::thrift::protocol::TCompactProtocolT<
-      thrift::ThriftBufferedTransport>>
-      protocol;
-  char copy[sizeof(PageHeader)];
-  bool wasInBuffer = false;
+PageHeader PageReader::readPageHeader() {
   if (bufferEnd_ == bufferStart_) {
     const void* buffer;
     int32_t size;
@@ -90,37 +83,17 @@ PageHeader PageReader::readPageHeader(int64_t remainingSize) {
     bufferStart_ = reinterpret_cast<const char*>(buffer);
     bufferEnd_ = bufferStart_ + size;
   }
-  if (bufferEnd_ - bufferStart_ >= sizeof(PageHeader)) {
-    wasInBuffer = true;
-    transport = std::make_shared<thrift::ThriftBufferedTransport>(
-        bufferStart_, sizeof(PageHeader));
-    protocol = std::make_unique<apache::thrift::protocol::TCompactProtocolT<
-        thrift::ThriftBufferedTransport>>(transport);
-  } else {
-    dwio::common::readBytes(
-        std::min<int64_t>(remainingSize, sizeof(PageHeader)),
-        inputStream_.get(),
-        &copy,
-        bufferStart_,
-        bufferEnd_);
 
-    transport = std::make_shared<thrift::ThriftBufferedTransport>(
-        copy, sizeof(PageHeader));
-    protocol = std::make_unique<apache::thrift::protocol::TCompactProtocolT<
-        thrift::ThriftBufferedTransport>>(transport);
-  }
+  std::shared_ptr<thrift::ThriftTransport> transport =
+      std::make_shared<thrift::ThriftStreamingTransport>(
+          inputStream_.get(), bufferStart_, bufferEnd_);
+  apache::thrift::protocol::TCompactProtocolT<thrift::ThriftTransport> protocol(
+      transport);
   PageHeader pageHeader;
-  uint64_t readBytes = pageHeader.read(protocol.get());
+  uint64_t readBytes;
+  readBytes = pageHeader.read(&protocol);
+
   pageDataStart_ = pageStart_ + readBytes;
-  // Unread the bytes that were not consumed.
-  if (wasInBuffer) {
-    bufferStart_ += readBytes;
-  } else {
-    std::vector<uint64_t> start = {pageDataStart_};
-    dwio::common::PositionProvider position(start);
-    inputStream_->seekToPosition(position);
-    bufferStart_ = bufferEnd_ = nullptr;
-  }
   return pageHeader;
 }
 
@@ -411,7 +384,14 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           ? sizeof(float)
           : sizeof(double);
       auto numBytes = dictionary_.numValues * typeSize;
-      dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
+      if (type_->type->isShortDecimal() && parquetType == thrift::Type::INT32) {
+        auto veloxTypeLength = type_->type->cppSizeInBytes();
+        auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
+        dictionary_.values =
+            AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
+      } else {
+        dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
+      }
       if (pageData_) {
         memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
       } else {
@@ -421,6 +401,15 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             dictionary_.values->asMutable<char>(),
             bufferStart_,
             bufferEnd_);
+      }
+      if (type_->type->isShortDecimal() && parquetType == thrift::Type::INT32) {
+        auto values = dictionary_.values->asMutable<int64_t>();
+        auto parquetValues = dictionary_.values->asMutable<int32_t>();
+        for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
+          // Expand the Parquet type length values to Velox type length.
+          // We start from the end to allow in-place expansion.
+          values[i] = parquetValues[i];
+        }
       }
       break;
     }
@@ -670,6 +659,10 @@ void PageReader::makeDecoder() {
       break;
     case Encoding::PLAIN:
       switch (parquetType) {
+        case thrift::Type::BOOLEAN:
+          booleanDecoder_ = std::make_unique<BooleanDecoder>(
+              pageData_, pageData_ + encodedDataSize_);
+          break;
         case thrift::Type::BYTE_ARRAY:
           stringDecoder_ = std::make_unique<StringDecoder>(
               pageData_, pageData_ + encodedDataSize_);
@@ -722,6 +715,8 @@ void PageReader::skip(int64_t numRows) {
     directDecoder_->skip(toSkip);
   } else if (stringDecoder_) {
     stringDecoder_->skip(toSkip);
+  } else if (booleanDecoder_) {
+    booleanDecoder_->skip(toSkip);
   } else {
     VELOX_FAIL("No decoder to skip");
   }
@@ -758,8 +753,9 @@ void PageReader::skipNullsOnly(int64_t numRows) {
     seekToPage(firstUnvisited_ + numRows);
     firstUnvisited_ += numRows;
     toSkip = firstUnvisited_ - rowOfPage_;
+  } else {
+    firstUnvisited_ += numRows;
   }
-  firstUnvisited_ += numRows;
 
   // Skip nulls
   skipNulls(toSkip);
@@ -919,11 +915,11 @@ bool PageReader::rowsForPage(
   return true;
 }
 
-const VectorPtr& PageReader::dictionaryValues() {
+const VectorPtr& PageReader::dictionaryValues(const TypePtr& type) {
   if (!dictionaryValues_) {
     dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
         &pool_,
-        VARCHAR(),
+        type,
         nullptr,
         dictionary_.numValues,
         dictionary_.values,

@@ -29,7 +29,7 @@ using facebook::velox::test::BatchMaker;
 class PartitionedOutputBufferManagerTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = facebook::velox::memory::getDefaultMemoryPool();
+    pool_ = facebook::velox::memory::addDefaultLeafMemoryPool();
     bufferManager_ = PartitionedOutputBufferManager::getInstance().lock();
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
@@ -367,52 +367,41 @@ TEST_F(PartitionedOutputBufferManagerTest, outOfOrderAcks) {
 TEST_F(PartitionedOutputBufferManagerTest, errorInQueue) {
   auto queue = std::make_shared<ExchangeQueue>(1 << 20);
   auto page = std::make_unique<SerializedPage>(folly::IOBuf::copyBuffer("", 0));
-  {
-    std::lock_guard<std::mutex> l(queue->mutex());
-    queue->setErrorLocked("error");
+  std::vector<ContinuePromise> promises;
+  { queue->setError("error"); }
+  for (auto& promise : promises) {
+    promise.setValue();
   }
   ContinueFuture future;
   bool atEnd = false;
-  EXPECT_THROW(auto page = queue->dequeue(&atEnd, &future), std::runtime_error);
+  EXPECT_THROW(
+      auto page = queue->dequeueLocked(&atEnd, &future), std::runtime_error);
 }
 
-TEST_F(PartitionedOutputBufferManagerTest, serializedPage) {
+TEST_F(PartitionedOutputBufferManagerTest, setQueueErrorWithPendingPages) {
   const uint64_t kBufferSize = 128;
-  // IOBuf managed memory case
-  {
-    auto iobuf = folly::IOBuf::create(kBufferSize);
-    std::string payload = "abcdefghijklmnopq";
-    size_t payloadSize = payload.size();
-    std::memcpy(iobuf->writableData(), payload.data(), payloadSize);
-    iobuf->append(payloadSize);
+  auto iobuf = folly::IOBuf::create(kBufferSize);
+  const std::string payload("setQueueErrorWithPendingPages");
+  size_t payloadSize = payload.size();
+  std::memcpy(iobuf->writableData(), payload.data(), payloadSize);
+  iobuf->append(payloadSize);
 
-    EXPECT_EQ(0, pool_->getCurrentBytes());
-    {
-      auto serializedPage =
-          std::make_shared<SerializedPage>(std::move(iobuf), pool_.get());
-      EXPECT_EQ(payloadSize, pool_->getCurrentBytes());
-    }
-    EXPECT_EQ(0, pool_->getCurrentBytes());
+  auto page = std::make_unique<SerializedPage>(std::move(iobuf));
+
+  auto queue = std::make_shared<ExchangeQueue>(1 << 20);
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(queue->mutex());
+    queue->enqueueLocked(std::move(page), promises);
   }
 
-  // External managed memory case
-  {
-    auto allocator = memory::MemoryAllocator::getInstance();
-    void* buffer = allocator->allocateBytes(kBufferSize);
-    auto iobuf = folly::IOBuf::wrapBuffer(buffer, kBufferSize);
-    std::string payload = "abcdefghijklmnopq";
-    std::memcpy(iobuf->writableData(), payload.data(), payload.size());
+  queue->setError("error");
 
-    EXPECT_EQ(0, pool_->getCurrentBytes());
-    {
-      auto serializedPage = std::make_shared<SerializedPage>(
-          std::move(iobuf), pool_.get(), [allocator, kBufferSize](auto& iobuf) {
-            allocator->freeBytes(iobuf.writableData(), kBufferSize);
-          });
-      EXPECT_EQ(kBufferSize, pool_->getCurrentBytes());
-    }
-    EXPECT_EQ(0, pool_->getCurrentBytes());
-  }
+  // Expect a throw on dequeue after the queue has been set error.
+  ContinueFuture future;
+  bool atEnd = false;
+  ASSERT_THROW(
+      auto page = queue->dequeueLocked(&atEnd, &future), std::runtime_error);
 }
 
 TEST_F(PartitionedOutputBufferManagerTest, getDataOnFailedTask) {

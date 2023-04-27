@@ -31,7 +31,7 @@ StreamingAggregation::StreamingAggregation(
           aggregationNode->step() == core::AggregationNode::Step::kPartial
               ? "PartialAggregation"
               : "Aggregation"),
-      outputBatchSize_{driverCtx->queryConfig().preferredOutputBatchSize()},
+      outputBatchSize_{outputBatchRows()},
       step_{aggregationNode->step()} {
   auto numKeys = aggregationNode->groupingKeys().size();
   decodedKeys_.resize(numKeys);
@@ -64,7 +64,7 @@ StreamingAggregation::StreamingAggregation(
       if (channels.back() == kConstantChannel) {
         auto constant = static_cast<const core::ConstantTypedExpr*>(arg.get());
         constants.push_back(BaseVector::createConstant(
-            constant->value(), 1, operatorCtx_->pool()));
+            constant->type(), constant->value(), 1, operatorCtx_->pool()));
       } else {
         constants.push_back(nullptr);
       }

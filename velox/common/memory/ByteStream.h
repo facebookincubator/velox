@@ -26,7 +26,7 @@ struct ByteRange {
   // Start of buffer. Not owned.
   uint8_t* buffer;
 
-  // Number of bytes or bits  starting at 'buffer'.
+  // Number of bytes or bits starting at 'buffer'.
   int32_t size;
 
   // Index of next byte/bit to be read/written in 'buffer'.
@@ -112,6 +112,7 @@ class ByteStream {
   void resetInput(std::vector<ByteRange>&& ranges) {
     ranges_ = std::move(ranges);
     current_ = &ranges_[0];
+    lastRangeEnd_ = ranges_.back().size;
   }
 
   void setRange(ByteRange range) {
@@ -422,7 +423,9 @@ class IOBufOutputStream : public OutputStream {
 
   void seekp(std::streampos pos) override;
 
-  std::unique_ptr<folly::IOBuf> getIOBuf();
+  /// 'releaseFn' is executed on iobuf destruction if not null.
+  std::unique_ptr<folly::IOBuf> getIOBuf(
+      const std::function<void()>& releaseFn = nullptr);
 
  private:
   std::shared_ptr<StreamArena> arena_;

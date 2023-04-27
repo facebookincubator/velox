@@ -92,7 +92,7 @@ class BaseDuckWrapperTest : public testing::Test {
   }
 
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
   std::unique_ptr<DuckDBWrapper> db_{
@@ -117,6 +117,11 @@ TEST_F(BaseDuckWrapperTest, simpleSelect) {
 
 TEST_F(BaseDuckWrapperTest, scalarTypes) {
   // test various types
+  // boolean types
+  execute("CREATE TABLE booleans(i BOOLEAN)");
+  execute("INSERT INTO booleans VALUES (true), (true), (false), (false)");
+  verifyUnaryResult<bool>("SELECT * FROM booleans", {true, true, false, false});
+
   // integer types
   verifyUnaryResult<int8_t>("SELECT 42::TINYINT", {42});
   verifyUnaryResult<int16_t>("SELECT 42::SMALLINT", {42});
@@ -142,6 +147,9 @@ TEST_F(BaseDuckWrapperTest, scalarTypes) {
   verifyUnaryResult<StringView>(
       "SELECT 'this is a long, non-inlined, example string'",
       {StringView("this is a long, non-inlined, example string")});
+
+  // blob
+  verifyUnaryResult<StringView>("SELECT '\\xFF'::BLOB", {StringView("\xFF")});
 }
 
 TEST_F(BaseDuckWrapperTest, types) {

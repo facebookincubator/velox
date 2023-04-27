@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
 class LocalPartitionTest : public HiveConnectorTestBase {
@@ -46,17 +48,17 @@ class LocalPartitionTest : public HiveConnectorTestBase {
     return filePaths;
   }
 
-  static RowTypePtr getRowType(const RowVectorPtr& rowVector) {
-    return std::dynamic_pointer_cast<const RowType>(rowVector->type());
-  }
-
   void verifyExchangeSourceOperatorStats(
       const std::shared_ptr<exec::Task>& task,
-      int expectedPositions) {
+      int expectedPositions,
+      int expectedVectors) {
     auto stats = task->taskStats().pipelineStats[0].operatorStats.front();
     ASSERT_EQ(stats.inputPositions, expectedPositions);
-    ASSERT_EQ(stats.outputPositions, expectedPositions);
+    ASSERT_EQ(stats.inputVectors, expectedVectors);
     ASSERT_TRUE(stats.inputBytes > 0);
+
+    ASSERT_EQ(stats.outputPositions, stats.inputPositions);
+    ASSERT_EQ(stats.outputVectors, stats.inputVectors);
     ASSERT_EQ(stats.inputBytes, stats.outputBytes);
   }
 
@@ -108,11 +110,11 @@ TEST_F(LocalPartitionTest, gather) {
                 .planNode();
 
   auto task = assertQuery(op, "SELECT 300, -71, 152");
-  verifyExchangeSourceOperatorStats(task, 300);
+  verifyExchangeSourceOperatorStats(task, 300, 3);
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = getRowType(vectors[0]);
+  auto rowType = asRowType(vectors[0]->type());
 
   std::vector<core::PlanNodeId> scanNodeIds;
 
@@ -140,7 +142,7 @@ TEST_F(LocalPartitionTest, gather) {
   }
 
   task = queryBuilder.assertResults("SELECT 300, -71, 152");
-  verifyExchangeSourceOperatorStats(task, 300);
+  verifyExchangeSourceOperatorStats(task, 300, 3);
 }
 
 TEST_F(LocalPartitionTest, partition) {
@@ -152,7 +154,7 @@ TEST_F(LocalPartitionTest, partition) {
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = getRowType(vectors[0]);
+  auto rowType = asRowType(vectors[0]->type());
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
@@ -187,7 +189,7 @@ TEST_F(LocalPartitionTest, partition) {
 
   auto task =
       queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
-  verifyExchangeSourceOperatorStats(task, 300);
+  verifyExchangeSourceOperatorStats(task, 300, 6);
 }
 
 TEST_F(LocalPartitionTest, maxBufferSizeGather) {
@@ -221,7 +223,7 @@ TEST_F(LocalPartitionTest, maxBufferSizeGather) {
                   .config(core::QueryConfig::kMaxLocalExchangeBufferSize, "100")
                   .assertResults("SELECT 2100, -71, 228");
 
-  verifyExchangeSourceOperatorStats(task, 2100);
+  verifyExchangeSourceOperatorStats(task, 2100, 21);
 }
 
 TEST_F(LocalPartitionTest, maxBufferSizePartition) {
@@ -235,7 +237,7 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = getRowType(vectors[0]);
+  auto rowType = asRowType(vectors[0]->type());
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
@@ -270,13 +272,74 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
 
   auto task =
       queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
-  verifyExchangeSourceOperatorStats(task, 2100);
+  verifyExchangeSourceOperatorStats(task, 2100, 42);
 
   // Re-run with higher memory limit (enough to hold ~10 vectors at a time).
   queryBuilder.config(core::QueryConfig::kMaxLocalExchangeBufferSize, "10240");
 
   task = queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
-  verifyExchangeSourceOperatorStats(task, 2100);
+  verifyExchangeSourceOperatorStats(task, 2100, 42);
+}
+
+TEST_F(LocalPartitionTest, blockingOnLocalExchangeQueue) {
+  auto localExchangeBufferSize = "1024";
+  auto baseVector = vectorMaker_.flatVector<int64_t>(
+      1024 * 1024, [](auto row) { return row; });
+  // Make a small dictionary vector of one row and roughly 8 bytes that is
+  // smaller than the localExchangeBufferSize.
+  auto smallInput = vectorMaker_.rowVector(
+      {"c0"}, {wrapInDictionary(makeIndices({0}), baseVector)});
+  // Make a large dictionary vector of 1024 rows and roughly 8KB that is larger
+  // than the localExchangeBufferSize.
+  auto largeInput = vectorMaker_.rowVector(
+      {"c0"},
+      {wrapInDictionary(
+          makeIndices(baseVector->size(), [](auto row) { return row; }),
+          baseVector)});
+
+  struct {
+    RowVectorPtr input;
+    int64_t numBlocked;
+
+    std::string debugString() const {
+      return fmt::format(
+          "inputBatchBytes: {}, numBlocked: {}",
+          input->estimateFlatSize(),
+          numBlocked);
+    }
+  } testSettings[] = {
+      {smallInput, 0}, // Small input will not make LocalPartition blocked.
+      {largeInput, 1}}; // Large input will make LocalPartition blocked.
+
+  for (const auto& test : testSettings) {
+    SCOPED_TRACE(test.debugString());
+
+    createDuckDbTable({test.input});
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId nodeId;
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .localPartition(
+                        {"c0"},
+                        {PlanBuilder(planNodeIdGenerator)
+                             .values({test.input})
+                             .planNode()})
+                    .capturePlanNodeId(nodeId)
+                    .planNode();
+    auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                    .plan(plan)
+                    .maxDrivers(4)
+                    .config(
+                        core::QueryConfig::kMaxLocalExchangeBufferSize,
+                        localExchangeBufferSize)
+                    .assertResults("SELECT * FROM tmp");
+    ASSERT_EQ(
+        exec::toPlanStats(task->taskStats())
+            .at(nodeId)
+            .customStats["blockedWaitForConsumerTimes"]
+            .sum,
+        test.numBlocked);
+  }
 }
 
 TEST_F(LocalPartitionTest, multipleExchanges) {
@@ -297,7 +360,7 @@ TEST_F(LocalPartitionTest, multipleExchanges) {
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = getRowType(vectors[0]);
+  auto rowType = asRowType(vectors[0]->type());
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   std::vector<core::PlanNodeId> scanNodeIds;
@@ -360,7 +423,7 @@ TEST_F(LocalPartitionTest, earlyCompletion) {
 
   auto task = assertQuery(plan, "VALUES (3), (4)");
 
-  verifyExchangeSourceOperatorStats(task, 100);
+  verifyExchangeSourceOperatorStats(task, 100, 1);
 
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.

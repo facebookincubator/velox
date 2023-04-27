@@ -21,12 +21,21 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
+DEFINE_int32(
+    parquet_prefetch_rowgroups,
+    1,
+    "Number of next row groups to "
+    "prefetch. 1 means prefetch the next row group before decoding "
+    "the current one");
+
 namespace facebook::velox::parquet {
 
 ReaderBase::ReaderBase(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options)
     : pool_(options.getMemoryPool()),
+      directorySizeGuess_(options.getDirectorySizeGuess()),
+      filePreloadThreshold_(options.getFilePreloadThreshold()),
       options_(options),
       input_(std::move(input)) {
   fileLength_ = input_->getReadFile()->size();
@@ -38,9 +47,9 @@ ReaderBase::ReaderBase(
 }
 
 void ReaderBase::loadFileMetaData() {
-  bool preloadFile_ = fileLength_ <= FILE_PRELOAD_THRESHOLD;
+  bool preloadFile_ = fileLength_ <= filePreloadThreshold_;
   uint64_t readSize =
-      preloadFile_ ? fileLength_ : std::min(fileLength_, DIRECTORY_SIZE_GUESS);
+      preloadFile_ ? fileLength_ : std::min(fileLength_, directorySizeGuess_);
 
   auto stream = input_->read(
       fileLength_ - readSize, readSize, dwio::common::LogType::FOOTER);
@@ -60,7 +69,7 @@ void ReaderBase::loadFileMetaData() {
   int32_t footerOffsetInBuffer = readSize - 8 - footerLength;
   if (footerLength > readSize - 8) {
     footerOffsetInBuffer = 0;
-    auto missingLength = footerLength - readSize - 8;
+    auto missingLength = footerLength - readSize + 8;
     stream = input_->read(
         fileLength_ - footerLength - 8,
         missingLength,
@@ -73,11 +82,12 @@ void ReaderBase::loadFileMetaData() {
         missingLength, stream.get(), copy.data(), bufferStart, bufferEnd);
   }
 
-  auto thriftTransport = std::make_shared<thrift::ThriftBufferedTransport>(
-      copy.data() + footerOffsetInBuffer, footerLength);
-  auto thriftProtocol =
-      std::make_unique<apache::thrift::protocol::TCompactProtocolT<
-          thrift::ThriftBufferedTransport>>(thriftTransport);
+  std::shared_ptr<thrift::ThriftTransport> thriftTransport =
+      std::make_shared<thrift::ThriftBufferedTransport>(
+          copy.data() + footerOffsetInBuffer, footerLength);
+  auto thriftProtocol = std::make_unique<
+      apache::thrift::protocol::TCompactProtocolT<thrift::ThriftTransport>>(
+      thriftTransport);
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
 }
@@ -454,11 +464,20 @@ void ReaderBase::scheduleRowGroups(
     newInput->load(dwio::common::LogType::STRIPE);
     inputs_[thisGroup] = std::move(newInput);
   }
-  if (nextGroup) {
-    auto newInput = input_->clone();
-    reader.enqueueRowGroup(nextGroup, *newInput);
-    newInput->load(dwio::common::LogType::STRIPE);
-    inputs_[nextGroup] = std::move(newInput);
+  for (auto counter = 0; counter < FLAGS_parquet_prefetch_rowgroups;
+       ++counter) {
+    if (nextGroup) {
+      if (inputs_.count(nextGroup) != 0) {
+        auto newInput = input_->clone();
+        reader.enqueueRowGroup(nextGroup, *newInput);
+        newInput->load(dwio::common::LogType::STRIPE);
+        inputs_[nextGroup] = std::move(newInput);
+      }
+    } else {
+      break;
+    }
+    nextGroup =
+        nextGroup + 1 < rowGroupIds.size() ? rowGroupIds[nextGroup + 1] : 0;
   }
   if (currentGroup > 1) {
     inputs_.erase(rowGroupIds[currentGroup - 1]);
@@ -515,13 +534,18 @@ ParquetRowReader::ParquetRowReader(
       *options_.getScanSpec());
 
   filterRowGroups();
+  if (!rowGroupIds_.empty()) {
+    // schedule prefetch of first row group right after reading the metadata.
+    // This is usually on a split preload thread before the split goes to table
+    // scan.
+    advanceToNextRowGroup();
+  }
 }
 
 namespace {
 struct ParquetStatsContext : dwio::common::StatsContext {};
 } // namespace
 
-//
 void ParquetRowReader::filterRowGroups() {
   const auto& rowGroups = readerBase_->fileMetaData().row_groups;
   rowGroupIds_.reserve(rowGroups.size());

@@ -57,7 +57,13 @@ function prompt {
 }
 
 function update_brew {
-  /usr/local/bin/brew update --force --quiet
+  BREW_PATH=/usr/local/bin/brew
+  if [ `arch` == "arm64" ] ;
+     then
+       BREW_PATH=/opt/homebrew/bin/brew ;
+ fi
+  $BREW_PATH update --auto-update --verbose
+  $BREW_PATH developer off
 }
 
 function install_build_prerequisites {
@@ -81,8 +87,14 @@ function install_build_prerequisites {
 }
 
 function install_fmt {
-  github_checkout fmtlib/fmt 8.0.0
+  github_checkout fmtlib/fmt 8.0.1
   cmake_install -DFMT_TEST=OFF
+}
+
+function install_folly {
+  github_checkout facebook/folly "v2022.11.14.00"
+  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+    cmake_install -DBUILD_TESTS=OFF
 }
 
 function install_double_conversion {
@@ -113,6 +125,8 @@ function install_velox_deps {
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
 
 (
+  echo "Installing mac dependencies"
+  update_brew
   if [[ $# -ne 0 ]]; then
     for cmd in "$@"; do
       run_and_time "${cmd}"

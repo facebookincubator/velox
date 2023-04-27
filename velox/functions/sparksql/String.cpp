@@ -56,19 +56,15 @@ class Instr : public exec::VectorFunction {
 
     if (isAscii(args[0].get(), selected)) {
       selected.applyToSelected([&](vector_size_t row) {
-        output->set(
-            row,
-            instr<true>(
-                haystack->valueAt<StringView>(row),
-                needle->valueAt<StringView>(row)));
+        auto h = haystack->valueAt<StringView>(row);
+        auto n = needle->valueAt<StringView>(row);
+        output->set(row, instr<true>(h, n));
       });
     } else {
       selected.applyToSelected([&](vector_size_t row) {
-        output->set(
-            row,
-            instr<false>(
-                haystack->valueAt<StringView>(row),
-                needle->valueAt<StringView>(row)));
+        auto h = haystack->valueAt<StringView>(row);
+        auto n = needle->valueAt<StringView>(row);
+        output->set(row, instr<false>(h, n));
       });
     }
   }
@@ -144,6 +140,15 @@ std::shared_ptr<exec::VectorFunction> makeLength(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   static const auto kLengthFunction = std::make_shared<Length>();
   return kLengthFunction;
+}
+
+void encodeDigestToBase16(uint8_t* output, int digestSize) {
+  static unsigned char const kHexCodes[] = "0123456789abcdef";
+  for (int i = digestSize - 1; i >= 0; --i) {
+    int digestChar = output[i];
+    output[i * 2] = kHexCodes[(digestChar >> 4) & 0xf];
+    output[i * 2 + 1] = kHexCodes[digestChar & 0xf];
+  }
 }
 
 } // namespace facebook::velox::functions::sparksql

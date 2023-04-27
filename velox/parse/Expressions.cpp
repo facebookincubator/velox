@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Expressions.h"
+#include "velox/parse/Expressions.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
@@ -257,13 +257,15 @@ TypedExprPtr Expressions::inferTypes(
       // ConstantVector<ComplexType>.
       VELOX_CHECK_NOT_NULL(
           pool, "parsing array literals requires a memory pool");
-      auto arrayVector = variantArrayToVector(constant->value().array(), pool);
+      auto arrayVector = variantArrayToVector(
+          constant->type(), constant->value().array(), pool);
       auto constantVector =
           std::make_shared<ConstantVector<velox::ComplexType>>(
               pool, 1, 0, arrayVector);
       return std::make_shared<const ConstantTypedExpr>(constantVector);
     }
-    return std::make_shared<const ConstantTypedExpr>(constant->value());
+    return std::make_shared<const ConstantTypedExpr>(
+        constant->type(), constant->value());
   }
   if (auto cast = std::dynamic_pointer_cast<const CastExpr>(expr)) {
     return std::make_shared<const CastTypedExpr>(

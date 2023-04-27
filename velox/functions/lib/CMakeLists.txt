@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-find_library(RE2 re2 REQUIRED)
 
 add_library(velox_is_null_functions IsNull.cpp)
 
@@ -32,9 +31,10 @@ add_library(
   Re2Functions.cpp
   StringEncodingUtils.cpp)
 
-target_link_libraries(velox_functions_lib velox_vector ${RE2}
+target_link_libraries(velox_functions_lib velox_vector re2::re2
                       ${FOLLY_WITH_DEPENDENCIES})
 
+add_subdirectory(aggregates)
 add_subdirectory(string)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

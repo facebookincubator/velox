@@ -19,16 +19,17 @@ add_executable(
   BitwiseTest.cpp
   CompareNullSafeTests.cpp
   DateTimeFunctionsTest.cpp
+  ElementAtTest.cpp
   HashTest.cpp
   InTest.cpp
   LeastGreatestTest.cpp
   MapTest.cpp
+  MightContainTest.cpp
   RegexFunctionsTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp
   SplitFunctionsTest.cpp
   StringTest.cpp
-  SubscriptTest.cpp
   XxHash64Test.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
@@ -42,4 +43,4 @@ target_link_libraries(
   gtest
   gtest_main
   gmock
-  ${gflags_LIBRARIES})
+  gflags::gflags)

@@ -161,6 +161,19 @@ struct UnscaledLongDecimal {
     return *this;
   }
 
+  static FOLLY_ALWAYS_INLINE void serialize(
+      const UnscaledLongDecimal& longDecimal,
+      char* serializedData) {
+    memcpy(serializedData, &longDecimal.unscaledValue_, sizeof(int128_t));
+  }
+
+  static FOLLY_ALWAYS_INLINE UnscaledLongDecimal
+  deserialize(const char* serializedData) {
+    UnscaledLongDecimal ans;
+    memcpy(&ans.unscaledValue_, serializedData, sizeof(int128_t));
+    return ans;
+  }
+
  private:
   static constexpr int128_t kMin =
       -(1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
@@ -263,6 +276,10 @@ class numeric_limits<facebook::velox::UnscaledLongDecimal> {
   }
   static facebook::velox::UnscaledLongDecimal max() {
     return facebook::velox::UnscaledLongDecimal::max();
+  }
+
+  static facebook::velox::UnscaledLongDecimal lowest() {
+    return facebook::velox::UnscaledLongDecimal::min();
   }
 };
 } // namespace std

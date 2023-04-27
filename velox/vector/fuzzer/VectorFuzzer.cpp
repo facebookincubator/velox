@@ -21,6 +21,7 @@
 #include <codecvt>
 #include <locale>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/type/Date.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/FlatVector.h"
@@ -107,28 +108,63 @@ uint32_t rand(FuzzerGenerator& rng) {
   return boost::random::uniform_int_distribution<uint32_t>()(rng);
 }
 
-Timestamp randTimestamp(
-    FuzzerGenerator& rng,
-    bool useMicrosecondPrecisionTimestamp = false) {
-  return useMicrosecondPrecisionTimestamp
-      ? Timestamp::fromMicros(rand<int64_t>(rng))
-      : Timestamp(rand<int32_t>(rng), (rand<int64_t>(rng) % MAX_NANOS));
+template <>
+uint64_t rand(FuzzerGenerator& rng) {
+  return boost::random::uniform_int_distribution<uint64_t>()(rng);
+}
+
+template <>
+int128_t rand(FuzzerGenerator& rng) {
+  return buildInt128(rand<int64_t>(rng), rand<uint64_t>(rng));
+}
+
+Timestamp randTimestamp(FuzzerGenerator& rng, VectorFuzzer::Options opts) {
+  auto precision = opts.useMicrosecondPrecisionTimestamp
+      ? VectorFuzzer::Options::TimestampPrecision::kMicroSeconds
+      : opts.timestampPrecision;
+
+  switch (precision) {
+    case VectorFuzzer::Options::TimestampPrecision::kNanoSeconds:
+      return Timestamp(rand<int32_t>(rng), (rand<int64_t>(rng) % MAX_NANOS));
+    case VectorFuzzer::Options::TimestampPrecision::kMicroSeconds:
+      return Timestamp::fromMicros(rand<int64_t>(rng));
+    case VectorFuzzer::Options::TimestampPrecision::kMilliSeconds:
+      return Timestamp::fromMillis(rand<int64_t>(rng));
+    case VectorFuzzer::Options::TimestampPrecision::kSeconds:
+      return Timestamp(rand<int32_t>(rng), 0);
+  }
+  return {}; // no-op.
 }
 
 Date randDate(FuzzerGenerator& rng) {
   return Date(rand<int32_t>(rng));
 }
 
-IntervalDayTime randIntervalDayTime(FuzzerGenerator& rng) {
-  return IntervalDayTime(rand<int64_t>(rng));
+size_t getElementsVectorLength(
+    const VectorFuzzer::Options& opts,
+    vector_size_t size) {
+  if (opts.containerVariableLength == false &&
+      size * opts.containerLength > opts.complexElementsMaxSize) {
+    VELOX_USER_FAIL(
+        "Requested fixed opts.containerVariableLength can't be satisfied: "
+        "increase opts.complexElementsMaxSize, reduce opts.containerLength"
+        " or make opts.containerVariableLength=true");
+  }
+  return std::min(size * opts.containerLength, opts.complexElementsMaxSize);
 }
 
-size_t genContainerLength(
-    const VectorFuzzer::Options& opts,
+UnscaledShortDecimal randShortDecimal(
+    const TypePtr& type,
     FuzzerGenerator& rng) {
-  return opts.containerVariableLength
-      ? rand<uint32_t>(rng) % opts.containerLength
-      : opts.containerLength;
+  auto precision = type->asShortDecimal().precision();
+  auto randVal = rand<int64_t>(rng) % DecimalUtil::kPowersOfTen[precision];
+  return UnscaledShortDecimal(randVal);
+}
+
+UnscaledLongDecimal randLongDecimal(const TypePtr& type, FuzzerGenerator& rng) {
+  auto precision = type->asLongDecimal().precision();
+  auto randVal = rand<int128_t>(rng) % DecimalUtil::kPowersOfTen[precision];
+  return UnscaledLongDecimal(randVal);
 }
 
 /// Unicode character ranges. Ensure the vector indexes match the UTF8CharList
@@ -208,7 +244,10 @@ StringView randString(
 }
 
 template <TypeKind kind>
-variant randVariantImpl(
+VectorPtr fuzzConstantPrimitiveImpl(
+    memory::MemoryPool* pool,
+    const TypePtr& type,
+    vector_size_t size,
     FuzzerGenerator& rng,
     const VectorFuzzer::Options& opts) {
   using TCpp = typename TypeTraits<kind>::NativeType;
@@ -217,22 +256,24 @@ variant randVariantImpl(
     std::string buf;
     auto stringView = randString(rng, opts, buf, converter);
 
-    if constexpr (kind == TypeKind::VARCHAR) {
-      return variant(stringView);
-    } else if constexpr (kind == TypeKind::VARBINARY) {
-      return variant::binary(stringView);
-    } else {
-      VELOX_UNREACHABLE();
-    }
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, std::move(stringView));
   }
   if constexpr (std::is_same_v<TCpp, Timestamp>) {
-    return variant(randTimestamp(rng, opts.useMicrosecondPrecisionTimestamp));
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, randTimestamp(rng, opts));
   } else if constexpr (std::is_same_v<TCpp, Date>) {
-    return variant(randDate(rng));
-  } else if constexpr (std::is_same_v<TCpp, IntervalDayTime>) {
-    return variant(randIntervalDayTime(rng));
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, randDate(rng));
+  } else if constexpr (std::is_same_v<TCpp, UnscaledShortDecimal>) {
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, randShortDecimal(type, rng));
+  } else if constexpr (std::is_same_v<TCpp, UnscaledLongDecimal>) {
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, randLongDecimal(type, rng));
   } else {
-    return variant(rand<TCpp>(rng));
+    return std::make_shared<ConstantVector<TCpp>>(
+        pool, size, false, type, rand<TCpp>(rng));
   }
 }
 
@@ -252,12 +293,13 @@ void fuzzFlatPrimitiveImpl(
     if constexpr (std::is_same_v<TCpp, StringView>) {
       flatVector->set(i, randString(rng, opts, strBuf, converter));
     } else if constexpr (std::is_same_v<TCpp, Timestamp>) {
-      flatVector->set(
-          i, randTimestamp(rng, opts.useMicrosecondPrecisionTimestamp));
+      flatVector->set(i, randTimestamp(rng, opts));
     } else if constexpr (std::is_same_v<TCpp, Date>) {
       flatVector->set(i, randDate(rng));
-    } else if constexpr (std::is_same_v<TCpp, IntervalDayTime>) {
-      flatVector->set(i, randIntervalDayTime(rng));
+    } else if constexpr (std::is_same_v<TCpp, UnscaledShortDecimal>) {
+      flatVector->set(i, randShortDecimal(vector->type(), rng));
+    } else if constexpr (std::is_same_v<TCpp, UnscaledLongDecimal>) {
+      flatVector->set(i, randLongDecimal(vector->type(), rng));
     } else {
       flatVector->set(i, rand<TCpp>(rng));
     }
@@ -355,6 +397,10 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
   return vector;
 }
 
+VectorPtr VectorFuzzer::fuzz(const GeneratorSpec& generatorSpec) {
+  return generatorSpec.generateData(rng_, pool_, opts_.vectorSize);
+}
+
 VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type) {
   return fuzzConstant(type, opts_.vectorSize);
 }
@@ -371,7 +417,14 @@ VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
     if (type->isUnKnown()) {
       return BaseVector::createNullConstant(type, size, pool_);
     } else {
-      return BaseVector::createConstant(randVariant(type), size, pool_);
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+          fuzzConstantPrimitiveImpl,
+          type->kind(),
+          pool_,
+          type,
+          size,
+          rng_,
+          opts_);
     }
   }
 
@@ -413,7 +466,9 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
   // Arrays.
   else if (type->isArray()) {
     return fuzzArray(
-        fuzzFlat(type->asArray().elementType(), size * opts_.containerLength),
+        fuzzFlat(
+            type->asArray().elementType(),
+            getElementsVectorLength(opts_, size)),
         size);
   }
   // Maps.
@@ -422,10 +477,12 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
     // not specify the order they'll be called in, leading to inconsistent
     // results across platforms.
     auto keys = opts_.normalizeMapKeys
-        ? fuzzFlatNotNull(type->asMap().keyType(), size * opts_.containerLength)
-        : fuzzFlat(type->asMap().keyType(), size * opts_.containerLength);
-    auto values =
-        fuzzFlat(type->asMap().valueType(), size * opts_.containerLength);
+        ? fuzzFlatNotNull(
+              type->asMap().keyType(), getElementsVectorLength(opts_, size))
+        : fuzzFlat(
+              type->asMap().keyType(), getElementsVectorLength(opts_, size));
+    auto values = fuzzFlat(
+        type->asMap().valueType(), getElementsVectorLength(opts_, size));
     return fuzzMap(keys, values, size);
   }
   // Rows.
@@ -437,7 +494,8 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
     for (const auto& childType : rowType.children()) {
       childrenVectors.emplace_back(fuzzFlat(childType, size));
     }
-    return fuzzRow(std::move(childrenVectors), size);
+
+    return fuzzRow(std::move(childrenVectors), rowType.names(), size);
   } else {
     VELOX_UNREACHABLE();
   }
@@ -456,7 +514,7 @@ VectorPtr VectorFuzzer::fuzzFlatPrimitive(
     // First, fill it with random values.
     // TODO: We should bias towards edge cases (min, max, Nan, etc).
     auto kind = vector->typeKind();
-    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         fuzzFlatPrimitiveImpl, kind, vector, rng_, opts_);
 
     // Second, generate a random null vector.
@@ -479,7 +537,9 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
 
     case TypeKind::ARRAY:
       return fuzzArray(
-          fuzz(type->asArray().elementType(), size * opts_.containerLength),
+          fuzz(
+              type->asArray().elementType(),
+              getElementsVectorLength(opts_, size)),
           size);
 
     case TypeKind::MAP: {
@@ -487,10 +547,11 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
       // does not specify the order they'll be called in, leading to
       // inconsistent results across platforms.
       auto keys = opts_.normalizeMapKeys
-          ? fuzzNotNull(type->asMap().keyType(), size * opts_.containerLength)
-          : fuzz(type->asMap().keyType(), size * opts_.containerLength);
+          ? fuzzNotNull(
+                type->asMap().keyType(), getElementsVectorLength(opts_, size))
+          : fuzz(type->asMap().keyType(), getElementsVectorLength(opts_, size));
       auto values =
-          fuzz(type->asMap().valueType(), size * opts_.containerLength);
+          fuzz(type->asMap().valueType(), getElementsVectorLength(opts_, size));
       return fuzzMap(keys, values, size);
     }
 
@@ -511,12 +572,7 @@ VectorPtr VectorFuzzer::fuzzDictionary(
   VELOX_CHECK(
       vectorSize > 0 || size == 0,
       "Cannot build a non-empty dictionary on an empty underlying vector");
-  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool_);
-  auto rawIndices = indices->asMutable<vector_size_t>();
-
-  for (size_t i = 0; i < size; ++i) {
-    rawIndices[i] = rand<vector_size_t>(rng_) % vectorSize;
-  }
+  BufferPtr indices = fuzzIndices(size, vectorSize);
 
   auto nulls = opts_.dictionaryHasNulls ? fuzzNulls(size) : nullptr;
   return BaseVector::wrapInDictionary(nulls, indices, size, vector);
@@ -639,6 +695,25 @@ RowVectorPtr VectorFuzzer::fuzzInputRow(const RowTypePtr& rowType) {
 
 RowVectorPtr VectorFuzzer::fuzzRow(
     std::vector<VectorPtr>&& children,
+    std::vector<std::string> childrenNames,
+    vector_size_t size) {
+  std::vector<TypePtr> types;
+  types.reserve(children.size());
+
+  for (const auto& child : children) {
+    types.emplace_back(child->type());
+  }
+
+  return std::make_shared<RowVector>(
+      pool_,
+      ROW(std::move(childrenNames), std::move(types)),
+      opts_.containerHasNulls ? fuzzNulls(size) : nullptr,
+      size,
+      std::move(children));
+}
+
+RowVectorPtr VectorFuzzer::fuzzRow(
+    std::vector<VectorPtr>&& children,
     vector_size_t size) {
   std::vector<TypePtr> types;
   types.reserve(children.size());
@@ -684,13 +759,51 @@ BufferPtr VectorFuzzer::fuzzNulls(vector_size_t size) {
   return builder.build();
 }
 
-variant VectorFuzzer::randVariant(const TypePtr& arg) {
-  VELOX_CHECK(arg->isPrimitiveType());
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      randVariantImpl, arg->kind(), rng_, opts_);
+BufferPtr VectorFuzzer::fuzzIndices(
+    vector_size_t size,
+    vector_size_t baseVectorSize) {
+  VELOX_CHECK_GE(size, 0);
+  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool_);
+  auto rawIndices = indices->asMutable<vector_size_t>();
+
+  for (size_t i = 0; i < size; ++i) {
+    rawIndices[i] = rand<vector_size_t>(rng_) % baseVectorSize;
+  }
+  return indices;
+}
+
+std::pair<int8_t, int8_t> VectorFuzzer::randPrecisionScale(TypeKind kind) {
+  VELOX_DCHECK(isDecimalKind(kind));
+  // Generate precision in range [1, Decimal type max precision]
+  auto precision = 1 +
+      rand<int8_t>(rng_) %
+          (kind == TypeKind::SHORT_DECIMAL ? ShortDecimalType::kMaxPrecision
+                                           : LongDecimalType::kMaxPrecision);
+  // Generate scale in range [0, precision]
+  auto scale = rand<int8_t>(rng_) % (precision + 1);
+  return {precision, scale};
+}
+
+TypePtr VectorFuzzer::randScalarNonFloatingPointType() {
+  static TypePtr kNonFloatingPointTypes[]{
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      VARCHAR(),
+      VARBINARY(),
+      TIMESTAMP(),
+      DATE(),
+  };
+  static constexpr int kNumTypes =
+      sizeof(kNonFloatingPointTypes) / sizeof(kNonFloatingPointTypes[0]);
+  return kNonFloatingPointTypes[rand<uint32_t>(rng_) % kNumTypes];
 }
 
 TypePtr VectorFuzzer::randType(int maxDepth) {
+  // @TODO Add decimal TypeKinds to randType.
+  // Refer https://github.com/facebookincubator/velox/issues/3942
   static TypePtr kScalarTypes[]{
       BOOLEAN(),
       TINYINT(),

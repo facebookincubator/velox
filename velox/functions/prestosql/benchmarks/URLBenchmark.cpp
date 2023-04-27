@@ -190,18 +190,21 @@ class UrlBenchmark : public functions::test::FunctionBenchmarkBase {
     folly::BenchmarkSuspender suspender;
 
     size_t size = 1000;
+    std::string url;
     auto vectorUrls = vectorMaker_.flatVector<StringView>(
         size,
-        [](auto row) {
+        [&](auto row) {
           // construct some pseudo random url
-          return StringView(fmt::format(
+          url = fmt::format(
               "http://somehost{}.com:8080/somepath{}/p.php?k1={}#Refi",
               row,
               row % 2,
-              row % 3));
+              row % 3);
+          return StringView(url);
         },
         nullptr);
-    auto constVector = BaseVector::createConstant("k1", size, pool());
+    auto constVector =
+        BaseVector::createConstant(VARCHAR(), "k1", size, pool());
     auto rowVector = isParameter
         ? vectorMaker_.rowVector({vectorUrls, constVector})
         : vectorMaker_.rowVector({vectorUrls});

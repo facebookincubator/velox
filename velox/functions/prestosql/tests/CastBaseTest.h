@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -137,25 +138,37 @@ class CastBaseTest : public FunctionBaseTest {
       const TypePtr& toType,
       const VectorPtr& input,
       const VectorPtr& expected) {
+    SCOPED_TRACE(fmt::format(
+        "Cast from {} to {}", fromType->toString(), toType->toString()));
     // Test with flat encoding.
-    evaluateAndVerify<TTo>(fromType, toType, makeRowVector({input}), expected);
-    evaluateAndVerify<TTo>(
-        fromType, toType, makeRowVector({input}), expected, true);
+    {
+      SCOPED_TRACE("Flat encoding");
+      evaluateAndVerify<TTo>(
+          fromType, toType, makeRowVector({input}), expected);
+      evaluateAndVerify<TTo>(
+          fromType, toType, makeRowVector({input}), expected, true);
+    }
 
     // Test with constant encoding that repeats the first element five times.
-    auto constInput = BaseVector::wrapInConstant(5, 0, input);
-    auto constExpected = BaseVector::wrapInConstant(5, 0, expected);
+    {
+      SCOPED_TRACE("Constant encoding");
+      auto constInput = BaseVector::wrapInConstant(5, 0, input);
+      auto constExpected = BaseVector::wrapInConstant(5, 0, expected);
 
-    evaluateAndVerify<TTo>(
-        fromType, toType, makeRowVector({constInput}), constExpected);
-    evaluateAndVerify<TTo>(
-        fromType, toType, makeRowVector({constInput}), constExpected, true);
+      evaluateAndVerify<TTo>(
+          fromType, toType, makeRowVector({constInput}), constExpected);
+      evaluateAndVerify<TTo>(
+          fromType, toType, makeRowVector({constInput}), constExpected, true);
+    }
 
     // Test with dictionary encoding that reverses the indices.
-    evaluateAndVerifyDictEncoding<TTo>(
-        fromType, toType, makeRowVector({input}), expected);
-    evaluateAndVerifyDictEncoding<TTo>(
-        fromType, toType, makeRowVector({input}), expected, true);
+    {
+      SCOPED_TRACE("Dictionary encoding");
+      evaluateAndVerifyDictEncoding<TTo>(
+          fromType, toType, makeRowVector({input}), expected);
+      evaluateAndVerifyDictEncoding<TTo>(
+          fromType, toType, makeRowVector({input}), expected, true);
+    }
   }
 
   template <typename TFrom, typename TTo>
@@ -174,13 +187,14 @@ class CastBaseTest : public FunctionBaseTest {
   void testThrow(
       const TypePtr& fromType,
       const TypePtr& toType,
-      std::vector<std::optional<TFrom>> input) {
-    EXPECT_THROW(
+      const std::vector<std::optional<TFrom>>& input,
+      const std::string& expectedErrorMessage) {
+    VELOX_ASSERT_THROW(
         evaluateCast<TTo>(
             fromType,
             toType,
             makeRowVector({makeNullableFlatVector<TFrom>(input, fromType)})),
-        VeloxException);
+        expectedErrorMessage);
   }
 };
 

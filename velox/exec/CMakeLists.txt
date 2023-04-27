@@ -14,12 +14,13 @@
 add_library(
   velox_exec
   Aggregate.cpp
+  AggregateCompanionAdapter.cpp
+  AggregateCompanionSignatures.cpp
   AggregateFunctionRegistry.cpp
   AggregationMasks.cpp
   AggregateWindow.cpp
+  ArrowStream.cpp
   ContainerRowSerde.cpp
-  CrossJoinBuild.cpp
-  CrossJoinProbe.cpp
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
@@ -39,6 +40,8 @@ add_library(
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
+  NestedLoopJoinBuild.cpp
+  NestedLoopJoinProbe.cpp
   Operator.cpp
   OperatorUtils.cpp
   OrderBy.cpp
@@ -71,7 +74,8 @@ target_link_libraries(
   velox_time
   velox_codegen
   velox_common_base
-  velox_test_util)
+  velox_test_util
+  velox_arrow_bridge)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

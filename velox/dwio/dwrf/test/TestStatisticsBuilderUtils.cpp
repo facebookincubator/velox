@@ -36,7 +36,12 @@ std::shared_ptr<FlatVector<T>> makeFlatVector(
     size_t length,
     BufferPtr values) {
   return std::make_shared<FlatVector<T>>(
-      pool, nulls, length, values, std::vector<BufferPtr>{});
+      pool,
+      CppToType<T>::create(),
+      nulls,
+      length,
+      values,
+      std::vector<BufferPtr>{});
 }
 
 template <typename T>
@@ -47,20 +52,11 @@ std::shared_ptr<FlatVector<T>> makeFlatVectorNoNulls(
   return makeFlatVector<T>(pool, BufferPtr(nullptr), 0, length, values);
 }
 
-BufferPtr allocateNulls(
-    size_t length,
-    facebook::velox::memory::MemoryPool* pool,
-    bool defaultValue = false) {
-  auto numBytes = bits::nbytes(length);
-  return AlignedBuffer::allocate<char>(
-      numBytes, pool, defaultValue ? bits::kNullByte : bits::kNotNullByte);
-}
-
 TEST(TestStatisticsBuilderUtils, addIntegerValues) {
   IntegerStatisticsBuilder builder{options};
 
   // add values non null
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   size_t size = 10;
 
   auto values = AlignedBuffer::allocate<int32_t>(size, pool.get());
@@ -105,7 +101,7 @@ TEST(TestStatisticsBuilderUtils, addDoubleValues) {
   DoubleStatisticsBuilder builder{options};
 
   // add values non null
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   size_t size = 10;
 
   auto values = AlignedBuffer::allocate<float>(size, pool.get());
@@ -150,13 +146,14 @@ TEST(TestStatisticsBuilderUtils, addStringValues) {
   StringStatisticsBuilder builder{options};
 
   // add values non null
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   size_t size = 10;
 
   auto values = AlignedBuffer::allocate<StringView>(10, pool.get());
   auto* valuesPtr = values->asMutable<StringView>();
-  for (size_t i = 0; i < size; ++i) {
-    valuesPtr[i] = StringView(std::string(1, 'a' + i));
+  char c = 'a';
+  for (size_t i = 0; i < size; ++i, ++c) {
+    valuesPtr[i] = StringView(&c, 1);
   }
 
   {
@@ -194,7 +191,7 @@ TEST(TestStatisticsBuilderUtils, addBooleanValues) {
   BooleanStatisticsBuilder builder{options};
 
   // add values non null
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   size_t size = 10;
 
   auto values = AlignedBuffer::allocate<bool>(size, pool.get());
@@ -237,7 +234,7 @@ TEST(TestStatisticsBuilderUtils, addValues) {
   StatisticsBuilder builder{options};
 
   // add values non null
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   size_t size = 10;
 
   auto values = AlignedBuffer::allocate<bool>(size, pool.get());
@@ -271,7 +268,7 @@ TEST(TestStatisticsBuilderUtils, addBinaryValues) {
   BinaryStatisticsBuilder builder{options};
 
   // add values non null
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   size_t size = 10;
 
   auto values = AlignedBuffer::allocate<StringView>(size, pool.get());

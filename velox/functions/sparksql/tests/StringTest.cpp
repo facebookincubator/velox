@@ -50,9 +50,51 @@ class StringTest : public SparkFunctionBaseTest {
         "length(c0)", {arg}, {VARBINARY()});
   }
 
+  std::optional<std::string> trim(std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("trim(c0)", srcStr);
+  }
+
+  std::optional<std::string> trim(
+      std::optional<std::string> trimStr,
+      std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("trim(c0, c1)", trimStr, srcStr);
+  }
+
+  std::optional<std::string> ltrim(std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("ltrim(c0)", srcStr);
+  }
+
+  std::optional<std::string> ltrim(
+      std::optional<std::string> trimStr,
+      std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("ltrim(c0, c1)", trimStr, srcStr);
+  }
+
+  std::optional<std::string> rtrim(std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("rtrim(c0)", srcStr);
+  }
+
+  std::optional<std::string> rtrim(
+      std::optional<std::string> trimStr,
+      std::optional<std::string> srcStr) {
+    return evaluateOnce<std::string>("rtrim(c0, c1)", trimStr, srcStr);
+  }
+
   std::optional<std::string> md5(std::optional<std::string> arg) {
     return evaluateOnce<std::string, std::string>(
         "md5(c0)", {arg}, {VARBINARY()});
+  }
+
+  std::optional<std::string> sha1(std::optional<std::string> arg) {
+    return evaluateOnce<std::string, std::string>(
+        "sha1(c0)", {arg}, {VARBINARY()});
+  }
+
+  std::optional<std::string> sha2(
+      std::optional<std::string> str,
+      std::optional<int32_t> bitLength) {
+    return evaluateOnce<std::string, std::string, int32_t>(
+        "sha2(cast(c0 as varbinary), c1)", str, bitLength);
   }
 
   bool compareFunction(
@@ -76,6 +118,20 @@ class StringTest : public SparkFunctionBaseTest {
       const std::optional<std::string>& str,
       const std::optional<std::string>& pattern) {
     return evaluateOnce<bool>("contains(c0, c1)", str, pattern);
+  }
+
+  std::optional<std::string> substring(
+      std::optional<std::string> str,
+      std::optional<int32_t> start) {
+    return evaluateOnce<std::string>("substring(c0, c1)", str, start);
+  }
+
+  std::optional<std::string> substring(
+      std::optional<std::string> str,
+      std::optional<int32_t> start,
+      std::optional<int32_t> length) {
+    return evaluateOnce<std::string>(
+        "substring(c0, c1, c2)", str, start, length);
   }
 };
 
@@ -141,6 +197,71 @@ TEST_F(StringTest, MD5) {
   EXPECT_EQ(md5("Infinity"), "eb2ac5b04180d8d6011a016aeb8f75b3");
 }
 
+TEST_F(StringTest, sha1) {
+  EXPECT_EQ(sha1(std::nullopt), std::nullopt);
+  EXPECT_EQ(sha1(""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+  EXPECT_EQ(sha1("Spark"), "85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c");
+  EXPECT_EQ(
+      sha1("0123456789abcdefghijklmnopqrstuvwxyz"),
+      "a26704c04fc5f10db5aab58468035531cc542485");
+}
+
+TEST_F(StringTest, sha2) {
+  EXPECT_EQ(sha2("Spark", -1), std::nullopt);
+  EXPECT_EQ(sha2("Spark", 1), std::nullopt);
+  EXPECT_EQ(
+      sha2("", 0),
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  EXPECT_EQ(
+      sha2("Spark", 0),
+      "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 0),
+      "74e7e5bb9d22d6db26bf76946d40fff3ea9f0346b884fd0694920fccfad15e33");
+  EXPECT_EQ(
+      sha2("", 224),
+      "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f");
+  EXPECT_EQ(
+      sha2("Spark", 224),
+      "dbeab94971678d36af2195851c0f7485775a2a7c60073d62fc04549c");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 224),
+      "e6e4a6be069cc9bead8b6050856d2b26da6b3f7efa0951e5fb3a54dd");
+  EXPECT_EQ(
+      sha2("", 256),
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  EXPECT_EQ(
+      sha2("Spark", 256),
+      "529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 256),
+      "74e7e5bb9d22d6db26bf76946d40fff3ea9f0346b884fd0694920fccfad15e33");
+  EXPECT_EQ(
+      sha2("", 384),
+      "38b060a751ac96384cd9327eb1b1e36a21fdb71114be0743"
+      "4c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b");
+  EXPECT_EQ(
+      sha2("Spark", 384),
+      "1e40b8d06c248a1cc32428c22582b6219d072283078fa140"
+      "d9ad297ecadf2cabefc341b857ad36226aa8d6d79f2ab67d");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 384),
+      "ce6d4ea5442bc6c830bea1942d4860db9f7b96f0e9d2c307"
+      "3ffe47a0e1166d95612d840ff15e5efdd23c1f273096da32");
+  EXPECT_EQ(
+      sha2("", 512),
+      "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
+      "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
+  EXPECT_EQ(
+      sha2("Spark", 512),
+      "44844a586c54c9a212da1dbfe05c5f1705de1af5fda1f0d36297623249b279fd"
+      "8f0ccec03f888f4fb13bf7cd83fdad58591c797f81121a23cfdd5e0897795238");
+  EXPECT_EQ(
+      sha2("0123456789abcdefghijklmnopqrstuvwxyz", 512),
+      "95cadc34aa46b9fdef432f62fe5bad8d9f475bfbecf797d5802bb5f2937a85d9"
+      "3ce4857a6262b03834c01c610d74cd1215f9a466dc6ad3dd15078e3309a03a6d");
+}
+
 TEST_F(StringTest, startsWith) {
   EXPECT_EQ(startsWith("hello", "ello"), false);
   EXPECT_EQ(startsWith("hello", "hell"), true);
@@ -175,6 +296,126 @@ TEST_F(StringTest, endsWith) {
   EXPECT_EQ(endsWith("-- hello there!", "hello there"), false);
   EXPECT_EQ(endsWith("-- hello there!", std::nullopt), std::nullopt);
   EXPECT_EQ(endsWith(std::nullopt, "abc"), std::nullopt);
+}
+
+TEST_F(StringTest, trim) {
+  EXPECT_EQ(trim(""), "");
+  EXPECT_EQ(trim("  data\t "), "data\t");
+  EXPECT_EQ(trim("  data\t"), "data\t");
+  EXPECT_EQ(trim("data\t "), "data\t");
+  EXPECT_EQ(trim("data\t"), "data\t");
+  EXPECT_EQ(trim("  \u6570\u636E\t "), "\u6570\u636E\t");
+  EXPECT_EQ(trim("  \u6570\u636E\t"), "\u6570\u636E\t");
+  EXPECT_EQ(trim("\u6570\u636E\t "), "\u6570\u636E\t");
+  EXPECT_EQ(trim("\u6570\u636E\t"), "\u6570\u636E\t");
+
+  EXPECT_EQ(trim("", ""), "");
+  EXPECT_EQ(trim("", "srcStr"), "srcStr");
+  EXPECT_EQ(trim("trimStr", ""), "");
+  EXPECT_EQ(trim("data!egr< >int", "integer data!"), "");
+  EXPECT_EQ(trim("int", "integer data!"), "eger data!");
+  EXPECT_EQ(trim("!!at", "integer data!"), "integer d");
+  EXPECT_EQ(trim("a", "integer data!"), "integer data!");
+  EXPECT_EQ(
+      trim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
+  EXPECT_EQ(trim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"), "\u636E!");
+  EXPECT_EQ(trim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"), "\u6574");
+  EXPECT_EQ(
+      trim("\u6570", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
+}
+
+TEST_F(StringTest, ltrim) {
+  EXPECT_EQ(ltrim(""), "");
+  EXPECT_EQ(ltrim("  data\t "), "data\t ");
+  EXPECT_EQ(ltrim("  data\t"), "data\t");
+  EXPECT_EQ(ltrim("data\t "), "data\t ");
+  EXPECT_EQ(ltrim("data\t"), "data\t");
+  EXPECT_EQ(ltrim("  \u6570\u636E\t "), "\u6570\u636E\t ");
+  EXPECT_EQ(ltrim("  \u6570\u636E\t"), "\u6570\u636E\t");
+  EXPECT_EQ(ltrim("\u6570\u636E\t "), "\u6570\u636E\t ");
+  EXPECT_EQ(ltrim("\u6570\u636E\t"), "\u6570\u636E\t");
+
+  EXPECT_EQ(ltrim("", ""), "");
+  EXPECT_EQ(ltrim("", "srcStr"), "srcStr");
+  EXPECT_EQ(ltrim("trimStr", ""), "");
+  EXPECT_EQ(ltrim("data!egr< >int", "integer data!"), "");
+  EXPECT_EQ(ltrim("int", "integer data!"), "eger data!");
+  EXPECT_EQ(ltrim("!!at", "integer data!"), "integer data!");
+  EXPECT_EQ(ltrim("a", "integer data!"), "integer data!");
+  EXPECT_EQ(
+      ltrim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
+  EXPECT_EQ(ltrim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"), "\u636E!");
+  EXPECT_EQ(
+      ltrim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
+  EXPECT_EQ(
+      ltrim("\u6570", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
+}
+
+TEST_F(StringTest, rtrim) {
+  EXPECT_EQ(rtrim(""), "");
+  EXPECT_EQ(rtrim("  data\t "), "  data\t");
+  EXPECT_EQ(rtrim("  data\t"), "  data\t");
+  EXPECT_EQ(rtrim("data\t "), "data\t");
+  EXPECT_EQ(rtrim("data\t"), "data\t");
+  EXPECT_EQ(rtrim("  \u6570\u636E\t "), "  \u6570\u636E\t");
+  EXPECT_EQ(rtrim("  \u6570\u636E\t"), "  \u6570\u636E\t");
+  EXPECT_EQ(rtrim("\u6570\u636E\t "), "\u6570\u636E\t");
+  EXPECT_EQ(rtrim("\u6570\u636E\t"), "\u6570\u636E\t");
+
+  EXPECT_EQ(rtrim("", ""), "");
+  EXPECT_EQ(rtrim("", "srcStr"), "srcStr");
+  EXPECT_EQ(rtrim("trimStr", ""), "");
+  EXPECT_EQ(rtrim("data!egr< >int", "integer data!"), "");
+  EXPECT_EQ(rtrim("int", "integer data!"), "integer data!");
+  EXPECT_EQ(rtrim("!!at", "integer data!"), "integer d");
+  EXPECT_EQ(rtrim("a", "integer data!"), "integer data!");
+  EXPECT_EQ(
+      rtrim("\u6570\u6574!\u6570 \u636E!", "\u6574\u6570 \u6570\u636E!"), "");
+  EXPECT_EQ(
+      rtrim(" \u6574\u6570 ", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
+  EXPECT_EQ(rtrim("! \u6570\u636E!", "\u6574\u6570 \u6570\u636E!"), "\u6574");
+  EXPECT_EQ(
+      rtrim("\u6570", "\u6574\u6570 \u6570\u636E!"),
+      "\u6574\u6570 \u6570\u636E!");
+}
+
+TEST_F(StringTest, substring) {
+  EXPECT_EQ(substring("example", 0, 2), "ex");
+  EXPECT_EQ(substring("example", 1, -1), "");
+  EXPECT_EQ(substring("example", 1, 0), "");
+  EXPECT_EQ(substring("example", 1, 2), "ex");
+  EXPECT_EQ(substring("example", 1, 7), "example");
+  EXPECT_EQ(substring("example", 1, 100), "example");
+  EXPECT_EQ(substring("example", 2, 2), "xa");
+  EXPECT_EQ(substring("example", 8, 2), "");
+  EXPECT_EQ(substring("example", -2, 2), "le");
+  EXPECT_EQ(substring("example", -7, 2), "ex");
+  EXPECT_EQ(substring("example", -8, 2), "e");
+  EXPECT_EQ(substring("example", -9, 2), "");
+  EXPECT_EQ(substring("example", -7, 7), "example");
+  EXPECT_EQ(substring("example", -9, 9), "example");
+  EXPECT_EQ(substring("example", 4, 2147483645), "mple");
+  EXPECT_EQ(substring("example", 2147483645, 4), "");
+  EXPECT_EQ(substring("example", -2147483648, 1), "");
+  EXPECT_EQ(substring("da\u6570\u636Eta", 2, 4), "a\u6570\u636Et");
+  EXPECT_EQ(substring("da\u6570\u636Eta", -3, 2), "\u636Et");
+
+  EXPECT_EQ(substring("example", 0), "example");
+  EXPECT_EQ(substring("example", 1), "example");
+  EXPECT_EQ(substring("example", 2), "xample");
+  EXPECT_EQ(substring("example", 8), "");
+  EXPECT_EQ(substring("example", 2147483647), "");
+  EXPECT_EQ(substring("example", -2), "le");
+  EXPECT_EQ(substring("example", -7), "example");
+  EXPECT_EQ(substring("example", -8), "example");
+  EXPECT_EQ(substring("example", -9), "example");
+  EXPECT_EQ(substring("example", -2147483647), "example");
+  EXPECT_EQ(substring("da\u6570\u636Eta", 3), "\u6570\u636Eta");
+  EXPECT_EQ(substring("da\u6570\u636Eta", -3), "\u636Eta");
 }
 
 } // namespace
