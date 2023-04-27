@@ -74,24 +74,23 @@ bool isResultTypeResolvableGivenIntermediateType(
 // Return a string that is preorder traveral of `type`. For example, for
 // row(bigint, array(double)), return a string "row_bigint_array_double".
 std::string toSuffixString(const TypeSignature& type) {
-  auto name = type.baseName();
+  auto& name = type.baseName();
   // For primitive and decimal types, return their names.
   if (type.parameters().empty() || isCommonDecimalName(name) ||
       isDecimalName(name)) {
     return name;
   }
-  auto upperName = boost::algorithm::to_upper_copy(name);
-  if (upperName == "ARRAY") {
+  if (name == "array") {
     return "array_" + toSuffixString(type.parameters()[0]);
   }
-  if (upperName == "MAP") {
+  if (name == "map") {
     return "map_" + toSuffixString(type.parameters()[0]) + "_" +
         toSuffixString(type.parameters()[1]);
   }
-  if (upperName == "ROW") {
+  if (name == "row") {
     std::string result = "row";
     for (const auto& child : type.parameters()) {
-      result = result + "_" + toSuffixString(child);
+      result += "_" + toSuffixString(child);
     }
     result += "_endrow";
     return result;

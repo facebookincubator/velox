@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <boost/algorithm/string.hpp>
 #include <memory>
 #include <optional>
 #include <string>
@@ -29,7 +28,7 @@ namespace facebook::velox::exec {
 std::string sanitizeName(const std::string& name);
 
 inline bool isCommonDecimalName(const std::string& typeName) {
-  return boost::iequals(typeName, "DECIMAL");
+  return typeName == "decimal";
 }
 
 /// Return a list of primitive type names.
@@ -84,6 +83,8 @@ class SignatureVariable {
   bool knownTypesOnly_ = false;
 };
 
+class FunctionSignatureBuilderBase;
+
 // Base type (e.g. map) and optional parameters (e.g. K, V).
 // All parameters must be of the same ParameterType.
 class TypeSignature {
@@ -106,8 +107,10 @@ class TypeSignature {
   }
 
  private:
-  const std::string baseName_;
-  const std::vector<TypeSignature> parameters_;
+  std::string baseName_;
+  std::vector<TypeSignature> parameters_;
+
+  friend FunctionSignatureBuilderBase;
 };
 
 class FunctionSignature {
@@ -229,6 +232,19 @@ inline void addVariable(
 ///     - function(S,T,R)
 TypeSignature parseTypeSignature(const std::string& signature);
 
+class FunctionSignatureBuilderBase {
+ protected:
+  virtual ~FunctionSignatureBuilderBase() = default;
+
+  void fixTypeNameCase(TypeSignature&);
+
+  std::unordered_map<std::string, SignatureVariable> variables_;
+  std::optional<TypeSignature> returnType_;
+  std::vector<TypeSignature> argumentTypes_;
+  std::vector<bool> constantArguments_;
+  bool variableArity_{false};
+};
+
 /// Convenience class for creating FunctionSignature instances.
 /// Example of usage:
 ///     - signature of "concat" function: varchar... -> varchar
@@ -247,7 +263,7 @@ TypeSignature parseTypeSignature(const std::string& signature);
 ///                .returnType("array(K)")
 ///                .argumentType("map(K,V)")
 ///                .build()
-class FunctionSignatureBuilder {
+class FunctionSignatureBuilder : FunctionSignatureBuilderBase {
  public:
   FunctionSignatureBuilder& typeVariable(const std::string& name) {
     addVariable(
@@ -294,13 +310,6 @@ class FunctionSignatureBuilder {
   }
 
   FunctionSignaturePtr build();
-
- private:
-  std::unordered_map<std::string, SignatureVariable> variables_;
-  std::optional<TypeSignature> returnType_;
-  std::vector<TypeSignature> argumentTypes_;
-  std::vector<bool> constantArguments_;
-  bool variableArity_{false};
 };
 
 /// Convenience class for creating AggregageFunctionSignature instances.
@@ -315,7 +324,7 @@ class FunctionSignatureBuilder {
 ///                .argumentType("double")
 ///                .argumentType("double")
 ///                .build()
-class AggregateFunctionSignatureBuilder {
+class AggregateFunctionSignatureBuilder : FunctionSignatureBuilderBase {
  public:
   AggregateFunctionSignatureBuilder& typeVariable(const std::string& name) {
     addVariable(
@@ -371,12 +380,7 @@ class AggregateFunctionSignatureBuilder {
   std::shared_ptr<AggregateFunctionSignature> build();
 
  private:
-  std::unordered_map<std::string, SignatureVariable> variables_;
-  std::optional<TypeSignature> returnType_;
   std::optional<TypeSignature> intermediateType_;
-  std::vector<TypeSignature> argumentTypes_;
-  std::vector<bool> constantArguments_;
-  bool variableArity_{false};
 };
 
 } // namespace facebook::velox::exec

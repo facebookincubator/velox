@@ -149,7 +149,10 @@ void validateBaseTypeAndCollectTypeParams(
     std::unordered_set<std::string>& collectedTypeVariables,
     bool isReturnType) {
   if (!variables.count(arg.baseName())) {
-    auto typeName = boost::algorithm::to_upper_copy(arg.baseName());
+    auto typeName = arg.baseName();
+    folly::toLowerAscii(typeName);
+    VELOX_CHECK_EQ(typeName, arg.baseName(), "Type name should be lower case");
+    boost::algorithm::to_upper(typeName);
 
     if (typeName == "ANY") {
       VELOX_USER_CHECK(
@@ -251,8 +254,22 @@ FunctionSignature::FunctionSignature(
   validate(variables_, returnType_, argumentTypes_, constantArguments_);
 }
 
+void FunctionSignatureBuilderBase::fixTypeNameCase(TypeSignature& type) {
+  if (variables_.count(type.baseName()) > 0) {
+    return;
+  }
+  folly::toLowerAscii(type.baseName_);
+  for (auto& param : type.parameters_) {
+    fixTypeNameCase(param);
+  }
+}
+
 FunctionSignaturePtr FunctionSignatureBuilder::build() {
   VELOX_CHECK(returnType_.has_value());
+  for (auto& type : argumentTypes_) {
+    fixTypeNameCase(type);
+  }
+  fixTypeNameCase(*returnType_);
   return std::make_shared<FunctionSignature>(
       std::move(variables_),
       returnType_.value(),
@@ -265,6 +282,11 @@ std::shared_ptr<AggregateFunctionSignature>
 AggregateFunctionSignatureBuilder::build() {
   VELOX_CHECK(returnType_.has_value());
   VELOX_CHECK(intermediateType_.has_value());
+  for (auto& type : argumentTypes_) {
+    fixTypeNameCase(type);
+  }
+  fixTypeNameCase(*returnType_);
+  fixTypeNameCase(*intermediateType_);
   return std::make_shared<AggregateFunctionSignature>(
       std::move(variables_),
       returnType_.value(),
