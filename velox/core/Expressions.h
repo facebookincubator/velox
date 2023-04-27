@@ -66,24 +66,27 @@ class InputTypedExpr : public ITypedExpr {
 
     return std::make_shared<InputTypedExpr>(type());
   }
+
+  folly::dynamic serialize() const override;
+
+  static TypedExprPtr create(const folly::dynamic& obj, void* context);
 };
 
 class ConstantTypedExpr : public ITypedExpr {
  public:
-  // Creates constant expression of scalar type.
-  explicit ConstantTypedExpr(variant value)
-      : ITypedExpr{value.inferType()}, value_{std::move(value)} {}
-
-  // Creates constant expression for cases when type cannot be properly inferred
-  // from the variant, like variant::null(). For complex types, only
-  // variant::null() is supported.
+  // Creates constant expression. For complex types, only
+  // variant::null() value is supported.
   ConstantTypedExpr(std::shared_ptr<const Type> type, variant value)
       : ITypedExpr{std::move(type)}, value_{std::move(value)} {}
 
   // Creates constant expression of scalar or complex type. The value comes from
   // index zero.
   explicit ConstantTypedExpr(const VectorPtr& value)
-      : ITypedExpr{value->type()}, valueVector_{value} {}
+      : ITypedExpr{value->type()},
+        valueVector_{
+            value->isConstantEncoding()
+                ? value
+                : BaseVector::wrapInConstant(1, 0, value)} {}
 
   std::string toString() const override {
     if (hasValueVector()) {
@@ -109,10 +112,20 @@ class ConstantTypedExpr : public ITypedExpr {
     return value_;
   }
 
-  // Returns value vector if hasValueVector() is true. Vector can be of scalar
-  // or complex type. The value is at index zero.
+  /// Return constant value vector if hasValueVector() is true. Returns null
+  /// otherwise.
   const VectorPtr& valueVector() const {
     return valueVector_;
+  }
+
+  VectorPtr toConstantVector(memory::MemoryPool* pool) const {
+    if (valueVector_) {
+      return valueVector_;
+    }
+    if (value_.isNull()) {
+      return BaseVector::createNullConstant(type(), 1, pool);
+    }
+    return BaseVector::createConstant(type(), value_, 1, pool);
   }
 
   const std::vector<TypedExprPtr>& inputs() const {
@@ -130,13 +143,13 @@ class ConstantTypedExpr : public ITypedExpr {
     }
   }
 
-  bool operator==(const ITypedExpr& other) const final {
+  bool equals(const ITypedExpr& other) const {
     const auto* casted = dynamic_cast<const ConstantTypedExpr*>(&other);
     if (!casted) {
       return false;
     }
 
-    if (!this->type()->kindEquals(casted->type())) {
+    if (!this->type()->equivalent(*casted->type())) {
       return false;
     }
 
@@ -151,7 +164,17 @@ class ConstantTypedExpr : public ITypedExpr {
     return this->value_ == casted->value_;
   }
 
-  VELOX_DEFINE_CLASS_NAME(ConstantTypedExpr)
+  bool operator==(const ITypedExpr& other) const final {
+    return this->equals(other);
+  }
+
+  bool operator==(const ConstantTypedExpr& other) const {
+    return this->equals(other);
+  }
+
+  folly::dynamic serialize() const override;
+
+  static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
   const variant value_;
@@ -213,6 +236,10 @@ class CallTypedExpr : public ITypedExpr {
         casted->inputs().end(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
+
+  folly::dynamic serialize() const override;
+
+  static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
   const std::string name_;
@@ -294,6 +321,10 @@ class FieldAccessTypedExpr : public ITypedExpr {
     return isInputColumn_;
   }
 
+  folly::dynamic serialize() const override;
+
+  static TypedExprPtr create(const folly::dynamic& obj, void* context);
+
  private:
   const std::string name_;
   const bool isInputColumn_;
@@ -308,8 +339,8 @@ class ConcatTypedExpr : public ITypedExpr {
  public:
   ConcatTypedExpr(
       const std::vector<std::string>& names,
-      const std::vector<TypedExprPtr>& expressions)
-      : ITypedExpr{toType(names, expressions), expressions} {}
+      const std::vector<TypedExprPtr>& inputs)
+      : ITypedExpr{toType(names, inputs), inputs} {}
 
   TypedExprPtr rewriteInputNames(
       const std::unordered_map<std::string, std::string>& mapping)
@@ -338,7 +369,7 @@ class ConcatTypedExpr : public ITypedExpr {
   }
 
   bool operator==(const ITypedExpr& other) const override {
-    const auto* casted = dynamic_cast<const FieldAccessTypedExpr*>(&other);
+    const auto* casted = dynamic_cast<const ConcatTypedExpr*>(&other);
     if (!casted) {
       return false;
     }
@@ -349,6 +380,10 @@ class ConcatTypedExpr : public ITypedExpr {
         casted->inputs().end(),
         [](const auto& p1, const auto& p2) { return *p1 == *p2; });
   }
+
+  folly::dynamic serialize() const override;
+
+  static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
   static std::shared_ptr<const Type> toType(
@@ -406,6 +441,10 @@ class LambdaTypedExpr : public ITypedExpr {
     return *signature_ == *casted->signature_ && *body_ == *casted->body_;
   }
 
+  folly::dynamic serialize() const override;
+
+  static TypedExprPtr create(const folly::dynamic& obj, void* context);
+
  private:
   const RowTypePtr signature_;
   const TypedExprPtr body_;
@@ -458,6 +497,10 @@ class CastTypedExpr : public ITypedExpr {
   bool nullOnFailure() const {
     return nullOnFailure_;
   }
+
+  folly::dynamic serialize() const override;
+
+  static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
   // This flag prevents throws and instead returns

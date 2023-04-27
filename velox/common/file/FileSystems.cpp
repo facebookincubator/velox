@@ -83,11 +83,15 @@ class LocalFileSystem : public FileSystem {
     return path;
   }
 
-  std::unique_ptr<ReadFile> openFileForRead(std::string_view path) override {
+  std::unique_ptr<ReadFile> openFileForRead(
+      std::string_view path,
+      const FileOptions& /*unused*/) override {
     return std::make_unique<LocalReadFile>(extractPath(path));
   }
 
-  std::unique_ptr<WriteFile> openFileForWrite(std::string_view path) override {
+  std::unique_ptr<WriteFile> openFileForWrite(
+      std::string_view path,
+      const FileOptions& /*unused*/) override {
     return std::make_unique<LocalWriteFile>(extractPath(path));
   }
 
@@ -152,6 +156,18 @@ class LocalFileSystem : public FileSystem {
         ec.message());
   }
 
+  void rmdir(std::string_view path) override {
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+    VELOX_CHECK_EQ(
+        0,
+        ec.value(),
+        "Rmdir {} failed: {}, message: {}",
+        path,
+        ec,
+        ec.message());
+  }
+
   static std::function<bool(std::string_view)> schemeMatcher() {
     // Note: presto behavior is to prefix local paths with 'file:'.
     // Check for that prefix and prune to absolute regular paths as needed.
@@ -180,5 +196,4 @@ void registerLocalFileSystem() {
   registerFileSystem(
       LocalFileSystem::schemeMatcher(), LocalFileSystem::fileSystemGenerator());
 }
-
 } // namespace facebook::velox::filesystems

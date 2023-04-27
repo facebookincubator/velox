@@ -79,7 +79,8 @@ class E2EFilterTestBase : public testing::Test {
   static constexpr int32_t kRowsInGroup = 10'000;
 
   void SetUp() override {
-    pool_ = memory::getDefaultMemoryPool();
+    rootPool_ = memory::defaultMemoryManager().addRootPool("E2EFilterTestBase");
+    leafPool_ = rootPool_->addLeafChild("E2EFilterTestBase");
   }
 
   static bool typeKindSupportsValueHook(TypeKind kind) {
@@ -105,12 +106,12 @@ class E2EFilterTestBase : public testing::Test {
   template <typename T>
   void makeIntDistribution(
       const std::string& fieldName,
-      T min,
-      T max,
+      int64_t min,
+      int64_t max,
       int32_t repeats,
       int32_t rareFrequency,
-      T rareMin,
-      T rareMax,
+      int64_t rareMin,
+      int64_t rareMax,
       bool keepNulls) {
     dataSetBuilder_->withIntDistributionForField<T>(
         Subfield(fieldName),
@@ -188,6 +189,7 @@ class E2EFilterTestBase : public testing::Test {
 
   void readWithFilter(
       std::shared_ptr<common::ScanSpec> spec,
+      const MutationSpec&,
       const std::vector<RowVectorPtr>& batches,
       const std::vector<uint64_t>& hitRows,
       uint64_t& time,
@@ -212,7 +214,7 @@ class E2EFilterTestBase : public testing::Test {
       rows.push_back(i);
     }
     auto result = std::static_pointer_cast<FlatVector<T>>(
-        BaseVector::create(child->type(), batch->size(), pool_.get()));
+        BaseVector::create(child->type(), batch->size(), leafPool_.get()));
     TestingHook<T> hook(result.get());
     child->as<LazyVector>()->load(rows, &hook);
     for (auto i = 0; i < rows.size(); ++i) {
@@ -252,7 +254,19 @@ class E2EFilterTestBase : public testing::Test {
       const std::vector<RowVectorPtr>& batches,
       const std::vector<std::string>& filterable);
 
-  void testSenario(
+ private:
+  void testReadWithFilterLazy(
+      const std::shared_ptr<common::ScanSpec>& spec,
+      const MutationSpec&,
+      const std::vector<RowVectorPtr>& batches,
+      const std::vector<uint64_t>& hitRows);
+
+  void testPruningWithFilter(
+      std::vector<RowVectorPtr>& batches,
+      const std::vector<std::string>& filterable);
+
+ protected:
+  void testScenario(
       const std::string& columns,
       std::function<void()> customize,
       bool wrapInStruct,
@@ -269,6 +283,10 @@ class E2EFilterTestBase : public testing::Test {
 
  protected:
   void testMetadataFilter();
+
+  void testSubfieldsPruning();
+
+  void testMutationCornerCases();
 
   // Allows testing reading with different batch sizes.
   void resetReadBatchSizes() {
@@ -288,7 +306,8 @@ class E2EFilterTestBase : public testing::Test {
 
   std::unique_ptr<test::DataSetBuilder> dataSetBuilder_;
   std::unique_ptr<common::FilterGenerator> filterGenerator_;
-  std::shared_ptr<memory::MemoryPool> pool_;
+  std::shared_ptr<memory::MemoryPool> rootPool_;
+  std::shared_ptr<memory::MemoryPool> leafPool_;
   std::shared_ptr<const RowType> rowType_;
   dwio::common::MemorySink* sinkPtr_;
   bool useVInts_ = true;

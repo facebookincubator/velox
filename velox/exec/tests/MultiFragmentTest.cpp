@@ -50,8 +50,9 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       int64_t maxMemory = kMaxMemory) {
     auto queryCtx = std::make_shared<core::QueryCtx>(
         executor_.get(), std::make_shared<core::MemConfig>(configSettings_));
-    queryCtx->pool()->setMemoryUsageTracker(
-        MemoryUsageTracker::create(maxMemory));
+    queryCtx->testingOverrideMemoryPool(
+        memory::defaultMemoryManager().addRootPool(
+            queryCtx->queryId(), maxMemory));
     core::PlanFragment planFragment{planNode};
     return std::make_shared<Task>(
         taskId,
@@ -98,7 +99,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     task->noMoreSplits("0");
   }
 
-  void assertQuery(
+  std::shared_ptr<Task> assertQuery(
       const std::shared_ptr<const core::PlanNode>& plan,
       const std::vector<std::string>& remoteTaskIds,
       const std::string& duckDbSql,
@@ -107,7 +108,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     for (auto& taskId : remoteTaskIds) {
       splits.push_back(std::make_shared<RemoteConnectorSplit>(taskId));
     }
-    OperatorTestBase::assertQuery(plan, splits, duckDbSql, sortingKeys);
+    return OperatorTestBase::assertQuery(plan, splits, duckDbSql, sortingKeys);
   }
 
   void assertQueryOrdered(
@@ -125,6 +126,16 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       writeToFile(filePaths_[i]->path, vectors_[i]);
     }
     createDuckDbTable(vectors_);
+  }
+
+  void verifyExchangeStats(
+      const std::shared_ptr<Task>& task,
+      int32_t expectedCount) const {
+    auto exchangeStats =
+        task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+    ASSERT_EQ(1, exchangeStats.count("localExchangeSource.numPages"));
+    ASSERT_EQ(
+        expectedCount, exchangeStats.at("localExchangeSource.numPages").count);
   }
 
   RowTypePtr rowType_{
@@ -191,16 +202,17 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
       numPools += pools.size();
       std::vector<memory::MemoryPool*> childPools;
       for (auto pool : pools) {
-        pool->visitChildren([&](memory::MemoryPool* childPool) {
-          ASSERT_EQ(poolsByName.count(childPool->name()), 0)
+        pool->visitChildren([&](memory::MemoryPool* childPool) -> bool {
+          EXPECT_EQ(poolsByName.count(childPool->name()), 0)
               << childPool->name();
           poolsByName[childPool->name()] = childPool;
           if (childPool->parent() != nullptr) {
-            ASSERT_EQ(poolsByName.count(childPool->parent()->name()), 1);
-            ASSERT_EQ(
+            EXPECT_EQ(poolsByName.count(childPool->parent()->name()), 1);
+            EXPECT_EQ(
                 poolsByName[childPool->parent()->name()], childPool->parent());
           }
           childPools.push_back(childPool);
+          return true;
         });
       }
       pools.swap(childPools);
@@ -208,8 +220,9 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
     if (i == 0) {
       // For leaf task, it has total 21 memory pools: task pool + 4 plan node
       // pools (TableScan, FilterProject, PartialAggregation, PartitionedOutput)
-      // and 16 operator pools (4 drivers * number of plan nodes).
-      ASSERT_EQ(numPools, 21);
+      // + 16 operator pools (4 drivers * number of plan nodes) + 4 connector
+      // pools for TableScan.
+      ASSERT_EQ(numPools, 25);
     } else {
       // For root task, it has total 8 memory pools: task pool + 3 plan node
       // pools (Exchange, Aggregation, PartitionedOutput) and 4 leaf pools: 3
@@ -284,7 +297,10 @@ TEST_F(MultiFragmentTest, distributedTableScan) {
     addHiveSplits(leafTask, filePaths_);
 
     auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
-    assertQuery(op, {leafTaskId}, "SELECT c2, c1 % 2, c0 % 10 FROM tmp");
+    auto task =
+        assertQuery(op, {leafTaskId}, "SELECT c2, c1 % 2, c0 % 10 FROM tmp");
+
+    verifyExchangeStats(task, 1);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -348,7 +364,7 @@ TEST_F(MultiFragmentTest, mergeExchange) {
   }
 }
 
-// Test reordering and dropping columns in PartitionedOutput operator
+// Test reordering and dropping columns in PartitionedOutput operator.
 TEST_F(MultiFragmentTest, partitionedOutput) {
   setupSources(10, 1000);
 
@@ -429,7 +445,10 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
 
     auto op = PlanBuilder().exchange(intermediatePlan->outputType()).planNode();
 
-    assertQuery(op, intermediateTaskIds, "SELECT c3, c0, c2 FROM tmp");
+    auto task =
+        assertQuery(op, intermediateTaskIds, "SELECT c3, c0, c2 FROM tmp");
+
+    verifyExchangeStats(task, kFanout);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -1201,4 +1220,70 @@ DEBUG_ONLY_TEST_F(
   // Unblock task terminate execution after no more split call finishes.
   blockTerminate.notify();
   ASSERT_TRUE(waitForTaskFailure(rootTask.get(), 1'000'000'000));
+}
+
+TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
+  setupSources(8, 1000);
+  auto taskId = makeTaskId("task", 0);
+  core::PlanNodePtr leafPlan;
+  leafPlan =
+      PlanBuilder().tableScan(rowType_).partitionedOutput({}, 1).planNode();
+
+  auto task = makeTask(taskId, leafPlan, 0);
+  Task::start(task, 1);
+  addHiveSplits(task, filePaths_);
+
+  auto bufferManager = PartitionedOutputBufferManager::getInstance().lock();
+  const uint64_t maxBytes = std::numeric_limits<uint64_t>::max();
+  const int destination = 0;
+  std::vector<std::unique_ptr<folly::IOBuf>> receivedIobufs;
+  int64_t sequence = 0;
+  for (;;) {
+    auto dataPromise = ContinuePromise("WaitForOutput");
+    bool complete{false};
+    ASSERT_TRUE(bufferManager->getData(
+        taskId,
+        destination,
+        maxBytes,
+        sequence,
+        [&](std::vector<std::unique_ptr<folly::IOBuf>> iobufs,
+            int64_t inSequence) {
+          for (auto& iobuf : iobufs) {
+            if (iobuf != nullptr) {
+              ++inSequence;
+              receivedIobufs.push_back(std::move(iobuf));
+            } else {
+              complete = true;
+            }
+          }
+          sequence = inSequence;
+          dataPromise.setValue();
+        }));
+    dataPromise.getSemiFuture().wait();
+    if (complete) {
+      break;
+    }
+  }
+
+  // Abort the task to terminate after get buffers from the partitioned output
+  // buffer manager.
+  task->requestAbort();
+  ASSERT_TRUE(waitForTaskAborted(task.get(), 5'000'000));
+
+  // Wait for 1 second to let async driver activities to finish and
+  // 'receivedIobufs' should be the last ones to hold the reference on the task.
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  int expectedTaskRefCounts{0};
+  for (const auto& iobuf : receivedIobufs) {
+    auto nextIoBuf = iobuf->next();
+    while (nextIoBuf != iobuf.get()) {
+      ++expectedTaskRefCounts;
+      nextIoBuf = nextIoBuf->next();
+    }
+    ++expectedTaskRefCounts;
+  }
+  ASSERT_EQ(task.use_count(), 1 + expectedTaskRefCounts);
+  receivedIobufs.clear();
+  ASSERT_EQ(task.use_count(), 1);
+  task.reset();
 }

@@ -26,8 +26,7 @@
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/TypeAliases.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 // FlatVector is marked final to allow for inlining on virtual methods called
 // on a pointer that has the static type FlatVector<T>; this can be a
@@ -54,33 +53,7 @@ class FlatVector final : public SimpleVector<T> {
 
   FlatVector(
       velox::memory::MemoryPool* pool,
-      BufferPtr nulls,
-      size_t length,
-      BufferPtr values,
-      std::vector<BufferPtr>&& stringBuffers,
-      const SimpleVectorStats<T>& stats = {},
-      std::optional<vector_size_t> distinctValueCount = std::nullopt,
-      std::optional<vector_size_t> nullCount = std::nullopt,
-      std::optional<bool> isSorted = std::nullopt,
-      std::optional<ByteCount> representedBytes = std::nullopt,
-      std::optional<ByteCount> storageByteCount = std::nullopt)
-      : FlatVector<T>(
-            pool,
-            CppToType<T>::create(),
-            std::move(nulls),
-            length,
-            values,
-            std::move(stringBuffers),
-            stats,
-            distinctValueCount,
-            nullCount,
-            isSorted,
-            representedBytes,
-            storageByteCount) {}
-
-  FlatVector(
-      velox::memory::MemoryPool* pool,
-      const std::shared_ptr<const Type>& type,
+      const TypePtr& type,
       BufferPtr nulls,
       size_t length,
       BufferPtr values,
@@ -135,7 +108,7 @@ class FlatVector final : public SimpleVector<T> {
 
   virtual ~FlatVector() override = default;
 
-  const T valueAtFast(vector_size_t idx) const;
+  T valueAtFast(vector_size_t idx) const;
 
   const T valueAt(vector_size_t idx) const override {
     return valueAtFast(idx);
@@ -254,6 +227,9 @@ class FlatVector final : public SimpleVector<T> {
       vector_size_t targetIndex,
       vector_size_t sourceIndex,
       vector_size_t count) override {
+    if (count == 0) {
+      return;
+    }
     copyValuesAndNulls(source, targetIndex, sourceIndex, count);
   }
 
@@ -477,7 +453,7 @@ class FlatVector final : public SimpleVector<T> {
 };
 
 template <>
-const bool FlatVector<bool>::valueAtFast(vector_size_t idx) const;
+bool FlatVector<bool>::valueAtFast(vector_size_t idx) const;
 
 template <>
 const bool* FlatVector<bool>::rawValues() const;
@@ -536,7 +512,13 @@ void FlatVector<StringView>::prepareForReuse();
 template <typename T>
 using FlatVectorPtr = std::shared_ptr<FlatVector<T>>;
 
-} // namespace velox
-} // namespace facebook
+// Error vector uses an opaque flat vector to store std::exception_ptr.
+// Since opaque types are stored as shared_ptr<void>, this ends up being a
+// double pointer in the form of std::shared_ptr<std::exception_ptr>. This is
+// fine since we only need to actually follow the pointer in failure cases.
+using ErrorVector = FlatVector<std::shared_ptr<void>>;
+using ErrorVectorPtr = std::shared_ptr<ErrorVector>;
+
+} // namespace facebook::velox
 
 #include "velox/vector/FlatVector-inl.h"

@@ -23,6 +23,7 @@
 #include <velox/type/Filter.h>
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Filter.h"
+#include "velox/type/UnscaledLongDecimal.h"
 
 #include <gtest/gtest.h>
 
@@ -382,6 +383,18 @@ TEST(FilterTest, bigintValuesUsingHashTableSimd) {
   }
 
   applySimdTestToVector(numbers32, *filter, verify);
+
+  // Make a filter with sizeMask_'s slot filled and the kPaddingElements'
+  // slots tested
+  // numbers has 4 elements, so the sizeMask_ is 15 (1 << log2(4*5) - 1 = 15)
+  // The 15'th slot is filled by 19 (19 * 0xc6a4a7935bd1e995L & 15L = 15L)
+  // The test value 3 will also be hashed to 15'th slot
+  // (3 * 0xc6a4a7935bd1e995L & 15L = 15L), and 3 is within [min, max]
+  numbers = {0, 1, 19, 10'000};
+  filter = createBigintValues(numbers, false);
+  ASSERT_TRUE(dynamic_cast<BigintValuesUsingHashTable*>(filter.get()));
+  int64_t values[] = {3, 3, 3, 3};
+  checkSimd(filter.get(), values, verify);
 }
 
 TEST(FilterTest, negatedBigintValuesUsingHashTableSimd) {
@@ -1716,4 +1729,87 @@ TEST(FilterTest, mergeWithBytesMultiRange) {
       testMergeWithBytes(left.get(), right.get());
     }
   }
+}
+
+TEST(FilterTest, HugeIntRange) {
+  auto filter = equalHugeint(buildInt128(1, 1), false);
+  auto testInt128 = [&](int128_t x) { return filter->testInt128(x); };
+  auto max = UnscaledLongDecimal::max().unscaledValue();
+  auto min = UnscaledLongDecimal::min().unscaledValue();
+
+  EXPECT_TRUE(filter->testInt128(buildInt128(1, 1)));
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(buildInt128(1, 0)));
+
+  EXPECT_TRUE(
+      filter->testInt128Range(buildInt128(1, 0), buildInt128(1, 2), false));
+  EXPECT_TRUE(
+      filter->testInt128Range(buildInt128(1, 0), buildInt128(1, 2), true));
+  EXPECT_FALSE(
+      filter->testInt128Range(buildInt128(0, 2), buildInt128(1, 0), false));
+  EXPECT_FALSE(
+      filter->testInt128Range(buildInt128(1, 2), buildInt128(1, 2), true));
+
+  filter = equalHugeint(max, false);
+  EXPECT_TRUE(filter->testInt128(max));
+  EXPECT_FALSE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128Range(buildInt128(1, 2), max, false));
+  EXPECT_FALSE(filter->testInt128Range(min, buildInt128(1, 2), false));
+
+  filter = equalHugeint(min, false);
+  EXPECT_TRUE(filter->testInt128(min));
+  EXPECT_FALSE(filter->testInt128(max));
+  EXPECT_TRUE(filter->testInt128Range(min, buildInt128(1, 2), false));
+  EXPECT_FALSE(filter->testInt128Range(buildInt128(1, 2), max, false));
+
+  filter = betweenHugeint(buildInt128(1, 1), buildInt128(2, 2), false);
+  EXPECT_TRUE(filter->testInt128(buildInt128(1, 3)));
+  EXPECT_TRUE(filter->testInt128(buildInt128(2, 1)));
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(buildInt128(1, 0)));
+  EXPECT_FALSE(filter->testInt128(buildInt128(2, 3)));
+
+  EXPECT_TRUE(
+      filter->testInt128Range(buildInt128(1, 3), buildInt128(2, 0), false));
+  EXPECT_TRUE(
+      filter->testInt128Range(buildInt128(2, 0), buildInt128(2, 2), true));
+  EXPECT_FALSE(
+      filter->testInt128Range(buildInt128(0, 0), buildInt128(1, 0), false));
+  EXPECT_FALSE(
+      filter->testInt128Range(buildInt128(2, 3), buildInt128(3, 5), true));
+
+  filter = betweenHugeint(buildInt128(1, 1), max, false);
+  EXPECT_TRUE(filter->testInt128(max));
+  EXPECT_FALSE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128Range(buildInt128(2, 2), max, true));
+  EXPECT_FALSE(filter->testInt128Range(min, buildInt128(1, 0), false));
+
+  filter = betweenHugeint(min, buildInt128(1, 1), false);
+  EXPECT_TRUE(filter->testInt128(min));
+  EXPECT_FALSE(filter->testInt128(max));
+  EXPECT_TRUE(filter->testInt128Range(min, buildInt128(0, 1), true));
+  EXPECT_FALSE(filter->testInt128Range(buildInt128(1, 2), max, false));
+
+  filter = greaterThanHugeint(buildInt128(1, 1), true);
+  EXPECT_TRUE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(buildInt128(1, 0)));
+  EXPECT_TRUE(filter->testInt128(buildInt128(1, 2)));
+
+  EXPECT_TRUE(
+      filter->testInt128Range(buildInt128(1, 0), buildInt128(1, 2), false));
+  EXPECT_TRUE(
+      filter->testInt128Range(buildInt128(0, 0), buildInt128(1, 1), true));
+  EXPECT_TRUE(
+      filter->testInt128Range(buildInt128(2, 1), buildInt128(2, 2), true));
+  EXPECT_FALSE(
+      filter->testInt128Range(buildInt128(0, 0), buildInt128(0, 1), false));
+
+  filter = greaterThanHugeint(min, true);
+  EXPECT_TRUE(filter->testInt128(max));
+  EXPECT_FALSE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128Range(min, max, false));
+
+  filter = greaterThanHugeint(max, true);
+  EXPECT_FALSE(filter->testInt128(max));
+  EXPECT_FALSE(filter->testInt128Range(min, max, false));
 }

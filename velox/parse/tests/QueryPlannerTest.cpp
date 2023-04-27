@@ -54,7 +54,7 @@ class QueryPlannerTest : public testing::Test {
         std::vector<VectorPtr>{});
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
 };
 
 TEST_F(QueryPlannerTest, values) {
@@ -113,7 +113,7 @@ TEST_F(QueryPlannerTest, tableScan) {
       inMemoryTables,
       "-- Project\n"
       "  -- Filter\n"
-      "    -- CrossJoin\n"
+      "    -- NestedLoopJoin\n"
       "      -- Values\n"
       "      -- Values\n");
 }

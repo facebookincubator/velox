@@ -37,8 +37,12 @@ class HiveColumnHandle : public ColumnHandle {
   HiveColumnHandle(
       const std::string& name,
       ColumnType columnType,
-      TypePtr dataType)
-      : name_(name), columnType_(columnType), dataType_(std::move(dataType)) {}
+      TypePtr dataType,
+      std::vector<common::Subfield> requiredSubfields = {})
+      : name_(name),
+        columnType_(columnType),
+        dataType_(std::move(dataType)),
+        requiredSubfields_(std::move(requiredSubfields)) {}
 
   const std::string& name() const {
     return name_;
@@ -52,6 +56,24 @@ class HiveColumnHandle : public ColumnHandle {
     return dataType_;
   }
 
+  // Applies to columns of complex types: arrays, maps and structs.  When a
+  // query uses only some of the subfields, the engine provides the complete
+  // list of required subfields and the connector is free to prune the rest.
+  //
+  // Examples:
+  //  - SELECT a[1], b['x'], x.y FROM t
+  //  - SELECT a FROM t WHERE b['y'] > 10
+  //
+  // Pruning a struct means populating some of the members with null values.
+  //
+  // Pruning a map means dropping keys not listed in the required subfields.
+  //
+  // Pruning arrays means dropping values with indices larger than maximum
+  // required index.
+  const std::vector<common::Subfield>& requiredSubfields() const {
+    return requiredSubfields_;
+  }
+
   bool isPartitionKey() const {
     return columnType_ == ColumnType::kPartitionKey;
   }
@@ -60,6 +82,7 @@ class HiveColumnHandle : public ColumnHandle {
   const std::string name_;
   const ColumnType columnType_;
   const TypePtr dataType_;
+  const std::vector<common::Subfield> requiredSubfields_;
 };
 
 using SubfieldFilters =
@@ -133,7 +156,43 @@ class HiveDataSource : public DataSource {
 
   std::unordered_map<std::string, RuntimeCounter> runtimeStats() override;
 
+  bool allPrefetchIssued() const override {
+    return rowReader_ && rowReader_->allPrefetchIssued();
+  }
+
+  void setFromDataSource(std::shared_ptr<DataSource> source) override;
+
   int64_t estimatedRowSize() override;
+
+  // Internal API, made public to be accessible in unit tests.  Do not use in
+  // other places.
+  static std::shared_ptr<common::ScanSpec> makeScanSpec(
+      const SubfieldFilters& filters,
+      const RowTypePtr& rowType,
+      const std::vector<const HiveColumnHandle*>& columnHandles,
+      memory::MemoryPool* pool);
+
+ protected:
+  virtual uint64_t readNext(uint64_t size) {
+    return rowReader_->next(size, output_);
+  }
+
+  std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
+      const FileHandle&,
+      const dwio::common::ReaderOptions&);
+
+  virtual std::unique_ptr<dwio::common::RowReader> createRowReader(
+      dwio::common::RowReaderOptions& options) {
+    return reader_->createRowReader(options);
+  }
+
+  std::shared_ptr<HiveConnectorSplit> split_;
+  FileHandleFactory* fileHandleFactory_;
+  dwio::common::ReaderOptions readerOpts_;
+  memory::MemoryPool* pool_;
+  VectorPtr output_;
+  RowTypePtr readerOutputType_;
+  std::unique_ptr<dwio::common::RowReader> rowReader_;
 
  private:
   // Evaluates remainingFilter_ on the specified vector. Returns number of rows
@@ -144,6 +203,7 @@ class HiveDataSource : public DataSource {
 
   void setConstantValue(
       common::ScanSpec* FOLLY_NONNULL spec,
+      const TypePtr& type,
       const velox::variant& value) const;
 
   void setNullConstantValue(
@@ -155,36 +215,32 @@ class HiveDataSource : public DataSource {
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
 
-  /// Clear split_, reader_ and rowReader_ after split has been fully processed.
+  // Clear split_ after split has been fully processed.  Keep readers around to
+  // hold adaptation.
   void resetSplit();
+
+  void configureRowReaderOptions(dwio::common::RowReaderOptions&) const;
 
   const RowTypePtr outputType_;
   // Column handles for the partition key columns keyed on partition key column
   // name.
   std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
       partitionKeys_;
-  FileHandleFactory* FOLLY_NONNULL fileHandleFactory_;
-  velox::memory::MemoryPool* FOLLY_NONNULL pool_;
   std::shared_ptr<dwio::common::IoStatistics> ioStats_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
-  std::shared_ptr<HiveConnectorSplit> split_;
-  dwio::common::ReaderOptions readerOpts_;
   dwio::common::RowReaderOptions rowReaderOpts_;
   std::unique_ptr<dwio::common::Reader> reader_;
-  std::unique_ptr<dwio::common::RowReader> rowReader_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
-  RowTypePtr readerOutputType_;
   bool emptySplit_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
 
-  VectorPtr output_;
   FileHandleCachedPtr fileHandle_;
   ExpressionEvaluator* FOLLY_NONNULL expressionEvaluator_;
   uint64_t completedRows_ = 0;
 
-  // Reusable memory for remaining filter evaluation
+  // Reusable memory for remaining filter evaluation.
   VectorPtr filterResult_;
   SelectivityVector filterRows_;
   exec::FilterEvalCtx filterEvalCtx_;
@@ -194,7 +250,7 @@ class HiveDataSource : public DataSource {
   folly::Executor* FOLLY_NULLABLE executor_;
 };
 
-class HiveConnector final : public Connector {
+class HiveConnector : public Connector {
  public:
   explicit HiveConnector(
       const std::string& id,
@@ -211,7 +267,7 @@ class HiveConnector final : public Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) override final {
+      ConnectorQueryCtx* connectorQueryCtx) override {
     return std::make_shared<HiveDataSource>(
         outputType,
         tableHandle,
@@ -222,6 +278,10 @@ class HiveConnector final : public Connector {
         connectorQueryCtx->allocator(),
         connectorQueryCtx->scanId(),
         executor_);
+  }
+
+  bool supportsSplitPreload() override {
+    return true;
   }
 
   std::shared_ptr<DataSink> createDataSink(
@@ -237,11 +297,21 @@ class HiveConnector final : public Connector {
         inputType, hiveInsertHandle, connectorQueryCtx, commitStrategy);
   }
 
-  folly::Executor* FOLLY_NULLABLE executor() {
+  folly::Executor* FOLLY_NULLABLE executor() const override {
     return executor_;
   }
 
- private:
+  FileHandleCacheStats fileHandleCacheStats() {
+    return fileHandleFactory_.cacheStats();
+  }
+
+  // NOTE: this is to clear file handle cache which might affect performance,
+  // and is only used for operational purposes.
+  FileHandleCacheStats clearFileHandleCache() {
+    return fileHandleFactory_.clearCache();
+  }
+
+ protected:
   FileHandleFactory fileHandleFactory_;
   folly::Executor* FOLLY_NULLABLE executor_;
 };

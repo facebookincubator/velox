@@ -79,7 +79,8 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
 
         std::lock_guard<std::mutex> l(task->mutex());
         if (!driver->state().isTerminated) {
-          state->operator_->recordBlockingTime(state->sinceMicros_);
+          state->operator_->recordBlockingTime(
+              state->sinceMicros_, state->reason_);
         }
         VELOX_CHECK(!driver->state().isSuspended);
         VELOX_CHECK(driver->state().hasBlockingFuture);
@@ -141,6 +142,33 @@ class CancelGuard {
   bool isThrow_ = true;
 };
 } // namespace
+
+std::string stopReasonString(StopReason reason) {
+  switch (reason) {
+    case StopReason::kNone:
+      return "NONE";
+    case StopReason::kBlock:
+      return "BLOCK";
+    case StopReason::kTerminate:
+      return "TERMINATE";
+    case StopReason::kAlreadyTerminated:
+      return "ALREADY_TERMINATED";
+    case StopReason::kYield:
+      return "YIELD";
+    case StopReason::kPause:
+      return "PAUSE";
+    case StopReason::kAlreadyOnThread:
+      return "ALREADY_ON_THREAD";
+    case StopReason::kAtEnd:
+      return "AT_END";
+    default:
+      return fmt::format("UNKNOWN_REASON {}", static_cast<int>(reason));
+  }
+}
+
+std::ostream& operator<<(std::ostream& out, const StopReason& reason) {
+  return out << stopReasonString(reason);
+}
 
 // static
 void Driver::enqueue(std::shared_ptr<Driver> driver) {
@@ -253,9 +281,10 @@ StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>& blockingState,
     RowVectorPtr& result) {
-  auto queuedTime = (getCurrentTimeMicro() - queueTimeStartMicros_) * 1'000;
+  const auto now = getCurrentTimeMicro();
+  const auto queuedTime = (now - queueTimeStartMicros_) * 1'000;
   // Update the next operator's queueTime.
-  auto stop = closed_ ? StopReason::kTerminate : task()->enter(state_);
+  auto stop = closed_ ? StopReason::kTerminate : task()->enter(state_, now);
   if (stop != StopReason::kNone) {
     if (stop == StopReason::kTerminate) {
       // ctx_ still has a reference to the Task. 'this' is not on
@@ -353,9 +382,7 @@ StopReason Driver::runInternal(
                 resultBytes = result->estimateFlatSize();
                 {
                   auto lockedStats = op->stats().wlock();
-                  lockedStats->outputVectors += 1;
-                  lockedStats->outputPositions += result->size();
-                  lockedStats->outputBytes += resultBytes;
+                  lockedStats->addOutputVector(resultBytes, result->size());
                 }
               }
             }
@@ -367,9 +394,7 @@ StopReason Driver::runInternal(
                   });
               {
                 auto lockedStats = nextOp->stats().wlock();
-                lockedStats->inputVectors += 1;
-                lockedStats->inputPositions += result->size();
-                lockedStats->inputBytes += resultBytes;
+                lockedStats->addInputVector(resultBytes, result->size());
               }
               RuntimeStatWriterScopeGuard statsWriterGuard(nextOp);
               nextOp->addInput(result);
@@ -427,9 +452,8 @@ StopReason Driver::runInternal(
                   op->operatorType());
               {
                 auto lockedStats = op->stats().wlock();
-                lockedStats->outputVectors += 1;
-                lockedStats->outputPositions += result->size();
-                lockedStats->outputBytes += result->estimateFlatSize();
+                lockedStats->addOutputVector(
+                    result->estimateFlatSize(), result->size());
               }
 
               // This code path is used only in single-threaded execution.
@@ -521,7 +545,7 @@ void Driver::initializeOperatorStats(std::vector<OperatorStats>& stats) {
 void Driver::addStatsToTask() {
   for (auto& op : operators_) {
     auto stats = op->stats(true);
-    stats.memoryStats.update(op->pool()->getMemoryUsageTracker());
+    stats.memoryStats.update(op->pool());
     stats.numDrivers = 1;
     task()->addOperatorStats(stats);
   }
@@ -678,12 +702,14 @@ std::string blockingReasonToString(BlockingReason reason) {
       return "kWaitForConsumer";
     case BlockingReason::kWaitForSplit:
       return "kWaitForSplit";
-    case BlockingReason::kWaitForExchange:
-      return "kWaitForExchange";
+    case BlockingReason::kWaitForProducer:
+      return "kWaitForProducer";
     case BlockingReason::kWaitForJoinBuild:
       return "kWaitForJoinBuild";
     case BlockingReason::kWaitForJoinProbe:
       return "kWaitForJoinProbe";
+    case BlockingReason::kWaitForMergeJoinRightSide:
+      return "kWaitForMergeJoinRightSide";
     case BlockingReason::kWaitForMemory:
       return "kWaitForMemory";
     case BlockingReason::kWaitForConnector:

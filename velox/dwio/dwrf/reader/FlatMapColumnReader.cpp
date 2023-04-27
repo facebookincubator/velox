@@ -90,37 +90,39 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesFiltered(
         if (sequence == 0) {
           return;
         }
-        // if this branch (sequence) is not in the node list yet
-        if (processed.count(sequence) == 0) {
-          EncodingKey seqEk(dataValueType->id, sequence);
-          const auto& keyInfo = stripe.getEncoding(seqEk).key();
-          auto key = extractKey<T>(keyInfo);
-          // check if we have key filter passed through read schema
-          if (keyPredicate(key)) {
-            // fetch reader, in map bitmap and key object.
-            auto inMap = stripe.getStream(
-                seqEk.forKind(proto::Stream_Kind_IN_MAP), true);
-            DWIO_ENSURE_NOT_NULL(inMap, "In map stream is required");
-            // build seekable
-            auto inMapDecoder =
-                createBooleanRleDecoder(std::move(inMap), seqEk);
-
-            // std::unique_ptr<ColumnReader>
-            auto valueReader = ColumnReader::build(
-                requestedValueType,
-                dataValueType,
-                stripe,
-                FlatMapContext{sequence, inMapDecoder.get()});
-
-            keyNodes.push_back(std::make_unique<KeyNode<T>>(
-                std::move(valueReader),
-                std::move(inMapDecoder),
-                key,
-                sequence,
-                memoryPool));
-            processed.insert(sequence);
-          }
+        // if this branch (sequence) is in the node list already
+        if (processed.count(sequence)) {
+          return;
         }
+
+        EncodingKey seqEk(dataValueType->id, sequence);
+        const auto& keyInfo = stripe.getEncoding(seqEk).key();
+        auto key = extractKey<T>(keyInfo);
+        // if key filter not passed through read schema
+        if (!keyPredicate(key)) {
+          return;
+        }
+
+        // fetch reader, in map bitmap and key object.
+        auto inMap =
+            stripe.getStream(seqEk.forKind(proto::Stream_Kind_IN_MAP), true);
+        DWIO_ENSURE_NOT_NULL(inMap, "In map stream is required");
+        // build seekable
+        auto inMapDecoder = createBooleanRleDecoder(std::move(inMap), seqEk);
+
+        auto valueReader = ColumnReader::build(
+            requestedValueType,
+            dataValueType,
+            stripe,
+            FlatMapContext{sequence, inMapDecoder.get()});
+
+        keyNodes.push_back(std::make_unique<KeyNode<T>>(
+            std::move(valueReader),
+            std::move(inMapDecoder),
+            key,
+            sequence,
+            memoryPool));
+        processed.insert(sequence);
       });
 
   VLOG(1) << "[Flat-Map] Initialized a flat-map column reader for node "
@@ -197,7 +199,12 @@ template <typename T>
 void FlatMapColumnReader<T>::initKeysVector(
     VectorPtr& vector,
     vector_size_t size) {
-  initializeFlatVector<T>(vector, memoryPool_, size, false);
+  initializeFlatVector<T>(
+      vector,
+      memoryPool_,
+      requestedType_->type->asMap().keyType(),
+      size,
+      false);
   vector->resize(size, false);
 }
 
@@ -208,6 +215,7 @@ void FlatMapColumnReader<StringView>::initKeysVector(
   initializeFlatVector<StringView>(
       vector,
       memoryPool_,
+      VARCHAR(),
       size,
       false,
       std::vector<BufferPtr>{stringKeyBuffer_->getBuffer()});
@@ -472,7 +480,7 @@ void KeyNode<StringView>::fillKeysVector(
   auto& flatVec = static_cast<FlatVector<StringView>&>(*vector);
   buffer->fillKey(ordinal_, [&](auto data, auto size) {
     const_cast<StringView*>(flatVec.rawValues())[offset] =
-        StringView{data, size};
+        StringView{data, static_cast<int32_t>(size)};
   });
 }
 

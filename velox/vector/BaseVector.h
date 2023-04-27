@@ -292,11 +292,6 @@ class BaseVector {
    */
   virtual std::unique_ptr<SimpleVector<uint64_t>> hashAll() const = 0;
 
-  // Returns true if all values in the specified rows are the same.
-  virtual bool isConstant(const SelectivityVector& rows) const {
-    return false;
-  }
-
   /// Returns true if this vector is encoded as flat (FlatVector).
   bool isFlatEncoding() const {
     return encoding_ == VectorEncoding::Simple::FLAT;
@@ -383,6 +378,9 @@ class BaseVector {
       const vector_size_t* toSourceRow) {
     rows.applyToSelected([&](vector_size_t row) {
       auto sourceRow = toSourceRow ? toSourceRow[row] : row;
+      if (sourceRow >= source->size()) {
+        return;
+      }
       if (source->isNullAt(sourceRow)) {
         setNull(row, true);
       } else {
@@ -404,6 +402,9 @@ class BaseVector {
       vector_size_t targetIndex,
       vector_size_t sourceIndex,
       vector_size_t count) {
+    if (count == 0) {
+      return;
+    }
     CopyRange range{sourceIndex, targetIndex, count};
     copyRanges(source, folly::Range(&range, 1));
   }
@@ -439,6 +440,7 @@ class BaseVector {
       std::shared_ptr<BaseVector>&& source);
 
   static std::shared_ptr<BaseVector> createConstant(
+      const TypePtr& type,
       variant value,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
@@ -476,7 +478,7 @@ class BaseVector {
   // overwritten.
   //
   // After invoking this function, the 'result' is guaranteed to be a flat
-  // uniquely-referenced vector.
+  // uniquely-referenced vector with all data-dependent flags reset.
   //
   // Use SelectivityVector::empty() to make the 'result' writable and preserve
   // all current values.
@@ -644,14 +646,16 @@ class BaseVector {
   /// To safely reuse a vector one needs to (1) ensure that the vector as well
   /// as all its buffers and child vectors are singly-referenced and mutable
   /// (for buffers); (2) clear append-only string buffers and child vectors
-  /// (elements of arrays, keys and values of maps, fields of structs).
+  /// (elements of arrays, keys and values of maps, fields of structs); (3)
+  /// reset all data-dependent flags.
   ///
   /// This method takes a non-const reference to a 'vector' and updates it to
   /// possibly a new flat vector of the specified size that is safe to reuse.
   /// If input 'vector' is not singly-referenced or not flat, replaces 'vector'
   /// with a new vector of the same type and specified size. If some of the
   /// buffers cannot be reused, these buffers are reset. Child vectors are
-  /// updated by calling this method recursively with size zero.
+  /// updated by calling this method recursively with size zero. Data-dependent
+  /// flags are reset after this call.
   static void prepareForReuse(
       std::shared_ptr<BaseVector>& vector,
       vector_size_t size);
@@ -792,6 +796,22 @@ class BaseVector {
 
   BufferPtr sliceNulls(vector_size_t offset, vector_size_t length) const {
     return sliceBuffer(*BOOLEAN(), nulls_, offset, length, pool_);
+  }
+
+  // Reset data-dependent flags to the "unknown" status. This is needed whenever
+  // a vector is mutated because the modification may invalidate these flags.
+  // Currently, we call this function in BaseVector::ensureWritable() and
+  // BaseVector::prepareForReuse() that are expected to be called before any
+  // vector mutation.
+  //
+  // Per-vector flags are reset to default values. Per-row flags are reset only
+  // at the selected rows. If rows is a nullptr, per-row flags are reset at all
+  // rows.
+  virtual void resetDataDependentFlags(const SelectivityVector* /*rows*/) {
+    nullCount_ = std::nullopt;
+    distinctValueCount_ = std::nullopt;
+    representedByteCount_ = std::nullopt;
+    storageByteCount_ = std::nullopt;
   }
 
   const TypePtr type_;

@@ -29,7 +29,7 @@ static void mockRelease(ArrowSchema*) {}
 
 void exportToArrow(const TypePtr& type, ArrowSchema& out) {
   auto pool =
-      &facebook::velox::memory::getProcessDefaultMemoryManager().getRoot();
+      &facebook::velox::memory::defaultMemoryManager().deprecatedLeafPool();
   exportToArrow(BaseVector::create(type, 0, pool), out);
 }
 

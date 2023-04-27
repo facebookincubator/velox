@@ -102,11 +102,15 @@ class SelectivityVector {
   }
 
   /**
-   * Set a range of values to valid from [start, end). updateBounds() need to be
-   * called explicitly after setValidRange() call, it can be called only once
-   * after multiple setValidRange() calls in a row.
+   * If range is not empty, set a range of values to valid from [start, end).
+   * updateBounds() need to be called explicitly after setValidRange() call, it
+   * can be called only once after multiple setValidRange() calls in a row.
    */
   void setValidRange(vector_size_t begin, vector_size_t end, bool valid) {
+    VELOX_DCHECK_GE(end, begin);
+    if (begin == end) {
+      return;
+    }
     VELOX_DCHECK_LE(end, bits_.size() * sizeof(bits_[0]) * 8);
     bits::fillBits(bits_.data(), begin, end, valid);
     allSelected_.reset();
@@ -128,14 +132,6 @@ class SelectivityVector {
    */
   MutableRange<bool> asMutableRange() {
     return MutableRange<bool>(bits_.data(), begin_, end_);
-  }
-
-  void setActiveRange(vector_size_t begin, vector_size_t end) {
-    VELOX_DCHECK_LE(begin, end, "Setting begin after end");
-    VELOX_DCHECK_LE(end, size_, "Range end out of range");
-    begin_ = begin;
-    end_ = end;
-    allSelected_.reset();
   }
 
   vector_size_t begin() const {

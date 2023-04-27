@@ -71,6 +71,77 @@ struct ExprStats {
   }
 };
 
+/// Maintains a set of rows for evaluation and removes rows with
+/// nulls or errors as needed. Helps to avoid copying SelectivityVector in cases
+/// when evaluation doesn't encounter nulls or errors.
+class MutableRemainingRows {
+ public:
+  /// @param rows Initial set of rows.
+  MutableRemainingRows(const SelectivityVector& rows, EvalCtx& context)
+      : context_{context},
+        originalRows_{&rows},
+        rows_{&rows},
+        mutableRowsHolder_{context} {}
+
+  const SelectivityVector& originalRows() const {
+    return *originalRows_;
+  }
+
+  /// @return current set of rows which may be different from the initial set if
+  /// deselectNulls or deselectErrors were called.
+  const SelectivityVector& rows() const {
+    return *rows_;
+  }
+
+  SelectivityVector& mutableRows() {
+    ensureMutableRemainingRows();
+    return *mutableRows_;
+  }
+
+  /// Removes rows with nulls.
+  /// @return true if at least one row remains.
+  bool deselectNulls(const uint64_t* rawNulls) {
+    ensureMutableRemainingRows();
+    mutableRows_->deselectNulls(rawNulls, rows_->begin(), rows_->end());
+
+    return mutableRows_->hasSelections();
+  }
+
+  /// Removes rows with errors (as recorded in EvalCtx::errors).
+  /// @return true if at least one row remains.
+  bool deselectErrors() {
+    ensureMutableRemainingRows();
+    context_.deselectErrors(*mutableRows_);
+
+    return mutableRows_->hasSelections();
+  }
+
+  /// @return true if current set of rows might be different from the original
+  /// set of rows, which may happen if deselectNull() or deselectErrors() were
+  /// called. May return 'true' even if current set of rows is the same as
+  /// original set. Returns 'false' only if current set of rows is for sure the
+  /// same as original.
+  bool mayHaveChanged() const {
+    return mutableRows_ != nullptr && !mutableRows_->isAllSelected();
+  }
+
+ private:
+  void ensureMutableRemainingRows() {
+    if (mutableRows_ == nullptr) {
+      mutableRows_ = mutableRowsHolder_.get(*rows_);
+      rows_ = mutableRows_;
+    }
+  }
+
+  EvalCtx& context_;
+  const SelectivityVector* const originalRows_;
+
+  const SelectivityVector* rows_;
+
+  SelectivityVector* mutableRows_{nullptr};
+  LocalSelectivityVector mutableRowsHolder_;
+};
+
 // An executable expression.
 class Expr {
  public:
@@ -125,6 +196,12 @@ class Expr {
       VectorPtr& result,
       bool topLevel = false);
 
+  void evalFlatNoNullsImpl(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result,
+      bool topLevel);
+
   // Simplified path for expression evaluation (flattens all vectors).
   void evalSimplified(
       const SelectivityVector& rows,
@@ -153,15 +230,7 @@ class Expr {
   virtual void computeMetadata();
 
   virtual void reset() {
-    if (sharedSubexprRows_) {
-      sharedSubexprRows_->clearAll();
-    }
-    if (BaseVector::isVectorWritable(sharedSubexprValues_) &&
-        sharedSubexprValues_->isFlatEncoding()) {
-      sharedSubexprValues_->resize(0);
-    } else {
-      sharedSubexprValues_ = nullptr;
-    }
+    sharedSubexprResults_.clear();
   }
 
   void clearMemo() {
@@ -193,6 +262,8 @@ class Expr {
   bool isDeterministic() const {
     return deterministic_;
   }
+
+  virtual bool isConstant() const;
 
   bool supportsFlatNoNullsFastPath() const {
     return supportsFlatNoNullsFastPath_;
@@ -314,6 +385,11 @@ class Expr {
   void
   evalAll(const SelectivityVector& rows, EvalCtx& context, VectorPtr& result);
 
+  void evalAllImpl(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result);
+
   // Checks 'inputValues_' for peelable wrappers (constants,
   // dictionaries etc) and applies the function of 'this' to distinct
   // values as opposed to all values. Wraps the return value into a
@@ -321,7 +397,6 @@ class Expr {
   // cardinality. Returns true if the function was called. Returns
   // false if no encodings could be peeled off.
   bool applyFunctionWithPeeling(
-      const SelectivityVector& rows,
       const SelectivityVector& applyRows,
       EvalCtx& context,
       VectorPtr& result);
@@ -341,18 +416,28 @@ class Expr {
       EvalCtx& context,
       LocalSelectivityVector& nullHolder);
 
-  // If this is a common subexpression, checks if there is a previously
-  // calculated result and populates the 'result'.
-  bool checkGetSharedSubexprValues(
-      const SelectivityVector& rows,
-      EvalCtx& context,
-      VectorPtr& result);
+  /// Returns true if this is a deterministic shared sub-expressions with at
+  /// least one input (i.e. not a constant or field access expression).
+  /// Evaluation of such expression is optimized by memoizing and reusing
+  /// the results of prior evaluations. That logic is implemented in
+  /// 'evaluateSharedSubexpr'.
+  bool shouldEvaluateSharedSubexp() const {
+    return deterministic_ && isMultiplyReferenced_ && !inputs_.empty();
+  }
 
-  // If this is a common subexpression, stores the newly calculated result.
-  void checkUpdateSharedSubexprValues(
+  /// Evaluate common sub-expression. Check if sharedSubexprValues_ already has
+  /// values for all 'rows'. If not, compute missing values.
+  template <typename TEval>
+  void evaluateSharedSubexpr(
       const SelectivityVector& rows,
       EvalCtx& context,
-      const VectorPtr& result);
+      VectorPtr& result,
+      TEval eval);
+
+  /// Return true if errors in evaluation 'vectorFunction_' arguments should be
+  /// thrown as soon as they happen. False if argument errors will be converted
+  /// into a null if another argument for the same row is null.
+  bool throwArgumentErrors(const EvalCtx& context) const;
 
   void evalSimplifiedImpl(
       const SelectivityVector& rows,
@@ -374,6 +459,39 @@ class Expr {
   /// Release 'inputValues_' back to vector pool in 'evalCtx' so they can be
   /// reused.
   void releaseInputValues(EvalCtx& evalCtx);
+
+  // Evaluates arguments of 'this' for 'rows'. 'rows' is updated to
+  // remove rows where an argument is null. If an argument gets an
+  // error and a subsequent argument has a null for the same row the
+  // error is masked and the row is removed from 'rows'. If
+  // 'context.throwOnError()' is true, an error in arguments that is
+  // not cancelled by a null will be thrown. Otherwise the errors
+  // found in arguments are left in place and added to errors that may
+  // have been in 'context' on entry. The rows where an argument had a
+  // null or error are removed from 'rows' at before returning. If
+  // 'rows' goes empty, we return false as soon as 'rows' is empty and set
+  // 'result' to nulls for initial 'rows'.. 'evalArg(i)' is called for
+  // evaluating the 'ith' argument.
+  template <typename EvalArg>
+  bool evalArgsDefaultNulls(
+      MutableRemainingRows& rows,
+      EvalArg evalArg,
+      EvalCtx& context,
+      VectorPtr& result);
+
+  // Evaluates arguments of 'this'. A null or does not remove its row
+  // from 'rows'. If 'context.throwOnError()' is false, errors are
+  // accumulated in 'context' adding themselves or overwriting
+  // previous errors for the same row. An error removes the
+  // corresponding row from 'rows.  Returns false if 'rows' goes
+  // empty and sets 'result'  to null for initial 'rows'. . 'evalArgs(i)' is
+  // called for evaluating the 'ith' argument.
+  template <typename EvalArg>
+  bool evalArgsWithNulls(
+      MutableRemainingRows& rows,
+      EvalArg evalArg,
+      EvalCtx& context,
+      VectorPtr& result);
 
   /// Returns an instance of CpuWallTimer if cpu usage tracking is enabled. Null
   /// otherwise.
@@ -419,11 +537,16 @@ class Expr {
 
   std::vector<VectorPtr> inputValues_;
 
-  // If multiply referenced or literal, these are the values.
-  VectorPtr sharedSubexprValues_;
+  struct SharedResults {
+    // The rows for which 'sharedSubexprValues_' has a value.
+    std::unique_ptr<SelectivityVector> sharedSubexprRows_ = nullptr;
+    // If multiply referenced or literal, these are the values.
+    VectorPtr sharedSubexprValues_ = nullptr;
+  };
 
-  // The rows for which 'sharedSubexprValues_' has a value.
-  std::unique_ptr<SelectivityVector> sharedSubexprRows_;
+  // Maps the inputs referenced by distinctFields_ captuered when
+  // evaluateSharedSubexpr() is called to the cached shared results.
+  std::map<std::vector<const BaseVector*>, SharedResults> sharedSubexprResults_;
 
   VectorPtr baseDictionary_;
 
@@ -444,13 +567,6 @@ class Expr {
   /// Runtime statistics. CPU time, wall time and number of processed rows.
   ExprStats stats_;
 };
-
-/// Translates row number of the outer vector into row number of the inner
-/// vector using DecodedVector.
-SelectivityVector* FOLLY_NONNULL translateToInnerRows(
-    const SelectivityVector& rows,
-    DecodedVector& decoded,
-    LocalSelectivityVector& newRowsHolder);
 
 /// Generate a selectivity vector of a single row.
 SelectivityVector* FOLLY_NONNULL
@@ -531,6 +647,13 @@ class ExprSet {
   /// @param compact If true, uses one-line representation for each expression.
   /// Otherwise, prints a tree of expressions one node per line.
   std::string toString(bool compact = true) const;
+
+  /// Returns evaluation statistics as a map keyed on function or special form
+  /// name. If a function or a special form occurs in the expression
+  /// multiple times, the statistics will be aggregated across all calls.
+  /// Statistics will be missing for functions and special forms that didn't get
+  /// evaluated.
+  std::unordered_map<std::string, exec::ExprStats> stats() const;
 
  protected:
   void clearSharedSubexprs();
@@ -620,7 +743,7 @@ class ExprSetListener {
   /// @param errors Error vector produced inside the try expression.
   virtual void onError(
       const SelectivityVector& rows,
-      const EvalCtx::ErrorVector& errors) = 0;
+      const ErrorVector& errors) = 0;
 };
 
 /// Return the ExprSetListeners having been registered.

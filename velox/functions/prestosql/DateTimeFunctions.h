@@ -84,6 +84,33 @@ struct TimestampWithTimezoneSupport {
 } // namespace
 
 template <typename T>
+struct DateFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Varchar>& date) {
+    bool nullOutput;
+    result = util::Converter<TypeKind::DATE>::cast(date, nullOutput);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Timestamp>& timestamp) {
+    bool nullOutput;
+    result = util::Converter<TypeKind::DATE>::cast(timestamp, nullOutput);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    bool nullOutput;
+    result = util::Converter<TypeKind::DATE>::cast(
+        this->toTimestamp(timestampWithTimezone), nullOutput);
+  }
+};
+
+template <typename T>
 struct WeekFunction : public InitSessionTimezone<T>,
                       public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -249,6 +276,18 @@ struct DayFunction : public InitSessionTimezone<T>,
   }
 };
 
+namespace {
+
+bool isIntervalWholeDays(int64_t milliseconds) {
+  return (milliseconds % kMillisInDay) == 0;
+}
+
+int64_t intervalDays(int64_t milliseconds) {
+  return milliseconds / kMillisInDay;
+}
+
+} // namespace
+
 template <typename T>
 struct DateMinusIntervalDayTime {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -258,10 +297,10 @@ struct DateMinusIntervalDayTime {
       const arg_type<Date>& date,
       const arg_type<IntervalDayTime>& interval) {
     VELOX_USER_CHECK(
-        interval.hasWholeDays(),
+        isIntervalWholeDays(interval),
         "Cannot subtract hours, minutes, seconds or milliseconds from a date");
     result = date;
-    result.addDays(-interval.days());
+    result.addDays(-intervalDays(interval));
   }
 };
 
@@ -274,10 +313,10 @@ struct DatePlusIntervalDayTime {
       const arg_type<Date>& date,
       const arg_type<IntervalDayTime>& interval) {
     VELOX_USER_CHECK(
-        interval.hasWholeDays(),
+        isIntervalWholeDays(interval),
         "Cannot add hours, minutes, seconds or milliseconds to a date");
     result = date;
-    result.addDays(interval.days());
+    result.addDays(intervalDays(interval));
   }
 };
 
@@ -1038,6 +1077,31 @@ struct ParseDateTimeFunction {
     dateTimeResult.timestamp.toGMT(timezoneId);
     result = std::make_tuple(dateTimeResult.timestamp.toMillis(), timezoneId);
     return true;
+  }
+};
+
+template <typename T>
+struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& input) {
+    // Convert timestampWithTimezone input to a timestamp representing the
+    // moment at the zone in timestampWithTimezone.
+    Timestamp inputTimeStamp = this->toTimestamp(input);
+
+    // Get the given timezone name
+    auto timezone = util::getTimeZoneName(*input.template at<1>());
+
+    auto* timezonePtr = date::locate_zone(timezone);
+
+    // Create a copy of inputTimeStamp and convert it to GMT
+    auto gmtTimeStamp = inputTimeStamp;
+    gmtTimeStamp.toGMT(*timezonePtr);
+
+    // Get offset in seconds with GMT and convert to hour
+    result = (inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds()) / 3600;
   }
 };
 

@@ -23,7 +23,6 @@ target_link_libraries(
   gtest_main
   ${FOLLY_WITH_DEPENDENCIES}
   ${Boost_FILESYSTEM_LIBRARIES}
-  ${DOUBLE_CONVERSION}
-  ${GFLAGS_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT})

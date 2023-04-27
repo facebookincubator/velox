@@ -37,7 +37,7 @@ target_link_libraries(
   velox_exec
   velox_dwio_common
   velox_aggregates
-  velox_aggregates_test_lib
+  velox_functions_aggregates_test_lib
   velox_functions_lib
   velox_functions_prestosql
   velox_hive_connector
@@ -59,8 +59,7 @@ target_link_libraries(
   gtest
   gtest_main
   ${FOLLY_WITH_DEPENDENCIES}
-  ${DOUBLE_CONVERSION}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog
   ${FMT}
   ${FILESYSTEM})

@@ -279,7 +279,9 @@ class RowReaderOptions {
 
   /*
    * Set to true, if you want to add a new column to the results containing the
-   * row numbers.
+   * row numbers.  These row numbers are relative to the beginning of file (0 as
+   * first row) and does not affected by filtering or deletion during the read
+   * (it always counts all rows in the file).
    */
   void setAppendRowNumberColumn(bool value) {
     appendRowNumberColumn_ = value;
@@ -346,10 +348,15 @@ class ReaderOptions {
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   SerDeOptions serDeOptions;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
+  uint64_t directorySizeGuess{kDefaultDirectorySizeGuess};
+  uint64_t filePreloadThreshold{kDefaultFilePreloadThreshold};
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
   static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
+  static constexpr uint64_t kDefaultDirectorySizeGuess = 1024 * 1024; // 1MB
+  static constexpr uint64_t kDefaultFilePreloadThreshold =
+      1024 * 1024 * 8; // 8MB
 
   ReaderOptions(velox::memory::MemoryPool* pool)
       : tailLocation(std::numeric_limits<uint64_t>::max()),
@@ -374,6 +381,8 @@ class ReaderOptions {
     prefetchMode = other.prefetchMode;
     serDeOptions = other.serDeOptions;
     decrypterFactory_ = other.decrypterFactory_;
+    directorySizeGuess = other.directorySizeGuess;
+    filePreloadThreshold = other.filePreloadThreshold;
     return *this;
   }
 
@@ -467,6 +476,16 @@ class ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setDirectorySizeGuess(uint64_t size) {
+    directorySizeGuess = size;
+    return *this;
+  }
+
+  ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
+    filePreloadThreshold = threshold;
+    return *this;
+  }
+
   /**
    * Get the desired tail location.
    * @return if not set, return the maximum long.
@@ -523,6 +542,14 @@ class ReaderOptions {
   const std::shared_ptr<encryption::DecrypterFactory> getDecrypterFactory()
       const {
     return decrypterFactory_;
+  }
+
+  uint64_t getDirectorySizeGuess() const {
+    return directorySizeGuess;
+  }
+
+  uint64_t getFilePreloadThreshold() const {
+    return filePreloadThreshold;
   }
 };
 

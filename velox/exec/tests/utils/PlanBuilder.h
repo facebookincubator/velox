@@ -162,9 +162,15 @@ class PlanBuilder {
   /// @param parallelizable If true, ValuesNode can run multi-threaded, in which
   /// case it will produce duplicate data from each thread, e.g. each thread
   /// will return all the data in 'values'. Useful for testing.
+  /// @param repeatTimes The number of times data is produced as input. If
+  /// greater than one, each RowVector will produce data as input `repeatTimes`.
+  /// For example, in case `values` has 3 vectors {v1, v2, v3} and repeatTimes
+  /// is 2, the input produced will be {v1, v2, v3, v1, v2, v3}. Useful for
+  /// testing.
   PlanBuilder& values(
       const std::vector<RowVectorPtr>& values,
-      bool parallelizable = false);
+      bool parallelizable = false,
+      size_t repeatTimes = 1);
 
   /// Add an ExchangeNode.
   ///
@@ -238,15 +244,15 @@ class PlanBuilder {
           connector::CommitStrategy::kNoCommit,
       const std::string& rowCountColumnName = "rowCount");
 
-  /// Add a TableWriteNode assuming that input columns names match column names
-  /// in the target table.
+  /// Add a TableWriteNode assuming that input columns match the source node
+  /// columns in order.
   ///
-  /// @param columnNames A subset of input columns to write.
+  /// @param tableColumnNames Column names in the target table.
   /// @param insertHandle Connector-specific table handle.
   /// @param rowCountColumnName The name of the output column containing the
   /// number of rows written.
   PlanBuilder& tableWrite(
-      const std::vector<std::string>& columnNames,
+      const std::vector<std::string>& tableColumnNames,
       const std::shared_ptr<core::InsertTableHandle>& insertHandle,
       connector::CommitStrategy commitStrategy =
           connector::CommitStrategy::kNoCommit,
@@ -605,15 +611,15 @@ class PlanBuilder {
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 
-  /// Add a CrossJoinNode to produce a cross product of the inputs. First input
-  /// comes from the preceding plan node. Second input is specified in 'right'
-  /// parameter.
+  /// Add a NestedLoopJoinNode to produce a cross product of the inputs. First
+  /// input comes from the preceding plan node. Second input is specified in
+  /// 'right' parameter.
   ///
   /// @param right Right-side input. Typically, to reduce memory usage, the
   /// smaller input is placed on the right-side.
   /// @param outputLayout Output layout consisting of columns from left and
   /// right sides.
-  PlanBuilder& crossJoin(
+  PlanBuilder& nestedLoopJoin(
       const core::PlanNodePtr& right,
       const std::vector<std::string>& outputLayout);
 
@@ -705,6 +711,8 @@ class PlanBuilder {
     options_ = options;
     return *this;
   }
+
+  static void registerSerDe();
 
  protected:
   // Users who create custom operators might want to extend the PlanBuilder to

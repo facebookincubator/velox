@@ -35,8 +35,29 @@ class TimestampWithTimeZoneType : public RowType {
     return instance;
   }
 
-  std::string toString() const override {
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  const char* name() const override {
     return "TIMESTAMP WITH TIME ZONE";
+  }
+
+  const std::vector<TypeParameter>& parameters() const override {
+    static const std::vector<TypeParameter> kEmpty = {};
+    return kEmpty;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = name();
+    return obj;
   }
 };
 
@@ -60,7 +81,7 @@ using TimestampWithTimezone = CustomType<TimestampWithTimezoneT>;
 
 class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
  public:
-  TypePtr getType(std::vector<TypePtr> /*childTypes*/) const override {
+  TypePtr getType() const override {
     return TIMESTAMP_WITH_TIME_ZONE();
   }
 
@@ -71,5 +92,7 @@ class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
         TIMESTAMP_WITH_TIME_ZONE()->toString());
   }
 };
+
+void registerTimestampWithTimeZoneType();
 
 } // namespace facebook::velox

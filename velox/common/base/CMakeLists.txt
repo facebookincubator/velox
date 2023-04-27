@@ -20,11 +20,12 @@ target_link_libraries(
   glog::glog
   ${FOLLY_WITH_DEPENDENCIES}
   ${FMT}
-  ${GFLAGS_LIBRARIES})
+  gflags::gflags)
 
 add_library(
   velox_common_base
   BitUtil.cpp
+  Counters.cpp
   Fs.cpp
   RandomUtil.cpp
   RawVector.cpp

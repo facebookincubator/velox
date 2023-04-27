@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -416,4 +416,19 @@ TEST_F(ZipTest, flatArraysWithGapInElements) {
 
   assertEqualVectors(expected, result);
 }
+
+// Single arg not supported.
+TEST_F(ZipTest, singleArgument) {
+  auto vector = makeNullableArrayVector<int64_t>(
+      {{1, 2, 3, 4}, {3, 4, 5}, {std::nullopt}});
+  VELOX_ASSERT_THROW(
+      evaluate<ArrayVector>("zip(c0)", makeRowVector({vector})),
+      "Scalar function signature is not supported: zip(ARRAY<BIGINT>). Supported signatures: "
+      "(array(E00),array(E01)) -> array(row(E00,E01)), (array(E00),array(E01),array(E02)) -> "
+      "array(row(E00,E01,E02)), (array(E00),array(E01),array(E02),array(E03)) -> array(row(E0"
+      "0,E01,E02,E03)), (array(E00),array(E01),array(E02),array(E03),array(E04)) -> array(row"
+      "(E00,E01,E02,E03,E04)), (array(E00),array(E01),array(E02),array(E03),array(E04),array("
+      "E05)) -> array(row(E00,E01,E02,E03,E04,E05))");
+}
+
 } // namespace

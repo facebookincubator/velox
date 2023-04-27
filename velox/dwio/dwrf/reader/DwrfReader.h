@@ -82,7 +82,10 @@ class DwrfRowReader : public StrideIndexProvider,
   std::optional<size_t> estimatedRowSize() const override;
 
   // Returns number of rows read. Guaranteed to be less then or equal to size.
-  uint64_t next(uint64_t size, VectorPtr& result) override;
+  uint64_t next(
+      uint64_t size,
+      VectorPtr& result,
+      const dwio::common::Mutation* = nullptr) override;
 
   void updateRuntimeStats(
       dwio::common::RuntimeStatistics& stats) const override {
@@ -90,6 +93,10 @@ class DwrfRowReader : public StrideIndexProvider,
   }
 
   void resetFilterCaches() override;
+
+  bool allPrefetchIssued() const override {
+    return true;
+  }
 
   // Returns the skipped strides for 'stripe'. Used for testing.
   std::optional<std::vector<uint64_t>> stridesToSkip(uint32_t stripe) const {
@@ -99,6 +106,14 @@ class DwrfRowReader : public StrideIndexProvider,
     }
     return it->second;
   }
+
+  // Creates column reader tree and may start prefetch of frequently read
+  // columns.
+  void startNextStripe();
+
+  int64_t nextRowNumber() override;
+
+  int64_t nextReadSize(uint64_t size) override;
 
  private:
   // footer
@@ -136,10 +151,6 @@ class DwrfRowReader : public StrideIndexProvider,
 
   // internal methods
 
-  // Creates column reader tree and may start prefetch of frequently read
-  // columns.
-  void startNextStripe();
-
   std::optional<size_t> estimatedRowSizeHelper(
       const FooterWrapper& footer,
       const dwio::common::Statistics& stats,
@@ -153,11 +164,17 @@ class DwrfRowReader : public StrideIndexProvider,
     return (lastStripe == 0);
   }
 
-  void setStrideIndex(uint64_t index) {
-    strideIndex_ = index;
-  }
+  void checkSkipStrides(uint64_t strideSize);
 
-  void checkSkipStrides(const StatsContext& context, uint64_t strideSize);
+  void readNext(
+      uint64_t rowsToRead,
+      const dwio::common::Mutation*,
+      VectorPtr& result);
+
+  void readWithRowNumber(
+      uint64_t rowsToRead,
+      const dwio::common::Mutation*,
+      VectorPtr& result);
 };
 
 class DwrfReader : public dwio::common::Reader {

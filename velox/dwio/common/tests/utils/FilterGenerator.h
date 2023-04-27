@@ -20,6 +20,7 @@
 #include <memory>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/type/Filter.h"
@@ -60,12 +61,16 @@ struct FilterSpec {
   bool allowNulls_{true};
 };
 
+struct MutationSpec {
+  std::vector<int64_t> deletedRows;
+};
+
 // Encodes a batch number and an index into the batch into an int32_t
 uint64_t batchPosition(uint32_t batchNumber, vector_size_t batchRow);
 uint32_t batchNumber(uint64_t position);
 vector_size_t batchRow(uint64_t position);
 VectorPtr getChildBySubfield(
-    RowVector* rowVector,
+    const RowVector* rowVector,
     const Subfield& subfield,
     const RowTypePtr& rowType = nullptr);
 
@@ -254,6 +259,10 @@ class ColumnStats : public AbstractColumnStats {
     return values_[boundedIndex];
   }
 
+  int64_t getIntegerValue(const T& value) {
+    return value;
+  }
+
   std::unique_ptr<Filter> makeRangeFilter(const FilterSpec& filterSpec) {
     if (values_.empty()) {
       if (filterSpec.allowNulls_) {
@@ -268,12 +277,13 @@ class ColumnStats : public AbstractColumnStats {
     T upper =
         valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
     if (!filterSpec.allowNulls_) {
-      return std::make_unique<velox::common::BigintRange>(lower, upper, false);
+      return std::make_unique<velox::common::BigintRange>(
+          getIntegerValue(lower), getIntegerValue(upper), false);
     }
     if (upperIndex - lowerIndex < 1000 && ++counter_ % 10 <= 3) {
       std::vector<int64_t> in;
       for (auto i = lowerIndex; i <= upperIndex; ++i) {
-        in.push_back(values_[i]);
+        in.push_back(getIntegerValue(values_[i]));
       }
       // make sure we don't accidentally generate an AlwaysFalse filter
       if (counter_ % 2 == 1 && filterSpec.selectPct < 100.0) {
@@ -284,10 +294,14 @@ class ColumnStats : public AbstractColumnStats {
     // sometimes make a negated filter instead (1/4 chance)
     if (counter_ % 4 == 1 && filterSpec.selectPct < 100.0) {
       return std::make_unique<velox::common::NegatedBigintRange>(
-          lower, upper, filterSpec.selectPct < 75);
+          getIntegerValue(lower),
+          getIntegerValue(upper),
+          filterSpec.selectPct < 75);
     }
     return std::make_unique<velox::common::BigintRange>(
-        lower, upper, filterSpec.selectPct > 25);
+        getIntegerValue(lower),
+        getIntegerValue(upper),
+        filterSpec.selectPct > 25);
   }
 
   std::unique_ptr<Filter> makeRowGroupSkipRangeFilter(
@@ -316,12 +330,8 @@ class ColumnStats : public AbstractColumnStats {
         }
       }
     }
-    if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
-      return std::make_unique<velox::common::BigintRange>(
-          max.unscaledValue(), max.unscaledValue(), false);
-    } else {
-      return std::make_unique<velox::common::BigintRange>(max, max, false);
-    }
+    return std::make_unique<velox::common::BigintRange>(
+        getIntegerValue(max), getIntegerValue(max), false);
   }
 
   // The sample size is 65536.
@@ -476,12 +486,25 @@ class FilterGenerator {
   SubfieldFilters makeSubfieldFilters(
       const std::vector<FilterSpec>& filterSpecs,
       const std::vector<RowVectorPtr>& batches,
+      MutationSpec*,
       std::vector<uint64_t>& hitRows);
   std::vector<std::string> makeFilterables(uint32_t count, float pct);
   std::vector<FilterSpec> makeRandomSpecs(
       const std::vector<std::string>& filterable,
       int32_t countX100);
-  std::shared_ptr<ScanSpec> makeScanSpec(SubfieldFilters filters);
+
+  // Make a ScanSpec with random prunings on columns included in 'prunable'.
+  // Only complex typed columns are prunable.
+  std::shared_ptr<ScanSpec> makeScanSpec(
+      const std::vector<std::string>& prunable,
+      std::vector<RowVectorPtr>& batches,
+      memory::MemoryPool* pool);
+
+  // Make a ScanSpec with the filters specified.
+  std::shared_ptr<ScanSpec> makeScanSpec(const SubfieldFilters& filters);
+
+  // Add the filter to an existing ScanSpec.
+  static void addToScanSpec(const SubfieldFilters& filters, ScanSpec&);
 
   inline folly::Random::DefaultGenerator& rng() {
     return rng_;
@@ -497,12 +520,6 @@ class FilterGenerator {
   }
 
  private:
-  static void makeFieldSpecs(
-      const std::string& pathPrefix,
-      int32_t level,
-      const std::shared_ptr<const Type>& type,
-      ScanSpec* spec);
-
   static void collectFilterableSubFields(
       const RowType* rowType,
       std::vector<std::string>& subFields);

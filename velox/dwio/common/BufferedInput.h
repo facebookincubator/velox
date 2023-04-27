@@ -78,7 +78,7 @@ class BufferedInput {
       // data. TODO: figure out how we can use the data cache for
       // this access.
       ret = std::make_unique<SeekableFileInputStream>(
-          input_, offset, length, pool_, logType);
+          input_, offset, length, pool_, logType, input_->getNaturalReadSize());
     }
     return ret;
   }
@@ -114,6 +114,14 @@ class BufferedInput {
   // Internal API, do not use outside Velox.
   const std::shared_ptr<ReadFileInputStream>& getInputStream() const {
     return input_;
+  }
+
+  virtual folly::Executor* FOLLY_NULLABLE executor() const {
+    return nullptr;
+  }
+
+  virtual int64_t prefetchSize() const {
+    return 0;
   }
 
  protected:

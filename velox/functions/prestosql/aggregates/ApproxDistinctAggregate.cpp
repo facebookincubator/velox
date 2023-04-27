@@ -23,6 +23,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
@@ -83,8 +84,7 @@ struct HllAccumulator {
     return isSparse_ ? sparseHll_.serializedSize() : denseHll_.serializedSize();
   }
 
-  void serialize(int8_t indexBitLength, StringView& output) {
-    char* outputBuffer = const_cast<char*>(output.data());
+  void serialize(int8_t indexBitLength, char* outputBuffer) {
     return isSparse_ ? sparseHll_.serialize(indexBitLength, outputBuffer)
                      : denseHll_.serialize(outputBuffer);
   }
@@ -174,17 +174,19 @@ class ApproxDistinctAggregate : public exec::Aggregate {
             FlatVector<StringView>* result,
             vector_size_t index) {
           auto size = accumulator->serializedSize();
+          StringView serialized;
           if (StringView::isInline(size)) {
-            StringView serialized(size);
-            accumulator->serialize(indexBitLength_, serialized);
-            result->setNoCopy(index, serialized);
+            std::string buffer(size, '\0');
+            accumulator->serialize(indexBitLength_, buffer.data());
+            serialized = StringView::makeInline(buffer);
           } else {
             Buffer* buffer = flatResult->getBufferWithSpace(size);
-            StringView serialized(buffer->as<char>() + buffer->size(), size);
-            accumulator->serialize(indexBitLength_, serialized);
+            char* ptr = buffer->asMutable<char>() + buffer->size();
+            accumulator->serialize(indexBitLength_, ptr);
             buffer->setSize(buffer->size() + size);
-            result->setNoCopy(index, serialized);
+            serialized = StringView(ptr, size);
           }
+          result->setNoCopy(index, serialized);
         });
   }
 
@@ -208,9 +210,8 @@ class ApproxDistinctAggregate : public exec::Aggregate {
         auto group = groups[row];
         auto tracker = trackRowSize(group);
         auto accumulator = value<HllAccumulator>(group);
-        if (clearNull(group)) {
-          accumulator->setIndexBitLength(indexBitLength_);
-        }
+        clearNull(group);
+        accumulator->setIndexBitLength(indexBitLength_);
 
         auto hash = hashOne(decodedValue_.valueAt<T>(row));
         accumulator->append(hash);
@@ -258,9 +259,8 @@ class ApproxDistinctAggregate : public exec::Aggregate {
         }
 
         auto accumulator = value<HllAccumulator>(group);
-        if (clearNull(group)) {
-          accumulator->setIndexBitLength(indexBitLength_);
-        }
+        clearNull(group);
+        accumulator->setIndexBitLength(indexBitLength_);
 
         auto hash = hashOne(decodedValue_.valueAt<T>(row));
         accumulator->append(hash);
@@ -394,14 +394,15 @@ bool registerApproxDistinct(
     const std::string& name,
     bool hllAsFinalResult,
     bool hllAsRawInput) {
+  auto returnType = hllAsFinalResult ? "hyperloglog" : "bigint";
+
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   if (hllAsRawInput) {
-    signatures.push_back(
-        exec::AggregateFunctionSignatureBuilder()
-            .returnType(hllAsFinalResult ? "varbinary" : "bigint")
-            .intermediateType("varbinary")
-            .argumentType("varbinary")
-            .build());
+    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                             .returnType(returnType)
+                             .intermediateType("varbinary")
+                             .argumentType("hyperloglog")
+                             .build());
   } else {
     for (const auto& inputType :
          {"boolean",
@@ -414,20 +415,18 @@ bool registerApproxDistinct(
           "varchar",
           "timestamp",
           "date"}) {
-      signatures.push_back(
-          exec::AggregateFunctionSignatureBuilder()
-              .returnType(hllAsFinalResult ? "varbinary" : "bigint")
-              .intermediateType("varbinary")
-              .argumentType(inputType)
-              .build());
+      signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                               .returnType(returnType)
+                               .intermediateType("varbinary")
+                               .argumentType(inputType)
+                               .build());
 
-      signatures.push_back(
-          exec::AggregateFunctionSignatureBuilder()
-              .returnType(hllAsFinalResult ? "varbinary" : "bigint")
-              .intermediateType("varbinary")
-              .argumentType(inputType)
-              .argumentType("double")
-              .build());
+      signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                               .returnType(returnType)
+                               .intermediateType("varbinary")
+                               .argumentType(inputType)
+                               .argumentType("double")
+                               .build());
     }
   }
 
@@ -451,10 +450,13 @@ bool registerApproxDistinct(
 
 } // namespace
 
-void registerApproxDistinctAggregates() {
-  registerApproxDistinct(kApproxDistinct, false, false);
-  registerApproxDistinct(kApproxSet, true, false);
-  registerApproxDistinct(kMerge, true, true);
+void registerApproxDistinctAggregates(const std::string& prefix) {
+  registerCustomType(
+      prefix + "hyperloglog",
+      std::make_unique<const HyperLogLogTypeFactories>());
+  registerApproxDistinct(prefix + kApproxDistinct, false, false);
+  registerApproxDistinct(prefix + kApproxSet, true, false);
+  registerApproxDistinct(prefix + kMerge, true, true);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

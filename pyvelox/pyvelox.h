@@ -67,7 +67,7 @@ struct PyVeloxContext {
 
  private:
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_ =
-      facebook::velox::memory::getDefaultMemoryPool();
+      facebook::velox::memory::addDefaultLeafMemoryPool();
   std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx_ =
       std::make_shared<facebook::velox::core::QueryCtx>();
   std::unique_ptr<facebook::velox::core::ExecCtx> execCtx_ =
@@ -113,11 +113,16 @@ inline velox::variant pyToVariant(const py::handle& obj) {
 static VectorPtr pyToConstantVector(
     const py::handle& obj,
     vector_size_t length,
-    facebook::velox::memory::MemoryPool* pool);
+    facebook::velox::memory::MemoryPool* pool,
+    TypePtr type = nullptr);
 
 template <TypeKind T>
 static VectorPtr variantsToFlatVector(
     const std::vector<velox::variant>& variants,
+    facebook::velox::memory::MemoryPool* pool);
+
+static inline VectorPtr pyListToVector(
+    const py::list& list,
     facebook::velox::memory::MemoryPool* pool);
 
 template <TypeKind T>
@@ -135,18 +140,14 @@ static VectorPtr createDictionaryVector(
       std::move(baseVector));
 }
 
-static inline VectorPtr pyListToVector(
-    const py::list& list,
-    facebook::velox::memory::MemoryPool* pool);
-
 template <typename NativeType>
 static py::object getItemFromSimpleVector(
-    SimpleVectorPtr<NativeType>& v,
+    SimpleVectorPtr<NativeType>& vector,
     vector_size_t idx);
 
 template <typename NativeType>
 inline void setItemInFlatVector(
-    FlatVectorPtr<NativeType>& v,
+    FlatVectorPtr<NativeType>& vector,
     vector_size_t idx,
     py::handle& obj);
 
@@ -219,9 +220,6 @@ inline void addDataTypeBindings(
       m, "MapType", py::module_local(asModuleLocalDefinitions));
   py::class_<RowType, Type, std::shared_ptr<RowType>> rowType(
       m, "RowType", py::module_local(asModuleLocalDefinitions));
-  py::class_<FixedSizeArrayType, Type, std::shared_ptr<FixedSizeArrayType>>
-      fixedArrayType(
-          m, "FixedSizeArrayType", py::module_local(asModuleLocalDefinitions));
 
   // Basic operations on Type.
   type.def("__str__", &Type::toString);
@@ -260,9 +258,6 @@ inline void addDataTypeBindings(
   arrayType.def(py::init<std::shared_ptr<Type>>());
   arrayType.def(
       "element_type", &ArrayType::elementType, "Return the element type");
-  fixedArrayType.def(py::init<int, velox::TypePtr>())
-      .def("element_type", &velox::FixedSizeArrayType::elementType)
-      .def("fixed_width", &velox::FixedSizeArrayType::fixedElementsWidth);
   mapType.def(py::init<std::shared_ptr<Type>, std::shared_ptr<Type>>());
   mapType.def("key_type", &MapType::keyType, "Return the key type");
   mapType.def("value_type", &MapType::valueType, "Return the value type");
@@ -307,9 +302,7 @@ inline void checkBounds(DictionaryIndices& indices, vector_size_t idx) {
   }
 }
 
-// Many Velox vectors are templated on TypeKind, so we must register each
-// type of vector for each TypeKind with pybind11. This function gets called
-// for each TypeKind.
+// Currently PyVelox will only register vectors for primitive types.
 template <TypeKind T>
 static void registerTypedVectors(
     py::module& m,
@@ -403,16 +396,21 @@ static void addVectorBindings(
       .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); })
       .def("resize", &BaseVector::resize);
 
-  for (int8_t t = 0; t <= static_cast<int8_t>(TypeKind::INTERVAL_DAY_TIME);
-       t++) {
-    // VARCHAR and VARBINARY create the same C++ type, so we skip one of them.
-    if (static_cast<TypeKind>(t) != TypeKind::VARCHAR) {
-      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          registerTypedVectors,
-          static_cast<TypeKind>(t),
-          m,
-          asModuleLocalDefinitions);
-    }
+  constexpr TypeKind supportedTypes[] = {
+      TypeKind::BOOLEAN,
+      TypeKind::TINYINT,
+      TypeKind::SMALLINT,
+      TypeKind::INTEGER,
+      TypeKind::BIGINT,
+      TypeKind::REAL,
+      TypeKind::DOUBLE,
+      TypeKind::VARBINARY,
+      TypeKind::TIMESTAMP,
+      TypeKind::DATE};
+
+  for (int i = 0; i < sizeof(supportedTypes) / sizeof(supportedTypes[0]); i++) {
+    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        registerTypedVectors, supportedTypes[i], m, asModuleLocalDefinitions);
   }
 
   py::class_<DictionaryIndices>(
@@ -430,10 +428,16 @@ static void addVectorBindings(
   m.def("from_list", [](const py::list& list) mutable {
     return pyListToVector(list, PyVeloxContext::getInstance().pool());
   });
-  m.def("constant_vector", [](const py::handle& obj, vector_size_t length) {
-    return pyToConstantVector(
-        obj, length, PyVeloxContext::getInstance().pool());
-  });
+  m.def(
+      "constant_vector",
+      [](const py::handle& obj, vector_size_t length, TypePtr type) {
+        return pyToConstantVector(
+            obj, length, PyVeloxContext::getInstance().pool(), type);
+      },
+      py::arg("value"),
+      py::arg("length"),
+      py::arg("type") = nullptr);
+
   m.def(
       "dictionary_vector",
       [](VectorPtr baseVector, const py::list& indices_list) {

@@ -2,6 +2,33 @@
 Array Functions
 =============================
 
+.. function:: all_match(array(T), function(T, boolean)) → boolean
+
+    Returns whether all elements of an array match the given predicate.
+
+        Returns true if all the elements match the predicate (a special case is when the array is empty);
+        Returns false if one or more elements don’t match;
+        Returns NULL if the predicate function returns NULL for one or more elements and true for all other elements.
+        Throws an exception if the predicate fails for one or more elements and returns true or NULL for the rest.
+
+.. function:: any_match(array(T), function(T, boolean)) → boolean
+
+    Returns whether at least one element of an array matches the given predicate.
+
+        Returns true if one or more elements match the predicate;
+        Returns false if none of the elements matches (a special case is when the array is empty);
+        Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
+        Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.
+
+.. function:: none_match(array(T), function(T, boolean)) → boolean
+
+    Returns whether no elements of an array match the given predicate.
+
+        Returns true if none of the elements matches the predicate (a special case is when the array is empty);
+        Returns false if one or more elements match;
+        Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
+        Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.
+
 .. function:: array_average(array(double)) -> double
 
     Returns the average of all non-null elements of the array. If there are no non-null elements, returns null.
@@ -81,6 +108,10 @@ Array Functions
         SELECT array_min(ARRAY [-1, -2, -2]); -- -2
         SELECT array_min(ARRAY [-1, -2, NULL]); -- NULL
         SELECT array_min(ARRAY []); -- NULL
+
+.. function:: array_normalize(array(E), E) -> array(E)
+
+    Normalizes array ``x`` by dividing each element by the p-norm of the array. It is equivalent to ``TRANSFORM(array, v -> v / REDUCE(array, 0, (a, v) -> a + POW(ABS(v), p), a -> POW(a, 1 / p))``, but the reduce part is only executed once. Returns null if the array is null or there are null array elements. If ``p`` is 0, then the input array is returned. Only REAL and DOUBLE types are supported.
 
 .. function:: arrays_overlap(x, y) -> boolean
 
@@ -182,6 +213,15 @@ Array Functions
 
     Returns a subarray starting from index ``start``(or starting from the end
     if ``start`` is negative) with a length of ``length``.
+
+.. function:: sequence(start, stop) -> array
+
+    Generate a sequence of integers from start to stop, incrementing by 1 if start is less than or equal to stop,
+    otherwise -1.
+
+.. function:: sequence(start, stop, step) -> array
+
+    Generate a sequence of integers from start to stop, incrementing by step.
 
 .. function:: subscript(array(E), index) -> E
 

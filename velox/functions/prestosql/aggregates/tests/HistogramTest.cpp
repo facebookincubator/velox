@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -184,10 +185,8 @@ TEST_F(HistogramTest, groupByInterval) {
 
   auto vector1 = makeFlatVector<int32_t>(
       num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
-  auto vector2 = makeFlatVector<IntervalDayTime>(
-      num,
-      [](vector_size_t row) { return IntervalDayTime(row); },
-      nullEvery(5));
+  auto vector2 = makeFlatVector<int64_t>(
+      num, [](auto row) { return row; }, nullEvery(5), INTERVAL_DAY_TIME());
 
   testHistogramWithDuck(vector1, vector2);
 }
@@ -245,10 +244,8 @@ TEST_F(HistogramTest, globalGroupByDate) {
 }
 
 TEST_F(HistogramTest, globalGroupByInterval) {
-  auto vector = makeFlatVector<IntervalDayTime>(
-      1'000,
-      [](vector_size_t row) { return IntervalDayTime(row); },
-      nullEvery(7));
+  auto vector = makeFlatVector<int64_t>(
+      1'000, [](auto row) { return row; }, nullEvery(7), INTERVAL_DAY_TIME());
 
   testGlobalHistogramWithDuck(vector);
 }

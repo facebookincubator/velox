@@ -38,12 +38,19 @@ class FunctionBenchmarkBase {
     return exec::ExprSet({typed}, &execCtx_);
   }
 
-  VectorPtr evaluate(exec::ExprSet& exprSet, const RowVectorPtr& data) {
-    SelectivityVector rows(data->size());
+  VectorPtr evaluate(
+      exec::ExprSet& exprSet,
+      const RowVectorPtr& data,
+      const SelectivityVector& rows) {
     exec::EvalCtx evalCtx(&execCtx_, &exprSet, data.get());
     std::vector<VectorPtr> results(1);
     exprSet.eval(rows, evalCtx, results);
     return results[0];
+  }
+
+  VectorPtr evaluate(exec::ExprSet& exprSet, const RowVectorPtr& data) {
+    SelectivityVector rows(data->size());
+    return evaluate(exprSet, data, rows);
   }
 
   VectorPtr evaluate(const std::string& expression, const RowVectorPtr& data) {
@@ -61,7 +68,7 @@ class FunctionBenchmarkBase {
 
  protected:
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
   parse::ParseOptions options_;

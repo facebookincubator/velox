@@ -16,10 +16,11 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
 #include "velox/serializers/PrestoSerializer.h"
-#include "velox/vector/DecodedVector.h"
+
+using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -201,7 +202,7 @@ class MaxSizeForStatsAggregate
   }
 };
 
-bool registerMaxSizeForStatsAggregate(const std::string& name) {
+bool registerMaxSizeForStats(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
@@ -227,8 +228,8 @@ bool registerMaxSizeForStatsAggregate(const std::string& name) {
 
 } // namespace
 
-void registerMaxSizeForStatsAggregate() {
-  registerMaxSizeForStatsAggregate(kMaxSizeForStats);
+void registerMaxSizeForStatsAggregate(const std::string& prefix) {
+  registerMaxSizeForStats(prefix + kMaxSizeForStats);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

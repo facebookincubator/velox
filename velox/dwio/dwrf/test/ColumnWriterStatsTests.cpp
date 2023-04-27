@@ -35,49 +35,6 @@ using namespace facebook::velox;
 using namespace facebook::velox::memory;
 using folly::Random;
 
-std::unique_ptr<RowReader> writeAndGetReader(
-    MemoryPool& pool,
-    const std::shared_ptr<const Type>& type,
-    VectorPtr batch,
-    const size_t repeat,
-    const int32_t flatMapColId) {
-  // write file to memory
-  auto sink = std::make_unique<MemorySink>(pool, 200 * 1024 * 1024);
-  auto sinkPtr = sink.get();
-
-  auto config = std::make_shared<Config>();
-  config->set(Config::ROW_INDEX_STRIDE, folly::to<uint32_t>(batch->size()));
-  if (flatMapColId >= 0) {
-    config->set(Config::FLATTEN_MAP, true);
-    config->set(Config::MAP_FLAT_COLS, {folly::to<uint32_t>(flatMapColId)});
-  }
-  WriterOptions options;
-  options.config = config;
-  options.schema = type;
-  options.flushPolicyFactory = [&]() {
-    return std::make_unique<LambdaFlushPolicy>([]() {
-      return false; // All batches are in one stripe.
-    });
-  };
-
-  Writer writer{options, std::move(sink), pool};
-
-  for (size_t i = 0; i < repeat; ++i) {
-    writer.write(batch);
-  }
-
-  writer.close();
-
-  std::string_view data(sinkPtr->getData(), sinkPtr->size());
-  auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(data);
-  auto input = std::make_unique<BufferedInput>(readFile, pool);
-
-  ReaderOptions readerOpts{&pool};
-  RowReaderOptions rowReaderOpts;
-  auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
-  return reader->createRowReader(rowReaderOpts);
-}
-
 uint64_t computeCumulativeNodeSize(
     std::unordered_map<uint32_t, uint64_t>& nodeSizes,
     const TypeWithId& type) {
@@ -181,34 +138,83 @@ void verifyStats(
 using PopulateBatch =
     std::function<std::vector<size_t>(MemoryPool&, VectorPtr*, size_t)>;
 
-void verifyTypeStats(
-    MemoryPool& pool,
-    const std::string& schema,
-    PopulateBatch populateBatch,
-    int32_t flatMapColId = -1) {
-  HiveTypeParser parser;
-  auto type = parser.parse(schema);
-
-  constexpr size_t batchSize = 1000;
-  VectorPtr childBatch;
-  auto nodeSizePerStride = populateBatch(pool, &childBatch, batchSize);
-  VectorPtr batch = std::make_shared<RowVector>(
-      &pool, type, nullptr, batchSize, std::vector<VectorPtr>{childBatch}, 0);
-
-  constexpr size_t repeat = 2;
-  auto rowReaderPtr =
-      writeAndGetReader(pool, type, std::move(batch), repeat, flatMapColId);
-  auto& rowReader = dynamic_cast<DwrfRowReader&>(*rowReaderPtr);
-  const bool hasFlatMapCol = flatMapColId >= 0;
-  verifyStats(rowReader, repeat, nodeSizePerStride, hasFlatMapCol);
-}
-
 class ColumnWriterStatsTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pool_ = getDefaultMemoryPool();
+    rootPool_ = defaultMemoryManager().addRootPool("ColumnWriterStatsTest");
+    leafPool_ = rootPool_->addLeafChild("ColumnWriterStatsTest");
   }
-  std::shared_ptr<MemoryPool> pool_;
+
+  std::unique_ptr<RowReader> writeAndGetReader(
+      const std::shared_ptr<const Type>& type,
+      VectorPtr batch,
+      const size_t repeat,
+      const int32_t flatMapColId) {
+    // write file to memory
+    auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
+    auto sinkPtr = sink.get();
+
+    auto config = std::make_shared<Config>();
+    config->set(Config::ROW_INDEX_STRIDE, folly::to<uint32_t>(batch->size()));
+    if (flatMapColId >= 0) {
+      config->set(Config::FLATTEN_MAP, true);
+      config->set(Config::MAP_FLAT_COLS, {folly::to<uint32_t>(flatMapColId)});
+    }
+    WriterOptions options;
+    options.config = config;
+    options.schema = type;
+    options.flushPolicyFactory = [&]() {
+      return std::make_unique<LambdaFlushPolicy>([]() {
+        return false; // All batches are in one stripe.
+      });
+    };
+
+    Writer writer{options, std::move(sink), rootPool_};
+
+    for (size_t i = 0; i < repeat; ++i) {
+      writer.write(batch);
+    }
+
+    writer.close();
+
+    std::string_view data(sinkPtr->getData(), sinkPtr->size());
+    auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(data);
+    auto input = std::make_unique<BufferedInput>(readFile, *leafPool_);
+
+    ReaderOptions readerOpts{leafPool_.get()};
+    RowReaderOptions rowReaderOpts;
+    auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
+    return reader->createRowReader(rowReaderOpts);
+  }
+
+  void verifyTypeStats(
+      const std::string& schema,
+      PopulateBatch populateBatch,
+      int32_t flatMapColId = -1) {
+    HiveTypeParser parser;
+    auto type = parser.parse(schema);
+
+    constexpr size_t batchSize = 1000;
+    VectorPtr childBatch;
+    auto nodeSizePerStride = populateBatch(*leafPool_, &childBatch, batchSize);
+    VectorPtr batch = std::make_shared<RowVector>(
+        leafPool_.get(),
+        type,
+        nullptr,
+        batchSize,
+        std::vector<VectorPtr>{childBatch},
+        0);
+
+    constexpr size_t repeat = 2;
+    auto rowReaderPtr =
+        writeAndGetReader(type, std::move(batch), repeat, flatMapColId);
+    auto& rowReader = dynamic_cast<DwrfRowReader&>(*rowReaderPtr);
+    const bool hasFlatMapCol = flatMapColId >= 0;
+    verifyStats(rowReader, repeat, nodeSizePerStride, hasFlatMapCol);
+  }
+
+  std::shared_ptr<MemoryPool> rootPool_;
+  std::shared_ptr<MemoryPool> leafPool_;
 };
 
 template <typename T>
@@ -219,97 +225,99 @@ VectorPtr makeFlatVector(
     size_t length,
     BufferPtr values) {
   auto flatVector = std::make_shared<FlatVector<T>>(
-      &pool, nulls, length, values, std::vector<BufferPtr>());
+      &pool,
+      CppToType<T>::create(),
+      nulls,
+      length,
+      values,
+      std::vector<BufferPtr>());
   flatVector->setNullCount(nullCount);
   return flatVector;
 }
 
 TEST_F(ColumnWriterStatsTest, Bool) {
-  auto populateBoolBatch = [](MemoryPool& pool,
-                              VectorPtr* vector,
-                              size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
-    auto* nullsPtr = nulls->asMutable<uint64_t>();
-    size_t nullCount = 0;
+  auto populateBoolBatch =
+      [](MemoryPool& pool, VectorPtr* vector, size_t size) {
+        BufferPtr nulls = allocateNulls(size, &pool);
+        auto* nullsPtr = nulls->asMutable<uint64_t>();
+        size_t nullCount = 0;
 
-    BufferPtr values = AlignedBuffer::allocate<bool>(size, &pool);
-    auto valuesPtr = values->asMutable<char>();
+        BufferPtr values = AlignedBuffer::allocate<bool>(size, &pool);
+        auto valuesPtr = values->asMutable<char>();
 
-    for (size_t i = 0; i < size; ++i) {
-      bool isNull = i & 1;
-      bits::setNull(nullsPtr, i, isNull);
-      if (isNull) {
-        ++nullCount;
-      } else {
-        bits::setBit(valuesPtr, i, static_cast<bool>(i & 2));
-      }
-    }
+        for (size_t i = 0; i < size; ++i) {
+          bool isNull = i & 1;
+          bits::setNull(nullsPtr, i, isNull);
+          if (isNull) {
+            ++nullCount;
+          } else {
+            bits::setBit(valuesPtr, i, static_cast<bool>(i & 2));
+          }
+        }
 
-    *vector = makeFlatVector<bool>(pool, nulls, nullCount, size, values);
-    return std::vector<size_t>{size, size};
-  };
-  verifyTypeStats(*pool_, "struct<bool_val:boolean>", populateBoolBatch);
+        *vector = makeFlatVector<bool>(pool, nulls, nullCount, size, values);
+        return std::vector<size_t>{size, size};
+      };
+  verifyTypeStats("struct<bool_val:boolean>", populateBoolBatch);
 }
 
 TEST_F(ColumnWriterStatsTest, TinyInt) {
-  auto populateTinyIntBatch = [](MemoryPool& pool,
-                                 VectorPtr* vector,
-                                 size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
-    auto* nullsPtr = nulls->asMutable<uint64_t>();
-    size_t nullCount = 0;
+  auto populateTinyIntBatch =
+      [](MemoryPool& pool, VectorPtr* vector, size_t size) {
+        BufferPtr nulls = allocateNulls(size, &pool);
+        auto* nullsPtr = nulls->asMutable<uint64_t>();
+        size_t nullCount = 0;
 
-    BufferPtr values = AlignedBuffer::allocate<int8_t>(size, &pool);
-    auto valuesPtr = values->asMutable<int8_t>();
+        BufferPtr values = AlignedBuffer::allocate<int8_t>(size, &pool);
+        auto valuesPtr = values->asMutable<int8_t>();
 
-    for (auto i = 0; i < size; i++) {
-      bool isNull = i & 1;
-      bits::setNull(nullsPtr, i, isNull);
-      if (isNull) {
-        ++nullCount;
-      } else {
-        valuesPtr[i] = static_cast<int8_t>(i);
-      }
-    }
+        for (auto i = 0; i < size; i++) {
+          bool isNull = i & 1;
+          bits::setNull(nullsPtr, i, isNull);
+          if (isNull) {
+            ++nullCount;
+          } else {
+            valuesPtr[i] = static_cast<int8_t>(i);
+          }
+        }
 
-    *vector = makeFlatVector<int8_t>(pool, nulls, nullCount, size, values);
-    return std::vector<size_t>{size, size};
-  };
-  verifyTypeStats(*pool_, "struct<byte_val:tinyint>", populateTinyIntBatch);
+        *vector = makeFlatVector<int8_t>(pool, nulls, nullCount, size, values);
+        return std::vector<size_t>{size, size};
+      };
+  verifyTypeStats("struct<byte_val:tinyint>", populateTinyIntBatch);
 }
 
 TEST_F(ColumnWriterStatsTest, SmallInt) {
-  auto populateSmallIntBatch = [](MemoryPool& pool,
-                                  VectorPtr* vector,
-                                  size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
-    auto* nullsPtr = nulls->asMutable<uint64_t>();
-    size_t nullCount = 0;
+  auto populateSmallIntBatch =
+      [](MemoryPool& pool, VectorPtr* vector, size_t size) {
+        BufferPtr nulls = allocateNulls(size, &pool);
+        auto* nullsPtr = nulls->asMutable<uint64_t>();
+        size_t nullCount = 0;
 
-    BufferPtr values = AlignedBuffer::allocate<int16_t>(size, &pool);
-    auto valuesPtr = values->asMutable<int16_t>();
+        BufferPtr values = AlignedBuffer::allocate<int16_t>(size, &pool);
+        auto valuesPtr = values->asMutable<int16_t>();
 
-    for (auto i = 0; i < size; i++) {
-      bool isNull = i & 1;
-      bits::setNull(nullsPtr, i, isNull);
-      if (isNull) {
-        ++nullCount;
-      } else {
-        valuesPtr[i] = static_cast<int16_t>(i);
-      }
-    }
+        for (auto i = 0; i < size; i++) {
+          bool isNull = i & 1;
+          bits::setNull(nullsPtr, i, isNull);
+          if (isNull) {
+            ++nullCount;
+          } else {
+            valuesPtr[i] = static_cast<int16_t>(i);
+          }
+        }
 
-    size_t totalSize =
-        nullCount * NULL_SIZE + (size - nullCount) * sizeof(int16_t);
-    *vector = makeFlatVector<int16_t>(pool, nulls, nullCount, size, values);
-    return std::vector<size_t>{totalSize, totalSize};
-  };
-  verifyTypeStats(*pool_, "struct<small_val:smallint>", populateSmallIntBatch);
+        size_t totalSize =
+            nullCount * NULL_SIZE + (size - nullCount) * sizeof(int16_t);
+        *vector = makeFlatVector<int16_t>(pool, nulls, nullCount, size, values);
+        return std::vector<size_t>{totalSize, totalSize};
+      };
+  verifyTypeStats("struct<small_val:smallint>", populateSmallIntBatch);
 }
 
 TEST_F(ColumnWriterStatsTest, Int) {
   auto populateIntBatch = [](MemoryPool& pool, VectorPtr* vector, size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
+    BufferPtr nulls = allocateNulls(size, &pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
     size_t nullCount = 0;
 
@@ -331,40 +339,39 @@ TEST_F(ColumnWriterStatsTest, Int) {
     *vector = makeFlatVector<int32_t>(pool, nulls, nullCount, size, values);
     return std::vector<size_t>{totalSize, totalSize};
   };
-  verifyTypeStats(*pool_, "struct<int_val:int>", populateIntBatch);
+  verifyTypeStats("struct<int_val:int>", populateIntBatch);
 }
 
 TEST_F(ColumnWriterStatsTest, Long) {
-  auto populateLongBatch = [](MemoryPool& pool,
-                              VectorPtr* vector,
-                              size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
-    auto* nullsPtr = nulls->asMutable<uint64_t>();
-    size_t nullCount = 0;
+  auto populateLongBatch =
+      [](MemoryPool& pool, VectorPtr* vector, size_t size) {
+        BufferPtr nulls = allocateNulls(size, &pool);
+        auto* nullsPtr = nulls->asMutable<uint64_t>();
+        size_t nullCount = 0;
 
-    BufferPtr values = AlignedBuffer::allocate<int64_t>(size, &pool);
-    auto valuesPtr = values->asMutable<int64_t>();
+        BufferPtr values = AlignedBuffer::allocate<int64_t>(size, &pool);
+        auto valuesPtr = values->asMutable<int64_t>();
 
-    for (auto i = 0; i < size; i++) {
-      bool isNull = i & 1;
-      bits::setNull(nullsPtr, i, isNull);
-      if (isNull) {
-        ++nullCount;
-      } else {
-        valuesPtr[i] = static_cast<int64_t>(i);
-      }
-    }
+        for (auto i = 0; i < size; i++) {
+          bool isNull = i & 1;
+          bits::setNull(nullsPtr, i, isNull);
+          if (isNull) {
+            ++nullCount;
+          } else {
+            valuesPtr[i] = static_cast<int64_t>(i);
+          }
+        }
 
-    size_t totalSize =
-        nullCount * NULL_SIZE + (size - nullCount) * sizeof(int64_t);
-    *vector = makeFlatVector<int64_t>(pool, nulls, nullCount, size, values);
-    return std::vector<size_t>{totalSize, totalSize};
-  };
-  verifyTypeStats(*pool_, "struct<long_val:bigint>", populateLongBatch);
+        size_t totalSize =
+            nullCount * NULL_SIZE + (size - nullCount) * sizeof(int64_t);
+        *vector = makeFlatVector<int64_t>(pool, nulls, nullCount, size, values);
+        return std::vector<size_t>{totalSize, totalSize};
+      };
+  verifyTypeStats("struct<long_val:bigint>", populateLongBatch);
 }
 
 auto populateFloatBatch = [](MemoryPool& pool, VectorPtr* vector, size_t size) {
-  BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
+  BufferPtr nulls = allocateNulls(size, &pool);
   auto* nullsPtr = nulls->asMutable<uint64_t>();
   size_t nullCount = 0;
 
@@ -387,40 +394,38 @@ auto populateFloatBatch = [](MemoryPool& pool, VectorPtr* vector, size_t size) {
 };
 
 TEST_F(ColumnWriterStatsTest, Float) {
-  verifyTypeStats(*pool_, "struct<float_val:float>", populateFloatBatch);
+  verifyTypeStats("struct<float_val:float>", populateFloatBatch);
 }
 
 TEST_F(ColumnWriterStatsTest, Double) {
-  auto populateDoubleBatch = [](MemoryPool& pool,
-                                VectorPtr* vector,
-                                size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
-    auto* nullsPtr = nulls->asMutable<uint64_t>();
-    size_t nullCount = 0;
+  auto populateDoubleBatch =
+      [](MemoryPool& pool, VectorPtr* vector, size_t size) {
+        BufferPtr nulls = allocateNulls(size, &pool);
+        auto* nullsPtr = nulls->asMutable<uint64_t>();
+        size_t nullCount = 0;
 
-    BufferPtr values = AlignedBuffer::allocate<double>(size, &pool);
-    auto valuesPtr = values->asMutable<double>();
+        BufferPtr values = AlignedBuffer::allocate<double>(size, &pool);
+        auto valuesPtr = values->asMutable<double>();
 
-    for (auto i = 0; i < size; i++) {
-      bool isNull = i & 1;
-      bits::setNull(nullsPtr, i, isNull);
-      if (isNull) {
-        ++nullCount;
-      } else {
-        valuesPtr[i] = static_cast<double>(i);
-      }
-    }
+        for (auto i = 0; i < size; i++) {
+          bool isNull = i & 1;
+          bits::setNull(nullsPtr, i, isNull);
+          if (isNull) {
+            ++nullCount;
+          } else {
+            valuesPtr[i] = static_cast<double>(i);
+          }
+        }
 
-    size_t totalSize =
-        nullCount * NULL_SIZE + (size - nullCount) * sizeof(double);
-    *vector = makeFlatVector<double>(pool, nulls, nullCount, size, values);
-    return std::vector<size_t>{totalSize, totalSize};
-  };
-  verifyTypeStats(*pool_, "struct<long_val:double>", populateDoubleBatch);
+        size_t totalSize =
+            nullCount * NULL_SIZE + (size - nullCount) * sizeof(double);
+        *vector = makeFlatVector<double>(pool, nulls, nullCount, size, values);
+        return std::vector<size_t>{totalSize, totalSize};
+      };
+  verifyTypeStats("struct<long_val:double>", populateDoubleBatch);
 }
 
-TEST(ColumnWriterStats, String) {
-  auto pool = getDefaultMemoryPool();
+TEST_F(ColumnWriterStatsTest, String) {
   auto populateStringBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         std::mt19937 gen{};
@@ -437,11 +442,10 @@ TEST(ColumnWriterStats, String) {
         }
         return std::vector<size_t>{totalSize, totalSize};
       };
-  verifyTypeStats(*pool, "struct<string_val:string>", populateStringBatch);
+  verifyTypeStats("struct<string_val:string>", populateStringBatch);
 }
 
-TEST(ColumnWriterStats, Binary) {
-  auto pool = getDefaultMemoryPool();
+TEST_F(ColumnWriterStatsTest, Binary) {
   auto populateBinaryBatch =
       [](MemoryPool& pool, VectorPtr* vector, size_t size) {
         std::mt19937 gen{};
@@ -458,14 +462,14 @@ TEST(ColumnWriterStats, Binary) {
         }
         return std::vector<size_t>{totalSize, totalSize};
       };
-  verifyTypeStats(*pool, "struct<binary_val:binary>", populateBinaryBatch);
+  verifyTypeStats("struct<binary_val:binary>", populateBinaryBatch);
 }
 
 TEST_F(ColumnWriterStatsTest, Timestamp) {
   auto populateTimestampBatch = [](MemoryPool& pool,
                                    VectorPtr* vector,
                                    size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
+    BufferPtr nulls = allocateNulls(size, &pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
     size_t nullCount = 0;
 
@@ -487,22 +491,21 @@ TEST_F(ColumnWriterStatsTest, Timestamp) {
     *vector = makeFlatVector<Timestamp>(pool, nulls, nullCount, size, values);
     return std::vector<size_t>{totalSize, totalSize};
   };
-  verifyTypeStats(
-      *pool_, "struct<timestamp_val:timestamp>", populateTimestampBatch);
+  verifyTypeStats("struct<timestamp_val:timestamp>", populateTimestampBatch);
 }
 
 TEST_F(ColumnWriterStatsTest, List) {
   auto populateListBatch = [](MemoryPool& pool,
                               VectorPtr* vector,
                               size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
+    BufferPtr nulls = allocateNulls(size, &pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
     size_t nullCount = 0;
 
-    auto offsets = AlignedBuffer::allocate<vector_size_t>(size, &pool);
+    auto offsets = allocateOffsets(size, &pool);
     auto* offsetsPtr = offsets->asMutable<vector_size_t>();
 
-    auto lengths = AlignedBuffer::allocate<vector_size_t>(size, &pool);
+    auto lengths = allocateSizes(size, &pool);
     auto* lengthsPtr = lengths->asMutable<vector_size_t>();
 
     size_t childSize = 0;
@@ -534,19 +537,19 @@ TEST_F(ColumnWriterStatsTest, List) {
     size_t totalSize = nullCount * NULL_SIZE + nodeSizePerStride.at(0);
     return std::vector<size_t>{totalSize, totalSize, nodeSizePerStride.at(0)};
   };
-  verifyTypeStats(*pool_, "struct<array_val:array<float>>", populateListBatch);
+  verifyTypeStats("struct<array_val:array<float>>", populateListBatch);
 }
 
 TEST_F(ColumnWriterStatsTest, Map) {
   auto populateMapBatch = [](MemoryPool& pool, VectorPtr* vector, size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
+    BufferPtr nulls = allocateNulls(size, &pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
     size_t nullCount = 0;
 
-    auto offsets = AlignedBuffer::allocate<vector_size_t>(size, &pool);
+    auto offsets = allocateOffsets(size, &pool);
     auto* offsetsPtr = offsets->asMutable<vector_size_t>();
 
-    auto lengths = AlignedBuffer::allocate<vector_size_t>(size, &pool);
+    auto lengths = allocateSizes(size, &pool);
     auto* lengthsPtr = lengths->asMutable<vector_size_t>();
 
     size_t childSize = 0;
@@ -586,66 +589,60 @@ TEST_F(ColumnWriterStatsTest, Map) {
     size_t totalSize = nullCount * NULL_SIZE + keySize + valueSize;
     return std::vector<size_t>{totalSize, totalSize, keySize, valueSize};
   };
-  verifyTypeStats(*pool_, "struct<map_val:map<int,float>>", populateMapBatch);
+  verifyTypeStats("struct<map_val:map<int,float>>", populateMapBatch);
   const uint32_t FLAT_MAP_COL_ID = 0;
   verifyTypeStats(
-      *pool_,
-      "struct<map_val:map<int,float>>",
-      populateMapBatch,
-      FLAT_MAP_COL_ID);
+      "struct<map_val:map<int,float>>", populateMapBatch, FLAT_MAP_COL_ID);
 }
 
 TEST_F(ColumnWriterStatsTest, Struct) {
-  auto populateStructBatch = [](MemoryPool& pool,
-                                VectorPtr* vector,
-                                size_t size) {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
-    auto* nullsPtr = nulls->asMutable<uint64_t>();
-    size_t nullCount = 0;
+  auto populateStructBatch =
+      [](MemoryPool& pool, VectorPtr* vector, size_t size) {
+        BufferPtr nulls = allocateNulls(size, &pool);
+        auto* nullsPtr = nulls->asMutable<uint64_t>();
+        size_t nullCount = 0;
 
-    for (auto i = 0; i < size; i++) {
-      bool isNull = i & 1;
-      bits::setNull(nullsPtr, i, isNull);
-      if (isNull) {
-        ++nullCount;
-      }
-    }
-
-    // set 0 for node 0 and node 1 size and backfill it after computing child
-    // node sizes.
-    std::vector<size_t> nodeSizePerStride = {0, 0};
-    std::vector<VectorPtr> children;
-    for (auto child = 0; child < 2; child++) {
-      VectorPtr childVector;
-      populateFloatBatch(pool, &childVector, size);
-      children.push_back(childVector);
-
-      size_t floatBatchSize = 0;
-      for (auto i = 0; i < size; i++) {
-        // Count only float sizes, when struct is not null.
-        if (!bits::isBitNull(nullsPtr, i)) {
-          floatBatchSize +=
-              childVector->isNullAt(i) ? NULL_SIZE : sizeof(float);
+        for (auto i = 0; i < size; i++) {
+          bool isNull = i & 1;
+          bits::setNull(nullsPtr, i, isNull);
+          if (isNull) {
+            ++nullCount;
+          }
         }
-      }
-      nodeSizePerStride.push_back(floatBatchSize);
-    }
-    *vector = std::make_shared<RowVector>(
-        &pool,
-        CppToType<Row<float, float>>::create(),
-        nulls,
-        size,
-        children,
-        nullCount);
-    nodeSizePerStride.at(0) =
-        nullCount + nodeSizePerStride.at(2) + nodeSizePerStride.at(3);
-    nodeSizePerStride.at(1) =
-        nullCount + nodeSizePerStride.at(2) + nodeSizePerStride.at(3);
 
-    return nodeSizePerStride;
-  };
+        // set 0 for node 0 and node 1 size and backfill it after computing
+        // child node sizes.
+        std::vector<size_t> nodeSizePerStride = {0, 0};
+        std::vector<VectorPtr> children;
+        for (auto child = 0; child < 2; child++) {
+          VectorPtr childVector;
+          populateFloatBatch(pool, &childVector, size);
+          children.push_back(childVector);
+
+          size_t floatBatchSize = 0;
+          for (auto i = 0; i < size; i++) {
+            // Count only float sizes, when struct is not null.
+            if (!bits::isBitNull(nullsPtr, i)) {
+              floatBatchSize +=
+                  childVector->isNullAt(i) ? NULL_SIZE : sizeof(float);
+            }
+          }
+          nodeSizePerStride.push_back(floatBatchSize);
+        }
+        *vector = std::make_shared<RowVector>(
+            &pool,
+            CppToType<Row<float, float>>::create(),
+            nulls,
+            size,
+            children,
+            nullCount);
+        nodeSizePerStride.at(0) =
+            nullCount + nodeSizePerStride.at(2) + nodeSizePerStride.at(3);
+        nodeSizePerStride.at(1) =
+            nullCount + nodeSizePerStride.at(2) + nodeSizePerStride.at(3);
+
+        return nodeSizePerStride;
+      };
   verifyTypeStats(
-      *pool_,
-      "struct<struct_val:struct<a:float,b:float>>",
-      populateStructBatch);
+      "struct<struct_val:struct<a:float,b:float>>", populateStructBatch);
 }

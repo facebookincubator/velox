@@ -76,15 +76,6 @@ Date getLiteralValue(const ::substrait::Expression::Literal& literal) {
   return Date(literal.date());
 }
 
-template <>
-IntervalDayTime getLiteralValue(
-    const ::substrait::Expression::Literal& literal) {
-  const auto& interval = literal.interval_day_to_second();
-  int64_t milliseconds = interval.days() * kMillisInDay +
-      interval.seconds() * kMillisInSecond + interval.microseconds() / 1000;
-  return IntervalDayTime(milliseconds);
-}
-
 ArrayVectorPtr makeArrayVector(const VectorPtr& elements) {
   BufferPtr offsets = allocateOffsets(1, elements->pool());
   BufferPtr sizes = allocateOffsets(1, elements->pool());
@@ -145,6 +136,24 @@ VectorPtr constructFlatVector(
   return vector;
 }
 
+/// Whether null will be returned on cast failure.
+bool isNullOnFailure(
+    ::substrait::Expression::Cast::FailureBehavior failureBehavior) {
+  switch (failureBehavior) {
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
+      return false;
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL:
+      return true;
+    default:
+      VELOX_NYI(
+          "The given failure behavior is NOT supported: '{}'", failureBehavior);
+  }
+}
+
 } // namespace
 
 namespace facebook::velox::substrait {
@@ -202,30 +211,30 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   switch (typeCase) {
     case ::substrait::Expression_Literal::LiteralTypeCase::kBoolean:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.boolean()));
+          BOOLEAN(), variant(substraitLit.boolean()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI8:
       // SubstraitLit.i8() will return int32, so we need this type conversion.
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(static_cast<int8_t>(substraitLit.i8())));
+          TINYINT(), variant(static_cast<int8_t>(substraitLit.i8())));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI16:
       // SubstraitLit.i16() will return int32, so we need this type conversion.
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(static_cast<int16_t>(substraitLit.i16())));
+          SMALLINT(), variant(static_cast<int16_t>(substraitLit.i16())));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI32:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.i32()));
+          INTEGER(), variant(substraitLit.i32()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kFp32:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.fp32()));
+          REAL(), variant(substraitLit.fp32()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI64:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.i64()));
+          BIGINT(), variant(substraitLit.i64()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kFp64:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.fp64()));
+          DOUBLE(), variant(substraitLit.fp64()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kString:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.string()));
+          VARCHAR(), variant(substraitLit.string()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
       auto veloxType =
           toVeloxType(substraitParser_.parseType(substraitLit.null())->type);
@@ -234,12 +243,15 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     }
     case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.var_char().value()));
+          VARCHAR(), variant(substraitLit.var_char().value()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kList: {
       auto constantVector =
           BaseVector::wrapInConstant(1, 0, literalsToArrayVector(substraitLit));
       return std::make_shared<const core::ConstantTypedExpr>(constantVector);
     }
+    case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
+      return std::make_shared<core::ConstantTypedExpr>(
+          DATE(), variant(Date(substraitLit.date())));
     default:
       VELOX_NYI(
           "Substrait conversion not supported for type case '{}'", typeCase);
@@ -293,7 +305,7 @@ ArrayVectorPtr SubstraitVeloxExprConverter::literalsToArrayVector(
       return makeArrayVector(constructFlatVector<TypeKind::TIMESTAMP>(
           listLiteral, childSize, TIMESTAMP(), pool_));
     case ::substrait::Expression_Literal::LiteralTypeCase::kIntervalDayToSecond:
-      return makeArrayVector(constructFlatVector<TypeKind::INTERVAL_DAY_TIME>(
+      return makeArrayVector(constructFlatVector<TypeKind::BIGINT>(
           listLiteral, childSize, INTERVAL_DAY_TIME(), pool_));
     case ::substrait::Expression_Literal::LiteralTypeCase::kList: {
       VectorPtr elements;
@@ -319,8 +331,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     const RowTypePtr& inputType) {
   auto substraitType = substraitParser_.parseType(castExpr.type());
   auto type = toVeloxType(substraitType->type);
-  // TODO add flag in substrait after. now is set false.
-  bool nullOnFailure = false;
+  bool nullOnFailure = isNullOnFailure(castExpr.failure_behavior());
 
   std::vector<core::TypedExprPtr> inputs{
       toVeloxExpr(castExpr.input(), inputType)};

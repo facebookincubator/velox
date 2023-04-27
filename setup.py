@@ -27,10 +27,14 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
 from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
 ROOT_DIR = Path(__file__).parent.resolve()
+
+with open("pyvelox/README.md") as f:
+    readme = f.read()
 
 
 # Override build directory
@@ -125,7 +129,6 @@ class CMakeBuild(build_ext):
             "-DVELOX_BUILD_PYTHON_PACKAGE=ON",
             f"-DPYTHON_EXECUTABLE={exec_path} ",
             "-DVELOX_CODEGEN_SUPPORT=OFF",
-            "-DVELOX_BUILD_MINIMAL=ON",
         ]
         build_args = []
 
@@ -158,10 +161,12 @@ setup(
     name="pyvelox",
     version=VERSION,
     description="Python bindings and extensions for Velox",
+    long_description=readme,
+    long_description_content_type="text/markdown",
     url="https://github.com/facebookincubator/velox",
     author="Meta",
     author_email="velox@fb.com",
-    license="BSD",
+    license="Apache License 2.0",
     install_requires=[
         "cffi",
         "typing",
@@ -172,7 +177,7 @@ setup(
     classifiers=[
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: BSD License",
+        "License :: OSI Approved :: Apache Software License",
         "Operating System :: POSIX :: Linux",
         "Programming Language :: C++",
         "Programming Language :: Python :: 3.7",

@@ -40,7 +40,7 @@ class E2EFilterTest : public E2EFilterTestBase {
       bool wrapInStruct,
       const std::vector<std::string>& filterable,
       int32_t numCombinations) {
-    testSenario(columns, customize, wrapInStruct, filterable, numCombinations);
+    testScenario(columns, customize, wrapInStruct, filterable, numCombinations);
 
     // Always test no null case.
     auto newCustomize = [&]() {
@@ -49,7 +49,7 @@ class E2EFilterTest : public E2EFilterTestBase {
       }
       makeNotNull(0);
     };
-    testSenario(
+    testScenario(
         columns, newCustomize, wrapInStruct, filterable, numCombinations);
   }
 
@@ -57,11 +57,11 @@ class E2EFilterTest : public E2EFilterTestBase {
       const TypePtr&,
       const std::vector<RowVectorPtr>& batches,
       bool /*forRowGroupSkip*/) override {
-    auto sink = std::make_unique<MemorySink>(*pool_, 200 * 1024 * 1024);
+    auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
     sinkPtr_ = sink.get();
 
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), *pool_, rowGroupSize_, writerProperties_);
+        std::move(sink), *leafPool_, rowGroupSize_, writerProperties_);
     for (auto& batch : batches) {
       writer_->write(batch);
     }
@@ -83,12 +83,22 @@ TEST_F(E2EFilterTest, writerMagic) {
   rowType_ = ROW({INTEGER()});
   std::vector<RowVectorPtr> batches;
   batches.push_back(std::static_pointer_cast<RowVector>(
-      test::BatchMaker::createBatch(rowType_, 20000, *pool_, nullptr, 0)));
+      test::BatchMaker::createBatch(rowType_, 20000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
   auto data = sinkPtr_->getData();
   auto size = sinkPtr_->size();
   EXPECT_EQ("PAR1", std::string(data, 4));
   EXPECT_EQ("PAR1", std::string(data + size - 4, 4));
+}
+
+TEST_F(E2EFilterTest, boolean) {
+  testWithTypes(
+      "boolean_val:boolean,"
+      "boolean_null:boolean",
+      [&]() { makeAllNulls("boolean_null"); },
+      true,
+      {"boolean_val"},
+      20);
 }
 
 TEST_F(E2EFilterTest, integerDirect) {
@@ -266,12 +276,12 @@ TEST_F(E2EFilterTest, shortDecimalDictionary) {
         [&]() {
           makeIntDistribution<UnscaledShortDecimal>(
               "shortdecimal_val",
-              UnscaledShortDecimal(10), // min
-              UnscaledShortDecimal(100), // max
+              10, // min
+              100, // max
               22, // repeats
               19, // rareFrequency
-              UnscaledShortDecimal(-999), // rareMin
-              UnscaledShortDecimal(30000), // rareMax
+              -999, // rareMin
+              30000, // rareMax
               true);
         },
         false,
@@ -296,12 +306,12 @@ TEST_F(E2EFilterTest, shortDecimalDirect) {
         [&]() {
           makeIntDistribution<UnscaledShortDecimal>(
               "shortdecimal_val",
-              UnscaledShortDecimal(10), // min
-              UnscaledShortDecimal(100), // max
+              10, // min
+              100, // max
               22, // repeats
               19, // rareFrequency
-              UnscaledShortDecimal(-999), // rareMin
-              UnscaledShortDecimal(30000), // rareMax
+              -999, // rareMin
+              30000, // rareMax
               true);
         },
         false,
@@ -334,12 +344,12 @@ TEST_F(E2EFilterTest, longDecimalDictionary) {
         [&]() {
           makeIntDistribution<UnscaledLongDecimal>(
               "longdecimal_val",
-              UnscaledLongDecimal(10), // min
-              UnscaledLongDecimal(100), // max
+              10, // min
+              100, // max
               22, // repeats
               19, // rareFrequency
-              UnscaledLongDecimal(-999), // rareMin
-              UnscaledLongDecimal(30000), // rareMax
+              -999, // rareMin
+              30000, // rareMax
               true);
         },
         true,
@@ -364,12 +374,12 @@ TEST_F(E2EFilterTest, longDecimalDirect) {
         [&]() {
           makeIntDistribution<UnscaledLongDecimal>(
               "longdecimal_val",
-              UnscaledLongDecimal(10), // min
-              UnscaledLongDecimal(100), // max
+              10, // min
+              100, // max
               22, // repeats
               19, // rareFrequency
-              UnscaledLongDecimal(-999), // rareMin
-              UnscaledLongDecimal(30000), // rareMax
+              -999, // rareMin
+              30000, // rareMax
               true);
         },
         true,
@@ -480,6 +490,14 @@ TEST_F(E2EFilterTest, metadataFilter) {
   testMetadataFilter();
 }
 
+TEST_F(E2EFilterTest, subfieldsPruning) {
+  testSubfieldsPruning();
+}
+
+TEST_F(E2EFilterTest, mutationCornerCases) {
+  testMutationCornerCases();
+}
+
 TEST_F(E2EFilterTest, map) {
   // Break up the leaf data in small pages to cover coalescing repdefs.
   writerProperties_ =
@@ -495,6 +513,58 @@ TEST_F(E2EFilterTest, map) {
       false,
       {"long_val", "map_val"},
       10);
+}
+
+TEST_F(E2EFilterTest, varbinaryDirect) {
+  writerProperties_ = ::parquet::WriterProperties::Builder()
+                          .disable_dictionary()
+                          ->data_pagesize(4 * 1024)
+                          ->build();
+
+  testWithTypes(
+      "varbinary_val:varbinary,"
+      "varbinary_val_2:varbinary",
+      [&]() {
+        makeStringUnique("varbinary_val");
+        makeStringUnique("varbinary_val_2");
+      },
+      true,
+      {"varbinary_val", "varbinary_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, varbinaryDictionary) {
+  testWithTypes(
+      "varbinary_val:varbinary,"
+      "varbinary_val_2:varbinary,"
+      "varbinary_const:varbinary",
+      [&]() {
+        makeStringDistribution("varbinary_val", 100, true, false);
+        makeStringDistribution("varbinary_val_2", 170, false, true);
+        makeStringDistribution("varbinary_const", 1, true, false);
+      },
+      true,
+      {"varbinary_val", "varbinary_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, largeMetadata) {
+  writerProperties_ =
+      ::parquet::WriterProperties::Builder().max_row_group_length(1)->build();
+  rowType_ = ROW({INTEGER()});
+  std::vector<RowVectorPtr> batches;
+  batches.push_back(std::static_pointer_cast<RowVector>(
+      test::BatchMaker::createBatch(rowType_, 1000, *leafPool_, nullptr, 0)));
+  writeToMemory(rowType_, batches, false);
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setDirectorySizeGuess(1024);
+  readerOpts.setFilePreloadThreshold(1024 * 8);
+  dwio::common::RowReaderOptions rowReaderOpts;
+  std::string_view data(sinkPtr_->getData(), sinkPtr_->size());
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
+  auto reader = makeReader(readerOpts, std::move(input));
+  EXPECT_EQ(1000, reader->numberOfRows());
 }
 
 // Define main so that gflags get processed.

@@ -138,6 +138,7 @@ class ParquetData : public dwio::common::FormatData {
       reader_->skipNullsOnly(numValues);
     }
     if (presetNulls_) {
+      VELOX_DCHECK_LE(numValues, presetNullsSize_ - presetNullsConsumed_);
       presetNullsConsumed_ += numValues;
     }
     return numValues;
@@ -155,8 +156,8 @@ class ParquetData : public dwio::common::FormatData {
     reader_->readWithVisitor(visitor);
   }
 
-  const VectorPtr& dictionaryValues() {
-    return reader_->dictionaryValues();
+  const VectorPtr& dictionaryValues(const TypePtr& type) {
+    return reader_->dictionaryValues(type);
   }
 
   void clearDictionary() {

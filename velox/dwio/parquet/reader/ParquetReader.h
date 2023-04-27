@@ -25,9 +25,6 @@
 
 namespace facebook::velox::parquet {
 
-constexpr uint64_t DIRECTORY_SIZE_GUESS = 1024 * 1024;
-constexpr uint64_t FILE_PRELOAD_THRESHOLD = 1024 * 1024 * 8;
-
 enum class ParquetMetricsType { HEADER, FILE_METADATA, FILE, BLOCK, TEST };
 
 class StructColumnReader;
@@ -103,6 +100,8 @@ class ReaderBase {
           children);
 
   memory::MemoryPool& pool_;
+  const uint64_t directorySizeGuess_;
+  const uint64_t filePreloadThreshold_;
   const dwio::common::ReaderOptions& options_;
   std::unique_ptr<velox::dwio::common::BufferedInput> input_;
   uint64_t fileLength_;
@@ -125,7 +124,14 @@ class ParquetRowReader : public dwio::common::RowReader {
       const dwio::common::RowReaderOptions& options);
   ~ParquetRowReader() override = default;
 
-  uint64_t next(uint64_t size, velox::VectorPtr& result) override;
+  int64_t nextRowNumber() override;
+
+  int64_t nextReadSize(uint64_t size) override;
+
+  uint64_t next(
+      uint64_t size,
+      velox::VectorPtr& result,
+      const dwio::common::Mutation* = nullptr) override;
 
   void updateRuntimeStats(
       dwio::common::RuntimeStatistics& stats) const override;
@@ -136,6 +142,11 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   const dwio::common::RowReaderOptions& getOptions() {
     return options_;
+  }
+
+  bool allPrefetchIssued() const override {
+    //  Allow opening the next split while this is reading.
+    return true;
   }
 
  private:
@@ -156,7 +167,8 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   // Indices of row groups where stats match filters.
   std::vector<uint32_t> rowGroupIds_;
-  uint32_t currentRowGroupIdsIdx_;
+  std::vector<uint64_t> firstRowOfRowGroup_;
+  uint32_t nextRowGroupIdsIdx_;
   const thrift::RowGroup* FOLLY_NULLABLE currentRowGroupPtr_{nullptr};
   uint64_t rowsInCurrentRowGroup_;
   uint64_t currentRowInGroup_;

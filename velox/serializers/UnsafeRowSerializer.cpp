@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/serializers/UnsafeRowSerializer.h"
-#include "velox/row/UnsafeRowDeserializer.h"
-#include "velox/row/UnsafeRowDynamicSerializer.h"
+#include "velox/row/UnsafeRowDeserializers.h"
+#include "velox/row/UnsafeRowSerializers.h"
 
 namespace facebook::velox::serializer::spark {
 
@@ -33,13 +33,12 @@ class UnsafeRowVectorSerializer : public VectorSerializer {
       : pool_{streamArena->pool()} {}
 
   void append(
-      RowVectorPtr vector,
+      const RowVectorPtr& vector,
       const folly::Range<const IndexRange*>& ranges) override {
     size_t totalSize = 0;
     for (auto& range : ranges) {
       for (auto i = range.begin; i < range.begin + range.size; ++i) {
-        auto rowSize = velox::row::UnsafeRowDynamicSerializer::getSizeRow(
-            vector->type(), vector.get(), i);
+        auto rowSize = row::UnsafeRowSerializer::getSizeRow(vector.get(), i);
         totalSize += rowSize + sizeof(size_t);
       }
     }
@@ -56,12 +55,10 @@ class UnsafeRowVectorSerializer : public VectorSerializer {
     for (auto& range : ranges) {
       for (auto i = range.begin; i < range.begin + range.size; ++i) {
         // Write row data.
-        auto rowSize = velox::row::UnsafeRowDynamicSerializer::getSizeRow(
-            vector->type(), vector.get(), i);
-        auto size =
-            velox::row::UnsafeRowDynamicSerializer::serialize(
-                vector->type(), vector, buffer + offset + sizeof(size_t), i)
-                .value_or(0);
+        auto rowSize = row::UnsafeRowSerializer::getSizeRow(vector.get(), i);
+        auto size = row::UnsafeRowSerializer::serialize(
+                        vector, buffer + offset + sizeof(size_t), i)
+                        .value_or(0);
 
         // Sanity check.
         VELOX_CHECK_EQ(rowSize, size);
@@ -116,7 +113,7 @@ void UnsafeRowVectorSerde::deserialize(
   }
 
   *result = std::dynamic_pointer_cast<RowVector>(
-      velox::row::UnsafeRowDynamicVectorDeserializer::deserializeComplex(
+      velox::row::UnsafeRowDeserializer::deserialize(
           serializedRows, type, pool));
 }
 

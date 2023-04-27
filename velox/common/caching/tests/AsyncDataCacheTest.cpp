@@ -254,6 +254,14 @@ class TestingCoalescedLoad : public CoalescedLoad {
     return pins;
   }
 
+  int64_t size() const override {
+    int64_t sum = 0;
+    for (auto& request : requests_) {
+      sum += request.size;
+    }
+    return sum;
+  }
+
  protected:
   std::shared_ptr<AsyncDataCache> cache_;
   std::vector<Request> requests_;
@@ -543,6 +551,8 @@ TEST_F(AsyncDataCacheTest, replace) {
     executor_->join();
   }
   auto stats = cache_->refreshStats();
+  EXPECT_LT(0, stats.numHit);
+  EXPECT_LT(0, stats.hitBytes);
   EXPECT_LT(0, stats.numEvict);
   EXPECT_GE(
       kMaxBytes / memory::AllocationTraits::kPageSize,

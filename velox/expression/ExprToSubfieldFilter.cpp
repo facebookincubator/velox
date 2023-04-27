@@ -27,16 +27,22 @@ namespace {
 VectorPtr toConstant(
     const core::TypedExprPtr& expr,
     const std::shared_ptr<core::QueryCtx>& queryCtx) {
+  static auto pool = memory::addDefaultLeafMemoryPool();
   auto data = std::make_shared<RowVector>(
-      queryCtx->pool(), ROW({}, {}), nullptr, 1, std::vector<VectorPtr>{});
-  core::ExecCtx execCtx{queryCtx->pool(), queryCtx.get()};
+      pool.get(), ROW({}, {}), nullptr, 1, std::vector<VectorPtr>{});
+  core::ExecCtx execCtx{pool.get(), queryCtx.get()};
   ExprSet exprSet({expr}, &execCtx);
+  if (!exprSet.exprs()[0]->isConstant()) {
+    return nullptr;
+  }
   EvalCtx evalCtx(&execCtx, &exprSet, data.get());
-
   SelectivityVector rows(1);
   std::vector<VectorPtr> results(1);
-  exprSet.eval(rows, evalCtx, results);
-
+  try {
+    exprSet.eval(rows, evalCtx, results);
+  } catch (const VeloxUserError&) {
+    return nullptr;
+  }
   return results[0];
 }
 
@@ -58,7 +64,9 @@ const core::CallTypedExpr* asCall(const core::ITypedExpr* expr) {
   return dynamic_cast<const core::CallTypedExpr*>(expr);
 }
 
-common::Subfield toSubfield(const core::FieldAccessTypedExpr* field) {
+bool toSubfield(
+    const core::FieldAccessTypedExpr* field,
+    common::Subfield& subfield) {
   std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
   for (auto* current = field;;) {
     path.push_back(
@@ -66,23 +74,21 @@ common::Subfield toSubfield(const core::FieldAccessTypedExpr* field) {
     if (current->inputs().empty()) {
       break;
     }
-    VELOX_CHECK_EQ(
-        current->inputs().size(),
-        1,
-        "Cannot convert to subfield: {}",
-        field->toString());
+    if (current->inputs().size() != 1) {
+      return false;
+    }
     auto* parent = current->inputs()[0].get();
     current = dynamic_cast<const core::FieldAccessTypedExpr*>(parent);
     if (!current) {
-      VELOX_CHECK_NOT_NULL(
-          dynamic_cast<const core::InputTypedExpr*>(parent),
-          "Cannot convert to subfield: {}",
-          field->toString());
+      if (!dynamic_cast<const core::InputTypedExpr*>(parent)) {
+        return false;
+      }
       break;
     }
   }
   std::reverse(path.begin(), path.end());
-  return common::Subfield(std::move(path));
+  subfield = common::Subfield(std::move(path));
+  return true;
 }
 
 common::BigintRange* asBigintRange(std::unique_ptr<common::Filter>& filter) {
@@ -136,6 +142,9 @@ std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
     const core::TypedExprPtr& upperExpr) {
   auto queryCtx = std::make_shared<core::QueryCtx>();
   auto upper = toConstant(upperExpr, queryCtx);
+  if (!upper) {
+    return nullptr;
+  }
   switch (upper->typeKind()) {
     case TypeKind::TINYINT:
       return lessThanOrEqual(singleValue<int8_t>(upper));
@@ -153,11 +162,11 @@ std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
       return lessThanOrEqual(singleValue<StringView>(upper));
     case TypeKind::DATE:
       return lessThanOrEqual(singleValue<Date>(upper).days());
+    case TypeKind::SHORT_DECIMAL:
+      return lessThanOrEqual(
+          singleValue<UnscaledShortDecimal>(upper).unscaledValue());
     default:
-      VELOX_UNSUPPORTED(
-          "Unsupported value for less than or equals filter: {} <= {}",
-          upper->type()->toString(),
-          upper->toString(0));
+      return nullptr;
   }
 }
 
@@ -165,6 +174,9 @@ std::unique_ptr<common::Filter> makeLessThanFilter(
     const core::TypedExprPtr& upperExpr) {
   auto queryCtx = std::make_shared<core::QueryCtx>();
   auto upper = toConstant(upperExpr, queryCtx);
+  if (!upper) {
+    return nullptr;
+  }
   switch (upper->typeKind()) {
     case TypeKind::TINYINT:
       return lessThan(singleValue<int8_t>(upper));
@@ -182,11 +194,10 @@ std::unique_ptr<common::Filter> makeLessThanFilter(
       return lessThan(singleValue<StringView>(upper));
     case TypeKind::DATE:
       return lessThan(singleValue<Date>(upper).days());
+    case TypeKind::SHORT_DECIMAL:
+      return lessThan(singleValue<UnscaledShortDecimal>(upper).unscaledValue());
     default:
-      VELOX_UNSUPPORTED(
-          "Unsupported value for less than filter: {} < {}",
-          upper->type()->toString(),
-          upper->toString(0));
+      return nullptr;
   }
 }
 
@@ -194,6 +205,9 @@ std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
     const core::TypedExprPtr& lowerExpr) {
   auto queryCtx = std::make_shared<core::QueryCtx>();
   auto lower = toConstant(lowerExpr, queryCtx);
+  if (!lower) {
+    return nullptr;
+  }
   switch (lower->typeKind()) {
     case TypeKind::TINYINT:
       return greaterThanOrEqual(singleValue<int8_t>(lower));
@@ -211,11 +225,11 @@ std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
       return greaterThanOrEqual(singleValue<StringView>(lower));
     case TypeKind::DATE:
       return greaterThanOrEqual(singleValue<Date>(lower).days());
+    case TypeKind::SHORT_DECIMAL:
+      return greaterThanOrEqual(
+          singleValue<UnscaledShortDecimal>(lower).unscaledValue());
     default:
-      VELOX_UNSUPPORTED(
-          "Unsupported value for greater than or equals filter: {} >= {}",
-          lower->type()->toString(),
-          lower->toString(0));
+      return nullptr;
   }
 }
 
@@ -223,6 +237,9 @@ std::unique_ptr<common::Filter> makeGreaterThanFilter(
     const core::TypedExprPtr& lowerExpr) {
   auto queryCtx = std::make_shared<core::QueryCtx>();
   auto lower = toConstant(lowerExpr, queryCtx);
+  if (!lower) {
+    return nullptr;
+  }
   switch (lower->typeKind()) {
     case TypeKind::TINYINT:
       return greaterThan(singleValue<int8_t>(lower));
@@ -240,11 +257,11 @@ std::unique_ptr<common::Filter> makeGreaterThanFilter(
       return greaterThan(singleValue<StringView>(lower));
     case TypeKind::DATE:
       return greaterThan(singleValue<Date>(lower).days());
+    case TypeKind::SHORT_DECIMAL:
+      return greaterThan(
+          singleValue<UnscaledShortDecimal>(lower).unscaledValue());
     default:
-      VELOX_UNSUPPORTED(
-          "Unsupported value for greater than filter: {} > {}",
-          lower->type()->toString(),
-          lower->toString(0));
+      return nullptr;
   }
 }
 
@@ -252,6 +269,9 @@ std::unique_ptr<common::Filter> makeEqualFilter(
     const core::TypedExprPtr& valueExpr) {
   auto queryCtx = std::make_shared<core::QueryCtx>();
   auto value = toConstant(valueExpr, queryCtx);
+  if (!value) {
+    return nullptr;
+  }
   switch (value->typeKind()) {
     case TypeKind::BOOLEAN:
       return boolEqual(singleValue<bool>(value));
@@ -267,11 +287,10 @@ std::unique_ptr<common::Filter> makeEqualFilter(
       return equal(singleValue<StringView>(value));
     case TypeKind::DATE:
       return equal(singleValue<Date>(value).days());
+    case TypeKind::SHORT_DECIMAL:
+      return equal(singleValue<UnscaledShortDecimal>(value).unscaledValue());
     default:
-      VELOX_UNSUPPORTED(
-          "Unsupported value for equals filter: {} = {}",
-          value->type()->toString(),
-          value->toString(0));
+      return nullptr;
   }
 }
 
@@ -279,11 +298,20 @@ std::unique_ptr<common::Filter> makeNotEqualFilter(
     const core::TypedExprPtr& valueExpr) {
   auto queryCtx = std::make_shared<core::QueryCtx>();
   auto value = toConstant(valueExpr, queryCtx);
+  if (!value) {
+    return nullptr;
+  }
 
   std::unique_ptr<common::Filter> lessThanFilter =
       makeLessThanFilter(valueExpr);
+  if (!lessThanFilter) {
+    return nullptr;
+  }
   std::unique_ptr<common::Filter> greaterThanFilter =
       makeGreaterThanFilter(valueExpr);
+  if (!greaterThanFilter) {
+    return nullptr;
+  }
 
   if (value->typeKind() == TypeKind::TINYINT ||
       value->typeKind() == TypeKind::SMALLINT ||
@@ -326,7 +354,9 @@ toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
 std::unique_ptr<common::Filter> makeInFilter(const core::TypedExprPtr& expr) {
   auto queryCtx = std::make_shared<core::QueryCtx>();
   auto vector = toConstant(expr, queryCtx);
-  VELOX_CHECK_EQ(vector->typeKind(), TypeKind::ARRAY);
+  if (!(vector && vector->type()->isArray())) {
+    return nullptr;
+  }
 
   auto arrayVector = vector->valueVector()->as<ArrayVector>();
   auto index = vector->as<ConstantVector<ComplexType>>()->index();
@@ -353,9 +383,7 @@ std::unique_ptr<common::Filter> makeInFilter(const core::TypedExprPtr& expr) {
       return in(values);
     }
     default:
-      VELOX_UNSUPPORTED(
-          "Unsupported value type for 'in' filter: {}",
-          elementType->toString());
+      return nullptr;
   }
 }
 
@@ -364,7 +392,13 @@ std::unique_ptr<common::Filter> makeBetweenFilter(
     const core::TypedExprPtr& upperExpr) {
   auto queryCtx = std::make_shared<core::QueryCtx>();
   auto lower = toConstant(lowerExpr, queryCtx);
+  if (!lower) {
+    return nullptr;
+  }
   auto upper = toConstant(upperExpr, queryCtx);
+  if (!upper) {
+    return nullptr;
+  }
   switch (lower->typeKind()) {
     case TypeKind::BIGINT:
       return between(singleValue<int64_t>(lower), singleValue<int64_t>(upper));
@@ -379,68 +413,85 @@ std::unique_ptr<common::Filter> makeBetweenFilter(
     case TypeKind::VARCHAR:
       return between(
           singleValue<StringView>(lower), singleValue<StringView>(upper));
+    case TypeKind::SHORT_DECIMAL:
+      return between(
+          singleValue<UnscaledShortDecimal>(lower).unscaledValue(),
+          singleValue<UnscaledShortDecimal>(upper).unscaledValue());
     default:
-      VELOX_UNSUPPORTED(
-          "Unsupported value for 'between' filter: {} BETWEEN {} AND {}",
-          lower->type()->toString(),
-          lower->toString(0),
-          upper->toString(0));
+      return nullptr;
   }
 }
 } // namespace
 
-std::pair<common::Subfield, std::unique_ptr<common::Filter>>
-leafCallToSubfieldFilter(const core::CallTypedExpr& call) {
-  using common::Subfield;
+std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
+    const core::CallTypedExpr& call,
+    common::Subfield& subfield) {
   if (call.name() == "eq") {
     if (auto field = asField(&call, 0)) {
-      return {toSubfield(field), makeEqualFilter(call.inputs()[1])};
+      if (toSubfield(field, subfield)) {
+        return makeEqualFilter(call.inputs()[1]);
+      }
     }
   } else if (call.name() == "neq") {
     if (auto field = asField(&call, 0)) {
-      return {toSubfield(field), makeNotEqualFilter(call.inputs()[1])};
+      if (toSubfield(field, subfield)) {
+        return makeNotEqualFilter(call.inputs()[1]);
+      }
     }
   } else if (call.name() == "lte") {
     if (auto field = asField(&call, 0)) {
-      return {toSubfield(field), makeLessThanOrEqualFilter(call.inputs()[1])};
+      if (toSubfield(field, subfield)) {
+        return makeLessThanOrEqualFilter(call.inputs()[1]);
+      }
     }
   } else if (call.name() == "lt") {
     if (auto field = asField(&call, 0)) {
-      return {toSubfield(field), makeLessThanFilter(call.inputs()[1])};
+      if (toSubfield(field, subfield)) {
+        return makeLessThanFilter(call.inputs()[1]);
+      }
     }
   } else if (call.name() == "gte") {
     if (auto field = asField(&call, 0)) {
-      return {
-          toSubfield(field), makeGreaterThanOrEqualFilter(call.inputs()[1])};
+      if (toSubfield(field, subfield)) {
+        return makeGreaterThanOrEqualFilter(call.inputs()[1]);
+      }
     }
   } else if (call.name() == "gt") {
     if (auto field = asField(&call, 0)) {
-      return {toSubfield(field), makeGreaterThanFilter(call.inputs()[1])};
+      if (toSubfield(field, subfield)) {
+        return makeGreaterThanFilter(call.inputs()[1]);
+      }
     }
   } else if (call.name() == "between") {
     if (auto field = asField(&call, 0)) {
-      return {
-          toSubfield(field),
-          makeBetweenFilter(call.inputs()[1], call.inputs()[2])};
+      if (toSubfield(field, subfield)) {
+        return makeBetweenFilter(call.inputs()[1], call.inputs()[2]);
+      }
     }
   } else if (call.name() == "in") {
     if (auto field = asField(&call, 0)) {
-      return {toSubfield(field), makeInFilter(call.inputs()[1])};
+      if (toSubfield(field, subfield)) {
+        return makeInFilter(call.inputs()[1]);
+      }
     }
   } else if (call.name() == "is_null") {
     if (auto field = asField(&call, 0)) {
-      return {toSubfield(field), isNull()};
+      if (toSubfield(field, subfield)) {
+        return isNull();
+      }
     }
   } else if (call.name() == "not") {
     if (auto nestedCall = asCall(call.inputs()[0].get())) {
       if (nestedCall->name() == "is_null") {
         if (auto field = asField(nestedCall, 0)) {
-          return {toSubfield(field), isNotNull()};
+          if (toSubfield(field, subfield)) {
+            return isNotNull();
+          }
         }
       }
     }
   }
-  VELOX_UNSUPPORTED("Unsupported call expression: {}", call.toString());
+  return nullptr;
 }
 
 std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
@@ -454,7 +505,10 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
           std::move(left.first),
           makeOrFilter(std::move(left.second), std::move(right.second))};
     }
-    return leafCallToSubfieldFilter(*call);
+    common::Subfield subfield;
+    if (auto filter = leafCallToSubfieldFilter(*call, subfield)) {
+      return std::make_pair(std::move(subfield), std::move(filter));
+    }
   }
   VELOX_UNSUPPORTED(
       "Unsupported expression for range filter: {}", expr->toString());

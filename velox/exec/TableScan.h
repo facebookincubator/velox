@@ -18,6 +18,8 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
+DECLARE_int32(split_preload_per_driver);
+
 namespace facebook::velox::exec {
 
 class TableScan : public SourceOperator {
@@ -47,17 +49,35 @@ class TableScan : public SourceOperator {
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override;
 
- private:
-  static constexpr int32_t kDefaultBatchSize = 1024;
+  /// Returns process-wide cumulative IO wait time for all table
+  /// scan. This is the blocked time. If running entirely from memory
+  /// this would be 0.
+  static uint64_t ioWaitNanos() {
+    return ioWaitNanos_;
+  }
 
-  // Adjust batch size according to split information.
-  void setBatchSize();
+ private:
+  // Sets 'maxPreloadSplits' and 'splitPreloader' if prefetching
+  // splits is appropriate. The preloader will be applied to the
+  // 'first 'maxPreloadSplits' of the Tasks's split queue for 'this'
+  // when getting splits.
+  void checkPreload();
+
+  // Sets 'split->dataSource' to be a Asyncsource that makes a
+  // DataSource to read 'split'. This source will be prepared in the
+  // background on the executor of the connector. If the DataSource is
+  // needed before prepare is done, it will be made when needed.
+  void preload(std::shared_ptr<connector::ConnectorSplit> split);
+
+  // Process-wide IO wait time.
+  static std::atomic<uint64_t> ioWaitNanos_;
 
   const std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
   const std::
       unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
           columnHandles_;
-  DriverCtx* driverCtx_;
+  DriverCtx* const driverCtx_;
+  memory::MemoryPool* const connectorPool_;
   ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
   BlockingReason blockingReason_;
   bool needNewSplit_ = true;
@@ -68,9 +88,30 @@ class TableScan : public SourceOperator {
   // Dynamic filters to add to the data source when it gets created.
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
       pendingDynamicFilters_;
-  int32_t readBatchSize_{kDefaultBatchSize};
+
+  int32_t maxPreloadedSplits_{0};
+
+  // Callback passed to getSplitOrFuture() for triggering async
+  // preload. The callback's lifetime is the lifetime of 'this'. This
+  // callback can schedule preloads on an executor. These preloads may
+  // outlive the Task and therefore need to capture a shared_ptr to
+  // it.
+  std::function<void(std::shared_ptr<connector::ConnectorSplit>)>
+      splitPreloader_{nullptr};
+
+  // Count of splits that started background preload.
+  int32_t numPreloadedSplits_{0};
+
+  // Count of splits that finished preloading before being read.
+  int32_t numReadyPreloadedSplits_{0};
+
+  int32_t readBatchSize_;
 
   // String shown in ExceptionContext inside DataSource and LazyVector loading.
   std::string debugString_;
+
+  // The last value of the IO wait time of 'this' that has been added to the
+  // global static 'ioWaitNanos_'.
+  uint64_t lastIoWaitNanos_{0};
 };
 } // namespace facebook::velox::exec

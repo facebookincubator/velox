@@ -186,6 +186,7 @@ class OrderByTest : public OperatorTestBase {
       } else {
         EXPECT_EQ(0, spilledStats(*task).spilledBytes);
       }
+      OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
     }
   }
 };
@@ -317,7 +318,9 @@ TEST_F(OrderByTest, varfields) {
         batchSize, [](vector_size_t row) { return row * 0.1; }, nullEvery(11));
     auto c2 = makeFlatVector<StringView>(
         batchSize,
-        [](vector_size_t row) { return StringView(std::to_string(row)); },
+        [](vector_size_t row) {
+          return StringView::makeInline(std::to_string(row));
+        },
         nullEvery(17));
     // TODO: Add support for array/map in createDuckDbTable and verify
     // that we can sort by array/map as well.
@@ -330,10 +333,10 @@ TEST_F(OrderByTest, varfields) {
 
 TEST_F(OrderByTest, unknown) {
   vector_size_t size = 1'000;
-  auto vector = makeRowVector(
-      {makeFlatVector<int64_t>(size, [](auto row) { return row % 7; }),
-       BaseVector::createConstant(
-           variant(TypeKind::UNKNOWN), size, pool_.get())});
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 7; }),
+      BaseVector::createNullConstant(UNKNOWN(), size, pool()),
+  });
 
   // Exclude "UNKNOWN" column as DuckDB doesn't understand UNKNOWN type
   createDuckDbTable(
@@ -353,22 +356,24 @@ TEST_F(OrderByTest, unknown) {
       {0});
 }
 
-/// Verifies that Order By output batch sizes correspond to
-/// preferredOutputBatchSize.
-TEST_F(OrderByTest, outputBatchSize) {
+/// Verifies output batch rows of OrderBy
+TEST_F(OrderByTest, outputBatchRows) {
   struct {
     int numRowsPerBatch;
-    int preferredOutBatchSize;
+    int preferredOutBatchBytes;
     int expectedOutputVectors;
 
     std::string debugString() const {
       return fmt::format(
           "numRowsPerBatch:{}, preferredOutBatchSize:{}, expectedOutputVectors:{}",
           numRowsPerBatch,
-          preferredOutBatchSize,
+          preferredOutBatchBytes,
           expectedOutputVectors);
     }
-  } testSettings[] = {{1024, 1024 * 1024 * 10, 1}, {1024, 1, 2}};
+    // Output kPreferredOutputBatchRows by default and thus include all rows in
+    // a single vector.
+    // TODO(gaoge): change after determining output batch rows adaptively.
+  } testSettings[] = {{1024, 1, 1}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -394,8 +399,8 @@ TEST_F(OrderByTest, outputBatchSize) {
                     .planNode();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->setConfigOverridesUnsafe(
-        {{core::QueryConfig::kPreferredOutputBatchSize,
-          std::to_string(testData.preferredOutBatchSize)}});
+        {{core::QueryConfig::kPreferredOutputBatchBytes,
+          std::to_string(testData.preferredOutBatchBytes)}});
     CursorParameters params;
     params.planNode = plan;
     params.queryCtx = queryCtx;
@@ -415,7 +420,7 @@ TEST_F(OrderByTest, spill) {
     batches.push_back(makeRowVector(
         {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row * 3; }),
          makeFlatVector<StringView>(kNumRows, [](auto row) {
-           return StringView(std::to_string(row * 3));
+           return StringView::makeInline(std::to_string(row * 3));
          })}));
   }
   createDuckDbTable(batches);
@@ -427,8 +432,9 @@ TEST_F(OrderByTest, spill) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   constexpr int64_t kMaxBytes = 20LL << 20; // 20 MB
-  queryCtx->pool()->setMemoryUsageTracker(
-      memory::MemoryUsageTracker::create(kMaxBytes));
+  queryCtx->testingOverrideMemoryPool(
+      memory::defaultMemoryManager().addRootPool(
+          queryCtx->queryId(), kMaxBytes));
   // Set 'kSpillableReservationGrowthPct' to an extreme large value to trigger
   // disk spilling by failed memory growth reservation.
   queryCtx->setConfigOverridesUnsafe({
@@ -448,6 +454,7 @@ TEST_F(OrderByTest, spill) {
   EXPECT_LT(0, stats[0].operatorStats[1].spilledBytes);
   EXPECT_EQ(1, stats[0].operatorStats[1].spilledPartitions);
   EXPECT_EQ(2, stats[0].operatorStats[1].spilledFiles);
+  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
 TEST_F(OrderByTest, spillWithMemoryLimit) {
@@ -476,11 +483,11 @@ TEST_F(OrderByTest, spillWithMemoryLimit) {
                       {1'000'000'000, false}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->pool()->setMemoryUsageTracker(
-        memory::MemoryUsageTracker::create(kMaxBytes));
+    queryCtx->testingOverrideMemoryPool(
+        memory::defaultMemoryManager().addRootPool(
+            queryCtx->queryId(), kMaxBytes));
     auto results =
         AssertQueryBuilder(
             PlanBuilder()
@@ -506,5 +513,6 @@ TEST_F(OrderByTest, spillWithMemoryLimit) {
 
     auto stats = task->taskStats().pipelineStats;
     ASSERT_EQ(testData.expectSpill, stats[0].operatorStats[1].spilledBytes > 0);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }

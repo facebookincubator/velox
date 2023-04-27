@@ -27,7 +27,6 @@
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Allocation.h"
-#include "velox/common/memory/MemoryUsageTracker.h"
 #include "velox/common/time/Timer.h"
 
 DECLARE_bool(velox_use_malloc);
@@ -158,7 +157,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// Defines the memory allocator kinds.
   enum class Kind {
     /// The default memory allocator kind which is implemented by
-    /// MemoryAllocatorImpl. It delegates the memory allocations to std::malloc.
+    /// MallocAllocator. It delegates the memory allocations to std::malloc.
     kMalloc,
     /// The memory allocator kind which is implemented by MmapAllocator. It
     /// manages the large chunk of memory allocations on its own by leveraging
@@ -187,8 +186,6 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   virtual ~MemoryAllocator() = default;
 
   static constexpr int32_t kMaxSizeClasses = 12;
-  /// Allocations smaller than 3K should go to malloc.
-  static constexpr int32_t kMaxMallocBytes = 3072;
   static constexpr uint16_t kMinAlignment = alignof(max_align_t);
   static constexpr uint16_t kMaxAlignment = 64;
 
@@ -205,12 +202,12 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// called with the actual allocation bytes and a flag indicating if it is
   /// called for pre-allocation or post-allocation failure. The flag is true for
   /// pre-allocation call and false for post-allocation failure call. The latter
-  /// is to let user have a chance to rollback if needed. For instance,
-  /// 'MemoryPoolImpl' object will make memory counting reservation in
+  /// is to let user have a chance to rollback if needed. As for now, it is only
+  /// used by 'MemoryPoolImpl' object to make memory counting reservation in
   /// 'reservationCB' before the actual memory allocation so it needs to release
-  /// the reservation if the actual allocation fails. The function returns true
-  /// if the allocation succeeded. If returning false, 'out' references no
-  /// memory and any partially allocated memory is freed.
+  /// the reservation if the actual allocation fails halfway. The function
+  /// returns true if the allocation succeeded. If it returns false, 'out'
+  /// references no memory and any partially allocated memory is freed.
   ///
   /// NOTE: user needs to explicitly release allocation 'out' by calling
   /// 'freeNonContiguous' on the same memory allocator object.
@@ -247,38 +244,17 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// Frees contiguous 'allocation'. 'allocation' is empty on return.
   virtual void freeContiguous(ContiguousAllocation& allocation) = 0;
 
-  /// Allocates 'bytes' contiguous bytes and returns the pointer to the first
-  /// byte. If 'bytes' is less than 'kMaxMallocBytes', delegates the allocation
-  /// to malloc. If the size is above that and below the largest size classes'
-  /// size, allocates one element of the next size classes' size. If 'size' is
-  /// greater than the largest size classes' size, calls allocateContiguous().
-  /// Returns nullptr if there is no space. The amount to allocate is subject to
-  /// the size limit of 'this'. This function is not virtual but calls the
-  /// virtual functions allocateNonContiguous and allocateContiguous, which can
-  /// track sizes and enforce caps etc. If 'alignment' is not kMinAlignment,
-  /// then 'bytes' must be a multiple of 'alignment'.
+  /// Allocates contiguous 'bytes' and return the first byte. Returns nullptr if
+  /// there is no space.
   ///
-  /// NOTE: 'alignment' must be power of two and in range of [kMinAlignment,
-  /// kMaxAlignment].
+  /// NOTE: 'alignment' must be power of two and in range of
+  /// [kMinAlignment, kMaxAlignment].
   virtual void* allocateBytes(
       uint64_t bytes,
       uint16_t alignment = kMinAlignment) = 0;
 
   /// Allocates a zero-filled contiguous bytes.
   virtual void* allocateZeroFilled(uint64_t bytes);
-
-  /// Allocates 'newSize' contiguous bytes. If 'p' is not null, this function
-  /// copies std::min(size, newSize) bytes from 'p' to the newly allocated
-  /// buffer and free 'p' after that. If 'alignment' is not kMinAlignment, then
-  /// newSize must be a multiple of 'alignment'.
-  ///
-  /// NOTE: 'alignment' must be power of two and in range of [kMinAlignment,
-  /// kMaxAlignment].
-  virtual void* reallocateBytes(
-      void* p,
-      int64_t size,
-      int64_t newSize,
-      uint16_t alignment = kMinAlignment);
 
   /// Frees contiguous memory allocated by allocateBytes, allocateZeroFilled,
   /// reallocateBytes.
@@ -305,11 +281,45 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     return Stats();
   }
 
-  virtual std::string toString() const;
+  virtual std::string toString() const = 0;
 
   /// Invoked to check if 'alignmentBytes' is valid and 'allocateBytes' is
   /// multiple of 'alignmentBytes'.
   static void alignmentCheck(uint64_t allocateBytes, uint16_t alignmentBytes);
+
+  /// Causes 'failure' to occur in memory allocation calls. This is a test-only
+  /// function for validating error paths which are rare to trigger in unit
+  /// test. If 'persistent' is false, then we only inject failure once in the
+  /// next call. Otherwise, we keep injecting failures until next
+  /// 'testingClearFailureInjection' call.
+  enum class InjectedFailure {
+    kNone,
+    /// Mimic case of not finding anything to advise away.
+    ///
+    /// NOTE: this only applies for MmapAllocator.
+    kMadvise,
+    /// Mimic running out of mmaps for process.
+    ///
+    /// NOTE: this only applies for MmapAllocator.
+    kMmap,
+    /// Mimic the actual memory allocation failure.
+    kAllocate,
+    /// Mimic the case that exceeds the memory allocator's internal cap limit.
+    ///
+    /// NOTE: this only applies for MmapAllocator.
+    kCap
+  };
+  void testingSetFailureInjection(
+      InjectedFailure failure,
+      bool persistent = false) {
+    injectedFailure_ = failure;
+    isPersistentFailureInjection_ = persistent;
+  }
+
+  void testingClearFailureInjection() {
+    injectedFailure_ = InjectedFailure::kNone;
+    isPersistentFailureInjection_ = false;
+  }
 
  protected:
   MemoryAllocator() = default;
@@ -340,10 +350,30 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       MachinePageCount numPages,
       MachinePageCount minSizeClass) const;
 
+  FOLLY_ALWAYS_INLINE bool testingHasInjectedFailure(InjectedFailure failure) {
+    if (FOLLY_LIKELY(injectedFailure_ != failure)) {
+      return false;
+    }
+    if (!isPersistentFailureInjection_) {
+      injectedFailure_ = InjectedFailure::kNone;
+    }
+    return true;
+  }
+
   // The machine page counts corresponding to different sizes in order
   // of increasing size.
   const std::vector<MachinePageCount>
       sizeClassSizes_{1, 2, 4, 8, 16, 32, 64, 128, 256};
+
+  std::atomic<MachinePageCount> numAllocated_{0};
+  // Tracks the number of mapped pages.
+  std::atomic<MachinePageCount> numMapped_{0};
+
+  // Indicates if the failure injection is persistent or transient.
+  //
+  // NOTE: this is only used for testing purpose.
+  InjectedFailure injectedFailure_{InjectedFailure::kNone};
+  bool isPersistentFailureInjection_{false};
 
  private:
   static std::mutex initMutex_;

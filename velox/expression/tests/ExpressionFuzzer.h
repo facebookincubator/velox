@@ -48,6 +48,58 @@ class ExpressionFuzzer {
   /// Return a random legit expression that returns returnType.
   core::TypedExprPtr generateExpression(const TypePtr& returnType);
 
+  /// Used to enable re-use of sub-expressions by exposing an API that allows
+  /// for randomly picking an expression that has a specific return type and a
+  /// nesting level less than or equal to a specified limit. It ensures that all
+  /// expressions that are valid candidates have an equal probability of
+  /// selection.
+  class ExprBank {
+   public:
+    ExprBank(FuzzerGenerator& rng, int maxLevelOfNesting)
+        : rng_(rng), maxLevelOfNesting_(maxLevelOfNesting) {}
+
+    /// Adds an expression to the bank.
+    void insert(const core::TypedExprPtr& expression);
+
+    /// Returns a randomly selected expression of the requested 'returnType'
+    /// which is guaranteed to have a nesting level less than or equal to
+    /// 'uptoLevelOfNesting'. Returns a nullptr if no such function can be
+    /// found.
+    core::TypedExprPtr getRandomExpression(
+        const TypePtr& returnType,
+        int uptoLevelOfNesting);
+
+    /// Removes all the expressions from the bank. Should be called after
+    /// every fuzzer iteration.
+    void reset() {
+      typeToExprsByLevel_.clear();
+    }
+
+   private:
+    int getNestedLevel(const core::TypedExprPtr& expression) {
+      int level = 0;
+      for (auto& input : expression->inputs()) {
+        level = std::max(level, getNestedLevel(input) + 1);
+      }
+      return level;
+    }
+
+    /// Reference to the random generator of the expression fuzzer.
+    FuzzerGenerator& rng_;
+
+    /// Only expression having less than or equal to this level of nesting will
+    /// be supported.
+    int maxLevelOfNesting_;
+
+    /// Represents a vector where each index contains a list of expressions such
+    /// that the depth of each expression tree is equal to that index.
+    typedef std::vector<std::vector<core::TypedExprPtr>> ExprsIndexedByLevel;
+
+    /// Maps a 'Type' serialized as a string to an object of type
+    /// ExprsIndexedByLevel
+    std::unordered_map<std::string, ExprsIndexedByLevel> typeToExprsByLevel_;
+  };
+
  private:
   struct ExprUsageStats {
     // Num of times the expression was randomly selected.
@@ -80,8 +132,7 @@ class ExpressionFuzzer {
     // occurred.
     void onError(
         const SelectivityVector& /*rows*/,
-        const ::facebook::velox::exec::EvalCtx::ErrorVector& /*errors*/)
-        override {}
+        const ::facebook::velox::ErrorVector& /*errors*/) override {}
 
    private:
     std::unordered_map<std::string, ExprUsageStats>& exprNameToStats_;
@@ -97,7 +148,13 @@ class ExpressionFuzzer {
 
   void appendConjunctSignatures();
 
+  TypePtr generateRootType();
+
   RowVectorPtr generateRowVector();
+
+  /// Randomize initial result vector data to test for correct null and data
+  /// setting in functions.
+  VectorPtr generateResultVector(TypePtr vectorType);
 
   core::TypedExprPtr generateArgConstant(const TypePtr& arg);
 
@@ -106,6 +163,8 @@ class ExpressionFuzzer {
   core::TypedExprPtr generateArg(const TypePtr& arg);
 
   std::vector<core::TypedExprPtr> generateArgs(const CallableSignature& input);
+
+  core::TypedExprPtr generateArg(const TypePtr& arg, bool isConstant);
 
   /// Specialization for the "like" function: second and third (optional)
   /// parameters always need to be constant.
@@ -137,6 +196,26 @@ class ExpressionFuzzer {
 
   core::TypedExprPtr getCallExprFromCallable(const CallableSignature& callable);
 
+  /// Executes two steps:
+  /// #1. Retries executing the expression in `plan` by wrapping it in a `try()`
+  ///     clause and expecting it not to throw an exception.
+  /// #2. Re-execute the expression only on rows that produced non-NULL values
+  ///     in the previous step.
+  ///
+  /// Throws in case any of these steps fail.
+  void retryWithTry(
+      core::TypedExprPtr plan,
+      const RowVectorPtr& rowVector,
+      const VectorPtr& resultVector,
+      const std::vector<column_index_t>& columnsToWrapInLazy);
+
+  /// Return a random signature mapped to functionName in expressionToSignature_
+  /// whose return type can match returnType. Return nullptr if no such
+  /// signature template exists.
+  const CallableSignature* chooseRandomConcreteSignature(
+      const TypePtr& returnType,
+      const std::string& functionName);
+
   /// Generate an expression by randomly selecting a concrete function signature
   /// that returns 'returnType' among all signatures that the function named
   /// 'functionName' supports.
@@ -163,14 +242,6 @@ class ExpressionFuzzer {
   /// nullptr if casting to the specified type is not supported. The supported
   /// types include primitive types, array, map, and row types right now.
   core::TypedExprPtr generateCastExpression(const TypePtr& returnType);
-
-  /// Choose a random type to be casted to the specified type. If the specified
-  /// type is primitive, return a random primitive type. If the specified type
-  /// is complex, return a type whose top-level being the same and child types
-  /// being determined by chooseCastFromType() recursively. Casting to or from
-  /// custom types is not supported yet. In case of an unsupported `to` type,
-  /// this function returns a nullptr.
-  TypePtr chooseCastFromType(const TypePtr& to);
 
   /// If --duration_sec > 0, check if we expired the time budget. Otherwise,
   /// check if we expired the number of iterations (--steps).
@@ -238,7 +309,7 @@ class ExpressionFuzzer {
   std::unordered_map<std::string, ArgsOverrideFunc> funcArgOverrides_;
 
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   test::ExpressionVerifier verifier_;
 
@@ -255,14 +326,8 @@ class ExpressionFuzzer {
   /// specific type is required as input to a callable.
   std::unordered_map<std::string, std::vector<std::string>> typeToColumnNames_;
 
-  /// Maps a 'Type' serialized as a string to the expressions that have already
-  /// been generated and have the same return type. Used to easily look up
-  /// expressions that can be re-used when a specific return type is required.
-  /// Only expressions with no nested expressions are tracked here and can be
-  /// re-used.
-  /// TODO: add support for sharing multi-level expressions.
-  std::unordered_map<std::string, std::vector<core::TypedExprPtr>>
-      typeToExpressions_;
+  /// Used to track all generated expressions and support expreesion re-use.
+  ExprBank expressionBank_;
 
   std::shared_ptr<ExprStatsListener> statListener_;
   std::unordered_map<std::string, ExprUsageStats> exprNameToStats_;

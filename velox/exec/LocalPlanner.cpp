@@ -15,10 +15,9 @@
  */
 #include "velox/exec/LocalPlanner.h"
 #include "velox/core/PlanFragment.h"
+#include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
-#include "velox/exec/CrossJoinBuild.h"
-#include "velox/exec/CrossJoinProbe.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FilterProject.h"
@@ -29,6 +28,8 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
+#include "velox/exec/NestedLoopJoinBuild.h"
+#include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/StreamingAggregation.h"
@@ -103,9 +104,9 @@ OperatorSupplier makeConsumerSupplier(
   }
 
   if (auto join =
-          std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+          std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode)) {
     return [join](int32_t operatorId, DriverCtx* ctx) {
-      return std::make_unique<CrossJoinBuild>(operatorId, ctx, join);
+      return std::make_unique<NestedLoopJoinBuild>(operatorId, ctx, join);
     };
   }
 
@@ -182,6 +183,9 @@ uint32_t maxDrivers(const DriverFactory& driverFactory) {
       if (!values->isParallelizable()) {
         return 1;
       }
+    } else if (std::dynamic_pointer_cast<const core::ArrowStreamNode>(node)) {
+      // ArrowStream node must run single-threaded.
+      return 1;
     } else if (
         auto limit = std::dynamic_pointer_cast<const core::LimitNode>(node)) {
       // final limit must run single-threaded
@@ -253,18 +257,107 @@ void LocalPlanner::plan(
 
   (*driverFactories)[0]->outputDriver = true;
 
+  if (planFragment.isGroupedExecution()) {
+    determineGroupedExecutionPipelines(planFragment, *driverFactories);
+    markMixedJoinBridges(*driverFactories);
+  }
+
+  // Determine number of drivers for each pipeline.
   for (auto& factory : *driverFactories) {
     factory->maxDrivers = detail::maxDrivers(*factory);
     factory->numDrivers = std::min(factory->maxDrivers, maxDrivers);
-    // For grouped/bucketed execution we would have separate groups of drivers
-    // dealing with separate split groups (one driver can access splits from
-    // only one designated split group), hence we will have total number of
-    // drivers multiplied by the number of split groups.
-    if (planFragment.isGroupedExecution()) {
+
+    // Pipelines running grouped/bucketed execution would have separate groups
+    // of drivers dealing with separate split groups (one driver can access
+    // splits from only one designated split group), hence we will have total
+    // number of drivers multiplied by the number of split groups.
+    if (factory->groupedExecution) {
       factory->numTotalDrivers =
           factory->numDrivers * planFragment.numSplitGroups;
     } else {
       factory->numTotalDrivers = factory->numDrivers;
+    }
+  }
+}
+
+// static
+void LocalPlanner::determineGroupedExecutionPipelines(
+    const core::PlanFragment& planFragment,
+    std::vector<std::unique_ptr<DriverFactory>>& driverFactories) {
+  // We run backwards - from leaf pipelines to the root pipeline.
+  for (auto it = driverFactories.rbegin(); it != driverFactories.rend(); ++it) {
+    auto& factory = *it;
+
+    // See if pipelines have leaf nodes that use grouped execution strategy.
+    if (planFragment.leafNodeRunsGroupedExecution(factory->leafNodeId())) {
+      factory->groupedExecution = true;
+    }
+
+    // If a pipeline's leaf node is Local Partition, which has all sources
+    // belonging to pipelines that run Grouped Execution, then our pipeline
+    // should run Grouped Execution as well.
+    if (auto localPartitionNode =
+            std::dynamic_pointer_cast<const core::LocalPartitionNode>(
+                factory->planNodes.front())) {
+      size_t numGroupedExecutionSources{0};
+      for (const auto& sourceNode : localPartitionNode->sources()) {
+        for (auto& anotherFactory : driverFactories) {
+          if (sourceNode == anotherFactory->planNodes.back() and
+              anotherFactory->groupedExecution) {
+            ++numGroupedExecutionSources;
+            break;
+          }
+        }
+      }
+      if (numGroupedExecutionSources > 0 and
+          numGroupedExecutionSources == localPartitionNode->sources().size()) {
+        factory->groupedExecution = true;
+      }
+    }
+  }
+}
+
+// static
+void LocalPlanner::markMixedJoinBridges(
+    std::vector<std::unique_ptr<DriverFactory>>& driverFactories) {
+  for (auto& factory : driverFactories) {
+    // We are interested in grouped execution pipelines only.
+    if (!factory->groupedExecution) {
+      continue;
+    }
+
+    // See if we have any join nodes.
+    for (const auto& planNode : factory->planNodes) {
+      if (auto joinNode =
+              std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
+        // See if the build source (2nd) belongs to an ungrouped execution.
+        auto& buildSourceNode = planNode->sources()[1];
+        for (auto& factoryOther : driverFactories) {
+          if (!factoryOther->groupedExecution &&
+              buildSourceNode->id() == factoryOther->outputNodeId()) {
+            factoryOther->mixedExecutionModeHashJoinNodeIds.emplace(
+                planNode->id());
+            factory->mixedExecutionModeHashJoinNodeIds.emplace(planNode->id());
+            break;
+          }
+        }
+      } else if (
+          auto joinNode =
+              std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                  planNode)) {
+        // See if the build source (2nd) belongs to an ungrouped execution.
+        auto& buildSourceNode = planNode->sources()[1];
+        for (auto& factoryOther : driverFactories) {
+          if (!factoryOther->groupedExecution &&
+              buildSourceNode->id() == factoryOther->outputNodeId()) {
+            factoryOther->mixedExecutionModeNestedLoopJoinNodeIds.emplace(
+                planNode->id());
+            factory->mixedExecutionModeNestedLoopJoinNodeIds.emplace(
+                planNode->id());
+            break;
+          }
+        }
+      }
     }
   }
 }
@@ -305,6 +398,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::ValuesNode>(planNode)) {
       operators.push_back(std::make_unique<Values>(id, ctx.get(), valuesNode));
     } else if (
+        auto arrowStreamNode =
+            std::dynamic_pointer_cast<const core::ArrowStreamNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<ArrowStream>(id, ctx.get(), arrowStreamNode));
+    } else if (
         auto tableScanNode =
             std::dynamic_pointer_cast<const core::TableScanNode>(planNode)) {
       operators.push_back(
@@ -339,9 +437,10 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(std::make_unique<HashProbe>(id, ctx.get(), joinNode));
     } else if (
         auto joinNode =
-            std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                planNode)) {
       operators.push_back(
-          std::make_unique<CrossJoinProbe>(id, ctx.get(), joinNode));
+          std::make_unique<NestedLoopJoinProbe>(id, ctx.get(), joinNode));
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
@@ -439,4 +538,52 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
 
   return std::make_shared<Driver>(std::move(ctx), std::move(operators));
 }
+
+std::vector<core::PlanNodeId> DriverFactory::needsHashJoinBridges() const {
+  std::vector<core::PlanNodeId> planNodeIds;
+  // Ungrouped execution pipelines need to take care of cross-mode bridges.
+  if (!groupedExecution && !mixedExecutionModeHashJoinNodeIds.empty()) {
+    planNodeIds.insert(
+        planNodeIds.end(),
+        mixedExecutionModeHashJoinNodeIds.begin(),
+        mixedExecutionModeHashJoinNodeIds.end());
+  }
+  for (const auto& planNode : planNodes) {
+    if (auto joinNode =
+            std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
+      // Grouped execution pipelines should not create cross-mode bridges.
+      if (!groupedExecution ||
+          !mixedExecutionModeHashJoinNodeIds.contains(joinNode->id())) {
+        planNodeIds.emplace_back(joinNode->id());
+      }
+    }
+  }
+  return planNodeIds;
+}
+
+std::vector<core::PlanNodeId> DriverFactory::needsNestedLoopJoinBridges()
+    const {
+  std::vector<core::PlanNodeId> planNodeIds;
+  // Ungrouped execution pipelines need to take care of cross-mode bridges.
+  if (!groupedExecution && !mixedExecutionModeNestedLoopJoinNodeIds.empty()) {
+    planNodeIds.insert(
+        planNodeIds.end(),
+        mixedExecutionModeNestedLoopJoinNodeIds.begin(),
+        mixedExecutionModeNestedLoopJoinNodeIds.end());
+  }
+  for (const auto& planNode : planNodes) {
+    if (auto joinNode =
+            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                planNode)) {
+      // Grouped execution pipelines should not create cross-mode bridges.
+      if (!groupedExecution ||
+          !mixedExecutionModeNestedLoopJoinNodeIds.contains(joinNode->id())) {
+        planNodeIds.emplace_back(joinNode->id());
+      }
+    }
+  }
+
+  return planNodeIds;
+}
+
 } // namespace facebook::velox::exec

@@ -34,7 +34,8 @@ struct Converter {
   // If in the future we change nullOutput in many functions we can revisit that
   // contract.
   static typename TypeTraits<KIND>::NativeType cast(T val, bool& nullOutput) {
-    VELOX_NYI();
+    VELOX_UNSUPPORTED(
+        "Conversion to {} is not supported", TypeTraits<KIND>::name);
   }
 };
 
@@ -81,7 +82,8 @@ struct Converter<
 
   template <typename From>
   static T cast(const From& v, bool& nullOutput) {
-    VELOX_NYI();
+    VELOX_UNSUPPORTED(
+        "Conversion to {} is not supported", TypeTraits<KIND>::name);
   }
 
   static T convertStringToInt(const folly::StringPiece& v, bool& nullOutput) {
@@ -374,6 +376,10 @@ struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
     return folly::to<std::string>(val);
   }
 
+  static std::string cast(const Timestamp& val, bool& nullOutput) {
+    return val.toString(Timestamp::Precision::kMilliseconds);
+  }
+
   static std::string cast(const bool& val, bool& nullOutput) {
     return val ? "true" : "false";
   }
@@ -386,7 +392,8 @@ struct Converter<TypeKind::TIMESTAMP> {
 
   template <typename From>
   static T cast(const From& /* v */, bool& nullOutput) {
-    VELOX_NYI();
+    VELOX_UNSUPPORTED("Conversion to Timestamp is not supported");
+    return T();
   }
 
   static T cast(folly::StringPiece v, bool& nullOutput) {
@@ -413,7 +420,8 @@ struct Converter<TypeKind::DATE, void, TRUNCATE> {
   using T = typename TypeTraits<TypeKind::DATE>::NativeType;
   template <typename From>
   static T cast(const From& /* v */, bool& nullOutput) {
-    VELOX_NYI();
+    VELOX_UNSUPPORTED("Conversion to Date is not supported");
+    return T();
   }
 
   static T cast(folly::StringPiece v, bool& nullOutput) {
@@ -430,7 +438,14 @@ struct Converter<TypeKind::DATE, void, TRUNCATE> {
 
   static T cast(const Timestamp& t, bool& nullOutput) {
     static const int32_t kSecsPerDay{86'400};
-    return Date(t.getSeconds() / kSecsPerDay);
+    auto seconds = t.getSeconds();
+    if (seconds >= 0 || seconds % kSecsPerDay == 0) {
+      return Date(seconds / kSecsPerDay);
+    }
+    // For division with negatives, minus 1 to compensate the discarded
+    // fractional part. e.g. -1/86'400 yields 0, yet it should be considered as
+    // -1 day.
+    return Date(seconds / kSecsPerDay - 1);
   }
 };
 

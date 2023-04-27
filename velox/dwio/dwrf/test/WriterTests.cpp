@@ -30,7 +30,7 @@ namespace facebook::velox::dwrf {
 
 class WriterTest : public Test {
  public:
-  WriterTest() : pool_(getDefaultMemoryPool()) {}
+  WriterTest() : pool_(addDefaultLeafMemoryPool("WriterTest")) {}
 
   WriterBase& createWriter(
       const std::shared_ptr<Config>& config,
@@ -41,7 +41,8 @@ class WriterTest : public Test {
       sink = std::move(memSink);
     }
     writer_ = std::make_unique<WriterBase>(std::move(sink));
-    writer_->initContext(config, pool_->addChild("test_writer_pool"));
+    writer_->initContext(
+        config, defaultMemoryManager().addRootPool("WriterTest"));
     return *writer_;
   }
 
@@ -326,14 +327,14 @@ class MockDataSink : public dwio::common::DataSink {
 
 TEST(WriterBaseTest, FlushWriterSinkUponClose) {
   auto config = std::make_shared<Config>();
-  auto pool = getDefaultMemoryPool();
+  auto pool = defaultMemoryManager().addRootPool("FlushWriterSinkUponClose");
   auto sink = std::make_unique<MockDataSink>();
   MockDataSink* sinkPtr = sink.get();
   EXPECT_CALL(*sinkPtr, write(_)).Times(1);
   EXPECT_CALL(*sinkPtr, isBuffered()).WillOnce(Return(false));
   {
     auto writer = std::make_unique<WriterBase>(std::move(sink));
-    writer->initContext(config, pool->addChild("test_writer_pool"));
+    writer->initContext(config, pool->addAggregateChild("test_writer_pool"));
     writer->close();
   }
 }

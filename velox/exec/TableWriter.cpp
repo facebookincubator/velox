@@ -31,13 +31,19 @@ TableWriter::TableWriter(
           tableWriteNode->id(),
           "TableWrite"),
       driverCtx_(driverCtx),
+      connectorPool_(driverCtx_->task->addConnectorPoolLocked(
+          planNodeId(),
+          driverCtx_->pipelineId,
+          driverCtx_->driverId,
+          operatorType(),
+          tableWriteNode->insertTableHandle()->connectorId())),
       insertTableHandle_(
           tableWriteNode->insertTableHandle()->connectorInsertTableHandle()),
       commitStrategy_(tableWriteNode->commitStrategy()) {
   const auto& connectorId = tableWriteNode->insertTableHandle()->connectorId();
   connector_ = connector::getConnector(connectorId);
-  connectorQueryCtx_ =
-      operatorCtx_->createConnectorQueryCtx(connectorId, planNodeId());
+  connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
+      connectorId, planNodeId(), connectorPool_);
 
   auto names = tableWriteNode->columnNames();
   auto types = tableWriteNode->columns()->children();
@@ -88,25 +94,23 @@ void TableWriter::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr TableWriter::getOutput() {
-  // Making sure the output is read only once after the write is fully done
+  // Making sure the output is read only once after the write is fully done.
   if (!noMoreInput_ || finished_) {
     return nullptr;
   }
   finished_ = true;
-
-  memory::MemoryPool* pool = connectorQueryCtx_->memoryPool();
 
   if (outputType_->size() == 0) {
     return nullptr;
   }
   if (outputType_->size() == 1) {
     return std::make_shared<RowVector>(
-        pool,
+        pool(),
         outputType_,
         nullptr,
         1,
-        std::vector<VectorPtr>{
-            BaseVector::createConstant((int64_t)numWrittenRows_, 1, pool)});
+        std::vector<VectorPtr>{std::make_shared<ConstantVector<int64_t>>(
+            pool(), 1, false /*isNull*/, BIGINT(), numWrittenRows_)});
   }
 
   std::vector<std::string> fragments = dataSink_->finish();
@@ -115,7 +119,7 @@ RowVectorPtr TableWriter::getOutput() {
 
   // Set rows column.
   FlatVectorPtr<int64_t> writtenRowsVector =
-      BaseVector::create<FlatVector<int64_t>>(BIGINT(), numOutputRows, pool);
+      BaseVector::create<FlatVector<int64_t>>(BIGINT(), numOutputRows, pool());
   writtenRowsVector->set(0, (int64_t)numWrittenRows_);
   for (int idx = 1; idx < numOutputRows; ++idx) {
     writtenRowsVector->setNull(idx, true);
@@ -124,7 +128,7 @@ RowVectorPtr TableWriter::getOutput() {
   // Set fragments column.
   FlatVectorPtr<StringView> fragmentsVector =
       BaseVector::create<FlatVector<StringView>>(
-          VARBINARY(), numOutputRows, pool);
+          VARBINARY(), numOutputRows, pool());
   fragmentsVector->setNull(0, true);
   for (int i = 1; i < numOutputRows; i++) {
     fragmentsVector->set(i, StringView(fragments[i - 1]));
@@ -132,20 +136,25 @@ RowVectorPtr TableWriter::getOutput() {
 
   // Set commitcontext column.
   // clang-format off
-     auto commitContextJson = folly::toJson(
-       folly::dynamic::object
-           ("lifespan", "TaskWide")
-           ("taskId", connectorQueryCtx_->taskId())
-           ("pageSinkCommitStrategy", commitStrategyToString(commitStrategy_))
-           ("lastPage", true));
+    auto commitContextJson = folly::toJson(
+      folly::dynamic::object
+          ("lifespan", "TaskWide")
+          ("taskId", connectorQueryCtx_->taskId())
+          ("pageSinkCommitStrategy", commitStrategyToString(commitStrategy_))
+          ("lastPage", true));
   // clang-format on
-  VectorPtr commitContextVector = BaseVector::createConstant(
-      variant::binary(commitContextJson), numOutputRows, pool);
+
+  auto commitContextVector = std::make_shared<ConstantVector<StringView>>(
+      pool(),
+      numOutputRows,
+      false /*isNull*/,
+      VARBINARY(),
+      StringView(commitContextJson));
 
   std::vector<VectorPtr> columns = {
       writtenRowsVector, fragmentsVector, commitContextVector};
 
   return std::make_shared<RowVector>(
-      pool, outputType_, nullptr, numOutputRows, columns);
+      pool(), outputType_, nullptr, numOutputRows, columns);
 }
 } // namespace facebook::velox::exec

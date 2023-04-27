@@ -38,13 +38,13 @@ add_library(
   InputStream.cpp
   IntDecoder.cpp
   IoStatistics.cpp
-  MemoryInputStream.cpp
   MetadataFilter.cpp
   Options.cpp
   Range.cpp
   ReaderFactory.cpp
   ScanSpec.cpp
   ColumnLoader.cpp
+  SelectiveByteRleColumnReader.cpp
   SelectiveColumnReader.cpp
   SelectiveRepeatedColumnReader.cpp
   SelectiveStructColumnReader.cpp

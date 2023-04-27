@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/container/F14Map.h>
+#include <stdexcept>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
@@ -44,25 +45,7 @@ class ConstantVector final : public SimpleVector<T> {
       velox::memory::MemoryPool* pool,
       size_t length,
       bool isNull,
-      T&& val,
-      const SimpleVectorStats<T>& stats = {},
-      std::optional<ByteCount> representedBytes = std::nullopt,
-      std::optional<ByteCount> storageByteCount = std::nullopt)
-      : ConstantVector(
-            pool,
-            length,
-            isNull,
-            CppToType<T>::create(),
-            std::move(val),
-            stats,
-            representedBytes,
-            storageByteCount) {}
-
-  ConstantVector(
-      velox::memory::MemoryPool* pool,
-      size_t length,
-      bool isNull,
-      std::shared_ptr<const Type> type,
+      TypePtr type,
       T&& val,
       const SimpleVectorStats<T>& stats = {},
       std::optional<ByteCount> representedBytes = std::nullopt,
@@ -90,10 +73,11 @@ class ConstantVector final : public SimpleVector<T> {
       valueVector_ = BaseVector::create(type, 1, pool);
       valueVector_->setNull(0, true);
     }
-    if (!isNull_ && std::is_same_v<T, StringView>) {
-      // Copy string value.
-      StringView* valuePtr = reinterpret_cast<StringView*>(&value_);
-      setValue(std::string(valuePtr->data(), valuePtr->size()));
+    if constexpr (std::is_same_v<T, StringView>) {
+      if (!isNull_) {
+        // Copy string value.
+        setValue(value_.str());
+      }
     }
     // If this is not encoded integer, or string, set value buffer
     if constexpr (can_simd) {
@@ -163,15 +147,19 @@ class ConstantVector final : public SimpleVector<T> {
     VELOX_FAIL("setNull not supported on ConstantVector");
   }
 
-  const T valueAtFast(vector_size_t /*idx*/) const {
+  const T value() const {
     VELOX_DCHECK(initialized_);
     return value_;
   }
 
-  virtual const T valueAt(vector_size_t idx) const override {
+  const T valueAtFast(vector_size_t /*idx*/) const {
+    return value();
+  }
+
+  virtual const T valueAt(vector_size_t /*idx*/) const override {
     VELOX_DCHECK(initialized_);
     SimpleVector<T>::checkElementSize();
-    return valueAtFast(idx);
+    return value();
   }
 
   BufferPtr getStringBuffer() const {
@@ -229,11 +217,6 @@ class ConstantVector final : public SimpleVector<T> {
 
   const BaseVector* loadedVector() const override {
     return const_cast<ConstantVector<T>*>(this)->loadedVector();
-  }
-
-  // Fast Check to optimize for constant vectors
-  bool isConstant(const SelectivityVector& rows) const override {
-    return true;
   }
 
   bool isScalar() const override {
@@ -312,12 +295,20 @@ class ConstantVector final : public SimpleVector<T> {
     return SimpleVector<T>::compare(other, index, otherIndex, flags);
   }
 
-  std::string toString(vector_size_t index) const override {
+  std::string toString() const {
     if (valueVector_) {
       return valueVector_->toString(index_);
     }
 
-    return SimpleVector<T>::toString(index);
+    if (isNull_) {
+      return "null";
+    } else {
+      return SimpleVector<T>::valueToString(value());
+    }
+  }
+
+  std::string toString(vector_size_t /*index*/) const override {
+    return toString();
   }
 
   bool isNullsWritable() const override {
@@ -329,7 +320,8 @@ class ConstantVector final : public SimpleVector<T> {
     std::stringstream out;
     out << "[" << BaseVector::encoding() << " "
         << BaseVector::type()->toString() << ": " << BaseVector::size()
-        << " elements, " << toString(index_) << "]";
+        << " elements, " << toString() << "]";
+
     return out.str();
   }
 

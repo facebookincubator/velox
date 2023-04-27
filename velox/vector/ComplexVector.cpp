@@ -139,6 +139,9 @@ void RowVector::copy(
     vector_size_t targetIndex,
     vector_size_t sourceIndex,
     vector_size_t count) {
+  if (count == 0) {
+    return;
+  }
   SelectivityVector rows(targetIndex + count);
   rows.setValidRange(0, targetIndex, false);
   rows.updateBounds();
@@ -206,8 +209,7 @@ void RowVector::copy(
     BufferPtr mappedIndices;
     vector_size_t* rawMappedIndices = nullptr;
     if (toSourceRow) {
-      mappedIndices =
-          AlignedBuffer::allocate<vector_size_t>(rows.size(), pool_);
+      mappedIndices = AlignedBuffer::allocate<vector_size_t>(rows.end(), pool_);
       rawMappedIndices = mappedIndices->asMutable<vector_size_t>();
       nonNullRows.applyToSelected(
           [&](auto row) { rawMappedIndices[row] = indices[toSourceRow[row]]; });
@@ -426,12 +428,14 @@ void ArrayVectorBase::copyRangesImpl(
         *targetValues);
   }
   auto setNotNulls = mayHaveNulls() || source->mayHaveNulls();
-  auto wantWidth = type()->isFixedWidth() ? type()->fixedElementsWidth() : 0;
   auto* mutableOffsets = offsets_->asMutable<vector_size_t>();
   auto* mutableSizes = sizes_->asMutable<vector_size_t>();
   vector_size_t childSize = targetValues->get()->size();
   if (ranges.size() == 1 && ranges.back().count == 1) {
     auto& range = ranges.back();
+    if (range.count == 0) {
+      return;
+    }
     VELOX_DCHECK(BaseVector::length_ >= range.targetIndex + range.count);
     // Fast path if we're just copying a single array.
     if (source->isNullAt(range.sourceIndex)) {
@@ -448,15 +452,6 @@ void ArrayVectorBase::copyRangesImpl(
       mutableSizes[range.targetIndex] = copySize;
 
       if (copySize > 0) {
-        // If we are populating a FixedSizeArray we validate here that
-        // the entries we are populating are the correct sizes.
-        if (wantWidth != 0) {
-          VELOX_CHECK_EQ(
-              copySize,
-              wantWidth,
-              "Invalid length element at wrappedIndex {}",
-              wrappedIndex);
-        }
         auto copyOffset = sourceArray->offsetAt(wrappedIndex);
         targetValues->get()->resize(childSize + copySize);
         targetValues->get()->copy(
@@ -471,6 +466,9 @@ void ArrayVectorBase::copyRangesImpl(
     std::vector<CopyRange> outRanges;
     vector_size_t totalCount = 0;
     for (auto& range : ranges) {
+      if (range.count == 0) {
+        continue;
+      }
       VELOX_DCHECK(BaseVector::length_ >= range.targetIndex + range.count);
       totalCount += range.count;
     }
@@ -488,17 +486,6 @@ void ArrayVectorBase::copyRangesImpl(
           vector_size_t copySize = sourceArray->sizeAt(wrappedIndex);
 
           if (copySize > 0) {
-            // If we are populating a FixedSizeArray we validate here that the
-            // entries we are populating are the correct sizes.
-            if (wantWidth != 0) {
-              VELOX_CHECK_EQ(
-                  copySize,
-                  wantWidth,
-                  "Invalid length element at index {}, wrappedIndex {}",
-                  i,
-                  wrappedIndex);
-            }
-
             auto copyOffset = sourceArray->offsetAt(wrappedIndex);
 
             // If we're copying two adjacent ranges, merge them.  This only
@@ -700,7 +687,7 @@ std::string ArrayVector::toString(vector_size_t index) const {
 }
 
 void ArrayVector::ensureWritable(const SelectivityVector& rows) {
-  auto newSize = std::max<vector_size_t>(rows.size(), BaseVector::length_);
+  auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
   if (offsets_ && !offsets_->unique()) {
     BufferPtr newOffsets =
         AlignedBuffer::allocate<vector_size_t>(newSize, BaseVector::pool_);
@@ -962,7 +949,7 @@ std::string MapVector::toString(vector_size_t index) const {
 }
 
 void MapVector::ensureWritable(const SelectivityVector& rows) {
-  auto newSize = std::max<vector_size_t>(rows.size(), BaseVector::length_);
+  auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
   if (offsets_ && !offsets_->unique()) {
     BufferPtr newOffsets =
         AlignedBuffer::allocate<vector_size_t>(newSize, BaseVector::pool_);
@@ -1026,8 +1013,6 @@ uint64_t MapVector::estimateFlatSize() const {
 
 void MapVector::prepareForReuse() {
   BaseVector::prepareForReuse();
-
-  sortedKeys_ = false;
 
   if (!(offsets_->unique() && offsets_->isMutable())) {
     offsets_ = nullptr;

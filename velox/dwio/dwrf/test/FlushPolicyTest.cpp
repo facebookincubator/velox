@@ -138,7 +138,8 @@ TEST(RowsPerStripeFlushPolicyTest, InvalidCases) {
 // RowsPerStripeFlushPolicy has no dictionary flush criteria.
 TEST(RowsPerSTripeFlushPolicyTest, DictionaryCriteriaTest) {
   auto config = std::make_shared<Config>();
-  WriterContext context{config, getDefaultMemoryPool()};
+  WriterContext context{
+      config, defaultMemoryManager().addRootPool("DictionaryCriteriaTest")};
 
   RowsPerStripeFlushPolicy policy({42});
   EXPECT_EQ(

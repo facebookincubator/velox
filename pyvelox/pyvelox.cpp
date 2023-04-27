@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#include "pyvelox.h" // @manual
+#include "pyvelox.h"
+#include "signatures.h"
 
 namespace facebook::velox::py {
 using namespace velox;
@@ -34,6 +35,15 @@ static VectorPtr variantToConstantVector(
   using NativeType = typename TypeTraits<T>::NativeType;
 
   TypePtr typePtr = fromKindToScalerType(T);
+  if (!variant.hasValue()) {
+    return std::make_shared<ConstantVector<NativeType>>(
+        pool,
+        length,
+        /*isNull=*/true,
+        typePtr,
+        NativeType{});
+  }
+
   NativeType value;
   if constexpr (std::is_same_v<NativeType, StringView>) {
     const std::string& str = variant.value<std::string>();
@@ -53,13 +63,21 @@ static VectorPtr variantToConstantVector(
 static VectorPtr pyToConstantVector(
     const py::handle& obj,
     vector_size_t length,
-    facebook::velox::memory::MemoryPool* pool) {
-  if (obj.is_none()) {
+    facebook::velox::memory::MemoryPool* pool,
+    TypePtr type) {
+  if (obj.is_none() && !type) {
     throw py::type_error("Cannot infer type of constant None vector");
   }
   velox::variant variant = pyToVariant(obj);
+  TypeKind kind = variant.kind();
+  if (type) {
+    kind = type->kind();
+    if (!obj.is_none()) {
+      variant = VariantConverter::convert(variant, type->kind());
+    }
+  }
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      variantToConstantVector, variant.kind(), variant, length, pool);
+      variantToConstantVector, kind, variant, length, pool);
 }
 
 template <TypeKind T>
@@ -131,39 +149,39 @@ static VectorPtr pyListToVector(
 
 template <typename NativeType>
 static py::object getItemFromSimpleVector(
-    SimpleVectorPtr<NativeType>& v,
+    SimpleVectorPtr<NativeType>& vector,
     vector_size_t idx) {
-  checkBounds(v, idx);
-  if (v->isNullAt(idx)) {
+  checkBounds(vector, idx);
+  if (vector->isNullAt(idx)) {
     return py::none();
   }
   if constexpr (std::is_same_v<NativeType, velox::StringView>) {
-    const velox::StringView value = v->valueAt(idx);
+    const velox::StringView value = vector->valueAt(idx);
     py::str result = std::string_view(value);
     return result;
   } else {
-    py::object result = py::cast(v->valueAt(idx));
+    py::object result = py::cast(vector->valueAt(idx));
     return result;
   }
 }
 
 template <typename NativeType>
 inline void setItemInFlatVector(
-    FlatVectorPtr<NativeType>& v,
+    FlatVectorPtr<NativeType>& vector,
     vector_size_t idx,
     py::handle& obj) {
-  checkBounds(v, idx);
+  checkBounds(vector, idx);
 
   velox::variant var = pyToVariant(obj);
   if (var.kind() == velox::TypeKind::INVALID) {
-    return v->setNull(idx, true);
+    return vector->setNull(idx, true);
   }
 
-  if (var.kind() != v->typeKind()) {
+  if (var.kind() != vector->typeKind()) {
     throw py::type_error("Attempted to insert value of mismatched types");
   }
 
-  v->set(idx, NativeType{var.value<NativeType>()});
+  vector->set(idx, NativeType{var.value<NativeType>()});
 }
 
 static VectorPtr evaluateExpression(
@@ -230,18 +248,6 @@ static void addExpressionBindings(
           },
           "Returns a list of expressions that the inputs to this expression")
       .def(
-          "withInputs",
-          [](IExprWrapper& e, std::vector<IExprWrapper>& i) {
-            std::vector<std::shared_ptr<const core::IExpr>> inputs;
-            inputs.reserve(i.size());
-            for (IExprWrapper& w : i) {
-              inputs.push_back(w.expr);
-            }
-            IExprWrapper result = {e.expr->withInputs(inputs)};
-            return result;
-          },
-          "Sets the inputs to the given list of expressions")
-      .def(
           "evaluate",
           [](IExprWrapper& e,
              std::vector<std::string> names,
@@ -274,12 +280,18 @@ static void addExpressionBindings(
 #ifdef CREATE_PYVELOX_MODULE
 PYBIND11_MODULE(pyvelox, m) {
   m.doc() = R"pbdoc(
-        PyVelox native code module
-        -----------------------
-       )pbdoc";
+      PyVelox native code module
+      --------------------------
+
+      .. currentmodule:: pyvelox.pyvelox
+
+      .. autosummary::
+         :toctree: _generate
+
+  )pbdoc";
 
   addVeloxBindings(m);
-
+  addSignatureBindings(m);
   m.attr("__version__") = "dev";
 }
 #endif

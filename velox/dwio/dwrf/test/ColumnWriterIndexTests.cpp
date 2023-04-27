@@ -92,7 +92,12 @@ VectorPtr prepBatchImpl(
   }
 
   auto batch = std::make_shared<FlatVector<T>>(
-      pool, nulls, size, values, std::vector<BufferPtr>());
+      pool,
+      CppToType<T>::create(),
+      nulls,
+      size,
+      values,
+      std::vector<BufferPtr>());
   batch->setNullCount(nullCount);
   return batch;
 }
@@ -102,7 +107,7 @@ VectorPtr prepStringBatchImpl(
     MemoryPool* pool,
     std::function<std::string(size_t, size_t)> genData,
     std::function<bool(size_t, size_t)> genNulls) {
-  BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), pool);
+  BufferPtr nulls = allocateNulls(size, pool);
   auto* nullsPtr = nulls->asMutable<uint64_t>();
   size_t nullCount = 0;
 
@@ -138,7 +143,7 @@ VectorPtr prepStringBatchImpl(
   }
 
   auto batch = std::make_shared<FlatVector<StringView>>(
-      pool, nulls, size, values, std::move(dataChunks));
+      pool, VARCHAR(), nulls, size, values, std::move(dataChunks));
   batch->setNullCount(nullCount);
   return batch;
 }
@@ -268,7 +273,7 @@ class WriterEncodingIndexTest2 {
  public:
   WriterEncodingIndexTest2()
       : config_{std::make_shared<Config>()},
-        pool_{facebook::velox::memory::getDefaultMemoryPool()} {}
+        pool_{facebook::velox::memory::addDefaultLeafMemoryPool()} {}
 
   virtual ~WriterEncodingIndexTest2() = default;
 
@@ -295,7 +300,10 @@ class WriterEncodingIndexTest2 {
       size_t flatMapOffset = 0) {
     auto isFlatMap = isRoot && flatMapOffset > 0;
     ASSERT_EQ(recordPositionCount.size(), backfillPositionCount.size());
-    WriterContext context{config_, velox::memory::getDefaultMemoryPool()};
+    WriterContext context{
+        config_,
+        velox::memory::defaultMemoryManager().addRootPool(
+            "WriterEncodingIndexTest2")};
     std::vector<StrictMock<MockIndexBuilder>*> mocks;
     for (auto i = 0; i < recordPositionCount.size(); ++i) {
       mocks.push_back(new StrictMock<MockIndexBuilder>());
@@ -564,7 +572,7 @@ class BinaryColumnWriterEncodingIndexTest
 
  protected:
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
-    BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), pool);
+    BufferPtr nulls = allocateNulls(size, pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
     size_t nullCount = 0;
 
@@ -589,7 +597,7 @@ class BinaryColumnWriterEncodingIndexTest
     }
 
     auto batch = std::make_shared<FlatVector<StringView>>(
-        pool, nulls, size, values, std::vector<BufferPtr>{data});
+        pool, VARCHAR(), nulls, size, values, std::vector<BufferPtr>{data});
     batch->setNullCount(nullCount);
     return batch;
   }
@@ -655,7 +663,7 @@ TYPED_TEST(FloatColumnWriterEncodingIndexTest, TestIndex) {
 class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
  public:
   explicit IntegerColumnWriterDirectEncodingIndexTest(bool abandonDict = false)
-      : pool_{memory::getDefaultMemoryPool()},
+      : pool_{memory::addDefaultLeafMemoryPool()},
         config_{std::make_shared<Config>()},
         abandonDict_{abandonDict} {
     config_->set(
@@ -694,7 +702,10 @@ class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
       size_t positionCount,
       size_t stripeCount,
       std::function<bool(size_t, size_t)> callAbandonDict) {
-    WriterContext context{config_, velox::memory::getDefaultMemoryPool()};
+    WriterContext context{
+        config_,
+        velox::memory::defaultMemoryManager().addRootPool(
+            "IntegerColumnWriterDirectEncodingIndexTest")};
     auto mockIndexBuilder = std::make_unique<StrictMock<MockIndexBuilder>>();
     auto mockIndexBuilderPtr = mockIndexBuilder.get();
     context.indexBuilderFactory_ = [&](auto /* unused */) {
@@ -858,7 +869,10 @@ TEST_F(IntegerColumnWriterAbandonDictionaryIndexTest, AbandonDictionary) {
 class StringColumnWriterDictionaryEncodingIndexTest : public testing::Test {
  public:
   explicit StringColumnWriterDictionaryEncodingIndexTest()
-      : pool_{memory::getDefaultMemoryPool()},
+      : rootPool_{memory::defaultMemoryManager().addRootPool(
+            "StringColumnWriterDictionaryEncodingIndexTest")},
+        leafPool_{rootPool_->addLeafChild(
+            "StringColumnWriterDictionaryEncodingIndexTest")},
         config_{std::make_shared<Config>()} {
     config_->set(
         Config::STRING_STATS_LIMIT, std::numeric_limits<uint32_t>::max());
@@ -881,7 +895,7 @@ class StringColumnWriterDictionaryEncodingIndexTest : public testing::Test {
   }
 
   void runTest(size_t pageCount, size_t positionCount, size_t stripeCount) {
-    WriterContext context{config_, velox::memory::getDefaultMemoryPool()};
+    WriterContext context{config_, rootPool_};
     auto mockIndexBuilder = std::make_unique<StrictMock<MockIndexBuilder>>();
     auto mockIndexBuilderPtr = mockIndexBuilder.get();
     context.indexBuilderFactory_ = [&](auto /* unused */) {
@@ -889,7 +903,8 @@ class StringColumnWriterDictionaryEncodingIndexTest : public testing::Test {
     };
     auto type = CppToType<folly::StringPiece>::create();
     auto typeWithId = TypeWithId::create(type, 1);
-    auto batch = prepBatch(1000, pool_.get(), alphabeticRoundRobin, someNulls);
+    auto batch =
+        prepBatch(1000, leafPool_.get(), alphabeticRoundRobin, someNulls);
 
     // ColumnWriter::recordPosition to capture PRESENT stream positions.
     // Compression + BufferedOutputStream + byteRLE + booleanRLE
@@ -934,7 +949,8 @@ class StringColumnWriterDictionaryEncodingIndexTest : public testing::Test {
     }
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_;
+  std::shared_ptr<memory::MemoryPool> rootPool_;
+  std::shared_ptr<memory::MemoryPool> leafPool_;
   std::shared_ptr<Config> config_;
 };
 
@@ -957,7 +973,10 @@ TEST_F(StringColumnWriterDictionaryEncodingIndexTest, OmitInDictStream) {
 class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
  public:
   explicit StringColumnWriterDirectEncodingIndexTest(bool abandonDict = false)
-      : pool_{memory::getDefaultMemoryPool()},
+      : rootPool_{memory::defaultMemoryManager().addRootPool(
+            "StringColumnWriterDirectEncodingIndexTest")},
+        leafPool_{rootPool_->addLeafChild(
+            "StringColumnWriterDirectEncodingIndexTest")},
         config_{std::make_shared<Config>()},
         abandonDict_{abandonDict} {
     config_->set(
@@ -971,7 +990,7 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
       size_t size,
       std::function<std::string(size_t, size_t)> genData,
       std::function<bool(size_t, size_t)> genNulls) {
-    return prepStringBatchImpl(size, pool_.get(), genData, genNulls);
+    return prepStringBatchImpl(size, leafPool_.get(), genData, genNulls);
   }
 
   void validateStats(const VectorPtr& batch, const ColumnStatistics& stats) {
@@ -984,7 +1003,7 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
       size_t positionCount,
       size_t stripeCount,
       std::function<bool(size_t, size_t)> callAbandonDict = neverAbandonDict) {
-    WriterContext context{config_, velox::memory::getDefaultMemoryPool()};
+    WriterContext context{config_, rootPool_};
     auto mockIndexBuilder = std::make_unique<StrictMock<MockIndexBuilder>>();
     auto mockIndexBuilderPtr = mockIndexBuilder.get();
     context.indexBuilderFactory_ = [&](auto /* unused */) {
@@ -1108,7 +1127,8 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
     }
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_;
+  std::shared_ptr<memory::MemoryPool> rootPool_;
+  std::shared_ptr<memory::MemoryPool> leafPool_;
   std::shared_ptr<Config> config_;
   bool abandonDict_;
 };
@@ -1152,14 +1172,14 @@ class ListColumnWriterEncodingIndexTest
 
  protected:
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
-    auto nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), pool);
+    auto nulls = allocateNulls(size, pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
     size_t nullCount = 0;
 
-    auto offsets = AlignedBuffer::allocate<vector_size_t>(size, pool);
+    auto offsets = allocateOffsets(size, pool);
     auto* offsetsPtr = offsets->asMutable<vector_size_t>();
 
-    auto lengths = AlignedBuffer::allocate<vector_size_t>(size, pool);
+    auto lengths = allocateSizes(size, pool);
     auto* lengthsPtr = lengths->asMutable<vector_size_t>();
 
     size_t value = 0;
@@ -1218,14 +1238,14 @@ class MapColumnWriterEncodingIndexTest
 
  protected:
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
-    auto nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), pool);
+    auto nulls = allocateNulls(size, pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
     size_t nullCount = 0;
 
-    auto offsets = AlignedBuffer::allocate<vector_size_t>(size, pool);
+    auto offsets = allocateOffsets(size, pool);
     auto* offsetsPtr = offsets->asMutable<vector_size_t>();
 
-    auto lengths = AlignedBuffer::allocate<vector_size_t>(size, pool);
+    auto lengths = allocateSizes(size, pool);
     auto* lengthsPtr = lengths->asMutable<vector_size_t>();
 
     size_t value = 0;
@@ -1289,12 +1309,12 @@ class FlatMapColumnWriterEncodingIndexTest
 
  protected:
   VectorPtr prepBatch(size_t size, MemoryPool* pool) override {
-    auto offsets = AlignedBuffer::allocate<vector_size_t>(size, pool);
+    auto offsets = allocateOffsets(size, pool);
     auto* offsetsPtr = offsets->asMutable<vector_size_t>();
     auto offsets2 = AlignedBuffer::allocate<vector_size_t>(size, pool);
     auto* offsets2Ptr = offsets2->asMutable<vector_size_t>();
 
-    auto lengths = AlignedBuffer::allocate<vector_size_t>(size, pool);
+    auto lengths = allocateSizes(size, pool);
     auto* lengthsPtr = lengths->asMutable<vector_size_t>();
     auto lengths2 = AlignedBuffer::allocate<vector_size_t>(size, pool);
     auto* lengths2Ptr = lengths2->asMutable<vector_size_t>();
@@ -1384,7 +1404,7 @@ class StructColumnWriterEncodingIndexTest
   }
 
   VectorPtr prepBatch(size_t size, MemoryPool* pool, bool isRoot) override {
-    auto nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), pool);
+    auto nulls = allocateNulls(size, pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
     size_t nullCount = 0;
 

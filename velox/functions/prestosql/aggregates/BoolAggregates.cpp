@@ -16,9 +16,10 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
-#include "velox/vector/FlatVector.h"
+
+using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -177,7 +178,7 @@ class BoolOrAggregate final : public BoolAndOrAggregate {
 };
 
 template <class T>
-bool registerBoolAggregate(const std::string& name) {
+bool registerBool(const std::string& name) {
   // TODO Fix signature to match Presto.
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
@@ -209,10 +210,10 @@ bool registerBoolAggregate(const std::string& name) {
 
 } // namespace
 
-void registerBoolAggregates() {
-  registerBoolAggregate<BoolAndAggregate>(kBoolAnd);
-  registerBoolAggregate<BoolAndAggregate>(kEvery);
-  registerBoolAggregate<BoolOrAggregate>(kBoolOr);
+void registerBoolAggregates(const std::string& prefix) {
+  registerBool<BoolAndAggregate>(prefix + kBoolAnd);
+  registerBool<BoolAndAggregate>(prefix + kEvery);
+  registerBool<BoolOrAggregate>(prefix + kBoolOr);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

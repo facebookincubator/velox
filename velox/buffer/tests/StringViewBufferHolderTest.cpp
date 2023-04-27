@@ -39,7 +39,7 @@ class StringViewBufferHolderTest : public testing::Test {
     return StringViewBufferHolder(pool_.get());
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
 };
 
 TEST_F(StringViewBufferHolderTest, inlinedStringViewDoesNotCopyToBuffer) {
@@ -179,7 +179,7 @@ TEST_F(
 
 TEST_F(StringViewBufferHolderTest, buffersCopy) {
   auto holder = makeHolder();
-  holder.getOwnedValue(StringView(nonInlinedString()));
+  holder.getOwnedValue(nonInlinedString());
 
   auto buffers = holder.buffers();
   EXPECT_EQ(1, buffers.size());
