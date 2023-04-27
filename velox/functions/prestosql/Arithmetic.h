@@ -35,7 +35,6 @@ namespace facebook::velox::functions {
 
 inline constexpr int kMinRadix = 2;
 inline constexpr int kMaxRadix = 36;
-constexpr double kInf = std::numeric_limits<double>::infinity();
 
 inline constexpr char digits[36] = {
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b',
@@ -496,24 +495,6 @@ struct TruncateFunction {
 
   FOLLY_ALWAYS_INLINE void call(double& result, double a, int32_t n) {
     result = truncate(a, n);
-  }
-};
-
-template <typename T>
-struct BetaCDFFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE void
-  call(double& result, double a, double b, double value) {
-    VELOX_USER_CHECK((a > 0) && (b > 0), "alpha and beta must be > 0");
-    VELOX_USER_CHECK(
-        (value >= 0) && (value <= 1), "value must be in the interval [0, 1]");
-    VELOX_USER_CHECK(
-        (a != kInf) && (b != kInf),
-        "alpha, beta values can't accept infinity value");
-
-    beta_distribution<> dist(a, b);
-    result = boost::math::cdf(dist, value);
   }
 };
 

@@ -17,6 +17,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/Bitwise.h"
+#include "velox/functions/prestosql/Probability.h"
 #include "velox/functions/prestosql/Rand.h"
 
 namespace facebook::velox::functions {
