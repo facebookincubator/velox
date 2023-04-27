@@ -190,6 +190,8 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<LastDayFunction, Date, Date>({prefix + "last_day"});
 
+  registerFunction<NextDayFunction, Date, Date, Varchar>({prefix + "next_day"});
+
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
       {prefix + "might_contain"});

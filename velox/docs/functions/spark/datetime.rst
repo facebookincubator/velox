@@ -11,6 +11,10 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns the last day of the month which the date belongs to.
 
+.. spark:function:: next_day(date, string) -> date
+
+    Returns the first date which is later than startDate and named as dayOfWeek.
+
 .. spark:function:: make_date(year, month, day) -> date
 
     Returns the date from year, month and day fields.

@@ -209,4 +209,78 @@ struct LastDayFunction {
   }
 };
 
+template <typename T>
+struct NextDayFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE int64_t getYear(const std::tm& time) {
+    return 1900 + time.tm_year;
+  }
+
+  FOLLY_ALWAYS_INLINE int64_t getMonth(const std::tm& time) {
+    return 1 + time.tm_mon;
+  }
+
+  FOLLY_ALWAYS_INLINE int64_t getDay(const std::tm& time) {
+    return time.tm_mday;
+  }
+
+  FOLLY_ALWAYS_INLINE int8_t
+  getDayOfWeekFromString(const std::string_view& inputStr) {
+    if (inputStr.empty()) {
+      VELOX_USER_FAIL("Empty input for day of week");
+    }
+    std::string input = {inputStr.begin(), inputStr.end()};
+    std::transform(
+        input.begin(), input.end(), input.begin(), [](char const& c) {
+          return std::toupper(c);
+        });
+    if (input == "SU" || input == "SUN" || input == "SUNDAY") {
+      return 3;
+    } else if (input == "MO" || input == "MON" || input == "MONDAY") {
+      return 4;
+    } else if (input == "TU" || input == "TUE" || input == "TUESDAY") {
+      return 5;
+    } else if (input == "WE" || input == "WED" || input == "WEDNESDAY") {
+      return 6;
+    } else if (input == "TH" || input == "THU" || input == "THURSDAY") {
+      return 0;
+    } else if (input == "FR" || input == "FRI" || input == "FRIDAY") {
+      return 1;
+    } else if (input == "SA" || input == "SAT" || input == "SATURDAY") {
+      return 2;
+    } else {
+      VELOX_USER_FAIL("Illegal input for day of week: {}", inputStr);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE int64_t
+  getNextDateForDayOfWeek(int64_t startDay, int8_t dayWeek) {
+    return startDay + 1 + ((dayWeek - 1 - startDay) % 7 + 7) % 7;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& startDate,
+      const arg_type<Varchar>& dayOfWeek) {
+    auto dateTime = getDateTime(startDate);
+    int8_t weekDay = getDayOfWeekFromString(
+        std::string_view(dayOfWeek.data(), dayOfWeek.size()));
+    int32_t year = getYear(dateTime);
+    int32_t month = getMonth(dateTime);
+    int32_t day = getDay(dateTime);
+    auto daysSinceEpoch = util::daysSinceEpochFromDate(year, month, day);
+    auto nextDay = getNextDateForDayOfWeek(daysSinceEpoch, weekDay);
+    VELOX_CHECK_EQ(
+        nextDay,
+        (int32_t)nextDay,
+        "Integer overflow in next_day({}-{}-{}, {})",
+        year,
+        month,
+        day,
+        dayOfWeek);
+    result = Date(nextDay);
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

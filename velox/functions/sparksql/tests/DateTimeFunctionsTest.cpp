@@ -208,5 +208,42 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
   EXPECT_EQ(lastDayFunc(std::nullopt), std::nullopt);
 }
 
+TEST_F(DateTimeFunctionsTest, nextDay) {
+  const auto nextDayFunc = [&](const std::optional<Date> date,
+                               const std::optional<StringView> dayOfWeek) {
+    return evaluateOnce<Date>("next_day(c0, c1)", date, dayOfWeek);
+  };
+
+  const auto nextDay = [&](const std::string& dateStr, const auto& dayOfWeek) {
+    Date d0;
+    parseTo(dateStr, d0);
+    return nextDayFunc(d0, dayOfWeek);
+  };
+
+  const auto parseDateStr = [&](const std::string& dateStr) {
+    Date d0;
+    parseTo(dateStr, d0);
+    return d0;
+  };
+
+  EXPECT_EQ(nextDay("2015-07-23", "Mon"), parseDateStr("2015-07-27"));
+  EXPECT_EQ(nextDay("2015-07-23", "mo"), parseDateStr("2015-07-27"));
+  EXPECT_EQ(nextDay("2015-07-23", "Tue"), parseDateStr("2015-07-28"));
+  EXPECT_EQ(nextDay("2015-07-23", "tu"), parseDateStr("2015-07-28"));
+  EXPECT_EQ(nextDay("2015-07-23", "we"), parseDateStr("2015-07-29"));
+  EXPECT_EQ(nextDay("2015-07-23", "wed"), parseDateStr("2015-07-29"));
+  EXPECT_EQ(nextDay("2015-07-23", "Thu"), parseDateStr("2015-07-30"));
+  EXPECT_EQ(nextDay("2015-07-23", "TH"), parseDateStr("2015-07-30"));
+  EXPECT_EQ(nextDay("2015-07-23", "Fri"), parseDateStr("2015-07-24"));
+  EXPECT_EQ(nextDay("2015-07-23", "fr"), parseDateStr("2015-07-24"));
+
+  EXPECT_EQ(nextDayFunc(std::nullopt, "xx"), std::nullopt);
+
+  Date d2;
+  parseTo("2015-07-23", d2);
+  EXPECT_THROW(nextDayFunc(d2, "xx"), VeloxUserError);
+  EXPECT_THROW(nextDayFunc(d2, "\"quote"), VeloxUserError);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
