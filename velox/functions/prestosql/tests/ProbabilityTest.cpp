@@ -35,10 +35,7 @@ MATCHER(IsInf, "is Infinity") {
   return arg && std::isinf(*arg);
 }
 
-class ProbabilityTest : public functions::test::FunctionBaseTest {
- 
-};
-
+class ProbabilityTest : public functions::test::FunctionBaseTest {};
 
 TEST_F(ProbabilityTest, betaCDF) {
   const auto betaCDF = [&](std::optional<double> a,

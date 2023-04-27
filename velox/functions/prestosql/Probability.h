@@ -17,14 +17,12 @@
 
 #include "boost/math/distributions/beta.hpp"
 
-
 namespace facebook::velox::functions {
 
 constexpr double kInf = std::numeric_limits<double>::infinity();
 
-
 namespace {
-  
+
 template <typename T>
 struct BetaCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);

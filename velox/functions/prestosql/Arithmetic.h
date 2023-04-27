@@ -23,13 +23,10 @@
 #include <functional>
 #include <system_error>
 
-#include "boost/math/distributions/beta.hpp"
 #include "folly/CPortability.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/ArithmeticImpl.h"
-
-using boost::math::beta_distribution;
 
 namespace facebook::velox::functions {
 
