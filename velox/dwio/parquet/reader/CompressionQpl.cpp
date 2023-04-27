@@ -15,6 +15,7 @@
  */
 #include <sys/time.h>
 
+#include <glog/logging.h>
 #include "CompressionQpl.h"
 #include "velox/dwio/common/BufferUtil.h"
 
@@ -30,52 +31,55 @@ hardware.
 * If hardware path init failed, call back to software path init.
 * If software path init failed, return error and exit.
 
-* But now, I don't know where to free the job buffers. If the reviewer know, can
-you tell me? Thanks.
+* QPL_STS_INTL_HARDWARE_TIMEOUT means init hardware timeout.
+* QPL_STS_INIT_HW_NOT_SUPPORTED means no IAA device.
+* QPL_STS_INIT_WORK_QUEUES_NOT_AVAILABLE means Supported and enabled work queues
+* are not found (May be due to lack of privileges e.g. lack of sudo on linux).
 */
 void Qplcodec::Initjob() {
-  if (initialize_job) {
+  if (jobInitialize_) {
     return;
   }
 
   qpl_status status;
   uint32_t size;
 
-  status = qpl_get_job_size(execute_path_, &size);
+  status = qpl_get_job_size(executePath_, &size);
   if (status != QPL_STS_OK) {
     VELOX_FAIL("QPL::An error acquired during job size getting.");
   }
 
-  job_buffer = new uint8_t[size];
-  job_ = reinterpret_cast<qpl_job*>(job_buffer);
-  status = qpl_init_job(execute_path_, job_);
+  jobBuffer_.resize(size);
+  job_ = reinterpret_cast<qpl_job*>(jobBuffer_.data());
 
-  if (status != QPL_STS_OK) {
-    execute_path_ = qpl_path_software;
-    status = qpl_get_job_size(execute_path_, &size);
+  status = qpl_init_job(executePath_, job_);
+
+  if (status == QPL_STS_INTL_HARDWARE_TIMEOUT ||
+      status == QPL_STS_INIT_HW_NOT_SUPPORTED ||
+      status == QPL_STS_INIT_WORK_QUEUES_NOT_AVAILABLE) {
+    executePath_ = qpl_path_software;
+    status = qpl_get_job_size(executePath_, &size);
     if (status != QPL_STS_OK) {
       VELOX_FAIL("QPL::An error acquired during job size getting.");
     }
 
-    delete[] job_buffer;
-    job_buffer = new uint8_t[size];
-    job_ = reinterpret_cast<qpl_job*>(job_buffer);
-    status = qpl_init_job(execute_path_, job_);
+    jobBuffer_.resize(size);
+    job_ = reinterpret_cast<qpl_job*>(jobBuffer_.data());
+    status = qpl_init_job(executePath_, job_);
     if (status != QPL_STS_OK) {
       VELOX_FAIL("QPL::An error acquired during compression job initializing.");
     }
   }
-  initialize_job = true;
+  jobInitialize_ = true;
   return;
 }
 
 Qplcodec::~Qplcodec() {
   qpl_status status = qpl_fini_job(job_);
   if (status != QPL_STS_OK) {
-    VELOX_FAIL(
-        "QPL::An error acquired during compression job initializing finalization.");
+    LOG(ERROR)
+        << "QPL::An error acquired during compression job initializing finalization.";
   }
-  delete[] job_buffer;
 }
 /*
  * The QPL can't compress/decompress the block over QPL_MAX_TRANS_SIZE,

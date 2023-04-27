@@ -18,15 +18,16 @@
 #include <qpl/qpl.h>
 #include <iostream>
 #include <memory>
+#include <vector>
 
 class Qplcodec {
  public:
   Qplcodec(qpl_path_t execute_path, qpl_compression_levels compression_level)
-      : initialize_job(false),
-        execute_path_(execute_path),
+      : jobInitialize_(false),
+        executePath_(execute_path),
         compression_level_(compression_level),
         job_(NULL),
-        job_buffer(NULL){};
+        jobBuffer_(0){};
   ~Qplcodec();
   void Initjob();
   void Decompress(
@@ -41,9 +42,9 @@ class Qplcodec {
       uint8_t* output);
 
  private:
-  bool initialize_job;
-  qpl_path_t execute_path_;
+  bool jobInitialize_;
+  qpl_path_t executePath_;
   qpl_compression_levels compression_level_;
   qpl_job* job_;
-  uint8_t* job_buffer;
+  std::vector<uint8_t> jobBuffer_;
 };
