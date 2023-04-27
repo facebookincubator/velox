@@ -46,6 +46,7 @@ add_library(
   PartitionedOutput.cpp
   PartitionedOutputBufferManager.cpp
   PlanNodeStats.cpp
+  ProbeOperatorState.cpp
   RowContainer.cpp
   Spill.cpp
   SpillOperatorGroup.cpp

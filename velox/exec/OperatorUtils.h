@@ -127,4 +127,9 @@ void addOperatorRuntimeStats(
 void aggregateOperatorRuntimeStats(
     std::unordered_map<std::string, RuntimeMetric>& stats);
 
+folly::Range<vector_size_t*> initializeRowNumberMapping(
+    BufferPtr& mapping,
+    vector_size_t size,
+    memory::MemoryPool* pool);
+
 } // namespace facebook::velox::exec
