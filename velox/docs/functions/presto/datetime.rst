@@ -4,7 +4,7 @@ Date and Time Functions
 
 .. function:: current_date() -> date
 
-    Returns the current date as of the start of the query.
+    Returns the current date.
 
 .. function:: date(x) -> date
 
