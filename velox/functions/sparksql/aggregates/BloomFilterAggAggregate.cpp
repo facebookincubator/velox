@@ -206,14 +206,14 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     if (args.size() > 1) {
       DecodedVector decodedEstimatedNumItems(*args[1], rows);
       setConstantArgument(
-          "originalEstimatedNumItems",
+          "estimatedNumItems",
           originalEstimatedNumItems_,
           decodedEstimatedNumItems);
       if (args.size() > 2) {
         VELOX_CHECK_EQ(args.size(), 3);
         DecodedVector decodedNumBits(*args[2], rows);
         setConstantArgument(
-            "originalNumBits", originalNumBits_, decodedNumBits);
+            "numBits", originalNumBits_, decodedNumBits);
       } else {
         originalNumBits_ = originalEstimatedNumItems_ * 8;
       }
