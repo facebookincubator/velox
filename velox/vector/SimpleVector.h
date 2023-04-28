@@ -169,20 +169,7 @@ class SimpleVector : public BaseVector {
     if (isNullAt(index)) {
       out << "null";
     } else {
-      if constexpr (std::is_same_v<T, bool>) {
-        out << (valueAt(index) ? "true" : "false");
-      } else if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
-        out << "<opaque>";
-      } else if constexpr (
-          std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
-        if (isDecimalType(*type())) {
-          out << DecimalUtil::toString(valueAt(index), type());
-        } else {
-          out << velox::to<std::string>(valueAt(index));
-        }
-      } else {
-        out << velox::to<std::string>(valueAt(index));
-      }
+      out << valueToString(valueAt(index));
     }
     return out.str();
   }

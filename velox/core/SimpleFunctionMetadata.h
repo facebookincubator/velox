@@ -281,7 +281,7 @@ template <typename T>
 struct TypeAnalysis<CustomType<T>> {
   void run(TypeAnalysisResults& results) {
     results.stats.concreteCount++;
-    results.out << detail::strToLowerCopy(T::typeName);
+    results.out << T::typeName;
   }
 };
 

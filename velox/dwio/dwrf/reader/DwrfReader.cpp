@@ -611,7 +611,6 @@ uint64_t maxStreamsForType(const TypeWrapper& type) {
       case TypeKind::SMALLINT:
       case TypeKind::INTEGER:
       case TypeKind::BIGINT:
-      case TypeKind::HUGEINT:
       case TypeKind::REAL:
       case TypeKind::DOUBLE:
       case TypeKind::BOOLEAN:

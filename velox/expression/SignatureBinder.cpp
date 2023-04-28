@@ -174,14 +174,6 @@ bool SignatureBinderBase::tryBind(
   auto actualTypeName =
       boost::algorithm::to_upper_copy(std::string(actualType->name()));
 
-  if (auto customType = getCustomType(baseName)) {
-    VELOX_CHECK_EQ(
-        typeSignature.parameters().size(),
-        0,
-        "Custom types with parameters are not supported yet");
-    return customType->equivalent(*actualType);
-  }
-
   if (typeName != actualTypeName) {
     return false;
   }

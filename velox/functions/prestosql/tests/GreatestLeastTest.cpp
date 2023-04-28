@@ -191,64 +191,44 @@ TEST_F(GreatestLeastTest, clearNulls) {
 
 TEST_F(GreatestLeastTest, shortDecimal) {
   const auto type = DECIMAL(10, 4);
+  static const auto kMin = DecimalUtil::kLongDecimalMin + 1;
+  static const auto kMax = DecimalUtil::kLongDecimalMax - 1;
 
   const auto a = makeNullableShortDecimalFlatVector(
-      {10000,
-       -10000,
-       20000,
-       DecimalUtil::kLongDecimalMax,
-       DecimalUtil::kLongDecimalMin,
-       std::nullopt},
-      type);
+      {10000, -10000, 20000, kMax, kMin, std::nullopt}, type);
   const auto b = makeNullableShortDecimalFlatVector(
-      {-10000,
-       10000,
-       -20000,
-       DecimalUtil::kLongDecimalMin,
-       DecimalUtil::kLongDecimalMax,
-       1},
-      type);
+      {-10000, 10000, -20000, kMin, kMax, 1}, type);
   runDecimalTest("least(c0)", {a}, a);
   runDecimalTest("greatest(c0)", {a}, a);
 
   auto expected = makeNullableShortDecimalFlatVector(
-      {-10000,
-       -10000,
-       -20000,
-       DecimalUtil::kLongDecimalMin,
-       DecimalUtil::kLongDecimalMin,
-       std::nullopt},
-      type);
+      {-10000, -10000, -20000, kMin, kMin, std::nullopt}, type);
   runDecimalTest("least(c0, c1)", {a, b}, expected);
 
   expected = makeNullableShortDecimalFlatVector(
-      {10000,
-       10000,
-       20000,
-       DecimalUtil::kLongDecimalMax,
-       DecimalUtil::kLongDecimalMax,
-       std::nullopt},
-      type);
+      {10000, 10000, 20000, kMax, kMax, std::nullopt}, type);
   runDecimalTest("greatest(c0, c1)", {a, b}, expected);
 }
 
 TEST_F(GreatestLeastTest, longDecimal) {
   const auto type = DECIMAL(38, 10);
+  static const auto kMin = DecimalUtil::kLongDecimalMin + 1;
+  static const auto kMax = DecimalUtil::kLongDecimalMax - 1;
 
   const auto a = makeNullableLongDecimalFlatVector(
       {HugeInt::build(10, 300),
        HugeInt::build(-10, 300),
        HugeInt::build(200, 300),
-       DecimalUtil::kLongDecimalMax,
-       DecimalUtil::kLongDecimalMin,
+       kMax,
+       kMin,
        std::nullopt},
       type);
   const auto b = makeNullableLongDecimalFlatVector(
       {HugeInt::build(-10, 300),
        HugeInt::build(10, 300),
        HugeInt::build(-200, 300),
-       DecimalUtil::kLongDecimalMin,
-       DecimalUtil::kLongDecimalMax,
+       kMin,
+       kMax,
        HugeInt::build(1, 1)},
       type);
   runDecimalTest("least(c0)", {a}, a);
@@ -258,8 +238,8 @@ TEST_F(GreatestLeastTest, longDecimal) {
       {HugeInt::build(-10, 300),
        HugeInt::build(-10, 300),
        HugeInt::build(-200, 300),
-       DecimalUtil::kLongDecimalMin,
-       DecimalUtil::kLongDecimalMin,
+       kMin,
+       kMin,
        std::nullopt},
       type);
   runDecimalTest("least(c0, c1)", {a, b}, expected);
@@ -268,8 +248,8 @@ TEST_F(GreatestLeastTest, longDecimal) {
       {HugeInt::build(10, 300),
        HugeInt::build(10, 300),
        HugeInt::build(200, 300),
-       DecimalUtil::kLongDecimalMax,
-       DecimalUtil::kLongDecimalMax,
+       kMax,
+       kMax,
        std::nullopt},
       type);
   runDecimalTest("greatest(c0, c1)", {a, b}, expected);

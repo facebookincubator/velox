@@ -275,8 +275,7 @@ int128_t readJavaDecimal(ByteStream* source) {
   return HugeInt::build(high, low);
 }
 
-template <>
-void readValues<int128_t>(
+void readDecimalValues(
     ByteStream* source,
     vector_size_t size,
     BufferPtr nulls,
@@ -344,6 +343,10 @@ void read(
           source, size, flatResult->nulls(), nullCount, values);
       return;
     }
+  }
+  if (type->isLongDecimal()) {
+    readDecimalValues(source, size, flatResult->nulls(), nullCount, values);
+    return;
   }
   readValues<T>(source, size, flatResult->nulls(), nullCount, values);
 }
@@ -972,7 +975,10 @@ FOLLY_ALWAYS_INLINE int128_t toJavaDecimalValue(int128_t value) {
 template <>
 void VectorStream::append(folly::Range<const int128_t*> values) {
   for (auto& value : values) {
-    auto val = toJavaDecimalValue(value);
+    int128_t val = value;
+    if (type_->isLongDecimal()) {
+      val = toJavaDecimalValue(value);
+    }
     values_.append<int128_t>(folly::Range(&val, 1));
   }
 }
@@ -985,7 +991,6 @@ void serializeFlatVector(
   using T = typename TypeTraits<kind>::NativeType;
   auto flatVector = dynamic_cast<const FlatVector<T>*>(vector);
   auto rawValues = flatVector->rawValues();
-  // Each Decimal value might have to be modified. Use slow path.
   if (!flatVector->mayHaveNulls()) {
     for (auto& range : ranges) {
       stream->appendNonNull(range.size);

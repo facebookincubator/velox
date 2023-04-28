@@ -72,7 +72,7 @@ enum class TypeKind : int8_t {
   VARBINARY = 8,
   TIMESTAMP = 9,
   DATE = 10,
-  HUGEINT = 12,
+  HUGEINT = 11,
   // Enum values for ComplexTypes start after 30 to leave
   // some values space to accommodate adding new scalar/native
   // types above.
