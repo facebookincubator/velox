@@ -124,12 +124,17 @@ std::vector<CacheRequest*> makeRequestParts(
   // metadata columns (empty no trackingData) always coalesce.
   bool prefetchOne =
       request.trackingId.id() == StreamIdentifier::sequentialFile().id_;
-  auto readPct =
-      (100 * trackingData.numReads) / (1 + trackingData.numReferences);
-  auto readDensity =
-      (100 * trackingData.readBytes) / (1 + trackingData.referencedBytes);
+  auto numQuanta = bits::roundUp(request.size, loadQuantum) / loadQuantum;
+  // Subtract the number of quanta of this to compare historical read to
+  // historical, not current referenced.
+  auto readPct = (100 * trackingData.numReads) /
+      std::max<int64_t>(1, trackingData.numReferences - numQuanta);
+  // We subtract the size of this request from referenced. in this way we
+  // compare historical read to historical referenced, not current referenced.
+  auto readDensity = (100 * trackingData.readBytes) /
+      std::max<int64_t>(1, trackingData.referencedBytes - request.size);
   bool prefetch = trackingData.referencedBytes > 0 &&
-      (isPrefetchPct(readPct) && readDensity >= 80);
+      (isPrefetchPct(readPct) && readDensity >= 60);
   std::vector<CacheRequest*> parts;
   for (uint64_t offset = 0; offset < request.size; offset += loadQuantum) {
     int32_t size = std::min<int32_t>(loadQuantum, request.size - offset);
