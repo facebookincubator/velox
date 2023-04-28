@@ -286,6 +286,16 @@ bool registerStatefulVectorFunction(
         (name), (signatures), (function));                                \
   }
 
+// Declares a vectorized UDF function given a tag. If. Goes into the UDF .cpp
+// file. If the function is already registered, new signature is appended to the
+// list of signatures.
+#define VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_NO_OVERWRITE(     \
+    tag, signatures, function)                                   \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(const std::string& name) { \
+    facebook::velox::exec::registerStatefulVectorFunction(       \
+        (name), (signatures), (function), {}, false);            \
+  }
+
 #define VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(    \
     tag, signatures, metadata, function)                         \
   void _VELOX_REGISTER_FUNC_NAME(tag)(const std::string& name) { \
