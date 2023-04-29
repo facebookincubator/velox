@@ -97,6 +97,40 @@ std::string Filter::toString() const {
       nullAllowed_ ? "null allowed" : "null not allowed");
 }
 
+namespace {
+std::unordered_map<FilterKind, std::string> filterKinds() {
+  return {
+      {FilterKind::kAlwaysFalse, "kAlwaysFalse"},
+      {FilterKind::kAlwaysTrue, "kAlwaysTrue"},
+      {FilterKind::kIsNull, "kIsNull"},
+      {FilterKind::kIsNotNull, "kIsNotNull"},
+      {FilterKind::kBoolValue, "kBoolValue"},
+      {FilterKind::kBigintRange, "kBigintRange"},
+      {FilterKind::kBigintValuesUsingHashTable, "kBigintValuesUsingHashTable"},
+      {FilterKind::kBigintValuesUsingBitmask, "kBigintValuesUsingBitmask"},
+      {FilterKind::kNegatedBigintRange, "kNegatedBigintRange"},
+      {FilterKind::kNegatedBigintValuesUsingHashTable,
+       "kNegatedBigintValuesUsingHashTable"},
+      {FilterKind::kNegatedBigintValuesUsingBitmask,
+       "kNegatedBigintValuesUsingBitmask"},
+      {FilterKind::kDoubleRange, "kDoubleRange"},
+      {FilterKind::kFloatRange, "kFloatRange"},
+      {FilterKind::kBytesRange, "kBytesRange"},
+      {FilterKind::kNegatedBytesRange, "kNegatedBytesRange"},
+      {FilterKind::kBytesValues, "kBytesValues"},
+      {FilterKind::kNegatedBytesValues, "kNegatedBytesValues"},
+      {FilterKind::kBigintMultiRange, "kBigintMultiRange"},
+      {FilterKind::kMultiRange, "kMultiRange"},
+      {FilterKind::kHugeintRange, "kHugeintRange"},
+  };
+}
+
+const char* filterKinds(FilterKind kind) {
+  static const auto kinds = filterKinds();
+  return kinds.at(kind).c_str();
+}
+} // namespace
+
 void Filter::registerSerDe() {
   auto& registry = DeserializationRegistryForSharedPtr();
 
@@ -210,8 +244,8 @@ FilterPtr NegatedBigintRange::create(const folly::dynamic& obj) {
 
 folly::dynamic HugeintRange::serialize() const {
   auto obj = Filter::serializeBase("HugeintRange");
-  auto lower = splitInt128<int64_t>(lower_);
-  auto upper = splitInt128<int64_t>(upper_);
+  auto lower = splitInt128(lower_);
+  auto upper = splitInt128(upper_);
   obj["lowerHi"] = lower.first;
   obj["lowerLo"] = lower.second;
   obj["upperHi"] = upper.first;
@@ -255,7 +289,7 @@ FilterPtr BigintValuesUsingHashTable::create(const folly::dynamic& obj) {
   auto min = obj["min"].asInt();
   auto max = obj["max"].asInt();
   auto containsEmptyMarker = obj["containsEmptyMarker"].asBool();
-  auto sizeMask = static_cast<int32_t>(obj["sizeMask"].asBool());
+  auto sizeMask = static_cast<int32_t>(obj["sizeMask"].asInt());
 
   std::vector<int64_t> values;
   auto valArr = obj["values"];
@@ -321,7 +355,6 @@ folly::dynamic NegatedBigintValuesUsingHashTable::serialize() const {
 FilterPtr NegatedBigintValuesUsingHashTable::create(const folly::dynamic& obj) {
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto deterministic = obj["deterministic"].asBool();
-  // auto kind = filterKindFromName(obj["kind"].asString());
   auto nonNegated =
       ISerializable::deserialize<BigintValuesUsingHashTable>(obj["nonNegated"]);
   return std::make_shared<NegatedBigintValuesUsingHashTable>(

@@ -36,7 +36,7 @@ class FilterSerDeTest : public testing::Test {
     auto obj = filter.serialize();
     auto copy = ISerializable::deserialize<Filter>(obj);
     EXPECT_EQ(filter.toString(), copy->toString());
-    ASSERT_TRUE(filter.testEquals(std::forward<FilterPtr>(copy)));
+    ASSERT_TRUE(filter.testingEquals(*copy));
   }
 };
 
