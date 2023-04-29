@@ -3073,6 +3073,7 @@ TEST_F(DateTimeFunctionsTest, fromISO8601FunctionDate) {
   EXPECT_EQ(Date(18297), fromISODate("2020-02-05T14:27:39.000"));
   // Date(-18297) is 1919-11-28.
   EXPECT_EQ(Date(-18297), fromISODate("1919-11-28T23:59:59.999"));
+  EXPECT_EQ(Date(-18297), fromISODate("1919-11-28T23:59:59.999Z"));
 
   // Illegal date format.
 //   VELOX_ASSERT_THROW(
