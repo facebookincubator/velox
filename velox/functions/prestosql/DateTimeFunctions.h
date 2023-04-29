@@ -100,6 +100,20 @@ struct TimestampWithTimezoneSupport {
 } // namespace
 
 template <typename T>
+struct FromISO8601DateFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Varchar>& isoDateStr) {
+    bool nullOutput;
+
+    std::string isoDateExtracted = std::string(isoDateStr.data(), isoDateStr.size()).substr(0, 10);
+    result = util::Converter<TypeKind::DATE>::cast(isoDateExtracted, nullOutput);
+  }
+};
+
+template <typename T>
 struct DateFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
