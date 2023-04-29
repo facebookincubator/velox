@@ -334,6 +334,7 @@ FilterPtr BigintValuesUsingBitmask::create(const folly::dynamic& obj) {
   auto min = obj["min"].asInt();
   auto max = obj["max"].asInt();
   auto nullAllowed = obj["nullAllowed"].asBool();
+  auto deterministic = obj["deterministic"].asBool();
 
   std::vector<bool> bitmask;
   auto arr = obj["bitmask"];
@@ -343,7 +344,7 @@ FilterPtr BigintValuesUsingBitmask::create(const folly::dynamic& obj) {
   }
 
   return std::make_shared<BigintValuesUsingBitmask>(
-      min, max, std::move(bitmask), nullAllowed);
+      min, max, std::move(bitmask), deterministic, nullAllowed);
 }
 
 folly::dynamic NegatedBigintValuesUsingHashTable::serialize() const {
@@ -358,7 +359,9 @@ FilterPtr NegatedBigintValuesUsingHashTable::create(const folly::dynamic& obj) {
   auto nonNegated =
       ISerializable::deserialize<BigintValuesUsingHashTable>(obj["nonNegated"]);
   return std::make_shared<NegatedBigintValuesUsingHashTable>(
-      deterministic, nullAllowed, std::move(*nonNegated));
+      deterministic,
+      nullAllowed,
+      std::move(const_cast<BigintValuesUsingHashTable&>(*nonNegated)));
 }
 
 folly::dynamic NegatedBigintValuesUsingBitmask::serialize() const {
@@ -377,7 +380,11 @@ FilterPtr NegatedBigintValuesUsingBitmask::create(const folly::dynamic& obj) {
   auto nonNegated =
       ISerializable::deserialize<BigintValuesUsingBitmask>(obj["nonNegated"]);
   return std::make_shared<NegatedBigintValuesUsingBitmask>(
-      min, max, *nonNegated, deterministic, nullAllowed);
+      min,
+      max,
+      std::move(const_cast<BigintValuesUsingBitmask&>(*nonNegated)),
+      deterministic,
+      nullAllowed);
 }
 
 template <>

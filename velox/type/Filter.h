@@ -888,9 +888,6 @@ class BigintValuesUsingHashTable final : public Filter {
         values_(std::move(values)),
         sizeMask_(sizeMask) {}
 
-  BigintValuesUsingHashTable(const BigintValuesUsingHashTable& other)
-      : BigintValuesUsingHashTable(other, other.nullAllowed_) {}
-
   folly::dynamic serialize() const override;
 
   static FilterPtr create(const folly::dynamic& obj);
@@ -998,29 +995,15 @@ class BigintValuesUsingBitmask final : public Filter {
       int64_t min,
       int64_t max,
       std::vector<bool>&& bitmask,
+      bool deterministic,
       bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBitmask),
+      : Filter(
+            deterministic,
+            nullAllowed,
+            FilterKind::kBigintValuesUsingBitmask),
         bitmask_(bitmask),
         min_(min),
         max_(max) {}
-
-  BigintValuesUsingBitmask(const BigintValuesUsingBitmask& other)
-      : Filter(
-            other.deterministic,
-            other.nullAllowed_,
-            FilterKind::kBigintValuesUsingBitmask),
-        bitmask_(other.bitmask_),
-        min_(other.min_),
-        max_(other.max_) {}
-
-  BigintValuesUsingBitmask(const BigintValuesUsingBitmask&& other)
-      : Filter(
-            other.deterministic,
-            other.nullAllowed_,
-            FilterKind::kBigintValuesUsingBitmask),
-        bitmask_(std::move(other.bitmask_)),
-        min_(other.min_),
-        max_(other.max_) {}
 
   BigintValuesUsingBitmask(
       const BigintValuesUsingBitmask& other,
@@ -1098,12 +1081,13 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
   NegatedBigintValuesUsingHashTable(
       bool deterministic,
       bool nullAllowed,
-      const BigintValuesUsingHashTable&& nonNegated)
+      BigintValuesUsingHashTable nonNegated)
       : Filter(
             deterministic,
             nullAllowed,
             FilterKind::kNegatedBigintValuesUsingHashTable),
-        nonNegated_(std::make_unique<BigintValuesUsingHashTable>(nonNegated)) {}
+        nonNegated_(std::make_unique<BigintValuesUsingHashTable>(
+            std::move(nonNegated))) {}
 
   NegatedBigintValuesUsingHashTable(
       const NegatedBigintValuesUsingHashTable& other,
@@ -1193,7 +1177,7 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
   NegatedBigintValuesUsingBitmask(
       int64_t min,
       int64_t max,
-      const BigintValuesUsingBitmask& nonNegated,
+      BigintValuesUsingBitmask nonNegated,
       bool deterministic,
       bool nullAllowed)
       : Filter(
@@ -1827,16 +1811,6 @@ class BytesValues final : public Filter {
 
   BytesValues(const BytesValues& other, bool nullAllowed)
       : Filter(true, nullAllowed, FilterKind::kBytesValues),
-        lower_(other.lower_),
-        upper_(other.upper_),
-        values_(other.values_),
-        lengths_(other.lengths_) {}
-
-  BytesValues(const BytesValues& other)
-      : Filter(
-            other.isDeterministic(),
-            other.nullAllowed_,
-            FilterKind::kBytesValues),
         lower_(other.lower_),
         upper_(other.upper_),
         values_(other.values_),
