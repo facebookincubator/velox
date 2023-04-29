@@ -142,45 +142,40 @@ value of <cite>max_partial_aggregation_memory</cite>. Specify higher value for <
 <td><p>false</p></td>
 <td><p>Spill memory to disk to avoid exceeding memory limits for the query.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spiller-spill-path</p></td>
-<td><p>string</p></td>
-<td><p>/tmp</p></td>
-<td><p>Directory where spilled content is written.</p></td>
-</tr>
-<tr class="row-even"><td><p>aggregation_spill_enabled</p></td>
+<tr class="row-odd"><td><p>aggregation_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>false</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk for aggregations to avoid exceeding
 memory limits for the query.</p></td>
 </tr>
-<tr class="row-odd"><td><p>join_spill_enabled</p></td>
+<tr class="row-even"><td><p>join_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>false</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk for hash joins to avoid exceeding memory
 limits for the query.</p></td>
 </tr>
-<tr class="row-even"><td><p>order_by_spill_enabled</p></td>
+<tr class="row-odd"><td><p>order_by_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>false</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether to spill memory to disk for order by to avoid exceeding memory
 limits for the query.</p></td>
 </tr>
-<tr class="row-odd"><td><p>aggregation_spill_memory_threshold</p></td>
+<tr class="row-even"><td><p>aggregation_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum amount of memory in bytes that a final aggregation can use before spilling. 0 means unlimited.</p></td>
 </tr>
-<tr class="row-even"><td><p>join_spill_memory_threshold</p></td>
+<tr class="row-odd"><td><p>join_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum amount of memory in bytes that a hash join build side can use before spilling. 0 means unlimited.</p></td>
 </tr>
-<tr class="row-odd"><td><p>order_by_spill_memory_threshold</p></td>
+<tr class="row-even"><td><p>order_by_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum amount of memory in bytes that an order by can use before spilling. 0 means unlimited.</p></td>
 </tr>
-<tr class="row-even"><td><p>spillable-reservation-growth-pct</p></td>
+<tr class="row-odd"><td><p>spillable-reservation-growth-pct</p></td>
 <td><p>integer</p></td>
 <td><p>25</p></td>
 <td><p>The spillable memory reservation growth percentage of the current memory reservation size. Suppose a growth
@@ -189,7 +184,7 @@ M * (1 + N / 100). After growing the memory reservation K times, the memory rese
 M * (1 + N / 100) ^ K. Hence the memory reservation grows along a series of powers of (1 + N / 100).
 If the memory reservation fails, it starts spilling.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max-spill-level</p></td>
+<tr class="row-even"><td><p>max-spill-level</p></td>
 <td><p>integer</p></td>
 <td><p>4</p></td>
 <td><p>The maximum allowed spilling level with zero being the initial spilling level. Applies to hash join build
@@ -197,12 +192,12 @@ spilling which might use recursive spilling when the build table is very large. 
 In this case an extremely large query might run out of spilling partition bits. The max spill level
 can be used to prevent a query from using too much io and cpu resources.</p></td>
 </tr>
-<tr class="row-even"><td><p>max-spill-file-size</p></td>
+<tr class="row-odd"><td><p>max-spill-file-size</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>The maximum allowed spill file size. Zero means unlimited.</p></td>
 </tr>
-<tr class="row-odd"><td><p>min-spill-run-size</p></td>
+<tr class="row-even"><td><p>min-spill-run-size</p></td>
 <td><p>integer</p></td>
 <td><p>256MB</p></td>
 <td><p>The minimum spill run size (bytes) limit used to select partitions for spilling. The spiller tries to spill a
