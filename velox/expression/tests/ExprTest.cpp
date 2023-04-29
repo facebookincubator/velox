@@ -3744,3 +3744,25 @@ TEST_F(ExprTest, dictionaryOverLoadedLazy) {
   auto resultFromLazy = evaluate("c0 < 5", makeRowVector({c0, c1}));
   assertEqualVectors(result[1], resultFromLazy);
 }
+
+TEST_F(ExprTest, copyableIntermediateResultVector) {
+  auto indices = makeIndices({0, 0, 4, 4, 0});
+  auto indices2 = makeIndices({0, 1, 3});
+  auto nulls = makeNulls({false, false, false, true, false});
+  auto c0 = BaseVector::wrapInDictionary(
+      nulls, indices, 5, makeNullableFlatVector<int64_t>({1, 1, 1, 2, 2}));
+  auto wrappedC0 = BaseVector::wrapInDictionary(nullptr, indices2, 3, c0);
+  auto c1 = BaseVector::wrapInDictionary(
+      nullptr, indices2, 3, makeNullableFlatVector<int64_t>({3, 3, 3, 3, 3}));
+
+  // Evaluate the expression only on rows 0, 1, 3. Coalesce will produce a
+  // dictionary-encoded partial result from the first arugment. When Coalesce's
+  // second argument is evaluated on remaining rows, it will copy all values
+  // except the remaining rows. This test ensures that copying values on rows
+  // other than 0, 1, 3 still works correctly.
+  auto result = evaluate(
+      "plus(coalesce(abs(plus(c0, 1::BIGINT)), 1::BIGINT), c1)",
+      makeRowVector({wrappedC0, c1}));
+  auto expected = makeNullableFlatVector<int64_t>({5, 5, 4});
+  assertEqualVectors(expected, result);
+}

@@ -81,6 +81,19 @@ bool isDictionaryOverFlat(const BaseVector& wrapper) {
   return wrapper.encoding() == VectorEncoding::Simple::DICTIONARY &&
       wrapper.valueVector()->isFlatEncoding();
 }
+
+BufferPtr zeroOutUnselectedRows(
+    const BufferPtr& indices,
+    const SelectivityVector& rows,
+    velox::memory::MemoryPool* pool) {
+  // allocateIndices set indices to 0 at all positions.
+  auto newIndices = allocateIndices(rows.end(), pool);
+  auto* rawNewIndices = newIndices->asMutable<vector_size_t>();
+  auto* rawIndices = indices->as<vector_size_t>();
+  rows.applyToSelected([&](auto row) { rawNewIndices[row] = rawIndices[row]; });
+
+  return newIndices;
+}
 } // namespace
 
 void PeeledEncoding::setDictionaryWrapping(
@@ -272,34 +285,18 @@ VectorPtr PeeledEncoding::wrap(
       wrappedResult =
           BaseVector::createNullConstant(outputType, rows.size(), pool);
     } else {
-      BufferPtr nulls;
+      BufferPtr indices = wrap_;
       if (!rows.isAllSelected()) {
         // The new base vector may be shorter than the original base vector
         // (e.g. if positions at the end of the original vector were not
         // selected for evaluation). In this case some original indices
         // corresponding to non-selected rows may point past the end of the base
-        // vector. Disable these by setting corresponding positions to null.
-        nulls = AlignedBuffer::allocate<bool>(rows.size(), pool, bits::kNull);
-        // Set the active rows to non-null.
-        rows.clearNulls(nulls);
-        if (wrapNulls_) {
-          // Add the nulls from the wrapping.
-          bits::andBits(
-              nulls->asMutable<uint64_t>(),
-              wrapNulls_->as<uint64_t>(),
-              rows.begin(),
-              rows.end());
-        }
-        // Reset nulls buffer if all positions happen to be non-null.
-        if (bits::isAllSet(
-                nulls->as<uint64_t>(), 0, rows.end(), bits::kNotNull)) {
-          nulls.reset();
-        }
-      } else {
-        nulls = wrapNulls_;
+        // vector. Disable these by making corresponding positions point to the
+        // first inner row.
+        indices = zeroOutUnselectedRows(wrap_, rows, pool);
       }
       wrappedResult = BaseVector::wrapInDictionary(
-          std::move(nulls), wrap_, rows.end(), std::move(peeledResult));
+          wrapNulls_, std::move(indices), rows.end(), std::move(peeledResult));
     }
   } else {
     wrappedResult = BaseVector::wrapInConstant(
