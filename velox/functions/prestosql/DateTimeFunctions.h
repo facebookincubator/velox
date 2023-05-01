@@ -1140,6 +1140,10 @@ struct TimeZoneMinuteFunction : public TimestampWithTimezoneSupport<T> {
     // Get offset in seconds with GMT and convert to minute
     auto offset = this->getGMTOffsetSec(input);
     result = (offset / 60) % 60;
+  }
+};
+
+template <typename T>
 struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
