@@ -56,19 +56,6 @@ class HugeInt {
 
 } // namespace facebook::velox
 
-namespace folly {
-template <>
-struct hasher<__int128_t> {
-  size_t operator()(const __int128_t& value) const {
-    auto upperHash =
-        folly::hasher<uint64_t>{}(static_cast<uint64_t>(value >> 64));
-    auto lowerHash = folly::hasher<uint64_t>{}(static_cast<uint64_t>(value));
-    return facebook::velox::bits::hashMix(upperHash, lowerHash);
-  }
-};
-
-} // namespace folly
-
 namespace std {
 string to_string(__int128_t x);
 } // namespace std
