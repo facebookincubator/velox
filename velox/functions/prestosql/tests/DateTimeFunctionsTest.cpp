@@ -2858,6 +2858,24 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
       dateParse("116", "%y+"), "Invalid format: \"116\" is malformed at \"6\"");
 }
 
+TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {
+  const auto dateFunction = [&](const std::optional<std::string>& dateString) {
+    return evaluateOnce<Date>("date(c0)", dateString);
+  };
+
+  // Date(0) is 1970-01-01.
+  EXPECT_EQ(Date(), dateFunction("1970-01-01"));
+  // Date(18297) is 2020-02-05.
+  EXPECT_EQ(Date(18297), dateFunction("2020-02-05"));
+  // Date(-18297) is 1919-11-28.
+  EXPECT_EQ(Date(-18297), dateFunction("1919-11-28"));
+
+  // Illegal date format.
+  VELOX_ASSERT_THROW(
+      dateFunction("2020-02-05 11:00"),
+      "Unable to parse date value: \"2020-02-05 11:00\", expected format is (YYYY-MM-DD)");
+}
+
 TEST_F(DateTimeFunctionsTest, dateFunctionTimestamp) {
   static const int64_t kSecondsInDay = 86'400;
   static const uint64_t kNanosInSecond = 1'000'000'000;
