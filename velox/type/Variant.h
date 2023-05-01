@@ -407,7 +407,7 @@ class variant {
     }
   }
 
-  std::string toJson(TypePtr type = nullptr) const;
+  std::string toJson(const TypePtr& type = nullptr) const;
 
   folly::dynamic serialize() const;
 

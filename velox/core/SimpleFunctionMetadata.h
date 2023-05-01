@@ -429,11 +429,6 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
         std::move(results.stats)};
   }
 
-  FOLLY_ALWAYS_INLINE bool isDecimalTypeSignature(const std::string& arg) {
-    auto upper = boost::algorithm::to_upper_copy(arg);
-    return (upper.find("DECIMAL") != std::string::npos);
-  }
-
   void buildSignature(const SignatureTypesAnalysisResults& analysis) {
     auto builder = exec::FunctionSignatureBuilder();
 

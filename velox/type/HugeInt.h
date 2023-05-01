@@ -37,8 +37,8 @@ class HugeInt {
     return static_cast<uint64_t>(value);
   }
 
-  static constexpr FOLLY_ALWAYS_INLINE int64_t upper(int128_t value) {
-    return static_cast<int64_t>(value >> 64);
+  static constexpr FOLLY_ALWAYS_INLINE uint64_t upper(int128_t value) {
+    return static_cast<uint64_t>(value >> 64);
   }
 
   static FOLLY_ALWAYS_INLINE int128_t deserialize(const char* serializedData) {
