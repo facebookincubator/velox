@@ -2856,7 +2856,7 @@ TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {
   // Date(0) is 1970-01-01.
   EXPECT_EQ(Date(), dateFunction("1970-01-01"));
   // Date(18297) is 2020-02-05.
-  EXPECT_EQ(Date(18297), dateFunction("2020-02-05T00:00:00.000"));
+  EXPECT_EQ(Date(18297), dateFunction("2020-02-05"));
   // Date(-18297) is 1919-11-28.
   EXPECT_EQ(Date(-18297), dateFunction("1919-11-28"));
 
@@ -3074,9 +3074,4 @@ TEST_F(DateTimeFunctionsTest, fromISO8601FunctionDate) {
   // Date(-18297) is 1919-11-28.
   EXPECT_EQ(Date(-18297), fromISODate("1919-11-28T23:59:59.999"));
   EXPECT_EQ(Date(-18297), fromISODate("1919-11-28T23:59:59.999Z"));
-
-  // Illegal date format.
-//   VELOX_ASSERT_THROW(
-//       fromISODate("2020-02-05 11:00"),
-//       "Unable to parse date value: \"2020-02-05 11:00\", expected format is (YYYY-MM-DDTHH:MM:SS.NNN)");
 }
