@@ -1051,7 +1051,7 @@ struct FormatDateTimeFunction {
 };
 
 template <typename T>
-struct FromISO8601DateFunction : public TimestampWithTimezoneSupport<T> {
+struct FromISO8601DateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
