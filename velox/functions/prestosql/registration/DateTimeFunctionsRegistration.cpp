@@ -38,8 +38,10 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<TimeZoneMinuteFunction, int64_t, TimestampWithTimezone>(
       {prefix + "timezone_minute"});
   registerFunction<ToISO8601Function, Varchar, Date>({prefix + "to_iso8601"});
-  registerFunction<ToISO8601Function, Varchar, Timestamp>({prefix + "to_iso8601"});
-  registerFunction<ToISO8601Function, Varchar, TimestampWithTimezone>({prefix + "to_iso8601"});
+  registerFunction<ToISO8601Function, Varchar, Timestamp>(
+      {prefix + "to_iso8601"});
+  registerFunction<ToISO8601Function, Varchar, TimestampWithTimezone>(
+      {prefix + "to_iso8601"});
   registerFunction<YearFunction, int64_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int64_t, Date>({prefix + "year"});
   registerFunction<YearFunction, int64_t, TimestampWithTimezone>(

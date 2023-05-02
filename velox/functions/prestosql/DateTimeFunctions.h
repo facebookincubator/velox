@@ -1148,32 +1148,32 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   std::string dateToISOstringHelper(Date date) {
-    // conversion of days-since-epoch to civil date follows 
+    // conversion of days-since-epoch to civil date follows
     // algorithm here: http://howardhinnant.github.io/date_algorithms.html
 
     auto z = date.days();
     z += 719468;
-    const int era = (z >= 0 ?  z : z - 146096) / 146097;
-    const unsigned doe = static_cast<unsigned>(z - era * 146097);          // [0, 146096]
-    const unsigned yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;  // [0, 399]
+    const int era = (z >= 0 ? z : z - 146096) / 146097;
+    const unsigned doe = static_cast<unsigned>(z - era * 146097); // [0, 146096]
+    const unsigned yoe =
+        (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
     int y = static_cast<int>(yoe) + era * 400;
-    const unsigned doy = doe - (365*yoe + yoe/4 - yoe/100);                // [0, 365]
-    const unsigned mp = (5*doy + 2)/153;                                   // [0, 11]
-    const unsigned d = doy - (153*mp+2)/5 + 1;                             // [1, 31]
+    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    const unsigned mp = (5 * doy + 2) / 153; // [0, 11]
+    const unsigned d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
     const unsigned m = mp + (mp < 10 ? 3 : -9);
     y += (m <= 2);
 
     // ISO 8601: "2011-10-05T14:48:00.000Z"
     auto yStr = std::to_string(y);
-    auto mStr = (m < 10 ) ? "0" + std::to_string(m) : std::to_string(m);
-    auto dStr = (m < 10 ) ? "0" + std::to_string(d) : std::to_string(d);
+    auto mStr = (m < 10) ? "0" + std::to_string(m) : std::to_string(m);
+    auto dStr = (m < 10) ? "0" + std::to_string(d) : std::to_string(d);
     return (yStr + "-" + mStr + "-" + dStr + "T" + "00:00:00.000");
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Date>& date) {
-
     auto isoStr = dateToISOstringHelper(date);
     result.resize(isoStr.size());
     result = isoStr;
@@ -1182,7 +1182,6 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Timestamp>& timestamp) {
-
     // timestamp.toString() returns in format
     // "1919-11-28T00:00:00.000000000"
     // truncate nanosecond precision for ISO 8601 string
@@ -1194,7 +1193,6 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     auto timezone = *timestampWithTimezone.template at<1>();
     auto timezoneName = util::getTimeZoneName(timezone);
