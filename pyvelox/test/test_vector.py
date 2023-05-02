@@ -55,6 +55,17 @@ class TestVeloxVector(unittest.TestCase):
         with self.assertRaises(ValueError):
             pv.from_list([])
 
+    def test_from_list_with_type(self):
+        a = pv.from_list([0, 1, 3], pv.BooleanType())
+        self.assertEqual(a.typeKind().name, 'BOOLEAN')
+        for i in range(len(a)):
+            self.assertTrue(isinstance(a[i], bool))
+        self.assertTrue(isinstance(pv.from_list([None, None, None], pv.VarcharType()), pv.BaseVector))
+        empty_vector = pv.from_list([], pv.IntegerType())
+        self.assertTrue(isinstance(empty_vector, pv.BaseVector))
+        with self.assertRaises(IndexError):
+            a = empty_vector[0]
+
     def test_constant_encoding(self):
         ints = pv.constant_vector(1000, 10)
         strings = pv.constant_vector("hello", 100)
