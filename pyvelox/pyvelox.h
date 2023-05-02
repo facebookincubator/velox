@@ -353,7 +353,8 @@ static void addVectorBindings(
           })
       .def("encoding", &BaseVector::encoding)
       .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); })
-      .def("resize", &BaseVector::resize);
+      .def("resize", &BaseVector::resize)
+      .def("slice", [](VectorPtr& u, vector_size_t offset, vector_size_t length) { return u->slice(offset, length);});
 
   constexpr TypeKind supportedTypes[] = {
       TypeKind::BOOLEAN,
