@@ -13,23 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <gtest/gtest.h>
 #include "velox/exec/ProbeOperatorState.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::test {
+class ProbeOperatorStateNameTest : public testing::Test {};
 
-std::string probeOperatorStateName(ProbeOperatorState state) {
-  switch (state) {
-    case ProbeOperatorState::kWaitForBuild:
-      return "WAIT_FOR_BUILD";
-    case ProbeOperatorState::kRunning:
-      return "RUNNING";
-    case ProbeOperatorState::kWaitForPeers:
-      return "WAIT_FOR_PEERS";
-    case ProbeOperatorState::kFinish:
-      return "FINISH";
-    default:
-      return fmt::format("UNKNOWN: {}", static_cast<int>(state));
-  }
+TEST_F(ProbeOperatorStateNameTest, basic) {
+  ASSERT_EQ(
+      probeOperatorStateName(ProbeOperatorState::kWaitForBuild),
+      "WAIT_FOR_BUILD");
+  ASSERT_EQ(probeOperatorStateName(ProbeOperatorState::kRunning), "RUNNING");
+  ASSERT_EQ(
+      probeOperatorStateName(ProbeOperatorState::kWaitForPeers),
+      "WAIT_FOR_PEERS");
+  ASSERT_EQ(probeOperatorStateName(ProbeOperatorState::kFinish), "FINISH");
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::test

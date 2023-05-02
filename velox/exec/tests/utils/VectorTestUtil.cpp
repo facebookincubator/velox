@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/utils/VectorHelpers.h"
+#include "velox/exec/tests/utils/VectorTestUtil.h"
 
 using namespace facebook::velox;
 
