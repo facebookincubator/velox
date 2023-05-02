@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
 #include "velox/exec/ProbeOperatorState.h"
+#include <gtest/gtest.h>
 
 namespace facebook::velox::exec::test {
-class ProbeOperatorStateNameTest : public testing::Test {};
+class ProbeOperatorStateTest : public testing::Test {};
 
-TEST_F(ProbeOperatorStateNameTest, basic) {
+TEST_F(ProbeOperatorStateTest, basic) {
   ASSERT_EQ(
       probeOperatorStateName(ProbeOperatorState::kWaitForBuild),
       "WAIT_FOR_BUILD");
@@ -29,6 +29,9 @@ TEST_F(ProbeOperatorStateNameTest, basic) {
       probeOperatorStateName(ProbeOperatorState::kWaitForPeers),
       "WAIT_FOR_PEERS");
   ASSERT_EQ(probeOperatorStateName(ProbeOperatorState::kFinish), "FINISH");
+  ASSERT_EQ(
+      probeOperatorStateName(static_cast<ProbeOperatorState>(-1)),
+      "UNKNOWN: -1");
 }
 
 } // namespace facebook::velox::exec::test
