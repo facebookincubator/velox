@@ -82,7 +82,8 @@ class HdfsFileSystem : public FileSystem {
   static bool isHdfsFile(std::string_view filename);
   static HdfsServiceEndpoint getServiceEndpoint(const Config* config);
   static HdfsServiceEndpoint getServiceEndpoint(
-      const std::string_view filePath);
+      const std::string_view filePath,
+      const Config* config);
 
  protected:
   class Impl;

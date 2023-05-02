@@ -36,6 +36,7 @@ static const std::string hdfsPort = "7878";
 static const std::string localhost = "localhost";
 static const std::string fullDestinationPath =
     "hdfs://" + localhost + ":" + hdfsPort + destinationPath;
+static const std::string simpleDestinationPath = "hdfs:///" + destinationPath;
 static const std::unordered_map<std::string, std::string> configurationValues(
     {{"hive.hdfs.host", localhost}, {"hive.hdfs.port", hdfsPort}});
 
@@ -186,8 +187,10 @@ TEST_F(HdfsFileSystemTest, viaFileSystem) {
 
 TEST_F(HdfsFileSystemTest, initializeFsWithEndpointInfoInFilePath) {
   facebook::velox::filesystems::registerHdfsFileSystem();
+  // Without host/port configured.
+  auto memConfig = std::make_shared<const core::MemConfig>();
   auto hdfsFileSystem =
-      filesystems::getFileSystem(fullDestinationPath, nullptr);
+      filesystems::getFileSystem(fullDestinationPath, memConfig);
   auto readFile = hdfsFileSystem->openFileForRead(fullDestinationPath);
   readData(readFile.get());
 
@@ -195,8 +198,17 @@ TEST_F(HdfsFileSystemTest, initializeFsWithEndpointInfoInFilePath) {
   const std::string wrongFullDestinationPath =
       "hdfs://not_exist_host:" + hdfsPort + destinationPath;
   VELOX_ASSERT_THROW(
-      filesystems::getFileSystem(wrongFullDestinationPath, nullptr),
+      filesystems::getFileSystem(wrongFullDestinationPath, memConfig),
       "Unable to connect to HDFS");
+}
+
+TEST_F(HdfsFileSystemTest, fallbackToUseConfig) {
+  facebook::velox::filesystems::registerHdfsFileSystem();
+  auto memConfig = std::make_shared<const core::MemConfig>(configurationValues);
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(simpleDestinationPath, memConfig);
+  auto readFile = hdfsFileSystem->openFileForRead(simpleDestinationPath);
+  readData(readFile.get());
 }
 
 TEST_F(HdfsFileSystemTest, oneFsInstanceForOneEndpoint) {
