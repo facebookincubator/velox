@@ -1059,8 +1059,10 @@ struct FromISO8601DateFunction {
       const arg_type<Varchar>& isoDateStr) {
     bool nullOutput;
 
-    std::string isoDateExtracted = std::string(isoDateStr.data(), isoDateStr.size()).substr(0, 10);
-    result = util::Converter<TypeKind::DATE>::cast(isoDateExtracted, nullOutput);
+    std::string isoDateExtracted =
+        std::string(isoDateStr.data(), isoDateStr.size()).substr(0, 10);
+    result =
+        util::Converter<TypeKind::DATE>::cast(isoDateExtracted, nullOutput);
   }
 };
 

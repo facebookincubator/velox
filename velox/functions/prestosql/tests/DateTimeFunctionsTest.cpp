@@ -3063,9 +3063,10 @@ TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
       "Unable to parse timestamp value: \"2023-\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
 }
 TEST_F(DateTimeFunctionsTest, fromISO8601FunctionDate) {
-  const auto fromISODate = [&](const std::optional<std::string>& isoDateString) {
-    return evaluateOnce<Date>("from_iso8601_date(c0)", isoDateString);
-  };
+  const auto fromISODate =
+      [&](const std::optional<std::string>& isoDateString) {
+        return evaluateOnce<Date>("from_iso8601_date(c0)", isoDateString);
+      };
 
   // Date(0) is 1970-01-01.
   EXPECT_EQ(Date(), fromISODate("1970-01-01T03:19:58.000"));
