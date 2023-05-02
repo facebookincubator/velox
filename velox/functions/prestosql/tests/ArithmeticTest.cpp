@@ -702,7 +702,7 @@ TEST_F(ArithmeticTest, truncate) {
 TEST_F(ArithmeticTest, normalCDF) {
   constexpr double kMaxdouble64 = std::numeric_limits<double>::max();
   constexpr double kMindouble64 = std::numeric_limits<double>::min();
-  
+
   const auto normal_cdf = [&](std::optional<double> mean,
                               std::optional<double> sd,
                               std::optional<double> value) {
@@ -719,15 +719,13 @@ TEST_F(ArithmeticTest, normalCDF) {
   EXPECT_EQ(0.5, normal_cdf(0, kInf, 0));
   EXPECT_THAT(normal_cdf(kNan, 1, 0), IsNan());
   EXPECT_THAT(normal_cdf(0, 1, kNan), IsNan());
-  EXPECT_THAT(normal_cdf(0, 1, kMaxdouble64 ), 1);
+  EXPECT_THAT(normal_cdf(0, 1, kMaxdouble64), 1);
   EXPECT_THAT(normal_cdf(0, kMaxdouble64, 0), 0.5);
   EXPECT_EQ(0.0, normal_cdf(kMaxdouble64, 1, 0));
   EXPECT_EQ(0.5, normal_cdf(0, 1, kMindouble64));
   EXPECT_EQ(0.5, normal_cdf(kMindouble64, 1, 0));
-  
 
-  VELOX_ASSERT_THROW(
-      normal_cdf(0, 0, 0.1985), "standardDeviation must be > 0");
+  VELOX_ASSERT_THROW(normal_cdf(0, 0, 0.1985), "standardDeviation must be > 0");
   VELOX_ASSERT_THROW(
       normal_cdf(0, kNan, 0.1985), "standardDeviation must be > 0");
 }
