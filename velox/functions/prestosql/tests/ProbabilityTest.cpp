@@ -56,6 +56,12 @@ TEST_F(ProbabilityTest, betaCDF) {
           std::numeric_limits<double>::max(),
           std::numeric_limits<double>::max(),
           0.3));
+  EXPECT_EQ(
+      0.5,
+      betaCDF(
+          std::numeric_limits<double>::min(),
+          std::numeric_limits<double>::min(),
+          0.3));
 
   VELOX_ASSERT_THROW(
       betaCDF(3, 3, kInf), "value must be in the interval [0, 1]");
