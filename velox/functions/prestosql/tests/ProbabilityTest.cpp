@@ -47,19 +47,22 @@ TEST_F(ProbabilityTest, betaCDF) {
   EXPECT_EQ(1.0, betaCDF(3, 3.6, 1.0));
   EXPECT_EQ(0.21764809997679951, betaCDF(3, 3.6, 0.3));
   EXPECT_EQ(0.9972502881611551, betaCDF(3, 3.6, 0.9));
+  EXPECT_EQ(0.0, betaCDF(kInf, 3, 0.2));
+  EXPECT_EQ(0.0, betaCDF(3, kInf, 0.2));
+  EXPECT_EQ(0.0, betaCDF(kInf, kInf, 0.2));
 
+  VELOX_ASSERT_THROW(
+      betaCDF(3, 3, kInf), "value must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(betaCDF(0, 3, 0.5), "a must be > 0");
   VELOX_ASSERT_THROW(betaCDF(3, 0, 0.5), "b must be > 0");
-  VELOX_ASSERT_THROW(betaCDF(kNan, 3, 0.5), "a must be > 0");
-  VELOX_ASSERT_THROW(betaCDF(3, kNan, 0.5), "b must be > 0");
-  VELOX_ASSERT_THROW(
-      betaCDF(3, 3, kNan), "value must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
       betaCDF(3, 5, -0.1), "value must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
       betaCDF(3, 5, 1.1), "value must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(betaCDF(kNan, 3, 0.5), "a must be > 0");
+  VELOX_ASSERT_THROW(betaCDF(3, kNan, 0.5), "b must be > 0");
   VELOX_ASSERT_THROW(
-      betaCDF(kInf, 3, 0.2), "alpha, beta values can't accept infinity value");
+      betaCDF(3, 3, kNan), "value must be in the interval [0, 1]");
 }
 
 } // namespace
