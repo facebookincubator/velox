@@ -46,6 +46,8 @@ class MemoryManager;
 
 constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 
+class MemoryReclaimer;
+
 /// This class provides the memory allocation interfaces for a query execution.
 /// Each query execution entity creates a dedicated memory pool object. The
 /// memory pool objects from a query are organized as a tree with four levels
@@ -403,6 +405,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual std::string toString() const = 0;
 
  protected:
+  friend class MemoryReclaimer;
+
   /// Indicates if this is a leaf memory pool or not.
   FOLLY_ALWAYS_INLINE bool isLeaf() const {
     return kind_ == Kind::kLeaf;

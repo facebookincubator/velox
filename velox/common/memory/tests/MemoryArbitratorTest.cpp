@@ -99,6 +99,20 @@ class MemoryReclaimerTest : public testing::Test {
 
   void TearDown() override {}
 
+  ArbitrationCandidate randomCandidate() {
+    ArbitrationCandidate candidate;
+    candidate.pool = nullptr;
+    candidate.reclaimable = !folly::Random::oneIn(3, rng_);
+    if (candidate.reclaimable) {
+      candidate.reclaimableBytes = folly::Random::oneIn(4, rng_)
+          ? 0
+          : 1 + folly::Random::rand32() % 1024;
+    }
+    candidate.freeBytes =
+        folly::Random::oneIn(3, rng_) ? 1 + folly::Random::rand32() % 1024 : 0;
+    return candidate;
+  }
+
   folly::Random::DefaultGenerator rng_;
 };
 
@@ -299,7 +313,7 @@ TEST_F(MemoryReclaimerTest, mockReclaim) {
   ASSERT_EQ(totalUsedBytes, 0);
   ASSERT_TRUE(root->reclaimableBytes(reclaimableBytes));
   ASSERT_EQ(reclaimableBytes, 0);
-}
+}g
 
 TEST_F(MemoryReclaimerTest, mockReclaimMoreThanAvailable) {
   const int numChildren = 10;
@@ -422,5 +436,127 @@ TEST_F(MemoryReclaimerTest, concurrentRandomMockReclaims) {
   ASSERT_TRUE(root->reclaimableBytes(reclaimableBytes));
   ASSERT_EQ(reclaimableBytes, 0);
   ASSERT_EQ(totalUsedBytes, 0);
+}
+
+TEST_F(MemoryReclaimerTest, ArbitrationCandidate) {
+  ArbitrationCandidate candidate;
+  candidate.reclaimable = true;
+  candidate.reclaimableBytes = 1000;
+  candidate.freeBytes = 2000;
+  ASSERT_EQ(
+      candidate.toString(),
+      "[reclaimable true reclaimableBytes 1000B freeBytes 1.95KB pool 0]");
+}
+
+TEST_F(MemoryReclaimerTest, sortCandidatesByReclaimableMemory) {
+  // Test the same candidate.
+  const int numCandidates = 10;
+  auto inputCandidate = randomCandidate();
+  std::vector<ArbitrationCandidate> candidates;
+  for (int i = 0; i < numCandidates; ++i) {
+    candidates.push_back(inputCandidate);
+  }
+  sortCandidatesByReclaimableMemory(candidates);
+  for (const auto& candidate : candidates) {
+    ASSERT_EQ(inputCandidate, candidate);
+  }
+  candidates.clear();
+
+  // Total increasing order.
+  inputCandidate.reclaimable = true;
+  inputCandidate.reclaimableBytes = 0;
+  for (int i = 0; i < numCandidates; ++i) {
+    candidates.push_back(inputCandidate);
+    ++inputCandidate.reclaimableBytes;
+  }
+  sortCandidatesByReclaimableMemory(candidates);
+  for (int i = 1; i < numCandidates; ++i) {
+    ASSERT_GT(
+        candidates[i - 1].reclaimableBytes, candidates[i].reclaimableBytes);
+  }
+  candidates.clear();
+
+  // Total decreasing order.
+  inputCandidate.reclaimable = true;
+  inputCandidate.reclaimableBytes = numCandidates * 10;
+  for (int i = 0; i < numCandidates; ++i) {
+    candidates.push_back(inputCandidate);
+    --inputCandidate.reclaimableBytes;
+  }
+  for (int i = 1; i < numCandidates; ++i) {
+    ASSERT_GT(
+        candidates[i - 1].reclaimableBytes, candidates[i].reclaimableBytes);
+  }
+  candidates.clear();
+
+  // Random test.
+  for (int i = 0; i < numCandidates; ++i) {
+    candidates.push_back(randomCandidate());
+  }
+  sortCandidatesByReclaimableMemory(candidates);
+
+  for (int i = 1; i < numCandidates; ++i) {
+    if (!candidates[i].reclaimable) {
+      continue;
+    }
+    ASSERT_TRUE(candidates[i - 1].reclaimable);
+    ASSERT_GE(
+        candidates[i - 1].reclaimableBytes, candidates[i].reclaimableBytes);
+  }
+  candidates.clear();
+}
+
+TEST_F(MemoryReclaimerTest, sortCandidatesByFreeCapacity) {
+  // Test the same candidate.
+  const int numCandidates = 10;
+  auto inputCandidate = randomCandidate();
+  std::vector<ArbitrationCandidate> candidates;
+  for (int i = 0; i < numCandidates; ++i) {
+    candidates.push_back(inputCandidate);
+  }
+  sortCandidatesByFreeCapacity(candidates);
+  for (const auto& candidate : candidates) {
+    ASSERT_EQ(inputCandidate, candidate);
+  }
+  candidates.clear();
+
+  // Total increasing order.
+  inputCandidate.reclaimable = false;
+  inputCandidate.freeBytes = 0;
+  for (int i = 0; i < numCandidates; ++i) {
+    candidates.push_back(inputCandidate);
+    ++inputCandidate.freeBytes;
+  }
+  sortCandidatesByFreeCapacity(candidates);
+  for (int i = 1; i < numCandidates; ++i) {
+    ASSERT_GT(candidates[i - 1].freeBytes, candidates[i].freeBytes);
+  }
+  candidates.clear();
+
+  // Total decreasing order.
+  inputCandidate.reclaimable = false;
+  inputCandidate.freeBytes = numCandidates * 10;
+  for (int i = 0; i < numCandidates; ++i) {
+    candidates.push_back(inputCandidate);
+    --inputCandidate.freeBytes;
+  }
+  for (int i = 1; i < numCandidates; ++i) {
+    ASSERT_GT(candidates[i - 1].freeBytes, candidates[i].freeBytes);
+  }
+  candidates.clear();
+
+  // Random test.
+  for (int i = 0; i < numCandidates; ++i) {
+    candidates.push_back(randomCandidate());
+  }
+  sortCandidatesByFreeCapacity(candidates);
+
+  for (int i = 1; i < numCandidates; ++i) {
+    if (!candidates[i].reclaimable) {
+      continue;
+    }
+    ASSERT_GE(candidates[i - 1].freeBytes, candidates[i].freeBytes);
+  }
+  candidates.clear();
 }
 } // namespace facebook::velox::memory

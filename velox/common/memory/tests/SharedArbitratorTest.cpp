@@ -641,18 +641,18 @@ TEST_F(MockSharedArbitrationTest, arbitrateBySelfMemoryReclaim) {
 
 DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, orderedArbitration) {
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::memory::SharedArbitrator::sortCandidatesByFreeCapacity",
-      std::function<void(const std::vector<SharedArbitrator::Candidate>*)>(
-          ([&](const std::vector<SharedArbitrator::Candidate>* candidates) {
+      "facebook::velox::memory::sortCandidatesByFreeCapacity",
+      std::function<void(const std::vector<ArbitrationCandidate>*)>(
+          ([&](const std::vector<ArbitrationCandidate>* candidates) {
             for (int i = 1; i < candidates->size(); ++i) {
               ASSERT_LE(
                   (*candidates)[i].freeBytes, (*candidates)[i - 1].freeBytes);
             }
           })));
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::memory::SharedArbitrator::sortCandidatesByReclaimableMemory",
-      std::function<void(const std::vector<SharedArbitrator::Candidate>*)>(
-          ([&](const std::vector<SharedArbitrator::Candidate>* candidates) {
+      "facebook::velox::memory::sortCandidatesByReclaimableMemory",
+      std::function<void(const std::vector<ArbitrationCandidate>*)>(
+          ([&](const std::vector<ArbitrationCandidate>* candidates) {
             for (int i = 1; i < candidates->size(); ++i) {
               ASSERT_LE(
                   (*candidates)[i].reclaimableBytes,

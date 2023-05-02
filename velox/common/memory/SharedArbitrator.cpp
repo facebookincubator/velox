@@ -23,40 +23,6 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
-void SharedArbitrator::sortCandidatesByFreeCapacity(
-    std::vector<Candidate>& candidates) {
-  std::sort(
-      candidates.begin(),
-      candidates.end(),
-      [&](const Candidate& lhs, const Candidate& rhs) {
-        return lhs.freeBytes > rhs.freeBytes;
-      });
-
-  TestValue::adjust(
-      "facebook::velox::memory::SharedArbitrator::sortCandidatesByFreeCapacity",
-      &candidates);
-}
-
-void SharedArbitrator::sortCandidatesByReclaimableMemory(
-    std::vector<Candidate>& candidates) {
-  std::sort(
-      candidates.begin(),
-      candidates.end(),
-      [](const Candidate& lhs, const Candidate& rhs) {
-        if (!lhs.reclaimable) {
-          return false;
-        }
-        if (!rhs.reclaimable) {
-          return true;
-        }
-        return lhs.reclaimableBytes > rhs.reclaimableBytes;
-      });
-
-  TestValue::adjust(
-      "facebook::velox::memory::SharedArbitrator::sortCandidatesByReclaimableMemory",
-      &candidates);
-}
-
 SharedArbitrator::~SharedArbitrator() {
   VELOX_CHECK_EQ(freeCapacity_, capacity_, "{}", toString());
 }
@@ -74,9 +40,9 @@ void SharedArbitrator::releaseMemory(MemoryPool* pool) {
   incrementFreeCapacityLocked(freedBytes);
 }
 
-std::vector<SharedArbitrator::Candidate> SharedArbitrator::getCandidateStats(
+std::vector<ArbitrationCandidate> SharedArbitrator::getCandidateStats(
     const std::vector<std::shared_ptr<MemoryPool>>& pools) {
-  std::vector<SharedArbitrator::Candidate> candidates;
+  std::vector<ArbitrationCandidate> candidates;
   candidates.reserve(pools.size());
   for (const auto& pool : pools) {
     uint64_t reclaimableBytes;
@@ -92,7 +58,8 @@ bool SharedArbitrator::growMemory(
     const std::vector<std::shared_ptr<MemoryPool>>& candidatePools,
     uint64_t targetBytes) {
   ScopedArbitration scopedArbitration(pool, this);
-  std::vector<Candidate> candidates = getCandidateStats(candidatePools);
+  std::vector<ArbitrationCandidate> candidates =
+      getCandidateStats(candidatePools);
   const bool success = arbitrateMemory(pool->root(), candidates, targetBytes);
   if (!success) {
     ++numFailures_;
@@ -102,7 +69,7 @@ bool SharedArbitrator::growMemory(
 
 bool SharedArbitrator::arbitrateMemory(
     MemoryPool* requestor,
-    std::vector<Candidate>& candidates,
+    std::vector<ArbitrationCandidate>& candidates,
     uint64_t targetBytes) {
   const int64_t growTarget =
       std::max(minMemoryPoolCapacityTransferSize_, targetBytes);
@@ -140,7 +107,7 @@ bool SharedArbitrator::arbitrateMemory(
 }
 
 uint64_t SharedArbitrator::reclaimFreeMemoryFromCandidates(
-    std::vector<Candidate>& candidates,
+    std::vector<ArbitrationCandidate>& candidates,
     uint64_t targetBytes) {
   // Sort candidate memory pools based on their free capacity.
   sortCandidatesByFreeCapacity(candidates);
@@ -166,7 +133,7 @@ uint64_t SharedArbitrator::reclaimFreeMemoryFromCandidates(
 }
 
 uint64_t SharedArbitrator::reclaimUsedMemoryFromCandidates(
-    std::vector<Candidate>& candidates,
+    std::vector<ArbitrationCandidate>& candidates,
     uint64_t targetBytes) {
   // Sort candidate memory pools based on their reclaimable memory.
   sortCandidatesByReclaimableMemory(candidates);

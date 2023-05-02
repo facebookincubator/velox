@@ -18,6 +18,9 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/common/testutil/TestValue.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
 std::string MemoryArbitrator::kindString(Kind kind) {
@@ -76,20 +79,40 @@ uint64_t MemoryReclaimer::reclaim(MemoryPool* pool, uint64_t targetBytes) {
   if (pool->kind() == MemoryPool::Kind::kLeaf) {
     return 0;
   }
-  // TODO: add to sort the child memory pools based on the reclaimable bytes
-  // before memory reclamation.
+  std::vector<std::shared_ptr<MemoryPool>> children;
+  {
+    folly::SharedMutex::ReadHolder guard{pool->childrenMutex_};
+    children.reserve(pool->children_.size());
+    for (auto& entry : pool->children_) {
+      auto child = entry.second.lock();
+      if (child != nullptr) {
+        children.push_back(std::move(child));
+      }
+    }
+  }
+
+  std::vector<ArbitrationCandidate> candidates(children.size());
+  for (uint32_t i = 0; i < children.size(); ++i) {
+    candidates[i].pool = children[i].get();
+    candidates[i].reclaimable =
+        children[i]->reclaimableBytes(candidates[i].reclaimableBytes);
+  }
+  sortCandidatesByReclaimableMemory(candidates);
+
   uint64_t reclaimedBytes{0};
-  pool->visitChildren([&targetBytes, &reclaimedBytes](MemoryPool* child) {
-    const auto bytes = child->reclaim(targetBytes);
+  for (const auto& candidate : candidates) {
+    if (!candidate.reclaimable || candidate.reclaimableBytes == 0) {
+      break;
+    }
+    const auto bytes = candidate.pool->reclaim(targetBytes);
     reclaimedBytes += bytes;
     if (targetBytes != 0) {
       if (bytes >= targetBytes) {
-        return false;
+        break;
       }
       targetBytes -= bytes;
     }
-    return true;
-  });
+  }
   return reclaimedBytes;
 }
 
@@ -104,5 +127,46 @@ std::string MemoryArbitrator::Stats::toString() const {
       succinctBytes(numReclaimedBytes),
       succinctBytes(maxCapacityBytes),
       succinctBytes(freeCapacityBytes));
+}
+
+std::string ArbitrationCandidate::toString() const {
+  return fmt::format(
+      "[reclaimable {} reclaimableBytes {} freeBytes {} pool {}]",
+      reclaimable,
+      succinctBytes(reclaimableBytes),
+      succinctBytes(freeBytes),
+      reinterpret_cast<uint64_t>(pool));
+}
+
+void sortCandidatesByReclaimableMemory(
+    std::vector<ArbitrationCandidate>& candidates) {
+  std::sort(
+      candidates.begin(),
+      candidates.end(),
+      [](const ArbitrationCandidate& lhs, const ArbitrationCandidate& rhs) {
+        if (!lhs.reclaimable) {
+          return false;
+        }
+        if (!rhs.reclaimable) {
+          return true;
+        }
+        return lhs.reclaimableBytes > rhs.reclaimableBytes;
+      });
+  TestValue::adjust(
+      "facebook::velox::memory::sortCandidatesByReclaimableMemory",
+      &candidates);
+}
+
+void sortCandidatesByFreeCapacity(
+    std::vector<ArbitrationCandidate>& candidates) {
+  std::sort(
+      candidates.begin(),
+      candidates.end(),
+      [&](const ArbitrationCandidate& lhs, const ArbitrationCandidate& rhs) {
+        return lhs.freeBytes > rhs.freeBytes;
+      });
+
+  TestValue::adjust(
+      "facebook::velox::memory::sortCandidatesByFreeCapacity", &candidates);
 }
 } // namespace facebook::velox::memory

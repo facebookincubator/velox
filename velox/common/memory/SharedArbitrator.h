@@ -44,14 +44,6 @@ class SharedArbitrator : public MemoryArbitrator {
 
   std::string toString() const final;
 
-  // The candidate memory pool stats used by arbitration.
-  struct Candidate {
-    bool reclaimable{false};
-    uint64_t reclaimableBytes{0};
-    uint64_t freeBytes{0};
-    MemoryPool* pool;
-  };
-
  private:
   class ScopedArbitration {
    public:
@@ -67,16 +59,12 @@ class SharedArbitrator : public MemoryArbitrator {
   };
 
   // Invoked to capture the candidate memory pools stats for arbitration.
-  static std::vector<Candidate> getCandidateStats(
+  static std::vector<ArbitrationCandidate> getCandidateStats(
       const std::vector<std::shared_ptr<MemoryPool>>& pools);
-
-  void sortCandidatesByReclaimableMemory(std::vector<Candidate>& candidates);
-
-  void sortCandidatesByFreeCapacity(std::vector<Candidate>& candidates);
 
   bool arbitrateMemory(
       MemoryPool* requestor,
-      std::vector<Candidate>& candidates,
+      std::vector<ArbitrationCandidate>& candidates,
       uint64_t targetBytes);
 
   // Invoked to start next memory arbitration request, and it will wait for the
@@ -94,7 +82,7 @@ class SharedArbitrator : public MemoryArbitrator {
   // NOTE: the function might sort 'candidates' based on each candidate's free
   // capacity internally.
   uint64_t reclaimFreeMemoryFromCandidates(
-      std::vector<Candidate>& candidates,
+      std::vector<ArbitrationCandidate>& candidates,
       uint64_t targetBytes);
 
   // Invoked to reclaim used memory capacity from 'candidates'.
@@ -102,7 +90,7 @@ class SharedArbitrator : public MemoryArbitrator {
   // NOTE: the function might sort 'candidates' based on each candidate's
   // reclaimable memory internally.
   uint64_t reclaimUsedMemoryFromCandidates(
-      std::vector<Candidate>& candidates,
+      std::vector<ArbitrationCandidate>& candidates,
       uint64_t targetBytes);
 
   // Decrement free capacity from the arbitrator with up to 'bytes'. The

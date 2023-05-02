@@ -220,4 +220,30 @@ class MemoryReclaimer {
  protected:
   MemoryReclaimer() = default;
 };
+
+/// Contains the memory stats for each candidate memory pool for various memory
+/// arbitration sorting purpose.
+struct ArbitrationCandidate {
+  bool reclaimable{false};
+  uint64_t reclaimableBytes{0};
+  uint64_t freeBytes{0};
+  MemoryPool* pool{nullptr};
+
+  std::string toString() const;
+
+  bool operator==(const ArbitrationCandidate& rhs) const {
+    return std::tie(reclaimable, reclaimableBytes, freeBytes, pool) ==
+        std::tie(
+               rhs.reclaimable, rhs.reclaimableBytes, rhs.freeBytes, rhs.pool);
+  }
+};
+
+/// Sort the memory arbitration 'candidates' based on the reclaimable memory.
+void sortCandidatesByReclaimableMemory(
+    std::vector<ArbitrationCandidate>& candidates);
+
+/// Sort the memory arbitration 'candidates' based on the free capacity.
+void sortCandidatesByFreeCapacity(
+    std::vector<ArbitrationCandidate>& candidates);
+
 } // namespace facebook::velox::memory
