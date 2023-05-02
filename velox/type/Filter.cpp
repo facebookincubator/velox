@@ -264,8 +264,6 @@ folly::dynamic BigintValuesUsingHashTable::serialize() const {
   auto obj = Filter::serializeBase("BigintValuesUsingHashTable");
   obj["min"] = min_;
   obj["max"] = max_;
-  obj["containsEmptyMarker"] = containsEmptyMarker_;
-  obj["sizeMask"] = sizeMask_;
 
   folly::dynamic values = folly::dynamic::array;
   for (auto v : values_) {
@@ -284,12 +282,8 @@ folly::dynamic BigintValuesUsingHashTable::serialize() const {
 
 FilterPtr BigintValuesUsingHashTable::create(const folly::dynamic& obj) {
   auto nullAllowed = obj["nullAllowed"].asBool();
-  auto deterministic = obj["deterministic"].asBool();
-
   auto min = obj["min"].asInt();
   auto max = obj["max"].asInt();
-  auto containsEmptyMarker = obj["containsEmptyMarker"].asBool();
-  auto sizeMask = static_cast<int32_t>(obj["sizeMask"].asInt());
 
   std::vector<int64_t> values;
   auto valArr = obj["values"];
@@ -304,16 +298,11 @@ FilterPtr BigintValuesUsingHashTable::create(const folly::dynamic& obj) {
   for (const auto& h : hashArr) {
     hashTable.push_back(h.asInt());
   }
+  auto res = std::make_shared<BigintValuesUsingHashTable>(
+      min, max, values, nullAllowed);
+  res->setHashTable(hashTable);
 
-  return std::make_shared<BigintValuesUsingHashTable>(
-      deterministic,
-      nullAllowed,
-      min,
-      max,
-      std::move(hashTable),
-      containsEmptyMarker,
-      std::move(values),
-      sizeMask);
+  return res;
 }
 
 folly::dynamic BigintValuesUsingBitmask::serialize() const {
@@ -321,11 +310,13 @@ folly::dynamic BigintValuesUsingBitmask::serialize() const {
   obj["min"] = min_;
   obj["max"] = max_;
 
-  folly::dynamic arr = folly::dynamic::array;
-  for (auto v : bitmask_) {
-    arr.push_back(v);
+  folly::dynamic values = folly::dynamic::array;
+  for (size_t i = 0; i < bitmask_.size(); ++i) {
+    if (bitmask_[i]) {
+      values.push_back(static_cast<int64_t>(i) + min_);
+    }
   }
-  obj["bitmask"] = arr;
+  obj["values"] = values;
 
   return obj;
 }
@@ -334,17 +325,16 @@ FilterPtr BigintValuesUsingBitmask::create(const folly::dynamic& obj) {
   auto min = obj["min"].asInt();
   auto max = obj["max"].asInt();
   auto nullAllowed = obj["nullAllowed"].asBool();
-  auto deterministic = obj["deterministic"].asBool();
 
-  std::vector<bool> bitmask;
-  auto arr = obj["bitmask"];
-  bitmask.reserve(arr.size());
-  for (const auto& v : arr) {
-    bitmask.push_back(v.asBool());
+  std::vector<int64_t> values;
+  auto valArr = obj["values"];
+  values.reserve(valArr.size());
+  for (const auto& v : valArr) {
+    values.push_back(v.asInt());
   }
 
   return std::make_shared<BigintValuesUsingBitmask>(
-      min, max, std::move(bitmask), deterministic, nullAllowed);
+      min, max, values, nullAllowed);
 }
 
 folly::dynamic NegatedBigintValuesUsingHashTable::serialize() const {
@@ -358,10 +348,14 @@ FilterPtr NegatedBigintValuesUsingHashTable::create(const folly::dynamic& obj) {
   auto deterministic = obj["deterministic"].asBool();
   auto nonNegated =
       ISerializable::deserialize<BigintValuesUsingHashTable>(obj["nonNegated"]);
-  return std::make_shared<NegatedBigintValuesUsingHashTable>(
-      deterministic,
-      nullAllowed,
-      std::move(const_cast<BigintValuesUsingHashTable&>(*nonNegated)));
+  auto min = nonNegated->min();
+  auto max = nonNegated->max();
+  auto values = nonNegated->values();
+  auto hashTable = nonNegated->hashTable();
+  auto res = std::make_shared<NegatedBigintValuesUsingHashTable>(
+      min, max, values, nullAllowed);
+  res->setHashTable(hashTable);
+  return res;
 }
 
 folly::dynamic NegatedBigintValuesUsingBitmask::serialize() const {
@@ -375,16 +369,12 @@ folly::dynamic NegatedBigintValuesUsingBitmask::serialize() const {
 FilterPtr NegatedBigintValuesUsingBitmask::create(const folly::dynamic& obj) {
   auto min = obj["min"].asInt();
   auto max = obj["max"].asInt();
-  auto deterministic = obj["deterministic"].asBool();
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto nonNegated =
       ISerializable::deserialize<BigintValuesUsingBitmask>(obj["nonNegated"]);
+  auto values = nonNegated->values();
   return std::make_shared<NegatedBigintValuesUsingBitmask>(
-      min,
-      max,
-      std::move(const_cast<BigintValuesUsingBitmask&>(*nonNegated)),
-      deterministic,
-      nullAllowed);
+      min, max, values, nullAllowed);
 }
 
 template <>
@@ -536,7 +526,7 @@ FilterPtr NegatedBytesValues::create(const folly::dynamic& obj) {
   auto deterministic = obj["deterministic"].asBool();
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto nonNegated = ISerializable::deserialize<BytesValues>(obj["nonNegated"]);
-  return std::make_unique<NegatedBytesValues>(
+  return std::make_shared<NegatedBytesValues>(
       *nonNegated, deterministic, nullAllowed);
 }
 
