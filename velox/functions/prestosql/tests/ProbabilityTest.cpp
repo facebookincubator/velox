@@ -24,6 +24,8 @@ namespace {
 
 constexpr double kInf = std::numeric_limits<double>::infinity();
 constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+constexpr double kDoubleMax = std::numeric_limits<double>::max();
+constexpr double kDoubleMin = std::numeric_limits<double>::min();
 
 MATCHER(IsNan, "is NaN") {
   return arg && std::isnan(*arg);
@@ -50,18 +52,8 @@ TEST_F(ProbabilityTest, betaCDF) {
   EXPECT_EQ(0.0, betaCDF(kInf, 3, 0.2));
   EXPECT_EQ(0.0, betaCDF(3, kInf, 0.2));
   EXPECT_EQ(0.0, betaCDF(kInf, kInf, 0.2));
-  EXPECT_EQ(
-      0.0,
-      betaCDF(
-          std::numeric_limits<double>::max(),
-          std::numeric_limits<double>::max(),
-          0.3));
-  EXPECT_EQ(
-      0.5,
-      betaCDF(
-          std::numeric_limits<double>::min(),
-          std::numeric_limits<double>::min(),
-          0.3));
+  EXPECT_EQ(0.0, betaCDF(kDoubleMax, kDoubleMax, 0.3));
+  EXPECT_EQ(0.5, betaCDF(kDoubleMin, kDoubleMin, 0.3));
 
   VELOX_ASSERT_THROW(
       betaCDF(3, 3, kInf), "value must be in the interval [0, 1]");

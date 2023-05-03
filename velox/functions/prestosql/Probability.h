@@ -19,8 +19,6 @@
 
 namespace facebook::velox::functions {
 
-constexpr double kInf = std::numeric_limits<double>::infinity();
-
 namespace {
 
 template <typename T>
@@ -29,6 +27,8 @@ struct BetaCDFFunction {
 
   FOLLY_ALWAYS_INLINE void
   call(double& result, double a, double b, double value) {
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+
     VELOX_USER_CHECK_GT(a, 0, "a must be > 0");
     VELOX_USER_CHECK_GT(b, 0, "b must be > 0");
     VELOX_USER_CHECK_GE(value, 0, "value must be in the interval [0, 1]");

@@ -241,6 +241,6 @@ Probability Functions
 
 .. function:: beta_cdf(a, b, value) -> double
 
-    Compute the Beta cdf with given a, b parameters:  P(N < value; a, b).
+    Compute the `Beta cdf <https://en.wikipedia.org/wiki/Beta_distribution>`_ with given a, b parameters:  P(N < value; a, b).
     The a, b parameters must be positive real numbers and value must be a real value (all of type DOUBLE).
     The value must lie on the interval [0, 1].
