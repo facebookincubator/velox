@@ -88,6 +88,12 @@ class QueryConfig {
   static constexpr const char* kMaxExtendedPartialAggregationMemory =
       "max_extended_partial_aggregation_memory";
 
+  static constexpr const char* kAbandonPartialAggregationMinRows =
+      "abandon_partial_aggregation_min_rows";
+
+  static constexpr const char* kAbandonPartialAggregationMinPct =
+      "abandon_partial_aggregation_min_pct";
+
   static constexpr const char* kMaxPartitionedOutputBufferSize =
       "driver.max-page-partitioning-buffer-size";
 
@@ -120,9 +126,6 @@ class QueryConfig {
 
   /// Global enable spilling flag.
   static constexpr const char* kSpillEnabled = "spill_enabled";
-
-  /// Spill path. "/tmp" by default.
-  static constexpr const char* kSpillPath = "spiller-spill-path";
 
   /// Aggregation spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kAggregationSpillEnabled =
@@ -188,6 +191,14 @@ class QueryConfig {
   uint64_t maxExtendedPartialAggregationMemoryUsage() const {
     static constexpr uint64_t kDefault = 1L << 26;
     return get<uint64_t>(kMaxExtendedPartialAggregationMemory, kDefault);
+  }
+
+  int32_t abandonPartialAggregationMinRows() const {
+    return get<int32_t>(kAbandonPartialAggregationMinRows, 10000);
+  }
+
+  int32_t abandonPartialAggregationMinPct() const {
+    return get<int32_t>(kAbandonPartialAggregationMinPct, 80);
   }
 
   uint64_t aggregationSpillMemoryThreshold() const {
@@ -289,17 +300,6 @@ class QueryConfig {
   /// Returns true if spilling is enabled.
   bool spillEnabled() const {
     return get<bool>(kSpillEnabled, false);
-  }
-
-  /// Returns the path for writing spill files. The path should be
-  /// interpretable by filesystems::getFileSystem and may refer to any writable
-  /// location. Actual file names are composed by appending '/' and a filename
-  /// composed of Task id and serial numbers. The files are automatically
-  /// deleted when no longer needed. Files may be left behind after crashes but
-  /// are identifiable based on the Task id in the name.
-  /// TODO(spershin): This method and kSpillPath will be removed.
-  std::optional<std::string> spillPath() const {
-    return get<std::string>(kSpillPath);
   }
 
   /// Returns 'is aggregation spilling enabled' flag. Must also check the

@@ -80,10 +80,6 @@ class FlatVector final : public SimpleVector<T> {
         rawValues_(values_.get() ? const_cast<T*>(values_->as<T>()) : nullptr) {
     setStringBuffers(std::move(stringBuffers));
     VELOX_DCHECK_GE(stringBuffers_.size(), stringBufferSet_.size());
-    VELOX_DCHECK_EQ(
-        (std::is_same_v<T, UnscaledShortDecimal>), type->isShortDecimal());
-    VELOX_DCHECK_EQ(
-        (std::is_same_v<T, UnscaledLongDecimal>), type->isLongDecimal());
     VELOX_CHECK(
         values_ || BaseVector::nulls_,
         "FlatVector needs to either have values or nulls");
@@ -394,7 +390,14 @@ class FlatVector final : public SimpleVector<T> {
     return true;
   }
 
+  // Acquire ownership for any string buffer that appears in source, the
+  // function does nothing if the vector type is not Varchar or Varbinary.
+  // The function throws if input encoding is lazy.
   void acquireSharedStringBuffers(const BaseVector* source);
+
+  // Acquire ownership for any string buffer that appears in source or any
+  // of its children recursively. The function throws if input encoding is lazy.
+  void acquireSharedStringBuffersRecursive(const BaseVector* source);
 
   Buffer* getBufferWithSpace(vector_size_t /* unused */) {
     return nullptr;

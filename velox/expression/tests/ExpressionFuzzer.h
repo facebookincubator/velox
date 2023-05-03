@@ -146,6 +146,19 @@ class ExpressionFuzzer {
 
   void reSeed();
 
+  // Parse --assign_function_tickets startup flag into a map that maps function
+  // name to its number of tickets.
+  void getTicketsForFunctions();
+
+  // Get tickets for one function assigned by the --assign_function_tickets
+  // flag. This function should be called after getTicketsForFunctions().
+  int getTickets(const std::string& funcName);
+
+  // Add `funcName` that returns `type` to typeToExpressionList_.
+  void addToTypeToExpressionListByTicketTimes(
+      const std::string& type,
+      const std::string& funcName);
+
   void appendConjunctSignatures();
 
   TypePtr generateRootType();
@@ -163,6 +176,11 @@ class ExpressionFuzzer {
   core::TypedExprPtr generateArg(const TypePtr& arg);
 
   std::vector<core::TypedExprPtr> generateArgs(const CallableSignature& input);
+
+  std::vector<core::TypedExprPtr> generateArgs(
+      const std::vector<TypePtr>& argTypes,
+      const std::vector<bool>& constantArgs,
+      uint32_t numVarArgs = 0);
 
   core::TypedExprPtr generateArg(const TypePtr& arg, bool isConstant);
 
@@ -194,7 +212,9 @@ class ExpressionFuzzer {
   std::vector<core::TypedExprPtr> generateSwitchArgs(
       const CallableSignature& input);
 
-  core::TypedExprPtr getCallExprFromCallable(const CallableSignature& callable);
+  core::TypedExprPtr getCallExprFromCallable(
+      const CallableSignature& callable,
+      const TypePtr& type);
 
   /// Executes two steps:
   /// #1. Retries executing the expression in `plan` by wrapping it in a `try()`
@@ -242,6 +262,22 @@ class ExpressionFuzzer {
   /// nullptr if casting to the specified type is not supported. The supported
   /// types include primitive types, array, map, and row types right now.
   core::TypedExprPtr generateCastExpression(const TypePtr& returnType);
+
+  // Generate an expression of the row_constructor special form that returns
+  // `returnType`. `returnType` must be a RowType.
+  core::TypedExprPtr generateRowConstructorExpression(
+      const TypePtr& returnType);
+
+  // Generate a random row type with `referencedType` be its field at
+  // `referencedIndex`.
+  TypePtr generateRandomRowTypeWithReferencedField(
+      uint32_t numFields,
+      uint32_t referencedIndex,
+      const TypePtr& referencedType);
+
+  // Generate an expression of the dereference special form that returns
+  // `returnType`.
+  core::TypedExprPtr generateDereferenceExpression(const TypePtr& returnType);
 
   /// If --duration_sec > 0, check if we expired the time budget. Otherwise,
   /// check if we expired the number of iterations (--steps).
@@ -295,6 +331,10 @@ class ExpressionFuzzer {
       std::string,
       std::unordered_map<std::string, std::vector<const SignatureTemplate*>>>
       expressionToTemplatedSignature_;
+
+  // A map that maps function name to its number of tickets parsed from the
+  // --assign_function_tickets startup flag .
+  std::unordered_map<std::string, int> functionsToTickets_;
 
   /// The remaining levels of expression nesting. It's initialized by
   /// FLAGS_max_level_of_nesting and updated in generateExpression(). When its

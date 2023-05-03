@@ -28,10 +28,6 @@ namespace facebook::velox::exec {
 
 std::string sanitizeName(const std::string& name);
 
-inline bool isCommonDecimalName(const std::string& typeName) {
-  return boost::iequals(typeName, "DECIMAL");
-}
-
 /// Return a list of primitive type names.
 const std::vector<std::string> primitiveTypeNames();
 
@@ -165,6 +161,10 @@ class FunctionSignature {
         variableArity_ == rhs.variableArity_;
   }
 
+ protected:
+  // Return a string of the list of argument types.
+  std::string argumentsToString() const;
+
  private:
   const std::unordered_map<std::string, SignatureVariable> variables_;
   const TypeSignature returnType_;
@@ -195,6 +195,8 @@ class AggregateFunctionSignature : public FunctionSignature {
   const TypeSignature& intermediateType() const {
     return intermediateType_;
   }
+
+  std::string toString() const override;
 
  private:
   const TypeSignature intermediateType_;

@@ -272,11 +272,11 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Rounds up to a power of 2 >= size, or to a size halfway between
   /// two consecutive powers of two, i.e 8, 12, 16, 24, 32, .... This
   /// coincides with JEMalloc size classes.
-  virtual size_t getPreferredSize(size_t size);
+  virtual size_t preferredSize(size_t size);
 
   /// Returns the memory allocation alignment size applied internally by this
   /// memory pool object.
-  virtual uint16_t getAlignment() const {
+  virtual uint16_t alignment() const {
     return alignment_;
   }
 
@@ -286,18 +286,12 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Returns the capacity from the root memory pool.
   virtual int64_t capacity() const = 0;
 
-  /// TODO: deprecate this after the integration with memory arbitrator.
-  using GrowCallback = std::function<bool(int64_t size, MemoryPool& pool)>;
-  virtual void setGrowCallback(GrowCallback func) {
-    VELOX_CHECK_NULL(
-        parent_, "Only root memory pool allows to set memory grow callback");
-    growCallback_ = func;
-  }
-
   /// Returns the currently used memory in bytes of this memory pool.
+  virtual int64_t currentBytes() const = 0;
   virtual int64_t getCurrentBytes() const = 0;
 
   /// Returns the peak memory usage in bytes of this memory pool.
+  virtual int64_t peakBytes() const = 0;
   virtual int64_t getMaxBytes() const = 0;
 
   /// Returns the reserved but not used memory reservation in bytes of this
@@ -353,17 +347,14 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Invoked by the memory arbitrator to leave memory arbitration processing.
   /// It is a noop if 'reclaimer_' is not set, otherwise invoke the reclaimer's
   /// corresponding method.
-  virtual void leaveArbitration();
-
-  /// Indicates whether we can reclaim memory from this memory pool or not.
-  /// The function returns false if 'reclaimer_' is not set, otherwise invoke
-  /// the reclaimer's corresponding method.
-  virtual bool canReclaim() const;
+  virtual void leaveArbitration() noexcept;
 
   /// Returns how many bytes is reclaimable from this memory pool. The function
-  /// returns zero if 'reclaimer_' is not set, otherwise invoke the reclaimer's
-  /// corresponding methods.
-  virtual uint64_t reclaimableBytes() const;
+  /// returns true if this memory pool is reclaimable, and returns the estimated
+  /// reclaimable bytes in 'reclaimableBytes'. If 'reclaimer_' is not set, the
+  /// function returns false, otherwise invoke the reclaimer's corresponding
+  /// method.
+  virtual bool reclaimableBytes(uint64_t& reclaimableBytes) const;
 
   /// Invoked by the memory arbitrator to reclaim memory from this memory pool
   /// with specified reclaim target bytes. If 'targetBytes' is zero, then it
@@ -413,7 +404,22 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   virtual std::string toString() const = 0;
 
+  /// Returns the next higher quantized size for the internal memory reservation
+  /// propagation. Small sizes are at MB granularity, larger ones at coarser
+  /// granularity.
+  FOLLY_ALWAYS_INLINE static uint64_t quantizedSize(uint64_t size) {
+    if (size < 16 * kMB) {
+      return bits::roundUp(size, kMB);
+    }
+    if (size < 64 * kMB) {
+      return bits::roundUp(size, 4 * kMB);
+    }
+    return bits::roundUp(size, 8 * kMB);
+  }
+
  protected:
+  static constexpr uint64_t kMB = 1 << 20;
+
   /// Indicates if this is a leaf memory pool or not.
   FOLLY_ALWAYS_INLINE bool isLeaf() const {
     return kind_ == Kind::kLeaf;
@@ -445,14 +451,13 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const bool threadSafe_;
   const std::shared_ptr<MemoryReclaimer> reclaimer_;
   const bool checkUsageLeak_;
-  GrowCallback growCallback_{};
 
-  /// Protects 'children_'.
+  // Protects 'children_'.
   mutable folly::SharedMutex childrenMutex_;
   // NOTE: we use raw pointer instead of weak pointer here to minimize
   // visitChildren() cost as we don't have to upgrade the weak pointer and copy
   // out the upgraded shared pointers.git
-  std::unordered_map<std::string, MemoryPool*> children_;
+  std::unordered_map<std::string, std::weak_ptr<MemoryPool>> children_;
 };
 
 std::ostream& operator<<(std::ostream& out, MemoryPool::Kind kind);
@@ -499,9 +504,19 @@ class MemoryPoolImpl : public MemoryPool {
 
   int64_t capacity() const override;
 
+  int64_t currentBytes() const override {
+    std::lock_guard<std::mutex> l(mutex_);
+    return currentBytesLocked();
+  }
+
   int64_t getCurrentBytes() const override {
     std::lock_guard<std::mutex> l(mutex_);
     return currentBytesLocked();
+  }
+
+  int64_t peakBytes() const override {
+    std::lock_guard<std::mutex> l(mutex_);
+    return peakBytes_;
   }
 
   int64_t getMaxBytes() const override {
@@ -523,17 +538,11 @@ class MemoryPoolImpl : public MemoryPool {
 
   void release() override;
 
-  uint64_t freeBytes() const override {
-    VELOX_NYI("{} unsupported", __FUNCTION__);
-  }
+  uint64_t freeBytes() const override;
 
-  uint64_t shrink(uint64_t targetBytes = 0) override {
-    VELOX_NYI("{} unsupported", __FUNCTION__);
-  }
+  uint64_t shrink(uint64_t targetBytes = 0) override;
 
-  uint64_t grow(uint64_t bytes) override {
-    VELOX_NYI("{} unsupported", __FUNCTION__);
-  }
+  uint64_t grow(uint64_t bytes) override;
 
   std::string toString() const override {
     std::lock_guard<std::mutex> l(mutex_);
@@ -549,8 +558,6 @@ class MemoryPoolImpl : public MemoryPool {
   }
 
  private:
-  static constexpr uint64_t kMB = 1 << 20;
-
   FOLLY_ALWAYS_INLINE static MemoryPoolImpl* toImpl(MemoryPool* pool) {
     return static_cast<MemoryPoolImpl*>(pool);
   }
@@ -591,18 +598,6 @@ class MemoryPoolImpl : public MemoryPool {
   // the MB or 8MB for larger sizes.
   FOLLY_ALWAYS_INLINE static int64_t roundedDelta(int64_t size, int64_t delta) {
     return quantizedSize(size + delta) - size;
-  }
-
-  // Returns the next higher quantized size. Small sizes are at MB granularity,
-  // larger ones at coarser granularity.
-  FOLLY_ALWAYS_INLINE static uint64_t quantizedSize(uint64_t size) {
-    if (size < 16 * kMB) {
-      return bits::roundUp(size, kMB);
-    }
-    if (size < 64 * kMB) {
-      return bits::roundUp(size, 4 * kMB);
-    }
-    return bits::roundUp(size, 8 * kMB);
   }
 
   // Reserve memory for a new allocation/reservation with specified 'size'.
@@ -690,19 +685,23 @@ class MemoryPoolImpl : public MemoryPool {
   bool maybeIncrementReservationLocked(uint64_t size);
 
   // Release memory reservation for an allocation free or memory release with
-  // specified 'size'. 'releaseThreadSafe' processes the memory reservation
-  // release with mutex lock protection at the leaf memory pool while
-  // 'reserveThreadSafe' doesn't.
-  void release(uint64_t bytes);
+  // specified 'size'. If 'releaseOnly' is true, then we only release the unused
+  // reservation if 'minReservationBytes_' is set. 'releaseThreadSafe' processes
+  // the memory reservation release with mutex lock protection at the leaf
+  // memory pool while 'reserveThreadSafe' doesn't.
+  void release(uint64_t bytes, bool releaseOnly = false);
 
-  void releaseThreadSafe(uint64_t size);
+  void releaseThreadSafe(uint64_t size, bool releaseOnly);
 
-  FOLLY_ALWAYS_INLINE void releaseNonThreadSafe(uint64_t size) {
+  FOLLY_ALWAYS_INLINE void releaseNonThreadSafe(
+      uint64_t size,
+      bool releaseOnly) {
     VELOX_CHECK(isLeaf());
     VELOX_DCHECK_NOT_NULL(parent_);
 
     int64_t newQuantized;
-    if (FOLLY_UNLIKELY(size == 0)) {
+    if (FOLLY_UNLIKELY(releaseOnly)) {
+      VELOX_DCHECK_EQ(size, 0);
       if (minReservationBytes_ == 0) {
         return;
       }
@@ -758,9 +757,10 @@ class MemoryPoolImpl : public MemoryPool {
       uint64_t incrementBytes);
 
   FOLLY_ALWAYS_INLINE void sanityCheckLocked() const {
-    if ((reservationBytes_ < usedReservationBytes_) ||
-        (reservationBytes_ < minReservationBytes_) ||
-        (usedReservationBytes_ < 0)) {
+    if (FOLLY_UNLIKELY(
+            (reservationBytes_ < usedReservationBytes_) ||
+            (reservationBytes_ < minReservationBytes_) ||
+            (usedReservationBytes_ < 0))) {
       VELOX_FAIL("Bad memory usage track state: {}", toStringLocked());
     }
   }

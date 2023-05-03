@@ -137,6 +137,7 @@ void E2EFilterTestBase::readWithoutFilter(
 
 void E2EFilterTestBase::readWithFilter(
     std::shared_ptr<ScanSpec> spec,
+    const MutationSpec& mutationSpec,
     const std::vector<RowVectorPtr>& batches,
     const std::vector<uint64_t>& hitRows,
     uint64_t& time,
@@ -157,16 +158,38 @@ void E2EFilterTestBase::readWithFilter(
   auto resultBatch = BaseVector::create(rowType_, 1, leafPool_.get());
   resetReadBatchSizes();
   int32_t clearCnt = 0;
+  auto deletedRowsIter = mutationSpec.deletedRows.begin();
   while (true) {
     {
       MicrosecondTimer timer(&time);
       if (++clearCnt % 17 == 0) {
         rowReader->resetFilterCaches();
       }
-      bool hasData = rowReader->next(nextReadBatchSize(), resultBatch);
-      if (!hasData) {
+      auto nextRowNumber = rowReader->nextRowNumber();
+      if (nextRowNumber == RowReader::kAtEnd) {
         break;
       }
+      auto readSize = rowReader->nextReadSize(nextReadBatchSize());
+      std::vector<uint64_t> isDeleted(bits::nwords(readSize));
+      bool haveDelete = false;
+      for (; deletedRowsIter != mutationSpec.deletedRows.end();
+           ++deletedRowsIter) {
+        auto i = *deletedRowsIter;
+        if (i < nextRowNumber) {
+          continue;
+        }
+        if (i >= nextRowNumber + readSize) {
+          break;
+        }
+        bits::setBit(isDeleted.data(), i - nextRowNumber);
+        haveDelete = true;
+      }
+      Mutation mutation;
+      if (haveDelete) {
+        mutation.deletedRows = isDeleted.data();
+      }
+      auto rowsScanned = rowReader->next(readSize, resultBatch, &mutation);
+      ASSERT_EQ(rowsScanned, readSize);
       if (resultBatch->size() == 0) {
         // No hits in the last resultBatch of rows.
         continue;
@@ -248,8 +271,10 @@ bool E2EFilterTestBase::loadWithHook(
 
 void E2EFilterTestBase::testReadWithFilterLazy(
     const std::shared_ptr<common::ScanSpec>& spec,
+    const MutationSpec& mutations,
     const std::vector<RowVectorPtr>& batches,
     const std::vector<uint64_t>& hitRows) {
+  SCOPED_TRACE("Lazy");
   // Test with LazyVectors for non-filtered columns.
   uint64_t timeWithFilter = 0;
   for (auto& childSpec : spec->children()) {
@@ -258,24 +283,26 @@ void E2EFilterTestBase::testReadWithFilterLazy(
       grandchild->setExtractValues(false);
     }
   }
-  readWithFilter(spec, batches, hitRows, timeWithFilter, false);
+  readWithFilter(spec, mutations, batches, hitRows, timeWithFilter, false);
   timeWithFilter = 0;
-  readWithFilter(spec, batches, hitRows, timeWithFilter, true);
+  readWithFilter(spec, mutations, batches, hitRows, timeWithFilter, true);
 }
 
 void E2EFilterTestBase::testFilterSpecs(
     const std::vector<RowVectorPtr>& batches,
     const std::vector<FilterSpec>& filterSpecs) {
+  MutationSpec mutations;
   std::vector<uint64_t> hitRows;
-  auto filters =
-      filterGenerator_->makeSubfieldFilters(filterSpecs, batches, hitRows);
+  auto filters = filterGenerator_->makeSubfieldFilters(
+      filterSpecs, batches, &mutations, hitRows);
   auto spec = filterGenerator_->makeScanSpec(std::move(filters));
   uint64_t timeWithFilter = 0;
-  readWithFilter(spec, batches, hitRows, timeWithFilter, false);
+  readWithFilter(spec, mutations, batches, hitRows, timeWithFilter, false);
 
   if (FLAGS_timing_repeats) {
     for (auto i = 0; i < FLAGS_timing_repeats; ++i) {
-      readWithFilter(spec, batches, hitRows, timeWithFilter, false, true);
+      readWithFilter(
+          spec, mutations, batches, hitRows, timeWithFilter, false, true);
     }
     LOG(INFO) << fmt::format(
         "    {} hits in {} us, {} input rows/s\n",
@@ -284,13 +311,14 @@ void E2EFilterTestBase::testFilterSpecs(
         batches[0]->size() * batches.size() * FLAGS_timing_repeats /
             (timeWithFilter / 1000000.0));
   }
-  testReadWithFilterLazy(spec, batches, hitRows);
+  testReadWithFilterLazy(spec, mutations, batches, hitRows);
 }
 
 void E2EFilterTestBase::testNoRowGroupSkip(
     const std::vector<RowVectorPtr>& batches,
     const std::vector<std::string>& filterable,
     int32_t numCombinations) {
+  SCOPED_TRACE("No row group skip");
   auto spec = filterGenerator_->makeScanSpec(SubfieldFilters{});
 
   uint64_t timeWithNoFilter = 0;
@@ -306,6 +334,7 @@ void E2EFilterTestBase::testNoRowGroupSkip(
 void E2EFilterTestBase::testRowGroupSkip(
     const std::vector<RowVectorPtr>& batches,
     const std::vector<std::string>& filterable) {
+  SCOPED_TRACE("Row group skip");
   std::vector<FilterSpec> specs;
   // Makes a row group skipping filter for the first bigint column.
   for (auto& field : filterable) {
@@ -330,6 +359,7 @@ void E2EFilterTestBase::testRowGroupSkip(
 void E2EFilterTestBase::testPruningWithFilter(
     std::vector<RowVectorPtr>& batches,
     const std::vector<std::string>& filterable) {
+  SCOPED_TRACE("Subfield pruning");
   std::vector<std::string> prunable;
   for (int i = 0; i < rowType_->size(); ++i) {
     auto kind = rowType_->childAt(i)->kind();
@@ -356,14 +386,15 @@ void E2EFilterTestBase::testPruningWithFilter(
   }
   auto scanSpec =
       filterGenerator_->makeScanSpec(prunable, batches, leafPool_.get());
+  MutationSpec mutations;
   std::vector<uint64_t> hitRows;
   auto filterSpecs = filterGenerator_->makeRandomSpecs(filterable, 125);
-  auto filters =
-      filterGenerator_->makeSubfieldFilters(filterSpecs, batches, hitRows);
+  auto filters = filterGenerator_->makeSubfieldFilters(
+      filterSpecs, batches, &mutations, hitRows);
   FilterGenerator::addToScanSpec(filters, *scanSpec);
   uint64_t timeWithFilter = 0;
-  readWithFilter(scanSpec, batches, hitRows, timeWithFilter, false);
-  testReadWithFilterLazy(scanSpec, batches, hitRows);
+  readWithFilter(scanSpec, mutations, batches, hitRows, timeWithFilter, false);
+  testReadWithFilterLazy(scanSpec, mutations, batches, hitRows);
 }
 
 void E2EFilterTestBase::testScenario(
@@ -429,17 +460,17 @@ void E2EFilterTestBase::testMetadataFilterImpl(
   int64_t originalIndex = 0;
   auto nextExpectedIndex = [&]() -> int64_t {
     for (;;) {
-      if (originalIndex >= batches.size() * kRowsInGroup) {
+      if (originalIndex >= batches.size() * batchSize_) {
         return -1;
       }
-      auto& batch = batches[originalIndex / kRowsInGroup];
+      auto& batch = batches[originalIndex / batchSize_];
       auto vecA = batch->as<RowVector>()->childAt(0)->asFlatVector<int64_t>();
       auto vecC = batch->as<RowVector>()
                       ->childAt(1)
                       ->as<RowVector>()
                       ->childAt(0)
                       ->asFlatVector<int64_t>();
-      auto j = originalIndex++ % kRowsInGroup;
+      auto j = originalIndex++ % batchSize_;
       auto a = vecA->valueAt(j);
       auto c = vecC->valueAt(j);
       if (validationFilter(a, c)) {
@@ -451,8 +482,8 @@ void E2EFilterTestBase::testMetadataFilterImpl(
     for (int i = 0; i < result->size(); ++i) {
       auto totalIndex = nextExpectedIndex();
       ASSERT_GE(totalIndex, 0);
-      auto& expected = batches[totalIndex / kRowsInGroup];
-      vector_size_t j = totalIndex % kRowsInGroup;
+      auto& expected = batches[totalIndex / batchSize_];
+      vector_size_t j = totalIndex % batchSize_;
       ASSERT_TRUE(result->equalValueAt(expected.get(), i, j))
           << result->toString(i) << " vs " << expected->toString(j);
     }
@@ -461,14 +492,20 @@ void E2EFilterTestBase::testMetadataFilterImpl(
 }
 
 void E2EFilterTestBase::testMetadataFilter() {
+  flushEveryNBatches_ = 1;
+  batchSize_ = 10;
+  test::VectorMaker vectorMaker(leafPool_.get());
+  functions::prestosql::registerAllScalarFunctions();
+  parse::registerTypeResolver();
+
   // a: bigint, b: struct<c: bigint>
   std::vector<RowVectorPtr> batches;
   for (int i = 0; i < 10; ++i) {
     auto a = BaseVector::create<FlatVector<int64_t>>(
-        BIGINT(), kRowsInGroup, leafPool_.get());
+        BIGINT(), batchSize_, leafPool_.get());
     auto c = BaseVector::create<FlatVector<int64_t>>(
-        BIGINT(), kRowsInGroup, leafPool_.get());
-    for (int j = 0; j < kRowsInGroup; ++j) {
+        BIGINT(), batchSize_, leafPool_.get());
+    for (int j = 0; j < batchSize_; ++j) {
       a->set(j, i);
       c->set(j, i);
     }
@@ -485,10 +522,8 @@ void E2EFilterTestBase::testMetadataFilter() {
         a->size(),
         std::vector<VectorPtr>({a, b})));
   }
-  writeToMemory(batches[0]->type(), batches, true);
+  writeToMemory(batches[0]->type(), batches, false);
 
-  functions::prestosql::registerAllScalarFunctions();
-  parse::registerTypeResolver();
   testMetadataFilterImpl(
       batches,
       common::Subfield("a"),
@@ -509,6 +544,29 @@ void E2EFilterTestBase::testMetadataFilter() {
       nullptr,
       "a in (1, 3, 8) or a >= 9",
       [](int64_t a, int64_t) { return a == 1 || a == 3 || a == 8 || a >= 9; });
+  testMetadataFilterImpl(
+      batches,
+      common::Subfield("a"),
+      nullptr,
+      "not (a not in (2, 3, 5, 7))",
+      [](int64_t a, int64_t) {
+        return !!(a == 2 || a == 3 || a == 5 || a == 7);
+      });
+
+  {
+    SCOPED_TRACE("Values not unique in row group");
+    auto a = vectorMaker.flatVector<int64_t>(batchSize_, folly::identity);
+    auto c = vectorMaker.flatVector<int64_t>(batchSize_, folly::identity);
+    auto b = vectorMaker.rowVector({"c"}, {c});
+    batches = {vectorMaker.rowVector({"a", "b"}, {a, b})};
+    writeToMemory(batches[0]->type(), batches, false);
+    testMetadataFilterImpl(
+        batches,
+        common::Subfield("a"),
+        nullptr,
+        "not (a = 1 and b.c = 2)",
+        [](int64_t a, int64_t c) { return !(a == 1 && c == 2); });
+  }
 }
 
 void E2EFilterTestBase::testSubfieldsPruning() {
@@ -613,6 +671,105 @@ void E2EFilterTestBase::testSubfieldsPruning() {
       ++ii;
     }
   }
+}
+
+void E2EFilterTestBase::testMutationCornerCases() {
+  test::VectorMaker vectorMaker(leafPool_.get());
+  flushEveryNBatches_ = 1;
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 10; ++i) {
+    auto a = vectorMaker.flatVector<int64_t>(
+        100, [&](auto j) { return 100 * i + j; });
+    batches.push_back(vectorMaker.rowVector({"a"}, {a}));
+  }
+  auto& rowType = batches[0]->type();
+  writeToMemory(rowType, batches, false);
+  ReaderOptions readerOpts{leafPool_.get()};
+  std::string_view data(sinkPtr_->getData(), sinkPtr_->size());
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
+  auto reader = makeReader(readerOpts, std::move(input));
+
+  // 1. Interleave batches with and without deletions.
+  // 2. Whole batch deletion.
+  // 3. Delete last a few rows in a batch.
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*rowType);
+  RowReaderOptions rowReaderOpts;
+  setUpRowReaderOptions(rowReaderOpts, spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto result = BaseVector::create(rowType, 0, leafPool_.get());
+  constexpr int kReadBatchSize = 10;
+  auto nwords = bits::nwords(kReadBatchSize);
+  std::vector<uint64_t> allSet(nwords, static_cast<uint64_t>(-1));
+  std::vector<uint64_t> oddSet(nwords, 0xAAAAAAAAAAAAAAAAull);
+  std::vector<uint64_t> noneSet(nwords, 0);
+  int64_t totalScanned = 0;
+  for (int i = 0;; ++i) {
+    auto nextRowNumber = rowReader->nextRowNumber();
+    if (nextRowNumber == RowReader::kAtEnd) {
+      break;
+    }
+    ASSERT_EQ(nextRowNumber, totalScanned);
+    uint64_t size = kReadBatchSize;
+    Mutation mutation;
+    switch (i % 5) {
+      case 0:
+        mutation.deletedRows = allSet.data();
+        break;
+      case 1:
+        mutation.deletedRows = oddSet.data();
+        break;
+      case 2:
+        mutation.deletedRows = noneSet.data();
+        break;
+      case 3:
+        size = kReadBatchSize + 2;
+        break;
+    }
+    auto numScanned = rowReader->next(size, result, &mutation);
+    ASSERT_GT(numScanned, 0);
+    totalScanned += numScanned;
+    auto* a = result->asUnchecked<RowVector>()
+                  ->childAt(0)
+                  ->loadedVector()
+                  ->asFlatVector<int64_t>();
+    if (i % 5 == 0) {
+      ASSERT_EQ(result->size(), 0);
+    } else if (i % 5 == 1) {
+      ASSERT_EQ(2 * result->size(), numScanned);
+      for (int j = 0; j < result->size(); ++j) {
+        ASSERT_EQ(a->valueAtFast(j), nextRowNumber + j * 2);
+      }
+    } else {
+      ASSERT_EQ(result->size(), numScanned);
+      for (int j = 0; j < result->size(); ++j) {
+        ASSERT_EQ(a->valueAtFast(j), nextRowNumber + j);
+      }
+    }
+  }
+  ASSERT_EQ(totalScanned, 1000);
+
+  // No child reader.
+  spec = std::make_shared<common::ScanSpec>("<root>");
+  setUpRowReaderOptions(rowReaderOpts, spec);
+  rowReader = reader->createRowReader(rowReaderOpts);
+  result = BaseVector::create(ROW({}), 0, leafPool_.get());
+  totalScanned = 0;
+  for (;;) {
+    auto nextRowNumber = rowReader->nextRowNumber();
+    if (nextRowNumber == RowReader::kAtEnd) {
+      break;
+    }
+    ASSERT_EQ(nextRowNumber, totalScanned);
+    Mutation mutation;
+    mutation.deletedRows = oddSet.data();
+    auto numScanned = rowReader->next(kReadBatchSize, result, &mutation);
+    ASSERT_GT(numScanned, 0);
+    ASSERT_EQ(2 * result->size(), numScanned);
+    totalScanned += numScanned;
+  }
+  ASSERT_EQ(totalScanned, 1000);
 }
 
 void OwnershipChecker::check(const VectorPtr& batch) {
