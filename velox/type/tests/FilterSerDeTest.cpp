@@ -58,9 +58,9 @@ TEST_F(FilterSerDeTest, bigintFilters) {
   testSerde(NegatedBigintRange(lo, hi, true));
   testSerde(NegatedBigintRange(lo, hi, false));
 
-  int128_t upper = buildInt128(hi, lo);
+  int128_t upper = HugeInt::build(hi, lo);
   hi = 0XABCDFFFFFFFF8A59;
-  int128_t lower = buildInt128(hi, lo);
+  int128_t lower = HugeInt::build(hi, lo);
   testSerde(HugeintRange(lower, upper, true));
   testSerde(HugeintRange(lower, upper, false));
 }

@@ -132,7 +132,7 @@ const char* filterKinds(FilterKind kind) {
 } // namespace
 
 void Filter::registerSerDe() {
-  auto& registry = DeserializationRegistryForSharedPtr();
+  auto& registry = DeserializationRegistryForUniquePtr();
 
   registry.Register("AlwaysFalse", AlwaysFalse::create);
   registry.Register("AlwaysTrue", AlwaysTrue::create);
@@ -174,32 +174,32 @@ folly::dynamic AlwaysFalse::serialize() const {
   return Filter::serializeBase("AlwaysFalse");
 }
 
-FilterPtr AlwaysFalse::create(const folly::dynamic& /*obj*/) {
-  return std::make_shared<AlwaysFalse>();
+FilterUniquePtr AlwaysFalse::create(const folly::dynamic& /*obj*/) {
+  return std::make_unique<AlwaysFalse>();
 }
 
 folly::dynamic AlwaysTrue::serialize() const {
   return Filter::serializeBase("AlwaysTrue");
 }
 
-FilterPtr AlwaysTrue::create(const folly::dynamic& /*obj*/) {
-  return std::make_shared<AlwaysTrue>();
+FilterUniquePtr AlwaysTrue::create(const folly::dynamic& /*obj*/) {
+  return std::make_unique<AlwaysTrue>();
 }
 
 folly::dynamic IsNull::serialize() const {
   return Filter::serializeBase("IsNull");
 }
 
-FilterPtr IsNull::create(const folly::dynamic& /*obj*/) {
-  return std::make_shared<IsNull>();
+FilterUniquePtr IsNull::create(const folly::dynamic& /*obj*/) {
+  return std::make_unique<IsNull>();
 }
 
 folly::dynamic IsNotNull::serialize() const {
   return Filter::serializeBase("IsNotNull");
 }
 
-FilterPtr IsNotNull::create(const folly::dynamic& /*obj*/) {
-  return std::make_shared<IsNotNull>();
+FilterUniquePtr IsNotNull::create(const folly::dynamic& /*obj*/) {
+  return std::make_unique<IsNotNull>();
 }
 
 folly::dynamic BoolValue::serialize() const {
@@ -208,10 +208,10 @@ folly::dynamic BoolValue::serialize() const {
   return obj;
 }
 
-FilterPtr BoolValue::create(const folly::dynamic& obj) {
+FilterUniquePtr BoolValue::create(const folly::dynamic& obj) {
   auto value = obj["value"].asBool();
   auto nullAllowed = obj["nullAllowed"].asBool();
-  return std::make_shared<BoolValue>(value, nullAllowed);
+  return std::make_unique<BoolValue>(value, nullAllowed);
 }
 
 folly::dynamic BigintRange::serialize() const {
@@ -221,11 +221,11 @@ folly::dynamic BigintRange::serialize() const {
   return obj;
 }
 
-FilterPtr BigintRange::create(const folly::dynamic& obj) {
+FilterUniquePtr BigintRange::create(const folly::dynamic& obj) {
   auto lower = obj["lower"].asInt();
   auto upper = obj["upper"].asInt();
   auto nullAllowed = obj["nullAllowed"].asBool();
-  return std::make_shared<BigintRange>(lower, upper, nullAllowed);
+  return std::make_unique<BigintRange>(lower, upper, nullAllowed);
 }
 
 folly::dynamic NegatedBigintRange::serialize() const {
@@ -235,29 +235,29 @@ folly::dynamic NegatedBigintRange::serialize() const {
   return obj;
 }
 
-FilterPtr NegatedBigintRange::create(const folly::dynamic& obj) {
+FilterUniquePtr NegatedBigintRange::create(const folly::dynamic& obj) {
   auto lower = obj["lower"].asInt();
   auto upper = obj["upper"].asInt();
   auto nullAllowed = obj["nullAllowed"].asBool();
-  return std::make_shared<NegatedBigintRange>(lower, upper, nullAllowed);
+  return std::make_unique<NegatedBigintRange>(lower, upper, nullAllowed);
 }
 
 folly::dynamic HugeintRange::serialize() const {
   auto obj = Filter::serializeBase("HugeintRange");
-  auto lower = splitInt128(lower_);
-  auto upper = splitInt128(upper_);
-  obj["lowerHi"] = lower.first;
-  obj["lowerLo"] = lower.second;
-  obj["upperHi"] = upper.first;
-  obj["upperLo"] = upper.second;
+  char lower[sizeof(int128_t)];
+  HugeInt::serialize(lower_, lower);
+  obj["lower"] = std::string(lower);
+  char upper[sizeof(int128_t)];
+  HugeInt::serialize(upper_, upper);
+  obj["upper"] = std::string(upper);
   return obj;
 }
 
-FilterPtr HugeintRange::create(const folly::dynamic& obj) {
-  auto lower = buildInt128(obj["lowerHi"].asInt(), obj["lowerLo"].asInt());
-  auto upper = buildInt128(obj["upperHi"].asInt(), obj["upperLo"].asInt());
+FilterUniquePtr HugeintRange::create(const folly::dynamic& obj) {
+  auto lower = HugeInt::deserialize(obj["lower"].asString().c_str());
+  auto upper = HugeInt::deserialize(obj["upper"].asString().c_str());
   auto nullAllowed = obj["nullAllowed"].asBool();
-  return std::make_shared<HugeintRange>(lower, upper, nullAllowed);
+  return std::make_unique<HugeintRange>(lower, upper, nullAllowed);
 }
 
 folly::dynamic BigintValuesUsingHashTable::serialize() const {
@@ -280,7 +280,7 @@ folly::dynamic BigintValuesUsingHashTable::serialize() const {
   return obj;
 }
 
-FilterPtr BigintValuesUsingHashTable::create(const folly::dynamic& obj) {
+FilterUniquePtr BigintValuesUsingHashTable::create(const folly::dynamic& obj) {
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto min = obj["min"].asInt();
   auto max = obj["max"].asInt();
@@ -298,7 +298,7 @@ FilterPtr BigintValuesUsingHashTable::create(const folly::dynamic& obj) {
   for (const auto& h : hashArr) {
     hashTable.push_back(h.asInt());
   }
-  auto res = std::make_shared<BigintValuesUsingHashTable>(
+  auto res = std::make_unique<BigintValuesUsingHashTable>(
       min, max, values, nullAllowed);
   res->setHashTable(hashTable);
 
@@ -321,7 +321,7 @@ folly::dynamic BigintValuesUsingBitmask::serialize() const {
   return obj;
 }
 
-FilterPtr BigintValuesUsingBitmask::create(const folly::dynamic& obj) {
+FilterUniquePtr BigintValuesUsingBitmask::create(const folly::dynamic& obj) {
   auto min = obj["min"].asInt();
   auto max = obj["max"].asInt();
   auto nullAllowed = obj["nullAllowed"].asBool();
@@ -333,7 +333,7 @@ FilterPtr BigintValuesUsingBitmask::create(const folly::dynamic& obj) {
     values.push_back(v.asInt());
   }
 
-  return std::make_shared<BigintValuesUsingBitmask>(
+  return std::make_unique<BigintValuesUsingBitmask>(
       min, max, values, nullAllowed);
 }
 
@@ -343,7 +343,8 @@ folly::dynamic NegatedBigintValuesUsingHashTable::serialize() const {
   return obj;
 }
 
-FilterPtr NegatedBigintValuesUsingHashTable::create(const folly::dynamic& obj) {
+FilterUniquePtr NegatedBigintValuesUsingHashTable::create(
+    const folly::dynamic& obj) {
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto deterministic = obj["deterministic"].asBool();
   auto nonNegated =
@@ -352,7 +353,7 @@ FilterPtr NegatedBigintValuesUsingHashTable::create(const folly::dynamic& obj) {
   auto max = nonNegated->max();
   auto values = nonNegated->values();
   auto hashTable = nonNegated->hashTable();
-  auto res = std::make_shared<NegatedBigintValuesUsingHashTable>(
+  auto res = std::make_unique<NegatedBigintValuesUsingHashTable>(
       min, max, values, nullAllowed);
   res->setHashTable(hashTable);
   return res;
@@ -366,14 +367,15 @@ folly::dynamic NegatedBigintValuesUsingBitmask::serialize() const {
   return obj;
 }
 
-FilterPtr NegatedBigintValuesUsingBitmask::create(const folly::dynamic& obj) {
+FilterUniquePtr NegatedBigintValuesUsingBitmask::create(
+    const folly::dynamic& obj) {
   auto min = obj["min"].asInt();
   auto max = obj["max"].asInt();
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto nonNegated =
       ISerializable::deserialize<BigintValuesUsingBitmask>(obj["nonNegated"]);
   auto values = nonNegated->values();
-  return std::make_shared<NegatedBigintValuesUsingBitmask>(
+  return std::make_unique<NegatedBigintValuesUsingBitmask>(
       min, max, values, nullAllowed);
 }
 
@@ -395,7 +397,7 @@ folly::dynamic FloatingPointRange<double>::serialize() const {
   return obj;
 }
 
-FilterPtr AbstractRange::create(const folly::dynamic& obj) {
+FilterUniquePtr AbstractRange::create(const folly::dynamic& obj) {
   auto lowerUnbounded = obj["lowerUnbounded"].asBool();
   auto lowerExclusive = obj["lowerExclusive"].asBool();
   auto upperUnbounded = obj["upperUnbounded"].asBool();
@@ -406,7 +408,7 @@ FilterPtr AbstractRange::create(const folly::dynamic& obj) {
   auto isDouble = obj["isDouble"].asBool();
 
   if (isDouble) {
-    return std::make_shared<FloatingPointRange<double>>(
+    return std::make_unique<FloatingPointRange<double>>(
         lower,
         lowerUnbounded,
         lowerExclusive,
@@ -415,7 +417,7 @@ FilterPtr AbstractRange::create(const folly::dynamic& obj) {
         upperExclusive,
         nullAllowed);
   } else {
-    return std::make_shared<FloatingPointRange<float>>(
+    return std::make_unique<FloatingPointRange<float>>(
         static_cast<float>(lower),
         lowerUnbounded,
         lowerExclusive,
@@ -434,7 +436,7 @@ folly::dynamic BytesRange::serialize() const {
   return obj;
 }
 
-FilterPtr BytesRange::create(const folly::dynamic& obj) {
+FilterUniquePtr BytesRange::create(const folly::dynamic& obj) {
   auto lowerUnbounded = obj["lowerUnbounded"].asBool();
   auto lowerExclusive = obj["lowerExclusive"].asBool();
   auto upperUnbounded = obj["upperUnbounded"].asBool();
@@ -442,7 +444,7 @@ FilterPtr BytesRange::create(const folly::dynamic& obj) {
   auto lower = obj["lower"].asString();
   auto upper = obj["upper"].asString();
   auto nullAllowed = obj["nullAllowed"].asBool();
-  return std::make_shared<BytesRange>(
+  return std::make_unique<BytesRange>(
       lower,
       lowerUnbounded,
       lowerExclusive,
@@ -458,10 +460,10 @@ folly::dynamic NegatedBytesRange::serialize() const {
   return obj;
 }
 
-FilterPtr NegatedBytesRange::create(const folly::dynamic& obj) {
+FilterUniquePtr NegatedBytesRange::create(const folly::dynamic& obj) {
   auto nonNegated = ISerializable::deserialize<BytesRange>(obj["nonNegated"]);
 
-  return std::make_shared<NegatedBytesRange>(
+  return std::make_unique<NegatedBytesRange>(
       nonNegated->lower(),
       nonNegated->lowerUnbounded(),
       nonNegated->lowerExclusive(),
@@ -481,7 +483,7 @@ folly::dynamic BytesValues::serialize() const {
   return obj;
 }
 
-FilterPtr BytesValues::create(const folly::dynamic& obj) {
+FilterUniquePtr BytesValues::create(const folly::dynamic& obj) {
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto arr = obj["values"];
   std::vector<std::string> values;
@@ -491,7 +493,7 @@ FilterPtr BytesValues::create(const folly::dynamic& obj) {
     values.emplace_back(v.asString());
   }
 
-  return std::make_shared<BytesValues>(values, nullAllowed);
+  return std::make_unique<BytesValues>(values, nullAllowed);
 }
 
 folly::dynamic BigintMultiRange::serialize() const {
@@ -504,7 +506,7 @@ folly::dynamic BigintMultiRange::serialize() const {
   return obj;
 }
 
-FilterPtr BigintMultiRange::create(const folly::dynamic& obj) {
+FilterUniquePtr BigintMultiRange::create(const folly::dynamic& obj) {
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto arr = obj["ranges"];
   std::vector<std::unique_ptr<BigintRange>> ranges;
@@ -513,7 +515,7 @@ FilterPtr BigintMultiRange::create(const folly::dynamic& obj) {
     ranges.push_back(std::make_unique<BigintRange>(
         *ISerializable::deserialize<BigintRange>(r)));
   }
-  return std::make_shared<BigintMultiRange>(std::move(ranges), nullAllowed);
+  return std::make_unique<BigintMultiRange>(std::move(ranges), nullAllowed);
 }
 
 folly::dynamic NegatedBytesValues::serialize() const {
@@ -522,11 +524,11 @@ folly::dynamic NegatedBytesValues::serialize() const {
   return obj;
 }
 
-FilterPtr NegatedBytesValues::create(const folly::dynamic& obj) {
+FilterUniquePtr NegatedBytesValues::create(const folly::dynamic& obj) {
   auto deterministic = obj["deterministic"].asBool();
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto nonNegated = ISerializable::deserialize<BytesValues>(obj["nonNegated"]);
-  return std::make_shared<NegatedBytesValues>(
+  return std::make_unique<NegatedBytesValues>(
       *nonNegated, deterministic, nullAllowed);
 }
 
@@ -541,7 +543,7 @@ folly::dynamic MultiRange::serialize() const {
   return obj;
 }
 
-FilterPtr MultiRange::create(const folly::dynamic& obj) {
+FilterUniquePtr MultiRange::create(const folly::dynamic& obj) {
   auto nullAllowed = obj["nullAllowed"].asBool();
   auto nanAllowed = obj["nanAllowed"].asBool();
   folly::dynamic arr = obj["filters"];
@@ -553,7 +555,7 @@ FilterPtr MultiRange::create(const folly::dynamic& obj) {
     filters.emplace_back(f->clone());
   }
 
-  return std::make_shared<MultiRange>(
+  return std::make_unique<MultiRange>(
       std::move(filters), nullAllowed, nanAllowed);
 }
 

@@ -177,6 +177,13 @@ class ISerializable {
           registryWithContext.Create(name, obj, context));
     }
 
+    const auto& registryOfUniquePtr =
+        velox::DeserializationRegistryForUniquePtr();
+    if (registryOfUniquePtr.Has(name)) {
+      return std::dynamic_pointer_cast<const T>(
+          std::shared_ptr(registryOfUniquePtr.Create(name, obj)));
+    }
+
     const auto& registry = velox::DeserializationRegistryForSharedPtr();
     VELOX_USER_CHECK(
         registry.Has(name),

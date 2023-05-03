@@ -58,7 +58,7 @@ enum class FilterKind {
 };
 
 class Filter;
-using FilterPtr = std::shared_ptr<const Filter>;
+using FilterUniquePtr = std::unique_ptr<const Filter>;
 
 /**
  * A simple filter (e.g. comparison with literal) that can be applied
@@ -281,7 +281,7 @@ class AlwaysFalse final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& /*obj*/);
+  static FilterUniquePtr create(const folly::dynamic& /*obj*/);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -346,7 +346,7 @@ class AlwaysTrue final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& /*obj*/);
+  static FilterUniquePtr create(const folly::dynamic& /*obj*/);
 
   bool testNull() const final {
     return true;
@@ -414,7 +414,7 @@ class IsNull final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& /*obj*/);
+  static FilterUniquePtr create(const folly::dynamic& /*obj*/);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -476,7 +476,7 @@ class IsNotNull final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& /*obj*/);
+  static FilterUniquePtr create(const folly::dynamic& /*obj*/);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -543,7 +543,7 @@ class BoolValue final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   bool testingEquals(const Filter& other) const final {
     auto ptr = dynamic_cast<const BoolValue*>(&other);
@@ -607,7 +607,7 @@ class BigintRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -717,7 +717,7 @@ class NegatedBigintRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -790,7 +790,7 @@ class HugeintRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -870,7 +870,7 @@ class BigintValuesUsingHashTable final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -989,7 +989,7 @@ class BigintValuesUsingBitmask final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1061,7 +1061,7 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1151,7 +1151,7 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1205,7 +1205,7 @@ class AbstractRange : public Filter {
     return upperExclusive_;
   }
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
  protected:
   AbstractRange(
@@ -1563,7 +1563,7 @@ class BytesRange final : public AbstractRange {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1679,7 +1679,7 @@ class NegatedBytesRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1768,7 +1768,7 @@ class BytesValues final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1848,7 +1848,7 @@ class BigintMultiRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
@@ -1921,7 +1921,7 @@ class NegatedBytesValues final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1982,7 +1982,7 @@ class MultiRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterPtr create(const folly::dynamic& obj);
+  static FilterUniquePtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
