@@ -76,7 +76,11 @@ option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
+option(VELOX_ENABLE_FBTHRIFT "Enable FBThrift support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
+option(VELOX_ENABLE_REMOTE_FUNCTION 
+       "Enable remote function execution support." 
+       OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
@@ -186,7 +190,7 @@ endif()
 
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
-  # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
+  # Native Parqiet reader requires Apache Thrift and Arrow Parquet writer, which
   # are included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
 endif()
@@ -511,3 +515,12 @@ endif()
 
 add_subdirectory(third_party)
 add_subdirectory(velox)
+
+
+
+if(VELOX_ENABLE_REMOTE_FUNCTION)
+  set(VELOX_ENABLE_FBTHRIFT ON)
+
+  set_source(FBThrift)
+  resolve_dependency(FBThrift)
+endif()
