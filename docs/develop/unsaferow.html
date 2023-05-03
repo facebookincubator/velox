@@ -131,6 +131,16 @@ of size 3 [1 =&gt; 10, 2 =&gt; 20, 3 =&gt; 30] uses 104 bytes.</p>
 <li><p>8 bytes for the value of the second struct field.</p></li>
 </ul>
 </section>
+<section id="batches-of-rows">
+<h2>Batches of Rows<a class="headerlink" href="#batches-of-rows" title="Permalink to this heading">¶</a></h2>
+<p>It is common for engines to require the serialization of a batch of rows. In
+these cases, a batch of serialized UnsafeRows can be created by successively
+serializing the row size then the UnsafeRow buffer, in the following manner:</p>
+<p>row size | UnsafeRow | row size | UnsafeRow | …</p>
+<p>Be careful that the <cite>row size</cite> integer needs to be of <strong>4 bytes</strong>, and encoded using
+<strong>big endian</strong> format. Note that this is different from the other integers serialized as
+part of the UnsafeRow payload, which are all expected to be little endian.</p>
+</section>
 </section>
 
 
@@ -145,6 +155,7 @@ of size 3 [1 =&gt; 10, 2 =&gt; 20, 3 =&gt; 30] uses 104 bytes.</p>
     <ul>
 <li><a class="reference internal" href="#">UnsafeRow Serialization Format</a><ul>
 <li><a class="reference internal" href="#examples">Examples</a></li>
+<li><a class="reference internal" href="#batches-of-rows">Batches of Rows</a></li>
 </ul>
 </li>
 </ul>
