@@ -17,6 +17,7 @@ add_executable(
   AsyncSourceTest.cpp
   BitUtilTest.cpp
   BloomFilterTest.cpp
+  CleanupTest.cpp
   CoalesceIoTest.cpp
   ExceptionTest.cpp
   FsTest.cpp
