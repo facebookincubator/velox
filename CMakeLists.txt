@@ -180,10 +180,6 @@ endif()
 
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
-  if(${CMAKE_SYSTEM_NAME} MATCHES "Linux" AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES
-                                               "x86_64"))
-    set(VELOX_ENABLE_QPL ON)
-  endif()
   # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
   # are included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
