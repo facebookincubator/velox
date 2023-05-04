@@ -15,6 +15,7 @@
  */
 
 #include "pyvelox.h"
+#include "serde.h"
 #include "signatures.h"
 
 namespace facebook::velox::py {
@@ -277,26 +278,6 @@ static void addExpressionBindings(
       });
 }
 
-static VectorPtr pyRestoreVectorFromFileHelper(
-    const char* FOLLY_NONNULL filePath) {
-  return restoreVectorFromFile(filePath, PyVeloxContext::getInstance().pool());
-}
-
-static void addVectorSerdeBindings(
-    py::module& m,
-    bool asModuleLocalDefinitions) {
-  using namespace facebook::velox;
-
-  m.def(
-      "save_vector",
-      &saveVectorToFile,
-      "Serializes the vector into binary format and writes it to a new file.");
-  m.def(
-      "load_vector",
-      &pyRestoreVectorFromFileHelper,
-      "Reads and deserializes a vector from a file stored by save_vector.");
-}
-
 #ifdef CREATE_PYVELOX_MODULE
 PYBIND11_MODULE(pyvelox, m) {
   m.doc() = R"pbdoc(
@@ -312,6 +293,7 @@ PYBIND11_MODULE(pyvelox, m) {
 
   addVeloxBindings(m);
   addSignatureBindings(m);
+  addSerdeBindings(m);
   m.attr("__version__") = "dev";
 }
 #endif

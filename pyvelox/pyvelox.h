@@ -29,55 +29,13 @@
 #include <velox/type/Variant.h>
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
-#include <velox/vector/VectorSaver.h>
 #include "folly/json.h"
+
+#include "context.h"
 
 namespace facebook::velox::py {
 
 namespace py = pybind11;
-
-struct PyVeloxContext {
-  PyVeloxContext() = default;
-  PyVeloxContext(const PyVeloxContext&) = delete;
-  PyVeloxContext(const PyVeloxContext&&) = delete;
-  PyVeloxContext& operator=(const PyVeloxContext&) = delete;
-  PyVeloxContext& operator=(const PyVeloxContext&&) = delete;
-
-  static inline PyVeloxContext& getInstance() {
-    if (!instance_) {
-      instance_ = std::make_unique<PyVeloxContext>();
-    }
-    return *instance_.get();
-  }
-
-  facebook::velox::memory::MemoryPool* pool() {
-    return pool_.get();
-  }
-  facebook::velox::core::QueryCtx* queryCtx() {
-    return queryCtx_.get();
-  }
-  facebook::velox::core::ExecCtx* execCtx() {
-    return execCtx_.get();
-  }
-
-  static inline void cleanup() {
-    if (instance_) {
-      instance_.reset();
-    }
-  }
-
- private:
-  std::shared_ptr<facebook::velox::memory::MemoryPool> pool_ =
-      facebook::velox::memory::addDefaultLeafMemoryPool();
-  std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx_ =
-      std::make_shared<facebook::velox::core::QueryCtx>();
-  std::unique_ptr<facebook::velox::core::ExecCtx> execCtx_ =
-      std::make_unique<facebook::velox::core::ExecCtx>(
-          pool_.get(),
-          queryCtx_.get());
-
-  static inline std::unique_ptr<PyVeloxContext> instance_;
-};
 
 static std::string serializeType(
     const std::shared_ptr<const velox::Type>& type);
@@ -465,10 +423,6 @@ static void addExpressionBindings(
     py::module& m,
     bool asModuleLocalDefinitions = true);
 
-static void addVectorSerdeBindings(
-    py::module& m,
-    bool asModuleLocalDefinitions = true);
-
 ///  Adds Velox Python Bindings to the module m.
 ///
 /// This function adds the following bindings:
@@ -489,7 +443,6 @@ inline void addVeloxBindings(
   addDataTypeBindings(m, asModuleLocalDefinitions);
   addVectorBindings(m, asModuleLocalDefinitions);
   addExpressionBindings(m, asModuleLocalDefinitions);
-  addVectorSerdeBindings(m, asModuleLocalDefinitions);
   auto atexit = py::module_::import("atexit");
   atexit.attr("register")(
       py::cpp_function([]() { PyVeloxContext::cleanup(); }));
