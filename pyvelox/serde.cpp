@@ -19,23 +19,21 @@
 
 #include <velox/vector/VectorSaver.h>
 
-
 namespace facebook::velox::py {
 
 namespace py = pybind11;
 
 namespace {
-    static VectorPtr pyRestoreVectorFromFileHelper(
-        const char* FOLLY_NONNULL filePath) {
-        using namespace facebook::velox;
-        memory::MemoryPool* pool = PyVeloxContext::getInstance().pool();
-        return restoreVectorFromFile(filePath, pool);
-    }
+static VectorPtr pyRestoreVectorFromFileHelper(
+    const char* FOLLY_NONNULL filePath) {
+  using namespace facebook::velox;
+  memory::MemoryPool* pool = PyVeloxContext::getInstance().pool();
+  return restoreVectorFromFile(filePath, pool);
 }
-
+} // namespace
 
 void addSerdeBindings(py::module& m, bool asModuleLocalDefinitions) {
-    using namespace facebook::velox;
+  using namespace facebook::velox;
 
   m.def(
       "save_vector",
@@ -47,4 +45,4 @@ void addSerdeBindings(py::module& m, bool asModuleLocalDefinitions) {
       "Reads and deserializes a vector from a file stored by save_vector.");
 }
 
-}
+} // namespace facebook::velox::py
