@@ -149,10 +149,10 @@ void verifyFailures(ReadFile* readFile) {
           .str();
   auto builderErrorMessage =
       (boost::format(
-           "Unable to connect to HDFS, got error: Hdfs::HdfsRpcException: HdfsFailoverException: "
+           "Unable to connect to HDFS: %s, got error: Hdfs::HdfsRpcException: HdfsFailoverException: "
            "Failed to invoke RPC call \"getFsStats\" on server \"%s\"\tCaused by: "
            "HdfsNetworkConnectException: Connect to \"%s\" failed") %
-       serverAddress % serverAddress)
+       serverAddress % serverAddress % serverAddress)
           .str();
   checkReadErrorMessages(readFile, offsetErrorMessage, kOneMB);
   HdfsFileSystemTest::miniCluster->stop();
@@ -160,7 +160,10 @@ void verifyFailures(ReadFile* readFile) {
   try {
     auto memConfig =
         std::make_shared<const core::MemConfig>(configurationValues);
-    facebook::velox::filesystems::HdfsFileSystem hdfsFileSystem(memConfig);
+    facebook::velox::filesystems::HdfsFileSystem hdfsFileSystem(
+        memConfig,
+        facebook::velox::filesystems::HdfsFileSystem::getServiceEndpoint(
+            memConfig.get()));
     FAIL() << "expected VeloxException";
   } catch (facebook::velox::VeloxException const& error) {
     EXPECT_THAT(error.message(), testing::HasSubstr(builderErrorMessage));
@@ -245,7 +248,10 @@ TEST_F(HdfsFileSystemTest, missingHost) {
         {{"hive.hdfs.port", hdfsPort}});
     auto memConfig =
         std::make_shared<const core::MemConfig>(missingHostConfiguration);
-    facebook::velox::filesystems::HdfsFileSystem hdfsFileSystem(memConfig);
+    facebook::velox::filesystems::HdfsFileSystem hdfsFileSystem(
+        memConfig,
+        facebook::velox::filesystems::HdfsFileSystem::getServiceEndpoint(
+            memConfig.get()));
     FAIL() << "expected VeloxException";
   } catch (facebook::velox::VeloxException const& error) {
     EXPECT_THAT(
@@ -262,7 +268,10 @@ TEST_F(HdfsFileSystemTest, missingPort) {
         {{"hive.hdfs.host", localhost}});
     auto memConfig =
         std::make_shared<const core::MemConfig>(missingPortConfiguration);
-    facebook::velox::filesystems::HdfsFileSystem hdfsFileSystem(memConfig);
+    facebook::velox::filesystems::HdfsFileSystem hdfsFileSystem(
+        memConfig,
+        facebook::velox::filesystems::HdfsFileSystem::getServiceEndpoint(
+            memConfig.get()));
     FAIL() << "expected VeloxException";
   } catch (facebook::velox::VeloxException const& error) {
     EXPECT_THAT(

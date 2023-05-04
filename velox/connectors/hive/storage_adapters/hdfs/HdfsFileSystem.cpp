@@ -28,27 +28,16 @@ std::mutex mtx;
 
 class HdfsFileSystem::Impl {
  public:
-  explicit Impl(const Config* config) {
-    auto endpointInfo = getServiceEndpoint(config);
-    auto builder = hdfsNewBuilder();
-    hdfsBuilderSetNameNode(builder, endpointInfo.host.c_str());
-    hdfsBuilderSetNameNodePort(builder, endpointInfo.port);
-    hdfsClient_ = hdfsBuilderConnect(builder);
-    VELOX_CHECK_NOT_NULL(
-        hdfsClient_,
-        "Unable to connect to HDFS, got error: {}.",
-        hdfsGetLastError())
-  }
-
+  // Keep config here for possible use in the future.
   explicit Impl(const Config* config, const HdfsServiceEndpoint& endpoint) {
     auto builder = hdfsNewBuilder();
     hdfsBuilderSetNameNode(builder, endpoint.host.c_str());
-    hdfsBuilderSetNameNodePort(builder, endpoint.port);
+    hdfsBuilderSetNameNodePort(builder, atoi(endpoint.port.data()));
     hdfsClient_ = hdfsBuilderConnect(builder);
     VELOX_CHECK_NOT_NULL(
         hdfsClient_,
         "Unable to connect to HDFS: {}, got error: {}.",
-        endpoint.identity,
+        endpoint.identity(),
         hdfsGetLastError())
   }
 
@@ -68,11 +57,6 @@ class HdfsFileSystem::Impl {
  private:
   hdfsFS hdfsClient_;
 };
-
-HdfsFileSystem::HdfsFileSystem(const std::shared_ptr<const Config>& config)
-    : FileSystem(config) {
-  impl_ = std::make_shared<Impl>(config.get());
-}
 
 HdfsFileSystem::HdfsFileSystem(
     const std::shared_ptr<const Config>& config,
@@ -163,7 +147,7 @@ static std::function<std::shared_ptr<FileSystem>(
               hdfsInitiationFlags;
       HdfsServiceEndpoint endpoint =
           HdfsFileSystem::getServiceEndpoint(filePath, properties.get());
-      std::string hdfsIdentity = endpoint.identity;
+      std::string hdfsIdentity = endpoint.identity();
       if (filesystems.find(hdfsIdentity) != filesystems.end()) {
         return filesystems[hdfsIdentity];
       }
