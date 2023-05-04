@@ -20,6 +20,8 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/core/Expressions.h"
+#include "velox/expression/Expr.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -223,6 +225,21 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         nullptr,
         timestamps->size(),
         std::vector<VectorPtr>({timestamps, timezones}));
+  }
+
+  std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
+  std::unique_ptr<core::ExecCtx> execCtx_{
+      std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
+
+  std::unique_ptr<exec::ExprSet> compile(const core::TypedExprPtr& expr) {
+    return std::make_unique<exec::ExprSet>(
+        std::vector<core::TypedExprPtr>{expr}, execCtx_.get());
+  }
+
+  core::TypedExprPtr currentTimeCall() {
+    std::vector<facebook::velox::core::TypedExprPtr> emptyVectors;
+    return std::make_shared<core::CallTypedExpr>(
+        VARCHAR(), emptyVectors, "current_time");
   }
 };
 
@@ -2838,15 +2855,45 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
       dateParse("116", "%y+"), "Invalid format: \"116\" is malformed at \"6\"");
 }
 
-TEST_F(DateTimeFunctionsTest, currentTimeTest) {
 //     std::optional<std::string> current_time() {
 //     return evaluateOnce<std::string>("get_current_time");
 //   }
-  const auto current_time = [&]() {   
-    return evaluateOnce<std::string>("current_time");
-  };
 
-  std::optional<std::string> currentTimeStr = current_time();
+// // test "current_time" eval
+//   auto vector = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+//   auto rowVector = makeRowVector({vector});
+//   SelectivityVector rows(rowVector->size());
+//   std::vector<VectorPtr> result(1);
 
-  EXPECT_EQ("19:51:34.241 UTC", currentTimeStr);
+//   exec::ExprSet exprSet({expression}, execCtx_.get());
+//   exec::EvalCtx context(execCtx_.get(), &exprSet, rowVector.get());
+//   exprSet.eval(rows, context, result);
+
+//   auto expected = makeNullableFlatVector<std::string>(
+//       {"19:51:34.241 PDT"});
+//   auto resultFront = result.front();
+//   assertEqualVectors(expected, result.front());
+
+// TEST_F(DateTimeFunctionsTest, currentTimeTest) {
+//   // test the built expression
+//   auto expression =
+//       currentTimeCall();
+
+//   ASSERT_EQ("current_time", compile(expression)->toString());
+
+//   const auto current_time = [&]() {   
+//     return evaluateOnce<std::string>("current_time");
+//   };
+
+//   std::optional<std::string> currentTimeStr = current_time();
+
+//   EXPECT_EQ("19:51:34.241 UTC", currentTimeStr);
+// }
+
+TEST_F(DateTimeFunctionsTest, currentTimeTest) {
+    auto expression =  currentTimeCall();
+    auto result = evaluate(expression, makeRowVector(std::vector<VectorPtr>{makeNullableFlatVector()}));
+    auto currentTimeStr = castEvaluateResult<std::string>(result, expression->toString());
+
+    EXPECT_EQ("19:51:34.241 UTC", currentTimeStr);
 }

@@ -1064,7 +1064,7 @@ struct CurrentTimeFunction {
     oss << std::put_time(&bt, "%H:%M:%S"); // HH:MM:SS
     oss << '.' << std::setfill('0') << std::setw(3) << ms.count(); // HH:MM:SS.ZZZ
     oss << " " << std::put_time(&bt, "%Z"); // HH:MM:SS.ZZZ UTC
-    
+    result.resize(oss.str().size());
     std::memcpy(result.data(), oss.str().data(), oss.str().size());
 
     return true;
