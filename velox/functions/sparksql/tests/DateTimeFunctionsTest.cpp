@@ -456,5 +456,54 @@ TEST_F(DateTimeFunctionsTest, quarterDate) {
   EXPECT_EQ(3, quarter("1954-08-08"));
 }
 
+TEST_F(DateTimeFunctionsTest, monthsBetween) {
+  const auto monthsBetweenFunc = [&](const std::optional<Timestamp> timestamp1,
+                                     const std::optional<Timestamp> timestamp2,
+                                     const std::optional<bool> roundOff) {
+    return evaluateOnce<double>(
+        "months_between(c0, c1, c2)", timestamp1, timestamp2, roundOff);
+  };
+
+  const std::string timeZone = "America/Los_Angeles";
+
+  setQueryTimeZone(timeZone);
+
+  const int64_t timeZoneID = util::getTimeZoneID(timeZone);
+
+  auto monthsBetween = [&](const auto& inputDate1,
+                           const auto& inputDate2,
+                           const auto& roundOff) {
+    Timestamp timestamp1 = util::fromTimestampString(inputDate1);
+    timestamp1.toGMT(timeZoneID);
+    Timestamp timestamp2 = util::fromTimestampString(inputDate2);
+    timestamp2.toGMT(timeZoneID);
+    return monthsBetweenFunc(timestamp1, timestamp2, roundOff);
+  };
+
+  EXPECT_EQ(
+      monthsBetween("1997-02-28 10:30:00", "1996-10-30", true), 3.94959677);
+  EXPECT_EQ(
+      monthsBetween("1997-02-28 10:30:00", "1996-10-30", false),
+      3.9495967741935485);
+  EXPECT_EQ(
+      monthsBetween("1997-02-28 10:30:00", "1996-10-30 00:00:00", true),
+      3.94959677);
+  EXPECT_EQ(
+      monthsBetween("1997-02-28 10:30:00", "1996-10-30 00:00:00", false),
+      3.9495967741935485);
+  EXPECT_EQ(
+      monthsBetween("2015-01-30 11:52:00", "2015-01-30 11:50:00", true), 0.0);
+  EXPECT_EQ(
+      monthsBetween("2015-01-30 11:52:00", "2015-01-30 11:50:00", false), 0.0);
+  EXPECT_EQ(
+      monthsBetween("2015-01-31 00:00:00", "2015-03-31 22:00:00", true), -2.0);
+  EXPECT_EQ(
+      monthsBetween("2015-01-31 00:00:00", "2015-03-31 22:00:00", false), -2.0);
+  EXPECT_EQ(
+      monthsBetween("2015-03-31 22:00:00", "2015-02-28 00:00:00", true), 1.0);
+  EXPECT_EQ(
+      monthsBetween("2015-03-31 22:00:00", "2015-02-28 00:00:00", false), 1.0);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
