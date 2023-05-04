@@ -40,7 +40,7 @@ dnf remove -y gflags
 dnf_install autoconf automake libtool bison flex python3
 
 # Required for google-cloud-storage
-dnf_install curl-devel c-ares-devel
+dnf_install curl-devel c-ares-devel python3-devel
 
 dnf_install conda
 

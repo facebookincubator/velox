@@ -22,85 +22,60 @@ set -eufx -o pipefail
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-INSTALL_PREFIX="${INSTALL_PREFIX:=${DEPENDENCY_DIR}/install}"
 
 function install_aws-sdk-cpp {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
   local AWS_SDK_VERSION="1.9.96"
 
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
-  cmake_install -DCMAKE_BUILD_TYPE=Debug -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
+  cmake_install -DCMAKE_BUILD_TYPE=Debug -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management" -DCMAKE_INSTALL_PREFIX="${DEPENDENCY_DIR}/install"
 }
 
 function install_gcs-sdk-cpp {
-  # install gcs dependencies
+  # Install gcs dependencies
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
   # abseil-cpp
-  if [ ! -d "${INSTALL_PREFIX}/include/absl" ]; then
-    github_wget_and_untar \
-      abseil/abseil-cpp/archive/20220623.1.tar.gz \
-      abseil-cpp && \
-    sed -i 's/^#define ABSL_OPTION_USE_\(.*\) 2/#define ABSL_OPTION_USE_\1 0/' "absl/base/options.h" && \
-    cmake_install -DBUILD_SHARED_LIBS=OFF \
-      -DABSL_BUILD_TESTING=OFF
-  fi
+  github_checkout abseil/abseil-cpp 20220623.1 --depth 1
+  sed -i 's/^#define ABSL_OPTION_USE_\(.*\) 2/#define ABSL_OPTION_USE_\1 0/' "absl/base/options.h"
+  cmake_install -DBUILD_SHARED_LIBS=OFF \
+    -DABSL_BUILD_TESTING=OFF
 
   # protobuf
-  if [ ! -d "${INSTALL_PREFIX}/include/google/protobuf" ]; then
-    github_wget_and_untar \
-      protocolbuffers/protobuf/archive/v21.12.tar.gz \
-      protobuf && \
-    cmake_install -DBUILD_SHARED_LIBS=OFF \
-      -Dprotobuf_BUILD_TESTS=OFF \
-      -Dprotobuf_ABSL_PROVIDER=package
-  fi
+  github_checkout protocolbuffers/protobuf v21.12 --depth 1
+  cmake_install -DBUILD_SHARED_LIBS=OFF \
+    -Dprotobuf_BUILD_TESTS=OFF \
+    -Dprotobuf_ABSL_PROVIDER=package
 
   # grpc
-  if [ ! -d "${INSTALL_PREFIX}/include/grpc" ]; then
-    github_wget_and_untar \
-      grpc/grpc/archive/v1.51.1.tar.gz \
-      grpc && \
-    cmake_install -DBUILD_SHARED_LIBS=OFF \
-      -DgRPC_INSTALL=ON \
-      -DgRPC_BUILD_TESTS=OFF \
-      -DgRPC_ABSL_PROVIDER=package \
-      -DgRPC_CARES_PROVIDER=package \
-      -DgRPC_PROTOBUF_PROVIDER=package \
-      -DgRPC_RE2_PROVIDER=package \
-      -DgRPC_SSL_PROVIDER=package \
-      -DgRPC_ZLIB_PROVIDER=package
-  fi
+  github_checkout grpc/grpc v1.51.1 --depth 1
+  cmake_install -DBUILD_SHARED_LIBS=OFF \
+    -DgRPC_INSTALL=ON \
+    -DgRPC_BUILD_TESTS=OFF \
+    -DgRPC_ABSL_PROVIDER=package \
+    -DgRPC_CARES_PROVIDER=package \
+    -DgRPC_PROTOBUF_PROVIDER=package \
+    -DgRPC_RE2_PROVIDER=package \
+    -DgRPC_SSL_PROVIDER=package \
+    -DgRPC_ZLIB_PROVIDER=package
 
   # crc32
-  if [ ! -d "${INSTALL_PREFIX}/include/crc32c" ]; then
-    github_wget_and_untar \
-      google/crc32c/archive/1.1.2.tar.gz \
-      crc32 && \
-    cmake_install -DBUILD_SHARED_LIBS=OFF \
-      -DCRC32C_BUILD_TESTS=OFF \
-      -DCRC32C_BUILD_BENCHMARKS=OFF \
-      -DCRC32C_USE_GLOG=OFF
-  fi
+  github_checkout google/crc32c 1.1.2 --depth 1
+  cmake_install -DBUILD_SHARED_LIBS=OFF \
+    -DCRC32C_BUILD_TESTS=OFF \
+    -DCRC32C_BUILD_BENCHMARKS=OFF \
+    -DCRC32C_USE_GLOG=OFF
 
   # nlohmann json
-  if [ ! -d "${INSTALL_PREFIX}/include/nlohmann" ]; then
-    github_wget_and_untar \
-      nlohmann/json/archive/v3.11.2.tar.gz \
-      json && \
-    cmake_install -DBUILD_SHARED_LIBS=OFF \
-      -DJSON_BuildTests=OFF
-  fi
+  github_checkout nlohmann/json v3.11.2 --depth 1
+  cmake_install -DBUILD_SHARED_LIBS=OFF \
+    -DJSON_BuildTests=OFF
 
   # google-cloud-gcp
-  if [ ! -d "${INSTALL_PREFIX}/include/google/storage" ]; then
-    github_wget_and_untar \
-      googleapis/google-cloud-cpp/archive/refs/tags/v2.5.0.tar.gz \
-      google-cloud-cpp && \
-    cmake_install -DBUILD_SHARED_LIBS=OFF \
-      -DCMAKE_INSTALL_MESSAGE=NEVER \
-      -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF
-  fi
+  github_checkout googleapis/google-cloud-cpp v2.5.0 --depth 1
+  cmake_install -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_INSTALL_MESSAGE=NEVER \
+    -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF
 }
 
 function install_libhdfs3 {
@@ -146,7 +121,7 @@ install_gcs=0
 install_hdfs=0
 
 if [ "$#" -eq 0 ]; then
-    #install all if none is specifically picked
+    # Install all adapters by default
     install_aws=1
     install_gcs=1
     install_hdfs=1

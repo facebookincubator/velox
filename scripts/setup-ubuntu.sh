@@ -38,6 +38,7 @@ sudo --preserve-env apt update && apt install -y \
   git \
   libc-ares-dev \
   libcurl4-openssl-dev \
+  python3-dev \
   libssl-dev \
   libboost-all-dev \
   libicu-dev \
