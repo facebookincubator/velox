@@ -259,7 +259,6 @@ class TestVeloxVector(unittest.TestCase):
 
 
 class TestVeloxVectorSaver(unittest.TestCase):
-    
     def setUp(self):
         # create a temporary directory
         self.test_dir = tempfile.mkdtemp()
