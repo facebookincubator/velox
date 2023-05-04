@@ -904,11 +904,14 @@ TEST_F(DriverTest, driverCreationThrow) {
                     return std::make_shared<ThrowNode>(id, input);
                   })
                   .planNode();
-
+  CursorParameters params;
+  params.planNode = plan;
+  params.maxDrivers = 5;
+  auto cursor = std::make_unique<TaskCursor>(params);
+  auto task = cursor->task();
   // Ensure execution threw correct error.
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).maxDrivers(5).copyResults(pool()),
-      "Can only create 1 'throw driver'.");
+  VELOX_ASSERT_THROW(cursor->moveNext(), "Can only create 1 'throw driver'.");
+  EXPECT_EQ(TaskState::kFailed, task->state());
 }
 
 DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskPause) {

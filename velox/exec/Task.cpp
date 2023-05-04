@@ -553,8 +553,6 @@ void Task::start(
     }
   }
 
-  std::unique_lock<std::mutex> l(self->mutex_);
-
   // Preallocate a bunch of slots for max concurrent grouped execution
   // drivers, if needed.
   if (self->numDriversPerSplitGroup_ > 0) {
@@ -562,62 +560,71 @@ void Task::start(
         self->numDriversPerSplitGroup_ * self->concurrentSplitGroups_);
   }
 
-  // We create the drivers running pipelines in ungrouped execution mode
-  // first.
-  if (self->numDriversUngrouped_ > 0) {
-    // Create the drivers we are going to run for this task.
-    std::vector<std::shared_ptr<Driver>> drivers;
-    drivers.reserve(self->numDriversUngrouped_);
-    self->createSplitGroupStateLocked(kUngroupedGroupId);
-    self->createDriversLocked(self, kUngroupedGroupId, drivers);
+  // Creating a Driver may throw. Catch this and set the Task to aborted. Throw
+  // can result from prepare failure like for undefined function.
+  try {
+    std::unique_lock<std::mutex> l(self->mutex_);
 
-    // Prevent the connecting structures from being cleaned up before all split
-    // groups are finished during the grouped exeution mode.
-    if (self->isGroupedExecution()) {
-      self->splitGroupStates_[kUngroupedGroupId].mixedExecutionMode = true;
-    }
+    // We create the drivers running pipelines in ungrouped execution mode
+    // first.
+    if (self->numDriversUngrouped_ > 0) {
+      // Create the drivers we are going to run for this task.
+      std::vector<std::shared_ptr<Driver>> drivers;
+      drivers.reserve(self->numDriversUngrouped_);
+      self->createSplitGroupStateLocked(kUngroupedGroupId);
+      self->createDriversLocked(self, kUngroupedGroupId, drivers);
 
-    // We might have first slots taken for grouped execution drivers, so need to
-    // append the ungrouped execution drivers afterwards in that case.
-    if (self->drivers_.empty()) {
-      self->drivers_ = std::move(drivers);
-    } else {
-      self->drivers_.reserve(
-          self->drivers_.size() + self->numDriversUngrouped_);
-      for (auto& driver : drivers) {
-        self->drivers_.emplace_back(std::move(driver));
+      // Prevent the connecting structures from being cleaned up before all
+      // split groups are finished during the grouped exeution mode.
+      if (self->isGroupedExecution()) {
+        self->splitGroupStates_[kUngroupedGroupId].mixedExecutionMode = true;
+      }
+
+      // We might have first slots taken for grouped execution drivers, so need
+      // to append the ungrouped execution drivers afterwards in that case.
+      if (self->drivers_.empty()) {
+        self->drivers_ = std::move(drivers);
+      } else {
+        self->drivers_.reserve(
+            self->drivers_.size() + self->numDriversUngrouped_);
+        for (auto& driver : drivers) {
+          self->drivers_.emplace_back(std::move(driver));
+        }
+      }
+
+      // Set and start all Drivers together inside 'mutex_' so that
+      // cancellations and pauses have well defined timing. For example, do not
+      // pause and restart a task while it is still adding Drivers. If the given
+      // executor is folly::InlineLikeExecutor (or it's child), since the
+      // drivers will be executed synchronously on the same thread as the
+      // current task, so we need release the lock to avoid the deadlock.
+      if (dynamic_cast<const folly::InlineLikeExecutor*>(
+              self->queryCtx()->executor())) {
+        l.unlock();
+      }
+      // We might have first slots taken for grouped execution drivers, so need
+      // only to enqueue the ungrouped execution drivers.
+      for (auto it = self->drivers_.end() - self->numDriversUngrouped_;
+           it != self->drivers_.end();
+           ++it) {
+        if (*it) {
+          ++self->numRunningDrivers_;
+          Driver::enqueue(*it);
+        }
       }
     }
 
-    // Set and start all Drivers together inside 'mutex_' so that cancellations
-    // and pauses have well defined timing. For example, do not pause and
-    // restart a task while it is still adding Drivers.
-    // If the given executor is folly::InlineLikeExecutor (or it's child), since
-    // the drivers will be executed synchronously on the same thread as the
-    // current task, so we need release the lock to avoid the deadlock.
-    if (dynamic_cast<const folly::InlineLikeExecutor*>(
-            self->queryCtx()->executor())) {
-      l.unlock();
-    }
-    // We might have first slots taken for grouped execution drivers, so need
-    // only to enqueue the ungrouped execution drivers.
-    for (auto it = self->drivers_.end() - self->numDriversUngrouped_;
-         it != self->drivers_.end();
-         ++it) {
-      if (*it) {
-        ++self->numRunningDrivers_;
-        Driver::enqueue(*it);
+    // As some splits for grouped execution could have been added before the
+    // task start, ensure we start running drivers for them.
+    if (self->numDriversPerSplitGroup_ > 0) {
+      if (!l.owns_lock()) {
+        l.lock();
       }
+      self->ensureSplitGroupsAreBeingProcessedLocked(self);
     }
-  }
-
-  // As some splits for grouped execution could have been added before the task
-  // start, ensure we start running drivers for them.
-  if (self->numDriversPerSplitGroup_ > 0) {
-    if (!l.owns_lock()) {
-      l.lock();
-    }
-    self->ensureSplitGroupsAreBeingProcessedLocked(self);
+  } catch (const std::exception& e) {
+    self->setError(std::current_exception());
+    throw;
   }
 }
 
