@@ -1042,12 +1042,31 @@ struct ParseDateTimeFunction {
   }
 };
 
+Timestamp parseMysql(
+      const std::string_view& input,
+      const std::string_view& format) {
+    return buildMysqlDateTimeFormatter(format)->parse(input).timestamp;
+  }
+
 template <typename T>
 struct CurrentTimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  std::shared_ptr<DateTimeFormatter> formatter_;
+  const date::time_zone* sessionTimeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config) {
+      sessionTimeZone_ = getTimeZoneFromConfig(config);
+  }
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result) {
+
+    formatter_ = buildJodaDateTimeFormatter(
+          std::string_view("HH:MM:SS.SSS"));
+
+    auto formatted = formatter_->format(Timestamp::now(), sessionTimeZone_);
 
     using namespace std::chrono;
 
