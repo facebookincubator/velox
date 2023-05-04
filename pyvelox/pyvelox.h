@@ -448,6 +448,4 @@ inline void addVeloxBindings(
       py::cpp_function([]() { PyVeloxContext::cleanup(); }));
 }
 
-/// Vector Serialization and Deserialization
-
 } // namespace facebook::velox::py
