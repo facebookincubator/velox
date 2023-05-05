@@ -31,8 +31,8 @@ namespace facebook::velox::functions::prestosql {
 namespace {
 
 /// This function is only for test.
-//template <typename T>
-//struct SIMDIsJsonScalarFunction {
+// template <typename T>
+// struct SIMDIsJsonScalarFunction {
 //  VELOX_DEFINE_FUNCTION_TYPES(T);
 //
 //  FOLLY_ALWAYS_INLINE void call(bool& result, const arg_type<Json>& json) {
@@ -65,7 +65,8 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
   }
 
   velox::VectorPtr makeJsonData(const std::string& json, int vectorSize) {
-    auto jsonVector = vectorMaker_.flatVector<velox::StringView>(vectorSize, JSON());
+    auto jsonVector =
+        vectorMaker_.flatVector<velox::StringView>(vectorSize, JSON());
     for (auto i = 0; i < vectorSize; i++) {
       jsonVector->set(i, velox::StringView(json));
     }
@@ -119,28 +120,20 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
   }
 };
 
-void VeloxIsJsonScalar(
-    int iter,
-    int vectorSize,
-    const std::string& fileSize) {
+void VeloxIsJsonScalar(int iter, int vectorSize, const std::string& fileSize) {
   folly::BenchmarkSuspender suspender;
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(fileSize);
   suspender.dismiss();
-  benchmark.runWithJson(
-      iter, vectorSize, "folly_is_json_scalar", json);
+  benchmark.runWithJson(iter, vectorSize, "folly_is_json_scalar", json);
 }
 
-void SIMDIsJsonScalar(
-    int iter,
-    int vectorSize,
-    const std::string& fileSize) {
+void SIMDIsJsonScalar(int iter, int vectorSize, const std::string& fileSize) {
   folly::BenchmarkSuspender suspender;
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(fileSize);
   suspender.dismiss();
-  benchmark.runWithJson(
-      iter, vectorSize, "simd_is_json_scalar", json);
+  benchmark.runWithJson(iter, vectorSize, "simd_is_json_scalar", json);
 }
 
 BENCHMARK_DRAW_LINE();

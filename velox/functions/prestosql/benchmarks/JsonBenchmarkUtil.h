@@ -20,11 +20,11 @@
 namespace facebook::velox::functions::prestosql {
 
 #define ISJSONSCALAR_BENCHMARK_NAMED_PARAM(type, name, iter, jsonSize) \
-  BENCHMARK_NAMED_PARAM(                                            \
+  BENCHMARK_NAMED_PARAM(                                               \
       name, type##_i_##iter##_jSize_##jsonSize, iter, #jsonSize)
 
 #define ISJSONSCALAR_BENCHMARK_NAMED_PARAM_TWO_FUNCS(             \
-    type, func1, func2, iter, jsonSize)                        \
+    type, func1, func2, iter, jsonSize)                           \
   ISJSONSCALAR_BENCHMARK_NAMED_PARAM(type, func1, iter, jsonSize) \
   ISJSONSCALAR_BENCHMARK_NAMED_PARAM(type, func2, iter, jsonSize)
 

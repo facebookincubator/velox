@@ -26,10 +26,10 @@ struct ParserContext {
   explicit ParserContext() noexcept;
   explicit ParserContext(const char* data, size_t length) noexcept
       : padded_json(data, length) {}
-  void parseElement(){
+  void parseElement() {
     jsonEle = domParser.parse(padded_json);
   }
-  void parseDocument(){
+  void parseDocument() {
     jsonDoc = ondemandParser.iterate(padded_json);
   }
   simdjson::dom::element jsonEle;
