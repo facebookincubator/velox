@@ -58,7 +58,7 @@ enum class FilterKind {
 };
 
 class Filter;
-using FilterUniquePtr = std::unique_ptr<const Filter>;
+using FilterUniquePtr = std::unique_ptr<Filter>;
 
 /**
  * A simple filter (e.g. comparison with literal) that can be applied

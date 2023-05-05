@@ -132,7 +132,7 @@ const char* filterKinds(FilterKind kind) {
 } // namespace
 
 void Filter::registerSerDe() {
-  auto& registry = DeserializationRegistryForUniquePtr();
+  auto& registry = deserializationRegistryForUniquePtr();
 
   registry.Register("AlwaysFalse", AlwaysFalse::create);
   registry.Register("AlwaysTrue", AlwaysTrue::create);

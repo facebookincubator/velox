@@ -170,21 +170,20 @@ class ISerializable {
     // creator generally be a static method in the class.
     auto name = obj["name"].asString();
 
+    auto res = deserializeAsUniquePtr<T>(obj);
+    if (res != nullptr) {
+      return std::dynamic_pointer_cast<const T>(
+          std::shared_ptr(std::move(res)));
+    }
+
     const auto& registryWithContext =
-        velox::DeserializationWithContextRegistryForSharedPtr();
+        velox::deserializationWithContextRegistryForSharedPtr();
     if (registryWithContext.Has(name)) {
       return std::dynamic_pointer_cast<const T>(
           registryWithContext.Create(name, obj, context));
     }
 
-    const auto& registryOfUniquePtr =
-        velox::DeserializationRegistryForUniquePtr();
-    if (registryOfUniquePtr.Has(name)) {
-      return std::dynamic_pointer_cast<const T>(
-          std::shared_ptr(registryOfUniquePtr.Create(name, obj)));
-    }
-
-    const auto& registry = velox::DeserializationRegistryForSharedPtr();
+    const auto& registry = velox::deserializationRegistryForSharedPtr();
     VELOX_USER_CHECK(
         registry.Has(name),
         "Deserialization function for class: {} is not registered",
@@ -212,6 +211,24 @@ class ISerializable {
       const folly::dynamic& obj,
       void* context = nullptr) {
     return T::create(obj);
+  }
+
+  template <
+      class T,
+      typename = std::enable_if_t<std::is_base_of_v<ISerializable, T>>>
+  static auto deserializeAsUniquePtr(
+      const folly::dynamic& obj,
+      void* context = nullptr) {
+    auto name = obj["name"].asString();
+    const auto& registry = velox::deserializationRegistryForUniquePtr();
+    using deserializeType =
+        decltype(DeserializationRegistryUniquePtrType::Create(
+            std::declval<std::string>(), std::declval<folly::dynamic>()));
+    if (registry.Has(name)) {
+      return registry.Create(name, obj);
+    } else {
+      return static_cast<deserializeType>(nullptr);
+    }
   }
 
   template <

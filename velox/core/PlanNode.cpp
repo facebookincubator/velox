@@ -1576,7 +1576,7 @@ std::unordered_set<core::PlanNodeId> PlanNode::leafPlanNodeIds() const {
 
 // static
 void PlanNode::registerSerDe() {
-  auto& registry = DeserializationWithContextRegistryForSharedPtr();
+  auto& registry = deserializationWithContextRegistryForSharedPtr();
 
   registry.Register("AggregationNode", AggregationNode::create);
   registry.Register("AssignUniqueIdNode", AssignUniqueIdNode::create);

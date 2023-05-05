@@ -17,18 +17,18 @@
 
 namespace facebook::velox {
 
-DeserializationRegistryType& DeserializationRegistryForSharedPtr() {
+DeserializationRegistryType& deserializationRegistryForSharedPtr() {
   static DeserializationRegistryType kRegistry;
   return kRegistry;
 }
 
 DeserializationWithContextRegistryType&
-DeserializationWithContextRegistryForSharedPtr() {
+deserializationWithContextRegistryForSharedPtr() {
   static DeserializationWithContextRegistryType kRegistry;
   return kRegistry;
 }
 
-DeserializationRegistryUniquePtrType& DeserializationRegistryForUniquePtr() {
+DeserializationRegistryUniquePtrType& deserializationRegistryForUniquePtr() {
   static DeserializationRegistryUniquePtrType kRegistry;
   return kRegistry;
 }
