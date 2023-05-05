@@ -27,9 +27,7 @@ void registerArrayFunctions(const std::string& prefix = "");
 
 void registerMapFunctions(const std::string& prefix = "");
 
-void registerJsonFunctions(
-    const std::string& prefix = "",
-    const bool useSimd = false);
+void registerJsonFunctions(const std::string& prefix = "");
 
 void registerHyperLogFunctions(const std::string& prefix = "");
 

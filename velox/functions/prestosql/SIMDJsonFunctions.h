@@ -21,12 +21,41 @@
 
 namespace facebook::velox::functions {
 
+struct ParserContext {
+ public:
+  explicit ParserContext() noexcept;
+  explicit ParserContext(const char* data, size_t length) noexcept
+      : padded_json(data, length) {}
+  void parseElement(){
+    jsonEle = domParser.parse(padded_json);
+  }
+  void parseDocument(){
+    jsonDoc = ondemandParser.iterate(padded_json);
+  }
+  simdjson::dom::element jsonEle;
+  simdjson::ondemand::document jsonDoc;
+
+ private:
+  simdjson::padded_string padded_json;
+  simdjson::dom::parser domParser;
+  simdjson::ondemand::parser ondemandParser;
+};
+
 template <typename T>
 struct SIMDIsJsonScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(bool& result, const arg_type<Json>& json) {
-    // TODO
+    ParserContext ctx(json.data(), json.size());
+    result = false;
+
+    ctx.parseDocument();
+    if (ctx.jsonDoc.type() == simdjson::ondemand::json_type::number ||
+        ctx.jsonDoc.type() == simdjson::ondemand::json_type::string ||
+        ctx.jsonDoc.type() == simdjson::ondemand::json_type::boolean ||
+        ctx.jsonDoc.type() == simdjson::ondemand::json_type::null) {
+      result = true;
+    }
   }
 };
 
@@ -47,7 +76,7 @@ struct SIMDJsonParseFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
+      out_type<Json>& result,
       const arg_type<Varchar>& json) {
     // TODO
   }
@@ -58,7 +87,7 @@ struct SIMDJsonExtractFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(
-      out_type<Varchar>& result,
+      out_type<Json>& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
     // TODO
