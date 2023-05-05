@@ -26,6 +26,9 @@ constexpr double kInf = std::numeric_limits<double>::infinity();
 constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 constexpr double kDoubleMax = std::numeric_limits<double>::max();
 constexpr double kDoubleMin = std::numeric_limits<double>::min();
+constexpr int64_t kIntInf = std::numeric_limits<int64_t>::max();
+constexpr int64_t kIntMax = std::numeric_limits<int64_t>::max();
+constexpr int64_t kIntMin = std::numeric_limits<int64_t>::min();
 
 MATCHER(IsNan, "is NaN") {
   return arg && std::isnan(*arg);
@@ -106,6 +109,53 @@ TEST_F(ProbabilityTest, normalCDF) {
   VELOX_ASSERT_THROW(normal_cdf(0, 0, 0.1985), "standardDeviation must be > 0");
   VELOX_ASSERT_THROW(
       normal_cdf(0, kNan, 0.1985), "standardDeviation must be > 0");
+}
+
+TEST_F(ProbabilityTest, binomialCDF) {
+  const auto binomialCDF = [&](std::optional<int64_t> numOfTrials,
+                               std::optional<double> successProb,
+                               std::optional<int64_t> value) {
+    return evaluateOnce<double>(
+        "binomial_cdf(c0, c1, c2)", numOfTrials, successProb, value);
+  };
+
+  EXPECT_EQ(binomialCDF(5, 0.5, 5), 1.0);
+  EXPECT_EQ(binomialCDF(5, 0.5, 0), 0.03125);
+  EXPECT_EQ(binomialCDF(20, 1.0, 0), 0.0);
+  EXPECT_EQ(binomialCDF(20, 0.3, 6), 0.60800981220092398);
+  EXPECT_EQ(binomialCDF(200, 0.3, 60), 0.5348091761606989);
+  EXPECT_EQ(0.0, binomialCDF(kIntInf, 0.5, 5));
+  EXPECT_EQ(0.0, binomialCDF(3, 0.5, kIntInf));
+  EXPECT_EQ(0.0, binomialCDF(kIntInf, 0.5, kIntInf));
+  EXPECT_EQ(0.0, binomialCDF(kIntMax, 0.5, 2));
+  EXPECT_EQ(0.0, binomialCDF(kIntMax, 0.5, kIntMax));
+
+  // Invalid inputs
+  VELOX_ASSERT_THROW(
+      binomialCDF(5, -0.5, 3),
+      "Success probability must be real value in [0, 1]");
+  VELOX_ASSERT_THROW(
+      binomialCDF(5, 2, 3), "Success probability must be real value in [0, 1]");
+  VELOX_ASSERT_THROW(
+      binomialCDF(1, 0.5, 3),
+      "Number of trials must be greater than or equal to value");
+  VELOX_ASSERT_THROW(
+      binomialCDF(-1, 0.5, -5), "Number of trials must be greater than 0");
+  VELOX_ASSERT_THROW(
+      binomialCDF(1, 0.5, -2), "Value must be a positive integer");
+  VELOX_ASSERT_THROW(
+      binomialCDF(kIntMin, 0.5, -5), "Number of trials must be greater than 0");
+  VELOX_ASSERT_THROW(
+      binomialCDF(5, kIntInf, 3),
+      "Success probability must be real value in [0, 1]");
+  VELOX_ASSERT_THROW(
+      binomialCDF(5, kIntMax, 3),
+      "Success probability must be real value in [0, 1]");
+  VELOX_ASSERT_THROW(
+      binomialCDF(5, kNan, 3),
+      "Success probability must be real value in [0, 1]");
+  VELOX_ASSERT_THROW(
+      binomialCDF(kNan, 0.5, 3), "Number of trials must be greater than 0");
 }
 
 } // namespace
