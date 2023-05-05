@@ -366,17 +366,6 @@ set_source(fmt)
 resolve_dependency(fmt)
 
 if(NOT ${VELOX_BUILD_MINIMAL})
-<<<<<<< HEAD
-  find_library(LZ4 lz4)
-  find_library(LZO lzo2)
-  find_library(ZSTD zstd)
-  find_library(SNAPPY snappy)
-  if(${VELOX_ENABLE_QPL})
-    add_definitions(-DVELOX_ENABLE_QPL)
-    # Force qpl from source to avoid system build problems. Such as version.
-    set(qpl_SOURCE BUNDLED)
-    resolve_dependency(qpl)
-=======
   find_package(ZLIB REQUIRED)
   find_package(lz4 REQUIRED)
   find_package(lzo2 REQUIRED)
@@ -389,7 +378,12 @@ if(NOT ${VELOX_BUILD_MINIMAL})
       set(ZSTD_TYPE shared)
     endif()
     add_library(zstd::zstd ALIAS zstd::libzstd_${ZSTD_TYPE})
->>>>>>> 509f98438cf6c22c1a808faccf1d15d4226c9ea8
+  endif()
+  if(${VELOX_ENABLE_QPL})
+    add_definitions(-DVELOX_ENABLE_QPL)
+    # Force qpl from source to avoid system build problems. Such as version.
+    set(qpl_SOURCE BUNDLED)
+    resolve_dependency(qpl)
   endif()
 endif()
 

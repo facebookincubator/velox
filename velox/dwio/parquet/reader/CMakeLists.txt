@@ -40,5 +40,5 @@ target_link_libraries(
 
 if(${VELOX_ENABLE_QPL})
   target_sources(velox_dwio_native_parquet_reader PRIVATE CompressionQpl.cpp)
-  target_link_libraries(velox_dwio_native_parquet_reader PRIVATE qpl)
+  target_link_libraries(velox_dwio_native_parquet_reader qpl)
 endif()
