@@ -1023,6 +1023,16 @@ void Task::noMoreSplitsForGroup(
   }
 }
 
+/// Moves split promises from one vector to another.
+static void movePromisesOut(
+    std::vector<ContinuePromise>& from,
+    std::vector<ContinuePromise>& to) {
+  for (auto& promise : from) {
+    to.push_back(std::move(promise));
+  }
+  from.clear();
+}
+
 void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   std::vector<ContinuePromise> splitPromises;
   bool allFinished;
@@ -1039,7 +1049,7 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
       // Mark all split stores as 'no more splits'.
       for (auto& it : splitsState.groupSplitsStores) {
         it.second.noMoreSplits = true;
-        splitPromises = std::move(it.second.splitPromises);
+        movePromisesOut(it.second.splitPromises, splitPromises);
       }
     } else if (!planFragment_.leafNodeRunsGroupedExecution(planNodeId)) {
       // During ungrouped execution, in the unlikely case there are no split
@@ -1447,16 +1457,6 @@ std::string Task::shortId(const std::string& id) {
   }
   auto hash = std::hash<std::string_view>()(std::string_view(str, dot - str));
   return fmt::format("tk:{}", hash & 0xffff);
-}
-
-/// Moves split promises from one vector to another.
-static void movePromisesOut(
-    std::vector<ContinuePromise>& from,
-    std::vector<ContinuePromise>& to) {
-  for (auto& promise : from) {
-    to.push_back(std::move(promise));
-  }
-  from.clear();
 }
 
 ContinueFuture Task::terminate(TaskState terminalState) {
