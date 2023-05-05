@@ -92,10 +92,8 @@ bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
   return filePath.find(kScheme) == 0;
 }
 
-/**
- * Get hdfs endpoint from config. This is applicable to the case that only one
- * hdfs endpoint will be used.
- */
+/// Gets a fixed hdfs endpoint from config. It is used in the case that hdfs
+/// endpoint is not contained in a given file path.
 HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(const Config* config) {
   auto hdfsHost = config->get("hive.hdfs.host");
   VELOX_CHECK(
@@ -108,10 +106,8 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(const Config* config) {
   return HdfsServiceEndpoint{*hdfsHost, *hdfsPort};
 }
 
-/**
- * Get hdfs endpoint from a given file path, if not found, fall back to get a
- * fixed one from configuration.
- */
+/// Gets hdfs endpoint from a given file path. If not found, fall back to get a
+/// fixed one from configuration.
 HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
     const std::string_view filePath,
     const Config* config) {
@@ -119,9 +115,10 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
   std::string hdfsIdentity{
       filePath.data(), kScheme.size(), endOfIdentityInfo - kScheme.size()};
   if (hdfsIdentity.empty()) {
-    // Fall back to get endpoint from config.
+    // Fall back to get a fixed endpoint from config.
     return getServiceEndpoint(config);
   }
+
   auto hostAndPortSeparator = hdfsIdentity.find(':', 0);
   // In HDFS HA mode, the hdfsIdentity is a nameservice ID with no port.
   if (hostAndPortSeparator == std::string::npos) {
@@ -152,6 +149,8 @@ static std::function<std::shared_ptr<FileSystem>(
         return filesystems[hdfsIdentity];
       }
       std::unique_lock<std::mutex> lk(mtx, std::defer_lock);
+      /// If the init flag for a given hdfs identity is not found,
+      /// create one for init use. It's a singleton.
       if (hdfsInitiationFlags.find(hdfsIdentity) == hdfsInitiationFlags.end()) {
         lk.lock();
         if (hdfsInitiationFlags.find(hdfsIdentity) ==
