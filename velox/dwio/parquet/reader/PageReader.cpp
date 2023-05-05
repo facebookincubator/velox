@@ -489,10 +489,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             values[i] = value;
           }
         }
-        auto values = dictionary_.values->asMutable<UnscaledShortDecimal>();
+        auto values = dictionary_.values->asMutable<int64_t>();
         for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = UnscaledShortDecimal(
-              __builtin_bswap64(values[i].unscaledValue()));
+          values[i] = __builtin_bswap64(values[i]);
         }
         break;
       } else if (type_->type->isLongDecimal()) {
@@ -513,10 +512,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             values[i] = value;
           }
         }
-        auto values = dictionary_.values->asMutable<UnscaledLongDecimal>();
+        auto values = dictionary_.values->asMutable<int128_t>();
         for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = UnscaledLongDecimal(
-              dwio::common::builtin_bswap128(values[i].unscaledValue()));
+          values[i] = dwio::common::builtin_bswap128(values[i]);
         }
         break;
       }

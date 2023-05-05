@@ -244,7 +244,7 @@ class InPredicate : public exec::VectorFunction {
       VectorPtr& result,
       F&& testFunction) const {
     if (alwaysNull_) {
-      auto localResult = createBoolConstantNull(rows.size(), context);
+      auto localResult = createBoolConstantNull(rows.end(), context);
       context.moveOrCopyResult(localResult, rows, result);
       return;
     }
@@ -257,13 +257,13 @@ class InPredicate : public exec::VectorFunction {
       auto simpleArg = arg->asUnchecked<SimpleVector<T>>();
       VectorPtr localResult;
       if (simpleArg->isNullAt(rows.begin())) {
-        localResult = createBoolConstantNull(rows.size(), context);
+        localResult = createBoolConstantNull(rows.end(), context);
       } else {
         bool pass = testFunction(simpleArg->valueAt(rows.begin()));
         if (!pass && passOrNull) {
-          localResult = createBoolConstantNull(rows.size(), context);
+          localResult = createBoolConstantNull(rows.end(), context);
         } else {
-          localResult = createBoolConstant(pass, rows.size(), context);
+          localResult = createBoolConstant(pass, rows.end(), context);
         }
       }
 
@@ -276,6 +276,7 @@ class InPredicate : public exec::VectorFunction {
     auto rawValues = flatArg->rawValues();
 
     context.ensureWritable(rows, BOOLEAN(), result);
+    result->clearNulls(rows);
     auto* boolResult = result->asUnchecked<FlatVector<bool>>();
 
     auto* rawResults = boolResult->mutableRawValues<uint64_t>();

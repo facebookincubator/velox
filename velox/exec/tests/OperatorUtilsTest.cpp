@@ -106,7 +106,7 @@ class OperatorUtilsTest
     }
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
 };
 
 TEST_F(OperatorUtilsTest, wrapChildConstant) {
@@ -276,4 +276,24 @@ TEST_F(OperatorUtilsTest, addOperatorRuntimeStats) {
   ASSERT_EQ(stats[statsName].sum, 500);
   ASSERT_EQ(stats[statsName].max, 200);
   ASSERT_EQ(stats[statsName].min, 100);
+}
+
+TEST_F(OperatorUtilsTest, initializeRowNumberMapping) {
+  BufferPtr mapping;
+  auto rawMapping = initializeRowNumberMapping(mapping, 10, pool());
+  ASSERT_TRUE(mapping != nullptr);
+  ASSERT_GE(mapping->size(), 10);
+
+  rawMapping = initializeRowNumberMapping(mapping, 100, pool());
+  ASSERT_GE(mapping->size(), 100);
+
+  rawMapping = initializeRowNumberMapping(mapping, 60, pool());
+  ASSERT_GE(mapping->size(), 100);
+
+  ASSERT_EQ(mapping->refCount(), 1);
+  auto otherMapping = mapping;
+  ASSERT_EQ(mapping->refCount(), 2);
+  ASSERT_EQ(mapping.get(), otherMapping.get());
+  rawMapping = initializeRowNumberMapping(mapping, 10, pool());
+  ASSERT_NE(mapping.get(), otherMapping.get());
 }

@@ -2,6 +2,14 @@
 Date and Time Functions
 =====================================
 
+.. function:: current_date() -> date
+
+    Returns the current date.
+
+.. function:: date(x) -> date
+
+    This is an alias for ``CAST(x AS date)``.
+
 .. function:: from_unixtime(unixtime) -> timestamp
 
     Returns the UNIX timestamp ``unixtime`` as a timestamp.
@@ -197,6 +205,14 @@ This behavior is different from Presto Java that allows arbitrary large timestam
 .. function:: second(x) -> bigint
 
     Returns the second of the minute from ``x``.
+
+.. function:: timezone_hour(timestamp) -> bigint
+
+    Returns the hour of the time zone offset from ``timestamp``.
+
+.. function:: timezone_minute(timestamp) -> bigint
+
+    Returns the minute of the time zone offset from ``timestamp``.
 
 .. function:: week(x) -> bigint
 

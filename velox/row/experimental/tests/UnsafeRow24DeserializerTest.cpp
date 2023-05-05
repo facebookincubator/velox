@@ -73,7 +73,7 @@ VectorPtr deserialize(
 class UnsafeRowVectorDeserializerTest : public ::testing::Test {
  public:
   UnsafeRowVectorDeserializerTest()
-      : pool_(memory::getDefaultMemoryPool()),
+      : pool_(memory::addDefaultLeafMemoryPool()),
         bufferPtr(AlignedBuffer::allocate<char>(1024, pool_.get(), true)),
         buffer(bufferPtr->asMutable<char>()) {}
 
@@ -552,8 +552,8 @@ class UnsafeRowComplexDeserializerTests : public exec::test::OperatorTestBase {
     std::vector<std::optional<std::string_view>> serializedVector;
     for (size_t i = 0; i < inputVector->size(); ++i) {
       // Serialize rowVector into bytes.
-      auto rowSize = UnsafeRowDynamicSerializer::serialize(
-          inputVector->type(), inputVector, this->buffers_[i], /*idx=*/i);
+      auto rowSize = UnsafeRowSerializer::serialize(
+          inputVector, this->buffers_[i], /*idx=*/i);
       serializedVector.push_back(
           rowSize.has_value()
               ? std::optional<std::string_view>(
@@ -565,7 +565,8 @@ class UnsafeRowComplexDeserializerTests : public exec::test::OperatorTestBase {
     assertEqualVectors(inputVector, outputVector);
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_ = memory::getDefaultMemoryPool();
+  std::shared_ptr<memory::MemoryPool> pool_ =
+      memory::addDefaultLeafMemoryPool();
   std::array<char[1024], kMaxBuffers> buffers_{};
 };
 
@@ -625,7 +626,7 @@ TEST_F(UnsafeRowComplexDeserializerTests, DISABLED_Testfuzzer) {
     std::vector<std::optional<std::string_view>> rowData;
     char* data = &buffer[0];
     for (int j = 0; j < input->size(); ++j) {
-      auto size = UnsafeRowDynamicSerializer::serialize(type, input, data, j);
+      auto size = UnsafeRowSerializer::serialize(input, data, j);
       ASSERT_TRUE(size);
       rowData.emplace_back(std::string_view(data, *size));
       data += *size;

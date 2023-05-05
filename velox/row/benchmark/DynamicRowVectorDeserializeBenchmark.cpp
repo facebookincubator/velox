@@ -45,12 +45,12 @@ class UnsaferowBatchDeserializer : public Deserializer {
   void deserialize(
       const std::vector<std::optional<std::string_view>>& data,
       const TypePtr& type) override {
-    UnsafeRowDynamicVectorBatchDeserializer::deserializeComplex(
-        data, type, pool_.get());
+    UnsafeRowDeserializer::deserialize(data, type, pool_.get());
   }
 
  private:
-  std::shared_ptr<memory::MemoryPool> pool_ = memory::getDefaultMemoryPool();
+  std::shared_ptr<memory::MemoryPool> pool_ =
+      memory::addDefaultLeafMemoryPool();
 };
 
 class BenchmarkHelper {
@@ -93,8 +93,8 @@ class BenchmarkHelper {
       BufferPtr bufferPtr =
           AlignedBuffer::allocate<char>(1024, pool_.get(), true);
       char* buffer = bufferPtr->asMutable<char>();
-      auto rowSize = UnsafeRowDynamicSerializer::serialize(
-          rowType, inputVector, buffer, /*idx=*/0);
+      auto rowSize =
+          UnsafeRowSerializer::serialize(inputVector, buffer, /*idx=*/0);
       results.push_back(std::string_view(buffer, rowSize.value()));
     }
     return {results, rowType};
@@ -115,7 +115,8 @@ class BenchmarkHelper {
       MAP(VARCHAR(), ARRAY(INTEGER())),
       ROW({INTEGER()})};
 
-  std::shared_ptr<memory::MemoryPool> pool_ = memory::getDefaultMemoryPool();
+  std::shared_ptr<memory::MemoryPool> pool_ =
+      memory::addDefaultLeafMemoryPool();
 };
 
 int deserialize(

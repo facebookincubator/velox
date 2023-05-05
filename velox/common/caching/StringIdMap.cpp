@@ -48,7 +48,8 @@ void StringIdMap::addReference(uint64_t id) {
   auto it = idToString_.find(id);
   VELOX_CHECK(
       it != idToString_.end(),
-      "Trying to add a reference to an id that is not in StringIdMap");
+      "Trying to add a reference to id {} that is not in StringIdMap",
+      id);
 
   ++it->second.numInUse;
 }

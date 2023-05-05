@@ -17,6 +17,14 @@ cmake_minimum_required(VERSION 3.14)
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
+# Sets new behavior for CMP0135, which controls how timestamps are extracted
+# when using ExternalProject_Add():
+# https://cmake.org/cmake/help/latest/policy/CMP0135.html
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+  set(CMAKE_POLICY_DEFAULT_CMP0135 NEW)
+endif()
+
 # set the project name
 project(velox)
 
@@ -161,6 +169,10 @@ if(VELOX_ENABLE_CCACHE
   endif()
 endif()
 
+# At the moment we prefer static linking but by default cmake looks for shared
+# libs first. This will still fallback to shared libs when static ones are not
+# found
+list(INSERT CMAKE_FIND_LIBRARY_SUFFIXES 0 a)
 if(VELOX_ENABLE_S3)
   # Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
   if(AWSSDK_ROOT_DIR)
@@ -279,7 +291,8 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-format-overflow \
          -Wno-strict-aliasing \
          -Wno-type-limits \
-         -Wno-stringop-overflow")
+         -Wno-stringop-overflow \
+         -Wno-return-type")
   endif()
 
   set(KNOWN_WARNINGS
@@ -352,14 +365,8 @@ resolve_dependency(glog)
 set_source(fmt)
 resolve_dependency(fmt)
 
-find_library(EVENT event)
-
-find_library(DOUBLE_CONVERSION double-conversion)
-
-# Required for boost.
-find_package(ZLIB)
-
 if(NOT ${VELOX_BUILD_MINIMAL})
+<<<<<<< HEAD
   find_library(LZ4 lz4)
   find_library(LZO lzo2)
   find_library(ZSTD zstd)
@@ -369,6 +376,20 @@ if(NOT ${VELOX_BUILD_MINIMAL})
     # Force qpl from source to avoid system build problems. Such as version.
     set(qpl_SOURCE BUNDLED)
     resolve_dependency(qpl)
+=======
+  find_package(ZLIB REQUIRED)
+  find_package(lz4 REQUIRED)
+  find_package(lzo2 REQUIRED)
+  find_package(zstd REQUIRED)
+  find_package(Snappy REQUIRED)
+  if(NOT TARGET zstd::zstd)
+    if(TARGET zstd::libzstd_static)
+      set(ZSTD_TYPE static)
+    else()
+      set(ZSTD_TYPE shared)
+    endif()
+    add_library(zstd::zstd ALIAS zstd::libzstd_${ZSTD_TYPE})
+>>>>>>> 509f98438cf6c22c1a808faccf1d15d4226c9ea8
   endif()
 endif()
 
@@ -382,6 +403,7 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
 endif()
 
 # Locate or build folly.
+add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
 
@@ -392,13 +414,8 @@ if(NOT DEFINED Boost_LIBRARIES)
 endif()
 
 set(FOLLY_WITH_DEPENDENCIES
-    ${FOLLY_LIBRARIES}
-    ${Boost_LIBRARIES}
-    ${DOUBLE_CONVERSION}
-    ${EVENT}
-    ${SNAPPY}
-    ${CMAKE_DL_LIBS}
-    ${FMT})
+    ${FOLLY_LIBRARIES} ${Boost_LIBRARIES} ${DOUBLE_CONVERSION} ${SNAPPY}
+    ${CMAKE_DL_LIBS} ${FMT})
 
 if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
   set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})

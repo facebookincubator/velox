@@ -18,10 +18,11 @@
 #include "velox/exec/AggregationHook.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using facebook::velox::exec::test::PlanBuilder;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -58,12 +59,6 @@ void verifyAggregates(
       } else if constexpr (std::is_same_v<ResultType, double>) {
         ASSERT_FLOAT_EQ(
             result.template value<TypeKind::DOUBLE>(), expectedResult);
-      } else if constexpr (std::is_same_v<ResultType, UnscaledShortDecimal>) {
-        auto output = result.template value<TypeKind::SHORT_DECIMAL>();
-        ASSERT_EQ(output.value(), expectedResult);
-      } else if constexpr (std::is_same_v<ResultType, UnscaledLongDecimal>) {
-        auto output = result.template value<TypeKind::LONG_DECIMAL>();
-        ASSERT_EQ(output.value(), expectedResult);
       } else {
         ASSERT_EQ(result, expectedResult);
       }
@@ -253,7 +248,7 @@ TEST_F(SumTest, sumDecimal) {
   std::vector<std::optional<int128_t>> longDecimalRawVector;
   for (int i = 0; i < 1000; ++i) {
     shortDecimalRawVector.push_back(i * 1000);
-    longDecimalRawVector.push_back(buildInt128(i * 10, i * 100));
+    longDecimalRawVector.push_back(HugeInt::build(i * 10, i * 100));
   }
   shortDecimalRawVector.push_back(std::nullopt);
   longDecimalRawVector.push_back(std::nullopt);
@@ -303,7 +298,7 @@ TEST_F(SumTest, sumDecimalOverflow) {
   // Short decimals do not overflow easily.
   std::vector<int64_t> shortDecimalInput;
   for (int i = 0; i < 10'000; ++i) {
-    shortDecimalInput.push_back(UnscaledShortDecimal::max().unscaledValue());
+    shortDecimalInput.push_back(DecimalUtil::kShortDecimalMax);
   }
   auto input = makeRowVector(
       {makeShortDecimalFlatVector(shortDecimalInput, DECIMAL(17, 5))});
@@ -328,8 +323,8 @@ TEST_F(SumTest, sumDecimalOverflow) {
   std::vector<int128_t> longDecimalInput;
   std::vector<int128_t> longDecimalOutput;
   // Create input with 2 UnscaledLongDecimal::max().
-  longDecimalInput.push_back(UnscaledLongDecimal::max().unscaledValue());
-  longDecimalInput.push_back(UnscaledLongDecimal::max().unscaledValue());
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMax);
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMax);
   // The sum must overflow.
   VELOX_ASSERT_THROW(
       decimalSumOverflow(longDecimalInput, longDecimalOutput),
@@ -337,8 +332,8 @@ TEST_F(SumTest, sumDecimalOverflow) {
 
   // Now add UnscaledLongDecimal::min().
   // The sum now must not overflow.
-  longDecimalInput.push_back(UnscaledLongDecimal::min().unscaledValue());
-  longDecimalOutput.push_back(UnscaledLongDecimal::max().unscaledValue());
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMin);
+  longDecimalOutput.push_back(DecimalUtil::kLongDecimalMax);
   decimalSumOverflow(longDecimalInput, longDecimalOutput);
 
   // Test Negative Overflow.
@@ -346,8 +341,8 @@ TEST_F(SumTest, sumDecimalOverflow) {
   longDecimalOutput.clear();
 
   // Create input with 2 UnscaledLongDecimal::min().
-  longDecimalInput.push_back(UnscaledLongDecimal::min().unscaledValue());
-  longDecimalInput.push_back(UnscaledLongDecimal::min().unscaledValue());
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMin);
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMin);
 
   // The sum must overflow.
   VELOX_ASSERT_THROW(
@@ -356,24 +351,24 @@ TEST_F(SumTest, sumDecimalOverflow) {
 
   // Now add UnscaledLongDecimal::max().
   // The sum now must not overflow.
-  longDecimalInput.push_back(UnscaledLongDecimal::max().unscaledValue());
-  longDecimalOutput.push_back(UnscaledLongDecimal::min().unscaledValue());
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMax);
+  longDecimalOutput.push_back(DecimalUtil::kLongDecimalMin);
   decimalSumOverflow(longDecimalInput, longDecimalOutput);
 
   // Check value in range.
   longDecimalInput.clear();
-  longDecimalInput.push_back(UnscaledLongDecimal::max().unscaledValue());
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMax);
   longDecimalInput.push_back(1);
   VELOX_ASSERT_THROW(
       decimalSumOverflow(longDecimalInput, longDecimalOutput),
-      "Decimal overflow");
+      "Value '100000000000000000000000000000000000000' is not in the range of Decimal Type");
 
   longDecimalInput.clear();
-  longDecimalInput.push_back(UnscaledLongDecimal::min().unscaledValue());
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMin);
   longDecimalInput.push_back(-1);
   VELOX_ASSERT_THROW(
       decimalSumOverflow(longDecimalInput, longDecimalOutput),
-      "Decimal overflow");
+      "Value '-100000000000000000000000000000000000000' is not in the range of Decimal Type");
 }
 
 TEST_F(SumTest, sumWithMask) {

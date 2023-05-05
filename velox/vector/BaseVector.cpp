@@ -137,12 +137,17 @@ VectorPtr BaseVector::wrapInDictionary(
     if (size == vector->size()) {
       return vector;
     }
-    return BaseVector::wrapInConstant(size, 0, vector);
+    return BaseVector::wrapInConstant(size, 0, std::move(vector));
   }
 
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      addDictionary, kind, nulls, indices, size, std::move(vector));
+      addDictionary,
+      kind,
+      std::move(nulls),
+      std::move(indices),
+      size,
+      std::move(vector));
 }
 
 template <TypeKind kind>
@@ -175,7 +180,7 @@ VectorPtr BaseVector::wrapInSequence(
     VectorPtr vector) {
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      addSequence, kind, lengths, size, std::move(vector));
+      addSequence, kind, std::move(lengths), size, std::move(vector));
 }
 
 template <TypeKind kind>
@@ -489,7 +494,7 @@ std::string BaseVector::toString(
 }
 
 void BaseVector::ensureWritable(const SelectivityVector& rows) {
-  auto newSize = std::max<vector_size_t>(rows.size(), length_);
+  auto newSize = std::max<vector_size_t>(rows.end(), length_);
   if (nulls_ && !(nulls_->unique() && nulls_->isMutable())) {
     BufferPtr newNulls = AlignedBuffer::allocate<bool>(newSize, pool_);
     auto rawNewNulls = newNulls->asMutable<uint64_t>();
@@ -511,9 +516,9 @@ void BaseVector::ensureWritable(
     VectorPool* vectorPool) {
   if (!result) {
     if (vectorPool) {
-      result = vectorPool->get(type, rows.size());
+      result = vectorPool->get(type, rows.end());
     } else {
-      result = BaseVector::create(type, rows.size(), pool);
+      result = BaseVector::create(type, rows.end(), pool);
     }
     return;
   }
@@ -542,7 +547,7 @@ void BaseVector::ensureWritable(
 
   // The copy-on-write size is the max of the writable row set and the
   // vector.
-  auto targetSize = std::max<vector_size_t>(rows.size(), result->size());
+  auto targetSize = std::max<vector_size_t>(rows.end(), result->size());
 
   VectorPtr copy;
   if (vectorPool) {
@@ -575,10 +580,6 @@ VectorPtr newConstant(
   T copy;
   if constexpr (std::is_same_v<T, StringView>) {
     copy = StringView(value.value<kind>());
-  } else if constexpr (
-      std::is_same_v<T, UnscaledShortDecimal> ||
-      std::is_same_v<T, UnscaledLongDecimal>) {
-    copy = value.value<kind>().value();
   } else {
     copy = value.value<T>();
   }
@@ -649,7 +650,7 @@ VectorPtr BaseVector::transpose(BufferPtr indices, VectorPtr&& source) {
       BufferPtr(nullptr),
       indices,
       indices->size() / sizeof(vector_size_t),
-      source);
+      std::move(source));
 }
 
 bool isLazyNotLoaded(const BaseVector& vector) {

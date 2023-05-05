@@ -57,14 +57,6 @@ void generateJsonTyped(
     } else if constexpr (
         std::is_same_v<T, Date> || std::is_same_v<T, Timestamp>) {
       result.append(std::to_string(value));
-    } else if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
-      // UnscaledShortDecimal doesn't include precision and scale information
-      // to serialize into JSON.
-      VELOX_UNSUPPORTED();
-    } else if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
-      // UnscaledLongDecimal doesn't include precision and scale information
-      // to serialize into JSON.
-      VELOX_UNSUPPORTED();
     } else {
       folly::toAppend<std::string, T>(value, &result);
     }
@@ -183,7 +175,7 @@ struct AsJson {
 
         exec::LocalDecodedVector localDecoded(context);
         std::vector<VectorPtr> peeledVectors;
-        auto peeledEncoding = exec::PeeledEncoding::Peel(
+        auto peeledEncoding = exec::PeeledEncoding::peel(
             {input}, rows, localDecoded, true, peeledVectors);
         VELOX_CHECK_EQ(peeledVectors.size(), 1);
         auto newRows =

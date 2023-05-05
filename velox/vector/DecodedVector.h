@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/HugeInt.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SelectivityVector.h"
 
@@ -385,10 +386,6 @@ class DecodedVector {
   // complex type.
   const void* data_ = nullptr;
 
-  // The first bit holds the value when a constant bool is decoded, and data_ in
-  // that case will refer to the address of this variable.
-  uint64_t constantBoolDataHolder_;
-
   // Null bitmask of the base vector if wrappings didn't add nulls
   // (hasExtraNulls_ is false). Otherwise, null bitmask of the base vector
   // combined with null bitmasks in all the wrappings (hasExtraNulls_ is true).
@@ -446,10 +443,10 @@ inline bool DecodedVector::valueAt(vector_size_t idx) const {
 }
 
 template <>
-inline UnscaledLongDecimal DecodedVector::valueAt(vector_size_t idx) const {
-  auto valuePosition = reinterpret_cast<const char*>(data_) +
-      sizeof(UnscaledLongDecimal) * index(idx);
-  return UnscaledLongDecimal::deserialize(valuePosition);
+inline int128_t DecodedVector::valueAt(vector_size_t idx) const {
+  auto valuePosition =
+      reinterpret_cast<const char*>(data_) + sizeof(int128_t) * index(idx);
+  return HugeInt::deserialize(valuePosition);
 }
 
 } // namespace facebook::velox
