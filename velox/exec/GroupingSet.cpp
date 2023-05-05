@@ -72,6 +72,7 @@ GroupingSet::GroupingSet(
                       ->queryConfig()
                       .hashAdaptivityEnabled()),
       pool_(*operatorCtx->pool()) {
+  VELOX_CHECK(pool_.trackUsage());
   for (auto& hasher : hashers_) {
     keyChannels_.push_back(hasher->channel());
   }
@@ -458,6 +459,27 @@ void GroupingSet::resetPartial() {
   }
 }
 
+bool GroupingSet::isPartialFull(int64_t maxBytes) {
+  VELOX_CHECK(isPartial_);
+  if (!table_ || allocatedBytes() <= maxBytes) {
+    return false;
+  }
+  if (table_->hashMode() != BaseHashTable::HashMode::kArray) {
+    // Not a kArray table, no rehashing will shrink this.
+    return true;
+  }
+  auto stats = table_->stats();
+  // If we have a large array with sparse data, we rehash this in a
+  // mode that turns off value ranges for kArray mode. Large means
+  // over 1/16 of the space budget and sparse means under 1 entry
+  // per 32 buckets.
+  if (stats.capacity * sizeof(void*) > maxBytes / 16 &&
+      stats.numDistinct < stats.capacity / 32) {
+    table_->decideHashMode(0, true);
+  }
+  return allocatedBytes() > maxBytes;
+}
+
 uint64_t GroupingSet::allocatedBytes() const {
   if (table_) {
     return table_->allocatedBytes();
@@ -504,8 +526,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  auto tracker = pool_.getMemoryUsageTracker();
-  const auto currentUsage = tracker->currentBytes();
+  const auto currentUsage = pool_.currentBytes();
   if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig_->spillableReservationGrowthPct / 100;
@@ -531,7 +552,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
       rows->sizeIncrement(input->size(), outOfLineBytes ? flatBytes : 0) +
       tableIncrement;
   // There must be at least 2x the increment in reservation.
-  if (tracker->availableReservation() > 2 * increment) {
+  if (pool_.availableReservation() > 2 * increment) {
     return;
   }
   // Check if can increase reservation. The increment is the larger of
@@ -540,7 +561,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   auto targetIncrement = std::max<int64_t>(
       increment * 2,
       currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
-  if (tracker->maybeReserve(targetIncrement)) {
+  if (pool_.maybeReserve(targetIncrement)) {
     return;
   }
   auto rowsToSpill = std::max<int64_t>(
@@ -561,7 +582,7 @@ void GroupingSet::spill(int64_t targetRows, int64_t targetBytes) {
     for (auto i = 0; i < types.size(); ++i) {
       names.push_back(fmt::format("s{}", i));
     }
-    VELOX_DCHECK(pool_.getMemoryUsageTracker() != nullptr);
+    VELOX_DCHECK(pool_.trackUsage());
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kAggregate,
         rows,
@@ -693,5 +714,106 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* FOLLY_NONNULL row) {
   }
   mergeSelection_.setValid(input.currentIndex(), false);
 }
+void GroupingSet::abandonPartialAggregation() {
+  abandonedPartialAggregation_ = true;
+  allSupportToIntermediate_ = true;
+  for (auto& aggregate : aggregates_) {
+    if (!aggregate->supportsToIntermediate()) {
+      allSupportToIntermediate_ = false;
+    }
+  }
+  if (!allSupportToIntermediate_) {
+    VELOX_CHECK_EQ(table_->rows()->numRows(), 0)
+    intermediateRows_ = table_->moveRows();
+    intermediateRows_->clear();
+  }
+  table_ = nullptr;
+}
+
+void GroupingSet::toIntermediate(
+    const RowVectorPtr& input,
+    RowVectorPtr& result) {
+  VELOX_CHECK(abandonedPartialAggregation_);
+  VELOX_CHECK(result.unique());
+  if (!isRawInput_) {
+    result = input;
+    return;
+  }
+  auto numRows = input->size();
+  activeRows_.resize(numRows);
+  activeRows_.setAll();
+  masks_.addInput(input, activeRows_);
+
+  result->resize(numRows);
+  if (intermediateRows_) {
+    intermediateGroups_.resize(numRows);
+    for (auto i = 0; i < numRows; ++i) {
+      intermediateGroups_[i] = intermediateRows_->newRow();
+      intermediateRows_->setAllNull(intermediateGroups_[i]);
+    }
+    intermediateRowNumbers_.resize(numRows);
+    std::iota(
+        intermediateRowNumbers_.begin(), intermediateRowNumbers_.end(), 0);
+  }
+
+  for (auto i = 0; i < keyChannels_.size(); ++i) {
+    result->childAt(i) = input->childAt(keyChannels_[i]);
+  }
+  for (auto i = 0; i < aggregates_.size(); ++i) {
+    auto& aggregateVector = result->childAt(i + keyChannels_.size());
+    VELOX_CHECK(aggregateVector.unique());
+    aggregateVector->resize(input->size());
+    const auto& rows = getSelectivityVector(i);
+    // Check if mask is false for all rows.
+    if (!rows.hasSelections()) {
+      // The aggregate produces its initial state for all
+      // rows. Initialize one, then read the same data into each
+      // element of flat result. This is most often a null but for
+      // example count produces a zero, so we use the per-aggregate
+      // functions.
+      aggregates_[i]->initializeNewGroups(
+          intermediateGroups_.data(),
+          folly::Range<const vector_size_t*>(
+              intermediateRowNumbers_.data(), 1));
+      firstGroup_.resize(numRows);
+      std::fill(firstGroup_.begin(), firstGroup_.end(), intermediateGroups_[0]);
+      aggregates_[i]->extractAccumulators(
+          firstGroup_.data(), intermediateGroups_.size(), &aggregateVector);
+      aggregates_[i]->clear();
+      continue;
+    }
+
+    populateTempVectors(i, input);
+
+    if (aggregates_[i]->supportsToIntermediate()) {
+      aggregates_[i]->toIntermediate(rows, tempVectors_, aggregateVector);
+      continue;
+    }
+    aggregates_[i]->initializeNewGroups(
+        intermediateGroups_.data(), intermediateRowNumbers_);
+
+    aggregates_[i]->addRawInput(
+        intermediateGroups_.data(), rows, tempVectors_, false);
+
+    aggregates_[i]->extractAccumulators(
+        intermediateGroups_.data(),
+        intermediateGroups_.size(),
+        &aggregateVector);
+    aggregates_[i]->clear();
+  }
+  if (intermediateRows_) {
+    intermediateRows_->eraseRows(folly::Range<char**>(
+        intermediateGroups_.data(), intermediateGroups_.size()));
+  }
+  tempVectors_.clear();
+}
+
+std::optional<int64_t> GroupingSet::estimateRowSize() const {
+  const RowContainer* rows =
+      table_ ? table_->rows() : rowsWhileReadingSpill_.get();
+  return rows && rows->estimateRowSize() >= 0
+      ? std::optional<int64_t>(rows->estimateRowSize())
+      : std::nullopt;
+};
 
 } // namespace facebook::velox::exec

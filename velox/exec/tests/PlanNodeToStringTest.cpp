@@ -377,11 +377,11 @@ TEST_F(PlanNodeToStringTest, mergeJoin) {
       plan->toString(true, false));
 }
 
-TEST_F(PlanNodeToStringTest, crossJoin) {
+TEST_F(PlanNodeToStringTest, nestedLoopJoin) {
   auto plan = PlanBuilder()
                   .values({data_})
                   .project({"c0 as t_c0", "c1 as t_c1"})
-                  .crossJoin(
+                  .nestedLoopJoin(
                       PlanBuilder()
                           .values({data_})
                           .project({"c0 as u_c0", "c1 as u_c1"})
@@ -389,9 +389,9 @@ TEST_F(PlanNodeToStringTest, crossJoin) {
                       {"t_c0", "t_c1", "u_c1"})
                   .planNode();
 
-  ASSERT_EQ("-- CrossJoin\n", plan->toString());
+  ASSERT_EQ("-- NestedLoopJoin\n", plan->toString());
   ASSERT_EQ(
-      "-- CrossJoin[] -> t_c0:SMALLINT, t_c1:INTEGER, u_c1:INTEGER\n",
+      "-- NestedLoopJoin[INNER] -> t_c0:SMALLINT, t_c1:INTEGER, u_c1:INTEGER\n",
       plan->toString(true, false));
 }
 
@@ -492,7 +492,7 @@ TEST_F(PlanNodeToStringTest, localPartition) {
 
   ASSERT_EQ("-- LocalPartition\n", plan->toString());
   ASSERT_EQ(
-      "-- LocalPartition[REPARTITION HASH(0)] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      "-- LocalPartition[REPARTITION HASH(keyChannels:0)] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
       plan->toString(true, false));
 
   plan = PlanBuilder().values({data_}).localPartition({}).planNode();

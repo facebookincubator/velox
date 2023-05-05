@@ -359,7 +359,6 @@ class SimpleFunctionAdapter : public VectorFunction {
     auto reuseStringsFromArg = reuseStringsFromArgValue();
     if (reuseStringsFromArg >= 0) {
       VELOX_CHECK_LT(reuseStringsFromArg, args.size());
-      VELOX_CHECK_EQ(args[reuseStringsFromArg]->typeKind(), TypeKind::VARCHAR);
       if (decoded.size() == 0 || !decoded.at(reuseStringsFromArg).has_value()) {
         // If we're here, we're guaranteed the argument is either a Flat
         // or Constant vector so no decoding is necessary.
@@ -380,7 +379,7 @@ class SimpleFunctionAdapter : public VectorFunction {
   void tryAcquireStringBuffer(BaseVector* vector, const BaseVector* source)
       const {
     if (auto* flatVector = vector->asFlatVector<StringView>()) {
-      flatVector->acquireSharedStringBuffers(source);
+      flatVector->acquireSharedStringBuffersRecursive(source);
     } else if (auto* arrayVector = vector->as<ArrayVector>()) {
       tryAcquireStringBuffer(arrayVector->elements().get(), source);
     } else if (auto* mapVector = vector->as<MapVector>()) {
@@ -539,11 +538,7 @@ class SimpleFunctionAdapter : public VectorFunction {
     if constexpr (FUNC::is_default_null_behavior) {
       allNotNull = true;
     } else {
-      if (applyContext.context.nullsPruned()) {
-        allNotNull = true;
-      } else {
-        allNotNull = (!readers.mayHaveNulls() && ...);
-      }
+      allNotNull = (!readers.mayHaveNulls() && ...);
     }
 
     // Iterate the rows.

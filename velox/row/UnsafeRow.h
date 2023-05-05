@@ -38,11 +38,6 @@ struct ScalarTraits {
     return v.valueAt<InMemoryType>(i);
   }
 
-  static void set(VectorPtr v, vector_size_t i, SerializedType val) {
-    auto flatVector = v->template asFlatVector<InMemoryType>();
-    flatVector->set(i, val);
-  }
-
   static void set(
       FlatVector<InMemoryType>* flatVector,
       vector_size_t i,
@@ -62,11 +57,6 @@ struct ScalarTraits<TypeKind::TIMESTAMP> {
 
   static int64_t get(const DecodedVector& v, vector_size_t i) {
     return v.valueAt<Timestamp>(i).toMicros();
-  }
-
-  static void set(VectorPtr v, vector_size_t i, SerializedType val) {
-    auto flatVector = v->template asFlatVector<InMemoryType>();
-    flatVector->set(i, Timestamp::fromMicros(val));
   }
 
   static void
@@ -92,11 +82,6 @@ struct ScalarTraits<TypeKind::TIMESTAMP> {
                                                                             \
     static const StringView& get(const DecodedVector& v, vector_size_t i) { \
       return v.data<StringView>()[v.index(i)];                              \
-    }                                                                       \
-                                                                            \
-    static void set(VectorPtr v, vector_size_t i, const StringView& val) {  \
-      auto flatVector = v->template asFlatVector<StringView>();             \
-      flatVector->set(i, val);                                              \
     }                                                                       \
                                                                             \
     static void set(                                                        \
@@ -131,16 +116,6 @@ class UnsafeRow {
    * UnsafeRow field width in bytes.
    */
   static const size_t kFieldWidthBytes = 8;
-
-  /**
-   * Number of bits in a byte.
-   */
-  static const size_t kNumBitsInByte = 8;
-
-  /**
-   * UnsafeRow word size in bits.
-   */
-  static const size_t kWordSizeBits = kFieldWidthBytes * kNumBitsInByte;
 
   /**
    * UnsafeRow class constructor.
@@ -255,16 +230,6 @@ class UnsafeRow {
   }
 
   /**
-   * Set all not null, used when a new unsafe is initialized.
-   * @param pos
-   */
-  void setAllNotNull(size_t pos) {
-    size_t nullLength = getNullLength(elementCapacity_);
-    // clear the buffer, assume all elements are valid
-    memset(nullSet_, 0, nullLength);
-  }
-
-  /**
    * @param pos
    * @return true if the element is null, false otherwise
    */
@@ -302,56 +267,6 @@ class UnsafeRow {
   }
 
   /**
-   * Writes a string_view of serialized data at the given index. If the element
-   * is fixed length, we write it at the fixed length data field. If the
-   * element is variable length, we append the serialized string_view to the
-   * unsafe row and write an offset pointer at the fixed length data field.
-   * @param pos
-   * @param type
-   * @param data string_view over the serialized element
-   */
-  void writeSerializedDataAt(
-      size_t pos,
-      const TypePtr& type,
-      const std::string_view& data) {
-    writeOffsetAndNullAt(pos, data.size(), type->isFixedWidth());
-    if (type->isFixedWidth()) {
-      return writeFixedLengthDataAt(pos, data);
-    }
-    return appendVariableLengthData(data);
-  }
-
-  /**
-   * Writes primitive data to the fixed length data field, bypasses the need to
-   * serialize.
-   * @tparam DataType a fundamental data type
-   * @param pos
-   * @param data
-   */
-  template <typename DataType>
-  void writePrimitiveAt(size_t pos, const DataType data) {
-    reinterpret_cast<uint64_t*>(fixedLengthData_)[pos] = data;
-  }
-
-  /**
-   * Writes a Timestamp as seconds, bypasses the need to serialize.
-   * @param pos
-   * @param data
-   */
-  void writeTimestampSecondsAt(size_t pos, const Timestamp& data) {
-    reinterpret_cast<uint64_t*>(fixedLengthData_)[pos] = data.getSeconds();
-  }
-
-  /**
-   * Writes a Timestamp as nanos, bypasses the need to serialize.
-   * @param pos
-   * @param data
-   */
-  void writeTimestampNanosAt(size_t pos, const Timestamp& data) {
-    reinterpret_cast<uint64_t*>(fixedLengthData_)[pos] = data.getNanos();
-  }
-
-  /**
    * @param pos
    * @param isFixedWidth
    * @return the location of the fixed size data if isFixedWidth is true,
@@ -376,7 +291,7 @@ class UnsafeRow {
 
     // write the data pointer
     reinterpret_cast<uint64_t*>(fixedLengthData_)[pos] = dataPointer;
-    setVariableLengthOffset(variableLengthOffset_ + size);
+    setVariableLengthOffset(alignToFieldWidth(variableLengthOffset_ + size));
   }
 
   /**
@@ -462,16 +377,6 @@ class UnsafeRow {
   }
 
   /**
-   * Given the elementSize, return the amount of padding (in bytes) required
-   * so that the element aligns to field width.
-   * @param elementSize
-   * @return size_t
-   */
-  static const size_t getPaddingLength(size_t elementSize) {
-    return alignToFieldWidth(elementSize) - elementSize;
-  }
-
-  /**
    * Reads the data field as a fixed length data.
    * @param pos
    * @param width The element width in bytes
@@ -481,22 +386,6 @@ class UnsafeRow {
     VELOX_CHECK_LE(width, 8);
     uint64_t* dataPointer = &reinterpret_cast<uint64_t*>(fixedLengthData_)[pos];
     return std::string_view(reinterpret_cast<char*>(dataPointer), width);
-  }
-
-  /**
-   * Writes the data field as a fixed length data, vector should have exactly
-   * one element
-   * @param pos
-   * @param data
-   * @param width The element width in bytes
-   */
-  void writeFixedLengthDataAt(size_t pos, const std::string_view& data) {
-    VELOX_CHECK_EQ(data.size(), 1);
-    VELOX_CHECK_LE(data.size(), 8);
-    std::memcpy(
-        &reinterpret_cast<uint64_t*>(fixedLengthData_)[pos],
-        data.begin(),
-        data.size());
   }
 
   /**
@@ -512,17 +401,28 @@ class UnsafeRow {
 
     return std::string_view(buffer_ + offset, size);
   }
-
-  /**
-   * Write the data field as a continuous variable length data type at the end
-   * of the row.
-   * @param pos
-   * @param data a string_view over the variable length data.
-   */
-  void appendVariableLengthData(const std::string_view& data) {
-    std::memcpy(
-        fixedLengthData_ + variableLengthOffset_, data.begin(), data.size());
-  }
 };
+
+template <TypeKind kind>
+size_t serializedSizeInBytes() {
+  return sizeof(typename ScalarTraits<kind>::SerializedType);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE size_t serializedSizeInBytes<TypeKind::VARCHAR>() {
+  VELOX_UNREACHABLE();
+}
+
+template <>
+FOLLY_ALWAYS_INLINE size_t serializedSizeInBytes<TypeKind::VARBINARY>() {
+  VELOX_UNREACHABLE();
+}
+
+/// Returns the number of bytes needed to serialized fixed-width type. Throws if
+/// 'type' is ot fixed-width.
+FOLLY_ALWAYS_INLINE size_t serializedSizeInBytes(const TypePtr& type) {
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      serializedSizeInBytes, type->kind());
+}
 
 } // namespace facebook::velox::row

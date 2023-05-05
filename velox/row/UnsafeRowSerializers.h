@@ -275,12 +275,10 @@ struct UnsafeRowSerializer {
       int32_t offset,
       size_t size,
       const BaseVector* data) {
-    using NativeType = typename TypeTraits<Kind>::NativeType;
-    const auto& simple =
-        *data->loadedVector()->asUnchecked<SimpleVector<NativeType>>();
+    using T = typename TypeTraits<Kind>::NativeType;
+    const auto& simple = *data->loadedVector()->asUnchecked<SimpleVector<T>>();
     auto [nullLength, fixedDataStart] = computeFixedDataStart(nullSet, size);
-    size_t dataSize = size * sizeof(NativeType);
-    auto stride = Kind == TypeKind::TIMESTAMP ? 8 : sizeof(NativeType);
+    auto stride = serializedSizeInBytes(data->type());
     for (int i = 0; i < size; i++) {
       bool isNull = simple.isNullAt(i + offset);
       if (isNull) {
@@ -291,7 +289,7 @@ struct UnsafeRowSerializer {
             simple.valueAt(i + offset), fixedDataStart + i * stride);
       }
     }
-    return UnsafeRow::alignToFieldWidth(dataSize + nullLength);
+    return UnsafeRow::alignToFieldWidth(size * stride + nullLength);
   }
 
   /// Struct declaration for partial template specialization.
@@ -387,112 +385,6 @@ struct UnsafeRowSerializer {
     }
   };
 
-  /// Template specialization for Map<K, V>.
-  /// \tparam K
-  /// \tparam V
-  template <typename K, typename V>
-  struct ComplexTypeSerializer<Map<K, V>> {
-    /// Takes a multimap and serializes to an UnsafeRow Map.
-    /// \tparam KeysType
-    /// \tparam ValuesType
-    /// \param data
-    /// \param buffer
-    /// \return size of variable length data written, 0 if no variable length
-    /// data is written or only fixed data length data is written, std::nullopt
-    /// otherwise
-    template <typename KeysType, typename ValuesType>
-    inline static std::optional<size_t> serialize(
-        const std::multimap<KeysType, ValuesType>& data,
-        char* buffer) {
-      VELOX_NYI("Static serializer for map needs to be first fixed");
-      // Allocate space for writing offset to values.
-      char* valueOffsetLocation = buffer;
-      size_t mapSize = 1 * UnsafeRow::kFieldWidthBytes;
-
-      // Write the number of elements.
-      size_t numElements = data.size();
-
-      std::vector<KeysType> keysVec;
-      std::vector<ValuesType> valsVec;
-      keysVec.reserve(numElements), valsVec.reserve(numElements);
-
-      for (auto& [key, value] : data) {
-        keysVec.emplace_back(std::reference_wrapper(key));
-        valsVec.emplace_back(std::reference_wrapper(value));
-      }
-
-      char* keysStart = buffer + mapSize;
-      // UnsafeRow treats the keys and values as UnsafeRow arrays.
-      size_t keySize =
-          ComplexTypeSerializer<Array<K>>::serialize(keysVec, keysStart)
-              .value_or(0);
-
-      // Write offset to values.
-      writeWord(valueOffsetLocation, keySize);
-      mapSize += keySize;
-
-      char* valsStart = buffer + mapSize;
-      size_t valsSize =
-          ComplexTypeSerializer<Array<V>>::serialize(valsVec, valsStart)
-              .value_or(0);
-
-      return mapSize + valsSize;
-    }
-  };
-
-  /// Template specialization for Row<T...>.
-  template <typename T, typename... RestT>
-  struct ComplexTypeSerializer<Row<T, RestT...>> {
-    /// Takes a any number of elements and serialize as a row.
-    /// \tparam V... data types of the elements
-    /// \param buffer
-    /// \param idx needed in case the elements are Vector types
-    /// \param elements...
-    /// \return size of variable length data written, 0 if no variable length
-    /// data is written or only fixed data length data is written
-    // TODO: Row type serializer is not tested
-    template <typename... V>
-    inline static size_t
-    serialize(char* buffer, size_t idx, const V&... elements) {
-      static constexpr size_t numFields = sizeof...(RestT) + 1;
-
-      // Create a temporary unsafe row to represent this current RowVector.
-      char* nullSet = buffer;
-      auto [nullLength, fixedDataStart] =
-          computeFixedDataStart(nullSet, numFields);
-      UnsafeRow row = UnsafeRow(buffer, nullSet, fixedDataStart, numFields);
-
-      return serializeElements<0, V...>(row, idx, elements...);
-    }
-
-    /// Takes a any number of elements and serialize as a row.
-    /// \tparam pos the row position to serialize to
-    /// \tparam V data types of the current element
-    /// \tparam RestV... data types of the rest of the elements
-    /// \param row
-    /// \param idx needed in case the elements are Vector types
-    /// \param element the current element
-    /// \param restElements rest of the elements
-    /// \return size of variable length data written, 0 if no variable length
-    /// data is written or only fixed data length data is written
-    template <size_t pos, typename V, typename... RestV>
-    inline static size_t serializeElements(
-        UnsafeRow& row,
-        size_t idx,
-        const V& element,
-        const RestV&... restElements) {
-      static_assert(sizeof...(RestT) == sizeof...(RestV));
-
-      if (sizeof...(RestV) == 0) {
-        return serializeElementAt<T, V>(row, element, pos, idx);
-      }
-      return serializeElementAt<T, V>(row, element, pos, idx) +
-          ComplexTypeSerializer<Row<RestT...>>::
-              template serializeElement<pos + 1, RestV...>(
-                  row, idx, restElements...);
-    }
-  };
-
   /// Templated serialization function for a vector of data.
   /// \tparam T vector element type
   /// \param buffer pointer to the start of the buffer, we need this to
@@ -522,8 +414,7 @@ struct UnsafeRowSerializer {
       }
       auto serializedDataSize =
           serializeSimpleVector<kind>(nullSet, offset, size, vector.get());
-      return UnsafeRow::alignToFieldWidth(
-          nullSet - buffer + serializedDataSize.value_or(0));
+      return UnsafeRow::alignToFieldWidth(serializedDataSize.value_or(0));
     } else {
       auto [nullLength, fixedDataStart] = computeFixedDataStart(nullSet, size);
       // Create a temporary unsafe row as a container to recursively serialize.
@@ -718,10 +609,6 @@ struct UnsafeRowSerializer {
       return UnsafeRow::alignToFieldWidth(totalSize);
     }
   };
-};
-
-struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
-  class UnsupportedSerializationException : public std::exception {};
 
   /// Dynamic function for serializing an element at the given index.
   /// \tparam DataType
@@ -741,10 +628,11 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
     // the row, we want to find the location to write to and write directly
     // to the buffer. This allows us to write once and avoid an extra copy.
     char* location = row.getSerializationLocation(pos, type->isFixedWidth());
-    auto serializedSize = serialize(type, data, location, idx);
+    auto serializedSize = serialize(data, location, idx);
     row.writeOffsetAndNullAt(pos, serializedSize, type->isFixedWidth());
   }
 
+ public:
   /// Dynamic version of the serialization function.
   /// \tparam DataType
   /// \param type The Velox type.
@@ -755,14 +643,11 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
   /// \return size of variable length data written, 0 if no variable length
   /// data is written or only fixed data length data is written, std::nullopt
   /// otherwise
-  static std::optional<size_t> serialize(
-      const TypePtr& type,
-      const VectorPtr& data,
-      char* buffer,
-      size_t idx = 0) {
+  static std::optional<size_t>
+  serialize(const VectorPtr& data, char* buffer, size_t idx) {
     VELOX_CHECK_NOT_NULL(buffer);
 
-    switch (type->kind()) {
+    switch (data->typeKind()) {
 #define FIXED_WIDTH(kind)                                             \
   case TypeKind::kind:                                                \
     return UnsafeRowSerializer::serializeFixedLength<TypeKind::kind>( \
@@ -782,24 +667,24 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
         return serializeStringView(data, buffer, idx);
       case TypeKind::ARRAY:
         return serializeArray(
-            type,
+            data->type(),
             data->wrappedVector()->template asUnchecked<ArrayVector>(),
             buffer,
             data->wrappedIndex(idx));
       case TypeKind::MAP:
         return serializeMap(
-            type,
+            data->type(),
             data->wrappedVector()->template asUnchecked<MapVector>(),
             buffer,
             data->wrappedIndex(idx));
       case TypeKind::ROW:
         return serializeRow(
-            type,
+            data->type(),
             data->wrappedVector()->template asUnchecked<RowVector>(),
             buffer,
             data->wrappedIndex(idx));
       default:
-        VELOX_UNSUPPORTED("Unsupported type: {}", type->toString());
+        VELOX_UNSUPPORTED("Unsupported type: {}", data->type()->toString());
     }
   }
 
@@ -841,7 +726,7 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
             offset,
             size,
             vector.get());
-    return nullSet - buffer + serializedDataSize.value_or(0);
+    return serializedDataSize.value_or(0);
   }
 
   /// Serializing an element in Velox array given its
@@ -998,9 +883,8 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
   inline static size_t getSizeSimpleVector(
       size_t size,
       const BaseVector* data) {
-    using NativeType = typename TypeTraits<Kind>::NativeType;
-    size_t dataSize = size * sizeof(NativeType);
-    return UnsafeRow::alignToFieldWidth(dataSize + UnsafeRow::kFieldWidthBytes);
+    size_t dataSize = size * serializedSizeInBytes(data->type());
+    return UnsafeRow::alignToFieldWidth(dataSize);
   }
 
   /// Extracts and returns size for StringView fields
@@ -1024,7 +908,6 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
   /// \param elementsVector element vector
   /// \return
   inline static size_t getSizeArray(
-      const TypePtr& elementsType,
       int32_t offset,
       vector_size_t size,
       const VectorPtr& elementsVector) {
@@ -1035,8 +918,7 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
     size_t result = 1 * UnsafeRow::kFieldWidthBytes;
     size_t nullLength = UnsafeRow::getNullLength(size);
 
-    result +=
-        nullLength + getSizeVector(elementsType, offset, size, elementsVector);
+    result += nullLength + getSizeVector(offset, size, elementsVector);
     return result;
   }
 
@@ -1060,11 +942,9 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
   /// \param size number of elements in the range
   /// \param vector the vector containing the range
   /// \return
-  inline static size_t getSizeVector(
-      const TypePtr& type,
-      int32_t offset,
-      vector_size_t size,
-      const VectorPtr& vector) {
+  inline static size_t
+  getSizeVector(int32_t offset, vector_size_t size, const VectorPtr& vector) {
+    const auto& type = vector->type();
     if (!type->isFixedWidth()) {
       // Complex elements take fixed block entry plus their variable size
       size_t fieldsSize = size * UnsafeRow::kFieldWidthBytes;
@@ -1085,8 +965,7 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
   /// \param data the vector
   /// \param idx the index of the element in the vector
   /// \return
-  inline static size_t
-  getSizeArray(const TypePtr& type, const ArrayVector* data, size_t idx) {
+  inline static size_t getSizeArray(const ArrayVector* data, size_t idx) {
     VELOX_CHECK(data->isIndexInRange(idx));
 
     if (data->isNullAt(idx)) {
@@ -1096,10 +975,7 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
     int32_t offset = data->offsetAt(idx);
     vector_size_t size = data->sizeAt(idx);
 
-    auto arrayTypePtr = std::dynamic_pointer_cast<const ArrayType>(type);
-
-    return getSizeArray(
-        arrayTypePtr->elementType(), offset, size, data->elements());
+    return getSizeArray(offset, size, data->elements());
   }
 
   /// Gets a size of an elememnt in map column
@@ -1107,8 +983,7 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
   /// \param data map vector
   /// \param idx the element index in the map vector
   /// \return
-  inline static size_t
-  getSizeMap(const TypePtr& type, const MapVector* data, size_t idx) {
+  inline static size_t getSizeMap(const MapVector* data, size_t idx) {
     // Spec for Unsafe maps is defined here:
     // https://github.com/apache/spark/blob/master/sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/UnsafeMapData.java
     // It consists of two arrays, one for keys and one for values also at
@@ -1117,18 +992,15 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
     if (data->isNullAt(idx)) {
       return 0;
     }
-    auto* mapTypePtr = static_cast<const MapType*>(type.get());
+
     // Based on Spark definition to a serialized map
     // we serialize keys and values arrays back to back
     // And only add the size (in bytes) of serialized keys
     int32_t offset = data->offsetAt(idx);
     vector_size_t size = data->sizeAt(idx);
 
-    auto keysArrayByteSize =
-        getSizeArray(mapTypePtr->keyType(), offset, size, data->mapKeys());
-
-    auto valuesArrayByteSize =
-        getSizeArray(mapTypePtr->valueType(), offset, size, data->mapValues());
+    auto keysArrayByteSize = getSizeArray(offset, size, data->mapKeys());
+    auto valuesArrayByteSize = getSizeArray(offset, size, data->mapValues());
     return keysArrayByteSize + valuesArrayByteSize +
         UnsafeRow::kFieldWidthBytes;
   }
@@ -1147,17 +1019,14 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
         return getSizeStringView(data, idx);
       case TypeKind::ARRAY:
         return getSizeArray(
-            type,
             data->wrappedVector()->template asUnchecked<ArrayVector>(),
             data->wrappedIndex(idx));
       case TypeKind::MAP:
         return getSizeMap(
-            type,
             data->wrappedVector()->template asUnchecked<MapVector>(),
             data->wrappedIndex(idx));
       case TypeKind::ROW:
         return getSizeRow(
-            type,
             data->wrappedVector()->template asUnchecked<RowVector>(),
             data->wrappedIndex(idx));
       default:
@@ -1204,9 +1073,8 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
   /// \param data row vector
   /// \param idx in dex of the row in the row vector
   /// \return
-  inline static size_t
-  getSizeRow(const TypePtr& type, const RowVector* data, size_t idx) {
-    if (data == nullptr || data->isNullAt(idx)) {
+  inline static size_t getSizeRow(const RowVector* data, size_t idx) {
+    if (data->isNullAt(idx)) {
       return 0;
     }
     const size_t numFields = data->childrenSize();
@@ -1214,7 +1082,7 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
 
     size_t elementsSize = 0;
     for (int fieldIdx = 0; fieldIdx < numFields; fieldIdx++) {
-      auto elementType = type->childAt(fieldIdx);
+      auto elementType = data->type()->childAt(fieldIdx);
       elementsSize += getSizeElementAt(
           elementType,
           data->childAt(fieldIdx),
@@ -1226,5 +1094,4 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
     return nullLength + elementsSize;
   }
 };
-
 } // namespace facebook::velox::row

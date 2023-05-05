@@ -18,8 +18,6 @@
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
-#include "velox/exec/CrossJoinBuild.h"
-#include "velox/exec/CrossJoinProbe.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FilterProject.h"
@@ -30,6 +28,8 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
+#include "velox/exec/NestedLoopJoinBuild.h"
+#include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/StreamingAggregation.h"
@@ -104,9 +104,9 @@ OperatorSupplier makeConsumerSupplier(
   }
 
   if (auto join =
-          std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+          std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode)) {
     return [join](int32_t operatorId, DriverCtx* ctx) {
-      return std::make_unique<CrossJoinBuild>(operatorId, ctx, join);
+      return std::make_unique<NestedLoopJoinBuild>(operatorId, ctx, join);
     };
   }
 
@@ -343,15 +343,17 @@ void LocalPlanner::markMixedJoinBridges(
         }
       } else if (
           auto joinNode =
-              std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+              std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                  planNode)) {
         // See if the build source (2nd) belongs to an ungrouped execution.
         auto& buildSourceNode = planNode->sources()[1];
         for (auto& factoryOther : driverFactories) {
           if (!factoryOther->groupedExecution &&
               buildSourceNode->id() == factoryOther->outputNodeId()) {
-            factoryOther->mixedExecutionModeCrossJoinNodeIds.emplace(
+            factoryOther->mixedExecutionModeNestedLoopJoinNodeIds.emplace(
                 planNode->id());
-            factory->mixedExecutionModeCrossJoinNodeIds.emplace(planNode->id());
+            factory->mixedExecutionModeNestedLoopJoinNodeIds.emplace(
+                planNode->id());
             break;
           }
         }
@@ -435,9 +437,10 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(std::make_unique<HashProbe>(id, ctx.get(), joinNode));
     } else if (
         auto joinNode =
-            std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                planNode)) {
       operators.push_back(
-          std::make_unique<CrossJoinProbe>(id, ctx.get(), joinNode));
+          std::make_unique<NestedLoopJoinProbe>(id, ctx.get(), joinNode));
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
@@ -558,21 +561,23 @@ std::vector<core::PlanNodeId> DriverFactory::needsHashJoinBridges() const {
   return planNodeIds;
 }
 
-std::vector<core::PlanNodeId> DriverFactory::needsCrossJoinBridges() const {
+std::vector<core::PlanNodeId> DriverFactory::needsNestedLoopJoinBridges()
+    const {
   std::vector<core::PlanNodeId> planNodeIds;
   // Ungrouped execution pipelines need to take care of cross-mode bridges.
-  if (!groupedExecution && !mixedExecutionModeCrossJoinNodeIds.empty()) {
+  if (!groupedExecution && !mixedExecutionModeNestedLoopJoinNodeIds.empty()) {
     planNodeIds.insert(
         planNodeIds.end(),
-        mixedExecutionModeCrossJoinNodeIds.begin(),
-        mixedExecutionModeCrossJoinNodeIds.end());
+        mixedExecutionModeNestedLoopJoinNodeIds.begin(),
+        mixedExecutionModeNestedLoopJoinNodeIds.end());
   }
   for (const auto& planNode : planNodes) {
     if (auto joinNode =
-            std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                planNode)) {
       // Grouped execution pipelines should not create cross-mode bridges.
       if (!groupedExecution ||
-          !mixedExecutionModeCrossJoinNodeIds.contains(joinNode->id())) {
+          !mixedExecutionModeNestedLoopJoinNodeIds.contains(joinNode->id())) {
         planNodeIds.emplace_back(joinNode->id());
       }
     }

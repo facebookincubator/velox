@@ -23,7 +23,8 @@ class InPredicateTest : public FunctionBaseTest {
  protected:
   template <typename T>
   void testIntegers() {
-    std::shared_ptr<memory::MemoryPool> pool{memory::getDefaultMemoryPool()};
+    std::shared_ptr<memory::MemoryPool> pool{
+        memory::addDefaultLeafMemoryPool()};
 
     const vector_size_t size = 1'000;
     auto vector = makeFlatVector<T>(size, [](auto row) { return row % 17; });
@@ -315,4 +316,15 @@ TEST_F(InPredicateTest, varbinary) {
       "c0 IN (CAST('apple' as VARBINARY), CAST('banana' as VARBINARY))";
   auto result = evaluate<SimpleVector<bool>>(predicate, input);
   assertEqualVectors(makeConstant(true, input->size()), result);
+}
+
+TEST_F(InPredicateTest, reusableResult) {
+  std::string predicate = "c0 IN (1, 2)";
+  auto input = makeRowVector({makeNullableFlatVector<int32_t>({0, 1, 2, 3})});
+  SelectivityVector rows(input->size());
+  VectorPtr result =
+      makeNullableFlatVector<bool>({false, true, std::nullopt, false});
+  auto actual = evaluate<SimpleVector<bool>>(predicate, input, rows, result);
+  auto expected = makeFlatVector<bool>({false, true, true, false});
+  assertEqualVectors(expected, actual);
 }

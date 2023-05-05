@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <boost/algorithm/string.hpp>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,10 +27,6 @@
 namespace facebook::velox::exec {
 
 std::string sanitizeName(const std::string& name);
-
-inline bool isCommonDecimalName(const std::string& typeName) {
-  return (typeName == "DECIMAL");
-}
 
 /// Return a list of primitive type names.
 const std::vector<std::string> primitiveTypeNames();
@@ -131,6 +128,8 @@ class FunctionSignature {
       std::vector<bool> constantArguments,
       bool variableArity);
 
+  virtual ~FunctionSignature() = default;
+
   const TypeSignature& returnType() const {
     return returnType_;
   }
@@ -147,7 +146,7 @@ class FunctionSignature {
     return variableArity_;
   }
 
-  std::string toString() const;
+  virtual std::string toString() const;
 
   const auto& variables() const {
     return variables_;
@@ -161,6 +160,10 @@ class FunctionSignature {
         argumentTypes_ == rhs.argumentTypes_ &&
         variableArity_ == rhs.variableArity_;
   }
+
+ protected:
+  // Return a string of the list of argument types.
+  std::string argumentsToString() const;
 
  private:
   const std::unordered_map<std::string, SignatureVariable> variables_;
@@ -193,9 +196,14 @@ class AggregateFunctionSignature : public FunctionSignature {
     return intermediateType_;
   }
 
+  std::string toString() const override;
+
  private:
   const TypeSignature intermediateType_;
 };
+
+using AggregateFunctionSignaturePtr =
+    std::shared_ptr<AggregateFunctionSignature>;
 
 namespace {
 

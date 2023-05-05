@@ -40,7 +40,6 @@
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MemoryPool.h"
-#include "velox/common/memory/MemoryUsage.h"
 
 DECLARE_int32(memory_usage_aggregation_interval_millis);
 DECLARE_bool(velox_memory_leak_check_enabled);
@@ -61,8 +60,8 @@ namespace facebook::velox::memory {
       errorMessage);
 
 /// This class provides the interface of memory manager. The memory manager is
-/// responsible for enforcing the memory usage quota as well as managing the
-/// memory pools.
+/// responsible for enforcing the memory capacity is within the capacity as well
+/// as managing the memory pools.
 class IMemoryManager {
  public:
   struct Options {
@@ -80,58 +79,76 @@ class IMemoryManager {
 
     /// Specifies the backing memory allocator.
     MemoryAllocator* allocator{MemoryAllocator::getInstance()};
+
+    /// Specifies the memory arbitration config.
+    MemoryArbitrator::Config arbitratorConfig{};
   };
 
   virtual ~IMemoryManager() = default;
 
-  /// Returns the total memory usage allowed under this memory manager.
-  /// The memory manager maintains this quota as a hard cap, and any allocation
-  /// that would exceed the quota throws.
-  virtual int64_t getMemoryQuota() const = 0;
+  /// Returns the memory capacity of this memory manager which puts a hard cap
+  /// on the memory usage, and any allocation that would exceed this capacity
+  /// throws.
+  virtual int64_t capacity() const = 0;
 
   /// Returns the memory allocation alignment of this memory manager.
   virtual uint16_t alignment() const = 0;
 
-  /// Creates a memory pool for use with specified 'name', 'kind' and 'cap'. If
-  /// 'name' is missing, the memory manager generates a default name internally
-  /// to ensure uniqueness. If 'kind' is kAggregate, a root memory pool is
-  /// created. Otherwise, a leaf memory pool is created as the child of the
-  /// memory manager's default root memory pool. If 'kind' is kAggregate and
-  /// 'trackUsage' is true, then set the memory usage tracker in the created
-  /// memory pool.
-  virtual std::shared_ptr<MemoryPool> getPool(
+  /// Creates a root memory pool with specified 'name' and 'capacity'. If 'name'
+  /// is missing, the memory manager generates a default name internally to
+  /// ensure uniqueness. If 'trackUsage' is true, then set the memory usage
+  /// tracker in the created root memory pool.
+  virtual std::shared_ptr<MemoryPool> addRootPool(
       const std::string& name = "",
-      MemoryPool::Kind kind = MemoryPool::Kind::kAggregate,
-      int64_t maxBytes = kMaxMemory,
-      bool trackUsage = true) = 0;
+      int64_t capacity = kMaxMemory,
+      bool trackUsage = true,
+      std::shared_ptr<MemoryReclaimer> reclaimer = nullptr) = 0;
 
-  /// Returns the number of alive memory pools allocated from getPool().
+  /// Creates a leaf memory pool for direct memory allocation use with specified
+  /// 'name'. If 'name' is missing, the memory manager generates a default name
+  /// internally to ensure uniqueness. The leaf memory pool is created as the
+  /// child of the memory manager's default root memory pool. If 'threadSafe' is
+  /// true, then we track its memory usage in a non-thread-safe mode to reduce
+  /// its cpu cost.
+  virtual std::shared_ptr<MemoryPool> addLeafPool(
+      const std::string& name = "",
+      bool threadSafe = true,
+      std::shared_ptr<MemoryReclaimer> reclaimer = nullptr) = 0;
+
+  /// Invoked to grows a memory pool's free capacity with at least
+  /// 'incrementBytes'. The function returns true on success, otherwise false.
+  virtual bool growPool(MemoryPool* pool, uint64_t incrementBytes) = 0;
+
+  /// Returns the default leaf memory pool for direct memory allocation use. The
+  /// pool is created as the child of the memory manager's default root memory
+  /// pool and is owned by the memory manager.
+  ///
+  /// TODO: deprecate this API after all the use cases are able to manage the
+  /// lifecycle of the allocated memory pools properly.
+  virtual MemoryPool& deprecatedLeafPool() = 0;
+
+  /// Returns the number of alive memory pools allocated from addRootPool() and
+  /// addLeafPool().
   ///
   /// NOTE: this doesn't count the memory manager's internal default root and
   /// leaf memory pools.
   virtual size_t numPools() const = 0;
 
-  /// Returns a leaf memory pool for memory allocation use. The pool is
-  /// created as the child of the memory manager's default root memory pool and
-  /// is owned by the memory manager.
-  ///
-  /// TODO: deprecate this API after all the use cases are able to manage the
-  /// lifecycle of the allocated memory pools properly.
-  virtual MemoryPool& deprecatedGetPool() = 0;
-
   /// Returns the current total memory usage under this memory manager.
   virtual int64_t getTotalBytes() const = 0;
 
   /// Reserves size for the allocation. Returns true if the total usage remains
-  /// under quota after the reservation. Caller is responsible for releasing the
-  /// offending reservation.
+  /// under capacity after the reservation. Caller is responsible for releasing
+  /// the offending reservation.
   ///
-  /// TODO: deprecate this and enforce the memory usage quota by memory pool.
+  /// TODO: deprecate this and enforce the memory usage capacity by memory
+  /// allocator.
   virtual bool reserve(int64_t size) = 0;
 
-  /// Subtracts from current total and regain memory quota.
+  /// Subtracts from current total memory usage.
   ///
-  /// TODO: deprecate this and enforce the memory usage quota by memory pool.
+  /// TODO: deprecate this and enforce the memory usage capacity by memory
+  /// allocator.
   virtual void release(int64_t size) = 0;
 
   /// Returns debug string of this memory manager.
@@ -144,14 +161,14 @@ class IMemoryManager {
 class MemoryManager final : public IMemoryManager {
  public:
   /// Tries to get the singleton memory manager. If not previously initialized,
-  /// the process singleton manager will be initialized with the given quota.
+  /// the process singleton manager will be initialized with the given capacity.
   FOLLY_EXPORT static MemoryManager& getInstance(
       const Options& options = Options{},
-      bool ensureQuota = false) {
+      bool ensureCapacity = false) {
     static MemoryManager manager{options};
-    auto actualCapacity = manager.getMemoryQuota();
+    auto actualCapacity = manager.capacity();
     VELOX_USER_CHECK(
-        !ensureQuota || actualCapacity == options.capacity,
+        !ensureCapacity || actualCapacity == options.capacity,
         "Process level manager manager created with input capacity: {}, actual capacity: {}",
         options.capacity,
         actualCapacity);
@@ -163,17 +180,24 @@ class MemoryManager final : public IMemoryManager {
 
   ~MemoryManager();
 
-  int64_t getMemoryQuota() const final;
+  int64_t capacity() const final;
 
   uint16_t alignment() const final;
 
-  std::shared_ptr<MemoryPool> getPool(
+  std::shared_ptr<MemoryPool> addRootPool(
       const std::string& name = "",
-      MemoryPool::Kind kind = MemoryPool::Kind::kAggregate,
       int64_t maxBytes = kMaxMemory,
-      bool trackUsage = true) final;
+      bool trackUsage = true,
+      std::shared_ptr<MemoryReclaimer> reclaimer = nullptr) final;
 
-  MemoryPool& deprecatedGetPool() final;
+  std::shared_ptr<MemoryPool> addLeafPool(
+      const std::string& name = "",
+      bool threadSafe = true,
+      std::shared_ptr<MemoryReclaimer> reclaimer = nullptr) final;
+
+  bool growPool(MemoryPool* pool, uint64_t incrementBytes) final;
+
+  MemoryPool& deprecatedLeafPool() final;
 
   int64_t getTotalBytes() const final;
 
@@ -182,9 +206,11 @@ class MemoryManager final : public IMemoryManager {
 
   size_t numPools() const final;
 
-  std::string toString() const final;
+  MemoryAllocator& allocator();
 
-  MemoryAllocator& getAllocator();
+  MemoryArbitrator* arbitrator();
+
+  std::string toString() const final;
 
   /// Returns the memory manger's internal default root memory pool for testing
   /// purpose.
@@ -195,13 +221,19 @@ class MemoryManager final : public IMemoryManager {
  private:
   void dropPool(MemoryPool* pool);
 
+  //  Returns the shared references to all the alive memory pools in 'pools_'.
+  std::vector<std::shared_ptr<MemoryPool>> getAlivePools() const;
+  std::vector<std::shared_ptr<MemoryPool>> getAlivePoolsLocked() const;
+
+  const int64_t capacity_;
   const std::shared_ptr<MemoryAllocator> allocator_;
-  const int64_t memoryQuota_;
+  // If not null, used to arbitrate the memory capacity among 'pools_'.
+  const std::unique_ptr<MemoryArbitrator> arbitrator_;
   const uint16_t alignment_;
   const bool checkUsageLeak_;
-  // The destruction callback set for the root memory pools created by getPool()
-  // which are tracked by 'pools_'. It is invoked on the root pool destruction
-  // and removes the pool from 'pools_'.
+  // The destruction callback set for the allocated  root memory pools which are
+  // tracked by 'pools_'. It is invoked on the root pool destruction and removes
+  // the pool from 'pools_'.
   const MemoryPoolImpl::DestructionCallback poolDestructionCb_;
 
   const std::shared_ptr<MemoryPool> defaultRoot_;
@@ -212,14 +244,17 @@ class MemoryManager final : public IMemoryManager {
 
   mutable folly::SharedMutex mutex_;
   std::atomic_long totalBytes_{0};
-  std::vector<MemoryPool*> pools_;
+  std::unordered_map<std::string, std::weak_ptr<MemoryPool>> pools_;
 };
 
-IMemoryManager& getProcessDefaultMemoryManager();
+IMemoryManager& defaultMemoryManager();
 
 /// Creates a leaf memory pool from the default memory manager for memory
-/// allocation use.
-std::shared_ptr<MemoryPool> getDefaultMemoryPool(const std::string& name = "");
+/// allocation use. If 'threadSafe' is true, then creates a leaf memory pool
+/// with thread-safe memory usage tracking.
+std::shared_ptr<MemoryPool> addDefaultLeafMemoryPool(
+    const std::string& name = "",
+    bool threadSafe = true);
 
 FOLLY_ALWAYS_INLINE int32_t alignmentPadding(void* address, int32_t alignment) {
   auto extra = reinterpret_cast<uintptr_t>(address) % alignment;

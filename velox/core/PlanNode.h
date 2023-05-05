@@ -264,10 +264,10 @@ class ArrowStreamNode : public PlanNode {
  public:
   ArrowStreamNode(
       const PlanNodeId& id,
-      const RowTypePtr& outputType,
+      RowTypePtr outputType,
       std::shared_ptr<ArrowArrayStream> arrowStream)
       : PlanNode(id),
-        outputType_(outputType),
+        outputType_(std::move(outputType)),
         arrowStream_(std::move(arrowStream)) {
     VELOX_CHECK_NOT_NULL(arrowStream_);
   }
@@ -411,13 +411,13 @@ class TableScanNode : public PlanNode {
  public:
   TableScanNode(
       const PlanNodeId& id,
-      const RowTypePtr& outputType,
+      RowTypePtr outputType,
       const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& assignments)
       : PlanNode(id),
-        outputType_(outputType),
+        outputType_(std::move(outputType)),
         tableHandle_(tableHandle),
         assignments_(assignments) {}
 
@@ -466,7 +466,7 @@ class TableWriteNode : public PlanNode {
       const RowTypePtr& columns,
       const std::vector<std::string>& columnNames,
       const std::shared_ptr<InsertTableHandle>& insertTableHandle,
-      const RowTypePtr& outputType,
+      RowTypePtr outputType,
       connector::CommitStrategy commitStrategy,
       const PlanNodePtr& source)
       : PlanNode(id),
@@ -474,7 +474,7 @@ class TableWriteNode : public PlanNode {
         columns_{columns},
         columnNames_{columnNames},
         insertTableHandle_(insertTableHandle),
-        outputType_(outputType),
+        outputType_(std::move(outputType)),
         commitStrategy_(commitStrategy) {
     VELOX_CHECK_EQ(columns->size(), columnNames.size());
     for (const auto& column : columns->names()) {
@@ -909,33 +909,6 @@ class GatherPartitionFunctionSpec : public PartitionFunctionSpec {
   }
 };
 
-/// TODO Remove once Prestissimo is updated.
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-using PartitionFunctionFactory =
-    std::function<std::unique_ptr<PartitionFunction>(int numPartitions)>;
-
-class LegacyPartitionFunctionSpec : public PartitionFunctionSpec {
- public:
-  LegacyPartitionFunctionSpec(PartitionFunctionFactory factory)
-      : factory_{std::move(factory)} {}
-
-  std::unique_ptr<PartitionFunction> create(int numPartitions) const override {
-    return factory_(numPartitions);
-  };
-
-  std::string toString() const override {
-    return "legacy";
-  }
-
-  folly::dynamic serialize() const override {
-    VELOX_UNSUPPORTED();
-  }
-
- private:
-  const PartitionFunctionFactory factory_;
-};
-#endif
-
 /// Partitions data using specified partition function. The number of partitions
 /// is determined by the parallelism of the upstream pipeline. Can be used to
 /// gather data from multiple sources.
@@ -976,21 +949,6 @@ class LocalPartitionNode : public PlanNode {
           sources_[0]->outputType()->toString());
     }
   }
-
-  /// TODO Remove once Prestissimo is updated.
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  LocalPartitionNode(
-      const PlanNodeId& id,
-      Type type,
-      PartitionFunctionFactory partitionFunctionFactory,
-      std::vector<PlanNodePtr> sources)
-      : LocalPartitionNode(
-            id,
-            type,
-            std::make_shared<LegacyPartitionFunctionSpec>(
-                std::move(partitionFunctionFactory)),
-            std::move(sources)) {}
-#endif
 
   static std::shared_ptr<LocalPartitionNode> gather(
       const PlanNodeId& id,
@@ -1065,34 +1023,6 @@ class PartitionedOutputNode : public PlanNode {
           "Broadcast partitioning doesn't allow for partitioning keys");
     }
   }
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  PartitionedOutputNode(
-      const PlanNodeId& id,
-      const std::vector<TypedExprPtr>& keys,
-      int numPartitions,
-      bool broadcast,
-      bool replicateNullsAndAny,
-      PartitionFunctionFactory partitionFunctionFactory,
-      RowTypePtr outputType,
-      PlanNodePtr source)
-      : PartitionedOutputNode(
-            id,
-            keys,
-            numPartitions,
-            broadcast,
-            replicateNullsAndAny,
-            std::make_shared<LegacyPartitionFunctionSpec>(
-                std::move(partitionFunctionFactory)),
-            std::move(outputType),
-            std::move(source)) {}
-
-  PartitionFunctionFactory partitionFunctionFactory() const {
-    return [this](int numPartitions) {
-      return partitionFunctionSpec_->create(numPartitions);
-    };
-  }
-#endif
 
   static std::shared_ptr<PartitionedOutputNode> broadcast(
       const PlanNodeId& id,
@@ -1307,7 +1237,7 @@ class AbstractJoinNode : public PlanNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      const RowTypePtr outputType);
+      RowTypePtr outputType);
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
@@ -1404,16 +1334,16 @@ class HashJoinNode : public AbstractJoinNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      const RowTypePtr outputType)
+      RowTypePtr outputType)
       : AbstractJoinNode(
             id,
             joinType,
             leftKeys,
             rightKeys,
-            filter,
-            left,
-            right,
-            outputType),
+            std::move(filter),
+            std::move(left),
+            std::move(right),
+            std::move(outputType)),
         nullAware_{nullAware} {
     if (nullAware) {
       VELOX_USER_CHECK(
@@ -1472,16 +1402,16 @@ class MergeJoinNode : public AbstractJoinNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      const RowTypePtr outputType)
+      RowTypePtr outputType)
       : AbstractJoinNode(
             id,
             joinType,
             leftKeys,
             rightKeys,
-            filter,
-            left,
-            right,
-            outputType) {}
+            std::move(filter),
+            std::move(left),
+            std::move(right),
+            std::move(outputType)) {}
 
   std::string_view name() const override {
     return "MergeJoin";
@@ -1492,10 +1422,27 @@ class MergeJoinNode : public AbstractJoinNode {
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 };
 
-// Cross join.
-class CrossJoinNode : public PlanNode {
+/// Represents inner/outer nested loop joins. Translates to an
+/// exec::NestedLoopJoinProbe and exec::NestedLoopJoinBuild. A separate pipeline
+/// is produced for the build side when generating exec::Operators.
+///
+/// Nested loop join supports both equal and non-equal joins. Expressions
+/// specified in joinCondition are evaluated on every combination of left/right
+/// tuple, to emit result.
+///
+/// To create Cartesian product of the left/right's output, use the constructor
+/// without `joinType` and `joinCondition` parameter.
+class NestedLoopJoinNode : public PlanNode {
  public:
-  CrossJoinNode(
+  NestedLoopJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      TypedExprPtr joinCondition,
+      PlanNodePtr left,
+      PlanNodePtr right,
+      RowTypePtr outputType);
+
+  NestedLoopJoinNode(
       const PlanNodeId& id,
       PlanNodePtr left,
       PlanNodePtr right,
@@ -1510,7 +1457,15 @@ class CrossJoinNode : public PlanNode {
   }
 
   std::string_view name() const override {
-    return "CrossJoin";
+    return "NestedLoopJoin";
+  }
+
+  const TypedExprPtr& joinCondition() const {
+    return joinCondition_;
+  }
+
+  JoinType joinType() const {
+    return joinType_;
   }
 
   folly::dynamic serialize() const override;
@@ -1520,9 +1475,16 @@ class CrossJoinNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
+  const JoinType joinType_;
+  const TypedExprPtr joinCondition_;
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
 };
+
+// TODO Remove after updating Prestissimo.
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+using CrossJoinNode = NestedLoopJoinNode;
+#endif
 
 // Represents the 'SortBy' node in the plan.
 class OrderByNode : public PlanNode {

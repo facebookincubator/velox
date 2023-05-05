@@ -187,6 +187,16 @@ class RowContainer {
              : 0);
   }
 
+  /// Sets all fields, aggregates, keys and dependents to null. Used
+  /// when making a row with uninitialized keys for aggregates with
+  /// no-op partial aggregation.
+  void setAllNull(char* FOLLY_NONNULL row) {
+    if (!nullOffsets_.empty()) {
+      memset(row + nullByte(nullOffsets_[0]), 0xff, initialNulls_.size());
+      bits::clearBit(row, freeFlagOffset_);
+    }
+  }
+
   // The row size excluding any out-of-line stored variable length values.
   int32_t fixedRowSize() const {
     return fixedRowSize_;
@@ -525,6 +535,9 @@ class RowContainer {
         stringAllocator_.freeSpace());
   }
 
+  // Returns the average size of rows in bytes stored in this container.
+  std::optional<int64_t> estimateRowSize() const;
+
   // Returns a cap on  extra memory that may be needed when adding 'numRows'
   // and variableLengthBytes of out-of-line variable length data.
   int64_t sizeIncrement(vector_size_t numRows, int64_t variableLengthBytes)
@@ -546,14 +559,6 @@ class RowContainer {
       }
     }
     return 0;
-  }
-
-  // Returns estimated number of rows a batch can support for
-  // the given batchSizeInBytes.
-  // FIXME(venkatra): estimate num rows for variable length fields.
-  int32_t estimatedNumRowsPerBatch(int32_t batchSizeInBytes) {
-    return (batchSizeInBytes / fixedRowSize_) +
-        ((batchSizeInBytes % fixedRowSize_) ? 1 : 0);
   }
 
   // Extract column values for 'rows' into 'result'.
@@ -1093,10 +1098,10 @@ class RowContainer {
 };
 
 template <>
-inline UnscaledLongDecimal RowContainer::valueAt<UnscaledLongDecimal>(
+inline int128_t RowContainer::valueAt<int128_t>(
     const char* FOLLY_NONNULL group,
     int32_t offset) {
-  return UnscaledLongDecimal::deserialize(group + offset);
+  return HugeInt::deserialize(group + offset);
 }
 
 template <>
@@ -1160,28 +1165,26 @@ inline void RowContainer::storeNoNulls<TypeKind::MAP>(
 }
 
 template <>
-inline void RowContainer::storeWithNulls<TypeKind::LONG_DECIMAL>(
+inline void RowContainer::storeWithNulls<TypeKind::HUGEINT>(
     const DecodedVector& decoded,
     vector_size_t index,
     char* FOLLY_NONNULL row,
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask) {
-  UnscaledLongDecimal::serialize(
-      decoded.valueAt<UnscaledLongDecimal>(index), row + offset);
+  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
   if (decoded.isNullAt(index)) {
     row[nullByte] |= nullMask;
   }
 }
 
 template <>
-inline void RowContainer::storeNoNulls<TypeKind::LONG_DECIMAL>(
+inline void RowContainer::storeNoNulls<TypeKind::HUGEINT>(
     const DecodedVector& decoded,
     vector_size_t index,
     char* FOLLY_NONNULL row,
     int32_t offset) {
-  UnscaledLongDecimal::serialize(
-      decoded.valueAt<UnscaledLongDecimal>(index), row + offset);
+  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
 }
 
 template <>

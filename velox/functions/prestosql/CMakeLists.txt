@@ -28,7 +28,7 @@ add_library(
   ArraySort.cpp
   ArraySum.cpp
   Comparisons.cpp
-  DecimalArithmetic.cpp
+  DecimalVectorFunctions.cpp
   ElementAt.cpp
   FilterFunctions.cpp
   FromUnixTime.cpp
@@ -45,6 +45,7 @@ add_library(
   Repeat.cpp
   Reverse.cpp
   RowFunction.cpp
+  Sequence.cpp
   Slice.cpp
   Split.cpp
   StringFunctions.cpp

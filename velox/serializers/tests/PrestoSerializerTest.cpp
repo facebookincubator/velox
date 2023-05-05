@@ -29,7 +29,7 @@ using namespace facebook::velox::test;
 class PrestoSerializerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getDefaultMemoryPool();
+    pool_ = memory::addDefaultLeafMemoryPool();
     serde_ = std::make_unique<serializer::presto::PrestoVectorSerde>();
     vectorMaker_ = std::make_unique<test::VectorMaker>(pool_.get());
   }
@@ -322,13 +322,13 @@ TEST_F(PrestoSerializerTest, timestampWithNanosecondPrecision) {
   assertEqualVectors(deserialized, expectedOutputWithLostPrecision);
 }
 
-TEST_F(PrestoSerializerTest, unscaledLongDecimal) {
+TEST_F(PrestoSerializerTest, longDecimal) {
   std::vector<int128_t> decimalValues(102);
-  decimalValues[0] = UnscaledLongDecimal::min().unscaledValue();
+  decimalValues[0] = DecimalUtil::kLongDecimalMin;
   for (int row = 1; row < 101; row++) {
     decimalValues[row] = row - 50;
   }
-  decimalValues[101] = UnscaledLongDecimal::max().unscaledValue();
+  decimalValues[101] = DecimalUtil::kLongDecimalMax;
   auto vector =
       vectorMaker_->longDecimalFlatVector(decimalValues, DECIMAL(20, 5));
 

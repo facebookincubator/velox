@@ -273,11 +273,27 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   EXPECT_EQ(exec::TaskState::kFinished, task->state());
   EXPECT_EQ(
       std::unordered_set<int32_t>({1, 5, 8}), getCompletedSplitGroups(task));
+
+  // Check that stats are properly assembled.
+  auto taskStats = task->taskStats();
+
+  // Expect 9 drivers in total: 3 drivers x 3 groups.
+  for (const auto& pipeStats : taskStats.pipelineStats) {
+    for (const auto& opStats : pipeStats.operatorStats) {
+      EXPECT_EQ(
+          9, opStats.runtimeStats.find("runningFinishWallNanos")->second.count);
+    }
+  }
+
+  // Check TableScan for total number of splits.
+  EXPECT_EQ(6, taskStats.pipelineStats[2].operatorStats[0].numSplits);
+  // Check FilterProject for total number of vectors/batches.
+  EXPECT_EQ(18, taskStats.pipelineStats[1].operatorStats[1].inputVectors);
 }
 
 // Here we test various aspects of grouped/bucketed execution involving
 // output buffer and 3 pipelines.
-TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndCrossJoin) {
+TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
   // Create source file - we will read from it in 6 splits.
   auto vectors = makeVectors(4, 20);
   auto filePath = TempFilePath::create();
@@ -291,7 +307,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndCrossJoin) {
     core::PlanNodePtr pipe0Node;
     core::PlanNodePtr pipe1Node;
 
-    // Hash or Cross join.
+    // Hash or Nested Loop join.
     if (i == 0) {
       pipe0Node =
           PlanBuilder(planNodeIdGenerator)
@@ -320,7 +336,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndCrossJoin) {
               .tableScan(rowType_)
               .capturePlanNodeId(probeScanNodeId)
               .project({"c3 as x", "c2 as y", "c1 as z", "c0 as w", "c4", "c5"})
-              .crossJoin(
+              .nestedLoopJoin(
                   PlanBuilder(planNodeIdGenerator)
                       .tableScan(rowType_, {"c0 > 0"})
                       .capturePlanNodeId(buildScanNodeId)

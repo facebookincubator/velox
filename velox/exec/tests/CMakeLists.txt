@@ -14,13 +14,25 @@
 add_subdirectory(utils)
 
 add_executable(
+  aggregate_companion_functions_test
+  AggregateCompanionAdapterTest.cpp AggregateCompanionSignaturesTest.cpp
+  DummyAggregateFunction.cpp)
+
+add_test(
+  NAME aggregate_companion_functions_test
+  COMMAND aggregate_companion_functions_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(aggregate_companion_functions_test velox_exec
+                      velox_function_registry gtest gtest_main)
+
+add_executable(
   velox_exec_test
   AggregationTest.cpp
   AggregateFunctionRegistryTest.cpp
   ArrowStreamTest.cpp
   AssignUniqueIdTest.cpp
   AsyncConnectorTest.cpp
-  CrossJoinTest.cpp
   CustomJoinTest.cpp
   EnforceSingleRowTest.cpp
   FilterProjectTest.cpp
@@ -36,11 +48,13 @@ add_executable(
   MergeJoinTest.cpp
   MergeTest.cpp
   MultiFragmentTest.cpp
+  NestedLoopJoinTest.cpp
   OrderByTest.cpp
   PartitionedOutputBufferManagerTest.cpp
   PlanNodeSerdeTest.cpp
   PlanNodeToStringTest.cpp
   PrintPlanWithStatsTest.cpp
+  ProbeOperatorStateTest.cpp
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
   MemoryCapExceededTest.cpp
@@ -86,7 +100,6 @@ add_test(
 target_link_libraries(
   velox_exec_test
   velox_aggregates
-  velox_aggregates_test_lib
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
@@ -115,7 +128,6 @@ target_link_libraries(
   gtest_main
   gmock
   ${FOLLY_WITH_DEPENDENCIES}
-  ${DOUBLE_CONVERSION}
   gflags::gflags
   glog::glog
   ${FMT}
@@ -150,7 +162,6 @@ target_link_libraries(
   gtest_main
   gmock
   ${FOLLY_WITH_DEPENDENCIES}
-  ${DOUBLE_CONVERSION}
   gflags::gflags
   glog::glog
   ${FMT}

@@ -63,8 +63,7 @@ void HiveConnectorTestBase::writeToFile(
   options.schema = vectors[0]->type();
   auto sink =
       std::make_unique<facebook::velox::dwio::common::LocalFileSink>(filePath);
-  auto childPool = rootPool_->addChild(
-      "HiveConnectorTestBase.Writer", memory::MemoryPool::Kind::kAggregate);
+  auto childPool = rootPool_->addAggregateChild("HiveConnectorTestBase.Writer");
   facebook::velox::dwrf::Writer writer{options, std::move(sink), *childPool};
   for (size_t i = 0; i < vectors.size(); ++i) {
     writer.write(vectors[i]);
@@ -109,7 +108,9 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
     const std::string& filePath,
     uint32_t splitCount,
     dwio::common::FileFormat format) {
-  const int fileSize = fs::file_size(filePath);
+  auto file =
+      filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
+  const int64_t fileSize = file->size();
   // Take the upper bound.
   const int splitSize = std::ceil((fileSize) / splitCount);
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> splits;
