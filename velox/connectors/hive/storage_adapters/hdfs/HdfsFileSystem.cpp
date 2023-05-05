@@ -92,20 +92,6 @@ bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
   return filePath.find(kScheme) == 0;
 }
 
-/// Gets a fixed hdfs endpoint from config. It is used in the case that hdfs
-/// endpoint is not contained in a given file path.
-HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(const Config* config) {
-  auto hdfsHost = config->get("hive.hdfs.host");
-  VELOX_CHECK(
-      hdfsHost.hasValue(),
-      "hdfsHost is empty, configuration missing for hdfs host");
-  auto hdfsPort = config->get("hive.hdfs.port");
-  VELOX_CHECK(
-      hdfsPort.hasValue(),
-      "hdfsPort is empty, configuration missing for hdfs port");
-  return HdfsServiceEndpoint{*hdfsHost, *hdfsPort};
-}
-
 /// Gets hdfs endpoint from a given file path. If not found, fall back to get a
 /// fixed one from configuration.
 HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
@@ -116,7 +102,15 @@ HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
       filePath.data(), kScheme.size(), endOfIdentityInfo - kScheme.size()};
   if (hdfsIdentity.empty()) {
     // Fall back to get a fixed endpoint from config.
-    return getServiceEndpoint(config);
+    auto hdfsHost = config->get("hive.hdfs.host");
+    VELOX_CHECK(
+        hdfsHost.hasValue(),
+        "hdfsHost is empty, configuration missing for hdfs host");
+    auto hdfsPort = config->get("hive.hdfs.port");
+    VELOX_CHECK(
+        hdfsPort.hasValue(),
+        "hdfsPort is empty, configuration missing for hdfs port");
+    return HdfsServiceEndpoint{*hdfsHost, *hdfsPort};
   }
 
   auto hostAndPortSeparator = hdfsIdentity.find(':', 0);

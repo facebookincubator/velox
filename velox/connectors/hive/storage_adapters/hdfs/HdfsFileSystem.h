@@ -85,8 +85,7 @@ class HdfsFileSystem : public FileSystem {
   }
 
   static bool isHdfsFile(std::string_view filename);
-  // Gets a fixed endpoint from config.
-  static HdfsServiceEndpoint getServiceEndpoint(const Config* config);
+
   /// The given filePath is used to infer hdfs endpoint. If hdfs identity is
   /// missing from filePath, the configured "hive.hdfs.host" & "hive.hdfs.port"
   /// will be used.
