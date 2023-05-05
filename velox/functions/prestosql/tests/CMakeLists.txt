@@ -39,6 +39,7 @@ add_executable(
   ArrayShuffleTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
+  BinaryFunctionsTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
   CeilFloorTest.cpp
@@ -59,6 +60,8 @@ add_executable(
   MapTest.cpp
   MapZipWithTest.cpp
   NotTest.cpp
+  ProbabilityTest.cpp
+  RandTest.cpp
   ReduceTest.cpp
   RegexpReplaceTest.cpp
   RepeatTest.cpp
@@ -66,6 +69,7 @@ add_executable(
   RoundTest.cpp
   ScalarFunctionRegTest.cpp
   SliceTest.cpp
+  SequenceTest.cpp
   SplitTest.cpp
   StringFunctionsTest.cpp
   TransformTest.cpp
