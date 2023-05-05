@@ -194,6 +194,7 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
   }
 }
 
+#if defined(VELOX_ENABLE_QPL)
 TEST_F(ParquetReaderTest, parseIntDecimalQpl) {
   // decimal_dict.parquet two columns (a: DECIMAL(7,2), b: DECIMAL(14,2)) and
   // 6 rows.
@@ -239,3 +240,4 @@ TEST_F(ParquetReaderTest, parseIntDecimalQpl) {
     EXPECT_EQ(b[index + 1].unscaledValue(), expectValues[i]);
   }
 }
+#endif
