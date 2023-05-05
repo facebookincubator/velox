@@ -20,7 +20,7 @@
 
 namespace facebook::velox::exec {
 
-std::shared_ptr<PeeledEncoding> PeeledEncoding::Peel(
+std::shared_ptr<PeeledEncoding> PeeledEncoding::peel(
     const std::vector<VectorPtr>& vectorsToPeel,
     const SelectivityVector& rows,
     LocalDecodedVector& decodedVector,
@@ -123,6 +123,10 @@ bool PeeledEncoding::peelInternal(
                                         : peeledVectors[fieldIndex];
       if (leaf == nullptr) {
         continue;
+      }
+      if (leaf->isLazy() && leaf->asUnchecked<LazyVector>()->isLoaded()) {
+        auto lazy = leaf->asUnchecked<LazyVector>();
+        leaf = lazy->loadedVectorShared();
       }
       if (!constantFields.empty() && constantFields[fieldIndex]) {
         setPeeled(leaf, fieldIndex, maybePeeled);
@@ -251,7 +255,7 @@ bool PeeledEncoding::peelInternal(
   return true;
 }
 
-VectorEncoding::Simple PeeledEncoding::getWrapEncoding() const {
+VectorEncoding::Simple PeeledEncoding::wrapEncoding() const {
   return wrapEncoding_;
 }
 

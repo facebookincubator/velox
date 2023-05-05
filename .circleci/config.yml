@@ -24,7 +24,7 @@ workflows:
       - macos-build:
           matrix:
             parameters:
-              os: [macos-intel, macos-m1]
+              os: [macos-intel]
       - format-check
       - header-check
 
@@ -41,11 +41,16 @@ workflows:
       - doc-gen-job
       - linux-presto-fuzzer-run
       - linux-spark-fuzzer-run
+      - linux-spark-aggregate-fuzzer-run
       - linux-aggregate-fuzzer-run
       - linux-join-fuzzer-run
       - docker-compose-ubuntu-cpp
       - docker-compose-centos-cpp
       - docker-compose-presto-native
+      - macos-build:
+          matrix:
+            parameters:
+              os: [ macos-m1 ]
 
 
   # Hourly build on weekdays
@@ -65,7 +70,7 @@ workflows:
       - macos-build:
           matrix:
             parameters:
-              os: [macos-intel, macos-m1]
+              os: [macos-intel]
 
 commands:
   update-submodules:
@@ -184,7 +189,7 @@ executors:
       - image : ghcr.io/facebookincubator/velox-dev:check-avx
   macos-intel:
     macos:
-      xcode: "14.2.0"
+      xcode: "14.3.0"
     resource_class: macos.x86.medium.gen2
   macos-m1:
     macos:
@@ -261,7 +266,7 @@ jobs:
       - run:
           name: "Build"
           command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
             ccache -s
           no_output_timeout: 1h
       - run:
@@ -310,6 +315,21 @@ jobs:
       - store_artifacts:
           path: '/tmp/spark_fuzzer_repro'
       - run:
+          name: "Run Spark Aggregate Fuzzer Tests"
+          command: |
+            mkdir -p /tmp/spark_aggregate_fuzzer_repro/
+            chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
+            _build/debug/velox/exec/tests/spark_aggregation_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 60 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro \
+            && echo -e "\n\nSpark Aggregation Fuzzer run finished successfully."
+          no_output_timeout: 5m
+      - store_artifacts:
+          path: '/tmp/spark_aggregate_fuzzer_repro'
+      - run:
           name: "Run Aggregate Fuzzer Tests"
           # Run aggregation fuzzer using the built executable.
           command: |
@@ -346,7 +366,13 @@ jobs:
             pip install deepdiff
             python ./scripts/signature.py export --spark --presto /tmp/pr_signatures.json
             cp ./scripts/signature.py /tmp/signature.py
-            git checkout main
+            git remote add upstream https://github.com/facebookincubator/velox
+            git fetch upstream
+            merge_base=$(git merge-base  'upstream/main' `git rev-parse HEAD`) || \
+            { echo "::error::Failed to find merge_base"; exit 1; }
+            echo "Merge Base: $merge_base"
+            git checkout $merge_base
+            git submodule update --init --recursive
             LD_LIBRARY_PATH=/usr/local/lib make python-clean
             LD_LIBRARY_PATH=/usr/local/lib make python-build
             cp /tmp/signature.py ./scripts/signature.py
@@ -468,6 +494,19 @@ jobs:
           fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \ 
           --repro_persist_path=/tmp/spark_fuzzer_repro"
 
+  linux-spark-aggregate-fuzzer-run:
+    executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - fuzzer-run:
+          fuzzer_output: "/tmp/spark_aggregate_fuzzer.log"
+          fuzzer_repro: "/tmp/spark_aggregate_fuzzer_repro"
+          fuzzer_name: "SparkAggregate"
+          fuzzer_exe: "_build/debug/velox/exec/tests/spark_aggregation_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \
+          --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro"
+
 
   linux-aggregate-fuzzer-run:
     executor: build
@@ -550,7 +589,7 @@ jobs:
             git checkout gh-pages
             cp -R velox/docs/_build/html/* docs
             git add docs
-            if [ -n "$(git status --porcelain)" ]
+            if [ -n "$(git status --porcelain --untracked-files=no)" ]
             then
               git commit -m "Update documentation"
               git push

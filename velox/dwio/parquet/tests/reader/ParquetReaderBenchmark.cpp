@@ -42,7 +42,7 @@ class ParquetReaderBenchmark {
  public:
   explicit ParquetReaderBenchmark(bool disableDictionary)
       : disableDictionary_(disableDictionary) {
-    pool_ = memory::getDefaultMemoryPool();
+    pool_ = memory::addDefaultLeafMemoryPool();
     dataSetBuilder_ = std::make_unique<DataSetBuilder>(*pool_.get(), 0);
     auto sink =
         std::make_unique<LocalFileSink>(fileFolder_->path + "/" + fileName_);
@@ -110,8 +110,8 @@ class ParquetReaderBenchmark {
       std::vector<uint64_t>& hitRows) {
     std::unique_ptr<FilterGenerator> filterGenerator =
         std::make_unique<FilterGenerator>(rowType, 0);
-    auto filters =
-        filterGenerator->makeSubfieldFilters(filterSpecs, batches, hitRows);
+    auto filters = filterGenerator->makeSubfieldFilters(
+        filterSpecs, batches, nullptr, hitRows);
     auto scanSpec = filterGenerator->makeScanSpec(std::move(filters));
     return scanSpec;
   }

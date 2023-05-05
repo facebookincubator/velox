@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/PartitionFunction.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -36,7 +37,7 @@ class PlanNodeSerdeTest : public testing::Test,
     Type::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
-    PlanBuilder::registerSerDe();
+    registerPartitionFunctionSerDe();
 
     data_ = {makeRowVector({
         makeFlatVector<int64_t>({1, 2, 3}),
@@ -72,7 +73,7 @@ TEST_F(PlanNodeSerdeTest, assignUniqueId) {
   testSerde(plan);
 }
 
-TEST_F(PlanNodeSerdeTest, crossJoin) {
+TEST_F(PlanNodeSerdeTest, nestedLoopJoin) {
   auto left = makeRowVector(
       {"t0", "t1", "t2"},
       {
@@ -93,7 +94,7 @@ TEST_F(PlanNodeSerdeTest, crossJoin) {
   auto plan =
       PlanBuilder(planNodeIdGenerator)
           .values({left})
-          .crossJoin(
+          .nestedLoopJoin(
               PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
               {"t0", "u1", "t2", "t1"})
           .planNode();

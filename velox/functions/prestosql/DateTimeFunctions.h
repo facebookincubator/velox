@@ -24,6 +24,7 @@
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 #include <iomanip>
+#include "velox/core/QueryConfig.h"
 
 namespace facebook::velox::functions {
 
@@ -80,9 +81,52 @@ struct TimestampWithTimezoneSupport {
 
     return timestamp;
   }
+
+  // Get offset in seconds with GMT from timestampWithTimezone
+  FOLLY_ALWAYS_INLINE
+  int64_t getGMTOffsetSec(
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    Timestamp inputTimeStamp = this->toTimestamp(timestampWithTimezone);
+    // Get the given timezone name
+    auto timezone =
+        util::getTimeZoneName(*timestampWithTimezone.template at<1>());
+    auto* timezonePtr = date::locate_zone(timezone);
+    // Create a copy of inputTimeStamp and convert it to GMT
+    auto gmtTimeStamp = inputTimeStamp;
+    gmtTimeStamp.toGMT(*timezonePtr);
+    // Get offset in seconds with GMT and convert to hour
+    return (inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds());
+  }
 };
 
 } // namespace
+
+template <typename T>
+struct DateFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Varchar>& date) {
+    bool nullOutput;
+    result = util::Converter<TypeKind::DATE>::cast(date, nullOutput);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Timestamp>& timestamp) {
+    bool nullOutput;
+    result = util::Converter<TypeKind::DATE>::cast(timestamp, nullOutput);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    bool nullOutput;
+    result = util::Converter<TypeKind::DATE>::cast(
+        this->toTimestamp(timestampWithTimezone), nullOutput);
+  }
+};
 
 template <typename T>
 struct WeekFunction : public InitSessionTimezone<T>,
@@ -250,6 +294,18 @@ struct DayFunction : public InitSessionTimezone<T>,
   }
 };
 
+namespace {
+
+bool isIntervalWholeDays(int64_t milliseconds) {
+  return (milliseconds % kMillisInDay) == 0;
+}
+
+int64_t intervalDays(int64_t milliseconds) {
+  return milliseconds / kMillisInDay;
+}
+
+} // namespace
+
 template <typename T>
 struct DateMinusIntervalDayTime {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -259,10 +315,10 @@ struct DateMinusIntervalDayTime {
       const arg_type<Date>& date,
       const arg_type<IntervalDayTime>& interval) {
     VELOX_USER_CHECK(
-        interval.hasWholeDays(),
+        isIntervalWholeDays(interval),
         "Cannot subtract hours, minutes, seconds or milliseconds from a date");
     result = date;
-    result.addDays(-interval.days());
+    result.addDays(-intervalDays(interval));
   }
 };
 
@@ -275,10 +331,10 @@ struct DatePlusIntervalDayTime {
       const arg_type<Date>& date,
       const arg_type<IntervalDayTime>& interval) {
     VELOX_USER_CHECK(
-        interval.hasWholeDays(),
+        isIntervalWholeDays(interval),
         "Cannot add hours, minutes, seconds or milliseconds to a date");
     result = date;
-    result.addDays(interval.days());
+    result.addDays(intervalDays(interval));
   }
 };
 
@@ -1042,51 +1098,93 @@ struct ParseDateTimeFunction {
   }
 };
 
-Timestamp parseMysql(
-      const std::string_view& input,
-      const std::string_view& format) {
-    return buildMysqlDateTimeFormatter(format)->parse(input).timestamp;
-  }
-
 template <typename T>
 struct CurrentTimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   std::shared_ptr<DateTimeFormatter> formatter_;
   const date::time_zone* sessionTimeZone_ = nullptr;
+  std::optional<int64_t> sessionTzID_;
 
-  FOLLY_ALWAYS_INLINE void initialize(
-      const core::QueryConfig& config) {
-      sessionTimeZone_ = getTimeZoneFromConfig(config);
+  FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    formatter_ = buildJodaDateTimeFormatter(
+        std::string_view("HH:mm:ss.SSS"));
   }
 
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result) {
+    Timestamp ts = Timestamp::now();
+    ts.toTimezone(*sessionTimeZone_);
+    
+    // Time part: HH:mm:ss.SSS
+    std::string timeFormatted = formatter_->format(ts, sessionTimeZone_);
 
-    formatter_ = buildJodaDateTimeFormatter(
-          std::string_view("HH:MM:SS.SSS"));
-
-    auto formatted = formatter_->format(Timestamp::now(), sessionTimeZone_);
-
+    // Timezone part: zzz
+    // Currently in DateTimeFormatter.cpp: 
+    // Function:format, Expression:  short name time zone is not yet supported
+    // When there is a full map (timezone -> short name time zone), then change implementation here
+    // ex: "America/Los_Angeles -> PDT"
     using namespace std::chrono;
-
     auto now = system_clock::now();
-
-    auto ms = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
-
     auto timer = system_clock::to_time_t(now);
-
     std::tm bt = *std::localtime(&timer);
 
+    // Time with time zone part: HH:mm:ss.SSS zzz
     std::ostringstream oss;
-
-    oss << std::put_time(&bt, "%H:%M:%S"); // HH:MM:SS
-    oss << '.' << std::setfill('0') << std::setw(3) << ms.count(); // HH:MM:SS.ZZZ
+    oss << timeFormatted;
     oss << " " << std::put_time(&bt, "%Z"); // HH:MM:SS.ZZZ UTC
     result.resize(oss.str().size());
     std::memcpy(result.data(), oss.str().data(), oss.str().size());
 
     return true;
+  }
+};
+
+template <typename T>
+struct CurrentDateFunction {
+  const date::time_zone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
+    timeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(Date& result) {
+    auto now = Timestamp::now();
+    if (timeZone_ != nullptr) {
+      now.toTimezone(*timeZone_);
+    }
+    const std::chrono::
+        time_point<std::chrono::system_clock, std::chrono::milliseconds>
+            localTimepoint(std::chrono::milliseconds(now.toMillis()));
+    auto daysSinceEpoch = std::chrono::floor<date::days>(localTimepoint);
+    result = Date(daysSinceEpoch.time_since_epoch().count());
+  }
+};
+
+template <typename T>
+struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& input) {
+    // Get offset in seconds with GMT and convert to hour
+    auto offset = this->getGMTOffsetSec(input);
+    result = offset / 3600;
+  }
+};
+
+template <typename T>
+struct TimeZoneMinuteFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& input) {
+    // Get offset in seconds with GMT and convert to minute
+    auto offset = this->getGMTOffsetSec(input);
+    result = (offset / 60) % 60;
   }
 };
 

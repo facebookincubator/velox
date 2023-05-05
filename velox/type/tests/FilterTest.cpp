@@ -20,7 +20,7 @@
 #include <numeric>
 #include <optional>
 
-#include <velox/type/Filter.h>
+#include <velox/type/DecimalUtil.h>
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Filter.h"
 
@@ -1728,4 +1728,87 @@ TEST(FilterTest, mergeWithBytesMultiRange) {
       testMergeWithBytes(left.get(), right.get());
     }
   }
+}
+
+TEST(FilterTest, HugeIntRange) {
+  auto filter = equalHugeint(HugeInt::build(1, 1), false);
+  auto testInt128 = [&](int128_t x) { return filter->testInt128(x); };
+  auto max = DecimalUtil::kLongDecimalMax;
+  auto min = DecimalUtil::kLongDecimalMin;
+
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(1, 1)));
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(1, 0)));
+
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 0), HugeInt::build(1, 2), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 0), HugeInt::build(1, 2), true));
+  EXPECT_FALSE(filter->testInt128Range(
+      HugeInt::build(0, 2), HugeInt::build(1, 0), false));
+  EXPECT_FALSE(filter->testInt128Range(
+      HugeInt::build(1, 2), HugeInt::build(1, 2), true));
+
+  filter = equalHugeint(max, false);
+  EXPECT_TRUE(filter->testInt128(max));
+  EXPECT_FALSE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128Range(HugeInt::build(1, 2), max, false));
+  EXPECT_FALSE(filter->testInt128Range(min, HugeInt::build(1, 2), false));
+
+  filter = equalHugeint(min, false);
+  EXPECT_TRUE(filter->testInt128(min));
+  EXPECT_FALSE(filter->testInt128(max));
+  EXPECT_TRUE(filter->testInt128Range(min, HugeInt::build(1, 2), false));
+  EXPECT_FALSE(filter->testInt128Range(HugeInt::build(1, 2), max, false));
+
+  filter = betweenHugeint(HugeInt::build(1, 1), HugeInt::build(2, 2), false);
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(1, 3)));
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(2, 1)));
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(1, 0)));
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(2, 3)));
+
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 3), HugeInt::build(2, 0), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(2, 0), HugeInt::build(2, 2), true));
+  EXPECT_FALSE(filter->testInt128Range(
+      HugeInt::build(0, 0), HugeInt::build(1, 0), false));
+  EXPECT_FALSE(filter->testInt128Range(
+      HugeInt::build(2, 3), HugeInt::build(3, 5), true));
+
+  filter = betweenHugeint(HugeInt::build(1, 1), max, false);
+  EXPECT_TRUE(filter->testInt128(max));
+  EXPECT_FALSE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128Range(HugeInt::build(2, 2), max, true));
+  EXPECT_FALSE(filter->testInt128Range(min, HugeInt::build(1, 0), false));
+
+  filter = betweenHugeint(min, HugeInt::build(1, 1), false);
+  EXPECT_TRUE(filter->testInt128(min));
+  EXPECT_FALSE(filter->testInt128(max));
+  EXPECT_TRUE(filter->testInt128Range(min, HugeInt::build(0, 1), true));
+  EXPECT_FALSE(filter->testInt128Range(HugeInt::build(1, 2), max, false));
+
+  filter = greaterThanHugeint(HugeInt::build(1, 1), true);
+  EXPECT_TRUE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(HugeInt::build(1, 0)));
+  EXPECT_TRUE(filter->testInt128(HugeInt::build(1, 2)));
+
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(1, 0), HugeInt::build(1, 2), false));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(0, 0), HugeInt::build(1, 1), true));
+  EXPECT_TRUE(filter->testInt128Range(
+      HugeInt::build(2, 1), HugeInt::build(2, 2), true));
+  EXPECT_FALSE(filter->testInt128Range(
+      HugeInt::build(0, 0), HugeInt::build(0, 1), false));
+
+  filter = greaterThanHugeint(min, true);
+  EXPECT_TRUE(filter->testInt128(max));
+  EXPECT_FALSE(filter->testInt128(min));
+  EXPECT_TRUE(filter->testInt128Range(min, max, false));
+
+  filter = greaterThanHugeint(max, true);
+  EXPECT_FALSE(filter->testInt128(max));
+  EXPECT_FALSE(filter->testInt128Range(min, max, false));
 }

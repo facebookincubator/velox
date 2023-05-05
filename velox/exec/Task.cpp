@@ -22,11 +22,11 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
-#include "velox/exec/CrossJoinBuild.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/Merge.h"
+#include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/Task.h"
@@ -76,6 +76,17 @@ std::string errorMessageImpl(const std::exception_ptr& exception) {
     message = "<Unknown exception type>";
   }
   return message;
+}
+
+// Add 'running time' metrics from CpuWallTiming structures to have them
+// available aggregated per thread.
+void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
+  op.runtimeStats["runningAddInputWallNanos"] =
+      RuntimeMetric(op.addInputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
+  op.runtimeStats["runningGetOutputWallNanos"] =
+      RuntimeMetric(op.getOutputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
+  op.runtimeStats["runningFinishWallNanos"] =
+      RuntimeMetric(op.finishTiming.wallNanos, RuntimeCounter::Unit::kNanos);
 }
 
 } // namespace
@@ -184,22 +195,12 @@ Task::Task(
       planFragment_(std::move(planFragment)),
       destination_(destination),
       queryCtx_(std::move(queryCtx)),
-      pool_(queryCtx_->pool()->addChild(
-          fmt::format("task.{}", taskId_.c_str()),
-          memory::MemoryPool::Kind::kAggregate)),
+      pool_(queryCtx_->pool()->addAggregateChild(
+          fmt::format("task.{}", taskId_.c_str()))),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
-      bufferManager_(PartitionedOutputBufferManager::getInstance()) {
-  auto memoryUsageTracker = pool_->getMemoryUsageTracker();
-  if (memoryUsageTracker) {
-    memoryUsageTracker->setMakeMemoryCapExceededMessage(
-        [&](memory::MemoryUsageTracker& tracker) {
-          VELOX_DCHECK(pool()->getMemoryUsageTracker().get() == &tracker);
-          return this->getErrorMsgOnMemCapExceeded(tracker);
-        });
-  }
-}
+      bufferManager_(PartitionedOutputBufferManager::getInstance()) {}
 
 Task::~Task() {
   try {
@@ -263,9 +264,8 @@ Task::getOrAddNodePool(const core::PlanNodeId& planNodeId) {
     return nodePools_[planNodeId];
   }
 
-  childPools_.push_back(pool_->addChild(
-      fmt::format("node.{}", planNodeId),
-      memory::MemoryPool::Kind::kAggregate));
+  childPools_.push_back(
+      pool_->addAggregateChild(fmt::format("node.{}", planNodeId)));
   auto* nodePool = childPools_.back().get();
   nodePools_[planNodeId] = nodePool;
   return nodePool;
@@ -277,27 +277,25 @@ velox::memory::MemoryPool* Task::addOperatorPool(
     uint32_t driverId,
     const std::string& operatorType) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addChild(fmt::format(
+  childPools_.push_back(nodePool->addLeafChild(fmt::format(
       "op.{}.{}.{}.{}", planNodeId, pipelineId, driverId, operatorType)));
   return childPools_.back().get();
 }
 
-velox::memory::MemoryPool* Task::addConnectorWriterPoolLocked(
+velox::memory::MemoryPool* Task::addConnectorPoolLocked(
     const core::PlanNodeId& planNodeId,
     int pipelineId,
     uint32_t driverId,
     const std::string& operatorType,
     const std::string& connectorId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addChild(
-      fmt::format(
-          "op.{}.{}.{}.{}.{}",
-          planNodeId,
-          pipelineId,
-          driverId,
-          operatorType,
-          connectorId),
-      memory::MemoryPool::Kind::kAggregate));
+  childPools_.push_back(nodePool->addAggregateChild(fmt::format(
+      "op.{}.{}.{}.{}.{}",
+      planNodeId,
+      pipelineId,
+      driverId,
+      operatorType,
+      connectorId)));
   return childPools_.back().get();
 }
 
@@ -307,7 +305,7 @@ velox::memory::MemoryPool* Task::addMergeSourcePool(
     uint32_t sourceId) {
   std::lock_guard<std::mutex> l(mutex_);
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addChild(fmt::format(
+  childPools_.push_back(nodePool->addLeafChild(fmt::format(
       "mergeExchangeClient.{}.{}.{}", planNodeId, pipelineId, sourceId)));
   return childPools_.back().get();
 }
@@ -316,7 +314,7 @@ velox::memory::MemoryPool* Task::addExchangeClientPool(
     const core::PlanNodeId& planNodeId,
     uint32_t pipelineId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addChild(
+  childPools_.push_back(nodePool->addLeafChild(
       fmt::format("exchangeClient.{}.{}", planNodeId, pipelineId)));
   return childPools_.back().get();
 }
@@ -573,6 +571,12 @@ void Task::start(
     self->createSplitGroupStateLocked(kUngroupedGroupId);
     self->createDriversLocked(self, kUngroupedGroupId, drivers);
 
+    // Prevent the connecting structures from being cleaned up before all split
+    // groups are finished during the grouped exeution mode.
+    if (self->isGroupedExecution()) {
+      self->splitGroupStates_[kUngroupedGroupId].mixedExecutionMode = true;
+    }
+
     // We might have first slots taken for grouped execution drivers, so need to
     // append the ungrouped execution drivers afterwards in that case.
     if (self->drivers_.empty()) {
@@ -701,7 +705,8 @@ void Task::createSplitGroupStateLocked(uint32_t splitGroupId) {
     }
 
     addHashJoinBridgesLocked(splitGroupId, factory->needsHashJoinBridges());
-    addCrossJoinBridgesLocked(splitGroupId, factory->needsCrossJoinBridges());
+    addNestedLoopJoinBridgesLocked(
+        splitGroupId, factory->needsNestedLoopJoinBridges());
     addCustomJoinBridgesLocked(splitGroupId, factory->planNodes);
   }
 }
@@ -753,8 +758,8 @@ void Task::createDriversLocked(
   // need to track down initialization of operator stats separately as well.
   if ((groupedExecutionDrivers & !initializedGroupedOpStats_) ||
       (!groupedExecutionDrivers & !initializedUngroupedOpStats_)) {
-    groupedExecutionDrivers ? initializedGroupedOpStats_
-                            : initializedUngroupedOpStats_ = true;
+    (groupedExecutionDrivers ? initializedGroupedOpStats_
+                             : initializedUngroupedOpStats_) = true;
     size_t firstPipelineDriverIndex{0};
     for (auto pipeline = 0; pipeline < numPipelines; ++pipeline) {
       auto& factory = driverFactories_[pipeline];
@@ -961,12 +966,7 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
   ++taskStats_.numTotalSplits;
   ++taskStats_.numQueuedSplits;
 
-  if (split.connectorSplit) {
-    // Tests may use the same splits list many times. Make sure there
-    // is no async load pending on any, if, for example, a test did
-    // not process all its splits.
-    split.connectorSplit->dataSource.reset();
-  }
+  VELOX_CHECK_NULL(split.connectorSplit->dataSource);
 
   if (!split.hasGroup()) {
     return addSplitToStoreLocked(
@@ -1324,13 +1324,16 @@ bool Task::allPeersFinished(
       break;
     }
   }
-  VELOX_CHECK(
+  VELOX_CHECK_NOT_NULL(
       callerShared, "Caller of Task::allPeersFinished is not a valid Driver");
-  state.drivers.push_back(callerShared);
-  state.promises.emplace_back(
-      fmt::format("Task::allPeersFinished {}", taskId_));
-  *future = state.promises.back().getSemiFuture();
-
+  // NOTE: we only set promise for the driver caller if it wants to wait for all
+  // the peers to finish.
+  if (future != nullptr) {
+    state.drivers.push_back(callerShared);
+    state.promises.emplace_back(
+        fmt::format("Task::allPeersFinished {}", taskId_));
+    *future = state.promises.back().getSemiFuture();
+  }
   return false;
 }
 
@@ -1366,13 +1369,13 @@ std::shared_ptr<JoinBridge> Task::getCustomJoinBridge(
   return getJoinBridgeInternal<JoinBridge>(splitGroupId, planNodeId);
 }
 
-void Task::addCrossJoinBridgesLocked(
+void Task::addNestedLoopJoinBridgesLocked(
     uint32_t splitGroupId,
     const std::vector<core::PlanNodeId>& planNodeIds) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNodeId : planNodeIds) {
     splitGroupState.bridges.emplace(
-        planNodeId, std::make_shared<CrossJoinBridge>());
+        planNodeId, std::make_shared<NestedLoopJoinBridge>());
   }
 }
 
@@ -1388,10 +1391,10 @@ std::shared_ptr<HashJoinBridge> Task::getHashJoinBridgeLocked(
   return getJoinBridgeInternalLocked<HashJoinBridge>(splitGroupId, planNodeId);
 }
 
-std::shared_ptr<CrossJoinBridge> Task::getCrossJoinBridge(
+std::shared_ptr<NestedLoopJoinBridge> Task::getNestedLoopJoinBridge(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
-  return getJoinBridgeInternal<CrossJoinBridge>(splitGroupId, planNodeId);
+  return getJoinBridgeInternal<NestedLoopJoinBridge>(splitGroupId, planNodeId);
 }
 
 template <class TBridgeType>
@@ -1409,6 +1412,14 @@ std::shared_ptr<TBridgeType> Task::getJoinBridgeInternalLocked(
   const auto& splitGroupState = splitGroupStates_[splitGroupId];
 
   auto it = splitGroupState.bridges.find(planNodeId);
+  if (it == splitGroupState.bridges.end()) {
+    // We might be looking for a bridge between grouped and ungrouped execution.
+    // It will belong to the 'ungrouped' state.
+    if (isGroupedExecution() && splitGroupId != kUngroupedGroupId) {
+      return getJoinBridgeInternalLocked<TBridgeType>(
+          kUngroupedGroupId, planNodeId);
+    }
+  }
   VELOX_CHECK(
       it != splitGroupState.bridges.end(),
       "Join bridge for plan node ID {} not found for group {}, task {}",
@@ -1615,6 +1626,7 @@ void Task::addOperatorStats(OperatorStats& stats) {
       stats.operatorId <
           taskStats_.pipelineStats[stats.pipelineId].operatorStats.size());
   aggregateOperatorRuntimeStats(stats.runtimeStats);
+  addRunningTimeOperatorMetrics(stats);
   taskStats_.pipelineStats[stats.pipelineId]
       .operatorStats[stats.operatorId]
       .add(stats);
@@ -1640,6 +1652,7 @@ TaskStats Task::taskStats() const {
     for (auto& op : driver->operators()) {
       auto statsCopy = op->stats(false);
       aggregateOperatorRuntimeStats(statsCopy.runtimeStats);
+      addRunningTimeOperatorMetrics(statsCopy);
       taskStats.pipelineStats[statsCopy.pipelineId]
           .operatorStats[statsCopy.operatorId]
           .add(statsCopy);
@@ -1876,7 +1889,7 @@ std::string Task::errorMessage() const {
   return errorMessageLocked();
 }
 
-StopReason Task::enter(ThreadState& state) {
+StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(state.isEnqueued);
   state.isEnqueued = false;
@@ -1892,6 +1905,9 @@ StopReason Task::enter(ThreadState& state) {
   }
   if (reason == StopReason::kNone) {
     ++numThreads_;
+    if (numThreads_ == 1) {
+      onThreadSince_ = nowMicros;
+    }
     state.setThread();
     state.hasBlockingFuture = false;
   }
@@ -1992,6 +2008,19 @@ StopReason Task::shouldStop() {
   return StopReason::kNone;
 }
 
+int32_t Task::yieldIfDue(uint64_t startTimeMicros) {
+  if (onThreadSince_ < startTimeMicros) {
+    std::lock_guard<std::mutex> l(mutex_);
+    // Reread inside the mutex
+    if (onThreadSince_ < startTimeMicros && numThreads_ && !toYield_ &&
+        !terminateRequested_ && !pauseRequested_) {
+      toYield_ = numThreads_;
+      return numThreads_;
+    }
+  }
+  return 0;
+}
+
 void Task::finishedLocked() {
   for (auto& promise : threadFinishPromises_) {
     promise.setValue();
@@ -2081,154 +2110,6 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
   return exchangeClients_[pipelineId];
 }
 
-namespace {
-// Describes memory usage stats of a Memory Pool (optionally aggregated).
-struct MemoryUsage {
-  int64_t totalBytes{0};
-  int64_t minBytes{std::numeric_limits<int64_t>::max()};
-  int64_t maxBytes{0};
-  size_t numEntries{0};
-
-  void update(int64_t bytes) {
-    maxBytes = std::max(maxBytes, bytes);
-    minBytes = std::min(minBytes, bytes);
-    totalBytes += bytes;
-    ++numEntries;
-  }
-
-  void toString(std::stringstream& out, const char* entriesName = "entries")
-      const {
-    out << succinctBytes(totalBytes) << " in " << numEntries << " "
-        << entriesName << ", min " << succinctBytes(minBytes) << ", max "
-        << succinctBytes(maxBytes);
-  }
-};
-
-// Aggregated memory usage stats of a single task plan node memory pool.
-struct NodeMemoryUsage {
-  MemoryUsage total;
-  std::unordered_map<std::string, MemoryUsage> operators;
-};
-
-// Aggregated memory usage stats of a single Task Pipeline Memory Pool.
-struct TaskMemoryUsage {
-  std::string taskId;
-  MemoryUsage total;
-  // The map from node id to its collected memory usage.
-  std::map<std::string, NodeMemoryUsage> nodes;
-
-  void toString(std::stringstream& out) const {
-    // Using 4 spaces for indent in the output.
-    out << "\n    ";
-    out << taskId;
-    out << ": ";
-    total.toString(out, "nodes");
-    for (const auto& [nodeId, nodeMemoryUsage] : nodes) {
-      out << "\n        ";
-      out << nodeId;
-      out << ": ";
-      nodeMemoryUsage.total.toString(out, "operators");
-      for (const auto& it : nodeMemoryUsage.operators) {
-        out << "\n            ";
-        out << it.first;
-        out << ": ";
-        it.second.toString(out, "instances");
-      }
-    }
-  }
-};
-
-void collectOperatorMemoryUsage(
-    NodeMemoryUsage& nodeMemoryUsage,
-    memory::MemoryPool* operatorPool) {
-  const auto numBytes = operatorPool->getMemoryUsageTracker()->currentBytes();
-  nodeMemoryUsage.total.update(numBytes);
-  auto& operatorMemoryUsage = nodeMemoryUsage.operators[operatorPool->name()];
-  operatorMemoryUsage.update(numBytes);
-}
-
-void collectNodeMemoryUsage(
-    TaskMemoryUsage& taskMemoryUsage,
-    memory::MemoryPool* nodePool) {
-  // Update task's stats from each node.
-  taskMemoryUsage.total.update(
-      nodePool->getMemoryUsageTracker()->currentBytes());
-
-  // NOTE: we use a plan node id as the node memory pool's name.
-  const auto& poolName = nodePool->name();
-  auto& nodeMemoryUsage = taskMemoryUsage.nodes[poolName];
-
-  // Run through the node's child operator pools and update the memory usage.
-  nodePool->visitChildren([&nodeMemoryUsage](memory::MemoryPool* operatorPool) {
-    collectOperatorMemoryUsage(nodeMemoryUsage, operatorPool);
-  });
-}
-
-void collectTaskMemoryUsage(
-    TaskMemoryUsage& taskMemoryUsage,
-    memory::MemoryPool* taskPool) {
-  taskMemoryUsage.taskId = taskPool->name();
-  taskPool->visitChildren([&taskMemoryUsage](memory::MemoryPool* nodePool) {
-    collectNodeMemoryUsage(taskMemoryUsage, nodePool);
-  });
-}
-
-std::string getQueryMemoryUsageString(memory::MemoryPool* queryPool) {
-  // Collect the memory usage numbers from query's tasks, nodes and operators.
-  std::vector<TaskMemoryUsage> taskMemoryUsages;
-  taskMemoryUsages.reserve(queryPool->getChildCount());
-  queryPool->visitChildren([&taskMemoryUsages](memory::MemoryPool* taskPool) {
-    taskMemoryUsages.emplace_back(TaskMemoryUsage{});
-    collectTaskMemoryUsage(taskMemoryUsages.back(), taskPool);
-  });
-
-  // We will collect each operator's aggregated memory usage to later show the
-  // largest memory consumers.
-  struct TopMemoryUsage {
-    int64_t totalBytes;
-    std::string description;
-  };
-  std::vector<TopMemoryUsage> topOperatorMemoryUsages;
-
-  // Build the query memory use tree (task->node->operator).
-  std::stringstream out;
-  out << "\n";
-  out << queryPool->name();
-  out << ": total: ";
-  out << succinctBytes(queryPool->getMemoryUsageTracker()->currentBytes());
-  for (const auto& taskMemoryUsage : taskMemoryUsages) {
-    taskMemoryUsage.toString(out);
-    // Collect each operator's memory usage into the vector.
-    for (const auto& [nodeId, nodeMemUsage] : taskMemoryUsage.nodes) {
-      for (const auto& it : nodeMemUsage.operators) {
-        const MemoryUsage& operatorMemoryUsage = it.second;
-        // Ignore operators with zero memory for top memory users.
-        if (operatorMemoryUsage.totalBytes > 0) {
-          topOperatorMemoryUsages.emplace_back(TopMemoryUsage{
-              operatorMemoryUsage.totalBytes,
-              fmt::format(
-                  "{}.{}.{}", taskMemoryUsage.taskId, nodeId, it.first)});
-        }
-      }
-    }
-  }
-
-  // Sort and show top memory users.
-  out << "\nTop operator memory usages:";
-  std::sort(
-      topOperatorMemoryUsages.begin(),
-      topOperatorMemoryUsages.end(),
-      [](const TopMemoryUsage& left, const TopMemoryUsage& right) {
-        return left.totalBytes > right.totalBytes;
-      });
-  for (const auto& top : topOperatorMemoryUsages) {
-    out << "\n    " << top.description << ": " << succinctBytes(top.totalBytes);
-  }
-
-  return out.str();
-}
-} // namespace
-
 std::shared_ptr<SpillOperatorGroup> Task::getSpillOperatorGroupLocked(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
@@ -2242,11 +2123,6 @@ std::shared_ptr<SpillOperatorGroup> Task::getSpillOperatorGroupLocked(
       planNodeId,
       splitGroupId);
   return group;
-}
-
-std::string Task::getErrorMsgOnMemCapExceeded(
-    memory::MemoryUsageTracker& /*tracker*/) {
-  return getQueryMemoryUsageString(queryCtx()->pool());
 }
 
 // static

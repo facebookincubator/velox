@@ -40,20 +40,24 @@ bool isColumnNameRequiringEscaping(const std::string& name) {
 
 namespace facebook::velox {
 
-bool isDecimalName(const std::string& typeName) {
-  auto typeNameUpper = boost::algorithm::to_upper_copy(typeName);
-  return (
-      typeNameUpper == TypeTraits<TypeKind::SHORT_DECIMAL>::name ||
-      typeNameUpper == TypeTraits<TypeKind::LONG_DECIMAL>::name);
+const ShortDecimalType& Type::asShortDecimal() const {
+  return dynamic_cast<const ShortDecimalType&>(*this);
 }
 
-bool isDecimalTypeSignature(const std::string& arg) {
-  auto upper = boost::algorithm::to_upper_copy(arg);
-  return (
-      upper.find(TypeTraits<TypeKind::SHORT_DECIMAL>::name) !=
-          std::string::npos ||
-      upper.find(TypeTraits<TypeKind::LONG_DECIMAL>::name) !=
-          std::string::npos);
+const LongDecimalType& Type::asLongDecimal() const {
+  return dynamic_cast<const LongDecimalType&>(*this);
+}
+
+bool Type::isShortDecimal() const {
+  return isShortDecimalType(*this);
+}
+
+bool Type::isLongDecimal() const {
+  return isLongDecimalType(*this);
+}
+
+bool Type::isDecimal() const {
+  return isDecimalType(*this);
 }
 
 // Static variable intialization is not thread safe for non
@@ -65,15 +69,13 @@ const std::unordered_map<std::string, TypeKind>& getTypeStringMap() {
       {"SMALLINT", TypeKind::SMALLINT},
       {"INTEGER", TypeKind::INTEGER},
       {"BIGINT", TypeKind::BIGINT},
+      {"HUGEINT", TypeKind::HUGEINT},
       {"REAL", TypeKind::REAL},
       {"DOUBLE", TypeKind::DOUBLE},
       {"VARCHAR", TypeKind::VARCHAR},
       {"VARBINARY", TypeKind::VARBINARY},
       {"TIMESTAMP", TypeKind::TIMESTAMP},
       {"DATE", TypeKind::DATE},
-      {"INTERVAL DAY TO SECOND", TypeKind::INTERVAL_DAY_TIME},
-      {"SHORT_DECIMAL", TypeKind::SHORT_DECIMAL},
-      {"LONG_DECIMAL", TypeKind::LONG_DECIMAL},
       {"ARRAY", TypeKind::ARRAY},
       {"MAP", TypeKind::MAP},
       {"ROW", TypeKind::ROW},
@@ -111,15 +113,13 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
       {TypeKind::SMALLINT, "SMALLINT"},
       {TypeKind::INTEGER, "INTEGER"},
       {TypeKind::BIGINT, "BIGINT"},
+      {TypeKind::HUGEINT, "HUGEINT"},
       {TypeKind::REAL, "REAL"},
       {TypeKind::DOUBLE, "DOUBLE"},
       {TypeKind::VARCHAR, "VARCHAR"},
       {TypeKind::VARBINARY, "VARBINARY"},
       {TypeKind::TIMESTAMP, "TIMESTAMP"},
       {TypeKind::DATE, "DATE"},
-      {TypeKind::INTERVAL_DAY_TIME, "INTERVAL DAY TO SECOND"},
-      {TypeKind::SHORT_DECIMAL, "SHORT_DECIMAL"},
-      {TypeKind::LONG_DECIMAL, "LONG_DECIMAL"},
       {TypeKind::ARRAY, "ARRAY"},
       {TypeKind::MAP, "MAP"},
       {TypeKind::ROW, "ROW"},
@@ -138,14 +138,14 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
 }
 
 std::pair<int, int> getDecimalPrecisionScale(const Type& type) {
-  VELOX_CHECK(type.isShortDecimal() || type.isLongDecimal());
   if (type.isShortDecimal()) {
-    const auto& decimalType = type.asShortDecimal();
+    const auto& decimalType = static_cast<const ShortDecimalType&>(type);
     return {decimalType.precision(), decimalType.scale()};
-  } else {
-    const auto& decimalType = type.asLongDecimal();
+  } else if (type.isLongDecimal()) {
+    const auto& decimalType = static_cast<const LongDecimalType&>(type);
     return {decimalType.precision(), decimalType.scale()};
   }
+  VELOX_FAIL("Type is not Decimal");
 }
 
 namespace {
@@ -183,8 +183,11 @@ TypePtr Type::create(const folly::dynamic& obj) {
     childTypes = deserializeChildTypes(obj);
   }
 
-  // Checks if 'typeName' specifies a custom type.
   auto typeName = obj["type"].asString();
+  if (isDecimalName(typeName)) {
+    return DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
+  }
+  // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
     return getCustomType(typeName);
   }
@@ -192,16 +195,6 @@ TypePtr Type::create(const folly::dynamic& obj) {
   // 'typeName' must be a built-in type.
   TypeKind typeKind = mapNameToTypeKind(typeName);
   switch (typeKind) {
-    case TypeKind::SHORT_DECIMAL: {
-      VELOX_USER_CHECK(
-          childTypes.empty(), "Short decimal type should not have child types");
-      return SHORT_DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
-    }
-    case TypeKind::LONG_DECIMAL: {
-      VELOX_USER_CHECK(
-          childTypes.empty(), "Long decimal type should not have child types");
-      return LONG_DECIMAL(obj["precision"].asInt(), obj["scale"].asInt());
-    }
     case TypeKind::ROW: {
       VELOX_USER_CHECK(obj["names"].isArray());
       std::vector<std::string> names;
@@ -234,10 +227,13 @@ TypePtr Type::create(const folly::dynamic& obj) {
 
 // static
 void Type::registerSerDe() {
-  velox::DeserializationRegistryForSharedPtr().Register(
+  auto& registry = velox::DeserializationRegistryForSharedPtr();
+  registry.Register(
       Type::getClassName(),
       static_cast<std::shared_ptr<const Type> (*)(const folly::dynamic&)>(
           Type::create));
+
+  registry.Register("IntervalDayTimeType", IntervalDayTimeType::deserialize);
 }
 
 std::string ArrayType::toString() const {
@@ -249,7 +245,8 @@ const TypePtr& ArrayType::childAt(uint32_t idx) const {
   return elementType();
 }
 
-ArrayType::ArrayType(TypePtr child) : child_{std::move(child)} {}
+ArrayType::ArrayType(TypePtr child)
+    : child_{std::move(child)}, parameters_{{TypeParameter(child_)}} {}
 
 bool ArrayType::equivalent(const Type& other) const {
   if (&other == this) {
@@ -286,7 +283,9 @@ const TypePtr& MapType::childAt(uint32_t idx) const {
 }
 
 MapType::MapType(TypePtr keyType, TypePtr valueType)
-    : keyType_{std::move(keyType)}, valueType_{std::move(valueType)} {}
+    : keyType_{std::move(keyType)},
+      valueType_{std::move(valueType)},
+      parameters_{{TypeParameter(keyType_), TypeParameter(valueType_)}} {}
 
 std::string MapType::toString() const {
   return "MAP<" + keyType()->toString() + "," + valueType()->toString() + ">";
@@ -305,8 +304,22 @@ folly::dynamic MapType::serialize() const {
   return obj;
 }
 
+namespace {
+std::vector<TypeParameter> createTypeParameters(
+    const std::vector<TypePtr>& children) {
+  std::vector<TypeParameter> parameters;
+  parameters.reserve(children.size());
+  for (const auto& child : children) {
+    parameters.push_back(TypeParameter(child));
+  }
+  return parameters;
+}
+} // namespace
+
 RowType::RowType(std::vector<std::string>&& names, std::vector<TypePtr>&& types)
-    : names_{std::move(names)}, children_{std::move(types)} {
+    : names_{std::move(names)},
+      children_{std::move(types)},
+      parameters_{createTypeParameters(children_)} {
   VELOX_USER_CHECK_EQ(
       names_.size(), children_.size(), "Mismatch names/types sizes");
 }
@@ -479,6 +492,12 @@ bool MapType::equivalent(const Type& other) const {
   return keyType_->equivalent(*otherMap.keyType_) &&
       valueType_->equivalent(*otherMap.valueType_);
 }
+
+FunctionType::FunctionType(
+    std::vector<std::shared_ptr<const Type>>&& argumentTypes,
+    std::shared_ptr<const Type> returnType)
+    : children_(allChildren(std::move(argumentTypes), returnType)),
+      parameters_{createTypeParameters(children_)} {}
 
 bool FunctionType::equivalent(const Type& other) const {
   if (&other == this) {
@@ -663,28 +682,15 @@ KOSKI_DEFINE_SCALAR_ACCESSOR(TIMESTAMP);
 KOSKI_DEFINE_SCALAR_ACCESSOR(VARCHAR);
 KOSKI_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 KOSKI_DEFINE_SCALAR_ACCESSOR(DATE);
-KOSKI_DEFINE_SCALAR_ACCESSOR(INTERVAL_DAY_TIME);
 KOSKI_DEFINE_SCALAR_ACCESSOR(UNKNOWN);
 
 #undef KOSKI_DEFINE_SCALAR_ACCESSOR
 
-std::shared_ptr<const ShortDecimalType> SHORT_DECIMAL(
-    const uint8_t precision,
-    const uint8_t scale) {
-  return std::make_shared<ShortDecimalType>(precision, scale);
-}
-
-std::shared_ptr<const LongDecimalType> LONG_DECIMAL(
-    const uint8_t precision,
-    const uint8_t scale) {
-  return std::make_shared<LongDecimalType>(precision, scale);
-}
-
 TypePtr DECIMAL(const uint8_t precision, const uint8_t scale) {
-  if (precision <= DecimalType<TypeKind::SHORT_DECIMAL>::kMaxPrecision) {
-    return SHORT_DECIMAL(precision, scale);
+  if (precision <= ShortDecimalType::kMaxPrecision) {
+    return std::make_shared<ShortDecimalType>(precision, scale);
   }
-  return LONG_DECIMAL(precision, scale);
+  return std::make_shared<LongDecimalType>(precision, scale);
 }
 
 TypePtr createScalarType(TypeKind kind) {
@@ -708,20 +714,6 @@ TypePtr createType(TypeKind kind, std::vector<TypePtr>&& children) {
     return UNKNOWN();
   }
   return VELOX_DYNAMIC_TYPE_DISPATCH(createType, kind, std::move(children));
-}
-
-template <>
-TypePtr createType<TypeKind::SHORT_DECIMAL>(
-    std::vector<TypePtr>&& /*children*/) {
-  std::string name{TypeTraits<TypeKind::SHORT_DECIMAL>::name};
-  VELOX_USER_FAIL("Not supported for kind: {}", name);
-}
-
-template <>
-TypePtr createType<TypeKind::LONG_DECIMAL>(
-    std::vector<TypePtr>&& /*children*/) {
-  std::string name{TypeTraits<TypeKind::LONG_DECIMAL>::name};
-  VELOX_USER_FAIL("Not supported for kind: {}", name);
 }
 
 template <>
@@ -851,8 +843,6 @@ TypePtr fromKindToScalerType(TypeKind kind) {
       return DOUBLE();
     case TypeKind::DATE:
       return DATE();
-    case TypeKind::INTERVAL_DAY_TIME:
-      return INTERVAL_DAY_TIME();
     case TypeKind::UNKNOWN:
       return UNKNOWN();
     default:
@@ -864,18 +854,6 @@ TypePtr fromKindToScalerType(TypeKind kind) {
 
 void toTypeSql(const TypePtr& type, std::ostream& out) {
   switch (type->kind()) {
-    case TypeKind::SHORT_DECIMAL: {
-      const auto& decimal = type->asShortDecimal();
-      out << "DECIMAL(" << std::to_string(decimal.precision()) << ", "
-          << std::to_string(decimal.scale()) << ")";
-      break;
-    }
-    case TypeKind::LONG_DECIMAL: {
-      const auto& decimal = type->asLongDecimal();
-      out << "DECIMAL(" << std::to_string(decimal.precision()) << ", "
-          << std::to_string(decimal.scale()) << ")";
-      break;
-    }
     case TypeKind::ARRAY:
       // Append <type>[], e.g. bigint[].
       toTypeSql(type->childAt(0), out);
@@ -911,6 +889,177 @@ void toTypeSql(const TypePtr& type, std::ostream& out) {
       }
       VELOX_UNSUPPORTED("Type is not supported: {}", type->toString());
   }
+}
+
+std::string IntervalDayTimeType::valueToString(int64_t value) const {
+  static const char* kIntervalFormat = "%d %02d:%02d:%02d.%03d";
+
+  int64_t remainMillis = value;
+  const int64_t days = remainMillis / kMillisInDay;
+  remainMillis -= days * kMillisInDay;
+  const int64_t hours = remainMillis / kMillisInHour;
+  remainMillis -= hours * kMillisInHour;
+  const int64_t minutes = remainMillis / kMillisInMinute;
+  remainMillis -= minutes * kMillisInMinute;
+  const int64_t seconds = remainMillis / kMillisInSecond;
+  remainMillis -= seconds * kMillisInSecond;
+  char buf[64];
+  snprintf(
+      buf,
+      sizeof(buf),
+      kIntervalFormat,
+      days,
+      hours,
+      minutes,
+      seconds,
+      remainMillis);
+
+  return buf;
+}
+
+namespace {
+using SingletonTypeMap = std::unordered_map<std::string, TypePtr>;
+
+const SingletonTypeMap& singletonBuiltInTypes() {
+  static const SingletonTypeMap kTypes = {
+      {"BOOLEAN", BOOLEAN()},
+      {"TINYINT", TINYINT()},
+      {"SMALLINT", SMALLINT()},
+      {"INTEGER", INTEGER()},
+      {"BIGINT", BIGINT()},
+      {"REAL", REAL()},
+      {"DOUBLE", DOUBLE()},
+      {"VARCHAR", VARCHAR()},
+      {"VARBINARY", VARBINARY()},
+      {"TIMESTAMP", TIMESTAMP()},
+      {"DATE", DATE()},
+      {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
+      {"UNKNOWN", UNKNOWN()},
+  };
+  return kTypes;
+};
+
+class DecimalParametricType {
+ public:
+  static TypePtr create(const std::vector<TypeParameter>& parameters) {
+    VELOX_USER_CHECK_EQ(2, parameters.size());
+    VELOX_USER_CHECK(parameters[0].kind == TypeParameterKind::kLongLiteral);
+    VELOX_USER_CHECK(parameters[0].longLiteral.has_value());
+    VELOX_USER_CHECK(parameters[1].kind == TypeParameterKind::kLongLiteral);
+    VELOX_USER_CHECK(parameters[1].longLiteral.has_value());
+
+    return DECIMAL(
+        parameters[0].longLiteral.value(), parameters[1].longLiteral.value());
+  }
+};
+
+class ArrayParametricType {
+ public:
+  static TypePtr create(const std::vector<TypeParameter>& parameters) {
+    VELOX_USER_CHECK_EQ(1, parameters.size());
+    VELOX_USER_CHECK(parameters[0].kind == TypeParameterKind::kType);
+    VELOX_USER_CHECK_NOT_NULL(parameters[0].type);
+
+    return ARRAY(parameters[0].type);
+  }
+};
+
+class MapParametricType {
+ public:
+  static TypePtr create(const std::vector<TypeParameter>& parameters) {
+    VELOX_USER_CHECK_EQ(2, parameters.size());
+    VELOX_USER_CHECK(parameters[0].kind == TypeParameterKind::kType);
+    VELOX_USER_CHECK_NOT_NULL(parameters[0].type);
+
+    VELOX_USER_CHECK(parameters[1].kind == TypeParameterKind::kType);
+    VELOX_USER_CHECK_NOT_NULL(parameters[1].type);
+
+    return MAP(parameters[0].type, parameters[1].type);
+  }
+};
+
+class RowParametricType {
+ public:
+  static TypePtr create(const std::vector<TypeParameter>& parameters) {
+    for (const auto& parameter : parameters) {
+      VELOX_USER_CHECK(parameter.kind == TypeParameterKind::kType);
+      VELOX_USER_CHECK_NOT_NULL(parameter.type);
+    }
+
+    std::vector<TypePtr> argumentTypes;
+    argumentTypes.reserve(parameters.size());
+    for (const auto& parameter : parameters) {
+      argumentTypes.push_back(parameter.type);
+    }
+
+    return ROW(std::move(argumentTypes));
+  }
+};
+
+class FunctionParametricType {
+ public:
+  static TypePtr create(const std::vector<TypeParameter>& parameters) {
+    VELOX_USER_CHECK_GE(parameters.size(), 1);
+    for (const auto& parameter : parameters) {
+      VELOX_USER_CHECK(parameter.kind == TypeParameterKind::kType);
+      VELOX_USER_CHECK_NOT_NULL(parameter.type);
+    }
+
+    std::vector<TypePtr> argumentTypes;
+    argumentTypes.reserve(parameters.size() - 1);
+    for (auto i = 0; i < parameters.size() - 1; ++i) {
+      argumentTypes.push_back(parameters[i].type);
+    }
+
+    return FUNCTION(std::move(argumentTypes), parameters.back().type);
+  }
+};
+
+using ParametricTypeMap = std::unordered_map<
+    std::string,
+    std::function<TypePtr(const std::vector<TypeParameter>& parameters)>>;
+
+const ParametricTypeMap& parametricBuiltinTypes() {
+  static const ParametricTypeMap kTypes = {
+      {"DECIMAL", DecimalParametricType::create},
+      {"ARRAY", ArrayParametricType::create},
+      {"MAP", MapParametricType::create},
+      {"ROW", RowParametricType::create},
+      {"FUNCTION", FunctionParametricType::create},
+  };
+  return kTypes;
+}
+
+} // namespace
+
+bool hasType(const std::string& name) {
+  if (singletonBuiltInTypes().count(name)) {
+    return true;
+  }
+
+  if (parametricBuiltinTypes().count(name)) {
+    return true;
+  }
+
+  if (customTypeExists(name)) {
+    return true;
+  }
+
+  return false;
+}
+
+TypePtr getType(
+    const std::string& name,
+    const std::vector<TypeParameter>& parameters) {
+  if (singletonBuiltInTypes().count(name)) {
+    return singletonBuiltInTypes().at(name);
+  }
+
+  if (parametricBuiltinTypes().count(name)) {
+    return parametricBuiltinTypes().at(name)(parameters);
+  }
+
+  return getCustomType(name);
 }
 
 } // namespace facebook::velox

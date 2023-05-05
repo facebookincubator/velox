@@ -28,6 +28,7 @@
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
+#include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
 #include "velox/functions/sparksql/RegisterArithmetic.h"
 #include "velox/functions/sparksql/RegisterCompare.h"
@@ -81,10 +82,14 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
 
-  registerFunction<SubstrFunction, Varchar, Varchar, int32_t>(
+  registerFunction<sparksql::SubstrFunction, Varchar, Varchar, int32_t>(
       {prefix + "substring"});
-  registerFunction<SubstrFunction, Varchar, Varchar, int32_t, int32_t>(
-      {prefix + "substring"});
+  registerFunction<
+      sparksql::SubstrFunction,
+      Varchar,
+      Varchar,
+      int32_t,
+      int32_t>({prefix + "substring"});
   exec::registerStatefulVectorFunction("instr", instrSignatures(), makeInstr);
   exec::registerStatefulVectorFunction(
       "length", lengthSignatures(), makeLength);
@@ -152,8 +157,23 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
 
+  // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
+
+  registerFunction<UnixTimestampFunction, int64_t>({prefix + "unix_timestamp"});
+
+  registerFunction<UnixTimestampParseFunction, int64_t, Varchar>(
+      {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<
+      UnixTimestampParseWithFormatFunction,
+      int64_t,
+      Varchar,
+      Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+
+  // Register bloom filter function
+  exec::registerVectorFunction(
+      prefix + "might_contain", mightContainSignatures(), makeMightContain());
 }
 
 } // namespace sparksql

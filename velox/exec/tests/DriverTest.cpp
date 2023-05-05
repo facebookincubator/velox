@@ -203,7 +203,12 @@ class DriverTest : public OperatorTestBase {
         } else if (operation == ResultOperation::kTerminate) {
           cancelFuture_ = cursor->task()->requestAbort();
         } else if (operation == ResultOperation::kYield) {
-          cursor->task()->requestYield();
+          if (*counter % 2 == 0) {
+            auto time = getCurrentTimeMicro();
+            cursor->task()->yieldIfDue(time - 10);
+          } else {
+            cursor->task()->requestYield();
+          }
         } else if (operation == ResultOperation::kPause) {
           auto& executor = folly::QueuedImmediateExecutor::instance();
           auto future = cursor->task()->requestPause().via(&executor);
@@ -1096,10 +1101,4 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionCalledFromOffThread) {
   }
   ASSERT_ANY_THROW(driver->task()->enterSuspended(driver->state()));
   ASSERT_ANY_THROW(driver->task()->leaveSuspended(driver->state()));
-}
-
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  folly::init(&argc, &argv, false);
-  return RUN_ALL_TESTS();
 }

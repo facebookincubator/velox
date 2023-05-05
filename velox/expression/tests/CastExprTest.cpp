@@ -889,11 +889,11 @@ TEST_F(CastExprTest, decimalToDecimal) {
   testComplexCast(
       "c0",
       makeNullableLongDecimalFlatVector(
-          {buildInt128(-2, 200),
-           buildInt128(-1, 300),
-           buildInt128(0, 400),
-           buildInt128(1, 1),
-           buildInt128(10, 100),
+          {HugeInt::build(-2, 200),
+           HugeInt::build(-1, 300),
+           HugeInt::build(0, 400),
+           HugeInt::build(1, 1),
+           HugeInt::build(10, 100),
            std::nullopt},
           DECIMAL(23, 8)),
       makeNullableShortDecimalFlatVector(
@@ -911,14 +911,14 @@ TEST_F(CastExprTest, decimalToDecimal) {
       testComplexCast(
           "c0",
           makeNullableLongDecimalFlatVector(
-              {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0)),
+              {DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
           makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
       "Cannot cast DECIMAL '99999999999999999999999999999999999999' to DECIMAL(38,1)");
   VELOX_ASSERT_THROW(
       testComplexCast(
           "c0",
           makeNullableLongDecimalFlatVector(
-              {UnscaledLongDecimal::min().unscaledValue()}, DECIMAL(38, 0)),
+              {DecimalUtil::kLongDecimalMin}, DECIMAL(38, 0)),
           makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
       "Cannot cast DECIMAL '-99999999999999999999999999999999999999' to DECIMAL(38,1)");
 }
@@ -1172,4 +1172,23 @@ TEST_F(CastExprTest, dictionaryEncodedNestedInput) {
       makeRowVector({expectedElements}, [](auto row) { return row % 3 == 2; });
   auto expectedArray = makeArrayVector({0, 3}, expectedRow);
   assertEqualVectors(expectedArray, result);
+}
+
+TEST_F(CastExprTest, smallerNonNullRowsSizeThanRows) {
+  // Evaluating Cast in Coalesce as the second argument triggers the copy of
+  // Cast localResult to the result vector. The localResult vector is of the
+  // size nonNullRows which can be smaller than rows. This test ensures that
+  // Cast doesn't attempt to access values out-of-bound and hit errors.
+  exec::registerVectorFunction(
+      "add_dict_with_2_trailing_nulls",
+      TestingDictionaryFunction::signatures(),
+      std::make_unique<TestingDictionaryFunction>(2));
+
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4}),
+       makeNullableFlatVector<double>({std::nullopt, 6, 7, std::nullopt})});
+  auto result = evaluate(
+      "coalesce(c1, cast(add_dict_with_2_trailing_nulls(c0) as double))", data);
+  auto expected = makeNullableFlatVector<double>({4, 6, 7, std::nullopt});
+  assertEqualVectors(expected, result);
 }

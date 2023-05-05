@@ -76,15 +76,6 @@ Date getLiteralValue(const ::substrait::Expression::Literal& literal) {
   return Date(literal.date());
 }
 
-template <>
-IntervalDayTime getLiteralValue(
-    const ::substrait::Expression::Literal& literal) {
-  const auto& interval = literal.interval_day_to_second();
-  int64_t milliseconds = interval.days() * kMillisInDay +
-      interval.seconds() * kMillisInSecond + interval.microseconds() / 1000;
-  return IntervalDayTime(milliseconds);
-}
-
 ArrayVectorPtr makeArrayVector(const VectorPtr& elements) {
   BufferPtr offsets = allocateOffsets(1, elements->pool());
   BufferPtr sizes = allocateOffsets(1, elements->pool());
@@ -143,6 +134,24 @@ VectorPtr constructFlatVector(
     setLiteralValue(child, flatVector, index++);
   }
   return vector;
+}
+
+/// Whether null will be returned on cast failure.
+bool isNullOnFailure(
+    ::substrait::Expression::Cast::FailureBehavior failureBehavior) {
+  switch (failureBehavior) {
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
+      return false;
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL:
+      return true;
+    default:
+      VELOX_NYI(
+          "The given failure behavior is NOT supported: '{}'", failureBehavior);
+  }
 }
 
 } // namespace
@@ -296,7 +305,7 @@ ArrayVectorPtr SubstraitVeloxExprConverter::literalsToArrayVector(
       return makeArrayVector(constructFlatVector<TypeKind::TIMESTAMP>(
           listLiteral, childSize, TIMESTAMP(), pool_));
     case ::substrait::Expression_Literal::LiteralTypeCase::kIntervalDayToSecond:
-      return makeArrayVector(constructFlatVector<TypeKind::INTERVAL_DAY_TIME>(
+      return makeArrayVector(constructFlatVector<TypeKind::BIGINT>(
           listLiteral, childSize, INTERVAL_DAY_TIME(), pool_));
     case ::substrait::Expression_Literal::LiteralTypeCase::kList: {
       VectorPtr elements;
@@ -322,8 +331,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     const RowTypePtr& inputType) {
   auto substraitType = substraitParser_.parseType(castExpr.type());
   auto type = toVeloxType(substraitType->type);
-  // TODO add flag in substrait after. now is set false.
-  bool nullOnFailure = false;
+  bool nullOnFailure = isNullOnFailure(castExpr.failure_behavior());
 
   std::vector<core::TypedExprPtr> inputs{
       toVeloxExpr(castExpr.input(), inputType)};

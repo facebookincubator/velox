@@ -88,16 +88,10 @@ std::shared_ptr<connector::ConnectorQueryCtx>
 OperatorCtx::createConnectorQueryCtx(
     const std::string& connectorId,
     const std::string& planNodeId,
-    bool forScan) const {
+    memory::MemoryPool* connectorPool) const {
   return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
-      forScan ? nullptr
-              : driverCtx_->task->addConnectorWriterPoolLocked(
-                    planNodeId_,
-                    driverCtx_->pipelineId,
-                    driverCtx_->driverId,
-                    operatorType_,
-                    connectorId),
+      connectorPool,
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
       std::make_unique<SimpleExpressionEvaluator>(
           execCtx()->queryCtx(), execCtx()->pool()),
@@ -150,20 +144,7 @@ Operator::Operator(
           driverCtx->pipelineId,
           std::move(planNodeId),
           std::move(operatorType)}),
-      outputType_(std::move(outputType)) {
-  auto memoryUsageTracker = pool()->getMemoryUsageTracker();
-  if (memoryUsageTracker) {
-    memoryUsageTracker->setMakeMemoryCapExceededMessage(
-        [&](memory::MemoryUsageTracker& tracker) {
-          VELOX_DCHECK(pool()->getMemoryUsageTracker().get() == &tracker);
-          std::stringstream out;
-          out << "\nFailed Operator: " << this->operatorType() << "."
-              << this->operatorId() << ": "
-              << succinctBytes(tracker.currentBytes());
-          return out.str();
-        });
-  }
-}
+      outputType_(std::move(outputType)) {}
 
 std::vector<std::unique_ptr<Operator::PlanNodeTranslator>>&
 Operator::translators() {
@@ -294,17 +275,45 @@ OperatorStats Operator::stats(bool clear) {
   return ret;
 }
 
+uint32_t Operator::outputBatchRows(
+    std::optional<uint64_t> averageRowSize) const {
+  const auto& queryConfig = operatorCtx_->task()->queryCtx()->queryConfig();
+
+  if (!averageRowSize.has_value()) {
+    return queryConfig.preferredOutputBatchRows();
+  }
+
+  uint64_t rowSize = averageRowSize.value();
+  VELOX_CHECK_GE(
+      rowSize,
+      0,
+      "The given average row size of {}.{} is negative.",
+      operatorType(),
+      operatorId());
+
+  if (rowSize * queryConfig.maxOutputBatchRows() <
+      queryConfig.preferredOutputBatchBytes()) {
+    return queryConfig.maxOutputBatchRows();
+  }
+  return std::max<uint32_t>(
+      queryConfig.preferredOutputBatchBytes() / rowSize, 1);
+}
+
 void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
   uint64_t now =
       std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::high_resolution_clock::now().time_since_epoch())
           .count();
-  auto wallNanos = (now - start) * 1000;
-  stats_.wlock()->blockedWallNanos += wallNanos;
-  auto statName = fmt::format(
-      "blocked{}WallNanos", blockingReasonToString(reason).substr(1));
-  addRuntimeStat(
-      statName, RuntimeCounter(wallNanos, RuntimeCounter::Unit::kNanos));
+  const auto wallNanos = (now - start) * 1000;
+  const auto blockReason = blockingReasonToString(reason).substr(1);
+
+  auto lockedStats = stats_.wlock();
+  lockedStats->blockedWallNanos += wallNanos;
+  lockedStats->addRuntimeStat(
+      fmt::format("blocked{}WallNanos", blockReason),
+      RuntimeCounter(wallNanos, RuntimeCounter::Unit::kNanos));
+  lockedStats->addRuntimeStat(
+      fmt::format("blocked{}Times", blockReason), RuntimeCounter(1));
 }
 
 std::string Operator::toString() const {

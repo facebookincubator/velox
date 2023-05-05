@@ -31,6 +31,11 @@ void AllocationPool::clear() {
 
 char* AllocationPool::allocateFixed(uint64_t bytes, int32_t alignment) {
   VELOX_CHECK_GT(bytes, 0, "Cannot allocate zero bytes");
+  if (availableInRun() >= bytes && alignment == 1) {
+    auto* result = currentRun().data<char>() + currentOffset_;
+    currentOffset_ += bytes;
+    return result;
+  }
   VELOX_CHECK_EQ(
       __builtin_popcount(alignment), 1, "Alignment can only be power of 2");
 
@@ -71,7 +76,7 @@ char* AllocationPool::allocateFixed(uint64_t bytes, int32_t alignment) {
 void AllocationPool::newRunImpl(memory::MachinePageCount numPages) {
   ++currentRun_;
   if (currentRun_ >= allocation_.numRuns()) {
-    if (allocation_.numRuns()) {
+    if (allocation_.numRuns() > 0) {
       allocations_.push_back(
           std::make_unique<memory::Allocation>(std::move(allocation_)));
     }
@@ -83,10 +88,7 @@ void AllocationPool::newRunImpl(memory::MachinePageCount numPages) {
 }
 
 void AllocationPool::newRun(int32_t preferredSize) {
-  auto numPages =
-      bits::roundUp(preferredSize, memory::AllocationTraits::kPageSize) /
-      memory::AllocationTraits::kPageSize;
-  newRunImpl(numPages);
+  newRunImpl(memory::AllocationTraits::numPages(preferredSize));
 }
 
 } // namespace facebook::velox

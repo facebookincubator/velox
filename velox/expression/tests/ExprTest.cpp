@@ -28,6 +28,8 @@
 #include "velox/expression/ConstantExpr.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
@@ -146,9 +148,12 @@ class ExprTest : public testing::Test, public VectorTestBase {
   }
 
   /// Create constant expression from a variant of primitive type.
-  std::shared_ptr<core::ConstantTypedExpr> makeConstantExpr(variant value) {
-    auto type = value.inferType();
-    return std::make_shared<core::ConstantTypedExpr>(type, std::move(value));
+  std::shared_ptr<core::ConstantTypedExpr> makeConstantExpr(
+      variant value,
+      const TypePtr& type = nullptr) {
+    auto valueType = type != nullptr ? type : value.inferType();
+    return std::make_shared<core::ConstantTypedExpr>(
+        valueType, std::move(value));
   }
 
   // Create LazyVector that produces a flat vector and asserts that is is being
@@ -2355,8 +2360,8 @@ TEST_F(ExprTest, constantToString) {
 }
 
 TEST_F(ExprTest, constantToSql) {
-  auto toSql = [&](const variant& value) {
-    exec::ExprSet exprSet({makeConstantExpr(value)}, execCtx_.get());
+  auto toSql = [&](const variant& value, const TypePtr& type = nullptr) {
+    exec::ExprSet exprSet({makeConstantExpr(value, type)}, execCtx_.get());
     auto sql = exprSet.expr(0)->toSql();
 
     auto input = makeRowVector(ROW({}), 1);
@@ -2397,9 +2402,11 @@ TEST_F(ExprTest, constantToSql) {
       "'1970-01-02T10:17:36.000123000'::TIMESTAMP");
   ASSERT_EQ(toSql(variant::null(TypeKind::TIMESTAMP)), "NULL::TIMESTAMP");
 
-  ASSERT_EQ(toSql(IntervalDayTime(123'456)), "INTERVAL 123456 MILLISECONDS");
   ASSERT_EQ(
-      toSql(variant::null(TypeKind::INTERVAL_DAY_TIME)),
+      toSql(123'456LL, INTERVAL_DAY_TIME()),
+      "'123456'::INTERVAL DAY TO SECOND");
+  ASSERT_EQ(
+      toSql(variant::null(TypeKind::BIGINT), INTERVAL_DAY_TIME()),
       "NULL::INTERVAL DAY TO SECOND");
 
   ASSERT_EQ(toSql(1.5f), "'1.5'::REAL");
@@ -3152,6 +3159,82 @@ TEST_F(ExprTest, mapKeysAndValues) {
   ASSERT_NO_THROW(exprSet->eval(rows, context, result));
 }
 
+TEST_F(ExprTest, maskErrorByNull) {
+  // Checks that errors in arguments of null-propagating functions are ignored
+  // for rows with at least one null.
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<int32_t>({1, 0, 3, 0, 5, 6}),
+       makeNullableFlatVector<int32_t>(
+           {std::nullopt, 10, std::nullopt, 10, std::nullopt, 10})});
+
+  auto resultAB =
+      evaluate("if (c2 is null, 10, CAST(null as BIGINT))  + (c0 / c1)", data);
+  auto resultBA =
+      evaluate("(c0 / c1) + if (c2 is null, 10, CAST(null as BIGINT))", data);
+
+  assertEqualVectors(resultAB, resultBA);
+  VELOX_ASSERT_THROW(evaluate("(c0 / c1) + 10", data), "division by zero");
+  VELOX_ASSERT_THROW(
+      evaluate("(c0 / c1) + (c0 + if(c1 = 0, 10, CAST(null as BIGINT)))", data),
+      "division by zero");
+
+  // Make non null flat input to invoke flat no null path for a subtree.
+  data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<int32_t>({1, 0, 3, 0, 5, 6})});
+  // Register a function that does not support flat no nulls fast path.
+  exec::registerVectorFunction(
+      "plus5",
+      PlusConstantFunction::signatures(),
+      std::make_unique<PlusConstantFunction>(5));
+
+  auto result = evaluate("plus5(c0 + c1)", data);
+  assertEqualVectors(
+      result, makeNullableFlatVector<int32_t>({7, 7, 11, 9, 15, 17}));
+
+  // try permutations of nulls and errors. c1 is 0 every 3rd. c1 is null every
+  // 5th. c2 is 0 every 7th.
+  data = makeRowVector(
+      {makeFlatVector<int32_t>(100, [](auto row) { return row % 3; }),
+       makeFlatVector<int32_t>(
+           100,
+           [](auto row) { return 1 + (row % 5); },
+           [](auto row) { return row % 5 == 0; }),
+       makeFlatVector<int32_t>(100, [](auto row) { return row % 7; })});
+  // All 6 permutations of 0, 1, 2.
+  std::vector<std::vector<int32_t>> permutations = {
+      {0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+  VectorPtr firstResult;
+  VectorPtr firstCoalesceResult;
+  for (auto& permutation : permutations) {
+    result = evaluate(
+        fmt::format(
+            "try((100 / c{}) + (100 / c{}) + (100 / c{}))",
+            permutation[0],
+            permutation[1],
+            permutation[2]),
+        data);
+    if (!firstResult) {
+      firstResult = result;
+    } else {
+      assertEqualVectors(firstResult, result);
+    }
+    auto coalesceResult = evaluate(
+        fmt::format(
+            "try(coalesce((100 / c{}) + (100 / c{}) + (100 / c{}), 9999))",
+            permutation[0],
+            permutation[1],
+            permutation[2]),
+        data);
+    if (!firstCoalesceResult) {
+      firstCoalesceResult = coalesceResult;
+    } else {
+      assertEqualVectors(firstCoalesceResult, coalesceResult);
+    }
+  }
+}
+
 /// Test recursive constant peeling: in general expression evaluation first,
 /// then in cast.
 TEST_F(ExprTest, constantWrap) {
@@ -3608,4 +3691,56 @@ TEST_F(ExprTest, commonSubExpressionWithPeeling) {
       ASSERT_EQ(totalNotDefaultNullFunc, 6);
     }
   }
+}
+
+TEST_F(ExprTest, dictionaryOverLoadedLazy) {
+  // This test verifies a corner case where peeling does not go past a loaded
+  // lazy layer which caused wrong set of inputs being passed to shared
+  // sub-expressions evaluation.
+  // Inputs are of the form c0: Dict1(Lazy(Dict2(Flat1))) and c1: Dict1(Flat
+  constexpr int32_t kSize = 100;
+
+  // Generate inputs of the form c0: Dict1(Lazy(Dict2(Flat1))) and c1:
+  // Dict1(Flat2). Note c0 and c1 have the same top encoding layer.
+
+  // Generate indices that randomly point to different rows of the base flat
+  // layer. This makes sure that wrong values are copied over if there is a bug
+  // in shared sub-expressions evaluation.
+  std::vector<int> indicesUnderLazy = {2, 5, 4, 1, 2, 4, 5, 6, 4, 9};
+  auto smallFlat =
+      makeFlatVector<int64_t>(kSize / 10, [](auto row) { return row * 2; });
+  auto indices = makeIndices(kSize, [&indicesUnderLazy](vector_size_t row) {
+    return indicesUnderLazy[row % 10];
+  });
+  auto lazyDict = std::make_shared<LazyVector>(
+      execCtx_->pool(),
+      smallFlat->type(),
+      kSize,
+      std::make_unique<SimpleVectorLoader>([=](RowSet /*rows*/) {
+        return wrapInDictionary(indices, kSize, smallFlat);
+      }));
+  // Make sure it is loaded, otherwise during evaluation ensureLoaded() would
+  // transform the input vector from Dict1(Lazy(Dict2(Flat1))) to
+  // Dict1((Dict2(Flat1))) which recreates the buffers for the top layers and
+  // disables any peeling that can happen between c0 and c1.
+  lazyDict->loadedVector();
+
+  auto sharedIndices = makeIndices(kSize / 2, [](auto row) { return row * 2; });
+  auto c0 = wrapInDictionary(sharedIndices, kSize / 2, lazyDict);
+  auto c1 = wrapInDictionary(
+      sharedIndices,
+      makeFlatVector<int64_t>(kSize, [](auto row) { return row; }));
+
+  // "(c0 < 5 and c1 < 90)" would peel Dict1 layer in the top level conjunct
+  // expression then when peeled c0 is passed to the inner "c0 < 5" expression,
+  // a call to EvalCtx::getField() removes the lazy layer which ensures the last
+  // dictionary layer is peeled. This means that shared sub-expression
+  // evaluation is done on the lowest flat layer. In the second expression "c0 <
+  // 5" the input is Dict1(Lazy(Dict2(Flat1))) and if peeling only removed till
+  // the lazy layer, the shared sub-expression evaluation gets called on
+  // Lazy(Dict2(Flat1)) which then results in wrong results.
+  auto result = evaluateMultiple(
+      {"(c0 < 5 and c1 < 90)", "c0 < 5"}, makeRowVector({c0, c1}));
+  auto resultFromLazy = evaluate("c0 < 5", makeRowVector({c0, c1}));
+  assertEqualVectors(result[1], resultFromLazy);
 }

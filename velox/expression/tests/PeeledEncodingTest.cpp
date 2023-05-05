@@ -168,11 +168,10 @@ TEST_P(PeeledEncodingBasicTests, allCommonDictionaryLayers) {
   auto input3 =
       wrapInDictionaryLayers(flat2, {&dictWrap3, &dictWrap2, &dictWrap1});
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       {input1, input2, input3}, rows, localDecodedVector, true, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 3);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::DICTIONARY);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_EQ(peeledVectors[0].get(), flat1.get());
   ASSERT_EQ(peeledVectors[1].get(), const1.get());
   ASSERT_EQ(peeledVectors[2].get(), peelWrappings(2, input3).get());
@@ -194,11 +193,10 @@ TEST_P(PeeledEncodingBasicTests, someCommonDictionaryLayers) {
   auto input3 =
       wrapInDictionaryLayers(flat2, {&dictWrap3, &dictWrap2, &dictWrap1});
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       {input1, input2, input3}, rows, localDecodedVector, true, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 3);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::DICTIONARY);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_EQ(peeledVectors[0].get(), peelWrappings(1, input1).get());
   ASSERT_EQ(peeledVectors[1].get(), peelWrappings(1, input2).get());
   ASSERT_EQ(peeledVectors[2].get(), peelWrappings(1, input3).get());
@@ -223,11 +221,10 @@ TEST_P(PeeledEncodingBasicTests, commonDictionaryLayersAndAConstant) {
   auto input3 =
       wrapInDictionaryLayers(flat2, {&dictWrap3, &dictWrap2, &dictWrap1});
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       {input1, input2, input3}, rows, localDecodedVector, true, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 3);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::DICTIONARY);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_EQ(peeledVectors[0].get(), flat1.get());
   if (peeledVectors[1].get() != const1.get()) {
     // In case the constant is resized to match other peeledVector's size.
@@ -245,14 +242,13 @@ TEST_P(PeeledEncodingBasicTests, singleConstantEncodedVector) {
   ///    be peeled.
   ///    Input Vectors: Const1(Complex1)
   ///    Peeled Vectors: Complex
-  ///    Peel: Const1
+  ///    peel: Const1
   auto input1 = complexConst;
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       {input1}, rows, localDecodedVector, true, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 1);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::CONSTANT);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::CONSTANT);
   ASSERT_EQ(peeledVectors[0].get(), peelWrappings(1, input1).get());
   ASSERT_EQ(peeledVectors[0]->encoding(), VectorEncoding::Simple::ARRAY);
   assertEqualVectors(
@@ -274,11 +270,10 @@ TEST_P(PeeledEncodingBasicTests, dictionaryOverConstantOverNullComplex) {
       BaseVector::createNullConstant(complexConst->type(), vectorSize_, pool());
   auto input1 = wrapInDictionaryLayers(nullComplexConst, {&dictWrap1});
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       {input1}, rows, localDecodedVector, true, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 1);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::CONSTANT);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::CONSTANT);
   ASSERT_EQ(peeledVectors[0].get(), peelWrappings(2, input1).get());
   ASSERT_EQ(peeledVectors[0]->encoding(), VectorEncoding::Simple::ARRAY);
   assertEqualVectors(
@@ -300,11 +295,10 @@ TEST_P(PeeledEncodingBasicTests, dictionaryOverConstantOverComplex) {
       vectorSize_, 0, fuzzer->fuzzNotNull(ARRAY(INTEGER()), 1));
   auto input1 = wrapInDictionaryLayers(nonNullComplexConst, {&dictWrap1});
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       {input1}, rows, localDecodedVector, true, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 1);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::DICTIONARY);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_EQ(peeledVectors[0].get(), peelWrappings(2, input1).get());
   ASSERT_EQ(peeledVectors[0]->encoding(), VectorEncoding::Simple::ARRAY);
   assertEqualVectors(
@@ -330,11 +324,10 @@ TEST_P(PeeledEncodingBasicTests, allConstant) {
   auto input2 = const1;
   auto input3 = const2;
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       {input1, input2, input3}, rows, localDecodedVector, true, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 3);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::CONSTANT);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::CONSTANT);
   ASSERT_EQ(peeledVectors[0].get(), complexConst.get());
   ASSERT_EQ(peeledVectors[1].get(), const1.get());
   ASSERT_EQ(peeledVectors[2].get(), const2.get());
@@ -354,10 +347,9 @@ TEST_P(PeeledEncodingBasicTests, emptyInputVectors) {
   //    Peel: Const(generic constant index)
   std::vector<VectorPtr> peeledVectors;
   auto peeledEncoding =
-      PeeledEncoding::Peel({}, rows, localDecodedVector, true, peeledVectors);
+      PeeledEncoding::peel({}, rows, localDecodedVector, true, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 0);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::CONSTANT);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::CONSTANT);
   assertEqualVectors(
       const1, peeledEncoding->wrap(const1->type(), pool(), const1, rows), rows);
 }
@@ -380,11 +372,10 @@ TEST_P(PeeledEncodingBasicTests, dictionaryLayersHavingNulls) {
   auto input3 =
       wrapInDictionaryLayers(flat2, {&dictWrap3, &dictWithNulls, &dictNoNulls});
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       {input1, input2, input3}, rows, localDecodedVector, false, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 3);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::DICTIONARY);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_EQ(peeledVectors[0].get(), peelWrappings(1, input1).get());
   if (peeledVectors[1].get() != const1.get()) {
     // In case the constant is resized to match other peeledVector's size.
@@ -409,11 +400,10 @@ TEST_P(PeeledEncodingBasicTests, constantResize) {
   auto input1 = wrapInDictionaryLayers(flatLarge, {&dictWrap2, &dictWrap1});
   auto input2 = const1;
   std::vector<VectorPtr> peeledVectors;
-  auto peeledEncoding = PeeledEncoding::Peel(
+  auto peeledEncoding = PeeledEncoding::peel(
       {input1, input2}, rows, localDecodedVector, true, peeledVectors);
   ASSERT_EQ(peeledVectors.size(), 2);
-  ASSERT_EQ(
-      peeledEncoding->getWrapEncoding(), VectorEncoding::Simple::DICTIONARY);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_EQ(peeledVectors[0].get(), flatLarge.get());
   ASSERT_NE(peeledVectors[1].get(), const1.get());
   ASSERT_EQ(peeledVectors[1]->encoding(), VectorEncoding::Simple::CONSTANT);
@@ -422,6 +412,31 @@ TEST_P(PeeledEncodingBasicTests, constantResize) {
       input1,
       peeledEncoding->wrap(flatLarge->type(), pool(), flatLarge, rows),
       rows);
+}
+
+TEST_P(PeeledEncodingBasicTests, intermidiateLazyLayer) {
+  LocalDecodedVector localDecodedVector(execCtx_);
+  const SelectivityVector& rows = GetParam().rows;
+  // 11. Ensure peeling also removes a loaded lazy layer.
+  //    Input Vectors: Dict1(Lazy(Dict2(Flat1)))
+  //    Peeled Vectors: Flat1
+  //    Peel: Dict1(Dict2) => collapsed into one dictionary
+
+  auto input1 = fuzzer->wrapInLazyVector(
+      wrapInDictionaryLayers(flat1, {&dictWrap2, &dictWrap1}));
+  // Make sure its loaded so that peeling will go past the lazy layer.
+  input1->loadedVector();
+  std::vector<VectorPtr> peeledVectors;
+  auto peeledEncoding = PeeledEncoding::peel(
+      {input1}, rows, localDecodedVector, true, peeledVectors);
+  ASSERT_EQ(peeledVectors.size(), 1);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::DICTIONARY);
+  ASSERT_TRUE(peeledVectors[0]->isFlatEncoding());
+  // Loading generates a new vector so we compare their contents instead.
+  LocalSelectivityVector traslatedRowsHolder(execCtx_);
+  auto translatedRows =
+      peeledEncoding->translateToInnerRows(rows, traslatedRowsHolder);
+  assertEqualVectors(peeledVectors[0], flat1, *translatedRows);
 }
 
 TEST_F(PeeledEncodingTest, peelingFails) {
@@ -446,7 +461,7 @@ TEST_F(PeeledEncodingTest, peelingFails) {
     auto input1 = wrapInDictionaryLayers(flat1, {&dictWrap1});
     auto input2 = wrapInDictionaryLayers(flat2, {&dictWrap2});
     std::vector<VectorPtr> peeledVectors;
-    auto peeledEncoding = PeeledEncoding::Peel(
+    auto peeledEncoding = PeeledEncoding::peel(
         {input1, input2}, rows, localDecodedVector, true, peeledVectors);
     ASSERT_TRUE(peeledVectors.empty());
     ASSERT_TRUE(!peeledEncoding);
@@ -459,7 +474,7 @@ TEST_F(PeeledEncodingTest, peelingFails) {
     auto input2 = wrapInDictionaryLayers(const1, {&dictWrap1});
     auto input3 = flat2;
     std::vector<VectorPtr> peeledVectors;
-    auto peeledEncoding = PeeledEncoding::Peel(
+    auto peeledEncoding = PeeledEncoding::peel(
         {input1, input2, input3},
         rows,
         localDecodedVector,
@@ -478,7 +493,7 @@ TEST_F(PeeledEncodingTest, peelingFails) {
     auto input2 = const1;
     auto input3 = wrapInDictionaryLayers(flat2, {&dictWrap2, &dictWithNulls});
     std::vector<VectorPtr> peeledVectors;
-    auto peeledEncoding = PeeledEncoding::Peel(
+    auto peeledEncoding = PeeledEncoding::peel(
         {input1, input2, input3},
         rows,
         localDecodedVector,

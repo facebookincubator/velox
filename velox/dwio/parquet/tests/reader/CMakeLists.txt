@@ -37,10 +37,10 @@ target_link_libraries(
   velox_e2e_filter_test_base
   velox_dwio_parquet_writer
   velox_dwio_native_parquet_reader
-  ${LZ4}
-  ${LZO}
-  ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  lz4::lz4
+  lzo2::lzo2
+  zstd::zstd
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_parquet_reader_benchmark ParquetReaderBenchmark.cpp)
@@ -70,6 +70,16 @@ target_link_libraries(
   velox_dwio_parquet_structure_decoder_benchmark
   velox_dwio_native_parquet_reader ${FOLLY_WITH_DEPENDENCIES}
   ${FOLLY_BENCHMARK})
+
+add_executable(velox_dwio_parquet_table_scan_test ParquetTableScanTest.cpp)
+target_link_libraries(
+  velox_dwio_parquet_table_scan_test
+  velox_dwio_parquet_reader
+  velox_exec_test_lib
+  velox_exec
+  velox_hive_connector
+  ${VELOX_LINK_LIBS}
+  ${TEST_LINK_LIBS})
 
 if(${VELOX_ENABLE_ARROW})
 

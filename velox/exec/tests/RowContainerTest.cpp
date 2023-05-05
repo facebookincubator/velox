@@ -463,12 +463,12 @@ TEST_F(RowContainerTest, types) {
       ROW(
           {{"bool_val", BOOLEAN()},
            {"tiny_val", TINYINT()},
-           {"long_decimal_val", LONG_DECIMAL(20, 3)},
+           {"long_decimal_val", DECIMAL(20, 3)},
            {"small_val", SMALLINT()},
            {"int_val", INTEGER()},
            {"long_val", BIGINT()},
            {"float_val", REAL()},
-           {"short_decimal_val", SHORT_DECIMAL(10, 2)},
+           {"short_decimal_val", DECIMAL(10, 2)},
            {"double_val", DOUBLE()},
            {"string_val", VARCHAR()},
            {"array_val", ARRAY(VARCHAR())},
@@ -481,8 +481,8 @@ TEST_F(RowContainerTest, types) {
 
            {"bool_val2", BOOLEAN()},
            {"tiny_val2", TINYINT()},
-           {"long_decimal_val2", LONG_DECIMAL(20, 0)},
-           {"short_decimal_val2", SHORT_DECIMAL(3, 3)},
+           {"long_decimal_val2", DECIMAL(20, 0)},
+           {"short_decimal_val2", DECIMAL(3, 3)},
            {"small_val2", SMALLINT()},
            {"int_val2", INTEGER()},
            {"long_val2", BIGINT()},
@@ -727,6 +727,30 @@ TEST_F(RowContainerTest, rowSizeWithNormalizedKey) {
   char* rows[2];
   auto numRows = data->listRows(&iter, 2, rowSize - 1, rows);
   ASSERT_EQ(numRows, 1);
+}
+
+TEST_F(RowContainerTest, estimateRowSize) {
+  auto numRows = 1000;
+
+  // Make a RowContainer with a fixed-length key column and a variable-length
+  // dependent column.
+  auto rowContainer = makeRowContainer({BIGINT()}, {VARCHAR()});
+  EXPECT_FALSE(rowContainer->estimateRowSize().has_value());
+
+  // Store rows to the container.
+  auto key =
+      vectorMaker_.flatVector<int64_t>(numRows, [](auto row) { return row; });
+  auto dependent = vectorMaker_.flatVector<StringView>(numRows, [](auto row) {
+    return StringView::makeInline(fmt::format("str {}", row));
+  });
+  SelectivityVector allRows(numRows);
+  DecodedVector decodedKey(*key, allRows);
+  DecodedVector decodedDependent(*dependent, allRows);
+  for (size_t i = 0; i < numRows; i++) {
+    auto row = rowContainer->newRow();
+    rowContainer->store(decodedKey, i, row, 0);
+    rowContainer->store(decodedDependent, i, row, 1);
+  }
 }
 
 class AggregateWithAlignment : public Aggregate {

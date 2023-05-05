@@ -202,7 +202,7 @@ void HiveDataSink::appendWriter(
 
   auto sink = dwio::common::DataSink::create(writePath);
   writers_.push_back(std::make_unique<Writer>(
-      options, std::move(sink), *connectorQueryCtx_->aggregatePool()));
+      options, std::move(sink), *connectorQueryCtx_->connectorMemoryPool()));
   writerInfo_.push_back(std::make_shared<HiveWriterInfo>(*writerParameters));
 }
 
@@ -291,7 +291,10 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
           VELOX_UNSUPPORTED("Unsupported insert existing partitions behavior.");
       }
     } else {
-      VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
+      if (HiveConfig::immutablePartitions(connectorQueryCtx_->config())) {
+        VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
+      }
+      return HiveWriterParameters::UpdateMode::kAppend;
     }
   } else {
     return HiveWriterParameters::UpdateMode::kNew;
