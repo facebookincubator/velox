@@ -226,8 +226,8 @@ struct CorrAccumulator : public CovarAccumulator {
   }
 
  private:
-  double m2X_;
-  double m2Y_;
+  double m2X_{0};
+  double m2Y_{0};
 };
 
 struct CorrResultAccessor {
@@ -309,13 +309,13 @@ struct RegrAccumulator : public CovarAccumulator {
     }
 
     m2X_ += m2XOther +
-        count() * countOther * std::pow(meanX() - meanXOther, 2) /
-            (double)(count() + countOther);
+        count() / (count() + countOther) * countOther *
+            std::pow(meanX() - meanXOther, 2);
     CovarAccumulator::merge(countOther, meanXOther, meanYOther, c2Other);
   }
 
  private:
-  double m2X_;
+  double m2X_{0};
 };
 
 struct RegrSlopeResultAccessor {
