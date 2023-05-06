@@ -494,5 +494,6 @@ struct TruncateFunction {
     result = truncate(a, n);
   }
 };
+
 } // namespace
 } // namespace facebook::velox::functions
