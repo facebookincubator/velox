@@ -30,25 +30,6 @@
 namespace facebook::velox::functions::prestosql {
 namespace {
 
-/// This function is only for test.
-// template <typename T>
-// struct SIMDIsJsonScalarFunction {
-//  VELOX_DEFINE_FUNCTION_TYPES(T);
-//
-//  FOLLY_ALWAYS_INLINE void call(bool& result, const arg_type<Json>& json) {
-//    ParserContext ctx(json.data(), json.size());
-//    result = false;
-//
-//    ctx.parseDocument();
-//    if (ctx.jsonDoc.type() == simdjson::ondemand::json_type::number ||
-//        ctx.jsonDoc.type() == simdjson::ondemand::json_type::string ||
-//        ctx.jsonDoc.type() == simdjson::ondemand::json_type::boolean ||
-//        ctx.jsonDoc.type() == simdjson::ondemand::json_type::null) {
-//      result = true;
-//    }
-//  }
-//};
-
 class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
  public:
   JsonBenchmark() : FunctionBenchmarkBase() {
@@ -71,25 +52,6 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
       jsonVector->set(i, velox::StringView(json));
     }
     return jsonVector;
-  }
-
-  void runWithJsonPath(
-      int iter,
-      int vectorSize,
-      const std::string& fnName,
-      const std::string& json,
-      const std::string& jsonPath) {
-    folly::BenchmarkSuspender suspender;
-
-    auto jsonVector = makeJsonData(json, vectorSize);
-    auto jsonPathVector = velox::BaseVector::createConstant(
-        VARCHAR(), jsonPath.data(), vectorSize, execCtx_.pool());
-
-    auto rowVector = vectorMaker_.rowVector({jsonVector, jsonPathVector});
-    auto exprSet =
-        compileExpression(fmt::format("{}(c0, c1)", fnName), rowVector->type());
-    suspender.dismiss();
-    doRun(iter, exprSet, rowVector);
   }
 
   void runWithJson(
@@ -120,7 +82,7 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
   }
 };
 
-void VeloxIsJsonScalar(int iter, int vectorSize, const std::string& fileSize) {
+void FollyIsJsonScalar(int iter, int vectorSize, const std::string& fileSize) {
   folly::BenchmarkSuspender suspender;
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(fileSize);
@@ -138,41 +100,40 @@ void SIMDIsJsonScalar(int iter, int vectorSize, const std::string& fileSize) {
 
 BENCHMARK_DRAW_LINE();
 
-ISJSONSCALAR_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
-    func,
-    VeloxIsJsonScalar,
-    SIMDIsJsonScalar,
-    100,
-    1K)
+BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_1k_size, 100, "1K");
+BENCHMARK_RELATIVE_NAMED_PARAM(SIMDIsJsonScalar, 100_iters_1k_size, 100, "1K");
+BENCHMARK_DRAW_LINE();
 
-ISJSONSCALAR_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
-    func,
-    VeloxIsJsonScalar,
+BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_10k_size, 100, "10K");
+BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDIsJsonScalar,
+    100_iters_10k_size,
     100,
-    10K)
+    "10K");
+BENCHMARK_DRAW_LINE();
 
-ISJSONSCALAR_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
-    func,
-    VeloxIsJsonScalar,
+BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_100k_size, 100, "100K");
+BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDIsJsonScalar,
+    100_iters_100k_size,
     100,
-    100K)
+    "100K");
+BENCHMARK_DRAW_LINE();
 
-ISJSONSCALAR_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
-    func,
-    VeloxIsJsonScalar,
+BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_1000k_size, 100, "1000K");
+BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDIsJsonScalar,
+    100_iters_1000k_size,
     100,
-    1000K)
+    "1000K");
+BENCHMARK_DRAW_LINE();
 
-ISJSONSCALAR_BENCHMARK_NAMED_PARAM_TWO_FUNCS(
-    func,
-    VeloxIsJsonScalar,
+BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_10000k_size, 100, "10000K");
+BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDIsJsonScalar,
+    100_iters_10000k_size,
     100,
-    10000K)
-
+    "10000K");
 BENCHMARK_DRAW_LINE();
 
 } // namespace

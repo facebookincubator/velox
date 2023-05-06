@@ -21,28 +21,25 @@
 namespace facebook::velox::functions {
 void registerJsonFunctions(const std::string& prefix) {
   registerJsonType();
+
   registerFunction<SIMDIsJsonScalarFunction, bool, Json>(
       {prefix + "is_json_scalar"});
-  registerFunction<SIMDJsonExtractScalarFunction, Varchar, Json, Varchar>(
+  registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
       {prefix + "json_extract_scalar"});
-  registerFunction<SIMDJsonExtractFunction, Varchar, Json, Varchar>(
-      {prefix + "json_extract"});
-  registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
+  registerFunction<JsonArrayLengthFunction, int64_t, Json>(
       {prefix + "json_array_length"});
-  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, bool>(
+  registerFunction<JsonArrayContainsFunction, bool, Json, bool>(
       {prefix + "json_array_contains"});
-  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, int64_t>(
+  registerFunction<JsonArrayContainsFunction, bool, Json, int64_t>(
       {prefix + "json_array_contains"});
-  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, double>(
+  registerFunction<JsonArrayContainsFunction, bool, Json, double>(
       {prefix + "json_array_contains"});
-  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, Varchar>(
+  registerFunction<JsonArrayContainsFunction, bool, Json, Varchar>(
       {prefix + "json_array_contains"});
-  registerFunction<SIMDJsonSizeFunction, int64_t, Json, Varchar>(
+  registerFunction<JsonSizeFunction, int64_t, Json, Varchar>(
       {prefix + "json_size"});
-  registerFunction<SIMDJsonParseFunction, Varchar, Varchar>(
-      {prefix + "json_parse"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, prefix + "json_parse");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_json_format, prefix + "json_format");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, prefix + "json_parse");
 }
 
 } // namespace facebook::velox::functions
