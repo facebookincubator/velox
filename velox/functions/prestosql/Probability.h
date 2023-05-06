@@ -43,5 +43,18 @@ struct BetaCDFFunction {
   }
 };
 
+template <typename T>
+struct NormalCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  // The reference for the computation of normal cumulative distribution
+  // here: https://mathworld.wolfram.com/NormalDistribution.html
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double m, double sd, double value) {
+    VELOX_USER_CHECK_GT(sd, 0, "standardDeviation must be > 0");
+
+    result = 0.5 * (1 + erf((value - m) / (sd * sqrt(2))));
+  }
+};
+
 } // namespace
 } // namespace facebook::velox::functions
