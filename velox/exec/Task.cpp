@@ -78,6 +78,17 @@ std::string errorMessageImpl(const std::exception_ptr& exception) {
   return message;
 }
 
+// Add 'running time' metrics from CpuWallTiming structures to have them
+// available aggregated per thread.
+void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
+  op.runtimeStats["runningAddInputWallNanos"] =
+      RuntimeMetric(op.addInputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
+  op.runtimeStats["runningGetOutputWallNanos"] =
+      RuntimeMetric(op.getOutputTiming.wallNanos, RuntimeCounter::Unit::kNanos);
+  op.runtimeStats["runningFinishWallNanos"] =
+      RuntimeMetric(op.finishTiming.wallNanos, RuntimeCounter::Unit::kNanos);
+}
+
 } // namespace
 
 std::atomic<uint64_t> Task::numCreatedTasks_ = 0;
@@ -747,8 +758,8 @@ void Task::createDriversLocked(
   // need to track down initialization of operator stats separately as well.
   if ((groupedExecutionDrivers & !initializedGroupedOpStats_) ||
       (!groupedExecutionDrivers & !initializedUngroupedOpStats_)) {
-    groupedExecutionDrivers ? initializedGroupedOpStats_
-                            : initializedUngroupedOpStats_ = true;
+    (groupedExecutionDrivers ? initializedGroupedOpStats_
+                             : initializedUngroupedOpStats_) = true;
     size_t firstPipelineDriverIndex{0};
     for (auto pipeline = 0; pipeline < numPipelines; ++pipeline) {
       auto& factory = driverFactories_[pipeline];
@@ -956,10 +967,7 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
   ++taskStats_.numQueuedSplits;
 
   if (split.connectorSplit) {
-    // Tests may use the same splits list many times. Make sure there
-    // is no async load pending on any, if, for example, a test did
-    // not process all its splits.
-    split.connectorSplit->dataSource.reset();
+    VELOX_CHECK_NULL(split.connectorSplit->dataSource);
   }
 
   if (!split.hasGroup()) {
@@ -1318,13 +1326,16 @@ bool Task::allPeersFinished(
       break;
     }
   }
-  VELOX_CHECK(
+  VELOX_CHECK_NOT_NULL(
       callerShared, "Caller of Task::allPeersFinished is not a valid Driver");
-  state.drivers.push_back(callerShared);
-  state.promises.emplace_back(
-      fmt::format("Task::allPeersFinished {}", taskId_));
-  *future = state.promises.back().getSemiFuture();
-
+  // NOTE: we only set promise for the driver caller if it wants to wait for all
+  // the peers to finish.
+  if (future != nullptr) {
+    state.drivers.push_back(callerShared);
+    state.promises.emplace_back(
+        fmt::format("Task::allPeersFinished {}", taskId_));
+    *future = state.promises.back().getSemiFuture();
+  }
   return false;
 }
 
@@ -1617,6 +1628,7 @@ void Task::addOperatorStats(OperatorStats& stats) {
       stats.operatorId <
           taskStats_.pipelineStats[stats.pipelineId].operatorStats.size());
   aggregateOperatorRuntimeStats(stats.runtimeStats);
+  addRunningTimeOperatorMetrics(stats);
   taskStats_.pipelineStats[stats.pipelineId]
       .operatorStats[stats.operatorId]
       .add(stats);
@@ -1642,6 +1654,7 @@ TaskStats Task::taskStats() const {
     for (auto& op : driver->operators()) {
       auto statsCopy = op->stats(false);
       aggregateOperatorRuntimeStats(statsCopy.runtimeStats);
+      addRunningTimeOperatorMetrics(statsCopy);
       taskStats.pipelineStats[statsCopy.pipelineId]
           .operatorStats[statsCopy.operatorId]
           .add(statsCopy);

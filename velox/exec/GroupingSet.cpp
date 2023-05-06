@@ -526,7 +526,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  const auto currentUsage = pool_.getCurrentBytes();
+  const auto currentUsage = pool_.currentBytes();
   if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig_->spillableReservationGrowthPct / 100;
@@ -713,6 +713,99 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* FOLLY_NONNULL row) {
         row, mergeSelection_, mergeArgs_, false);
   }
   mergeSelection_.setValid(input.currentIndex(), false);
+}
+void GroupingSet::abandonPartialAggregation() {
+  abandonedPartialAggregation_ = true;
+  allSupportToIntermediate_ = true;
+  for (auto& aggregate : aggregates_) {
+    if (!aggregate->supportsToIntermediate()) {
+      allSupportToIntermediate_ = false;
+    }
+  }
+  if (!allSupportToIntermediate_) {
+    VELOX_CHECK_EQ(table_->rows()->numRows(), 0)
+    intermediateRows_ = table_->moveRows();
+    intermediateRows_->clear();
+  }
+  table_ = nullptr;
+}
+
+void GroupingSet::toIntermediate(
+    const RowVectorPtr& input,
+    RowVectorPtr& result) {
+  VELOX_CHECK(abandonedPartialAggregation_);
+  VELOX_CHECK(result.unique());
+  if (!isRawInput_) {
+    result = input;
+    return;
+  }
+  auto numRows = input->size();
+  activeRows_.resize(numRows);
+  activeRows_.setAll();
+  masks_.addInput(input, activeRows_);
+
+  result->resize(numRows);
+  if (intermediateRows_) {
+    intermediateGroups_.resize(numRows);
+    for (auto i = 0; i < numRows; ++i) {
+      intermediateGroups_[i] = intermediateRows_->newRow();
+      intermediateRows_->setAllNull(intermediateGroups_[i]);
+    }
+    intermediateRowNumbers_.resize(numRows);
+    std::iota(
+        intermediateRowNumbers_.begin(), intermediateRowNumbers_.end(), 0);
+  }
+
+  for (auto i = 0; i < keyChannels_.size(); ++i) {
+    result->childAt(i) = input->childAt(keyChannels_[i]);
+  }
+  for (auto i = 0; i < aggregates_.size(); ++i) {
+    auto& aggregateVector = result->childAt(i + keyChannels_.size());
+    VELOX_CHECK(aggregateVector.unique());
+    aggregateVector->resize(input->size());
+    const auto& rows = getSelectivityVector(i);
+    // Check if mask is false for all rows.
+    if (!rows.hasSelections()) {
+      // The aggregate produces its initial state for all
+      // rows. Initialize one, then read the same data into each
+      // element of flat result. This is most often a null but for
+      // example count produces a zero, so we use the per-aggregate
+      // functions.
+      aggregates_[i]->initializeNewGroups(
+          intermediateGroups_.data(),
+          folly::Range<const vector_size_t*>(
+              intermediateRowNumbers_.data(), 1));
+      firstGroup_.resize(numRows);
+      std::fill(firstGroup_.begin(), firstGroup_.end(), intermediateGroups_[0]);
+      aggregates_[i]->extractAccumulators(
+          firstGroup_.data(), intermediateGroups_.size(), &aggregateVector);
+      aggregates_[i]->clear();
+      continue;
+    }
+
+    populateTempVectors(i, input);
+
+    if (aggregates_[i]->supportsToIntermediate()) {
+      aggregates_[i]->toIntermediate(rows, tempVectors_, aggregateVector);
+      continue;
+    }
+    aggregates_[i]->initializeNewGroups(
+        intermediateGroups_.data(), intermediateRowNumbers_);
+
+    aggregates_[i]->addRawInput(
+        intermediateGroups_.data(), rows, tempVectors_, false);
+
+    aggregates_[i]->extractAccumulators(
+        intermediateGroups_.data(),
+        intermediateGroups_.size(),
+        &aggregateVector);
+    aggregates_[i]->clear();
+  }
+  if (intermediateRows_) {
+    intermediateRows_->eraseRows(folly::Range<char**>(
+        intermediateGroups_.data(), intermediateGroups_.size()));
+  }
+  tempVectors_.clear();
 }
 
 std::optional<int64_t> GroupingSet::estimateRowSize() const {

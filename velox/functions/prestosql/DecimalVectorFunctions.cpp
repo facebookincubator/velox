@@ -146,8 +146,53 @@ class DecimalUnaryBaseFunction : public exec::VectorFunction {
     return result->asUnchecked<FlatVector<R>>()->mutableRawValues();
   }
 
- private:
   const uint8_t aRescale_;
+};
+
+template <typename A /* Argument */>
+class DecimalBetweenFunction : public exec::VectorFunction {
+ public:
+  DecimalBetweenFunction() {}
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& resultType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    prepareResults(rows, resultType, context, result);
+    // Second and third arguments must always be constant.
+    VELOX_CHECK(args[1]->isConstantEncoding() && args[2]->isConstantEncoding());
+    auto constantB = args[1]->asUnchecked<SimpleVector<A>>()->valueAt(0);
+    auto constantC = args[2]->asUnchecked<SimpleVector<A>>()->valueAt(0);
+    if (args[0]->isFlatEncoding()) {
+      // Fast path if first argument is flat.
+      auto flatA = args[0]->asUnchecked<FlatVector<A>>();
+      auto rawA = flatA->mutableRawValues();
+      context.applyToSelectedNoThrow(rows, [&](auto row) {
+        result->asUnchecked<FlatVector<bool>>()->set(
+            row, rawA[row] >= constantB && rawA[row] <= constantC);
+      });
+    } else {
+      // Path if first argument is encoded.
+      exec::DecodedArgs decodedArgs(rows, args, context);
+      auto a = decodedArgs.at(0);
+      context.applyToSelectedNoThrow(rows, [&](auto row) {
+        auto value = a->valueAt<A>(row);
+        result->asUnchecked<FlatVector<bool>>()->set(
+            row, value >= constantB && value <= constantC);
+      });
+    }
+  }
+
+ private:
+  void prepareResults(
+      const SelectivityVector& rows,
+      const TypePtr& resultType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
+    context.ensureWritable(rows, resultType, result);
+    result->clearNulls(rows);
+  }
 };
 
 class Addition {
@@ -164,17 +209,13 @@ class Addition {
     int128_t aRescaled;
     int128_t bRescaled;
     if (__builtin_mul_overflow(
-            a.unscaledValue(),
-            DecimalUtil::kPowersOfTen[aRescale],
-            &aRescaled) ||
+            a, DecimalUtil::kPowersOfTen[aRescale], &aRescaled) ||
         __builtin_mul_overflow(
-            b.unscaledValue(),
-            DecimalUtil::kPowersOfTen[bRescale],
-            &bRescaled)) {
-      VELOX_ARITHMETIC_ERROR(
-          "Decimal overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
+            b, DecimalUtil::kPowersOfTen[bRescale], &bRescaled)) {
+      VELOX_ARITHMETIC_ERROR("Decimal overflow: {} + {}", a, b);
     }
     r = checkedPlus<R>(R(aRescaled), R(bRescaled));
+    DecimalUtil::valueInRange(r);
   }
 
   inline static uint8_t
@@ -210,17 +251,13 @@ class Subtraction {
     int128_t aRescaled;
     int128_t bRescaled;
     if (__builtin_mul_overflow(
-            a.unscaledValue(),
-            DecimalUtil::kPowersOfTen[aRescale],
-            &aRescaled) ||
+            a, DecimalUtil::kPowersOfTen[aRescale], &aRescaled) ||
         __builtin_mul_overflow(
-            b.unscaledValue(),
-            DecimalUtil::kPowersOfTen[bRescale],
-            &bRescaled)) {
-      VELOX_ARITHMETIC_ERROR(
-          "Decimal overflow: {} - {}", a.unscaledValue(), b.unscaledValue());
+            b, DecimalUtil::kPowersOfTen[bRescale], &bRescaled)) {
+      VELOX_ARITHMETIC_ERROR("Decimal overflow: {} - {}", a, b);
     }
     r = checkedMinus<R>(R(aRescaled), R(bRescaled));
+    DecimalUtil::valueInRange(r);
   }
 
   inline static uint8_t
@@ -246,6 +283,7 @@ class Multiply {
     r = checkedMultiply<R>(
         checkedMultiply<R>(R(a), R(b)),
         R(DecimalUtil::kPowersOfTen[aRescale + bRescale]));
+    DecimalUtil::valueInRange(r);
   }
 
   inline static uint8_t
@@ -268,6 +306,7 @@ class Divide {
   inline static void
   apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t /*bRescale*/) {
     DecimalUtil::divideWithRoundUp<R, A, B>(r, a, b, false, aRescale, 0);
+    DecimalUtil::valueInRange(r);
   }
 
   inline static uint8_t
@@ -294,7 +333,7 @@ class Round {
     auto temp = a;
     DecimalUtil::divideWithRoundUp<A, A, int128_t>(
         temp, a, DecimalUtil::kPowersOfTen[aRescale], false, 0, 0);
-    r = R(temp.unscaledValue());
+    r = temp;
   }
 
   inline static uint8_t computeRescaleFactor(
@@ -317,7 +356,7 @@ class Abs {
   template <typename R, typename A>
   inline static void apply(R& r, const A& a, uint8_t /*aRescale*/) {
     if constexpr (std::is_same_v<R, A>) {
-      r = a.unscaledValue() < 0 ? R(-a.unscaledValue()) : a;
+      r = a < 0 ? R(-a) : a;
     }
   }
 
@@ -340,7 +379,7 @@ class Negate {
   template <typename R, typename A>
   inline static void apply(R& r, const A& a, uint8_t /*aRescale*/) {
     if constexpr (std::is_same_v<R, A>) {
-      r = R(-a.unscaledValue());
+      r = R(-a);
     }
   }
 
@@ -431,6 +470,18 @@ decimalAbsNegateSignature() {
               .build()};
 }
 
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+decimalBetweenSignature() {
+  return {exec::FunctionSignatureBuilder()
+              .integerVariable("a_precision")
+              .integerVariable("a_scale")
+              .returnType("boolean")
+              .argumentType("DECIMAL(a_precision, a_scale)")
+              .argumentType("DECIMAL(a_precision, a_scale)")
+              .argumentType("DECIMAL(a_precision, a_scale)")
+              .build()};
+}
+
 template <typename Operation>
 std::shared_ptr<exec::VectorFunction> createDecimalUnary(
     const std::string& /*name*/,
@@ -440,22 +491,19 @@ std::shared_ptr<exec::VectorFunction> createDecimalUnary(
   auto [rPrecision, rScale] =
       Operation::computeResultPrecisionScale(aPrecision, aScale);
   uint8_t aRescale = Operation::computeRescaleFactor(aScale, 0, rScale);
-  if (aType->kind() == TypeKind::SHORT_DECIMAL) {
-    return std::make_shared<DecimalUnaryBaseFunction<
-        UnscaledShortDecimal /*result*/,
-        UnscaledShortDecimal,
-        Operation>>(aRescale);
-  } else if (aType->kind() == TypeKind::LONG_DECIMAL) {
-    if (rPrecision <= DecimalType<TypeKind::SHORT_DECIMAL>::kMaxPrecision) {
-      return std::make_shared<DecimalUnaryBaseFunction<
-          UnscaledShortDecimal /*result*/,
-          UnscaledLongDecimal,
-          Operation>>(aRescale);
+  if (aType->isShortDecimal()) {
+    return std::make_shared<
+        DecimalUnaryBaseFunction<int64_t /*result*/, int64_t, Operation>>(
+        aRescale);
+  } else if (aType->isLongDecimal()) {
+    if (rPrecision <= ShortDecimalType::kMaxPrecision) {
+      return std::make_shared<
+          DecimalUnaryBaseFunction<int64_t /*result*/, int128_t, Operation>>(
+          aRescale);
     }
-    return std::make_shared<DecimalUnaryBaseFunction<
-        UnscaledLongDecimal /*result*/,
-        UnscaledLongDecimal,
-        Operation>>(aRescale);
+    return std::make_shared<
+        DecimalUnaryBaseFunction<int128_t /*result*/, int128_t, Operation>>(
+        aRescale);
   }
   VELOX_UNSUPPORTED();
 }
@@ -472,47 +520,67 @@ std::shared_ptr<exec::VectorFunction> createDecimalFunction(
       aPrecision, aScale, bPrecision, bScale);
   uint8_t aRescale = Operation::computeRescaleFactor(aScale, bScale, rScale);
   uint8_t bRescale = Operation::computeRescaleFactor(bScale, aScale, rScale);
-  if (aType->kind() == TypeKind::SHORT_DECIMAL) {
-    if (bType->kind() == TypeKind::SHORT_DECIMAL) {
-      if (rPrecision > DecimalType<TypeKind::SHORT_DECIMAL>::kMaxPrecision) {
+  if (aType->isShortDecimal()) {
+    if (bType->isShortDecimal()) {
+      if (rPrecision > ShortDecimalType::kMaxPrecision) {
         // Arguments are short decimals and result is a long decimal.
         return std::make_shared<DecimalBaseFunction<
-            UnscaledLongDecimal /*result*/,
-            UnscaledShortDecimal,
-            UnscaledShortDecimal,
+            int128_t /*result*/,
+            int64_t,
+            int64_t,
             Operation>>(aRescale, bRescale);
       } else {
         // Arguments are short decimals and result is a short decimal.
         return std::make_shared<DecimalBaseFunction<
-            UnscaledShortDecimal /*result*/,
-            UnscaledShortDecimal,
-            UnscaledShortDecimal,
+            int64_t /*result*/,
+            int64_t,
+            int64_t,
             Operation>>(aRescale, bRescale);
       }
     } else {
       // LHS is short decimal and rhs is a long decimal, result is long decimal.
       return std::make_shared<DecimalBaseFunction<
-          UnscaledLongDecimal /*result*/,
-          UnscaledShortDecimal,
-          UnscaledLongDecimal,
+          int128_t /*result*/,
+          int64_t,
+          int128_t,
           Operation>>(aRescale, bRescale);
     }
   } else {
-    if (bType->kind() == TypeKind::SHORT_DECIMAL) {
+    if (bType->isShortDecimal()) {
       // LHS is long decimal and rhs is short decimal, result is a long decimal.
       return std::make_shared<DecimalBaseFunction<
-          UnscaledLongDecimal /*result*/,
-          UnscaledLongDecimal,
-          UnscaledShortDecimal,
+          int128_t /*result*/,
+          int128_t,
+          int64_t,
           Operation>>(aRescale, bRescale);
     } else {
       // Arguments and result are all long decimals.
       return std::make_shared<DecimalBaseFunction<
-          UnscaledLongDecimal /*result*/,
-          UnscaledLongDecimal,
-          UnscaledLongDecimal,
+          int128_t /*result*/,
+          int128_t,
+          int128_t,
           Operation>>(aRescale, bRescale);
     }
+  }
+  VELOX_UNSUPPORTED();
+}
+
+std::shared_ptr<exec::VectorFunction> createDecimalBetweenFunction(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+  auto aType = inputArgs[0].type;
+  auto bType = inputArgs[1].type;
+  auto cType = inputArgs[2].type;
+  if (aType->isShortDecimal()) {
+    VELOX_CHECK(bType->isShortDecimal());
+    VELOX_CHECK(cType->isShortDecimal());
+    // Arguments are short decimals.
+    return std::make_shared<DecimalBetweenFunction<int64_t>>();
+  } else {
+    VELOX_CHECK(bType->isLongDecimal());
+    VELOX_CHECK(cType->isLongDecimal());
+    // Arguments are long decimals.
+    return std::make_shared<DecimalBetweenFunction<int128_t>>();
   }
   VELOX_UNSUPPORTED();
 }
@@ -552,4 +620,9 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_negate,
     decimalAbsNegateSignature(),
     createDecimalUnary<Negate>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_between,
+    decimalBetweenSignature(),
+    createDecimalBetweenFunction);
 }; // namespace facebook::velox::functions

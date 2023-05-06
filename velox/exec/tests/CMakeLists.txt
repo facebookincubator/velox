@@ -13,15 +13,17 @@
 # limitations under the License.
 add_subdirectory(utils)
 
-add_executable(aggregate_companion_adapter_test
-               AggregateCompanionAdapterTest.cpp)
+add_executable(
+  aggregate_companion_functions_test
+  AggregateCompanionAdapterTest.cpp AggregateCompanionSignaturesTest.cpp
+  DummyAggregateFunction.cpp)
 
 add_test(
-  NAME aggregate_companion_adapter_test
-  COMMAND aggregate_companion_adapter_test
+  NAME aggregate_companion_functions_test
+  COMMAND aggregate_companion_functions_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(aggregate_companion_adapter_test velox_exec
+target_link_libraries(aggregate_companion_functions_test velox_exec
                       velox_function_registry gtest gtest_main)
 
 add_executable(
@@ -52,6 +54,7 @@ add_executable(
   PlanNodeSerdeTest.cpp
   PlanNodeToStringTest.cpp
   PrintPlanWithStatsTest.cpp
+  ProbeOperatorStateTest.cpp
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
   MemoryCapExceededTest.cpp
@@ -113,22 +116,21 @@ target_link_libraries(
   velox_type
   velox_vector
   velox_vector_fuzzer
-  ${Boost_ATOMIC_LIBRARIES}
-  ${Boost_CONTEXT_LIBRARIES}
-  ${Boost_DATE_TIME_LIBRARIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
-  ${Boost_PROGRAM_OPTIONS_LIBRARIES}
-  ${Boost_REGEX_LIBRARIES}
-  ${Boost_THREAD_LIBRARIES}
-  ${Boost_SYSTEM_LIBRARIES}
+  Boost::atomic
+  Boost::context
+  Boost::date_time
+  Boost::filesystem
+  Boost::program_options
+  Boost::regex
+  Boost::thread
+  Boost::system
   gtest
   gtest_main
   gmock
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${DOUBLE_CONVERSION}
+  Folly::folly
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})
 
 target_link_libraries(
@@ -148,22 +150,21 @@ target_link_libraries(
   velox_type
   velox_vector
   velox_vector_fuzzer
-  ${Boost_ATOMIC_LIBRARIES}
-  ${Boost_CONTEXT_LIBRARIES}
-  ${Boost_DATE_TIME_LIBRARIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
-  ${Boost_PROGRAM_OPTIONS_LIBRARIES}
-  ${Boost_REGEX_LIBRARIES}
-  ${Boost_THREAD_LIBRARIES}
-  ${Boost_SYSTEM_LIBRARIES}
+  Boost::atomic
+  Boost::context
+  Boost::date_time
+  Boost::filesystem
+  Boost::program_options
+  Boost::regex
+  Boost::thread
+  Boost::system
   gtest
   gtest_main
   gmock
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${DOUBLE_CONVERSION}
+  Folly::folly
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})
 
 add_executable(velox_in_10_min_demo VeloxIn10MinDemo.cpp)

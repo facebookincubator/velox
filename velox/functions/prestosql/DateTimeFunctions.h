@@ -79,6 +79,22 @@ struct TimestampWithTimezoneSupport {
 
     return timestamp;
   }
+
+  // Get offset in seconds with GMT from timestampWithTimezone
+  FOLLY_ALWAYS_INLINE
+  int64_t getGMTOffsetSec(
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    Timestamp inputTimeStamp = this->toTimestamp(timestampWithTimezone);
+    // Get the given timezone name
+    auto timezone =
+        util::getTimeZoneName(*timestampWithTimezone.template at<1>());
+    auto* timezonePtr = date::locate_zone(timezone);
+    // Create a copy of inputTimeStamp and convert it to GMT
+    auto gmtTimeStamp = inputTimeStamp;
+    gmtTimeStamp.toGMT(*timezonePtr);
+    // Get offset in seconds with GMT and convert to hour
+    return (inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds());
+  }
 };
 
 } // namespace
@@ -1077,6 +1093,53 @@ struct ParseDateTimeFunction {
     dateTimeResult.timestamp.toGMT(timezoneId);
     result = std::make_tuple(dateTimeResult.timestamp.toMillis(), timezoneId);
     return true;
+  }
+};
+
+template <typename T>
+struct CurrentDateFunction {
+  const date::time_zone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
+    timeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(Date& result) {
+    auto now = Timestamp::now();
+    if (timeZone_ != nullptr) {
+      now.toTimezone(*timeZone_);
+    }
+    const std::chrono::
+        time_point<std::chrono::system_clock, std::chrono::milliseconds>
+            localTimepoint(std::chrono::milliseconds(now.toMillis()));
+    auto daysSinceEpoch = std::chrono::floor<date::days>(localTimepoint);
+    result = Date(daysSinceEpoch.time_since_epoch().count());
+  }
+};
+
+template <typename T>
+struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& input) {
+    // Get offset in seconds with GMT and convert to hour
+    auto offset = this->getGMTOffsetSec(input);
+    result = offset / 3600;
+  }
+};
+
+template <typename T>
+struct TimeZoneMinuteFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& input) {
+    // Get offset in seconds with GMT and convert to minute
+    auto offset = this->getGMTOffsetSec(input);
+    result = (offset / 60) % 60;
   }
 };
 

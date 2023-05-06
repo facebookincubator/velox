@@ -19,7 +19,11 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include "folly/ssl/OpenSSLHash.h"
+#pragma GCC diagnostic pop
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/Udf.h"
@@ -400,6 +404,19 @@ struct ToBigEndian64 {
     auto value = folly::Endian::big(input);
     result.setNoCopy(
         StringView(reinterpret_cast<const char*>(&value), kTypeLength));
+  }
+};
+
+template <typename T>
+struct ToIEEE754Bits64 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<double>& input) {
+    result.resize(64);
+    bits::toString((const uint64_t*)&input, 0, 64, result.data());
+    std::reverse(result.data(), result.data() + 64);
   }
 };
 

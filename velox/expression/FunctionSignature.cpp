@@ -66,7 +66,7 @@ std::string TypeSignature::toString() const {
   return out.str();
 }
 
-std::string FunctionSignature::toString() const {
+std::string FunctionSignature::argumentsToString() const {
   std::vector<std::string> arguments;
   auto size = argumentTypes_.size();
   arguments.reserve(size);
@@ -79,11 +79,16 @@ std::string FunctionSignature::toString() const {
     }
   }
   std::ostringstream out;
-  out << "(" << folly::join(",", arguments);
+  out << folly::join(",", arguments);
   if (variableArity_) {
     out << "...";
   }
-  out << ") -> " << returnType_.toString();
+  return out.str();
+}
+
+std::string FunctionSignature::toString() const {
+  std::ostringstream out;
+  out << "(" << argumentsToString() << ") -> " << returnType_.toString();
   return out.str();
 }
 
@@ -161,7 +166,8 @@ void validateBaseTypeAndCollectTypeParams(
     }
 
     if (!isPositiveInteger(typeName) &&
-        !tryMapNameToTypeKind(typeName).has_value()) {
+        !tryMapNameToTypeKind(typeName).has_value() &&
+        !isDecimalName(typeName)) {
       VELOX_USER_CHECK(hasType(typeName), "Type doesn't exist: {}", typeName);
     }
 
@@ -249,6 +255,13 @@ FunctionSignature::FunctionSignature(
       constantArguments_{std::move(constantArguments)},
       variableArity_{variableArity} {
   validate(variables_, returnType_, argumentTypes_, constantArguments_);
+}
+
+std::string AggregateFunctionSignature::toString() const {
+  std::ostringstream out;
+  out << "(" << argumentsToString() << ") -> " << intermediateType_.toString()
+      << " -> " << returnType().toString();
+  return out.str();
 }
 
 FunctionSignaturePtr FunctionSignatureBuilder::build() {

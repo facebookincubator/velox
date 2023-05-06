@@ -24,6 +24,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -58,87 +59,6 @@ std::function<void(Task* task)> makeAddSplit(
     }
     noMoreSplits = true;
   };
-}
-
-// Shuffle batches.
-void shuffleBatches(std::vector<RowVectorPtr>& batches) {
-  std::default_random_engine rng(1234);
-  std::shuffle(std::begin(batches), std::end(batches), rng);
-}
-
-// Make batches with random data.
-//
-// NOTE: if 'batchSize' is 0, then 'numBatches' is ignored and the function
-// returns a single empty batch.
-std::vector<RowVectorPtr> makeBatches(
-    int32_t batchSize,
-    int32_t numBatches,
-    const RowTypePtr& rowType,
-    memory::MemoryPool* pool,
-    double nullRatio = 0.1,
-    bool shuffle = true) {
-  VELOX_CHECK_GE(batchSize, 0);
-  VELOX_CHECK_GT(numBatches, 0);
-
-  std::vector<RowVectorPtr> batches;
-  batches.reserve(numBatches);
-  if (batchSize != 0) {
-    VectorFuzzer::Options options;
-    options.vectorSize = batchSize;
-    options.nullRatio = nullRatio;
-    VectorFuzzer fuzzer(options, pool);
-    for (int32_t i = 0; i < numBatches; ++i) {
-      batches.push_back(fuzzer.fuzzInputRow(rowType));
-    }
-  } else {
-    batches.push_back(RowVector::createEmpty(rowType, pool));
-  }
-  // NOTE: we generate a number of vectors with a fresh new fuzzer init with
-  // the same fix seed. The purpose is to ensure we have sufficient match if
-  // we use the row type for both build and probe inputs. Here we shuffle the
-  // built vectors to introduce some randomness during the join execution.
-  if (shuffle) {
-    shuffleBatches(batches);
-  }
-  return batches;
-}
-
-std::vector<RowVectorPtr> makeBatches(
-    vector_size_t numBatches,
-    std::function<RowVectorPtr(int32_t)> makeVector,
-    bool shuffle = true) {
-  std::vector<RowVectorPtr> batches;
-  batches.reserve(numBatches);
-  for (int32_t i = 0; i < numBatches; ++i) {
-    batches.push_back(makeVector(i));
-  }
-  if (shuffle) {
-    shuffleBatches(batches);
-  }
-  return batches;
-}
-
-std::vector<RowVectorPtr> mergeBatches(
-    std::vector<RowVectorPtr>&& lhs,
-    std::vector<RowVectorPtr>&& rhs,
-    bool shuffle = false) {
-  std::vector<RowVectorPtr> mergedBatches;
-  mergedBatches.reserve(lhs.size() + rhs.size());
-  std::move(lhs.begin(), lhs.end(), std::back_inserter(mergedBatches));
-  std::move(rhs.begin(), rhs.end(), std::back_inserter(mergedBatches));
-  if (shuffle) {
-    shuffleBatches(mergedBatches);
-  }
-  return mergedBatches;
-}
-
-std::vector<std::string> concat(
-    const std::vector<std::string>& a,
-    const std::vector<std::string>& b) {
-  std::vector<std::string> result;
-  result.insert(result.end(), a.begin(), a.end());
-  result.insert(result.end(), b.begin(), b.end());
-  return result;
 }
 
 // Returns aggregated spilled stats by 'task'.
@@ -291,13 +211,7 @@ class HashJoinBuilder {
     // single threaded. 'allProbeVectors_' contains the value vectors fed to
     // all the hash probe drivers, which will be used to populate the duckdb as
     // well.
-    allProbeVectors_.reserve(probeVectors_.size() * numDrivers_);
-    for (int i = 0; i < numDrivers_; ++i) {
-      std::copy(
-          probeVectors_.begin(),
-          probeVectors_.end(),
-          std::back_inserter(allProbeVectors_));
-    }
+    allProbeVectors_ = makeCopies(probeVectors_, numDrivers_);
     return *this;
   }
 
@@ -341,13 +255,7 @@ class HashJoinBuilder {
     // single threaded. 'allBuildVectors_' contains the value vectors fed to
     // all the hash build drivers, which will be used to populate the duckdb as
     // well.
-    allBuildVectors_.reserve(buildVectors_.size() * numDrivers_);
-    for (int i = 0; i < numDrivers_; ++i) {
-      std::copy(
-          buildVectors_.begin(),
-          buildVectors_.end(),
-          std::back_inserter(allBuildVectors_));
-    }
+    allBuildVectors_ = makeCopies(buildVectors_, numDrivers_);
     return *this;
   }
 
@@ -379,7 +287,13 @@ class HashJoinBuilder {
   }
 
   HashJoinBuilder& inputSplits(const SplitInput& inputSplits) {
-    inputSplits_ = inputSplits;
+    makeInputSplits_ = [inputSplits] { return inputSplits; };
+    return *this;
+  }
+
+  HashJoinBuilder& makeInputSplits(
+      std::function<SplitInput()>&& makeInputSplits) {
+    makeInputSplits_ = makeInputSplits;
     return *this;
   }
 
@@ -574,8 +488,10 @@ class HashJoinBuilder {
       int32_t maxSpillLevel = -1) {
     AssertQueryBuilder builder(planNode, duckDbQueryRunner_);
     builder.maxDrivers(numDrivers_);
-    for (const auto& splitEntry : inputSplits_) {
-      builder.splits(splitEntry.first, splitEntry.second);
+    if (makeInputSplits_) {
+      for (const auto& splitEntry : makeInputSplits_()) {
+        builder.splits(splitEntry.first, splitEntry.second);
+      }
     }
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_);
     std::shared_ptr<TempDirectoryPath> spillDirectory;
@@ -656,7 +572,7 @@ class HashJoinBuilder {
   std::optional<int32_t> maxSpillLevel_;
   bool checkSpillStats_{true};
 
-  SplitInput inputSplits_;
+  std::function<SplitInput()> makeInputSplits_;
   core::PlanNodePtr planNode_;
   std::unordered_map<std::string, std::string> configs_;
 
@@ -3415,23 +3331,37 @@ TEST_F(HashJoinTest, lazyVectors) {
 
   std::vector<std::shared_ptr<TempFilePath>> tempFiles;
 
-  std::vector<exec::Split> probeSplits;
   for (const auto& probeVector : probeVectors) {
     tempFiles.push_back(TempFilePath::create());
     writeToFile(tempFiles.back()->path, probeVector);
-    probeSplits.push_back(
-        exec::Split(makeHiveConnectorSplit(tempFiles.back()->path)));
   }
   createDuckDbTable("t", probeVectors);
 
-  std::vector<exec::Split> buildSplits;
   for (const auto& buildVector : buildVectors) {
     tempFiles.push_back(TempFilePath::create());
     writeToFile(tempFiles.back()->path, buildVector);
-    buildSplits.push_back(
-        exec::Split(makeHiveConnectorSplit(tempFiles.back()->path)));
   }
   createDuckDbTable("u", buildVectors);
+
+  auto makeInputSplits = [&](const core::PlanNodeId& probeScanId,
+                             const core::PlanNodeId& buildScanId) {
+    return [&] {
+      std::vector<exec::Split> probeSplits;
+      for (int i = 0; i < probeVectors.size(); ++i) {
+        probeSplits.push_back(
+            exec::Split(makeHiveConnectorSplit(tempFiles[i]->path)));
+      }
+      std::vector<exec::Split> buildSplits;
+      for (int i = 0; i < buildVectors.size(); ++i) {
+        buildSplits.push_back(exec::Split(
+            makeHiveConnectorSplit(tempFiles[probeSplits.size() + i]->path)));
+      }
+      SplitInput splits;
+      splits.emplace(probeScanId, probeSplits);
+      splits.emplace(buildScanId, buildSplits);
+      return splits;
+    };
+  };
 
   {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -3452,12 +3382,9 @@ TEST_F(HashJoinTest, lazyVectors) {
                   .project({"c1 + 1"})
                   .planNode();
 
-    SplitInput splits;
-    splits.emplace(probeScanId, probeSplits);
-    splits.emplace(buildScanId, buildSplits);
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splits)
+        .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
         .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
         .run();
   }
@@ -3485,13 +3412,9 @@ TEST_F(HashJoinTest, lazyVectors) {
                   .project({"c1 + 1", "bc1", "length(c3)"})
                   .planNode();
 
-    SplitInput splits;
-    splits.emplace(probeScanId, probeSplits);
-    splits.emplace(buildScanId, buildSplits);
-
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splits)
+        .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
         .referenceQuery(
             "SELECT t.c1 + 1, U.c1, length(t.c3) FROM t, u WHERE t.c0 = u.c0 and t.c2 < 29 and (t.c1 + u.c1) % 33 < 27")
         .run();
@@ -3507,7 +3430,6 @@ TEST_F(HashJoinTest, dynamicFilters) {
   probeVectors.reserve(numSplits);
 
   std::vector<std::shared_ptr<TempFilePath>> tempFiles;
-  std::vector<exec::Split> probeSplits;
   for (int32_t i = 0; i < numSplits; ++i) {
     auto rowVector = makeRowVector({
         makeFlatVector<int32_t>(
@@ -3517,9 +3439,18 @@ TEST_F(HashJoinTest, dynamicFilters) {
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
     writeToFile(tempFiles.back()->path, rowVector);
-    probeSplits.push_back(
-        exec::Split(makeHiveConnectorSplit(tempFiles.back()->path)));
   }
+  auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
+    return [&] {
+      std::vector<exec::Split> probeSplits;
+      for (auto& file : tempFiles) {
+        probeSplits.push_back(exec::Split(makeHiveConnectorSplit(file->path)));
+      }
+      SplitInput splits;
+      splits.emplace(nodeId, probeSplits);
+      return splits;
+    };
+  };
 
   // 100 key values in [35, 233] range.
   std::vector<RowVectorPtr> buildVectors;
@@ -3572,12 +3503,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
                   .project({"c0", "c1 + 1", "c1 + u_c1"})
                   .planNode();
     {
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
-          .inputSplits(splits)
+          .makeInputSplits(makeInputSplits(probeScanId))
           .referenceQuery(
               "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -3612,12 +3540,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
              .planNode();
 
     {
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
-          .inputSplits(splits)
+          .makeInputSplits(makeInputSplits(probeScanId))
           .referenceQuery(
               "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u)")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -3653,12 +3578,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
              .planNode();
 
     {
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
-          .inputSplits(splits)
+          .makeInputSplits(makeInputSplits(probeScanId))
           .referenceQuery(
               "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t)")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -3700,12 +3622,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
             .project({"a", "b + 1", "b + u_c1"})
             .planNode();
 
-    SplitInput splits;
-    splits.emplace(probeScanId, probeSplits);
-
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splits)
+        .makeInputSplits(makeInputSplits(probeScanId))
         .referenceQuery(
             "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -3736,12 +3655,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
                   .project({"c1 + u_c1"})
                   .planNode();
 
-    SplitInput splits;
-    splits.emplace(probeScanId, probeSplits);
-
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splits)
+        .makeInputSplits(makeInputSplits(probeScanId))
         .referenceQuery(
             "SELECT t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 500")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -3773,12 +3689,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
             .project({"c0", "c1 + 1"})
             .planNode();
 
-    SplitInput splits;
-    splits.emplace(probeScanId, probeSplits);
-
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splits)
+        .makeInputSplits(makeInputSplits(probeScanId))
         .referenceQuery("SELECT t.c0, t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
           SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
@@ -3810,12 +3723,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
                   .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0"})
                   .planNode();
 
-    SplitInput splits;
-    splits.emplace(probeScanId, probeSplits);
-
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splits)
+        .makeInputSplits(makeInputSplits(probeScanId))
         .referenceQuery("SELECT t.c0 FROM t JOIN u ON (t.c0 = u.c0)")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
           SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
@@ -3847,12 +3757,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
                   .project({"c1 + 1"})
                   .planNode();
 
-    SplitInput splits;
-    splits.emplace(probeScanId, probeSplits);
-
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splits)
+        .makeInputSplits(makeInputSplits(probeScanId))
         .referenceQuery(
             "SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 500")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -3887,12 +3794,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
             .planNode();
 
     {
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
-          .inputSplits(splits)
+          .makeInputSplits(makeInputSplits(probeScanId))
           .referenceQuery(
               "SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 200")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -3928,12 +3832,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
              .planNode();
 
     {
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
-          .inputSplits(splits)
+          .makeInputSplits(makeInputSplits(probeScanId))
           .referenceQuery(
               "SELECT t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND t.c0 < 200")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -3969,12 +3870,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
              .planNode();
 
     {
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
-          .inputSplits(splits)
+          .makeInputSplits(makeInputSplits(probeScanId))
           .referenceQuery(
               "SELECT u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t) AND u.c0 < 200")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -4027,12 +3925,9 @@ TEST_F(HashJoinTest, dynamicFilters) {
                   .project({"c1 + 1"})
                   .planNode();
 
-    SplitInput splits;
-    splits.emplace(probeScanId, probeSplits);
-
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
-        .inputSplits(splits)
+        .makeInputSplits(makeInputSplits(probeScanId))
         .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE (t.c0 + 1) = u.c0")
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
           ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
@@ -4053,7 +3948,6 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
   probeVectors.reserve(numSplits);
 
   std::vector<std::shared_ptr<TempFilePath>> tempFiles;
-  std::vector<exec::Split> probeSplits;
   // Each split has a column containing
   // the split number. This is used to filter out whole splits based
   // on metadata. We test how using metadata for dropping splits
@@ -4071,22 +3965,33 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
     probeVectors.push_back(rowVector);
     tempFiles.push_back(TempFilePath::create());
     writeToFile(tempFiles.back()->path, rowVector);
-    probeSplits.push_back(
-        exec::Split(makeHiveConnectorSplit(tempFiles.back()->path)));
   }
 
-  // We add splits that have no rows.
-  auto makeEmpty = [&]() {
-    return exec::Split(HiveConnectorSplitBuilder(tempFiles.back()->path)
-                           .start(10000000)
-                           .length(1)
-                           .build());
+  auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
+    return [&] {
+      std::vector<exec::Split> probeSplits;
+      for (auto& file : tempFiles) {
+        probeSplits.push_back(exec::Split(makeHiveConnectorSplit(file->path)));
+      }
+      // We add splits that have no rows.
+      auto makeEmpty = [&]() {
+        return exec::Split(HiveConnectorSplitBuilder(tempFiles.back()->path)
+                               .start(10000000)
+                               .length(1)
+                               .build());
+      };
+      std::vector<exec::Split> emptyFront = {makeEmpty(), makeEmpty()};
+      std::vector<exec::Split> emptyMiddle = {makeEmpty(), makeEmpty()};
+      probeSplits.insert(
+          probeSplits.begin(), emptyFront.begin(), emptyFront.end());
+      probeSplits.insert(
+          probeSplits.begin() + 13, emptyMiddle.begin(), emptyMiddle.end());
+      SplitInput splits;
+      splits.emplace(nodeId, probeSplits);
+      return splits;
+    };
   };
-  std::vector<exec::Split> emptyFront = {makeEmpty(), makeEmpty()};
-  std::vector<exec::Split> emptyMiddle = {makeEmpty(), makeEmpty()};
-  probeSplits.insert(probeSplits.begin(), emptyFront.begin(), emptyFront.end());
-  probeSplits.insert(
-      probeSplits.begin() + 13, emptyMiddle.begin(), emptyMiddle.end());
+
   // 100 key values in [35, 233] range.
   std::vector<RowVectorPtr> buildVectors;
   for (int i = 0; i < 5; ++i) {
@@ -4138,13 +4043,10 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
                   .project({"c0", "c1 + 1", "c1 + u_c1"})
                   .planNode();
     {
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .numDrivers(1)
-          .inputSplits(splits)
+          .makeInputSplits(makeInputSplits(probeScanId))
           .referenceQuery(
               "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c2 > 0")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -4183,13 +4085,10 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
              .planNode();
 
     {
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .numDrivers(1)
-          .inputSplits(splits)
+          .makeInputSplits(makeInputSplits(probeScanId))
           .referenceQuery(
               "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND t.c2 > 0")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -4229,13 +4128,10 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
              .planNode();
 
     {
-      SplitInput splits;
-      splits.emplace(probeScanId, probeSplits);
-
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
           .planNode(std::move(op))
           .numDrivers(1)
-          .inputSplits(splits)
+          .makeInputSplits(makeInputSplits(probeScanId))
           .referenceQuery(
               "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t WHERE t.c2 > 0)")
           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {

@@ -124,6 +124,7 @@ std::vector<KeyNode<T>> getKeyNodes(
         if (sequence == 0 || processed.count(sequence) > 0) {
           return;
         }
+        processed.insert(sequence);
         EncodingKey seqEk(dataValueType->id, sequence);
         const auto& keyInfo = stripe.getEncoding(seqEk).key();
         auto key = extractKey<T>(keyInfo);
@@ -157,12 +158,15 @@ std::vector<KeyNode<T>> getKeyNodes(
         VELOX_CHECK(inMap, "In map stream is required");
         auto inMapDecoder = createBooleanRleDecoder(std::move(inMap), seqEk);
         DwrfParams childParams(
-            stripe, FlatMapContext(sequence, inMapDecoder.get()));
+            stripe,
+            FlatMapContext{
+                .sequence = sequence,
+                .inMapDecoder = inMapDecoder.get(),
+                .keySelectionCallback = nullptr});
         auto reader = SelectiveDwrfReader::build(
             requestedValueType, dataValueType, childParams, *childSpec);
         keyNodes.emplace_back(
             key, sequence, std::move(reader), std::move(inMapDecoder));
-        processed.insert(sequence);
       });
 
   VLOG(1) << "[Flat-Map] Initialized a flat-map column reader for node "
@@ -244,6 +248,7 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
       override {
     numReads_ = scanSpec_->newRead();
     prepareRead<char>(offset, rows, incomingNulls);
+    VELOX_DCHECK(!hasMutation());
     auto* mapNulls =
         nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
     for (auto* reader : children_) {

@@ -22,7 +22,7 @@ add_library(
   DecimalUtil.cpp
   DoubleUtil.cpp
   Filter.cpp
-  UnscaledLongDecimal.cpp
+  HugeInt.cpp
   StringView.h
   Subfield.cpp
   Timestamp.cpp
@@ -39,5 +39,6 @@ target_link_libraries(
   velox_exception
   velox_serialization
   velox_external_date
-  ${Boost_REGEX_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES})
+  Boost::regex
+  Boost::headers
+  Folly::folly)

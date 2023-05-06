@@ -78,6 +78,11 @@ class Aggregate {
     return true;
   }
 
+  /// Returns true if toIntermediate() is supported.
+  virtual bool supportsToIntermediate() const {
+    return false;
+  }
+
   void setAllocator(HashStringAllocator* allocator) {
     setAllocatorInternal(allocator);
   }
@@ -200,6 +205,18 @@ class Aggregate {
   // See comment on 'result' in extractValues().
   virtual void
   extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result) = 0;
+
+  /// Produces an accumulator initialized from a single value for each
+  /// row in 'rows'. The raw arguments of the aggregate are in 'args',
+  /// which have the same meaning as in addRawInput. The result is
+  /// placed in 'result'. 'result is allocated if nullptr, otherwise
+  /// it is expected to be a writable flat vector of the right type.
+  virtual void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const {
+    VELOX_NYI("toIntermediate not supported");
+  }
 
   // Frees any out of line storage for the accumulator in
   // 'groups'. No-op for fixed length accumulators.
@@ -374,4 +391,22 @@ AggregateFunctionMap& aggregateFunctions();
 const AggregateFunctionEntry* FOLLY_NULLABLE
 getAggregateFunctionEntry(const std::string& name);
 
+struct CompanionSignatureEntry {
+  std::string functionName;
+  std::vector<FunctionSignaturePtr> signatures;
+};
+
+struct CompanionFunctionSignatureMap {
+  std::vector<CompanionSignatureEntry> partial;
+  std::vector<CompanionSignatureEntry> merge;
+  std::vector<CompanionSignatureEntry> extract;
+  std::vector<CompanionSignatureEntry> mergeExtract;
+};
+
+// Returns a map of potential companion function signatures the specified
+// aggregation function would have. Notice that the registration of the
+// specified aggregation function needs to register companion functions together
+// for them to be used in queries.
+std::optional<CompanionFunctionSignatureMap> getCompanionFunctionSignatures(
+    const std::string& name);
 } // namespace facebook::velox::exec

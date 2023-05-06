@@ -17,6 +17,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/Bitwise.h"
+#include "velox/functions/prestosql/Probability.h"
 #include "velox/functions/prestosql/Rand.h"
 
 namespace facebook::velox::functions {
@@ -100,8 +101,10 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<TruncateFunction, double, double>({prefix + "truncate"});
   registerFunction<TruncateFunction, double, double, int32_t>(
       {prefix + "truncate"});
+  registerFunction<BetaCDFFunction, double, double, double, double>(
+      {prefix + "beta_cdf"});
   registerFunction<NormalCDFFunction, double, double, double, double>(
-      {prefix + "normal_cdf"});
+      {prefix + "normal_cdf"});    
 }
 
 } // namespace

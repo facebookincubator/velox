@@ -26,162 +26,6 @@
 
 namespace facebook::velox::dwrf {
 
-EncodingIter::EncodingIter(
-    const proto::StripeFooter& footer,
-    const std::vector<proto::StripeEncryptionGroup>& encryptionGroups,
-    int32_t encryptionGroupIndex,
-    google::protobuf::RepeatedPtrField<proto::ColumnEncoding>::const_iterator
-        current,
-    google::protobuf::RepeatedPtrField<proto::ColumnEncoding>::const_iterator
-        currentEnd)
-    : footer_{footer},
-      encryptionGroups_{encryptionGroups},
-      encryptionGroupIndex_{encryptionGroupIndex},
-      current_{std::move(current)},
-      currentEnd_{std::move(currentEnd)} {
-  // Move to the end or a valid position.
-  if (current_ == currentEnd_) {
-    next();
-  }
-}
-
-/* static */ EncodingIter EncodingIter::begin(
-    const proto::StripeFooter& footer,
-    const std::vector<proto::StripeEncryptionGroup>& encryptionGroups) {
-  return EncodingIter{
-      footer,
-      encryptionGroups,
-      -1,
-      footer.encoding().begin(),
-      footer.encoding().end()};
-}
-
-/* static */ EncodingIter EncodingIter::end(
-    const proto::StripeFooter& footer,
-    const std::vector<proto::StripeEncryptionGroup>& encryptionGroups) {
-  if (encryptionGroups.empty()) {
-    const auto& footerEncodings = footer.encoding();
-    return EncodingIter{
-        footer,
-        encryptionGroups,
-        -1,
-        footerEncodings.end(),
-        footerEncodings.end()};
-  }
-  const auto lastEncryptionGroupIndex =
-      folly::to<int32_t>(encryptionGroups.size()) - 1;
-  const auto& lastEncryptionGroupEncodings = encryptionGroups.back().encoding();
-  return EncodingIter{
-      footer,
-      encryptionGroups,
-      lastEncryptionGroupIndex,
-      lastEncryptionGroupEncodings.end(),
-      lastEncryptionGroupEncodings.end()};
-}
-
-void EncodingIter::next() {
-  // The check is needed for the initial position
-  // if footer is empty but encryption groups are not.
-  if (current_ != currentEnd_) {
-    ++current_;
-  }
-  // Get to the absolute end or a valid position.
-  while (current_ == currentEnd_) {
-    if (encryptionGroupIndex_ == encryptionGroups_.size() - 1) {
-      return;
-    }
-    const auto& encryptionGroup = encryptionGroups_.at(++encryptionGroupIndex_);
-    current_ = encryptionGroup.encoding().begin();
-    currentEnd_ = encryptionGroup.encoding().end();
-  }
-  return;
-}
-
-EncodingIter& EncodingIter::operator++() {
-  next();
-  return *this;
-}
-
-EncodingIter EncodingIter::operator++(int) {
-  auto current = *this;
-  next();
-  return current;
-}
-
-bool EncodingIter::operator==(const EncodingIter& other) const {
-  return current_ == other.current_;
-}
-
-bool EncodingIter::operator!=(const EncodingIter& other) const {
-  return current_ != other.current_;
-}
-
-EncodingIter::reference EncodingIter::operator*() const {
-  return *current_;
-}
-
-EncodingIter::pointer EncodingIter::operator->() const {
-  return &(*current_);
-}
-
-EncodingManager::EncodingManager(
-    const encryption::EncryptionHandler& encryptionHandler)
-    : encryptionHandler_{encryptionHandler} {
-  initEncryptionGroups();
-}
-
-proto::ColumnEncoding& EncodingManager::addEncodingToFooter(uint32_t nodeId) {
-  if (encryptionHandler_.isEncrypted(nodeId)) {
-    auto index = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return *encryptionGroups_.at(index).add_encoding();
-  } else {
-    return *footer_.add_encoding();
-  }
-}
-
-proto::Stream* EncodingManager::addStreamToFooter(
-    uint32_t nodeId,
-    uint32_t& currentIndex) {
-  if (encryptionHandler_.isEncrypted(nodeId)) {
-    currentIndex = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return encryptionGroups_.at(currentIndex).add_streams();
-  } else {
-    currentIndex = std::numeric_limits<uint32_t>::max();
-    return footer_.add_streams();
-  }
-}
-
-std::string* EncodingManager::addEncryptionGroupToFooter() {
-  return footer_.add_encryptiongroups();
-}
-
-proto::StripeEncryptionGroup EncodingManager::getEncryptionGroup(uint32_t i) {
-  return encryptionGroups_.at(i);
-}
-
-const proto::StripeFooter& EncodingManager::getFooter() const {
-  return footer_;
-}
-
-EncodingIter EncodingManager::begin() const {
-  return EncodingIter::begin(footer_, encryptionGroups_);
-}
-
-EncodingIter EncodingManager::end() const {
-  return EncodingIter::end(footer_, encryptionGroups_);
-}
-
-void EncodingManager::initEncryptionGroups() {
-  // initialize encryption groups
-  if (encryptionHandler_.isEncrypted()) {
-    auto count = encryptionHandler_.getEncryptionGroupCount();
-    // We use uint32_t::max to represent non-encrypted when adding streams, so
-    // make sure number of encryption groups is smaller than that
-    DWIO_ENSURE_LT(count, std::numeric_limits<uint32_t>::max());
-    encryptionGroups_.resize(count);
-  }
-}
-
 namespace {
 // We currently use previous stripe raw size as the proxy for the expected
 // stripe raw size. For the first stripe, we are more conservative about
@@ -329,10 +173,9 @@ bool Writer::shouldFlush(const WriterContext& context, size_t nextWriteLength) {
     VLOG(1) << fmt::format(
         "overMemoryBudget: {}, dictionaryMemUsage: {}, outputStreamSize: {}, generalMemUsage: {}, estimatedStripeSize: {}",
         overBudget,
-        context.getMemoryUsage(MemoryUsageCategory::DICTIONARY)
-            .getCurrentBytes(),
+        context.getMemoryUsage(MemoryUsageCategory::DICTIONARY).currentBytes(),
         context.getEstimatedOutputStreamSize(),
-        context.getMemoryUsage(MemoryUsageCategory::GENERAL).getCurrentBytes(),
+        context.getMemoryUsage(MemoryUsageCategory::GENERAL).currentBytes(),
         context.getEstimatedStripeSize(context.stripeRawSize));
   }
   return decision;
@@ -361,8 +204,7 @@ void Writer::enterLowMemoryMode() {
 void Writer::flushStripe(bool close) {
   auto& context = getContext();
   int64_t preFlushStreamMemoryUsage =
-      context.getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM)
-          .getCurrentBytes();
+      context.getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM).currentBytes();
   if (context.stripeRowCount == 0) {
     return;
   }
@@ -390,7 +232,7 @@ void Writer::flushStripe(bool close) {
   // Collects the memory increment from flushing data to output streams.
   auto flushOverhead =
       context.getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM)
-          .getCurrentBytes() -
+          .currentBytes() -
       preFlushStreamMemoryUsage;
   context.recordFlushOverhead(flushOverhead);
   metrics.flushOverhead = flushOverhead;
@@ -436,9 +278,8 @@ void Writer::flushStripe(bool close) {
   // deals with streams
   uint64_t indexLength = 0;
   sink.setMode(WriterSink::Mode::Index);
-  auto planner = layoutPlannerFactory_(getStreamList(context), encodingManager);
-  planner->plan();
-  planner->iterateIndexStreams([&](auto& streamId, auto& content) {
+  auto result = layoutPlanner_->plan(encodingManager, getStreamList(context));
+  result.iterateIndexStreams([&](auto& streamId, auto& content) {
     DWIO_ENSURE(
         isIndexStream(streamId.kind()),
         "unexpected stream kind ",
@@ -450,7 +291,7 @@ void Writer::flushStripe(bool close) {
 
   uint64_t dataLength = 0;
   sink.setMode(WriterSink::Mode::Data);
-  planner->iterateDataStreams([&](auto& streamId, auto& content) {
+  result.iterateDataStreams([&](auto& streamId, auto& content) {
     DWIO_ENSURE(
         !isIndexStream(streamId.kind()),
         "unexpected stream kind ",
@@ -504,7 +345,7 @@ void Writer::flushStripe(bool close) {
 
   auto& dictionaryDataMemoryUsage =
       context.getMemoryUsage(MemoryUsageCategory::DICTIONARY);
-  metrics.dictionaryMemory = dictionaryDataMemoryUsage.getCurrentBytes();
+  metrics.dictionaryMemory = dictionaryDataMemoryUsage.currentBytes();
   // TODO: what does this try to capture?
   metrics.maxDictSize = dictionaryDataMemoryUsage.stats().peakBytes;
 
@@ -636,10 +477,10 @@ void Writer::flushInternal(bool close) {
             .totalMemory = context.getTotalMemoryUsage(),
             .dictionaryMemory =
                 context.getMemoryUsage(MemoryUsageCategory::DICTIONARY)
-                    .getCurrentBytes(),
+                    .currentBytes(),
             .generalMemory =
                 context.getMemoryUsage(MemoryUsageCategory::GENERAL)
-                    .getCurrentBytes()});
+                    .currentBytes()});
   }
 }
 

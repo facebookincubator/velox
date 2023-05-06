@@ -28,8 +28,7 @@ target_link_libraries(
   velox_vector
   velox_vector_fuzzer
   velox_vector_test_lib
-  ${FOLLY}
-  ${DOUBLE_CONVERSION}
+  Folly::folly
   gtest
   gtest_main
   gflags::gflags

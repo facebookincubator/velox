@@ -102,22 +102,14 @@ class RowReaderOptions {
   std::shared_ptr<folly::Executor> decodingExecutor_;
   std::shared_ptr<folly::Executor> ioExecutor_;
   bool appendRowNumberColumn_ = false;
+  // Function to populate metrics related to feature projection stats
+  // in Koski. This gets fired in FlatMapColumnReader.
+  // This is a bit of a hack as there is (by design) no good way
+  // To propogate information from column reader to Koski
+  std::function<void(uint64_t numTotalKeys, uint64_t numSelectedKeys)>
+      keySelectionCallback_;
 
  public:
-  RowReaderOptions(const RowReaderOptions& other) {
-    dataStart = other.dataStart;
-    dataLength = other.dataLength;
-    preloadStripe = other.preloadStripe;
-    projectSelectedType = other.projectSelectedType;
-    errorTolerance_ = other.errorTolerance_;
-    selector_ = other.selector_;
-    scanSpec_ = other.scanSpec_;
-    metadataFilter_ = other.metadataFilter_;
-    returnFlatVector_ = other.returnFlatVector_;
-    flatmapNodeIdAsStruct_ = other.flatmapNodeIdAsStruct_;
-    appendRowNumberColumn_ = other.appendRowNumberColumn_;
-  }
-
   RowReaderOptions() noexcept
       : dataStart(0),
         dataLength(std::numeric_limits<uint64_t>::max()),
@@ -279,7 +271,9 @@ class RowReaderOptions {
 
   /*
    * Set to true, if you want to add a new column to the results containing the
-   * row numbers.
+   * row numbers.  These row numbers are relative to the beginning of file (0 as
+   * first row) and does not affected by filtering or deletion during the read
+   * (it always counts all rows in the file).
    */
   void setAppendRowNumberColumn(bool value) {
     appendRowNumberColumn_ = value;
@@ -287,6 +281,17 @@ class RowReaderOptions {
 
   bool getAppendRowNumberColumn() const {
     return appendRowNumberColumn_;
+  }
+
+  void setKeySelectionCallback(
+      std::function<void(uint64_t totalKeys, uint64_t selectedKeys)>
+          keySelectionCallback) {
+    keySelectionCallback_ = std::move(keySelectionCallback);
+  }
+
+  const std::function<void(uint64_t totalKeys, uint64_t selectedKeys)>
+  getKeySelectionCallback() const {
+    return keySelectionCallback_;
   }
 
   const std::shared_ptr<folly::Executor>& getDecodingExecutor() const {

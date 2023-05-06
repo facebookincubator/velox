@@ -16,6 +16,7 @@
 
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <functional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -852,18 +853,8 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
 };
 
 template <>
-UnscaledShortDecimal VectorTest::testValue<UnscaledShortDecimal>(
-    int32_t i,
-    BufferPtr& /*space*/) {
-  return UnscaledShortDecimal(i);
-}
-
-template <>
-UnscaledLongDecimal VectorTest::testValue<UnscaledLongDecimal>(
-    int32_t i,
-    BufferPtr& /*space*/) {
-  int128_t value = buildInt128(i % 2 ? (i * -1) : i, 0xAAAAAAAAAAAAAAAA);
-  return UnscaledLongDecimal(value);
+int128_t VectorTest::testValue<int128_t>(int32_t i, BufferPtr& /*space*/) {
+  return HugeInt::build(i % 2 ? (i * -1) : i, 0xAAAAAAAAAAAAAAAA);
 }
 
 template <>
@@ -971,8 +962,8 @@ TEST_F(VectorTest, createOther) {
 }
 
 TEST_F(VectorTest, createDecimal) {
-  testFlat<TypeKind::SHORT_DECIMAL>(SHORT_DECIMAL(10, 5), vectorSize_);
-  testFlat<TypeKind::LONG_DECIMAL>(LONG_DECIMAL(30, 5), vectorSize_);
+  testFlat<TypeKind::BIGINT>(DECIMAL(10, 5), vectorSize_);
+  testFlat<TypeKind::HUGEINT>(DECIMAL(30, 5), vectorSize_);
 }
 
 TEST_F(VectorTest, createOpaque) {
@@ -1408,14 +1399,7 @@ class VectorCreateConstantTest : public VectorTest {
       typename TypeTraits<KIND>::NativeType val,
       const TypePtr& type = Type::create<KIND>()) {
     using TCpp = typename TypeTraits<KIND>::NativeType;
-    variant var;
-    if constexpr (std::is_same_v<TCpp, UnscaledShortDecimal>) {
-      var = variant::shortDecimal(val.unscaledValue(), type);
-    } else if constexpr (std::is_same_v<TCpp, UnscaledLongDecimal>) {
-      var = variant::longDecimal(val.unscaledValue(), type);
-    } else {
-      var = variant::create<KIND>(val);
-    }
+    variant var = variant::create<KIND>(val);
 
     auto baseVector = BaseVector::createConstant(type, var, size_, pool_.get());
     auto simpleVector = baseVector->template as<SimpleVector<TCpp>>();
@@ -1429,11 +1413,6 @@ class VectorCreateConstantTest : public VectorTest {
       if constexpr (std::is_same_v<TCpp, StringView>) {
         ASSERT_EQ(
             var.template value<KIND>(), std::string(simpleVector->valueAt(i)));
-      } else if constexpr (
-          std::is_same_v<TCpp, UnscaledShortDecimal> ||
-          std::is_same_v<TCpp, UnscaledLongDecimal>) {
-        const auto& value = var.template value<KIND>().value();
-        ASSERT_EQ(value, simpleVector->valueAt(i));
       } else {
         ASSERT_EQ(var.template value<KIND>(), simpleVector->valueAt(i));
       }
@@ -1514,10 +1493,6 @@ TEST_F(VectorCreateConstantTest, scalar) {
 
   testPrimitiveConstant<TypeKind::REAL>(99.98);
   testPrimitiveConstant<TypeKind::DOUBLE>(12.345);
-  testPrimitiveConstant<TypeKind::SHORT_DECIMAL>(
-      UnscaledShortDecimal(12345), DECIMAL(5, 4));
-  testPrimitiveConstant<TypeKind::LONG_DECIMAL>(
-      UnscaledLongDecimal(12345), DECIMAL(20, 4));
 
   testPrimitiveConstant<TypeKind::VARCHAR>(StringView("hello world"));
   testPrimitiveConstant<TypeKind::VARBINARY>(StringView("my binary buffer"));
@@ -1552,8 +1527,8 @@ TEST_F(VectorCreateConstantTest, null) {
 
   testNullConstant<TypeKind::REAL>(REAL());
   testNullConstant<TypeKind::DOUBLE>(DOUBLE());
-  testNullConstant<TypeKind::SHORT_DECIMAL>(DECIMAL(10, 5));
-  testNullConstant<TypeKind::LONG_DECIMAL>(DECIMAL(20, 5));
+  testNullConstant<TypeKind::BIGINT>(DECIMAL(10, 5));
+  testNullConstant<TypeKind::HUGEINT>(DECIMAL(20, 5));
 
   testNullConstant<TypeKind::TIMESTAMP>(TIMESTAMP());
   testNullConstant<TypeKind::DATE>(DATE());
@@ -1916,6 +1891,112 @@ TEST_F(VectorTest, acquireSharedStringBuffers) {
   EXPECT_EQ(2, flatVector->stringBuffers().size());
   flatVector->acquireSharedStringBuffers(sourceVectors[0].get());
   EXPECT_EQ(2, flatVector->stringBuffers().size());
+
+  // Function does not throw if the input is not varchar or varbinary.
+  flatVector->setStringBuffers({buffers[0]});
+  auto arrayVector = makeArrayVector<int32_t>({});
+  ASSERT_NO_THROW(flatVector->acquireSharedStringBuffers(arrayVector.get()));
+
+  auto unkownVector = BaseVector::create(UNKNOWN(), 100, pool_.get());
+  ASSERT_NO_THROW(flatVector->acquireSharedStringBuffers(unkownVector.get()));
+}
+
+TEST_F(VectorTest, acquireSharedStringBuffersRecursive) {
+  auto vector = BaseVector::create(VARCHAR(), 100, pool_.get());
+  auto flatVector = vector->as<FlatVector<StringView>>();
+
+  auto testWithEncodings = [&](const VectorPtr& source,
+                               const std::function<void()>& check) {
+    flatVector->setStringBuffers({});
+    flatVector->acquireSharedStringBuffersRecursive(source.get());
+    check();
+
+    // Constant vector.
+    auto constantVector = BaseVector::wrapInConstant(10, 0, source);
+    flatVector->setStringBuffers({});
+    flatVector->acquireSharedStringBuffersRecursive(constantVector.get());
+    check();
+
+    // Dictionary Vector.
+    BufferPtr indices =
+        AlignedBuffer::allocate<vector_size_t>(source->size(), pool_.get());
+    for (int32_t i = 0; i < source->size(); ++i) {
+      indices->asMutable<vector_size_t>()[i] = source->size() - i - 1;
+    }
+    auto dictionaryVector =
+        BaseVector::wrapInDictionary(nullptr, indices, source->size(), source);
+    flatVector->setStringBuffers({});
+    flatVector->acquireSharedStringBuffersRecursive(dictionaryVector.get());
+    check();
+  };
+
+  // Acquiring buffer from array
+
+  { // Array<int>
+    auto arrayVector = makeArrayVector<int32_t>({{1, 2, 3}});
+    testWithEncodings(arrayVector, [&]() {
+      ASSERT_EQ(flatVector->stringBuffers().size(), 0);
+    });
+  }
+
+  { // Array<Varchar>
+    auto arrayVector = makeArrayVector<StringView>(
+        {{"This is long enough not to be inlined !!!", "b"}});
+
+    testWithEncodings(arrayVector, [&]() {
+      EXPECT_EQ(1, flatVector->stringBuffers().size());
+      ASSERT_EQ(
+          flatVector->stringBuffers()[0],
+          arrayVector->as<ArrayVector>()
+              ->elements()
+              ->asFlatVector<StringView>()
+              ->stringBuffers()[0]);
+    });
+  }
+
+  // Array<Array<Varchar>>
+  auto arrayVector = makeNullableNestedArrayVector<StringView>(
+      {{{{{"This is long enough not to be inlined !!!"_sv}}}}});
+
+  testWithEncodings(arrayVector, [&]() {
+    EXPECT_EQ(1, flatVector->stringBuffers().size());
+    ASSERT_EQ(
+        flatVector->stringBuffers()[0],
+        arrayVector->as<ArrayVector>()
+            ->elements()
+            ->as<ArrayVector>()
+            ->elements()
+            ->asFlatVector<StringView>()
+            ->stringBuffers()[0]);
+  });
+
+  // Map<Varchar,Varchar>
+  auto mapVector = makeMapVector<StringView, StringView>(
+      {{{"This is long enough not to be inlined !!!"_sv,
+         "This is long enough not to be inlined !!!"_sv}}});
+
+  testWithEncodings(mapVector, [&]() {
+    EXPECT_EQ(2, flatVector->stringBuffers().size());
+    ASSERT_EQ(
+        flatVector->stringBuffers()[0],
+        mapVector->as<MapVector>()
+            ->mapKeys()
+            ->asFlatVector<StringView>()
+            ->stringBuffers()[0]);
+    ASSERT_EQ(
+        flatVector->stringBuffers()[1],
+        mapVector->as<MapVector>()
+            ->mapValues()
+            ->asFlatVector<StringView>()
+            ->stringBuffers()[0]);
+  });
+
+  // Row
+  flatVector->setStringBuffers({});
+  auto rowVector =
+      makeRowVector({mapVector, arrayVector, makeFlatVector<int32_t>({1, 2})});
+  testWithEncodings(
+      rowVector, [&]() { EXPECT_EQ(3, flatVector->stringBuffers().size()); });
 }
 
 /// Test MapVector::canonicalize for a MapVector with 'values' vector shorter
