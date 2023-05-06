@@ -69,7 +69,6 @@ TEST_F(ProbabilityTest, betaCDF) {
       betaCDF(3, 3, kNan), "value must be in the interval [0, 1]");
 }
 
-
 TEST_F(ProbabilityTest, normalCDF) {
   constexpr double kMaxdouble64 = std::numeric_limits<double>::max();
   constexpr double kMindouble64 = std::numeric_limits<double>::min();
