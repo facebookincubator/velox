@@ -88,8 +88,14 @@ class OperatorTestBase : public testing::Test,
 
   std::shared_ptr<Task> assertQuery(
       const core::PlanNodePtr& plan,
-      const std::string& duckDbSql) {
-    return test::assertQuery(plan, duckDbSql, duckDbQueryRunner_);
+      const std::string& duckDbSql,
+      const std::optional<bool> enableResultTypeMismatch = std::nullopt) {
+    return test::assertQuery(
+        plan,
+        duckDbSql,
+        duckDbQueryRunner_,
+        std::nullopt,
+        enableResultTypeMismatch);
   }
 
   std::shared_ptr<Task> assertQuery(

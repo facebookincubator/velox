@@ -23,6 +23,8 @@
 #include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::duckdb::duckdbTimestampToVelox;
+using facebook::velox::duckdb::fromVeloxType;
+using facebook::velox::duckdb::toVeloxType;
 using facebook::velox::duckdb::veloxTimestampToDuckDB;
 
 namespace facebook::velox::exec::test {
@@ -32,6 +34,10 @@ static const std::string kDuckDbTimestampWarning =
     "Note: DuckDB only supports timestamps of millisecond precision. If this "
     "test involves timestamp inputs, please make sure you use the right"
     " precision.";
+
+// When true, enables assertion to check if mismatched DuckDB and Velox result
+// types can be made compatible.
+static const bool kEnableResultTypeMismatch = false;
 
 template <TypeKind kind>
 ::duckdb::Value duckValueAt(const VectorPtr& vector, vector_size_t index) {
@@ -341,9 +347,27 @@ velox::variant arrayVariantAt(
 
 std::vector<MaterializedRow> materialize(
     ::duckdb::DataChunk* dataChunk,
-    const std::shared_ptr<const RowType>& rowType) {
+    const std::shared_ptr<const RowType>& rowType,
+    const bool enableResultTypeMismatch) {
   VELOX_CHECK_EQ(
       rowType->size(), dataChunk->GetTypes().size(), "Wrong number of columns");
+
+  // Check if Velox types match DuckDB types.
+  //
+  // There are cases when they differ and would result in an assertion error
+  // when trying to extract the variant for the wrong DuckDB value, e.g.
+  // AVG(DECIMAL) would return result as DECIMAL in Velox but DOUBLE in DuckDB,
+  // the same could be observed with decimal division.
+  //
+  // If "enableResultTypeMismatch" is set to true, then we allow type upcast
+  // for either DuckDB or Velox to match the results, otherwise an error is
+  // thrown.
+  std::vector<bool> typesMatch;
+  for (size_t j = 0; j < rowType->size(); ++j) {
+    auto type = rowType->childAt(j);
+    auto duckDbType = toVeloxType(dataChunk->GetTypes()[j]);
+    typesMatch.push_back(duckDbType->equivalent(*type));
+  }
 
   auto size = dataChunk->size();
   std::vector<MaterializedRow> rows;
@@ -363,22 +387,57 @@ std::vector<MaterializedRow> materialize(
       auto typeKind = type->kind();
       if (dataChunk->GetValue(j, i).IsNull()) {
         row.push_back(nulls[j]);
-      } else if (typeKind == TypeKind::ARRAY) {
+      } else if (typeKind == TypeKind::ARRAY && typesMatch[j]) {
         row.push_back(arrayVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (typeKind == TypeKind::MAP) {
+      } else if (typeKind == TypeKind::MAP && typesMatch[j]) {
         row.push_back(mapVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (typeKind == TypeKind::ROW) {
+      } else if (typeKind == TypeKind::ROW && typesMatch[j]) {
         row.push_back(rowVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (type->isDecimal()) {
+      } else if (type->isDecimal() && typesMatch[j]) {
         row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i)));
-      } else if (isIntervalDayTimeType(type)) {
+      } else if (isIntervalDayTimeType(type) && typesMatch[j]) {
         auto value = variant(::duckdb::Interval::GetMicro(
             dataChunk->GetValue(j, i).GetValue<::duckdb::interval_t>()));
         row.push_back(value);
-      } else {
+      } else if (typesMatch[j]) {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             variantAt, typeKind, dataChunk, i, j);
         row.push_back(value);
+      } else {
+        // Handle type mismatch between Velox and DuckDB, this typically means
+        // upcasting the DuckDB type to produce a Velox variant.
+        auto duckDbType = dataChunk->GetTypes()[j].id();
+        VELOX_CHECK(
+            enableResultTypeMismatch,
+            "Cannot compare values for different types. Velox value has {} type "
+            "but DuckDB returns {} type. Please check the query, if this type mismatch "
+            "is expected, you can enable 'enableResultTypeMismatch'",
+            type,
+            LogicalTypeIdToString(duckDbType));
+
+        if (type->isDecimal() &&
+            duckDbType == ::duckdb::LogicalTypeId::DOUBLE) {
+          // This case happens when the query has "AVG(DECIMAL)" or "DECIMAL /
+          // DECIMAL". Both expressions produce DOUBLE in DuckDB but the values
+          // match.
+          //
+          // In this case we cast everything to Velox DECIMAL as this would
+          // round DuckDB value. This allows us to compare values as is without
+          // any floating-point precision issues - we cannot increase
+          // floating-point precision for DECIMAL. For example, for
+          // DECIMAL(36,2):
+          // - Velox: 15.49
+          // - DuckDB: 15.48654581228407
+          // In this case, it is fine to cast DuckDB to 15.49.
+          auto decimalDuckDbType = fromVeloxType(type);
+          auto value = dataChunk->GetValue(j, i).CastAs(decimalDuckDbType);
+          row.push_back(duckdb::decimalVariant(value));
+        } else {
+          VELOX_UNSUPPORTED(
+              "Conversion between Velox {} type and DuckDB {} type is not supported",
+              type,
+              LogicalTypeIdToString(duckDbType));
+        }
       }
     }
     rows.push_back(row);
@@ -861,6 +920,7 @@ DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
 void DuckDbQueryRunner::execute(
     const std::string& sql,
     const std::shared_ptr<const RowType>& resultRowType,
+    const std::optional<bool> enableResultTypeMismatch,
     std::function<void(std::vector<MaterializedRow>&)> resultCallback) {
   auto duckDbResult = execute(sql);
 
@@ -870,7 +930,10 @@ void DuckDbQueryRunner::execute(
     if (!dataChunk || (dataChunk->size() == 0)) {
       break;
     }
-    auto rows = materialize(dataChunk.get(), resultRowType);
+    auto rows = materialize(
+        dataChunk.get(),
+        resultRowType,
+        enableResultTypeMismatch.value_or(kEnableResultTypeMismatch));
     resultCallback(rows);
   }
 }
@@ -879,9 +942,15 @@ std::shared_ptr<Task> assertQuery(
     const core::PlanNodePtr& plan,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
+    std::optional<std::vector<uint32_t>> sortingKeys,
+    const std::optional<bool> enableResultTypeMismatch) {
   return assertQuery(
-      plan, [](Task*) {}, duckDbSql, duckDbQueryRunner, sortingKeys);
+      plan,
+      [](Task*) {},
+      duckDbSql,
+      duckDbQueryRunner,
+      sortingKeys,
+      enableResultTypeMismatch);
 }
 
 std::shared_ptr<Task> assertQueryReturnsEmptyResult(
@@ -1051,7 +1120,8 @@ void assertResults(
     const std::vector<RowVectorPtr>& results,
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner) {
+    DuckDbQueryRunner& duckDbQueryRunner,
+    const std::optional<bool> enableResultTypeMismatch) {
   MaterializedRowMultiset actualRows;
   for (const auto& vector : results) {
     auto rows = materialize(vector);
@@ -1059,7 +1129,8 @@ void assertResults(
         rows.begin(), rows.end(), std::inserter(actualRows, actualRows.end()));
   }
 
-  auto expectedRows = duckDbQueryRunner.execute(duckDbSql, resultType);
+  auto expectedRows = duckDbQueryRunner.execute(
+      duckDbSql, resultType, enableResultTypeMismatch);
   assertEqualResults(
       expectedRows,
       actualRows,
@@ -1136,7 +1207,8 @@ void assertResultsOrdered(
     const std::shared_ptr<const RowType>& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    const std::vector<uint32_t>& sortingKeys) {
+    const std::vector<uint32_t>& sortingKeys,
+    const std::optional<bool> enableResultTypeMismatch) {
   std::vector<OrderedPartition> actualPartitions;
   std::vector<OrderedPartition> expectedPartitions;
 
@@ -1151,7 +1223,8 @@ void assertResultsOrdered(
     }
   }
 
-  auto expectedRows = duckDbQueryRunner.executeOrdered(duckDbSql, resultType);
+  auto expectedRows = duckDbQueryRunner.executeOrdered(
+      duckDbSql, resultType, enableResultTypeMismatch);
   for (const auto& row : expectedRows) {
     auto keys = getColumns(row, sortingKeys);
     if (expectedPartitions.empty() || expectedPartitions.back().first != keys) {
@@ -1266,11 +1339,17 @@ std::shared_ptr<Task> assertQuery(
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
+    std::optional<std::vector<uint32_t>> sortingKeys,
+    const std::optional<bool> enableResultTypeMismatch) {
   CursorParameters params;
   params.planNode = plan;
   return assertQuery(
-      params, addSplits, duckDbSql, duckDbQueryRunner, sortingKeys);
+      params,
+      addSplits,
+      duckDbSql,
+      duckDbQueryRunner,
+      sortingKeys,
+      enableResultTypeMismatch);
 }
 
 std::shared_ptr<Task> assertQuery(
@@ -1278,7 +1357,8 @@ std::shared_ptr<Task> assertQuery(
     std::function<void(exec::Task*)> addSplits,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
+    std::optional<std::vector<uint32_t>> sortingKeys,
+    const std::optional<bool> enableResultTypeMismatch) {
   auto [cursor, actualResults] = readCursor(params, addSplits);
 
   if (sortingKeys) {
@@ -1287,13 +1367,15 @@ std::shared_ptr<Task> assertQuery(
         params.planNode->outputType(),
         duckDbSql,
         duckDbQueryRunner,
-        sortingKeys.value());
+        sortingKeys.value(),
+        enableResultTypeMismatch);
   } else {
     assertResults(
         actualResults,
         params.planNode->outputType(),
         duckDbSql,
-        duckDbQueryRunner);
+        duckDbQueryRunner,
+        enableResultTypeMismatch);
   }
   auto task = cursor->task();
 

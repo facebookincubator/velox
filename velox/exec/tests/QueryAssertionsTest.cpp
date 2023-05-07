@@ -394,4 +394,61 @@ TEST_F(QueryAssertionsTest, nullVariant) {
   assertQuery(plan, "SELECT * FROM tmp");
 }
 
+TEST_F(QueryAssertionsTest, duckDbHugeintConversion) {
+  std::vector<int64_t> values = {1};
+  auto input = {makeRowVector({makeFlatVector<int64_t>(values)})};
+  auto plan = PlanBuilder().values(input).planNode();
+  assertQuery(plan, "select sum(1::BIGINT)");
+}
+
+TEST_F(QueryAssertionsTest, doubleToShortDecimalAvgConversion) {
+  auto rowType = ROW({"c0"}, {DECIMAL(5, 2)});
+  auto input = {
+      makeRowVector({makeShortDecimalFlatVector({12345}, DECIMAL(5, 2))})};
+  auto plan = PlanBuilder().tableScan(rowType).values(input).planNode();
+
+  // DuckDB returns DOUBLE for AVG(DECIMAL), enable result type mismatch.
+  assertQuery(plan, "select avg(123.45::DECIMAL(5,2))", true);
+
+  // The same query fails with the flag disabled.
+  EXPECT_ANY_THROW(
+      assertQuery(plan, "select avg(123.45::DECIMAL(5,2))", false));
+
+  // Explicit cast does not require the flag, so the test should pass with the
+  // flag disabled.
+  assertQuery(plan, "select avg(123.45::DECIMAL(5,2))::DECIMAL(5,2)", false);
+}
+
+TEST_F(QueryAssertionsTest, doubleToShortDecimalDivConversion) {
+  auto rowType = ROW({"c0"}, {DECIMAL(5, 2)});
+  auto input = {
+      makeRowVector({makeShortDecimalFlatVector({5144}, DECIMAL(5, 2))})};
+  auto plan = PlanBuilder().tableScan(rowType).values(input).planNode();
+
+  // DuckDB returns DOUBLE for DECIMAL/DECIMAL, enable result type mismatch.
+  // DuckDB result: 51.4375
+  // Velox result: 51.44
+  assertQuery(plan, "select 123.45::DECIMAL(5,2) / 2.4::DECIMAL(5,2)", true);
+  EXPECT_ANY_THROW(assertQuery(
+      plan, "select 123.45::DECIMAL(5,2) / 2.4::DECIMAL(5,2)", false));
+}
+
+TEST_F(QueryAssertionsTest, doubleToLongDecimalAvgConversion) {
+  auto rowType = ROW({"c0"}, {DECIMAL(38, 2)});
+  auto input = {
+      makeRowVector({makeLongDecimalFlatVector({12345}, DECIMAL(38, 2))})};
+  auto plan = PlanBuilder().tableScan(rowType).values(input).planNode();
+
+  // DuckDB returns DOUBLE for AVG(DECIMAL), enable result type mismatch.
+  assertQuery(plan, "select avg(123.45::DECIMAL(38,2))", true);
+
+  // The same query fails with the flag disabled.
+  EXPECT_ANY_THROW(
+      assertQuery(plan, "select avg(123.45::DECIMAL(38,2))", false));
+
+  // Explicit cast does not require the flag, so the test should pass with the
+  // flag disabled.
+  assertQuery(plan, "select avg(123.45::DECIMAL(38,2))::DECIMAL(38,2)", false);
+}
+
 } // namespace facebook::velox::test
