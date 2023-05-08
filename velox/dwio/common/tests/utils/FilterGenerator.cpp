@@ -222,7 +222,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRowGroupSkipRangeFilter(
     const Subfield& /*subfield*/) {
   static std::string max = kMaxString;
   return std::make_unique<velox::common::BytesRange>(
-      max, false, false, max, false, false, false);
+      max, false, false, "", false, false, false);
 }
 
 std::string FilterGenerator::specsToString(

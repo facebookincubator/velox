@@ -142,12 +142,22 @@ void InputStream::vread(
   DWIO_ENSURE_EQ(regions.size(), size, "mismatched region->buffer");
 
   // convert buffer to IOBufs and convert regions to VReadIntervals
-  LOG(INFO) << "[VREAD] fall back vread to sequential reads.";
+  std::vector<folly::Range<char*>> ranges;
+  uint64_t offset = regions[0].offset;
+  uint64_t lastEnd = offset;
+  uint64_t curOffset = offset;
   for (size_t i = 0; i < size; ++i) {
     // fill each buffer
     const auto& r = regions[i];
-    read(buffers[i], r.length, r.offset, purpose);
+    curOffset = r.offset;
+    if (lastEnd != curOffset) {
+      ranges.push_back(folly::Range<char*>(nullptr, curOffset - lastEnd));
+    }
+    ranges.push_back(
+        folly::Range<char*>(static_cast<char*>(buffers[i]), r.length));
+    lastEnd = curOffset + r.length;
   }
+  read(ranges, offset, purpose);
 }
 
 const std::string& InputStream::getName() const {

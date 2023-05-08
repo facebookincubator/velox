@@ -325,8 +325,10 @@ class ColumnStats : public AbstractColumnStats {
         }
       }
     }
-    return std::make_unique<velox::common::BigintRange>(
-        getIntegerValue(max), getIntegerValue(max), false);
+    int64_t value = getIntegerValue(max);
+    int64_t lower = value > 0 ? value : value * (-1);
+    int64_t upper = value > 0 ? value * (-1) : value;
+    return std::make_unique<velox::common::BigintRange>(lower, upper, false);
   }
 
   // The sample size is 65536.

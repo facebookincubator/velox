@@ -21,6 +21,8 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
+#include <folly/String.h>
+
 namespace facebook::velox::parquet {
 
 ReaderBase::ReaderBase(
@@ -113,7 +115,7 @@ void ReaderBase::initializeSchema() {
   uint32_t maxSchemaElementIdx = fileMetaData_->schema.size() - 1;
   schemaWithId_ = getParquetColumnInfo(
       maxSchemaElementIdx, maxRepeat, maxDefine, schemaIdx, columnIdx);
-  schema_ = createRowType(schemaWithId_->getChildren());
+  schema_ = createRowType(schemaWithId_->getChildren(), isCaseSensitive());
 }
 
 std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
@@ -232,7 +234,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         // Row type
         auto childrenCopy = children;
         return std::make_shared<const ParquetTypeWithId>(
-            createRowType(children),
+            createRowType(children, isCaseSensitive()),
             std::move(childrenCopy),
             curSchemaIdx,
             maxSchemaElementIdx,
@@ -430,13 +432,17 @@ TypePtr ReaderBase::convertType(
 }
 
 std::shared_ptr<const RowType> ReaderBase::createRowType(
-    std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>>
-        children) {
+    std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>> children,
+    bool caseSensitive) {
   std::vector<std::string> childNames;
   std::vector<TypePtr> childTypes;
   for (auto& child : children) {
-    childNames.push_back(
-        std::static_pointer_cast<const ParquetTypeWithId>(child)->name_);
+    auto childName =
+        std::static_pointer_cast<const ParquetTypeWithId>(child)->name_;
+    if (!caseSensitive) {
+      folly::toLowerAscii(childName);
+    }
+    childNames.push_back(childName);
     childTypes.push_back(child->type);
   }
   return TypeFactory<TypeKind::ROW>::create(
@@ -545,7 +551,11 @@ void ParquetRowReader::filterRowGroups() {
     auto fileOffset = rowGroups_[i].__isset.file_offset
         ? rowGroups_[i].file_offset
         : rowGroups_[i].columns[0].file_offset;
-    VELOX_CHECK_GT(fileOffset, 0);
+    VELOX_CHECK_GE(fileOffset, 0);
+    if (fileOffset == 0) {
+      rowGroupIds_.push_back(i);
+      continue;
+    }
     auto rowGroupInRange =
         (fileOffset >= options_.getOffset() &&
          fileOffset < options_.getLimit());

@@ -405,11 +405,12 @@ class FooterWrapper : public ProtoWrapperBase {
 
   bool hasRowIndexStride() const {
     return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_rowindexstride()
-                                        : false;
+                                        : orcPtr()->has_rowindexstride();
   }
 
   uint32_t rowIndexStride() const {
-    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->rowindexstride() : 0;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->rowindexstride()
+                                        : orcPtr()->rowindexstride();
   }
 
   int stripeCacheOffsetsSize() const {
@@ -425,7 +426,8 @@ class FooterWrapper : public ProtoWrapperBase {
 
   // TODO: ORC has not supported column statistics yet
   int statisticsSize() const {
-    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->statistics_size() : 0;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->statistics_size()
+                                        : orcPtr()->statistics_size();
   }
 
   const ::google::protobuf::RepeatedPtrField<
@@ -437,13 +439,14 @@ class FooterWrapper : public ProtoWrapperBase {
 
   const ::facebook::velox::dwrf::proto::ColumnStatistics& statistics(
       int index) const {
-    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
+    // VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->statistics(index);
   }
 
   // TODO: ORC has not supported encryption yet
   bool hasEncryption() const {
-    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_encryption() : false;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_encryption()
+                                        : orcPtr()->has_encryption();
   }
 
   const ::facebook::velox::dwrf::proto::Encryption& encryption() const {

@@ -56,6 +56,110 @@ class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {
    */
   void next(int64_t* data, uint64_t numValues, const uint64_t* nulls) override;
 
+  void nextLengths(int32_t* const data, const int32_t numValues) {
+    for (int i = 0; i < numValues; ++i) {
+      data[i] = readValue();
+    }
+  }
+
+  int64_t readShortRepeatsValue() {
+    int64_t value;
+    uint64_t n = nextShortRepeats(&value, 0, 1, nullptr);
+    VELOX_CHECK(n == (uint64_t)1);
+    return value;
+  }
+
+  int64_t readDirectValue() {
+    int64_t value;
+    uint64_t n = nextDirect(&value, 0, 1, nullptr);
+    VELOX_CHECK(n == (uint64_t)1);
+    return value;
+  }
+
+  int64_t readPatchedBaseValue() {
+    int64_t value;
+    uint64_t n = nextPatched(&value, 0, 1, nullptr);
+    VELOX_CHECK(n == (uint64_t)1);
+    return value;
+  }
+
+  int64_t readDeltaValue() {
+    int64_t value;
+    uint64_t n = nextDelta(&value, 0, 1, nullptr);
+    VELOX_CHECK(n == (uint64_t)1);
+    return value;
+  }
+
+  int64_t readValue() {
+    if (runRead == runLength) {
+      resetRun();
+      firstByte = readByte();
+    }
+
+    int64_t value = 0;
+    auto type = static_cast<EncodingType>((firstByte >> 6) & 0x03);
+    if (type == SHORT_REPEAT) {
+      value = readShortRepeatsValue();
+    } else if (type == DIRECT) {
+      value = readDirectValue();
+    } else if (type == PATCHED_BASE) {
+      value = readPatchedBaseValue();
+    } else if (type == DELTA) {
+      value = readDeltaValue();
+    } else {
+      DWIO_RAISE("unknown encoding");
+    }
+
+    return value;
+  }
+
+  template <bool hasNulls>
+  void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
+    if constexpr (hasNulls) {
+      numValues = bits::countNonNulls(nulls, current, current + numValues);
+    }
+    skip(numValues);
+  }
+
+  template <bool hasNulls, typename Visitor>
+  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
+    int32_t current = visitor.start();
+    skip<hasNulls>(current, 0, nulls);
+
+    int32_t toSkip;
+    bool atEnd = false;
+    const bool allowNulls = hasNulls && visitor.allowNulls();
+
+    for (;;) {
+      if (hasNulls && allowNulls && bits::isBitNull(nulls, current)) {
+        toSkip = visitor.processNull(atEnd);
+      } else {
+        if (hasNulls && !allowNulls) {
+          toSkip = visitor.checkAndSkipNulls(nulls, current, atEnd);
+          if (!Visitor::dense) {
+            skip<false>(toSkip, current, nullptr);
+          }
+          if (atEnd) {
+            return;
+          }
+        }
+
+        // We are at a non-null value on a row to visit.
+        auto value = readValue();
+        toSkip = visitor.process(value, atEnd);
+      }
+
+      ++current;
+      if (toSkip) {
+        skip<hasNulls>(toSkip, current, nulls);
+        current += toSkip;
+      }
+      if (atEnd) {
+        return;
+      }
+    }
+  }
+
  private:
   // Used by PATCHED_BASE
   void adjustGapAndPatch() {

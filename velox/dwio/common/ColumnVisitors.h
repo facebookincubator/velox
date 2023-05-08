@@ -155,11 +155,19 @@ class ColumnVisitor {
       SelectiveColumnReader* reader,
       const RowSet& rows,
       ExtractValues values)
+      : ColumnVisitor(filter, reader, &rows[0], rows.size(), values) {}
+
+  ColumnVisitor(
+      TFilter& filter,
+      SelectiveColumnReader* reader,
+      const vector_size_t* rows,
+      vector_size_t numRows,
+      ExtractValues values)
       : filter_(filter),
         reader_(reader),
         allowNulls_(!TFilter::deterministic || filter.testNull()),
-        rows_(&rows[0]),
-        numRows_(rows.size()),
+        rows_(rows),
+        numRows_(numRows),
         rowIndex_(0),
         values_(values) {}
 
@@ -415,6 +423,10 @@ class ColumnVisitor {
 
   HookType& hook() {
     return values_.hook();
+  }
+
+  ExtractValues extractValues() const {
+    return values_;
   }
 
   T* rawValues(int32_t size) {
@@ -1384,6 +1396,19 @@ class DirectRleColumnVisitor
             filter,
             reader,
             rows,
+            values) {}
+
+  DirectRleColumnVisitor(
+      TFilter& filter,
+      SelectiveColumnReader* reader,
+      const vector_size_t* rows,
+      vector_size_t numRows,
+      ExtractValues values)
+      : ColumnVisitor<T, TFilter, ExtractValues, isDense>(
+            filter,
+            reader,
+            rows,
+            numRows,
             values) {}
 
   // Use for replacing all rows with non-null rows for fast path with
