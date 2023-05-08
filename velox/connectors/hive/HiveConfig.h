@@ -95,6 +95,9 @@ class HiveConfig {
   static std::optional<std::string> s3IAMRole(const Config* config);
 
   static std::string s3IAMRoleSessionName(const Config* config);
+  static constexpr const char* kCaseSensitive = "case_sensitive";
+
+  static bool isCaseSensitive(const Config* config);
 };
 
 } // namespace facebook::velox::connector::hive

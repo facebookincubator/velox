@@ -693,6 +693,13 @@ inline int32_t countLeadingZeros(uint64_t word) {
   return __builtin_clzll(word);
 }
 
+inline int32_t countLeadingZerosUint128(__uint128_t word) {
+  uint64_t hi = word >> 64;
+  uint64_t lo = static_cast<uint64_t>(word);
+  return (hi == 0) ? 64 + bits::countLeadingZeros(lo)
+                   : bits::countLeadingZeros(hi);
+}
+
 inline uint64_t nextPowerOfTwo(uint64_t size) {
   if (size == 0) {
     return 0;
