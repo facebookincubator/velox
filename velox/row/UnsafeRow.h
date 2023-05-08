@@ -421,7 +421,7 @@ FOLLY_ALWAYS_INLINE size_t serializedSizeInBytes<TypeKind::VARBINARY>() {
 /// Returns the number of bytes needed to serialized fixed-width type. Throws if
 /// 'type' is ot fixed-width.
 FOLLY_ALWAYS_INLINE size_t serializedSizeInBytes(const TypePtr& type) {
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
       serializedSizeInBytes, type->kind());
 }
 

@@ -689,7 +689,11 @@ struct UnsafeRowDeserializer {
     std::vector<VectorPtr> columnVectors(numFields);
     for (size_t i = 0; i < numFields; ++i) {
       columnVectors[i] = deserialize(
-          StructBatchIteratorPtr->nextColumnBatch(), rowType.childAt(i), pool);
+          StructBatchIteratorPtr->nextColumnBatch(),
+          rowType.childAt(i),
+          pool,
+          numFields,
+          i);
     }
 
     return std::make_shared<RowVector>(
@@ -698,6 +702,76 @@ struct UnsafeRowDeserializer {
 
   /**
    * Converts a list of PrimitiveBatchIterators to a FlatVector
+   * @tparam Kind the element's type kind.
+   * @param dataIterator iterator that points to the dataIterator over the
+   * whole column batch of data.
+   * @param type The element type
+   * @param pool
+   * @return a FlatVector
+   */
+  template <TypeKind Kind>
+  static VectorPtr createDecimalFlatVector(
+      const DataBatchIteratorPtr& dataIterator,
+      const TypePtr& type,
+      memory::MemoryPool* pool,
+      int32_t numFields,
+      int32_t fieldsIdx) {
+    auto iterator =
+        std::dynamic_pointer_cast<PrimitiveBatchIterator>(dataIterator);
+    size_t size = iterator->numRows();
+    auto vector = BaseVector::create(type, size, pool);
+    using TypeTraits = ScalarTraits<Kind>;
+    using InMemoryType = typename TypeTraits::InMemoryType;
+
+    size_t nullCount = 0;
+    auto* flatResult = vector->asFlatVector<InMemoryType>();
+
+    for (int32_t i = 0; i < size; ++i) {
+      if (iterator->isNull(i)) {
+        vector->setNull(i, true);
+        iterator->next();
+        nullCount++;
+      } else {
+        vector->setNull(i, false);
+
+        if constexpr (std::is_same_v<InMemoryType, UnscaledShortDecimal>) {
+          int64_t val =
+              UnsafeRowPrimitiveBatchDeserializer::deserializeFixedWidth<
+                  int64_t>(iterator->next().value());
+          TypeTraits::set(flatResult, i, UnscaledShortDecimal(val));
+        } else if constexpr (std::
+                                 is_same_v<InMemoryType, UnscaledLongDecimal>) {
+          int64_t offsetAndSize;
+          auto memory_address = iterator->next().value().data();
+          memcpy(&offsetAndSize, memory_address, sizeof(int64_t));
+          int32_t length = int32_t(offsetAndSize);
+          int32_t wordoffset = int32_t(offsetAndSize >> 32);
+          uint8_t bytesValue[length];
+          int64_t nullBitsetWidthInBytes = ((numFields + 63) / 64) * 8;
+          int64_t fieldOffset = nullBitsetWidthInBytes + 8L * fieldsIdx;
+          memcpy(bytesValue, memory_address + wordoffset - fieldOffset, length);
+
+          uint8_t bytesValue2[32]{};
+          for (int k = length - 1; k >= 0; k--) {
+            bytesValue2[length - 1 - k] = bytesValue[k];
+          }
+          if (int8_t(bytesValue[0]) < 0) {
+            for (int k = length; k < 32; k++) {
+              bytesValue2[k] = 255;
+            }
+          }
+          int128_t val;
+          memcpy(&val, bytesValue2, sizeof(int128_t));
+          TypeTraits::set(flatResult, i, UnscaledLongDecimal(val));
+        }
+      }
+    }
+    vector->setNullCount(nullCount);
+    return vector;
+  }
+
+  /**
+   * Converts a list of UnsafeRowPrimitiveBatchIterators to a FlatVector
    * @tparam Kind the element's type kind.
    * @param dataIterator iterator that points to the dataIterator over the
    * whole column batch of data.
@@ -753,21 +827,32 @@ struct UnsafeRowDeserializer {
    */
   static VectorPtr convertPrimitiveIteratorsToVectors(
       const DataBatchIteratorPtr& dataIterator,
-      memory::MemoryPool* pool) {
+      memory::MemoryPool* pool,
+      int32_t numFields = 1,
+      int32_t fieldsIdx = 0) {
     const TypePtr& type = dataIterator->type();
     assert(type->isPrimitiveType());
-
+    if (type->kind() == TypeKind::SHORT_DECIMAL) {
+      return createDecimalFlatVector<TypeKind::SHORT_DECIMAL>(
+          dataIterator, type, pool, numFields, fieldsIdx);
+    } else if (type->kind() == TypeKind::LONG_DECIMAL) {
+      return createDecimalFlatVector<TypeKind::LONG_DECIMAL>(
+          dataIterator, type, pool, numFields, fieldsIdx);
+    }
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         createFlatVector, type->kind(), dataIterator, type, pool);
   }
 
   static VectorPtr convertToVectors(
       const DataBatchIteratorPtr& dataIterator,
-      memory::MemoryPool* pool) {
+      memory::MemoryPool* pool,
+      int32_t numFields = 1,
+      int32_t fieldsIdx = 0) {
     const TypePtr& type = dataIterator->type();
 
     if (type->isPrimitiveType()) {
-      return convertPrimitiveIteratorsToVectors(dataIterator, pool);
+      return convertPrimitiveIteratorsToVectors(
+          dataIterator, pool, numFields, fieldsIdx);
     } else if (type->isRow()) {
       return convertStructIteratorsToVectors(dataIterator, pool);
     } else if (type->isArray()) {
@@ -777,6 +862,16 @@ struct UnsafeRowDeserializer {
     } else {
       VELOX_NYI("Unsupported data iterators type");
     }
+  }
+
+  static VectorPtr deserialize(
+      std::optional<std::string_view> data,
+      TypePtr type,
+      memory::MemoryPool* pool,
+      int32_t numFields,
+      int32_t fieldsIdx) {
+    std::vector<std::optional<std::string_view>> vectors{data};
+    return deserialize(vectors, type, pool, numFields, fieldsIdx);
   }
 
   /**
@@ -809,6 +904,16 @@ struct UnsafeRowDeserializer {
       const TypePtr& type,
       memory::MemoryPool* pool) {
     return convertToVectors(getBatchIteratorPtr(data, type), pool);
+  }
+
+  static VectorPtr deserialize(
+      const std::vector<std::optional<std::string_view>>& data,
+      const TypePtr& type,
+      memory::MemoryPool* pool,
+      int32_t numFields,
+      int32_t fieldsIdx) {
+    return convertToVectors(
+        getBatchIteratorPtr(data, type), pool, numFields, fieldsIdx);
   }
 };
 
