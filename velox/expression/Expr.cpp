@@ -647,7 +647,7 @@ void Expr::evalFlatNoNullsImpl(
       // No need to re-evaluate constant expression. Simply move constant values
       // from constantInputs_.
       inputValues_[i] = std::move(constantInputs_[i]);
-      inputValues_[i]->resize(rows.end());
+      inputValues_[i]->resize(rows.size());
     } else {
       inputs_[i]->evalFlatNoNulls(rows, context, inputValues_[i]);
     }
@@ -755,7 +755,7 @@ void Expr::evaluateSharedSubexpr(
     eval(rows, context, result);
 
     if (!sharedSubexprRows) {
-      sharedSubexprRows = context.execCtx()->getSelectivityVector(rows.end());
+      sharedSubexprRows = context.execCtx()->getSelectivityVector(rows.size());
     }
 
     *sharedSubexprRows = rows;
@@ -1147,7 +1147,7 @@ void Expr::setAllNulls(
     result->addNulls(notNulls.get()->asRange().bits(), rows);
     return;
   }
-  result = BaseVector::createNullConstant(type(), rows.end(), context.pool());
+  result = BaseVector::createNullConstant(type(), rows.size(), context.pool());
 }
 
 namespace {

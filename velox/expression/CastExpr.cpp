@@ -27,6 +27,7 @@
 #include "velox/expression/StringWriter.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/type/DecimalUtilOp.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FunctionVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -42,7 +43,7 @@ namespace {
 /// @param input The input vector (of type From)
 /// @param result The output vector (of type To)
 /// @return False if the result is null
-template <typename To, typename From, bool Truncate>
+template <typename To, typename From, bool Truncate, bool AllowDecimal>
 void applyCastKernel(
     vector_size_t row,
     const SimpleVector<From>* input,
@@ -50,9 +51,20 @@ void applyCastKernel(
     bool& nullOutput) {
   // Special handling for string target type
   if constexpr (CppToType<To>::typeKind == TypeKind::VARCHAR) {
-    auto output =
-        util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-            input->valueAt(row), nullOutput);
+    std::string output;
+    if constexpr (
+        CppToType<From>::typeKind == TypeKind::SHORT_DECIMAL ||
+        CppToType<From>::typeKind == TypeKind::LONG_DECIMAL) {
+      output = util::
+          Converter<CppToType<To>::typeKind, void, Truncate, AllowDecimal>::
+              cast(input->valueAt(row), nullOutput, input->type());
+
+    } else {
+      output = util::
+          Converter<CppToType<To>::typeKind, void, Truncate, AllowDecimal>::
+              cast(input->valueAt(row), nullOutput);
+    }
+
     if (!nullOutput) {
       // Write the result output to the output vector
       auto writer = exec::StringWriter<>(result, row);
@@ -63,11 +75,22 @@ void applyCastKernel(
       writer.finalize();
     }
   } else {
-    auto output =
-        util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-            input->valueAt(row), nullOutput);
-    if (!nullOutput) {
-      result->set(row, output);
+    if constexpr (
+        CppToType<From>::typeKind == TypeKind::SHORT_DECIMAL ||
+        CppToType<From>::typeKind == TypeKind::LONG_DECIMAL) {
+      auto output = util::
+          Converter<CppToType<To>::typeKind, void, Truncate, AllowDecimal>::
+              cast(input->valueAt(row), nullOutput, input->type());
+      if (!nullOutput) {
+        result->set(row, output);
+      }
+    } else {
+      auto output = util::
+          Converter<CppToType<To>::typeKind, void, Truncate, AllowDecimal>::
+              cast(input->valueAt(row), nullOutput);
+      if (!nullOutput) {
+        result->set(row, output);
+      }
     }
   }
 }
@@ -134,6 +157,78 @@ void applyIntToDecimalCastKernel(
     }
   });
 }
+
+template <typename TInput, typename TOutput>
+void applyDateToDecimalCastKernel(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    VectorPtr castResult) {
+  auto sourceVector = input.as<SimpleVector<Date>>();
+  auto castResultRawBuffer =
+      castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
+  const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    auto rescaledValue = DecimalUtil::rescaleInt<TInput, TOutput>(
+        sourceVector->valueAt(row).days(),
+        toPrecisionScale.first,
+        toPrecisionScale.second);
+    if (rescaledValue.has_value()) {
+      castResultRawBuffer[row] = rescaledValue.value();
+    } else {
+      castResult->setNull(row, true);
+    }
+  });
+}
+
+template <typename TInput, typename TOutput>
+void applyDoubleToDecimalCastKernel(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    VectorPtr castResult) {
+  auto sourceVector = input.as<SimpleVector<TInput>>();
+  auto castResultRawBuffer =
+      castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
+  const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    auto rescaledValue = DecimalUtilOp::rescaleDouble<TInput, TOutput>(
+        sourceVector->valueAt(row),
+        toPrecisionScale.first,
+        toPrecisionScale.second);
+    if (rescaledValue.has_value()) {
+      castResultRawBuffer[row] = rescaledValue.value();
+    } else {
+      castResult->setNull(row, true);
+    }
+  });
+}
+
+template <typename TOutput>
+void applyVarCharToDecimalCastKernel(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    VectorPtr castResult) {
+  auto sourceVector = input.as<SimpleVector<StringView>>();
+  auto castResultRawBuffer =
+      castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
+  const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    auto rescaledValue = DecimalUtilOp::rescaleVarchar<TOutput>(
+        sourceVector->valueAt(row),
+        toPrecisionScale.first,
+        toPrecisionScale.second);
+    if (rescaledValue.has_value()) {
+      castResultRawBuffer[row] = rescaledValue.value();
+    } else {
+      castResult->setNull(row, true);
+    }
+  });
+}
 } // namespace
 
 template <typename To, typename From>
@@ -144,6 +239,7 @@ void CastExpr::applyCastWithTry(
     FlatVector<To>* resultFlatVector) {
   const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
   auto isCastIntByTruncate = queryConfig.isCastIntByTruncate();
+  const bool isCastIntAllowDecimal = queryConfig.isCastIntAllowDecimal();
 
   auto* inputSimpleVector = input.as<SimpleVector<From>>();
 
@@ -152,8 +248,13 @@ void CastExpr::applyCastWithTry(
       bool nullOutput = false;
       try {
         // Passing a false truncate flag
-        applyCastKernel<To, From, false>(
-            row, inputSimpleVector, resultFlatVector, nullOutput);
+        if (isCastIntAllowDecimal) {
+          applyCastKernel<To, From, false, true>(
+              row, inputSimpleVector, resultFlatVector, nullOutput);
+        } else {
+          applyCastKernel<To, From, false, false>(
+              row, inputSimpleVector, resultFlatVector, nullOutput);
+        }
       } catch (const VeloxRuntimeError& re) {
         VELOX_FAIL(
             makeErrorMessage(input, row, resultFlatVector->type()) + " " +
@@ -177,8 +278,13 @@ void CastExpr::applyCastWithTry(
       bool nullOutput = false;
       try {
         // Passing a true truncate flag
-        applyCastKernel<To, From, true>(
-            row, inputSimpleVector, resultFlatVector, nullOutput);
+        if (isCastIntAllowDecimal) {
+          applyCastKernel<To, From, true, true>(
+              row, inputSimpleVector, resultFlatVector, nullOutput);
+        } else {
+          applyCastKernel<To, From, true, false>(
+              row, inputSimpleVector, resultFlatVector, nullOutput);
+        }
       } catch (const VeloxRuntimeError& re) {
         VELOX_FAIL(
             makeErrorMessage(input, row, resultFlatVector->type()) + " " +
@@ -273,6 +379,15 @@ void CastExpr::applyCast(
       return applyCastWithTry<To, Timestamp>(
           rows, context, input, resultFlatVector);
     }
+    case TypeKind::SHORT_DECIMAL: {
+      return applyCastWithTry<To, UnscaledShortDecimal>(
+          rows, context, input, resultFlatVector);
+    }
+    case TypeKind::LONG_DECIMAL: {
+      return applyCastWithTry<To, UnscaledLongDecimal>(
+          rows, context, input, resultFlatVector);
+    }
+
     default: {
       VELOX_UNSUPPORTED("Invalid from type in casting: {}", fromType);
     }
@@ -513,6 +628,10 @@ VectorPtr CastExpr::applyDecimal(
   context.ensureWritable(rows, toType, castResult);
   (*castResult).clearNulls(rows);
   switch (fromType->kind()) {
+    case TypeKind::BOOLEAN:
+      applyIntToDecimalCastKernel<bool, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
     case TypeKind::SHORT_DECIMAL:
       applyDecimalCastKernel<UnscaledShortDecimal, DecimalType>(
           rows, input, context, fromType, toType, castResult);
@@ -535,6 +654,22 @@ VectorPtr CastExpr::applyDecimal(
       break;
     case TypeKind::BIGINT:
       applyIntToDecimalCastKernel<int64_t, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
+    case TypeKind::DATE:
+      applyDateToDecimalCastKernel<int32_t, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
+    case TypeKind::REAL:
+      applyDoubleToDecimalCastKernel<float, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
+    case TypeKind::DOUBLE:
+      applyDoubleToDecimalCastKernel<double, DecimalType>(
+          rows, input, context, toType, castResult);
+      break;
+    case TypeKind::VARCHAR:
+      applyVarCharToDecimalCastKernel<DecimalType>(
           rows, input, context, toType, castResult);
       break;
     default:
