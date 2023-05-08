@@ -86,10 +86,11 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
+    computeCapacity();
+    VELOX_USER_CHECK(
+        !decodedRaw_.mayHaveNulls(),
+        "First argument of bloom_filter_agg cannot be null");
     rows.applyToSelected([&](vector_size_t row) {
-      VELOX_USER_CHECK(
-          !decodedRaw_.isNullAt(row),
-          "First argument of bloom_filter_agg cannot be null");
       auto group = groups[row];
       auto tracker = trackRowSize(group);
       auto accumulator = value<BloomFilterAccumulator>(group);
@@ -123,21 +124,19 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
+    computeCapacity();
     auto tracker = trackRowSize(group);
     auto accumulator = value<BloomFilterAccumulator>(group);
     accumulator->init(capacity_);
+    VELOX_USER_CHECK(
+        !decodedRaw_.mayHaveNulls(),
+        "First argument of bloom_filter_agg cannot be null");
     if (decodedRaw_.isConstantMapping()) {
-      VELOX_USER_CHECK(
-          !decodedRaw_.isNullAt(0),
-          "First argument of bloom_filter_agg cannot be null");
       // All values are same, just do for the first.
       accumulator->insert(decodedRaw_.valueAt<int64_t>(0));
       return;
     }
     rows.applyToSelected([&](vector_size_t row) {
-      VELOX_USER_CHECK(
-          !decodedRaw_.isNullAt(row),
-          "First argument of bloom_filter_agg cannot be null");
       accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
     });
   }
@@ -206,25 +205,26 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     if (args.size() > 1) {
       DecodedVector decodedEstimatedNumItems(*args[1], rows);
       setConstantArgument(
-          "estimatedNumItems",
-          originalEstimatedNumItems_,
-          decodedEstimatedNumItems);
+          "estimatedNumItems", estimatedNumItems_, decodedEstimatedNumItems);
       if (args.size() > 2) {
         VELOX_CHECK_EQ(args.size(), 3);
         DecodedVector decodedNumBits(*args[2], rows);
-        setConstantArgument(
-            "numBits", originalNumBits_, decodedNumBits);
+        setConstantArgument("numBits", numBits_, decodedNumBits);
       } else {
-        originalNumBits_ = originalEstimatedNumItems_ * 8;
+        numBits_ = estimatedNumItems_ * 8;
       }
     } else {
-      originalEstimatedNumItems_ = kDefaultExpectedNumItems;
-      originalNumBits_ = kDefaultNumBits;
+      estimatedNumItems_ = kDefaultExpectedNumItems;
+      numBits_ = kDefaultNumBits;
     }
+  }
 
-    estimatedNumItems_ = std::min(originalEstimatedNumItems_, kMaxNumItems);
-    numBits_ = std::min(originalNumBits_, kMaxNumBits);
-    capacity_ = numBits_ / 16;
+  void computeCapacity() {
+    if (capacity_ == kMissingArgument) {
+      int64_t estimatedNumItems_ = std::min(estimatedNumItems_, kMaxNumItems);
+      int64_t numBits = std::min(numBits_, kMaxNumBits);
+      capacity_ = numBits / 16;
+    }
   }
 
   int32_t getTotalSize(char** groups, int32_t numGroups) const {
@@ -269,8 +269,6 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   // Reusable instance of DecodedVector for decoding input vectors.
   DecodedVector decodedRaw_;
   DecodedVector decodedIntermediate_;
-  int64_t originalEstimatedNumItems_ = kMissingArgument;
-  int64_t originalNumBits_ = kMissingArgument;
   int64_t estimatedNumItems_ = kMissingArgument;
   int64_t numBits_ = kMissingArgument;
   int32_t capacity_ = kMissingArgument;
