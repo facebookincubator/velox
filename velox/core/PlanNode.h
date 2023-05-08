@@ -18,7 +18,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
-
+#include "velox/vector/ComplexVectorStream.h"
 #include "velox/vector/arrow/Abi.h"
 #include "velox/vector/arrow/Bridge.h"
 
@@ -258,6 +258,43 @@ class ValuesNode : public PlanNode {
   const RowTypePtr outputType_;
   const bool parallelizable_;
   const size_t repeatTimes_;
+};
+
+class ValueStreamNode : public PlanNode {
+ public:
+  ValueStreamNode(
+      const PlanNodeId& id,
+      const RowTypePtr& outputType,
+      std::shared_ptr<RowVectorStream> valueStream)
+      : PlanNode(id),
+        outputType_(outputType),
+        valueStream_(std::move(valueStream)) {
+    VELOX_CHECK_NOT_NULL(valueStream_);
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override;
+
+  const std::shared_ptr<RowVectorStream>& rowVectorStream() const {
+    return valueStream_;
+  }
+
+  std::string_view name() const override {
+    return "ValueStream";
+  }
+
+  folly::dynamic serialize() const override {
+    VELOX_UNSUPPORTED("ValueStream plan node is not serializable");
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const RowTypePtr outputType_;
+  std::shared_ptr<RowVectorStream> valueStream_;
 };
 
 class ArrowStreamNode : public PlanNode {
@@ -664,6 +701,56 @@ inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
   ss << step;
   return ss.str();
 }
+
+/// Plan node used to apply all of the projections expressions to every input
+/// row, hence we will get mulitple output row for an input rows. This has
+/// similar behavior to spark ExpandExec.
+class ExpandNode : public PlanNode {
+ public:
+  /// @param id Plan node ID.
+  /// @param projectSets A list of project sets. The output conatins one cloumn
+  /// for each project expr. The project expr may be cloumn reference, null or
+  /// int constant.
+  /// @param names The names and order of the projects in the output.
+  /// @param source Input plan node.
+  ExpandNode(
+      PlanNodeId id,
+      std::vector<std::vector<TypedExprPtr>> projectSets,
+      std::vector<std::string> names,
+      PlanNodePtr source);
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const std::vector<std::vector<TypedExprPtr>>& projectSets() const {
+    return projectSets_;
+  }
+
+  const std::vector<std::string>& names() const {
+    return names_;
+  }
+
+  std::string_view name() const override {
+    return "Expand";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<PlanNodePtr> sources_;
+  const RowTypePtr outputType_;
+  const std::vector<std::vector<TypedExprPtr>> projectSets_;
+  const std::vector<std::string> names_;
+};
 
 /// Plan node used to implement aggregations over grouping sets. Duplicates the
 /// aggregation input for each set of grouping keys. The output contains one
