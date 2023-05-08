@@ -19,7 +19,9 @@ add_executable(
   BitwiseTest.cpp
   CompareNullSafeTests.cpp
   DateTimeFunctionsTest.cpp
+  DecimalArithmeticTest.cpp
   ElementAtTest.cpp
+  DateTimeTest.cpp
   HashTest.cpp
   InTest.cpp
   LeastGreatestTest.cpp
@@ -30,7 +32,8 @@ add_executable(
   SortArrayTest.cpp
   SplitFunctionsTest.cpp
   StringTest.cpp
-  XxHash64Test.cpp)
+  XxHash64Test.cpp
+  MightContainTest.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
 

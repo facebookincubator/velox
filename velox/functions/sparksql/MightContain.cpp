@@ -22,7 +22,12 @@
 
 namespace facebook::velox::functions::sparksql {
 namespace {
+template <typename Allocator = std::allocator<uint64_t>>
 class BloomFilterMightContainFunction final : public exec::VectorFunction {
+ public:
+  explicit BloomFilterMightContainFunction(BloomFilter<Allocator> bloomFilter)
+      : bloomFilter_(std::move(bloomFilter)) {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
@@ -33,26 +38,21 @@ class BloomFilterMightContainFunction final : public exec::VectorFunction {
     context.ensureWritable(rows, BOOLEAN(), resultRef);
     auto& result = *resultRef->as<FlatVector<bool>>();
     exec::DecodedArgs decodedArgs(rows, args, context);
-    auto serialized = decodedArgs.at(0);
     auto value = decodedArgs.at(1);
 
-    HashStringAllocator allocator{context.pool()};
-    VELOX_USER_CHECK(serialized->isConstantMapping())
-    BloomFilter output{StlAllocator<uint64_t>(&allocator)};
-    try {
-      auto sv = serialized->valueAt<StringView>(0);
-      output.merge(sv.data());
-    } catch (const std::exception& e) {
-      context.setErrors(rows, std::current_exception());
-      return;
+    if (!bloomFilter_.isSet()) {
+      rows.applyToSelected([&](int row) { result.set(row, false); });
+    } else {
+      rows.applyToSelected([&](int row) {
+        auto contain = bloomFilter_.mayContain(
+            folly::hasher<int64_t>()(value->valueAt<int64_t>(row)));
+        result.set(row, contain);
+      });
     }
-
-    rows.applyToSelected([&](int row) {
-      auto contain = output.mayContain(
-          folly::hasher<int64_t>()(value->valueAt<int64_t>(row)));
-      result.set(row, contain);
-    });
   }
+
+ private:
+  BloomFilter<Allocator> bloomFilter_;
 };
 } // namespace
 
@@ -64,8 +64,22 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> mightContainSignatures() {
               .build()};
 }
 
-std::unique_ptr<exec::VectorFunction> makeMightContain() {
-  return std::make_unique<BloomFilterMightContainFunction>();
+std::shared_ptr<exec::VectorFunction> makeMightContain(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+  VELOX_CHECK_EQ(inputArgs.size(), 2);
+  BaseVector* serialized = inputArgs[0].constantValue.get();
+  if (!serialized) {
+    VELOX_USER_FAIL(
+        "{} requires first argument to be a constant of type VARBINARY", name);
+  }
+  BloomFilter bloomFilter;
+  if (!serialized->isNullAt(0)) {
+    bloomFilter.merge(
+        serialized->as<ConstantVector<StringView>>()->valueAt(0).str().c_str());
+  }
+  return std::make_shared<BloomFilterMightContainFunction<>>(
+      std::move(bloomFilter));
 }
 
 } // namespace facebook::velox::functions::sparksql

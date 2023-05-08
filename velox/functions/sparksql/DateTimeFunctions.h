@@ -152,4 +152,48 @@ struct UnixTimestampParseWithFormatFunction
   bool invalidFormat_{false};
 };
 
+template <typename T>
+struct DateAddFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const int32_t value) {
+    result = addToDate(date, DateTimeUnit::kDay, value);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const int16_t value) {
+    result = addToDate(date, DateTimeUnit::kDay, (int32_t)value);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool
+  call(out_type<Date>& result, const arg_type<Date>& date, const int8_t value) {
+    result = addToDate(date, DateTimeUnit::kDay, (int32_t)value);
+    return true;
+  }
+};
+
+template <typename T>
+struct DateDiffFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int32_t& result,
+      const arg_type<Date>& date1,
+      const arg_type<Date>& date2) {
+    int64_t value = diffDate(DateTimeUnit::kDay, date1, date2);
+    if (value != (int32_t)value) {
+      VELOX_UNSUPPORTED("integer overflow");
+    }
+    result = (int32_t)value;
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

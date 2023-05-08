@@ -156,11 +156,11 @@ class SubscriptImpl : public exec::VectorFunction {
       exec::EvalCtx& context) const {
     auto* pool = context.pool();
 
-    BufferPtr indices = allocateIndices(rows.end(), pool);
+    BufferPtr indices = allocateIndices(rows.size(), pool);
     auto rawIndices = indices->asMutable<vector_size_t>();
 
     // Create nulls for lazy initialization.
-    NullsBuilder nullsBuilder(rows.end(), pool);
+    NullsBuilder nullsBuilder(rows.size(), pool);
 
     exec::LocalDecodedVector arrayHolder(context, *arrayArg, rows);
     auto decodedArray = arrayHolder.get();
@@ -211,11 +211,11 @@ class SubscriptImpl : public exec::VectorFunction {
     // to ensure user error checks for indices are not skipped.
     if (baseArray->elements()->size() == 0) {
       return BaseVector::createNullConstant(
-          baseArray->elements()->type(), rows.end(), context.pool());
+          baseArray->elements()->type(), rows.size(), context.pool());
     }
 
     return BaseVector::wrapInDictionary(
-        nullsBuilder.build(), indices, rows.end(), baseArray->elements());
+        nullsBuilder.build(), indices, rows.size(), baseArray->elements());
   }
 
   // Normalize indices from 1 or 0-based into always 0-based (according to
@@ -290,11 +290,11 @@ class SubscriptImpl : public exec::VectorFunction {
       exec::EvalCtx& context) const {
     auto* pool = context.pool();
 
-    BufferPtr indices = allocateIndices(rows.end(), pool);
+    BufferPtr indices = allocateIndices(rows.size(), pool);
     auto rawIndices = indices->asMutable<vector_size_t>();
 
     // Create nulls for lazy initialization.
-    NullsBuilder nullsBuilder(rows.end(), pool);
+    NullsBuilder nullsBuilder(rows.size(), pool);
 
     // Get base MapVector.
     // TODO: Optimize the case when indices are identity.
@@ -364,11 +364,11 @@ class SubscriptImpl : public exec::VectorFunction {
     // ensure user error checks for indices are not skipped.
     if (baseMap->mapValues()->size() == 0) {
       return BaseVector::createNullConstant(
-          baseMap->mapValues()->type(), rows.end(), context.pool());
+          baseMap->mapValues()->type(), rows.size(), context.pool());
     }
 
     return BaseVector::wrapInDictionary(
-        nullsBuilder.build(), indices, rows.end(), baseMap->mapValues());
+        nullsBuilder.build(), indices, rows.size(), baseMap->mapValues());
   }
 };
 

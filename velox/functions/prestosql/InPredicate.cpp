@@ -244,7 +244,7 @@ class InPredicate : public exec::VectorFunction {
       VectorPtr& result,
       F&& testFunction) const {
     if (alwaysNull_) {
-      auto localResult = createBoolConstantNull(rows.end(), context);
+      auto localResult = createBoolConstantNull(rows.size(), context);
       context.moveOrCopyResult(localResult, rows, result);
       return;
     }
@@ -257,13 +257,13 @@ class InPredicate : public exec::VectorFunction {
       auto simpleArg = arg->asUnchecked<SimpleVector<T>>();
       VectorPtr localResult;
       if (simpleArg->isNullAt(rows.begin())) {
-        localResult = createBoolConstantNull(rows.end(), context);
+        localResult = createBoolConstantNull(rows.size(), context);
       } else {
         bool pass = testFunction(simpleArg->valueAt(rows.begin()));
         if (!pass && passOrNull) {
-          localResult = createBoolConstantNull(rows.end(), context);
+          localResult = createBoolConstantNull(rows.size(), context);
         } else {
-          localResult = createBoolConstant(pass, rows.end(), context);
+          localResult = createBoolConstant(pass, rows.size(), context);
         }
       }
 

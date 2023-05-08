@@ -101,10 +101,16 @@ class AverageAggregate : public exec::Aggregate {
         rows.applyToSelected([&](vector_size_t i) {
           updateNonNullValue(groups[i], TAccumulator(value));
         });
+      } else {
+        // Spark expects the result of partial avg to be non-nullable.
+        rows.applyToSelected(
+            [&](vector_size_t i) { exec::Aggregate::clearNull(groups[i]); });
       }
     } else if (decodedRaw_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
         if (decodedRaw_.isNullAt(i)) {
+          // Spark expects the result of partial avg to be non-nullable.
+          exec::Aggregate::clearNull(groups[i]);
           return;
         }
         updateNonNullValue(
@@ -135,12 +141,18 @@ class AverageAggregate : public exec::Aggregate {
         const TInput value = decodedRaw_.valueAt<TInput>(0);
         const auto numRows = rows.countSelected();
         updateNonNullValue(group, numRows, TAccumulator(value) * numRows);
+      } else {
+        // Spark expects the result of partial avg to be non-nullable.
+        exec::Aggregate::clearNull(group);
       }
     } else if (decodedRaw_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
         if (!decodedRaw_.isNullAt(i)) {
           updateNonNullValue(
               group, TAccumulator(decodedRaw_.valueAt<TInput>(i)));
+        } else {
+          // Spark expects the result of partial avg to be non-nullable.
+          exec::Aggregate::clearNull(group);
         }
       });
     } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
@@ -195,6 +207,49 @@ class AverageAggregate : public exec::Aggregate {
             groups[i],
             baseCountVector->valueAt(decodedIndex),
             baseSumVector->valueAt(decodedIndex));
+      });
+    }
+  }
+
+  void retractIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /* mayPushdown */) override {
+    decodedPartial_.decode(*args[0], rows);
+    auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
+    auto baseSumVector =
+        baseRowVector->childAt(0)->as<SimpleVector<TAccumulator>>();
+    auto baseCountVector =
+        baseRowVector->childAt(1)->as<SimpleVector<int64_t>>();
+
+    if (decodedPartial_.isConstantMapping()) {
+      if (!decodedPartial_.isNullAt(0)) {
+        auto decodedIndex = decodedPartial_.index(0);
+        auto count = baseCountVector->valueAt(decodedIndex);
+        auto sum = baseSumVector->valueAt(decodedIndex);
+        rows.applyToSelected([&](vector_size_t i) {
+          updateNonNullValue(groups[i], -count, -sum);
+        });
+      }
+    } else if (decodedPartial_.mayHaveNulls()) {
+      rows.applyToSelected([&](vector_size_t i) {
+        if (decodedPartial_.isNullAt(i)) {
+          return;
+        }
+        auto decodedIndex = decodedPartial_.index(i);
+        updateNonNullValue(
+            groups[i],
+            -baseCountVector->valueAt(decodedIndex),
+            -baseSumVector->valueAt(decodedIndex));
+      });
+    } else {
+      rows.applyToSelected([&](vector_size_t i) {
+        auto decodedIndex = decodedPartial_.index(i);
+        updateNonNullValue(
+            groups[i],
+            -baseCountVector->valueAt(decodedIndex),
+            -baseSumVector->valueAt(decodedIndex));
       });
     }
   }
@@ -277,9 +332,15 @@ class AverageAggregate : public exec::Aggregate {
       if (isNull(group)) {
         vector->setNull(i, true);
       } else {
-        clearNull(rawNulls, i);
         auto* sumCount = accumulator(group);
-        rawValues[i] = TResult(sumCount->sum) / sumCount->count;
+        if (sumCount->count == 0) {
+          // To align with Spark, if all input are nulls, count will be 0,
+          // and the result of final avg will be null.
+          vector->setNull(i, true);
+        } else {
+          clearNull(rawNulls, i);
+          rawValues[i] = (TResult)sumCount->sum / sumCount->count;
+        }
       }
     }
   }
@@ -342,7 +403,7 @@ bool registerAverage(const std::string& name) {
                            .integerVariable("a_precision")
                            .integerVariable("a_scale")
                            .argumentType("DECIMAL(a_precision, a_scale)")
-                           .intermediateType("VARBINARY")
+                           .intermediateType("varbinary")
                            .returnType("DECIMAL(a_precision, a_scale)")
                            .build());
 
@@ -422,7 +483,8 @@ bool registerAverage(const std::string& name) {
                   resultType->kindName());
           }
         }
-      });
+      },
+      true);
   return true;
 }
 

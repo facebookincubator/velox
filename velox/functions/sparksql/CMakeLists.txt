@@ -16,6 +16,8 @@ add_library(
   ArraySort.cpp
   Bitwise.cpp
   CompareFunctionsNullSafe.cpp
+  Decimal.cpp
+  DecimalArithmetic.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp
@@ -27,7 +29,8 @@ add_library(
   RegisterCompare.cpp
   Size.cpp
   SplitFunctions.cpp
-  String.cpp)
+  String.cpp
+  MightContain.cpp)
 
 target_link_libraries(
   velox_functions_spark velox_functions_lib velox_functions_prestosql_impl
@@ -38,6 +41,7 @@ set_property(TARGET velox_functions_spark PROPERTY JOB_POOL_COMPILE
 
 if(${VELOX_ENABLE_AGGREGATES})
   add_subdirectory(aggregates)
+  add_subdirectory(windows)
 endif()
 
 if(${VELOX_BUILD_TESTING})

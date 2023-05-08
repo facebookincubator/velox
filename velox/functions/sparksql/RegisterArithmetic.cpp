@@ -33,6 +33,7 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerUnaryNumeric<AbsFunction>({prefix + "abs"});
   registerFunction<ExpFunction, double, double>({prefix + "exp"});
   registerBinaryIntegral<PModFunction>({prefix + "pmod"});
+  registerBinaryFloatingPoint<PModFloatFunction>({prefix + "pmod"});
   registerFunction<PowerFunction, double, double, double>({prefix + "power"});
   registerUnaryNumeric<RoundFunction>({prefix + "round"});
   registerFunction<RoundFunction, int8_t, int8_t, int32_t>({prefix + "round"});
@@ -51,6 +52,11 @@ void registerArithmeticFunctions(const std::string& prefix) {
       {prefix + "floor"});
   registerFunction<sparksql::FloorFunction, int64_t, double>(
       {prefix + "floor"});
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_add, prefix + "decimal_add");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_sub, prefix + "decimal_subtract");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_mul, prefix + "decimal_multiply");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "decimal_divide");
 }
 
 } // namespace facebook::velox::functions::sparksql

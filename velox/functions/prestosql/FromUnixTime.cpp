@@ -77,7 +77,7 @@ class FromUnixtimeFunction : public exec::VectorFunction {
         pool,
         outputType,
         BufferPtr(nullptr),
-        rows.end(),
+        rows.size(),
         std::vector<VectorPtr>{timestamps, timezones},
         0 /*nullCount*/);
 

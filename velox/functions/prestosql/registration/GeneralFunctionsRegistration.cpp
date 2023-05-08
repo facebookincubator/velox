@@ -23,6 +23,8 @@ namespace facebook::velox::functions {
 void registerAllSpecialFormGeneralFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_in, "in");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, "row_constructor");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_concat_row_with_null, "row_constructor_with_null");
   registerIsNullFunction("is_null");
 }
 

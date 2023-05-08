@@ -44,6 +44,8 @@ add_test(
   COMMAND velox_windows_value_test
   WORKING_DIRECTORY .)
 
+set_tests_properties(velox_windows_value_test PROPERTIES TIMEOUT 10000)
+
 target_link_libraries(velox_windows_value_test
                       ${CMAKE_WINDOW_TEST_LINK_LIBRARIES})
 

@@ -53,6 +53,19 @@ void ensureRegexIsCompatible(
       // instead adds the character ].
     } else if (*c == ']' && charClassStart + 1 != c) {
       charClassStart = nullptr;
+    } else if (*c == '(' && c + 3 < pattern.end() && *(c + 1) == '?') {
+      // RE2 doesn't support lookaround (lookahead or lookbehind), so we should
+      // exclude such patterns:
+      // (?=), (?!), (?<=), (?<!).
+      if (*(c + 2) == '=' || *(c + 2) == '!') {
+        VELOX_USER_FAIL(
+            "{} does NOT support lookahead in RE2-based implementation.",
+            functionName)
+      } else if (*(c + 2) == '<' && (*(c + 3) == '=' || *(c + 3) == '!')) {
+        VELOX_USER_FAIL(
+            "{} does NOT support lookbehind in RE2-based implementation.",
+            functionName)
+      }
     }
   }
 }
