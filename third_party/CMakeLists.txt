@@ -38,7 +38,8 @@ if(VELOX_ENABLE_ARROW)
       -DCMAKE_INSTALL_PREFIX=${ARROW_PREFIX}/install
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DARROW_BUILD_STATIC=ON
-      -DThrift_SOURCE=${THRIFT_SOURCE})
+      -DThrift_SOURCE=BUNDLED
+      -Dre2_SOURCE=AUTO)
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
   add_library(thrift STATIC IMPORTED GLOBAL)
@@ -58,11 +59,11 @@ if(VELOX_ENABLE_ARROW)
                                       ${THRIFT_INCLUDE_DIR})
   set_property(TARGET thrift PROPERTY IMPORTED_LOCATION ${THRIFT_LIB})
 
-  set(VELOX_ARROW_BUILD_VERSION 8.0.0)
+  set(VELOX_ARROW_BUILD_VERSION 11.0.0)
   set(VELOX_ARROW_BUILD_SHA256_CHECKSUM
-      ad9a05705117c989c116bae9ac70492fe015050e1b80fb0e38fde4b5d863aaa3)
+      4c720f943eeb00924081a2d06c5c6d9b743411cba0a1f82f661d37f5634badea)
   set(VELOX_ARROW_SOURCE_URL
-      "https://archive.apache.org/dist/arrow/arrow-${VELOX_ARROW_BUILD_VERSION}/apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
+      "https://github.com/oap-project/arrow/archive/refs/tags/v${VELOX_ARROW_BUILD_VERSION}-gluten-1.0.0.tar.gz"
   )
 
   resolve_dependency_url(ARROW)
@@ -71,7 +72,6 @@ if(VELOX_ENABLE_ARROW)
     arrow_ep
     PREFIX ${ARROW_PREFIX}
     URL ${VELOX_ARROW_SOURCE_URL}
-    URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
     SOURCE_SUBDIR cpp
     CMAKE_ARGS ${ARROW_CMAKE_ARGS}
     BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a ${ARROW_LIBDIR}/libparquet.a
