@@ -103,6 +103,10 @@ class GroupingSet {
   /// Returns an estimate of the average row size.
   std::optional<int64_t> estimateRowSize() const;
 
+  int64_t numDistincts() const {
+    return table_ ? table_->numDistinct() : 0;
+  }
+
  private:
   void addInputForActiveRows(const RowVectorPtr& input, bool mayPushdown);
 

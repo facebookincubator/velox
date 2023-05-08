@@ -671,6 +671,56 @@ PlanBuilder& PlanBuilder::groupId(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::expand(
+    const std::vector<std::vector<std::string>>& projectionSets) {
+  std::vector<std::vector<core::TypedExprPtr>> projectSetExprs;
+  projectSetExprs.reserve(projectionSets.size());
+  std::vector<std::string> names;
+  names.reserve(projectionSets[0].size());
+  std::vector<std::shared_ptr<const Type>> types;
+  types.reserve(projectionSets[0].size());
+  std::string groupIdPrefix = "group_id_";
+  int grouIdColCount = 0;
+  for (int i = 0; i < projectionSets[0].size(); ++i) {
+    for (int j = 0; j < projectionSets.size(); ++j) {
+      if (projectionSets[j][i] != "") {
+        if (planNode_->outputType()->containsChild(projectionSets[j][i])) {
+          names.push_back(projectionSets[j][i]);
+          types.push_back(
+              field(planNode_->outputType(), projectionSets[j][i])->type());
+        } else {
+          names.push_back(groupIdPrefix + std::to_string(grouIdColCount++));
+          types.push_back(BIGINT());
+        }
+        break;
+      }
+    }
+  }
+
+  for (const auto& projectionSet : projectionSets) {
+    std::vector<core::TypedExprPtr> projectExprs;
+    projectExprs.reserve(projectionSet.size());
+    for (int i = 0; i < projectionSet.size(); ++i) {
+      if (projectionSet[i] == "") {
+        projectExprs.push_back(std::make_shared<core::ConstantTypedExpr>(
+            types[i], variant::null(types[i]->kind())));
+      } else if (planNode_->outputType()->containsChild(projectionSet[i])) {
+        projectExprs.push_back(
+            field(planNode_->outputType(), projectionSet[i]));
+      } else {
+        projectExprs.push_back(std::make_shared<core::ConstantTypedExpr>(
+            BIGINT(), variant(std::stol(projectionSet[i]))));
+      }
+    }
+    projectSetExprs.push_back(projectExprs);
+  }
+
+  planNode_ = std::make_shared<core::ExpandNode>(
+      nextPlanNodeId(), projectSetExprs, std::move(names), planNode_);
+
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::localMerge(
     const std::vector<std::string>& keys,
     std::vector<core::PlanNodePtr> sources) {

@@ -90,7 +90,7 @@ class Aggregate {
   // the row. Only applies to accumulators that store variable size data out of
   // line. Fixed length accumulators do not use this. 0 if the row does not have
   // a size field.
-  void setOffsets(
+  virtual void setOffsets(
       int32_t offset,
       int32_t nullByte,
       uint8_t nullMask,
@@ -148,6 +148,22 @@ class Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) = 0;
+
+  virtual void retractIntermediateResults(
+      char** group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) {
+    VELOX_NYI();
+  }
+
+  virtual void retractRawInput(
+      char** group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) {
+    VELOX_NYI();
+  }
 
   // Updates the single partial accumulator from raw input data for global
   // aggregation.
@@ -365,6 +381,9 @@ struct AggregateFunctionEntry {
   std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures;
   AggregateFunctionFactory factory;
 };
+
+std::optional<const AggregateFunctionEntry*> getAggregateFunctionEntry(
+    const std::string& name);
 
 using AggregateFunctionMap =
     std::unordered_map<std::string, AggregateFunctionEntry>;

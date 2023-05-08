@@ -54,6 +54,11 @@ HashBuild::HashBuild(
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
+      spillMemoryThreshold_(
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .joinSpillMemoryThreshold()), // fixme should we use
+                                            // "hashBuildSpillMemoryThreshold"
       spillConfig_(
           joinNode_->canSpill(driverCtx->queryConfig())
               ? operatorCtx_->makeSpillConfig(Spiller::Type::kHashJoinBuild)
@@ -87,9 +92,6 @@ HashBuild::HashBuild(
   }
 
   // Identify the non-key build side columns and make a decoder for each.
-  const auto numDependents = outputType->size() - numKeys;
-  dependentChannels_.reserve(numDependents);
-  decoders_.reserve(numDependents);
   for (auto i = 0; i < outputType->size(); ++i) {
     if (keyChannelMap.find(i) == keyChannelMap.end()) {
       dependentChannels_.emplace_back(i);
@@ -421,6 +423,19 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
   // Test-only spill path.
   if (testingTriggerSpill()) {
     numSpillRows_ = std::max<int64_t>(1, numRows / 10);
+    numSpillBytes_ = numSpillRows_ * outOfLineBytesPerRow;
+    return false;
+  }
+
+  auto tracker = pool()->getMemoryUsageTracker();
+  VELOX_CHECK_NOT_NULL(tracker);
+  const auto currentUsage = tracker->currentBytes();
+  if ((spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) ||
+      tracker->highUsage()) {
+    const int64_t bytesToSpill =
+        currentUsage * spillConfig()->spillableReservationGrowthPct / 100;
+    numSpillRows_ = std::max<int64_t>(
+        1, bytesToSpill / (rows->fixedRowSize() + outOfLineBytesPerRow));
     numSpillBytes_ = numSpillRows_ * outOfLineBytesPerRow;
     return false;
   }

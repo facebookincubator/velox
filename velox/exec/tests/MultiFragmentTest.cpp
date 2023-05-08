@@ -1204,8 +1204,8 @@ DEBUG_ONLY_TEST_F(
       kRootTaskId,
       rootPlan,
       0,
-      [](RowVectorPtr /*unused*/, ContinueFuture* /*unused*/)
-          -> BlockingReason { return BlockingReason::kNotBlocked; },
+      [](RowVectorPtr /*unused*/, ContinueFuture*
+         /*unused*/) -> BlockingReason { return BlockingReason::kNotBlocked; },
       kRootMemoryLimit);
   Task::start(rootTask, 1);
   {

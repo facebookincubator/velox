@@ -15,7 +15,6 @@
  */
 
 #include "velox/exec/Aggregate.h"
-
 #include <unordered_map>
 #include "velox/exec/AggregateCompanionAdapter.h"
 #include "velox/exec/AggregateWindow.h"

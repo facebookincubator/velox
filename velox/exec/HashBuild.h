@@ -233,6 +233,10 @@ class HashBuild final : public Operator {
 
   const std::shared_ptr<HashJoinBridge> joinBridge_;
 
+  // The maximum memory usage that a hash build can hold before spilling.
+  // If it is zero, then there is no such limit.
+  const uint64_t spillMemoryThreshold_;
+
   const std::optional<Spiller::Config> spillConfig_;
 
   const std::shared_ptr<SpillOperatorGroup> spillGroup_;

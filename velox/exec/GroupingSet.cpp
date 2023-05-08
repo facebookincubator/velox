@@ -527,7 +527,8 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   }
 
   const auto currentUsage = pool_.getCurrentBytes();
-  if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
+  if ((spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) ||
+      pool_.highUsage()) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig_->spillableReservationGrowthPct / 100;
     auto rowsToSpill = std::max<int64_t>(
