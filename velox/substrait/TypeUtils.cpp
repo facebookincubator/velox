@@ -65,6 +65,21 @@ std::string_view getNameBeforeDelimiter(
   return std::string_view(compoundName.data(), pos);
 }
 
+std::pair<int32_t, int32_t> getPrecisionAndScale(const std::string& typeName) {
+  std::size_t start = typeName.find_first_of("<");
+  std::size_t end = typeName.find_last_of(">");
+  if (start == std::string::npos || end == std::string::npos) {
+    throw std::runtime_error("Invalid decimal type.");
+  }
+
+  std::string decimalType = typeName.substr(start + 1, end - start - 1);
+  std::size_t token_pos = decimalType.find_first_of(",");
+  auto precision = stoi(decimalType.substr(0, token_pos));
+  auto scale =
+      stoi(decimalType.substr(token_pos + 1, decimalType.length() - 1));
+  return std::make_pair(precision, scale);
+}
+
 TypePtr toVeloxType(const std::string& typeName) {
   VELOX_CHECK(!typeName.empty(), "Cannot convert empty string to Velox type.");
 
@@ -122,6 +137,14 @@ TypePtr toVeloxType(const std::string& typeName) {
     }
     case TypeKind::UNKNOWN:
       return UNKNOWN();
+    case TypeKind::SHORT_DECIMAL: {
+      auto shortDecimal = getPrecisionAndScale(typeName);
+      return SHORT_DECIMAL(shortDecimal.first, shortDecimal.second);
+    }
+    case TypeKind::LONG_DECIMAL: {
+      auto longDecimal = getPrecisionAndScale(typeName);
+      return LONG_DECIMAL(longDecimal.first, longDecimal.second);
+    }
     default:
       VELOX_NYI("Velox type conversion not supported for type {}.", typeName);
   }

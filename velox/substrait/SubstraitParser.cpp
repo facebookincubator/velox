@@ -118,6 +118,20 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
       nullability = substraitType.date().nullability();
       break;
     }
+    case ::substrait::Type::KindCase::kDecimal: {
+      auto precision = substraitType.decimal().precision();
+      auto scale = substraitType.decimal().scale();
+      if (precision <= 18) {
+        typeName = "SHORT_DECIMAL<" + std::to_string(precision) + "," +
+            std::to_string(scale) + ">";
+      } else {
+        typeName = "LONG_DECIMAL<" + std::to_string(precision) + "," +
+            std::to_string(scale) + ">";
+      }
+
+      nullability = substraitType.decimal().nullability();
+      break;
+    }
     default:
       VELOX_NYI(
           "Parsing for Substrait type not supported: {}",
@@ -144,6 +158,14 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
   return std::make_shared<SubstraitType>(type);
 }
 
+std::string SubstraitParser::parseType(const std::string& substraitType) {
+  auto it = typeMap_.find(substraitType);
+  if (it == typeMap_.end()) {
+    VELOX_NYI("Substrait parsing for type {} not supported.", substraitType);
+  }
+  return it->second;
+};
+
 std::vector<std::shared_ptr<SubstraitParser::SubstraitType>>
 SubstraitParser::parseNamedStruct(const ::substrait::NamedStruct& namedStruct) {
   // Nte that "names" are not used.
@@ -158,6 +180,36 @@ SubstraitParser::parseNamedStruct(const ::substrait::NamedStruct& namedStruct) {
     substraitTypeList.emplace_back(parseType(type));
   }
   return substraitTypeList;
+}
+
+std::vector<bool> SubstraitParser::parsePartitionColumns(
+    const ::substrait::NamedStruct& namedStruct) {
+  const auto& columnsTypes = namedStruct.partition_columns().column_type();
+  std::vector<bool> isPartitionColumns;
+  if (columnsTypes.size() == 0) {
+    // Regard all columns as non-partitioned columns.
+    isPartitionColumns.resize(namedStruct.names().size(), false);
+    return isPartitionColumns;
+  } else {
+    VELOX_CHECK(
+        columnsTypes.size() == namedStruct.names().size(),
+        "Invalid partion columns.");
+  }
+
+  isPartitionColumns.reserve(columnsTypes.size());
+  for (const auto& columnType : columnsTypes) {
+    switch (columnType) {
+      case ::substrait::PartitionColumns::NORMAL_COL:
+        isPartitionColumns.emplace_back(false);
+        break;
+      case ::substrait::PartitionColumns::PARTITION_COL:
+        isPartitionColumns.emplace_back(true);
+        break;
+      default:
+        VELOX_FAIL("Patition column type is not supported.");
+    }
+  }
+  return isPartitionColumns;
 }
 
 int32_t SubstraitParser::parseReferenceSegment(
@@ -219,17 +271,73 @@ const std::string& SubstraitParser::findFunctionSpec(
   return map[id];
 }
 
+std::string SubstraitParser::getSubFunctionName(
+    const std::string& subFuncSpec) const {
+  // Get the position of ":" in the function name.
+  std::size_t pos = subFuncSpec.find(":");
+  if (pos == std::string::npos) {
+    return subFuncSpec;
+  }
+  return subFuncSpec.substr(0, pos);
+}
+
+void SubstraitParser::getSubFunctionTypes(
+    const std::string& subFuncSpec,
+    std::vector<std::string>& types) const {
+  // Get the position of ":" in the function name.
+  std::size_t pos = subFuncSpec.find(":");
+  // Get the parameter types.
+  std::string funcTypes;
+  if (pos == std::string::npos) {
+    funcTypes = subFuncSpec;
+  } else {
+    if (pos == subFuncSpec.size() - 1) {
+      return;
+    }
+    funcTypes = subFuncSpec.substr(pos + 1);
+  }
+  // Split the types with delimiter.
+  std::string delimiter = "_";
+  while ((pos = funcTypes.find(delimiter)) != std::string::npos) {
+    auto type = funcTypes.substr(0, pos);
+    if (type != "opt" && type != "req") {
+      types.emplace_back(type);
+    }
+    funcTypes.erase(0, pos + delimiter.length());
+  }
+  types.emplace_back(funcTypes);
+}
+
 std::string SubstraitParser::findVeloxFunction(
     const std::unordered_map<uint64_t, std::string>& functionMap,
     uint64_t id) const {
   std::string funcSpec = findFunctionSpec(functionMap, id);
   std::string_view funcName = getNameBeforeDelimiter(funcSpec, ":");
-  return mapToVeloxFunction({funcName.begin(), funcName.end()});
+  std::vector<std::string> types;
+  getSubFunctionTypes(funcSpec, types);
+  bool isDecimal = false;
+  for (auto& type : types) {
+    if (type.find("dec") != std::string::npos) {
+      isDecimal = true;
+      break;
+    }
+  }
+  return mapToVeloxFunction({funcName.begin(), funcName.end()}, isDecimal);
 }
 
 std::string SubstraitParser::mapToVeloxFunction(
-    const std::string& substraitFunction) const {
+    const std::string& substraitFunction,
+    bool isDecimal) const {
   auto it = substraitVeloxFunctionMap_.find(substraitFunction);
+  if (isDecimal) {
+    if (substraitFunction == "add" || substraitFunction == "subtract" ||
+        substraitFunction == "multiply" || substraitFunction == "divide" ||
+        substraitFunction == "avg" || substraitFunction == "avg_merge" ||
+        substraitFunction == "sum" || substraitFunction == "sum_merge" ||
+        substraitFunction == "round") {
+      return "decimal_" + substraitFunction;
+    }
+  }
   if (it != substraitVeloxFunctionMap_.end()) {
     return it->second;
   }
@@ -237,6 +345,21 @@ std::string SubstraitParser::mapToVeloxFunction(
   // If not finding the mapping from Substrait function name to Velox function
   // name, the original Substrait function name will be used.
   return substraitFunction;
+}
+
+bool SubstraitParser::configSetInOptimization(
+    const ::substrait::extensions::AdvancedExtension& extension,
+    const std::string& config) const {
+  if (extension.has_optimization()) {
+    google::protobuf::StringValue msg;
+    extension.optimization().UnpackTo(&msg);
+    std::size_t pos = msg.value().find(config);
+    if ((pos != std::string::npos) &&
+        (msg.value().substr(pos + config.size(), 1) == "1")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace facebook::velox::substrait

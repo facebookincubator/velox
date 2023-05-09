@@ -19,7 +19,8 @@
 #include "velox/core/Expressions.h"
 #include "velox/substrait/SubstraitParser.h"
 #include "velox/vector/ComplexVector.h"
-
+#include "velox/type/StringView.h"
+#include "velox/vector/FlatVector.h"
 namespace facebook::velox::substrait {
 
 /// This class is used to convert Substrait representations to Velox
@@ -34,6 +35,12 @@ class SubstraitVeloxExprConverter {
       const std::unordered_map<uint64_t, std::string>& functionMap)
       : pool_(pool), functionMap_(functionMap) {}
 
+  /// Stores the variant and its type.
+  struct TypedVariant {
+    variant veloxVariant;
+    TypePtr variantType;
+  };
+
   /// Convert Substrait Field into Velox Field Expression.
   std::shared_ptr<const core::FieldAccessTypedExpr> toVeloxExpr(
       const ::substrait::Expression::FieldReference& substraitField,
@@ -44,12 +51,22 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression::ScalarFunction& substraitFunc,
       const RowTypePtr& inputType);
 
+  /// Convert Substrait SingularOrList into Velox Expression.
+  core::TypedExprPtr toVeloxExpr(
+      const ::substrait::Expression::SingularOrList& singularOrList,
+      const RowTypePtr& inputType);
+
   /// Convert Substrait CastExpression to Velox Expression.
   std::shared_ptr<const core::ITypedExpr> toVeloxExpr(
       const ::substrait::Expression::Cast& castExpr,
       const RowTypePtr& inputType);
 
-  /// Convert Substrait Literal into Velox Expression.
+  /// Create expression for extract.
+  std::shared_ptr<const core::ITypedExpr> toExtractExpr(
+      const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
+      const TypePtr& outputType);
+
+  /// Used to convert Substrait Literal into Velox Expression.
   std::shared_ptr<const core::ConstantTypedExpr> toVeloxExpr(
       const ::substrait::Expression::Literal& substraitLit);
 
@@ -58,26 +75,50 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression& substraitExpr,
       const RowTypePtr& inputType);
 
-  /// Convert Substrait IfThen into Velox Expression.
+  /// Convert Substrait IfThen into switch or if expression.
   std::shared_ptr<const core::ITypedExpr> toVeloxExpr(
       const ::substrait::Expression::IfThen& substraitIfThen,
       const RowTypePtr& inputType);
+
+  /// Wrap a constant vector from literals with an array vector inside to create
+  /// the constant expression.
+  std::shared_ptr<const core::ConstantTypedExpr> literalsToConstantExpr(
+      const std::vector<::substrait::Expression::Literal>& literals);
 
  private:
   /// Convert list literal to ArrayVector.
   ArrayVectorPtr literalsToArrayVector(
       const ::substrait::Expression::Literal& listLiteral);
 
+  RowVectorPtr literalsToRowVector(
+      const ::substrait::Expression::Literal& structLiteral);
+
   /// Memory pool.
   memory::MemoryPool* pool_;
 
   /// The Substrait parser used to convert Substrait representations into
   /// recognizable representations.
-  SubstraitParser substraitParser_;
+  std::shared_ptr<SubstraitParser> subParser_ =
+      std::make_shared<SubstraitParser>();
 
   /// The map storing the relations between the function id and the function
   /// name.
   std::unordered_map<uint64_t, std::string> functionMap_;
+
+  // The map storing the Substrait extract function input field and velox
+  // function name.
+  std::unordered_map<std::string, std::string> extractDatetimeFunctionMap_ = {
+      {"MILLISECOND", "millisecond"},
+      {"SECOND", "second"},
+      {"MINUTE", "minute"},
+      {"HOUR", "hour"},
+      {"DAY", "day"},
+      {"DAY_OF_WEEK", "day_of_week"},
+      {"DAY_OF_YEAR", "day_of_year"},
+      {"MONTH", "month"},
+      {"QUARTER", "quarter"},
+      {"YEAR", "year"},
+      {"YEAR_OF_WEEK", "year_of_week"}};
 };
 
 } // namespace facebook::velox::substrait

@@ -18,17 +18,20 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/substrait/SubstraitToVeloxPlan.h"
+#include "velox/substrait/SubstraitToVeloxPlanValidator.h"
 #include "velox/type/Type.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec;
+namespace vestrait = facebook::velox::substrait;
 
 class Substrait2VeloxPlanConversionTest
     : public exec::test::HiveConnectorTestBase {
@@ -68,6 +71,13 @@ class Substrait2VeloxPlanConversionTest
 
   std::shared_ptr<exec::test::TempDirectoryPath> tmpDir_{
       exec::test::TempDirectoryPath::create()};
+  std::shared_ptr<vestrait::SubstraitVeloxPlanConverter> planConverter_ =
+      std::make_shared<vestrait::SubstraitVeloxPlanConverter>(
+          memoryPool_.get());
+
+ private:
+  std::shared_ptr<memory::MemoryPool> memoryPool_{
+      memory::addDefaultLeafMemoryPool()};
 };
 
 // This test will firstly generate mock TPC-H lineitem ORC file. Then, Velox's
@@ -260,29 +270,63 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
       " the quickly ironic pains lose car"};
   vectors.emplace_back(makeFlatVector<std::string>(lCommentData));
 
-  // Write data into an ORC file.
+  // Write data into an DWRF file.
   writeToFile(
-      tmpDir_->path + "/mock_lineitem.orc",
+      tmpDir_->path + "/mock_lineitem.dwrf",
       {makeRowVector(type->names(), vectors)});
 
   // Find and deserialize Substrait plan json file.
-  std::string planPath =
+  std::string subPlanPath =
       getDataFilePath("velox/substrait/tests", "data/q6_first_stage.json");
 
   // Read q6_first_stage.json and resume the Substrait plan.
   ::substrait::Plan substraitPlan;
-  JsonToProtoConverter::readFromFile(planPath, substraitPlan);
+  JsonToProtoConverter::readFromFile(subPlanPath, substraitPlan);
 
   // Convert to Velox PlanNode.
-  facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter(
-      pool_.get());
-  auto planNode = planConverter.toVeloxPlan(substraitPlan);
+  auto planNode = planConverter_->toVeloxPlan(substraitPlan);
 
   auto expectedResult = makeRowVector({
       makeFlatVector<double>(1, [](auto /*row*/) { return 13613.1921; }),
   });
 
   exec::test::AssertQueryBuilder(planNode)
-      .splits(makeSplits(planConverter, planNode))
+      .splits(makeSplits(*planConverter_, planNode))
       .assertResults(expectedResult);
+}
+
+TEST_F(Substrait2VeloxPlanConversionTest, ifthenTest) {
+  std::string subPlanPath =
+      getDataFilePath("velox/substrait/tests", "data/if_then.json");
+
+  ::substrait::Plan substraitPlan;
+  JsonToProtoConverter::readFromFile(subPlanPath, substraitPlan);
+
+  // Convert to Velox PlanNode.
+  auto planNode = planConverter_->toVeloxPlan(substraitPlan);
+  ASSERT_EQ(
+      "-- Project[expressions: ] -> \n"
+      "  -- TableScan[table: hive_table, range filters: "
+      "[(hd_demo_sk, Filter(IsNotNull, deterministic, null not allowed)),"
+      " (hd_vehicle_count, BigintRange: [1, 9223372036854775807] no nulls)], "
+      "remaining filter: (and(or(equalto(ROW[\"hd_buy_potential\"],\">10000\"),"
+      "equalto(ROW[\"hd_buy_potential\"],\"unknown\")),if(greaterthan(ROW[\"hd_vehicle_count\"],0),"
+      "greaterthan(divide(cast ROW[\"hd_dep_count\"] as DOUBLE,cast ROW[\"hd_vehicle_count\"] as DOUBLE),1.2))))]"
+      " -> n0_0:BIGINT, n0_1:VARCHAR, n0_2:BIGINT, n0_3:BIGINT\n",
+      planNode->toString(true, true));
+}
+
+TEST_F(Substrait2VeloxPlanConversionTest, filterUpper) {
+  std::string subPlanPath =
+      getDataFilePath("velox/substrait/tests", "data/filter_upper.json");
+
+  ::substrait::Plan substraitPlan;
+  JsonToProtoConverter::readFromFile(subPlanPath, substraitPlan);
+
+  // Convert to Velox PlanNode.
+  auto planNode = planConverter_->toVeloxPlan(substraitPlan);
+  ASSERT_EQ(
+      "-- Project[expressions: ] -> \n  -- TableScan[table: hive_table, range filters: "
+      "[(key, BigintRange: [-2147483648, 2] no nulls)]] -> n0_0:INTEGER\n",
+      planNode->toString(true, true));
 }

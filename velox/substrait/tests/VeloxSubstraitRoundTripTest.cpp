@@ -21,10 +21,10 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
+#include "velox/functions/sparksql/Register.h"
 #include "velox/substrait/SubstraitToVeloxPlan.h"
-#include "velox/substrait/VeloxToSubstraitPlan.h"
-
 #include "velox/substrait/VariantToVectorConverter.h"
+#include "velox/substrait/VeloxToSubstraitPlan.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -97,7 +97,7 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
   std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =
       std::make_shared<VeloxToSubstraitPlanConvertor>();
   std::shared_ptr<SubstraitVeloxPlanConverter> substraitConverter_ =
-      std::make_shared<SubstraitVeloxPlanConverter>(pool_.get());
+      std::make_shared<SubstraitVeloxPlanConverter>(pool_.get(), true);
 };
 
 TEST_F(VeloxSubstraitRoundTripTest, project) {
@@ -508,6 +508,7 @@ TEST_F(VeloxSubstraitRoundTripTest, dateType) {
 }
 
 int main(int argc, char** argv) {
+  facebook::velox::functions::sparksql::registerFunctions("");
   testing::InitGoogleTest(&argc, argv);
   folly::init(&argc, &argv, false);
   return RUN_ALL_TESTS();

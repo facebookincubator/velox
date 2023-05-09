@@ -95,31 +95,31 @@ TEST_F(FunctionTest, constructFunctionMap) {
   auto functionMap = planConverter_->getFunctionMap();
   ASSERT_EQ(functionMap.size(), 9);
 
-  std::string function = planConverter_->findFunction(1);
+  std::string function = planConverter_->findFuncSpec(1);
   ASSERT_EQ(function, "lte:fp64_fp64");
 
-  function = planConverter_->findFunction(2);
+  function = planConverter_->findFuncSpec(2);
   ASSERT_EQ(function, "and:bool_bool");
 
-  function = planConverter_->findFunction(3);
+  function = planConverter_->findFuncSpec(3);
   ASSERT_EQ(function, "subtract:opt_fp64_fp64");
 
-  function = planConverter_->findFunction(4);
+  function = planConverter_->findFuncSpec(4);
   ASSERT_EQ(function, "multiply:opt_fp64_fp64");
 
-  function = planConverter_->findFunction(5);
+  function = planConverter_->findFuncSpec(5);
   ASSERT_EQ(function, "add:opt_fp64_fp64");
 
-  function = planConverter_->findFunction(6);
+  function = planConverter_->findFuncSpec(6);
   ASSERT_EQ(function, "sum:opt_fp64");
 
-  function = planConverter_->findFunction(7);
+  function = planConverter_->findFuncSpec(7);
   ASSERT_EQ(function, "count:opt_fp64");
 
-  function = planConverter_->findFunction(8);
+  function = planConverter_->findFuncSpec(8);
   ASSERT_EQ(function, "count:opt_i32");
 
-  function = planConverter_->findFunction(9);
+  function = planConverter_->findFuncSpec(9);
   ASSERT_EQ(function, "is_not_null:fp64");
 }
 
@@ -198,4 +198,20 @@ TEST_F(FunctionTest, setVectorFromVariants) {
   ASSERT_TRUE(isIntervalDayTimeType(resultVec->type()));
   ASSERT_EQ(9020, resultVec->asFlatVector<int64_t>()->valueAt(0));
   ASSERT_EQ(8875, resultVec->asFlatVector<int64_t>()->valueAt(1));
+}
+
+TEST_F(FunctionTest, getFunctionType) {
+  std::vector<std::string> types;
+  substraitParser_->getSubFunctionTypes("sum:opt_i32", types);
+  ASSERT_EQ("i32", types[0]);
+
+  types.clear();
+  substraitParser_->getSubFunctionTypes("sum:i32", types);
+  ASSERT_EQ("i32", types[0]);
+
+  types.clear();
+  substraitParser_->getSubFunctionTypes("sum:opt_str_str", types);
+  ASSERT_EQ(2, types.size());
+  ASSERT_EQ("str", types[0]);
+  ASSERT_EQ("str", types[1]);
 }

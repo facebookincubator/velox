@@ -4,8 +4,8 @@ syntax = "proto3";
 package substrait;
 
 import "google/protobuf/any.proto";
-import "velox/substrait/proto/substrait/extensions/extensions.proto";
-import "velox/substrait/proto/substrait/type.proto";
+import "substrait/extensions/extensions.proto";
+import "substrait/type.proto";
 
 option csharp_namespace = "Substrait.Protobuf";
 option go_package = "github.com/substrait-io/substrait-go/proto";
@@ -168,11 +168,12 @@ message JoinRel {
     JOIN_TYPE_OUTER = 2;
     JOIN_TYPE_LEFT = 3;
     JOIN_TYPE_RIGHT = 4;
-    JOIN_TYPE_SEMI = 5;
-    JOIN_TYPE_ANTI = 6;
+    JOIN_TYPE_LEFT_SEMI = 5;
+    JOIN_TYPE_RIGHT_SEMI = 6;
+    JOIN_TYPE_ANTI = 7;
     // This join is useful for nested sub-queries where we need exactly one tuple in output (or throw exception)
     // See Section 3.2 of https://15721.courses.cs.cmu.edu/spring2018/papers/16-optimizer2/hyperjoins-btw2017.pdf
-    JOIN_TYPE_SINGLE = 7;
+    JOIN_TYPE_SINGLE = 8;
   }
 
   substrait.extensions.AdvancedExtension advanced_extension = 10;
@@ -234,6 +235,19 @@ message SortRel {
   Rel input = 2;
   repeated SortField sorts = 3;
   substrait.extensions.AdvancedExtension advanced_extension = 10;
+}
+
+message WindowRel {
+  RelCommon common = 1;
+  Rel input = 2;
+  repeated Measure measures = 3;
+  repeated Expression partition_expressions = 4;
+  repeated SortField sorts = 5;
+  substrait.extensions.AdvancedExtension advanced_extension = 10;
+
+  message Measure {
+    Expression.WindowFunction measure = 1;
+  }
 }
 
 // The relational operator capturing simple FILTERs (as in the WHERE clause of SQL)
@@ -340,6 +354,35 @@ message ExchangeRel {
   }
 }
 
+// Duplicates records, possibly switching output expressions between each duplicate.
+// Default output is all of the fields declared followed by one int64 field that contains the
+// duplicate_id which is a zero-index ordinal of which duplicate of the original record this
+// corresponds to.
+message ExpandRel {
+  RelCommon common = 1;
+  Rel input = 2;
+  repeated ExpandField fields = 4;
+  substrait.extensions.AdvancedExtension advanced_extension = 10;
+
+  message ExpandField {
+    oneof field_type {
+      // Field that switches output based on which duplicate_id we're outputting
+      SwitchingField switching_field = 2;
+
+      // Field that outputs the same value no matter which duplicate_id we're on.
+      Expression consistent_field = 3;
+    }
+  }
+
+  message SwitchingField {
+    // Array that contains an expression to output per duplicate_id
+    // each `switching_field` must have the same number of expressions
+    // all expressions within a switching field be the same type class but can differ in nullability.
+    // this column will be nullable if any of the expressions are nullable.
+    repeated Expression duplicates = 1;
+  }
+}
+
 // A relation with output field names.
 //
 // This is for use at the root of a `Rel` tree.
@@ -369,6 +412,9 @@ message Rel {
     //Physical relations
     HashJoinRel hash_join = 13;
     MergeJoinRel merge_join = 14;
+    ExpandRel expand = 15;
+    WindowRel window = 16;
+    GenerateRel generate = 17;
   }
 }
 
@@ -836,6 +882,9 @@ message Expression {
     // Optional; defaults to the start of the partition.
     Bound lower_bound = 5;
 
+    string column_name = 12;
+    WindowType window_type = 13;
+
     // Defines the record relative to the current record up to which the window
     // extends. The bound is inclusive. If the upper bound indexes a record
     // less than the lower bound, TODO (null range/no records passed?
@@ -867,10 +916,9 @@ message Expression {
       // Defines that the bound extends to or from the current record.
       message CurrentRow {}
 
-      // Defines an "unbounded bound": for lower bounds this means the start
-      // of the partition, and for upper bounds this means the end of the
-      // partition.
-      message Unbounded {}
+      message Unbounded_Preceding {}
+
+      message Unbounded_Following {}
 
       oneof kind {
         // The bound extends some number of records behind the current record.
@@ -883,10 +931,8 @@ message Expression {
         // The bound extends to the current record.
         CurrentRow current_row = 3;
 
-        // The bound extends to the start of the partition or the end of the
-        // partition, depending on whether this represents the upper or lower
-        // bound.
-        Unbounded unbounded = 4;
+        Unbounded_Preceding unbounded_preceding = 4;
+        Unbounded_Following unbounded_following = 5;
       }
     }
   }
@@ -1176,6 +1222,17 @@ message Expression {
   }
 }
 
+message GenerateRel {
+  RelCommon common = 1;
+  Rel input = 2;
+  
+  Expression generator = 3;
+  repeated Expression child_output = 4;
+  bool outer = 5;
+
+  substrait.extensions.AdvancedExtension advanced_extension = 10;
+}
+
 // The description of a field to sort on (including the direction of sorting and null semantics)
 message SortField {
   Expression expr = 1;
@@ -1222,6 +1279,11 @@ enum AggregationPhase {
   // This call should combine the intermediate values to yield the final
   // return value.
   AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT = 4;
+}
+
+enum WindowType {
+  ROWS = 0;
+  RANGE = 1;
 }
 
 // An aggregate function.

@@ -33,7 +33,7 @@ using namespace facebook::velox::substrait;
 class Substrait2VeloxValuesNodeConversionTest : public OperatorTestBase {
  protected:
   std::shared_ptr<SubstraitVeloxPlanConverter> planConverter_ =
-      std::make_shared<SubstraitVeloxPlanConverter>(pool_.get());
+      std::make_shared<SubstraitVeloxPlanConverter>(pool_.get(), true);
 };
 
 // SELECT * FROM tmp

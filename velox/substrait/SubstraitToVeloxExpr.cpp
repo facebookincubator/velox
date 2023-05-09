@@ -17,6 +17,7 @@
 #include "velox/substrait/SubstraitToVeloxExpr.h"
 #include "velox/substrait/TypeUtils.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/VariantToVector.h"
 
 using namespace facebook::velox;
 namespace {
@@ -91,11 +92,27 @@ ArrayVectorPtr makeArrayVector(const VectorPtr& elements) {
       elements);
 }
 
+RowVectorPtr makeRowVector(const std::vector<VectorPtr>& children) {
+  std::vector<std::shared_ptr<const Type>> types;
+  types.resize(children.size());
+  for (int i = 0; i < children.size(); i++) {
+    types[i] = children[i]->type();
+  }
+  const size_t vectorSize = children.empty() ? 0 : children.front()->size();
+  auto rowType = ROW(std::move(types));
+  return std::make_shared<RowVector>(
+      children[0]->pool(), rowType, BufferPtr(nullptr), vectorSize, children);
+}
+
 ArrayVectorPtr makeEmptyArrayVector(memory::MemoryPool* pool) {
   BufferPtr offsets = allocateOffsets(1, pool);
   BufferPtr sizes = allocateOffsets(1, pool);
   return std::make_shared<ArrayVector>(
       pool, ARRAY(UNKNOWN()), nullptr, 1, offsets, sizes, nullptr);
+}
+
+RowVectorPtr makeEmptyRowVector(memory::MemoryPool* pool) {
+  return makeRowVector({});
 }
 
 template <typename T>
@@ -110,8 +127,10 @@ void setLiteralValue(
       vector->set(index, StringView(literal.string()));
     } else if (literal.has_var_char()) {
       vector->set(index, StringView(literal.var_char().value()));
+    } else if (literal.has_binary()) {
+      vector->set(index, StringView(literal.binary()));
     } else {
-      VELOX_FAIL("Unexpected string literal");
+      VELOX_FAIL("Unexpected string or binary literal");
     }
   } else {
     vector->set(index, getLiteralValue<T>(literal));
@@ -154,8 +173,23 @@ bool isNullOnFailure(
   }
 }
 
+template <TypeKind kind>
+VectorPtr constructFlatVectorForStruct(
+    const ::substrait::Expression::Literal& child,
+    const vector_size_t size,
+    const TypePtr& type,
+    memory::MemoryPool* pool) {
+  VELOX_CHECK(type->isPrimitiveType());
+  auto vector = BaseVector::create(type, size, pool);
+  using T = typename TypeTraits<kind>::NativeType;
+  auto flatVector = vector->as<FlatVector<T>>();
+  setLiteralValue(child, flatVector, 0);
+  return vector;
+}
+
 } // namespace
 
+using facebook::velox::core::variantArrayToVector;
 namespace facebook::velox::substrait {
 
 std::shared_ptr<const core::FieldAccessTypedExpr>
@@ -166,25 +200,81 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   switch (typeCase) {
     case ::substrait::Expression::FieldReference::ReferenceTypeCase::
         kDirectReference: {
-      const auto& directRef = substraitField.direct_reference();
-      int32_t colIdx = substraitParser_.parseReferenceSegment(directRef);
+      const auto& dRef = substraitField.direct_reference();
+      VELOX_CHECK(dRef.has_struct_field(), "Struct field expected.");
+      int32_t colIdx = subParser_->parseReferenceSegment(dRef);
+      std::optional<int32_t> childIdx = std::nullopt;
+      if (dRef.struct_field().has_child()) {
+        childIdx =
+            subParser_->parseReferenceSegment(dRef.struct_field().child());
+      }
+
+      const auto& inputTypes = inputType->children();
       const auto& inputNames = inputType->names();
       const int64_t inputSize = inputNames.size();
-      if (colIdx <= inputSize) {
-        const auto& inputTypes = inputType->children();
-        // Convert type to row.
+
+      if (colIdx >= inputSize) {
+        VELOX_FAIL("Missing the column with id '{}' .", colIdx);
+      }
+
+      if (!childIdx.has_value()) {
         return std::make_shared<core::FieldAccessTypedExpr>(
             inputTypes[colIdx],
             std::make_shared<core::InputTypedExpr>(inputTypes[colIdx]),
             inputNames[colIdx]);
       } else {
-        VELOX_FAIL("Missing the column with id '{}' .", colIdx);
+        // Select a subfield in a struct by name.
+        if (auto inputColumnType = asRowType(inputTypes[colIdx])) {
+          if (childIdx.value() >= inputColumnType->size()) {
+            VELOX_FAIL("Missing the subfield with id '{}' .", childIdx.value());
+          }
+          return std::make_shared<core::FieldAccessTypedExpr>(
+              inputColumnType->childAt(childIdx.value()),
+              std::make_shared<core::FieldAccessTypedExpr>(
+                  inputTypes[colIdx], inputNames[colIdx]),
+              inputColumnType->nameOf(childIdx.value()));
+        } else {
+          VELOX_FAIL("RowType expected.");
+        }
       }
+      break;
     }
     default:
       VELOX_NYI(
           "Substrait conversion not supported for Reference '{}'", typeCase);
   }
+}
+
+std::shared_ptr<const core::ITypedExpr>
+SubstraitVeloxExprConverter::toExtractExpr(
+    const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
+    const TypePtr& outputType) {
+  VELOX_CHECK_EQ(params.size(), 2);
+  auto functionArg =
+      std::dynamic_pointer_cast<const core::ConstantTypedExpr>(params[0]);
+  if (functionArg) {
+    // Get the function argument.
+    auto variant = functionArg->value();
+    if (!variant.hasValue()) {
+      VELOX_FAIL("Value expected in variant.");
+    }
+    // The first parameter specifies extracting from which field.
+    // Only year is supported currently.
+    std::string from = variant.value<std::string>();
+
+    // The second parameter is the function parameter.
+    std::vector<std::shared_ptr<const core::ITypedExpr>> exprParams;
+    exprParams.reserve(1);
+    exprParams.emplace_back(params[1]);
+    auto iter = extractDatetimeFunctionMap_.find(from);
+    if (iter != extractDatetimeFunctionMap_.end()) {
+      return std::make_shared<const core::CallTypedExpr>(
+          outputType, std::move(exprParams), iter->second);
+    } else {
+      VELOX_NYI("Extract from {} not supported.", from);
+    }
+  }
+  VELOX_FAIL("Constant is expected to be the first parameter in extract.");
 }
 
 std::shared_ptr<const core::ITypedExpr>
@@ -196,12 +286,63 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   for (const auto& sArg : substraitFunc.arguments()) {
     params.emplace_back(toVeloxExpr(sArg.value(), inputType));
   }
-  const auto& veloxFunction = substraitParser_.findVeloxFunction(
+  const auto& veloxFunction = subParser_->findVeloxFunction(
       functionMap_, substraitFunc.function_reference());
   std::string typeName =
-      substraitParser_.parseType(substraitFunc.output_type())->type;
+      subParser_->parseType(substraitFunc.output_type())->type;
+
+  if (veloxFunction == "extract") {
+    return toExtractExpr(std::move(params), toVeloxType(typeName));
+  }
+
   return std::make_shared<const core::CallTypedExpr>(
       toVeloxType(typeName), std::move(params), veloxFunction);
+}
+
+std::shared_ptr<const core::ConstantTypedExpr>
+SubstraitVeloxExprConverter::literalsToConstantExpr(
+    const std::vector<::substrait::Expression::Literal>& literals) {
+  std::vector<variant> variants;
+  variants.reserve(literals.size());
+  VELOX_CHECK_GE(literals.size(), 0, "List should have at least one item.");
+  std::optional<TypePtr> literalType = std::nullopt;
+  for (const auto& literal : literals) {
+    auto veloxVariant = toVeloxExpr(literal)->value();
+    if (!literalType.has_value()) {
+      literalType = veloxVariant.inferType();
+    }
+    variants.emplace_back(veloxVariant);
+  }
+  VELOX_CHECK(literalType.has_value(), "Type expected.");
+  auto varArray = variant::array(variants);
+  ArrayVectorPtr arrayVector =
+      variantArrayToVector(varArray.inferType(), varArray.array(), pool_);
+  // Wrap the array vector into constant vector.
+  auto constantVector =
+      BaseVector::wrapInConstant(1 /*length*/, 0 /*index*/, arrayVector);
+  return std::make_shared<const core::ConstantTypedExpr>(constantVector);
+}
+
+core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
+    const ::substrait::Expression::SingularOrList& singularOrList,
+    const RowTypePtr& inputType) {
+  VELOX_CHECK(
+      singularOrList.options_size() > 0, "At least one option is expected.");
+  auto options = singularOrList.options();
+  std::vector<::substrait::Expression::Literal> literals;
+  literals.reserve(options.size());
+  for (const auto& option : options) {
+    VELOX_CHECK(option.has_literal(), "Literal is expected as option.");
+    literals.emplace_back(option.literal());
+  }
+
+  std::vector<std::shared_ptr<const core::ITypedExpr>> params;
+  params.reserve(2);
+  // First param is the value, second param is the list.
+  params.emplace_back(toVeloxExpr(singularOrList.value(), inputType));
+  params.emplace_back(literalsToConstantExpr(literals));
+  return std::make_shared<const core::CallTypedExpr>(
+      BOOLEAN(), std::move(params), "in");
 }
 
 std::shared_ptr<const core::ConstantTypedExpr>
@@ -237,10 +378,21 @@ SubstraitVeloxExprConverter::toVeloxExpr(
           VARCHAR(), variant(substraitLit.string()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
       auto veloxType =
-          toVeloxType(substraitParser_.parseType(substraitLit.null())->type);
-      return std::make_shared<core::ConstantTypedExpr>(
-          veloxType, variant::null(veloxType->kind()));
+          toVeloxType(subParser_->parseType(substraitLit.null())->type);
+      if (veloxType->isShortDecimal()) {
+        return std::make_shared<core::ConstantTypedExpr>(
+            veloxType, variant::shortDecimal(std::nullopt, veloxType));
+      } else if (veloxType->isLongDecimal()) {
+        return std::make_shared<core::ConstantTypedExpr>(
+            veloxType, variant::longDecimal(std::nullopt, veloxType));
+      } else {
+        return std::make_shared<core::ConstantTypedExpr>(
+            veloxType, variant::null(veloxType->kind()));
+      }
     }
+    case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
+      return std::make_shared<core::ConstantTypedExpr>(
+          DATE(), variant(Date(substraitLit.date())));
     case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
       return std::make_shared<core::ConstantTypedExpr>(
           VARCHAR(), variant(substraitLit.var_char().value()));
@@ -249,9 +401,30 @@ SubstraitVeloxExprConverter::toVeloxExpr(
           BaseVector::wrapInConstant(1, 0, literalsToArrayVector(substraitLit));
       return std::make_shared<const core::ConstantTypedExpr>(constantVector);
     }
-    case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
+    case ::substrait::Expression_Literal::LiteralTypeCase::kBinary:
       return std::make_shared<core::ConstantTypedExpr>(
-          DATE(), variant(Date(substraitLit.date())));
+          VARBINARY(), variant::binary(substraitLit.binary()));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kStruct: {
+      auto constantVector =
+          BaseVector::wrapInConstant(1, 0, literalsToRowVector(substraitLit));
+      return std::make_shared<const core::ConstantTypedExpr>(constantVector);
+    }
+    case ::substrait::Expression_Literal::LiteralTypeCase::kDecimal: {
+      auto decimal = substraitLit.decimal().value();
+      auto precision = substraitLit.decimal().precision();
+      auto scale = substraitLit.decimal().scale();
+      int128_t decimalValue;
+      memcpy(&decimalValue, decimal.c_str(), 16);
+      if (precision <= 18) {
+        auto type = SHORT_DECIMAL(precision, scale);
+        return std::make_shared<core::ConstantTypedExpr>(
+            type, variant::shortDecimal((int64_t)decimalValue, type));
+      } else {
+        auto type = LONG_DECIMAL(precision, scale);
+        return std::make_shared<core::ConstantTypedExpr>(
+            type, variant::longDecimal(decimalValue, type));
+      }
+    }
     default:
       VELOX_NYI(
           "Substrait conversion not supported for type case '{}'", typeCase);
@@ -293,7 +466,7 @@ ArrayVectorPtr SubstraitVeloxExprConverter::literalsToArrayVector(
           listLiteral, childSize, VARCHAR(), pool_));
     case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
       auto veloxType =
-          toVeloxType(substraitParser_.parseType(listLiteral.null())->type);
+          toVeloxType(subParser_->parseType(listLiteral.null())->type);
       auto kind = veloxType->kind();
       return makeArrayVector(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           constructFlatVector, kind, listLiteral, childSize, veloxType, pool_));
@@ -325,18 +498,77 @@ ArrayVectorPtr SubstraitVeloxExprConverter::literalsToArrayVector(
   }
 }
 
+RowVectorPtr SubstraitVeloxExprConverter::literalsToRowVector(
+    const ::substrait::Expression::Literal& structLiteral) {
+  auto childSize = structLiteral.struct_().fields().size();
+  if (childSize == 0) {
+    return makeEmptyRowVector(pool_);
+  }
+  auto typeCase = structLiteral.struct_().fields(0).literal_type_case();
+  switch (typeCase) {
+    case ::substrait::Expression_Literal::LiteralTypeCase::kBinary: {
+      std::vector<VectorPtr> vectors;
+      vectors.reserve(structLiteral.struct_().fields().size());
+      for (auto& child : structLiteral.struct_().fields()) {
+        vectors.emplace_back(constructFlatVectorForStruct<TypeKind::VARBINARY>(
+            child, 1, VARBINARY(), pool_));
+      }
+      return makeRowVector(vectors);
+    }
+    default:
+      VELOX_NYI(
+          "literalsToRowVector not supported for type case '{}'", typeCase);
+  }
+}
+
 std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::Cast& castExpr,
     const RowTypePtr& inputType) {
-  auto substraitType = substraitParser_.parseType(castExpr.type());
+  auto substraitType = subParser_->parseType(castExpr.type());
   auto type = toVeloxType(substraitType->type);
   bool nullOnFailure = isNullOnFailure(castExpr.failure_behavior());
 
   std::vector<core::TypedExprPtr> inputs{
       toVeloxExpr(castExpr.input(), inputType)};
-
   return std::make_shared<core::CastTypedExpr>(type, inputs, nullOnFailure);
+}
+
+std::shared_ptr<const core::ITypedExpr>
+SubstraitVeloxExprConverter::toVeloxExpr(
+    const ::substrait::Expression::IfThen& ifThenExpr,
+    const RowTypePtr& inputType) {
+  VELOX_CHECK(ifThenExpr.ifs().size() > 0, "If clause expected.");
+
+  // Params are concatenated conditions and results with an optional "else" at
+  // the end, e.g. {condition1, result1, condition2, result2,..else}
+  std::vector<core::TypedExprPtr> params;
+  // If and then expressions are in pairs.
+  params.reserve(ifThenExpr.ifs().size() * 2);
+  std::optional<TypePtr> outputType = std::nullopt;
+  for (const auto& ifThen : ifThenExpr.ifs()) {
+    params.emplace_back(toVeloxExpr(ifThen.if_(), inputType));
+    const auto& thenExpr = toVeloxExpr(ifThen.then(), inputType);
+    // Get output type from the first then expression.
+    if (!outputType.has_value()) {
+      outputType = thenExpr->type();
+    }
+    params.emplace_back(thenExpr);
+  }
+
+  if (ifThenExpr.has_else_()) {
+    params.reserve(1);
+    params.emplace_back(toVeloxExpr(ifThenExpr.else_(), inputType));
+  }
+
+  VELOX_CHECK(outputType.has_value(), "Output type should be set.");
+  if (ifThenExpr.ifs().size() == 1) {
+    // If there is only one if-then clause, use if expression.
+    return std::make_shared<const core::CallTypedExpr>(
+        outputType.value(), std::move(params), "if");
+  }
+  return std::make_shared<const core::CallTypedExpr>(
+      outputType.value(), std::move(params), "switch");
 }
 
 std::shared_ptr<const core::ITypedExpr>
@@ -356,47 +588,12 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       return toVeloxExpr(substraitExpr.cast(), inputType);
     case ::substrait::Expression::RexTypeCase::kIfThen:
       return toVeloxExpr(substraitExpr.if_then(), inputType);
+    case ::substrait::Expression::RexTypeCase::kSingularOrList:
+      return toVeloxExpr(substraitExpr.singular_or_list(), inputType);
     default:
       VELOX_NYI(
           "Substrait conversion not supported for Expression '{}'", typeCase);
   }
-}
-
-std::shared_ptr<const core::ITypedExpr>
-SubstraitVeloxExprConverter::toVeloxExpr(
-    const ::substrait::Expression_IfThen& substraitIfThen,
-    const RowTypePtr& inputType) {
-  std::vector<core::TypedExprPtr> inputs;
-  if (substraitIfThen.has_else_()) {
-    inputs.reserve(substraitIfThen.ifs_size() * 2 + 1);
-  } else {
-    inputs.reserve(substraitIfThen.ifs_size() * 2);
-  }
-
-  TypePtr resultType;
-  for (auto& ifExpr : substraitIfThen.ifs()) {
-    auto ifClauseExpr = toVeloxExpr(ifExpr.if_(), inputType);
-    inputs.emplace_back(ifClauseExpr);
-    auto thenClauseExpr = toVeloxExpr(ifExpr.then(), inputType);
-    inputs.emplace_back(thenClauseExpr);
-
-    if (!thenClauseExpr->type()->containsUnknown()) {
-      resultType = thenClauseExpr->type();
-    }
-  }
-
-  if (substraitIfThen.has_else_()) {
-    auto elseClauseExpr = toVeloxExpr(substraitIfThen.else_(), inputType);
-    inputs.emplace_back(elseClauseExpr);
-    if (!resultType && !elseClauseExpr->type()->containsUnknown()) {
-      resultType = elseClauseExpr->type();
-    }
-  }
-
-  VELOX_CHECK_NOT_NULL(resultType, "Result type not found");
-
-  return std::make_shared<const core::CallTypedExpr>(
-      resultType, std::move(inputs), "if");
 }
 
 } // namespace facebook::velox::substrait

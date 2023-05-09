@@ -67,19 +67,19 @@
                         "input": {
                             "project": {
                                 "common": {
-                                    "emit":{
-                                        "outputMapping":[
-                                           2
+                                    "emit": {
+                                        "outputMapping": [
+                                            2
                                         ]
                                     }
                                 },
                                 "input": {
                                     "project": {
                                         "common": {
-                                            "emit":{
-                                                "outputMapping":[
-                                                   4,
-                                                   5
+                                            "emit": {
+                                                "outputMapping": [
+                                                    4,
+                                                    5
                                                 ]
                                             }
                                         },
@@ -491,8 +491,8 @@
                                                             "partition_index": "0",
                                                             "start": "0",
                                                             "length": "3719",
-                                                            "uri_file": "/mock_lineitem.orc",
-                                                            "orc": {}
+                                                            "uri_file": "/mock_lineitem.dwrf",
+                                                            "dwrf": {}
                                                         }
                                                     ]
                                                 }

@@ -33,15 +33,14 @@ get_filename_component(PROTO_DIR ${substrait_proto_directory}/, DIRECTORY)
 # Generate Substrait hearders
 add_custom_command(
   OUTPUT ${PROTO_OUTPUT_FILES}
-  COMMAND
-    ${Protobuf_PROTOC_EXECUTABLE} --proto_path ${PROJECT_SOURCE_DIR}/
-    --proto_path ${Protobuf_INCLUDE_DIRS} --cpp_out ${PROJECT_SOURCE_DIR}
-    ${PROTO_FILES}
+  COMMAND ${Protobuf_PROTOC_EXECUTABLE} --proto_path  ${proto_directory}/ --cpp_out ${PROTO_OUTPUT_DIR}
+          ${PROTO_FILES}
   DEPENDS ${PROTO_DIR}
   COMMENT "Running PROTO compiler"
   VERBATIM)
 add_custom_target(substrait_proto ALL DEPENDS ${PROTO_OUTPUT_FILES})
 add_dependencies(substrait_proto protobuf::libprotobuf)
+
 
 set(SRCS
     ${PROTO_SRCS}
@@ -54,13 +53,14 @@ set(SRCS
     VeloxToSubstraitPlan.cpp
     VeloxToSubstraitType.cpp
     VeloxSubstraitSignature.cpp
-    VariantToVectorConverter.cpp)
+    VariantToVectorConverter.cpp
+    SubstraitToVeloxPlanValidator.cpp)
 
 add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter
                            PUBLIC ${PROTO_OUTPUT_DIR})
 target_link_libraries(velox_substrait_plan_converter velox_connector
-                      velox_dwio_dwrf_common)
+                      velox_dwio_dwrf_common velox_functions_spark)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
