@@ -23,6 +23,8 @@ add_library(
   HiveConnectorTestBase.cpp
   OperatorTestBase.cpp
   PlanBuilder.cpp
+  PlanFuzzer.cpp
+  Rebatch.cpp
   QueryAssertions.cpp
   SumNonPODAggregate.cpp
   TpchQueryBuilder.cpp

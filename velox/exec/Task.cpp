@@ -907,6 +907,9 @@ bool Task::addSplitWithSequence(
       // duplicate splits would be ignored.
       auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
       if (sequenceId > splitsState.maxSequenceId) {
+        if (rememberSplits_) {
+          rememberedSplits_.push_back({planNodeId, split});
+        }
         promise = addSplitLocked(splitsState, std::move(split));
         added = true;
       }
@@ -931,6 +934,10 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
     std::lock_guard<std::mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
     if (isTaskRunning) {
+      if (rememberSplits_) {
+        rememberedSplits_.push_back({planNodeId, split});
+      }
+
       promise = addSplitLocked(
           getPlanNodeSplitsStateLocked(planNodeId), std::move(split));
     }

@@ -193,6 +193,21 @@ class Task : public std::enable_shared_from_this<Task> {
   /// corresponding to plan node with specified ID.
   void noMoreSplits(const core::PlanNodeId& planNodeId);
 
+  /// Causes all added splits to be recorded for possible replay.
+  void testingRememberAllSplits() {
+    rememberSplits_ = true;
+  }
+
+  struct TaskSplit {
+    core::PlanNodeId nodeId;
+    Split split;
+  };
+
+  // Returns all added splits.
+  std::vector<TaskSplit> moveRememberedSplits() {
+    return std::move(rememberedSplits_);
+  }
+
   /// Updates the total number of output buffers to broadcast the results of the
   /// execution to. Used when plan tree ends with a PartitionedOutputNode with
   /// broadcast flag set to true.
@@ -963,6 +978,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Base spill directory for this task.
   std::string spillDirectory_;
+
+  bool rememberSplits_{false};
+  std::vector<TaskSplit> rememberedSplits_;
 };
 
 /// Listener invoked on task completion.

@@ -19,8 +19,11 @@
 
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/tests/utils/Cursor.h"
+#include "velox/exec/tests/utils/PlanFuzzer.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/vector/VectorTypeUtils.h"
+
+DEFINE_bool(fuzz_plans, true, "Use PlanFuzzer on plans in QueryAssertions");
 
 using facebook::velox::duckdb::duckdbTimestampToVelox;
 using facebook::velox::duckdb::veloxTimestampToDuckDB;
@@ -1195,6 +1198,31 @@ void assertResultsOrdered(
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
+    const CursorParameters& params,
+    std::function<void(exec::Task*)> addSplits) {
+  auto cursor = std::make_unique<TaskCursor>(params);
+  // 'result' borrows memory from cursor so the life cycle must be shorter.
+  std::vector<RowVectorPtr> result;
+  auto* task = cursor->task().get();
+  if (FLAGS_fuzz_plans) {
+    task->testingRememberAllSplits();
+  }
+  addSplits(task);
+
+  while (cursor->moveNext()) {
+    result.push_back(cursor->current());
+    addSplits(task);
+  }
+
+  EXPECT_TRUE(waitForTaskCompletion(task)) << task->taskId();
+  if (FLAGS_fuzz_plans) {
+    checkFuzzedPlans(params, result, cursor->task());
+  }
+  return {std::move(cursor), std::move(result)};
+}
+
+std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
+readCursorOnly(
     const CursorParameters& params,
     std::function<void(exec::Task*)> addSplits) {
   auto cursor = std::make_unique<TaskCursor>(params);
