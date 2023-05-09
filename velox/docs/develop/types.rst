@@ -2,9 +2,11 @@
 Types
 =====
 
-Velox supports a fixed set of physical types, an extensible set of logical types,
-complex types, and few types specific to Presto.
-
+Velox supports both scalar types and complex types.
+Scalar types include a fixed set of physical types, and
+an extensible set of logical types.
+Physical types determine the in-memory layout of the data.
+Logical types add semantics to a physical type.
 
 Physical Types
 ~~~~~~~~~~~~~~
@@ -12,37 +14,43 @@ Each physical type is implemented using a C++ type. The table
 below shows the supported physical types, their corresponding C++ type,
 and bytes required per value.
 
-======================  ===========================    ==================
-Velox Physical Type     C++ Type                       Bytes per Value
-======================  ===========================    ==================
-BOOLEAN                 bool                            0.125 (i.e. 1 bit)
-TINYINT                 int8_t                          1
-SMALLINT                int16_t                         2
-INTEGER                 int32_t	                        4
-BIGINT                  int64_t                         8
-HUGEINT                 int128_t                       16
-DATE                    struct Date                     8
-REAL                    float                           4
-DOUBLE                  double                          8
-TIMESTAMP               struct Timestamp               16
-VARCHAR                 struct StringView              16
-VARBINARY               struct StringView              16
-======================  ===========================    ==================
+================   ===========================    ==================
+Physical Type      C++ Type                       Bytes per Value
+================   ===========================    ==================
+BOOLEAN            bool                            0.125 (i.e. 1 bit)
+TINYINT            int8_t                          1
+SMALLINT           int16_t                         2
+INTEGER            int32_t	                        4
+BIGINT             int64_t                         8
+HUGEINT            int128_t                       16
+DATE               struct Date                     8
+REAL               float                           4
+DOUBLE             double                          8
+TIMESTAMP          struct Timestamp               16
+VARCHAR            struct StringView              16
+VARBINARY          struct StringView              16
+================  ===========================    ==================
 
 All physical types have a one-to-one mapping with their C++ types.
+The C++ type is also used as a template parameter for vector classes.
 
 Logical Types
 ~~~~~~~~~~~~~
-Velox logical types are backed by a physical type.
+Loogical types are backed by a physical type.
+Logical types include additional semantics.
+There can be multiple logical types backed by the same physical type.
+Therefore, knowing the C++ type is not sufficient to infer a logical type.
 The table below shows the supported logical types, and
 their corresponding physical type.
 
 ======================  ===========================
-Velox Logical Type      Physical Type
+Logical Type            Physical Type
 ======================  ===========================
 DECIMAL                 BIGINT / HUGEINT
 INTERVAL DAY TO SECOND  BIGINT
 ======================  ===========================
+
+We are in the process of migrating DATE type to a logical type backed by BIGINT.
 
 DECIMAL type carries additional `precision`,
 and `scale` information. `Precision` is the number of
@@ -63,15 +71,13 @@ Velox supports the ARRAY, MAP, and ROW complex types.
 
 Presto Types
 ~~~~~~~~~~~~
-Velox also supports certain types specific to Presto that are backed by a
-physical type.
-The table below shows the supported Presto types, and
-their corresponding physical type.
+Velox supports a number of Presto-specific logical types.
+The table below shows the supported Presto types.
 
 ========================  =====================
 Presto Type               Physical Type
 ========================  =====================
-HYPERLOGLOG               VARCHAR
+HYPERLOGLOG               VARBINARY
 JSON                      VARCHAR
 TIMESTAMP WITH TIME ZONE  ROW<BIGINT, SMALLINT>
 ========================  =====================
