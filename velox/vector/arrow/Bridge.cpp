@@ -954,6 +954,36 @@ VectorPtr importFromArrowImpl(
     memory::MemoryPool* pool,
     bool isViewer);
 
+VectorPtr createDecimalVector(
+    memory::MemoryPool* pool,
+    const TypePtr& type,
+    BufferPtr nulls,
+    const ArrowSchema& arrowSchema,
+    const ArrowArray& arrowArray,
+    WrapInBufferViewFunc wrapInBufferView) {
+  auto valueBuf = wrapInBufferView(
+      arrowArray.buffers[1], arrowArray.length * sizeof(int128_t));
+
+  auto dst = valueBuf->as<uint8_t>();
+
+  VectorPtr base = BaseVector::create(type, arrowArray.length, pool);
+  base->setNulls(nulls);
+
+  auto flatVector =
+      std::dynamic_pointer_cast<FlatVector<UnscaledShortDecimal>>(base);
+
+  for (int i = 0; i < arrowArray.length; i++) {
+    int128_t result;
+    memcpy(&result, dst + i * sizeof(int128_t), sizeof(int128_t));
+    int64_t value = static_cast<int64_t>(result);
+    if (!base->isNullAt(i)) {
+      flatVector->set(i, UnscaledShortDecimal(static_cast<int64_t>(result)));
+    }
+  }
+
+  return flatVector;
+}
+
 RowVectorPtr createRowVector(
     memory::MemoryPool* pool,
     const RowTypePtr& rowType,
@@ -1154,6 +1184,11 @@ VectorPtr importFromArrowImpl(
     return createMapVector(
         pool, type, nulls, arrowSchema, arrowArray, isViewer, wrapInBufferView);
   }
+  if (type->isShortDecimal()) {
+    return createDecimalVector(
+        pool, type, nulls, arrowSchema, arrowArray, wrapInBufferView);
+  }
+
   // Other primitive types.
   VELOX_CHECK(
       type->isPrimitiveType(),
@@ -1166,7 +1201,7 @@ VectorPtr importFromArrowImpl(
   auto values = wrapInBufferView(
       arrowArray.buffers[1], arrowArray.length * type->cppSizeInBytes());
 
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
       createFlatVector,
       type->kind(),
       pool,

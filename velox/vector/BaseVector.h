@@ -673,7 +673,11 @@ class BaseVector {
   // two unknowns but values cannot be assigned into an unknown 'left'
   // from a not-unknown 'right'.
   static bool compatibleKind(TypeKind left, TypeKind right) {
-    return left == right || right == TypeKind::UNKNOWN;
+    // Vectors of VARCHAR and VARBINARY are compatible with each other.
+    bool varcharAndBinary =
+        (left == TypeKind::VARCHAR && right == TypeKind::VARBINARY) ||
+        (left == TypeKind::VARBINARY && right == TypeKind::VARCHAR);
+    return left == right || right == TypeKind::UNKNOWN || varcharAndBinary;
   }
 
   /// Returns a brief summary of the vector. If 'recursive' is true, includes a
