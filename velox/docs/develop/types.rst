@@ -29,6 +29,8 @@ VARCHAR                 struct StringView              16
 VARBINARY               struct StringView              16
 ======================  ===========================    ==================
 
+All physical types have a one-to-one mapping with their C++ types.
+
 Logical Types
 ~~~~~~~~~~~~~
 Velox logical types are backed by a physical type.
