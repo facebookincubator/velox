@@ -94,7 +94,7 @@ TEST(DateTimeUtilTest, fromDateString) {
 TEST(DateTimeUtilTest, fromDateStrInvalid) {
   EXPECT_THROW(fromDateString(""), VeloxUserError);
   EXPECT_THROW(fromDateString("     "), VeloxUserError);
-  EXPECT_THROW(fromDateString("2000"), VeloxUserError);
+  EXPECT_EQ(fromDateString("2000"), 10957);
 
   // Different separators.
   EXPECT_THROW(fromDateString("2000/01-01"), VeloxUserError);
@@ -102,11 +102,11 @@ TEST(DateTimeUtilTest, fromDateStrInvalid) {
 
   // Trailing characters.
   EXPECT_THROW(fromDateString("2000-01-01   asdf"), VeloxUserError);
-  EXPECT_THROW(fromDateString("2000-01-01 0"), VeloxUserError);
+  EXPECT_EQ(fromDateString("2000-01-01 0"), 10957);
 
   // Too large of a year.
-  EXPECT_THROW(fromDateString("1000000"), VeloxUserError);
-  EXPECT_THROW(fromDateString("-1000000"), VeloxUserError);
+  EXPECT_EQ(fromDateString("1000000"), 364522972);
+  EXPECT_EQ(fromDateString("-1000000"), -365962028);
 }
 
 TEST(DateTimeUtilTest, fromTimeString) {

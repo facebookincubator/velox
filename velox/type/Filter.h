@@ -29,6 +29,7 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
+#include "velox/type/UnscaledLongDecimal.h"
 #include "velox/type/UnscaledShortDecimal.h"
 
 namespace facebook::velox::common {
@@ -46,6 +47,7 @@ enum class FilterKind {
   kNegatedBigintValuesUsingHashTable,
   kNegatedBigintValuesUsingBitmask,
   kDoubleRange,
+  kDoubleValues,
   kFloatRange,
   kBytesRange,
   kNegatedBytesRange,
@@ -54,6 +56,8 @@ enum class FilterKind {
   kBigintMultiRange,
   kMultiRange,
   kHugeintRange,
+  kShortDecimalRange,
+  kShortDecimalMultiRange,
 };
 
 /**
@@ -542,6 +546,138 @@ class BoolValue final : public Filter {
   const bool value_;
 };
 
+/// Range filter for short decimal data types. Supports open, closed and
+/// unbounded ranges, e.g. c >= 10, c <= 34, c BETWEEN 10 and 34. Open ranges
+/// can be implemented by using the value to the left or right of the end of the
+/// range, e.g. a < 10 is equivalent to a <= 9.
+class ShortDecimalRange final : public Filter {
+ public:
+  /// @param lower Lower end of the range, inclusive.
+  /// @param upper Upper end of the range, inclusive.
+  /// @param nullAllowed Null values are passing the filter if true.
+  ShortDecimalRange(
+      UnscaledShortDecimal lower,
+      UnscaledShortDecimal upper,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kShortDecimalRange),
+        lower_(lower),
+        upper_(upper),
+        isSingleValue_(upper_ == lower_) {}
+
+  ShortDecimalRange(
+      UnscaledShortDecimal lower,
+      bool lowerUnbounded,
+      bool lowerExclusive,
+      UnscaledShortDecimal upper,
+      bool upperUnbounded,
+      bool upperExclusive,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kShortDecimalRange),
+        lower_(lowerExclusive ? lower + UnscaledShortDecimal(1) : lower),
+        upper_(upperExclusive ? upper - UnscaledShortDecimal(1) : upper),
+        isSingleValue_(upper_ == lower_) {}
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<ShortDecimalRange>(
+          this->lower_, this->upper_, nullAllowed.value());
+    } else {
+      return std::make_unique<ShortDecimalRange>(*this);
+    }
+  }
+
+  bool testInt64(int64_t value) const final {
+    return value >= lower_.unscaledValue() && value <= upper_.unscaledValue();
+  }
+
+  xsimd::batch_bool<int64_t> testValues(
+      xsimd::batch<int64_t> values) const final {
+    if (isSingleValue_) {
+      return values == xsimd::broadcast<int64_t>(lower_.unscaledValue());
+    }
+    return (xsimd::broadcast<int64_t>(lower_.unscaledValue()) <= values) &
+        (values <= xsimd::broadcast<int64_t>(upper_.unscaledValue()));
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    return !(min > upper_.unscaledValue() || max < lower_.unscaledValue());
+  }
+
+  UnscaledShortDecimal lower() const {
+    return lower_;
+  }
+
+  UnscaledShortDecimal upper() const {
+    return upper_;
+  }
+
+  bool isSingleValue() const {
+    return isSingleValue_;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  std::string toString() const final {
+    return fmt::format(
+        "ShortDecimalRange: [{}, {}] {}",
+        lower_,
+        upper_,
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+ private:
+  const UnscaledShortDecimal lower_;
+  const UnscaledShortDecimal upper_;
+  const bool isSingleValue_;
+};
+
+/// Represents a combination of two of more range filters on short decimal types
+/// with OR semantics. The filter passes if at least one of the contained
+/// filters passes.
+class ShortDecimalMultiRange final : public Filter {
+ public:
+  /// @param ranges List of range filters. Must contain at least two entries.
+  /// @param nullAllowed Null values are passing the filter if true. nullAllowed
+  /// flags in the 'ranges' filters are ignored.
+  ShortDecimalMultiRange(
+      std::vector<std::unique_ptr<ShortDecimalRange>> ranges,
+      bool nullAllowed);
+
+  ShortDecimalMultiRange(const ShortDecimalMultiRange& other, bool nullAllowed);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final;
+
+  bool testInt64(int64_t value) const final;
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  const std::vector<std::unique_ptr<ShortDecimalRange>>& ranges() const {
+    return ranges_;
+  }
+
+  std::string toString() const override {
+    std::ostringstream out;
+    out << "ShortDecimalMultiRange: [";
+    for (const auto& range : ranges_) {
+      out << " " << range->toString();
+    }
+    out << " ]" << (nullAllowed_ ? "with nulls" : "no nulls");
+    return out.str();
+  }
+
+ private:
+  const std::vector<std::unique_ptr<ShortDecimalRange>> ranges_;
+  std::vector<int64_t> lowerBounds_;
+};
+
 /// Range filter for integral data types. Supports open, closed and unbounded
 /// ranges, e.g. c >= 10, c <= 34, c BETWEEN 10 and 34. Open ranges can be
 /// implemented by using the value to the left or right of the end of the range,
@@ -559,6 +695,27 @@ class BigintRange final : public Filter {
         upper32_(std::min<int64_t>(upper, std::numeric_limits<int32_t>::max())),
         lower16_(std::max<int64_t>(lower, std::numeric_limits<int16_t>::min())),
         upper16_(std::min<int64_t>(upper, std::numeric_limits<int16_t>::max())),
+        isSingleValue_(upper_ == lower_) {}
+
+  BigintRange(
+      int64_t lower,
+      bool lowerUnbounded,
+      bool lowerExclusive,
+      int64_t upper,
+      bool upperUnbounded,
+      bool upperExclusive,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBigintRange),
+        lower_(lowerExclusive ? lower + 1 : lower),
+        upper_(upperExclusive ? upper - 1 : upper),
+        lower32_(
+            std::max<int64_t>(lower_, std::numeric_limits<int32_t>::min())),
+        upper32_(
+            std::min<int64_t>(upper_, std::numeric_limits<int32_t>::max())),
+        lower16_(
+            std::max<int64_t>(lower_, std::numeric_limits<int16_t>::min())),
+        upper16_(
+            std::min<int64_t>(upper_, std::numeric_limits<int16_t>::max())),
         isSingleValue_(upper_ == lower_) {}
 
   std::unique_ptr<Filter> clone(
@@ -1020,6 +1177,56 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
   int min_;
   int max_;
   std::unique_ptr<BigintValuesUsingBitmask> nonNegated_;
+};
+
+class DoubleValues final : public Filter {
+ public:
+  /// @param min Minimum value.
+  /// @param max Maximum value.
+  /// @param values A list of unique values that pass the filter. Must contain
+  /// at least two entries.
+  /// @param nullAllowed Null values are passing the filter if true.
+  DoubleValues(
+      double min,
+      double max,
+      const std::vector<double>& values,
+      bool nullAllowed);
+
+  DoubleValues(const DoubleValues& other, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kDoubleValues),
+        bitmask_(other.bitmask_),
+        min_(other.min_),
+        max_(other.max_) {}
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<DoubleValues>(*this, nullAllowed.value());
+    } else {
+      return std::make_unique<DoubleValues>(*this);
+    }
+  }
+
+  std::vector<double> values() const;
+
+  bool testDouble(double value) const final;
+
+  bool testDoubleRange(double min, double max, bool hasNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+ private:
+  std::unique_ptr<Filter> mergeWith(double min, double max, const Filter* other)
+      const;
+
+  int64_t toInt64(double value) const {
+    int64_t converted = (int64_t)(value + 0.5);
+    return converted;
+  }
+
+  std::vector<bool> bitmask_;
+  const double min_;
+  const double max_;
 };
 
 /// Base class for range filters on floating point and string data types.
@@ -1699,6 +1906,11 @@ class MultiRange final : public Filter {
         filters_(std::move(filters)),
         nanAllowed_(nanAllowed) {}
 
+  MultiRange(std::vector<std::unique_ptr<Filter>> filters, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kMultiRange),
+        filters_(std::move(filters)),
+        nanAllowed_(true) {}
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
 
@@ -1772,6 +1984,10 @@ std::unique_ptr<Filter> createBigintValues(
 // Creates a hash or bitmap based NOT IN filter depending on value distribution.
 std::unique_ptr<Filter> createNegatedBigintValues(
     const std::vector<int64_t>& values,
+    bool nullAllowed);
+
+std::unique_ptr<Filter> createDoubleValues(
+    const std::vector<double>& values,
     bool nullAllowed);
 
 } // namespace facebook::velox::common

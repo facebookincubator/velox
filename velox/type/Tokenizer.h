@@ -35,11 +35,13 @@ class Tokenizer {
     kFailed,
   };
 
-  explicit Tokenizer(const std::string& path);
+  explicit Tokenizer(const std::string& path, bool dotAsRegular = false);
 
   bool hasNext();
 
   std::unique_ptr<Subfield::PathElement> next();
+
+  bool isUnquotedPathCharacter(char c);
 
  private:
   const char DOT = '.';
@@ -51,6 +53,8 @@ class Tokenizer {
   const char UNICODE_CARET = '^';
 
   const std::string path_;
+  // Whether to treat dot as regular charactor.
+  bool dotAsRegular_;
   int index_;
   State state;
   bool firstSegment = true;
@@ -75,8 +79,6 @@ class Tokenizer {
   bool tryToComputeNext();
 
   void invalidSubfieldPath();
-
-  bool isUnquotedPathCharacter(char c);
 
   bool isUnquotedSubscriptCharacter(char c);
 

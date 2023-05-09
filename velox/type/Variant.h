@@ -531,6 +531,10 @@ class variant {
   }
 
   void checkIsKind(TypeKind kind) const {
+    // Integer is compatible for getting the value from a date variant.
+    if (kind_ == TypeKind::DATE && kind == TypeKind::INTEGER) {
+      return;
+    }
     if (kind_ != kind) {
       // Error path outlined to encourage inlining of the branch.
       throwCheckIsKindError(kind);
@@ -737,5 +741,9 @@ struct VariantConverter {
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(convert, toKind, value);
   }
 };
+
+// Return true if value is of a floating-point type or a complex type that
+// contains a floating-point-typed child.
+std::optional<bool> isFloatingPointType(const variant& value);
 
 } // namespace facebook::velox

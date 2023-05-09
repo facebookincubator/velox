@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <boost/multiprecision/cpp_int.hpp>
 #include <folly/dynamic.h>
 #include <sstream>
 #include <string>
@@ -23,6 +24,8 @@
 #pragma once
 
 namespace facebook::velox {
+using boost::multiprecision::int256_t;
+using uint128_t = __uint128_t;
 
 struct UnscaledShortDecimal {
  public:
@@ -120,6 +123,66 @@ struct UnscaledShortDecimal {
   UnscaledShortDecimal& operator++() {
     unscaledValue_++;
     return *this;
+  }
+
+  UnscaledShortDecimal plus(const UnscaledShortDecimal& a, bool* overflow) {
+    int64_t result;
+    *overflow =
+        __builtin_add_overflow(unscaledValue_, a.unscaledValue(), &result);
+    if (UNLIKELY(*overflow || !UnscaledShortDecimal::valueInRange(result))) {
+      *overflow = true;
+      return UnscaledShortDecimal(-1);
+    }
+    return UnscaledShortDecimal(result);
+  }
+
+  UnscaledShortDecimal minus(const UnscaledShortDecimal& a, bool* overflow) {
+    int64_t result;
+    *overflow =
+        __builtin_sub_overflow(unscaledValue_, a.unscaledValue(), &result);
+    if (UNLIKELY(*overflow || !UnscaledShortDecimal::valueInRange(result))) {
+      *overflow = true;
+      return UnscaledShortDecimal(-1);
+    }
+    return UnscaledShortDecimal(result);
+  }
+
+  UnscaledShortDecimal multiply(const UnscaledShortDecimal& a, bool* overflow) {
+    int64_t result;
+    *overflow =
+        __builtin_mul_overflow(unscaledValue_, a.unscaledValue(), &result);
+    if (UNLIKELY(*overflow || !UnscaledShortDecimal::valueInRange(result))) {
+      *overflow = true;
+      return UnscaledShortDecimal(-1);
+    }
+    return UnscaledShortDecimal(result);
+  }
+
+  int32_t countLeadingZeros() const {
+    auto abs = std::abs(unscaledValue_);
+    return bits::countLeadingZeros(abs);
+  }
+
+  static inline UnscaledShortDecimal convert(int256_t in, bool* overflow) {
+    int64_t result;
+    constexpr int256_t UINT64_MASK = std::numeric_limits<uint64_t>::max();
+
+    int256_t inAbs = abs(in);
+    bool isNegative = in < 0;
+
+    uint128_t unsignResult = (inAbs & UINT64_MASK).convert_to<uint64_t>();
+    inAbs >>= 64;
+
+    if (inAbs > 0) {
+      // we've shifted in by 128-bit, so nothing should be left.
+      *overflow = true;
+    } else if (unsignResult > INT64_MAX) {
+      // the high-bit must not be set (signed 128-bit).
+      *overflow = true;
+    } else {
+      result = static_cast<int64_t>(unsignResult);
+    }
+    return UnscaledShortDecimal(isNegative ? -result : result);
   }
 
  private:

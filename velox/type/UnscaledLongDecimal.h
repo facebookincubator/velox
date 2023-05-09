@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <boost/multiprecision/cpp_int.hpp>
 #include <folly/dynamic.h>
 #include <sstream>
 #include <string>
@@ -26,6 +27,8 @@
 namespace facebook::velox {
 
 using int128_t = __int128_t;
+using boost::multiprecision::int256_t;
+using uint128_t = __uint128_t;
 
 constexpr int128_t buildInt128(uint64_t hi, uint64_t lo) {
   // GCC does not allow left shift negative value.
@@ -172,6 +175,66 @@ struct UnscaledLongDecimal {
     UnscaledLongDecimal ans;
     memcpy(&ans.unscaledValue_, serializedData, sizeof(int128_t));
     return ans;
+  }
+
+  UnscaledLongDecimal plus(const UnscaledLongDecimal& a, bool* overflow) {
+    int128_t result;
+    *overflow =
+        __builtin_add_overflow(unscaledValue_, a.unscaledValue(), &result);
+    if (UNLIKELY(*overflow || !UnscaledLongDecimal::valueInRange(result))) {
+      *overflow = true;
+      return UnscaledLongDecimal(-1);
+    }
+    return UnscaledLongDecimal(result);
+  }
+
+  UnscaledLongDecimal minus(const UnscaledLongDecimal& a, bool* overflow) {
+    int128_t result;
+    *overflow =
+        __builtin_sub_overflow(unscaledValue_, a.unscaledValue(), &result);
+    if (UNLIKELY(*overflow || !UnscaledLongDecimal::valueInRange(result))) {
+      *overflow = true;
+      return UnscaledLongDecimal(-1);
+    }
+    return UnscaledLongDecimal(result);
+  }
+
+  UnscaledLongDecimal multiply(const UnscaledLongDecimal& a, bool* overflow) {
+    int128_t result;
+    *overflow =
+        __builtin_mul_overflow(unscaledValue_, a.unscaledValue(), &result);
+    if (UNLIKELY(*overflow || !UnscaledLongDecimal::valueInRange(result))) {
+      *overflow = true;
+      return UnscaledLongDecimal(-1);
+    }
+    return UnscaledLongDecimal(result);
+  }
+
+  int32_t countLeadingZeros() const {
+    auto abs = std::abs(unscaledValue_);
+    return bits::countLeadingZerosUint128(abs);
+  }
+
+  static inline UnscaledLongDecimal convert(int256_t in, bool* overflow) {
+    int128_t result;
+    int128_t INT128_MAX = int128_t(int128_t(-1L)) >> 1;
+    constexpr int256_t UINT128_MASK = std::numeric_limits<uint128_t>::max();
+
+    int256_t inAbs = abs(in);
+    bool isNegative = in < 0;
+
+    uint128_t unsignResult = (inAbs & UINT128_MASK).convert_to<uint128_t>();
+    inAbs >>= 128;
+
+    if (inAbs > 0) {
+      // we've shifted in by 128-bit, so nothing should be left.
+      *overflow = true;
+    } else if (unsignResult > INT128_MAX) {
+      *overflow = true;
+    } else {
+      result = static_cast<int128_t>(unsignResult);
+    }
+    return UnscaledLongDecimal(isNegative ? -result : result);
   }
 
  private:

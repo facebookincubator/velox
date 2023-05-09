@@ -32,6 +32,85 @@ const folly::json::serialization_opts& getOpts() {
 }
 } // namespace
 
+std::optional<bool> isFloatingPointType(const variant& value) {
+  if (!value.hasValue()) {
+    return std::nullopt;
+  }
+
+  if (value.kind() == TypeKind::REAL || value.kind() == TypeKind::DOUBLE) {
+    return true;
+  } else {
+    if (value.kind() == TypeKind::ARRAY) {
+      auto elements = value.value<TypeKind::ARRAY>();
+      if (elements.empty()) {
+        return false;
+      } else {
+        for (const auto& element : elements) {
+          auto result = isFloatingPointType(element);
+          if (result.has_value()) {
+            return result;
+          }
+        }
+        return std::nullopt;
+      }
+    } else if (value.kind() == TypeKind::MAP) {
+      auto pairs = value.value<TypeKind::MAP>();
+      if (pairs.empty()) {
+        return false;
+      } else {
+        std::optional<bool> floatingKey = std::nullopt;
+        for (const auto& pair : pairs) {
+          auto result = isFloatingPointType(pair.first);
+          if (result.has_value()) {
+            floatingKey = result;
+            break;
+          }
+        }
+
+        std::optional<bool> floatingValue = std::nullopt;
+        for (const auto& pair : pairs) {
+          auto result = isFloatingPointType(pair.second);
+          if (result.has_value()) {
+            floatingValue = result;
+            break;
+          }
+        }
+
+        if ((floatingKey.has_value() && *floatingKey) ||
+            (floatingValue.has_value() && *floatingValue)) {
+          return true;
+        }
+        if (!floatingKey.has_value() || !floatingValue.has_value()) {
+          return std::nullopt;
+        }
+        return false;
+      }
+    } else if (value.kind() == TypeKind::ROW) {
+      auto children = value.value<TypeKind::ROW>();
+      if (children.empty()) {
+        return false;
+      } else {
+        bool undetermined = false;
+        for (const auto& child : children) {
+          auto result = isFloatingPointType(child);
+          if (result.has_value() && *result) {
+            return true;
+          }
+          if (!result.has_value()) {
+            undetermined = true;
+          }
+        }
+        if (undetermined) {
+          return std::nullopt;
+        }
+        return false;
+      }
+    } else {
+      return false;
+    }
+  }
+}
+
 template <bool nullEqualsNull>
 bool evaluateNullEquality(const variant& a, const variant& b) {
   if constexpr (nullEqualsNull) {
@@ -721,6 +800,57 @@ bool variant::equalsWithEpsilon(const variant& other) const {
   }
   if ((kind_ == TypeKind::REAL) or (kind_ == TypeKind::DOUBLE)) {
     return equalsFloatingPointWithEpsilon(*this, other);
+  } else if (kind_ == TypeKind::ARRAY) {
+    auto elements = value<TypeKind::ARRAY>();
+    auto otherElements = other.value<TypeKind::ARRAY>();
+    if (elements.size() != otherElements.size()) {
+      return false;
+    }
+    if (elements.empty()) {
+      return true;
+    } else {
+      for (auto i = 0; i < elements.size(); ++i) {
+        if (!elements[i].equalsWithEpsilon(otherElements[i])) {
+          return false;
+        }
+      }
+      return true;
+    }
+  } else if (kind_ == TypeKind::MAP) {
+    auto pairs = value<TypeKind::MAP>();
+    auto otherPairs = other.value<TypeKind::MAP>();
+    if (pairs.size() != otherPairs.size()) {
+      return false;
+    }
+    if (pairs.empty()) {
+      return true;
+    } else {
+      auto iter = pairs.begin();
+      auto otherIter = otherPairs.begin();
+      for (; iter != pairs.end(); ++iter, ++otherIter) {
+        if (!iter->first.equalsWithEpsilon(otherIter->first) ||
+            !iter->second.equalsWithEpsilon(otherIter->second)) {
+          return false;
+        }
+      }
+      return true;
+    }
+  } else if (kind_ == TypeKind::ROW) {
+    auto children = value<TypeKind::ROW>();
+    auto otherChildren = other.value<TypeKind::ROW>();
+    if (children.size() != otherChildren.size()) {
+      return false;
+    }
+    if (children.empty()) {
+      return true;
+    } else {
+      for (auto i = 0; i < children.size(); ++i) {
+        if (!children[i].equalsWithEpsilon(otherChildren[i])) {
+          return false;
+        }
+      }
+      return true;
+    }
   }
 
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, *this, other);
