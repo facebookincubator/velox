@@ -21,6 +21,8 @@ namespace facebook::velox::functions {
 
 namespace {
 
+const double sqrtOfTwo = sqrt(2);
+
 template <typename T>
 struct BetaCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -52,7 +54,7 @@ struct NormalCDFFunction {
   call(double& result, double m, double sd, double value) {
     VELOX_USER_CHECK_GT(sd, 0, "standardDeviation must be > 0");
 
-    result = 0.5 * (1 + erf((value - m) / (sd * sqrt(2))));
+    result = 0.5 * (1 + erf((value - m) / (sd * sqrtOfTwo)));
   }
 };
 

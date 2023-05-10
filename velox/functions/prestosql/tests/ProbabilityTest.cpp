@@ -70,8 +70,7 @@ TEST_F(ProbabilityTest, betaCDF) {
 }
 
 TEST_F(ProbabilityTest, normalCDF) {
-  constexpr double kMaxdouble64 = std::numeric_limits<double>::max();
-  constexpr double kMindouble64 = std::numeric_limits<double>::min();
+  
 
   const auto normal_cdf = [&](std::optional<double> mean,
                               std::optional<double> sd,
@@ -89,11 +88,11 @@ TEST_F(ProbabilityTest, normalCDF) {
   EXPECT_EQ(0.5, normal_cdf(0, kInf, 0));
   EXPECT_THAT(normal_cdf(kNan, 1, 0), IsNan());
   EXPECT_THAT(normal_cdf(0, 1, kNan), IsNan());
-  EXPECT_THAT(normal_cdf(0, 1, kMaxdouble64), 1);
-  EXPECT_THAT(normal_cdf(0, kMaxdouble64, 0), 0.5);
-  EXPECT_EQ(0.0, normal_cdf(kMaxdouble64, 1, 0));
-  EXPECT_EQ(0.5, normal_cdf(0, 1, kMindouble64));
-  EXPECT_EQ(0.5, normal_cdf(kMindouble64, 1, 0));
+  EXPECT_EQ(normal_cdf(0, 1, kDoubleMax), 1);
+  EXPECT_EQ(normal_cdf(0, kDoubleMax, 0), 0.5);
+  EXPECT_EQ(0.0, normal_cdf(kDoubleMax, 1, 0));
+  EXPECT_EQ(0.5, normal_cdf(0, 1, kDoubleMin));
+  EXPECT_EQ(0.5, normal_cdf(kDoubleMin, 1, 0));
 
   VELOX_ASSERT_THROW(normal_cdf(0, 0, 0.1985), "standardDeviation must be > 0");
   VELOX_ASSERT_THROW(
