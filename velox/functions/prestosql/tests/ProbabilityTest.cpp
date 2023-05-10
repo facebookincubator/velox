@@ -70,8 +70,6 @@ TEST_F(ProbabilityTest, betaCDF) {
 }
 
 TEST_F(ProbabilityTest, normalCDF) {
-  
-
   const auto normal_cdf = [&](std::optional<double> mean,
                               std::optional<double> sd,
                               std::optional<double> value) {

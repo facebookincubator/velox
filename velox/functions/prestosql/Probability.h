@@ -21,7 +21,7 @@ namespace facebook::velox::functions {
 
 namespace {
 
-const double sqrtOfTwo = sqrt(2);
+constexpr double sqrtOfTwo = sqrt(2);
 
 template <typename T>
 struct BetaCDFFunction {
