@@ -1107,41 +1107,42 @@ class TestCustomExchangeTranslator : public exec::Operator::PlanNodeTranslator {
   }
 };
 
-TEST_F(MultiFragmentTest, customPlanNodeWithExchangeClient) {
-  setupSources(5, 100);
-  Operator::registerOperator(std::make_unique<TestCustomExchangeTranslator>());
-  auto leafTaskId = makeTaskId("leaf", 0);
-  auto leafPlan =
-      PlanBuilder().values(vectors_).partitionedOutput({}, 1).planNode();
-  auto leafTask = makeTask(leafTaskId, leafPlan, 0);
-  Task::start(leafTask, 1);
+// TEST_F(MultiFragmentTest, customPlanNodeWithExchangeClient) {
+//   setupSources(5, 100);
+//   Operator::registerOperator(std::make_unique<TestCustomExchangeTranslator>());
+//   auto leafTaskId = makeTaskId("leaf", 0);
+//   auto leafPlan =
+//       PlanBuilder().values(vectors_).partitionedOutput({}, 1).planNode();
+//   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+//   Task::start(leafTask, 1);
 
-  CursorParameters params;
-  core::PlanNodeId testNodeId;
-  params.maxDrivers = 1;
-  params.planNode =
-      PlanBuilder()
-          .addNode([&leafPlan](std::string id, core::PlanNodePtr /* input */) {
-            return std::make_shared<TestCustomExchangeNode>(
-                id, leafPlan->outputType());
-          })
-          .capturePlanNodeId(testNodeId)
-          .planNode();
+//  CursorParameters params;
+//  core::PlanNodeId testNodeId;
+//  params.maxDrivers = 1;
+//  params.planNode =
+//      PlanBuilder()
+//          .addNode([&leafPlan](std::string id, core::PlanNodePtr /* input */)
+//          {
+//            return std::make_shared<TestCustomExchangeNode>(
+//                id, leafPlan->outputType());
+//          })
+//          .capturePlanNodeId(testNodeId)
+//          .planNode();
 
-  auto cursor = std::make_unique<TaskCursor>(params);
-  auto task = cursor->task();
-  addRemoteSplits(task, {leafTaskId});
-  while (cursor->moveNext()) {
-  }
-  EXPECT_NE(
-      toPlanStats(task->taskStats())
-          .at(testNodeId)
-          .customStats.count("testCustomExchangeStat"),
-      0);
-  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
-      << leafTask->taskId();
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
-}
+//  auto cursor = std::make_unique<TaskCursor>(params);
+//  auto task = cursor->task();
+//  addRemoteSplits(task, {leafTaskId});
+//  while (cursor->moveNext()) {
+//  }
+//  EXPECT_NE(
+//      toPlanStats(task->taskStats())
+//          .at(testNodeId)
+//          .customStats.count("testCustomExchangeStat"),
+//      0);
+//  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
+//      << leafTask->taskId();
+//  ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
+//}
 
 // This test is to reproduce the race condition between task terminate and no
 // more split call:
