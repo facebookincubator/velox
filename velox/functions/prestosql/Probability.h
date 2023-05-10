@@ -66,7 +66,7 @@ template <typename T>
 struct BinomialCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void
+  FOLLY_ALWAYS_INLINE static void
   call(double& result, int64_t numOfTrials, double successProb, int64_t value) {
     constexpr int64_t kInf = std::numeric_limits<int64_t>::max();
 
