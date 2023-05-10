@@ -325,9 +325,7 @@ class ISerializable {
   template <
       class T,
       typename = std::enable_if_t<std::is_base_of_v<ISerializable, T>>>
-  static auto deserializeAsUniquePtr(
-      const folly::dynamic& obj,
-      void* context = nullptr) {
+  static auto deserializeAsUniquePtr(const folly::dynamic& obj) {
     auto name = obj["name"].asString();
     const auto& registry = velox::deserializationRegistryForUniquePtr();
     using deserializeType =

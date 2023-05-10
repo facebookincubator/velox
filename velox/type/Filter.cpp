@@ -166,7 +166,8 @@ void Filter::registerSerDe() {
   registry.Register(
       "NegatedBigintValuesUsingBitmask",
       NegatedBigintValuesUsingBitmask::create);
-  registry.Register("FloatingPointRange", AbstractRange::create);
+  registry.Register("FloatRange", AbstractRange::create);
+  registry.Register("DoubleRange", AbstractRange::create);
   registry.Register("BytesRange", BytesRange::create);
   registry.Register("NegatedBytesRange", NegatedBytesRange::create);
   registry.Register("BytesValues", BytesValues::create);
@@ -278,12 +279,13 @@ bool NegatedBigintRange::testingEquals(const Filter& other) const {
 
 folly::dynamic HugeintRange::serialize() const {
   auto obj = Filter::serializeBase("HugeintRange");
-  char lower[sizeof(int128_t)];
+  auto size = sizeof(int128_t);
+  char lower[size];
   HugeInt::serialize(lower_, lower);
-  obj["lower"] = std::string(lower);
-  char upper[sizeof(int128_t)];
+  obj["lower"] = std::string(lower, size);
+  char upper[size];
   HugeInt::serialize(upper_, upper);
-  obj["upper"] = std::string(upper);
+  obj["upper"] = std::string(upper, size);
   return obj;
 }
 
@@ -449,19 +451,17 @@ bool NegatedBigintValuesUsingBitmask::testingEquals(const Filter& other) const {
 
 template <>
 folly::dynamic FloatingPointRange<float>::serialize() const {
-  auto obj = AbstractRange::serializeBase("FloatingPointRange");
+  auto obj = AbstractRange::serializeBase("FloatRange");
   obj["lower"] = lower_;
   obj["upper"] = upper_;
-  obj["isDouble"] = false;
   return obj;
 }
 
 template <>
 folly::dynamic FloatingPointRange<double>::serialize() const {
-  auto obj = AbstractRange::serializeBase("FloatingPointRange");
+  auto obj = AbstractRange::serializeBase("DoubleRange");
   obj["lower"] = lower_;
   obj["upper"] = upper_;
-  obj["isDouble"] = true;
   return obj;
 }
 
@@ -473,9 +473,9 @@ FilterPtr AbstractRange::create(const folly::dynamic& obj) {
   auto lower = obj["lower"].asDouble();
   auto upper = obj["upper"].asDouble();
   auto nullAllowed = deserializeNullAllowed(obj);
-  auto isDouble = obj["isDouble"].asBool();
+  auto name = obj["name"].asString();
 
-  if (isDouble) {
+  if (name == "DoubleRange") {
     return std::make_unique<FloatingPointRange<double>>(
         lower,
         lowerUnbounded,
