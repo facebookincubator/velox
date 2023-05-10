@@ -114,7 +114,9 @@ class Filter : public velox::ISerializable {
    * Only used in test code.
    * @return Whether an object is the same as itself.
    */
-  virtual bool testingEquals(const Filter& other) const {
+  virtual bool testingEquals(const Filter& other) const = 0;
+
+  bool testingBaseEquals(const Filter& other) const {
     return deterministic_ == other.isDeterministic() &&
         nullAllowed_ == other.nullAllowed_ && kind_ == other.kind();
   }
@@ -283,6 +285,10 @@ class AlwaysFalse final : public Filter {
 
   static FilterPtr create(const folly::dynamic& /*obj*/);
 
+  bool testingEquals(const Filter& other) const final {
+    return Filter::testingBaseEquals(other);
+  }
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<AlwaysFalse>();
@@ -347,6 +353,10 @@ class AlwaysTrue final : public Filter {
   folly::dynamic serialize() const override;
 
   static FilterPtr create(const folly::dynamic& /*obj*/);
+
+  bool testingEquals(const Filter& other) const final {
+    return Filter::testingBaseEquals(other);
+  }
 
   bool testNull() const final {
     return true;
@@ -416,6 +426,10 @@ class IsNull final : public Filter {
 
   static FilterPtr create(const folly::dynamic& /*obj*/);
 
+  bool testingEquals(const Filter& other) const final {
+    return Filter::testingBaseEquals(other);
+  }
+
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<IsNull>();
@@ -477,6 +491,10 @@ class IsNotNull final : public Filter {
   folly::dynamic serialize() const override;
 
   static FilterPtr create(const folly::dynamic& /*obj*/);
+
+  bool testingEquals(const Filter& other) const final {
+    return Filter::testingBaseEquals(other);
+  }
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1779,13 +1797,6 @@ class NegatedBytesValues final : public Filter {
     VELOX_CHECK(!values.empty(), "values must not be empty");
     nonNegated_ = std::make_unique<BytesValues>(values, !nullAllowed);
   }
-
-  NegatedBytesValues(
-      const BytesValues& nonNegated,
-      bool deterministic,
-      bool nullAllowed)
-      : Filter(deterministic, nullAllowed, FilterKind::kNegatedBytesValues),
-        nonNegated_(std::make_unique<BytesValues>(std::move(nonNegated))) {}
 
   NegatedBytesValues(const NegatedBytesValues& other, bool nullAllowed)
       : Filter(true, nullAllowed, other.kind()),
