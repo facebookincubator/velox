@@ -58,7 +58,7 @@ enum class FilterKind {
 };
 
 class Filter;
-using FilterUniquePtr = std::unique_ptr<Filter>;
+using FilterPtr = std::unique_ptr<Filter>;
 
 /**
  * A simple filter (e.g. comparison with literal) that can be applied
@@ -281,7 +281,7 @@ class AlwaysFalse final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& /*obj*/);
+  static FilterPtr create(const folly::dynamic& /*obj*/);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -346,7 +346,7 @@ class AlwaysTrue final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& /*obj*/);
+  static FilterPtr create(const folly::dynamic& /*obj*/);
 
   bool testNull() const final {
     return true;
@@ -414,7 +414,7 @@ class IsNull final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& /*obj*/);
+  static FilterPtr create(const folly::dynamic& /*obj*/);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -476,7 +476,7 @@ class IsNotNull final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& /*obj*/);
+  static FilterPtr create(const folly::dynamic& /*obj*/);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -543,13 +543,9 @@ class BoolValue final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const BoolValue*>(&other);
-    return Filter::testingEquals(other) && ptr != nullptr &&
-        (value_ == ptr->value_);
-  }
+  bool testingEquals(const Filter& other) const final;
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -607,7 +603,7 @@ class BigintRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -686,14 +682,7 @@ class BigintRange final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const BigintRange*>(&other);
-    return Filter::testingEquals(other) && ptr != nullptr &&
-        (lower_ == ptr->lower_) && (upper_ == ptr->upper_) &&
-        (lower32_ == ptr->lower32_) && (upper32_ == ptr->upper32_) &&
-        (lower16_ == ptr->lower16_) && (upper16_ == ptr->upper16_) &&
-        (isSingleValue_ == ptr->isSingleValue_);
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   const int64_t lower_;
@@ -717,7 +706,7 @@ class NegatedBigintRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -768,11 +757,7 @@ class NegatedBigintRange final : public Filter {
     return "Negated" + nonNegated_->toString();
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const NegatedBigintRange*>(&other);
-    return Filter::testingEquals(other) && ptr != nullptr &&
-        nonNegated_->testingEquals(*(ptr->nonNegated_));
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   std::unique_ptr<BigintRange> nonNegated_;
@@ -790,7 +775,7 @@ class HugeintRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -830,12 +815,7 @@ class HugeintRange final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const HugeintRange*>(&other);
-    return Filter::testingEquals(other) && ptr != nullptr &&
-        (std::to_string(lower_) == std::to_string(ptr->lower_)) &&
-        (std::to_string(upper_) == std::to_string(ptr->upper_));
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   const int128_t lower_;
@@ -870,7 +850,7 @@ class BigintValuesUsingHashTable final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -908,10 +888,6 @@ class BigintValuesUsingHashTable final : public Filter {
     return hashTable_;
   }
 
-  void setHashTable(std::vector<int64_t> hashTable) {
-    hashTable_ = std::move(hashTable);
-  }
-
   std::string toString() const final {
     return fmt::format(
         "BigintValuesUsingHashTable: [{}, {}] {}",
@@ -920,33 +896,7 @@ class BigintValuesUsingHashTable final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const BigintValuesUsingHashTable*>(&other);
-    bool res = Filter::testingEquals(other) && ptr != nullptr &&
-        min_ == ptr->min_ && max_ == ptr->max_ &&
-        containsEmptyMarker_ == ptr->containsEmptyMarker_ &&
-        sizeMask_ == ptr->sizeMask_ &&
-        hashTable_.size() == ptr->hashTable_.size() &&
-        values_.size() == ptr->values_.size();
-
-    if (!res) {
-      return false;
-    }
-
-    for (size_t i = 0; i < hashTable_.size(); ++i) {
-      if (hashTable_.at(i) != ptr->hashTable_.at(i)) {
-        return false;
-      }
-    }
-
-    for (size_t i = 0; i < values_.size(); ++i) {
-      if (values_.at(i) != ptr->values_.at(i)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   std::unique_ptr<Filter>
@@ -989,7 +939,7 @@ class BigintValuesUsingBitmask final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1009,24 +959,7 @@ class BigintValuesUsingBitmask final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const BigintValuesUsingBitmask*>(&other);
-    bool res = Filter::testingEquals(other) && ptr != nullptr &&
-        min_ == ptr->min_ && max_ == ptr->max_ &&
-        bitmask_.size() == ptr->bitmask_.size();
-
-    if (!res) {
-      return false;
-    }
-
-    for (size_t i = 0; i < bitmask_.size(); ++i) {
-      if (bitmask_.at(i) != ptr->bitmask_.at(i)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   std::unique_ptr<Filter>
@@ -1061,7 +994,7 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1101,10 +1034,6 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
     return nonNegated_->values();
   }
 
-  void setHashTable(std::vector<int64_t> hashTable) {
-    nonNegated_->setHashTable(std::move(hashTable));
-  }
-
   std::string toString() const final {
     return fmt::format(
         "NegatedBigintValuesUsingHashTable: [{}, {}] {}",
@@ -1113,11 +1042,7 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const NegatedBigintValuesUsingHashTable*>(&other);
-    return Filter::testingEquals(other) && ptr != nullptr &&
-        nonNegated_->testingEquals(*(ptr->nonNegated_));
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   std::unique_ptr<Filter>
@@ -1151,7 +1076,7 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1171,11 +1096,7 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const NegatedBigintValuesUsingBitmask*>(&other);
-    return Filter::testingEquals(other) && ptr != nullptr &&
-        nonNegated_->testingEquals(*(ptr->nonNegated_));
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   std::unique_ptr<Filter>
@@ -1205,7 +1126,7 @@ class AbstractRange : public Filter {
     return upperExclusive_;
   }
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
  protected:
   AbstractRange(
@@ -1563,7 +1484,7 @@ class BytesRange final : public AbstractRange {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1627,12 +1548,7 @@ class BytesRange final : public AbstractRange {
     return upper_;
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const BytesRange*>(&other);
-    return Filter::testingEquals(other) && ptr != nullptr &&
-        lower_ == ptr->lower_ && upper_ == ptr->upper_ &&
-        singleValue_ == ptr->singleValue_;
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   const std::string lower_;
@@ -1679,7 +1595,7 @@ class NegatedBytesRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1728,11 +1644,7 @@ class NegatedBytesRange final : public Filter {
     return nonNegated_->upper();
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const NegatedBytesRange*>(&other);
-    return ptr != nullptr && Filter::testingEquals(other) &&
-        nonNegated_->testingEquals(*(ptr->nonNegated_));
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   std::unique_ptr<Filter> toMultiRange() const;
@@ -1768,7 +1680,7 @@ class BytesValues final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1799,31 +1711,7 @@ class BytesValues final : public Filter {
     return values_;
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const BytesValues*>(&other);
-    auto res = Filter::testingEquals(other) && ptr != nullptr &&
-        lower_ == ptr->lower_ && upper_ == ptr->upper_ &&
-        values_.size() == ptr->values_.size() &&
-        lengths_.size() == ptr->lengths_.size();
-
-    if (!res) {
-      return false;
-    }
-
-    for (const auto& v : values_) {
-      if (!ptr->values_.contains(v)) {
-        return false;
-      }
-    }
-
-    for (auto l : lengths_) {
-      if (!ptr->lengths_.contains(l)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   std::string lower_;
@@ -1848,7 +1736,7 @@ class BigintMultiRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
@@ -1873,23 +1761,7 @@ class BigintMultiRange final : public Filter {
     return out.str();
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const BigintMultiRange*>(&other);
-    auto res = Filter::testingEquals(other) && ptr != nullptr &&
-        ranges_.size() == ptr->ranges_.size();
-
-    if (!res) {
-      return false;
-    }
-
-    for (size_t i = 0; i < ranges_.size(); ++i) {
-      if (!(ranges_.at(i)->testingEquals(*(ptr->ranges_.at(i))))) {
-        return false;
-      }
-    }
-
-    return true;
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   const std::vector<std::unique_ptr<BigintRange>> ranges_;
@@ -1921,7 +1793,7 @@ class NegatedBytesValues final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -1950,11 +1822,7 @@ class NegatedBytesValues final : public Filter {
     return nonNegated_->values();
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const NegatedBytesValues*>(&other);
-    return Filter::testingEquals(other) && ptr != nullptr &&
-        nonNegated_->testingEquals((*(ptr->nonNegated_)));
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   std::unique_ptr<BytesValues> nonNegated_;
@@ -1982,7 +1850,7 @@ class MultiRange final : public Filter {
 
   folly::dynamic serialize() const override;
 
-  static FilterUniquePtr create(const folly::dynamic& obj);
+  static FilterPtr create(const folly::dynamic& obj);
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
@@ -2012,24 +1880,7 @@ class MultiRange final : public Filter {
     return nanAllowed_;
   }
 
-  bool testingEquals(const Filter& other) const final {
-    auto ptr = dynamic_cast<const MultiRange*>(&other);
-    auto res = Filter::testingEquals(other) && ptr != nullptr &&
-        nanAllowed_ == ptr->nanAllowed_ &&
-        filters_.size() == ptr->filters_.size();
-
-    if (!res) {
-      return false;
-    }
-
-    for (size_t i = 0; i < filters_.size(); ++i) {
-      if (!filters_.at(i)->testingEquals(*(ptr->filters_.at(i)->clone()))) {
-        return false;
-      }
-    }
-
-    return true;
-  }
+  bool testingEquals(const Filter& other) const final;
 
  private:
   const std::vector<std::unique_ptr<Filter>> filters_;

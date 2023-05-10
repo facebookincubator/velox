@@ -78,7 +78,7 @@ class Dot : public ISerializable {
 };
 
 TEST(SerializableTest, basic) {
-  deserializationWithContextRegistryForSharedPtr().Register("Dot", Dot::create);
+  DeserializationWithContextRegistryForSharedPtr().Register("Dot", Dot::create);
 
   Dot dot{"yellow", 10};
   auto serialized = dot.serialize();
@@ -114,7 +114,7 @@ TEST(SerializableTest, basic) {
 }
 
 TEST(SerializableTest, context) {
-  deserializationWithContextRegistryForSharedPtr().Register("Dot", Dot::create);
+  DeserializationWithContextRegistryForSharedPtr().Register("Dot", Dot::create);
 
   Dot dot{"yellow", 10};
   auto serialized = dot.serialize();

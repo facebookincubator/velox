@@ -177,13 +177,13 @@ class ISerializable {
     }
 
     const auto& registryWithContext =
-        velox::deserializationWithContextRegistryForSharedPtr();
+        velox::DeserializationWithContextRegistryForSharedPtr();
     if (registryWithContext.Has(name)) {
       return std::dynamic_pointer_cast<const T>(
           registryWithContext.Create(name, obj, context));
     }
 
-    const auto& registry = velox::deserializationRegistryForSharedPtr();
+    const auto& registry = velox::DeserializationRegistryForSharedPtr();
     VELOX_USER_CHECK(
         registry.Has(name),
         "Deserialization function for class: {} is not registered",

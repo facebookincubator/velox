@@ -55,7 +55,7 @@ folly::dynamic ITypedExpr::serializeBase(std::string_view name) const {
 
 // static
 void ITypedExpr::registerSerDe() {
-  auto& registry = deserializationWithContextRegistryForSharedPtr();
+  auto& registry = DeserializationWithContextRegistryForSharedPtr();
 
   registry.Register("CallTypedExpr", core::CallTypedExpr::create);
   registry.Register("CastTypedExpr", core::CastTypedExpr::create);

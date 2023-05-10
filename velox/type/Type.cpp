@@ -227,7 +227,7 @@ TypePtr Type::create(const folly::dynamic& obj) {
 
 // static
 void Type::registerSerDe() {
-  auto& registry = velox::deserializationRegistryForSharedPtr();
+  auto& registry = velox::DeserializationRegistryForSharedPtr();
   registry.Register(
       Type::getClassName(),
       static_cast<std::shared_ptr<const Type> (*)(const folly::dynamic&)>(

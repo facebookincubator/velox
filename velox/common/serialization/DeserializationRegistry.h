@@ -29,14 +29,14 @@ using DeserializationRegistryType = Registry<
     std::string,
     std::shared_ptr<const ISerializable>(const folly::dynamic&)>;
 
-DeserializationRegistryType& deserializationRegistryForSharedPtr();
+DeserializationRegistryType& DeserializationRegistryForSharedPtr();
 
 using DeserializationWithContextRegistryType = Registry<
     std::string,
     std::shared_ptr<const ISerializable>(const folly::dynamic&, void* context)>;
 
 DeserializationWithContextRegistryType&
-deserializationWithContextRegistryForSharedPtr();
+DeserializationWithContextRegistryForSharedPtr();
 
 using DeserializationRegistryUniquePtrType = Registry<
     std::string,
@@ -58,10 +58,10 @@ struct is_templated_create<
 template <class T>
 void registerDeserializer() {
   if constexpr (detail::is_templated_create<T>::value) {
-    deserializationRegistryForSharedPtr().Register(
+    DeserializationRegistryForSharedPtr().Register(
         T::getClassName(), T::template create<T>);
   } else {
-    deserializationRegistryForSharedPtr().Register(
+    DeserializationRegistryForSharedPtr().Register(
         T::getClassName(), T::create);
   }
 }

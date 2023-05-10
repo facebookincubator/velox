@@ -20,7 +20,7 @@
 namespace facebook::velox::exec {
 
 void registerPartitionFunctionSerDe() {
-  auto& registry = deserializationWithContextRegistryForSharedPtr();
+  auto& registry = DeserializationWithContextRegistryForSharedPtr();
 
   registry.Register(
       "HashPartitionFunctionSpec", HashPartitionFunctionSpec::deserialize);
