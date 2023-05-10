@@ -20,7 +20,6 @@ add_library(
   In.cpp
   LeastGreatest.cpp
   Map.cpp
-  MightContain.cpp
   RegexFunctions.cpp
   Register.cpp
   RegisterArithmetic.cpp

@@ -16,7 +16,6 @@
 
 #include "velox/functions/sparksql/MightContain.h"
 #include "velox/common/base/BloomFilter.h"
-#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
