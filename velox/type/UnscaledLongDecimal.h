@@ -217,7 +217,9 @@ struct UnscaledLongDecimal {
 
   static inline UnscaledLongDecimal convert(int256_t in, bool* overflow) {
     int128_t result;
+#ifndef INT128_MAX
     int128_t INT128_MAX = int128_t(int128_t(-1L)) >> 1;
+#endif
     constexpr int256_t UINT128_MASK = std::numeric_limits<uint128_t>::max();
 
     int256_t inAbs = abs(in);

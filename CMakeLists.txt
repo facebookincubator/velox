@@ -183,10 +183,15 @@ if(VELOX_ENABLE_S3)
 endif()
 
 if(VELOX_ENABLE_HDFS)
-  find_library(
-    LIBHDFS3
-    NAMES libhdfs3.so libhdfs3.dylib
-    HINTS "${CMAKE_SOURCE_DIR}/hawq/depends/libhdfs3/_build/src/" REQUIRED)
+  find_package(libhdfs3)
+  if(libhdfs3_FOUND AND TARGET HDFS::hdfs3)
+    set(LIBHDFS3 HDFS::hdfs3)
+  else()
+    find_library(
+      LIBHDFS3
+      NAMES libhdfs3.so libhdfs3.dylib
+      HINTS "${CMAKE_SOURCE_DIR}/hawq/depends/libhdfs3/_build/src/" REQUIRED)
+  endif()
   add_definitions(-DVELOX_ENABLE_HDFS3)
 endif()
 
@@ -342,7 +347,7 @@ resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 # for reference. find_package(range-v3)
 
 set_source(gflags)
-resolve_dependency(gflags COMPONENTS shared)
+resolve_dependency(gflags)
 if(NOT TARGET gflags::gflags)
   # This is a bit convoluted, but we want to be able to use gflags::gflags as a
   # target even when velox is built as a subproject which uses
@@ -479,7 +484,7 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
   endif()
 endif()
 find_package(BISON 3.0.4 REQUIRED)
-find_package(FLEX 2.5.13 REQUIRED)
+find_package(FLEX 2.6.0 REQUIRED) # for cxx17
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
@@ -488,14 +493,17 @@ include_directories(SYSTEM velox/external/duckdb/tpch/dbgen/include)
 
 # these were previously vendored in third-party/
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  set(gtest_SOURCE BUNDLED)
-  resolve_dependency(gtest)
-  set(VELOX_GTEST_INCUDE_DIR
-      "${gtest_SOURCE_DIR}/googletest/include"
-      PARENT_SCOPE)
+  set_source(GTest)
+  resolve_dependency(GTest)
+  foreach(tgt gtest gtest_main gmock gmock_main)
+      if (NOT TARGET ${tgt} AND TARGET GTest::${tgt})
+          add_library(${tgt} INTERFACE IMPORTED)
+          target_link_libraries(${tgt} INTERFACE GTest::${tgt})
+      endif() 
+  endforeach(tgt)
 endif()
 
-set(xsimd_SOURCE BUNDLED)
+set_source(xsimd)
 resolve_dependency(xsimd)
 
 include(CTest) # include after project() but before add_subdirectory()

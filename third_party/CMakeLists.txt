@@ -24,6 +24,35 @@ if(VELOX_ENABLE_ARROW)
   else()
     set(THRIFT_SOURCE "BUNDLED")
   endif()
+
+  # Use external arrow & parquet only if <package>_DIR is defined
+  if(Thrift_FOUND AND DEFINED Arrow_DIR AND DEFINED Parquet_DIR)
+    find_package(Arrow PATHS "${Arrow_DIR}" NO_DEFAULT_PATH)
+    find_package(Parquet PATHS "${Parquet_DIR}" NO_DEFAULT_PATH)
+    if(Arrow_FOUND AND Parquet_FOUND)
+      add_library(arrow INTERFACE)
+      add_library(parquet INTERFACE)
+      add_library(thrift INTERFACE)
+
+      if(TARGET Arrow::arrow_static)
+        target_link_libraries(arrow INTERFACE Arrow::arrow_static)
+      else()
+        target_link_libraries(arrow INTERFACE Arrow::arrow_shared)
+      endif()
+
+      if(TARGET Parquet::parquet_static)
+        target_link_libraries(parquet INTERFACE Parquet::parquet_static)
+      else()
+        target_link_libraries(parquet INTERFACE Parquet::parquet_shared)
+      endif()
+
+      target_link_libraries(thrift INTERFACE thrift::thrift)
+
+      message(STATUS "Using external arrow")
+      return()
+    endif()
+  endif()
+
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
   set(ARROW_CMAKE_ARGS
       -DARROW_PARQUET=ON
