@@ -6,6 +6,10 @@ Date and Time Functions
 
     Returns the current date.
 
+.. function:: current_time() -> string
+
+    Returns the current time with timezone in the format HH:MM:SS.ZZZ UTC
+
 .. function:: date(x) -> date
 
     This is an alias for ``CAST(x AS date)``.
@@ -23,10 +27,6 @@ Date and Time Functions
 .. function:: to_unixtime(timestamp) -> double
 
     Returns ``timestamp`` as a UNIX timestamp.
-
-.. function:: current_time() -> string
-
-    Returns the current time with timezone in the format HH:MM:SS.ZZZ UTC
 
 Truncation Function
 -------------------

@@ -1102,40 +1102,21 @@ template <typename T>
 struct CurrentTimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::shared_ptr<DateTimeFormatter> formatter_;
   const date::time_zone* sessionTimeZone_ = nullptr;
-  std::optional<int64_t> sessionTzID_;
 
   FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
-    formatter_ = buildJodaDateTimeFormatter(
-        std::string_view("HH:mm:ss.SSS"));
   }
 
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result) {
     Timestamp ts = Timestamp::now();
     ts.toTimezone(*sessionTimeZone_);
+
+    std::string tsString = ts.toStringTimeWithTimezone();
     
-    // Time part: HH:mm:ss.SSS
-    std::string timeFormatted = formatter_->format(ts, sessionTimeZone_);
-
-    // Timezone part: zzz
-    // Currently in DateTimeFormatter.cpp: 
-    // Function:format, Expression:  short name time zone is not yet supported
-    // When there is a full map (timezone -> short name time zone), then change implementation here
-    // ex: "America/Los_Angeles -> PDT"
-    using namespace std::chrono;
-    auto now = system_clock::now();
-    auto timer = system_clock::to_time_t(now);
-    std::tm bt = *std::localtime(&timer);
-
-    // Time with time zone part: HH:mm:ss.SSS zzz
-    std::ostringstream oss;
-    oss << timeFormatted;
-    oss << " " << std::put_time(&bt, "%Z"); // HH:MM:SS.ZZZ UTC
-    result.resize(oss.str().size());
-    std::memcpy(result.data(), oss.str().data(), oss.str().size());
+    result.resize(tsString.size());
+    std::memcpy(result.data(), tsString.data(), tsString.size());
 
     return true;
   }

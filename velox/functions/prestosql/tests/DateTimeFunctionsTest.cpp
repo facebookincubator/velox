@@ -237,9 +237,9 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   }
 
   core::TypedExprPtr currentTimeCall() {
-    std::vector<facebook::velox::core::TypedExprPtr> emptyVectors;
+    std::vector<facebook::velox::core::TypedExprPtr> emptyVector;
     return std::make_shared<core::CallTypedExpr>(
-        VARCHAR(), emptyVectors, "current_time");
+        VARCHAR(), emptyVector, "current_time");
   }
 
   Date getCurrentDate(const std::optional<std::string>& timeZone) {
