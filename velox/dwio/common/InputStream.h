@@ -181,6 +181,11 @@ class ReadFileInputStream final : public InputStream {
 
   bool hasReadAsync() const override;
 
+  void vread(
+      const std::vector<void*>& buffers,
+      const std::vector<Region>& regions,
+      const LogType purpose) override;
+
   const std::shared_ptr<velox::ReadFile>& getReadFile() const {
     return readFile_;
   }

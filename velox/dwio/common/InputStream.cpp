@@ -127,6 +127,28 @@ bool ReadFileInputStream::hasReadAsync() const {
   return readFile_->hasPreadvAsync();
 }
 
+void ReadFileInputStream::vread(
+    const std::vector<void*>& buffers,
+    const std::vector<Region>& regions,
+    const LogType purpose) {
+  const auto size = buffers.size();
+  DWIO_ENSURE_GT(size, 0, "invalid vread parameters");
+  DWIO_ENSURE_EQ(regions.size(), size, "mismatched region->buffer");
+
+  std::vector<ReadFile::Segment> segments;
+  segments.reserve(size);
+
+  for (size_t i = 0; i < size; ++i) {
+    const auto& r = regions[i];
+    segments.push_back(
+        {.offset = r.offset,
+         .buffer = {reinterpret_cast<char*>(buffers[i]), r.length},
+         .label = {}});
+    logRead(r.offset, r.length, purpose);
+  }
+  readFile_->preadv(segments);
+}
+
 bool Region::operator<(const Region& other) const {
   return offset < other.offset ||
       (offset == other.offset && length < other.length);
