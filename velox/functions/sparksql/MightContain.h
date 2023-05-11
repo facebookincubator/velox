@@ -25,7 +25,7 @@ struct BloomFilterMightContainFunction {
 
   using Allocator = std::allocator<uint64_t>;
 
-  FOLLY_ALWAYS_INLINE void initialize(
+  void initialize(
       const core::QueryConfig&,
       const arg_type<Varbinary>* serialized,
       const arg_type<int64_t>*) {
