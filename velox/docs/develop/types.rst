@@ -29,6 +29,8 @@ DOUBLE             double                        8
 TIMESTAMP          struct Timestamp              16
 VARCHAR            struct StringView             16
 VARBINARY          struct StringView             16
+OPAQUE             std::shared_ptr<void>         User-defined
+UNKNOWN            struct UnknownValue           0
 ================   ===========================   ===================
 
 All physical types have a one-to-one mapping with their C++ types.
@@ -38,6 +40,14 @@ StringView is a struct that contains a 4-byte size field, a 4-byte prefix field,
 and an 8-byte field to store the remaining string (after the prefix) in-line or
 a pointer to the full string out-of-line.
 Refer :doc:`vectors </develop/vectors>` for how vectors of StringView are stored.
+
+Velox allows users to define custom types by extending the OPAQUE type.
+An opaque type must be specified wih an unique `std::type_index`.
+Values for this type must be provided as `std::shared_ptr<T>` where T is a C++ type.
+
+UNKNOWN types are commomly used when type inference fails during runtime.
+For example: An unsupported Type from another system say Spark can be
+mapped to the UNKNOWN Velox type.
 
 Logical Types
 ~~~~~~~~~~~~~
@@ -60,7 +70,7 @@ DECIMAL type carries additional `precision`,
 and `scale` information. `Precision` is the number of
 digits in a number. `Scale` is the number of digits to the right of the decimal
 point in a number. For example, the number `123.45` has a precision of `5` and a
-scale of `2`. Decimal types are backed by `BIGINT` and `HUGEINT` physical types,
+scale of `2`. DECIMAL types are backed by `BIGINT` and `HUGEINT` physical types,
 which store the unscaled value. For example, the unscaled value of decimal
 `123.45` is `12345`. `BIGINT` is used upto 18 precision, and has a range of
 [:math:`-10^{18} + 1, +10^{18} - 1`]. `HUGEINT` is used starting from 19 precision
