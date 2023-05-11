@@ -2912,7 +2912,7 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
 TEST_F(DateTimeFunctionsTest, currentTimeTest) {
   auto tz = "America/Los_Angeles";
   setQueryTimeZone(tz);
-  auto expression =  currentTimeCall();
+  auto expression = currentTimeCall();
   auto result = evaluate(expression, makeRowVector({makeNullableFlatVector<int32_t>(
     {10, 10, std::nullopt, 15})}));
   // auto currentTimeStr = castEvaluateResult<std::string>(result, expression->toString());
