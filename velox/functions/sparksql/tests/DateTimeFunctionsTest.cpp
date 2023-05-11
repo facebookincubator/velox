@@ -159,6 +159,10 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
   constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
   auto errorMessage = fmt::format("Date out of range: {}-12-15", kMax);
   VELOX_ASSERT_THROW(makeDate(kMax, 12, 15), errorMessage);
+
+  constexpr const int32_t kJodaMaxYear{292278994};
+  VELOX_ASSERT_THROW(makeDate(kJodaMaxYear - 10, 12, 15), "Integer overflow");
+
   VELOX_ASSERT_THROW(makeDate(2021, 13, 1), "Date out of range: 2021-13-1");
   VELOX_ASSERT_THROW(makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
   VELOX_ASSERT_THROW(makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
