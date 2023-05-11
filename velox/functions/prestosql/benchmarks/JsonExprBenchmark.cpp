@@ -24,11 +24,12 @@
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/SIMDJsonFunctions.h"
 #include "velox/functions/prestosql/benchmarks/JsonBenchmarkUtil.h"
-#include "velox/functions/prestosql/benchmarks/JsonFileReader.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 namespace facebook::velox::functions::prestosql {
 namespace {
+
+const std::string smallJson = R"({"k1":"v1"})";
 
 class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
  public:
@@ -40,9 +41,13 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
         {"simd_is_json_scalar"});
   }
 
-  std::string prepareData(const std::string& fileSize) {
-    JsonFileReader reader;
-    return reader.readJsonStringFromFile(fileSize);
+  std::string prepareData(int fileSize) {
+    std::string jsonData = R"({"key": [)" + smallJson;
+    for (int i = 0; i < fileSize / 10; i++) {
+      jsonData += "," + smallJson;
+    }
+    jsonData += "]}";
+    return jsonData;
   }
 
   velox::VectorPtr makeJsonData(const std::string& json, int vectorSize) {
@@ -82,7 +87,7 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
   }
 };
 
-void FollyIsJsonScalar(int iter, int vectorSize, const std::string& fileSize) {
+void FollyIsJsonScalar(int iter, int vectorSize, int fileSize) {
   folly::BenchmarkSuspender suspender;
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(fileSize);
@@ -90,7 +95,7 @@ void FollyIsJsonScalar(int iter, int vectorSize, const std::string& fileSize) {
   benchmark.runWithJson(iter, vectorSize, "folly_is_json_scalar", json);
 }
 
-void SIMDIsJsonScalar(int iter, int vectorSize, const std::string& fileSize) {
+void SIMDIsJsonScalar(int iter, int vectorSize, int fileSize) {
   folly::BenchmarkSuspender suspender;
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(fileSize);
@@ -100,40 +105,28 @@ void SIMDIsJsonScalar(int iter, int vectorSize, const std::string& fileSize) {
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_1k_size, 100, "1K");
-BENCHMARK_RELATIVE_NAMED_PARAM(SIMDIsJsonScalar, 100_iters_1k_size, 100, "1K");
+BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_1k_size, 100, 10);
+BENCHMARK_RELATIVE_NAMED_PARAM(SIMDIsJsonScalar, 100_iters_1k_size, 100, 10);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_10k_size, 100, "10K");
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    SIMDIsJsonScalar,
-    100_iters_10k_size,
-    100,
-    "10K");
+BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_10k_size, 100, 100);
+BENCHMARK_RELATIVE_NAMED_PARAM(SIMDIsJsonScalar, 100_iters_10k_size, 100, 100);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_100k_size, 100, "100K");
+BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_100k_size, 100, 1000);
 BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDIsJsonScalar,
     100_iters_100k_size,
     100,
-    "100K");
+    1000);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_1000k_size, 100, "1000K");
+BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_1000k_size, 100, 10000);
 BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDIsJsonScalar,
     100_iters_1000k_size,
     100,
-    "1000K");
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_10000k_size, 100, "10000K");
-BENCHMARK_RELATIVE_NAMED_PARAM(
-    SIMDIsJsonScalar,
-    100_iters_10000k_size,
-    100,
-    "10000K");
+    10000);
 BENCHMARK_DRAW_LINE();
 
 } // namespace
