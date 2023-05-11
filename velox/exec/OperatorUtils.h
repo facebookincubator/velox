@@ -136,4 +136,13 @@ folly::Range<vector_size_t*> initializeRowNumberMapping(
     vector_size_t size,
     memory::MemoryPool* pool);
 
+// Projects children of 'src' RowVector to 'dest' RowVector according to
+// 'projections' and 'mapping'
+void projectChildren(
+    RowVectorPtr dest,
+    RowVectorPtr src,
+    const std::vector<IdentityProjection>& projections,
+    int32_t size,
+    const BufferPtr mapping);
+
 } // namespace facebook::velox::exec

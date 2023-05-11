@@ -15,6 +15,8 @@
  */
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/VectorTestUtil.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -22,8 +24,21 @@ using namespace facebook::velox::exec::test;
 
 class NestedLoopJoinTest : public HiveConnectorTestBase {
  protected:
+  RowTypePtr defaultLeftType_;
+  RowTypePtr defaultRightType_;
+  std::vector<std::string> comparisons_;
+  std::vector<core::JoinType> joinTypes_;
+
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
+    defaultLeftType_ = ROW({{"t0", BIGINT()}});
+    defaultRightType_ = ROW({{"u0", BIGINT()}});
+    comparisons_ = {"=", "<", "<=", "<>"};
+    joinTypes_ = {
+        core::JoinType::kInner,
+        core::JoinType::kLeft,
+        core::JoinType::kRight,
+        core::JoinType::kFull};
   }
 
   template <typename T>
@@ -37,9 +52,74 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
     return vectorMaker_.lazyFlatVector<int32_t>(
         size, [start](auto row) { return start + row; });
   }
+
+  void runTest(
+      const std::vector<RowVectorPtr>& leftVectors,
+      const std::vector<RowVectorPtr>& rightVectors,
+      int32_t numDrivers = 1) {
+    if (numDrivers == 1) {
+      createDuckDbTable("t", leftVectors);
+      createDuckDbTable("u", rightVectors);
+    } else {
+      auto allLeftVectors = makeCopies(leftVectors, numDrivers);
+      auto allRightVectors = makeCopies(rightVectors, numDrivers);
+      createDuckDbTable("t", allLeftVectors);
+      createDuckDbTable("u", allRightVectors);
+    }
+
+    CursorParameters params;
+    params.maxDrivers = numDrivers;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+    for (auto joinType : joinTypes_) {
+      for (const auto& comparison : comparisons_) {
+        SCOPED_TRACE(fmt::format(
+            "maxDrivers:{} joinType:{} comparison:{}",
+            std::to_string(numDrivers),
+            joinTypeName(joinType),
+            comparison));
+
+        params.planNode = PlanBuilder(planNodeIdGenerator)
+                              .values(leftVectors, numDrivers > 1)
+                              .nestedLoopJoin(
+                                  PlanBuilder(planNodeIdGenerator)
+                                      .values(rightVectors, numDrivers > 1)
+                                      .planNode(),
+                                  fmt::format("t0 {} u0", comparison),
+                                  {"t0", "u0"},
+                                  joinType)
+                              .planNode();
+
+        assertQuery(
+            params,
+            fmt::format(
+                "SELECT t0, u0 FROM t {} JOIN u ON t.t0 {} u.u0",
+                joinTypeName(joinType),
+                comparison));
+      }
+    }
+  }
 };
 
 TEST_F(NestedLoopJoinTest, basic) {
+  auto leftVectors = makeBatches(20, 5, defaultLeftType_, pool_.get());
+  auto rightVectors = makeBatches(18, 5, defaultRightType_, pool_.get());
+  runTest(leftVectors, rightVectors);
+}
+
+TEST_F(NestedLoopJoinTest, emptyLeft) {
+  auto leftVectors = makeBatches(0, 5, defaultLeftType_, pool_.get());
+  auto rightVectors = makeBatches(18, 5, defaultRightType_, pool_.get());
+  runTest(leftVectors, rightVectors);
+}
+
+TEST_F(NestedLoopJoinTest, emptyRight) {
+  auto leftVectors = makeBatches(20, 5, defaultLeftType_, pool_.get());
+  auto rightVectors = makeBatches(0, 5, defaultRightType_, pool_.get());
+  runTest(leftVectors, rightVectors);
+}
+
+TEST_F(NestedLoopJoinTest, basicCrossJoin) {
   auto leftVectors = {
       makeRowVector({sequence<int32_t>(10)}),
       makeRowVector({sequence<int32_t>(100, 10)}),
@@ -178,11 +258,12 @@ TEST_F(NestedLoopJoinTest, lazyVectors) {
                         .values({rightVectors})
                         .project({"c0 AS u_c0"})
                         .planNode(),
-                    {"c0", "u_c0"})
-                .filter("c0 + u_c0 < 100")
+                    "c0+u_c0<100",
+                    {"c0", "u_c0"},
+                    core::JoinType::kFull)
                 .planNode();
 
-  assertQuery(op, "SELECT * FROM t, u WHERE t.c0 + u.c0 < 100");
+  assertQuery(op, "SELECT * FROM t FULL JOIN u ON t.c0 + u.c0 < 100");
 }
 
 // Test cross join with a build side that has rows, but no columns.
@@ -231,29 +312,68 @@ TEST_F(NestedLoopJoinTest, zeroColumnBuild) {
   assertQuery(op, "SELECT * FROM t");
 }
 
-// Test multi-threaded build and probe sides.
-TEST_F(NestedLoopJoinTest, parallelism) {
-  // Setup 5 threads for build and probe. Each build thread gets 3 identical
-  // rows of input from the Values operator. The build thread that finishes last
-  // combines data from all other threads making it 3x5=15 rows and puts them
-  // into the NestedLoopJoinBridge. All probe threads get 2 identical ros of
-  // input from the Values operator and join them with 15 rows of build side
-  // data from the bridge. Each probe thread is expected to produce 30 rows.
+TEST_F(NestedLoopJoinTest, parallel) {
+  auto leftVectors = makeBatches(10, 5, defaultLeftType_, pool_.get());
+  auto rightVectors = makeBatches(7, 5, defaultRightType_, pool_.get());
+  runTest(leftVectors, rightVectors, 5);
+}
 
-  auto left = {makeRowVector({sequence<int32_t>(2)})};
-  auto right = {makeRowVector({"u_c0"}, {sequence<int32_t>(3)})};
+TEST_F(NestedLoopJoinTest, bigintArray) {
+  auto leftVectors = makeBatches(1000, 5, defaultLeftType_, pool_.get());
+  auto rightVectors = makeBatches(900, 5, defaultRightType_, pool_.get());
+  createDuckDbTable("t", leftVectors);
+  createDuckDbTable("u", rightVectors);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 5;
-  params.planNode =
+  auto plan =
       PlanBuilder(planNodeIdGenerator)
-          .values({left}, true)
+          .values(leftVectors)
           .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator).values({right}, true).planNode(),
-              {"c0", "u_c0"})
-          .partialAggregation({}, {"count(1)"})
+              PlanBuilder(planNodeIdGenerator).values(rightVectors).planNode(),
+              "t0 = u0",
+              {"t0", "u0"},
+              core::JoinType::kFull)
           .planNode();
 
-  OperatorTestBase::assertQuery(params, "VALUES (30), (30), (30), (30), (30)");
+  assertQuery(plan, "SELECT t0, u0 FROM t FULL JOIN u ON t.t0 = u.u0");
+}
+
+TEST_F(NestedLoopJoinTest, allTypes) {
+  RowTypePtr leftTypes = ROW(
+      {{"t0", BIGINT()},
+       {"t1", VARCHAR()},
+       {"t2", REAL()},
+       {"t3", DOUBLE()},
+       {"t4", INTEGER()},
+       {"t5", SMALLINT()},
+       {"t6", TINYINT()}});
+
+  RowTypePtr rightTypes = ROW(
+      {{"u0", BIGINT()},
+       {"u1", VARCHAR()},
+       {"u2", REAL()},
+       {"u3", DOUBLE()},
+       {"u4", INTEGER()},
+       {"u5", SMALLINT()},
+       {"u6", TINYINT()}});
+
+  auto leftVectors = makeBatches(60, 5, leftTypes, pool_.get());
+  auto rightVectors = makeBatches(50, 5, rightTypes, pool_.get());
+  createDuckDbTable("t", leftVectors);
+  createDuckDbTable("u", rightVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(leftVectors)
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values(rightVectors).planNode(),
+              "t0 = u0 AND t1 = u1 AND t2 = u2 AND t3 = u3 AND t4 = u4 AND t5 = u5 AND t6 = u6",
+              {"t0", "u0"},
+              core::JoinType::kFull)
+          .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT t0, u0 FROM t FULL JOIN u ON t.t0 = u0 AND t1 = u1 AND t2 = u2 AND t3 = u3 AND t4 = u4 AND t5 = u5 AND t6 = u6");
 }

@@ -24,7 +24,7 @@ class NestedLoopJoinBridge : public JoinBridge {
  public:
   void setData(std::vector<VectorPtr> buildVectors);
 
-  std::optional<std::vector<VectorPtr>> dataOrFuture(ContinueFuture* future);
+  std::optional<std::vector<RowVectorPtr>> dataOrFuture(ContinueFuture* future);
 
  private:
   std::optional<std::vector<VectorPtr>> buildVectors_;

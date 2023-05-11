@@ -224,12 +224,12 @@ and emitting results.
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
 
 NestedLoopJoinNode
-~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~
 
-The cross join operation combines two separate inputs into a single output by
-combining each row of the left hand side input with each row of the right hand
-side input. If there are N rows in the left input and M rows in the right
-input, the output of the cross join will contain N * M rows.
+NestedLoopJoinNode represents an implementation that iterates through each row from
+the left side of the join and, for each row, iterates through all rows from the right
+side of the join, comparing them based on the join condition to find matching rows
+and emitting results. Nested loop join supports non-equality join.
 
 .. list-table::
    :widths: 10 30
@@ -238,6 +238,10 @@ input, the output of the cross join will contain N * M rows.
 
    * - Property
      - Description
+   * - joinType
+     - Join type: inner, left, right, full.
+   * - joinCondition
+     - SQL expression as the join condition. Can use columns from both probe and build sides of the join.
    * - outputType
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
 

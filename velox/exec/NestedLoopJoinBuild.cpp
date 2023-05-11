@@ -29,7 +29,7 @@ void NestedLoopJoinBridge::setData(std::vector<VectorPtr> buildVectors) {
   notify(std::move(promises));
 }
 
-std::optional<std::vector<VectorPtr>> NestedLoopJoinBridge::dataOrFuture(
+std::optional<std::vector<RowVectorPtr>> NestedLoopJoinBridge::dataOrFuture(
     ContinueFuture* future) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
