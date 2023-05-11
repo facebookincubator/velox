@@ -20,7 +20,7 @@ Physical Type      C++ Type                      Fixed Width (bytes)
 BOOLEAN            bool                          0.125 (i.e. 1 bit)
 TINYINT            int8_t                        1
 SMALLINT           int16_t                       2
-INTEGER            int32_t	                     4
+INTEGER            int32_t                       4
 BIGINT             int64_t                       8
 HUGEINT            int128_t                      16
 DATE               struct Date                   8
@@ -45,7 +45,7 @@ Values for this type must be provided as `std::shared_ptr<T>` where T is a C++ t
 More details on when to use an OPAQUE type to define a custom type are given below.
 
 VARCHAR, VARBINARY, OPAQUE use variable number of bytes per value.
-These types store a fixed-width part in the C++ Type and a variable-width part elsewhere.
+These types store a fixed-width part in the C++ type and a variable-width part elsewhere.
 All other types use fixed-width bytes per value as shown in the above table.
 For example: VARCHAR and VARBINARY :doc:`FlatVectors </develop/vectors>` store the
 fixed-width part in a StringView for each value.
@@ -57,7 +57,6 @@ OPAQUE types store variable-width parts outside of the FlatVector.
 UNKNOWN type is used to represent an empty or all nulls vector of unknown type.
 For example, SELECT array() returns an ARRAY(UNKNOWN()) because it is not possible
 to determine the type of the elements. This works because there are no elements.
-UNKNOWN type can also be used when runtime type-inference fails.
 
 Logical Types
 ~~~~~~~~~~~~~
