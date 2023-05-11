@@ -10,8 +10,8 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: make_date(year, month, day) -> date
 
     Returns the date from year, month and day fields.
-    ``year``, ``month`` and ``day`` must be ``integer``.
-    The function will throw an error on invalid inputs.
+    ``year``, ``month`` and ``day`` must be ``INTEGER``.
+    Throws an error if inputs are not valid.
 
 .. spark:function:: to_unix_timestamp(string) -> integer
 

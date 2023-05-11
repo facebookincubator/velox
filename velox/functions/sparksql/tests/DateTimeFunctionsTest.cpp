@@ -149,9 +149,13 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
                             std::optional<int32_t> day) {
     return evaluateOnce<Date>("make_date(c0, c1, c2)", year, month, day);
   };
-  Date expectDate;
-  parseTo("1920-01-25", expectDate);
-  EXPECT_EQ(makeDate(1920, 1, 25), expectDate);
+  Date expectedDate;
+  parseTo("1920-01-25", expectedDate);
+  EXPECT_EQ(makeDate(1920, 1, 25), expectedDate);
+
+  parseTo("-0010-01-30", expectedDate);
+  EXPECT_EQ(makeDate(-10, 1, 30), expectedDate);
+
   constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
   auto errorMessage = fmt::format("Date out of range: {}-12-15", kMax);
   VELOX_ASSERT_THROW(makeDate(kMax, 12, 15), errorMessage);

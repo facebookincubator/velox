@@ -162,6 +162,7 @@ struct MakeDateFunction {
       const int32_t month,
       const int32_t day) {
     auto daysSinceEpoch = util::daysSinceEpochFromDate(year, month, day);
+    VELOX_CHECK_EQ(daysSinceEpoch, (int32_t)daysSinceEpoch, "Integer overflow");
     result = Date(daysSinceEpoch);
   }
 };
