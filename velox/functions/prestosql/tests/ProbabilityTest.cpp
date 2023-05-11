@@ -94,6 +94,10 @@ TEST_F(ProbabilityTest, normalCDF) {
   EXPECT_EQ(0, normal_cdf(1, kDoubleMin, 0));
   EXPECT_THAT(normal_cdf(kDoubleMax, kDoubleMax, kInf), IsNan());
   EXPECT_EQ(0.5, normal_cdf(kDoubleMax, kDoubleMax, kDoubleMax));
+  EXPECT_EQ(0.5, normal_cdf(kDoubleMin, kDoubleMin, kDoubleMin));
+  EXPECT_EQ(0.5, normal_cdf(kDoubleMax, 1, kDoubleMax));
+  EXPECT_EQ(0.5, normal_cdf(10, kDoubleMax, kDoubleMax));
+  EXPECT_EQ(0.5, normal_cdf(kDoubleMax, kDoubleMax, 1.96));
   EXPECT_EQ(std::nullopt, normal_cdf(std::nullopt, 1, 1.96));
   EXPECT_EQ(std::nullopt, normal_cdf(1, 1, std::nullopt));
   EXPECT_EQ(std::nullopt, normal_cdf(std::nullopt, 1, std::nullopt));
