@@ -2,7 +2,7 @@
 Types
 =====
 
-Velox supports both scalar types and complex types.
+Velox supports scalar types and complex types.
 Scalar types are categorized into a fixed set of physical types,
 and an extensible set of logical types.
 Physical types determine the in-memory layout of the data.
@@ -12,10 +12,10 @@ Physical Types
 ~~~~~~~~~~~~~~
 Each physical type is implemented using a C++ type. The table
 below shows the supported physical types, their corresponding C++ type,
-and bytes required per value.
+and fixed-width bytes required per value.
 
 ================   ===========================   ===================
-Physical Type      C++ Type                      Bytes per Value
+Physical Type      C++ Type                      Fixed Width (bytes)
 ================   ===========================   ===================
 BOOLEAN            bool                          0.125 (i.e. 1 bit)
 TINYINT            int8_t                        1
@@ -29,42 +29,53 @@ DOUBLE             double                        8
 TIMESTAMP          struct Timestamp              16
 VARCHAR            struct StringView             16
 VARBINARY          struct StringView             16
-OPAQUE             std::shared_ptr<void>         User-defined
+OPAQUE             std::shared_ptr<void>         16
 UNKNOWN            struct UnknownValue           0
 ================   ===========================   ===================
 
-All physical types have a one-to-one mapping with their C++ types.
+All physical types except VARCHAR and VARBINARY have a one-to-one mapping
+with their C++ types.
 The C++ type is also used as a template parameter for vector classes.
+For example, vector of 64-bit integers is represented as `FlatVector<int64_t>`
+whose type is `BIGINT`.
 
-StringView is a struct that contains a 4-byte size field, a 4-byte prefix field,
-and an 8-byte field to store the remaining string (after the prefix) in-line or
-a pointer to the full string out-of-line.
-Refer :doc:`vectors </develop/vectors>` for how vectors of StringView are stored.
-
-Velox allows users to define custom types by extending the OPAQUE type.
-An opaque type must be specified wih an unique `std::type_index`.
+OPAQUE type can be used to define custom types.
+An OPAQUE type must be specified wih an unique `std::type_index`.
 Values for this type must be provided as `std::shared_ptr<T>` where T is a C++ type.
+More details on when to use an OPAQUE type to define a custom type are given below.
 
-UNKNOWN types are commomly used when type inference fails during runtime.
-For example: An unsupported Type from another system say Spark can be
-mapped to the UNKNOWN Velox type.
+VARCHAR, VARBINARY, OPAQUE use variable number of bytes per value.
+These types store a fixed-width part in the C++ Type and a variable-width part elsewhere.
+All other types use fixed-width bytes per value as shown in the above table.
+For example: VARCHAR and VARBINARY :doc:`FlatVectors </develop/vectors>` store the
+fixed-width part in a StringView for each value.
+StringView is a struct that contains a 4-byte size field, a 4-byte prefix field,
+and an 8-byte field pointer that points to variable-width part.
+The variable-width part for each value is store in `stringBuffers`.
+OPAQUE types store variable-width parts outside of the FlatVector.
+
+UNKNOWN type is used to represent an empty or all nulls vector of unknown type.
+For example, SELECT array() returns an ARRAY(UNKNOWN()) because it is not possible
+to determine the type of the elements. This works because there are no elements.
+UNKNOWN type can also be used when runtime type-inference fails.
 
 Logical Types
 ~~~~~~~~~~~~~
-Logical types are backed by a physical type and include additional Type semantics.
+Logical types are backed by a physical type and include additional semantics.
 There can be multiple logical types backed by the same physical type.
 Therefore, knowing the C++ type is not sufficient to infer a logical type.
 The table below shows the supported logical types, and
 their corresponding physical type.
 
-======================  ===========================
+======================  ======================================================
 Logical Type            Physical Type
-======================  ===========================
-DECIMAL                 BIGINT / HUGEINT
+======================  ======================================================
+DECIMAL                 BIGINT if precision <= 18, HUGEINT if precision >= 19
 INTERVAL DAY TO SECOND  BIGINT
-======================  ===========================
+======================  ======================================================
 
-We are in the process of migrating DATE type to a logical type backed by BIGINT.
+We are in the process of migrating (:pr:`4744`) DATE type to a logical type backed
+by BIGINT.
 
 DECIMAL type carries additional `precision`,
 and `scale` information. `Precision` is the number of
@@ -78,6 +89,13 @@ upto 38 precision, with a range of [:math:`-10^{38} + 1, +10^{38} - 1`].
 
 All the three values, precision, scale, unscaled value are required to represent a
 decimal value.
+
+Custom Types
+~~~~~~~~~~~~
+Most custom types can be represented as logical types and can be built by extending
+the existing physical types. For example, Presto Types described below are implemented
+by extending the physical types.
+An OPAQUE type must be used when there is no physical type available to back the logical type.
 
 Complex Types
 ~~~~~~~~~~~~~
