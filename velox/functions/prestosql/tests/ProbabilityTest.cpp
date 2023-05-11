@@ -91,6 +91,13 @@ TEST_F(ProbabilityTest, normalCDF) {
   EXPECT_EQ(0.0, normal_cdf(kDoubleMax, 1, 0));
   EXPECT_EQ(0.5, normal_cdf(0, 1, kDoubleMin));
   EXPECT_EQ(0.5, normal_cdf(kDoubleMin, 1, 0));
+  EXPECT_EQ(0, normal_cdf(1, kDoubleMin, 0));
+  EXPECT_THAT(normal_cdf(kDoubleMax, kDoubleMax, kInf), IsNan());
+  EXPECT_EQ(0.5, normal_cdf(kDoubleMax, kDoubleMax, kDoubleMax));
+  EXPECT_EQ(std::nullopt, normal_cdf(std::nullopt, 1, 1.96));
+  EXPECT_EQ(std::nullopt, normal_cdf(1, 1, std::nullopt));
+  EXPECT_EQ(std::nullopt, normal_cdf(std::nullopt, 1, std::nullopt));
+  EXPECT_EQ(std::nullopt, normal_cdf(std::nullopt, std::nullopt, std::nullopt));
 
   VELOX_ASSERT_THROW(normal_cdf(0, 0, 0.1985), "standardDeviation must be > 0");
   VELOX_ASSERT_THROW(
