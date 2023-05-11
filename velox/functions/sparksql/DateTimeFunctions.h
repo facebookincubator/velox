@@ -156,14 +156,13 @@ template <typename T>
 struct MakeDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const int32_t year,
       const int32_t month,
       const int32_t day) {
     auto daysSinceEpoch = util::daysSinceEpochFromDate(year, month, day);
     result = Date(daysSinceEpoch);
-    return true;
   }
 };
 

@@ -7,9 +7,11 @@ Convenience Extraction Functions
 
 These functions support TIMESTAMP and DATE input types.
 
-.. spark:function:: make_date(int, int, int) -> date
+.. spark:function:: make_date(year, month, day) -> date
 
-    Returns the date from from year, month and day fields.
+    Returns the date from year, month and day fields.
+    ``year``, ``month`` and ``day`` must be ``integer``.
+    The function will throw an error on invalid inputs.
 
 .. spark:function:: to_unix_timestamp(string) -> integer
 

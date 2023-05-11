@@ -15,6 +15,7 @@
  */
 
 #include <stdint.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -148,16 +149,15 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
                             std::optional<int32_t> day) {
     return evaluateOnce<Date>("make_date(c0, c1, c2)", year, month, day);
   };
-  Date d0;
-  parseTo("1920-01-25", d0);
-  EXPECT_EQ(makeDate(1920, 1, 25), d0);
-  EXPECT_FALSE(makeDate(std::nullopt, 7, 15).has_value());
-  EXPECT_FALSE(makeDate(2019, std::nullopt, 17).has_value());
-  EXPECT_FALSE(makeDate(2019, 8, std::nullopt).has_value());
-  EXPECT_THROW(makeDate(INT32_MAX, 12, 15), VeloxUserError);
-  EXPECT_THROW(makeDate(2021, 13, 1), VeloxUserError);
-  EXPECT_THROW(makeDate(2022, 3, 35), VeloxUserError);
-  EXPECT_THROW(makeDate(2023, 2, 29), VeloxUserError);
+  Date expectDate;
+  parseTo("1920-01-25", expectDate);
+  EXPECT_EQ(makeDate(1920, 1, 25), expectDate);
+  constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
+  auto errorMessage = fmt::format("Date out of range: {}-12-15", kMax);
+  VELOX_ASSERT_THROW(makeDate(kMax, 12, 15), errorMessage);
+  VELOX_ASSERT_THROW(makeDate(2021, 13, 1), "Date out of range: 2021-13-1");
+  VELOX_ASSERT_THROW(makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
+  VELOX_ASSERT_THROW(makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
 }
 
 } // namespace
