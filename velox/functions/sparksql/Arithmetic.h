@@ -25,6 +25,14 @@
 namespace facebook::velox::functions::sparksql {
 
 template <typename T>
+struct AcoshFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::acosh(a);
+  }
+};
+
+template <typename T>
 struct RemainderFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool

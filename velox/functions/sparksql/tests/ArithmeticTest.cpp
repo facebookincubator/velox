@@ -183,6 +183,18 @@ TEST_F(ArithmeticTest, Divide) {
   EXPECT_TRUE(std::isnan(divide(kInf, -kInf).value_or(0)));
 }
 
+TEST_F(ArithmeticTest, acosh) {
+  const auto acosh = [&](std::optional<double> a) {
+    return evaluateOnce<double>("acosh(c0)", a);
+  };
+
+  EXPECT_EQ(acosh(1), 0);
+  EXPECT_TRUE(std::isnan(acosh(0).value_or(0)));
+  EXPECT_EQ(acosh(kInf), kInf);
+  EXPECT_EQ(acosh(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(acosh(kNan).value_or(0)));
+}
+
 class CeilFloorTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
