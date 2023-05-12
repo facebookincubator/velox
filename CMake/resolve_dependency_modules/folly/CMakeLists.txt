@@ -34,7 +34,8 @@ FetchContent_Declare(
   URL ${VELOX_FOLLY_SOURCE_URL}
   URL_HASH ${VELOX_FOLLY_BUILD_SHA256_CHECKSUM}
   PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch
-                ${glog_patch})
+                ${glog_patch}
+  OVERRIDE_FIND_PACKAGE)
 
 if(ON_APPLE_M1)
   # folly will wrongly assume x86_64 if this is not set

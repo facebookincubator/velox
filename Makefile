@@ -91,7 +91,7 @@ release:				#: Build the release version
 	$(MAKE) build BUILD_DIR=release
 
 min_debug:				#: Minimal build with debugging symbols
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS=-DVELOX_BUILD_MINIMAL=ON
+	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_MINIMAL=ON ${EXTRA_CMAKE_FLAGS}"
 	$(MAKE) build BUILD_DIR=debug
 
 benchmarks-basic-build:

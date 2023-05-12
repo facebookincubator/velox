@@ -59,5 +59,6 @@ FetchContent_MakeAvailable(Boost)
 # To aling with Boost system install we create Boost::headers target
 add_library(boost_headers INTERFACE)
 add_library(Boost::headers ALIAS boost_headers)
+add_library(Boost::boost ALIAS boost_headers)
 list(TRANSFORM BOOST_HEADER_ONLY PREPEND Boost::)
 target_link_libraries(boost_headers INTERFACE ${BOOST_HEADER_ONLY})

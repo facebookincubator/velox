@@ -24,3 +24,6 @@ set(Boost_NO_SYSTEM_PATHS ON)
 # We have to keep the FindBoost.cmake in an subfolder to prevent it from
 # overriding the system provided one when Boost_SOURCE=SYSTEM
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/boost)
+
+set(Boost_LIBRARIES headers;boost;atomic;context;date_time;filesystem;math;program_options;regex;system;thread)
+file(GLOB Boost_INCLUDE_DIRS "${CMAKE_CURRENT_BINARY_DIR}/_deps/boost-src/libs/*/include/")

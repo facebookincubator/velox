@@ -1,0 +1,204 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 766130e072..8e30d0863e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -89,7 +89,7 @@ if (compiler_only OR build_all)
+   set(THRIFT1 thrift1)
+   set(THRIFTCPP2 thriftcpp2)
+   include(ThriftLibrary.cmake)
+-  install(FILES ThriftLibrary.cmake DESTINATION ${INCLUDE_INSTALL_DIR}/thrift)
++  #install(FILES ThriftLibrary.cmake DESTINATION ${INCLUDE_INSTALL_DIR}/thrift)
+ endif ()
+ 
+ # Find required dependencies for thrift/lib
+diff --git a/thrift/CMakeLists.txt b/thrift/CMakeLists.txt
+index e03c78bc5a..55a0cc1127 100644
+--- a/thrift/CMakeLists.txt
++++ b/thrift/CMakeLists.txt
+@@ -36,22 +36,22 @@ configure_package_config_file(
+     BIN_INSTALL_DIR
+     INCLUDE_INSTALL_DIR
+ )
+-install(
+-  FILES ${CMAKE_CURRENT_BINARY_DIR}/FBThriftConfig.cmake
+-  DESTINATION ${CMAKE_INSTALL_DIR}
+-)
+-install(
+-  EXPORT fbthrift-exports
+-  FILE FBThriftTargets.cmake
+-  NAMESPACE FBThrift::
+-  DESTINATION ${CMAKE_INSTALL_DIR}
+-)
++#install(
++#  FILES ${CMAKE_CURRENT_BINARY_DIR}/FBThriftConfig.cmake
++#  DESTINATION ${CMAKE_INSTALL_DIR}
++#)
++#install(
++#  EXPORT fbthrift-exports
++#  FILE FBThriftTargets.cmake
++#  NAMESPACE FBThrift::
++#  DESTINATION ${CMAKE_INSTALL_DIR}
++#)
+ 
+-install(
+-  DIRECTORY annotation "${CMAKE_CURRENT_BINARY_DIR}/annotation"
+-  DESTINATION include/thrift
+-  FILES_MATCHING
+-    PATTERN "*.h"
+-    PATTERN "*.tcc"
+-    PATTERN CMakeFiles EXCLUDE
+-)
++#install(
++#  DIRECTORY annotation "${CMAKE_CURRENT_BINARY_DIR}/annotation"
++#  DESTINATION include/thrift
++#  FILES_MATCHING
++#    PATTERN "*.h"
++#    PATTERN "*.tcc"
++#    PATTERN CMakeFiles EXCLUDE
++#)
+diff --git a/thrift/compiler/CMakeLists.txt b/thrift/compiler/CMakeLists.txt
+index 4e32281d19..dcfedf1512 100644
+--- a/thrift/compiler/CMakeLists.txt
++++ b/thrift/compiler/CMakeLists.txt
+@@ -151,10 +151,10 @@ if (BUILD_SHARED_LIBS)
+   )
+ endif ()
+ 
+-install(
+-  TARGETS thrift1 compiler_ast compiler_base compiler mustache
+-  EXPORT fbthrift-exports
+-  RUNTIME DESTINATION ${BIN_INSTALL_DIR}
+-  LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+-  ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
+-)
++#install(
++#  TARGETS thrift1 compiler_ast compiler_base compiler mustache
++#  EXPORT fbthrift-exports
++#  RUNTIME DESTINATION ${BIN_INSTALL_DIR}
++#  LIBRARY DESTINATION ${LIB_INSTALL_DIR}
++#  ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
++#)
+diff --git a/thrift/lib/CMakeLists.txt b/thrift/lib/CMakeLists.txt
+index 101f2d1ddc..a1ac0f8f35 100644
+--- a/thrift/lib/CMakeLists.txt
++++ b/thrift/lib/CMakeLists.txt
+@@ -30,11 +30,11 @@ set(LIB_DIRS
+   cpp2
+   py3
+ )
+-foreach(dir ${LIB_DIRS})
+-  install(DIRECTORY ${dir} "${CMAKE_CURRENT_BINARY_DIR}/${dir}"
+-        DESTINATION include/thrift/lib
+-        FILES_MATCHING
+-          PATTERN "*.h"
+-          PATTERN "*.tcc"
+-          PATTERN CMakeFiles EXCLUDE)
+-endforeach()
++#foreach(dir ${LIB_DIRS})
++#  install(DIRECTORY ${dir} "${CMAKE_CURRENT_BINARY_DIR}/${dir}"
++#        DESTINATION include/thrift/lib
++#        FILES_MATCHING
++#          PATTERN "*.h"
++#          PATTERN "*.tcc"
++#          PATTERN CMakeFiles EXCLUDE)
++#endforeach()
+diff --git a/thrift/lib/cpp/CMakeLists.txt b/thrift/lib/cpp/CMakeLists.txt
+index 678ce38b41..1ef6ea3bc7 100644
+--- a/thrift/lib/cpp/CMakeLists.txt
++++ b/thrift/lib/cpp/CMakeLists.txt
+@@ -136,12 +136,12 @@ set(THRIFT1_HEADER_DIRS
+   server
+   transport
+ )
+-foreach(dir ${THRIFT1_HEADER_DIRS})
+-  install(DIRECTORY ${dir} DESTINATION ${INCLUDE_INSTALL_DIR}/thrift/lib/cpp
+-          FILES_MATCHING PATTERN "*.h")
+-  install(DIRECTORY ${dir} DESTINATION ${INCLUDE_INSTALL_DIR}/thrift/lib/cpp
+-          FILES_MATCHING PATTERN "*.tcc")
+-endforeach()
++#foreach(dir ${THRIFT1_HEADER_DIRS})
++#  install(DIRECTORY ${dir} DESTINATION ${INCLUDE_INSTALL_DIR}/thrift/lib/cpp
++#          FILES_MATCHING PATTERN "*.h")
++#  install(DIRECTORY ${dir} DESTINATION ${INCLUDE_INSTALL_DIR}/thrift/lib/cpp
++#          FILES_MATCHING PATTERN "*.tcc")
++#endforeach()
+ 
+ if (BUILD_SHARED_LIBS)
+   # all but thrift since it's an interface
+@@ -150,13 +150,13 @@ if (BUILD_SHARED_LIBS)
+     )
+ endif()
+ 
+-install(
+-  TARGETS
+-    thrift-core
+-    concurrency
+-    transport
+-    async
+-    thrift
+-  EXPORT fbthrift-exports
+-  DESTINATION ${LIB_INSTALL_DIR}
+-)
++#install(
++#  TARGETS
++#    thrift-core
++#    concurrency
++#    transport
++#    async
++#    thrift
++#  EXPORT fbthrift-exports
++#  DESTINATION ${LIB_INSTALL_DIR}
++#)
+diff --git a/thrift/lib/cpp2/CMakeLists.txt b/thrift/lib/cpp2/CMakeLists.txt
+index 71b6018747..172bf42999 100644
+--- a/thrift/lib/cpp2/CMakeLists.txt
++++ b/thrift/lib/cpp2/CMakeLists.txt
+@@ -370,11 +370,11 @@ set(THRIFT2_HEADER_DIRS
+   transport
+   util
+ )
+-install(
+-  DIRECTORY ${THRIFT2_HEADER_DIRS}
+-  DESTINATION ${INCLUDE_INSTALL_DIR}/thrift/lib/cpp2
+-  FILES_MATCHING PATTERN "*.h" PATTERN "*.tcc"
+-)
++#install(
++#  DIRECTORY ${THRIFT2_HEADER_DIRS}
++#  DESTINATION ${INCLUDE_INSTALL_DIR}/thrift/lib/cpp2
++#  FILES_MATCHING PATTERN "*.h" PATTERN "*.tcc"
++#)
+ 
+ if (BUILD_SHARED_LIBS)
+   set_target_properties(rpcmetadata thriftannotation thriftmetadata
+@@ -383,17 +383,17 @@ if (BUILD_SHARED_LIBS)
+     )
+ endif()
+ 
+-install(
+-  TARGETS
+-    rpcmetadata
+-    thriftannotation
+-    thriftmetadata
+-    thriftfrozen2
+-    thrifttyperep
+-    thrifttype
+-    thriftanyrep
+-    thriftprotocol
+-    thriftcpp2
+-  EXPORT fbthrift-exports
+-  DESTINATION ${LIB_INSTALL_DIR}
+-)
++#install(
++#  TARGETS
++#    rpcmetadata
++#    thriftannotation
++#    thriftmetadata
++#    thriftfrozen2
++#    thrifttyperep
++#    thrifttype
++#    thriftanyrep
++#    thriftprotocol
++#    thriftcpp2
++#  EXPORT fbthrift-exports
++#  DESTINATION ${LIB_INSTALL_DIR}
++#)

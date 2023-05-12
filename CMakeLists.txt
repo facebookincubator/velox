@@ -76,6 +76,7 @@ option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
+option(VELOX_ENABLE_FBTHRIFT "Enable FBThrift support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
@@ -290,6 +291,8 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-strict-aliasing \
          -Wno-type-limits \
          -Wno-stringop-overflow \
+         -Wno-stringop-overread \
+         -Wno-deprecated-declarations \
          -Wno-return-type")
   endif()
 
@@ -320,10 +323,12 @@ resolve_dependency(ICU)
 
 set(BOOST_INCLUDE_LIBRARIES
     headers
+    boost
     atomic
     context
     date_time
     filesystem
+    math
     program_options
     regex
     system
@@ -393,6 +398,11 @@ if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
   set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
 else()
   set(FOLLY_BENCHMARK Folly::follybenchmark)
+endif()
+
+if(VELOX_ENABLE_REMOTE_FUNCTION)
+  set_source(FBThrift)
+  resolve_dependency(FBThrift)
 endif()
 
 if(NOT ${VELOX_BUILD_MINIMAL})
